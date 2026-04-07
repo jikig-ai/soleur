@@ -15,6 +15,7 @@ import { SettingUpState } from "@/components/connect-repo/setting-up-state";
 import { ReadyState } from "@/components/connect-repo/ready-state";
 import { FailedState } from "@/components/connect-repo/failed-state";
 import { InterruptedState } from "@/components/connect-repo/interrupted-state";
+import { LinkGitHubState } from "@/components/connect-repo/link-github-state";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -23,6 +24,7 @@ type State =
   | "choose"
   | "create_project"
   | "github_redirect"
+  | "link_github"
   | "select_project"
   | "no_projects"
   | "setting_up"
@@ -51,12 +53,16 @@ export default function ConnectRepoPage() {
   const searchParams = useSearchParams();
 
   const [state, setState] = useState<State>(() => {
-    // Avoid flashing the "choose" screen when returning from GitHub App install
     if (typeof window !== "undefined") {
       const params = new URLSearchParams(window.location.search);
+      // Returning from GitHub App install callback
       const action = params.get("setup_action");
       if (params.get("installation_id") && (action === "install" || action === "update")) {
         return "github_redirect";
+      }
+      // Returning from failed identity linking attempt
+      if (params.get("link_error")) {
+        return "link_github";
       }
     }
     return "choose";
@@ -111,6 +117,8 @@ export default function ConnectRepoPage() {
           } else {
             setState("no_projects");
           }
+        } else if (!data.installed && data.reason === "no_github_identity") {
+          setState("link_github");
         }
       } catch {
         // Silent — user can still proceed manually via choose screen
@@ -389,6 +397,11 @@ export default function ConnectRepoPage() {
           }
           return;
         }
+        // No GitHub identity linked — prompt to link
+        if (!detectData.installed && detectData.reason === "no_github_identity") {
+          setState("link_github");
+          return;
+        }
       }
     } catch {
       // Network error — fall through to GitHub redirect
@@ -560,6 +573,13 @@ export default function ConnectRepoPage() {
           <GitHubRedirectState
             onContinue={handleGitHubRedirectContinue}
             onBack={handleGitHubRedirectBack}
+          />
+        )}
+        {state === "link_github" && (
+          <LinkGitHubState
+            onBack={() => setState("choose")}
+            onSkip={handleSkip}
+            initialError={searchParams.get("link_error")}
           />
         )}
         {state === "select_project" && (

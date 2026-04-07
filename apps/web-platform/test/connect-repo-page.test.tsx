@@ -24,6 +24,14 @@ vi.mock("next/font/google", () => ({
   Inter: () => ({ className: "mock-sans", variable: "--font-sans" }),
 }));
 
+vi.mock("@/lib/supabase/client", () => ({
+  createClient: () => ({
+    auth: {
+      linkIdentity: vi.fn().mockResolvedValue({ data: {}, error: null }),
+    },
+  }),
+}));
+
 import ConnectRepoPage from "@/app/(auth)/connect-repo/page";
 
 // ---------------------------------------------------------------------------
@@ -660,5 +668,109 @@ describe("Phase 4: Auto-detect existing installation", () => {
 
     // Should NOT have redirected to GitHub
     expect(hrefSetter).not.toHaveBeenCalled();
+  });
+});
+
+// ===========================================================================
+// Phase 5: Link GitHub identity for email-only accounts
+// ===========================================================================
+
+describe("Phase 5: Link GitHub identity", () => {
+  test("on mount: shows link_github state when no GitHub identity", async () => {
+    setupFetchMock({
+      "/api/repo/detect-installation": () =>
+        Promise.resolve(
+          new Response(
+            JSON.stringify({ installed: false, reason: "no_github_identity" }),
+            { status: 200 },
+          ),
+        ),
+    });
+
+    render(<ConnectRepoPage />);
+
+    await waitFor(() => {
+      expect(screen.getByText("Connect Your GitHub Account")).toBeInTheDocument();
+    });
+  });
+
+  test("Connect Existing: shows link_github when no GitHub identity", async () => {
+    let detectCount = 0;
+    setupFetchMock({
+      "/api/repo/repos": () =>
+        Promise.resolve(
+          new Response(
+            JSON.stringify({ error: "GitHub App not installed" }),
+            { status: 400 },
+          ),
+        ),
+      "/api/repo/detect-installation": () => {
+        detectCount++;
+        if (detectCount === 1) {
+          // Mount detection: not installed (show choose first)
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({ installed: false, reason: "not_installed" }),
+              { status: 200 },
+            ),
+          );
+        }
+        // Click detection: no GitHub identity
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({ installed: false, reason: "no_github_identity" }),
+            { status: 200 },
+          ),
+        );
+      },
+    });
+
+    render(<ConnectRepoPage />);
+
+    const connectBtn = await screen.findByText("Connect Project");
+    await userEvent.click(connectBtn);
+
+    await waitFor(() => {
+      expect(screen.getByText("Connect Your GitHub Account")).toBeInTheDocument();
+    });
+  });
+
+  test("link_github state shows error from link_error query param", async () => {
+    setCallbackParams("?link_error=Identity+already+linked");
+    setupFetchMock();
+
+    render(<ConnectRepoPage />);
+
+    await waitFor(() => {
+      expect(screen.getByText("Connect Your GitHub Account")).toBeInTheDocument();
+      expect(screen.getByText("Identity already linked")).toBeInTheDocument();
+    });
+  });
+
+  test("link_github Go Back returns to choose state", async () => {
+    setupFetchMock({
+      "/api/repo/detect-installation": () =>
+        Promise.resolve(
+          new Response(
+            JSON.stringify({ installed: false, reason: "no_github_identity" }),
+            { status: 200 },
+          ),
+        ),
+    });
+
+    render(<ConnectRepoPage />);
+
+    await waitFor(() => {
+      expect(screen.getByText("Connect Your GitHub Account")).toBeInTheDocument();
+    });
+
+    const goBackBtn = screen.getByText("Go Back");
+    await userEvent.click(goBackBtn);
+
+    await waitFor(() => {
+      expect(
+        screen.getByText("Give Your AI Team the Full Picture"),
+      ).toBeInTheDocument();
+    });
   });
 });
