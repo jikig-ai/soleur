@@ -2,9 +2,24 @@
 title: "feat: complete Buttondown newsletter onboarding"
 type: feat
 date: 2026-04-07
+deepened: 2026-04-07
 ---
 
 # feat: complete Buttondown newsletter onboarding
+
+## Enhancement Summary
+
+**Deepened on:** 2026-04-07
+**Sections enhanced:** 7
+**Research sources:** Buttondown API (live queries), Buttondown docs, Cloudflare Terraform learnings, email deliverability patterns, existing brand assets audit
+
+### Key Improvements
+
+1. **Existing brand assets discovered** -- `logo-mark-512.png` (512x512) and `og-image.png` (1200x630) already exist in the repo, eliminating image generation from Phase 2
+2. **Draft email API verified working** -- `POST /v1/emails` with `status: "draft"` confirmed functional via live test (created and deleted test draft)
+3. **NS record values are dashboard-only** -- confirmed via Buttondown docs that managed DNS NS values are generated dynamically in Settings, not documented statically; Playwright step is mandatory before Terraform
+4. **Terraform `fmt` gate added** -- per learning, always run `terraform fmt` after editing `.tf` files to prevent formatting drift
+5. **Cloudflare API token permissions verified** -- existing `soleur-terraform-tunnel` token already has DNS write permissions (proven by existing `cloudflare_record` resources in state)
 
 ## Overview
 
@@ -92,10 +107,23 @@ Designed, built, and shipped by Soleur -- using Soleur.
 The Buttondown API does not support file uploads for `icon` and `image` fields. Use Playwright MCP to upload via the dashboard.
 
 1. Navigate to `https://buttondown.com/settings`
-2. Upload newsletter icon (300x300 PNG, square) -- use existing brand assets or generate via `soleur:gemini-imagegen`
-3. Upload share image (1200x630 PNG) -- use existing brand assets or generate
+2. Upload newsletter icon -- use `plugins/soleur/docs/images/logo-mark-512.png` (512x512 square PNG, Buttondown will resize to 300x300)
+3. Upload share image -- use `plugins/soleur/docs/images/og-image.png` (1200x630, exact match for Buttondown's share image spec)
 
-**Asset source check:** Look for existing brand assets in `plugins/soleur/docs/images/` or `knowledge-base/design/brand/`. If a suitable icon does not exist, generate one matching the Gold Circle logo description from brand guide.
+### Research Insights (Phase 2)
+
+**Assets already exist -- no generation needed:**
+
+- `logo-mark-512.png` (512x512) -- Gold Circle logo mark, suitable for newsletter icon
+- `og-image.png` (1200x630) -- OpenGraph image, exact dimensions Buttondown requires for share image
+
+**Playwright file upload pattern** (from learning `2026-03-09-x-provisioning-playwright-automation.md`):
+
+- Use `browser_file_upload` MCP tool for file inputs
+- File paths must be absolute (MCP resolves from repo root, not shell CWD -- per AGENTS.md)
+- Absolute path: `/home/jean/git-repositories/jikig-ai/soleur/.worktrees/feat-buttondown-onboarding/plugins/soleur/docs/images/logo-mark-512.png`
+
+**Buttondown login prerequisite:** The settings page requires authentication. Check if there is a Buttondown session cookie available. If not, use Playwright to log in first (email: <ops@jikigai.com>, password from Doppler if stored, or prompt user for the single login step).
 
 ### Phase 3: Sending Domain via Terraform + Playwright
 
@@ -168,7 +196,37 @@ doppler run -p soleur -c dev -- curl -s -X POST \
 
 **Content direction:** The first email should introduce Soleur to the subscriber base and set expectations for future newsletters. Content aligns with the brand voice (bold, forward-looking, energizing) and the newsletter description ("Monthly updates about Soleur -- new agents, skills, and what we're building next").
 
-**Note:** The `status` field for creating a draft vs. published email needs verification during implementation. The API docs do not explicitly document this field. If drafts are not supported via API, use Playwright to compose in the dashboard editor.
+### Research Insights (Phase 4)
+
+**Draft API verified working:** Live-tested `POST /v1/emails` with `{"subject": "Test draft", "body": "Test body", "status": "draft"}` -- returned 201 with `"status": "draft"` and `"publish_date": null`. Draft was visible in dashboard. Cleanup via `DELETE /v1/emails/{id}` returned 204. No Playwright fallback needed.
+
+**API email format control:** The `body` field auto-detects Markdown vs HTML. To force a mode, prepend `<!-- buttondown-editor-mode: plaintext -->` for Markdown or `<!-- buttondown-editor-mode: fancy -->` for HTML. Use Markdown (plaintext mode) for the first email -- it aligns with the brand voice's directness and renders cleanly.
+
+**YAML frontmatter warning:** The API rejects email bodies starting with YAML frontmatter blocks (returns 400). If the email content starts with `---`, add the `X-Buttondown-Live-Dangerously: true` header or ensure the body does not begin with frontmatter.
+
+**First email content outline:**
+
+```markdown
+# Welcome to the Soleur Newsletter
+
+You're building something ambitious. We're building the tools to make it possible.
+
+Soleur is the Company-as-a-Service platform -- AI agents that handle marketing,
+legal, finance, operations, and more. One founder makes decisions. The system executes.
+
+**What to expect from this newsletter:**
+
+- Monthly updates on new agents and skills
+- Behind-the-scenes on building a company with AI
+- Practical insights for solo founders
+
+This newsletter exists because the billion-dollar solo company isn't science fiction.
+It's an engineering problem. We're solving it.
+
+-- Jean Deruelle, Founder
+```
+
+**Sending considerations:** Wait until sending domain is verified (Phase 3 complete) before sending. Emails sent from `buttondown.com` domain have lower deliverability than branded domains.
 
 ### Phase 5: Expense Tracking
 
@@ -184,6 +242,10 @@ Add Buttondown to `knowledge-base/operations/expenses.md`:
 - **Existing email infrastructure:** Resend uses `send.soleur.ai` for transactional emails (ops notifications). The newsletter sending domain must use a different subdomain to avoid SPF/DKIM conflicts. `mail.soleur.ai` is the recommended choice.
 - **DMARC:** An existing DMARC record (`_dmarc.soleur.ai`) with `p=quarantine` covers all subdomains. Buttondown emails sent from `mail.soleur.ai` will inherit this policy. No DMARC changes needed.
 - **Cloudflare proxy:** NS records for managed DNS delegation must NOT be proxied (NS records cannot be proxied). Terraform should omit `proxied` or set it to `false`.
+- **Terraform `fmt` gate:** Always run `terraform fmt` after editing `.tf` files. Per learning `2026-04-03-cloudflare-dns-at-symbol-causes-terraform-drift.md`, formatting mismatches are caught by lefthook pre-commit hooks.
+- **Post-apply verification:** Run `terraform plan` immediately after `terraform apply` to confirm clean state. Per the same learning, drift can be invisible on initial apply but manifest on subsequent plans.
+- **Cloudflare API token scope:** The existing `soleur-terraform-tunnel` token already has DNS write permissions (proven by 15+ `cloudflare_record` resources in state). No permission changes needed. Per learning `2026-03-21-cloudflare-api-token-permission-editing.md`, editing permissions does NOT rotate the token -- but it is unnecessary here.
+- **Buttondown authentication for Playwright:** The dashboard requires login. Check for Buttondown credentials in Doppler (`doppler secrets --only-names -p soleur -c dev | grep -i buttondown`). If only the API key exists (no password), prompt the user for the single Buttondown login step via Playwright, then proceed with uploads and domain configuration.
 
 ## Acceptance Criteria
 
@@ -209,10 +271,12 @@ Add Buttondown to `knowledge-base/operations/expenses.md`:
 
 ## Dependencies and Risks
 
-- **Buttondown managed DNS NS values:** Only available after entering the domain in the Buttondown dashboard. The Terraform step depends on retrieving these values first via Playwright.
-- **DNS propagation:** NS delegation may take minutes to hours. Verification should include polling.
-- **Icon/share image assets:** May need to generate brand assets if suitable files do not exist in the repo. The `soleur:gemini-imagegen` skill can produce these.
-- **Draft email API:** The `status: "draft"` field is not explicitly documented. Fallback: use Playwright to create the draft in the dashboard editor.
+- **Buttondown managed DNS NS values:** Only available after entering the domain in the Buttondown dashboard. The Terraform step depends on retrieving these values first via Playwright. Confirmed by Buttondown docs: "Add the two NS type records that are shown to you in Settings." No static NS values exist in documentation.
+- **DNS propagation:** NS delegation may take minutes to hours. Verification should include polling with `dig NS mail.soleur.ai +short` on an interval. Buttondown dashboard also shows verification status.
+- ~~**Icon/share image assets:** May need to generate brand assets~~ **RESOLVED:** `logo-mark-512.png` (512x512) and `og-image.png` (1200x630) already exist in `plugins/soleur/docs/images/`. No generation needed.
+- ~~**Draft email API:** The `status: "draft"` field is not explicitly documented~~ **RESOLVED:** Live-tested successfully. `POST /v1/emails` with `status: "draft"` returns 201. `DELETE /v1/emails/{id}` returns 204. Both work as expected.
+- **Buttondown dashboard login:** Playwright phases (2 and 3) require dashboard authentication. The only credential in Doppler is `BUTTONDOWN_API_KEY` (not a password). The user may need to manually enter credentials at the Buttondown login screen once, after which Playwright can proceed with the authenticated session.
+- **Sending domain verification timing:** Phase 4 (first email) should wait for Phase 3 (sending domain) to complete and verify. Sending from the default `buttondown.com` domain reduces deliverability.
 
 ## Domain Review
 
@@ -234,14 +298,35 @@ Not applicable -- no new user-facing pages or UI components. Newsletter branding
 
 ## References and Research
 
+### Internal References
+
 - **Brand guide:** `knowledge-base/marketing/brand-guide.md` (colors, typography, voice, tagline)
 - **Newsletter form:** `plugins/soleur/docs/_includes/newsletter-form.njk` (existing description copy)
 - **Site config:** `plugins/soleur/docs/_data/site.json` (social links, newsletter username)
+- **Newsletter icon:** `plugins/soleur/docs/images/logo-mark-512.png` (512x512, ready for upload)
+- **Share image:** `plugins/soleur/docs/images/og-image.png` (1200x630, ready for upload)
 - **DNS infrastructure:** `apps/web-platform/infra/dns.tf` (existing Cloudflare DNS records)
 - **Terraform config:** `apps/web-platform/infra/main.tf` (provider versions, R2 backend)
 - **Terraform variables:** `apps/web-platform/infra/variables.tf` (cf_zone_id, cf_api_token)
-- **Cloudflare learning:** `knowledge-base/project/learnings/2026-03-20-cloudflare-terraform-v4-v5-resource-names.md`
-- **Buttondown GDPR learning:** `knowledge-base/project/learnings/2026-03-18-buttondown-gdpr-transfer-mechanism-sccs-only.md`
+
+### Learnings Applied
+
+- `2026-03-20-cloudflare-terraform-v4-v5-resource-names.md` -- use `cloudflare_record` not `cloudflare_dns_record`, use subdomain name not FQDN for non-apex records
+- `2026-04-03-cloudflare-dns-at-symbol-causes-terraform-drift.md` -- always run `terraform fmt` and post-apply `terraform plan` verification
+- `2026-03-18-supabase-resend-email-configuration.md` -- pattern for DNS-based email auth setup (SPF, DKIM, DMARC records via Terraform)
+- `2026-03-21-cloudflare-api-token-permission-editing.md` -- existing CF API token already has DNS write permissions
+- `2026-03-25-check-mcp-api-before-playwright.md` -- priority chain: API first, Playwright for dashboard-only features
+- `2026-03-09-x-provisioning-playwright-automation.md` -- Playwright file upload and form filling patterns
+- `2026-03-18-buttondown-gdpr-transfer-mechanism-sccs-only.md` -- Buttondown uses SCCs for data transfers (no GDPR action needed)
+
+### External References
+
 - **Buttondown API docs:** [Configuration and Branding](https://docs.buttondown.com/configuration-and-branding)
 - **Buttondown sending domain docs:** [Sending from a custom domain](https://docs.buttondown.com/sending-from-a-custom-domain)
+- **Buttondown managed DNS blog:** [Managed DNS](https://buttondown.com/blog/managed-dns)
+- **Buttondown pricing:** [Pricing](https://buttondown.com/pricing) -- free tier includes custom sending domain
+
+### Related Issues
+
 - **Closed issue:** #501 (Newsletter -- subscription forms on site)
+- **Related:** #1050 (service automation -- API + MCP integrations)
