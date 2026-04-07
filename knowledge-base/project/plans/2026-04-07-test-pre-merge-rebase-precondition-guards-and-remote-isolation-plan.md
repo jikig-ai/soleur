@@ -2,9 +2,22 @@
 title: "test: add precondition guards and remote isolation to pre-merge-rebase tests"
 type: fix
 date: 2026-04-07
+deepened: 2026-04-07
 ---
 
 # test: add precondition guards and remote isolation to pre-merge-rebase tests
+
+## Enhancement Summary
+
+**Deepened on:** 2026-04-07
+**Sections enhanced:** 3 (Proposed Solution, Acceptance Criteria, Context)
+**Research sources used:** 4 institutional learnings, plan review (3 reviewers)
+
+### Key Improvements
+
+1. Documented the `beforeEach` reordering rationale with explicit step sequence
+2. Added edge case for bare-repo test cleanup interaction with remote reset
+3. Incorporated review feedback on diagnostic message specificity
 
 Closes #1701, Closes #1702
 
@@ -62,6 +75,20 @@ Capture the initial commit SHA in `beforeAll` (after the first push to `origin/m
 
    Note: The existing `git reset --hard origin/main` runs before `git clean -fd`. The remote reset must happen before the local reset, so the sequence becomes: (a) checkout main, (b) reset remote ref, (c) fetch origin, (d) reset local to origin/main, (e) git clean -fd.
 
+### Research Insights
+
+**Edge Cases:**
+
+- The "bare repo cwd" test (line 419) directly manipulates `remoteDir` by creating `refs/heads/test-feature` and a `todos/` directory. The `beforeEach` remote reset only resets `refs/heads/main` -- it does not clean up `refs/heads/test-feature` or the filesystem `todos/`. This is correct because that test already handles its own cleanup in a `finally` block. No additional cleanup needed.
+- If `git checkout main` in `beforeEach` fails due to a prior test leaving merge-in-progress state, the remote reset will still succeed (it operates on `remoteDir`, not `repoDir`). The "push failure after merge" test's `finally` block already runs `git merge --abort`. However, as defense-in-depth, consider adding `Bun.spawnSync(["git", "merge", "--abort"], { cwd: repoDir, env: GIT_ENV })` at the start of `beforeEach` (before `git checkout main`). This is optional -- the existing `finally` blocks handle it.
+- The precondition guard message should be generic ("expected JSON deny output but got empty stdout") rather than test-name-specific. All 7 guards use the same message, which is simpler and still diagnostic. The message identifies the failure mode (empty stdout); the test runner identifies which test failed.
+
+**Institutional Learnings Applied:**
+
+- **False-green anti-pattern** (from `pre-merge-hook-bare-repo-diff-false-positive-20260402.md`): "Never use conditional assertions where the happy path makes the condition false." The precondition guards prevent exactly this -- without them, `JSON.parse("")` throws a `SyntaxError` that is cryptic but at least visible. The worse failure mode is a test that silently passes because a prior guard fires unexpectedly (empty stdout, no JSON.parse call, test passes vacuously).
+- **Two-layer cleanup** (from `2026-04-07-git-reset-hard-does-not-clean-untracked-files-in-test-isolation.md`): `git reset --hard` + `git clean -fd` already covers tracked and untracked files. The remote reset adds a third layer for the shared remote state.
+- **GIT_CEILING_DIRECTORIES + env stripping** (from `2026-03-24-git-ceiling-directories-test-isolation.md`): Already implemented in the test file. No changes needed.
+
 ## Files Changed
 
 | File | Change |
@@ -70,11 +97,11 @@ Capture the initial commit SHA in `beforeAll` (after the first push to `origin/m
 
 ## Acceptance Criteria
 
-- [ ] All 7 `JSON.parse(result.stdout)` calls (excluding the already-guarded detached HEAD test) are preceded by `expect(result.stdout, ...).not.toBe("")`
-- [ ] `initialMainSha` is captured in `beforeAll` and used to reset the remote in `beforeEach`
-- [ ] `beforeEach` resets the remote's `main` ref, fetches, then resets local -- in that order
-- [ ] All 21 existing tests still pass
-- [ ] No new test flakiness introduced (run test suite 3+ times)
+- [x] All 7 `JSON.parse(result.stdout)` calls (excluding the already-guarded detached HEAD test) are preceded by `expect(result.stdout, ...).not.toBe("")`
+- [x] `initialMainSha` is captured in `beforeAll` and used to reset the remote in `beforeEach`
+- [x] `beforeEach` resets the remote's `main` ref, fetches, then resets local -- in that order
+- [x] All 21 existing tests still pass
+- [x] No new test flakiness introduced (run test suite 3+ times)
 
 ## Test Scenarios
 
@@ -94,8 +121,17 @@ No cross-domain implications detected -- infrastructure/tooling change.
 - Learning: `knowledge-base/project/learnings/test-failures/2026-04-07-git-reset-hard-does-not-clean-untracked-files-in-test-isolation.md` documents the root cause and fix pattern
 - Current sequential test execution masks the #1702 ordering dependency, but bun may randomize order in future versions
 
+### Plan Review Feedback (3 reviewers)
+
+- **DHH reviewer:** No changes needed. Two concrete issues with concrete fixes, no unnecessary abstractions.
+- **Kieran reviewer:** Plan is correct and complete. Minor suggestion: consider test-name-specific diagnostic messages (declined -- generic message is simpler and the test runner already identifies which test failed).
+- **Code simplicity reviewer:** Already minimal at ~15 lines added. A `parseJsonOutput` helper could consolidate the pattern but adds abstraction for a 1-line guard -- inline is preferred for test explicitness.
+
 ## References
 
 - Related issue: #1694 (original test isolation fix, closed by PR #1704)
 - Related PR: #1704 (added `git clean -fd` and first precondition guard)
 - File: `test/pre-merge-rebase.test.ts`
+- Learning: `knowledge-base/project/learnings/workflow-issues/pre-merge-hook-bare-repo-diff-false-positive-20260402.md` (false-green anti-pattern)
+- Learning: `knowledge-base/project/learnings/2026-03-24-git-ceiling-directories-test-isolation.md` (GIT_CEILING_DIRECTORIES pattern)
+- Learning: `knowledge-base/project/learnings/2026-03-03-pre-merge-rebase-hook-implementation.md` (hook implementation context)
