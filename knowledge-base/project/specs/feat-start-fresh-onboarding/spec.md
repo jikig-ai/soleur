@@ -30,9 +30,9 @@ When a founder creates a new project via "Start Fresh," they land on a static da
 | ID | Requirement |
 |----|-------------|
 | FR1 | Dashboard renders a `first-run` state when no `vision.md` exists in the KB: welcome message + "What are you building?" focused prompt |
-| FR2 | First chat message on a fresh project writes `knowledge-base/overview/vision.md` with the founder's idea |
+| FR2 | First chat message on a fresh project creates `knowledge-base/overview/vision.md` server-side (guaranteed, not LLM-dependent). CPO agent enhances it with structured sections. |
 | FR3 | After vision capture, dashboard renders `foundations` state: 4 smart prompt cards + chat input + leader strip |
-| FR4 | Each foundation card pre-fills the chat input with a contextual prompt including the founder's project idea |
+| FR4 | Each foundation card pre-fills the chat input with a static contextual prompt (no vision.md content fetch needed — agent reads KB during chat) |
 | FR5 | Card completion state is derived from KB file existence checks via API |
 | FR6 | When all 4 foundation KB files exist, dashboard transitions to `command-center` state (existing Command Center design) |
 | FR7 | Cards have no enforced order — founders pick freely |
@@ -42,7 +42,7 @@ When a founder creates a new project via "Start Fresh," they land on a static da
 
 | ID | Requirement |
 |----|-------------|
-| TR1 | Must merge `feat-kb-no-project-empty-state` branch first (Command Center, connect-repo, KB viewer, responsive layout) |
+| TR1 | Rebase onto main — dependency branch already merged as `54a727ee` |
 | TR2 | KB file existence checks use existing `/api/kb/tree` or similar endpoint — no new API routes for simple existence checks |
 | TR3 | Dashboard state logic lives in a single hook or component — `useDashboardState()` or similar |
 | TR4 | Smart prompt pre-fill uses the chat input's existing API (no new input mechanism) |
