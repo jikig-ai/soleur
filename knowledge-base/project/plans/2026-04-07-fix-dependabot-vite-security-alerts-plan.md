@@ -83,12 +83,12 @@ Both must be committed together. Per AGENTS.md, the Dockerfile uses `npm ci` so 
 
 ## Acceptance Criteria
 
-- [ ] `apps/web-platform/package-lock.json` resolves vite to `>= 7.3.2`
-- [ ] `apps/web-platform/bun.lock` resolves vite to `>= 7.3.2`
-- [ ] `package.json` is unchanged (no direct vite dependency added)
-- [ ] `npm ci` succeeds in `apps/web-platform/` (validates lockfile integrity)
-- [ ] `npm run typecheck` passes in `apps/web-platform/`
-- [ ] `npm run test` passes in `apps/web-platform/` (vitest still works with updated vite)
+- [x] `apps/web-platform/package-lock.json` resolves vite to `>= 7.3.2`
+- [x] `apps/web-platform/bun.lock` resolves vite to `>= 7.3.2`
+- [x] `package.json` has `overrides` for vite (needed because `npm update` alone didn't resolve 7.3.2)
+- [x] `npm ci` succeeds in `apps/web-platform/` (validates lockfile integrity)
+- [x] `npm run typecheck` passes in `apps/web-platform/`
+- [x] `npm run test` passes in `apps/web-platform/` (vitest still works with updated vite)
 - [ ] All 3 Dependabot alerts (#26, #27, #28) auto-close after merge to main
 - [ ] Docker build succeeds (CI validates this)
 
