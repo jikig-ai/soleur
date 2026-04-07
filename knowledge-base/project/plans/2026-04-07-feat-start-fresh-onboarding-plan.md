@@ -218,10 +218,10 @@ None. Zero new files.
 ### Product/UX Gate
 
 **Tier:** blocking
-**Decision:** reviewed (partial)
-**Agents invoked:** spec-flow-analyzer
-**Skipped specialists:** ux-design-lead (wireframes needed before implementation — run separately), copywriter (prompt copy needed before implementation — run separately)
-**Pencil available:** N/A (deferred to pre-implementation phase)
+**Decision:** reviewed
+**Agents invoked:** spec-flow-analyzer, ux-design-lead, copywriter
+**Skipped specialists:** none
+**Pencil available:** N/A (not needed — implementation brief covers layout)
 
 #### Findings
 
