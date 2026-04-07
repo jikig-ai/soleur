@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useKb } from "@/components/kb/kb-context";
 import { FileTree } from "@/components/kb/file-tree";
+import { SearchOverlay } from "@/components/kb/search-overlay";
 
 export default function KnowledgeBasePage() {
   const { tree, loading, error } = useKb();
@@ -58,6 +59,9 @@ export default function KnowledgeBasePage() {
           Knowledge Base
         </h1>
       </header>
+      <div className="shrink-0 px-3 pb-3">
+        <SearchOverlay />
+      </div>
       <div className="flex-1 overflow-y-auto px-2 pb-4">
         <FileTree />
       </div>
