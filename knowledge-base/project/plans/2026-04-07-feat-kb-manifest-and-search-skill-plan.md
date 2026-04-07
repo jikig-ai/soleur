@@ -99,18 +99,18 @@ Known constraint: lefthook hangs in worktrees >60s — the script must complete 
 
 ## Acceptance Criteria
 
-- [ ] `scripts/generate-kb-index.sh` exists and generates `knowledge-base/INDEX.md`
-- [ ] INDEX.md lists all non-archived `.md` files in `knowledge-base/` with title and path
-- [ ] Running the script twice produces identical output (deterministic)
-- [ ] Script completes in <5 seconds for the current corpus (~2,375 files)
-- [ ] `plugins/soleur/skills/kb-search/SKILL.md` exists with proper frontmatter
+- [x] `scripts/generate-kb-index.sh` exists and generates `knowledge-base/INDEX.md`
+- [x] INDEX.md lists all non-archived `.md` files in `knowledge-base/` with title and path
+- [x] Running the script twice produces identical output (deterministic)
+- [x] Script completes in <5 seconds for the current corpus (~2,375 files)
+- [x] `plugins/soleur/skills/kb-search/SKILL.md` exists with proper frontmatter
 - [ ] `soleur:kb-search <keywords>` returns results across all KB domains
 - [ ] Cross-category queries work (e.g., searching "authentication" finds results in both learnings and marketing)
-- [ ] Lefthook pre-commit hook regenerates INDEX.md when KB files change
-- [ ] `INDEX.md` added to `.markdownlintignore`
-- [ ] learnings-researcher agent instructions updated to use INDEX.md for discovery
-- [ ] Plugin component test passes (`bun test plugins/soleur/test/components.test.ts`)
-- [ ] Skill description stays under cumulative budget (1,800 words total)
+- [x] Lefthook pre-commit hook regenerates INDEX.md when KB files change
+- [x] `INDEX.md` added to `.markdownlintignore`
+- [x] learnings-researcher agent instructions updated to use INDEX.md for discovery
+- [x] Plugin component test passes (`bun test plugins/soleur/test/components.test.ts`)
+- [x] Skill description stays under cumulative budget (1,800 words total)
 
 ## Test Scenarios
 
