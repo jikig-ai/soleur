@@ -2,9 +2,22 @@
 title: "fix: health check returns supabase: connected"
 type: fix
 date: 2026-04-07
+deepened: 2026-04-07
 ---
 
 # fix: health check returns supabase: connected
+
+## Enhancement Summary
+
+**Deepened on:** 2026-04-07
+**Sections enhanced:** 2 (Proposed Solution, Implementation)
+**Research agents used:** learnings-researcher, PostgREST behavior analysis
+
+### Key Improvements
+
+1. Documented PostgREST RLS behavior that makes the anon-key table query approach reliable
+2. Added edge case: table rename/drop resilience consideration
+3. Cross-referenced existing Docker healthcheck learnings from knowledge base
 
 ## Overview
 
@@ -38,9 +51,9 @@ Change `checkSupabase()` to query a specific table (`users`) with `select=id&lim
 
 ## Acceptance Criteria
 
-- [ ] `/health` returns `supabase: "connected"` when Supabase is reachable (update `checkSupabase()` in `apps/web-platform/server/health.ts`)
-- [ ] `/health` returns `supabase: "error"` when Supabase is unreachable (timeout/network error)
-- [ ] Existing unit tests in `apps/web-platform/test/server/health.test.ts` continue to pass
+- [x] `/health` returns `supabase: "connected"` when Supabase is reachable (update `checkSupabase()` in `apps/web-platform/server/health.ts`)
+- [x] `/health` returns `supabase: "error"` when Supabase is unreachable (timeout/network error)
+- [x] Existing unit tests in `apps/web-platform/test/server/health.test.ts` continue to pass
 - [ ] Production verification: `curl https://app.soleur.ai/health | jq .supabase` returns `"connected"` after deploy
 
 ## Test Scenarios
@@ -88,8 +101,20 @@ async function checkSupabase(): Promise<boolean> {
 
 No other files need changes. The `HealthResponse` interface, `buildHealthResponse()`, Dockerfile `HEALTHCHECK`, and E2E smoke test all remain valid.
 
+### Research Insights
+
+**PostgREST RLS behavior:** When an anon-key request queries an RLS-protected table without an authenticated JWT, PostgREST returns HTTP 200 with an empty JSON array (`[]`). This is by design -- RLS filters rows at the database level, not at the HTTP level. The HTTP layer only returns non-200 when the table does not exist (404) or the API key is invalid/missing (401). This makes table queries a reliable connectivity probe even without authentication.
+
+**Edge case -- table rename or drop:** If the `users` table were renamed or dropped in a future migration, the health check would start returning `supabase: "error"` (PostgREST returns 404 for nonexistent tables). This is acceptable -- the `users` table is foundational to the schema (referenced by every other table via foreign keys) and will not be removed. If it were, the entire application would break, not just the health check.
+
+**Related learnings:**
+
+- `knowledge-base/project/learnings/2026-03-20-node-slim-missing-curl-healthcheck.md` -- the Dockerfile HEALTHCHECK already uses `node -e "fetch(...)"` instead of curl, hitting this same `/health` endpoint
+- `knowledge-base/project/learnings/2026-03-20-docker-healthcheck-fast-liveness-pattern.md` -- documents the fast-liveness pattern for slow-starting containers (not directly applicable here but contextually related)
+
 ## References
 
 - Related issue: #1685
 - Source PR: #1680
 - Supabase PostgREST docs: anon key can query tables with RLS but cannot list schemas
+- [PostgREST RLS documentation](https://postgrest.org/en/stable/references/auth.html)
