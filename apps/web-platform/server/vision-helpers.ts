@@ -1,10 +1,13 @@
 import fs from "fs";
 import path from "path";
 
+const MAX_VISION_CONTENT = 5000;
+
 /**
  * Create a minimal vision.md from the founder's first message.
- * No-op if vision.md already exists. Caller should wrap in .catch()
- * to avoid unhandled rejections (Node 22+ terminates on them).
+ * No-op if vision.md already exists (uses O_EXCL to avoid TOCTOU race).
+ * Caller should wrap in .catch() to avoid unhandled rejections
+ * (Node 22+ terminates on them).
  */
 export async function tryCreateVision(
   workspacePath: string,
@@ -17,20 +20,24 @@ export async function tryCreateVision(
     "vision.md",
   );
 
-  // Check if vision.md already exists — don't overwrite
-  try {
-    await fs.promises.access(visionPath);
-    return;
-  } catch {
-    // File doesn't exist — create it below
-  }
+  // Truncate oversized content to prevent disk abuse
+  const safe = content.length > MAX_VISION_CONTENT
+    ? content.slice(0, MAX_VISION_CONTENT)
+    : content;
 
   await fs.promises.mkdir(path.dirname(visionPath), { recursive: true });
-  await fs.promises.writeFile(
-    visionPath,
-    `# Vision\n\n${content}\n`,
-    "utf-8",
-  );
+
+  // O_EXCL: atomic create — fails if file already exists (no TOCTOU race)
+  try {
+    await fs.promises.writeFile(
+      visionPath,
+      `# Vision\n\n${safe}\n`,
+      { encoding: "utf-8", flag: "wx" },
+    );
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "EEXIST") return;
+    throw err;
+  }
 }
 
 /**

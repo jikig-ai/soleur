@@ -401,6 +401,15 @@ export async function startAgentSession(
       await syncPull(userId, workspacePath);
     }
 
+    // Create vision.md on first message if it doesn't exist (fire-and-forget).
+    // Runs in startAgentSession (not sendUserMessage) to reuse the already-fetched
+    // workspacePath and avoid an extra DB query on every message.
+    if (userMessage) {
+      tryCreateVision(workspacePath, userMessage).catch((err) => {
+        log.error({ err, userId }, "Failed to create initial vision.md");
+      });
+    }
+
     // Build system prompt for the domain leader
     let systemPrompt = `You are the ${leader.title} (${leader.name}) for this user's business. ${leader.description}
 
@@ -846,19 +855,6 @@ export async function sendUserMessage(
 
   // Save user message to DB (after ownership verified)
   await saveMessage(conversationId, "user", content);
-
-  // Create vision.md on first message if it doesn't exist (fire-and-forget)
-  const { data: senderUser } = await supabase()
-    .from("users")
-    .select("workspace_path")
-    .eq("id", userId)
-    .single();
-
-  if (senderUser?.workspace_path) {
-    tryCreateVision(senderUser.workspace_path, content).catch((err) => {
-      log.error({ err, userId }, "Failed to create initial vision.md");
-    });
-  }
 
   // Check for an in-memory session with a captured session_id
   const key = sessionKey(userId, conversationId);

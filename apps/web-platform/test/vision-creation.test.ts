@@ -10,14 +10,12 @@ vi.mock("fs", () => {
     default: {
       ...actual,
       promises: {
-        access: vi.fn(),
         mkdir: vi.fn(),
         writeFile: vi.fn(),
         stat: vi.fn(),
       },
     },
     promises: {
-      access: vi.fn(),
       mkdir: vi.fn(),
       writeFile: vi.fn(),
       stat: vi.fn(),
@@ -25,13 +23,10 @@ vi.mock("fs", () => {
   };
 });
 
-const mockAccess = vi.mocked(fs.promises.access);
 const mockMkdir = vi.mocked(fs.promises.mkdir);
 const mockWriteFile = vi.mocked(fs.promises.writeFile);
 const mockStat = vi.mocked(fs.promises.stat);
 
-// Import the functions under test (exported from agent-runner.ts)
-// We import lazily after mocks are set up
 let tryCreateVision: (workspacePath: string, content: string) => Promise<void>;
 let buildVisionEnhancementPrompt: (workspacePath: string) => Promise<string | null>;
 
@@ -39,7 +34,6 @@ beforeEach(async () => {
   vi.clearAllMocks();
   vi.resetModules();
 
-  // Dynamic import after mocks are configured
   const mod = await import("@/server/vision-helpers");
   tryCreateVision = mod.tryCreateVision;
   buildVisionEnhancementPrompt = mod.buildVisionEnhancementPrompt;
@@ -49,7 +43,6 @@ describe("tryCreateVision", () => {
   const WORKSPACE = "/workspaces/user-123";
 
   it("creates vision.md with founder message when file does not exist", async () => {
-    mockAccess.mockRejectedValueOnce(new Error("ENOENT"));
     mockMkdir.mockResolvedValueOnce(undefined);
     mockWriteFile.mockResolvedValueOnce(undefined);
 
@@ -62,27 +55,40 @@ describe("tryCreateVision", () => {
     expect(mockWriteFile).toHaveBeenCalledWith(
       path.join(WORKSPACE, "knowledge-base", "overview", "vision.md"),
       "# Vision\n\nA platform that connects local farmers to restaurants\n",
-      "utf-8",
+      { encoding: "utf-8", flag: "wx" },
     );
   });
 
-  it("does not overwrite existing vision.md", async () => {
-    mockAccess.mockResolvedValueOnce(undefined); // File exists
+  it("does not overwrite existing vision.md (EEXIST from wx flag)", async () => {
+    mockMkdir.mockResolvedValueOnce(undefined);
+    const eexist = new Error("EEXIST") as NodeJS.ErrnoException;
+    eexist.code = "EEXIST";
+    mockWriteFile.mockRejectedValueOnce(eexist);
 
+    // Should silently return — no throw
     await tryCreateVision(WORKSPACE, "Some new idea");
 
-    expect(mockMkdir).not.toHaveBeenCalled();
-    expect(mockWriteFile).not.toHaveBeenCalled();
+    expect(mockWriteFile).toHaveBeenCalled();
+    // No error thrown — EEXIST is handled
   });
 
-  it("handles mkdir/writeFile failures gracefully", async () => {
-    mockAccess.mockRejectedValueOnce(new Error("ENOENT"));
-    mockMkdir.mockRejectedValueOnce(new Error("EPERM"));
+  it("truncates content exceeding 5000 characters", async () => {
+    mockMkdir.mockResolvedValueOnce(undefined);
+    mockWriteFile.mockResolvedValueOnce(undefined);
 
-    // Should not throw — caller uses .catch()
-    await expect(
-      tryCreateVision(WORKSPACE, "test"),
-    ).rejects.toThrow("EPERM");
+    const longContent = "x".repeat(10000);
+    await tryCreateVision(WORKSPACE, longContent);
+
+    const written = mockWriteFile.mock.calls[0][1] as string;
+    // "# Vision\n\n" (10 chars) + 5000 chars + "\n" (1 char) = 5011
+    expect(written.length).toBe(5011);
+  });
+
+  it("re-throws non-EEXIST errors from writeFile", async () => {
+    mockMkdir.mockResolvedValueOnce(undefined);
+    mockWriteFile.mockRejectedValueOnce(new Error("EPERM"));
+
+    await expect(tryCreateVision(WORKSPACE, "test")).rejects.toThrow("EPERM");
   });
 });
 

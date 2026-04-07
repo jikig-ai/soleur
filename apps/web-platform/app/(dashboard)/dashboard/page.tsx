@@ -43,14 +43,9 @@ interface TreeNode {
   children?: TreeNode[];
 }
 
-function flattenTree(node: TreeNode): Set<string> {
-  const paths = new Set<string>();
+function flattenTree(node: TreeNode, paths = new Set<string>()): Set<string> {
   if (node.type === "file" && node.path) paths.add(node.path);
-  if (node.children) {
-    for (const child of node.children) {
-      for (const p of flattenTree(child)) paths.add(p);
-    }
-  }
+  for (const child of node.children ?? []) flattenTree(child, paths);
   return paths;
 }
 
@@ -182,6 +177,15 @@ export default function DashboardPage() {
     (promptText: string) => {
       const params = new URLSearchParams();
       params.set("msg", promptText);
+      router.push(`/dashboard/chat/new?${params.toString()}`);
+    },
+    [router],
+  );
+
+  const handleLeaderClick = useCallback(
+    (leaderId: string) => {
+      const params = new URLSearchParams();
+      params.set("msg", `@${leaderId} `);
       router.push(`/dashboard/chat/new?${params.toString()}`);
     },
     [router],
@@ -344,33 +348,7 @@ export default function DashboardPage() {
           New conversation
         </button>
 
-        {/* Leader strip */}
-        <p className="mb-4 text-xs font-medium tracking-widest text-neutral-400">
-          YOUR ORGANIZATION
-        </p>
-        <div className="flex flex-wrap justify-center gap-3">
-          {DOMAIN_LEADERS.map((leader) => (
-            <button
-              key={leader.id}
-              type="button"
-              onClick={() => {
-                const params = new URLSearchParams();
-                params.set("msg", `@${leader.id} `);
-                router.push(`/dashboard/chat/new?${params.toString()}`);
-              }}
-              className="group flex items-center gap-1.5 rounded-lg px-2 py-1 transition-colors hover:bg-neutral-800/50"
-            >
-              <span
-                className={`flex h-5 w-5 items-center justify-center rounded text-[10px] font-semibold text-white ${LEADER_BG_COLORS[leader.id]}`}
-              >
-                {leader.id.toUpperCase()}
-              </span>
-              <span className="text-xs text-neutral-500 group-hover:text-neutral-300">
-                {leader.name}
-              </span>
-            </button>
-          ))}
-        </div>
+        <LeaderStrip onLeaderClick={handleLeaderClick} />
       </div>
     );
   }
@@ -424,33 +402,7 @@ export default function DashboardPage() {
           ))}
         </div>
 
-        {/* Leader strip */}
-        <p className="mb-4 text-xs font-medium tracking-widest text-neutral-400">
-          YOUR ORGANIZATION
-        </p>
-        <div className="flex flex-wrap justify-center gap-3">
-          {DOMAIN_LEADERS.map((leader) => (
-            <button
-              key={leader.id}
-              type="button"
-              onClick={() => {
-                const params = new URLSearchParams();
-                params.set("msg", `@${leader.id} `);
-                router.push(`/dashboard/chat/new?${params.toString()}`);
-              }}
-              className="group flex items-center gap-1.5 rounded-lg px-2 py-1 transition-colors hover:bg-neutral-800/50"
-            >
-              <span
-                className={`flex h-5 w-5 items-center justify-center rounded text-[10px] font-semibold text-white ${LEADER_BG_COLORS[leader.id]}`}
-              >
-                {leader.id.toUpperCase()}
-              </span>
-              <span className="text-xs text-neutral-500 group-hover:text-neutral-300">
-                {leader.name}
-              </span>
-            </button>
-          ))}
-        </div>
+        <LeaderStrip onLeaderClick={handleLeaderClick} />
       </div>
     );
   }
@@ -570,6 +522,35 @@ export default function DashboardPage() {
         </div>
       )}
     </div>
+  );
+}
+
+function LeaderStrip({ onLeaderClick }: { onLeaderClick: (leaderId: string) => void }) {
+  return (
+    <>
+      <p className="mb-4 text-xs font-medium tracking-widest text-neutral-400">
+        YOUR ORGANIZATION
+      </p>
+      <div className="flex flex-wrap justify-center gap-3">
+        {DOMAIN_LEADERS.map((leader) => (
+          <button
+            key={leader.id}
+            type="button"
+            onClick={() => onLeaderClick(leader.id)}
+            className="group flex items-center gap-1.5 rounded-lg px-2 py-1 transition-colors hover:bg-neutral-800/50"
+          >
+            <span
+              className={`flex h-5 w-5 items-center justify-center rounded text-[10px] font-semibold text-white ${LEADER_BG_COLORS[leader.id]}`}
+            >
+              {leader.id.toUpperCase()}
+            </span>
+            <span className="text-xs text-neutral-500 group-hover:text-neutral-300">
+              {leader.name}
+            </span>
+          </button>
+        ))}
+      </div>
+    </>
   );
 }
 
