@@ -37,7 +37,7 @@ app/(dashboard)/dashboard/kb/
   layout.tsx              -- KB layout: tree sidebar (desktop), responsive shell ("use client")
   page.tsx                -- Tree view: file listing, search, empty state
   [...path]/
-    page.tsx              -- Content view: markdown rendering, ask-about link ("use client")
+    page.tsx              -- Content view: markdown rendering, chat-about link ("use client")
 
 components/
   kb/
@@ -150,14 +150,14 @@ Build the content page that renders markdown files with syntax highlighting.
 - [ ] Apply brand typography: Cormorant Garamond for rendered h1/h2, Inter for body, JetBrains Mono for code
 - [ ] Syntax highlighting theme: dark theme matching neutral-950 code blocks with amber-300 strings
 - [ ] Mobile back button — visible back arrow in content header (not just breadcrumb). Design in this phase, not deferred to polish
-- [ ] "Ask about this" — inline `<Link>` in content header navigating to `/dashboard/chat/new?msg=Tell me about the file at <kb-path>&leader=cto` (uses existing `?msg=` param from chat page). No separate component file — it's one link element
+- [ ] "Chat about this" — inline `<Link>` in content header navigating to `/dashboard/chat/new?msg=Tell me about the file at <kb-path>&leader=cto` (uses existing `?msg=` param from chat page). No separate component file — it's one link element
 
 **Files created:**
 
 - `apps/web-platform/app/(dashboard)/dashboard/kb/[...path]/page.tsx` — new (`"use client"`)
 - `apps/web-platform/components/kb/kb-breadcrumb.tsx` — new
 
-**Success criteria:** Deep links work (`/dashboard/kb/product/roadmap.md` renders the file). Breadcrumb navigates. Code blocks highlighted. 404 handled gracefully. Mobile back arrow visible. "Ask about this" opens chat with file context.
+**Success criteria:** Deep links work (`/dashboard/kb/product/roadmap.md` renders the file). Breadcrumb navigates. Code blocks highlighted. 404 handled gracefully. Mobile back arrow visible. "Chat about this" opens chat with file context.
 
 #### Phase 4: Search
 
@@ -200,7 +200,7 @@ Build the search overlay with snippet results.
 | Bottom sheet for mobile file tree | Higher implementation complexity with no UX benefit over separate views. |
 | shiki for syntax highlighting | ~1.7MB bundle vs ~45KB for rehype-highlight. Lighthouse risk too high for v1. |
 | Domain badges in tree (colored tags per domain) | Requires frontmatter parsing for every file on tree load. Too heavy for tree endpoint. |
-| Read-only without "Ask about this" | Misses closing the review loop. The button is small scope with high value. |
+| Read-only without "Chat about this" | Misses closing the review loop. The button is small scope with high value. |
 
 ## Acceptance Criteria
 
@@ -213,7 +213,7 @@ Build the search overlay with snippet results.
 - [ ] Empty state displays when KB has no artifacts
 - [ ] Mobile: file tree and content are separate views with back navigation
 - [ ] Deep links work: `/dashboard/kb/product/roadmap.md` renders directly
-- [ ] "Ask about this" button opens chat with file context
+- [ ] "Chat about this" button opens chat with file context
 - [ ] Breadcrumb navigation shows current file path
 
 ### Non-Functional Requirements
@@ -241,7 +241,7 @@ Build the search overlay with snippet results.
 - Given a search query matching nothing, when submitting search, then "No results" message displays
 - Given an empty KB (no artifacts), when loading `/dashboard/kb`, then empty state with CTA displays
 - Given a deep link `/dashboard/kb/product/roadmap.md`, when loading directly, then content renders without tree interaction
-- Given a content view, when clicking "Ask about this", then navigates to `/dashboard/chat/new?msg=...`
+- Given a content view, when clicking "Chat about this", then navigates to `/dashboard/chat/new?msg=...`
 - Given a mobile viewport (< 768px), when viewing KB, then tree and content are separate full-screen views
 
 ### Edge Cases
@@ -254,7 +254,7 @@ Build the search overlay with snippet results.
 
 ### Integration Verification
 
-- **Browser:** Navigate to `/dashboard/kb`, verify tree loads, click a file, verify content renders, click "Ask about this", verify chat opens
+- **Browser:** Navigate to `/dashboard/kb`, verify tree loads, click a file, verify content renders, click "Chat about this", verify chat opens
 - **API verify:** `curl -s /api/kb/tree` returns `{ tree: { name, type, children, modifiedAt } }` with `modifiedAt` on file nodes
 
 ## Domain Review
@@ -290,7 +290,7 @@ Build the search overlay with snippet results.
 3. **Empty→populated transition** — no auto-refresh after first conversation populates KB. → Fetch-on-mount acceptable for v1; note in tasks.
 4. **Tree state lost on mobile back** — expand/collapse state resets on back navigation. → Store in layout context (persists across page navigations).
 5. **Directory deep link** — `/dashboard/kb/product/` hits 404 since API only serves `.md` files. → Redirect to tree root with directory auto-expanded.
-6. **"Ask about this" exit** — no return path from chat to KB. → Browser back sufficient for v1.
+6. **"Chat about this" exit** — no return path from chat to KB. → Browser back sufficient for v1.
 7. **Search during tree loading** — search should operate independently of tree state. → Search results navigate directly to content view.
 8. **Deep nesting (5+ levels)** — tree indentation pushes names off-screen on mobile. → Cap indent at level 3, horizontal scroll for deeper content, breadcrumb truncation with ellipsis.
 9. **No loading states** — need loading skeletons for tree, content, and search. → Add to each phase.
@@ -313,7 +313,7 @@ Implementation: Cormorant Garamond 500 headline, Inter 400 subtext, gold gradien
 | react-markdown v10.1.0 | Installed | Already used in chat page |
 | remark-gfm v4.0.1 | Installed | Already used in chat page |
 | rehype-highlight | Not installed | Must add in Phase 0 |
-| Chat page `?msg=` param | Exists (line 22, 61-69) | "Ask about this" can use existing mechanism |
+| Chat page `?msg=` param | Exists (line 22, 61-69) | "Chat about this" can use existing mechanism |
 
 ## Risk Analysis & Mitigation
 
@@ -322,7 +322,7 @@ Implementation: Cormorant Garamond 500 headline, Inter 400 subtext, gold gradien
 | Lighthouse regression from rehype-highlight | Medium | Low | Dynamic import (~45KB total). Measure before/after. |
 | Tree API missing `modifiedAt` | Low | Certain | Phase 0 extends `buildTree()` to include `fs.stat().mtime`. Small change. |
 | Markdown component divergence | Medium | Medium | Phase 0 extracts shared renderer as hard prerequisite before any KB work. |
-| "Ask about this" chat context not rendering | Low | Medium | Uses existing `?msg=` param pattern. If chat doesn't support context injection, button still works as a navigation link. |
+| "Chat about this" chat context not rendering | Low | Medium | Uses existing `?msg=` param pattern. If chat doesn't support context injection, button still works as a navigation link. |
 | Mobile layout fighting dashboard drawer | Low | Low | KB layout uses same 768px breakpoint and `usePathname()` pattern as dashboard. |
 | Docker build failure from missing lockfile sync | High | Medium | AGENTS.md rule: regenerate both `bun.lock` and `package-lock.json` after any dependency change. Phase 0 explicitly includes this. |
 

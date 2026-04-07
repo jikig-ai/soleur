@@ -14,7 +14,7 @@ Scope:
 - Sidebar file tree with collapsible directories and last-modified timestamps
 - Markdown rendering with syntax highlighting (rehype-highlight)
 - Search bar with snippet results and highlighted matches
-- "Ask about this" button linking KB files to chat
+- "Chat about this" button linking KB files to chat
 - Mobile-responsive with separate tree/content views
 - Deep-linkable via catch-all route `/dashboard/kb/[...path]`
 
@@ -36,7 +36,7 @@ The route-segment layout approach was chosen because:
 | 1 | Mobile interaction model | Separate views (tree -> content -> back) | Collapsible panel, bottom sheet | Most mobile-native pattern (Files app). Simplest to build. Back button works naturally with URL routing. |
 | 2 | URL structure | Catch-all route `/dashboard/kb/[...path]` | Client state only | Enables deep linking, bookmarks, browser back/forward, agent-to-KB links. Essential for the review loop. |
 | 3 | Syntax highlighting | rehype-highlight with selective languages (md, yaml, json, ts, bash) | shiki (lazy-loaded) | ~45KB vs ~1.7MB. Lighthouse > 80 target. KB content is mostly prose with occasional code. Good enough quality. |
-| 4 | Interactivity level | Read-only + "Ask about this" button | Pure read-only, full inline conversations | Button opens chat with file as context. Small scope increase that demonstrates the agent-KB loop immediately. Full inline conversations deferred to L4 roadmap vision. |
+| 4 | Interactivity level | Read-only + "Chat about this" button | Pure read-only, full inline conversations | Button opens chat with file as context. Small scope increase that demonstrates the agent-KB loop immediately. Full inline conversations deferred to L4 roadmap vision. |
 | 5 | File metadata in tree | Name + last-modified relative date | Name only, name + domain badge | Timestamps make "compounding knowledge" tangible (CMO). Domain badges require frontmatter parsing for every file -- too heavy for tree. |
 | 6 | Search results UX | Snippets with highlighted matches | File list only | API already returns line-level matches with highlight offsets. Snippets make search feel intelligent. |
 | 7 | Component architecture | Route-segment layout (tree in layout, content in page) | Single page with client routing | Most Next.js-idiomatic. Tree persists on desktop nav. Mobile transitions handled by framework. |
@@ -45,7 +45,7 @@ The route-segment layout approach was chosen because:
 
 - **Empty state copy:** Who writes the empty state messaging? CMO flagged this as conversion-critical. Should go through copywriter, not be a developer placeholder.
 - **Tree depth on mobile:** Default collapsed past level 2? Or show all levels? UX wireframes should test this.
-- **"Ask about this" chat integration:** Does `/dashboard/chat/new?context=<kb-path>` exist yet? If not, the button can be a stub that creates a new conversation with the file path as the first message.
+- **"Chat about this" chat integration:** Does `/dashboard/chat/new?context=<kb-path>` exist yet? If not, the button can be a stub that creates a new conversation with the file path as the first message.
 - **Last-modified source:** Git metadata via API, file stat, or frontmatter date field? API currently returns frontmatter but not timestamps.
 - **Non-markdown files:** YAML, JSON, images in KB -- render raw, show as code, or hide from tree? Current API only includes `.md` files.
 
@@ -79,7 +79,7 @@ components/
     file-tree.tsx         <- Recursive tree component
     search-overlay.tsx    <- Search with snippet results
     kb-breadcrumb.tsx     <- Breadcrumb nav for content view
-    ask-about-button.tsx  <- "Ask about this" chat link
+        (inline in content page — no separate component)
   ui/
     markdown-renderer.tsx <- Extracted from chat (shared)
 ```

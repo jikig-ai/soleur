@@ -16,7 +16,7 @@ Founders cannot see what their AI organization produced. Plans, brainstorms, spe
 - G3: Founders can search across all KB content and navigate to results
 - G4: Works on mobile (PWA-installable, Lighthouse > 80)
 - G5: Files are deep-linkable via URL for agent-to-KB references
-- G6: Founders can initiate a chat about any KB file ("Ask about this")
+- G6: Founders can initiate a chat about any KB file ("Chat about this")
 
 ## Non-Goals
 
@@ -39,7 +39,7 @@ Founders cannot see what their AI organization produced. Plans, brainstorms, spe
 | FR5 | Empty state | When KB has no artifacts, displays conversion-oriented messaging encouraging the user to start a conversation. Copy to be reviewed by copywriter. |
 | FR6 | Mobile responsive | Separate views on mobile: file tree is one screen, tapping a file navigates to content view with back button. Desktop shows side-by-side layout. |
 | FR7 | Deep linking | Files accessible via `/dashboard/kb/[...path]`. Supports bookmarks, browser back/forward, and agent-generated links. |
-| FR8 | Ask about this | Button on content view opens a new chat conversation with the current file as context. |
+| FR8 | Chat about this | Button on content view opens a new chat conversation with the current file as context. |
 
 ## Technical Requirements
 
@@ -123,7 +123,7 @@ type SearchResult = {
 | TS5 | Search for non-existent term | Empty results message displayed |
 | TS6 | Load empty KB | Empty state with CTA displayed |
 | TS7 | Deep link to specific file | Content renders directly without tree interaction |
-| TS8 | Click "Ask about this" | Navigates to chat with file context |
+| TS8 | Click "Chat about this" | Navigates to chat with file context |
 | TS9 | Mobile viewport | Tree and content are separate views |
 | TS10 | Code block in markdown | Syntax highlighting applied |
 
@@ -141,4 +141,4 @@ type SearchResult = {
 | Lighthouse score regression from syntax highlighter | Medium | Dynamic import, selective language registration, measure before/after |
 | Markdown component divergence between chat and KB | Medium | Extract shared renderer as prerequisite task |
 | Last-modified timestamps not in current API | Low | Extend tree endpoint to include file stat mtime, or derive from git |
-| "Ask about this" requires chat integration that may not exist | Low | Button can create new conversation with file path as initial context |
+| "Chat about this" requires chat integration that may not exist | Low | Button can create new conversation with file path as initial context |

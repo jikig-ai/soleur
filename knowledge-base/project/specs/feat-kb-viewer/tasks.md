@@ -54,7 +54,7 @@
   - [ ] 3.1.5 Handle directory deep links → plain redirect to `/dashboard/kb`
   - [ ] 3.1.6 Loading skeleton placeholder
   - [ ] 3.1.7 Mobile back arrow in content header (not just breadcrumb)
-  - [ ] 3.1.8 "Ask about this" — inline `<Link>` to `/dashboard/chat/new?msg=...&leader=cto` (no separate component)
+  - [ ] 3.1.8 "Chat about this" — inline `<Link>` to `/dashboard/chat/new?msg=...&leader=cto` (no separate component)
 - [ ] 3.2 Create breadcrumb (`components/kb/kb-breadcrumb.tsx`)
   - [ ] 3.2.1 Render path segments as clickable links
   - [ ] 3.2.2 Last segment is current file (non-clickable)
