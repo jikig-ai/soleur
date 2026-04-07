@@ -49,3 +49,7 @@ pre-commit:
         echo "Move to knowledge-base/project/ before committing:" >&2
         echo "  knowledge-base/{brainstorms,learnings,plans,specs}/ -> knowledge-base/project/{brainstorms,learnings,plans,specs}/" >&2
         exit 1
+    generate-kb-index:
+      priority: 10
+      glob: "knowledge-base/**/*.md"
+      run: bash scripts/generate-kb-index.sh && git add knowledge-base/INDEX.md
