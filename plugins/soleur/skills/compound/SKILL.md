@@ -191,7 +191,7 @@ Close the gap between "we learned X" and "X is now enforced." The project has pr
 
 7. **Feed into Constitution Promotion.** Present each deviation to the user via the existing Accept/Skip/Edit gate in the Constitution Promotion section below. Accepted hook proposals should be manually copied to `.claude/hooks/` after testing — never auto-install.
 
-8. **Rule budget count.** After deviation analysis, count always-loaded rules: `grep -c '^- ' knowledge-base/project/constitution.md` + `grep -c '^- ' AGENTS.md`. Output: `"Rule budget: N always-loaded rules (constitution: X, AGENTS.md: Y)"`. If N > 250, append: `"[WARNING] Rule budget exceeded (N/250). Consider retiring hook-enforced rules or migrating advisory rules to skill/agent instructions."`
+8. **Rule budget count.** After deviation analysis, count always-loaded rules in `AGENTS.md` (the only file included via `CLAUDE.md @AGENTS.md`): `grep -c '^- ' AGENTS.md`. Constitution.md is on-demand (loaded by skills when needed, not every turn) and tracked separately. Output: `"Rule budget: A always-loaded rules (AGENTS.md: A), C on-demand rules (constitution.md: C)"`. If A > 100, append: `"[WARNING] AGENTS.md budget exceeded (A/100). Move skill-specific rules to the skills that enforce them."` If C > 300, append: `"[WARNING] constitution.md is large (C/300). Consider migrating narrow rules to skill/agent instructions."`
 
 ### Empty Case
 
