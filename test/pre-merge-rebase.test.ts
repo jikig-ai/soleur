@@ -135,6 +135,7 @@ describe("pre-merge-rebase hook (no git repo needed)", () => {
 describe("pre-merge-rebase hook (with git repo)", () => {
   let repoDir: string;
   let remoteDir: string;
+  let initialMainSha: string;
 
   beforeAll(() => {
     remoteDir = mkdtempSync(join(tmpdir(), "hook-test-remote-"));
@@ -152,6 +153,10 @@ describe("pre-merge-rebase hook (with git repo)", () => {
       cwd: repoDir,
     });
     spawnChecked(["git", "push", "origin", "main"], { cwd: repoDir });
+
+    initialMainSha = new TextDecoder()
+      .decode(spawnChecked(["git", "rev-parse", "main"], { cwd: repoDir }).stdout)
+      .trim();
   });
 
   afterAll(() => {
@@ -161,6 +166,15 @@ describe("pre-merge-rebase hook (with git repo)", () => {
 
   beforeEach(() => {
     spawnChecked(["git", "checkout", "main"], { cwd: repoDir });
+    // Reset remote main to initial commit so tests that pushed to origin/main
+    // don't affect subsequent tests (latent ordering dependency).
+    spawnChecked(
+      ["git", "update-ref", "refs/heads/main", initialMainSha],
+      { cwd: remoteDir }
+    );
+    // Re-fetch so local origin/main tracks the reset remote.
+    spawnChecked(["git", "fetch", "origin"], { cwd: repoDir });
+    // Re-reset local main to match the now-reset origin/main.
     spawnChecked(["git", "reset", "--hard", "origin/main"], { cwd: repoDir });
     // Remove untracked files/directories (e.g., todos/ from addReviewEvidence).
     // git reset --hard only resets tracked files; clean -fd handles the rest.
@@ -192,6 +206,7 @@ describe("pre-merge-rebase hook (with git repo)", () => {
     );
 
     expect(result.exitCode).toBe(0);
+    expect(result.stdout, "expected JSON deny output but got empty stdout").not.toBe("");
     const output = JSON.parse(result.stdout);
     expect(output.hookSpecificOutput.permissionDecision).toBe("deny");
     expect(output.hookSpecificOutput.permissionDecisionReason).toContain(
@@ -284,6 +299,7 @@ describe("pre-merge-rebase hook (with git repo)", () => {
     );
 
     expect(result.exitCode).toBe(0);
+    expect(result.stdout, "expected JSON deny output but got empty stdout").not.toBe("");
     const output = JSON.parse(result.stdout);
     expect(output.hookSpecificOutput.additionalContext).toContain("merged");
     expect(output.hookSpecificOutput.additionalContext).toContain("test-behind");
@@ -299,6 +315,7 @@ describe("pre-merge-rebase hook (with git repo)", () => {
     );
 
     expect(result.exitCode).toBe(0);
+    expect(result.stdout, "expected JSON deny output but got empty stdout").not.toBe("");
     const output = JSON.parse(result.stdout);
     expect(output.hookSpecificOutput.permissionDecision).toBe("deny");
     expect(output.hookSpecificOutput.permissionDecisionReason).toContain(
@@ -319,6 +336,7 @@ describe("pre-merge-rebase hook (with git repo)", () => {
     );
 
     expect(result.exitCode).toBe(0);
+    expect(result.stdout, "expected JSON deny output but got empty stdout").not.toBe("");
     const output = JSON.parse(result.stdout);
     expect(output.hookSpecificOutput.permissionDecision).toBe("deny");
     expect(output.hookSpecificOutput.permissionDecisionReason).toContain(
@@ -349,6 +367,7 @@ describe("pre-merge-rebase hook (with git repo)", () => {
     );
 
     expect(result.exitCode).toBe(0);
+    expect(result.stdout, "expected JSON deny output but got empty stdout").not.toBe("");
     const output = JSON.parse(result.stdout);
     expect(output.hookSpecificOutput.permissionDecision).toBe("deny");
     expect(output.hookSpecificOutput.permissionDecisionReason).toContain(
@@ -490,6 +509,7 @@ describe("pre-merge-rebase hook (with git repo)", () => {
       );
 
       expect(result.exitCode).toBe(0);
+      expect(result.stdout, "expected JSON deny output but got empty stdout").not.toBe("");
       const output = JSON.parse(result.stdout);
       expect(output.hookSpecificOutput.permissionDecision).toBe("deny");
       expect(output.hookSpecificOutput.permissionDecisionReason).toContain(
@@ -525,6 +545,7 @@ describe("pre-merge-rebase hook (with git repo)", () => {
       makeInput("gh pr merge 123 --squash --auto", repoDir)
     );
     expect(first.exitCode).toBe(0);
+    expect(first.stdout, "expected JSON deny output but got empty stdout").not.toBe("");
     const firstOutput = JSON.parse(first.stdout);
     expect(firstOutput.hookSpecificOutput.additionalContext).toContain("merged");
 
