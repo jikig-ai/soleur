@@ -359,9 +359,22 @@ async function findOrgInstallationForUser(
   );
 
   for (const inst of orgInstallations) {
+    // Use installation token (not App JWT) for org membership check —
+    // GET /orgs/{org}/members/{user} requires members:read permission
+    let installationToken: string;
+    try {
+      installationToken = await generateInstallationToken(inst.id);
+    } catch (err) {
+      log.warn(
+        { err, installationId: inst.id },
+        "Failed to generate installation token for membership check",
+      );
+      continue;
+    }
+
     const memberCheck = await githubFetch(
       `${GITHUB_API}/orgs/${encodeURIComponent(inst.account.login)}/members/${encodeURIComponent(githubLogin)}`,
-      { headers: { Authorization: `Bearer ${jwt}` } },
+      { headers: { Authorization: `token ${installationToken}` } },
     );
     // 204 = is a member, 302 = requester is not org member, 404 = not a member
     if (memberCheck.status === 204) {
