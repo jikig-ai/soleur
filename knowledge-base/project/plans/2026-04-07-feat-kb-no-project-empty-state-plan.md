@@ -48,12 +48,12 @@ Use the same Tailwind utility classes, `font-serif` for headings, `text-neutral-
 
 ## Acceptance Criteria
 
-- [ ] When a user with no connected project visits `/dashboard/kb`, they see a dedicated empty state (not "Unable to load your knowledge base")
-- [ ] The empty state includes a heading indicating no project is set up
-- [ ] The empty state includes a brief description guiding the user
-- [ ] The empty state includes a CTA button to create or connect a project (links to `/connect-repo?return_to=/dashboard/kb`)
-- [ ] The generic error message ("Unable to load your knowledge base") remains for the `"unknown"` error state
-- [ ] The `"workspace-not-ready"` state continues to work as before
+- [x] When a user with no connected project visits `/dashboard/kb`, they see a dedicated empty state (not "Unable to load your knowledge base")
+- [x] The empty state includes a heading indicating no project is set up
+- [x] The empty state includes a brief description guiding the user
+- [x] The empty state includes a CTA button to create or connect a project (links to `/connect-repo?return_to=/dashboard/kb`)
+- [x] The generic error message ("Unable to load your knowledge base") remains for the `"unknown"` error state
+- [x] The `"workspace-not-ready"` state continues to work as before
 
 ## Test Scenarios
 
@@ -92,6 +92,14 @@ Add a new conditional branch before the generic `if (error)` block:
 
 ```typescript
 if (error === "not-found") {
+  return <NoProjectState />;
+}
+```
+
+Extract the JSX into a named function component (matching the file's existing `EmptyState` and `LoadingSkeleton` pattern):
+
+```typescript
+function NoProjectState() {
   return (
     <div className="flex h-full items-center justify-center p-6">
       <div className="max-w-sm text-center">
