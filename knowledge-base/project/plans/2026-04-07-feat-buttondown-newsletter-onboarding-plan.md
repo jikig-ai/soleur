@@ -249,17 +249,17 @@ Add Buttondown to `knowledge-base/operations/expenses.md`:
 
 ## Acceptance Criteria
 
-- [ ] Newsletter description set to match website form copy
-- [ ] Tint color changed from Buttondown default blue to brand gold `#C9A962`
-- [ ] Header displays "Soleur" heading with tagline
-- [ ] Footer includes brand tagline and social links
-- [ ] Timezone set to `Europe/Paris`
-- [ ] Newsletter icon uploaded (300x300 square PNG)
-- [ ] Share image uploaded (1200x630 PNG)
-- [ ] Sending domain `mail.soleur.ai` configured and verified in Buttondown
-- [ ] NS records for `mail.soleur.ai` added to Terraform and applied
-- [ ] First newsletter email drafted (or sent if content is approved)
-- [ ] Buttondown added to `knowledge-base/operations/expenses.md`
+- [x] Newsletter description set to match website form copy
+- [x] Tint color changed from Buttondown default blue to brand gold `#C9A962`
+- [x] Header displays "Soleur" heading with tagline
+- [x] Footer includes brand tagline and social links
+- [x] Timezone set to `Europe/Paris`
+- [x] Newsletter icon uploaded (300x300 square PNG)
+- [x] Share image uploaded (1200x630 PNG)
+- [x] Sending domain `mail.soleur.ai` configured and verified in Buttondown
+- [x] NS records for `mail.soleur.ai` added to Terraform and applied
+- [x] First newsletter email sent (2026-04-07)
+- [x] Buttondown added to `knowledge-base/operations/expenses.md`
 
 ## Test Scenarios
 

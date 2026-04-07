@@ -33,12 +33,12 @@
 
 ## Phase 4: First Newsletter Draft
 
-- [ ] 4.1 Draft first email content (introduction to Soleur, set expectations for future newsletters)
-- [ ] 4.2 Create draft via `POST /v1/emails` API with `status: "draft"` (verified working)
-- [ ] 4.3 Preview draft in Buttondown dashboard via Playwright to verify branding renders correctly
-- [ ] 4.4 Decision gate: send or hold for user review
+- [x] 4.1 Draft first email content (introduction to Soleur, set expectations for future newsletters)
+- [x] 4.2 Create draft via `POST /v1/emails` API with `status: "draft"` (verified working)
+- [x] 4.3 Preview draft in Buttondown dashboard via Playwright to verify branding renders correctly
+- [x] 4.4 Decision gate: sent to subscribers on 2026-04-07
 
 ## Phase 5: Expense Tracking and Documentation
 
-- [ ] 5.1 Add Buttondown free-tier entry to `knowledge-base/operations/expenses.md`
-- [ ] 5.2 Run markdownlint on modified files
+- [x] 5.1 Add Buttondown free-tier entry to `knowledge-base/operations/expenses.md`
+- [x] 5.2 Run markdownlint on modified files
