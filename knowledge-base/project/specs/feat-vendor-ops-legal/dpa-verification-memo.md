@@ -1,7 +1,7 @@
 # DPA Verification Memo -- Web Platform Services
 
 **Date:** 2026-03-18
-**Updated:** 2026-03-19 (dashboard verification via Playwright, Supabase DPA signed)
+**Updated:** 2026-04-07 (Supabase Braintrust sub-processor resolution)
 **Issue:** #670, #702
 **Reviewed by:** Soleur CLO agent (automated review, not legal advice)
 
@@ -42,6 +42,21 @@ PR #637 deployed four external services for the Soleur web platform (app.soleur.
 - **Data processed:** Email addresses, hashed passwords (bcrypt via GoTrue), auth tokens (JWT), session metadata.
 - **DPA execution status:** **SIGNED 2026-03-19** via PandaDoc. DPA version dated August 5, 2025. Supervisory authority: CNIL. Special categories: None. SCCs (Module 2 C2P + Module 3 P2P) incorporated. Governing law: Irish law (SCCs Clause 17). Jurisdiction: courts of Ireland (SCCs Clause 18).
 - **Action:** None -- DPA executed.
+
+#### Braintrust Sub-Processor Resolution (2026-04-07)
+
+Supabase notified of Braintrust (monitoring/tracing tooling) as a new sub-processor (~2026-03-23). Questions sent to `privacy@supabase.io` same day, follow-up sent 2026-03-29. Response received 2026-04-07 from Tracy Lane (Supabase):
+
+- **Scope:** Braintrust is used only for Supabase AI Assistant features (response quality evaluation, debugging). Not applicable if AI Assistant is not used.
+- **EU-hosted projects excluded:** For projects hosted in EU regions (including our eu-west-1 deployment), Braintrust tracing is **disabled**. No data is sent to Braintrust.
+- **No cross-border transfer:** Because EU-hosted projects are excluded from Braintrust processing, no international transfer occurs.
+- **Data categories (if applicable):** User ID, org ID, project ref, chat ID, plan ID, user prompts/responses (subject to AI opt-in), model name, token usage, latency, environment. **None of this applies to our EU-hosted project.**
+- **Braintrust processing location:** US (AWS us-east-1) -- irrelevant for EU-hosted projects.
+- **Retention:** 30 days (for non-EU projects that use AI Assistant).
+- **Model training:** Contractually prohibited. Braintrust may not use customer data for AI/ML training.
+- **Braintrust sub-processors:** Braintrust may engage its own sub-processors per its own DPA.
+- **Objection window:** 5 days per Section 6.5. Window passed, but position defensible (questions sent same day as notice, Supabase acknowledged and responded).
+- **Resolution:** No objection filed. Sub-processor accepted. No re-signing required -- existing DPA (August 5, 2025) remains in effect. No impact on Jikigai's EU-hosted project.
 
 ### Stripe Inc
 

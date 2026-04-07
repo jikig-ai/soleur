@@ -136,8 +136,17 @@ export default function DashboardLayout({
           })}
         </nav>
 
-        {/* Sign out */}
+        {/* Footer links */}
         <div className="border-t border-neutral-800 p-3 safe-bottom">
+          <a
+            href="https://soleur-ai.betteruptime.com/"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="flex min-h-[44px] w-full items-center gap-3 rounded-lg px-3 py-2 text-sm text-neutral-400 transition-colors hover:bg-neutral-800/50 hover:text-neutral-200"
+          >
+            <StatusIcon className="h-4 w-4 shrink-0" />
+            Status
+          </a>
           <button
             onClick={handleSignOut}
             className="flex min-h-[44px] w-full items-center gap-3 rounded-lg px-3 py-2 text-sm text-neutral-400 transition-colors hover:bg-neutral-800/50 hover:text-neutral-200"
@@ -251,6 +260,24 @@ function SettingsIcon({ className }: { className?: string }) {
         strokeLinecap="round"
         strokeLinejoin="round"
         d="M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z"
+      />
+    </svg>
+  );
+}
+
+function StatusIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      className={className}
+      fill="none"
+      viewBox="0 0 24 24"
+      stroke="currentColor"
+      strokeWidth={1.5}
+    >
+      <path
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        d="M9 12.75 11.25 15 15 9.75M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z"
       />
     </svg>
   );

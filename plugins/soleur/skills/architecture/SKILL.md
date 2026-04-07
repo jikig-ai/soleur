@@ -15,7 +15,8 @@ Create, manage, and query Architecture Decision Records (ADRs) and generate Merm
 | `architecture list` | Display all ADRs with status, title, and date |
 | `architecture supersede <N> [title]` | Mark ADR-N as superseded and create its replacement |
 | `architecture diagram [type]` | Generate a Mermaid C4 diagram (context, container, or component) |
-| `architecture assess [feature]` | Assess a feature against the NFR register and recommend relevant requirements |
+| `architecture assess [feature]` | Assess a feature against the NFR register and principles register |
+| `architecture principle list` | Display the architecture principles register |
 
 If no sub-command is provided, display the table above and ask which sub-command to run.
 
@@ -84,6 +85,7 @@ Create a new ADR with the next sequential number.
    - **Consequences:** What becomes easier or harder?
    - **Cost Impacts:** How much does this change increase or reduce costs? (reference `knowledge-base/operations/expenses.md` for baseline; use "None" if no impact)
    - **NFR Impacts:** Which non-functional requirements are affected? Read [nfr-reference.md](./references/nfr-reference.md) for the assessment checklist and common patterns by decision type. Reference NFR IDs from `knowledge-base/engineering/architecture/nfr-register.md`. Use "None" if no impact.
+   - **Principle Alignment:** Which architectural principles does this decision align with or deviate from? Read `knowledge-base/engineering/architecture/principles-register.md` for the register. Reference AP-NNN IDs. Use "None" if no impact.
    - **Diagram:** (optional) Should a Mermaid C4 diagram be included?
 
 7. **Write the ADR body** with the gathered context. If a diagram was requested, generate using proper C4 syntax from [c4-reference.md](./references/c4-reference.md).
@@ -220,9 +222,11 @@ Assess a feature or plan against the NFR register to identify which non-function
 
 2. **Read the NFR register** at `knowledge-base/engineering/architecture/nfr-register.md`.
 
-3. **Identify affected containers and links.** Read the Container & Link Inventory in the NFR register. Map the feature to specific C4 containers and links it touches (e.g., a new external service adds a network link; a new UI feature affects Dashboard and API Routes).
+3. **Read the principles register** at `knowledge-base/engineering/architecture/principles-register.md`. If it does not exist, skip principle alignment in step 5b.
 
-4. **Classify the feature** against the decision type patterns from [nfr-reference.md](./references/nfr-reference.md):
+4. **Identify affected containers and links.** Read the Container & Link Inventory in the NFR register. Map the feature to specific C4 containers and links it touches (e.g., a new external service adds a network link; a new UI feature affects Dashboard and API Routes).
+
+5. **Classify the feature** against the decision type patterns from [nfr-reference.md](./references/nfr-reference.md):
 
    - New external service integration
    - Infrastructure change
@@ -231,7 +235,7 @@ Assess a feature or plan against the NFR register to identify which non-function
    - Security change
    - Deployment change
 
-5. **Assess each NFR category.** For each of the 7 categories (Observability, Resilience, Testing, Configuration & Delivery, Scaling & Recovery, Security, Data Quality), determine:
+6. **Assess each NFR category.** For each of the 7 categories (Observability, Resilience, Testing, Configuration & Delivery, Scaling & Recovery, Security, Data Quality), determine:
 
    - Which specific NFRs are relevant to the affected containers/links
    - Current per-container/link status from the NFR register tables
@@ -239,7 +243,9 @@ Assess a feature or plan against the NFR register to identify which non-function
    - Any evidence gaps (rows with "Applicable: Yes" but no evidence documented)
    - Any new NFRs that should be added to the register
 
-6. **Output the assessment** as a per-container table:
+7. **Assess principle alignment.** For each principle in the register (AP-001 through AP-NNN), determine: relevant to this feature (yes/no), alignment status (Aligned/Deviation/N/A), and brief rationale. Skip if the principles register was not found in step 3.
+
+8. **Output the assessment** as a per-container table:
 
    ```text
    ## NFR Assessment: [Feature Name]
@@ -258,9 +264,20 @@ Assess a feature or plan against the NFR register to identify which non-function
    | NFR-026 | Encryption In-Transit | Founder -> Dashboard | Implemented | No change | Cloudflare |
    ```
 
-7. **Recommend actions.** For each NFR with "Needs attention" or "Risk introduced" impact, propose a specific action referencing the affected container/link (e.g., "Add circuit breaker on Agent Runtime -> Stripe link", "Configure structured logging for New Service container").
+   If the principles register was loaded, add a Principle Alignment section:
 
-8. **Offer to create an ADR.** If the assessment reveals architectural decisions (e.g., choosing to accept a risk, implementing a new NFR), ask: "Create an ADR to document these decisions?"
+   ```text
+   ### Principle Alignment
+
+   | Principle | Title | Status | Note |
+   |-----------|-------|--------|------|
+   | AP-001 | Terraform-only provisioning | Aligned | New infra uses Terraform |
+   | AP-008 | Doppler secrets | N/A | No new secrets |
+   ```
+
+9. **Recommend actions.** For each NFR with "Needs attention" or "Risk introduced" impact, propose a specific action referencing the affected container/link (e.g., "Add circuit breaker on Agent Runtime -> Stripe link", "Configure structured logging for New Service container"). For each principle with "Deviation" status, explain the deviation and whether an exception is justified.
+
+10. **Offer to create an ADR.** If the assessment reveals architectural decisions (e.g., choosing to accept a risk, implementing a new NFR, deviating from a principle), ask: "Create an ADR to document these decisions?" Principle alignment will be pre-filled from the assessment.
 
 ---
 
@@ -275,3 +292,19 @@ ADRs and learnings serve different purposes:
 | **Format** | Context / Decision / Consequences | Problem / Solution / Key Insight |
 | **Location** | `knowledge-base/engineering/architecture/decisions/` | `knowledge-base/project/learnings/` |
 | **Lifecycle** | Active → Superseded | Evergreen (archived when stale) |
+
+---
+
+## Sub-command: principle list
+
+Display the architecture principles register.
+
+### Steps
+
+1. **Read the principles register** at `knowledge-base/engineering/architecture/principles-register.md`.
+
+2. **If the file does not exist:** Display "No principles register found. Create one at `knowledge-base/engineering/architecture/principles-register.md`."
+
+3. **Display the principles table** from the register, preserving the markdown table format.
+
+4. **Display the enforcement tiers table** below the principles table.

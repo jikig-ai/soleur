@@ -1,5 +1,5 @@
 ---
-last_updated: 2026-03-29
+last_updated: 2026-04-07
 ---
 
 # Legal Compliance Posture
@@ -36,13 +36,13 @@ Source: `knowledge-base/project/specs/feat-vendor-ops-legal/dpa-verification-mem
 
 | Item | Issue | Status | Deadline | Notes |
 |------|-------|--------|----------|-------|
-| Supabase DPA update (Braintrust sub-processor) | #1056 | FOLLOW-UP SENT | 2026-04-05 (response deadline) | Initial questions sent 2026-03-23. Follow-up sent 2026-03-29 preserving objection rights under Section 6.5 (5-day contractual window passed, but email stated 30 days + questions unanswered = defensible position). Formal objection to be filed if no response by 2026-04-05. Do NOT sign updated DPA until questions answered. |
 | T&C blanket statement contradictions | #736 | OPEN | - | Identified during #670 review |
 
 ## Completed Compliance Work
 
 | Item | Issue/PR | Completed | Notes |
 |------|----------|-----------|-------|
+| Supabase DPA update (Braintrust sub-processor) | #1056 / PR #1298 | 2026-04-07 | Supabase confirmed (Tracy Lane, 2026-04-07): Braintrust tracing disabled for EU-hosted projects (eu-west-1). No cross-border transfer. No data sent to Braintrust. No re-signing required — existing DPA (signed 2026-03-19) remains in effect. Sub-processor accepted via Section 6.5 notification mechanism. |
 | Web platform vendor DPA review | #670 / PR #732 | 2026-03-18 | All 4 vendor DPAs signed/verified. Expense ledger updated. Legal docs updated |
 | Vendor checklist gate added | #670 / PR #732 | 2026-03-18 | PR template and constitution updated with vendor compliance section |
 

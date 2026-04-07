@@ -36,12 +36,13 @@ Your evaluation must verify:
 - Design patterns are consistently applied
 - Architectural decisions are properly documented when significant
 - If the PR introduces a new service, cross-boundary integration, or infrastructure change, check `knowledge-base/engineering/architecture/decisions/` for a corresponding ADR. Report missing ADRs as advisory findings (not blockers): "Consider creating an ADR for this architectural change — run `/soleur:architecture create`"
+- Read `knowledge-base/engineering/architecture/principles-register.md` if it exists. For PRs that introduce infrastructure changes, new services, data model changes, or cross-boundary integrations, check alignment with relevant principles (AP-NNN). Report deviations as advisory findings (not blockers): "This change may deviate from AP-NNN (Title) — [brief explanation]"
 
 Provide your analysis in a structured format that includes:
 
 1. **Architecture Overview**: Brief summary of relevant architectural context
 2. **Change Assessment**: How the changes fit within the architecture
-3. **Compliance Check**: Specific architectural principles upheld or violated
+3. **Compliance Check**: Specific architectural principles upheld or violated, including principle alignment from the principles register (AP-NNN deviations noted as advisory)
 4. **Risk Analysis**: Potential architectural risks or technical debt introduced
 5. **Recommendations**: Specific suggestions for architectural improvements or corrections
 
