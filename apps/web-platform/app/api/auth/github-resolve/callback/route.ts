@@ -103,6 +103,12 @@ export async function GET(request: Request) {
       return redirectWithDeletedCookie(ERROR_REDIRECT, request);
     }
 
+    // Validate GitHub username format (alphanumeric + hyphens, max 39 chars)
+    if (!/^[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,37}[a-zA-Z0-9])?$/.test(userData.login)) {
+      logger.error({ login: userData.login.slice(0, 50) }, "GitHub resolve callback: invalid login format");
+      return redirectWithDeletedCookie(ERROR_REDIRECT, request);
+    }
+
     githubUsername = userData.login;
   } catch (err) {
     logger.error({ err }, "GitHub resolve callback: GET /user threw");

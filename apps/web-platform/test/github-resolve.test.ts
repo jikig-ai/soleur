@@ -74,6 +74,11 @@ function extractCookie(response: Response, name: string): string | undefined {
 // ---------------------------------------------------------------------------
 
 describe("GET /api/auth/github-resolve (initiate)", () => {
+  beforeEach(() => {
+    // Initiate route now checks auth (defense-in-depth)
+    mockGetUser.mockResolvedValue({ data: { user: { id: "user-123" } } });
+  });
+
   test("returns 302 redirect to GitHub OAuth authorize URL", async () => {
     const response = await initiateHandler(makeInitiateRequest());
 

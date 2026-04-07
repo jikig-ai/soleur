@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { createClient } from "@/lib/supabase/server";
 import logger from "@/server/logger";
 
 /**
@@ -12,6 +13,13 @@ import logger from "@/server/logger";
  */
 export async function GET() {
   const siteUrl = process.env.NEXT_PUBLIC_SITE_URL ?? "https://app.soleur.ai";
+
+  // Defense-in-depth: verify session even though middleware enforces auth
+  const supabase = await createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) {
+    return NextResponse.redirect(new URL("/login", siteUrl));
+  }
   const clientId = process.env.GITHUB_CLIENT_ID;
   if (!clientId) {
     logger.error("GITHUB_CLIENT_ID not configured");
