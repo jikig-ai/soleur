@@ -101,13 +101,18 @@ describe("findInstallationForLogin", () => {
         { id: 99, account: { login: "my-org", type: "Organization" } },
       ]),
     });
+    // Installation token exchange for membership check
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ token: "ghs_test_token", expires_at: new Date(Date.now() + 3600000).toISOString() }),
+    });
     // Membership check: 204 = is a member
     mockFetch.mockResolvedValueOnce({ status: 204 });
 
     const result = await findInstallationForLogin("orgmember");
 
     expect(result).toBe(99);
-    expect(mockFetch.mock.calls[2][0]).toContain("/orgs/my-org/members/orgmember");
+    expect(mockFetch.mock.calls[3][0]).toContain("/orgs/my-org/members/orgmember");
   });
 
   test("skips non-org installations in fallback", async () => {
