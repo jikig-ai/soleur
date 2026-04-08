@@ -15,6 +15,10 @@
 
 set -euo pipefail
 
+# Resolve script's own absolute path so it can be re-invoked from within a worktree
+# (worktrees don't contain plugins/, so relative paths from the caller's CWD fail)
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 # Colors for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -371,6 +375,24 @@ create_for_feature() {
 
   # git worktree add on bare repos writes core.bare=false to shared config — fix it
   ensure_bare_config
+
+  # Verify the worktree was actually created as a proper git worktree, not just a directory.
+  # git worktree add can silently produce a partial result (directory with knowledge-base/ only)
+  # when run from a bare repo root under certain configurations (#1756).
+  local actual_toplevel
+  if ! actual_toplevel=$(git -C "$worktree_path" rev-parse --show-toplevel 2>/dev/null); then
+    echo -e "${RED}Error: Worktree creation failed -- 'git rev-parse --show-toplevel' failed inside $worktree_path${NC}"
+    echo -e "${YELLOW}The directory exists but is not a functioning git worktree.${NC}"
+    echo -e "${YELLOW}Run: git worktree list  # to see current worktree state${NC}"
+    exit 1
+  fi
+  if [[ "$actual_toplevel" != "$worktree_path" ]]; then
+    echo -e "${RED}Error: Worktree not properly created.${NC}"
+    echo -e "  Expected: $worktree_path"
+    echo -e "  Got:      $actual_toplevel"
+    exit 1
+  fi
+  echo -e "${GREEN}Worktree verified: $actual_toplevel${NC}"
 
   # Create spec directory in main repo (shared across worktrees)
   if [[ -d "$GIT_ROOT/knowledge-base" ]]; then
