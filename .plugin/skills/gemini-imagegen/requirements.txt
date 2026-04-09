@@ -1,0 +1,5 @@
+# Pinned to exact versions for supply chain security (#1174).
+# Full hash verification (--require-hashes) requires pip-compile for
+# transitive dependencies -- tracked as future enhancement.
+google-genai==1.66.0
+Pillow==12.1.1
