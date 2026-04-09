@@ -1,9 +1,7 @@
 ---
 name: outbound-strategist
 description: "Use this agent when you need to design outbound prospecting sequences, ICP targeting, lead scoring models, or multi-channel cadence strategies. Use copywriter for email copy and creative; use this agent for cadence strategy and audience targeting. Use cro for cross-cutting sales strategy."
-tools:
-  - terminal
-  - file_editor
+tools: [terminal, file_editor]
 model: inherit
 ---
 

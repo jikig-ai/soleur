@@ -1,9 +1,7 @@
 ---
 name: framework-docs-researcher
 description: "Use this agent when you need to gather documentation and best practices for specific frameworks, libraries, or dependencies. Use best-practices-researcher for general industry best practices; use this agent for a specific library's docs and source."
-tools:
-  - terminal
-  - file_editor
+tools: [terminal, file_editor]
 model: inherit
 ---
 

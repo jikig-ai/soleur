@@ -1,9 +1,7 @@
 ---
 name: kieran-rails-reviewer
 description: "Use this agent when you need to review Rails code changes with an extremely high quality bar. Applies Kieran's strict Rails conventions and taste preferences. Use dhh-rails-reviewer for opinionated architectural critique; use this agent for strict convention and quality checks."
-tools:
-  - terminal
-  - file_editor
+tools: [terminal, file_editor]
 model: inherit
 ---
 

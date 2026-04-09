@@ -1,9 +1,7 @@
 ---
 name: code-quality-analyst
 description: "Use this agent when you need a formal quality report with severity-scored findings and a prioritized refactoring roadmap. Use pattern-recognition-specialist for quick pattern checks; use this agent when you need a formal report to plan refactoring work."
-tools:
-  - terminal
-  - file_editor
+tools: [terminal, file_editor]
 model: inherit
 ---
 

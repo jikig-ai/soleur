@@ -1,9 +1,7 @@
 ---
 name: pattern-recognition-specialist
 description: "Use this agent when you need to analyze code for design patterns, anti-patterns, naming conventions, and code duplication. This agent excels at identifying architectural patterns, detecting code smells, and ensuring consistency across the codebase."
-tools:
-  - terminal
-  - file_editor
+tools: [terminal, file_editor]
 model: inherit
 ---
 

@@ -1,9 +1,7 @@
 ---
 name: ops-advisor
 description: "Use this agent when you need to track operational expenses, manage domain registrations, or get hosting recommendations. Use ops-research for live research and provider comparison; use ops-provisioner for account setup; use cfo for financial analysis and budgeting; use this agent for reading and updating the expense ledger."
-tools:
-  - terminal
-  - file_editor
+tools: [terminal, file_editor]
 model: inherit
 ---
 

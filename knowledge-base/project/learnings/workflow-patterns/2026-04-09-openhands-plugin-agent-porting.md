@@ -26,6 +26,14 @@ OpenHands agents are structurally simpler than Claude Code agents: flat director
 
 The `tools: [terminal, file_editor]` pair covers most agent needs because `terminal` subsumes git, curl, grep, semgrep, and gh CLI. Only agents that spawn sub-agents need `delegate` (YELLOW agents, not in this batch).
 
+## Pitfall: Bash Markdown Transformation
+
+When transforming markdown files with bash scripts, three traps cause silent body corruption:
+
+1. **`---` in body content** — `awk` or `sed` scripts that split on `---` (frontmatter delimiter) will eat horizontal rules in the body. Use a state machine that counts delimiters: only the first two `---` lines are frontmatter boundaries.
+2. **Command substitution strips trailing newlines** — `body=$(cat file)` silently removes all trailing `\n`. Write directly to the output file with `>>` instead of capturing into a variable.
+3. **Long lines truncated** — Some shells/tools silently truncate lines over ~1024 chars. Verify with `wc -c` on specific lines (e.g., analytics-analyst had a formula line that was truncated).
+
 ## Related
 
 - Issue: #1774

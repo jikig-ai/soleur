@@ -1,9 +1,7 @@
 ---
 name: repo-research-analyst
 description: "Use this agent when you need to research a repository's structure, documentation, and patterns -- architecture files, GitHub issues, contribution guidelines, and implementation patterns. Unlike git-history-analyzer (commit history), this agent examines repo structure, docs, issues, and templates."
-tools:
-  - terminal
-  - file_editor
+tools: [terminal, file_editor]
 model: inherit
 ---
 

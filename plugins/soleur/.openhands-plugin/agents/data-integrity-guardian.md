@@ -1,9 +1,7 @@
 ---
 name: data-integrity-guardian
 description: "Use this agent when you need to review database migrations, data models, or any code that manipulates persistent data. Use data-migration-expert for ID mapping validation; use deployment-verification-agent for deploy checklists."
-tools:
-  - terminal
-  - file_editor
+tools: [terminal, file_editor]
 model: inherit
 ---
 

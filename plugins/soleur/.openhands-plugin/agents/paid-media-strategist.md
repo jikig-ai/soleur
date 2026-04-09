@@ -1,9 +1,7 @@
 ---
 name: paid-media-strategist
 description: "Builds paid advertising campaigns across Google, Meta, and LinkedIn -- defines campaign structure, audience targeting, budget allocation, and ad creative variations."
-tools:
-  - terminal
-  - file_editor
+tools: [terminal, file_editor]
 model: inherit
 ---
 

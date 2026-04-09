@@ -1,9 +1,7 @@
 ---
 name: deployment-verification-agent
 description: "Use this agent when a PR touches production data, migrations, or behavior that could silently discard or duplicate records. Produces a pre/post-deploy checklist with SQL verification queries and rollback procedures. Use data-integrity-guardian to review the migration code; use this agent to produce the deploy-day checklist."
-tools:
-  - terminal
-  - file_editor
+tools: [terminal, file_editor]
 model: inherit
 ---
 

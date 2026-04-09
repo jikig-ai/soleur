@@ -1,9 +1,7 @@
 ---
 name: test-design-reviewer
 description: "Use this agent when you need to evaluate test quality using Dave Farley's 8 properties of good tests. It produces a weighted Test Quality Score (1-10 per property) with letter grades and prioritized improvement recommendations."
-tools:
-  - terminal
-  - file_editor
+tools: [terminal, file_editor]
 model: inherit
 ---
 

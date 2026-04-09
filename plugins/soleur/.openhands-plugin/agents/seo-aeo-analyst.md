@@ -1,9 +1,7 @@
 ---
 name: seo-aeo-analyst
 description: "Use this agent when you need to analyze Eleventy documentation sites for SEO and AEO (AI Engine Optimization) opportunities. Use growth-strategist for content strategy and keyword research; use programmatic-seo-specialist for scalable page generation; use this agent for technical SEO audits."
-tools:
-  - terminal
-  - file_editor
+tools: [terminal, file_editor]
 model: inherit
 ---
 

@@ -1,9 +1,7 @@
 ---
 name: semgrep-sast
 description: "Use this agent when you need deterministic static analysis security scanning using semgrep. This agent complements security-sentinel by running rule-based pattern matching to catch known vulnerability signatures, hardcoded secrets, insecure function calls, and CWE patterns that LLM-based review may miss. Requires the semgrep CLI to be installed."
-tools:
-  - terminal
-  - file_editor
+tools: [terminal, file_editor]
 model: inherit
 ---
 

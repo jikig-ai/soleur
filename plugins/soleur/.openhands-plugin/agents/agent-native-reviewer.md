@@ -1,9 +1,7 @@
 ---
 name: agent-native-reviewer
 description: "Use this agent when reviewing code to ensure features are agent-native -- any action a user can take, an agent can also take, and anything a user can see, an agent can see. Enforces agent-user parity in capability and context."
-tools:
-  - terminal
-  - file_editor
+tools: [terminal, file_editor]
 model: inherit
 ---
 
