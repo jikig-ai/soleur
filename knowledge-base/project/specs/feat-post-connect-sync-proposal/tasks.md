@@ -20,11 +20,11 @@
   - [ ] 1.1.3 Implement categorization algorithm (Strong 6+/8, Developing 3-5/8, Gaps Found 0-2/8)
   - [ ] 1.1.4 Implement recommendation generation based on missing signals (brand-aligned copy)
   - [ ] 1.1.5 Add 5-second timeout safety net
-- [ ] 1.2 Create `supabase/migrations/016_project_health_snapshot.sql`
+- [ ] 1.2 Create `supabase/migrations/017_project_health_snapshot.sql`
   - [ ] 1.2.1 `ALTER TABLE users ADD COLUMN IF NOT EXISTS health_snapshot jsonb`
   - [ ] 1.2.2 Add restrictive RLS policy preventing client UPDATE of `health_snapshot` [Updated 2026-04-10: RLS security fix — existing "Users can update own profile" allows UPDATE on ALL columns]
   - [ ] 1.2.3 Verify migration is idempotent (IF NOT EXISTS)
-  - Note: migration number 016 is fragile — verify no concurrent PR landed a migration before applying [Updated 2026-04-10]
+  - Note: migration number updated to 017 after merging main (016 taken by github_username) [Updated 2026-04-10]
 - [ ] 1.3 Modify `apps/web-platform/app/api/repo/setup/route.ts`
   - [ ] 1.3.1 Call `scanProjectHealth()` in `.then()` handler after provisioning
   - [ ] 1.3.2 Wrap scan in try/catch (failure sets null snapshot, does not block provisioning)

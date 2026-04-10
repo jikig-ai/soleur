@@ -33,7 +33,7 @@ A hybrid approach combining speed with depth:
 | Layer | What | Where | When | Duration |
 |-------|------|-------|------|----------|
 | Fast scan | Server-side file-presence checks | `server/workspace.ts` | During provisioning | ~2-5s |
-| Health snapshot | JSON stored on user record | `016_*.sql` migration | After fast scan | Instant |
+| Health snapshot | JSON stored on user record | `017_*.sql` migration | After fast scan | Instant |
 | Ready state | Display health snapshot + recommendations | `ready-state.tsx` revamp | On provisioning complete | Immediate |
 | Agent sync | Headless `/soleur:sync` | `agent-runner.ts` | After provisioning complete | 1-5 min async |
 | ~~KB overview~~ | ~~Persistent health report page~~ | ~~`/dashboard/kb/overview`~~ | ~~Always available~~ | Deferred [Updated 2026-04-10] |
@@ -94,7 +94,7 @@ export interface ProjectHealthSnapshot {
 
 Simplified from initial design per review feedback: dropped `meta` field (nothing consumes it), dropped signal `category` (UI shows flat lists), dropped `Recommendation` interface (always exactly 3 strings in priority order). [Updated 2026-04-10] Dropped `version: 1` (speculative forward-compatibility, one consumer). Flattened `kbState.sections` to `kbExists: boolean` (KB viewer already shows section detail, snapshot copy goes stale after sync).
 
-**Migration: `supabase/migrations/016_project_health_snapshot.sql`**
+**Migration: `supabase/migrations/017_project_health_snapshot.sql`**
 
 ```sql
 ALTER TABLE public.users
