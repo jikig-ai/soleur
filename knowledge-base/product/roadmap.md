@@ -180,12 +180,16 @@ This roadmap was reviewed by CTO, CLO, CFO, and CMO before finalization.
 | 3.2 | KB viewer UI (sidebar tree, markdown rendering, search) | P1 | [#1689](https://github.com/jikig-ai/soleur/issues/1689) | Stub only |
 | 3.3 | Conversation inbox with status badges | P1 | [#1690](https://github.com/jikig-ai/soleur/issues/1690) | Not started |
 | 3.4 | API + MCP service integrations (Cloudflare, Stripe, Plausible first) | P1 | [#1050](https://github.com/jikig-ai/soleur/issues/1050) | Not started |
-| 3.5 | Secure token storage for third-party APIs (BYOK-grade encryption) | P1 | [#1076](https://github.com/jikig-ai/soleur/issues/1076) | Not started |
+| 3.5 | Secure token storage for third-party APIs (BYOK-grade encryption) | P1 | [#1076](https://github.com/jikig-ai/soleur/issues/1076) | Done |
 | 3.6 | Usage/cost indicator (BYOK spending) | P2 | [#1691](https://github.com/jikig-ai/soleur/issues/1691) | Not started |
 | 3.7 | Review gate notifications (PWA push + email fallback for iOS) | P2 | [#1049](https://github.com/jikig-ai/soleur/issues/1049) | Not started |
 | 3.8 | Guided instructions fallback (deep links + review gates for services without API/MCP) | P2 | [#1077](https://github.com/jikig-ai/soleur/issues/1077) | Not started |
 | 3.9 | Chat UX redesign — remove department grid, @-mention autocomplete, auto-routing, sidebar | P2 | [#1289](https://github.com/jikig-ai/soleur/issues/1289) | Done (completed in P2) |
-| 3.10 | CI/CD integration (agents trigger deploys, run tests, open PRs on founder's repo) | P1 | [#1062](https://github.com/jikig-ai/soleur/issues/1062) | Not started |
+| 3.10 | CI/CD integration (parent — decomposed into 3.10a-d) | P1 | [#1062](https://github.com/jikig-ai/soleur/issues/1062) | In progress |
+| 3.10a | GitHub App + server-side proxy infrastructure | P1 | [#1926](https://github.com/jikig-ai/soleur/issues/1926) | Not started |
+| 3.10b | Read CI status and logs via proxy | P1 | [#1927](https://github.com/jikig-ai/soleur/issues/1927) | Not started |
+| 3.10c | Trigger GitHub Actions workflows via proxy | P1 | [#1928](https://github.com/jikig-ai/soleur/issues/1928) | Not started |
+| 3.10d | Open PRs via proxy (push to feature branches) | P1 | [#1929](https://github.com/jikig-ai/soleur/issues/1929) | Not started |
 | 3.11 | Product analytics instrumentation for P4 validation metrics (domain engagement, session frequency, KB growth) | P1 | [#1063](https://github.com/jikig-ai/soleur/issues/1063) | Not started |
 | 3.12 | Pricing page (soleur.ai) | P1 | [#656](https://github.com/jikig-ai/soleur/issues/656) | Done |
 | 3.13 | Subscription management (cancel, upgrade/downgrade) | P1 | [#1078](https://github.com/jikig-ai/soleur/issues/1078) | Not started |
