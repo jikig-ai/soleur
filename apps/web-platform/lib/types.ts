@@ -42,10 +42,11 @@ export type WSMessage =
   | { type: "stream"; content: string; partial: boolean; leaderId: DomainLeaderId }
   | { type: "stream_start"; leaderId: DomainLeaderId; source?: "auto" | "mention" }
   | { type: "stream_end"; leaderId: DomainLeaderId }
-  | { type: "review_gate"; gateId: string; question: string; options: string[] }
+  | { type: "review_gate"; gateId: string; question: string; header?: string; options: string[]; descriptions?: Record<string, string | undefined> }
   | { type: "session_started"; conversationId: string }
   | { type: "session_ended"; reason: string }
-  | { type: "error"; message: string; errorCode?: WSErrorCode };
+  | { type: "usage_update"; conversationId: string; totalCostUsd: number; inputTokens: number; outputTokens: number }
+  | { type: "error"; message: string; errorCode?: WSErrorCode; gateId?: string };
 
 // Database types (matches Supabase schema)
 export interface User {
@@ -83,6 +84,9 @@ export interface Conversation {
   domain_leader: DomainLeaderId | null;
   session_id: string | null;
   status: "active" | "waiting_for_user" | "completed" | "failed";
+  total_cost_usd: number;
+  input_tokens: number;
+  output_tokens: number;
   last_active: string;
   created_at: string;
 }
