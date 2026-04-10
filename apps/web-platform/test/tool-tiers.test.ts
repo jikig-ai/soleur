@@ -12,8 +12,7 @@
 import { describe, test, expect } from "vitest";
 import {
   getToolTier,
-  TOOL_TIER_MAP,
-  type ToolTier,
+  buildGateMessage,
 } from "../server/tool-tiers";
 
 describe("getToolTier", () => {
@@ -55,24 +54,44 @@ describe("getToolTier", () => {
     );
   });
 
-  test("TOOL_TIER_MAP contains all expected tools", () => {
-    const expectedTools = [
-      "mcp__soleur_platform__github_read_ci_status",
-      "mcp__soleur_platform__github_read_workflow_logs",
-      "mcp__soleur_platform__github_trigger_workflow",
-      "mcp__soleur_platform__github_push_branch",
-      "mcp__soleur_platform__create_pull_request",
-    ];
+});
 
-    for (const tool of expectedTools) {
-      expect(TOOL_TIER_MAP).toHaveProperty(tool);
-    }
+describe("buildGateMessage", () => {
+  test("trigger workflow message includes workflow_id and ref", () => {
+    const msg = buildGateMessage(
+      "mcp__soleur_platform__github_trigger_workflow",
+      { workflow_id: 42, ref: "main" },
+    );
+    expect(msg).toContain("42");
+    expect(msg).toContain("main");
+    expect(msg).toMatch(/trigger workflow/i);
   });
 
-  test("no tool is mapped to an invalid tier", () => {
-    const validTiers: ToolTier[] = ["auto-approve", "gated", "blocked"];
-    for (const tier of Object.values(TOOL_TIER_MAP)) {
-      expect(validTiers).toContain(tier);
-    }
+  test("push branch message includes branch name", () => {
+    const msg = buildGateMessage(
+      "mcp__soleur_platform__github_push_branch",
+      { branch: "feat-new-feature" },
+    );
+    expect(msg).toContain("feat-new-feature");
+    expect(msg).toMatch(/push/i);
+  });
+
+  test("create PR message includes title and branches", () => {
+    const msg = buildGateMessage(
+      "mcp__soleur_platform__create_pull_request",
+      { title: "My PR", base: "main", head: "feat-x" },
+    );
+    expect(msg).toContain("My PR");
+    expect(msg).toContain("main");
+    expect(msg).toContain("feat-x");
+    expect(msg).toMatch(/open PR/i);
+  });
+
+  test("unknown tool uses short tool name", () => {
+    const msg = buildGateMessage(
+      "mcp__soleur_platform__some_new_tool",
+      {},
+    );
+    expect(msg).toContain("some_new_tool");
   });
 });

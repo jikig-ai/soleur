@@ -161,10 +161,20 @@ describe("readWorkflowLogs", () => {
     });
   }
 
+  function mockRunResponse(headSha: string = "abc123") {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: async () => ({ head_sha: headSha, conclusion: "failure" }),
+    });
+  }
+
   test("returns annotations when available", async () => {
     const installationId = uniqueInstallationId();
-    // Token for check runs request
+    // Token for run fetch (to get head_sha)
     mockTokenResponse();
+    mockRunResponse();
+    // Check runs request (token cached)
     mockFetch.mockResolvedValueOnce({
       ok: true,
       status: 200,
@@ -182,7 +192,7 @@ describe("readWorkflowLogs", () => {
         ],
       }),
     });
-    // Token for annotations request (may reuse cached token)
+    // Annotations request
     mockFetch.mockResolvedValueOnce({
       ok: true,
       status: 200,
@@ -220,8 +230,9 @@ describe("readWorkflowLogs", () => {
 
   test("falls back to last 100 lines of failed step when no annotations", async () => {
     const installationId = uniqueInstallationId();
-    // Token for check runs request
+    // Token for run fetch + check runs request
     mockTokenResponse();
+    mockRunResponse();
     mockFetch.mockResolvedValueOnce({
       ok: true,
       status: 200,
@@ -278,6 +289,7 @@ describe("readWorkflowLogs", () => {
   test("returns empty result when run has no check runs", async () => {
     const installationId = uniqueInstallationId();
     mockTokenResponse();
+    mockRunResponse();
     mockFetch.mockResolvedValueOnce({
       ok: true,
       status: 200,

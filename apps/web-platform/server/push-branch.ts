@@ -114,7 +114,7 @@ export async function pushBranch(options: PushBranchOptions): Promise<PushResult
   try {
     writeFileSync(
       helperPath,
-      `#!/bin/sh\necho "username=x-access-token"\necho "password=${token}"`,
+      `#!/bin/sh\necho 'username=x-access-token'\necho 'password=${token}'`,
       { mode: 0o700 },
     );
 

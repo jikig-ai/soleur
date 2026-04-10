@@ -24,11 +24,13 @@ const {
   mockQuery,
   mockSendToClient,
   mockAbortableReviewGate,
+  mockLogInfo,
 } = vi.hoisted(() => ({
   mockFrom: vi.fn(),
   mockQuery: vi.fn(),
   mockSendToClient: vi.fn(),
   mockAbortableReviewGate: vi.fn(),
+  mockLogInfo: vi.fn(),
 }));
 
 // ---------------------------------------------------------------------------
@@ -54,7 +56,7 @@ vi.mock("@sentry/nextjs", () => ({ captureException: vi.fn() }));
 vi.mock("../server/ws-handler", () => ({ sendToClient: mockSendToClient }));
 vi.mock("../server/logger", () => ({
   createChildLogger: () => ({
-    info: vi.fn(),
+    info: mockLogInfo,
     warn: vi.fn(),
     error: vi.fn(),
   }),
@@ -91,6 +93,11 @@ vi.mock("../server/domain-router", () => ({ routeMessage: vi.fn() }));
 vi.mock("../server/session-sync", () => ({
   syncPull: vi.fn(),
   syncPush: vi.fn(),
+}));
+vi.mock("../server/github-api", () => ({
+  githubApiGet: vi.fn().mockResolvedValue({ default_branch: "main" }),
+  githubApiGetText: vi.fn().mockResolvedValue(""),
+  githubApiPost: vi.fn().mockResolvedValue(null),
 }));
 
 import { startAgentSession } from "../server/agent-runner";
@@ -258,78 +265,46 @@ describe("canUseTool tiered gating (#1926)", () => {
   describe("audit logging", () => {
     test("structured audit log emitted for gated tool", async () => {
       mockAbortableReviewGate.mockResolvedValue("Approve");
+      const canUseTool = await getCanUseTool();
 
-      const logSpy = vi.fn();
-      const originalLog = console.log;
-      console.log = logSpy;
+      await canUseTool(
+        "mcp__soleur_platform__create_pull_request",
+        { head: "feat-branch", base: "main", title: "test" },
+        { signal: new AbortController().signal },
+      );
 
-      try {
-        const canUseTool = await getCanUseTool();
-
-        await canUseTool(
-          "mcp__soleur_platform__create_pull_request",
-          { head: "feat-branch", base: "main", title: "test" },
-          { signal: new AbortController().signal },
-        );
-
-        // At least one call should contain structured audit data
-        const auditCalls = logSpy.mock.calls.filter((args: unknown[]) => {
-          const msg = typeof args[0] === "string" ? args[0] : "";
-          try {
-            const parsed = JSON.parse(msg);
-            return parsed.tool && parsed.tier && parsed.decision;
-          } catch {
-            return false;
-          }
-        });
-        expect(auditCalls.length).toBeGreaterThan(0);
-
-        // Verify audit log contains expected fields
-        const firstAudit = JSON.parse(auditCalls[0][0] as string);
-        expect(firstAudit.tool).toBe("mcp__soleur_platform__create_pull_request");
-        expect(firstAudit.tier).toBe("gated");
-        expect(firstAudit.repo).toBe("alice/my-repo");
-        expect(firstAudit.ts).toBeTypeOf("number");
-      } finally {
-        console.log = originalLog;
-      }
+      // Logger.info should have been called with audit data
+      const auditCall = mockLogInfo.mock.calls.find(
+        (args: unknown[]) => {
+          const obj = args[0] as Record<string, unknown>;
+          return obj?.tool && obj?.tier && obj?.decision;
+        },
+      );
+      expect(auditCall).toBeDefined();
+      const auditData = auditCall![0] as Record<string, unknown>;
+      expect(auditData.tool).toBe("mcp__soleur_platform__create_pull_request");
+      expect(auditData.tier).toBe("gated");
+      expect(auditData.decision).toBe("approved");
+      expect(auditData.repo).toBe("alice/my-repo");
     });
 
     test("audit log records rejection decision", async () => {
       mockAbortableReviewGate.mockResolvedValue("Reject");
+      const canUseTool = await getCanUseTool();
 
-      const logSpy = vi.fn();
-      const originalLog = console.log;
-      console.log = logSpy;
+      await canUseTool(
+        "mcp__soleur_platform__create_pull_request",
+        { head: "feat-branch", base: "main", title: "test" },
+        { signal: new AbortController().signal },
+      );
 
-      try {
-        const canUseTool = await getCanUseTool();
-
-        await canUseTool(
-          "mcp__soleur_platform__create_pull_request",
-          { head: "feat-branch", base: "main", title: "test" },
-          { signal: new AbortController().signal },
-        );
-
-        const auditCalls = logSpy.mock.calls
-          .filter((args: unknown[]) => {
-            try {
-              const parsed = JSON.parse(args[0] as string);
-              return parsed.tool && parsed.decision;
-            } catch {
-              return false;
-            }
-          })
-          .map((args: unknown[]) => JSON.parse(args[0] as string));
-
-        // Should have a "rejected" decision log
-        const rejectedLog = auditCalls.find(
-          (log: Record<string, unknown>) => log.decision === "rejected",
-        );
-        expect(rejectedLog).toBeDefined();
-      } finally {
-        console.log = originalLog;
-      }
+      const auditCall = mockLogInfo.mock.calls.find(
+        (args: unknown[]) => {
+          const obj = args[0] as Record<string, unknown>;
+          return obj?.decision === "rejected";
+        },
+      );
+      expect(auditCall).toBeDefined();
     });
   });
 

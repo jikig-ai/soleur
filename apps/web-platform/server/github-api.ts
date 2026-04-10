@@ -42,6 +42,31 @@ export async function githubApiGet<T = unknown>(
 }
 
 /**
+ * Make an authenticated GET request that returns plain text (e.g., job logs).
+ * Same auth and error handling as githubApiGet, but returns text instead of JSON.
+ */
+export async function githubApiGetText(
+  installationId: number,
+  path: string,
+): Promise<string> {
+  const token = await generateInstallationToken(installationId);
+
+  const response = await fetch(`${GITHUB_API}${path}`, {
+    headers: {
+      Authorization: `token ${token}`,
+      Accept: "application/vnd.github+json",
+      "X-GitHub-Api-Version": "2022-11-28",
+    },
+  });
+
+  if (!response.ok) {
+    await handleErrorResponse(response, path);
+  }
+
+  return response.text();
+}
+
+/**
  * Make an authenticated POST (or other method) request to the GitHub API.
  * DELETE method is rejected unconditionally as a safety guard.
  */

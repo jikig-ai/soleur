@@ -8,7 +8,7 @@
  * the agent subprocess never sees GitHub tokens.
  */
 
-import { githubApiGet } from "./github-api";
+import { githubApiGet, githubApiGetText } from "./github-api";
 import { createChildLogger } from "./logger";
 
 const log = createChildLogger("ci-tools");
@@ -152,10 +152,16 @@ export async function readWorkflowLogs(
   repo: string,
   runId: number,
 ): Promise<WorkflowLogResult> {
-  // 1. Get check runs for this workflow run
+  // 1. Resolve the run's head_sha (the commits/check-runs endpoint needs
+  //    a commit ref, not a workflow run ID)
+  const run = await githubApiGet<{ head_sha: string; conclusion: string | null }>(
+    installationId,
+    `/repos/${owner}/${repo}/actions/runs/${runId}`,
+  );
+
   const checkData = await githubApiGet<CheckRunsResponse>(
     installationId,
-    `/repos/${owner}/${repo}/commits/${runId}/check-runs`,
+    `/repos/${owner}/${repo}/commits/${run.head_sha}/check-runs`,
   );
 
   if (checkData.check_runs.length === 0) {
@@ -257,30 +263,11 @@ async function fetchFallbackLog(
     const failedStep = failedJob.steps.find((s) => s.conclusion === "failure");
     if (!failedStep) return null;
 
-    // Fetch job log (plain text)
-    const token = await import("./github-app").then((m) =>
-      m.generateInstallationToken(installationId),
+    // Fetch job log (plain text) via the centralized wrapper
+    const fullLog = await githubApiGetText(
+      installationId,
+      `/repos/${owner}/${repo}/actions/jobs/${failedJob.id}/logs`,
     );
-
-    const logResponse = await fetch(
-      `https://api.github.com/repos/${owner}/${repo}/actions/jobs/${failedJob.id}/logs`,
-      {
-        headers: {
-          Authorization: `token ${token}`,
-          Accept: "application/vnd.github+json",
-        },
-      },
-    );
-
-    if (!logResponse.ok) {
-      log.warn(
-        { status: logResponse.status, jobId: failedJob.id },
-        "Failed to fetch job logs",
-      );
-      return null;
-    }
-
-    const fullLog = await logResponse.text();
     // Return last 100 lines
     const lines = fullLog.split("\n").slice(-100).join("\n");
 

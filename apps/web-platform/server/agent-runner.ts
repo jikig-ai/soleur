@@ -27,6 +27,7 @@ import { getToolTier, buildGateMessage } from "./tool-tiers";
 import { readCiStatus, readWorkflowLogs } from "./ci-tools";
 import { triggerWorkflow, createRateLimiter } from "./trigger-workflow";
 import { pushBranch } from "./push-branch";
+import { githubApiGet } from "./github-api";
 
 const log = createChildLogger("agent");
 
@@ -474,6 +475,19 @@ When you need user input for important decisions, use the AskUserQuestion tool.`
         repoOwner = owner;
         repoName = repo;
 
+        // Fetch the repo's default branch for protected-branch validation (#1929).
+        // Uses the existing token cache — no extra round-trip if token is warm.
+        let defaultBranch = "main";
+        try {
+          const repoData = await githubApiGet<{ default_branch: string }>(
+            installationId,
+            `/repos/${owner}/${repo}`,
+          );
+          defaultBranch = repoData.default_branch;
+        } catch {
+          // Fall back to "main" — still protected by the hardcoded list
+        }
+
         const createPr = tool(
           "create_pull_request",
           "Create a pull request on the user's connected GitHub repository. " +
@@ -604,6 +618,7 @@ When you need user input for important decisions, use the AskUserQuestion tool.`
                 workspacePath,
                 branch: args.branch,
                 force: args.force,
+                defaultBranch,
               });
               return {
                 content: [{ type: "text" as const, text: JSON.stringify(result) }],
@@ -792,17 +807,11 @@ When you need user input for important decisions, use the AskUserQuestion tool.`
           if (platformToolNames.includes(toolName)) {
             const tier = getToolTier(toolName);
 
-            // Structured audit log for every platform tool invocation
-            console.log(JSON.stringify({
-              tool: toolName,
-              tier,
-              decision: tier === "blocked" ? "deny" : "pending",
-              sessionId: session.sessionId,
-              repo: `${repoOwner}/${repoName}`,
-              ts: Date.now(),
-            }));
-
             if (tier === "blocked") {
+              log.info(
+                { sec: true, tool: toolName, tier, decision: "deny", repo: `${repoOwner}/${repoName}` },
+                "Platform tool blocked",
+              );
               return {
                 behavior: "deny" as const,
                 message: "This action is not allowed from cloud agents",
@@ -832,15 +841,11 @@ When you need user input for important decisions, use the AskUserQuestion tool.`
 
               await updateConversationStatus(conversationId, "active");
 
-              // Update audit log with decision
-              console.log(JSON.stringify({
-                tool: toolName,
-                tier,
-                decision: selection === "Approve" ? "approved" : "rejected",
-                sessionId: session.sessionId,
-                repo: `${repoOwner}/${repoName}`,
-                ts: Date.now(),
-              }));
+              const decision = selection === "Approve" ? "approved" : "rejected";
+              log.info(
+                { sec: true, tool: toolName, tier, decision, repo: `${repoOwner}/${repoName}` },
+                "Platform tool gated",
+              );
 
               if (selection !== "Approve") {
                 return {
@@ -853,7 +858,10 @@ When you need user input for important decisions, use the AskUserQuestion tool.`
             }
 
             // auto-approve: read-only tools pass through
-            log.info({ sec: true, toolName, agentId: options.agentID }, "MCP tool auto-approved");
+            log.info(
+              { sec: true, tool: toolName, tier, decision: "auto-approved", repo: `${repoOwner}/${repoName}` },
+              "Platform tool auto-approved",
+            );
             return { behavior: "allow" as const };
           }
 

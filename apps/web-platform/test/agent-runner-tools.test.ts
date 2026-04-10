@@ -74,6 +74,11 @@ vi.mock("../server/session-sync", () => ({
   syncPull: vi.fn(),
   syncPush: vi.fn(),
 }));
+vi.mock("../server/github-api", () => ({
+  githubApiGet: vi.fn().mockResolvedValue({ default_branch: "main" }),
+  githubApiGetText: vi.fn().mockResolvedValue(""),
+  githubApiPost: vi.fn().mockResolvedValue(null),
+}));
 
 import { startAgentSession } from "../server/agent-runner";
 
