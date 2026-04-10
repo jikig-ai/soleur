@@ -7,7 +7,7 @@
 // ---------------------------------------------------------------------------
 
 import { execFileSync } from "child_process";
-import { readdirSync, statSync, unlinkSync, writeFileSync } from "fs";
+import { readdirSync, unlinkSync, writeFileSync } from "fs";
 import { join } from "path";
 import { createServiceClient } from "@/lib/supabase/service";
 import type { SupabaseClient } from "@supabase/supabase-js";

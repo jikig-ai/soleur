@@ -3,9 +3,11 @@
 -- Used by the admin analytics dashboard for KB growth sparklines.
 ALTER TABLE public.users ADD COLUMN IF NOT EXISTS kb_sync_history jsonb NOT NULL DEFAULT '[]';
 
--- Prevent client-side updates to kb_sync_history via the anon-key Supabase client.
+-- Defense-in-depth: prevent client-side updates to kb_sync_history.
+-- Primary protection: migration 006 restricts the authenticated role's UPDATE
+-- privilege to only the email column. This RESTRICTIVE policy is belt-and-suspenders
+-- in case column-level grants are later broadened.
 -- Only the service role (used by session-sync after syncPush) should write this column.
--- Without this policy, any authenticated user could forge KB growth data.
 CREATE POLICY "Users cannot update kb_sync_history directly"
   ON public.users
   AS RESTRICTIVE

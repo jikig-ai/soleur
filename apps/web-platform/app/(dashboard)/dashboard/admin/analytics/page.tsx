@@ -32,17 +32,18 @@ export default async function AdminAnalyticsPage() {
     service
       .from("conversations")
       .select("user_id, domain_leader, status, created_at")
-      .order("created_at", { ascending: true }),
+      .order("created_at", { ascending: true })
+      .limit(10_000),
   ]);
 
   if (usersResult.error || convsResult.error) {
-    const errorMsg =
-      usersResult.error?.message ??
-      convsResult.error?.message ??
-      "Unknown error";
+    console.error(
+      "[analytics] query failed:",
+      usersResult.error ?? convsResult.error,
+    );
     return (
       <div className="flex flex-col items-center justify-center min-h-[400px] gap-4">
-        <p className="text-red-400">Failed to load analytics data: {errorMsg}</p>
+        <p className="text-red-400">Failed to load analytics data. Please try again.</p>
         <a
           href="/dashboard/admin/analytics"
           className="text-amber-500 underline hover:text-amber-400"
