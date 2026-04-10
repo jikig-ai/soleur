@@ -149,20 +149,20 @@ response format. Fixing this alone likely resolves Issues 1 and 2. Issue 3
 
 **File: `apps/web-platform/server/agent-runner.ts` (lines 600-632)**
 
-- [ ] Extract question from SDK schema: read `toolInput.questions[0].question`
+- [x] Extract question from SDK schema: read `toolInput.questions[0].question`
   instead of `toolInput.question`
-- [ ] Extract header from SDK schema: read `toolInput.questions[0].header` for
+- [x] Extract header from SDK schema: read `toolInput.questions[0].header` for
   the card title
-- [ ] Extract options from SDK schema: read `toolInput.questions[0].options` and
+- [x] Extract options from SDK schema: read `toolInput.questions[0].options` and
   map `option.label` to get string labels; send `option.description` alongside
   for richer UI
-- [ ] Handle multi-question case: iterate over `toolInput.questions` array
+- [x] Handle multi-question case: iterate over `toolInput.questions` array
   (currently only the first question is surfaced as a gate; for MVP, show all
   questions sequentially or support only the first)
-- [ ] Fix response format: return
+- [x] Fix response format: return
   `{ behavior: "allow", updatedInput: { questions: toolInput.questions, answers: { [questionText]: selection } } }`
   instead of `{ ...toolInput, answer: selection }`
-- [ ] Keep fallback for backward compatibility: if `toolInput.questions` is
+- [x] Keep fallback for backward compatibility: if `toolInput.questions` is
   undefined (older SDK or direct tool invocation), fall back to the current
   `toolInput.question` / `toolInput.options` extraction
 
@@ -217,7 +217,7 @@ return {
 
 **File: `apps/web-platform/lib/types.ts`**
 
-- [ ] Extend the `review_gate` WSMessage type with optional `header` and
+- [x] Extend the `review_gate` WSMessage type with optional `header` and
   `descriptions` fields:
 
 ```typescript
@@ -228,7 +228,7 @@ return {
 
 **File: `apps/web-platform/server/review-gate.ts`**
 
-- [ ] No changes needed -- the review gate promise mechanics are correct.
+- [x] No changes needed -- the review gate promise mechanics are correct.
   `validateSelection` already validates against the offered `options` array
   which will now contain actual option labels from the SDK.
 
@@ -239,52 +239,52 @@ improves the visual rendering.
 
 **File: `apps/web-platform/app/(dashboard)/dashboard/chat/[conversationId]/page.tsx`**
 
-- [ ] Update `ReviewGateCard` props to accept `header` and `descriptions`
-- [ ] Display the `header` (e.g., "Library", "Approach") as a small tag/chip
+- [x] Update `ReviewGateCard` props to accept `header` and `descriptions`
+- [x] Display the `header` (e.g., "Library", "Approach") as a small tag/chip
   above the question
-- [ ] Display option descriptions as subtext below each button label
-- [ ] Increase visual prominence of the question text (use `text-base` instead
+- [x] Display option descriptions as subtext below each button label
+- [x] Increase visual prominence of the question text (use `text-base` instead
   of `text-sm`, `font-medium` already applied)
-- [ ] Add a question mark icon (SVG inline) to differentiate review gate cards
+- [x] Add a question mark icon (SVG inline) to differentiate review gate cards
   from regular messages
 
 **File: `apps/web-platform/lib/ws-client.ts`**
 
-- [ ] Extend `ChatMessage` to carry `header` and `descriptions` fields for
+- [x] Extend `ChatMessage` to carry `header` and `descriptions` fields for
   review gate messages
-- [ ] In the `review_gate` handler (line 209), map the new fields from the
+- [x] In the `review_gate` handler (line 209), map the new fields from the
   WSMessage to the ChatMessage
 
 ### Phase 2: Fix button click errors (Issue 2)
 
 **File: `apps/web-platform/app/(dashboard)/dashboard/chat/[conversationId]/page.tsx`**
 
-- [ ] Replace `selected: string | null` state with a state machine:
+- [x] Replace `selected: string | null` state with a state machine:
   `{ status: "idle" | "pending" | "resolved" | "error"; selection: string | null; error?: string }`
-- [ ] On click: set status to `pending` with the selected option, call
+- [x] On click: set status to `pending` with the selected option, call
   `onSelect(gateId, option)`
-- [ ] Show the existing `SpinnerIcon` (from `components/icons/index.tsx`) inline
+- [x] Show the existing `SpinnerIcon` (from `components/icons/index.tsx`) inline
   on the clicked button during `pending` state
-- [ ] On `resolved` confirmation: set status to `resolved`
-- [ ] On error: set status to `error`, display error text inline on the card
+- [x] On `resolved` confirmation: set status to `resolved`
+- [x] On error: set status to `error`, display error text inline on the card
   (red text below buttons, similar to `ErrorCard` pattern), reset to `idle`
   after 3 seconds so user can retry
 
 **File: `apps/web-platform/lib/ws-client.ts`**
 
-- [ ] Add `gateError` field to `ChatMessage` for review gate messages
-- [ ] When receiving an `error` message with a `gateId`, find the matching
+- [x] Add `gateError` field to `ChatMessage` for review gate messages
+- [x] When receiving an `error` message with a `gateId`, find the matching
   review gate message in the array and set its `gateError` field instead of
   appending a generic error bubble
 
 **File: `apps/web-platform/lib/types.ts`**
 
-- [ ] Extend the `error` WSMessage type to optionally include `gateId`:
+- [x] Extend the `error` WSMessage type to optionally include `gateId`:
   `| { type: "error"; message: string; errorCode?: WSErrorCode; gateId?: string }`
 
 **File: `apps/web-platform/server/ws-handler.ts`**
 
-- [ ] In the `review_gate_response` handler (line 336), pass `gateId` when
+- [x] In the `review_gate_response` handler (line 336), pass `gateId` when
   sending error to client:
 
 ```typescript
@@ -307,9 +307,9 @@ case "review_gate_response": {
 
 **File: `apps/web-platform/lib/ws-client.ts`**
 
-- [ ] After sending `review_gate_response`, optimistically mark the message as
+- [x] After sending `review_gate_response`, optimistically mark the message as
   `resolved` with `selectedOption` set to the chosen option
-- [ ] Add `resolved?: boolean` and `selectedOption?: string` fields to `ChatMessage`
+- [x] Add `resolved?: boolean` and `selectedOption?: string` fields to `ChatMessage`
 
 ```typescript
 const sendReviewGateResponse = useCallback(
@@ -328,7 +328,7 @@ const sendReviewGateResponse = useCallback(
 
 **File: `apps/web-platform/app/(dashboard)/dashboard/chat/[conversationId]/page.tsx`**
 
-- [ ] When `resolved === true`, render a compact single-line summary instead of
+- [x] When `resolved === true`, render a compact single-line summary instead of
   the full card:
 
 ```tsx
@@ -343,8 +343,8 @@ if (resolved) {
 }
 ```
 
-- [ ] Use CSS `transition-all duration-300` for smooth height change
-- [ ] If an error later overrides the optimistic resolution (server sends back
+- [x] Use CSS `transition-all duration-300` for smooth height change
+- [x] If an error later overrides the optimistic resolution (server sends back
   an error with the `gateId`), revert to the full card with error state
 
 ### Phase 4: Server-side resilience (stretch)
@@ -384,24 +384,24 @@ timeout rejection in the `canUseTool` callback's catch block.
 
 ## Acceptance Criteria
 
-- [ ] Server correctly extracts `questions[0].question`, `questions[0].header`,
+- [x] Server correctly extracts `questions[0].question`, `questions[0].header`,
   and `questions[0].options[].label` from the SDK's `AskUserQuestion` tool input
-- [ ] Server returns `{ questions, answers: { [question]: selection } }` as the
+- [x] Server returns `{ questions, answers: { [question]: selection } }` as the
   `updatedInput` to the SDK (matching `AskUserQuestionOutput` type)
-- [ ] Review gate cards display the agent's actual question text prominently
+- [x] Review gate cards display the agent's actual question text prominently
   with the header tag shown above it
-- [ ] Option buttons show both the label and description text from the SDK
-- [ ] When no question is provided (fallback), a helpful default message appears
-- [ ] Clicking a review gate button shows a `SpinnerIcon` loading state on the
+- [x] Option buttons show both the label and description text from the SDK
+- [x] When no question is provided (fallback), a helpful default message appears
+- [x] Clicking a review gate button shows a `SpinnerIcon` loading state on the
   clicked button while the response is processed
-- [ ] If the gate has expired or the session has ended, the user sees a clear
+- [x] If the gate has expired or the session has ended, the user sees a clear
   error inline on the card itself (not a separate error bubble) and buttons
   reset to allow retry
-- [ ] After successful resolution, the review gate card collapses to a compact
+- [x] After successful resolution, the review gate card collapses to a compact
   summary showing the selected option with a check icon
-- [ ] All existing review gate tests continue to pass
+- [x] All existing review gate tests continue to pass
   (`apps/web-platform/test/review-gate.test.ts`)
-- [ ] New tests cover: SDK schema extraction, correct response format, error
+- [x] New tests cover: SDK schema extraction, correct response format, error
   recovery with retry, card collapse, `gateId`-targeted error routing
 
 ## Domain Review
