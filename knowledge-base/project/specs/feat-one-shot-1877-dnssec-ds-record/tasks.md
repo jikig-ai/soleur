@@ -2,7 +2,7 @@
 
 ## Phase 1: Terraform Resource Setup
 
-- [ ] 1.1 Add `cloudflare_zone_dnssec` resource to `apps/web-platform/infra/dns.tf`
+- [x] 1.1 Add `cloudflare_zone_dnssec` resource to `apps/web-platform/infra/dns.tf`
   - Resource name: `cloudflare_zone_dnssec.soleur_ai`
   - Set `zone_id = var.cf_zone_id`
   - Set `status = "active"`
@@ -10,7 +10,7 @@
   - Set `dnssec_presigned = false`
   - Include `lifecycle { ignore_changes = [status] }` block for pending-to-active transition
   - Include comment explaining Cloudflare Registrar auto-propagation and lifecycle block purpose
-- [ ] 1.2 Run `terraform fmt` and `terraform validate` on the edited file
+- [x] 1.2 Run `terraform fmt` and `terraform validate` on the edited file
 - [ ] 1.3 Run `terraform import cloudflare_zone_dnssec.soleur_ai '<zone_id>'` to adopt existing DNSSEC state
   - Use Doppler nested invocation pattern from `variables.tf` comments
   - Zone ID: `5af02a2f394e9ba6e0ea23c381a26b67`
