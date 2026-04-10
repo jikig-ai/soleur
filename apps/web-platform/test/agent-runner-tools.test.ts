@@ -73,9 +73,13 @@ vi.mock("../server/review-gate", () => ({
   MAX_SELECTION_LENGTH: 200,
   REVIEW_GATE_TIMEOUT_MS: 300_000,
 }));
-vi.mock("../server/domain-leaders", () => ({
-  DOMAIN_LEADERS: [{ id: "cpo", name: "CPO", title: "Chief Product Officer", description: "Product" }],
-}));
+vi.mock("../server/domain-leaders", () => {
+  const leaders = [{ id: "cpo", name: "CPO", title: "Chief Product Officer", description: "Product" }];
+  return {
+    DOMAIN_LEADERS: leaders,
+    ROUTABLE_DOMAIN_LEADERS: leaders,
+  };
+});
 vi.mock("../server/domain-router", () => ({ routeMessage: vi.fn() }));
 vi.mock("../server/session-sync", () => ({
   syncPull: vi.fn(),

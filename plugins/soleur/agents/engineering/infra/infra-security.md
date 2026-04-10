@@ -15,6 +15,8 @@ This agent uses the Cloudflare MCP server (`cloudflare`) bundled in plugin.json.
 
 **Authentication:** Users authenticate once via `/mcp` (OAuth 2.1). On any auth or permission error from MCP, direct the user to run `/mcp` and re-authenticate with Cloudflare, surfacing the raw error message.
 
+**OAuth scope selection:** When authenticating Cloudflare MCP for audits, select "Advanced: Select individual permissions" during the first OAuth flow. The MCP `authenticate` tool is single-use per session — if the scope is too narrow, you cannot re-auth without restarting the MCP server. Required scopes for comprehensive audits: Zone Settings Read, DNS Read, Firewall Services Read, Access Read, Account Settings Read, Notifications Read, Audit Logs Read.
+
 **Graceful degradation:** If MCP tools are unavailable or return auth errors, fall back to CLI-only checks (dig, openssl s_client, curl -sI). Announce which operations are skipped and why. Never fail entirely when CLI tools can still provide value.
 
 **Zone discovery:** Do not require users to provide a zone ID. Use MCP to list zones and match by domain name. If multiple zones match, present options for user selection. If zero zones match, report the error clearly.
@@ -37,6 +39,55 @@ When auditing a domain's security posture, check these areas and report findings
 
 - Use `search` to find zone settings, DNS records, and DNSSEC endpoints
 - Use `execute` to retrieve SSL mode, Always Use HTTPS, HSTS, security headers, all DNS records, and DNSSEC status
+
+**API token checks** (require `CF_API_TOKEN_AUDIT` in Doppler `dev` config):
+
+When MCP OAuth is unavailable (CI, headless mode, or auth errors), use the dedicated read-only audit token. Retrieve it via `doppler secrets get CF_API_TOKEN_AUDIT -p soleur -c dev --plain`.
+
+Zone and account IDs (canonical source: `apps/web-platform/infra/main.tf`):
+
+Zone ID: `5af02a2f394e9ba6e0ea23c381a26b67` (soleur.ai) | Account ID: `4d5ba6f096b2686fbdd404167dd4e125`
+
+```bash
+BASE="https://api.cloudflare.com/client/v4"
+TOKEN=$(doppler secrets get CF_API_TOKEN_AUDIT -p soleur -c dev --plain)
+ZONE_ID="5af02a2f394e9ba6e0ea23c381a26b67"
+ACCT_ID="4d5ba6f096b2686fbdd404167dd4e125"
+
+# Zone Settings (SSL mode, security level, browser integrity, bot fight mode)
+curl -s -H "Authorization: Bearer $TOKEN" "$BASE/zones/$ZONE_ID/settings" | jq '.result[] | {id, value}'
+
+# DNS Records
+curl -s -H "Authorization: Bearer $TOKEN" "$BASE/zones/$ZONE_ID/dns_records" | jq '.result[] | {name, type, content, proxied}'
+
+# SSL Certificates
+curl -s -H "Authorization: Bearer $TOKEN" "$BASE/zones/$ZONE_ID/ssl/certificate_packs" | jq '.result'
+
+# Firewall Rules (may return empty on Free plan — WAF is Pro+)
+curl -s -H "Authorization: Bearer $TOKEN" "$BASE/zones/$ZONE_ID/firewall/rules" | jq '.result'
+
+# Account Settings
+curl -s -H "Authorization: Bearer $TOKEN" "$BASE/accounts/$ACCT_ID" | jq '.result'
+
+# Audit Logs
+curl -s -H "Authorization: Bearer $TOKEN" "$BASE/accounts/$ACCT_ID/audit_logs?per_page=5" | jq '.result[] | {action, when, actor_email: (.actor.email | split("@") | "***@" + .[1])}'
+
+# Notification Policies
+curl -s -H "Authorization: Bearer $TOKEN" "$BASE/accounts/$ACCT_ID/alerting/v3/policies" | jq '.result[] | {name, enabled, alert_type}'
+
+# Token health check
+curl -s -H "Authorization: Bearer $TOKEN" "$BASE/user/tokens/verify" | jq '.result.status'
+```
+
+**PII redaction:** Actor emails in the audit log jq filter are redacted by default (`***@domain.com`) to avoid displaying PII in conversation output. Full emails are available in the raw API response when needed for incident investigation.
+
+Paid plan notes: `GET /zones/<id>/firewall/rules` and `GET /zones/<id>/rulesets` may return empty arrays on the Free plan (WAF is a Pro+ feature). Do not report empty results as findings — note them as "requires paid plan" instead.
+
+**Fallback chain** (try in order):
+
+1. MCP `execute` -- OAuth-authenticated, richest API access
+2. `CF_API_TOKEN_AUDIT` via curl -- read-only, deterministic, works in CI
+3. CLI-only checks (dig, openssl, curl -sI) -- no credentials needed
 
 **CLI checks** (no credentials needed):
 

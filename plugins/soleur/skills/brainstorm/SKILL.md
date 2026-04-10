@@ -58,6 +58,21 @@ Options:
 
 If one-shot is selected, pass the original feature description (including any issue references) to `skill: soleur:one-shot` and stop brainstorm execution. Note: this skips brainstorm capture (Phase 3.5), worktree creation (Phase 3), and spec/issue creation (Phase 3.6) -- the one-shot pipeline handles setup through the plan skill.
 
+### Phase 0.25: Roadmap Freshness Check
+
+Domain leaders read `knowledge-base/product/roadmap.md` as ground truth. If the roadmap's status columns are stale, every domain assessment is unreliable. This step syncs the roadmap with GitHub milestone data before domain leaders are spawned.
+
+**Skip if** `knowledge-base/product/roadmap.md` does not exist.
+
+1. Read the roadmap's `last_updated` frontmatter date.
+2. For each phase milestone listed in the roadmap, run `gh issue list --milestone "<milestone name>" --state all --json number,state --jq '.[] | "\(.number) | \(.state)"' | head -n 50` to get current issue states.
+3. Compare each issue's GitHub state against the status column in the roadmap table. If any CLOSED issue is listed as "Not started", "Stub only", or "In progress", update it to "Done".
+4. Update the `## Current State` section with current open/closed counts per phase.
+5. Update `last_updated` and `last_reviewed` frontmatter to today's date.
+6. If any changes were made, commit: `git add knowledge-base/product/roadmap.md && git commit -m "docs: sync roadmap statuses from GitHub milestones"`.
+
+**Why:** In #1745, the CPO assessed KB sharing as premature because "KB API and viewer are not started" — but both had been shipping for weeks. The stale roadmap caused a domain leader to give incorrect sequencing advice, wasting a brainstorm cycle.
+
 ### Phase 0.5: Domain Leader Assessment
 
 Assess whether the feature description has implications for specific business domains. Domain leaders participate in brainstorming when their domain is relevant.
@@ -300,7 +315,23 @@ Ensure the brainstorms directory exists before writing.
 
 **Execute concluded actions first.** If the brainstorm concluded with an immediate actionable step (subscribe to a service, configure a tool, open a page), execute it via Playwright, `xdg-open`, CLI, or API before presenting handoff options. Do not list it as a prose "action item."
 
-**Context headroom notice:** Before presenting options, display: "All artifacts are on disk. Starting a new session for `/soleur:plan` will give you maximum context headroom."
+**Exit gate sequence:**
+
+1. Run `skill: soleur:compound` to capture learnings from the brainstorm session.
+   If compound finds nothing to capture, it will skip gracefully — do not block on this.
+2. Commit and push any remaining uncommitted artifacts. Scope `git add` to
+   feature-specific directories only (do NOT use `git add -A knowledge-base/`
+   which could stage unrelated changes from other worktrees or manual edits):
+
+   ```bash
+   git add knowledge-base/project/brainstorms/ knowledge-base/project/specs/feat-<name>/
+   git status --short
+   ```
+
+   If there are staged changes, commit with `git commit -m "docs: brainstorm artifacts for feat-<name>"` and `git push`.
+   If push fails (no network), warn and continue.
+
+Display: "All artifacts are on disk. Run `/clear` then `/soleur:plan` for maximum context headroom."
 
 Use **AskUserQuestion tool** to present next steps:
 

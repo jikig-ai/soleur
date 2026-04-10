@@ -28,6 +28,8 @@ claude plugin install soleur
 claude plugin install --url https://github.com/jikig-ai/soleur/tree/main/plugins/soleur
 ```
 
+**Running with Ollama?** Use `ollama launch claude --model gemma4:31b-cloud` to start Soleur with your preferred local model.
+
 **For existing codebases:** Run `/soleur:sync` first to populate your knowledge-base with conventions and patterns.
 
 ## The Workflow

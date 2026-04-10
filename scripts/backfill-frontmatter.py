@@ -83,7 +83,7 @@ def extract_inline_tags(content):
         return normalize_tags(raw)
 
     # Check ## Tags section
-    match = re.search(r"^## Tags\s*\n+(.+?)(?:\n\n|\n#|\Z)", content, re.MULTILINE | re.DOTALL)
+    match = re.search(r"^## Tags[ \t]*\n((?:[^\n]|\n(?!\n|#))+)", content, re.MULTILINE)
     if match:
         raw = match.group(1).strip()
         if raw:
