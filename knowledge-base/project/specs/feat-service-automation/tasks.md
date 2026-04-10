@@ -4,6 +4,24 @@
 **Issue:** [#1050](https://github.com/jikig-ai/soleur/issues/1050)
 **Branch:** `feat-service-automation`
 
+## Phase 0: canUseTool Plugin MCP Authorization (Prerequisite)
+
+- [ ] 0.1 Read plugin.json to extract MCP server names at agent-runner startup
+  - Parse `plugins/soleur/.claude-plugin/plugin.json` mcpServers keys
+  - Build `pluginMcpServerNames` array (e.g., `["cloudflare", "stripe", "vercel", "context7"]`)
+- [ ] 0.2 Add plugin MCP allowlist to canUseTool in `agent-runner.ts`
+  - [ ] 0.2.1 Check `toolName.startsWith("mcp__plugin_soleur_")` AND server name matches
+  - [ ] 0.2.2 Log plugin MCP tool invocations for audit trail
+  - [ ] 0.2.3 Place check BEFORE the deny-by-default block (line 664)
+- [ ] 0.3 Add plugin MCP patterns to `allowedTools` SDK option
+  - Build wildcard patterns: `mcp__plugin_soleur_<server>__*`
+  - Merge with existing `platformToolNames` into single `allowedTools` array
+- [ ] 0.4 Add tests to `agent-runner-tools.test.ts`
+  - [ ] 0.4.1 Test `mcp__plugin_soleur_cloudflare__execute` is allowed
+  - [ ] 0.4.2 Test `mcp__plugin_soleur_unknown__hack` is denied
+  - [ ] 0.4.3 Test unregistered `mcp__random_server__tool` is denied
+  - [ ] 0.4.4 Test `platformToolNames` still works for in-process tools
+
 ## Phase 1: Stripe MCP Integration
 
 - [ ] 1.1 Add Stripe MCP server entry to `plugins/soleur/.claude-plugin/plugin.json`
@@ -20,6 +38,9 @@
   - [ ] 2.1.3 Define `plausible_get_stats` tool (GET `/api/v1/stats/aggregate`)
   - [ ] 2.1.4 Add 5-second timeout to all Plausible API calls
   - [ ] 2.1.5 Add token sanitization -- never log or expose tokens in error messages
+  - [ ] 2.1.6 Add JSON response body validation before parsing (non-JSON 2xx protection)
+  - [ ] 2.1.7 Add `site_id` input validation (`[a-zA-Z0-9._-]+` pattern, no path traversal)
+  - [ ] 2.1.8 Add HTTPS URL validation before transmitting bearer token
 - [ ] 2.2 Integrate service tools into agent-runner.ts MCP server
   - [ ] 2.2.1 Import service tool definitions from `service-tools.ts`
   - [ ] 2.2.2 Register tools in `soleur_platform` MCP server alongside `create_pull_request`
@@ -33,6 +54,9 @@
   - [ ] 2.3.5 Test `plausible_get_stats` with mocked success
   - [ ] 2.3.6 Test input validation (missing domain, invalid goal_type)
   - [ ] 2.3.7 Verify tokens are not present in error outputs
+  - [ ] 2.3.8 Test non-JSON response handling (HTML error page with 200 status)
+  - [ ] 2.3.9 Test `site_id` with path traversal characters rejected
+  - [ ] 2.3.10 Test `plausible_add_goal` idempotency (PUT upsert semantics)
 
 ## Phase 3: Service Automation Agent
 
@@ -50,10 +74,14 @@
 
 ## Phase 4: Guided Instructions Fallback
 
+- [ ] 4.0 Create `plugins/soleur/agents/operations/references/service-deep-links.md`
+  - Deep links for signup, token generation, and dashboard for each service
+  - Separate from agent prompt so URLs can be updated independently
 - [ ] 4.1 Add guided instruction playbooks to service-automator agent
   - [ ] 4.1.1 Cloudflare guided flow (deep links + steps)
   - [ ] 4.1.2 Stripe guided flow (deep links + steps)
   - [ ] 4.1.3 Plausible guided flow (deep links + steps)
+  - [ ] 4.1.4 Include required token permissions for each service
 - [ ] 4.2 Implement post-completion token capture prompt
   - Agent prompts user to store API token via Connected Services after manual setup
 - [ ] 4.3 Verify review gate behavior in guided mode
