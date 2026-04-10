@@ -160,6 +160,7 @@ When a PR adds external services (terraform resources, account signups, API key 
 - Python requirements files must pin exact versions (`==`) -- pip has no lockfile mechanism, so exact version pinning is the primary supply chain defense; `--require-hashes` for full transitive dependency verification requires `pip-compile` from `pip-tools`
 - Never add a dependency for something an LLM can generate inline -- every new dependency is an attack surface expansion; the dependency-review-action flags new dependencies on every PR
 - `bunfig.toml` sets `minimumReleaseAge = 259200` (3 days) at all package roots -- newly published packages cannot be installed for 72 hours, which would have caught the litellm attack (live for ~1 hour)
+- Never use `npx <tool>` in shared scripts or CI when the tool is a project devDependency -- `npx` resolves from its global cache (`~/.npm/_npx/`) before `node_modules/.bin/`, silently pulling a different version than the lockfile specifies; use `npm run <script>` (which prepends `node_modules/.bin/` to `$PATH`) or invoke the binary directly via `./node_modules/.bin/<tool>`. **Why:** In #1856, `npx vitest run` in `test-all.sh` pulled a cached vitest version that depended on rolldown native bindings not installed locally, producing intermittent failures unrelated to test code.
 
 ### Never
 
