@@ -16,22 +16,30 @@ export interface WebSocketError {
   };
 }
 
-interface ChatMessage {
+interface ChatMessageBase {
   id: string;
   role: "user" | "assistant";
   content: string;
-  type: "text" | "review_gate";
   leaderId?: DomainLeaderId;
-  /** Present only when type === "review_gate" */
-  gateId?: string;
-  question?: string;
-  options?: string[];
+}
+
+interface ChatTextMessage extends ChatMessageBase {
+  type: "text";
+}
+
+interface ChatGateMessage extends ChatMessageBase {
+  type: "review_gate";
+  gateId: string;
+  question: string;
+  options: string[];
   header?: string;
   descriptions?: Record<string, string | undefined>;
   resolved?: boolean;
   selectedOption?: string;
   gateError?: string;
 }
+
+type ChatMessage = ChatTextMessage | ChatGateMessage;
 
 export interface UsageData {
   totalCostUsd: number;
@@ -263,7 +271,7 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
           // Route gateId-targeted errors to the review gate message
           if (msg.gateId) {
             setMessages((prev) => prev.map((m) =>
-              m.gateId === msg.gateId
+              m.type === "review_gate" && m.gateId === msg.gateId
                 ? { ...m, gateError: msg.message, resolved: false, selectedOption: undefined }
                 : m,
             ));
@@ -447,7 +455,7 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
       send({ type: "review_gate_response", gateId, selection });
       // Optimistically mark as resolved
       setMessages((prev) => prev.map((m) =>
-        m.gateId === gateId
+        m.type === "review_gate" && m.gateId === gateId
           ? { ...m, resolved: true, selectedOption: selection, gateError: undefined }
           : m,
       ));
