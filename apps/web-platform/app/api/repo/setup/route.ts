@@ -3,6 +3,7 @@ import * as Sentry from "@sentry/nextjs";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { validateOrigin, rejectCsrf } from "@/lib/auth/validate-origin";
 import { provisionWorkspaceWithRepo } from "@/server/workspace";
+import { scanProjectHealth } from "@/server/project-scanner";
 import logger from "@/server/logger";
 
 /**
@@ -99,6 +100,18 @@ export async function POST(request: Request) {
     userEmail,
   )
     .then(async (workspacePath) => {
+      // Fast scan — failure must not block provisioning
+      let healthSnapshot = null;
+      try {
+        healthSnapshot = scanProjectHealth(workspacePath);
+      } catch (scanErr) {
+        logger.error(
+          { err: scanErr, userId: user.id },
+          "Project health scan failed — continuing without snapshot",
+        );
+        Sentry.captureException(scanErr);
+      }
+
       const { error } = await serviceClient
         .from("users")
         .update({
@@ -106,6 +119,7 @@ export async function POST(request: Request) {
           workspace_status: "ready",
           repo_status: "ready",
           repo_last_synced_at: new Date().toISOString(),
+          health_snapshot: healthSnapshot,
         })
         .eq("id", user.id);
 
@@ -115,7 +129,10 @@ export async function POST(request: Request) {
           "Failed to update user after successful clone",
         );
       } else {
-        logger.info({ userId: user.id, repoUrl }, "Repo setup completed");
+        logger.info(
+          { userId: user.id, repoUrl, category: healthSnapshot?.category },
+          "Repo setup completed",
+        );
       }
     })
     .catch(async (err) => {
