@@ -8,7 +8,7 @@ date: 2026-04-10
 
 ## Overview
 
-Add full cost transparency for BYOK users across two UI surfaces: a live cost indicator during active conversations (updating per agent turn) and a cumulative usage section on the billing page with three views (per-conversation, tokens breakdown, per-domain). The Agent SDK already provides all required data (`total_cost_usd`, `usage`, `modelUsage`) — the codebase currently discards it.
+Add cost transparency for BYOK users across two UI surfaces: a live cost indicator during active conversations (updating per agent turn) and a conversation cost list on the billing page. The Agent SDK already provides `total_cost_usd` on every result message — the codebase currently discards it.
 
 **Issue:** #1691
 **Brainstorm:** `knowledge-base/project/brainstorms/2026-04-10-byok-cost-tracking-brainstorm.md`
@@ -28,7 +28,7 @@ Single-pass implementation across four layers: database migration, server-side c
 ### Architecture
 
 ```text
-SDK Result Message ──► agent-runner.ts ──► UPDATE conversations SET cost columns
+SDK Result Message ──► agent-runner.ts ──► UPDATE conversations SET total_cost_usd += delta
                               │
                               ▼
                        sendToClient({ type: "usage_update", ... })
@@ -40,7 +40,7 @@ SDK Result Message ──► agent-runner.ts ──► UPDATE conversations SET 
                  ┌─────────────┴─────────────┐
                  │                           │
         Conversation UI              Billing Page
-        (live indicator)         (cumulative dashboard)
+        (live indicator)         (conversation cost list)
 ```
 
 ### Implementation Phases
@@ -49,21 +49,37 @@ SDK Result Message ──► agent-runner.ts ──► UPDATE conversations SET 
 
 **File:** `apps/web-platform/supabase/migrations/017_conversation_cost_tracking.sql`
 
-Add cost columns to `conversations` table:
+Add cost columns to `conversations` table and an atomic increment function:
 
 ```sql
+-- Cost tracking columns (minimal: dollar cost + token counts)
 ALTER TABLE conversations
   ADD COLUMN total_cost_usd NUMERIC(10, 6) DEFAULT 0,
   ADD COLUMN input_tokens INTEGER DEFAULT 0,
-  ADD COLUMN output_tokens INTEGER DEFAULT 0,
-  ADD COLUMN cache_read_tokens INTEGER DEFAULT 0,
-  ADD COLUMN cache_creation_tokens INTEGER DEFAULT 0,
-  ADD COLUMN model_usage JSONB DEFAULT '{}';
+  ADD COLUMN output_tokens INTEGER DEFAULT 0;
+
+-- Atomic increment to avoid race conditions under concurrent multi-leader turns
+CREATE OR REPLACE FUNCTION increment_conversation_cost(
+  conv_id UUID,
+  cost_delta NUMERIC,
+  input_delta INTEGER,
+  output_delta INTEGER
+) RETURNS VOID AS $$
+BEGIN
+  UPDATE conversations SET
+    total_cost_usd = total_cost_usd + cost_delta,
+    input_tokens = input_tokens + input_delta,
+    output_tokens = output_tokens + output_delta
+  WHERE id = conv_id;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
 ```
 
 RLS policy: existing `conversations` RLS already scopes to `user_id`. New columns inherit the table-level grant — no separate column policy needed (per learning: column-level REVOKE is silently ineffective with table-level grants).
 
 **Gotcha:** No down migration. Cost data is financial PII — irreversible by design per GDPR remediation learning.
+
+**[Updated 2026-04-10] Review changes applied:** Dropped `cache_read_tokens`, `cache_creation_tokens`, and `model_usage JSONB` columns per reviewer consensus (YAGNI — users need dollar cost, not cache internals or per-model splits). Added atomic increment function per Kieran's correctness finding (avoids race conditions).
 
 #### Phase 2: Server-Side Cost Capture
 
@@ -72,27 +88,21 @@ RLS policy: existing `conversations` RLS already scopes to `user_id`. New column
 In the `message.type === "result"` handler, after `saveMessage` and before `syncPush`:
 
 ```typescript
-// Capture cost data from SDK result
-const costUpdate = {
-  total_cost_usd: message.total_cost_usd ?? 0,
-  input_tokens: message.usage?.input_tokens ?? 0,
-  output_tokens: message.usage?.output_tokens ?? 0,
-  cache_read_tokens: message.usage?.cache_read_input_tokens ?? 0,
-  cache_creation_tokens: message.usage?.cache_creation_input_tokens ?? 0,
-  model_usage: message.modelUsage ?? {},
-};
+// Capture cost data from SDK result (per-turn delta)
+const costDelta = message.total_cost_usd ?? 0;
+const inputDelta = message.usage?.input_tokens ?? 0;
+const outputDelta = message.usage?.output_tokens ?? 0;
 
-// Persist to conversations table (accumulate for multi-turn)
-const { error: costError } = await supabase
-  .from("conversations")
-  .update({
-    total_cost_usd: supabase.rpc("increment_cost", {
-      conv_id: conversationId,
-      cost_delta: costUpdate.total_cost_usd,
-    }),
-    // ... or simpler: read-then-write with accumulated values
-  })
-  .eq("id", conversationId);
+// Atomic increment — safe under concurrent multi-leader turns
+const { error: costError } = await supabase.rpc(
+  "increment_conversation_cost",
+  {
+    conv_id: conversationId,
+    cost_delta: costDelta,
+    input_delta: inputDelta,
+    output_delta: outputDelta,
+  }
+);
 
 if (costError) {
   console.error("Failed to save cost data:", costError.message);
@@ -103,11 +113,13 @@ if (costError) {
 sendToClient(userId, {
   type: "usage_update",
   conversationId,
-  ...costUpdate,
+  totalCostUsd: costDelta,
+  inputTokens: inputDelta,
+  outputTokens: outputDelta,
 });
 ```
 
-**Cost accumulation strategy:** For multi-turn conversations, each turn's `total_cost_usd` from the SDK is the cumulative session cost (not a delta). Store the latest value directly — no need to sum. The `modelUsage` JSONB should be deep-merged (accumulate per-model token counts across turns).
+**Cost accumulation strategy:** Each SDK result's `total_cost_usd` is the cost for that single agent turn invocation (the conversation runner calls the SDK once per turn). Use atomic increment (`total_cost_usd = total_cost_usd + delta`) to accumulate safely across concurrent turns. Verify this assumption at implementation time by logging the first few results.
 
 **Gotcha:** Always destructure `{ error }` from Supabase calls — client never throws (per learning). Log errors but don't block the conversation.
 
@@ -124,34 +136,26 @@ Add to the `WSMessage` discriminated union:
     totalCostUsd: number;
     inputTokens: number;
     outputTokens: number;
-    cacheReadTokens: number;
-    cacheCreationTokens: number;
-    modelUsage: Record<string, {
-      costUSD: number;
-      inputTokens: number;
-      outputTokens: number;
-    }>;
   }
 ```
 
 **File:** `apps/web-platform/lib/ws-client.ts` (lines 132-284)
 
-Add `case "usage_update"` to the switch handler. Expose usage state via a new `usageData` field returned from `useWebSocket`:
+Add `case "usage_update"` to the switch handler. Accumulate cost in React state (each message is a per-turn delta):
 
 ```typescript
 case "usage_update":
-  setUsageData({
-    totalCostUsd: msg.totalCostUsd,
-    inputTokens: msg.inputTokens,
-    outputTokens: msg.outputTokens,
-    cacheReadTokens: msg.cacheReadTokens,
-    cacheCreationTokens: msg.cacheCreationTokens,
-    modelUsage: msg.modelUsage,
-  });
+  setUsageData((prev) => ({
+    totalCostUsd: (prev?.totalCostUsd ?? 0) + msg.totalCostUsd,
+    inputTokens: (prev?.inputTokens ?? 0) + msg.inputTokens,
+    outputTokens: (prev?.outputTokens ?? 0) + msg.outputTokens,
+  }));
   break;
 ```
 
-**Gotcha:** Follow error sanitization pattern — the `usage_update` message contains no sensitive data (just numbers), but never include raw error messages if the cost update fails (per CWE-209 learning).
+Return `usageData` from the `useWebSocket` hook. Persist last-known value on WS disconnect (don't reset to zero).
+
+**Gotcha:** Follow error sanitization pattern — never include raw error messages if the cost update fails (per CWE-209 learning).
 
 #### Phase 4: Live Cost Indicator (Conversation UI)
 
@@ -172,50 +176,42 @@ Design tokens: match existing status bar — `text-xs`, `text-neutral-400`, no a
 
 Mobile: `text-xs` is already compact. No special mobile treatment needed — it's a single line of text.
 
-#### Phase 5: Billing Page Usage Section
+#### Phase 5: Billing Page Conversation Cost List
 
 **File:** `apps/web-platform/app/(dashboard)/dashboard/billing/page.tsx`
 
-Add a usage section below the existing subscription card inside the `max-w-md space-y-6` wrapper. Three tab views:
+Add a usage section below the existing subscription card inside the `max-w-md space-y-6` wrapper. **Flat list only — no tabs, no time-range selector, no aggregation queries.**
 
-**Tab 1: Per-Conversation Costs**
+Query `conversations` WHERE `user_id = current` AND `total_cost_usd > 0`, ordered by `created_at DESC`, limit 50. Display each as a row: domain leader label, relative timestamp, cost (`~$X.XXXX estimated`).
 
-Query `conversations` WHERE `user_id = current` AND `total_cost_usd > 0`, ordered by `created_at DESC`. Display as a list: domain leader icon, timestamp, cost.
+Empty state: "No API usage yet. Conversations will appear here with their costs." Show only when user has a BYOK key configured but no cost data.
 
-**Tab 2: Tokens Breakdown**
+**Design tokens:** Match existing billing page — `bg-neutral-900` card, `border-neutral-700` borders, `text-neutral-400` secondary text, `rounded-lg`, `text-sm`.
 
-Aggregate query grouping by date range (daily/weekly/monthly toggle). Show total input/output/cache tokens and total cost. Per-model breakdown from `model_usage` JSONB.
+**Supabase queries:** Destructure `{ data, error }` and handle errors gracefully (per learning).
 
-**Tab 3: Cost by Domain**
-
-Aggregate query grouping by `domain_leader`. Show per-domain cost and conversation count.
-
-**Time range selector:** Three buttons (Day / Week / Month) filtering the `created_at` range. Default: current month.
-
-**Design tokens:** Match existing billing page — `bg-neutral-900` cards, `border-neutral-700` borders, `text-neutral-400` secondary text, `rounded-lg`, `text-sm`.
-
-**Supabase queries:** All queries must destructure `{ data, error }` and handle errors gracefully. Use the existing Supabase client pattern from the billing page.
+**[Updated 2026-04-10] Review changes applied:** Tabs (per-conversation, tokens breakdown, per-domain), time-range selector, and aggregation queries cut per reviewer consensus. Ship a flat list; add breakdowns when users request them.
 
 ## Alternative Approaches Considered
 
 | Approach | Why Rejected |
 |----------|-------------|
-| Separate `usage_events` table (per-turn records) | Over-engineered for MVP — per-conversation columns suffice for all three views. Revisit if per-turn drill-down is requested. |
+| Separate `usage_events` table (per-turn records) | Over-engineered for MVP — per-conversation columns suffice. Revisit if per-turn drill-down is requested. |
 | Independent pricing table | Maintenance burden when Anthropic changes rates. SDK's `costUSD` is authoritative. |
 | Real-time streaming estimation (per-chunk) | Requires verifying SDK streaming event usage data. Per-turn updates are accurate and simpler. |
-| New `/dashboard/usage` page | Extra surface to maintain. Billing page already exists and is the natural home for cost data. |
-| Token-count estimation during streaming | Inaccurate (character-count heuristic). Users would see wrong numbers corrected on turn end. |
+| New `/dashboard/usage` page | Extra surface to maintain. Billing page already exists. |
+| Token-count estimation during streaming | Inaccurate (character-count heuristic). |
+| Tabbed dashboard with time-range selector | Over-scoped for MVP (per plan review). Ship flat list, add breakdowns when users ask. |
+| `model_usage` JSONB + cache token columns | YAGNI — users need dollar cost, not per-model splits or cache internals. SDK data is available for backfill. |
 
 ## Acceptance Criteria
 
 ### Functional Requirements
 
-- [ ] Per-conversation cost captured from SDK result and stored in `conversations` table (`agent-runner.ts`)
+- [ ] Per-conversation cost captured from SDK result and stored in `conversations` table via atomic increment (`agent-runner.ts`)
 - [ ] `usage_update` WebSocket message sent to client after each agent turn
 - [ ] Live cost indicator visible in conversation UI during active conversations
-- [ ] Billing page shows usage section with per-conversation, tokens, and per-domain views
-- [ ] Time range selector (day/week/month) filters cumulative views
-- [ ] Multi-model cost breakdown (Opus, Sonnet, Haiku) displayed in tokens view
+- [ ] Billing page shows conversation cost list (flat list, most recent first)
 - [ ] All cost figures labeled as "estimated"
 - [ ] Works on mobile viewport (PWA)
 
@@ -255,7 +251,7 @@ Spec-flow-analyzer and CPO agents hit API rate limits during plan generation. Ke
 - **Flow gap: No API key state** — If a BYOK user has no API key configured, the cost indicator should not render (guard on key existence). The billing usage section should show an empty state prompting key setup.
 - **Flow gap: WS disconnect** — If WebSocket disconnects mid-conversation, the last-known cost should persist in React state (not reset to zero). On reconnect, the next turn will update with the authoritative SDK total.
 - **Flow gap: Loading state** — Before the first turn completes, the cost indicator should not render (no skeleton/spinner for a cost badge — just absent until data arrives).
-- **Mobile consideration** — Status bar already uses `text-xs`. Cost badge fits inline. Billing page tabs should stack vertically on mobile if `max-w-md` is too narrow for three horizontal tabs.
+- **Mobile consideration** — Status bar already uses `text-xs`. Cost badge fits inline. Billing page list is a simple vertical layout — no special mobile treatment needed.
 
 Wireframes and copywriter review should run before implementation. Consider running `/soleur:plan` domain review agents when rate limits reset.
 
@@ -263,11 +259,10 @@ Wireframes and copywriter review should run before implementation. Consider runn
 
 ### Acceptance Tests
 
-- Given a BYOK user starts a conversation, when the agent completes a turn, then the conversation's `total_cost_usd` column is updated with the SDK's reported cost
+- Given a BYOK user starts a conversation, when the agent completes a turn, then the conversation's `total_cost_usd` column is incremented by the SDK's reported cost
 - Given a BYOK user is viewing an active conversation, when an agent turn completes, then the live cost indicator updates to show the accumulated dollar cost
-- Given a BYOK user visits the billing page, when they have conversations with cost data, then three views (per-conversation, tokens, per-domain) display correct aggregations
-- Given a BYOK user selects "Week" time range, when viewing the billing page, then only conversations from the current week are included in aggregations
-- Given a conversation uses multiple models (Opus + Haiku), when viewing the tokens breakdown, then per-model costs are displayed separately
+- Given a BYOK user visits the billing page, when they have conversations with cost data, then a flat list shows each conversation with its domain and cost
+- Given two concurrent agent turns in the same conversation, when both complete, then the total cost reflects both increments (atomic update, no race condition)
 
 ### Edge Cases
 
@@ -278,7 +273,7 @@ Wireframes and copywriter review should run before implementation. Consider runn
 
 ### Integration Verification
 
-- **Browser:** Navigate to `/dashboard/billing`, verify usage section appears with tab navigation (Per-Conversation / Tokens / By Domain)
+- **Browser:** Navigate to `/dashboard/billing`, verify conversation cost list appears below subscription card
 - **Browser:** Start a conversation with a BYOK key, verify cost indicator appears in status bar after first agent turn completes
 - **API verify:** After a conversation, query `conversations` table for `total_cost_usd > 0` to verify persistence
 
