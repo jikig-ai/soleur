@@ -465,10 +465,10 @@ This creates a virtuous cycle: the first time is guided, subsequent interactions
 - [x] Agent can provision Cloudflare zones via MCP tools (Cloudflare MCP server accessible)
 - [x] Agent can create Stripe products/prices via MCP tools (Stripe MCP server accessible)
 - [x] Agent can create Plausible sites and goals via in-process API tools
-- [ ] Agent falls back to guided instructions when no token is stored for a service
-- [ ] Guided instructions include deep links to service configuration pages
-- [ ] Review gates pause the agent at each manual step in guided mode
-- [ ] After guided setup, agent prompts user to store their new API token
+- [x] Agent falls back to guided instructions when no token is stored for a service
+- [x] Guided instructions include deep links to service configuration pages
+- [x] Review gates pause the agent at each manual step in guided mode
+- [x] After guided setup, agent prompts user to store their new API token
 - [x] Service tokens from Connected Services are available to automation tools
 - [x] Plausible API tools validate inputs and handle errors gracefully (timeout, auth failure, API errors)
 - [x] Plausible API tools validate JSON response body before parsing (non-JSON 2xx protection)

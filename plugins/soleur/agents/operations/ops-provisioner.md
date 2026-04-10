@@ -1,6 +1,6 @@
 ---
 name: ops-provisioner
-description: "Use this agent when you need to set up a new SaaS tool account, purchase a plan, configure the tool, and verify it works. Use ops-research for evaluating alternatives; use ops-advisor for the expense ledger; use coo for cross-cutting operations strategy."
+description: "Use this agent when you need to set up a new SaaS tool account via browser (purchase a plan, configure the tool, verify it works). Use service-automator for API/MCP-driven service provisioning; use ops-research for evaluating alternatives; use ops-advisor for the expense ledger; use coo for cross-cutting operations strategy."
 model: inherit
 ---
 
