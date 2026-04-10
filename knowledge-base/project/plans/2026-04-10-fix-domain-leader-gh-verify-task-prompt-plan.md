@@ -136,11 +136,11 @@ Normalize CCO agent file wording from "a specific GitHub issue" to "a GitHub iss
 
 ## Acceptance Criteria
 
-- [ ] All 8 Task Prompts in `brainstorm-domain-config.md` include `gh issue view` verification instruction
-- [ ] Verification instruction follows the exact pattern from commit a558001a
-- [ ] CCO agent file wording normalized to match other agents
-- [ ] No other files modified
-- [ ] `npx markdownlint-cli2 --fix` passes on all changed `.md` files
+- [x] All 8 Task Prompts in `brainstorm-domain-config.md` include `gh issue view` verification instruction
+- [x] Verification instruction follows the exact pattern from commit a558001a
+- [x] CCO agent file wording normalized to match other agents
+- [x] No other files modified
+- [x] `npx markdownlint-cli2 --fix` passes on all changed `.md` files
 
 ## Test Scenarios
 
