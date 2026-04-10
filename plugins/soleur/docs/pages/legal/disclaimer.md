@@ -2,7 +2,7 @@
 title: "Disclaimer"
 description: "Warranty disclaimers and limitation of liability for Soleur."
 layout: base.njk
-permalink: pages/legal/disclaimer.html
+permalink: legal/disclaimer/
 ---
 
 <section class="page-hero">
@@ -202,7 +202,7 @@ Soleur is a source-available project maintained by Jikigai, a company incorporat
 
 If you have questions about this Disclaimer, you may contact us through:
 
-- **Email:** legal@jikigai.com
+- **Email:** <legal@jikigai.com>
 - **GitHub:** [github.com/jikig-ai/soleur](https://github.com/jikig-ai/soleur)
 - **Website:** [soleur.ai](https://soleur.ai)
 

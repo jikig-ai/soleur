@@ -49,6 +49,8 @@ Before executing any browser scenarios, check whether the dev server is reachabl
    - Report: "Dev server failed to start within 30s. See server output above."
    - Continue to API verification steps (do not block the pipeline)
 
+   - When `doppler run` starts the dev server but Supabase env vars (`NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`) are missing from the Doppler config, the server starts but crashes on first request. Check the server log for "Your project's URL and Key are required" before declaring the server ready.
+
 ### Step 2: Detect Environment
 
 Determine the Doppler config to use:

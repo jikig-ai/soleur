@@ -564,13 +564,20 @@ Do NOT use `gh pr checks --watch` -- it exits immediately with "no checks report
 
 ## Phase 7: Poll for Merge and Cleanup
 
-After auto-merge is queued, poll until the PR is merged. Do NOT ask "merge now or later?" -- auto-merge handles it.
+After auto-merge is queued, poll until the PR is merged. Do NOT ask "merge now or later?" -- auto-merge handles it. Do NOT use foreground `sleep` — Claude Code blocks `sleep` >= 2s in foreground Bash calls.
+
+Use the **Monitor tool** with this shell loop:
 
 ```bash
-gh pr view <number> --json state --jq .state
+while true; do
+  state=$(gh pr view <number> --json state --jq .state)
+  echo "$(date +%H:%M:%S) state=$state"
+  [ "$state" = "MERGED" ] || [ "$state" = "CLOSED" ] && break
+  sleep 10
+done
 ```
 
-Poll every 10 seconds until state is `MERGED`.
+Each `echo` line arrives as a Monitor notification. React to the final state.
 
 **If state becomes `CLOSED` (not `MERGED`):** Auto-merge was cancelled due to a CI failure.
 
@@ -599,19 +606,24 @@ Poll every 10 seconds until state is `MERGED`.
    gh pr view <number> --json mergeCommit --jq .mergeCommit.oid
    ```
 
-   **Step 2:** Wait 15 seconds for workflows to trigger, then list all runs on the merge commit:
+   **Step 2:** Wait 15 seconds for workflows to trigger, then list all runs on the merge commit. Use `Bash` with `run_in_background: true` for the delayed check:
 
    ```bash
-   gh run list --branch main --commit <merge-sha> --json databaseId,workflowName,status,conclusion
+   sleep 15 && gh run list --branch main --commit <merge-sha> --json databaseId,workflowName,status,conclusion
    ```
 
-   **Step 3:** For each run that is not yet `completed`, poll every 30 seconds:
+   **Step 3:** For each run that is not yet `completed`, use the **Monitor tool** with a shell loop:
 
    ```bash
-   gh run view <id> --json status,conclusion --jq '"\(.status) \(.conclusion)"'
+   while true; do
+     result=$(gh run view <id> --json status,conclusion --jq '"\(.status) \(.conclusion)"')
+     echo "$(date +%H:%M:%S) run=<id> $result"
+     echo "$result" | grep -q "^completed" && break
+     sleep 30
+   done
    ```
 
-   Poll until all runs complete. Expected max wait: ~5 minutes for Docker builds + deploy verification.
+   Expected max wait: ~5 minutes for Docker builds + deploy verification.
 
    **Step 4:** Check conclusions:
    - All `success`: Report "Release verification: N/N workflows passed" and continue.
@@ -639,13 +651,18 @@ Poll every 10 seconds until state is `MERGED`.
 
    If a workflow has a long expected runtime (>10 minutes), note this to the user and continue polling. Do not skip validation because the workflow is slow.
 
-   **Step 3:** Poll each triggered run until completion (check every 30 seconds):
+   **Step 3:** Poll each triggered run until completion using the **Monitor tool**:
 
    ```bash
-   gh run list --workflow <workflow-filename> --limit 1 --json databaseId,status,conclusion --jq '.[0]'
+   while true; do
+     result=$(gh run list --workflow <workflow-filename> --limit 1 --json databaseId,status,conclusion --jq '.[0]')
+     echo "$(date +%H:%M:%S) $result"
+     echo "$result" | grep -q '"completed"' && break
+     sleep 30
+   done
    ```
 
-   Poll until `status` is `completed`. Then check `conclusion`:
+   React to the final `conclusion` from the Monitor output:
    - **success**: Report pass and continue
    - **failure**: Report failure, fetch logs with `gh run view <id> --log | tail -50`, and present the error to the user. Do NOT silently proceed.
 

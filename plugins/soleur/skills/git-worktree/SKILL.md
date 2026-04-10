@@ -23,6 +23,7 @@ This skill provides a unified interface for managing Git worktrees across your d
 **NEVER call `git worktree add` directly.** Always use the `worktree-manager.sh` script.
 
 The script handles critical setup that raw git commands don't:
+
 1. Copies `.env`, `.env.local`, `.env.test`, etc. from main repo
 2. Ensures `.worktrees` is in `.gitignore`
 3. Creates consistent directory structure
@@ -87,15 +88,18 @@ bash ./plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh cleanup
 Creates a new worktree with the given branch name.
 
 **Options:**
+
 - `branch-name` (required): The name for the new branch and worktree
 - `from-branch` (optional): Base branch to create from (defaults to `main`)
 
 **Example:**
+
 ```bash
 bash ./plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh create feature-login
 ```
 
 **What happens:**
+
 1. Checks if worktree already exists
 2. Updates the base branch from remote
 3. Creates new worktree and branch
@@ -107,11 +111,13 @@ bash ./plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh create fea
 Lists all available worktrees with their branches and current status.
 
 **Example:**
+
 ```bash
 bash ./plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh list
 ```
 
 **Output shows:**
+
 - Worktree name
 - Branch name
 - Which is current (marked with ✓)
@@ -122,11 +128,13 @@ bash ./plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh list
 Switches to an existing worktree and cd's into it.
 
 **Example:**
+
 ```bash
 bash ./plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh switch feature-login
 ```
 
 **Optional:**
+
 - If name not provided, lists available worktrees and prompts for selection
 
 ### `cleanup` or `clean`
@@ -134,11 +142,13 @@ bash ./plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh switch fea
 Interactively cleans up inactive worktrees with confirmation.
 
 **Example:**
+
 ```bash
 bash ./plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh cleanup
 ```
 
 **What happens:**
+
 1. Lists all inactive worktrees
 2. Asks for confirmation
 3. Removes selected worktrees
@@ -149,11 +159,13 @@ bash ./plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh cleanup
 Syncs stale on-disk files from git HEAD in a bare repo. Only needed when the repo uses `core.bare=true` — on-disk files at the bare root become stale after merges since git never updates them. Auto-called after `cleanup-merged` cleans branches in bare repo context.
 
 **Example:**
+
 ```bash
 bash ./plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh sync-bare-files
 ```
 
 **What it syncs:**
+
 - `AGENTS.md`, `CLAUDE.md` (session-start instructions)
 - `plugins/soleur/AGENTS.md`, `plugins/soleur/CLAUDE.md`
 - `plugins/soleur/hooks/*` (plugin hooks: stop-hook, welcome-hook, hooks.json)
@@ -288,6 +300,13 @@ bash ./plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh copy-env f
 ```
 
 Navigate back to the repository root directory.
+
+## Sharp Edges
+
+- If `worktree-manager.sh` reports success but `cd` to the worktree path fails or `git branch --show-current` returns an unexpected branch, the worktree was not properly created. Fall back to `git worktree add` directly: `git worktree add .worktrees/<name> -b <name> main`. The script includes post-creation verification (#1806) but edge cases on bare repos may still produce partial directories. Tracked in #1854.
+- The `draft-pr` subcommand uses `SCRIPT_DIR` for path resolution -- invoke it from inside the worktree, not from the bare repo root.
+- When creating worktrees manually (not via the script), always use absolute paths. Relative paths resolve from CWD, not from `GIT_DIR`, creating nested worktrees that are difficult to clean up. The script handles this correctly but manual `git worktree add` commands are susceptible.
+- When lefthook hangs in a worktree (>60s), kill it (`pkill -f "lefthook run"`), verify checks manually, then commit with `LEFTHOOK=0 git commit`. This is a known lefthook/worktree interaction bug.
 
 ## Technical Details
 
