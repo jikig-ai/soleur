@@ -240,7 +240,7 @@ export default function DashboardPage() {
   // First-run state (no vision.md, no conversations)
   // ---------------------------------------------------------------------------
 
-  if (!kbError && !visionExists && !loading && conversations.length === 0 && !hasActiveFilter) {
+  if (!kbError && !visionExists && conversations.length === 0 && !hasActiveFilter) {
     return (
       <div className="mx-auto flex min-h-[calc(100dvh-4rem)] max-w-3xl flex-col items-center justify-center px-4 py-10">
         <p className="mb-3 text-xs font-medium tracking-widest text-amber-500">
@@ -355,9 +355,13 @@ export default function DashboardPage() {
 
   // ---------------------------------------------------------------------------
   // Command Center — empty state (all foundations complete, no conversations)
+  // Show immediately once KB state is known — don't block on conversation
+  // loading. If conversations load later and are non-empty, React re-renders
+  // into the inbox view below. This prevents the Supabase client initialisation
+  // (navigator locks, Realtime WebSocket) from keeping users on a skeleton.
   // ---------------------------------------------------------------------------
 
-  if (!loading && !error && conversations.length === 0 && !hasActiveFilter) {
+  if (conversations.length === 0 && !hasActiveFilter) {
     return (
       <div className="mx-auto flex min-h-[calc(100dvh-4rem)] max-w-3xl flex-col items-center justify-center px-4 py-10">
         <p className="mb-3 text-xs font-medium tracking-widest text-amber-500">

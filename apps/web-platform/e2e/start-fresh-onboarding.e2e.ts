@@ -42,14 +42,87 @@ function kbTree(...files: string[]): { tree: TreeNode } {
 // Helpers
 // ---------------------------------------------------------------------------
 
+/** Mock user for Supabase auth responses (matches mock-supabase.ts MOCK_USER). */
+const MOCK_AUTH_USER = {
+  id: "test-user-id",
+  aud: "authenticated",
+  role: "authenticated",
+  email: "test@e2e.com",
+  email_confirmed_at: "2024-01-01T00:00:00Z",
+  phone: "",
+  confirmed_at: "2024-01-01T00:00:00Z",
+  app_metadata: { provider: "email", providers: ["email"] },
+  user_metadata: {},
+  identities: [],
+  created_at: "2024-01-01T00:00:00Z",
+  updated_at: "2024-01-01T00:00:00Z",
+};
+
 /** Intercept /api/kb/tree and all Supabase client-side calls before navigating. */
 async function setupDashboardMocks(page: Page, kbFiles: string[]) {
+  // Inject fake Supabase session into localStorage so the JS client
+  // doesn't short-circuit auth.getUser() before the HTTP mock triggers.
+  // Without this, the client sees no stored session and returns an auth
+  // error locally — the page.route() mock for /auth/v1/user never fires.
+  await page.addInitScript(() => {
+    const fakeSession = {
+      access_token: "test-access-token",
+      token_type: "bearer",
+      expires_in: 86400,
+      expires_at: Math.floor(Date.now() / 1000) + 86400,
+      refresh_token: "test-refresh-token",
+      user: {
+        id: "test-user-id",
+        aud: "authenticated",
+        role: "authenticated",
+        email: "test@e2e.com",
+        email_confirmed_at: "2024-01-01T00:00:00Z",
+        phone: "",
+        confirmed_at: "2024-01-01T00:00:00Z",
+        app_metadata: { provider: "email", providers: ["email"] },
+        user_metadata: {},
+        identities: [],
+        created_at: "2024-01-01T00:00:00Z",
+        updated_at: "2024-01-01T00:00:00Z",
+      },
+    };
+    localStorage.setItem(
+      "sb-localhost-auth-token",
+      JSON.stringify(fakeSession),
+    );
+  });
+
   // KB tree API (dashboard useEffect)
   await page.route("**/api/kb/tree", async (route) => {
     await route.fulfill({
       status: 200,
       contentType: "application/json",
       body: JSON.stringify(kbTree(...kbFiles)),
+    });
+  });
+
+  // Supabase Auth: getUser (useConversations hook calls supabase.auth.getUser())
+  await page.route("**/auth/v1/user", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify(MOCK_AUTH_USER),
+    });
+  });
+
+  // Supabase Auth: token refresh (prevent delays from session refresh attempts)
+  await page.route("**/auth/v1/token*", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        access_token: "test-access-token",
+        token_type: "bearer",
+        expires_in: 86400,
+        expires_at: Math.floor(Date.now() / 1000) + 86400,
+        refresh_token: "test-refresh-token",
+        user: MOCK_AUTH_USER,
+      }),
     });
   });
 
@@ -211,11 +284,44 @@ test.describe("Start Fresh onboarding: foundations state", () => {
 // ---------------------------------------------------------------------------
 // Tests: Command Center State (all foundations complete)
 // ---------------------------------------------------------------------------
-// NOTE: Command center tests are skipped — the useConversations hook's
-// loading state doesn't resolve in the test environment (the hook depends
-// on Supabase Realtime subscription status, which the mock can't satisfy).
-// The command center rendering logic is covered by unit tests. See #1831.
-// ---------------------------------------------------------------------------
+
+const ALL_FOUNDATION_FILES = [
+  "overview/vision.md",
+  "marketing/brand-guide.md",
+  "product/business-validation.md",
+  "legal/privacy-policy.md",
+];
+
+test.describe("Start Fresh onboarding: command center state", () => {
+  test("shows Command Center when all 4 foundation files exist", async ({ page }) => {
+    await setupDashboardMocks(page, ALL_FOUNDATION_FILES);
+    await gotoDashboard(page);
+
+    await expect(page.getByText("Your organization is ready.")).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByText("COMMAND CENTER").first()).toBeVisible();
+  });
+
+  test("suggested prompts render in command center", async ({ page }) => {
+    await setupDashboardMocks(page, ALL_FOUNDATION_FILES);
+    await gotoDashboard(page);
+
+    await expect(page.getByText("Your organization is ready.")).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByText("Review my go-to-market strategy")).toBeVisible();
+    await expect(page.getByText("Draft a privacy policy for my SaaS")).toBeVisible();
+    await expect(page.getByText("Plan Q2 budget and runway")).toBeVisible();
+    await expect(page.getByText("Prioritize my product roadmap")).toBeVisible();
+  });
+
+  test("suggested prompt click navigates to chat", async ({ page }) => {
+    await setupDashboardMocks(page, ALL_FOUNDATION_FILES);
+    await gotoDashboard(page);
+
+    await expect(page.getByText("Your organization is ready.")).toBeVisible({ timeout: 15_000 });
+    await page.getByText("Review my go-to-market strategy").click();
+    await page.waitForURL("**/dashboard/chat/new?msg=**", { timeout: 10_000 });
+    expect(page.url()).toContain("msg=Review+my+go-to-market+strategy");
+  });
+});
 
 // ---------------------------------------------------------------------------
 // Tests: Loading and Error States
