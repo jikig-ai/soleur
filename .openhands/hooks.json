@@ -1,0 +1,53 @@
+{
+  "pre_tool_use": [
+    {
+      "matcher": "terminal",
+      "hooks": [
+        {
+          "type": "command",
+          "command": ".openhands/hooks/guardrails.sh",
+          "timeout": 10
+        },
+        {
+          "type": "command",
+          "command": ".openhands/hooks/pre-merge-rebase.sh",
+          "timeout": 30
+        }
+      ]
+    },
+    {
+      "matcher": "file_editor",
+      "hooks": [
+        {
+          "type": "command",
+          "command": ".openhands/hooks/worktree-write-guard.sh",
+          "timeout": 5
+        }
+      ]
+    }
+  ],
+  "session_start": [
+    {
+      "matcher": "*",
+      "hooks": [
+        {
+          "type": "command",
+          "command": ".openhands/hooks/welcome-hook.sh",
+          "timeout": 5
+        }
+      ]
+    }
+  ],
+  "stop": [
+    {
+      "matcher": "*",
+      "hooks": [
+        {
+          "type": "command",
+          "command": ".openhands/hooks/stop-hook.sh",
+          "timeout": 30
+        }
+      ]
+    }
+  ]
+}
