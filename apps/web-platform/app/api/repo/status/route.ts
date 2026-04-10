@@ -50,6 +50,22 @@ export async function GET() {
     );
   }
 
+  // Check for an active system sync conversation (#1816)
+  let syncConversationId: string | null = null;
+  if (status === "ready") {
+    const { data: syncConv } = await serviceClient
+      .from("conversations")
+      .select("id")
+      .eq("user_id", user.id)
+      .eq("domain_leader", "system")
+      .eq("status", "active")
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    syncConversationId = syncConv?.id ?? null;
+  }
+
   return NextResponse.json({
     status,
     repoUrl,
@@ -57,6 +73,7 @@ export async function GET() {
     lastSyncedAt: userData.repo_last_synced_at ?? null,
     hasKnowledgeBase,
     healthSnapshot: userData.health_snapshot ?? null,
+    syncConversationId,
     errorMessage: status === "error" ? (userData.repo_error ?? null) : null,
   });
 }

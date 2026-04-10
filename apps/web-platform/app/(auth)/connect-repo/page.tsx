@@ -68,6 +68,7 @@ export default function ConnectRepoPage() {
   const [setupSteps, setSetupSteps] = useState<SetupStep[]>(SETUP_STEPS_TEMPLATE);
   const [setupError, setSetupError] = useState<string | null>(null);
   const [healthSnapshot, setHealthSnapshot] = useState<ProjectHealthSnapshot | null>(null);
+  const [syncConversationId, setSyncConversationId] = useState<string | null>(null);
   const [pendingCreate, setPendingCreate] = useState<{
     name: string;
     isPrivate: boolean;
@@ -337,6 +338,7 @@ export default function ConnectRepoPage() {
             );
             setConnectedRepoName(data.repoName ?? repoName);
             if (data.healthSnapshot) setHealthSnapshot(data.healthSnapshot);
+            setSyncConversationId(data.syncConversationId ?? null);
             // Brief delay so user sees the completed checklist
             setTimeout(() => setState("ready"), 800);
           } else if (data.status === "error") {
@@ -618,6 +620,7 @@ export default function ConnectRepoPage() {
             onContinue={handleOpenDashboard}
             onViewKb={handleViewKb}
             healthSnapshot={healthSnapshot}
+            syncConversationId={syncConversationId}
           />
         )}
         {state === "failed" && <FailedState onRetry={handleRetry} errorMessage={setupError} />}
