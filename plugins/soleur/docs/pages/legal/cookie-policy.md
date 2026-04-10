@@ -2,7 +2,7 @@
 title: "Cookie Policy"
 description: "Cookie usage on the Soleur documentation site. The Soleur plugin itself does not use cookies. Analytics are privacy-friendly via Plausible."
 layout: base.njk
-permalink: pages/legal/cookie-policy.html
+permalink: legal/cookie-policy/
 ---
 
 <section class="page-hero">
@@ -181,7 +181,7 @@ If you have questions about this Cookie Policy or our data practices, you can re
 
 ---
 
-> **Related documents:** This Cookie Policy references data collection and privacy practices. Consider reviewing the companion [Privacy Policy](/pages/legal/privacy-policy.html) for comprehensive coverage of personal data handling, the [Terms & Conditions](/pages/legal/terms-and-conditions.html) for the governing law that applies to this policy, and the [GDPR Policy](/pages/legal/gdpr-policy.html) for EU/EEA-specific data protection obligations.
+> **Related documents:** This Cookie Policy references data collection and privacy practices. Consider reviewing the companion [Privacy Policy](/legal/privacy-policy/) for comprehensive coverage of personal data handling, the [Terms & Conditions](/legal/terms-and-conditions/) for the governing law that applies to this policy, and the [GDPR Policy](/legal/gdpr-policy/) for EU/EEA-specific data protection obligations.
 
 ---
 
