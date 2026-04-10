@@ -4,7 +4,6 @@ import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { validateOrigin, rejectCsrf } from "@/lib/auth/validate-origin";
 import { provisionWorkspaceWithRepo } from "@/server/workspace";
 import { scanProjectHealth } from "@/server/project-scanner";
-import { startAgentSession } from "@/server/agent-runner";
 import logger from "@/server/logger";
 
 /**
@@ -159,12 +158,16 @@ export async function POST(request: Request) {
         return;
       }
 
-      startAgentSession(
-        user.id,
-        conversationId,
-        undefined,
-        undefined,
-        "/soleur:sync --headless",
+      // Dynamic import: agent-runner.ts pulls in @anthropic-ai/claude-agent-sdk
+      // which breaks Next.js build-time route validation when statically imported.
+      import("@/server/agent-runner").then(({ startAgentSession }) =>
+        startAgentSession(
+          user.id,
+          conversationId,
+          undefined,
+          undefined,
+          "/soleur:sync --headless",
+        ),
       ).catch((syncErr) => {
         logger.error(
           { err: syncErr, userId: user.id },
