@@ -25,6 +25,7 @@ import { createPullRequest } from "./github-app";
 import { tryCreateVision, buildVisionEnhancementPrompt } from "./vision-helpers";
 import { getToolTier, buildGateMessage } from "./tool-tiers";
 import { readCiStatus, readWorkflowLogs } from "./ci-tools";
+import { triggerWorkflow, createRateLimiter } from "./trigger-workflow";
 
 const log = createChildLogger("agent");
 
@@ -443,6 +444,9 @@ When you need user input for important decisions, use the AskUserQuestion tool.`
     let repoOwner = "";
     let repoName = "";
 
+    // Session-scoped rate limiter for workflow triggers (#1928)
+    const workflowRateLimiter = createRateLimiter();
+
     if (installationId && repoUrl) {
       // Parse owner/repo from repo_url (e.g., "https://github.com/owner/repo")
       let owner: string;
@@ -551,10 +555,39 @@ When you need user input for important decisions, use the AskUserQuestion tool.`
           },
         );
 
+        // Phase 3: Trigger workflows (#1928) — gated tier
+        const triggerWorkflowTool = tool(
+          "github_trigger_workflow",
+          "Trigger a workflow_dispatch event on the connected repository. " +
+          "Requires founder approval via review gate. Rate limited to 10 triggers per session. " +
+          "Use github_read_ci_status first to find workflow IDs.",
+          {
+            workflow_id: z.number().describe("The workflow ID to trigger (from github_read_ci_status)"),
+            ref: z.string().describe("Git ref to run the workflow on (branch name or tag)"),
+            inputs: z.record(z.string(), z.string()).optional().describe("Optional workflow_dispatch inputs"),
+          },
+          async (args) => {
+            try {
+              const result = await triggerWorkflow(
+                installationId, owner, repo,
+                args.workflow_id, args.ref, workflowRateLimiter, args.inputs,
+              );
+              return {
+                content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
+              };
+            } catch (err) {
+              return {
+                content: [{ type: "text" as const, text: `Error triggering workflow: ${(err as Error).message}` }],
+                isError: true,
+              };
+            }
+          },
+        );
+
         const toolServer = createSdkMcpServer({
           name: "soleur_platform",
           version: "1.0.0",
-          tools: [createPr, ciStatusTool, workflowLogsTool],
+          tools: [createPr, ciStatusTool, workflowLogsTool, triggerWorkflowTool],
         });
 
         mcpServersOption = { soleur_platform: toolServer };
@@ -562,6 +595,7 @@ When you need user input for important decisions, use the AskUserQuestion tool.`
           "mcp__soleur_platform__create_pull_request",
           "mcp__soleur_platform__github_read_ci_status",
           "mcp__soleur_platform__github_read_workflow_logs",
+          "mcp__soleur_platform__github_trigger_workflow",
         ];
       }
     }

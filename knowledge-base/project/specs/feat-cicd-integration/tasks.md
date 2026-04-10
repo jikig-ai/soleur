@@ -21,12 +21,12 @@
 
 ## Phase 3: Trigger Workflows (#1928)
 
-- [ ] 3.1 Add `github_trigger_workflow` tool (gated)
-- [ ] 3.2 Register with `gated` tier in canUseTool
-- [ ] 3.3 Implement review gate message: "Agent wants to trigger workflow **{name}** on branch **{ref}**"
-- [ ] 3.4 After dispatch, auto-poll status and return run ID
-- [ ] 3.5 Add simple rate limit counter: max 10 workflow triggers per session
-- [ ] 3.6 Write tests: verify gate fires, verify dispatch, verify rate limiting
+- [x] 3.1 Add `github_trigger_workflow` tool (gated)
+- [x] 3.2 Register with `gated` tier in canUseTool
+- [x] 3.3 Implement review gate message: "Agent wants to trigger workflow **{name}** on branch **{ref}**"
+- [x] 3.4 After dispatch, auto-poll status and return run ID
+- [x] 3.5 Add simple rate limit counter: max 10 workflow triggers per session
+- [x] 3.6 Write tests: verify gate fires, verify dispatch, verify rate limiting
 
 ## Phase 4: Open PRs (#1929)
 
