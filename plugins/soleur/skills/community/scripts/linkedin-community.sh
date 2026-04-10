@@ -8,7 +8,10 @@
 #   fetch-activity                 - Fetch account activity (requires Marketing API)
 #
 # Environment variables (required):
-#   LINKEDIN_ACCESS_TOKEN  - OAuth 2.0 Bearer token (60-day TTL)
+#   LINKEDIN_ACCESS_TOKEN      - OAuth 2.0 Bearer token for personal posts (60-day TTL)
+#   LINKEDIN_ORG_ACCESS_TOKEN  - OAuth 2.0 Bearer token for organization/company page posts
+#                                (requires w_organization_social scope; falls back to
+#                                LINKEDIN_ACCESS_TOKEN if unset)
 #   LINKEDIN_PERSON_URN    - Person URN for posting (urn:li:person:{id}), optional if --author provided
 #   LINKEDIN_ALLOW_POST    - Set to "true" to enable posting (safety guard, default: disabled)
 #
@@ -266,6 +269,13 @@ cmd_post_content() {
     echo "Error: No author specified. Provide --author or set LINKEDIN_PERSON_URN." >&2
     exit 1
   fi
+
+  # Organization posts require w_organization_social scope -- use LINKEDIN_ORG_ACCESS_TOKEN
+  # if set, otherwise fall back to LINKEDIN_ACCESS_TOKEN (which will likely 400).
+  if [[ "$author" == urn:li:organization:* ]] && [[ -n "${LINKEDIN_ORG_ACCESS_TOKEN:-}" ]]; then
+    LINKEDIN_ACCESS_TOKEN="$LINKEDIN_ORG_ACCESS_TOKEN"
+  fi
+
   local json_body
   json_body=$(jq -n \
     --arg author "$author" \
