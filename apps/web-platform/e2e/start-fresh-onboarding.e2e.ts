@@ -60,6 +60,38 @@ const MOCK_AUTH_USER = {
 
 /** Intercept /api/kb/tree and all Supabase client-side calls before navigating. */
 async function setupDashboardMocks(page: Page, kbFiles: string[]) {
+  // Inject fake Supabase session into localStorage so the JS client
+  // doesn't short-circuit auth.getUser() before the HTTP mock triggers.
+  // Without this, the client sees no stored session and returns an auth
+  // error locally — the page.route() mock for /auth/v1/user never fires.
+  await page.addInitScript(() => {
+    const fakeSession = {
+      access_token: "test-access-token",
+      token_type: "bearer",
+      expires_in: 86400,
+      expires_at: Math.floor(Date.now() / 1000) + 86400,
+      refresh_token: "test-refresh-token",
+      user: {
+        id: "test-user-id",
+        aud: "authenticated",
+        role: "authenticated",
+        email: "test@e2e.com",
+        email_confirmed_at: "2024-01-01T00:00:00Z",
+        phone: "",
+        confirmed_at: "2024-01-01T00:00:00Z",
+        app_metadata: { provider: "email", providers: ["email"] },
+        user_metadata: {},
+        identities: [],
+        created_at: "2024-01-01T00:00:00Z",
+        updated_at: "2024-01-01T00:00:00Z",
+      },
+    };
+    localStorage.setItem(
+      "sb-localhost-auth-token",
+      JSON.stringify(fakeSession),
+    );
+  });
+
   // KB tree API (dashboard useEffect)
   await page.route("**/api/kb/tree", async (route) => {
     await route.fulfill({
