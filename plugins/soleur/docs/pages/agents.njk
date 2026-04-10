@@ -2,7 +2,7 @@
 title: Soleur AI Agents
 description: "AI agents for every business department -- engineering, marketing, legal, finance, operations, product, sales, and support. The full Soleur agent roster."
 layout: base.njk
-permalink: pages/agents.html
+permalink: agents/
 ---
 
     <section class="page-hero">
@@ -29,7 +29,7 @@ The result: {{ stats.agents }} open source AI agents that function as a unified 
     <div class="container">
       <nav class="category-nav" aria-label="Agent categories">
         {%- for domain in agents.domains %}
-        <a href="pages/agents.html#{{ domain.key }}" class="category-pill">{{ domain.name }}</a>
+        <a href="agents/#{{ domain.key }}" class="category-pill">{{ domain.name }}</a>
         {%- endfor %}
       </nav>
 

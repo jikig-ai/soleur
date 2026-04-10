@@ -2,7 +2,7 @@
 title: "Individual Contributor License Agreement"
 description: "Agreement defining intellectual property terms for individual contributors to the Soleur project."
 layout: base.njk
-permalink: pages/legal/individual-cla.html
+permalink: legal/individual-cla/
 ---
 
 <section class="page-hero">
@@ -85,9 +85,10 @@ You agree to notify Us of any facts or circumstances of which You become aware t
 ---
 
 > **Related documents:** This Individual Contributor License Agreement relates to the Project's intellectual property framework. Please review the companion documents:
-> - [Corporate Contributor License Agreement](/pages/legal/corporate-cla.html) -- for contributions made on behalf of an organization
-> - [Terms & Conditions](/pages/legal/terms-and-conditions.html) -- governs use of the Soleur platform
-> - [Privacy Policy](/pages/legal/privacy-policy.html) -- details data practices including CLA signature processing
+>
+> - [Corporate Contributor License Agreement](/legal/corporate-cla/) -- for contributions made on behalf of an organization
+> - [Terms & Conditions](/legal/terms-and-conditions/) -- governs use of the Soleur platform
+> - [Privacy Policy](/legal/privacy-policy/) -- details data practices including CLA signature processing
 
     </div>
   </div>
