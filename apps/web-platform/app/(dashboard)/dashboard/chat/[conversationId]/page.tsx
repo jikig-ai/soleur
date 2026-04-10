@@ -34,6 +34,7 @@ export default function ChatPage() {
     reconnect,
     routeSource,
     activeLeaderIds,
+    usageData,
   } = useWebSocket(conversationId);
 
   const [sessionStarted, setSessionStarted] = useState(false);
@@ -285,10 +286,19 @@ export default function ChatPage() {
       </div>
 
       {/* Status bar */}
-      {activeLeaderIds.length > 0 && (
+      {(activeLeaderIds.length > 0 || (usageData && usageData.totalCostUsd > 0)) && (
         <div className="hidden border-t border-neutral-800/50 px-4 py-1.5 md:block md:px-6">
           <p className="text-xs text-neutral-500">
-            {activeLeaderIds.length} leaders responding
+            {activeLeaderIds.length > 0 && (
+              <>{activeLeaderIds.length} leaders responding</>
+            )}
+            {usageData && usageData.totalCostUsd > 0 && (
+              <span className="text-neutral-400">
+                {activeLeaderIds.length > 0 && " · "}
+                ~${usageData.totalCostUsd.toFixed(4)}
+                <span className="text-neutral-500 ml-1">estimated</span>
+              </span>
+            )}
           </p>
         </div>
       )}
@@ -325,11 +335,17 @@ export default function ChatPage() {
           />
         </div>
         <div className="mx-auto mt-1 flex max-w-3xl items-center justify-between text-xs text-neutral-400">
-          {activeLeaderIds.length > 0 && (
-            <span className="md:hidden">
-              {activeLeaderIds.length} leaders responding
-            </span>
-          )}
+          <span className="md:hidden">
+            {activeLeaderIds.length > 0 && (
+              <>{activeLeaderIds.length} leaders responding</>
+            )}
+            {usageData && usageData.totalCostUsd > 0 && (
+              <span className="text-neutral-400">
+                {activeLeaderIds.length > 0 && " · "}
+                ~${usageData.totalCostUsd.toFixed(4)} est.
+              </span>
+            )}
+          </span>
           <span className="ml-auto hidden md:inline">Type @ to switch leader</span>
         </div>
       </div>
