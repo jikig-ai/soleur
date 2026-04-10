@@ -86,6 +86,7 @@ describe("ReadyState — health snapshot", () => {
       <ReadyState
         repoName="user/test-repo"
         onContinue={vi.fn()}
+        onViewKb={vi.fn()}
         healthSnapshot={mockSnapshot}
       />,
     );
@@ -104,6 +105,7 @@ describe("ReadyState — health snapshot", () => {
       <ReadyState
         repoName="user/test-repo"
         onContinue={vi.fn()}
+        onViewKb={vi.fn()}
         healthSnapshot={strongSnapshot}
       />,
     );
@@ -121,6 +123,7 @@ describe("ReadyState — health snapshot", () => {
       <ReadyState
         repoName="user/test-repo"
         onContinue={vi.fn()}
+        onViewKb={vi.fn()}
         healthSnapshot={gapsSnapshot}
       />,
     );
@@ -138,6 +141,7 @@ describe("ReadyState — health snapshot", () => {
       <ReadyState
         repoName="user/test-repo"
         onContinue={vi.fn()}
+        onViewKb={vi.fn()}
         healthSnapshot={mockSnapshot}
       />,
     );
@@ -165,6 +169,7 @@ describe("ReadyState — health snapshot", () => {
       <ReadyState
         repoName="user/test-repo"
         onContinue={vi.fn()}
+        onViewKb={vi.fn()}
         healthSnapshot={mockSnapshot}
       />,
     );
@@ -191,6 +196,7 @@ describe("ReadyState — health snapshot", () => {
       <ReadyState
         repoName="user/test-repo"
         onContinue={vi.fn()}
+        onViewKb={vi.fn()}
         healthSnapshot={mockSnapshot}
       />,
     );
@@ -213,6 +219,7 @@ describe("ReadyState — health snapshot", () => {
       <ReadyState
         repoName="user/test-repo"
         onContinue={vi.fn()}
+        onViewKb={vi.fn()}
         healthSnapshot={mockSnapshot}
       />,
     );
@@ -237,6 +244,7 @@ describe("ReadyState — health snapshot", () => {
       <ReadyState
         repoName="user/test-repo"
         onContinue={vi.fn()}
+        onViewKb={vi.fn()}
         healthSnapshot={null}
       />,
     );
@@ -246,7 +254,8 @@ describe("ReadyState — health snapshot", () => {
       screen.getByText("Your AI Team Is Ready."),
     ).toBeInTheDocument();
     expect(screen.getByText("user/test-repo")).toBeInTheDocument();
-    expect(screen.getByText("Open Dashboard")).toBeInTheDocument();
+    expect(screen.getByText("Open Command Center")).toBeInTheDocument();
+    expect(screen.getByText("Review Knowledge Base")).toBeInTheDocument();
 
     // Health-specific sections should NOT be present
     expect(screen.queryByTestId("detected-signals")).not.toBeInTheDocument();
@@ -266,6 +275,7 @@ describe("ReadyState — health snapshot", () => {
       <ReadyState
         repoName="user/test-repo"
         onContinue={vi.fn()}
+        onViewKb={vi.fn()}
         healthSnapshot={mockSnapshot}
       />,
     );
@@ -282,16 +292,16 @@ describe("ReadyState — health snapshot", () => {
       <ReadyState
         repoName="user/test-repo"
         onContinue={vi.fn()}
+        onViewKb={vi.fn()}
         healthSnapshot={mockSnapshot}
       />,
     );
 
-    // kbExists is false, so the CTA should link to KB
-    const kbLink = screen.getByRole("link", {
+    // kbExists is false, so the CTA should navigate to KB
+    const kbButton = screen.getByRole("button", {
       name: /review knowledge base/i,
     });
-    expect(kbLink).toBeInTheDocument();
-    expect(kbLink).toHaveAttribute("href", "/dashboard/kb");
+    expect(kbButton).toBeInTheDocument();
   });
 
   it('renders "Open Command Center" and "Review Knowledge Base" CTAs together', async () => {
@@ -300,6 +310,7 @@ describe("ReadyState — health snapshot", () => {
       <ReadyState
         repoName="user/test-repo"
         onContinue={vi.fn()}
+        onViewKb={vi.fn()}
         healthSnapshot={mockSnapshot}
       />,
     );
@@ -308,7 +319,7 @@ describe("ReadyState — health snapshot", () => {
       screen.getByRole("button", { name: /open command center/i }),
     ).toBeInTheDocument();
     expect(
-      screen.getByRole("link", { name: /review knowledge base/i }),
+      screen.getByRole("button", { name: /review knowledge base/i }),
     ).toBeInTheDocument();
   });
 });
