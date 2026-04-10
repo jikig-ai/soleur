@@ -6,6 +6,27 @@ date: 2026-04-10
 
 # feat: Cloudflare security audit for soleur.ai
 
+## Enhancement Summary
+
+**Deepened on:** 2026-04-10
+**Sections enhanced:** 8 phases + acceptance criteria + risks
+**Research sources:** Cloudflare official docs, 8 institutional learnings, web security best practices
+
+### Key Improvements
+
+1. Added MCP-specific API endpoint patterns and JavaScript execution templates for each audit phase
+2. Incorporated 8 institutional learnings (Bot Fight Mode interaction with Access, async webhook timeouts, token permission editing, service token expiry monitoring, DNS `@` drift, Terraform v4/v5 naming, WebSocket auth chain, attack surface enumeration)
+3. Added CAA record audit, Automatic SSL/TLS mode detection, and Security Analytics threat categorization as new audit items
+4. Added Cloudflare Audit Logs review as a new audit dimension for detecting unauthorized configuration changes
+5. Enhanced remediation phase with rollback procedures and change-one-at-a-time verification protocol
+
+### New Considerations Discovered
+
+- Bot Fight Mode was previously disabled to unblock deploy webhooks (2026-03-21 learning) -- audit must verify it remains disabled on purpose and document the compensating controls
+- Cloudflare's Automatic SSL/TLS (Q4 2025+) may have changed the effective encryption mode -- check whether zone uses manual or automatic mode
+- The official Cloudflare MCP server exposes 2,500+ endpoints via `search()` and `execute()` using Codemode (JavaScript against typed API client) -- audit can access Security Analytics, Audit Logs, and threat data programmatically
+- CAA records may be auto-managed by Cloudflare but invisible in the dashboard -- CLI verification with `dig` is required
+
 ## Overview
 
 Comprehensive security audit of the Cloudflare configuration for `soleur.ai` and all associated subdomains, triggered by 257 security threats detected in the last month. The audit uses the Cloudflare MCP server (authenticated via OAuth 2.1) and the `infra-security` agent to scan all zones, audit DNS records, SSL/TLS certificates, Cloudflare Access configs, WAF configurations, and identify misconfigurations requiring remediation.
@@ -38,10 +59,28 @@ From `apps/web-platform/infra/`:
 - `@` symbol in DNS records causes Terraform drift -- already fixed (2026-04-03 learning)
 - Cloudflare Terraform v4 vs v5 naming differences (2026-03-20 learning)
 - WebSocket Cloudflare auth debugging patterns (2026-03-17 learning)
+- Bot Fight Mode blocks API/webhook traffic through Cloudflare Tunnel -- was disabled to unblock deploy webhooks (2026-03-21 learning)
+- Async webhook pattern required to avoid Cloudflare 120s edge timeout (2026-03-21 learning)
+- Cloudflare API token permissions cannot be self-modified -- dashboard automation via Playwright required for permission changes (2026-03-21 learning)
+- Attack surface enumeration must cover ALL code paths, not just the reported vector (2026-03-20 learning)
 
 ## Proposed Solution
 
 Execute a multi-phase security audit using the Cloudflare MCP server and CLI verification tools. The audit follows the `infra-security` agent's protocol with severity-based findings reporting.
+
+### Research Insights: MCP Server Capabilities
+
+The official Cloudflare MCP server at `https://mcp.cloudflare.com/mcp` provides access to 2,500+ API endpoints via two tools:
+
+- **`search()`** -- Query the OpenAPI spec to discover endpoints (e.g., "zone settings", "DNS records", "security events")
+- **`execute()`** -- Run JavaScript against the Cloudflare API client. The code runs in an isolated Dynamic Worker sandbox with OAuth-scoped permissions
+
+This means every audit check that uses the Cloudflare API can be performed via MCP without needing raw `curl` commands. The MCP handles authentication, pagination, and error formatting.
+
+**References:**
+
+- [Cloudflare MCP servers documentation](https://developers.cloudflare.com/agents/model-context-protocol/mcp-servers-for-cloudflare/)
+- [Code Mode: give agents an entire API in 1,000 tokens](https://blog.cloudflare.com/code-mode-mcp/)
 
 ## Technical Approach
 
@@ -56,11 +95,16 @@ Execute a multi-phase security audit using the Cloudflare MCP server and CLI ver
 - [ ] Use MCP `execute` tool to list all zones in the account
 - [ ] Verify `soleur.ai` zone is found and note zone ID
 - [ ] Check for any unexpected zones
+- [ ] Verify MCP OAuth scope includes: Zone:Read, DNS:Read, SSL and Certificates:Read, Firewall Services:Read, Access:Organizations/Identity Providers/Service Tokens:Read, Account Settings:Read, Notifications:Read
 
 **Verification:**
 
 - `dig +short soleur.ai` resolves correctly
 - MCP returns zone list without errors
+
+**Research Insights:**
+
+The MCP server uses OAuth 2.1 with user-approved permission scoping. If any audit phase fails with a permissions error, the scope must be expanded by re-authenticating. Per the learning on Cloudflare API token permissions (2026-03-21), token permissions can be modified without rotating the token value -- but MCP OAuth tokens may require re-consent for additional scopes.
 
 ### Phase 2: DNS Record Audit
 
@@ -75,9 +119,13 @@ Execute a multi-phase security audit using the Cloudflare MCP server and CLI ver
 - [ ] Verify proxy status: web-serving records should be proxied (orange cloud), mail records should NOT be proxied
 - [ ] Verify `api.soleur.ai` is correctly unproxied (Supabase requirement)
 - [ ] Check SPF, DKIM, DMARC records for email authentication completeness
+- [ ] Verify DMARC policy is `p=quarantine` or `p=reject` (not `p=none` which provides no protection)
+- [ ] Verify SPF records use `-all` (hard fail) or `~all` (soft fail), not `+all` or `?all`
 - [ ] Look for dangling CNAME records pointing to decommissioned services
 - [ ] Verify no wildcard records exist that could expose unintended subdomains
 - [ ] Check TTL values for appropriateness
+- [ ] Verify no zone-apex records use `name = "@"` (causes perpetual Terraform drift per 2026-04-03 learning)
+- [ ] Check CAA records -- Cloudflare may auto-manage them invisibly (verify via `dig` even if dashboard shows none)
 
 **CLI verification:**
 
@@ -87,6 +135,28 @@ Execute a multi-phase security audit using the Cloudflare MCP server and CLI ver
 - `dig TXT _dmarc.soleur.ai` (DMARC policy)
 - `dig TXT soleur.ai` (SPF + Google verification)
 - `dig +trace soleur.ai` (delegation chain)
+- `dig CAA soleur.ai` (Certificate Authority Authorization)
+
+**Research Insights:**
+
+**Email Authentication Best Practices (from [Cloudflare DMARC Management docs](https://developers.cloudflare.com/dmarc-management/security-records/)):**
+
+- SPF, DKIM, and DMARC form a trio -- all three are needed for complete email authentication
+- DMARC ties SPF and DKIM together and tells receiving servers what to do when a check fails
+- For domains that send email (like `send.soleur.ai` via Resend), all three records must be present on the sending subdomain
+- For domains that do NOT send email, a `v=spf1 -all` record and `p=reject` DMARC policy prevent spoofing
+
+**CAA Records (from [Cloudflare SSL/TLS docs](https://developers.cloudflare.com/ssl/edge-certificates/caa-records/)):**
+
+- CAA records specify which CAs can issue certificates for the domain
+- Cloudflare adds CAA records automatically but they do not appear in the dashboard
+- Run `dig CAA soleur.ai` to verify -- even if the dashboard shows none, CLI may reveal auto-managed records
+- Setting custom CAA records does not affect which CA Cloudflare uses for edge certificates
+
+**Institutional Learning Applied:**
+
+- The `@` symbol DNS drift issue (2026-04-03) was already fixed -- verify the fix persists and no new records use `@`
+- Cross-reference every DNS record against Terraform state to catch shadow DNS (records created via dashboard that are not in IaC)
 
 ### Phase 3: SSL/TLS Certificate Audit
 
@@ -95,14 +165,17 @@ Execute a multi-phase security audit using the Cloudflare MCP server and CLI ver
 **Tasks:**
 
 - [ ] Retrieve SSL/TLS mode via MCP (should be Full (Strict))
+- [ ] Check if zone uses Automatic SSL/TLS mode (new since Q4 2025) vs manual mode selection
 - [ ] Check "Always Use HTTPS" setting (should be enabled)
 - [ ] Check HSTS configuration (should be enabled, max-age >= 31536000, includeSubDomains, preload)
-- [ ] Check minimum TLS version (should be 1.2+)
+- [ ] Check minimum TLS version (should be 1.2+, prefer 1.2 as minimum)
 - [ ] Check TLS 1.3 support (should be enabled)
 - [ ] Check Opportunistic Encryption setting
 - [ ] Check Automatic HTTPS Rewrites setting
 - [ ] Verify certificate chain validity for all subdomains
 - [ ] Check Certificate Transparency Monitoring setting
+- [ ] Verify origin certificate (if Cloudflare Origin CA is used)
+- [ ] Check if post-quantum handshakes are available (Cloudflare began testing Q4 2025)
 
 **CLI verification:**
 
@@ -110,6 +183,29 @@ Execute a multi-phase security audit using the Cloudflare MCP server and CLI ver
 - `openssl s_client -connect soleur.ai:443 -servername soleur.ai` (apex cert)
 - `curl -sI https://soleur.ai` (HSTS headers, security headers)
 - `curl -sI https://app.soleur.ai` (app domain security headers)
+- `openssl s_client -connect soleur.ai:443 -servername soleur.ai 2>/dev/null | openssl x509 -noout -dates` (cert expiry)
+
+**Research Insights:**
+
+**SSL/TLS Mode Best Practices (from [Cloudflare SSL/TLS docs](https://developers.cloudflare.com/ssl/origin-configuration/ssl-modes/full-strict/)):**
+
+- Full (Strict) requires a valid certificate on the origin server (not self-signed unless Cloudflare Origin CA)
+- Cloudflare strongly recommends Full or Full (Strict) to prevent man-in-the-middle attacks
+- "Flexible" mode is a critical security risk -- traffic between Cloudflare and origin is unencrypted
+- Automatic SSL/TLS (new feature) dynamically selects the strongest mode the origin supports
+
+**HSTS Best Practices (from [Cloudflare HSTS docs](https://developers.cloudflare.com/ssl/edge-certificates/additional-options/http-strict-transport-security/)):**
+
+- HSTS protects against SSL stripping/downgrade attacks
+- Recommended: `max-age=63072000` (2 years), `includeSubDomains`, `preload`
+- The `preload` directive allows submission to browser HSTS preload lists
+- Note: The existing Next.js security headers already set `max-age=63072000; includeSubDomains; preload` (per 2026-03-20 learning) -- verify Cloudflare does not override or conflict
+
+**Minimum TLS Version (from [Cloudflare Minimum TLS docs](https://developers.cloudflare.com/ssl/edge-certificates/additional-options/minimum-tls/)):**
+
+- TLS 1.0 and 1.1 are deprecated by major browsers
+- Setting minimum to TLS 1.2 blocks legacy clients but ensures strong encryption
+- TLS 1.3 provides improved performance and security but should not be the minimum (some enterprise clients still need 1.2)
 
 ### Phase 4: Cloudflare Access / Zero Trust Audit
 
@@ -120,17 +216,34 @@ Execute a multi-phase security audit using the Cloudflare MCP server and CLI ver
 - [ ] List all Access applications via MCP
 - [ ] Verify deploy webhook Access application configuration
 - [ ] Check Access policy: only GitHub Actions service token should have access
-- [ ] Verify service token is not expired or near expiry
+- [ ] Verify service token is not expired or near expiry (check `expires_at` field)
 - [ ] Check if `expiring_service_token_alert` notification policy is active
 - [ ] Review tunnel configuration: only `deploy.soleur.ai` route should exist
 - [ ] Verify catch-all rule returns 404 (not a permissive default)
 - [ ] Check for any stale or orphaned Access applications
-- [ ] Verify tunnel is healthy and connected
+- [ ] Verify tunnel is healthy and connected (check tunnel status via MCP)
+- [ ] Check session duration setting (24h is current, verify appropriateness)
+- [ ] Verify `non_identity` decision type is used (not `allow` which would require identity)
 
 **Cross-reference with Terraform:**
 
 - `tunnel.tf` defines the tunnel, Access application, service token, and policy
 - Verify live configuration matches Terraform state
+
+**Research Insights:**
+
+**Zero Trust Best Practices (from [Cloudflare ZTNA reference architecture](https://developers.cloudflare.com/reference-architecture/design-guides/designing-ztna-access-policies/)):**
+
+- Cloudflare recommends against using `Bypass` policies for permanent direct access
+- Service tokens should have the minimum necessary lifetime -- default 1 year, consider shorter if rotation is automated
+- Each service/server should have its own service token to prevent credential sharing (per 2026-03-21 async webhook learning)
+- The `non_identity` decision type is correct for machine-to-machine auth (no login page presented)
+
+**Institutional Learnings Applied:**
+
+- Service token expiry is monitored via Terraform `cloudflare_notification_policy` + GitHub Actions backup workflow (2026-03-21 learning). Verify BOTH monitoring layers are active.
+- Bot Fight Mode was disabled at the zone level because it intercepts traffic BEFORE Cloudflare Access evaluates service tokens (2026-03-21 tunnel provisioning learning). This is an intentional trade-off -- document it as an accepted risk with compensating controls (WAF rules, HMAC validation).
+- The deploy webhook uses async (fire-and-forget) pattern with 202 response to avoid Cloudflare's 120s edge timeout (2026-03-21 async webhook learning). Verify `hooks.json` still has `"include-command-output-in-response": false`.
 
 ### Phase 5: WAF and Security Features Audit
 
@@ -139,16 +252,43 @@ Execute a multi-phase security audit using the Cloudflare MCP server and CLI ver
 **Tasks:**
 
 - [ ] Check if WAF is enabled (availability depends on Cloudflare plan)
-- [ ] Review WAF managed rules configuration
-- [ ] Check Bot Fight Mode status (should be enabled)
-- [ ] Check Browser Integrity Check status
+- [ ] Review WAF managed rules configuration (Cloudflare Managed Ruleset + OWASP Core Ruleset)
+- [ ] Check Bot Fight Mode status -- expected to be OFF (intentionally disabled per 2026-03-21 learning to unblock deploy webhooks). Document this as an accepted risk.
+- [ ] Check Browser Integrity Check status (should be enabled -- blocks requests with missing or non-standard user agents)
 - [ ] Review Security Level setting (Medium recommended as baseline)
 - [ ] Check Challenge Passage TTL
 - [ ] Review any custom WAF rules / Firewall Rules
 - [ ] Check rate limiting rules (if any)
-- [ ] Review the 257 threats detected -- categorize by type (DDoS, bot, scanner, etc.)
+- [ ] Review the 257 threats detected via Security Analytics -- categorize by type using MCP
 - [ ] Check Under Attack Mode status (should be off unless actively under attack)
 - [ ] Verify Scrape Shield settings (Email Address Obfuscation, Server-side Excludes, Hotlink Protection)
+- [ ] Check User Agent Blocking rules
+- [ ] Review Cloudflare Audit Logs for any unauthorized configuration changes in the last 30 days
+
+**Research Insights:**
+
+**WAF on Free Plans (from [Cloudflare WAF docs](https://developers.cloudflare.com/waf/get-started/)):**
+
+- Free plans include the Cloudflare Managed Ruleset and basic bot protection
+- The Cloudflare OWASP Core Ruleset uses a scoring model -- each matching rule adds to a cumulative threat score
+- WAF custom rules can supplement managed rules for domain-specific protection
+- Bot Fight Mode on Free plans is a simple on/off toggle with no customization -- it cannot be scoped per path, which is why it was disabled (it blocks deploy webhooks)
+
+**Security Analytics (from [Cloudflare Security Analytics docs](https://developers.cloudflare.com/waf/analytics/security-analytics/)):**
+
+- Security Analytics shows ALL traffic (acted on or not) -- use this for comprehensive threat analysis
+- Security Events shows only mitigated requests -- use this for understanding what Cloudflare blocked
+- Attack analysis uses WAF attack scores; Bot analysis uses bot scores
+- The 257 threats should be categorized via Security Analytics into: attack types (SQLi, XSS, RCE, etc.), bot categories, source countries/ASNs, and targeted paths
+
+**Audit Logs (from [Cloudflare Audit Logs docs](https://developers.cloudflare.com/fundamentals/account/account-security/audit-logs/)):**
+
+- Audit logs cover ~95% of Cloudflare products
+- Check for: unauthorized zone setting changes, DNS record modifications, Access policy updates, tunnel configuration changes
+- Filter by time range (last 30 days) and action type (changes only, not reads)
+
+**Bot Fight Mode Trade-off:**
+Per the 2026-03-21 tunnel provisioning learning, Bot Fight Mode was disabled because it intercepts traffic at the Cloudflare edge BEFORE Access evaluates service tokens. The deploy webhook has two compensating controls: CF Access service token authentication and HMAC-SHA256 payload verification. The audit should verify both controls are active and document this as an accepted architectural decision, not a misconfiguration.
 
 ### Phase 6: DNSSEC Audit
 
@@ -160,10 +300,23 @@ Execute a multi-phase security audit using the Cloudflare MCP server and CLI ver
 - [ ] If disabled: flag as HIGH severity finding
 - [ ] If enabled: verify DS record is present at registrar
 - [ ] Verify DNSSEC algorithm and key rotation status
+- [ ] Check DNSSEC states (active, pending, disabled) via MCP
 
 **CLI verification:**
 
 - `dig +dnssec soleur.ai` (DNSSEC validation)
+- `dig DS soleur.ai @<parent-ns>` (DS record at registrar)
+
+**Research Insights:**
+
+**DNSSEC Best Practices (from [Cloudflare DNSSEC docs](https://developers.cloudflare.com/dns/dnssec/)):**
+
+- DNSSEC adds cryptographic signatures to DNS records, preventing DNS spoofing
+- Cloudflare Registrar offers one-click DNSSEC activation for free
+- If the domain is registered with Cloudflare, DNSSEC should be trivial to enable
+- If registered elsewhere, the registrar must add the DS record provided by Cloudflare
+- DNSSEC states: `pending` (waiting for registrar DS record), `active` (fully operational), `disabled`
+- Troubleshooting: [DNSSEC troubleshooting guide](https://developers.cloudflare.com/dns/dnssec/troubleshooting/)
 
 ### Phase 7: HTTP Security Headers Audit
 
@@ -172,11 +325,36 @@ Execute a multi-phase security audit using the Cloudflare MCP server and CLI ver
 **Tasks:**
 
 - [ ] Check Content-Security-Policy header
-- [ ] Check X-Frame-Options header
-- [ ] Check X-Content-Type-Options header
-- [ ] Check Referrer-Policy header
+- [ ] Check X-Frame-Options header (should be DENY)
+- [ ] Check X-Content-Type-Options header (should be nosniff)
+- [ ] Check Referrer-Policy header (should be strict-origin-when-cross-origin)
 - [ ] Check Permissions-Policy header
+- [ ] Check Cross-Origin-Opener-Policy header (should be same-origin)
+- [ ] Check Cross-Origin-Resource-Policy header (should be same-origin)
 - [ ] Compare headers across `soleur.ai`, `app.soleur.ai`, and the docs site
+- [ ] Verify Cloudflare does not strip or override application-set headers
+
+**Research Insights:**
+
+**Existing Security Headers (from 2026-03-20 learning: Static CSP Security Headers):**
+The Next.js app already sets comprehensive security headers via `next.config.ts`:
+
+| Header | Expected Value |
+|--------|---------------|
+| Content-Security-Policy | `default-src 'self'; script-src 'self'; ...` |
+| X-Frame-Options | `DENY` |
+| Strict-Transport-Security | `max-age=63072000; includeSubDomains; preload` |
+| X-Content-Type-Options | `nosniff` |
+| Referrer-Policy | `strict-origin-when-cross-origin` |
+| Permissions-Policy | `camera=(), microphone=(), geolocation=()` |
+| Cross-Origin-Opener-Policy | `same-origin` |
+| Cross-Origin-Resource-Policy | `same-origin` |
+
+The audit should verify these headers survive Cloudflare proxying -- Cloudflare may add its own headers or modify existing ones. Check for:
+
+- Double HSTS headers (both Cloudflare and app setting them)
+- CSP conflicts if Cloudflare injects any scripts (Rocket Loader, Email Obfuscation)
+- Whether Cloudflare's Email Address Obfuscation modifies the DOM in a way that conflicts with CSP
 
 ### Phase 8: Remediation
 
@@ -184,14 +362,33 @@ Execute a multi-phase security audit using the Cloudflare MCP server and CLI ver
 
 **Tasks:**
 
-- [ ] For Cloudflare-side settings: apply fixes via MCP `execute` tool
+- [ ] For Cloudflare-side settings: apply fixes via MCP `execute` tool ONE AT A TIME
+- [ ] After each change, verify with CLI tools before proceeding to next change
 - [ ] For Terraform-managed resources: update `.tf` files and validate
 - [ ] Run `terraform validate` and `terraform fmt` after any `.tf` changes
 - [ ] For settings that should be Terraform-managed but are not: add to appropriate `.tf` file
 - [ ] Create GitHub issues for any findings that require longer-term work
 - [ ] Verify fixes with CLI tools after applying
+- [ ] If a remediation change breaks live traffic, revert immediately via MCP
 
 **Important:** Any Terraform changes must use the v4 provider attribute names (not v5). See learning: `2026-03-20-cloudflare-terraform-v4-v5-resource-names.md`.
+
+**Research Insights:**
+
+**Remediation Protocol:**
+
+1. **Prioritize by severity:** Critical > High > Medium > Low
+2. **One change at a time:** Apply a single setting change, verify with CLI, then proceed. Never batch security setting changes -- a batch failure is harder to diagnose than a single-change failure.
+3. **Verify before and after:** Run the relevant CLI check before the change (baseline) and after (confirmation)
+4. **Rollback plan:** For each change, know how to revert. MCP `execute` can set values back. For Terraform, `git checkout -- <file>` reverts local changes.
+5. **Bot Fight Mode exception:** Do NOT re-enable Bot Fight Mode. It was intentionally disabled (2026-03-21 learning). If the audit determines bot protection is needed, use custom WAF rules scoped to specific paths instead.
+
+**Attack Surface Enumeration (from 2026-03-20 learning):**
+Before implementing any remediation, enumerate ALL code paths that touch the security surface:
+
+- What are ALL the ways traffic reaches the origin? (Cloudflare proxy, tunnel, direct IP if exposed)
+- What allowlists or bypass mechanisms exist? (Bot Fight Mode off, specific firewall rules)
+- Which paths are checked by the fix, and which are not?
 
 ## Acceptance Criteria
 
@@ -202,9 +399,11 @@ Execute a multi-phase security audit using the Cloudflare MCP server and CLI ver
 - [ ] All DNS records cross-referenced with Terraform state
 - [ ] SSL/TLS configuration verified as Full (Strict) with HSTS
 - [ ] Zero Trust Access configurations reviewed
-- [ ] WAF and security feature status documented
+- [ ] WAF and security feature status documented (inline only)
 - [ ] DNSSEC status verified
-- [ ] HTTP security headers checked
+- [ ] HTTP security headers checked across all domains
+- [ ] Security Analytics reviewed and 257 threats categorized
+- [ ] Cloudflare Audit Logs reviewed for unauthorized changes
 - [ ] All findings reported inline (not persisted to files)
 - [ ] Critical and high severity findings remediated or tracked with GitHub issues
 - [ ] Terraform changes (if any) pass `terraform validate`
@@ -214,39 +413,51 @@ Execute a multi-phase security audit using the Cloudflare MCP server and CLI ver
 - [ ] No aggregated security findings persisted to repository files
 - [ ] Audit completes without requiring manual Cloudflare dashboard access
 - [ ] All remediation changes are idempotent
+- [ ] Each remediation change verified individually before proceeding
 
 ### Quality Gates
 
 - [ ] CLI verification confirms MCP findings match reality
 - [ ] Any Terraform changes use correct v4 provider syntax
 - [ ] GitHub issues created for deferred remediations
+- [ ] Bot Fight Mode intentional disable documented with compensating controls
 
 ## Test Scenarios
 
 ### Authentication
 
 - Given the Cloudflare MCP server is configured in plugin.json, when `mcp__plugin_soleur_cloudflare__authenticate` is invoked, then authentication succeeds and API calls return data
+- Given MCP OAuth scope is insufficient for a specific API call, when the call fails with a permissions error, then the error is reported and re-authentication is suggested
 
 ### DNS Audit
 
 - Given DNS records exist in both Cloudflare and Terraform, when the audit cross-references them, then all Terraform-managed records are found in Cloudflare
 - Given the DMARC record exists, when checked, then `p=quarantine` or `p=reject` policy is active
 - Given the SPF records exist, when checked, then they include the correct `amazonses.com` include
+- Given CAA records may be auto-managed, when `dig CAA soleur.ai` is run, then results are reported even if dashboard shows none
 
 ### SSL/TLS Audit
 
 - Given SSL/TLS mode is queried, when the mode is not Full (Strict), then it is flagged as a MEDIUM finding
 - Given HSTS is checked, when max-age is less than 31536000, then it is flagged as a HIGH finding
+- Given minimum TLS version is checked, when it is below 1.2, then it is flagged as a HIGH finding
 
 ### Access Audit
 
 - Given the deploy Access application exists, when its policies are reviewed, then only the GitHub Actions service token has access
 - Given the tunnel configuration is retrieved, when routes are listed, then only `deploy.soleur.ai` maps to `localhost:9000` with a 404 catch-all
+- Given the service token has an expiry date, when it is within 60 days, then it is flagged as a MEDIUM finding
+
+### WAF Audit
+
+- Given Bot Fight Mode is OFF, when the audit checks it, then it documents this as an intentional decision with compensating controls (not a misconfiguration)
+- Given Security Analytics data is available, when the 257 threats are queried, then they are categorized by type and reported inline
 
 ### Remediation
 
 - Given a misconfiguration is found, when it is Cloudflare-side only, then it is fixed via MCP execute
 - Given a misconfiguration affects Terraform-managed resources, when remediated, then the `.tf` file is updated and `terraform validate` passes
+- Given a remediation changes live traffic behavior, when applied, then CLI verification confirms the change does not break functionality
 
 ## Dependencies and Risks
 
@@ -254,7 +465,7 @@ Execute a multi-phase security audit using the Cloudflare MCP server and CLI ver
 
 - Cloudflare MCP server must be accessible and authenticated
 - `dig` and `openssl` CLI tools must be installed locally
-- Cloudflare API token must have sufficient permissions (Zone:Read, DNS:Read, SSL:Read, Firewall:Read, Access:Read)
+- Cloudflare API token (via MCP OAuth) must have sufficient permissions (Zone:Read, DNS:Read, SSL:Read, Firewall:Read, Access:Read, Account Settings:Read, Notifications:Read)
 
 ### Risks
 
@@ -262,8 +473,11 @@ Execute a multi-phase security audit using the Cloudflare MCP server and CLI ver
 |------|------------|
 | MCP authentication fails | Fall back to CLI-only checks (dig, openssl, curl) per infra-security agent graceful degradation protocol |
 | Cloudflare plan limitations (free vs pro WAF) | Document which features are unavailable on the current plan rather than treating absence as misconfiguration |
-| API token insufficient permissions | Identify missing permissions and document what additional scopes are needed |
-| Remediation changes break live traffic | Apply settings changes one at a time, verify with CLI after each change |
+| API token insufficient permissions | Identify missing permissions and re-authenticate MCP with expanded OAuth scope |
+| Remediation changes break live traffic | Apply settings changes one at a time, verify with CLI after each change, have rollback plan ready |
+| Bot Fight Mode re-enablement breaks deploys | Do NOT re-enable. Use custom WAF rules scoped to specific paths if bot protection needed |
+| Cloudflare Automatic SSL/TLS overrides manual settings | Check whether zone uses automatic or manual SSL/TLS mode before asserting misconfiguration |
+| MCP OAuth scope too narrow | Re-authenticate with broader scope. Permissions expansion does not rotate token value. |
 
 ## Alternative Approaches Considered
 
@@ -273,6 +487,7 @@ Execute a multi-phase security audit using the Cloudflare MCP server and CLI ver
 | Cloudflare API via curl/REST | Backup | Available as fallback if MCP fails, but MCP provides structured access |
 | Third-party security scanner (SSL Labs, SecurityHeaders.com) | Supplementary | Can be used for external validation but does not cover Cloudflare-specific settings (WAF rules, Access policies, tunnel config) |
 | Terraform plan drift detection only | Insufficient | Only catches Terraform-managed resources; many security settings (SSL mode, HSTS, WAF) are not in Terraform state |
+| Cloudflare Audit Logs MCP server | Supplementary | Specialized MCP server for audit log queries -- use alongside the main Cloudflare MCP for configuration changes audit |
 
 ## Domain Review
 
@@ -301,11 +516,18 @@ Execute a multi-phase security audit using the Cloudflare MCP server and CLI ver
 - Agent: `plugins/soleur/agents/engineering/infra/infra-security.md`
 - Brainstorm: `knowledge-base/project/brainstorms/2026-03-20-cloudflare-tunnel-deploy-brainstorm.md`
 - Learnings:
-  - `2026-03-21-cloudflare-service-token-expiry-monitoring.md`
-  - `2026-04-03-cloudflare-dns-at-symbol-causes-terraform-drift.md`
-  - `2026-03-20-cloudflare-terraform-v4-v5-resource-names.md`
-  - `2026-02-16-inline-only-output-for-security-agents.md`
-  - `2026-03-20-security-fix-attack-surface-enumeration.md`
+  - `2026-03-21-cloudflare-service-token-expiry-monitoring.md` -- Service token expiry monitoring pattern
+  - `2026-04-03-cloudflare-dns-at-symbol-causes-terraform-drift.md` -- DNS `@` perpetual drift fix
+  - `2026-03-20-cloudflare-terraform-v4-v5-resource-names.md` -- v4 vs v5 resource naming
+  - `2026-02-16-inline-only-output-for-security-agents.md` -- Security findings must be inline only
+  - `2026-03-20-security-fix-attack-surface-enumeration.md` -- Full attack surface enumeration pattern
+  - `2026-03-21-cloudflare-tunnel-server-provisioning.md` -- Bot Fight Mode + Access interaction, systemd hardening
+  - `2026-03-21-async-webhook-deploy-cloudflare-timeout.md` -- Async webhook pattern, 120s timeout
+  - `2026-03-21-cloudflare-api-token-permission-editing.md` -- Token permission editing without rotation
+  - `2026-03-17-websocket-cloudflare-auth-debugging.md` -- WebSocket auth through Cloudflare proxy
+  - `2026-03-20-nextjs-static-csp-security-headers.md` -- Existing security headers in app
+  - `2026-03-19-ci-ssh-deploy-firewall-hidden-dependency.md` -- Firewall rule dependencies
+  - `2026-03-20-security-refactor-adjacent-config-audit.md` -- Adjacent config collateral damage
 
 ### Related Issues
 
@@ -315,5 +537,19 @@ Execute a multi-phase security audit using the Cloudflare MCP server and CLI ver
 
 ### External References
 
-- Cloudflare MCP server: `https://mcp.cloudflare.com/mcp`
-- Cloudflare security best practices: [Cloudflare Docs](https://developers.cloudflare.com/fundamentals/security/)
+- [Cloudflare MCP servers](https://developers.cloudflare.com/agents/model-context-protocol/mcp-servers-for-cloudflare/)
+- [Cloudflare Security rules](https://developers.cloudflare.com/security/rules/)
+- [Cloudflare WAF Managed Rules](https://developers.cloudflare.com/waf/managed-rules/)
+- [Cloudflare Security Analytics](https://developers.cloudflare.com/waf/analytics/security-analytics/)
+- [Cloudflare Audit Logs](https://developers.cloudflare.com/fundamentals/account/account-security/audit-logs/)
+- [Cloudflare DNSSEC](https://developers.cloudflare.com/dns/dnssec/)
+- [Cloudflare DMARC Management](https://developers.cloudflare.com/dmarc-management/security-records/)
+- [Cloudflare SSL/TLS Full (Strict)](https://developers.cloudflare.com/ssl/origin-configuration/ssl-modes/full-strict/)
+- [Cloudflare HSTS](https://developers.cloudflare.com/ssl/edge-certificates/additional-options/http-strict-transport-security/)
+- [Cloudflare Minimum TLS Version](https://developers.cloudflare.com/ssl/edge-certificates/additional-options/minimum-tls/)
+- [Cloudflare CAA Records](https://developers.cloudflare.com/ssl/edge-certificates/caa-records/)
+- [Cloudflare Bot Fight Mode](https://developers.cloudflare.com/bots/get-started/bot-fight-mode/)
+- [Cloudflare Browser Integrity Check](https://developers.cloudflare.com/waf/tools/browser-integrity-check/)
+- [Cloudflare Zero Trust Access policies](https://developers.cloudflare.com/reference-architecture/design-guides/designing-ztna-access-policies/)
+- [Cloudflare Service Tokens](https://developers.cloudflare.com/cloudflare-one/identity/service-tokens/)
+- [Code Mode blog post](https://blog.cloudflare.com/code-mode-mcp/)
