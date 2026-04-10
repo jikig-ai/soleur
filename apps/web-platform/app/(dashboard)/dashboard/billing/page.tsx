@@ -2,17 +2,26 @@
 
 import { useEffect, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
+import { DOMAIN_LEADERS } from "@/server/domain-leaders";
 
 type SubscriptionStatus = "active" | "cancelled" | null;
+
+interface ConversationCost {
+  id: string;
+  domain_leader: string;
+  total_cost_usd: number;
+  created_at: string;
+}
 
 export default function BillingPage() {
   const [status, setStatus] = useState<SubscriptionStatus>(null);
   const [loading, setLoading] = useState(true);
   const [checkoutLoading, setCheckoutLoading] = useState(false);
   const [error, setError] = useState("");
+  const [conversations, setConversations] = useState<ConversationCost[]>([]);
 
   useEffect(() => {
-    async function fetchStatus() {
+    async function fetchData() {
       const supabase = createClient();
       const {
         data: { user },
@@ -26,11 +35,23 @@ export default function BillingPage() {
           .single();
 
         setStatus(data?.subscription_status ?? null);
+
+        const { data: costData, error: costError } = await supabase
+          .from("conversations")
+          .select("id, domain_leader, total_cost_usd, created_at")
+          .eq("user_id", user.id)
+          .gt("total_cost_usd", 0)
+          .order("created_at", { ascending: false })
+          .limit(50);
+
+        if (!costError && costData) {
+          setConversations(costData);
+        }
       }
       setLoading(false);
     }
 
-    fetchStatus();
+    fetchData();
   }, []);
 
   async function handleSubscribe() {
@@ -114,6 +135,42 @@ export default function BillingPage() {
           )}
         </div>
 
+        {/* API Usage section */}
+        <div className="rounded-lg border border-neutral-700 bg-neutral-900 p-6 space-y-4">
+          <h2 className="text-sm font-medium text-neutral-200">API Usage</h2>
+
+          {conversations.length > 0 ? (
+            <div className="space-y-2">
+              {conversations.map((conv) => {
+                const leader = DOMAIN_LEADERS.find((l) => l.id === conv.domain_leader);
+                return (
+                  <div
+                    key={conv.id}
+                    className="flex items-center justify-between rounded-md border border-neutral-800 px-3 py-2"
+                  >
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm text-neutral-300">
+                        {leader?.name ?? conv.domain_leader.toUpperCase()}
+                      </span>
+                      <span className="text-xs text-neutral-500">
+                        {formatRelativeTime(conv.created_at)}
+                      </span>
+                    </div>
+                    <span className="text-sm text-neutral-400">
+                      ~${conv.total_cost_usd.toFixed(4)}
+                      <span className="ml-1 text-neutral-500">estimated</span>
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
+            <p className="text-sm text-neutral-500">
+              No API usage yet. Conversations will appear here with their costs.
+            </p>
+          )}
+        </div>
+
         <a
           href="/dashboard"
           className="block text-center text-sm text-neutral-500 hover:text-neutral-300"
@@ -123,4 +180,15 @@ export default function BillingPage() {
       </div>
     </main>
   );
+}
+
+function formatRelativeTime(isoDate: string): string {
+  const diff = Date.now() - new Date(isoDate).getTime();
+  const minutes = Math.floor(diff / 60000);
+  if (minutes < 1) return "just now";
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  return `${days}d ago`;
 }
