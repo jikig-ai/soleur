@@ -157,13 +157,13 @@ This is more robust than `./node_modules/.bin/vitest run` because `npm run` alwa
 
 ## Acceptance Criteria
 
-- [ ] `worktree-manager.sh` `create_worktree()` has a `[[ ! -d "$worktree_path" ]]` check before the `git rev-parse` verification
-- [ ] `worktree-manager.sh` `create_for_feature()` has the same directory check
-- [ ] `plugins/soleur/skills/git-worktree/SKILL.md` has a Sharp Edges section documenting the fallback pattern, absolute path requirement, and lefthook caveat
-- [ ] `apps/web-platform/package.json` has a `test:ci` script set to `vitest run`
-- [ ] `scripts/test-all.sh` uses `npm run test:ci` (or `./node_modules/.bin/vitest run`) instead of `npx vitest run`
-- [ ] All existing tests pass (`bash scripts/test-all.sh`)
-- [ ] Both lockfiles (`bun.lock` and `package-lock.json`) regenerated if `package.json` changes
+- [x] `worktree-manager.sh` `create_worktree()` has a `[[ ! -d "$worktree_path" ]]` check before the `git rev-parse` verification
+- [x] `worktree-manager.sh` `create_for_feature()` has the same directory check
+- [x] `plugins/soleur/skills/git-worktree/SKILL.md` has a Sharp Edges section documenting the fallback pattern, absolute path requirement, and lefthook caveat
+- [x] `apps/web-platform/package.json` has a `test:ci` script set to `vitest run`
+- [x] `scripts/test-all.sh` uses `npm run test:ci` (or `./node_modules/.bin/vitest run`) instead of `npx vitest run`
+- [x] All existing tests pass (`bash scripts/test-all.sh`)
+- [x] Both lockfiles (`bun.lock` and `package-lock.json`) regenerated if `package.json` changes
 
 ## Test Scenarios
 
