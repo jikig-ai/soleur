@@ -640,7 +640,6 @@ When you need user input for important decisions, use the AskUserQuestion tool.`
               updatedInput: buildReviewGateResponse(
                 toolInput as Record<string, unknown>,
                 selection,
-                gate.isNewSchema,
               ),
             };
           }
