@@ -23,7 +23,7 @@ export function SettingsContent({
   repoLastSyncedAt,
 }: SettingsContentProps) {
   return (
-    <div className="mx-auto max-w-2xl space-y-10 px-4 py-10">
+    <div className="space-y-10">
       <h1 className="mb-8 text-2xl font-semibold text-white">Settings</h1>
 
       {/* Project Section */}
