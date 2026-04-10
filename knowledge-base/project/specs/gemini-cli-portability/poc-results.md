@@ -100,3 +100,47 @@ All ported components are **structurally valid** (correct file formats, frontmat
 3. Verifying CLO activates specialist skills
 4. Running `/go #1234` to verify routing
 5. Activating compound after a code change to verify learning capture
+
+## Context Isolation Risk
+
+The subagent-to-skill restructuring introduces a **context cross-contamination risk** that is not tested in this PoC. When multiple specialist skills run sequentially within the same leader subagent conversation, earlier skill outputs remain visible to later skills. This creates a failure mode where one specialist's output is misinterpreted as instructions or context by a subsequent specialist.
+
+### Failure Scenario
+
+Consider the CLO domain leader activating two specialists sequentially:
+
+1. **legal-compliance-auditor** runs first, producing findings such as "Missing GDPR data processing agreement" or "Terms of Service lacks arbitration clause"
+2. **legal-document-generator** runs second in the same conversation context
+
+The document generator now sees the auditor's findings in its context window. Without explicit context boundaries, the generator may:
+
+- Treat audit findings as generation instructions (e.g., generating a GDPR agreement because the auditor flagged its absence, even if the user only requested a Terms of Service update)
+- Incorporate audit language verbatim into generated documents (mixing analytical tone into legal prose)
+- Act on remediation recommendations meant for the human operator, not for another skill
+
+### Why This Was Not Caught
+
+The PoC verified structural validity (file formats, tool references, frontmatter) but did not execute any skills at runtime. The cross-contamination risk only manifests during actual sequential skill execution within a shared conversation context. Claude Code avoids this by spawning specialists as independent subagents with isolated conversation contexts.
+
+### Affected Domains
+
+Any domain leader that activates multiple specialists is affected. Severity scales with specialist count:
+
+| Domain Leader | Specialist Count | Risk Level |
+|---|---|---|
+| CMO | 7+ | Critical — longest sequential chain, most diverse specialist outputs |
+| CLO | 2 | Medium — auditor output may contaminate generator |
+| CTO | 3 | Medium — architect findings may influence implementer |
+| COO | 2 | Low — fewer cross-specialist dependencies |
+
+### Runtime Test Case (Future)
+
+When a Gemini API key is available, validate context isolation with the following test:
+
+1. Activate the CLO subagent
+2. Have CLO activate `legal-compliance-auditor` skill, which produces audit findings (e.g., "CRITICAL: Missing privacy policy")
+3. Without clearing context, have CLO activate `legal-document-generator` skill with an unrelated request (e.g., "Generate a contributor license agreement")
+4. **Pass condition:** The generated CLA contains no references to privacy policies, GDPR, or any content from the auditor's findings
+5. **Fail condition:** The generated document incorporates or responds to the auditor's output
+
+A second test should verify the reverse direction — generator output should not influence a subsequent audit's findings or severity assessments.

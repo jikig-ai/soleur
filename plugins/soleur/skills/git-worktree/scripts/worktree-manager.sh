@@ -319,6 +319,13 @@ create_worktree() {
   # git worktree add on bare repos writes core.bare=false to shared config — fix it
   ensure_bare_config
 
+  # Fast-fail: verify directory was created before expensive git checks
+  if [[ ! -d "$worktree_path" ]]; then
+    echo -e "${RED}Error: Worktree directory not created at $worktree_path${NC}"
+    echo -e "${YELLOW}Hint: Try 'git worktree add $worktree_path -b $branch_name $from_branch' directly${NC}"
+    exit 1
+  fi
+
   # Verify the worktree was actually created (git worktree add can silently fail on bare repos)
   local actual_toplevel
   if ! actual_toplevel=$(git -C "$worktree_path" rev-parse --show-toplevel 2>/dev/null); then
@@ -389,6 +396,13 @@ create_for_feature() {
 
   # git worktree add on bare repos writes core.bare=false to shared config — fix it
   ensure_bare_config
+
+  # Fast-fail: verify directory was created before expensive git checks
+  if [[ ! -d "$worktree_path" ]]; then
+    echo -e "${RED}Error: Worktree directory not created at $worktree_path${NC}"
+    echo -e "${YELLOW}Hint: Try 'git worktree add $worktree_path -b $branch_name $from_branch' directly${NC}"
+    exit 1
+  fi
 
   # Verify the worktree was actually created (git worktree add can silently fail on bare repos)
   local actual_toplevel

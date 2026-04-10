@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback, useMemo } from "react";
-import { DOMAIN_LEADERS } from "@/server/domain-leaders";
+import { ROUTABLE_DOMAIN_LEADERS } from "@/server/domain-leaders";
 import type { DomainLeaderId } from "@/server/domain-leaders";
 import { LEADER_BG_COLORS } from "./leader-colors";
 
@@ -21,7 +21,7 @@ export function AtMentionDropdown({
   const [activeIndex, setActiveIndex] = useState(0);
 
   const filtered = useMemo(() =>
-    DOMAIN_LEADERS.filter((leader) => {
+    ROUTABLE_DOMAIN_LEADERS.filter((leader) => {
       if (!query) return true;
       const q = query.toLowerCase();
       return (

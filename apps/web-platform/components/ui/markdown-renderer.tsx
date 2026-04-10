@@ -5,7 +5,12 @@ import remarkGfm from "remark-gfm";
 import rehypeHighlight from "rehype-highlight";
 import type { Components } from "react-markdown";
 
-const MARKDOWN_COMPONENTS: Components = {
+// Module-level variable set before creating components — avoids threading
+// a prop through every component definition.
+let linkRel = "noopener noreferrer";
+
+function buildComponents(): Components {
+  return {
   h1: ({ children }) => (
     <h1 className="mb-3 mt-4 text-lg font-semibold text-white">{children}</h1>
   ),
@@ -58,7 +63,7 @@ const MARKDOWN_COMPONENTS: Components = {
     <strong className="font-semibold text-white">{children}</strong>
   ),
   a: ({ href, children }) => (
-    <a href={href} target="_blank" rel="noopener noreferrer"
+    <a href={href} target="_blank" rel={linkRel}
       className="text-amber-400 underline hover:text-amber-300">{children}</a>
   ),
   blockquote: ({ children }) => (
@@ -66,19 +71,33 @@ const MARKDOWN_COMPONENTS: Components = {
       {children}
     </blockquote>
   ),
-};
+  };
+}
 
 const REMARK_PLUGINS = [remarkGfm];
 const DISALLOWED_ELEMENTS = ["script", "iframe", "form", "object", "embed", "style", "link"];
 
 const REHYPE_PLUGINS = [rehypeHighlight];
 
-export function MarkdownRenderer({ content }: { content: string }) {
+const DEFAULT_COMPONENTS = buildComponents();
+
+interface MarkdownRendererProps {
+  content: string;
+  /** Add rel="nofollow" to all links (used for public shared documents). */
+  nofollow?: boolean;
+}
+
+export function MarkdownRenderer({ content, nofollow }: MarkdownRendererProps) {
+  // Update module-level linkRel before rendering.
+  linkRel = nofollow
+    ? "nofollow noopener noreferrer"
+    : "noopener noreferrer";
+
   return (
     <Markdown
       remarkPlugins={REMARK_PLUGINS}
       rehypePlugins={REHYPE_PLUGINS}
-      components={MARKDOWN_COMPONENTS}
+      components={DEFAULT_COMPONENTS}
       disallowedElements={DISALLOWED_ELEMENTS}
       unwrapDisallowed
     >

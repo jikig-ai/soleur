@@ -2,7 +2,7 @@
 title: "Data Protection Disclosure"
 description: "Data processing relationship clarification for Soleur under GDPR."
 layout: base.njk
-permalink: pages/legal/data-protection-disclosure.html
+permalink: legal/data-protection-disclosure/
 ---
 
 <section class="page-hero">
@@ -26,7 +26,7 @@ This Data Protection Disclosure ("DPD") describes the data processing relationsh
 
 - **You** ("User," "Controller," or "you"), the individual or entity using the Soleur plugin.
 
-This DPD supplements our [Terms and Conditions](/pages/legal/terms-and-conditions.html) and [Privacy Policy](/pages/legal/privacy-policy.html) and transparently describes the data processing relationship under the General Data Protection Regulation (EU) 2016/679 ("GDPR"). Because Soleur is not a data processor (see Section 2), this is not a Data Processing Agreement under Article 28. It is a disclosure document that clarifies data handling responsibilities.
+This DPD supplements our [Terms and Conditions](/legal/terms-and-conditions/) and [Privacy Policy](/legal/privacy-policy/) and transparently describes the data processing relationship under the General Data Protection Regulation (EU) 2016/679 ("GDPR"). Because Soleur is not a data processor (see Section 2), this is not a Data Processing Agreement under Article 28. It is a disclosure document that clarifies data handling responsibilities.
 
 Soleur is a source-available project maintained by Jikigai, a company incorporated in France, with its registered office at 25 rue de Ponthieu, 75008 Paris, France.
 
@@ -201,7 +201,7 @@ For data processed through the Web Platform (app.soleur.ai) where Jikigai acts a
 - **(e)** **Right to Data Portability (Article 20):** Request personal data in a structured, commonly used, machine-readable format.
 - **(f)** **Right to Object (Article 21):** Object to processing of personal data. The legal basis for Web Platform processing is contract performance (Article 6(1)(b)), so this right applies primarily when processing extends beyond strict contractual necessity.
 
-Jikigai will acknowledge requests within 5 business days and respond substantively within one month of receipt, as required by GDPR Article 12(3). This period may be extended by two further months where necessary, taking into account the complexity or volume of requests, in which case we will inform you of the extension and reasons within the initial one-month period. For full details on how each right applies, see the companion [GDPR Policy](/pages/legal/gdpr-policy.html) Section 5.
+Jikigai will acknowledge requests within 5 business days and respond substantively within one month of receipt, as required by GDPR Article 12(3). This period may be extended by two further months where necessary, taking into account the complexity or volume of requests, in which case we will inform you of the extension and reasons within the initial one-month period. For full details on how each right applies, see the companion [GDPR Policy](/legal/gdpr-policy/) Section 5.
 
 ---
 
@@ -316,7 +316,7 @@ Users may delete their Web Platform account at any time via account settings. Up
 - **(d)** Conversation data (messages and conversation metadata) is deleted from Supabase (cascade delete via foreign key).
 - **(e)** Cloudflare cache entries expire per standard TTL; no persistent user data is stored by Cloudflare.
 
-See the [Terms and Conditions](/pages/legal/terms-and-conditions.html) Section 14.1b for the full account termination procedure.
+See the [Terms and Conditions](/legal/terms-and-conditions/) Section 14.1b for the full account termination procedure.
 
 ---
 
@@ -350,7 +350,7 @@ For questions, concerns, or requests related to this DPD:
 
 ---
 
-> **Related documents:** This Data Protection Disclosure references data practices and privacy obligations. Please review the companion [Privacy Policy](/pages/legal/privacy-policy.html), [GDPR Policy](/pages/legal/gdpr-policy.html), [Terms and Conditions](/pages/legal/terms-and-conditions.html), and [Individual Contributor License Agreement](/pages/legal/individual-cla.html) documents to ensure consistency.
+> **Related documents:** This Data Protection Disclosure references data practices and privacy obligations. Please review the companion [Privacy Policy](/legal/privacy-policy/), [GDPR Policy](/legal/gdpr-policy/), [Terms and Conditions](/legal/terms-and-conditions/), and [Individual Contributor License Agreement](/legal/individual-cla/) documents to ensure consistency.
 
     </div>
   </div>
