@@ -148,10 +148,10 @@ verify_worktree_created() {
   fi
 
   # Check 2: Verify worktree is registered in git's worktree list (#1932)
-  if ! git worktree list --porcelain | grep -qF "worktree $worktree_path"; then
+  if ! git worktree list --porcelain | grep -qxF "worktree $worktree_path"; then
     echo -e "${YELLOW}Warning: Worktree not in git worktree list — attempting repair...${NC}"
     git worktree repair "$worktree_path" 2>/dev/null || true
-    if ! git worktree list --porcelain | grep -qF "worktree $worktree_path"; then
+    if ! git worktree list --porcelain | grep -qxF "worktree $worktree_path"; then
       echo -e "${RED}Error: Worktree directory exists but is not registered after repair${NC}"
       git worktree remove "$worktree_path" --force 2>/dev/null || rm -rf "$worktree_path" 2>/dev/null || true
       exit 1
