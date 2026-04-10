@@ -464,21 +464,21 @@ This creates a virtuous cycle: the first time is guided, subsequent interactions
 - [x] Plugin MCP tools (Cloudflare, Stripe) are authorized by `canUseTool` via explicit allowlist (Phase 0)
 - [x] Agent can provision Cloudflare zones via MCP tools (Cloudflare MCP server accessible)
 - [x] Agent can create Stripe products/prices via MCP tools (Stripe MCP server accessible)
-- [ ] Agent can create Plausible sites and goals via in-process API tools
+- [x] Agent can create Plausible sites and goals via in-process API tools
 - [ ] Agent falls back to guided instructions when no token is stored for a service
 - [ ] Guided instructions include deep links to service configuration pages
 - [ ] Review gates pause the agent at each manual step in guided mode
 - [ ] After guided setup, agent prompts user to store their new API token
 - [ ] Service tokens from Connected Services are available to automation tools
-- [ ] Plausible API tools validate inputs and handle errors gracefully (timeout, auth failure, API errors)
-- [ ] Plausible API tools validate JSON response body before parsing (non-JSON 2xx protection)
+- [x] Plausible API tools validate inputs and handle errors gracefully (timeout, auth failure, API errors)
+- [x] Plausible API tools validate JSON response body before parsing (non-JSON 2xx protection)
 
 ### Non-Functional Requirements
 
 - [ ] No new database tables or migrations required (uses existing `api_keys`)
-- [ ] Plausible API calls timeout after 5 seconds (match existing `VALIDATION_TIMEOUT_MS`)
-- [ ] Plausible `site_id` inputs validated against `[a-zA-Z0-9._-]+` pattern (URL injection prevention)
-- [ ] Service tool errors are logged but never expose tokens in logs or error messages
+- [x] Plausible API calls timeout after 5 seconds (match existing `VALIDATION_TIMEOUT_MS`)
+- [x] Plausible `site_id` inputs validated against `[a-zA-Z0-9._-]+` pattern (URL injection prevention)
+- [x] Service tool errors are logged but never expose tokens in logs or error messages
 - [ ] In-process MCP tools follow the `create_pull_request` security pattern (input validation, error containment)
 - [ ] Agent environment isolation maintained -- service tokens only injected via `buildAgentEnv` allowlist
 - [x] Plugin MCP tool allowlist derived from plugin.json server names, not hardcoded (defense-in-depth)
@@ -486,7 +486,7 @@ This creates a virtuous cycle: the first time is guided, subsequent interactions
 
 ### Quality Gates
 
-- [ ] Unit tests for all Plausible API tool wrappers
+- [x] Unit tests for all Plausible API tool wrappers
 - [ ] Integration test for token retrieval + tool registration flow
 - [ ] TypeScript strict mode passes
 - [ ] No new `any` types introduced
