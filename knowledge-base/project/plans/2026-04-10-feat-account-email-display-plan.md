@@ -6,6 +6,23 @@ date: 2026-04-10
 
 # feat: Display account email in dashboard sidebar and settings
 
+## Enhancement Summary
+
+**Deepened on:** 2026-04-10
+**Sections enhanced:** 4 (Technical Considerations, Proposed Solution, Acceptance Criteria, Test Scenarios)
+**Research sources:** Supabase SSR docs (Context7), existing codebase patterns (use-onboarding.ts, use-conversations.ts, ws-client.ts), project learnings
+
+### Key Improvements
+
+1. **Use `getSession()` instead of `getUser()` for sidebar** -- `getUser()` makes a network request to the Supabase Auth server on every call; `getSession()` reads from cookies (no network round trip). For displaying an email in the UI (not a security-sensitive operation), `getSession()` is sufficient and avoids an extra HTTP call on every page load.
+2. **Skeleton placeholder for email** -- Use a small animated placeholder (matching existing loading patterns in the codebase) while the session loads, preventing layout shift.
+3. **`onAuthStateChange` consideration** -- The codebase currently has zero `onAuthStateChange` listeners; each component fetches auth independently. Adding one in the layout would be overengineering for this feature. Keep the per-component pattern consistent.
+
+### New Considerations Discovered
+
+- The Supabase docs explicitly warn: "You should never trust the unencoded session data if you're writing server code." However, this is client-side display-only code, so `getSession()` is safe here. The middleware already calls `getUser()` for route protection.
+- The `ws-client.ts` already uses `getSession()` for the same reason (needs the token, not server-verified user data) -- establishes precedent in the codebase.
+
 ## Overview
 
 Users with multiple Soleur accounts (different email addresses) have no way to identify which account they are currently signed into. The email address is only used internally for the delete-account confirmation dialog but is never shown in the UI. This makes multi-account usage error-prone.
@@ -29,25 +46,94 @@ The sidebar footer currently contains "Status" link and "Sign out" button. Add t
 
 The dashboard layout (`app/(dashboard)/layout.tsx`) is a client component that already creates a Supabase client for sign-out. It can fetch the user session to get the email.
 
+#### Research Insights
+
+**Implementation pattern** -- Add a `userEmail` state variable and a `useEffect` that calls `supabase.auth.getSession()` on mount:
+
+```typescript
+const [userEmail, setUserEmail] = useState<string | null>(null);
+
+useEffect(() => {
+  const supabase = createClient();
+  supabase.auth.getSession().then(({ data: { session } }) => {
+    setUserEmail(session?.user?.email ?? null);
+  });
+}, []);
+```
+
+**Why `getSession()` over `getUser()`:** The Supabase docs state that `getSession()` reads from the local cookie store (no network request), while `getUser()` makes a round trip to the Supabase Auth server. Since:
+
+- The middleware already verifies auth via `getUser()` on every request
+- This is display-only (no security decision depends on this value)
+- The sidebar renders on every dashboard page
+
+Using `getSession()` avoids an unnecessary network call per page navigation. This matches the pattern in `lib/ws-client.ts:91` which uses `getSession()` for the same reason.
+
+**Sidebar footer markup** -- Insert the email display in the footer `div` (line 140 of layout.tsx), before the Status link:
+
+```tsx
+{userEmail && (
+  <p
+    className="truncate px-3 py-1 text-xs text-neutral-500"
+    title={userEmail}
+  >
+    {userEmail}
+  </p>
+)}
+```
+
+**Edge cases:**
+
+- If `getSession()` returns null (expired cookie, race condition on first load), `userEmail` stays null and the email line is not rendered -- no layout shift, no error
+- The `truncate` utility class applies `overflow: hidden; text-overflow: ellipsis; white-space: nowrap` -- handles long emails without breaking the sidebar width
+
 ### Settings Page Implementation
 
 The settings page (`app/(dashboard)/dashboard/settings/page.tsx`) already passes `userEmail` to `SettingsContent`. Add an "Account" info section at the top of the settings content (before the Project section) that displays the email in a read-only field.
+
+#### Research Insights
+
+**Implementation pattern** -- Add a new section at the top of `SettingsContent`, before the Project section. Use the same card styling as other sections:
+
+```tsx
+{/* Account Section */}
+<section>
+  <h2 className="mb-4 text-lg font-semibold text-white">Account</h2>
+  <div className="rounded-xl border border-neutral-800 bg-neutral-900/50 p-6">
+    <div className="space-y-1">
+      <p className="text-sm text-neutral-400">Email</p>
+      <p className="text-sm font-medium text-white">{userEmail}</p>
+    </div>
+  </div>
+</section>
+```
+
+**Reorganization** -- Move the existing "Account" section (danger zone with delete button) into the new Account section card, or keep it separate as "Danger Zone". The cleaner approach: rename the existing danger-zone section header from "Account" to "Danger Zone" and put the new email-display section under "Account" at the top. This prevents two sections both called "Account".
 
 ## Technical Considerations
 
 ### Data Source
 
-The email is available from `supabase.auth.getUser()` which returns `user.email`. This is already called in:
+The email is available from two Supabase auth methods:
 
-- `app/(dashboard)/dashboard/settings/page.tsx` (server component) -- passes to `SettingsContent`
-- `app/(dashboard)/dashboard/billing/page.tsx` (client component) -- fetches user but does not display email
+- **`supabase.auth.getSession()`** -- Reads session from cookies (Next.js SSR) or localStorage (SPA). No network request. Returns `session.user.email`. Suitable for display-only client components.
+- **`supabase.auth.getUser()`** -- Makes a network request to the Supabase Auth server to verify the JWT. Returns verified `user.email`. Required for server-side security decisions.
 
-For the sidebar (client component), add a `useEffect` to fetch the user session via `supabase.auth.getUser()` on mount.
+Existing usage in the codebase:
+
+- `app/(dashboard)/dashboard/settings/page.tsx` (server component) -- uses `getUser()`, passes email to `SettingsContent`
+- `app/(dashboard)/dashboard/billing/page.tsx` (client component) -- uses `getUser()` but does not display email
+- `lib/ws-client.ts` (client) -- uses `getSession()` to get the access token without a network call
+- `hooks/use-onboarding.ts` (client) -- uses `getUser()` but also needs the user ID for database writes
+
+For the sidebar (client component, display-only), use `getSession()` to avoid an additional network request on every page load.
 
 ### Performance
 
-- The sidebar email fetch is a local cookie-based auth check, not a network round trip to Supabase -- minimal performance impact
-- No new database queries needed; `auth.getUser()` reads from the session
+- **Sidebar:** `getSession()` reads from the cookie store -- zero network overhead. This is the same approach used by `ws-client.ts`.
+- **Settings page:** Already uses server-side `getUser()` in the page component -- no additional fetch needed. The `userEmail` prop is already passed to `SettingsContent`.
+- No new database queries needed.
+- No additional Supabase auth server round trips introduced.
 
 ### Files to Modify
 
@@ -63,11 +149,13 @@ The `public.users` table already has an `email` column (from migration `001_init
 ## Acceptance Criteria
 
 - [ ] User's email address is visible in the dashboard sidebar footer, above the status link and sign-out button
-- [ ] User's email address is displayed in the settings page in a clearly labeled "Account" section
-- [ ] Long email addresses are truncated with ellipsis in the sidebar (CSS `text-overflow: ellipsis`)
+- [ ] User's email address is displayed in the settings page in a clearly labeled "Account" section at the top (before Project section)
+- [ ] The existing "Account" heading in settings (danger zone) is renamed to "Danger Zone" to avoid duplicate section names
+- [ ] Long email addresses are truncated with ellipsis in the sidebar (CSS `truncate` utility) with full email in `title` attribute for hover
 - [ ] Email displays correctly on mobile (drawer sidebar) and desktop
 - [ ] Email is not editable (read-only display)
-- [ ] No layout shift or loading flash when email loads in the sidebar
+- [ ] No layout shift when email loads -- conditional rendering (`{userEmail && ...}`) rather than a placeholder, since `getSession()` resolves from cookies nearly instantly
+- [ ] Sidebar uses `getSession()` (not `getUser()`) to avoid an unnecessary network request per page load
 
 ## Domain Review
 
@@ -92,11 +180,28 @@ This modifies existing UI (sidebar footer and settings page) with minimal design
 
 ## Test Scenarios
 
-- Given a signed-in user, when viewing any dashboard page, then the sidebar footer displays their email address
-- Given a signed-in user with a long email address (40+ characters), when viewing the sidebar, then the email is truncated with ellipsis and a `title` attribute shows the full email on hover
-- Given a signed-in user, when viewing the settings page, then the Account section at the top shows their email address
+### Sidebar Email Display
+
+- Given a signed-in user, when viewing any dashboard page, then the sidebar footer displays their email address above the Status link
+- Given a signed-in user with a long email address (e.g., `very.long.email.address.for.testing@extremely-long-domain-name.example.com`), when viewing the sidebar, then the email is truncated with ellipsis and a `title` attribute shows the full email on hover
 - Given a signed-in user on mobile, when opening the sidebar drawer, then the email is visible in the drawer footer
+- Given a signed-in user, when the page loads, then no layout shift occurs in the sidebar footer (email renders without visible flicker)
+
+### Settings Email Display
+
+- Given a signed-in user, when viewing the settings page, then the "Account" section at the top shows their email address
+- Given a signed-in user, when viewing the settings page, then the delete-account section is labeled "Danger Zone" (not "Account")
+
+### Session Handling
+
 - Given a user who signs out and signs in with a different email, then the sidebar and settings show the new email
+- Given an expired session (edge case), when the sidebar attempts to read the session, then no error is thrown and the email line is simply not rendered
+
+### Browser: Visual Verification
+
+- **Browser:** Navigate to `/dashboard`, verify email appears in the left sidebar footer area
+- **Browser:** Navigate to `/dashboard/settings`, verify email appears in the Account section at the top of the page
+- **Browser:** On mobile viewport (375px wide), open the sidebar drawer, verify email is visible and does not overflow
 
 ## Context
 
