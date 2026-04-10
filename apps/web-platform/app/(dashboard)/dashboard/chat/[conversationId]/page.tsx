@@ -489,7 +489,7 @@ function ReviewGateCard({
   }
 
   return (
-    <div className="rounded-xl border border-amber-800/50 bg-amber-950/30 p-5">
+    <div role="group" aria-label={question} aria-busy={pending !== null} className="rounded-xl border border-amber-800/50 bg-amber-950/30 p-5">
       {header && (
         <span className="mb-2 inline-block rounded-md bg-amber-900/50 px-2 py-0.5 text-xs font-medium text-amber-300">
           {header}
@@ -525,7 +525,7 @@ function ReviewGateCard({
         ))}
       </div>
       {gateError && (
-        <p className="mt-2 text-sm text-red-400">{gateError}</p>
+        <p role="alert" className="mt-2 text-sm text-red-400">{gateError}</p>
       )}
     </div>
   );
