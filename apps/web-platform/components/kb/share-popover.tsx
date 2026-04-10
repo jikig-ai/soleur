@@ -45,15 +45,14 @@ export function SharePopover({ documentPath }: SharePopoverProps) {
     async function checkShare() {
       setState((s) => ({ ...s, status: "loading" }));
       try {
-        const res = await fetch("/api/kb/share");
+        const res = await fetch(`/api/kb/share?documentPath=${encodeURIComponent(documentPath)}`);
         if (!res.ok) {
           setState((s) => ({ ...s, status: "idle" }));
           return;
         }
         const data = await res.json();
         const existing = data.shares?.find(
-          (s: { document_path: string; revoked: boolean }) =>
-            s.document_path === documentPath && !s.revoked,
+          (s: { revoked: boolean }) => !s.revoked,
         );
         if (!cancelled && existing) {
           setState({

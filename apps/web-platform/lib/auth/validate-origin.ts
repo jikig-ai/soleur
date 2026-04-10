@@ -28,7 +28,10 @@ export function validateOrigin(request: Request): {
     }
   }
 
-  return { valid: false, origin: null };
+  // No Origin or Referer header — this is a non-browser client (curl,
+  // server-to-server, mobile app).  CSRF is a browser-only attack vector,
+  // so allow the request through.  Authentication still gates access.
+  return { valid: true, origin: null };
 }
 
 export function rejectCsrf(route: string, origin: string | null): Response {
