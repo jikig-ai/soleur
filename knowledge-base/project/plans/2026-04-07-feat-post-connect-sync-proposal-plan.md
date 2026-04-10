@@ -36,7 +36,7 @@ A hybrid approach combining speed with depth:
 | Health snapshot | JSON stored on user record | `016_*.sql` migration | After fast scan | Instant |
 | Ready state | Display health snapshot + recommendations | `ready-state.tsx` revamp | On provisioning complete | Immediate |
 | Agent sync | Headless `/soleur:sync` | `agent-runner.ts` | After provisioning complete | 1-5 min async |
-| KB overview | Persistent health report page | `/dashboard/kb/overview` | Always available | N/A |
+| ~~KB overview~~ | ~~Persistent health report page~~ | ~~`/dashboard/kb/overview`~~ | ~~Always available~~ | Deferred [Updated 2026-04-10] |
 | Notification | Conversation status update | Supabase Realtime | On sync complete | Realtime |
 
 ## Technical Approach
@@ -47,18 +47,17 @@ A hybrid approach combining speed with depth:
 connect-repo/page.tsx          server/workspace.ts           agent-runner.ts
        |                              |                            |
   [Setting Up]                  provisionWithRepo()                |
-  step 1: clone ───────────────> git clone                         |
-  step 2: scan ────────────────> scanProjectHealth() [NEW]         |
-  step 3: detect KB ───────────> (within scanner)                  |
-  step 4: store ───────────────> UPDATE users SET health_snapshot  |
-  step 5: trigger sync ───────> INSERT conversations [NEW] ───────> startAgentSession()
+  "Cloning repository" ───────> git clone                          |
+  "Scanning project" ─────────> scanProjectHealth() [NEW]          |
+  "Preparing your team" ──────> UPDATE users SET health_snapshot   |
+       |                        INSERT conversations [NEW] ───────> startAgentSession()
        |                              |                         /soleur:sync --headless
   [Ready State]                  return workspace_path              |
-  display health_snapshot             |                        [runs async]
-  link to Command Center              |                             |
-       |                              |                   UPDATE conversations
-  /dashboard/kb/overview              |                   SET status='completed'
-  persistent health view              |                        [Realtime push]
+  display health_snapshot             |                   .catch() logs to Sentry
+  link to Command Center              |                        [runs async]
+                                      |                   UPDATE conversations
+                                      |                   SET status='completed'
+                                      |                        [Realtime push]
 ```
 
 ### Implementation Phases
@@ -82,7 +81,6 @@ Build the server-side scanner and store results.
 
 ```typescript
 export interface ProjectHealthSnapshot {
-  version: 1
   scannedAt: string
   category: "strong" | "developing" | "gaps-found"
   signals: {
@@ -90,14 +88,11 @@ export interface ProjectHealthSnapshot {
     missing: { id: string; label: string }[]
   }
   recommendations: string[]  // Top 3, pre-sorted by priority. Brand-aligned copy.
-  kbState: {
-    exists: boolean
-    sections: { name: string; populated: boolean }[]
-  }
+  kbExists: boolean
 }
 ```
 
-Simplified from initial design per review feedback: dropped `meta` field (nothing consumes it), dropped signal `category` (UI shows flat lists), dropped `Recommendation` interface (always exactly 3 strings in priority order).
+Simplified from initial design per review feedback: dropped `meta` field (nothing consumes it), dropped signal `category` (UI shows flat lists), dropped `Recommendation` interface (always exactly 3 strings in priority order). [Updated 2026-04-10] Dropped `version: 1` (speculative forward-compatibility, one consumer). Flattened `kbState.sections` to `kbExists: boolean` (KB viewer already shows section detail, snapshot copy goes stale after sync).
 
 **Migration: `supabase/migrations/016_project_health_snapshot.sql`**
 
@@ -105,17 +100,21 @@ Simplified from initial design per review feedback: dropped `meta` field (nothin
 ALTER TABLE public.users
   ADD COLUMN IF NOT EXISTS health_snapshot jsonb DEFAULT NULL;
 
-ALTER TABLE public.conversations
-  ADD COLUMN IF NOT EXISTS source text NOT NULL DEFAULT 'user'
-  CHECK (source IN ('user', 'system'));
+-- RLS fix: 001_initial_schema.sql has "Users can update own profile" allowing UPDATE
+-- on ALL columns. Restrict health_snapshot to server-only writes.
+-- Column-level REVOKE is silently ignored when table-level GRANT exists (learning #13).
+-- Instead, add a restrictive RLS policy that prevents client UPDATE of health_snapshot.
+CREATE POLICY "Prevent client health_snapshot update" ON public.users
+  AS RESTRICTIVE FOR UPDATE TO authenticated
+  USING (
+    -- Block if the client is trying to change health_snapshot.
+    -- Service role bypasses RLS, so server writes are unaffected.
+    (health_snapshot IS NOT DISTINCT FROM (SELECT health_snapshot FROM public.users WHERE id = auth.uid()))
+  );
 
--- domain_leader is NOT NULL in 001_initial_schema.sql, but system-initiated
--- conversations have no leader. Drop the constraint.
-ALTER TABLE public.conversations ALTER COLUMN domain_leader DROP NOT NULL;
-
--- health_snapshot: Server-only column. RLS allows SELECT but not UPDATE from client.
--- source: Distinguishes user-initiated from system-initiated (auto-sync) conversations.
--- domain_leader: Now nullable for system conversations.
+-- System-initiated conversations use domain_leader = 'system' as a sentinel.
+-- No new columns needed -- reuses existing schema. [Updated 2026-04-10]
+-- health_snapshot: Server-only column, protected by restrictive RLS policy.
 ```
 
 **Modify: `apps/web-platform/app/api/repo/setup/route.ts`** (single insertion point -- NOT workspace.ts)
@@ -138,24 +137,15 @@ Replace fake animation with real progress and show health snapshot on completion
 
 **Modify: `apps/web-platform/app/(auth)/connect-repo/page.tsx`**
 
-- **Animation approach (revised after SpecFlow analysis):** The provisioning function `provisionWorkspaceWithRepo` runs as a single async operation with no intermediate DB writes. Adding intermediate `repo_status` values (e.g., "scanning") would require restructuring the setup route's `.then()` handler. Instead, use a **batch completion** approach:
-  - While `repo_status === "cloning"`, advance steps 1-3 on a 2-second cadence (clone + scan happen within the single async operation)
-  - When `repo_status === "ready"` AND `health_snapshot` is present in the status response, mark all steps complete
-  - This maps real operations to steps without requiring intermediate DB writes
-  - Steps 4-5 ("Learning your conventions" / "Briefing your team") complete when the status response includes `health_snapshot`
+- **Simplified animation approach [Updated 2026-04-10]:** Show current operation label during provisioning. When `repo_status === "ready"` AND `health_snapshot` is present in status response, transition to Ready state. No multi-step choreography — a single animated label reflecting the current backend operation is sufficient. The existing gold gradient progress bar can show indeterminate progress.
 - Store `health_snapshot` from status response in component state
-- **Revised step labels** (per brand voice review):
-  1. "Cloning repository"
-  2. "Mapping project structure"
-  3. "Reading existing documentation"
-  4. "Learning your conventions"
-  5. "Briefing your team"
+- **Operation labels** (per brand voice review): "Cloning repository" → "Scanning project" → "Preparing your team" → complete
 
 **Modify: `apps/web-platform/components/connect-repo/setting-up-state.tsx`**
 
-- Accept step status from parent (driven by backend state, not timer)
-- Steps still animate sequentially but now reflect real operations
-- Keep existing visual design (gold gradient progress bar, checkmarks)
+- Accept current operation label from parent (driven by backend state, not timer)
+- Show single animated label with indeterminate progress bar
+- Keep existing visual design (gold gradient progress bar)
 
 **Modify: `apps/web-platform/components/connect-repo/ready-state.tsx`**
 
@@ -175,25 +165,28 @@ Create a conversation and start a headless sync session after provisioning.
 
 **Modify: `apps/web-platform/app/api/repo/setup/route.ts`**
 
-- After storing health snapshot, **check for BYOK API key availability** before triggering sync:
-  - Call `getUserApiKey(userId)` -- if no key configured, skip sync silently
-  - If key exists, INSERT a new conversation row:
-    - `user_id`: current user
-    - `domain_leader`: null (system-initiated)
-    - `source`: "system" (new column, distinguishes from user-initiated)
-    - `status`: "active"
-    - `session_id`: generated UUID
+- After storing health snapshot, INSERT a new conversation row: [Updated 2026-04-10]
+  - `user_id`: current user
+  - `domain_leader`: `"system"` (sentinel value — no new column needed, reuses existing schema)
+  - `status`: "active"
+  - `session_id`: generated UUID
   - Call `startAgentSession()` with prompt: `/soleur:sync --headless`
+  - **Fire-and-forget with `.catch()`:** The returned promise MUST have `.catch()` attached — `try/catch` only catches synchronous errors, and an unhandled rejection crashes the Node server (learning #9). [Updated 2026-04-10]
   - This runs asynchronously -- the provisioning response returns immediately
   - The conversation appears in Command Center with "active" status
-- **If no API key:** Store health snapshot but skip sync. The Ready state shows the fast-scan health report without a "Deep analysis in progress" status. The user can trigger sync manually later after configuring their key.
-- **Idempotency:** Before creating a sync conversation, check for an existing active sync conversation for this user with `source = 'system'`. Skip if one exists.
-- **Error handling:** Wrap conversation INSERT + `startAgentSession()` in try/catch. If either fails, provisioning still succeeds -- the user gets a connected repo with health snapshot but no async sync. Log the error via Sentry. The sync can be triggered manually later.
+- **BYOK key check:** `startAgentSession()` already calls `getUserApiKey(userId)` internally and rejects if no key exists. The `.catch()` handler absorbs this gracefully — no separate pre-check needed. [Updated 2026-04-10]
+- **Idempotency:** Not needed — sync triggers once during provisioning, which is itself idempotent (runs once per user, guarded by `repo_status`). [Updated 2026-04-10]
+- **Error handling:** `.catch()` on the `startAgentSession()` promise logs to Sentry and continues. Provisioning still succeeds — the user gets a connected repo with health snapshot but no async sync. The sync can be triggered manually later.
 
-**Modify: `apps/web-platform/hooks/use-conversations.ts`**
+**Modify: `apps/web-platform/hooks/use-conversations.ts`** [Updated 2026-04-10]
 
-- Update `deriveTitle()` to handle `source === 'system'` conversations: return "Project Analysis" instead of "Untitled conversation"
+- `deriveTitle()` takes `(messages, conversationId)` — it has no access to the conversation object. Title derivation for system conversations must happen in the `enriched` mapping (line ~115) where the full conversation row is available, not in `deriveTitle()`.
+- When `conversation.domain_leader === 'system'`, set title to "Project Analysis" in the enrichment step.
 - System-initiated conversations render with a distinct visual indicator (e.g., system badge or robot icon)
+
+**Modify: `apps/web-platform/lib/types.ts`** [Updated 2026-04-10]
+
+- No `Conversation` interface change needed — `domain_leader` already exists as `string`. The `"system"` sentinel is a convention, not a type change.
 
 **Considerations for agent-runner.ts:**
 
@@ -209,31 +202,13 @@ Create a conversation and start a headless sync session after provisioning.
 - Headless mode auto-accepts high-confidence findings and skips low-confidence ones
 - Safety constraints still run in headless mode
 
-#### Phase 4: KB Overview Page
+#### ~~Phase 4: KB Overview Page~~ — Deferred [Updated 2026-04-10]
 
-New persistent page for ongoing project health visibility.
+Cut per plan review consensus: Phase 2 Ready state already displays the health snapshot. Building a second persistent surface for the same data before measuring whether users engage with the Ready state data is premature. Deferred to a separate issue — ship Phases 1-3, measure engagement, then decide.
 
-**New file: `apps/web-platform/app/(dashboard)/dashboard/kb/overview/page.tsx`**
+**Deferral issue:** #1808
 
-- **Client component** (`"use client"`) -- must be client-side because the KB layout is a client component wrapping all children. Server components inside `"use client"` boundaries have incompatible data fetching. Uses existing `KbContext` for data access.
-- Fetches user's `health_snapshot` via `/api/repo/status` (already includes snapshot after Phase 1 changes)
-- Fetches KB tree via `/api/kb/tree` for completeness display
-- Displays full health report: all detected signals, all missing signals, all recommendations
-- Section labels: "Next Steps" (not "Recommendations"), "Knowledge Base Coverage" (not "KB Completeness")
-- Shows deep analysis status: timestamp, "Re-analyze" button (disabled for V1 with "Coming soon" tooltip -- deferred to future iteration)
-- Category badge: "Strong" / "Developing" / "Gaps Found"
-- When `health_snapshot` is null (pre-migration users): show "Connect a repo to see your project assessment" message
-- Uses same responsive layout pattern as existing KB pages
-
-**Modify: `apps/web-platform/app/(dashboard)/dashboard/kb/layout.tsx`**
-
-- Add "Overview" as first item in KB sidebar navigation
-- Update `isContentView` logic: `pathname !== "/dashboard/kb" && pathname !== "/dashboard/kb/overview"` -- overview renders full-width like empty/error states, not in the narrow content pane
-
-**Modify: `apps/web-platform/app/(dashboard)/dashboard/kb/page.tsx`**
-
-- When KB is empty AND health_snapshot exists, redirect to `/dashboard/kb/overview` instead of showing "Nothing Here Yet"
-- When KB has content, keep existing tree view behavior
+**No changes to KB layout or KB page in this feature.**
 
 **Command Center notification (no dedicated phase -- zero additional work):**
 
@@ -259,26 +234,26 @@ New persistent page for ongoing project health visibility.
 - [ ] Fast scan runs during provisioning after repo clone, producing a `ProjectHealthSnapshot`
 - [ ] Scanner detects: package managers, test files, CI config, linting, Docker, README, CLAUDE.md, KB state
 - [ ] Health snapshot stored as JSON column on users table via Supabase migration
-- [ ] "Setting Up" animation steps map to real backend operations. Steps 1-3 advance on a 2s cadence during "cloning" (timer-driven but bounded by real clone duration). Steps 4-5 complete when status response includes `health_snapshot` (event-driven). Honest improvement: steps are operation-mapped, not fully event-driven per-step.
-- [ ] Given no BYOK API key configured, when provisioning completes, then no sync conversation is created and Ready state omits deep analysis status
+- [ ] "Setting Up" shows current operation label during provisioning, transitions to Ready state when status returns "ready" with health snapshot [Updated 2026-04-10]
+- [ ] Given no BYOK API key configured, when provisioning completes, then sync conversation `.catch()` absorbs the error and Ready state omits deep analysis status [Updated 2026-04-10]
 - [ ] Ready state displays health snapshot: detected signals, missing signals, top 3 recommendations
 - [ ] Agent sync conversation auto-created after provisioning completes
 - [ ] Agent sync runs headless (`/soleur:sync --headless`) in the background
 - [ ] Agent sync conversation appears in Command Center with "active" status
 - [ ] When agent sync completes, conversation status updates to "completed" via Supabase Realtime
-- [ ] `/dashboard/kb/overview` page shows full health report with all signals and recommendations
-- [ ] KB overview shows KB completeness (which sections populated vs. empty)
-- [ ] KB page redirects to overview when KB is empty and health snapshot exists
+- ~~[ ] `/dashboard/kb/overview` page shows full health report~~ — Deferred (Phase 4 cut) [Updated 2026-04-10]
+- ~~[ ] KB overview shows KB completeness~~ — Deferred (Phase 4 cut) [Updated 2026-04-10]
+- ~~[ ] KB page redirects to overview when KB is empty~~ — Deferred (Phase 4 cut) [Updated 2026-04-10]
 
 ### Non-Functional Requirements
 
 - [ ] Fast scan completes in under 5 seconds for repos up to 100k files
 - [ ] Health snapshot JSON payload under 2KB
 - [ ] No new external dependencies for the fast scanner (uses Node.js `fs` only)
-- [ ] `health_snapshot` column is server-only-writable (existing RLS prevents client UPDATE)
+- [ ] `health_snapshot` column is server-only-writable (restrictive RLS policy prevents client UPDATE — see migration) [Updated 2026-04-10]
 - [ ] New POST routes include CSRF protection (`validateOrigin` + `rejectCsrf`)
 - [ ] All Supabase calls destructure `{ data, error }` and handle errors explicitly
-- [ ] KB overview page uses same responsive layout as existing KB pages
+- ~~[ ] KB overview page uses same responsive layout~~ — Deferred (Phase 4 cut) [Updated 2026-04-10]
 - [ ] Migration is idempotent (`IF NOT EXISTS`)
 
 ### Quality Gates
@@ -316,21 +291,21 @@ New persistent page for ongoing project health visibility.
 
 1. **G1 — No intermediate repo_status states:** Resolved with batch-completion animation approach. Steps advance on cadence during "cloning", complete when "ready" + health_snapshot arrives. No intermediate DB writes needed.
 2. **G6 — BYOK key dependency:** Resolved by gating sync on key availability. If no key, skip sync silently. Ready state shows fast-scan snapshot without "Deep analysis in progress."
-3. **G4/G5 — System conversation identity:** Resolved with `source` column on conversations table ("user" | "system"). System conversations render as "Project Analysis" with distinct badge.
+3. **G4/G5 — System conversation identity:** Resolved with `domain_leader = 'system'` sentinel (no new column). System conversations render as "Project Analysis" with distinct badge. Title set in enrichment mapping, not `deriveTitle()`. [Updated 2026-04-10]
 4. **G8 — Duplicate sync conversations:** Resolved with idempotency check before creating sync conversation.
 5. **G11 — Schema version:** Added `version: 1` to ProjectHealthSnapshot type.
 6. **G13 — KB overview rendering:** Resolved as client component (inside "use client" layout).
-7. **G15 — isContentView for overview:** Resolved with explicit path exclusion in layout logic.
+7. ~~**G15 — isContentView for overview:**~~ N/A — Phase 4 deferred. [Updated 2026-04-10]
 8. **G16 — Categorization algorithm:** Defined: Strong (6+/8 signals), Developing (3-5/8), Gaps Found (0-2/8).
 9. **G18 — Null snapshot fallback:** Ready state degrades gracefully to current design when snapshot is null.
 10. **G20/G21 — Scan failure:** Scan failure does not block provisioning. Sets null snapshot, logs to Sentry.
-11. **G14 — Re-analyze button:** Deferred to future iteration (disabled with "Coming soon" tooltip).
+11. ~~**G14 — Re-analyze button:**~~ N/A — Phase 4 deferred. [Updated 2026-04-10]
 
 #### CPO Findings
 
-1. **C1 — Milestone mismatch:** #1772 milestoned to "Post-MVP / Later" but brainstorm says P3. **Action required:** Re-milestone to Phase 3, add roadmap row 3.16.
-2. **C2 — Phase 2 sequencing:** P2 (Secure for Beta) not completed. CPO recommends gating implementation on P2 exit criteria. **Decision needed from user.**
-3. **C3 — Overlap with #1751 (Start Fresh onboarding):** Both features modify the post-connect experience. Need unified post-connect UX design before either ships. **Action required:** Reconcile #1751 and #1772 before implementation.
+1. **C1 — Milestone mismatch:** ~~#1772 milestoned to "Post-MVP / Later" but brainstorm says P3.~~ **Resolved [Updated 2026-04-10]:** Re-milestoned to Phase 3, roadmap row 3.16 added.
+2. **C2 — Phase 2 sequencing:** ~~P2 (Secure for Beta) not completed.~~ **Resolved [Updated 2026-04-10]:** P2 complete — all 20 issues closed, milestone closed. No longer a gate.
+3. **C3 — Overlap with #1751 (Start Fresh onboarding):** ~~Both features modify the post-connect experience.~~ **Resolved [Updated 2026-04-10]:** #1751 closed. Foundation card UI removed from dashboard. No post-connect UX overlap remains.
 4. **C6 — Token budget:** Set `maxBudgetUsd: 1.0` for system-initiated syncs. Added to Phase 3.
 
 #### Copywriter Findings
@@ -358,26 +333,26 @@ Exported screenshots:
 
 - Given a repo with `package.json`, `tsconfig.json`, `.github/workflows/`, `README.md`, and `knowledge-base/`, when fast scan runs, then snapshot category is "strong" and all five signals are detected
 - Given a repo with only `package.json` and no tests/CI/docs, when fast scan runs, then snapshot category is "gaps-found" and recommendations include "Add tests" and "Set up CI/CD"
-- Given a repo with `knowledge-base/project/constitution.md` but no `components/`, when fast scan runs, then `kbState.sections` shows constitution as populated and components as empty
+- Given a repo with `knowledge-base/`, when fast scan runs, then `kbExists` is true [Updated 2026-04-10]
 - Given provisioning completes, when status polling returns "ready", then response includes `health_snapshot` with valid `ProjectHealthSnapshot` shape
 - Given a health snapshot with 3 detected and 4 missing signals, when Ready state renders, then 3 green checkmarks and 4 amber suggestions are visible
 - Given provisioning completes, when the user navigates to Command Center, then a sync conversation with status "active" is listed
 - Given a sync conversation completes, when Realtime pushes the update, then conversation status badge changes to "completed" without page refresh
-- Given an empty KB with a health snapshot, when the user navigates to `/dashboard/kb`, then they are redirected to `/dashboard/kb/overview`
+- ~~Given an empty KB, redirect to `/dashboard/kb/overview`~~ — Phase 4 deferred [Updated 2026-04-10]
 
 ### Edge Cases
 
 - Given a repo with zero recognizable files (e.g., binary-only), when fast scan runs, then category is "gaps-found" with generic "Add documentation" recommendation
 - Given provisioning fails at clone step, when setup route catches the error, then no health snapshot or sync conversation is created, and `repo_status` is "error"
-- Given agent sync fails mid-run, when conversation status updates to "failed", then Command Center shows failure status and KB overview still shows fast-scan snapshot
-- Given a repo already has a populated KB, when fast scan detects `knowledge-base/`, then `kbState.exists` is true and recommendations reference existing content
-- Given health snapshot is null (pre-migration users), when KB overview page loads, then it shows a "Connect a repo to see health analysis" message instead of crashing
+- Given agent sync fails mid-run, when conversation status updates to "failed", then Command Center shows failure status and Ready state still shows fast-scan snapshot [Updated 2026-04-10]
+- Given a repo already has a populated KB, when fast scan detects `knowledge-base/`, then `kbExists` is true and recommendations reference existing content [Updated 2026-04-10]
+- Given health snapshot is null (scan failed), when Ready state renders, then it degrades gracefully to current design (no crash) [Updated 2026-04-10]
 
 ### Integration Verification
 
 - **Browser:** Navigate to `/connect-repo`, select a test repo, complete setup flow, verify Ready state shows health signals and recommendations
 - **Browser:** After setup, navigate to `/dashboard`, verify sync conversation appears in Command Center
-- **Browser:** Navigate to `/dashboard/kb/overview`, verify health report displays all sections
+- ~~**Browser:** Navigate to `/dashboard/kb/overview`~~ — Phase 4 deferred [Updated 2026-04-10]
 - **API verify:** `curl -s localhost:3000/api/repo/status -H "Cookie: $SESSION" | jq '.healthSnapshot.category'` expects `"developing"` or `"strong"` or `"gaps-found"`
 
 ## Dependencies and Prerequisites
@@ -400,9 +375,9 @@ Exported screenshots:
 | Headless sync produces low-quality KB entries | Medium | Medium | Auto-accept only high-confidence findings. User reviews in KB viewer afterward |
 | Agent sync consumes excessive tokens | Medium | High | Set a token budget per sync session. Monitor via Sentry/logs |
 | Migration conflicts with concurrent PRs | Low | Low | Use `IF NOT EXISTS`. Column addition is non-breaking |
-| Health snapshot schema evolves | Medium | Low | JSON column is schema-flexible. `version: 1` field included for forward compatibility |
-| BYOK key not configured | Medium | Low | Skip sync silently if no key. Ready state shows fast-scan snapshot only. User triggers sync after key setup |
-| Overlap with #1751 (Start Fresh onboarding) | Medium | High | Reconcile both features' post-connect UX before implementing either. Create unified design. |
+| Health snapshot schema evolves | Medium | Low | JSON column is schema-flexible. Add `version` field later if migration needed. [Updated 2026-04-10] |
+| BYOK key not configured | Medium | Low | `startAgentSession()` rejects internally, `.catch()` absorbs. Ready state shows fast-scan snapshot only. [Updated 2026-04-10] |
+| ~~Overlap with #1751 (Start Fresh onboarding)~~ | ~~Medium~~ | ~~High~~ | **Resolved [Updated 2026-04-10]:** #1751 closed, foundation card UI removed. No overlap. |
 | Supabase Realtime misses conversation update | Low | Medium | Existing client-side re-validation pattern handles this. Polling fallback on dashboard load |
 
 ## Institutional Learnings to Apply
@@ -413,10 +388,16 @@ These learnings from `knowledge-base/project/learnings/` directly apply to this 
 2. **CSRF coverage** (`2026-03-20`): New POST routes need `validateOrigin` + `rejectCsrf`. Structural test enforces this
 3. **Headless mode convention** (`2026-03-03`): Use `--headless` flag in `$ARGUMENTS`, strip before processing
 4. **Promise leak prevention** (`2026-03-20`): Long-lived promises (sync session) need AbortSignal cancellation with `timer.unref()`
-5. **RLS whitelist model** (`2026-03-20`): `health_snapshot` column should be server-only-writable. Existing users RLS is SELECT-only for authenticated role
+5. **RLS whitelist model** (`2026-03-20`): `health_snapshot` column needs restrictive RLS policy — `001_initial_schema.sql` has "Users can update own profile" allowing UPDATE on ALL columns. Column-level REVOKE is a no-op with table-level GRANT (learning #13). [Updated 2026-04-10]
 6. **Middleware path matching** (`2026-03-20`): New dashboard routes use `pathname === p || pathname.startsWith(p + "/")`
 7. **Error sanitization** (`2026-03-20`): All error messages to clients go through `error-sanitizer.ts`
 8. **Trigger/fallback parity** (`2026-03-20`): If using DB triggers for status transitions, application fallback must mirror trigger logic
+9. **Fire-and-forget `.catch()` required** (`2026-03-20`): `startAgentSession()` called without `.catch()` crashes entire Node server on rejection. Critical for the auto-triggered sync in Phase 3. [Updated 2026-04-10]
+10. **WS session race abort** (`2026-03-27`): Concurrent `start_session` creates race; must abort previous session before replacing conversationId. Applies to idempotency check in Phase 3. [Updated 2026-04-10]
+11. ~~**KB viewer React context layout** (`2026-04-07`):~~ N/A — Phase 4 deferred. [Updated 2026-04-10]
+12. **Supabase module-scope crash** (`2026-04-05`): `createClient()` at module scope crashes when env vars absent. Use lazy getter returning `SupabaseClient | null`. Applies to `project-scanner.ts` if it uses Supabase. [Updated 2026-04-10]
+13. **Disconnect null constraint violation** (`2026-04-06`): Disconnect handler set columns to null violating NOT NULL/CHECK constraints. Schema and code must agree on nullable columns. Applies to `domain_leader DROP NOT NULL` in migration. [Updated 2026-04-10]
+14. **Connect-repo state rename** (`2026-04-08`): `github_resolve` state renamed to `link_github`, `GitHubResolveState` → `LinkGitHubState`. Plan Phase 2 modifications to `connect-repo/page.tsx` must use updated state names. [Updated 2026-04-10]
 
 ## Future Considerations
 
@@ -433,19 +414,19 @@ These learnings from `knowledge-base/project/learnings/` directly apply to this 
 - Provisioning pipeline: `apps/web-platform/server/workspace.ts:117-236`
 - Setup API route: `apps/web-platform/app/api/repo/setup/route.ts:1-142`
 - Status polling: `apps/web-platform/app/api/repo/status/route.ts:1-61`
-- Fake setup steps: `apps/web-platform/app/(auth)/connect-repo/page.tsx:40-46`
+- Fake setup steps: `apps/web-platform/app/(auth)/connect-repo/page.tsx:343` (setTimeout transition) [Updated 2026-04-10]
 - Ready state component: `apps/web-platform/components/connect-repo/ready-state.tsx`
 - Setting up component: `apps/web-platform/components/connect-repo/setting-up-state.tsx`
 - Command Center: `apps/web-platform/app/(dashboard)/dashboard/page.tsx`
 - Realtime subscription: `apps/web-platform/hooks/use-conversations.ts:141`
 - Agent sessions: `apps/web-platform/server/agent-runner.ts`
-- KB tree API: `apps/web-platform/app/api/kb/tree/route.ts`
-- KB layout: `apps/web-platform/app/(dashboard)/dashboard/kb/layout.tsx`
+- ~~KB tree API: `apps/web-platform/app/api/kb/tree/route.ts`~~ — Phase 4 deferred [Updated 2026-04-10]
+- ~~KB layout: `apps/web-platform/app/(dashboard)/dashboard/kb/layout.tsx`~~ — Phase 4 deferred [Updated 2026-04-10]
 - Sync command: `plugins/soleur/commands/sync.md`
 
 ### Related Work
 
 - Command Center: #1759 (merged)
-- Start Fresh onboarding: #1751 (overlap -- must reconcile post-connect UX)
+- Start Fresh onboarding: #1751 (closed — no overlap) [Updated 2026-04-10]
 - Issue: #1772
 - Draft PR: #1771
