@@ -10,6 +10,7 @@ export const LEADER_COLORS: Record<DomainLeaderId, string> = {
   coo: "border-l-yellow-500",
   clo: "border-l-red-500",
   cco: "border-l-teal-500",
+  system: "border-l-neutral-500",
 };
 
 /** Tailwind background color classes for leader avatar badges. */
@@ -22,4 +23,5 @@ export const LEADER_BG_COLORS: Record<DomainLeaderId, string> = {
   coo: "bg-yellow-500",
   clo: "bg-red-500",
   cco: "bg-teal-500",
+  system: "bg-neutral-500",
 };

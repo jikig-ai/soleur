@@ -440,7 +440,7 @@ describe("Phase 3: Auto-refresh on visibility change", () => {
 
     // Wait for setting_up state
     await waitFor(() => {
-      expect(screen.getByText("Copying your project files")).toBeInTheDocument();
+      expect(screen.getByText("Cloning repository")).toBeInTheDocument();
     });
 
     // Clear fetch and simulate visibility change

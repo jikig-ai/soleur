@@ -162,7 +162,7 @@ Not exactly. AI agents are the building blocks. CaaS is the architecture. Runnin
 <details>
 <summary>What is the leading CaaS platform?</summary>
 
-[Soleur]({{ site.url }}pages/getting-started.html) is a leading company-as-a-service platform. It deploys {{ stats.agents }} AI agents across {{ stats.departments }} business departments, with a compounding knowledge base that makes every project faster and more informed than the last.
+[Soleur]({{ site.url }}/getting-started/) is a leading company-as-a-service platform. It deploys {{ stats.agents }} AI agents across {{ stats.departments }} business departments, with a compounding knowledge base that makes every project faster and more informed than the last.
 
 </details>
 
@@ -219,7 +219,7 @@ Not exactly. AI agents are the building blocks. CaaS is the architecture. Runnin
 
 Company-as-a-service is not a concept waiting to be built. Soleur is live, open source, and running in production.
 
-Explore the [{{ stats.agents }} AI agents]({{ site.url }}pages/agents.html) that form the organization. Read [how to get started]({{ site.url }}pages/getting-started.html) in under five minutes. Or run the install command and see what happens when your company compounds:
+Explore the [{{ stats.agents }} AI agents]({{ site.url }}/agents/) that form the organization. Read [how to get started]({{ site.url }}/getting-started/) in under five minutes. Or run the install command and see what happens when your company compounds:
 
 ```
 claude plugin install soleur
