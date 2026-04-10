@@ -22,6 +22,7 @@ import { abortableReviewGate, validateSelection, type AgentSession } from "./rev
 import { createChildLogger } from "./logger";
 import { syncPull, syncPush } from "./session-sync";
 import { createPullRequest } from "./github-app";
+import { tryCreateVision, buildVisionEnhancementPrompt } from "./vision-helpers";
 
 const log = createChildLogger("agent");
 
@@ -400,6 +401,15 @@ export async function startAgentSession(
       await syncPull(userId, workspacePath);
     }
 
+    // Create vision.md on first message if it doesn't exist (fire-and-forget).
+    // Runs in startAgentSession (not sendUserMessage) to reuse the already-fetched
+    // workspacePath and avoid an extra DB query on every message.
+    if (userMessage) {
+      tryCreateVision(workspacePath, userMessage).catch((err) => {
+        log.error({ err, userId }, "Failed to create initial vision.md");
+      });
+    }
+
     // Build system prompt for the domain leader
     let systemPrompt = `You are the ${leader.title} (${leader.name}) for this user's business. ${leader.description}
 
@@ -410,6 +420,12 @@ When you need user input for important decisions, use the AskUserQuestion tool.`
     // Inject artifact context when conversation started from a specific page
     if (context?.content) {
       systemPrompt += `\n\nThe user is currently viewing: ${context.path}\n\nArtifact content:\n${context.content}\n\nAnswer in the context of this artifact.`;
+    }
+
+    // CPO-scoped: enhance minimal vision.md with structured sections
+    if (effectiveLeaderId === "cpo") {
+      const enhancement = await buildVisionEnhancementPrompt(workspacePath);
+      if (enhancement) systemPrompt += enhancement;
     }
 
     // ---------------------------------------------------------------------------

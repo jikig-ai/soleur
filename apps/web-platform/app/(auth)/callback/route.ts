@@ -56,20 +56,6 @@ export async function GET(request: NextRequest) {
         "exchangeCodeForSession failed",
       );
 
-      // If this was an identity linking attempt (from connect-repo), redirect
-      // back to connect-repo with an error instead of dumping the user on login.
-      // Check both cookie (reliable — survives OAuth chain) and query param (fallback).
-      const isLinkAttempt =
-        request.cookies.get("soleur_link_attempt")?.value === "1" ||
-        searchParams.get("from") === "link";
-      if (isLinkAttempt) {
-        const linkError = encodeURIComponent(error.message ?? "Failed to link GitHub account");
-        const response = redirectWithCookies(`${origin}/connect-repo?link_error=${linkError}`, pendingCookies);
-        // Clear the link attempt cookie
-        response.cookies.set("soleur_link_attempt", "", { maxAge: 0, path: "/" });
-        return response;
-      }
-
       // Return specific error so the login page can show a helpful message
       const errorCode = error.message?.includes("code verifier")
         ? "code_verifier_missing"
@@ -118,19 +104,6 @@ export async function GET(request: NextRequest) {
         return redirectWithCookies(`${origin}${redirectPath}`, pendingCookies);
       }
     }
-  }
-
-  // If this was an identity linking attempt that failed before a code was issued
-  // (e.g., Supabase redirected back with ?error=... but no ?code=), redirect to
-  // connect-repo instead of dumping the user on the login page.
-  const isLinkAttempt = request.cookies.get("soleur_link_attempt")?.value === "1";
-  if (isLinkAttempt) {
-    const errorDesc = searchParams.get("error_description") ?? searchParams.get("error") ?? "Failed to link GitHub account";
-    const linkError = encodeURIComponent(errorDesc);
-    logger.warn({ origin, error: errorDesc }, "Identity linking failed — redirecting to connect-repo");
-    const response = NextResponse.redirect(`${origin}/connect-repo?link_error=${linkError}`);
-    response.cookies.set("soleur_link_attempt", "", { maxAge: 0, path: "/" });
-    return response;
   }
 
   // Auth failed — redirect to login with error

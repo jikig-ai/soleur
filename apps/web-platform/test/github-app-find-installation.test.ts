@@ -51,10 +51,13 @@ describe("findInstallationForLogin", () => {
     );
   });
 
-  test("returns null when app is not installed (404)", async () => {
+  test("returns null when no personal or org installation found", async () => {
+    // Personal check: 404
+    mockFetch.mockResolvedValueOnce({ ok: false, status: 404 });
+    // Org fallback: no installations
     mockFetch.mockResolvedValueOnce({
-      ok: false,
-      status: 404,
+      ok: true,
+      json: async () => ([]),
     });
 
     const result = await findInstallationForLogin("noinstall-user");
@@ -62,11 +65,10 @@ describe("findInstallationForLogin", () => {
     expect(result).toBeNull();
   });
 
-  test("returns null on unexpected API error", async () => {
-    mockFetch.mockResolvedValueOnce({
-      ok: false,
-      status: 500,
-    });
+  test("returns null on unexpected API error with no org installations", async () => {
+    mockFetch.mockResolvedValueOnce({ ok: false, status: 500 });
+    // Org fallback: list fails too
+    mockFetch.mockResolvedValueOnce({ ok: false, status: 500 });
 
     const result = await findInstallationForLogin("error-user");
 
@@ -78,16 +80,64 @@ describe("findInstallationForLogin", () => {
       ok: true,
       json: async () => ({ account: { login: "testuser" } }),
     });
+    // Org fallback: no installations
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ([]),
+    });
 
     const result = await findInstallationForLogin("testuser");
 
     expect(result).toBeNull();
   });
 
-  test("encodes special characters in login", async () => {
+  test("finds org installation when user is a member", async () => {
+    // Personal check: 404
+    mockFetch.mockResolvedValueOnce({ ok: false, status: 404 });
+    // Org fallback: list installations
     mockFetch.mockResolvedValueOnce({
-      ok: false,
-      status: 404,
+      ok: true,
+      json: async () => ([
+        { id: 99, account: { login: "my-org", type: "Organization" } },
+      ]),
+    });
+    // Installation token exchange for membership check
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ token: "ghs_test_token", expires_at: new Date(Date.now() + 3600000).toISOString() }),
+    });
+    // Membership check: 204 = is a member
+    mockFetch.mockResolvedValueOnce({ status: 204 });
+
+    const result = await findInstallationForLogin("orgmember");
+
+    expect(result).toBe(99);
+    expect(mockFetch.mock.calls[3][0]).toContain("/orgs/my-org/members/orgmember");
+  });
+
+  test("skips non-org installations in fallback", async () => {
+    // Personal check: 404
+    mockFetch.mockResolvedValueOnce({ ok: false, status: 404 });
+    // Org fallback: only User-type installations
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ([
+        { id: 50, account: { login: "otheruser", type: "User" } },
+      ]),
+    });
+
+    const result = await findInstallationForLogin("testuser");
+
+    expect(result).toBeNull();
+    // Only 2 calls: personal check + list installations (no membership checks)
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+  });
+
+  test("encodes special characters in login", async () => {
+    mockFetch.mockResolvedValueOnce({ ok: false, status: 404 });
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ([]),
     });
 
     await findInstallationForLogin("user with spaces");

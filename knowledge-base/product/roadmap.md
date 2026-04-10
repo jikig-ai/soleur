@@ -191,7 +191,8 @@ This roadmap was reviewed by CTO, CLO, CFO, and CMO before finalization.
 | 3.13 | Subscription management (cancel, upgrade/downgrade) | P1 | [#1078](https://github.com/jikig-ai/soleur/issues/1078) | Not started |
 | 3.14 | Invoice history + failed payment handling | P2 | [#1079](https://github.com/jikig-ai/soleur/issues/1079) | Not started |
 | 3.15 | Fix meta tags not rendering in production HTML (OG, canonical, Twitter cards) | P0 | [#1121](https://github.com/jikig-ai/soleur/issues/1121) | Done |
-| 3.16 | Post-connect sync proposal and project status report | P1 | [#1772](https://github.com/jikig-ai/soleur/issues/1772) | Plan complete |
+| 3.16 | Start Fresh onboarding — guided first-run with foundation cards (vision, brand, validation, legal) | P1 | [#1751](https://github.com/jikig-ai/soleur/issues/1751) | Done |
+| 3.17 | Post-connect sync proposal and project status report | P1 | [#1772](https://github.com/jikig-ai/soleur/issues/1772) | Plan complete |
 
 **Why 3.1-3.2 matter:** The knowledge base is the compounding moat. If founders cannot see plans, brainstorms, brand guides, and competitive analyses their agents produced, the value is invisible. The KB viewer closes the review loop.
 
