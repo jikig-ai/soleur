@@ -361,7 +361,7 @@ export default function DashboardPage() {
   // (navigator locks, Realtime WebSocket) from keeping users on a skeleton.
   // ---------------------------------------------------------------------------
 
-  if (conversations.length === 0 && !hasActiveFilter && !error) {
+  if (conversations.length === 0 && !hasActiveFilter) {
     return (
       <div className="mx-auto flex min-h-[calc(100dvh-4rem)] max-w-3xl flex-col items-center justify-center px-4 py-10">
         <p className="mb-3 text-xs font-medium tracking-widest text-amber-500">
