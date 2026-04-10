@@ -8,7 +8,7 @@ type SubscriptionStatus = "active" | "cancelled" | null;
 
 interface ConversationCost {
   id: string;
-  domain_leader: string;
+  domain_leader: string | null;
   total_cost_usd: number;
   created_at: string;
 }
@@ -150,7 +150,7 @@ export default function BillingPage() {
                   >
                     <div className="flex items-center gap-2">
                       <span className="text-sm text-neutral-300">
-                        {leader?.name ?? conv.domain_leader.toUpperCase()}
+                        {leader?.name ?? conv.domain_leader?.toUpperCase() ?? "General"}
                       </span>
                       <span className="text-xs text-neutral-500">
                         {formatRelativeTime(conv.created_at)}

@@ -719,7 +719,8 @@ When you need user input for important decisions, use the AskUserQuestion tool.`
         const inputDelta = message.usage?.input_tokens ?? 0;
         const outputDelta = message.usage?.output_tokens ?? 0;
 
-        const { error: costError } = await supabase().rpc(
+        // Fire-and-forget: cost tracking is non-blocking telemetry
+        supabase().rpc(
           "increment_conversation_cost",
           {
             conv_id: conversationId,
@@ -727,11 +728,11 @@ When you need user input for important decisions, use the AskUserQuestion tool.`
             input_delta: inputDelta,
             output_delta: outputDelta,
           },
-        );
-
-        if (costError) {
-          log.error({ err: costError, conversationId }, "Failed to save cost data");
-        }
+        ).then(({ error: costError }) => {
+          if (costError) {
+            log.error({ err: costError, conversationId }, "Failed to save cost data");
+          }
+        });
 
         sendToClient(userId, {
           type: "usage_update",

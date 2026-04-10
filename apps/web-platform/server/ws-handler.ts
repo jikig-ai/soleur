@@ -383,6 +383,7 @@ async function handleMessage(userId: string, raw: string): Promise<void> {
     case "review_gate":
     case "session_started":
     case "session_ended":
+    case "usage_update":
     case "error": {
       sendToClient(userId, {
         type: "error",
