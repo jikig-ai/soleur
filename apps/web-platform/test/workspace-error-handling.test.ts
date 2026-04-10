@@ -9,6 +9,7 @@ delete process.env.GIT_WORK_TREE;
 
 import { describe, test, expect, afterEach, beforeEach, vi } from "vitest";
 import { existsSync, rmSync } from "fs";
+import { join } from "path";
 import { randomUUID } from "crypto";
 
 const TEST_WORKSPACES = "/tmp/soleur-test-workspaces-err";
@@ -72,5 +73,88 @@ describe("provisionWorkspaceWithRepo error wrapping", () => {
 
     // Credential helper should be cleaned up
     expect(existsSync(credPath)).toBe(false);
+  });
+});
+
+describe("provisionWorkspace sentinel file", () => {
+  test("creates soleur-welcomed.local sentinel in .claude/", async () => {
+    const { provisionWorkspace } = await import("../server/workspace");
+    const userId = randomUUID();
+    const workspacePath = await provisionWorkspace(userId);
+
+    expect(existsSync(join(workspacePath, ".claude", "soleur-welcomed.local"))).toBe(true);
+  });
+});
+
+describe("provisionWorkspaceWithRepo sentinel file", () => {
+  test("does NOT create sentinel when suppressWelcomeHook is omitted", async () => {
+    vi.doMock("../server/github-app", () => ({
+      generateInstallationToken: vi.fn().mockResolvedValue("ghs_faketoken123"),
+      randomCredentialPath: vi.fn().mockReturnValue(`/tmp/git-cred-${randomUUID()}`),
+    }));
+
+    // Mock execFileSync to simulate successful clone (create workspace dir with .git)
+    const origExecFileSync = (await import("child_process")).execFileSync;
+    vi.doMock("child_process", async () => {
+      const actual = await vi.importActual<typeof import("child_process")>("child_process");
+      return {
+        ...actual,
+        execFileSync: vi.fn().mockImplementation((cmd: string, args: string[], opts?: Record<string, unknown>) => {
+          if (cmd === "git" && args[0] === "-c") {
+            // Simulate clone: create the directory with a .git marker
+            const targetDir = args[args.length - 1];
+            const { mkdirSync, writeFileSync } = require("fs");
+            mkdirSync(targetDir, { recursive: true });
+            mkdirSync(join(targetDir, ".git"), { recursive: true });
+            writeFileSync(join(targetDir, ".git", "HEAD"), "ref: refs/heads/main\n");
+            return Buffer.from("");
+          }
+          return origExecFileSync(cmd, args, opts);
+        }),
+      };
+    });
+
+    const { provisionWorkspaceWithRepo } = await import("../server/workspace");
+    const userId = randomUUID();
+    const workspacePath = await provisionWorkspaceWithRepo(
+      userId, "https://github.com/test/repo", 12345,
+    );
+
+    expect(existsSync(join(workspacePath, ".claude", "soleur-welcomed.local"))).toBe(false);
+  });
+
+  test("creates sentinel when suppressWelcomeHook is true", async () => {
+    vi.doMock("../server/github-app", () => ({
+      generateInstallationToken: vi.fn().mockResolvedValue("ghs_faketoken123"),
+      randomCredentialPath: vi.fn().mockReturnValue(`/tmp/git-cred-${randomUUID()}`),
+    }));
+
+    const origExecFileSync = (await import("child_process")).execFileSync;
+    vi.doMock("child_process", async () => {
+      const actual = await vi.importActual<typeof import("child_process")>("child_process");
+      return {
+        ...actual,
+        execFileSync: vi.fn().mockImplementation((cmd: string, args: string[], opts?: Record<string, unknown>) => {
+          if (cmd === "git" && args[0] === "-c") {
+            const targetDir = args[args.length - 1];
+            const { mkdirSync, writeFileSync } = require("fs");
+            mkdirSync(targetDir, { recursive: true });
+            mkdirSync(join(targetDir, ".git"), { recursive: true });
+            writeFileSync(join(targetDir, ".git", "HEAD"), "ref: refs/heads/main\n");
+            return Buffer.from("");
+          }
+          return origExecFileSync(cmd, args, opts);
+        }),
+      };
+    });
+
+    const { provisionWorkspaceWithRepo } = await import("../server/workspace");
+    const userId = randomUUID();
+    const workspacePath = await provisionWorkspaceWithRepo(
+      userId, "https://github.com/test/repo", 12345,
+      undefined, undefined, { suppressWelcomeHook: true },
+    );
+
+    expect(existsSync(join(workspacePath, ".claude", "soleur-welcomed.local"))).toBe(true);
   });
 });

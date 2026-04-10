@@ -42,10 +42,10 @@ export type WSMessage =
   | { type: "stream"; content: string; partial: boolean; leaderId: DomainLeaderId }
   | { type: "stream_start"; leaderId: DomainLeaderId; source?: "auto" | "mention" }
   | { type: "stream_end"; leaderId: DomainLeaderId }
-  | { type: "review_gate"; gateId: string; question: string; options: string[] }
+  | { type: "review_gate"; gateId: string; question: string; header?: string; options: string[]; descriptions?: Record<string, string | undefined> }
   | { type: "session_started"; conversationId: string }
   | { type: "session_ended"; reason: string }
-  | { type: "error"; message: string; errorCode?: WSErrorCode };
+  | { type: "error"; message: string; errorCode?: WSErrorCode; gateId?: string };
 
 // Database types (matches Supabase schema)
 export interface User {

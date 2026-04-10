@@ -72,6 +72,9 @@ export async function provisionWorkspace(userId: string): Promise<string> {
     JSON.stringify(DEFAULT_SETTINGS, null, 2) + "\n",
   );
 
+  // 3b. Suppress welcome hook — guided onboarding handles first run
+  writeFileSync(join(claudeDir, "soleur-welcomed.local"), "");
+
   // 4. Symlink plugins/soleur -> shared plugin path
   const pluginsDir = join(workspacePath, "plugins");
   ensureDir(pluginsDir);
@@ -120,6 +123,7 @@ export async function provisionWorkspaceWithRepo(
   installationId: number,
   userName?: string,
   userEmail?: string,
+  options?: { suppressWelcomeHook?: boolean },
 ): Promise<string> {
   if (!UUID_RE.test(userId)) {
     throw new Error(`Invalid userId format: ${userId}`);
@@ -222,6 +226,11 @@ export async function provisionWorkspaceWithRepo(
     join(claudeDir, "settings.json"),
     JSON.stringify(DEFAULT_SETTINGS, null, 2) + "\n",
   );
+
+  // 8b. Suppress welcome hook for Start Fresh workspaces
+  if (options?.suppressWelcomeHook) {
+    writeFileSync(join(claudeDir, "soleur-welcomed.local"), "");
+  }
 
   // 9. Scaffold knowledge-base/ subdirectories if they don't exist in the clone
   const kbRoot = join(workspacePath, "knowledge-base");

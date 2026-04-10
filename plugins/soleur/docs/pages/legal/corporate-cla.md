@@ -2,7 +2,7 @@
 title: "Corporate Contributor License Agreement"
 description: "Agreement defining intellectual property terms for organizations contributing to the Soleur project."
 layout: base.njk
-permalink: pages/legal/corporate-cla.html
+permalink: legal/corporate-cla/
 ---
 
 <section class="page-hero">
@@ -56,7 +56,7 @@ You represent that:
 
 ## 5. Authorized Representative Management
 
-You are responsible for maintaining an accurate list of Authorized Representatives. To add or remove Authorized Representatives, contact Us at legal@jikigai.com. Until We are notified of a change, the most recent list of Authorized Representatives on file shall apply.
+You are responsible for maintaining an accurate list of Authorized Representatives. To add or remove Authorized Representatives, contact Us at <legal@jikigai.com>. Until We are notified of a change, the most recent list of Authorized Representatives on file shall apply.
 
 ## 6. Support and Warranty Disclaimer
 
@@ -80,7 +80,8 @@ You agree to notify Us of any facts or circumstances of which You become aware t
 
 ---
 
-**Signing:** To sign this Corporate Contributor License Agreement, contact legal@jikigai.com with the subject "Corporate CLA -- [Organization Name]." Include:
+**Signing:** To sign this Corporate Contributor License Agreement, contact <legal@jikigai.com> with the subject "Corporate CLA -- [Organization Name]." Include:
+
 - Organization name and address
 - Name and title of the authorized signatory
 - List of GitHub usernames authorized to contribute on behalf of the organization
@@ -92,9 +93,10 @@ You agree to notify Us of any facts or circumstances of which You become aware t
 ---
 
 > **Related documents:** This Corporate Contributor License Agreement relates to the Project's intellectual property framework. Please review the companion documents:
-> - [Individual Contributor License Agreement](/pages/legal/individual-cla.html) -- for contributions made by individuals
-> - [Terms & Conditions](/pages/legal/terms-and-conditions.html) -- governs use of the Soleur platform
-> - [Privacy Policy](/pages/legal/privacy-policy.html) -- details data practices including CLA signature processing
+>
+> - [Individual Contributor License Agreement](/legal/individual-cla/) -- for contributions made by individuals
+> - [Terms & Conditions](/legal/terms-and-conditions/) -- governs use of the Soleur platform
+> - [Privacy Policy](/legal/privacy-policy/) -- details data practices including CLA signature processing
 
     </div>
   </div>

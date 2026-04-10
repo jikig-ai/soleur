@@ -10,7 +10,7 @@ generated-date: 2026-02-20
 **Soleur -- Company-as-a-Service Platform**
 
 **Effective Date:** February 20, 2026
-**Last Updated:** March 29, 2026 (added conversation management to Section 3.7, added conversation data to Supabase row in Section 4.2, added conversation data retention to Section 8.4, added DPIA re-evaluation for conversation data to Section 9, added processing activity #10 to Article 30 register, added conversation data breach scenario to Section 11.2)
+**Last Updated:** April 10, 2026 (added Section 3.8 Content Sharing lawful basis, added processing activity #11 to Article 30 register, added share link retention to Section 8.4)
 
 ---
 
@@ -87,6 +87,17 @@ For processing of account data, workspace data, and subscription data through th
 - **Infrastructure hosting:** The lawful basis is **contract performance** (Article 6(1)(b)) -- processing is necessary to provide workspace environments. Data processed: user workspaces, encrypted API keys (AES-256-GCM), Docker containers. Hosted on Hetzner in Helsinki, Finland (EU-only).
 - **Conversation management:** The lawful basis is **contract performance** (Article 6(1)(b)) -- processing is necessary to provide the conversational AI service. Data processed: conversation metadata (domain leader, status, timestamps), message content (user messages, assistant responses, tool call metadata).
 - **CDN/proxy processing:** For authenticated users, the lawful basis is **contract performance** (Article 6(1)(b)) -- Cloudflare processes requests as part of delivering the Web Platform service. For unauthenticated traffic (visitors who have not signed up), the lawful basis is **legitimate interest** (Article 6(1)(f)) -- operating CDN and DDoS protection for `app.soleur.ai` is necessary for infrastructure security and service availability (see also GDPR Recital 49). Data processed: IP addresses, request headers, TLS termination data. Processed by Cloudflare (see DPD Section 4.2).
+
+<!-- Added 2026-04-10: KB sharing -->
+
+### 3.8 Content Sharing (Knowledge Base Document Sharing)
+
+For processing related to the knowledge base document sharing feature on the Web Platform:
+
+- **Share link management (authenticated users):** The lawful basis is **contract performance** (Article 6(1)(b)) -- processing is necessary to provide the sharing feature the user activated. Data processed: share link metadata (document ID, sharing user ID, creation timestamp, share token).
+- **Viewer access logs (unauthenticated viewers):** The lawful basis is **legitimate interest** (Article 6(1)(f)) -- infrastructure security and abuse prevention for publicly accessible endpoints. Data processed: IP address, timestamp, user-agent (standard server access logs via Cloudflare and Hetzner). No cookies are set, no additional tracking occurs, and no account or profile is created for viewers. The balancing test considers: (a) only standard HTTP connection metadata is processed, (b) viewers voluntarily access a public URL, (c) the processing is necessary for security and cannot be avoided, and (d) no profiling or cross-site tracking occurs.
+
+<!-- End: KB sharing -->
 
 A balancing test is not required for the contract performance basis used in account, payment, and infrastructure processing above. For the legitimate interest basis applied to unauthenticated CDN/proxy traffic, the balancing test considers: (a) the processing is limited to standard HTTP connection metadata (IP addresses, request headers), (b) operating CDN and DDoS protection is within the reasonable expectations of anyone visiting a web application, (c) Cloudflare does not use this data for profiling or advertising, and (d) the processing is necessary for infrastructure security and cannot be achieved without processing technical connection data from all visitors. Data subjects may object under Article 21 by contacting <legal@jikigai.com>.
 
@@ -244,7 +255,7 @@ Newsletter subscriber email addresses are retained by Buttondown for as long as 
 
 ### 8.4 Web Platform Data
 
-Web Platform account data (email, hashed password, auth tokens) is retained while the account is active and deleted upon account deletion request. Conversation data (messages and conversation metadata) is retained while the account is active and deleted upon account deletion request (cascade delete via foreign key). Encrypted API keys are deleted with the associated workspace. Payment records (subscription metadata, invoices) are retained for 10 years per French tax law (Code de commerce Art. L123-22).
+Web Platform account data (email, hashed password, auth tokens) is retained while the account is active and deleted upon account deletion request. Conversation data (messages and conversation metadata) is retained while the account is active and deleted upon account deletion request (cascade delete via foreign key). Encrypted API keys are deleted with the associated workspace. Share link records are retained while the link is active and deleted upon revocation or account deletion (cascade delete). <!-- Added 2026-04-10: KB sharing --> Payment records (subscription metadata, invoices) are retained for 10 years per French tax law (Code de commerce Art. L123-22).
 
 ### 8.5 Third-Party Retention
 
@@ -272,7 +283,7 @@ This assessment will be revisited if processing activities expand significantly 
 
 Jikigai maintains an internal record of processing activities as required by Article 30(1) of the GDPR. The SME exemption under Article 30(5) does not apply because, although Jikigai has fewer than 250 employees, the documentation site hosting constitutes non-occasional processing (continuous web hosting).
 
-The register documents ten processing activities:
+The register documents eleven processing activities:
 
 1. **Documentation website hosting** (soleur.ai via GitHub Pages) -- IP addresses, browser metadata of visitors
 2. **Website analytics** (soleur.ai via Plausible Analytics) -- page URLs, referrer URLs, country (derived from IP, not stored), device type, browser type. Legal basis: legitimate interest (Article 6(1)(f)). No personal data is stored; IP addresses are discarded after geolocation. Plausible Analytics is hosted in the EU.
@@ -284,6 +295,10 @@ The register documents ten processing activities:
 8. **Web Platform payment processing** (app.soleur.ai via Stripe Checkout) -- customer email, subscription metadata. Card data is processed exclusively by Stripe (PCI DSS Level 1, SAQ-A integration) and never reaches Jikigai servers. Legal basis: contract performance (Article 6(1)(b)). Data is processed by Stripe Inc (US-based, DPF + SCCs). Retention: subscription records retained for 10 years per French tax law (Code de commerce Art. L123-22).
 9. **Web Platform infrastructure hosting** (app.soleur.ai via Hetzner (Helsinki, Finland, EU)) -- user workspaces, encrypted API keys (AES-256-GCM), Docker containers. Legal basis: contract performance (Article 6(1)(b)). Data is processed by Hetzner Online GmbH (EU-based, no international transfer). Retention: while account is active.
 10. **Web Platform conversation management** (app.soleur.ai via Supabase) -- conversation metadata (domain leader, status, timestamps) and message content (user messages, assistant responses, tool call metadata). Legal basis: contract performance (Article 6(1)(b)). Data is processed by Supabase Inc (project deployed to AWS eu-west-1, Ireland, EU -- no international data transfer). Retention: while account is active; deleted on account deletion request.
+
+<!-- Added 2026-04-10: KB sharing -->
+11. **Web Platform content sharing** (app.soleur.ai via Supabase) -- share link metadata (document ID, sharing user ID, creation timestamp, share token) for authenticated users who activate document sharing; server access logs (IP address, timestamp, user-agent) for unauthenticated viewers accessing shared URLs. Legal basis: contract performance (Article 6(1)(b)) for share link records; legitimate interest (Article 6(1)(f)) for viewer access logs. No cookies are set for viewers; shared pages include `noindex` meta tags. Retention: share link records retained while active, deleted on revocation or account deletion; access logs per Cloudflare and Hetzner retention policies.
+<!-- End: KB sharing -->
 
 The register is maintained internally and is available on request to the competent supervisory authority (CNIL for France). Since the 2018 reform of the Loi Informatique et Libertes, no registration or prior declaration to the CNIL is required.
 
