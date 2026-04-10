@@ -9,31 +9,31 @@ Issue: #1837
 
 ## Phase 1: Create Cloudflare API Token
 
-- [ ] 1.0 Pre-check: test `POST /user/tokens` via MCP (if succeeds, use API path instead of Playwright)
-- [ ] 1.1 Open Cloudflare dashboard API tokens page via Playwright MCP (`https://dash.cloudflare.com/profile/api-tokens`)
-- [ ] 1.2 Create custom token named `soleur-security-audit`
-- [ ] 1.3 Add Zone permissions: Zone Settings Read, DNS Read, SSL and Certificates Read, Firewall Services Read
-- [ ] 1.4 Add Account permissions: Access Read, Account Settings Read, Notifications Read, Audit Logs Read
-- [ ] 1.5 Set zone resources: Specific zone > soleur.ai
-- [ ] 1.6 Do NOT set expiry (permanent token) or IP restrictions
-- [ ] 1.7 Create token and copy the value (shown only once)
-- [ ] 1.8 Verify token via API: `curl -H "Authorization: Bearer <token>" https://api.cloudflare.com/client/v4/user/tokens/verify`
-- [ ] 1.9 Close browser via `browser_close`
+- [x] 1.0 Pre-check: test `POST /user/tokens` via MCP (if succeeds, use API path instead of Playwright)
+- [x] 1.1 Open Cloudflare dashboard API tokens page via Playwright MCP (`https://dash.cloudflare.com/profile/api-tokens`)
+- [x] 1.2 Create custom token named `soleur-security-audit`
+- [x] 1.3 Add Zone permissions: Zone Settings Read, DNS Read, SSL and Certificates Read, Firewall Services Read
+- [x] 1.4 Add Account permissions: Access Read, Account Settings Read, Notifications Read, Logs Read
+- [x] 1.5 Set zone resources: All zones (single zone; specific zone selector unreachable via Playwright)
+- [x] 1.6 Do NOT set expiry (permanent token) or IP restrictions
+- [x] 1.7 Create token and copy the value (shown only once)
+- [x] 1.8 Verify token via API: `curl -H "Authorization: Bearer <token>" https://api.cloudflare.com/client/v4/user/tokens/verify`
+- [x] 1.9 Close browser via `browser_close`
 
 ## Phase 2: Store in Doppler
 
-- [ ] 2.1 Store token in Doppler `dev` config: `doppler secrets set CF_API_TOKEN_AUDIT=<value> -p soleur -c dev`
-- [ ] 2.2 Verify retrieval: `doppler secrets get CF_API_TOKEN_AUDIT -p soleur -c dev --plain | head -c 20`
+- [x] 2.1 Store token in Doppler `dev` config: `doppler secrets set CF_API_TOKEN_AUDIT=<value> -p soleur -c dev`
+- [x] 2.2 Verify retrieval: `doppler secrets get CF_API_TOKEN_AUDIT -p soleur -c dev --plain | head -c 20`
 
 ## Phase 3: Update infra-security Agent
 
-- [ ] 3.1 Read `plugins/soleur/agents/engineering/infra/infra-security.md`
-- [ ] 3.2 Add API-token fallback section to the Audit Protocol
-  - [ ] 3.2.1 Document `CF_API_TOKEN_AUDIT` environment variable and when to use it
-  - [ ] 3.2.2 Add curl-based check commands for each permission category with exact endpoints
-  - [ ] 3.2.3 Document the fallback chain: MCP -> API token -> CLI-only
-  - [ ] 3.2.4 Note which endpoints may require paid plan (WAF rules, custom rulesets)
-- [ ] 3.3 Run markdownlint on the modified file
+- [x] 3.1 Read `plugins/soleur/agents/engineering/infra/infra-security.md`
+- [x] 3.2 Add API-token fallback section to the Audit Protocol
+  - [x] 3.2.1 Document `CF_API_TOKEN_AUDIT` environment variable and when to use it
+  - [x] 3.2.2 Add curl-based check commands for each permission category with exact endpoints
+  - [x] 3.2.3 Document the fallback chain: MCP -> API token -> CLI-only
+  - [x] 3.2.4 Note which endpoints may require paid plan (WAF rules, custom rulesets)
+- [x] 3.3 Run markdownlint on the modified file
 
 ## Phase 4: Verification
 

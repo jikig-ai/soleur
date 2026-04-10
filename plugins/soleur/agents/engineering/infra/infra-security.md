@@ -38,6 +38,51 @@ When auditing a domain's security posture, check these areas and report findings
 - Use `search` to find zone settings, DNS records, and DNSSEC endpoints
 - Use `execute` to retrieve SSL mode, Always Use HTTPS, HSTS, security headers, all DNS records, and DNSSEC status
 
+**API token checks** (require `CF_API_TOKEN_AUDIT` in Doppler `dev` config):
+
+When MCP OAuth is unavailable (CI, headless mode, or auth errors), use the dedicated read-only audit token. Retrieve it via `doppler secrets get CF_API_TOKEN_AUDIT -p soleur -c dev --plain`.
+
+Zone ID: `5af02a2f394e9ba6e0ea23c381a26b67` (soleur.ai) | Account ID: `4d5ba6f096b2686fbdd404167dd4e125`
+
+```bash
+BASE="https://api.cloudflare.com/client/v4"
+TOKEN=$(doppler secrets get CF_API_TOKEN_AUDIT -p soleur -c dev --plain)
+ZONE_ID="5af02a2f394e9ba6e0ea23c381a26b67"
+ACCT_ID="4d5ba6f096b2686fbdd404167dd4e125"
+
+# Zone Settings (SSL mode, security level, browser integrity, bot fight mode)
+curl -s -H "Authorization: Bearer $TOKEN" "$BASE/zones/$ZONE_ID/settings" | jq '.result[] | {id, value}'
+
+# DNS Records
+curl -s -H "Authorization: Bearer $TOKEN" "$BASE/zones/$ZONE_ID/dns_records" | jq '.result[] | {name, type, content, proxied}'
+
+# SSL Certificates
+curl -s -H "Authorization: Bearer $TOKEN" "$BASE/zones/$ZONE_ID/ssl/certificate_packs" | jq '.result'
+
+# Firewall Rules (may return empty on Free plan — WAF is Pro+)
+curl -s -H "Authorization: Bearer $TOKEN" "$BASE/zones/$ZONE_ID/firewall/rules" | jq '.result'
+
+# Account Settings
+curl -s -H "Authorization: Bearer $TOKEN" "$BASE/accounts/$ACCT_ID" | jq '.result'
+
+# Audit Logs
+curl -s -H "Authorization: Bearer $TOKEN" "$BASE/accounts/$ACCT_ID/audit_logs?per_page=5" | jq '.result[] | {action, when, actor_email: .actor.email}'
+
+# Notification Policies
+curl -s -H "Authorization: Bearer $TOKEN" "$BASE/accounts/$ACCT_ID/alerting/v3/policies" | jq '.result[] | {name, enabled, alert_type}'
+
+# Token health check
+curl -s -H "Authorization: Bearer $TOKEN" "$BASE/user/tokens/verify" | jq '.result.status'
+```
+
+Paid plan notes: `GET /zones/<id>/firewall/rules` and `GET /zones/<id>/rulesets` may return empty arrays on the Free plan (WAF is a Pro+ feature). Do not report empty results as findings — note them as "requires paid plan" instead.
+
+**Fallback chain** (try in order):
+
+1. MCP `execute` -- OAuth-authenticated, richest API access
+2. `CF_API_TOKEN_AUDIT` via curl -- read-only, deterministic, works in CI
+3. CLI-only checks (dig, openssl, curl -sI) -- no credentials needed
+
 **CLI checks** (no credentials needed):
 
 - `dig +short <domain>` -- DNS resolution verification
