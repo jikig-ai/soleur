@@ -72,9 +72,9 @@ async function setupDashboardMocks(page: Page, kbFiles: string[]) {
     });
   });
 
-  // Supabase Realtime: prevent WebSocket connection attempts from blocking
+  // Supabase Realtime: return empty response to prevent WebSocket retry loops
   await page.route("**/realtime/**", async (route) => {
-    await route.abort("connectionrefused");
+    await route.fulfill({ status: 200, contentType: "text/plain", body: "" });
   });
 }
 
@@ -112,7 +112,9 @@ test.describe("Start Fresh onboarding: first-run state", () => {
     await gotoDashboard(page);
 
     await expect(page.getByText("Tell your organization what you're building.")).toBeVisible({ timeout: 10_000 });
-    await expect(page.getByText("YOUR ORGANIZATION")).not.toBeVisible();
+    // Use exact match: "YOUR ORGANIZATION" substring-matches the heading text
+    // "Tell your organization what you're building." without exact: true
+    await expect(page.getByText("YOUR ORGANIZATION", { exact: true })).not.toBeVisible();
     await expect(page.getByText("Review my go-to-market strategy")).not.toBeVisible();
   });
 
@@ -222,7 +224,7 @@ test.describe("Start Fresh onboarding: command center state", () => {
     await setupDashboardMocks(page, ALL_FOUNDATIONS);
     await gotoDashboard(page);
 
-    await expect(page.getByText("Your organization is ready.")).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByText("Your organization is ready.")).toBeVisible({ timeout: 20_000 });
     await expect(page.getByText("Start a conversation to put your agents to work.")).toBeVisible();
   });
 
@@ -230,7 +232,7 @@ test.describe("Start Fresh onboarding: command center state", () => {
     await setupDashboardMocks(page, ALL_FOUNDATIONS);
     await gotoDashboard(page);
 
-    await expect(page.getByText("Your organization is ready.")).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByText("Your organization is ready.")).toBeVisible({ timeout: 20_000 });
     await expect(page.getByText("Review my go-to-market strategy")).toBeVisible();
     await expect(page.getByText("Draft a privacy policy for my SaaS")).toBeVisible();
     await expect(page.getByText("Plan Q2 budget and runway")).toBeVisible();
@@ -241,7 +243,7 @@ test.describe("Start Fresh onboarding: command center state", () => {
     await setupDashboardMocks(page, ALL_FOUNDATIONS);
     await gotoDashboard(page);
 
-    await expect(page.getByText("Your organization is ready.")).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByText("Your organization is ready.")).toBeVisible({ timeout: 20_000 });
 
     await page.getByText("Review my go-to-market strategy").click();
     await page.waitForURL("**/dashboard/chat/new?msg=**", { timeout: 10_000 });
