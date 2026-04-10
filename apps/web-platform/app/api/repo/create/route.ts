@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import * as Sentry from "@sentry/nextjs";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { validateOrigin, rejectCsrf } from "@/lib/auth/validate-origin";
-import { createRepo } from "@/server/github-app";
+import { createRepo, GitHubClientError } from "@/server/github-app";
 import logger from "@/server/logger";
 
 /**
@@ -71,6 +71,15 @@ export async function POST(request: Request) {
       "Failed to create repository",
     );
     Sentry.captureException(err);
+
+    // Surface user-actionable GitHub errors (4xx) with their message;
+    // hide internal details for everything else.
+    if (err instanceof GitHubClientError) {
+      return NextResponse.json(
+        { error: err.message },
+        { status: err.statusCode },
+      );
+    }
     return NextResponse.json(
       { error: "Failed to create repository" },
       { status: 500 },

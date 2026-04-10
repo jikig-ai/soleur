@@ -54,6 +54,20 @@ class InstallationError extends Error {
   }
 }
 
+/**
+ * Thrown when the GitHub API returns a 4xx client error that the user can act on
+ * (e.g., "name already exists on this account", validation failures).
+ * Distinguishes user-facing errors from internal 5xx failures.
+ */
+export class GitHubClientError extends Error {
+  constructor(
+    message: string,
+    public readonly statusCode: number,
+  ) {
+    super(message);
+  }
+}
+
 interface GitHubInstallationTokenResponse {
   token: string;
   expires_at: string;
@@ -562,6 +576,10 @@ export async function createRepo(
       { status: response.status, body: body.slice(0, 500), installationId, name },
       "Failed to create repo",
     );
+    // 4xx = user-actionable (e.g., 422 "name already exists"); 5xx = internal
+    if (response.status >= 400 && response.status < 500) {
+      throw new GitHubClientError(errorMessage, response.status);
+    }
     throw new Error(errorMessage);
   }
 

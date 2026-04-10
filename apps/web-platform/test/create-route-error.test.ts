@@ -9,12 +9,24 @@ const {
   mockServiceFrom,
   mockCreateRepo,
   mockCaptureException,
-} = vi.hoisted(() => ({
-  mockGetUser: vi.fn(),
-  mockServiceFrom: vi.fn(),
-  mockCreateRepo: vi.fn(),
-  mockCaptureException: vi.fn(),
-}));
+  MockGitHubClientError,
+} = vi.hoisted(() => {
+  class _GitHubClientError extends Error {
+    constructor(
+      message: string,
+      public readonly statusCode: number,
+    ) {
+      super(message);
+    }
+  }
+  return {
+    mockGetUser: vi.fn(),
+    mockServiceFrom: vi.fn(),
+    mockCreateRepo: vi.fn(),
+    mockCaptureException: vi.fn(),
+    MockGitHubClientError: _GitHubClientError,
+  };
+});
 
 // ---------------------------------------------------------------------------
 // Mock modules BEFORE importing the route handler
@@ -40,6 +52,7 @@ vi.mock("@/server/logger", () => ({
 
 vi.mock("@/server/github-app", () => ({
   createRepo: mockCreateRepo,
+  GitHubClientError: MockGitHubClientError,
 }));
 
 vi.mock("@sentry/nextjs", () => ({
@@ -88,16 +101,28 @@ describe("POST /api/repo/create — error handling", () => {
     });
   });
 
-  test("returns specific error message from createRepo", async () => {
+  test("returns specific error message for GitHub client errors (4xx)", async () => {
     mockCreateRepo.mockRejectedValue(
-      new Error("name already exists on this account"),
+      new MockGitHubClientError("name already exists on this account", 422),
+    );
+
+    const res = await POST(makeRequest({ name: "my-repo", private: true }));
+    expect(res.status).toBe(422);
+
+    const body = await res.json();
+    expect(body.error).toBe("name already exists on this account");
+  });
+
+  test("returns static message for internal errors (not GitHubClientError)", async () => {
+    mockCreateRepo.mockRejectedValue(
+      new Error("GitHub API internal failure"),
     );
 
     const res = await POST(makeRequest({ name: "my-repo", private: true }));
     expect(res.status).toBe(500);
 
     const body = await res.json();
-    expect(body.error).toBe("name already exists on this account");
+    expect(body.error).toBe("Failed to create repository");
   });
 
   test("calls Sentry.captureException on error", async () => {
