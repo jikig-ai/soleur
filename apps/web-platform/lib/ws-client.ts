@@ -33,6 +33,12 @@ interface ChatMessage {
   gateError?: string;
 }
 
+export interface UsageData {
+  totalCostUsd: number;
+  inputTokens: number;
+  outputTokens: number;
+}
+
 interface UseWebSocketReturn {
   messages: ChatMessage[];
   startSession: (leaderId?: DomainLeaderId, context?: ConversationContext) => void;
@@ -45,6 +51,7 @@ interface UseWebSocketReturn {
   reconnect: () => void;
   routeSource: "auto" | "mention" | null;
   activeLeaderIds: DomainLeaderId[];
+  usageData: UsageData | null;
 }
 
 const MAX_BACKOFF = 30_000;
@@ -69,6 +76,7 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
   const [routeSource, setRouteSource] = useState<"auto" | "mention" | null>(null);
   const [activeLeaderIds, setActiveLeaderIds] = useState<DomainLeaderId[]>([]);
   const [sessionConfirmed, setSessionConfirmed] = useState(false);
+  const [usageData, setUsageData] = useState<UsageData | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const backoffRef = useRef(INITIAL_BACKOFF);
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
@@ -108,6 +116,7 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
   const connect = useCallback(async () => {
     if (!mountedRef.current) return;
     setSessionConfirmed(false);
+    setUsageData(null);
 
     // Clean up any existing connection
     if (wsRef.current) {
@@ -295,6 +304,15 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
           break;
         }
 
+        case "usage_update": {
+          setUsageData((prev) => ({
+            totalCostUsd: (prev?.totalCostUsd ?? 0) + msg.totalCostUsd,
+            inputTokens: (prev?.inputTokens ?? 0) + msg.inputTokens,
+            outputTokens: (prev?.outputTokens ?? 0) + msg.outputTokens,
+          }));
+          break;
+        }
+
         // auth (client-only), chat — no UI message needed
         default:
           break;
@@ -445,5 +463,5 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
     connect();
   }, [connect]);
 
-  return { messages, startSession, sendMessage, sendReviewGateResponse, status, sessionConfirmed, disconnectReason, lastError, reconnect, routeSource, activeLeaderIds };
+  return { messages, startSession, sendMessage, sendReviewGateResponse, status, sessionConfirmed, disconnectReason, lastError, reconnect, routeSource, activeLeaderIds, usageData };
 }

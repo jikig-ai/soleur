@@ -727,6 +727,34 @@ When you need user input for important decisions, use the AskUserQuestion tool.`
           await saveMessage(conversationId, "assistant", fullText, undefined, streamLeaderId);
         }
 
+        // Capture cost data from SDK result (per-turn delta)
+        const costDelta = message.total_cost_usd ?? 0;
+        const inputDelta = message.usage?.input_tokens ?? 0;
+        const outputDelta = message.usage?.output_tokens ?? 0;
+
+        // Fire-and-forget: cost tracking is non-blocking telemetry
+        supabase().rpc(
+          "increment_conversation_cost",
+          {
+            conv_id: conversationId,
+            cost_delta: costDelta,
+            input_delta: inputDelta,
+            output_delta: outputDelta,
+          },
+        ).then(({ error: costError }) => {
+          if (costError) {
+            log.error({ err: costError, conversationId }, "Failed to save cost data");
+          }
+        });
+
+        sendToClient(userId, {
+          type: "usage_update",
+          conversationId,
+          totalCostUsd: costDelta,
+          inputTokens: inputDelta,
+          outputTokens: outputDelta,
+        });
+
         // Sync: push changes to remote after session (connected repos only)
         if (user.repo_status === "ready") {
           await syncPush(userId, workspacePath);
