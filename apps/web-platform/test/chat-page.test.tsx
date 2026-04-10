@@ -8,7 +8,7 @@ const mockSendMessage = vi.fn();
 const mockSendReviewGateResponse = vi.fn();
 
 let wsReturn = {
-  messages: [] as Array<{ id: string; role: "user" | "assistant"; content: string; type: "text" | "review_gate"; leaderId?: string }>,
+  messages: [] as Array<{ id: string; role: "user" | "assistant"; content: string; type: "text" | "review_gate"; leaderId?: string; gateId?: string; question?: string; options?: string[]; header?: string; descriptions?: Record<string, string | undefined>; resolved?: boolean; selectedOption?: string; gateError?: string }>,
   startSession: mockStartSession,
   sendMessage: mockSendMessage,
   sendReviewGateResponse: mockSendReviewGateResponse,
@@ -23,6 +23,21 @@ let wsReturn = {
 
 vi.mock("@/lib/ws-client", () => ({
   useWebSocket: () => wsReturn,
+}));
+
+// Mock useTeamNames hook
+vi.mock("@/hooks/use-team-names", () => ({
+  useTeamNames: () => ({
+    names: {},
+    nudgesDismissed: [],
+    namingPromptedAt: null,
+    loading: false,
+    updateName: vi.fn(),
+    dismissNudge: vi.fn(),
+    getDisplayName: (id: string) => id.toUpperCase(),
+    getBadgeLabel: (id: string) => id.toUpperCase().slice(0, 3),
+  }),
+  TeamNamesProvider: ({ children }: { children: React.ReactNode }) => children,
 }));
 
 // Mock next/navigation
@@ -202,8 +217,8 @@ describe("ChatPage", () => {
       { id: "s1", role: "assistant", content: "My analysis", type: "text", leaderId: "cmo" },
     ];
     await renderChatPage();
-    // CMO name badge should be present
-    expect(screen.getByText("CMO")).toBeInTheDocument();
+    // CMO should appear in both the badge and name label
+    expect(screen.getAllByText("CMO").length).toBeGreaterThanOrEqual(1);
   });
 
   it("shows mobile back arrow", async () => {
@@ -400,6 +415,100 @@ describe("ChatPage", () => {
         expect(mockStartSession).toHaveBeenCalledWith(undefined, undefined);
       });
       expect(fetchSpy).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("ReviewGateCard", () => {
+    it("renders the question text prominently", async () => {
+      wsReturn.messages = [
+        {
+          id: "gate-g1", role: "assistant", content: "Which library?",
+          type: "review_gate", gateId: "g1", question: "Which library?",
+          options: ["React Query", "SWR"],
+        },
+      ];
+      await renderChatPage();
+      expect(screen.getByText("Which library?")).toBeInTheDocument();
+    });
+
+    it("renders header as a tag when provided", async () => {
+      wsReturn.messages = [
+        {
+          id: "gate-g1", role: "assistant", content: "Which library?",
+          type: "review_gate", gateId: "g1", question: "Which library?",
+          header: "Library", options: ["React Query", "SWR"],
+        },
+      ];
+      await renderChatPage();
+      expect(screen.getByText("Library")).toBeInTheDocument();
+    });
+
+    it("renders option descriptions as subtext", async () => {
+      wsReturn.messages = [
+        {
+          id: "gate-g1", role: "assistant", content: "Which approach?",
+          type: "review_gate", gateId: "g1", question: "Which approach?",
+          options: ["A", "B"],
+          descriptions: { A: "First approach", B: "Second approach" },
+        },
+      ];
+      await renderChatPage();
+      expect(screen.getByText("First approach")).toBeInTheDocument();
+      expect(screen.getByText("Second approach")).toBeInTheDocument();
+    });
+
+    it("renders option buttons", async () => {
+      wsReturn.messages = [
+        {
+          id: "gate-g1", role: "assistant", content: "Choose",
+          type: "review_gate", gateId: "g1", question: "Choose",
+          options: ["Yes", "No"],
+        },
+      ];
+      await renderChatPage();
+      expect(screen.getByRole("button", { name: "Yes" })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "No" })).toBeInTheDocument();
+    });
+
+    it("calls onSelect and shows selected state when button clicked", async () => {
+      wsReturn.messages = [
+        {
+          id: "gate-g1", role: "assistant", content: "Choose",
+          type: "review_gate", gateId: "g1", question: "Choose",
+          options: ["Yes", "No"],
+        },
+      ];
+      await renderChatPage();
+      await userEvent.click(screen.getByRole("button", { name: "Yes" }));
+      expect(mockSendReviewGateResponse).toHaveBeenCalledWith("g1", "Yes");
+    });
+
+    it("renders collapsed summary when resolved", async () => {
+      wsReturn.messages = [
+        {
+          id: "gate-g1", role: "assistant", content: "Choose",
+          type: "review_gate", gateId: "g1", question: "Choose",
+          options: ["Yes", "No"],
+          resolved: true, selectedOption: "Yes",
+        },
+      ];
+      await renderChatPage();
+      expect(screen.getByText("Yes")).toBeInTheDocument();
+      // Buttons should not be present in collapsed state
+      expect(screen.queryByRole("button", { name: "No" })).not.toBeInTheDocument();
+    });
+
+    it("renders error message inline when gateError is set", async () => {
+      wsReturn.messages = [
+        {
+          id: "gate-g1", role: "assistant", content: "Choose",
+          type: "review_gate", gateId: "g1", question: "Choose",
+          options: ["Yes", "No"],
+          gateError: "Review gate not found or already resolved",
+        },
+      ];
+      await renderChatPage();
+      expect(screen.getByText(/Review gate not found/)).toBeInTheDocument();
     });
   });
 });
