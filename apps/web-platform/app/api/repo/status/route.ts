@@ -21,7 +21,7 @@ export async function GET() {
   const serviceClient = createServiceClient();
   const { data: userData, error: fetchError } = await serviceClient
     .from("users")
-    .select("repo_url, repo_status, repo_last_synced_at, workspace_path, repo_error")
+    .select("repo_url, repo_status, repo_last_synced_at, workspace_path, repo_error, health_snapshot")
     .eq("id", user.id)
     .single();
 
@@ -50,12 +50,30 @@ export async function GET() {
     );
   }
 
+  // Check for an active system sync conversation (#1816)
+  let syncConversationId: string | null = null;
+  if (status === "ready") {
+    const { data: syncConv } = await serviceClient
+      .from("conversations")
+      .select("id")
+      .eq("user_id", user.id)
+      .eq("domain_leader", "system")
+      .eq("status", "active")
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    syncConversationId = syncConv?.id ?? null;
+  }
+
   return NextResponse.json({
     status,
     repoUrl,
     repoName,
     lastSyncedAt: userData.repo_last_synced_at ?? null,
     hasKnowledgeBase,
+    healthSnapshot: userData.health_snapshot ?? null,
+    syncConversationId,
     errorMessage: status === "error" ? (userData.repo_error ?? null) : null,
   });
 }

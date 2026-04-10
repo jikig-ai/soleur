@@ -9,6 +9,8 @@ export const PUBLIC_PATHS = [
   "/api/webhooks",
   "/ws",
   "/manifest.webmanifest",
+  "/shared",
+  "/api/shared",
 ];
 
 /** Auth required, but T&C check skipped (user must reach these to accept terms) */

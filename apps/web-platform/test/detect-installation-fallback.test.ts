@@ -50,6 +50,39 @@ function makeRequest() {
 }
 
 // ---------------------------------------------------------------------------
+// Table-routing helpers for mockServiceFrom
+// ---------------------------------------------------------------------------
+type TableOperation = "select" | "update";
+type TableMockConfig = Record<string, Partial<Record<TableOperation, unknown>>>;
+
+/**
+ * Configure mockServiceFrom to route by table name + operation instead of
+ * relying on positional mockReturnValueOnce chains.
+ */
+function setupTableRoutes(config: TableMockConfig) {
+  mockServiceFrom.mockImplementation((table: string) => {
+    const tableConfig = config[table];
+    if (!tableConfig) {
+      throw new Error(`Unexpected .from("${table}") call — add it to setupTableRoutes`);
+    }
+    const mock: Record<string, unknown> = {};
+    if (tableConfig.select !== undefined) {
+      mock.select = vi.fn().mockReturnValue({
+        eq: vi.fn().mockReturnValue({
+          single: vi.fn().mockResolvedValue({ data: tableConfig.select }),
+        }),
+      });
+    }
+    if (tableConfig.update !== undefined) {
+      mock.update = vi.fn().mockReturnValue({
+        eq: vi.fn().mockResolvedValue({ error: tableConfig.update }),
+      });
+    }
+    return mock;
+  });
+}
+
+// ---------------------------------------------------------------------------
 // Tests: github_username fallback
 // ---------------------------------------------------------------------------
 
@@ -64,15 +97,12 @@ describe("POST /api/repo/detect-installation — github_username fallback", () =
   });
 
   test("uses stored github_username when no Supabase GitHub identity exists", async () => {
-    // No github_installation_id but github_username stored from prior OAuth resolve
-    mockServiceFrom.mockReturnValueOnce({
-      select: vi.fn().mockReturnValue({
-        eq: vi.fn().mockReturnValue({
-          single: vi.fn().mockResolvedValue({
-            data: { github_installation_id: null, github_username: "deruelle" },
-          }),
-        }),
-      }),
+    // Route .from("users") to return select data and accept updates
+    setupTableRoutes({
+      users: {
+        select: { github_installation_id: null, github_username: "deruelle" },
+        update: null, // no error
+      },
     });
 
     // No GitHub identity in Supabase
@@ -85,13 +115,6 @@ describe("POST /api/repo/detect-installation — github_username fallback", () =
     mockVerifyInstallationOwnership.mockResolvedValue({ verified: true });
     mockListInstallationRepos.mockResolvedValue([{ name: "my-repo", fullName: "deruelle/my-repo" }]);
 
-    // Update call to store installation_id
-    mockServiceFrom.mockReturnValueOnce({
-      update: vi.fn().mockReturnValue({
-        eq: vi.fn().mockResolvedValue({ error: null }),
-      }),
-    });
-
     const response = await POST(makeRequest());
     const data = await response.json();
 
@@ -101,15 +124,11 @@ describe("POST /api/repo/detect-installation — github_username fallback", () =
   });
 
   test("returns no_github_identity when neither Supabase identity nor github_username exists", async () => {
-    // No github_installation_id and no github_username
-    mockServiceFrom.mockReturnValueOnce({
-      select: vi.fn().mockReturnValue({
-        eq: vi.fn().mockReturnValue({
-          single: vi.fn().mockResolvedValue({
-            data: { github_installation_id: null, github_username: null },
-          }),
-        }),
-      }),
+    // Route .from("users") — no installation ID or username
+    setupTableRoutes({
+      users: {
+        select: { github_installation_id: null, github_username: null },
+      },
     });
 
     // No GitHub identity in Supabase
@@ -125,13 +144,12 @@ describe("POST /api/repo/detect-installation — github_username fallback", () =
   });
 
   test("prefers Supabase GitHub identity over stored github_username", async () => {
-    // No github_installation_id stored
-    mockServiceFrom.mockReturnValueOnce({
-      select: vi.fn().mockReturnValue({
-        eq: vi.fn().mockReturnValue({
-          single: vi.fn().mockResolvedValue({ data: { github_installation_id: null } }),
-        }),
-      }),
+    // Route .from("users") — no installation ID, accept updates
+    setupTableRoutes({
+      users: {
+        select: { github_installation_id: null },
+        update: null, // no error
+      },
     });
 
     // Has GitHub identity in Supabase
@@ -150,13 +168,6 @@ describe("POST /api/repo/detect-installation — github_username fallback", () =
     mockFindInstallationForLogin.mockResolvedValue(99999);
     mockVerifyInstallationOwnership.mockResolvedValue({ verified: true });
     mockListInstallationRepos.mockResolvedValue([{ name: "repo", fullName: "supabase-user/repo" }]);
-
-    // Update call
-    mockServiceFrom.mockReturnValueOnce({
-      update: vi.fn().mockReturnValue({
-        eq: vi.fn().mockResolvedValue({ error: null }),
-      }),
-    });
 
     const response = await POST(makeRequest());
     const data = await response.json();

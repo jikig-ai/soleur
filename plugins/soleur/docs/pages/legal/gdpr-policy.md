@@ -2,7 +2,7 @@
 title: "GDPR Policy"
 description: "EU General Data Protection Regulation compliance for Soleur."
 layout: base.njk
-permalink: pages/legal/gdpr-policy.html
+permalink: legal/gdpr-policy/
 ---
 
 <section class="page-hero">
@@ -98,6 +98,15 @@ For processing of account data, workspace data, and subscription data through th
 - **CDN/proxy processing:** For authenticated users, the lawful basis is **contract performance** (Article 6(1)(b)) -- Cloudflare processes requests as part of delivering the Web Platform service. For unauthenticated traffic (visitors who have not signed up), the lawful basis is **legitimate interest** (Article 6(1)(f)) -- operating CDN and DDoS protection for `app.soleur.ai` is necessary for infrastructure security and service availability (see also GDPR Recital 49). Data processed: IP addresses, request headers, TLS termination data. Processed by Cloudflare (see DPD Section 4.2).
 
 A balancing test is not required for the contract performance basis used in account, payment, and infrastructure processing above. For the legitimate interest basis applied to unauthenticated CDN/proxy traffic, the balancing test considers: (a) the processing is limited to standard HTTP connection metadata (IP addresses, request headers), (b) operating CDN and DDoS protection is within the reasonable expectations of anyone visiting a web application, (c) Cloudflare does not use this data for profiling or advertising, and (d) the processing is necessary for infrastructure security and cannot be achieved without processing technical connection data from all visitors. Data subjects may object under Article 21 by contacting <legal@jikigai.com>.
+
+<!-- Added 2026-04-10: KB sharing -->
+
+### 3.8 Content Sharing
+
+- **Share link management:** The lawful basis is **contract performance** (Article 6(1)(b)) -- processing is necessary to provide the sharing feature the user activated. Data processed: share link metadata (token, document path, creation timestamp, revocation status).
+- **Shared page viewer access logs:** The lawful basis is **legitimate interest** (Article 6(1)(f)) -- infrastructure security and abuse prevention for publicly accessible share endpoints. Data processed: IP addresses, timestamps, user-agent strings. The balancing test considers: (a) processing is limited to standard server access log data, (b) no cookies or tracking are applied to shared page viewers, (c) the processing is necessary for rate limiting and abuse prevention on public endpoints. Data subjects may object under Article 21 by contacting <legal@jikigai.com>.
+
+<!-- End: KB sharing -->
 
 ---
 
@@ -350,7 +359,7 @@ This GDPR Policy shall be governed by and construed in accordance with the laws 
 
 ---
 
-> **Related documents:** This GDPR Policy should be read alongside the companion [Privacy Policy](/pages/legal/privacy-policy.html) for broader privacy disclosures, the [Cookie Policy](/pages/legal/cookie-policy.html) for information about cookies used by the documentation site, and the [Individual CLA](/pages/legal/individual-cla.html) and [Corporate CLA](/pages/legal/corporate-cla.html) for contributor license terms.
+> **Related documents:** This GDPR Policy should be read alongside the companion [Privacy Policy](/legal/privacy-policy/) for broader privacy disclosures, the [Cookie Policy](/legal/cookie-policy/) for information about cookies used by the documentation site, and the [Individual CLA](/legal/individual-cla/) and [Corporate CLA](/legal/corporate-cla/) for contributor license terms.
 
     </div>
   </div>

@@ -134,7 +134,7 @@ Soleur runs {{ stats.agents }} agents across {{ stats.departments }} departments
 claude plugin install soleur
 ```
 
-Explore the [{{ stats.agents }} agents]({{ site.url }}pages/agents.html), read [what company-as-a-service means]({{ site.url }}blog/what-is-company-as-a-service/) for solo founders, or [get started in five minutes]({{ site.url }}pages/getting-started.html).
+Explore the [{{ stats.agents }} agents]({{ site.url }}/agents/), read [what company-as-a-service means]({{ site.url }}blog/what-is-company-as-a-service/) for solo founders, or [get started in five minutes]({{ site.url }}/getting-started/).
 
 ---
 

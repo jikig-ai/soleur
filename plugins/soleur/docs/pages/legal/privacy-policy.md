@@ -2,7 +2,7 @@
 title: "Privacy Policy"
 description: "How Soleur handles data with its local-first architecture."
 layout: base.njk
-permalink: pages/legal/privacy-policy.html
+permalink: legal/privacy-policy/
 ---
 
 <section class="page-hero">
@@ -117,7 +117,21 @@ The Soleur Web Platform at [app.soleur.ai](https://app.soleur.ai) is a cloud-hos
 
 **Legal basis:** Contract performance (Article 6(1)(b) GDPR) -- processing is necessary to provide the Web Platform service you signed up for.
 
-**Retention:** Account data is retained while your account is active and deleted upon account deletion request. Conversation data is retained while the account is active and deleted upon account deletion request (cascade delete via foreign key). Payment records are retained per French tax law (10 years, Code de commerce Art. L123-22).
+**Retention:** Account data is retained while your account is active and deleted upon account deletion request. Conversation data is retained while the account is active and deleted upon account deletion request (cascade delete via foreign key). Share link records are retained while the link is active and deleted upon revocation or account deletion (cascade delete). Payment records are retained per French tax law (10 years, Code de commerce Art. L123-22).
+
+<!-- Added 2026-04-10: KB sharing -->
+
+### 4.8 Content Sharing (Knowledge Base Document Sharing)
+
+The Web Platform allows authenticated users to share individual knowledge base documents via public links. When a document is shared:
+
+- **Data shared publicly:** The document content is accessible to anyone with the share link. Shared pages include noindex meta tags and are not indexed by search engines. No cookies are set for unauthenticated viewers, and the CTA banner on shared pages collects no data (it links to the signup page only).
+- **Viewer data collected:** For unauthenticated viewers accessing a shared link, only standard server access logs are collected (IP address, timestamp, user-agent). No additional tracking or analytics is applied to shared page viewers.
+- **Share link records:** The Web Platform stores metadata about active share links (document ID, sharing user ID, creation timestamp, share token) in the database. These records are retained while the share link is active and deleted when the owner revokes the link or deletes their account (cascade delete).
+- **Legal basis:** Legitimate interest (Article 6(1)(f) GDPR) for processing viewer access logs. Contract performance (Article 6(1)(b) GDPR) for maintaining share link records.
+- **Revocation:** The document owner can revoke a share link at any time, which takes immediate effect. After revocation, the shared URL returns an error. However, Jikigai cannot guarantee that recipients have not copied or redistributed the content prior to revocation.
+
+<!-- End: KB sharing -->
 
 ## 5. Third-Party Services
 
@@ -277,7 +291,7 @@ The Soleur Plugin does not use cookies.
 
 The Docs Site, hosted on GitHub Pages, may use cookies as determined by GitHub's platform. Soleur does not add any first-party cookies to the Docs Site. For details on GitHub's cookie practices, see [GitHub's cookie documentation](https://docs.github.com/en/site-policy/privacy-policies/github-cookies).
 
-The Web Platform at app.soleur.ai uses strictly necessary cookies for authentication (Supabase session cookies) and payment security (Stripe fraud prevention cookies). These cookies are exempt from consent requirements under ePrivacy Directive Article 5(3). For full details, see the [Cookie Policy](/pages/legal/cookie-policy.html).
+The Web Platform at app.soleur.ai uses strictly necessary cookies for authentication (Supabase session cookies) and payment security (Stripe fraud prevention cookies). These cookies are exempt from consent requirements under ePrivacy Directive Article 5(3). For full details, see the [Cookie Policy](/legal/cookie-policy/).
 
 ## 13. Changes to This Policy
 
@@ -302,7 +316,7 @@ To exercise your data subject rights under GDPR, send a written request to <lega
 
 ---
 
-> **Related documents:** This Privacy Policy should be read alongside the companion [Cookie Policy](/pages/legal/cookie-policy.html) for detailed information about cookies used by the Docs Site (GitHub Pages), the [GDPR Policy](/pages/legal/gdpr-policy.html) for detailed GDPR-specific disclosures, and the [Individual Contributor License Agreement](/pages/legal/individual-cla.html) for details on contributor data processing.
+> **Related documents:** This Privacy Policy should be read alongside the companion [Cookie Policy](/legal/cookie-policy/) for detailed information about cookies used by the Docs Site (GitHub Pages), the [GDPR Policy](/legal/gdpr-policy/) for detailed GDPR-specific disclosures, and the [Individual Contributor License Agreement](/legal/individual-cla/) for details on contributor data processing.
 
     </div>
   </div>
