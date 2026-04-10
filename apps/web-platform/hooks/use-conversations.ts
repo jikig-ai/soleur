@@ -114,9 +114,12 @@ export function useConversations(
     // Derive titles and previews
     const enriched: ConversationWithPreview[] = convData.map((conv: Conversation) => {
       const { text, leader } = derivePreview(messages, conv.id);
+      const title = conv.domain_leader === "system"
+        ? "Project Analysis"
+        : deriveTitle(messages, conv.id);
       return {
         ...conv,
-        title: deriveTitle(messages, conv.id),
+        title,
         preview: text,
         lastMessageLeader: leader,
       };

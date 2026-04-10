@@ -63,6 +63,20 @@ export const DOMAIN_LEADERS = [
       "Community management, support strategy, customer engagement, and communications.",
     agentPath: "agents/support/cco.md",
   },
+  {
+    id: "system",
+    name: "System",
+    title: "System Process",
+    description:
+      "Internal system processes such as automated sync and health checks.",
+    agentPath: "",
+    internal: true,
+  },
 ] as const;
 
 export type DomainLeaderId = (typeof DOMAIN_LEADERS)[number]["id"];
+
+/** Domain leaders visible to users (excludes internal leaders like "system"). */
+export const ROUTABLE_DOMAIN_LEADERS = DOMAIN_LEADERS.filter(
+  (l) => !("internal" in l && l.internal),
+);
