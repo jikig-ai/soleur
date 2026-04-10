@@ -95,3 +95,4 @@ After HTML/CSS changes to pages that have corresponding .pen design files in `kn
 - Only use Pencil MCP tools for .pen file operations -- do not read .pen files with the Read tool
 - When brand-guide.md exists, the `## Visual Direction` section is the source of truth for colors, fonts, and style
 - Save all .pen files under `knowledge-base/product/design/{domain}/` organized by domain
+- When wireframing credential/token input forms, use obviously-fake placeholder values (e.g., `your-api-token-here`, `sk_test_example_key`). Realistic-looking API key patterns (e.g., `sk_live_...`) trigger GitHub push protection on design files.

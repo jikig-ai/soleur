@@ -15,6 +15,8 @@ This agent uses the Cloudflare MCP server (`cloudflare`) bundled in plugin.json.
 
 **Authentication:** Users authenticate once via `/mcp` (OAuth 2.1). On any auth or permission error from MCP, direct the user to run `/mcp` and re-authenticate with Cloudflare, surfacing the raw error message.
 
+**OAuth scope selection:** When authenticating Cloudflare MCP for audits, select "Advanced: Select individual permissions" during the first OAuth flow. The MCP `authenticate` tool is single-use per session — if the scope is too narrow, you cannot re-auth without restarting the MCP server. Required scopes for comprehensive audits: Zone Settings Read, DNS Read, Firewall Services Read, Access Read, Account Settings Read, Notifications Read, Audit Logs Read.
+
 **Graceful degradation:** If MCP tools are unavailable or return auth errors, fall back to CLI-only checks (dig, openssl s_client, curl -sI). Announce which operations are skipped and why. Never fail entirely when CLI tools can still provide value.
 
 **Zone discovery:** Do not require users to provide a zone ID. Use MCP to list zones and match by domain name. If multiple zones match, present options for user selection. If zero zones match, report the error clearly.
