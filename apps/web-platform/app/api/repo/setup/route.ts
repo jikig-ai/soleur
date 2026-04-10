@@ -4,6 +4,7 @@ import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { validateOrigin, rejectCsrf } from "@/lib/auth/validate-origin";
 import { provisionWorkspaceWithRepo } from "@/server/workspace";
 import { scanProjectHealth } from "@/server/project-scanner";
+import { startAgentSession } from "@/server/agent-runner";
 import logger from "@/server/logger";
 
 /**
@@ -128,12 +129,49 @@ export async function POST(request: Request) {
           { err: error, userId: user.id },
           "Failed to update user after successful clone",
         );
-      } else {
-        logger.info(
-          { userId: user.id, repoUrl, category: healthSnapshot?.category },
-          "Repo setup completed",
-        );
+        return;
       }
+
+      logger.info(
+        { userId: user.id, repoUrl, category: healthSnapshot?.category },
+        "Repo setup completed",
+      );
+
+      // Auto-trigger headless sync — fire-and-forget with .catch()
+      // BYOK check is handled internally by startAgentSession (rejects if no key)
+      const conversationId = crypto.randomUUID();
+      const { error: convError } = await serviceClient
+        .from("conversations")
+        .insert({
+          id: conversationId,
+          user_id: user.id,
+          domain_leader: "system",
+          status: "active",
+          session_id: crypto.randomUUID(),
+        });
+
+      if (convError) {
+        logger.error(
+          { err: convError, userId: user.id },
+          "Failed to create sync conversation",
+        );
+        Sentry.captureException(convError);
+        return;
+      }
+
+      startAgentSession(
+        user.id,
+        conversationId,
+        undefined,
+        undefined,
+        "/soleur:sync --headless",
+      ).catch((syncErr) => {
+        logger.error(
+          { err: syncErr, userId: user.id },
+          "Auto-triggered sync failed",
+        );
+        Sentry.captureException(syncErr);
+      });
     })
     .catch(async (err) => {
       logger.error({ err, userId: user.id, repoUrl }, "Repo clone failed");
