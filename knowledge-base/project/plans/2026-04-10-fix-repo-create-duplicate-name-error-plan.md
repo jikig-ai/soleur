@@ -166,13 +166,13 @@ Update `github-app-create-repo.test.ts`:
 
 ## Acceptance Criteria
 
-- [ ] `POST /api/repo/create` returns HTTP 409 (not 500) when the GitHub API returns 422 "name already exists"
-- [ ] `Sentry.captureException` is NOT called for GitHub 422/403 errors (user-correctable)
-- [ ] `Sentry.captureException` IS still called for genuine server errors (network failures, 500s, unknown errors)
-- [ ] Error message from GitHub ("name already exists on this account") is preserved in the JSON response
-- [ ] Client displays the specific error message (not generic "Project Setup Failed")
-- [ ] Existing tests updated to reflect new status codes
-- [ ] `GitHubApiError` class is exported and used consistently in `createRepo`
+- [x] `POST /api/repo/create` returns HTTP 409 (not 500) when the GitHub API returns 422 "name already exists"
+- [x] `Sentry.captureException` is NOT called for GitHub 422/403 errors (user-correctable)
+- [x] `Sentry.captureException` IS still called for genuine server errors (network failures, 500s, unknown errors)
+- [x] Error message from GitHub ("name already exists on this account") is preserved in the JSON response
+- [x] Client displays the specific error message (not generic "Project Setup Failed")
+- [x] Existing tests updated to reflect new status codes
+- [x] `GitHubApiError` class is exported and used consistently in `createRepo`
 
 ## Test Scenarios
 
