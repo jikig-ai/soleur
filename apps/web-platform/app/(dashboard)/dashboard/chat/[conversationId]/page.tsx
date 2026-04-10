@@ -8,7 +8,7 @@ import type { ConversationContext } from "@/lib/types";
 import { ErrorCard } from "@/components/ui/error-card";
 import { DOMAIN_LEADERS } from "@/server/domain-leaders";
 import type { DomainLeaderId } from "@/server/domain-leaders";
-import { LEADER_COLORS, LEADER_BG_COLORS } from "@/components/chat/leader-colors";
+import { LEADER_COLORS } from "@/components/chat/leader-colors";
 import { ChatInput } from "@/components/chat/chat-input";
 import { AtMentionDropdown } from "@/components/chat/at-mention-dropdown";
 import { useTeamNames } from "@/hooks/use-team-names";
@@ -38,7 +38,7 @@ export default function ChatPage() {
     usageData,
   } = useWebSocket(conversationId);
 
-  const { names: customNames, getDisplayName, getBadgeLabel } = useTeamNames();
+  const { names: customNames, getDisplayName } = useTeamNames();
 
   const [sessionStarted, setSessionStarted] = useState(false);
   const [initialMsgSent, setInitialMsgSent] = useState(false);
@@ -265,7 +265,6 @@ export default function ChatPage() {
                     showFullTitle={!!isFirst}
                     isStreaming={!!msg.leaderId && activeLeaderIds.includes(msg.leaderId)}
                     getDisplayName={getDisplayName}
-                    getBadgeLabel={getBadgeLabel}
                   />
                 )}
               </div>
@@ -380,7 +379,6 @@ function MessageBubble({
   showFullTitle = false,
   isStreaming = false,
   getDisplayName,
-  getBadgeLabel,
 }: {
   role: "user" | "assistant";
   content: string;
@@ -388,14 +386,12 @@ function MessageBubble({
   showFullTitle?: boolean;
   isStreaming?: boolean;
   getDisplayName?: (id: DomainLeaderId) => string;
-  getBadgeLabel?: (id: DomainLeaderId) => string;
 }) {
   const isUser = role === "user";
   const leader = leaderId ? DOMAIN_LEADERS.find((l) => l.id === leaderId) : null;
   const colorClass = leaderId ? (LEADER_COLORS[leaderId] ?? "border-l-neutral-500") : "";
 
   const displayName = leaderId && getDisplayName ? getDisplayName(leaderId) : leader?.name;
-  const badgeText = leaderId && getBadgeLabel ? getBadgeLabel(leaderId) : leader?.name.slice(0, 3);
 
   return (
     <div className={`flex ${isUser ? "justify-end" : "justify-start"}`}>
@@ -403,9 +399,16 @@ function MessageBubble({
         {/* Leader avatar */}
         {leader && (
           <span
-            className={`mt-1 flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-xs font-semibold text-white ${LEADER_BG_COLORS[leaderId!]}`}
+            className="mt-1 flex h-7 w-7 shrink-0 items-center justify-center overflow-hidden rounded-md"
+            aria-label={`Soleur ${leaderId!.toUpperCase()}`}
           >
-            {badgeText}
+            <img
+              src="/icons/soleur-logo-mark.png"
+              alt=""
+              width={28}
+              height={28}
+              className="h-full w-full object-cover"
+            />
           </span>
         )}
 
