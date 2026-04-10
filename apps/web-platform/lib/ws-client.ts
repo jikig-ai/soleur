@@ -116,6 +116,7 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
   const connect = useCallback(async () => {
     if (!mountedRef.current) return;
     setSessionConfirmed(false);
+    setUsageData(null);
 
     // Clean up any existing connection
     if (wsRef.current) {

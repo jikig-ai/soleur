@@ -54,10 +54,13 @@ vi.mock("../server/sandbox-hook", () => ({
 vi.mock("../server/review-gate", () => ({
   abortableReviewGate: vi.fn(),
   validateSelection: vi.fn(),
+  extractReviewGateInput: vi.fn(),
+  buildReviewGateResponse: vi.fn(),
   MAX_SELECTION_LENGTH: 200,
   REVIEW_GATE_TIMEOUT_MS: 300_000,
 }));
 vi.mock("../server/domain-leaders", () => ({
+  ROUTABLE_DOMAIN_LEADERS: [{ id: "cpo", name: "CPO", title: "Chief Product Officer", description: "Product" }],
   DOMAIN_LEADERS: [{ id: "cpo", name: "CPO", title: "Chief Product Officer", description: "Product" }],
 }));
 vi.mock("../server/domain-router", () => ({ routeMessage: vi.fn() }));
