@@ -73,7 +73,7 @@ This roadmap was reviewed by CTO, CLO, CFO, and CMO before finalization.
 |-----------|--------|
 | Phase 1 (Close the Loop) | Complete. Milestone closed. All 15 issues closed. |
 | Phase 2 (Secure for Beta) | Complete. Milestone closed. All 20 issues closed (including #1375). |
-| Phase 3 (Make it Sticky) | In progress. 11 open, 2 closed. |
+| Phase 3 (Make it Sticky) | In progress. 12 open, 2 closed. |
 | Phase 4 (Validate + Scale) | Not started. 18 open, 9 closed. |
 | Phase 5 (Desktop Native App) | Defined. 5 issues created (#1423-#1429). Trigger-gated on user demand. |
 | Post-MVP / Later | 56 open, 75 closed. |
@@ -191,7 +191,8 @@ This roadmap was reviewed by CTO, CLO, CFO, and CMO before finalization.
 | 3.13 | Subscription management (cancel, upgrade/downgrade) | P1 | [#1078](https://github.com/jikig-ai/soleur/issues/1078) | Not started |
 | 3.14 | Invoice history + failed payment handling | P2 | [#1079](https://github.com/jikig-ai/soleur/issues/1079) | Not started |
 | 3.15 | Fix meta tags not rendering in production HTML (OG, canonical, Twitter cards) | P0 | [#1121](https://github.com/jikig-ai/soleur/issues/1121) | Done |
-| 3.16 | Start Fresh onboarding — guided first-run with foundation cards (vision, brand, validation, legal) | P1 | [#1751](https://github.com/jikig-ai/soleur/issues/1751) | Not started |
+| 3.16 | Start Fresh onboarding — guided first-run with foundation cards (vision, brand, validation, legal) | P1 | [#1751](https://github.com/jikig-ai/soleur/issues/1751) | Done |
+| 3.17 | Post-connect sync proposal and project status report | P1 | [#1772](https://github.com/jikig-ai/soleur/issues/1772) | Plan complete |
 
 **Why 3.1-3.2 matter:** The knowledge base is the compounding moat. If founders cannot see plans, brainstorms, brand guides, and competitive analyses their agents produced, the value is invisible. The KB viewer closes the review loop.
 
