@@ -4,14 +4,16 @@ Source plan: `knowledge-base/project/plans/2026-04-10-feat-soleur-branded-leader
 
 ## Phase 1: Setup
 
-- [ ] 1.1 Copy logo asset from `plugins/soleur/docs/images/logo-mark-512.png` to `apps/web-platform/public/icons/soleur-logo-mark.png`
+- [ ] 1.1 Resize logo from 512px to 64px using Pillow and copy to `apps/web-platform/public/icons/soleur-logo-mark.png`
+  - Command: `python3 -c "from PIL import Image; img = Image.open('plugins/soleur/docs/images/logo-mark-512.png'); img.resize((64, 64), Image.LANCZOS).save('apps/web-platform/public/icons/soleur-logo-mark.png')"`
 
 ## Phase 2: Core Implementation
 
-- [ ] 2.1 Modify `LeaderBadge` component in `apps/web-platform/components/inbox/conversation-row.tsx` to render an `<img>` tag with the Soleur logo instead of uppercase leader ID text
-- [ ] 2.2 Apply brand accent background color `#C9A962` via inline style (Tailwind v4 -- no config file to extend)
-- [ ] 2.3 Add appropriate padding so the logo does not touch badge edges
-- [ ] 2.4 Add `alt="Soleur"` to the image for accessibility
+- [ ] 2.1 Modify `LeaderBadge` in `apps/web-platform/components/inbox/conversation-row.tsx` to render `<img>` with `src="/icons/soleur-logo-mark.png"` and `object-fit: cover` with `rounded-md`
+- [ ] 2.2 No background color needed -- logo has built-in dark `#0A0A0A` background with gold accents (remove any bg color class)
+- [ ] 2.3 Add `aria-label` to badge element combining "Soleur" with leader ID; set `alt=""` on image (decorative)
+- [ ] 2.4 Remove `LEADER_BG_COLORS` import from conversation-row.tsx (dead import after change)
+- [ ] 2.5 Add `width` and `height` attributes to `<img>` to prevent layout shift on load failure
 
 ## Phase 3: Verification
 
