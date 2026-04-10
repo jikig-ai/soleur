@@ -87,8 +87,8 @@ export async function POST(request: Request) {
   return NextResponse.json({ token, url: `/shared/${token}` }, { status: 201 });
 }
 
-/** GET — list all share links for the authenticated user. */
-export async function GET() {
+/** GET — list share links for the authenticated user, optionally filtered by documentPath. */
+export async function GET(request: Request) {
   const supabase = await createClient();
   const {
     data: { user },
@@ -98,11 +98,20 @@ export async function GET() {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
+  const { searchParams } = new URL(request.url);
+  const documentPath = searchParams.get("documentPath");
+
   const serviceClient = createServiceClient();
-  const { data: shares, error } = await serviceClient
+  let query = serviceClient
     .from("kb_share_links")
     .select("token, document_path, created_at, revoked")
-    .eq("user_id", user.id)
+    .eq("user_id", user.id);
+
+  if (documentPath) {
+    query = query.eq("document_path", documentPath);
+  }
+
+  const { data: shares, error } = await query
     .order("created_at", { ascending: false });
 
   if (error) {
