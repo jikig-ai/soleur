@@ -13,7 +13,9 @@ severity: info
 
 Porting 44 GREEN agents from Claude Code nested directory structure (`plugins/soleur/agents/<domain>/<subdomain>/<name>.md`) to OpenHands flat plugin format (`plugins/soleur/.openhands-plugin/agents/<name>.md`). Needed to transform frontmatter while preserving body content exactly.
 
-## Solution
+> **Superseded:** The `.openhands-plugin/agents/` format was an intermediate step. All 63 agents were migrated to `.openhands/skills/<name>/SKILL.md` (the official OpenHands extensions structure) — see the `refactor-openhands-skills` branch. In OpenHands, "agents" become "skills" (contextual instructions loaded via keyword triggers, not spawnable sub-agents). The `tools` and `model` frontmatter fields were removed; `triggers` was added.
+
+## Solution (historical — `.openhands-plugin/agents/` format)
 
 1. **Directory structure:** OpenHands plugins use `.plugin/plugin.json` manifest + flat `agents/*.md` directory (no nesting)
 2. **Frontmatter changes:** Add `tools:` field (OpenHands requires explicit tool declaration), remove Claude Code-specific fields (`stack`, `color`), keep `model: inherit`
@@ -25,6 +27,8 @@ Porting 44 GREEN agents from Claude Code nested directory structure (`plugins/so
 OpenHands agents are structurally simpler than Claude Code agents: flat directory, explicit tool list, no domain-based nesting. The simplification is a feature — `load_agents_from_dir()` scans a single directory. Agent names must be globally unique (no domain namespace), which was already true for all 44 Soleur agents.
 
 The `tools: [terminal, file_editor]` pair covers most agent needs because `terminal` subsumes git, curl, grep, semgrep, and gh CLI. Only agents that spawn sub-agents need `delegate` (YELLOW agents, not in this batch).
+
+The final `.openhands/skills/` format is even simpler: each skill is a `SKILL.md` file in its own directory with `name`, `description`, and `triggers` frontmatter. No `tools` or `model` fields — skills are contextual instructions, not autonomous agents.
 
 ## Pitfall: Bash Markdown Transformation
 

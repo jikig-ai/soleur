@@ -23,7 +23,7 @@ from openhands.sdk import load_agents_from_dir
 from openhands.sdk.subagent import register_file_agents
 
 # load_agents_from_dir(Path) returns List[AgentDefinition]
-# register_file_agents(project_root) discovers .agents/agents/*.md
+# register_file_agents(project_root) discovers .openhands/agents/*.md
 ```
 
 **AgentDefinition fields** (from `openhands.sdk.subagent.schema`):
@@ -140,7 +140,7 @@ from openhands.sdk import load_skills_from_dir
 # Keyword skills keyed by skill name
 ```
 
-Skills load from `.agents/skills/*/SKILL.md` with YAML frontmatter. Keyword trigger matching confirmed.
+Skills load from `.openhands/skills/*/SKILL.md` with YAML frontmatter. Keyword trigger matching confirmed.
 
 ---
 
