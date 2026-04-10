@@ -68,7 +68,7 @@
 - [x] 6.2 Write tests for billing page cost list
   - Verify list renders conversations with costs
   - Verify empty state when no conversations
-- [ ] 6.3 Browser verification
+- [x] 6.3 Browser verification
   - Navigate to /dashboard/billing, verify cost list below subscription card
   - Start conversation, verify cost indicator in status bar after first turn
   - Test on mobile viewport

@@ -208,19 +208,19 @@ Empty state: "No API usage yet. Conversations will appear here with their costs.
 
 ### Functional Requirements
 
-- [ ] Per-conversation cost captured from SDK result and stored in `conversations` table via atomic increment (`agent-runner.ts`)
-- [ ] `usage_update` WebSocket message sent to client after each agent turn
-- [ ] Live cost indicator visible in conversation UI during active conversations
-- [ ] Billing page shows conversation cost list (flat list, most recent first)
-- [ ] All cost figures labeled as "estimated"
-- [ ] Works on mobile viewport (PWA)
+- [x] Per-conversation cost captured from SDK result and stored in `conversations` table via atomic increment (`agent-runner.ts`)
+- [x] `usage_update` WebSocket message sent to client after each agent turn
+- [x] Live cost indicator visible in conversation UI during active conversations
+- [x] Billing page shows conversation cost list (flat list, most recent first)
+- [x] All cost figures labeled as "estimated"
+- [x] Works on mobile viewport (PWA)
 
 ### Non-Functional Requirements
 
-- [ ] Cost tracking does not block conversation flow (non-blocking error handling)
-- [ ] New migration is forward-only (no down migration)
-- [ ] RLS enforced — users see only their own cost data
-- [ ] No raw error messages exposed to client via WebSocket
+- [x] Cost tracking does not block conversation flow (non-blocking error handling)
+- [x] New migration is forward-only (no down migration)
+- [x] RLS enforced — users see only their own cost data
+- [x] No raw error messages exposed to client via WebSocket
 
 ## Domain Review
 
