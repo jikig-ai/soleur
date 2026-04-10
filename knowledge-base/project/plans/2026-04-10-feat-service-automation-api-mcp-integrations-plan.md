@@ -488,9 +488,9 @@ This creates a virtuous cycle: the first time is guided, subsequent interactions
 
 - [x] Unit tests for all Plausible API tool wrappers
 - [x] Integration test for token retrieval + tool registration flow
-- [ ] TypeScript strict mode passes
-- [ ] No new `any` types introduced
-- [ ] Markdownlint passes on all changed `.md` files
+- [x] TypeScript strict mode passes
+- [x] No new `any` types introduced
+- [x] Markdownlint passes on all changed `.md` files
 
 ## Test Scenarios
 

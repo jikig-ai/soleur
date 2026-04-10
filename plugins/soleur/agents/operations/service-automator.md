@@ -1,6 +1,6 @@
 ---
 name: service-automator
-description: "Use this agent when you need to provision or configure third-party services via API or MCP tools. Use ops-provisioner for manual SaaS setup via browser; use this agent for API/MCP-driven service provisioning."
+description: "Use this agent when you need to provision third-party services via API or MCP tools. Use ops-provisioner for browser-based SaaS setup."
 model: inherit
 ---
 

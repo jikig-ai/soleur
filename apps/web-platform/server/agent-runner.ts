@@ -514,7 +514,8 @@ When you need user input for important decisions, use the AskUserQuestion tool.`
           },
         );
 
-        const platformTools = [createPr];
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any -- SDK uses any for heterogeneous tool arrays
+        const platformTools: Array<ReturnType<typeof tool<any>>> = [createPr];
         platformToolNames = ["mcp__soleur_platform__create_pull_request"];
 
         // Conditionally register Plausible tools when user has a stored API key.
