@@ -9,7 +9,7 @@ import { ErrorCard } from "@/components/ui/error-card";
 import { STATUS_LABELS } from "@/lib/types";
 import type { ConversationStatus } from "@/lib/types";
 import type { DomainLeaderId } from "@/server/domain-leaders";
-import { DOMAIN_LEADERS } from "@/server/domain-leaders";
+import { DOMAIN_LEADERS, ROUTABLE_DOMAIN_LEADERS } from "@/server/domain-leaders";
 import { LEADER_BG_COLORS } from "@/components/chat/leader-colors";
 
 // ---------------------------------------------------------------------------
@@ -87,7 +87,7 @@ const STATUS_OPTIONS: { value: ConversationStatus | ""; label: string }[] = [
 const DOMAIN_OPTIONS: { value: string; label: string }[] = [
   { value: "", label: "All domains" },
   { value: "general", label: "General" },
-  ...DOMAIN_LEADERS.map((l) => ({ value: l.id, label: l.name })),
+  ...ROUTABLE_DOMAIN_LEADERS.map((l) => ({ value: l.id, label: l.name })),
 ];
 
 export default function DashboardPage() {
@@ -394,7 +394,7 @@ export default function DashboardPage() {
               <div className="flex gap-1">
                 {prompt.leaders.map((id) => (
                   <span key={id} className="text-xs text-neutral-500">
-                    {DOMAIN_LEADERS.find((l) => l.id === id)?.name}
+                    {ROUTABLE_DOMAIN_LEADERS.find((l) => l.id === id)?.name}
                   </span>
                 ))}
               </div>
@@ -532,7 +532,7 @@ function LeaderStrip({ onLeaderClick }: { onLeaderClick: (leaderId: string) => v
         YOUR ORGANIZATION
       </p>
       <div className="flex flex-wrap justify-center gap-3">
-        {DOMAIN_LEADERS.map((leader) => (
+        {ROUTABLE_DOMAIN_LEADERS.map((leader) => (
           <button
             key={leader.id}
             type="button"
