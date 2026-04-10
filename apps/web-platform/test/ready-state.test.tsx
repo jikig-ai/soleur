@@ -286,11 +286,12 @@ describe("ReadyState — health snapshot", () => {
       />,
     );
 
-    // kbExists is false, so the CTA should say something about reviewing/creating KB
-    const kbButton = screen.getByRole("button", {
+    // kbExists is false, so the CTA should link to KB
+    const kbLink = screen.getByRole("link", {
       name: /review knowledge base/i,
     });
-    expect(kbButton).toBeInTheDocument();
+    expect(kbLink).toBeInTheDocument();
+    expect(kbLink).toHaveAttribute("href", "/dashboard/kb");
   });
 
   it('renders "Open Command Center" and "Review Knowledge Base" CTAs together', async () => {
@@ -307,7 +308,7 @@ describe("ReadyState — health snapshot", () => {
       screen.getByRole("button", { name: /open command center/i }),
     ).toBeInTheDocument();
     expect(
-      screen.getByRole("button", { name: /review knowledge base/i }),
+      screen.getByRole("link", { name: /review knowledge base/i }),
     ).toBeInTheDocument();
   });
 });

@@ -176,13 +176,12 @@ export function ReadyState({
       {/* CTAs */}
       <div className="flex items-center justify-center gap-3">
         <GoldButton onClick={onContinue}>Open Command Center</GoldButton>
-        <button
-          type="button"
-          onClick={onContinue}
-          className="rounded-lg border border-neutral-700 px-6 py-3 text-sm font-medium text-neutral-300 transition-colors hover:border-neutral-600 hover:text-neutral-100"
+        <Link
+          href="/dashboard/kb"
+          className="inline-block rounded-lg border border-neutral-700 px-6 py-3 text-sm font-medium text-neutral-300 transition-colors hover:border-neutral-600 hover:text-neutral-100"
         >
           Review Knowledge Base
-        </button>
+        </Link>
       </div>
     </div>
   );

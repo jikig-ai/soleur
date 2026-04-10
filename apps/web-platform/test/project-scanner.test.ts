@@ -158,9 +158,8 @@ describe("scanProjectHealth", () => {
     expect(result.kbExists).toBe(false);
   });
 
-  // 6. Recommendations array has exactly 3 entries
-  it("returns exactly 3 recommendations", () => {
-    // With 4 missing signals, still exactly 3 recommendations (top-3 priority)
+  // 6. Recommendations: top 3 from missing signals, or fewer if < 3 missing
+  it("returns at most 3 recommendations when 4+ signals are missing", () => {
     setupFs([
       `${WORKSPACE}/package.json`,
       `${WORKSPACE}/README.md`,
@@ -173,7 +172,7 @@ describe("scanProjectHealth", () => {
     expect(result.recommendations).toHaveLength(3);
   });
 
-  it("returns exactly 3 recommendations even when all signals are missing", () => {
+  it("returns 3 recommendations when all signals are missing", () => {
     setupFs([]);
 
     const result = scanProjectHealth(WORKSPACE);
@@ -181,14 +180,13 @@ describe("scanProjectHealth", () => {
     expect(result.recommendations).toHaveLength(3);
   });
 
-  it("returns exactly 3 recommendations when only 1 signal is missing", () => {
-    // 7 signals present, 1 missing — still returns exactly 3 (may pad with general advice)
+  it("returns 1 recommendation when only 1 signal is missing", () => {
     const paths = allSignalPaths().slice(0, 7); // drop knowledge-base
     setupFs(paths);
 
     const result = scanProjectHealth(WORKSPACE);
 
-    expect(result.recommendations).toHaveLength(3);
+    expect(result.recommendations).toHaveLength(1);
   });
 
   // 7. scannedAt is a valid ISO date string

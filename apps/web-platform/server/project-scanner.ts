@@ -102,12 +102,6 @@ const SIGNAL_DEFINITIONS: SignalDefinition[] = [
   },
 ];
 
-const GENERAL_RECOMMENDATIONS = [
-  "Run the deep analysis to get a full assessment of the project's conventions and patterns.",
-  "Review the Knowledge Base after analysis completes for actionable recommendations.",
-  "Consider adding automated quality checks to the development workflow.",
-];
-
 function detectSignal(
   workspacePath: string,
   signal: SignalDefinition,
@@ -137,17 +131,7 @@ export function scanProjectHealth(workspacePath: string): ProjectHealthSnapshot 
     }
   }
 
-  const recommendations: string[] = [];
-  for (let i = 0; i < 3; i++) {
-    if (i < missingRecommendations.length) {
-      recommendations.push(missingRecommendations[i]);
-    } else {
-      recommendations.push(
-        GENERAL_RECOMMENDATIONS[i - missingRecommendations.length] ??
-          GENERAL_RECOMMENDATIONS[GENERAL_RECOMMENDATIONS.length - 1],
-      );
-    }
-  }
+  const recommendations = missingRecommendations.slice(0, 3);
 
   const kbExists = fs.existsSync(path.join(workspacePath, "knowledge-base"));
 
