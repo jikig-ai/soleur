@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback, useMemo, Component } from "react";
 import type { ReactNode } from "react";
+import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { KbContext } from "@/components/kb/kb-context";
 import type { KbContextValue } from "@/components/kb/kb-context";
@@ -238,12 +239,12 @@ function NoProjectState() {
           Connect a GitHub project so your AI team can build your knowledge
           base with plans, specs, and analyses.
         </p>
-        <a
+        <Link
           href="/connect-repo?return_to=/dashboard/kb"
           className="inline-flex items-center gap-2 rounded-lg bg-gradient-to-r from-amber-600 to-amber-500 px-5 py-2.5 text-sm font-medium text-neutral-950 transition-opacity hover:opacity-90"
         >
           Set Up Project
-        </a>
+        </Link>
       </div>
     </div>
   );
@@ -277,7 +278,7 @@ function EmptyState() {
           plans, specs, brand guides, and competitive analyses that appear here
           automatically.
         </p>
-        <a
+        <Link
           href="/dashboard/chat/new"
           className="inline-flex items-center gap-2 rounded-lg bg-gradient-to-r from-amber-600 to-amber-500 px-5 py-2.5 text-sm font-medium text-neutral-950 transition-opacity hover:opacity-90"
         >
@@ -285,7 +286,7 @@ function EmptyState() {
             <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2Z" strokeLinecap="round" strokeLinejoin="round" />
           </svg>
           Open a Chat
-        </a>
+        </Link>
       </div>
     </div>
   );
