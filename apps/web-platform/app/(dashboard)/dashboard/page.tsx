@@ -199,6 +199,14 @@ export default function DashboardPage() {
       const message = input?.value?.trim();
       if (!message) return;
       completeOnboarding();
+
+      // Create vision.md server-side from the typed idea (fire-and-forget)
+      fetch("/api/vision", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ content: message }),
+      }).catch(() => { /* non-blocking — agent will create via tryCreateVision fallback */ });
+
       const params = new URLSearchParams();
       params.set("msg", message);
       router.push(`/dashboard/chat/new?${params.toString()}`);
