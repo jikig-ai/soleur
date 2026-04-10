@@ -1,18 +1,26 @@
 ---
 title: "Acceptable Use Policy"
-type: acceptable-use-policy
-jurisdiction: FR, EU
-generated-date: 2026-02-20
-last-updated: 2026-04-10
+description: "Permitted and prohibited uses of the Soleur platform."
+layout: base.njk
+permalink: legal/acceptable-use-policy/
 ---
 
-# Acceptable Use Policy
+<section class="page-hero">
+  <div class="container">
+    <h1>Acceptable Use Policy</h1>
+    <p>Effective February 20, 2026 | Last Updated March 29, 2026</p>
+  </div>
+</section>
+
+<section class="content">
+  <div class="container">
+    <div class="prose">
 
 **Soleur -- Company-as-a-Service Platform**
 
 **Effective Date:** February 20, 2026
 
-**Last Updated:** April 10, 2026
+**Last Updated:** March 29, 2026
 
 ---
 
@@ -30,7 +38,7 @@ This Policy applies to all users globally, with specific provisions addressing c
 
 This Policy applies to all use of the Soleur platform, including but not limited to:
 
-- Interaction with Soleur's 45 AI agents and 45 skills;
+- Interaction with Soleur's {{ stats.agents }} AI agents and {{ stats.skills }} skills;
 - Execution of shell commands, code generation, and file manipulation through agents;
 - Browser automation via the agent-browser subsystem;
 - API interactions initiated by or through Soleur agents;
@@ -118,14 +126,14 @@ You must not:
 
 ### 4.6 Shared Content
 
-The Web Platform allows you to share knowledge base documents via public links. When using this feature, you must not:
+When sharing knowledge base documents via the Web Platform's public link feature, you must not share documents that:
 
-- (a) Share documents containing confidential or proprietary information belonging to third parties without authorization from the information owner;
-- (b) Share documents containing personally identifiable information (PII) of third parties without their explicit consent or another lawful basis under applicable data protection law;
-- (c) Share documents containing material that infringes the intellectual property rights of any third party, including copyrighted content, trade secrets, or proprietary methodologies; or
-- (d) Use the sharing feature to distribute content that would otherwise violate Section 4.2 (Harmful or Illegal Content) of this Policy.
+- (a) Contain confidential or proprietary information belonging to third parties without their authorization;
+- (b) Include personally identifiable information (PII) of third parties without their explicit consent;
+- (c) Contain material that infringes any third party's copyright, trademark, or other intellectual property rights; or
+- (d) Contain harmful, illegal, defamatory, or misleading content.
 
-You are solely responsible for reviewing document content before sharing. Jikigai does not pre-screen shared content and is not liable for content you choose to make publicly accessible.
+You are solely responsible for reviewing document content before sharing. Jikigai does not pre-screen shared content. Violation of this section may result in share link revocation and account suspension under Section 6.
 
 <!-- End: KB sharing -->
 
@@ -262,3 +270,7 @@ For questions about this Policy, please contact us through:
 > **Related documents:** This Acceptable Use Policy references data protection practices and obligations. Consider generating companion **Privacy Policy**, **GDPR Policy**, and **Terms and Conditions** documents to ensure consistency. If Soleur processes personal data on behalf of users in a controller-processor relationship, a **Data Protection Disclosure** may also be appropriate.
 
 ---
+
+    </div>
+  </div>
+</section>
