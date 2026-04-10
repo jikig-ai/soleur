@@ -7,7 +7,8 @@
 // ---------------------------------------------------------------------------
 
 import { execFileSync } from "child_process";
-import { unlinkSync, writeFileSync } from "fs";
+import { readdirSync, unlinkSync, writeFileSync } from "fs";
+import { join } from "path";
 import { createServiceClient } from "@/lib/supabase/service";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { generateInstallationToken, randomCredentialPath } from "./github-app";
@@ -103,6 +104,72 @@ async function getInstallationId(userId: string): Promise<number | null> {
   }
 
   return data.github_installation_id;
+}
+
+/**
+ * Recursively count .md files in a directory.
+ * Returns 0 if the directory does not exist.
+ */
+export function countMdFiles(dirPath: string): number {
+  let count = 0;
+  try {
+    const entries = readdirSync(dirPath, { withFileTypes: true });
+    for (const entry of entries) {
+      const fullPath = join(dirPath, entry.name);
+      if (entry.isDirectory()) {
+        count = count + countMdFiles(fullPath);
+      } else if (entry.isFile() && entry.name.endsWith(".md")) {
+        count = count + 1;
+      }
+    }
+  } catch {
+    // Directory does not exist or is not readable
+  }
+  return count;
+}
+
+/**
+ * Record the current KB file count in the user's kb_sync_history JSONB array.
+ * Trims to the last 14 entries. Best-effort — failures are logged, never thrown.
+ */
+async function recordKbSyncHistory(
+  userId: string,
+  workspacePath: string,
+): Promise<void> {
+  const supabase = getSupabase();
+  if (!supabase) return;
+
+  const kbPath = join(workspacePath, "knowledge-base");
+  const fileCount = countMdFiles(kbPath);
+
+  const { data: user, error: fetchError } = await supabase
+    .from("users")
+    .select("kb_sync_history")
+    .eq("id", userId)
+    .single();
+
+  if (fetchError || !user) {
+    log.warn({ err: fetchError, userId }, "Failed to fetch kb_sync_history");
+    return;
+  }
+
+  const history = Array.isArray(user.kb_sync_history)
+    ? (user.kb_sync_history as Array<{ date: string; count: number }>)
+    : [];
+
+  const today = new Date().toISOString().slice(0, 10);
+  const updated = [...history, { date: today, count: fileCount }].slice(-14);
+
+  const { error: updateError } = await supabase
+    .from("users")
+    .update({ kb_sync_history: updated })
+    .eq("id", userId);
+
+  if (updateError) {
+    log.warn({ err: updateError, userId }, "Failed to update kb_sync_history");
+  } else {
+    log.debug({ userId, fileCount }, "Recorded KB sync history");
+  }
 }
 
 async function updateLastSynced(userId: string): Promise<void> {
@@ -247,6 +314,13 @@ export async function syncPush(
       ],
       { cwd: workspacePath, stdio: "pipe", timeout: 60_000 },
     );
+
+    // Best-effort: record KB file count for analytics sparklines
+    try {
+      await recordKbSyncHistory(userId, workspacePath);
+    } catch (err) {
+      log.warn({ err, userId }, "KB sync history recording failed");
+    }
 
     await updateLastSynced(userId);
     log.info({ userId }, "Sync push completed");

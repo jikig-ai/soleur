@@ -16,16 +16,35 @@ export interface WebSocketError {
   };
 }
 
-interface ChatMessage {
+interface ChatMessageBase {
   id: string;
   role: "user" | "assistant";
   content: string;
-  type: "text" | "review_gate";
   leaderId?: DomainLeaderId;
-  /** Present only when type === "review_gate" */
-  gateId?: string;
-  question?: string;
-  options?: string[];
+}
+
+interface ChatTextMessage extends ChatMessageBase {
+  type: "text";
+}
+
+interface ChatGateMessage extends ChatMessageBase {
+  type: "review_gate";
+  gateId: string;
+  question: string;
+  options: string[];
+  header?: string;
+  descriptions?: Record<string, string | undefined>;
+  resolved?: boolean;
+  selectedOption?: string;
+  gateError?: string;
+}
+
+type ChatMessage = ChatTextMessage | ChatGateMessage;
+
+export interface UsageData {
+  totalCostUsd: number;
+  inputTokens: number;
+  outputTokens: number;
 }
 
 interface UseWebSocketReturn {
@@ -40,6 +59,7 @@ interface UseWebSocketReturn {
   reconnect: () => void;
   routeSource: "auto" | "mention" | null;
   activeLeaderIds: DomainLeaderId[];
+  usageData: UsageData | null;
 }
 
 const MAX_BACKOFF = 30_000;
@@ -64,6 +84,7 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
   const [routeSource, setRouteSource] = useState<"auto" | "mention" | null>(null);
   const [activeLeaderIds, setActiveLeaderIds] = useState<DomainLeaderId[]>([]);
   const [sessionConfirmed, setSessionConfirmed] = useState(false);
+  const [usageData, setUsageData] = useState<UsageData | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const backoffRef = useRef(INITIAL_BACKOFF);
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
@@ -103,6 +124,7 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
   const connect = useCallback(async () => {
     if (!mountedRef.current) return;
     setSessionConfirmed(false);
+    setUsageData(null);
 
     // Clean up any existing connection
     if (wsRef.current) {
@@ -218,6 +240,8 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
               gateId: msg.gateId,
               question: msg.question,
               options: msg.options,
+              header: msg.header,
+              descriptions: msg.descriptions,
             },
           ]);
           break;
@@ -242,6 +266,16 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
               code: "rate_limited",
               message: "You've been rate limited. Please wait before trying again.",
             });
+          }
+
+          // Route gateId-targeted errors to the review gate message
+          if (msg.gateId) {
+            setMessages((prev) => prev.map((m) =>
+              m.type === "review_gate" && m.gateId === msg.gateId
+                ? { ...m, gateError: msg.message, resolved: false, selectedOption: undefined }
+                : m,
+            ));
+            break;
           }
 
           setMessages((prev) => [
@@ -275,6 +309,15 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
 
         case "session_started": {
           setSessionConfirmed(true);
+          break;
+        }
+
+        case "usage_update": {
+          setUsageData((prev) => ({
+            totalCostUsd: (prev?.totalCostUsd ?? 0) + msg.totalCostUsd,
+            inputTokens: (prev?.inputTokens ?? 0) + msg.inputTokens,
+            outputTokens: (prev?.outputTokens ?? 0) + msg.outputTokens,
+          }));
           break;
         }
 
@@ -410,6 +453,12 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
   const sendReviewGateResponse = useCallback(
     (gateId: string, selection: string) => {
       send({ type: "review_gate_response", gateId, selection });
+      // Optimistically mark as resolved
+      setMessages((prev) => prev.map((m) =>
+        m.type === "review_gate" && m.gateId === gateId
+          ? { ...m, resolved: true, selectedOption: selection, gateError: undefined }
+          : m,
+      ));
     },
     [send],
   );
@@ -422,5 +471,5 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
     connect();
   }, [connect]);
 
-  return { messages, startSession, sendMessage, sendReviewGateResponse, status, sessionConfirmed, disconnectReason, lastError, reconnect, routeSource, activeLeaderIds };
+  return { messages, startSession, sendMessage, sendReviewGateResponse, status, sessionConfirmed, disconnectReason, lastError, reconnect, routeSource, activeLeaderIds, usageData };
 }

@@ -1,10 +1,22 @@
 "use client";
 
-import { useState, useEffect, useCallback, useMemo, Component } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import type { ReactNode } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { KbContext } from "@/components/kb/kb-context";
 import type { KbContextValue } from "@/components/kb/kb-context";
+import { FileTree } from "@/components/kb/file-tree";
+import { SearchOverlay } from "@/components/kb/search-overlay";
+import { getAncestorPaths } from "@/components/kb/get-ancestor-paths";
+import {
+  DesktopPlaceholder,
+  EmptyState,
+  KbErrorBoundary,
+  LoadingSkeleton,
+  NoProjectState,
+  UnknownError,
+  WorkspaceNotReady,
+} from "@/components/kb";
 import type { TreeNode } from "@/server/kb-reader";
 
 export default function KbLayout({ children }: { children: ReactNode }) {
@@ -67,6 +79,28 @@ export default function KbLayout({ children }: { children: ReactNode }) {
     });
   }, []);
 
+  // Auto-expand ancestor directories when navigating to a file
+  useEffect(() => {
+    if (!pathname.startsWith("/dashboard/kb/") || pathname === "/dashboard/kb") {
+      return;
+    }
+    const relativePath = decodeURIComponent(pathname.slice("/dashboard/kb/".length));
+    const ancestors = getAncestorPaths(relativePath);
+    if (ancestors.length === 0) return;
+
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      let changed = false;
+      for (const dir of ancestors) {
+        if (!next.has(dir)) {
+          next.add(dir);
+          changed = true;
+        }
+      }
+      return changed ? next : prev;
+    });
+  }, [pathname]);
+
   const isContentView = pathname !== "/dashboard/kb";
   const hasTreeContent = tree?.children && tree.children.length > 0;
 
@@ -82,7 +116,11 @@ export default function KbLayout({ children }: { children: ReactNode }) {
   if (loading || error || (!loading && !hasTreeContent)) {
     return (
       <KbContext value={ctxValue}>
-        {children}
+        {loading && <LoadingSkeleton />}
+        {error === "workspace-not-ready" && <WorkspaceNotReady />}
+        {error === "not-found" && <NoProjectState />}
+        {error === "unknown" && <UnknownError />}
+        {!loading && !error && !hasTreeContent && <EmptyState />}
       </KbContext>
     );
   }
@@ -97,8 +135,19 @@ export default function KbLayout({ children }: { children: ReactNode }) {
             isContentView ? "hidden" : "block"
           }`}
         >
-          {/* page.tsx renders here when at /dashboard/kb */}
-          {!isContentView && children}
+          <div className="flex h-full flex-col">
+            <header className="shrink-0 px-4 pb-3 pt-4">
+              <h1 className="font-serif text-lg font-medium tracking-tight text-white">
+                Knowledge Base
+              </h1>
+            </header>
+            <div className="shrink-0 px-3 pb-3">
+              <SearchOverlay />
+            </div>
+            <div className="flex-1 overflow-y-auto px-2 pb-4">
+              <FileTree />
+            </div>
+          </div>
         </aside>
 
         {/* Content area — visible on desktop always, on mobile only when viewing content */}
@@ -114,64 +163,4 @@ export default function KbLayout({ children }: { children: ReactNode }) {
       </div>
     </KbContext>
   );
-}
-
-function DesktopPlaceholder() {
-  return (
-    <div className="hidden h-full items-center justify-center md:flex">
-      <div className="text-center">
-        <svg
-          width="48"
-          height="48"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="1"
-          className="mx-auto mb-3 text-neutral-600"
-        >
-          <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z" strokeLinecap="round" strokeLinejoin="round" />
-          <path d="M14 2v6h6" strokeLinecap="round" strokeLinejoin="round" />
-        </svg>
-        <p className="text-sm text-neutral-500">Select a file to view</p>
-        <p className="mt-1 text-xs text-neutral-600">
-          Choose a file from the sidebar to preview its contents
-        </p>
-      </div>
-    </div>
-  );
-}
-
-class KbErrorBoundary extends Component<
-  { children: ReactNode },
-  { hasError: boolean }
-> {
-  constructor(props: { children: ReactNode }) {
-    super(props);
-    this.state = { hasError: false };
-  }
-
-  static getDerivedStateFromError() {
-    return { hasError: true };
-  }
-
-  render() {
-    if (this.state.hasError) {
-      return (
-        <div className="flex h-full items-center justify-center">
-          <div className="text-center">
-            <p className="text-sm text-neutral-400">
-              Something went wrong loading this content.
-            </p>
-            <button
-              onClick={() => this.setState({ hasError: false })}
-              className="mt-2 text-sm text-amber-400 underline hover:text-amber-300"
-            >
-              Try again
-            </button>
-          </div>
-        </div>
-      );
-    }
-    return this.props.children;
-  }
 }

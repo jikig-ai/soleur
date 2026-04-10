@@ -25,12 +25,14 @@ const {
   mockSendToClient,
   mockAbortableReviewGate,
   mockLogInfo,
+  mockReadFileSync,
 } = vi.hoisted(() => ({
   mockFrom: vi.fn(),
   mockQuery: vi.fn(),
   mockSendToClient: vi.fn(),
   mockAbortableReviewGate: vi.fn(),
   mockLogInfo: vi.fn(),
+  mockReadFileSync: vi.fn(),
 }));
 
 // ---------------------------------------------------------------------------
@@ -48,6 +50,11 @@ vi.mock("@anthropic-ai/claude-agent-sdk", () => ({
     instance: { tools: opts.tools },
   })),
 }));
+
+vi.mock("fs", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("fs")>();
+  return { ...actual, readFileSync: mockReadFileSync };
+});
 
 vi.mock("@supabase/supabase-js", () => ({
   createClient: vi.fn(() => ({ from: mockFrom })),
@@ -86,9 +93,10 @@ vi.mock("../server/review-gate", () => ({
   MAX_SELECTION_LENGTH: 200,
   REVIEW_GATE_TIMEOUT_MS: 300_000,
 }));
-vi.mock("../server/domain-leaders", () => ({
-  DOMAIN_LEADERS: [{ id: "cpo", name: "CPO", title: "Chief Product Officer", description: "Product" }],
-}));
+vi.mock("../server/domain-leaders", () => {
+  const leaders = [{ id: "cpo", name: "CPO", title: "Chief Product Officer", description: "Product" }];
+  return { DOMAIN_LEADERS: leaders, ROUTABLE_DOMAIN_LEADERS: leaders };
+});
 vi.mock("../server/domain-router", () => ({ routeMessage: vi.fn() }));
 vi.mock("../server/session-sync", () => ({
   syncPull: vi.fn(),
@@ -99,6 +107,11 @@ vi.mock("../server/github-api", () => ({
   githubApiGetText: vi.fn().mockResolvedValue(""),
   githubApiPost: vi.fn().mockResolvedValue(null),
 }));
+vi.mock("../server/service-tools", () => ({
+  plausibleCreateSite: vi.fn(),
+  plausibleAddGoal: vi.fn(),
+  plausibleGetStats: vi.fn(),
+}));
 
 import { startAgentSession } from "../server/agent-runner";
 
@@ -106,31 +119,33 @@ import { startAgentSession } from "../server/agent-runner";
 // Helpers
 // ---------------------------------------------------------------------------
 
+const DEFAULT_API_KEY_ROW = {
+  id: "key-1",
+  provider: "anthropic",
+  encrypted_key: Buffer.from("test").toString("base64"),
+  iv: Buffer.from("test-iv-1234").toString("base64"),
+  auth_tag: Buffer.from("test-tag-1234567").toString("base64"),
+  key_version: 2,
+};
+
+// Creates a chainable mock that supports both:
+// - getUserApiKey: select().eq().eq().eq().limit().single() -> { data, error }
+// - getUserServiceTokens: await select().eq().eq() -> { data, error }
+function createApiKeysMock(rows: Record<string, unknown>[] = [DEFAULT_API_KEY_ROW]) {
+  const createChain = (): Record<string, unknown> => ({
+    data: rows,
+    error: null,
+    eq: () => createChain(),
+    limit: () => ({ single: () => ({ data: rows[0] ?? null, error: null }) }),
+    then: (resolve: (v: unknown) => void) => resolve({ data: rows, error: null }),
+  });
+  return { select: () => createChain() };
+}
+
 function setupSupabaseMock(userData: Record<string, unknown>) {
   mockFrom.mockImplementation((table: string) => {
     if (table === "api_keys") {
-      return {
-        select: () => ({
-          eq: () => ({
-            eq: () => ({
-              eq: () => ({
-                limit: () => ({
-                  single: () => ({
-                    data: {
-                      id: "key-1",
-                      encrypted_key: Buffer.from("test").toString("base64"),
-                      iv: Buffer.from("test-iv-1234").toString("base64"),
-                      auth_tag: Buffer.from("test-tag-1234567").toString("base64"),
-                      key_version: 2,
-                    },
-                    error: null,
-                  }),
-                }),
-              }),
-            }),
-          }),
-        }),
-      };
+      return createApiKeysMock();
     }
     if (table === "users") {
       return {
@@ -199,6 +214,12 @@ async function getCanUseTool() {
 describe("canUseTool tiered gating (#1926)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockReadFileSync.mockImplementation((filePath: string) => {
+      if (String(filePath).includes("plugin.json")) {
+        return JSON.stringify({ mcpServers: {} });
+      }
+      throw new Error(`ENOENT: no such file ${filePath}`);
+    });
   });
 
   describe("gated tier", () => {

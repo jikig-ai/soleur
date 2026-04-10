@@ -5,7 +5,7 @@ import path from "path";
 import { z } from "zod/v4";
 
 import { createServiceClient } from "@/lib/supabase/service";
-import { DOMAIN_LEADERS, type DomainLeaderId } from "./domain-leaders";
+import { ROUTABLE_DOMAIN_LEADERS, type DomainLeaderId } from "./domain-leaders";
 import { routeMessage } from "./domain-router";
 import { KeyInvalidError } from "@/lib/types";
 import { decryptKey, decryptKeyLegacy, encryptKey } from "./byok";
@@ -18,10 +18,11 @@ import { buildAgentEnv } from "./agent-env";
 import { PROVIDER_CONFIG, EXCLUDED_FROM_SERVICES_UI } from "./providers";
 import type { Provider } from "@/lib/types";
 import { createSandboxHook } from "./sandbox-hook";
-import { abortableReviewGate, validateSelection, type AgentSession } from "./review-gate";
+import { abortableReviewGate, validateSelection, extractReviewGateInput, buildReviewGateResponse, type AgentSession } from "./review-gate";
 import { createChildLogger } from "./logger";
 import { syncPull, syncPush } from "./session-sync";
 import { createPullRequest } from "./github-app";
+import { plausibleCreateSite, plausibleAddGoal, plausibleGetStats } from "./service-tools";
 import { tryCreateVision, buildVisionEnhancementPrompt } from "./vision-helpers";
 import { getToolTier, buildGateMessage } from "./tool-tiers";
 import { readCiStatus, readWorkflowLogs } from "./ci-tools";
@@ -379,7 +380,7 @@ export async function startAgentSession(
 
     // Get leader config (default to CPO as general advisor if no leader specified)
     const effectiveLeaderId = leaderId ?? "cpo";
-    const leader = DOMAIN_LEADERS.find((l) => l.id === effectiveLeaderId);
+    const leader = ROUTABLE_DOMAIN_LEADERS.find((l) => l.id === effectiveLeaderId);
     if (!leader) throw new Error(`Unknown leader: ${effectiveLeaderId}`);
 
     // Get user workspace path, repo status, and GitHub App connection
@@ -395,6 +396,20 @@ export async function startAgentSession(
 
     const workspacePath = user.workspace_path;
     const pluginPath = path.join(workspacePath, "plugins", "soleur");
+
+    // Extract MCP server names from plugin.json for canUseTool allowlisting.
+    // Uses explicit server-name matching (not blanket mcp__ prefix).
+    // See learning: 2026-04-06-mcp-tool-canusertool-scope-allowlist.md
+    let pluginMcpServerNames: string[] = [];
+    try {
+      const pluginJsonPath = path.join(pluginPath, ".claude-plugin", "plugin.json");
+      const pluginJson = JSON.parse(readFileSync(pluginJsonPath, "utf-8"));
+      if (pluginJson.mcpServers && typeof pluginJson.mcpServers === "object") {
+        pluginMcpServerNames = Object.keys(pluginJson.mcpServers);
+      }
+    } catch {
+      // plugin.json may not exist in all workspaces; proceed without plugin MCP tools
+    }
 
     // Migrate existing workspaces: remove pre-approved permissions that
     // bypass canUseTool (see #725). Safe to run on every session start —
@@ -433,6 +448,19 @@ When you need user input for important decisions, use the AskUserQuestion tool.`
       if (enhancement) systemPrompt += enhancement;
     }
 
+    // Inject connected services context for service automation tier selection.
+    // The agent uses this to decide MCP vs API vs guided instructions.
+    // Map env var names to human-readable labels to avoid leaking internals.
+    if (Object.keys(serviceTokens).length > 0) {
+      const envVarToLabel = Object.fromEntries(
+        Object.values(PROVIDER_CONFIG).map((c) => [c.envVar, c.label]),
+      );
+      const serviceList = Object.keys(serviceTokens)
+        .map((envVar) => `- ${envVarToLabel[envVar] ?? envVar}: connected`)
+        .join("\n");
+      systemPrompt += `\n\n## Connected Services\n${serviceList}`;
+    }
+
     // ---------------------------------------------------------------------------
     // In-process MCP server for platform tools (PR creation, etc.)
     // Only available when user has a GitHub App installation with a connected repo.
@@ -449,8 +477,11 @@ When you need user input for important decisions, use the AskUserQuestion tool.`
     // Session-scoped rate limiter for workflow triggers (#1928)
     const workflowRateLimiter = createRateLimiter();
 
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- SDK uses any for heterogeneous tool arrays
+    const platformTools: Array<ReturnType<typeof tool<any>>> = [];
+
+    // GitHub PR tool: requires GitHub App installation with a connected repo.
     if (installationId && repoUrl) {
-      // Parse owner/repo from repo_url (e.g., "https://github.com/owner/repo")
       let owner: string;
       let repo: string;
       try {
@@ -463,8 +494,6 @@ When you need user input for important decisions, use the AskUserQuestion tool.`
         repo = "";
       }
 
-      // Validate owner/repo contain only safe GitHub name characters
-      // to prevent path-traversal or injection in API URL interpolation.
       const GITHUB_NAME_RE = /^[a-zA-Z0-9._-]+$/;
       if (!GITHUB_NAME_RE.test(owner) || !GITHUB_NAME_RE.test(repo)) {
         owner = "";
@@ -517,136 +546,191 @@ When you need user input for important decisions, use the AskUserQuestion tool.`
           },
         );
 
-        // Phase 2: Read CI status (#1927) — auto-approve tier
-        const ciStatusTool = tool(
-          "github_read_ci_status",
-          "Read recent CI workflow run statuses for the connected repository. " +
-          "Returns status (pass/fail/in-progress), commit SHA, branch, run URL, " +
-          "and workflow name/ID. Optionally filter by branch.",
-          {
-            branch: z.string().optional().describe("Filter runs by branch name"),
-            per_page: z.number().default(10).describe("Number of runs to return (max 30)"),
-          },
-          async (args) => {
-            try {
-              const runs = await readCiStatus(
-                installationId, owner, repo,
-                { branch: args.branch, per_page: Math.min(args.per_page, 30) },
-              );
-              return {
-                content: [{ type: "text" as const, text: JSON.stringify(runs, null, 2) }],
-              };
-            } catch (err) {
-              return {
-                content: [{ type: "text" as const, text: `Error reading CI status: ${(err as Error).message}` }],
-                isError: true,
-              };
-            }
-          },
-        );
+        platformTools.push(createPr);
+        platformToolNames.push("mcp__soleur_platform__create_pull_request");
 
-        const workflowLogsTool = tool(
-          "github_read_workflow_logs",
-          "Read failure details for a specific workflow run. Returns check annotations " +
-          "(structured failure data) when available, otherwise falls back to the last " +
-          "100 lines of the first failed step. Use github_read_ci_status first to find run IDs.",
-          {
-            run_id: z.number().describe("The workflow run ID to inspect"),
-          },
-          async (args) => {
-            try {
-              const result = await readWorkflowLogs(
-                installationId, owner, repo, args.run_id,
-              );
-              return {
-                content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
-              };
-            } catch (err) {
-              return {
-                content: [{ type: "text" as const, text: `Error reading workflow logs: ${(err as Error).message}` }],
-                isError: true,
-              };
-            }
-          },
+        // Phase 2: Read CI status (#1927) — auto-approve tier
+        platformTools.push(
+          tool(
+            "github_read_ci_status",
+            "Read recent CI workflow run statuses for the connected repository. " +
+            "Returns status (pass/fail/in-progress), commit SHA, branch, run URL, " +
+            "and workflow name/ID. Optionally filter by branch.",
+            {
+              branch: z.string().optional().describe("Filter runs by branch name"),
+              per_page: z.number().default(10).describe("Number of runs to return (max 30)"),
+            },
+            async (args) => {
+              try {
+                const runs = await readCiStatus(
+                  installationId, owner, repo,
+                  { branch: args.branch, per_page: Math.min(args.per_page, 30) },
+                );
+                return {
+                  content: [{ type: "text" as const, text: JSON.stringify(runs, null, 2) }],
+                };
+              } catch (err) {
+                return {
+                  content: [{ type: "text" as const, text: `Error reading CI status: ${(err as Error).message}` }],
+                  isError: true,
+                };
+              }
+            },
+          ),
+          tool(
+            "github_read_workflow_logs",
+            "Read failure details for a specific workflow run. Returns check annotations " +
+            "(structured failure data) when available, otherwise falls back to the last " +
+            "100 lines of the first failed step. Use github_read_ci_status first to find run IDs.",
+            {
+              run_id: z.number().describe("The workflow run ID to inspect"),
+            },
+            async (args) => {
+              try {
+                const result = await readWorkflowLogs(
+                  installationId, owner, repo, args.run_id,
+                );
+                return {
+                  content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
+                };
+              } catch (err) {
+                return {
+                  content: [{ type: "text" as const, text: `Error reading workflow logs: ${(err as Error).message}` }],
+                  isError: true,
+                };
+              }
+            },
+          ),
+        );
+        platformToolNames.push(
+          "mcp__soleur_platform__github_read_ci_status",
+          "mcp__soleur_platform__github_read_workflow_logs",
         );
 
         // Phase 3: Trigger workflows (#1928) — gated tier
-        const triggerWorkflowTool = tool(
-          "github_trigger_workflow",
-          "Trigger a workflow_dispatch event on the connected repository. " +
-          "Requires founder approval via review gate. Rate limited to 10 triggers per session. " +
-          "Use github_read_ci_status first to find workflow IDs.",
-          {
-            workflow_id: z.number().describe("The workflow ID to trigger (from github_read_ci_status)"),
-            ref: z.string().describe("Git ref to run the workflow on (branch name or tag)"),
-            inputs: z.record(z.string(), z.string()).optional().describe("Optional workflow_dispatch inputs"),
-          },
-          async (args) => {
-            try {
-              const result = await triggerWorkflow(
-                installationId, owner, repo,
-                args.workflow_id, args.ref, workflowRateLimiter, args.inputs,
-              );
-              return {
-                content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
-              };
-            } catch (err) {
-              return {
-                content: [{ type: "text" as const, text: `Error triggering workflow: ${(err as Error).message}` }],
-                isError: true,
-              };
-            }
-          },
+        platformTools.push(
+          tool(
+            "github_trigger_workflow",
+            "Trigger a workflow_dispatch event on the connected repository. " +
+            "Requires founder approval via review gate. Rate limited to 10 triggers per session. " +
+            "Use github_read_ci_status first to find workflow IDs.",
+            {
+              workflow_id: z.number().describe("The workflow ID to trigger (from github_read_ci_status)"),
+              ref: z.string().describe("Git ref to run the workflow on (branch name or tag)"),
+              inputs: z.record(z.string(), z.string()).optional().describe("Optional workflow_dispatch inputs"),
+            },
+            async (args) => {
+              try {
+                const result = await triggerWorkflow(
+                  installationId, owner, repo,
+                  args.workflow_id, args.ref, workflowRateLimiter, args.inputs,
+                );
+                return {
+                  content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
+                };
+              } catch (err) {
+                return {
+                  content: [{ type: "text" as const, text: `Error triggering workflow: ${(err as Error).message}` }],
+                  isError: true,
+                };
+              }
+            },
+          ),
         );
+        platformToolNames.push("mcp__soleur_platform__github_trigger_workflow");
 
         // Phase 4: Push branches (#1929) — gated tier
-        const pushBranchTool = tool(
-          "github_push_branch",
-          "Push the current workspace HEAD to a feature branch on the remote. " +
-          "Requires founder approval via review gate. Force-push and push to " +
-          "main/master are blocked unconditionally.",
-          {
-            branch: z.string().describe("Target branch name (must not be main, master, or default branch)"),
-            force: z.boolean().default(false).describe("Force-push (always rejected — included for explicit error messaging)"),
-          },
-          async (args) => {
-            try {
-              const result = await pushBranch({
-                installationId,
-                owner,
-                repo,
-                workspacePath,
-                branch: args.branch,
-                force: args.force,
-                defaultBranch,
-              });
-              return {
-                content: [{ type: "text" as const, text: JSON.stringify(result) }],
-              };
-            } catch (err) {
-              return {
-                content: [{ type: "text" as const, text: `Error pushing branch: ${(err as Error).message}` }],
-                isError: true,
-              };
-            }
-          },
+        platformTools.push(
+          tool(
+            "github_push_branch",
+            "Push the current workspace HEAD to a feature branch on the remote. " +
+            "Requires founder approval via review gate. Force-push and push to " +
+            "main/master are blocked unconditionally.",
+            {
+              branch: z.string().describe("Target branch name (must not be main, master, or default branch)"),
+              force: z.boolean().default(false).describe("Force-push (always rejected — included for explicit error messaging)"),
+            },
+            async (args) => {
+              try {
+                const result = await pushBranch({
+                  installationId,
+                  owner,
+                  repo,
+                  workspacePath,
+                  branch: args.branch,
+                  force: args.force,
+                  defaultBranch,
+                });
+                return {
+                  content: [{ type: "text" as const, text: JSON.stringify(result) }],
+                };
+              } catch (err) {
+                return {
+                  content: [{ type: "text" as const, text: `Error pushing branch: ${(err as Error).message}` }],
+                  isError: true,
+                };
+              }
+            },
+          ),
         );
-
-        const toolServer = createSdkMcpServer({
-          name: "soleur_platform",
-          version: "1.0.0",
-          tools: [createPr, ciStatusTool, workflowLogsTool, triggerWorkflowTool, pushBranchTool],
-        });
-
-        mcpServersOption = { soleur_platform: toolServer };
-        platformToolNames = [
-          "mcp__soleur_platform__create_pull_request",
-          "mcp__soleur_platform__github_read_ci_status",
-          "mcp__soleur_platform__github_read_workflow_logs",
-          "mcp__soleur_platform__github_trigger_workflow",
-          "mcp__soleur_platform__github_push_branch",
-        ];
+        platformToolNames.push("mcp__soleur_platform__github_push_branch");
       }
+    }
+
+    // Service tools: registered independently of GitHub installation.
+    // Users with stored API keys get tools even without a connected repo.
+    const plausibleKey = serviceTokens.PLAUSIBLE_API_KEY;
+    if (plausibleKey) {
+      const wrapResult = (result: { success: boolean; data?: unknown; error?: string }) => ({
+        content: [{ type: "text" as const, text: JSON.stringify(result) }],
+        ...(result.success ? {} : { isError: true }),
+      });
+
+      platformTools.push(
+        tool(
+          "plausible_create_site",
+          "Create a new site in Plausible Analytics. Returns the created site metadata.",
+          {
+            domain: z.string().describe("Domain name for the site (e.g., example.com)"),
+            timezone: z.string().default("UTC").describe("Timezone for the site"),
+          },
+          async (args) => wrapResult(await plausibleCreateSite(plausibleKey, args.domain, args.timezone)),
+        ),
+        tool(
+          "plausible_add_goal",
+          "Add a conversion goal to a Plausible Analytics site. Uses PUT with upsert semantics (safely idempotent).",
+          {
+            site_id: z.string().describe("Domain of the site (e.g., example.com)"),
+            goal_type: z.enum(["event", "page"]).describe("Type of goal"),
+            value: z.string().describe("Event name (for event goals) or page path (for page goals)"),
+          },
+          async (args) => wrapResult(await plausibleAddGoal(plausibleKey, args.site_id, args.goal_type, args.value)),
+        ),
+        tool(
+          "plausible_get_stats",
+          "Get aggregate stats for a Plausible Analytics site. Returns visitors, pageviews, bounce rate, and visit duration.",
+          {
+            site_id: z.string().describe("Domain of the site (e.g., example.com)"),
+            period: z.enum(["day", "7d", "30d"]).default("30d").describe("Time period for stats"),
+          },
+          async (args) => wrapResult(await plausibleGetStats(plausibleKey, args.site_id, args.period)),
+        ),
+      );
+      platformToolNames.push(
+        "mcp__soleur_platform__plausible_create_site",
+        "mcp__soleur_platform__plausible_add_goal",
+        "mcp__soleur_platform__plausible_get_stats",
+      );
+    }
+
+    // Build MCP server if any platform tools are registered
+    if (platformTools.length > 0) {
+      const toolServer = createSdkMcpServer({
+        name: "soleur_platform",
+        version: "1.0.0",
+        tools: platformTools,
+      });
+      mcpServersOption = { soleur_platform: toolServer };
     }
 
     // Run the Agent SDK query
@@ -674,7 +758,14 @@ When you need user input for important decisions, use the AskUserQuestion tool.`
         env: buildAgentEnv(apiKey, serviceTokens),
         disallowedTools: ["WebSearch", "WebFetch"],
         ...(mcpServersOption ? { mcpServers: mcpServersOption } : {}),
-        ...(platformToolNames.length > 0 ? { allowedTools: platformToolNames } : {}),
+        ...(platformToolNames.length > 0 || pluginMcpServerNames.length > 0
+          ? {
+              allowedTools: [
+                ...platformToolNames,
+                ...pluginMcpServerNames.map((s) => `mcp__plugin_soleur_${s}__*`),
+              ],
+            }
+          : {}),
         sandbox: {
           enabled: true,
           autoAllowBashIfSandboxed: true,
@@ -748,18 +839,27 @@ When you need user input for important decisions, use the AskUserQuestion tool.`
           // Review gates: intercept AskUserQuestion
           if (toolName === "AskUserQuestion") {
             const gateId = randomUUID();
-            const question =
-              (toolInput.question as string) || "Agent needs your input";
-            const rawOptions = Array.isArray(toolInput.options)
-              ? (toolInput.options as unknown[]).filter((o): o is string => typeof o === "string")
-              : [];
-            const gateOptions = rawOptions.length > 0 ? rawOptions : ["Approve", "Reject"];
+            const gate = extractReviewGateInput(toolInput as Record<string, unknown>);
+
+            if (gate.isNewSchema) {
+              const questions = (toolInput as Record<string, unknown>).questions as unknown[];
+              if (questions.length > 1) {
+                log.warn(
+                  { questionCount: questions.length },
+                  "AskUserQuestion received multiple questions; only the first is surfaced",
+                );
+              }
+            }
 
             sendToClient(userId, {
               type: "review_gate",
               gateId,
-              question,
-              options: gateOptions,
+              question: gate.question,
+              header: gate.header,
+              options: gate.options,
+              descriptions: Object.keys(gate.descriptions).length > 0
+                ? gate.descriptions
+                : undefined,
             });
 
             await updateConversationStatus(conversationId, "waiting_for_user");
@@ -769,14 +869,17 @@ When you need user input for important decisions, use the AskUserQuestion tool.`
               gateId,
               controller.signal,
               undefined, // timeoutMs (use default)
-              gateOptions,
+              gate.options,
             );
 
             await updateConversationStatus(conversationId, "active");
 
             return {
               behavior: "allow" as const,
-              updatedInput: { ...toolInput, answer: selection },
+              updatedInput: buildReviewGateResponse(
+                toolInput as Record<string, unknown>,
+                selection,
+              ),
             };
           }
 
@@ -865,6 +968,19 @@ When you need user input for important decisions, use the AskUserQuestion tool.`
             return { behavior: "allow" as const };
           }
 
+          // Allow plugin MCP tools from servers registered in plugin.json.
+          // Uses explicit server-name matching (not blanket mcp__ prefix).
+          // See learning: 2026-04-06-mcp-tool-canusertool-scope-allowlist.md
+          if (
+            toolName.startsWith("mcp__plugin_soleur_") &&
+            pluginMcpServerNames.some((server) =>
+              toolName.startsWith(`mcp__plugin_soleur_${server}__`),
+            )
+          ) {
+            log.info({ sec: true, toolName, agentId: options.agentID }, "Plugin MCP tool invoked");
+            return { behavior: "allow" as const };
+          }
+
           // Deny-by-default: block unrecognized tools
           return {
             behavior: "deny" as const,
@@ -917,6 +1033,34 @@ When you need user input for important decisions, use the AskUserQuestion tool.`
         if (fullText) {
           await saveMessage(conversationId, "assistant", fullText, undefined, streamLeaderId);
         }
+
+        // Capture cost data from SDK result (per-turn delta)
+        const costDelta = message.total_cost_usd ?? 0;
+        const inputDelta = message.usage?.input_tokens ?? 0;
+        const outputDelta = message.usage?.output_tokens ?? 0;
+
+        // Fire-and-forget: cost tracking is non-blocking telemetry
+        supabase().rpc(
+          "increment_conversation_cost",
+          {
+            conv_id: conversationId,
+            cost_delta: costDelta,
+            input_delta: inputDelta,
+            output_delta: outputDelta,
+          },
+        ).then(({ error: costError }) => {
+          if (costError) {
+            log.error({ err: costError, conversationId }, "Failed to save cost data");
+          }
+        });
+
+        sendToClient(userId, {
+          type: "usage_update",
+          conversationId,
+          totalCostUsd: costDelta,
+          inputTokens: inputDelta,
+          outputTokens: outputDelta,
+        });
 
         // Sync: push changes to remote after session (connected repos only)
         if (user.repo_status === "ready") {

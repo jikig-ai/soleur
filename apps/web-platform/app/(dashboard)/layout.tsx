@@ -4,6 +4,7 @@ import { useState, useEffect } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
+import { TeamNamesProvider } from "@/hooks/use-team-names";
 
 const NAV_ITEMS = [
   { href: "/dashboard", label: "Command Center", icon: GridIcon },
@@ -19,6 +20,14 @@ export default function DashboardLayout({
   const pathname = usePathname();
   const router = useRouter();
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const [userEmail, setUserEmail] = useState<string | null>(null);
+
+  useEffect(() => {
+    const supabase = createClient();
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setUserEmail(session?.user?.email ?? null);
+    });
+  }, []);
 
   // Auto-close drawer on route change
   useEffect(() => {
@@ -63,6 +72,7 @@ export default function DashboardLayout({
   }
 
   return (
+    <TeamNamesProvider>
     <div className="flex h-dvh flex-col md:flex-row">
       {/* Mobile top bar — only visible below md breakpoint */}
       <div className="flex h-14 shrink-0 items-center border-b border-neutral-800 bg-neutral-900 px-4 safe-top md:hidden">
@@ -138,6 +148,14 @@ export default function DashboardLayout({
 
         {/* Footer links */}
         <div className="border-t border-neutral-800 p-3 safe-bottom">
+          {userEmail && (
+            <p
+              className="truncate px-3 py-1 text-xs text-neutral-500"
+              title={userEmail}
+            >
+              {userEmail}
+            </p>
+          )}
           <a
             href="https://soleur-ai.betteruptime.com/"
             target="_blank"
@@ -165,6 +183,7 @@ export default function DashboardLayout({
         {children}
       </main>
     </div>
+    </TeamNamesProvider>
   );
 }
 
