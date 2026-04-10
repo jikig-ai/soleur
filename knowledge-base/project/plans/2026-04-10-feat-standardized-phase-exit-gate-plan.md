@@ -7,6 +7,26 @@ issue: "#1931"
 
 # feat: Standardized Phase Exit Gate
 
+## Enhancement Summary
+
+**Deepened on:** 2026-04-10
+**Sections enhanced:** 6 (Tasks 1-4, Pipeline Compatibility, Risks)
+**Research sources:** 5 learnings, 4 SKILL.md files, constitution.md
+
+### Key Improvements
+
+1. Scoped `git add` in brainstorm exit gate to feature-specific directories (avoids staging unrelated changes)
+2. Added precise pipeline detection mechanism for review skill (conversation marker + invocation chain)
+3. Added compound ordering constraint: compound MUST run before commit, not after (constitution line 96)
+4. Added continuation marker contract for review pipeline mode (`## Review Phase Complete`)
+5. Identified that brainstorm never runs in pipeline (one-shot skips to plan) -- exit gate fires unconditionally
+
+### New Considerations Discovered
+
+- Constitution line 98 constrains exit gate phrasing: "Skills invoked mid-pipeline must never use stop/return/done language." The `/clear` recommendation must be advisory, not imperative.
+- Ship Phase 2 already checks for recent compound output via `git log --since="1 week ago" -- knowledge-base/project/learnings/`. Double compound is a no-op, not a conflict.
+- Review SKILL.md has zero pipeline detection today -- it is the highest-risk change in this feature.
+
 ## Summary
 
 Add a standardized exit sequence to each workflow skill (brainstorm, plan, work, review) that runs compound + commit + push before handoff, then displays a `/clear` recommendation. Also verify each skill's entry reads all needed state from disk, not conversation context.
@@ -16,6 +36,10 @@ Add a standardized exit sequence to each workflow skill (brainstorm, plan, work,
 Each workflow phase accumulates significant context (agent results, dialogue, research). By the time the next phase starts, the context window is partially consumed by the previous phase's conversation. Skills read artifacts from disk on entry, so conversation context from the prior phase is redundant weight. Without a standardized exit gate, some skills commit but skip compound, others skip both, and none recommend `/clear` to free context headroom.
 
 Source: Workflow observation during #1063 brainstorm -- context was heavy after 6 parallel domain assessments and multiple dialogue rounds.
+
+### Research Insights: Context Window Pressure
+
+Per the context compaction learning (2026-02-22), the plugin's baseline metadata is ~13k tokens (skills + agents). Multi-phase pipelines (brainstorm -> plan -> work -> compound -> ship) regularly hit the compaction threshold. The `/clear` recommendation directly addresses this by encouraging users to shed accumulated context between phases. Each skill already reads its needed state from disk, making conversation context from prior phases pure overhead.
 
 ## Current State Analysis
 
@@ -51,10 +75,24 @@ Each skill's handoff section gets a standardized exit gate that runs BEFORE pres
 
 The exit gate MUST NOT fire when the skill is invoked by a pipeline orchestrator (one-shot, ship). Pipeline orchestrators handle compound/commit/push themselves. Detection mechanism:
 
-- **work**: Already has pipeline detection ("If invoked by one-shot"). The exit gate wraps the existing direct-invocation path only.
-- **review**: Needs pipeline detection. If invoked by one-shot or work's Phase 4 chain, skip the exit gate.
-- **brainstorm**: Never runs inside a pipeline. Exit gate always fires.
-- **plan**: When running as a one-shot subagent (detected by Task context or plan file path argument), skip the interactive exit gate. The subagent returns the plan file path via its return contract.
+- **work**: Already has pipeline detection ("If invoked by one-shot" at line 425 of SKILL.md). The exit gate wraps the existing direct-invocation path only. One-shot path emits `## Work Phase Complete` marker.
+- **review**: Needs pipeline detection (currently has NONE). If invoked by work's Phase 4 chain or by one-shot (step 4), skip the exit gate. Detection: check if the conversation contains `skill: soleur:work` or `soleur:one-shot` invocation earlier.
+- **brainstorm**: Never runs inside a pipeline. One-shot routes directly to plan, skipping brainstorm entirely (brainstorm Phase 0 offers one-shot as an escape hatch, but one-shot never invokes brainstorm). Exit gate always fires.
+- **plan**: Has existing pipeline detection via `$ARGUMENTS` file path check (line 99 of SKILL.md). When running as a one-shot subagent, it returns via a structured return contract. The exit gate does not fire.
+
+### Research Insight: Pipeline Handoff Language
+
+Per constitution line 98 and learnings 2026-03-02 and 2026-03-03, skills invoked mid-pipeline must never use stop/return/done language in their handoff. The exit gate's `/clear` recommendation must be phrased as advisory text that does NOT imply end-of-turn. Specifically:
+
+- Do NOT write: "Run `/clear` and stop." (implies turn boundary)
+- Do NOT write: "Announce to the user that context is heavy." (triggers turn-ending behavior)
+- DO write: "Display: ..." followed by the next instruction (advisory, non-blocking)
+
+### Compound Ordering Constraint
+
+Per constitution line 96: "Run code review and compound before committing -- the commit is the gate, not the PR; compound must never be placed after `git push` or CI because compound produces a commit that invalidates CI and creates an infinite loop."
+
+This means the exit gate sequence MUST be: compound first, then commit+push. Compound itself may produce a commit (learning file), so the exit gate commit covers both the skill's artifacts AND compound's output.
 
 ### Constraint: `/clear` Is User-Only
 
@@ -70,110 +108,173 @@ The exit gate MUST NOT fire when the skill is invoked by a pipeline orchestrator
 
 **Changes:**
 
-1. Before the "Context headroom notice" line (which already exists at line ~304), insert compound invocation:
+1. Before the "Context headroom notice" line (which already exists at line 303), insert compound invocation:
 
    ```text
    **Exit gate sequence:**
 
    1. Run `skill: soleur:compound` to capture learnings from the brainstorm session.
       If compound finds nothing to capture, it will skip gracefully.
-   2. Commit and push any remaining uncommitted artifacts:
+   2. Commit and push any remaining uncommitted artifacts. Scope git add to
+      feature-specific directories only (do NOT use `git add -A knowledge-base/`
+      which could stage unrelated changes from other worktrees or manual edits):
       ```bash
-      git add -A knowledge-base/
+      git add knowledge-base/project/brainstorms/ knowledge-base/project/specs/feat-<name>/
       git status --short
       ```
-      If there are changes, commit with `git commit -m "docs: brainstorm artifacts for feat-<name>"` and `git push`.
+
+      If there are staged changes, commit with `git commit -m "docs: brainstorm artifacts for feat-<name>"` and `git push`.
       If push fails (no network), warn and continue.
+
    ```
 
-2. The existing "Context headroom notice" line already says: "All artifacts are on disk. Starting a new session for `/soleur:plan` will give you maximum context headroom." Enhance it to explicitly recommend `/clear`:
+2. The existing "Context headroom notice" line already says: "All artifacts are on disk. Starting a new session for `/soleur:plan` will give you maximum context headroom." Replace the full line with:
 
    ```text
    "All artifacts are on disk. Run `/clear` then `/soleur:plan` for maximum context headroom."
    ```
 
-**Note:** Brainstorm already commits in Phase 3.6. The exit gate commit is a safety net for any artifacts created after Phase 3.6 (e.g., deferred issue creation in Phase 3.6 step 7, or domain assessments that added content).
+**Note:** Brainstorm already commits in Phase 3.6. The exit gate commit is a safety net for any artifacts created after Phase 3.6 (e.g., deferred issue creation in Phase 3.6 step 7, or domain assessments that added content). Compound runs BEFORE the commit per constitution line 96 (compound may produce a learning file that should be included in the commit).
+
+### Research Insight: Brainstorm Is Never Pipeline-Invoked
+
+One-shot (SKILL.md line 8-9) starts at step 0 and goes directly to plan -- it never invokes brainstorm. Brainstorm's Phase 0 offers one-shot as an escape hatch (line 55-59), but the reverse does not happen. Therefore the exit gate fires unconditionally -- no pipeline detection needed.
 
 ### Task 2: Add Exit Gate to plan/SKILL.md
 
 **File:** `plugins/soleur/skills/plan/SKILL.md`
 
-**Location:** Post-Generation Options section -- insert exit gate BEFORE the AskUserQuestion.
+**Location:** Between the "Plan Review" section and the "Post-Generation Options" section (around line 435).
 
 **Changes:**
 
-1. Add pipeline detection. If the plan skill is running inside a one-shot subagent (the conversation contains a Task delegation with a return contract), skip the exit gate and return the plan file path per the return contract.
+1. Plan already has pipeline detection via `$ARGUMENTS` file path check (line 99 of SKILL.md: "If `$ARGUMENTS` contains a file path..."). However, the one-shot subagent invocation path is more nuanced -- the plan subagent receives arguments via a Task delegation with a return contract (one-shot SKILL.md lines 33-64). The exit gate should check:
+   - If the conversation contains a Task delegation with `RETURN CONTRACT` text, this is a subagent -- skip exit gate
+   - If `$ARGUMENTS` is a plain text description (direct user invocation) -- run exit gate
 
-2. For direct invocation, insert before the Post-Generation Options AskUserQuestion:
+2. For direct invocation, insert AFTER "Plan Review" and BEFORE "Post-Generation Options":
 
    ```text
-   **Exit gate sequence (direct invocation only):**
+   ## Exit Gate (direct invocation only)
+
+   **Pipeline detection:** If this skill is running inside a Task subagent (the conversation
+   contains a `RETURN CONTRACT` section from a Task delegation), skip the exit gate entirely.
+   Return the plan file path per the return contract. The calling pipeline handles compound
+   and lifecycle progression.
+
+   **If invoked directly by the user:**
 
    1. Run `skill: soleur:compound` to capture learnings from the planning session.
       If compound finds nothing to capture, it will skip gracefully.
-   2. Verify all plan artifacts are committed and pushed (plan file + tasks.md were
-      already committed in the Save Tasks section). Run `git status --short` to check
-      for any uncommitted changes. If found, commit and push.
+   2. Verify all plan artifacts are committed and pushed. The Save Tasks section already
+      committed the plan file and tasks.md. Run `git status --short` to check for any
+      remaining uncommitted changes. If found:
+      ```bash
+      git add knowledge-base/project/plans/ knowledge-base/project/specs/feat-<name>/
+      git commit -m "docs: plan artifacts for feat-<name>"
+      git push
+      ```
+
+      If push fails (no network), warn and continue.
    3. Display: "All artifacts are on disk. Run `/clear` then `/soleur:work` for maximum
       context headroom."
+
    ```
 
-3. Update the Post-Generation Options question text to include the `/clear` recommendation in the preamble.
+3. Update the Post-Generation Options question text to reinforce the `/clear` recommendation:
 
-**Pipeline mode:** When plan is invoked as a subagent (one-shot Steps 1-2), it already returns via a structured return contract. The exit gate does not fire. The subagent commits plan artifacts as part of its normal flow.
+   Current: `"Plan reviewed and ready at..."`
+   Updated: `"Plan reviewed and ready at... Context is saved to disk -- run /clear before /soleur:work for maximum headroom."`
+
+### Research Insight: Plan's Existing Commit
+
+The plan's "Save Tasks to Knowledge Base" section (around line 403-413) already runs `git add` + `git commit` + `git push` for plan artifacts. The exit gate's commit step is a safety net that catches any changes from the plan review process (reviewers may propose edits applied after the initial commit). The exit gate commit uses `git status --short` as a guard -- if the save section already committed everything, the exit gate finds nothing to commit and moves on.
 
 ### Task 3: Add Exit Gate to work/SKILL.md
 
 **File:** `plugins/soleur/skills/work/SKILL.md`
 
-**Location:** Phase 4: Handoff -- the direct-invocation path.
+**Location:** Phase 4: Handoff -- the direct-invocation path (lines 427-433).
 
 **Changes:**
 
-1. Work's Phase 4 direct-invocation path already runs review + resolve-todo + compound + ship. This IS the exit gate. The missing piece is the `/clear` recommendation.
+1. Work's Phase 4 direct-invocation path (line 427) already runs:
+   - Step 1: `skill: soleur:review`
+   - Step 2: `skill: soleur:resolve-todo-parallel`
+   - Step 3: `skill: soleur:compound`
+   - Step 4: `skill: soleur:ship`
 
-2. After the compound step (step 3 in Phase 4's direct-invocation sequence) and before the ship step (step 4), add:
+   This chain IS the exit gate for work. Compound runs (step 3), ship handles commit+push+PR (step 4). The only missing piece is the `/clear` recommendation.
+
+2. **Chosen approach:** Add a non-blocking advisory line after compound (step 3) and before ship (step 4):
 
    ```text
-   3.5. Display: "Implementation and review complete. All artifacts are on disk.
-        If context is heavy, run `/clear` then `/soleur:ship` for maximum headroom.
-        Otherwise, ship will run next automatically."
+   3.5. Display: "Tip: After shipping, run `/clear` to reclaim context headroom for the next task."
    ```
 
-   However, this creates a problem: it would break the automatic flow from compound to ship. The user would need to explicitly continue.
+   This is advisory, non-blocking, and does NOT break the automatic chain. The model outputs the tip as a single line and immediately proceeds to ship. It does NOT use "announce", "stop", or "return" language (per constitution line 98 and learnings 2026-03-02).
 
-   **Better approach:** Add the `/clear` recommendation ONLY if the user declines to proceed immediately. Since work's Phase 4 already chains review -> compound -> ship automatically, the `/clear` prompt should appear only if one of these steps fails or the user interrupts.
+3. The one-shot path (line 425) remains unchanged -- it emits `## Work Phase Complete` marker and continues to one-shot step 4. No exit gate fires in pipeline mode.
 
-   **Revised approach:** After compound completes (step 3), if the session has consumed significant context (heuristic: conversation has had context compaction), display the `/clear` recommendation as an advisory note but continue to ship automatically. The note would say: "Context headroom is low. After this session, consider running `/clear` before your next task."
+### Research Insight: Work Already Has the Full Exit Gate
 
-   **Simplest correct approach:** Keep the current automatic chain (review -> compound -> ship) intact. Add a single line after compound completes: "Tip: After shipping, run `/clear` to reclaim context headroom for the next task." This is advisory, non-blocking, and applies to the post-ship state.
+Work is the only skill that already runs all three exit gate components (compound, commit, push) via its Phase 4 chain. The change for work is minimal -- just the `/clear` advisory. This confirms the plan's design: the exit gate is about consistency across skills, not adding new capabilities to work.
 
-3. The one-shot path remains unchanged (emits `## Work Phase Complete` marker).
+### Research Insight: Do NOT Insert a Blocking Prompt
+
+Per learning 2026-03-02: "any phrasing that implies user-facing output is interpreted as a terminal action." The advisory line MUST be followed by the next instruction (`skill: soleur:ship`) in the same paragraph or section. Do not place it in its own AskUserQuestion block or suggest the user should decide whether to `/clear` before ship runs.
 
 ### Task 4: Add Exit Gate to review/SKILL.md
 
 **File:** `plugins/soleur/skills/review/SKILL.md`
 
-**Location:** After Step 5 (Findings Synthesis and GitHub Issue Creation), at the end of the skill.
+**Location:** After the Summary Report in Step 5 (Findings Synthesis), at the end of the "Step 3: Summary Report" section (after the severity breakdown and before "### 7. End-to-End Testing").
 
 **Changes:**
 
-1. Add pipeline detection. If review was invoked by work's Phase 4 chain or by one-shot (step 4), skip the exit gate. Detection: check if the conversation contains `skill: soleur:work` invocation earlier, or one-shot markers.
+1. Add pipeline detection. Review currently has ZERO pipeline awareness -- this is the highest-risk edit. The detection mechanism mirrors work's pattern (line 425 of work/SKILL.md):
 
-2. For direct invocation (user ran `/soleur:review` standalone), add after the Summary Report:
+   ```text
+   ### 6. Exit Gate
+
+   **Pipeline detection:** If the conversation contains `skill: soleur:work` output earlier (indicating review was invoked by work's Phase 4 chain) or `soleur:one-shot` output (indicating review was invoked by one-shot step 4), skip the exit gate. The calling pipeline handles compound, commit, and lifecycle progression.
+
+   **If invoked directly by the user** (no work or one-shot orchestrator in the conversation):
+   ```
+
+   The detection is conversation-based, not argument-based, because work invokes review via the Skill tool without special arguments. The presence of prior work/one-shot output is the reliable signal.
+
+2. For direct invocation (user ran `/soleur:review` standalone), add:
 
    ```text
    **Exit gate sequence (direct invocation only):**
 
    1. Run `skill: soleur:compound` to capture learnings from the review session.
       If compound finds nothing to capture, it will skip gracefully.
-   2. Commit review artifacts (GitHub issues are already created remotely).
-      Run `git status --short`. If local changes exist, commit and push.
+   2. Commit any local artifacts. GitHub issues are already created remotely,
+      but local files may have been modified (plan updates, todo resolutions).
+      Run `git status --short`. If there are changes:
+      ```bash
+      git add <changed files>
+      git commit -m "docs: review artifacts for feat-<name>"
+      git push
+      ```
+
+      If push fails (no network), warn and continue.
    3. Display: "Review complete. All findings are tracked as GitHub issues.
       Run `/clear` then `/soleur:work` or `/soleur:ship` for maximum context headroom."
+
    ```
 
-3. Add a note that when review is invoked by work or one-shot, the calling pipeline handles compound and commit.
+3. Add a note after the pipeline detection block: "When review is invoked by work or one-shot, the calling pipeline handles compound and commit. Do not duplicate these steps."
+
+### Research Insight: Review Handoff Language
+
+Per the skill handoff learnings (2026-03-02, 2026-03-03), the exit gate text must NOT use "announce", "return control", or "stop" language. The display instruction is advisory. After displaying the `/clear` recommendation, present the End-to-End Testing option (Phase 7) as normal. The exit gate does not replace the existing flow -- it inserts before it.
+
+### Edge Case: Review Creates No Local Files
+
+Review's primary output is GitHub issues (created via `gh issue create`). These are remote-only. The `git status --short` check in the exit gate may find nothing to commit, which is the expected case. The commit step must handle the empty case gracefully (check before committing, do not error on "nothing to commit").
 
 ### Task 5: Verify Entry Robustness (Audit Only)
 
@@ -183,17 +284,27 @@ Verify each skill's entry reads all needed state from disk. Based on the Current
 
 **No code changes for this task** -- just verification that the current entry behavior is robust. Document the audit finding in the plan.
 
-### Task 6: Update AGENTS.md (if needed)
+### Task 6: Update constitution.md
 
-If the exit gate pattern warrants a new rule or convention, add it to AGENTS.md or constitution.md. Candidate rule:
+Add the exit gate convention to `knowledge-base/project/constitution.md` under Architecture > Always section. Insert after line 98 (the "Skills invoked mid-pipeline must never use stop/return/done language" rule) since the new rule is a companion to it:
 
 ```text
-- Workflow skills (brainstorm, plan, work, review) must run compound + commit + push
-  before presenting handoff options to the user. Skip the exit gate when invoked by a
-  pipeline orchestrator (one-shot, ship). Display a `/clear` recommendation at handoff.
+- Workflow skills (brainstorm, plan, work, review) must run compound + commit + push before presenting handoff options to the user -- skip the exit gate when invoked by a pipeline orchestrator (one-shot, ship); display a `/clear` recommendation at handoff to encourage context headroom recovery between phases
 ```
 
-This would go in constitution.md under Architecture > Always, since it is a structural convention enforced by skill instructions (not a hook).
+This goes in constitution.md (not AGENTS.md) because:
+
+- It is a structural convention enforced by skill instructions, not a hard rule that the agent would violate without being told every turn
+- It is on-demand context (loaded by skills when they start), not always-loaded context
+- AGENTS.md already has the compound-before-commit rule (line 96 equivalent); constitution.md gets the broader exit gate pattern
+
+### Research Insight: Rule Relationship to Existing Rules
+
+The new rule complements three existing constitution rules:
+
+1. **Line 96:** "Run code review and compound before committing" -- the exit gate operationalizes this per-skill
+2. **Line 98:** "Skills invoked mid-pipeline must never use stop/return/done language" -- the exit gate's pipeline detection implements this
+3. **Line 90:** "Lifecycle workflows with hooks must cover every state transition" -- the exit gate closes the handoff gap between phases
 
 ## Alternative Approaches Considered
 
@@ -294,8 +405,11 @@ This would go in constitution.md under Architecture > Always, since it is a stru
 |------|--------|------------|
 | Exit gate breaks one-shot pipeline | High -- pipeline stalls | Pipeline detection in each skill; test Scenario 3, 5, 7 |
 | Compound takes too long at handoff | Medium -- user impatience | Compound skips gracefully if nothing to capture |
-| Double compound (exit gate + ship) | Low -- redundant work | Ship Phase 2 already checks for recent compound; deduplication built-in |
+| Double compound (exit gate + ship) | Low -- redundant work | Ship Phase 2 checks `git log --since="1 week ago" -- knowledge-base/project/learnings/`; deduplication built-in |
 | Exit gate commit conflicts with prior commits | Low | Exit gate uses `git status --short` check first; only commits if changes exist |
+| Review exit gate fires in pipeline mode | High -- review currently has zero pipeline detection | Conversation-based detection (check for prior work/one-shot output); test Scenario 7 specifically |
+| Exit gate `/clear` text triggers turn-ending | Medium -- model stops before next step | Use advisory phrasing per constitution line 98; no "announce", "stop", "return" language |
+| Scoped `git add` misses new directories | Low -- artifacts not committed | List explicit paths for each skill (brainstorms/, specs/, plans/); git add is idempotent on already-committed files |
 
 ## Implementation Order
 
