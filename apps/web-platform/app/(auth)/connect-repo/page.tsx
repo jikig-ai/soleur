@@ -6,6 +6,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { safeReturnTo } from "@/lib/safe-return-to";
 import { serif, sans } from "@/components/connect-repo/fonts";
 import type { Repo, SetupStep } from "@/components/connect-repo/types";
+import type { ProjectHealthSnapshot } from "@/server/project-scanner";
 import { ChooseState } from "@/components/connect-repo/choose-state";
 import { CreateProjectState } from "@/components/connect-repo/create-project-state";
 import { GitHubRedirectState } from "@/components/connect-repo/github-redirect-state";
@@ -38,11 +39,9 @@ type State =
 const DEFAULT_GITHUB_APP_SLUG = process.env.NEXT_PUBLIC_GITHUB_APP_SLUG ?? "soleur-ai";
 
 const SETUP_STEPS_TEMPLATE: SetupStep[] = [
-  { label: "Copying your project files", status: "pending" },
-  { label: "Scanning project structure", status: "pending" },
-  { label: "Detecting knowledge base", status: "pending" },
-  { label: "Analyzing conventions and patterns", status: "pending" },
-  { label: "Preparing your AI team to work on your project", status: "pending" },
+  { label: "Cloning repository", status: "pending" },
+  { label: "Scanning project", status: "pending" },
+  { label: "Preparing your team", status: "pending" },
 ];
 
 // ---------------------------------------------------------------------------
@@ -68,6 +67,8 @@ export default function ConnectRepoPage() {
   const [connectedRepoName, setConnectedRepoName] = useState("");
   const [setupSteps, setSetupSteps] = useState<SetupStep[]>(SETUP_STEPS_TEMPLATE);
   const [setupError, setSetupError] = useState<string | null>(null);
+  const [healthSnapshot, setHealthSnapshot] = useState<ProjectHealthSnapshot | null>(null);
+  const [syncConversationId, setSyncConversationId] = useState<string | null>(null);
   const [pendingCreate, setPendingCreate] = useState<{
     name: string;
     isPrivate: boolean;
@@ -289,7 +290,7 @@ export default function ConnectRepoPage() {
               i < currentStep ? "done" : i === currentStep ? "active" : "pending",
           })),
         );
-      }, 3000);
+      }, 2000);
 
       // Kick off setup
       try {
@@ -336,6 +337,8 @@ export default function ConnectRepoPage() {
               prev.map((s) => ({ ...s, status: "done" as const })),
             );
             setConnectedRepoName(data.repoName ?? repoName);
+            if (data.healthSnapshot) setHealthSnapshot(data.healthSnapshot);
+            setSyncConversationId(data.syncConversationId ?? null);
             // Brief delay so user sees the completed checklist
             setTimeout(() => setState("ready"), 800);
           } else if (data.status === "error") {
@@ -547,6 +550,10 @@ export default function ConnectRepoPage() {
     router.push(consumeReturnTo());
   }
 
+  function handleViewKb() {
+    router.push("/dashboard/kb");
+  }
+
   // ---------------------------------------------------------------------------
   // Render
   // ---------------------------------------------------------------------------
@@ -611,6 +618,9 @@ export default function ConnectRepoPage() {
           <ReadyState
             repoName={connectedRepoName}
             onContinue={handleOpenDashboard}
+            onViewKb={handleViewKb}
+            healthSnapshot={healthSnapshot}
+            syncConversationId={syncConversationId}
           />
         )}
         {state === "failed" && <FailedState onRetry={handleRetry} errorMessage={setupError} />}

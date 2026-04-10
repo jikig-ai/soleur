@@ -5,7 +5,7 @@ import path from "path";
 import { z } from "zod/v4";
 
 import { createServiceClient } from "@/lib/supabase/service";
-import { DOMAIN_LEADERS, type DomainLeaderId } from "./domain-leaders";
+import { ROUTABLE_DOMAIN_LEADERS, type DomainLeaderId } from "./domain-leaders";
 import { routeMessage } from "./domain-router";
 import { KeyInvalidError } from "@/lib/types";
 import { decryptKey, decryptKeyLegacy, encryptKey } from "./byok";
@@ -374,7 +374,7 @@ export async function startAgentSession(
 
     // Get leader config (default to CPO as general advisor if no leader specified)
     const effectiveLeaderId = leaderId ?? "cpo";
-    const leader = DOMAIN_LEADERS.find((l) => l.id === effectiveLeaderId);
+    const leader = ROUTABLE_DOMAIN_LEADERS.find((l) => l.id === effectiveLeaderId);
     if (!leader) throw new Error(`Unknown leader: ${effectiveLeaderId}`);
 
     // Get user workspace path, repo status, and GitHub App connection

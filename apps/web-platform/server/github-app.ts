@@ -54,6 +54,21 @@ class InstallationError extends Error {
   }
 }
 
+/**
+ * Thrown when the GitHub API returns an error response.
+ * Carries the HTTP status code so callers can distinguish user-correctable
+ * 4xx errors from internal 5xx failures.
+ */
+export class GitHubApiError extends Error {
+  constructor(
+    message: string,
+    public readonly statusCode: number,
+  ) {
+    super(message);
+    this.name = "GitHubApiError";
+  }
+}
+
 interface GitHubInstallationTokenResponse {
   token: string;
   expires_at: string;
@@ -562,7 +577,7 @@ export async function createRepo(
       { status: response.status, body: body.slice(0, 500), installationId, name },
       "Failed to create repo",
     );
-    throw new Error(errorMessage);
+    throw new GitHubApiError(errorMessage, response.status);
   }
 
   const data = (await response.json()) as GitHubRepoResponse;

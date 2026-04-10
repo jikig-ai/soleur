@@ -52,7 +52,7 @@ run_suite() {
 run_suite "test/content-publisher" bun test test/content-publisher.test.ts
 run_suite "test/x-community" bun test test/x-community.test.ts
 run_suite "test/pre-merge-rebase" bun test test/pre-merge-rebase.test.ts
-run_suite "apps/web-platform" bash -c "cd apps/web-platform && npx vitest run 2>&1"
+run_suite "apps/web-platform" bash -c "cd apps/web-platform && npm run test:ci 2>&1"
 run_suite "plugins/soleur" bun test plugins/soleur/
 run_suite "blog-link-validation" bash scripts/validate-blog-links.sh
 

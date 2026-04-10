@@ -3,6 +3,7 @@ import * as Sentry from "@sentry/nextjs";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { validateOrigin, rejectCsrf } from "@/lib/auth/validate-origin";
 import { provisionWorkspaceWithRepo } from "@/server/workspace";
+import { scanProjectHealth } from "@/server/project-scanner";
 import logger from "@/server/logger";
 
 /**
@@ -99,6 +100,18 @@ export async function POST(request: Request) {
     userEmail,
   )
     .then(async (workspacePath) => {
+      // Fast scan — failure must not block provisioning
+      let healthSnapshot = null;
+      try {
+        healthSnapshot = scanProjectHealth(workspacePath);
+      } catch (scanErr) {
+        logger.error(
+          { err: scanErr, userId: user.id },
+          "Project health scan failed — continuing without snapshot",
+        );
+        Sentry.captureException(scanErr);
+      }
+
       const { error } = await serviceClient
         .from("users")
         .update({
@@ -106,6 +119,7 @@ export async function POST(request: Request) {
           workspace_status: "ready",
           repo_status: "ready",
           repo_last_synced_at: new Date().toISOString(),
+          health_snapshot: healthSnapshot,
         })
         .eq("id", user.id);
 
@@ -114,9 +128,53 @@ export async function POST(request: Request) {
           { err: error, userId: user.id },
           "Failed to update user after successful clone",
         );
-      } else {
-        logger.info({ userId: user.id, repoUrl }, "Repo setup completed");
+        return;
       }
+
+      logger.info(
+        { userId: user.id, repoUrl, category: healthSnapshot?.category },
+        "Repo setup completed",
+      );
+
+      // Auto-trigger headless sync — fire-and-forget with .catch()
+      // BYOK check is handled internally by startAgentSession (rejects if no key)
+      const conversationId = crypto.randomUUID();
+      const { error: convError } = await serviceClient
+        .from("conversations")
+        .insert({
+          id: conversationId,
+          user_id: user.id,
+          domain_leader: "system",
+          status: "active",
+          session_id: crypto.randomUUID(),
+        });
+
+      if (convError) {
+        logger.error(
+          { err: convError, userId: user.id },
+          "Failed to create sync conversation",
+        );
+        Sentry.captureException(convError);
+        return;
+      }
+
+      // Dynamic import: agent-runner.ts pulls in @anthropic-ai/claude-agent-sdk
+      // which breaks Next.js build-time route validation when statically imported.
+      import("@/server/agent-runner").then(({ startAgentSession }) =>
+        startAgentSession(
+          user.id,
+          conversationId,
+          undefined,
+          undefined,
+          "/soleur:sync --headless",
+        ),
+      ).catch((syncErr) => {
+        logger.error(
+          { err: syncErr, userId: user.id },
+          "Auto-triggered sync failed",
+        );
+        Sentry.captureException(syncErr);
+      });
     })
     .catch(async (err) => {
       logger.error({ err, userId: user.id, repoUrl }, "Repo clone failed");
