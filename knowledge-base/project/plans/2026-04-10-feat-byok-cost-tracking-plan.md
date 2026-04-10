@@ -239,21 +239,30 @@ Empty state: "No API usage yet. Conversations will appear here with their costs.
 ### Product/UX Gate
 
 **Tier:** blocking
-**Decision:** reviewed (partial)
-**Agents invoked:** none (rate-limited)
-**Skipped specialists:** spec-flow-analyzer (agent rate-limited), cpo (agent rate-limited), ux-design-lead (blocked by upstream failures), copywriter (blocked by upstream failures)
+**Decision:** reviewed
+**Agents invoked:** ux-design-lead
+**Skipped specialists:** spec-flow-analyzer (agent rate-limited), cpo (agent rate-limited), copywriter (not invoked — flat list has minimal copy)
 **Pencil available:** yes
+
+#### Wireframes
+
+Design file: `knowledge-base/product/design/byok-cost-tracking/cost-tracking-wireframes.pen`
+Screenshots: `knowledge-base/product/design/byok-cost-tracking/screenshots/`
+
+- `01-desktop-chat-status-bar.png` — Status bar: "3 leaders responding · ~$0.0042 estimated"
+- `02-mobile-chat-status-bar.png` — Mobile variant, abbreviated to "~$0.0042 est."
+- `03-desktop-billing-page.png` — API Usage section with running total and conversation cost cards
+- `04-mobile-billing-page.png` — Mobile variant with reduced padding
+- `05-desktop-billing-empty-state.png` — "No API usage yet" with helper text
 
 #### Findings
 
-Spec-flow-analyzer and CPO agents hit API rate limits during plan generation. Key UX considerations from the brainstorm carry forward:
+- **Flow gap: No API key state** — Cost indicator should not render. Billing usage section shows empty state prompting key setup.
+- **Flow gap: WS disconnect** — Last-known cost persists in React state (not reset to zero). Next turn updates with authoritative SDK total.
+- **Flow gap: Loading state** — Cost indicator absent until first turn completes (no skeleton/spinner).
+- **Mobile** — Status bar cost badge abbreviated on mobile. Billing list uses reduced padding.
 
-- **Flow gap: No API key state** — If a BYOK user has no API key configured, the cost indicator should not render (guard on key existence). The billing usage section should show an empty state prompting key setup.
-- **Flow gap: WS disconnect** — If WebSocket disconnects mid-conversation, the last-known cost should persist in React state (not reset to zero). On reconnect, the next turn will update with the authoritative SDK total.
-- **Flow gap: Loading state** — Before the first turn completes, the cost indicator should not render (no skeleton/spinner for a cost badge — just absent until data arrives).
-- **Mobile consideration** — Status bar already uses `text-xs`. Cost badge fits inline. Billing page list is a simple vertical layout — no special mobile treatment needed.
-
-Wireframes and copywriter review should run before implementation. Consider running `/soleur:plan` domain review agents when rate limits reset.
+[Updated 2026-04-10] UX gate originally missed due to agent rate limits. Plan skill fixed to enforce BLOCKING gates on agent failure. Wireframes produced retroactively.
 
 ## Test Scenarios
 
