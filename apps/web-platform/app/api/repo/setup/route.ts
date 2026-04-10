@@ -103,16 +103,21 @@ export async function POST(request: Request) {
     { suppressWelcomeHook: isStartFresh },
   )
     .then(async (workspacePath) => {
-      // Fast scan — failure must not block provisioning
+      // Fast scan — failure must not block provisioning.
+      // Skip for Start Fresh projects: the repo is empty by design and the
+      // health snapshot would only show misleading "Gaps Found" signals.
+      // When null, ReadyState renders "Your AI Team Is Ready." instead.
       let healthSnapshot = null;
-      try {
-        healthSnapshot = scanProjectHealth(workspacePath);
-      } catch (scanErr) {
-        logger.error(
-          { err: scanErr, userId: user.id },
-          "Project health scan failed — continuing without snapshot",
-        );
-        Sentry.captureException(scanErr);
+      if (!isStartFresh) {
+        try {
+          healthSnapshot = scanProjectHealth(workspacePath);
+        } catch (scanErr) {
+          logger.error(
+            { err: scanErr, userId: user.id },
+            "Project health scan failed — continuing without snapshot",
+          );
+          Sentry.captureException(scanErr);
+        }
       }
 
       const { error } = await serviceClient

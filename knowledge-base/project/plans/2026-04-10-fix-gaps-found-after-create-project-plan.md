@@ -67,12 +67,12 @@ The headless `/soleur:sync` still fires for Start Fresh projects. This is correc
 
 ## Acceptance Criteria
 
-- [ ] Creating a project via "Start Fresh" shows the simple "Your AI Team Is Ready." ready state (no health badge, no DETECTED/MISSING signals, no recommendations)
-- [ ] Creating a project via "Connect Existing" still shows the health snapshot with DETECTED/MISSING signals and category badge
-- [ ] The headless `/soleur:sync` still fires for both flows
-- [ ] Existing project-scanner and ready-state tests still pass
-- [ ] New test: setup route does not call `scanProjectHealth` when source is `"start_fresh"`
-- [ ] New test: setup route stores `health_snapshot: null` in the DB update when source is `"start_fresh"`
+- [x] Creating a project via "Start Fresh" shows the simple "Your AI Team Is Ready." ready state (no health badge, no DETECTED/MISSING signals, no recommendations)
+- [x] Creating a project via "Connect Existing" still shows the health snapshot with DETECTED/MISSING signals and category badge
+- [x] The headless `/soleur:sync` still fires for both flows
+- [x] Existing project-scanner and ready-state tests still pass
+- [x] New test: setup route does not call `scanProjectHealth` when source is `"start_fresh"`
+- [x] New test: setup route stores `health_snapshot: null` in the DB update when source is `"start_fresh"`
 
 ## Test Scenarios
 
