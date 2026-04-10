@@ -10,6 +10,8 @@ interface AtMentionDropdownProps {
   visible: boolean;
   onSelect: (leaderId: DomainLeaderId) => void;
   onDismiss: () => void;
+  /** Custom names map from TeamNamesProvider (e.g., { cto: "Alex" }) */
+  customNames?: Record<string, string>;
 }
 
 export function AtMentionDropdown({
@@ -17,6 +19,7 @@ export function AtMentionDropdown({
   visible,
   onSelect,
   onDismiss,
+  customNames = {},
 }: AtMentionDropdownProps) {
   const [activeIndex, setActiveIndex] = useState(0);
 
@@ -24,12 +27,14 @@ export function AtMentionDropdown({
     ROUTABLE_DOMAIN_LEADERS.filter((leader) => {
       if (!query) return true;
       const q = query.toLowerCase();
+      const custom = customNames[leader.id]?.toLowerCase() ?? "";
       return (
         leader.id.includes(q) ||
         leader.name.toLowerCase().includes(q) ||
-        leader.title.toLowerCase().includes(q)
+        leader.title.toLowerCase().includes(q) ||
+        custom.includes(q)
       );
-    }), [query]);
+    }), [query, customNames]);
 
   // Reset active index when query or visibility changes
   useEffect(() => {
@@ -98,12 +103,16 @@ export function AtMentionDropdown({
               <span
                 className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-xs font-semibold text-white ${LEADER_BG_COLORS[leader.id]}`}
               >
-                {leader.name.slice(0, 2)}
+                {customNames[leader.id]
+                  ? customNames[leader.id].slice(0, 3).toUpperCase()
+                  : leader.name.slice(0, 3)}
               </span>
               <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-2">
                   <span className="text-sm font-semibold text-white">
-                    {leader.name}
+                    {customNames[leader.id]
+                      ? `${customNames[leader.id]} (${leader.name})`
+                      : leader.name}
                   </span>
                 </div>
                 <p className="truncate text-xs text-neutral-400">

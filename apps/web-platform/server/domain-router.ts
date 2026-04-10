@@ -28,7 +28,23 @@ export interface RouteResult {
  * leader IDs and names (e.g., @CMO, @cmo, @CTO).
  * Returns only valid leader IDs; invalid mentions are ignored.
  */
-export function parseAtMentions(message: string): DomainLeaderId[] {
+export function parseAtMentions(
+  message: string,
+  customNames?: Record<string, string>,
+): DomainLeaderId[] {
+  // Build reverse lookup: custom name (lowercase) -> leader ID
+  const customNameMap = new Map<string, DomainLeaderId>();
+  if (customNames) {
+    for (const [leaderId, name] of Object.entries(customNames)) {
+      if (name) {
+        // Map the full custom name and its first word (for multi-word names)
+        customNameMap.set(name.toLowerCase(), leaderId as DomainLeaderId);
+        const firstWord = name.split(/\s+/)[0];
+        if (firstWord) customNameMap.set(firstWord.toLowerCase(), leaderId as DomainLeaderId);
+      }
+    }
+  }
+
   const mentionPattern = /@(\w+)/g;
   const mentions: DomainLeaderId[] = [];
   const seen = new Set<DomainLeaderId>();
@@ -36,9 +52,20 @@ export function parseAtMentions(message: string): DomainLeaderId[] {
   let match: RegExpExecArray | null;
   while ((match = mentionPattern.exec(message)) !== null) {
     const tag = match[1].toLowerCase();
-    const leader = ROUTABLE_DOMAIN_LEADERS.find(
+
+    // Check role ID and role name first
+    let leader = ROUTABLE_DOMAIN_LEADERS.find(
       (l) => l.id === tag || l.name.toLowerCase() === tag,
     );
+
+    // Fall back to custom name lookup
+    if (!leader) {
+      const customId = customNameMap.get(tag);
+      if (customId) {
+        leader = ROUTABLE_DOMAIN_LEADERS.find((l) => l.id === customId);
+      }
+    }
+
     if (leader && !seen.has(leader.id)) {
       seen.add(leader.id);
       mentions.push(leader.id);

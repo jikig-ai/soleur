@@ -11,6 +11,7 @@ import type { DomainLeaderId } from "@/server/domain-leaders";
 import { LEADER_COLORS, LEADER_BG_COLORS } from "@/components/chat/leader-colors";
 import { ChatInput } from "@/components/chat/chat-input";
 import { AtMentionDropdown } from "@/components/chat/at-mention-dropdown";
+import { useTeamNames } from "@/hooks/use-team-names";
 
 export default function ChatPage() {
   const params = useParams<{ conversationId: string }>();
@@ -36,6 +37,8 @@ export default function ChatPage() {
     activeLeaderIds,
     usageData,
   } = useWebSocket(conversationId);
+
+  const { names: customNames, getDisplayName, getBadgeLabel } = useTeamNames();
 
   const [sessionStarted, setSessionStarted] = useState(false);
   const [initialMsgSent, setInitialMsgSent] = useState(false);
@@ -147,8 +150,7 @@ export default function ChatPage() {
           {activeLeaderIds.length > 0 && (
             <span className="text-sm text-neutral-400 md:hidden">
               {activeLeaderIds
-                .map((id) => DOMAIN_LEADERS.find((l) => l.id === id)?.name)
-                .filter(Boolean)
+                .map((id) => getDisplayName(id))
                 .join(", ")}{" "}
               responding
             </span>
@@ -170,14 +172,14 @@ export default function ChatPage() {
               <>
                 Auto-routed to{" "}
                 {respondingLeaders
-                  .map((id) => DOMAIN_LEADERS.find((l) => l.id === id)?.name)
+                  .map((id) => getDisplayName(id))
                   .join(", ")}
               </>
             ) : (
               <>
                 Directed to @
                 {respondingLeaders
-                  .map((id) => DOMAIN_LEADERS.find((l) => l.id === id)?.name)
+                  .map((id) => getDisplayName(id))
                   .join(", @")}
               </>
             )}
@@ -262,6 +264,8 @@ export default function ChatPage() {
                     leaderId={msg.leaderId}
                     showFullTitle={!!isFirst}
                     isStreaming={!!msg.leaderId && activeLeaderIds.includes(msg.leaderId)}
+                    getDisplayName={getDisplayName}
+                    getBadgeLabel={getBadgeLabel}
                   />
                 )}
               </div>
@@ -309,6 +313,7 @@ export default function ChatPage() {
           <AtMentionDropdown
             query={atQuery}
             visible={atVisible}
+            customNames={customNames}
             onSelect={(id) => {
               setAtVisible(false);
               if (insertRef.current) {
@@ -374,16 +379,23 @@ function MessageBubble({
   leaderId,
   showFullTitle = false,
   isStreaming = false,
+  getDisplayName,
+  getBadgeLabel,
 }: {
   role: "user" | "assistant";
   content: string;
   leaderId?: DomainLeaderId;
   showFullTitle?: boolean;
   isStreaming?: boolean;
+  getDisplayName?: (id: DomainLeaderId) => string;
+  getBadgeLabel?: (id: DomainLeaderId) => string;
 }) {
   const isUser = role === "user";
   const leader = leaderId ? DOMAIN_LEADERS.find((l) => l.id === leaderId) : null;
   const colorClass = leaderId ? (LEADER_COLORS[leaderId] ?? "border-l-neutral-500") : "";
+
+  const displayName = leaderId && getDisplayName ? getDisplayName(leaderId) : leader?.name;
+  const badgeText = leaderId && getBadgeLabel ? getBadgeLabel(leaderId) : leader?.name.slice(0, 3);
 
   return (
     <div className={`flex ${isUser ? "justify-end" : "justify-start"}`}>
@@ -393,7 +405,7 @@ function MessageBubble({
           <span
             className={`mt-1 flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-xs font-semibold text-white ${LEADER_BG_COLORS[leaderId!]}`}
           >
-            {leader.name.slice(0, 2)}
+            {badgeText}
           </span>
         )}
 
@@ -407,7 +419,7 @@ function MessageBubble({
           {leader && (
             <div className="mb-1 flex items-center gap-2">
               <span className="text-xs font-semibold text-neutral-300">
-                {leader.name}
+                {displayName}
               </span>
               {showFullTitle && (
                 <span className="text-xs text-neutral-500">{leader.title}</span>

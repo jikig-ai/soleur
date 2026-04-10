@@ -25,6 +25,21 @@ vi.mock("@/lib/ws-client", () => ({
   useWebSocket: () => wsReturn,
 }));
 
+// Mock useTeamNames hook
+vi.mock("@/hooks/use-team-names", () => ({
+  useTeamNames: () => ({
+    names: {},
+    nudgesDismissed: [],
+    namingPromptedAt: null,
+    loading: false,
+    updateName: vi.fn(),
+    dismissNudge: vi.fn(),
+    getDisplayName: (id: string) => id.toUpperCase(),
+    getBadgeLabel: (id: string) => id.toUpperCase().slice(0, 3),
+  }),
+  TeamNamesProvider: ({ children }: { children: React.ReactNode }) => children,
+}));
+
 // Mock next/navigation
 const mockSearchParams = new URLSearchParams();
 const mockReplace = vi.fn();
@@ -202,8 +217,8 @@ describe("ChatPage", () => {
       { id: "s1", role: "assistant", content: "My analysis", type: "text", leaderId: "cmo" },
     ];
     await renderChatPage();
-    // CMO name badge should be present
-    expect(screen.getByText("CMO")).toBeInTheDocument();
+    // CMO should appear in both the badge and name label
+    expect(screen.getAllByText("CMO").length).toBeGreaterThanOrEqual(1);
   });
 
   it("shows mobile back arrow", async () => {
