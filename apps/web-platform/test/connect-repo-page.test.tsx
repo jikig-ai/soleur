@@ -71,7 +71,7 @@ function setupFetchMock(overrides: Record<string, () => Promise<Response>> = {})
       Promise.resolve(new Response(JSON.stringify({ status: "cloning" }), { status: 200 })),
     "/api/repo/status": () =>
       Promise.resolve(
-        new Response(JSON.stringify({ status: "ready", repoName: "user/test-repo" }), {
+        new Response(JSON.stringify({ status: "not_connected" }), {
           status: 200,
         }),
       ),
@@ -117,6 +117,7 @@ beforeEach(() => {
 
   mockSearchParams.current = new URLSearchParams();
   mockPush.mockClear();
+  sessionStorage.clear();
 });
 
 afterEach(() => {
@@ -440,7 +441,7 @@ describe("Phase 3: Auto-refresh on visibility change", () => {
 
     // Wait for setting_up state
     await waitFor(() => {
-      expect(screen.getByText("Copying your project files")).toBeInTheDocument();
+      expect(screen.getByText("Cloning repository")).toBeInTheDocument();
     });
 
     // Clear fetch and simulate visibility change
