@@ -23,6 +23,10 @@ export async function DELETE(
   const { token } = await params;
 
   const serviceClient = createServiceClient();
+  // Note: workspace_status check is intentionally skipped for revocation.
+  // Revoking a share link is a metadata operation on kb_share_links,
+  // not a workspace content access. Users should be able to revoke even
+  // if their workspace is disconnected or not ready.
   const { data: shareLink, error: fetchError } = await serviceClient
     .from("kb_share_links")
     .select("id, user_id")
