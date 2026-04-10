@@ -23,6 +23,7 @@ import { createChildLogger } from "./logger";
 import { syncPull, syncPush } from "./session-sync";
 import { createPullRequest } from "./github-app";
 import { tryCreateVision, buildVisionEnhancementPrompt } from "./vision-helpers";
+import { getToolTier, buildGateMessage } from "./tool-tiers";
 
 const log = createChildLogger("agent");
 
@@ -437,6 +438,9 @@ When you need user input for important decisions, use the AskUserQuestion tool.`
 
     let mcpServersOption: Record<string, ReturnType<typeof createSdkMcpServer>> | undefined;
     let platformToolNames: string[] = [];
+    // Hoisted for canUseTool audit logging — set inside the installationId guard
+    let repoOwner = "";
+    let repoName = "";
 
     if (installationId && repoUrl) {
       // Parse owner/repo from repo_url (e.g., "https://github.com/owner/repo")
@@ -461,6 +465,9 @@ When you need user input for important decisions, use the AskUserQuestion tool.`
       }
 
       if (owner && repo) {
+        repoOwner = owner;
+        repoName = repo;
+
         const createPr = tool(
           "create_pull_request",
           "Create a pull request on the user's connected GitHub repository. " +
@@ -653,11 +660,74 @@ When you need user input for important decisions, use the AskUserQuestion tool.`
             return { behavior: "allow" as const };
           }
 
-          // Allow in-process MCP server tools registered via mcpServers option.
+          // Tiered gating for in-process MCP server tools (#1926).
           // Scoped to platformToolNames (not blanket mcp__ prefix) to prevent
           // future MCP servers from being auto-allowed without explicit review.
           if (platformToolNames.includes(toolName)) {
-            log.info({ sec: true, toolName, agentId: options.agentID }, "MCP tool invoked");
+            const tier = getToolTier(toolName);
+
+            // Structured audit log for every platform tool invocation
+            console.log(JSON.stringify({
+              tool: toolName,
+              tier,
+              decision: tier === "blocked" ? "deny" : "pending",
+              sessionId: session.sessionId,
+              repo: `${repoOwner}/${repoName}`,
+              ts: Date.now(),
+            }));
+
+            if (tier === "blocked") {
+              return {
+                behavior: "deny" as const,
+                message: "This action is not allowed from cloud agents",
+              };
+            }
+
+            if (tier === "gated") {
+              const gateId = randomUUID();
+              const question = buildGateMessage(toolName, toolInput);
+
+              sendToClient(userId, {
+                type: "review_gate",
+                gateId,
+                question,
+                options: ["Approve", "Reject"],
+              });
+
+              await updateConversationStatus(conversationId, "waiting_for_user");
+
+              const selection = await abortableReviewGate(
+                session,
+                gateId,
+                options.signal,
+                undefined,
+                ["Approve", "Reject"],
+              );
+
+              await updateConversationStatus(conversationId, "active");
+
+              // Update audit log with decision
+              console.log(JSON.stringify({
+                tool: toolName,
+                tier,
+                decision: selection === "Approve" ? "approved" : "rejected",
+                sessionId: session.sessionId,
+                repo: `${repoOwner}/${repoName}`,
+                ts: Date.now(),
+              }));
+
+              if (selection !== "Approve") {
+                return {
+                  behavior: "deny" as const,
+                  message: "User rejected the action",
+                };
+              }
+
+              return { behavior: "allow" as const };
+            }
+
+            // auto-approve: read-only tools pass through
+            log.info({ sec: true, toolName, agentId: options.agentID }, "MCP tool auto-approved");
             return { behavior: "allow" as const };
           }
 

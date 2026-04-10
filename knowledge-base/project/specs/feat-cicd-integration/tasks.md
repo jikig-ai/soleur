@@ -2,13 +2,13 @@
 
 ## Phase 1: Tiered Gating Infrastructure (#1926)
 
-- [ ] 1.1 Add tiered gate logic to `canUseTool` via switch on tool name: `auto-approve` | `gated` | `blocked`
-- [ ] 1.2 For `gated` tools: trigger `AskUserQuestion` with tool name, parameters, and human-readable description
-- [ ] 1.3 For `blocked` patterns: reject with clear error message
-- [ ] 1.4 Add inline structured audit logging in `canUseTool` (JSON to stdout)
+- [x] 1.1 Add tiered gate logic to `canUseTool` via switch on tool name: `auto-approve` | `gated` | `blocked`
+- [x] 1.2 For `gated` tools: trigger `AskUserQuestion` with tool name, parameters, and human-readable description
+- [x] 1.3 For `blocked` patterns: reject with clear error message
+- [x] 1.4 Add inline structured audit logging in `canUseTool` (JSON to stdout)
 - [ ] 1.5 Update GitHub App manifest to add `actions:write` and `checks:read` permissions
 - [ ] 1.6 Add graceful degradation for 403s from unapproved permission upgrades
-- [ ] 1.7 Write tests for tiered gating logic
+- [x] 1.7 Write tests for tiered gating logic
 
 ## Phase 2: Read CI Status (#1927)
 
