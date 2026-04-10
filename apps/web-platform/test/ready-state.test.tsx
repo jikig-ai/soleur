@@ -241,6 +241,7 @@ describe("ReadyState — health snapshot", () => {
       <ReadyState
         repoName="user/test-repo"
         onContinue={vi.fn()}
+        onViewKb={vi.fn()}
         healthSnapshot={mockSnapshot}
         syncConversationId={null}
       />,
