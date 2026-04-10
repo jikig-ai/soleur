@@ -25,3 +25,7 @@
 - [ ] 2.2 Grep all 8 domain leader agent files for `gh issue view` -- expect 8 matches (unchanged)
 - [ ] 2.3 Verify CCO wording matches other agents
 - [ ] 2.4 Run `npx markdownlint-cli2 --fix` on changed `.md` files
+
+## 3. Deferred (separate issue)
+
+- [ ] 3.1 Create GitHub issue for named agent spawning (Approach B) -- change brainstorm/plan skills to use `Task <leader-name>(Task Prompt)` instead of anonymous Tasks
