@@ -19,6 +19,95 @@ export interface AgentSession {
 export const REVIEW_GATE_TIMEOUT_MS = 5 * 60 * 1_000; // 5 minutes
 export const MAX_SELECTION_LENGTH = 256;
 
+// SDK AskUserQuestion schema types (from @anthropic-ai/claude-agent-sdk)
+interface SdkQuestionOption {
+  label: string;
+  description?: string;
+  preview?: string;
+}
+
+interface SdkQuestion {
+  question: string;
+  header: string;
+  options: SdkQuestionOption[];
+  multiSelect: boolean;
+}
+
+export interface ReviewGateInput {
+  question: string;
+  header: string;
+  options: string[];
+  descriptions: Record<string, string | undefined>;
+  isNewSchema: boolean;
+}
+
+/**
+ * Extract review gate fields from the SDK's AskUserQuestion tool input.
+ * Handles both the new SDK schema (questions[] array) and legacy format
+ * (flat question/options fields).
+ */
+export function extractReviewGateInput(
+  toolInput: Record<string, unknown>,
+): ReviewGateInput {
+  const questions = Array.isArray(toolInput.questions)
+    ? (toolInput.questions as SdkQuestion[])
+    : undefined;
+
+  const firstQ = questions && questions.length > 0 ? questions[0] : undefined;
+
+  if (firstQ) {
+    const options = firstQ.options.map((o) => o.label);
+    const descriptions = Object.fromEntries(
+      firstQ.options.map((o) => [o.label, o.description]),
+    );
+    return {
+      question: firstQ.question,
+      header: firstQ.header || "Input needed",
+      options: options.length > 0 ? options : ["Approve", "Reject"],
+      descriptions,
+      isNewSchema: true,
+    };
+  }
+
+  // Legacy fallback
+  const question =
+    (toolInput.question as string) || "Agent needs your input";
+  const rawOptions = Array.isArray(toolInput.options)
+    ? (toolInput.options as unknown[]).filter(
+        (o): o is string => typeof o === "string",
+      )
+    : [];
+
+  return {
+    question,
+    header: "Input needed",
+    options: rawOptions.length > 0 ? rawOptions : ["Approve", "Reject"],
+    descriptions: {},
+    isNewSchema: false,
+  };
+}
+
+/**
+ * Build the updatedInput response for the SDK after the user makes a selection.
+ * New schema returns { questions, answers: { [question]: selection } }.
+ * Legacy schema returns { ...toolInput, answer: selection }.
+ */
+export function buildReviewGateResponse(
+  toolInput: Record<string, unknown>,
+  selection: string,
+  isNewSchema: boolean,
+): Record<string, unknown> {
+  if (isNewSchema) {
+    const questions = toolInput.questions as SdkQuestion[];
+    const questionText = questions[0].question;
+    return {
+      questions,
+      answers: { [questionText]: selection },
+    };
+  }
+  return { ...toolInput, answer: selection };
+}
+
 /**
  * Validate that a review gate selection is one of the offered options
  * and within the length limit. Throws on invalid input.

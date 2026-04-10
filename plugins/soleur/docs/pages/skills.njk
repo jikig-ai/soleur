@@ -2,7 +2,7 @@
 title: Soleur Skills
 description: "Multi-step workflow skills for the Soleur platform — from feature development and code review to content writing, deployment, and agentic engineering."
 layout: base.njk
-permalink: pages/skills.html
+permalink: skills/
 ---
 
     <section class="page-hero">
@@ -29,7 +29,7 @@ The compound engineering lifecycle drives every feature through five stages: bra
     <div class="container">
       <nav class="category-nav" aria-label="Skill categories">
         {%- for category in skills.categories %}
-        <a href="pages/skills.html#{{ category.slug }}" class="category-pill">{{ category.name }}</a>
+        <a href="skills/#{{ category.slug }}" class="category-pill">{{ category.name }}</a>
         {%- endfor %}
       </nav>
 

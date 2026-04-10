@@ -61,10 +61,10 @@ describe("validateOrigin", () => {
     expect(result.origin).toBe("not-a-valid-url");
   });
 
-  it("rejects when neither Origin nor Referer is present (fail-closed)", () => {
+  it("allows requests without Origin or Referer (non-browser clients)", () => {
     const req = makeRequest({});
     const result = validateOrigin(req);
-    expect(result.valid).toBe(false);
+    expect(result.valid).toBe(true);
     expect(result.origin).toBeNull();
   });
 

@@ -41,6 +41,15 @@
             "command": ".claude/hooks/worktree-write-guard.sh"
           }
         ]
+      },
+      {
+        "matcher": "mcp__pencil__open_document",
+        "hooks": [
+          {
+            "type": "command",
+            "command": ".claude/hooks/pencil-open-guard.sh"
+          }
+        ]
       }
     ]
   }
