@@ -86,7 +86,24 @@ Created a living status document tracking vendor DPAs, legal documents, and comp
 - Living status documents (like `expenses.md`, `compliance-posture.md`) should exist for every domain where agents make status assertions
 - When an agent references an issue number, the system should treat the assertion as unverified until `gh` CLI confirms it
 
+## Recurrence: 2026-04-10
+
+[Updated 2026-04-10] The fix documented above was **incompletely applied**. During the #1062 CI/CD integration brainstorm:
+
+- **CTO** cited #1060, #1044, and #1076 as open blockers — all three were closed 3-13 days prior
+- **CPO** made the same stale assertions despite having the verification instruction since commit a558001a
+
+**Root cause of recurrence:** The learning documented the fix as applied to "all 8 domain leaders" but only the CPO actually received it. The CTO, CFO, CRO, CCO, COO, and CMO assess phases still lack the `gh issue view` verification instruction.
+
+**Tracking issue:** #1930 — add verification instruction to all 6 missing domain leaders
+
+**Additional gap:** The roadmap (`knowledge-base/product/roadmap.md`) had stale status for #1076 ("Not started" when it was closed 2026-04-07). Fixed during this session.
+
+**Lesson:** When a fix is documented as applied to N agents, verify each agent file actually received the edit. "Fix applied to all 8" was aspirational, not verified.
+
 ## Related Issues
 
-- #1056: Supabase DPA update tracking (the task that exposed this problem)
+- #1056: Supabase DPA update tracking (the task that exposed the original problem)
 - #670: Original vendor DPA review (the issue both agents incorrectly claimed was not started)
+- #1062: CI/CD integration brainstorm (exposed the recurrence)
+- #1930: Tracking issue to apply the fix to 6 missing domain leaders

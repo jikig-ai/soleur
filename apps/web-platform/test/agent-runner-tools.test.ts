@@ -68,7 +68,9 @@ vi.mock("../server/sandbox-hook", () => ({
   createSandboxHook: vi.fn(() => vi.fn()),
 }));
 vi.mock("../server/review-gate", () => ({
-  abortableReviewGate: vi.fn(),
+  // Default to "Approve" so gated tools pass through in wiring tests.
+  // Tiered gating behavior is tested in canusertool-tiered-gating.test.ts.
+  abortableReviewGate: vi.fn().mockResolvedValue("Approve"),
   validateSelection: vi.fn(),
   MAX_SELECTION_LENGTH: 200,
   REVIEW_GATE_TIMEOUT_MS: 300_000,
@@ -84,6 +86,11 @@ vi.mock("../server/domain-router", () => ({ routeMessage: vi.fn() }));
 vi.mock("../server/session-sync", () => ({
   syncPull: vi.fn(),
   syncPush: vi.fn(),
+}));
+vi.mock("../server/github-api", () => ({
+  githubApiGet: vi.fn().mockResolvedValue({ default_branch: "main" }),
+  githubApiGetText: vi.fn().mockResolvedValue(""),
+  githubApiPost: vi.fn().mockResolvedValue(null),
 }));
 vi.mock("../server/service-tools", () => ({
   plausibleCreateSite: vi.fn(),

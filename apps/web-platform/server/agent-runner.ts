@@ -24,6 +24,11 @@ import { syncPull, syncPush } from "./session-sync";
 import { createPullRequest } from "./github-app";
 import { plausibleCreateSite, plausibleAddGoal, plausibleGetStats } from "./service-tools";
 import { tryCreateVision, buildVisionEnhancementPrompt } from "./vision-helpers";
+import { getToolTier, buildGateMessage } from "./tool-tiers";
+import { readCiStatus, readWorkflowLogs } from "./ci-tools";
+import { triggerWorkflow, createRateLimiter } from "./trigger-workflow";
+import { pushBranch } from "./push-branch";
+import { githubApiGet } from "./github-api";
 
 const log = createChildLogger("agent");
 
@@ -465,6 +470,13 @@ When you need user input for important decisions, use the AskUserQuestion tool.`
 
     let mcpServersOption: Record<string, ReturnType<typeof createSdkMcpServer>> | undefined;
     let platformToolNames: string[] = [];
+    // Hoisted for canUseTool audit logging — set inside the installationId guard
+    let repoOwner = "";
+    let repoName = "";
+
+    // Session-scoped rate limiter for workflow triggers (#1928)
+    const workflowRateLimiter = createRateLimiter();
+
     // eslint-disable-next-line @typescript-eslint/no-explicit-any -- SDK uses any for heterogeneous tool arrays
     const platformTools: Array<ReturnType<typeof tool<any>>> = [];
 
@@ -489,6 +501,22 @@ When you need user input for important decisions, use the AskUserQuestion tool.`
       }
 
       if (owner && repo) {
+        repoOwner = owner;
+        repoName = repo;
+
+        // Fetch the repo's default branch for protected-branch validation (#1929).
+        // Uses the existing token cache — no extra round-trip if token is warm.
+        let defaultBranch = "main";
+        try {
+          const repoData = await githubApiGet<{ default_branch: string }>(
+            installationId,
+            `/repos/${owner}/${repo}`,
+          );
+          defaultBranch = repoData.default_branch;
+        } catch {
+          // Fall back to "main" — still protected by the hardcoded list
+        }
+
         const createPr = tool(
           "create_pull_request",
           "Create a pull request on the user's connected GitHub repository. " +
@@ -520,6 +548,132 @@ When you need user input for important decisions, use the AskUserQuestion tool.`
 
         platformTools.push(createPr);
         platformToolNames.push("mcp__soleur_platform__create_pull_request");
+
+        // Phase 2: Read CI status (#1927) — auto-approve tier
+        platformTools.push(
+          tool(
+            "github_read_ci_status",
+            "Read recent CI workflow run statuses for the connected repository. " +
+            "Returns status (pass/fail/in-progress), commit SHA, branch, run URL, " +
+            "and workflow name/ID. Optionally filter by branch.",
+            {
+              branch: z.string().optional().describe("Filter runs by branch name"),
+              per_page: z.number().default(10).describe("Number of runs to return (max 30)"),
+            },
+            async (args) => {
+              try {
+                const runs = await readCiStatus(
+                  installationId, owner, repo,
+                  { branch: args.branch, per_page: Math.min(args.per_page, 30) },
+                );
+                return {
+                  content: [{ type: "text" as const, text: JSON.stringify(runs, null, 2) }],
+                };
+              } catch (err) {
+                return {
+                  content: [{ type: "text" as const, text: `Error reading CI status: ${(err as Error).message}` }],
+                  isError: true,
+                };
+              }
+            },
+          ),
+          tool(
+            "github_read_workflow_logs",
+            "Read failure details for a specific workflow run. Returns check annotations " +
+            "(structured failure data) when available, otherwise falls back to the last " +
+            "100 lines of the first failed step. Use github_read_ci_status first to find run IDs.",
+            {
+              run_id: z.number().describe("The workflow run ID to inspect"),
+            },
+            async (args) => {
+              try {
+                const result = await readWorkflowLogs(
+                  installationId, owner, repo, args.run_id,
+                );
+                return {
+                  content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
+                };
+              } catch (err) {
+                return {
+                  content: [{ type: "text" as const, text: `Error reading workflow logs: ${(err as Error).message}` }],
+                  isError: true,
+                };
+              }
+            },
+          ),
+        );
+        platformToolNames.push(
+          "mcp__soleur_platform__github_read_ci_status",
+          "mcp__soleur_platform__github_read_workflow_logs",
+        );
+
+        // Phase 3: Trigger workflows (#1928) — gated tier
+        platformTools.push(
+          tool(
+            "github_trigger_workflow",
+            "Trigger a workflow_dispatch event on the connected repository. " +
+            "Requires founder approval via review gate. Rate limited to 10 triggers per session. " +
+            "Use github_read_ci_status first to find workflow IDs.",
+            {
+              workflow_id: z.number().describe("The workflow ID to trigger (from github_read_ci_status)"),
+              ref: z.string().describe("Git ref to run the workflow on (branch name or tag)"),
+              inputs: z.record(z.string(), z.string()).optional().describe("Optional workflow_dispatch inputs"),
+            },
+            async (args) => {
+              try {
+                const result = await triggerWorkflow(
+                  installationId, owner, repo,
+                  args.workflow_id, args.ref, workflowRateLimiter, args.inputs,
+                );
+                return {
+                  content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
+                };
+              } catch (err) {
+                return {
+                  content: [{ type: "text" as const, text: `Error triggering workflow: ${(err as Error).message}` }],
+                  isError: true,
+                };
+              }
+            },
+          ),
+        );
+        platformToolNames.push("mcp__soleur_platform__github_trigger_workflow");
+
+        // Phase 4: Push branches (#1929) — gated tier
+        platformTools.push(
+          tool(
+            "github_push_branch",
+            "Push the current workspace HEAD to a feature branch on the remote. " +
+            "Requires founder approval via review gate. Force-push and push to " +
+            "main/master are blocked unconditionally.",
+            {
+              branch: z.string().describe("Target branch name (must not be main, master, or default branch)"),
+              force: z.boolean().default(false).describe("Force-push (always rejected — included for explicit error messaging)"),
+            },
+            async (args) => {
+              try {
+                const result = await pushBranch({
+                  installationId,
+                  owner,
+                  repo,
+                  workspacePath,
+                  branch: args.branch,
+                  force: args.force,
+                  defaultBranch,
+                });
+                return {
+                  content: [{ type: "text" as const, text: JSON.stringify(result) }],
+                };
+              } catch (err) {
+                return {
+                  content: [{ type: "text" as const, text: `Error pushing branch: ${(err as Error).message}` }],
+                  isError: true,
+                };
+              }
+            },
+          ),
+        );
+        platformToolNames.push("mcp__soleur_platform__github_push_branch");
       }
     }
 
@@ -750,11 +904,67 @@ When you need user input for important decisions, use the AskUserQuestion tool.`
             return { behavior: "allow" as const };
           }
 
-          // Allow in-process MCP server tools registered via mcpServers option.
+          // Tiered gating for in-process MCP server tools (#1926).
           // Scoped to platformToolNames (not blanket mcp__ prefix) to prevent
           // future MCP servers from being auto-allowed without explicit review.
           if (platformToolNames.includes(toolName)) {
-            log.info({ sec: true, toolName, agentId: options.agentID }, "MCP tool invoked");
+            const tier = getToolTier(toolName);
+
+            if (tier === "blocked") {
+              log.info(
+                { sec: true, tool: toolName, tier, decision: "deny", repo: `${repoOwner}/${repoName}` },
+                "Platform tool blocked",
+              );
+              return {
+                behavior: "deny" as const,
+                message: "This action is not allowed from cloud agents",
+              };
+            }
+
+            if (tier === "gated") {
+              const gateId = randomUUID();
+              const question = buildGateMessage(toolName, toolInput);
+
+              sendToClient(userId, {
+                type: "review_gate",
+                gateId,
+                question,
+                options: ["Approve", "Reject"],
+              });
+
+              await updateConversationStatus(conversationId, "waiting_for_user");
+
+              const selection = await abortableReviewGate(
+                session,
+                gateId,
+                options.signal,
+                undefined,
+                ["Approve", "Reject"],
+              );
+
+              await updateConversationStatus(conversationId, "active");
+
+              const decision = selection === "Approve" ? "approved" : "rejected";
+              log.info(
+                { sec: true, tool: toolName, tier, decision, repo: `${repoOwner}/${repoName}` },
+                "Platform tool gated",
+              );
+
+              if (selection !== "Approve") {
+                return {
+                  behavior: "deny" as const,
+                  message: "User rejected the action",
+                };
+              }
+
+              return { behavior: "allow" as const };
+            }
+
+            // auto-approve: read-only tools pass through
+            log.info(
+              { sec: true, tool: toolName, tier, decision: "auto-approved", repo: `${repoOwner}/${repoName}` },
+              "Platform tool auto-approved",
+            );
             return { behavior: "allow" as const };
           }
 
