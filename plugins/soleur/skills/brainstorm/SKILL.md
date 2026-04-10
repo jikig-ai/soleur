@@ -315,7 +315,23 @@ Ensure the brainstorms directory exists before writing.
 
 **Execute concluded actions first.** If the brainstorm concluded with an immediate actionable step (subscribe to a service, configure a tool, open a page), execute it via Playwright, `xdg-open`, CLI, or API before presenting handoff options. Do not list it as a prose "action item."
 
-**Context headroom notice:** Before presenting options, display: "All artifacts are on disk. Starting a new session for `/soleur:plan` will give you maximum context headroom."
+**Exit gate sequence:**
+
+1. Run `skill: soleur:compound` to capture learnings from the brainstorm session.
+   If compound finds nothing to capture, it will skip gracefully — do not block on this.
+2. Commit and push any remaining uncommitted artifacts. Scope `git add` to
+   feature-specific directories only (do NOT use `git add -A knowledge-base/`
+   which could stage unrelated changes from other worktrees or manual edits):
+
+   ```bash
+   git add knowledge-base/project/brainstorms/ knowledge-base/project/specs/feat-<name>/
+   git status --short
+   ```
+
+   If there are staged changes, commit with `git commit -m "docs: brainstorm artifacts for feat-<name>"` and `git push`.
+   If push fails (no network), warn and continue.
+
+Display: "All artifacts are on disk. Run `/clear` then `/soleur:plan` for maximum context headroom."
 
 Use **AskUserQuestion tool** to present next steps:
 
