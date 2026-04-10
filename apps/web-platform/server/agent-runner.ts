@@ -443,6 +443,15 @@ When you need user input for important decisions, use the AskUserQuestion tool.`
       if (enhancement) systemPrompt += enhancement;
     }
 
+    // Inject connected services context for service automation tier selection.
+    // The agent uses this to decide MCP vs API vs guided instructions.
+    if (Object.keys(serviceTokens).length > 0) {
+      const serviceList = Object.keys(serviceTokens)
+        .map((envVar) => `- ${envVar}: connected`)
+        .join("\n");
+      systemPrompt += `\n\n## Connected Services\n${serviceList}`;
+    }
+
     // ---------------------------------------------------------------------------
     // In-process MCP server for platform tools (PR creation, etc.)
     // Only available when user has a GitHub App installation with a connected repo.
