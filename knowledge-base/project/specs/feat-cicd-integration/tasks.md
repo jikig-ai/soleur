@@ -12,12 +12,12 @@
 
 ## Phase 2: Read CI Status (#1927)
 
-- [ ] 2.1 Create `github-api.ts`: thin fetch wrapper using `generateInstallationToken()`
-- [ ] 2.2 Add `github_read_ci_status` tool (auto-approve) — includes workflow names/IDs in results
-- [ ] 2.3 Add `github_read_workflow_logs` tool (auto-approve) — annotations first, fallback to last 100 lines of failed step
-- [ ] 2.4 Register tools with `auto-approve` gate tier
-- [ ] 2.5 Add `allowedTools` entries in agent-runner.ts
-- [ ] 2.6 Write tests: mock GitHub API, verify annotation extraction
+- [x] 2.1 Create `github-api.ts`: thin fetch wrapper using `generateInstallationToken()`
+- [x] 2.2 Add `github_read_ci_status` tool (auto-approve) — includes workflow names/IDs in results
+- [x] 2.3 Add `github_read_workflow_logs` tool (auto-approve) — annotations first, fallback to last 100 lines of failed step
+- [x] 2.4 Register tools with `auto-approve` gate tier
+- [x] 2.5 Add `allowedTools` entries in agent-runner.ts
+- [x] 2.6 Write tests: mock GitHub API, verify annotation extraction
 
 ## Phase 3: Trigger Workflows (#1928)
 

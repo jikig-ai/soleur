@@ -24,6 +24,7 @@ import { syncPull, syncPush } from "./session-sync";
 import { createPullRequest } from "./github-app";
 import { tryCreateVision, buildVisionEnhancementPrompt } from "./vision-helpers";
 import { getToolTier, buildGateMessage } from "./tool-tiers";
+import { readCiStatus, readWorkflowLogs } from "./ci-tools";
 
 const log = createChildLogger("agent");
 
@@ -497,14 +498,71 @@ When you need user input for important decisions, use the AskUserQuestion tool.`
           },
         );
 
+        // Phase 2: Read CI status (#1927) — auto-approve tier
+        const ciStatusTool = tool(
+          "github_read_ci_status",
+          "Read recent CI workflow run statuses for the connected repository. " +
+          "Returns status (pass/fail/in-progress), commit SHA, branch, run URL, " +
+          "and workflow name/ID. Optionally filter by branch.",
+          {
+            branch: z.string().optional().describe("Filter runs by branch name"),
+            per_page: z.number().default(10).describe("Number of runs to return (max 30)"),
+          },
+          async (args) => {
+            try {
+              const runs = await readCiStatus(
+                installationId, owner, repo,
+                { branch: args.branch, per_page: Math.min(args.per_page, 30) },
+              );
+              return {
+                content: [{ type: "text" as const, text: JSON.stringify(runs, null, 2) }],
+              };
+            } catch (err) {
+              return {
+                content: [{ type: "text" as const, text: `Error reading CI status: ${(err as Error).message}` }],
+                isError: true,
+              };
+            }
+          },
+        );
+
+        const workflowLogsTool = tool(
+          "github_read_workflow_logs",
+          "Read failure details for a specific workflow run. Returns check annotations " +
+          "(structured failure data) when available, otherwise falls back to the last " +
+          "100 lines of the first failed step. Use github_read_ci_status first to find run IDs.",
+          {
+            run_id: z.number().describe("The workflow run ID to inspect"),
+          },
+          async (args) => {
+            try {
+              const result = await readWorkflowLogs(
+                installationId, owner, repo, args.run_id,
+              );
+              return {
+                content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
+              };
+            } catch (err) {
+              return {
+                content: [{ type: "text" as const, text: `Error reading workflow logs: ${(err as Error).message}` }],
+                isError: true,
+              };
+            }
+          },
+        );
+
         const toolServer = createSdkMcpServer({
           name: "soleur_platform",
           version: "1.0.0",
-          tools: [createPr],
+          tools: [createPr, ciStatusTool, workflowLogsTool],
         });
 
         mcpServersOption = { soleur_platform: toolServer };
-        platformToolNames = ["mcp__soleur_platform__create_pull_request"];
+        platformToolNames = [
+          "mcp__soleur_platform__create_pull_request",
+          "mcp__soleur_platform__github_read_ci_status",
+          "mcp__soleur_platform__github_read_workflow_logs",
+        ];
       }
     }
 
