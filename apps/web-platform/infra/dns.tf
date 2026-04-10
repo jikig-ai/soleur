@@ -130,12 +130,8 @@ resource "cloudflare_record" "buttondown_ns2" {
 # DNSSEC for soleur.ai -- chain of trust via DS record at .ai registry.
 # Cloudflare Registrar auto-propagates DS records via CDS/CDNSKEY scanning.
 # Status transitions: disabled -> pending -> active (1-2 days for registry propagation).
-#
-# The lifecycle block prevents perpetual drift during the pending -> active
-# transition. The API returns "pending" while the DS record propagates to the
-# .ai registry, but our desired state is "active". Without ignore_changes,
-# every terraform plan would show a diff. Remove the lifecycle block once
-# status reaches "active" (verify via: dig soleur.ai DS @8.8.8.8 +short).
+# Status is computed-only in provider v4.x (not configurable).
+# Verify: dig soleur.ai DS @8.8.8.8 +short
 resource "cloudflare_zone_dnssec" "soleur_ai" {
   zone_id = var.cf_zone_id
 }
