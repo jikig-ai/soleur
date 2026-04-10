@@ -74,7 +74,7 @@ resource "cloudflare_record" "mx_send_send" {
 resource "cloudflare_record" "dmarc" {
   zone_id = var.cf_zone_id
   name    = "_dmarc"
-  content = "v=DMARC1; p=quarantine; rua=mailto:dmarc-reports@soleur.ai; pct=100"
+  content = "v=DMARC1; p=reject; rua=mailto:dmarc-reports@soleur.ai; pct=100"
   type    = "TXT"
   ttl     = 1
 }
@@ -100,11 +100,57 @@ resource "cloudflare_record" "supabase_acme_challenge" {
   ttl     = 60
 }
 
+# SPF hard-fail for root domain -- soleur.ai does not send email directly.
+# Prevents spoofing of @soleur.ai addresses. Sending domains (send.soleur.ai)
+# have their own SPF records with amazonses.com include.
+resource "cloudflare_record" "spf_root" {
+  zone_id = var.cf_zone_id
+  name    = "soleur.ai"
+  content = "v=spf1 -all"
+  type    = "TXT"
+  ttl     = 1
+}
+
 # Google Search Console domain verification (required for OAuth consent screen branding, see #1398)
 resource "cloudflare_record" "google_site_verification" {
   zone_id = var.cf_zone_id
   name    = "soleur.ai" # Use FQDN, not "@" -- CF API normalizes @ to FQDN, causing perpetual drift
   content = "google-site-verification=zbo0JKaBz4mZwUq9sv_gXtmw5RmiN6dw_O8bqK2nq6s"
+  type    = "TXT"
+  ttl     = 1
+}
+
+# GitHub Pages -- docs site (soleur.ai apex + www redirect)
+# These records were previously created via dashboard; imported to Terraform for IaC governance.
+resource "cloudflare_record" "github_pages" {
+  for_each = toset([
+    "185.199.108.153",
+    "185.199.109.153",
+    "185.199.110.153",
+    "185.199.111.153",
+  ])
+
+  zone_id = var.cf_zone_id
+  name    = "soleur.ai"
+  content = each.value
+  type    = "A"
+  proxied = true
+  ttl     = 1
+}
+
+resource "cloudflare_record" "www" {
+  zone_id = var.cf_zone_id
+  name    = "www"
+  content = "jikig-ai.github.io"
+  type    = "CNAME"
+  proxied = true
+  ttl     = 1
+}
+
+resource "cloudflare_record" "github_pages_challenge" {
+  zone_id = var.cf_zone_id
+  name    = "_github-pages-challenge-jikig-ai"
+  content = "8fcc2ac37a5abcac6cd2c71556053f"
   type    = "TXT"
   ttl     = 1
 }
@@ -125,4 +171,13 @@ resource "cloudflare_record" "buttondown_ns2" {
   content = "ns2.onbuttondown.com"
   type    = "NS"
   ttl     = 1
+}
+
+# DNSSEC for soleur.ai -- chain of trust via DS record at .ai registry.
+# Cloudflare Registrar auto-propagates DS records via CDS/CDNSKEY scanning.
+# Status transitions: disabled -> pending -> active (1-2 days for registry propagation).
+# Status is computed-only in provider v4.x (not configurable).
+# Verify: dig soleur.ai DS @8.8.8.8 +short
+resource "cloudflare_zone_dnssec" "soleur_ai" {
+  zone_id = var.cf_zone_id
 }

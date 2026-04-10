@@ -8,7 +8,7 @@ const PLUGIN_ROOT = resolve(import.meta.dir, "..");
 // Agents recurse into subdirectories (loader behavior)
 export function discoverAgents(): string[] {
   return Array.from(new Glob("agents/**/*.md").scanSync(PLUGIN_ROOT)).filter(
-    (f) => !basename(f).startsWith("README"),
+    (f) => !basename(f).startsWith("README") && !f.includes("/references/"),
   );
 }
 

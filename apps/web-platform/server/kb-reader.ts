@@ -69,6 +69,8 @@ function parseFrontmatter(raw: string): {
   content: string;
 } {
   try {
+    // engines: {} disables custom YAML engines, preventing code injection
+    // via gray-matter's historical JS-in-frontmatter feature (CVE in <4.0.3).
     const parsed = matter(raw, { engines: {} });
     return {
       frontmatter:

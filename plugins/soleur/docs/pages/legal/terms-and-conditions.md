@@ -2,7 +2,7 @@
 title: "Terms & Conditions"
 description: "Terms and Conditions governing use of the Soleur platform."
 layout: base.njk
-permalink: pages/legal/terms-and-conditions.html
+permalink: legal/terms-and-conditions/
 ---
 
 <section class="page-hero">
@@ -82,7 +82,7 @@ When you create a Web Platform account:
 - You may store encrypted API keys (BYOK -- bring your own key) in your workspace.
 - If you subscribe to a paid plan, payment is processed by Stripe via Stripe Checkout. Card data is handled exclusively by Stripe and never reaches Jikigai servers.
 
-The Web Platform is hosted on Hetzner servers in Helsinki, Finland (EU) and uses Cloudflare as a CDN/proxy. Full data processing details are described in the [Privacy Policy](/pages/legal/privacy-policy.html) Section 4.7.
+The Web Platform is hosted on Hetzner servers in Helsinki, Finland (EU) and uses Cloudflare as a CDN/proxy. Full data processing details are described in the [Privacy Policy](/legal/privacy-policy/) Section 4.7.
 
 By creating a Web Platform account, you accept these Terms and acknowledge that your data will be processed as described in the Privacy Policy. Acceptance requires checking the "I agree to the Terms & Conditions and Privacy Policy" checkbox on the signup page before account creation. The checkbox is unchecked by default; you must actively check it to proceed. Your acceptance is timestamped and recorded.
 
@@ -133,7 +133,7 @@ All rights, title, and interest in and to the Plugin (including agent definition
 
 ### 6.5 Contributor Intellectual Property
 
-If you contribute code or other materials to the Soleur project via pull requests, you must sign a Contributor License Agreement (CLA) before your contribution can be accepted. The CLA grants Jikigai a perpetual, irrevocable license to use, modify, sublicense, and relicense your contribution, while you retain your copyright. The CLA includes an express patent grant covering contributed code. Full terms are set out in the [Individual Contributor License Agreement](/pages/legal/individual-cla.html) and [Corporate Contributor License Agreement](/pages/legal/corporate-cla.html).
+If you contribute code or other materials to the Soleur project via pull requests, you must sign a Contributor License Agreement (CLA) before your contribution can be accepted. The CLA grants Jikigai a perpetual, irrevocable license to use, modify, sublicense, and relicense your contribution, while you retain your copyright. The CLA includes an express patent grant covering contributed code. Full terms are set out in the [Individual Contributor License Agreement](/legal/individual-cla/) and [Corporate Contributor License Agreement](/legal/corporate-cla/).
 
 ## 7. AI-Generated Output
 
@@ -159,7 +159,7 @@ You are solely responsible for reviewing, validating, and assuming liability for
 
 Soleur operates on a local-first model. The Plugin itself does not collect, transmit, or store personal data on external servers. All User Content, configuration files, and knowledge-base entries remain on your local machine under your control.
 
-This section applies to the Plugin only. For Web Platform data practices, see Section 8.1b and the [Privacy Policy](/pages/legal/privacy-policy.html) Section 4.7.
+This section applies to the Plugin only. For Web Platform data practices, see Section 8.1b and the [Privacy Policy](/legal/privacy-policy/) Section 4.7.
 
 ### 8.1b Web Platform Data Practices
 
@@ -170,7 +170,20 @@ The Soleur Web Platform collects and processes personal data as necessary to pro
 - **Workspace data** (encrypted API keys, workspace configurations) hosted on Hetzner (Helsinki, Finland, EU).
 - **Technical data** (IP addresses, request headers) processed by Cloudflare CDN/proxy.
 
-For comprehensive data processing details, legal bases, retention periods, and your rights, see the [Privacy Policy](/pages/legal/privacy-policy.html) and [GDPR Policy](/pages/legal/gdpr-policy.html).
+For comprehensive data processing details, legal bases, retention periods, and your rights, see the [Privacy Policy](/legal/privacy-policy/) and [GDPR Policy](/legal/gdpr-policy/).
+
+<!-- Added 2026-04-10: KB sharing -->
+
+### 8.1c Shared Content
+
+The Web Platform allows you to share individual knowledge base documents via public links. By using this feature:
+
+- **Your responsibility:** You are solely responsible for the content you choose to share. You must ensure that shared documents do not contain confidential third-party information, personally identifiable information of others without their consent, or material that infringes third-party intellectual property rights. See the [Acceptable Use Policy](/legal/acceptable-use-policy/) for detailed rules.
+- **Jikigai's role:** Jikigai acts as a processor making the document content available at the shared URL on your instruction. Jikigai does not review, moderate, or approve shared content prior to publication.
+- **Revocation:** You may revoke a share link at any time from the Web Platform. Revocation takes immediate effect. However, Jikigai cannot guarantee that recipients have not copied, downloaded, or redistributed the content prior to revocation.
+- **No warranty of recipient conduct:** Jikigai makes no representation regarding how recipients will use shared content and accepts no liability for any downstream use by recipients.
+
+<!-- End: KB sharing -->
 
 ### 8.2 Documentation Site
 
@@ -186,7 +199,7 @@ If you are located in the EU/EEA, you have rights under the GDPR including the r
 
 For the Plugin, these rights are inherently satisfied by your local control over Plugin-generated data.
 
-For the Web Platform, you may exercise these rights against Jikigai by contacting <legal@jikigai.com>. See the [GDPR Policy](/pages/legal/gdpr-policy.html) Section 5 for full details on how to exercise each right.
+For the Web Platform, you may exercise these rights against Jikigai by contacting <legal@jikigai.com>. See the [GDPR Policy](/legal/gdpr-policy/) Section 5 for full details on how to exercise each right.
 
 For any GDPR-related inquiries concerning the documentation site or third-party integrations, please contact us through the channels listed in Section 17.
 
@@ -270,7 +283,7 @@ You may delete your Web Platform account at any time. Upon account deletion:
 
 If a Subscription is active at the time of account deletion, it is handled as described in Section 5.2.
 
-For details on data retention after account deletion, see the [Privacy Policy](/pages/legal/privacy-policy.html) Section 7.
+For details on data retention after account deletion, see the [Privacy Policy](/legal/privacy-policy/) Section 7.
 
 ### 14.2 Termination by Us
 
@@ -340,14 +353,14 @@ To exercise your data subject rights under GDPR, send a written request to <lega
 
 > **Related documents:** This Terms & Conditions document references privacy practices, data handling, cookies, acceptable use policies, and contributor agreements. Please review the companion documents:
 >
-> - [Privacy Policy](/pages/legal/privacy-policy.html) -- details data practices referenced in Section 8
-> - [Acceptable Use Policy](/pages/legal/acceptable-use-policy.html) -- expands on the acceptable use provisions in Section 9
-> - [Cookie Policy](/pages/legal/cookie-policy.html) -- covers cookies used by the documentation site
-> - [Disclaimer](/pages/legal/disclaimer.html) -- standalone version of warranty and liability provisions
-> - [Data Protection Disclosure](/pages/legal/data-protection-disclosure.html) -- sub-processor details and data processing transparency
-> - [GDPR Policy](/pages/legal/gdpr-policy.html) -- detailed GDPR-specific policy for EU/EEA users
-> - [Individual CLA](/pages/legal/individual-cla.html) -- contributor license agreement for individuals
-> - [Corporate CLA](/pages/legal/corporate-cla.html) -- contributor license agreement for organizations
+> - [Privacy Policy](/legal/privacy-policy/) -- details data practices referenced in Section 8
+> - [Acceptable Use Policy](/legal/acceptable-use-policy/) -- expands on the acceptable use provisions in Section 9
+> - [Cookie Policy](/legal/cookie-policy/) -- covers cookies used by the documentation site
+> - [Disclaimer](/legal/disclaimer/) -- standalone version of warranty and liability provisions
+> - [Data Protection Disclosure](/legal/data-protection-disclosure/) -- sub-processor details and data processing transparency
+> - [GDPR Policy](/legal/gdpr-policy/) -- detailed GDPR-specific policy for EU/EEA users
+> - [Individual CLA](/legal/individual-cla/) -- contributor license agreement for individuals
+> - [Corporate CLA](/legal/corporate-cla/) -- contributor license agreement for organizations
 
     </div>
   </div>
