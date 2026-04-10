@@ -186,14 +186,14 @@ modify other worktrees' state). Available in git 2.17+ (project uses 2.51.0).
 
 ## Acceptance Criteria
 
-- [ ] `create_worktree()` verifies worktree appears in `git worktree list --porcelain` after creation
-- [ ] `create_for_feature()` verifies worktree appears in `git worktree list --porcelain` after creation
-- [ ] Verification failure triggers `git worktree repair "$worktree_path"` (targeted) retry before hard error
-- [ ] `ensure_bare_config` runs AFTER verification (not between `git worktree add` and verification)
-- [ ] Script exits non-zero with clear error message when worktree creation truly fails
-- [ ] Existing rev-parse verification remains as first-pass check (inside `verify_worktree_created`)
-- [ ] Both functions use the same `verify_worktree_created()` function (no divergence)
-- [ ] No behavioral change for the happy path (worktree creation succeeds as before)
+- [x] `create_worktree()` verifies worktree appears in `git worktree list --porcelain` after creation
+- [x] `create_for_feature()` verifies worktree appears in `git worktree list --porcelain` after creation
+- [x] Verification failure triggers `git worktree repair "$worktree_path"` (targeted) retry before hard error
+- [x] `ensure_bare_config` runs AFTER verification (not between `git worktree add` and verification)
+- [x] Script exits non-zero with clear error message when worktree creation truly fails
+- [x] Existing rev-parse verification remains as first-pass check (inside `verify_worktree_created`)
+- [x] Both functions use the same `verify_worktree_created()` function (no divergence)
+- [x] No behavioral change for the happy path (worktree creation succeeds as before)
 
 ## Test Scenarios
 
