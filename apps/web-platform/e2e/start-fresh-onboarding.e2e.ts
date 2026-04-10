@@ -298,7 +298,7 @@ test.describe("Start Fresh onboarding: command center state", () => {
     await gotoDashboard(page);
 
     await expect(page.getByText("Your organization is ready.")).toBeVisible({ timeout: 15_000 });
-    await expect(page.getByText("COMMAND CENTER")).toBeVisible();
+    await expect(page.getByText("COMMAND CENTER").first()).toBeVisible();
   });
 
   test("suggested prompts render in command center", async ({ page }) => {
