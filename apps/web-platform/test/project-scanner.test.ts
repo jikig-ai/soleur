@@ -44,11 +44,11 @@ function setupFs(
   dirEntries: Record<string, string[]> = {},
 ) {
   mockExistsSync.mockImplementation((p) => existingPaths.includes(String(p)));
-  mockReaddirSync.mockImplementation((p) => {
+  mockReaddirSync.mockImplementation(((p: unknown) => {
     const entries = dirEntries[String(p)];
-    if (entries) return entries as unknown as fs.Dirent[];
-    return [] as unknown as fs.Dirent[];
-  });
+    if (entries) return entries;
+    return [];
+  }) as typeof fs.readdirSync);
 }
 
 /**
