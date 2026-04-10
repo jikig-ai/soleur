@@ -432,11 +432,37 @@ After writing the plan file, automatically run `/plan_review <plan_file_path>` t
 4. If Partially: ask which changes to apply, then apply selected changes
 5. If Skip: continue unchanged
 
+## Exit Gate (direct invocation only)
+
+**Pipeline detection:** If this skill is running inside a Task subagent (the conversation
+contains a `RETURN CONTRACT` section from a Task delegation), skip the exit gate entirely.
+Return the plan file path per the return contract. The calling pipeline handles compound
+and lifecycle progression.
+
+**If invoked directly by the user:**
+
+1. Run `skill: soleur:compound` to capture learnings from the planning session.
+   If compound finds nothing to capture, it will skip gracefully — do not block on this.
+2. Verify all plan artifacts are committed and pushed. The Save Tasks section already
+   committed the plan file and tasks.md. Run `git status --short` to check for any
+   remaining uncommitted changes. If found:
+
+   ```bash
+   git add knowledge-base/project/plans/ knowledge-base/project/specs/feat-<name>/
+   git commit -m "docs: plan artifacts for feat-<name>"
+   git push
+   ```
+
+   If there are no uncommitted changes, skip the commit. If push fails (no network),
+   warn and continue.
+3. Display: "All artifacts are on disk. Run `/clear` then `/soleur:work` for maximum
+   context headroom."
+
 ## Post-Generation Options
 
 After plan review, use the **AskUserQuestion tool** to present these options:
 
-**Question:** "Plan reviewed and ready at `knowledge-base/project/plans/YYYY-MM-DD-<type>-<name>-plan.md`. What would you like to do next?"
+**Question:** "Plan reviewed and ready at `knowledge-base/project/plans/YYYY-MM-DD-<type>-<name>-plan.md`. Context is saved to disk — run `/clear` before `/soleur:work` for maximum headroom. What would you like to do next?"
 
 **Options:**
 

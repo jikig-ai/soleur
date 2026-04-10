@@ -324,13 +324,13 @@ The new rule complements three existing constitution rules:
 
 ## Acceptance Criteria
 
-- [ ] Each workflow skill (brainstorm, plan, work, review) runs compound before handoff in direct invocation mode
-- [ ] Each skill commits and pushes all artifacts before presenting next-step options
-- [ ] Each skill displays a `/clear` recommendation at handoff
-- [ ] Exit gate does NOT fire when a skill is invoked by a pipeline orchestrator (one-shot, ship)
-- [ ] Each skill's entry reads all needed state from disk (verified by audit -- no changes needed)
-- [ ] No regression in one-shot pipeline (work emits `## Work Phase Complete` correctly, plan returns via subagent contract)
-- [ ] Compound does not block if it finds nothing to capture
+- [x] Each workflow skill (brainstorm, plan, work, review) runs compound before handoff in direct invocation mode
+- [x] Each skill commits and pushes all artifacts before presenting next-step options
+- [x] Each skill displays a `/clear` recommendation at handoff
+- [x] Exit gate does NOT fire when a skill is invoked by a pipeline orchestrator (one-shot, ship)
+- [x] Each skill's entry reads all needed state from disk (verified by audit -- no changes needed)
+- [x] No regression in one-shot pipeline (work emits `## Work Phase Complete` correctly, plan returns via subagent contract)
+- [x] Compound does not block if it finds nothing to capture
 
 ## Domain Review
 
