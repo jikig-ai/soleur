@@ -10,7 +10,6 @@ import { STATUS_LABELS } from "@/lib/types";
 import type { ConversationStatus } from "@/lib/types";
 import type { DomainLeaderId } from "@/server/domain-leaders";
 import { DOMAIN_LEADERS, ROUTABLE_DOMAIN_LEADERS } from "@/server/domain-leaders";
-import { LEADER_BG_COLORS } from "@/components/chat/leader-colors";
 
 // ---------------------------------------------------------------------------
 // Foundation card definitions
@@ -332,9 +331,16 @@ export default function DashboardPage() {
                 className="flex flex-col gap-2 rounded-xl border border-neutral-800 bg-neutral-900/50 p-4 text-left transition-colors hover:border-neutral-600"
               >
                 <span
-                  className={`flex h-5 w-5 items-center justify-center rounded text-[10px] font-semibold text-white ${LEADER_BG_COLORS[card.leaderId]}`}
+                  className="flex h-5 w-5 items-center justify-center overflow-hidden rounded"
+                  aria-label={`Soleur ${card.leaderId.toUpperCase()}`}
                 >
-                  {card.leaderId.toUpperCase()}
+                  <img
+                    src="/icons/soleur-logo-mark.png"
+                    alt=""
+                    width={20}
+                    height={20}
+                    className="h-full w-full object-cover"
+                  />
                 </span>
                 <span className="text-sm font-medium text-white">
                   {card.title}
@@ -552,9 +558,16 @@ function LeaderStrip({ onLeaderClick }: { onLeaderClick: (leaderId: string) => v
             className="group flex items-center gap-1.5 rounded-lg px-2 py-1 transition-colors hover:bg-neutral-800/50"
           >
             <span
-              className={`flex h-5 w-5 items-center justify-center rounded text-[10px] font-semibold text-white ${LEADER_BG_COLORS[leader.id]}`}
+              className="flex h-5 w-5 items-center justify-center overflow-hidden rounded"
+              aria-label={`Soleur ${leader.id.toUpperCase()}`}
             >
-              {leader.id.toUpperCase()}
+              <img
+                src="/icons/soleur-logo-mark.png"
+                alt=""
+                width={20}
+                height={20}
+                className="h-full w-full object-cover"
+              />
             </span>
             <span className="text-xs text-neutral-500 group-hover:text-neutral-300">
               {leader.name}

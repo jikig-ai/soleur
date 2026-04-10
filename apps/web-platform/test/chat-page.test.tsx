@@ -216,13 +216,16 @@ describe("ChatPage", () => {
     expect(screen.getAllByText(/2 leaders responding/i).length).toBeGreaterThanOrEqual(1);
   });
 
-  it("renders leader message with colored name badge", async () => {
+  it("renders leader message with Soleur logo badge", async () => {
     wsReturn.messages = [
       { id: "s1", role: "assistant", content: "My analysis", type: "text", leaderId: "cmo" },
     ];
     await renderChatPage();
-    // CMO should appear in both the badge and name label
-    expect(screen.getAllByText("CMO").length).toBeGreaterThanOrEqual(1);
+    // Logo badge should appear with aria-label
+    const badge = screen.getByLabelText(/Soleur CMO/i);
+    expect(badge).toBeInTheDocument();
+    // Name label still shows display name
+    expect(screen.getByText("CMO")).toBeInTheDocument();
   });
 
   it("shows mobile back arrow", async () => {
