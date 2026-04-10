@@ -210,10 +210,10 @@ describe("ReadyState — health snapshot", () => {
   });
 
   // -------------------------------------------------------------------------
-  // 5. Shows "Deep analysis in progress" with Command Center link
+  // 5. Shows "Deep analysis in progress" only when syncConversationId exists
   // -------------------------------------------------------------------------
 
-  it('shows "Deep analysis in progress" with Command Center link', async () => {
+  it('shows "Deep analysis in progress" when syncConversationId is provided', async () => {
     const ReadyState = await importReadyState();
     render(
       <ReadyState
@@ -221,6 +221,7 @@ describe("ReadyState — health snapshot", () => {
         onContinue={vi.fn()}
         onViewKb={vi.fn()}
         healthSnapshot={mockSnapshot}
+        syncConversationId="conv-123"
       />,
     );
 
@@ -232,6 +233,29 @@ describe("ReadyState — health snapshot", () => {
     const ccLink = screen.getByRole("link", { name: /command center/i });
     expect(ccLink).toBeInTheDocument();
     expect(ccLink).toHaveAttribute("href", expect.stringContaining("/dashboard"));
+  });
+
+  it('shows fallback message when syncConversationId is null (#1816)', async () => {
+    const ReadyState = await importReadyState();
+    render(
+      <ReadyState
+        repoName="user/test-repo"
+        onContinue={vi.fn()}
+        onViewKb={vi.fn()}
+        healthSnapshot={mockSnapshot}
+        syncConversationId={null}
+      />,
+    );
+
+    // Should NOT show deep analysis message
+    expect(
+      screen.queryByText(/deep analysis in progress/i),
+    ).not.toBeInTheDocument();
+
+    // Should show fallback message
+    expect(
+      screen.getByText(/your project is ready/i),
+    ).toBeInTheDocument();
   });
 
   // -------------------------------------------------------------------------

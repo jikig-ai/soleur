@@ -12,6 +12,8 @@ interface ReadyStateProps {
   onContinue: () => void;
   onViewKb: () => void;
   healthSnapshot?: ProjectHealthSnapshot | null;
+  /** When set, a sync conversation is actively running — show deep analysis status. */
+  syncConversationId?: string | null;
 }
 
 const CATEGORY_LABELS: Record<ProjectHealthSnapshot["category"], string> = {
@@ -31,6 +33,7 @@ export function ReadyState({
   onContinue,
   onViewKb,
   healthSnapshot,
+  syncConversationId,
 }: ReadyStateProps) {
   if (!healthSnapshot) {
     return (
@@ -173,16 +176,22 @@ export function ReadyState({
         </div>
       </Card>
 
-      {/* Deep analysis status */}
-      <p className="text-xs text-neutral-500">
-        Deep analysis in progress —{" "}
-        <Link
-          href="/dashboard"
-          className="text-amber-400 underline underline-offset-2 hover:text-amber-300"
-        >
-          View in Command Center
-        </Link>
-      </p>
+      {/* Deep analysis status — only shown when a sync conversation exists (#1816) */}
+      {syncConversationId ? (
+        <p className="text-xs text-neutral-500">
+          Deep analysis in progress —{" "}
+          <Link
+            href="/dashboard"
+            className="text-amber-400 underline underline-offset-2 hover:text-amber-300"
+          >
+            View in Command Center
+          </Link>
+        </p>
+      ) : (
+        <p className="text-xs text-neutral-500">
+          Your project is ready. Start a conversation to begin working with your AI team.
+        </p>
+      )}
 
       {/* CTAs */}
       <div className="flex items-center justify-center gap-3">
