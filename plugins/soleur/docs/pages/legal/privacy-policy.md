@@ -1,23 +1,14 @@
 ---
 title: "Privacy Policy"
-description: "How Soleur handles data with its local-first architecture."
-layout: base.njk
-permalink: pages/legal/privacy-policy.html
+type: privacy-policy
+jurisdiction: FR, EU
+generated-date: 2026-02-20
 ---
 
-<section class="page-hero">
-  <div class="container">
-    <h1>Privacy Policy</h1>
-    <p>Effective February 20, 2026 | Last Updated March 29, 2026</p>
-  </div>
-</section>
-
-<section class="content">
-  <div class="container">
-    <div class="prose">
+# Privacy Policy
 
 **Effective Date:** February 20, 2026
-**Last Updated:** March 29, 2026 (added conversation data as PII category in Section 4.7, updated purpose and retention for conversation history, added conversation data retention to Section 7, added conversation data export right to Section 8, added Web Platform cookies cross-reference to Section 12)
+**Last Updated:** April 10, 2026 (added Section 4.8 Content Sharing processing activity, added share link record retention to Section 7)
 
 ## 1. Introduction
 
@@ -35,7 +26,7 @@ For privacy inquiries, you may contact us at <legal@jikigai.com> (include "Priva
 
 ## 3. What the Plugin Does
 
-Soleur is a locally installed Claude Code plugin. It provides {{ stats.agents }} AI agents, {{ stats.skills }} skills, and a compounding knowledge base to support structured software development workflows. The Plugin is installed via the Claude Code CLI and runs entirely on your local machine.
+Soleur is a locally installed Claude Code plugin. It provides 45 AI agents, 45 skills, and a compounding knowledge base to support structured software development workflows. The Plugin is installed via the Claude Code CLI and runs entirely on your local machine.
 
 ## 4. Data We Collect
 
@@ -118,6 +109,20 @@ The Soleur Web Platform at [app.soleur.ai](https://app.soleur.ai) is a cloud-hos
 **Legal basis:** Contract performance (Article 6(1)(b) GDPR) -- processing is necessary to provide the Web Platform service you signed up for.
 
 **Retention:** Account data is retained while your account is active and deleted upon account deletion request. Conversation data is retained while the account is active and deleted upon account deletion request (cascade delete via foreign key). Payment records are retained per French tax law (10 years, Code de commerce Art. L123-22).
+
+<!-- Added 2026-04-10: KB sharing -->
+
+### 4.8 Content Sharing (Knowledge Base Document Sharing)
+
+The Web Platform allows authenticated users to share individual knowledge base documents via public links. When a document is shared:
+
+- **Data shared publicly:** The document content is accessible to anyone with the share link. Shared pages include `noindex` meta tags and are not indexed by search engines. No cookies are set for unauthenticated viewers, and the CTA banner on shared pages collects no data (it links to the signup page only).
+- **Viewer data collected:** For unauthenticated viewers accessing a shared link, only standard **server access logs** are collected (IP address, timestamp, user-agent). These logs are processed by Cloudflare (see Section 5.8) and the hosting infrastructure (see Section 5.7) as part of normal request handling. No additional tracking or analytics is applied to shared page viewers.
+- **Share link records:** The Web Platform stores metadata about active share links (document ID, sharing user ID, creation timestamp, share token) in the Supabase database. These records are retained while the share link is active and deleted when the owner revokes the link or deletes their account (cascade delete).
+- **Legal basis:** Legitimate interest (Article 6(1)(f) GDPR) for processing viewer access logs (infrastructure security and abuse prevention). Contract performance (Article 6(1)(b) GDPR) for maintaining share link records (providing the sharing feature the user activated).
+- **Revocation:** The document owner can revoke a share link at any time, which takes immediate effect. After revocation, the shared URL returns an error and the document content is no longer accessible. However, Jikigai cannot guarantee that recipients have not copied or redistributed the content prior to revocation.
+
+<!-- End: KB sharing -->
 
 ## 5. Third-Party Services
 
@@ -206,7 +211,7 @@ For newsletter subscriptions, the legal basis for processing your email address 
 ## 7. Data Retention
 
 - **Plugin data:** All data created by the Plugin is stored locally on your machine. You control its retention and deletion entirely.
-- **Web Platform data:** Account data (email, auth tokens) is retained while your account is active and deleted upon account deletion request. Conversation data (messages and conversation metadata) is retained while the user's account is active and deleted upon account deletion request (cascade delete via foreign key). Encrypted API keys are deleted with the associated workspace. Payment records (subscription metadata, invoices) are retained for 10 years per French tax law (Code de commerce Art. L123-22).
+- **Web Platform data:** Account data (email, auth tokens) is retained while your account is active and deleted upon account deletion request. Conversation data (messages and conversation metadata) is retained while the user's account is active and deleted upon account deletion request (cascade delete via foreign key). Encrypted API keys are deleted with the associated workspace. Share link records are retained while the link is active and deleted upon revocation or account deletion (cascade delete). <!-- Added 2026-04-10: KB sharing --> Payment records (subscription metadata, invoices) are retained for 10 years per French tax law (Code de commerce Art. L123-22).
 - **Docs Site data:** Any data collected by GitHub Pages is retained according to GitHub's data retention policies.
 - **Repository interaction data:** Issues, pull requests, and other contributions are retained on GitHub according to its standard policies and your own account settings.
 - **Newsletter subscription data:** Your email address is retained by Buttondown for as long as you remain subscribed. Upon unsubscription, your email is removed from the active subscriber list. Technical metadata (IP address, referrer URL, subscription timestamp, browser/device metadata) is retained according to Buttondown's data retention practices. Buttondown may retain anonymized aggregate data (e.g., subscriber counts) after unsubscription.
@@ -277,7 +282,7 @@ The Soleur Plugin does not use cookies.
 
 The Docs Site, hosted on GitHub Pages, may use cookies as determined by GitHub's platform. Soleur does not add any first-party cookies to the Docs Site. For details on GitHub's cookie practices, see [GitHub's cookie documentation](https://docs.github.com/en/site-policy/privacy-policies/github-cookies).
 
-The Web Platform at app.soleur.ai uses strictly necessary cookies for authentication (Supabase session cookies) and payment security (Stripe fraud prevention cookies). These cookies are exempt from consent requirements under ePrivacy Directive Article 5(3). For full details, see the [Cookie Policy](/pages/legal/cookie-policy.html).
+The Web Platform at app.soleur.ai uses strictly necessary cookies for authentication (Supabase session cookies) and payment security (Stripe fraud prevention cookies). These cookies are exempt from consent requirements under ePrivacy Directive Article 5(3). For full details, see the [Cookie Policy](cookie-policy.md).
 
 ## 13. Changes to This Policy
 
@@ -302,8 +307,4 @@ To exercise your data subject rights under GDPR, send a written request to <lega
 
 ---
 
-> **Related documents:** This Privacy Policy should be read alongside the companion [Cookie Policy](/pages/legal/cookie-policy.html) for detailed information about cookies used by the Docs Site (GitHub Pages), the [GDPR Policy](/pages/legal/gdpr-policy.html) for detailed GDPR-specific disclosures, and the [Individual Contributor License Agreement](/pages/legal/individual-cla.html) for details on contributor data processing.
-
-    </div>
-  </div>
-</section>
+> **Related documents:** This Privacy Policy should be read alongside the companion [Cookie Policy](cookie-policy.md) for detailed information about cookies used by the Docs Site (GitHub Pages), the [GDPR Policy](gdpr-policy.md) for detailed GDPR-specific disclosures, and the [Individual Contributor License Agreement](individual-cla.md) for details on contributor data processing.
