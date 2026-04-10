@@ -2,9 +2,25 @@
 title: "feat: Enable GitHub Security and Quality"
 type: feat
 date: 2026-04-10
+deepened: 2026-04-10
 ---
 
 # feat: Enable GitHub Security and Quality
+
+## Enhancement Summary
+
+**Deepened on:** 2026-04-10
+**Sections enhanced:** 6
+**Research sources:** GitHub REST API (live queries), GitHub docs (CodeQL setup, secret scanning, query suites, supported patterns), project learnings (3 relevant)
+
+### Key Improvements
+
+1. Added `threat_model` recommendation (`remote_and_local`) for GitHub Actions workflow analysis where environment variables and CLI args are common taint sources
+2. Added concrete push protection gotcha from project learning -- UX agent placeholder secrets (Stripe keys in .pen files) already triggered push protection on 2026-04-07
+3. Added API pagination note for alert triage -- `gh api --paginate` outputs concatenated arrays requiring `jq -s 'add // []'` (constitution rule)
+4. Added extended query suite precision tradeoff details and recommendation to start with `extended` and tune down if false positive rate is too high
+5. Added secret scanning coverage scope -- 500+ token types, non-provider patterns for private keys and connection strings, validity checks contact providers to verify active secrets
+6. Documented current branch protection ruleset (`CI Required`: test, dependency-review, e2e) confirming CodeQL is NOT a required check
 
 ## Overview
 
@@ -40,7 +56,8 @@ Enable via the REST API:
 gh api -X PATCH repos/jikig-ai/soleur/code-scanning/default-setup \
   --field state=configured \
   --field query_suite=extended \
-  --field languages='["actions","javascript-typescript","python"]'
+  --field languages='["actions","javascript-typescript","python"]' \
+  --field threat_model=remote_and_local
 ```
 
 **Why default setup over advanced setup (custom workflow)?**
@@ -52,7 +69,20 @@ gh api -X PATCH repos/jikig-ai/soleur/code-scanning/default-setup \
 - The repository has no compiled languages requiring custom build steps
 - Can be upgraded to advanced setup later if customization is needed
 
-**Language selection:** Include `actions`, `javascript-typescript`, and `python`. Exclude `ruby` since the `.rb` files are only template assets in `plugins/soleur/skills/dspy-ruby/assets/`, not runtime code.
+### Research Insights: CodeQL Configuration
+
+**Query suite selection -- `extended` over `default`:**
+The `extended` suite is a superset of `default`, adding queries with "slightly lower precision and severity." This means more findings but also more potential false positives. For a project that values catching code quality issues (not just security), `extended` is the right choice. If false positive noise becomes problematic, downgrade to `default` via the same API call.
+
+**Threat model -- `remote_and_local` recommended:**
+The default threat model (`remote`) only considers network requests as taint sources. For this repository, `remote_and_local` is more appropriate because:
+
+- GitHub Actions workflows heavily use environment variables and CLI arguments as data sources
+- Shell scripts (81 in the repo) process command-line arguments and environment variables
+- The `remote_and_local` model adds "command-line arguments, environment variables, file systems, and databases" as potential tainted data sources
+- This catches issues like unsanitized environment variable injection in workflow `run:` blocks
+
+**Language selection:** Include `actions`, `javascript-typescript`, and `python`. Exclude `ruby` since the `.rb` files are only template assets in `plugins/soleur/skills/dspy-ruby/assets/`, not runtime code. The API PATCH endpoint uses combined identifiers (`javascript-typescript`, not separate `javascript` + `typescript`).
 
 ### 2. Enable Secret Scanning via Repository Settings API
 
@@ -74,21 +104,34 @@ JSONEOF
 
 This enables:
 
-- **Secret scanning**: Detects secrets in all branches and git history
+- **Secret scanning**: Detects secrets in all branches and git history across 500+ token types from major providers (GitHub, AWS, Stripe, Azure, Google Cloud, and hundreds more)
 - **Push protection**: Blocks pushes that contain recognized secret patterns (developers can bypass with justification)
-- **Non-provider patterns**: Detects generic secrets (private keys, connection strings) beyond named provider patterns
-- **Validity checks**: Verifies with providers whether detected secrets are still active
+- **Non-provider patterns**: Detects generic secrets beyond named providers -- elliptic curve private keys, RSA/SSH/PGP private keys, MongoDB connection strings with credentials, HTTP Bearer tokens, and generic API keys with `-----BEGIN PRIVATE KEY-----` headers
+- **Validity checks**: Contacts the issuing provider to verify whether detected secrets are still active, helping prioritize remediation (revoked secrets are lower priority than active ones)
+
+### Research Insights: Secret Scanning Coverage
+
+**Scope:** Secret scanning runs automatically for free on public repos. It scans all Git history across all branches, plus issue/PR descriptions, comments, discussions, and wikis.
+
+**Push protection limitations:** Push protection and validity checks are NOT supported for passwords or most non-provider patterns. They work best for structured secrets from known providers (API keys with recognizable prefixes like `sk_live_`, `AKIA`, `ghp_`).
+
+**Known project gotcha:** On 2026-04-07, the ux-design-lead agent generated a Pencil wireframe containing a realistic Stripe API key placeholder (`sk_live_[REDACTED]`) that triggered push protection and required history rewriting to fix (see `knowledge-base/project/learnings/2026-04-07-ux-agent-placeholder-secrets-trigger-push-protection.md`). This confirms push protection works but highlights that realistic-looking test data in non-code files can trigger false positives.
 
 ### 3. Verify and Handle Existing Alerts
 
 After enabling, check for pre-existing alerts from historical commits:
 
 ```bash
-gh api repos/jikig-ai/soleur/secret-scanning/alerts --jq '.[].secret_type' | sort | uniq -c
-gh api repos/jikig-ai/soleur/code-scanning/alerts --jq '.[].rule.id' | sort | uniq -c
+gh api --paginate repos/jikig-ai/soleur/secret-scanning/alerts | jq -s 'add // []' | jq '.[].secret_type' | sort | uniq -c
+gh api --paginate repos/jikig-ai/soleur/code-scanning/alerts | jq -s 'add // []' | jq '.[].rule.id' | sort | uniq -c
 ```
 
-Triage any alerts found -- dismiss false positives, revoke real secrets.
+**Note:** Use `--paginate` with `jq -s 'add // []'` because `gh api --paginate` outputs separate JSON arrays per page (concatenated, not merged). Without the `jq -s` wrapper, multi-page responses produce invalid JSON (constitution rule).
+
+Triage any alerts found:
+
+- **Secret scanning alerts:** For each alert, check validity status. Active secrets must be revoked immediately (follow the procedure in `knowledge-base/project/learnings/2026-02-10-api-key-leaked-in-git-history-cleanup.md`). Revoked secrets can be dismissed as "revoked." False positives (test fixtures, placeholder values) can be dismissed as "false positive."
+- **Code scanning alerts:** Review by severity. Critical/high findings need immediate attention. Medium/low findings from the `extended` suite may include code quality suggestions that can be tracked as follow-up issues.
 
 ## Technical Considerations
 
@@ -100,13 +143,24 @@ Triage any alerts found -- dismiss false positives, revoke real secrets.
 
 ### Developer Experience Impact
 
-- **Push protection** may block pushes containing test fixtures that look like secrets. Developers can bypass with a reason (false positive, used in test, will fix later)
+- **Push protection** may block pushes containing test fixtures that look like secrets. Developers can bypass with a reason (false positive, used in test, will fix later). Real-world example: on 2026-04-07, a Pencil wireframe file containing `sk_live_` placeholder triggered push protection (learning: `2026-04-07-ux-agent-placeholder-secrets-trigger-push-protection.md`)
 - CodeQL annotations appear directly on PR diffs, providing inline feedback
 - No additional CI jobs to maintain -- default setup is fully managed
+- **Initial scan notification:** Enabling default setup triggers an immediate analysis workflow. Results appear in the Security tab once the first run completes. The tool status page shows timestamps and scan coverage percentages
 
 ### Branch Protection Considerations
 
-CodeQL default setup does NOT automatically add itself to required status checks. If branch protection rules should require CodeQL to pass before merge, that must be configured separately. For initial rollout, keep it advisory-only (non-blocking) to avoid disrupting existing workflows.
+CodeQL default setup does NOT automatically add itself to required status checks. The current `CI Required` ruleset (id: 14145388) requires three checks: `test`, `dependency-review`, and `e2e`. CodeQL is not in this list.
+
+For initial rollout, keep CodeQL advisory-only (non-blocking) to avoid disrupting existing workflows. After running for a few weeks and confirming a low false-positive rate, consider adding the CodeQL check to the ruleset via:
+
+```bash
+gh api -X PUT repos/jikig-ai/soleur/rulesets/14145388 \
+  --field 'rules[0].parameters.required_status_checks[3].context=CodeQL' \
+  --field 'rules[0].parameters.required_status_checks[3].integration_id=15368'
+```
+
+**Sharp edge:** If CodeQL is added as a required check, every PR will need a passing CodeQL analysis. Since default setup only runs on push to the default branch and on PRs, this should work. But if the analysis fails (timeout, infrastructure issue), it will block all merges. Keep it advisory until confidence is established.
 
 ### Existing Security Tooling
 
@@ -124,8 +178,8 @@ CodeQL and secret scanning complement these tools without overlap:
 
 ## Acceptance Criteria
 
-- [ ] CodeQL default setup is configured with `extended` query suite for `actions`, `javascript-typescript`, and `python`
-- [ ] CodeQL initial analysis completes successfully (check via API: `gh api repos/jikig-ai/soleur/code-scanning/default-setup --jq .state` returns `configured`)
+- [ ] CodeQL default setup is configured with `extended` query suite for `actions`, `javascript-typescript`, and `python` with `remote_and_local` threat model
+- [ ] CodeQL initial analysis completes successfully (check via API: `gh api repos/jikig-ai/soleur/code-scanning/default-setup --jq .state` returns `configured` and `updated_at` is non-null)
 - [ ] Secret scanning is enabled (`status: enabled`)
 - [ ] Secret scanning push protection is enabled (`status: enabled`)
 - [ ] Secret scanning non-provider patterns is enabled (`status: enabled`)
@@ -136,7 +190,7 @@ CodeQL and secret scanning complement these tools without overlap:
 
 ## Test Scenarios
 
-- Given CodeQL default setup is configured, when checking setup status via API, then state is `configured` and languages include `actions`, `javascript-typescript`, `python`
+- Given CodeQL default setup is configured, when checking setup status via API, then state is `configured`, languages include `actions`, `javascript-typescript`, `python`, query_suite is `extended`, and threat_model is `remote_and_local`
 - Given secret scanning is enabled, when checking repository settings via API, then `secret_scanning.status` is `enabled`
 - Given push protection is enabled, when checking repository settings via API, then `secret_scanning_push_protection.status` is `enabled`
 - Given CodeQL has run, when listing code scanning alerts via API, then the endpoint returns 200 (not 404 "no analysis found")
@@ -144,7 +198,7 @@ CodeQL and secret scanning complement these tools without overlap:
 
 **API verification commands:**
 
-- **CodeQL status:** `gh api repos/jikig-ai/soleur/code-scanning/default-setup --jq '{state, languages, query_suite}'`
+- **CodeQL status:** `gh api repos/jikig-ai/soleur/code-scanning/default-setup --jq '{state, languages, query_suite, threat_model, updated_at}'`
 - **Secret scanning status:** `gh api repos/jikig-ai/soleur --jq '.security_and_analysis | {secret_scanning: .secret_scanning.status, push_protection: .secret_scanning_push_protection.status, non_provider: .secret_scanning_non_provider_patterns.status, validity: .secret_scanning_validity_checks.status}'`
 - **Code scanning alerts:** `gh api repos/jikig-ai/soleur/code-scanning/alerts --jq 'length'`
 - **Secret scanning alerts:** `gh api repos/jikig-ai/soleur/secret-scanning/alerts --jq 'length'`
@@ -162,18 +216,23 @@ CodeQL and secret scanning complement these tools without overlap:
 
 | Risk | Likelihood | Impact | Mitigation |
 |------|-----------|--------|------------|
-| CodeQL initial scan surfaces many alerts | Medium | Low | Triage systematically; quality alerts are advisory |
-| Push protection blocks legitimate pushes | Low | Low | Developers can bypass with reason; tune if noisy |
-| Secret scanning finds historical secrets | Medium | Medium | Follow the existing revoke-and-cleanup procedure from the 2026-02-10 learning |
-| API calls require admin permissions | Low | Low | Current `gh` token has admin access (verified) |
+| CodeQL initial scan surfaces many alerts | Medium | Low | Triage systematically; `extended` suite has slightly lower precision -- downgrade to `default` if false positive rate is too high |
+| Push protection blocks legitimate pushes | Medium | Low | Already happened on 2026-04-07 (Stripe placeholder in .pen file). Developers bypass with reason; add pre-push grep for common API key patterns in non-code files |
+| Secret scanning finds historical secrets | Medium | Medium | Follow revoke-and-cleanup procedure from 2026-02-10 learning; validity checks help prioritize (active > revoked) |
+| API calls require admin permissions | Low | Low | Current `gh` token has admin access (verified via `gh api repos/jikig-ai/soleur --jq .permissions`) |
+| `remote_and_local` threat model produces more findings than `remote` | Medium | Low | Local sources (env vars, CLI args) are common in this repo's shell scripts; findings are more relevant, not noise |
 
 ## References and Research
 
 ### Internal References
 
 - Secret leak learning: `knowledge-base/project/learnings/2026-02-10-api-key-leaked-in-git-history-cleanup.md`
+- Push protection gotcha: `knowledge-base/project/learnings/2026-04-07-ux-agent-placeholder-secrets-trigger-push-protection.md`
+- Actions workflow security patterns: `knowledge-base/project/learnings/2026-02-21-github-actions-workflow-security-patterns.md`
+- Security agent output policy: `knowledge-base/project/learnings/2026-02-16-inline-only-output-for-security-agents.md`
 - Existing dependency review: `.github/workflows/dependency-review.yml`
 - CI workflow: `.github/workflows/ci.yml`
+- CI Required ruleset (id: 14145388): requires `test`, `dependency-review`, `e2e`
 
 ### External References
 

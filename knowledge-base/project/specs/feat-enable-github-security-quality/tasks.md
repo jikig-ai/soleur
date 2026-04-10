@@ -13,12 +13,14 @@ date: 2026-04-10
 - [ ] 1.2 Verify secret scanning status via API
   - Confirm all four secret scanning features show `enabled`
 - [ ] 1.3 Triage any pre-existing secret scanning alerts
-  - List alerts, revoke real secrets, dismiss false positives
+  - List alerts with `gh api --paginate` + `jq -s 'add // []'` (pagination safety)
+  - Check validity status: active secrets must be revoked immediately
+  - Dismiss false positives and revoked secrets with appropriate reason
 
 ## Phase 2: Enable CodeQL Code Scanning
 
 - [ ] 2.1 Enable CodeQL default setup via code scanning API
-  - Configure with `extended` query suite for `actions`, `javascript-typescript`, `python`
+  - Configure with `extended` query suite for `actions`, `javascript-typescript`, `python` with `remote_and_local` threat model
 - [ ] 2.2 Wait for initial CodeQL analysis to complete
   - Poll `code-scanning/default-setup` until state is `configured` and `updated_at` is populated
 - [ ] 2.3 Verify code scanning is active
