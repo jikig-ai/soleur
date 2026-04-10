@@ -168,6 +168,33 @@ export function extractClientIp(req: IncomingMessage): string {
 }
 
 // ---------------------------------------------------------------------------
+// IP extraction — Next.js API routes (Web Request API)
+// ---------------------------------------------------------------------------
+
+/** Extract client IP from a Next.js API route Request (Web API headers). */
+export function extractClientIpFromHeaders(headers: Headers): string {
+  const cfIp = headers.get("cf-connecting-ip");
+  if (cfIp) return cfIp;
+  // Same rationale as extractClientIp: do NOT trust x-forwarded-for.
+  return "unknown";
+}
+
+// ---------------------------------------------------------------------------
+// HTTP rate limiter singleton for public share endpoints
+// ---------------------------------------------------------------------------
+
+export const shareEndpointThrottle = new SlidingWindowCounter({
+  windowMs: 60_000,
+  maxRequests: parseInt(process.env.SHARE_RATE_LIMIT_PER_MIN ?? "60", 10),
+});
+
+const pruneShareInterval = setInterval(
+  () => shareEndpointThrottle.prune(),
+  60_000,
+);
+pruneShareInterval.unref();
+
+// ---------------------------------------------------------------------------
 // Rate limit rejection logging + Sentry breadcrumbs
 // ---------------------------------------------------------------------------
 
