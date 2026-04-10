@@ -37,14 +37,14 @@ Issue: #1837
 
 ## Phase 4: Verification
 
-- [ ] 4.1 Test token verify: `GET /user/tokens/verify` returns `status: active`
-- [ ] 4.2 Test zone listing: `GET /zones?account.id=4d5ba6f096b2686fbdd404167dd4e125` returns soleur.ai
-- [ ] 4.3 Test zone settings read: `GET /zones/5af02a2f394e9ba6e0ea23c381a26b67/settings/ssl`
-- [ ] 4.4 Test DNS records read: `GET /zones/5af02a2f394e9ba6e0ea23c381a26b67/dns_records?per_page=1`
-- [ ] 4.5 Test SSL certificates read: `GET /zones/5af02a2f394e9ba6e0ea23c381a26b67/ssl/certificate_packs`
-- [ ] 4.6 Test firewall rules read: `GET /zones/5af02a2f394e9ba6e0ea23c381a26b67/firewall/rules`
-- [ ] 4.7 Test account settings read: `GET /accounts/4d5ba6f096b2686fbdd404167dd4e125/`
-- [ ] 4.8 Test audit logs read: `GET /accounts/4d5ba6f096b2686fbdd404167dd4e125/audit_logs?per_page=1`
-- [ ] 4.9 Test notifications read: `GET /accounts/4d5ba6f096b2686fbdd404167dd4e125/alerting/v3/policies`
-- [ ] 4.10 Test write rejection: `PATCH /zones/5af02a2f394e9ba6e0ea23c381a26b67/settings/ssl` returns error
-- [ ] 4.11 Verify existing `CF_API_TOKEN` still active: `GET /user/tokens/verify`
+- [x] 4.1 Test token verify: `GET /user/tokens/verify` returns `status: active`
+- [x] 4.2 Test zone listing: `GET /zones?account.id=4d5ba6f096b2686fbdd404167dd4e125` returns soleur.ai
+- [x] 4.3 Test zone settings read: `GET /zones/5af02a2f394e9ba6e0ea23c381a26b67/settings/ssl`
+- [x] 4.4 Test DNS records read: `GET /zones/5af02a2f394e9ba6e0ea23c381a26b67/dns_records?per_page=1`
+- [x] 4.5 Test SSL certificates read: `GET /zones/5af02a2f394e9ba6e0ea23c381a26b67/ssl/certificate_packs`
+- [x] 4.6 Test firewall rules read: `GET /zones/5af02a2f394e9ba6e0ea23c381a26b67/firewall/rules`
+- [x] 4.7 Test account settings read: `GET /accounts/4d5ba6f096b2686fbdd404167dd4e125/`
+- [x] 4.8 Test audit logs read: `GET /accounts/4d5ba6f096b2686fbdd404167dd4e125/audit_logs?per_page=1`
+- [x] 4.9 Test notifications read: `GET /accounts/4d5ba6f096b2686fbdd404167dd4e125/alerting/v3/policies`
+- [x] 4.10 Test write rejection: `PATCH /zones/5af02a2f394e9ba6e0ea23c381a26b67/settings/ssl` returns error
+- [x] 4.11 Verify existing `CF_API_TOKEN` still active: `GET /user/tokens/verify`

@@ -344,12 +344,12 @@ fails, click the parent container element as a workaround.
 
 ## Acceptance Criteria
 
-- [ ] New Cloudflare API token `soleur-security-audit` created with all 8 read permissions
-- [ ] Token stored in Doppler `dev` config as `CF_API_TOKEN_AUDIT`
-- [ ] Token verified working via API call (`/user/tokens/verify`)
-- [ ] infra-security agent updated with API-token fallback audit path
-- [ ] Each permission category verified with a test API call (zone settings, DNS, SSL, firewall, account settings, audit logs, notifications)
-- [ ] Existing `CF_API_TOKEN` unchanged and still functional for Terraform
+- [x] New Cloudflare API token `soleur-security-audit` created with all 8 read permissions
+- [x] Token stored in Doppler `dev` config as `CF_API_TOKEN_AUDIT`
+- [x] Token verified working via API call (`/user/tokens/verify`)
+- [x] infra-security agent updated with API-token fallback audit path
+- [x] Each permission category verified with a test API call (zone settings, DNS, SSL, firewall, account settings, audit logs, notifications)
+- [x] Existing `CF_API_TOKEN` unchanged and still functional for Terraform
 
 ## Test Scenarios
 
