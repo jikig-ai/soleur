@@ -80,9 +80,9 @@ export async function POST(request: Request) {
       "Failed to create repository",
     );
     Sentry.captureException(err);
-    const message = err instanceof Error ? err.message : "Failed to create repository";
+
     return NextResponse.json(
-      { error: message },
+      { error: "Failed to create repository" },
       { status: 500 },
     );
   }

@@ -135,6 +135,8 @@ describe("POST /api/repo/create — error handling", () => {
     const res = await POST(makeRequest({ name: "my-repo", private: true }));
     expect(res.status).toBe(500);
 
+    const body = await res.json();
+    expect(body.error).toBe("Failed to create repository");
     expect(mockCaptureException).toHaveBeenCalledWith(err);
   });
 

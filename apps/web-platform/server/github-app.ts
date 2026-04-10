@@ -54,6 +54,11 @@ class InstallationError extends Error {
   }
 }
 
+/**
+ * Thrown when the GitHub API returns an error response.
+ * Carries the HTTP status code so callers can distinguish user-correctable
+ * 4xx errors from internal 5xx failures.
+ */
 export class GitHubApiError extends Error {
   constructor(
     message: string,
