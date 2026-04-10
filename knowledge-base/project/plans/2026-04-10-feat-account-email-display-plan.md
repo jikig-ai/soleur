@@ -148,14 +148,14 @@ The `public.users` table already has an `email` column (from migration `001_init
 
 ## Acceptance Criteria
 
-- [ ] User's email address is visible in the dashboard sidebar footer, above the status link and sign-out button
-- [ ] User's email address is displayed in the settings page in a clearly labeled "Account" section at the top (before Project section)
-- [ ] The existing "Account" heading in settings (danger zone) is renamed to "Danger Zone" to avoid duplicate section names
-- [ ] Long email addresses are truncated with ellipsis in the sidebar (CSS `truncate` utility) with full email in `title` attribute for hover
-- [ ] Email displays correctly on mobile (drawer sidebar) and desktop
-- [ ] Email is not editable (read-only display)
-- [ ] No layout shift when email loads -- conditional rendering (`{userEmail && ...}`) rather than a placeholder, since `getSession()` resolves from cookies nearly instantly
-- [ ] Sidebar uses `getSession()` (not `getUser()`) to avoid an unnecessary network request per page load
+- [x] User's email address is visible in the dashboard sidebar footer, above the status link and sign-out button
+- [x] User's email address is displayed in the settings page in a clearly labeled "Account" section at the top (before Project section)
+- [x] The existing "Account" heading in settings (danger zone) is renamed to "Danger Zone" to avoid duplicate section names
+- [x] Long email addresses are truncated with ellipsis in the sidebar (CSS `truncate` utility) with full email in `title` attribute for hover
+- [x] Email displays correctly on mobile (drawer sidebar) and desktop
+- [x] Email is not editable (read-only display)
+- [x] No layout shift when email loads -- conditional rendering (`{userEmail && ...}`) rather than a placeholder, since `getSession()` resolves from cookies nearly instantly
+- [x] Sidebar uses `getSession()` (not `getUser()`) to avoid an unnecessary network request per page load
 
 ## Domain Review
 
