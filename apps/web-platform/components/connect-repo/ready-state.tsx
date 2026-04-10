@@ -10,6 +10,7 @@ import type { ProjectHealthSnapshot } from "@/server/project-scanner";
 interface ReadyStateProps {
   repoName: string;
   onContinue: () => void;
+  onViewKb: () => void;
   healthSnapshot?: ProjectHealthSnapshot | null;
 }
 
@@ -28,6 +29,7 @@ const CATEGORY_COLORS: Record<ProjectHealthSnapshot["category"], string> = {
 export function ReadyState({
   repoName,
   onContinue,
+  onViewKb,
   healthSnapshot,
 }: ReadyStateProps) {
   if (!healthSnapshot) {
@@ -69,7 +71,16 @@ export function ReadyState({
           approve.
         </p>
 
-        <GoldButton onClick={onContinue}>Open Dashboard</GoldButton>
+        <div className="flex flex-col items-center gap-3 sm:flex-row sm:justify-center">
+          <GoldButton onClick={onContinue}>Open Command Center</GoldButton>
+          <button
+            type="button"
+            onClick={onViewKb}
+            className="rounded-lg border border-neutral-700 px-6 py-3 text-sm font-medium text-neutral-300 transition-colors hover:border-neutral-500 hover:text-neutral-100"
+          >
+            Review Knowledge Base
+          </button>
+        </div>
       </div>
     );
   }
@@ -176,12 +187,13 @@ export function ReadyState({
       {/* CTAs */}
       <div className="flex items-center justify-center gap-3">
         <GoldButton onClick={onContinue}>Open Command Center</GoldButton>
-        <Link
-          href="/dashboard/kb"
-          className="inline-block rounded-lg border border-neutral-700 px-6 py-3 text-sm font-medium text-neutral-300 transition-colors hover:border-neutral-600 hover:text-neutral-100"
+        <button
+          type="button"
+          onClick={onViewKb}
+          className="rounded-lg border border-neutral-700 px-6 py-3 text-sm font-medium text-neutral-300 transition-colors hover:border-neutral-500 hover:text-neutral-100"
         >
           Review Knowledge Base
-        </Link>
+        </button>
       </div>
     </div>
   );

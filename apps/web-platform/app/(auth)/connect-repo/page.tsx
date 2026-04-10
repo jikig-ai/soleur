@@ -548,6 +548,10 @@ export default function ConnectRepoPage() {
     router.push(consumeReturnTo());
   }
 
+  function handleViewKb() {
+    router.push("/dashboard/kb");
+  }
+
   // ---------------------------------------------------------------------------
   // Render
   // ---------------------------------------------------------------------------
@@ -612,6 +616,7 @@ export default function ConnectRepoPage() {
           <ReadyState
             repoName={connectedRepoName}
             onContinue={handleOpenDashboard}
+            onViewKb={handleViewKb}
             healthSnapshot={healthSnapshot}
           />
         )}
