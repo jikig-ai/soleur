@@ -2,9 +2,23 @@
 title: "fix: CPO domain leader operates on stale milestone data"
 type: fix
 date: 2026-04-10
+deepened: 2026-04-10
 ---
 
 # fix: CPO domain leader operates on stale milestone data
+
+## Enhancement Summary
+
+**Deepened on:** 2026-04-10
+**Sections enhanced:** 3 (Proposed Solution, Edge Cases, Context)
+**Research sources:** 4 institutional learnings, constitution.md convention audit, cross-agent pattern analysis
+
+### Key Improvements
+
+1. Added `gh api --paginate` / `jq` sharp edge from constitution.md line 29 -- milestones query should drop `--paginate` (repos rarely exceed 30 milestones) to avoid the concatenated-array footgun in agent context
+2. Incorporated pattern from `domain-leader-false-status-assertions-20260323` learning -- the CPO fix is the upstream complement to the existing per-issue `gh issue view` verification already present on all 8 domain leaders
+3. Added edge case: the "Roadmap consistency check" bullet already says `gh api repos/{owner}/{repo}/milestones` but the instruction ordering makes it advisory; the fix must restructure the bullet, not just add a new one, to avoid duplication
+4. Added note from `agent-prompt-sharp-edges-only` learning -- keep the CPO agent changes surgical (reorder + add conflict rule), do not add general API usage docs
 
 ## Overview
 
@@ -28,9 +42,10 @@ The CPO agent's "Roadmap consistency check" instruction (line 22 of `plugins/sol
 
 Restructure the Assess phase to query the API FIRST:
 
-1. **Move milestone API query to the top of the Assess section** -- before reading roadmap.md. Add an explicit instruction: "Run `gh api repos/{owner}/{repo}/milestones --paginate` and `gh api repos/{owner}/{repo}/milestones?state=closed --paginate` FIRST to get authoritative phase status."
-2. **Add conflict resolution rule**: "If the API result conflicts with the roadmap.md Current State section, trust the API -- the file may be stale. Flag the staleness as an inconsistency finding in the assessment output."
-3. **Preserve existing cross-reference logic** -- the "Roadmap consistency check" bullet stays, but moves after the API query and now serves as a reconciliation step rather than a primary data source.
+1. **Restructure the existing "Roadmap consistency check" bullet** (line 22) into two parts: (a) an API-first query at the TOP of the Assess section, and (b) a reconciliation step later. Do NOT add a new bullet that duplicates the existing one -- the existing bullet already mentions `gh api repos/{owner}/{repo}/milestones` but is positioned too late and is advisory rather than authoritative.
+2. **Drop `--paginate`** from the milestones query. Repos rarely exceed 30 milestones (GitHub's default page size). Using `--paginate` introduces the concatenated-array footgun documented in constitution.md line 29 (`[...][...]` breaks shell variable assignment). The agent runs this in a Bash tool call, not a pipeline -- simpler is safer.
+3. **Add conflict resolution rule**: "If the API result conflicts with the roadmap.md Current State section, trust the API -- the file may be stale. Flag the staleness as an inconsistency finding in the assessment output."
+4. **Keep changes surgical** per the `agent-prompt-sharp-edges-only` learning -- add only the ordering constraint and conflict resolution rule. Do not add API usage documentation or general best practices.
 
 **File to edit:** `plugins/soleur/agents/product/cpo.md` (lines 16-24, Assess section)
 
@@ -43,7 +58,7 @@ Restructure the Assess phase to query the API FIRST:
 - Check GitHub issue state (if referenced)
 - Cross-reference brand vs validation
 - Check spec files
-- Roadmap consistency check (advisory cross-reference)
+- Roadmap consistency check (advisory cross-reference)  ← line 22, runs LAST
 - Determine maturity stage
 - Report structured table
 ```
@@ -52,16 +67,20 @@ Restructure the Assess phase to query the API FIRST:
 
 ```markdown
 ### 1. Assess
-- **Milestone status (authoritative):** Run gh api milestones (open + closed) FIRST
+- **Milestone status (authoritative):** Query gh api milestones (open + closed) FIRST
 - Check business-validation.md
 - Check brand-guide.md
 - Check GitHub issue state (if referenced)
 - Cross-reference brand vs validation
 - Check spec files
-- **Roadmap reconciliation:** Read roadmap.md Current State, compare against API results. If they conflict, trust API and flag staleness as finding.
+- **Roadmap reconciliation:** (replaces old "Roadmap consistency check")
+  Read roadmap.md, compare against API results. Trust API when they conflict,
+  flag staleness as finding.
 - Determine maturity stage
 - Report structured table (include milestone data from API, not from file)
 ```
+
+**Implementation note:** The existing "Roadmap consistency check" bullet (line 22) is being SPLIT and MOVED, not just supplemented. Remove the old bullet entirely and replace with the two new bullets in their respective positions. This avoids having two bullets that both mention `gh api milestones` with conflicting authority levels.
 
 ### Part 2: AGENTS.md Workflow Gate
 
@@ -115,11 +134,13 @@ Also update the `last_updated` frontmatter field to `2026-04-10`.
 
 ## Acceptance Criteria
 
-- [ ] CPO agent runs `gh api milestones` (both open and closed states) before reading roadmap.md or asserting phase status
+- [ ] CPO agent runs `gh api milestones` (both open and closed states) BEFORE any roadmap.md reads or phase status assertions
 - [ ] CPO agent instruction explicitly states: trust API over file when they conflict, flag staleness
+- [ ] CPO agent does NOT use `--paginate` on milestones query (avoids concatenated-array footgun per constitution.md line 29)
+- [ ] The old "Roadmap consistency check" bullet is REPLACED (not duplicated) -- only one instruction references `gh api milestones`
 - [ ] AGENTS.md has a workflow gate requiring roadmap.md Current State update when closing milestones
 - [ ] roadmap.md Current State section date updated to 2026-04-10
-- [ ] roadmap.md Current State numbers match current GitHub API output
+- [ ] roadmap.md Current State numbers match current GitHub API output (re-queried at implementation time, not copied from plan)
 - [ ] roadmap.md `last_updated` frontmatter updated to 2026-04-10
 
 ## Test Scenarios
@@ -129,11 +150,29 @@ Also update the `last_updated` frontmatter field to `2026-04-10`.
 - Given AGENTS.md, when searching for "closing a phase milestone", then a workflow gate bullet is found requiring Current State update
 - Given roadmap.md, when reading the Current State section, then the date is 2026-04-10 and Phase 3 shows 12 open, 27 closed (matching API)
 
+## Edge Cases
+
+1. **Duplicate milestone API instructions:** The existing "Roadmap consistency check" bullet (line 22) already contains `gh api repos/{owner}/{repo}/milestones`. If the implementer adds a NEW bullet at the top of Assess without removing the old one, the agent will have two instructions to query milestones -- one authoritative (top) and one advisory (old position). The old bullet MUST be removed and replaced, not supplemented.
+
+2. **`--paginate` footgun for agent context:** Constitution.md line 29 requires `jq -s 'add // []'` when using `--paginate` with array endpoints. Since agents run `gh api` in Bash tool calls (not piped through jq), using `--paginate` would produce broken JSON if multiple pages exist. Drop `--paginate` entirely -- milestones endpoints are bounded by the number of phases (currently 6), well under the 30-per-page default.
+
+3. **Stale numbers in the Current State update:** The milestone counts (12 open/27 closed for Phase 3, etc.) were captured from the API at plan creation time (2026-04-10). By the time implementation runs, these numbers may have changed. The implementer should re-query the API during implementation and use the live numbers, not the plan's snapshot.
+
+4. **Other domain leaders reading roadmap.md:** Only the CPO has the "Roadmap consistency check" instruction. Other domain leaders (CTO, CMO, CLO, etc.) do not read roadmap.md for phase status -- they only verify individual issue state via `gh issue view`. This fix is correctly scoped to CPO only. If other leaders start reading roadmap.md in the future, the same API-first pattern should be applied.
+
+5. **Workflow gate scope:** The new AGENTS.md gate covers "closing a phase milestone" but milestones can also become stale when issues are moved between milestones (already covered by existing gate) or when issue counts change significantly. The Current State section should ideally be updated on any milestone state change, but the gate intentionally targets the highest-impact event (closure) to avoid over-engineering. The weekly CPO review cadence (roadmap.md line 366) provides a backstop for incremental drift.
+
 ## Context
 
-### Related Learning
+### Related Learnings
 
-`knowledge-base/project/learnings/2026-03-25-domain-assessments-contain-stale-codebase-claims.md` -- Previous fix was downstream (plan reviewers catch stale claims). This fix is upstream (prevent stale data from reaching the CPO in the first place).
+1. `knowledge-base/project/learnings/2026-03-25-domain-assessments-contain-stale-codebase-claims.md` -- Previous fix was downstream (plan reviewers catch stale claims). This fix is upstream (prevent stale data from reaching the CPO in the first place).
+
+2. `knowledge-base/project/learnings/workflow-issues/domain-leader-false-status-assertions-20260323.md` -- All 8 domain leaders were updated with `gh issue view` verification for individual issues. This fix extends the same API-first pattern to milestone-level status for the CPO specifically.
+
+3. `knowledge-base/project/learnings/2026-04-03-milestone-roadmap-integrity-audit.md` -- Established the bidirectional enforcement principle (issues->milestones AND milestones->issues). This fix adds a third direction: milestones->roadmap Current State.
+
+4. `knowledge-base/project/learnings/2026-02-13-agent-prompt-sharp-edges-only.md` -- Agent prompts should contain only what the model would get wrong without them. The CPO agent changes should be minimal: reorder, add conflict rule, remove duplication. Do not add API documentation.
 
 ### Files to Modify
 
