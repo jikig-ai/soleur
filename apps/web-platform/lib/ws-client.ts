@@ -26,6 +26,11 @@ interface ChatMessage {
   gateId?: string;
   question?: string;
   options?: string[];
+  header?: string;
+  descriptions?: Record<string, string | undefined>;
+  resolved?: boolean;
+  selectedOption?: string;
+  gateError?: string;
 }
 
 interface UseWebSocketReturn {
@@ -218,6 +223,8 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
               gateId: msg.gateId,
               question: msg.question,
               options: msg.options,
+              header: msg.header,
+              descriptions: msg.descriptions,
             },
           ]);
           break;
@@ -242,6 +249,16 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
               code: "rate_limited",
               message: "You've been rate limited. Please wait before trying again.",
             });
+          }
+
+          // Route gateId-targeted errors to the review gate message
+          if (msg.gateId) {
+            setMessages((prev) => prev.map((m) =>
+              m.gateId === msg.gateId
+                ? { ...m, gateError: msg.message, resolved: false, selectedOption: undefined }
+                : m,
+            ));
+            break;
           }
 
           setMessages((prev) => [
@@ -410,6 +427,12 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
   const sendReviewGateResponse = useCallback(
     (gateId: string, selection: string) => {
       send({ type: "review_gate_response", gateId, selection });
+      // Optimistically mark as resolved
+      setMessages((prev) => prev.map((m) =>
+        m.gateId === gateId
+          ? { ...m, resolved: true, selectedOption: selection, gateError: undefined }
+          : m,
+      ));
     },
     [send],
   );
