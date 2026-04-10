@@ -433,20 +433,20 @@ This dual-write strategy provides belt-and-suspenders reliability: the dashboard
 
 ### Functional Requirements
 
-- [ ] "Start Fresh" flow completes without showing the import screen (repo list)
-- [ ] After Start Fresh setup completes, user lands on dashboard first-run view
-- [ ] Vision.md created from first-run form contains the founder's typed idea, not a slash command
-- [ ] `tryCreateVision()` rejects slash commands (`/soleur:sync`, etc.) and very short messages
-- [ ] Welcome hook does not fire for Start Fresh workspaces (sentinel created during provisioning)
-- [ ] "Connect Existing" flow continues to work unchanged (auto-detect, repo list, sync suggestion)
-- [ ] Returning to `/connect-repo` after project is "ready" redirects to `/dashboard`
-- [ ] SessionStorage loss during GitHub redirect does not show import screen for Start Fresh users
+- [x] "Start Fresh" flow completes without showing the import screen (repo list)
+- [x] After Start Fresh setup completes, user lands on dashboard first-run view
+- [x] Vision.md created from first-run form contains the founder's typed idea, not a slash command
+- [x] `tryCreateVision()` rejects slash commands (`/soleur:sync`, etc.) and very short messages
+- [x] Welcome hook does not fire for Start Fresh workspaces (sentinel created during provisioning)
+- [x] "Connect Existing" flow continues to work unchanged (auto-detect, repo list, sync suggestion)
+- [x] Returning to `/connect-repo` after project is "ready" redirects to `/dashboard`
+- [x] SessionStorage loss during GitHub redirect does not show import screen for Start Fresh users
 
 ### Non-Functional Requirements
 
-- [ ] No new Supabase migrations
-- [ ] No changes to the tag-and-route system
-- [ ] Backward compatible with existing Connect Existing flow
+- [x] No new Supabase migrations
+- [x] No changes to the tag-and-route system
+- [x] Backward compatible with existing Connect Existing flow
 
 ## Test Scenarios
 
