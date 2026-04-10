@@ -71,12 +71,12 @@ This roadmap was reviewed by CTO, CLO, CFO, and CMO before finalization.
 
 | Dimension | Status |
 |-----------|--------|
-| Phase 1 (Close the Loop) | Complete. Milestone closed. |
-| Phase 2 (Secure for Beta) | Complete. Milestone closed. |
-| Phase 3 (Make it Sticky) | In progress. 12 open, 22 closed. Core KB infrastructure done (API, viewer, inbox, token storage, onboarding). Remaining: service automation, billing, analytics, CI/CD, sharing. |
+| Phase 1 (Close the Loop) | Complete. Milestone closed. 0 open, 15 closed. |
+| Phase 2 (Secure for Beta) | Complete. Milestone closed. 0 open, 20 closed. |
+| Phase 3 (Make it Sticky) | In progress. 14 open, 27 closed. Core KB infrastructure done (API, viewer, inbox, token storage, onboarding). Remaining: service automation, billing, analytics, CI/CD, sharing. |
 | Phase 4 (Validate + Scale) | Not started. 16 open, 11 closed. Blocked by Phase 3 completion + marketing/multi-user gates. |
-| Phase 5 (Desktop Native App) | Defined. 5 issues created (#1423-#1429). Trigger-gated on user demand. |
-| Post-MVP / Later | 65 open, 255 closed. |
+| Phase 5 (Desktop Native App) | Defined. 5 open, 0 closed. Trigger-gated on user demand. |
+| Post-MVP / Later | 74 open, 265 closed. |
 | Beta users | 0 |
 | Pricing gates passed | 0 of 5 |
 
