@@ -70,7 +70,7 @@ curl -s -H "Authorization: Bearer $TOKEN" "$BASE/zones/$ZONE_ID/firewall/rules" 
 curl -s -H "Authorization: Bearer $TOKEN" "$BASE/accounts/$ACCT_ID" | jq '.result'
 
 # Audit Logs
-curl -s -H "Authorization: Bearer $TOKEN" "$BASE/accounts/$ACCT_ID/audit_logs?per_page=5" | jq '.result[] | {action, when, actor_email: .actor.email}'
+curl -s -H "Authorization: Bearer $TOKEN" "$BASE/accounts/$ACCT_ID/audit_logs?per_page=5" | jq '.result[] | {action, when, actor_email: (.actor.email | split("@") | "***@" + .[1])}'
 
 # Notification Policies
 curl -s -H "Authorization: Bearer $TOKEN" "$BASE/accounts/$ACCT_ID/alerting/v3/policies" | jq '.result[] | {name, enabled, alert_type}'
@@ -78,6 +78,8 @@ curl -s -H "Authorization: Bearer $TOKEN" "$BASE/accounts/$ACCT_ID/alerting/v3/p
 # Token health check
 curl -s -H "Authorization: Bearer $TOKEN" "$BASE/user/tokens/verify" | jq '.result.status'
 ```
+
+**PII redaction:** Actor emails in the audit log jq filter are redacted by default (`***@domain.com`) to avoid displaying PII in conversation output. Full emails are available in the raw API response when needed for incident investigation.
 
 Paid plan notes: `GET /zones/<id>/firewall/rules` and `GET /zones/<id>/rulesets` may return empty arrays on the Free plan (WAF is a Pro+ feature). Do not report empty results as findings — note them as "requires paid plan" instead.
 
