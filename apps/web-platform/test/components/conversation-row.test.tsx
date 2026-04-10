@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import { describe, it, expect, vi } from "vitest";
 import { ConversationRow } from "@/components/inbox/conversation-row";
 import type { ConversationWithPreview } from "@/hooks/use-conversations";
@@ -29,14 +29,28 @@ function makeConversation(
 }
 
 describe("ConversationRow LeaderBadge", () => {
-  it("renders a Soleur logo image instead of text when domain_leader is set", () => {
-    const { container } = render(
+  it("renders a logo image inside each badge container", () => {
+    render(
       <ConversationRow conversation={makeConversation({ domain_leader: "cto" })} />,
     );
 
-    const imgs = container.querySelectorAll<HTMLImageElement>("img[src*='soleur-logo-mark']");
-    expect(imgs.length).toBeGreaterThan(0);
-    expect(imgs[0].src).toContain("/icons/soleur-logo-mark.png");
+    const badges = screen.getAllByLabelText(/Soleur CTO/i);
+    expect(badges).toHaveLength(2);
+
+    for (const badge of badges) {
+      const img = within(badge).getByRole("presentation");
+      expect(img.tagName).toBe("IMG");
+    }
+  });
+
+  it("sets the correct src on the logo image", () => {
+    render(
+      <ConversationRow conversation={makeConversation({ domain_leader: "cto" })} />,
+    );
+
+    const badge = screen.getAllByLabelText(/Soleur CTO/i)[0];
+    const img = within(badge).getByRole("presentation");
+    expect(img).toHaveAttribute("src", "/icons/soleur-logo-mark.png");
   });
 
   it("does not render leader ID text in the badge", () => {
@@ -46,29 +60,29 @@ describe("ConversationRow LeaderBadge", () => {
     expect(badges).toHaveLength(0);
   });
 
-  it("has aria-label combining Soleur with leader ID", () => {
+  it("has aria-label combining Soleur with leader ID (mobile + desktop)", () => {
     render(<ConversationRow conversation={makeConversation({ domain_leader: "cto" })} />);
 
-    const badge = screen.getAllByLabelText(/Soleur CTO/i);
-    expect(badge.length).toBeGreaterThan(0);
+    const badges = screen.getAllByLabelText(/Soleur CTO/i);
+    expect(badges).toHaveLength(2);
   });
 
   it("sets alt='' on the logo image (decorative)", () => {
-    const { container } = render(
+    render(
       <ConversationRow conversation={makeConversation({ domain_leader: "cto" })} />,
     );
 
-    const img = container.querySelector<HTMLImageElement>("img[src*='soleur-logo-mark']");
-    expect(img).not.toBeNull();
+    const badge = screen.getAllByLabelText(/Soleur CTO/i)[0];
+    const img = within(badge).getByRole("presentation");
     expect(img).toHaveAttribute("alt", "");
   });
 
   it("does not render a badge when domain_leader is null", () => {
-    const { container } = render(
+    render(
       <ConversationRow conversation={makeConversation({ domain_leader: null })} />,
     );
 
-    const img = container.querySelector<HTMLImageElement>("img[src*='soleur-logo-mark']");
-    expect(img).toBeNull();
+    const badges = screen.queryAllByLabelText(/Soleur/i);
+    expect(badges).toHaveLength(0);
   });
 });
