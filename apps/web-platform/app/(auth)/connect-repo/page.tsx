@@ -101,7 +101,28 @@ export default function ConnectRepoPage() {
     if (detectAttemptedRef.current) return;
     detectAttemptedRef.current = true;
 
+    // Guard: skip auto-detect when user is in the create flow
+    try {
+      if (sessionStorage.getItem("soleur_create_flow") === "true") return;
+    } catch { /* sessionStorage unavailable */ }
+
+    // Clear stale state to prevent flash of old repo list on remount
+    setRepos([]);
+    setReposLoading(false);
+
     (async () => {
+      // Guard: redirect to dashboard if project is already ready
+      try {
+        const statusRes = await fetch("/api/repo/status");
+        if (statusRes.ok) {
+          const statusData = await statusRes.json();
+          if (statusData.status === "ready") {
+            router.push("/dashboard");
+            return;
+          }
+        }
+      } catch { /* continue to auto-detect */ }
+
       try {
         const res = await fetch("/api/repo/detect-installation", {
           method: "POST",
@@ -174,8 +195,20 @@ export default function ConnectRepoPage() {
             return;
           }
           const data = await createRes.json();
-          startSetup(data.repoUrl, data.fullName);
+          startSetup(data.repoUrl, data.fullName, "start_fresh");
         } else {
+          // SessionStorage may have been lost. Check if project is already ready
+          // before falling through to the import screen.
+          try {
+            const statusRes = await fetch("/api/repo/status");
+            if (statusRes.ok) {
+              const statusData = await statusRes.json();
+              if (statusData.status === "ready") {
+                router.push("/dashboard");
+                return;
+              }
+            }
+          } catch { /* fall through to fetchRepos */ }
           await fetchRepos();
         }
       } catch {
@@ -266,7 +299,7 @@ export default function ConnectRepoPage() {
   // Start setup + polling
   // ---------------------------------------------------------------------------
   const startSetup = useCallback(
-    async (repoUrl: string, repoName: string) => {
+    async (repoUrl: string, repoName: string, source?: "start_fresh" | "connect_existing") => {
       setConnectedRepoName(repoName);
       setState("setting_up");
 
@@ -297,7 +330,7 @@ export default function ConnectRepoPage() {
         const res = await fetch("/api/repo/setup", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ repoUrl }),
+          body: JSON.stringify({ repoUrl, source: source ?? "connect_existing" }),
         });
         if (!res.ok) {
           if (stepTimerRef.current) clearInterval(stepTimerRef.current);
@@ -359,6 +392,9 @@ export default function ConnectRepoPage() {
   // Handlers
   // ---------------------------------------------------------------------------
   function handleCreateNew() {
+    try {
+      sessionStorage.setItem("soleur_create_flow", "true");
+    } catch { /* sessionStorage unavailable */ }
     setState("create_project");
   }
 
@@ -444,7 +480,7 @@ export default function ConnectRepoPage() {
       });
       if (createRes.ok) {
         const data = await createRes.json();
-        startSetup(data.repoUrl, data.fullName);
+        startSetup(data.repoUrl, data.fullName, "start_fresh");
         return;
       }
       const errorData = await createRes.json().catch(() => null);
@@ -464,7 +500,7 @@ export default function ConnectRepoPage() {
             });
             if (retryRes.ok) {
               const data = await retryRes.json();
-              startSetup(data.repoUrl, data.fullName);
+              startSetup(data.repoUrl, data.fullName, "start_fresh");
               return;
             }
           }
@@ -525,7 +561,7 @@ export default function ConnectRepoPage() {
   }
 
   function handleSelectProject(repo: Repo) {
-    startSetup(`https://github.com/${repo.fullName}`, repo.fullName);
+    startSetup(`https://github.com/${repo.fullName}`, repo.fullName, "connect_existing");
   }
 
   function handleUpdateAccess() {
@@ -542,11 +578,17 @@ export default function ConnectRepoPage() {
   }
 
   function handleStartOver() {
+    try {
+      sessionStorage.removeItem("soleur_create_flow");
+    } catch { /* sessionStorage unavailable */ }
     setPendingCreate(null);
     setState("choose");
   }
 
   function handleOpenDashboard() {
+    try {
+      sessionStorage.removeItem("soleur_create_flow");
+    } catch { /* sessionStorage unavailable */ }
     router.push(consumeReturnTo());
   }
 
