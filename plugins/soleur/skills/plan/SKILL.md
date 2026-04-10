@@ -507,5 +507,6 @@ Run `bash ./plugins/soleur/skills/archive-kb/scripts/archive-kb.sh` from the rep
 - When a plan prescribes dependency upgrades within a major version range, specify the npm version tag explicitly (e.g., `npm install next@15`, not `npm install next@latest`). The `@latest` tag resolves globally and may cross major version boundaries.
 - When a plan references specific dependency version ranges or peer constraints, verify them via `npm view <pkg> peerDependencies` before prescribing a fix approach. Plans have prescribed wrong version ranges that were only caught during implementation.
 - When a plan adds a new required check to CI/branch protection rulesets, the plan MUST include an audit step that greps for ALL workflows creating PRs via `GITHUB_TOKEN` or `create-pull-request` action and lists each one requiring synthetic check updates. Plans that claim "only N workflows need updating" without showing the grep output are incomplete.
+- When a plan prescribes Supabase/PostgREST query syntax (embedded resources, lateral joins, `.select()` with modifiers), include a verification note: "Confirm syntax against Supabase JS client docs before implementing." PostgREST embedded resource syntax is more limited than expected — chained `.limit().order().eq()` inside `select()` does not work.
 
 NEVER CODE! Just research and write the plan.

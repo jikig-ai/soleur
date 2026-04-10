@@ -1,10 +1,11 @@
-import { DOMAIN_LEADERS, type DomainLeaderId } from "./domain-leaders";
+import { ROUTABLE_DOMAIN_LEADERS, type DomainLeaderId } from "./domain-leaders";
 import { createChildLogger } from "./logger";
 
 const log = createChildLogger("domain");
 
 // Assessment questions ported from brainstorm-domain-config.md
-const DOMAIN_ASSESSMENT: Record<DomainLeaderId, string> = {
+// Only routable leaders are included — internal leaders (e.g. "system") are excluded.
+const DOMAIN_ASSESSMENT: Partial<Record<DomainLeaderId, string>> = {
   cmo: "Does this involve content, brand, SEO, pricing, or marketing?",
   cto: "Does this require architectural decisions, code review, or technical assessment?",
   cfo: "Does this involve budgeting, revenue, or financial planning?",
@@ -35,7 +36,7 @@ export function parseAtMentions(message: string): DomainLeaderId[] {
   let match: RegExpExecArray | null;
   while ((match = mentionPattern.exec(message)) !== null) {
     const tag = match[1].toLowerCase();
-    const leader = DOMAIN_LEADERS.find(
+    const leader = ROUTABLE_DOMAIN_LEADERS.find(
       (l) => l.id === tag || l.name.toLowerCase() === tag,
     );
     if (leader && !seen.has(leader.id)) {
@@ -81,7 +82,7 @@ async function classifyMessage(
 ): Promise<DomainLeaderId[]> {
   const assessmentList = Object.entries(DOMAIN_ASSESSMENT)
     .map(([id, question]) => {
-      const leader = DOMAIN_LEADERS.find((l) => l.id === id);
+      const leader = ROUTABLE_DOMAIN_LEADERS.find((l) => l.id === id);
       return `- ${id} (${leader?.title ?? id}): ${question}`;
     })
     .join("\n");
@@ -129,9 +130,9 @@ Respond with ONLY a JSON array like ["cmo","clo"]. No explanation.`,
     const parsed = JSON.parse(text.trim()) as string[];
 
     // Validate that returned IDs are actual leaders
-    const validIds = new Set(DOMAIN_LEADERS.map((l) => l.id));
+    const validIds = new Set<string>(ROUTABLE_DOMAIN_LEADERS.map((l) => l.id));
     const validated = parsed.filter((id): id is DomainLeaderId =>
-      validIds.has(id as DomainLeaderId),
+      validIds.has(id),
     );
 
     if (validated.length === 0) {

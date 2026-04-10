@@ -168,6 +168,39 @@ export function extractClientIp(req: IncomingMessage): string {
 }
 
 // ---------------------------------------------------------------------------
+// IP extraction — Next.js API routes (Web Request API)
+// ---------------------------------------------------------------------------
+
+/** Extract client IP from a Next.js API route Request (Web API headers). */
+export function extractClientIpFromHeaders(headers: Headers): string {
+  const cfIp = headers.get("cf-connecting-ip");
+  if (cfIp) return cfIp;
+  // In non-Cloudflare environments (dev, staging), use x-forwarded-for
+  // which Next.js sets from the TCP connection. In production behind
+  // Cloudflare, cf-connecting-ip is always present — XFF is only reached
+  // if traffic bypasses Cloudflare (direct-to-origin), which is an
+  // operational concern, not a spoofing vector at that point.
+  const xff = headers.get("x-forwarded-for");
+  if (xff) return xff.split(",")[0].trim();
+  return "unknown";
+}
+
+// ---------------------------------------------------------------------------
+// HTTP rate limiter singleton for public share endpoints
+// ---------------------------------------------------------------------------
+
+export const shareEndpointThrottle = new SlidingWindowCounter({
+  windowMs: 60_000,
+  maxRequests: parseInt(process.env.SHARE_RATE_LIMIT_PER_MIN ?? "60", 10),
+});
+
+const pruneShareInterval = setInterval(
+  () => shareEndpointThrottle.prune(),
+  60_000,
+);
+pruneShareInterval.unref();
+
+// ---------------------------------------------------------------------------
 // Rate limit rejection logging + Sentry breadcrumbs
 // ---------------------------------------------------------------------------
 
