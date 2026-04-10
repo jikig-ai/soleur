@@ -6,6 +6,26 @@ date: 2026-04-10
 
 # sec: Expand CF API token permissions for security monitoring
 
+## Enhancement Summary
+
+**Deepened on:** 2026-04-10
+**Sections enhanced:** 6
+**Research sources:** Cloudflare OpenAPI spec (MCP search), Cloudflare MCP execute (zone discovery), WebFetch (permissions docs), 5 project learnings, Doppler config audit
+
+### Key Improvements
+
+1. **Corrected account assignment** -- zone `soleur.ai` is under Jean's personal account (`4d5ba6f096b2686fbdd404167dd4e125`), not the Ops account as originally stated. Token must be created under the correct account.
+2. **API token creation endpoint discovered** -- `POST /user/tokens` exists in the Cloudflare API and accepts permission group IDs + resource scoping. However, MCP OAuth token lacks `API Tokens Write` scope, so Playwright/dashboard remains the implementation path for this ticket.
+3. **Concrete zone ID and permission group ID lookup** -- added exact API calls to resolve permission group IDs at implementation time, eliminating guesswork.
+4. **Expiry policy decision** -- CF API tokens can be created without expiry (field is optional). Plan now explicitly recommends no expiry with annual review, avoiding unnecessary rotation overhead.
+5. **Doppler config naming** -- applied learning from `2026-03-29-doppler-service-token-config-scope-mismatch.md` to ensure consistent naming if the token is later added to CI.
+6. **Playwright automation hardened** -- applied learnings for MCP-first check, browser cleanup, and viewport workarounds.
+
+### New Considerations Discovered
+
+- The `POST /user/tokens` API creates tokens that include the `value` field in the response (shown only once, like dashboard). Future automation could use this endpoint if a token with `API Tokens Write` scope is created first.
+- Zone scoping uses resource format `com.cloudflare.api.account.zone.<zone_id>` -- the exact zone ID (`5af02a2f394e9ba6e0ea23c381a26b67`) is now known.
+
 ## Overview
 
 Create a dedicated read-only Cloudflare API token (`CF_API_TOKEN_AUDIT`) with permissions
@@ -46,13 +66,18 @@ Rationale:
 
 ### Phase 1: Create Cloudflare API Token (Playwright automation)
 
-Per learning `2026-03-21-cloudflare-api-token-permission-editing.md`, CF API tokens cannot
-be created or modified via the API itself. Use Playwright MCP to automate token creation
-via the Cloudflare dashboard.
+Per learning `2026-03-21-cloudflare-api-token-permission-editing.md`, editing existing CF API
+token permissions requires dashboard access. Creating new tokens via `POST /user/tokens` API
+is technically possible (endpoint exists in OpenAPI spec) but requires `API Tokens Write`
+scope on the calling token -- which the MCP OAuth token lacks (confirmed: returns 9109
+Unauthorized). Use Playwright MCP to automate token creation via the Cloudflare dashboard.
 
 **Token name:** `soleur-security-audit`
 
-**Account:** <Ops@jikigai.com> (account ID: `1ed2b077487f00f5baf7498af6975d95`)
+**Account:** <Jean.deruelle@jikigai.com> (account ID: `4d5ba6f096b2686fbdd404167dd4e125`)
+
+**Important:** The `soleur.ai` zone (ID: `5af02a2f394e9ba6e0ea23c381a26b67`) is under
+Jean's personal account, NOT the Ops account. The token must be created under Jean's profile.
 
 **Permissions (all Read-only):**
 
@@ -67,22 +92,53 @@ via the Cloudflare dashboard.
 | Account | Notifications | Read |
 | Account | Audit Logs | Read |
 
-**Zone resources:** Include all zones (or restrict to `soleur.ai` and `jikigai.com` if the
-dashboard supports zone filtering for custom tokens).
+**Zone resources:** Restrict to `soleur.ai` zone only (ID: `5af02a2f394e9ba6e0ea23c381a26b67`).
+The account currently has only this one zone, but scoping to specific zones is more secure
+than "All zones" if additional zones are added later.
+
+**Expiry policy:** Do not set an expiry date. CF API tokens are permanent by default (the
+`expires_on` field is optional per the OpenAPI spec). An annual review cadence is preferable
+to forced rotation for a read-only audit token -- rotation would require updating Doppler
+and re-verifying all audit integrations with zero security benefit (the token is read-only).
+
+**Pre-Playwright check** (per learning `2026-03-25-check-mcp-api-before-playwright.md`):
+Before launching Playwright, verify that `POST /user/tokens` still returns 9109 via MCP.
+If it succeeds (MCP scope changed), use the API path instead -- it is faster and more reliable.
 
 **Playwright steps:**
 
 1. Navigate to `https://dash.cloudflare.com/profile/api-tokens`
 2. Click "Create Token"
-3. Select "Create Custom Token"
+3. Select "Create Custom Token" (or "Get started" next to "Create Custom Token")
 4. Set token name: `soleur-security-audit`
 5. Add each permission row from the table above
-6. Set zone resources to all zones in the account
-7. Click "Continue to summary"
-8. Review permissions match the table
-9. Click "Create Token"
-10. Copy the token value (displayed only once)
-11. Verify token via API: `curl -H "Authorization: Bearer <token>" https://api.cloudflare.com/client/v4/user/tokens/verify`
+6. Set zone resources to "Specific zone" > `soleur.ai`
+7. Do NOT set IP address filtering (agent runs from multiple IPs)
+8. Click "Continue to summary"
+9. Review permissions match the table (take a screenshot for verification)
+10. Click "Create Token"
+11. Copy the token value (displayed only once -- the `value` field is only in the create response)
+12. Verify token via API: `curl -H "Authorization: Bearer <token>" https://api.cloudflare.com/client/v4/user/tokens/verify`
+13. **Call `browser_close`** (per learning `2026-04-03-playwright-browser-cleanup-on-session-exit.md` -- mandatory after Playwright tasks)
+
+### Research Insights: Token Creation API
+
+The Cloudflare API supports programmatic token creation via `POST /user/tokens`. The request
+body requires:
+
+- `name`: token name (max 120 chars)
+- `policies`: array of `{ effect, permission_groups: [{id}], resources }` objects
+- `expires_on`: optional ISO 8601 datetime
+- `condition.request_ip`: optional IP restrictions
+
+Permission group IDs can be fetched from `GET /user/tokens/permission_groups` (filterable by
+`name` and `scope` query params). Resource scoping uses the format:
+`com.cloudflare.api.account.zone.5af02a2f394e9ba6e0ea23c381a26b67` for zone-scoped permissions.
+
+This API path is blocked for this ticket because the MCP OAuth token lacks `API Tokens Write`
+scope. To enable API-based token management in the future, create a privileged token with
+`API Tokens Write` scope and store it separately in Doppler. This would eliminate the
+Playwright dependency for all future token operations.
 
 ### Phase 2: Store in Doppler
 
@@ -94,16 +150,42 @@ doppler secrets set CF_API_TOKEN_AUDIT=<token_value> -p soleur -c dev
 
 **Config placement rationale:**
 
-- `dev` -- local agent runs, interactive audits
+- `dev` -- local agent runs, interactive audits. This is the primary config.
 - `prd_scheduled` -- if a scheduled GitHub Actions workflow needs it later
 - NOT in `prd_terraform` -- this token is not used by Terraform
 - NOT in `ci` -- CI workflows do not currently run security audits
+
+**Naming convention** (per learning `2026-03-29-doppler-service-token-config-scope-mismatch.md`):
+If this token is later used in CI workflows, the GitHub secret must use a config-specific name
+(e.g., `CF_API_TOKEN_AUDIT_DEV` or `CF_API_TOKEN_AUDIT_SCHEDULED`) to encode the Doppler
+config scope. Never use a bare `CF_API_TOKEN_AUDIT` GitHub secret -- it hides which Doppler
+config the service token is scoped to.
 
 Verify storage:
 
 ```text
 doppler secrets get CF_API_TOKEN_AUDIT -p soleur -c dev --plain | head -c 20
 ```
+
+### Research Insights: Doppler Configuration
+
+Current CF-related secrets across Doppler configs (audited 2026-04-10):
+
+| Config | CF Keys |
+|--------|---------|
+| `dev` | `CF_API_TOKEN`, `CF_ZONE_ID` |
+| `prd_terraform` | `CF_ACCESS_CLIENT_ID`, `CF_ACCESS_CLIENT_SECRET`, `CF_ACCOUNT_ID`, `CF_API_TOKEN`, `CF_NOTIFICATION_EMAIL`, `CF_TUNNEL_TOKEN`, `CF_ZONE_ID`, `HCLOUD_TOKEN` |
+| `ci` | (none) |
+| `prd` | (none) |
+| `prd_scheduled` | (none) |
+
+The `CF_API_TOKEN` in `dev` starts with `cfut_` (confirmed via Doppler read). Adding
+`CF_API_TOKEN_AUDIT` to `dev` keeps the audit token co-located with the existing token
+for local agent use.
+
+**Doppler stderr contamination** (per learning `2026-04-06-doppler-stderr-contaminates-docker-env-file.md`):
+When using `doppler run` in scripts, be aware that Doppler CLI may write warnings to stderr.
+For audit scripts that capture output, always redirect stderr appropriately.
 
 ### Phase 3: Update infra-security agent
 
@@ -131,22 +213,102 @@ Add a new subsection for API-token-based checks that complement MCP:
 
 ### Phase 4: Verification
 
-After all phases complete, run a test audit using the new token:
+After all phases complete, run verification using the exact IDs discovered during research.
+
+**Known identifiers:**
+
+- Account ID: `4d5ba6f096b2686fbdd404167dd4e125` (Jean's account)
+- Zone ID: `5af02a2f394e9ba6e0ea23c381a26b67` (soleur.ai)
+
+**Step 1: Token health check**
 
 ```text
 doppler run -c dev -- curl -s \
   -H "Authorization: Bearer $CF_API_TOKEN_AUDIT" \
-  "https://api.cloudflare.com/client/v4/zones?account.id=1ed2b077487f00f5baf7498af6975d95" \
+  "https://api.cloudflare.com/client/v4/user/tokens/verify" \
+  | jq '.result.status'
+```
+
+Expected: `"active"`
+
+**Step 2: Zone listing**
+
+```text
+doppler run -c dev -- curl -s \
+  -H "Authorization: Bearer $CF_API_TOKEN_AUDIT" \
+  "https://api.cloudflare.com/client/v4/zones?account.id=4d5ba6f096b2686fbdd404167dd4e125" \
   | jq '.result[].name'
 ```
 
-Expected: returns zone names (soleur.ai, jikigai.com, etc.)
+Expected: `"soleur.ai"`
 
-Then test each permission category:
+**Step 3: Per-permission verification (one call per permission group)**
 
-- Zone settings: `GET /zones/<zone_id>/settings/ssl`
-- Firewall: `GET /zones/<zone_id>/firewall/rules`
-- Audit logs: `GET /accounts/<account_id>/audit_logs?per_page=1`
+```text
+ZONE_ID="5af02a2f394e9ba6e0ea23c381a26b67"
+ACCT_ID="4d5ba6f096b2686fbdd404167dd4e125"
+BASE="https://api.cloudflare.com/client/v4"
+
+# Zone Settings Read
+doppler run -c dev -- curl -s -H "Authorization: Bearer $CF_API_TOKEN_AUDIT" \
+  "$BASE/zones/$ZONE_ID/settings/ssl" | jq '.result.value'
+# DNS Read
+doppler run -c dev -- curl -s -H "Authorization: Bearer $CF_API_TOKEN_AUDIT" \
+  "$BASE/zones/$ZONE_ID/dns_records?per_page=1" | jq '.success'
+# SSL Read
+doppler run -c dev -- curl -s -H "Authorization: Bearer $CF_API_TOKEN_AUDIT" \
+  "$BASE/zones/$ZONE_ID/ssl/certificate_packs" | jq '.success'
+# Firewall Read
+doppler run -c dev -- curl -s -H "Authorization: Bearer $CF_API_TOKEN_AUDIT" \
+  "$BASE/zones/$ZONE_ID/firewall/rules" | jq '.success'
+# Account Settings Read
+doppler run -c dev -- curl -s -H "Authorization: Bearer $CF_API_TOKEN_AUDIT" \
+  "$BASE/accounts/$ACCT_ID" | jq '.success'
+# Audit Logs Read
+doppler run -c dev -- curl -s -H "Authorization: Bearer $CF_API_TOKEN_AUDIT" \
+  "$BASE/accounts/$ACCT_ID/audit_logs?per_page=1" | jq '.success'
+# Notifications Read
+doppler run -c dev -- curl -s -H "Authorization: Bearer $CF_API_TOKEN_AUDIT" \
+  "$BASE/accounts/$ACCT_ID/alerting/v3/policies" | jq '.success'
+```
+
+All should return `true` or a valid value.
+
+**Step 4: Write rejection test**
+
+```text
+doppler run -c dev -- curl -s -X PATCH \
+  -H "Authorization: Bearer $CF_API_TOKEN_AUDIT" \
+  -H "Content-Type: application/json" \
+  -d '{"value":"off"}' \
+  "$BASE/zones/$ZONE_ID/settings/ssl" | jq '.success'
+```
+
+Expected: `false` (confirms read-only scope)
+
+**Step 5: Existing token health**
+
+```text
+doppler run -c dev -- curl -s \
+  -H "Authorization: Bearer $CF_API_TOKEN" \
+  "https://api.cloudflare.com/client/v4/user/tokens/verify" | jq '.result.status'
+```
+
+Expected: `"active"` (Terraform token unaffected)
+
+### Research Insights: Cloudflare API Endpoint Availability
+
+Some endpoints may return errors on the Free plan. During verification, document which
+endpoints succeed and which return plan-level errors. Known constraints:
+
+- `GET /zones/<id>/firewall/rules` -- WAF rules may return empty on Free plan (WAF is
+  a Pro+ feature), but the endpoint itself should be accessible
+- `GET /zones/<id>/rulesets` -- Custom rulesets are a Pro+ feature; the endpoint may
+  return an empty list or a plan-level error
+- `GET /accounts/<id>/audit_logs` -- Available on all plans (confirmed in CF docs)
+
+If any endpoint returns a plan-level error, document it in the infra-security agent as a
+"requires paid plan" note so audits do not report false negatives.
 
 ## Technical Considerations
 
@@ -165,7 +327,20 @@ Then test each permission category:
 
 ### Browser automation dependency
 
-Token creation requires Playwright MCP. If Playwright is unavailable, the plan degrades to manual dashboard instructions with specific steps. This is one of the genuinely manual steps -- Cloudflare does not expose token creation via its API.
+Token creation requires Playwright MCP. If Playwright is unavailable, the plan degrades to
+manual dashboard instructions with specific steps.
+
+**Important correction from research:** Cloudflare DOES expose token creation via
+`POST /user/tokens`, but the MCP OAuth token currently lacks `API Tokens Write` scope
+(confirmed: returns error 9109). The dashboard/Playwright path is a practical constraint
+of the current MCP configuration, not a fundamental API limitation. The plan includes a
+pre-Playwright check to test the API path first (per learning
+`2026-03-25-check-mcp-api-before-playwright.md`).
+
+**Playwright viewport workaround** (per learning
+`2026-03-21-cloudflare-api-token-permission-editing.md`): Permission dropdown comboboxes
+on the CF dashboard may render outside the viewport. If `browser_click` on a combobox ref
+fails, click the parent container element as a workaround.
 
 ## Acceptance Criteria
 
@@ -184,7 +359,7 @@ Token creation requires Playwright MCP. If Playwright is unavailable, the plan d
 - Given the audit token, when requesting audit logs, then recent account activity entries are returned
 - Given the audit token, when attempting a write operation (e.g., `PATCH /zones/<id>/settings`), then the API returns 403 (confirming read-only scope)
 - **API verify:** `doppler run -c dev -- curl -s -H "Authorization: Bearer $CF_API_TOKEN_AUDIT" https://api.cloudflare.com/client/v4/user/tokens/verify | jq '.result.status'` expects `"active"`
-- **API verify:** `doppler run -c dev -- curl -s -H "Authorization: Bearer $CF_API_TOKEN_AUDIT" "https://api.cloudflare.com/client/v4/zones?account.id=1ed2b077487f00f5baf7498af6975d95&per_page=1" | jq '.success'` expects `true`
+- **API verify:** `doppler run -c dev -- curl -s -H "Authorization: Bearer $CF_API_TOKEN_AUDIT" "https://api.cloudflare.com/client/v4/zones?account.id=4d5ba6f096b2686fbdd404167dd4e125&per_page=1" | jq '.success'` expects `true`
 
 ## Domain Review
 
@@ -204,10 +379,12 @@ existing learnings.
 
 **Status:** reviewed
 **Assessment:** Token creation adds one new secret to Doppler `dev` config. Operational
-cost is minimal (read-only token, no recurring expense). The token should be added to the
-credential expiry monitoring pattern established in #974 if Cloudflare API tokens have
-expiry dates. Verify during creation whether the token has an expiry or is permanent.
-If it expires, add it to the `scheduled-cf-token-expiry-check.yml` workflow scope.
+cost is minimal (read-only token, no recurring expense). Per the Cloudflare OpenAPI spec,
+the `expires_on` field is optional for API tokens -- the plan recommends creating the token
+without an expiry (permanent), avoiding rotation overhead for a read-only credential. The
+`scheduled-cf-token-expiry-check.yml` workflow monitors Access service tokens (which have
+mandatory 1-year expiry), not API tokens. No changes to the expiry monitoring workflow
+are needed. Annual manual review of the token's permissions is sufficient.
 
 ## Dependencies and Risks
 
@@ -225,6 +402,11 @@ If it expires, add it to the `scheduled-cf-token-expiry-check.yml` workflow scop
 - infra-security agent: `plugins/soleur/agents/engineering/infra/infra-security.md`
 - CF token permission editing learning: `knowledge-base/project/learnings/2026-03-21-cloudflare-api-token-permission-editing.md`
 - CF service token expiry monitoring: `knowledge-base/project/learnings/2026-03-21-cloudflare-service-token-expiry-monitoring.md`
+- Check MCP/API before Playwright: `knowledge-base/project/learnings/2026-03-25-check-mcp-api-before-playwright.md`
+- Playwright browser cleanup: `knowledge-base/project/learnings/workflow-issues/2026-04-03-playwright-browser-cleanup-on-session-exit.md`
+- Doppler service token config scope: `knowledge-base/project/learnings/2026-03-29-doppler-service-token-config-scope-mismatch.md`
+- Terraform-Doppler dual credential pattern: `knowledge-base/project/learnings/integration-issues/2026-04-05-terraform-doppler-dual-credential-pattern.md`
+- Doppler stderr contamination: `knowledge-base/project/learnings/integration-issues/2026-04-06-doppler-stderr-contaminates-docker-env-file.md`
 - Token expiry check workflow: `.github/workflows/scheduled-cf-token-expiry-check.yml`
 - Terraform CF provider config: `apps/web-platform/infra/main.tf`
 - CF token monitor spec: `knowledge-base/project/specs/feat-cf-token-monitor/session-state.md`
@@ -235,3 +417,15 @@ If it expires, add it to the `scheduled-cf-token-expiry-check.yml` workflow scop
 - [Cloudflare API v4 Docs](https://developers.cloudflare.com/api/)
 - Issue: #1837
 - Originating audit: PR #1820
+
+### Research Verification (2026-04-10)
+
+| Claim | Verified Via | Result |
+|-------|-------------|--------|
+| soleur.ai zone ID | MCP `GET /zones` | `5af02a2f394e9ba6e0ea23c381a26b67` (confirmed) |
+| soleur.ai account | MCP `GET /zones` | Jean's personal account `4d5ba6f096b2686fbdd404167dd4e125` (NOT Ops) |
+| API token creation endpoint | Cloudflare OpenAPI spec search | `POST /user/tokens` exists, requires `API Tokens Write` scope |
+| MCP can create tokens | MCP `GET /user/tokens/permission_groups` | Error 9109 Unauthorized (MCP lacks scope) |
+| Token expiry optional | OpenAPI spec `expires_on` field | Optional field, tokens are permanent by default |
+| CF_API_TOKEN in dev | Doppler `doppler secrets get` | Starts with `cfut_` (confirmed) |
+| CF_API_TOKEN_AUDIT in dev | Doppler `doppler secrets get` | Does not exist yet (confirmed) |
