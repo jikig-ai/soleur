@@ -9,8 +9,7 @@ import { ErrorCard } from "@/components/ui/error-card";
 import { STATUS_LABELS } from "@/lib/types";
 import type { ConversationStatus } from "@/lib/types";
 import type { DomainLeaderId } from "@/server/domain-leaders";
-import { DOMAIN_LEADERS } from "@/server/domain-leaders";
-import { LEADER_BG_COLORS } from "@/components/chat/leader-colors";
+import { DOMAIN_LEADERS, ROUTABLE_DOMAIN_LEADERS } from "@/server/domain-leaders";
 
 // ---------------------------------------------------------------------------
 // Foundation card definitions
@@ -87,7 +86,7 @@ const STATUS_OPTIONS: { value: ConversationStatus | ""; label: string }[] = [
 const DOMAIN_OPTIONS: { value: string; label: string }[] = [
   { value: "", label: "All domains" },
   { value: "general", label: "General" },
-  ...DOMAIN_LEADERS.map((l) => ({ value: l.id, label: l.name })),
+  ...ROUTABLE_DOMAIN_LEADERS.map((l) => ({ value: l.id, label: l.name })),
 ];
 
 export default function DashboardPage() {
@@ -199,6 +198,14 @@ export default function DashboardPage() {
       const message = input?.value?.trim();
       if (!message) return;
       completeOnboarding();
+
+      // Create vision.md server-side from the typed idea (fire-and-forget)
+      fetch("/api/vision", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ content: message }),
+      }).catch(() => { /* non-blocking — agent will create via tryCreateVision fallback */ });
+
       const params = new URLSearchParams();
       params.set("msg", message);
       router.push(`/dashboard/chat/new?${params.toString()}`);
@@ -240,7 +247,7 @@ export default function DashboardPage() {
   // First-run state (no vision.md, no conversations)
   // ---------------------------------------------------------------------------
 
-  if (!kbError && !visionExists && !loading && conversations.length === 0 && !hasActiveFilter) {
+  if (!kbError && !visionExists && conversations.length === 0 && !hasActiveFilter) {
     return (
       <div className="mx-auto flex min-h-[calc(100dvh-4rem)] max-w-3xl flex-col items-center justify-center px-4 py-10">
         <p className="mb-3 text-xs font-medium tracking-widest text-amber-500">
@@ -324,9 +331,16 @@ export default function DashboardPage() {
                 className="flex flex-col gap-2 rounded-xl border border-neutral-800 bg-neutral-900/50 p-4 text-left transition-colors hover:border-neutral-600"
               >
                 <span
-                  className={`flex h-5 w-5 items-center justify-center rounded text-[10px] font-semibold text-white ${LEADER_BG_COLORS[card.leaderId]}`}
+                  className="flex h-5 w-5 items-center justify-center overflow-hidden rounded"
+                  aria-label={`Soleur ${card.leaderId.toUpperCase()}`}
                 >
-                  {card.leaderId.toUpperCase()}
+                  <img
+                    src="/icons/soleur-logo-mark.png"
+                    alt=""
+                    width={20}
+                    height={20}
+                    className="h-full w-full object-cover"
+                  />
                 </span>
                 <span className="text-sm font-medium text-white">
                   {card.title}
@@ -355,9 +369,13 @@ export default function DashboardPage() {
 
   // ---------------------------------------------------------------------------
   // Command Center — empty state (all foundations complete, no conversations)
+  // Show immediately once KB state is known — don't block on conversation
+  // loading. If conversations load later and are non-empty, React re-renders
+  // into the inbox view below. This prevents the Supabase client initialisation
+  // (navigator locks, Realtime WebSocket) from keeping users on a skeleton.
   // ---------------------------------------------------------------------------
 
-  if (!loading && !error && conversations.length === 0 && !hasActiveFilter) {
+  if (conversations.length === 0 && !hasActiveFilter) {
     return (
       <div className="mx-auto flex min-h-[calc(100dvh-4rem)] max-w-3xl flex-col items-center justify-center px-4 py-10">
         <p className="mb-3 text-xs font-medium tracking-widest text-amber-500">
@@ -394,7 +412,7 @@ export default function DashboardPage() {
               <div className="flex gap-1">
                 {prompt.leaders.map((id) => (
                   <span key={id} className="text-xs text-neutral-500">
-                    {DOMAIN_LEADERS.find((l) => l.id === id)?.name}
+                    {ROUTABLE_DOMAIN_LEADERS.find((l) => l.id === id)?.name}
                   </span>
                 ))}
               </div>
@@ -532,7 +550,7 @@ function LeaderStrip({ onLeaderClick }: { onLeaderClick: (leaderId: string) => v
         YOUR ORGANIZATION
       </p>
       <div className="flex flex-wrap justify-center gap-3">
-        {DOMAIN_LEADERS.map((leader) => (
+        {ROUTABLE_DOMAIN_LEADERS.map((leader) => (
           <button
             key={leader.id}
             type="button"
@@ -540,9 +558,16 @@ function LeaderStrip({ onLeaderClick }: { onLeaderClick: (leaderId: string) => v
             className="group flex items-center gap-1.5 rounded-lg px-2 py-1 transition-colors hover:bg-neutral-800/50"
           >
             <span
-              className={`flex h-5 w-5 items-center justify-center rounded text-[10px] font-semibold text-white ${LEADER_BG_COLORS[leader.id]}`}
+              className="flex h-5 w-5 items-center justify-center overflow-hidden rounded"
+              aria-label={`Soleur ${leader.id.toUpperCase()}`}
             >
-              {leader.id.toUpperCase()}
+              <img
+                src="/icons/soleur-logo-mark.png"
+                alt=""
+                width={20}
+                height={20}
+                className="h-full w-full object-cover"
+              />
             </span>
             <span className="text-xs text-neutral-500 group-hover:text-neutral-300">
               {leader.name}

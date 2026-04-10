@@ -1,0 +1,3379 @@
+{
+  "version": "2.9",
+  "children": [
+    {
+      "type": "frame",
+      "id": "RbCG1",
+      "x": 0,
+      "y": -200,
+      "name": "component/Badge",
+      "reusable": true,
+      "width": 32,
+      "height": 32,
+      "fill": "#E857A0",
+      "cornerRadius": 6,
+      "justifyContent": "center",
+      "alignItems": "center",
+      "children": [
+        {
+          "type": "text",
+          "id": "QywDK",
+          "fill": "#FFFFFF",
+          "content": "CMO",
+          "fontFamily": "Inter",
+          "fontSize": 10,
+          "fontWeight": "700",
+          "letterSpacing": 0.5
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "xbPuZ",
+      "x": 0,
+      "y": 0,
+      "name": "01 — Team Settings Desktop",
+      "width": 1280,
+      "height": 920,
+      "fill": "#0A0A0A",
+      "children": [
+        {
+          "type": "frame",
+          "id": "2jTfd",
+          "name": "Sidebar",
+          "width": 260,
+          "height": "fill_container",
+          "fill": "#0D0D0D",
+          "stroke": {
+            "thickness": {
+              "right": 1
+            },
+            "fill": "#2A2A2A"
+          },
+          "layout": "vertical",
+          "gap": 8,
+          "padding": 24,
+          "children": [
+            {
+              "type": "text",
+              "id": "N4D2e",
+              "fill": "#C9A962",
+              "content": "S O L E U R",
+              "fontFamily": "Inter",
+              "fontSize": 16,
+              "fontWeight": "500",
+              "letterSpacing": 4
+            },
+            {
+              "type": "frame",
+              "id": "QCqyd",
+              "name": "spacer1",
+              "width": "fill_container",
+              "height": 40
+            },
+            {
+              "type": "text",
+              "id": "yhJxK",
+              "fill": "#6A6A6A",
+              "content": "SETTINGS",
+              "fontFamily": "Inter",
+              "fontSize": 11,
+              "fontWeight": "600",
+              "letterSpacing": 3
+            },
+            {
+              "type": "frame",
+              "id": "KppBI",
+              "name": "spacer2",
+              "width": "fill_container",
+              "height": 8
+            },
+            {
+              "type": "frame",
+              "id": "3TXKO",
+              "name": "navGeneral",
+              "width": "fill_container",
+              "height": 40,
+              "padding": [
+                10,
+                12
+              ],
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "45dVK",
+                  "fill": "#848484",
+                  "content": "General",
+                  "fontFamily": "Inter",
+                  "fontSize": 14,
+                  "fontWeight": "normal"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "SZ4ha",
+              "name": "navTeam",
+              "width": "fill_container",
+              "height": 40,
+              "fill": "#141414",
+              "stroke": {
+                "thickness": {
+                  "left": 3
+                },
+                "fill": "#C9A962"
+              },
+              "padding": [
+                10,
+                12
+              ],
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "mLSBc",
+                  "fill": "#E0E0E0",
+                  "content": "Team",
+                  "fontFamily": "Inter",
+                  "fontSize": 14,
+                  "fontWeight": "500"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "0yW4K",
+              "name": "navKB",
+              "width": "fill_container",
+              "height": 40,
+              "padding": [
+                10,
+                12
+              ],
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "fAoKX",
+                  "fill": "#848484",
+                  "content": "Knowledge Base",
+                  "fontFamily": "Inter",
+                  "fontSize": 14,
+                  "fontWeight": "normal"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "3yMkL",
+              "name": "navIntegrations",
+              "width": "fill_container",
+              "height": 40,
+              "padding": [
+                10,
+                12
+              ],
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "M1rW7",
+                  "fill": "#848484",
+                  "content": "Integrations",
+                  "fontFamily": "Inter",
+                  "fontSize": 14,
+                  "fontWeight": "normal"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "U2tpU",
+          "name": "Main Content",
+          "width": "fill_container",
+          "height": "fill_container",
+          "layout": "vertical",
+          "gap": 8,
+          "padding": [
+            48,
+            64
+          ],
+          "children": [
+            {
+              "type": "text",
+              "id": "yCowD",
+              "fill": "#C9A962",
+              "content": "YOUR TEAM",
+              "fontFamily": "Inter",
+              "fontSize": 11,
+              "fontWeight": "600",
+              "letterSpacing": 3
+            },
+            {
+              "type": "text",
+              "id": "lYAiI",
+              "fill": "#E0E0E0",
+              "content": "Domain Leaders",
+              "fontFamily": "Inter",
+              "fontSize": 32,
+              "fontWeight": "600"
+            },
+            {
+              "type": "text",
+              "id": "W7P0o",
+              "fill": "#6A6A6A",
+              "textGrowth": "fixed-width",
+              "width": "fill_container",
+              "content": "Give your leaders custom names. Names display as \"Name (Role)\" across conversations and mentions.",
+              "fontFamily": "Inter",
+              "fontSize": 14,
+              "fontWeight": "normal"
+            },
+            {
+              "type": "frame",
+              "id": "4euhr",
+              "name": "spacer",
+              "width": "fill_container",
+              "height": 16
+            },
+            {
+              "type": "frame",
+              "id": "TFTpY",
+              "name": "Leader Rows",
+              "width": "fill_container",
+              "layout": "vertical",
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "LDqlw",
+                  "name": "Row CMO",
+                  "width": "fill_container",
+                  "height": 56,
+                  "stroke": {
+                    "thickness": {
+                      "bottom": 1
+                    },
+                    "fill": "#1A1A1A"
+                  },
+                  "gap": 16,
+                  "padding": [
+                    12,
+                    0
+                  ],
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "id": "aZEhv",
+                      "type": "ref",
+                      "ref": "RbCG1",
+                      "name": "b1",
+                      "y": 12,
+                      "descendants": {
+                        "QywDK": {
+                          "content": "CMO"
+                        }
+                      }
+                    },
+                    {
+                      "type": "text",
+                      "id": "5oy1m",
+                      "fill": "#6A6A6A",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "Chief Marketing Officer",
+                      "fontFamily": "Inter",
+                      "fontSize": 13,
+                      "fontWeight": "normal"
+                    },
+                    {
+                      "type": "frame",
+                      "id": "NVrm5",
+                      "name": "input",
+                      "width": 200,
+                      "height": 36,
+                      "fill": "#141414",
+                      "cornerRadius": 6,
+                      "stroke": {
+                        "thickness": 1,
+                        "fill": "#2A2A2A"
+                      },
+                      "padding": [
+                        8,
+                        12
+                      ],
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "Yl3IC",
+                          "fill": "#E0E0E0",
+                          "content": "Sarah",
+                          "fontFamily": "Inter",
+                          "fontSize": 14,
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "uybEr",
+                  "name": "Row CTO",
+                  "width": "fill_container",
+                  "height": 56,
+                  "stroke": {
+                    "thickness": {
+                      "bottom": 1
+                    },
+                    "fill": "#1A1A1A"
+                  },
+                  "gap": 16,
+                  "padding": [
+                    12,
+                    0
+                  ],
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "id": "AfVMg",
+                      "type": "ref",
+                      "ref": "RbCG1",
+                      "fill": "#4A90D9",
+                      "name": "b2",
+                      "y": 12,
+                      "descendants": {
+                        "QywDK": {
+                          "content": "CTO"
+                        }
+                      }
+                    },
+                    {
+                      "type": "text",
+                      "id": "iCas0",
+                      "fill": "#6A6A6A",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "Chief Technology Officer",
+                      "fontFamily": "Inter",
+                      "fontSize": 13,
+                      "fontWeight": "normal"
+                    },
+                    {
+                      "type": "frame",
+                      "id": "CACJI",
+                      "name": "input",
+                      "width": 200,
+                      "height": 36,
+                      "fill": "#141414",
+                      "cornerRadius": 6,
+                      "stroke": {
+                        "thickness": 1,
+                        "fill": "#2A2A2A"
+                      },
+                      "padding": [
+                        8,
+                        12
+                      ],
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "EuOw9",
+                          "fill": "#E0E0E0",
+                          "content": "Alex",
+                          "fontFamily": "Inter",
+                          "fontSize": 14,
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "JYlAR",
+                  "name": "Row CFO",
+                  "width": "fill_container",
+                  "height": 56,
+                  "stroke": {
+                    "thickness": {
+                      "bottom": 1
+                    },
+                    "fill": "#1A1A1A"
+                  },
+                  "gap": 16,
+                  "padding": [
+                    12,
+                    0
+                  ],
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "id": "vy5uZ",
+                      "type": "ref",
+                      "ref": "RbCG1",
+                      "fill": "#34C759",
+                      "name": "b3",
+                      "y": 12,
+                      "descendants": {
+                        "QywDK": {
+                          "content": "CFO"
+                        }
+                      }
+                    },
+                    {
+                      "type": "text",
+                      "id": "2RGc5",
+                      "fill": "#6A6A6A",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "Chief Financial Officer",
+                      "fontFamily": "Inter",
+                      "fontSize": 13,
+                      "fontWeight": "normal"
+                    },
+                    {
+                      "type": "frame",
+                      "id": "nluK2",
+                      "name": "input",
+                      "width": 200,
+                      "height": 36,
+                      "fill": "#141414",
+                      "cornerRadius": 6,
+                      "stroke": {
+                        "thickness": 1,
+                        "fill": "#2A2A2A"
+                      },
+                      "padding": [
+                        8,
+                        12
+                      ],
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "UT1rX",
+                          "fill": "#6A6A6A",
+                          "content": "Enter a name...",
+                          "fontFamily": "Inter",
+                          "fontSize": 14,
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "geO5S",
+                  "name": "Row CPO",
+                  "width": "fill_container",
+                  "height": 56,
+                  "stroke": {
+                    "thickness": {
+                      "bottom": 1
+                    },
+                    "fill": "#1A1A1A"
+                  },
+                  "gap": 16,
+                  "padding": [
+                    12,
+                    0
+                  ],
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "id": "t9GzC",
+                      "type": "ref",
+                      "ref": "RbCG1",
+                      "fill": "#9B59B6",
+                      "name": "b4",
+                      "y": 12,
+                      "descendants": {
+                        "QywDK": {
+                          "content": "CPO"
+                        }
+                      }
+                    },
+                    {
+                      "type": "text",
+                      "id": "qvcrq",
+                      "fill": "#6A6A6A",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "Chief Product Officer",
+                      "fontFamily": "Inter",
+                      "fontSize": 13,
+                      "fontWeight": "normal"
+                    },
+                    {
+                      "type": "frame",
+                      "id": "mRq0j",
+                      "name": "input",
+                      "width": 200,
+                      "height": 36,
+                      "fill": "#141414",
+                      "cornerRadius": 6,
+                      "stroke": {
+                        "thickness": 1,
+                        "fill": "#2A2A2A"
+                      },
+                      "padding": [
+                        8,
+                        12
+                      ],
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "BO3SU",
+                          "fill": "#6A6A6A",
+                          "content": "Enter a name...",
+                          "fontFamily": "Inter",
+                          "fontSize": 14,
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "f5PWm",
+                  "name": "Row CRO",
+                  "width": "fill_container",
+                  "height": 56,
+                  "stroke": {
+                    "thickness": {
+                      "bottom": 1
+                    },
+                    "fill": "#1A1A1A"
+                  },
+                  "gap": 16,
+                  "padding": [
+                    12,
+                    0
+                  ],
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "id": "JplVW",
+                      "type": "ref",
+                      "ref": "RbCG1",
+                      "fill": "#E67E22",
+                      "name": "b5",
+                      "y": 12,
+                      "descendants": {
+                        "QywDK": {
+                          "content": "CRO"
+                        }
+                      }
+                    },
+                    {
+                      "type": "text",
+                      "id": "DqLTA",
+                      "fill": "#6A6A6A",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "Chief Revenue Officer",
+                      "fontFamily": "Inter",
+                      "fontSize": 13,
+                      "fontWeight": "normal"
+                    },
+                    {
+                      "type": "frame",
+                      "id": "s7h8r",
+                      "name": "input",
+                      "width": 200,
+                      "height": 36,
+                      "fill": "#141414",
+                      "cornerRadius": 6,
+                      "stroke": {
+                        "thickness": 1,
+                        "fill": "#2A2A2A"
+                      },
+                      "padding": [
+                        8,
+                        12
+                      ],
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "daX4l",
+                          "fill": "#6A6A6A",
+                          "content": "Enter a name...",
+                          "fontFamily": "Inter",
+                          "fontSize": 14,
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "YmDYX",
+                  "name": "Row COO",
+                  "width": "fill_container",
+                  "height": 56,
+                  "stroke": {
+                    "thickness": {
+                      "bottom": 1
+                    },
+                    "fill": "#1A1A1A"
+                  },
+                  "gap": 16,
+                  "padding": [
+                    12,
+                    0
+                  ],
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "id": "9PgLM",
+                      "type": "ref",
+                      "ref": "RbCG1",
+                      "fill": "#F5C542",
+                      "name": "b6",
+                      "y": 12,
+                      "descendants": {
+                        "QywDK": {
+                          "content": "COO"
+                        }
+                      }
+                    },
+                    {
+                      "type": "text",
+                      "id": "drwBM",
+                      "fill": "#6A6A6A",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "Chief Operations Officer",
+                      "fontFamily": "Inter",
+                      "fontSize": 13,
+                      "fontWeight": "normal"
+                    },
+                    {
+                      "type": "frame",
+                      "id": "EstaZ",
+                      "name": "input",
+                      "width": 200,
+                      "height": 36,
+                      "fill": "#141414",
+                      "cornerRadius": 6,
+                      "stroke": {
+                        "thickness": 1,
+                        "fill": "#2A2A2A"
+                      },
+                      "padding": [
+                        8,
+                        12
+                      ],
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "EFJ28",
+                          "fill": "#6A6A6A",
+                          "content": "Enter a name...",
+                          "fontFamily": "Inter",
+                          "fontSize": 14,
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "hpU36",
+                  "name": "Row CLO",
+                  "width": "fill_container",
+                  "height": 56,
+                  "stroke": {
+                    "thickness": {
+                      "bottom": 1
+                    },
+                    "fill": "#1A1A1A"
+                  },
+                  "gap": 16,
+                  "padding": [
+                    12,
+                    0
+                  ],
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "id": "r7CS3",
+                      "type": "ref",
+                      "ref": "RbCG1",
+                      "fill": "#E74C3C",
+                      "name": "b7",
+                      "y": 12,
+                      "descendants": {
+                        "QywDK": {
+                          "content": "CLO"
+                        }
+                      }
+                    },
+                    {
+                      "type": "text",
+                      "id": "Fh61h",
+                      "fill": "#6A6A6A",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "Chief Legal Officer",
+                      "fontFamily": "Inter",
+                      "fontSize": 13,
+                      "fontWeight": "normal"
+                    },
+                    {
+                      "type": "frame",
+                      "id": "uWpMy",
+                      "name": "input",
+                      "width": 200,
+                      "height": 36,
+                      "fill": "#141414",
+                      "cornerRadius": 6,
+                      "stroke": {
+                        "thickness": 1,
+                        "fill": "#2A2A2A"
+                      },
+                      "padding": [
+                        8,
+                        12
+                      ],
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "fcXBB",
+                          "fill": "#6A6A6A",
+                          "content": "Enter a name...",
+                          "fontFamily": "Inter",
+                          "fontSize": 14,
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "GodMZ",
+                  "name": "Row CCO",
+                  "width": "fill_container",
+                  "height": 56,
+                  "gap": 16,
+                  "padding": [
+                    12,
+                    0
+                  ],
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "id": "5gwQu",
+                      "type": "ref",
+                      "ref": "RbCG1",
+                      "fill": "#2DD4BF",
+                      "name": "b8",
+                      "y": 12,
+                      "descendants": {
+                        "QywDK": {
+                          "content": "CCO"
+                        }
+                      }
+                    },
+                    {
+                      "type": "text",
+                      "id": "5JFII",
+                      "fill": "#6A6A6A",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "Chief Communications Officer",
+                      "fontFamily": "Inter",
+                      "fontSize": 13,
+                      "fontWeight": "normal"
+                    },
+                    {
+                      "type": "frame",
+                      "id": "J9UFc",
+                      "name": "input",
+                      "width": 200,
+                      "height": 36,
+                      "fill": "#141414",
+                      "cornerRadius": 6,
+                      "stroke": {
+                        "thickness": 1,
+                        "fill": "#2A2A2A"
+                      },
+                      "padding": [
+                        8,
+                        12
+                      ],
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "J9jBx",
+                          "fill": "#6A6A6A",
+                          "content": "Enter a name...",
+                          "fontFamily": "Inter",
+                          "fontSize": 14,
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "De7Sp",
+              "name": "spacer-bottom",
+              "width": "fill_container",
+              "height": 16
+            },
+            {
+              "type": "text",
+              "id": "WgHPP",
+              "fill": "#4A4A4A",
+              "content": "Changes save automatically",
+              "fontFamily": "Inter",
+              "fontSize": 12,
+              "fontWeight": "normal",
+              "fontStyle": "italic"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "Ix6mO",
+      "x": 1380,
+      "y": 0,
+      "name": "02 — Onboarding Name Your Team",
+      "width": 800,
+      "height": 700,
+      "fill": "#0A0A0A",
+      "layout": "vertical",
+      "justifyContent": "center",
+      "alignItems": "center",
+      "children": [
+        {
+          "type": "frame",
+          "id": "VCR4C",
+          "name": "Onboarding Card",
+          "width": 600,
+          "layout": "vertical",
+          "gap": 8,
+          "padding": [
+            40,
+            48
+          ],
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "text",
+              "id": "tFiHe",
+              "fill": "#C9A962",
+              "content": "MEET YOUR TEAM",
+              "textAlign": "center",
+              "fontFamily": "Inter",
+              "fontSize": 11,
+              "fontWeight": "600",
+              "letterSpacing": 3
+            },
+            {
+              "type": "text",
+              "id": "MrOIC",
+              "fill": "#E0E0E0",
+              "content": "Want to Name Your Leaders?",
+              "textAlign": "center",
+              "fontFamily": "Inter",
+              "fontSize": 28,
+              "fontWeight": "600"
+            },
+            {
+              "type": "text",
+              "id": "gPlkW",
+              "fill": "#6A6A6A",
+              "textGrowth": "fixed-width",
+              "width": "fill_container",
+              "content": "Give each domain leader a name that feels right to you. You can always change these later in Settings.",
+              "textAlign": "center",
+              "fontFamily": "Inter",
+              "fontSize": 14,
+              "fontWeight": "normal"
+            },
+            {
+              "type": "frame",
+              "id": "j02Bd",
+              "name": "spacer",
+              "width": "fill_container",
+              "height": 16
+            },
+            {
+              "type": "frame",
+              "id": "Cu9jr",
+              "name": "Leader Rows",
+              "width": "fill_container",
+              "layout": "vertical",
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "7JWYX",
+                  "name": "Row CMO",
+                  "width": "fill_container",
+                  "height": 48,
+                  "stroke": {
+                    "thickness": {
+                      "bottom": 1
+                    },
+                    "fill": "#1A1A1A"
+                  },
+                  "gap": 16,
+                  "padding": [
+                    8,
+                    0
+                  ],
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "id": "cSWDA",
+                      "type": "ref",
+                      "ref": "RbCG1",
+                      "name": "rb1",
+                      "y": 8,
+                      "descendants": {
+                        "QywDK": {
+                          "content": "CMO"
+                        }
+                      }
+                    },
+                    {
+                      "type": "text",
+                      "id": "p6sKV",
+                      "fill": "#6A6A6A",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "Chief Marketing Officer",
+                      "fontFamily": "Inter",
+                      "fontSize": 13,
+                      "fontWeight": "normal"
+                    },
+                    {
+                      "type": "frame",
+                      "id": "EaDSP",
+                      "name": "input",
+                      "width": 180,
+                      "height": 32,
+                      "fill": "#141414",
+                      "cornerRadius": 6,
+                      "stroke": {
+                        "thickness": 1,
+                        "fill": "#2A2A2A"
+                      },
+                      "padding": [
+                        6,
+                        12
+                      ],
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "pACxI",
+                          "fill": "#6A6A6A",
+                          "content": "Enter a name...",
+                          "fontFamily": "Inter",
+                          "fontSize": 13,
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "1y2qr",
+                  "name": "Row CTO",
+                  "width": "fill_container",
+                  "height": 48,
+                  "stroke": {
+                    "thickness": {
+                      "bottom": 1
+                    },
+                    "fill": "#1A1A1A"
+                  },
+                  "gap": 16,
+                  "padding": [
+                    8,
+                    0
+                  ],
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "id": "O5uf7",
+                      "type": "ref",
+                      "ref": "RbCG1",
+                      "fill": "#4A90D9",
+                      "name": "rb2",
+                      "y": 8,
+                      "descendants": {
+                        "QywDK": {
+                          "content": "CTO"
+                        }
+                      }
+                    },
+                    {
+                      "type": "text",
+                      "id": "RtCbL",
+                      "fill": "#6A6A6A",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "Chief Technology Officer",
+                      "fontFamily": "Inter",
+                      "fontSize": 13,
+                      "fontWeight": "normal"
+                    },
+                    {
+                      "type": "frame",
+                      "id": "vrbMv",
+                      "name": "input",
+                      "width": 180,
+                      "height": 32,
+                      "fill": "#141414",
+                      "cornerRadius": 6,
+                      "stroke": {
+                        "thickness": 1,
+                        "fill": "#2A2A2A"
+                      },
+                      "padding": [
+                        6,
+                        12
+                      ],
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "I2mCr",
+                          "fill": "#6A6A6A",
+                          "content": "Enter a name...",
+                          "fontFamily": "Inter",
+                          "fontSize": 13,
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "pSR1w",
+                  "name": "Row CFO",
+                  "width": "fill_container",
+                  "height": 48,
+                  "stroke": {
+                    "thickness": {
+                      "bottom": 1
+                    },
+                    "fill": "#1A1A1A"
+                  },
+                  "gap": 16,
+                  "padding": [
+                    8,
+                    0
+                  ],
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "id": "sWAws",
+                      "type": "ref",
+                      "ref": "RbCG1",
+                      "fill": "#34C759",
+                      "name": "rb3",
+                      "y": 8,
+                      "descendants": {
+                        "QywDK": {
+                          "content": "CFO"
+                        }
+                      }
+                    },
+                    {
+                      "type": "text",
+                      "id": "OqHQV",
+                      "fill": "#6A6A6A",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "Chief Financial Officer",
+                      "fontFamily": "Inter",
+                      "fontSize": 13,
+                      "fontWeight": "normal"
+                    },
+                    {
+                      "type": "frame",
+                      "id": "AMDIP",
+                      "name": "input",
+                      "width": 180,
+                      "height": 32,
+                      "fill": "#141414",
+                      "cornerRadius": 6,
+                      "stroke": {
+                        "thickness": 1,
+                        "fill": "#2A2A2A"
+                      },
+                      "padding": [
+                        6,
+                        12
+                      ],
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "ERdvC",
+                          "fill": "#6A6A6A",
+                          "content": "Enter a name...",
+                          "fontFamily": "Inter",
+                          "fontSize": 13,
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "eza1J",
+                  "name": "Row CPO",
+                  "width": "fill_container",
+                  "height": 48,
+                  "stroke": {
+                    "thickness": {
+                      "bottom": 1
+                    },
+                    "fill": "#1A1A1A"
+                  },
+                  "gap": 16,
+                  "padding": [
+                    8,
+                    0
+                  ],
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "id": "YGmiX",
+                      "type": "ref",
+                      "ref": "RbCG1",
+                      "fill": "#9B59B6",
+                      "name": "rb4",
+                      "y": 8,
+                      "descendants": {
+                        "QywDK": {
+                          "content": "CPO"
+                        }
+                      }
+                    },
+                    {
+                      "type": "text",
+                      "id": "M7Et1",
+                      "fill": "#6A6A6A",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "Chief Product Officer",
+                      "fontFamily": "Inter",
+                      "fontSize": 13,
+                      "fontWeight": "normal"
+                    },
+                    {
+                      "type": "frame",
+                      "id": "dF54m",
+                      "name": "input",
+                      "width": 180,
+                      "height": 32,
+                      "fill": "#141414",
+                      "cornerRadius": 6,
+                      "stroke": {
+                        "thickness": 1,
+                        "fill": "#2A2A2A"
+                      },
+                      "padding": [
+                        6,
+                        12
+                      ],
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "YPIuP",
+                          "fill": "#6A6A6A",
+                          "content": "Enter a name...",
+                          "fontFamily": "Inter",
+                          "fontSize": 13,
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "uDZDb",
+                  "name": "Row CRO",
+                  "width": "fill_container",
+                  "height": 48,
+                  "stroke": {
+                    "thickness": {
+                      "bottom": 1
+                    },
+                    "fill": "#1A1A1A"
+                  },
+                  "gap": 16,
+                  "padding": [
+                    8,
+                    0
+                  ],
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "id": "xrMEf",
+                      "type": "ref",
+                      "ref": "RbCG1",
+                      "fill": "#E67E22",
+                      "name": "rb5",
+                      "y": 8,
+                      "descendants": {
+                        "QywDK": {
+                          "content": "CRO"
+                        }
+                      }
+                    },
+                    {
+                      "type": "text",
+                      "id": "KwU8t",
+                      "fill": "#6A6A6A",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "Chief Revenue Officer",
+                      "fontFamily": "Inter",
+                      "fontSize": 13,
+                      "fontWeight": "normal"
+                    },
+                    {
+                      "type": "frame",
+                      "id": "yVUQX",
+                      "name": "input",
+                      "width": 180,
+                      "height": 32,
+                      "fill": "#141414",
+                      "cornerRadius": 6,
+                      "stroke": {
+                        "thickness": 1,
+                        "fill": "#2A2A2A"
+                      },
+                      "padding": [
+                        6,
+                        12
+                      ],
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "Mjvm9",
+                          "fill": "#6A6A6A",
+                          "content": "Enter a name...",
+                          "fontFamily": "Inter",
+                          "fontSize": 13,
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "SpzNb",
+                  "name": "Row COO",
+                  "width": "fill_container",
+                  "height": 48,
+                  "stroke": {
+                    "thickness": {
+                      "bottom": 1
+                    },
+                    "fill": "#1A1A1A"
+                  },
+                  "gap": 16,
+                  "padding": [
+                    8,
+                    0
+                  ],
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "id": "AeGqV",
+                      "type": "ref",
+                      "ref": "RbCG1",
+                      "fill": "#F5C542",
+                      "name": "rb6",
+                      "y": 8,
+                      "descendants": {
+                        "QywDK": {
+                          "content": "COO"
+                        }
+                      }
+                    },
+                    {
+                      "type": "text",
+                      "id": "sPjrm",
+                      "fill": "#6A6A6A",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "Chief Operations Officer",
+                      "fontFamily": "Inter",
+                      "fontSize": 13,
+                      "fontWeight": "normal"
+                    },
+                    {
+                      "type": "frame",
+                      "id": "QDCS4",
+                      "name": "input",
+                      "width": 180,
+                      "height": 32,
+                      "fill": "#141414",
+                      "cornerRadius": 6,
+                      "stroke": {
+                        "thickness": 1,
+                        "fill": "#2A2A2A"
+                      },
+                      "padding": [
+                        6,
+                        12
+                      ],
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "1BY5c",
+                          "fill": "#6A6A6A",
+                          "content": "Enter a name...",
+                          "fontFamily": "Inter",
+                          "fontSize": 13,
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "GmhVy",
+                  "name": "Row CLO",
+                  "width": "fill_container",
+                  "height": 48,
+                  "stroke": {
+                    "thickness": {
+                      "bottom": 1
+                    },
+                    "fill": "#1A1A1A"
+                  },
+                  "gap": 16,
+                  "padding": [
+                    8,
+                    0
+                  ],
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "id": "TfMWn",
+                      "type": "ref",
+                      "ref": "RbCG1",
+                      "fill": "#E74C3C",
+                      "name": "rb7",
+                      "y": 8,
+                      "descendants": {
+                        "QywDK": {
+                          "content": "CLO"
+                        }
+                      }
+                    },
+                    {
+                      "type": "text",
+                      "id": "Orap0",
+                      "fill": "#6A6A6A",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "Chief Legal Officer",
+                      "fontFamily": "Inter",
+                      "fontSize": 13,
+                      "fontWeight": "normal"
+                    },
+                    {
+                      "type": "frame",
+                      "id": "qv9M6",
+                      "name": "input",
+                      "width": 180,
+                      "height": 32,
+                      "fill": "#141414",
+                      "cornerRadius": 6,
+                      "stroke": {
+                        "thickness": 1,
+                        "fill": "#2A2A2A"
+                      },
+                      "padding": [
+                        6,
+                        12
+                      ],
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "KvoGC",
+                          "fill": "#6A6A6A",
+                          "content": "Enter a name...",
+                          "fontFamily": "Inter",
+                          "fontSize": 13,
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "3IY2N",
+                  "name": "Row CCO",
+                  "width": "fill_container",
+                  "height": 48,
+                  "gap": 16,
+                  "padding": [
+                    8,
+                    0
+                  ],
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "id": "fhenb",
+                      "type": "ref",
+                      "ref": "RbCG1",
+                      "fill": "#2DD4BF",
+                      "name": "rb8",
+                      "y": 8,
+                      "descendants": {
+                        "QywDK": {
+                          "content": "CCO"
+                        }
+                      }
+                    },
+                    {
+                      "type": "text",
+                      "id": "UvGoV",
+                      "fill": "#6A6A6A",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "Chief Communications Officer",
+                      "fontFamily": "Inter",
+                      "fontSize": 13,
+                      "fontWeight": "normal"
+                    },
+                    {
+                      "type": "frame",
+                      "id": "vkYA2",
+                      "name": "input",
+                      "width": 180,
+                      "height": 32,
+                      "fill": "#141414",
+                      "cornerRadius": 6,
+                      "stroke": {
+                        "thickness": 1,
+                        "fill": "#2A2A2A"
+                      },
+                      "padding": [
+                        6,
+                        12
+                      ],
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "dPEnb",
+                          "fill": "#6A6A6A",
+                          "content": "Enter a name...",
+                          "fontFamily": "Inter",
+                          "fontSize": 13,
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "nZ7el",
+              "name": "spacer",
+              "width": "fill_container",
+              "height": 24
+            },
+            {
+              "type": "frame",
+              "id": "6DA56",
+              "name": "Footer",
+              "width": "fill_container",
+              "gap": 24,
+              "justifyContent": "center",
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "AiEtQ",
+                  "fill": "#6A6A6A",
+                  "content": "Skip for now",
+                  "fontFamily": "Inter",
+                  "fontSize": 14,
+                  "fontWeight": "normal"
+                },
+                {
+                  "type": "frame",
+                  "id": "XPg2H",
+                  "name": "Save Button",
+                  "height": 40,
+                  "fill": "#C9A962",
+                  "cornerRadius": 6,
+                  "padding": [
+                    10,
+                    24
+                  ],
+                  "justifyContent": "center",
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "ye1LG",
+                      "fill": "#0A0A0A",
+                      "content": "Save Names",
+                      "fontFamily": "Inter",
+                      "fontSize": 14,
+                      "fontWeight": "600"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "V9TPb",
+      "x": 2280,
+      "y": 0,
+      "name": "06 — Team Settings Mobile",
+      "width": 390,
+      "height": 844,
+      "fill": "#0A0A0A",
+      "layout": "vertical",
+      "children": [
+        {
+          "type": "frame",
+          "id": "Ltr8i",
+          "name": "Mobile Header",
+          "width": "fill_container",
+          "height": 48,
+          "fill": "#0D0D0D",
+          "stroke": {
+            "thickness": {
+              "bottom": 1
+            },
+            "fill": "#1A1A1A"
+          },
+          "gap": 12,
+          "padding": [
+            12,
+            16
+          ],
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "text",
+              "id": "kVWYS",
+              "fill": "#E0E0E0",
+              "content": "←",
+              "fontFamily": "Inter",
+              "fontSize": 20,
+              "fontWeight": "normal"
+            },
+            {
+              "type": "text",
+              "id": "MJnl7",
+              "fill": "#E0E0E0",
+              "content": "Team Settings",
+              "fontFamily": "Inter",
+              "fontSize": 16,
+              "fontWeight": "500"
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "KQno7",
+          "name": "Body",
+          "width": "fill_container",
+          "height": "fill_container",
+          "layout": "vertical",
+          "gap": 8,
+          "padding": [
+            24,
+            16
+          ],
+          "children": [
+            {
+              "type": "text",
+              "id": "RdiLH",
+              "fill": "#C9A962",
+              "content": "YOUR TEAM",
+              "fontFamily": "Inter",
+              "fontSize": 11,
+              "fontWeight": "600",
+              "letterSpacing": 3
+            },
+            {
+              "type": "text",
+              "id": "pemD7",
+              "fill": "#E0E0E0",
+              "content": "Domain Leaders",
+              "fontFamily": "Inter",
+              "fontSize": 24,
+              "fontWeight": "600"
+            },
+            {
+              "type": "text",
+              "id": "5LJnZ",
+              "fill": "#6A6A6A",
+              "textGrowth": "fixed-width",
+              "width": "fill_container",
+              "content": "Assign custom names to your leaders. Changes save automatically.",
+              "fontFamily": "Inter",
+              "fontSize": 13,
+              "fontWeight": "normal"
+            },
+            {
+              "type": "frame",
+              "id": "SroGm",
+              "name": "spacer",
+              "width": "fill_container",
+              "height": 12
+            },
+            {
+              "type": "frame",
+              "id": "PwIPg",
+              "name": "Leader Cards",
+              "width": "fill_container",
+              "layout": "vertical",
+              "gap": 12,
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "pPuP1",
+                  "name": "Card CMO",
+                  "width": "fill_container",
+                  "fill": "#111111",
+                  "cornerRadius": 8,
+                  "stroke": {
+                    "thickness": 1,
+                    "fill": "#1A1A1A"
+                  },
+                  "layout": "vertical",
+                  "gap": 8,
+                  "padding": 16,
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "8VfXv",
+                      "name": "c1top",
+                      "width": "fill_container",
+                      "gap": 12,
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "id": "TKS7s",
+                          "type": "ref",
+                          "ref": "RbCG1",
+                          "width": 36,
+                          "height": 36,
+                          "name": "cb1",
+                          "y": 0,
+                          "descendants": {
+                            "QywDK": {
+                              "x": 3.5,
+                              "y": 11.5,
+                              "content": "CMO",
+                              "fontSize": 11
+                            }
+                          }
+                        },
+                        {
+                          "type": "text",
+                          "id": "IiySx",
+                          "fill": "#E0E0E0",
+                          "content": "Chief Marketing Officer",
+                          "fontFamily": "Inter",
+                          "fontSize": 14,
+                          "fontWeight": "500"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "rwHJg",
+                      "name": "input",
+                      "width": "fill_container",
+                      "height": 40,
+                      "fill": "#0A0A0A",
+                      "cornerRadius": 6,
+                      "stroke": {
+                        "thickness": 1,
+                        "fill": "#2A2A2A"
+                      },
+                      "padding": [
+                        10,
+                        12
+                      ],
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "zyGYu",
+                          "fill": "#E0E0E0",
+                          "content": "Sarah",
+                          "fontFamily": "Inter",
+                          "fontSize": 14,
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "Pn35e",
+                  "name": "Card CTO",
+                  "width": "fill_container",
+                  "fill": "#111111",
+                  "cornerRadius": 8,
+                  "stroke": {
+                    "thickness": 1,
+                    "fill": "#1A1A1A"
+                  },
+                  "layout": "vertical",
+                  "gap": 8,
+                  "padding": 16,
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "IkYyL",
+                      "name": "c2top",
+                      "width": "fill_container",
+                      "gap": 12,
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "id": "U2bRs",
+                          "type": "ref",
+                          "ref": "RbCG1",
+                          "fill": "#4A90D9",
+                          "width": 36,
+                          "height": 36,
+                          "name": "cb2",
+                          "y": 0,
+                          "descendants": {
+                            "QywDK": {
+                              "x": 5,
+                              "y": 11.5,
+                              "content": "CTO",
+                              "fontSize": 11
+                            }
+                          }
+                        },
+                        {
+                          "type": "text",
+                          "id": "pmNMS",
+                          "fill": "#E0E0E0",
+                          "content": "Chief Technology Officer",
+                          "fontFamily": "Inter",
+                          "fontSize": 14,
+                          "fontWeight": "500"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "iOp9V",
+                      "name": "input",
+                      "width": "fill_container",
+                      "height": 40,
+                      "fill": "#0A0A0A",
+                      "cornerRadius": 6,
+                      "stroke": {
+                        "thickness": 1,
+                        "fill": "#2A2A2A"
+                      },
+                      "padding": [
+                        10,
+                        12
+                      ],
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "lM7Td",
+                          "fill": "#E0E0E0",
+                          "content": "Alex",
+                          "fontFamily": "Inter",
+                          "fontSize": 14,
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "030AU",
+                  "name": "Card CFO",
+                  "width": "fill_container",
+                  "fill": "#111111",
+                  "cornerRadius": 8,
+                  "stroke": {
+                    "thickness": 1,
+                    "fill": "#1A1A1A"
+                  },
+                  "layout": "vertical",
+                  "gap": 8,
+                  "padding": 16,
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "eZx1p",
+                      "name": "c3top",
+                      "width": "fill_container",
+                      "gap": 12,
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "id": "2CTll",
+                          "type": "ref",
+                          "ref": "RbCG1",
+                          "fill": "#34C759",
+                          "width": 36,
+                          "height": 36,
+                          "name": "cb3",
+                          "y": 0,
+                          "descendants": {
+                            "QywDK": {
+                              "x": 5.5,
+                              "y": 11.5,
+                              "content": "CFO",
+                              "fontSize": 11
+                            }
+                          }
+                        },
+                        {
+                          "type": "text",
+                          "id": "l7IQF",
+                          "fill": "#E0E0E0",
+                          "content": "Chief Financial Officer",
+                          "fontFamily": "Inter",
+                          "fontSize": 14,
+                          "fontWeight": "500"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "7hLAF",
+                      "name": "input",
+                      "width": "fill_container",
+                      "height": 40,
+                      "fill": "#0A0A0A",
+                      "cornerRadius": 6,
+                      "stroke": {
+                        "thickness": 1,
+                        "fill": "#2A2A2A"
+                      },
+                      "padding": [
+                        10,
+                        12
+                      ],
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "wt3wo",
+                          "fill": "#6A6A6A",
+                          "fontFamily": "Inter",
+                          "fontSize": 14,
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "j65gX",
+                  "name": "Card CPO",
+                  "width": "fill_container",
+                  "fill": "#111111",
+                  "cornerRadius": 8,
+                  "stroke": {
+                    "thickness": 1,
+                    "fill": "#1A1A1A"
+                  },
+                  "layout": "vertical",
+                  "gap": 8,
+                  "padding": 16,
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "qJH9Y",
+                      "name": "c4top",
+                      "width": "fill_container",
+                      "gap": 12,
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "id": "hYPvl",
+                          "type": "ref",
+                          "ref": "RbCG1",
+                          "fill": "#9B59B6",
+                          "width": 36,
+                          "height": 36,
+                          "name": "cb4",
+                          "y": 0,
+                          "descendants": {
+                            "QywDK": {
+                              "x": 5,
+                              "y": 11.5,
+                              "content": "CPO",
+                              "fontSize": 11
+                            }
+                          }
+                        },
+                        {
+                          "type": "text",
+                          "id": "EU4x1",
+                          "fill": "#E0E0E0",
+                          "content": "Chief Product Officer",
+                          "fontFamily": "Inter",
+                          "fontSize": 14,
+                          "fontWeight": "500"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "hpvCW",
+                      "name": "input",
+                      "width": "fill_container",
+                      "height": 40,
+                      "fill": "#0A0A0A",
+                      "cornerRadius": 6,
+                      "stroke": {
+                        "thickness": 1,
+                        "fill": "#2A2A2A"
+                      },
+                      "padding": [
+                        10,
+                        12
+                      ],
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "rNWdK",
+                          "fill": "#6A6A6A",
+                          "fontFamily": "Inter",
+                          "fontSize": 14,
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "r816P",
+                  "name": "Card CRO",
+                  "width": "fill_container",
+                  "fill": "#111111",
+                  "cornerRadius": 8,
+                  "stroke": {
+                    "thickness": 1,
+                    "fill": "#1A1A1A"
+                  },
+                  "layout": "vertical",
+                  "gap": 8,
+                  "padding": 16,
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "4GCC3",
+                      "name": "c5top",
+                      "width": "fill_container",
+                      "gap": 12,
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "id": "CInol",
+                          "type": "ref",
+                          "ref": "RbCG1",
+                          "fill": "#E67E22",
+                          "width": 36,
+                          "height": 36,
+                          "name": "cb5",
+                          "y": 0,
+                          "descendants": {
+                            "QywDK": {
+                              "x": 5,
+                              "y": 11.5,
+                              "content": "CRO",
+                              "fontSize": 11
+                            }
+                          }
+                        },
+                        {
+                          "type": "text",
+                          "id": "G3Rfs",
+                          "fill": "#E0E0E0",
+                          "content": "Chief Revenue Officer",
+                          "fontFamily": "Inter",
+                          "fontSize": 14,
+                          "fontWeight": "500"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "UUZ81",
+                      "name": "input",
+                      "width": "fill_container",
+                      "height": 40,
+                      "fill": "#0A0A0A",
+                      "cornerRadius": 6,
+                      "stroke": {
+                        "thickness": 1,
+                        "fill": "#2A2A2A"
+                      },
+                      "padding": [
+                        10,
+                        12
+                      ],
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "zgB7a",
+                          "fill": "#6A6A6A",
+                          "fontFamily": "Inter",
+                          "fontSize": 14,
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "03brq",
+                  "name": "Card COO",
+                  "width": "fill_container",
+                  "fill": "#111111",
+                  "cornerRadius": 8,
+                  "stroke": {
+                    "thickness": 1,
+                    "fill": "#1A1A1A"
+                  },
+                  "layout": "vertical",
+                  "gap": 8,
+                  "padding": 16,
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "hE3WN",
+                      "name": "c6top",
+                      "width": "fill_container",
+                      "gap": 12,
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "id": "MUZMP",
+                          "type": "ref",
+                          "ref": "RbCG1",
+                          "fill": "#F5C542",
+                          "width": 36,
+                          "height": 36,
+                          "name": "cb6",
+                          "y": 0,
+                          "descendants": {
+                            "QywDK": {
+                              "x": 4.5,
+                              "y": 11.5,
+                              "content": "COO",
+                              "fontSize": 11
+                            }
+                          }
+                        },
+                        {
+                          "type": "text",
+                          "id": "qaplU",
+                          "fill": "#E0E0E0",
+                          "content": "Chief Operations Officer",
+                          "fontFamily": "Inter",
+                          "fontSize": 14,
+                          "fontWeight": "500"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "d6SOh",
+                      "name": "input",
+                      "width": "fill_container",
+                      "height": 40,
+                      "fill": "#0A0A0A",
+                      "cornerRadius": 6,
+                      "stroke": {
+                        "thickness": 1,
+                        "fill": "#2A2A2A"
+                      },
+                      "padding": [
+                        10,
+                        12
+                      ],
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "Ffyyd",
+                          "fill": "#6A6A6A",
+                          "fontFamily": "Inter",
+                          "fontSize": 14,
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "CHGrQ",
+      "x": 0,
+      "y": 1020,
+      "name": "03 — Contextual Nudge Post-Interaction",
+      "width": 960,
+      "height": 640,
+      "fill": "#0A0A0A",
+      "layout": "vertical",
+      "padding": [
+        40,
+        64
+      ],
+      "children": [
+        {
+          "type": "frame",
+          "id": "fxf2B",
+          "name": "Conversation Header",
+          "width": "fill_container",
+          "stroke": {
+            "thickness": {
+              "bottom": 1
+            },
+            "fill": "#1A1A1A"
+          },
+          "gap": 12,
+          "padding": [
+            0,
+            0,
+            16,
+            0
+          ],
+          "alignItems": "center",
+          "children": [
+            {
+              "id": "iCxtr",
+              "type": "ref",
+              "ref": "RbCG1",
+              "fill": "#4A90D9",
+              "name": "tb",
+              "y": 2,
+              "descendants": {
+                "QywDK": {
+                  "content": "CTO"
+                }
+              }
+            },
+            {
+              "type": "frame",
+              "id": "amuOm",
+              "name": "topLabels",
+              "layout": "vertical",
+              "gap": 2,
+              "children": [
+                {
+                  "type": "text",
+                  "id": "IsoGf",
+                  "fill": "#E0E0E0",
+                  "content": "CTO",
+                  "fontFamily": "Inter",
+                  "fontSize": 16,
+                  "fontWeight": "600"
+                },
+                {
+                  "type": "text",
+                  "id": "lfCdj",
+                  "fill": "#6A6A6A",
+                  "content": "Chief Technology Officer",
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "normal"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "DGgdZ",
+          "name": "spacer",
+          "width": "fill_container",
+          "height": 24
+        },
+        {
+          "type": "frame",
+          "id": "e1LkM",
+          "name": "User Message",
+          "width": "fill_container",
+          "layout": "vertical",
+          "gap": 4,
+          "padding": [
+            0,
+            0,
+            16,
+            0
+          ],
+          "children": [
+            {
+              "type": "text",
+              "id": "NyVod",
+              "fill": "#6A6A6A",
+              "content": "You",
+              "fontFamily": "Inter",
+              "fontSize": 13,
+              "fontWeight": "500"
+            },
+            {
+              "type": "text",
+              "id": "9lawW",
+              "fill": "#C8C8C8",
+              "textGrowth": "fixed-width",
+              "width": "fill_container",
+              "content": "Review the authentication flow and suggest improvements for session management.",
+              "fontFamily": "Inter",
+              "fontSize": 14,
+              "fontWeight": "normal"
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "tLDrt",
+          "name": "spacer2",
+          "width": "fill_container",
+          "height": 16
+        },
+        {
+          "type": "frame",
+          "id": "a8xyO",
+          "name": "CTO Reply",
+          "width": "fill_container",
+          "stroke": {
+            "thickness": {
+              "left": 2
+            },
+            "fill": "#4A90D9"
+          },
+          "layout": "vertical",
+          "gap": 8,
+          "padding": [
+            0,
+            0,
+            0,
+            16
+          ],
+          "children": [
+            {
+              "type": "text",
+              "id": "A7H0B",
+              "fill": "#4A90D9",
+              "content": "CTO",
+              "fontFamily": "Inter",
+              "fontSize": 13,
+              "fontWeight": "600"
+            },
+            {
+              "type": "text",
+              "id": "w1wi0",
+              "fill": "#C8C8C8",
+              "textGrowth": "fixed-width",
+              "width": "fill_container",
+              "content": "I've reviewed your authentication flow. Here are three key improvements for session management:",
+              "fontFamily": "Inter",
+              "fontSize": 14,
+              "fontWeight": "normal"
+            },
+            {
+              "type": "text",
+              "id": "WklgQ",
+              "fill": "#C8C8C8",
+              "textGrowth": "fixed-width",
+              "width": "fill_container",
+              "content": "1. Implement sliding window token refresh — rotate tokens 5 minutes before expiry\n2. Add device fingerprinting for session binding\n3. Store session metadata in Redis with TTL-based cleanup",
+              "lineHeight": 1.6,
+              "fontFamily": "Inter",
+              "fontSize": 14,
+              "fontWeight": "normal"
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "M3eDe",
+          "name": "spacer3",
+          "width": "fill_container",
+          "height": "fill_container"
+        },
+        {
+          "type": "frame",
+          "id": "lH4k9",
+          "name": "Nudge Bar",
+          "width": "fill_container",
+          "fill": "#111827",
+          "cornerRadius": 8,
+          "stroke": {
+            "thickness": 1,
+            "fill": "#1E3A5F"
+          },
+          "gap": 12,
+          "padding": 16,
+          "alignItems": "center",
+          "children": [
+            {
+              "id": "T5RXp",
+              "type": "ref",
+              "ref": "RbCG1",
+              "fill": "#4A90D9",
+              "width": 28,
+              "height": 28,
+              "name": "nb",
+              "x": 16,
+              "y": 18.5,
+              "descendants": {
+                "QywDK": {
+                  "x": 3.5,
+                  "y": 8.5,
+                  "content": "CTO",
+                  "fontSize": 9
+                }
+              }
+            },
+            {
+              "type": "frame",
+              "id": "wwH3p",
+              "name": "nudgeText",
+              "width": "fill_container",
+              "layout": "vertical",
+              "gap": 2,
+              "children": [
+                {
+                  "type": "text",
+                  "id": "N1KZZ",
+                  "fill": "#E0E0E0",
+                  "content": "You just worked with your CTO.",
+                  "fontFamily": "Inter",
+                  "fontSize": 13,
+                  "fontWeight": "600"
+                },
+                {
+                  "type": "text",
+                  "id": "h2url",
+                  "fill": "#6A6A6A",
+                  "textGrowth": "fixed-width",
+                  "width": "fill_container",
+                  "content": "Want to give them a name? It will display as \"Name (CTO)\" in conversations.",
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "normal"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "MiqKm",
+              "name": "input",
+              "width": 120,
+              "height": 32,
+              "fill": "#0A0A0A",
+              "cornerRadius": 6,
+              "stroke": {
+                "thickness": 1,
+                "fill": "#2A2A2A"
+              },
+              "padding": [
+                6,
+                10
+              ],
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "FazuH",
+                  "fill": "#E0E0E0",
+                  "content": "Alex",
+                  "fontFamily": "Inter",
+                  "fontSize": 13,
+                  "fontWeight": "normal"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "n1hPD",
+              "name": "Save",
+              "height": 32,
+              "fill": "#4A90D9",
+              "cornerRadius": 6,
+              "padding": [
+                6,
+                16
+              ],
+              "justifyContent": "center",
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "sKTPy",
+                  "fill": "#FFFFFF",
+                  "content": "Save",
+                  "fontFamily": "Inter",
+                  "fontSize": 13,
+                  "fontWeight": "600"
+                }
+              ]
+            },
+            {
+              "type": "text",
+              "id": "A8Fck",
+              "fill": "#6A6A6A",
+              "content": "Dismiss",
+              "fontFamily": "Inter",
+              "fontSize": 13,
+              "fontWeight": "normal"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "qHRGJ",
+      "x": 1060,
+      "y": 1020,
+      "name": "04 — At-Mention Dropdown",
+      "width": 960,
+      "height": 640,
+      "fill": "#0A0A0A",
+      "layout": "vertical",
+      "padding": [
+        0,
+        100
+      ],
+      "justifyContent": "end",
+      "children": [
+        {
+          "type": "frame",
+          "id": "JQzH6",
+          "name": "Dropdown",
+          "clip": true,
+          "width": "fill_container",
+          "fill": "#141414",
+          "cornerRadius": 8,
+          "stroke": {
+            "thickness": 1,
+            "fill": "#2A2A2A"
+          },
+          "layout": "vertical",
+          "children": [
+            {
+              "type": "frame",
+              "id": "m97XG",
+              "name": "Header",
+              "width": "fill_container",
+              "stroke": {
+                "thickness": {
+                  "bottom": 1
+                },
+                "fill": "#2A2A2A"
+              },
+              "padding": [
+                10,
+                16
+              ],
+              "children": [
+                {
+                  "type": "text",
+                  "id": "kmldV",
+                  "fill": "#6A6A6A",
+                  "content": "L E A D E R S",
+                  "fontFamily": "Inter",
+                  "fontSize": 10,
+                  "fontWeight": "600",
+                  "letterSpacing": 3
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "sLwis",
+              "name": "Row CMO",
+              "width": "fill_container",
+              "fill": "#1A1A1A",
+              "gap": 12,
+              "padding": [
+                12,
+                16
+              ],
+              "alignItems": "center",
+              "children": [
+                {
+                  "id": "SMoIT",
+                  "type": "ref",
+                  "ref": "RbCG1",
+                  "width": 28,
+                  "height": 28,
+                  "name": "rb1",
+                  "x": 16,
+                  "y": 15,
+                  "descendants": {
+                    "QywDK": {
+                      "x": 2,
+                      "y": 8.5,
+                      "content": "CMO",
+                      "fontSize": 9
+                    }
+                  }
+                },
+                {
+                  "type": "frame",
+                  "id": "aD2qa",
+                  "name": "rl1",
+                  "width": "fill_container",
+                  "layout": "vertical",
+                  "gap": 2,
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "4buE2",
+                      "fill": "#E0E0E0",
+                      "content": "Sarah (CMO)",
+                      "fontFamily": "Inter",
+                      "fontSize": 14,
+                      "fontWeight": "600"
+                    },
+                    {
+                      "type": "text",
+                      "id": "YanpH",
+                      "fill": "#6A6A6A",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "Chief Marketing Officer — Marketing strategy, content, SEO",
+                      "fontFamily": "Inter",
+                      "fontSize": 12,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "Y2v7k",
+              "name": "Row CTO",
+              "width": "fill_container",
+              "gap": 12,
+              "padding": [
+                12,
+                16
+              ],
+              "alignItems": "center",
+              "children": [
+                {
+                  "id": "Lbjue",
+                  "type": "ref",
+                  "ref": "RbCG1",
+                  "fill": "#4A90D9",
+                  "width": 28,
+                  "height": 28,
+                  "name": "rb2",
+                  "x": 16,
+                  "y": 15,
+                  "descendants": {
+                    "QywDK": {
+                      "x": 3.5,
+                      "y": 8.5,
+                      "content": "CTO",
+                      "fontSize": 9
+                    }
+                  }
+                },
+                {
+                  "type": "frame",
+                  "id": "9f9WA",
+                  "name": "rl2",
+                  "width": "fill_container",
+                  "layout": "vertical",
+                  "gap": 2,
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "sKf7J",
+                      "fill": "#E0E0E0",
+                      "content": "Alex (CTO)",
+                      "fontFamily": "Inter",
+                      "fontSize": 14,
+                      "fontWeight": "600"
+                    },
+                    {
+                      "type": "text",
+                      "id": "BNer0",
+                      "fill": "#6A6A6A",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "Chief Technology Officer — Technical architecture, code review",
+                      "fontFamily": "Inter",
+                      "fontSize": 12,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "GCLIt",
+              "name": "Row CFO",
+              "width": "fill_container",
+              "gap": 12,
+              "padding": [
+                12,
+                16
+              ],
+              "alignItems": "center",
+              "children": [
+                {
+                  "id": "PVnzE",
+                  "type": "ref",
+                  "ref": "RbCG1",
+                  "fill": "#34C759",
+                  "width": 28,
+                  "height": 28,
+                  "name": "rb3",
+                  "x": 16,
+                  "y": 15,
+                  "descendants": {
+                    "QywDK": {
+                      "x": 3.5,
+                      "y": 8.5,
+                      "content": "CFO",
+                      "fontSize": 9
+                    }
+                  }
+                },
+                {
+                  "type": "frame",
+                  "id": "hpdBy",
+                  "name": "rl3",
+                  "width": "fill_container",
+                  "layout": "vertical",
+                  "gap": 2,
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "wbE1Z",
+                      "fill": "#E0E0E0",
+                      "content": "CFO",
+                      "fontFamily": "Inter",
+                      "fontSize": 14,
+                      "fontWeight": "600"
+                    },
+                    {
+                      "type": "text",
+                      "id": "A3NL5",
+                      "fill": "#6A6A6A",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "Chief Financial Officer — Budget planning, revenue analysis",
+                      "fontFamily": "Inter",
+                      "fontSize": 12,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "YlDlb",
+              "name": "Row CPO",
+              "width": "fill_container",
+              "gap": 12,
+              "padding": [
+                12,
+                16
+              ],
+              "alignItems": "center",
+              "children": [
+                {
+                  "id": "eAATe",
+                  "type": "ref",
+                  "ref": "RbCG1",
+                  "fill": "#9B59B6",
+                  "width": 28,
+                  "height": 28,
+                  "name": "rb4",
+                  "x": 16,
+                  "y": 15,
+                  "descendants": {
+                    "QywDK": {
+                      "x": 3.5,
+                      "y": 8.5,
+                      "content": "CPO",
+                      "fontSize": 9
+                    }
+                  }
+                },
+                {
+                  "type": "frame",
+                  "id": "X6dQC",
+                  "name": "rl4",
+                  "width": "fill_container",
+                  "layout": "vertical",
+                  "gap": 2,
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "fFK6U",
+                      "fill": "#E0E0E0",
+                      "content": "CPO",
+                      "fontFamily": "Inter",
+                      "fontSize": 14,
+                      "fontWeight": "600"
+                    },
+                    {
+                      "type": "text",
+                      "id": "DvIQU",
+                      "fill": "#6A6A6A",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "Chief Product Officer — Product strategy, specs, user research",
+                      "fontFamily": "Inter",
+                      "fontSize": 12,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "vNS8N",
+              "name": "Footer",
+              "width": "fill_container",
+              "stroke": {
+                "thickness": {
+                  "top": 1
+                },
+                "fill": "#2A2A2A"
+              },
+              "padding": [
+                8,
+                16
+              ],
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "qdSLE",
+                  "fill": "#4A4A4A",
+                  "content": "4 matches",
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "normal"
+                },
+                {
+                  "type": "frame",
+                  "id": "yo8Qz",
+                  "width": "fill_container",
+                  "height": 1
+                },
+                {
+                  "type": "text",
+                  "id": "309aX",
+                  "fill": "#4A4A4A",
+                  "content": "↑  ↓  to navigate",
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "normal"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "QPAdJ",
+          "name": "Input Bar",
+          "width": "fill_container",
+          "gap": 8,
+          "padding": [
+            12,
+            16,
+            24,
+            16
+          ],
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "text",
+              "id": "apY9D",
+              "fill": "#C9A962",
+              "content": "@",
+              "fontFamily": "Inter",
+              "fontSize": 16,
+              "fontWeight": "600"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "Q5V2n",
+      "x": 2120,
+      "y": 1020,
+      "name": "05 — Display Format Conversation and Cards",
+      "width": 960,
+      "height": 640,
+      "fill": "#0A0A0A",
+      "layout": "vertical",
+      "gap": 16,
+      "padding": [
+        40,
+        64
+      ],
+      "children": [
+        {
+          "type": "text",
+          "id": "IVw9H",
+          "fill": "#C9A962",
+          "content": "DISPLAY FORMAT",
+          "fontFamily": "Inter",
+          "fontSize": 11,
+          "fontWeight": "600",
+          "letterSpacing": 3
+        },
+        {
+          "type": "text",
+          "id": "KRYP5",
+          "fill": "#E0E0E0",
+          "content": "Name (Role) — Always Visible",
+          "fontFamily": "Inter",
+          "fontSize": 28,
+          "fontWeight": "600"
+        },
+        {
+          "type": "text",
+          "id": "YRBW9",
+          "fill": "#6A6A6A",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "Custom names always display alongside the role title. The role is never hidden, ensuring clarity across all touchpoints.",
+          "fontFamily": "Inter",
+          "fontSize": 14,
+          "fontWeight": "normal"
+        },
+        {
+          "type": "frame",
+          "id": "ZcIru",
+          "name": "spacer",
+          "width": "fill_container",
+          "height": 8
+        },
+        {
+          "type": "text",
+          "id": "jOzeH",
+          "fill": "#6A6A6A",
+          "content": "CONVERSATION MESSAGES",
+          "fontFamily": "Inter",
+          "fontSize": 10,
+          "fontWeight": "600",
+          "letterSpacing": 3
+        },
+        {
+          "type": "frame",
+          "id": "Ekmfg",
+          "name": "Messages",
+          "width": "fill_container",
+          "layout": "vertical",
+          "gap": 12,
+          "children": [
+            {
+              "type": "frame",
+              "id": "5qs1n",
+              "name": "CMO Message",
+              "width": "fill_container",
+              "cornerRadius": 8,
+              "stroke": {
+                "thickness": 1,
+                "fill": "#1A1A1A"
+              },
+              "layout": "vertical",
+              "gap": 8,
+              "padding": 16,
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "4kRG0",
+                  "name": "msg1header",
+                  "width": "fill_container",
+                  "gap": 8,
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "id": "LpX1z",
+                      "type": "ref",
+                      "ref": "RbCG1",
+                      "width": 24,
+                      "height": 24,
+                      "name": "mb1",
+                      "y": 0,
+                      "descendants": {
+                        "QywDK": {
+                          "x": 1,
+                          "y": 7,
+                          "content": "CMO",
+                          "fontSize": 8
+                        }
+                      }
+                    },
+                    {
+                      "type": "text",
+                      "id": "asTFF",
+                      "fill": "#E0E0E0",
+                      "content": "Sarah (CMO)",
+                      "fontFamily": "Inter",
+                      "fontSize": 14,
+                      "fontWeight": "600"
+                    },
+                    {
+                      "type": "text",
+                      "id": "7gj9s",
+                      "fill": "#4A4A4A",
+                      "content": "2 min ago",
+                      "fontFamily": "Inter",
+                      "fontSize": 12,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                },
+                {
+                  "type": "text",
+                  "id": "7uQ2S",
+                  "fill": "#C8C8C8",
+                  "textGrowth": "fixed-width",
+                  "width": "fill_container",
+                  "content": "I've drafted the Q2 campaign brief targeting developer communities. The messaging emphasizes the memory-first value proposition we validated last week.",
+                  "lineHeight": 1.5,
+                  "fontFamily": "Inter",
+                  "fontSize": 13,
+                  "fontWeight": "normal"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "XROsv",
+              "name": "CTO Message",
+              "width": "fill_container",
+              "cornerRadius": 8,
+              "stroke": {
+                "thickness": 1,
+                "fill": "#1A1A1A"
+              },
+              "layout": "vertical",
+              "gap": 8,
+              "padding": 16,
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "sCGiP",
+                  "name": "msg2h",
+                  "width": "fill_container",
+                  "gap": 8,
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "id": "it6xG",
+                      "type": "ref",
+                      "ref": "RbCG1",
+                      "fill": "#4A90D9",
+                      "width": 24,
+                      "height": 24,
+                      "name": "mb2",
+                      "y": 0,
+                      "descendants": {
+                        "QywDK": {
+                          "x": 2.5,
+                          "y": 7,
+                          "content": "CTO",
+                          "fontSize": 8
+                        }
+                      }
+                    },
+                    {
+                      "type": "text",
+                      "id": "108QJ",
+                      "fill": "#E0E0E0",
+                      "content": "Alex (CTO)",
+                      "fontFamily": "Inter",
+                      "fontSize": 14,
+                      "fontWeight": "600"
+                    },
+                    {
+                      "type": "text",
+                      "id": "1AV7K",
+                      "fill": "#4A4A4A",
+                      "content": "just now",
+                      "fontFamily": "Inter",
+                      "fontSize": 12,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                },
+                {
+                  "type": "text",
+                  "id": "opIUm",
+                  "fill": "#C8C8C8",
+                  "textGrowth": "fixed-width",
+                  "width": "fill_container",
+                  "content": "The auth refactor is complete. Session tokens now use sliding window refresh with Redis-backed TTL cleanup. PR #1847 is ready for review.",
+                  "lineHeight": 1.5,
+                  "fontFamily": "Inter",
+                  "fontSize": 13,
+                  "fontWeight": "normal"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "EQpf7",
+          "name": "spacer2",
+          "width": "fill_container",
+          "height": 4
+        },
+        {
+          "type": "text",
+          "id": "jd2Zt",
+          "fill": "#6A6A6A",
+          "content": "LEADER CARDS",
+          "fontFamily": "Inter",
+          "fontSize": 10,
+          "fontWeight": "600",
+          "letterSpacing": 3
+        },
+        {
+          "type": "frame",
+          "id": "78Hux",
+          "name": "Cards Row",
+          "width": "fill_container",
+          "gap": 16,
+          "children": [
+            {
+              "type": "frame",
+              "id": "M7v6H",
+              "name": "CMO Card",
+              "width": "fill_container",
+              "cornerRadius": 8,
+              "stroke": {
+                "thickness": 1,
+                "fill": "#1A1A1A"
+              },
+              "layout": "vertical",
+              "gap": 8,
+              "padding": 16,
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "z4ujb",
+                  "name": "card1h",
+                  "width": "fill_container",
+                  "gap": 8,
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "id": "KXSUr",
+                      "type": "ref",
+                      "ref": "RbCG1",
+                      "width": 28,
+                      "height": 28,
+                      "name": "cb1",
+                      "y": 1,
+                      "descendants": {
+                        "QywDK": {
+                          "x": 2,
+                          "y": 8.5,
+                          "content": "CMO",
+                          "fontSize": 9
+                        }
+                      }
+                    },
+                    {
+                      "type": "frame",
+                      "id": "PSXCa",
+                      "name": "cl1",
+                      "layout": "vertical",
+                      "gap": 1,
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "wJayi",
+                          "fill": "#E0E0E0",
+                          "content": "Sarah (CMO)",
+                          "fontFamily": "Inter",
+                          "fontSize": 13,
+                          "fontWeight": "600"
+                        },
+                        {
+                          "type": "text",
+                          "id": "xQHsM",
+                          "fill": "#6A6A6A",
+                          "content": "Chief Marketing Officer",
+                          "fontFamily": "Inter",
+                          "fontSize": 11,
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "type": "text",
+                  "id": "7ta8M",
+                  "fill": "#6A6A6A",
+                  "textGrowth": "fixed-width",
+                  "width": "fill_container",
+                  "content": "Marketing strategy, content, SEO, brand, social media, and growth.",
+                  "lineHeight": 1.4,
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "normal"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "3c0z8",
+              "name": "CTO Card",
+              "width": "fill_container",
+              "cornerRadius": 8,
+              "stroke": {
+                "thickness": 1,
+                "fill": "#1A1A1A"
+              },
+              "layout": "vertical",
+              "gap": 8,
+              "padding": 16,
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "q9Gk5",
+                  "name": "card2h",
+                  "width": "fill_container",
+                  "gap": 8,
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "id": "6fhb2",
+                      "type": "ref",
+                      "ref": "RbCG1",
+                      "fill": "#4A90D9",
+                      "width": 28,
+                      "height": 28,
+                      "name": "cb2",
+                      "y": 1,
+                      "descendants": {
+                        "QywDK": {
+                          "x": 3.5,
+                          "y": 8.5,
+                          "content": "CTO",
+                          "fontSize": 9
+                        }
+                      }
+                    },
+                    {
+                      "type": "frame",
+                      "id": "FDIGY",
+                      "name": "cl2",
+                      "layout": "vertical",
+                      "gap": 1,
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "Yo4cT",
+                          "fill": "#E0E0E0",
+                          "content": "Alex (CTO)",
+                          "fontFamily": "Inter",
+                          "fontSize": 13,
+                          "fontWeight": "600"
+                        },
+                        {
+                          "type": "text",
+                          "id": "TbK7u",
+                          "fill": "#6A6A6A",
+                          "content": "Chief Technology Officer",
+                          "fontFamily": "Inter",
+                          "fontSize": 11,
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "type": "text",
+                  "id": "PRJPd",
+                  "fill": "#6A6A6A",
+                  "textGrowth": "fixed-width",
+                  "width": "fill_container",
+                  "content": "Technical architecture, code review, engineering practices, and infrastructure.",
+                  "lineHeight": 1.4,
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "normal"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "kUN1I",
+              "name": "CFO Card",
+              "width": "fill_container",
+              "cornerRadius": 8,
+              "stroke": {
+                "thickness": 1,
+                "fill": "#1A1A1A"
+              },
+              "layout": "vertical",
+              "gap": 8,
+              "padding": 16,
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "Vo8Fu",
+                  "name": "card3h",
+                  "width": "fill_container",
+                  "gap": 8,
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "id": "TU6k4",
+                      "type": "ref",
+                      "ref": "RbCG1",
+                      "fill": "#34C759",
+                      "width": 28,
+                      "height": 28,
+                      "name": "cb3",
+                      "y": 1,
+                      "descendants": {
+                        "QywDK": {
+                          "x": 3.5,
+                          "y": 8.5,
+                          "content": "CFO",
+                          "fontSize": 9
+                        }
+                      }
+                    },
+                    {
+                      "type": "frame",
+                      "id": "8iSgw",
+                      "name": "cl3",
+                      "layout": "vertical",
+                      "gap": 1,
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "GAMNd",
+                          "fill": "#E0E0E0",
+                          "content": "CFO",
+                          "fontFamily": "Inter",
+                          "fontSize": 13,
+                          "fontWeight": "600"
+                        },
+                        {
+                          "type": "text",
+                          "id": "b1Amz",
+                          "fill": "#6A6A6A",
+                          "content": "Chief Financial Officer",
+                          "fontFamily": "Inter",
+                          "fontSize": 11,
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "type": "text",
+                  "id": "KWH0z",
+                  "fill": "#6A6A6A",
+                  "textGrowth": "fixed-width",
+                  "width": "fill_container",
+                  "content": "Budget planning, revenue analysis, financial reporting, and forecasting.",
+                  "lineHeight": 1.4,
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "normal"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

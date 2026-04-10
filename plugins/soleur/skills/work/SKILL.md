@@ -240,6 +240,8 @@ Run these checks before proceeding to Phase 1. A FAIL blocks execution with a re
 
    - When adding route handler tests that require `vi.mock()`, create a separate test file from existing unit tests that import the real module. Vitest hoists all `vi.mock()` calls to the top of the file, clobbering real imports for the entire file regardless of describe block scope.
    - When creating test files with `vi.mock()` factories that reference shared variables, use `vi.hoisted()` from the start -- vitest hoists `vi.mock` to the top of the file before `const`/`let` declarations execute.
+   - When testing decorative images (alt="") with happy-dom, use container.querySelector instead of screen.getAllByRole("img", { hidden: true }) -- happy-dom excludes presentational elements from role queries even with hidden: true.
+   - When adding `sessionStorage` usage to React components, ensure the component's test file includes `sessionStorage.clear()` in its `beforeEach` block. Shared jsdom environments leak sessionStorage between tests, causing ordering-dependent failures.
 
    **Test environment setup:** If the project's test runner cannot run the type of test needed (e.g., React component tests require jsdom but vitest is configured for node), set up the test environment BEFORE starting the task. This is part of RED — the test infrastructure must exist for the test to fail properly.
 
@@ -429,6 +431,7 @@ If you catch yourself writing phrases like "set up X in the browser", "go to the
 1. `skill: soleur:review` (or `skill: soleur:review --headless` if headless) — catch issues before shipping
 2. `skill: soleur:resolve-todo-parallel` — resolve any review findings (no `--headless` needed; this skill has no interactive prompts)
 3. `skill: soleur:compound` (or `skill: soleur:compound --headless` if headless) — capture learnings before committing
+3.5. Display: "Tip: After shipping, run `/clear` to reclaim context headroom for the next task."
 4. `skill: soleur:ship` (or `skill: soleur:ship --headless` if headless) — commit, push, create PR, merge
 
 ---

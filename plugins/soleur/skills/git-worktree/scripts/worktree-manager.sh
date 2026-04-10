@@ -133,6 +133,13 @@ verify_worktree_created() {
   local branch_name="$2"
   local from_branch="$3"
 
+  # Check 0: Fast-fail if directory was not created at all
+  if [[ ! -d "$worktree_path" ]]; then
+    echo -e "${RED}Error: Worktree directory not created at $worktree_path${NC}"
+    echo -e "${YELLOW}Hint: Try 'git worktree add $worktree_path -b $branch_name $from_branch' directly${NC}"
+    exit 1
+  fi
+
   # Check 1: Verify the directory is a valid git worktree
   local actual_toplevel
   if ! actual_toplevel=$(git -C "$worktree_path" rev-parse --show-toplevel 2>/dev/null); then

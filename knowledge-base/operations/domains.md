@@ -1,5 +1,5 @@
 ---
-last_updated: 2026-03-20
+last_updated: 2026-04-10
 ---
 
 # Domains
@@ -16,7 +16,7 @@ last_updated: 2026-03-20
 | A | soleur.ai | 185.199.109.153 | Yes | GitHub Pages |
 | A | soleur.ai | 185.199.110.153 | Yes | GitHub Pages |
 | A | soleur.ai | 185.199.111.153 | Yes | GitHub Pages |
-| CNAME | www.soleur.ai | jikig-ai.github.io | Yes | GitHub Pages |
+| CNAME | <www.soleur.ai> | jikig-ai.github.io | Yes | GitHub Pages |
 | TXT | _github-pages-challenge-jikig-ai.soleur.ai | 8fcc2ac37a5abcac6cd2c71556053f | No | Domain verification |
 
 ## Security Configuration
@@ -28,6 +28,7 @@ last_updated: 2026-03-20
 | Minimum TLS Version | 1.2 |
 | HSTS | max-age=31536000; includeSubDomains; preload |
 | HSTS Preload | Submitted 2026-03-20 — pending inclusion in Chromium preload list |
+| DNSSEC | Enabled (pending DS propagation to .ai registry — expected active by 2026-04-12) |
 | X-Content-Type-Options | nosniff |
 
 ## HSTS Preload Commitment
