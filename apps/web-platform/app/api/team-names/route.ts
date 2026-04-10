@@ -4,7 +4,7 @@ import { validateCustomName } from "@/server/team-names-validation";
 import { ROUTABLE_DOMAIN_LEADERS } from "@/server/domain-leaders";
 import { validateOrigin, rejectCsrf } from "@/lib/auth/validate-origin";
 
-const VALID_LEADER_IDS = new Set(ROUTABLE_DOMAIN_LEADERS.map((l) => l.id));
+const VALID_LEADER_IDS = new Set<string>(ROUTABLE_DOMAIN_LEADERS.map((l) => l.id));
 
 /** GET /api/team-names — returns all custom names for the authenticated user. */
 export async function GET() {
