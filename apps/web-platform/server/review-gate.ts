@@ -95,8 +95,8 @@ export function extractReviewGateInput(
 export function buildReviewGateResponse(
   toolInput: Record<string, unknown>,
   selection: string,
-  isNewSchema: boolean,
 ): Record<string, unknown> {
+  const isNewSchema = Array.isArray(toolInput.questions);
   if (isNewSchema) {
     const questions = toolInput.questions as SdkQuestion[];
     const questionText = questions[0].question;
