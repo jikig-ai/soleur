@@ -461,7 +461,7 @@ This creates a virtuous cycle: the first time is guided, subsequent interactions
 
 ### Functional Requirements
 
-- [ ] Plugin MCP tools (Cloudflare, Stripe) are authorized by `canUseTool` via explicit allowlist (Phase 0)
+- [x] Plugin MCP tools (Cloudflare, Stripe) are authorized by `canUseTool` via explicit allowlist (Phase 0)
 - [ ] Agent can provision Cloudflare zones via MCP tools (Cloudflare MCP server accessible)
 - [ ] Agent can create Stripe products/prices via MCP tools (Stripe MCP server accessible)
 - [ ] Agent can create Plausible sites and goals via in-process API tools
@@ -481,8 +481,8 @@ This creates a virtuous cycle: the first time is guided, subsequent interactions
 - [ ] Service tool errors are logged but never expose tokens in logs or error messages
 - [ ] In-process MCP tools follow the `create_pull_request` security pattern (input validation, error containment)
 - [ ] Agent environment isolation maintained -- service tokens only injected via `buildAgentEnv` allowlist
-- [ ] Plugin MCP tool allowlist derived from plugin.json server names, not hardcoded (defense-in-depth)
-- [ ] Unregistered MCP tools still denied by `canUseTool` (regression test required)
+- [x] Plugin MCP tool allowlist derived from plugin.json server names, not hardcoded (defense-in-depth)
+- [x] Unregistered MCP tools still denied by `canUseTool` (regression test required)
 
 ### Quality Gates
 

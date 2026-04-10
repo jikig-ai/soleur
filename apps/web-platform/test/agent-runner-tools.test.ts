@@ -9,9 +9,10 @@ process.env.NEXT_PUBLIC_SUPABASE_URL ??= "https://test.supabase.co";
 // (vitest hoists vi.mock to the top of the file before let/const execute).
 // ---------------------------------------------------------------------------
 
-const { mockFrom, mockQuery } = vi.hoisted(() => ({
+const { mockFrom, mockQuery, mockReadFileSync } = vi.hoisted(() => ({
   mockFrom: vi.fn(),
   mockQuery: vi.fn(),
+  mockReadFileSync: vi.fn(),
 }));
 
 vi.mock("@anthropic-ai/claude-agent-sdk", () => ({
@@ -26,6 +27,14 @@ vi.mock("@anthropic-ai/claude-agent-sdk", () => ({
     instance: { tools: opts.tools },
   })),
 }));
+
+vi.mock("fs", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("fs")>();
+  return {
+    ...actual,
+    readFileSync: mockReadFileSync,
+  };
+});
 
 vi.mock("@supabase/supabase-js", () => ({
   createClient: vi.fn(() => ({ from: mockFrom })),
@@ -153,6 +162,19 @@ function setupQueryMockImmediate() {
 describe("agent-runner MCP tool wiring", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // Return plugin.json with MCP server entries when readFileSync is called
+    mockReadFileSync.mockImplementation((filePath: string) => {
+      if (String(filePath).includes("plugin.json")) {
+        return JSON.stringify({
+          mcpServers: {
+            context7: { type: "http", url: "https://mcp.context7.com/mcp" },
+            cloudflare: { type: "http", url: "https://mcp.cloudflare.com/mcp" },
+            vercel: { type: "http", url: "https://mcp.vercel.com" },
+          },
+        });
+      }
+      throw new Error(`ENOENT: no such file ${filePath}`);
+    });
   });
 
   test("passes mcpServers to query() when user has installationId and repo_url", async () => {
@@ -304,6 +326,94 @@ describe("agent-runner MCP tool wiring", () => {
     expect(mockQuery).toHaveBeenCalledOnce();
     const options = mockQuery.mock.calls[0][0].options;
     expect(options.mcpServers).toBeUndefined();
+  });
+
+  test("canUseTool allows plugin MCP tools from registered servers", async () => {
+    setupSupabaseMock({
+      workspace_path: "/tmp/test-workspace",
+      repo_status: "ready",
+      github_installation_id: 12345,
+      repo_url: "https://github.com/alice/my-repo",
+    });
+    setupQueryMockImmediate();
+
+    await startAgentSession("user-1", "conv-1", "cpo");
+
+    const options = mockQuery.mock.calls[0][0].options;
+    const canUseTool = options.canUseTool!;
+
+    // Plugin MCP tool from a server registered in plugin.json should be allowed
+    const result = await canUseTool(
+      "mcp__plugin_soleur_cloudflare__zones_list",
+      {},
+      { signal: new AbortController().signal },
+    );
+    expect(result.behavior).toBe("allow");
+  });
+
+  test("canUseTool denies plugin MCP tools from unregistered servers", async () => {
+    setupSupabaseMock({
+      workspace_path: "/tmp/test-workspace",
+      repo_status: "ready",
+      github_installation_id: 12345,
+      repo_url: "https://github.com/alice/my-repo",
+    });
+    setupQueryMockImmediate();
+
+    await startAgentSession("user-1", "conv-1", "cpo");
+
+    const options = mockQuery.mock.calls[0][0].options;
+    const canUseTool = options.canUseTool!;
+
+    // Plugin MCP tool from an unregistered server should be denied
+    const result = await canUseTool(
+      "mcp__plugin_soleur_unknown__hack",
+      {},
+      { signal: new AbortController().signal },
+    );
+    expect(result.behavior).toBe("deny");
+  });
+
+  test("canUseTool denies non-plugin mcp__ tools", async () => {
+    setupSupabaseMock({
+      workspace_path: "/tmp/test-workspace",
+      repo_status: "ready",
+      github_installation_id: 12345,
+      repo_url: "https://github.com/alice/my-repo",
+    });
+    setupQueryMockImmediate();
+
+    await startAgentSession("user-1", "conv-1", "cpo");
+
+    const options = mockQuery.mock.calls[0][0].options;
+    const canUseTool = options.canUseTool!;
+
+    // Non-plugin MCP tool should still be denied
+    const result = await canUseTool(
+      "mcp__random_server__dangerous_tool",
+      {},
+      { signal: new AbortController().signal },
+    );
+    expect(result.behavior).toBe("deny");
+  });
+
+  test("allowedTools includes plugin MCP wildcard patterns", async () => {
+    setupSupabaseMock({
+      workspace_path: "/tmp/test-workspace",
+      repo_status: "ready",
+      github_installation_id: 12345,
+      repo_url: "https://github.com/alice/my-repo",
+    });
+    setupQueryMockImmediate();
+
+    await startAgentSession("user-1", "conv-1", "cpo");
+
+    const options = mockQuery.mock.calls[0][0].options;
+
+    // allowedTools should include wildcard patterns for plugin MCP servers
+    expect(options.allowedTools).toContain("mcp__plugin_soleur_cloudflare__*");
+    expect(options.allowedTools).toContain("mcp__plugin_soleur_context7__*");
+    expect(options.allowedTools).toContain("mcp__plugin_soleur_vercel__*");
   });
 
   test("canUseTool still denies non-mcp unrecognized tools", async () => {

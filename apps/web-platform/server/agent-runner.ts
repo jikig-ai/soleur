@@ -391,6 +391,20 @@ export async function startAgentSession(
     const workspacePath = user.workspace_path;
     const pluginPath = path.join(workspacePath, "plugins", "soleur");
 
+    // Extract MCP server names from plugin.json for canUseTool allowlisting.
+    // Uses explicit server-name matching (not blanket mcp__ prefix).
+    // See learning: 2026-04-06-mcp-tool-canusertool-scope-allowlist.md
+    let pluginMcpServerNames: string[] = [];
+    try {
+      const pluginJsonPath = path.join(pluginPath, ".claude-plugin", "plugin.json");
+      const pluginJson = JSON.parse(readFileSync(pluginJsonPath, "utf-8"));
+      if (pluginJson.mcpServers && typeof pluginJson.mcpServers === "object") {
+        pluginMcpServerNames = Object.keys(pluginJson.mcpServers);
+      }
+    } catch {
+      // plugin.json may not exist in all workspaces; proceed without plugin MCP tools
+    }
+
     // Migrate existing workspaces: remove pre-approved permissions that
     // bypass canUseTool (see #725). Safe to run on every session start —
     // no-op for already-migrated workspaces.
@@ -526,7 +540,14 @@ When you need user input for important decisions, use the AskUserQuestion tool.`
         env: buildAgentEnv(apiKey, serviceTokens),
         disallowedTools: ["WebSearch", "WebFetch"],
         ...(mcpServersOption ? { mcpServers: mcpServersOption } : {}),
-        ...(platformToolNames.length > 0 ? { allowedTools: platformToolNames } : {}),
+        ...(platformToolNames.length > 0 || pluginMcpServerNames.length > 0
+          ? {
+              allowedTools: [
+                ...platformToolNames,
+                ...pluginMcpServerNames.map((s) => `mcp__plugin_soleur_${s}__*`),
+              ],
+            }
+          : {}),
         sandbox: {
           enabled: true,
           autoAllowBashIfSandboxed: true,
@@ -658,6 +679,19 @@ When you need user input for important decisions, use the AskUserQuestion tool.`
           // future MCP servers from being auto-allowed without explicit review.
           if (platformToolNames.includes(toolName)) {
             log.info({ sec: true, toolName, agentId: options.agentID }, "MCP tool invoked");
+            return { behavior: "allow" as const };
+          }
+
+          // Allow plugin MCP tools from servers registered in plugin.json.
+          // Uses explicit server-name matching (not blanket mcp__ prefix).
+          // See learning: 2026-04-06-mcp-tool-canusertool-scope-allowlist.md
+          if (
+            toolName.startsWith("mcp__plugin_soleur_") &&
+            pluginMcpServerNames.some((server) =>
+              toolName.startsWith(`mcp__plugin_soleur_${server}__`),
+            )
+          ) {
+            log.info({ sec: true, toolName, agentId: options.agentID }, "Plugin MCP tool invoked");
             return { behavior: "allow" as const };
           }
 
