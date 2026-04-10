@@ -65,4 +65,4 @@ export const DOMAIN_LEADERS = [
   },
 ] as const;
 
-export type DomainLeaderId = (typeof DOMAIN_LEADERS)[number]["id"];
+export type DomainLeaderId = (typeof DOMAIN_LEADERS)[number]["id"] | "system";

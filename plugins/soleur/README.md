@@ -10,6 +10,8 @@ Install the plugin:
 claude plugin install soleur
 ```
 
+**Running with Ollama?** Use `ollama launch claude --model gemma4:31b-cloud` to start Soleur with your preferred local model.
+
 ## The Soleur Workflow
 
 The recommended way to use Soleur is through the unified entry point:

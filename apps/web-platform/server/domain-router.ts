@@ -13,6 +13,7 @@ const DOMAIN_ASSESSMENT: Record<DomainLeaderId, string> = {
   coo: "Does this involve operations, vendors, tools, or expense tracking?",
   clo: "Does this involve legal documents, compliance, or privacy?",
   cco: "Does this involve support, community, or customer engagement?",
+  system: "",
 };
 
 const MAX_LEADERS_PER_MESSAGE = 3;
@@ -129,9 +130,9 @@ Respond with ONLY a JSON array like ["cmo","clo"]. No explanation.`,
     const parsed = JSON.parse(text.trim()) as string[];
 
     // Validate that returned IDs are actual leaders
-    const validIds = new Set(DOMAIN_LEADERS.map((l) => l.id));
+    const validIds = new Set<string>(DOMAIN_LEADERS.map((l) => l.id));
     const validated = parsed.filter((id): id is DomainLeaderId =>
-      validIds.has(id as DomainLeaderId),
+      validIds.has(id),
     );
 
     if (validated.length === 0) {
