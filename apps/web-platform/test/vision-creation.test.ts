@@ -88,7 +88,35 @@ describe("tryCreateVision", () => {
     mockMkdir.mockResolvedValueOnce(undefined);
     mockWriteFile.mockRejectedValueOnce(new Error("EPERM"));
 
-    await expect(tryCreateVision(WORKSPACE, "test")).rejects.toThrow("EPERM");
+    await expect(tryCreateVision(WORKSPACE, "A valid startup idea")).rejects.toThrow("EPERM");
+  });
+
+  it("rejects slash commands like /soleur:sync --headless", async () => {
+    await tryCreateVision(WORKSPACE, "/soleur:sync --headless");
+    expect(mockWriteFile).not.toHaveBeenCalled();
+  });
+
+  it("rejects content shorter than 10 characters", async () => {
+    await tryCreateVision(WORKSPACE, "@cpo");
+    expect(mockWriteFile).not.toHaveBeenCalled();
+  });
+
+  it("rejects malformed sync output (### Vision /soleur:sync)", async () => {
+    await tryCreateVision(WORKSPACE, "### Vision /soleur:sync --headless");
+    expect(mockWriteFile).not.toHaveBeenCalled();
+  });
+
+  it("accepts mention with content (user message with leader prefix)", async () => {
+    mockMkdir.mockResolvedValueOnce(undefined);
+    mockWriteFile.mockResolvedValueOnce(undefined);
+
+    await tryCreateVision(WORKSPACE, "@cpo I'm building a marketplace for designers");
+    expect(mockWriteFile).toHaveBeenCalled();
+  });
+
+  it("rejects bare leader mention without content", async () => {
+    await tryCreateVision(WORKSPACE, "@cto");
+    expect(mockWriteFile).not.toHaveBeenCalled();
   });
 });
 

@@ -19,6 +19,14 @@ export default function DashboardLayout({
   const pathname = usePathname();
   const router = useRouter();
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const [userEmail, setUserEmail] = useState<string | null>(null);
+
+  useEffect(() => {
+    const supabase = createClient();
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setUserEmail(session?.user?.email ?? null);
+    });
+  }, []);
 
   // Auto-close drawer on route change
   useEffect(() => {
@@ -138,6 +146,14 @@ export default function DashboardLayout({
 
         {/* Footer links */}
         <div className="border-t border-neutral-800 p-3 safe-bottom">
+          {userEmail && (
+            <p
+              className="truncate px-3 py-1 text-xs text-neutral-500"
+              title={userEmail}
+            >
+              {userEmail}
+            </p>
+          )}
           <a
             href="https://soleur-ai.betteruptime.com/"
             target="_blank"
