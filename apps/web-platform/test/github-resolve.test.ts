@@ -26,9 +26,47 @@ vi.mock("@/server/logger", () => ({
   default: { warn: vi.fn(), error: vi.fn(), info: vi.fn() },
 }));
 
-// Mock global fetch for GitHub API calls
-const mockFetch = vi.fn();
+// ---------------------------------------------------------------------------
+// URL-routing mock for global fetch (GitHub API calls)
+// ---------------------------------------------------------------------------
+
+type MockRoute = {
+  test: (url: string, init?: RequestInit) => boolean;
+  response: () => Promise<Partial<Response>>;
+};
+
+const fetchRoutes: MockRoute[] = [];
 const originalFetch = globalThis.fetch;
+
+/** Register a URL-matching mock response. Routes are checked in order. */
+function mockFetchRoute(
+  match: string | ((url: string, init?: RequestInit) => boolean),
+  response: Partial<Response> | (() => Promise<Partial<Response>>),
+) {
+  const test = typeof match === "string"
+    ? (url: string) => url.includes(match)
+    : match;
+  const responseFn = typeof response === "function"
+    ? response
+    : () => Promise.resolve(response);
+  fetchRoutes.push({ test, response: responseFn });
+}
+
+/** Clear all registered routes. */
+function clearFetchRoutes() {
+  fetchRoutes.length = 0;
+}
+
+/** The routing fetch mock — matches registered routes by URL. */
+const routingFetch = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+  const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+  for (const route of fetchRoutes) {
+    if (route.test(url, init)) {
+      return route.response();
+    }
+  }
+  throw new Error(`Unmatched fetch URL: ${url}`);
+}) as unknown as typeof fetch;
 
 // ---------------------------------------------------------------------------
 // Import route handlers
@@ -131,7 +169,8 @@ describe("GET /api/auth/github-resolve (initiate)", () => {
 describe("GET /api/auth/github-resolve/callback", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    globalThis.fetch = mockFetch as unknown as typeof fetch;
+    clearFetchRoutes();
+    globalThis.fetch = routingFetch;
 
     // Default: authenticated user
     mockGetUser.mockResolvedValue({
@@ -144,22 +183,26 @@ describe("GET /api/auth/github-resolve/callback", () => {
         eq: vi.fn().mockResolvedValue({ error: null }),
       }),
     });
+
+    // Default: token revocation succeeds (fire-and-forget, matched by URL)
+    mockFetchRoute("/applications/", { ok: true, status: 204 });
   });
 
   afterEach(() => {
+    clearFetchRoutes();
     globalThis.fetch = originalFetch;
   });
 
   test("stores github_username and redirects on valid code+state", async () => {
     const stateNonce = "test-state-123";
 
-    // Mock GitHub token exchange
-    mockFetch.mockResolvedValueOnce({
+    // Mock GitHub token exchange (matched by URL)
+    mockFetchRoute("login/oauth/access_token", {
       ok: true,
       json: async () => ({ access_token: "ghu_test_token", token_type: "bearer" }),
     });
-    // Mock GET /user
-    mockFetch.mockResolvedValueOnce({
+    // Mock GET /user (matched by URL)
+    mockFetchRoute((url, init) => url.includes("api.github.com/user") && init?.method !== "DELETE", {
       ok: true,
       json: async () => ({ login: "deruelle" }),
     });
@@ -215,7 +258,7 @@ describe("GET /api/auth/github-resolve/callback", () => {
   test("redirects with resolve_error=1 when token exchange fails", async () => {
     const stateNonce = "test-state-456";
 
-    mockFetch.mockResolvedValueOnce({
+    mockFetchRoute("login/oauth/access_token", {
       ok: false,
       status: 400,
       json: async () => ({ error: "bad_verification_code" }),
@@ -235,11 +278,11 @@ describe("GET /api/auth/github-resolve/callback", () => {
   test("redirects with resolve_error=1 when GET /user returns empty login", async () => {
     const stateNonce = "test-state-789";
 
-    mockFetch.mockResolvedValueOnce({
+    mockFetchRoute("login/oauth/access_token", {
       ok: true,
       json: async () => ({ access_token: "ghu_test_token", token_type: "bearer" }),
     });
-    mockFetch.mockResolvedValueOnce({
+    mockFetchRoute((url, init) => url.includes("api.github.com/user") && init?.method !== "DELETE", {
       ok: true,
       json: async () => ({ login: "" }),
     });
@@ -258,11 +301,11 @@ describe("GET /api/auth/github-resolve/callback", () => {
   test("deletes state cookie on successful callback", async () => {
     const stateNonce = "test-state-cleanup";
 
-    mockFetch.mockResolvedValueOnce({
+    mockFetchRoute("login/oauth/access_token", {
       ok: true,
       json: async () => ({ access_token: "ghu_test_token", token_type: "bearer" }),
     });
-    mockFetch.mockResolvedValueOnce({
+    mockFetchRoute((url, init) => url.includes("api.github.com/user") && init?.method !== "DELETE", {
       ok: true,
       json: async () => ({ login: "deruelle" }),
     });

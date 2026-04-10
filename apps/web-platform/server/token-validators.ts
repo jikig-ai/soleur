@@ -3,7 +3,7 @@ import type { Provider } from "@/lib/types";
 const VALIDATION_TIMEOUT_MS = 5_000;
 
 interface ValidatorConfig {
-  url: string;
+  url: string | (() => string);
   headers: (token: string) => Record<string, string>;
   method?: string;
 }
@@ -23,7 +23,7 @@ const VALIDATOR_CONFIGS: Partial<Record<Provider, ValidatorConfig>> = {
     headers: (token) => ({ Authorization: `Bearer ${token}` }),
   },
   plausible: {
-    url: "https://plausible.io/api/v1/stats/realtime/visitors?site_id=soleur.ai",
+    url: () => `https://plausible.io/api/v1/stats/realtime/visitors?site_id=${encodeURIComponent(process.env.PLAUSIBLE_SITE_ID ?? "soleur.ai")}`,
     headers: (token) => ({ Authorization: `Bearer ${token}` }),
   },
   hetzner: {
@@ -67,7 +67,8 @@ export async function validateToken(
   const config = VALIDATOR_CONFIGS[provider];
   if (!config) return false;
   try {
-    const res = await fetch(config.url, {
+    const url = typeof config.url === "function" ? config.url() : config.url;
+    const res = await fetch(url, {
       method: config.method,
       headers: config.headers(token),
       signal: AbortSignal.timeout(VALIDATION_TIMEOUT_MS),
