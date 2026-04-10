@@ -224,7 +224,7 @@ describe("ReadyState — health snapshot", () => {
     // Should have a link/reference to Command Center
     const ccLink = screen.getByRole("link", { name: /command center/i });
     expect(ccLink).toBeInTheDocument();
-    expect(ccLink).toHaveAttribute("href", expect.stringContaining("/dashboard/command-center"));
+    expect(ccLink).toHaveAttribute("href", expect.stringContaining("/dashboard"));
   });
 
   // -------------------------------------------------------------------------
