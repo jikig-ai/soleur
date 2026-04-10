@@ -189,13 +189,13 @@ doppler run --project soleur --config prd_terraform -- \
 
 ## Acceptance Criteria
 
-- [ ] `cloudflare_zone_dnssec.soleur_ai` resource exists in `apps/web-platform/infra/dns.tf`
-- [ ] Resource is imported into Terraform state (no orphaned/duplicate resources)
-- [ ] `terraform plan` shows no unexpected changes after import
-- [ ] DS record is present at the `.ai` parent zone (`dig soleur.ai DS @8.8.8.8` returns the record)
-- [ ] DNSSEC validation works end-to-end (`dig +dnssec soleur.ai` shows `ad` flag)
-- [ ] `knowledge-base/operations/domains.md` documents DNSSEC as enabled
-- [ ] Issue #1877 is closed
+- [x] `cloudflare_zone_dnssec.soleur_ai` resource exists in `apps/web-platform/infra/dns.tf`
+- [x] Resource is imported into Terraform state (no orphaned/duplicate resources)
+- [x] `terraform plan` shows no unexpected changes after import (no DNSSEC-related changes)
+- [ ] DS record is present at the `.ai` parent zone (pending — 1-2 day propagation)
+- [ ] DNSSEC validation works end-to-end (pending DS propagation)
+- [x] `knowledge-base/operations/domains.md` documents DNSSEC as enabled
+- [ ] Issue #1877 is closed (will close via PR body)
 
 ## Test Scenarios
 
