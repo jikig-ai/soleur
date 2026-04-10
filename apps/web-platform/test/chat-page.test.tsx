@@ -7,8 +7,12 @@ const mockStartSession = vi.fn();
 const mockSendMessage = vi.fn();
 const mockSendReviewGateResponse = vi.fn();
 
+type MockTextMessage = { id: string; role: "user" | "assistant"; content: string; type: "text"; leaderId?: string };
+type MockGateMessage = { id: string; role: "user" | "assistant"; content: string; type: "review_gate"; leaderId?: string; gateId: string; question: string; options: string[]; header?: string; descriptions?: Record<string, string | undefined>; resolved?: boolean; selectedOption?: string; gateError?: string };
+type MockChatMessage = MockTextMessage | MockGateMessage;
+
 let wsReturn = {
-  messages: [] as Array<{ id: string; role: "user" | "assistant"; content: string; type: "text" | "review_gate"; leaderId?: string; gateId?: string; question?: string; options?: string[]; header?: string; descriptions?: Record<string, string | undefined>; resolved?: boolean; selectedOption?: string; gateError?: string }>,
+  messages: [] as MockChatMessage[],
   startSession: mockStartSession,
   sendMessage: mockSendMessage,
   sendReviewGateResponse: mockSendReviewGateResponse,

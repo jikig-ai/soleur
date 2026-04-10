@@ -247,9 +247,9 @@ export default function ChatPage() {
                 <div key={msg.id}>
                   {msg.type === "review_gate" ? (
                     <ReviewGateCard
-                      gateId={msg.gateId!}
-                      question={msg.question!}
-                      options={msg.options!}
+                      gateId={msg.gateId}
+                      question={msg.question}
+                      options={msg.options}
                       header={msg.header}
                       descriptions={msg.descriptions}
                       resolved={msg.resolved}

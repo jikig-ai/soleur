@@ -82,7 +82,7 @@ const mockSendReviewGateResponse = vi.fn();
 const mockReconnect = vi.fn();
 
 let wsReturn: {
-  messages: Array<{ id: string; role: "user" | "assistant"; content: string; type: "text" | "review_gate"; leaderId?: string }>;
+  messages: Array<{ id: string; role: "user" | "assistant"; content: string; type: "text"; leaderId?: string }>;
   startSession: typeof mockStartSession;
   sendMessage: typeof mockSendMessage;
   sendReviewGateResponse: typeof mockSendReviewGateResponse;
