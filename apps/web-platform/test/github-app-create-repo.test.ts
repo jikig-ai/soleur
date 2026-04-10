@@ -26,7 +26,11 @@ afterAll(() => {
 });
 
 // Import AFTER env and fetch mocking
-import { createRepo, getInstallationAccount } from "../server/github-app";
+import {
+  createRepo,
+  getInstallationAccount,
+  GitHubApiError,
+} from "../server/github-app";
 
 describe("createRepo", () => {
   beforeEach(() => {
@@ -142,7 +146,7 @@ describe("createRepo", () => {
     expect(repoCreateCall[0]).toBe("https://api.github.com/user/repos");
   });
 
-  test("extracts specific error message from 422 response", async () => {
+  test("throws GitHubApiError with statusCode 422 for duplicate name", async () => {
     const installationId = uniqueInstallationId();
 
     // Mock 1: GET /app/installations/{id} — org account
@@ -168,7 +172,46 @@ describe("createRepo", () => {
 
     await expect(
       createRepo(installationId, "existing-repo", true),
-    ).rejects.toThrow(/name already exists/);
+    ).rejects.toSatisfy((err: unknown) => {
+      expect(err).toBeInstanceOf(GitHubApiError);
+      expect((err as GitHubApiError).statusCode).toBe(422);
+      expect((err as GitHubApiError).message).toMatch(
+        /name already exists/,
+      );
+      return true;
+    });
+  });
+
+  test("throws GitHubApiError with statusCode 403 for permission denied", async () => {
+    const installationId = uniqueInstallationId();
+
+    // Mock 1: GET /app/installations/{id} — org account
+    mockInstallationAccountResponse({
+      login: "my-org",
+      id: 1,
+      type: "Organization",
+    });
+
+    // Mock 2: POST /app/installations/{id}/access_tokens
+    mockTokenResponse();
+
+    // Mock 3: POST /orgs/my-org/repos — 403 error
+    mockFetch.mockResolvedValueOnce({
+      ok: false,
+      status: 403,
+      text: async () =>
+        JSON.stringify({
+          message: "Resource not accessible by integration",
+        }),
+    });
+
+    await expect(
+      createRepo(installationId, "new-repo", true),
+    ).rejects.toSatisfy((err: unknown) => {
+      expect(err).toBeInstanceOf(GitHubApiError);
+      expect((err as GitHubApiError).statusCode).toBe(403);
+      return true;
+    });
   });
 
   test("throws on installation 404", async () => {
