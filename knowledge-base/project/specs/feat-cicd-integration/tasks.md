@@ -30,14 +30,14 @@
 
 ## Phase 4: Open PRs (#1929)
 
-- [ ] 4.1 Extract credential helper from workspace.ts into reusable `withCredentialHelper()`
-- [ ] 4.2 Add `github_push_branch` MCP tool (gated) — schema: `branch` (string), `force` (boolean, default false)
-- [ ] 4.3 Validate branch name in handler: reject main, master, stored default branch
-- [ ] 4.4 Register `github_push_branch` with `gated` tier
-- [ ] 4.5 Add review gate to existing `create_pull_request` tool
-- [ ] 4.6 Implement review gate messages for push and PR creation
-- [ ] 4.7 Set git commit author to `Soleur Agent <agent@soleur.ai>` (hardcoded)
-- [ ] 4.8 Write tests: branch validation, credential cleanup, gate verification
+- [x] 4.1 Extract credential helper from workspace.ts into reusable `withCredentialHelper()`
+- [x] 4.2 Add `github_push_branch` MCP tool (gated) — schema: `branch` (string), `force` (boolean, default false)
+- [x] 4.3 Validate branch name in handler: reject main, master, stored default branch
+- [x] 4.4 Register `github_push_branch` with `gated` tier
+- [x] 4.5 Add review gate to existing `create_pull_request` tool
+- [x] 4.6 Implement review gate messages for push and PR creation
+- [x] 4.7 Set git commit author to `Soleur Agent <agent@soleur.ai>` (hardcoded)
+- [x] 4.8 Write tests: branch validation, credential cleanup, gate verification
 
 ## Phase 5: Integration Testing
 

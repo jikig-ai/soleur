@@ -26,6 +26,7 @@ import { tryCreateVision, buildVisionEnhancementPrompt } from "./vision-helpers"
 import { getToolTier, buildGateMessage } from "./tool-tiers";
 import { readCiStatus, readWorkflowLogs } from "./ci-tools";
 import { triggerWorkflow, createRateLimiter } from "./trigger-workflow";
+import { pushBranch } from "./push-branch";
 
 const log = createChildLogger("agent");
 
@@ -584,10 +585,42 @@ When you need user input for important decisions, use the AskUserQuestion tool.`
           },
         );
 
+        // Phase 4: Push branches (#1929) — gated tier
+        const pushBranchTool = tool(
+          "github_push_branch",
+          "Push the current workspace HEAD to a feature branch on the remote. " +
+          "Requires founder approval via review gate. Force-push and push to " +
+          "main/master are blocked unconditionally.",
+          {
+            branch: z.string().describe("Target branch name (must not be main, master, or default branch)"),
+            force: z.boolean().default(false).describe("Force-push (always rejected — included for explicit error messaging)"),
+          },
+          async (args) => {
+            try {
+              const result = await pushBranch({
+                installationId,
+                owner,
+                repo,
+                workspacePath,
+                branch: args.branch,
+                force: args.force,
+              });
+              return {
+                content: [{ type: "text" as const, text: JSON.stringify(result) }],
+              };
+            } catch (err) {
+              return {
+                content: [{ type: "text" as const, text: `Error pushing branch: ${(err as Error).message}` }],
+                isError: true,
+              };
+            }
+          },
+        );
+
         const toolServer = createSdkMcpServer({
           name: "soleur_platform",
           version: "1.0.0",
-          tools: [createPr, ciStatusTool, workflowLogsTool, triggerWorkflowTool],
+          tools: [createPr, ciStatusTool, workflowLogsTool, triggerWorkflowTool, pushBranchTool],
         });
 
         mcpServersOption = { soleur_platform: toolServer };
@@ -596,6 +629,7 @@ When you need user input for important decisions, use the AskUserQuestion tool.`
           "mcp__soleur_platform__github_read_ci_status",
           "mcp__soleur_platform__github_read_workflow_logs",
           "mcp__soleur_platform__github_trigger_workflow",
+          "mcp__soleur_platform__github_push_branch",
         ];
       }
     }
