@@ -7,11 +7,23 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 const mockSelect = vi.fn();
 const mockEq = vi.fn();
 const mockSingle = vi.fn();
+const mockMaybeSingle = vi.fn();
 
 vi.mock("@/lib/supabase/server", () => {
-  const mockFrom = vi.fn(() => ({
-    select: mockSelect,
-  }));
+  // Chain builder for conversations query (select → eq → eq → eq → order → limit → maybeSingle)
+  const convChain = {
+    select: vi.fn(() => convChain),
+    eq: vi.fn(() => convChain),
+    order: vi.fn(() => convChain),
+    limit: vi.fn(() => convChain),
+    maybeSingle: mockMaybeSingle,
+  };
+
+  const mockFrom = vi.fn((table: string) => {
+    if (table === "conversations") return convChain;
+    // Default: users table chain
+    return { select: mockSelect };
+  });
   mockSelect.mockReturnValue({ eq: mockEq });
   mockEq.mockReturnValue({ single: mockSingle });
 
@@ -43,7 +55,7 @@ describe("GET /api/repo/status — health_snapshot", () => {
     vi.clearAllMocks();
   });
 
-  it("includes healthSnapshot in response when stored in user record", async () => {
+  it("includes healthSnapshot and syncConversationId in response when stored", async () => {
     const snapshot = {
       scannedAt: "2026-04-10T00:00:00.000Z",
       category: "developing",
@@ -67,6 +79,12 @@ describe("GET /api/repo/status — health_snapshot", () => {
       error: null,
     });
 
+    // Active sync conversation exists
+    mockMaybeSingle.mockResolvedValue({
+      data: { id: "conv-abc" },
+      error: null,
+    });
+
     const { GET } = await import(
       "@/app/api/repo/status/route"
     );
@@ -75,10 +93,11 @@ describe("GET /api/repo/status — health_snapshot", () => {
     const body = await res.json();
 
     expect(body.healthSnapshot).toEqual(snapshot);
+    expect(body.syncConversationId).toBe("conv-abc");
     expect(body.status).toBe("ready");
   });
 
-  it("returns healthSnapshot as null when not stored", async () => {
+  it("returns syncConversationId as null when no active sync conversation (#1816)", async () => {
     mockSingle.mockResolvedValue({
       data: {
         repo_url: "https://github.com/user/repo",
@@ -91,6 +110,12 @@ describe("GET /api/repo/status — health_snapshot", () => {
       error: null,
     });
 
+    // No active sync conversation
+    mockMaybeSingle.mockResolvedValue({
+      data: null,
+      error: null,
+    });
+
     const { GET } = await import(
       "@/app/api/repo/status/route"
     );
@@ -99,5 +124,6 @@ describe("GET /api/repo/status — health_snapshot", () => {
     const body = await res.json();
 
     expect(body.healthSnapshot).toBeNull();
+    expect(body.syncConversationId).toBeNull();
   });
 });
