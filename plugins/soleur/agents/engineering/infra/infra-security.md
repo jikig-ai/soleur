@@ -42,6 +42,8 @@ When auditing a domain's security posture, check these areas and report findings
 
 When MCP OAuth is unavailable (CI, headless mode, or auth errors), use the dedicated read-only audit token. Retrieve it via `doppler secrets get CF_API_TOKEN_AUDIT -p soleur -c dev --plain`.
 
+Zone and account IDs (canonical source: `apps/web-platform/infra/main.tf`):
+
 Zone ID: `5af02a2f394e9ba6e0ea23c381a26b67` (soleur.ai) | Account ID: `4d5ba6f096b2686fbdd404167dd4e125`
 
 ```bash
