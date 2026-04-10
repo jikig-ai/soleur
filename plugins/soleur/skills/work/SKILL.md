@@ -431,6 +431,7 @@ If you catch yourself writing phrases like "set up X in the browser", "go to the
 1. `skill: soleur:review` (or `skill: soleur:review --headless` if headless) — catch issues before shipping
 2. `skill: soleur:resolve-todo-parallel` — resolve any review findings (no `--headless` needed; this skill has no interactive prompts)
 3. `skill: soleur:compound` (or `skill: soleur:compound --headless` if headless) — capture learnings before committing
+3.5. Display: "Tip: After shipping, run `/clear` to reclaim context headroom for the next task."
 4. `skill: soleur:ship` (or `skill: soleur:ship --headless` if headless) — commit, push, create PR, merge
 
 ---
