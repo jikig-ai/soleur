@@ -178,15 +178,15 @@ CodeQL and secret scanning complement these tools without overlap:
 
 ## Acceptance Criteria
 
-- [ ] CodeQL default setup is configured with `extended` query suite for `actions`, `javascript-typescript`, and `python` with `remote_and_local` threat model
-- [ ] CodeQL initial analysis completes successfully (check via API: `gh api repos/jikig-ai/soleur/code-scanning/default-setup --jq .state` returns `configured` and `updated_at` is non-null)
-- [ ] Secret scanning is enabled (`status: enabled`)
-- [ ] Secret scanning push protection is enabled (`status: enabled`)
-- [ ] Secret scanning non-provider patterns is enabled (`status: enabled`)
-- [ ] Secret scanning validity checks is enabled (`status: enabled`)
-- [ ] Any pre-existing secret scanning alerts are triaged (revoked or dismissed)
-- [ ] Any pre-existing code scanning alerts are reviewed
-- [ ] GitHub Security tab shows all three features as active
+- [x] CodeQL default setup is configured with `extended` query suite for `actions`, `javascript-typescript`, and `python` with `remote_and_local` threat model
+- [x] CodeQL initial analysis completes successfully (check via API: `gh api repos/jikig-ai/soleur/code-scanning/default-setup --jq .state` returns `configured` and `updated_at` is non-null)
+- [x] Secret scanning is enabled (`status: enabled`)
+- [x] Secret scanning push protection is enabled (`status: enabled`)
+- [ ] Secret scanning non-provider patterns is enabled (`status: enabled`) — blocked: requires `admin:org` OAuth scope to attach org code security configuration
+- [ ] Secret scanning validity checks is enabled (`status: enabled`) — blocked: requires `admin:org` OAuth scope to attach org code security configuration
+- [x] Any pre-existing secret scanning alerts are triaged (revoked or dismissed) — 1 alert (Anthropic API Key) dismissed as revoked
+- [x] Any pre-existing code scanning alerts are reviewed — 84 alerts triaged, tracking issue #1894 created
+- [x] GitHub Security tab shows code scanning and secret scanning as active
 
 ## Test Scenarios
 
