@@ -510,5 +510,47 @@ describe("ChatPage", () => {
       await renderChatPage();
       expect(screen.getByText(/Review gate not found/)).toBeInTheDocument();
     });
+
+    it("has role=group and aria-label on card container", async () => {
+      wsReturn.messages = [
+        {
+          id: "gate-g1", role: "assistant", content: "Which library?",
+          type: "review_gate", gateId: "g1", question: "Which library?",
+          options: ["React Query", "SWR"],
+        },
+      ];
+      await renderChatPage();
+      const group = screen.getByRole("group", { name: "Which library?" });
+      expect(group).toBeInTheDocument();
+    });
+
+    it("sets aria-busy during pending state", async () => {
+      wsReturn.messages = [
+        {
+          id: "gate-g1", role: "assistant", content: "Choose",
+          type: "review_gate", gateId: "g1", question: "Choose",
+          options: ["Yes", "No"],
+        },
+      ];
+      await renderChatPage();
+      const group = screen.getByRole("group", { name: "Choose" });
+      expect(group).toHaveAttribute("aria-busy", "false");
+      await userEvent.click(screen.getByRole("button", { name: "Yes" }));
+      expect(group).toHaveAttribute("aria-busy", "true");
+    });
+
+    it("renders error message with role=alert", async () => {
+      wsReturn.messages = [
+        {
+          id: "gate-g1", role: "assistant", content: "Choose",
+          type: "review_gate", gateId: "g1", question: "Choose",
+          options: ["Yes", "No"],
+          gateError: "Review gate not found or already resolved",
+        },
+      ];
+      await renderChatPage();
+      const alert = screen.getByRole("alert");
+      expect(alert).toHaveTextContent(/Review gate not found/);
+    });
   });
 });
