@@ -117,6 +117,11 @@ export async function plausibleGetStats(
   const idError = validateSiteId(siteId);
   if (idError) return { success: false, error: "Invalid site ID format" };
 
+  const VALID_PERIODS = ["day", "7d", "30d"];
+  if (!VALID_PERIODS.includes(period)) {
+    return { success: false, error: "Invalid period (must be day, 7d, or 30d)" };
+  }
+
   const params = new URLSearchParams({
     site_id: siteId,
     period,

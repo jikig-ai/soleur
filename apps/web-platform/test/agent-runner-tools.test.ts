@@ -476,6 +476,31 @@ describe("agent-runner MCP tool wiring", () => {
     expect(options.allowedTools).toContain("mcp__soleur_platform__plausible_get_stats");
   });
 
+  test("Plausible tools registered even without GitHub installation", async () => {
+    const plausibleRow = {
+      ...DEFAULT_API_KEY_ROW,
+      id: "key-plausible",
+      provider: "plausible",
+    };
+    setupSupabaseMock(
+      {
+        workspace_path: "/tmp/test-workspace",
+        repo_status: null,
+        github_installation_id: null,
+        repo_url: null,
+      },
+      [DEFAULT_API_KEY_ROW, plausibleRow],
+    );
+    setupQueryMockImmediate();
+
+    await startAgentSession("user-1", "conv-1", "cpo");
+
+    const options = mockQuery.mock.calls[0][0].options;
+    expect(options.allowedTools).toContain("mcp__soleur_platform__plausible_create_site");
+    // PR tool should NOT be present (no GitHub installation)
+    expect(options.allowedTools).not.toContain("mcp__soleur_platform__create_pull_request");
+  });
+
   test("Plausible tools not registered when user has no PLAUSIBLE_API_KEY", async () => {
     setupSupabaseMock({
       workspace_path: "/tmp/test-workspace",
