@@ -2,6 +2,8 @@ import { describe, test, expect, vi, beforeEach, afterEach } from "vitest";
 import {
   abortableReviewGate,
   validateSelection,
+  extractReviewGateInput,
+  buildReviewGateResponse,
   MAX_SELECTION_LENGTH,
   REVIEW_GATE_TIMEOUT_MS,
   type AgentSession,
@@ -63,6 +65,142 @@ describe("validateSelection", () => {
 
   test("MAX_SELECTION_LENGTH is 256", () => {
     expect(MAX_SELECTION_LENGTH).toBe(256);
+  });
+});
+
+describe("extractReviewGateInput", () => {
+  test("extracts question, header, options from SDK schema", () => {
+    const toolInput = {
+      questions: [{
+        question: "Which approach?",
+        header: "Approach",
+        options: [
+          { label: "A", description: "desc A" },
+          { label: "B", description: "desc B" },
+        ],
+        multiSelect: false,
+      }],
+    };
+
+    const result = extractReviewGateInput(toolInput);
+    expect(result.question).toBe("Which approach?");
+    expect(result.header).toBe("Approach");
+    expect(result.options).toEqual(["A", "B"]);
+    expect(result.descriptions).toEqual({ A: "desc A", B: "desc B" });
+    expect(result.isNewSchema).toBe(true);
+  });
+
+  test("falls back to legacy fields when questions array is absent", () => {
+    const toolInput = {
+      question: "Do you approve?",
+      options: ["Yes", "No"],
+    };
+
+    const result = extractReviewGateInput(toolInput);
+    expect(result.question).toBe("Do you approve?");
+    expect(result.header).toBe("Input needed");
+    expect(result.options).toEqual(["Yes", "No"]);
+    expect(result.descriptions).toEqual({});
+    expect(result.isNewSchema).toBe(false);
+  });
+
+  test("uses default question and options when nothing is provided", () => {
+    const toolInput = {};
+
+    const result = extractReviewGateInput(toolInput);
+    expect(result.question).toBe("Agent needs your input");
+    expect(result.header).toBe("Input needed");
+    expect(result.options).toEqual(["Approve", "Reject"]);
+    expect(result.descriptions).toEqual({});
+    expect(result.isNewSchema).toBe(false);
+  });
+
+  test("handles empty questions array gracefully", () => {
+    const toolInput = { questions: [] };
+
+    const result = extractReviewGateInput(toolInput);
+    expect(result.question).toBe("Agent needs your input");
+    expect(result.options).toEqual(["Approve", "Reject"]);
+    expect(result.isNewSchema).toBe(false);
+  });
+
+  test("handles options without descriptions", () => {
+    const toolInput = {
+      questions: [{
+        question: "Pick one",
+        header: "Choice",
+        options: [
+          { label: "X" },
+          { label: "Y" },
+        ],
+        multiSelect: false,
+      }],
+    };
+
+    const result = extractReviewGateInput(toolInput);
+    expect(result.options).toEqual(["X", "Y"]);
+    expect(result.descriptions).toEqual({ X: undefined, Y: undefined });
+  });
+
+  test("filters non-string legacy options", () => {
+    const toolInput = {
+      question: "Choose",
+      options: ["Valid", 42, null, "Also valid"],
+    };
+
+    const result = extractReviewGateInput(toolInput);
+    expect(result.options).toEqual(["Valid", "Also valid"]);
+  });
+});
+
+describe("buildReviewGateResponse", () => {
+  test("builds new-schema response with questions and answers", () => {
+    const toolInput = {
+      questions: [{
+        question: "Which approach?",
+        header: "Approach",
+        options: [
+          { label: "A", description: "desc A" },
+          { label: "B", description: "desc B" },
+        ],
+        multiSelect: false,
+      }],
+    };
+
+    const result = buildReviewGateResponse(toolInput, "A", true);
+    expect(result).toEqual({
+      questions: toolInput.questions,
+      answers: { "Which approach?": "A" },
+    });
+  });
+
+  test("builds legacy response with spread toolInput and answer field", () => {
+    const toolInput = {
+      question: "Approve?",
+      options: ["Yes", "No"],
+    };
+
+    const result = buildReviewGateResponse(toolInput, "Yes", false);
+    expect(result).toEqual({
+      question: "Approve?",
+      options: ["Yes", "No"],
+      answer: "Yes",
+    });
+  });
+
+  test("new-schema response does not include answer field", () => {
+    const toolInput = {
+      questions: [{
+        question: "Pick",
+        header: "H",
+        options: [{ label: "X", description: "" }],
+        multiSelect: false,
+      }],
+    };
+
+    const result = buildReviewGateResponse(toolInput, "X", true);
+    expect(result).not.toHaveProperty("answer");
+    expect(result).toHaveProperty("answers");
   });
 });
 
