@@ -18,7 +18,7 @@ import { buildAgentEnv } from "./agent-env";
 import { PROVIDER_CONFIG, EXCLUDED_FROM_SERVICES_UI } from "./providers";
 import type { Provider } from "@/lib/types";
 import { createSandboxHook } from "./sandbox-hook";
-import { abortableReviewGate, validateSelection, type AgentSession } from "./review-gate";
+import { abortableReviewGate, validateSelection, extractReviewGateInput, buildReviewGateResponse, type AgentSession } from "./review-gate";
 import { createChildLogger } from "./logger";
 import { syncPull, syncPush } from "./session-sync";
 import { createPullRequest } from "./github-app";
@@ -600,18 +600,27 @@ When you need user input for important decisions, use the AskUserQuestion tool.`
           // Review gates: intercept AskUserQuestion
           if (toolName === "AskUserQuestion") {
             const gateId = randomUUID();
-            const question =
-              (toolInput.question as string) || "Agent needs your input";
-            const rawOptions = Array.isArray(toolInput.options)
-              ? (toolInput.options as unknown[]).filter((o): o is string => typeof o === "string")
-              : [];
-            const gateOptions = rawOptions.length > 0 ? rawOptions : ["Approve", "Reject"];
+            const gate = extractReviewGateInput(toolInput as Record<string, unknown>);
+
+            if (gate.isNewSchema) {
+              const questions = (toolInput as Record<string, unknown>).questions as unknown[];
+              if (questions.length > 1) {
+                log.warn(
+                  { questionCount: questions.length },
+                  "AskUserQuestion received multiple questions; only the first is surfaced",
+                );
+              }
+            }
 
             sendToClient(userId, {
               type: "review_gate",
               gateId,
-              question,
-              options: gateOptions,
+              question: gate.question,
+              header: gate.header,
+              options: gate.options,
+              descriptions: Object.keys(gate.descriptions).length > 0
+                ? gate.descriptions
+                : undefined,
             });
 
             await updateConversationStatus(conversationId, "waiting_for_user");
@@ -621,14 +630,18 @@ When you need user input for important decisions, use the AskUserQuestion tool.`
               gateId,
               controller.signal,
               undefined, // timeoutMs (use default)
-              gateOptions,
+              gate.options,
             );
 
             await updateConversationStatus(conversationId, "active");
 
             return {
               behavior: "allow" as const,
-              updatedInput: { ...toolInput, answer: selection },
+              updatedInput: buildReviewGateResponse(
+                toolInput as Record<string, unknown>,
+                selection,
+                gate.isNewSchema,
+              ),
             };
           }
 
