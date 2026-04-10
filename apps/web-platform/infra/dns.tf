@@ -1,3 +1,41 @@
+# Import blocks for records created via Cloudflare dashboard or API before Terraform management.
+# These are one-time imports — Terraform removes them from state after the first successful apply.
+
+import {
+  to = cloudflare_record.spf_root
+  id = "5af02a2f394e9ba6e0ea23c381a26b67/adcc69ef6ae1813f8b19f5b383764ae3"
+}
+
+import {
+  to = cloudflare_record.github_pages["185.199.108.153"]
+  id = "5af02a2f394e9ba6e0ea23c381a26b67/7064d3cc315b2eb989e2daba6d9753f6"
+}
+
+import {
+  to = cloudflare_record.github_pages["185.199.109.153"]
+  id = "5af02a2f394e9ba6e0ea23c381a26b67/65900bd45527fd31430a1186a15d5cc9"
+}
+
+import {
+  to = cloudflare_record.github_pages["185.199.110.153"]
+  id = "5af02a2f394e9ba6e0ea23c381a26b67/ebbc9e4264be0db57c22f7d603279ce0"
+}
+
+import {
+  to = cloudflare_record.github_pages["185.199.111.153"]
+  id = "5af02a2f394e9ba6e0ea23c381a26b67/3f4e591596966cb5af642d17f699b451"
+}
+
+import {
+  to = cloudflare_record.www
+  id = "5af02a2f394e9ba6e0ea23c381a26b67/b1bd16f69fff661a1308532face3e873"
+}
+
+import {
+  to = cloudflare_record.github_pages_challenge
+  id = "5af02a2f394e9ba6e0ea23c381a26b67/f85fc17419e58c9794fdcd2e016cc2cf"
+}
+
 resource "cloudflare_record" "app" {
   zone_id = var.cf_zone_id
   name    = "app"
@@ -8,9 +46,7 @@ resource "cloudflare_record" "app" {
 }
 
 # Deploy webhook endpoint routed through Cloudflare Tunnel (see #749).
-
 # Protected by CF Access service token + HMAC signature validation.
-
 resource "cloudflare_record" "deploy" {
   zone_id = var.cf_zone_id
   name    = "deploy"
@@ -48,7 +84,6 @@ resource "cloudflare_record" "mx_send" {
 }
 
 # DNS records for send.soleur.ai subdomain (Resend HTTP API — ops notifications)
-
 resource "cloudflare_record" "dkim_resend_send" {
   zone_id = var.cf_zone_id
   name    = "resend._domainkey.send"
@@ -83,9 +118,7 @@ resource "cloudflare_record" "dmarc" {
 }
 
 # Supabase custom domain -- branded API endpoint for OAuth callbacks and client connections.
-
 # Must NOT be proxied: Supabase needs direct DNS for SSL certificate verification.
-
 resource "cloudflare_record" "supabase_custom_domain" {
   zone_id = var.cf_zone_id
   name    = "api"
@@ -96,9 +129,7 @@ resource "cloudflare_record" "supabase_custom_domain" {
 }
 
 # ACME challenge for Supabase custom domain SSL certificate verification.
-
 # Value from `supabase domains create` output.
-
 resource "cloudflare_record" "supabase_acme_challenge" {
   zone_id = var.cf_zone_id
   name    = "_acme-challenge.api"
@@ -108,11 +139,8 @@ resource "cloudflare_record" "supabase_acme_challenge" {
 }
 
 # SPF hard-fail for root domain -- soleur.ai does not send email directly.
-
 # Prevents spoofing of @soleur.ai addresses. Sending domains (send.soleur.ai)
-
 # have their own SPF records with amazonses.com include.
-
 resource "cloudflare_record" "spf_root" {
   zone_id = var.cf_zone_id
   name    = "soleur.ai"
@@ -122,7 +150,6 @@ resource "cloudflare_record" "spf_root" {
 }
 
 # Google Search Console domain verification (required for OAuth consent screen branding, see #1398)
-
 resource "cloudflare_record" "google_site_verification" {
   zone_id = var.cf_zone_id
   name    = "soleur.ai" # Use FQDN, not "@" -- CF API normalizes @ to FQDN, causing perpetual drift
@@ -132,40 +159,18 @@ resource "cloudflare_record" "google_site_verification" {
 }
 
 # GitHub Pages -- docs site (soleur.ai apex + www redirect)
-
 # These records were previously created via dashboard; imported to Terraform for IaC governance.
+resource "cloudflare_record" "github_pages" {
+  for_each = toset([
+    "185.199.108.153",
+    "185.199.109.153",
+    "185.199.110.153",
+    "185.199.111.153",
+  ])
 
-resource "cloudflare_record" "github_pages_1" {
   zone_id = var.cf_zone_id
   name    = "soleur.ai"
-  content = "185.199.108.153"
-  type    = "A"
-  proxied = true
-  ttl     = 1
-}
-
-resource "cloudflare_record" "github_pages_2" {
-  zone_id = var.cf_zone_id
-  name    = "soleur.ai"
-  content = "185.199.109.153"
-  type    = "A"
-  proxied = true
-  ttl     = 1
-}
-
-resource "cloudflare_record" "github_pages_3" {
-  zone_id = var.cf_zone_id
-  name    = "soleur.ai"
-  content = "185.199.110.153"
-  type    = "A"
-  proxied = true
-  ttl     = 1
-}
-
-resource "cloudflare_record" "github_pages_4" {
-  zone_id = var.cf_zone_id
-  name    = "soleur.ai"
-  content = "185.199.111.153"
+  content = each.value
   type    = "A"
   proxied = true
   ttl     = 1
@@ -189,9 +194,7 @@ resource "cloudflare_record" "github_pages_challenge" {
 }
 
 # Buttondown managed sending domain -- NS delegation for mail.soleur.ai
-
 # Buttondown manages DKIM/SPF/MX records within this subdomain automatically.
-
 resource "cloudflare_record" "buttondown_ns1" {
   zone_id = var.cf_zone_id
   name    = "mail"
