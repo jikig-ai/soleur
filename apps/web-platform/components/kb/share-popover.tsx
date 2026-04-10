@@ -7,7 +7,7 @@ interface SharePopoverProps {
 }
 
 interface ShareState {
-  status: "idle" | "loading" | "active" | "revoked";
+  status: "idle" | "loading" | "active";
   token: string | null;
   url: string | null;
   copied: boolean;

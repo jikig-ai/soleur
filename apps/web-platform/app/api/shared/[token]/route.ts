@@ -72,7 +72,6 @@ export async function GET(
     );
     return NextResponse.json({
       content: result.content,
-      frontmatter: result.frontmatter,
       path: shareLink.document_path,
     });
   } catch (err) {

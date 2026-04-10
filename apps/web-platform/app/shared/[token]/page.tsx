@@ -2,12 +2,11 @@
 
 import { useState, useEffect, use } from "react";
 import Link from "next/link";
-import { SharedMarkdownRenderer } from "@/components/shared/shared-markdown-renderer";
+import { MarkdownRenderer } from "@/components/ui/markdown-renderer";
 import { CtaBanner } from "@/components/shared/cta-banner";
 
 interface SharedContent {
   content: string;
-  frontmatter: Record<string, unknown>;
   path: string;
 }
 
@@ -102,7 +101,7 @@ export default function SharedDocumentPage({
 
             {data && (
               <article className="prose-kb">
-                <SharedMarkdownRenderer content={data.content} />
+                <MarkdownRenderer content={data.content} nofollow />
               </article>
             )}
           </div>

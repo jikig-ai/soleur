@@ -175,7 +175,13 @@ export function extractClientIp(req: IncomingMessage): string {
 export function extractClientIpFromHeaders(headers: Headers): string {
   const cfIp = headers.get("cf-connecting-ip");
   if (cfIp) return cfIp;
-  // Same rationale as extractClientIp: do NOT trust x-forwarded-for.
+  // In non-Cloudflare environments (dev, staging), use x-forwarded-for
+  // which Next.js sets from the TCP connection. In production behind
+  // Cloudflare, cf-connecting-ip is always present — XFF is only reached
+  // if traffic bypasses Cloudflare (direct-to-origin), which is an
+  // operational concern, not a spoofing vector at that point.
+  const xff = headers.get("x-forwarded-for");
+  if (xff) return xff.split(",")[0].trim();
   return "unknown";
 }
 

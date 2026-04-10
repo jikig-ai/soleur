@@ -38,9 +38,14 @@ describe("extractClientIpFromHeaders", () => {
     expect(extractClientIpFromHeaders(headers)).toBe("unknown");
   });
 
-  test("ignores x-forwarded-for (not trusted)", () => {
+  test("falls back to x-forwarded-for when cf-connecting-ip absent", () => {
     const headers = new Headers({ "x-forwarded-for": "5.6.7.8" });
-    expect(extractClientIpFromHeaders(headers)).toBe("unknown");
+    expect(extractClientIpFromHeaders(headers)).toBe("5.6.7.8");
+  });
+
+  test("uses first IP from x-forwarded-for chain", () => {
+    const headers = new Headers({ "x-forwarded-for": "1.1.1.1, 2.2.2.2" });
+    expect(extractClientIpFromHeaders(headers)).toBe("1.1.1.1");
   });
 });
 
