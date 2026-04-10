@@ -145,9 +145,9 @@ If either check fails, investigate whether the migration was applied. Check:
 
 ## Acceptance Criteria
 
-- [ ] REST API query to `conversations` table returns a valid JSON response (table exists, RLS active)
-- [ ] `pg_class.relreplident` for `conversations` is `f` (FULL)
-- [ ] GitHub issue #1766 closed with verification comment
+- [x] REST API query to `conversations` table returns a valid JSON response (table exists, RLS active)
+- [x] `pg_class.relreplident` for `conversations` is `f` (FULL)
+- [x] GitHub issue #1766 closed with verification comment
 
 ## Test Scenarios
 
