@@ -91,12 +91,15 @@ export async function POST(request: Request) {
   const userName = user.user_metadata?.full_name ?? user.email?.split("@")[0] ?? "Soleur User";
   const userEmail = userData.email ?? user.email ?? "";
 
+  const isStartFresh = body.source === "start_fresh";
+
   provisionWorkspaceWithRepo(
     user.id,
     repoUrl,
     userData.github_installation_id,
     userName,
     userEmail,
+    { suppressWelcomeHook: isStartFresh },
   )
     .then(async (workspacePath) => {
       const { error } = await serviceClient
