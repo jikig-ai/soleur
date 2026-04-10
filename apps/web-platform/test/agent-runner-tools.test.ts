@@ -170,6 +170,7 @@ describe("agent-runner MCP tool wiring", () => {
             context7: { type: "http", url: "https://mcp.context7.com/mcp" },
             cloudflare: { type: "http", url: "https://mcp.cloudflare.com/mcp" },
             vercel: { type: "http", url: "https://mcp.vercel.com" },
+            stripe: { type: "http", url: "https://mcp.stripe.com" },
           },
         });
       }
@@ -414,6 +415,7 @@ describe("agent-runner MCP tool wiring", () => {
     expect(options.allowedTools).toContain("mcp__plugin_soleur_cloudflare__*");
     expect(options.allowedTools).toContain("mcp__plugin_soleur_context7__*");
     expect(options.allowedTools).toContain("mcp__plugin_soleur_vercel__*");
+    expect(options.allowedTools).toContain("mcp__plugin_soleur_stripe__*");
   });
 
   test("canUseTool still denies non-mcp unrecognized tools", async () => {

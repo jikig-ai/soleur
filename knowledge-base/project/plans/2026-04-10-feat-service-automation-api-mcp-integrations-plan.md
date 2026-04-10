@@ -462,8 +462,8 @@ This creates a virtuous cycle: the first time is guided, subsequent interactions
 ### Functional Requirements
 
 - [x] Plugin MCP tools (Cloudflare, Stripe) are authorized by `canUseTool` via explicit allowlist (Phase 0)
-- [ ] Agent can provision Cloudflare zones via MCP tools (Cloudflare MCP server accessible)
-- [ ] Agent can create Stripe products/prices via MCP tools (Stripe MCP server accessible)
+- [x] Agent can provision Cloudflare zones via MCP tools (Cloudflare MCP server accessible)
+- [x] Agent can create Stripe products/prices via MCP tools (Stripe MCP server accessible)
 - [ ] Agent can create Plausible sites and goals via in-process API tools
 - [ ] Agent falls back to guided instructions when no token is stored for a service
 - [ ] Guided instructions include deep links to service configuration pages
