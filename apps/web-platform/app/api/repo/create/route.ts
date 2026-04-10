@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import * as Sentry from "@sentry/nextjs";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { validateOrigin, rejectCsrf } from "@/lib/auth/validate-origin";
-import { createRepo } from "@/server/github-app";
+import { createRepo, GitHubApiError } from "@/server/github-app";
 import logger from "@/server/logger";
 
 /**
@@ -66,14 +66,23 @@ export async function POST(request: Request) {
     );
     return NextResponse.json(result);
   } catch (err) {
+    if (err instanceof GitHubApiError && (err.statusCode === 422 || err.statusCode === 403)) {
+      const status = err.statusCode === 422 ? 409 : 403;
+      logger.warn(
+        { statusCode: err.statusCode, userId: user.id, repoName: name },
+        "GitHub API rejected repo creation (user-correctable)",
+      );
+      return NextResponse.json({ error: err.message }, { status });
+    }
+
     logger.error(
       { err, userId: user.id, repoName: name },
       "Failed to create repository",
     );
     Sentry.captureException(err);
-    const message = err instanceof Error ? err.message : "Failed to create repository";
+
     return NextResponse.json(
-      { error: message },
+      { error: "Failed to create repository" },
       { status: 500 },
     );
   }
