@@ -115,6 +115,23 @@ export async function GET(request: Request) {
     return redirectWithDeletedCookie(ERROR_REDIRECT, request);
   }
 
+  // --- Revoke the access token (fire-and-forget) ---
+  // The token has no scopes but revoking it limits the window for misuse.
+  // Uses DELETE /applications/{client_id}/token with Basic auth.
+  try {
+    await fetch(`https://api.github.com/applications/${clientId}/token`, {
+      method: "DELETE",
+      headers: {
+        Authorization: `Basic ${btoa(`${clientId}:${clientSecret}`)}`,
+        Accept: "application/vnd.github+json",
+      },
+      body: JSON.stringify({ access_token: accessToken }),
+    });
+  } catch {
+    // Best-effort — don't fail the flow if revocation fails
+    logger.warn("GitHub resolve callback: token revocation failed (non-fatal)");
+  }
+
   // --- Get authenticated user ---
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
