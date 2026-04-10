@@ -57,6 +57,7 @@ This repository contains the Soleur Claude Code plugin. Detailed conventions liv
 - Ensure dependencies are installed at the correct package level (not just root) before tests or CI. Check subdirectories like `agent-browser/` or app-level packages.
 - For production debugging, use observability tools — never SSH for logs. Priority: (1) Sentry API (`SENTRY_API_TOKEN` from Doppler `prd`), (2) Better Stack, (3) `/health` endpoint. SSH is for infrastructure provisioning only.
 - When lefthook hangs in a worktree (>60s), kill (`pkill -f "lefthook run"`), verify checks manually, commit with `LEFTHOOK=0`. Known lefthook/worktree bug.
+- Before calling `mcp__pencil__open_document`, ensure the target .pen file is committed in git [hook-enforced: pencil-open-guard.sh]. Untracked .pen files have no recovery path — `open_document` can silently overwrite them with an empty document.
 - Playwright MCP uses `--isolated` mode (`.mcp.json`). If singleton lock fails, kill Chrome processes. Do not remove `--isolated` — required for parallel sessions.
 - After completing a Playwright task, call `browser_close` [hook-enforced: browser-cleanup-hook.sh].
 - Before pushing `package.json` changes, verify deps are in the correct `package.json` (app-level, not just root) and both `bun.lock` and `package-lock.json` are regenerated if both exist (Dockerfile uses `npm ci`).
