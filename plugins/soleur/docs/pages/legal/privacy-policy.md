@@ -2,7 +2,7 @@
 title: "Privacy Policy"
 description: "How Soleur handles data with its local-first architecture."
 layout: base.njk
-permalink: pages/legal/privacy-policy.html
+permalink: legal/privacy-policy/
 ---
 
 <section class="page-hero">
@@ -277,7 +277,7 @@ The Soleur Plugin does not use cookies.
 
 The Docs Site, hosted on GitHub Pages, may use cookies as determined by GitHub's platform. Soleur does not add any first-party cookies to the Docs Site. For details on GitHub's cookie practices, see [GitHub's cookie documentation](https://docs.github.com/en/site-policy/privacy-policies/github-cookies).
 
-The Web Platform at app.soleur.ai uses strictly necessary cookies for authentication (Supabase session cookies) and payment security (Stripe fraud prevention cookies). These cookies are exempt from consent requirements under ePrivacy Directive Article 5(3). For full details, see the [Cookie Policy](/pages/legal/cookie-policy.html).
+The Web Platform at app.soleur.ai uses strictly necessary cookies for authentication (Supabase session cookies) and payment security (Stripe fraud prevention cookies). These cookies are exempt from consent requirements under ePrivacy Directive Article 5(3). For full details, see the [Cookie Policy](/legal/cookie-policy/).
 
 ## 13. Changes to This Policy
 
@@ -302,7 +302,7 @@ To exercise your data subject rights under GDPR, send a written request to <lega
 
 ---
 
-> **Related documents:** This Privacy Policy should be read alongside the companion [Cookie Policy](/pages/legal/cookie-policy.html) for detailed information about cookies used by the Docs Site (GitHub Pages), the [GDPR Policy](/pages/legal/gdpr-policy.html) for detailed GDPR-specific disclosures, and the [Individual Contributor License Agreement](/pages/legal/individual-cla.html) for details on contributor data processing.
+> **Related documents:** This Privacy Policy should be read alongside the companion [Cookie Policy](/legal/cookie-policy/) for detailed information about cookies used by the Docs Site (GitHub Pages), the [GDPR Policy](/legal/gdpr-policy/) for detailed GDPR-specific disclosures, and the [Individual Contributor License Agreement](/legal/individual-cla/) for details on contributor data processing.
 
     </div>
   </div>
