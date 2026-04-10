@@ -33,15 +33,15 @@ infrastructure).
 
 ## Acceptance Criteria
 
-- [ ] Verify Terraform config on latest main matches the intended changes
+- [x] Verify Terraform config on latest main matches the intended changes
       (DMARC reject, Cloudflare-only firewall IPs) -- no code changes needed
-- [ ] Run `terraform plan` locally to confirm exactly 2 changes, 0 adds, 0
+- [x] Run `terraform plan` locally to confirm exactly 2 changes, 0 adds, 0
       destroys
-- [ ] Run `terraform apply` to push the desired state to live infrastructure
-- [ ] Verify DMARC record via DNS query shows `p=reject`
-- [ ] Verify HTTP/HTTPS connectivity through Cloudflare proxy still works
+- [x] Run `terraform apply` to push the desired state to live infrastructure
+- [x] Verify DMARC record via DNS query shows `p=reject`
+- [x] Verify HTTP/HTTPS connectivity through Cloudflare proxy still works
       (health check)
-- [ ] Close issue #1899 after successful apply
+- [x] Close issue #1899 after successful apply
 
 ## Test Scenarios
 
@@ -63,19 +63,31 @@ git fetch origin
 git merge origin/main
 ```
 
-### 2. Run Terraform plan
+### 2. Initialize and run Terraform plan
 
-From `apps/web-platform/infra/`, run the plan with Doppler credentials to
+From `apps/web-platform/infra/`, initialize Terraform (required for backend
+auth and provider download), then run the plan with Doppler credentials to
 confirm the expected 2 changes.
 
-Per AGENTS.md, use the nested Doppler invocation pattern:
+Per AGENTS.md, export R2 backend credentials separately (the name transformer
+renames them to `TF_VAR_*` which the backend ignores), then use the nested
+Doppler invocation pattern. Generate a throwaway SSH key for the `ssh_key_path`
+variable (matches the drift workflow pattern):
 
 ```text
 cd apps/web-platform/infra
+ssh-keygen -t ed25519 -f /tmp/ci_ssh_key -N "" -q
+
+# Export R2 backend credentials (plain names, not TF_VAR_*)
+export AWS_ACCESS_KEY_ID=$(doppler secrets get AWS_ACCESS_KEY_ID -p soleur -c prd_terraform --plain)
+export AWS_SECRET_ACCESS_KEY=$(doppler secrets get AWS_SECRET_ACCESS_KEY -p soleur -c prd_terraform --plain)
+
+terraform init -input=false
+
 doppler run --project soleur --config prd_terraform -- \
   doppler run --token "$(doppler configure get token --plain)" \
     --project soleur --config prd_terraform --name-transformer tf-var -- \
-  terraform plan -input=false
+  terraform plan -input=false -var="ssh_key_path=/tmp/ci_ssh_key.pub"
 ```
 
 **Gate:** The plan must show exactly `0 to add, 2 to change, 0 to destroy`.
@@ -91,7 +103,7 @@ hardening from PR #1869.
 doppler run --project soleur --config prd_terraform -- \
   doppler run --token "$(doppler configure get token --plain)" \
     --project soleur --config prd_terraform --name-transformer tf-var -- \
-  terraform apply -auto-approve -input=false
+  terraform apply -auto-approve -input=false -var="ssh_key_path=/tmp/ci_ssh_key.pub"
 ```
 
 ### 4. Verify
