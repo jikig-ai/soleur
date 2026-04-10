@@ -22,6 +22,10 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
+# Resolve this script's own directory so callers inside worktrees can reference it
+# without knowing where plugins/ lives relative to their CWD.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 # Auto-confirm flag (--yes skips all interactive prompts)
 YES_FLAG=false
 
@@ -315,6 +319,20 @@ create_worktree() {
   # git worktree add on bare repos writes core.bare=false to shared config — fix it
   ensure_bare_config
 
+  # Verify the worktree was actually created (git worktree add can silently fail on bare repos)
+  local actual_toplevel
+  if ! actual_toplevel=$(git -C "$worktree_path" rev-parse --show-toplevel 2>/dev/null); then
+    echo -e "${RED}Error: Worktree creation failed — $worktree_path is not a valid git worktree${NC}"
+    echo -e "${YELLOW}Hint: Try 'git worktree add $worktree_path -b $branch_name $from_branch' directly${NC}"
+    git worktree remove "$worktree_path" --force 2>/dev/null || rm -rf "$worktree_path" 2>/dev/null || true
+    exit 1
+  fi
+  if [[ "$actual_toplevel" != "$worktree_path" ]]; then
+    echo -e "${RED}Error: Worktree path mismatch — expected $worktree_path, got $actual_toplevel${NC}"
+    git worktree remove "$worktree_path" --force 2>/dev/null || rm -rf "$worktree_path" 2>/dev/null || true
+    exit 1
+  fi
+
   # Copy environment files
   copy_env_files "$worktree_path"
 
@@ -372,6 +390,20 @@ create_for_feature() {
   # git worktree add on bare repos writes core.bare=false to shared config — fix it
   ensure_bare_config
 
+  # Verify the worktree was actually created (git worktree add can silently fail on bare repos)
+  local actual_toplevel
+  if ! actual_toplevel=$(git -C "$worktree_path" rev-parse --show-toplevel 2>/dev/null); then
+    echo -e "${RED}Error: Worktree creation failed — $worktree_path is not a valid git worktree${NC}"
+    echo -e "${YELLOW}Hint: Try 'git worktree add $worktree_path -b $branch_name $from_branch' directly${NC}"
+    git worktree remove "$worktree_path" --force 2>/dev/null || rm -rf "$worktree_path" 2>/dev/null || true
+    exit 1
+  fi
+  if [[ "$actual_toplevel" != "$worktree_path" ]]; then
+    echo -e "${RED}Error: Worktree path mismatch — expected $worktree_path, got $actual_toplevel${NC}"
+    git worktree remove "$worktree_path" --force 2>/dev/null || rm -rf "$worktree_path" 2>/dev/null || true
+    exit 1
+  fi
+
   # Create spec directory in main repo (shared across worktrees)
   if [[ -d "$GIT_ROOT/knowledge-base" ]]; then
     mkdir -p "$spec_dir"
@@ -390,6 +422,7 @@ create_for_feature() {
   echo "Next steps:"
   echo -e "  1. ${BLUE}cd $worktree_path${NC}"
   echo -e "  2. Create spec: ${BLUE}knowledge-base/project/specs/$branch_name/spec.md${NC}"
+  echo -e "  3. Open draft PR: ${BLUE}bash $SCRIPT_DIR/worktree-manager.sh draft-pr${NC}"
   echo ""
 }
 
