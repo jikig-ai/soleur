@@ -1,5 +1,5 @@
 ---
-last_updated: 2026-04-06
+last_updated: 2026-04-10
 last_reviewed: 2026-04-06
 review_cadence: weekly
 owner: CPO
@@ -67,16 +67,16 @@ This roadmap was reviewed by CTO, CLO, CFO, and CMO before finalization.
 
 ---
 
-## Current State (2026-04-03)
+## Current State (2026-04-10)
 
 | Dimension | Status |
 |-----------|--------|
-| Phase 1 (Close the Loop) | Complete. Milestone closed. All 15 issues closed. |
-| Phase 2 (Secure for Beta) | Complete. Milestone closed. All 20 issues closed (including #1375). |
-| Phase 3 (Make it Sticky) | In progress. 11 open, 2 closed. |
-| Phase 4 (Validate + Scale) | Not started. 18 open, 9 closed. |
-| Phase 5 (Desktop Native App) | Defined. 5 issues created (#1423-#1429). Trigger-gated on user demand. |
-| Post-MVP / Later | 56 open, 75 closed. |
+| Phase 1 (Close the Loop) | Complete. Milestone closed. 0 open, 15 closed. |
+| Phase 2 (Secure for Beta) | Complete. Milestone closed. 0 open, 20 closed. |
+| Phase 3 (Make it Sticky) | In progress. 12 open, 27 closed. |
+| Phase 4 (Validate + Scale) | Not started. 16 open, 11 closed. |
+| Phase 5 (Desktop Native App) | Defined. 5 open, 0 closed. Trigger-gated on user demand. |
+| Post-MVP / Later | 73 open, 265 closed. |
 | Beta users | 0 |
 | Pricing gates passed | 0 of 5 |
 

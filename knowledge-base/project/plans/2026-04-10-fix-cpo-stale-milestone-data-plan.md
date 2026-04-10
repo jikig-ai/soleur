@@ -134,14 +134,14 @@ Also update the `last_updated` frontmatter field to `2026-04-10`.
 
 ## Acceptance Criteria
 
-- [ ] CPO agent runs `gh api milestones` (both open and closed states) BEFORE any roadmap.md reads or phase status assertions
-- [ ] CPO agent instruction explicitly states: trust API over file when they conflict, flag staleness
-- [ ] CPO agent does NOT use `--paginate` on milestones query (avoids concatenated-array footgun per constitution.md line 29)
-- [ ] The old "Roadmap consistency check" bullet is REPLACED (not duplicated) -- only one instruction references `gh api milestones`
-- [ ] AGENTS.md has a workflow gate requiring roadmap.md Current State update when closing milestones
-- [ ] roadmap.md Current State section date updated to 2026-04-10
-- [ ] roadmap.md Current State numbers match current GitHub API output (re-queried at implementation time, not copied from plan)
-- [ ] roadmap.md `last_updated` frontmatter updated to 2026-04-10
+- [x] CPO agent runs `gh api milestones` (both open and closed states) BEFORE any roadmap.md reads or phase status assertions
+- [x] CPO agent instruction explicitly states: trust API over file when they conflict, flag staleness
+- [x] CPO agent does NOT use `--paginate` on milestones query (avoids concatenated-array footgun per constitution.md line 29)
+- [x] The old "Roadmap consistency check" bullet is REPLACED (not duplicated) -- only one instruction references `gh api milestones`
+- [x] AGENTS.md has a workflow gate requiring roadmap.md Current State update when closing milestones
+- [x] roadmap.md Current State section date updated to 2026-04-10
+- [x] roadmap.md Current State numbers match current GitHub API output (re-queried at implementation time, not copied from plan)
+- [x] roadmap.md `last_updated` frontmatter updated to 2026-04-10
 
 ## Test Scenarios
 

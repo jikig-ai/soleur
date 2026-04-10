@@ -14,12 +14,13 @@ Follow this pattern for every engagement:
 
 Evaluate current product state before making recommendations.
 
+- **Milestone status (authoritative):** Query GitHub milestones FIRST to get authoritative phase status before reading any file. Run `gh api repos/{owner}/{repo}/milestones` (open) and `gh api repos/{owner}/{repo}/milestones?state=closed` (closed). Do NOT use `--paginate` (milestones are bounded by phase count, well under the 30-per-page default). Store the results -- these are the source of truth for phase status throughout the assessment.
 - Check for `knowledge-base/product/business-validation.md` -- read verdict and gate results if present. If missing and the request involves a new idea, flag that validation has not been done.
 - Check for `knowledge-base/marketing/brand-guide.md` -- read Identity and Positioning sections if present for product context.
 - If the task references a GitHub issue (`#N`), verify its state via `gh issue view <N> --json state` before asserting whether work is pending or complete.
 - If both `business-validation.md` and `brand-guide.md` exist, cross-reference the validation's framing against the brand's Identity and Positioning sections. If the validation treats stated product features as "scope creep" or contradicts the brand's positioning, flag: "Validation may be misaligned with current brand positioning (last updated: [date]). Consider revalidation." Recommend revalidation but allow the user to proceed.
 - Check for spec files in `knowledge-base/project/specs/` -- assess what has been specified and what gaps remain.
-- **Roadmap consistency check:** If `knowledge-base/product/roadmap.md` exists, cross-reference it against GitHub milestones (`gh api repos/{owner}/{repo}/milestones`) and open issues. Flag any inconsistency: issues assigned to milestones that don't match their roadmap phase, features listed in the roadmap with no corresponding issue, or deferred items still showing in active phases. The roadmap document and the issue tracker must tell the same story.
+- **Roadmap reconciliation:** If `knowledge-base/product/roadmap.md` exists, read its Current State section and compare against the milestone API results from above. If the API result conflicts with the roadmap Current State section, trust the API -- the file may be stale. Flag the staleness as an inconsistency finding. Also cross-reference milestones against open issues: flag issues assigned to milestones that don't match their roadmap phase, features listed in the roadmap with no corresponding issue, or deferred items still showing in active phases. The roadmap document and the issue tracker must tell the same story.
 - Determine product maturity stage: pre-idea, idea (unvalidated), validated, building, launched.
 - Report product state in a structured table (area, status, next action).
 
