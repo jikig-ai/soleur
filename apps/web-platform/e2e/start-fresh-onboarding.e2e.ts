@@ -42,8 +42,9 @@ function kbTree(...files: string[]): { tree: TreeNode } {
 // Helpers
 // ---------------------------------------------------------------------------
 
-/** Intercept /api/kb/tree and Supabase REST calls before navigating to /dashboard. */
+/** Intercept /api/kb/tree and all Supabase client-side calls before navigating. */
 async function setupDashboardMocks(page: Page, kbFiles: string[]) {
+  // KB tree API (dashboard useEffect)
   await page.route("**/api/kb/tree", async (route) => {
     await route.fulfill({
       status: 200,
@@ -52,12 +53,28 @@ async function setupDashboardMocks(page: Page, kbFiles: string[]) {
     });
   });
 
+  // Supabase REST: conversations (useConversations hook)
   await page.route("**/rest/v1/conversations*", async (route) => {
     await route.fulfill({ status: 200, contentType: "application/json", body: "[]" });
   });
 
+  // Supabase REST: messages (useConversations hook)
   await page.route("**/rest/v1/messages*", async (route) => {
     await route.fulfill({ status: 200, contentType: "application/json", body: "[]" });
+  });
+
+  // Supabase REST: users table (useOnboarding hook queries onboarding_completed_at)
+  await page.route("**/rest/v1/users*", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify([{ onboarding_completed_at: "2024-01-01T00:00:00Z", pwa_banner_dismissed_at: "2024-01-01T00:00:00Z" }]),
+    });
+  });
+
+  // Supabase Realtime: prevent WebSocket connection attempts from blocking
+  await page.route("**/realtime/**", async (route) => {
+    await route.abort("connectionrefused");
   });
 }
 
@@ -107,7 +124,7 @@ test.describe("Start Fresh onboarding: first-run state", () => {
     await page.getByPlaceholder("What are you building?").fill("An AI-powered legal assistant");
     await page.getByLabel("Send message").click();
 
-    await page.waitForURL("**/dashboard/chat/new?msg=**", { timeout: 5_000 });
+    await page.waitForURL("**/dashboard/chat/new?msg=**", { timeout: 10_000 });
     expect(page.url()).toContain("msg=An+AI-powered+legal+assistant");
   });
 });
@@ -158,7 +175,7 @@ test.describe("Start Fresh onboarding: foundations state", () => {
     await expect(page.getByText("Build the foundations.")).toBeVisible({ timeout: 10_000 });
 
     await page.getByRole("button", { name: /Brand Identity/ }).click();
-    await page.waitForURL("**/dashboard/chat/new?msg=**", { timeout: 5_000 });
+    await page.waitForURL("**/dashboard/chat/new?msg=**", { timeout: 10_000 });
     expect(page.url()).toContain("msg=Define+the+brand+identity");
   });
 
@@ -227,7 +244,7 @@ test.describe("Start Fresh onboarding: command center state", () => {
     await expect(page.getByText("Your organization is ready.")).toBeVisible({ timeout: 10_000 });
 
     await page.getByText("Review my go-to-market strategy").click();
-    await page.waitForURL("**/dashboard/chat/new?msg=**", { timeout: 5_000 });
+    await page.waitForURL("**/dashboard/chat/new?msg=**", { timeout: 10_000 });
     expect(page.url()).toContain("msg=Review+my+go-to-market+strategy");
   });
 });

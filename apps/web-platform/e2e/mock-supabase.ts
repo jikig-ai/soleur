@@ -65,6 +65,15 @@ export function startMockSupabase(port: number): Promise<http.Server> {
       // ---- Auth endpoints ----
 
       if (url.pathname === "/auth/v1/user") {
+        // Only return a user if an Authorization header is present.
+        // Without this check, unauthenticated pages (login, signup) get
+        // unexpected "authenticated" responses from the client-side Supabase.
+        const auth = req.headers.authorization ?? "";
+        if (!auth.startsWith("Bearer ")) {
+          res.writeHead(401);
+          res.end(JSON.stringify({ error: "unauthorized", message: "No authorization header" }));
+          return;
+        }
         res.writeHead(200);
         res.end(JSON.stringify(MOCK_USER));
         return;
