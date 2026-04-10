@@ -27,9 +27,10 @@ GIT_ROOT=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null | s
 # If file path is inside a worktree, allow it (correct behavior)
 [[ "$FILE_PATH" == *"/.worktrees/"* ]] && exit 0
 
-# Allow writes to .claude/ directory (settings, hooks, memory)
+# Allow writes to .claude/ and .openhands/ directories (settings, hooks, memory)
 RELATIVE_PATH="${FILE_PATH#"$GIT_ROOT"/}"
 [[ "$RELATIVE_PATH" == .claude/* ]] && exit 0
+[[ "$RELATIVE_PATH" == .openhands/* ]] && exit 0
 
 # Check if any worktrees exist
 WORKTREE_DIR="$GIT_ROOT/.worktrees"
