@@ -22,6 +22,7 @@ import { abortableReviewGate, validateSelection, extractReviewGateInput, buildRe
 import { createChildLogger } from "./logger";
 import { syncPull, syncPush } from "./session-sync";
 import { createPullRequest } from "./github-app";
+import { plausibleCreateSite, plausibleAddGoal, plausibleGetStats } from "./service-tools";
 import { tryCreateVision, buildVisionEnhancementPrompt } from "./vision-helpers";
 
 const log = createChildLogger("agent");
@@ -391,6 +392,20 @@ export async function startAgentSession(
     const workspacePath = user.workspace_path;
     const pluginPath = path.join(workspacePath, "plugins", "soleur");
 
+    // Extract MCP server names from plugin.json for canUseTool allowlisting.
+    // Uses explicit server-name matching (not blanket mcp__ prefix).
+    // See learning: 2026-04-06-mcp-tool-canusertool-scope-allowlist.md
+    let pluginMcpServerNames: string[] = [];
+    try {
+      const pluginJsonPath = path.join(pluginPath, ".claude-plugin", "plugin.json");
+      const pluginJson = JSON.parse(readFileSync(pluginJsonPath, "utf-8"));
+      if (pluginJson.mcpServers && typeof pluginJson.mcpServers === "object") {
+        pluginMcpServerNames = Object.keys(pluginJson.mcpServers);
+      }
+    } catch {
+      // plugin.json may not exist in all workspaces; proceed without plugin MCP tools
+    }
+
     // Migrate existing workspaces: remove pre-approved permissions that
     // bypass canUseTool (see #725). Safe to run on every session start —
     // no-op for already-migrated workspaces.
@@ -428,6 +443,19 @@ When you need user input for important decisions, use the AskUserQuestion tool.`
       if (enhancement) systemPrompt += enhancement;
     }
 
+    // Inject connected services context for service automation tier selection.
+    // The agent uses this to decide MCP vs API vs guided instructions.
+    // Map env var names to human-readable labels to avoid leaking internals.
+    if (Object.keys(serviceTokens).length > 0) {
+      const envVarToLabel = Object.fromEntries(
+        Object.values(PROVIDER_CONFIG).map((c) => [c.envVar, c.label]),
+      );
+      const serviceList = Object.keys(serviceTokens)
+        .map((envVar) => `- ${envVarToLabel[envVar] ?? envVar}: connected`)
+        .join("\n");
+      systemPrompt += `\n\n## Connected Services\n${serviceList}`;
+    }
+
     // ---------------------------------------------------------------------------
     // In-process MCP server for platform tools (PR creation, etc.)
     // Only available when user has a GitHub App installation with a connected repo.
@@ -437,9 +465,11 @@ When you need user input for important decisions, use the AskUserQuestion tool.`
 
     let mcpServersOption: Record<string, ReturnType<typeof createSdkMcpServer>> | undefined;
     let platformToolNames: string[] = [];
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- SDK uses any for heterogeneous tool arrays
+    const platformTools: Array<ReturnType<typeof tool<any>>> = [];
 
+    // GitHub PR tool: requires GitHub App installation with a connected repo.
     if (installationId && repoUrl) {
-      // Parse owner/repo from repo_url (e.g., "https://github.com/owner/repo")
       let owner: string;
       let repo: string;
       try {
@@ -452,8 +482,6 @@ When you need user input for important decisions, use the AskUserQuestion tool.`
         repo = "";
       }
 
-      // Validate owner/repo contain only safe GitHub name characters
-      // to prevent path-traversal or injection in API URL interpolation.
       const GITHUB_NAME_RE = /^[a-zA-Z0-9._-]+$/;
       if (!GITHUB_NAME_RE.test(owner) || !GITHUB_NAME_RE.test(repo)) {
         owner = "";
@@ -490,15 +518,65 @@ When you need user input for important decisions, use the AskUserQuestion tool.`
           },
         );
 
-        const toolServer = createSdkMcpServer({
-          name: "soleur_platform",
-          version: "1.0.0",
-          tools: [createPr],
-        });
-
-        mcpServersOption = { soleur_platform: toolServer };
-        platformToolNames = ["mcp__soleur_platform__create_pull_request"];
+        platformTools.push(createPr);
+        platformToolNames.push("mcp__soleur_platform__create_pull_request");
       }
+    }
+
+    // Service tools: registered independently of GitHub installation.
+    // Users with stored API keys get tools even without a connected repo.
+    const plausibleKey = serviceTokens.PLAUSIBLE_API_KEY;
+    if (plausibleKey) {
+      const wrapResult = (result: { success: boolean; data?: unknown; error?: string }) => ({
+        content: [{ type: "text" as const, text: JSON.stringify(result) }],
+        ...(result.success ? {} : { isError: true }),
+      });
+
+      platformTools.push(
+        tool(
+          "plausible_create_site",
+          "Create a new site in Plausible Analytics. Returns the created site metadata.",
+          {
+            domain: z.string().describe("Domain name for the site (e.g., example.com)"),
+            timezone: z.string().default("UTC").describe("Timezone for the site"),
+          },
+          async (args) => wrapResult(await plausibleCreateSite(plausibleKey, args.domain, args.timezone)),
+        ),
+        tool(
+          "plausible_add_goal",
+          "Add a conversion goal to a Plausible Analytics site. Uses PUT with upsert semantics (safely idempotent).",
+          {
+            site_id: z.string().describe("Domain of the site (e.g., example.com)"),
+            goal_type: z.enum(["event", "page"]).describe("Type of goal"),
+            value: z.string().describe("Event name (for event goals) or page path (for page goals)"),
+          },
+          async (args) => wrapResult(await plausibleAddGoal(plausibleKey, args.site_id, args.goal_type, args.value)),
+        ),
+        tool(
+          "plausible_get_stats",
+          "Get aggregate stats for a Plausible Analytics site. Returns visitors, pageviews, bounce rate, and visit duration.",
+          {
+            site_id: z.string().describe("Domain of the site (e.g., example.com)"),
+            period: z.enum(["day", "7d", "30d"]).default("30d").describe("Time period for stats"),
+          },
+          async (args) => wrapResult(await plausibleGetStats(plausibleKey, args.site_id, args.period)),
+        ),
+      );
+      platformToolNames.push(
+        "mcp__soleur_platform__plausible_create_site",
+        "mcp__soleur_platform__plausible_add_goal",
+        "mcp__soleur_platform__plausible_get_stats",
+      );
+    }
+
+    // Build MCP server if any platform tools are registered
+    if (platformTools.length > 0) {
+      const toolServer = createSdkMcpServer({
+        name: "soleur_platform",
+        version: "1.0.0",
+        tools: platformTools,
+      });
+      mcpServersOption = { soleur_platform: toolServer };
     }
 
     // Run the Agent SDK query
@@ -526,7 +604,14 @@ When you need user input for important decisions, use the AskUserQuestion tool.`
         env: buildAgentEnv(apiKey, serviceTokens),
         disallowedTools: ["WebSearch", "WebFetch"],
         ...(mcpServersOption ? { mcpServers: mcpServersOption } : {}),
-        ...(platformToolNames.length > 0 ? { allowedTools: platformToolNames } : {}),
+        ...(platformToolNames.length > 0 || pluginMcpServerNames.length > 0
+          ? {
+              allowedTools: [
+                ...platformToolNames,
+                ...pluginMcpServerNames.map((s) => `mcp__plugin_soleur_${s}__*`),
+              ],
+            }
+          : {}),
         sandbox: {
           enabled: true,
           autoAllowBashIfSandboxed: true,
@@ -670,6 +755,19 @@ When you need user input for important decisions, use the AskUserQuestion tool.`
           // future MCP servers from being auto-allowed without explicit review.
           if (platformToolNames.includes(toolName)) {
             log.info({ sec: true, toolName, agentId: options.agentID }, "MCP tool invoked");
+            return { behavior: "allow" as const };
+          }
+
+          // Allow plugin MCP tools from servers registered in plugin.json.
+          // Uses explicit server-name matching (not blanket mcp__ prefix).
+          // See learning: 2026-04-06-mcp-tool-canusertool-scope-allowlist.md
+          if (
+            toolName.startsWith("mcp__plugin_soleur_") &&
+            pluginMcpServerNames.some((server) =>
+              toolName.startsWith(`mcp__plugin_soleur_${server}__`),
+            )
+          ) {
+            log.info({ sec: true, toolName, agentId: options.agentID }, "Plugin MCP tool invoked");
             return { behavior: "allow" as const };
           }
 
