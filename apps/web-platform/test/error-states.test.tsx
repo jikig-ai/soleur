@@ -105,6 +105,20 @@ vi.mock("next/navigation", () => ({
   usePathname: () => "/dashboard/chat/test-conv",
 }));
 
+vi.mock("@/hooks/use-team-names", () => ({
+  useTeamNames: () => ({
+    names: {},
+    nudgesDismissed: [],
+    namingPromptedAt: null,
+    loading: false,
+    updateName: vi.fn(),
+    dismissNudge: vi.fn(),
+    getDisplayName: (id: string) => id.toUpperCase(),
+    getBadgeLabel: (id: string) => id.toUpperCase().slice(0, 3),
+  }),
+  TeamNamesProvider: ({ children }: { children: React.ReactNode }) => children,
+}));
+
 describe("Error state clearing on remount (#1377)", () => {
   beforeEach(() => {
     mockReconnect.mockClear();
