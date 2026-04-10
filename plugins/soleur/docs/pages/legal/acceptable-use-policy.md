@@ -2,7 +2,7 @@
 title: "Acceptable Use Policy"
 description: "Permitted and prohibited uses of the Soleur platform."
 layout: base.njk
-permalink: pages/legal/acceptable-use-policy.html
+permalink: legal/acceptable-use-policy/
 ---
 
 <section class="page-hero">

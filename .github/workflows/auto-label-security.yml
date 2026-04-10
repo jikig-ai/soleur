@@ -1,0 +1,41 @@
+# Auto-label issues with "sec:" title prefix as type/security.
+# Runs on issue open/edit so security issues are labeled immediately,
+# not waiting for the daily triage cron.
+#
+# Security: Uses github.event.issue.number (integer) only in run: commands.
+# Title matching is done via gh CLI JSON output piped to jq, never
+# interpolated into shell.
+
+name: Auto-label Security Issues
+
+on:
+  issues:
+    types: [opened, edited]
+
+permissions:
+  issues: write
+
+jobs:
+  label-security:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Check title prefix and apply label
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+        run: |
+          gh label create "type/security" --description "Security vulnerability, hardening, or audit finding" --color "DC143C" 2>/dev/null || true
+          TITLE=$(gh issue view "$ISSUE_NUMBER" --json title --jq '.title')
+          if echo "$TITLE" | grep -qi '^sec:'; then
+            HAS_LABEL=$(gh issue view "$ISSUE_NUMBER" --json labels --jq '.labels[].name' | grep -c '^type/security$' || true)
+            if [ "$HAS_LABEL" = "0" ]; then
+              gh issue edit "$ISSUE_NUMBER" --add-label "type/security"
+              echo "Applied type/security label to issue #$ISSUE_NUMBER"
+            else
+              echo "Issue #$ISSUE_NUMBER already has type/security label"
+            fi
+          else
+            echo "Issue #$ISSUE_NUMBER title does not start with sec: -- skipping"
+          fi

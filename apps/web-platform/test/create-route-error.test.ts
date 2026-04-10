@@ -9,14 +9,15 @@ const {
   mockServiceFrom,
   mockCreateRepo,
   mockCaptureException,
-  MockGitHubClientError,
+  GitHubApiError,
 } = vi.hoisted(() => {
-  class _GitHubClientError extends Error {
+  class GitHubApiError extends Error {
     constructor(
       message: string,
       public readonly statusCode: number,
     ) {
       super(message);
+      this.name = "GitHubApiError";
     }
   }
   return {
@@ -24,7 +25,7 @@ const {
     mockServiceFrom: vi.fn(),
     mockCreateRepo: vi.fn(),
     mockCaptureException: vi.fn(),
-    MockGitHubClientError: _GitHubClientError,
+    GitHubApiError,
   };
 });
 
@@ -52,7 +53,7 @@ vi.mock("@/server/logger", () => ({
 
 vi.mock("@/server/github-app", () => ({
   createRepo: mockCreateRepo,
-  GitHubClientError: MockGitHubClientError,
+  GitHubApiError,
 }));
 
 vi.mock("@sentry/nextjs", () => ({
@@ -101,35 +102,50 @@ describe("POST /api/repo/create — error handling", () => {
     });
   });
 
-  test("returns specific error message for GitHub client errors (4xx)", async () => {
+  test("returns 409 with specific message for GitHub 422 (duplicate name)", async () => {
     mockCreateRepo.mockRejectedValue(
-      new MockGitHubClientError("name already exists on this account", 422),
+      new GitHubApiError("name already exists on this account", 422),
     );
 
     const res = await POST(makeRequest({ name: "my-repo", private: true }));
-    expect(res.status).toBe(422);
+    expect(res.status).toBe(409);
 
     const body = await res.json();
     expect(body.error).toBe("name already exists on this account");
+    expect(mockCaptureException).not.toHaveBeenCalled();
   });
 
-  test("returns static message for internal errors (not GitHubClientError)", async () => {
+  test("returns 403 for GitHub 403 (permission denied)", async () => {
     mockCreateRepo.mockRejectedValue(
-      new Error("GitHub API internal failure"),
+      new GitHubApiError("Resource not accessible by integration", 403),
     );
+
+    const res = await POST(makeRequest({ name: "my-repo", private: true }));
+    expect(res.status).toBe(403);
+
+    const body = await res.json();
+    expect(body.error).toBe("Resource not accessible by integration");
+    expect(mockCaptureException).not.toHaveBeenCalled();
+  });
+
+  test("returns 500 and calls Sentry for GitHubApiError with 500 status", async () => {
+    const err = new GitHubApiError("GitHub server error", 500);
+    mockCreateRepo.mockRejectedValue(err);
 
     const res = await POST(makeRequest({ name: "my-repo", private: true }));
     expect(res.status).toBe(500);
 
     const body = await res.json();
     expect(body.error).toBe("Failed to create repository");
+    expect(mockCaptureException).toHaveBeenCalledWith(err);
   });
 
-  test("calls Sentry.captureException on error", async () => {
+  test("returns 500 and calls Sentry for generic errors", async () => {
     const err = new Error("GitHub API rate limit exceeded");
     mockCreateRepo.mockRejectedValue(err);
 
-    await POST(makeRequest({ name: "my-repo", private: true }));
+    const res = await POST(makeRequest({ name: "my-repo", private: true }));
+    expect(res.status).toBe(500);
 
     expect(mockCaptureException).toHaveBeenCalledWith(err);
   });
@@ -142,5 +158,6 @@ describe("POST /api/repo/create — error handling", () => {
 
     const body = await res.json();
     expect(body.error).toBe("Failed to create repository");
+    expect(mockCaptureException).toHaveBeenCalled();
   });
 });

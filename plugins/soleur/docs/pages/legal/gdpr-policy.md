@@ -2,7 +2,7 @@
 title: "GDPR Policy"
 description: "EU General Data Protection Regulation compliance for Soleur."
 layout: base.njk
-permalink: pages/legal/gdpr-policy.html
+permalink: legal/gdpr-policy/
 ---
 
 <section class="page-hero">
@@ -350,7 +350,7 @@ This GDPR Policy shall be governed by and construed in accordance with the laws 
 
 ---
 
-> **Related documents:** This GDPR Policy should be read alongside the companion [Privacy Policy](/pages/legal/privacy-policy.html) for broader privacy disclosures, the [Cookie Policy](/pages/legal/cookie-policy.html) for information about cookies used by the documentation site, and the [Individual CLA](/pages/legal/individual-cla.html) and [Corporate CLA](/pages/legal/corporate-cla.html) for contributor license terms.
+> **Related documents:** This GDPR Policy should be read alongside the companion [Privacy Policy](/legal/privacy-policy/) for broader privacy disclosures, the [Cookie Policy](/legal/cookie-policy/) for information about cookies used by the documentation site, and the [Individual CLA](/legal/individual-cla/) and [Corporate CLA](/legal/corporate-cla/) for contributor license terms.
 
     </div>
   </div>
