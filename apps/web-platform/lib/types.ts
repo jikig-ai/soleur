@@ -45,6 +45,7 @@ export type WSMessage =
   | { type: "review_gate"; gateId: string; question: string; options: string[] }
   | { type: "session_started"; conversationId: string }
   | { type: "session_ended"; reason: string }
+  | { type: "usage_update"; conversationId: string; totalCostUsd: number; inputTokens: number; outputTokens: number }
   | { type: "error"; message: string; errorCode?: WSErrorCode };
 
 // Database types (matches Supabase schema)
@@ -83,6 +84,9 @@ export interface Conversation {
   domain_leader: DomainLeaderId | null;
   session_id: string | null;
   status: "active" | "waiting_for_user" | "completed" | "failed";
+  total_cost_usd: number;
+  input_tokens: number;
+  output_tokens: number;
   last_active: string;
   created_at: string;
 }
