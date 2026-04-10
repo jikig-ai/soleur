@@ -4,6 +4,7 @@ import { useState, useEffect } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
+import { TeamNamesProvider } from "@/hooks/use-team-names";
 
 const NAV_ITEMS = [
   { href: "/dashboard", label: "Command Center", icon: GridIcon },
@@ -63,6 +64,7 @@ export default function DashboardLayout({
   }
 
   return (
+    <TeamNamesProvider>
     <div className="flex h-dvh flex-col md:flex-row">
       {/* Mobile top bar — only visible below md breakpoint */}
       <div className="flex h-14 shrink-0 items-center border-b border-neutral-800 bg-neutral-900 px-4 safe-top md:hidden">
@@ -165,6 +167,7 @@ export default function DashboardLayout({
         {children}
       </main>
     </div>
+    </TeamNamesProvider>
   );
 }
 
