@@ -34,6 +34,43 @@ Gemini CLI is architecturally 50x closer to Claude Code than Codex CLI was. The 
 
 For 6 of 8 domain leaders (those with 2-3 specialists), this is acceptable. For the CMO (7+ specialists), it degrades significantly — a single CMO session would need to sequentially load marketing strategist, copywriter, SEO analyst, etc. instructions into the same context window.
 
+## Context Cross-Contamination Risk
+
+The subagent-to-skill restructuring has an unverified context cross-contamination risk. When multiple specialist skills run sequentially in the same conversation context, earlier skill outputs remain visible to later skills. This means one specialist's output may be misinterpreted as instructions or context by a subsequent specialist.
+
+**Example:** The CLO activates `legal-compliance-auditor`, which produces findings like "CRITICAL: Missing privacy policy." The CLO then activates `legal-document-generator` to draft a contributor license agreement. Because the auditor's findings are still in the conversation context, the generator may incorporate privacy policy language into the CLA — acting on the auditor's output as if it were a generation instruction.
+
+This failure mode does not exist in Claude Code, where each specialist runs as an independent subagent with its own isolated conversation context.
+
+### Severity
+
+The risk scales with specialist count and output diversity. The CMO domain (7+ specialists) is most exposed — SEO analysis findings could contaminate copywriter output, or social media metrics could influence content strategy recommendations in unintended ways. Domains with 2 specialists (CLO, COO) have lower but non-zero risk.
+
+### Mitigation Options
+
+1. **Explicit context boundaries** — Prepend each skill activation with instructions to ignore prior conversation content ("You are starting a new task. Disregard all previous output in this conversation.")
+2. **Output scrubbing** — Strip or collapse prior skill outputs before activating the next skill (requires Gemini CLI support for conversation context manipulation)
+3. **Accept and document** — For domains with 2 specialists and low cross-contamination potential, accept the risk and document the expected behavior
+
+None of these mitigations have been validated at runtime. Option 1 is the most practical but relies on model compliance, not enforcement.
+
+### Runtime Test Case Specification
+
+When runtime verification becomes possible (Gemini API key configured), execute the following test:
+
+**Test: Sequential Specialist Context Isolation**
+
+1. Activate the CLO subagent with a task requiring both specialists
+2. CLO activates `legal-compliance-auditor`, which produces audit findings (e.g., "CRITICAL: Missing privacy policy", "WARNING: Terms of Service lacks arbitration clause")
+3. Without clearing context, CLO activates `legal-document-generator` with an unrelated request: "Generate a contributor license agreement"
+4. Inspect the generated CLA for contamination from audit findings
+5. **Pass:** Generated CLA contains no references to privacy policies, GDPR, arbitration, or any audit-specific content
+6. **Fail:** Generated document incorporates, references, or responds to the auditor's findings
+
+**Reverse-direction test:** Generate a document first, then run an audit. Verify the audit does not reference or incorporate language from the generated document.
+
+**CMO stress test:** Activate 3+ CMO specialists sequentially (e.g., SEO analyst → copywriter → social media strategist). Verify each specialist's output is independent of the previous specialists' outputs.
+
 ## What to Build (when triggered)
 
 ### Minimum Viable Gemini Extension
