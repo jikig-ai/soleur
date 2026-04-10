@@ -80,6 +80,10 @@ export async function POST(request: Request) {
     );
   }
 
+  logger.info(
+    { event: "share_created", userId: user.id, documentPath: body.documentPath },
+    "kb/share: share link created",
+  );
   return NextResponse.json({ token, url: `/shared/${token}` }, { status: 201 });
 }
 

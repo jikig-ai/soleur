@@ -66,6 +66,10 @@ export async function GET(
   try {
     const kbRoot = path.join(owner.workspace_path, "knowledge-base");
     const result = await readContent(kbRoot, shareLink.document_path);
+    logger.info(
+      { event: "shared_page_viewed", token, documentPath: shareLink.document_path },
+      "shared: document viewed",
+    );
     return NextResponse.json({
       content: result.content,
       frontmatter: result.frontmatter,

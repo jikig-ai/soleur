@@ -50,5 +50,9 @@ export async function DELETE(
     );
   }
 
+  logger.info(
+    { event: "share_revoked", userId: user.id, token },
+    "kb/share: share link revoked",
+  );
   return NextResponse.json({ revoked: true });
 }
