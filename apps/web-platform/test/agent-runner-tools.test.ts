@@ -81,6 +81,11 @@ vi.mock("../server/session-sync", () => ({
   syncPull: vi.fn(),
   syncPush: vi.fn(),
 }));
+vi.mock("../server/service-tools", () => ({
+  plausibleCreateSite: vi.fn(),
+  plausibleAddGoal: vi.fn(),
+  plausibleGetStats: vi.fn(),
+}));
 
 import { startAgentSession } from "../server/agent-runner";
 
@@ -88,31 +93,36 @@ import { startAgentSession } from "../server/agent-runner";
 // Helpers
 // ---------------------------------------------------------------------------
 
-function setupSupabaseMock(userData: Record<string, unknown>) {
+const DEFAULT_API_KEY_ROW = {
+  id: "key-1",
+  provider: "anthropic",
+  encrypted_key: Buffer.from("test").toString("base64"),
+  iv: Buffer.from("test-iv-1234").toString("base64"),
+  auth_tag: Buffer.from("test-tag-1234567").toString("base64"),
+  key_version: 2,
+};
+
+// Creates a chainable mock that supports both:
+// - getUserApiKey: select().eq().eq().eq().limit().single() -> { data, error }
+// - getUserServiceTokens: await select().eq().eq() -> { data, error }
+function createApiKeysMock(rows: Record<string, unknown>[] = [DEFAULT_API_KEY_ROW]) {
+  const createChain = (): Record<string, unknown> => ({
+    data: rows,
+    error: null,
+    eq: () => createChain(),
+    limit: () => ({ single: () => ({ data: rows[0] ?? null, error: null }) }),
+    then: (resolve: (v: unknown) => void) => resolve({ data: rows, error: null }),
+  });
+  return { select: () => createChain() };
+}
+
+function setupSupabaseMock(
+  userData: Record<string, unknown>,
+  serviceTokenRows?: Record<string, unknown>[],
+) {
   mockFrom.mockImplementation((table: string) => {
     if (table === "api_keys") {
-      return {
-        select: () => ({
-          eq: () => ({
-            eq: () => ({
-              eq: () => ({
-                limit: () => ({
-                  single: () => ({
-                    data: {
-                      id: "key-1",
-                      encrypted_key: Buffer.from("test").toString("base64"),
-                      iv: Buffer.from("test-iv-1234").toString("base64"),
-                      auth_tag: Buffer.from("test-tag-1234567").toString("base64"),
-                      key_version: 2,
-                    },
-                    error: null,
-                  }),
-                }),
-              }),
-            }),
-          }),
-        }),
-      };
+      return createApiKeysMock(serviceTokenRows ?? [DEFAULT_API_KEY_ROW]);
     }
     if (table === "users") {
       return {
@@ -439,5 +449,76 @@ describe("agent-runner MCP tool wiring", () => {
       { signal: new AbortController().signal },
     );
     expect(result.behavior).toBe("deny");
+  });
+
+  test("platformToolNames includes Plausible tools when user has PLAUSIBLE_API_KEY", async () => {
+    const plausibleRow = {
+      ...DEFAULT_API_KEY_ROW,
+      id: "key-plausible",
+      provider: "plausible",
+    };
+    setupSupabaseMock(
+      {
+        workspace_path: "/tmp/test-workspace",
+        repo_status: "ready",
+        github_installation_id: 12345,
+        repo_url: "https://github.com/alice/my-repo",
+      },
+      [DEFAULT_API_KEY_ROW, plausibleRow],
+    );
+    setupQueryMockImmediate();
+
+    await startAgentSession("user-1", "conv-1", "cpo");
+
+    const options = mockQuery.mock.calls[0][0].options;
+    expect(options.allowedTools).toContain("mcp__soleur_platform__plausible_create_site");
+    expect(options.allowedTools).toContain("mcp__soleur_platform__plausible_add_goal");
+    expect(options.allowedTools).toContain("mcp__soleur_platform__plausible_get_stats");
+  });
+
+  test("Plausible tools not registered when user has no PLAUSIBLE_API_KEY", async () => {
+    setupSupabaseMock({
+      workspace_path: "/tmp/test-workspace",
+      repo_status: "ready",
+      github_installation_id: 12345,
+      repo_url: "https://github.com/alice/my-repo",
+    });
+    setupQueryMockImmediate();
+
+    await startAgentSession("user-1", "conv-1", "cpo");
+
+    const options = mockQuery.mock.calls[0][0].options;
+    const allowed = options.allowedTools ?? [];
+    expect(allowed).not.toContain("mcp__soleur_platform__plausible_create_site");
+  });
+
+  test("canUseTool allows Plausible MCP tools when registered", async () => {
+    const plausibleRow = {
+      ...DEFAULT_API_KEY_ROW,
+      id: "key-plausible",
+      provider: "plausible",
+    };
+    setupSupabaseMock(
+      {
+        workspace_path: "/tmp/test-workspace",
+        repo_status: "ready",
+        github_installation_id: 12345,
+        repo_url: "https://github.com/alice/my-repo",
+      },
+      [DEFAULT_API_KEY_ROW, plausibleRow],
+    );
+    setupQueryMockImmediate();
+
+    await startAgentSession("user-1", "conv-1", "cpo");
+
+    const options = mockQuery.mock.calls[0][0].options;
+    const canUseTool = options.canUseTool!;
+
+    const result = await canUseTool(
+      "mcp__soleur_platform__plausible_create_site",
+      { domain: "example.com" },
+      { signal: new AbortController().signal },
+    );
+    expect(result.behavior).toBe("allow");
   });
 });

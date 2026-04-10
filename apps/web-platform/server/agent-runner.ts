@@ -22,6 +22,7 @@ import { abortableReviewGate, validateSelection, type AgentSession } from "./rev
 import { createChildLogger } from "./logger";
 import { syncPull, syncPush } from "./session-sync";
 import { createPullRequest } from "./github-app";
+import { plausibleCreateSite, plausibleAddGoal, plausibleGetStats } from "./service-tools";
 import { tryCreateVision, buildVisionEnhancementPrompt } from "./vision-helpers";
 
 const log = createChildLogger("agent");
@@ -504,14 +505,77 @@ When you need user input for important decisions, use the AskUserQuestion tool.`
           },
         );
 
+        const platformTools = [createPr];
+        platformToolNames = ["mcp__soleur_platform__create_pull_request"];
+
+        // Conditionally register Plausible tools when user has a stored API key.
+        // Pure functions from service-tools.ts — zero SDK deps for testability.
+        const plausibleKey = serviceTokens.PLAUSIBLE_API_KEY;
+        if (plausibleKey) {
+          const plausibleCreateSiteTool = tool(
+            "plausible_create_site",
+            "Create a new site in Plausible Analytics. Returns the created site metadata.",
+            {
+              domain: z.string().describe("Domain name for the site (e.g., example.com)"),
+              timezone: z.string().default("UTC").describe("Timezone for the site"),
+            },
+            async (args) => {
+              const result = await plausibleCreateSite(plausibleKey, args.domain, args.timezone);
+              return {
+                content: [{ type: "text" as const, text: JSON.stringify(result) }],
+                ...(result.success ? {} : { isError: true }),
+              };
+            },
+          );
+
+          const plausibleAddGoalTool = tool(
+            "plausible_add_goal",
+            "Add a conversion goal to a Plausible Analytics site. Uses PUT with upsert semantics (safely idempotent).",
+            {
+              site_id: z.string().describe("Domain of the site (e.g., example.com)"),
+              goal_type: z.enum(["event", "page"]).describe("Type of goal"),
+              value: z.string().describe("Event name (for event goals) or page path (for page goals)"),
+            },
+            async (args) => {
+              const result = await plausibleAddGoal(plausibleKey, args.site_id, args.goal_type, args.value);
+              return {
+                content: [{ type: "text" as const, text: JSON.stringify(result) }],
+                ...(result.success ? {} : { isError: true }),
+              };
+            },
+          );
+
+          const plausibleGetStatsTool = tool(
+            "plausible_get_stats",
+            "Get aggregate stats for a Plausible Analytics site. Returns visitors, pageviews, bounce rate, and visit duration.",
+            {
+              site_id: z.string().describe("Domain of the site (e.g., example.com)"),
+              period: z.enum(["day", "7d", "30d"]).default("30d").describe("Time period for stats"),
+            },
+            async (args) => {
+              const result = await plausibleGetStats(plausibleKey, args.site_id, args.period);
+              return {
+                content: [{ type: "text" as const, text: JSON.stringify(result) }],
+                ...(result.success ? {} : { isError: true }),
+              };
+            },
+          );
+
+          platformTools.push(plausibleCreateSiteTool, plausibleAddGoalTool, plausibleGetStatsTool);
+          platformToolNames.push(
+            "mcp__soleur_platform__plausible_create_site",
+            "mcp__soleur_platform__plausible_add_goal",
+            "mcp__soleur_platform__plausible_get_stats",
+          );
+        }
+
         const toolServer = createSdkMcpServer({
           name: "soleur_platform",
           version: "1.0.0",
-          tools: [createPr],
+          tools: platformTools,
         });
 
         mcpServersOption = { soleur_platform: toolServer };
-        platformToolNames = ["mcp__soleur_platform__create_pull_request"];
       }
     }
 

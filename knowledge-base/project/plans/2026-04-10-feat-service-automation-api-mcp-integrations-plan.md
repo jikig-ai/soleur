@@ -469,25 +469,25 @@ This creates a virtuous cycle: the first time is guided, subsequent interactions
 - [ ] Guided instructions include deep links to service configuration pages
 - [ ] Review gates pause the agent at each manual step in guided mode
 - [ ] After guided setup, agent prompts user to store their new API token
-- [ ] Service tokens from Connected Services are available to automation tools
+- [x] Service tokens from Connected Services are available to automation tools
 - [x] Plausible API tools validate inputs and handle errors gracefully (timeout, auth failure, API errors)
 - [x] Plausible API tools validate JSON response body before parsing (non-JSON 2xx protection)
 
 ### Non-Functional Requirements
 
-- [ ] No new database tables or migrations required (uses existing `api_keys`)
+- [x] No new database tables or migrations required (uses existing `api_keys`)
 - [x] Plausible API calls timeout after 5 seconds (match existing `VALIDATION_TIMEOUT_MS`)
 - [x] Plausible `site_id` inputs validated against `[a-zA-Z0-9._-]+` pattern (URL injection prevention)
 - [x] Service tool errors are logged but never expose tokens in logs or error messages
-- [ ] In-process MCP tools follow the `create_pull_request` security pattern (input validation, error containment)
-- [ ] Agent environment isolation maintained -- service tokens only injected via `buildAgentEnv` allowlist
+- [x] In-process MCP tools follow the `create_pull_request` security pattern (input validation, error containment)
+- [x] Agent environment isolation maintained -- service tokens only injected via `buildAgentEnv` allowlist
 - [x] Plugin MCP tool allowlist derived from plugin.json server names, not hardcoded (defense-in-depth)
 - [x] Unregistered MCP tools still denied by `canUseTool` (regression test required)
 
 ### Quality Gates
 
 - [x] Unit tests for all Plausible API tool wrappers
-- [ ] Integration test for token retrieval + tool registration flow
+- [x] Integration test for token retrieval + tool registration flow
 - [ ] TypeScript strict mode passes
 - [ ] No new `any` types introduced
 - [ ] Markdownlint passes on all changed `.md` files
