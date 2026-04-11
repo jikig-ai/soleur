@@ -97,7 +97,7 @@ test.describe("OTP callback error handling", () => {
     );
 
     await expect(
-      page.getByText("Sign-in failed. Please try again."),
+      page.getByText("Sign-in failed. If you have an existing account, try signing in with email instead."),
     ).toBeVisible({ timeout: 10_000 });
   });
 
