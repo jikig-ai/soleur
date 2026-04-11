@@ -29,6 +29,8 @@ interface ChatInputProps {
   onAtDismiss: () => void;
   disabled?: boolean;
   placeholder?: string;
+  /** Conversation ID for presigning uploads. */
+  conversationId?: string;
   /** Insert text at the current cursor position (used by AtMentionDropdown selection). */
   insertRef?: React.MutableRefObject<((text: string, replaceFrom: number) => void) | null>;
 }
@@ -39,6 +41,7 @@ export function ChatInput({
   onAtDismiss,
   disabled = false,
   placeholder = "Ask your team anything... or @mention a leader",
+  conversationId,
   insertRef,
 }: ChatInputProps) {
   const [value, setValue] = useState("");
@@ -145,7 +148,7 @@ export function ChatInput({
             filename: att.file.name,
             contentType: att.file.type,
             sizeBytes: att.file.size,
-            conversationId: window.location.pathname.split("/").pop(),
+            conversationId,
           }),
         });
 

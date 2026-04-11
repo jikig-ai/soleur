@@ -1229,6 +1229,22 @@ export async function sendUserMessage(
   // Persist attachment metadata and download files to workspace
   let attachmentContext: string | undefined;
   if (attachments && attachments.length > 0) {
+    // Validate and sanitize each attachment (defense-in-depth — client is untrusted)
+    const ALLOWED_TYPES = new Set(["image/png", "image/jpeg", "image/gif", "image/webp", "application/pdf"]);
+    const pathPrefix = `${userId}/${conversationId}/`;
+
+    for (const att of attachments) {
+      // P1 fix: reject storagePath that doesn't belong to this user/conversation or contains traversal
+      if (!att.storagePath.startsWith(pathPrefix) || att.storagePath.includes("..")) {
+        throw new Error("Attachment not found");
+      }
+      if (!ALLOWED_TYPES.has(att.contentType)) {
+        throw new Error("Unsupported file type");
+      }
+      // Sanitize filename: strip path separators
+      att.filename = att.filename.replace(/[/\\]/g, "_");
+    }
+
     // Insert attachment metadata rows
     const attachmentRows = attachments.map((att) => ({
       message_id: messageId,
@@ -1270,7 +1286,11 @@ export async function sendUserMessage(
           continue;
         }
 
-        const ext = att.filename.split(".").pop() || "bin";
+        const extMap: Record<string, string> = {
+          "image/png": "png", "image/jpeg": "jpeg", "image/gif": "gif",
+          "image/webp": "webp", "application/pdf": "pdf",
+        };
+        const ext = extMap[att.contentType] || "bin";
         const localPath = path.join(attachDir, `${randomUUID()}.${ext}`);
         writeFileSync(localPath, Buffer.from(await fileData.arrayBuffer()));
         filePaths.push(`- ${att.filename} (${att.contentType}, ${att.sizeBytes} bytes): ${localPath}`);

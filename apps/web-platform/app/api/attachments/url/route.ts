@@ -20,8 +20,8 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "invalid_request" }, { status: 400 });
   }
 
-  // Verify the storage path belongs to this user (path starts with userId/)
-  if (!body.storagePath.startsWith(`${user.id}/`)) {
+  // Verify the storage path belongs to this user and reject path traversal
+  if (!body.storagePath.startsWith(`${user.id}/`) || body.storagePath.includes("..")) {
     return NextResponse.json({ error: "unauthorized" }, { status: 403 });
   }
 

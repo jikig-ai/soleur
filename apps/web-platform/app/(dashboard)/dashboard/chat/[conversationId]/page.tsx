@@ -329,6 +329,7 @@ export default function ChatPage() {
           />
           <ChatInput
             onSend={handleSend}
+            conversationId={conversationId}
             onAtTrigger={(query, pos) => {
               setAtQuery(query);
               setAtPosition(pos);
