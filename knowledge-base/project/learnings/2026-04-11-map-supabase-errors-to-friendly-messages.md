@@ -22,37 +22,19 @@ error strings directly to users. Two classes of errors were affected:
 
 ## Solution
 
-All changes in a single file (`apps/web-platform/app/(auth)/login/page.tsx`):
+Created a shared error mapping utility at `apps/web-platform/lib/auth/error-messages.ts`:
 
-1. Added `code_verifier_missing` → `"Session expired. Please try signing in again."` to `CALLBACK_ERRORS`.
-2. Improved `auth_failed` message to include context about GitHub account linking.
-3. Added `SUPABASE_ERROR_PATTERNS: [RegExp, string][]` array for regex-based mapping
-   of raw Supabase messages to friendly copy.
-4. Added `mapSupabaseError(message)` helper that iterates patterns and falls back to
-   a generic safe message.
-5. Replaced both `setError(error.message)` calls with `setError(mapSupabaseError(error.message))`.
+1. `CALLBACK_ERRORS` map for query-param redirect errors (`auth_failed`, `code_verifier_missing`, `provider_disabled`).
+2. `SUPABASE_ERROR_PATTERNS: [RegExp, string][]` array for regex-based mapping of raw Supabase messages to friendly copy.
+3. `mapSupabaseError(message)` helper that iterates patterns and falls back to `DEFAULT_ERROR_MESSAGE`.
+4. Applied to all auth surfaces: `login/page.tsx`, `signup/page.tsx`, and `oauth-buttons.tsx`.
+5. Added `console.error` before mapping so raw errors are available in dev tools for debugging.
 
 ## Key Insight
 
 Never pass `error.message` from third-party SDKs directly to UI state. Always
 mediate through a mapping layer. Regex patterns (rather than exact string matches)
 handle Supabase message variations across versions.
-
-## Session Errors
-
-1. **`worktree-manager.sh` exited 128** — script calls `git pull` which fails in a
-   bare repo. Recovery: used `git worktree add` directly.
-   **Prevention:** `fix-issue` skill should document `git worktree add` as the bare-repo
-   fallback when worktree-manager fails.
-
-2. **`bun test` crashed with Floating Point Exception** — Bun v1.3.6 segfaults before
-   running any tests on this machine. No test baseline could be established.
-   **Prevention:** File a tracking issue. The `fix-issue` skill should detect
-   `panic:` in bun output and note it as a pre-existing runner crash, not a test failure.
-
-3. **`Glob **/login*` returned no files** — Next.js route groups use `(auth)/login/`
-   parenthesised directory names that glob patterns without explicit `(*)` don't match.
-   **Prevention:** For Next.js apps, use `**/(*)/**/*login*` or list `app/` directly.
 
 ## Tags
 

@@ -5,37 +5,8 @@ import { useSearchParams, useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { OAuthButtons } from "@/components/auth/oauth-buttons";
 import { EMAIL_OTP_LENGTH } from "@/lib/auth/constants";
+import { CALLBACK_ERRORS, DEFAULT_ERROR_MESSAGE, mapSupabaseError } from "@/lib/auth/error-messages";
 import Link from "next/link";
-
-const CALLBACK_ERRORS: Record<string, string> = {
-  auth_failed:
-    "Sign-in failed. This GitHub account may already be linked to another Soleur account. Try signing in with your email instead.",
-  code_verifier_missing: "Session expired. Please try signing in again.",
-  provider_disabled:
-    "This sign-in provider is not enabled. Please use a different method.",
-};
-
-const SUPABASE_ERROR_PATTERNS: [RegExp, string][] = [
-  [
-    /email rate limit exceeded/i,
-    "Too many sign-in attempts. Please wait a few minutes and try again.",
-  ],
-  [
-    /invalid otp/i,
-    "That code is incorrect or has expired. Please request a new one.",
-  ],
-  [
-    /token.*expired/i,
-    "Your sign-in code has expired. Please request a new one.",
-  ],
-];
-
-function mapSupabaseError(message: string): string {
-  for (const [pattern, friendly] of SUPABASE_ERROR_PATTERNS) {
-    if (pattern.test(message)) return friendly;
-  }
-  return "Something went wrong. Please try again.";
-}
 
 export default function LoginPage() {
   return (
@@ -59,8 +30,7 @@ function LoginForm() {
     const callbackError = searchParams.get("error");
     if (callbackError) {
       setError(
-        CALLBACK_ERRORS[callbackError] ??
-          "Something went wrong. Please try again.",
+        CALLBACK_ERRORS[callbackError] ?? DEFAULT_ERROR_MESSAGE,
       );
     }
   }, [searchParams]);
@@ -79,6 +49,7 @@ function LoginForm() {
     setLoading(false);
 
     if (error) {
+      console.error("[auth] Supabase error:", error.message);
       setError(mapSupabaseError(error.message));
     } else {
       setOtpSent(true);
@@ -101,6 +72,7 @@ function LoginForm() {
     setLoading(false);
 
     if (error) {
+      console.error("[auth] Supabase error:", error.message);
       setError(mapSupabaseError(error.message));
     } else {
       router.push("/dashboard");

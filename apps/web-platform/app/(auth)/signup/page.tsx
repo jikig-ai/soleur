@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { OAuthButtons } from "@/components/auth/oauth-buttons";
 import { EMAIL_OTP_LENGTH } from "@/lib/auth/constants";
+import { mapSupabaseError } from "@/lib/auth/error-messages";
 import Link from "next/link";
 
 export default function SignupPage() {
@@ -28,7 +29,8 @@ export default function SignupPage() {
     setLoading(false);
 
     if (error) {
-      setError(error.message);
+      console.error("[auth] Supabase error:", error.message);
+      setError(mapSupabaseError(error.message));
     } else {
       setOtpSent(true);
       setTimeout(() => otpRef.current?.focus(), 100);
@@ -50,7 +52,8 @@ export default function SignupPage() {
     setLoading(false);
 
     if (error) {
-      setError(error.message);
+      console.error("[auth] Supabase error:", error.message);
+      setError(mapSupabaseError(error.message));
     } else {
       router.push("/accept-terms");
     }
