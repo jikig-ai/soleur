@@ -54,76 +54,84 @@ export function useConversations(
     setLoading(true);
     setError(null);
 
-    const supabase = createClient();
+    try {
+      const supabase = createClient();
 
-    // Get user ID for query filter and Realtime subscription
-    const { data: authData, error: authError } = await supabase.auth.getUser();
-    if (authError || !authData.user) {
-      setError("Authentication required");
+      // Get user ID for query filter and Realtime subscription
+      const { data: authData, error: authError } = await supabase.auth.getUser();
+      if (authError || !authData.user) {
+        setError("Authentication required");
+        setLoading(false);
+        return;
+      }
+      const currentUserId = authData.user.id;
+      setUserId(currentUserId);
+
+      // Query 1: Fetch conversations (explicit user_id filter for defence-in-depth)
+      let query = supabase
+        .from("conversations")
+        .select("*")
+        .eq("user_id", currentUserId)
+        .order("last_active", { ascending: false })
+        .order("created_at", { ascending: false });
+
+      if (statusFilter) {
+        query = query.eq("status", statusFilter);
+      }
+      if (domainFilter === "general") {
+        query = query.is("domain_leader", null);
+      } else if (domainFilter) {
+        query = query.eq("domain_leader", domainFilter);
+      }
+
+      const { data: convData, error: convError } = await query.limit(50);
+      if (convError) {
+        setError(convError.message);
+        setLoading(false);
+        return;
+      }
+      if (!convData || convData.length === 0) {
+        setConversations([]);
+        setLoading(false);
+        return;
+      }
+
+      // Query 2: Fetch messages for displayed conversations
+      const ids = convData.map((c: Conversation) => c.id);
+      const { data: msgData, error: msgError } = await supabase
+        .from("messages")
+        .select("conversation_id, role, content, leader_id, created_at")
+        .in("conversation_id", ids)
+        .order("created_at", { ascending: true });
+
+      if (msgError) {
+        setError(msgError.message);
+        setLoading(false);
+        return;
+      }
+
+      const messages = (msgData ?? []) as Message[];
+
+      // Derive titles and previews
+      const enriched: ConversationWithPreview[] = convData.map((conv: Conversation) => {
+        const { text, leader } = derivePreview(messages, conv.id);
+        const title = conv.domain_leader === "system"
+          ? "Project Analysis"
+          : deriveTitle(messages, conv.id);
+        return {
+          ...conv,
+          title,
+          preview: text,
+          lastMessageLeader: leader,
+        };
+      });
+
+      setConversations(enriched);
       setLoading(false);
-      return;
-    }
-    const currentUserId = authData.user.id;
-    setUserId(currentUserId);
-
-    // Query 1: Fetch conversations (explicit user_id filter for defence-in-depth)
-    let query = supabase
-      .from("conversations")
-      .select("*")
-      .eq("user_id", currentUserId)
-      .order("last_active", { ascending: false })
-      .order("created_at", { ascending: false });
-
-    if (statusFilter) {
-      query = query.eq("status", statusFilter);
-    }
-    if (domainFilter === "general") {
-      query = query.is("domain_leader", null);
-    } else if (domainFilter) {
-      query = query.eq("domain_leader", domainFilter);
-    }
-
-    const { data: convData, error: convError } = await query.limit(50);
-    if (convError) {
-      setError(convError.message);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to load conversations");
       setLoading(false);
-      return;
     }
-    if (!convData || convData.length === 0) {
-      setConversations([]);
-      setLoading(false);
-      return;
-    }
-
-    // Query 2: Fetch messages for displayed conversations
-    const ids = convData.map((c: Conversation) => c.id);
-    const { data: msgData, error: msgError } = await supabase
-      .from("messages")
-      .select("conversation_id, role, content, leader_id, created_at")
-      .in("conversation_id", ids)
-      .order("created_at", { ascending: true });
-
-    if (msgError) {
-      setError(msgError.message);
-      setLoading(false);
-      return;
-    }
-
-    const messages = (msgData ?? []) as Message[];
-
-    // Derive titles and previews
-    const enriched: ConversationWithPreview[] = convData.map((conv: Conversation) => {
-      const { text, leader } = derivePreview(messages, conv.id);
-      return {
-        ...conv,
-        title: deriveTitle(messages, conv.id),
-        preview: text,
-        lastMessageLeader: leader,
-      };
-    });
-
-    setConversations(enriched);
-    setLoading(false);
   }, [statusFilter, domainFilter]);
 
   // Initial fetch

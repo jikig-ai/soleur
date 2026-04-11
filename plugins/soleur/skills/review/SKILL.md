@@ -375,6 +375,30 @@ After creating all GitHub issues, present comprehensive summary:
 - Optimization opportunities
 - Documentation updates
 
+### 6. Exit Gate
+
+**Pipeline detection:** If the conversation contains `skill: soleur:work` output earlier (indicating review was invoked by work's Phase 4 chain) or `soleur:one-shot` output (indicating review was invoked by one-shot step 4), skip the exit gate. The calling pipeline handles compound, commit, and lifecycle progression. When review is invoked by work or one-shot, do not duplicate these steps.
+
+**If invoked directly by the user** (no work or one-shot orchestrator in the conversation):
+
+1. Run `skill: soleur:compound` to capture learnings from the review session.
+   If compound finds nothing to capture, it will skip gracefully — do not block on this.
+2. Commit any local artifacts. GitHub issues are already created remotely,
+   but local files may have been modified (plan updates, todo resolutions).
+   Run `git status --short`. If there are changes:
+
+   ```bash
+   git add <changed files>
+   git commit -m "docs: review artifacts for feat-<name>"
+   git push
+   ```
+
+   If there are no local changes, skip the commit (this is the expected case — review's
+   primary output is GitHub issues, which are remote-only). If push fails (no network),
+   warn and continue.
+3. Display: "Review complete. All findings are tracked as GitHub issues.
+   Run `/clear` then `/soleur:work` or `/soleur:ship` for maximum context headroom."
+
 ### 7. End-to-End Testing (Optional)
 
 **Read `plugins/soleur/skills/review/references/review-e2e-testing.md` now** for project type detection, testing offers (Web/iOS/Hybrid), and subagent procedures for browser and Xcode testing.

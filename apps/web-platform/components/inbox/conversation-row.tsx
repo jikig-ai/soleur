@@ -4,7 +4,6 @@ import { useRouter } from "next/navigation";
 import { STATUS_LABELS } from "@/lib/types";
 import type { ConversationStatus } from "@/lib/types";
 import type { ConversationWithPreview } from "@/hooks/use-conversations";
-import { LEADER_BG_COLORS } from "@/components/chat/leader-colors";
 import { relativeTime } from "@/lib/relative-time";
 import type { DomainLeaderId } from "@/server/domain-leaders";
 
@@ -29,12 +28,18 @@ function StatusBadge({ status }: { status: ConversationStatus }) {
 }
 
 function LeaderBadge({ leaderId }: { leaderId: DomainLeaderId }) {
-  const bg = LEADER_BG_COLORS[leaderId] || "bg-neutral-700";
   return (
     <span
-      className={`flex h-7 w-7 items-center justify-center rounded-md text-[10px] font-semibold text-white md:h-8 md:w-8 md:text-xs ${bg}`}
+      className="flex h-7 w-7 items-center justify-center overflow-hidden rounded-md md:h-8 md:w-8"
+      aria-label={`Soleur ${leaderId.toUpperCase()}`}
     >
-      {leaderId.toUpperCase()}
+      <img
+        src="/icons/soleur-logo-mark.png"
+        alt=""
+        width={28}
+        height={28}
+        className="h-full w-full object-cover"
+      />
     </span>
   );
 }

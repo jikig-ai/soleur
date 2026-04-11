@@ -17,7 +17,7 @@ Plan review by 3 specialized reviewers (DHH, Kieran, Code Simplicity) consistent
 
 1. **One generic instruction, not 5 domain-specific variants.** The LLM already knows what gaps look like in its own domain. A CTO does not need to be told to consider "review agents for unfamiliar stacks" -- it already knows. The generic version: "check whether any agents or skills are missing from the current domain" works identically across all 5 leaders.
 
-2. **Agent file only, not Task prompt duplication.** The agent file IS the prompt. When brainstorm spawns `Task cto:`, the CTO's full instructions (including the new section) load automatically. Duplicating the instruction in the Task prompt is belt-and-suspenders for nothing.
+2. **Agent file only, not Task prompt duplication.** ~~The agent file IS the prompt. When brainstorm spawns `Task cto:`, the CTO's full instructions (including the new section) load automatically.~~ **CORRECTION (2026-04-10):** This assumption was incorrect. The brainstorm SKILL.md uses anonymous Tasks ("spawn a Task using the Task Prompt from the table"), not named agent Tasks (`Task cto:`). Agent file instructions do NOT load during brainstorm/plan spawning. See #1930 and learning `2026-04-10-anonymous-task-spawning-loses-agent-context.md`. Task Prompt patching IS needed as belt-and-suspenders until Approach B (#1937) switches to named agent spawning.
 
 3. **No explicit consolidation step.** The brainstorm command writes the document by synthesizing all leader outputs already in context. It naturally consolidates and deduplicates without being told to "1. Collect 2. Deduplicate 3. Include."
 

@@ -564,13 +564,20 @@ Do NOT use `gh pr checks --watch` -- it exits immediately with "no checks report
 
 ## Phase 7: Poll for Merge and Cleanup
 
-After auto-merge is queued, poll until the PR is merged. Do NOT ask "merge now or later?" -- auto-merge handles it.
+After auto-merge is queued, poll until the PR is merged. Do NOT ask "merge now or later?" -- auto-merge handles it. Do NOT use foreground `sleep` — Claude Code blocks `sleep` >= 2s in foreground Bash calls.
+
+Use the **Monitor tool** with this shell loop:
 
 ```bash
-gh pr view <number> --json state --jq .state
+while true; do
+  state=$(gh pr view <number> --json state --jq .state)
+  echo "$(date +%H:%M:%S) state=$state"
+  [ "$state" = "MERGED" ] || [ "$state" = "CLOSED" ] && break
+  sleep 10
+done
 ```
 
-Poll every 10 seconds until state is `MERGED`.
+Each `echo` line arrives as a Monitor notification. React to the final state.
 
 **If state becomes `CLOSED` (not `MERGED`):** Auto-merge was cancelled due to a CI failure.
 
@@ -616,10 +623,15 @@ Poll every 10 seconds until state is `MERGED`.
    - If total runs > 0 and pending = 0: all runs completed. Proceed to Step 4.
    - If total runs = 0: workflows have not registered yet. Wait 15 seconds and re-query. Retry up to 3 times (45 seconds total). If still 0 after 3 retries, treat as "no workflows triggered" and skip verification (the PR only touched files outside all path filters).
 
-   **Step 3:** For each run that is not yet `completed`, poll every 30 seconds:
+   **Step 3:** For each run that is not yet `completed`, use the **Monitor tool** with a shell loop:
 
    ```bash
-   gh run view <id> --json status,conclusion --jq '"\(.status) \(.conclusion)"'
+   while true; do
+     result=$(gh run view <id> --json status,conclusion --jq '"\(.status) \(.conclusion)"')
+     echo "$(date +%H:%M:%S) run=<id> $result"
+     echo "$result" | grep -q "^completed" && break
+     sleep 30
+   done
    ```
 
    Poll until all runs report `completed`. Maximum 40 iterations (20 minutes). If the maximum is reached, report: "Release verification timed out after 20 minutes. N runs still pending: [list workflow names and IDs]." Do NOT silently continue -- investigate the stalled workflows.
@@ -650,10 +662,15 @@ Poll every 10 seconds until state is `MERGED`.
 
    If a workflow has a long expected runtime (>10 minutes), note this to the user and continue polling. Do not skip validation because the workflow is slow.
 
-   **Step 3:** Poll each triggered run until completion (check every 30 seconds):
+   **Step 3:** Poll each triggered run until completion using the **Monitor tool**:
 
    ```bash
-   gh run list --workflow <workflow-filename> --limit 1 --json databaseId,status,conclusion --jq '.[0] | "\(.status) \(.conclusion)"'
+   while true; do
+     result=$(gh run list --workflow <workflow-filename> --limit 1 --json databaseId,status,conclusion --jq '.[0] | "\(.status) \(.conclusion)"')
+     echo "$(date +%H:%M:%S) $result"
+     echo "$result" | grep -q "^completed" && break
+     sleep 30
+   done
    ```
 
    Poll until output starts with `completed`. Maximum 40 iterations (20 minutes). If the maximum is reached, report: "Post-merge validation timed out after 20 minutes for workflow [name]." Do NOT silently continue. Then check `conclusion`:
