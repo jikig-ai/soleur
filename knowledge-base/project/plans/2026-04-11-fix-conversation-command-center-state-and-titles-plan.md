@@ -4,431 +4,290 @@ type: fix
 date: 2026-04-11
 issue: "#1962"
 deepened: 2026-04-11
+updated: 2026-04-11
 ---
 
 # Fix Conversation Command Center State and Titles
 
-## Enhancement Summary
+[Updated 2026-04-11] Revised based on brainstorm decisions. Key changes: clickable
+status badge (not ellipsis menu), blocked transitions on active conversations,
+no Retry action, deferred conversation creation.
 
-**Deepened on:** 2026-04-11
-**Sections enhanced:** 5
-**Research sources:** Context7 Supabase docs, project learnings, codebase pattern analysis
+## Summary
 
-### Key Improvements
+Three problems in the Command Center conversation inbox:
 
-1. Title derivation now has a cascading fallback chain (user message -> raw message -> assistant message -> leader label -> "Untitled")
-2. Status update uses optimistic UI with Supabase `{ error }` destructuring (per learning: silent error return values)
-3. Action menu follows existing popover pattern from `share-popover.tsx` with outside-click dismissal
-4. Realtime deduplication handled -- optimistic update + Realtime subscription coexist without flicker
+1. Some conversations display as "Untitled conversation" — `deriveTitle()` has
+   no fallback when user messages are missing or only contain @-mentions
+2. Users cannot change conversation status — "Needs attention" (failed) stays
+   stuck forever with no UI to transition state
+3. Junk conversations pollute the inbox — empty rows created at session start
+   before any real message is sent
 
-### Institutional Learnings Applied
+## Brainstorm Reference
 
-- **Supabase silent error return values:** Always destructure `{ error }` from every Supabase call (learning: 2026-03-20)
-- **Vitest module-level Supabase mock timing:** Mock tracked functions in the `vi.mock()` factory, not inside test bodies (learning: 2026-04-06)
-- **Supabase ReturnType resolves to never:** Use explicit `SupabaseClient` type import when typing lazy getters (learning: 2026-04-05)
-
----
-
-Two bugs in the Command Center make conversations hard to manage:
-
-1. Some conversations display as "Untitled conversation" when the first user message is missing or empty
-2. Users cannot change conversation status -- "Needs attention" (failed) stays stuck forever because there is no UI to transition state
-
-## Root Cause Analysis
-
-### Untitled Conversations
-
-`deriveTitle()` in `hooks/use-conversations.ts:26-32` returns "Untitled conversation" when:
-
-- No user-role message exists for the conversation (e.g., the message insert failed after conversation creation)
-- The first user message is only `@leader` mentions with no remaining content after stripping
-
-The `domain_leader === "system"` case is already handled (hardcoded to "Project Analysis"), but general conversations without user messages fall through.
-
-### Stuck Status
-
-The `ConversationRow` component in `components/inbox/conversation-row.tsx` is purely navigational -- clicking always goes to `/dashboard/chat/[id]`. There is no mechanism for the user to mark a "failed" conversation as "completed" (dismissing the error) or to archive/complete conversations they no longer need.
-
-The RLS policy (`"Users can manage own conversations" for all using (auth.uid() = user_id)`) already permits client-side updates, so no migration is needed.
-
-### Research Insights
-
-**Why conversations end up untitled:**
-
-1. **Race condition on creation:** `createConversation()` in `ws-handler.ts:136` inserts the conversation row before the first user message is saved (`saveMessage()` in `agent-runner.ts:232`). If the WebSocket disconnects between these two operations, the conversation exists without any messages.
-2. **System conversations:** Conversations created by the `/api/repo/status` route with `domain_leader: "system"` use an internal system message format that `deriveTitle()` does not recognize as user content.
-3. **@-mention-only messages:** A user typing only `@cto` and sending triggers conversation creation, but after stripping the mention pattern `/@\w+\s*/g`, nothing remains.
-
-**Why the "Needs attention" state persists:**
-
-The `failed` status is set in `agent-runner.ts:1100-1108` when the agent session throws an error (e.g., API timeout, model error). The only path back to `active` is sending a new message (which creates a new session), but the conversation row in the Command Center navigates to the chat page rather than providing in-place state management. The user must navigate to the conversation, send a message to "restart" it, or live with the stuck badge.
-
-## Acceptance Criteria
-
-- [ ] Conversations with no user messages display a meaningful fallback title (e.g., first assistant message content, or leader-specific label like "CTO conversation")
-- [ ] Conversations where the first user message is only @-mentions after stripping display the raw message instead of empty string
-- [ ] Each conversation row has a status-change action (click/menu) that allows the user to transition status
-- [ ] Valid transitions: any status -> "completed" (dismiss/archive), "failed" -> "active" (retry), "waiting_for_user" -> "completed" (dismiss)
-- [ ] Status change persists to Supabase and updates UI immediately (optimistic update)
-- [ ] Realtime subscription already in `use-conversations.ts` picks up the persisted change
-- [ ] Existing tests in `test/command-center.test.tsx` and `test/components/conversation-row.test.tsx` continue passing
-- [ ] New tests cover: title fallback scenarios, status change UI interaction, optimistic update behavior
+- **Brainstorm:** `knowledge-base/project/brainstorms/2026-04-11-conversation-state-management-brainstorm.md`
+- **Spec:** `knowledge-base/project/specs/fix-conversation-state/spec.md`
 
 ## Implementation
 
-### 1. Fix Title Derivation (`hooks/use-conversations.ts`)
+### 1. Fix Title Derivation
 
 **File:** `apps/web-platform/hooks/use-conversations.ts`
 
-Update `deriveTitle()` to handle edge cases with a cascading fallback chain:
+Rewrite `deriveTitle()` (lines 26-33) to accept `domainLeader` as a third
+parameter and handle the full fallback chain in one function (reviewer
+feedback: avoid splitting logic between `deriveTitle` and enrichment block):
 
-```typescript
-function deriveTitle(messages: Message[], conversationId: string): string {
-  const firstUserMsg = messages.find(
-    (m) => m.conversation_id === conversationId && m.role === "user",
-  );
-  if (firstUserMsg) {
-    const content = firstUserMsg.content.replace(/@\w+\s*/g, "").trim();
-    if (content.length > 0) {
-      return content.length > 60 ? `${content.slice(0, 57)}...` : content;
-    }
-    // User message was only @-mentions -- use the raw message
-    const raw = firstUserMsg.content.trim();
-    if (raw.length > 0) {
-      return raw.length > 60 ? `${raw.slice(0, 57)}...` : raw;
-    }
-  }
-
-  // Fallback: use first assistant message content
-  const firstAssistantMsg = messages.find(
-    (m) => m.conversation_id === conversationId && m.role === "assistant",
-  );
-  if (firstAssistantMsg) {
-    const stripped = firstAssistantMsg.content.replace(/[#*`_~\[\]()]/g, "").trim();
-    if (stripped.length > 0) {
-      return stripped.length > 60 ? `${stripped.slice(0, 57)}...` : stripped;
-    }
-  }
-
-  return "Untitled conversation";
-}
+```text
+deriveTitle(messages, conversationId, domainLeader?):
+1. First user message content (strip @-mentions, truncate to 60 chars)
+2. First assistant message content (truncate to 60 chars)
+3. If user message exists but was only @-mentions: raw text (before stripping)
+4. Domain leader label ("CTO conversation") if domainLeader is set
+5. "Untitled conversation"
 ```
 
-Update the enrichment logic to use `domain_leader` as a final fallback before "Untitled":
+Note: step 2 (assistant message) comes before step 3 (raw @-mention) because
+"@cto" is a worse title than a meaningful assistant response (reviewer feedback).
 
-```typescript
-const enriched: ConversationWithPreview[] = convData.map((conv: Conversation) => {
-  const { text, leader } = derivePreview(messages, conv.id);
-  let title: string;
-  if (conv.domain_leader === "system") {
-    title = "Project Analysis";
-  } else {
-    const derived = deriveTitle(messages, conv.id);
-    title = derived === "Untitled conversation" && conv.domain_leader
-      ? `${conv.domain_leader.toUpperCase()} conversation`
-      : derived;
-  }
-  return { ...conv, title, preview: text, lastMessageLeader: leader };
-});
-```
+Update the enrichment block (lines 116-127) to pass `conv.domain_leader` to
+`deriveTitle()` and remove the separate leader fallback check. The `system`
+special case stays in the enrichment block (hardcoded "Project Analysis").
 
-#### Research Insights
-
-**Best Practices:**
-
-- Call `deriveTitle()` only once per conversation (the current plan calls it twice in the ternary -- refactored above to store in a variable)
-- Keep the regex strip pattern `/@\w+\s*/g` consistent with the chat input's mention detection pattern
-- Truncation at 57 chars + "..." = 60 chars total -- consistent with email subject line best practice for scannability
-
-**Edge Cases:**
-
-- Messages with only whitespace after stripping: guard with `.trim()` before length check
-- Messages containing only emoji (e.g., a user sends just a thumbs-up): these pass through correctly since they are not stripped by the `@` pattern
-- Very long first messages (500+ chars): truncation at 60 is correct, prevents layout overflow in the row component
-
-### 2. Add Status Change to ConversationRow (`components/inbox/conversation-row.tsx`)
+### 2. Add Clickable Status Badge with Dropdown
 
 **File:** `apps/web-platform/components/inbox/conversation-row.tsx`
 
-Add an action menu following the existing popover pattern from `components/kb/share-popover.tsx`:
+Replace the read-only `StatusBadge` component with an interactive version:
 
-- A "..." (ellipsis/more) button positioned at the right edge of each row
-- On click, opens a small dropdown with status transition options
-- Uses `useRef` + outside-click listener for dismissal (same pattern as `SharePopover`)
-- Calls `e.stopPropagation()` on the menu button to prevent row navigation
+- **`failed` and `waiting_for_user`:** Badge is clickable. Clicking opens a
+  dropdown below/beside the badge with available transition actions.
+- **`active`:** Badge is NOT clickable (no visual affordance, no dropdown).
+  Agent is running — transitions are blocked.
+- **`completed`:** Badge is NOT clickable. Terminal state, no available actions.
 
-**Allowed transitions per current status:**
+**Dropdown actions by status:**
 
 | Current Status | Available Actions |
 |---|---|
-| `waiting_for_user` | Mark as completed |
-| `active` | Mark as completed |
-| `completed` | (no actions -- already terminal) |
-| `failed` | Mark as completed, Retry (mark as active) |
+| `failed` | Dismiss (→ completed) |
+| `waiting_for_user` | Mark resolved (→ completed) |
+| `active` | (blocked — no dropdown) |
+| `completed` | (terminal — no dropdown) |
 
-```typescript
-interface ConversationRowProps {
-  conversation: ConversationWithPreview;
-  onStatusChange?: (id: string, newStatus: ConversationStatus) => void;
-}
+**Implementation pattern:**
 
-function StatusMenu({
-  conversation,
-  onStatusChange,
-}: {
-  conversation: ConversationWithPreview;
-  onStatusChange: (id: string, newStatus: ConversationStatus) => void;
-}) {
-  const [open, setOpen] = useState(false);
-  const menuRef = useRef<HTMLDivElement>(null);
+- Follow `components/kb/share-popover.tsx` pattern: `useRef` + `mousedown`
+  listener for outside-click dismissal
+- `e.stopPropagation()` on the badge click AND each dropdown item to prevent
+  row navigation (`onClick → router.push`)
+- Position with `absolute` + `z-50` to render above adjacent rows
+- Minimum 44x44px touch target for mobile accessibility
+- `aria-label` and `role="menu"` for accessibility
 
-  useEffect(() => {
-    if (!open) return;
-    function handleClickOutside(e: MouseEvent) {
-      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
-        setOpen(false);
-      }
-    }
-    document.addEventListener("mousedown", handleClickOutside);
-    return () => document.removeEventListener("mousedown", handleClickOutside);
-  }, [open]);
+**Props change:** `ConversationRow` gains `onStatusChange?: (id, newStatus) => void`.
+When provided, `StatusBadge` renders as interactive for applicable statuses.
 
-  const actions = getAvailableActions(conversation.status);
-  if (actions.length === 0) return null;
-
-  return (
-    <div className="relative" ref={menuRef}>
-      <button
-        type="button"
-        onClick={(e) => {
-          e.stopPropagation();
-          setOpen(!open);
-        }}
-        className="flex h-7 w-7 items-center justify-center rounded-md text-neutral-500 transition-colors hover:bg-neutral-700 hover:text-neutral-300"
-        aria-label="Conversation actions"
-      >
-        <EllipsisIcon className="h-4 w-4" />
-      </button>
-      {open && (
-        <div className="absolute right-0 top-full z-50 mt-1 w-44 rounded-lg border border-neutral-700 bg-neutral-900 py-1 shadow-xl">
-          {actions.map((action) => (
-            <button
-              key={action.status}
-              type="button"
-              onClick={(e) => {
-                e.stopPropagation();
-                onStatusChange(conversation.id, action.status);
-                setOpen(false);
-              }}
-              className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-neutral-300 transition-colors hover:bg-neutral-800"
-            >
-              {action.label}
-            </button>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
-function getAvailableActions(status: ConversationStatus): { status: ConversationStatus; label: string }[] {
-  switch (status) {
-    case "waiting_for_user":
-      return [{ status: "completed", label: "Mark as completed" }];
-    case "active":
-      return [{ status: "completed", label: "Mark as completed" }];
-    case "failed":
-      return [
-        { status: "completed", label: "Dismiss" },
-        { status: "active", label: "Retry" },
-      ];
-    case "completed":
-      return [];
-  }
-}
-```
-
-#### Research Insights
-
-**Best Practices:**
-
-- Use `e.stopPropagation()` on both the trigger button AND each menu item click to prevent bubbling to the row's `onClick` handler
-- Position with `absolute right-0 top-full` to avoid clipping on narrow viewports
-- Add `z-50` to ensure the dropdown renders above adjacent rows
-- Use `aria-label` on the trigger button for accessibility
-- The menu should not render at all for `completed` conversations (no available actions)
-
-**Performance Considerations:**
-
-- The `useEffect` for outside-click should only attach when `open === true` (already in the pattern)
-- Do not create a new Supabase client instance per menu interaction -- the hook-level `createClient()` should be reused
-
-**Mobile touch target:**
-
-- The "..." button must be minimum 44x44px touch target (already specified as `h-7 w-7` = 28px, bump to `min-h-[44px] min-w-[44px]` with padding for touch accessibility on mobile)
-- On mobile layout, the menu button should appear in the row's bottom-right area (within the vertical stack)
-
-### 3. Add Status Update Function to `use-conversations.ts`
+### 3. Add `updateStatus` to `useConversations` Hook
 
 **File:** `apps/web-platform/hooks/use-conversations.ts`
 
-Export an `updateStatus` function from the hook that:
+Add `updateStatus` function to the hook:
 
-1. Captures current state for rollback
-2. Optimistically updates the local state
-3. Calls Supabase with proper `{ error }` destructuring (per learning)
-4. On error, reverts the optimistic update and surfaces the error
+1. Capture `conversations` state for rollback
+2. Optimistically update local state via `setConversations`
+3. Call Supabase: `supabase.from("conversations").update({ status }).eq("id", id)`
+4. Destructure `{ error }` (learning: Supabase silent error return values)
+5. On error: revert optimistic update, set error state
 
-```typescript
-const updateStatus = useCallback(async (conversationId: string, newStatus: ConversationStatus) => {
-  // Capture previous state for rollback
-  const previousConversations = conversations;
+**Realtime coexistence:** The existing subscription (lines 144-176) will
+receive the same UPDATE event ~100-300ms later. The re-application is
+idempotent — React reconciliation skips re-render when values match.
 
-  // Optimistic update
-  setConversations((prev) =>
-    prev.map((c) =>
-      c.id === conversationId
-        ? { ...c, status: newStatus, last_active: new Date().toISOString() }
-        : c,
-    ),
-  );
+**Update `UseConversationsResult` interface** (line 19) to include
+`updateStatus: (conversationId: string, newStatus: ConversationStatus) => Promise<void>`.
 
-  const supabase = createClient();
-  const { error } = await supabase
-    .from("conversations")
-    .update({ status: newStatus, last_active: new Date().toISOString() })
-    .eq("id", conversationId);
-
-  if (error) {
-    // Revert optimistic update with captured state
-    setConversations(previousConversations);
-    setError(`Failed to update status: ${error.message}`);
-  }
-}, [conversations]);
-```
-
-#### Research Insights
-
-**Optimistic Update + Realtime Coexistence:**
-
-The Realtime subscription in `use-conversations.ts:158-166` will receive the same UPDATE event from Postgres after the optimistic write completes. This creates a potential double-update:
-
-1. Optimistic: UI updates immediately
-2. Realtime: Postgres broadcasts the change ~100-300ms later
-
-The current Realtime handler `setConversations((prev) => prev.map(...))` re-applies the same values, which is idempotent -- React's state reconciliation will not trigger a re-render if the values match. No additional deduplication logic is needed.
-
-**Error Handling (per Supabase learning):**
-
-- The Supabase JS client does NOT throw on failures -- it returns `{ data, error }`
-- Always destructure and check `error` explicitly
-- The `createClient()` call returns a browser client that uses the user's session cookie for RLS enforcement -- no additional auth needed
-
-**Rollback Strategy:**
-
-- Capture `conversations` (current state) before the optimistic write
-- On error, restore the captured state directly (cheaper than re-fetching)
-- Only call `fetchConversations()` as a last resort if state is corrupted
-
-**Race Condition: Multiple rapid clicks:**
-
-- If user clicks "Mark as completed" then immediately clicks "Retry" on the same row, the second optimistic update will overwrite the first
-- The Supabase writes are independent (last-write-wins on the server)
-- This is acceptable behavior -- the UI always shows the most recent intent
-
-### 4. Update Hook Return Type
-
-**File:** `apps/web-platform/hooks/use-conversations.ts`
-
-```typescript
-interface UseConversationsResult {
-  conversations: ConversationWithPreview[];
-  loading: boolean;
-  error: string | null;
-  refetch: () => void;
-  updateStatus: (conversationId: string, newStatus: ConversationStatus) => Promise<void>;
-}
-```
-
-Return `updateStatus` from `useConversations`:
-
-```typescript
-return { conversations, loading, error, refetch: fetchConversations, updateStatus };
-```
-
-### 5. Update Dashboard Page
+### 4. Wire Dashboard Page
 
 **File:** `apps/web-platform/app/(dashboard)/dashboard/page.tsx`
 
-Destructure `updateStatus` from the hook and pass to each `ConversationRow`:
+- Destructure `updateStatus` from `useConversations()` (line 98)
+- Pass `onStatusChange={updateStatus}` to each `ConversationRow` (line 538)
 
-```typescript
-const { conversations, loading, error, refetch, updateStatus } = useConversations({
-  statusFilter,
-  domainFilter,
-});
+### 5. Defer Conversation Creation Until First Real Message
 
-// In the conversation list rendering:
-{conversations.map((conv) => (
-  <ConversationRow
-    key={conv.id}
-    conversation={conv}
-    onStatusChange={updateStatus}
-  />
-))}
+**Files:**
+
+- `apps/web-platform/server/ws-handler.ts` (primary)
+- `apps/web-platform/server/agent-runner.ts` (adjust `sendUserMessage`)
+
+Currently `start_session` (ws-handler.ts:207) calls `createConversation()`
+immediately, creating a DB row before any message is sent. Change to:
+
+**`createConversation` signature change:**
+
+Add optional `id` parameter so a pre-generated UUID can be passed in
+(reviewer finding H4: current function generates its own UUID at line 134).
+
+```text
+async function createConversation(userId, leaderId?, id?): Promise<string>
 ```
 
-## Test Scenarios
+If `id` is provided, use it instead of calling `randomUUID()`.
 
-- Given a conversation with no messages, when the command center renders, then the title shows the domain leader label (e.g., "CTO conversation") instead of "Untitled conversation"
-- Given a conversation where the first user message is "@cto ", when the command center renders, then the title shows "@cto" (raw message)
-- Given a conversation with only assistant messages, when the command center renders, then the title shows the assistant message content
-- Given a conversation row with status "failed", when the user clicks the action menu and selects "Mark as completed", then the status badge changes to "Completed" immediately and the Supabase update is called
-- Given a failed Supabase update, when the user tries to change status, then the status reverts and an error message appears
-- Given a conversation with status "waiting_for_user", when the user marks it as "completed", then the row updates and the Realtime subscription does not conflict
-- Given a conversation with status "completed", when the row renders, then no action menu button appears
+**`start_session` handler changes:**
 
-### Test Implementation Notes
+1. Generate a UUID eagerly: `const pendingId = randomUUID()`
+2. Do NOT call `createConversation()` — store in session:
+   `session.pendingConversationId = pendingId`
+   `session.pendingLeaderId = msg.leaderId`
+   `session.pendingContext = validatedContext`
+3. Send `session_started { conversationId: pendingId }` to client as before
+4. For directed sessions (with `leaderId`), do NOT boot the agent yet —
+   agent boot also defers to first message
 
-**Mock pattern for update calls** (per Vitest Supabase mock learning):
+**`chat` handler changes (reviewer findings H2, H3):**
 
-The existing `command-center.test.tsx` uses `createQueryBuilder()` with a thenable pattern. Extend it to track `update` calls:
+The existing guard at line 308 (`if (!session.conversationId)`) must be
+rewritten to also check `session.pendingConversationId`:
 
-```typescript
-// Add to existing createQueryBuilder:
-const mockUpdate = vi.fn().mockReturnThis();
-
-function createQueryBuilder(data: unknown[]) {
-  const result = { data, error: null };
-  const builder = {
-    select: vi.fn().mockReturnThis(),
-    eq: vi.fn().mockReturnThis(),
-    in: vi.fn().mockReturnThis(),
-    is: vi.fn().mockReturnThis(),
-    order: vi.fn().mockReturnThis(),
-    limit: vi.fn().mockReturnThis(),
-    single: vi.fn().mockReturnThis(),
-    update: mockUpdate,
-    then: (onfulfilled: (value: unknown) => unknown) =>
-      Promise.resolve(result).then(onfulfilled),
-  };
-  return builder;
+```text
+if (!session.conversationId && !session.pendingConversationId) {
+  // "No active session. Send start_session first."
+  return;
 }
 ```
 
-**Critical:** The `mockUpdate` must be defined at module level (before `vi.mock()`) so the factory can reference it. Defining it inside `beforeEach` is too late -- the Supabase mock factory runs at import time (per learning: 2026-04-06).
+If `session.pendingConversationId` exists (conversation not yet in DB):
 
-## Context
+1. Check if message content is real (strip @-mentions, check non-empty)
+2. If real:
+   a. Call `createConversation(userId, session.pendingLeaderId, session.pendingConversationId)`
+   b. Set `session.conversationId = session.pendingConversationId`
+   c. Clear pending state: `delete session.pendingConversationId`
+   d. Call `sendUserMessage()` directly — it handles `saveMessage()` internally
+      (reviewer finding H3: do NOT call `saveMessage` separately, that double-saves)
+3. If only @-mentions with no content: send error "Please include a
+   message along with the @-mention", do NOT create conversation
 
-- **Brainstorm:** `knowledge-base/project/brainstorms/2026-04-07-conversation-inbox-brainstorm.md`
-- **RLS policy:** "Users can manage own conversations" allows UPDATE via browser client
-- **Realtime:** Already subscribed to conversation UPDATE events in `use-conversations.ts:144-176`
-- **No migration needed:** Schema already supports all four statuses and RLS permits user updates
-- **Key pattern:** Optimistic updates match the existing Realtime subscription -- the subscription will receive the change after Postgres processes it, but the UI updates immediately
-- **Popover pattern:** `components/kb/share-popover.tsx` provides the reference implementation for outside-click dismissal menus
+If `session.conversationId` exists (already created): proceed as normal.
+
+**`close_conversation` handler changes (reviewer finding H1):**
+
+If `close_conversation` fires when only `pendingConversationId` exists (no DB
+row yet), clean up the pending state and send `session_ended`. Do NOT attempt
+a DB update on a non-existent row:
+
+```text
+if (!session.conversationId && session.pendingConversationId) {
+  delete session.pendingConversationId;
+  sendToClient(userId, { type: "session_ended" });
+  return;
+}
+```
+
+**`resume_session` is unchanged** — it operates on existing conversations only
+(verifies ownership at lines 249-259). No pending state involved.
+
+**Risk: Client expects conversationId for URL routing.** The UUID is generated
+eagerly and sent in `session_started`, so the client navigates to
+`/dashboard/chat/{id}` immediately. The DB row is created when the first real
+message arrives. The chat page's message fetch returns empty for new
+conversations — same as current behavior.
+
+**Risk: Agent boot timing for directed sessions.** Currently, directed sessions
+(`@cto`) boot the agent immediately in `start_session`. With deferred creation,
+the agent boots on first `chat` message instead. This adds ~200-500ms latency
+to the first response for directed sessions.
+
+**Risk: Realtime INSERT events.** The Realtime subscription (use-conversations.ts
+lines 144-176) listens only for UPDATE events. A deferred INSERT won't appear
+in the inbox until the next fetch. Mitigation: add `INSERT` to the Realtime
+subscription, or accept that new conversations appear on the next poll/refetch.
+
+## Test Scenarios
+
+### Title derivation
+
+- Given a conversation with no messages, when rendered, title shows domain
+  leader label (e.g., "CTO conversation") or "Untitled conversation"
+- Given a conversation where first user message is "@cto " and an assistant
+  message exists, title shows the assistant message content (not "@cto")
+- Given a conversation where first user message is "@cto " and no assistant
+  message exists, title shows "@cto" (raw message, not empty string)
+- Given a conversation with only assistant messages, when rendered, title
+  shows the assistant message content
+
+### Status transitions
+
+- Given a conversation with status "failed", when user clicks the status
+  badge, a dropdown appears with "Dismiss"
+- Given a conversation with status "waiting_for_user", when user clicks the
+  badge, a dropdown appears with "Mark resolved"
+- Given a conversation with status "active", the status badge is not clickable
+- Given a conversation with status "completed", the status badge is not clickable
+- Given a failed Supabase update, the status reverts and an error appears
+
+### Deferred conversation creation
+
+- Given a new session, when start_session is sent, no conversation row
+  exists in the database
+- Given a new session, when the first chat message with real content is sent,
+  a conversation row is created
+- Given a new session, when only "@cto" is sent with no other content,
+  no conversation row is created
+
+## Acceptance Criteria
+
+- [ ] No conversation displays as "Untitled" when it has any messages
+- [ ] Failed conversations can be dismissed from the inbox via badge click
+- [ ] Waiting conversations can be marked resolved from the inbox via badge click
+- [ ] Active conversations have non-clickable status badges
+- [ ] Completed conversations have no dropdown actions
+- [ ] Starting a session that errors before any message creates no conversation row
+- [ ] Sending only "@cto" with no other content does not create a conversation
+- [ ] Existing tests in `test/command-center.test.tsx` and
+  `test/components/conversation-row.test.tsx` continue passing
+- [ ] New tests cover: title fallback, badge click interaction, optimistic update,
+  deferred creation
 
 ## Domain Review
 
-**Domains relevant:** none
+**Domains relevant:** Engineering, Product
 
-No cross-domain implications detected -- bug fix for existing UI component with no new user flows, no architectural changes, no external service integration.
+### Engineering (CTO)
+
+**Status:** reviewed
+**Assessment:** Race condition between user-initiated and agent-driven transitions
+is the highest technical risk — resolved by blocking transitions on active
+conversations. Direct Supabase client update is the right pattern since the
+command center page has no WS connection. Discriminated union exhaustive
+switches must be verified if WSMessage types change. Deferred conversation
+creation changes the ws-handler flow significantly — test session lifecycle
+thoroughly.
+
+### Product (CPO)
+
+**Status:** reviewed
+**Assessment:** Inbox noise compounds over time and undermines Phase 3 "Make it
+Sticky" promise. The 4-state model is sufficient for current user count (0
+external users). Title persistence and bulk operations can be revisited when
+real usage data exists in Phase 4.
+
+### Product/UX Gate
+
+**Tier:** advisory
+**Decision:** reviewed
+**Agents invoked:** CPO (brainstorm carry-forward)
+**Skipped specialists:** ux-design-lead (running in parallel, designs pending)
+**Pencil available:** N/A
+
+## Context
+
+- **RLS policy:** "Users can manage own conversations" allows UPDATE via browser client
+- **Realtime:** Already subscribed to conversation UPDATE events in `use-conversations.ts:144-176`
+- **No migration needed:** Schema supports all four statuses and RLS permits user updates
+- **Popover pattern:** `components/kb/share-popover.tsx` provides outside-click reference
+- **Key learning:** Supabase JS client silently discards errors unless `{ error }` destructured
+- **Key learning:** Vitest mock tracked functions must be at module level before `vi.mock()` factory
