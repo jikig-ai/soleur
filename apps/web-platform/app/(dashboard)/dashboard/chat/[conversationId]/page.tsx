@@ -4,7 +4,7 @@ import { useState, useRef, useEffect } from "react";
 import { useParams, useSearchParams, useRouter, usePathname } from "next/navigation";
 import { MarkdownRenderer } from "@/components/ui/markdown-renderer";
 import { useWebSocket } from "@/lib/ws-client";
-import type { ConversationContext } from "@/lib/types";
+import type { ConversationContext, AttachmentRef } from "@/lib/types";
 import { ErrorCard } from "@/components/ui/error-card";
 import { DOMAIN_LEADERS } from "@/server/domain-leaders";
 import type { DomainLeaderId } from "@/server/domain-leaders";
@@ -125,9 +125,13 @@ export default function ChatPage() {
   const hasAssistantMessage = messages.some((m) => m.role === "assistant");
   const isClassifying = hasUserMessage && !hasAssistantMessage && routeSource === null;
 
-  function handleSend(message: string) {
+  function handleSend(message: string, attachments?: AttachmentRef[]) {
     if (status !== "connected") return;
-    sendMessage(message);
+    if (attachments && attachments.length > 0) {
+      sendMessage(message, attachments);
+    } else {
+      sendMessage(message);
+    }
   }
 
   return (

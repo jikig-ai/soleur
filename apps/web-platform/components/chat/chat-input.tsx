@@ -1,9 +1,30 @@
 "use client";
 
 import { useState, useRef, useCallback, useEffect } from "react";
+import type { AttachmentRef } from "@/lib/types";
+
+const ALLOWED_TYPES = new Set([
+  "image/png",
+  "image/jpeg",
+  "image/gif",
+  "image/webp",
+  "application/pdf",
+]);
+
+const MAX_FILE_SIZE = 20 * 1024 * 1024; // 20 MB
+const MAX_FILES = 5;
+
+interface PendingAttachment {
+  id: string;
+  file: File;
+  preview?: string;
+  progress: number;
+  error?: string;
+  uploaded?: AttachmentRef;
+}
 
 interface ChatInputProps {
-  onSend: (message: string) => void;
+  onSend: (message: string, attachments?: AttachmentRef[]) => void;
   onAtTrigger: (query: string, cursorPosition: number) => void;
   onAtDismiss: () => void;
   disabled?: boolean;
@@ -21,7 +42,19 @@ export function ChatInput({
   insertRef,
 }: ChatInputProps) {
   const [value, setValue] = useState("");
+  const [attachments, setAttachments] = useState<PendingAttachment[]>([]);
+  const [attachError, setAttachError] = useState<string | null>(null);
+  const [isUploading, setIsUploading] = useState(false);
+  const [isDragOver, setIsDragOver] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Clear error after 3 seconds
+  useEffect(() => {
+    if (!attachError) return;
+    const timer = setTimeout(() => setAttachError(null), 3_000);
+    return () => clearTimeout(timer);
+  }, [attachError]);
 
   // Expose insert function to parent for @-mention selection
   useEffect(() => {
@@ -36,7 +69,6 @@ export function ChatInput({
         const newValue = before + text + " " + after;
         setValue(newValue);
 
-        // Set cursor after inserted text + space
         const newCursor = replaceFrom + text.length + 1;
         requestAnimationFrame(() => {
           textarea.selectionStart = newCursor;
@@ -47,13 +79,150 @@ export function ChatInput({
     }
   }, [insertRef, value]);
 
-  const handleSubmit = useCallback(() => {
+  const validateAndAddFiles = useCallback(
+    (files: FileList | File[]) => {
+      const fileArray = Array.from(files);
+      const currentCount = attachments.length;
+      const validFiles: PendingAttachment[] = [];
+
+      for (const file of fileArray) {
+        if (currentCount + validFiles.length >= MAX_FILES) {
+          setAttachError(`Maximum ${MAX_FILES} files per message.`);
+          break;
+        }
+        if (!ALLOWED_TYPES.has(file.type)) {
+          setAttachError(`"${file.name}" is not a supported file type.`);
+          continue;
+        }
+        if (file.size > MAX_FILE_SIZE) {
+          setAttachError(`"${file.name}" exceeds the 20 MB size limit.`);
+          continue;
+        }
+
+        const preview = file.type.startsWith("image/")
+          ? URL.createObjectURL(file)
+          : undefined;
+
+        validFiles.push({
+          id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+          file,
+          preview,
+          progress: 0,
+        });
+      }
+
+      if (validFiles.length > 0) {
+        setAttachments((prev) => [...prev, ...validFiles]);
+      }
+    },
+    [attachments.length],
+  );
+
+  const removeAttachment = useCallback((id: string) => {
+    setAttachments((prev) => {
+      const item = prev.find((a) => a.id === id);
+      if (item?.preview) URL.revokeObjectURL(item.preview);
+      return prev.filter((a) => a.id !== id);
+    });
+  }, []);
+
+  const uploadAttachments = useCallback(async (): Promise<AttachmentRef[]> => {
+    const results: AttachmentRef[] = [];
+
+    for (let i = 0; i < attachments.length; i++) {
+      const att = attachments[i];
+      if (att.uploaded) {
+        results.push(att.uploaded);
+        continue;
+      }
+
+      try {
+        // Step 1: Get presigned URL
+        const presignRes = await fetch("/api/attachments/presign", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            filename: att.file.name,
+            contentType: att.file.type,
+            sizeBytes: att.file.size,
+            conversationId: window.location.pathname.split("/").pop(),
+          }),
+        });
+
+        if (!presignRes.ok) {
+          const err = await presignRes.json().catch(() => ({}));
+          throw new Error(err.error || "Presign failed");
+        }
+
+        const { uploadUrl, storagePath } = await presignRes.json();
+
+        // Step 2: Upload to Storage
+        setAttachments((prev) =>
+          prev.map((a) => (a.id === att.id ? { ...a, progress: 50 } : a)),
+        );
+
+        const uploadRes = await fetch(uploadUrl, {
+          method: "PUT",
+          headers: { "Content-Type": att.file.type },
+          body: att.file,
+        });
+
+        if (!uploadRes.ok) {
+          throw new Error("Upload to storage failed");
+        }
+
+        const ref: AttachmentRef = {
+          storagePath,
+          filename: att.file.name,
+          contentType: att.file.type,
+          sizeBytes: att.file.size,
+        };
+
+        setAttachments((prev) =>
+          prev.map((a) =>
+            a.id === att.id ? { ...a, progress: 100, uploaded: ref } : a,
+          ),
+        );
+
+        results.push(ref);
+      } catch (err) {
+        setAttachments((prev) =>
+          prev.map((a) =>
+            a.id === att.id
+              ? { ...a, error: err instanceof Error ? err.message : "Upload failed" }
+              : a,
+          ),
+        );
+      }
+    }
+
+    return results;
+  }, [attachments]);
+
+  const handleSubmit = useCallback(async () => {
     const trimmed = value.trim();
-    if (!trimmed) return;
-    onSend(trimmed);
+    if (!trimmed && attachments.length === 0) return;
+
+    if (attachments.length > 0) {
+      setIsUploading(true);
+      try {
+        const uploaded = await uploadAttachments();
+        if (uploaded.length > 0) {
+          onSend(trimmed, uploaded);
+        } else if (trimmed) {
+          onSend(trimmed);
+        }
+      } finally {
+        setIsUploading(false);
+        setAttachments([]);
+      }
+    } else {
+      onSend(trimmed);
+    }
+
     setValue("");
     onAtDismiss();
-  }, [value, onSend, onAtDismiss]);
+  }, [value, attachments, onSend, onAtDismiss, uploadAttachments]);
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -108,42 +277,181 @@ export function ChatInput({
     onAtTrigger("", cursor);
   }, [value, onAtTrigger]);
 
+  // Drag-and-drop handlers
+  const handleDragOver = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragOver(true);
+  }, []);
+
+  const handleDragLeave = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragOver(false);
+  }, []);
+
+  const handleDrop = useCallback(
+    (e: React.DragEvent) => {
+      e.preventDefault();
+      setIsDragOver(false);
+      if (e.dataTransfer.files.length > 0) {
+        validateAndAddFiles(e.dataTransfer.files);
+      }
+    },
+    [validateAndAddFiles],
+  );
+
+  // Clipboard paste handler
+  const handlePaste = useCallback(
+    (e: React.ClipboardEvent) => {
+      const files = e.clipboardData.files;
+      if (files.length > 0) {
+        e.preventDefault();
+        validateAndAddFiles(files);
+      }
+    },
+    [validateAndAddFiles],
+  );
+
   return (
-    <div className="flex items-end gap-2">
-      <div className="relative flex-1">
-        <textarea
-          ref={textareaRef}
-          value={value}
-          onChange={handleChange}
-          onKeyDown={handleKeyDown}
-          placeholder={placeholder}
-          disabled={disabled}
-          rows={1}
-          className="w-full resize-none rounded-xl border border-neutral-700 bg-neutral-900 px-4 py-3 pr-12 text-sm text-white placeholder:text-neutral-500 focus:border-neutral-500 focus:outline-none disabled:opacity-50"
-        />
-        {/* Mobile @ button */}
+    <div
+      className="relative"
+      onDragOver={handleDragOver}
+      onDragLeave={handleDragLeave}
+      onDrop={handleDrop}
+    >
+      {/* Drag overlay */}
+      {isDragOver && (
+        <div className="absolute inset-0 z-10 flex items-center justify-center rounded-xl border-2 border-dashed border-amber-500 bg-amber-500/10">
+          <span className="text-sm font-medium text-amber-400">Drop files here</span>
+        </div>
+      )}
+
+      {/* Attachment preview strip */}
+      {attachments.length > 0 && (
+        <div className="mb-2 flex flex-wrap gap-2">
+          {attachments.map((att) => (
+            <div
+              key={att.id}
+              data-testid="attachment-preview"
+              className="relative flex items-center gap-2 rounded-lg border border-neutral-700 bg-neutral-800 px-2 py-1.5"
+            >
+              {att.preview ? (
+                <img
+                  src={att.preview}
+                  alt=""
+                  className="h-8 w-8 rounded object-cover"
+                />
+              ) : (
+                <div className="flex h-8 w-8 items-center justify-center rounded bg-neutral-700 text-xs text-neutral-400">
+                  PDF
+                </div>
+              )}
+              <div className="flex flex-col">
+                <span className="max-w-[120px] truncate text-xs text-neutral-300">
+                  {att.file.name}
+                </span>
+                {att.error ? (
+                  <span className="text-xs text-red-400">{att.error}</span>
+                ) : att.progress > 0 && att.progress < 100 ? (
+                  <div className="mt-0.5 h-1 w-16 overflow-hidden rounded-full bg-neutral-700">
+                    <div
+                      className="h-full bg-amber-500 transition-all"
+                      style={{ width: `${att.progress}%` }}
+                    />
+                  </div>
+                ) : null}
+              </div>
+              <button
+                type="button"
+                onClick={() => removeAttachment(att.id)}
+                className="ml-1 rounded p-0.5 text-neutral-500 hover:text-neutral-300"
+                aria-label={`Remove ${att.file.name}`}
+              >
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <line x1="18" y1="6" x2="6" y2="18" />
+                  <line x1="6" y1="6" x2="18" y2="18" />
+                </svg>
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Error toast */}
+      {attachError && (
+        <div className="mb-2 rounded-lg border border-red-800/50 bg-red-950/30 px-3 py-2 text-xs text-red-300">
+          {attachError}
+        </div>
+      )}
+
+      <div className="flex items-end gap-2">
+        {/* Paperclip / attach button */}
         <button
           type="button"
-          onClick={handleAtButtonClick}
-          disabled={disabled}
-          className="absolute bottom-2.5 right-2 rounded-md p-1 text-neutral-500 transition-colors hover:text-neutral-300 disabled:opacity-50 md:hidden"
-          aria-label="Mention a leader"
+          onClick={() => fileInputRef.current?.click()}
+          disabled={disabled || isUploading}
+          className="flex h-[44px] w-[44px] shrink-0 items-center justify-center rounded-xl border border-neutral-700 text-neutral-400 transition-colors hover:border-neutral-500 hover:text-white disabled:opacity-50"
+          aria-label="Attach file"
         >
-          <span className="text-sm font-medium">@</span>
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" />
+          </svg>
+        </button>
+
+        <input
+          ref={fileInputRef}
+          type="file"
+          multiple
+          accept="image/png,image/jpeg,image/gif,image/webp,application/pdf"
+          className="hidden"
+          onChange={(e) => {
+            if (e.target.files) validateAndAddFiles(e.target.files);
+            e.target.value = "";
+          }}
+        />
+
+        <div className="relative flex-1">
+          <textarea
+            ref={textareaRef}
+            value={value}
+            onChange={handleChange}
+            onKeyDown={handleKeyDown}
+            onPaste={handlePaste}
+            placeholder={placeholder}
+            disabled={disabled || isUploading}
+            rows={1}
+            className="w-full resize-none rounded-xl border border-neutral-700 bg-neutral-900 px-4 py-3 pr-12 text-sm text-white placeholder:text-neutral-500 focus:border-neutral-500 focus:outline-none disabled:opacity-50"
+          />
+          {/* Mobile @ button */}
+          <button
+            type="button"
+            onClick={handleAtButtonClick}
+            disabled={disabled}
+            className="absolute bottom-2.5 right-2 rounded-md p-1 text-neutral-500 transition-colors hover:text-neutral-300 disabled:opacity-50 md:hidden"
+            aria-label="Mention a leader"
+          >
+            <span className="text-sm font-medium">@</span>
+          </button>
+        </div>
+        <button
+          type="button"
+          onClick={handleSubmit}
+          disabled={disabled || isUploading || (!value.trim() && attachments.length === 0)}
+          className="flex h-[44px] w-[44px] shrink-0 items-center justify-center rounded-xl bg-amber-600 text-white transition-colors hover:bg-amber-500 disabled:opacity-50 disabled:hover:bg-amber-600"
+          aria-label="Send message"
+        >
+          {isUploading ? (
+            <svg width="18" height="18" viewBox="0 0 24 24" className="animate-spin" fill="none" stroke="currentColor" strokeWidth="2">
+              <circle cx="12" cy="12" r="10" strokeOpacity="0.25" />
+              <path d="M12 2a10 10 0 0 1 10 10" strokeLinecap="round" />
+            </svg>
+          ) : (
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <line x1="12" y1="19" x2="12" y2="5" />
+              <polyline points="5 12 12 5 19 12" />
+            </svg>
+          )}
         </button>
       </div>
-      <button
-        type="button"
-        onClick={handleSubmit}
-        disabled={disabled || !value.trim()}
-        className="flex h-[44px] w-[44px] shrink-0 items-center justify-center rounded-xl bg-amber-600 text-white transition-colors hover:bg-amber-500 disabled:opacity-50 disabled:hover:bg-amber-600"
-        aria-label="Send message"
-      >
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-          <line x1="12" y1="19" x2="12" y2="5" />
-          <polyline points="5 12 12 5 19 12" />
-        </svg>
-      </button>
     </div>
   );
 }

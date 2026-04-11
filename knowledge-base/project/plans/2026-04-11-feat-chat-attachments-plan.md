@@ -142,24 +142,24 @@ Add the file picker, drag-drop, paste, and upload progress to the chat input.
 
 **Tasks:**
 
-- [ ] 2.1 Extract chat input into dedicated component `apps/web-platform/components/chat/chat-input.tsx`
+- [x] 2.1 Extract chat input into dedicated component `apps/web-platform/components/chat/chat-input.tsx`
   - Move the `<form>` from `page.tsx:101-128` into a new component
   - Props: `onSend(content: string, attachments?: AttachmentRef[])`, `disabled: boolean`
   - Keeps existing text input + send button behavior
 
-- [ ] 2.2 Add file input handlers (paperclip button, drag-drop, clipboard paste)
+- [x] 2.2 Add file input handlers (paperclip button, drag-drop, clipboard paste)
   - **Paperclip button:** Hidden `<input type="file" accept="image/png,image/jpeg,image/gif,image/webp,application/pdf" multiple />` triggered by paperclip icon button to the left of the text input. On file select: add to pending attachments state, show preview strip
   - **Drag-and-drop:** `onDragEnter`/`onDragOver` on chat container shows drop zone overlay. `onDrop`: add files to pending attachments with client-side type/size validation
   - **Clipboard paste:** `onPaste` handler checks `event.clipboardData.files` for image data, adds to pending attachments
   - **Client-side validation:** reject files > 20 MB or wrong MIME type with immediate error feedback. Cap at 5 files per message
 
-- [ ] 2.3 Add attachment preview strip
+- [x] 2.3 Add attachment preview strip
   - Below the text input, show thumbnails for pending images and file cards for pending PDFs
   - Each preview has a remove (X) button
   - Show filename and size
   - For images: `URL.createObjectURL()` for local preview (works with existing `blob:` in CSP `img-src`)
 
-- [ ] 2.4 Implement upload flow in `ChatInput`
+- [x] 2.4 Implement upload flow in `ChatInput`
   - On send: for each pending attachment:
     1. Call `POST /api/attachments/presign` with file metadata
     2. `PUT` the file to the returned `uploadUrl`

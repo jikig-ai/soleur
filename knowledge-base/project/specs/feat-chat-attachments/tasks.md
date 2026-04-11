@@ -24,10 +24,10 @@
 
 ## Phase 2: Client Upload UX
 
-- [ ] 2.1 Extract chat input into `components/chat/chat-input.tsx`
-- [ ] 2.2 Add file input handlers (paperclip button, drag-drop, clipboard paste) with client-side validation
-- [ ] 2.3 Add attachment preview strip (thumbnails + file cards + remove button)
-- [ ] 2.4 Implement presign -> upload -> send flow with progress indicators
+- [x] 2.1 Extract chat input into `components/chat/chat-input.tsx`
+- [x] 2.2 Add file input handlers (paperclip button, drag-drop, clipboard paste) with client-side validation
+- [x] 2.3 Add attachment preview strip (thumbnails + file cards + remove button)
+- [x] 2.4 Implement presign -> upload -> send flow with progress indicators
 
 ## Phase 3: Server-Side Processing
 
