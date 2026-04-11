@@ -139,43 +139,43 @@ missing auto-approve integration test for completeness.
 
 #### Phase 1: Merge and Verify
 
-- [ ] 1.1 Merge `origin/main` into this branch to receive CI/CD
+- [x] 1.1 Merge `origin/main` into this branch to receive CI/CD
   implementation from PR #1925
-- [ ] 1.2 Run existing test suite to verify all tests pass:
+- [x] 1.2 Run existing test suite to verify all tests pass:
   `cd apps/web-platform && bun test ci-tools github-api tool-tiers canusertool-tiered-gating`
-- [ ] 1.3 Verify TypeScript compilation: `cd apps/web-platform && npx tsc --noEmit`
+- [x] 1.3 Verify TypeScript compilation: `cd apps/web-platform && npx tsc --noEmit`
 
 #### Phase 2: Acceptance Criteria Verification
 
 Map each acceptance criterion to its implementation evidence:
 
-- [ ] 2.1 **AC1: Agent can read workflow run status** --
+- [x] 2.1 **AC1: Agent can read workflow run status** --
   `readCiStatus()` in `ci-tools.ts` calls
   `GET /repos/{owner}/{repo}/actions/runs` and returns `CiRunSummary[]`
   with id, name, branch, sha, status, conclusion, url, workflowId.
   Verified by `ci-tools.test.ts` "returns workflow runs with status"
   test.
 
-- [ ] 2.2 **AC2: Agent can read check suite results** --
+- [x] 2.2 **AC2: Agent can read check suite results** --
   `readWorkflowLogs()` in `ci-tools.ts` fetches check runs via
   `GET /repos/{owner}/{repo}/commits/{sha}/check-runs` and extracts
   annotations. Verified by `ci-tools.test.ts` "returns annotations"
   test.
 
-- [ ] 2.3 **AC3: Agent can read workflow run logs (with truncation)** --
+- [x] 2.3 **AC3: Agent can read workflow run logs (with truncation)** --
   `readWorkflowLogs()` falls back to `fetchFallbackLog()` which returns
   last 100 lines of the first failed step via
   `GET /repos/{owner}/{repo}/actions/jobs/{id}/logs`. Verified by
   `ci-tools.test.ts` "falls back to last 100 lines" test.
 
-- [ ] 2.4 **AC4: All reads are auto-approved at the proxy layer** --
+- [x] 2.4 **AC4: All reads are auto-approved at the proxy layer** --
   `tool-tiers.ts` maps both
   `mcp__soleur_platform__github_read_ci_status` and
   `mcp__soleur_platform__github_read_workflow_logs` to `auto-approve`.
   `canUseTool` in `agent-runner.ts` passes through auto-approve tools
   with audit log. Verified by `tool-tiers.test.ts`.
 
-- [ ] 2.5 **AC5: Proxy rejects reads targeting repos other than the
+- [x] 2.5 **AC5: Proxy rejects reads targeting repos other than the
   connected workspace** -- MCP tool definitions in `agent-runner.ts`
   hardcode `owner` and `repo` from workspace metadata (captured at line
   565 and 590). The tool schema exposes only `branch` and `per_page`
@@ -184,7 +184,7 @@ Map each acceptance criterion to its implementation evidence:
 
 #### Phase 3: Test Gap Remediation
 
-- [ ] 3.1 **Add auto-approve integration test to
+- [x] 3.1 **Add auto-approve integration test to
   `canusertool-tiered-gating.test.ts`.** The existing tests only cover
   the `gated` tier path (create_pull_request). The `auto-approve` path
   for `github_read_ci_status` and `github_read_workflow_logs` is tested
@@ -215,7 +215,7 @@ Map each acceptance criterion to its implementation evidence:
 
 Potential gaps to investigate:
 
-- [ ] 4.1 **Check suite vs check run semantics.** AC2 says "check suite
+- [x] 4.1 **Check suite vs check run semantics.** AC2 says "check suite
   results" but the implementation reads check runs
   (`/commits/{sha}/check-runs`), not check suites
   (`/repos/{owner}/{repo}/check-suites/{id}`). Check runs are the
@@ -225,7 +225,7 @@ Potential gaps to investigate:
   runs are strictly more useful than check suites for CI failure
   analysis.
 
-- [ ] 4.2 **Commit status checks.** The issue description mentions
+- [x] 4.2 **Commit status checks.** The issue description mentions
   "commit statuses" but neither the spec nor the implementation includes
   the legacy Status API
   (`GET /repos/{owner}/{repo}/commits/{ref}/status`). The modern Check
@@ -240,7 +240,7 @@ Potential gaps to investigate:
   Check Runs, not Commit Statuses. Repos on GitHub Actions exclusively
   use Check Runs, so the legacy Status API is not needed.
 
-- [ ] 4.3 **GitHub App permissions.** The archived tasks.md shows task
+- [x] 4.3 **GitHub App permissions.** The archived tasks.md shows task
   1.5 "Update GitHub App manifest to add `actions:write` and
   `checks:read` permissions" as unchecked. This is a manual step
   (GitHub App settings page). Verify the app manifest has correct
@@ -295,15 +295,15 @@ Potential gaps to investigate:
 
 ## Acceptance Criteria
 
-- [ ] Agent can read workflow run status for the connected repo
-- [ ] Agent can read check suite results
-- [ ] Agent can read workflow run logs (with truncation for large
+- [x] Agent can read workflow run status for the connected repo
+- [x] Agent can read check suite results
+- [x] Agent can read workflow run logs (with truncation for large
   outputs)
-- [ ] All reads are auto-approved at the proxy layer
-- [ ] Proxy rejects reads targeting repos other than the connected
+- [x] All reads are auto-approved at the proxy layer
+- [x] Proxy rejects reads targeting repos other than the connected
   workspace
-- [ ] All existing tests pass after merge
-- [ ] Auto-approve integration test added for CI read tools
+- [x] All existing tests pass after merge
+- [x] Auto-approve integration test added for CI read tools
 
 ## Domain Review
 
