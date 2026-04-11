@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { createClient } from "@/lib/supabase/client";
 import type { Conversation, Message, ConversationStatus } from "@/lib/types";
-import type { DomainLeaderId } from "@/server/domain-leaders";
+import { DOMAIN_LEADERS, type DomainLeaderId } from "@/server/domain-leaders";
 
 export interface ConversationWithPreview extends Conversation {
   title: string;
@@ -23,13 +23,47 @@ interface UseConversationsResult {
   refetch: () => void;
 }
 
-function deriveTitle(messages: Message[], conversationId: string): string {
-  const firstUserMsg = messages.find(
-    (m) => m.conversation_id === conversationId && m.role === "user",
-  );
-  if (!firstUserMsg) return "Untitled conversation";
-  const content = firstUserMsg.content.replace(/@\w+\s*/g, "").trim();
-  return content.length > 60 ? `${content.slice(0, 57)}...` : content;
+export function deriveTitle(
+  messages: Message[],
+  conversationId: string,
+  domainLeader?: DomainLeaderId | null,
+): string {
+  const convMessages = messages.filter((m) => m.conversation_id === conversationId);
+  const firstUserMsg = convMessages.find((m) => m.role === "user");
+  const firstAssistantMsg = convMessages.find((m) => m.role === "assistant");
+
+  // 1. First user message content (strip @-mentions, truncate)
+  if (firstUserMsg) {
+    const stripped = firstUserMsg.content.replace(/@\w+\s*/g, "").trim();
+    if (stripped) {
+      return stripped.length > 60 ? `${stripped.slice(0, 57)}...` : stripped;
+    }
+
+    // 2. Assistant message (better title than raw @-mention)
+    if (firstAssistantMsg) {
+      const content = firstAssistantMsg.content.trim();
+      return content.length > 60 ? `${content.slice(0, 57)}...` : content;
+    }
+
+    // 3. Raw @-mention text (last resort for messages)
+    const raw = firstUserMsg.content.trim();
+    if (raw) return raw.length > 60 ? `${raw.slice(0, 57)}...` : raw;
+  }
+
+  // No user message — try assistant only
+  if (firstAssistantMsg) {
+    const content = firstAssistantMsg.content.trim();
+    return content.length > 60 ? `${content.slice(0, 57)}...` : content;
+  }
+
+  // 4. Domain leader label
+  if (domainLeader) {
+    const leader = DOMAIN_LEADERS.find((l) => l.id === domainLeader);
+    if (leader) return `${leader.name} conversation`;
+  }
+
+  // 5. Fallback
+  return "Untitled conversation";
 }
 
 function derivePreview(messages: Message[], conversationId: string): { text: string | null; leader: DomainLeaderId | null } {
@@ -117,7 +151,7 @@ export function useConversations(
         const { text, leader } = derivePreview(messages, conv.id);
         const title = conv.domain_leader === "system"
           ? "Project Analysis"
-          : deriveTitle(messages, conv.id);
+          : deriveTitle(messages, conv.id, conv.domain_leader);
         return {
           ...conv,
           title,
