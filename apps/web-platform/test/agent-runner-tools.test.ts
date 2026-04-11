@@ -9,9 +9,10 @@ process.env.NEXT_PUBLIC_SUPABASE_URL ??= "https://test.supabase.co";
 // (vitest hoists vi.mock to the top of the file before let/const execute).
 // ---------------------------------------------------------------------------
 
-const { mockFrom, mockQuery } = vi.hoisted(() => ({
+const { mockFrom, mockQuery, mockReadFileSync } = vi.hoisted(() => ({
   mockFrom: vi.fn(),
   mockQuery: vi.fn(),
+  mockReadFileSync: vi.fn(),
 }));
 
 vi.mock("@anthropic-ai/claude-agent-sdk", () => ({
@@ -26,6 +27,14 @@ vi.mock("@anthropic-ai/claude-agent-sdk", () => ({
     instance: { tools: opts.tools },
   })),
 }));
+
+vi.mock("fs", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("fs")>();
+  return {
+    ...actual,
+    readFileSync: mockReadFileSync,
+  };
+});
 
 vi.mock("@supabase/supabase-js", () => ({
   createClient: vi.fn(() => ({ from: mockFrom })),
@@ -59,18 +68,34 @@ vi.mock("../server/sandbox-hook", () => ({
   createSandboxHook: vi.fn(() => vi.fn()),
 }));
 vi.mock("../server/review-gate", () => ({
-  abortableReviewGate: vi.fn(),
+  // Default to "Approve" so gated tools pass through in wiring tests.
+  // Tiered gating behavior is tested in canusertool-tiered-gating.test.ts.
+  abortableReviewGate: vi.fn().mockResolvedValue("Approve"),
   validateSelection: vi.fn(),
   MAX_SELECTION_LENGTH: 200,
   REVIEW_GATE_TIMEOUT_MS: 300_000,
 }));
-vi.mock("../server/domain-leaders", () => ({
-  DOMAIN_LEADERS: [{ id: "cpo", name: "CPO", title: "Chief Product Officer", description: "Product" }],
-}));
+vi.mock("../server/domain-leaders", () => {
+  const leaders = [{ id: "cpo", name: "CPO", title: "Chief Product Officer", description: "Product" }];
+  return {
+    DOMAIN_LEADERS: leaders,
+    ROUTABLE_DOMAIN_LEADERS: leaders,
+  };
+});
 vi.mock("../server/domain-router", () => ({ routeMessage: vi.fn() }));
 vi.mock("../server/session-sync", () => ({
   syncPull: vi.fn(),
   syncPush: vi.fn(),
+}));
+vi.mock("../server/github-api", () => ({
+  githubApiGet: vi.fn().mockResolvedValue({ default_branch: "main" }),
+  githubApiGetText: vi.fn().mockResolvedValue(""),
+  githubApiPost: vi.fn().mockResolvedValue(null),
+}));
+vi.mock("../server/service-tools", () => ({
+  plausibleCreateSite: vi.fn(),
+  plausibleAddGoal: vi.fn(),
+  plausibleGetStats: vi.fn(),
 }));
 
 import { startAgentSession } from "../server/agent-runner";
@@ -79,31 +104,36 @@ import { startAgentSession } from "../server/agent-runner";
 // Helpers
 // ---------------------------------------------------------------------------
 
-function setupSupabaseMock(userData: Record<string, unknown>) {
+const DEFAULT_API_KEY_ROW = {
+  id: "key-1",
+  provider: "anthropic",
+  encrypted_key: Buffer.from("test").toString("base64"),
+  iv: Buffer.from("test-iv-1234").toString("base64"),
+  auth_tag: Buffer.from("test-tag-1234567").toString("base64"),
+  key_version: 2,
+};
+
+// Creates a chainable mock that supports both:
+// - getUserApiKey: select().eq().eq().eq().limit().single() -> { data, error }
+// - getUserServiceTokens: await select().eq().eq() -> { data, error }
+function createApiKeysMock(rows: Record<string, unknown>[] = [DEFAULT_API_KEY_ROW]) {
+  const createChain = (): Record<string, unknown> => ({
+    data: rows,
+    error: null,
+    eq: () => createChain(),
+    limit: () => ({ single: () => ({ data: rows[0] ?? null, error: null }) }),
+    then: (resolve: (v: unknown) => void) => resolve({ data: rows, error: null }),
+  });
+  return { select: () => createChain() };
+}
+
+function setupSupabaseMock(
+  userData: Record<string, unknown>,
+  serviceTokenRows?: Record<string, unknown>[],
+) {
   mockFrom.mockImplementation((table: string) => {
     if (table === "api_keys") {
-      return {
-        select: () => ({
-          eq: () => ({
-            eq: () => ({
-              eq: () => ({
-                limit: () => ({
-                  single: () => ({
-                    data: {
-                      id: "key-1",
-                      encrypted_key: Buffer.from("test").toString("base64"),
-                      iv: Buffer.from("test-iv-1234").toString("base64"),
-                      auth_tag: Buffer.from("test-tag-1234567").toString("base64"),
-                      key_version: 2,
-                    },
-                    error: null,
-                  }),
-                }),
-              }),
-            }),
-          }),
-        }),
-      };
+      return createApiKeysMock(serviceTokenRows ?? [DEFAULT_API_KEY_ROW]);
     }
     if (table === "users") {
       return {
@@ -153,6 +183,20 @@ function setupQueryMockImmediate() {
 describe("agent-runner MCP tool wiring", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // Return plugin.json with MCP server entries when readFileSync is called
+    mockReadFileSync.mockImplementation((filePath: string) => {
+      if (String(filePath).includes("plugin.json")) {
+        return JSON.stringify({
+          mcpServers: {
+            context7: { type: "http", url: "https://mcp.context7.com/mcp" },
+            cloudflare: { type: "http", url: "https://mcp.cloudflare.com/mcp" },
+            vercel: { type: "http", url: "https://mcp.vercel.com" },
+            stripe: { type: "http", url: "https://mcp.stripe.com" },
+          },
+        });
+      }
+      throw new Error(`ENOENT: no such file ${filePath}`);
+    });
   });
 
   test("passes mcpServers to query() when user has installationId and repo_url", async () => {
@@ -306,6 +350,95 @@ describe("agent-runner MCP tool wiring", () => {
     expect(options.mcpServers).toBeUndefined();
   });
 
+  test("canUseTool allows plugin MCP tools from registered servers", async () => {
+    setupSupabaseMock({
+      workspace_path: "/tmp/test-workspace",
+      repo_status: "ready",
+      github_installation_id: 12345,
+      repo_url: "https://github.com/alice/my-repo",
+    });
+    setupQueryMockImmediate();
+
+    await startAgentSession("user-1", "conv-1", "cpo");
+
+    const options = mockQuery.mock.calls[0][0].options;
+    const canUseTool = options.canUseTool!;
+
+    // Plugin MCP tool from a server registered in plugin.json should be allowed
+    const result = await canUseTool(
+      "mcp__plugin_soleur_cloudflare__zones_list",
+      {},
+      { signal: new AbortController().signal },
+    );
+    expect(result.behavior).toBe("allow");
+  });
+
+  test("canUseTool denies plugin MCP tools from unregistered servers", async () => {
+    setupSupabaseMock({
+      workspace_path: "/tmp/test-workspace",
+      repo_status: "ready",
+      github_installation_id: 12345,
+      repo_url: "https://github.com/alice/my-repo",
+    });
+    setupQueryMockImmediate();
+
+    await startAgentSession("user-1", "conv-1", "cpo");
+
+    const options = mockQuery.mock.calls[0][0].options;
+    const canUseTool = options.canUseTool!;
+
+    // Plugin MCP tool from an unregistered server should be denied
+    const result = await canUseTool(
+      "mcp__plugin_soleur_unknown__hack",
+      {},
+      { signal: new AbortController().signal },
+    );
+    expect(result.behavior).toBe("deny");
+  });
+
+  test("canUseTool denies non-plugin mcp__ tools", async () => {
+    setupSupabaseMock({
+      workspace_path: "/tmp/test-workspace",
+      repo_status: "ready",
+      github_installation_id: 12345,
+      repo_url: "https://github.com/alice/my-repo",
+    });
+    setupQueryMockImmediate();
+
+    await startAgentSession("user-1", "conv-1", "cpo");
+
+    const options = mockQuery.mock.calls[0][0].options;
+    const canUseTool = options.canUseTool!;
+
+    // Non-plugin MCP tool should still be denied
+    const result = await canUseTool(
+      "mcp__random_server__dangerous_tool",
+      {},
+      { signal: new AbortController().signal },
+    );
+    expect(result.behavior).toBe("deny");
+  });
+
+  test("allowedTools includes plugin MCP wildcard patterns", async () => {
+    setupSupabaseMock({
+      workspace_path: "/tmp/test-workspace",
+      repo_status: "ready",
+      github_installation_id: 12345,
+      repo_url: "https://github.com/alice/my-repo",
+    });
+    setupQueryMockImmediate();
+
+    await startAgentSession("user-1", "conv-1", "cpo");
+
+    const options = mockQuery.mock.calls[0][0].options;
+
+    // allowedTools should include wildcard patterns for plugin MCP servers
+    expect(options.allowedTools).toContain("mcp__plugin_soleur_cloudflare__*");
+    expect(options.allowedTools).toContain("mcp__plugin_soleur_context7__*");
+    expect(options.allowedTools).toContain("mcp__plugin_soleur_vercel__*");
+    expect(options.allowedTools).toContain("mcp__plugin_soleur_stripe__*");
+  });
+
   test("canUseTool still denies non-mcp unrecognized tools", async () => {
     setupSupabaseMock({
       workspace_path: "/tmp/test-workspace",
@@ -327,5 +460,101 @@ describe("agent-runner MCP tool wiring", () => {
       { signal: new AbortController().signal },
     );
     expect(result.behavior).toBe("deny");
+  });
+
+  test("platformToolNames includes Plausible tools when user has PLAUSIBLE_API_KEY", async () => {
+    const plausibleRow = {
+      ...DEFAULT_API_KEY_ROW,
+      id: "key-plausible",
+      provider: "plausible",
+    };
+    setupSupabaseMock(
+      {
+        workspace_path: "/tmp/test-workspace",
+        repo_status: "ready",
+        github_installation_id: 12345,
+        repo_url: "https://github.com/alice/my-repo",
+      },
+      [DEFAULT_API_KEY_ROW, plausibleRow],
+    );
+    setupQueryMockImmediate();
+
+    await startAgentSession("user-1", "conv-1", "cpo");
+
+    const options = mockQuery.mock.calls[0][0].options;
+    expect(options.allowedTools).toContain("mcp__soleur_platform__plausible_create_site");
+    expect(options.allowedTools).toContain("mcp__soleur_platform__plausible_add_goal");
+    expect(options.allowedTools).toContain("mcp__soleur_platform__plausible_get_stats");
+  });
+
+  test("Plausible tools registered even without GitHub installation", async () => {
+    const plausibleRow = {
+      ...DEFAULT_API_KEY_ROW,
+      id: "key-plausible",
+      provider: "plausible",
+    };
+    setupSupabaseMock(
+      {
+        workspace_path: "/tmp/test-workspace",
+        repo_status: null,
+        github_installation_id: null,
+        repo_url: null,
+      },
+      [DEFAULT_API_KEY_ROW, plausibleRow],
+    );
+    setupQueryMockImmediate();
+
+    await startAgentSession("user-1", "conv-1", "cpo");
+
+    const options = mockQuery.mock.calls[0][0].options;
+    expect(options.allowedTools).toContain("mcp__soleur_platform__plausible_create_site");
+    // PR tool should NOT be present (no GitHub installation)
+    expect(options.allowedTools).not.toContain("mcp__soleur_platform__create_pull_request");
+  });
+
+  test("Plausible tools not registered when user has no PLAUSIBLE_API_KEY", async () => {
+    setupSupabaseMock({
+      workspace_path: "/tmp/test-workspace",
+      repo_status: "ready",
+      github_installation_id: 12345,
+      repo_url: "https://github.com/alice/my-repo",
+    });
+    setupQueryMockImmediate();
+
+    await startAgentSession("user-1", "conv-1", "cpo");
+
+    const options = mockQuery.mock.calls[0][0].options;
+    const allowed = options.allowedTools ?? [];
+    expect(allowed).not.toContain("mcp__soleur_platform__plausible_create_site");
+  });
+
+  test("canUseTool allows Plausible MCP tools when registered", async () => {
+    const plausibleRow = {
+      ...DEFAULT_API_KEY_ROW,
+      id: "key-plausible",
+      provider: "plausible",
+    };
+    setupSupabaseMock(
+      {
+        workspace_path: "/tmp/test-workspace",
+        repo_status: "ready",
+        github_installation_id: 12345,
+        repo_url: "https://github.com/alice/my-repo",
+      },
+      [DEFAULT_API_KEY_ROW, plausibleRow],
+    );
+    setupQueryMockImmediate();
+
+    await startAgentSession("user-1", "conv-1", "cpo");
+
+    const options = mockQuery.mock.calls[0][0].options;
+    const canUseTool = options.canUseTool!;
+
+    const result = await canUseTool(
+      "mcp__soleur_platform__plausible_create_site",
+      { domain: "example.com" },
+      { signal: new AbortController().signal },
+    );
+    expect(result.behavior).toBe("allow");
   });
 });

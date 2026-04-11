@@ -1,0 +1,1314 @@
+{
+  "version": "2.9",
+  "children": [
+    {
+      "type": "frame",
+      "id": "xluj1",
+      "x": 0,
+      "y": 0,
+      "name": "Desktop Chat Status Bar",
+      "clip": true,
+      "width": 800,
+      "fill": "#0a0a0a",
+      "layout": "vertical",
+      "children": [
+        {
+          "type": "frame",
+          "id": "Dqu4B",
+          "name": "Message Area Tail",
+          "width": "fill_container",
+          "height": 40,
+          "fill": "#0a0a0a",
+          "layout": "vertical",
+          "padding": [
+            12,
+            24
+          ],
+          "justifyContent": "end",
+          "children": [
+            {
+              "type": "text",
+              "id": "zSuu9",
+              "name": "lastMsg",
+              "fill": "#e5e5e5",
+              "content": "Here is a summary of the competitive landscape...",
+              "fontFamily": "Inter",
+              "fontSize": 14,
+              "fontWeight": "normal"
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "MxNn9",
+          "name": "Status Bar",
+          "width": "fill_container",
+          "fill": "#0a0a0a",
+          "stroke": {
+            "align": "outside",
+            "thickness": {
+              "top": 1
+            },
+            "fill": "#262626"
+          },
+          "gap": 12,
+          "padding": [
+            6,
+            24
+          ],
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "text",
+              "id": "iaxsp",
+              "name": "leaderText",
+              "fill": "#737373",
+              "content": "3 leaders responding",
+              "fontFamily": "Inter",
+              "fontSize": 12,
+              "fontWeight": "normal"
+            },
+            {
+              "type": "text",
+              "id": "baymt",
+              "name": "sep1",
+              "fill": "#525252",
+              "content": "·",
+              "fontFamily": "Inter",
+              "fontSize": 12,
+              "fontWeight": "normal"
+            },
+            {
+              "type": "text",
+              "id": "TAKxd",
+              "name": "costBadge",
+              "fill": "#737373",
+              "content": "~$0.0042 estimated",
+              "fontFamily": "Inter",
+              "fontSize": 12,
+              "fontWeight": "normal"
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "b2eH3",
+          "name": "Input Bar",
+          "width": "fill_container",
+          "height": 52,
+          "fill": "#0a0a0a",
+          "stroke": {
+            "align": "outside",
+            "thickness": {
+              "top": 1
+            },
+            "fill": "#262626"
+          },
+          "gap": 12,
+          "padding": [
+            12,
+            24
+          ],
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "frame",
+              "id": "qCRN4",
+              "name": "Input Field",
+              "width": "fill_container",
+              "height": 36,
+              "fill": "#171717",
+              "cornerRadius": 8,
+              "padding": [
+                8,
+                12
+              ],
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "cjcLt",
+                  "name": "placeholder",
+                  "fill": "#525252",
+                  "content": "Message your leaders...",
+                  "fontFamily": "Inter",
+                  "fontSize": 14,
+                  "fontWeight": "normal"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "LhM8N",
+      "x": 0,
+      "y": 200,
+      "name": "Mobile Chat Status Bar",
+      "clip": true,
+      "width": 390,
+      "fill": "#0a0a0a",
+      "layout": "vertical",
+      "children": [
+        {
+          "type": "frame",
+          "id": "KZcgh",
+          "name": "Message Area Tail",
+          "width": "fill_container",
+          "height": 40,
+          "fill": "#0a0a0a",
+          "layout": "vertical",
+          "padding": [
+            12,
+            16
+          ],
+          "justifyContent": "end",
+          "children": [
+            {
+              "type": "text",
+              "id": "YrBVo",
+              "name": "mLastMsg",
+              "fill": "#e5e5e5",
+              "content": "Here is the competitive landscape...",
+              "fontFamily": "Inter",
+              "fontSize": 14,
+              "fontWeight": "normal"
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "X8kX1",
+          "name": "Status Bar",
+          "width": "fill_container",
+          "fill": "#0a0a0a",
+          "stroke": {
+            "align": "outside",
+            "thickness": {
+              "top": 1
+            },
+            "fill": "#262626"
+          },
+          "gap": 8,
+          "padding": [
+            6,
+            16
+          ],
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "text",
+              "id": "ZnkpX",
+              "name": "mLeaderText",
+              "fill": "#737373",
+              "content": "3 leaders responding",
+              "fontFamily": "Inter",
+              "fontSize": 11,
+              "fontWeight": "normal"
+            },
+            {
+              "type": "text",
+              "id": "RtETP",
+              "name": "mSep",
+              "fill": "#525252",
+              "content": "·",
+              "fontFamily": "Inter",
+              "fontSize": 11,
+              "fontWeight": "normal"
+            },
+            {
+              "type": "text",
+              "id": "dutKG",
+              "name": "mCostBadge",
+              "fill": "#737373",
+              "content": "~$0.0042 est.",
+              "fontFamily": "Inter",
+              "fontSize": 11,
+              "fontWeight": "normal"
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "oo0PK",
+          "name": "Input Bar",
+          "width": "fill_container",
+          "height": 52,
+          "fill": "#0a0a0a",
+          "stroke": {
+            "align": "outside",
+            "thickness": {
+              "top": 1
+            },
+            "fill": "#262626"
+          },
+          "gap": 12,
+          "padding": [
+            12,
+            16
+          ],
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "frame",
+              "id": "EvfGV",
+              "name": "Input Field",
+              "width": "fill_container",
+              "height": 36,
+              "fill": "#171717",
+              "cornerRadius": 8,
+              "padding": [
+                8,
+                12
+              ],
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "jEJpd",
+                  "name": "mPlaceholder",
+                  "fill": "#525252",
+                  "content": "Message your leaders...",
+                  "fontFamily": "Inter",
+                  "fontSize": 14,
+                  "fontWeight": "normal"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "9iXlT",
+      "x": 0,
+      "y": 400,
+      "name": "Desktop Billing Page",
+      "clip": true,
+      "width": 800,
+      "fill": "#0a0a0a",
+      "layout": "vertical",
+      "justifyContent": "center",
+      "alignItems": "center",
+      "children": [
+        {
+          "type": "frame",
+          "id": "tToaI",
+          "name": "Content",
+          "width": 448,
+          "layout": "vertical",
+          "gap": 24,
+          "padding": [
+            40,
+            0
+          ],
+          "children": [
+            {
+              "type": "frame",
+              "id": "fp2GH",
+              "name": "Header",
+              "width": "fill_container",
+              "layout": "vertical",
+              "gap": 8,
+              "children": [
+                {
+                  "type": "text",
+                  "id": "eeNzn",
+                  "name": "heading",
+                  "fill": "#fafafa",
+                  "content": "Billing",
+                  "fontFamily": "Inter",
+                  "fontSize": 24,
+                  "fontWeight": "600"
+                },
+                {
+                  "type": "text",
+                  "id": "Gn0oY",
+                  "name": "subtitle",
+                  "fill": "#737373",
+                  "content": "Manage your Soleur subscription",
+                  "fontFamily": "Inter",
+                  "fontSize": 14,
+                  "fontWeight": "normal"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "BJ5o6",
+              "name": "Subscription Card",
+              "width": "fill_container",
+              "fill": "#171717",
+              "cornerRadius": 8,
+              "stroke": {
+                "align": "inside",
+                "thickness": 1,
+                "fill": "#404040"
+              },
+              "layout": "vertical",
+              "gap": 16,
+              "padding": 24,
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "Ef7YN",
+                  "name": "Sub Row",
+                  "width": "fill_container",
+                  "justifyContent": "space_between",
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "e0Lwh",
+                      "name": "subLabel",
+                      "fill": "#737373",
+                      "content": "Subscription",
+                      "fontFamily": "Inter",
+                      "fontSize": 14,
+                      "fontWeight": "normal"
+                    },
+                    {
+                      "type": "frame",
+                      "id": "1rglQ",
+                      "name": "Badge",
+                      "fill": "#052e16",
+                      "cornerRadius": 9999,
+                      "stroke": {
+                        "align": "inside",
+                        "thickness": 1,
+                        "fill": "#14532d"
+                      },
+                      "padding": [
+                        4,
+                        12
+                      ],
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "B0cH8",
+                          "name": "badgeText",
+                          "fill": "#4ade80",
+                          "content": "Active",
+                          "fontFamily": "Inter",
+                          "fontSize": 12,
+                          "fontWeight": "500"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "0twH2",
+                  "name": "Manage Button",
+                  "width": "fill_container",
+                  "cornerRadius": 8,
+                  "stroke": {
+                    "align": "inside",
+                    "thickness": 1,
+                    "fill": "#525252"
+                  },
+                  "padding": [
+                    12,
+                    16
+                  ],
+                  "justifyContent": "center",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "Xf7dO",
+                      "name": "manageBtnText",
+                      "fill": "#d4d4d4",
+                      "content": "Manage subscription",
+                      "fontFamily": "Inter",
+                      "fontSize": 14,
+                      "fontWeight": "500"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "rRdCA",
+              "name": "API Usage Section",
+              "width": "fill_container",
+              "layout": "vertical",
+              "gap": 16,
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "COEM2",
+                  "name": "Section Header",
+                  "width": "fill_container",
+                  "justifyContent": "space_between",
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "iuviV",
+                      "name": "costTitle",
+                      "fill": "#fafafa",
+                      "content": "API Usage",
+                      "fontFamily": "Inter",
+                      "fontSize": 16,
+                      "fontWeight": "600"
+                    },
+                    {
+                      "type": "text",
+                      "id": "pgeT8",
+                      "name": "totalBadge",
+                      "fill": "#737373",
+                      "content": "~$0.0847 total",
+                      "fontFamily": "Inter",
+                      "fontSize": 12,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "6irJx",
+                  "name": "Cost List",
+                  "width": "fill_container",
+                  "layout": "vertical",
+                  "gap": 8,
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "iwWPo",
+                      "name": "Cost Card 1",
+                      "width": "fill_container",
+                      "fill": "#171717",
+                      "cornerRadius": 8,
+                      "stroke": {
+                        "align": "inside",
+                        "thickness": 1,
+                        "fill": "#404040"
+                      },
+                      "padding": 16,
+                      "justifyContent": "space_between",
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "frame",
+                          "id": "HtA8a",
+                          "name": "Card Left",
+                          "layout": "vertical",
+                          "gap": 4,
+                          "children": [
+                            {
+                              "type": "text",
+                              "id": "yqAvl",
+                              "name": "card1Leader",
+                              "fill": "#e5e5e5",
+                              "content": "Engineering",
+                              "fontFamily": "Inter",
+                              "fontSize": 14,
+                              "fontWeight": "500"
+                            },
+                            {
+                              "type": "text",
+                              "id": "vzC9R",
+                              "name": "card1Time",
+                              "fill": "#737373",
+                              "content": "2 hours ago",
+                              "fontFamily": "Inter",
+                              "fontSize": 12,
+                              "fontWeight": "normal"
+                            }
+                          ]
+                        },
+                        {
+                          "type": "text",
+                          "id": "hE7NQ",
+                          "name": "card1Cost",
+                          "fill": "#d4d4d4",
+                          "content": "~$0.0312",
+                          "fontFamily": "Inter",
+                          "fontSize": 14,
+                          "fontWeight": "500"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "L0exs",
+                      "name": "Cost Card 2",
+                      "width": "fill_container",
+                      "fill": "#171717",
+                      "cornerRadius": 8,
+                      "stroke": {
+                        "align": "inside",
+                        "thickness": 1,
+                        "fill": "#404040"
+                      },
+                      "padding": 16,
+                      "justifyContent": "space_between",
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "frame",
+                          "id": "KyyyM",
+                          "name": "Card Left",
+                          "layout": "vertical",
+                          "gap": 4,
+                          "children": [
+                            {
+                              "type": "text",
+                              "id": "fdl5G",
+                              "name": "card2Leader",
+                              "fill": "#e5e5e5",
+                              "content": "Marketing",
+                              "fontFamily": "Inter",
+                              "fontSize": 14,
+                              "fontWeight": "500"
+                            },
+                            {
+                              "type": "text",
+                              "id": "L81Lx",
+                              "name": "card2Time",
+                              "fill": "#737373",
+                              "content": "5 hours ago",
+                              "fontFamily": "Inter",
+                              "fontSize": 12,
+                              "fontWeight": "normal"
+                            }
+                          ]
+                        },
+                        {
+                          "type": "text",
+                          "id": "ogC7u",
+                          "name": "card2Cost",
+                          "fill": "#d4d4d4",
+                          "content": "~$0.0284",
+                          "fontFamily": "Inter",
+                          "fontSize": 14,
+                          "fontWeight": "500"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "lom49",
+                      "name": "Cost Card 3",
+                      "width": "fill_container",
+                      "fill": "#171717",
+                      "cornerRadius": 8,
+                      "stroke": {
+                        "align": "inside",
+                        "thickness": 1,
+                        "fill": "#404040"
+                      },
+                      "padding": 16,
+                      "justifyContent": "space_between",
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "frame",
+                          "id": "wF6bw",
+                          "name": "Card Left",
+                          "layout": "vertical",
+                          "gap": 4,
+                          "children": [
+                            {
+                              "type": "text",
+                              "id": "Vyi15",
+                              "name": "card3Leader",
+                              "fill": "#e5e5e5",
+                              "content": "Product",
+                              "fontFamily": "Inter",
+                              "fontSize": 14,
+                              "fontWeight": "500"
+                            },
+                            {
+                              "type": "text",
+                              "id": "5kuou",
+                              "name": "card3Time",
+                              "fill": "#737373",
+                              "content": "Yesterday",
+                              "fontFamily": "Inter",
+                              "fontSize": 12,
+                              "fontWeight": "normal"
+                            }
+                          ]
+                        },
+                        {
+                          "type": "text",
+                          "id": "skPHq",
+                          "name": "card3Cost",
+                          "fill": "#d4d4d4",
+                          "content": "~$0.0251",
+                          "fontFamily": "Inter",
+                          "fontSize": 14,
+                          "fontWeight": "500"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "type": "text",
+                  "id": "koMG3",
+                  "name": "estLabel",
+                  "fill": "#525252",
+                  "content": "Costs are estimated based on token usage",
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "normal"
+                }
+              ]
+            },
+            {
+              "type": "text",
+              "id": "YQI3J",
+              "name": "backLink",
+              "fill": "#737373",
+              "textGrowth": "fixed-width",
+              "width": "fill_container",
+              "content": "Back to dashboard",
+              "textAlign": "center",
+              "fontFamily": "Inter",
+              "fontSize": 14,
+              "fontWeight": "normal"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "fEF0s",
+      "x": 860,
+      "y": 400,
+      "name": "Mobile Billing Page",
+      "clip": true,
+      "width": 390,
+      "fill": "#0a0a0a",
+      "layout": "vertical",
+      "padding": 16,
+      "alignItems": "center",
+      "children": [
+        {
+          "type": "frame",
+          "id": "aCwDQ",
+          "name": "Content",
+          "width": "fill_container",
+          "layout": "vertical",
+          "gap": 24,
+          "padding": [
+            24,
+            0
+          ],
+          "children": [
+            {
+              "type": "frame",
+              "id": "onQn8",
+              "name": "Header",
+              "width": "fill_container",
+              "layout": "vertical",
+              "gap": 8,
+              "children": [
+                {
+                  "type": "text",
+                  "id": "x1oAo",
+                  "name": "mHeading",
+                  "fill": "#fafafa",
+                  "content": "Billing",
+                  "fontFamily": "Inter",
+                  "fontSize": 24,
+                  "fontWeight": "600"
+                },
+                {
+                  "type": "text",
+                  "id": "zipBg",
+                  "name": "mSubtitle",
+                  "fill": "#737373",
+                  "content": "Manage your Soleur subscription",
+                  "fontFamily": "Inter",
+                  "fontSize": 14,
+                  "fontWeight": "normal"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "O6aCp",
+              "name": "Subscription Card",
+              "width": "fill_container",
+              "fill": "#171717",
+              "cornerRadius": 8,
+              "stroke": {
+                "align": "inside",
+                "thickness": 1,
+                "fill": "#404040"
+              },
+              "layout": "vertical",
+              "gap": 16,
+              "padding": 20,
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "fGJEL",
+                  "name": "Sub Row",
+                  "width": "fill_container",
+                  "justifyContent": "space_between",
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "wt2HD",
+                      "name": "mSubLabel",
+                      "fill": "#737373",
+                      "content": "Subscription",
+                      "fontFamily": "Inter",
+                      "fontSize": 14,
+                      "fontWeight": "normal"
+                    },
+                    {
+                      "type": "frame",
+                      "id": "2roaT",
+                      "name": "Badge",
+                      "fill": "#052e16",
+                      "cornerRadius": 9999,
+                      "stroke": {
+                        "align": "inside",
+                        "thickness": 1,
+                        "fill": "#14532d"
+                      },
+                      "padding": [
+                        4,
+                        12
+                      ],
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "hkrar",
+                          "name": "mBadgeText",
+                          "fill": "#4ade80",
+                          "content": "Active",
+                          "fontFamily": "Inter",
+                          "fontSize": 12,
+                          "fontWeight": "500"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "Qzdxg",
+                  "name": "Manage Button",
+                  "width": "fill_container",
+                  "cornerRadius": 8,
+                  "stroke": {
+                    "align": "inside",
+                    "thickness": 1,
+                    "fill": "#525252"
+                  },
+                  "padding": [
+                    12,
+                    16
+                  ],
+                  "justifyContent": "center",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "aCJ1K",
+                      "name": "mManageBtnText",
+                      "fill": "#d4d4d4",
+                      "content": "Manage subscription",
+                      "fontFamily": "Inter",
+                      "fontSize": 14,
+                      "fontWeight": "500"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "8ZZlA",
+              "name": "API Usage Section",
+              "width": "fill_container",
+              "layout": "vertical",
+              "gap": 12,
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "WluXm",
+                  "name": "Section Header",
+                  "width": "fill_container",
+                  "justifyContent": "space_between",
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "MH8V3",
+                      "name": "mCostTitle",
+                      "fill": "#fafafa",
+                      "content": "API Usage",
+                      "fontFamily": "Inter",
+                      "fontSize": 16,
+                      "fontWeight": "600"
+                    },
+                    {
+                      "type": "text",
+                      "id": "nq4m6",
+                      "name": "mTotalBadge",
+                      "fill": "#737373",
+                      "content": "~$0.0847 total",
+                      "fontFamily": "Inter",
+                      "fontSize": 12,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "rJ6LH",
+                  "name": "Cost List",
+                  "width": "fill_container",
+                  "layout": "vertical",
+                  "gap": 8,
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "u0EXR",
+                      "name": "Cost Card 1",
+                      "width": "fill_container",
+                      "fill": "#171717",
+                      "cornerRadius": 8,
+                      "stroke": {
+                        "align": "inside",
+                        "thickness": 1,
+                        "fill": "#404040"
+                      },
+                      "padding": 14,
+                      "justifyContent": "space_between",
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "frame",
+                          "id": "pgXcA",
+                          "name": "Card Left",
+                          "layout": "vertical",
+                          "gap": 2,
+                          "children": [
+                            {
+                              "type": "text",
+                              "id": "DH2Bi",
+                              "name": "mc1Leader",
+                              "fill": "#e5e5e5",
+                              "content": "Engineering",
+                              "fontFamily": "Inter",
+                              "fontSize": 14,
+                              "fontWeight": "500"
+                            },
+                            {
+                              "type": "text",
+                              "id": "EOSBL",
+                              "name": "mc1Time",
+                              "fill": "#737373",
+                              "content": "2 hours ago",
+                              "fontFamily": "Inter",
+                              "fontSize": 11,
+                              "fontWeight": "normal"
+                            }
+                          ]
+                        },
+                        {
+                          "type": "text",
+                          "id": "3k4Qm",
+                          "name": "mc1Cost",
+                          "fill": "#d4d4d4",
+                          "content": "~$0.0312",
+                          "fontFamily": "Inter",
+                          "fontSize": 14,
+                          "fontWeight": "500"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "7kEy7",
+                      "name": "Cost Card 2",
+                      "width": "fill_container",
+                      "fill": "#171717",
+                      "cornerRadius": 8,
+                      "stroke": {
+                        "align": "inside",
+                        "thickness": 1,
+                        "fill": "#404040"
+                      },
+                      "padding": 14,
+                      "justifyContent": "space_between",
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "frame",
+                          "id": "LMZFQ",
+                          "name": "Card Left",
+                          "layout": "vertical",
+                          "gap": 2,
+                          "children": [
+                            {
+                              "type": "text",
+                              "id": "QOxtP",
+                              "name": "mc2Leader",
+                              "fill": "#e5e5e5",
+                              "content": "Marketing",
+                              "fontFamily": "Inter",
+                              "fontSize": 14,
+                              "fontWeight": "500"
+                            },
+                            {
+                              "type": "text",
+                              "id": "ujKgS",
+                              "name": "mc2Time",
+                              "fill": "#737373",
+                              "content": "5 hours ago",
+                              "fontFamily": "Inter",
+                              "fontSize": 11,
+                              "fontWeight": "normal"
+                            }
+                          ]
+                        },
+                        {
+                          "type": "text",
+                          "id": "c189Z",
+                          "name": "mc2Cost",
+                          "fill": "#d4d4d4",
+                          "content": "~$0.0284",
+                          "fontFamily": "Inter",
+                          "fontSize": 14,
+                          "fontWeight": "500"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "dkFri",
+                      "name": "Cost Card 3",
+                      "width": "fill_container",
+                      "fill": "#171717",
+                      "cornerRadius": 8,
+                      "stroke": {
+                        "align": "inside",
+                        "thickness": 1,
+                        "fill": "#404040"
+                      },
+                      "padding": 14,
+                      "justifyContent": "space_between",
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "frame",
+                          "id": "oGGHi",
+                          "name": "Card Left",
+                          "layout": "vertical",
+                          "gap": 2,
+                          "children": [
+                            {
+                              "type": "text",
+                              "id": "pVh2l",
+                              "name": "mc3Leader",
+                              "fill": "#e5e5e5",
+                              "content": "Product",
+                              "fontFamily": "Inter",
+                              "fontSize": 14,
+                              "fontWeight": "500"
+                            },
+                            {
+                              "type": "text",
+                              "id": "fBLdb",
+                              "name": "mc3Time",
+                              "fill": "#737373",
+                              "content": "Yesterday",
+                              "fontFamily": "Inter",
+                              "fontSize": 11,
+                              "fontWeight": "normal"
+                            }
+                          ]
+                        },
+                        {
+                          "type": "text",
+                          "id": "sTNE2",
+                          "name": "mc3Cost",
+                          "fill": "#d4d4d4",
+                          "content": "~$0.0251",
+                          "fontFamily": "Inter",
+                          "fontSize": 14,
+                          "fontWeight": "500"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "type": "text",
+                  "id": "hEZOf",
+                  "name": "mEstLabel",
+                  "fill": "#525252",
+                  "content": "Costs are estimated based on token usage",
+                  "fontFamily": "Inter",
+                  "fontSize": 11,
+                  "fontWeight": "normal"
+                }
+              ]
+            },
+            {
+              "type": "text",
+              "id": "BOBRi",
+              "name": "mBackLink",
+              "fill": "#737373",
+              "textGrowth": "fixed-width",
+              "width": "fill_container",
+              "content": "Back to dashboard",
+              "textAlign": "center",
+              "fontFamily": "Inter",
+              "fontSize": 14,
+              "fontWeight": "normal"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "Ymx64",
+      "x": 860,
+      "y": 0,
+      "name": "Desktop Billing Empty State",
+      "clip": true,
+      "width": 800,
+      "fill": "#0a0a0a",
+      "layout": "vertical",
+      "justifyContent": "center",
+      "alignItems": "center",
+      "children": [
+        {
+          "type": "frame",
+          "id": "n74NH",
+          "name": "Content",
+          "width": 448,
+          "layout": "vertical",
+          "gap": 24,
+          "padding": [
+            40,
+            0
+          ],
+          "children": [
+            {
+              "type": "frame",
+              "id": "2zjOc",
+              "name": "Header",
+              "width": "fill_container",
+              "layout": "vertical",
+              "gap": 8,
+              "children": [
+                {
+                  "type": "text",
+                  "id": "dQaQJ",
+                  "name": "eHeading",
+                  "fill": "#fafafa",
+                  "content": "Billing",
+                  "fontFamily": "Inter",
+                  "fontSize": 24,
+                  "fontWeight": "600"
+                },
+                {
+                  "type": "text",
+                  "id": "EYjF4",
+                  "name": "eSubtitle",
+                  "fill": "#737373",
+                  "content": "Manage your Soleur subscription",
+                  "fontFamily": "Inter",
+                  "fontSize": 14,
+                  "fontWeight": "normal"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "Aw0J9",
+              "name": "Subscription Card",
+              "width": "fill_container",
+              "fill": "#171717",
+              "cornerRadius": 8,
+              "stroke": {
+                "align": "inside",
+                "thickness": 1,
+                "fill": "#404040"
+              },
+              "layout": "vertical",
+              "gap": 16,
+              "padding": 24,
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "ffiak",
+                  "name": "Sub Row",
+                  "width": "fill_container",
+                  "justifyContent": "space_between",
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "mYKZr",
+                      "name": "eSubLabel",
+                      "fill": "#737373",
+                      "content": "Subscription",
+                      "fontFamily": "Inter",
+                      "fontSize": 14,
+                      "fontWeight": "normal"
+                    },
+                    {
+                      "type": "frame",
+                      "id": "FkHZ3",
+                      "name": "Badge",
+                      "fill": "#052e16",
+                      "cornerRadius": 9999,
+                      "stroke": {
+                        "align": "inside",
+                        "thickness": 1,
+                        "fill": "#14532d"
+                      },
+                      "padding": [
+                        4,
+                        12
+                      ],
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "Wuu2S",
+                          "name": "eBadgeText",
+                          "fill": "#4ade80",
+                          "content": "Active",
+                          "fontFamily": "Inter",
+                          "fontSize": 12,
+                          "fontWeight": "500"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "JaYId",
+                  "name": "Manage Button",
+                  "width": "fill_container",
+                  "cornerRadius": 8,
+                  "stroke": {
+                    "align": "inside",
+                    "thickness": 1,
+                    "fill": "#525252"
+                  },
+                  "padding": [
+                    12,
+                    16
+                  ],
+                  "justifyContent": "center",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "BEkoz",
+                      "name": "eManageBtnText",
+                      "fill": "#d4d4d4",
+                      "content": "Manage subscription",
+                      "fontFamily": "Inter",
+                      "fontSize": 14,
+                      "fontWeight": "500"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "MsqIH",
+              "name": "API Usage Section",
+              "width": "fill_container",
+              "layout": "vertical",
+              "gap": 16,
+              "children": [
+                {
+                  "type": "text",
+                  "id": "YJ1a5",
+                  "name": "eCostHeader",
+                  "fill": "#fafafa",
+                  "content": "API Usage",
+                  "fontFamily": "Inter",
+                  "fontSize": 16,
+                  "fontWeight": "600"
+                },
+                {
+                  "type": "frame",
+                  "id": "etY5U",
+                  "name": "Empty State Card",
+                  "width": "fill_container",
+                  "fill": "#171717",
+                  "cornerRadius": 8,
+                  "stroke": {
+                    "align": "inside",
+                    "thickness": 1,
+                    "fill": "#404040"
+                  },
+                  "layout": "vertical",
+                  "gap": 8,
+                  "padding": [
+                    32,
+                    24
+                  ],
+                  "justifyContent": "center",
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "Vozeh",
+                      "name": "eEmptyText",
+                      "fill": "#737373",
+                      "content": "No API usage yet.",
+                      "fontFamily": "Inter",
+                      "fontSize": 14,
+                      "fontWeight": "normal"
+                    },
+                    {
+                      "type": "text",
+                      "id": "KWG0O",
+                      "name": "eEmptyHint",
+                      "fill": "#525252",
+                      "textGrowth": "fixed-width",
+                      "width": 300,
+                      "content": "Start a conversation with your BYOK API key to see costs here.",
+                      "textAlign": "center",
+                      "fontFamily": "Inter",
+                      "fontSize": 12,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "text",
+              "id": "EcE6e",
+              "name": "eBackLink",
+              "fill": "#737373",
+              "textGrowth": "fixed-width",
+              "width": "fill_container",
+              "content": "Back to dashboard",
+              "textAlign": "center",
+              "fontFamily": "Inter",
+              "fontSize": 14,
+              "fontWeight": "normal"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

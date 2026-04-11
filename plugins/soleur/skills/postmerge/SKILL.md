@@ -37,11 +37,18 @@ Check the latest CI run on main triggered by the merge:
 gh run list --branch main --limit 3 --json databaseId,status,conclusion,headSha
 ```
 
-Find the run matching the merge commit SHA. If no matching run yet, poll every 15 seconds (max 5 minutes):
+Find the run matching the merge commit SHA. If no matching run yet, use the **Monitor tool** with a polling loop (max 5 minutes). Do NOT use foreground `sleep`:
 
 ```bash
-gh run view <run-id> --json status,conclusion --jq '{status, conclusion}'
+for i in $(seq 1 20); do
+  result=$(gh run view <run-id> --json status,conclusion --jq '{status, conclusion}')
+  echo "$(date +%H:%M:%S) $result"
+  echo "$result" | grep -q '"completed"' && break
+  sleep 15
+done
 ```
+
+React to the final status from the Monitor output.
 
 **If CI passes:** Proceed to Phase 3.
 
