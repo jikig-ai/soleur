@@ -95,7 +95,7 @@ export default function DashboardPage() {
   const [statusFilter, setStatusFilter] = useState<ConversationStatus | null>(null);
   const [domainFilter, setDomainFilter] = useState<DomainLeaderId | "general" | null>(null);
 
-  const { conversations, loading, error, refetch } = useConversations({
+  const { conversations, loading, error, refetch, updateStatus } = useConversations({
     statusFilter,
     domainFilter,
   });
@@ -535,7 +535,7 @@ export default function DashboardPage() {
       {!loading && !error && conversations.length > 0 && (
         <div className="space-y-2">
           {conversations.map((conv) => (
-            <ConversationRow key={conv.id} conversation={conv} />
+            <ConversationRow key={conv.id} conversation={conv} onStatusChange={updateStatus} />
           ))}
         </div>
       )}
