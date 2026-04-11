@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { createClient } from "@/lib/supabase/client";
+import { mapSupabaseError } from "@/lib/auth/error-messages";
 
 type Provider = "google" | "apple" | "github" | "azure";
 
@@ -76,7 +77,8 @@ export function OAuthButtons({ disabled = false }: { disabled?: boolean }) {
     });
 
     if (error) {
-      setError(error.message);
+      console.error("[auth] Supabase OAuth error:", error.message);
+      setError(mapSupabaseError(error.message));
       setLoading(null);
     }
     // On success, the browser redirects — no state cleanup needed
