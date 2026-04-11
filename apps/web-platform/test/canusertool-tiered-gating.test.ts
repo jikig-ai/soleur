@@ -329,6 +329,65 @@ describe("canUseTool tiered gating (#1926)", () => {
     });
   });
 
+  describe("auto-approve tier (#1927)", () => {
+    test("github_read_ci_status auto-approved without review gate", async () => {
+      const canUseTool = await getCanUseTool();
+
+      const result = await canUseTool(
+        "mcp__soleur_platform__github_read_ci_status",
+        { branch: "main", per_page: 10 },
+        { signal: new AbortController().signal },
+      );
+
+      expect(result.behavior).toBe("allow");
+      // No review gate should fire for auto-approve tools
+      expect(mockSendToClient).not.toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ type: "review_gate" }),
+      );
+      expect(mockAbortableReviewGate).not.toHaveBeenCalled();
+    });
+
+    test("github_read_workflow_logs auto-approved without review gate", async () => {
+      const canUseTool = await getCanUseTool();
+
+      const result = await canUseTool(
+        "mcp__soleur_platform__github_read_workflow_logs",
+        { run_id: 12345 },
+        { signal: new AbortController().signal },
+      );
+
+      expect(result.behavior).toBe("allow");
+      expect(mockSendToClient).not.toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ type: "review_gate" }),
+      );
+      expect(mockAbortableReviewGate).not.toHaveBeenCalled();
+    });
+
+    test("auto-approve audit log emitted with correct tier", async () => {
+      const canUseTool = await getCanUseTool();
+
+      await canUseTool(
+        "mcp__soleur_platform__github_read_ci_status",
+        { branch: "main" },
+        { signal: new AbortController().signal },
+      );
+
+      const auditCall = mockLogInfo.mock.calls.find(
+        (args: unknown[]) => {
+          const obj = args[0] as Record<string, unknown>;
+          return obj?.tool === "mcp__soleur_platform__github_read_ci_status"
+            && obj?.tier === "auto-approve";
+        },
+      );
+      expect(auditCall).toBeDefined();
+      const auditData = auditCall![0] as Record<string, unknown>;
+      expect(auditData.decision).toBe("auto-approved");
+      expect(auditData.repo).toBe("alice/my-repo");
+    });
+  });
+
   describe("unregistered tools still denied", () => {
     test("non-platform MCP tools are denied by default", async () => {
       const canUseTool = await getCanUseTool();
