@@ -31,12 +31,12 @@
 
 ## Phase 3: Server-Side Processing
 
-- [ ] 3.1 Update WS chat handler to extract, validate (max 5), and forward `msg.attachments`
-- [ ] 3.2 Update `sendUserMessage` (line 1187) to accept and persist attachment metadata
-- [ ] 3.3 Download attachments from Storage to workspace filesystem
-- [ ] 3.4 Build attachment context string for agent prompt
-- [ ] 3.5 Update `startAgentSession` to include attachment context
-- [ ] 3.6 Update message history API to join `message_attachments` and return signed download URLs
+- [x] 3.1 Update WS chat handler to extract, validate (max 5), and forward `msg.attachments`
+- [x] 3.2 Update `sendUserMessage` (line 1187) to accept and persist attachment metadata
+- [x] 3.3 Download attachments from Storage to workspace filesystem
+- [x] 3.4 Build attachment context string for agent prompt
+- [x] 3.5 Update `startAgentSession` to include attachment context
+- [x] 3.6 Update message history API to join `message_attachments` and return signed download URLs
 
 ## Phase 4: Display + Polish
 

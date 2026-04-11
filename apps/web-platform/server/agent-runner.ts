@@ -1,13 +1,13 @@
 import { query, tool, createSdkMcpServer } from "@anthropic-ai/claude-agent-sdk";
 import { randomUUID } from "crypto";
-import { readFileSync, writeFileSync } from "fs";
+import { readFileSync, writeFileSync, mkdirSync } from "fs";
 import path from "path";
 import { z } from "zod/v4";
 
 import { createServiceClient } from "@/lib/supabase/service";
 import { ROUTABLE_DOMAIN_LEADERS, type DomainLeaderId } from "./domain-leaders";
 import { routeMessage } from "./domain-router";
-import { KeyInvalidError } from "@/lib/types";
+import { KeyInvalidError, type AttachmentRef } from "@/lib/types";
 import { decryptKey, decryptKeyLegacy, encryptKey } from "./byok";
 import { sendToClient } from "./ws-handler";
 import * as Sentry from "@sentry/nextjs";
@@ -269,7 +269,7 @@ async function loadConversationHistory(
 ): Promise<Array<{ role: string; content: string }>> {
   const { data, error } = await supabase()
     .from("messages")
-    .select("role, content, created_at")
+    .select("role, content, created_at, message_attachments(filename, content_type, size_bytes)")
     .eq("conversation_id", conversationId)
     .order("created_at", { ascending: true });
 
@@ -278,7 +278,19 @@ async function loadConversationHistory(
     return [];
   }
 
-  return data ?? [];
+  // Augment user messages with attachment context for replay
+  return (data ?? []).map((m) => {
+    const atts = (m as Record<string, unknown>).message_attachments as
+      | Array<{ filename: string; content_type: string; size_bytes: number }>
+      | undefined;
+    if (atts && atts.length > 0 && m.role === "user") {
+      const attList = atts
+        .map((a) => `- ${a.filename} (${a.content_type}, ${a.size_bytes} bytes)`)
+        .join("\n");
+      return { role: m.role, content: `${m.content}\n\n[Attached files:\n${attList}]` };
+    }
+    return { role: m.role, content: m.content };
+  });
 }
 
 function buildReplayPrompt(
@@ -1189,6 +1201,7 @@ export async function sendUserMessage(
   conversationId: string,
   content: string,
   conversationContext?: import("@/lib/types").ConversationContext,
+  attachments?: AttachmentRef[],
 ): Promise<void> {
   // Verify conversation ownership BEFORE saving the message to prevent
   // cross-user writes (the message insert has no user_id check itself).
@@ -1202,7 +1215,72 @@ export async function sendUserMessage(
   if (convErr || !conv) throw new Error("Conversation not found");
 
   // Save user message to DB (after ownership verified)
-  await saveMessage(conversationId, "user", content);
+  const messageId = randomUUID();
+  const { error: msgErr } = await supabase().from("messages").insert({
+    id: messageId,
+    conversation_id: conversationId,
+    role: "user",
+    content,
+    tool_calls: null,
+    leader_id: null,
+  });
+  if (msgErr) throw new Error(`Failed to save message: ${msgErr.message}`);
+
+  // Persist attachment metadata and download files to workspace
+  let attachmentContext: string | undefined;
+  if (attachments && attachments.length > 0) {
+    // Insert attachment metadata rows
+    const attachmentRows = attachments.map((att) => ({
+      message_id: messageId,
+      storage_path: att.storagePath,
+      filename: att.filename,
+      content_type: att.contentType,
+      size_bytes: att.sizeBytes,
+    }));
+
+    const { error: attErr } = await supabase()
+      .from("message_attachments")
+      .insert(attachmentRows);
+
+    if (attErr) {
+      log.error({ err: attErr, messageId }, "Failed to save attachment metadata");
+      throw new Error("Upload failed");
+    }
+
+    // Download files to workspace for agent access
+    const { data: user } = await supabase()
+      .from("users")
+      .select("workspace_path")
+      .eq("id", userId)
+      .single();
+
+    if (user?.workspace_path) {
+      const attachDir = path.join(user.workspace_path, "attachments", conversationId);
+      mkdirSync(attachDir, { recursive: true });
+
+      const filePaths: string[] = [];
+      for (const att of attachments) {
+        const { data: fileData, error: dlErr } = await supabase()
+          .storage
+          .from("chat-attachments")
+          .download(att.storagePath);
+
+        if (dlErr || !fileData) {
+          log.error({ err: dlErr, storagePath: att.storagePath }, "Failed to download attachment");
+          continue;
+        }
+
+        const ext = att.filename.split(".").pop() || "bin";
+        const localPath = path.join(attachDir, `${randomUUID()}.${ext}`);
+        writeFileSync(localPath, Buffer.from(await fileData.arrayBuffer()));
+        filePaths.push(`- ${att.filename} (${att.contentType}, ${att.sizeBytes} bytes): ${localPath}`);
+      }
+
+      if (filePaths.length > 0) {
+        attachmentContext = `The user attached the following files:\n${filePaths.join("\n")}`;
+      }
+    }
+  }
 
   // Check for an in-memory session with a captured session_id
   const key = sessionKey(userId, conversationId);
@@ -1229,6 +1307,11 @@ export async function sendUserMessage(
     });
   };
 
+  // Augment content with attachment context for the agent
+  const augmentedContent = attachmentContext
+    ? `${content}\n\n${attachmentContext}`
+    : content;
+
   // If no domain_leader is set (tag-and-route mode), use the router
   // to determine which leaders should respond
   if (!conv.domain_leader) {
@@ -1236,7 +1319,7 @@ export async function sendUserMessage(
       const apiKey = await getUserApiKey(userId);
       const route = await routeMessage(content, apiKey, conversationContext);
       log.info({ leaders: route.leaders, source: route.source }, "Routed message to leaders");
-      dispatchToLeaders(userId, conversationId, route.leaders, content, conversationContext, undefined, route.source)
+      dispatchToLeaders(userId, conversationId, route.leaders, augmentedContent, conversationContext, undefined, route.source)
         .catch(handleSessionError);
     } catch (err) {
       handleSessionError(err);
@@ -1252,7 +1335,7 @@ export async function sendUserMessage(
       conversationId,
       (conv.domain_leader as DomainLeaderId) ?? undefined,
       resumeSessionId,
-      content,
+      augmentedContent,
     ).catch(async (err) => {
       log.warn({ err }, "SDK resume failed, falling back to message replay");
       // Clear stale session_id
@@ -1266,7 +1349,7 @@ export async function sendUserMessage(
 
       // Load history and build replay prompt
       const history = await loadConversationHistory(conversationId);
-      const replayPrompt = buildReplayPrompt(history, content);
+      const replayPrompt = buildReplayPrompt(history, augmentedContent);
 
       startAgentSession(
         userId,
@@ -1280,8 +1363,8 @@ export async function sendUserMessage(
     // No session to resume — first turn or history-only replay
     const history = await loadConversationHistory(conversationId);
     const prompt = history.length > 0
-      ? buildReplayPrompt(history, content)
-      : content;
+      ? buildReplayPrompt(history, augmentedContent)
+      : augmentedContent;
 
     startAgentSession(
       userId,

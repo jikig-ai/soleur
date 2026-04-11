@@ -174,12 +174,12 @@ Wire up the WebSocket handler, message persistence, and agent integration.
 
 **Tasks:**
 
-- [ ] 3.1 Update WebSocket chat handler in `apps/web-platform/server/ws-handler.ts:138`
+- [x] 3.1 Update WebSocket chat handler in `apps/web-platform/server/ws-handler.ts:138`
   - Extract `msg.attachments` (optional array) from the chat message
   - Server-side cap: reject if `attachments.length > 5`
   - Pass to `sendUserMessage(userId, session.conversationId, msg.content, msg.attachments)`
 
-- [ ] 3.2 Update `sendUserMessage` in `apps/web-platform/server/agent-runner.ts:1187`
+- [x] 3.2 Update `sendUserMessage` in `apps/web-platform/server/agent-runner.ts:1187`
   - Add `attachments?: AttachmentRef[]` parameter
   - After `saveMessage()`, insert rows into `message_attachments` table for each attachment
   - Destructure `{ error }` on every Supabase insert — throw on failure
@@ -191,12 +191,12 @@ Wire up the WebSocket handler, message persistence, and agent integration.
     - `"The user attached the following files:\n- {filename} ({contentType}, {sizeBytes} bytes): {workspacePath}\n..."`
   - Pass this context to `startAgentSession()` as additional prompt context
 
-- [ ] 3.3 Update `startAgentSession` to accept attachment context
+- [x] 3.3 Update `startAgentSession` to accept attachment context
   - Add optional `attachmentContext?: string` parameter
   - Prepend attachment context to the agent prompt so the agent knows about uploaded files
   - The agent can then read the files from the workspace using Claude's native vision/PDF capabilities
 
-- [ ] 3.4 Update message history API in `apps/web-platform/server/api-messages.ts`
+- [x] 3.4 Update message history API in `apps/web-platform/server/api-messages.ts`
   - Join `message_attachments` when fetching messages
   - Return attachment metadata with each message
   - Generate signed download URLs for each attachment (temporary URLs for client display)
