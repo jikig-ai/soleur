@@ -33,9 +33,11 @@ The deepened plan for #1927 specified `bun test ci-tools github-api tool-tiers c
 ## What Didn't Work
 
 **Attempted Solution 1:** Using bun test with filter names (as plan prescribed)
+
 - **Why it failed:** bun test uses its own test runner, not vitest. The project's vitest config defines test file patterns and workspace settings that bun test does not read.
 
 **Attempted Solution 2:** Using bun test with explicit file paths (`./test/ci-tools.test.ts`)
+
 - **Why it failed:** Same reason — bun's built-in test runner has different file discovery than vitest.
 
 ## Session Errors
