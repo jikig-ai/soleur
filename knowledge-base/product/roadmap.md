@@ -198,6 +198,7 @@ This roadmap was reviewed by CTO, CLO, CFO, and CMO before finalization.
 | 3.16 | Start Fresh onboarding — guided first-run with foundation cards (vision, brand, validation, legal) | P1 | [#1751](https://github.com/jikig-ai/soleur/issues/1751) | Done |
 | 3.17 | Post-connect sync proposal and project status report | P1 | [#1772](https://github.com/jikig-ai/soleur/issues/1772) | Done |
 | 3.18 | KB items, KB, and session sharing (read-only external access with signup CTAs, revocable) | P2 | [#1745](https://github.com/jikig-ai/soleur/issues/1745) | Done |
+| 3.19 | Chat attachments (images + PDFs via Supabase Storage, presigned URL upload, AI processing via filesystem write) | P2 | [#1961](https://github.com/jikig-ai/soleur/issues/1961) | In progress |
 
 **Why 3.1-3.2 matter:** The knowledge base is the compounding moat. If founders cannot see plans, brainstorms, brand guides, and competitive analyses their agents produced, the value is invisible. The KB viewer closes the review loop.
 
