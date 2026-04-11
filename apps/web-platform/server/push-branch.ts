@@ -52,10 +52,10 @@ export interface PushResult {
 // ---------------------------------------------------------------------------
 
 /**
- * Validate that a branch name is not protected.
+ * Reject pushes to protected branches.
  * Throws if the branch matches main, master, or the stored default branch.
  */
-export function validateBranchName(
+export function rejectProtectedBranch(
   branch: string,
   defaultBranch?: string,
 ): void {
@@ -94,8 +94,8 @@ export async function pushBranch(options: PushBranchOptions): Promise<PushResult
   // 2. Validate branch name format (all 10 git ref format rules)
   validateBranchFormat(branch);
 
-  // 3. Validate branch is not protected (main, master, default)
-  validateBranchName(branch, defaultBranch);
+  // 3. Reject pushes to protected branches (main, master, default)
+  rejectProtectedBranch(branch, defaultBranch);
 
   // 4. Set git author to Soleur Agent identity
   try {

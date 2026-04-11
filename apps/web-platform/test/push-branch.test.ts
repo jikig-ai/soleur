@@ -40,30 +40,30 @@ vi.mock("../server/logger", () => ({
 }));
 
 import {
-  validateBranchName,
+  rejectProtectedBranch,
   PROTECTED_BRANCHES,
   pushBranch,
 } from "../server/push-branch";
 
-describe("validateBranchName", () => {
+describe("rejectProtectedBranch", () => {
   test("rejects 'main'", () => {
-    expect(() => validateBranchName("main")).toThrow(/protected/i);
+    expect(() => rejectProtectedBranch("main")).toThrow(/protected/i);
   });
 
   test("rejects 'master'", () => {
-    expect(() => validateBranchName("master")).toThrow(/protected/i);
+    expect(() => rejectProtectedBranch("master")).toThrow(/protected/i);
   });
 
   test("rejects custom default branch", () => {
-    expect(() => validateBranchName("develop", "develop")).toThrow(/protected/i);
+    expect(() => rejectProtectedBranch("develop", "develop")).toThrow(/protected/i);
   });
 
   test("allows feature branches", () => {
-    expect(() => validateBranchName("feat-ci-cd")).not.toThrow();
+    expect(() => rejectProtectedBranch("feat-ci-cd")).not.toThrow();
   });
 
   test("allows branches with slashes", () => {
-    expect(() => validateBranchName("fix/bug-123")).not.toThrow();
+    expect(() => rejectProtectedBranch("fix/bug-123")).not.toThrow();
   });
 
   test("PROTECTED_BRANCHES includes main and master", () => {
