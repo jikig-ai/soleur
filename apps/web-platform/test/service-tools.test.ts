@@ -94,8 +94,18 @@ describe("plausibleCreateSite", () => {
     const result = await plausibleCreateSite("test-api-key", "../admin");
 
     expect(result.success).toBe(false);
-    expect(result.error).toContain("Invalid domain");
+    expect(result.error).toContain("Invalid site ID");
     // fetch should NOT have been called — validation rejects before API call
+    expect(globalThis.fetch).not.toHaveBeenCalled();
+  });
+
+  test("rejects single-label domain (no dot)", async () => {
+    globalThis.fetch = mockFetchResponse(200, {});
+
+    const result = await plausibleCreateSite("test-api-key", "localhost");
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain("dot");
     expect(globalThis.fetch).not.toHaveBeenCalled();
   });
 
@@ -135,6 +145,13 @@ describe("plausibleAddGoal", () => {
 
     expect(result.success).toBe(false);
     expect(result.error).toContain("Invalid site ID");
+  });
+
+  test("rejects single-label site_id (no dot)", async () => {
+    const result = await plausibleAddGoal("test-api-key", "internal", "event", "Signup");
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain("dot");
   });
 
   test("rejects invalid goal_type", async () => {
@@ -182,6 +199,13 @@ describe("plausibleGetStats", () => {
 
     expect(result.success).toBe(false);
     expect(result.error).toContain("Invalid site ID");
+  });
+
+  test("rejects single-label site_id (no dot)", async () => {
+    const result = await plausibleGetStats("test-api-key", "testhost", "day");
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain("dot");
   });
 
   test("returns error on non-JSON response", async () => {
