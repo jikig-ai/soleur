@@ -40,16 +40,16 @@
 
 ## Phase 4: Display + Polish
 
-- [ ] 4.1 Update `MessageBubble` to render image thumbnails and PDF cards
-- [ ] 4.2 Add click-to-expand for images (lightbox/modal)
-- [ ] 4.3 Wire up attachment data from history API and WebSocket to message rendering
-- [ ] 4.4 Add conversation-level storage cleanup (delete blobs before conversation DB row)
+- [x] 4.1 Update `MessageBubble` to render image thumbnails and PDF cards
+- [x] 4.2 Add click-to-expand for images (lightbox/modal)
+- [x] 4.3 Wire up attachment data from history API and WebSocket to message rendering
+- [x] 4.4 Add conversation-level storage cleanup (delete blobs before conversation DB row)
 
 ## Phase 5: Testing
 
-- [ ] 5.1 Unit tests for presign endpoint (type validation, size validation, file count cap, auth, CSRF)
-- [ ] 5.2 Unit tests for attachment metadata persistence
+- [x] 5.1 Unit tests for presign endpoint (type validation, size validation, file count cap, auth, CSRF)
+- [x] 5.2 Unit tests for attachment metadata persistence (covered by presign route tests)
 - [ ] 5.3 Integration test: upload -> display -> reload history
 - [ ] 5.4 Test on mobile PWA (iOS Safari, Android Chrome)
-- [ ] 5.5 Verify CSRF structural test includes new route
+- [x] 5.5 Verify CSRF structural test includes new route
 - [ ] 5.6 Test conversation deletion purges Storage objects

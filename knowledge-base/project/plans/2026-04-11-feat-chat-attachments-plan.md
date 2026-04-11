@@ -208,24 +208,24 @@ Render attachments in the chat and finalize.
 
 **Tasks:**
 
-- [ ] 4.1 Update `MessageBubble` in `apps/web-platform/app/(dashboard)/dashboard/chat/[conversationId]/page.tsx:136`
+- [x] 4.1 Update `MessageBubble` in `apps/web-platform/app/(dashboard)/dashboard/chat/[conversationId]/page.tsx:136`
   - Accept `attachments` prop
   - For images: render `<img>` thumbnail (max-width 300px) with click-to-expand (lightbox or modal)
   - For PDFs: render a file card with icon, filename, size, and download link
   - Download link: use the signed URL from the message history API
   - Handle missing/expired URLs gracefully (show "attachment unavailable" placeholder)
 
-- [ ] 4.2 Update chat page to pass attachments to `MessageBubble`
+- [x] 4.2 Update chat page to pass attachments to `MessageBubble`
   - When loading message history, map attachment data from the API response
   - When receiving new messages via WebSocket, include attachment refs in the local state
 
-- [ ] 4.3 Add conversation-level storage cleanup
+- [x] 4.3 Add conversation-level storage cleanup
   - Wherever conversation deletion currently happens, add a step to batch-delete Storage objects BEFORE the DB row is deleted
   - Query `message_attachments` for all storage paths in the conversation
   - Call `serviceClient.storage.from('chat-attachments').remove([paths])`
   - This covers the acceptance criterion: "Deleting a conversation purges all associated Storage objects"
 
-**Deferred:** GDPR account-level blob cleanup (all attachments across all conversations) is deferred to a follow-up issue. DB rows are cleaned up via FK CASCADE; Storage blob orphans accumulate until the cleanup issue ships. At current scale (1 user, no deletions), this is not a launch blocker.
+**Implemented:** GDPR account-level blob cleanup is included in `server/account-delete.ts` — all user attachment Storage objects are purged before auth record deletion.
 
 **Note on orphaned uploads:** Failed or partial uploads (presigned URL generated but PUT never completed or failed) accumulate in Supabase Storage. Consider adding a Supabase Storage lifecycle rule or a periodic cleanup job in a follow-up issue. Not a launch blocker at current scale.
 

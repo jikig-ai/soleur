@@ -12,6 +12,7 @@ import { LEADER_COLORS } from "@/components/chat/leader-colors";
 import { ChatInput } from "@/components/chat/chat-input";
 import { AtMentionDropdown } from "@/components/chat/at-mention-dropdown";
 import { useTeamNames } from "@/hooks/use-team-names";
+import { AttachmentDisplay } from "@/components/chat/attachment-display";
 
 export default function ChatPage() {
   const params = useParams<{ conversationId: string }>();
@@ -269,6 +270,7 @@ export default function ChatPage() {
                     showFullTitle={!!isFirst}
                     isStreaming={!!msg.leaderId && activeLeaderIds.includes(msg.leaderId)}
                     getDisplayName={getDisplayName}
+                    attachments={msg.attachments}
                   />
                 )}
               </div>
@@ -383,6 +385,7 @@ function MessageBubble({
   showFullTitle = false,
   isStreaming = false,
   getDisplayName,
+  attachments,
 }: {
   role: "user" | "assistant";
   content: string;
@@ -390,6 +393,7 @@ function MessageBubble({
   showFullTitle?: boolean;
   isStreaming?: boolean;
   getDisplayName?: (id: DomainLeaderId) => string;
+  attachments?: AttachmentRef[];
 }) {
   const isUser = role === "user";
   const leader = leaderId ? DOMAIN_LEADERS.find((l) => l.id === leaderId) : null;
@@ -439,6 +443,9 @@ function MessageBubble({
             <p className="whitespace-pre-wrap [overflow-wrap:anywhere]">{content}</p>
           ) : (
             <MarkdownRenderer content={content} />
+          )}
+          {attachments && attachments.length > 0 && (
+            <AttachmentDisplay attachments={attachments} />
           )}
         </div>
       </div>
