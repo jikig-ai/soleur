@@ -89,7 +89,7 @@ describe("useConversations.updateStatus", () => {
     vi.clearAllMocks();
     conversationBuilder = createQueryBuilder([mockConversation]);
     messageBuilder = createQueryBuilder(mockMessages);
-    updateBuilder = createQueryBuilder(null, null);
+    updateBuilder = createQueryBuilder([], null);
   });
 
   it("optimistically updates conversation status in local state", async () => {
@@ -128,7 +128,7 @@ describe("useConversations.updateStatus", () => {
 
   it("reverts optimistic update on Supabase error", async () => {
     // Set up update to fail
-    updateBuilder = createQueryBuilder(null, { message: "RLS policy violation" });
+    updateBuilder = createQueryBuilder([], { message: "RLS policy violation" });
 
     const { useConversations } = await import("@/hooks/use-conversations");
     const { result } = renderHook(() => useConversations());
