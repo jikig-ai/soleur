@@ -606,11 +606,22 @@ Each `echo` line arrives as a Monitor notification. React to the final state.
    gh pr view <number> --json mergeCommit --jq .mergeCommit.oid
    ```
 
-   **Step 2:** Wait 15 seconds for workflows to trigger, then list all runs on the merge commit. Use `Bash` with `run_in_background: true` for the delayed check:
+   **Step 2:** Wait 15 seconds for workflows to trigger, then count pending runs on the merge commit:
 
    ```bash
-   sleep 15 && gh run list --branch main --commit <merge-sha> --json databaseId,workflowName,status,conclusion
+   gh run list --branch main --commit <merge-sha> --json databaseId,workflowName,status,conclusion --jq '[.[] | select(.status != "completed")] | length'
    ```
+
+   This outputs a single integer (the count of non-completed runs). If the output is empty or non-numeric, re-run the command once. If still invalid, report an error and abort.
+
+   **Empty-result fallback:** If the pending count is `0`, verify that runs actually exist:
+
+   ```bash
+   gh run list --branch main --commit <merge-sha> --json databaseId --jq 'length'
+   ```
+
+   - If total runs > 0 and pending = 0: all runs completed. Proceed to Step 4.
+   - If total runs = 0: workflows have not registered yet. Wait 15 seconds and re-query. Retry up to 3 times (45 seconds total). If still 0 after 3 retries, treat as "no workflows triggered" and skip verification (the PR only touched files outside all path filters).
 
    **Step 3:** For each run that is not yet `completed`, use the **Monitor tool** with a shell loop:
 
@@ -623,7 +634,7 @@ Each `echo` line arrives as a Monitor notification. React to the final state.
    done
    ```
 
-   Expected max wait: ~5 minutes for Docker builds + deploy verification.
+   Poll until all runs report `completed`. Maximum 40 iterations (20 minutes). If the maximum is reached, report: "Release verification timed out after 20 minutes. N runs still pending: [list workflow names and IDs]." Do NOT silently continue -- investigate the stalled workflows.
 
    **Step 4:** Check conclusions:
    - All `success`: Report "Release verification: N/N workflows passed" and continue.
@@ -655,14 +666,15 @@ Each `echo` line arrives as a Monitor notification. React to the final state.
 
    ```bash
    while true; do
-     result=$(gh run list --workflow <workflow-filename> --limit 1 --json databaseId,status,conclusion --jq '.[0]')
+     result=$(gh run list --workflow <workflow-filename> --limit 1 --json databaseId,status,conclusion --jq '.[0] | "\(.status) \(.conclusion)"')
      echo "$(date +%H:%M:%S) $result"
-     echo "$result" | grep -q '"completed"' && break
+     echo "$result" | grep -q "^completed" && break
      sleep 30
    done
    ```
 
-   React to the final `conclusion` from the Monitor output:
+   Poll until output starts with `completed`. Maximum 40 iterations (20 minutes). If the maximum is reached, report: "Post-merge validation timed out after 20 minutes for workflow [name]." Do NOT silently continue. Then check `conclusion`:
+
    - **success**: Report pass and continue
    - **failure**: Report failure, fetch logs with `gh run view <id> --log | tail -50`, and present the error to the user. Do NOT silently proceed.
 

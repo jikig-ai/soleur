@@ -5,13 +5,8 @@ import { useSearchParams, useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { OAuthButtons } from "@/components/auth/oauth-buttons";
 import { EMAIL_OTP_LENGTH } from "@/lib/auth/constants";
+import { CALLBACK_ERRORS, DEFAULT_ERROR_MESSAGE, mapSupabaseError } from "@/lib/auth/error-messages";
 import Link from "next/link";
-
-const CALLBACK_ERRORS: Record<string, string> = {
-  auth_failed: "Sign-in failed. Please try again.",
-  provider_disabled:
-    "This sign-in provider is not enabled. Please use a different method.",
-};
 
 export default function LoginPage() {
   return (
@@ -35,8 +30,7 @@ function LoginForm() {
     const callbackError = searchParams.get("error");
     if (callbackError) {
       setError(
-        CALLBACK_ERRORS[callbackError] ??
-          "Something went wrong. Please try again.",
+        CALLBACK_ERRORS[callbackError] ?? DEFAULT_ERROR_MESSAGE,
       );
     }
   }, [searchParams]);
@@ -55,7 +49,8 @@ function LoginForm() {
     setLoading(false);
 
     if (error) {
-      setError(error.message);
+      console.error("[auth] Supabase error:", error.message);
+      setError(mapSupabaseError(error.message));
     } else {
       setOtpSent(true);
       setTimeout(() => otpRef.current?.focus(), 100);
@@ -77,7 +72,8 @@ function LoginForm() {
     setLoading(false);
 
     if (error) {
-      setError(error.message);
+      console.error("[auth] Supabase error:", error.message);
+      setError(mapSupabaseError(error.message));
     } else {
       router.push("/dashboard");
     }
