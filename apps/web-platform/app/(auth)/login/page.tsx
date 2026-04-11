@@ -8,10 +8,34 @@ import { EMAIL_OTP_LENGTH } from "@/lib/auth/constants";
 import Link from "next/link";
 
 const CALLBACK_ERRORS: Record<string, string> = {
-  auth_failed: "Sign-in failed. Please try again.",
+  auth_failed:
+    "Sign-in failed. This GitHub account may already be linked to another Soleur account. Try signing in with your email instead.",
+  code_verifier_missing: "Session expired. Please try signing in again.",
   provider_disabled:
     "This sign-in provider is not enabled. Please use a different method.",
 };
+
+const SUPABASE_ERROR_PATTERNS: [RegExp, string][] = [
+  [
+    /email rate limit exceeded/i,
+    "Too many sign-in attempts. Please wait a few minutes and try again.",
+  ],
+  [
+    /invalid otp/i,
+    "That code is incorrect or has expired. Please request a new one.",
+  ],
+  [
+    /token.*expired/i,
+    "Your sign-in code has expired. Please request a new one.",
+  ],
+];
+
+function mapSupabaseError(message: string): string {
+  for (const [pattern, friendly] of SUPABASE_ERROR_PATTERNS) {
+    if (pattern.test(message)) return friendly;
+  }
+  return "Something went wrong. Please try again.";
+}
 
 export default function LoginPage() {
   return (
@@ -55,7 +79,7 @@ function LoginForm() {
     setLoading(false);
 
     if (error) {
-      setError(error.message);
+      setError(mapSupabaseError(error.message));
     } else {
       setOtpSent(true);
       setTimeout(() => otpRef.current?.focus(), 100);
@@ -77,7 +101,7 @@ function LoginForm() {
     setLoading(false);
 
     if (error) {
-      setError(error.message);
+      setError(mapSupabaseError(error.message));
     } else {
       router.push("/dashboard");
     }
