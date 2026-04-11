@@ -150,15 +150,15 @@ Also add the same max-iteration guard (40 iterations / 20 minutes) to this polli
 
 ## Acceptance Criteria
 
-- [ ] Phase 7 item 2 Step 2 `gh run list` command includes `--jq` filter that outputs pending run count as an integer
-- [ ] Phase 7 item 2 Step 2 includes explicit handling for empty results (0 total runs = workflows not yet registered)
-- [ ] Phase 7 item 2 Step 2 includes a retry mechanism for the "no runs registered yet" case (up to 3 retries with 15-second waits)
-- [ ] Phase 7 item 2 Step 3 polling includes a maximum iteration guard (exit after 40 iterations / 20 minutes)
-- [ ] Phase 7 includes result validation: empty or non-numeric parsing results trigger a re-query, not infinite loop
-- [ ] Phase 7 item 3 Step 3 `gh run list` command uses `--jq` filter that extracts status string directly (not full JSON object)
-- [ ] Phase 7 item 3 Step 3 polling includes a maximum iteration guard (exit after 40 iterations / 20 minutes)
-- [ ] No Python3 dependency in any Phase 7 instruction
-- [ ] markdownlint passes on the modified SKILL.md
+- [x] Phase 7 item 2 Step 2 `gh run list` command includes `--jq` filter that outputs pending run count as an integer
+- [x] Phase 7 item 2 Step 2 includes explicit handling for empty results (0 total runs = workflows not yet registered)
+- [x] Phase 7 item 2 Step 2 includes a retry mechanism for the "no runs registered yet" case (up to 3 retries with 15-second waits)
+- [x] Phase 7 item 2 Step 3 polling includes a maximum iteration guard (exit after 40 iterations / 20 minutes)
+- [x] Phase 7 includes result validation: empty or non-numeric parsing results trigger a re-query, not infinite loop
+- [x] Phase 7 item 3 Step 3 `gh run list` command uses `--jq` filter that extracts status string directly (not full JSON object)
+- [x] Phase 7 item 3 Step 3 polling includes a maximum iteration guard (exit after 40 iterations / 20 minutes)
+- [x] No Python3 dependency in any Phase 7 instruction
+- [x] markdownlint passes on the modified SKILL.md
 
 ## Test Scenarios
 
