@@ -14,8 +14,8 @@ export type ToolTier = "auto-approve" | "gated" | "blocked";
 
 /**
  * Canonical tier assignments for all platform MCP tools.
- * Tools not in this map default to "auto-approve" in getToolTier()
- * because they are already validated by platformToolNames inclusion.
+ * Tools not in this map default to "gated" in getToolTier()
+ * (fail-closed: new tools require explicit tier assignment).
  */
 export const TOOL_TIER_MAP: Record<string, ToolTier> = {
   // Phase 2: Read CI status (auto-approve — read-only)
@@ -32,11 +32,11 @@ export const TOOL_TIER_MAP: Record<string, ToolTier> = {
 
 /**
  * Look up the tier for a platform MCP tool.
- * Returns "auto-approve" for tools not in the map (safe default for
- * platform tools already validated by platformToolNames inclusion).
+ * Returns "gated" for tools not in the map (fail-closed: new tools
+ * require explicit tier assignment before they can auto-approve).
  */
 export function getToolTier(toolName: string): ToolTier {
-  return TOOL_TIER_MAP[toolName] ?? "auto-approve";
+  return TOOL_TIER_MAP[toolName] ?? "gated";
 }
 
 /**
