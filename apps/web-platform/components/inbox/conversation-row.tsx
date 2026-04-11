@@ -13,6 +13,13 @@ const STATUS_ACTIONS: Partial<Record<ConversationStatus, { label: string; target
   waiting_for_user: { label: "Mark resolved", target: "completed" },
 };
 
+const BADGE_STYLES: Record<ConversationStatus, { dot: string; text: string; bg: string }> = {
+  waiting_for_user: { dot: "bg-amber-500", text: "text-amber-500", bg: "bg-amber-500/10" },
+  active: { dot: "bg-blue-500", text: "text-blue-500", bg: "bg-blue-500/10" },
+  completed: { dot: "bg-green-500", text: "text-green-500", bg: "bg-green-500/10" },
+  failed: { dot: "bg-red-500", text: "text-red-500", bg: "bg-red-500/10" },
+};
+
 function StatusBadge({
   status,
   onAction,
@@ -38,14 +45,7 @@ function StatusBadge({
 
   const label = STATUS_LABELS[status];
 
-  const styles: Record<ConversationStatus, { dot: string; text: string; bg: string }> = {
-    waiting_for_user: { dot: "bg-amber-500", text: "text-amber-500", bg: "bg-amber-500/10" },
-    active: { dot: "bg-blue-500", text: "text-blue-500", bg: "bg-blue-500/10" },
-    completed: { dot: "bg-green-500", text: "text-green-500", bg: "bg-green-500/10" },
-    failed: { dot: "bg-red-500", text: "text-red-500", bg: "bg-red-500/10" },
-  };
-
-  const s = styles[status];
+  const s = BADGE_STYLES[status];
 
   const badge = (
     <span className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium ${s.bg} ${s.text}`}>
@@ -134,7 +134,7 @@ export function ConversationRow({ conversation, onStatusChange }: ConversationRo
       role="button"
       tabIndex={0}
       onClick={() => router.push(`/dashboard/chat/${conversation.id}`)}
-      onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") router.push(`/dashboard/chat/${conversation.id}`); }}
+      onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); router.push(`/dashboard/chat/${conversation.id}`); } }}
       className={`flex w-full min-h-[44px] items-start gap-3 rounded-lg border p-3 text-left transition-colors md:items-center md:gap-4 md:p-4 cursor-pointer ${
         isDecision
           ? "border-amber-500/20 bg-amber-500/[0.06] hover:bg-amber-500/[0.1]"

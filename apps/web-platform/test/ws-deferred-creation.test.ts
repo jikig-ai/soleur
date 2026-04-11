@@ -104,7 +104,7 @@ describe("deferred conversation creation", () => {
     expect(started.conversationId).toBeTruthy();
 
     // Session should have pending state, not conversationId
-    expect(session.pendingConversationId).toBe(started.conversationId);
+    expect(session.pending?.id).toBe(started.conversationId);
     expect(session.conversationId).toBeUndefined();
   });
 
@@ -115,7 +115,7 @@ describe("deferred conversation creation", () => {
     // Step 1: start_session (deferred)
     await handleMessage("user-1", JSON.stringify({ type: "start_session" }));
     const started = sent.find((m: any) => m.type === "session_started") as any;
-    expect(session.pendingConversationId).toBe(started.conversationId);
+    expect(session.pending?.id).toBe(started.conversationId);
 
     // Step 2: send chat with real content
     await handleMessage("user-1", JSON.stringify({
@@ -127,7 +127,7 @@ describe("deferred conversation creation", () => {
     expect(mockInsert).toHaveBeenCalled();
     // Session should transition from pending to active
     expect(session.conversationId).toBe(started.conversationId);
-    expect(session.pendingConversationId).toBeUndefined();
+    expect(session.pending?.id).toBeUndefined();
   });
 
   it("chat with only @-mention does not create conversation", async () => {
@@ -155,14 +155,14 @@ describe("deferred conversation creation", () => {
     sessions.set("user-1", session);
 
     await handleMessage("user-1", JSON.stringify({ type: "start_session" }));
-    expect(session.pendingConversationId).toBeTruthy();
+    expect(session.pending?.id).toBeTruthy();
 
     await handleMessage("user-1", JSON.stringify({ type: "close_conversation" }));
 
     // No DB update — conversation was never created
     expect(mockUpdate).not.toHaveBeenCalled();
     // Pending state cleaned up
-    expect(session.pendingConversationId).toBeUndefined();
+    expect(session.pending?.id).toBeUndefined();
     // session_ended should be sent
     const ended = sent.find((m: any) => m.type === "session_ended") as any;
     expect(ended).toBeTruthy();

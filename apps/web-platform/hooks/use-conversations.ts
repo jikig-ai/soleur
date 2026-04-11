@@ -24,6 +24,10 @@ interface UseConversationsResult {
   updateStatus: (conversationId: string, newStatus: ConversationStatus) => Promise<void>;
 }
 
+function truncate(s: string, max = 60): string {
+  return s.length > max ? `${s.slice(0, max - 3)}...` : s;
+}
+
 export function deriveTitle(
   messages: Message[],
   conversationId: string,
@@ -33,28 +37,19 @@ export function deriveTitle(
   const firstUserMsg = convMessages.find((m) => m.role === "user");
   const firstAssistantMsg = convMessages.find((m) => m.role === "assistant");
 
-  // 1. First user message content (strip @-mentions, truncate)
+  // 1. First user message content (strip @-mentions)
   if (firstUserMsg) {
     const stripped = firstUserMsg.content.replace(/@\w+\s*/g, "").trim();
-    if (stripped) {
-      return stripped.length > 60 ? `${stripped.slice(0, 57)}...` : stripped;
-    }
-
-    // 2. Assistant message (better title than raw @-mention)
-    if (firstAssistantMsg) {
-      const content = firstAssistantMsg.content.trim();
-      return content.length > 60 ? `${content.slice(0, 57)}...` : content;
-    }
-
-    // 3. Raw @-mention text (last resort for messages)
-    const raw = firstUserMsg.content.trim();
-    if (raw) return raw.length > 60 ? `${raw.slice(0, 57)}...` : raw;
+    if (stripped) return truncate(stripped);
   }
 
-  // No user message — try assistant only
-  if (firstAssistantMsg) {
-    const content = firstAssistantMsg.content.trim();
-    return content.length > 60 ? `${content.slice(0, 57)}...` : content;
+  // 2. Assistant message (better title than raw @-mention)
+  if (firstAssistantMsg) return truncate(firstAssistantMsg.content.trim());
+
+  // 3. Raw @-mention text (user message exists but was only @-mentions)
+  if (firstUserMsg) {
+    const raw = firstUserMsg.content.trim();
+    if (raw) return truncate(raw);
   }
 
   // 4. Domain leader label
@@ -212,7 +207,8 @@ export function useConversations(
 
   const updateStatus = useCallback(
     async (conversationId: string, newStatus: ConversationStatus) => {
-      const previous = conversations;
+      // Capture only the previous status for targeted rollback (avoids stale closure)
+      const previousStatus = conversations.find((c) => c.id === conversationId)?.status;
       // Optimistic update
       setConversations((prev) =>
         prev.map((c) => (c.id === conversationId ? { ...c, status: newStatus } : c)),
@@ -222,14 +218,17 @@ export function useConversations(
       const { error: updateError } = await supabase
         .from("conversations")
         .update({ status: newStatus })
-        .eq("id", conversationId);
+        .eq("id", conversationId)
+        .eq("user_id", userId!);
 
       if (updateError) {
-        setConversations(previous);
-        setError(updateError.message);
+        setConversations((prev) =>
+          prev.map((c) => (c.id === conversationId ? { ...c, status: previousStatus! } : c)),
+        );
+        setError("Failed to update conversation status");
       }
     },
-    [conversations],
+    [conversations, userId],
   );
 
   return { conversations, loading, error, refetch: fetchConversations, updateStatus };

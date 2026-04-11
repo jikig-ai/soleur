@@ -42,15 +42,18 @@ const supabase = createServiceClient();
 /** Grace period before aborting session on disconnect (allows reconnection). */
 const DISCONNECT_GRACE_MS = 30_000;
 
+/** Deferred conversation state — exists XOR conversationId exists. */
+export interface PendingConversation {
+  id: string;
+  leaderId?: DomainLeaderId;
+  context?: ConversationContext;
+}
+
 export interface ClientSession {
   ws: WebSocket;
   conversationId?: string;
-  /** Pre-generated UUID for deferred conversation creation (no DB row yet). */
-  pendingConversationId?: string;
-  /** Domain leader for deferred creation (stored until first real message). */
-  pendingLeaderId?: DomainLeaderId;
-  /** Validated context for deferred creation. */
-  pendingContext?: ConversationContext;
+  /** Deferred conversation (no DB row yet). Cleared when materialized or closed. */
+  pending?: PendingConversation;
   /** Timer for deferred abort on disconnect — cleared if user reconnects. */
   disconnectTimer?: ReturnType<typeof setTimeout>;
   /** Timestamp of last user activity (auth or chat message). */
@@ -213,14 +216,12 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
         // Defer conversation creation: generate UUID but don't insert into DB.
         // The row is created on the first real chat message.
         const pendingId = randomUUID();
-        session.pendingConversationId = pendingId;
-        session.pendingLeaderId = msg.leaderId;
-        session.pendingContext = validatedContext;
+        session.pending = { id: pendingId, leaderId: msg.leaderId, context: validatedContext };
         session.conversationId = undefined;
 
         log.info({ userId, leaderId: msg.leaderId ?? "auto-route", pendingId }, "start_session (deferred creation)");
 
-        sendToClient(userId, { type: "session_started", conversationId: pendingId });
+        sendToClient(userId, { type: "session_started", conversationId: session.pending.id });
         resetIdleTimer(userId, session);
         log.debug("session_started sent to client");
       } catch (err) {
@@ -237,6 +238,8 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
     case "resume_session": {
       try {
         abortActiveSession(userId, session);
+        // Clear any pending deferred state — resuming an existing conversation
+        session.pending = undefined;
 
         // Verify conversation ownership
         const { data: conv, error: convErr } = await supabase
@@ -270,10 +273,8 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
     // ------------------------------------------------------------------
     case "close_conversation": {
       // Handle pending state (conversation never created in DB)
-      if (!session.conversationId && session.pendingConversationId) {
-        session.pendingConversationId = undefined;
-        session.pendingLeaderId = undefined;
-        session.pendingContext = undefined;
+      if (!session.conversationId && session.pending) {
+        session.pending = undefined;
         sendToClient(userId, { type: "session_ended", reason: "closed" });
         break;
       }
@@ -307,7 +308,7 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
     // chat: forward user message into the running agent session
     // ------------------------------------------------------------------
     case "chat": {
-      if (!session.conversationId && !session.pendingConversationId) {
+      if (!session.conversationId && !session.pending) {
         sendToClient(userId, {
           type: "error",
           message: "No active session. Send start_session first.",
@@ -319,7 +320,7 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
       resetIdleTimer(userId, session);
 
       // Materialize pending conversation on first real message
-      if (!session.conversationId && session.pendingConversationId) {
+      if (!session.conversationId && session.pending) {
         const stripped = msg.content.replace(/@\w+\s*/g, "").trim();
         if (!stripped) {
           sendToClient(userId, {
@@ -330,13 +331,10 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
         }
 
         try {
-          await createConversation(userId, session.pendingLeaderId, session.pendingConversationId);
-          session.conversationId = session.pendingConversationId;
-          const pendingLeader = session.pendingLeaderId;
-          const pendingContext = session.pendingContext;
-          session.pendingConversationId = undefined;
-          session.pendingLeaderId = undefined;
-          session.pendingContext = undefined;
+          const { id: pendingId, leaderId: pendingLeader, context: pendingContext } = session.pending;
+          await createConversation(userId, pendingLeader, pendingId);
+          session.conversationId = pendingId;
+          session.pending = undefined;
 
           log.info({ conversationId: session.conversationId, leaderId: pendingLeader ?? "auto-route" }, "Conversation materialized on first message");
 
