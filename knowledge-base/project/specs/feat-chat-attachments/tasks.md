@@ -2,25 +2,25 @@
 
 ## Phase 1: Infrastructure + Upload API
 
-- [ ] 1.1 Create migration `019_chat_attachments.sql`
-  - [ ] 1.1.1 Create Supabase Storage bucket `chat-attachments` (private)
-  - [ ] 1.1.2 Create `message_attachments` table with FK CASCADE to `messages`
-  - [ ] 1.1.3 Add RLS policies (SELECT for conversation owner, no anon INSERT/UPDATE/DELETE)
-  - [ ] 1.1.4 Add index on `message_id`
-- [ ] 1.2 Update CSP `img-src` in `lib/csp.ts` to include Supabase Storage host
-- [ ] 1.3 Create `app/api/attachments/presign/route.ts`
-  - [ ] 1.3.1 CSRF validation (`validateOrigin`)
-  - [ ] 1.3.2 Auth check (`supabase.auth.getUser()`)
-  - [ ] 1.3.3 Conversation ownership verification
-  - [ ] 1.3.4 File type + size validation (allowlist, 20MB max, 5 files max)
-  - [ ] 1.3.5 Generate storage path and signed upload URL
-  - [ ] 1.3.6 Return `{ uploadUrl, storagePath }`
-- [ ] 1.4 Add `AttachmentRef` interface and extend `WSMessage` chat type in `lib/types.ts`
-- [ ] 1.5 Extend `ChatMessage` in `ws-client.ts` with attachments
-- [ ] 1.6 Update `sendMessage` in `ws-client.ts` to accept attachments
-- [ ] 1.7 Extend `Message` interface in `lib/types.ts` with attachments
-- [ ] 1.8 Add error sanitizer entries for upload errors
-- [ ] 1.9 Add typed `WSErrorCode` values (`upload_failed`, `file_too_large`, `unsupported_file_type`, `too_many_files`)
+- [x] 1.1 Create migration `019_chat_attachments.sql`
+  - [x] 1.1.1 Create Supabase Storage bucket `chat-attachments` (private)
+  - [x] 1.1.2 Create `message_attachments` table with FK CASCADE to `messages`
+  - [x] 1.1.3 Add RLS policies (SELECT for conversation owner, no anon INSERT/UPDATE/DELETE)
+  - [x] 1.1.4 Add index on `message_id`
+- [x] 1.2 Update CSP `img-src` in `lib/csp.ts` to include Supabase Storage host
+- [x] 1.3 Create `app/api/attachments/presign/route.ts`
+  - [x] 1.3.1 CSRF validation (`validateOrigin`)
+  - [x] 1.3.2 Auth check (`supabase.auth.getUser()`)
+  - [x] 1.3.3 Conversation ownership verification
+  - [x] 1.3.4 File type + size validation (allowlist, 20MB max, 5 files max)
+  - [x] 1.3.5 Generate storage path and signed upload URL
+  - [x] 1.3.6 Return `{ uploadUrl, storagePath }`
+- [x] 1.4 Add `AttachmentRef` interface and extend `WSMessage` chat type in `lib/types.ts`
+- [x] 1.5 Extend `ChatMessage` in `ws-client.ts` with attachments
+- [x] 1.6 Update `sendMessage` in `ws-client.ts` to accept attachments
+- [x] 1.7 Extend `Message` interface in `lib/types.ts` with attachments
+- [x] 1.8 Add error sanitizer entries for upload errors
+- [x] 1.9 Add typed `WSErrorCode` values (`upload_failed`, `file_too_large`, `unsupported_file_type`, `too_many_files`)
 
 ## Phase 2: Client Upload UX
 

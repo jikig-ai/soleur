@@ -51,7 +51,7 @@ export function buildCspHeader(options: {
     `script-src ${scriptSrc}`,
     // unsafe-inline required for Next.js inline style injection
     "style-src 'self' 'unsafe-inline'",
-    "img-src 'self' blob: data:",
+    `img-src 'self' blob: data: ${supabaseConnect.split(" ")[0]}`,
     "font-src 'self'",
     `connect-src 'self' ${appWsOrigin} ${supabaseConnect} https://*.ingest.sentry.io https://*.ingest.de.sentry.io`,
     "object-src 'none'",

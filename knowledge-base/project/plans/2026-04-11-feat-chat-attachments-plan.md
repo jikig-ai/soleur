@@ -85,7 +85,7 @@ Create the storage bucket, database table, presigned URL endpoint, and extend Ty
 
 **Tasks:**
 
-- [ ] 1.1 Create Supabase Storage bucket `chat-attachments` via migration `019_chat_attachments.sql`
+- [x] 1.1 Create Supabase Storage bucket `chat-attachments` via migration `019_chat_attachments.sql`
   - Bucket: `chat-attachments`, public: false
   - Storage object path pattern: `{user_id}/{conversation_id}/{uuid}.{ext}`
   - RLS policy: SELECT where user owns the conversation (join through `messages` → `conversations`)
@@ -93,17 +93,17 @@ Create the storage bucket, database table, presigned URL endpoint, and extend Ty
   - No direct UPDATE/DELETE by anon key
   - File: `apps/web-platform/supabase/migrations/019_chat_attachments.sql`
 
-- [ ] 1.2 Create `message_attachments` table in same migration
+- [x] 1.2 Create `message_attachments` table in same migration
   - Columns: `id uuid PK DEFAULT gen_random_uuid()`, `message_id uuid FK REFERENCES messages(id) ON DELETE CASCADE`, `storage_path text NOT NULL`, `filename text NOT NULL`, `content_type text NOT NULL`, `size_bytes integer NOT NULL`, `created_at timestamptz DEFAULT now()`
   - RLS: SELECT where `auth.uid()` matches the message owner (via join to conversations)
   - No INSERT/UPDATE/DELETE via anon key — all writes via service role
   - Index on `message_id` for join performance
 
-- [ ] 1.3 Update CSP in `apps/web-platform/lib/csp.ts`
+- [x] 1.3 Update CSP in `apps/web-platform/lib/csp.ts`
   - Add Supabase Storage host to `img-src` directive (same as `NEXT_PUBLIC_SUPABASE_URL` host)
   - The `connect-src` already includes `*.supabase.co` — uploads work without changes
 
-- [ ] 1.4 Create presign API route `apps/web-platform/app/api/attachments/presign/route.ts`
+- [x] 1.4 Create presign API route `apps/web-platform/app/api/attachments/presign/route.ts`
   - Method: POST
   - Input: `{ filename: string, contentType: string, sizeBytes: number, conversationId: string }`
   - Validation:
@@ -119,21 +119,21 @@ Create the storage bucket, database table, presigned URL endpoint, and extend Ty
   - Error responses: typed `{ error: "file_too_large" | "unsupported_file_type" | "unauthorized" | "conversation_not_found" | "too_many_files" }`
   - Pattern follows: `apps/web-platform/app/api/keys/route.ts`
 
-- [ ] 1.5 Extend `WSMessage` type in `apps/web-platform/lib/types.ts:17`
+- [x] 1.5 Extend `WSMessage` type in `apps/web-platform/lib/types.ts:17`
   - Change chat message type from `{ type: "chat"; content: string }` to `{ type: "chat"; content: string; attachments?: AttachmentRef[] }`
   - Add `AttachmentRef` interface: `{ storagePath: string; filename: string; contentType: string; sizeBytes: number }`
 
-- [ ] 1.6 Extend `ChatMessage` in `apps/web-platform/lib/ws-client.ts:10`
+- [x] 1.6 Extend `ChatMessage` in `apps/web-platform/lib/ws-client.ts:10`
   - Add `attachments?: AttachmentRef[]` to the `ChatMessage` interface
   - Update `sendMessage` function (line 268) to accept optional `attachments` parameter and include in WS payload
 
-- [ ] 1.7 Extend `Message` interface in `apps/web-platform/lib/types.ts:103`
+- [x] 1.7 Extend `Message` interface in `apps/web-platform/lib/types.ts:103`
   - Add `attachments?: { id: string; storagePath: string; filename: string; contentType: string; sizeBytes: number }[]`
 
-- [ ] 1.8 Add error sanitizer entries in `apps/web-platform/server/error-sanitizer.ts`
+- [x] 1.8 Add error sanitizer entries in `apps/web-platform/server/error-sanitizer.ts`
   - Add to `KNOWN_SAFE_MESSAGES`: `"File too large"`, `"Unsupported file type"`, `"Upload failed"`, `"Attachment not found"`, `"Too many files"`
 
-- [ ] 1.9 Add typed error codes to `WSErrorCode` in `apps/web-platform/lib/types.ts`
+- [x] 1.9 Add typed error codes to `WSErrorCode` in `apps/web-platform/lib/types.ts`
   - Add `"upload_failed"`, `"file_too_large"`, `"unsupported_file_type"`, `"too_many_files"` to the union type
 
 #### Phase 2: Client Upload UX
