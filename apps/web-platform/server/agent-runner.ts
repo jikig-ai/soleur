@@ -21,6 +21,7 @@ import { createSandboxHook } from "./sandbox-hook";
 import { abortableReviewGate, validateSelection, extractReviewGateInput, buildReviewGateResponse, type AgentSession } from "./review-gate";
 import { createChildLogger } from "./logger";
 import { syncPull, syncPush } from "./session-sync";
+import { validateBranchFormat } from "./branch-validation";
 import { createPullRequest } from "./github-app";
 import { plausibleCreateSite, plausibleAddGoal, plausibleGetStats } from "./service-tools";
 import { tryCreateVision, buildVisionEnhancementPrompt } from "./vision-helpers";
@@ -542,6 +543,15 @@ When you need user input for important decisions, use the AskUserQuestion tool.`
           },
           async (args) => {
             try {
+              // Validate branch name format before hitting GitHub API
+              validateBranchFormat(args.head);
+              validateBranchFormat(args.base);
+              if (args.head === args.base) {
+                return {
+                  content: [{ type: "text" as const, text: "Error creating PR: Head branch and base branch cannot be the same" }],
+                  isError: true,
+                };
+              }
               const result = await createPullRequest(
                 installationId, owner, repo,
                 args.head, args.base, args.title, args.body,

@@ -72,7 +72,7 @@ describe("OAuthButtons", () => {
     });
     render(<OAuthButtons />);
     await userEvent.click(screen.getByRole("button", { name: /google/i }));
-    expect(screen.getByText("Provider not configured")).toBeInTheDocument();
+    expect(screen.getByText("Something went wrong. Please try again.")).toBeInTheDocument();
   });
 
   it("disables all buttons while loading", async () => {

@@ -46,11 +46,11 @@ describe("getToolTier", () => {
     );
   });
 
-  test("returns auto-approve for unregistered platform tools (safe default)", () => {
-    // Platform tools not in the tier map default to auto-approve
-    // because they are already validated by platformToolNames inclusion
+  test("returns gated for unregistered platform tools (fail-closed default)", () => {
+    // Platform tools not in the tier map default to gated
+    // so new tools require explicit tier assignment before auto-approve
     expect(getToolTier("mcp__soleur_platform__unknown_future_tool")).toBe(
-      "auto-approve",
+      "gated",
     );
   });
 

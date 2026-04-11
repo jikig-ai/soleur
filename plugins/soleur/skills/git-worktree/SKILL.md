@@ -307,6 +307,7 @@ Navigate back to the repository root directory.
 - The `draft-pr` subcommand uses `SCRIPT_DIR` for path resolution -- invoke it from inside the worktree, not from the bare repo root.
 - When creating worktrees manually (not via the script), always use absolute paths. Relative paths resolve from CWD, not from `GIT_DIR`, creating nested worktrees that are difficult to clean up. The script handles this correctly but manual `git worktree add` commands are susceptible.
 - When lefthook hangs in a worktree (>60s), kill it (`pkill -f "lefthook run"`), verify checks manually, then commit with `LEFTHOOK=0 git commit`. This is a known lefthook/worktree interaction bug.
+- After `git worktree add` on bare repos, verify both `rev-parse --show-toplevel` (directory validity) and `git worktree list --porcelain` (registration). See learning: `knowledge-base/project/learnings/2026-04-10-worktree-registration-verification-insufficient.md`.
 
 ## Technical Details
 

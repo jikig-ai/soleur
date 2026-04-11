@@ -94,8 +94,18 @@ describe("plausibleCreateSite", () => {
     const result = await plausibleCreateSite("test-api-key", "../admin");
 
     expect(result.success).toBe(false);
-    expect(result.error).toContain("Invalid domain");
+    expect(result.error).toContain("Invalid site ID");
     // fetch should NOT have been called — validation rejects before API call
+    expect(globalThis.fetch).not.toHaveBeenCalled();
+  });
+
+  test("rejects single-label domain (no dot)", async () => {
+    globalThis.fetch = mockFetchResponse(200, {});
+
+    const result = await plausibleCreateSite("test-api-key", "localhost");
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain("dot");
     expect(globalThis.fetch).not.toHaveBeenCalled();
   });
 
@@ -137,11 +147,43 @@ describe("plausibleAddGoal", () => {
     expect(result.error).toContain("Invalid site ID");
   });
 
+  test("rejects single-label site_id (no dot)", async () => {
+    const result = await plausibleAddGoal("test-api-key", "internal", "event", "Signup");
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain("dot");
+  });
+
   test("rejects invalid goal_type", async () => {
     const result = await plausibleAddGoal("test-api-key", "example.com", "invalid" as "event", "Test");
 
     expect(result.success).toBe(false);
     expect(result.error).toContain("goal_type");
+  });
+
+  test("page goal produces page_path not event_name in fetch body", async () => {
+    const responseBody = { goal_type: "page", page_path: "/signup" };
+    globalThis.fetch = mockFetchResponse(200, responseBody);
+
+    const result = await plausibleAddGoal("test-api-key", "example.com", "page", "/signup");
+
+    expect(result.success).toBe(true);
+
+    const [, opts] = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0];
+    const body = JSON.parse(opts.body);
+    expect(body.page_path).toBe("/signup");
+    expect(body.event_name).toBeUndefined();
+    expect(body.goal_type).toBe("page");
+    expect(body.site_id).toBe("example.com");
+  });
+
+  test("non-timeout network error returns Network error", async () => {
+    globalThis.fetch = vi.fn().mockRejectedValue(new TypeError("fetch failed"));
+
+    const result = await plausibleAddGoal("test-api-key", "example.com", "event", "Signup");
+
+    expect(result.success).toBe(false);
+    expect(result.error).toBe("Network error");
   });
 
   test("handles PUT upsert idempotency (success on repeated call)", async () => {
@@ -182,6 +224,13 @@ describe("plausibleGetStats", () => {
 
     expect(result.success).toBe(false);
     expect(result.error).toContain("Invalid site ID");
+  });
+
+  test("rejects single-label site_id (no dot)", async () => {
+    const result = await plausibleGetStats("test-api-key", "testhost", "day");
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain("dot");
   });
 
   test("returns error on non-JSON response", async () => {

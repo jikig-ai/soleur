@@ -42,9 +42,18 @@ const supabase = createServiceClient();
 /** Grace period before aborting session on disconnect (allows reconnection). */
 const DISCONNECT_GRACE_MS = 30_000;
 
+/** Deferred conversation state — exists XOR conversationId exists. */
+export interface PendingConversation {
+  id: string;
+  leaderId?: DomainLeaderId;
+  context?: ConversationContext;
+}
+
 export interface ClientSession {
   ws: WebSocket;
   conversationId?: string;
+  /** Deferred conversation (no DB row yet). Cleared when materialized or closed. */
+  pending?: PendingConversation;
   /** Timer for deferred abort on disconnect — cleared if user reconnects. */
   disconnectTimer?: ReturnType<typeof setTimeout>;
   /** Timestamp of last user activity (auth or chat message). */
@@ -54,7 +63,7 @@ export interface ClientSession {
 }
 
 /** Active connections keyed by Supabase user ID. */
-const sessions = new Map<string, ClientSession>();
+export const sessions = new Map<string, ClientSession>();
 
 /** Deferred abort timers for disconnected sessions (keyed by userId:conversationId). */
 const pendingDisconnects = new Map<string, ReturnType<typeof setTimeout>>();
@@ -130,8 +139,9 @@ function resetIdleTimer(userId: string, session: ClientSession): void {
 async function createConversation(
   userId: string,
   leaderId?: DomainLeaderId,
+  id?: string,
 ): Promise<string> {
-  const id = randomUUID();
+  if (!id) id = randomUUID();
 
   const { error } = await supabase.from("conversations").insert({
     id,
@@ -152,7 +162,7 @@ async function createConversation(
 // Message router
 // ---------------------------------------------------------------------------
 
-async function handleMessage(userId: string, raw: string): Promise<void> {
+export async function handleMessage(userId: string, raw: string): Promise<void> {
   let msg: WSMessage;
 
   try {
@@ -203,31 +213,15 @@ async function handleMessage(userId: string, raw: string): Promise<void> {
 
         abortActiveSession(userId, session);
 
-        log.info({ userId, leaderId: msg.leaderId ?? "auto-route" }, "start_session");
-        const conversationId = await createConversation(userId, msg.leaderId);
-        session.conversationId = conversationId;
-        // Only boot agent immediately for directed sessions (@-mention).
-        // Auto-route sessions (no leaderId) wait for the first chat message
-        // which triggers sendUserMessage -> routeMessage -> dispatchToLeaders.
-        if (msg.leaderId) {
-          log.info({ conversationId, leaderId: msg.leaderId }, "Directed session, booting agent");
-          startAgentSession(userId, conversationId, msg.leaderId, undefined, undefined, validatedContext).catch(
-            (err) => {
-              Sentry.captureException(err);
-              log.error({ userId, err }, "startAgentSession error");
-              sendToClient(userId, {
-                type: "error",
-                message: sanitizeErrorForClient(err),
-                errorCode:
-                  err instanceof KeyInvalidError ? "key_invalid" : undefined,
-              });
-            },
-          );
-        } else {
-          log.info({ conversationId }, "Auto-route session, waiting for first message");
-        }
+        // Defer conversation creation: generate UUID but don't insert into DB.
+        // The row is created on the first real chat message.
+        const pendingId = randomUUID();
+        session.pending = { id: pendingId, leaderId: msg.leaderId, context: validatedContext };
+        session.conversationId = undefined;
 
-        sendToClient(userId, { type: "session_started", conversationId });
+        log.info({ userId, leaderId: msg.leaderId ?? "auto-route", pendingId }, "start_session (deferred creation)");
+
+        sendToClient(userId, { type: "session_started", conversationId: session.pending.id });
         resetIdleTimer(userId, session);
         log.debug("session_started sent to client");
       } catch (err) {
@@ -244,6 +238,8 @@ async function handleMessage(userId: string, raw: string): Promise<void> {
     case "resume_session": {
       try {
         abortActiveSession(userId, session);
+        // Clear any pending deferred state — resuming an existing conversation
+        session.pending = undefined;
 
         // Verify conversation ownership
         const { data: conv, error: convErr } = await supabase
@@ -276,6 +272,13 @@ async function handleMessage(userId: string, raw: string): Promise<void> {
     // close_conversation: explicitly end the current conversation
     // ------------------------------------------------------------------
     case "close_conversation": {
+      // Handle pending state (conversation never created in DB)
+      if (!session.conversationId && session.pending) {
+        session.pending = undefined;
+        sendToClient(userId, { type: "session_ended", reason: "closed" });
+        break;
+      }
+
       if (!session.conversationId) {
         sendToClient(userId, {
           type: "error",
@@ -305,7 +308,7 @@ async function handleMessage(userId: string, raw: string): Promise<void> {
     // chat: forward user message into the running agent session
     // ------------------------------------------------------------------
     case "chat": {
-      if (!session.conversationId) {
+      if (!session.conversationId && !session.pending) {
         sendToClient(userId, {
           type: "error",
           message: "No active session. Send start_session first.",
@@ -326,10 +329,54 @@ async function handleMessage(userId: string, raw: string): Promise<void> {
       // User activity resets idle timer
       resetIdleTimer(userId, session);
 
+      // Materialize pending conversation on first real message
+      if (!session.conversationId && session.pending) {
+        const stripped = msg.content.replace(/@\w+\s*/g, "").trim();
+        if (!stripped) {
+          sendToClient(userId, {
+            type: "error",
+            message: "Please include a message along with the @-mention.",
+          });
+          return;
+        }
+
+        try {
+          const { id: pendingId, leaderId: pendingLeader, context: pendingContext } = session.pending;
+          await createConversation(userId, pendingLeader, pendingId);
+          session.conversationId = pendingId;
+          session.pending = undefined;
+
+          log.info({ conversationId: session.conversationId, leaderId: pendingLeader ?? "auto-route" }, "Conversation materialized on first message");
+
+          // Boot agent for directed sessions now that conversation exists
+          if (pendingLeader) {
+            startAgentSession(userId, session.conversationId, pendingLeader, undefined, undefined, pendingContext).catch(
+              (err) => {
+                Sentry.captureException(err);
+                log.error({ userId, err }, "startAgentSession error");
+                sendToClient(userId, {
+                  type: "error",
+                  message: sanitizeErrorForClient(err),
+                  errorCode: err instanceof KeyInvalidError ? "key_invalid" : undefined,
+                });
+              },
+            );
+          }
+
+          // sendUserMessage handles saveMessage internally — do not double-save
+          await sendUserMessage(userId, session.conversationId, msg.content, pendingContext);
+        } catch (err) {
+          Sentry.captureException(err);
+          log.error({ userId, err }, "chat error (deferred creation)");
+          sendToClient(userId, { type: "error", message: sanitizeErrorForClient(err) });
+        }
+        break;
+      }
+
       try {
         await sendUserMessage(
           userId,
-          session.conversationId,
+          session.conversationId!,
           msg.content,
           undefined, // conversationContext
           msg.attachments,
