@@ -14,8 +14,15 @@
 - [ ] 2.4 **AC4** Verify both tools are mapped to `auto-approve` in `tool-tiers.ts` and pass through `canUseTool`
 - [ ] 2.5 **AC5** Verify MCP tools hardcode owner/repo from workspace metadata (no user params)
 
-## Phase 3: Gap Analysis
+## Phase 3: Test Gap Remediation
 
-- [ ] 3.1 Confirm check runs vs check suites is acceptable (check runs provide more granular data)
-- [ ] 3.2 Confirm legacy Status API omission is acceptable (GitHub Actions uses Check Runs exclusively)
-- [ ] 3.3 Verify GitHub App manifest permissions or confirm graceful degradation (403 handling)
+- [ ] 3.1 Add auto-approve integration test for `github_read_ci_status` to `canusertool-tiered-gating.test.ts`
+- [ ] 3.2 Add auto-approve integration test for `github_read_workflow_logs` to `canusertool-tiered-gating.test.ts`
+- [ ] 3.3 Verify no review gate triggered (no `sendToClient` call) for auto-approve tools
+- [ ] 3.4 Verify structured audit log emitted with `tier: "auto-approve"` and `decision: "auto-approved"`
+
+## Phase 4: Gap Analysis
+
+- [ ] 4.1 Confirm check runs vs check suites is acceptable (check runs provide more granular data)
+- [ ] 4.2 Confirm legacy Status API omission is acceptable (GitHub Actions uses Check Runs exclusively)
+- [ ] 4.3 Verify GitHub App manifest permissions or confirm graceful degradation (403 handling)
