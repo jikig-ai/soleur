@@ -45,7 +45,7 @@ Bun version: 1.3.6 (d530ed99) on Linux x64. The crash occurs in Bun's internal p
 
 ### Root Cause of #1948
 
-Issue #1948 was discovered during bot-fix #1765. The scheduled-bug-fixer workflow uses `bun-version-file: ".bun-version"` which pins to 1.3.11, so CI should not reproduce this crash. The likely scenario is that the crash was observed on a system where Bun 1.3.6 was installed globally before the `.bun-version` file was adopted, or the issue was filed retroactively from an earlier observation.
+Issue #1948 was discovered during bot-fix #1765. The scheduled-bug-fixer workflow uses `bun-version-file: ".bun-version"` which pins to 1.3.11, so CI should not reproduce this crash. The issue body explicitly states "Bun version: 1.3.6 (d530ed99)" -- the crash was observed before the `.bun-version` pin was in place, or on a runner where the global Bun installation (1.3.6) was used instead of the pinned version. Verify by checking bot-fix #1765 run logs if the root cause matters for closing.
 
 ### Relationship to Prior Issues
 
@@ -60,17 +60,15 @@ Issue #1948 was discovered during bot-fix #1765. The scheduled-bug-fixer workflo
 
 ### Tasks
 
-1. **Verify test stability** -- Run `bun test` 5 consecutive times and `bash scripts/test-all.sh` once to confirm the three-layer defense holds (already done during research: all pass)
+1. **Verify test stability** -- Run `bash scripts/test-all.sh` once as a smoke test to confirm the three-layer defense holds (CI is already green on main with 3 consecutive runs, so extended local verification is redundant)
 
-2. **Evaluate Bun 1.3.12 upgrade** -- Bun 1.3.12 was released 2026-04-10 with 120 bug fixes. However, it does NOT meet the project's `minimumReleaseAge` of 259200 seconds (3 days) per `bunfig.toml`. The upgrade should be deferred until 2026-04-13.
+2. **Evaluate Bun 1.3.12 upgrade** -- Bun 1.3.12 was released 2026-04-10 with 120 bug fixes. However, it does NOT meet the project's `minimumReleaseAge` of 259200 seconds (3 days) per `bunfig.toml`. Bump `.bun-version` to 1.3.12 after 2026-04-13 as a routine maintenance task -- no tracking issue needed.
 
 3. **Close #1948** -- Add a resolution comment documenting:
+   - This is the same crash class as #1511 (duplicate)
    - The three-layer fix (version pin, sequential runner, dual-runner exclusion)
    - Links to prior resolutions (#1511, #860)
    - Current test stability verification results
-   - Note about optional Bun 1.3.12 upgrade after release age gate
-
-4. **Create tracking issue for Bun 1.3.12 upgrade** -- A separate `chore:` issue milestoned to "Post-MVP / Later" for bumping `.bun-version` to 1.3.12 after 2026-04-13. This is not blocking -- 1.3.11 is stable.
 
 ### Files to Modify
 
@@ -83,17 +81,11 @@ No code changes required. The fix is already in place. This plan is verification
 ### Commands to Run
 
 ```bash
-# Task 1: Verify stability (5 consecutive runs)
-for i in 1 2 3 4 5; do echo "--- Run $i ---"; bun test; done
-
-# Task 1b: Verify sequential runner
+# Task 1: Verify stability (smoke test)
 bash scripts/test-all.sh
 
 # Task 3: Close issue with resolution comment
 gh issue close 1948 --comment "Resolved by existing three-layer defense..."
-
-# Task 4: Create tracking issue for 1.3.12 upgrade
-gh issue create --title "chore: bump .bun-version to 1.3.12" ...
 ```
 
 ## Non-goals
@@ -105,16 +97,13 @@ gh issue create --title "chore: bump .bun-version to 1.3.12" ...
 
 ## Acceptance Criteria
 
-- [ ] `bun test` passes 5 consecutive runs with 0 failures and no SIGFPE
-- [ ] `bash scripts/test-all.sh` exits 0
-- [ ] Issue #1948 closed with resolution comment linking fix PRs
-- [ ] Tracking issue created for Bun 1.3.12 upgrade (milestoned to "Post-MVP / Later")
+- [x] `bash scripts/test-all.sh` exits 0
+- [x] Issue #1948 closed with resolution comment explicitly noting duplicate crash class of #1511 and linking fix PRs
 
 ## Test Scenarios
 
-- Given Bun 1.3.11 installed (via `.bun-version`), when `bun test` runs 5 consecutive times, then all runs complete with 0 failures and no crash
-- Given `scripts/test-all.sh` exists, when executed, then all suites pass
-- Given issue #1948 closed, when viewing it on GitHub, then the resolution comment documents the three-layer fix and links to #860 and #1511
+- Given `scripts/test-all.sh` exists, when executed, then all suites pass and exit 0
+- Given issue #1948 closed, when viewing it on GitHub, then the resolution comment states "duplicate crash class of #1511", documents the three-layer fix, and links to #860 and #1511
 
 ## Domain Review
 
