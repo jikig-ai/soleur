@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef, useCallback } from "react";
 import { createClient } from "@/lib/supabase/client";
-import { WS_CLOSE_CODES, type WSMessage, type ConversationContext } from "@/lib/types";
+import { WS_CLOSE_CODES, type WSMessage, type ConversationContext, type AttachmentRef } from "@/lib/types";
 import type { DomainLeaderId } from "@/server/domain-leaders";
 
 type ConnectionStatus = "connecting" | "connected" | "reconnecting" | "disconnected";
@@ -16,22 +16,31 @@ export interface WebSocketError {
   };
 }
 
-interface ChatMessage {
+interface ChatMessageBase {
   id: string;
   role: "user" | "assistant";
   content: string;
-  type: "text" | "review_gate";
   leaderId?: DomainLeaderId;
-  /** Present only when type === "review_gate" */
-  gateId?: string;
-  question?: string;
-  options?: string[];
+  attachments?: AttachmentRef[];
+}
+
+interface ChatTextMessage extends ChatMessageBase {
+  type: "text";
+}
+
+interface ChatGateMessage extends ChatMessageBase {
+  type: "review_gate";
+  gateId: string;
+  question: string;
+  options: string[];
   header?: string;
   descriptions?: Record<string, string | undefined>;
   resolved?: boolean;
   selectedOption?: string;
   gateError?: string;
 }
+
+type ChatMessage = ChatTextMessage | ChatGateMessage;
 
 export interface UsageData {
   totalCostUsd: number;
@@ -42,7 +51,7 @@ export interface UsageData {
 interface UseWebSocketReturn {
   messages: ChatMessage[];
   startSession: (leaderId?: DomainLeaderId, context?: ConversationContext) => void;
-  sendMessage: (content: string) => void;
+  sendMessage: (content: string, attachments?: AttachmentRef[]) => void;
   sendReviewGateResponse: (gateId: string, selection: string) => void;
   status: ConnectionStatus;
   sessionConfirmed: boolean;
@@ -263,7 +272,7 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
           // Route gateId-targeted errors to the review gate message
           if (msg.gateId) {
             setMessages((prev) => prev.map((m) =>
-              m.gateId === msg.gateId
+              m.type === "review_gate" && m.gateId === msg.gateId
                 ? { ...m, gateError: msg.message, resolved: false, selectedOption: undefined }
                 : m,
             ));
@@ -426,7 +435,7 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
   );
 
   const sendMessage = useCallback(
-    (content: string) => {
+    (content: string, attachments?: AttachmentRef[]) => {
       // Add the user message to local state immediately
       setMessages((prev) => [
         ...prev,
@@ -435,9 +444,10 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
           role: "user",
           content,
           type: "text",
+          attachments,
         },
       ]);
-      send({ type: "chat", content });
+      send({ type: "chat", content, attachments });
     },
     [send],
   );
@@ -447,7 +457,7 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
       send({ type: "review_gate_response", gateId, selection });
       // Optimistically mark as resolved
       setMessages((prev) => prev.map((m) =>
-        m.gateId === gateId
+        m.type === "review_gate" && m.gateId === gateId
           ? { ...m, resolved: true, selectedOption: selection, gateError: undefined }
           : m,
       ));

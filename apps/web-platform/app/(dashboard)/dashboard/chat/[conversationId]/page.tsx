@@ -4,14 +4,15 @@ import { useState, useRef, useEffect } from "react";
 import { useParams, useSearchParams, useRouter, usePathname } from "next/navigation";
 import { MarkdownRenderer } from "@/components/ui/markdown-renderer";
 import { useWebSocket } from "@/lib/ws-client";
-import type { ConversationContext } from "@/lib/types";
+import type { ConversationContext, AttachmentRef } from "@/lib/types";
 import { ErrorCard } from "@/components/ui/error-card";
 import { DOMAIN_LEADERS } from "@/server/domain-leaders";
 import type { DomainLeaderId } from "@/server/domain-leaders";
-import { LEADER_COLORS, LEADER_BG_COLORS } from "@/components/chat/leader-colors";
+import { LEADER_COLORS } from "@/components/chat/leader-colors";
 import { ChatInput } from "@/components/chat/chat-input";
 import { AtMentionDropdown } from "@/components/chat/at-mention-dropdown";
 import { useTeamNames } from "@/hooks/use-team-names";
+import { AttachmentDisplay } from "@/components/chat/attachment-display";
 
 export default function ChatPage() {
   const params = useParams<{ conversationId: string }>();
@@ -38,7 +39,7 @@ export default function ChatPage() {
     usageData,
   } = useWebSocket(conversationId);
 
-  const { names: customNames, getDisplayName, getBadgeLabel } = useTeamNames();
+  const { names: customNames, getDisplayName } = useTeamNames();
 
   const [sessionStarted, setSessionStarted] = useState(false);
   const [initialMsgSent, setInitialMsgSent] = useState(false);
@@ -125,9 +126,13 @@ export default function ChatPage() {
   const hasAssistantMessage = messages.some((m) => m.role === "assistant");
   const isClassifying = hasUserMessage && !hasAssistantMessage && routeSource === null;
 
-  function handleSend(message: string) {
+  function handleSend(message: string, attachments?: AttachmentRef[]) {
     if (status !== "connected") return;
-    sendMessage(message);
+    if (attachments && attachments.length > 0) {
+      sendMessage(message, attachments);
+    } else {
+      sendMessage(message);
+    }
   }
 
   return (
@@ -247,9 +252,9 @@ export default function ChatPage() {
                 <div key={msg.id}>
                   {msg.type === "review_gate" ? (
                     <ReviewGateCard
-                      gateId={msg.gateId!}
-                      question={msg.question!}
-                      options={msg.options!}
+                      gateId={msg.gateId}
+                      question={msg.question}
+                      options={msg.options}
                       header={msg.header}
                       descriptions={msg.descriptions}
                       resolved={msg.resolved}
@@ -265,7 +270,7 @@ export default function ChatPage() {
                     showFullTitle={!!isFirst}
                     isStreaming={!!msg.leaderId && activeLeaderIds.includes(msg.leaderId)}
                     getDisplayName={getDisplayName}
-                    getBadgeLabel={getBadgeLabel}
+                    attachments={msg.attachments}
                   />
                 )}
               </div>
@@ -324,6 +329,7 @@ export default function ChatPage() {
           />
           <ChatInput
             onSend={handleSend}
+            conversationId={conversationId}
             onAtTrigger={(query, pos) => {
               setAtQuery(query);
               setAtPosition(pos);
@@ -380,7 +386,7 @@ function MessageBubble({
   showFullTitle = false,
   isStreaming = false,
   getDisplayName,
-  getBadgeLabel,
+  attachments,
 }: {
   role: "user" | "assistant";
   content: string;
@@ -388,14 +394,13 @@ function MessageBubble({
   showFullTitle?: boolean;
   isStreaming?: boolean;
   getDisplayName?: (id: DomainLeaderId) => string;
-  getBadgeLabel?: (id: DomainLeaderId) => string;
+  attachments?: AttachmentRef[];
 }) {
   const isUser = role === "user";
   const leader = leaderId ? DOMAIN_LEADERS.find((l) => l.id === leaderId) : null;
   const colorClass = leaderId ? (LEADER_COLORS[leaderId] ?? "border-l-neutral-500") : "";
 
   const displayName = leaderId && getDisplayName ? getDisplayName(leaderId) : leader?.name;
-  const badgeText = leaderId && getBadgeLabel ? getBadgeLabel(leaderId) : leader?.name.slice(0, 3);
 
   return (
     <div className={`flex ${isUser ? "justify-end" : "justify-start"}`}>
@@ -403,9 +408,16 @@ function MessageBubble({
         {/* Leader avatar */}
         {leader && (
           <span
-            className={`mt-1 flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-xs font-semibold text-white ${LEADER_BG_COLORS[leaderId!]}`}
+            className="mt-1 flex h-7 w-7 shrink-0 items-center justify-center overflow-hidden rounded-md"
+            aria-label={`Soleur ${leaderId!.toUpperCase()}`}
           >
-            {badgeText}
+            <img
+              src="/icons/soleur-logo-mark.png"
+              alt=""
+              width={28}
+              height={28}
+              className="h-full w-full object-cover"
+            />
           </span>
         )}
 
@@ -432,6 +444,9 @@ function MessageBubble({
             <p className="whitespace-pre-wrap [overflow-wrap:anywhere]">{content}</p>
           ) : (
             <MarkdownRenderer content={content} />
+          )}
+          {attachments && attachments.length > 0 && (
+            <AttachmentDisplay attachments={attachments} />
           )}
         </div>
       </div>
@@ -486,7 +501,7 @@ function ReviewGateCard({
   }
 
   return (
-    <div className="rounded-xl border border-amber-800/50 bg-amber-950/30 p-5">
+    <div role="group" aria-label={question} aria-busy={pending !== null} className="rounded-xl border border-amber-800/50 bg-amber-950/30 p-5">
       {header && (
         <span className="mb-2 inline-block rounded-md bg-amber-900/50 px-2 py-0.5 text-xs font-medium text-amber-300">
           {header}
@@ -522,7 +537,7 @@ function ReviewGateCard({
         ))}
       </div>
       {gateError && (
-        <p className="mt-2 text-sm text-red-400">{gateError}</p>
+        <p role="alert" className="mt-2 text-sm text-red-400">{gateError}</p>
       )}
     </div>
   );

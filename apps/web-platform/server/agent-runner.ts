@@ -1,13 +1,13 @@
 import { query, tool, createSdkMcpServer } from "@anthropic-ai/claude-agent-sdk";
 import { randomUUID } from "crypto";
-import { readFileSync, writeFileSync } from "fs";
+import { readFileSync, writeFileSync, mkdirSync } from "fs";
 import path from "path";
 import { z } from "zod/v4";
 
 import { createServiceClient } from "@/lib/supabase/service";
 import { ROUTABLE_DOMAIN_LEADERS, type DomainLeaderId } from "./domain-leaders";
 import { routeMessage } from "./domain-router";
-import { KeyInvalidError } from "@/lib/types";
+import { KeyInvalidError, type AttachmentRef } from "@/lib/types";
 import { decryptKey, decryptKeyLegacy, encryptKey } from "./byok";
 import { sendToClient } from "./ws-handler";
 import * as Sentry from "@sentry/nextjs";
@@ -21,8 +21,15 @@ import { createSandboxHook } from "./sandbox-hook";
 import { abortableReviewGate, validateSelection, extractReviewGateInput, buildReviewGateResponse, type AgentSession } from "./review-gate";
 import { createChildLogger } from "./logger";
 import { syncPull, syncPush } from "./session-sync";
+import { validateBranchFormat } from "./branch-validation";
 import { createPullRequest } from "./github-app";
+import { plausibleCreateSite, plausibleAddGoal, plausibleGetStats } from "./service-tools";
 import { tryCreateVision, buildVisionEnhancementPrompt } from "./vision-helpers";
+import { getToolTier, buildGateMessage } from "./tool-tiers";
+import { readCiStatus, readWorkflowLogs } from "./ci-tools";
+import { triggerWorkflow, createRateLimiter } from "./trigger-workflow";
+import { pushBranch } from "./push-branch";
+import { githubApiGet } from "./github-api";
 
 const log = createChildLogger("agent");
 
@@ -263,7 +270,7 @@ async function loadConversationHistory(
 ): Promise<Array<{ role: string; content: string }>> {
   const { data, error } = await supabase()
     .from("messages")
-    .select("role, content, created_at")
+    .select("role, content, created_at, message_attachments(filename, content_type, size_bytes)")
     .eq("conversation_id", conversationId)
     .order("created_at", { ascending: true });
 
@@ -272,7 +279,19 @@ async function loadConversationHistory(
     return [];
   }
 
-  return data ?? [];
+  // Augment user messages with attachment context for replay
+  return (data ?? []).map((m) => {
+    const atts = (m as Record<string, unknown>).message_attachments as
+      | Array<{ filename: string; content_type: string; size_bytes: number }>
+      | undefined;
+    if (atts && atts.length > 0 && m.role === "user") {
+      const attList = atts
+        .map((a) => `- ${a.filename} (${a.content_type}, ${a.size_bytes} bytes)`)
+        .join("\n");
+      return { role: m.role, content: `${m.content}\n\n[Attached files:\n${attList}]` };
+    }
+    return { role: m.role, content: m.content };
+  });
 }
 
 function buildReplayPrompt(
@@ -391,6 +410,20 @@ export async function startAgentSession(
     const workspacePath = user.workspace_path;
     const pluginPath = path.join(workspacePath, "plugins", "soleur");
 
+    // Extract MCP server names from plugin.json for canUseTool allowlisting.
+    // Uses explicit server-name matching (not blanket mcp__ prefix).
+    // See learning: 2026-04-06-mcp-tool-canusertool-scope-allowlist.md
+    let pluginMcpServerNames: string[] = [];
+    try {
+      const pluginJsonPath = path.join(pluginPath, ".claude-plugin", "plugin.json");
+      const pluginJson = JSON.parse(readFileSync(pluginJsonPath, "utf-8"));
+      if (pluginJson.mcpServers && typeof pluginJson.mcpServers === "object") {
+        pluginMcpServerNames = Object.keys(pluginJson.mcpServers);
+      }
+    } catch {
+      // plugin.json may not exist in all workspaces; proceed without plugin MCP tools
+    }
+
     // Migrate existing workspaces: remove pre-approved permissions that
     // bypass canUseTool (see #725). Safe to run on every session start —
     // no-op for already-migrated workspaces.
@@ -428,6 +461,19 @@ When you need user input for important decisions, use the AskUserQuestion tool.`
       if (enhancement) systemPrompt += enhancement;
     }
 
+    // Inject connected services context for service automation tier selection.
+    // The agent uses this to decide MCP vs API vs guided instructions.
+    // Map env var names to human-readable labels to avoid leaking internals.
+    if (Object.keys(serviceTokens).length > 0) {
+      const envVarToLabel = Object.fromEntries(
+        Object.values(PROVIDER_CONFIG).map((c) => [c.envVar, c.label]),
+      );
+      const serviceList = Object.keys(serviceTokens)
+        .map((envVar) => `- ${envVarToLabel[envVar] ?? envVar}: connected`)
+        .join("\n");
+      systemPrompt += `\n\n## Connected Services\n${serviceList}`;
+    }
+
     // ---------------------------------------------------------------------------
     // In-process MCP server for platform tools (PR creation, etc.)
     // Only available when user has a GitHub App installation with a connected repo.
@@ -437,9 +483,18 @@ When you need user input for important decisions, use the AskUserQuestion tool.`
 
     let mcpServersOption: Record<string, ReturnType<typeof createSdkMcpServer>> | undefined;
     let platformToolNames: string[] = [];
+    // Hoisted for canUseTool audit logging — set inside the installationId guard
+    let repoOwner = "";
+    let repoName = "";
 
+    // Session-scoped rate limiter for workflow triggers (#1928)
+    const workflowRateLimiter = createRateLimiter();
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- SDK uses any for heterogeneous tool arrays
+    const platformTools: Array<ReturnType<typeof tool<any>>> = [];
+
+    // GitHub PR tool: requires GitHub App installation with a connected repo.
     if (installationId && repoUrl) {
-      // Parse owner/repo from repo_url (e.g., "https://github.com/owner/repo")
       let owner: string;
       let repo: string;
       try {
@@ -452,8 +507,6 @@ When you need user input for important decisions, use the AskUserQuestion tool.`
         repo = "";
       }
 
-      // Validate owner/repo contain only safe GitHub name characters
-      // to prevent path-traversal or injection in API URL interpolation.
       const GITHUB_NAME_RE = /^[a-zA-Z0-9._-]+$/;
       if (!GITHUB_NAME_RE.test(owner) || !GITHUB_NAME_RE.test(repo)) {
         owner = "";
@@ -461,6 +514,22 @@ When you need user input for important decisions, use the AskUserQuestion tool.`
       }
 
       if (owner && repo) {
+        repoOwner = owner;
+        repoName = repo;
+
+        // Fetch the repo's default branch for protected-branch validation (#1929).
+        // Uses the existing token cache — no extra round-trip if token is warm.
+        let defaultBranch = "main";
+        try {
+          const repoData = await githubApiGet<{ default_branch: string }>(
+            installationId,
+            `/repos/${owner}/${repo}`,
+          );
+          defaultBranch = repoData.default_branch;
+        } catch {
+          // Fall back to "main" — still protected by the hardcoded list
+        }
+
         const createPr = tool(
           "create_pull_request",
           "Create a pull request on the user's connected GitHub repository. " +
@@ -474,6 +543,15 @@ When you need user input for important decisions, use the AskUserQuestion tool.`
           },
           async (args) => {
             try {
+              // Validate branch name format before hitting GitHub API
+              validateBranchFormat(args.head);
+              validateBranchFormat(args.base);
+              if (args.head === args.base) {
+                return {
+                  content: [{ type: "text" as const, text: "Error creating PR: Head branch and base branch cannot be the same" }],
+                  isError: true,
+                };
+              }
               const result = await createPullRequest(
                 installationId, owner, repo,
                 args.head, args.base, args.title, args.body,
@@ -490,15 +568,191 @@ When you need user input for important decisions, use the AskUserQuestion tool.`
           },
         );
 
-        const toolServer = createSdkMcpServer({
-          name: "soleur_platform",
-          version: "1.0.0",
-          tools: [createPr],
-        });
+        platformTools.push(createPr);
+        platformToolNames.push("mcp__soleur_platform__create_pull_request");
 
-        mcpServersOption = { soleur_platform: toolServer };
-        platformToolNames = ["mcp__soleur_platform__create_pull_request"];
+        // Phase 2: Read CI status (#1927) — auto-approve tier
+        platformTools.push(
+          tool(
+            "github_read_ci_status",
+            "Read recent CI workflow run statuses for the connected repository. " +
+            "Returns status (pass/fail/in-progress), commit SHA, branch, run URL, " +
+            "and workflow name/ID. Optionally filter by branch.",
+            {
+              branch: z.string().optional().describe("Filter runs by branch name"),
+              per_page: z.number().default(10).describe("Number of runs to return (max 30)"),
+            },
+            async (args) => {
+              try {
+                const runs = await readCiStatus(
+                  installationId, owner, repo,
+                  { branch: args.branch, per_page: Math.min(args.per_page, 30) },
+                );
+                return {
+                  content: [{ type: "text" as const, text: JSON.stringify(runs, null, 2) }],
+                };
+              } catch (err) {
+                return {
+                  content: [{ type: "text" as const, text: `Error reading CI status: ${(err as Error).message}` }],
+                  isError: true,
+                };
+              }
+            },
+          ),
+          tool(
+            "github_read_workflow_logs",
+            "Read failure details for a specific workflow run. Returns check annotations " +
+            "(structured failure data) when available, otherwise falls back to the last " +
+            "100 lines of the first failed step. Use github_read_ci_status first to find run IDs.",
+            {
+              run_id: z.number().describe("The workflow run ID to inspect"),
+            },
+            async (args) => {
+              try {
+                const result = await readWorkflowLogs(
+                  installationId, owner, repo, args.run_id,
+                );
+                return {
+                  content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
+                };
+              } catch (err) {
+                return {
+                  content: [{ type: "text" as const, text: `Error reading workflow logs: ${(err as Error).message}` }],
+                  isError: true,
+                };
+              }
+            },
+          ),
+        );
+        platformToolNames.push(
+          "mcp__soleur_platform__github_read_ci_status",
+          "mcp__soleur_platform__github_read_workflow_logs",
+        );
+
+        // Phase 3: Trigger workflows (#1928) — gated tier
+        platformTools.push(
+          tool(
+            "github_trigger_workflow",
+            "Trigger a workflow_dispatch event on the connected repository. " +
+            "Requires founder approval via review gate. Rate limited to 10 triggers per session. " +
+            "Use github_read_ci_status first to find workflow IDs.",
+            {
+              workflow_id: z.number().describe("The workflow ID to trigger (from github_read_ci_status)"),
+              ref: z.string().describe("Git ref to run the workflow on (branch name or tag)"),
+              inputs: z.record(z.string(), z.string()).optional().describe("Optional workflow_dispatch inputs"),
+            },
+            async (args) => {
+              try {
+                const result = await triggerWorkflow(
+                  installationId, owner, repo,
+                  args.workflow_id, args.ref, workflowRateLimiter, args.inputs,
+                );
+                return {
+                  content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
+                };
+              } catch (err) {
+                return {
+                  content: [{ type: "text" as const, text: `Error triggering workflow: ${(err as Error).message}` }],
+                  isError: true,
+                };
+              }
+            },
+          ),
+        );
+        platformToolNames.push("mcp__soleur_platform__github_trigger_workflow");
+
+        // Phase 4: Push branches (#1929) — gated tier
+        platformTools.push(
+          tool(
+            "github_push_branch",
+            "Push the current workspace HEAD to a feature branch on the remote. " +
+            "Requires founder approval via review gate. Force-push and push to " +
+            "main/master are blocked unconditionally.",
+            {
+              branch: z.string().describe("Target branch name (must not be main, master, or default branch)"),
+              force: z.boolean().default(false).describe("Force-push (always rejected — included for explicit error messaging)"),
+            },
+            async (args) => {
+              try {
+                const result = await pushBranch({
+                  installationId,
+                  owner,
+                  repo,
+                  workspacePath,
+                  branch: args.branch,
+                  force: args.force,
+                  defaultBranch,
+                });
+                return {
+                  content: [{ type: "text" as const, text: JSON.stringify(result) }],
+                };
+              } catch (err) {
+                return {
+                  content: [{ type: "text" as const, text: `Error pushing branch: ${(err as Error).message}` }],
+                  isError: true,
+                };
+              }
+            },
+          ),
+        );
+        platformToolNames.push("mcp__soleur_platform__github_push_branch");
       }
+    }
+
+    // Service tools: registered independently of GitHub installation.
+    // Users with stored API keys get tools even without a connected repo.
+    const plausibleKey = serviceTokens.PLAUSIBLE_API_KEY;
+    if (plausibleKey) {
+      const wrapResult = (result: { success: boolean; data?: unknown; error?: string }) => ({
+        content: [{ type: "text" as const, text: JSON.stringify(result) }],
+        ...(result.success ? {} : { isError: true }),
+      });
+
+      platformTools.push(
+        tool(
+          "plausible_create_site",
+          "Create a new site in Plausible Analytics. Returns the created site metadata.",
+          {
+            domain: z.string().describe("Domain name for the site (e.g., example.com)"),
+            timezone: z.string().default("UTC").describe("Timezone for the site"),
+          },
+          async (args) => wrapResult(await plausibleCreateSite(plausibleKey, args.domain, args.timezone)),
+        ),
+        tool(
+          "plausible_add_goal",
+          "Add a conversion goal to a Plausible Analytics site. Uses PUT with upsert semantics (safely idempotent).",
+          {
+            site_id: z.string().describe("Domain of the site (e.g., example.com)"),
+            goal_type: z.enum(["event", "page"]).describe("Type of goal"),
+            value: z.string().describe("Event name (for event goals) or page path (for page goals)"),
+          },
+          async (args) => wrapResult(await plausibleAddGoal(plausibleKey, args.site_id, args.goal_type, args.value)),
+        ),
+        tool(
+          "plausible_get_stats",
+          "Get aggregate stats for a Plausible Analytics site. Returns visitors, pageviews, bounce rate, and visit duration.",
+          {
+            site_id: z.string().describe("Domain of the site (e.g., example.com)"),
+            period: z.enum(["day", "7d", "30d"]).default("30d").describe("Time period for stats"),
+          },
+          async (args) => wrapResult(await plausibleGetStats(plausibleKey, args.site_id, args.period)),
+        ),
+      );
+      platformToolNames.push(
+        "mcp__soleur_platform__plausible_create_site",
+        "mcp__soleur_platform__plausible_add_goal",
+        "mcp__soleur_platform__plausible_get_stats",
+      );
+    }
+
+    // Build MCP server if any platform tools are registered
+    if (platformTools.length > 0) {
+      const toolServer = createSdkMcpServer({
+        name: "soleur_platform",
+        version: "1.0.0",
+        tools: platformTools,
+      });
+      mcpServersOption = { soleur_platform: toolServer };
     }
 
     // Run the Agent SDK query
@@ -526,7 +780,14 @@ When you need user input for important decisions, use the AskUserQuestion tool.`
         env: buildAgentEnv(apiKey, serviceTokens),
         disallowedTools: ["WebSearch", "WebFetch"],
         ...(mcpServersOption ? { mcpServers: mcpServersOption } : {}),
-        ...(platformToolNames.length > 0 ? { allowedTools: platformToolNames } : {}),
+        ...(platformToolNames.length > 0 || pluginMcpServerNames.length > 0
+          ? {
+              allowedTools: [
+                ...platformToolNames,
+                ...pluginMcpServerNames.map((s) => `mcp__plugin_soleur_${s}__*`),
+              ],
+            }
+          : {}),
         sandbox: {
           enabled: true,
           autoAllowBashIfSandboxed: true,
@@ -640,7 +901,6 @@ When you need user input for important decisions, use the AskUserQuestion tool.`
               updatedInput: buildReviewGateResponse(
                 toolInput as Record<string, unknown>,
                 selection,
-                gate.isNewSchema,
               ),
             };
           }
@@ -666,11 +926,80 @@ When you need user input for important decisions, use the AskUserQuestion tool.`
             return { behavior: "allow" as const };
           }
 
-          // Allow in-process MCP server tools registered via mcpServers option.
+          // Tiered gating for in-process MCP server tools (#1926).
           // Scoped to platformToolNames (not blanket mcp__ prefix) to prevent
           // future MCP servers from being auto-allowed without explicit review.
           if (platformToolNames.includes(toolName)) {
-            log.info({ sec: true, toolName, agentId: options.agentID }, "MCP tool invoked");
+            const tier = getToolTier(toolName);
+
+            if (tier === "blocked") {
+              log.info(
+                { sec: true, tool: toolName, tier, decision: "deny", repo: `${repoOwner}/${repoName}` },
+                "Platform tool blocked",
+              );
+              return {
+                behavior: "deny" as const,
+                message: "This action is not allowed from cloud agents",
+              };
+            }
+
+            if (tier === "gated") {
+              const gateId = randomUUID();
+              const question = buildGateMessage(toolName, toolInput);
+
+              sendToClient(userId, {
+                type: "review_gate",
+                gateId,
+                question,
+                options: ["Approve", "Reject"],
+              });
+
+              await updateConversationStatus(conversationId, "waiting_for_user");
+
+              const selection = await abortableReviewGate(
+                session,
+                gateId,
+                options.signal,
+                undefined,
+                ["Approve", "Reject"],
+              );
+
+              await updateConversationStatus(conversationId, "active");
+
+              const decision = selection === "Approve" ? "approved" : "rejected";
+              log.info(
+                { sec: true, tool: toolName, tier, decision, repo: `${repoOwner}/${repoName}` },
+                "Platform tool gated",
+              );
+
+              if (selection !== "Approve") {
+                return {
+                  behavior: "deny" as const,
+                  message: "User rejected the action",
+                };
+              }
+
+              return { behavior: "allow" as const };
+            }
+
+            // auto-approve: read-only tools pass through
+            log.info(
+              { sec: true, tool: toolName, tier, decision: "auto-approved", repo: `${repoOwner}/${repoName}` },
+              "Platform tool auto-approved",
+            );
+            return { behavior: "allow" as const };
+          }
+
+          // Allow plugin MCP tools from servers registered in plugin.json.
+          // Uses explicit server-name matching (not blanket mcp__ prefix).
+          // See learning: 2026-04-06-mcp-tool-canusertool-scope-allowlist.md
+          if (
+            toolName.startsWith("mcp__plugin_soleur_") &&
+            pluginMcpServerNames.some((server) =>
+              toolName.startsWith(`mcp__plugin_soleur_${server}__`),
+            )
+          ) {
+            log.info({ sec: true, toolName, agentId: options.agentID }, "Plugin MCP tool invoked");
             return { behavior: "allow" as const };
           }
 
@@ -882,6 +1211,7 @@ export async function sendUserMessage(
   conversationId: string,
   content: string,
   conversationContext?: import("@/lib/types").ConversationContext,
+  attachments?: AttachmentRef[],
 ): Promise<void> {
   // Verify conversation ownership BEFORE saving the message to prevent
   // cross-user writes (the message insert has no user_id check itself).
@@ -895,7 +1225,92 @@ export async function sendUserMessage(
   if (convErr || !conv) throw new Error("Conversation not found");
 
   // Save user message to DB (after ownership verified)
-  await saveMessage(conversationId, "user", content);
+  const messageId = randomUUID();
+  const { error: msgErr } = await supabase().from("messages").insert({
+    id: messageId,
+    conversation_id: conversationId,
+    role: "user",
+    content,
+    tool_calls: null,
+    leader_id: null,
+  });
+  if (msgErr) throw new Error(`Failed to save message: ${msgErr.message}`);
+
+  // Persist attachment metadata and download files to workspace
+  let attachmentContext: string | undefined;
+  if (attachments && attachments.length > 0) {
+    // Validate and sanitize each attachment (defense-in-depth — client is untrusted)
+    const ALLOWED_TYPES = new Set(["image/png", "image/jpeg", "image/gif", "image/webp", "application/pdf"]);
+    const pathPrefix = `${userId}/${conversationId}/`;
+
+    for (const att of attachments) {
+      // P1 fix: reject storagePath that doesn't belong to this user/conversation or contains traversal
+      if (!att.storagePath.startsWith(pathPrefix) || att.storagePath.includes("..")) {
+        throw new Error("Attachment not found");
+      }
+      if (!ALLOWED_TYPES.has(att.contentType)) {
+        throw new Error("Unsupported file type");
+      }
+      // Sanitize filename: strip path separators
+      att.filename = att.filename.replace(/[/\\]/g, "_");
+    }
+
+    // Insert attachment metadata rows
+    const attachmentRows = attachments.map((att) => ({
+      message_id: messageId,
+      storage_path: att.storagePath,
+      filename: att.filename,
+      content_type: att.contentType,
+      size_bytes: att.sizeBytes,
+    }));
+
+    const { error: attErr } = await supabase()
+      .from("message_attachments")
+      .insert(attachmentRows);
+
+    if (attErr) {
+      log.error({ err: attErr, messageId }, "Failed to save attachment metadata");
+      throw new Error("Upload failed");
+    }
+
+    // Download files to workspace for agent access
+    const { data: user } = await supabase()
+      .from("users")
+      .select("workspace_path")
+      .eq("id", userId)
+      .single();
+
+    if (user?.workspace_path) {
+      const attachDir = path.join(user.workspace_path, "attachments", conversationId);
+      mkdirSync(attachDir, { recursive: true });
+
+      const filePaths: string[] = [];
+      for (const att of attachments) {
+        const { data: fileData, error: dlErr } = await supabase()
+          .storage
+          .from("chat-attachments")
+          .download(att.storagePath);
+
+        if (dlErr || !fileData) {
+          log.error({ err: dlErr, storagePath: att.storagePath }, "Failed to download attachment");
+          continue;
+        }
+
+        const extMap: Record<string, string> = {
+          "image/png": "png", "image/jpeg": "jpeg", "image/gif": "gif",
+          "image/webp": "webp", "application/pdf": "pdf",
+        };
+        const ext = extMap[att.contentType] || "bin";
+        const localPath = path.join(attachDir, `${randomUUID()}.${ext}`);
+        writeFileSync(localPath, Buffer.from(await fileData.arrayBuffer()));
+        filePaths.push(`- ${att.filename} (${att.contentType}, ${att.sizeBytes} bytes): ${localPath}`);
+      }
+
+      if (filePaths.length > 0) {
+        attachmentContext = `The user attached the following files:\n${filePaths.join("\n")}`;
+      }
+    }
+  }
 
   // Check for an in-memory session with a captured session_id
   const key = sessionKey(userId, conversationId);
@@ -922,6 +1337,11 @@ export async function sendUserMessage(
     });
   };
 
+  // Augment content with attachment context for the agent
+  const augmentedContent = attachmentContext
+    ? `${content}\n\n${attachmentContext}`
+    : content;
+
   // If no domain_leader is set (tag-and-route mode), use the router
   // to determine which leaders should respond
   if (!conv.domain_leader) {
@@ -929,7 +1349,7 @@ export async function sendUserMessage(
       const apiKey = await getUserApiKey(userId);
       const route = await routeMessage(content, apiKey, conversationContext);
       log.info({ leaders: route.leaders, source: route.source }, "Routed message to leaders");
-      dispatchToLeaders(userId, conversationId, route.leaders, content, conversationContext, undefined, route.source)
+      dispatchToLeaders(userId, conversationId, route.leaders, augmentedContent, conversationContext, undefined, route.source)
         .catch(handleSessionError);
     } catch (err) {
       handleSessionError(err);
@@ -945,7 +1365,7 @@ export async function sendUserMessage(
       conversationId,
       (conv.domain_leader as DomainLeaderId) ?? undefined,
       resumeSessionId,
-      content,
+      augmentedContent,
     ).catch(async (err) => {
       log.warn({ err }, "SDK resume failed, falling back to message replay");
       // Clear stale session_id
@@ -959,7 +1379,7 @@ export async function sendUserMessage(
 
       // Load history and build replay prompt
       const history = await loadConversationHistory(conversationId);
-      const replayPrompt = buildReplayPrompt(history, content);
+      const replayPrompt = buildReplayPrompt(history, augmentedContent);
 
       startAgentSession(
         userId,
@@ -973,8 +1393,8 @@ export async function sendUserMessage(
     // No session to resume — first turn or history-only replay
     const history = await loadConversationHistory(conversationId);
     const prompt = history.length > 0
-      ? buildReplayPrompt(history, content)
-      : content;
+      ? buildReplayPrompt(history, augmentedContent)
+      : augmentedContent;
 
     startAgentSession(
       userId,

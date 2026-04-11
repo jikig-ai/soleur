@@ -13,7 +13,7 @@ Support domain leader. Assess before acting. Inventory support state before reco
 Evaluate current support posture before making recommendations.
 
 - Check for open GitHub issues: `gh issue list --state open --json number,title,labels,createdAt`. Note issue volume, age distribution, and label coverage.
-- If the task references a specific GitHub issue (`#N`), verify its state via `gh issue view <N> --json state` before asserting whether work is pending or complete.
+- If the task references a GitHub issue (`#N`), verify its state via `gh issue view <N> --json state` before asserting whether work is pending or complete.
 - Check for existing support artifacts in `knowledge-base/support/` (runbooks, FAQs, escalation guides). Note what exists and what is missing.
 - Check for community digests in `knowledge-base/support/community/` (recent digest files, community health trends).
 - Inventory: issue triage state, documentation coverage, community health metrics.

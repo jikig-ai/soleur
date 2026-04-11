@@ -7,8 +7,12 @@ const mockStartSession = vi.fn();
 const mockSendMessage = vi.fn();
 const mockSendReviewGateResponse = vi.fn();
 
+type MockTextMessage = { id: string; role: "user" | "assistant"; content: string; type: "text"; leaderId?: string };
+type MockGateMessage = { id: string; role: "user" | "assistant"; content: string; type: "review_gate"; leaderId?: string; gateId: string; question: string; options: string[]; header?: string; descriptions?: Record<string, string | undefined>; resolved?: boolean; selectedOption?: string; gateError?: string };
+type MockChatMessage = MockTextMessage | MockGateMessage;
+
 let wsReturn = {
-  messages: [] as Array<{ id: string; role: "user" | "assistant"; content: string; type: "text" | "review_gate"; leaderId?: string; gateId?: string; question?: string; options?: string[]; header?: string; descriptions?: Record<string, string | undefined>; resolved?: boolean; selectedOption?: string; gateError?: string }>,
+  messages: [] as MockChatMessage[],
   startSession: mockStartSession,
   sendMessage: mockSendMessage,
   sendReviewGateResponse: mockSendReviewGateResponse,
@@ -212,13 +216,16 @@ describe("ChatPage", () => {
     expect(screen.getAllByText(/2 leaders responding/i).length).toBeGreaterThanOrEqual(1);
   });
 
-  it("renders leader message with colored name badge", async () => {
+  it("renders leader message with Soleur logo badge", async () => {
     wsReturn.messages = [
       { id: "s1", role: "assistant", content: "My analysis", type: "text", leaderId: "cmo" },
     ];
     await renderChatPage();
-    // CMO should appear in both the badge and name label
-    expect(screen.getAllByText("CMO").length).toBeGreaterThanOrEqual(1);
+    // Logo badge should appear with aria-label
+    const badge = screen.getByLabelText(/Soleur CMO/i);
+    expect(badge).toBeInTheDocument();
+    // Name label still shows display name
+    expect(screen.getByText("CMO")).toBeInTheDocument();
   });
 
   it("shows mobile back arrow", async () => {
@@ -509,6 +516,48 @@ describe("ChatPage", () => {
       ];
       await renderChatPage();
       expect(screen.getByText(/Review gate not found/)).toBeInTheDocument();
+    });
+
+    it("has role=group and aria-label on card container", async () => {
+      wsReturn.messages = [
+        {
+          id: "gate-g1", role: "assistant", content: "Which library?",
+          type: "review_gate", gateId: "g1", question: "Which library?",
+          options: ["React Query", "SWR"],
+        },
+      ];
+      await renderChatPage();
+      const group = screen.getByRole("group", { name: "Which library?" });
+      expect(group).toBeInTheDocument();
+    });
+
+    it("sets aria-busy during pending state", async () => {
+      wsReturn.messages = [
+        {
+          id: "gate-g1", role: "assistant", content: "Choose",
+          type: "review_gate", gateId: "g1", question: "Choose",
+          options: ["Yes", "No"],
+        },
+      ];
+      await renderChatPage();
+      const group = screen.getByRole("group", { name: "Choose" });
+      expect(group).toHaveAttribute("aria-busy", "false");
+      await userEvent.click(screen.getByRole("button", { name: "Yes" }));
+      expect(group).toHaveAttribute("aria-busy", "true");
+    });
+
+    it("renders error message with role=alert", async () => {
+      wsReturn.messages = [
+        {
+          id: "gate-g1", role: "assistant", content: "Choose",
+          type: "review_gate", gateId: "g1", question: "Choose",
+          options: ["Yes", "No"],
+          gateError: "Review gate not found or already resolved",
+        },
+      ];
+      await renderChatPage();
+      const alert = screen.getByRole("alert");
+      expect(alert).toHaveTextContent(/Review gate not found/);
     });
   });
 });

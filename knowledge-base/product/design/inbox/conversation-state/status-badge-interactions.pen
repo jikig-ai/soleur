@@ -1,0 +1,1367 @@
+{
+  "version": "2.9",
+  "children": [
+    {
+      "type": "frame",
+      "id": "saU7b",
+      "x": 0,
+      "y": 0,
+      "name": "01 — Failed State (Dropdown Open)",
+      "width": 900,
+      "fill": "$--background",
+      "layout": "vertical",
+      "padding": 40,
+      "children": [
+        {
+          "type": "text",
+          "id": "2YA3l",
+          "name": "label1",
+          "fill": "$--dim-foreground",
+          "content": "Failed — Dropdown open (clickable badge)",
+          "fontFamily": "$--font-primary",
+          "fontSize": 12,
+          "fontWeight": "500"
+        },
+        {
+          "type": "frame",
+          "id": "wga2A",
+          "name": "Conversation Row",
+          "width": "fill_container",
+          "fill": "$--surface",
+          "cornerRadius": 8,
+          "stroke": {
+            "align": "inside",
+            "thickness": 1,
+            "fill": "$--border"
+          },
+          "gap": 16,
+          "padding": 16,
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "frame",
+              "id": "YknMo",
+              "name": "Badge Wrapper",
+              "layout": "vertical",
+              "gap": 4,
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "WhN2Z",
+                  "name": "Status Badge — Failed",
+                  "fill": "$--red-bg",
+                  "cornerRadius": 9999,
+                  "gap": 6,
+                  "padding": [
+                    4,
+                    10
+                  ],
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "ellipse",
+                      "id": "idgMR",
+                      "name": "dot1",
+                      "fill": "$--red-500",
+                      "width": 6,
+                      "height": 6
+                    },
+                    {
+                      "type": "text",
+                      "id": "EweTR",
+                      "name": "badgeText1",
+                      "fill": "$--red-500",
+                      "content": "Needs attention",
+                      "fontFamily": "$--font-primary",
+                      "fontSize": 12,
+                      "fontWeight": "500"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "jsFPM",
+                  "name": "Dropdown Menu",
+                  "width": 180,
+                  "fill": "$--dropdown-bg",
+                  "cornerRadius": 8,
+                  "stroke": {
+                    "align": "inside",
+                    "thickness": 1,
+                    "fill": "$--dropdown-border"
+                  },
+                  "layout": "vertical",
+                  "gap": 2,
+                  "padding": 4,
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "tEpTr",
+                      "name": "Dismiss Action",
+                      "width": "fill_container",
+                      "fill": "$--dropdown-hover",
+                      "cornerRadius": 6,
+                      "gap": 8,
+                      "padding": [
+                        8,
+                        12
+                      ],
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "icon_font",
+                          "id": "qWtf4",
+                          "name": "dismissIcon",
+                          "width": 14,
+                          "height": 14,
+                          "iconFontName": "circle-x",
+                          "iconFontFamily": "lucide",
+                          "fill": "$--muted-foreground"
+                        },
+                        {
+                          "type": "text",
+                          "id": "cW8SZ",
+                          "name": "dismissText",
+                          "fill": "$--foreground",
+                          "content": "Dismiss",
+                          "fontFamily": "Inter",
+                          "fontSize": 13
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "tzdh5",
+                      "name": "Hint Row",
+                      "width": "fill_container",
+                      "gap": 4,
+                      "padding": [
+                        6,
+                        12
+                      ],
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "R3hW2",
+                          "name": "hintText",
+                          "fill": "$--dimmer-foreground",
+                          "content": "Move to completed",
+                          "fontFamily": "Inter",
+                          "fontSize": 11,
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "fPOFU",
+              "name": "Content",
+              "width": "fill_container",
+              "layout": "vertical",
+              "gap": 2,
+              "children": [
+                {
+                  "type": "text",
+                  "id": "RHi70",
+                  "name": "title1",
+                  "fill": "$--foreground",
+                  "textGrowth": "fixed-width",
+                  "width": "fill_container",
+                  "content": "Set up Stripe webhooks for subscription billing",
+                  "fontFamily": "$--font-primary",
+                  "fontSize": 14,
+                  "fontWeight": "500"
+                },
+                {
+                  "type": "text",
+                  "id": "w8alW",
+                  "name": "preview1",
+                  "fill": "$--muted-foreground",
+                  "textGrowth": "fixed-width",
+                  "width": "fill_container",
+                  "content": "Agent crashed during webhook endpoint configuration. Error: connection timeout to Stripe API...",
+                  "fontFamily": "$--font-primary",
+                  "fontSize": 12,
+                  "fontWeight": "normal"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "3jdtq",
+              "name": "Leader Badge",
+              "width": 32,
+              "height": 32,
+              "fill": "#8b5cf6",
+              "cornerRadius": 6,
+              "justifyContent": "center",
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "m8IdZ",
+                  "name": "leaderText1",
+                  "fill": "#ffffff",
+                  "content": "CF",
+                  "fontFamily": "$--font-primary",
+                  "fontSize": 11,
+                  "fontWeight": "600"
+                }
+              ]
+            },
+            {
+              "type": "text",
+              "id": "1PHRY",
+              "name": "time1",
+              "fill": "$--dim-foreground",
+              "content": "3h ago",
+              "fontFamily": "$--font-primary",
+              "fontSize": 12,
+              "fontWeight": "normal"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "ZxHu6",
+      "x": 0,
+      "y": 380,
+      "name": "02 — Waiting for User (Dropdown Open)",
+      "width": 900,
+      "fill": "$--background",
+      "layout": "vertical",
+      "padding": 40,
+      "children": [
+        {
+          "type": "text",
+          "id": "LNknz",
+          "name": "label2",
+          "fill": "$--dim-foreground",
+          "content": "Waiting for user — Dropdown open (clickable badge)",
+          "fontFamily": "Inter",
+          "fontSize": 12,
+          "fontWeight": "500"
+        },
+        {
+          "type": "frame",
+          "id": "A8nWC",
+          "name": "Conversation Row — Waiting",
+          "width": "fill_container",
+          "fill": "$--amber-surface",
+          "cornerRadius": 8,
+          "stroke": {
+            "align": "inside",
+            "thickness": 1,
+            "fill": "$--amber-border"
+          },
+          "gap": 16,
+          "padding": 16,
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "frame",
+              "id": "KzBEM",
+              "name": "Badge Wrapper",
+              "layout": "vertical",
+              "gap": 4,
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "rldC8",
+                  "name": "Status Badge — Waiting",
+                  "fill": "$--amber-bg",
+                  "cornerRadius": 9999,
+                  "gap": 6,
+                  "padding": [
+                    4,
+                    10
+                  ],
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "ellipse",
+                      "id": "BN4v9",
+                      "name": "dot2",
+                      "fill": "$--amber-500",
+                      "width": 6,
+                      "height": 6
+                    },
+                    {
+                      "type": "text",
+                      "id": "ahL0l",
+                      "name": "bt2",
+                      "fill": "$--amber-500",
+                      "content": "Needs your decision",
+                      "fontFamily": "Inter",
+                      "fontSize": 12,
+                      "fontWeight": "500"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "0WbWJ",
+                  "name": "Dropdown Menu",
+                  "width": 200,
+                  "fill": "$--dropdown-bg",
+                  "cornerRadius": 8,
+                  "stroke": {
+                    "align": "inside",
+                    "thickness": 1,
+                    "fill": "$--dropdown-border"
+                  },
+                  "layout": "vertical",
+                  "gap": 2,
+                  "padding": 4,
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "DEnoZ",
+                      "name": "Mark Resolved Action",
+                      "width": "fill_container",
+                      "fill": "$--dropdown-hover",
+                      "cornerRadius": 6,
+                      "gap": 8,
+                      "padding": [
+                        8,
+                        12
+                      ],
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "icon_font",
+                          "id": "PENQf",
+                          "name": "icon2",
+                          "width": 14,
+                          "height": 14,
+                          "iconFontName": "circle-check",
+                          "iconFontFamily": "lucide",
+                          "fill": "$--green-500"
+                        },
+                        {
+                          "type": "text",
+                          "id": "SfG8H",
+                          "name": "dt2",
+                          "fill": "$--foreground",
+                          "content": "Mark resolved",
+                          "fontFamily": "Inter",
+                          "fontSize": 13,
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "gJ3kk",
+                      "name": "Hint Row",
+                      "width": "fill_container",
+                      "padding": [
+                        6,
+                        12
+                      ],
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "gYZy9",
+                          "name": "ht2",
+                          "fill": "$--dimmer-foreground",
+                          "content": "Move to completed",
+                          "fontFamily": "Inter",
+                          "fontSize": 11,
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "a0lsv",
+              "name": "Content",
+              "width": "fill_container",
+              "layout": "vertical",
+              "gap": 2,
+              "children": [
+                {
+                  "type": "text",
+                  "id": "VnqdF",
+                  "name": "t2",
+                  "fill": "$--foreground",
+                  "textGrowth": "fixed-width",
+                  "width": "fill_container",
+                  "content": "Review PR #1742: WebSocket validation and error logging",
+                  "fontFamily": "Inter",
+                  "fontSize": 14,
+                  "fontWeight": "500"
+                },
+                {
+                  "type": "text",
+                  "id": "3uHpe",
+                  "name": "p2",
+                  "fill": "$--muted-foreground",
+                  "textGrowth": "fixed-width",
+                  "width": "fill_container",
+                  "content": "CTO wants to merge this PR but needs your approval on the breaking change to the WebSocket handshake...",
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "normal"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "48ah7",
+              "name": "Leader Badge",
+              "width": 32,
+              "height": 32,
+              "fill": "#3b82f6",
+              "cornerRadius": 6,
+              "justifyContent": "center",
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "TTR7g",
+                  "name": "lt2",
+                  "fill": "#ffffff",
+                  "content": "CT",
+                  "fontFamily": "Inter",
+                  "fontSize": 11,
+                  "fontWeight": "600"
+                }
+              ]
+            },
+            {
+              "type": "text",
+              "id": "7Tx8R",
+              "name": "tm2",
+              "fill": "$--dim-foreground",
+              "content": "2m ago",
+              "fontFamily": "Inter",
+              "fontSize": 12,
+              "fontWeight": "normal"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "2bUOj",
+      "x": 0,
+      "y": 760,
+      "name": "03 — Active State (Non-clickable)",
+      "width": 900,
+      "fill": "$--background",
+      "layout": "vertical",
+      "padding": 40,
+      "children": [
+        {
+          "type": "text",
+          "id": "BAy40",
+          "name": "label3",
+          "fill": "$--dim-foreground",
+          "content": "Active — Badge is NOT clickable (agent running)",
+          "fontFamily": "Inter",
+          "fontSize": 12,
+          "fontWeight": "500"
+        },
+        {
+          "type": "frame",
+          "id": "PG3pS",
+          "name": "Conversation Row — Active",
+          "width": "fill_container",
+          "fill": "$--surface",
+          "cornerRadius": 8,
+          "stroke": {
+            "align": "inside",
+            "thickness": 1,
+            "fill": "$--border"
+          },
+          "gap": 16,
+          "padding": 16,
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "frame",
+              "id": "0mzpR",
+              "name": "Status Badge — Active",
+              "fill": "$--blue-bg",
+              "cornerRadius": 9999,
+              "gap": 6,
+              "padding": [
+                4,
+                10
+              ],
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "ellipse",
+                  "id": "94M98",
+                  "name": "dot3",
+                  "fill": "$--blue-500",
+                  "width": 6,
+                  "height": 6
+                },
+                {
+                  "type": "text",
+                  "id": "XP04b",
+                  "name": "bt3",
+                  "fill": "$--blue-500",
+                  "content": "In progress",
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "500"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "KmBi5",
+              "name": "Content",
+              "width": "fill_container",
+              "layout": "vertical",
+              "gap": 2,
+              "children": [
+                {
+                  "type": "text",
+                  "id": "IzoVe",
+                  "name": "t3",
+                  "fill": "$--foreground",
+                  "textGrowth": "fixed-width",
+                  "width": "fill_container",
+                  "content": "Deploy documentation site to GitHub Pages",
+                  "fontFamily": "Inter",
+                  "fontSize": 14,
+                  "fontWeight": "500"
+                },
+                {
+                  "type": "text",
+                  "id": "JcdgY",
+                  "name": "p3",
+                  "fill": "$--muted-foreground",
+                  "textGrowth": "fixed-width",
+                  "width": "fill_container",
+                  "content": "Running Eleventy build, validating component counts. Currently at step 3 of 5...",
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "normal"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "DPmuR",
+              "name": "Leader Badge",
+              "width": 32,
+              "height": 32,
+              "fill": "#3b82f6",
+              "cornerRadius": 6,
+              "justifyContent": "center",
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "kstki",
+                  "name": "lt3",
+                  "fill": "#ffffff",
+                  "content": "CT",
+                  "fontFamily": "Inter",
+                  "fontSize": 11,
+                  "fontWeight": "600"
+                }
+              ]
+            },
+            {
+              "type": "text",
+              "id": "s6ABO",
+              "name": "tm3",
+              "fill": "$--dim-foreground",
+              "content": "1h ago",
+              "fontFamily": "Inter",
+              "fontSize": 12,
+              "fontWeight": "normal"
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "NNWim",
+          "name": "No Click Annotation",
+          "gap": 6,
+          "padding": [
+            4,
+            8
+          ],
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "icon_font",
+              "id": "EVCBu",
+              "name": "noIcon",
+              "width": 12,
+              "height": 12,
+              "iconFontName": "mouse-pointer-click",
+              "iconFontFamily": "lucide",
+              "fill": "$--dimmer-foreground"
+            },
+            {
+              "type": "text",
+              "id": "sFHXJ",
+              "name": "noText",
+              "fill": "$--dimmer-foreground",
+              "content": "Badge has no hover/click affordance — cursor: default, no dropdown",
+              "fontFamily": "Inter",
+              "fontSize": 11,
+              "fontWeight": "normal"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "uXijs",
+      "x": 0,
+      "y": 1020,
+      "name": "04 — Completed State (No Dropdown)",
+      "width": 900,
+      "fill": "$--background",
+      "layout": "vertical",
+      "padding": 40,
+      "children": [
+        {
+          "type": "text",
+          "id": "1PC0s",
+          "name": "label4",
+          "fill": "$--dim-foreground",
+          "content": "Completed — Terminal state, no dropdown",
+          "fontFamily": "Inter",
+          "fontSize": 12,
+          "fontWeight": "500"
+        },
+        {
+          "type": "frame",
+          "id": "TIccC",
+          "name": "Conversation Row — Completed",
+          "width": "fill_container",
+          "fill": "$--surface",
+          "cornerRadius": 8,
+          "stroke": {
+            "align": "inside",
+            "thickness": 1,
+            "fill": "$--border"
+          },
+          "gap": 16,
+          "padding": 16,
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "frame",
+              "id": "xCGCo",
+              "name": "Status Badge — Completed",
+              "fill": "$--green-bg",
+              "cornerRadius": 9999,
+              "gap": 6,
+              "padding": [
+                4,
+                10
+              ],
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "ellipse",
+                  "id": "pQs9Z",
+                  "name": "dot4",
+                  "fill": "$--green-500",
+                  "width": 6,
+                  "height": 6
+                },
+                {
+                  "type": "text",
+                  "id": "532oH",
+                  "name": "bt4",
+                  "fill": "$--green-500",
+                  "content": "Done",
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "500"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "aOzPN",
+              "name": "Content",
+              "width": "fill_container",
+              "layout": "vertical",
+              "gap": 2,
+              "children": [
+                {
+                  "type": "text",
+                  "id": "i5bO9",
+                  "name": "t4",
+                  "fill": "$--muted-foreground",
+                  "textGrowth": "fixed-width",
+                  "width": "fill_container",
+                  "content": "Draft privacy policy for GDPR compliance",
+                  "fontFamily": "Inter",
+                  "fontSize": 14,
+                  "fontWeight": "500"
+                },
+                {
+                  "type": "text",
+                  "id": "Sfyzj",
+                  "name": "p4",
+                  "fill": "$--dimmer-foreground",
+                  "textGrowth": "fixed-width",
+                  "width": "fill_container",
+                  "content": "CLO completed the privacy policy draft. Document saved to knowledge-base/legal/privacy-policy.md...",
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "normal"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "1eVsG",
+              "name": "Leader Badge",
+              "width": 32,
+              "height": 32,
+              "fill": "#f97316",
+              "cornerRadius": 6,
+              "justifyContent": "center",
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "UKnKf",
+                  "name": "lt4",
+                  "fill": "#ffffff",
+                  "content": "CL",
+                  "fontFamily": "Inter",
+                  "fontSize": 11,
+                  "fontWeight": "600"
+                }
+              ]
+            },
+            {
+              "type": "text",
+              "id": "Fs4lB",
+              "name": "tm4",
+              "fill": "$--dim-foreground",
+              "content": "Yesterday",
+              "fontFamily": "Inter",
+              "fontSize": 12,
+              "fontWeight": "normal"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "Tx2E3",
+      "x": 960,
+      "y": 0,
+      "name": "05 — Mobile: Failed (Dropdown Open)",
+      "width": 390,
+      "fill": "$--background",
+      "layout": "vertical",
+      "gap": 12,
+      "padding": [
+        24,
+        16
+      ],
+      "children": [
+        {
+          "type": "text",
+          "id": "y3mdG",
+          "name": "mLabel",
+          "fill": "$--dim-foreground",
+          "content": "Mobile — Failed state, dropdown open",
+          "fontFamily": "Inter",
+          "fontSize": 12,
+          "fontWeight": "500"
+        },
+        {
+          "type": "frame",
+          "id": "Ja6Q2",
+          "name": "Conversation Row — Mobile Failed",
+          "width": "fill_container",
+          "fill": "$--surface",
+          "cornerRadius": 8,
+          "stroke": {
+            "align": "inside",
+            "thickness": 1,
+            "fill": "$--border"
+          },
+          "layout": "vertical",
+          "gap": 8,
+          "padding": 12,
+          "children": [
+            {
+              "type": "frame",
+              "id": "WJ5sy",
+              "name": "Top Row",
+              "width": "fill_container",
+              "justifyContent": "space_between",
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "AZrhP",
+                  "name": "Badge Wrapper",
+                  "layout": "vertical",
+                  "gap": 4,
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "nxJv6",
+                      "name": "Status Badge",
+                      "fill": "$--red-bg",
+                      "cornerRadius": 9999,
+                      "gap": 6,
+                      "padding": [
+                        4,
+                        10
+                      ],
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "ellipse",
+                          "id": "wud1q",
+                          "name": "mDot",
+                          "fill": "$--red-500",
+                          "width": 6,
+                          "height": 6
+                        },
+                        {
+                          "type": "text",
+                          "id": "xQSCL",
+                          "name": "mBt",
+                          "fill": "$--red-500",
+                          "content": "Needs attention",
+                          "fontFamily": "Inter",
+                          "fontSize": 12,
+                          "fontWeight": "500"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "B9N07",
+                      "name": "Dropdown Menu",
+                      "width": 180,
+                      "fill": "$--dropdown-bg",
+                      "cornerRadius": 8,
+                      "stroke": {
+                        "align": "inside",
+                        "thickness": 1,
+                        "fill": "$--dropdown-border"
+                      },
+                      "layout": "vertical",
+                      "gap": 2,
+                      "padding": 4,
+                      "children": [
+                        {
+                          "type": "frame",
+                          "id": "r6zQZ",
+                          "name": "Dismiss Action",
+                          "width": "fill_container",
+                          "fill": "$--dropdown-hover",
+                          "cornerRadius": 6,
+                          "gap": 8,
+                          "padding": [
+                            8,
+                            12
+                          ],
+                          "alignItems": "center",
+                          "children": [
+                            {
+                              "type": "icon_font",
+                              "id": "BMBan",
+                              "name": "mDicon",
+                              "width": 14,
+                              "height": 14,
+                              "iconFontName": "circle-x",
+                              "iconFontFamily": "lucide",
+                              "fill": "$--muted-foreground"
+                            },
+                            {
+                              "type": "text",
+                              "id": "lu3Co",
+                              "name": "mDtext",
+                              "fill": "$--foreground",
+                              "content": "Dismiss",
+                              "fontFamily": "Inter",
+                              "fontSize": 13,
+                              "fontWeight": "normal"
+                            }
+                          ]
+                        },
+                        {
+                          "type": "frame",
+                          "id": "eHVox",
+                          "name": "mDhint",
+                          "width": "fill_container",
+                          "padding": [
+                            6,
+                            12
+                          ],
+                          "children": [
+                            {
+                              "type": "text",
+                              "id": "Kp5LM",
+                              "name": "mHt",
+                              "fill": "$--dimmer-foreground",
+                              "content": "Move to completed",
+                              "fontFamily": "Inter",
+                              "fontSize": 11,
+                              "fontWeight": "normal"
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "type": "text",
+                  "id": "exn47",
+                  "name": "mTime",
+                  "fill": "$--dim-foreground",
+                  "content": "3h ago",
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "normal"
+                }
+              ]
+            },
+            {
+              "type": "text",
+              "id": "kb8JJ",
+              "name": "mTitle",
+              "fill": "$--foreground",
+              "textGrowth": "fixed-width",
+              "width": "fill_container",
+              "content": "Set up Stripe webhooks for subscription billing",
+              "fontFamily": "Inter",
+              "fontSize": 14,
+              "fontWeight": "500"
+            },
+            {
+              "type": "text",
+              "id": "JlZBl",
+              "name": "mPreview",
+              "fill": "$--muted-foreground",
+              "textGrowth": "fixed-width",
+              "width": "fill_container",
+              "content": "Agent crashed during webhook endpoint configuration. Error: connection timeout to Stripe API...",
+              "fontFamily": "Inter",
+              "fontSize": 12,
+              "fontWeight": "normal"
+            },
+            {
+              "type": "frame",
+              "id": "0X7wK",
+              "name": "Leader Row",
+              "width": "fill_container",
+              "gap": 6,
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "eOhi8",
+                  "name": "mLb",
+                  "width": 28,
+                  "height": 28,
+                  "fill": "#8b5cf6",
+                  "cornerRadius": 6,
+                  "justifyContent": "center",
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "d11QH",
+                      "name": "mLt",
+                      "fill": "#ffffff",
+                      "content": "CF",
+                      "fontFamily": "Inter",
+                      "fontSize": 10,
+                      "fontWeight": "600"
+                    }
+                  ]
+                },
+                {
+                  "type": "text",
+                  "id": "OQnRH",
+                  "name": "mLname",
+                  "fill": "$--dim-foreground",
+                  "content": "CFO",
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "normal"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "n5QM4",
+      "x": 960,
+      "y": 460,
+      "name": "06 — Mobile: Waiting for User (Dropdown Open)",
+      "width": 390,
+      "fill": "$--background",
+      "layout": "vertical",
+      "gap": 12,
+      "padding": [
+        24,
+        16
+      ],
+      "children": [
+        {
+          "type": "text",
+          "id": "fryIw",
+          "name": "m2Label",
+          "fill": "$--dim-foreground",
+          "content": "Mobile — Waiting for user, dropdown open",
+          "fontFamily": "Inter",
+          "fontSize": 12,
+          "fontWeight": "500"
+        },
+        {
+          "type": "frame",
+          "id": "W9Mj8",
+          "name": "Conversation Row — Mobile Waiting",
+          "width": "fill_container",
+          "fill": "$--amber-surface",
+          "cornerRadius": 8,
+          "stroke": {
+            "align": "inside",
+            "thickness": 1,
+            "fill": "$--amber-border"
+          },
+          "layout": "vertical",
+          "gap": 8,
+          "padding": 12,
+          "children": [
+            {
+              "type": "frame",
+              "id": "f8Sop",
+              "name": "Top Row",
+              "width": "fill_container",
+              "justifyContent": "space_between",
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "uKx7H",
+                  "name": "Badge Wrapper",
+                  "layout": "vertical",
+                  "gap": 4,
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "wkxny",
+                      "name": "Status Badge",
+                      "fill": "$--amber-bg",
+                      "cornerRadius": 9999,
+                      "gap": 6,
+                      "padding": [
+                        4,
+                        10
+                      ],
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "ellipse",
+                          "id": "cDZLK",
+                          "name": "m2Dot",
+                          "fill": "$--amber-500",
+                          "width": 6,
+                          "height": 6
+                        },
+                        {
+                          "type": "text",
+                          "id": "A9WQk",
+                          "name": "m2Bt",
+                          "fill": "$--amber-500",
+                          "content": "Needs your decision",
+                          "fontFamily": "Inter",
+                          "fontSize": 12,
+                          "fontWeight": "500"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "z1mje",
+                      "name": "Dropdown Menu",
+                      "width": 200,
+                      "fill": "$--dropdown-bg",
+                      "cornerRadius": 8,
+                      "stroke": {
+                        "align": "inside",
+                        "thickness": 1,
+                        "fill": "$--dropdown-border"
+                      },
+                      "layout": "vertical",
+                      "gap": 2,
+                      "padding": 4,
+                      "children": [
+                        {
+                          "type": "frame",
+                          "id": "BgYx8",
+                          "name": "Mark Resolved Action",
+                          "width": "fill_container",
+                          "fill": "$--dropdown-hover",
+                          "cornerRadius": 6,
+                          "gap": 8,
+                          "padding": [
+                            8,
+                            12
+                          ],
+                          "alignItems": "center",
+                          "children": [
+                            {
+                              "type": "icon_font",
+                              "id": "fH9tL",
+                              "name": "m2Dicon",
+                              "width": 14,
+                              "height": 14,
+                              "iconFontName": "circle-check",
+                              "iconFontFamily": "lucide",
+                              "fill": "$--green-500"
+                            },
+                            {
+                              "type": "text",
+                              "id": "B14QR",
+                              "name": "m2Dtext",
+                              "fill": "$--foreground",
+                              "content": "Mark resolved",
+                              "fontFamily": "Inter",
+                              "fontSize": 13,
+                              "fontWeight": "normal"
+                            }
+                          ]
+                        },
+                        {
+                          "type": "frame",
+                          "id": "FZCwi",
+                          "name": "m2Dhint",
+                          "width": "fill_container",
+                          "padding": [
+                            6,
+                            12
+                          ],
+                          "children": [
+                            {
+                              "type": "text",
+                              "id": "oAH7Q",
+                              "name": "m2Ht",
+                              "fill": "$--dimmer-foreground",
+                              "content": "Move to completed",
+                              "fontFamily": "Inter",
+                              "fontSize": 11,
+                              "fontWeight": "normal"
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "type": "text",
+                  "id": "TcniV",
+                  "name": "m2Time",
+                  "fill": "$--dim-foreground",
+                  "content": "2m ago",
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "normal"
+                }
+              ]
+            },
+            {
+              "type": "text",
+              "id": "v8zWt",
+              "name": "m2Title",
+              "fill": "$--foreground",
+              "textGrowth": "fixed-width",
+              "width": "fill_container",
+              "content": "Review PR #1742: WebSocket validation and error logging",
+              "fontFamily": "Inter",
+              "fontSize": 14,
+              "fontWeight": "500"
+            },
+            {
+              "type": "text",
+              "id": "IJjDe",
+              "name": "m2Preview",
+              "fill": "$--muted-foreground",
+              "textGrowth": "fixed-width",
+              "width": "fill_container",
+              "content": "CTO wants to merge this PR but needs your approval on the breaking change to the WebSocket handshake...",
+              "fontFamily": "Inter",
+              "fontSize": 12,
+              "fontWeight": "normal"
+            },
+            {
+              "type": "frame",
+              "id": "O7bVz",
+              "name": "Leader Row",
+              "width": "fill_container",
+              "gap": 6,
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "pmlX7",
+                  "name": "m2Lb",
+                  "width": 28,
+                  "height": 28,
+                  "fill": "#3b82f6",
+                  "cornerRadius": 6,
+                  "justifyContent": "center",
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "VCKgR",
+                      "name": "m2Lt",
+                      "fill": "#ffffff",
+                      "content": "CT",
+                      "fontFamily": "Inter",
+                      "fontSize": 10,
+                      "fontWeight": "600"
+                    }
+                  ]
+                },
+                {
+                  "type": "text",
+                  "id": "4YvZW",
+                  "name": "m2Ln",
+                  "fill": "$--dim-foreground",
+                  "content": "CTO",
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "normal"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "variables": {
+    "--background": {
+      "type": "color",
+      "value": "#111111"
+    },
+    "--surface": {
+      "type": "color",
+      "value": "#171717"
+    },
+    "--surface-hover": {
+      "type": "color",
+      "value": "#1f1f1f"
+    },
+    "--border": {
+      "type": "color",
+      "value": "#262626"
+    },
+    "--foreground": {
+      "type": "color",
+      "value": "#ffffff"
+    },
+    "--muted-foreground": {
+      "type": "color",
+      "value": "#a3a3a3"
+    },
+    "--dim-foreground": {
+      "type": "color",
+      "value": "#737373"
+    },
+    "--dimmer-foreground": {
+      "type": "color",
+      "value": "#525252"
+    },
+    "--red-500": {
+      "type": "color",
+      "value": "#ef4444"
+    },
+    "--red-bg": {
+      "type": "color",
+      "value": "#ef44441a"
+    },
+    "--amber-500": {
+      "type": "color",
+      "value": "#f59e0b"
+    },
+    "--amber-bg": {
+      "type": "color",
+      "value": "#f59e0b1a"
+    },
+    "--amber-border": {
+      "type": "color",
+      "value": "#f59e0b33"
+    },
+    "--amber-surface": {
+      "type": "color",
+      "value": "#f59e0b0f"
+    },
+    "--blue-500": {
+      "type": "color",
+      "value": "#3b82f6"
+    },
+    "--blue-bg": {
+      "type": "color",
+      "value": "#3b82f61a"
+    },
+    "--green-500": {
+      "type": "color",
+      "value": "#22c55e"
+    },
+    "--green-bg": {
+      "type": "color",
+      "value": "#22c55e1a"
+    },
+    "--dropdown-bg": {
+      "type": "color",
+      "value": "#1c1c1c"
+    },
+    "--dropdown-border": {
+      "type": "color",
+      "value": "#333333"
+    },
+    "--dropdown-hover": {
+      "type": "color",
+      "value": "#2a2a2a"
+    },
+    "--font-primary": {
+      "type": "string",
+      "value": "Inter"
+    },
+    "--radius-badge": {
+      "type": "number",
+      "value": 9999
+    }
+  }
+}

@@ -167,7 +167,7 @@ describe("buildReviewGateResponse", () => {
       }],
     };
 
-    const result = buildReviewGateResponse(toolInput, "A", true);
+    const result = buildReviewGateResponse(toolInput, "A");
     expect(result).toEqual({
       questions: toolInput.questions,
       answers: { "Which approach?": "A" },
@@ -180,7 +180,7 @@ describe("buildReviewGateResponse", () => {
       options: ["Yes", "No"],
     };
 
-    const result = buildReviewGateResponse(toolInput, "Yes", false);
+    const result = buildReviewGateResponse(toolInput, "Yes");
     expect(result).toEqual({
       question: "Approve?",
       options: ["Yes", "No"],
@@ -198,7 +198,7 @@ describe("buildReviewGateResponse", () => {
       }],
     };
 
-    const result = buildReviewGateResponse(toolInput, "X", true);
+    const result = buildReviewGateResponse(toolInput, "X");
     expect(result).not.toHaveProperty("answer");
     expect(result).toHaveProperty("answers");
   });

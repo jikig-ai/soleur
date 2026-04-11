@@ -238,6 +238,8 @@ Run these checks before proceeding to Phase 1. A FAIL blocks execution with a re
 
    Skipping this gate — writing implementation before tests — is a workflow violation equivalent to committing directly to main. The rationalization "this is simple enough to not need test-first" is exactly the reasoning TDD is designed to prevent.
 
+   - When adding MCP tools to an existing registration block in agent-runner.ts, verify each tool's prerequisites are independent of the block's guard condition. Write a test that validates the new tool works WITHOUT the existing block's prerequisites (e.g., Plausible tools work without GitHub installation).
+
    - When adding route handler tests that require `vi.mock()`, create a separate test file from existing unit tests that import the real module. Vitest hoists all `vi.mock()` calls to the top of the file, clobbering real imports for the entire file regardless of describe block scope.
    - When creating test files with `vi.mock()` factories that reference shared variables, use `vi.hoisted()` from the start -- vitest hoists `vi.mock` to the top of the file before `const`/`let` declarations execute.
    - When testing decorative images (alt="") with happy-dom, use container.querySelector instead of screen.getAllByRole("img", { hidden: true }) -- happy-dom excludes presentational elements from role queries even with hidden: true.
@@ -431,6 +433,7 @@ If you catch yourself writing phrases like "set up X in the browser", "go to the
 1. `skill: soleur:review` (or `skill: soleur:review --headless` if headless) — catch issues before shipping
 2. `skill: soleur:resolve-todo-parallel` — resolve any review findings (no `--headless` needed; this skill has no interactive prompts)
 3. `skill: soleur:compound` (or `skill: soleur:compound --headless` if headless) — capture learnings before committing
+3.5. Display: "Tip: After shipping, run `/clear` to reclaim context headroom for the next task."
 4. `skill: soleur:ship` (or `skill: soleur:ship --headless` if headless) — commit, push, create PR, merge
 
 ---

@@ -432,11 +432,37 @@ After writing the plan file, automatically run `/plan_review <plan_file_path>` t
 4. If Partially: ask which changes to apply, then apply selected changes
 5. If Skip: continue unchanged
 
+## Exit Gate (direct invocation only)
+
+**Pipeline detection:** If this skill is running inside a Task subagent (the conversation
+contains a `RETURN CONTRACT` section from a Task delegation), skip the exit gate entirely.
+Return the plan file path per the return contract. The calling pipeline handles compound
+and lifecycle progression.
+
+**If invoked directly by the user:**
+
+1. Run `skill: soleur:compound` to capture learnings from the planning session.
+   If compound finds nothing to capture, it will skip gracefully — do not block on this.
+2. Verify all plan artifacts are committed and pushed. The Save Tasks section already
+   committed the plan file and tasks.md. Run `git status --short` to check for any
+   remaining uncommitted changes. If found:
+
+   ```bash
+   git add knowledge-base/project/plans/ knowledge-base/project/specs/feat-<name>/
+   git commit -m "docs: plan artifacts for feat-<name>"
+   git push
+   ```
+
+   If there are no uncommitted changes, skip the commit. If push fails (no network),
+   warn and continue.
+3. Display: "All artifacts are on disk. Run `/clear` then `/soleur:work` for maximum
+   context headroom."
+
 ## Post-Generation Options
 
 After plan review, use the **AskUserQuestion tool** to present these options:
 
-**Question:** "Plan reviewed and ready at `knowledge-base/project/plans/YYYY-MM-DD-<type>-<name>-plan.md`. What would you like to do next?"
+**Question:** "Plan reviewed and ready at `knowledge-base/project/plans/YYYY-MM-DD-<type>-<name>-plan.md`. Context is saved to disk — run `/clear` before `/soleur:work` for maximum headroom. What would you like to do next?"
 
 **Options:**
 
@@ -509,5 +535,6 @@ Run `bash ./plugins/soleur/skills/archive-kb/scripts/archive-kb.sh` from the rep
 - When a plan adds a new required check to CI/branch protection rulesets, the plan MUST include an audit step that greps for ALL workflows creating PRs via `GITHUB_TOKEN` or `create-pull-request` action and lists each one requiring synthetic check updates. Plans that claim "only N workflows need updating" without showing the grep output are incomplete.
 - When a plan prescribes Supabase/PostgREST query syntax (embedded resources, lateral joins, `.select()` with modifiers), include a verification note: "Confirm syntax against Supabase JS client docs before implementing." PostgREST embedded resource syntax is more limited than expected — chained `.limit().order().eq()` inside `select()` does not work.
 - When prescribing `gh api` commands with array parameters, always use `--input -` with a heredoc JSON body instead of `--field`. The `--field` flag wraps values in quotes, turning JSON arrays into strings (HTTP 422). After any GitHub settings PATCH, immediately re-read settings to verify the change was applied — the repo API silently ignores some org-level features (returns 200 OK without state change).
+- When generating test commands, always reference `package.json scripts.test` rather than assuming a runner (bun test, vitest, jest). Plans that hardcode a specific test runner can fail silently when the project uses a different framework.
 
 NEVER CODE! Just research and write the plan.

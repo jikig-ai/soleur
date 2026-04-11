@@ -10,6 +10,7 @@ description: "This skill should be used when enhancing an existing plan with par
 **Note: The current year is 2026.** Use this when searching for recent documentation and best practices.
 
 This skill takes an existing plan (from the `soleur:plan` skill) and enhances each section with parallel research agents. Each major element gets its own dedicated research sub-agent to find:
+
 - Best practices and industry patterns
 - Performance optimizations
 - UI/UX improvements (if applicable)
@@ -23,6 +24,7 @@ The result is a deeply grounded, production-ready plan with concrete implementat
 <plan_path> #$ARGUMENTS </plan_path>
 
 **If the plan path above is empty:**
+
 1. Check for recent plans: `ls -la knowledge-base/project/plans/`
 2. Ask the user: "Which plan would you like to deepen? Please provide the path (e.g., `knowledge-base/project/plans/2026-01-15-feat-my-feature-plan.md`)."
 
@@ -37,6 +39,7 @@ First, read and parse the plan to identify each major section that can be enhanc
 </thinking>
 
 **Read the plan file and extract:**
+
 - [ ] Overview/Problem Statement
 - [ ] Proposed Solution sections
 - [ ] Technical Approach/Architecture
@@ -48,6 +51,7 @@ First, read and parse the plan to identify each major section that can be enhanc
 - [ ] Domain areas (data models, APIs, UI, security, performance, etc.)
 
 **Create a section manifest:**
+
 ```
 Section 1: [Title] - [Brief description of what to research]
 Section 2: [Title] - [Brief description of what to research]
@@ -91,6 +95,7 @@ cat [skill-path]/SKILL.md
 **Step 3: Match skills to plan content**
 
 For each skill discovered:
+
 - Read its SKILL.md description
 - Check if any plan sections match the skill's domain
 - If there's a match, spawn a sub-agent to apply that skill's knowledge
@@ -100,6 +105,7 @@ For each skill discovered:
 **CRITICAL: For EACH skill that matches, spawn a separate sub-agent and instruct it to USE that skill.**
 
 For each matched skill:
+
 ```
 Task general-purpose: "You have the [skill-name] skill available at [skill-path].
 
@@ -117,18 +123,21 @@ The skill tells you what to do - follow it. Execute the skill completely."
 ```
 
 **Spawn ALL skill sub-agents in PARALLEL:**
+
 - 1 sub-agent per matched skill
 - Each sub-agent reads and uses its assigned skill
 - All run simultaneously
 - 10, 20, 30 skill sub-agents is fine
 
 **Each sub-agent:**
+
 1. Reads its skill's SKILL.md
 2. Follows the skill's workflow/instructions
 3. Applies the skill to the plan
 4. Returns whatever the skill produces (code, recommendations, patterns, reviews, etc.)
 
 **Example spawns:**
+
 ```
 Task general-purpose: "Use the dhh-rails-style skill at ~/.claude/plugins/.../dhh-rails-style. Read SKILL.md and apply it to: [Rails sections of plan]"
 
@@ -203,17 +212,20 @@ head -20 knowledge-base/project/learnings/**/*.md
 **Step 3: Filter - only spawn sub-agents for LIKELY relevant learnings**
 
 Compare each learning's frontmatter against the plan:
+
 - `tags:` - Do any tags match technologies/patterns in the plan?
 - `category:` - Is this category relevant? (e.g., skip deployment-issues if plan is UI-only)
 - `module:` - Does the plan touch this module?
 - `symptom:` / `root_cause:` - Could this problem occur with the plan?
 
 **SKIP learnings that are clearly not applicable:**
+
 - Plan is frontend-only -> skip `database-migrations/` learnings
 - Plan is Python -> skip `rails-specific/` learnings
 - Plan has no auth -> skip `authentication-issues/` learnings
 
 **SPAWN sub-agents for learnings that MIGHT apply:**
+
 - Any tag overlap with plan technologies
 - Same category as plan domain
 - Similar patterns or concerns
@@ -270,12 +282,15 @@ Return concrete, actionable recommendations."
 **Also use Context7 MCP for framework documentation:**
 
 For any technologies/frameworks mentioned in the plan, query Context7:
+
 ```
 mcp__plugin_soleur_context7__resolve-library-id: Find library ID for [framework]
 mcp__plugin_soleur_context7__query-docs: Query documentation for specific patterns
 ```
 
 **Verify API availability against installed SDK version:** Context7 docs may reference APIs not yet available in the project's pinned dependency version. After recommending a specific API (e.g., `getClaims()`), check `node_modules` or `Gemfile.lock` to confirm the method exists in the installed version before including it in the plan.
+
+- When Context7 MCP returns Terraform resource attributes, cross-check against the installed provider version (`grep -A2 'registry.terraform.io/<provider>' .terraform.lock.hcl`). Context7 returns latest docs, not version-pinned docs — attributes may not exist in the pinned version.
 
 **Use WebSearch for current best practices:**
 
@@ -310,6 +325,7 @@ cat ~/.claude/plugins/installed_plugins.json
 ```
 
 **Important:** Check EVERY source. Include agents from:
+
 - Project `.claude/agents/`
 - User's `~/.claude/agents/`
 - soleur plugin (but SKIP engineering/workflow/ agents - only use review, research, and design)
@@ -317,6 +333,7 @@ cat ~/.claude/plugins/installed_plugins.json
 - Any local plugins
 
 **For soleur plugin specifically:**
+
 - USE: `agents/engineering/review/*` (all reviewers)
 - USE: `agents/engineering/research/*` (all researchers)
 - USE: `agents/engineering/design/*` (design agents)
@@ -335,6 +352,7 @@ Task [agent-name]: "Review this plan using your expertise. Apply all your checks
 ```
 
 **CRITICAL RULES:**
+
 - Do NOT filter agents by "relevance" - run them ALL
 - Do NOT skip agents because they "might not apply" - let them decide
 - Launch ALL agents in a SINGLE message with multiple Task tool calls
@@ -362,6 +380,7 @@ Wait for ALL parallel agents to complete - skills, research agents, review agent
 6. **Web searches** - Current best practices and articles
 
 **For each agent's findings, extract:**
+
 - [ ] Concrete recommendations (actionable items)
 - [ ] Code patterns and examples (copy-paste ready)
 - [ ] Anti-patterns to avoid (warnings)
@@ -373,6 +392,7 @@ Wait for ALL parallel agents to complete - skills, research agents, review agent
 - [ ] Relevant learnings (past solutions that apply - prevent repeating mistakes)
 
 **Deduplicate and prioritize:**
+
 - Merge similar recommendations from multiple agents
 - Prioritize by impact (high-value improvements first)
 - Flag conflicting advice for human review
@@ -407,12 +427,15 @@ Merge research findings back into the plan, adding depth without changing the or
 ```
 
 **Edge Cases:**
+
 - [Edge case 1 and how to handle]
 - [Edge case 2 and how to handle]
 
 **References:**
+
 - [Documentation URL 1]
 - [Documentation URL 2]
+
 ```
 
 ### 8. Add Enhancement Summary
@@ -439,6 +462,7 @@ At the top of the plan, add a summary section:
 ### 9. Update Plan File
 
 **Write the enhanced plan:**
+
 - Preserve original filename
 - Add `-deepened` suffix if the user prefers a new file
 - Update any timestamps or metadata
@@ -450,6 +474,7 @@ Update the plan file in place (or if user requests a separate file, append `-dee
 ## Quality Checks
 
 Before finalizing:
+
 - [ ] All original content preserved
 - [ ] Research insights clearly marked and attributed
 - [ ] Code examples are syntactically correct
@@ -464,6 +489,7 @@ After writing the enhanced plan, use the **AskUserQuestion tool** to present the
 **Question:** "Plan deepened at `[plan_path]`. What would you like to do next?"
 
 **Options:**
+
 1. **View diff** - Show what was added/changed
 2. **Run `/plan_review`** - Get feedback from reviewers on enhanced plan
 3. **Start `soleur:work`** - Begin implementing this enhanced plan
@@ -471,6 +497,7 @@ After writing the enhanced plan, use the **AskUserQuestion tool** to present the
 5. **Revert** - Restore original plan (if backup exists)
 
 Based on selection:
+
 - **View diff** -> Run `git diff [plan_path]` or show before/after
 - **`/plan_review`** -> Call the /plan_review command with the plan file path
 - **`soleur:work`** -> Use `skill: soleur:work` with the plan file path
@@ -480,6 +507,7 @@ Based on selection:
 ## Example Enhancement
 
 **Before (from `soleur:plan`):**
+
 ```markdown
 ## Technical Approach
 
@@ -487,6 +515,7 @@ Use React Query for data fetching with optimistic updates.
 ```
 
 **After (from /deepen-plan):**
+
 ```markdown
 ## Technical Approach
 
@@ -519,11 +548,14 @@ const queryClient = new QueryClient({
 ```
 
 **Edge Cases:**
+
 - Handle race conditions with `cancelQueries` on component unmount
 - Implement retry logic for transient network failures
 - Consider offline support with `persistQueryClient`
 
 **References:**
-- https://tanstack.com/query/latest/docs/react/guides/optimistic-updates
-- https://tkdodo.eu/blog/practical-react-query
+
+- <https://tanstack.com/query/latest/docs/react/guides/optimistic-updates>
+- <https://tkdodo.eu/blog/practical-react-query>
+
 ```

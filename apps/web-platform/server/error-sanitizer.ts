@@ -27,6 +27,16 @@ const KNOWN_SAFE_MESSAGES: Record<string, string> = {
     "Unable to save the service token. Please try again.",
   "Failed to disconnect service":
     "Unable to remove the service connection. Please try again.",
+  "File too large":
+    "The file exceeds the 20 MB size limit. Please choose a smaller file.",
+  "Unsupported file type":
+    "This file type is not supported. Please upload an image (PNG, JPEG, GIF, WebP) or PDF.",
+  "Upload failed":
+    "The file upload failed. Please try again.",
+  "Attachment not found":
+    "The attachment could not be found.",
+  "Too many files":
+    "Maximum 5 files per message. Please remove some attachments.",
 };
 
 export function sanitizeErrorForClient(err: unknown): string {

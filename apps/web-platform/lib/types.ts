@@ -1,7 +1,16 @@
 import type { DomainLeaderId } from "@/server/domain-leaders";
 
 // Typed error codes for structured error handling over WebSocket
-export type WSErrorCode = "key_invalid" | "session_expired" | "session_resumed" | "rate_limited" | "idle_timeout";
+export type WSErrorCode =
+  | "key_invalid"
+  | "session_expired"
+  | "session_resumed"
+  | "rate_limited"
+  | "idle_timeout"
+  | "upload_failed"
+  | "file_too_large"
+  | "unsupported_file_type"
+  | "too_many_files";
 
 // Shared WebSocket close codes — single source of truth for server, client, and tests.
 // See: https://developer.mozilla.org/en-US/docs/Web/API/CloseEvent/code (4000-4999 = application-reserved)
@@ -23,6 +32,14 @@ export class KeyInvalidError extends Error {
   }
 }
 
+// Attachment reference passed with chat messages
+export interface AttachmentRef {
+  storagePath: string;
+  filename: string;
+  contentType: string;
+  sizeBytes: number;
+}
+
 // Context passed when starting a conversation from a specific page
 export interface ConversationContext {
   path: string;    // artifact path (e.g., "knowledge-base/product/roadmap.md")
@@ -34,7 +51,7 @@ export interface ConversationContext {
 export type WSMessage =
   | { type: "auth"; token: string }
   | { type: "auth_ok" }
-  | { type: "chat"; content: string }
+  | { type: "chat"; content: string; attachments?: AttachmentRef[] }
   | { type: "start_session"; leaderId?: DomainLeaderId; context?: ConversationContext }
   | { type: "resume_session"; conversationId: string }
   | { type: "close_conversation" }
@@ -100,6 +117,14 @@ export const STATUS_LABELS: Record<ConversationStatus, string> = {
   failed: "Needs attention",
 } as const;
 
+export interface MessageAttachment {
+  id: string;
+  storagePath: string;
+  filename: string;
+  contentType: string;
+  sizeBytes: number;
+}
+
 export interface Message {
   id: string;
   conversation_id: string;
@@ -107,5 +132,6 @@ export interface Message {
   content: string;
   tool_calls: unknown | null;
   leader_id: DomainLeaderId | null;
+  attachments?: MessageAttachment[];
   created_at: string;
 }

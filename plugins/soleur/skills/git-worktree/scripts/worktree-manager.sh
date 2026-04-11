@@ -123,6 +123,53 @@ ensure_bare_config() {
   fi
 }
 
+# Verify a worktree was properly created and registered.
+# Checks: (1) rev-parse --show-toplevel matches expected path,
+#          (2) worktree appears in git worktree list.
+# On registration failure, attempts targeted git worktree repair before giving up.
+# Usage: verify_worktree_created "$worktree_path" "$branch_name" "$from_branch"
+verify_worktree_created() {
+  local worktree_path="$1"
+  local branch_name="$2"
+  # $from_branch is used only in diagnostic hint messages below, but kept as a
+  # parameter because all callers already have it in scope and the hint aids
+  # debugging when worktree creation fails.
+  local from_branch="$3"
+
+  # Check 0: Fast-fail if directory was not created at all
+  if [[ ! -d "$worktree_path" ]]; then
+    echo -e "${RED}Error: Worktree directory not created at $worktree_path${NC}"
+    echo -e "${YELLOW}Hint: Try 'git worktree add $worktree_path -b $branch_name $from_branch' directly${NC}"
+    exit 1
+  fi
+
+  # Check 1: Verify the directory is a valid git worktree
+  local actual_toplevel
+  if ! actual_toplevel=$(git -C "$worktree_path" rev-parse --show-toplevel 2>/dev/null); then
+    echo -e "${RED}Error: Worktree creation failed — $worktree_path is not a valid git worktree${NC}"
+    echo -e "${YELLOW}Hint: Try 'git worktree add $worktree_path -b $branch_name $from_branch' directly${NC}"
+    git worktree remove "$worktree_path" --force 2>/dev/null || rm -rf "$worktree_path" 2>/dev/null || true
+    exit 1
+  fi
+  if [[ "$actual_toplevel" != "$worktree_path" ]]; then
+    echo -e "${RED}Error: Worktree path mismatch — expected $worktree_path, got $actual_toplevel${NC}"
+    git worktree remove "$worktree_path" --force 2>/dev/null || rm -rf "$worktree_path" 2>/dev/null || true
+    exit 1
+  fi
+
+  # Check 2: Verify worktree is registered in git's worktree list (#1932)
+  if ! git worktree list --porcelain | grep -qxF "worktree $worktree_path"; then
+    echo -e "${YELLOW}Warning: Worktree not in git worktree list — attempting repair...${NC}"
+    git worktree repair "$worktree_path" 2>/dev/null || true
+    if ! git worktree list --porcelain | grep -qxF "worktree $worktree_path"; then
+      echo -e "${RED}Error: Worktree directory exists but is not registered after repair${NC}"
+      git worktree remove "$worktree_path" --force 2>/dev/null || rm -rf "$worktree_path" 2>/dev/null || true
+      exit 1
+    fi
+    echo -e "${GREEN}Repair successful — worktree now registered${NC}"
+  fi
+}
+
 # Ensure .worktrees is in .gitignore
 ensure_gitignore() {
   if ! grep -q "^\.worktrees$" "$GIT_ROOT/.gitignore" 2>/dev/null; then
@@ -316,29 +363,11 @@ create_worktree() {
   echo -e "${BLUE}Creating worktree...${NC}"
   git worktree add -b "$branch_name" "$worktree_path" "$from_branch"
 
+  # Verify BEFORE fixing config — most honest check of worktree health
+  verify_worktree_created "$worktree_path" "$branch_name" "$from_branch"
+
   # git worktree add on bare repos writes core.bare=false to shared config — fix it
   ensure_bare_config
-
-  # Fast-fail: verify directory was created before expensive git checks
-  if [[ ! -d "$worktree_path" ]]; then
-    echo -e "${RED}Error: Worktree directory not created at $worktree_path${NC}"
-    echo -e "${YELLOW}Hint: Try 'git worktree add $worktree_path -b $branch_name $from_branch' directly${NC}"
-    exit 1
-  fi
-
-  # Verify the worktree was actually created (git worktree add can silently fail on bare repos)
-  local actual_toplevel
-  if ! actual_toplevel=$(git -C "$worktree_path" rev-parse --show-toplevel 2>/dev/null); then
-    echo -e "${RED}Error: Worktree creation failed — $worktree_path is not a valid git worktree${NC}"
-    echo -e "${YELLOW}Hint: Try 'git worktree add $worktree_path -b $branch_name $from_branch' directly${NC}"
-    git worktree remove "$worktree_path" --force 2>/dev/null || rm -rf "$worktree_path" 2>/dev/null || true
-    exit 1
-  fi
-  if [[ "$actual_toplevel" != "$worktree_path" ]]; then
-    echo -e "${RED}Error: Worktree path mismatch — expected $worktree_path, got $actual_toplevel${NC}"
-    git worktree remove "$worktree_path" --force 2>/dev/null || rm -rf "$worktree_path" 2>/dev/null || true
-    exit 1
-  fi
 
   # Copy environment files
   copy_env_files "$worktree_path"
@@ -394,29 +423,11 @@ create_for_feature() {
   echo -e "${BLUE}Creating worktree...${NC}"
   git worktree add -b "$branch_name" "$worktree_path" "$from_branch"
 
+  # Verify BEFORE fixing config — most honest check of worktree health
+  verify_worktree_created "$worktree_path" "$branch_name" "$from_branch"
+
   # git worktree add on bare repos writes core.bare=false to shared config — fix it
   ensure_bare_config
-
-  # Fast-fail: verify directory was created before expensive git checks
-  if [[ ! -d "$worktree_path" ]]; then
-    echo -e "${RED}Error: Worktree directory not created at $worktree_path${NC}"
-    echo -e "${YELLOW}Hint: Try 'git worktree add $worktree_path -b $branch_name $from_branch' directly${NC}"
-    exit 1
-  fi
-
-  # Verify the worktree was actually created (git worktree add can silently fail on bare repos)
-  local actual_toplevel
-  if ! actual_toplevel=$(git -C "$worktree_path" rev-parse --show-toplevel 2>/dev/null); then
-    echo -e "${RED}Error: Worktree creation failed — $worktree_path is not a valid git worktree${NC}"
-    echo -e "${YELLOW}Hint: Try 'git worktree add $worktree_path -b $branch_name $from_branch' directly${NC}"
-    git worktree remove "$worktree_path" --force 2>/dev/null || rm -rf "$worktree_path" 2>/dev/null || true
-    exit 1
-  fi
-  if [[ "$actual_toplevel" != "$worktree_path" ]]; then
-    echo -e "${RED}Error: Worktree path mismatch — expected $worktree_path, got $actual_toplevel${NC}"
-    git worktree remove "$worktree_path" --force 2>/dev/null || rm -rf "$worktree_path" 2>/dev/null || true
-    exit 1
-  fi
 
   # Create spec directory in main repo (shared across worktrees)
   if [[ -d "$GIT_ROOT/knowledge-base" ]]; then

@@ -56,6 +56,32 @@ export async function deleteAccount(
     log.warn({ userId, err }, "Failed to delete workspace during deletion (non-fatal)");
   }
 
+  // 3.5 Purge Storage blobs for all user attachments (DB rows are FK-cascaded,
+  // but Storage objects are not). List all objects under the user's prefix.
+  try {
+    const { data: objects } = await service.storage
+      .from("chat-attachments")
+      .list(userId, { limit: 1_000 });
+
+    if (objects && objects.length > 0) {
+      // Storage list returns objects at one level — need to recurse into conversation folders
+      const allPaths: string[] = [];
+      for (const folder of objects) {
+        const { data: files } = await service.storage
+          .from("chat-attachments")
+          .list(`${userId}/${folder.name}`, { limit: 1_000 });
+        if (files) {
+          allPaths.push(...files.map((f) => `${userId}/${folder.name}/${f.name}`));
+        }
+      }
+      if (allPaths.length > 0) {
+        await service.storage.from("chat-attachments").remove(allPaths);
+      }
+    }
+  } catch (err) {
+    log.warn({ userId, err }, "Failed to purge attachment blobs during deletion (non-fatal)");
+  }
+
   // 4. Delete auth record — FK cascade handles public.users and all children
   //    IMPORTANT: auth deletion must come first. If it fails, no data is lost.
   //    If public.users were deleted first and auth deletion failed, the user
