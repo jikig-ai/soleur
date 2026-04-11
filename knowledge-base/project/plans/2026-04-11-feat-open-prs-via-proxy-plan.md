@@ -417,19 +417,19 @@ After hardening work is complete:
 
 ## Acceptance Criteria
 
-- [ ] `branch-validation.ts` extracted as standalone module with zero heavy dependencies
-- [ ] `validateBranchFormat()` enforces all 10 git ref format rules
-- [ ] push-branch.ts calls `validateBranchFormat()` before protected-branch check
-- [ ] PR creation tool validates head/base format and rejects head === base
-- [ ] `branch-validation.test.ts` covers all 10 rules plus edge cases (empty, length, valid names)
-- [ ] Happy-path push-branch tests cover credential helper lifecycle (create, use, cleanup)
-- [ ] Happy-path push-branch tests verify git author configuration
-- [ ] Credential helper cleanup test verifies cleanup runs even on push failure
-- [ ] createPullRequest unit tests cover success, error parsing, and structured error extraction
-- [ ] All test mocks assert the exact URL/command being called (not just response shape)
-- [ ] All existing tests pass (86 suites)
-- [ ] Issues #1926-#1929 closed
-- [ ] Roadmap entries 3.10a-d updated to "Done"
+- [x] `branch-validation.ts` extracted as standalone module with zero heavy dependencies
+- [x] `validateBranchFormat()` enforces all 10 git ref format rules
+- [x] push-branch.ts calls `validateBranchFormat()` before protected-branch check
+- [x] PR creation tool validates head/base format and rejects head === base
+- [x] `branch-validation.test.ts` covers all 10 rules plus edge cases (empty, length, valid names)
+- [x] Happy-path push-branch tests cover credential helper lifecycle (create, use, cleanup)
+- [x] Happy-path push-branch tests verify git author configuration
+- [x] Credential helper cleanup test verifies cleanup runs even on push failure
+- [x] createPullRequest unit tests cover success, error parsing, and structured error extraction
+- [x] All test mocks assert the exact URL/command being called (not just response shape)
+- [x] All existing tests pass (87 suites, 930 tests)
+- [x] Issues #1926-#1929 closed
+- [x] Roadmap entries 3.10a-d updated to "Done"
 
 ## Test Scenarios
 
