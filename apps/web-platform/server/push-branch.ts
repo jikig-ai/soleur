@@ -14,6 +14,7 @@
 import { execFileSync } from "child_process";
 import { writeFileSync, unlinkSync } from "fs";
 
+import { validateBranchFormat } from "./branch-validation";
 import { generateInstallationToken, randomCredentialPath } from "./github-app";
 import { createChildLogger } from "./logger";
 
@@ -90,10 +91,13 @@ export async function pushBranch(options: PushBranchOptions): Promise<PushResult
     );
   }
 
-  // 2. Validate branch name
+  // 2. Validate branch name format (all 10 git ref format rules)
+  validateBranchFormat(branch);
+
+  // 3. Validate branch is not protected (main, master, default)
   validateBranchName(branch, defaultBranch);
 
-  // 3. Set git author to Soleur Agent identity
+  // 4. Set git author to Soleur Agent identity
   try {
     execFileSync("git", ["config", "user.name", AGENT_AUTHOR_NAME], {
       cwd: workspacePath,
@@ -107,7 +111,7 @@ export async function pushBranch(options: PushBranchOptions): Promise<PushResult
     log.warn({ err }, "Failed to set git author — push may use existing config");
   }
 
-  // 4. Generate token and create credential helper
+  // 5. Generate token and create credential helper
   const token = await generateInstallationToken(installationId);
   const helperPath = randomCredentialPath();
 
@@ -118,7 +122,7 @@ export async function pushBranch(options: PushBranchOptions): Promise<PushResult
       { mode: 0o700 },
     );
 
-    // 5. Push to remote
+    // 6. Push to remote
     const repoUrl = `https://github.com/${owner}/${repo}.git`;
     execFileSync(
       "git",
@@ -144,7 +148,7 @@ export async function pushBranch(options: PushBranchOptions): Promise<PushResult
     const stderr = rawStderr.replace(/\/[^\s:]+/g, "<path>");
     throw new Error(`Git push failed: ${stderr || (err as Error).message}`);
   } finally {
-    // 6. Clean up credential helper immediately
+    // 7. Clean up credential helper immediately
     try {
       unlinkSync(helperPath);
     } catch {
