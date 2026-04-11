@@ -566,18 +566,24 @@ Do NOT use `gh pr checks --watch` -- it exits immediately with "no checks report
 
 After auto-merge is queued, poll until the PR is merged. Do NOT ask "merge now or later?" -- auto-merge handles it. Do NOT use foreground `sleep` — Claude Code blocks `sleep` >= 2s in foreground Bash calls.
 
-Use the **Monitor tool** with this shell loop:
+Use the **Monitor tool** with this shell loop (max 60 iterations = 10 minutes):
 
 ```bash
+i=0
 while true; do
   state=$(gh pr view <number> --json state --jq .state)
-  echo "$(date +%H:%M:%S) state=$state"
+  echo "$(date +%H:%M:%S) state=$state (iteration $((i+1))/60)"
   [ "$state" = "MERGED" ] || [ "$state" = "CLOSED" ] && break
+  i=$((i+1))
+  if [ "$i" -ge 60 ]; then
+    echo "Merge poll timed out after 10 minutes. PR state: $state"
+    break
+  fi
   sleep 10
 done
 ```
 
-Each `echo` line arrives as a Monitor notification. React to the final state.
+Each `echo` line arrives as a Monitor notification. React to the final state. If the loop exits via timeout, report the timeout to the user and investigate why the PR has not merged.
 
 **If state becomes `CLOSED` (not `MERGED`):** Auto-merge was cancelled due to a CI failure.
 
