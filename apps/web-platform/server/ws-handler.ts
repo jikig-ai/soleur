@@ -316,6 +316,16 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
         return;
       }
 
+      // Server-side attachment cap
+      if (msg.attachments && msg.attachments.length > 5) {
+        sendToClient(userId, {
+          type: "error",
+          message: "Too many files",
+          errorCode: "too_many_files",
+        });
+        return;
+      }
+
       // User activity resets idle timer
       resetIdleTimer(userId, session);
 
@@ -368,6 +378,8 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
           userId,
           session.conversationId!,
           msg.content,
+          undefined, // conversationContext
+          msg.attachments,
         );
       } catch (err) {
         Sentry.captureException(err);
