@@ -161,6 +161,31 @@ describe("plausibleAddGoal", () => {
     expect(result.error).toContain("goal_type");
   });
 
+  test("page goal produces page_path not event_name in fetch body", async () => {
+    const responseBody = { goal_type: "page", page_path: "/signup" };
+    globalThis.fetch = mockFetchResponse(200, responseBody);
+
+    const result = await plausibleAddGoal("test-api-key", "example.com", "page", "/signup");
+
+    expect(result.success).toBe(true);
+
+    const [, opts] = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0];
+    const body = JSON.parse(opts.body);
+    expect(body.page_path).toBe("/signup");
+    expect(body.event_name).toBeUndefined();
+    expect(body.goal_type).toBe("page");
+    expect(body.site_id).toBe("example.com");
+  });
+
+  test("non-timeout network error returns Network error", async () => {
+    globalThis.fetch = vi.fn().mockRejectedValue(new TypeError("fetch failed"));
+
+    const result = await plausibleAddGoal("test-api-key", "example.com", "event", "Signup");
+
+    expect(result.success).toBe(false);
+    expect(result.error).toBe("Network error");
+  });
+
   test("handles PUT upsert idempotency (success on repeated call)", async () => {
     const responseBody = { goal_type: "event", event_name: "Signup" };
     globalThis.fetch = mockFetchResponse(200, responseBody);

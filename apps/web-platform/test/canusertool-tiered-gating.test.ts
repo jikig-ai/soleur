@@ -207,6 +207,34 @@ async function getCanUseTool() {
   ) => Promise<{ behavior: string; message?: string; updatedInput?: Record<string, unknown> }>;
 }
 
+/**
+ * Find a structured audit log call matching the given filter.
+ * Throws a descriptive error listing all actual audit calls if no match found.
+ */
+function findAuditLog(
+  mock: ReturnType<typeof vi.fn>,
+  filter: (obj: Record<string, unknown>) => boolean,
+): Record<string, unknown> {
+  const allAuditCalls = mock.mock.calls.filter(
+    (args: unknown[]) => {
+      const obj = args[0] as Record<string, unknown>;
+      return obj?.tool && obj?.tier;
+    },
+  );
+  const match = allAuditCalls.find((args: unknown[]) =>
+    filter(args[0] as Record<string, unknown>),
+  );
+  if (!match) {
+    const summaries = allAuditCalls.map(
+      (args: unknown[]) => JSON.stringify(args[0]),
+    );
+    throw new Error(
+      `No audit log matched filter. Actual audit calls (${allAuditCalls.length}):\n${summaries.join("\n")}`,
+    );
+  }
+  return match[0] as Record<string, unknown>;
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -295,14 +323,9 @@ describe("canUseTool tiered gating (#1926)", () => {
       );
 
       // Logger.info should have been called with audit data
-      const auditCall = mockLogInfo.mock.calls.find(
-        (args: unknown[]) => {
-          const obj = args[0] as Record<string, unknown>;
-          return obj?.tool && obj?.tier && obj?.decision;
-        },
+      const auditData = findAuditLog(mockLogInfo, (obj) =>
+        obj.tool === "mcp__soleur_platform__create_pull_request" && obj.decision === "approved",
       );
-      expect(auditCall).toBeDefined();
-      const auditData = auditCall![0] as Record<string, unknown>;
       expect(auditData.tool).toBe("mcp__soleur_platform__create_pull_request");
       expect(auditData.tier).toBe("gated");
       expect(auditData.decision).toBe("approved");
@@ -319,13 +342,31 @@ describe("canUseTool tiered gating (#1926)", () => {
         { signal: new AbortController().signal },
       );
 
-      const auditCall = mockLogInfo.mock.calls.find(
-        (args: unknown[]) => {
-          const obj = args[0] as Record<string, unknown>;
-          return obj?.decision === "rejected";
-        },
+      const auditData = findAuditLog(mockLogInfo, (obj) =>
+        obj.decision === "rejected",
       );
-      expect(auditCall).toBeDefined();
+      expect(auditData.decision).toBe("rejected");
+    });
+  });
+
+  describe("auto-approve tier", () => {
+    test("structured audit log emitted for auto-approved tool", async () => {
+      const canUseTool = await getCanUseTool();
+
+      await canUseTool(
+        "mcp__soleur_platform__github_read_ci_status",
+        { owner: "alice", repo: "my-repo", ref: "main" },
+        { signal: new AbortController().signal },
+      );
+
+      const auditData = findAuditLog(mockLogInfo, (obj) =>
+        obj.tool === "mcp__soleur_platform__github_read_ci_status" && obj.tier === "auto-approve",
+      );
+      expect(auditData.tool).toBe("mcp__soleur_platform__github_read_ci_status");
+      expect(auditData.tier).toBe("auto-approve");
+      expect(auditData.decision).toBe("auto-approved");
+      // Review gate should NOT have been called for auto-approve tools
+      expect(mockAbortableReviewGate).not.toHaveBeenCalled();
     });
   });
 
