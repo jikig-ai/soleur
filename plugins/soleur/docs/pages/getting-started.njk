@@ -2,7 +2,7 @@
 title: Getting Started with Soleur
 description: "Get started with Soleur in one command. Deploy AI agents across engineering, marketing, legal, finance, and every business department. Free and open source."
 layout: base.njk
-permalink: pages/getting-started.html
+permalink: getting-started/
 ---
 
     <!-- Hero -->
@@ -31,7 +31,7 @@ permalink: pages/getting-started.html
               <li>Real-time agent activity and knowledge base</li>
               <li>Priority support and early access to new features</li>
             </ul>
-            <a href="pages/pricing.html" class="btn btn-primary path-card-cta">Join the Waitlist &rarr;</a>
+            <a href="pricing/" class="btn btn-primary path-card-cta">Join the Waitlist &rarr;</a>
           </div>
 
           <div class="path-card path-card--secondary">
@@ -40,7 +40,7 @@ permalink: pages/getting-started.html
               <span class="path-card-badge path-card-badge--available">AVAILABLE NOW</span>
             </div>
             <p class="path-card-desc">Install the Claude Code extension and run your AI organization locally. Full access to all {{ stats.agents }} agents and {{ stats.skills }} skills. Free and open source.</p>
-            <a href="pages/getting-started.html#self-hosted" class="btn btn-secondary path-card-cta">Get Started &rarr;</a>
+            <a href="getting-started/#self-hosted" class="btn btn-secondary path-card-cta">Get Started &rarr;</a>
           </div>
 
         </div>
@@ -61,6 +61,10 @@ claude plugin install soleur</code></pre>
         <div class="callout">
           <strong>Existing project?</strong> Run <code>/soleur:sync</code> to analyze your codebase and populate the knowledge base.<br>
           <strong>Starting fresh?</strong> Run <code>/soleur:go</code> and describe what you need.
+        </div>
+
+        <div class="callout">
+          <strong>Running with Ollama?</strong> Use the command <code>ollama launch claude --model gemma4:31b-cloud</code> to start Soleur with your preferred local model.
         </div>
 
         <h3 class="section-subtitle" style="margin-top: var(--space-8);">The Workflow</h3>
@@ -151,9 +155,9 @@ claude plugin install soleur</code></pre>
         <h3 class="section-subtitle" style="margin-top: var(--space-8);">Learn More</h3>
 
         <ul class="learn-more-links">
-          <li><a href="pages/agents.html">Agents <span class="learn-more-desc">AI agents across engineering, finance, marketing, legal, operations, product, sales, and support</span></a></li>
-          <li><a href="pages/skills.html">Skills <span class="learn-more-desc">Multi-step skills for complex workflows</span></a></li>
-          <li><a href="pages/changelog.html">Changelog <span class="learn-more-desc">All notable changes to Soleur</span></a></li>
+          <li><a href="agents/">Agents <span class="learn-more-desc">AI agents across engineering, finance, marketing, legal, operations, product, sales, and support</span></a></li>
+          <li><a href="skills/">Skills <span class="learn-more-desc">Multi-step skills for complex workflows</span></a></li>
+          <li><a href="changelog/">Changelog <span class="learn-more-desc">All notable changes to Soleur</span></a></li>
         </ul>
       </div>
     </section>
@@ -166,7 +170,7 @@ claude plugin install soleur</code></pre>
         <div class="faq-list">
           <details class="faq-item">
             <summary class="faq-question">What do I need to run Soleur?</summary>
-            <p class="faq-answer">For the self-hosted version, you need the Claude Code CLI with an Anthropic API key or a Claude subscription. First, add the Soleur marketplace with <code>claude plugin marketplace add jikig-ai/soleur</code>, then install with <code>claude plugin install soleur</code> and run <code>/soleur:go</code> to start. No additional dependencies or server setup needed. The cloud platform (coming soon) requires only a browser and a Soleur subscription.</p>
+            <p class="faq-answer">For the self-hosted version, you need the Claude Code CLI with an Anthropic API key or a Claude subscription. Alternatively, you can run Soleur using Ollama via the <code>ollama launch</code> command. First, add the Soleur marketplace with <code>claude plugin marketplace add jikig-ai/soleur</code>, then install with <code>claude plugin install soleur</code> and run <code>/soleur:go</code> to start. No additional dependencies or server setup needed. The cloud platform (coming soon) requires only a browser and a Soleur subscription.</p>
           </details>
           <details class="faq-item">
             <summary class="faq-question">Does Soleur work on Windows, Linux, and macOS?</summary>
@@ -202,7 +206,7 @@ claude plugin install soleur</code></pre>
           "name": "What do I need to run Soleur?",
           "acceptedAnswer": {
             "@type": "Answer",
-            "text": "For the self-hosted version, you need the Claude Code CLI with an Anthropic API key or a Claude subscription. First, add the Soleur marketplace with claude plugin marketplace add jikig-ai/soleur, then install with claude plugin install soleur and run /soleur:go to start. The cloud platform (coming soon) requires only a browser and a Soleur subscription."
+            "text": "For the self-hosted version, you need the Claude Code CLI with an Anthropic API key or a Claude subscription. Alternatively, you can run Soleur using Ollama via the ollama launch command. First, add the Soleur marketplace with claude plugin marketplace add jikig-ai/soleur, then install with claude plugin install soleur and run /soleur:go to start. No additional dependencies or server setup needed. The cloud platform (coming soon) requires only a browser and a Soleur subscription."
           }
         },
         {

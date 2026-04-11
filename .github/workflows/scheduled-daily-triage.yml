@@ -48,6 +48,7 @@ jobs:
           gh label create "type/feature"  --description "New capability or enhancement"             --color "A2EEEF" 2>/dev/null || true
           gh label create "type/chore"    --description "Maintenance, refactoring, tech debt"       --color "BFD4F2" 2>/dev/null || true
           gh label create "type/question" --description "Needs clarification or is a question"      --color "D876E3" 2>/dev/null || true
+          gh label create "type/security" --description "Security vulnerability, hardening, or audit finding" --color "DC143C" 2>/dev/null || true
 
           # Domain labels -- aligned with Soleur department leaders
           gh label create "domain/engineering" --description "Plugin code, CI/CD, infra, docs site (CTO)" --color "0075CA" 2>/dev/null || true
@@ -92,6 +93,7 @@ jobs:
             - p3-low: Cosmetic, enhancement, nice-to-have, no time pressure
 
             TYPE (pick one):
+            - security: Title starts with "sec:" OR describes a security vulnerability, hardening, exploit, or audit finding
             - bug: Something that worked before is now broken, or doesn't work as documented
             - feature: New capability that doesn't exist yet
             - chore: Maintenance, refactoring, dependency update, tech debt

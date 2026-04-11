@@ -157,7 +157,7 @@ describe("Settings page sections", () => {
     expect(screen.getByText("API Key")).toBeInTheDocument();
   });
 
-  it("renders 'Account' section heading", async () => {
+  it("renders 'Account' section heading with user email", async () => {
     const { SettingsContent } = await import(
       "@/components/settings/settings-content"
     );
@@ -173,6 +173,47 @@ describe("Settings page sections", () => {
       />,
     );
     expect(screen.getByText("Account")).toBeInTheDocument();
+    expect(screen.getByText("test@example.com")).toBeInTheDocument();
+  });
+
+  it("renders 'Danger Zone' section heading instead of duplicate 'Account'", async () => {
+    const { SettingsContent } = await import(
+      "@/components/settings/settings-content"
+    );
+    render(
+      <SettingsContent
+        userEmail="test@example.com"
+        hasApiKey={false}
+        apiKeyProvider={null}
+        apiKeyLastValidated={null}
+        repoUrl={null}
+        repoStatus="not_connected"
+        repoLastSyncedAt={null}
+      />,
+    );
+    expect(screen.getByText("Danger Zone")).toBeInTheDocument();
+  });
+
+  it("renders Account section before Project section", async () => {
+    const { SettingsContent } = await import(
+      "@/components/settings/settings-content"
+    );
+    render(
+      <SettingsContent
+        userEmail="test@example.com"
+        hasApiKey={false}
+        apiKeyProvider={null}
+        apiKeyLastValidated={null}
+        repoUrl={null}
+        repoStatus="not_connected"
+        repoLastSyncedAt={null}
+      />,
+    );
+    const headings = screen.getAllByRole("heading", { level: 2 });
+    const headingTexts = headings.map((h) => h.textContent);
+    expect(headingTexts.indexOf("Account")).toBeLessThan(
+      headingTexts.indexOf("Project"),
+    );
   });
 
   it("shows key status as 'No key configured' when no key exists", async () => {

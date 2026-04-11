@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-04-06
-last_reviewed: 2026-04-06
+last_updated: 2026-04-10
+last_reviewed: 2026-04-10
 review_cadence: weekly
 owner: CPO
 depends_on:
@@ -67,16 +67,16 @@ This roadmap was reviewed by CTO, CLO, CFO, and CMO before finalization.
 
 ---
 
-## Current State (2026-04-03)
+## Current State (2026-04-10)
 
 | Dimension | Status |
 |-----------|--------|
-| Phase 1 (Close the Loop) | Complete. Milestone closed. All 15 issues closed. |
-| Phase 2 (Secure for Beta) | Complete. Milestone closed. All 20 issues closed (including #1375). |
-| Phase 3 (Make it Sticky) | In progress. 11 open, 2 closed. |
-| Phase 4 (Validate + Scale) | Not started. 18 open, 9 closed. |
-| Phase 5 (Desktop Native App) | Defined. 5 issues created (#1423-#1429). Trigger-gated on user demand. |
-| Post-MVP / Later | 56 open, 75 closed. |
+| Phase 1 (Close the Loop) | Complete. Milestone closed. 0 open, 15 closed. |
+| Phase 2 (Secure for Beta) | Complete. Milestone closed. 0 open, 20 closed. |
+| Phase 3 (Make it Sticky) | In progress. 14 open, 27 closed. Core KB infrastructure done (API, viewer, inbox, token storage, onboarding). Remaining: service automation, billing, analytics, CI/CD, sharing. |
+| Phase 4 (Validate + Scale) | Not started. 16 open, 11 closed. Blocked by Phase 3 completion + marketing/multi-user gates. |
+| Phase 5 (Desktop Native App) | Defined. 5 open, 0 closed. Trigger-gated on user demand. |
+| Post-MVP / Later | 74 open, 265 closed. |
 | Beta users | 0 |
 | Pricing gates passed | 0 of 5 |
 
@@ -176,22 +176,28 @@ This roadmap was reviewed by CTO, CLO, CFO, and CMO before finalization.
 
 | # | Feature | Priority | Issue | Status |
 |---|---------|----------|-------|--------|
-| 3.1 | KB REST API (file tree, content, search) | P1 | [#1688](https://github.com/jikig-ai/soleur/issues/1688) | Not started |
-| 3.2 | KB viewer UI (sidebar tree, markdown rendering, search) | P1 | [#1689](https://github.com/jikig-ai/soleur/issues/1689) | Stub only |
-| 3.3 | Conversation inbox with status badges | P1 | [#1690](https://github.com/jikig-ai/soleur/issues/1690) | Not started |
+| 3.1 | KB REST API (file tree, content, search) | P1 | [#1688](https://github.com/jikig-ai/soleur/issues/1688) | Done |
+| 3.2 | KB viewer UI (sidebar tree, markdown rendering, search) | P1 | [#1689](https://github.com/jikig-ai/soleur/issues/1689) | Done |
+| 3.3 | Conversation inbox with status badges | P1 | [#1690](https://github.com/jikig-ai/soleur/issues/1690) | Done |
 | 3.4 | API + MCP service integrations (Cloudflare, Stripe, Plausible first) | P1 | [#1050](https://github.com/jikig-ai/soleur/issues/1050) | Not started |
-| 3.5 | Secure token storage for third-party APIs (BYOK-grade encryption) | P1 | [#1076](https://github.com/jikig-ai/soleur/issues/1076) | Not started |
+| 3.5 | Secure token storage for third-party APIs (BYOK-grade encryption) | P1 | [#1076](https://github.com/jikig-ai/soleur/issues/1076) | Done |
 | 3.6 | Usage/cost indicator (BYOK spending) | P2 | [#1691](https://github.com/jikig-ai/soleur/issues/1691) | Not started |
 | 3.7 | Review gate notifications (PWA push + email fallback for iOS) | P2 | [#1049](https://github.com/jikig-ai/soleur/issues/1049) | Not started |
 | 3.8 | Guided instructions fallback (deep links + review gates for services without API/MCP) | P2 | [#1077](https://github.com/jikig-ai/soleur/issues/1077) | Not started |
 | 3.9 | Chat UX redesign — remove department grid, @-mention autocomplete, auto-routing, sidebar | P2 | [#1289](https://github.com/jikig-ai/soleur/issues/1289) | Done (completed in P2) |
-| 3.10 | CI/CD integration (agents trigger deploys, run tests, open PRs on founder's repo) | P1 | [#1062](https://github.com/jikig-ai/soleur/issues/1062) | Not started |
+| 3.10 | CI/CD integration (parent — decomposed into 3.10a-d) | P1 | [#1062](https://github.com/jikig-ai/soleur/issues/1062) | In progress |
+| 3.10a | GitHub App + server-side proxy infrastructure | P1 | [#1926](https://github.com/jikig-ai/soleur/issues/1926) | Not started |
+| 3.10b | Read CI status and logs via proxy | P1 | [#1927](https://github.com/jikig-ai/soleur/issues/1927) | Not started |
+| 3.10c | Trigger GitHub Actions workflows via proxy | P1 | [#1928](https://github.com/jikig-ai/soleur/issues/1928) | Not started |
+| 3.10d | Open PRs via proxy (push to feature branches) | P1 | [#1929](https://github.com/jikig-ai/soleur/issues/1929) | Not started |
 | 3.11 | Product analytics instrumentation for P4 validation metrics (domain engagement, session frequency, KB growth) | P1 | [#1063](https://github.com/jikig-ai/soleur/issues/1063) | Not started |
 | 3.12 | Pricing page (soleur.ai) | P1 | [#656](https://github.com/jikig-ai/soleur/issues/656) | Done |
 | 3.13 | Subscription management (cancel, upgrade/downgrade) | P1 | [#1078](https://github.com/jikig-ai/soleur/issues/1078) | Not started |
 | 3.14 | Invoice history + failed payment handling | P2 | [#1079](https://github.com/jikig-ai/soleur/issues/1079) | Not started |
 | 3.15 | Fix meta tags not rendering in production HTML (OG, canonical, Twitter cards) | P0 | [#1121](https://github.com/jikig-ai/soleur/issues/1121) | Done |
-| 3.16 | Start Fresh onboarding — guided first-run with foundation cards (vision, brand, validation, legal) | P1 | [#1751](https://github.com/jikig-ai/soleur/issues/1751) | Not started |
+| 3.16 | Start Fresh onboarding — guided first-run with foundation cards (vision, brand, validation, legal) | P1 | [#1751](https://github.com/jikig-ai/soleur/issues/1751) | Done |
+| 3.17 | Post-connect sync proposal and project status report | P1 | [#1772](https://github.com/jikig-ai/soleur/issues/1772) | Done |
+| 3.18 | KB items, KB, and session sharing (read-only external access with signup CTAs, revocable) | P2 | [#1745](https://github.com/jikig-ai/soleur/issues/1745) | In progress |
 
 **Why 3.1-3.2 matter:** The knowledge base is the compounding moat. If founders cannot see plans, brainstorms, brand guides, and competitive analyses their agents produced, the value is invisible. The KB viewer closes the review loop.
 
@@ -369,8 +375,8 @@ Weekly CPO review (every Monday). Pre-product-market-fit: the landscape changes 
 - **After each beta cohort:** Update validation findings. Adjust Phase 3 scope.
 - **Quarterly:** Full roadmap revision. Cross-reference with competitive intelligence and marketing strategy.
 
-Next review: 2026-04-10.
+Next review: 2026-04-17.
 
 ---
 
-_Generated: 2026-03-23. Domain review: CTO, CLO, CFO, CMO (2026-03-23). Milestone audit: 2026-04-03. CPO weekly review: 2026-04-06. Sources: business-validation.md (2026-03-12), competitive-intelligence.md (2026-03-12), pricing-strategy.md (2026-03-12), brand-guide.md (2026-02-21). Workshop conducted via /soleur:product-roadmap skill._
+_Generated: 2026-03-23. Domain review: CTO, CLO, CFO, CMO (2026-03-23). Milestone audit: 2026-04-03. CPO weekly review: 2026-04-06. Status sync from GitHub milestones: 2026-04-10. Sources: business-validation.md (2026-03-12), competitive-intelligence.md (2026-03-12), pricing-strategy.md (2026-03-12), brand-guide.md (2026-02-21). Workshop conducted via /soleur:product-roadmap skill._
