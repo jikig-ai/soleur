@@ -31,59 +31,62 @@ export function validateBranchFormat(branch: string): void {
     throw new Error("Invalid branch name '@'");
   }
 
+  const display = branch.slice(0, 100);
+
   // Rule 6: cannot begin or end with /
   if (branch.startsWith("/") || branch.endsWith("/")) {
     throw new Error(
-      `Invalid branch name '${branch.slice(0, 100)}': cannot begin or end with '/'`,
+      `Invalid branch name '${display}': cannot begin or end with '/'`,
     );
   }
 
   // Rule 7: cannot end with .
   if (branch.endsWith(".")) {
     throw new Error(
-      `Invalid branch name '${branch.slice(0, 100)}': cannot end with '.'`,
+      `Invalid branch name '${display}': cannot end with '.'`,
     );
   }
 
   // Rule 3: no .. anywhere
   if (branch.includes("..")) {
     throw new Error(
-      `Invalid branch name '${branch.slice(0, 100)}': cannot contain '..'`,
+      `Invalid branch name '${display}': cannot contain '..'`,
     );
   }
 
   // Rule 6: no consecutive //
   if (branch.includes("//")) {
     throw new Error(
-      `Invalid branch name '${branch.slice(0, 100)}': cannot contain '//'`,
+      `Invalid branch name '${display}': cannot contain '//'`,
     );
   }
 
   // Rule 8: no @{ sequence
   if (branch.includes("@{")) {
     throw new Error(
-      `Invalid branch name '${branch.slice(0, 100)}': cannot contain '@{'`,
+      `Invalid branch name '${display}': cannot contain '@{'`,
     );
   }
 
   // Rule 4+5+10: no control chars, space, ~, ^, :, ?, *, [, ], \
   if (BANNED_CHARS_RE.test(branch)) {
     throw new Error(
-      `Invalid branch name '${branch.slice(0, 100)}': contains forbidden characters`,
+      `Invalid branch name '${display}': contains forbidden characters`,
     );
   }
 
   // Rule 1: no component starts with . or ends with .lock
   const components = branch.split("/");
   for (const component of components) {
+    const componentDisplay = component.slice(0, 50);
     if (component.startsWith(".")) {
       throw new Error(
-        `Invalid branch name '${branch.slice(0, 100)}': component '${component}' starts with '.'`,
+        `Invalid branch name '${display}': component '${componentDisplay}' starts with '.'`,
       );
     }
     if (component.endsWith(".lock")) {
       throw new Error(
-        `Invalid branch name '${branch.slice(0, 100)}': component '${component}' ends with '.lock'`,
+        `Invalid branch name '${display}': component '${componentDisplay}' ends with '.lock'`,
       );
     }
   }
