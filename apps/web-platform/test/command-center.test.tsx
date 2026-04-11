@@ -214,9 +214,9 @@ describe("Command Center", () => {
       expect(screen.getAllByText(/Review PR #1742/).length).toBeGreaterThanOrEqual(1);
     });
 
-    // Click the first conversation row (a button element)
+    // Click the first conversation row (a div with role="button")
     const titleElements = screen.getAllByText(/Review PR #1742/);
-    const row = titleElements[0].closest("button");
+    const row = titleElements[0].closest('[role="button"]');
     if (row) fireEvent.click(row);
 
     expect(mockPush).toHaveBeenCalledWith("/dashboard/chat/conv-1");

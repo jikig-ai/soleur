@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { createClient } from "@/lib/supabase/client";
 import type { Conversation, Message, ConversationStatus } from "@/lib/types";
-import type { DomainLeaderId } from "@/server/domain-leaders";
+import { DOMAIN_LEADERS, type DomainLeaderId } from "@/server/domain-leaders";
 
 export interface ConversationWithPreview extends Conversation {
   title: string;
@@ -21,15 +21,45 @@ interface UseConversationsResult {
   loading: boolean;
   error: string | null;
   refetch: () => void;
+  updateStatus: (conversationId: string, newStatus: ConversationStatus) => Promise<void>;
 }
 
-function deriveTitle(messages: Message[], conversationId: string): string {
-  const firstUserMsg = messages.find(
-    (m) => m.conversation_id === conversationId && m.role === "user",
-  );
-  if (!firstUserMsg) return "Untitled conversation";
-  const content = firstUserMsg.content.replace(/@\w+\s*/g, "").trim();
-  return content.length > 60 ? `${content.slice(0, 57)}...` : content;
+function truncate(s: string, max = 60): string {
+  return s.length > max ? `${s.slice(0, max - 3)}...` : s;
+}
+
+export function deriveTitle(
+  messages: Message[],
+  conversationId: string,
+  domainLeader?: DomainLeaderId | null,
+): string {
+  const convMessages = messages.filter((m) => m.conversation_id === conversationId);
+  const firstUserMsg = convMessages.find((m) => m.role === "user");
+  const firstAssistantMsg = convMessages.find((m) => m.role === "assistant");
+
+  // 1. First user message content (strip @-mentions)
+  if (firstUserMsg) {
+    const stripped = firstUserMsg.content.replace(/@\w+\s*/g, "").trim();
+    if (stripped) return truncate(stripped);
+  }
+
+  // 2. Assistant message (better title than raw @-mention)
+  if (firstAssistantMsg) return truncate(firstAssistantMsg.content.trim());
+
+  // 3. Raw @-mention text (user message exists but was only @-mentions)
+  if (firstUserMsg) {
+    const raw = firstUserMsg.content.trim();
+    if (raw) return truncate(raw);
+  }
+
+  // 4. Domain leader label
+  if (domainLeader) {
+    const leader = DOMAIN_LEADERS.find((l) => l.id === domainLeader);
+    if (leader) return `${leader.name} conversation`;
+  }
+
+  // 5. Fallback
+  return "Untitled conversation";
 }
 
 function derivePreview(messages: Message[], conversationId: string): { text: string | null; leader: DomainLeaderId | null } {
@@ -117,7 +147,7 @@ export function useConversations(
         const { text, leader } = derivePreview(messages, conv.id);
         const title = conv.domain_leader === "system"
           ? "Project Analysis"
-          : deriveTitle(messages, conv.id);
+          : deriveTitle(messages, conv.id, conv.domain_leader);
         return {
           ...conv,
           title,
@@ -175,5 +205,31 @@ export function useConversations(
     };
   }, [userId]);
 
-  return { conversations, loading, error, refetch: fetchConversations };
+  const updateStatus = useCallback(
+    async (conversationId: string, newStatus: ConversationStatus) => {
+      // Capture only the previous status for targeted rollback (avoids stale closure)
+      const previousStatus = conversations.find((c) => c.id === conversationId)?.status;
+      // Optimistic update
+      setConversations((prev) =>
+        prev.map((c) => (c.id === conversationId ? { ...c, status: newStatus } : c)),
+      );
+
+      const supabase = createClient();
+      const { error: updateError } = await supabase
+        .from("conversations")
+        .update({ status: newStatus })
+        .eq("id", conversationId)
+        .eq("user_id", userId!);
+
+      if (updateError) {
+        setConversations((prev) =>
+          prev.map((c) => (c.id === conversationId ? { ...c, status: previousStatus! } : c)),
+        );
+        setError("Failed to update conversation status");
+      }
+    },
+    [conversations, userId],
+  );
+
+  return { conversations, loading, error, refetch: fetchConversations, updateStatus };
 }

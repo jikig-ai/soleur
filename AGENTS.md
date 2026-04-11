@@ -81,3 +81,4 @@ This repository contains the Soleur Claude Code plugin. Detailed conventions liv
 
 - Challenge reasoning instead of validating. No flattery. If something looks wrong, say so.
 - Delegate verbose exploration (3+ file reads, research, analysis) to subagents. Keep main context for edits and user-facing iteration.
+- When proposing to clear context or resume from a fresh session, always provide a copy-pasteable resume prompt that includes: skill/command to run, plan file path, branch name, worktree path, PR number, issue number, and a one-line summary of what was already done. The user should be able to paste and go without re-explaining context.
