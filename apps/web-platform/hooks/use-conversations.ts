@@ -21,6 +21,7 @@ interface UseConversationsResult {
   loading: boolean;
   error: string | null;
   refetch: () => void;
+  updateStatus: (conversationId: string, newStatus: ConversationStatus) => Promise<void>;
 }
 
 export function deriveTitle(
@@ -209,5 +210,27 @@ export function useConversations(
     };
   }, [userId]);
 
-  return { conversations, loading, error, refetch: fetchConversations };
+  const updateStatus = useCallback(
+    async (conversationId: string, newStatus: ConversationStatus) => {
+      const previous = conversations;
+      // Optimistic update
+      setConversations((prev) =>
+        prev.map((c) => (c.id === conversationId ? { ...c, status: newStatus } : c)),
+      );
+
+      const supabase = createClient();
+      const { error: updateError } = await supabase
+        .from("conversations")
+        .update({ status: newStatus })
+        .eq("id", conversationId);
+
+      if (updateError) {
+        setConversations(previous);
+        setError(updateError.message);
+      }
+    },
+    [conversations],
+  );
+
+  return { conversations, loading, error, refetch: fetchConversations, updateStatus };
 }
