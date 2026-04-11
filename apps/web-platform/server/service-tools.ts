@@ -19,6 +19,9 @@ function validateSiteId(siteId: string): string | null {
   if (!SAFE_ID_RE.test(siteId)) {
     return "Invalid site ID format";
   }
+  if (!siteId.includes(".")) {
+    return "Domain must contain at least one dot";
+  }
   return null;
 }
 
@@ -75,7 +78,7 @@ export async function plausibleCreateSite(
   timezone = "UTC",
 ): Promise<PlausibleResult> {
   const idError = validateSiteId(domain);
-  if (idError) return { success: false, error: `Invalid domain format` };
+  if (idError) return { success: false, error: idError };
 
   return plausibleFetch(apiKey, "/api/v1/sites", {
     method: "POST",
@@ -90,7 +93,7 @@ export async function plausibleAddGoal(
   value: string,
 ): Promise<PlausibleResult> {
   const idError = validateSiteId(siteId);
-  if (idError) return { success: false, error: "Invalid site ID format" };
+  if (idError) return { success: false, error: idError };
 
   if (goalType !== "event" && goalType !== "page") {
     return { success: false, error: "goal_type must be 'event' or 'page'" };
@@ -115,7 +118,7 @@ export async function plausibleGetStats(
   period: "day" | "7d" | "30d" = "30d",
 ): Promise<PlausibleResult> {
   const idError = validateSiteId(siteId);
-  if (idError) return { success: false, error: "Invalid site ID format" };
+  if (idError) return { success: false, error: idError };
 
   const VALID_PERIODS = ["day", "7d", "30d"];
   if (!VALID_PERIODS.includes(period)) {

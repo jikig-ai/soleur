@@ -34,14 +34,14 @@ deepened: 2026-04-11
 
 ## Acceptance Criteria
 
-- [ ] `validateSiteId("example.com")` returns `null` (valid)
-- [ ] `validateSiteId("sub.example.com")` returns `null` (valid)
-- [ ] `validateSiteId("localhost")` returns error string containing "dot"
-- [ ] `validateSiteId("notadomain")` returns error string containing "dot"
-- [ ] `validateSiteId("../admin")` still returns error (existing path traversal check preserved)
-- [ ] Existing tests continue to pass unchanged
-- [ ] New tests cover single-label rejection for all three public functions (`plausibleCreateSite`, `plausibleAddGoal`, `plausibleGetStats`)
-- [ ] Callers pass through the specific `validateSiteId` error (not a generic wrapper)
+- [x] `validateSiteId("example.com")` returns `null` (valid)
+- [x] `validateSiteId("sub.example.com")` returns `null` (valid)
+- [x] `validateSiteId("localhost")` returns error string containing "dot"
+- [x] `validateSiteId("notadomain")` returns error string containing "dot"
+- [x] `validateSiteId("../admin")` still returns error (existing path traversal check preserved)
+- [x] Existing tests continue to pass unchanged
+- [x] New tests cover single-label rejection for all three public functions (`plausibleCreateSite`, `plausibleAddGoal`, `plausibleGetStats`)
+- [x] Callers pass through the specific `validateSiteId` error (not a generic wrapper)
 
 ### Research Insights
 
