@@ -240,16 +240,16 @@ subscription, or accept that new conversations appear on the next poll/refetch.
 
 ## Acceptance Criteria
 
-- [ ] No conversation displays as "Untitled" when it has any messages
-- [ ] Failed conversations can be dismissed from the inbox via badge click
-- [ ] Waiting conversations can be marked resolved from the inbox via badge click
-- [ ] Active conversations have non-clickable status badges
-- [ ] Completed conversations have no dropdown actions
-- [ ] Starting a session that errors before any message creates no conversation row
-- [ ] Sending only "@cto" with no other content does not create a conversation
-- [ ] Existing tests in `test/command-center.test.tsx` and
+- [x] No conversation displays as "Untitled" when it has any messages
+- [x] Failed conversations can be dismissed from the inbox via badge click
+- [x] Waiting conversations can be marked resolved from the inbox via badge click
+- [x] Active conversations have non-clickable status badges
+- [x] Completed conversations have no dropdown actions
+- [x] Starting a session that errors before any message creates no conversation row
+- [x] Sending only "@cto" with no other content does not create a conversation
+- [x] Existing tests in `test/command-center.test.tsx` and
   `test/components/conversation-row.test.tsx` continue passing
-- [ ] New tests cover: title fallback, badge click interaction, optimistic update,
+- [x] New tests cover: title fallback, badge click interaction, optimistic update,
   deferred creation
 
 ## Domain Review
