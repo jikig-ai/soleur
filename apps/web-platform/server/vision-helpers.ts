@@ -13,6 +13,13 @@ export async function tryCreateVision(
   workspacePath: string,
   content: string,
 ): Promise<void> {
+  // Content validation: reject non-user content
+  const trimmed = content.trim();
+  if (trimmed.length < 10) return;
+  if (trimmed.startsWith("/")) return;
+  if (trimmed.startsWith("@") && !trimmed.includes(" ")) return;
+  if (/^###?\s/.test(trimmed) && /\/soleur:/.test(trimmed)) return;
+
   const visionPath = path.join(
     workspacePath,
     "knowledge-base",

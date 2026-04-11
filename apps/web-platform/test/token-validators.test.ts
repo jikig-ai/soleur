@@ -103,6 +103,21 @@ describe("validateToken", () => {
   test("returns true for plausible when stats endpoint responds 200", async () => {
     mockFetch.mockResolvedValue({ ok: true });
     expect(await validateToken("plausible", "pl-key")).toBe(true);
+    expect(mockFetch).toHaveBeenCalledWith(
+      expect.stringContaining("site_id=soleur.ai"),
+      expect.any(Object),
+    );
+  });
+
+  test("plausible uses PLAUSIBLE_SITE_ID env var when set", async () => {
+    process.env.PLAUSIBLE_SITE_ID = "example.com";
+    mockFetch.mockResolvedValue({ ok: true });
+    expect(await validateToken("plausible", "pl-key")).toBe(true);
+    expect(mockFetch).toHaveBeenCalledWith(
+      expect.stringContaining("site_id=example.com"),
+      expect.any(Object),
+    );
+    delete process.env.PLAUSIBLE_SITE_ID;
   });
 
   test("returns false when fetch throws (network error)", async () => {

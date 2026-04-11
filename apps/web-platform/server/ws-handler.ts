@@ -357,7 +357,11 @@ async function handleMessage(userId: string, raw: string): Promise<void> {
       } catch (err) {
         Sentry.captureException(err);
         log.error({ userId, err }, "review_gate_response error");
-        sendToClient(userId, { type: "error", message: sanitizeErrorForClient(err) });
+        sendToClient(userId, {
+          type: "error",
+          message: sanitizeErrorForClient(err),
+          gateId: msg.gateId,
+        });
       }
       break;
     }
@@ -383,6 +387,7 @@ async function handleMessage(userId: string, raw: string): Promise<void> {
     case "review_gate":
     case "session_started":
     case "session_ended":
+    case "usage_update":
     case "error": {
       sendToClient(userId, {
         type: "error",
