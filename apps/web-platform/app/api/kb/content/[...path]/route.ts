@@ -26,6 +26,8 @@ const CONTENT_TYPE_MAP: Record<string, string> = {
 
 const ATTACHMENT_EXTENSIONS = new Set([".docx"]);
 
+const MAX_BINARY_SIZE = 50 * 1024 * 1024; // 50 MB
+
 export async function GET(
   _request: Request,
   { params }: { params: Promise<{ path: string[] }> },
@@ -96,13 +98,22 @@ export async function GET(
   }
 
   // Symlink check — reject symlinks to prevent escaping kbRoot
+  let lstat: fs.Stats;
   try {
-    const lstat = await fs.promises.lstat(fullPath);
+    lstat = await fs.promises.lstat(fullPath);
     if (lstat.isSymbolicLink()) {
       return NextResponse.json({ error: "Access denied" }, { status: 403 });
     }
   } catch {
     return NextResponse.json({ error: "File not found" }, { status: 404 });
+  }
+
+  // Size guard — prevent reading arbitrarily large files into memory
+  if (lstat.size > MAX_BINARY_SIZE) {
+    return NextResponse.json(
+      { error: "File exceeds maximum size limit" },
+      { status: 413 },
+    );
   }
 
   // Read and serve file
