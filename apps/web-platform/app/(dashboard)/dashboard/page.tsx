@@ -286,103 +286,82 @@ export default function DashboardPage() {
   }
 
   // ---------------------------------------------------------------------------
-  // Foundations state (vision exists, not all foundations complete)
-  // ---------------------------------------------------------------------------
-
-  if (!kbError && visionExists && !allFoundationsComplete) {
-    return (
-      <div className="mx-auto flex min-h-[calc(100dvh-4rem)] max-w-3xl flex-col items-center justify-center px-4 py-10">
-        <p className="mb-3 text-xs font-medium tracking-widest text-amber-500">
-          FOUNDATIONS
-        </p>
-        <h1 className="mb-3 text-center text-3xl font-semibold text-white md:text-4xl">
-          Build the foundations.
-        </h1>
-        <p className="mb-8 text-center text-sm text-neutral-400">
-          Each card briefs a department leader. Complete them in any order.
-        </p>
-
-        {/* Foundation cards */}
-        <div className="mb-10 grid w-full grid-cols-2 gap-3 md:grid-cols-4">
-          {foundationCards.map((card) =>
-            card.done ? (
-              <a
-                key={card.id}
-                href={`/dashboard/kb/${card.kbPath}`}
-                className="flex flex-col gap-2 rounded-xl border border-neutral-800/50 bg-neutral-900/30 p-4 text-left transition-colors hover:border-neutral-700"
-              >
-                <span className="text-lg text-green-500" aria-label="Complete">
-                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M20 6 9 17l-5-5" />
-                  </svg>
-                </span>
-                <span className="text-sm font-medium text-neutral-400">
-                  {card.title}
-                </span>
-                <span className="text-xs text-neutral-600">
-                  View in Knowledge Base
-                </span>
-              </a>
-            ) : (
-              <button
-                key={card.id}
-                type="button"
-                onClick={() => handlePromptClick(card.promptText)}
-                className="flex flex-col gap-2 rounded-xl border border-neutral-800 bg-neutral-900/50 p-4 text-left transition-colors hover:border-neutral-600"
-              >
-                <span
-                  className="flex h-5 w-5 items-center justify-center overflow-hidden rounded"
-                  aria-label={`Soleur ${card.leaderId.toUpperCase()}`}
-                >
-                  <img
-                    src="/icons/soleur-logo-mark.png"
-                    alt=""
-                    width={20}
-                    height={20}
-                    className="h-full w-full object-cover"
-                  />
-                </span>
-                <span className="text-sm font-medium text-white">
-                  {card.title}
-                </span>
-                <span className="text-xs text-neutral-500">
-                  {card.promptText}
-                </span>
-              </button>
-            ),
-          )}
-        </div>
-
-        {/* New conversation button */}
-        <button
-          type="button"
-          onClick={() => router.push("/dashboard/chat/new")}
-          className="mb-10 rounded-lg bg-gradient-to-r from-[#D4B36A] to-[#B8923E] px-6 py-3 text-sm font-semibold text-white transition-opacity hover:opacity-90"
-        >
-          New conversation
-        </button>
-
-        <LeaderStrip onLeaderClick={handleLeaderClick} />
-      </div>
-    );
-  }
-
-  // ---------------------------------------------------------------------------
-  // Command Center — empty state (all foundations complete, no conversations)
-  // Show immediately once KB state is known — don't block on conversation
-  // loading. If conversations load later and are non-empty, React re-renders
-  // into the inbox view below. This prevents the Supabase client initialisation
-  // (navigator locks, Realtime WebSocket) from keeping users on a skeleton.
+  // Command Center — empty state (no conversations, no active filters)
+  // Shows foundation cards at top when incomplete, then empty conversation
+  // placeholder or suggested prompts depending on foundation status.
   // ---------------------------------------------------------------------------
 
   if (conversations.length === 0 && !hasActiveFilter) {
     return (
-      <div className="mx-auto flex min-h-[calc(100dvh-4rem)] max-w-3xl flex-col items-center justify-center px-4 py-10">
+      <div className={`mx-auto flex min-h-[calc(100dvh-4rem)] max-w-3xl flex-col px-4 py-10 ${visionExists && !allFoundationsComplete ? "items-center pt-10" : "items-center justify-center"}`}>
+        {/* Foundation cards (only when incomplete) */}
+        {visionExists && !allFoundationsComplete && (
+          <div className="mb-10 w-full">
+            <p className="mb-2 text-xs font-medium tracking-widest text-amber-500">
+              FOUNDATIONS
+            </p>
+            <p className="mb-4 text-sm text-neutral-400">
+              Complete these to brief your department leaders.
+            </p>
+            <div className="grid w-full grid-cols-2 gap-3 md:grid-cols-4">
+              {foundationCards.map((card) =>
+                card.done ? (
+                  <a
+                    key={card.id}
+                    href={`/dashboard/kb/${card.kbPath}`}
+                    className="flex flex-col gap-2 rounded-xl border border-neutral-800/50 bg-neutral-900/30 p-4 text-left transition-colors hover:border-neutral-700"
+                  >
+                    <span className="text-lg text-green-500" aria-label="Complete">
+                      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M20 6 9 17l-5-5" />
+                      </svg>
+                    </span>
+                    <span className="text-sm font-medium text-neutral-400">
+                      {card.title}
+                    </span>
+                    <span className="text-xs text-neutral-600">
+                      View in Knowledge Base
+                    </span>
+                  </a>
+                ) : (
+                  <button
+                    key={card.id}
+                    type="button"
+                    onClick={() => handlePromptClick(card.promptText)}
+                    className="flex flex-col gap-2 rounded-xl border border-neutral-800 bg-neutral-900/50 p-4 text-left transition-colors hover:border-neutral-600"
+                  >
+                    <span
+                      className="flex h-5 w-5 items-center justify-center overflow-hidden rounded"
+                      aria-label={`Soleur ${card.leaderId.toUpperCase()}`}
+                    >
+                      <img
+                        src="/icons/soleur-logo-mark.png"
+                        alt=""
+                        width={20}
+                        height={20}
+                        className="h-full w-full object-cover"
+                      />
+                    </span>
+                    <span className="text-sm font-medium text-white">
+                      {card.title}
+                    </span>
+                    <span className="text-xs text-neutral-500">
+                      {card.promptText}
+                    </span>
+                  </button>
+                ),
+              )}
+            </div>
+          </div>
+        )}
+
         <p className="mb-3 text-xs font-medium tracking-widest text-amber-500">
           COMMAND CENTER
         </p>
         <h1 className="mb-3 text-center text-3xl font-semibold text-white md:text-4xl">
-          Your organization is ready.
+          {allFoundationsComplete
+            ? "Your organization is ready."
+            : "No conversations yet."}
         </h1>
         <p className="mb-8 text-center text-sm text-neutral-400">
           Start a conversation to put your agents to work.
@@ -396,29 +375,31 @@ export default function DashboardPage() {
           New conversation
         </button>
 
-        {/* Suggested prompts */}
-        <div className="mb-10 grid w-full grid-cols-2 gap-3 md:grid-cols-4">
-          {SUGGESTED_PROMPTS.map((prompt) => (
-            <button
-              key={prompt.title}
-              type="button"
-              onClick={() => handlePromptClick(prompt.title)}
-              className="flex flex-col gap-2 rounded-xl border border-neutral-800 bg-neutral-900/50 p-4 text-left transition-colors hover:border-neutral-600"
-            >
-              <span className="text-lg">{prompt.icon}</span>
-              <span className="text-sm font-medium text-white">
-                {prompt.title}
-              </span>
-              <div className="flex gap-1">
-                {prompt.leaders.map((id) => (
-                  <span key={id} className="text-xs text-neutral-500">
-                    {ROUTABLE_DOMAIN_LEADERS.find((l) => l.id === id)?.name}
-                  </span>
-                ))}
-              </div>
-            </button>
-          ))}
-        </div>
+        {/* Suggested prompts (only when all foundations complete) */}
+        {allFoundationsComplete && (
+          <div className="mb-10 grid w-full grid-cols-2 gap-3 md:grid-cols-4">
+            {SUGGESTED_PROMPTS.map((prompt) => (
+              <button
+                key={prompt.title}
+                type="button"
+                onClick={() => handlePromptClick(prompt.title)}
+                className="flex flex-col gap-2 rounded-xl border border-neutral-800 bg-neutral-900/50 p-4 text-left transition-colors hover:border-neutral-600"
+              >
+                <span className="text-lg">{prompt.icon}</span>
+                <span className="text-sm font-medium text-white">
+                  {prompt.title}
+                </span>
+                <div className="flex gap-1">
+                  {prompt.leaders.map((id) => (
+                    <span key={id} className="text-xs text-neutral-500">
+                      {ROUTABLE_DOMAIN_LEADERS.find((l) => l.id === id)?.name}
+                    </span>
+                  ))}
+                </div>
+              </button>
+            ))}
+          </div>
+        )}
 
         <LeaderStrip onLeaderClick={handleLeaderClick} />
       </div>
@@ -440,6 +421,67 @@ export default function DashboardPage() {
           <UserIcon className="h-4 w-4" />
         </div>
       </div>
+
+      {/* Foundation cards (only when incomplete) */}
+      {visionExists && !allFoundationsComplete && (
+        <div className="mb-6">
+          <p className="mb-2 text-xs font-medium tracking-widest text-amber-500">
+            FOUNDATIONS
+          </p>
+          <p className="mb-4 text-sm text-neutral-400">
+            Complete these to brief your department leaders.
+          </p>
+          <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+            {foundationCards.map((card) =>
+              card.done ? (
+                <a
+                  key={card.id}
+                  href={`/dashboard/kb/${card.kbPath}`}
+                  className="flex flex-col gap-2 rounded-xl border border-neutral-800/50 bg-neutral-900/30 p-4 text-left transition-colors hover:border-neutral-700"
+                >
+                  <span className="text-lg text-green-500" aria-label="Complete">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M20 6 9 17l-5-5" />
+                    </svg>
+                  </span>
+                  <span className="text-sm font-medium text-neutral-400">
+                    {card.title}
+                  </span>
+                  <span className="text-xs text-neutral-600">
+                    View in Knowledge Base
+                  </span>
+                </a>
+              ) : (
+                <button
+                  key={card.id}
+                  type="button"
+                  onClick={() => handlePromptClick(card.promptText)}
+                  className="flex flex-col gap-2 rounded-xl border border-neutral-800 bg-neutral-900/50 p-4 text-left transition-colors hover:border-neutral-600"
+                >
+                  <span
+                    className="flex h-5 w-5 items-center justify-center overflow-hidden rounded"
+                    aria-label={`Soleur ${card.leaderId.toUpperCase()}`}
+                  >
+                    <img
+                      src="/icons/soleur-logo-mark.png"
+                      alt=""
+                      width={20}
+                      height={20}
+                      className="h-full w-full object-cover"
+                    />
+                  </span>
+                  <span className="text-sm font-medium text-white">
+                    {card.title}
+                  </span>
+                  <span className="text-xs text-neutral-500">
+                    {card.promptText}
+                  </span>
+                </button>
+              ),
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Filter bar */}
       <div className="mb-4 flex flex-wrap items-center gap-2">

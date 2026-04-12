@@ -145,10 +145,12 @@ describe("Start Fresh Onboarding - KB State Derivation", () => {
     render(<DashboardPage />);
 
     await waitFor(() => {
-      expect(screen.getByText(/build the foundations/i)).toBeInTheDocument();
+      expect(screen.getByText(/complete these to brief your department leaders/i)).toBeInTheDocument();
     });
     // Vision card should be marked complete
     expect(screen.getByText("Vision")).toBeInTheDocument();
+    // Empty conversation placeholder should also appear
+    expect(screen.getByText(/no conversations yet/i)).toBeInTheDocument();
   });
 
   it("shows Command Center when all 4 foundation files exist", async () => {
@@ -197,7 +199,7 @@ describe("Start Fresh Onboarding - KB State Derivation", () => {
     render(<DashboardPage />);
 
     await waitFor(() => {
-      expect(screen.getByText(/build the foundations/i)).toBeInTheDocument();
+      expect(screen.getByText(/complete these to brief your department leaders/i)).toBeInTheDocument();
     });
 
     // Vision and Brand should be complete (checkmark accessible text)
@@ -236,10 +238,10 @@ describe("Start Fresh Onboarding - KB State Derivation", () => {
     );
     render(<DashboardPage />);
 
-    // Should fall through to Command Center (existing empty state)
+    // Should fall through to empty state (no foundations visible since KB state unknown)
     await waitFor(() => {
       expect(
-        screen.getByText(/your organization is ready/i),
+        screen.getByText(/no conversations yet/i),
       ).toBeInTheDocument();
     });
   });
@@ -330,7 +332,7 @@ describe("Start Fresh Onboarding - Conditional Rendering", () => {
     render(<DashboardPage />);
 
     await waitFor(() => {
-      expect(screen.getByText(/build the foundations/i)).toBeInTheDocument();
+      expect(screen.getByText(/complete these to brief your department leaders/i)).toBeInTheDocument();
     });
 
     // Done cards should be links to KB viewer
