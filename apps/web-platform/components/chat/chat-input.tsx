@@ -14,6 +14,41 @@ const ALLOWED_TYPES = new Set([
 const MAX_FILE_SIZE = 20 * 1024 * 1024; // 20 MB
 const MAX_FILES = 5;
 
+function uploadWithProgress(
+  url: string,
+  file: File,
+  contentType: string,
+  onProgress: (percent: number) => void,
+): { promise: Promise<void>; xhr: XMLHttpRequest } {
+  const xhr = new XMLHttpRequest();
+
+  const promise = new Promise<void>((resolve, reject) => {
+    xhr.open("PUT", url);
+    xhr.setRequestHeader("Content-Type", contentType);
+
+    xhr.upload.onprogress = (event) => {
+      if (event.lengthComputable) {
+        const percent = Math.round((event.loaded / event.total) * 100);
+        onProgress(percent);
+      }
+    };
+
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        resolve();
+      } else {
+        reject(new Error("Upload to storage failed"));
+      }
+    };
+
+    xhr.onerror = () => reject(new Error("Upload to storage failed"));
+    xhr.onabort = () => reject(new Error("Upload cancelled"));
+    xhr.send(file);
+  });
+
+  return { promise, xhr };
+}
+
 interface PendingAttachment {
   id: string;
   file: File;
@@ -51,6 +86,7 @@ export function ChatInput({
   const [isDragOver, setIsDragOver] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const activeXhrs = useRef<Map<string, XMLHttpRequest>>(new Map());
 
   // Clear error after 3 seconds
   useEffect(() => {
@@ -122,6 +158,9 @@ export function ChatInput({
   );
 
   const removeAttachment = useCallback((id: string) => {
+    const xhr = activeXhrs.current.get(id);
+    if (xhr) xhr.abort();
+    activeXhrs.current.delete(id);
     setAttachments((prev) => {
       const item = prev.find((a) => a.id === id);
       if (item?.preview) URL.revokeObjectURL(item.preview);
@@ -159,20 +198,20 @@ export function ChatInput({
 
         const { uploadUrl, storagePath } = await presignRes.json();
 
-        // Step 2: Upload to Storage
-        setAttachments((prev) =>
-          prev.map((a) => (a.id === att.id ? { ...a, progress: 50 } : a)),
+        // Step 2: Upload to Storage with progress tracking
+        const { promise, xhr } = uploadWithProgress(
+          uploadUrl,
+          att.file,
+          att.file.type,
+          (percent) => {
+            setAttachments((prev) =>
+              prev.map((a) => (a.id === att.id ? { ...a, progress: percent } : a)),
+            );
+          },
         );
-
-        const uploadRes = await fetch(uploadUrl, {
-          method: "PUT",
-          headers: { "Content-Type": att.file.type },
-          body: att.file,
-        });
-
-        if (!uploadRes.ok) {
-          throw new Error("Upload to storage failed");
-        }
+        activeXhrs.current.set(att.id, xhr);
+        await promise;
+        activeXhrs.current.delete(att.id);
 
         const ref: AttachmentRef = {
           storagePath,
@@ -217,7 +256,7 @@ export function ChatInput({
         }
       } finally {
         setIsUploading(false);
-        setAttachments([]);
+        setAttachments((prev) => prev.filter((a) => a.error));
       }
     } else {
       onSend(trimmed);
@@ -355,12 +394,22 @@ export function ChatInput({
                 {att.error ? (
                   <span className="text-xs text-red-400">{att.error}</span>
                 ) : att.progress > 0 && att.progress < 100 ? (
-                  <div className="mt-0.5 h-1 w-16 overflow-hidden rounded-full bg-neutral-700">
-                    <div
-                      className="h-full bg-amber-500 transition-all"
-                      style={{ width: `${att.progress}%` }}
-                    />
+                  <div className="mt-0.5 flex items-center gap-1.5">
+                    <div className="h-1 w-16 overflow-hidden rounded-full bg-neutral-700">
+                      <div
+                        className="h-full bg-amber-500"
+                        style={{
+                          width: `${att.progress}%`,
+                          transition: "width 150ms ease",
+                        }}
+                      />
+                    </div>
+                    <span className="text-[10px] tabular-nums text-neutral-400">
+                      {att.progress}%
+                    </span>
                   </div>
+                ) : att.progress === 100 ? (
+                  <span className="text-xs text-green-400">Uploaded</span>
                 ) : null}
               </div>
               <button

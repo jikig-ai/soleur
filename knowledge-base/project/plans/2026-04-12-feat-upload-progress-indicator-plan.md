@@ -16,16 +16,16 @@ For small files the jump is imperceptible. For larger files (PDFs up to 20 MB), 
 
 ## Proposed Solution
 
-Replace the `fetch()` PUT call with `XMLHttpRequest` to get granular `upload.onprogress` events during the actual file transfer. Keep the presign phase as `fetch()` (it transfers no file bytes). Map progress through two phases:
+Replace the `fetch()` PUT call with `XMLHttpRequest` to get granular `upload.onprogress` events during the actual file transfer. Keep the presign phase as `fetch()` (it transfers no file bytes). Progress phases:
 
-1. **Presign phase (0-10%):** Quick API call to get the signed URL
-2. **Upload phase (10-100%):** Real byte-level progress from XHR `upload.onprogress`
+1. **Presign phase:** Brief indeterminate pulse on the file chip while the signed URL is fetched
+2. **Upload phase (0-100%):** Real byte-level progress from XHR `upload.onprogress`
 
 Additionally, improve the visual indicator:
 
-- Show an indeterminate state (pulsing/spinner) on the file chip immediately when added, before upload begins
 - Add a percentage text label alongside the progress bar for explicit feedback
-- Show a checkmark or completion state when upload finishes
+- Show a checkmark or completion state when upload finishes (note: this is transient -- attachments clear from state after send completes)
+- Support abort: if the user removes an attachment during upload, call `xhr.abort()` to cancel the in-flight request
 
 ## Technical Considerations
 
@@ -55,14 +55,15 @@ None -- XHR and fetch perform identically for PUT uploads. The progress events f
 
 ## Acceptance Criteria
 
-- [ ] When a file is added to the chat input, the file chip immediately shows a visual indicator that upload is pending (before send is pressed)
-- [ ] When the user presses send, the progress bar on each file chip fills from 0-100% with granular increments during the actual upload (not just 0/50/100 jumps)
-- [ ] A percentage label (e.g., "42%") is visible on or near each file chip during upload
-- [ ] When upload completes, the progress bar transitions to a completion state (checkmark or green bar)
-- [ ] When upload fails, the file chip shows the error state with red text (existing behavior preserved)
-- [ ] The send button shows the existing spinner during upload (existing behavior preserved)
-- [ ] Upload progress works correctly for multiple simultaneous file uploads (sequential upload per the existing pattern)
-- [ ] No regressions in existing attachment tests (presign mock patterns may need updating for XHR)
+- [x] When the user presses send, the progress bar on each file chip fills from 0-100% with granular increments during the actual upload (not just 0/50/100 jumps)
+- [ ] During the presign phase (before XHR starts), the file chip shows a brief indeterminate/pulse state
+- [x] A percentage label (e.g., "42%") is visible on or near each file chip during upload
+- [x] When upload completes, the progress bar transitions to a completion state (checkmark or green text)
+- [x] When upload fails, the file chip shows the error state with red text (existing behavior preserved)
+- [x] The send button shows the existing spinner during upload (existing behavior preserved)
+- [x] Upload progress works correctly for multiple file uploads (sequential upload per the existing pattern)
+- [x] Removing an attachment during upload aborts the in-flight XHR request
+- [x] No regressions in existing attachment tests (presign mock patterns may need updating for XHR)
 
 ## Domain Review
 
@@ -82,19 +83,19 @@ Modification to existing chat input component. Progress indicator is a standard 
 
 ## Test Scenarios
 
-- Given a user attaches a PNG file, when the file appears in the preview strip (before send), then the chip shows an "added" state with the filename (no progress bar yet -- file is not uploading)
-- Given a user presses send with an attached file, when the presign API responds, then progress shows approximately 10%
-- Given the PUT upload is in progress, when bytes are transferred, then the progress bar and percentage label update incrementally (not a single jump)
-- Given the PUT upload completes, when progress reaches 100%, then the file chip shows a completion indicator
+- Given a user attaches a PNG file, when the file appears in the preview strip (before send), then the chip shows the filename with no progress bar (file is staged, not uploading)
+- Given a user presses send with an attached file, when the XHR upload is in progress, then the progress bar and percentage label update incrementally (not a single jump from 0 to 100)
+- Given the PUT upload completes, when progress reaches 100%, then the file chip shows a completion indicator ("Uploaded" text)
 - Given the PUT upload fails (network error), when the error is caught, then the file chip shows red error text with the error message
 - Given multiple files are attached, when send is pressed, then each file shows individual progress as it uploads sequentially
-- Given a very small file (< 1 KB), when uploaded, then progress still transitions smoothly (0 -> 10 -> 100) without visual jank
+- Given a user removes an attachment while it is uploading, when the remove button is clicked, then the in-flight XHR is aborted and the chip is removed
+- Given a very small file (< 1 KB), when uploaded, then progress transitions smoothly (0 -> 100) without visual jank
 
 ## MVP
 
 ### `apps/web-platform/components/chat/chat-input.tsx`
 
-Replace the `fetch()` PUT in `uploadAttachments` with an XHR wrapper:
+Replace the `fetch()` PUT in `uploadAttachments` with an XHR wrapper that returns both the promise and the XHR instance (for abort support):
 
 ```typescript
 // Helper: upload with progress tracking via XHR
@@ -103,9 +104,10 @@ function uploadWithProgress(
   file: File,
   contentType: string,
   onProgress: (percent: number) => void,
-): Promise<void> {
-  return new Promise((resolve, reject) => {
-    const xhr = new XMLHttpRequest();
+): { promise: Promise<void>; xhr: XMLHttpRequest } {
+  const xhr = new XMLHttpRequest();
+
+  const promise = new Promise<void>((resolve, reject) => {
     xhr.open("PUT", url);
     xhr.setRequestHeader("Content-Type", contentType);
 
@@ -125,34 +127,51 @@ function uploadWithProgress(
     };
 
     xhr.onerror = () => reject(new Error("Upload to storage failed"));
+    xhr.onabort = () => reject(new Error("Upload cancelled"));
     xhr.send(file);
   });
+
+  return { promise, xhr };
 }
 ```
 
-Update `uploadAttachments` to use the helper and map progress:
+Store the active XHR reference so `removeAttachment` can abort it. Use a `useRef<Map<string, XMLHttpRequest>>` to track in-flight XHRs by attachment ID.
+
+Update `uploadAttachments` to use the helper with direct 0-100% progress:
 
 ```typescript
-// After presign succeeds, set progress to 10%
-setAttachments((prev) =>
-  prev.map((a) => (a.id === att.id ? { ...a, progress: 10 } : a)),
-);
-
-// Upload with real progress (10-100%)
-await uploadWithProgress(
+// Upload with real progress (0-100%)
+const { promise, xhr } = uploadWithProgress(
   uploadUrl,
   att.file,
   att.file.type,
-  (uploadPercent) => {
-    const mapped = 10 + Math.round(uploadPercent * 0.9);
+  (percent) => {
     setAttachments((prev) =>
-      prev.map((a) => (a.id === att.id ? { ...a, progress: mapped } : a)),
+      prev.map((a) => (a.id === att.id ? { ...a, progress: percent } : a)),
     );
   },
 );
+activeXhrs.current.set(att.id, xhr);
+await promise;
+activeXhrs.current.delete(att.id);
 ```
 
-Update the progress UI in the attachment preview strip to show percentage:
+Update `removeAttachment` to abort in-flight uploads:
+
+```typescript
+const removeAttachment = useCallback((id: string) => {
+  const xhr = activeXhrs.current.get(id);
+  if (xhr) xhr.abort();
+  activeXhrs.current.delete(id);
+  setAttachments((prev) => {
+    const item = prev.find((a) => a.id === id);
+    if (item?.preview) URL.revokeObjectURL(item.preview);
+    return prev.filter((a) => a.id !== id);
+  });
+}, []);
+```
+
+Update the progress UI in the attachment preview strip to show percentage. Use `transition: width 150ms ease` instead of `transition-all` to avoid jank with rapid progress events:
 
 ```tsx
 {att.error ? (
@@ -161,8 +180,11 @@ Update the progress UI in the attachment preview strip to show percentage:
   <div className="flex items-center gap-1.5">
     <div className="h-1 w-16 overflow-hidden rounded-full bg-neutral-700">
       <div
-        className="h-full bg-amber-500 transition-all"
-        style={{ width: `${att.progress}%` }}
+        className="h-full bg-amber-500"
+        style={{
+          width: `${att.progress}%`,
+          transition: "width 150ms ease",
+        }}
       />
     </div>
     <span className="text-[10px] tabular-nums text-neutral-400">
@@ -176,7 +198,28 @@ Update the progress UI in the attachment preview strip to show percentage:
 
 ### `apps/web-platform/test/chat-input-attachments.test.tsx`
 
-Update the "calls onSend with attachments after successful upload" test to mock XHR instead of the second `fetch()` call. The presign `fetch()` stays mocked as-is. The XHR mock needs to simulate `upload.onprogress` events.
+Update the "calls onSend with attachments after successful upload" test to mock XHR instead of the second `fetch()` call. The presign `fetch()` stays mocked as-is. Use this XHR mock pattern:
+
+```typescript
+const mockXhr = {
+  open: vi.fn(),
+  setRequestHeader: vi.fn(),
+  send: vi.fn(),
+  abort: vi.fn(),
+  upload: { onprogress: null as ((e: ProgressEvent) => void) | null },
+  onload: null as (() => void) | null,
+  onerror: null as (() => void) | null,
+  onabort: null as (() => void) | null,
+  status: 200,
+};
+vi.stubGlobal("XMLHttpRequest", vi.fn(() => mockXhr));
+
+// In test: trigger upload completion after send
+// mockXhr.send is called -> trigger onload in next tick
+mockXhr.send.mockImplementation(() => {
+  setTimeout(() => mockXhr.onload?.(), 0);
+});
+```
 
 ## References
 
