@@ -213,20 +213,20 @@ The 3-4 files to migrate are:
 
 ## Acceptance Criteria
 
-- [ ] `lib/kb-constants.ts` exists with `KB_MAX_FILE_SIZE`, `ATTACHMENT_ALLOWED_TYPES`,
-      `ATTACHMENT_MAX_FILE_SIZE`, and `ATTACHMENT_MAX_FILES` exports
-- [ ] `server/kb-reader.ts` imports `KB_MAX_FILE_SIZE` from `@/lib/kb-constants`
-- [ ] `server/context-validation.ts` imports `KB_MAX_FILE_SIZE` from `@/lib/kb-constants`
-- [ ] `app/api/attachments/presign/route.ts` imports attachment constants from `@/lib/kb-constants`
-- [ ] `components/chat/chat-input.tsx` imports attachment constants from `@/lib/kb-constants`
-- [ ] No duplicate constant definitions remain in any of the four consumer files
-- [ ] `test/helpers/mock-supabase.ts` exists with `mockQueryChain` helper
-- [ ] `mockQueryChain` implements `.then()` for PromiseLike compatibility (thenable)
-- [ ] `mockQueryChain` supports `.single()` as a terminal that returns a separate thenable
-- [ ] 3-4 test files migrated to use the shared helper
-- [ ] All existing tests pass without changes to assertions
-- [ ] `lib/kb-constants.ts` does NOT include `"use client"` directive
-- [ ] `getExtension()` map stays in `presign/route.ts` (not extracted -- no duplication)
+- [x] `lib/kb-constants.ts` exists with `KB_MAX_FILE_SIZE` export
+      (attachment constants already extracted to `lib/attachment-constants.ts` on main)
+- [x] `server/kb-reader.ts` imports `KB_MAX_FILE_SIZE` from `@/lib/kb-constants`
+- [x] `server/context-validation.ts` imports `KB_MAX_FILE_SIZE` from `@/lib/kb-constants`
+- [x] `app/api/attachments/presign/route.ts` imports attachment constants from `@/lib/attachment-constants` (already done on main)
+- [x] `components/chat/chat-input.tsx` imports attachment constants from `@/lib/attachment-constants` (already done on main)
+- [x] No duplicate constant definitions remain in any of the four consumer files
+- [x] `test/helpers/mock-supabase.ts` exists with `mockQueryChain` helper
+- [x] `mockQueryChain` implements `.then()` for PromiseLike compatibility (thenable)
+- [x] `mockQueryChain` supports `.single()` as a terminal that returns a separate thenable
+- [x] 3 test files migrated to use the shared helper (vision-route, presign-route, disconnect-route)
+- [x] All existing tests pass without changes to assertions (1085 passed, 0 failed)
+- [x] `lib/kb-constants.ts` does NOT include `"use client"` directive
+- [x] `getExtension()` map stays in `presign/route.ts` (not extracted -- no duplication)
 
 ## Test Scenarios
 
