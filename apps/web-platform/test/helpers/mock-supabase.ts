@@ -1,4 +1,23 @@
+import type { Mock } from "vitest";
 import { vi } from "vitest";
+
+/** Return type of mockQueryChain — provides type safety at call sites. */
+export interface MockQueryChain {
+  select: Mock;
+  eq: Mock;
+  neq: Mock;
+  in: Mock;
+  is: Mock;
+  order: Mock;
+  limit: Mock;
+  range: Mock;
+  insert: Mock;
+  update: Mock;
+  upsert: Mock;
+  delete: Mock;
+  single: Mock;
+  then: (onfulfilled?: (v: unknown) => unknown) => Promise<unknown>;
+}
 
 /**
  * Create a thenable query chain mock matching Supabase JS v2 query builder.
@@ -29,12 +48,12 @@ import { vi } from "vitest";
 export function mockQueryChain<T>(
   data: T,
   error: { message: string } | null = null,
-) {
+): MockQueryChain {
   const result = { data, error };
 
-  const chain: Record<string, unknown> = {};
+  const chain = {} as MockQueryChain;
 
-  const chainingMethods = [
+  const chainingMethods: (keyof MockQueryChain)[] = [
     "select",
     "eq",
     "neq",
@@ -50,7 +69,7 @@ export function mockQueryChain<T>(
   ];
 
   for (const method of chainingMethods) {
-    chain[method] = vi.fn(() => chain);
+    (chain[method] as Mock) = vi.fn(() => chain);
   }
 
   // PromiseLike: allows `await chain.select().eq()`
