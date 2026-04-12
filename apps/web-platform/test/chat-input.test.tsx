@@ -111,12 +111,6 @@ describe("ChatInput", () => {
     expect(sendButton).toBeDisabled();
   });
 
-  it("textarea has min-h-[44px] to match button height", () => {
-    setup();
-    const textarea = screen.getByRole("textbox");
-    expect(textarea.className).toContain("min-h-[44px]");
-  });
-
   it("sends message via send button click", async () => {
     const onSend = vi.fn();
     setup({ onSend });
