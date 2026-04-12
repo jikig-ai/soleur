@@ -1,6 +1,7 @@
 import { query, tool, createSdkMcpServer } from "@anthropic-ai/claude-agent-sdk";
 import { randomUUID } from "crypto";
 import { readFileSync, writeFileSync, mkdirSync } from "fs";
+import { writeFile, mkdir } from "fs/promises";
 import path from "path";
 import { z } from "zod/v4";
 
@@ -1282,29 +1283,36 @@ export async function sendUserMessage(
 
     if (user?.workspace_path) {
       const attachDir = path.join(user.workspace_path, "attachments", conversationId);
-      mkdirSync(attachDir, { recursive: true });
+      await mkdir(attachDir, { recursive: true });
 
-      const filePaths: string[] = [];
-      for (const att of attachments) {
-        const { data: fileData, error: dlErr } = await supabase()
-          .storage
-          .from("chat-attachments")
-          .download(att.storagePath);
+      const extMap: Record<string, string> = {
+        "image/png": "png", "image/jpeg": "jpeg", "image/gif": "gif",
+        "image/webp": "webp", "application/pdf": "pdf",
+      };
 
-        if (dlErr || !fileData) {
-          log.error({ err: dlErr, storagePath: att.storagePath }, "Failed to download attachment");
-          continue;
-        }
+      const results = await Promise.allSettled(
+        attachments.map(async (att) => {
+          const { data: fileData, error: dlErr } = await supabase()
+            .storage
+            .from("chat-attachments")
+            .download(att.storagePath);
 
-        const extMap: Record<string, string> = {
-          "image/png": "png", "image/jpeg": "jpeg", "image/gif": "gif",
-          "image/webp": "webp", "application/pdf": "pdf",
-        };
-        const ext = extMap[att.contentType] || "bin";
-        const localPath = path.join(attachDir, `${randomUUID()}.${ext}`);
-        writeFileSync(localPath, Buffer.from(await fileData.arrayBuffer()));
-        filePaths.push(`- ${att.filename} (${att.contentType}, ${att.sizeBytes} bytes): ${localPath}`);
-      }
+          if (dlErr || !fileData) {
+            log.error({ err: dlErr, storagePath: att.storagePath }, "Failed to download attachment");
+            return null;
+          }
+
+          const ext = extMap[att.contentType] || "bin";
+          const localPath = path.join(attachDir, `${randomUUID()}.${ext}`);
+          await writeFile(localPath, Buffer.from(await fileData.arrayBuffer()));
+          return `- ${att.filename} (${att.contentType}, ${att.sizeBytes} bytes): ${localPath}`;
+        }),
+      );
+
+      const filePaths = results
+        .filter((r): r is PromiseFulfilledResult<string | null> => r.status === "fulfilled")
+        .map((r) => r.value)
+        .filter((v): v is string => v !== null);
 
       if (filePaths.length > 0) {
         attachmentContext = `The user attached the following files:\n${filePaths.join("\n")}`;
