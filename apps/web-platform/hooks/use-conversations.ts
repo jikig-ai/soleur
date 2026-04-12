@@ -208,7 +208,6 @@ export function useConversations(
       setError(updateError.message);
       return;
     }
-    // Optimistic: remove from current list immediately
     setConversations((prev) => prev.filter((c) => c.id !== id));
   }, []);
 
@@ -222,7 +221,6 @@ export function useConversations(
       setError(updateError.message);
       return;
     }
-    // Optimistic: remove from archived list immediately
     setConversations((prev) => prev.filter((c) => c.id !== id));
   }, []);
 
