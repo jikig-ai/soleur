@@ -40,7 +40,7 @@ export default function ChatPage() {
     usageData,
   } = useWebSocket(conversationId);
 
-  const { names: customNames, getDisplayName } = useTeamNames();
+  const { names: customNames, getDisplayName, loading: teamNamesLoading } = useTeamNames();
 
   const [sessionStarted, setSessionStarted] = useState(false);
   const [initialMsgSent, setInitialMsgSent] = useState(false);
@@ -335,6 +335,7 @@ export default function ChatPage() {
             query={atQuery}
             visible={atVisible}
             customNames={customNames}
+            loading={teamNamesLoading}
             onSelect={(id) => {
               setAtVisible(false);
               if (insertRef.current) {
