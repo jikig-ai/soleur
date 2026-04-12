@@ -133,6 +133,7 @@ export async function GET(
         "Content-Disposition": `${disposition}; filename="${safeName}"`,
         "Content-Length": buffer.length.toString(),
         "X-Content-Type-Options": "nosniff",
+        "Cache-Control": "private, max-age=60",
       },
     });
   } catch {
