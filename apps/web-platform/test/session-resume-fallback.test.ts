@@ -284,7 +284,7 @@ describe("session resume fallback", () => {
 
     // The conversations.update mock should NOT have been called with "failed" status
     // (it may have been called for other reasons like status updates, but not from the error path)
-    const updateCalls = mockConversationUpdate.mock.calls;
+    const updateCalls = mockConversationUpdate.mock.calls as unknown[][];
     for (const call of updateCalls) {
       const arg = call[0] as Record<string, unknown> | undefined;
       if (arg && "status" in arg) {
