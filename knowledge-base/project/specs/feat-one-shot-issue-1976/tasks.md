@@ -11,35 +11,50 @@
   - Wire `storage: { from: mockStorageFrom }` into the `createServiceClient` mock factory
   - Default `mockStorageList` to return `{ data: [], error: null }` so existing tests are unaffected
 
-- [ ] 1.2 Add `setupStorageMocks` helper or extend `setupSupabaseMocks`
-  - Accept optional overrides for folder-level and file-level list responses
-  - Configure `mockStorageList` to return different results based on the folder argument
-  - Configure `mockStorageRemove` to resolve successfully by default
+- [ ] 1.2 Extend `setupSupabaseMocks` helper with Storage defaults
+  - Add `mockStorageList.mockResolvedValue({ data: [], error: null })` as default
+  - Add `mockStorageRemove.mockResolvedValue({ data: [], error: null })` as default
+  - This ensures existing tests are unaffected by Storage mock addition
 
 - [ ] 1.3 Write failing test: happy path blob purge
-  - Mock `list(userId)` to return 2 folder objects `[{ name: "conv-1" }, { name: "conv-2" }]`
-  - Mock `list("userId/conv-1")` to return `[{ name: "img1.png" }, { name: "doc1.pdf" }]`
-  - Mock `list("userId/conv-2")` to return `[{ name: "img2.jpg" }]`
+  - Use `mockStorageList.mockImplementation()` with argument-conditional returns
+  - Mock `list("user-123")` to return 2 folder objects `[{ name: "conv-1" }, { name: "conv-2" }]`
+  - Mock `list("user-123/conv-1")` to return `[{ name: "img1.png" }, { name: "doc1.pdf" }]`
+  - Mock `list("user-123/conv-2")` to return `[{ name: "img2.jpg" }]`
   - Assert `remove()` called with `["user-123/conv-1/img1.png", "user-123/conv-1/doc1.pdf", "user-123/conv-2/img2.jpg"]`
+  - Assert `mockStorageFrom` called with `"chat-attachments"`
 
-- [ ] 1.4 Write failing test: Storage error is non-fatal
+- [ ] 1.4 Write failing test: `list()` error is non-fatal
   - Mock `mockStorageList` to throw `new Error("Storage unavailable")`
   - Assert `deleteAccount()` returns `{ success: true }`
   - Assert `auth.admin.deleteUser` is still called
 
-- [ ] 1.5 Write failing test: cascade order includes Storage purge
+- [ ] 1.5 Write failing test: `remove()` error is non-fatal
+  - Mock `mockStorageList` to succeed with folder/file data
+  - Mock `mockStorageRemove` to throw `new Error("Storage remove failed")`
+  - Assert `deleteAccount()` returns `{ success: true }`
+  - Assert `auth.admin.deleteUser` is still called
+
+- [ ] 1.6 Write failing test: cascade order includes Storage purge
   - Extend the existing "correct order" test to track `"storage-purge"` step
+  - Add `mockStorageList.mockImplementation()` with folder/file data to the tracking setup
   - Expected order: `["abort", "workspace", "storage-purge", "auth"]`
 
-- [ ] 1.6 Write failing test: pagination across multiple pages
-  - Mock `list(userId)` first call to return exactly `PAGE_SIZE` (1,000) folder stubs, second call to return 5 more
+- [ ] 1.7 Write failing test: pagination across multiple pages
+  - Mock `list("user-123")` first call to return exactly `PAGE_SIZE` (1,000) folder stubs, second call to return 5 more
   - Assert `list()` called with `offset: 0` then `offset: 1000` for the folder level
   - Assert all 1,005 folders are processed
+
+- [ ] 1.8 Write failing test: zero attachments
+  - Use default mock (empty `{ data: [] }`)
+  - Assert `remove()` is never called
+  - Assert `deleteAccount()` returns `{ success: true }`
 
 ## Phase 2: Implementation (GREEN)
 
 - [ ] 2.1 Extract `listAllStorageObjects()` helper in `apps/web-platform/server/account-delete.ts`
-  - Parameters: `storage`, `bucket: string`, `folder: string`
+  - Type parameter: `storage: SupabaseClient["storage"]` (import from `@supabase/supabase-js`)
+  - Other parameters: `bucket: string`, `folder: string`
   - Returns: `Promise<string[]>` (object names)
   - Uses offset-based pagination loop with `PAGE_SIZE = 1_000`
   - Loop: fetch page with `{ limit: PAGE_SIZE, offset }`, collect names, break when `data.length < PAGE_SIZE` or `!data`

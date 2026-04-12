@@ -2,9 +2,23 @@
 title: "fix: harden GDPR Storage purge — add test coverage + pagination"
 type: fix
 date: 2026-04-12
+deepened: 2026-04-12
 ---
 
 # fix: Harden GDPR Storage Purge in account-delete.ts
+
+## Enhancement Summary
+
+**Deepened on:** 2026-04-12
+**Sections enhanced:** 4 (Proposed Solution, Technical Considerations, Test Scenarios, Acceptance Criteria)
+**Research sources used:** Supabase JS Storage API docs (Context7), Vitest mock API docs (Context7), project learnings (4 applied)
+
+### Key Improvements
+
+1. Added argument-conditional mock pattern for `mockStorageList` (different returns based on folder path argument)
+2. Added `remove()` failure test scenario (separate from `list()` failure -- both must be non-fatal)
+3. Added boundary condition test for exactly PAGE_SIZE items (must trigger one more page fetch)
+4. Clarified type import for `listAllStorageObjects` helper parameter
 
 ## Overview
 
@@ -51,13 +65,48 @@ vi.mock("@/lib/supabase/server", () => ({
 }));
 ```
 
-**New tests (3):**
+### Research Insights: Mock Setup
 
-1. **Happy path:** Mock `list()` to return folder objects at the first level and file objects at the second level. Assert that `remove()` is called with the correctly assembled paths in the format `userId/folderName/fileName`.
+**Argument-conditional returns with `mockImplementation`:** The happy path test needs `mockStorageList` to return different data depending on the folder argument. Use `mockImplementation` with argument inspection rather than `mockReturnValue` (which returns the same value regardless of arguments):
 
-2. **Error path (non-fatal):** Mock `list()` to throw an error. Assert that `deleteAccount()` still returns `{ success: true }` (Storage failure is non-fatal -- the existing try/catch wraps the entire block).
+```typescript
+// Pattern: argument-conditional mock (from Vitest docs)
+mockStorageList.mockImplementation((folder: string, _opts?: unknown) => {
+  if (folder === "user-123") {
+    // Top-level: return conversation folders
+    return Promise.resolve({ data: [{ name: "conv-1" }, { name: "conv-2" }], error: null });
+  }
+  if (folder === "user-123/conv-1") {
+    return Promise.resolve({ data: [{ name: "img1.png" }, { name: "doc1.pdf" }], error: null });
+  }
+  if (folder === "user-123/conv-2") {
+    return Promise.resolve({ data: [{ name: "img2.jpg" }], error: null });
+  }
+  return Promise.resolve({ data: [], error: null });
+});
+```
 
-3. **Cascade order includes Storage before auth:** Extend the existing "correct order" test to verify Storage purge runs between workspace deletion and auth deletion. The expected order becomes: `["abort", "workspace", "storage-purge", "auth"]`.
+**Default mock in `beforeEach`:** Reset `mockStorageList` and `mockStorageRemove` in the existing `beforeEach(() => vi.clearAllMocks())` block. Since `vi.clearAllMocks()` already resets all mocks, the Storage mocks need a default implementation set in `setupSupabaseMocks` to avoid `undefined` returns:
+
+```typescript
+// Inside setupSupabaseMocks (or called from it)
+mockStorageList.mockResolvedValue({ data: [], error: null });
+mockStorageRemove.mockResolvedValue({ data: [], error: null });
+```
+
+This ensures existing tests (which don't care about Storage) get empty results and don't break.
+
+**New tests (5):**
+
+1. **Happy path:** Mock `list()` with argument-conditional returns for folder and file levels. Assert that `remove()` is called with the correctly assembled paths in the format `userId/folderName/fileName`.
+
+2. **`list()` error path (non-fatal):** Mock `mockStorageList` to throw an error. Assert that `deleteAccount()` still returns `{ success: true }` (Storage failure is non-fatal -- the existing try/catch wraps the entire block).
+
+3. **`remove()` error path (non-fatal):** Mock `mockStorageList` to succeed but `mockStorageRemove` to throw. Assert that `deleteAccount()` still returns `{ success: true }`. This is a distinct failure mode from `list()` failure -- both must be non-fatal.
+
+4. **Cascade order includes Storage before auth:** Extend the existing "correct order" test to verify Storage purge runs between workspace deletion and auth deletion. The expected order becomes: `["abort", "workspace", "storage-purge", "auth"]`.
+
+5. **Zero attachments:** Mock `list()` to return empty `{ data: [] }`. Assert `remove()` is never called.
 
 ### Part 2: Fix pagination with offset loop
 
@@ -65,11 +114,12 @@ Extract a helper function `listAllStorageObjects` that paginates through all obj
 
 ```typescript
 // apps/web-platform/server/account-delete.ts
+import type { SupabaseClient } from "@supabase/supabase-js";
 
 const PAGE_SIZE = 1_000;
 
 async function listAllStorageObjects(
-  storage: ReturnType<typeof createServiceClient>["storage"],
+  storage: SupabaseClient["storage"],
   bucket: string,
   folder: string,
 ): Promise<string[]> {
@@ -92,6 +142,16 @@ async function listAllStorageObjects(
   return names;
 }
 ```
+
+### Research Insights: Type Safety
+
+**Use `SupabaseClient["storage"]` not `ReturnType`:** Per the learning `supabase-returntype-resolves-to-never.md`, `ReturnType<typeof createServiceClient>` can resolve to `never` in certain TypeScript configurations. Import `SupabaseClient` from `@supabase/supabase-js` and use the indexed access type `SupabaseClient["storage"]` for the parameter type.
+
+### Research Insights: Pagination
+
+**Boundary condition -- exactly PAGE_SIZE items:** When `list()` returns exactly `PAGE_SIZE` items, the loop must fetch one more page to confirm there are no more. The `data.length < PAGE_SIZE` check handles this correctly -- if we get exactly 1,000 items, we fetch again. This is the standard offset-based pagination pattern confirmed by Supabase JS Storage docs (Context7). The worst case is one extra empty-page fetch when the total is an exact multiple of PAGE_SIZE.
+
+**Offset vs cursor pagination:** Supabase Storage uses offset-based pagination (not cursor-based). This means if objects are deleted during pagination, items could be skipped or duplicated. For GDPR deletion this is acceptable -- we are collecting objects to delete, and any skipped objects represent a best-effort gap (same as the existing non-pagination code). Cursor-based pagination is not available for Storage `list()`.
 
 Then replace the two fixed-limit `list()` calls with this helper:
 
@@ -122,7 +182,7 @@ Add a test that mocks `list()` to return exactly `PAGE_SIZE` items on the first 
 
 - **Thenable not needed:** The Storage `list()` and `remove()` methods return normal Promises, not Supabase query builder chains. The thenable learning (`supabase-query-builder-mock-thenable-20260407.md`) applies only to PostgREST query builders, not Storage API calls.
 
-- **`remove()` batch size:** The Supabase Storage `remove()` API does not document a maximum batch size for file paths (unlike the vector API which caps at 500). The current approach of collecting all paths and calling `remove()` once is acceptable. If future scale requires it, batching the `remove()` call into chunks of 1,000 is a straightforward follow-up.
+- **`remove()` batch size:** The Supabase Storage `remove()` API does not document a maximum batch size for file paths (unlike the vector API which caps at 500). The current approach of collecting all paths and calling `remove()` once is acceptable. If future scale requires it, batching the `remove()` call into chunks of 1,000 is a straightforward follow-up. Note: the `remove()` API also returns `{ data, error }` -- per the Supabase silent errors learning, the error should be checked even though the entire block is try/catch'd (for logging specificity).
 
 - **Non-fatal contract:** The entire Storage purge block is wrapped in `try/catch` (line 61-83). Both the existing code and the hardened version must preserve this: Storage failures log a warning but do not fail the account deletion. This is correct -- the auth record deletion (which triggers FK CASCADE for DB rows) is the critical path. Orphaned blobs are a data hygiene issue, not a data integrity issue.
 
@@ -131,13 +191,17 @@ Add a test that mocks `list()` to return exactly `PAGE_SIZE` items on the first 
 ## Acceptance Criteria
 
 - [ ] `account-delete.test.ts` includes a `mockStorage` that mocks `service.storage.from("chat-attachments")` with `.list()` and `.remove()`
+- [ ] Storage mock defaults to empty results in `setupSupabaseMocks` so existing tests are unaffected
 - [ ] Happy path test: blob paths collected from nested folder/file listing and passed to `remove()` in correct format (`userId/folder/file`)
-- [ ] Error path test: Storage `list()` throws, `deleteAccount()` still returns `{ success: true }`
+- [ ] `list()` error path test: Storage `list()` throws, `deleteAccount()` still returns `{ success: true }`
+- [ ] `remove()` error path test: Storage `remove()` throws after successful `list()`, `deleteAccount()` still returns `{ success: true }`
+- [ ] Zero attachments test: `list()` returns empty, `remove()` is never called
 - [ ] Cascade order test updated to include Storage purge step between workspace and auth
 - [ ] `list()` calls use offset-based pagination loop instead of fixed `{ limit: 1_000 }`
 - [ ] Pagination test: when first page returns exactly `PAGE_SIZE` items, a second page is fetched with `offset: PAGE_SIZE`
-- [ ] All existing tests in `account-delete.test.ts` continue to pass (Storage mock must default to empty results so existing tests are unaffected)
-- [ ] `vitest run` passes with zero failures
+- [ ] `listAllStorageObjects` helper uses `SupabaseClient["storage"]` type (not `ReturnType`)
+- [ ] All existing tests in `account-delete.test.ts` continue to pass
+- [ ] `cd apps/web-platform && npx vitest run` passes with zero failures
 
 ## Test Scenarios
 
@@ -152,6 +216,8 @@ Add a test that mocks `list()` to return exactly `PAGE_SIZE` items on the first 
 
 - Given a user with zero attachments (no conversations or empty storage prefix), when `deleteAccount` runs, then `remove()` is never called and the function succeeds
 - Given a Storage API where `list()` returns `{ data: null }`, when `deleteAccount` runs, then the pagination loop terminates gracefully without error
+- Given a Storage API where `list()` succeeds but `remove()` throws, when `deleteAccount` runs, then the function still returns `{ success: true }` and `auth.admin.deleteUser` is still called
+- Given a user with exactly PAGE_SIZE (1,000) conversation folders, when `deleteAccount` runs, then `list()` is called twice for the folder level (offsets 0 and 1,000) -- the second call returns empty, confirming no more folders
 
 ## Domain Review
 
