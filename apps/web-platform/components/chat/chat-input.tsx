@@ -2,17 +2,11 @@
 
 import { useState, useRef, useCallback, useEffect } from "react";
 import type { AttachmentRef } from "@/lib/types";
-
-const ALLOWED_TYPES = new Set([
-  "image/png",
-  "image/jpeg",
-  "image/gif",
-  "image/webp",
-  "application/pdf",
-]);
-
-const MAX_FILE_SIZE = 20 * 1024 * 1024; // 20 MB
-const MAX_FILES = 5;
+import {
+  ALLOWED_ATTACHMENT_TYPES,
+  MAX_ATTACHMENT_SIZE,
+  MAX_ATTACHMENTS_PER_MESSAGE,
+} from "@/lib/attachment-constants";
 
 interface PendingAttachment {
   id: string;
@@ -89,15 +83,15 @@ export function ChatInput({
       const validFiles: PendingAttachment[] = [];
 
       for (const file of fileArray) {
-        if (currentCount + validFiles.length >= MAX_FILES) {
-          setAttachError(`Maximum ${MAX_FILES} files per message.`);
+        if (currentCount + validFiles.length >= MAX_ATTACHMENTS_PER_MESSAGE) {
+          setAttachError(`Maximum ${MAX_ATTACHMENTS_PER_MESSAGE} files per message.`);
           break;
         }
-        if (!ALLOWED_TYPES.has(file.type)) {
+        if (!ALLOWED_ATTACHMENT_TYPES.has(file.type)) {
           setAttachError(`"${file.name}" is not a supported file type.`);
           continue;
         }
-        if (file.size > MAX_FILE_SIZE) {
+        if (file.size > MAX_ATTACHMENT_SIZE) {
           setAttachError(`"${file.name}" exceeds the 20 MB size limit.`);
           continue;
         }
@@ -130,14 +124,8 @@ export function ChatInput({
   }, []);
 
   const uploadAttachments = useCallback(async (): Promise<AttachmentRef[]> => {
-    const results: AttachmentRef[] = [];
-
-    for (let i = 0; i < attachments.length; i++) {
-      const att = attachments[i];
-      if (att.uploaded) {
-        results.push(att.uploaded);
-        continue;
-      }
+    const promises = attachments.map(async (att): Promise<AttachmentRef | null> => {
+      if (att.uploaded) return att.uploaded;
 
       try {
         // Step 1: Get presigned URL
@@ -187,7 +175,7 @@ export function ChatInput({
           ),
         );
 
-        results.push(ref);
+        return ref;
       } catch (err) {
         setAttachments((prev) =>
           prev.map((a) =>
@@ -196,10 +184,17 @@ export function ChatInput({
               : a,
           ),
         );
+        return null;
       }
-    }
+    });
 
-    return results;
+    const settled = await Promise.allSettled(promises);
+    return settled
+      .filter(
+        (r): r is PromiseFulfilledResult<AttachmentRef> =>
+          r.status === "fulfilled" && r.value !== null,
+      )
+      .map((r) => r.value);
   }, [attachments]);
 
   const handleSubmit = useCallback(async () => {
