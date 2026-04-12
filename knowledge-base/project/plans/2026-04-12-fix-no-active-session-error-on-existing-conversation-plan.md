@@ -213,16 +213,16 @@ React effect scheduler guarantees ordering.
 
 ## Acceptance Criteria
 
-- [ ] Opening an existing conversation URL and sending a message works without
+- [x] Opening an existing conversation URL and sending a message works without
       error (`apps/web-platform/lib/ws-client.ts`,
       `apps/web-platform/app/(dashboard)/dashboard/chat/[conversationId]/page.tsx`)
-- [ ] New conversations (`/dashboard/chat/new`) continue to work as before
+- [x] New conversations (`/dashboard/chat/new`) continue to work as before
       (deferred creation flow)
-- [ ] WebSocket reconnection after transient failure re-establishes the session
+- [x] WebSocket reconnection after transient failure re-establishes the session
       (both new and existing conversations)
-- [ ] The `session_started` event is received before the user can send messages
+- [x] The `session_started` event is received before the user can send messages
       on an existing conversation
-- [ ] File attachments work on both new and existing conversations
+- [x] File attachments work on both new and existing conversations
 
 ## Test Scenarios
 
