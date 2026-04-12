@@ -199,8 +199,11 @@ export async function POST(request: Request) {
     // separate ArrayBuffer alongside the File blob. This reduces peak
     // per-request memory by ~20 MB for a max-size upload.
     const chunks: Uint8Array[] = [];
-    for await (const chunk of file.stream()) {
-      chunks.push(chunk);
+    const reader = file.stream().getReader();
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      chunks.push(value);
     }
     const base64Content = Buffer.concat(chunks).toString("base64");
 
