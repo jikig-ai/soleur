@@ -1349,10 +1349,11 @@ export async function sendUserMessage(
       const apiKey = await getUserApiKey(userId);
 
       // Fetch user's custom team names for @-mention resolution
-      const { data: nameRows } = await supabase()
+      const { data: nameRows, error: namesError } = await supabase()
         .from("team_names")
         .select("leader_id, custom_name")
         .eq("user_id", userId);
+      if (namesError) log.warn({ err: namesError }, "Failed to fetch custom team names");
       const customNames: Record<string, string> = {};
       for (const row of nameRows ?? []) {
         customNames[row.leader_id] = row.custom_name;
