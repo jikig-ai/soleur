@@ -6,6 +6,7 @@ import { isPathInWorkspace } from "./sandbox";
 const MAX_FILE_SIZE = 1024 * 1024; // 1MB
 const MAX_QUERY_LENGTH = 200;
 const MAX_SEARCH_RESULTS = 100;
+const MAX_CONCURRENT_STAT = 50;
 
 // --- Types ---
 
@@ -62,6 +63,30 @@ export class KbValidationError extends Error {
 
 function escapeRegex(str: string): string {
   return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/** Run `fn` over every item in `items` with at most `concurrency` in-flight at once. */
+async function mapWithConcurrency<T, R>(
+  items: T[],
+  concurrency: number,
+  fn: (item: T) => Promise<R>,
+): Promise<R[]> {
+  const results: R[] = new Array(items.length);
+  let nextIndex = 0;
+
+  async function worker(): Promise<void> {
+    while (nextIndex < items.length) {
+      const idx = nextIndex++;
+      results[idx] = await fn(items[idx]);
+    }
+  }
+
+  const workers = Array.from(
+    { length: Math.min(concurrency, items.length) },
+    () => worker(),
+  );
+  await Promise.all(workers);
+  return results;
 }
 
 function parseFrontmatter(raw: string): {
@@ -130,7 +155,7 @@ export async function buildTree(
   }
 
   const dirPromises: Promise<TreeNode | null>[] = [];
-  const filePromises: Promise<TreeNode>[] = [];
+  const fileEntries: { entry: fs.Dirent; fullPath: string }[] = [];
 
   for (const entry of entries) {
     const fullPath = path.join(kbRoot, entry.name);
@@ -142,24 +167,28 @@ export async function buildTree(
         }),
       );
     } else if (entry.isFile() && !entry.isSymbolicLink() && entry.name.endsWith(".md")) {
-      filePromises.push(
-        fs.promises
-          .stat(fullPath)
-          .then((stat) => stat.mtime.toISOString())
-          .catch(() => undefined)
-          .then((modifiedAt) => ({
-            name: entry.name,
-            type: "file" as const,
-            path: path.relative(effectiveTopRoot, fullPath),
-            modifiedAt,
-          })),
-      );
+      fileEntries.push({ entry, fullPath });
     }
   }
 
   const [dirResults, fileNodes] = await Promise.all([
     Promise.all(dirPromises),
-    Promise.all(filePromises),
+    mapWithConcurrency(
+      fileEntries,
+      MAX_CONCURRENT_STAT,
+      async ({ entry, fullPath }): Promise<TreeNode> => {
+        const modifiedAt = await fs.promises
+          .stat(fullPath)
+          .then((stat) => stat.mtime.toISOString())
+          .catch(() => undefined);
+        return {
+          name: entry.name,
+          type: "file" as const,
+          path: path.relative(effectiveTopRoot, fullPath),
+          modifiedAt,
+        };
+      },
+    ),
   ]);
 
   const dirs = dirResults.filter((d): d is TreeNode => d !== null);
