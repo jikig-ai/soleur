@@ -106,15 +106,15 @@ After the subagent returns, check for a `## Session Summary` heading in the outp
 > **CONTINUATION GATE**: When work outputs `## Work Phase Complete`, that is your signal to continue. Do NOT end your turn. Do NOT treat "Implementation complete" or similar phrases as a stopping point. Immediately proceed to step 4 in the same response.
 
 4. Use the **Skill tool**: `skill: soleur:review`
-5. **Resolve P1 review findings.** List open GitHub issues with `code-review` + `priority/p1-high` labels:
+5. **Resolve ALL review findings (P1, P2, and P3).** Technical debt compounds — fix everything now, not later. List open GitHub issues from this review session:
 
    ```bash
-   gh issue list --label code-review --label priority/p1-high --state open --search "PR #<current_pr_number>" --json number,title,body
+   gh issue list --label code-review --state open --search "PR #<current_pr_number>" --json number,title,body,labels
    ```
 
    The `--search` flag scopes results to issues from this review session (the review skill's issue template includes `PR #<number>` in the body). If zero issues match, proceed immediately to Step 5.5.
 
-   For each matching P1 issue, spawn a parallel `pr-comment-resolver` agent. Pass the issue body's `## Problem`, `## Proposed Fix`, and `Location:` fields as the agent's input. After all agents return, commit fixes and close each resolved issue:
+   For each matching issue (regardless of priority), spawn a parallel `pr-comment-resolver` agent. Pass the issue body's `## Problem`, `## Proposed Fix`, and `Location:` fields as the agent's input. After all agents return, commit fixes and close each resolved issue:
 
    ```bash
    gh issue close <number> --comment "Fixed in <commit-sha>"

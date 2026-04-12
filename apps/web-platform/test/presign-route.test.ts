@@ -1,4 +1,5 @@
 import { describe, test, expect, vi, beforeEach } from "vitest";
+import { mockQueryChain } from "./helpers/mock-supabase";
 
 // ---------------------------------------------------------------------------
 // Mocks — vi.hoisted ensures these are available when vi.mock factories run
@@ -74,17 +75,9 @@ function setupAuthenticatedUser() {
 }
 
 function setupConversationOwnership(owned: boolean) {
-  const mockSingle = vi.fn().mockResolvedValue({
-    data: owned ? { id: TEST_CONVERSATION_ID } : null,
-    error: owned ? null : null,
-  });
-  const mockEq2 = vi.fn(() => ({ single: mockSingle }));
-  const mockEq1 = vi.fn(() => ({ eq: mockEq2 }));
-  const mockSelect = vi.fn(() => ({ eq: mockEq1 }));
-
   mockFrom.mockImplementation((table: string) => {
     if (table === "conversations") {
-      return { select: mockSelect };
+      return mockQueryChain(owned ? { id: TEST_CONVERSATION_ID } : null);
     }
     return {};
   });

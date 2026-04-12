@@ -77,6 +77,7 @@ describe("WebSocketError interface", () => {
 // --- Hook contract tests for error state clearing (#1377) ---
 
 const mockStartSession = vi.fn();
+const mockResumeSession = vi.fn();
 const mockSendMessage = vi.fn();
 const mockSendReviewGateResponse = vi.fn();
 const mockReconnect = vi.fn();
@@ -84,6 +85,7 @@ const mockReconnect = vi.fn();
 let wsReturn: {
   messages: Array<{ id: string; role: "user" | "assistant"; content: string; type: "text"; leaderId?: string }>;
   startSession: typeof mockStartSession;
+  resumeSession: typeof mockResumeSession;
   sendMessage: typeof mockSendMessage;
   sendReviewGateResponse: typeof mockSendReviewGateResponse;
   status: "connecting" | "connected" | "reconnecting" | "disconnected";
@@ -92,6 +94,8 @@ let wsReturn: {
   reconnect: typeof mockReconnect;
   routeSource: "auto" | "mention" | null;
   activeLeaderIds: string[];
+  sessionConfirmed: boolean;
+  usageData: null;
 };
 
 vi.mock("@/lib/ws-client", () => ({
@@ -125,6 +129,7 @@ describe("Error state clearing on remount (#1377)", () => {
     wsReturn = {
       messages: [],
       startSession: mockStartSession,
+      resumeSession: mockResumeSession,
       sendMessage: mockSendMessage,
       sendReviewGateResponse: mockSendReviewGateResponse,
       status: "connected",
@@ -133,6 +138,8 @@ describe("Error state clearing on remount (#1377)", () => {
       reconnect: mockReconnect,
       routeSource: null,
       activeLeaderIds: [],
+      sessionConfirmed: false,
+      usageData: null,
     };
   });
 

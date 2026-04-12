@@ -1,4 +1,5 @@
 import { describe, test, expect, vi, beforeEach } from "vitest";
+import { mockQueryChain } from "./helpers/mock-supabase";
 
 // ---------------------------------------------------------------------------
 // Mocks — vi.hoisted ensures these are available when vi.mock factories run
@@ -75,19 +76,17 @@ function setupUserMocks(opts: {
 }) {
   const { repoStatus = "ready", selectError = null, updateError = null } = opts;
 
-  const mockSelectSingle = vi.fn().mockResolvedValue({
-    data: selectError ? null : { repo_status: repoStatus },
-    error: selectError,
-  });
-  const mockSelectEq = vi.fn(() => ({ single: mockSelectSingle }));
-  const mockSelect = vi.fn(() => ({ eq: mockSelectEq }));
+  const selectChain = mockQueryChain(
+    selectError ? null : { repo_status: repoStatus },
+    selectError,
+  );
 
   const mockUpdateEq = vi.fn().mockResolvedValue({ error: updateError });
   const mockUpdate = vi.fn(() => ({ eq: mockUpdateEq }));
 
   mockFrom.mockImplementation((table: string) => {
     if (table === "users") {
-      return { select: mockSelect, update: mockUpdate };
+      return { select: selectChain.select, update: mockUpdate };
     }
     return {};
   });
