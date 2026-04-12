@@ -17,8 +17,12 @@ const mockConversations = [
     domain_leader: "cto",
     session_id: null,
     status: "waiting_for_user" as const,
+    total_cost_usd: 0,
+    input_tokens: 0,
+    output_tokens: 0,
     last_active: new Date(Date.now() - 2 * 60000).toISOString(), // 2m ago
     created_at: new Date(Date.now() - 3600000).toISOString(),
+    archived_at: null,
   },
   {
     id: "conv-2",
@@ -26,8 +30,12 @@ const mockConversations = [
     domain_leader: "cmo",
     session_id: null,
     status: "active" as const,
+    total_cost_usd: 0,
+    input_tokens: 0,
+    output_tokens: 0,
     last_active: new Date(Date.now() - 15 * 60000).toISOString(), // 15m ago
     created_at: new Date(Date.now() - 7200000).toISOString(),
+    archived_at: null,
   },
   {
     id: "conv-3",
@@ -35,8 +43,12 @@ const mockConversations = [
     domain_leader: "cfo",
     session_id: null,
     status: "completed" as const,
+    total_cost_usd: 0,
+    input_tokens: 0,
+    output_tokens: 0,
     last_active: new Date(Date.now() - 86400000).toISOString(), // 1d ago
     created_at: new Date(Date.now() - 172800000).toISOString(),
+    archived_at: null,
   },
 ];
 
@@ -84,6 +96,7 @@ function createQueryBuilder(data: unknown[]) {
     eq: vi.fn().mockReturnThis(),
     in: vi.fn().mockReturnThis(),
     is: vi.fn().mockReturnThis(),
+    not: vi.fn().mockReturnThis(),
     order: vi.fn().mockReturnThis(),
     limit: vi.fn().mockReturnThis(),
     single: vi.fn().mockReturnThis(),
@@ -214,12 +227,78 @@ describe("Command Center", () => {
       expect(screen.getAllByText(/Review PR #1742/).length).toBeGreaterThanOrEqual(1);
     });
 
-    // Click the first conversation row (a button element)
+    // Click the first conversation row (a div with role="button")
     const titleElements = screen.getAllByText(/Review PR #1742/);
-    const row = titleElements[0].closest("button");
+    const row = titleElements[0].closest("[role='button']");
     if (row) fireEvent.click(row);
 
     expect(mockPush).toHaveBeenCalledWith("/dashboard/chat/conv-1");
+  });
+
+  it("hides archived conversations from the default active view", async () => {
+    // Include an archived conversation in the mock data
+    const withArchived = [
+      ...mockConversations,
+      {
+        id: "conv-archived",
+        user_id: "user-1",
+        domain_leader: "cpo",
+        session_id: null,
+        status: "completed" as const,
+        total_cost_usd: 0,
+        input_tokens: 0,
+        output_tokens: 0,
+        last_active: new Date(Date.now() - 604800000).toISOString(),
+        created_at: new Date(Date.now() - 604800000).toISOString(),
+        archived_at: new Date().toISOString(),
+      },
+    ];
+    conversationBuilder = createQueryBuilder(withArchived);
+
+    const { default: DashboardPage } = await import(
+      "@/app/(dashboard)/dashboard/page"
+    );
+    render(<DashboardPage />);
+
+    await waitFor(() => {
+      expect(screen.getAllByText("Needs your decision").length).toBeGreaterThanOrEqual(1);
+    });
+
+    // The query builder should have been called with .is("archived_at", null) for the default active view
+    expect(conversationBuilder.is).toHaveBeenCalledWith("archived_at", null);
+  });
+
+  it("shows Active and Archived toggle buttons in filter bar", async () => {
+    const { default: DashboardPage } = await import(
+      "@/app/(dashboard)/dashboard/page"
+    );
+    render(<DashboardPage />);
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Active" })).toBeInTheDocument();
+    });
+    expect(screen.getByRole("button", { name: "Archived" })).toBeInTheDocument();
+  });
+
+  it("switches to archived view when Archived button is clicked", async () => {
+    const { default: DashboardPage } = await import(
+      "@/app/(dashboard)/dashboard/page"
+    );
+    render(<DashboardPage />);
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Archived" })).toBeInTheDocument();
+    });
+
+    // Reset the mock to track the new query
+    conversationBuilder = createQueryBuilder([]);
+
+    fireEvent.click(screen.getByRole("button", { name: "Archived" }));
+
+    // After clicking, the hook should refetch with .not("archived_at", "is", null)
+    await waitFor(() => {
+      expect(conversationBuilder.not).toHaveBeenCalledWith("archived_at", "is", null);
+    });
   });
 
   it("navigates to new conversation when button is clicked", async () => {

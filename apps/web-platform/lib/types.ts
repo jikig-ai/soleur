@@ -89,6 +89,7 @@ export interface Conversation {
   output_tokens: number;
   last_active: string;
   created_at: string;
+  archived_at: string | null;
 }
 
 export type ConversationStatus = Conversation["status"];

@@ -3,6 +3,7 @@
 import { useState, useCallback, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { useConversations } from "@/hooks/use-conversations";
+import type { ArchiveFilter } from "@/hooks/use-conversations";
 import { useOnboarding } from "@/hooks/use-onboarding";
 import { ConversationRow } from "@/components/inbox/conversation-row";
 import { ErrorCard } from "@/components/ui/error-card";
@@ -94,10 +95,12 @@ export default function DashboardPage() {
   const { completeOnboarding } = useOnboarding();
   const [statusFilter, setStatusFilter] = useState<ConversationStatus | null>(null);
   const [domainFilter, setDomainFilter] = useState<DomainLeaderId | "general" | null>(null);
+  const [archiveFilter, setArchiveFilter] = useState<ArchiveFilter>("active");
 
-  const { conversations, loading, error, refetch } = useConversations({
+  const { conversations, loading, error, refetch, archiveConversation, unarchiveConversation } = useConversations({
     statusFilter,
     domainFilter,
+    archiveFilter,
   });
 
   // ---------------------------------------------------------------------------
@@ -170,6 +173,7 @@ export default function DashboardPage() {
   const clearFilters = useCallback(() => {
     setStatusFilter(null);
     setDomainFilter(null);
+    setArchiveFilter("active");
   }, []);
 
   const handlePromptClick = useCallback(
@@ -213,7 +217,7 @@ export default function DashboardPage() {
     [router, completeOnboarding],
   );
 
-  const hasActiveFilter = statusFilter !== null || domainFilter !== null;
+  const hasActiveFilter = statusFilter !== null || domainFilter !== null || archiveFilter !== "active";
 
   // ---------------------------------------------------------------------------
   // Loading skeleton (shown while KB tree loads)
@@ -443,6 +447,32 @@ export default function DashboardPage() {
 
       {/* Filter bar */}
       <div className="mb-4 flex flex-wrap items-center gap-2">
+        {/* Archive toggle */}
+        <div className="flex rounded-lg border border-neutral-700 overflow-hidden">
+          <button
+            type="button"
+            onClick={() => setArchiveFilter("active")}
+            className={`min-h-[44px] px-3 py-2 text-sm font-medium transition-colors ${
+              archiveFilter === "active"
+                ? "bg-neutral-700 text-white"
+                : "bg-neutral-900 text-neutral-400 hover:text-neutral-300"
+            }`}
+          >
+            Active
+          </button>
+          <button
+            type="button"
+            onClick={() => setArchiveFilter("archived")}
+            className={`min-h-[44px] px-3 py-2 text-sm font-medium transition-colors ${
+              archiveFilter === "archived"
+                ? "bg-neutral-700 text-white"
+                : "bg-neutral-900 text-neutral-400 hover:text-neutral-300"
+            }`}
+          >
+            Archived
+          </button>
+        </div>
+
         <select
           value={statusFilter ?? ""}
           onChange={handleStatusChange}
@@ -535,7 +565,12 @@ export default function DashboardPage() {
       {!loading && !error && conversations.length > 0 && (
         <div className="space-y-2">
           {conversations.map((conv) => (
-            <ConversationRow key={conv.id} conversation={conv} />
+            <ConversationRow
+              key={conv.id}
+              conversation={conv}
+              onArchive={archiveConversation}
+              onUnarchive={unarchiveConversation}
+            />
           ))}
         </div>
       )}
