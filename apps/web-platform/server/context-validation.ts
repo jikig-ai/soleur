@@ -1,11 +1,10 @@
 import type { ConversationContext } from "@/lib/types";
+import { KB_MAX_FILE_SIZE } from "@/lib/kb-constants";
 
 /** Safe path pattern: alphanumeric, hyphens, underscores, slashes, ending in .md */
 const SAFE_PATH_RE = /^[a-zA-Z0-9_\-/]+\.md$/;
 /** Allowed context types */
 const ALLOWED_CONTEXT_TYPES = new Set(["kb-viewer"]);
-/** Max context content length (matches kb-reader MAX_FILE_SIZE) */
-const MAX_CONTEXT_CONTENT_LENGTH = 1024 * 1024; // 1MB
 
 /**
  * Validate a ConversationContext payload from the client.
@@ -38,7 +37,7 @@ export function validateConversationContext(
     if (typeof obj.content !== "string") {
       throw new Error("Invalid context: content must be a string");
     }
-    if (obj.content.length > MAX_CONTEXT_CONTENT_LENGTH) {
+    if (obj.content.length > KB_MAX_FILE_SIZE) {
       throw new Error("Invalid context: content exceeds 1MB limit");
     }
   }

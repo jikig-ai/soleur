@@ -1,4 +1,5 @@
 import { describe, test, expect, vi, beforeEach } from "vitest";
+import { mockQueryChain } from "./helpers/mock-supabase";
 
 // ---------------------------------------------------------------------------
 // Mocks — vi.hoisted ensures these are available when vi.mock factories run
@@ -58,16 +59,6 @@ function buildRequest(body: unknown): Request {
   });
 }
 
-function mockQueryBuilder(data: unknown) {
-  return {
-    select: vi.fn().mockReturnThis(),
-    eq: vi.fn().mockReturnThis(),
-    single: vi.fn().mockReturnValue({
-      then: (fn: (v: unknown) => unknown) =>
-        Promise.resolve({ data, error: null }).then(fn),
-    }),
-  };
-}
 
 // ---------------------------------------------------------------------------
 // Tests
@@ -85,7 +76,7 @@ describe("POST /api/vision", () => {
       error: null,
     });
     mockFrom.mockReturnValue(
-      mockQueryBuilder({ workspace_path: "/workspaces/user-1" }),
+      mockQueryChain({ workspace_path: "/workspaces/user-1" }),
     );
     mockTryCreateVision.mockResolvedValue(undefined);
 
@@ -127,7 +118,7 @@ describe("POST /api/vision", () => {
       data: { user: { id: "user-1" } },
       error: null,
     });
-    mockFrom.mockReturnValue(mockQueryBuilder(null));
+    mockFrom.mockReturnValue(mockQueryChain(null));
 
     const res = await POST(buildRequest({ content: "A valid startup idea" }));
 
