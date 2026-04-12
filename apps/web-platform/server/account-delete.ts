@@ -1,3 +1,4 @@
+import type { SupabaseClient } from "@supabase/supabase-js";
 import { createServiceClient } from "@/lib/supabase/server";
 import { abortAllUserSessions } from "@/server/agent-runner";
 import { deleteWorkspace } from "@/server/workspace";
@@ -5,24 +6,35 @@ import { createChildLogger } from "./logger";
 
 const log = createChildLogger("account-delete");
 
-/** Paginate Supabase Storage list() until all objects are returned. */
+const PAGE_SIZE = 1_000;
+const MAX_PAGES = 100; // Safety bound: 100k objects per folder
+
+/**
+ * List all object names in a Storage folder, paginating through all pages.
+ * Supabase Storage uses offset-based pagination.
+ */
 async function listAllStorageObjects(
-  storage: ReturnType<typeof createServiceClient>["storage"],
+  storage: SupabaseClient["storage"],
   bucket: string,
-  prefix: string,
-): Promise<{ name: string }[]> {
-  const PAGE = 1_000;
-  const all: { name: string }[] = [];
+  folder: string,
+): Promise<string[]> {
+  const names: string[] = [];
   let offset = 0;
-  // eslint-disable-next-line no-constant-condition
-  while (true) {
-    const { data } = await storage.from(bucket).list(prefix, { limit: PAGE, offset });
+
+  for (let page = 0; page < MAX_PAGES; page++) {
+    const { data } = await storage
+      .from(bucket)
+      .list(folder, { limit: PAGE_SIZE, offset });
+
     if (!data || data.length === 0) break;
-    all.push(...data);
-    if (data.length < PAGE) break;
-    offset += PAGE;
+
+    names.push(...data.map((obj) => obj.name));
+
+    if (data.length < PAGE_SIZE) break;
+    offset += PAGE_SIZE;
   }
-  return all;
+
+  return names;
 }
 
 export interface DeleteAccountResult {
@@ -82,15 +94,14 @@ export async function deleteAccount(
     const folders = await listAllStorageObjects(service.storage, "chat-attachments", userId);
 
     if (folders.length > 0) {
-      // Storage list returns objects at one level — need to recurse into conversation folders
       const allPaths: string[] = [];
-      for (const folder of folders) {
+      for (const folderName of folders) {
         const files = await listAllStorageObjects(
           service.storage,
           "chat-attachments",
-          `${userId}/${folder.name}`,
+          `${userId}/${folderName}`,
         );
-        allPaths.push(...files.map((f) => `${userId}/${folder.name}/${f.name}`));
+        allPaths.push(...files.map((f) => `${userId}/${folderName}/${f}`));
       }
       if (allPaths.length > 0) {
         await service.storage.from("chat-attachments").remove(allPaths);
