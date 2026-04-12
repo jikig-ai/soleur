@@ -2,9 +2,26 @@
 title: "fix: extract shared KB constants and Supabase mock helper"
 type: fix
 date: 2026-04-12
+deepened: 2026-04-12
 ---
 
 # Extract shared KB constants and Supabase mock helper
+
+## Enhancement Summary
+
+**Deepened on:** 2026-04-12
+**Sections enhanced:** 3 (Proposed Solution Part 2, Test Scenarios, new Sharp Edges)
+**Research sources:** 4 institutional learnings, codebase analysis of 17 test files
+
+### Key Improvements
+
+1. Mock helper must implement `.then()` for PromiseLike compatibility (Supabase v2 query
+   builder is thenable -- documented in project learning `supabase-query-builder-mock-thenable-20260407`)
+2. All mock functions shared with `vi.mock()` factories must use `vi.hoisted()` -- the helper
+   must be designed to work with hoisted references, not export pre-built mocks
+3. Added concrete `mockQueryChain` implementation with variable-depth chaining and `.single()`
+   terminal support
+4. Added sharp edges section documenting three pitfalls from institutional learnings
 
 ## Overview
 
@@ -91,18 +108,98 @@ elsewhere, so it stays in the route file.
 Create `apps/web-platform/test/helpers/mock-supabase.ts` exporting reusable helpers for the
 two most common patterns:
 
-1. **`createMockSupabaseClient(overrides?)`** -- returns a mock client with `auth.getUser`
-   and `from` pre-wired to `vi.fn()` instances. Returns the mock functions for per-test
-   configuration.
+1. **`mockQueryChain(data, error?)`** -- returns a fluent chain mock that is **thenable**
+   (implements `.then()`) so `await chain.select().eq()` works. All chaining methods return
+   `this`; `.single()` returns a thenable resolving to `{ data, error }`.
 
-2. **`mockQueryChain(data, error?)`** -- returns a fluent chain mock
-   (`select().eq().eq().single()`) resolving to `{ data, error }`. Handles variable chain
-   depth.
+2. **`createMockSupabaseClient(overrides?)`** -- not a pre-built mock. Instead, a factory
+   that returns `{ mockGetUser, mockFrom }` vi.fn instances that test files wire into their
+   own `vi.hoisted()` + `vi.mock()` blocks. The helper cannot export a ready-made `vi.mock()`
+   factory because `vi.mock()` must be called at the top level of each test file.
+
+#### Research Insights: mockQueryChain Implementation
+
+The Supabase JS v2 query builder is a `PromiseLike` -- it implements `.then()` so queries
+can be `await`ed directly. Mocks that only make terminal methods (`.single()`, `.limit()`)
+return Promises break when queries are `await`ed without a terminal.
+
+**Concrete implementation pattern (from institutional learning):**
+
+```ts
+import { vi } from "vitest";
+
+/**
+ * Create a thenable query chain mock that supports variable-depth chaining.
+ * All chaining methods (.select, .eq, .in, .is, .order, .limit) return `this`.
+ * The chain is PromiseLike: `await chain.select().eq()` resolves to { data, error }.
+ * `.single()` returns a separate thenable resolving to { data, error }.
+ */
+export function mockQueryChain<T>(data: T, error: { message: string } | null = null) {
+  const result = { data, error };
+  const chain: Record<string, unknown> = {
+    select: vi.fn().mockReturnThis(),
+    eq: vi.fn().mockReturnThis(),
+    neq: vi.fn().mockReturnThis(),
+    in: vi.fn().mockReturnThis(),
+    is: vi.fn().mockReturnThis(),
+    order: vi.fn().mockReturnThis(),
+    limit: vi.fn().mockReturnThis(),
+    range: vi.fn().mockReturnThis(),
+    insert: vi.fn().mockReturnThis(),
+    update: vi.fn().mockReturnThis(),
+    upsert: vi.fn().mockReturnThis(),
+    delete: vi.fn().mockReturnThis(),
+    // PromiseLike: allows `await chain.select().eq()`
+    then: (onfulfilled?: (v: unknown) => unknown) =>
+      Promise.resolve(result).then(onfulfilled),
+    // Terminal: `.single()` returns a separate thenable
+    single: vi.fn(() => ({
+      then: (onfulfilled?: (v: unknown) => unknown) =>
+        Promise.resolve(result).then(onfulfilled),
+    })),
+  };
+  // Make all chaining methods return `chain` (mockReturnThis needs the reference)
+  for (const key of ["select", "eq", "neq", "in", "is", "order", "limit", "range",
+                      "insert", "update", "upsert", "delete"]) {
+    (chain[key] as ReturnType<typeof vi.fn>).mockReturnValue(chain);
+  }
+  return chain;
+}
+```
+
+#### Design Constraint: vi.hoisted() Compatibility
+
+The helper CANNOT export a `vi.mock()` factory because vitest hoists `vi.mock()` calls to
+the file top. Test files must still declare their own `vi.hoisted()` block and `vi.mock()`
+call. The helper provides building blocks, not a complete mock setup.
+
+**Usage pattern in test files:**
+
+```ts
+import { mockQueryChain } from "./helpers/mock-supabase";
+
+const { mockGetUser, mockFrom } = vi.hoisted(() => ({
+  mockGetUser: vi.fn(),
+  mockFrom: vi.fn(),
+}));
+
+vi.mock("@/lib/supabase/server", () => ({
+  createClient: vi.fn(async () => ({
+    auth: { getUser: mockGetUser },
+  })),
+  createServiceClient: vi.fn(() => ({
+    from: mockFrom,
+  })),
+}));
+
+// In tests:
+mockFrom.mockReturnValue(mockQueryChain({ id: "123", name: "test" }));
+```
 
 **Scope decision -- incremental migration:** Do NOT rewrite all 17 test files in this PR.
 Instead:
 
-- Create the helper with the two functions above
+- Create the helper with `mockQueryChain` (primary value -- eliminates the chain boilerplate)
 - Migrate 3-4 representative test files to prove the helper works
 - Leave remaining files for incremental adoption (each future PR that touches a test file
   can migrate it)
@@ -123,12 +220,17 @@ The 3-4 files to migrate are:
 - [ ] `app/api/attachments/presign/route.ts` imports attachment constants from `@/lib/kb-constants`
 - [ ] `components/chat/chat-input.tsx` imports attachment constants from `@/lib/kb-constants`
 - [ ] No duplicate constant definitions remain in any of the four consumer files
-- [ ] `test/helpers/mock-supabase.ts` exists with `createMockSupabaseClient` and `mockQueryChain`
+- [ ] `test/helpers/mock-supabase.ts` exists with `mockQueryChain` helper
+- [ ] `mockQueryChain` implements `.then()` for PromiseLike compatibility (thenable)
+- [ ] `mockQueryChain` supports `.single()` as a terminal that returns a separate thenable
 - [ ] 3-4 test files migrated to use the shared helper
 - [ ] All existing tests pass without changes to assertions
+- [ ] `lib/kb-constants.ts` does NOT include `"use client"` directive
 - [ ] `getExtension()` map stays in `presign/route.ts` (not extracted -- no duplication)
 
 ## Test Scenarios
+
+### KB Constants (existing tests should continue passing)
 
 - Given kb-reader uses `KB_MAX_FILE_SIZE` from the shared module, when a file exceeds 1MB,
   then `readContent` throws `KbValidationError`
@@ -138,10 +240,19 @@ The 3-4 files to migrate are:
   20MB, then route returns 400 `file_too_large`
 - Given chat-input uses `ATTACHMENT_ALLOWED_TYPES` from shared module, when user attaches
   an unsupported type, then error is shown
-- Given `mockQueryChain({ id: "123" })` returns a fluent chain, when test calls
-  `.select().eq().single()`, then it resolves to `{ data: { id: "123" }, error: null }`
-- Given a migrated test file uses `createMockSupabaseClient`, when `vi.clearAllMocks()` runs
-  in `beforeEach`, then all mock functions are reset correctly
+
+### Mock Helper (new unit tests in `test/helpers/mock-supabase.test.ts`)
+
+- Given `mockQueryChain({ id: "123" })`, when `await chain.select("*").eq("id", "123")`,
+  then resolves to `{ data: { id: "123" }, error: null }` (thenable without terminal)
+- Given `mockQueryChain({ id: "123" })`, when `await chain.select().eq().single()`,
+  then resolves to `{ data: { id: "123" }, error: null }` (with `.single()` terminal)
+- Given `mockQueryChain(null, { message: "not found" })`, when `await chain.select().eq()`,
+  then resolves to `{ data: null, error: { message: "not found" } }` (error case)
+- Given a migrated test file uses `mockQueryChain`, when `vi.clearAllMocks()` runs in
+  `beforeEach`, then the chain's `vi.fn()` call counts are reset correctly
+- Given `mockQueryChain`, when used inside a `vi.mock()` factory via `vi.hoisted()`,
+  then the import resolves correctly (not blocked by hoisting)
 
 ## Domain Review
 
@@ -185,8 +296,44 @@ No cross-domain implications detected -- infrastructure/tooling change.
 - `apps/web-platform/test/disconnect-route.test.ts`
 - `apps/web-platform/test/account-delete.test.ts`
 
+## Sharp Edges
+
+These pitfalls are documented in institutional learnings and directly apply to this work:
+
+1. **Thenable mock is mandatory.** Supabase JS v2 query builder implements `PromiseLike`.
+   A mock that only makes `.single()` or `.limit()` return Promises will silently resolve
+   to `undefined` when the query is `await`ed without a terminal method. The `mockQueryChain`
+   helper MUST implement `.then()` on the chain object itself.
+   (Source: `learnings/test-failures/supabase-query-builder-mock-thenable-20260407.md`)
+
+2. **`vi.hoisted()` is required for shared mock references.** Any `vi.fn()` referenced inside
+   a `vi.mock()` factory must be declared via `vi.hoisted()`. The helper file can export
+   utility functions (like `mockQueryChain`) but NOT pre-declared `vi.fn()` instances that
+   test files pass into `vi.mock()` -- those must be hoisted per-file.
+   (Source: `learnings/test-failures/2026-04-06-vitest-mock-hoisting-requires-vi-hoisted.md`)
+
+3. **Module-level Supabase client timing.** Some modules call `createClient()` at module
+   scope (e.g., `agent-runner.ts`). For those, `mockFrom` must be wired inside the `vi.mock()`
+   factory, not in a `beforeEach`. This PR's migration candidates (`presign-route`,
+   `vision-route`, `disconnect-route`, `account-delete`) all use route handlers that call
+   `createClient()`/`createServiceClient()` per-request, so this is not a blocker -- but the
+   helper's documentation should note this constraint for future adopters.
+   (Source: `learnings/2026-04-06-vitest-module-level-supabase-mock-timing.md`)
+
+4. **`"use client"` directive in shared constants.** `chat-input.tsx` is a client component.
+   The shared `lib/kb-constants.ts` must NOT include `"use client"` -- it exports plain
+   constants that are tree-shakeable. Next.js correctly handles importing a server-compatible
+   module from a client component as long as the module only exports serializable values.
+
+5. **Test runner: use `npx vitest`, not `bunx vitest`.** The project uses vitest via npm.
+   `bunx vitest` fetches the latest version which may have incompatible native bindings.
+   (Source: `learnings/test-failures/2026-04-06-vitest-mock-hoisting-requires-vi-hoisted.md`)
+
 ## References
 
 - #2014 -- extract shared KB constants to prevent drift
 - #2016 -- extract shared Supabase mock helper for tests
 - `knowledge-base/project/learnings/2026-03-18-shared-test-helpers-extraction.md`
+- `knowledge-base/project/learnings/test-failures/supabase-query-builder-mock-thenable-20260407.md`
+- `knowledge-base/project/learnings/test-failures/2026-04-06-vitest-mock-hoisting-requires-vi-hoisted.md`
+- `knowledge-base/project/learnings/2026-04-06-vitest-module-level-supabase-mock-timing.md`
