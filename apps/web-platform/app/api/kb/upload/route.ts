@@ -195,8 +195,14 @@ export async function POST(request: Request) {
       }
     }
 
-    // Base64 encode file content
-    const base64Content = Buffer.from(await file.arrayBuffer()).toString("base64");
+    // Base64 encode file content — stream bytes to avoid allocating a
+    // separate ArrayBuffer alongside the File blob. This reduces peak
+    // per-request memory by ~20 MB for a max-size upload.
+    const chunks: Uint8Array[] = [];
+    for await (const chunk of file.stream()) {
+      chunks.push(chunk);
+    }
+    const base64Content = Buffer.concat(chunks).toString("base64");
 
     // Upload via GitHub Contents API (PUT)
     const result = await githubApiPost<{
