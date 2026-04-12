@@ -204,29 +204,29 @@ GET /api/kb/content/path/to/image.png
 
 ### Functional
 
-- [ ] Per-directory upload button visible on hover in FileTree sidebar
-- [ ] Clicking upload opens native file picker filtered to: PNG, JPEG, GIF, WebP, PDF, CSV, TXT, DOCX
-- [ ] Uploaded file is committed to the correct directory in the user's git repo
-- [ ] Commit message format: `Upload {filename} via Soleur` (clear provenance)
-- [ ] After upload, FileTree refreshes to show the new file without page reload
-- [ ] Non-markdown files visible in FileTree with type-appropriate icons
-- [ ] Clicking an image shows preview with lightbox
-- [ ] Clicking a PDF shows embedded viewer (browser native)
-- [ ] Clicking CSV/TXT shows content or download link
-- [ ] Clicking DOCX shows download link
-- [ ] Duplicate filename returns 409, client prompts overwrite or cancel
-- [ ] Overwrite re-commits with correct SHA (no force push)
-- [ ] Upload shows loading indicator during commit
-- [ ] Error messages surface actual GitHub API errors, not generic strings
+- [x] Per-directory upload button visible on hover in FileTree sidebar
+- [x] Clicking upload opens native file picker filtered to: PNG, JPEG, GIF, WebP, PDF, CSV, TXT, DOCX
+- [x] Uploaded file is committed to the correct directory in the user's git repo
+- [x] Commit message format: `Upload {filename} via Soleur` (clear provenance)
+- [x] After upload, FileTree refreshes to show the new file without page reload
+- [x] Non-markdown files visible in FileTree with type-appropriate icons
+- [x] Clicking an image shows preview with lightbox
+- [x] Clicking a PDF shows embedded viewer (browser native)
+- [x] Clicking CSV/TXT shows content or download link
+- [x] Clicking DOCX shows download link
+- [x] Duplicate filename returns 409, client prompts overwrite or cancel
+- [x] Overwrite re-commits with correct SHA (no force push)
+- [x] Upload shows loading indicator during commit
+- [x] Error messages surface actual GitHub API errors, not generic strings
 
 ### Non-Functional
 
-- [ ] Files > 20MB rejected client-side AND server-side with clear message
-- [ ] Unsupported file types rejected client-side AND server-side
-- [ ] Path traversal attempts (../../, null bytes, symlinks) rejected server-side
-- [ ] CSRF protection on POST route (validated by csrf-coverage.test.ts)
-- [ ] Binary file serving route validates path within workspace boundary
-- [ ] No base64 content persisted in database
+- [x] Files > 20MB rejected client-side AND server-side with clear message
+- [x] Unsupported file types rejected client-side AND server-side
+- [x] Path traversal attempts (../../, null bytes, symlinks) rejected server-side
+- [x] CSRF protection on POST route (validated by csrf-coverage.test.ts)
+- [x] Binary file serving route validates path within workspace boundary
+- [x] No base64 content persisted in database
 
 ## Test Scenarios
 
