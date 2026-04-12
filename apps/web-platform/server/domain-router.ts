@@ -86,9 +86,10 @@ export async function routeMessage(
   message: string,
   apiKey: string,
   context?: { path?: string; type?: string; content?: string },
+  customNames?: Record<string, string>,
 ): Promise<RouteResult> {
   // Check for explicit @-mentions first (override mode)
-  const mentions = parseAtMentions(message);
+  const mentions = parseAtMentions(message, customNames);
   if (mentions.length > 0) {
     return { leaders: mentions.slice(0, MAX_LEADERS_PER_MESSAGE), source: "mention" };
   }

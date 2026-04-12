@@ -1355,7 +1355,19 @@ export async function sendUserMessage(
   if (!conv.domain_leader) {
     try {
       const apiKey = await getUserApiKey(userId);
-      const route = await routeMessage(content, apiKey, conversationContext);
+
+      // Fetch user's custom team names for @-mention resolution
+      const { data: nameRows, error: namesError } = await supabase()
+        .from("team_names")
+        .select("leader_id, custom_name")
+        .eq("user_id", userId);
+      if (namesError) log.warn({ err: namesError }, "Failed to fetch custom team names");
+      const customNames: Record<string, string> = {};
+      for (const row of nameRows ?? []) {
+        customNames[row.leader_id] = row.custom_name;
+      }
+
+      const route = await routeMessage(content, apiKey, conversationContext, customNames);
       log.info({ leaders: route.leaders, source: route.source }, "Routed message to leaders");
       dispatchToLeaders(userId, conversationId, route.leaders, augmentedContent, conversationContext, undefined, route.source)
         .catch(handleSessionError);
