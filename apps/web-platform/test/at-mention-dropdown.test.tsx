@@ -111,4 +111,55 @@ describe("AtMentionDropdown", () => {
     expect(options).toHaveLength(1);
     expect(screen.getByText("1 match")).toBeInTheDocument();
   });
+
+  // Custom name filtering tests
+  it("filters by custom name — @ole matches CTO named Oleg", () => {
+    setup({ query: "ole", customNames: { cto: "Oleg" } });
+    const options = screen.getAllByRole("option");
+    expect(options).toHaveLength(1);
+    expect(screen.getByText("1 match")).toBeInTheDocument();
+  });
+
+  it("filters by custom name — @pat matches CFO named Patrick", () => {
+    setup({ query: "pat", customNames: { cfo: "Patrick" } });
+    const options = screen.getAllByRole("option");
+    expect(options).toHaveLength(1);
+    expect(screen.getByText("1 match")).toBeInTheDocument();
+  });
+
+  it("custom name match is case-insensitive", () => {
+    setup({ query: "OLE", customNames: { cto: "Oleg" } });
+    const options = screen.getAllByRole("option");
+    expect(options).toHaveLength(1);
+  });
+
+  it("empty customNames still matches by leader id, name, title", () => {
+    setup({ query: "cto", customNames: {} });
+    const options = screen.getAllByRole("option");
+    expect(options).toHaveLength(1);
+  });
+
+  it("shows loading state when names loading and query has no default matches", () => {
+    setup({ query: "ole", loading: true });
+    expect(screen.getByText("Loading team...")).toBeInTheDocument();
+    expect(screen.queryByText("No matches")).not.toBeInTheDocument();
+  });
+
+  it("still shows default matches while loading", () => {
+    setup({ query: "cto", loading: true });
+    // "cto" matches leader.id even without custom names
+    const options = screen.getAllByRole("option");
+    expect(options).toHaveLength(1);
+  });
+
+  it("shows custom name in display format", () => {
+    setup({ query: "ole", customNames: { cto: "Oleg" } });
+    expect(screen.getByText("Oleg (CTO)")).toBeInTheDocument();
+  });
+
+  it("matches multiple leaders when custom names overlap", () => {
+    setup({ query: "ole", customNames: { cto: "Oleg", clo: "Olena" } });
+    const options = screen.getAllByRole("option");
+    expect(options).toHaveLength(2);
+  });
 });
