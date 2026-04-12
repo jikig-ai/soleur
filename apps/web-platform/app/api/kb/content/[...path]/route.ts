@@ -97,7 +97,7 @@ export async function GET(
 
   // Symlink check — reject symlinks to prevent escaping kbRoot
   try {
-    const lstat = fs.lstatSync(fullPath);
+    const lstat = await fs.promises.lstat(fullPath);
     if (lstat.isSymbolicLink()) {
       return NextResponse.json({ error: "Access denied" }, { status: 403 });
     }
@@ -107,18 +107,21 @@ export async function GET(
 
   // Read and serve file
   try {
-    const buffer = fs.readFileSync(fullPath);
+    const buffer = await fs.promises.readFile(fullPath);
     const contentType = CONTENT_TYPE_MAP[ext] || "application/octet-stream";
     const disposition = ATTACHMENT_EXTENSIONS.has(ext)
       ? "attachment"
       : "inline";
-    const filename = path.basename(relativePath);
+    // Sanitize filename for Content-Disposition header (RFC 5987)
+    const rawName = path.basename(relativePath);
+    const safeName = rawName.replace(/["\r\n\\]/g, "_");
 
     return new Response(buffer, {
       headers: {
         "Content-Type": contentType,
-        "Content-Disposition": `${disposition}; filename="${filename}"`,
+        "Content-Disposition": `${disposition}; filename="${safeName}"`,
         "Content-Length": buffer.length.toString(),
+        "X-Content-Type-Options": "nosniff",
       },
     });
   } catch {
