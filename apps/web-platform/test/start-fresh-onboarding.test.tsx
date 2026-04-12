@@ -145,10 +145,12 @@ describe("Start Fresh Onboarding - KB State Derivation", () => {
     render(<DashboardPage />);
 
     await waitFor(() => {
-      expect(screen.getByText(/build the foundations/i)).toBeInTheDocument();
+      expect(screen.getByText(/complete these to brief your department leaders/i)).toBeInTheDocument();
     });
     // Vision card should be marked complete
     expect(screen.getByText("Vision")).toBeInTheDocument();
+    // Empty conversation placeholder should also appear
+    expect(screen.getByText(/no conversations yet/i)).toBeInTheDocument();
   });
 
   it("shows Command Center when all 4 foundation files exist", async () => {
@@ -197,7 +199,7 @@ describe("Start Fresh Onboarding - KB State Derivation", () => {
     render(<DashboardPage />);
 
     await waitFor(() => {
-      expect(screen.getByText(/build the foundations/i)).toBeInTheDocument();
+      expect(screen.getByText(/complete these to brief your department leaders/i)).toBeInTheDocument();
     });
 
     // Vision and Brand should be complete (checkmark accessible text)
@@ -228,6 +230,50 @@ describe("Start Fresh Onboarding - KB State Derivation", () => {
     });
   });
 
+  it("shows foundation cards and conversation list together when foundations incomplete and conversations exist", async () => {
+    // Partial foundations (vision only)
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: () =>
+        Promise.resolve({ tree: buildMockTree(["overview/vision.md"]) }),
+    });
+
+    // Conversations exist
+    conversationBuilder = createQueryBuilder([
+      {
+        id: "conv-1",
+        user_id: "user-1",
+        domain_leader: "cmo",
+        session_id: null,
+        status: "completed",
+        total_cost_usd: 0,
+        input_tokens: 0,
+        output_tokens: 0,
+        last_active: new Date().toISOString(),
+        created_at: new Date().toISOString(),
+        title: "Brand strategy discussion",
+        archived_at: null,
+      },
+    ]);
+
+    const { default: DashboardPage } = await import(
+      "@/app/(dashboard)/dashboard/page"
+    );
+    render(<DashboardPage />);
+
+    // Foundation cards should be visible
+    await waitFor(() => {
+      expect(screen.getByText(/complete these to brief your department leaders/i)).toBeInTheDocument();
+    });
+
+    // Conversation list should also be visible (filter bar indicates inbox state)
+    expect(screen.getByText(/all statuses/i)).toBeInTheDocument();
+    // Foundation card titles
+    expect(screen.getByText("Brand Identity")).toBeInTheDocument();
+    expect(screen.getByText("Legal Foundations")).toBeInTheDocument();
+  });
+
   it("falls through to Command Center on API error", async () => {
     fetchMock.mockRejectedValueOnce(new Error("Network error"));
 
@@ -236,10 +282,10 @@ describe("Start Fresh Onboarding - KB State Derivation", () => {
     );
     render(<DashboardPage />);
 
-    // Should fall through to Command Center (existing empty state)
+    // Should fall through to empty state (no foundations visible since KB state unknown)
     await waitFor(() => {
       expect(
-        screen.getByText(/your organization is ready/i),
+        screen.getByText(/no conversations yet/i),
       ).toBeInTheDocument();
     });
   });
@@ -330,7 +376,7 @@ describe("Start Fresh Onboarding - Conditional Rendering", () => {
     render(<DashboardPage />);
 
     await waitFor(() => {
-      expect(screen.getByText(/build the foundations/i)).toBeInTheDocument();
+      expect(screen.getByText(/complete these to brief your department leaders/i)).toBeInTheDocument();
     });
 
     // Done cards should be links to KB viewer
