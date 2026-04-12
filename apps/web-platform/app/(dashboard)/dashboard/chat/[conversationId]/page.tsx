@@ -27,6 +27,7 @@ export default function ChatPage() {
   const {
     messages,
     startSession,
+    resumeSession,
     sendMessage,
     sendReviewGateResponse,
     status,
@@ -39,7 +40,7 @@ export default function ChatPage() {
     usageData,
   } = useWebSocket(conversationId);
 
-  const { names: customNames, getDisplayName } = useTeamNames();
+  const { names: customNames, getDisplayName, loading: teamNamesLoading } = useTeamNames();
 
   const [sessionStarted, setSessionStarted] = useState(false);
   const [initialMsgSent, setInitialMsgSent] = useState(false);
@@ -85,13 +86,28 @@ export default function ChatPage() {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
-  // Start session when connected AND context is resolved (or not needed)
+  // Start or resume session when connected
   useEffect(() => {
-    if (status === "connected" && conversationId === "new" && !sessionStarted && !contextLoading) {
-      startSession(leaderId ?? undefined, kbContext);
+    if (status !== "connected" || sessionStarted) return;
+
+    if (conversationId === "new") {
+      if (!contextLoading) {
+        startSession(leaderId ?? undefined, kbContext);
+        setSessionStarted(true);
+      }
+    } else {
+      // Existing conversation — resume the server-side session
+      resumeSession(conversationId);
       setSessionStarted(true);
     }
-  }, [status, conversationId, leaderId, sessionStarted, startSession, contextLoading, kbContext]);
+  }, [status, conversationId, leaderId, sessionStarted, startSession, resumeSession, contextLoading, kbContext]);
+
+  // Reset sessionStarted on reconnection so session init re-fires
+  useEffect(() => {
+    if (status === "reconnecting") {
+      setSessionStarted(false);
+    }
+  }, [status]);
 
   // Send initial message from ?msg= param after server confirms session
   useEffect(() => {
@@ -319,6 +335,7 @@ export default function ChatPage() {
             query={atQuery}
             visible={atVisible}
             customNames={customNames}
+            loading={teamNamesLoading}
             onSelect={(id) => {
               setAtVisible(false);
               if (insertRef.current) {
