@@ -61,5 +61,5 @@ Users cannot upload files (images, PDFs, documents) to their knowledge base thro
 | T4 | Upload an unsupported file type (.exe) | Rejected with clear error message |
 | T5 | Upload a file with the same name as existing file | User prompted to overwrite or cancel |
 | T6 | Upload to a deeply nested directory | File committed to correct path in git |
-| T7 | After upload, agent can reference the file in conversation | Agent sees file in KB tree and can discuss it |
+| ~~T7~~ | ~~After upload, agent can reference the file in conversation~~ | ~~Agent sees file in KB tree and can discuss it~~ — **Descoped from V1.** Agents see file names in tree but reading binary content requires separate server-side access path. Tracked in follow-up issue. |
 | T8 | Path traversal attempt (../../etc/passwd) | Rejected by server validation |
