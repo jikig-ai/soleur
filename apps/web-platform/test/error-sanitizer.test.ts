@@ -109,4 +109,23 @@ describe("sanitizeErrorForClient", () => {
       "An unexpected error occurred. Please try again.",
     );
   });
+
+  test("SDK resume error returns friendly message", () => {
+    const err = new Error(
+      "Claude Code returned an error result: No conversation found with session ID: 544e6cdb-461b-40f6-bd78-498893569a6e",
+    );
+    expect(sanitizeErrorForClient(err)).toBe(
+      "Session resume failed. Falling back to conversation history.",
+    );
+  });
+
+  test("SDK resume error does not leak session UUID", () => {
+    const uuid = "544e6cdb-461b-40f6-bd78-498893569a6e";
+    const err = new Error(
+      `Claude Code returned an error result: No conversation found with session ID: ${uuid}`,
+    );
+    const result = sanitizeErrorForClient(err);
+    expect(result).not.toContain(uuid);
+    expect(result).not.toContain("session ID");
+  });
 });

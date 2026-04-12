@@ -51,6 +51,7 @@ export interface UsageData {
 interface UseWebSocketReturn {
   messages: ChatMessage[];
   startSession: (leaderId?: DomainLeaderId, context?: ConversationContext) => void;
+  resumeSession: (conversationId: string) => void;
   sendMessage: (content: string, attachments?: AttachmentRef[]) => void;
   sendReviewGateResponse: (gateId: string, selection: string) => void;
   status: ConnectionStatus;
@@ -434,6 +435,14 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
     [send],
   );
 
+  const resumeSession = useCallback(
+    (targetConversationId: string) => {
+      setSessionConfirmed(false);
+      send({ type: "resume_session", conversationId: targetConversationId });
+    },
+    [send],
+  );
+
   const sendMessage = useCallback(
     (content: string, attachments?: AttachmentRef[]) => {
       // Add the user message to local state immediately
@@ -473,5 +482,5 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
     connect();
   }, [connect]);
 
-  return { messages, startSession, sendMessage, sendReviewGateResponse, status, sessionConfirmed, disconnectReason, lastError, reconnect, routeSource, activeLeaderIds, usageData };
+  return { messages, startSession, resumeSession, sendMessage, sendReviewGateResponse, status, sessionConfirmed, disconnectReason, lastError, reconnect, routeSource, activeLeaderIds, usageData };
 }

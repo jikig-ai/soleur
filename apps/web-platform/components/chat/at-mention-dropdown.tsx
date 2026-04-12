@@ -12,6 +12,8 @@ interface AtMentionDropdownProps {
   onDismiss: () => void;
   /** Custom names map from TeamNamesProvider (e.g., { cto: "Alex" }) */
   customNames?: Record<string, string>;
+  /** Whether custom names are still loading from the API */
+  loading?: boolean;
 }
 
 export function AtMentionDropdown({
@@ -20,6 +22,7 @@ export function AtMentionDropdown({
   onSelect,
   onDismiss,
   customNames = {},
+  loading = false,
 }: AtMentionDropdownProps) {
   const [activeIndex, setActiveIndex] = useState(0);
 
@@ -86,7 +89,9 @@ export function AtMentionDropdown({
         Leaders
       </div>
       {filtered.length === 0 ? (
-        <div className="px-3 py-3 text-sm text-neutral-500">No matches</div>
+        <div className="px-3 py-3 text-sm text-neutral-500">
+          {loading && query ? "Loading team..." : "No matches"}
+        </div>
       ) : (
         <ul className="max-h-64 overflow-y-auto pb-1">
           {filtered.map((leader, index) => (
