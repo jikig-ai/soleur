@@ -245,14 +245,17 @@ export function ChatInput({
     const trimmed = value.trim();
     if (!trimmed && attachments.length === 0) return;
 
+    let sent = false;
     if (attachments.length > 0) {
       setIsUploading(true);
       try {
         const uploaded = await uploadAttachments();
         if (uploaded.length > 0) {
           onSend(trimmed, uploaded);
+          sent = true;
         } else if (trimmed) {
           onSend(trimmed);
+          sent = true;
         }
       } finally {
         setIsUploading(false);
@@ -260,10 +263,13 @@ export function ChatInput({
       }
     } else {
       onSend(trimmed);
+      sent = true;
     }
 
-    setValue("");
-    onAtDismiss();
+    if (sent) {
+      setValue("");
+      onAtDismiss();
+    }
   }, [value, attachments, onSend, onAtDismiss, uploadAttachments]);
 
   const handleKeyDown = useCallback(

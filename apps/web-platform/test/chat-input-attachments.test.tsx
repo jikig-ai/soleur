@@ -320,9 +320,7 @@ describe("ChatInput — attachments", () => {
       });
 
       // XHR send starts but never completes (simulates in-flight upload)
-      let resolveUpload: () => void;
       mockXhr.send.mockImplementation(() => {
-        new Promise<void>((resolve) => { resolveUpload = resolve; });
         setTimeout(() => {
           mockXhr.upload.onprogress?.({ lengthComputable: true, loaded: 25, total: 100 });
         }, 0);
@@ -352,6 +350,74 @@ describe("ChatInput — attachments", () => {
 
       // XHR.abort() should have been called
       expect(mockXhr.abort).toHaveBeenCalled();
+    });
+
+    it("shows error on non-2xx XHR status (e.g., 403 expired presign)", async () => {
+      setup();
+
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({
+          uploadUrl: "https://storage.supabase.co/upload/signed/abc",
+          storagePath: "user-1/conv-1/uuid.png",
+        }),
+      });
+
+      mockXhr.status = 403;
+      mockXhr.send.mockImplementation(() => {
+        setTimeout(() => mockXhr.onload?.(), 0);
+      });
+
+      const fileInput = document.querySelector("input[type='file']") as HTMLInputElement;
+      const pngFile = new File(["x"], "test.png", { type: "image/png" });
+      fireEvent.change(fileInput, { target: { files: [pngFile] } });
+
+      await waitFor(() => {
+        expect(screen.getByText(/test\.png/)).toBeInTheDocument();
+      });
+
+      const textarea = screen.getByRole("textbox");
+      await userEvent.type(textarea, "hi");
+      await userEvent.keyboard("{Enter}");
+
+      await waitFor(() => {
+        expect(screen.getByText(/upload to storage failed/i)).toBeInTheDocument();
+      });
+    });
+
+    it("preserves errored attachments after send while clearing successful ones", async () => {
+      setup();
+
+      // First file: presign succeeds, XHR fails
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({
+          uploadUrl: "https://storage.supabase.co/upload/signed/abc",
+          storagePath: "user-1/conv-1/uuid.png",
+        }),
+      });
+
+      mockXhr.send.mockImplementation(() => {
+        setTimeout(() => mockXhr.onerror?.(), 0);
+      });
+
+      const fileInput = document.querySelector("input[type='file']") as HTMLInputElement;
+      const pngFile = new File(["x"], "fail.png", { type: "image/png" });
+      fireEvent.change(fileInput, { target: { files: [pngFile] } });
+
+      await waitFor(() => {
+        expect(screen.getByText(/fail\.png/)).toBeInTheDocument();
+      });
+
+      const textarea = screen.getByRole("textbox");
+      await userEvent.type(textarea, "hi");
+      await userEvent.keyboard("{Enter}");
+
+      // Errored attachment should persist with error message
+      await waitFor(() => {
+        expect(screen.getByText(/upload to storage failed/i)).toBeInTheDocument();
+        expect(screen.getByText(/fail\.png/)).toBeInTheDocument();
+      });
     });
   });
 });
