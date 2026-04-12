@@ -71,99 +71,22 @@ Domain assessments carried forward from brainstorm (2026-04-12).
 
 ### Implementation approach
 
-The change is a restructuring of render logic in a single file. No new components, no new hooks, no backend changes.
+The change is a restructuring of render logic in a single file. No new components, no new hooks, no backend changes. [Updated 2026-04-12 after plan review: removed FoundationsBar extraction per reviewer consensus — inline the JSX directly.]
 
-**Step 1: Extract a `FoundationsBar` inline component**
+**Step 1: Delete the foundations early return (lines 292-368)**
 
-Extract the foundation cards rendering into a reusable inline component within `page.tsx`:
+Delete the entire `if (!kbError && visionExists && !allFoundationsComplete)` block that returns early. This block currently gates the inbox behind incomplete foundations.
 
-```tsx
-// apps/web-platform/app/(dashboard)/dashboard/page.tsx
-function FoundationsBar({
-  foundationCards,
-  onPromptClick,
-}: {
-  foundationCards: FoundationCard[];
-  onPromptClick: (text: string) => void;
-}) {
-  return (
-    <div className="mb-8">
-      <p className="mb-2 text-xs font-medium tracking-widest text-amber-500">
-        FOUNDATIONS
-      </p>
-      <p className="mb-4 text-sm text-neutral-400">
-        Complete these to brief your department leaders.
-      </p>
-      <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-        {/* same card rendering as current foundations state */}
-      </div>
-    </div>
-  );
-}
-```
+**Step 2: Add foundation cards to the empty inbox state (lines 378-426)**
 
-**Step 2: Remove the foundations early return (lines 292-368)**
+Add the foundation card grid JSX (copied from the deleted block, lines 306-354) as a conditional block inside the empty state. Adjust the heading text and layout:
 
-Delete the entire `if (!kbError && visionExists && !allFoundationsComplete)` block that returns early.
+- When `visionExists && !allFoundationsComplete`: show foundation cards at top, heading "No conversations yet.", subtext "Start a conversation to put your agents to work."
+- When all foundations complete: keep existing "Your organization is ready." heading with suggested prompts
+- Note: the empty state uses `items-center justify-center` — switch to `items-center justify-start pt-10` when foundations are shown to avoid awkward vertical centering of a tall page
 
-**Step 3: Add `FoundationsBar` to the empty inbox state (lines 378-426)**
+**Step 3: Add foundation cards to the inbox state (lines 432-543)**
 
-When `visionExists && !allFoundationsComplete`, render `FoundationsBar` at the top of the empty state. Replace the "Your organization is ready" heading with context-appropriate copy:
+Add the same foundation card grid JSX as a conditional block between the header and the filter bar, guarded by `visionExists && !allFoundationsComplete`.
 
-```tsx
-if (conversations.length === 0 && !hasActiveFilter) {
-  return (
-    <div className="mx-auto flex min-h-[calc(100dvh-4rem)] max-w-3xl flex-col items-center justify-center px-4 py-10">
-      {visionExists && !allFoundationsComplete && (
-        <FoundationsBar
-          foundationCards={foundationCards}
-          onPromptClick={handlePromptClick}
-        />
-      )}
-
-      <p className="mb-3 text-xs font-medium tracking-widest text-amber-500">
-        COMMAND CENTER
-      </p>
-      <h1 className="...">
-        {allFoundationsComplete
-          ? "Your organization is ready."
-          : "No conversations yet."}
-      </h1>
-      <p className="...">
-        Start a conversation to put your agents to work.
-      </p>
-
-      {/* New conversation button */}
-      {/* Suggested prompts (only when foundations are complete) */}
-      {/* Leader strip */}
-    </div>
-  );
-}
-```
-
-**Step 4: Add `FoundationsBar` to the inbox state (lines 432-543)**
-
-When `visionExists && !allFoundationsComplete`, render `FoundationsBar` between the header and the filter bar:
-
-```tsx
-return (
-  <div className="mx-auto max-w-4xl px-4 py-6 md:py-8">
-    {/* Header */}
-    <div className="mb-6 flex items-center justify-between">...</div>
-
-    {/* Foundation cards (only when incomplete) */}
-    {visionExists && !allFoundationsComplete && (
-      <FoundationsBar
-        foundationCards={foundationCards}
-        onPromptClick={handlePromptClick}
-      />
-    )}
-
-    {/* Filter bar */}
-    <div className="mb-4 flex flex-wrap items-center gap-2">...</div>
-
-    {/* Conversation list */}
-    ...
-  </div>
-);
-```
+**Edge case note:** When `kbError === "error"`, `kbPaths` is empty so `visionExists` is false — foundation cards are correctly excluded. No regression from removing the `!kbError` guard in the deleted block.

@@ -5,11 +5,11 @@
 
 ## Phase 1: Implementation
 
-- [ ] 1.1 Extract `FoundationsBar` inline component from existing foundation cards JSX in `page.tsx`
-- [ ] 1.2 Remove the foundations early return block (`if (!kbError && visionExists && !allFoundationsComplete)` at line 292)
-- [ ] 1.3 Add `FoundationsBar` to the empty inbox state (foundations incomplete + zero conversations)
-- [ ] 1.4 Add `FoundationsBar` to the full inbox state (foundations incomplete + conversations exist)
-- [ ] 1.5 Update empty-state heading copy: "No conversations yet" when foundations incomplete, "Your organization is ready" when complete
+- [ ] 1.1 Delete the foundations early return block (`if (!kbError && visionExists && !allFoundationsComplete)` at line 292)
+- [ ] 1.2 Add foundation card grid JSX to the empty inbox state (inline, no component extraction)
+- [ ] 1.3 Add foundation card grid JSX to the full inbox state (between header and filter bar)
+- [ ] 1.4 Update empty-state heading copy: "No conversations yet" when foundations incomplete, "Your organization is ready" when complete
+- [ ] 1.5 Adjust empty-state vertical alignment (`justify-start pt-10`) when foundations are shown
 
 ## Phase 2: Testing
 
