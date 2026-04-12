@@ -149,12 +149,12 @@ In `ws-handler.ts`, the `resume_session` handler (line 238-268) restores the `co
 
 ## Acceptance Criteria
 
-- [ ] When the Claude Agent SDK returns "No conversation found with session ID", the system falls back to message replay instead of showing an error
-- [ ] The fallback path (clear stale session_id, load history, replay) executes successfully
-- [ ] Users see either a seamless response (via replay) or a friendly error message, never the generic "An unexpected error occurred"
-- [ ] The `KNOWN_SAFE_MESSAGES` or pattern matching in `error-sanitizer.ts` covers the SDK resume error
-- [ ] Sentry stops receiving "No conversation found with session ID" errors for this flow
-- [ ] Both plain text and file attachment messages work correctly after the fix
+- [x] When the Claude Agent SDK returns "No conversation found with session ID", the system falls back to message replay instead of showing an error
+- [x] The fallback path (clear stale session_id, load history, replay) executes successfully
+- [x] Users see either a seamless response (via replay) or a friendly error message, never the generic "An unexpected error occurred"
+- [x] The `KNOWN_SAFE_MESSAGES` or pattern matching in `error-sanitizer.ts` covers the SDK resume error
+- [x] Sentry stops receiving "No conversation found with session ID" errors for this flow
+- [x] Both plain text and file attachment messages work correctly after the fix
 
 ## Test Scenarios
 

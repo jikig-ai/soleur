@@ -1136,6 +1136,17 @@ When you need user input for important decisions, use the AskUserQuestion tool.`
           },
         );
       }
+    } else if (
+      resumeSessionId &&
+      err instanceof Error &&
+      err.message.includes("No conversation found with session ID")
+    ) {
+      // Resume-specific error: clean up the typing indicator and re-throw
+      // so the caller's .catch() fallback can fire (clear stale session_id,
+      // load history, replay). Do NOT capture to Sentry (expected operational
+      // behavior) or mark conversation as failed (it will be retried).
+      sendToClient(userId, { type: "stream_end", leaderId: leaderId ?? "cpo" });
+      throw err;
     } else {
       Sentry.captureException(err);
       log.error({ err, userId, conversationId }, "Session error");
