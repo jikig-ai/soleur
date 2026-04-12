@@ -2,8 +2,7 @@ import fs from "fs";
 import path from "path";
 import matter from "gray-matter";
 import { isPathInWorkspace } from "./sandbox";
-
-const MAX_FILE_SIZE = 1024 * 1024; // 1MB
+import { KB_MAX_FILE_SIZE } from "@/lib/kb-constants";
 const MAX_QUERY_LENGTH = 200;
 const MAX_SEARCH_RESULTS = 100;
 
@@ -210,7 +209,7 @@ export async function readContent(
     throw new KbNotFoundError();
   }
 
-  if (stat.size > MAX_FILE_SIZE) {
+  if (stat.size > KB_MAX_FILE_SIZE) {
     throw new KbValidationError("File exceeds maximum size limit");
   }
 
@@ -246,7 +245,7 @@ export async function searchKb(
       let raw: string;
       try {
         const stat = await fs.promises.stat(fullPath);
-        if (stat.size > MAX_FILE_SIZE) return null;
+        if (stat.size > KB_MAX_FILE_SIZE) return null;
         raw = await fs.promises.readFile(fullPath, "utf-8");
       } catch {
         return null;
