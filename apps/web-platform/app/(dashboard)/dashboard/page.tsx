@@ -293,7 +293,7 @@ export default function DashboardPage() {
 
   if (conversations.length === 0 && !hasActiveFilter) {
     return (
-      <div className={`mx-auto flex min-h-[calc(100dvh-4rem)] max-w-3xl flex-col px-4 py-10 ${visionExists && !allFoundationsComplete ? "items-center pt-10" : "items-center justify-center"}`}>
+      <div className={`mx-auto flex min-h-[calc(100dvh-4rem)] max-w-3xl flex-col items-center px-4 py-10 ${visionExists && !allFoundationsComplete ? "pt-10" : "justify-center"}`}>
         {/* Foundation cards (only when incomplete) */}
         {visionExists && !allFoundationsComplete && (
           <div className="mb-10 w-full">
