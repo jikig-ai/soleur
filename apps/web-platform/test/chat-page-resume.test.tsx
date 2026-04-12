@@ -17,7 +17,7 @@ let wsReturn = {
   resumeSession: mockResumeSession,
   sendMessage: mockSendMessage,
   sendReviewGateResponse: mockSendReviewGateResponse,
-  status: "connected" as const,
+  status: "connected" as "connecting" | "connected" | "reconnecting" | "disconnected",
   disconnectReason: undefined as string | undefined,
   lastError: null as import("@/lib/ws-client").WebSocketError | null,
   reconnect: vi.fn(),
@@ -121,7 +121,7 @@ describe("ChatPage — existing conversation (resume_session)", () => {
     });
 
     // Simulate reconnecting status
-    wsReturn.status = "reconnecting" as "connected";
+    wsReturn.status = "reconnecting";
     const mod = await import(
       "@/app/(dashboard)/dashboard/chat/[conversationId]/page"
     );
