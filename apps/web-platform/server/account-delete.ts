@@ -7,6 +7,7 @@ import { createChildLogger } from "./logger";
 const log = createChildLogger("account-delete");
 
 const PAGE_SIZE = 1_000;
+const MAX_PAGES = 100; // Safety bound: 100k objects per folder
 
 /**
  * List all object names in a Storage folder, paginating through all pages.
@@ -20,7 +21,7 @@ async function listAllStorageObjects(
   const names: string[] = [];
   let offset = 0;
 
-  while (true) {
+  for (let page = 0; page < MAX_PAGES; page++) {
     const { data } = await storage
       .from(bucket)
       .list(folder, { limit: PAGE_SIZE, offset });

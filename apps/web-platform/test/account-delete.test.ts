@@ -303,9 +303,9 @@ describe("deleteAccount", () => {
 
     await deleteAccount("user-123", "test@example.com");
 
-    // With pagination, folder-level list must be called at least twice
-    // (first page returned exactly PAGE_SIZE items → must fetch second page)
-    expect(folderListCallCount).toBeGreaterThanOrEqual(2);
+    // With pagination, folder-level list must be called exactly twice
+    // (first page returned exactly PAGE_SIZE items → fetch second page → empty → done)
+    expect(folderListCallCount).toBe(2);
   });
 
   test("does not call remove() when user has zero attachments", async () => {
