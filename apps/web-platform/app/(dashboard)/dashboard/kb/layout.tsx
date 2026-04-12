@@ -27,45 +27,49 @@ export default function KbLayout({ children }: { children: ReactNode }) {
   const [error, setError] = useState<KbContextValue["error"]>(null);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
 
-  useEffect(() => {
-    let cancelled = false;
-    async function fetchTree() {
-      try {
-        const res = await fetch("/api/kb/tree");
-        if (!cancelled) {
-          if (res.status === 401) {
-            router.push("/login");
-            return;
-          }
-          if (res.status === 503) {
-            setError("workspace-not-ready");
-            setLoading(false);
-            return;
-          }
-          if (res.status === 404) {
-            setError("not-found");
-            setLoading(false);
-            return;
-          }
-          if (!res.ok) {
-            setError("unknown");
-            setLoading(false);
-            return;
-          }
-          const data = await res.json();
-          setTree(data.tree);
-          setLoading(false);
-        }
-      } catch {
-        if (!cancelled) {
-          setError("unknown");
-          setLoading(false);
-        }
+  const fetchTree = useCallback(async (signal?: AbortSignal) => {
+    try {
+      const res = await fetch("/api/kb/tree", { signal });
+      if (signal?.aborted) return;
+      if (res.status === 401) {
+        router.push("/login");
+        return;
+      }
+      if (res.status === 503) {
+        setError("workspace-not-ready");
+        setLoading(false);
+        return;
+      }
+      if (res.status === 404) {
+        setError("not-found");
+        setLoading(false);
+        return;
+      }
+      if (!res.ok) {
+        setError("unknown");
+        setLoading(false);
+        return;
+      }
+      const data = await res.json();
+      setTree(data.tree);
+      setLoading(false);
+    } catch {
+      if (!signal?.aborted) {
+        setError("unknown");
+        setLoading(false);
       }
     }
-    fetchTree();
-    return () => { cancelled = true; };
   }, [router]);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    fetchTree(controller.signal);
+    return () => { controller.abort(); };
+  }, [fetchTree]);
+
+  const refreshTree = useCallback(async () => {
+    await fetchTree();
+  }, [fetchTree]);
 
   const toggleExpanded = useCallback((path: string) => {
     setExpanded((prev) => {
@@ -110,7 +114,8 @@ export default function KbLayout({ children }: { children: ReactNode }) {
     error,
     expanded,
     toggleExpanded,
-  }), [tree, loading, error, expanded, toggleExpanded]);
+    refreshTree,
+  }), [tree, loading, error, expanded, toggleExpanded, refreshTree]);
 
   // Full-width states: loading, errors, or empty KB (no sidebar needed)
   if (loading || error || (!loading && !hasTreeContent)) {
