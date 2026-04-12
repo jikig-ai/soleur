@@ -110,11 +110,11 @@ Changing `items-end` to `items-center` would fix single-line alignment but break
 
 ## Acceptance Criteria
 
-- [ ] Attachment button, textarea, and send button are vertically aligned in the default single-line state
-- [ ] When the textarea expands to multiple lines, the buttons remain anchored at the bottom
-- [ ] The fix applies to both the chat page (`/dashboard/chat/[conversationId]`) and any other consumer of the ChatInput component
-- [ ] No visual regression in mobile view (the mobile @ button inside the textarea remains correctly positioned)
-- [ ] Existing tests in `apps/web-platform/test/chat-input.test.tsx` continue to pass
+- [x] Attachment button, textarea, and send button are vertically aligned in the default single-line state
+- [x] When the textarea expands to multiple lines, the buttons remain anchored at the bottom
+- [x] The fix applies to both the chat page (`/dashboard/chat/[conversationId]`) and any other consumer of the ChatInput component
+- [x] No visual regression in mobile view (the mobile @ button inside the textarea remains correctly positioned)
+- [x] Existing tests in `apps/web-platform/test/chat-input.test.tsx` continue to pass
 
 ## Domain Review
 
