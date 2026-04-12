@@ -190,18 +190,18 @@ Add a test that mocks `list()` to return exactly `PAGE_SIZE` items on the first 
 
 ## Acceptance Criteria
 
-- [ ] `account-delete.test.ts` includes a `mockStorage` that mocks `service.storage.from("chat-attachments")` with `.list()` and `.remove()`
-- [ ] Storage mock defaults to empty results in `setupSupabaseMocks` so existing tests are unaffected
-- [ ] Happy path test: blob paths collected from nested folder/file listing and passed to `remove()` in correct format (`userId/folder/file`)
-- [ ] `list()` error path test: Storage `list()` throws, `deleteAccount()` still returns `{ success: true }`
-- [ ] `remove()` error path test: Storage `remove()` throws after successful `list()`, `deleteAccount()` still returns `{ success: true }`
-- [ ] Zero attachments test: `list()` returns empty, `remove()` is never called
-- [ ] Cascade order test updated to include Storage purge step between workspace and auth
-- [ ] `list()` calls use offset-based pagination loop instead of fixed `{ limit: 1_000 }`
-- [ ] Pagination test: when first page returns exactly `PAGE_SIZE` items, a second page is fetched with `offset: PAGE_SIZE`
-- [ ] `listAllStorageObjects` helper uses `SupabaseClient["storage"]` type (not `ReturnType`)
-- [ ] All existing tests in `account-delete.test.ts` continue to pass
-- [ ] `cd apps/web-platform && npx vitest run` passes with zero failures
+- [x] `account-delete.test.ts` includes a `mockStorage` that mocks `service.storage.from("chat-attachments")` with `.list()` and `.remove()`
+- [x] Storage mock defaults to empty results in `setupSupabaseMocks` so existing tests are unaffected
+- [x] Happy path test: blob paths collected from nested folder/file listing and passed to `remove()` in correct format (`userId/folder/file`)
+- [x] `list()` error path test: Storage `list()` throws, `deleteAccount()` still returns `{ success: true }`
+- [x] `remove()` error path test: Storage `remove()` throws after successful `list()`, `deleteAccount()` still returns `{ success: true }`
+- [x] Zero attachments test: `list()` returns empty, `remove()` is never called
+- [x] Cascade order test updated to include Storage purge step between workspace and auth
+- [x] `list()` calls use offset-based pagination loop instead of fixed `{ limit: 1_000 }`
+- [x] Pagination test: when first page returns exactly `PAGE_SIZE` items, a second page is fetched with `offset: PAGE_SIZE`
+- [x] `listAllStorageObjects` helper uses `SupabaseClient["storage"]` type (not `ReturnType`)
+- [x] All existing tests in `account-delete.test.ts` continue to pass
+- [x] `cd apps/web-platform && npx vitest run` passes with zero failures
 
 ## Test Scenarios
 

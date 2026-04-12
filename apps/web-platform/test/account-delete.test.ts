@@ -12,11 +12,15 @@ const mockAuth = {
     deleteUser: vi.fn(),
   },
 };
+const mockStorageList = vi.fn();
+const mockStorageRemove = vi.fn();
+const mockStorageFrom = vi.fn();
 
 vi.mock("@/lib/supabase/server", () => ({
   createServiceClient: () => ({
     from: mockFrom,
     auth: mockAuth,
+    storage: { from: mockStorageFrom },
   }),
 }));
 
@@ -62,6 +66,13 @@ function setupSupabaseMocks(overrides: {
 
   mockDeleteWorkspace.mockResolvedValue(undefined);
   mockAbortAllUserSessions.mockReturnValue(undefined);
+
+  mockStorageFrom.mockReturnValue({
+    list: mockStorageList,
+    remove: mockStorageRemove,
+  });
+  mockStorageList.mockResolvedValue({ data: [], error: null });
+  mockStorageRemove.mockResolvedValue({ data: [], error: null });
 }
 
 // ---------------------------------------------------------------------------
@@ -176,6 +187,135 @@ describe("deleteAccount", () => {
 
     expect(result.success).toBe(false);
     expect(result.error).toMatch(/failed/i);
+  });
+
+  // -------------------------------------------------------------------------
+  // Storage blob purge (step 3.5) — GDPR Article 17
+  // -------------------------------------------------------------------------
+
+  test("purges Storage blobs with correct paths from nested folder/file listing", async () => {
+    setupSupabaseMocks();
+
+    mockStorageList.mockImplementation(async (folder: string) => {
+      if (folder === "user-123") {
+        return { data: [{ name: "conv-1" }, { name: "conv-2" }], error: null };
+      }
+      if (folder === "user-123/conv-1") {
+        return { data: [{ name: "img1.png" }, { name: "doc1.pdf" }], error: null };
+      }
+      if (folder === "user-123/conv-2") {
+        return { data: [{ name: "img2.jpg" }], error: null };
+      }
+      return { data: [], error: null };
+    });
+
+    const result = await deleteAccount("user-123", "test@example.com");
+
+    expect(result.success).toBe(true);
+    expect(mockStorageFrom).toHaveBeenCalledWith("chat-attachments");
+    expect(mockStorageRemove).toHaveBeenCalledWith([
+      "user-123/conv-1/img1.png",
+      "user-123/conv-1/doc1.pdf",
+      "user-123/conv-2/img2.jpg",
+    ]);
+  });
+
+  test("Storage list() error is non-fatal — deletion still succeeds", async () => {
+    setupSupabaseMocks();
+
+    mockStorageList.mockRejectedValue(new Error("Storage unavailable"));
+
+    const result = await deleteAccount("user-123", "test@example.com");
+
+    expect(result.success).toBe(true);
+    expect(mockAuth.admin.deleteUser).toHaveBeenCalledWith("user-123");
+  });
+
+  test("Storage remove() error is non-fatal — deletion still succeeds", async () => {
+    setupSupabaseMocks();
+
+    mockStorageList.mockImplementation(async (folder: string) => {
+      if (folder === "user-123") {
+        return { data: [{ name: "conv-1" }], error: null };
+      }
+      if (folder === "user-123/conv-1") {
+        return { data: [{ name: "file.png" }], error: null };
+      }
+      return { data: [], error: null };
+    });
+    mockStorageRemove.mockRejectedValue(new Error("Storage remove failed"));
+
+    const result = await deleteAccount("user-123", "test@example.com");
+
+    expect(result.success).toBe(true);
+    expect(mockAuth.admin.deleteUser).toHaveBeenCalledWith("user-123");
+  });
+
+  test("cascade order: Storage purge runs between workspace deletion and auth deletion", async () => {
+    setupSupabaseMocks();
+    const callOrder: string[] = [];
+
+    mockAbortAllUserSessions.mockImplementation(() => {
+      callOrder.push("abort");
+    });
+    mockDeleteWorkspace.mockImplementation(async () => {
+      callOrder.push("workspace");
+    });
+    mockStorageList.mockImplementation(async (folder: string) => {
+      if (folder === "user-123") {
+        return { data: [{ name: "conv-1" }], error: null };
+      }
+      if (folder === "user-123/conv-1") {
+        return { data: [{ name: "file.png" }], error: null };
+      }
+      return { data: [], error: null };
+    });
+    mockStorageRemove.mockImplementation(async () => {
+      callOrder.push("storage-purge");
+      return { data: [], error: null };
+    });
+    mockAuth.admin.deleteUser.mockImplementation(async () => {
+      callOrder.push("auth");
+      return { data: {}, error: null };
+    });
+
+    const result = await deleteAccount("user-123", "test@example.com");
+
+    expect(result.success).toBe(true);
+    expect(callOrder).toEqual(["abort", "workspace", "storage-purge", "auth"]);
+  });
+
+  test("paginates when folder list returns PAGE_SIZE (1000) items", async () => {
+    setupSupabaseMocks();
+
+    const fullPage = Array.from({ length: 1_000 }, (_, i) => ({ name: `conv-${i}` }));
+
+    let folderListCallCount = 0;
+    mockStorageList.mockImplementation(async (folder: string) => {
+      if (folder === "user-123") {
+        folderListCallCount++;
+        if (folderListCallCount === 1) return { data: fullPage, error: null };
+        return { data: [], error: null };
+      }
+      // Per-conversation files — return empty for pagination test
+      return { data: [], error: null };
+    });
+
+    await deleteAccount("user-123", "test@example.com");
+
+    // With pagination, folder-level list must be called at least twice
+    // (first page returned exactly PAGE_SIZE items → must fetch second page)
+    expect(folderListCallCount).toBeGreaterThanOrEqual(2);
+  });
+
+  test("does not call remove() when user has zero attachments", async () => {
+    setupSupabaseMocks();
+    // Default mock already returns { data: [], error: null }
+
+    const result = await deleteAccount("user-123", "test@example.com");
+
+    expect(result.success).toBe(true);
+    expect(mockStorageRemove).not.toHaveBeenCalled();
   });
 });
 
