@@ -163,6 +163,7 @@ When a PR adds external services (terraform resources, account signups, API key 
 - Never add a dependency for something an LLM can generate inline -- every new dependency is an attack surface expansion; the dependency-review-action flags new dependencies on every PR
 - `bunfig.toml` sets `minimumReleaseAge = 259200` (3 days) at all package roots -- newly published packages cannot be installed for 72 hours, which would have caught the litellm attack (live for ~1 hour)
 - Never use `npx <tool>` in shared scripts or CI when the tool is a project devDependency -- `npx` resolves from its global cache (`~/.npm/_npx/`) before `node_modules/.bin/`, silently pulling a different version than the lockfile specifies; use `npm run <script>` (which prepends `node_modules/.bin/` to `$PATH`) or invoke the binary directly via `./node_modules/.bin/<tool>`. **Why:** In #1856, `npx vitest run` in `test-all.sh` pulled a cached vitest version that depended on rolldown native bindings not installed locally, producing intermittent failures unrelated to test code.
+- When designing features that store user-generated content (uploads, documents, configurations), prefer git-committed storage for data portability -- users must be able to `git clone` and take all their data; if cloud-only storage is unavoidable, the spec must include an export mechanism and the export path must be tested before shipping
 
 ### Never
 
