@@ -8,6 +8,7 @@ import { createServiceClient } from "@/lib/supabase/service";
 import { ROUTABLE_DOMAIN_LEADERS, type DomainLeaderId } from "./domain-leaders";
 import { routeMessage } from "./domain-router";
 import { KeyInvalidError, type AttachmentRef } from "@/lib/types";
+import { ALLOWED_ATTACHMENT_TYPES } from "@/lib/attachment-constants";
 import { decryptKey, decryptKeyLegacy, encryptKey } from "./byok";
 import { sendToClient } from "./ws-handler";
 import * as Sentry from "@sentry/nextjs";
@@ -1240,7 +1241,6 @@ export async function sendUserMessage(
   let attachmentContext: string | undefined;
   if (attachments && attachments.length > 0) {
     // Validate and sanitize each attachment (defense-in-depth — client is untrusted)
-    const ALLOWED_TYPES = new Set(["image/png", "image/jpeg", "image/gif", "image/webp", "application/pdf"]);
     const pathPrefix = `${userId}/${conversationId}/`;
 
     for (const att of attachments) {
@@ -1248,7 +1248,7 @@ export async function sendUserMessage(
       if (!att.storagePath.startsWith(pathPrefix) || att.storagePath.includes("..")) {
         throw new Error("Attachment not found");
       }
-      if (!ALLOWED_TYPES.has(att.contentType)) {
+      if (!ALLOWED_ATTACHMENT_TYPES.has(att.contentType)) {
         throw new Error("Unsupported file type");
       }
       // Sanitize filename: strip path separators
