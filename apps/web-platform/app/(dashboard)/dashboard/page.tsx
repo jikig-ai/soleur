@@ -97,7 +97,7 @@ export default function DashboardPage() {
   const [domainFilter, setDomainFilter] = useState<DomainLeaderId | "general" | null>(null);
   const [archiveFilter, setArchiveFilter] = useState<ArchiveFilter>("active");
 
-  const { conversations, loading, error, refetch, archiveConversation, unarchiveConversation } = useConversations({
+  const { conversations, loading, error, refetch, archiveConversation, unarchiveConversation, updateStatus } = useConversations({
     statusFilter,
     domainFilter,
     archiveFilter,
@@ -570,6 +570,7 @@ export default function DashboardPage() {
               conversation={conv}
               onArchive={archiveConversation}
               onUnarchive={unarchiveConversation}
+              onStatusChange={updateStatus}
             />
           ))}
         </div>

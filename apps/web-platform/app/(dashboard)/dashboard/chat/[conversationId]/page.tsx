@@ -4,7 +4,7 @@ import { useState, useRef, useEffect } from "react";
 import { useParams, useSearchParams, useRouter, usePathname } from "next/navigation";
 import { MarkdownRenderer } from "@/components/ui/markdown-renderer";
 import { useWebSocket } from "@/lib/ws-client";
-import type { ConversationContext } from "@/lib/types";
+import type { ConversationContext, AttachmentRef } from "@/lib/types";
 import { ErrorCard } from "@/components/ui/error-card";
 import { DOMAIN_LEADERS } from "@/server/domain-leaders";
 import type { DomainLeaderId } from "@/server/domain-leaders";
@@ -12,6 +12,7 @@ import { LEADER_COLORS } from "@/components/chat/leader-colors";
 import { ChatInput } from "@/components/chat/chat-input";
 import { AtMentionDropdown } from "@/components/chat/at-mention-dropdown";
 import { useTeamNames } from "@/hooks/use-team-names";
+import { AttachmentDisplay } from "@/components/chat/attachment-display";
 
 export default function ChatPage() {
   const params = useParams<{ conversationId: string }>();
@@ -38,7 +39,7 @@ export default function ChatPage() {
     usageData,
   } = useWebSocket(conversationId);
 
-  const { names: customNames, getDisplayName } = useTeamNames();
+  const { names: customNames, getDisplayName, loading: teamNamesLoading } = useTeamNames();
 
   const [sessionStarted, setSessionStarted] = useState(false);
   const [initialMsgSent, setInitialMsgSent] = useState(false);
@@ -125,9 +126,13 @@ export default function ChatPage() {
   const hasAssistantMessage = messages.some((m) => m.role === "assistant");
   const isClassifying = hasUserMessage && !hasAssistantMessage && routeSource === null;
 
-  function handleSend(message: string) {
+  function handleSend(message: string, attachments?: AttachmentRef[]) {
     if (status !== "connected") return;
-    sendMessage(message);
+    if (attachments && attachments.length > 0) {
+      sendMessage(message, attachments);
+    } else {
+      sendMessage(message);
+    }
   }
 
   return (
@@ -265,6 +270,7 @@ export default function ChatPage() {
                     showFullTitle={!!isFirst}
                     isStreaming={!!msg.leaderId && activeLeaderIds.includes(msg.leaderId)}
                     getDisplayName={getDisplayName}
+                    attachments={msg.attachments}
                   />
                 )}
               </div>
@@ -313,6 +319,7 @@ export default function ChatPage() {
             query={atQuery}
             visible={atVisible}
             customNames={customNames}
+            loading={teamNamesLoading}
             onSelect={(id) => {
               setAtVisible(false);
               if (insertRef.current) {
@@ -323,6 +330,7 @@ export default function ChatPage() {
           />
           <ChatInput
             onSend={handleSend}
+            conversationId={conversationId}
             onAtTrigger={(query, pos) => {
               setAtQuery(query);
               setAtPosition(pos);
@@ -379,6 +387,7 @@ function MessageBubble({
   showFullTitle = false,
   isStreaming = false,
   getDisplayName,
+  attachments,
 }: {
   role: "user" | "assistant";
   content: string;
@@ -386,6 +395,7 @@ function MessageBubble({
   showFullTitle?: boolean;
   isStreaming?: boolean;
   getDisplayName?: (id: DomainLeaderId) => string;
+  attachments?: AttachmentRef[];
 }) {
   const isUser = role === "user";
   const leader = leaderId ? DOMAIN_LEADERS.find((l) => l.id === leaderId) : null;
@@ -435,6 +445,9 @@ function MessageBubble({
             <p className="whitespace-pre-wrap [overflow-wrap:anywhere]">{content}</p>
           ) : (
             <MarkdownRenderer content={content} />
+          )}
+          {attachments && attachments.length > 0 && (
+            <AttachmentDisplay attachments={attachments} />
           )}
         </div>
       </div>

@@ -229,7 +229,7 @@ describe("Command Center", () => {
 
     // Click the first conversation row (a div with role="button")
     const titleElements = screen.getAllByText(/Review PR #1742/);
-    const row = titleElements[0].closest("[role='button']");
+    const row = titleElements[0].closest('[role="button"]');
     if (row) fireEvent.click(row);
 
     expect(mockPush).toHaveBeenCalledWith("/dashboard/chat/conv-1");

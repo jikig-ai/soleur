@@ -131,6 +131,9 @@ ensure_bare_config() {
 verify_worktree_created() {
   local worktree_path="$1"
   local branch_name="$2"
+  # $from_branch is used only in diagnostic hint messages below, but kept as a
+  # parameter because all callers already have it in scope and the hint aids
+  # debugging when worktree creation fails.
   local from_branch="$3"
 
   # Check 0: Fast-fail if directory was not created at all

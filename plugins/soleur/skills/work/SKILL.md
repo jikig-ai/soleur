@@ -238,6 +238,8 @@ Run these checks before proceeding to Phase 1. A FAIL blocks execution with a re
 
    Skipping this gate — writing implementation before tests — is a workflow violation equivalent to committing directly to main. The rationalization "this is simple enough to not need test-first" is exactly the reasoning TDD is designed to prevent.
 
+   - When adding MCP tools to an existing registration block in agent-runner.ts, verify each tool's prerequisites are independent of the block's guard condition. Write a test that validates the new tool works WITHOUT the existing block's prerequisites (e.g., Plausible tools work without GitHub installation).
+
    - When adding route handler tests that require `vi.mock()`, create a separate test file from existing unit tests that import the real module. Vitest hoists all `vi.mock()` calls to the top of the file, clobbering real imports for the entire file regardless of describe block scope.
    - When creating test files with `vi.mock()` factories that reference shared variables, use `vi.hoisted()` from the start -- vitest hoists `vi.mock` to the top of the file before `const`/`let` declarations execute.
    - When testing decorative images (alt="") with happy-dom, use container.querySelector instead of screen.getAllByRole("img", { hidden: true }) -- happy-dom excludes presentational elements from role queries even with hidden: true.
@@ -424,7 +426,7 @@ If you catch yourself writing phrases like "set up X in the browser", "go to the
 
 #### Invocation Mode
 
-**If invoked by one-shot** (the conversation contains `soleur:one-shot` skill output earlier): Do not invoke ship, review, or compound — the orchestrator handles those. Output exactly `## Work Phase Complete` (this is a continuation marker, NOT a turn-ending statement) and then **immediately continue executing the next numbered step in the one-shot sequence** (step 4: review). Do NOT end your turn after outputting this marker.
+**If invoked by one-shot** (the conversation contains `soleur:one-shot` skill output earlier): Output exactly `## Work Phase Complete` and then **immediately invoke** `skill: soleur:review` (step 4 of the one-shot sequence). Do NOT end your turn after outputting the marker — you ARE the orchestrator, so you must continue executing one-shot steps 4 through 10 in order. The marker is a progress signal, not a stopping point.
 
 **If invoked directly by the user** (no one-shot orchestrator): Continue through the post-implementation pipeline automatically. Do NOT stop and wait — the earlier learning "Workflow Completion is Not Task Completion" applies. Run these steps in order, forwarding `--headless` if `HEADLESS_MODE=true`:
 
@@ -495,7 +497,7 @@ Before entering Phase 4, verify these Phase 2-3 items are complete:
 - [ ] Code follows existing patterns
 - [ ] Figma designs match implementation (if applicable)
 
-After Phase 4 handoff (one-shot only), the orchestrator handles: `/review`, `/resolve-todo-parallel`, `/compound`, `/ship`.
+After Phase 4 handoff (one-shot only), the same agent continues executing one-shot steps 4-10 (`/review`, `/qa`, `/compound`, `/ship`, `/test-browser`, `/feature-video`).
 
 ## When to Use Reviewer Agents
 

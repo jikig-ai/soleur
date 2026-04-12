@@ -1,0 +1,55 @@
+# Tasks: Chat Attachments
+
+## Phase 1: Infrastructure + Upload API
+
+- [x] 1.1 Create migration `019_chat_attachments.sql`
+  - [x] 1.1.1 Create Supabase Storage bucket `chat-attachments` (private)
+  - [x] 1.1.2 Create `message_attachments` table with FK CASCADE to `messages`
+  - [x] 1.1.3 Add RLS policies (SELECT for conversation owner, no anon INSERT/UPDATE/DELETE)
+  - [x] 1.1.4 Add index on `message_id`
+- [x] 1.2 Update CSP `img-src` in `lib/csp.ts` to include Supabase Storage host
+- [x] 1.3 Create `app/api/attachments/presign/route.ts`
+  - [x] 1.3.1 CSRF validation (`validateOrigin`)
+  - [x] 1.3.2 Auth check (`supabase.auth.getUser()`)
+  - [x] 1.3.3 Conversation ownership verification
+  - [x] 1.3.4 File type + size validation (allowlist, 20MB max, 5 files max)
+  - [x] 1.3.5 Generate storage path and signed upload URL
+  - [x] 1.3.6 Return `{ uploadUrl, storagePath }`
+- [x] 1.4 Add `AttachmentRef` interface and extend `WSMessage` chat type in `lib/types.ts`
+- [x] 1.5 Extend `ChatMessage` in `ws-client.ts` with attachments
+- [x] 1.6 Update `sendMessage` in `ws-client.ts` to accept attachments
+- [x] 1.7 Extend `Message` interface in `lib/types.ts` with attachments
+- [x] 1.8 Add error sanitizer entries for upload errors
+- [x] 1.9 Add typed `WSErrorCode` values (`upload_failed`, `file_too_large`, `unsupported_file_type`, `too_many_files`)
+
+## Phase 2: Client Upload UX
+
+- [x] 2.1 Extract chat input into `components/chat/chat-input.tsx`
+- [x] 2.2 Add file input handlers (paperclip button, drag-drop, clipboard paste) with client-side validation
+- [x] 2.3 Add attachment preview strip (thumbnails + file cards + remove button)
+- [x] 2.4 Implement presign -> upload -> send flow with progress indicators
+
+## Phase 3: Server-Side Processing
+
+- [x] 3.1 Update WS chat handler to extract, validate (max 5), and forward `msg.attachments`
+- [x] 3.2 Update `sendUserMessage` (line 1187) to accept and persist attachment metadata
+- [x] 3.3 Download attachments from Storage to workspace filesystem
+- [x] 3.4 Build attachment context string for agent prompt
+- [x] 3.5 Update `startAgentSession` to include attachment context
+- [x] 3.6 Update message history API to join `message_attachments` and return signed download URLs
+
+## Phase 4: Display + Polish
+
+- [x] 4.1 Update `MessageBubble` to render image thumbnails and PDF cards
+- [x] 4.2 Add click-to-expand for images (lightbox/modal)
+- [x] 4.3 Wire up attachment data from history API and WebSocket to message rendering
+- [x] 4.4 Add conversation-level storage cleanup (delete blobs before conversation DB row)
+
+## Phase 5: Testing
+
+- [x] 5.1 Unit tests for presign endpoint (type validation, size validation, file count cap, auth, CSRF)
+- [x] 5.2 Unit tests for attachment metadata persistence (covered by presign route tests)
+- [ ] 5.3 Integration test: upload -> display -> reload history
+- [ ] 5.4 Test on mobile PWA (iOS Safari, Android Chrome)
+- [x] 5.5 Verify CSRF structural test includes new route
+- [ ] 5.6 Test conversation deletion purges Storage objects

@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef, useCallback } from "react";
 import { createClient } from "@/lib/supabase/client";
-import { WS_CLOSE_CODES, type WSMessage, type ConversationContext } from "@/lib/types";
+import { WS_CLOSE_CODES, type WSMessage, type ConversationContext, type AttachmentRef } from "@/lib/types";
 import type { DomainLeaderId } from "@/server/domain-leaders";
 
 type ConnectionStatus = "connecting" | "connected" | "reconnecting" | "disconnected";
@@ -21,6 +21,7 @@ interface ChatMessageBase {
   role: "user" | "assistant";
   content: string;
   leaderId?: DomainLeaderId;
+  attachments?: AttachmentRef[];
 }
 
 interface ChatTextMessage extends ChatMessageBase {
@@ -50,7 +51,7 @@ export interface UsageData {
 interface UseWebSocketReturn {
   messages: ChatMessage[];
   startSession: (leaderId?: DomainLeaderId, context?: ConversationContext) => void;
-  sendMessage: (content: string) => void;
+  sendMessage: (content: string, attachments?: AttachmentRef[]) => void;
   sendReviewGateResponse: (gateId: string, selection: string) => void;
   status: ConnectionStatus;
   sessionConfirmed: boolean;
@@ -434,7 +435,7 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
   );
 
   const sendMessage = useCallback(
-    (content: string) => {
+    (content: string, attachments?: AttachmentRef[]) => {
       // Add the user message to local state immediately
       setMessages((prev) => [
         ...prev,
@@ -443,9 +444,10 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
           role: "user",
           content,
           type: "text",
+          attachments,
         },
       ]);
-      send({ type: "chat", content });
+      send({ type: "chat", content, attachments });
     },
     [send],
   );
