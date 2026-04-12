@@ -14,6 +14,7 @@ export interface TreeNode {
   type: "file" | "directory";
   path?: string;
   modifiedAt?: string;
+  extension?: string; // e.g., ".md", ".png", ".pdf"
   children?: TreeNode[];
 }
 
@@ -85,6 +86,8 @@ function parseFrontmatter(raw: string): {
   }
 }
 
+// Search only indexes .md files — binary files are not text-searchable.
+// This is intentional even though buildTree now includes all file types.
 async function collectMdFiles(
   dir: string,
   relativeTo: string,
@@ -141,7 +144,10 @@ export async function buildTree(
           return child.children && child.children.length > 0 ? child : null;
         }),
       );
-    } else if (entry.isFile() && !entry.isSymbolicLink() && entry.name.endsWith(".md")) {
+    } else if (entry.isFile() && !entry.isSymbolicLink()) {
+      // The .md filter was removed to support file uploads (images, PDFs, etc.).
+      // All file types are included in the tree; search remains .md-only.
+      const ext = path.extname(entry.name);
       filePromises.push(
         fs.promises
           .stat(fullPath)
@@ -152,6 +158,7 @@ export async function buildTree(
             type: "file" as const,
             path: path.relative(effectiveTopRoot, fullPath),
             modifiedAt,
+            extension: ext || undefined,
           })),
       );
     }
