@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { parseAtMentions } from "@/server/domain-router";
+import { parseAtMentions, routeMessage } from "@/server/domain-router";
 
 describe("parseAtMentions", () => {
   test("parses lowercase leader IDs", () => {
@@ -78,5 +78,25 @@ describe("parseAtMentions", () => {
 
   test("works with no custom names (backward compat)", () => {
     expect(parseAtMentions("@CTO fix")).toEqual(["cto"]);
+  });
+});
+
+describe("routeMessage", () => {
+  test("resolves @oleg to CTO with custom names (mention mode, no API call)", async () => {
+    const result = await routeMessage(
+      "@oleg review this architecture",
+      "fake-api-key",
+      undefined,
+      { cto: "Oleg" },
+    );
+    expect(result).toEqual({ leaders: ["cto"], source: "mention" });
+  });
+
+  test("still resolves @CTO without custom names (backward compat)", async () => {
+    const result = await routeMessage(
+      "@CTO fix the build",
+      "fake-api-key",
+    );
+    expect(result).toEqual({ leaders: ["cto"], source: "mention" });
   });
 });
