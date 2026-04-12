@@ -213,15 +213,15 @@ test.describe("Start Fresh onboarding: foundations state", () => {
     await setupDashboardMocks(page, ["overview/vision.md"]);
     await gotoDashboard(page);
 
-    await expect(page.getByText("Build the foundations.")).toBeVisible({ timeout: 10_000 });
-    await expect(page.getByText("Each card briefs a department leader.")).toBeVisible();
+    await expect(page.getByText("Complete these to brief your department leaders.")).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByText("No conversations yet.")).toBeVisible();
   });
 
   test("vision card shows checkmark when complete", async ({ page }) => {
     await setupDashboardMocks(page, ["overview/vision.md"]);
     await gotoDashboard(page);
 
-    await expect(page.getByText("Build the foundations.")).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByText("Complete these to brief your department leaders.")).toBeVisible({ timeout: 10_000 });
 
     const visionCard = page.locator('a[href="/dashboard/kb/overview/vision.md"]');
     await expect(visionCard).toBeVisible();
@@ -233,7 +233,7 @@ test.describe("Start Fresh onboarding: foundations state", () => {
     await setupDashboardMocks(page, ["overview/vision.md"]);
     await gotoDashboard(page);
 
-    await expect(page.getByText("Build the foundations.")).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByText("Complete these to brief your department leaders.")).toBeVisible({ timeout: 10_000 });
 
     const brandCard = page.getByRole("button", { name: /Brand Identity/ });
     await expect(brandCard).toBeVisible();
@@ -247,7 +247,7 @@ test.describe("Start Fresh onboarding: foundations state", () => {
     await setupDashboardMocks(page, ["overview/vision.md"]);
     await gotoDashboard(page);
 
-    await expect(page.getByText("Build the foundations.")).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByText("Complete these to brief your department leaders.")).toBeVisible({ timeout: 10_000 });
 
     await page.getByRole("button", { name: /Brand Identity/ }).click();
     await page.waitForURL("**/dashboard/chat/new?msg=**", { timeout: 10_000 });
@@ -261,7 +261,7 @@ test.describe("Start Fresh onboarding: foundations state", () => {
     ]);
     await gotoDashboard(page);
 
-    await expect(page.getByText("Build the foundations.")).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByText("Complete these to brief your department leaders.")).toBeVisible({ timeout: 10_000 });
 
     // Vision and Brand should be done (links)
     await expect(page.locator('a[href="/dashboard/kb/overview/vision.md"]')).toBeVisible();
@@ -276,7 +276,7 @@ test.describe("Start Fresh onboarding: foundations state", () => {
     await setupDashboardMocks(page, ["overview/vision.md"]);
     await gotoDashboard(page);
 
-    await expect(page.getByText("Build the foundations.")).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByText("Complete these to brief your department leaders.")).toBeVisible({ timeout: 10_000 });
     await expect(page.getByText("YOUR ORGANIZATION")).toBeVisible();
   });
 });
@@ -386,7 +386,7 @@ test.describe("Start Fresh onboarding: connect existing project", () => {
     ]);
     await gotoDashboard(page);
 
-    await expect(page.getByText("Build the foundations.")).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByText("Complete these to brief your department leaders.")).toBeVisible({ timeout: 10_000 });
 
     // Vision and Legal should be done
     await expect(page.locator('a[href="/dashboard/kb/overview/vision.md"]')).toBeVisible();
