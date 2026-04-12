@@ -1,6 +1,6 @@
 # Spec: Conversation History Visibility in Command Center
 
-**Issue:** TBD
+**Issue:** [#2026](https://github.com/jikig-ai/soleur/issues/2026)
 **Branch:** feat-conversation-history
 **Brainstorm:** [2026-04-12-conversation-history-visibility-brainstorm.md](../../brainstorms/2026-04-12-conversation-history-visibility-brainstorm.md)
 
