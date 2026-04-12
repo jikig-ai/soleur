@@ -1,6 +1,7 @@
 import { query, tool, createSdkMcpServer } from "@anthropic-ai/claude-agent-sdk";
 import { randomUUID } from "crypto";
 import { readFileSync, writeFileSync, mkdirSync } from "fs";
+import { writeFile, mkdir } from "fs/promises";
 import path from "path";
 import { z } from "zod/v4";
 
@@ -8,6 +9,7 @@ import { createServiceClient } from "@/lib/supabase/service";
 import { ROUTABLE_DOMAIN_LEADERS, type DomainLeaderId } from "./domain-leaders";
 import { routeMessage } from "./domain-router";
 import { KeyInvalidError, type AttachmentRef } from "@/lib/types";
+import { ALLOWED_ATTACHMENT_TYPES } from "@/lib/attachment-constants";
 import { decryptKey, decryptKeyLegacy, encryptKey } from "./byok";
 import { sendToClient } from "./ws-handler";
 import * as Sentry from "@sentry/nextjs";
@@ -1240,7 +1242,6 @@ export async function sendUserMessage(
   let attachmentContext: string | undefined;
   if (attachments && attachments.length > 0) {
     // Validate and sanitize each attachment (defense-in-depth — client is untrusted)
-    const ALLOWED_TYPES = new Set(["image/png", "image/jpeg", "image/gif", "image/webp", "application/pdf"]);
     const pathPrefix = `${userId}/${conversationId}/`;
 
     for (const att of attachments) {
@@ -1248,7 +1249,7 @@ export async function sendUserMessage(
       if (!att.storagePath.startsWith(pathPrefix) || att.storagePath.includes("..")) {
         throw new Error("Attachment not found");
       }
-      if (!ALLOWED_TYPES.has(att.contentType)) {
+      if (!ALLOWED_ATTACHMENT_TYPES.has(att.contentType)) {
         throw new Error("Unsupported file type");
       }
       // Sanitize filename: strip path separators
@@ -1282,29 +1283,36 @@ export async function sendUserMessage(
 
     if (user?.workspace_path) {
       const attachDir = path.join(user.workspace_path, "attachments", conversationId);
-      mkdirSync(attachDir, { recursive: true });
+      await mkdir(attachDir, { recursive: true });
 
-      const filePaths: string[] = [];
-      for (const att of attachments) {
-        const { data: fileData, error: dlErr } = await supabase()
-          .storage
-          .from("chat-attachments")
-          .download(att.storagePath);
+      const extMap: Record<string, string> = {
+        "image/png": "png", "image/jpeg": "jpeg", "image/gif": "gif",
+        "image/webp": "webp", "application/pdf": "pdf",
+      };
 
-        if (dlErr || !fileData) {
-          log.error({ err: dlErr, storagePath: att.storagePath }, "Failed to download attachment");
-          continue;
-        }
+      const results = await Promise.allSettled(
+        attachments.map(async (att) => {
+          const { data: fileData, error: dlErr } = await supabase()
+            .storage
+            .from("chat-attachments")
+            .download(att.storagePath);
 
-        const extMap: Record<string, string> = {
-          "image/png": "png", "image/jpeg": "jpeg", "image/gif": "gif",
-          "image/webp": "webp", "application/pdf": "pdf",
-        };
-        const ext = extMap[att.contentType] || "bin";
-        const localPath = path.join(attachDir, `${randomUUID()}.${ext}`);
-        writeFileSync(localPath, Buffer.from(await fileData.arrayBuffer()));
-        filePaths.push(`- ${att.filename} (${att.contentType}, ${att.sizeBytes} bytes): ${localPath}`);
-      }
+          if (dlErr || !fileData) {
+            log.error({ err: dlErr, storagePath: att.storagePath }, "Failed to download attachment");
+            return null;
+          }
+
+          const ext = extMap[att.contentType] || "bin";
+          const localPath = path.join(attachDir, `${randomUUID()}.${ext}`);
+          await writeFile(localPath, Buffer.from(await fileData.arrayBuffer()));
+          return `- ${att.filename} (${att.contentType}, ${att.sizeBytes} bytes): ${localPath}`;
+        }),
+      );
+
+      const filePaths = results
+        .filter((r): r is PromiseFulfilledResult<string | null> => r.status === "fulfilled")
+        .map((r) => r.value)
+        .filter((v): v is string => v !== null);
 
       if (filePaths.length > 0) {
         attachmentContext = `The user attached the following files:\n${filePaths.join("\n")}`;
@@ -1347,7 +1355,19 @@ export async function sendUserMessage(
   if (!conv.domain_leader) {
     try {
       const apiKey = await getUserApiKey(userId);
-      const route = await routeMessage(content, apiKey, conversationContext);
+
+      // Fetch user's custom team names for @-mention resolution
+      const { data: nameRows, error: namesError } = await supabase()
+        .from("team_names")
+        .select("leader_id, custom_name")
+        .eq("user_id", userId);
+      if (namesError) log.warn({ err: namesError }, "Failed to fetch custom team names");
+      const customNames: Record<string, string> = {};
+      for (const row of nameRows ?? []) {
+        customNames[row.leader_id] = row.custom_name;
+      }
+
+      const route = await routeMessage(content, apiKey, conversationContext, customNames);
       log.info({ leaders: route.leaders, source: route.source }, "Routed message to leaders");
       dispatchToLeaders(userId, conversationId, route.leaders, augmentedContent, conversationContext, undefined, route.source)
         .catch(handleSessionError);
