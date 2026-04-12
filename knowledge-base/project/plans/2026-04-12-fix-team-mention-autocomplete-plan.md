@@ -143,15 +143,15 @@ The `agent-runner.ts` uses a lazy-initialized service client (`createServiceClie
 
 ## Acceptance Criteria
 
-- [ ] Typing `@ole` in the chat input when CTO is named "Oleg" shows the CTO in the autocomplete dropdown (`at-mention-dropdown.tsx`)
-- [ ] Typing `@pat` when CFO is named "Patrick" shows the CFO in the autocomplete dropdown
-- [ ] Custom name filtering is case-insensitive (e.g., `@OLE` matches "Oleg")
-- [ ] When the team names API fetch fails, the dropdown still works with default names (no crash, graceful fallback)
-- [ ] When the team names API fetch is still loading and user types `@ole`, the dropdown does not show "No matches" (shows a loading state or waits)
-- [ ] Server-side `parseAtMentions` receives custom names when routing messages (agent-runner passes them through)
-- [ ] Manually typed `@oleg` in a message resolves to the CTO on the server side
-- [ ] All existing at-mention-dropdown tests continue to pass
-- [ ] New tests cover custom name filtering, case-insensitive matching, and loading state
+- [x] Typing `@ole` in the chat input when CTO is named "Oleg" shows the CTO in the autocomplete dropdown (`at-mention-dropdown.tsx`)
+- [x] Typing `@pat` when CFO is named "Patrick" shows the CFO in the autocomplete dropdown
+- [x] Custom name filtering is case-insensitive (e.g., `@OLE` matches "Oleg")
+- [x] When the team names API fetch fails, the dropdown still works with default names (no crash, graceful fallback)
+- [x] When the team names API fetch is still loading and user types `@ole`, the dropdown does not show "No matches" (shows a loading state or waits)
+- [x] Server-side `parseAtMentions` receives custom names when routing messages (agent-runner passes them through)
+- [x] Manually typed `@oleg` in a message resolves to the CTO on the server side
+- [x] All existing at-mention-dropdown tests continue to pass
+- [x] New tests cover custom name filtering, case-insensitive matching, and loading state
 
 ## Test Scenarios
 
