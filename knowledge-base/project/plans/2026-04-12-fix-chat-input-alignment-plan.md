@@ -134,13 +134,13 @@ The "Type @ to switch leader" text is a separate `<span>` in a `<div>` below the
 
 ## Acceptance Criteria
 
-- [ ] The attachment button, text input, and send button are vertically centered (not bottom-aligned) in the chat input bar
-- [ ] The placeholder text reads "Follow up or ask another question... Type @ to switch leader" when connected
-- [ ] The "Type @ to switch leader" text no longer appears as a separate element below the input bar
-- [ ] Mobile layout still shows usage data below the input bar (the mobile `<span>` is preserved)
-- [ ] The "Reconnecting..." placeholder does not include the `@` hint text
-- [ ] Existing tests pass without modification (or are updated if they assert on the affected text)
-- [ ] The mobile `@` button (absolute-positioned inside the textarea container) remains correctly positioned after the alignment change
+- [x] The attachment button, text input, and send button are vertically centered (not bottom-aligned) in the chat input bar
+- [x] The placeholder text reads "Follow up or ask another question... Type @ to switch leader" when connected
+- [x] The "Type @ to switch leader" text no longer appears as a separate element below the input bar
+- [x] Mobile layout still shows usage data below the input bar (the mobile `<span>` is preserved)
+- [x] The "Reconnecting..." placeholder does not include the `@` hint text
+- [x] Existing tests pass without modification (or are updated if they assert on the affected text)
+- [x] The mobile `@` button (absolute-positioned inside the textarea container) remains correctly positioned after the alignment change
 
 ## Test Scenarios
 

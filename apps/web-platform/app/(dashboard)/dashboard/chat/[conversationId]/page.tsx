@@ -339,7 +339,7 @@ export default function ChatPage() {
             disabled={status !== "connected"}
             placeholder={
               status === "connected"
-                ? "Follow up or ask another question..."
+                ? "Follow up or ask another question... Type @ to switch leader"
                 : "Reconnecting..."
             }
             insertRef={insertRef}
@@ -357,7 +357,6 @@ export default function ChatPage() {
               </span>
             )}
           </span>
-          <span className="ml-auto hidden md:inline">Type @ to switch leader</span>
         </div>
       </div>
     </div>
