@@ -52,7 +52,7 @@ are committed (#2037).
 
 Cancel flow:
   User clicks "Cancel" → Retention modal (KB count, convos, services)
-  → "Keep my account" (close modal) | "Continue to cancel" (→ Stripe Portal)
+  → "Stay subscribed" (close modal) | "Continue to cancel" (→ Stripe Portal)
 
 Portal flow:
   User clicks "Manage" → POST /api/billing/portal → 302 → Stripe Portal
@@ -254,13 +254,13 @@ File: `apps/web-platform/components/settings/cancel-retention-modal.tsx`
 
 Modal overlay shown when user clicks "Cancel Subscription":
 
-- Heading: "Before you go..."
+- Heading: "Your compounding knowledge"
 - Stats display (fetched from existing tables):
   - KB artifact count (from `knowledge-base` API or conversations table)
   - Conversation count
   - Connected service count (from `service_tokens` table)
   - Days since signup (from `users.created_at`)
-- Primary CTA: "Keep my account" → closes modal
+- Primary CTA: "Stay subscribed" → closes modal
 - Secondary CTA: "Continue to cancel" → POST `/api/billing/portal` →
   redirect to Stripe Portal where actual cancellation happens
 
@@ -304,7 +304,7 @@ Test runner: Check `package.json scripts.test` — project uses vitest.
       and returns redirect URL
 - [ ] Pre-cancel retention modal shows KB artifact count, conversation
       count, connected service count, and days since signup
-- [ ] Retention modal "Keep my account" closes modal, "Continue to
+- [ ] Retention modal "Stay subscribed" closes modal, "Continue to
       cancel" redirects to Stripe portal
 - [ ] `customer.subscription.updated` webhook updates `subscription_status`,
       `cancel_at_period_end`, `current_period_end`
@@ -364,15 +364,58 @@ Upgrade/downgrade terms deferred with the feature (#2037).
 
 ### Product/UX Gate
 
-**Tier:** advisory
+**Tier:** blocking (retention modal is a new UI component with persuasive copy)
 **Decision:** reviewed
-**Agents invoked:** none (brainstorm carry-forward — CPO and CMO
-already assessed the billing section as a Settings sub-section, modal
-retention pattern)
-**Skipped specialists:** ux-design-lead (existing Settings card pattern
-reused, no novel page layout), conversion-optimizer (CMO recommended but
-deferred to post-launch when churn data exists)
-**Pencil available:** N/A
+**Agents invoked:** spec-flow-analyzer, ux-design-lead, copywriter
+**Brainstorm-recommended specialists:** conversion-optimizer (CMO),
+copywriter (CMO) — copywriter invoked, conversion-optimizer deferred
+to post-launch (0 users, no churn data to optimize against)
+**Skipped specialists:** conversion-optimizer (user-acknowledged — no
+churn data to optimize against at 0 users)
+**Pencil available:** yes
+
+#### Wireframes
+
+Design file: `knowledge-base/product/design/billing/subscription-management.pen`
+Screenshots: `knowledge-base/product/design/billing/screenshots/`
+
+1. `01-settings-billing-active-subscriber.png` — Active badge, plan name,
+   period end, Manage/Cancel buttons
+2. `02-settings-billing-cancelling-state.png` — Amber Cancelling badge,
+   warning banner with Reactivate link
+3. `03-settings-billing-no-subscription.png` — Empty state with Subscribe CTA
+4. `04-retention-modal.png` — 2x2 stats grid (gold accents), two CTAs
+
+#### Copywriter Revisions
+
+- Modal heading: ~~"Your compounding knowledge"~~ → **"Your compounding knowledge"**
+  (factual, not guilt-trip adjacent)
+- Primary CTA: ~~"Stay subscribed"~~ → **"Stay subscribed"**
+  (declarative, not defensive)
+- No-subscription badge: remove badge entirely, show Subscribe CTA only
+
+#### Spec-Flow Gaps Identified
+
+1. **Post-portal stale state** — Every Portal return shows DB state that
+   may not reflect the action just taken (webhook hasn't fired yet).
+   **Resolution:** Add `router.refresh()` on return from portal. If
+   `subscription_status` hasn't changed after 3 seconds, show a subtle
+   "Updating..." spinner. Webhook typically fires within 1-2 seconds.
+2. **Cancelled state undefined** — No screen spec for a user whose period
+   has ended (`subscription_status = 'cancelled'`).
+   **Resolution:** Show same layout as no-subscription state but with
+   copy: "Your subscription ended on [date]." and Subscribe CTA labeled
+   "Resubscribe".
+3. **Double-subscribe guard UI** — AC says block, but no UI for the block.
+   **Resolution:** Checkout route returns 400 if `subscription_status =
+   'active'`. Billing section never shows Subscribe button when active.
+4. **Retention modal stats failure** — Unspecified behavior if count
+   queries fail.
+   **Resolution:** Show modal without stats section. The CTAs are the
+   critical path, not the stats.
+5. **Billing page redirect** — AC says redirect, Phase 1 says delete.
+   **Resolution:** Replace `page.tsx` with a redirect component instead
+   of deleting: `redirect("/dashboard/settings")`.
 
 ## Test Scenarios
 
@@ -386,7 +429,7 @@ deferred to post-launch when churn data exists)
 - Given an active subscriber, when they click "Cancel Subscription",
   then they see a retention modal with KB count, conversation count,
   connected services count, and days since signup
-- Given a retention modal is open, when user clicks "Keep my account",
+- Given a retention modal is open, when user clicks "Stay subscribed",
   then the modal closes and no cancellation occurs
 - Given a retention modal is open, when user clicks "Continue to cancel",
   then they are redirected to Stripe Portal to complete cancellation
@@ -411,6 +454,15 @@ deferred to post-launch when churn data exists)
   then the handler logs a warning and returns 200
 - Given the Stripe API is unavailable, when user clicks portal button,
   then they see an error message (not a crash)
+- Given a user returns from Stripe Portal after cancelling, when the
+  webhook hasn't fired yet, then Settings shows a brief "Updating..."
+  state before reflecting the new status
+- Given a cancelled user whose period has ended, when they visit Settings,
+  then they see "Your subscription ended on [date]" with a Resubscribe button
+- Given a user navigates to `/dashboard/billing`, then they are redirected
+  to `/dashboard/settings`
+- Given retention modal stats queries fail, when the modal opens, then
+  it renders without the stats section (CTAs still functional)
 
 ## Dependencies & Risks
 
