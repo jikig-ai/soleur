@@ -136,9 +136,12 @@ export async function sendPushNotifications(
   );
 
   const supabase = createServiceClient();
+  const deliveredIds: string[] = [];
   for (let i = 0; i < results.length; i++) {
     const result = results[i];
-    if (result.status === "rejected") {
+    if (result.status === "fulfilled") {
+      deliveredIds.push(subscriptions[i].id);
+    } else {
       const err = result.reason as { statusCode?: number };
       if (err.statusCode === 410) {
         log.info({ subscriptionId: subscriptions[i].id }, "Push subscription expired (410 Gone), deleting");
@@ -153,6 +156,14 @@ export async function sendPushNotifications(
         );
       }
     }
+  }
+
+  // Update last_used_at for successfully delivered subscriptions
+  if (deliveredIds.length > 0) {
+    await supabase
+      .from("push_subscriptions")
+      .update({ last_used_at: new Date().toISOString() })
+      .in("id", deliveredIds);
   }
 }
 
