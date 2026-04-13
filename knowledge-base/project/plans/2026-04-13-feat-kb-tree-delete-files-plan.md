@@ -73,7 +73,9 @@ Markdown files (`.md`) are the core knowledge base content and are created/manag
 - [ ] Route rejects symlink targets via `lstat().isSymbolicLink()` check
 - [ ] Route deletes the file via GitHub Contents API (GET sha, then DELETE)
 - [ ] Route syncs workspace after deletion using credential helper pattern
-- [ ] Route returns 200 on success, 401/403/404/400/502 for error cases
+- [ ] Route returns 200 on success (with `commitSha` in body), 401/403/404/400/409/502 for error cases
+- [ ] Route handles 409 Conflict from GitHub API (SHA mismatch due to concurrent modification) and returns 409 to client
+- [ ] Route handles non-existent local files gracefully (skip symlink check, proceed with GitHub API deletion)
 - [ ] File items in `file-tree.tsx` show a delete button (trash icon) on hover
 - [ ] Delete button is only shown for attachment files (non-`.md`)
 - [ ] Clicking delete shows a confirmation dialog before proceeding
@@ -91,6 +93,9 @@ Markdown files (`.md`) are the core knowledge base content and are created/manag
 - Given a valid delete where workspace sync fails, when DELETE is called, then the file is deleted from GitHub but 500 is returned with `SYNC_FAILED` code
 - Given an unauthenticated request, when DELETE is called, then 401 is returned
 - Given a path with null bytes, when DELETE is called, then 400 is returned
+- Given a file that was concurrently modified (SHA mismatch), when DELETE is called, then 409 is returned with a "file was modified, please refresh" message
+- Given a directory path (not a file), when DELETE is called, then 400 is returned
+- Given a file that exists on GitHub but not locally (workspace out of sync), when DELETE is called, then the symlink check is skipped (file cannot be a symlink if it does not exist locally) and deletion proceeds via GitHub API
 - Given a file item in the tree, when hovering over it, then a delete button (trash icon) appears
 - Given the delete button is clicked, when confirmation dialog appears, then "Delete" and "Cancel" buttons are shown
 - Given the user confirms deletion, when the API returns success, then the tree refreshes and the file disappears
@@ -175,7 +180,7 @@ The route follows this sequence:
 4. Extract and validate path from URL segments
 5. Null byte check on path
 6. Path traversal check via `isPathInWorkspace(fullPath, kbRoot)`
-7. Symlink check via `lstat().isSymbolicLink()`
+7. Symlink check via `lstat().isSymbolicLink()` -- if ENOENT (file exists on GitHub but not locally), skip this check and proceed (a non-existent local file cannot be a symlink)
 8. Extension check -- only allow deleting attachment files (non-`.md`)
 9. Parse owner/repo from `repo_url`
 10. GET file SHA from GitHub Contents API (`githubApiGet`)

@@ -19,7 +19,7 @@
 - [ ] 2.2.4 Extract path from URL segments, validate workspace status
 - [ ] 2.2.5 Null byte check on path
 - [ ] 2.2.6 Path traversal check via `isPathInWorkspace(fullPath, kbRoot)`
-- [ ] 2.2.7 Symlink check via `fs.promises.lstat()` + `isSymbolicLink()`
+- [ ] 2.2.7 Symlink check via `fs.promises.lstat()` + `isSymbolicLink()` -- if ENOENT (file not on disk but exists on GitHub), skip check and proceed
 - [ ] 2.2.8 Extension check -- reject `.md` files (only attachments are deletable)
 - [ ] 2.2.9 Parse owner/repo from `repo_url`
 - [ ] 2.2.10 GET file SHA from GitHub Contents API (`githubApiGet`)
@@ -51,6 +51,8 @@
   - [ ] 3.1.7 Workspace not ready: returns 503
   - [ ] 3.1.8 `.md` file rejection: returns 400
   - [ ] 3.1.9 Workspace sync failure: returns 500 with `SYNC_FAILED` code
+  - [ ] 3.1.10 SHA mismatch (concurrent modification): returns 409 with refresh message
+  - [ ] 3.1.11 Directory path (not a file): returns 400
 - [ ] 3.2 Write component tests (`test/file-tree-delete.test.tsx`)
   - [ ] 3.2.1 Delete button appears on hover for attachment files
   - [ ] 3.2.2 Delete button does NOT appear for `.md` files
