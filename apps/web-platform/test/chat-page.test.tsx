@@ -8,7 +8,7 @@ const mockSendMessage = vi.fn();
 const mockSendReviewGateResponse = vi.fn();
 
 type MockTextMessage = { id: string; role: "user" | "assistant"; content: string; type: "text"; leaderId?: string };
-type MockGateMessage = { id: string; role: "user" | "assistant"; content: string; type: "review_gate"; leaderId?: string; gateId: string; question: string; options: string[]; header?: string; descriptions?: Record<string, string | undefined>; resolved?: boolean; selectedOption?: string; gateError?: string };
+type MockGateMessage = { id: string; role: "user" | "assistant"; content: string; type: "review_gate"; leaderId?: string; gateId: string; question: string; options: string[]; header?: string; descriptions?: Record<string, string | undefined>; stepProgress?: { current: number; total: number; title: string }; resolved?: boolean; selectedOption?: string; gateError?: string };
 type MockChatMessage = MockTextMessage | MockGateMessage;
 
 let wsReturn = {
@@ -558,6 +558,33 @@ describe("ChatPage", () => {
       await renderChatPage();
       const alert = screen.getByRole("alert");
       expect(alert).toHaveTextContent(/Review gate not found/);
+    });
+
+    it("renders step progress indicator when stepProgress is present", async () => {
+      wsReturn.messages = [
+        {
+          id: "gate-g1", role: "assistant", content: "Configure DNS",
+          type: "review_gate", gateId: "g1", question: "Navigate to the DNS settings and add the A record.",
+          header: "Step 2 of 6: Configure DNS",
+          options: ["Done -- proceed to next step", "I need help", "Skip this step"],
+          stepProgress: { current: 2, total: 6, title: "Configure DNS" },
+        },
+      ];
+      await renderChatPage();
+      expect(screen.getByText("Step 2 of 6")).toBeDefined();
+      expect(screen.getByText("33%")).toBeDefined();
+    });
+
+    it("does not render step progress when stepProgress is absent", async () => {
+      wsReturn.messages = [
+        {
+          id: "gate-g1", role: "assistant", content: "Which library?",
+          type: "review_gate", gateId: "g1", question: "Which library?",
+          options: ["React Query", "SWR"],
+        },
+      ];
+      await renderChatPage();
+      expect(screen.queryByText(/Step \d+ of \d+/)).toBeNull();
     });
   });
 });

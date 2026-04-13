@@ -36,22 +36,22 @@ Guided instructions fallback for services without API/MCP (Tier 3 of 3-tier serv
 
 ### 3.1 Add step progress to review gate protocol
 
-- [ ] 3.1.1 Add optional `stepProgress` field to `ChatGateMessage` in `apps/web-platform/lib/ws-client.ts`
-- [ ] 3.1.2 Add optional `stepProgress` to `WSMessage` review_gate type in `apps/web-platform/lib/types.ts`
-- [ ] 3.1.3 Forward `stepProgress` from agent-runner review gate emission in `apps/web-platform/server/agent-runner.ts`
-- [ ] 3.1.4 Parse step progress from AskUserQuestion `header` field (pattern: "Step N of M: title")
+- [x] 3.1.1 Add optional `stepProgress` field to `ChatGateMessage` in `apps/web-platform/lib/ws-client.ts`
+- [x] 3.1.2 Add optional `stepProgress` to `WSMessage` review_gate type in `apps/web-platform/lib/types.ts`
+- [x] 3.1.3 Forward `stepProgress` from agent-runner review gate emission in `apps/web-platform/server/agent-runner.ts`
+- [x] 3.1.4 Parse step progress from AskUserQuestion `header` field (pattern: "Step N of M: title")
 
 ### 3.2 Render progress in ReviewGateCard
 
-- [ ] 3.2.1 Read `apps/web-platform/app/(dashboard)/dashboard/chat/[conversationId]/page.tsx`
-- [ ] 3.2.2 Add `stepProgress` prop to ReviewGateCard
-- [ ] 3.2.3 Render progress bar or "Step N of M" indicator above the question
-- [ ] 3.2.4 Style deep links (detect URLs in question text, render as styled buttons/links)
+- [x] 3.2.1 Read `apps/web-platform/app/(dashboard)/dashboard/chat/[conversationId]/page.tsx`
+- [x] 3.2.2 Add `stepProgress` prop to ReviewGateCard
+- [x] 3.2.3 Render progress bar or "Step N of M" indicator above the question
+- [ ] 3.2.4 Style deep links (detect URLs in question text, render as styled buttons/links) -- deferred, MVP uses copy-pasteable URLs
 
 ### 3.3 Test UI changes
 
-- [ ] 3.3.1 Add test for ReviewGateCard with stepProgress prop in `apps/web-platform/test/chat-page.test.tsx`
-- [ ] 3.3.2 Run full test suite: `cd apps/web-platform && npm run test`
+- [x] 3.3.1 Add test for ReviewGateCard with stepProgress prop in `apps/web-platform/test/chat-page.test.tsx`
+- [x] 3.3.2 Run full test suite: `cd apps/web-platform && npm run test`
 
 ## Phase 4: Deferred Items
 
