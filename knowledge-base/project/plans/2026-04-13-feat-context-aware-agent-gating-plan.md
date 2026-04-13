@@ -43,10 +43,10 @@ Add a classification step to the review skill that runs `git diff --name-only` a
 
 ## Acceptance Criteria
 
-- [ ] Non-code PRs (docs, config, CI only) spawn 4 agents instead of 8
-- [ ] Source code PRs still spawn all 8 agents (no regression)
-- [ ] "deep review" override in args or PR body forces full pipeline
-- [ ] Conditional agents block (9-14) is unaffected by the gate
+- [x] Non-code PRs (docs, config, CI only) spawn 4 agents instead of 8
+- [x] Source code PRs still spawn all 8 agents (no regression)
+- [x] "deep review" override in args or PR body forces full pipeline
+- [x] Conditional agents block (9-14) is unaffected by the gate
 
 ## Test Scenarios
 
