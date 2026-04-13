@@ -71,6 +71,7 @@ describe("notifications", () => {
         select: () => ({
           eq: () => ({ data: subscriptions, error: null }),
         }),
+        update: () => ({ in: () => ({ error: null }) }),
       });
       mockSendNotification.mockResolvedValue({});
 
@@ -82,6 +83,10 @@ describe("notifications", () => {
       });
 
       expect(mockSendNotification).toHaveBeenCalledTimes(1);
+      expect(mockSendNotification).toHaveBeenCalledWith(
+        { endpoint: "https://push.example.com/1", keys: { p256dh: "key1", auth: "auth1" } },
+        expect.stringContaining('"conversationId":"conv-1"'),
+      );
       expect(mockResendSend).not.toHaveBeenCalled();
     });
 
@@ -106,6 +111,9 @@ describe("notifications", () => {
 
       expect(mockSendNotification).not.toHaveBeenCalled();
       expect(mockResendSend).toHaveBeenCalledTimes(1);
+      const emailCall = mockResendSend.mock.calls[0][0];
+      expect(emailCall.to).toContain("test@example.com");
+      expect(emailCall.html).toContain("/dashboard/chat/conv-1");
     });
   });
 
@@ -116,6 +124,9 @@ describe("notifications", () => {
         { id: "sub-2", endpoint: "https://push.example.com/2", p256dh: "key2", auth: "auth2" },
       ];
       mockSendNotification.mockResolvedValue({});
+      mockFrom.mockReturnValue({
+        update: () => ({ in: () => ({ error: null }) }),
+      });
 
       await sendPushNotifications(subscriptions, {
         type: "review_gate",
@@ -125,6 +136,14 @@ describe("notifications", () => {
       });
 
       expect(mockSendNotification).toHaveBeenCalledTimes(2);
+      expect(mockSendNotification).toHaveBeenCalledWith(
+        { endpoint: "https://push.example.com/1", keys: { p256dh: "key1", auth: "auth1" } },
+        expect.any(String),
+      );
+      expect(mockSendNotification).toHaveBeenCalledWith(
+        { endpoint: "https://push.example.com/2", keys: { p256dh: "key2", auth: "auth2" } },
+        expect.any(String),
+      );
     });
 
     test("deletes subscription on 410 Gone response", async () => {
@@ -134,10 +153,15 @@ describe("notifications", () => {
       const gone = new Error("410 Gone");
       (gone as unknown as Record<string, number>).statusCode = 410;
       mockSendNotification.mockRejectedValue(gone);
+      const mockDelete = vi.fn(() => ({
+        eq: vi.fn(() => ({ error: null })),
+      }));
+      const mockUpdate = vi.fn(() => ({
+        in: vi.fn(() => ({ error: null })),
+      }));
       mockFrom.mockReturnValue({
-        delete: () => ({
-          eq: () => ({ error: null }),
-        }),
+        delete: mockDelete,
+        update: mockUpdate,
       });
 
       await sendPushNotifications(subscriptions, {
@@ -148,13 +172,18 @@ describe("notifications", () => {
       });
 
       expect(mockFrom).toHaveBeenCalledWith("push_subscriptions");
+      expect(mockDelete).toHaveBeenCalled();
     });
 
-    test("does not delete subscription on non-410 errors", async () => {
+    test("updates last_used_at after successful delivery", async () => {
       const subscriptions = [
         { id: "sub-1", endpoint: "https://push.example.com/1", p256dh: "key1", auth: "auth1" },
+        { id: "sub-2", endpoint: "https://push.example.com/2", p256dh: "key2", auth: "auth2" },
       ];
-      mockSendNotification.mockRejectedValue(new Error("Network error"));
+      mockSendNotification.mockResolvedValue({});
+      const mockIn = vi.fn(() => ({ error: null }));
+      const mockUpdate = vi.fn(() => ({ in: mockIn }));
+      mockFrom.mockReturnValue({ update: mockUpdate });
 
       await sendPushNotifications(subscriptions, {
         type: "review_gate",
@@ -163,7 +192,31 @@ describe("notifications", () => {
         question: "Approve budget?",
       });
 
-      // mockFrom should not have been called for deletion
+      expect(mockFrom).toHaveBeenCalledWith("push_subscriptions");
+      expect(mockUpdate).toHaveBeenCalledWith(
+        expect.objectContaining({ last_used_at: expect.any(String) }),
+      );
+      expect(mockIn).toHaveBeenCalledWith("id", ["sub-1", "sub-2"]);
+    });
+
+    test("does not delete subscription on non-410 errors", async () => {
+      const subscriptions = [
+        { id: "sub-1", endpoint: "https://push.example.com/1", p256dh: "key1", auth: "auth1" },
+      ];
+      mockSendNotification.mockRejectedValue(new Error("Network error"));
+      mockFrom.mockReturnValue({
+        update: vi.fn(() => ({ in: vi.fn(() => ({ error: null })) })),
+      });
+
+      await sendPushNotifications(subscriptions, {
+        type: "review_gate",
+        conversationId: "conv-1",
+        agentName: "CEO",
+        question: "Approve budget?",
+      });
+
+      // mockFrom should have been called for last_used_at update (0 delivered ids → no update call)
+      // but NOT for deletion
       expect(mockFrom).not.toHaveBeenCalledWith("push_subscriptions");
     });
   });

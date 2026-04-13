@@ -40,8 +40,10 @@ describe("push-subscription API route", () => {
         data: { user: { id: "user-1" } },
         error: null,
       });
+      const mockUpsert = vi.fn(() => ({ error: null }));
       mockFrom.mockReturnValue({
-        upsert: () => ({ error: null }),
+        select: () => ({ eq: () => ({ count: 0, error: null }) }),
+        upsert: mockUpsert,
       });
 
       const req = new Request("https://app.soleur.ai/api/push-subscription", {
@@ -57,6 +59,45 @@ describe("push-subscription API route", () => {
       expect(res.status).toBe(200);
       const body = await res.json();
       expect(body.success).toBe(true);
+      expect(mockFrom).toHaveBeenCalledWith("push_subscriptions");
+      expect(mockUpsert).toHaveBeenCalledWith(
+        expect.objectContaining({
+          user_id: "user-1",
+          endpoint: "https://push.example.com/sub/123",
+          p256dh: "test-p256dh",
+          auth: "test-auth",
+        }),
+        { onConflict: "user_id,endpoint" },
+      );
+    });
+
+    test("rejects subscription when per-user limit is reached", async () => {
+      mockGetUser.mockResolvedValue({
+        data: { user: { id: "user-1" } },
+        error: null,
+      });
+      // First call: count check (head: true returns count)
+      mockFrom.mockReturnValueOnce({
+        select: () => ({ eq: () => ({ count: 20, error: null }) }),
+      });
+      // Second call: existing endpoint check (returns empty = new endpoint)
+      mockFrom.mockReturnValueOnce({
+        select: () => ({ eq: () => ({ eq: () => ({ limit: () => ({ data: [], error: null }) }) }) }),
+      });
+
+      const req = new Request("https://app.soleur.ai/api/push-subscription", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          endpoint: "https://push.example.com/sub/new",
+          keys: { p256dh: "test-p256dh", auth: "test-auth" },
+        }),
+      });
+
+      const res = await POST(req);
+      expect(res.status).toBe(400);
+      const body = await res.json();
+      expect(body.error).toContain("limit");
     });
 
     test("rejects unauthenticated requests", async () => {
@@ -117,13 +158,10 @@ describe("push-subscription API route", () => {
         data: { user: { id: "user-1" } },
         error: null,
       });
-      mockFrom.mockReturnValue({
-        delete: () => ({
-          eq: () => ({
-            eq: () => ({ error: null }),
-          }),
-        }),
-      });
+      const mockEqEndpoint = vi.fn(() => ({ error: null }));
+      const mockEqUser = vi.fn(() => ({ eq: mockEqEndpoint }));
+      const mockDelete = vi.fn(() => ({ eq: mockEqUser }));
+      mockFrom.mockReturnValue({ delete: mockDelete });
 
       const req = new Request("https://app.soleur.ai/api/push-subscription", {
         method: "DELETE",
@@ -135,6 +173,9 @@ describe("push-subscription API route", () => {
 
       const res = await DELETE(req);
       expect(res.status).toBe(200);
+      expect(mockFrom).toHaveBeenCalledWith("push_subscriptions");
+      expect(mockEqUser).toHaveBeenCalledWith("user_id", "user-1");
+      expect(mockEqEndpoint).toHaveBeenCalledWith("endpoint", "https://push.example.com/sub/123");
     });
 
     test("rejects unauthenticated DELETE", async () => {
