@@ -37,6 +37,38 @@ export async function POST(request: Request) {
   }
 
   const service = createServiceClient();
+
+  // Enforce per-user subscription limit to prevent unbounded fan-out (#2043)
+  const MAX_SUBSCRIPTIONS_PER_USER = 20;
+  const { count, error: countError } = await service
+    .from("push_subscriptions")
+    .select("id", { count: "exact", head: true })
+    .eq("user_id", user.id);
+
+  if (countError) {
+    return NextResponse.json(
+      { error: "Failed to check subscription count" },
+      { status: 500 },
+    );
+  }
+
+  // Allow upsert if under limit OR if this endpoint already exists (update case)
+  if (count !== null && count >= MAX_SUBSCRIPTIONS_PER_USER) {
+    const { data: existing } = await service
+      .from("push_subscriptions")
+      .select("id")
+      .eq("user_id", user.id)
+      .eq("endpoint", body.endpoint)
+      .limit(1);
+
+    if (!existing || existing.length === 0) {
+      return NextResponse.json(
+        { error: `Subscription limit reached (max ${MAX_SUBSCRIPTIONS_PER_USER} per user)` },
+        { status: 400 },
+      );
+    }
+  }
+
   const { error } = await service.from("push_subscriptions").upsert(
     {
       user_id: user.id,
