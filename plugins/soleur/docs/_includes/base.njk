@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en-US">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -86,7 +86,7 @@
   </script>
   <base href="/">
   <link rel="icon" type="image/png" href="images/favicon.png">
-  <title>{% if title == site.name %}{{ site.name }} - {{ site.tagline }}{% else %}{{ seoTitle if seoTitle else title }} - {{ site.name }}{% endif %}</title>
+  <title>{% if seoTitle %}{{ seoTitle }}{% elif title == site.name %}{{ site.name }} - {{ site.tagline }}{% else %}{{ title }} - {{ site.name }}{% endif %}</title>
   <link rel="preload" href="css/style.css" as="style">
   <link rel="stylesheet" href="css/style.css">
   <!-- Privacy-friendly analytics by Plausible -->
