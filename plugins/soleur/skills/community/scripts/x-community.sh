@@ -366,16 +366,21 @@ _fetch_tweets_for_user() {
 
 # --- Anomaly detection ---
 
-# Check public_metrics for anomalous patterns and emit warnings to stderr.
-# Arguments: metrics_json (JSON object with followers_count, following_count, tweet_count, listed_count)
-# Returns: 0 if anomaly detected, 1 if normal
-_check_metrics_anomaly() {
+# Detect anomalous public_metrics patterns and emit warnings to stderr.
+# Shell boolean convention: returns 0 (true) if anomaly exists, 1 (false) if normal.
+# Arguments: metrics_json (JSON object with followers_count, following_count, tweet_count)
+_has_metrics_anomaly() {
   local metrics_json="$1"
 
   local followers following tweets
-  followers=$(echo "$metrics_json" | jq -r '.followers_count // 0')
-  following=$(echo "$metrics_json" | jq -r '.following_count // 0')
-  tweets=$(echo "$metrics_json" | jq -r '.tweet_count // 0')
+  read -r followers following tweets < <(
+    echo "$metrics_json" | jq -r '[.followers_count // 0, .following_count // 0, .tweet_count // 0] | @tsv'
+  )
+
+  # Fail safe on non-numeric jq output (malformed API response)
+  if [[ ! "$followers" =~ ^[0-9]+$ ]] || [[ ! "$following" =~ ^[0-9]+$ ]] || [[ ! "$tweets" =~ ^[0-9]+$ ]]; then
+    return 1
+  fi
 
   # Genuinely new/empty account: all zeros is not anomalous
   if (( followers == 0 && following == 0 && tweets == 0 )); then
@@ -383,7 +388,6 @@ _check_metrics_anomaly() {
   fi
 
   # All-zeros degradation: followers=0, following=0, but tweets>0
-  # Stronger signal of API degradation than organic unfollows
   if (( followers == 0 && following == 0 && tweets > 0 )); then
     echo "Warning: X API returned all-zero social metrics for account with ${tweets} tweets. Possible API degradation." | head -c 200 >&2
     return 0
@@ -404,7 +408,7 @@ cmd_fetch_metrics() {
   local body
   body=$(get_request "/2/users/me" "user.fields=public_metrics,description,created_at")
 
-  local output
+  local output metrics_json
   output=$(echo "$body" | jq '{
     username: .data.username,
     name: .data.name,
@@ -412,11 +416,10 @@ cmd_fetch_metrics() {
     created_at: .data.created_at,
     metrics: .data.public_metrics
   }')
+  metrics_json=$(echo "$output" | jq '.metrics // {}')
 
-  # Run anomaly check on metrics (warnings go to stderr, stdout unchanged)
-  local metrics_json
-  metrics_json=$(echo "$body" | jq '.data.public_metrics // {}')
-  _check_metrics_anomaly "$metrics_json" || true
+  # Run anomaly check (warnings go to stderr, stdout unchanged)
+  _has_metrics_anomaly "$metrics_json" || true
 
   echo "$output"
 }

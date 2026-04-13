@@ -80,6 +80,8 @@ $ROUTER x fetch-timeline --max 20
 
 The `fetch-mentions` and `fetch-timeline` commands require X API paid access (credit purchase). If these return 403, continue with `fetch-metrics` only.
 
+`fetch-metrics` emits anomaly warnings to stderr when metrics look suspicious (e.g., active account with 0 followers, or all social metrics zeroed out). Check the command output for lines starting with "Warning:" and include them as diagnostic notes in the digest.
+
 Bluesky (if enabled): fetch profile metrics:
 
 ```bash
