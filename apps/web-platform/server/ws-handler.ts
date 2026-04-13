@@ -60,6 +60,8 @@ export interface ClientSession {
   lastActivity: number;
   /** Timer that closes the connection after WS_IDLE_TIMEOUT_MS of inactivity. */
   idleTimer?: ReturnType<typeof setTimeout>;
+  /** Cached subscription status — set at auth, refreshed by billing check timer. */
+  subscriptionStatus?: string;
 }
 
 /** Active connections keyed by Supabase user ID. */
@@ -133,6 +135,25 @@ function resetIdleTimer(userId: string, session: ClientSession): void {
   }, WS_IDLE_TIMEOUT_MS);
   timer.unref();
   session.idleTimer = timer;
+}
+
+/**
+ * Check if user's subscription is suspended using cached session status.
+ * Returns true if suspended (sends error and closes connection).
+ */
+function checkSubscriptionSuspended(userId: string, session: ClientSession): boolean {
+  if (session.subscriptionStatus === "unpaid") {
+    sendToClient(userId, {
+      type: "error",
+      message: "Your subscription is unpaid. Resolve payment to continue.",
+    });
+    session.ws.close(
+      WS_CLOSE_CODES.SUBSCRIPTION_SUSPENDED,
+      "Subscription suspended",
+    );
+    return true;
+  }
+  return false;
 }
 
 /**
@@ -239,6 +260,8 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
     // ------------------------------------------------------------------
     case "resume_session": {
       try {
+        if (checkSubscriptionSuspended(userId, session)) return;
+
         abortActiveSession(userId, session);
         // Clear any pending deferred state — resuming an existing conversation
         session.pending = undefined;
@@ -310,6 +333,8 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
     // chat: forward user message into the running agent session
     // ------------------------------------------------------------------
     case "chat": {
+      if (checkSubscriptionSuspended(userId, session)) return;
+
       if (!session.conversationId && !session.pending) {
         sendToClient(userId, {
           type: "error",
@@ -572,10 +597,10 @@ export function setupWebSocket(server: HTTPServer) {
         userId = user.id;
         pendingConnections.remove(clientIp);
 
-        // Enforce T&C acceptance (version-aware)
+        // Enforce T&C acceptance (version-aware) and cache subscription status
         const { data: userRow, error: tcError } = await supabase
           .from("users")
-          .select("tc_accepted_version")
+          .select("tc_accepted_version, subscription_status")
           .eq("id", user.id)
           .single();
 
@@ -602,7 +627,11 @@ export function setupWebSocket(server: HTTPServer) {
         }
 
         // Register session — cancel any pending disconnect grace period
-        const newSession: ClientSession = { ws, lastActivity: Date.now() };
+        const newSession: ClientSession = {
+          ws,
+          lastActivity: Date.now(),
+          subscriptionStatus: userRow?.subscription_status ?? undefined,
+        };
         sessions.set(userId, newSession);
         for (const [key, timer] of pendingDisconnects) {
           if (key.startsWith(`${userId}:`)) {

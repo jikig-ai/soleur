@@ -112,19 +112,36 @@ export async function middleware(request: NextRequest) {
   if (!TC_EXEMPT_PATHS.some((p) => pathname === p || pathname.startsWith(p + "/"))) {
     const { data: userRow, error: tcError } = await supabase
       .from("users")
-      .select("tc_accepted_version")
+      .select("tc_accepted_version, subscription_status")
       .eq("id", user.id)
       .single();
 
     if (tcError) {
-      // Fail open: allow request if we cannot verify T&C status.
+      // Fail open: allow request if we cannot verify T&C or billing status.
       // Auth is already verified by getUser() above.
-      console.error(`[middleware] tc_accepted_version query failed: ${tcError.message}`);
+      console.error(`[middleware] user query failed: ${tcError.message}`);
       return withCspHeaders(response, cspValue);
     }
 
     if (userRow?.tc_accepted_version !== TC_VERSION) {
       return redirectWithCookies("/accept-terms");
+    }
+
+    // Billing enforcement: unpaid users are read-only (GET only).
+    // Allow billing/checkout paths so users can resolve payment.
+    if (
+      userRow?.subscription_status === "unpaid" &&
+      request.method !== "GET" &&
+      !pathname.startsWith("/api/billing") &&
+      !pathname.startsWith("/api/checkout")
+    ) {
+      return withCspHeaders(
+        NextResponse.json(
+          { error: "subscription_suspended" },
+          { status: 403 },
+        ),
+        cspValue,
+      );
     }
   }
 

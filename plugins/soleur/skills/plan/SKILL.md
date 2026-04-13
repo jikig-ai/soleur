@@ -469,8 +469,19 @@ and lifecycle progression.
 
    If there are no uncommitted changes, skip the commit. If push fails (no network),
    warn and continue.
-3. Display: "All artifacts are on disk. Run `/clear` then `/soleur:work` for maximum
-   context headroom."
+3. Display the resume prompt (per AGENTS.md Communication rule). Format:
+
+   ```text
+   All artifacts are on disk. Run `/clear` then paste this to resume:
+
+   /soleur:work <plan-file-path>
+
+   Context: branch <branch>, worktree <worktree-path>, PR #<N>, issue #<N>.
+   <one-line summary of what was already done>
+   ```
+
+   Replace placeholders with actual values from the session. The user must be
+   able to paste the command and go without re-explaining context.
 
 **Resume prompt (MANDATORY):** After the display message above, always output a copy-pasteable resume prompt block. This is required by AGENTS.md whenever `/clear` is mentioned. Format:
 

@@ -267,7 +267,7 @@ describe("Stripe webhook — subscription lifecycle", () => {
 
   describe("unhandled events", () => {
     test("returns 200 for unhandled event types", async () => {
-      const event = makeEvent("invoice.paid", { id: "inv_123" });
+      const event = makeEvent("payment_intent.succeeded", { id: "pi_123" });
       mockConstructEvent.mockReturnValue(event);
 
       const res = await POST(makeRequest());
