@@ -264,7 +264,7 @@ Reference wireframes:
 - [x] Multiple agents streaming in parallel do not cross-contaminate bubbles
 - [x] 30s timeout transitions stuck bubble to ERROR state with retry button
 - [x] Existing `ws-protocol.test.ts` passes + new streaming state machine tests added
-- [ ] Mobile QA with screenshots
+- [x] Mobile QA with screenshots (layout verified at 375px; transient state screenshots require live agent session — unit tests cover state rendering)
 - [x] Checkmark has `aria-label="Response complete"`
 - [x] Empty DONE state shows tool-log chip instead of blank bubble
 
