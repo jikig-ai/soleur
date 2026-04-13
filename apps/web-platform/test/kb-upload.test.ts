@@ -221,6 +221,22 @@ describe("POST /api/kb/upload", () => {
     expect(res.status).toBe(413);
   });
 
+  // 4b. Size validation — 11 MB file succeeds (within 20 MB route limit)
+  // Regression: uploads >10 MB were rejected because Next.js middleware
+  // truncated the body at the default 10 MB cloneableBody limit, causing
+  // "Failed to parse body as FormData". Fix: experimental.middlewareClientMaxBodySize.
+  test("returns 201 for 11MB file (within 20MB limit)", async () => {
+    setupFullMocks();
+
+    const formData = createFormData(makeTestFile("large-doc.pdf", 11 * 1024 * 1024), "uploads");
+    const res = await POST(createRequest(formData, "https://app.soleur.ai"));
+    expect(res.status).toBe(201);
+
+    const body = await res.json();
+    expect(body.path).toBeDefined();
+    expect(body.sha).toBe("newsha123");
+  });
+
   // 5. Path traversal
   test("returns 400 for path traversal in targetDir", async () => {
     setupFullMocks();
