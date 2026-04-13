@@ -4,6 +4,7 @@ import { useRef, useState, useCallback } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useKb } from "./kb-context";
+import { UploadProgress } from "./upload-progress";
 import type { TreeNode } from "@/server/kb-reader";
 
 const ALLOWED_ACCEPT = ".png,.jpg,.jpeg,.gif,.webp,.pdf,.csv,.txt,.docx";
@@ -11,6 +12,41 @@ const ALLOWED_EXTENSIONS = new Set([
   "png", "jpg", "jpeg", "gif", "webp", "pdf", "csv", "txt", "docx",
 ]);
 const MAX_FILE_SIZE = 20 * 1024 * 1024; // 20 MB
+
+function xhrUpload(
+  url: string,
+  formData: FormData,
+  onProgress: (percent: number) => void,
+): Promise<{ status: number; body: unknown }> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", url);
+
+    xhr.upload.onprogress = (e) => {
+      if (e.lengthComputable) {
+        onProgress(Math.round((e.loaded / e.total) * 100));
+      } else {
+        // Signal indeterminate mode
+        onProgress(-1);
+      }
+    };
+
+    xhr.onload = () => {
+      try {
+        const body = JSON.parse(xhr.responseText);
+        resolve({ status: xhr.status, body });
+      } catch {
+        resolve({ status: xhr.status, body: { error: "Invalid response" } });
+      }
+    };
+
+    xhr.onerror = () => reject(new Error("Network error"));
+    xhr.ontimeout = () => reject(new Error("Upload timed out"));
+    xhr.timeout = 120_000; // 2 minutes for large files
+
+    xhr.send(formData);
+  });
+}
 
 export function FileTree() {
   const { tree, expanded, toggleExpanded } = useKb();
@@ -37,7 +73,8 @@ export function FileTree() {
 
 type UploadState =
   | { status: "idle" }
-  | { status: "uploading" }
+  | { status: "uploading"; progress: number }
+  | { status: "processing" }
   | { status: "error"; message: string }
   | { status: "duplicate"; filename: string; sha: string; file: File; targetDir: string };
 
@@ -63,7 +100,7 @@ function TreeItem({
   const paddingLeft = `${indent * 12 + 8}px`;
 
   const uploadFile = useCallback(async (file: File, targetDir: string, sha?: string) => {
-    setUploadState({ status: "uploading" });
+    setUploadState({ status: "uploading", progress: 0 });
 
     const formData = new FormData();
     formData.append("file", file);
@@ -71,26 +108,29 @@ function TreeItem({
     if (sha) formData.append("sha", sha);
 
     try {
-      const res = await fetch("/api/kb/upload", {
-        method: "POST",
-        body: formData,
-      });
+      const { status, body } = await xhrUpload(
+        "/api/kb/upload",
+        formData,
+        (percent) => setUploadState({ status: "uploading", progress: percent }),
+      );
 
-      if (res.status === 409) {
-        const data = await res.json();
+      // Show processing state while we handle the response
+      setUploadState({ status: "processing" });
+
+      if (status === 409) {
         setUploadState({
           status: "duplicate",
           filename: file.name,
-          sha: data.sha,
+          sha: (body as { sha: string }).sha,
           file,
           targetDir,
         });
         return;
       }
 
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({ error: "Upload failed" }));
-        setUploadState({ status: "error", message: data.error || "Upload failed" });
+      if (status < 200 || status >= 300) {
+        const msg = (body as { error?: string }).error || "Upload failed";
+        setUploadState({ status: "error", message: msg });
         return;
       }
 
@@ -127,7 +167,7 @@ function TreeItem({
   if (node.type === "directory") {
     const dirKey = parentPath ? `${parentPath}/${node.name}` : node.name;
     const isExpanded = expanded.has(dirKey);
-    const isUploading = uploadState.status === "uploading";
+    const isBusy = uploadState.status === "uploading" || uploadState.status === "processing";
 
     return (
       <li>
@@ -135,13 +175,15 @@ function TreeItem({
           <button
             onClick={() => onToggle(dirKey)}
             className={`flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm text-neutral-300 hover:bg-neutral-800/50 ${
-              isUploading ? "bg-amber-500/10" : ""
+              isBusy ? "bg-amber-500/10" : ""
             }`}
             style={{ paddingLeft }}
             aria-expanded={isExpanded}
           >
-            {isUploading ? (
-              <UploadSpinner />
+            {uploadState.status === "uploading" ? (
+              <UploadProgress percent={uploadState.progress} />
+            ) : uploadState.status === "processing" ? (
+              <UploadProgress percent={-1} />
             ) : (
               <svg
                 width="12"
@@ -157,13 +199,13 @@ function TreeItem({
             )}
             <FolderIcon />
             <span className="truncate font-medium">{node.name}</span>
-            {node.modifiedAt && !isUploading && (
+            {node.modifiedAt && !isBusy && (
               <span className="ml-auto shrink-0 text-xs text-neutral-600">
                 {formatRelativeTime(node.modifiedAt)}
               </span>
             )}
           </button>
-          {!isUploading && (
+          {!isBusy && (
             <button
               onClick={(e) => {
                 e.stopPropagation();

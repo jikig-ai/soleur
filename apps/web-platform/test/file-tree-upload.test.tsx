@@ -48,9 +48,45 @@ function renderFileTree(overrides: Partial<KbContextValue> = {}) {
   );
 }
 
+/** Helper: create a mock XMLHttpRequest that resolves with the given status/body */
+function mockXhr(status: number, body: unknown) {
+  const xhrInstance = {
+    open: vi.fn(),
+    send: vi.fn(),
+    upload: { onprogress: null as ((e: ProgressEvent) => void) | null },
+    onload: null as (() => void) | null,
+    onerror: null as (() => void) | null,
+    ontimeout: null as (() => void) | null,
+    timeout: 0,
+    status,
+    responseText: JSON.stringify(body),
+  };
+
+  // When send() is called, simulate immediate completion
+  xhrInstance.send.mockImplementation(() => {
+    // Fire progress event
+    if (xhrInstance.upload.onprogress) {
+      xhrInstance.upload.onprogress(
+        new ProgressEvent("progress", { lengthComputable: true, loaded: 100, total: 100 }),
+      );
+    }
+    // Fire onload
+    queueMicrotask(() => {
+      xhrInstance.onload?.();
+    });
+  });
+
+  vi.stubGlobal(
+    "XMLHttpRequest",
+    vi.fn(() => xhrInstance),
+  );
+
+  return xhrInstance;
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
-  global.fetch = vi.fn();
+  vi.unstubAllGlobals();
 });
 
 describe("FileTree upload", () => {
@@ -78,7 +114,6 @@ describe("FileTree upload", () => {
     await waitFor(() => {
       expect(screen.getByText("File exceeds 20MB limit")).toBeDefined();
     });
-    expect(global.fetch).not.toHaveBeenCalled();
   });
 
   it("rejects unsupported file types client-side", async () => {
@@ -91,15 +126,10 @@ describe("FileTree upload", () => {
     await waitFor(() => {
       expect(screen.getByText("Unsupported file type: .exe")).toBeDefined();
     });
-    expect(global.fetch).not.toHaveBeenCalled();
   });
 
   it("uploads file and calls refreshTree on success", async () => {
-    (global.fetch as ReturnType<typeof vi.fn>).mockResolvedValue({
-      ok: true,
-      status: 201,
-      json: () => Promise.resolve({ path: "assets/photo.png", sha: "abc", commitSha: "def" }),
-    });
+    const xhr = mockXhr(201, { path: "assets/photo.png", sha: "abc", commitSha: "def" });
 
     renderFileTree();
     const fileInput = document.querySelector('input[type="file"]') as HTMLInputElement;
@@ -108,7 +138,7 @@ describe("FileTree upload", () => {
     fireEvent.change(fileInput, { target: { files: [file] } });
 
     await waitFor(() => {
-      expect(global.fetch).toHaveBeenCalledWith("/api/kb/upload", expect.objectContaining({ method: "POST" }));
+      expect(xhr.open).toHaveBeenCalledWith("POST", "/api/kb/upload");
     });
 
     await waitFor(() => {
@@ -117,11 +147,7 @@ describe("FileTree upload", () => {
   });
 
   it("shows duplicate dialog on 409 response", async () => {
-    (global.fetch as ReturnType<typeof vi.fn>).mockResolvedValue({
-      ok: false,
-      status: 409,
-      json: () => Promise.resolve({ error: "File already exists", sha: "existing-sha", path: "assets/photo.png" }),
-    });
+    mockXhr(409, { error: "File already exists", sha: "existing-sha", path: "assets/photo.png" });
 
     renderFileTree();
     const fileInput = document.querySelector('input[type="file"]') as HTMLInputElement;
