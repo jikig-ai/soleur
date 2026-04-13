@@ -88,6 +88,7 @@ Structure your findings as:
 
 **Quality Assurance:**
 
+- **Existence verification:** When reporting that a specific file does not exist (e.g., "no service worker found"), verify with the Glob tool using explicit filename patterns (e.g., `**/sw.js`, `**/sw.ts`, `**/manifest.*`) before making the claim. Content-based Grep misses do not prove file absence — a file can exist without containing the search pattern. Before any "X does not exist" assertion, try a direct Read at the most likely path.
 - Verify findings by checking multiple sources
 - Distinguish between official guidelines and observed patterns
 - Note the recency of documentation (check last update dates)
