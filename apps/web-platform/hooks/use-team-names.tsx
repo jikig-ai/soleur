@@ -6,6 +6,8 @@ import { DOMAIN_LEADERS, type DomainLeaderId } from "@/server/domain-leaders";
 interface TeamNamesState {
   /** Map of leaderId -> custom name (e.g., { cto: "Alex" }) */
   names: Record<string, string>;
+  /** Map of leaderId -> custom icon KB path (e.g., { cto: "settings/team-icons/cto.png" }) */
+  iconPaths: Record<string, string>;
   /** Array of leader IDs whose contextual nudge was dismissed */
   nudgesDismissed: string[];
   /** Whether the onboarding naming prompt was already shown */
@@ -16,6 +18,8 @@ interface TeamNamesState {
   error: string | null;
   /** Update a leader's custom name. Empty string removes the name. */
   updateName: (leaderId: string, name: string) => Promise<void>;
+  /** Update a leader's custom icon path. Null clears it. */
+  updateIcon: (leaderId: string, path: string | null) => Promise<void>;
   /** Dismiss the contextual nudge for a leader. */
   dismissNudge: (leaderId: string) => Promise<void>;
   /** Retry fetching team names after a failure. */
@@ -24,6 +28,8 @@ interface TeamNamesState {
   getDisplayName: (leaderId: DomainLeaderId) => string;
   /** Get just the label for the avatar badge (first 3 chars of custom name, or role acronym). */
   getBadgeLabel: (leaderId: DomainLeaderId) => string;
+  /** Get the custom icon KB path, or null if not set. */
+  getIconPath: (leaderId: DomainLeaderId) => string | null;
 }
 
 const TeamNamesContext = createContext<TeamNamesState | null>(null);
@@ -32,6 +38,7 @@ const leaderNameMap = new Map(DOMAIN_LEADERS.map((l) => [l.id, l.name]));
 
 export function TeamNamesProvider({ children }: { children: ReactNode }) {
   const [names, setNames] = useState<Record<string, string>>({});
+  const [iconPaths, setIconPaths] = useState<Record<string, string>>({});
   const [nudgesDismissed, setNudgesDismissed] = useState<string[]>([]);
   const [namingPromptedAt, setNamingPromptedAt] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -50,8 +57,9 @@ export function TeamNamesProvider({ children }: { children: ReactNode }) {
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         return res.json();
       })
-      .then((data: { names: Record<string, string>; nudgesDismissed: string[]; namingPromptedAt: string | null }) => {
+      .then((data: { names: Record<string, string>; iconPaths?: Record<string, string>; nudgesDismissed: string[]; namingPromptedAt: string | null }) => {
         setNames(data.names);
+        setIconPaths(data.iconPaths ?? {});
         setNudgesDismissed(data.nudgesDismissed);
         setNamingPromptedAt(data.namingPromptedAt);
         setError(null);
@@ -122,18 +130,50 @@ export function TeamNamesProvider({ children }: { children: ReactNode }) {
     [names],
   );
 
+  const getIconPath = useCallback(
+    (leaderId: DomainLeaderId): string | null => {
+      return iconPaths[leaderId] ?? null;
+    },
+    [iconPaths],
+  );
+
+  const updateIcon = useCallback(async (leaderId: string, path: string | null) => {
+    // Optimistic update
+    setIconPaths((prev) => {
+      if (path === null) {
+        const next = { ...prev };
+        delete next[leaderId];
+        return next;
+      }
+      return { ...prev, [leaderId]: path };
+    });
+
+    try {
+      await fetch("/api/team-names", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ leaderId, iconPath: path }),
+      });
+    } catch (err) {
+      console.error("[team-names] icon save error:", err);
+    }
+  }, []);
+
   return (
     <TeamNamesContext.Provider value={{
       names,
+      iconPaths,
       nudgesDismissed,
       namingPromptedAt,
       loading,
       error,
       updateName,
+      updateIcon,
       dismissNudge,
       refetch,
       getDisplayName,
       getBadgeLabel,
+      getIconPath,
     }}>
       {children}
     </TeamNamesContext.Provider>

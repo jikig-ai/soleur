@@ -20,7 +20,7 @@ export async function GET() {
   const [namesResult, userResult] = await Promise.all([
     supabase
       .from("team_names")
-      .select("leader_id, custom_name")
+      .select("leader_id, custom_name, custom_icon_path")
       .eq("user_id", user.id),
     supabase
       .from("users")
@@ -38,11 +38,15 @@ export async function GET() {
 
   // Return as a map: { cto: "Alex", ... } plus metadata
   const names: Record<string, string> = {};
+  const iconPaths: Record<string, string> = {};
   for (const row of namesResult.data ?? []) {
     names[row.leader_id] = row.custom_name;
+    if (row.custom_icon_path) {
+      iconPaths[row.leader_id] = row.custom_icon_path;
+    }
   }
 
-  return NextResponse.json({ names, nudgesDismissed, namingPromptedAt });
+  return NextResponse.json({ names, iconPaths, nudgesDismissed, namingPromptedAt });
 }
 
 /** PUT /api/team-names — upsert a custom name for a single leader. */
@@ -60,20 +64,48 @@ export async function PUT(request: Request) {
   }
 
   const body = await request.json().catch(() => null);
-  if (!body || typeof body.leaderId !== "string" || typeof body.name !== "string") {
+  if (!body || typeof body.leaderId !== "string") {
     return NextResponse.json(
-      { error: "Missing leaderId or name" },
+      { error: "Missing leaderId" },
       { status: 400 },
     );
   }
 
-  const { leaderId, name } = body as { leaderId: string; name: string };
+  const { leaderId } = body as { leaderId: string };
+  const hasName = typeof body.name === "string";
+  const hasIconPath = "iconPath" in body;
+
+  if (!hasName && !hasIconPath) {
+    return NextResponse.json(
+      { error: "Missing name or iconPath" },
+      { status: 400 },
+    );
+  }
 
   if (!VALID_LEADER_IDS.has(leaderId)) {
     return NextResponse.json({ error: "Invalid leader ID" }, { status: 400 });
   }
 
-  const trimmed = name.trim();
+  // Icon-path-only update (set or clear)
+  if (hasIconPath && !hasName) {
+    const iconPath = body.iconPath as string | null;
+    const { error } = await supabase.from("team_names").upsert(
+      {
+        user_id: user.id,
+        leader_id: leaderId,
+        custom_icon_path: iconPath,
+        updated_at: new Date().toISOString(),
+      },
+      { onConflict: "user_id,leader_id" },
+    );
+    if (error) {
+      return NextResponse.json({ error: "Failed to save icon path" }, { status: 500 });
+    }
+    return NextResponse.json({ saved: true, iconPath });
+  }
+
+  // Name update (with optional icon path)
+  const trimmed = (body.name as string).trim();
 
   // Empty name = delete the custom name (revert to default)
   if (trimmed === "") {
@@ -91,13 +123,19 @@ export async function PUT(request: Request) {
     return NextResponse.json({ error: validation.error }, { status: 400 });
   }
 
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const upsertData: Record<string, any> = {
+    user_id: user.id,
+    leader_id: leaderId,
+    custom_name: trimmed,
+    updated_at: new Date().toISOString(),
+  };
+  if (hasIconPath) {
+    upsertData.custom_icon_path = body.iconPath as string | null;
+  }
+
   const { error } = await supabase.from("team_names").upsert(
-    {
-      user_id: user.id,
-      leader_id: leaderId,
-      custom_name: trimmed,
-      updated_at: new Date().toISOString(),
-    },
+    upsertData,
     { onConflict: "user_id,leader_id" },
   );
 

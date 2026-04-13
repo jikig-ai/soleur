@@ -7,7 +7,7 @@ const mockFetch = vi.fn();
 vi.stubGlobal("fetch", mockFetch);
 
 function TestConsumer() {
-  const { names, getDisplayName, loading, error, refetch } = useTeamNames();
+  const { names, getDisplayName, getIconPath, loading, error, refetch } = useTeamNames();
   return (
     <div>
       <span data-testid="loading">{String(loading)}</span>
@@ -15,6 +15,8 @@ function TestConsumer() {
       <span data-testid="cto-display">{getDisplayName("cto")}</span>
       <span data-testid="cmo-display">{getDisplayName("cmo")}</span>
       <span data-testid="cto-name">{names.cto ?? "none"}</span>
+      <span data-testid="cto-icon">{getIconPath("cto") ?? "none"}</span>
+      <span data-testid="cmo-icon">{getIconPath("cmo") ?? "none"}</span>
       <button data-testid="refetch" onClick={refetch}>Refetch</button>
     </div>
   );
@@ -141,5 +143,41 @@ describe("useTeamNames", () => {
 
     expect(screen.getByTestId("error").textContent).toBe("none");
     expect(screen.getByTestId("cto-display").textContent).toBe("Alex (CTO)");
+  });
+
+  it("returns icon path from API response", async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: () => Promise.resolve({
+        names: { cto: "Alex" },
+        iconPaths: { cto: "settings/team-icons/cto.png" },
+        nudgesDismissed: [],
+        namingPromptedAt: null,
+      }),
+    });
+
+    await act(async () => {
+      renderWithProvider();
+    });
+
+    expect(screen.getByTestId("cto-icon").textContent).toBe("settings/team-icons/cto.png");
+    expect(screen.getByTestId("cmo-icon").textContent).toBe("none");
+  });
+
+  it("returns null icon path when no icons are set", async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: () => Promise.resolve({
+        names: {},
+        nudgesDismissed: [],
+        namingPromptedAt: null,
+      }),
+    });
+
+    await act(async () => {
+      renderWithProvider();
+    });
+
+    expect(screen.getByTestId("cto-icon").textContent).toBe("none");
   });
 });
