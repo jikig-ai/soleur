@@ -205,12 +205,24 @@ After generating the plan structure, assess which business domains this plan has
 
 4. **Collect findings:** Wait for all domain leader Tasks to complete. Each returns a brief structured assessment. If a domain leader Task fails (timeout, error), write partial findings for that domain with `Status: error` and continue with remaining domains.
 
+**Step 1.5 — Brainstorm Specialist Carry-Forward Gate:**
+
+After domain sweep, scan the brainstorm document's `## Domain Assessments` section (and any `## Capability Gaps` section) for domain leaders that recommended specific specialists by name (e.g., "delegates to conversion-optimizer", "recommends copywriter for cancellation copy", "invoke ux-design-lead for wireframes"). Build a `REQUIRED_SPECIALISTS` list from these recommendations.
+
+For each specialist in `REQUIRED_SPECIALISTS`:
+
+1. If the specialist will be invoked by the Product/UX Gate pipeline below (ux-design-lead, copywriter, spec-flow-analyzer), mark it as "covered by UX Gate" — it will run in Step 2.
+2. If the specialist is NOT covered by the UX Gate pipeline (e.g., conversion-optimizer, retention-strategist, pricing-strategist), invoke it as a Task now with a scoped prompt derived from the recommendation context. Spawn in parallel if multiple.
+3. Record all brainstorm-recommended specialists in the Domain Review section under `**Brainstorm-recommended specialists:**`.
+
+**Enforcement:** Specialists recommended by name in brainstorm domain assessments MUST be either invoked or explicitly declined by the user via AskUserQuestion ("Domain leader recommended [specialist] for [reason]. Run now / Skip with acknowledgment"). Silent skipping is a workflow violation. **Why:** In #1078, the CMO recommended conversion-optimizer and copywriter for the cancellation flow, but the plan skill silently wrote them into `Skipped specialists:` without asking, producing UX artifacts that lacked brand review.
+
 **Step 2 — Product/UX Gate:**
 
-After Step 1 completes, if Product domain was flagged as relevant, run the existing three-tier classification:
+After Steps 1 and 1.5 complete, if Product domain was flagged as relevant, run the existing three-tier classification:
 
-- **BLOCKING**: Creates new user-facing pages, multi-step user flows, or new UI components that users interact with (e.g., signup flows, dashboards, onboarding wizards, chat interfaces, prompts, modals, banners)
-- **ADVISORY**: Modifies existing user-facing pages or components (e.g., layout changes, form updates, adding fields to existing screens)
+- **BLOCKING**: Creates new user-facing pages, multi-step user flows, or significant new UI components — including modals, dialogs, confirmation flows, and interstitials with emotional or persuasive copy (e.g., signup flows, dashboards, onboarding wizards, chat interfaces, retention modals, cancel confirmation screens, prompts, banners)
+- **ADVISORY**: Modifies existing user-facing pages or components without adding new interactive surfaces (e.g., layout changes, form updates, adding fields to existing screens)
 - **NONE**: No user-facing impact
 
 A plan that *discusses* UI concepts but *implements* orchestration changes (e.g., adding a UX gate to a skill) is NONE.

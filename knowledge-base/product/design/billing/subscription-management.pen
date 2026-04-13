@@ -1,0 +1,948 @@
+{
+  "version": "2.9",
+  "children": [
+    {
+      "type": "frame",
+      "id": "jYeUx",
+      "x": 0,
+      "y": 0,
+      "name": "01 Settings Billing — Active Subscriber",
+      "width": 800,
+      "height": 680,
+      "fill": "#0A0A0A",
+      "layout": "vertical",
+      "gap": 32,
+      "padding": [
+        40,
+        48
+      ],
+      "children": [
+        {
+          "type": "text",
+          "id": "6mInC",
+          "name": "page-title",
+          "fill": "#FFFFFF",
+          "content": "Settings",
+          "fontFamily": "Inter",
+          "fontSize": 24,
+          "fontWeight": "600"
+        },
+        {
+          "type": "text",
+          "id": "7BK3k",
+          "name": "section-heading",
+          "fill": "#FFFFFF",
+          "content": "Billing",
+          "fontFamily": "Inter",
+          "fontSize": 18,
+          "fontWeight": "600"
+        },
+        {
+          "type": "frame",
+          "id": "oYVO1",
+          "name": "billing-card",
+          "width": "fill_container",
+          "fill": "#141414",
+          "cornerRadius": 12,
+          "stroke": {
+            "thickness": 1,
+            "fill": "#262626"
+          },
+          "layout": "vertical",
+          "gap": 20,
+          "padding": 24,
+          "children": [
+            {
+              "type": "frame",
+              "id": "s3H8R",
+              "name": "plan-row",
+              "width": "fill_container",
+              "gap": 12,
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "iuVgL",
+                  "name": "plan-info",
+                  "layout": "vertical",
+                  "gap": 4,
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "ZhTbp",
+                      "name": "plan-label",
+                      "fill": "#848484",
+                      "content": "Plan",
+                      "fontFamily": "Inter",
+                      "fontSize": 12
+                    },
+                    {
+                      "type": "text",
+                      "id": "BWWw6",
+                      "name": "plan-value",
+                      "fill": "#FFFFFF",
+                      "content": "Solo — $49/mo",
+                      "fontFamily": "Inter",
+                      "fontSize": 15,
+                      "fontWeight": "500"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "BWDxz",
+                  "name": "active-badge",
+                  "fill": "#166534",
+                  "cornerRadius": 12,
+                  "padding": [
+                    4,
+                    12
+                  ],
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "jGN5M",
+                      "name": "badge-text",
+                      "fill": "#4ADE80",
+                      "content": "Active",
+                      "fontFamily": "Inter",
+                      "fontSize": 12,
+                      "fontWeight": "500"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "rectangle",
+              "id": "uyRTy",
+              "name": "divider",
+              "fill": "#262626",
+              "width": "fill_container",
+              "height": 1
+            },
+            {
+              "type": "frame",
+              "id": "npYGm",
+              "name": "period-info",
+              "width": "fill_container",
+              "layout": "vertical",
+              "gap": 4,
+              "children": [
+                {
+                  "type": "text",
+                  "id": "qIKli",
+                  "name": "period-label",
+                  "fill": "#848484",
+                  "content": "Billing period ends",
+                  "fontFamily": "Inter",
+                  "fontSize": 12
+                },
+                {
+                  "type": "text",
+                  "id": "aE57f",
+                  "name": "period-value",
+                  "fill": "#FFFFFF",
+                  "content": "May 13, 2026",
+                  "fontFamily": "Inter",
+                  "fontSize": 15,
+                  "fontWeight": "500"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "mUyEr",
+              "name": "button-row",
+              "width": "fill_container",
+              "gap": 12,
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "OYumu",
+                  "name": "manage-btn",
+                  "fill": {
+                    "type": "gradient",
+                    "gradientType": "linear",
+                    "enabled": true,
+                    "rotation": 90,
+                    "size": {
+                      "height": 1
+                    },
+                    "colors": [
+                      {
+                        "color": "#D4B36A",
+                        "position": 0
+                      },
+                      {
+                        "color": "#B8923E",
+                        "position": 1
+                      }
+                    ]
+                  },
+                  "padding": [
+                    10,
+                    20
+                  ],
+                  "justifyContent": "center",
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "PksFt",
+                      "name": "manage-text",
+                      "fill": "#0A0A0A",
+                      "content": "Manage Subscription",
+                      "fontFamily": "Inter",
+                      "fontSize": 13,
+                      "fontWeight": "600"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "Fc3BZ",
+                  "name": "cancel-btn",
+                  "fill": "#00000000",
+                  "stroke": {
+                    "thickness": 1,
+                    "fill": "#404040"
+                  },
+                  "padding": [
+                    10,
+                    20
+                  ],
+                  "justifyContent": "center",
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "ZG8HY",
+                      "name": "cancel-text",
+                      "fill": "#FFFFFF",
+                      "content": "Cancel Subscription",
+                      "fontFamily": "Inter",
+                      "fontSize": 13,
+                      "fontWeight": "500"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "HMpQq",
+      "x": 900,
+      "y": 0,
+      "name": "02 Settings Billing — Cancelling State",
+      "width": 800,
+      "height": 740,
+      "fill": "#0A0A0A",
+      "layout": "vertical",
+      "gap": 32,
+      "padding": [
+        40,
+        48
+      ],
+      "children": [
+        {
+          "type": "text",
+          "id": "UbVOg",
+          "name": "page-title",
+          "fill": "#FFFFFF",
+          "content": "Settings",
+          "fontFamily": "Inter",
+          "fontSize": 24,
+          "fontWeight": "600"
+        },
+        {
+          "type": "text",
+          "id": "F3asi",
+          "name": "section-heading",
+          "fill": "#FFFFFF",
+          "content": "Billing",
+          "fontFamily": "Inter",
+          "fontSize": 18,
+          "fontWeight": "600"
+        },
+        {
+          "type": "frame",
+          "id": "OgD5c",
+          "name": "billing-card",
+          "width": "fill_container",
+          "fill": "#141414",
+          "cornerRadius": 12,
+          "stroke": {
+            "thickness": 1,
+            "fill": "#262626"
+          },
+          "layout": "vertical",
+          "gap": 20,
+          "padding": 24,
+          "children": [
+            {
+              "type": "frame",
+              "id": "jnaCT",
+              "name": "cancelling-banner",
+              "width": "fill_container",
+              "fill": "#78350F20",
+              "cornerRadius": 8,
+              "stroke": {
+                "thickness": 1,
+                "fill": "#92400E"
+              },
+              "layout": "vertical",
+              "gap": 8,
+              "padding": [
+                12,
+                16
+              ],
+              "children": [
+                {
+                  "type": "text",
+                  "id": "NCcT7",
+                  "name": "banner-text",
+                  "fill": "#FCD34D",
+                  "textGrowth": "fixed-width",
+                  "width": "fill_container",
+                  "content": "Your subscription will end on May 13, 2026. You'll retain full access until then.",
+                  "lineHeight": 1.5,
+                  "fontFamily": "Inter",
+                  "fontSize": 13
+                },
+                {
+                  "type": "text",
+                  "id": "ejs1Q",
+                  "name": "reactivate-link",
+                  "fill": "#C9A962",
+                  "content": "Reactivate",
+                  "fontFamily": "Inter",
+                  "fontSize": 13,
+                  "fontWeight": "600"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "UY8KM",
+              "name": "plan-row",
+              "width": "fill_container",
+              "gap": 12,
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "J5fO3",
+                  "name": "plan-info",
+                  "layout": "vertical",
+                  "gap": 4,
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "ZRGzn",
+                      "name": "plan-label",
+                      "fill": "#848484",
+                      "content": "Plan",
+                      "fontFamily": "Inter",
+                      "fontSize": 12
+                    },
+                    {
+                      "type": "text",
+                      "id": "RyaWG",
+                      "name": "plan-value",
+                      "fill": "#FFFFFF",
+                      "content": "Solo — $49/mo",
+                      "fontFamily": "Inter",
+                      "fontSize": 15,
+                      "fontWeight": "500"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "UN4aG",
+                  "name": "cancelling-badge",
+                  "fill": "#78350F",
+                  "cornerRadius": 12,
+                  "padding": [
+                    4,
+                    12
+                  ],
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "MdjCU",
+                      "name": "badge-text",
+                      "fill": "#FBBF24",
+                      "content": "Cancelling",
+                      "fontFamily": "Inter",
+                      "fontSize": 12,
+                      "fontWeight": "500"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "rectangle",
+              "id": "XO825",
+              "name": "divider",
+              "fill": "#262626",
+              "width": "fill_container",
+              "height": 1
+            },
+            {
+              "type": "frame",
+              "id": "5EgBa",
+              "name": "period-info",
+              "width": "fill_container",
+              "layout": "vertical",
+              "gap": 4,
+              "children": [
+                {
+                  "type": "text",
+                  "id": "EqKof",
+                  "name": "period-label",
+                  "fill": "#848484",
+                  "content": "Access ends",
+                  "fontFamily": "Inter",
+                  "fontSize": 12
+                },
+                {
+                  "type": "text",
+                  "id": "Y9rTm",
+                  "name": "period-value",
+                  "fill": "#FFFFFF",
+                  "content": "May 13, 2026",
+                  "fontFamily": "Inter",
+                  "fontSize": 15,
+                  "fontWeight": "500"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "2OI17",
+              "name": "button-row",
+              "width": "fill_container",
+              "gap": 12,
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "1cWL3",
+                  "name": "manage-btn",
+                  "fill": {
+                    "type": "gradient",
+                    "gradientType": "linear",
+                    "enabled": true,
+                    "rotation": 90,
+                    "size": {
+                      "height": 1
+                    },
+                    "colors": [
+                      {
+                        "color": "#D4B36A",
+                        "position": 0
+                      },
+                      {
+                        "color": "#B8923E",
+                        "position": 1
+                      }
+                    ]
+                  },
+                  "padding": [
+                    10,
+                    20
+                  ],
+                  "justifyContent": "center",
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "moJhx",
+                      "name": "manage-text",
+                      "fill": "#0A0A0A",
+                      "content": "Manage Subscription",
+                      "fontFamily": "Inter",
+                      "fontSize": 13,
+                      "fontWeight": "600"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "94Luq",
+      "x": 1800,
+      "y": 0,
+      "name": "03 Settings Billing — No Subscription",
+      "width": 800,
+      "height": 480,
+      "fill": "#0A0A0A",
+      "layout": "vertical",
+      "gap": 32,
+      "padding": [
+        40,
+        48
+      ],
+      "children": [
+        {
+          "type": "text",
+          "id": "wMcPC",
+          "name": "page-title",
+          "fill": "#FFFFFF",
+          "content": "Settings",
+          "fontFamily": "Inter",
+          "fontSize": 24,
+          "fontWeight": "600"
+        },
+        {
+          "type": "text",
+          "id": "kgA01",
+          "name": "section-heading",
+          "fill": "#FFFFFF",
+          "content": "Billing",
+          "fontFamily": "Inter",
+          "fontSize": 18,
+          "fontWeight": "600"
+        },
+        {
+          "type": "frame",
+          "id": "aIOsY",
+          "name": "billing-card",
+          "width": "fill_container",
+          "fill": "#141414",
+          "cornerRadius": 12,
+          "stroke": {
+            "thickness": 1,
+            "fill": "#262626"
+          },
+          "layout": "vertical",
+          "gap": 20,
+          "padding": 24,
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "ellipse",
+              "id": "irzrS",
+              "name": "empty-icon",
+              "fill": "#1F1F1F",
+              "width": 48,
+              "height": 48,
+              "stroke": {
+                "thickness": 1,
+                "fill": "#333333"
+              }
+            },
+            {
+              "type": "text",
+              "id": "jeVSm",
+              "name": "no-sub-text",
+              "fill": "#848484",
+              "content": "No active subscription",
+              "textAlign": "center",
+              "fontFamily": "Inter",
+              "fontSize": 15,
+              "fontWeight": "500"
+            },
+            {
+              "type": "text",
+              "id": "4X9tD",
+              "name": "no-sub-desc",
+              "fill": "#6A6A6A",
+              "content": "Subscribe to access the full Soleur platform.",
+              "textAlign": "center",
+              "fontFamily": "Inter",
+              "fontSize": 13
+            },
+            {
+              "type": "frame",
+              "id": "HdUP0",
+              "name": "subscribe-btn",
+              "fill": {
+                "type": "gradient",
+                "gradientType": "linear",
+                "enabled": true,
+                "rotation": 90,
+                "size": {
+                  "height": 1
+                },
+                "colors": [
+                  {
+                    "color": "#D4B36A",
+                    "position": 0
+                  },
+                  {
+                    "color": "#B8923E",
+                    "position": 1
+                  }
+                ]
+              },
+              "padding": [
+                12,
+                32
+              ],
+              "justifyContent": "center",
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "nYwNB",
+                  "name": "subscribe-text",
+                  "fill": "#0A0A0A",
+                  "content": "Subscribe",
+                  "fontFamily": "Inter",
+                  "fontSize": 14,
+                  "fontWeight": "600"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "9TeIo",
+      "x": 0,
+      "y": 800,
+      "name": "04 Retention Modal",
+      "width": 800,
+      "height": 680,
+      "fill": "#0A0A0A",
+      "layout": "none",
+      "children": [
+        {
+          "type": "rectangle",
+          "id": "itgUW",
+          "x": 0,
+          "y": 0,
+          "name": "overlay-bg",
+          "fill": "#000000CC",
+          "width": 800,
+          "height": 680
+        },
+        {
+          "type": "frame",
+          "id": "0Sq9G",
+          "x": 140,
+          "y": 80,
+          "name": "modal-card",
+          "width": 520,
+          "fill": "#141414",
+          "cornerRadius": 12,
+          "stroke": {
+            "thickness": 1,
+            "fill": "#262626"
+          },
+          "layout": "vertical",
+          "gap": 24,
+          "padding": 32,
+          "children": [
+            {
+              "type": "text",
+              "id": "LuVjU",
+              "name": "modal-heading",
+              "fill": "#FFFFFF",
+              "content": "Before you go...",
+              "fontFamily": "Cormorant Garamond",
+              "fontSize": 22,
+              "fontWeight": "500"
+            },
+            {
+              "type": "text",
+              "id": "WfVnJ",
+              "name": "modal-desc",
+              "fill": "#848484",
+              "textGrowth": "fixed-width",
+              "width": "fill_container",
+              "content": "Here's what you've built with Soleur so far:",
+              "lineHeight": 1.5,
+              "fontFamily": "Inter",
+              "fontSize": 14
+            },
+            {
+              "type": "frame",
+              "id": "RZntQ",
+              "name": "stats-grid",
+              "width": "fill_container",
+              "layout": "vertical",
+              "gap": 12,
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "jYq5l",
+                  "name": "stats-row-1",
+                  "width": "fill_container",
+                  "gap": 12,
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "7OHcC",
+                      "name": "stat-kb",
+                      "width": "fill_container",
+                      "fill": "#1A1A1A",
+                      "cornerRadius": 8,
+                      "stroke": {
+                        "thickness": 1,
+                        "fill": "#2A2A2A"
+                      },
+                      "layout": "vertical",
+                      "gap": 4,
+                      "padding": 16,
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "PQdI2",
+                          "name": "stat-kb-value",
+                          "fill": "#C9A962",
+                          "content": "47",
+                          "fontFamily": "Inter",
+                          "fontSize": 28,
+                          "fontWeight": "600"
+                        },
+                        {
+                          "type": "text",
+                          "id": "uBSe3",
+                          "name": "stat-kb-label",
+                          "fill": "#6A6A6A",
+                          "content": "KB Artifacts",
+                          "fontFamily": "Inter",
+                          "fontSize": 11,
+                          "fontWeight": "500"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "vNLqs",
+                      "name": "stat-convos",
+                      "width": "fill_container",
+                      "fill": "#1A1A1A",
+                      "cornerRadius": 8,
+                      "stroke": {
+                        "thickness": 1,
+                        "fill": "#2A2A2A"
+                      },
+                      "layout": "vertical",
+                      "gap": 4,
+                      "padding": 16,
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "yvkxg",
+                          "name": "stat-convos-value",
+                          "fill": "#C9A962",
+                          "content": "128",
+                          "fontFamily": "Inter",
+                          "fontSize": 28,
+                          "fontWeight": "600"
+                        },
+                        {
+                          "type": "text",
+                          "id": "w4YOM",
+                          "name": "stat-convos-label",
+                          "fill": "#6A6A6A",
+                          "content": "Conversations",
+                          "fontFamily": "Inter",
+                          "fontSize": 11,
+                          "fontWeight": "500"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "tKycZ",
+                  "name": "stats-row-2",
+                  "width": "fill_container",
+                  "gap": 12,
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "rS51a",
+                      "name": "stat-services",
+                      "width": "fill_container",
+                      "fill": "#1A1A1A",
+                      "cornerRadius": 8,
+                      "stroke": {
+                        "thickness": 1,
+                        "fill": "#2A2A2A"
+                      },
+                      "layout": "vertical",
+                      "gap": 4,
+                      "padding": 16,
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "Bob4l",
+                          "name": "stat-services-value",
+                          "fill": "#C9A962",
+                          "content": "5",
+                          "fontFamily": "Inter",
+                          "fontSize": 28,
+                          "fontWeight": "600"
+                        },
+                        {
+                          "type": "text",
+                          "id": "7P8zQ",
+                          "name": "stat-services-label",
+                          "fill": "#6A6A6A",
+                          "content": "Connected Services",
+                          "fontFamily": "Inter",
+                          "fontSize": 11,
+                          "fontWeight": "500"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "DO964",
+                      "name": "stat-days",
+                      "width": "fill_container",
+                      "fill": "#1A1A1A",
+                      "cornerRadius": 8,
+                      "stroke": {
+                        "thickness": 1,
+                        "fill": "#2A2A2A"
+                      },
+                      "layout": "vertical",
+                      "gap": 4,
+                      "padding": 16,
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "Uxl3G",
+                          "name": "stat-days-value",
+                          "fill": "#C9A962",
+                          "content": "93",
+                          "fontFamily": "Inter",
+                          "fontSize": 28,
+                          "fontWeight": "600"
+                        },
+                        {
+                          "type": "text",
+                          "id": "m4aph",
+                          "name": "stat-days-label",
+                          "fill": "#6A6A6A",
+                          "content": "Days Building",
+                          "fontFamily": "Inter",
+                          "fontSize": 11,
+                          "fontWeight": "500"
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "rectangle",
+              "id": "8dcTX",
+              "name": "modal-divider",
+              "fill": "#262626",
+              "width": "fill_container",
+              "height": 1
+            },
+            {
+              "type": "frame",
+              "id": "ffybi",
+              "name": "cta-row",
+              "width": "fill_container",
+              "gap": 12,
+              "justifyContent": "end",
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "uxPy0",
+                  "name": "continue-cancel-btn",
+                  "fill": "#00000000",
+                  "stroke": {
+                    "thickness": 1,
+                    "fill": "#404040"
+                  },
+                  "padding": [
+                    12,
+                    20
+                  ],
+                  "justifyContent": "center",
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "sQJGw",
+                      "name": "continue-cancel-text",
+                      "fill": "#848484",
+                      "content": "Continue to cancel",
+                      "fontFamily": "Inter",
+                      "fontSize": 13,
+                      "fontWeight": "500"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "fEWO4",
+                  "name": "keep-account-btn",
+                  "fill": {
+                    "type": "gradient",
+                    "gradientType": "linear",
+                    "enabled": true,
+                    "rotation": 90,
+                    "size": {
+                      "height": 1
+                    },
+                    "colors": [
+                      {
+                        "color": "#D4B36A",
+                        "position": 0
+                      },
+                      {
+                        "color": "#B8923E",
+                        "position": 1
+                      }
+                    ]
+                  },
+                  "padding": [
+                    12,
+                    24
+                  ],
+                  "justifyContent": "center",
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "5fYFz",
+                      "name": "keep-account-text",
+                      "fill": "#0A0A0A",
+                      "content": "Keep my account",
+                      "fontFamily": "Inter",
+                      "fontSize": 14,
+                      "fontWeight": "600"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
