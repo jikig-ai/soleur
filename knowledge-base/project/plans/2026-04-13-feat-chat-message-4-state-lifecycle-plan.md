@@ -256,17 +256,17 @@ Reference wireframes:
 
 ## Acceptance Criteria
 
-- [ ] Single bubble per agent turn (no duplicate bubbles)
-- [ ] No duplicated text content in any streaming scenario
-- [ ] Pulsing indicator visible during THINKING, TOOL\_USE, and STREAMING states
-- [ ] Status text shows what agent is doing during TOOL\_USE state (human-readable labels)
-- [ ] Checkmark and markdown rendering appear when agent is DONE
-- [ ] Multiple agents streaming in parallel do not cross-contaminate bubbles
-- [ ] 30s timeout transitions stuck bubble to ERROR state with retry button
-- [ ] Existing `ws-protocol.test.ts` passes + new streaming state machine tests added
+- [x] Single bubble per agent turn (no duplicate bubbles)
+- [x] No duplicated text content in any streaming scenario
+- [x] Pulsing indicator visible during THINKING, TOOL\_USE, and STREAMING states
+- [x] Status text shows what agent is doing during TOOL\_USE state (human-readable labels)
+- [x] Checkmark and markdown rendering appear when agent is DONE
+- [x] Multiple agents streaming in parallel do not cross-contaminate bubbles
+- [x] 30s timeout transitions stuck bubble to ERROR state with retry button
+- [x] Existing `ws-protocol.test.ts` passes + new streaming state machine tests added
 - [ ] Mobile QA with screenshots
-- [ ] Checkmark has `aria-label="Response complete"`
-- [ ] Empty DONE state shows tool-log chip instead of blank bubble
+- [x] Checkmark has `aria-label="Response complete"`
+- [x] Empty DONE state shows tool-log chip instead of blank bubble
 
 ## Test Scenarios
 
