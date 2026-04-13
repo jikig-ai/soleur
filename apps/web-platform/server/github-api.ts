@@ -15,6 +15,83 @@ import { createChildLogger } from "./logger";
 const log = createChildLogger("github-api");
 
 const GITHUB_API = "https://api.github.com";
+const GITHUB_FETCH_TIMEOUT_MS = 15_000;
+const MAX_RETRIES = 2; // 3 total attempts
+const BASE_DELAY_MS = 1_000;
+
+// ---------------------------------------------------------------------------
+// Retry wrapper for transient failures
+// ---------------------------------------------------------------------------
+
+function isRetryable(err: unknown): boolean {
+  // AbortSignal.timeout() fires a DOMException with name "TimeoutError"
+  if (err instanceof DOMException && err.name === "TimeoutError") return true;
+  // Network-level fetch failure (undici throws TypeError with "fetch failed")
+  if (err instanceof TypeError && err.message === "fetch failed") return true;
+  // Undici-specific error codes
+  if (
+    err instanceof Error &&
+    "code" in err &&
+    typeof (err as { code: unknown }).code === "string"
+  ) {
+    const code = (err as { code: string }).code;
+    return [
+      "UND_ERR_CONNECT_TIMEOUT",
+      "UND_ERR_SOCKET",
+      "ECONNRESET",
+      "ECONNREFUSED",
+      "ENOTFOUND",
+      "ENETDOWN",
+    ].includes(code);
+  }
+  return false;
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function fetchWithRetry(
+  url: string,
+  init: RequestInit,
+): Promise<Response> {
+  let lastError: Error | null = null;
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    try {
+      // Each attempt gets a fresh AbortSignal — a timed-out signal cannot be reused
+      const response = await fetch(url, {
+        ...init,
+        signal: AbortSignal.timeout(GITHUB_FETCH_TIMEOUT_MS),
+      });
+      // Retry on 5xx (GitHub transient errors)
+      if (response.status >= 500 && attempt < MAX_RETRIES) {
+        lastError = new Error(`GitHub API ${response.status}`);
+        // Drain response body to prevent socket keep-alive issues
+        await response.text().catch(() => {});
+        log.warn(
+          { attempt: attempt + 1, status: response.status, url },
+          "GitHub API fetch failed — retrying",
+        );
+        await delay(BASE_DELAY_MS * 2 ** attempt);
+        continue;
+      }
+      return response;
+    } catch (err) {
+      lastError = err instanceof Error ? err : new Error(String(err));
+      if (attempt < MAX_RETRIES && isRetryable(err)) {
+        log.warn(
+          { attempt: attempt + 1, err: lastError.message, url },
+          "GitHub API fetch failed — retrying",
+        );
+        await delay(BASE_DELAY_MS * 2 ** attempt);
+        continue;
+      }
+      throw lastError;
+    }
+  }
+  // TypeScript exhaustiveness guard — loop always exits via return or throw above
+  throw lastError;
+}
 
 /**
  * Make an authenticated GET request to the GitHub API.
@@ -26,7 +103,7 @@ export async function githubApiGet<T = unknown>(
 ): Promise<T> {
   const token = await generateInstallationToken(installationId);
 
-  const response = await fetch(`${GITHUB_API}${path}`, {
+  const response = await fetchWithRetry(`${GITHUB_API}${path}`, {
     headers: {
       Authorization: `token ${token}`,
       Accept: "application/vnd.github+json",
@@ -51,7 +128,7 @@ export async function githubApiGetText(
 ): Promise<string> {
   const token = await generateInstallationToken(installationId);
 
-  const response = await fetch(`${GITHUB_API}${path}`, {
+  const response = await fetchWithRetry(`${GITHUB_API}${path}`, {
     headers: {
       Authorization: `token ${token}`,
       Accept: "application/vnd.github+json",
@@ -82,7 +159,7 @@ export async function githubApiPost<T = unknown>(
 
   const token = await generateInstallationToken(installationId);
 
-  const response = await fetch(`${GITHUB_API}${path}`, {
+  const response = await fetchWithRetry(`${GITHUB_API}${path}`, {
     method: method.toUpperCase(),
     headers: {
       Authorization: `token ${token}`,

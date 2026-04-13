@@ -285,6 +285,25 @@ export async function POST(request: Request) {
   } catch (error) {
     Sentry.captureException(error);
 
+    // Timeout errors: DOMException (AbortSignal.timeout) or undici connect timeout
+    const isTimeout =
+      (error instanceof DOMException && error.name === "TimeoutError") ||
+      (error instanceof Error &&
+        "code" in error &&
+        typeof (error as { code: unknown }).code === "string" &&
+        (error as { code: string }).code === "UND_ERR_CONNECT_TIMEOUT");
+
+    if (isTimeout) {
+      logger.error(
+        { err: error, userId: user.id, path: filePath },
+        "kb/upload: GitHub API connect timeout",
+      );
+      return NextResponse.json(
+        { error: "GitHub API timed out. Please try again.", code: "GITHUB_TIMEOUT" },
+        { status: 504 },
+      );
+    }
+
     if (error instanceof Error && error.message.includes("GitHub API")) {
       logger.error(
         { err: error, userId: user.id, path: filePath },
