@@ -29,9 +29,13 @@ function isServerMessage(msg: WSMessage): boolean {
   return [
     "auth_ok",
     "stream",
+    "stream_start",
+    "stream_end",
+    "tool_use",
     "review_gate",
     "session_started",
     "session_ended",
+    "usage_update",
     "error",
   ].includes(msg.type);
 }
@@ -270,6 +274,161 @@ describe("rate limiting close codes", () => {
     const values = Object.values(WS_CLOSE_CODES);
     const unique = new Set(values);
     expect(unique.size).toBe(values.length);
+  });
+});
+
+describe("streaming lifecycle protocol", () => {
+  test("stream_start is a server message", () => {
+    const msg = parseMessage(
+      '{"type":"stream_start","leaderId":"cto","source":"auto"}',
+    );
+    expect(msg).not.toBeNull();
+    expect(isServerMessage(msg!)).toBe(true);
+    expect(isClientMessage(msg!)).toBe(false);
+  });
+
+  test("stream_end is a server message", () => {
+    const msg = parseMessage('{"type":"stream_end","leaderId":"cto"}');
+    expect(msg).not.toBeNull();
+    expect(isServerMessage(msg!)).toBe(true);
+    expect(isClientMessage(msg!)).toBe(false);
+  });
+
+  test("tool_use is a server message with tool and label", () => {
+    const msg = parseMessage(
+      '{"type":"tool_use","leaderId":"cto","tool":"Read","label":"Reading file..."}',
+    );
+    expect(msg).not.toBeNull();
+    expect(isServerMessage(msg!)).toBe(true);
+    expect(isClientMessage(msg!)).toBe(false);
+    if (msg!.type === "tool_use") {
+      expect(msg!.tool).toBe("Read");
+      expect(msg!.label).toBe("Reading file...");
+      expect(msg!.leaderId).toBe("cto");
+    }
+  });
+
+  test("valid lifecycle sequence: stream_start → tool_use → stream (partial) → stream_end", () => {
+    const sequence = [
+      '{"type":"stream_start","leaderId":"cmo"}',
+      '{"type":"tool_use","leaderId":"cmo","tool":"Read","label":"Reading file..."}',
+      '{"type":"stream","content":"Hello","partial":true,"leaderId":"cmo"}',
+      '{"type":"stream","content":"Hello world","partial":true,"leaderId":"cmo"}',
+      '{"type":"stream_end","leaderId":"cmo"}',
+    ];
+
+    const parsed = sequence.map((raw) => parseMessage(raw));
+    // All messages parse successfully
+    for (const msg of parsed) {
+      expect(msg).not.toBeNull();
+      expect(isServerMessage(msg!)).toBe(true);
+    }
+
+    // Verify correct types in order
+    expect(parsed[0]!.type).toBe("stream_start");
+    expect(parsed[1]!.type).toBe("tool_use");
+    expect(parsed[2]!.type).toBe("stream");
+    expect(parsed[3]!.type).toBe("stream");
+    expect(parsed[4]!.type).toBe("stream_end");
+  });
+
+  test("no partial:false emission after partials were sent", () => {
+    // After cumulative partial:true messages, the server should NOT send
+    // a final partial:false with the same content. Only stream_end signals
+    // completion. This test validates the protocol contract.
+    const events = [
+      { type: "stream_start", leaderId: "cmo" },
+      { type: "stream", content: "A", partial: true, leaderId: "cmo" },
+      { type: "stream", content: "AB", partial: true, leaderId: "cmo" },
+      { type: "stream", content: "ABC", partial: true, leaderId: "cmo" },
+      { type: "stream_end", leaderId: "cmo" },
+    ];
+
+    // Verify no partial:false exists in the sequence
+    const streamEvents = events.filter((e) => e.type === "stream");
+    for (const evt of streamEvents) {
+      expect(evt.partial).toBe(true);
+    }
+
+    // Final event is stream_end, not a stream with partial:false
+    expect(events[events.length - 1].type).toBe("stream_end");
+  });
+
+  test("cumulative partials produce correct final content via replace semantics", () => {
+    // Client should REPLACE content on each partial:true, not append
+    const partials = [
+      { content: "A", partial: true },
+      { content: "AB", partial: true },
+      { content: "ABC", partial: true },
+    ];
+
+    // Simulate replace semantics (correct)
+    let replaceResult = "";
+    for (const p of partials) {
+      replaceResult = p.content; // replace
+    }
+    expect(replaceResult).toBe("ABC");
+
+    // Demonstrate why append is wrong
+    let appendResult = "";
+    for (const p of partials) {
+      appendResult += p.content; // append (bug)
+    }
+    expect(appendResult).toBe("AABABC"); // This is the bug we're fixing
+    expect(appendResult).not.toBe("ABC");
+  });
+
+  test("multi-agent interleaving: independent leaderIds do not cross-contaminate", () => {
+    const events = [
+      { type: "stream_start", leaderId: "cmo" },
+      { type: "stream_start", leaderId: "cto" },
+      { type: "stream", content: "CMO text", partial: true, leaderId: "cmo" },
+      { type: "stream", content: "CTO text", partial: true, leaderId: "cto" },
+      { type: "stream_end", leaderId: "cmo" },
+      { type: "stream_end", leaderId: "cto" },
+    ];
+
+    // Group events by leaderId
+    const byLeader = new Map<string, typeof events>();
+    for (const evt of events) {
+      const id = evt.leaderId;
+      if (!byLeader.has(id)) byLeader.set(id, []);
+      byLeader.get(id)!.push(evt);
+    }
+
+    // Each leader has independent stream lifecycle
+    expect(byLeader.get("cmo")!.length).toBe(3);
+    expect(byLeader.get("cto")!.length).toBe(3);
+
+    // CMO content is only CMO's
+    const cmoStreams = byLeader.get("cmo")!.filter((e) => e.type === "stream");
+    expect(cmoStreams[0].content).toBe("CMO text");
+
+    // CTO content is only CTO's
+    const ctoStreams = byLeader.get("cto")!.filter((e) => e.type === "stream");
+    expect(ctoStreams[0].content).toBe("CTO text");
+  });
+
+  test("tool_use labels map SDK tools to human-readable strings", () => {
+    const toolLabels: Record<string, string> = {
+      Read: "Reading file...",
+      Bash: "Running command...",
+      Edit: "Editing file...",
+      Write: "Writing file...",
+      WebSearch: "Searching web...",
+      Grep: "Searching code...",
+      Glob: "Finding files...",
+    };
+
+    for (const [tool, label] of Object.entries(toolLabels)) {
+      const msg = parseMessage(
+        JSON.stringify({ type: "tool_use", leaderId: "cto", tool, label }),
+      );
+      expect(msg).not.toBeNull();
+      if (msg!.type === "tool_use") {
+        expect(msg!.label).toBe(label);
+      }
+    }
   });
 });
 

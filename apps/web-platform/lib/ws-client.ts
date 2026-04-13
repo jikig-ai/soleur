@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef, useCallback } from "react";
 import { createClient } from "@/lib/supabase/client";
-import { WS_CLOSE_CODES, type WSMessage, type ConversationContext, type AttachmentRef } from "@/lib/types";
+import { WS_CLOSE_CODES, type WSMessage, type MessageState, type ConversationContext, type AttachmentRef } from "@/lib/types";
 import type { DomainLeaderId } from "@/server/domain-leaders";
 
 type ConnectionStatus = "connecting" | "connected" | "reconnecting" | "disconnected";
@@ -22,6 +22,9 @@ interface ChatMessageBase {
   content: string;
   leaderId?: DomainLeaderId;
   attachments?: AttachmentRef[];
+  state?: MessageState;
+  toolLabel?: string;
+  toolsUsed?: string[];
 }
 
 interface ChatTextMessage extends ChatMessageBase {
@@ -69,6 +72,7 @@ interface UseWebSocketReturn {
 
 const MAX_BACKOFF = 30_000;
 const INITIAL_BACKOFF = 1_000;
+const STUCK_TIMEOUT_MS = 30_000;
 
 /** Close codes where reconnecting will never succeed. */
 export const NON_TRANSIENT_CLOSE_CODES: Record<number, { target?: string; reason: string }> = {
@@ -99,19 +103,59 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
   /** Map of active leader streams: leaderId → message index in the messages array */
   const activeStreamsRef = useRef<Map<string, number>>(new Map());
 
+  /** Map of per-leader timeout timers for stuck THINKING/TOOL_USE states (30s) */
+  const timeoutTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
+
+  /** Clear a single leader's timeout timer */
+  const clearLeaderTimeout = useCallback((leaderId: string) => {
+    const timer = timeoutTimersRef.current.get(leaderId);
+    if (timer) {
+      clearTimeout(timer);
+      timeoutTimersRef.current.delete(leaderId);
+    }
+  }, []);
+
+  /** Clear all timeout timers */
+  const clearAllTimeouts = useCallback(() => {
+    for (const timer of timeoutTimersRef.current.values()) {
+      clearTimeout(timer);
+    }
+    timeoutTimersRef.current.clear();
+  }, []);
+
+  /** Start/reset a 30s timeout for a leader — transitions to error on fire */
+  const resetLeaderTimeout = useCallback((leaderId: string) => {
+    clearLeaderTimeout(leaderId);
+    const timer = setTimeout(() => {
+      if (!mountedRef.current) return;
+      const idx = activeStreamsRef.current.get(leaderId);
+      if (idx === undefined) return;
+      setMessages((prev) => {
+        if (idx >= prev.length) return prev;
+        const updated = [...prev];
+        updated[idx] = { ...updated[idx], state: "error" };
+        return updated;
+      });
+      activeStreamsRef.current.delete(leaderId);
+      timeoutTimersRef.current.delete(leaderId);
+    }, STUCK_TIMEOUT_MS);
+    timeoutTimersRef.current.set(leaderId, timer);
+  }, [clearLeaderTimeout]);
+
   /** Permanently tear down the WebSocket — prevents reconnect loop.
    *  Mirrors the key_invalid teardown pattern. */
   const teardown = useCallback(() => {
     mountedRef.current = false;
     clearTimeout(reconnectTimerRef.current);
     activeStreamsRef.current.clear();
+    clearAllTimeouts();
     setSessionConfirmed(false);
     setRealConversationId(null);
     if (wsRef.current) {
       wsRef.current.onclose = null;
       wsRef.current.close();
     }
-  }, []);
+  }, [clearAllTimeouts]);
 
   const getWsUrlAndToken = useCallback(async () => {
     const proto = window.location.protocol === "https:" ? "wss" : "ws";
@@ -180,19 +224,44 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
           if (msg.source) {
             setRouteSource(msg.source);
           }
-          // Create a new empty message bubble for this leader
+          // Create a new empty message bubble for this leader with THINKING state
           setMessages((prev) => {
             const newMsg: ChatMessage = {
-              id: `stream-${msg.leaderId}-${Date.now()}`,
+              id: `stream-${msg.leaderId}-${crypto.randomUUID()}`,
               role: "assistant",
               content: "",
               type: "text",
               leaderId: msg.leaderId,
+              state: "thinking",
+              toolsUsed: [],
             };
             activeStreamsRef.current.set(msg.leaderId, prev.length);
             setActiveLeaderIds(Array.from(activeStreamsRef.current.keys()) as DomainLeaderId[]);
             return [...prev, newMsg];
           });
+          // Start 30s timeout for stuck THINKING state
+          resetLeaderTimeout(msg.leaderId);
+          break;
+        }
+
+        case "tool_use": {
+          // Update bubble to TOOL_USE state with human-readable label
+          const toolIdx = activeStreamsRef.current.get(msg.leaderId);
+          if (toolIdx !== undefined) {
+            setMessages((prev) => {
+              if (toolIdx >= prev.length) return prev;
+              const updated = [...prev];
+              updated[toolIdx] = {
+                ...updated[toolIdx],
+                state: "tool_use",
+                toolLabel: msg.label,
+                toolsUsed: [...(updated[toolIdx].toolsUsed ?? []), msg.tool],
+              };
+              return updated;
+            });
+          }
+          // Reset timeout — activity detected
+          resetLeaderTimeout(msg.leaderId);
           break;
         }
 
@@ -204,39 +273,56 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
             const idx = activeStreamsRef.current.get(streamLeaderId);
 
             if (idx !== undefined && idx < prev.length) {
-              // Append to existing bubble for this leader
+              // REPLACE content (not append) — server sends cumulative snapshots
               const updated = [...prev];
               updated[idx] = {
                 ...updated[idx],
-                content: updated[idx].content + msg.content,
+                content: msg.content,
+                state: "streaming",
+                toolLabel: undefined,
               };
               return updated;
             }
 
             // No active stream for this leader (stream_start may have been missed)
-            // Create a new bubble
+            // Create a new bubble with streaming state
             const newMsg: ChatMessage = {
-              id: `stream-${streamLeaderId}-${Date.now()}`,
+              id: `stream-${streamLeaderId}-${crypto.randomUUID()}`,
               role: "assistant",
               content: msg.content,
               type: "text",
               leaderId: streamLeaderId,
+              state: "streaming",
+              toolsUsed: [],
             };
             activeStreamsRef.current.set(streamLeaderId, prev.length);
             return [...prev, newMsg];
           });
+          // Reset timeout — activity detected
+          resetLeaderTimeout(streamLeaderId);
           break;
         }
 
         case "stream_end": {
-          // Finalize this leader's stream — remove from active streams map
+          // Finalize this leader's stream — set state to DONE
+          const endIdx = activeStreamsRef.current.get(msg.leaderId);
+          if (endIdx !== undefined) {
+            setMessages((prev) => {
+              if (endIdx >= prev.length) return prev;
+              const updated = [...prev];
+              updated[endIdx] = { ...updated[endIdx], state: "done" };
+              return updated;
+            });
+          }
           activeStreamsRef.current.delete(msg.leaderId);
+          clearLeaderTimeout(msg.leaderId);
           setActiveLeaderIds(Array.from(activeStreamsRef.current.keys()) as DomainLeaderId[]);
           break;
         }
 
         case "review_gate": {
           activeStreamsRef.current.clear();
+          clearAllTimeouts();
           setMessages((prev) => [
             ...prev,
             {
@@ -257,6 +343,7 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
 
         case "error": {
           activeStreamsRef.current.clear();
+          clearAllTimeouts();
 
           // Key invalidation: set structured error instead of redirect
           if (msg.errorCode === "key_invalid") {
@@ -300,6 +387,7 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
 
         case "session_ended": {
           activeStreamsRef.current.clear();
+          clearAllTimeouts();
           // Don't display "turn_complete" as a visible message — it's a lifecycle signal
           if (msg.reason !== "turn_complete") {
             setMessages((prev) => [
@@ -427,12 +515,13 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
     return () => {
       mountedRef.current = false;
       clearTimeout(reconnectTimerRef.current);
+      clearAllTimeouts();
       if (wsRef.current) {
         wsRef.current.onclose = null; // prevent reconnect on intentional close
         wsRef.current.close();
       }
     };
-  }, [connect, conversationId]);
+  }, [connect, conversationId, clearAllTimeouts]);
 
   const startSession = useCallback(
     (leaderId?: DomainLeaderId, context?: ConversationContext) => {
@@ -456,7 +545,7 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
       setMessages((prev) => [
         ...prev,
         {
-          id: `user-${Date.now()}`,
+          id: `user-${crypto.randomUUID()}`,
           role: "user",
           content,
           type: "text",

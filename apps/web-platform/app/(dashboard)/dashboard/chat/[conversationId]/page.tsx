@@ -4,7 +4,7 @@ import { useState, useRef, useEffect, useCallback } from "react";
 import { useParams, useSearchParams, useRouter, usePathname } from "next/navigation";
 import { MarkdownRenderer } from "@/components/ui/markdown-renderer";
 import { useWebSocket } from "@/lib/ws-client";
-import type { ConversationContext, AttachmentRef } from "@/lib/types";
+import type { ConversationContext, AttachmentRef, MessageState } from "@/lib/types";
 import { ErrorCard } from "@/components/ui/error-card";
 import { DOMAIN_LEADERS } from "@/server/domain-leaders";
 import type { DomainLeaderId } from "@/server/domain-leaders";
@@ -352,7 +352,9 @@ export default function ChatPage() {
                     content={msg.content}
                     leaderId={msg.leaderId}
                     showFullTitle={!!isFirst}
-                    isStreaming={!!msg.leaderId && activeLeaderIds.includes(msg.leaderId)}
+                    messageState={msg.state}
+                    toolLabel={msg.toolLabel}
+                    toolsUsed={msg.toolsUsed}
                     getDisplayName={getDisplayName}
                     attachments={msg.attachments}
                   />
@@ -469,7 +471,9 @@ function MessageBubble({
   content,
   leaderId,
   showFullTitle = false,
-  isStreaming = false,
+  messageState,
+  toolLabel,
+  toolsUsed,
   getDisplayName,
   attachments,
 }: {
@@ -477,15 +481,30 @@ function MessageBubble({
   content: string;
   leaderId?: DomainLeaderId;
   showFullTitle?: boolean;
-  isStreaming?: boolean;
+  messageState?: MessageState;
+  toolLabel?: string;
+  toolsUsed?: string[];
   getDisplayName?: (id: DomainLeaderId) => string;
   attachments?: AttachmentRef[];
 }) {
   const isUser = role === "user";
   const leader = leaderId ? DOMAIN_LEADERS.find((l) => l.id === leaderId) : null;
   const colorClass = leaderId ? (LEADER_COLORS[leaderId] ?? "border-l-neutral-500") : "";
-
   const displayName = leaderId && getDisplayName ? getDisplayName(leaderId) : leader?.name;
+
+  // Determine if this bubble is in an active state (pulsing border)
+  const isActive = messageState === "thinking" || messageState === "tool_use" || messageState === "streaming";
+  const isError = messageState === "error";
+  const isDone = messageState === "done";
+
+  // Border style based on state
+  const borderStyle = isError
+    ? "border-2 border-red-900/60"
+    : isActive
+      ? "message-bubble-active border-2 border-amber-600/70"
+      : isDone
+        ? "border border-neutral-800/60"
+        : "border border-neutral-800";
 
   return (
     <div className={`flex ${isUser ? "justify-end" : "justify-start"}`}>
@@ -507,12 +526,31 @@ function MessageBubble({
         )}
 
         <div
-          className={`rounded-xl px-4 py-3 text-sm leading-relaxed ${
+          className={`relative rounded-xl px-4 py-3 text-sm leading-relaxed ${
             isUser
               ? "bg-neutral-800 text-neutral-100"
-              : `bg-neutral-900 text-neutral-200 border border-neutral-800 ${leader ? `border-l-2 ${colorClass}` : ""}`
+              : `bg-neutral-900 text-neutral-200 ${borderStyle} ${leader && !isActive && !isError ? `border-l-2 ${colorClass}` : ""}`
           }`}
         >
+          {/* State badge chip (visible in TOOL_USE and STREAMING states) */}
+          {(messageState === "tool_use" || messageState === "streaming") && (
+            <span className="absolute -top-2.5 right-3 rounded-full border border-amber-700/50 bg-neutral-900 px-2 py-0.5 text-[10px] font-medium text-amber-500">
+              {messageState === "tool_use" ? "Working" : "Streaming"}
+            </span>
+          )}
+
+          {/* Checkmark on DONE */}
+          {isDone && role === "assistant" && (
+            <span
+              className="absolute -top-2.5 right-3 flex h-5 w-5 items-center justify-center rounded-full bg-neutral-900 text-amber-600"
+              aria-label="Response complete"
+            >
+              <svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true">
+                <path d="M2 6.5L4.5 9L10 3" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+            </span>
+          )}
+
           {leader && (
             <div className="mb-1 flex items-center gap-2">
               <span className="text-xs font-semibold text-neutral-300">
@@ -523,18 +561,51 @@ function MessageBubble({
               )}
             </div>
           )}
-          {content === "" && role === "assistant" ? (
+
+          {/* State-driven content rendering */}
+          {messageState === "thinking" || (!messageState && content === "" && role === "assistant") ? (
             <ThinkingDots />
-          ) : isUser || isStreaming ? (
+          ) : messageState === "tool_use" && toolLabel ? (
+            <ToolStatusChip label={toolLabel} />
+          ) : messageState === "error" ? (
+            <div className="flex items-center gap-2 text-red-400">
+              <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
+                <circle cx="7" cy="7" r="6" stroke="currentColor" strokeWidth="1.2" />
+                <path d="M7 4v3.5M7 9.5v.01" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+              </svg>
+              <span className="text-sm">Agent stopped responding</span>
+            </div>
+          ) : isDone && content === "" && toolsUsed && toolsUsed.length > 0 ? (
+            <div className="flex items-center gap-1.5 text-xs text-neutral-500">
+              <span>Used:</span>
+              {toolsUsed.map((t, i) => (
+                <span key={i} className="rounded bg-neutral-800 px-1.5 py-0.5">{t}</span>
+              ))}
+            </div>
+          ) : messageState === "streaming" || (content === "" && role === "assistant" && !isDone) ? (
+            <p className="whitespace-pre-wrap [overflow-wrap:anywhere]">
+              {content}<span className="animate-pulse text-amber-500">&#x258C;</span>
+            </p>
+          ) : isUser ? (
             <p className="whitespace-pre-wrap [overflow-wrap:anywhere]">{content}</p>
           ) : (
             <MarkdownRenderer content={content} />
           )}
+
           {attachments && attachments.length > 0 && (
             <AttachmentDisplay attachments={attachments} />
           )}
         </div>
       </div>
+    </div>
+  );
+}
+
+function ToolStatusChip({ label }: { label: string }) {
+  return (
+    <div className="flex items-center gap-2 py-0.5">
+      <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-amber-500" />
+      <span className="text-sm text-neutral-400">{label}</span>
     </div>
   );
 }

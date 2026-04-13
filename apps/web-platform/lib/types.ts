@@ -48,6 +48,9 @@ export interface ConversationContext {
   content?: string; // full artifact content for system prompt injection
 }
 
+// Message lifecycle states: each agent bubble progresses through these states
+export type MessageState = "thinking" | "tool_use" | "streaming" | "done" | "error";
+
 // WebSocket message protocol
 export type WSMessage =
   | { type: "auth"; token: string }
@@ -60,6 +63,7 @@ export type WSMessage =
   | { type: "stream"; content: string; partial: boolean; leaderId: DomainLeaderId }
   | { type: "stream_start"; leaderId: DomainLeaderId; source?: "auto" | "mention" }
   | { type: "stream_end"; leaderId: DomainLeaderId }
+  | { type: "tool_use"; leaderId: DomainLeaderId; tool: string; label: string }
   | { type: "review_gate"; gateId: string; question: string; header?: string; options: string[]; descriptions?: Record<string, string | undefined>; stepProgress?: { current: number; total: number } }
   | { type: "session_started"; conversationId: string }
   | { type: "session_ended"; reason: string }
