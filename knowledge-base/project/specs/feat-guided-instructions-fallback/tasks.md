@@ -57,4 +57,4 @@ Guided instructions fallback for services without API/MCP (Tier 3 of 3-tier serv
 
 ### 4.1 Create tracking issues
 
-- [ ] 4.1.1 Create issue for screenshot/annotation support in guided mode (deferred to Phase 5 desktop app)
+- [x] 4.1.1 Create issue for screenshot/annotation support in guided mode (deferred to Phase 5 desktop app) → #2038
