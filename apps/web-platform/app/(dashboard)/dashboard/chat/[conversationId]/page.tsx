@@ -9,6 +9,7 @@ import { ErrorCard } from "@/components/ui/error-card";
 import { DOMAIN_LEADERS } from "@/server/domain-leaders";
 import type { DomainLeaderId } from "@/server/domain-leaders";
 import { LEADER_COLORS } from "@/components/chat/leader-colors";
+import { LeaderAvatar } from "@/components/leader-avatar";
 import { ChatInput } from "@/components/chat/chat-input";
 import { AtMentionDropdown } from "@/components/chat/at-mention-dropdown";
 import { useTeamNames } from "@/hooks/use-team-names";
@@ -44,7 +45,7 @@ export default function ChatPage() {
     realConversationId,
   } = useWebSocket(conversationId);
 
-  const { names: customNames, getDisplayName, loading: teamNamesLoading } = useTeamNames();
+  const { names: customNames, getDisplayName, getIconPath, loading: teamNamesLoading } = useTeamNames();
 
   const [sessionStarted, setSessionStarted] = useState(false);
   const [initialMsgSent, setInitialMsgSent] = useState(false);
@@ -356,6 +357,7 @@ export default function ChatPage() {
                     toolLabel={msg.toolLabel}
                     toolsUsed={msg.toolsUsed}
                     getDisplayName={getDisplayName}
+                    getIconPath={getIconPath}
                     attachments={msg.attachments}
                   />
                 )}
@@ -475,6 +477,7 @@ function MessageBubble({
   toolLabel,
   toolsUsed,
   getDisplayName,
+  getIconPath,
   attachments,
 }: {
   role: "user" | "assistant";
@@ -485,12 +488,14 @@ function MessageBubble({
   toolLabel?: string;
   toolsUsed?: string[];
   getDisplayName?: (id: DomainLeaderId) => string;
+  getIconPath?: (id: DomainLeaderId) => string | null;
   attachments?: AttachmentRef[];
 }) {
   const isUser = role === "user";
   const leader = leaderId ? DOMAIN_LEADERS.find((l) => l.id === leaderId) : null;
   const colorClass = leaderId ? (LEADER_COLORS[leaderId] ?? "border-l-neutral-500") : "";
   const displayName = leaderId && getDisplayName ? getDisplayName(leaderId) : leader?.name;
+  const customIconPath = leaderId && getIconPath ? getIconPath(leaderId) : null;
 
   // Determine if this bubble is in an active state (pulsing border)
   const isActive = messageState === "thinking" || messageState === "tool_use" || messageState === "streaming";
@@ -511,18 +516,7 @@ function MessageBubble({
       <div className={`flex max-w-[90%] gap-3 md:max-w-[80%] ${isUser ? "flex-row-reverse" : ""}`}>
         {/* Leader avatar */}
         {leader && (
-          <span
-            className="mt-1 flex h-7 w-7 shrink-0 items-center justify-center overflow-hidden rounded-md"
-            aria-label={`Soleur ${leaderId!.toUpperCase()}`}
-          >
-            <img
-              src="/icons/soleur-logo-mark.png"
-              alt=""
-              width={28}
-              height={28}
-              className="h-full w-full object-cover"
-            />
-          </span>
+          <LeaderAvatar leaderId={leaderId!} size="md" className="mt-1" customIconPath={customIconPath} />
         )}
 
         <div

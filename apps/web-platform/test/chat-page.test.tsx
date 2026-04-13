@@ -216,14 +216,17 @@ describe("ChatPage", () => {
     expect(screen.getAllByText(/2 leaders responding/i).length).toBeGreaterThanOrEqual(1);
   });
 
-  it("renders leader message with Soleur logo badge", async () => {
+  it("renders leader message with domain-specific icon badge", async () => {
     wsReturn.messages = [
       { id: "s1", role: "assistant", content: "My analysis", type: "text", leaderId: "cmo" },
     ];
     await renderChatPage();
-    // Logo badge should appear with aria-label
-    const badge = screen.getByLabelText(/Soleur CMO/i);
+    // Domain icon badge should appear with aria-label
+    const badge = screen.getByLabelText(/CMO avatar/i);
     expect(badge).toBeInTheDocument();
+    // Should render lucide icon, not Soleur logo
+    const img = badge.querySelector('img[src="/icons/soleur-logo-mark.png"]');
+    expect(img).toBeNull();
     // Name label still shows display name
     expect(screen.getByText("CMO")).toBeInTheDocument();
   });
