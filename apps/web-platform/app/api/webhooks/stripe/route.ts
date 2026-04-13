@@ -4,17 +4,18 @@ import { createServiceClient } from "@/lib/supabase/server";
 import type Stripe from "stripe";
 import logger from "@/server/logger";
 
-// Map Stripe subscription statuses to the CHECK constraint values in migration 002.
+// Map Stripe subscription statuses to the CHECK constraint values.
 // Stripe sends: active, canceled, incomplete, incomplete_expired, past_due, trialing, unpaid, paused.
-// DB allows: none, active, cancelled, past_due.
+// DB allows: none, active, cancelled, past_due, unpaid (migration 022).
 function mapStripeStatus(stripeStatus: string): string {
   switch (stripeStatus) {
     case "active":
     case "trialing":
       return "active";
     case "past_due":
-    case "unpaid":
       return "past_due";
+    case "unpaid":
+      return "unpaid";
     case "canceled":
     case "incomplete_expired":
     case "paused":
@@ -117,6 +118,46 @@ export async function POST(request: Request) {
       if (error) {
         logger.error({ error, customerId }, "Webhook: failed to update user on customer.subscription.deleted");
         return NextResponse.json({ error: "DB update failed" }, { status: 500 });
+      }
+      break;
+    }
+
+    case "invoice.payment_failed": {
+      const invoice = event.data.object as Stripe.Invoice;
+      const customerId =
+        typeof invoice.customer === "string"
+          ? invoice.customer
+          : invoice.customer?.id;
+      logger.warn(
+        { customerId, invoiceId: invoice.id },
+        "Stripe invoice.payment_failed — logged for observability, status managed by customer.subscription.updated",
+      );
+      break;
+    }
+
+    case "invoice.paid": {
+      const invoice = event.data.object as Stripe.Invoice;
+      const customerId =
+        typeof invoice.customer === "string"
+          ? invoice.customer
+          : invoice.customer?.id;
+
+      if (customerId) {
+        const { error } = await supabase
+          .from("users")
+          .update({ subscription_status: "active" })
+          .eq("stripe_customer_id", customerId);
+
+        if (error) {
+          logger.error(
+            { error, customerId },
+            "Webhook: failed to update user on invoice.paid",
+          );
+          return NextResponse.json(
+            { error: "DB update failed" },
+            { status: 500 },
+          );
+        }
       }
       break;
     }

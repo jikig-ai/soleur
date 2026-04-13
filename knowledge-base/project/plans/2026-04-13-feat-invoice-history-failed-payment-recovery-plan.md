@@ -258,10 +258,10 @@ Not a code phase — part of standard post-merge workflow (per AGENTS.md):
 - [ ] Invoice list displays with PDF download links (FR1, FR2)
 - [ ] In-app banner shows for `past_due` and `unpaid` (FR3, FR4)
 - [ ] Read-only mode enforced when `unpaid` (FR5)
-- [ ] Webhook handles `customer.subscription.updated` for all status transitions (FR6, FR7)
-- [ ] `invoice.payment_failed` logged but does not change status
-- [ ] Webhook handles `invoice.paid` → `active` (FR8)
-- [ ] Webhook updates are idempotent (no stripe_events table needed) (FR9)
+- [x] Webhook handles `customer.subscription.updated` for all status transitions (FR6, FR7)
+- [x] `invoice.payment_failed` logged but does not change status
+- [x] Webhook handles `invoice.paid` → `active` (FR8)
+- [x] Webhook updates are idempotent (no stripe_events table needed) (FR9)
 - [ ] Portal sessions are dynamic (FR10)
 - [ ] Middleware fails open on query error (TR5)
 - [ ] WS handler gates both `chat` and `resume_session` for unpaid users
