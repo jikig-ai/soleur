@@ -21,4 +21,4 @@ Source: `knowledge-base/project/plans/2026-04-13-chore-close-invoice-recovery-fo
 
 - [x] 3.1 Update roadmap row 3.14 status from "Not started" to "Done"
 - [x] 3.2 Update Current State section (synced all milestone counts from GitHub)
-- [ ] 3.3 Commit and push all changes
+- [x] 3.3 Commit and push all changes
