@@ -2,9 +2,22 @@
 title: "fix: KB upload workspace sync fails due to missing git credential helper"
 type: fix
 date: 2026-04-13
+deepened: 2026-04-13
 ---
 
 # fix: KB upload workspace sync fails due to missing git credential helper
+
+## Enhancement Summary
+
+**Deepened on:** 2026-04-13
+**Sections enhanced:** 3 (Root Cause, Fix Implementation, Test Scenarios)
+**Research sources:** Codebase pattern analysis (session-sync.ts, push-branch.ts, workspace.ts), institutional learnings (repo-connection-implementation, silent-setup-failure)
+
+### Key Improvements
+
+1. Added shallow clone edge case analysis (`--ff-only` correctness verification)
+2. Added token generation failure as a distinct error path (not just sync failure)
+3. Identified credential helper script quoting discrepancy across codebase (backtick vs single-quote for password value)
 
 ## Overview
 
@@ -48,6 +61,14 @@ And in `server/push-branch.ts:130`:
 ```
 
 The upload route is the only git-remote operation that skips the credential helper.
+
+### Research Insights
+
+**Shallow clone compatibility with `--ff-only`:** Workspaces are cloned with `--depth 1`. The upload route uses `--ff-only` while `session-sync.ts` uses `--no-rebase --autostash`. The `--ff-only` choice is correct here: the Contents API commit creates exactly one new commit on the remote's HEAD, so fast-forward is guaranteed (the local workspace has not diverged). The `session-sync.ts` pattern uses `--no-rebase` because arbitrary time may pass between syncs, creating divergence. No change needed.
+
+**Credential helper script quoting:** The codebase has two quoting styles for the helper script. `workspace.ts:148` and `session-sync.ts:78` use backtick template literals with unquoted password values. `push-branch.ts:121` uses single quotes around the token value. Both work because the token is alphanumeric, but the plan should use the same style as `session-sync.ts` (backtick, unquoted) for consistency since that is the closest pattern match (both are pull operations).
+
+**Token generation as distinct failure mode:** The `silent-setup-failure` learning (2026-04-03) documents that `generateInstallationToken` can fail if the GitHub App credentials are expired or the installation was removed. The current plan's catch block lumps token generation failure together with git pull failure under `SYNC_FAILED`. This is acceptable for V1 since both are unrecoverable without user action, but the error message logged to Sentry should distinguish the two (token generation vs git pull).
 
 ## Proposed Solution
 
@@ -116,6 +137,14 @@ try {
 }
 ```
 
+### Implementation Edge Cases
+
+**Token expiry during upload:** GitHub App installation tokens have a 1-hour TTL with a 5-minute safety margin in the cache (`github-app.ts`). A 20MB upload with base64 encoding, Contents API PUT, and git pull should complete well within this window. No special handling needed.
+
+**Concurrent uploads:** Two concurrent uploads to the same workspace could race on `git pull`. The second pull would fail if the first pull's merge is in progress (`.git/index.lock` contention). This is pre-existing behavior -- the `SYNC_FAILED` error and "Try refreshing" message already handle this gracefully. The file is committed to GitHub regardless.
+
+**`writeFileSync` failure:** If `/tmp` is full or read-only, the credential helper write fails. This throws before git pull runs, so no cleanup is needed. The catch block returns SYNC_FAILED. The `randomCredentialPath()` uses `randomUUID()` so collisions are not a concern.
+
 ### Why Not Extract a Shared Helper
 
 `session-sync.ts` already has `writeCredentialHelper()` and `cleanupCredentialHelper()` as private functions. Extracting them to a shared module would be cleaner, but the scope of this bug fix should stay minimal. A refactor to DRY up the credential helper pattern across `upload/route.ts`, `session-sync.ts`, and `push-branch.ts` can follow as a separate PR. The inline approach matches the existing pattern in `workspace.ts` (lines 144-148).
@@ -151,6 +180,11 @@ No cross-domain implications detected -- single-file bug fix in existing upload 
 
 - Given all existing upload tests (CSRF, auth, type validation, size validation, path traversal, duplicate detection, overwrite), when run with the new credential helper logic, then all continue to pass
 - Given the `mockExecFile` mock resolves successfully, when the upload flow completes, then the response is 201 with path, sha, and commitSha (no regression in success path)
+
+### Credential Helper Cleanup
+
+- Given the credential helper is written to `/tmp/git-cred-<uuid>`, when the upload completes (success or failure), then no credential helper file remains on disk (verified by checking `/tmp/git-cred-*` after test)
+- Given `/tmp` is not writable (edge case), when `writeFileSync` throws, then the catch block returns SYNC_FAILED and no helper file needs cleanup
 
 ### Integration Verification (for `/soleur:qa`)
 
