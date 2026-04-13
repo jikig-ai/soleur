@@ -431,4 +431,42 @@ describe("POST /api/kb/upload", () => {
     const body = await res.json();
     expect(body.sha).toBe("newsha123");
   });
+
+  // 20. formData error logging: logs error details and sends to Sentry
+  test("logs error name, message and sends to Sentry when formData() throws", async () => {
+    setupFullMocks();
+
+    // Create a request whose body cannot be parsed as FormData
+    const badRequest = new Request("http://localhost:3000/api/kb/upload", {
+      method: "POST",
+      body: "not-valid-form-data",
+      headers: {
+        "Origin": "https://app.soleur.ai",
+        "Content-Type": "multipart/form-data", // missing boundary
+      },
+    });
+
+    const res = await POST(badRequest);
+    expect(res.status).toBe(400);
+
+    const body = await res.json();
+    expect(body.error).toBe("Invalid form data");
+    // detail field removed to prevent information disclosure
+    expect(body.detail).toBeUndefined();
+
+    // Verify logger.error was called with structured error info
+    const loggerMod = await import("@/server/logger");
+    expect(loggerMod.default.error).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: "kb_upload_formdata_error",
+        errName: expect.any(String),
+        errMsg: expect.any(String),
+      }),
+      expect.stringContaining("formData parsing failed"),
+    );
+
+    // Verify Sentry received the exception
+    const Sentry = await import("@sentry/nextjs");
+    expect(Sentry.captureException).toHaveBeenCalledWith(expect.any(Error));
+  });
 });
