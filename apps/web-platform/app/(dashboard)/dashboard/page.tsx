@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useEffect } from "react";
+import { useState, useCallback, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { useConversations } from "@/hooks/use-conversations";
 import type { ArchiveFilter } from "@/hooks/use-conversations";
@@ -9,9 +9,21 @@ import { ConversationRow } from "@/components/inbox/conversation-row";
 import { ErrorCard } from "@/components/ui/error-card";
 import { STATUS_LABELS } from "@/lib/types";
 import { FOUNDATION_MIN_CONTENT_BYTES } from "@/lib/kb-constants";
+import { validateFiles } from "@/lib/validate-files";
+import { setPendingFiles } from "@/lib/pending-attachments";
 import type { ConversationStatus } from "@/lib/types";
 import type { DomainLeaderId } from "@/server/domain-leaders";
 import { DOMAIN_LEADERS, ROUTABLE_DOMAIN_LEADERS } from "@/server/domain-leaders";
+
+// ---------------------------------------------------------------------------
+// Types
+// ---------------------------------------------------------------------------
+
+interface FirstRunAttachment {
+  id: string;
+  file: File;
+  preview?: string;
+}
 
 // ---------------------------------------------------------------------------
 // Foundation card definitions
@@ -171,6 +183,53 @@ export default function DashboardPage() {
   const allFoundationsComplete = foundationCards.every((c) => c.done);
 
   // ---------------------------------------------------------------------------
+  // First-run attachment state
+  // ---------------------------------------------------------------------------
+
+  const [firstRunAttachments, setFirstRunAttachments] = useState<FirstRunAttachment[]>([]);
+  const [attachError, setAttachError] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [isDragOver, setIsDragOver] = useState(false);
+
+  const validateAndAddFiles = useCallback(
+    (files: FileList | File[]) => {
+      const { valid, error } = validateFiles(files, firstRunAttachments.length);
+
+      if (error) setAttachError(error);
+      if (valid.length > 0) {
+        setFirstRunAttachments((prev) => [
+          ...prev,
+          ...valid.map((file) => ({
+            id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+            file,
+            preview: file.type.startsWith("image/") ? URL.createObjectURL(file) : undefined,
+          })),
+        ]);
+        setAttachError(null);
+      }
+    },
+    [firstRunAttachments.length],
+  );
+
+  const removeFirstRunAttachment = useCallback((id: string) => {
+    setFirstRunAttachments((prev) => {
+      const item = prev.find((a) => a.id === id);
+      if (item?.preview) URL.revokeObjectURL(item.preview);
+      return prev.filter((a) => a.id !== id);
+    });
+  }, []);
+
+  // Revoke preview URLs on unmount
+  useEffect(() => {
+    return () => {
+      firstRunAttachments.forEach((a) => {
+        if (a.preview) URL.revokeObjectURL(a.preview);
+      });
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- cleanup only on unmount
+  }, []);
+
+  // ---------------------------------------------------------------------------
   // Handlers
   // ---------------------------------------------------------------------------
 
@@ -213,21 +272,32 @@ export default function DashboardPage() {
       const form = e.currentTarget;
       const input = form.elements.namedItem("idea") as HTMLInputElement;
       const message = input?.value?.trim();
-      if (!message) return;
+      if (!message && firstRunAttachments.length === 0) return;
       completeOnboarding();
 
+      // Store pending files for the chat page to upload after conversation creation
+      if (firstRunAttachments.length > 0) {
+        setPendingFiles(firstRunAttachments.map((a) => a.file));
+        // Revoke preview URLs — the files are now in the singleton
+        firstRunAttachments.forEach((a) => {
+          if (a.preview) URL.revokeObjectURL(a.preview);
+        });
+      }
+
       // Create vision.md server-side from the typed idea (fire-and-forget)
-      fetch("/api/vision", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ content: message }),
-      }).catch(() => { /* non-blocking — agent will create via tryCreateVision fallback */ });
+      if (message) {
+        fetch("/api/vision", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ content: message }),
+        }).catch(() => { /* non-blocking — agent will create via tryCreateVision fallback */ });
+      }
 
       const params = new URLSearchParams();
-      params.set("msg", message);
+      if (message) params.set("msg", message);
       router.push(`/dashboard/chat/new?${params.toString()}`);
     },
-    [router, completeOnboarding],
+    [router, completeOnboarding, firstRunAttachments],
   );
 
   const hasActiveFilter = statusFilter !== null || domainFilter !== null || archiveFilter !== "active";
@@ -277,14 +347,94 @@ export default function DashboardPage() {
           Describe your startup idea and your AI organization will get to work.
         </p>
 
-        <form onSubmit={handleFirstRunSend} className="w-full max-w-xl">
-          <div className="flex items-end gap-2">
+        <form
+          onSubmit={handleFirstRunSend}
+          className={`w-full max-w-xl ${isDragOver ? "rounded-2xl border-2 border-dashed border-amber-500 bg-amber-500/10 p-2" : ""}`}
+          onDragOver={(e) => { e.preventDefault(); setIsDragOver(true); }}
+          onDragLeave={() => setIsDragOver(false)}
+          onDrop={(e) => {
+            e.preventDefault();
+            setIsDragOver(false);
+            if (e.dataTransfer.files.length > 0) validateAndAddFiles(e.dataTransfer.files);
+          }}
+        >
+          {/* Attachment preview strip */}
+          {firstRunAttachments.length > 0 && (
+            <div className="mb-2 flex flex-wrap gap-2">
+              {firstRunAttachments.map((att) => (
+                <div
+                  key={att.id}
+                  className="flex items-center gap-1.5 rounded-lg border border-neutral-700 bg-neutral-800 px-2 py-1.5"
+                >
+                  {att.preview ? (
+                    <img
+                      src={att.preview}
+                      alt=""
+                      className="h-8 w-8 rounded object-cover"
+                    />
+                  ) : (
+                    <svg className="h-4 w-4 text-red-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 0 0-3.375-3.375h-1.5A1.125 1.125 0 0 1 13.5 7.125v-1.5a3.375 3.375 0 0 0-3.375-3.375H8.25m2.25 0H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 0 0-9-9Z" />
+                    </svg>
+                  )}
+                  <span className="max-w-[120px] truncate text-xs text-neutral-300">{att.file.name}</span>
+                  <button
+                    type="button"
+                    onClick={() => removeFirstRunAttachment(att.id)}
+                    className="ml-1 text-neutral-500 hover:text-white"
+                    aria-label={`Remove ${att.file.name}`}
+                  >
+                    <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M6 18 18 6M6 6l12 12" />
+                    </svg>
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Error message */}
+          {attachError && (
+            <p className="mb-2 text-xs text-red-400">{attachError}</p>
+          )}
+
+          <div className="flex items-center gap-3">
+            {/* Paperclip / attach button */}
+            <button
+              type="button"
+              onClick={() => fileInputRef.current?.click()}
+              className="flex h-[44px] w-[44px] shrink-0 items-center justify-center rounded-xl border border-neutral-700 text-neutral-400 transition-colors hover:border-neutral-500 hover:text-white"
+              aria-label="Attach files"
+            >
+              <svg className="h-[18px] w-[18px]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="m18.375 12.739-7.693 7.693a4.5 4.5 0 0 1-6.364-6.364l10.94-10.94A3 3 0 1 1 19.5 7.372L8.552 18.32m.009-.01-.01.01m5.699-9.941-7.81 7.81a1.5 1.5 0 0 0 2.112 2.13" />
+              </svg>
+            </button>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="image/png,image/jpeg,image/gif,image/webp,application/pdf"
+              multiple
+              className="hidden"
+              onChange={(e) => {
+                if (e.target.files) validateAndAddFiles(e.target.files);
+                e.target.value = "";
+              }}
+            />
+
             <input
               name="idea"
               type="text"
               placeholder="What are you building?"
               autoFocus
-              className="flex-1 rounded-xl border border-neutral-700 bg-neutral-900 px-4 py-3 text-sm text-white placeholder:text-neutral-500 focus:border-neutral-500 focus:outline-none"
+              className="min-h-[44px] flex-1 rounded-xl border border-neutral-700 bg-neutral-900 px-4 py-3 text-sm text-white placeholder:text-neutral-500 focus:border-neutral-500 focus:outline-none"
+              onPaste={(e) => {
+                const files = Array.from(e.clipboardData.files);
+                if (files.length > 0) {
+                  e.preventDefault();
+                  validateAndAddFiles(files);
+                }
+              }}
             />
             <button
               type="submit"

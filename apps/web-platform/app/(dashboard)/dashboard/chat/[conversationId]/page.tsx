@@ -14,6 +14,8 @@ import { AtMentionDropdown } from "@/components/chat/at-mention-dropdown";
 import { useTeamNames } from "@/hooks/use-team-names";
 import { AttachmentDisplay } from "@/components/chat/attachment-display";
 import { NotificationPrompt } from "@/components/chat/notification-prompt";
+import { getPendingFiles, clearPendingFiles } from "@/lib/pending-attachments";
+import { uploadWithProgress } from "@/lib/upload-with-progress";
 
 export default function ChatPage() {
   const params = useParams<{ conversationId: string }>();
@@ -39,6 +41,7 @@ export default function ChatPage() {
     routeSource,
     activeLeaderIds,
     usageData,
+    realConversationId,
   } = useWebSocket(conversationId);
 
   const { names: customNames, getDisplayName, loading: teamNamesLoading } = useTeamNames();
@@ -128,6 +131,60 @@ export default function ChatPage() {
       router.replace(pathname, { scroll: false });
     }
   }, [sessionConfirmed, msgParam, initialMsgSent, sendMessage, router, pathname]);
+
+  // Upload pending files from command center after initial message materializes the conversation
+  const [pendingFilesHandled, setPendingFilesHandled] = useState(false);
+  useEffect(() => {
+    if (!initialMsgSent || pendingFilesHandled || !realConversationId) return;
+
+    const files = getPendingFiles();
+    if (files.length === 0) {
+      clearPendingFiles();
+      setPendingFilesHandled(true);
+      return;
+    }
+
+    setPendingFilesHandled(true);
+    clearPendingFiles();
+
+    (async () => {
+      try {
+        const uploaded: AttachmentRef[] = [];
+
+        for (const file of files) {
+          const presignRes = await fetch("/api/attachments/presign", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              filename: file.name,
+              contentType: file.type,
+              sizeBytes: file.size,
+              conversationId: realConversationId,
+            }),
+          });
+
+          if (!presignRes.ok) continue;
+
+          const { uploadUrl, storagePath } = await presignRes.json();
+          const { promise } = uploadWithProgress(uploadUrl, file, file.type, () => {});
+          await promise;
+
+          uploaded.push({
+            storagePath,
+            filename: file.name,
+            contentType: file.type,
+            sizeBytes: file.size,
+          });
+        }
+
+        if (uploaded.length > 0) {
+          sendMessage("", uploaded);
+        }
+      } catch {
+        // Graceful degradation — text message was already sent, attachments just don't arrive
+      }
+    })();
+  }, [initialMsgSent, pendingFilesHandled, realConversationId, sendMessage]);
 
   // Session confirmation timeout: if server never confirms, show error
   useEffect(() => {

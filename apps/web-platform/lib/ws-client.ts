@@ -66,6 +66,8 @@ interface UseWebSocketReturn {
   routeSource: "auto" | "mention" | null;
   activeLeaderIds: DomainLeaderId[];
   usageData: UsageData | null;
+  /** The real conversation UUID from session_started (pending ID that becomes the row ID). */
+  realConversationId: string | null;
 }
 
 const MAX_BACKOFF = 30_000;
@@ -91,6 +93,7 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
   const [routeSource, setRouteSource] = useState<"auto" | "mention" | null>(null);
   const [activeLeaderIds, setActiveLeaderIds] = useState<DomainLeaderId[]>([]);
   const [sessionConfirmed, setSessionConfirmed] = useState(false);
+  const [realConversationId, setRealConversationId] = useState<string | null>(null);
   const [usageData, setUsageData] = useState<UsageData | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const backoffRef = useRef(INITIAL_BACKOFF);
@@ -147,6 +150,7 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
     activeStreamsRef.current.clear();
     clearAllTimeouts();
     setSessionConfirmed(false);
+    setRealConversationId(null);
     if (wsRef.current) {
       wsRef.current.onclose = null;
       wsRef.current.close();
@@ -400,6 +404,7 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
         }
 
         case "session_started": {
+          if (msg.conversationId) setRealConversationId(msg.conversationId);
           setSessionConfirmed(true);
           break;
         }
@@ -573,5 +578,5 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
     connect();
   }, [connect]);
 
-  return { messages, startSession, resumeSession, sendMessage, sendReviewGateResponse, status, sessionConfirmed, disconnectReason, lastError, reconnect, routeSource, activeLeaderIds, usageData };
+  return { messages, startSession, resumeSession, sendMessage, sendReviewGateResponse, status, sessionConfirmed, disconnectReason, lastError, reconnect, routeSource, activeLeaderIds, usageData, realConversationId };
 }

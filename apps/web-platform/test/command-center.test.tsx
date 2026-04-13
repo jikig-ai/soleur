@@ -354,4 +354,142 @@ describe("Command Center", () => {
 
     expect(mockPush).toHaveBeenCalledWith("/dashboard/chat/new");
   });
+
+  // -------------------------------------------------------------------------
+  // First-run state: input sizing + attachment support
+  // -------------------------------------------------------------------------
+
+  describe("first-run form", () => {
+    beforeEach(() => {
+      // No conversations + no vision.md triggers the first-run state
+      conversationBuilder = createQueryBuilder([]);
+      messageBuilder = createQueryBuilder([]);
+
+      // KB tree without vision.md
+      globalThis.fetch = vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: () =>
+          Promise.resolve({
+            tree: {
+              name: "knowledge-base",
+              type: "directory",
+              children: [
+                { name: "marketing", type: "directory", children: [{ name: "brand-guide.md", type: "file", path: "marketing/brand-guide.md", size: 1000 }] },
+              ],
+            },
+          }),
+      });
+    });
+
+    it("renders the first-run input and submit button at equal min-height", async () => {
+      const { default: DashboardPage } = await import(
+        "@/app/(dashboard)/dashboard/page"
+      );
+      render(<DashboardPage />);
+
+      await waitFor(() => {
+        expect(screen.getByPlaceholderText("What are you building?")).toBeInTheDocument();
+      });
+
+      const input = screen.getByPlaceholderText("What are you building?");
+      expect(input.className).toContain("min-h-[44px]");
+    });
+
+    it("renders a paperclip attach button", async () => {
+      const { default: DashboardPage } = await import(
+        "@/app/(dashboard)/dashboard/page"
+      );
+      render(<DashboardPage />);
+
+      await waitFor(() => {
+        expect(screen.getByLabelText("Attach files")).toBeInTheDocument();
+      });
+    });
+
+    it("shows attachment preview when a valid file is selected", async () => {
+      const { default: DashboardPage } = await import(
+        "@/app/(dashboard)/dashboard/page"
+      );
+      render(<DashboardPage />);
+
+      await waitFor(() => {
+        expect(screen.getByLabelText("Attach files")).toBeInTheDocument();
+      });
+
+      // Find the hidden file input and simulate file selection
+      const fileInput = document.querySelector('input[type="file"]') as HTMLInputElement;
+      expect(fileInput).not.toBeNull();
+
+      const pngFile = new File(["fake-png"], "test.png", { type: "image/png" });
+      fireEvent.change(fileInput, { target: { files: [pngFile] } });
+
+      await waitFor(() => {
+        expect(screen.getByText("test.png")).toBeInTheDocument();
+      });
+    });
+
+    it("shows error for unsupported file type", async () => {
+      const { default: DashboardPage } = await import(
+        "@/app/(dashboard)/dashboard/page"
+      );
+      render(<DashboardPage />);
+
+      await waitFor(() => {
+        expect(screen.getByLabelText("Attach files")).toBeInTheDocument();
+      });
+
+      const fileInput = document.querySelector('input[type="file"]') as HTMLInputElement;
+      const exeFile = new File(["bad"], "malware.exe", { type: "application/x-executable" });
+      fireEvent.change(fileInput, { target: { files: [exeFile] } });
+
+      await waitFor(() => {
+        expect(screen.getByText(/not a supported file type/)).toBeInTheDocument();
+      });
+    });
+
+    it("removes attachment when X button is clicked", async () => {
+      const { default: DashboardPage } = await import(
+        "@/app/(dashboard)/dashboard/page"
+      );
+      render(<DashboardPage />);
+
+      await waitFor(() => {
+        expect(screen.getByLabelText("Attach files")).toBeInTheDocument();
+      });
+
+      const fileInput = document.querySelector('input[type="file"]') as HTMLInputElement;
+      const file = new File(["data"], "doc.pdf", { type: "application/pdf" });
+      fireEvent.change(fileInput, { target: { files: [file] } });
+
+      await waitFor(() => {
+        expect(screen.getByText("doc.pdf")).toBeInTheDocument();
+      });
+
+      fireEvent.click(screen.getByLabelText("Remove doc.pdf"));
+
+      await waitFor(() => {
+        expect(screen.queryByText("doc.pdf")).not.toBeInTheDocument();
+      });
+    });
+
+    it("navigates to chat/new on submit with text", async () => {
+      const { default: DashboardPage } = await import(
+        "@/app/(dashboard)/dashboard/page"
+      );
+      render(<DashboardPage />);
+
+      await waitFor(() => {
+        expect(screen.getByPlaceholderText("What are you building?")).toBeInTheDocument();
+      });
+
+      const input = screen.getByPlaceholderText("What are you building?");
+      fireEvent.change(input, { target: { value: "A SaaS for cats" } });
+      fireEvent.submit(input.closest("form")!);
+
+      expect(mockPush).toHaveBeenCalledWith(
+        expect.stringContaining("/dashboard/chat/new"),
+      );
+    });
+  });
 });

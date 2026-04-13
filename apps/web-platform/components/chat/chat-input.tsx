@@ -2,46 +2,8 @@
 
 import { useState, useRef, useCallback, useEffect } from "react";
 import type { AttachmentRef } from "@/lib/types";
-import {
-  ALLOWED_ATTACHMENT_TYPES,
-  MAX_ATTACHMENT_SIZE,
-  MAX_ATTACHMENTS_PER_MESSAGE,
-} from "@/lib/attachment-constants";
-
-function uploadWithProgress(
-  url: string,
-  file: File,
-  contentType: string,
-  onProgress: (percent: number) => void,
-): { promise: Promise<void>; xhr: XMLHttpRequest } {
-  const xhr = new XMLHttpRequest();
-
-  const promise = new Promise<void>((resolve, reject) => {
-    xhr.open("PUT", url);
-    xhr.setRequestHeader("Content-Type", contentType);
-
-    xhr.upload.onprogress = (event) => {
-      if (event.lengthComputable) {
-        const percent = Math.round((event.loaded / event.total) * 100);
-        onProgress(percent);
-      }
-    };
-
-    xhr.onload = () => {
-      if (xhr.status >= 200 && xhr.status < 300) {
-        resolve();
-      } else {
-        reject(new Error("Upload to storage failed"));
-      }
-    };
-
-    xhr.onerror = () => reject(new Error("Upload to storage failed"));
-    xhr.onabort = () => reject(new Error("Upload cancelled"));
-    xhr.send(file);
-  });
-
-  return { promise, xhr };
-}
+import { validateFiles } from "@/lib/validate-files";
+import { uploadWithProgress } from "@/lib/upload-with-progress";
 
 interface PendingAttachment {
   id: string;
@@ -114,38 +76,19 @@ export function ChatInput({
 
   const validateAndAddFiles = useCallback(
     (files: FileList | File[]) => {
-      const fileArray = Array.from(files);
-      const currentCount = attachments.length;
-      const validFiles: PendingAttachment[] = [];
+      const { valid, error } = validateFiles(files, attachments.length);
 
-      for (const file of fileArray) {
-        if (currentCount + validFiles.length >= MAX_ATTACHMENTS_PER_MESSAGE) {
-          setAttachError(`Maximum ${MAX_ATTACHMENTS_PER_MESSAGE} files per message.`);
-          break;
-        }
-        if (!ALLOWED_ATTACHMENT_TYPES.has(file.type)) {
-          setAttachError(`"${file.name}" is not a supported file type.`);
-          continue;
-        }
-        if (file.size > MAX_ATTACHMENT_SIZE) {
-          setAttachError(`"${file.name}" exceeds the 20 MB size limit.`);
-          continue;
-        }
-
-        const preview = file.type.startsWith("image/")
-          ? URL.createObjectURL(file)
-          : undefined;
-
-        validFiles.push({
-          id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
-          file,
-          preview,
-          progress: 0,
-        });
-      }
-
-      if (validFiles.length > 0) {
-        setAttachments((prev) => [...prev, ...validFiles]);
+      if (error) setAttachError(error);
+      if (valid.length > 0) {
+        setAttachments((prev) => [
+          ...prev,
+          ...valid.map((file) => ({
+            id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+            file,
+            preview: file.type.startsWith("image/") ? URL.createObjectURL(file) : undefined,
+            progress: 0,
+          })),
+        ]);
       }
     },
     [attachments.length],
