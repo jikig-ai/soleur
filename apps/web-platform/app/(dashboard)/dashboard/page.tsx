@@ -9,15 +9,21 @@ import { ConversationRow } from "@/components/inbox/conversation-row";
 import { ErrorCard } from "@/components/ui/error-card";
 import { STATUS_LABELS } from "@/lib/types";
 import { FOUNDATION_MIN_CONTENT_BYTES } from "@/lib/kb-constants";
-import {
-  ALLOWED_ATTACHMENT_TYPES,
-  MAX_ATTACHMENT_SIZE,
-  MAX_ATTACHMENTS_PER_MESSAGE,
-} from "@/lib/attachment-constants";
+import { validateFiles } from "@/lib/validate-files";
 import { setPendingFiles } from "@/lib/pending-attachments";
 import type { ConversationStatus } from "@/lib/types";
 import type { DomainLeaderId } from "@/server/domain-leaders";
 import { DOMAIN_LEADERS, ROUTABLE_DOMAIN_LEADERS } from "@/server/domain-leaders";
+
+// ---------------------------------------------------------------------------
+// Types
+// ---------------------------------------------------------------------------
+
+interface FirstRunAttachment {
+  id: string;
+  file: File;
+  preview?: string;
+}
 
 // ---------------------------------------------------------------------------
 // Foundation card definitions
@@ -180,12 +186,6 @@ export default function DashboardPage() {
   // First-run attachment state
   // ---------------------------------------------------------------------------
 
-  interface FirstRunAttachment {
-    id: string;
-    file: File;
-    preview?: string;
-  }
-
   const [firstRunAttachments, setFirstRunAttachments] = useState<FirstRunAttachment[]>([]);
   const [attachError, setAttachError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -193,33 +193,18 @@ export default function DashboardPage() {
 
   const validateAndAddFiles = useCallback(
     (files: FileList | File[]) => {
-      const fileArray = Array.from(files);
-      const currentCount = firstRunAttachments.length;
-      const valid: FirstRunAttachment[] = [];
+      const { valid, error } = validateFiles(files, firstRunAttachments.length);
 
-      for (const file of fileArray) {
-        if (currentCount + valid.length >= MAX_ATTACHMENTS_PER_MESSAGE) {
-          setAttachError(`Maximum ${MAX_ATTACHMENTS_PER_MESSAGE} files per message.`);
-          break;
-        }
-        if (!ALLOWED_ATTACHMENT_TYPES.has(file.type)) {
-          setAttachError(`"${file.name}" is not a supported file type.`);
-          continue;
-        }
-        if (file.size > MAX_ATTACHMENT_SIZE) {
-          setAttachError(`"${file.name}" exceeds the 20 MB size limit.`);
-          continue;
-        }
-
-        valid.push({
-          id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
-          file,
-          preview: file.type.startsWith("image/") ? URL.createObjectURL(file) : undefined,
-        });
-      }
-
+      if (error) setAttachError(error);
       if (valid.length > 0) {
-        setFirstRunAttachments((prev) => [...prev, ...valid]);
+        setFirstRunAttachments((prev) => [
+          ...prev,
+          ...valid.map((file) => ({
+            id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+            file,
+            preview: file.type.startsWith("image/") ? URL.createObjectURL(file) : undefined,
+          })),
+        ]);
         setAttachError(null);
       }
     },
