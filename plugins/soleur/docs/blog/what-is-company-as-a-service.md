@@ -2,6 +2,7 @@
 title: "What Is Company-as-a-Service?"
 date: 2026-03-05
 description: "Company-as-a-Service is a new model where AI agents run every business department. Learn what CaaS means, how it works, and why it matters for solo founders."
+ogImage: "blog/og-what-is-company-as-a-service.png"
 tags:
   - company-as-a-service
   - CaaS

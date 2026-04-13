@@ -49,6 +49,7 @@ tmp/
 
 # Legitimate image assets (negate the blanket *.png rule)
 !plugins/soleur/docs/images/*.png
+!plugins/soleur/docs/images/blog/*.png
 !plugins/soleur/docs/screenshots/*.png
 !apps/web-platform/public/icons/*.png
 !knowledge-base/product/design/**/screenshots/*.png
