@@ -10,16 +10,22 @@ const {
   mockGithubApiGet,
   mockGithubApiPost,
   mockGenerateInstallationToken,
+  mockRandomCredentialPath,
   mockIsPathInWorkspace,
   mockExecFile,
+  mockWriteFileSync,
+  mockUnlinkSync,
 } = vi.hoisted(() => ({
   mockGetUser: vi.fn(),
   mockFrom: vi.fn(),
   mockGithubApiGet: vi.fn(),
   mockGithubApiPost: vi.fn(),
   mockGenerateInstallationToken: vi.fn(),
+  mockRandomCredentialPath: vi.fn(),
   mockIsPathInWorkspace: vi.fn(),
   mockExecFile: vi.fn(),
+  mockWriteFileSync: vi.fn(),
+  mockUnlinkSync: vi.fn(),
 }));
 
 vi.mock("@/lib/supabase/server", () => ({
@@ -46,6 +52,7 @@ vi.mock("@/server/github-api", () => ({
 
 vi.mock("@/server/github-app", () => ({
   generateInstallationToken: mockGenerateInstallationToken,
+  randomCredentialPath: mockRandomCredentialPath,
 }));
 
 vi.mock("@/server/sandbox", () => ({
@@ -66,6 +73,11 @@ vi.mock("node:child_process", () => ({
 
 vi.mock("node:util", () => ({
   promisify: vi.fn((fn: unknown) => fn),
+}));
+
+vi.mock("node:fs", () => ({
+  writeFileSync: mockWriteFileSync,
+  unlinkSync: mockUnlinkSync,
 }));
 
 // ---------------------------------------------------------------------------
@@ -135,6 +147,7 @@ function setupFullMocks() {
   setupUserData();
   mockIsPathInWorkspace.mockReturnValue(true);
   mockGenerateInstallationToken.mockResolvedValue("test-token");
+  mockRandomCredentialPath.mockReturnValue("/tmp/git-cred-test-uuid");
   // File does not exist (404 from GitHub)
   mockGithubApiGet.mockRejectedValue(new Error("GitHub API request failed: 404 /repos/test-owner/test-repo/contents/knowledge-base/uploads/test.png"));
   // Successful PUT
@@ -339,5 +352,66 @@ describe("POST /api/kb/upload", () => {
 
     const body = await res.json();
     expect(body.code).toBe("GITHUB_API_ERROR");
+  });
+
+  // 15. Credential helper: git pull called with credential helper arg
+  test("git pull is called with credential helper argument", async () => {
+    setupFullMocks();
+
+    const formData = createFormData(makeTestFile(), "uploads");
+    const res = await POST(createRequest(formData, "https://app.soleur.ai"));
+    expect(res.status).toBe(201);
+
+    expect(mockExecFile).toHaveBeenCalledWith(
+      "git",
+      expect.arrayContaining(["-c", expect.stringContaining("credential.helper=!")]),
+      expect.objectContaining({ cwd: TEST_WORKSPACE_PATH }),
+    );
+  });
+
+  // 16. Credential helper: cleanup after successful pull
+  test("credential helper file is cleaned up after successful pull", async () => {
+    setupFullMocks();
+
+    const formData = createFormData(makeTestFile(), "uploads");
+    const res = await POST(createRequest(formData, "https://app.soleur.ai"));
+    expect(res.status).toBe(201);
+
+    expect(mockWriteFileSync).toHaveBeenCalledWith(
+      "/tmp/git-cred-test-uuid",
+      expect.stringContaining("x-access-token"),
+      expect.objectContaining({ mode: 0o700 }),
+    );
+    expect(mockUnlinkSync).toHaveBeenCalledWith("/tmp/git-cred-test-uuid");
+  });
+
+  // 17. Credential helper: cleanup after failed pull
+  test("credential helper file is cleaned up after failed pull", async () => {
+    setupFullMocks();
+    mockExecFile.mockRejectedValue(new Error("git pull failed"));
+
+    const formData = createFormData(makeTestFile(), "uploads");
+    const res = await POST(createRequest(formData, "https://app.soleur.ai"));
+    expect(res.status).toBe(500);
+
+    // Helper must still be cleaned up even on failure
+    expect(mockUnlinkSync).toHaveBeenCalledWith("/tmp/git-cred-test-uuid");
+  });
+
+  // 18. Credential helper: SYNC_FAILED when token generation fails
+  test("returns SYNC_FAILED when installation token generation fails", async () => {
+    setupFullMocks();
+    mockGenerateInstallationToken.mockRejectedValue(
+      new Error("GitHub installation token request failed: 401"),
+    );
+
+    const formData = createFormData(makeTestFile(), "uploads");
+    const res = await POST(createRequest(formData, "https://app.soleur.ai"));
+    expect(res.status).toBe(500);
+
+    const body = await res.json();
+    expect(body.code).toBe("SYNC_FAILED");
+    // git pull should NOT have been called
+    expect(mockExecFile).not.toHaveBeenCalled();
   });
 });
