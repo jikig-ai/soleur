@@ -28,9 +28,9 @@ Guided instructions fallback for services without API/MCP (Tier 3 of 3-tier serv
 
 ### 2.1 Write tests for guided tier selection
 
-- [ ] 2.1.1 Add test in `apps/web-platform/test/` verifying that when no API token is stored for a service, the agent system prompt includes connected services context WITHOUT that service
-- [ ] 2.1.2 Add test verifying the service-automator agent prompt includes the guided protocol section
-- [ ] 2.1.3 Run tests: `cd apps/web-platform && npm run test`
+- [x] 2.1.1 Add test in `apps/web-platform/test/` verifying that when no API token is stored for a service, the agent system prompt includes connected services context WITHOUT that service
+- [x] 2.1.2 Add test verifying connected services context includes/excludes services based on stored tokens
+- [x] 2.1.3 Run tests: `cd apps/web-platform && npm run test`
 
 ## Phase 3: UI Polish (Optional)
 

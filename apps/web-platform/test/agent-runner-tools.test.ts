@@ -557,4 +557,69 @@ describe("agent-runner MCP tool wiring", () => {
     );
     expect(result.behavior).toBe("allow");
   });
+
+  test("system prompt includes Connected Services with Plausible when user has PLAUSIBLE_API_KEY", async () => {
+    const plausibleRow = {
+      ...DEFAULT_API_KEY_ROW,
+      id: "key-plausible",
+      provider: "plausible",
+    };
+    setupSupabaseMock(
+      {
+        workspace_path: "/tmp/test-workspace",
+        repo_status: "ready",
+        github_installation_id: 12345,
+        repo_url: "https://github.com/alice/my-repo",
+      },
+      [DEFAULT_API_KEY_ROW, plausibleRow],
+    );
+    setupQueryMockImmediate();
+
+    await startAgentSession("user-1", "conv-1", "cpo");
+
+    const options = mockQuery.mock.calls[0][0].options;
+    expect(options.systemPrompt).toContain("## Connected Services");
+    expect(options.systemPrompt).toContain("- Plausible: connected");
+  });
+
+  test("system prompt does NOT include Connected Services when user has no service tokens", async () => {
+    setupSupabaseMock({
+      workspace_path: "/tmp/test-workspace",
+      repo_status: "ready",
+      github_installation_id: 12345,
+      repo_url: "https://github.com/alice/my-repo",
+    });
+    setupQueryMockImmediate();
+
+    await startAgentSession("user-1", "conv-1", "cpo");
+
+    const options = mockQuery.mock.calls[0][0].options;
+    // Only anthropic row exists (skipped by getUserServiceTokens) → no Connected Services
+    expect(options.systemPrompt).not.toContain("## Connected Services");
+  });
+
+  test("system prompt omits Plausible from Connected Services when no Plausible token", async () => {
+    const cloudflareRow = {
+      ...DEFAULT_API_KEY_ROW,
+      id: "key-cloudflare",
+      provider: "cloudflare",
+    };
+    setupSupabaseMock(
+      {
+        workspace_path: "/tmp/test-workspace",
+        repo_status: "ready",
+        github_installation_id: 12345,
+        repo_url: "https://github.com/alice/my-repo",
+      },
+      [DEFAULT_API_KEY_ROW, cloudflareRow],
+    );
+    setupQueryMockImmediate();
+
+    await startAgentSession("user-1", "conv-1", "cpo");
+
+    const options = mockQuery.mock.calls[0][0].options;
+    expect(options.systemPrompt).toContain("## Connected Services");
+    expect(options.systemPrompt).toContain("- Cloudflare: connected");
+    expect(options.systemPrompt).not.toContain("- Plausible: connected");
+  });
 });
