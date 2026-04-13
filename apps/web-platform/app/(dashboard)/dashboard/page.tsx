@@ -11,6 +11,7 @@ import { STATUS_LABELS } from "@/lib/types";
 import type { ConversationStatus } from "@/lib/types";
 import type { DomainLeaderId } from "@/server/domain-leaders";
 import { DOMAIN_LEADERS, ROUTABLE_DOMAIN_LEADERS } from "@/server/domain-leaders";
+import { LeaderAvatar } from "@/components/leader-avatar";
 
 // ---------------------------------------------------------------------------
 // Foundation card definitions
@@ -334,18 +335,7 @@ export default function DashboardPage() {
                     onClick={() => handlePromptClick(card.promptText)}
                     className="flex flex-col gap-2 rounded-xl border border-neutral-800 bg-neutral-900/50 p-4 text-left transition-colors hover:border-neutral-600"
                   >
-                    <span
-                      className="flex h-5 w-5 items-center justify-center overflow-hidden rounded"
-                      aria-label={`Soleur ${card.leaderId.toUpperCase()}`}
-                    >
-                      <img
-                        src="/icons/soleur-logo-mark.png"
-                        alt=""
-                        width={20}
-                        height={20}
-                        className="h-full w-full object-cover"
-                      />
-                    </span>
+                    <LeaderAvatar leaderId={card.leaderId} size="sm" />
                     <span className="text-sm font-medium text-white">
                       {card.title}
                     </span>
@@ -421,9 +411,6 @@ export default function DashboardPage() {
         <h1 className="text-xl font-semibold text-white md:text-2xl">
           Command Center
         </h1>
-        <div className="flex h-8 w-8 items-center justify-center rounded-full bg-neutral-800 text-xs font-medium text-neutral-300">
-          <UserIcon className="h-4 w-4" />
-        </div>
       </div>
 
       {/* Foundation cards (only when incomplete) */}
@@ -462,18 +449,7 @@ export default function DashboardPage() {
                   onClick={() => handlePromptClick(card.promptText)}
                   className="flex flex-col gap-2 rounded-xl border border-neutral-800 bg-neutral-900/50 p-4 text-left transition-colors hover:border-neutral-600"
                 >
-                  <span
-                    className="flex h-5 w-5 items-center justify-center overflow-hidden rounded"
-                    aria-label={`Soleur ${card.leaderId.toUpperCase()}`}
-                  >
-                    <img
-                      src="/icons/soleur-logo-mark.png"
-                      alt=""
-                      width={20}
-                      height={20}
-                      className="h-full w-full object-cover"
-                    />
-                  </span>
+                  <LeaderAvatar leaderId={card.leaderId} size="sm" />
                   <span className="text-sm font-medium text-white">
                     {card.title}
                   </span>
@@ -635,18 +611,7 @@ function LeaderStrip({ onLeaderClick }: { onLeaderClick: (leaderId: string) => v
             onClick={() => onLeaderClick(leader.id)}
             className="group flex items-center gap-1.5 rounded-lg px-2 py-1 transition-colors hover:bg-neutral-800/50"
           >
-            <span
-              className="flex h-5 w-5 items-center justify-center overflow-hidden rounded"
-              aria-label={`Soleur ${leader.id.toUpperCase()}`}
-            >
-              <img
-                src="/icons/soleur-logo-mark.png"
-                alt=""
-                width={20}
-                height={20}
-                className="h-full w-full object-cover"
-              />
-            </span>
+            <LeaderAvatar leaderId={leader.id} size="sm" />
             <span className="text-xs text-neutral-500 group-hover:text-neutral-300">
               {leader.name}
             </span>
@@ -657,10 +622,3 @@ function LeaderStrip({ onLeaderClick }: { onLeaderClick: (leaderId: string) => v
   );
 }
 
-function UserIcon({ className }: { className?: string }) {
-  return (
-    <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-      <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 6a3.75 3.75 0 1 1-7.5 0 3.75 3.75 0 0 1 7.5 0ZM4.501 20.118a7.5 7.5 0 0 1 14.998 0A17.933 17.933 0 0 1 12 21.75c-2.676 0-5.216-.584-7.499-1.632Z" />
-    </svg>
-  );
-}

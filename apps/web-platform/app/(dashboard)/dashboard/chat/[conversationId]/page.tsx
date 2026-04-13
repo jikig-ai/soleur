@@ -9,6 +9,7 @@ import { ErrorCard } from "@/components/ui/error-card";
 import { DOMAIN_LEADERS } from "@/server/domain-leaders";
 import type { DomainLeaderId } from "@/server/domain-leaders";
 import { LEADER_COLORS } from "@/components/chat/leader-colors";
+import { LeaderAvatar } from "@/components/leader-avatar";
 import { ChatInput } from "@/components/chat/chat-input";
 import { AtMentionDropdown } from "@/components/chat/at-mention-dropdown";
 import { useTeamNames } from "@/hooks/use-team-names";
@@ -435,18 +436,7 @@ function MessageBubble({
       <div className={`flex max-w-[90%] gap-3 md:max-w-[80%] ${isUser ? "flex-row-reverse" : ""}`}>
         {/* Leader avatar */}
         {leader && (
-          <span
-            className="mt-1 flex h-7 w-7 shrink-0 items-center justify-center overflow-hidden rounded-md"
-            aria-label={`Soleur ${leaderId!.toUpperCase()}`}
-          >
-            <img
-              src="/icons/soleur-logo-mark.png"
-              alt=""
-              width={28}
-              height={28}
-              className="h-full w-full object-cover"
-            />
-          </span>
+          <LeaderAvatar leaderId={leaderId!} size="md" className="mt-1" />
         )}
 
         <div
