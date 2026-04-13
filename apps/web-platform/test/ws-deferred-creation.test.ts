@@ -20,10 +20,6 @@ vi.mock("@/lib/supabase/service", () => ({
           eq: vi.fn().mockReturnValue({
             single: mockSelectSingle,
           }),
-          single: vi.fn().mockResolvedValue({
-            data: { subscription_status: "active" },
-            error: null,
-          }),
         }),
       }),
     }),

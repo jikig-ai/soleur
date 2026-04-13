@@ -38,5 +38,7 @@ export async function GET() {
     pdfUrl: inv.invoice_pdf,
   }));
 
-  return NextResponse.json({ invoices });
+  const res = NextResponse.json({ invoices });
+  res.headers.set("Cache-Control", "private, max-age=300");
+  return res;
 }

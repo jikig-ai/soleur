@@ -8,14 +8,3 @@ export function getStripe(): Stripe {
   }
   return _stripe;
 }
-
-export async function createPortalSession(
-  customerId: string,
-  returnUrl: string,
-): Promise<string> {
-  const session = await getStripe().billingPortal.sessions.create({
-    customer: customerId,
-    return_url: returnUrl,
-  });
-  return session.url;
-}
