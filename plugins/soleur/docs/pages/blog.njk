@@ -29,19 +29,94 @@ permalink: blog/index.html
 
 <div class="container">
   {% if collections.blog and collections.blog.length > 0 %}
-  <h2 class="sr-only">Posts</h2>
-  <div class="catalog-grid">
-    {% for post in collections.blog | reverse %}
-    <a href="{{ post.url }}" class="component-card">
-      <div class="card-header">
-        <span class="card-dot" style="background: var(--color-accent)"></span>
-        <span class="card-category">{{ post.date | readableDate }}</span>
-      </div>
-      <h3 class="card-title">{{ post.data.title }}</h3>
-      <p class="card-description">{{ post.data.description }}</p>
-    </a>
-    {% endfor %}
-  </div>
+
+  <nav class="category-nav" aria-label="Blog categories">
+    <a href="#company-as-a-service" class="category-pill">What is Company-as-a-Service?</a>
+    <a href="#comparisons" class="category-pill">Soleur vs. Competitors</a>
+    <a href="#case-studies" class="category-pill">Case Studies</a>
+    <a href="#engineering" class="category-pill">Engineering Deep Dives</a>
+  </nav>
+
+  <section id="company-as-a-service" class="category-section">
+    <div class="category-header">
+      <h2 class="category-title">What is Company-as-a-Service?</h2>
+    </div>
+    <div class="catalog-grid">
+      {% for post in collections.blog | reverse %}
+      {% if "CaaS" in post.data.tags or ("ai-agents" in post.data.tags and "comparison" not in post.data.tags and "case-study" not in post.data.tags) %}
+      <a href="{{ post.url }}" class="component-card">
+        <div class="card-header">
+          <span class="card-dot" style="background: var(--color-accent)"></span>
+          <span class="card-category">{{ post.date | readableDate }}</span>
+        </div>
+        <h3 class="card-title">{{ post.data.title }}</h3>
+        <p class="card-description">{{ post.data.description }}</p>
+      </a>
+      {% endif %}
+      {% endfor %}
+    </div>
+  </section>
+
+  <section id="comparisons" class="category-section">
+    <div class="category-header">
+      <h2 class="category-title">Soleur vs. Competitors</h2>
+    </div>
+    <div class="catalog-grid">
+      {% for post in collections.blog | reverse %}
+      {% if "comparison" in post.data.tags %}
+      <a href="{{ post.url }}" class="component-card">
+        <div class="card-header">
+          <span class="card-dot" style="background: var(--color-accent)"></span>
+          <span class="card-category">{{ post.date | readableDate }}</span>
+        </div>
+        <h3 class="card-title">{{ post.data.title }}</h3>
+        <p class="card-description">{{ post.data.description }}</p>
+      </a>
+      {% endif %}
+      {% endfor %}
+    </div>
+  </section>
+
+  <section id="case-studies" class="category-section">
+    <div class="category-header">
+      <h2 class="category-title">Case Studies</h2>
+    </div>
+    <div class="catalog-grid">
+      {% for post in collections.blog | reverse %}
+      {% if "case-study" in post.data.tags %}
+      <a href="{{ post.url }}" class="component-card">
+        <div class="card-header">
+          <span class="card-dot" style="background: var(--color-accent)"></span>
+          <span class="card-category">{{ post.date | readableDate }}</span>
+        </div>
+        <h3 class="card-title">{{ post.data.title }}</h3>
+        <p class="card-description">{{ post.data.description }}</p>
+      </a>
+      {% endif %}
+      {% endfor %}
+    </div>
+  </section>
+
+  <section id="engineering" class="category-section">
+    <div class="category-header">
+      <h2 class="category-title">Engineering Deep Dives</h2>
+    </div>
+    <div class="catalog-grid">
+      {% for post in collections.blog | reverse %}
+      {% if "comparison" not in post.data.tags and "case-study" not in post.data.tags and "CaaS" not in post.data.tags and "ai-agents" not in post.data.tags %}
+      <a href="{{ post.url }}" class="component-card">
+        <div class="card-header">
+          <span class="card-dot" style="background: var(--color-accent)"></span>
+          <span class="card-category">{{ post.date | readableDate }}</span>
+        </div>
+        <h3 class="card-title">{{ post.data.title }}</h3>
+        <p class="card-description">{{ post.data.description }}</p>
+      </a>
+      {% endif %}
+      {% endfor %}
+    </div>
+  </section>
+
   {% else %}
   <section class="category-section">
     <p style="color: var(--color-text-secondary); text-align: center; padding: var(--space-16) 0;">
