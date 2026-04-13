@@ -58,6 +58,7 @@ This repository contains the Soleur Claude Code plugin. Detailed conventions liv
 - Write failing tests BEFORE implementation code when a plan includes Test Scenarios or Acceptance Criteria [skill-enforced: work Phase 2 TDD Gate]. Infrastructure-only tasks (config, CI, scaffolding) are exempt.
 - Always run `npx markdownlint-cli2 --fix` on changed `.md` files before committing. Re-read after `replace_all` on Markdown tables to verify cell spacing.
 - Ensure dependencies are installed at the correct package level (not just root) before tests or CI. Check subdirectories like `agent-browser/` or app-level packages.
+- In worktrees, run vitest via `node node_modules/vitest/vitest.mjs run` instead of `npx vitest run`. The npx cache is shared across worktrees and can resolve to a stale worktree's vitest installation, causing phantom test failures with wrong path resolution. **Why:** In the 2026-04-13 session, `npx vitest` resolved to `feat-fix-kb-pdf-upload-formdata`'s vitest while running in `feat-dashboard-agent-identity`, causing 108 phantom failures.
 - For production debugging, use observability tools — never SSH for logs. Priority: (1) Sentry API (`SENTRY_API_TOKEN` from Doppler `prd`), (2) Better Stack, (3) `/health` endpoint. SSH is for infrastructure provisioning only.
 - When lefthook hangs in a worktree (>60s), kill (`pkill -f "lefthook run"`), verify checks manually, commit with `LEFTHOOK=0`. Known lefthook/worktree bug.
 - Before calling `mcp__pencil__open_document`, ensure the target .pen file is committed in git [hook-enforced: pencil-open-guard.sh]. Untracked .pen files have no recovery path — `open_document` can silently overwrite them with an empty document.
@@ -71,6 +72,7 @@ This repository contains the Soleur Claude Code plugin. Detailed conventions liv
 
 - After merging, read files from the merged branch (`git show main:<path>`), not the bare repo directory (stale).
 - Never skip QA/review before merging. Full pipeline: plan → implement → review → QA → compound → ship.
+- Before spawning review agents, push the branch to remote (`git push -u origin <branch>`). Review subagents may use `git show` or remote state; unpushed commits produce stale analysis where agents report on planning artifacts instead of implementation code. **Why:** In the 2026-04-13 session, 4 of 9 review agents analyzed pre-push state and produced findings about code that didn't exist yet.
 - Before shipping, verify: (1) review comments resolved, (2) QA run with screenshots if UI, (3) tests pass locally.
 - When a reviewer or user says to keep a feature/phase, do not remove it without explicit confirmation.
 
