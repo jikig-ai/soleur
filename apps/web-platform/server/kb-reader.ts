@@ -14,6 +14,7 @@ export interface TreeNode {
   type: "file" | "directory";
   path?: string;
   modifiedAt?: string;
+  size?: number;
   extension?: string; // e.g., ".md", ".png", ".pdf"
   children?: TreeNode[];
 }
@@ -180,15 +181,13 @@ export async function buildTree(
       MAX_CONCURRENT_STAT,
       async ({ entry, fullPath }): Promise<TreeNode> => {
         const ext = path.extname(entry.name);
-        const modifiedAt = await fs.promises
-          .stat(fullPath)
-          .then((stat) => stat.mtime.toISOString())
-          .catch(() => undefined);
+        const stat = await fs.promises.stat(fullPath).catch(() => null);
         return {
           name: entry.name,
           type: "file" as const,
           path: path.relative(effectiveTopRoot, fullPath),
-          modifiedAt,
+          modifiedAt: stat?.mtime.toISOString(),
+          size: stat?.size,
           extension: ext || undefined,
         };
       },

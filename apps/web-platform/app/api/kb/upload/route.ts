@@ -96,8 +96,18 @@ export async function POST(request: Request) {
   let formData: FormData;
   try {
     formData = await request.formData();
-  } catch {
-    return NextResponse.json({ error: "Invalid form data" }, { status: 400 });
+  } catch (err) {
+    const errMsg = err instanceof Error ? err.message : String(err);
+    const errName = err instanceof Error ? err.name : "Unknown";
+    logger.error(
+      { event: "kb_upload_formdata_error", errName, errMsg, userId: user?.id },
+      "kb/upload: formData parsing failed",
+    );
+    Sentry.captureException(err);
+    return NextResponse.json(
+      { error: "Invalid form data" },
+      { status: 400 },
+    );
   }
 
   const file = formData.get("file") as File | null;

@@ -1,5 +1,6 @@
 import fs from "fs";
 import path from "path";
+import { FOUNDATION_MIN_CONTENT_BYTES } from "@/lib/kb-constants";
 
 const MAX_VISION_CONTENT = 5000;
 
@@ -64,7 +65,7 @@ export async function buildVisionEnhancementPrompt(
 
   try {
     const stat = await fs.promises.stat(visionPath);
-    if (stat.size >= 500) return null;
+    if (stat.size >= FOUNDATION_MIN_CONTENT_BYTES) return null;
   } catch {
     return null;
   }
