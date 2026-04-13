@@ -147,16 +147,16 @@ None.
 
 ## Acceptance Criteria
 
-- [ ] When the X API returns `followers_count: 0` and `tweet_count > 0` and
+- [x] When the X API returns `followers_count: 0` and `tweet_count > 0` and
   `following_count > 0`, a warning is emitted to stderr describing the anomaly
-- [ ] When the X API returns non-zero `followers_count`, no warning is emitted
-- [ ] When the X API returns all-zero `public_metrics`, a stronger warning is
+- [x] When the X API returns non-zero `followers_count`, no warning is emitted
+- [x] When the X API returns all-zero `public_metrics`, a stronger warning is
   emitted to stderr indicating possible API degradation
-- [ ] The diagnostic warning is printed to stderr (not stdout) so it does
+- [x] The diagnostic warning is printed to stderr (not stdout) so it does
   not corrupt JSON output
-- [ ] The `cmd_fetch_metrics` output JSON schema is unchanged (same keys,
+- [x] The `cmd_fetch_metrics` output JSON schema is unchanged (same keys,
   same structure)
-- [ ] An account with `followers_count: 0`, `tweet_count: 0`, `following_count: 0`
+- [x] An account with `followers_count: 0`, `tweet_count: 0`, `following_count: 0`
   does not trigger a warning (genuinely new account)
 
 ## Test Scenarios

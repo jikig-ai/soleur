@@ -18,6 +18,12 @@ const HANDLE_RESPONSE_HELPER = join(
   "test-handle-response.sh"
 );
 
+const CHECK_METRICS_ANOMALY_HELPER = join(
+  import.meta.dirname,
+  "helpers",
+  "test-check-metrics-anomaly.sh"
+);
+
 // x-community.sh calls require_jq in main() before dispatching to any command,
 // so ALL tests that invoke the script need this guard, not just direct jq calls.
 const HAS_JQ =
@@ -610,5 +616,94 @@ describe("x-community.sh -- rename verification", () => {
 
     // grep -c returns the count; 0 matches means exit code 1
     expect(result.exitCode).toBe(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// _check_metrics_anomaly -- anomaly detection for public_metrics
+// ---------------------------------------------------------------------------
+
+describeIfJq("x-community.sh _check_metrics_anomaly -- active account zero followers", () => {
+  test("emits warning when followers=0 but tweets>0 and following>0", () => {
+    const metrics = JSON.stringify({
+      followers_count: 0,
+      following_count: 18,
+      tweet_count: 67,
+      listed_count: 0,
+    });
+
+    const result = Bun.spawnSync(
+      ["bash", CHECK_METRICS_ANOMALY_HELPER, metrics],
+      { env: NO_CREDS_ENV }
+    );
+
+    // Return code 0 = anomaly detected
+    expect(result.exitCode).toBe(0);
+    const stderr = decode(result.stderr);
+    expect(stderr).toContain("Warning:");
+    expect(stderr).toContain("0 followers");
+    // Stdout must be empty (no JSON corruption)
+    expect(decode(result.stdout)).toBe("");
+  });
+});
+
+describeIfJq("x-community.sh _check_metrics_anomaly -- all-zeros degradation", () => {
+  test("emits stronger warning when all metrics are zero except tweet_count", () => {
+    const metrics = JSON.stringify({
+      followers_count: 0,
+      following_count: 0,
+      tweet_count: 67,
+      listed_count: 0,
+    });
+
+    const result = Bun.spawnSync(
+      ["bash", CHECK_METRICS_ANOMALY_HELPER, metrics],
+      { env: NO_CREDS_ENV }
+    );
+
+    expect(result.exitCode).toBe(0);
+    const stderr = decode(result.stderr);
+    expect(stderr).toContain("Warning:");
+    expect(stderr).toContain("API degradation");
+  });
+});
+
+describeIfJq("x-community.sh _check_metrics_anomaly -- normal account", () => {
+  test("no warning when followers > 0", () => {
+    const metrics = JSON.stringify({
+      followers_count: 5,
+      following_count: 18,
+      tweet_count: 67,
+      listed_count: 1,
+    });
+
+    const result = Bun.spawnSync(
+      ["bash", CHECK_METRICS_ANOMALY_HELPER, metrics],
+      { env: NO_CREDS_ENV }
+    );
+
+    // Return code 1 = normal (no anomaly)
+    expect(result.exitCode).toBe(1);
+    expect(decode(result.stderr)).toBe("");
+  });
+});
+
+describeIfJq("x-community.sh _check_metrics_anomaly -- genuinely new account", () => {
+  test("no warning when all metrics are zero (new account)", () => {
+    const metrics = JSON.stringify({
+      followers_count: 0,
+      following_count: 0,
+      tweet_count: 0,
+      listed_count: 0,
+    });
+
+    const result = Bun.spawnSync(
+      ["bash", CHECK_METRICS_ANOMALY_HELPER, metrics],
+      { env: NO_CREDS_ENV }
+    );
+
+    // Return code 1 = normal (genuinely new account, not anomalous)
+    expect(result.exitCode).toBe(1);
+    expect(decode(result.stderr)).toBe("");
   });
 });
