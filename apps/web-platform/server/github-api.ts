@@ -105,6 +105,40 @@ export async function githubApiPost<T = unknown>(
   return response.json() as Promise<T>;
 }
 
+/**
+ * Make an authenticated DELETE request to the GitHub API.
+ * Restricted to first-party API routes — NOT exposed to cloud agent sessions.
+ * The githubApiPost DELETE guard remains in place for agent safety.
+ */
+export async function githubApiDelete<T = unknown>(
+  installationId: number,
+  path: string,
+  body: Record<string, unknown>,
+): Promise<T | null> {
+  const token = await generateInstallationToken(installationId);
+
+  const response = await fetch(`${GITHUB_API}${path}`, {
+    method: "DELETE",
+    headers: {
+      Authorization: `token ${token}`,
+      Accept: "application/vnd.github+json",
+      "X-GitHub-Api-Version": "2022-11-28",
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(body),
+  });
+
+  if (!response.ok) {
+    await handleErrorResponse(response, path);
+  }
+
+  if (response.status === 204) {
+    return null;
+  }
+
+  return response.json() as Promise<T>;
+}
+
 async function handleErrorResponse(
   response: Response,
   path: string,
