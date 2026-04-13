@@ -6,24 +6,24 @@
 
 ## Phase 1: Cleanup + Database + Webhook Foundation
 
-- [ ] 1.0 Delete standalone billing page
+- [x] 1.0 Delete standalone billing page
       (`apps/web-platform/app/(dashboard)/dashboard/billing/page.tsx`)
   - Replace with redirect to `/dashboard/settings` (bookmark safety)
-- [ ] 1.1 Create migration: add `stripe_subscription_id`, `current_period_end`,
+- [x] 1.1 Create migration: add `stripe_subscription_id`, `current_period_end`,
       `cancel_at_period_end` columns to users table
   - Check latest migration number in `apps/web-platform/supabase/migrations/`
   - Columns are auto-protected by migration 006 (no GRANT needed)
   - No `current_plan` column — hardcode "Solo" in UI for single tier
-- [ ] 1.2 Expand webhook handler (`apps/web-platform/app/api/webhooks/stripe/route.ts`):
-  - [ ] 1.2.1 Add `customer.subscription.updated` handler — update
+- [x] 1.2 Expand webhook handler (`apps/web-platform/app/api/webhooks/stripe/route.ts`):
+  - [x] 1.2.1 Add `customer.subscription.updated` handler — update
         `subscription_status`, `cancel_at_period_end`, `current_period_end`
         by `stripe_customer_id`
-  - [ ] 1.2.2 Update `checkout.session.completed` handler — also store
+  - [x] 1.2.2 Update `checkout.session.completed` handler — also store
         `stripe_subscription_id` from `session.subscription`
-  - [ ] 1.2.3 Update `customer.subscription.deleted` handler — set
+  - [x] 1.2.3 Update `customer.subscription.deleted` handler — set
         `subscription_status` to `cancelled`, `cancel_at_period_end = false`,
         clear `current_period_end`
-- [ ] 1.3 Fix duplicate Stripe customers in checkout route
+- [x] 1.3 Fix duplicate Stripe customers in checkout route
       (`apps/web-platform/app/api/checkout/route.ts`):
   - Query user's `stripe_customer_id` before creating session
   - Pass `customer` instead of `customer_email` if ID exists
