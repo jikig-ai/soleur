@@ -3,6 +3,54 @@
 import { useState, useEffect } from "react";
 import type { AttachmentRef } from "@/lib/types";
 
+// ── Signed-URL cache with 50-minute TTL ──────────────────────────────
+// Signed URLs expire after 1 hour; we cache for 50 minutes to avoid
+// serving an expired URL while still minimising redundant fetches.
+const URL_TTL_MS = 50 * 60 * 1_000; // 50 minutes
+const urlCache = new Map<string, { url: string; expiresAt: number }>();
+
+function useAttachmentUrl(storagePath: string): string | null {
+  const [url, setUrl] = useState<string | null>(() => {
+    const cached = urlCache.get(storagePath);
+    if (cached && cached.expiresAt > Date.now()) return cached.url;
+    return null;
+  });
+
+  useEffect(() => {
+    // Return early if we already have a valid cached URL
+    const cached = urlCache.get(storagePath);
+    if (cached && cached.expiresAt > Date.now()) {
+      setUrl(cached.url);
+      return;
+    }
+
+    let cancelled = false;
+    fetch("/api/attachments/url", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ storagePath }),
+    })
+      .then((r) => r.json())
+      .then((data) => {
+        if (!cancelled && data.url) {
+          urlCache.set(storagePath, {
+            url: data.url,
+            expiresAt: Date.now() + URL_TTL_MS,
+          });
+          setUrl(data.url);
+        }
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [storagePath]);
+
+  return url;
+}
+
+// ── Components ───────────────────────────────────────────────────────
+
 interface AttachmentDisplayProps {
   attachments: AttachmentRef[];
 }
@@ -24,23 +72,8 @@ export function AttachmentDisplay({ attachments }: AttachmentDisplayProps) {
 }
 
 function ImageAttachment({ attachment }: { attachment: AttachmentRef }) {
-  const [url, setUrl] = useState<string | null>(null);
+  const url = useAttachmentUrl(attachment.storagePath);
   const [expanded, setExpanded] = useState(false);
-
-  useEffect(() => {
-    let cancelled = false;
-    fetch("/api/attachments/url", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ storagePath: attachment.storagePath }),
-    })
-      .then((r) => r.json())
-      .then((data) => {
-        if (!cancelled && data.url) setUrl(data.url);
-      })
-      .catch(() => {});
-    return () => { cancelled = true; };
-  }, [attachment.storagePath]);
 
   if (!url) {
     return (
@@ -82,22 +115,7 @@ function ImageAttachment({ attachment }: { attachment: AttachmentRef }) {
 }
 
 function FileAttachment({ attachment }: { attachment: AttachmentRef }) {
-  const [url, setUrl] = useState<string | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    fetch("/api/attachments/url", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ storagePath: attachment.storagePath }),
-    })
-      .then((r) => r.json())
-      .then((data) => {
-        if (!cancelled && data.url) setUrl(data.url);
-      })
-      .catch(() => {});
-    return () => { cancelled = true; };
-  }, [attachment.storagePath]);
+  const url = useAttachmentUrl(attachment.storagePath);
 
   const sizeKb = Math.round(attachment.sizeBytes / 1_024);
 

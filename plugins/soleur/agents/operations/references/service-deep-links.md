@@ -6,6 +6,10 @@ Separated from the agent prompt so URLs can be updated independently without mod
 
 ## Cloudflare
 
+**Estimated time:** ~15 min (plus up to 24 hours for nameserver propagation)
+
+**Prerequisites:** A domain you control with access to its registrar's nameserver settings
+
 | Action | URL |
 |--------|-----|
 | Signup | `https://dash.cloudflare.com/sign-up` |
@@ -21,11 +25,15 @@ Separated from the agent prompt so URLs can be updated independently without mod
 1. Create a Cloudflare account at the signup URL
 2. Add your site domain (Cloudflare will scan existing DNS records)
 3. Update your domain's nameservers to the ones Cloudflare provides
-4. Wait for nameserver propagation (can take up to 24 hours)
+4. Wait for nameserver propagation (can take up to 24 hours -- skip and return later)
 5. Generate an API token at the API Tokens page with the permissions above
 6. Store the token in Settings > Connected Services
 
 ## Stripe
+
+**Estimated time:** ~10 min (account verification may take 1-2 business days)
+
+**Prerequisites:** Business details (name, address, tax ID) and a bank account for payouts
 
 | Action | URL |
 |--------|-----|
@@ -47,6 +55,10 @@ Separated from the agent prompt so URLs can be updated independently without mod
 
 ## Plausible
 
+**Estimated time:** ~5 min
+
+**Prerequisites:** A website you control (to add the tracking script)
+
 | Action | URL |
 |--------|-----|
 | Signup | `https://plausible.io/register` |
@@ -63,10 +75,14 @@ Separated from the agent prompt so URLs can be updated independently without mod
 2. Add your site domain at the Add Site page
 3. Add the Plausible script tag to your site's `<head>` section
 4. Visit your site to verify a pageview is recorded
-5. Generate an API key at the API Keys page
+5. Generate an API key at the API Keys page (note: Sites API may require a paid plan)
 6. Store the API key in Settings > Connected Services
 
 ## Hetzner
+
+**Estimated time:** ~5 min
+
+**Prerequisites:** None
 
 | Action | URL |
 |--------|-----|
@@ -86,6 +102,10 @@ Separated from the agent prompt so URLs can be updated independently without mod
 
 ## Resend
 
+**Estimated time:** ~10 min (domain DNS verification may take a few minutes)
+
+**Prerequisites:** A domain you control with access to DNS settings (for sending domain verification)
+
 | Action | URL |
 |--------|-----|
 | Signup | `https://resend.com/signup` |
@@ -101,3 +121,32 @@ Separated from the agent prompt so URLs can be updated independently without mod
 2. Add and verify your sending domain at the Domains page
 3. Generate an API key at the API Keys page
 4. Store the API key in Settings > Connected Services
+
+## Adding New Services
+
+To add a new service to this file, create a section with the following structure:
+
+```markdown
+## Service Name
+
+**Estimated time:** ~N min (plus any async wait times)
+
+**Prerequisites:** What the user needs before starting (or "None")
+
+| Action | URL |
+|--------|-----|
+| Signup | `https://...` |
+| Dashboard | `https://...` |
+| API Keys | `https://...` |
+
+**Token permissions:** List required scopes/permissions
+
+**Guided steps:**
+
+1. Step one (each step becomes an AskUserQuestion in the guided flow)
+2. Step two
+3. ...
+N. Store the token in Settings > Connected Services (always the last step)
+```
+
+After adding the service here, also add a provider entry in `apps/web-platform/server/providers.ts` with the `envVar`, `category`, and `label` fields. No changes to the service-automator agent prompt are needed -- the agent reads steps from this file.
