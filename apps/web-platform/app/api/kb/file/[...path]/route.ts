@@ -165,6 +165,7 @@ export async function DELETE(
           {
             error: "File deleted from GitHub but workspace sync failed. Try refreshing.",
             code: "SYNC_FAILED",
+            commitSha: result?.commit?.sha ?? null,
           },
           { status: 500 },
         );

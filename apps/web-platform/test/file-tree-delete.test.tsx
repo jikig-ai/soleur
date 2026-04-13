@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import type { TreeNode } from "@/server/kb-reader";
 
@@ -94,6 +94,10 @@ describe("FileTree delete UI", () => {
     mockRefreshTree.mockResolvedValue(undefined);
   });
 
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   it("shows delete button on hover for attachment files", () => {
     setupKbMock(makeTree([overviewDir]));
     render(<FileTree />);
@@ -132,7 +136,7 @@ describe("FileTree delete UI", () => {
   });
 
   it("calls API and refreshes tree on confirm", async () => {
-    global.fetch = vi.fn().mockResolvedValue({
+    vi.spyOn(global, "fetch").mockResolvedValue({
       ok: true,
       status: 200,
       json: () => Promise.resolve({ commitSha: "abc123" }),
@@ -182,7 +186,7 @@ describe("FileTree delete UI", () => {
   });
 
   it("shows error message on API failure with dismiss button", async () => {
-    global.fetch = vi.fn().mockResolvedValue({
+    vi.spyOn(global, "fetch").mockResolvedValue({
       ok: false,
       status: 500,
       json: () => Promise.resolve({ error: "Internal server error" }),
