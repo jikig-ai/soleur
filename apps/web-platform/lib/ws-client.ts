@@ -35,7 +35,7 @@ interface ChatGateMessage extends ChatMessageBase {
   options: string[];
   header?: string;
   descriptions?: Record<string, string | undefined>;
-  stepProgress?: { current: number; total: number; title: string };
+  stepProgress?: { current: number; total: number };
   resolved?: boolean;
   selectedOption?: string;
   gateError?: string;
