@@ -209,11 +209,13 @@ After generating the plan structure, assess which business domains this plan has
 
 After Step 1 completes, if Product domain was flagged as relevant, run the existing three-tier classification:
 
-- **BLOCKING**: Creates new user-facing pages, multi-step user flows, or significant new UI components (e.g., signup flows, dashboards, onboarding wizards, chat interfaces)
+- **BLOCKING**: Creates new user-facing pages, multi-step user flows, or new UI components that users interact with (e.g., signup flows, dashboards, onboarding wizards, chat interfaces, prompts, modals, banners)
 - **ADVISORY**: Modifies existing user-facing pages or components (e.g., layout changes, form updates, adding fields to existing screens)
 - **NONE**: No user-facing impact
 
 A plan that *discusses* UI concepts but *implements* orchestration changes (e.g., adding a UX gate to a skill) is NONE.
+
+**Mechanical escalation (overrides subjective assessment):** Scan the plan's "Files to create" list. If any new file path matches `components/**/*.tsx`, `app/**/page.tsx`, or `app/**/layout.tsx`, the tier is **BLOCKING** regardless of subjective assessment. Creating a new component file = new user-facing surface = UX review required. **Why:** In #1049, a notification prompt component was classified as ADVISORY because the agent judged it "not significant enough." The user had to manually trigger the UX gate post-plan.
 
 **On BLOCKING:**
 

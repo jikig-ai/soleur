@@ -149,15 +149,24 @@ CREATE POLICY "Users can update own subscriptions"
 13. Extend `app/sw-register.tsx` to chain push subscription after SW registration:
     - After `register()` resolves, check if user has push permission
     - If permitted and not yet subscribed, subscribe silently
-14. Create `components/notification-prompt.tsx`:
-    - Contextual in-app prompt shown when first review gate fires and user has no push
-    - "Enable notifications so you don't miss agent decisions"
-    - Triggers browser permission request on user action
-    - After permission granted, subscribe immediately
-    - Track "first prompt shown" via localStorage flag
+14. Create `components/notification-prompt.tsx` (CPO-reviewed design):
+    - Inline dismissible banner (not modal), neutral/blue border, visually distinct from
+      review gate cards (amber)
+    - Shown AFTER the first review gate resolves (not alongside — avoid dual-ask)
+    - Copy: heading "Agents need you even when you're away." body "Enable notifications
+      so you never miss a decision that blocks progress." CTA "Enable notifications",
+      dismiss "Not now" (text link)
+    - On "Enable": trigger `Notification.requestPermission()`, subscribe, set localStorage
+      flag `notification-prompt-seen`
+    - On dismiss: set flag, do not show again on this device
+    - On ignore (scroll past): treat as not-seen, show again on next gate resolution
+    - Maximum 2 shows total per device, then set flag permanently
+    - On iOS Safari (not PWA): adjust copy to "Install Soleur to your home screen for
+      push notifications" — do not trigger a permission request that will fail
+    - After permission granted, subscribe immediately via `subscribeToPush()`
 15. Integrate prompt into review gate flow in `lib/ws-client.ts`:
-    - On `review_gate` message, check localStorage flag + push permission state
-    - Show notification-prompt alongside the review gate question if applicable
+    - On `review_gate_response` (gate resolved), check localStorage flag + push state
+    - If flag not set and shows < 2: render notification-prompt below resolved gate card
 
 **Files to create/modify:**
 
@@ -215,7 +224,8 @@ when user is offline. Clicking notification opens correct conversation.
 | Queue-based dispatch (BullMQ/Redis) | Rejected | YAGNI for P3 with 0-1 users. |
 | Supabase Edge Function + DB trigger | Rejected | Adds latency, splits logic across runtimes. |
 | Separate email template module | Rejected | One email, one caller. Inline in notifications.ts. |
-| Onboarding info card (soft ask) | Cut | YAGNI. Contextual prompt at first review gate is sufficient. Browser manages permissions natively. |
+| Onboarding info card (soft ask) | Cut | YAGNI. Prompt after first gate resolution is sufficient. Browser manages permissions natively. |
+| Show prompt alongside review gate | Rejected (CPO) | Dual-ask problem — user is already making a time-sensitive decision. Show after gate resolves instead. |
 | Notification settings toggle | Cut | YAGNI. Browser provides notification settings. Build when a settings page exists with other content. |
 | `isUserOnline()` function | Cut | Redundant with `sendToClient()` return value. Avoid parallel state checks that can drift. |
 | Notification batching | Deferred to P4 | Premature with 0-1 users. |
@@ -229,7 +239,8 @@ when user is offline. Clicking notification opens correct conversation.
 - [ ] Clicking push notification opens `/dashboard/chat/{conversationId}`
 - [ ] User with zero push subscriptions receives email via Resend
 - [ ] Email includes actionable summary and deep link to conversation
-- [ ] First review gate triggers contextual push permission prompt
+- [ ] First review gate resolution shows contextual push permission prompt (after gate, not during)
+- [ ] Notification prompt shown max 2 times per device, then stops
 - [ ] Multiple devices can subscribe to push for same user
 - [ ] Push notifications are fire-and-forget (do not block review gate timeout)
 - [ ] Dead push subscriptions (410 Gone) are deleted immediately
@@ -256,7 +267,7 @@ when user is offline. Clicking notification opens correct conversation.
 - Given a user with no active WS and push subscriptions, when a review gate fires, then push notifications are sent to all registered devices
 - Given a user with no active WS and zero push subscriptions, when a review gate fires, then an email is sent via Resend to the user's auth.users.email
 - Given a user clicking a push notification, when the app opens, then it navigates to `/dashboard/chat/{conversationId}`
-- Given the first review gate for a user without push, when the gate fires, then a contextual permission prompt appears alongside the gate question
+- Given the first review gate for a user without push, when the gate resolves, then a notification permission prompt appears below the resolved gate card
 
 ### Edge Cases
 
@@ -323,15 +334,17 @@ when user is offline. Clicking notification opens correct conversation.
 
 ### Product/UX Gate
 
-**Tier:** advisory
-**Decision:** reviewed (carry-forward from brainstorm)
-**Agents invoked:** none (brainstorm carried forward CPO assessment)
-**Skipped specialists:** ux-design-lead (advisory tier — notification prompt is a single component, not a multi-page flow)
-**Pencil available:** N/A
+**Tier:** blocking (mechanical escalation: `components/notification-prompt.tsx` is a new component file)
+**Decision:** reviewed
+**Agents invoked:** cpo, ux-design-lead
+**Skipped specialists:** none
+**Pencil available:** pending (ux-design-lead in progress)
 
 #### Findings
 
-CPO assessed: necessary for Phase 3 exit criteria. Notification content settled (actionable summary). Deep linking to `/dashboard/chat/{conversationId}`. No full preferences UI for P3.
+**CPO (post-plan review):** Show notification prompt AFTER the review gate resolves, not alongside it. Dual-ask (gate question + permission request) splits attention on a time-sensitive decision. "You almost missed this" framing after resolution is a natural contextual hook. Inline dismissible banner (not modal), neutral/blue border. Max 2 shows per device, then stop. On iOS Safari without PWA: adjust copy to explain home-screen install requirement. Copy: "Agents need you even when you're away." / "Enable notifications so you never miss a decision that blocks progress." / CTA "Enable notifications" / dismiss "Not now" (text link).
+
+**UX design lead:** wireframes pending.
 
 ## References and Research
 

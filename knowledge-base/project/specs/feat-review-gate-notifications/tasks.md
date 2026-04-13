@@ -30,8 +30,8 @@
 - [ ] 1.12 Extend `public/sw.js` (push + notificationclick handlers)
 - [ ] 1.13 Create `lib/push-subscription.ts` (subscribeToPush, unsubscribeFromPush)
 - [ ] 1.14 Extend `app/sw-register.tsx` (chain push subscription after registration)
-- [ ] 1.15 Create `components/notification-prompt.tsx` (contextual prompt at first gate)
-- [ ] 1.16 Integrate prompt in `lib/ws-client.ts` (show on first review_gate message)
+- [ ] 1.15 Create `components/notification-prompt.tsx` (CPO-reviewed: inline banner after gate resolves, max 2 shows, iOS copy variant)
+- [ ] 1.16 Integrate prompt in `lib/ws-client.ts` (show after review_gate_response, not during gate)
 
 ## Phase 2: Legal + Compliance + Tests
 
