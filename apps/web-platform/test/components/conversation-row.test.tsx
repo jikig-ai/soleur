@@ -29,53 +29,31 @@ function makeConversation(
   };
 }
 
-describe("ConversationRow LeaderBadge", () => {
-  it("renders a logo image inside each badge container", () => {
+describe("ConversationRow LeaderAvatar", () => {
+  it("renders a domain-specific icon badge for each leader (mobile + desktop)", () => {
     render(
       <ConversationRow conversation={makeConversation({ domain_leader: "cto" })} />,
     );
 
-    const badges = screen.getAllByLabelText(/Soleur CTO/i);
+    const badges = screen.getAllByLabelText(/CTO avatar/i);
     expect(badges).toHaveLength(2);
-
+    // Should render lucide icon, not Soleur logo image
     for (const badge of badges) {
-      const img = within(badge).getByRole("presentation");
-      expect(img.tagName).toBe("IMG");
+      const img = badge.querySelector('img[src="/icons/soleur-logo-mark.png"]');
+      expect(img).toBeNull();
     }
   });
 
-  it("sets the correct src on the logo image", () => {
-    render(
+  it("applies the leader background color to the badge", () => {
+    const { container } = render(
       <ConversationRow conversation={makeConversation({ domain_leader: "cto" })} />,
     );
 
-    const badge = screen.getAllByLabelText(/Soleur CTO/i)[0];
-    const img = within(badge).getByRole("presentation");
-    expect(img).toHaveAttribute("src", "/icons/soleur-logo-mark.png");
-  });
-
-  it("does not render leader ID text in the badge", () => {
-    render(<ConversationRow conversation={makeConversation({ domain_leader: "cmo" })} />);
-
-    const badges = screen.queryAllByText("CMO");
-    expect(badges).toHaveLength(0);
-  });
-
-  it("has aria-label combining Soleur with leader ID (mobile + desktop)", () => {
-    render(<ConversationRow conversation={makeConversation({ domain_leader: "cto" })} />);
-
-    const badges = screen.getAllByLabelText(/Soleur CTO/i);
-    expect(badges).toHaveLength(2);
-  });
-
-  it("sets alt='' on the logo image (decorative)", () => {
-    render(
-      <ConversationRow conversation={makeConversation({ domain_leader: "cto" })} />,
-    );
-
-    const badge = screen.getAllByLabelText(/Soleur CTO/i)[0];
-    const img = within(badge).getByRole("presentation");
-    expect(img).toHaveAttribute("alt", "");
+    const badges = container.querySelectorAll("[aria-label='CTO avatar']");
+    expect(badges.length).toBe(2);
+    for (const badge of badges) {
+      expect(badge.className).toContain("bg-blue-500");
+    }
   });
 
   it("does not render a badge when domain_leader is null", () => {
@@ -83,7 +61,7 @@ describe("ConversationRow LeaderBadge", () => {
       <ConversationRow conversation={makeConversation({ domain_leader: null })} />,
     );
 
-    const badges = screen.queryAllByLabelText(/Soleur/i);
+    const badges = screen.queryAllByLabelText(/avatar/i);
     expect(badges).toHaveLength(0);
   });
 });

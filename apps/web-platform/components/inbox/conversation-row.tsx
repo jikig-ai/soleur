@@ -7,6 +7,7 @@ import type { ConversationStatus } from "@/lib/types";
 import type { ConversationWithPreview } from "@/hooks/use-conversations";
 import { relativeTime } from "@/lib/relative-time";
 import type { DomainLeaderId } from "@/server/domain-leaders";
+import { LeaderAvatar } from "@/components/leader-avatar";
 
 const STATUS_ACTIONS: Partial<Record<ConversationStatus, { label: string; target: ConversationStatus }>> = {
   failed: { label: "Dismiss", target: "completed" },
@@ -98,22 +99,6 @@ function StatusBadge({
   );
 }
 
-function LeaderBadge({ leaderId }: { leaderId: DomainLeaderId }) {
-  return (
-    <span
-      className="flex h-7 w-7 items-center justify-center overflow-hidden rounded-md md:h-8 md:w-8"
-      aria-label={`Soleur ${leaderId.toUpperCase()}`}
-    >
-      <img
-        src="/icons/soleur-logo-mark.png"
-        alt=""
-        width={28}
-        height={28}
-        className="h-full w-full object-cover"
-      />
-    </span>
-  );
-}
 
 function ArchiveButton({
   isArchived,
@@ -203,7 +188,7 @@ export function ConversationRow({ conversation, onArchive, onUnarchive, onStatus
         <div className="flex items-center justify-between">
           {conversation.domain_leader && (
             <div className="flex items-center gap-1.5">
-              <LeaderBadge leaderId={conversation.domain_leader} />
+              <LeaderAvatar leaderId={conversation.domain_leader} size="md" />
             </div>
           )}
           {(onArchive || onUnarchive) && (
@@ -235,7 +220,7 @@ export function ConversationRow({ conversation, onArchive, onUnarchive, onStatus
           )}
         </div>
         {conversation.domain_leader && (
-          <LeaderBadge leaderId={conversation.domain_leader} />
+          <LeaderAvatar leaderId={conversation.domain_leader} size="md" />
         )}
         <span className="shrink-0 text-xs text-neutral-500">
           {relativeTime(conversation.last_active)}

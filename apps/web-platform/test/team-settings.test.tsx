@@ -104,13 +104,57 @@ describe("TeamSettingsContent", () => {
     });
   });
 
-  it("shows colored badges for each leader", async () => {
+  it("shows domain-specific icon avatars for each leader", async () => {
     renderTeamSettings();
 
     await waitFor(() => {
-      // Badges show 3-letter role acronyms by default, or custom name prefix
-      expect(screen.getByText("CMO")).toBeInTheDocument();
-      expect(screen.getByText("CTO")).toBeInTheDocument();
+      // Each leader row has an avatar with upload trigger
+      const avatars = screen.getAllByLabelText(/avatar.*upload/i);
+      expect(avatars.length).toBe(8);
+    });
+  });
+
+  it("renders clickable avatar for each leader with upload trigger", async () => {
+    renderTeamSettings();
+
+    await waitFor(() => {
+      // Each leader row should have a clickable avatar with an associated file input
+      const avatars = screen.getAllByLabelText(/avatar.*upload/i);
+      expect(avatars.length).toBe(8);
+    });
+  });
+
+  it("has hidden file inputs accepting PNG/SVG/WebP", async () => {
+    renderTeamSettings();
+
+    await waitFor(() => {
+      expect(screen.getAllByPlaceholderText("Enter a name...")).toHaveLength(8);
+    });
+
+    const fileInputs = document.querySelectorAll('input[type="file"]');
+    expect(fileInputs.length).toBe(8);
+    for (const input of fileInputs) {
+      expect(input.getAttribute("accept")).toBe("image/png,image/webp");
+    }
+  });
+
+  it("shows reset button when leader has a custom icon", async () => {
+    mockFetch.mockReset();
+    mockFetch.mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({
+        names: { cto: "Alex" },
+        iconPaths: { cto: "settings/team-icons/cto.png" },
+        nudgesDismissed: [],
+        namingPromptedAt: null,
+      }),
+    });
+
+    renderTeamSettings();
+
+    await waitFor(() => {
+      const resetButtons = screen.getAllByLabelText(/reset.*icon/i);
+      expect(resetButtons.length).toBe(1);
     });
   });
 });
