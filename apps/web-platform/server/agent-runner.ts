@@ -884,6 +884,12 @@ When you need user input for important decisions, use the AskUserQuestion tool.`
               }
             }
 
+            // Parse step progress from header (e.g., "Step 2 of 6: Configure DNS")
+            const stepMatch = gate.header?.match(/^Step (\d+) of (\d+): .+$/);
+            const stepProgress = stepMatch
+              ? { current: Number(stepMatch[1]), total: Number(stepMatch[2]) }
+              : undefined;
+
             sendToClient(userId, {
               type: "review_gate",
               gateId,
@@ -893,6 +899,7 @@ When you need user input for important decisions, use the AskUserQuestion tool.`
               descriptions: Object.keys(gate.descriptions).length > 0
                 ? gate.descriptions
                 : undefined,
+              stepProgress,
             });
 
             await updateConversationStatus(conversationId, "waiting_for_user");

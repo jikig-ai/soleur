@@ -35,6 +35,7 @@ interface ChatGateMessage extends ChatMessageBase {
   options: string[];
   header?: string;
   descriptions?: Record<string, string | undefined>;
+  stepProgress?: { current: number; total: number };
   resolved?: boolean;
   selectedOption?: string;
   gateError?: string;
@@ -244,6 +245,7 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
               options: msg.options,
               header: msg.header,
               descriptions: msg.descriptions,
+              stepProgress: msg.stepProgress,
             },
           ]);
           break;
