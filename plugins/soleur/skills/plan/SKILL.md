@@ -205,15 +205,29 @@ After generating the plan structure, assess which business domains this plan has
 
 4. **Collect findings:** Wait for all domain leader Tasks to complete. Each returns a brief structured assessment. If a domain leader Task fails (timeout, error), write partial findings for that domain with `Status: error` and continue with remaining domains.
 
+**Step 1.5 — Brainstorm Specialist Carry-Forward Gate:**
+
+After domain sweep, scan the brainstorm document's `## Domain Assessments` section (and any `## Capability Gaps` section) for domain leaders that recommended specific specialists by name (e.g., "delegates to conversion-optimizer", "recommends copywriter for cancellation copy", "invoke ux-design-lead for wireframes"). Build a `REQUIRED_SPECIALISTS` list from these recommendations.
+
+For each specialist in `REQUIRED_SPECIALISTS`:
+
+1. If the specialist will be invoked by the Product/UX Gate pipeline below (ux-design-lead, copywriter, spec-flow-analyzer), mark it as "covered by UX Gate" — it will run in Step 2.
+2. If the specialist is NOT covered by the UX Gate pipeline (e.g., conversion-optimizer, retention-strategist, pricing-strategist), invoke it as a Task now with a scoped prompt derived from the recommendation context. Spawn in parallel if multiple.
+3. Record all brainstorm-recommended specialists in the Domain Review section under `**Brainstorm-recommended specialists:**`.
+
+**Enforcement:** Specialists recommended by name in brainstorm domain assessments MUST be either invoked or explicitly declined by the user via AskUserQuestion ("Domain leader recommended [specialist] for [reason]. Run now / Skip with acknowledgment"). Silent skipping is a workflow violation. **Why:** In #1078, the CMO recommended conversion-optimizer and copywriter for the cancellation flow, but the plan skill silently wrote them into `Skipped specialists:` without asking, producing UX artifacts that lacked brand review.
+
 **Step 2 — Product/UX Gate:**
 
-After Step 1 completes, if Product domain was flagged as relevant, run the existing three-tier classification:
+After Steps 1 and 1.5 complete, if Product domain was flagged as relevant, run the existing three-tier classification:
 
-- **BLOCKING**: Creates new user-facing pages, multi-step user flows, or significant new UI components (e.g., signup flows, dashboards, onboarding wizards, chat interfaces)
-- **ADVISORY**: Modifies existing user-facing pages or components (e.g., layout changes, form updates, adding fields to existing screens)
+- **BLOCKING**: Creates new user-facing pages, multi-step user flows, or significant new UI components — including modals, dialogs, confirmation flows, and interstitials with emotional or persuasive copy (e.g., signup flows, dashboards, onboarding wizards, chat interfaces, retention modals, cancel confirmation screens, prompts, banners)
+- **ADVISORY**: Modifies existing user-facing pages or components without adding new interactive surfaces (e.g., layout changes, form updates, adding fields to existing screens)
 - **NONE**: No user-facing impact
 
 A plan that *discusses* UI concepts but *implements* orchestration changes (e.g., adding a UX gate to a skill) is NONE.
+
+**Mechanical escalation (overrides subjective assessment):** Scan the plan's "Files to create" list. If any new file path matches `components/**/*.tsx`, `app/**/page.tsx`, or `app/**/layout.tsx`, the tier is **BLOCKING** regardless of subjective assessment. Creating a new component file = new user-facing surface = UX review required. **Why:** In #1049, a notification prompt component was classified as ADVISORY because the agent judged it "not significant enough." The user had to manually trigger the UX gate post-plan.
 
 **On BLOCKING:**
 
@@ -469,11 +483,20 @@ and lifecycle progression.
    Replace placeholders with actual values from the session. The user must be
    able to paste the command and go without re-explaining context.
 
+**Resume prompt (MANDATORY):** After the display message above, always output a copy-pasteable resume prompt block. This is required by AGENTS.md whenever `/clear` is mentioned. Format:
+
+```text
+Resume prompt (copy-paste after /clear):
+/soleur:work <plan-path>. Branch: feat-<name>. Worktree: .worktrees/feat-<name>/. Issue: #<number>. PR: #<pr-number>. Plan reviewed, implementation next.
+```
+
 ## Post-Generation Options
 
 After plan review, use the **AskUserQuestion tool** to present these options:
 
-**Question:** "Plan reviewed and ready. Resume prompt above. What would you like to do next?"
+**Resume prompt (MANDATORY — AGENTS.md Communication):** Before presenting the question, generate a copy-pasteable resume prompt containing: skill to run (`/soleur:work`), plan file path, branch name, worktree path, PR number, issue number, and a one-line summary of what was already done. Display it in a fenced code block so the user can paste it into a fresh session after `/clear`. This is the single most important output of the post-generation phase — without it, the user cannot resume in a new session without re-explaining context.
+
+**Question:** "Plan reviewed and ready at `knowledge-base/project/plans/YYYY-MM-DD-<type>-<name>-plan.md`. Context is saved to disk — run `/clear` before `/soleur:work` for maximum headroom. What would you like to do next?"
 
 **Options:**
 

@@ -344,6 +344,13 @@ Brainstorm complete with <N> key decisions. Ready for planning.
 
 Replace placeholders with actual values from the session.
 
+**Resume prompt (MANDATORY):** After the display message above, always output a copy-pasteable resume prompt block. This is required by AGENTS.md whenever `/clear` is mentioned. Format:
+
+```text
+Resume prompt (copy-paste after /clear):
+/soleur:plan #<issue-number> — <feature title>. Brainstorm: <brainstorm-path>. Spec: <spec-path>. Branch: feat-<name>. Worktree: .worktrees/feat-<name>/. PR: #<pr-number>. Brainstorm complete, plan next.
+```
+
 Use **AskUserQuestion tool** to present next steps:
 
 **Question:** "Brainstorm captured. Resume prompt above. What would you like to do next?"

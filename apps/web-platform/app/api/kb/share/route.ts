@@ -28,6 +28,14 @@ export async function POST(request: Request) {
     );
   }
 
+  // Only markdown files can be shared
+  if (!body.documentPath.endsWith(".md")) {
+    return NextResponse.json(
+      { error: "Only markdown files can be shared" },
+      { status: 400 },
+    );
+  }
+
   const serviceClient = createServiceClient();
   const { data: userData } = await serviceClient
     .from("users")

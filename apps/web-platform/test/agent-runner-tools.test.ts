@@ -99,81 +99,25 @@ vi.mock("../server/service-tools", () => ({
 }));
 
 import { startAgentSession } from "../server/agent-runner";
+import {
+  DEFAULT_API_KEY_ROW,
+  createSupabaseMockImpl,
+  createQueryMock,
+} from "./helpers/agent-runner-mocks";
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
-const DEFAULT_API_KEY_ROW = {
-  id: "key-1",
-  provider: "anthropic",
-  encrypted_key: Buffer.from("test").toString("base64"),
-  iv: Buffer.from("test-iv-1234").toString("base64"),
-  auth_tag: Buffer.from("test-tag-1234567").toString("base64"),
-  key_version: 2,
-};
-
-// Creates a chainable mock that supports both:
-// - getUserApiKey: select().eq().eq().eq().limit().single() -> { data, error }
-// - getUserServiceTokens: await select().eq().eq() -> { data, error }
-function createApiKeysMock(rows: Record<string, unknown>[] = [DEFAULT_API_KEY_ROW]) {
-  const createChain = (): Record<string, unknown> => ({
-    data: rows,
-    error: null,
-    eq: () => createChain(),
-    limit: () => ({ single: () => ({ data: rows[0] ?? null, error: null }) }),
-    then: (resolve: (v: unknown) => void) => resolve({ data: rows, error: null }),
-  });
-  return { select: () => createChain() };
-}
-
 function setupSupabaseMock(
   userData: Record<string, unknown>,
   serviceTokenRows?: Record<string, unknown>[],
 ) {
-  mockFrom.mockImplementation((table: string) => {
-    if (table === "api_keys") {
-      return createApiKeysMock(serviceTokenRows ?? [DEFAULT_API_KEY_ROW]);
-    }
-    if (table === "users") {
-      return {
-        select: () => ({
-          eq: () => ({
-            single: () => ({
-              data: userData,
-              error: null,
-            }),
-          }),
-        }),
-      };
-    }
-    if (table === "conversations") {
-      return {
-        update: vi.fn(() => ({
-          eq: vi.fn(() => ({ error: null })),
-        })),
-      };
-    }
-    if (table === "messages") {
-      return { insert: () => ({ error: null }) };
-    }
-    return {
-      select: () => ({ eq: () => ({ single: () => ({ data: null, error: null }) }) }),
-      update: () => ({ eq: () => ({ error: null }) }),
-      insert: () => ({ error: null }),
-    };
-  });
+  createSupabaseMockImpl(mockFrom, { userData, apiKeyRows: serviceTokenRows });
 }
 
 function setupQueryMockImmediate() {
-  mockQuery.mockReturnValue({
-    async *[Symbol.asyncIterator]() {
-      yield { type: "result", session_id: "sess-1" };
-    },
-    next: vi.fn(),
-    return: vi.fn(),
-    throw: vi.fn(),
-  } as any);
+  createQueryMock(mockQuery);
 }
 
 // ---------------------------------------------------------------------------
@@ -556,5 +500,70 @@ describe("agent-runner MCP tool wiring", () => {
       { signal: new AbortController().signal },
     );
     expect(result.behavior).toBe("allow");
+  });
+
+  test("system prompt includes Connected Services with Plausible when user has PLAUSIBLE_API_KEY", async () => {
+    const plausibleRow = {
+      ...DEFAULT_API_KEY_ROW,
+      id: "key-plausible",
+      provider: "plausible",
+    };
+    setupSupabaseMock(
+      {
+        workspace_path: "/tmp/test-workspace",
+        repo_status: "ready",
+        github_installation_id: 12345,
+        repo_url: "https://github.com/alice/my-repo",
+      },
+      [DEFAULT_API_KEY_ROW, plausibleRow],
+    );
+    setupQueryMockImmediate();
+
+    await startAgentSession("user-1", "conv-1", "cpo");
+
+    const options = mockQuery.mock.calls[0][0].options;
+    expect(options.systemPrompt).toContain("## Connected Services");
+    expect(options.systemPrompt).toContain("- Plausible: connected");
+  });
+
+  test("system prompt does NOT include Connected Services when user has no service tokens", async () => {
+    setupSupabaseMock({
+      workspace_path: "/tmp/test-workspace",
+      repo_status: "ready",
+      github_installation_id: 12345,
+      repo_url: "https://github.com/alice/my-repo",
+    });
+    setupQueryMockImmediate();
+
+    await startAgentSession("user-1", "conv-1", "cpo");
+
+    const options = mockQuery.mock.calls[0][0].options;
+    // Only anthropic row exists (skipped by getUserServiceTokens) → no Connected Services
+    expect(options.systemPrompt).not.toContain("## Connected Services");
+  });
+
+  test("system prompt omits Plausible from Connected Services when no Plausible token", async () => {
+    const cloudflareRow = {
+      ...DEFAULT_API_KEY_ROW,
+      id: "key-cloudflare",
+      provider: "cloudflare",
+    };
+    setupSupabaseMock(
+      {
+        workspace_path: "/tmp/test-workspace",
+        repo_status: "ready",
+        github_installation_id: 12345,
+        repo_url: "https://github.com/alice/my-repo",
+      },
+      [DEFAULT_API_KEY_ROW, cloudflareRow],
+    );
+    setupQueryMockImmediate();
+
+    await startAgentSession("user-1", "conv-1", "cpo");
+
+    const options = mockQuery.mock.calls[0][0].options;
+    expect(options.systemPrompt).toContain("## Connected Services");
+    expect(options.systemPrompt).toContain("- Cloudflare: connected");
+    expect(options.systemPrompt).not.toContain("- Plausible: connected");
   });
 });

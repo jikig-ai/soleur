@@ -59,7 +59,7 @@ export type WSMessage =
   | { type: "stream"; content: string; partial: boolean; leaderId: DomainLeaderId }
   | { type: "stream_start"; leaderId: DomainLeaderId; source?: "auto" | "mention" }
   | { type: "stream_end"; leaderId: DomainLeaderId }
-  | { type: "review_gate"; gateId: string; question: string; header?: string; options: string[]; descriptions?: Record<string, string | undefined> }
+  | { type: "review_gate"; gateId: string; question: string; header?: string; options: string[]; descriptions?: Record<string, string | undefined>; stepProgress?: { current: number; total: number } }
   | { type: "session_started"; conversationId: string }
   | { type: "session_ended"; reason: string }
   | { type: "usage_update"; conversationId: string; totalCostUsd: number; inputTokens: number; outputTokens: number }
@@ -106,6 +106,7 @@ export interface Conversation {
   output_tokens: number;
   last_active: string;
   created_at: string;
+  archived_at: string | null;
 }
 
 export type ConversationStatus = Conversation["status"];

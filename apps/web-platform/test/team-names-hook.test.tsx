@@ -7,13 +7,15 @@ const mockFetch = vi.fn();
 vi.stubGlobal("fetch", mockFetch);
 
 function TestConsumer() {
-  const { names, getDisplayName, loading } = useTeamNames();
+  const { names, getDisplayName, loading, error, refetch } = useTeamNames();
   return (
     <div>
       <span data-testid="loading">{String(loading)}</span>
+      <span data-testid="error">{error ?? "none"}</span>
       <span data-testid="cto-display">{getDisplayName("cto")}</span>
       <span data-testid="cmo-display">{getDisplayName("cmo")}</span>
       <span data-testid="cto-name">{names.cto ?? "none"}</span>
+      <button data-testid="refetch" onClick={refetch}>Refetch</button>
     </div>
   );
 }
@@ -101,7 +103,7 @@ describe("useTeamNames", () => {
     expect(screen.getByTestId("loading").textContent).toBe("false");
   });
 
-  it("handles fetch errors gracefully", async () => {
+  it("handles fetch errors gracefully and exposes error state", async () => {
     mockFetch.mockRejectedValueOnce(new Error("Network error"));
 
     await act(async () => {
@@ -111,5 +113,33 @@ describe("useTeamNames", () => {
     // Falls back to empty names — no custom names displayed
     expect(screen.getByTestId("cto-display").textContent).toBe("CTO");
     expect(screen.getByTestId("loading").textContent).toBe("false");
+    expect(screen.getByTestId("error").textContent).toBe("Network error");
+  });
+
+  it("refetch retries and clears error on success", async () => {
+    mockFetch.mockRejectedValueOnce(new Error("Network error"));
+
+    await act(async () => {
+      renderWithProvider();
+    });
+
+    expect(screen.getByTestId("error").textContent).toBe("Network error");
+
+    // Set up a successful response for the retry
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: () => Promise.resolve({
+        names: { cto: "Alex" },
+        nudgesDismissed: [],
+        namingPromptedAt: null,
+      }),
+    });
+
+    await act(async () => {
+      screen.getByTestId("refetch").click();
+    });
+
+    expect(screen.getByTestId("error").textContent).toBe("none");
+    expect(screen.getByTestId("cto-display").textContent).toBe("Alex (CTO)");
   });
 });

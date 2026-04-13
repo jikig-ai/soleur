@@ -114,6 +114,20 @@ describe("buildCspHeader", () => {
     expect(connectSrc).not.toMatch(/\bwss:\s/);
   });
 
+  test("connect-src includes push service endpoints (FCM, Mozilla, Apple)", () => {
+    const connectSrc = parseCspDirective(prodCsp, "connect-src");
+    expect(connectSrc).toContain("https://fcm.googleapis.com");
+    expect(connectSrc).toContain("https://updates.push.services.mozilla.com");
+    expect(connectSrc).toContain("https://*.push.apple.com");
+  });
+
+  test("connect-src includes push service endpoints in dev mode", () => {
+    const connectSrc = parseCspDirective(devCsp, "connect-src");
+    expect(connectSrc).toContain("https://fcm.googleapis.com");
+    expect(connectSrc).toContain("https://updates.push.services.mozilla.com");
+    expect(connectSrc).toContain("https://*.push.apple.com");
+  });
+
   test("connect-src includes Sentry ingest domains (global and EU region)", () => {
     const connectSrc = parseCspDirective(prodCsp, "connect-src");
     expect(connectSrc).toContain("https://*.ingest.sentry.io");
