@@ -98,13 +98,13 @@ function domExceptionTimeout() {
 
 function undiciConnectTimeout() {
   const err = new Error("connect ETIMEDOUT");
-  (err as { code: string }).code = "UND_ERR_CONNECT_TIMEOUT";
+  (err as unknown as { code: string }).code = "UND_ERR_CONNECT_TIMEOUT";
   return err;
 }
 
 function econnresetError() {
   const err = new Error("read ECONNRESET");
-  (err as { code: string }).code = "ECONNRESET";
+  (err as unknown as { code: string }).code = "ECONNRESET";
   return err;
 }
 
