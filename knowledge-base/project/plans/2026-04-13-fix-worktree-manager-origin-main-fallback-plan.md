@@ -4,6 +4,25 @@ type: fix
 date: 2026-04-13
 ---
 
+## Enhancement Summary
+
+**Deepened on:** 2026-04-13
+**Sections enhanced:** 3 (Proposed Solution, Test Scenarios, Context)
+**Research sources:** git-scm docs, codebase learnings, git update-ref edge case analysis
+
+### Key Improvements
+
+1. Added `git update-ref` safety analysis confirming atomicity and correctness
+2. Added edge case for failed fetch (both paths fail) -- no update-ref attempted
+3. Confirmed `cleanup_merged_worktrees()` needs identical fix for consistency
+4. Added verification step to test scenarios
+
+### New Considerations Discovered
+
+- `git update-ref` uses lockfiles internally -- safe for parallel sessions
+- The `elif` guard guarantees `origin/$branch` exists before `update-ref` runs
+- No `--no-deref` flag needed -- `refs/heads/main` is always a direct ref
+
 # fix: worktree-manager.sh origin/main fallback sets correct base commit
 
 ## Overview
@@ -69,6 +88,58 @@ elif git fetch origin "$branch" 2>/dev/null; then
 fi
 ```
 
+### Changes to `cleanup_merged_worktrees()`
+
+Apply the same fix to the fallback at lines 820-824:
+
+```bash
+# Current (broken):
+if git fetch origin main:main 2>/dev/null; then
+  echo -e "${GREEN}Updated main to latest${NC}"
+elif git fetch origin main 2>/dev/null; then
+  # Fallback: non-fast-forward (e.g., force-push) -- at least update origin/main
+  echo -e "${YELLOW}Warning: Could not fast-forward local main -- fetched origin/main only${NC}"
+fi
+
+# Fixed:
+if git fetch origin main:main 2>/dev/null; then
+  echo -e "${GREEN}Updated main to latest${NC}"
+elif git fetch origin main 2>/dev/null; then
+  # Fast-forward failed but fetch succeeded -- force-update local ref to match remote.
+  # Safe because direct commits to main are prohibited (hook-enforced).
+  git update-ref refs/heads/main origin/main
+  echo -e "${YELLOW}Warning: Could not fast-forward local main -- force-updated to origin/main${NC}"
+fi
+```
+
+### Research Insights
+
+**Safety of `git update-ref` in this context:**
+
+- `git update-ref` is atomic -- it uses a lockfile (`refs/heads/main.lock`)
+  internally, so parallel sessions cannot corrupt the ref
+- The `elif` guard guarantees `origin/$branch` exists before `update-ref` runs
+  (the fetch that populated it succeeded)
+- No `--no-deref` flag is needed because `refs/heads/main` is always a direct
+  ref (not a symbolic ref like HEAD)
+- `git update-ref` does NOT verify ancestry -- it unconditionally moves the ref.
+  This is intentional here: direct commits to main are prohibited, so local main
+  should always be an ancestor of (or equal to) origin/main. If it somehow isn't,
+  force-updating is the correct recovery
+
+**Edge case: both fetch paths fail:**
+
+If `git fetch origin "$branch:$branch"` AND `git fetch origin "$branch"` both
+fail (network down, remote unreachable), neither branch executes and
+`update_branch_ref` returns silently. The worktree will be created from whatever
+local main currently points to. This is acceptable -- network failure is
+unrecoverable and the existing behavior is preserved
+
+**References:**
+
+- [git-update-ref documentation](https://git-scm.com/docs/git-update-ref)
+- [git update-ref best practices](https://copyprogramming.com/howto/git-update-ref-appears-to-do-nothing)
+
 ### File
 
 `plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh`
@@ -95,6 +166,33 @@ fi
 - Given a bare repo where local `main` is already at `origin/main`, when
   `worktree-manager.sh create <name>` runs, then the fast-forward path succeeds and
   no force-update is needed
+- Given a bare repo where both fetch paths fail (network down), when
+  `update_branch_ref` completes, then no `update-ref` is attempted and the function
+  returns silently (existing behavior preserved)
+- Given `cleanup_merged_worktrees()` runs in a bare repo where `git fetch origin
+  main:main` fails, when the cleanup completes, then `git rev-parse main` should
+  equal `git rev-parse origin/main` (same fix applied to cleanup path)
+
+### Verification commands
+
+After applying the fix, verify in a bare repo where local main is stale:
+
+```bash
+# Record stale state
+git rev-parse main          # Should show old commit
+git rev-parse origin/main   # Should show newer commit
+
+# Run worktree creation
+bash ./plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh --yes create test-branch
+
+# Verify fix
+git rev-parse main          # Should now equal origin/main
+git -C .worktrees/test-branch log --oneline -1  # Should show latest commit
+
+# Cleanup
+git worktree remove .worktrees/test-branch
+git branch -D test-branch
+```
 
 ## Domain Review
 
