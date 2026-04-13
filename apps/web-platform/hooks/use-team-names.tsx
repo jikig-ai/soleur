@@ -84,6 +84,15 @@ export function TeamNamesProvider({ children }: { children: ReactNode }) {
       return { ...prev, [leaderId]: trimmed };
     });
 
+    // Deleting a name deletes the entire row, so clear the icon path too
+    if (trimmed === "") {
+      setIconPaths((prev) => {
+        const next = { ...prev };
+        delete next[leaderId];
+        return next;
+      });
+    }
+
     try {
       await fetch("/api/team-names", {
         method: "PUT",

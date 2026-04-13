@@ -6,6 +6,8 @@ import { validateOrigin, rejectCsrf } from "@/lib/auth/validate-origin";
 
 const VALID_LEADER_IDS = new Set<string>(ROUTABLE_DOMAIN_LEADERS.map((l) => l.id));
 
+const ICON_PATH_PATTERN = /^settings\/team-icons\/[a-z]{2,3}\.(png|webp|svg)$/;
+
 /** GET /api/team-names — returns all custom names for the authenticated user. */
 export async function GET() {
   const supabase = await createClient();
@@ -89,18 +91,36 @@ export async function PUT(request: Request) {
   // Icon-path-only update (set or clear)
   if (hasIconPath && !hasName) {
     const iconPath = body.iconPath as string | null;
-    const { error } = await supabase.from("team_names").upsert(
-      {
-        user_id: user.id,
-        leader_id: leaderId,
-        custom_icon_path: iconPath,
-        updated_at: new Date().toISOString(),
-      },
-      { onConflict: "user_id,leader_id" },
-    );
-    if (error) {
+    if (iconPath !== null && !ICON_PATH_PATTERN.test(iconPath)) {
+      return NextResponse.json({ error: "Invalid icon path" }, { status: 400 });
+    }
+    // Try UPDATE first (won't create a row, preserves existing custom_name)
+    const { data: updated, error: updateErr } = await supabase
+      .from("team_names")
+      .update({ custom_icon_path: iconPath, updated_at: new Date().toISOString() })
+      .eq("user_id", user.id)
+      .eq("leader_id", leaderId)
+      .select("leader_id");
+
+    if (updateErr) {
       return NextResponse.json({ error: "Failed to save icon path" }, { status: 500 });
     }
+
+    // No existing row — INSERT with the leader's default role name (custom_name is NOT NULL)
+    if (!updated || updated.length === 0) {
+      const defaultName = ROUTABLE_DOMAIN_LEADERS.find((l) => l.id === leaderId)?.name ?? leaderId.toUpperCase();
+      const { error: insertErr } = await supabase.from("team_names").insert({
+        user_id: user.id,
+        leader_id: leaderId,
+        custom_name: defaultName,
+        custom_icon_path: iconPath,
+        updated_at: new Date().toISOString(),
+      });
+      if (insertErr) {
+        return NextResponse.json({ error: "Failed to save icon path" }, { status: 500 });
+      }
+    }
+
     return NextResponse.json({ saved: true, iconPath });
   }
 
@@ -123,8 +143,14 @@ export async function PUT(request: Request) {
     return NextResponse.json({ error: validation.error }, { status: 400 });
   }
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const upsertData: Record<string, any> = {
+  if (hasIconPath) {
+    const ip = body.iconPath as string | null;
+    if (ip !== null && !ICON_PATH_PATTERN.test(ip)) {
+      return NextResponse.json({ error: "Invalid icon path" }, { status: 400 });
+    }
+  }
+
+  const upsertData: Record<string, string | null> = {
     user_id: user.id,
     leader_id: leaderId,
     custom_name: trimmed,

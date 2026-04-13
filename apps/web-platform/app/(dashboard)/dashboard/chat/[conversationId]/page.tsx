@@ -42,7 +42,7 @@ export default function ChatPage() {
     usageData,
   } = useWebSocket(conversationId);
 
-  const { names: customNames, getDisplayName, loading: teamNamesLoading } = useTeamNames();
+  const { names: customNames, getDisplayName, getIconPath, loading: teamNamesLoading } = useTeamNames();
 
   const [sessionStarted, setSessionStarted] = useState(false);
   const [initialMsgSent, setInitialMsgSent] = useState(false);
@@ -298,6 +298,7 @@ export default function ChatPage() {
                     showFullTitle={!!isFirst}
                     isStreaming={!!msg.leaderId && activeLeaderIds.includes(msg.leaderId)}
                     getDisplayName={getDisplayName}
+                    getIconPath={getIconPath}
                     attachments={msg.attachments}
                   />
                 )}
@@ -415,6 +416,7 @@ function MessageBubble({
   showFullTitle = false,
   isStreaming = false,
   getDisplayName,
+  getIconPath,
   attachments,
 }: {
   role: "user" | "assistant";
@@ -423,6 +425,7 @@ function MessageBubble({
   showFullTitle?: boolean;
   isStreaming?: boolean;
   getDisplayName?: (id: DomainLeaderId) => string;
+  getIconPath?: (id: DomainLeaderId) => string | null;
   attachments?: AttachmentRef[];
 }) {
   const isUser = role === "user";
@@ -430,13 +433,14 @@ function MessageBubble({
   const colorClass = leaderId ? (LEADER_COLORS[leaderId] ?? "border-l-neutral-500") : "";
 
   const displayName = leaderId && getDisplayName ? getDisplayName(leaderId) : leader?.name;
+  const customIconPath = leaderId && getIconPath ? getIconPath(leaderId) : null;
 
   return (
     <div className={`flex ${isUser ? "justify-end" : "justify-start"}`}>
       <div className={`flex max-w-[90%] gap-3 md:max-w-[80%] ${isUser ? "flex-row-reverse" : ""}`}>
         {/* Leader avatar */}
         {leader && (
-          <LeaderAvatar leaderId={leaderId!} size="md" className="mt-1" />
+          <LeaderAvatar leaderId={leaderId!} size="md" className="mt-1" customIconPath={customIconPath} />
         )}
 
         <div

@@ -9,7 +9,7 @@ import type { DomainLeaderId } from "@/server/domain-leaders";
 
 const MAX_ICON_SIZE = 100 * 1024; // 100KB
 const MAX_ICON_DIMENSION = 256;
-const ACCEPTED_ICON_TYPES = ["image/png", "image/svg+xml", "image/webp"];
+const ACCEPTED_ICON_TYPES = ["image/png", "image/webp"];
 
 export function TeamSettingsContent() {
   const { names, updateName, updateIcon, getIconPath, loading } = useTeamNames();
@@ -112,7 +112,7 @@ function LeaderRow({
 
       // Client-side validation
       if (!ACCEPTED_ICON_TYPES.includes(file.type)) {
-        setError("Only PNG, SVG, and WebP images are accepted");
+        setError("Only PNG and WebP images are accepted");
         return;
       }
       if (file.size > MAX_ICON_SIZE) {
@@ -134,10 +134,13 @@ function LeaderRow({
 
       try {
         const ext = file.name.split(".").pop() ?? "png";
-        const filename = `settings/team-icons/${leaderId}.${ext}`;
+        const iconFilename = `${leaderId}.${ext}`;
+        const targetDir = "settings/team-icons";
+        // Create a new File with the desired filename (upload API uses file.name)
+        const renamedFile = new File([file], iconFilename, { type: file.type });
         const formData = new FormData();
-        formData.append("file", file);
-        formData.append("path", filename);
+        formData.append("file", renamedFile);
+        formData.append("targetDir", targetDir);
 
         const res = await fetch("/api/kb/upload", {
           method: "POST",
@@ -148,7 +151,7 @@ function LeaderRow({
           throw new Error(`Upload failed: ${res.status}`);
         }
 
-        await onIconChange(leaderId, filename);
+        await onIconChange(leaderId, `${targetDir}/${iconFilename}`);
       } catch (err) {
         console.error("[team-settings] icon upload error:", err);
         setError("Upload failed. Please try again.");
@@ -181,7 +184,7 @@ function LeaderRow({
       <input
         ref={fileInputRef}
         type="file"
-        accept="image/png,image/svg+xml,image/webp"
+        accept="image/png,image/webp"
         className="hidden"
         onChange={handleFileSelect}
       />

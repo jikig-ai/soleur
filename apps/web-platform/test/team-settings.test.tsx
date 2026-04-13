@@ -134,7 +134,7 @@ describe("TeamSettingsContent", () => {
     const fileInputs = document.querySelectorAll('input[type="file"]');
     expect(fileInputs.length).toBe(8);
     for (const input of fileInputs) {
-      expect(input.getAttribute("accept")).toBe("image/png,image/svg+xml,image/webp");
+      expect(input.getAttribute("accept")).toBe("image/png,image/webp");
     }
   });
 

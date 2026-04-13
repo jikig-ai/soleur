@@ -1,4 +1,4 @@
-import { memo, useState } from "react";
+import { memo, useState, useEffect } from "react";
 import {
   Megaphone,
   Cog,
@@ -46,6 +46,12 @@ export const LeaderAvatar = memo(function LeaderAvatar({
   customIconPath,
 }: LeaderAvatarProps) {
   const [imgError, setImgError] = useState(false);
+
+  // Reset error state when the icon path changes (new upload or reset)
+  useEffect(() => {
+    setImgError(false);
+  }, [customIconPath]);
+
   const leader = leaderId
     ? DOMAIN_LEADERS.find((l) => l.id === leaderId)
     : null;
