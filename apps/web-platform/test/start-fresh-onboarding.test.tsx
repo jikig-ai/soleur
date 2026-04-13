@@ -55,7 +55,10 @@ vi.mock("@/lib/supabase/client", () => ({
 }));
 
 // Helper: build a KB tree structure matching the API response
-function buildMockTree(filePaths: string[]) {
+function buildMockTree(
+  filePaths: string[],
+  sizes?: Record<string, number>,
+) {
   // Build a nested TreeNode from flat paths
   const root: Record<string, unknown> = {
     name: "knowledge-base",
@@ -78,6 +81,7 @@ function buildMockTree(filePaths: string[]) {
           type: "file",
           path: p,
           modifiedAt: new Date().toISOString(),
+          size: sizes?.[p] ?? 1000,
         });
       } else {
         let dir = children.find(
@@ -272,6 +276,65 @@ describe("Start Fresh Onboarding - KB State Derivation", () => {
     // Foundation card titles
     expect(screen.getByText("Brand Identity")).toBeInTheDocument();
     expect(screen.getByText("Legal Foundations")).toBeInTheDocument();
+  });
+
+  it("stub vision.md does not count as foundation complete", async () => {
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: () =>
+        Promise.resolve({
+          tree: buildMockTree(
+            ["overview/vision.md"],
+            { "overview/vision.md": 200 },
+          ),
+        }),
+    });
+
+    const { default: DashboardPage } = await import(
+      "@/app/(dashboard)/dashboard/page"
+    );
+    render(<DashboardPage />);
+
+    await waitFor(() => {
+      // Vision exists but is stub — should show foundation cards
+      expect(screen.getByText(/no conversations yet/i)).toBeInTheDocument();
+    });
+
+    // No green checkmarks — vision is a stub (< 500 bytes)
+    expect(screen.queryByLabelText("Complete")).not.toBeInTheDocument();
+  });
+
+  it("shows all foundations complete only when all files >= 500 bytes", async () => {
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: () =>
+        Promise.resolve({
+          tree: buildMockTree(
+            [
+              "overview/vision.md",
+              "marketing/brand-guide.md",
+              "product/business-validation.md",
+              "legal/privacy-policy.md",
+            ],
+            { "overview/vision.md": 300 },
+          ),
+        }),
+    });
+
+    const { default: DashboardPage } = await import(
+      "@/app/(dashboard)/dashboard/page"
+    );
+    render(<DashboardPage />);
+
+    await waitFor(() => {
+      // Vision is a stub so not all foundations complete — shows foundations view
+      expect(screen.getByText(/complete these to brief your department leaders/i)).toBeInTheDocument();
+    });
+
+    // Should NOT show "Your organization is ready"
+    expect(screen.queryByText(/your organization is ready/i)).not.toBeInTheDocument();
   });
 
   it("falls through to Command Center on API error", async () => {

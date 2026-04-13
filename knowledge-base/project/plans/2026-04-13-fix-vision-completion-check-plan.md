@@ -452,15 +452,15 @@ it("stub vision.md does not count as foundation complete", async () => {
 
 ## Acceptance Criteria
 
-- [ ] KB tree API response includes `size` (number, bytes) for each file node
-- [ ] Foundation cards show green checkmark only when file exists AND size >= 500 bytes
-- [ ] Stub vision.md (< 500 bytes) shows as incomplete (clickable card with prompt)
-- [ ] Substantial vision.md (>= 500 bytes) shows as complete (green checkmark, link to KB)
-- [ ] First-run state (no vision.md at all) still shows the "What are you building?" input
-- [ ] Vision exists but is stub: shows foundation cards with Vision as incomplete
-- [ ] All four foundation cards use the same size-based completion check
-- [ ] Existing tests pass with updated mocks
-- [ ] New test: stub vision.md (size < 500) does not show green checkmark
+- [x] KB tree API response includes `size` (number, bytes) for each file node
+- [x] Foundation cards show green checkmark only when file exists AND size >= 500 bytes
+- [x] Stub vision.md (< 500 bytes) shows as incomplete (clickable card with prompt)
+- [x] Substantial vision.md (>= 500 bytes) shows as complete (green checkmark, link to KB)
+- [x] First-run state (no vision.md at all) still shows the "What are you building?" input
+- [x] Vision exists but is stub: shows foundation cards with Vision as incomplete
+- [x] All four foundation cards use the same size-based completion check
+- [x] Existing tests pass with updated mocks
+- [x] New test: stub vision.md (size < 500) does not show green checkmark
 
 ## Test Scenarios
 

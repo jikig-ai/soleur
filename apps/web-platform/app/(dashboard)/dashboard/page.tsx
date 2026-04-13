@@ -8,6 +8,7 @@ import { useOnboarding } from "@/hooks/use-onboarding";
 import { ConversationRow } from "@/components/inbox/conversation-row";
 import { ErrorCard } from "@/components/ui/error-card";
 import { STATUS_LABELS } from "@/lib/types";
+import { FOUNDATION_MIN_CONTENT_BYTES } from "@/lib/kb-constants";
 import type { ConversationStatus } from "@/lib/types";
 import type { DomainLeaderId } from "@/server/domain-leaders";
 import { DOMAIN_LEADERS, ROUTABLE_DOMAIN_LEADERS } from "@/server/domain-leaders";
@@ -40,13 +41,23 @@ interface TreeNode {
   name: string;
   type: "file" | "directory";
   path?: string;
+  size?: number;
   children?: TreeNode[];
 }
 
-function flattenTree(node: TreeNode, paths = new Set<string>()): Set<string> {
-  if (node.type === "file" && node.path) paths.add(node.path);
-  for (const child of node.children ?? []) flattenTree(child, paths);
-  return paths;
+interface FileInfo {
+  size?: number;
+}
+
+function flattenTree(
+  node: TreeNode,
+  files = new Map<string, FileInfo>(),
+): Map<string, FileInfo> {
+  if (node.type === "file" && node.path) {
+    files.set(node.path, { size: node.size });
+  }
+  for (const child of node.children ?? []) flattenTree(child, files);
+  return files;
 }
 
 // ---------------------------------------------------------------------------
@@ -108,7 +119,7 @@ export default function DashboardPage() {
   // ---------------------------------------------------------------------------
 
   const [kbLoading, setKbLoading] = useState(true);
-  const [kbPaths, setKbPaths] = useState<Set<string>>(new Set());
+  const [kbFiles, setKbFiles] = useState<Map<string, FileInfo>>(new Map());
   const [kbError, setKbError] = useState<"provisioning" | "error" | null>(null);
 
   useEffect(() => {
@@ -134,7 +145,7 @@ export default function DashboardPage() {
       .then((data) => {
         if (cancelled) return;
         if (data?.tree) {
-          setKbPaths(flattenTree(data.tree));
+          setKbFiles(flattenTree(data.tree));
         }
         setKbLoading(false);
       })
@@ -150,10 +161,12 @@ export default function DashboardPage() {
     };
   }, [router]);
 
-  const visionExists = kbPaths.has("overview/vision.md");
+  const visionExists = kbFiles.has("overview/vision.md");
   const foundationCards: FoundationCard[] = FOUNDATION_PATHS.map((f) => ({
     ...f,
-    done: kbPaths.has(f.kbPath),
+    done:
+      kbFiles.has(f.kbPath) &&
+      (kbFiles.get(f.kbPath)?.size ?? 0) >= FOUNDATION_MIN_CONTENT_BYTES,
   }));
   const allFoundationsComplete = foundationCards.every((c) => c.done);
 
