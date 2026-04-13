@@ -9,7 +9,6 @@ import { BillingSection } from "@/components/settings/billing-section";
 
 const BASE_PROPS = {
   subscriptionStatus: null as string | null,
-  stripeCustomerId: null as string | null,
   currentPeriodEnd: null as string | null,
   cancelAtPeriodEnd: false,
   conversationCount: 0,
@@ -34,7 +33,7 @@ describe("BillingSection", () => {
         <BillingSection
           {...BASE_PROPS}
           subscriptionStatus="active"
-          stripeCustomerId="cus_123"
+
           currentPeriodEnd="2026-05-13T00:00:00.000Z"
         />,
       );
@@ -58,7 +57,7 @@ describe("BillingSection", () => {
         <BillingSection
           {...BASE_PROPS}
           subscriptionStatus="active"
-          stripeCustomerId="cus_123"
+
           currentPeriodEnd="2026-05-13T00:00:00.000Z"
           cancelAtPeriodEnd={true}
         />,
