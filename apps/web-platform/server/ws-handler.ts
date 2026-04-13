@@ -136,6 +136,31 @@ function resetIdleTimer(userId: string, session: ClientSession): void {
 }
 
 /**
+ * Check if user's subscription is suspended. Returns true if suspended
+ * (sends error and closes connection). Returns false if ok to proceed.
+ */
+async function checkSubscriptionSuspended(userId: string, session: ClientSession): Promise<boolean> {
+  const { data } = await supabase
+    .from("users")
+    .select("subscription_status")
+    .eq("id", userId)
+    .single();
+
+  if (data?.subscription_status === "unpaid") {
+    sendToClient(userId, {
+      type: "error",
+      message: "Your subscription is unpaid. Resolve payment to continue.",
+    });
+    session.ws.close(
+      WS_CLOSE_CODES.SUBSCRIPTION_SUSPENDED,
+      "Subscription suspended",
+    );
+    return true;
+  }
+  return false;
+}
+
+/**
  * Create a conversation row in the database and return its ID.
  */
 async function createConversation(
@@ -239,6 +264,8 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
     // ------------------------------------------------------------------
     case "resume_session": {
       try {
+        if (await checkSubscriptionSuspended(userId, session)) return;
+
         abortActiveSession(userId, session);
         // Clear any pending deferred state — resuming an existing conversation
         session.pending = undefined;
@@ -310,6 +337,8 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
     // chat: forward user message into the running agent session
     // ------------------------------------------------------------------
     case "chat": {
+      if (await checkSubscriptionSuspended(userId, session)) return;
+
       if (!session.conversationId && !session.pending) {
         sendToClient(userId, {
           type: "error",
