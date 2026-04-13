@@ -138,7 +138,7 @@
         </div>
         {%- for col in site.footerColumns %}
         <div class="footer-col">
-          <h4 class="footer-heading">{{ col.heading }}</h4>
+          <h3 class="footer-heading">{{ col.heading }}</h3>
           <ul class="footer-links">
             {%- for link in col.links %}
             <li><a href="{{ link.url }}"{% if link.external %} target="_blank" rel="noopener"{% endif %}>{{ link.label }}</a></li>
