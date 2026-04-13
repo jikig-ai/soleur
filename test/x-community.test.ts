@@ -18,6 +18,12 @@ const HANDLE_RESPONSE_HELPER = join(
   "test-handle-response.sh"
 );
 
+const CHECK_METRICS_ANOMALY_HELPER = join(
+  import.meta.dirname,
+  "helpers",
+  "test-check-metrics-anomaly.sh"
+);
+
 // x-community.sh calls require_jq in main() before dispatching to any command,
 // so ALL tests that invoke the script need this guard, not just direct jq calls.
 const HAS_JQ =
@@ -610,5 +616,102 @@ describe("x-community.sh -- rename verification", () => {
 
     // grep -c returns the count; 0 matches means exit code 1
     expect(result.exitCode).toBe(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// _has_metrics_anomaly -- anomaly detection for public_metrics
+// Shell boolean: 0 = true (anomaly exists), 1 = false (normal)
+// ---------------------------------------------------------------------------
+
+describeIfJq("x-community.sh _has_metrics_anomaly", () => {
+  test("emits warning when followers=0 but tweets>0 and following>0", () => {
+    const metrics = JSON.stringify({
+      followers_count: 0,
+      following_count: 18,
+      tweet_count: 67,
+      listed_count: 0,
+    });
+
+    const result = Bun.spawnSync(
+      ["bash", CHECK_METRICS_ANOMALY_HELPER, metrics],
+      { env: NO_CREDS_ENV }
+    );
+
+    expect(result.exitCode).toBe(0);
+    const stderr = decode(result.stderr);
+    expect(stderr).toContain("Warning:");
+    expect(stderr).toContain("0 followers");
+    expect(decode(result.stdout)).toBe("");
+  });
+
+  test("emits degradation warning when all social metrics are zero except tweet_count", () => {
+    const metrics = JSON.stringify({
+      followers_count: 0,
+      following_count: 0,
+      tweet_count: 67,
+      listed_count: 0,
+    });
+
+    const result = Bun.spawnSync(
+      ["bash", CHECK_METRICS_ANOMALY_HELPER, metrics],
+      { env: NO_CREDS_ENV }
+    );
+
+    expect(result.exitCode).toBe(0);
+    const stderr = decode(result.stderr);
+    expect(stderr).toContain("Warning:");
+    expect(stderr).toContain("API degradation");
+  });
+
+  test("no warning when followers > 0", () => {
+    const metrics = JSON.stringify({
+      followers_count: 5,
+      following_count: 18,
+      tweet_count: 67,
+      listed_count: 1,
+    });
+
+    const result = Bun.spawnSync(
+      ["bash", CHECK_METRICS_ANOMALY_HELPER, metrics],
+      { env: NO_CREDS_ENV }
+    );
+
+    expect(result.exitCode).toBe(1);
+    expect(decode(result.stderr)).toBe("");
+  });
+
+  test("no warning when all metrics are zero (genuinely new account)", () => {
+    const metrics = JSON.stringify({
+      followers_count: 0,
+      following_count: 0,
+      tweet_count: 0,
+      listed_count: 0,
+    });
+
+    const result = Bun.spawnSync(
+      ["bash", CHECK_METRICS_ANOMALY_HELPER, metrics],
+      { env: NO_CREDS_ENV }
+    );
+
+    expect(result.exitCode).toBe(1);
+    expect(decode(result.stderr)).toBe("");
+  });
+
+  test("no warning when only listed_count > 0 (listed_count excluded from detection)", () => {
+    const metrics = JSON.stringify({
+      followers_count: 0,
+      following_count: 0,
+      tweet_count: 0,
+      listed_count: 3,
+    });
+
+    const result = Bun.spawnSync(
+      ["bash", CHECK_METRICS_ANOMALY_HELPER, metrics],
+      { env: NO_CREDS_ENV }
+    );
+
+    expect(result.exitCode).toBe(1);
+    expect(decode(result.stderr)).toBe("");
   });
 });
