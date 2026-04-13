@@ -67,22 +67,22 @@ Markdown files (`.md`) are the core knowledge base content and are created/manag
 
 ## Acceptance Criteria
 
-- [ ] `DELETE /api/kb/file/[...path]` route exists and validates auth, CSRF, path traversal, symlinks, and workspace status
-- [ ] Route rejects paths outside `knowledge-base/` via `isPathInWorkspace()`
-- [ ] Route rejects null bytes in path segments
-- [ ] Route rejects symlink targets via `lstat().isSymbolicLink()` check
-- [ ] Route deletes the file via GitHub Contents API (GET sha, then DELETE)
-- [ ] Route syncs workspace after deletion using credential helper pattern
-- [ ] Route returns 200 on success (with `commitSha` in body), 401/403/404/400/409/502 for error cases
-- [ ] Route handles 409 Conflict from GitHub API (SHA mismatch due to concurrent modification) and returns 409 to client
-- [ ] Route handles non-existent local files gracefully (skip symlink check, proceed with GitHub API deletion)
-- [ ] File items in `file-tree.tsx` show a delete button (trash icon) on hover
-- [ ] Delete button is only shown for attachment files (non-`.md`)
-- [ ] Clicking delete shows a confirmation dialog before proceeding
-- [ ] Successful deletion calls `refreshTree()` to update the tree
-- [ ] Delete state (deleting/error) is shown inline like upload state
-- [ ] `githubApiDelete` function exists in `server/github-api.ts` for first-party DELETE calls
-- [ ] Unit tests cover: happy path, path traversal rejection, symlink rejection, 404 handling, workspace sync failure
+- [x] `DELETE /api/kb/file/[...path]` route exists and validates auth, CSRF, path traversal, symlinks, and workspace status
+- [x] Route rejects paths outside `knowledge-base/` via `isPathInWorkspace()`
+- [x] Route rejects null bytes in path segments
+- [x] Route rejects symlink targets via `lstat().isSymbolicLink()` check
+- [x] Route deletes the file via GitHub Contents API (GET sha, then DELETE)
+- [x] Route syncs workspace after deletion using credential helper pattern
+- [x] Route returns 200 on success (with `commitSha` in body), 401/403/404/400/409/502 for error cases
+- [x] Route handles 409 Conflict from GitHub API (SHA mismatch due to concurrent modification) and returns 409 to client
+- [x] Route handles non-existent local files gracefully (skip symlink check, proceed with GitHub API deletion)
+- [x] File items in `file-tree.tsx` show a delete button (trash icon) on hover
+- [x] Delete button is only shown for attachment files (non-`.md`)
+- [x] Clicking delete shows a confirmation dialog before proceeding
+- [x] Successful deletion calls `refreshTree()` to update the tree
+- [x] Delete state (deleting/error) is shown inline like upload state
+- [x] `githubApiDelete` function exists in `server/github-api.ts` for first-party DELETE calls
+- [x] Unit tests cover: happy path, path traversal rejection, symlink rejection, 404 handling, workspace sync failure
 
 ## Test Scenarios
 
