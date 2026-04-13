@@ -107,12 +107,14 @@ export function abortActiveSession(userId: string, session: ClientSession): void
 
 /**
  * Serialize and send a WSMessage to the client identified by `userId`.
- * No-ops silently if the user has no active connection or the socket is not open.
+ * Returns true if the message was delivered via WebSocket, false if the
+ * user has no active connection or the socket is not open.
  */
-export function sendToClient(userId: string, message: WSMessage): void {
+export function sendToClient(userId: string, message: WSMessage): boolean {
   const session = sessions.get(userId);
-  if (!session || session.ws.readyState !== WebSocket.OPEN) return;
+  if (!session || session.ws.readyState !== WebSocket.OPEN) return false;
   session.ws.send(JSON.stringify(message));
+  return true;
 }
 
 /** Auth timeout: close unauthenticated connections after 5 seconds. */
