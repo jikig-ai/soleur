@@ -389,12 +389,3 @@ function UploadIcon() {
     </svg>
   );
 }
-
-function UploadSpinner() {
-  return (
-    <svg width="12" height="12" viewBox="0 0 12 12" className="shrink-0 animate-spin text-amber-400">
-      <circle cx="6" cy="6" r="4.5" fill="none" stroke="currentColor" strokeWidth="1.5" opacity="0.3" />
-      <path d="M6 1.5a4.5 4.5 0 0 1 4.5 4.5" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
-    </svg>
-  );
-}
