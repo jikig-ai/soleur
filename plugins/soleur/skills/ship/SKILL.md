@@ -167,6 +167,8 @@ Search for unarchived artifacts matching the feature name (excluding `archive/` 
 - **Yes** -> Use `skill: soleur:compound`
 - **Skip** -> Continue without documenting
 
+After compound completes (or is skipped), continue to Phase 3 immediately. Do NOT stop or wait for user input — the ship pipeline is not complete until Phase 7 finishes.
+
 ## Phase 3: Verify Documentation
 
 Check if new commands, skills, or agents were added in this branch.
@@ -261,7 +263,7 @@ Invoke the preflight skill via the **Skill tool**:
 
 **If preflight reports any FAIL:** Abort the ship pipeline. Display the preflight results table and stop. Do not proceed to Phase 5.5 or Phase 6.
 
-**If preflight reports all PASS or SKIP:** Continue to Phase 5.5.
+**If preflight reports all PASS or SKIP:** Continue to Phase 5.5 immediately. Do NOT stop or wait for user input after preflight passes — the ship pipeline is not complete until Phase 7 finishes. Nested skill invocations (preflight, compound) return control here; losing track of the pipeline state after a nested skill is a known failure mode.
 
 ## Phase 5.5: Pre-Ship Review Gates
 

@@ -145,10 +145,10 @@ describe("Command Center", () => {
             name: "knowledge-base",
             type: "directory",
             children: [
-              { name: "overview", type: "directory", children: [{ name: "vision.md", type: "file", path: "overview/vision.md" }] },
-              { name: "marketing", type: "directory", children: [{ name: "brand-guide.md", type: "file", path: "marketing/brand-guide.md" }] },
-              { name: "product", type: "directory", children: [{ name: "business-validation.md", type: "file", path: "product/business-validation.md" }] },
-              { name: "legal", type: "directory", children: [{ name: "privacy-policy.md", type: "file", path: "legal/privacy-policy.md" }] },
+              { name: "overview", type: "directory", children: [{ name: "vision.md", type: "file", path: "overview/vision.md", size: 1000 }] },
+              { name: "marketing", type: "directory", children: [{ name: "brand-guide.md", type: "file", path: "marketing/brand-guide.md", size: 1000 }] },
+              { name: "product", type: "directory", children: [{ name: "business-validation.md", type: "file", path: "product/business-validation.md", size: 1000 }] },
+              { name: "legal", type: "directory", children: [{ name: "privacy-policy.md", type: "file", path: "legal/privacy-policy.md", size: 1000 }] },
             ],
           },
         }),
@@ -299,6 +299,43 @@ describe("Command Center", () => {
     await waitFor(() => {
       expect(conversationBuilder.not).toHaveBeenCalledWith("archived_at", "is", null);
     });
+  });
+
+  it("shows foundation cards with Vision incomplete when vision.md is a stub", async () => {
+    conversationBuilder = createQueryBuilder([]);
+    messageBuilder = createQueryBuilder([]);
+
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: () =>
+        Promise.resolve({
+          tree: {
+            name: "knowledge-base",
+            type: "directory",
+            children: [
+              { name: "overview", type: "directory", children: [{ name: "vision.md", type: "file", path: "overview/vision.md", size: 200 }] },
+              { name: "marketing", type: "directory", children: [{ name: "brand-guide.md", type: "file", path: "marketing/brand-guide.md", size: 1000 }] },
+              { name: "product", type: "directory", children: [{ name: "business-validation.md", type: "file", path: "product/business-validation.md", size: 1000 }] },
+              { name: "legal", type: "directory", children: [{ name: "privacy-policy.md", type: "file", path: "legal/privacy-policy.md", size: 1000 }] },
+            ],
+          },
+        }),
+    });
+
+    const { default: DashboardPage } = await import(
+      "@/app/(dashboard)/dashboard/page"
+    );
+    render(<DashboardPage />);
+
+    await waitFor(() => {
+      expect(screen.getByText(/no conversations yet/i)).toBeInTheDocument();
+    });
+
+    // Vision is a stub — should NOT have green checkmark
+    // Only 3 of 4 foundations complete (brand, validation, legal)
+    const completeLabels = screen.getAllByLabelText("Complete");
+    expect(completeLabels).toHaveLength(3);
   });
 
   it("navigates to new conversation when button is clicked", async () => {
