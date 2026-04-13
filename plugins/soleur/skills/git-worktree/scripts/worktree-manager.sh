@@ -190,8 +190,11 @@ update_branch_ref() {
     elif git fetch origin "$branch" 2>/dev/null; then
       # Fast-forward failed but fetch succeeded -- force-update local ref to match remote.
       # Safe because direct commits to main are prohibited (hook-enforced).
-      git update-ref "refs/heads/$branch" "origin/$branch"
-      echo -e "${YELLOW}Warning: Could not fast-forward local $branch -- force-updated to origin/$branch${NC}"
+      if git update-ref "refs/heads/$branch" "origin/$branch"; then
+        echo -e "${YELLOW}Warning: Could not fast-forward local $branch -- force-updated to origin/$branch${NC}"
+      else
+        echo -e "${RED}Error: could not force-update refs/heads/$branch${NC}"
+      fi
     fi
   else
     git checkout "$branch"
@@ -825,8 +828,11 @@ cleanup_merged_worktrees() {
       elif git fetch origin main 2>/dev/null; then
         # Fast-forward failed but fetch succeeded -- force-update local ref to match remote.
         # Safe because direct commits to main are prohibited (hook-enforced).
-        git update-ref refs/heads/main origin/main
-        echo -e "${YELLOW}Warning: Could not fast-forward local main -- force-updated to origin/main${NC}"
+        if git update-ref "refs/heads/main" "origin/main"; then
+          echo -e "${YELLOW}Warning: Could not fast-forward local main -- force-updated to origin/main${NC}"
+        else
+          echo -e "${RED}Error: could not force-update refs/heads/main${NC}"
+        fi
       fi
       # Auto-sync stale on-disk files so the next session reads current versions
       sync_bare_files
