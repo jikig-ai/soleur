@@ -51,6 +51,17 @@ function supabase() { return _supabase ??= createServiceClient(); }
 const PLUGIN_PATH =
   process.env.SOLEUR_PLUGIN_PATH || "/app/shared/plugins/soleur";
 
+// Human-readable labels for tool_use WS events
+const TOOL_LABELS: Record<string, string> = {
+  Read: "Reading file...",
+  Bash: "Running command...",
+  Edit: "Editing file...",
+  Write: "Writing file...",
+  WebSearch: "Searching web...",
+  Grep: "Searching code...",
+  Glob: "Finding files...",
+};
+
 // ---------------------------------------------------------------------------
 // Workspace permissions migration (#725)
 // Defense-in-depth layer 2: settingSources: [] (layer 1) prevents the SDK
@@ -1054,17 +1065,6 @@ When you need user input for important decisions, use the AskUserQuestion tool.`
     let fullText = "";
     let hasStreamedPartials = false;
     const streamLeaderId = effectiveLeaderId;
-
-    // Human-readable labels for tool_use WS events
-    const TOOL_LABELS: Record<string, string> = {
-      Read: "Reading file...",
-      Bash: "Running command...",
-      Edit: "Editing file...",
-      Write: "Writing file...",
-      WebSearch: "Searching web...",
-      Grep: "Searching code...",
-      Glob: "Finding files...",
-    };
 
     // Notify client that this leader is about to stream
     sendToClient(userId, { type: "stream_start", leaderId: streamLeaderId, source: routeSource });

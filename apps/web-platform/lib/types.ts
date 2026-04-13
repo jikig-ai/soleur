@@ -48,7 +48,7 @@ export interface ConversationContext {
   content?: string; // full artifact content for system prompt injection
 }
 
-// 4-state message lifecycle: each agent bubble progresses through these states
+// Message lifecycle states: each agent bubble progresses through these states
 export type MessageState = "thinking" | "tool_use" | "streaming" | "done" | "error";
 
 // WebSocket message protocol

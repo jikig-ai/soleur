@@ -70,6 +70,7 @@ interface UseWebSocketReturn {
 
 const MAX_BACKOFF = 30_000;
 const INITIAL_BACKOFF = 1_000;
+const STUCK_TIMEOUT_MS = 30_000;
 
 /** Close codes where reconnecting will never succeed. */
 export const NON_TRANSIENT_CLOSE_CODES: Record<number, { target?: string; reason: string }> = {
@@ -101,8 +102,6 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
 
   /** Map of per-leader timeout timers for stuck THINKING/TOOL_USE states (30s) */
   const timeoutTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
-
-  const STUCK_TIMEOUT_MS = 30_000;
 
   /** Clear a single leader's timeout timer */
   const clearLeaderTimeout = useCallback((leaderId: string) => {
@@ -319,6 +318,7 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
 
         case "review_gate": {
           activeStreamsRef.current.clear();
+          clearAllTimeouts();
           setMessages((prev) => [
             ...prev,
             {
@@ -339,6 +339,7 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
 
         case "error": {
           activeStreamsRef.current.clear();
+          clearAllTimeouts();
 
           // Key invalidation: set structured error instead of redirect
           if (msg.errorCode === "key_invalid") {
@@ -382,6 +383,7 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
 
         case "session_ended": {
           activeStreamsRef.current.clear();
+          clearAllTimeouts();
           // Don't display "turn_complete" as a visible message — it's a lifecycle signal
           if (msg.reason !== "turn_complete") {
             setMessages((prev) => [
