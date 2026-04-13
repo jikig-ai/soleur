@@ -78,3 +78,54 @@ self.addEventListener("fetch", (event) => {
   // Network-only for everything else (HTML, manifest, etc.)
   // HTML must come from network to get fresh CSP nonce
 });
+
+// ---------------------------------------------------------------------------
+// Push notifications (review gate alerts for offline users)
+// ---------------------------------------------------------------------------
+
+self.addEventListener("push", (event) => {
+  if (!event.data) return;
+
+  let payload;
+  try {
+    payload = event.data.json();
+  } catch {
+    return;
+  }
+
+  const title = payload.title || "Soleur";
+  const options = {
+    body: payload.body || "",
+    icon: payload.icon || "/icons/icon-192x192.png",
+    badge: "/icons/icon-192x192.png",
+    data: payload.data || {},
+    tag: "review-gate", // collapse duplicate notifications
+  };
+
+  event.waitUntil(self.registration.showNotification(title, options));
+});
+
+self.addEventListener("notificationclick", (event) => {
+  event.notification.close();
+
+  // Validate URL origin to prevent open redirect via crafted push payload
+  const rawUrl = event.notification.data?.url || "/dashboard";
+  const parsed = new URL(rawUrl, self.location.origin);
+  const url = parsed.origin === self.location.origin ? parsed.href : "/dashboard";
+
+  event.waitUntil(
+    self.clients
+      .matchAll({ type: "window", includeUncontrolled: true })
+      .then((clients) => {
+        // Focus an existing tab if one is open on the app
+        for (const client of clients) {
+          if (new URL(client.url).origin === self.location.origin) {
+            client.navigate(url);
+            return client.focus();
+          }
+        }
+        // Otherwise open a new tab
+        return self.clients.openWindow(url);
+      })
+  );
+});

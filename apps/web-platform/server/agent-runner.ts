@@ -12,6 +12,7 @@ import { KeyInvalidError, type AttachmentRef } from "@/lib/types";
 import { ALLOWED_ATTACHMENT_TYPES } from "@/lib/attachment-constants";
 import { decryptKey, decryptKeyLegacy, encryptKey } from "./byok";
 import { sendToClient } from "./ws-handler";
+import { notifyOfflineUser, type NotificationPayload } from "./notifications";
 import * as Sentry from "@sentry/nextjs";
 import { sanitizeErrorForClient } from "./error-sanitizer";
 import {
@@ -890,7 +891,7 @@ When you need user input for important decisions, use the AskUserQuestion tool.`
               ? { current: Number(stepMatch[1]), total: Number(stepMatch[2]) }
               : undefined;
 
-            sendToClient(userId, {
+            const gateDelivered = sendToClient(userId, {
               type: "review_gate",
               gateId,
               question: gate.question,
@@ -901,6 +902,16 @@ When you need user input for important decisions, use the AskUserQuestion tool.`
                 : undefined,
               stepProgress,
             });
+
+            if (!gateDelivered) {
+              // User offline — fire-and-forget push/email notification
+              notifyOfflineUser(userId, {
+                type: "review_gate",
+                conversationId,
+                agentName: leaderId ?? "Agent",
+                question: gate.question,
+              }).catch((err) => log.error({ userId, err }, "Offline notification failed"));
+            }
 
             await updateConversationStatus(conversationId, "waiting_for_user");
 
@@ -965,12 +976,21 @@ When you need user input for important decisions, use the AskUserQuestion tool.`
               const gateId = randomUUID();
               const question = buildGateMessage(toolName, toolInput);
 
-              sendToClient(userId, {
+              const toolGateDelivered = sendToClient(userId, {
                 type: "review_gate",
                 gateId,
                 question,
                 options: ["Approve", "Reject"],
               });
+
+              if (!toolGateDelivered) {
+                notifyOfflineUser(userId, {
+                  type: "review_gate",
+                  conversationId,
+                  agentName: leaderId ?? "Agent",
+                  question,
+                }).catch((err) => log.error({ userId, err }, "Offline notification failed (tool gate)"));
+              }
 
               await updateConversationStatus(conversationId, "waiting_for_user");
 

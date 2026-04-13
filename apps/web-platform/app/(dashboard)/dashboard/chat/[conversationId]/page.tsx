@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useCallback } from "react";
 import { useParams, useSearchParams, useRouter, usePathname } from "next/navigation";
 import { MarkdownRenderer } from "@/components/ui/markdown-renderer";
 import { useWebSocket } from "@/lib/ws-client";
@@ -13,6 +13,7 @@ import { ChatInput } from "@/components/chat/chat-input";
 import { AtMentionDropdown } from "@/components/chat/at-mention-dropdown";
 import { useTeamNames } from "@/hooks/use-team-names";
 import { AttachmentDisplay } from "@/components/chat/attachment-display";
+import { NotificationPrompt } from "@/components/chat/notification-prompt";
 
 export default function ChatPage() {
   const params = useParams<{ conversationId: string }>();
@@ -48,8 +49,17 @@ export default function ChatPage() {
   const [atQuery, setAtQuery] = useState("");
   const [atVisible, setAtVisible] = useState(false);
   const [atPosition, setAtPosition] = useState(0);
+  const [showNotificationPrompt, setShowNotificationPrompt] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const insertRef = useRef<((text: string, replaceFrom: number) => void) | null>(null);
+
+  const handleReviewGateResponse = useCallback(
+    (gateId: string, selection: string) => {
+      sendReviewGateResponse(gateId, selection);
+      setShowNotificationPrompt(true);
+    },
+    [sendReviewGateResponse],
+  );
 
   // Fetch KB content when ?context= param is present
   const [kbContext, setKbContext] = useState<ConversationContext | undefined>();
@@ -277,7 +287,7 @@ export default function ChatPage() {
                       resolved={msg.resolved}
                       selectedOption={msg.selectedOption}
                       gateError={msg.gateError}
-                      onSelect={sendReviewGateResponse}
+                      onSelect={handleReviewGateResponse}
                   />
                 ) : (
                   <MessageBubble
@@ -307,6 +317,7 @@ export default function ChatPage() {
             </div>
           )}
 
+          <NotificationPrompt visible={showNotificationPrompt} />
           <div ref={messagesEndRef} />
         </div>
       </div>

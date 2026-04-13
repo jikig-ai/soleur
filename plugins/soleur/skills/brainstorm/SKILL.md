@@ -333,6 +333,13 @@ Ensure the brainstorms directory exists before writing.
 
 Display: "All artifacts are on disk. Run `/clear` then `/soleur:plan` for maximum context headroom."
 
+**Resume prompt (MANDATORY):** After the display message above, always output a copy-pasteable resume prompt block. This is required by AGENTS.md whenever `/clear` is mentioned. Format:
+
+```text
+Resume prompt (copy-paste after /clear):
+/soleur:plan #<issue-number> — <feature title>. Brainstorm: <brainstorm-path>. Spec: <spec-path>. Branch: feat-<name>. Worktree: .worktrees/feat-<name>/. PR: #<pr-number>. Brainstorm complete, plan next.
+```
+
 Use **AskUserQuestion tool** to present next steps:
 
 **Question:** "Brainstorm captured. Now in worktree `feat-<name>`. What would you like to do next?"
