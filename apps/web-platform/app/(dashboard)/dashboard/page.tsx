@@ -98,7 +98,7 @@ const STATUS_OPTIONS: { value: ConversationStatus | ""; label: string }[] = [
 const DOMAIN_OPTIONS: { value: string; label: string }[] = [
   { value: "", label: "All domains" },
   { value: "general", label: "General" },
-  ...ROUTABLE_DOMAIN_LEADERS.map((l) => ({ value: l.id, label: l.name })),
+  ...ROUTABLE_DOMAIN_LEADERS.map((l) => ({ value: l.id, label: l.domain })),
 ];
 
 export default function DashboardPage() {

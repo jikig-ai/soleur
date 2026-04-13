@@ -2,6 +2,7 @@ export const DOMAIN_LEADERS = [
   {
     id: "cmo",
     name: "CMO",
+    domain: "Marketing",
     title: "Chief Marketing Officer",
     description:
       "Marketing strategy, content, SEO, brand, social media, and growth.",
@@ -10,6 +11,7 @@ export const DOMAIN_LEADERS = [
   {
     id: "cto",
     name: "CTO",
+    domain: "Engineering",
     title: "Chief Technology Officer",
     description:
       "Technical architecture, code review, engineering practices, and infrastructure.",
@@ -18,6 +20,7 @@ export const DOMAIN_LEADERS = [
   {
     id: "cfo",
     name: "CFO",
+    domain: "Finance",
     title: "Chief Financial Officer",
     description:
       "Budget planning, revenue analysis, financial reporting, and forecasting.",
@@ -26,6 +29,7 @@ export const DOMAIN_LEADERS = [
   {
     id: "cpo",
     name: "CPO",
+    domain: "Product",
     title: "Chief Product Officer",
     description:
       "Product strategy, specs, user research, competitive analysis, and UX.",
@@ -34,6 +38,7 @@ export const DOMAIN_LEADERS = [
   {
     id: "cro",
     name: "CRO",
+    domain: "Sales",
     title: "Chief Revenue Officer",
     description:
       "Sales strategy, pipeline analysis, outbound, deal architecture, and pricing.",
@@ -42,6 +47,7 @@ export const DOMAIN_LEADERS = [
   {
     id: "coo",
     name: "COO",
+    domain: "Operations",
     title: "Chief Operations Officer",
     description:
       "Operations, tooling, vendor management, expense tracking, and provisioning.",
@@ -50,6 +56,7 @@ export const DOMAIN_LEADERS = [
   {
     id: "clo",
     name: "CLO",
+    domain: "Legal",
     title: "Chief Legal Officer",
     description:
       "Legal documents, compliance audits, privacy policies, and terms of service.",
@@ -58,6 +65,7 @@ export const DOMAIN_LEADERS = [
   {
     id: "cco",
     name: "CCO",
+    domain: "Support",
     title: "Chief Communications Officer",
     description:
       "Community management, support strategy, customer engagement, and communications.",
@@ -66,6 +74,7 @@ export const DOMAIN_LEADERS = [
   {
     id: "system",
     name: "System",
+    domain: "System",
     title: "System Process",
     description:
       "Internal system processes such as automated sync and health checks.",
