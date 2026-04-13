@@ -338,13 +338,13 @@ when user is offline. Clicking notification opens correct conversation.
 **Decision:** reviewed
 **Agents invoked:** cpo, ux-design-lead
 **Skipped specialists:** none
-**Pencil available:** pending (ux-design-lead in progress)
+**Pencil available:** yes
 
 #### Findings
 
 **CPO (post-plan review):** Show notification prompt AFTER the review gate resolves, not alongside it. Dual-ask (gate question + permission request) splits attention on a time-sensitive decision. "You almost missed this" framing after resolution is a natural contextual hook. Inline dismissible banner (not modal), neutral/blue border. Max 2 shows per device, then stop. On iOS Safari without PWA: adjust copy to explain home-screen install requirement. Copy: "Agents need you even when you're away." / "Enable notifications so you never miss a decision that blocks progress." / CTA "Enable notifications" / dismiss "Not now" (text link).
 
-**UX design lead:** wireframes pending.
+**UX design lead:** 4 wireframes delivered to `knowledge-base/product/design/notifications/screenshots/`. Design file: `notification-permission-prompt.pen`. Key decisions: inline blue banner below amber review gate card (color differentiation), 3 states (default, granted with auto-dismiss, denied with "We'll email you instead" fallback message), mobile-responsive with stacked buttons. Dismissible via X button and "Not now" text link.
 
 ## References and Research
 
