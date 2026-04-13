@@ -4,6 +4,19 @@
 **Branch:** feat-command-center-input-ui
 **PR:** #2133
 
+## Enhancement Summary
+
+**Deepened on:** 2026-04-13
+**Sections enhanced:** 4 (Solution, Phase 4, Phase 5, Edge Cases)
+**Research sources:** ws-handler.ts deferred creation flow, ws-client.ts session_started handler, 3 institutional learnings (IDOR attachments, XHR upload progress, WS session race)
+
+### Key Improvements
+
+1. Confirmed `pendingId` from `session_started` IS the final `conversationId` — no UUID mismatch risk
+2. Added concrete ws-client.ts implementation detail for capturing conversationId
+3. Added edge case handling from institutional learnings (storagePath validation, abort-before-replace)
+4. Clarified two-step send timing: text message materializes the row, then presign works with same ID
+
 ## Problem
 
 The Command Center first-run input has two issues:
@@ -33,7 +46,9 @@ In `apps/web-platform/app/(dashboard)/dashboard/page.tsx`:
 
 Architecture: Add file selection UI to the command center form. On submit, store files in a module-level singleton, navigate to chat/new. The chat page sends the text message first (which materializes the conversation and produces a real `conversationId`), then uploads files via presign API and sends them as a follow-up message.
 
-**Why two-step send:** The presign API (`app/api/attachments/presign/route.ts:62-71`) validates `conversationId` against the `conversations` DB table. During the first-run flow, the conversation row is not created until the first `chat` message materializes it (deferred creation in `ws-handler.ts`). Uploading files before the text message would fail with `404 conversation_not_found`.
+**Why two-step send:** The presign API (`app/api/attachments/presign/route.ts:62-71`) validates `conversationId` against the `conversations` DB table. During the first-run flow, the conversation row is not created until the first `chat` message materializes it (`ws-handler.ts:360-376`). Uploading files before the text message would fail with `404 conversation_not_found`.
+
+**Critical detail (from deepening):** The `pendingId` UUID generated at `ws-handler.ts:241` and sent in `session_started` at line 247 IS the final `conversationId` — `createConversation()` at line 372 uses that same `pendingId`. So the client can capture this ID from `session_started`, send the text message (which materializes the row), then call presign with the same ID. No UUID mismatch risk.
 
 **Files to create:**
 
@@ -78,8 +93,15 @@ Architecture: Add file selection UI to the command center form. On submit, store
 
 ### Phase 4: Expose conversationId from ws-client
 
-- [ ] In `apps/web-platform/lib/ws-client.ts`, capture `conversationId` from `session_started` message (line ~314) and expose it via the hook return value
-- [ ] Add `realConversationId` (or similar) to the `useWebSocket` return type
+- [ ] In `apps/web-platform/lib/ws-client.ts`, capture `msg.conversationId` from the `session_started` case (line 314-316). Currently the handler only sets `sessionConfirmed = true` and drops the conversationId.
+- [ ] Add state: `const [realConversationId, setRealConversationId] = useState<string | null>(null)`
+- [ ] In `session_started` handler: `setRealConversationId(msg.conversationId); setSessionConfirmed(true);`
+- [ ] Add `realConversationId` to the hook return value
+- [ ] Reset `realConversationId` to `null` in reconnection effect (line ~117)
+
+### Research Insight (from ws-handler.ts)
+
+The server sends `{ type: "session_started", conversationId: session.pending.id }` at `ws-handler.ts:247`. The `pending.id` is a `randomUUID()` generated at line 241 that becomes the actual conversation ID when materialized at line 372-373. The client can safely use this ID for presign calls after the first text message materializes the row.
 
 ### Phase 5: Consume pending files on chat page
 
@@ -149,6 +171,18 @@ No cross-domain implications detected — UI fix and feature parity enhancement 
 | IndexedDB for file storage | Survives page reload | Async, complex, files don't survive reload anyway since `router.push` is SPA | Rejected |
 | Upload at command center (create temp conversation) | Files uploaded before navigation | Requires creating a conversation server-side before user sees chat, complex rollback | Rejected |
 | **Module-level singleton** | **Simple, no deps, survives SPA nav, consumed once** | **Doesn't survive page reload** | **Chosen** |
+
+## Edge Cases (from institutional learnings)
+
+1. **Object URL memory leaks:** `URL.createObjectURL()` for image previews must be revoked on: (a) form submission, (b) component unmount, (c) file removal. Add `useEffect` cleanup that revokes all active preview URLs. (Learning: `xhr-upload-progress-and-state-ordering-20260413.md`)
+
+2. **Attachment metadata validation:** The WS `sendMessage` path passes `AttachmentRef` metadata (storagePath, filename, contentType) to the server. The server re-validates at point of use (IDOR prevention). No client-side changes needed, but the follow-up message must use the `AttachmentRef[]` returned by presign (server-generated paths), not client-constructed paths. (Learning: `service-role-idor-untrusted-ws-attachments.md`)
+
+3. **Session abort race:** If the user submits the command center form twice rapidly, the second `start_session` aborts the first. The pending-attachments singleton should use `setPendingFiles` (replace, not append) to be idempotent on double-submit. (Learning: `ws-session-race-abort-before-replace.md`)
+
+4. **Upload failure after navigation:** If presign or upload fails after the text message was already sent, the user sees their text message in the chat but no attachments. Show a toast: "Attachments could not be uploaded." Don't block the conversation — the text message is already delivered.
+
+5. **Module singleton and code splitting:** Next.js may split the dashboard page and chat page into different chunks. If the `pending-attachments.ts` module is imported by both, Next.js bundles it into the shared chunk — the singleton survives. If somehow split, the singleton would be empty on the chat page. Mitigate by importing from both pages (ensures shared chunk allocation).
 
 ## Non-Goals
 
