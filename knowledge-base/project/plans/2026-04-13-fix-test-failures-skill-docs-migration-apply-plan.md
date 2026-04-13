@@ -174,13 +174,13 @@ None -- production database verification only.
 
 ## Acceptance Criteria
 
-- [ ] All 6 tests from #2086 verified passing; issue closed with evidence
-- [ ] SKILL.md updated with 3 new sharp edge bullets matching #2085 proposed text
-- [ ] Learning file created at `knowledge-base/project/learnings/integration-issues/origin-main-fallback-stale-ref-worktree-manager-20260413.md`
-- [ ] Migration 021 verified present on production Supabase (applied by CI); index confirmed via SQL query
-- [ ] Issue #2082 closed with verification evidence
+- [x] All 6 tests from #2086 verified passing; issue closed with evidence
+- [x] SKILL.md updated with 3 new sharp edge bullets matching #2085 proposed text
+- [x] Learning file created at `knowledge-base/project/learnings/integration-issues/origin-main-fallback-stale-ref-worktree-manager-20260413.md`
+- [x] Migration 021 verified present on production Supabase (applied by CI); index confirmed via SQL query
+- [x] Issue #2082 closed with verification evidence
 - [ ] Issue #2085 closed after SKILL.md changes are merged
-- [ ] All modified `.md` files pass markdownlint
+- [x] All modified `.md` files pass markdownlint
 
 ## Domain Review
 
