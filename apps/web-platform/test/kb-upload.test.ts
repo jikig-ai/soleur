@@ -451,8 +451,8 @@ describe("POST /api/kb/upload", () => {
 
     const body = await res.json();
     expect(body.error).toBe("Invalid form data");
-    expect(body.detail).toBeDefined();
-    expect(typeof body.detail).toBe("string");
+    // detail field removed to prevent information disclosure
+    expect(body.detail).toBeUndefined();
 
     // Verify logger.error was called with structured error info
     const loggerMod = await import("@/server/logger");

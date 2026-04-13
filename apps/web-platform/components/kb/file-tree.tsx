@@ -114,28 +114,28 @@ function TreeItem({
         (percent) => setUploadState({ status: "uploading", progress: percent }),
       );
 
-      // Show processing state while we handle the response
-      setUploadState({ status: "processing" });
-
       if (status === 409) {
-        setUploadState({
-          status: "duplicate",
-          filename: file.name,
-          sha: (body as { sha: string }).sha,
-          file,
-          targetDir,
-        });
+        const sha409 = typeof body === "object" && body && "sha" in body
+          ? (body as { sha: string }).sha : undefined;
+        if (sha409) {
+          setUploadState({ status: "duplicate", filename: file.name, sha: sha409, file, targetDir });
+        } else {
+          setUploadState({ status: "error", message: "File already exists but server response was malformed" });
+        }
         return;
       }
 
       if (status < 200 || status >= 300) {
-        const msg = (body as { error?: string }).error || "Upload failed";
-        setUploadState({ status: "error", message: msg });
+        const errBody = typeof body === "object" && body && "error" in body
+          ? (body as { error: string }).error : undefined;
+        setUploadState({ status: "error", message: errBody || "Upload failed" });
         return;
       }
 
-      setUploadState({ status: "idle" });
+      // Show processing state only for successful uploads while refreshing tree
+      setUploadState({ status: "processing" });
       await refreshTree();
+      setUploadState({ status: "idle" });
     } catch {
       setUploadState({ status: "error", message: "Network error. Please try again." });
     }

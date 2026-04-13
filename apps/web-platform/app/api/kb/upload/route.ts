@@ -105,7 +105,7 @@ export async function POST(request: Request) {
     );
     Sentry.captureException(err);
     return NextResponse.json(
-      { error: "Invalid form data", detail: errMsg },
+      { error: "Invalid form data" },
       { status: 400 },
     );
   }
