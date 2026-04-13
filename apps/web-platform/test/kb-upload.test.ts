@@ -221,6 +221,22 @@ describe("POST /api/kb/upload", () => {
     expect(res.status).toBe(413);
   });
 
+  // 4b. Size validation — 11 MB file succeeds (within 20 MB route limit)
+  // Regression: uploads >10 MB were rejected because Next.js middleware
+  // truncated the body at the default 10 MB cloneableBody limit, causing
+  // "Failed to parse body as FormData". Fix: experimental.middlewareClientMaxBodySize.
+  test("returns 201 for 11MB file (within 20MB limit)", async () => {
+    setupFullMocks();
+
+    const formData = createFormData(makeTestFile("large-doc.pdf", 11 * 1024 * 1024), "uploads");
+    const res = await POST(createRequest(formData, "https://app.soleur.ai"));
+    expect(res.status).toBe(201);
+
+    const body = await res.json();
+    expect(body.path).toBeDefined();
+    expect(body.sha).toBe("newsha123");
+  });
+
   // 5. Path traversal
   test("returns 400 for path traversal in targetDir", async () => {
     setupFullMocks();
@@ -430,5 +446,43 @@ describe("POST /api/kb/upload", () => {
 
     const body = await res.json();
     expect(body.sha).toBe("newsha123");
+  });
+
+  // 20. formData error logging: logs error details and sends to Sentry
+  test("logs error name, message and sends to Sentry when formData() throws", async () => {
+    setupFullMocks();
+
+    // Create a request whose body cannot be parsed as FormData
+    const badRequest = new Request("http://localhost:3000/api/kb/upload", {
+      method: "POST",
+      body: "not-valid-form-data",
+      headers: {
+        "Origin": "https://app.soleur.ai",
+        "Content-Type": "multipart/form-data", // missing boundary
+      },
+    });
+
+    const res = await POST(badRequest);
+    expect(res.status).toBe(400);
+
+    const body = await res.json();
+    expect(body.error).toBe("Invalid form data");
+    // detail field removed to prevent information disclosure
+    expect(body.detail).toBeUndefined();
+
+    // Verify logger.error was called with structured error info
+    const loggerMod = await import("@/server/logger");
+    expect(loggerMod.default.error).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: "kb_upload_formdata_error",
+        errName: expect.any(String),
+        errMsg: expect.any(String),
+      }),
+      expect.stringContaining("formData parsing failed"),
+    );
+
+    // Verify Sentry received the exception
+    const Sentry = await import("@sentry/nextjs");
+    expect(Sentry.captureException).toHaveBeenCalledWith(expect.any(Error));
   });
 });

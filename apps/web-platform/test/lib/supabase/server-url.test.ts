@@ -33,9 +33,28 @@ describe("serverUrl", () => {
     expect(serverUrl()).toBe("https://custom.domain.com");
   });
 
-  it("throws when both SUPABASE_URL and NEXT_PUBLIC_SUPABASE_URL are missing", () => {
+  it("throws when both SUPABASE_URL and NEXT_PUBLIC_SUPABASE_URL are missing in production", () => {
+    process.env = { ...originalEnv, NODE_ENV: "production" };
     delete process.env.SUPABASE_URL;
     delete process.env.NEXT_PUBLIC_SUPABASE_URL;
+
+    expect(() => serverUrl()).toThrow(
+      "Missing SUPABASE_URL and NEXT_PUBLIC_SUPABASE_URL",
+    );
+  });
+
+  it("returns placeholder URL in dev mode when both vars are missing", () => {
+    process.env = { ...originalEnv, NODE_ENV: "development" };
+    delete process.env.SUPABASE_URL;
+    delete process.env.NEXT_PUBLIC_SUPABASE_URL;
+
+    const url = serverUrl();
+    expect(url).toBe("https://placeholder.supabase.co");
+  });
+
+  it("throws when NODE_ENV is undefined and both vars are missing", () => {
+    const { NODE_ENV: _, SUPABASE_URL: __, NEXT_PUBLIC_SUPABASE_URL: ___, ...envWithout } = originalEnv;
+    process.env = envWithout as typeof process.env;
 
     expect(() => serverUrl()).toThrow(
       "Missing SUPABASE_URL and NEXT_PUBLIC_SUPABASE_URL",

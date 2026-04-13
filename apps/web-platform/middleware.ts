@@ -56,6 +56,20 @@ export async function middleware(request: NextRequest) {
     request: { headers: requestHeaders },
   });
 
+  // Skip Supabase auth when env vars are missing in dev mode — allow
+  // unauthenticated access so the dev server can boot without Doppler.
+  // Only triggers for NODE_ENV=development (not test, where mocks provide the client).
+  if (
+    process.env.NODE_ENV === "development" &&
+    (!process.env.NEXT_PUBLIC_SUPABASE_URL || !process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY)
+  ) {
+    console.warn(
+      "[supabase] Middleware env vars missing — skipping auth. " +
+        "Run with: doppler run -c dev -- npm run dev",
+    );
+    return withCspHeaders(response, cspValue);
+  }
+
   const supabase = createServerClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,

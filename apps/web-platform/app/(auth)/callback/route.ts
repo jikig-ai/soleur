@@ -16,6 +16,16 @@ export async function GET(request: NextRequest) {
   );
 
   if (code) {
+    // Guard: in dev mode without Supabase env vars, redirect to login with error.
+    // Only triggers for NODE_ENV=development (not test, where mocks provide the client).
+    if (
+      process.env.NODE_ENV === "development" &&
+      (!process.env.NEXT_PUBLIC_SUPABASE_URL || !process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY)
+    ) {
+      logger.warn("Auth callback called without Supabase env vars — redirecting to login");
+      return NextResponse.redirect(`${origin}/login?error=auth_failed`);
+    }
+
     // Accumulate cookie operations so they can be applied to whatever
     // redirect response we return. cookies() from next/headers does NOT
     // carry over to NextResponse.redirect() — cookies must be set on the

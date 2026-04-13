@@ -78,7 +78,7 @@ if [[ -z "$REVIEW_TODOS" ]] && [[ -z "$REVIEW_COMMIT" ]]; then
       --head "$CURRENT_BRANCH" --state open --json number --jq '.[0].number // empty' 2>/dev/null || true)
   fi
   if [[ -n "$PR_NUMBER" ]]; then
-    REVIEW_ISSUES=$(gh issue list --label code-review --search "PR #${PR_NUMBER}" \
+    REVIEW_ISSUES=$(gh issue list --label code-review --state all --search "PR #${PR_NUMBER}" \
       --limit 1 --json number --jq '.[0].number // empty' 2>/dev/null || true)
   fi
 fi
