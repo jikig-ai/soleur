@@ -72,6 +72,46 @@ When the user has PLAUSIBLE_API_KEY stored:
 2. **Configure:** `plausible_add_goal` for key conversion events (Signup, Purchase, Contact)
 3. **Verify:** `plausible_get_stats` to confirm the site is tracking (may show 0 visitors initially)
 
+## Guided Instructions Protocol
+
+When a service falls to the guided tier (no stored API token AND no MCP OAuth session for the requested service), use sequential AskUserQuestion calls to walk the user through setup step by step.
+
+### Tier Detection
+
+Check the `## Connected Services` section in your system prompt. If the requested service is NOT listed as "connected", use guided instructions. If the service IS listed, use the MCP or API tier as described in the Tier Selection table above.
+
+### Step Format
+
+For each step in the service's guided steps list (from [service-deep-links.md](./references/service-deep-links.md)), issue one AskUserQuestion call:
+
+- **header:** `Step N of M: [step title]` (e.g., "Step 2 of 6: Add DNS records")
+- **question:** Clear instructions with the deep link URL inline. Example: "Navigate to <https://dash.cloudflare.com/profile/api-tokens> and create a new API token with these permissions: Zone:Read, DNS:Edit, Zone Settings:Edit, SSL/TLS:Edit."
+- **options:**
+  - `{ label: "Done -- proceed to next step", description: "I completed this step successfully" }`
+  - `{ label: "I need help", description: "Show me more detail about this step" }`
+  - `{ label: "Skip this step", description: "I want to skip this and continue" }`
+
+### Response Handling
+
+- **"Done -- proceed to next step":** Acknowledge completion and issue the next step's AskUserQuestion.
+- **"I need help":** Provide additional context about the current step (what to look for on the page, common issues, expected outcomes). Then re-issue the same step as a new AskUserQuestion with the same step number and options.
+- **"Skip this step":** Note the skip, warn if skipping may cause issues downstream (e.g., skipping DNS verification means the domain won't work), and advance to the next step.
+
+### Post-Completion Summary
+
+After all steps are completed (or skipped), provide a summary:
+
+1. List each step with its outcome (completed, skipped, or needed help)
+2. Warn about any skipped steps that may need attention later
+3. Provide the token generation deep link and prompt the user to store their API token in Settings > Connected Services
+4. Explain that future provisioning will be fully automated once the token is stored
+
+### Special Cases
+
+- **Cloudflare nameserver propagation (Step 4):** This step can take up to 24 hours. Do NOT block on it. Advise the user to skip and return to verification later.
+- **Stripe account activation:** Warn that live payments and payouts require business verification (1-2 business days).
+- **Plausible Sites API:** The Sites API may require a paid plan. Mention this in the guided flow.
+
 ## Safety Rules
 
 - Never expose API tokens in conversation output or error messages

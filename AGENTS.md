@@ -50,6 +50,7 @@ This repository contains the Soleur Claude Code plugin. Detailed conventions liv
 - When a PR includes database migrations (`supabase/migrations/`), verify they are applied to production before closing the issue. Test via Supabase REST API. A committed-but-unapplied migration is a silent deployment failure.
 - When a feature creates external resources (Cloud tasks, Doppler configs, DNS, infrastructure), validate each resource produces correct output BEFORE shipping. Never ship without running each new service and verifying output.
 - For user-facing pages with a Product/UX Gate, specialists (ux-design-lead, copywriter) must produce artifacts before implementation. Code implements from approved artifacts, not brainstorm notes.
+- When a feature stores user-generated content, verify the data export path during brainstorm. User data must be exportable without custom tooling — prefer git-committed storage over cloud-only storage. If cloud storage is chosen, the spec must document the export mechanism. **Why:** In #1974, data portability was identified as a deciding factor between Supabase Storage and git-committed uploads — the git approach won because `git clone` gives users everything with zero vendor lock-in.
 
 ## Code Quality
 

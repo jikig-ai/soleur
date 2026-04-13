@@ -28,6 +28,7 @@ export default function ChatPage() {
   const {
     messages,
     startSession,
+    resumeSession,
     sendMessage,
     sendReviewGateResponse,
     status,
@@ -40,7 +41,7 @@ export default function ChatPage() {
     usageData,
   } = useWebSocket(conversationId);
 
-  const { names: customNames, getDisplayName } = useTeamNames();
+  const { names: customNames, getDisplayName, loading: teamNamesLoading } = useTeamNames();
 
   const [sessionStarted, setSessionStarted] = useState(false);
   const [initialMsgSent, setInitialMsgSent] = useState(false);
@@ -95,13 +96,28 @@ export default function ChatPage() {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
-  // Start session when connected AND context is resolved (or not needed)
+  // Start or resume session when connected
   useEffect(() => {
-    if (status === "connected" && conversationId === "new" && !sessionStarted && !contextLoading) {
-      startSession(leaderId ?? undefined, kbContext);
+    if (status !== "connected" || sessionStarted) return;
+
+    if (conversationId === "new") {
+      if (!contextLoading) {
+        startSession(leaderId ?? undefined, kbContext);
+        setSessionStarted(true);
+      }
+    } else {
+      // Existing conversation — resume the server-side session
+      resumeSession(conversationId);
       setSessionStarted(true);
     }
-  }, [status, conversationId, leaderId, sessionStarted, startSession, contextLoading, kbContext]);
+  }, [status, conversationId, leaderId, sessionStarted, startSession, resumeSession, contextLoading, kbContext]);
+
+  // Reset sessionStarted on reconnection so session init re-fires
+  useEffect(() => {
+    if (status === "reconnecting") {
+      setSessionStarted(false);
+    }
+  }, [status]);
 
   // Send initial message from ?msg= param after server confirms session
   useEffect(() => {
@@ -267,6 +283,7 @@ export default function ChatPage() {
                       options={msg.options}
                       header={msg.header}
                       descriptions={msg.descriptions}
+                      stepProgress={msg.stepProgress}
                       resolved={msg.resolved}
                       selectedOption={msg.selectedOption}
                       gateError={msg.gateError}
@@ -330,6 +347,7 @@ export default function ChatPage() {
             query={atQuery}
             visible={atVisible}
             customNames={customNames}
+            loading={teamNamesLoading}
             onSelect={(id) => {
               setAtVisible(false);
               if (insertRef.current) {
@@ -350,7 +368,7 @@ export default function ChatPage() {
             disabled={status !== "connected"}
             placeholder={
               status === "connected"
-                ? "Follow up or ask another question..."
+                ? "Follow up or ask another question... Type @ to switch leader"
                 : "Reconnecting..."
             }
             insertRef={insertRef}
@@ -368,7 +386,6 @@ export default function ChatPage() {
               </span>
             )}
           </span>
-          <span className="ml-auto hidden md:inline">Type @ to switch leader</span>
         </div>
       </div>
     </div>
@@ -471,6 +488,7 @@ function ReviewGateCard({
   options,
   header,
   descriptions,
+  stepProgress,
   resolved,
   selectedOption,
   gateError,
@@ -481,6 +499,7 @@ function ReviewGateCard({
   options: string[];
   header?: string;
   descriptions?: Record<string, string | undefined>;
+  stepProgress?: { current: number; total: number };
   resolved?: boolean;
   selectedOption?: string;
   gateError?: string;
@@ -513,6 +532,23 @@ function ReviewGateCard({
 
   return (
     <div role="group" aria-label={question} aria-busy={pending !== null} className="rounded-xl border border-amber-800/50 bg-amber-950/30 p-5">
+      {stepProgress && stepProgress.total > 0 && (() => {
+        const pct = Math.round((stepProgress.current / stepProgress.total) * 100);
+        return (
+          <div className="mb-3">
+            <div className="mb-1 flex items-center justify-between text-xs text-amber-300">
+              <span>Step {stepProgress.current} of {stepProgress.total}</span>
+              <span className="text-amber-400/60">{pct}%</span>
+            </div>
+            <div className="h-1.5 overflow-hidden rounded-full bg-amber-900/40">
+              <div
+                className="h-full rounded-full bg-amber-500 transition-all duration-500"
+                style={{ width: `${pct}%` }}
+              />
+            </div>
+          </div>
+        );
+      })()}
       {header && (
         <span className="mb-2 inline-block rounded-md bg-amber-900/50 px-2 py-0.5 text-xs font-medium text-amber-300">
           {header}

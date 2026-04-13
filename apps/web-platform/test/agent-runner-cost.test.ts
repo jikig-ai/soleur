@@ -79,86 +79,26 @@ vi.mock("../server/providers", () => ({
 }));
 
 import { startAgentSession } from "../server/agent-runner";
+import {
+  createSupabaseMockImpl,
+  createQueryMock,
+} from "./helpers/agent-runner-mocks";
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
 function setupSupabaseMock() {
-  mockFrom.mockImplementation((table: string) => {
-    if (table === "api_keys") {
-      return {
-        select: () => ({
-          eq: () => ({
-            eq: () => ({
-              eq: () => ({
-                limit: () => ({
-                  single: () => ({
-                    data: {
-                      id: "key-1",
-                      encrypted_key: Buffer.from("test").toString("base64"),
-                      iv: Buffer.from("test-iv-1234").toString("base64"),
-                      auth_tag: Buffer.from("test-tag-1234567").toString("base64"),
-                      key_version: 2,
-                    },
-                    error: null,
-                  }),
-                }),
-              }),
-            }),
-          }),
-        }),
-      };
-    }
-    if (table === "users") {
-      return {
-        select: () => ({
-          eq: () => ({
-            single: () => ({
-              data: {
-                workspace_path: "/tmp/test-workspace",
-                repo_status: null,
-                github_installation_id: null,
-                repo_url: null,
-              },
-              error: null,
-            }),
-          }),
-        }),
-      };
-    }
-    if (table === "conversations") {
-      return {
-        update: vi.fn(() => ({
-          eq: vi.fn(() => ({ error: null })),
-        })),
-      };
-    }
-    if (table === "messages") {
-      return { insert: () => ({ error: null }) };
-    }
-    return {
-      select: () => ({ eq: () => ({ single: () => ({ data: null, error: null }) }) }),
-      update: () => ({ eq: () => ({ error: null }) }),
-      insert: () => ({ error: null }),
-    };
-  });
+  createSupabaseMockImpl(mockFrom);
 }
 
 function setupQueryWithCost(costUsd: number, inputTokens: number, outputTokens: number) {
-  mockQuery.mockReturnValue({
-    async *[Symbol.asyncIterator]() {
-      yield {
-        type: "result",
-        session_id: "sess-cost-1",
-        total_cost_usd: costUsd,
-        usage: { input_tokens: inputTokens, output_tokens: outputTokens },
-      };
-    },
-    next: vi.fn(),
-    return: vi.fn(),
-    throw: vi.fn(),
-  } as any);
+  createQueryMock(mockQuery, {
+    type: "result",
+    session_id: "sess-cost-1",
+    total_cost_usd: costUsd,
+    usage: { input_tokens: inputTokens, output_tokens: outputTokens },
+  });
 }
 
 // ---------------------------------------------------------------------------

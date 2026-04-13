@@ -60,11 +60,20 @@ Ensure that the code is ready for analysis (either in worktree or on current bra
 
 </task_list>
 
+#### Change Classification Gate
+
+Before spawning review agents, classify the PR to avoid spawning agents whose expertise is irrelevant to the change.
+
+1. Run `git diff --name-only origin/main...HEAD | head -n 200` to get the list of changed files.
+2. Check for override: scan `$ARGUMENTS` for "deep review" or "full review". Also run `gh pr view --json body,title --jq '.body + " " + .title'` and check for the same phrases. If override detected, skip classification and spawn all 8 agents.
+3. Apply a single judgment on the file list: **Does this PR contain source code files?** Source code includes: `.ts`, `.js`, `.jsx`, `.tsx`, `.rb`, `.py`, `.go`, `.rs`, `.swift`, `.kt`, `.java`, `.c`, `.cpp`, `.cs`, `.php`, `.sh`, `.bash`, `.zsh` — any file that contains executable logic. Non-code includes: `.md`, `.txt`, `.yml`, `.yaml`, `.toml`, `.json`, `.css`, `.html`, `.njk`, `.svg`, `.png`, `.jpg`, `.gif`, `.pen`, `LICENSE`, `CHANGELOG*`, `.github/**` workflow files, and plugin/agent/skill definition files (`plugins/**/*.md`, `agents/**/*.md`).
+4. Announce the classification result before spawning agents.
+
 #### Parallel Agents to review the PR:
 
 <parallel_tasks>
 
-Run ALL or most of these agents at the same time:
+**If the PR contains source code files (or override detected), spawn all 8 agents:**
 
 1. Task git-history-analyzer(PR content)
 2. Task pattern-recognition-specialist(PR content)
@@ -75,7 +84,20 @@ Run ALL or most of these agents at the same time:
 7. Task agent-native-reviewer(PR content) - Verify new features are agent-accessible
 8. Task code-quality-analyst(PR content) - Detect code smells and produce refactoring roadmap
 
+**If the PR contains NO source code files (non-code only), spawn 4 agents:**
+
+1. Task git-history-analyzer(PR content)
+2. Task pattern-recognition-specialist(PR content)
+3. Task security-sentinel(PR content) - Still needed: config/CI can expose secrets, markdown can contain code examples
+4. Task code-quality-analyst(PR content) - Still needed: docs/config quality matters
+
+Skipped for non-code PRs: architecture-strategist, performance-oracle, data-integrity-guardian, agent-native-reviewer. These agents analyze source code structure, runtime performance, database integrity, and agent accessibility — none are relevant to documentation, configuration, or CI changes.
+
+Announce: "Change classified as **[code/non-code]**. Spawning [N]/8 review agents. [If non-code: Skipped: architecture-strategist, performance-oracle, data-integrity-guardian, agent-native-reviewer — not relevant to non-code changes. Use 'deep review' to force full pipeline.]"
+
 </parallel_tasks>
+
+**Note:** The conditional agents block below (agents 9-14: Rails reviewers, migration experts, test-design-reviewer, semgrep) is **unaffected** by the classification gate. Both gates run independently — the classification controls only the always-on agents above.
 
 #### Conditional Agents (Run if applicable):
 
