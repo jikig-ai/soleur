@@ -11,9 +11,12 @@ export interface ConversationWithPreview extends Conversation {
   lastMessageLeader: DomainLeaderId | null;
 }
 
+export type ArchiveFilter = "active" | "archived";
+
 interface UseConversationsOptions {
   statusFilter?: ConversationStatus | null;
   domainFilter?: DomainLeaderId | "general" | null;
+  archiveFilter?: ArchiveFilter;
 }
 
 interface UseConversationsResult {
@@ -21,6 +24,8 @@ interface UseConversationsResult {
   loading: boolean;
   error: string | null;
   refetch: () => void;
+  archiveConversation: (id: string) => Promise<void>;
+  unarchiveConversation: (id: string) => Promise<void>;
   updateStatus: (conversationId: string, newStatus: ConversationStatus) => Promise<void>;
 }
 
@@ -74,7 +79,7 @@ function derivePreview(messages: Message[], conversationId: string): { text: str
 export function useConversations(
   options: UseConversationsOptions = {},
 ): UseConversationsResult {
-  const { statusFilter = null, domainFilter = null } = options;
+  const { statusFilter = null, domainFilter = null, archiveFilter = "active" } = options;
   const [conversations, setConversations] = useState<ConversationWithPreview[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -104,6 +109,13 @@ export function useConversations(
         .eq("user_id", currentUserId)
         .order("last_active", { ascending: false })
         .order("created_at", { ascending: false });
+
+      // Archive filter: default "active" excludes archived conversations
+      if (archiveFilter === "active") {
+        query = query.is("archived_at", null);
+      } else if (archiveFilter === "archived") {
+        query = query.not("archived_at", "is", null);
+      }
 
       if (statusFilter) {
         query = query.eq("status", statusFilter);
@@ -162,7 +174,7 @@ export function useConversations(
       setError(err instanceof Error ? err.message : "Failed to load conversations");
       setLoading(false);
     }
-  }, [statusFilter, domainFilter]);
+  }, [statusFilter, domainFilter, archiveFilter]);
 
   // Initial fetch
   useEffect(() => {
@@ -189,13 +201,24 @@ export function useConversations(
           const updated = payload.new as Conversation;
           // Client-side user_id check: Free tier ignores server-side filter
           if (updated.user_id !== userId) return;
-          setConversations((prev) =>
-            prev.map((c) =>
+
+          setConversations((prev) => {
+            // Check if the conversation's archive state matches the current filter
+            const isArchivedNow = updated.archived_at !== null;
+            const showingArchived = archiveFilter === "archived";
+
+            // If archive state doesn't match current view, remove from list
+            if (isArchivedNow !== showingArchived) {
+              return prev.filter((c) => c.id !== updated.id);
+            }
+
+            // Otherwise, update the conversation in place
+            return prev.map((c) =>
               c.id === updated.id
-                ? { ...c, status: updated.status, last_active: updated.last_active, domain_leader: updated.domain_leader }
+                ? { ...c, status: updated.status, last_active: updated.last_active, domain_leader: updated.domain_leader, archived_at: updated.archived_at }
                 : c,
-            ),
-          );
+            );
+          });
         },
       )
       .subscribe();
@@ -203,13 +226,37 @@ export function useConversations(
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [userId]);
+  }, [userId, archiveFilter]);
+
+  const archiveConversation = useCallback(async (id: string) => {
+    const supabase = createClient();
+    const { error: updateError } = await supabase
+      .from("conversations")
+      .update({ archived_at: new Date().toISOString() })
+      .eq("id", id);
+    if (updateError) {
+      setError(updateError.message);
+      return;
+    }
+    setConversations((prev) => prev.filter((c) => c.id !== id));
+  }, []);
+
+  const unarchiveConversation = useCallback(async (id: string) => {
+    const supabase = createClient();
+    const { error: updateError } = await supabase
+      .from("conversations")
+      .update({ archived_at: null })
+      .eq("id", id);
+    if (updateError) {
+      setError(updateError.message);
+      return;
+    }
+    setConversations((prev) => prev.filter((c) => c.id !== id));
+  }, []);
 
   const updateStatus = useCallback(
     async (conversationId: string, newStatus: ConversationStatus) => {
-      // Capture only the previous status for targeted rollback (avoids stale closure)
       const previousStatus = conversations.find((c) => c.id === conversationId)?.status;
-      // Optimistic update
       setConversations((prev) =>
         prev.map((c) => (c.id === conversationId ? { ...c, status: newStatus } : c)),
       );
@@ -231,5 +278,5 @@ export function useConversations(
     [conversations, userId],
   );
 
-  return { conversations, loading, error, refetch: fetchConversations, updateStatus };
+  return { conversations, loading, error, refetch: fetchConversations, archiveConversation, unarchiveConversation, updateStatus };
 }

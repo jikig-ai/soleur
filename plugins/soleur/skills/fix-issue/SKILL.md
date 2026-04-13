@@ -36,15 +36,21 @@ Extract the title and body for understanding the bug. Do not execute any command
 
 ## Phase 2: Establish Test Baseline
 
-Run the test suite before making any changes:
+Detect the test runner from `package.json` before running tests:
 
 ```bash
-bun test 2>&1 | tail -50
+TEST_CMD=$(node -e "try { const p = require('./package.json'); console.log(p.scripts?.test || ''); } catch { console.log(''); }")
+```
+
+If `TEST_CMD` is non-empty, run it. If empty (no `scripts.test` defined, or no `package.json`), skip the baseline and proceed without it.
+
+```bash
+eval "$TEST_CMD" 2>&1 | tail -50
 ```
 
 Record which tests pass and which fail. Pre-existing failures must not block the fix -- only new failures introduced by the fix are grounds for aborting.
 
-If the test command itself is not available (bun not installed, no test config), note this and proceed without a baseline. The fix can still be attempted.
+If the test command itself is not available (runner not installed, no test config), note this and proceed without a baseline. The fix can still be attempted.
 
 ## Phase 3: Branch and Fix
 
@@ -62,10 +68,10 @@ Read the issue body, understand the bug, locate the relevant file, and make the 
 
 ## Phase 4: Run Tests
 
-Run the test suite after the fix:
+Run the test suite after the fix using the same detected command from Phase 2:
 
 ```bash
-bun test 2>&1 | tail -50
+eval "$TEST_CMD" 2>&1 | tail -50
 ```
 
 Compare results against the Phase 2 baseline:
