@@ -294,7 +294,7 @@ describe("POST /api/kb/upload", () => {
     expect(body.sha).toBe("existingsha789");
   });
 
-  // 11. Successful upload
+  // 11. Successful upload (includes credential helper verification)
   test("returns 201 with path, sha, commitSha on success", async () => {
     setupFullMocks();
 
@@ -306,6 +306,13 @@ describe("POST /api/kb/upload", () => {
     expect(body.path).toBeDefined();
     expect(body.sha).toBe("newsha123");
     expect(body.commitSha).toBe("commitsha456");
+
+    // Verify git pull used credential helper
+    expect(mockExecFile).toHaveBeenCalledWith(
+      "git",
+      expect.arrayContaining(["-c", expect.stringContaining("credential.helper=!")]),
+      expect.objectContaining({ cwd: TEST_WORKSPACE_PATH }),
+    );
   });
 
   // 12. Overwrite with sha
@@ -354,23 +361,8 @@ describe("POST /api/kb/upload", () => {
     expect(body.code).toBe("GITHUB_API_ERROR");
   });
 
-  // 15. Credential helper: git pull called with credential helper arg
-  test("git pull is called with credential helper argument", async () => {
-    setupFullMocks();
-
-    const formData = createFormData(makeTestFile(), "uploads");
-    const res = await POST(createRequest(formData, "https://app.soleur.ai"));
-    expect(res.status).toBe(201);
-
-    expect(mockExecFile).toHaveBeenCalledWith(
-      "git",
-      expect.arrayContaining(["-c", expect.stringContaining("credential.helper=!")]),
-      expect.objectContaining({ cwd: TEST_WORKSPACE_PATH }),
-    );
-  });
-
-  // 16. Credential helper: cleanup after successful pull
-  test("credential helper file is cleaned up after successful pull", async () => {
+  // 15. Credential helper: written with correct content and permissions
+  test("credential helper is written with correct content and permissions", async () => {
     setupFullMocks();
 
     const formData = createFormData(makeTestFile(), "uploads");
@@ -382,6 +374,16 @@ describe("POST /api/kb/upload", () => {
       expect.stringContaining("x-access-token"),
       expect.objectContaining({ mode: 0o700 }),
     );
+  });
+
+  // 16. Credential helper: cleanup after successful pull
+  test("credential helper file is cleaned up after successful pull", async () => {
+    setupFullMocks();
+
+    const formData = createFormData(makeTestFile(), "uploads");
+    const res = await POST(createRequest(formData, "https://app.soleur.ai"));
+    expect(res.status).toBe(201);
+
     expect(mockUnlinkSync).toHaveBeenCalledWith("/tmp/git-cred-test-uuid");
   });
 
@@ -413,5 +415,20 @@ describe("POST /api/kb/upload", () => {
     expect(body.code).toBe("SYNC_FAILED");
     // git pull should NOT have been called
     expect(mockExecFile).not.toHaveBeenCalled();
+  });
+
+  // 19. Credential helper: cleanup failure does not break upload
+  test("returns 201 when credential helper cleanup fails", async () => {
+    setupFullMocks();
+    mockUnlinkSync.mockImplementation(() => {
+      throw new Error("ENOENT: no such file or directory");
+    });
+
+    const formData = createFormData(makeTestFile(), "uploads");
+    const res = await POST(createRequest(formData, "https://app.soleur.ai"));
+    expect(res.status).toBe(201);
+
+    const body = await res.json();
+    expect(body.sha).toBe("newsha123");
   });
 });
