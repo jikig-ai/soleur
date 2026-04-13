@@ -108,7 +108,10 @@ self.addEventListener("push", (event) => {
 self.addEventListener("notificationclick", (event) => {
   event.notification.close();
 
-  const url = event.notification.data?.url || "/dashboard";
+  // Validate URL origin to prevent open redirect via crafted push payload
+  const rawUrl = event.notification.data?.url || "/dashboard";
+  const parsed = new URL(rawUrl, self.location.origin);
+  const url = parsed.origin === self.location.origin ? parsed.href : "/dashboard";
 
   event.waitUntil(
     self.clients

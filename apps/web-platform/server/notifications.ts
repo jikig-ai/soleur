@@ -7,7 +7,7 @@
 
 import webpush from "web-push";
 import { Resend } from "resend";
-import { createServiceClient, serverUrl } from "@/lib/supabase/service";
+import { createServiceClient } from "@/lib/supabase/service";
 import { createChildLogger } from "@/server/logger";
 
 const log = createChildLogger("notifications");
@@ -135,13 +135,13 @@ export async function sendPushNotifications(
     ),
   );
 
+  const supabase = createServiceClient();
   for (let i = 0; i < results.length; i++) {
     const result = results[i];
     if (result.status === "rejected") {
       const err = result.reason as { statusCode?: number };
       if (err.statusCode === 410) {
         log.info({ subscriptionId: subscriptions[i].id }, "Push subscription expired (410 Gone), deleting");
-        const supabase = createServiceClient();
         await supabase
           .from("push_subscriptions")
           .delete()
@@ -170,10 +170,10 @@ export async function sendEmailNotification(
   const { error } = await resend.emails.send({
     from: "Soleur <notifications@soleur.ai>",
     to: [email],
-    subject: `${payload.agentName} needs your input — Soleur`,
+    subject: `${escapeHtml(payload.agentName)} needs your input — Soleur`,
     html: `
       <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 480px; margin: 0 auto; padding: 24px;">
-        <h2 style="margin: 0 0 16px; font-size: 18px; color: #1a1a1a;">${payload.agentName} needs your input</h2>
+        <h2 style="margin: 0 0 16px; font-size: 18px; color: #1a1a1a;">${escapeHtml(payload.agentName)} needs your input</h2>
         <p style="margin: 0 0 16px; color: #4a4a4a; line-height: 1.5;">${escapeHtml(payload.question)}</p>
         <a href="${deepLink}" style="display: inline-block; padding: 12px 24px; background: #2563eb; color: #fff; text-decoration: none; border-radius: 6px; font-weight: 500;">Open conversation</a>
         <p style="margin: 24px 0 0; font-size: 12px; color: #9a9a9a;">You received this because an agent is waiting for your decision on Soleur.</p>
@@ -197,5 +197,6 @@ function escapeHtml(str: string): string {
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
 }

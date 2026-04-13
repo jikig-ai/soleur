@@ -28,6 +28,14 @@ export async function POST(request: Request) {
     );
   }
 
+  // Validate endpoint is HTTPS to prevent SSRF via arbitrary URLs
+  if (!body.endpoint.startsWith("https://")) {
+    return NextResponse.json(
+      { error: "Push endpoint must use HTTPS" },
+      { status: 400 },
+    );
+  }
+
   const service = createServiceClient();
   const { error } = await service.from("push_subscriptions").upsert(
     {
