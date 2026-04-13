@@ -78,6 +78,12 @@ type UploadState =
   | { status: "error"; message: string }
   | { status: "duplicate"; filename: string; sha: string; file: File; targetDir: string };
 
+type DeleteState =
+  | { status: "idle" }
+  | { status: "confirming" }
+  | { status: "deleting" }
+  | { status: "error"; message: string };
+
 function TreeItem({
   node,
   depth,
@@ -95,6 +101,24 @@ function TreeItem({
   const { refreshTree } = useKb();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [uploadState, setUploadState] = useState<UploadState>({ status: "idle" });
+  const [deleteState, setDeleteState] = useState<DeleteState>({ status: "idle" });
+
+  const deleteFile = useCallback(async (filePath: string) => {
+    setDeleteState({ status: "deleting" });
+    try {
+      const res = await fetch(`/api/kb/file/${filePath}`, { method: "DELETE" });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({ error: "Delete failed" }));
+        setDeleteState({ status: "error", message: body.error || "Delete failed" });
+        return;
+      }
+      setDeleteState({ status: "idle" });
+      await refreshTree();
+    } catch {
+      setDeleteState({ status: "error", message: "Network error. Please try again." });
+    }
+  }, [refreshTree]);
+
   // Cap visual indent at 3 levels
   const indent = Math.min(depth, 3);
   const paddingLeft = `${indent * 12 + 8}px`;
@@ -276,26 +300,74 @@ function TreeItem({
   // File node
   const filePath = `/dashboard/kb/${node.path}`;
   const isActive = pathname === filePath;
+  const isAttachment = node.extension !== ".md";
+  const isDeleting = deleteState.status === "deleting";
 
   return (
     <li>
-      <Link
-        href={filePath}
-        className={`flex items-center gap-2 rounded-md px-2 py-1.5 text-sm transition-colors ${
-          isActive
-            ? "bg-neutral-800 text-amber-400"
-            : "text-neutral-400 hover:bg-neutral-800/50 hover:text-neutral-200"
-        }`}
-        style={{ paddingLeft }}
-      >
-        <FileTypeIcon extension={node.extension} />
-        <span className="truncate">{node.name}</span>
-        {node.modifiedAt && (
-          <span className="ml-auto shrink-0 text-xs text-neutral-600">
-            {formatRelativeTime(node.modifiedAt)}
-          </span>
+      <div className="group relative">
+        <Link
+          href={filePath}
+          className={`flex items-center gap-2 rounded-md px-2 py-1.5 text-sm transition-colors ${
+            isActive
+              ? "bg-neutral-800 text-amber-400"
+              : "text-neutral-400 hover:bg-neutral-800/50 hover:text-neutral-200"
+          } ${isDeleting ? "opacity-50" : ""}`}
+          style={{ paddingLeft }}
+        >
+          <FileTypeIcon extension={node.extension} />
+          <span className="truncate">{node.name}</span>
+          {node.modifiedAt && !isDeleting && (
+            <span className="ml-auto shrink-0 text-xs text-neutral-600">
+              {formatRelativeTime(node.modifiedAt)}
+            </span>
+          )}
+          {isDeleting && (
+            <span className="ml-auto shrink-0 text-xs text-neutral-500">
+              Deleting...
+            </span>
+          )}
+        </Link>
+        {isAttachment && deleteState.status === "idle" && (
+          <button
+            onClick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              setDeleteState({ status: "confirming" });
+            }}
+            className="absolute right-1 top-1/2 -translate-y-1/2 rounded p-1 text-neutral-500 opacity-0 transition-opacity hover:bg-neutral-700 hover:text-red-400 group-hover:opacity-100"
+            title="Delete file"
+            aria-label={`Delete ${node.name}`}
+          >
+            <TrashIcon />
+          </button>
         )}
-      </Link>
+      </div>
+      {deleteState.status === "confirming" && (
+        <div className="mx-2 mt-1 rounded bg-red-500/10 px-2 py-1.5 text-xs text-red-400" style={{ marginLeft: paddingLeft }}>
+          <p className="mb-1.5">Delete &ldquo;{node.name}&rdquo;?</p>
+          <div className="flex gap-2">
+            <button
+              onClick={() => node.path && deleteFile(node.path)}
+              className="rounded bg-red-500/20 px-2 py-0.5 text-red-300 hover:bg-red-500/30"
+            >
+              Delete
+            </button>
+            <button
+              onClick={() => setDeleteState({ status: "idle" })}
+              className="rounded px-2 py-0.5 text-neutral-400 hover:text-neutral-300"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+      {deleteState.status === "error" && (
+        <div className="mx-2 mt-1 flex items-center gap-1.5 rounded bg-red-500/10 px-2 py-1 text-xs text-red-400" style={{ marginLeft: paddingLeft }}>
+          <span className="flex-1">{deleteState.message}</span>
+          <button onClick={() => setDeleteState({ status: "idle" })} className="shrink-0 hover:text-red-300" aria-label="Dismiss error">&times;</button>
+        </div>
+      )}
     </li>
   );
 }
@@ -386,6 +458,16 @@ function UploadIcon() {
       <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" strokeLinecap="round" strokeLinejoin="round" />
       <polyline points="17 8 12 3 7 8" strokeLinecap="round" strokeLinejoin="round" />
       <line x1="12" y1="3" x2="12" y2="15" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+function TrashIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+      <path d="M3 6h18" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   );
 }
