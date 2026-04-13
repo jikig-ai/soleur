@@ -10,16 +10,22 @@ const {
   mockGithubApiGet,
   mockGithubApiPost,
   mockGenerateInstallationToken,
+  mockRandomCredentialPath,
   mockIsPathInWorkspace,
   mockExecFile,
+  mockWriteFileSync,
+  mockUnlinkSync,
 } = vi.hoisted(() => ({
   mockGetUser: vi.fn(),
   mockFrom: vi.fn(),
   mockGithubApiGet: vi.fn(),
   mockGithubApiPost: vi.fn(),
   mockGenerateInstallationToken: vi.fn(),
+  mockRandomCredentialPath: vi.fn(),
   mockIsPathInWorkspace: vi.fn(),
   mockExecFile: vi.fn(),
+  mockWriteFileSync: vi.fn(),
+  mockUnlinkSync: vi.fn(),
 }));
 
 vi.mock("@/lib/supabase/server", () => ({
@@ -46,6 +52,7 @@ vi.mock("@/server/github-api", () => ({
 
 vi.mock("@/server/github-app", () => ({
   generateInstallationToken: mockGenerateInstallationToken,
+  randomCredentialPath: mockRandomCredentialPath,
 }));
 
 vi.mock("@/server/sandbox", () => ({
@@ -66,6 +73,11 @@ vi.mock("node:child_process", () => ({
 
 vi.mock("node:util", () => ({
   promisify: vi.fn((fn: unknown) => fn),
+}));
+
+vi.mock("node:fs", () => ({
+  writeFileSync: mockWriteFileSync,
+  unlinkSync: mockUnlinkSync,
 }));
 
 // ---------------------------------------------------------------------------
@@ -135,6 +147,7 @@ function setupFullMocks() {
   setupUserData();
   mockIsPathInWorkspace.mockReturnValue(true);
   mockGenerateInstallationToken.mockResolvedValue("test-token");
+  mockRandomCredentialPath.mockReturnValue("/tmp/git-cred-test-uuid");
   // File does not exist (404 from GitHub)
   mockGithubApiGet.mockRejectedValue(new Error("GitHub API request failed: 404 /repos/test-owner/test-repo/contents/knowledge-base/uploads/test.png"));
   // Successful PUT
@@ -281,7 +294,7 @@ describe("POST /api/kb/upload", () => {
     expect(body.sha).toBe("existingsha789");
   });
 
-  // 11. Successful upload
+  // 11. Successful upload (includes credential helper verification)
   test("returns 201 with path, sha, commitSha on success", async () => {
     setupFullMocks();
 
@@ -293,6 +306,13 @@ describe("POST /api/kb/upload", () => {
     expect(body.path).toBeDefined();
     expect(body.sha).toBe("newsha123");
     expect(body.commitSha).toBe("commitsha456");
+
+    // Verify git pull used credential helper
+    expect(mockExecFile).toHaveBeenCalledWith(
+      "git",
+      expect.arrayContaining(["-c", expect.stringContaining("credential.helper=!")]),
+      expect.objectContaining({ cwd: TEST_WORKSPACE_PATH }),
+    );
   });
 
   // 12. Overwrite with sha
@@ -339,5 +359,114 @@ describe("POST /api/kb/upload", () => {
 
     const body = await res.json();
     expect(body.code).toBe("GITHUB_API_ERROR");
+  });
+
+  // 15. Credential helper: written with correct content and permissions
+  test("credential helper is written with correct content and permissions", async () => {
+    setupFullMocks();
+
+    const formData = createFormData(makeTestFile(), "uploads");
+    const res = await POST(createRequest(formData, "https://app.soleur.ai"));
+    expect(res.status).toBe(201);
+
+    expect(mockWriteFileSync).toHaveBeenCalledWith(
+      "/tmp/git-cred-test-uuid",
+      expect.stringContaining("x-access-token"),
+      expect.objectContaining({ mode: 0o700 }),
+    );
+  });
+
+  // 16. Credential helper: cleanup after successful pull
+  test("credential helper file is cleaned up after successful pull", async () => {
+    setupFullMocks();
+
+    const formData = createFormData(makeTestFile(), "uploads");
+    const res = await POST(createRequest(formData, "https://app.soleur.ai"));
+    expect(res.status).toBe(201);
+
+    expect(mockUnlinkSync).toHaveBeenCalledWith("/tmp/git-cred-test-uuid");
+  });
+
+  // 17. Credential helper: cleanup after failed pull
+  test("credential helper file is cleaned up after failed pull", async () => {
+    setupFullMocks();
+    mockExecFile.mockRejectedValue(new Error("git pull failed"));
+
+    const formData = createFormData(makeTestFile(), "uploads");
+    const res = await POST(createRequest(formData, "https://app.soleur.ai"));
+    expect(res.status).toBe(500);
+
+    // Helper must still be cleaned up even on failure
+    expect(mockUnlinkSync).toHaveBeenCalledWith("/tmp/git-cred-test-uuid");
+  });
+
+  // 18. Credential helper: SYNC_FAILED when token generation fails
+  test("returns SYNC_FAILED when installation token generation fails", async () => {
+    setupFullMocks();
+    mockGenerateInstallationToken.mockRejectedValue(
+      new Error("GitHub installation token request failed: 401"),
+    );
+
+    const formData = createFormData(makeTestFile(), "uploads");
+    const res = await POST(createRequest(formData, "https://app.soleur.ai"));
+    expect(res.status).toBe(500);
+
+    const body = await res.json();
+    expect(body.code).toBe("SYNC_FAILED");
+    // git pull should NOT have been called
+    expect(mockExecFile).not.toHaveBeenCalled();
+  });
+
+  // 19. Credential helper: cleanup failure does not break upload
+  test("returns 201 when credential helper cleanup fails", async () => {
+    setupFullMocks();
+    mockUnlinkSync.mockImplementation(() => {
+      throw new Error("ENOENT: no such file or directory");
+    });
+
+    const formData = createFormData(makeTestFile(), "uploads");
+    const res = await POST(createRequest(formData, "https://app.soleur.ai"));
+    expect(res.status).toBe(201);
+
+    const body = await res.json();
+    expect(body.sha).toBe("newsha123");
+  });
+
+  // 20. formData error logging: logs error details and sends to Sentry
+  test("logs error name, message and sends to Sentry when formData() throws", async () => {
+    setupFullMocks();
+
+    // Create a request whose body cannot be parsed as FormData
+    const badRequest = new Request("http://localhost:3000/api/kb/upload", {
+      method: "POST",
+      body: "not-valid-form-data",
+      headers: {
+        "Origin": "https://app.soleur.ai",
+        "Content-Type": "multipart/form-data", // missing boundary
+      },
+    });
+
+    const res = await POST(badRequest);
+    expect(res.status).toBe(400);
+
+    const body = await res.json();
+    expect(body.error).toBe("Invalid form data");
+    // detail field removed to prevent information disclosure
+    expect(body.detail).toBeUndefined();
+
+    // Verify logger.error was called with structured error info
+    const loggerMod = await import("@/server/logger");
+    expect(loggerMod.default.error).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: "kb_upload_formdata_error",
+        errName: expect.any(String),
+        errMsg: expect.any(String),
+      }),
+      expect.stringContaining("formData parsing failed"),
+    );
+
+    // Verify Sentry received the exception
+    const Sentry = await import("@sentry/nextjs");
+    expect(Sentry.captureException).toHaveBeenCalledWith(expect.any(Error));
   });
 });

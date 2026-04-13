@@ -9,6 +9,7 @@ interface TreeNode {
   name: string;
   type: "file" | "directory";
   path?: string;
+  size?: number;
   children?: TreeNode[];
 }
 
@@ -23,7 +24,7 @@ function kbTree(...files: string[]): { tree: TreeNode } {
       pathSoFar = pathSoFar ? `${pathSoFar}/${part}` : part;
       if (i === parts.length - 1) {
         current.children ??= [];
-        current.children.push({ name: part, type: "file", path: pathSoFar });
+        current.children.push({ name: part, type: "file", path: pathSoFar, size: 1000 });
       } else {
         current.children ??= [];
         let child = current.children.find((c) => c.name === part && c.type === "directory");
