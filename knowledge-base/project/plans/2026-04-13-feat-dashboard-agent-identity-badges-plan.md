@@ -150,25 +150,25 @@ Delivered as two PRs on the `feat-dashboard-agent-identity` branch:
 
 ### PR 1: Default Badges
 
-- [ ] Each domain leader's conversations and messages display a domain-specific lucide-react icon badge instead of the generic Soleur logo
-- [ ] Soleur "S" logo appears only on messages where `leader_id` is `"system"` or null
-- [ ] The non-functional profile icon (`UserIcon` circle) is removed from the inbox header
-- [ ] Leader cards on the dashboard show domain-specific icons
-- [ ] `LeaderAvatar` component is used in all 3 rendering locations (conversation list, message bubble, dashboard cards)
-- [ ] Colors from `leader-colors.ts` are consolidated into the leader type definition
-- [ ] No visual regression on existing features (status badges, conversation layout, chat functionality)
+- [x] Each domain leader's conversations and messages display a domain-specific lucide-react icon badge instead of the generic Soleur logo
+- [x] Soleur "S" logo appears only on messages where `leader_id` is `"system"` or null
+- [x] The non-functional profile icon (`UserIcon` circle) is removed from the inbox header
+- [x] Leader cards on the dashboard show domain-specific icons
+- [x] `LeaderAvatar` component is used in all 3 rendering locations (conversation list, message bubble, dashboard cards)
+- [x] Colors from `leader-colors.ts` are consolidated into the leader type definition
+- [x] No visual regression on existing features (status badges, conversation layout, chat functionality)
 
 ### PR 2: Customization UI
 
-- [ ] Each leader row on team settings shows a clickable avatar (click-to-upload)
-- [ ] Clicking the avatar opens a file picker accepting PNG/SVG/WebP up to 256x256px and 100KB
-- [ ] Uploaded icons are committed to `knowledge-base/settings/team-icons/` via git
-- [ ] Custom icons appear in `LeaderAvatar` across all surfaces (conversations, messages, cards)
-- [ ] "Reset" button removes custom icon and reverts to default lucide-react icon
-- [ ] Icon customization persists across sessions (stored in Supabase + git)
-- [ ] LeaderAvatar handles missing custom icon files gracefully (404 falls back to default)
-- [ ] LeaderAvatar has appropriate aria-labels and alt text
-- [ ] Upload failures show toast error with retry option
+- [x] Each leader row on team settings shows a clickable avatar (click-to-upload)
+- [x] Clicking the avatar opens a file picker accepting PNG/SVG/WebP up to 256x256px and 100KB
+- [x] Uploaded icons are committed to `knowledge-base/settings/team-icons/` via git
+- [x] Custom icons appear in `LeaderAvatar` across all surfaces (conversations, messages, cards)
+- [x] "Reset" button removes custom icon and reverts to default lucide-react icon
+- [x] Icon customization persists across sessions (stored in Supabase + git)
+- [x] LeaderAvatar handles missing custom icon files gracefully (404 falls back to default)
+- [x] LeaderAvatar has appropriate aria-labels and alt text
+- [x] Upload failures show toast error with retry option
 
 ## Domain Review
 
