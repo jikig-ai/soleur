@@ -193,6 +193,7 @@ async function githubFetch(
 ): Promise<Response> {
   const response = await fetch(url, {
     ...options,
+    signal: AbortSignal.timeout(15_000),
     headers: {
       Accept: "application/vnd.github+json",
       "X-GitHub-Api-Version": "2022-11-28",

@@ -267,15 +267,15 @@ Both must be caught. The existing pattern in `service-tools.ts` only checks `DOM
 
 ## Acceptance Criteria
 
-- [ ] `githubApiGet`, `githubApiGetText`, and `githubApiPost` in `github-api.ts` use `fetchWithRetry` which includes `AbortSignal.timeout(15_000)` on every fetch call
-- [ ] A `fetchWithRetry` wrapper retries on `UND_ERR_CONNECT_TIMEOUT`, `ECONNRESET`, `ECONNREFUSED`, `ENOTFOUND`, `ENETDOWN`, `UND_ERR_SOCKET`, `TypeError`, `TimeoutError`, and 5xx responses with exponential backoff (max 3 attempts)
-- [ ] `githubFetch` in `github-app.ts` includes `AbortSignal.timeout(15_000)` on every fetch call (timeout only, no retry at this layer)
-- [ ] The upload route (`app/api/kb/upload/route.ts`) returns HTTP 504 with `{ code: "GITHUB_TIMEOUT" }` when GitHub API times out (after retries exhausted)
-- [ ] Both `DOMException` timeout and undici `UND_ERR_CONNECT_TIMEOUT` are caught in the upload route error handler
-- [ ] Retry attempts are logged at `warn` level with attempt number, error message, and URL
-- [ ] 5xx retry drains the response body before retrying to prevent socket issues
-- [ ] Existing tests pass without modification
-- [ ] No changes to the client-side upload code (team-settings.tsx) -- the retry is server-side
+- [x] `githubApiGet`, `githubApiGetText`, and `githubApiPost` in `github-api.ts` use `fetchWithRetry` which includes `AbortSignal.timeout(15_000)` on every fetch call
+- [x] A `fetchWithRetry` wrapper retries on `UND_ERR_CONNECT_TIMEOUT`, `ECONNRESET`, `ECONNREFUSED`, `ENOTFOUND`, `ENETDOWN`, `UND_ERR_SOCKET`, `TypeError`, `TimeoutError`, and 5xx responses with exponential backoff (max 3 attempts)
+- [x] `githubFetch` in `github-app.ts` includes `AbortSignal.timeout(15_000)` on every fetch call (timeout only, no retry at this layer)
+- [x] The upload route (`app/api/kb/upload/route.ts`) returns HTTP 504 with `{ code: "GITHUB_TIMEOUT" }` when GitHub API times out (after retries exhausted)
+- [x] Both `DOMException` timeout and undici `UND_ERR_CONNECT_TIMEOUT` are caught in the upload route error handler
+- [x] Retry attempts are logged at `warn` level with attempt number, error message, and URL
+- [x] 5xx retry drains the response body before retrying to prevent socket issues
+- [x] Existing tests pass without modification
+- [x] No changes to the client-side upload code (team-settings.tsx) -- the retry is server-side
 
 ## Test Scenarios
 
