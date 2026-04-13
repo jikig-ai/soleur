@@ -67,13 +67,13 @@ This roadmap was reviewed by CTO, CLO, CFO, and CMO before finalization.
 
 ---
 
-## Current State (2026-04-12)
+## Current State (2026-04-13)
 
 | Dimension | Status |
 |-----------|--------|
 | Phase 1 (Close the Loop) | Complete. Milestone closed. 0 open, 15 closed. |
 | Phase 2 (Secure for Beta) | Complete. Milestone closed. 0 open, 20 closed. |
-| Phase 3 (Make it Sticky) | In progress. 9 open, 21 closed (milestone). Core KB, inbox, token storage, onboarding, CI/CD, service automation, analytics, sharing, usage indicator, chat attachments all done. Remaining: review gate notifications, guided instructions fallback, subscription management, invoice history, KB file upload, GDPR storage purge, conversation archiving, service automation announcement. |
+| Phase 3 (Make it Sticky) | In progress. 6 open, 30 closed (milestone). Umbrella #672 closed — all essential KB/inbox/usage features done. Remaining: review gate notifications (#1049), guided instructions fallback (#1077), subscription management (#1078), invoice history (#1079), service automation announcement (#1944), agent work visualization (#2004). |
 | Phase 4 (Validate + Scale) | Not started. 16 open, 11 closed. Blocked by Phase 3 completion + marketing/multi-user gates. |
 | Phase 5 (Desktop Native App) | Defined. 5 open, 0 closed. Trigger-gated on user demand. |
 | Post-MVP / Later | 74 open, 265 closed. |
