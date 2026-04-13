@@ -110,14 +110,14 @@ Update `knowledge-base/product/roadmap.md`:
 
 ## Acceptance Criteria
 
-- [ ] 4 separate GitHub issues created for deferred P3 items, each milestoned to
+- [x] 4 separate GitHub issues created for deferred P3 items (#2102, #2103, #2104, #2105), each milestoned to
   "Post-MVP / Later" with `code-review` label
-- [ ] #2099 closed with comment referencing the 4 new issues
-- [ ] Migration 022 verified applied to production (CHECK constraint includes
+- [x] #2099 closed with comment referencing the 4 new issues
+- [x] Migration 022 verified applied to production (CHECK constraint includes
   `'unpaid'`)
-- [ ] #2100 closed with verification evidence
-- [ ] Roadmap row 3.14 updated to "Done"
-- [ ] Current State section updated (remove #1079 from remaining)
+- [x] #2100 closed with verification evidence
+- [x] Roadmap row 3.14 updated to "Done"
+- [x] Current State section updated (synced from GitHub milestones)
 
 ## Test Scenarios
 
