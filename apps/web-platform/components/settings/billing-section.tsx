@@ -1,12 +1,10 @@
 "use client";
 
 import { useState } from "react";
-import { useRouter } from "next/navigation";
 import { CancelRetentionModal } from "./cancel-retention-modal";
 
 interface BillingSectionProps {
   subscriptionStatus: string | null;
-  stripeCustomerId: string | null;
   currentPeriodEnd: string | null;
   cancelAtPeriodEnd: boolean;
   conversationCount: number;
@@ -16,14 +14,12 @@ interface BillingSectionProps {
 
 export function BillingSection({
   subscriptionStatus,
-  stripeCustomerId,
   currentPeriodEnd,
   cancelAtPeriodEnd,
   conversationCount,
   serviceTokenCount,
   createdAt,
 }: BillingSectionProps) {
-  const router = useRouter();
   const [loading, setLoading] = useState(false);
   const [showRetentionModal, setShowRetentionModal] = useState(false);
   const [error, setError] = useState("");

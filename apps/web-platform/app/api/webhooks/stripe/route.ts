@@ -4,6 +4,32 @@ import { createServiceClient } from "@/lib/supabase/server";
 import type Stripe from "stripe";
 import logger from "@/server/logger";
 
+// Map Stripe subscription statuses to the CHECK constraint values in migration 002.
+// Stripe sends: active, canceled, incomplete, incomplete_expired, past_due, trialing, unpaid, paused.
+// DB allows: none, active, cancelled, past_due.
+function mapStripeStatus(stripeStatus: string): string {
+  switch (stripeStatus) {
+    case "active":
+    case "trialing":
+      return "active";
+    case "past_due":
+    case "unpaid":
+      return "past_due";
+    case "canceled":
+    case "incomplete_expired":
+    case "paused":
+      return "cancelled";
+    default:
+      return "active";
+  }
+}
+
+function extractCustomerId(subscription: Stripe.Subscription): string {
+  return typeof subscription.customer === "string"
+    ? subscription.customer
+    : subscription.customer.id;
+}
+
 export async function POST(request: Request) {
   const body = await request.text();
   const signature = request.headers.get("stripe-signature");
@@ -36,7 +62,7 @@ export async function POST(request: Request) {
       const userId = session.metadata?.supabase_user_id;
 
       if (userId) {
-        await supabase
+        const { error } = await supabase
           .from("users")
           .update({
             stripe_customer_id: session.customer as string,
@@ -44,38 +70,42 @@ export async function POST(request: Request) {
             stripe_subscription_id: session.subscription as string,
           })
           .eq("id", userId);
+
+        if (error) {
+          logger.error({ error, userId }, "Webhook: failed to update user on checkout.session.completed");
+          return NextResponse.json({ error: "DB update failed" }, { status: 500 });
+        }
       }
       break;
     }
 
     case "customer.subscription.updated": {
       const subscription = event.data.object as Stripe.Subscription;
-      const customerId =
-        typeof subscription.customer === "string"
-          ? subscription.customer
-          : subscription.customer.id;
+      const customerId = extractCustomerId(subscription);
 
-      await supabase
+      const { error } = await supabase
         .from("users")
         .update({
-          subscription_status: subscription.status,
+          subscription_status: mapStripeStatus(subscription.status),
           cancel_at_period_end: subscription.cancel_at_period_end,
           current_period_end: new Date(
             subscription.current_period_end * 1_000,
           ).toISOString(),
         })
         .eq("stripe_customer_id", customerId);
+
+      if (error) {
+        logger.error({ error, customerId }, "Webhook: failed to update user on customer.subscription.updated");
+        return NextResponse.json({ error: "DB update failed" }, { status: 500 });
+      }
       break;
     }
 
     case "customer.subscription.deleted": {
       const subscription = event.data.object as Stripe.Subscription;
-      const customerId =
-        typeof subscription.customer === "string"
-          ? subscription.customer
-          : subscription.customer.id;
+      const customerId = extractCustomerId(subscription);
 
-      await supabase
+      const { error } = await supabase
         .from("users")
         .update({
           subscription_status: "cancelled",
@@ -83,6 +113,11 @@ export async function POST(request: Request) {
           current_period_end: null,
         })
         .eq("stripe_customer_id", customerId);
+
+      if (error) {
+        logger.error({ error, customerId }, "Webhook: failed to update user on customer.subscription.deleted");
+        return NextResponse.json({ error: "DB update failed" }, { status: 500 });
+      }
       break;
     }
 

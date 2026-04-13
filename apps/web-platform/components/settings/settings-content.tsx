@@ -13,7 +13,6 @@ interface SettingsContentProps {
   repoStatus: RepoStatus;
   repoLastSyncedAt: string | null;
   subscriptionStatus: string | null;
-  stripeCustomerId: string | null;
   currentPeriodEnd: string | null;
   cancelAtPeriodEnd: boolean;
   conversationCount: number;
@@ -30,7 +29,6 @@ export function SettingsContent({
   repoStatus,
   repoLastSyncedAt,
   subscriptionStatus,
-  stripeCustomerId,
   currentPeriodEnd,
   cancelAtPeriodEnd,
   conversationCount,
@@ -112,7 +110,6 @@ export function SettingsContent({
       {/* Billing Section */}
       <BillingSection
         subscriptionStatus={subscriptionStatus}
-        stripeCustomerId={stripeCustomerId}
         currentPeriodEnd={currentPeriodEnd}
         cancelAtPeriodEnd={cancelAtPeriodEnd}
         conversationCount={conversationCount}

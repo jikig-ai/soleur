@@ -183,6 +183,88 @@ describe("Stripe webhook — subscription lifecycle", () => {
     });
   });
 
+  describe("status mapping", () => {
+    test("maps Stripe 'trialing' to DB 'active'", async () => {
+      const event = makeEvent("customer.subscription.updated", {
+        customer: CUSTOMER_ID,
+        status: "trialing",
+        cancel_at_period_end: false,
+        current_period_end: 1_700_000_000,
+      });
+      mockConstructEvent.mockReturnValue(event);
+
+      await POST(makeRequest());
+
+      expect(mockUpdate).toHaveBeenCalledWith(
+        expect.objectContaining({ subscription_status: "active" }),
+      );
+    });
+
+    test("maps Stripe 'past_due' to DB 'past_due'", async () => {
+      const event = makeEvent("customer.subscription.updated", {
+        customer: CUSTOMER_ID,
+        status: "past_due",
+        cancel_at_period_end: false,
+        current_period_end: 1_700_000_000,
+      });
+      mockConstructEvent.mockReturnValue(event);
+
+      await POST(makeRequest());
+
+      expect(mockUpdate).toHaveBeenCalledWith(
+        expect.objectContaining({ subscription_status: "past_due" }),
+      );
+    });
+
+    test("maps Stripe 'canceled' to DB 'cancelled'", async () => {
+      const event = makeEvent("customer.subscription.updated", {
+        customer: CUSTOMER_ID,
+        status: "canceled",
+        cancel_at_period_end: false,
+        current_period_end: 1_700_000_000,
+      });
+      mockConstructEvent.mockReturnValue(event);
+
+      await POST(makeRequest());
+
+      expect(mockUpdate).toHaveBeenCalledWith(
+        expect.objectContaining({ subscription_status: "cancelled" }),
+      );
+    });
+  });
+
+  describe("error handling", () => {
+    test("returns 500 when DB update fails on checkout.session.completed", async () => {
+      const event = makeEvent("checkout.session.completed", {
+        customer: CUSTOMER_ID,
+        subscription: SUBSCRIPTION_ID,
+        metadata: { supabase_user_id: USER_ID },
+      });
+      mockConstructEvent.mockReturnValue(event);
+      mockEq.mockResolvedValue({ error: { message: "constraint violation" } });
+
+      const res = await POST(makeRequest());
+
+      expect(res.status).toBe(500);
+      expect(mockLogger.error).toHaveBeenCalled();
+    });
+
+    test("returns 500 when DB update fails on subscription.updated", async () => {
+      const event = makeEvent("customer.subscription.updated", {
+        customer: CUSTOMER_ID,
+        status: "active",
+        cancel_at_period_end: false,
+        current_period_end: 1_700_000_000,
+      });
+      mockConstructEvent.mockReturnValue(event);
+      mockEq.mockResolvedValue({ error: { message: "connection lost" } });
+
+      const res = await POST(makeRequest());
+
+      expect(res.status).toBe(500);
+    });
+  });
+
   describe("unhandled events", () => {
     test("returns 200 for unhandled event types", async () => {
       const event = makeEvent("invoice.paid", { id: "inv_123" });
