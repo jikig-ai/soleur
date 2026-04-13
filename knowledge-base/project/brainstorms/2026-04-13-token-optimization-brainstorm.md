@@ -15,6 +15,7 @@ Soleur is hitting Claude Code usage limits faster than expected due to cumulativ
 The user's quality bar is non-negotiable across all pipelines (review, domain assessments, implementation). This rules out model downgrades (e.g., `model: sonnet` overrides). Savings must come from **not spawning agents that aren't relevant**, rather than making agents cheaper.
 
 Context-aware gating was chosen over:
+
 - **Tiered profiles** (light/standard/deep presets) — simpler but less surgical
 - **Incremental spawning** (start small, escalate) — more efficient but slower and more complex
 - **Advisor strategy** (Messages API `advisor_20260301` tool) — cannot work at the plugin level (see below)
