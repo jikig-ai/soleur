@@ -455,14 +455,25 @@ and lifecycle progression.
 
    If there are no uncommitted changes, skip the commit. If push fails (no network),
    warn and continue.
-3. Display: "All artifacts are on disk. Run `/clear` then `/soleur:work` for maximum
-   context headroom."
+3. Display the resume prompt (per AGENTS.md Communication rule). Format:
+
+   ```text
+   All artifacts are on disk. Run `/clear` then paste this to resume:
+
+   /soleur:work <plan-file-path>
+
+   Context: branch <branch>, worktree <worktree-path>, PR #<N>, issue #<N>.
+   <one-line summary of what was already done>
+   ```
+
+   Replace placeholders with actual values from the session. The user must be
+   able to paste the command and go without re-explaining context.
 
 ## Post-Generation Options
 
 After plan review, use the **AskUserQuestion tool** to present these options:
 
-**Question:** "Plan reviewed and ready at `knowledge-base/project/plans/YYYY-MM-DD-<type>-<name>-plan.md`. Context is saved to disk — run `/clear` before `/soleur:work` for maximum headroom. What would you like to do next?"
+**Question:** "Plan reviewed and ready. Resume prompt above. What would you like to do next?"
 
 **Options:**
 
