@@ -9,12 +9,19 @@ const nextConfig: NextConfig = {
   output: undefined,
   // Allow WebSocket upgrade on the same port
   serverExternalPackages: ["@anthropic-ai/claude-agent-sdk", "ws"],
-  // SECURITY: restrict Server Action origins for defense-in-depth
-  serverActions: {
-    allowedOrigins:
-      process.env.NODE_ENV === "development"
-        ? ["app.soleur.ai", "localhost:3000"]
-        : ["app.soleur.ai"],
+  experimental: {
+    // SECURITY: restrict Server Action origins for defense-in-depth
+    serverActions: {
+      allowedOrigins:
+        process.env.NODE_ENV === "development"
+          ? ["app.soleur.ai", "localhost:3000"]
+          : ["app.soleur.ai"],
+    },
+    // Next.js clones the request body when middleware modifies headers.
+    // Default limit is 10 MB — bodies exceeding it are silently truncated,
+    // causing "Failed to parse body as FormData" for uploads >10 MB.
+    // Set to 25 MB (route handler caps at 20 MB; headroom for multipart overhead).
+    middlewareClientMaxBodySize: 25 * 1024 * 1024,
   },
   async headers() {
     return [
