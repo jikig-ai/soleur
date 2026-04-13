@@ -27,26 +27,25 @@ In `apps/web-platform/app/(dashboard)/dashboard/page.tsx`:
 - Change container from `gap-2` to `gap-3` for better visual spacing
 - Change `items-end` to `items-center` for vertical centering
 
-### Part 2: Add attachment support via pending-file bridge
+### Part 2: Add attachment support via two-step send
 
-Architecture: Store selected files in a module-level singleton, navigate to chat/new, then upload files after conversation creation.
+[Updated 2026-04-13 — revised after plan review found fatal presign sequencing bug]
+
+Architecture: Add file selection UI to the command center form. On submit, store files in a module-level singleton, navigate to chat/new. The chat page sends the text message first (which materializes the conversation and produces a real `conversationId`), then uploads files via presign API and sends them as a follow-up message.
+
+**Why two-step send:** The presign API (`app/api/attachments/presign/route.ts:62-71`) validates `conversationId` against the `conversations` DB table. During the first-run flow, the conversation row is not created until the first `chat` message materializes it (deferred creation in `ws-handler.ts`). Uploading files before the text message would fail with `404 conversation_not_found`.
 
 **Files to create:**
 
-- `apps/web-platform/lib/pending-attachments.ts` — Module-level store for `File[]` that survives client-side navigation. Simple get/set/clear API.
+- `apps/web-platform/lib/pending-attachments.ts` — Module-level store for `File[]` that survives client-side SPA navigation. Simple get/set/clear API with a staleness guard (files older than 5 minutes are discarded on `get`).
 
 **Files to modify:**
 
-- `apps/web-platform/app/(dashboard)/dashboard/page.tsx` — Add paperclip button, hidden file input, attachment preview strip, drag/drop, and paste handlers to the first-run form. Reuse validation logic from `chat-input.tsx` (import `ALLOWED_ATTACHMENT_TYPES`, `MAX_ATTACHMENT_SIZE`, `MAX_ATTACHMENTS_PER_MESSAGE` from `lib/attachment-constants.ts`). On submit, store files via `pending-attachments.ts` before navigating.
+- `apps/web-platform/app/(dashboard)/dashboard/page.tsx` — Add paperclip button, hidden file input, attachment preview strip, drag/drop, and paste handlers to the first-run form. Reuse validation from `lib/attachment-constants.ts`. On submit, store `File[]` via pending-attachments, revoke preview URLs, then navigate.
 
-- `apps/web-platform/app/(dashboard)/dashboard/chat/[conversationId]/page.tsx` — After `sessionConfirmed`, check for pending files. If present, upload via presign API, then send initial message with both text and `AttachmentRef[]`. Clear pending files after consumption.
+- `apps/web-platform/app/(dashboard)/dashboard/chat/[conversationId]/page.tsx` — After initial text message is sent and `sessionConfirmed`, check for pending files. Upload via presign API (using the now-materialized `conversationId`), then send as a follow-up message. Clear pending files after consumption. Handle upload failures gracefully (send text-only, show error toast).
 
-### Why module-level store (not Context/zustand)
-
-- Both pages share the `(dashboard)/layout.tsx` which survives `router.push` (client-side SPA navigation)
-- A module-level singleton is simpler than adding a context provider or a new dependency
-- Files are consumed once and cleared — no reactivity needed
-- The app has no zustand dependency; no need to add one for this
+- `apps/web-platform/lib/ws-client.ts` — Expose the `conversationId` from `session_started` message (currently ignored at line 314). The chat page needs the real UUID for presign calls when `conversationId` param is `"new"`.
 
 ## Implementation Tasks
 
@@ -59,10 +58,10 @@ Architecture: Store selected files in a module-level singleton, navigate to chat
 ### Phase 2: Create pending-attachments bridge
 
 - [ ] Create `apps/web-platform/lib/pending-attachments.ts`:
-  - `setPendingFiles(files: File[]): void`
-  - `getPendingFiles(): File[]`
+  - `setPendingFiles(files: File[]): void` — stores files with current timestamp
+  - `getPendingFiles(): File[]` — returns files if < 5 min old, otherwise clears and returns `[]`
   - `clearPendingFiles(): void`
-  - Simple module-level `let pendingFiles: File[] = []`
+  - Module-level `let pendingFiles: { files: File[]; timestamp: number } | null = null`
 
 ### Phase 3: Add attachment UI to command center form
 
@@ -77,17 +76,24 @@ Architecture: Store selected files in a module-level singleton, navigate to chat
 - [ ] Update `handleFirstRunSend`: store `File[]` via `setPendingFiles()` before `router.push`
 - [ ] Update submit button disabled state: allow submit when attachments exist even without text
 
-### Phase 4: Consume pending files on chat page
+### Phase 4: Expose conversationId from ws-client
+
+- [ ] In `apps/web-platform/lib/ws-client.ts`, capture `conversationId` from `session_started` message (line ~314) and expose it via the hook return value
+- [ ] Add `realConversationId` (or similar) to the `useWebSocket` return type
+
+### Phase 5: Consume pending files on chat page
 
 - [ ] In `chat/[conversationId]/page.tsx`, import `getPendingFiles`/`clearPendingFiles`
-- [ ] After `sessionConfirmed && msgParam && !initialMsgSent`:
-  1. Get pending files
-  2. If files exist: upload each via presign API (reuse `uploadWithProgress` from chat-input), then call `sendMessage(msgParam, uploadedRefs)`
-  3. If no files: existing behavior (`sendMessage(msgParam)`)
-  4. Clear pending files
+- [ ] After initial text message is sent (`initialMsgSent === true`), check for pending files
+- [ ] If files exist:
+  1. Wait for `realConversationId` from ws-client (the materialized UUID)
+  2. Upload each file via presign API using the real conversationId
+  3. Send as follow-up message: `sendMessage("", uploadedRefs)`
+  4. Handle upload failures: log error, show toast, continue without attachments
+- [ ] Clear pending files after consumption (success or failure)
 - [ ] Import `uploadWithProgress` from `components/chat/chat-input.tsx` — or extract to shared util if not already exported
 
-### Phase 5: Tests
+### Phase 6: Tests
 
 - [ ] Update `apps/web-platform/test/command-center.test.tsx`:
   - Test input and button have matching min-height
@@ -95,8 +101,10 @@ Architecture: Store selected files in a module-level singleton, navigate to chat
   - Test file validation (type, size, count limits)
   - Test attachment preview strip renders for selected files
   - Test files are stored via pending-attachments on submit
+  - Test preview URL cleanup on submit and unmount
 - [ ] Add `apps/web-platform/test/pending-attachments.test.ts`:
   - Test set/get/clear lifecycle
+  - Test staleness guard (files older than 5 min discarded)
   - Test clear empties the store
 
 ## Acceptance Criteria
