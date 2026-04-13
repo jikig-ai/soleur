@@ -24,11 +24,26 @@ export default async function SettingsPage() {
     .limit(1)
     .single();
 
-  const { data: repoData } = await service
+  const { data: userData } = await service
     .from("users")
-    .select("repo_url, repo_status, repo_last_synced_at")
+    .select(
+      "repo_url, repo_status, repo_last_synced_at, subscription_status, stripe_customer_id, current_period_end, cancel_at_period_end, created_at",
+    )
     .eq("id", user.id)
     .single();
+
+  // Fetch stats for retention modal
+  const [{ count: conversationCount }, { count: serviceTokenCount }] =
+    await Promise.all([
+      service
+        .from("conversations")
+        .select("*", { count: "exact", head: true })
+        .eq("user_id", user.id),
+      service
+        .from("service_tokens")
+        .select("*", { count: "exact", head: true })
+        .eq("user_id", user.id),
+    ]);
 
   return (
     <SettingsShell>
@@ -37,9 +52,16 @@ export default async function SettingsPage() {
         hasApiKey={!!apiKey}
         apiKeyProvider={apiKey?.provider ?? null}
         apiKeyLastValidated={apiKey?.updated_at ?? null}
-        repoUrl={repoData?.repo_url ?? null}
-        repoStatus={(repoData?.repo_status as RepoStatus) ?? "not_connected"}
-        repoLastSyncedAt={repoData?.repo_last_synced_at ?? null}
+        repoUrl={userData?.repo_url ?? null}
+        repoStatus={(userData?.repo_status as RepoStatus) ?? "not_connected"}
+        repoLastSyncedAt={userData?.repo_last_synced_at ?? null}
+        subscriptionStatus={userData?.subscription_status ?? null}
+        stripeCustomerId={userData?.stripe_customer_id ?? null}
+        currentPeriodEnd={userData?.current_period_end ?? null}
+        cancelAtPeriodEnd={userData?.cancel_at_period_end ?? false}
+        conversationCount={conversationCount ?? 0}
+        serviceTokenCount={serviceTokenCount ?? 0}
+        createdAt={userData?.created_at ?? new Date().toISOString()}
       />
     </SettingsShell>
   );
