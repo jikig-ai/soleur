@@ -6,23 +6,23 @@ Guided instructions fallback for services without API/MCP (Tier 3 of 3-tier serv
 
 ### 1.1 Formalize guided instructions protocol in service-automator
 
-- [ ] 1.1.1 Read current `plugins/soleur/agents/operations/service-automator.md`
-- [ ] 1.1.2 Add `## Guided Instructions Protocol` section with sequential AskUserQuestion pattern
-- [ ] 1.1.3 Define step format: header="Step N of M: [title]", question with deep link + instructions, options=["Done -- proceed to next step", "I need help", "Skip this step"]
-- [ ] 1.1.4 Add tier detection instructions: check connected services context, if no token for requested service AND no MCP session, use guided tier
-- [ ] 1.1.5 Add "I need help" handling: provide additional context without advancing step
-- [ ] 1.1.6 Add "Skip this step" handling: note skip, advance to next step, warn if skip may cause issues
-- [ ] 1.1.7 Add post-completion summary and token storage prompt
-- [ ] 1.1.8 Run `npx markdownlint-cli2 --fix` on the file
+- [x] 1.1.1 Read current `plugins/soleur/agents/operations/service-automator.md`
+- [x] 1.1.2 Add `## Guided Instructions Protocol` section with sequential AskUserQuestion pattern
+- [x] 1.1.3 Define step format: header="Step N of M: [title]", question with deep link + instructions, options=["Done -- proceed to next step", "I need help", "Skip this step"]
+- [x] 1.1.4 Add tier detection instructions: check connected services context, if no token for requested service AND no MCP session, use guided tier
+- [x] 1.1.5 Add "I need help" handling: provide additional context without advancing step
+- [x] 1.1.6 Add "Skip this step" handling: note skip, advance to next step, warn if skip may cause issues
+- [x] 1.1.7 Add post-completion summary and token storage prompt
+- [x] 1.1.8 Run `npx markdownlint-cli2 --fix` on the file
 
 ### 1.2 Enhance service-deep-links.md
 
-- [ ] 1.2.1 Read current `plugins/soleur/agents/operations/references/service-deep-links.md`
-- [ ] 1.2.2 Add estimated setup time per service (e.g., "~5 min" for Plausible, "~15 min" for Cloudflare with DNS)
-- [ ] 1.2.3 Add prerequisites per service (e.g., "Requires a domain you control" for Cloudflare)
-- [ ] 1.2.4 Add `## Adding New Services` section documenting the format
-- [ ] 1.2.5 Ensure step numbers are explicit and consistent across all services
-- [ ] 1.2.6 Run `npx markdownlint-cli2 --fix` on the file
+- [x] 1.2.1 Read current `plugins/soleur/agents/operations/references/service-deep-links.md`
+- [x] 1.2.2 Add estimated setup time per service (e.g., "~5 min" for Plausible, "~15 min" for Cloudflare with DNS)
+- [x] 1.2.3 Add prerequisites per service (e.g., "Requires a domain you control" for Cloudflare)
+- [x] 1.2.4 Add `## Adding New Services` section documenting the format
+- [x] 1.2.5 Ensure step numbers are explicit and consistent across all services
+- [x] 1.2.6 Run `npx markdownlint-cli2 --fix` on the file
 
 ## Phase 2: Testing
 
