@@ -48,6 +48,10 @@ export function sanitizeErrorForClient(err: unknown): string {
     const safe = KNOWN_SAFE_MESSAGES[err.message];
     if (safe) return safe;
 
+    if (err.message.includes("No conversation found with session ID")) {
+      return "Session resume failed. Falling back to conversation history.";
+    }
+
     if (err.message.startsWith("Unknown leader:")) {
       return "Invalid domain leader selected.";
     }

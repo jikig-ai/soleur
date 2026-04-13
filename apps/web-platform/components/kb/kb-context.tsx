@@ -9,6 +9,7 @@ export interface KbContextValue {
   error: "workspace-not-ready" | "not-found" | "unknown" | null;
   expanded: Set<string>;
   toggleExpanded: (path: string) => void;
+  refreshTree: () => Promise<void>;
 }
 
 export const KbContext = createContext<KbContextValue | null>(null);

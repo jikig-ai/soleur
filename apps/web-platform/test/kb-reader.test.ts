@@ -44,12 +44,26 @@ describe("buildTree", () => {
     });
   });
 
-  test("excludes non-.md files", async () => {
-    fs.writeFileSync(path.join(kbRoot, "data.json"), "{}");
-    fs.writeFileSync(path.join(kbRoot, "readme.md"), "# Hello");
+  test("includes all file types, not just .md", async () => {
+    fs.writeFileSync(path.join(kbRoot, "test.md"), "# Hello");
+    fs.writeFileSync(path.join(kbRoot, "image.png"), "fake-png");
+    fs.writeFileSync(path.join(kbRoot, "data.csv"), "a,b,c");
+    fs.writeFileSync(path.join(kbRoot, "doc.pdf"), "fake-pdf");
     const tree = await buildTree(kbRoot);
-    expect(tree.children).toHaveLength(1);
-    expect(tree.children![0].name).toBe("readme.md");
+    expect(tree.children).toHaveLength(4);
+    const names = tree.children!.map((c) => c.name).sort();
+    expect(names).toEqual(["data.csv", "doc.pdf", "image.png", "test.md"]);
+    // Each file node should have an extension field
+    for (const child of tree.children!) {
+      expect(child.extension).toBeDefined();
+    }
+    const extMap = Object.fromEntries(
+      tree.children!.map((c) => [c.name, c.extension]),
+    );
+    expect(extMap["test.md"]).toBe(".md");
+    expect(extMap["image.png"]).toBe(".png");
+    expect(extMap["data.csv"]).toBe(".csv");
+    expect(extMap["doc.pdf"]).toBe(".pdf");
   });
 
   test("builds nested directory structure", async () => {
@@ -116,6 +130,50 @@ describe("buildTree", () => {
     const missingKb = path.join(tmpWorkspace, "nonexistent");
     const tree = await buildTree(missingKb);
     expect(tree.children).toEqual([]);
+  });
+
+  test("includes extension field on file nodes", async () => {
+    fs.writeFileSync(path.join(kbRoot, "readme.md"), "# Hello");
+    fs.writeFileSync(path.join(kbRoot, "photo.png"), "fake-png");
+    const tree = await buildTree(kbRoot);
+    for (const child of tree.children!) {
+      expect(child.type).toBe("file");
+      expect(child.extension).toBeDefined();
+    }
+    const mdNode = tree.children!.find((c) => c.name === "readme.md");
+    const pngNode = tree.children!.find((c) => c.name === "photo.png");
+    expect(mdNode!.extension).toBe(".md");
+    expect(pngNode!.extension).toBe(".png");
+  });
+
+  test("does not include extension field on directory nodes", async () => {
+    fs.mkdirSync(path.join(kbRoot, "subdir"));
+    fs.writeFileSync(path.join(kbRoot, "subdir", "file.md"), "# Doc");
+    const tree = await buildTree(kbRoot);
+    const dir = tree.children![0];
+    expect(dir.type).toBe("directory");
+    expect(dir.extension).toBeUndefined();
+  });
+
+  test("includes all allowed file types", async () => {
+    const extensions = [
+      "file.png",
+      "file.jpg",
+      "file.jpeg",
+      "file.gif",
+      "file.webp",
+      "file.pdf",
+      "file.csv",
+      "file.txt",
+      "file.docx",
+    ];
+    for (const name of extensions) {
+      fs.writeFileSync(path.join(kbRoot, name), "fake-content");
+    }
+    const tree = await buildTree(kbRoot);
+    expect(tree.children).toHaveLength(extensions.length);
+    const treeNames = tree.children!.map((c) => c.name).sort();
+    expect(treeNames).toEqual([...extensions].sort());
   });
 });
 
@@ -295,5 +353,29 @@ describe("searchKb", () => {
     const match = result.results.find((r) => r.path === "with-fm.md");
     expect(match).toBeDefined();
     expect(match!.frontmatter).toEqual({ category: "test" });
+  });
+
+  test("does not search binary/non-.md files", async () => {
+    fs.writeFileSync(path.join(kbRoot, "image.png"), "findme in png");
+    fs.writeFileSync(path.join(kbRoot, "data.csv"), "findme in csv");
+    fs.writeFileSync(path.join(kbRoot, "searchable.md"), "findme in markdown");
+    const result = await searchKb(kbRoot, "findme");
+    // Only the .md file should be searched
+    expect(result.results).toHaveLength(1);
+    expect(result.results[0].path).toBe("searchable.md");
+  });
+
+  test("collectMdFiles still returns only .md files", async () => {
+    fs.writeFileSync(path.join(kbRoot, "doc.md"), "markdown");
+    fs.writeFileSync(path.join(kbRoot, "image.png"), "png");
+    fs.writeFileSync(path.join(kbRoot, "data.csv"), "csv");
+    // searchKb uses collectMdFiles internally — if it only finds .md files,
+    // then collectMdFiles is correctly filtering.
+    const result = await searchKb(kbRoot, "markdown");
+    expect(result.results).toHaveLength(1);
+    expect(result.results[0].path).toBe("doc.md");
+    // Also verify no results for content only in non-.md files
+    const pngResult = await searchKb(kbRoot, "png");
+    expect(pngResult.results).toHaveLength(0);
   });
 });
