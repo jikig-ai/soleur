@@ -256,17 +256,17 @@ Possible fixes depending on what the logging reveals:
 
 ## Acceptance Criteria
 
-- [ ] Uploading a file shows a circular progress indicator that fills from 0% to 100%
-- [ ] The progress indicator shows the percentage numerically for files that take more than ~1 second
-- [ ] The progress indicator smoothly animates between progress updates (CSS transition)
-- [ ] After upload reaches 100%, a brief processing state is shown before returning to idle
+- [x] Uploading a file shows a circular progress indicator that fills from 0% to 100%
+- [x] The progress indicator shows the percentage numerically for files that take more than ~1 second
+- [x] The progress indicator smoothly animates between progress updates (CSS transition)
+- [x] After upload reaches 100%, a brief processing state is shown before returning to idle
 - [ ] PDF files up to 20MB upload successfully without "Invalid form data" error
-- [ ] The `formData()` catch block logs the actual exception type and message to Sentry
-- [ ] Files over 20MB are still rejected with a clear size error message (client-side validation)
-- [ ] The duplicate detection flow (409 response) still works correctly with XHR
-- [ ] Error states (network error, server error) still display correctly
-- [ ] The upload button is hidden during upload (existing behavior preserved)
-- [ ] Existing tests pass; new tests cover the progress and body size scenarios
+- [x] The `formData()` catch block logs the actual exception type and message to Sentry
+- [x] Files over 20MB are still rejected with a clear size error message (client-side validation)
+- [x] The duplicate detection flow (409 response) still works correctly with XHR
+- [x] Error states (network error, server error) still display correctly
+- [x] The upload button is hidden during upload (existing behavior preserved)
+- [x] Existing tests pass; new tests cover the progress and body size scenarios
 
 ## Domain Review
 
