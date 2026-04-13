@@ -3,7 +3,9 @@ import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { validateOrigin, rejectCsrf } from "@/lib/auth/validate-origin";
 import { isPathInWorkspace } from "@/server/sandbox";
 import { githubApiGet, githubApiPost } from "@/server/github-api";
+import { generateInstallationToken, randomCredentialPath } from "@/server/github-app";
 import { execFile } from "node:child_process";
+import { writeFileSync, unlinkSync } from "node:fs";
 import { promisify } from "node:util";
 import path from "path";
 import logger from "@/server/logger";
@@ -223,11 +225,21 @@ export async function POST(request: Request) {
     );
 
     // Workspace sync (best-effort — file is committed to GitHub)
+    let helperPath: string | null = null;
     try {
-      await execFileAsync("git", ["pull", "--ff-only"], {
-        cwd: userData.workspace_path,
-        timeout: 30000,
-      });
+      const token = await generateInstallationToken(userData.github_installation_id);
+      helperPath = randomCredentialPath();
+      writeFileSync(
+        helperPath,
+        `#!/bin/sh\necho "username=x-access-token"\necho "password=${token}"`,
+        { mode: 0o700 },
+      );
+
+      await execFileAsync(
+        "git",
+        ["-c", `credential.helper=!${helperPath}`, "pull", "--ff-only"],
+        { cwd: userData.workspace_path, timeout: 30_000 },
+      );
     } catch (syncError) {
       logger.error(
         { err: syncError, userId: user.id },
@@ -241,6 +253,10 @@ export async function POST(request: Request) {
         },
         { status: 500 },
       );
+    } finally {
+      if (helperPath) {
+        try { unlinkSync(helperPath); } catch { /* best-effort cleanup */ }
+      }
     }
 
     logger.info(
