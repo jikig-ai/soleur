@@ -36,16 +36,35 @@ export async function POST(request: Request) {
       const userId = session.metadata?.supabase_user_id;
 
       if (userId) {
-        // NOTE: requires migration to add stripe_customer_id and subscription_status
-        // columns to the users table
         await supabase
           .from("users")
           .update({
             stripe_customer_id: session.customer as string,
             subscription_status: "active",
+            stripe_subscription_id: session.subscription as string,
           })
           .eq("id", userId);
       }
+      break;
+    }
+
+    case "customer.subscription.updated": {
+      const subscription = event.data.object as Stripe.Subscription;
+      const customerId =
+        typeof subscription.customer === "string"
+          ? subscription.customer
+          : subscription.customer.id;
+
+      await supabase
+        .from("users")
+        .update({
+          subscription_status: subscription.status,
+          cancel_at_period_end: subscription.cancel_at_period_end,
+          current_period_end: new Date(
+            subscription.current_period_end * 1_000,
+          ).toISOString(),
+        })
+        .eq("stripe_customer_id", customerId);
       break;
     }
 
@@ -58,7 +77,11 @@ export async function POST(request: Request) {
 
       await supabase
         .from("users")
-        .update({ subscription_status: "cancelled" })
+        .update({
+          subscription_status: "cancelled",
+          cancel_at_period_end: false,
+          current_period_end: null,
+        })
         .eq("stripe_customer_id", customerId);
       break;
     }
