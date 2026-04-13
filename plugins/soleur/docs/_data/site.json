@@ -24,7 +24,9 @@
   ],
   "author": {
     "name": "Jean Deruelle",
-    "url": "https://soleur.ai/about/"
+    "url": "https://soleur.ai/about/",
+    "role": "Founder",
+    "company": "Soleur"
   },
   "footerColumns": [
     {

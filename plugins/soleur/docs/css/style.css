@@ -429,6 +429,12 @@
     margin-inline: auto;
     margin-bottom: var(--space-6);
   }
+  .landing-hero .hero-tagline {
+    font-size: 1.5rem;
+    font-weight: 500;
+    color: var(--color-text-secondary);
+    margin-bottom: var(--space-4);
+  }
   .landing-hero .hero-sub {
     font-size: 1.125rem;
     color: var(--color-text-secondary);

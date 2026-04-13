@@ -24,7 +24,8 @@ layout: base.njk
   "author": {
     "@type": "Person",
     "name": "{{ site.author.name }}",
-    "url": "{{ site.author.url }}"
+    "url": "{{ site.author.url }}",
+    "jobTitle": "{{ site.author.role }} of {{ site.name }}"
   },
   "publisher": {
     "@type": "Organization",
@@ -51,7 +52,7 @@ layout: base.njk
       {% if updated %}
       <span class="blog-post-updated">Updated <time datetime="{{ updated | dateToRfc3339 }}">{{ updated | readableDate }}</time></span>
       {% endif %}
-      <span class="blog-post-author">by <a href="{{ site.author.url }}" rel="author">{{ site.author.name }}</a></span>
+      <span class="blog-post-author">by <a href="{{ site.author.url }}" rel="author">{{ site.author.name }}</a>, {{ site.author.role }} of {{ site.name }}</span>
     </div>
     {% if tags %}
     <div class="blog-tags">
