@@ -140,7 +140,7 @@ describe("FileTree delete UI", () => {
       ok: true,
       status: 200,
       json: () => Promise.resolve({ commitSha: "abc123" }),
-    });
+    } as unknown as Response);
 
     setupKbMock(makeTree([overviewDir]));
     render(<FileTree />);
@@ -190,7 +190,7 @@ describe("FileTree delete UI", () => {
       ok: false,
       status: 500,
       json: () => Promise.resolve({ error: "Internal server error" }),
-    });
+    } as unknown as Response);
 
     setupKbMock(makeTree([overviewDir]));
     render(<FileTree />);
