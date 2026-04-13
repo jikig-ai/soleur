@@ -79,4 +79,19 @@ describe("CancelRetentionModal", () => {
       screen.getByRole("button", { name: /continue to cancel/i }),
     ).toBeInTheDocument();
   });
+
+  it("has role=dialog and aria-modal=true", () => {
+    render(<CancelRetentionModal {...BASE_PROPS} />);
+
+    const dialog = screen.getByRole("dialog");
+    expect(dialog).toHaveAttribute("aria-modal", "true");
+    expect(dialog).toHaveAttribute("aria-labelledby", "retention-heading");
+  });
+
+  it("calls onClose when Escape key is pressed", () => {
+    render(<CancelRetentionModal {...BASE_PROPS} />);
+
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(BASE_PROPS.onClose).toHaveBeenCalledTimes(1);
+  });
 });

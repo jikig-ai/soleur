@@ -1,5 +1,7 @@
 "use client";
 
+import { useEffect, useRef } from "react";
+
 interface CancelRetentionModalProps {
   open: boolean;
   onClose: () => void;
@@ -17,6 +19,49 @@ export function CancelRetentionModal({
   serviceTokenCount,
   createdAt,
 }: CancelRetentionModalProps) {
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLElement | null>(null);
+  const onCloseRef = useRef(onClose);
+  useEffect(() => {
+    onCloseRef.current = onClose;
+  });
+
+  useEffect(() => {
+    if (!open) return;
+
+    triggerRef.current = document.activeElement as HTMLElement;
+    dialogRef.current?.focus();
+
+    function handleKeyDown(e: KeyboardEvent) {
+      if (e.key === "Escape") {
+        onCloseRef.current();
+        return;
+      }
+
+      if (e.key === "Tab" && dialogRef.current) {
+        const focusable = dialogRef.current.querySelectorAll<HTMLElement>(
+          'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])',
+        );
+        const first = focusable[0];
+        const last = focusable[focusable.length - 1];
+
+        if (e.shiftKey && document.activeElement === first) {
+          e.preventDefault();
+          last?.focus();
+        } else if (!e.shiftKey && document.activeElement === last) {
+          e.preventDefault();
+          first?.focus();
+        }
+      }
+    }
+
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("keydown", handleKeyDown);
+      triggerRef.current?.focus();
+    };
+  }, [open]);
+
   if (!open) return null;
 
   const daysSinceSignup = Math.floor(
@@ -38,8 +83,18 @@ export function CancelRetentionModal({
         onClick={onClose}
         role="presentation"
       />
-      <div className="relative w-full max-w-md rounded-xl border border-neutral-800 bg-neutral-900 p-8">
-        <h3 className="mb-2 text-xl font-semibold text-white">
+      <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="retention-heading"
+        tabIndex={-1}
+        className="relative w-full max-w-md rounded-xl border border-neutral-800 bg-neutral-900 p-8"
+      >
+        <h3
+          id="retention-heading"
+          className="mb-2 text-xl font-semibold text-white"
+        >
           Before you go...
         </h3>
         <p className="mb-6 text-sm text-neutral-400">

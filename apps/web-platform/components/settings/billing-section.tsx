@@ -36,14 +36,14 @@ export function BillingSection({
       })
     : null;
 
-  async function handlePortalRedirect() {
+  async function redirectTo(endpoint: string, fallbackError: string) {
     setLoading(true);
     setError("");
     try {
-      const res = await fetch("/api/billing/portal", { method: "POST" });
+      const res = await fetch(endpoint, { method: "POST" });
       const data = await res.json();
       if (!res.ok) {
-        setError(data.error || "Failed to open billing portal");
+        setError(data.error || fallbackError);
         return;
       }
       if (data.url) {
@@ -56,25 +56,10 @@ export function BillingSection({
     }
   }
 
-  async function handleSubscribe() {
-    setLoading(true);
-    setError("");
-    try {
-      const res = await fetch("/api/checkout", { method: "POST" });
-      const data = await res.json();
-      if (!res.ok) {
-        setError(data.error || "Failed to create checkout session");
-        return;
-      }
-      if (data.url) {
-        window.location.href = data.url;
-      }
-    } catch {
-      setError("Something went wrong. Please try again.");
-    } finally {
-      setLoading(false);
-    }
-  }
+  const handlePortalRedirect = () =>
+    redirectTo("/api/billing/portal", "Failed to open billing portal");
+  const handleSubscribe = () =>
+    redirectTo("/api/checkout", "Failed to create checkout session");
 
   return (
     <section>
