@@ -99,7 +99,7 @@ self.addEventListener("push", (event) => {
     icon: payload.icon || "/icons/icon-192x192.png",
     badge: "/icons/icon-192x192.png",
     data: payload.data || {},
-    tag: "review-gate", // collapse duplicate notifications
+    tag: payload.data?.conversationId ? `review-gate-${payload.data.conversationId}` : "review-gate",
   };
 
   event.waitUntil(self.registration.showNotification(title, options));

@@ -16,6 +16,8 @@ ARG NEXT_PUBLIC_SENTRY_DSN
 ARG NEXT_PUBLIC_GITHUB_APP_SLUG
 # Plugin stats (computed by CI from plugins/soleur/agents/)
 ARG NEXT_PUBLIC_AGENT_COUNT
+# Web Push VAPID public key (client-side push subscription)
+ARG NEXT_PUBLIC_VAPID_PUBLIC_KEY
 # Sentry source map upload (builder stage only — not present in runner image)
 ARG SENTRY_AUTH_TOKEN
 ARG SENTRY_ORG
