@@ -146,14 +146,14 @@ unrecoverable and the existing behavior is preserved
 
 ## Acceptance Criteria
 
-- [ ] When `git fetch origin main:main` fails (non-fast-forward), `update_branch_ref`
+- [x] When `git fetch origin main:main` fails (non-fast-forward), `update_branch_ref`
   force-updates the local `main` ref to `origin/main` via `git update-ref`
-- [ ] Worktrees created after a failed fast-forward are based on `origin/main`,
+- [x] Worktrees created after a failed fast-forward are based on `origin/main`,
   not the stale local `main`
-- [ ] The warning message is updated to say "force-updated" instead of just "using"
-- [ ] The same fix applies to both `create_worktree()` and `create_for_feature()` paths
+- [x] The warning message is updated to say "force-updated" instead of just "using"
+- [x] The same fix applies to both `create_worktree()` and `create_for_feature()` paths
   (both call `update_branch_ref`, so fixing the function fixes both)
-- [ ] The `cleanup_merged_worktrees()` fallback path (lines 820-824) receives the same
+- [x] The `cleanup_merged_worktrees()` fallback path (lines 820-824) receives the same
   fix for consistency
 
 ## Test Scenarios
