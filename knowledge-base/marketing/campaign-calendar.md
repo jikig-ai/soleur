@@ -1,5 +1,5 @@
 ---
-last_updated: 2026-04-06
+last_updated: 2026-04-13
 ---
 
 # Campaign Calendar
@@ -10,8 +10,6 @@ Rolling view of content distributions. Auto-generated from `distribution-content
 
 | Title | Type | Publish Date | Channels | Status |
 |-------|------|-------------|----------|--------|
-| Vibe Coding vs Agentic Engineering: What Solo Founders Need to Know | pillar | 2026-04-07 (Tue) | discord, x, bluesky, linkedin-company | scheduled |
-| Platform Milestone: Soleur Is Now Installable on Any Device | milestone-announcement | 2026-04-10 (Thu) | discord, x, bluesky, linkedin-personal, linkedin-company | scheduled |
 | Soleur vs. Paperclip: Domain Intelligence vs. AI Company Orchestration | comparison | 2026-04-15 (Tue) | discord, x, bluesky, linkedin-company | scheduled |
 | Your AI Team Now Works From Your Actual Codebase | feature-launch | 2026-04-17 (Thu) | discord, x, bluesky, linkedin-personal, linkedin-company, indiehackers, reddit, hackernews | scheduled |
 
@@ -20,13 +18,15 @@ Rolling view of content distributions. Auto-generated from `distribution-content
 | Title | Type | Publish Date | Channels | Status |
 |-------|------|-------------|----------|--------|
 | AI Agents for Solo Founders: The Definitive Guide | pillar | - | discord, x, bluesky, linkedin-company | draft |
-| From Scattered Positioning to a Full Brand Guide in Two Sessions | case-study | 2026-03-21 | discord, x, bluesky, linkedin-company | draft |
+| From Scattered Positioning to a Full Brand Guide in Two Sessions | case-study | 2026-03-24 | discord, x, bluesky, linkedin-company | draft |
 | Soleur vs. Polsia: Two Architectures for Running a Company with AI | pillar | - | discord, x, bluesky, linkedin-company | draft |
 
 ## Published
 
 | Title | Type | Publish Date | Channels | Status |
 |-------|------|-------------|----------|--------|
+| Platform Milestone: Soleur Is Now Installable on Any Device | milestone-announcement | 2026-04-10 | discord, x, bluesky, linkedin-personal, linkedin-company | published |
+| Vibe Coding vs Agentic Engineering: What Solo Founders Need to Know | pillar | 2026-04-07 | discord, x, bluesky, linkedin-company | published |
 | Running a Business Validation Workshop With AI Gates | case-study | 2026-03-26 | discord, x, bluesky, linkedin-company | published |
 | How We Generated 9 Legal Documents in Days, Not Months | case-study | 2026-03-21 | bluesky, linkedin-company | published |
 | Building an Operations Department for a One-Person Company | case-study | 2026-03-21 | bluesky, linkedin-company | published |
