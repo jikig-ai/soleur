@@ -21,7 +21,7 @@ are committed (#2037).
 - Billing page links to hardcoded `https://billing.stripe.com/p/login/test`
 - No `customer.subscription.updated` webhook handler
 - Missing DB columns: `stripe_subscription_id`, `current_period_end`,
-  `cancel_at_period_end`, `current_plan`
+  `cancel_at_period_end`
 - Checkout creates duplicate Stripe customers (uses `customer_email` instead
   of `customer` param)
 - Billing page is standalone — not integrated with Settings
@@ -73,7 +73,14 @@ Stripe Portal action
 
 ### Implementation Phases
 
-#### Phase 1: Database + Webhook Foundation
+#### Phase 1: Cleanup + Database + Webhook Foundation
+
+**Delete standalone billing page first**
+
+File: `apps/web-platform/app/(dashboard)/dashboard/billing/page.tsx`
+
+Delete this file. Its functionality is replaced by the Settings billing
+section. API usage display deferred to invoice history (#1079).
 
 **Migration: add billing columns**
 
@@ -87,8 +94,7 @@ File: `apps/web-platform/supabase/migrations/018_subscription_billing_columns.sq
 ALTER TABLE public.users
   ADD COLUMN IF NOT EXISTS stripe_subscription_id text,
   ADD COLUMN IF NOT EXISTS current_period_end timestamptz,
-  ADD COLUMN IF NOT EXISTS cancel_at_period_end boolean NOT NULL DEFAULT false,
-  ADD COLUMN IF NOT EXISTS current_plan text;
+  ADD COLUMN IF NOT EXISTS cancel_at_period_end boolean NOT NULL DEFAULT false;
 ```
 
 No RLS changes needed — migration 006 already does `REVOKE UPDATE ON
@@ -103,29 +109,21 @@ number. The `018` above is a placeholder.
 
 File: `apps/web-platform/app/api/webhooks/stripe/route.ts`
 
-Add `customer.subscription.updated` handler. Refactor existing handler
-for idempotency:
+Add `customer.subscription.updated` handler:
 
 - Extract subscription ID, status, `cancel_at_period_end`,
-  `current_period_end`, plan/price info from the event
+  `current_period_end` from the event
 - Update users table by `stripe_customer_id` match
 - For `checkout.session.completed`: also store `stripe_subscription_id`
   (extract from `session.subscription`)
-- For `customer.subscription.deleted`: set `cancel_at_period_end = false`,
-  clear `current_period_end`
+- For `customer.subscription.deleted`: set `subscription_status` to
+  `'cancelled'`, `cancel_at_period_end = false`, clear
+  `current_period_end`
 
-Idempotency strategy: Use the Stripe event's `created` timestamp. If
-the incoming event's timestamp is older than the DB's last known state
-(compare `current_period_end` or add a `stripe_event_timestamp` column),
-skip processing. This handles out-of-order delivery without needing a
-separate events table.
-
-**Simpler alternative for idempotency:** Since Stripe webhook retries
-are rare and the operations are idempotent SET operations (not
-increments), the existing fire-and-forget approach may be acceptable for
-v1. The `UPDATE ... SET` is naturally idempotent — running it twice
-produces the same result. Only add event deduplication if webhook
-replays cause observable issues.
+No explicit idempotency mechanism needed — all webhook handlers use
+`UPDATE ... SET` which is naturally idempotent (running twice produces
+the same result). Add event deduplication only if webhook replays cause
+observable issues.
 
 **Fix duplicate Stripe customers**
 
@@ -222,7 +220,7 @@ Add billing data to the server component's data fetch:
 // Add to existing service client queries
 const { data: billingData } = await service
   .from("users")
-  .select("subscription_status, stripe_customer_id, current_period_end, cancel_at_period_end, current_plan")
+  .select("subscription_status, stripe_customer_id, current_period_end, cancel_at_period_end")
   .eq("id", user.id)
   .single();
 ```
@@ -238,7 +236,7 @@ New component following the existing Settings card pattern:
 - Subscription status badge (Active / Cancelled / Cancelling / None)
   - "Cancelling" shown when `cancel_at_period_end = true` and
     `subscription_status = 'active'`
-- Plan name and price (from `current_plan` or hardcoded for single tier)
+- Plan name and price (hardcoded "Solo — $49/mo" for single tier)
 - Billing period end date (formatted from `current_period_end`)
 - "Manage Subscription" button → POST to `/api/billing/portal` → redirect
 - "Cancel Subscription" button → opens retention modal
@@ -266,36 +264,16 @@ Modal overlay shown when user clicks "Cancel Subscription":
 - Secondary CTA: "Continue to cancel" → POST `/api/billing/portal` →
   redirect to Stripe Portal where actual cancellation happens
 
-The stats can be fetched server-side in the Settings page and passed as
-props, or fetched client-side in the modal. Server-side is simpler since
-we're already fetching data in the Settings server component.
+Stats are fetched server-side in the Settings page and passed as props
+(already fetching data there — add count queries for conversations,
+service tokens, and KB entries alongside billing data).
 
-**API routes for stats (if needed)**
-
-If the stats require a separate fetch (conversations count, KB count,
-services count), consider adding a simple `/api/billing/stats` GET route
-that returns the counts. However, the simpler approach is to fetch
-counts in the Settings server component alongside the billing data.
-
-#### Phase 4: Cleanup + Tests
-
-**Remove standalone billing page**
-
-File: `apps/web-platform/app/(dashboard)/dashboard/billing/page.tsx`
-
-Delete this file. Its functionality is replaced by the Settings billing
-section. The `DOMAIN_LEADERS` import and API usage display can be moved
-to Settings if needed, but the CMO flagged that the current billing page
-has zero brand alignment — start fresh in Settings.
-
-**If API usage display is wanted in Settings:** Move the conversation
-cost list to a separate component
-(`components/settings/api-usage-section.tsx`) and include it in
-Settings. Otherwise, defer to invoice history (#1079).
+#### Phase 4: Tests
 
 **Test coverage**
 
 Files:
+
 - `apps/web-platform/test/billing-section.test.tsx` — component render
   tests for billing section (active, cancelled, cancelling, no sub)
 - `apps/web-platform/test/api-billing-portal.test.ts` — portal route
@@ -329,7 +307,7 @@ Test runner: Check `package.json scripts.test` — project uses vitest.
 - [ ] Retention modal "Keep my account" closes modal, "Continue to
       cancel" redirects to Stripe portal
 - [ ] `customer.subscription.updated` webhook updates `subscription_status`,
-      `cancel_at_period_end`, `current_period_end`, `current_plan`
+      `cancel_at_period_end`, `current_period_end`
 - [ ] `checkout.session.completed` webhook stores `stripe_subscription_id`
 - [ ] Settings billing section shows plan name, status badge, period end
       date, manage/cancel buttons
@@ -337,6 +315,12 @@ Test runner: Check `package.json scripts.test` — project uses vitest.
 - [ ] Checkout uses existing `stripe_customer_id` when available
 - [ ] No subscription state: shows subscribe CTA in Settings billing
 - [ ] Standalone `/dashboard/billing` page removed
+- [ ] `customer.subscription.deleted` webhook sets `subscription_status`
+      to `cancelled`, clears `cancel_at_period_end` and `current_period_end`
+- [ ] Active subscriber who tries to subscribe again is blocked or
+      redirected to manage (double-subscribe guard)
+- [ ] `/dashboard/billing` URL returns redirect to `/dashboard/settings`
+      (not 404 — users may have bookmarks)
 
 ### Non-Functional Requirements
 
