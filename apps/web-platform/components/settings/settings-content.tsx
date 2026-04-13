@@ -2,6 +2,7 @@ import Link from "next/link";
 import { KeyRotationForm } from "./key-rotation-form";
 import { DeleteAccountDialog } from "./delete-account-dialog";
 import { ProjectSetupCard, type RepoStatus } from "./project-setup-card";
+import { BillingSection } from "./billing-section";
 
 interface SettingsContentProps {
   userEmail: string;
@@ -11,6 +12,12 @@ interface SettingsContentProps {
   repoUrl: string | null;
   repoStatus: RepoStatus;
   repoLastSyncedAt: string | null;
+  subscriptionStatus: string | null;
+  currentPeriodEnd: string | null;
+  cancelAtPeriodEnd: boolean;
+  conversationCount: number;
+  serviceTokenCount: number;
+  createdAt: string;
 }
 
 export function SettingsContent({
@@ -21,6 +28,12 @@ export function SettingsContent({
   repoUrl,
   repoStatus,
   repoLastSyncedAt,
+  subscriptionStatus,
+  currentPeriodEnd,
+  cancelAtPeriodEnd,
+  conversationCount,
+  serviceTokenCount,
+  createdAt,
 }: SettingsContentProps) {
   return (
     <div className="space-y-10">
@@ -93,6 +106,16 @@ export function SettingsContent({
           </Link>
         </div>
       </section>
+
+      {/* Billing Section */}
+      <BillingSection
+        subscriptionStatus={subscriptionStatus}
+        currentPeriodEnd={currentPeriodEnd}
+        cancelAtPeriodEnd={cancelAtPeriodEnd}
+        conversationCount={conversationCount}
+        serviceTokenCount={serviceTokenCount}
+        createdAt={createdAt}
+      />
 
       {/* Danger Zone Section */}
       <section>
