@@ -1,4 +1,4 @@
-import { memo } from "react";
+import { memo, useState } from "react";
 import {
   Megaphone,
   Cog,
@@ -35,13 +35,17 @@ interface LeaderAvatarProps {
   leaderId: DomainLeaderId | null | undefined;
   size: "sm" | "md" | "lg";
   className?: string;
+  /** Optional custom icon KB path. When provided, renders as an img instead of lucide icon. */
+  customIconPath?: string | null;
 }
 
 export const LeaderAvatar = memo(function LeaderAvatar({
   leaderId,
   size,
   className,
+  customIconPath,
 }: LeaderAvatarProps) {
+  const [imgError, setImgError] = useState(false);
   const leader = leaderId
     ? DOMAIN_LEADERS.find((l) => l.id === leaderId)
     : null;
@@ -67,14 +71,26 @@ export const LeaderAvatar = memo(function LeaderAvatar({
 
   const bgColor = LEADER_BG_COLORS[leaderId!];
   const IconComponent = ICON_MAP[leader.defaultIcon];
+  const showCustomIcon = customIconPath && !imgError;
 
   return (
     <span
-      className={`flex ${sizeConfig.container} shrink-0 items-center justify-center rounded-md ${bgColor} ${className ?? ""}`}
+      className={`flex ${sizeConfig.container} shrink-0 items-center justify-center rounded-md ${bgColor} overflow-hidden ${className ?? ""}`}
       aria-label={`${leader.name} avatar`}
     >
-      {IconComponent && (
-        <IconComponent size={sizeConfig.icon} className="text-white" />
+      {showCustomIcon ? (
+        <img
+          src={`/api/kb/content/${customIconPath}`}
+          alt={`${leader.name} custom icon`}
+          width={sizeConfig.icon + 4}
+          height={sizeConfig.icon + 4}
+          className="h-full w-full object-cover"
+          onError={() => setImgError(true)}
+        />
+      ) : (
+        IconComponent && (
+          <IconComponent size={sizeConfig.icon} className="text-white" />
+        )
       )}
     </span>
   );

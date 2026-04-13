@@ -66,4 +66,23 @@ describe("LeaderAvatar", () => {
     const badge = container.firstElementChild;
     expect(badge?.className).toContain("mt-1");
   });
+
+  it("renders custom icon when customIconPath is provided", () => {
+    const { container } = render(
+      <LeaderAvatar leaderId="cto" size="md" customIconPath="settings/team-icons/cto.png" />,
+    );
+    const img = container.querySelector("img");
+    expect(img).toBeTruthy();
+    expect(img!.getAttribute("src")).toBe("/api/kb/content/settings/team-icons/cto.png");
+    expect(img!.getAttribute("alt")).toBe("CTO custom icon");
+  });
+
+  it("renders default icon when customIconPath is null", () => {
+    const { container } = render(
+      <LeaderAvatar leaderId="cto" size="md" customIconPath={null} />,
+    );
+    // Should NOT render a custom img
+    const img = container.querySelector('img[alt="CTO custom icon"]');
+    expect(img).toBeNull();
+  });
 });
