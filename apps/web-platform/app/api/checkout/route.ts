@@ -16,10 +16,26 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
+  // Check existing billing state to reuse Stripe customer and block double-subscribe
+  const { data: userData } = await supabase
+    .from("users")
+    .select("stripe_customer_id, subscription_status")
+    .eq("id", user.id)
+    .single();
+
+  if (userData?.subscription_status === "active") {
+    return NextResponse.json(
+      { error: "Already subscribed" },
+      { status: 400 },
+    );
+  }
+
   const appOrigin = process.env.NEXT_PUBLIC_APP_URL ?? "https://app.soleur.ai";
 
   const session = await getStripe().checkout.sessions.create({
-    customer_email: user.email,
+    ...(userData?.stripe_customer_id
+      ? { customer: userData.stripe_customer_id }
+      : { customer_email: user.email }),
     mode: "subscription",
     line_items: [{ price: process.env.STRIPE_PRICE_ID!, quantity: 1 }],
     success_url: `${appOrigin}/dashboard?checkout=success`,
