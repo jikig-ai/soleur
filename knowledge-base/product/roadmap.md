@@ -200,6 +200,8 @@ This roadmap was reviewed by CTO, CLO, CFO, and CMO before finalization.
 | 3.18 | KB items, KB, and session sharing (read-only external access with signup CTAs, revocable) | P2 | [#1745](https://github.com/jikig-ai/soleur/issues/1745) | Done |
 | 3.19 | Chat attachments (images + PDFs via Supabase Storage, presigned URL upload, AI processing via filesystem write) | P2 | [#1961](https://github.com/jikig-ai/soleur/issues/1961) | Done |
 | 3.20 | KB file upload (images, PDFs, CSV, TXT, DOCX via GitHub Contents API, per-directory upload button, binary file preview) | P3 | [#1974](https://github.com/jikig-ai/soleur/issues/1974) | Done |
+| 3.21 | Agent work visualization in UX (show agent activity, progress, and outputs) | P2 | [#2004](https://github.com/jikig-ai/soleur/issues/2004) | Not started |
+| 3.22 | Service automation feature announcement (marketing content for launch) | P3 | [#1944](https://github.com/jikig-ai/soleur/issues/1944) | Not started |
 
 **Why 3.1-3.2 matter:** The knowledge base is the compounding moat. If founders cannot see plans, brainstorms, brand guides, and competitive analyses their agents produced, the value is invisible. The KB viewer closes the review loop.
 
