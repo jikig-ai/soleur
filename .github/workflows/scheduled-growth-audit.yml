@@ -15,10 +15,8 @@
 name: "Scheduled: Growth Audit"
 
 on:
-  # MIGRATED TO CLOUD SCHEDULED TASK — 2026-03-25
-  # Uncomment schedule to revert to GHA execution
-  # schedule:
-  #   - cron: '0 9 * * 1'   # Every Monday at 09:00 UTC
+  schedule:
+    - cron: '0 9 * * 1'   # Every Monday at 09:00 UTC
   workflow_dispatch:
 
 concurrency:
