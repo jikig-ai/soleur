@@ -14,6 +14,15 @@ import { decryptKey, decryptKeyLegacy, encryptKey } from "./byok";
 import { sendToClient } from "./ws-handler";
 import * as Sentry from "@sentry/nextjs";
 import { sanitizeErrorForClient } from "./error-sanitizer";
+import {
+  ERR_WORKSPACE_NOT_PROVISIONED,
+  ERR_CONVERSATION_NOT_FOUND,
+  ERR_NO_ACTIVE_SESSION,
+  ERR_REVIEW_GATE_NOT_FOUND,
+  ERR_ATTACHMENT_NOT_FOUND,
+  ERR_UNSUPPORTED_FILE_TYPE,
+  ERR_UPLOAD_FAILED,
+} from "./error-messages";
 import { isPathInWorkspace } from "./sandbox";
 import { UNVERIFIED_PARAM_TOOLS, extractToolPath, isFileTool, isSafeTool } from "./tool-path-checker";
 import { buildAgentEnv } from "./agent-env";
@@ -406,7 +415,7 @@ export async function startAgentSession(
       .single();
 
     if (!user?.workspace_path) {
-      throw new Error("Workspace not provisioned");
+      throw new Error(ERR_WORKSPACE_NOT_PROVISIONED);
     }
 
     const workspacePath = user.workspace_path;
@@ -1235,7 +1244,7 @@ export async function sendUserMessage(
     .eq("user_id", userId)
     .single();
 
-  if (convErr || !conv) throw new Error("Conversation not found");
+  if (convErr || !conv) throw new Error(ERR_CONVERSATION_NOT_FOUND);
 
   // Save user message to DB (after ownership verified)
   const messageId = randomUUID();
@@ -1258,10 +1267,10 @@ export async function sendUserMessage(
     for (const att of attachments) {
       // P1 fix: reject storagePath that doesn't belong to this user/conversation or contains traversal
       if (!att.storagePath.startsWith(pathPrefix) || att.storagePath.includes("..")) {
-        throw new Error("Attachment not found");
+        throw new Error(ERR_ATTACHMENT_NOT_FOUND);
       }
       if (!ALLOWED_ATTACHMENT_TYPES.has(att.contentType)) {
-        throw new Error("Unsupported file type");
+        throw new Error(ERR_UNSUPPORTED_FILE_TYPE);
       }
       // Sanitize filename: strip path separators
       att.filename = att.filename.replace(/[/\\]/g, "_");
@@ -1282,7 +1291,7 @@ export async function sendUserMessage(
 
     if (attErr) {
       log.error({ err: attErr, messageId }, "Failed to save attachment metadata");
-      throw new Error("Upload failed");
+      throw new Error(ERR_UPLOAD_FAILED);
     }
 
     // Download files to workspace for agent access
@@ -1466,11 +1475,11 @@ export async function resolveReviewGate(
   }
 
   if (!hasSession) {
-    throw new Error("No active session");
+    throw new Error(ERR_NO_ACTIVE_SESSION);
   }
 
   if (!foundSession || !foundEntry) {
-    throw new Error("Review gate not found or already resolved");
+    throw new Error(ERR_REVIEW_GATE_NOT_FOUND);
   }
 
   validateSelection(foundEntry.options, selection);

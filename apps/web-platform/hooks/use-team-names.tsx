@@ -12,10 +12,14 @@ interface TeamNamesState {
   namingPromptedAt: string | null;
   /** Whether the initial fetch is still loading */
   loading: boolean;
+  /** Error message from the last fetch attempt, or null if successful */
+  error: string | null;
   /** Update a leader's custom name. Empty string removes the name. */
   updateName: (leaderId: string, name: string) => Promise<void>;
   /** Dismiss the contextual nudge for a leader. */
   dismissNudge: (leaderId: string) => Promise<void>;
+  /** Retry fetching team names after a failure. */
+  refetch: () => void;
   /** Get the display name: "CustomName (ROLE)" or "ROLE" if no custom name. */
   getDisplayName: (leaderId: DomainLeaderId) => string;
   /** Get just the label for the avatar badge (first 3 chars of custom name, or role acronym). */
@@ -31,8 +35,16 @@ export function TeamNamesProvider({ children }: { children: ReactNode }) {
   const [nudgesDismissed, setNudgesDismissed] = useState<string[]>([]);
   const [namingPromptedAt, setNamingPromptedAt] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [fetchKey, setFetchKey] = useState(0);
+
+  const refetch = useCallback(() => {
+    setFetchKey((k) => k + 1);
+  }, []);
 
   useEffect(() => {
+    setLoading(true);
+    setError(null);
     fetch("/api/team-names")
       .then((res) => {
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -42,12 +54,14 @@ export function TeamNamesProvider({ children }: { children: ReactNode }) {
         setNames(data.names);
         setNudgesDismissed(data.nudgesDismissed);
         setNamingPromptedAt(data.namingPromptedAt);
+        setError(null);
       })
       .catch((err) => {
         console.error("[team-names] fetch error:", err);
+        setError(err instanceof Error ? err.message : "Failed to load team names");
       })
       .finally(() => setLoading(false));
-  }, []);
+  }, [fetchKey]);
 
   const updateName = useCallback(async (leaderId: string, name: string) => {
     const trimmed = name.trim();
@@ -114,8 +128,10 @@ export function TeamNamesProvider({ children }: { children: ReactNode }) {
       nudgesDismissed,
       namingPromptedAt,
       loading,
+      error,
       updateName,
       dismissNudge,
+      refetch,
       getDisplayName,
       getBadgeLabel,
     }}>
