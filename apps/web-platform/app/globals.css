@@ -16,4 +16,16 @@
   .safe-bottom {
     padding-bottom: env(safe-area-inset-bottom, 0px);
   }
+  .message-bubble-active {
+    animation: pulse-border 2s ease-in-out infinite;
+  }
+}
+
+@keyframes pulse-border {
+  0%, 100% {
+    border-color: oklch(0.666 0.16 55 / 0.7);
+  }
+  50% {
+    border-color: oklch(0.666 0.16 55 / 0.3);
+  }
 }
