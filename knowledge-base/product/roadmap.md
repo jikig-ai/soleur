@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-04-11
-last_reviewed: 2026-04-11
+last_updated: 2026-04-12
+last_reviewed: 2026-04-12
 review_cadence: weekly
 owner: CPO
 depends_on:
@@ -67,13 +67,13 @@ This roadmap was reviewed by CTO, CLO, CFO, and CMO before finalization.
 
 ---
 
-## Current State (2026-04-10)
+## Current State (2026-04-13)
 
 | Dimension | Status |
 |-----------|--------|
 | Phase 1 (Close the Loop) | Complete. Milestone closed. 0 open, 15 closed. |
 | Phase 2 (Secure for Beta) | Complete. Milestone closed. 0 open, 20 closed. |
-| Phase 3 (Make it Sticky) | In progress. 4 open, 26 closed (milestone). Core KB, inbox, token storage, onboarding, CI/CD, service automation, analytics, sharing, usage indicator all done. Remaining: review gate notifications, guided instructions fallback, subscription management, invoice history. |
+| Phase 3 (Make it Sticky) | In progress. 6 open, 30 closed (milestone). Umbrella #672 closed — all essential KB/inbox/usage features done. Remaining: review gate notifications (#1049), guided instructions fallback (#1077), subscription management (#1078), invoice history (#1079), service automation announcement (#1944), agent work visualization (#2004). |
 | Phase 4 (Validate + Scale) | Not started. 16 open, 11 closed. Blocked by Phase 3 completion + marketing/multi-user gates. |
 | Phase 5 (Desktop Native App) | Defined. 5 open, 0 closed. Trigger-gated on user demand. |
 | Post-MVP / Later | 74 open, 265 closed. |
@@ -198,7 +198,8 @@ This roadmap was reviewed by CTO, CLO, CFO, and CMO before finalization.
 | 3.16 | Start Fresh onboarding — guided first-run with foundation cards (vision, brand, validation, legal) | P1 | [#1751](https://github.com/jikig-ai/soleur/issues/1751) | Done |
 | 3.17 | Post-connect sync proposal and project status report | P1 | [#1772](https://github.com/jikig-ai/soleur/issues/1772) | Done |
 | 3.18 | KB items, KB, and session sharing (read-only external access with signup CTAs, revocable) | P2 | [#1745](https://github.com/jikig-ai/soleur/issues/1745) | Done |
-| 3.19 | Chat attachments (images + PDFs via Supabase Storage, presigned URL upload, AI processing via filesystem write) | P2 | [#1961](https://github.com/jikig-ai/soleur/issues/1961) | In progress |
+| 3.19 | Chat attachments (images + PDFs via Supabase Storage, presigned URL upload, AI processing via filesystem write) | P2 | [#1961](https://github.com/jikig-ai/soleur/issues/1961) | Done |
+| 3.20 | KB file upload (images, PDFs, CSV, TXT, DOCX via GitHub Contents API, per-directory upload button, binary file preview) | P3 | [#1974](https://github.com/jikig-ai/soleur/issues/1974) | In progress |
 
 **Why 3.1-3.2 matter:** The knowledge base is the compounding moat. If founders cannot see plans, brainstorms, brand guides, and competitive analyses their agents produced, the value is invisible. The KB viewer closes the review loop.
 

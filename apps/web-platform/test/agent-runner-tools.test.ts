@@ -99,81 +99,25 @@ vi.mock("../server/service-tools", () => ({
 }));
 
 import { startAgentSession } from "../server/agent-runner";
+import {
+  DEFAULT_API_KEY_ROW,
+  createSupabaseMockImpl,
+  createQueryMock,
+} from "./helpers/agent-runner-mocks";
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
-const DEFAULT_API_KEY_ROW = {
-  id: "key-1",
-  provider: "anthropic",
-  encrypted_key: Buffer.from("test").toString("base64"),
-  iv: Buffer.from("test-iv-1234").toString("base64"),
-  auth_tag: Buffer.from("test-tag-1234567").toString("base64"),
-  key_version: 2,
-};
-
-// Creates a chainable mock that supports both:
-// - getUserApiKey: select().eq().eq().eq().limit().single() -> { data, error }
-// - getUserServiceTokens: await select().eq().eq() -> { data, error }
-function createApiKeysMock(rows: Record<string, unknown>[] = [DEFAULT_API_KEY_ROW]) {
-  const createChain = (): Record<string, unknown> => ({
-    data: rows,
-    error: null,
-    eq: () => createChain(),
-    limit: () => ({ single: () => ({ data: rows[0] ?? null, error: null }) }),
-    then: (resolve: (v: unknown) => void) => resolve({ data: rows, error: null }),
-  });
-  return { select: () => createChain() };
-}
-
 function setupSupabaseMock(
   userData: Record<string, unknown>,
   serviceTokenRows?: Record<string, unknown>[],
 ) {
-  mockFrom.mockImplementation((table: string) => {
-    if (table === "api_keys") {
-      return createApiKeysMock(serviceTokenRows ?? [DEFAULT_API_KEY_ROW]);
-    }
-    if (table === "users") {
-      return {
-        select: () => ({
-          eq: () => ({
-            single: () => ({
-              data: userData,
-              error: null,
-            }),
-          }),
-        }),
-      };
-    }
-    if (table === "conversations") {
-      return {
-        update: vi.fn(() => ({
-          eq: vi.fn(() => ({ error: null })),
-        })),
-      };
-    }
-    if (table === "messages") {
-      return { insert: () => ({ error: null }) };
-    }
-    return {
-      select: () => ({ eq: () => ({ single: () => ({ data: null, error: null }) }) }),
-      update: () => ({ eq: () => ({ error: null }) }),
-      insert: () => ({ error: null }),
-    };
-  });
+  createSupabaseMockImpl(mockFrom, { userData, apiKeyRows: serviceTokenRows });
 }
 
 function setupQueryMockImmediate() {
-  mockQuery.mockReturnValue({
-    async *[Symbol.asyncIterator]() {
-      yield { type: "result", session_id: "sess-1" };
-    },
-    next: vi.fn(),
-    return: vi.fn(),
-    throw: vi.fn(),
-  } as any);
+  createQueryMock(mockQuery);
 }
 
 // ---------------------------------------------------------------------------

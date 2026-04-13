@@ -3,17 +3,10 @@ import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { validateOrigin, rejectCsrf } from "@/lib/auth/validate-origin";
 import logger from "@/server/logger";
 import { randomUUID } from "crypto";
-
-const ALLOWED_CONTENT_TYPES = new Set([
-  "image/png",
-  "image/jpeg",
-  "image/gif",
-  "image/webp",
-  "application/pdf",
-]);
-
-const MAX_FILE_SIZE = 20 * 1024 * 1024; // 20 MB
-const MAX_FILES_PER_MESSAGE = 5;
+import {
+  ALLOWED_ATTACHMENT_TYPES,
+  MAX_ATTACHMENT_SIZE,
+} from "@/lib/attachment-constants";
 
 function getExtension(contentType: string): string {
   const map: Record<string, string> = {
@@ -55,12 +48,12 @@ export async function POST(request: Request) {
   const { filename, contentType, sizeBytes, conversationId } = body;
 
   // Validate file type
-  if (!ALLOWED_CONTENT_TYPES.has(contentType)) {
+  if (!ALLOWED_ATTACHMENT_TYPES.has(contentType)) {
     return NextResponse.json({ error: "unsupported_file_type" }, { status: 400 });
   }
 
   // Validate file size
-  if (sizeBytes <= 0 || sizeBytes > MAX_FILE_SIZE) {
+  if (sizeBytes <= 0 || sizeBytes > MAX_ATTACHMENT_SIZE) {
     return NextResponse.json({ error: "file_too_large" }, { status: 400 });
   }
 

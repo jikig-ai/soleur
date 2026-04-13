@@ -1,4 +1,4 @@
-import { render, screen, within } from "@testing-library/react";
+import { render, screen, within, fireEvent } from "@testing-library/react";
 import { describe, it, expect, vi } from "vitest";
 import { ConversationRow } from "@/components/inbox/conversation-row";
 import type { ConversationWithPreview } from "@/hooks/use-conversations";
@@ -21,6 +21,7 @@ function makeConversation(
     output_tokens: 0,
     last_active: new Date().toISOString(),
     created_at: new Date().toISOString(),
+    archived_at: null,
     title: "Test conversation",
     preview: "Some preview text",
     lastMessageLeader: null,
@@ -84,5 +85,74 @@ describe("ConversationRow LeaderBadge", () => {
 
     const badges = screen.queryAllByLabelText(/Soleur/i);
     expect(badges).toHaveLength(0);
+  });
+});
+
+describe("ConversationRow Archive", () => {
+  it("renders archive button when onArchive is provided", () => {
+    const onArchive = vi.fn();
+    render(
+      <ConversationRow
+        conversation={makeConversation()}
+        onArchive={onArchive}
+        onUnarchive={vi.fn()}
+      />,
+    );
+
+    const buttons = screen.getAllByLabelText("Archive conversation");
+    expect(buttons.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("does not render archive button when callbacks are omitted", () => {
+    render(<ConversationRow conversation={makeConversation()} />);
+
+    const buttons = screen.queryAllByLabelText(/Archive conversation|Unarchive conversation/);
+    expect(buttons).toHaveLength(0);
+  });
+
+  it("renders unarchive button when conversation is archived", () => {
+    render(
+      <ConversationRow
+        conversation={makeConversation({ archived_at: new Date().toISOString() })}
+        onArchive={vi.fn()}
+        onUnarchive={vi.fn()}
+      />,
+    );
+
+    const buttons = screen.getAllByLabelText("Unarchive conversation");
+    expect(buttons.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("archive button click does not trigger row navigation", () => {
+    const mockPush = vi.fn();
+    vi.mocked(vi.fn()).mockReturnValue({ push: mockPush });
+
+    const onArchive = vi.fn();
+    render(
+      <ConversationRow
+        conversation={makeConversation()}
+        onArchive={onArchive}
+        onUnarchive={vi.fn()}
+      />,
+    );
+
+    // Click the archive button — should call onArchive, not navigate
+    const archiveBtn = screen.getAllByLabelText("Archive conversation")[0];
+    fireEvent.click(archiveBtn);
+
+    expect(onArchive).toHaveBeenCalledWith("conv-1");
+  });
+
+  it("shows archived visual indicator when archived_at is set", () => {
+    render(
+      <ConversationRow
+        conversation={makeConversation({ archived_at: new Date().toISOString() })}
+        onArchive={vi.fn()}
+        onUnarchive={vi.fn()}
+      />,
+    );
+
+    const indicators = screen.getAllByText("Archived");
+    expect(indicators.length).toBeGreaterThanOrEqual(1);
   });
 });

@@ -22,6 +22,7 @@ function makeConversation(
     output_tokens: 0,
     last_active: new Date().toISOString(),
     created_at: new Date().toISOString(),
+    archived_at: null,
     title: "Test conversation",
     preview: "Some preview text",
     lastMessageLeader: null,

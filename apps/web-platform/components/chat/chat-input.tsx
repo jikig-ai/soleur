@@ -2,17 +2,46 @@
 
 import { useState, useRef, useCallback, useEffect } from "react";
 import type { AttachmentRef } from "@/lib/types";
+import {
+  ALLOWED_ATTACHMENT_TYPES,
+  MAX_ATTACHMENT_SIZE,
+  MAX_ATTACHMENTS_PER_MESSAGE,
+} from "@/lib/attachment-constants";
 
-const ALLOWED_TYPES = new Set([
-  "image/png",
-  "image/jpeg",
-  "image/gif",
-  "image/webp",
-  "application/pdf",
-]);
+function uploadWithProgress(
+  url: string,
+  file: File,
+  contentType: string,
+  onProgress: (percent: number) => void,
+): { promise: Promise<void>; xhr: XMLHttpRequest } {
+  const xhr = new XMLHttpRequest();
 
-const MAX_FILE_SIZE = 20 * 1024 * 1024; // 20 MB
-const MAX_FILES = 5;
+  const promise = new Promise<void>((resolve, reject) => {
+    xhr.open("PUT", url);
+    xhr.setRequestHeader("Content-Type", contentType);
+
+    xhr.upload.onprogress = (event) => {
+      if (event.lengthComputable) {
+        const percent = Math.round((event.loaded / event.total) * 100);
+        onProgress(percent);
+      }
+    };
+
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        resolve();
+      } else {
+        reject(new Error("Upload to storage failed"));
+      }
+    };
+
+    xhr.onerror = () => reject(new Error("Upload to storage failed"));
+    xhr.onabort = () => reject(new Error("Upload cancelled"));
+    xhr.send(file);
+  });
+
+  return { promise, xhr };
+}
 
 interface PendingAttachment {
   id: string;
@@ -51,6 +80,7 @@ export function ChatInput({
   const [isDragOver, setIsDragOver] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const activeXhrs = useRef<Map<string, XMLHttpRequest>>(new Map());
 
   // Clear error after 3 seconds
   useEffect(() => {
@@ -89,15 +119,15 @@ export function ChatInput({
       const validFiles: PendingAttachment[] = [];
 
       for (const file of fileArray) {
-        if (currentCount + validFiles.length >= MAX_FILES) {
-          setAttachError(`Maximum ${MAX_FILES} files per message.`);
+        if (currentCount + validFiles.length >= MAX_ATTACHMENTS_PER_MESSAGE) {
+          setAttachError(`Maximum ${MAX_ATTACHMENTS_PER_MESSAGE} files per message.`);
           break;
         }
-        if (!ALLOWED_TYPES.has(file.type)) {
+        if (!ALLOWED_ATTACHMENT_TYPES.has(file.type)) {
           setAttachError(`"${file.name}" is not a supported file type.`);
           continue;
         }
-        if (file.size > MAX_FILE_SIZE) {
+        if (file.size > MAX_ATTACHMENT_SIZE) {
           setAttachError(`"${file.name}" exceeds the 20 MB size limit.`);
           continue;
         }
@@ -122,6 +152,9 @@ export function ChatInput({
   );
 
   const removeAttachment = useCallback((id: string) => {
+    const xhr = activeXhrs.current.get(id);
+    if (xhr) xhr.abort();
+    activeXhrs.current.delete(id);
     setAttachments((prev) => {
       const item = prev.find((a) => a.id === id);
       if (item?.preview) URL.revokeObjectURL(item.preview);
@@ -130,14 +163,8 @@ export function ChatInput({
   }, []);
 
   const uploadAttachments = useCallback(async (): Promise<AttachmentRef[]> => {
-    const results: AttachmentRef[] = [];
-
-    for (let i = 0; i < attachments.length; i++) {
-      const att = attachments[i];
-      if (att.uploaded) {
-        results.push(att.uploaded);
-        continue;
-      }
+    const promises = attachments.map(async (att): Promise<AttachmentRef | null> => {
+      if (att.uploaded) return att.uploaded;
 
       try {
         // Step 1: Get presigned URL
@@ -159,20 +186,20 @@ export function ChatInput({
 
         const { uploadUrl, storagePath } = await presignRes.json();
 
-        // Step 2: Upload to Storage
-        setAttachments((prev) =>
-          prev.map((a) => (a.id === att.id ? { ...a, progress: 50 } : a)),
+        // Step 2: Upload to Storage with progress tracking
+        const { promise, xhr } = uploadWithProgress(
+          uploadUrl,
+          att.file,
+          att.file.type,
+          (percent) => {
+            setAttachments((prev) =>
+              prev.map((a) => (a.id === att.id ? { ...a, progress: percent } : a)),
+            );
+          },
         );
-
-        const uploadRes = await fetch(uploadUrl, {
-          method: "PUT",
-          headers: { "Content-Type": att.file.type },
-          body: att.file,
-        });
-
-        if (!uploadRes.ok) {
-          throw new Error("Upload to storage failed");
-        }
+        activeXhrs.current.set(att.id, xhr);
+        await promise;
+        activeXhrs.current.delete(att.id);
 
         const ref: AttachmentRef = {
           storagePath,
@@ -187,7 +214,7 @@ export function ChatInput({
           ),
         );
 
-        results.push(ref);
+        return ref;
       } catch (err) {
         setAttachments((prev) =>
           prev.map((a) =>
@@ -196,35 +223,48 @@ export function ChatInput({
               : a,
           ),
         );
+        return null;
       }
-    }
+    });
 
-    return results;
+    const settled = await Promise.allSettled(promises);
+    return settled
+      .filter(
+        (r): r is PromiseFulfilledResult<AttachmentRef> =>
+          r.status === "fulfilled" && r.value !== null,
+      )
+      .map((r) => r.value);
   }, [attachments]);
 
   const handleSubmit = useCallback(async () => {
     const trimmed = value.trim();
     if (!trimmed && attachments.length === 0) return;
 
+    let sent = false;
     if (attachments.length > 0) {
       setIsUploading(true);
       try {
         const uploaded = await uploadAttachments();
         if (uploaded.length > 0) {
           onSend(trimmed, uploaded);
+          sent = true;
         } else if (trimmed) {
           onSend(trimmed);
+          sent = true;
         }
       } finally {
         setIsUploading(false);
-        setAttachments([]);
+        setAttachments((prev) => prev.filter((a) => a.error));
       }
     } else {
       onSend(trimmed);
+      sent = true;
     }
 
-    setValue("");
-    onAtDismiss();
+    if (sent) {
+      setValue("");
+      onAtDismiss();
+    }
   }, [value, attachments, onSend, onAtDismiss, uploadAttachments]);
 
   const handleKeyDown = useCallback(
@@ -355,12 +395,22 @@ export function ChatInput({
                 {att.error ? (
                   <span className="text-xs text-red-400">{att.error}</span>
                 ) : att.progress > 0 && att.progress < 100 ? (
-                  <div className="mt-0.5 h-1 w-16 overflow-hidden rounded-full bg-neutral-700">
-                    <div
-                      className="h-full bg-amber-500 transition-all"
-                      style={{ width: `${att.progress}%` }}
-                    />
+                  <div className="mt-0.5 flex items-center gap-1.5">
+                    <div className="h-1 w-16 overflow-hidden rounded-full bg-neutral-700">
+                      <div
+                        className="h-full bg-amber-500"
+                        style={{
+                          width: `${att.progress}%`,
+                          transition: "width 150ms ease",
+                        }}
+                      />
+                    </div>
+                    <span className="text-[10px] tabular-nums text-neutral-400">
+                      {att.progress}%
+                    </span>
                   </div>
+                ) : att.progress === 100 ? (
+                  <span className="text-xs text-green-400">Uploaded</span>
                 ) : null}
               </div>
               <button
@@ -386,7 +436,7 @@ export function ChatInput({
         </div>
       )}
 
-      <div className="flex items-end gap-2">
+      <div className="flex items-center gap-2">
         {/* Paperclip / attach button */}
         <button
           type="button"
@@ -422,7 +472,7 @@ export function ChatInput({
             placeholder={placeholder}
             disabled={disabled || isUploading}
             rows={1}
-            className="w-full resize-none rounded-xl border border-neutral-700 bg-neutral-900 px-4 py-3 pr-12 text-sm text-white placeholder:text-neutral-500 focus:border-neutral-500 focus:outline-none disabled:opacity-50"
+            className="w-full resize-none rounded-xl border border-neutral-700 bg-neutral-900 px-4 py-3 pr-12 text-sm text-white placeholder:text-neutral-500 focus:border-neutral-500 focus:outline-none disabled:opacity-50 min-h-[44px]"
           />
           {/* Mobile @ button */}
           <button

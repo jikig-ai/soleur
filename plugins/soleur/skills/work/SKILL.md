@@ -426,7 +426,7 @@ If you catch yourself writing phrases like "set up X in the browser", "go to the
 
 #### Invocation Mode
 
-**If invoked by one-shot** (the conversation contains `soleur:one-shot` skill output earlier): Do not invoke ship, review, or compound — the orchestrator handles those. Output exactly `## Work Phase Complete` (this is a continuation marker, NOT a turn-ending statement) and then **immediately continue executing the next numbered step in the one-shot sequence** (step 4: review). Do NOT end your turn after outputting this marker.
+**If invoked by one-shot** (the conversation contains `soleur:one-shot` skill output earlier): Output exactly `## Work Phase Complete` and then **immediately invoke** `skill: soleur:review` (step 4 of the one-shot sequence). Do NOT end your turn after outputting the marker — you ARE the orchestrator, so you must continue executing one-shot steps 4 through 10 in order. The marker is a progress signal, not a stopping point.
 
 **If invoked directly by the user** (no one-shot orchestrator): Continue through the post-implementation pipeline automatically. Do NOT stop and wait — the earlier learning "Workflow Completion is Not Task Completion" applies. Run these steps in order, forwarding `--headless` if `HEADLESS_MODE=true`:
 
@@ -497,7 +497,7 @@ Before entering Phase 4, verify these Phase 2-3 items are complete:
 - [ ] Code follows existing patterns
 - [ ] Figma designs match implementation (if applicable)
 
-After Phase 4 handoff (one-shot only), the orchestrator handles: `/review`, `/resolve-todo-parallel`, `/compound`, `/ship`.
+After Phase 4 handoff (one-shot only), the same agent continues executing one-shot steps 4-10 (`/review`, `/qa`, `/compound`, `/ship`, `/test-browser`, `/feature-video`).
 
 ## When to Use Reviewer Agents
 

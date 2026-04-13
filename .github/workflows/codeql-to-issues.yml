@@ -1,0 +1,51 @@
+# Create a GitHub issue when CodeQL finds a new code scanning alert.
+# Integrates with auto-label-security.yml via "sec:" title prefix.
+# Deduplicates by checking for existing open issues with the alert number.
+
+name: CodeQL Alert to Issue
+
+on:
+  code_scanning_alert:
+    types: [created]
+
+permissions:
+  issues: write
+  security-events: read
+
+jobs:
+  create-issue:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Create issue from alert
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          ALERT_NUMBER: ${{ github.event.alert.number }}
+          ALERT_RULE_ID: ${{ github.event.alert.rule.id }}
+          ALERT_RULE_DESC: ${{ github.event.alert.rule.description }}
+          ALERT_SEVERITY: ${{ github.event.alert.rule.security_severity_level }}
+          ALERT_TOOL: ${{ github.event.alert.tool.name }}
+          ALERT_FILE: ${{ github.event.alert.most_recent_instance.location.path }}
+          ALERT_START_LINE: ${{ github.event.alert.most_recent_instance.location.start_line }}
+          ALERT_MESSAGE: ${{ github.event.alert.most_recent_instance.message.text }}
+          ALERT_HTML_URL: ${{ github.event.alert.html_url }}
+          ALERT_REF: ${{ github.event.alert.most_recent_instance.ref }}
+        run: |
+          SEARCH_QUERY="sec: CodeQL alert #${ALERT_NUMBER} repo:${GH_REPO} is:issue is:open"
+          EXISTING=$(gh search issues "$SEARCH_QUERY" --json number --jq 'length')
+          if [ "$EXISTING" -gt 0 ]; then
+            echo "Issue already exists for CodeQL alert #${ALERT_NUMBER} — skipping"
+            exit 0
+          fi
+
+          TITLE="sec: CodeQL alert #${ALERT_NUMBER} — ${ALERT_RULE_DESC}"
+
+          { echo "## CodeQL Alert #${ALERT_NUMBER}"; echo ""; echo "**Rule:** \`${ALERT_RULE_ID}\` — ${ALERT_RULE_DESC}"; echo "**Severity:** ${ALERT_SEVERITY}"; echo "**Tool:** ${ALERT_TOOL}"; echo "**File:** \`${ALERT_FILE}:${ALERT_START_LINE}\`"; echo "**Ref:** \`${ALERT_REF}\`"; echo ""; echo "### Message"; echo ""; echo "${ALERT_MESSAGE}"; echo ""; echo "### Links"; echo ""; echo "- [View alert](${ALERT_HTML_URL})"; echo ""; echo "---"; echo "*Auto-created by codeql-to-issues.yml*"; } > "${RUNNER_TEMP}/issue-body.md"
+
+          gh issue create \
+            --title "$TITLE" \
+            --body-file "${RUNNER_TEMP}/issue-body.md" \
+            --label "type/security"
+
+          echo "Created issue for CodeQL alert #${ALERT_NUMBER}"
