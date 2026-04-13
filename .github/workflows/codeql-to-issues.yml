@@ -1,51 +1,70 @@
-# Create a GitHub issue when CodeQL finds a new code scanning alert.
+# Poll CodeQL code scanning alerts and create GitHub issues for new findings.
 # Integrates with auto-label-security.yml via "sec:" title prefix.
 # Deduplicates by checking for existing open issues with the alert number.
+#
+# Note: code_scanning_alert is NOT a valid GitHub Actions trigger event.
+# This workflow uses schedule + workflow_dispatch instead.
 
 name: CodeQL Alert to Issue
 
 on:
-  code_scanning_alert:
-    types: [created]
+  schedule:
+    - cron: "0 6 * * *"
+  workflow_dispatch:
 
 permissions:
   issues: write
   security-events: read
 
 jobs:
-  create-issue:
+  check-alerts:
     runs-on: ubuntu-latest
-    timeout-minutes: 2
+    timeout-minutes: 5
     steps:
-      - name: Create issue from alert
+      - name: Process open CodeQL alerts
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-          ALERT_NUMBER: ${{ github.event.alert.number }}
-          ALERT_RULE_ID: ${{ github.event.alert.rule.id }}
-          ALERT_RULE_DESC: ${{ github.event.alert.rule.description }}
-          ALERT_SEVERITY: ${{ github.event.alert.rule.security_severity_level }}
-          ALERT_TOOL: ${{ github.event.alert.tool.name }}
-          ALERT_FILE: ${{ github.event.alert.most_recent_instance.location.path }}
-          ALERT_START_LINE: ${{ github.event.alert.most_recent_instance.location.start_line }}
-          ALERT_MESSAGE: ${{ github.event.alert.most_recent_instance.message.text }}
-          ALERT_HTML_URL: ${{ github.event.alert.html_url }}
-          ALERT_REF: ${{ github.event.alert.most_recent_instance.ref }}
         run: |
-          SEARCH_QUERY="sec: CodeQL alert #${ALERT_NUMBER} repo:${GH_REPO} is:issue is:open"
-          EXISTING=$(gh search issues "$SEARCH_QUERY" --json number --jq 'length')
-          if [ "$EXISTING" -gt 0 ]; then
-            echo "Issue already exists for CodeQL alert #${ALERT_NUMBER} — skipping"
+          echo "Fetching open code scanning alerts..."
+          ALERTS=$(gh api repos/${GH_REPO}/code-scanning/alerts?state=open --jq '.[] | select(.rule.security_severity_level == "critical" or .rule.security_severity_level == "high") | {number, rule_id: .rule.id, rule_desc: .rule.description, severity: .rule.security_severity_level, tool: .tool.name, file: .most_recent_instance.location.path, line: .most_recent_instance.location.start_line, message: .most_recent_instance.message.text, html_url: .html_url, ref: .most_recent_instance.ref}' 2>&1) || true
+
+          if [ -z "$ALERTS" ]; then
+            echo "No open critical/high severity alerts found."
             exit 0
           fi
 
-          TITLE="sec: CodeQL alert #${ALERT_NUMBER} — ${ALERT_RULE_DESC}"
+          CREATED=0
+          SKIPPED=0
 
-          { echo "## CodeQL Alert #${ALERT_NUMBER}"; echo ""; echo "**Rule:** \`${ALERT_RULE_ID}\` — ${ALERT_RULE_DESC}"; echo "**Severity:** ${ALERT_SEVERITY}"; echo "**Tool:** ${ALERT_TOOL}"; echo "**File:** \`${ALERT_FILE}:${ALERT_START_LINE}\`"; echo "**Ref:** \`${ALERT_REF}\`"; echo ""; echo "### Message"; echo ""; echo "${ALERT_MESSAGE}"; echo ""; echo "### Links"; echo ""; echo "- [View alert](${ALERT_HTML_URL})"; echo ""; echo "---"; echo "*Auto-created by codeql-to-issues.yml*"; } > "${RUNNER_TEMP}/issue-body.md"
+          echo "$ALERTS" | jq -c '.' | while IFS= read -r alert; do
+            ALERT_NUMBER=$(echo "$alert" | jq -r '.number')
+            ALERT_RULE_ID=$(echo "$alert" | jq -r '.rule_id')
+            ALERT_RULE_DESC=$(echo "$alert" | jq -r '.rule_desc')
+            ALERT_SEVERITY=$(echo "$alert" | jq -r '.severity')
+            ALERT_TOOL=$(echo "$alert" | jq -r '.tool')
+            ALERT_FILE=$(echo "$alert" | jq -r '.file')
+            ALERT_LINE=$(echo "$alert" | jq -r '.line')
+            ALERT_MESSAGE=$(echo "$alert" | jq -r '.message')
+            ALERT_HTML_URL=$(echo "$alert" | jq -r '.html_url')
+            ALERT_REF=$(echo "$alert" | jq -r '.ref')
 
-          gh issue create \
-            --title "$TITLE" \
-            --body-file "${RUNNER_TEMP}/issue-body.md" \
-            --label "type/security"
+            SEARCH_QUERY="sec: CodeQL alert #${ALERT_NUMBER} repo:${GH_REPO} is:issue is:open"
+            EXISTING=$(gh search issues "$SEARCH_QUERY" --json number --jq 'length' 2>/dev/null || echo "0")
 
-          echo "Created issue for CodeQL alert #${ALERT_NUMBER}"
+            if [ "$EXISTING" -gt 0 ]; then
+              echo "Issue already exists for CodeQL alert #${ALERT_NUMBER} — skipping"
+              SKIPPED=$((SKIPPED + 1))
+              continue
+            fi
+
+            TITLE="sec: CodeQL alert #${ALERT_NUMBER} — ${ALERT_RULE_DESC}"
+
+            { echo "## CodeQL Alert #${ALERT_NUMBER}"; echo ""; echo "**Rule:** \`${ALERT_RULE_ID}\` — ${ALERT_RULE_DESC}"; echo "**Severity:** ${ALERT_SEVERITY}"; echo "**Tool:** ${ALERT_TOOL}"; echo "**File:** \`${ALERT_FILE}:${ALERT_LINE}\`"; echo "**Ref:** \`${ALERT_REF}\`"; echo ""; echo "### Message"; echo ""; echo "${ALERT_MESSAGE}"; echo ""; echo "### Links"; echo ""; echo "- [View alert](${ALERT_HTML_URL})"; echo ""; echo "---"; echo "*Auto-created by codeql-to-issues.yml*"; } > "${RUNNER_TEMP}/issue-body-${ALERT_NUMBER}.md"
+
+            gh issue create --title "$TITLE" --body-file "${RUNNER_TEMP}/issue-body-${ALERT_NUMBER}.md" --label "type/security"
+            echo "Created issue for CodeQL alert #${ALERT_NUMBER} (severity: ${ALERT_SEVERITY})"
+            CREATED=$((CREATED + 1))
+          done
+
+          echo "Done. Created: ${CREATED}, Skipped (existing): ${SKIPPED}"
