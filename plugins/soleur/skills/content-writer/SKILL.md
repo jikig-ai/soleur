@@ -165,6 +165,20 @@ On acceptance, write the article to the output path.
 
 Report: "Article written to `<path>`. Review and commit when ready."
 
+## Phase 4.5: OG Image Generation
+
+Every blog post must have a unique OG image for social sharing differentiation. After writing the article:
+
+1. **Check for existing `ogImage`** in the frontmatter. If already set, skip.
+2. **Generate a unique OG image** (1200x630px) using the `gemini-imagegen` skill or Pillow fallback:
+   - Brand colors: dark background `#1a1a1a`, gold accent `#c4a35a`
+   - Abstract/thematic visual matching the article topic -- no text in the image (og:title provides text)
+   - Save to `plugins/soleur/docs/images/blog/og-<slug>.png`
+3. **Add `ogImage` to frontmatter**: `ogImage: "blog/og-<slug>.png"`
+4. The base template resolves this as `/images/{{ ogImage }}` for og:image meta tags
+
+**Headless mode:** Auto-generate without prompting. **Interactive mode:** Show the generated image and ask for approval.
+
 ## Important Guidelines
 
 - All content requires explicit user approval before writing -- no auto-write (unless `--headless` is passed, which auto-accepts on PASS citations and auto-fixes FAIL claims before accepting)
