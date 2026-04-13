@@ -458,6 +458,13 @@ and lifecycle progression.
 3. Display: "All artifacts are on disk. Run `/clear` then `/soleur:work` for maximum
    context headroom."
 
+**Resume prompt (MANDATORY):** After the display message above, always output a copy-pasteable resume prompt block. This is required by AGENTS.md whenever `/clear` is mentioned. Format:
+
+```text
+Resume prompt (copy-paste after /clear):
+/soleur:work <plan-path>. Branch: feat-<name>. Worktree: .worktrees/feat-<name>/. Issue: #<number>. PR: #<pr-number>. Plan reviewed, implementation next.
+```
+
 ## Post-Generation Options
 
 After plan review, use the **AskUserQuestion tool** to present these options:
