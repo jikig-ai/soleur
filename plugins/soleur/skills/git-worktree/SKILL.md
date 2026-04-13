@@ -308,6 +308,9 @@ Navigate back to the repository root directory.
 - When creating worktrees manually (not via the script), always use absolute paths. Relative paths resolve from CWD, not from `GIT_DIR`, creating nested worktrees that are difficult to clean up. The script handles this correctly but manual `git worktree add` commands are susceptible.
 - When lefthook hangs in a worktree (>60s), kill it (`pkill -f "lefthook run"`), verify checks manually, then commit with `LEFTHOOK=0 git commit`. This is a known lefthook/worktree interaction bug.
 - After `git worktree add` on bare repos, verify both `rev-parse --show-toplevel` (directory validity) and `git worktree list --porcelain` (registration). See learning: `knowledge-base/project/learnings/2026-04-10-worktree-registration-verification-insufficient.md`.
+- In bare repos with multiple worktrees, `git fetch origin branch:branch` fails when the target branch is checked out in any worktree -- git rejects the refspec update. The fallback `git fetch origin branch` only updates `origin/branch`, NOT the local ref. Use `git update-ref refs/heads/branch origin/branch` to force-sync when the fetch refspec is rejected.
+- After creating a worktree via the script, always verify it exists in `git worktree list` before attempting to `cd` into it -- the script may report success for names that silently fail (e.g., excessively long names).
+- In bare repos, `git branch --show-current` from the bare root returns `main` (or empty), not the worktree's branch. Always ensure CWD is inside the target worktree before running branch-detecting git commands.
 
 ## Technical Details
 
