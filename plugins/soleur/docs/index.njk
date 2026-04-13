@@ -1,5 +1,6 @@
 ---
 title: Soleur
+seoTitle: "Soleur — Company-as-a-Service Platform for Solo Founders"
 description: "Soleur is the open-source company-as-a-service platform for solo founders and solopreneurs — AI agents across engineering, marketing, legal, finance, and every business department."
 layout: base.njk
 permalink: index.html
@@ -7,8 +8,9 @@ permalink: index.html
 
     <!-- Hero -->
     <section class="landing-hero">
-      <h1>Build a Billion-Dollar Company. Alone.</h1>
-      <p class="hero-sub">You&rsquo;re wearing 9 hats. Soleur takes 8 off your head &mdash; marketing campaigns, legal contracts, competitive analysis, financial planning &mdash; delegated to AI agents that remember everything about your business.</p>
+      <h1>The Company-as-a-Service Platform for Solo Founders</h1>
+      <p class="hero-tagline">Build a Billion-Dollar Company. Alone.</p>
+      <p class="hero-sub">Soleur is an open-source company-as-a-service platform that deploys {{ stats.agents }} AI agents across {{ stats.departments }} business departments &mdash; engineering, marketing, legal, finance, operations, product, sales, and support &mdash; giving a single founder the operational capacity of a full organization. Every agent shares a compounding knowledge base that grows with your business.</p>
       <p class="hero-trust">Human-in-the-loop. Your expertise, amplified.</p>
       <form class="newsletter-form hero-waitlist-form" id="homepage-waitlist-form"
         action="https://buttondown.com/api/emails/embed-subscribe/soleur"
@@ -102,7 +104,7 @@ permalink: index.html
           </div>
           {%- endfor %}
         </div>
-        <h3 class="feature-grid-sublabel">The Workflow</h3>
+        <h2 class="feature-grid-sublabel">The Workflow</h2>
         <div class="feature-grid-workflow">
           <div class="feature-card">
             <div class="feature-card-icon" aria-hidden="true">&#x1F4A1;</div>
@@ -154,7 +156,7 @@ permalink: index.html
           </details>
           <details class="faq-item">
             <summary class="faq-question">How does Soleur differ from Cursor or GitHub Copilot?</summary>
-            <p class="faq-answer">Cursor and Copilot help you write code. Soleur helps you run a company. It includes agents for marketing strategy, legal compliance, financial planning, sales pipeline analysis, and more. The core difference: Soleur maintains a persistent knowledge base across every department. Your marketing agent knows your brand voice. Your legal agent knows your compliance posture. Cursor starts fresh every session.</p>
+            <p class="faq-answer">Cursor and Copilot help you write code. Soleur helps you run a company. It includes agents for marketing strategy, legal compliance, financial planning, sales pipeline analysis, and more. The core difference: Soleur maintains a persistent knowledge base across every department. Your marketing agent knows your brand voice. Your legal agent knows your compliance posture. Cursor starts fresh every session. Soleur is built on <a href="https://docs.anthropic.com/en/docs/claude-code" rel="noopener noreferrer">Claude Code</a> and the <a href="https://modelcontextprotocol.io/" rel="noopener noreferrer">Model Context Protocol (MCP)</a>, the open standard for connecting AI to external tools.</p>
           </details>
           <details class="faq-item">
             <summary class="faq-question">What if the AI output is wrong?</summary>
