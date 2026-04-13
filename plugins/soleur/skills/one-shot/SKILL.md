@@ -1,6 +1,6 @@
 ---
 name: one-shot
-description: "This skill should be used when running the full autonomous engineering workflow from plan to PR with video."
+description: "This skill should be used when running the full autonomous engineering workflow from plan to merged PR."
 ---
 
 Run these steps in order. Do not do anything else.
@@ -93,7 +93,7 @@ After the subagent returns, check for a `## Session Summary` heading in the outp
 2. Use the **Skill tool**: `skill: soleur:plan`, args: "$ARGUMENTS" and then `skill: soleur:deepen-plan` inline (no compaction benefit, but pipeline continues)
 3. Continue to step 3.
 
-**Steps 3-10: Implementation, Review, and Ship**
+**Steps 3-8: Implementation, Review, and Ship**
 
 3. Use the **Skill tool**: `skill: soleur:work`, args: "<plan_file_path>". Work handles implementation only (Phases 0-3). It does NOT invoke ship -- one-shot controls the full lifecycle below.
 
@@ -119,9 +119,7 @@ After the subagent returns, check for a `## Session Summary` heading in the outp
 5.5. Use the **Skill tool**: `skill: soleur:qa`, args: "<plan_file_path>". QA verifies features work end-to-end by executing the plan's Test Scenarios (browser flows via Playwright MCP, API verification via Doppler + curl). If QA fails, fix the issues and re-run QA before proceeding. If the plan has no Test Scenarios section, QA skips gracefully.
 6. Use the **Skill tool**: `skill: soleur:compound`
 7. Use the **Skill tool**: `skill: soleur:ship`. Ship handles compound re-check (Phase 2), documentation verification (Phase 3), tests (Phase 4), semver label assignment, push, PR creation, CI, merge, and cleanup.
-8. Use the **Skill tool**: `skill: soleur:test-browser`
-9. Use the **Skill tool**: `skill: soleur:feature-video`
-10. Output `<promise>DONE</promise>` when video is in PR
+8. Output `<promise>DONE</promise>` when PR is merged and release workflows pass
 
 CRITICAL RULE: If a completion promise is set, you may ONLY output it when the statement is completely and unequivocally TRUE. Do not output false promises to escape the loop.
 
