@@ -228,14 +228,13 @@ describe("POST /api/kb/upload", () => {
   test("returns 201 for 11MB file (within 20MB limit)", async () => {
     setupFullMocks();
 
-    const file = new File(
-      [new Uint8Array(11 * 1024 * 1024)],
-      "large-doc.pdf",
-      { type: "application/pdf" },
-    );
-    const formData = createFormData(file, "uploads");
+    const formData = createFormData(makeTestFile("large-doc.pdf", 11 * 1024 * 1024), "uploads");
     const res = await POST(createRequest(formData, "https://app.soleur.ai"));
     expect(res.status).toBe(201);
+
+    const body = await res.json();
+    expect(body.path).toBeDefined();
+    expect(body.sha).toBe("newsha123");
   });
 
   // 5. Path traversal
