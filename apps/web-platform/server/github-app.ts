@@ -186,6 +186,7 @@ export function _resetSlugCacheForTesting(): void {
 // ---------------------------------------------------------------------------
 
 const GITHUB_API = "https://api.github.com";
+const GITHUB_FETCH_TIMEOUT_MS = 15_000;
 
 async function githubFetch(
   url: string,
@@ -193,7 +194,7 @@ async function githubFetch(
 ): Promise<Response> {
   const response = await fetch(url, {
     ...options,
-    signal: AbortSignal.timeout(15_000),
+    signal: AbortSignal.timeout(GITHUB_FETCH_TIMEOUT_MS),
     headers: {
       Accept: "application/vnd.github+json",
       "X-GitHub-Api-Version": "2022-11-28",

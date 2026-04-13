@@ -26,8 +26,8 @@ const BASE_DELAY_MS = 1_000;
 function isRetryable(err: unknown): boolean {
   // AbortSignal.timeout() fires a DOMException with name "TimeoutError"
   if (err instanceof DOMException && err.name === "TimeoutError") return true;
-  // Network-level errors (DNS failure, connection refused, fetch failed)
-  if (err instanceof TypeError) return true;
+  // Network-level fetch failure (undici throws TypeError with "fetch failed")
+  if (err instanceof TypeError && err.message === "fetch failed") return true;
   // Undici-specific error codes
   if (
     err instanceof Error &&
@@ -89,6 +89,7 @@ async function fetchWithRetry(
       throw lastError;
     }
   }
+  // TypeScript exhaustiveness guard — loop always exits via return or throw above
   throw lastError;
 }
 

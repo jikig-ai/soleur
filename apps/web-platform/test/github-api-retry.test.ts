@@ -220,7 +220,7 @@ describe("github-api fetchWithRetry", () => {
       mockTokenResponse();
       mockFetch.mockResolvedValueOnce(clientErrorResponse(403, '{"message":"Forbidden"}'));
 
-      await expect(githubApiGet(id, "/repos/o/r")).rejects.toThrow();
+      await expect(githubApiGet(id, "/repos/o/r")).rejects.toThrow(/permission denied.*403/);
       expect(mockFetch).toHaveBeenCalledTimes(2);
     });
   });
@@ -234,7 +234,7 @@ describe("github-api fetchWithRetry", () => {
       mockFetch.mockRejectedValueOnce(domExceptionTimeout());
       mockFetch.mockRejectedValueOnce(domExceptionTimeout());
 
-      await expect(githubApiGet(id, "/user")).rejects.toThrow();
+      await expect(githubApiGet(id, "/user")).rejects.toThrow(/signal timed out/);
       // Token + 3 API attempts = 4 calls
       expect(mockFetch).toHaveBeenCalledTimes(4);
     });
@@ -246,7 +246,7 @@ describe("github-api fetchWithRetry", () => {
       mockFetch.mockResolvedValueOnce(serverErrorResponse(502));
       mockFetch.mockResolvedValueOnce(serverErrorResponse(502));
 
-      await expect(githubApiGet(id, "/user")).rejects.toThrow();
+      await expect(githubApiGet(id, "/user")).rejects.toThrow(/502/);
       expect(mockFetch).toHaveBeenCalledTimes(4);
     });
   });
