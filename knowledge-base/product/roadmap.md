@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-04-11
-last_reviewed: 2026-04-11
+last_updated: 2026-04-13
+last_reviewed: 2026-04-13
 review_cadence: weekly
 owner: CPO
 depends_on:
@@ -67,13 +67,13 @@ This roadmap was reviewed by CTO, CLO, CFO, and CMO before finalization.
 
 ---
 
-## Current State (2026-04-10)
+## Current State (2026-04-13)
 
 | Dimension | Status |
 |-----------|--------|
 | Phase 1 (Close the Loop) | Complete. Milestone closed. 0 open, 15 closed. |
 | Phase 2 (Secure for Beta) | Complete. Milestone closed. 0 open, 20 closed. |
-| Phase 3 (Make it Sticky) | In progress. 4 open, 26 closed (milestone). Core KB, inbox, token storage, onboarding, CI/CD, service automation, analytics, sharing, usage indicator all done. Remaining: review gate notifications, guided instructions fallback, subscription management, invoice history. |
+| Phase 3 (Make it Sticky) | In progress. 6 open, 57 closed (milestone). Core KB, inbox, token storage, onboarding, CI/CD, service automation, analytics, sharing, usage indicator, pricing page, start fresh onboarding, post-connect sync all done. Remaining: review gate notifications, guided instructions fallback, subscription management, invoice history, agent work visualization, service automation announcement. |
 | Phase 4 (Validate + Scale) | Not started. 16 open, 11 closed. Blocked by Phase 3 completion + marketing/multi-user gates. |
 | Phase 5 (Desktop Native App) | Defined. 5 open, 0 closed. Trigger-gated on user demand. |
 | Post-MVP / Later | 74 open, 265 closed. |
