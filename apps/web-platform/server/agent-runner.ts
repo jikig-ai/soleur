@@ -1052,7 +1052,19 @@ When you need user input for important decisions, use the AskUserQuestion tool.`
 
     // Stream messages to client with leader attribution
     let fullText = "";
+    let hasStreamedPartials = false;
     const streamLeaderId = effectiveLeaderId;
+
+    // Human-readable labels for tool_use WS events
+    const TOOL_LABELS: Record<string, string> = {
+      Read: "Reading file...",
+      Bash: "Running command...",
+      Edit: "Editing file...",
+      Write: "Writing file...",
+      WebSearch: "Searching web...",
+      Grep: "Searching code...",
+      Glob: "Finding files...",
+    };
 
     // Notify client that this leader is about to stream
     sendToClient(userId, { type: "stream_start", leaderId: streamLeaderId, source: routeSource });
@@ -1079,11 +1091,24 @@ When you need user input for important decisions, use the AskUserQuestion tool.`
           for (const block of content) {
             if (block.type === "text") {
               fullText += block.text;
+              // Skip final text emission if partials already streamed this content
+              // (client already has the full text via cumulative partial:true messages)
+              if (!hasStreamedPartials) {
+                sendToClient(userId, {
+                  type: "stream",
+                  content: block.text,
+                  partial: false,
+                  leaderId: streamLeaderId,
+                });
+              }
+            } else if (block.type === "tool_use") {
+              // Emit tool_use event so client can show status chip
+              const toolName = (block as { name?: string }).name ?? "unknown";
               sendToClient(userId, {
-                type: "stream",
-                content: block.text,
-                partial: false,
+                type: "tool_use",
                 leaderId: streamLeaderId,
+                tool: toolName,
+                label: TOOL_LABELS[toolName] ?? "Working...",
               });
             }
           }
@@ -1139,7 +1164,7 @@ When you need user input for important decisions, use the AskUserQuestion tool.`
           reason: "turn_complete",
         });
       } else if (
-        // Partial messages (streaming text deltas)
+        // Partial messages (streaming text deltas — cumulative snapshots)
         "message" in message &&
         message.message?.content
       ) {
@@ -1147,6 +1172,7 @@ When you need user input for important decisions, use the AskUserQuestion tool.`
         if (Array.isArray(content)) {
           const lastBlock = content[content.length - 1];
           if (lastBlock?.type === "text") {
+            hasStreamedPartials = true;
             sendToClient(userId, {
               type: "stream",
               content: lastBlock.text,

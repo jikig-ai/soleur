@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef, useCallback } from "react";
 import { createClient } from "@/lib/supabase/client";
-import { WS_CLOSE_CODES, type WSMessage, type ConversationContext, type AttachmentRef } from "@/lib/types";
+import { WS_CLOSE_CODES, type WSMessage, type MessageState, type ConversationContext, type AttachmentRef } from "@/lib/types";
 import type { DomainLeaderId } from "@/server/domain-leaders";
 
 type ConnectionStatus = "connecting" | "connected" | "reconnecting" | "disconnected";
@@ -22,6 +22,9 @@ interface ChatMessageBase {
   content: string;
   leaderId?: DomainLeaderId;
   attachments?: AttachmentRef[];
+  state?: MessageState;
+  toolLabel?: string;
+  toolsUsed?: string[];
 }
 
 interface ChatTextMessage extends ChatMessageBase {
