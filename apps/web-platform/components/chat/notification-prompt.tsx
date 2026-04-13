@@ -76,7 +76,7 @@ export function NotificationPrompt({ visible }: NotificationPromptProps) {
   // Already at max shows or permission already decided
   if (typeof window !== "undefined") {
     if (getShowCount() >= MAX_SHOWS) return null;
-    if (Notification.permission === "granted") return null;
+    if (typeof Notification !== "undefined" && Notification.permission === "granted") return null;
   }
 
   // iOS Safari without PWA: can't do Web Push

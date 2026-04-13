@@ -234,30 +234,30 @@ when user is offline. Clicking notification opens correct conversation.
 
 ### Functional Requirements
 
-- [ ] Offline user receives push notification when review gate fires
-- [ ] Push notification includes agent name and decision summary
-- [ ] Clicking push notification opens `/dashboard/chat/{conversationId}`
-- [ ] User with zero push subscriptions receives email via Resend
-- [ ] Email includes actionable summary and deep link to conversation
-- [ ] First review gate resolution shows contextual push permission prompt (after gate, not during)
-- [ ] Notification prompt shown max 2 times per device, then stops
-- [ ] Multiple devices can subscribe to push for same user
-- [ ] Push notifications are fire-and-forget (do not block review gate timeout)
-- [ ] Dead push subscriptions (410 Gone) are deleted immediately
+- [x] Offline user receives push notification when review gate fires
+- [x] Push notification includes agent name and decision summary
+- [x] Clicking push notification opens `/dashboard/chat/{conversationId}`
+- [x] User with zero push subscriptions receives email via Resend
+- [x] Email includes actionable summary and deep link to conversation
+- [x] First review gate resolution shows contextual push permission prompt (after gate, not during)
+- [x] Notification prompt shown max 2 times per device, then stops
+- [x] Multiple devices can subscribe to push for same user
+- [x] Push notifications are fire-and-forget (do not block review gate timeout)
+- [x] Dead push subscriptions (410 Gone) are deleted immediately
 
 ### Non-Functional Requirements
 
-- [ ] CSP `connect-src` updated with push service endpoints
-- [ ] VAPID keys stored in Doppler (not hardcoded)
-- [ ] Push subscriptions protected by RLS (users access own rows only)
-- [ ] Resend DPA verified/signed before merge
+- [x] CSP `connect-src` updated with push service endpoints
+- [x] VAPID keys stored in Doppler (not hardcoded)
+- [x] Push subscriptions protected by RLS (users access own rows only)
+- [x] Resend DPA verified/signed before merge
 
 ### Quality Gates
 
-- [ ] All existing tests pass (no regressions)
-- [ ] New tests for notification dispatch, 410 cleanup, API route, and CSP
-- [ ] Privacy Policy, DPD updated with new processing activities
-- [ ] Compliance posture updated for Resend
+- [x] All existing tests pass (no regressions)
+- [x] New tests for notification dispatch, 410 cleanup, API route, and CSP
+- [x] Privacy Policy, DPD updated with new processing activities
+- [x] Compliance posture updated for Resend
 
 ## Test Scenarios
 
