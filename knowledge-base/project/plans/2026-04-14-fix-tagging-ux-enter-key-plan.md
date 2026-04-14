@@ -2,9 +2,29 @@
 title: "fix: Enter key selects autocomplete item instead of sending message"
 type: fix
 date: 2026-04-14
+deepened: 2026-04-14
 ---
 
 # fix: Enter key selects autocomplete item instead of sending message
+
+## Enhancement Summary
+
+**Deepened on:** 2026-04-14
+**Sections enhanced:** 6
+**Research sources used:** WAI-ARIA Authoring Practices Guide (combobox pattern), React.dev event handling docs, Vercel React Best Practices, project learnings (tag-and-route architecture, a11y patterns)
+
+### Key Improvements
+
+1. Added WAI-ARIA combobox keyboard interaction compliance analysis -- the fix aligns with the W3C standard where Enter on the input selects the active option when the popup is open
+2. Added accessibility improvements: `aria-expanded`, `aria-activedescendant`, and `Tab` key handling for the dropdown hint footer
+3. Added edge case analysis: empty filtered list, rapid typing race conditions, Tab key behavior, and IME composition
+4. Strengthened test scenarios with integration-level tests that exercise both components together
+
+### New Considerations Discovered
+
+- The current `AtMentionDropdown` registers its keyboard handler on `document` instead of the `<textarea>` -- this deviates from the WAI-ARIA combobox pattern where the input element owns the keyboard handler. The chosen fix (prop approach) works correctly without changing this, but a future refactor could move the keyboard logic into `ChatInput` for full combobox compliance.
+- The dropdown footer shows keyboard hints for up/down but not for Enter or Escape -- adding `Enter to select` would improve discoverability.
+- The `Tab` key currently does nothing when the dropdown is open -- per WAI-ARIA, Tab should close the popup and move focus normally.
 
 ## Overview
 
@@ -23,6 +43,16 @@ The `ChatInput` component has an `onKeyDown` handler on the `<textarea>` element
 
 The `AtMentionDropdown` test ("selects with Enter key") passes because it fires `fireEvent.keyDown(document, ...)` directly on `document`, bypassing the textarea handler entirely. The integration between the two components was never tested together.
 
+### Research Insights: Event Propagation
+
+**React synthetic events vs native DOM events:** React attaches event handlers to the root DOM node (not individual elements). React's synthetic `onKeyDown` on the textarea fires during React's internal dispatch, which happens during the bubble phase. The `document.addEventListener("keydown")` in `AtMentionDropdown` fires after all element-level handlers have completed bubbling. This ordering is deterministic and well-documented in React.dev -- it is not a race condition but a guaranteed ordering problem.
+
+**WAI-ARIA combobox pattern (W3C APG):** The standard combobox keyboard interaction pattern places ALL keyboard handling on the input element itself:
+
+> "When focus is within the combobox, the Enter key accepts the focused option and closes the popup."
+
+The current architecture splits keyboard handling between the textarea (`ChatInput`) and `document` (`AtMentionDropdown`). The fix consolidates the Enter decision into `ChatInput` by checking `atMentionVisible`, which matches the WAI-ARIA intent: the input element decides whether Enter submits or selects.
+
 ## Proposed Solution
 
 Pass a prop or signal to `ChatInput` indicating whether the `@mention` dropdown is currently visible. When visible, suppress the Enter-to-send behavior so the dropdown's own Enter handler can select the highlighted leader.
@@ -36,6 +66,7 @@ Pass a prop or signal to `ChatInput` indicating whether the `@mention` dropdown 
 1. **`apps/web-platform/components/chat/chat-input.tsx`**
    - Add `atMentionVisible?: boolean` to `ChatInputProps` interface
    - In `handleKeyDown`, check `atMentionVisible` before calling `handleSubmit()` on Enter
+   - Add `atMentionVisible` to `handleKeyDown` dependency array
 
 2. **`apps/web-platform/app/(dashboard)/dashboard/chat/[conversationId]/page.tsx`**
    - Pass `atMentionVisible={atVisible}` to the `<ChatInput>` component
@@ -53,7 +84,7 @@ Pass a prop or signal to `ChatInput` indicating whether the `@mention` dropdown 
 |----------|------|------|----------|
 | **Prop `atMentionVisible`** (chosen) | Simple, explicit, no DOM coupling | One more prop | Chosen -- minimal change, clear intent |
 | **`e.stopPropagation()` in dropdown** | No prop needed | Dropdown uses `document` listener, not React event -- `stopPropagation` from document level cannot stop the textarea handler that fires first | Does not work -- wrong propagation direction |
-| **Move dropdown keydown to textarea `onKeyDown`** | Single handler, no race | Couples dropdown logic into ChatInput, violates component separation | Over-engineering for this fix |
+| **Move dropdown keydown to textarea `onKeyDown`** | Single handler, no race, WAI-ARIA compliant | Couples dropdown logic into ChatInput, violates component separation | Over-engineering for this fix; consider as future refactor |
 | **Use `useRef` to share "dropdown active" state** | No prop drilling | Ref is mutable, harder to test, same information as a prop | Unnecessary indirection |
 | **Capture phase listener in dropdown** | Fires before textarea | Requires `addEventListener("keydown", fn, true)` which is fragile and harder to reason about | Fragile, non-standard React pattern |
 
@@ -84,6 +115,18 @@ Pass a prop or signal to `ChatInput` indicating whether the `@mention` dropdown 
 - Given the `@mention` dropdown is visible, when the user presses Escape, then the dropdown closes and Enter sends the message
 - Given the `@mention` dropdown is visible, when the user presses Shift+Enter, then a newline is inserted (not a selection, not a send)
 
+### Research Insights: Additional Test Scenarios
+
+**Edge cases from WAI-ARIA combobox pattern analysis:**
+
+- Given the `@mention` dropdown is visible but the filtered list is empty (query matches no leader), when the user presses Enter, then the message should be sent normally (no leader to select)
+- Given the user types `@cto` and the dropdown shows one match, when the user presses Enter, then "cto" is selected -- verify the dropdown closes and the cursor is positioned after the inserted `@cto`
+- Given the user is composing with an IME (e.g., Japanese input), when `isComposing` is true on the KeyboardEvent, then Enter should NOT trigger send or select (it finalizes the IME composition)
+
+**Integration test (both components rendered together):**
+
+- Render `ChatPage` (or a minimal wrapper with both `ChatInput` and `AtMentionDropdown`), type `@`, verify dropdown appears, press Enter, verify `onSend` was NOT called and the leader was inserted into the input text
+
 ## MVP
 
 ### chat-input.tsx change (handleKeyDown)
@@ -99,6 +142,22 @@ const handleKeyDown = useCallback(
   },
   [handleSubmit, atMentionVisible],
 );
+```
+
+### chat-input.tsx change (interface)
+
+```typescript
+interface ChatInputProps {
+  onSend: (message: string, attachments?: AttachmentRef[]) => void;
+  onAtTrigger: (query: string, cursorPosition: number) => void;
+  onAtDismiss: () => void;
+  disabled?: boolean;
+  placeholder?: string;
+  conversationId?: string;
+  insertRef?: React.MutableRefObject<((text: string, replaceFrom: number) => void) | null>;
+  /** When true, Enter key defers to the @mention dropdown instead of sending. */
+  atMentionVisible?: boolean;
+}
 ```
 
 ### chat page change (prop pass-through)
@@ -120,10 +179,31 @@ const handleKeyDown = useCallback(
 />
 ```
 
+### Research Insights: Performance Considerations
+
+**`rerender-dependencies` (Vercel React Best Practices):** The `atMentionVisible` boolean is a primitive value, so adding it to the `useCallback` dependency array is cheap -- React can compare it by value without triggering unnecessary re-renders. This is the correct pattern per the Vercel guidelines: "Use primitive dependencies in effects."
+
+**`client-event-listeners` (Vercel React Best Practices):** The `AtMentionDropdown` currently adds/removes a `document` keydown listener on every visibility change. This is correct behavior (cleanup on `visible=false`), but if the component re-renders frequently, consider moving to the `useLatest` ref pattern for the callback to avoid listener churn. Not needed for this fix since the listener lifecycle is already gated on `visible`.
+
+### Research Insights: Accessibility Improvements (Deferred)
+
+The following improvements align with the WAI-ARIA combobox pattern but are out of scope for this bug fix. File as separate issues if desired:
+
+1. **`aria-expanded` on textarea:** When the dropdown is visible, the textarea should have `aria-expanded="true"` and reference the listbox via `aria-controls`. This lets screen readers announce that a popup is available.
+
+2. **`aria-activedescendant` on textarea:** When a dropdown item is highlighted, set `aria-activedescendant` on the textarea to the `id` of the active option. This lets screen readers announce the focused option without moving DOM focus.
+
+3. **`Tab` key closes dropdown:** Per WAI-ARIA, pressing Tab when the popup is open should close the popup and move focus normally. Currently Tab does nothing special when the dropdown is open.
+
+4. **Dropdown footer hint update:** The footer shows `up/down to navigate` but does not mention `Enter to select` or `Esc to dismiss`. Adding these hints improves discoverability.
+
 ## References
 
 - Related issue: #2160
+- WAI-ARIA Combobox Pattern: [W3C APG Combobox](https://www.w3.org/WAI/ARIA/apg/patterns/combobox/)
+- React Event Handling: [React.dev Responding to Events](https://react.dev/learn/responding-to-events)
 - AtMentionDropdown component: `apps/web-platform/components/chat/at-mention-dropdown.tsx`
 - ChatInput component: `apps/web-platform/components/chat/chat-input.tsx`
 - Chat page: `apps/web-platform/app/(dashboard)/dashboard/chat/[conversationId]/page.tsx`
 - Learning: `knowledge-base/project/learnings/2026-03-27-tag-and-route-multi-leader-architecture.md`
+- Learning: `knowledge-base/project/learnings/2026-04-02-tailwind-v4-a11y-focus-ring-contrast-patterns.md`
