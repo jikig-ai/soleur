@@ -8,6 +8,24 @@ vi.mock("next/navigation", () => ({
   useRouter: () => ({ push: mockPush }),
 }));
 
+vi.mock("@/hooks/use-team-names", () => ({
+  useTeamNames: () => ({
+    names: {},
+    iconPaths: {},
+    nudgesDismissed: [],
+    namingPromptedAt: null,
+    loading: false,
+    error: null,
+    updateName: vi.fn(),
+    updateIcon: vi.fn(),
+    dismissNudge: vi.fn(),
+    refetch: vi.fn(),
+    getDisplayName: (id: string) => id.toUpperCase(),
+    getBadgeLabel: (id: string) => id.toUpperCase().slice(0, 3),
+    getIconPath: () => null,
+  }),
+}));
+
 function makeConversation(
   overrides: Partial<ConversationWithPreview> = {},
 ): ConversationWithPreview {

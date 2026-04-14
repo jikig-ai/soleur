@@ -15,6 +15,7 @@ import type { ConversationStatus } from "@/lib/types";
 import type { DomainLeaderId } from "@/server/domain-leaders";
 import { DOMAIN_LEADERS, ROUTABLE_DOMAIN_LEADERS } from "@/server/domain-leaders";
 import { LeaderAvatar } from "@/components/leader-avatar";
+import { useTeamNames } from "@/hooks/use-team-names";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -120,6 +121,8 @@ export default function DashboardPage() {
   const [statusFilter, setStatusFilter] = useState<ConversationStatus | null>(null);
   const [domainFilter, setDomainFilter] = useState<DomainLeaderId | "general" | null>(null);
   const [archiveFilter, setArchiveFilter] = useState<ArchiveFilter>("active");
+
+  const { getIconPath } = useTeamNames();
 
   const { conversations, loading, error, refetch, archiveConversation, unarchiveConversation, updateStatus } = useConversations({
     statusFilter,
@@ -498,7 +501,7 @@ export default function DashboardPage() {
                     onClick={() => handlePromptClick(card.promptText)}
                     className="flex flex-col gap-2 rounded-xl border border-neutral-800 bg-neutral-900/50 p-4 text-left transition-colors hover:border-neutral-600"
                   >
-                    <LeaderAvatar leaderId={card.leaderId} size="sm" />
+                    <LeaderAvatar leaderId={card.leaderId} size="sm" customIconPath={getIconPath(card.leaderId)} />
                     <span className="text-sm font-medium text-white">
                       {card.title}
                     </span>
@@ -558,7 +561,7 @@ export default function DashboardPage() {
           </div>
         )}
 
-        <LeaderStrip onLeaderClick={handleLeaderClick} />
+        <LeaderStrip onLeaderClick={handleLeaderClick} getIconPath={getIconPath} />
       </div>
     );
   }
@@ -612,7 +615,7 @@ export default function DashboardPage() {
                   onClick={() => handlePromptClick(card.promptText)}
                   className="flex flex-col gap-2 rounded-xl border border-neutral-800 bg-neutral-900/50 p-4 text-left transition-colors hover:border-neutral-600"
                 >
-                  <LeaderAvatar leaderId={card.leaderId} size="sm" />
+                  <LeaderAvatar leaderId={card.leaderId} size="sm" customIconPath={getIconPath(card.leaderId)} />
                   <span className="text-sm font-medium text-white">
                     {card.title}
                   </span>
@@ -760,7 +763,7 @@ export default function DashboardPage() {
   );
 }
 
-function LeaderStrip({ onLeaderClick }: { onLeaderClick: (leaderId: string) => void }) {
+function LeaderStrip({ onLeaderClick, getIconPath }: { onLeaderClick: (leaderId: string) => void; getIconPath: (id: DomainLeaderId) => string | null }) {
   return (
     <>
       <p className="mb-4 text-xs font-medium tracking-widest text-neutral-400">
@@ -774,7 +777,7 @@ function LeaderStrip({ onLeaderClick }: { onLeaderClick: (leaderId: string) => v
             onClick={() => onLeaderClick(leader.id)}
             className="group flex items-center gap-1.5 rounded-lg px-2 py-1 transition-colors hover:bg-neutral-800/50"
           >
-            <LeaderAvatar leaderId={leader.id} size="sm" />
+            <LeaderAvatar leaderId={leader.id} size="sm" customIconPath={getIconPath(leader.id as DomainLeaderId)} />
             <span className="text-xs text-neutral-500 group-hover:text-neutral-300">
               {leader.name}
             </span>
