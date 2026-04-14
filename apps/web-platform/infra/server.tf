@@ -1,3 +1,12 @@
+locals {
+  # Rendered hooks.json content, shared between cloud-init user_data (fresh servers)
+  # and the deploy_pipeline_fix provisioner (existing server). Single source of truth
+  # avoids drift between the two code paths (#2201).
+  hooks_json = templatefile("${path.module}/hooks.json.tmpl", {
+    webhook_deploy_secret = var.webhook_deploy_secret
+  })
+}
+
 resource "hcloud_ssh_key" "default" {
   name       = "soleur-web-platform"
   public_key = file(var.ssh_key_path)
@@ -18,13 +27,15 @@ resource "hcloud_server" "web" {
   ssh_keys    = [hcloud_ssh_key.default.id]
 
   user_data = templatefile("${path.module}/cloud-init.yml", {
-    image_name              = var.image_name
-    ci_deploy_script_b64    = base64encode(file("${path.module}/ci-deploy.sh"))
-    disk_monitor_script_b64 = base64encode(file("${path.module}/disk-monitor.sh"))
-    tunnel_token            = cloudflare_zero_trust_tunnel_cloudflared.web.tunnel_token
-    webhook_deploy_secret   = var.webhook_deploy_secret
-    doppler_token           = var.doppler_token
-    resend_api_key          = var.resend_api_key
+    image_name                  = var.image_name
+    ci_deploy_script_b64        = base64encode(file("${path.module}/ci-deploy.sh"))
+    cat_deploy_state_script_b64 = base64encode(file("${path.module}/cat-deploy-state.sh"))
+    disk_monitor_script_b64     = base64encode(file("${path.module}/disk-monitor.sh"))
+    hooks_json_b64              = base64encode(local.hooks_json)
+    tunnel_token                = cloudflare_zero_trust_tunnel_cloudflared.web.tunnel_token
+    webhook_deploy_secret       = var.webhook_deploy_secret
+    doppler_token               = var.doppler_token
+    resend_api_key              = var.resend_api_key
   })
 
   # cloud-init and ssh_keys are create-time attributes. After import,
@@ -83,13 +94,24 @@ resource "terraform_data" "disk_monitor_install" {
 # Shows as "will be created" in CI drift reports -- expected behavior (#1409).
 # Source of truth for webhook.service: cloud-init.yml (search "path: /etc/systemd/system/webhook.service").
 # The standalone webhook.service file keeps triggers_replace and the file provisioner in sync.
+#
+# NOTE (#2205): ci-deploy.sh, cat-deploy-state.sh, and hooks.json are ALSO
+# provisioned via cloud-init write_files for fresh servers. See cloud-init.yml
+# (search "path: /usr/local/bin/ci-deploy.sh" and "/usr/local/bin/cat-deploy-state.sh").
+# Both paths must stay in sync — a change here without updating cloud-init.yml
+# means new servers provisioned from scratch will miss the change.
 resource "terraform_data" "deploy_pipeline_fix" {
   # AppArmor profile must be loaded before ci-deploy.sh references it (#1570).
   depends_on = [terraform_data.apparmor_bwrap_profile]
 
+  # hcloud_server.web has ignore_changes=[user_data], so cloud-init never re-applies
+  # to the existing server. This resource is the sole path for pushing ci-deploy.sh,
+  # webhook.service, cat-deploy-state.sh, and hooks.json updates to production (#2185).
   triggers_replace = sha256(join(",", [
     file("${path.module}/ci-deploy.sh"),
     file("${path.module}/webhook.service"),
+    file("${path.module}/cat-deploy-state.sh"),
+    local.hooks_json,
   ]))
 
   connection {
@@ -109,9 +131,24 @@ resource "terraform_data" "deploy_pipeline_fix" {
     destination = "/etc/systemd/system/webhook.service"
   }
 
+  provisioner "file" {
+    source      = "${path.module}/cat-deploy-state.sh"
+    destination = "/usr/local/bin/cat-deploy-state.sh"
+  }
+
+  provisioner "file" {
+    content     = local.hooks_json
+    destination = "/etc/webhook/hooks.json"
+  }
+
   provisioner "remote-exec" {
     inline = [
       "chmod +x /usr/local/bin/ci-deploy.sh",
+      "chmod +x /usr/local/bin/cat-deploy-state.sh",
+      # hooks.json must be readable by the webhook (deploy group) but not world-readable --
+      # it contains the HMAC secret. Provisioner "file" uploads as root:root by default.
+      "chown root:deploy /etc/webhook/hooks.json",
+      "chmod 640 /etc/webhook/hooks.json",
       # Append DOPPLER_CONFIG_DIR and DOPPLER_ENABLE_VERSION_CHECK to webhook-deploy env file.
       # Redirects Doppler CLI config to /tmp (writable under PrivateTmp) instead of ~/.doppler
       # (blocked by ProtectHome=read-only). grep guard makes this idempotent.
