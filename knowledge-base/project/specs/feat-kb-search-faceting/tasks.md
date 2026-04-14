@@ -7,57 +7,42 @@ plan: knowledge-base/project/plans/2026-04-14-feat-kb-search-frontmatter-facetin
 
 # Tasks: kb-search Frontmatter Faceting
 
-## Phase 1 — Facet extraction library (1h)
+> Post-review strip: ~2.5h total. Two phases.
 
-- [ ] **1.1** — Create fixtures under `tests/scripts/fixtures/learnings/` covering: inline form, block form, no frontmatter, missing tags field, empty tags array, quoted values, mixed casing, dirty values.
-- [ ] **1.2** — Write failing bats tests in `tests/scripts/test-extract-facets.bats` per TDD gate (AGENTS.md Code Quality).
-- [ ] **1.3** — Create `scripts/lib/extract-facets.sh` with two exported functions: `extract_tags_from_file`, `extract_category_from_file`.
-- [ ] **1.4** — Implement awk-based frontmatter isolation (`/^---$/{c++; next} c==1`). No `sed` range expressions.
-- [ ] **1.5** — Implement inline-form detection (`^tags:\s*\[`) and block-form detection (tags label followed by indented `- value` lines).
-- [ ] **1.6** — Implement quote stripping, whitespace trim, lowercase output, silent skip on missing/empty/malformed inputs.
-- [ ] **1.7** — Run bats suite, confirm all Phase 1 tests pass.
+## Phase A — Generator + autocomplete artifacts (~1.5h)
 
-## Phase 2 — Index generator augmentation (1h)
+- [ ] **A.1** — Create fixtures in `tests/scripts/fixtures/facets/`: `inline.md`, `block.md`, `mixed-case.md`, `no-frontmatter.md`, `missing-tags.md`, `empty-tags.md`, `dirty.md`.
+- [ ] **A.2** — Write failing bats at `tests/scripts/test-generate-kb-index.bats` covering TS1–TS5. Use `KB_ROOT` env override or tmp-dir setup so the script targets fixtures, not the real corpus.
+- [ ] **A.3** — Edit `scripts/generate-kb-index.sh`: inline facet extraction after existing INDEX.md section. Preserve `xargs -P4 -n100`.
+- [ ] **A.4** — Implement awk frontmatter isolation + dual-mode tag parser (inline `[a,b]` + block `- value`) with explicit block-form termination (`^[a-z_]+:`).
+- [ ] **A.5** — Use per-worker `mktemp` temp files (e.g., `/tmp/kb-tags.$$`) inside xargs workers. Merge with `cat | sort -u` in main process.
+- [ ] **A.6** — Use POSIX character classes (`[[:space:]]`), not `\s`. Verify `export -f` compatibility or inline the function into the `bash -c` string.
+- [ ] **A.7** — Strip quotes, lowercase, skip empty lines before dedup.
+- [ ] **A.8** — Run bats — all Phase A tests pass.
+- [ ] **A.9** — Run `time bash scripts/generate-kb-index.sh` 3× on full corpus. Median must be < 5s. If over budget, collapse to single awk pass.
+- [ ] **A.10** — Commit `knowledge-base/kb-tags.txt` and `knowledge-base/kb-categories.txt`.
 
-- [ ] **2.1** — Source `scripts/lib/extract-facets.sh` from `scripts/generate-kb-index.sh`.
-- [ ] **2.2** — Add parallel pass emitting tags and categories into temp files, preserving `xargs -P4 -n100` batching.
-- [ ] **2.3** — `sort -u` temp files into `knowledge-base/_tags.txt` and `knowledge-base/_categories.txt`.
-- [ ] **2.4** — Leave existing INDEX.md generation untouched.
-- [ ] **2.5** — Run generator 3× on full corpus, record median wall-clock (must be < 5s).
-- [ ] **2.6** — Commit the two autocomplete artifacts (`_tags.txt`, `_categories.txt`).
+## Phase B — Skill docs (~1h)
 
-## Phase 3 — kb-search skill instructions (1.5h)
+- [ ] **B.1** — Update `plugins/soleur/skills/kb-search/SKILL.md`: add Argument Parsing section, algorithm pseudocode, 4 examples, scope note, output format note.
+- [ ] **B.2** — Update `plugins/soleur/skills/compound-capture/SKILL.md` Step 3: faceted-query pattern, before/after example, preference guidance.
+- [ ] **B.3** — Run `npx markdownlint-cli2 --fix` on both SKILL.md files.
+- [ ] **B.4** — Run end-to-end smoke (TS6, TS7): measure perf on full corpus and issue `/kb-search --tag <real-tag>` to confirm wiring.
 
-- [ ] **3.1** — Update `plugins/soleur/skills/kb-search/SKILL.md` with Argument Parsing section documenting `--tag`, `--category`, FR9–FR15 semantics.
-- [ ] **3.2** — Add agent-executable algorithm pseudocode (artifact validation → warn-but-accept → file filter → keyword grep → emit).
-- [ ] **3.3** — Add 4 examples: tag+keyword, category+keyword, tag-only, miss with did-you-mean.
-- [ ] **3.4** — Add scope note (learnings/ only) and output format note (title+path for tag-only).
-- [ ] **3.5** — Run markdownlint on SKILL.md (`npx markdownlint-cli2 --fix`).
+## Pre-Ship (~30min)
 
-## Phase 4 — Compound-capture integration (0.5h)
-
-- [ ] **4.1** — Update `plugins/soleur/skills/compound-capture/SKILL.md` Step 3 (Related Docs Finder) with faceted-query pattern.
-- [ ] **4.2** — Add before/after example (grep → `/kb-search --tag`).
-- [ ] **4.3** — Add guidance on when to prefer facets vs grep.
-- [ ] **4.4** — Run markdownlint on SKILL.md.
-
-## Phase 5 — Validation (1h)
-
-- [ ] **5.1** — Execute all test scenarios TS1–TS17 from spec. Record results.
-- [ ] **5.2** — Verify pre-commit hook still completes under budget.
-- [ ] **5.3** — Grep `knowledge-base/` for "kb-search" references; update any that should mention new flags.
-- [ ] **5.4** — Run `/soleur:review` pipeline before marking PR ready.
-- [ ] **5.5** — Resolve any review findings.
-- [ ] **5.6** — Run `/soleur:compound` to capture any session learnings.
-- [ ] **5.7** — Mark PR ready, label with `semver:patch`, auto-merge.
+- [ ] **P.1** — Run `/soleur:review` pipeline.
+- [ ] **P.2** — Resolve review findings.
+- [ ] **P.3** — Run `/soleur:compound` to capture session learnings.
+- [ ] **P.4** — Mark PR ready, label `semver:patch`, auto-merge.
 
 ## Dependencies
 
-- 2.1 depends on 1.3
-- 3.2 depends on 2.3 (algorithm references artifact paths)
-- 5.1 depends on 1.7, 2.5, 3.x, 4.x
-- 5.7 depends on 5.1–5.6
+- A.3 depends on A.2 (TDD gate)
+- A.10 depends on A.8, A.9
+- B.4 depends on A.10
+- P.x depends on A, B complete
 
 ## Exit criteria
 
-All Phase 5 tasks complete; all FRs + TRs from spec satisfied; CI green; PR merged.
+All FR1–FR15, TR1–TR11, TS1–TS7 from spec satisfied; perf median < 5s; CI green; PR merged.
