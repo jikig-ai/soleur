@@ -87,12 +87,12 @@ This aligns with the upload button's existing `transition-opacity` and `group-ho
 
 ## Acceptance Criteria
 
-- [ ] Hovering a file row hides the time label and shows only the delete button (attachment files)
-- [ ] Hovering a directory row hides the time label and shows only the upload button
-- [ ] Time label remains visible on hover for `.md` files (no delete button, no hide)
-- [ ] The opacity transitions are smooth (both time-out and button-in animate together)
-- [ ] No layout shift occurs during the transition (the row height stays constant)
-- [ ] Existing delete and upload button functionality is unchanged
+- [x] Hovering a file row hides the time label and shows only the delete button (attachment files)
+- [x] Hovering a directory row hides the time label and shows only the upload button
+- [x] Time label remains visible on hover for `.md` files (no delete button, no hide)
+- [x] The opacity transitions are smooth (both time-out and button-in animate together)
+- [x] No layout shift occurs during the transition (the row height stays constant)
+- [x] Existing delete and upload button functionality is unchanged
 
 ## Test Scenarios
 
