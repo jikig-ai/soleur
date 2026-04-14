@@ -7,7 +7,7 @@ const mockStartSession = vi.fn();
 const mockSendMessage = vi.fn();
 const mockSendReviewGateResponse = vi.fn();
 
-type MockTextMessage = { id: string; role: "user" | "assistant"; content: string; type: "text"; leaderId?: string };
+type MockTextMessage = { id: string; role: "user" | "assistant"; content: string; type: "text"; leaderId?: string; state?: "thinking" | "tool_use" | "streaming" | "done" | "error" };
 type MockGateMessage = { id: string; role: "user" | "assistant"; content: string; type: "review_gate"; leaderId?: string; gateId: string; question: string; options: string[]; header?: string; descriptions?: Record<string, string | undefined>; stepProgress?: { current: number; total: number }; resolved?: boolean; selectedOption?: string; gateError?: string };
 type MockChatMessage = MockTextMessage | MockGateMessage;
 
