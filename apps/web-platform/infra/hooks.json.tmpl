@@ -1,0 +1,47 @@
+[
+  {
+    "id": "deploy",
+    "execute-command": "/usr/local/bin/ci-deploy.sh",
+    "command-working-directory": "/",
+    "include-command-output-in-response": false,
+    "success-http-response-code": 202,
+    "response-message": "Deploy initiated",
+    "http-methods": ["POST"],
+    "trigger-rule-mismatch-http-response-code": 403,
+    "pass-environment-to-command": [
+      {
+        "source": "payload",
+        "name": "command",
+        "envname": "SSH_ORIGINAL_COMMAND"
+      }
+    ],
+    "trigger-rule": {
+      "match": {
+        "type": "payload-hmac-sha256",
+        "secret": ${jsonencode(webhook_deploy_secret)},
+        "parameter": {
+          "source": "header",
+          "name": "X-Signature-256"
+        }
+      }
+    }
+  },
+  {
+    "id": "deploy-status",
+    "execute-command": "/usr/local/bin/cat-deploy-state.sh",
+    "command-working-directory": "/",
+    "include-command-output-in-response": true,
+    "http-methods": ["GET"],
+    "trigger-rule-mismatch-http-response-code": 403,
+    "trigger-rule": {
+      "match": {
+        "type": "payload-hmac-sha256",
+        "secret": ${jsonencode(webhook_deploy_secret)},
+        "parameter": {
+          "source": "header",
+          "name": "X-Signature-256"
+        }
+      }
+    }
+  }
+]

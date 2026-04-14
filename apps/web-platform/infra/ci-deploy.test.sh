@@ -11,72 +11,75 @@ PASS=0
 FAIL=0
 TOTAL=0
 
-# Shared mock scaffold: creates all common mock binaries in $MOCK_DIR.
-# Each run_deploy* variant calls this first, then overlays specialized mocks.
-create_base_mocks() {
-  local mock_dir="$1"
+# Hardened PATH for all test subshells.
+# Excludes ~/.local/bin (where real doppler lives) so missing mocks fail loudly
+# rather than falling through to real commands.
+readonly TEST_PATH_BASE="/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 
-  # Mock logger (accept any args silently)
-  cat > "$mock_dir/logger" << 'MOCK'
+# --- Mock factories ---------------------------------------------------------
+# All specialized mocks are driven by env vars. Tests set MOCK_DOCKER_MODE /
+# MOCK_CURL_MODE before invoking a runner; the runner calls create_base_mocks
+# which emits a single unified mock binary per command.
+#
+# MOCK_DOCKER_MODE values:
+#   default        - echo abc123 on run, exit 0 otherwise (minimal)
+#   trace          - emit DOCKER_TRACE:<subcmd> for each call; honor
+#                    MOCK_DOCKER_PULL_FAIL / MOCK_DOCKER_RUN_FAIL_CANARY /
+#                    MOCK_DOCKER_RUN_FAIL_PROD
+#   apparmor-trace - emit DOCKER_RUN_ARGS:<args> and DOCKER_EXEC_ARGS:<args>
+#   bwrap-trace    - emit DOCKER_EXEC:<args> and BWRAP_CANARY_CHECK marker on
+#                    a successful bwrap exec
+#   bwrap-fail     - like bwrap-trace but `docker exec ... bwrap ...` fails
+#
+# MOCK_CURL_MODE values:
+#   default        - healthy endpoint (200 / OK); honor MOCK_CURL_CANARY_FAIL
+#                    to fail the localhost:3001 canary probe
+
+create_mock_logger() {
+  cat > "$1/logger" << 'MOCK'
 #!/bin/bash
 exit 0
 MOCK
-  chmod +x "$mock_dir/logger"
+  chmod +x "$1/logger"
+}
 
-  # Mock docker (accept any args, print fake container ID for 'run')
-  cat > "$mock_dir/docker" << 'MOCK'
-#!/bin/bash
-if [[ "${1:-}" == "run" ]]; then
-  echo "abc123"
-fi
-exit 0
-MOCK
-  chmod +x "$mock_dir/docker"
-
-  # Mock curl (simulate healthy endpoint)
-  cat > "$mock_dir/curl" << 'MOCK'
-#!/bin/bash
-for arg in "$@"; do
-  if [[ "$arg" == *"http_code"* ]]; then
-    echo "200"
-    exit 0
-  fi
-done
-echo "OK"
-exit 0
-MOCK
-  chmod +x "$mock_dir/curl"
-
-  # Mock sudo (just runs the command without privilege escalation)
-  cat > "$mock_dir/sudo" << 'MOCK'
+create_mock_sudo() {
+  cat > "$1/sudo" << 'MOCK'
 #!/bin/bash
 exec "$@"
 MOCK
-  chmod +x "$mock_dir/sudo"
+  chmod +x "$1/sudo"
+}
 
-  # Mock chown
-  cat > "$mock_dir/chown" << 'MOCK'
+create_mock_chown() {
+  cat > "$1/chown" << 'MOCK'
 #!/bin/bash
 exit 0
 MOCK
-  chmod +x "$mock_dir/chown"
+  chmod +x "$1/chown"
+}
 
-  # Mock seq (for health check loops -- return "1" so the loop runs once)
-  cat > "$mock_dir/seq" << 'MOCK'
+create_mock_seq() {
+  cat > "$1/seq" << 'MOCK'
 #!/bin/bash
 echo "1"
 MOCK
-  chmod +x "$mock_dir/seq"
+  chmod +x "$1/seq"
+}
 
-  # Mock flock (always succeeds -- lock not contended)
-  cat > "$mock_dir/flock" << 'MOCK'
+create_mock_flock() {
+  cat > "$1/flock" << 'MOCK'
 #!/bin/bash
+if [[ "${MOCK_FLOCK_CONTENDED:-}" == "1" ]]; then
+  exit 1
+fi
 exit 0
 MOCK
-  chmod +x "$mock_dir/flock"
+  chmod +x "$1/flock"
+}
 
-  # Mock df (reports plenty of disk space; MOCK_DF_LOW=1 simulates low disk)
-  cat > "$mock_dir/df" << 'MOCK'
+create_mock_df() {
+  cat > "$1/df" << 'MOCK'
 #!/bin/bash
 echo "Avail"
 if [[ "${MOCK_DF_LOW:-}" == "1" ]]; then
@@ -85,10 +88,11 @@ else
   echo "20000000"
 fi
 MOCK
-  chmod +x "$mock_dir/df"
+  chmod +x "$1/df"
+}
 
-  # Mock doppler (simulate successful secrets download)
-  cat > "$mock_dir/doppler" << 'MOCK'
+create_mock_doppler() {
+  cat > "$1/doppler" << 'MOCK'
 #!/bin/bash
 if [[ "${1:-}" == "secrets" ]]; then
   echo "KEY=value"
@@ -96,7 +100,140 @@ if [[ "${1:-}" == "secrets" ]]; then
 fi
 exit 0
 MOCK
-  chmod +x "$mock_dir/doppler"
+  chmod +x "$1/doppler"
+}
+
+# Unified docker mock. Behavior selected at runtime via MOCK_DOCKER_MODE env var.
+# Writing one mock (not five) eliminates drift across test scenarios.
+create_docker_mock() {
+  cat > "$1/docker" << 'MOCK'
+#!/bin/bash
+mode="${MOCK_DOCKER_MODE:-default}"
+
+case "$mode" in
+  trace)
+    echo "DOCKER_TRACE:$1"
+    if [[ "${1:-}" == "pull" ]] && [[ "${MOCK_DOCKER_PULL_FAIL:-}" == "1" ]]; then
+      exit 1
+    fi
+    if [[ "${1:-}" == "run" ]]; then
+      for arg in "$@"; do
+        if [[ "$arg" == *"-canary" ]] && [[ "${MOCK_DOCKER_RUN_FAIL_CANARY:-}" == "1" ]]; then
+          exit 1
+        fi
+      done
+      for arg in "$@"; do
+        if [[ "$arg" == "soleur-web-platform" ]] && [[ "${MOCK_DOCKER_RUN_FAIL_PROD:-}" == "1" ]]; then
+          exit 1
+        fi
+      done
+      echo "abc123"
+    fi
+    exit 0
+    ;;
+  apparmor-trace)
+    if [[ "${1:-}" == "run" ]]; then
+      echo "DOCKER_RUN_ARGS:$*"
+      echo "abc123"
+    fi
+    if [[ "${1:-}" == "exec" ]]; then
+      echo "DOCKER_EXEC_ARGS:$*"
+    fi
+    exit 0
+    ;;
+  bwrap-trace)
+    if [[ "${1:-}" == "run" ]]; then echo "abc123"; fi
+    if [[ "${1:-}" == "exec" ]]; then
+      echo "DOCKER_EXEC:$*"
+      for arg in "$@"; do
+        if [[ "$arg" == *"bwrap"* ]]; then
+          echo "BWRAP_CANARY_CHECK"
+          exit 0
+        fi
+      done
+    fi
+    exit 0
+    ;;
+  bwrap-fail)
+    if [[ "${1:-}" == "run" ]]; then echo "abc123"; fi
+    if [[ "${1:-}" == "exec" ]]; then
+      for arg in "$@"; do
+        if [[ "$arg" == *"bwrap"* ]]; then
+          echo "bwrap: No permissions to create new namespace" >&2
+          exit 1
+        fi
+      done
+    fi
+    exit 0
+    ;;
+  default|*)
+    if [[ "${1:-}" == "run" ]]; then
+      for arg in "$@"; do
+        if [[ "$arg" == *"-canary" ]] && [[ "${MOCK_DOCKER_RUN_FAIL_CANARY:-}" == "1" ]]; then
+          exit 1
+        fi
+      done
+      echo "abc123"
+    fi
+    if [[ "${1:-}" == "exec" ]]; then
+      exit 0
+    fi
+    exit 0
+    ;;
+esac
+MOCK
+  chmod +x "$1/docker"
+}
+
+# Unified curl mock. Behavior selected at runtime via MOCK_CURL_MODE env var.
+create_curl_mock() {
+  cat > "$1/curl" << 'MOCK'
+#!/bin/bash
+for arg in "$@"; do
+  if [[ "$arg" == *"http_code"* ]]; then echo "200"; exit 0; fi
+  if [[ "$arg" == *"localhost:3001"* ]] && [[ "${MOCK_CURL_CANARY_FAIL:-}" == "1" ]]; then
+    exit 1
+  fi
+done
+echo "OK"
+exit 0
+MOCK
+  chmod +x "$1/curl"
+}
+
+# Shared mock scaffold: creates all common mock binaries in $MOCK_DIR.
+# Docker/curl behavior is driven by MOCK_DOCKER_MODE / MOCK_CURL_MODE env vars
+# (see factory docs above). Specialized overrides are rare after consolidation.
+create_base_mocks() {
+  local mock_dir="$1"
+  create_mock_logger "$mock_dir"
+  create_docker_mock "$mock_dir"
+  create_curl_mock "$mock_dir"
+  create_mock_sudo "$mock_dir"
+  create_mock_chown "$mock_dir"
+  create_mock_seq "$mock_dir"
+  create_mock_flock "$mock_dir"
+  create_mock_df "$mock_dir"
+  create_mock_doppler "$mock_dir"
+}
+
+# Parse .reason and .exit_code out of a ci-deploy.state JSON file.
+# Prefers jq; falls back to grep/sed so tests run without jq installed.
+# Usage: read_state_reason_and_exit <state_file> <reason_var> <exit_var>
+read_state_reason_and_exit() {
+  local state_file="$1"
+  local reason_var="$2"
+  local exit_var="$3"
+  local _reason _exit
+  if command -v jq >/dev/null 2>&1; then
+    _reason=$(jq -r '.reason // ""' "$state_file" 2>/dev/null || echo "<jq_parse_error>")
+    _exit=$(jq -r '.exit_code // ""' "$state_file" 2>/dev/null || echo "<jq_parse_error>")
+  else
+    _reason=$(grep -oE '"reason":"[^"]*"' "$state_file" | sed 's/.*:"\(.*\)"/\1/')
+    _exit=$(grep -oE '"exit_code":-?[0-9]+' "$state_file" | sed 's/.*://')
+  fi
+  printf -v "$reason_var" '%s' "$_reason"
+  printf -v "$exit_var" '%s' "$_exit"
 }
 
 run_deploy() {
@@ -109,10 +246,14 @@ run_deploy() {
     trap 'rm -rf "$MOCK_DIR"' EXIT
 
     export CI_DEPLOY_LOCK="$MOCK_DIR/ci-deploy.lock"
+    # CI_DEPLOY_STATE defaults to a per-run temp path unless the caller already set one.
+    if [[ -z "${CI_DEPLOY_STATE:-}" ]]; then
+      export CI_DEPLOY_STATE="$MOCK_DIR/ci-deploy.state"
+    fi
     create_base_mocks "$MOCK_DIR"
 
     export DOPPLER_TOKEN="dp.st.prd.mock-token"
-    export PATH="$MOCK_DIR:$PATH"
+    export PATH="$MOCK_DIR:$TEST_PATH_BASE"
     bash "$DEPLOY_SCRIPT" 2>&1
   )
 }
@@ -172,52 +313,14 @@ run_deploy_traced() {
     trap 'rm -rf "$MOCK_DIR"' EXIT
 
     export CI_DEPLOY_LOCK="$MOCK_DIR/ci-deploy.lock"
+    if [[ -z "${CI_DEPLOY_STATE:-}" ]]; then
+      export CI_DEPLOY_STATE="$MOCK_DIR/ci-deploy.state"
+    fi
+    export MOCK_DOCKER_MODE="trace"
     create_base_mocks "$MOCK_DIR"
 
-    # Override: docker mock with trace markers and configurable failures
-    cat > "$MOCK_DIR/docker" << 'MOCK'
-#!/bin/bash
-echo "DOCKER_TRACE:$1"
-# Configurable pull failure
-if [[ "${1:-}" == "pull" ]] && [[ "${MOCK_DOCKER_PULL_FAIL:-}" == "1" ]]; then
-  exit 1
-fi
-# Configurable canary run failure
-if [[ "${1:-}" == "run" ]]; then
-  for arg in "$@"; do
-    if [[ "$arg" == *"-canary" ]] && [[ "${MOCK_DOCKER_RUN_FAIL_CANARY:-}" == "1" ]]; then
-      exit 1
-    fi
-  done
-  # Configurable production run failure (after canary)
-  for arg in "$@"; do
-    if [[ "$arg" == "soleur-web-platform" ]] && [[ "${MOCK_DOCKER_RUN_FAIL_PROD:-}" == "1" ]]; then
-      exit 1
-    fi
-  done
-  echo "abc123"
-fi
-exit 0
-MOCK
-    chmod +x "$MOCK_DIR/docker"
-
-    # Override: curl mock with port-based routing for canary health checks
-    cat > "$MOCK_DIR/curl" << 'MOCK'
-#!/bin/bash
-for arg in "$@"; do
-  if [[ "$arg" == *"http_code"* ]]; then echo "200"; exit 0; fi
-  # Canary port failure
-  if [[ "$arg" == *"localhost:3001"* ]] && [[ "${MOCK_CURL_CANARY_FAIL:-}" == "1" ]]; then
-    exit 1
-  fi
-done
-echo "OK"
-exit 0
-MOCK
-    chmod +x "$MOCK_DIR/curl"
-
     export DOPPLER_TOKEN="dp.st.prd.mock-token"
-    export PATH="$MOCK_DIR:$PATH"
+    export PATH="$MOCK_DIR:$TEST_PATH_BASE"
     bash "$DEPLOY_SCRIPT" 2>&1
   )
 }
@@ -514,21 +617,8 @@ assert_flock_rejection() {
 
   local output actual_exit
   output=$(
-    export SSH_ORIGINAL_COMMAND="deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0"
-    MOCK_DIR=$(mktemp -d)
-    trap 'rm -rf "$MOCK_DIR"' EXIT
-    export CI_DEPLOY_LOCK="$MOCK_DIR/ci-deploy.lock"
-    create_base_mocks "$MOCK_DIR"
-
-    # Override: flock simulates lock contention
-    cat > "$MOCK_DIR/flock" << 'MOCK'
-#!/bin/bash
-exit 1
-MOCK
-    chmod +x "$MOCK_DIR/flock"
-
-    export PATH="$MOCK_DIR:$PATH"
-    bash "$DEPLOY_SCRIPT" 2>&1
+    export MOCK_FLOCK_CONTENDED=1
+    run_deploy "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0" 2>&1
   ) && actual_exit=0 || actual_exit=$?
 
   if [[ "$actual_exit" -eq 1 ]] && printf '%s\n' "$output" | grep -qF "another deploy in progress"; then
@@ -581,7 +671,7 @@ MOCK
 
     # Restrict PATH to mock dir + standard system dirs (excludes ~/.local/bin
     # where real doppler lives, so MOCK_DOPPLER_MISSING=1 actually works)
-    export PATH="$MOCK_DIR:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+    export PATH="$MOCK_DIR:$TEST_PATH_BASE"
     bash "$DEPLOY_SCRIPT" 2>&1
   )
 }
@@ -723,29 +813,8 @@ assert_apparmor_profile() {
 
   local output actual_exit
   output=$(
-    export SSH_ORIGINAL_COMMAND="$cmd"
-    MOCK_DIR=$(mktemp -d)
-    trap 'rm -rf "$MOCK_DIR"' EXIT
-    export CI_DEPLOY_LOCK="$MOCK_DIR/ci-deploy.lock"
-    create_base_mocks "$MOCK_DIR"
-
-    # Override: docker mock that logs full args for 'run' commands
-    cat > "$MOCK_DIR/docker" << 'MOCK'
-#!/bin/bash
-if [[ "${1:-}" == "run" ]]; then
-  echo "DOCKER_RUN_ARGS:$*"
-  echo "abc123"
-fi
-if [[ "${1:-}" == "exec" ]]; then
-  echo "DOCKER_EXEC_ARGS:$*"
-fi
-exit 0
-MOCK
-    chmod +x "$MOCK_DIR/docker"
-
-    export DOPPLER_TOKEN="dp.st.prd.mock-token"
-    export PATH="$MOCK_DIR:$PATH"
-    bash "$DEPLOY_SCRIPT" 2>&1
+    export MOCK_DOCKER_MODE="apparmor-trace"
+    run_deploy "$cmd" 2>&1
   ) && actual_exit=0 || actual_exit=$?
 
   # Check that all DOCKER_RUN_ARGS lines contain apparmor=soleur-bwrap
@@ -790,33 +859,8 @@ assert_bwrap_canary_check() {
 
   local output actual_exit
   output=$(
-    export SSH_ORIGINAL_COMMAND="deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0"
-    MOCK_DIR=$(mktemp -d)
-    trap 'rm -rf "$MOCK_DIR"' EXIT
-    export CI_DEPLOY_LOCK="$MOCK_DIR/ci-deploy.lock"
-    create_base_mocks "$MOCK_DIR"
-
-    # Override: docker mock that traces exec calls
-    cat > "$MOCK_DIR/docker" << 'MOCK'
-#!/bin/bash
-if [[ "${1:-}" == "run" ]]; then echo "abc123"; fi
-if [[ "${1:-}" == "exec" ]]; then
-  echo "DOCKER_EXEC:$*"
-  # Check if this is a bwrap check
-  for arg in "$@"; do
-    if [[ "$arg" == *"bwrap"* ]]; then
-      echo "BWRAP_CANARY_CHECK"
-      exit 0
-    fi
-  done
-fi
-exit 0
-MOCK
-    chmod +x "$MOCK_DIR/docker"
-
-    export DOPPLER_TOKEN="dp.st.prd.mock-token"
-    export PATH="$MOCK_DIR:$PATH"
-    bash "$DEPLOY_SCRIPT" 2>&1
+    export MOCK_DOCKER_MODE="bwrap-trace"
+    run_deploy "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0" 2>&1
   ) && actual_exit=0 || actual_exit=$?
 
   if [[ "$actual_exit" -eq 0 ]] && printf '%s\n' "$output" | grep -qF "BWRAP_CANARY_CHECK"; then
@@ -837,31 +881,8 @@ assert_bwrap_canary_failure_rollback() {
 
   local output actual_exit
   output=$(
-    export SSH_ORIGINAL_COMMAND="deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0"
-    MOCK_DIR=$(mktemp -d)
-    trap 'rm -rf "$MOCK_DIR"' EXIT
-    export CI_DEPLOY_LOCK="$MOCK_DIR/ci-deploy.lock"
-    create_base_mocks "$MOCK_DIR"
-
-    # Override: docker mock where bwrap exec fails
-    cat > "$MOCK_DIR/docker" << 'MOCK'
-#!/bin/bash
-if [[ "${1:-}" == "run" ]]; then echo "abc123"; fi
-if [[ "${1:-}" == "exec" ]]; then
-  for arg in "$@"; do
-    if [[ "$arg" == *"bwrap"* ]]; then
-      echo "bwrap: No permissions to create new namespace" >&2
-      exit 1
-    fi
-  done
-fi
-exit 0
-MOCK
-    chmod +x "$MOCK_DIR/docker"
-
-    export DOPPLER_TOKEN="dp.st.prd.mock-token"
-    export PATH="$MOCK_DIR:$PATH"
-    bash "$DEPLOY_SCRIPT" 2>&1
+    export MOCK_DOCKER_MODE="bwrap-fail"
+    run_deploy "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0" 2>&1
   ) && actual_exit=0 || actual_exit=$?
 
   if [[ "$actual_exit" -ne 0 ]] && printf '%s\n' "$output" | grep -qiF "sandbox"; then
@@ -897,24 +918,8 @@ assert_env_file_cleanup() {
     export CI_DEPLOY_LOCK="$MOCK_DIR/ci-deploy.lock"
     export ENV_FILE_TRACKER="$tracker_dir/env_file_path"
     create_base_mocks "$MOCK_DIR"
-
-    # Override: docker mock with configurable canary failure
-    cat > "$MOCK_DIR/docker" << 'MOCK'
-#!/bin/bash
-if [[ "${1:-}" == "run" ]]; then
-  for arg in "$@"; do
-    if [[ "$arg" == *"-canary" ]] && [[ "${MOCK_DOCKER_RUN_FAIL_CANARY:-}" == "1" ]]; then
-      exit 1
-    fi
-  done
-  echo "abc123"
-fi
-if [[ "${1:-}" == "exec" ]]; then
-  exit 0
-fi
-exit 0
-MOCK
-    chmod +x "$MOCK_DIR/docker"
+    # Default docker mock already honors MOCK_DOCKER_RUN_FAIL_CANARY and returns
+    # exit 0 for exec (the cleanup scenario never needs bwrap tracing).
 
     # Mock mktemp: create a real temp file but record its path to the tracker
     cat > "$MOCK_DIR/mktemp" << 'MOCK'
@@ -929,7 +934,7 @@ MOCK
 
     eval "$extra_env"
     export DOPPLER_TOKEN="dp.st.prd.mock-token"
-    export PATH="$MOCK_DIR:$PATH"
+    export PATH="$MOCK_DIR:$TEST_PATH_BASE"
     bash "$DEPLOY_SCRIPT" 2>&1
   ) && actual_exit=0 || actual_exit=$?
 
@@ -958,6 +963,341 @@ assert_env_file_cleanup "canary crash cleans up env file" \
   "export MOCK_DOCKER_RUN_FAIL_CANARY=1"
 
 assert_env_file_cleanup "successful deploy cleans up env file" ""
+
+echo ""
+echo "--- Deploy state file (#2185 observability) ---"
+
+# assert_state_contains: runs deploy, then parses the state file written by ci-deploy.sh.
+# Validates .exit_code and .reason via jq (falls back to grep if jq unavailable).
+# Signature: assert_state_contains <description> <expected_reason> <expected_exit_code> [<cmd>] [<extra_env>] [<runner>]
+#   <runner> defaults to run_deploy_traced. Pass run_deploy_doppler for scenarios
+#   that need the restricted PATH + configurable doppler mock (doppler_* reasons).
+assert_state_contains() {
+  local description="$1"
+  local expected_reason="$2"
+  local expected_exit_code="$3"
+  # Use ${4-default} (no colon) so an explicitly empty "" for cmd is preserved
+  # -- needed to exercise the command_missing branch.
+  local cmd="${4-deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0}"
+  local extra_env="${5:-}"
+  local runner="${6:-run_deploy_traced}"
+
+  TOTAL=$((TOTAL + 1))
+
+  # State file lives outside the per-run MOCK_DIR so we can read it after the subshell cleans up.
+  local state_dir
+  state_dir=$(mktemp -d)
+  local state_file="$state_dir/ci-deploy.state"
+
+  local output actual_exit
+  output=$(
+    eval "$extra_env"
+    export CI_DEPLOY_STATE="$state_file"
+    "$runner" "$cmd" 2>&1
+  ) && actual_exit=0 || actual_exit=$?
+
+  local actual_reason actual_exit_code
+  if [[ ! -f "$state_file" ]]; then
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: $description (state file was never written)"
+    echo "        output: $output"
+    rm -rf "$state_dir"
+    return
+  fi
+
+  read_state_reason_and_exit "$state_file" actual_reason actual_exit_code
+
+  if [[ "$actual_reason" == "$expected_reason" ]] && [[ "$actual_exit_code" == "$expected_exit_code" ]]; then
+    PASS=$((PASS + 1))
+    echo "  PASS: $description (reason=$actual_reason exit_code=$actual_exit_code script_exit=$actual_exit)"
+  else
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: $description"
+    echo "        expected: reason=$expected_reason exit_code=$expected_exit_code"
+    echo "        actual:   reason=$actual_reason exit_code=$actual_exit_code"
+    echo "        state:    $(cat "$state_file")"
+    echo "        output:   $output"
+  fi
+
+  rm -rf "$state_dir"
+}
+
+# Happy path -> reason="ok", exit_code=0
+assert_state_contains "happy path writes reason=ok" "ok" "0"
+
+# Low disk -> reason="insufficient_disk_space"
+assert_state_contains "low disk writes reason=insufficient_disk_space" \
+  "insufficient_disk_space" "1" \
+  "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0" \
+  "export MOCK_DF_LOW=1"
+
+# Flock contention -> reason="lock_contention"
+assert_state_contains "flock contention writes reason=lock_contention" \
+  "lock_contention" "1" \
+  "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0" \
+  "export MOCK_FLOCK_CONTENDED=1"
+
+# Docker pull failure -> unhandled exit path via set -e. Today's behavior: docker pull
+# failures fall through to the EXIT trap as "unhandled" (no explicit pull_failed handler).
+# When #2202's follow-up adds an explicit pull_failed reason, this assertion will fail
+# and force a single-direction update. See GitHub issue for the follow-up.
+assert_state_contains "docker pull fail writes reason=unhandled" \
+  "unhandled" "1" \
+  "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0" \
+  "export MOCK_DOCKER_PULL_FAIL=1"
+
+# Canary container run crash -> unhandled via set -e. Today's behavior: docker run
+# failures for the canary container fall through to the EXIT trap as "unhandled"
+# (no explicit canary_crashed handler). When the follow-up adds a canary_crashed
+# reason, this assertion will fail and force a single-direction update.
+assert_state_contains "canary container run crash writes reason=unhandled" \
+  "unhandled" "1" \
+  "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0" \
+  "export MOCK_DOCKER_RUN_FAIL_CANARY=1"
+
+# Canary health check failure -> reason=canary_failed
+assert_state_contains "canary health failure writes reason=canary_failed" \
+  "canary_failed" "1" \
+  "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0" \
+  "export MOCK_CURL_CANARY_FAIL=1"
+
+# -- Command parsing reason coverage (#2202) --
+# These validations run BEFORE flock and Doppler resolution, so run_deploy_traced
+# (with its generic docker/doppler mocks) exercises them correctly.
+
+# Empty SSH_ORIGINAL_COMMAND -> reason=command_missing
+assert_state_contains "empty command writes reason=command_missing" \
+  "command_missing" "1" \
+  ""
+
+# Wrong field count (not 4) -> reason=command_malformed
+assert_state_contains "malformed command writes reason=command_malformed" \
+  "command_malformed" "1" \
+  "deploy"
+
+# Unknown action verb -> reason=action_unknown
+assert_state_contains "unknown action writes reason=action_unknown" \
+  "action_unknown" "1" \
+  "notify web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0"
+
+# Unknown component -> reason=component_unknown
+assert_state_contains "unknown component writes reason=component_unknown" \
+  "component_unknown" "1" \
+  "deploy unknown-app ghcr.io/jikig-ai/soleur-web-platform v1.0.0"
+
+# Wrong image for component -> reason=image_mismatch
+assert_state_contains "wrong image writes reason=image_mismatch" \
+  "image_mismatch" "1" \
+  "deploy web-platform ghcr.io/jikig-ai/soleur-attacker-repo v1.0.0"
+
+# Malformed semver tag -> reason=tag_malformed
+assert_state_contains "bad tag writes reason=tag_malformed" \
+  "tag_malformed" "1" \
+  "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform latest"
+
+# -- Doppler reason coverage (#2202) --
+# Doppler reasons require run_deploy_doppler (restricted PATH + configurable doppler mock);
+# pass it as the 6th arg to assert_state_contains.
+
+# Doppler binary absent -> reason=doppler_unavailable
+assert_state_contains "missing doppler binary writes reason=doppler_unavailable" \
+  "doppler_unavailable" "1" \
+  "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0" \
+  "export MOCK_DOPPLER_MISSING=1" \
+  "run_deploy_doppler"
+
+# DOPPLER_TOKEN unset -> reason=doppler_token_missing
+assert_state_contains "unset DOPPLER_TOKEN writes reason=doppler_token_missing" \
+  "doppler_token_missing" "1" \
+  "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0" \
+  "export MOCK_DOPPLER_TOKEN_UNSET=1" \
+  "run_deploy_doppler"
+
+# Doppler secrets download fails -> reason=doppler_fetch_failed
+assert_state_contains "doppler fetch failure writes reason=doppler_fetch_failed" \
+  "doppler_fetch_failed" "1" \
+  "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0" \
+  "export MOCK_DOPPLER_FAIL=1" \
+  "run_deploy_doppler"
+
+# -- Bwrap sandbox verification failure (#2202) --
+# canary_sandbox_failed is written when `docker exec soleur-web-platform-canary bwrap ...`
+# fails after the canary is running and healthy. Needs a custom docker mock that accepts
+# `run` and curl-health-check but fails on `exec ... bwrap`.
+assert_canary_sandbox_failed_state() {
+  TOTAL=$((TOTAL + 1))
+
+  local state_dir
+  state_dir=$(mktemp -d)
+  local state_file="$state_dir/ci-deploy.state"
+
+  local output actual_exit
+  output=$(
+    export CI_DEPLOY_STATE="$state_file"
+    export MOCK_DOCKER_MODE="bwrap-fail"
+    run_deploy "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0" 2>&1
+  ) && actual_exit=0 || actual_exit=$?
+
+  local actual_reason actual_exit_code
+  if [[ ! -f "$state_file" ]]; then
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: canary_sandbox_failed writes reason (state file was never written)"
+    echo "        output: $output"
+    rm -rf "$state_dir"
+    return
+  fi
+
+  read_state_reason_and_exit "$state_file" actual_reason actual_exit_code
+
+  if [[ "$actual_reason" == "canary_sandbox_failed" ]] && [[ "$actual_exit_code" == "1" ]]; then
+    PASS=$((PASS + 1))
+    echo "  PASS: bwrap sandbox failure writes reason=canary_sandbox_failed"
+  else
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: bwrap sandbox failure writes reason=canary_sandbox_failed"
+    echo "        expected: reason=canary_sandbox_failed exit_code=1"
+    echo "        actual:   reason=$actual_reason exit_code=$actual_exit_code"
+    echo "        state:    $(cat "$state_file")"
+    echo "        output:   $output"
+  fi
+
+  rm -rf "$state_dir"
+}
+
+assert_canary_sandbox_failed_state
+
+# Production container start failure (after canary passes) -> reason=production_start_failed
+assert_state_contains "production start failure writes reason=production_start_failed" \
+  "production_start_failed" "1" \
+  "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0" \
+  "export MOCK_DOCKER_RUN_FAIL_PROD=1"
+
+# Note: no_handler is unreachable without modifying ci-deploy.sh (requires a
+# component allowlisted in ALLOWED_IMAGES but missing from the case statement).
+# Skipped per #2202 scope.
+
+# Issue #2199 fix 1: initial "running" write must happen AFTER command parsing,
+# so tag/component are populated (not empty strings).
+# We snapshot the state file mid-deploy by making `df` (called after the initial
+# "running" write) copy the live state file to a side location before returning.
+assert_initial_running_has_tag() {
+  TOTAL=$((TOTAL + 1))
+
+  local state_dir
+  state_dir=$(mktemp -d)
+  local state_file="$state_dir/ci-deploy.state"
+  local snapshot="$state_dir/running.snapshot"
+
+  local output actual_exit
+  output=$(
+    export SSH_ORIGINAL_COMMAND="deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0"
+    MOCK_DIR=$(mktemp -d)
+    trap 'rm -rf "$MOCK_DIR"' EXIT
+    export CI_DEPLOY_LOCK="$MOCK_DIR/ci-deploy.lock"
+    export CI_DEPLOY_STATE="$state_file"
+    export RUNNING_SNAPSHOT="$snapshot"
+    create_base_mocks "$MOCK_DIR"
+
+    # df runs immediately after the initial "running" write_state; snapshot state here.
+    cat > "$MOCK_DIR/df" << 'MOCK'
+#!/bin/bash
+if [[ -n "${RUNNING_SNAPSHOT:-}" ]] && [[ -f "${CI_DEPLOY_STATE:-}" ]]; then
+  cp "$CI_DEPLOY_STATE" "$RUNNING_SNAPSHOT"
+fi
+echo "Avail"
+echo "20000000"
+MOCK
+    chmod +x "$MOCK_DIR/df"
+
+    export DOPPLER_TOKEN="dp.st.prd.mock-token"
+    export PATH="$MOCK_DIR:$TEST_PATH_BASE"
+    bash "$DEPLOY_SCRIPT" 2>&1
+  ) && actual_exit=0 || actual_exit=$?
+
+  if [[ ! -f "$snapshot" ]]; then
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: initial running state snapshot was not captured"
+    echo "        output: $output"
+    rm -rf "$state_dir"
+    return
+  fi
+
+  local snap_reason snap_exit snap_tag snap_component
+  if command -v jq >/dev/null 2>&1; then
+    snap_reason=$(jq -r '.reason // ""' "$snapshot" 2>/dev/null)
+    snap_exit=$(jq -r '.exit_code // ""' "$snapshot" 2>/dev/null)
+    snap_tag=$(jq -r '.tag // ""' "$snapshot" 2>/dev/null)
+    snap_component=$(jq -r '.component // ""' "$snapshot" 2>/dev/null)
+  else
+    snap_reason=$(grep -oE '"reason":"[^"]*"' "$snapshot" | sed 's/.*:"\(.*\)"/\1/')
+    snap_exit=$(grep -oE '"exit_code":-?[0-9]+' "$snapshot" | sed 's/.*://')
+    snap_tag=$(grep -oE '"tag":"[^"]*"' "$snapshot" | sed 's/.*:"\(.*\)"/\1/')
+    snap_component=$(grep -oE '"component":"[^"]*"' "$snapshot" | sed 's/.*:"\(.*\)"/\1/')
+  fi
+
+  if [[ "$snap_reason" == "running" ]] && [[ "$snap_exit" == "-1" ]] && \
+     [[ "$snap_tag" == "v1.0.0" ]] && [[ "$snap_component" == "web-platform" ]]; then
+    PASS=$((PASS + 1))
+    echo "  PASS: initial running state has populated tag/component (tag=$snap_tag component=$snap_component)"
+  else
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: initial running state has populated tag/component"
+    echo "        expected: reason=running exit_code=-1 tag=v1.0.0 component=web-platform"
+    echo "        actual:   reason=$snap_reason exit_code=$snap_exit tag=$snap_tag component=$snap_component"
+    echo "        snapshot: $(cat "$snapshot")"
+  fi
+
+  rm -rf "$state_dir"
+}
+
+assert_initial_running_has_tag
+
+# Issue #2199 fix 3: a stale ${STATE_FILE}.final sentinel from a prior SIGKILLed
+# run must not suppress the current run's failure reason. We pre-create the
+# sentinel, trigger a known failure (low disk), and verify the explicit reason
+# is still written (not silently dropped by the EXIT trap's "unhandled" guard).
+assert_stale_sentinel_cleared() {
+  TOTAL=$((TOTAL + 1))
+
+  local state_dir
+  state_dir=$(mktemp -d)
+  local state_file="$state_dir/ci-deploy.state"
+  # Pre-create the stale sentinel as if a prior run was SIGKILLed.
+  touch "${state_file}.final"
+
+  local output actual_exit
+  output=$(
+    export CI_DEPLOY_STATE="$state_file"
+    export MOCK_DF_LOW=1
+    run_deploy_traced "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0" 2>&1
+  ) && actual_exit=0 || actual_exit=$?
+
+  local actual_reason actual_exit_code
+  if [[ ! -f "$state_file" ]]; then
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: stale sentinel test (state file was never written)"
+    echo "        output: $output"
+    rm -rf "$state_dir"
+    return
+  fi
+
+  read_state_reason_and_exit "$state_file" actual_reason actual_exit_code
+
+  if [[ "$actual_reason" == "insufficient_disk_space" ]] && [[ "$actual_exit_code" == "1" ]]; then
+    PASS=$((PASS + 1))
+    echo "  PASS: stale sentinel cleared; new run's explicit reason is preserved"
+  else
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: stale sentinel cleared; new run's explicit reason is preserved"
+    echo "        expected: reason=insufficient_disk_space exit_code=1"
+    echo "        actual:   reason=$actual_reason exit_code=$actual_exit_code"
+    echo "        state:    $(cat "$state_file")"
+  fi
+
+  rm -rf "$state_dir"
+}
+
+assert_stale_sentinel_cleared
 
 echo ""
 echo "=== Results: $PASS/$TOTAL passed, $FAIL failed ==="
