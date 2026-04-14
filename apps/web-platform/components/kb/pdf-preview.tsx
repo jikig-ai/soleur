@@ -1,9 +1,7 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Document, Page, pdfjs } from "react-pdf";
-import "react-pdf/dist/Page/AnnotationLayer.css";
-import "react-pdf/dist/Page/TextLayer.css";
 
 pdfjs.GlobalWorkerOptions.workerSrc = new URL(
   "pdfjs-dist/build/pdf.worker.min.mjs",
@@ -19,6 +17,18 @@ export function PdfPreview({ src, filename }: PdfPreviewProps) {
   const [numPages, setNumPages] = useState(0);
   const [pageNumber, setPageNumber] = useState(1);
   const [error, setError] = useState(false);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [containerWidth, setContainerWidth] = useState<number>();
+
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const observer = new ResizeObserver(([entry]) => {
+      setContainerWidth(entry.contentRect.width);
+    });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
 
   if (error) {
     return (
@@ -48,7 +58,7 @@ export function PdfPreview({ src, filename }: PdfPreviewProps) {
         </a>
       </div>
 
-      <div className="flex-1 overflow-auto rounded-lg border border-neutral-800 bg-neutral-900/50">
+      <div ref={containerRef} className="flex-1 overflow-auto rounded-lg border border-neutral-800 bg-neutral-900/50">
         <Document
           file={src}
           onLoadSuccess={({ numPages: n }) => setNumPages(n)}
@@ -61,6 +71,7 @@ export function PdfPreview({ src, filename }: PdfPreviewProps) {
         >
           <Page
             pageNumber={pageNumber}
+            width={containerWidth}
             renderTextLayer={false}
             renderAnnotationLayer={false}
             className="mx-auto"

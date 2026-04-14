@@ -26,13 +26,19 @@ vi.mock("next/dynamic", () => ({
 }));
 
 // Mock react-pdf — happy-dom lacks canvas
+const pdfMockBehavior = vi.hoisted(() => ({ shouldError: false }));
+
 vi.mock("react-pdf", async () => {
   const { useEffect } = await import("react");
   return {
-    Document: ({ children, onLoadSuccess }: any) => {
+    Document: ({ children, onLoadSuccess, onLoadError }: any) => {
       useEffect(() => {
-        onLoadSuccess?.({ numPages: 3 });
-      }, [onLoadSuccess]);
+        if (pdfMockBehavior.shouldError) {
+          onLoadError?.();
+        } else {
+          onLoadSuccess?.({ numPages: 3 });
+        }
+      }, [onLoadSuccess, onLoadError]);
       return <div data-testid="pdf-document">{children}</div>;
     },
     Page: ({ pageNumber }: any) => (
@@ -49,6 +55,7 @@ vi.mock("next/navigation", () => ({
 
 beforeEach(() => {
   vi.clearAllMocks();
+  pdfMockBehavior.shouldError = false;
 });
 
 describe("FilePreview", () => {
@@ -126,6 +133,17 @@ describe("FilePreview", () => {
     fireEvent.click(nextBtn);
     expect(screen.getByText("Page 3 of 3")).toBeDefined();
     expect(nextBtn.hasAttribute("disabled")).toBe(true);
+  });
+
+  it("shows download fallback when PDF fails to load", async () => {
+    pdfMockBehavior.shouldError = true;
+    const { container } = render(<FilePreview path="docs/broken.pdf" extension=".pdf" />);
+    await waitFor(() => {
+      expect(screen.getByText("Unable to preview this PDF")).toBeDefined();
+    });
+    const downloadLink = container.querySelector("a[download]");
+    expect(downloadLink).not.toBeNull();
+    expect(downloadLink?.getAttribute("href")).toBe("/api/kb/content/docs/broken.pdf");
   });
 
   it("renders download link for .docx files", () => {
