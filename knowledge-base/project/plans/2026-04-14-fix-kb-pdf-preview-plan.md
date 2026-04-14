@@ -2,9 +2,33 @@
 title: "fix: Replace dead embed-based PDF preview with react-pdf viewer"
 type: fix
 date: 2026-04-14
+deepened: 2026-04-14
 ---
 
 # fix: Replace dead embed-based PDF preview with react-pdf viewer
+
+## Enhancement Summary
+
+**Deepened on:** 2026-04-14
+**Sections enhanced:** 6 (Technical Considerations, Acceptance Criteria, Test Scenarios, Files to Modify, Dependencies, Implementation Details)
+**Research sources:** Context7 react-pdf docs, npm registry, 5 project learnings, codebase pattern analysis
+
+### Key Improvements
+
+1. Added concrete code examples for `pdf-preview.tsx` and dynamic import pattern
+2. Verified react-pdf v10.4.1 peer deps explicitly support React 19 (`^19.0.0`)
+3. Identified testing sharp edge: esbuild in vitest does not support React 19 `<Context value>` shorthand -- must use `.Provider` pattern
+4. Added canvas mock requirement for vitest (react-pdf renders to `<canvas>`)
+5. Identified `next/dynamic` as first usage in codebase -- no existing patterns to follow
+6. Confirmed both `bun.lock` (repo root) and `package-lock.json` (app-level) lockfile locations
+
+### Applicable Learnings
+
+- `2026-04-10-react-context-provider-breaks-existing-tests.md`: Use `.Provider` pattern, mock new dependencies in all affected test files
+- `2026-03-30-npm-latest-tag-crosses-major-versions.md`: Install `react-pdf@10` not `react-pdf@latest` to avoid future major version drift
+- `2026-03-27-csp-strict-dynamic-requires-dynamic-rendering.md`: CSP and rendering mode must agree; verify worker-src change works in production build
+- `2026-04-12-binary-content-serving-security-headers.md`: Backend already hardened with nosniff + async I/O -- no backend changes needed
+- `2026-04-07-kb-viewer-react-context-layout-patterns.md`: Existing dark theme patterns (neutral-800, amber accents) must be followed
 
 ## Overview
 
@@ -47,6 +71,12 @@ pdf.js creates a Web Worker for parsing. When using the `import.meta.url` patter
 
 **Proposed change:** `worker-src 'self' blob:` -- minimal CSP relaxation. `object-src 'none'` and `frame-src 'none'` remain untouched.
 
+#### Research Insights
+
+**Learning applied** (`2026-03-27-csp-strict-dynamic-requires-dynamic-rendering.md`): CSP and rendering mode must agree. The root layout already forces dynamic rendering (fixed in PR #1213), so the nonce propagates correctly. The `worker-src` change only affects web worker loading, not script execution. Verify in production build that the worker loads without CSP violations by checking the browser console.
+
+**Verification step:** After implementation, run `npm run build` and serve locally to confirm no CSP errors in the browser console. CSP violations in happy-dom tests are not detectable -- this must be verified in a real browser.
+
 ### Next.js App Router + Dynamic Import
 
 react-pdf uses `import.meta.url` and canvas APIs that are not available during SSR. The docs state: "In Next.js, make sure to skip SSR when importing the module."
@@ -65,15 +95,47 @@ const PdfPreview = dynamic(
 
 The actual `PdfPreview` component lives in a separate file (`pdf-preview.tsx`) that configures the worker and imports react-pdf. This ensures the worker configuration happens in the same module as the components (per react-pdf docs).
 
+#### Research Insights
+
+**First `next/dynamic` usage in codebase:** No existing patterns to follow. This establishes the convention for future dynamic imports. The pattern is straightforward: separate the heavy component into its own file, import via `dynamic()`, provide a skeleton loading state.
+
+**Critical from react-pdf docs:** "The `workerSrc` must be set in the **same module** where you use React-PDF components. Setting it in a separate file and then importing React-PDF in another component may cause the default value to overwrite your custom setting due to module execution order." This is why the worker config and the `Document`/`Page` usage must be in `pdf-preview.tsx`, not in `file-preview.tsx`.
+
+**Loading skeleton pattern** (from codebase analysis): The KB viewer uses this spinner pattern consistently: `<div className="h-5 w-5 animate-spin rounded-full border-2 border-neutral-600 border-t-amber-400" />`. Use the same for the PDF loading state.
+
 ### React 19 Compatibility
 
-react-pdf v10.x supports React 19. The project uses `react: ^19.1.0`. No `swcMinify: false` workaround needed for Next.js 15+ (that was for pre-v15 only).
+react-pdf v10.4.1 (latest) supports React 19. Peer dependencies verified via npm registry:
+
+```text
+react: ^16.8.0 || ^17.0.0 || ^18.0.0 || ^19.0.0
+react-dom: ^16.8.0 || ^17.0.0 || ^18.0.0 || ^19.0.0
+@types/react: ^16.8.0 || ^17.0.0 || ^18.0.0 || ^19.0.0
+```
+
+The project uses `react: ^19.1.0`. No `swcMinify: false` workaround needed for Next.js 15+ (that was for pre-v15 only).
+
+**Learning applied** (`2026-03-30-npm-latest-tag-crosses-major-versions.md`): Install with `npm install react-pdf@10` not `react-pdf@latest` to pin to the current major and avoid future cross-major jumps.
 
 ### Worker File Strategy
 
 The `import.meta.url` approach is recommended by react-pdf docs and works with Next.js's webpack bundler. The worker file from `pdfjs-dist/build/pdf.worker.min.mjs` is resolved at build time. No need to manually copy the worker to `public/` -- the bundler handles it.
 
 If the bundler approach fails (e.g., in production build), fall back to copying the worker to `public/pdf.worker.min.mjs` via a `postinstall` script.
+
+#### Concrete Implementation
+
+```typescript
+// apps/web-platform/components/kb/pdf-preview.tsx
+import { pdfjs } from "react-pdf";
+
+pdfjs.GlobalWorkerOptions.workerSrc = new URL(
+  "pdfjs-dist/build/pdf.worker.min.mjs",
+  import.meta.url,
+).toString();
+```
+
+**Note from react-pdf docs:** This MUST be in the same file that renders `<Document>` and `<Page>`. Module execution order can cause the default value to overwrite the custom setting if configured in a separate file.
 
 ### Mobile Memory
 
@@ -82,6 +144,139 @@ Page-by-page rendering (one `<Page>` component at a time) prevents loading all p
 ### Bundle Impact
 
 pdf.js core is ~500KB gzipped. Dynamic import ensures this only loads when a user opens a PDF file. Non-PDF routes are unaffected.
+
+## Implementation Reference
+
+### pdf-preview.tsx (new file)
+
+```tsx
+// apps/web-platform/components/kb/pdf-preview.tsx
+"use client";
+
+import { useState } from "react";
+import { Document, Page, pdfjs } from "react-pdf";
+import "react-pdf/dist/Page/AnnotationLayer.css";
+import "react-pdf/dist/Page/TextLayer.css";
+
+pdfjs.GlobalWorkerOptions.workerSrc = new URL(
+  "pdfjs-dist/build/pdf.worker.min.mjs",
+  import.meta.url,
+).toString();
+
+interface PdfPreviewProps {
+  src: string;
+  filename: string;
+}
+
+export function PdfPreview({ src, filename }: PdfPreviewProps) {
+  const [numPages, setNumPages] = useState(0);
+  const [pageNumber, setPageNumber] = useState(1);
+  const [error, setError] = useState(false);
+
+  if (error) {
+    return <PdfDownloadFallback src={src} filename={filename} />;
+  }
+
+  return (
+    <div className="flex h-full flex-col gap-3 p-4">
+      <div className="flex items-center justify-between">
+        <span className="text-sm text-neutral-400">{filename}</span>
+        <a
+          href={src}
+          download={filename}
+          className="rounded-md border border-neutral-700 px-3 py-1 text-xs text-neutral-300 hover:bg-neutral-800"
+        >
+          Download
+        </a>
+      </div>
+
+      <div className="flex-1 overflow-auto rounded-lg border border-neutral-800 bg-neutral-900/50">
+        <Document
+          file={src}
+          onLoadSuccess={({ numPages: n }) => setNumPages(n)}
+          onLoadError={() => setError(true)}
+          loading={
+            <div className="flex items-center justify-center p-8">
+              <div className="h-5 w-5 animate-spin rounded-full border-2 border-neutral-600 border-t-amber-400" />
+            </div>
+          }
+        >
+          <Page
+            pageNumber={pageNumber}
+            renderTextLayer={false}
+            renderAnnotationLayer={false}
+            className="mx-auto"
+          />
+        </Document>
+      </div>
+
+      {numPages > 1 && (
+        <div className="flex items-center justify-center gap-3">
+          <button
+            onClick={() => setPageNumber((p) => Math.max(p - 1, 1))}
+            disabled={pageNumber <= 1}
+            className="rounded-md border border-neutral-700 px-3 py-1 text-xs text-neutral-300 hover:bg-neutral-800 disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            Previous
+          </button>
+          <span className="text-xs text-neutral-400">
+            Page {pageNumber} of {numPages}
+          </span>
+          <button
+            onClick={() => setPageNumber((p) => Math.min(p + 1, numPages))}
+            disabled={pageNumber >= numPages}
+            className="rounded-md border border-neutral-700 px-3 py-1 text-xs text-neutral-300 hover:bg-neutral-800 disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            Next
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function PdfDownloadFallback({ src, filename }: { src: string; filename: string }) {
+  return (
+    <div className="flex h-full flex-col items-center justify-center gap-4 p-8 text-center">
+      <p className="text-sm text-neutral-400">Unable to preview this PDF</p>
+      <a
+        href={src}
+        download={filename}
+        className="inline-flex items-center gap-2 rounded-lg border border-amber-500/50 px-4 py-2 text-sm font-medium text-amber-400 transition-colors hover:border-amber-400 hover:text-amber-300"
+      >
+        Download {filename}
+      </a>
+    </div>
+  );
+}
+```
+
+### file-preview.tsx changes
+
+```tsx
+// Replace the inline PdfPreview function with:
+import dynamic from "next/dynamic";
+
+const PdfPreview = dynamic(
+  () => import("./pdf-preview").then((mod) => mod.PdfPreview),
+  {
+    ssr: false,
+    loading: () => (
+      <div className="flex items-center justify-center p-8">
+        <div className="h-5 w-5 animate-spin rounded-full border-2 border-neutral-600 border-t-amber-400" />
+      </div>
+    ),
+  },
+);
+// Remove the old PdfPreview function entirely (lines 82-103)
+```
+
+### csp.ts change
+
+```diff
+-    "worker-src 'self'",
++    "worker-src 'self' blob:",
+```
 
 ## Acceptance Criteria
 
@@ -108,6 +303,45 @@ pdf.js core is ~500KB gzipped. Dynamic import ensures this only loads when a use
 - Given a PDF file, when the user clicks "Download", then the file downloads with correct filename
 - Given a non-PDF file, when opened in the viewer, then the PDF component is NOT loaded (dynamic import)
 
+### Testing Sharp Edges
+
+**Canvas mocking:** react-pdf renders to `<canvas>`. happy-dom provides a basic canvas element but does not implement the 2D rendering context. Tests should mock `react-pdf` at the module level rather than trying to render actual PDFs:
+
+```typescript
+vi.mock("react-pdf", () => ({
+  Document: ({ children, onLoadSuccess }: any) => {
+    // Simulate successful load
+    onLoadSuccess?.({ numPages: 3 });
+    return <div data-testid="pdf-document">{children}</div>;
+  },
+  Page: ({ pageNumber }: any) => (
+    <div data-testid="pdf-page">Page {pageNumber}</div>
+  ),
+  pdfjs: { GlobalWorkerOptions: { workerSrc: "" } },
+}));
+```
+
+**Dynamic import mocking:** `next/dynamic` with `ssr: false` makes testing harder since the component is loaded asynchronously. Mock the dynamic import to render the component synchronously:
+
+```typescript
+vi.mock("next/dynamic", () => ({
+  __esModule: true,
+  default: (loader: () => Promise<any>) => {
+    // Resolve the dynamic import synchronously for tests
+    const Component = (props: any) => {
+      const [Loaded, setLoaded] = useState<any>(null);
+      useEffect(() => { loader().then(setLoaded); }, []);
+      return Loaded ? <Loaded {...props} /> : null;
+    };
+    return Component;
+  },
+}));
+```
+
+**Learning applied** (`2026-04-10-react-context-provider-breaks-existing-tests.md`): When adding new module-level dependencies (react-pdf, next/dynamic), search all test files that render `FilePreview` and add appropriate mocks. Use `.Provider` pattern, not React 19 `<Context value>` shorthand (esbuild limitation in vitest).
+
+**Test runner** (from `package.json`): `vitest` is the configured runner. In worktrees, use `node node_modules/vitest/vitest.mjs run` not `npx vitest run`.
+
 ## Domain Review
 
 **Domains relevant:** Product
@@ -121,23 +355,31 @@ This modifies an existing (broken) UI component. The visual design is minimal --
 
 ## Dependencies and Risks
 
-| Risk | Mitigation |
-|------|-----------|
-| react-pdf v10 incompatible with React 19 | Verified via context7 docs: v10.x supports React 19 |
-| pdf.js worker blocked by CSP | Add `blob:` to `worker-src`; verify in production |
-| Large bundle size from pdf.js | Dynamic import isolates to PDF routes only |
-| `import.meta.url` fails in production build | Fallback: copy worker to `public/` with postinstall script |
-| pdfjs-dist peer dependency conflict | Check `npm view react-pdf peerDependencies` before install |
+| Risk | Mitigation | Status |
+|------|-----------|--------|
+| react-pdf v10 incompatible with React 19 | Verified: v10.4.1 peer deps include `^19.0.0` | Resolved |
+| pdf.js worker blocked by CSP | Add `blob:` to `worker-src`; verify in browser after build | Open -- verify post-impl |
+| Large bundle size from pdf.js (~500KB gz) | Dynamic import isolates to PDF routes only | Mitigated by design |
+| `import.meta.url` fails in production build | Fallback: copy worker to `public/` with postinstall script | Low risk -- recommended approach |
+| pdfjs-dist peer dependency conflict | Verified: transitive dep of react-pdf, no conflicts | Resolved |
+| CSS imports for annotation/text layers | Import `react-pdf/dist/Page/AnnotationLayer.css` and `TextLayer.css` in the component file; these are small and only loaded via dynamic import | Noted |
+| Canvas not available in happy-dom | Mock react-pdf at module level in tests (see Testing Sharp Edges) | Mitigated by design |
+
+### Research Note: AnnotationLayer and TextLayer CSS
+
+react-pdf ships two optional CSS files for rendering text selection overlays and link annotations. The plan disables both layers (`renderTextLayer={false}`, `renderAnnotationLayer={false}`) to keep the initial implementation simple. The CSS imports are included but inert when layers are disabled. If text selection is added later, these imports are already in place.
 
 ## Files to Modify
 
-- `apps/web-platform/package.json` -- add `react-pdf` dependency
-- `apps/web-platform/components/kb/file-preview.tsx` -- replace inline `PdfPreview` with dynamic import
-- `apps/web-platform/components/kb/pdf-preview.tsx` -- **new file**: react-pdf based component
-- `apps/web-platform/lib/csp.ts` -- add `blob:` to `worker-src`
-- `apps/web-platform/test/file-preview.test.tsx` -- update tests for new component structure
-- `bun.lock` -- regenerated
-- `apps/web-platform/package-lock.json` -- regenerated (if exists; Dockerfile uses `npm ci`)
+| File | Action | Details |
+|------|--------|---------|
+| `apps/web-platform/package.json` | Edit | Add `react-pdf@10` to dependencies |
+| `apps/web-platform/components/kb/pdf-preview.tsx` | **Create** | New file: react-pdf component with worker config, page nav, error handling |
+| `apps/web-platform/components/kb/file-preview.tsx` | Edit | Replace inline `PdfPreview` (lines 82-103) with `next/dynamic` import; add loading skeleton |
+| `apps/web-platform/lib/csp.ts` | Edit | Line 59: `worker-src 'self'` to `worker-src 'self' blob:` |
+| `apps/web-platform/test/file-preview.test.tsx` | Edit | Mock `react-pdf` and `next/dynamic`; update PDF test case; add nav tests |
+| `bun.lock` (repo root) | Regenerate | `bun install` from repo root |
+| `apps/web-platform/package-lock.json` | Regenerate | `npm install` from `apps/web-platform/` (Dockerfile uses `npm ci`) |
 
 ## Alternative Approaches Considered
 

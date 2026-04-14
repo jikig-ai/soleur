@@ -6,9 +6,9 @@ Issue: #2153
 ## Phase 1: Setup
 
 - [ ] 1.1 Install `react-pdf` in `apps/web-platform/package.json`
-  - Run `npm install react-pdf` from `apps/web-platform/`
+  - Run `npm install react-pdf@10` from `apps/web-platform/` (pin major to avoid cross-major drift)
   - Verify `pdfjs-dist` is pulled as transitive dependency
-  - Verify no React 19 peer dependency conflicts
+  - Verify no React 19 peer dependency conflicts (already verified: `^19.0.0` in peer deps)
 - [ ] 1.2 Regenerate lockfiles
   - Run `bun install` from repo root to update `bun.lock`
   - Run `npm install` from `apps/web-platform/` to update `package-lock.json`
@@ -37,11 +37,15 @@ Issue: #2153
 ## Phase 3: Testing
 
 - [ ] 3.1 Update `apps/web-platform/test/file-preview.test.tsx`
+  - Mock `react-pdf` at module level (Document, Page, pdfjs) -- happy-dom lacks canvas
   - Mock `next/dynamic` to render the PDF component synchronously in tests
   - Update "renders embed for .pdf files" test -- no longer checks for `<embed>`
   - Add test: PDF component receives correct `src` and `filename` props
   - Add test: download button rendered for PDF files
+  - Add test: page navigation buttons appear for multi-page PDFs
+  - Add test: error state shows download fallback
   - Keep all non-PDF tests unchanged (image, text, docx, csv, lightbox)
+  - Use `.Provider` pattern not React 19 `<Context value>` shorthand (esbuild limitation)
 - [ ] 3.2 Run test suite
   - Run `node node_modules/vitest/vitest.mjs run` from `apps/web-platform/`
   - Verify all tests pass (both `unit` and `component` projects)
