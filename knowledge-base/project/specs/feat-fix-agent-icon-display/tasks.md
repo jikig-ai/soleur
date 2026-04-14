@@ -2,30 +2,32 @@
 
 ## Phase 1: Setup
 
-- [ ] 1.1 Read and understand `LeaderAvatar` component interface (`components/leader-avatar.tsx`)
-- [ ] 1.2 Read `useTeamNames` hook to understand `getIconPath` API (`hooks/use-team-names.tsx`)
-- [ ] 1.3 Review working implementations in `team-settings.tsx` and `chat/[conversationId]/page.tsx` as reference patterns
+- [ ] 1.1 Read `LeaderAvatar` component interface (`components/leader-avatar.tsx`) -- confirm `customIconPath` prop type
+- [ ] 1.2 Read `useTeamNames` hook (`hooks/use-team-names.tsx`) -- confirm `getIconPath` returns `string | null`
+- [ ] 1.3 Review working implementation in `chat/[conversationId]/page.tsx` lines 48, 360, 480-519 as reference pattern
 
 ## Phase 2: Core Implementation
 
 - [ ] 2.1 Wire `customIconPath` in `ConversationRow` (`components/inbox/conversation-row.tsx`)
-  - [ ] 2.1.1 Import `useTeamNames` from `@/hooks/use-team-names`
-  - [ ] 2.1.2 Call `useTeamNames()` to get `getIconPath`
-  - [ ] 2.1.3 Pass `customIconPath={getIconPath(conversation.domain_leader)}` to mobile `LeaderAvatar` (line ~191)
-  - [ ] 2.1.4 Pass `customIconPath={getIconPath(conversation.domain_leader)}` to desktop `LeaderAvatar` (line ~223)
+  - [ ] 2.1.1 Import `useTeamNames` from `@/hooks/use-team-names` and `DomainLeaderId` type from `@/server/domain-leaders`
+  - [ ] 2.1.2 Call `const { getIconPath } = useTeamNames();` inside `ConversationRow` function body
+  - [ ] 2.1.3 Add `customIconPath={getIconPath(conversation.domain_leader as DomainLeaderId)}` to mobile `LeaderAvatar` (line ~191)
+  - [ ] 2.1.4 Add `customIconPath={getIconPath(conversation.domain_leader as DomainLeaderId)}` to desktop `LeaderAvatar` (line ~223)
 
-- [ ] 2.2 Wire `customIconPath` in `DashboardPage` foundation cards (`app/(dashboard)/dashboard/page.tsx`)
+- [ ] 2.2 Wire `customIconPath` in `DashboardPage` (`app/(dashboard)/dashboard/page.tsx`)
   - [ ] 2.2.1 Import `useTeamNames` from `@/hooks/use-team-names`
-  - [ ] 2.2.2 Call `useTeamNames()` to get `getIconPath` in the `DashboardPage` component
-  - [ ] 2.2.3 Pass `customIconPath={getIconPath(card.leaderId)}` to both foundation card `LeaderAvatar` instances (empty state and inbox state)
+  - [ ] 2.2.2 Call `const { getIconPath } = useTeamNames();` inside `DashboardPage` function body
+  - [ ] 2.2.3 Add `customIconPath={getIconPath(card.leaderId)}` to empty-state foundation card `LeaderAvatar` (line ~501)
+  - [ ] 2.2.4 Add `customIconPath={getIconPath(card.leaderId)}` to inbox-state foundation card `LeaderAvatar` (line ~615)
+  - [ ] 2.2.5 Pass `getIconPath={getIconPath}` to `LeaderStrip` component (line ~561)
 
-- [ ] 2.3 Wire `customIconPath` in `LeaderStrip` (`app/(dashboard)/dashboard/page.tsx`)
-  - [ ] 2.3.1 Accept `getIconPath` prop in `LeaderStrip` component
-  - [ ] 2.3.2 Pass `customIconPath={getIconPath(leader.id)}` to `LeaderAvatar` in the strip
-  - [ ] 2.3.3 Pass `getIconPath` from `DashboardPage` to `LeaderStrip`
+- [ ] 2.3 Wire `customIconPath` in `LeaderStrip` (same file, line ~763)
+  - [ ] 2.3.1 Add `getIconPath` to `LeaderStrip` props: `{ onLeaderClick: ...; getIconPath: (id: DomainLeaderId) => string | null }`
+  - [ ] 2.3.2 Add `customIconPath={getIconPath(leader.id as DomainLeaderId)}` to `LeaderAvatar` (line ~777)
 
 ## Phase 3: Testing
 
-- [ ] 3.1 Run existing test suite to verify no regressions
-- [ ] 3.2 Update `conversation-row.test.tsx` to mock `useTeamNames` if tests fail due to missing context
-- [ ] 3.3 Verify all 5 test scenarios from the plan pass
+- [ ] 3.1 Add `vi.mock("@/hooks/use-team-names")` to `test/components/conversation-row.test.tsx` (match pattern from `test/chat-page.test.tsx` lines 44-50)
+- [ ] 3.2 Run test suite: `node node_modules/vitest/vitest.mjs run` (worktree-safe)
+- [ ] 3.3 Verify all existing tests pass with the mock in place
+- [ ] 3.4 (Optional) Add test case for custom icon rendering in `conversation-row.test.tsx`
