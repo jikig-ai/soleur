@@ -56,6 +56,7 @@ const overviewDir: TreeNode = {
   name: "overview",
   type: "directory",
   path: "overview",
+  modifiedAt: new Date().toISOString(),
   children: [pngFile, mdFile],
 };
 
@@ -183,6 +184,46 @@ describe("FileTree delete UI", () => {
 
     // Confirmation should disappear
     expect(screen.queryByRole("button", { name: /cancel/i })).toBeNull();
+  });
+
+  it("hides time label on hover for attachment files via group-hover:opacity-0", () => {
+    setupKbMock(makeTree([overviewDir]));
+    const { container } = render(<FileTree />);
+
+    // Find the attachment file's time span
+    const fileLink = screen.getByText("screenshot.png");
+    const fileRow = fileLink.closest(".group")!;
+    const timeSpan = fileRow.querySelector("a span.ml-auto") as HTMLElement;
+
+    expect(timeSpan).toBeTruthy();
+    expect(timeSpan.className).toContain("group-hover:opacity-0");
+    expect(timeSpan.className).toContain("transition-opacity");
+  });
+
+  it("does NOT hide time label on hover for .md files", () => {
+    setupKbMock(makeTree([overviewDir]));
+    render(<FileTree />);
+
+    const mdLink = screen.getByText("readme.md");
+    const mdRow = mdLink.closest(".group")!;
+    const timeSpan = mdRow.querySelector("a span.ml-auto") as HTMLElement;
+
+    expect(timeSpan).toBeTruthy();
+    expect(timeSpan.className).not.toContain("group-hover:opacity-0");
+  });
+
+  it("hides time label on hover for directory rows via group-hover:opacity-0", () => {
+    setupKbMock(makeTree([overviewDir]));
+    render(<FileTree />);
+
+    // The directory row has an aria-expanded button
+    const dirButton = screen.getByRole("button", { expanded: true });
+    const dirRow = dirButton.closest(".group")!;
+    const timeSpan = dirRow.querySelector("button span.ml-auto") as HTMLElement;
+
+    expect(timeSpan).toBeTruthy();
+    expect(timeSpan.className).toContain("group-hover:opacity-0");
+    expect(timeSpan.className).toContain("transition-opacity");
   });
 
   it("shows error message on API failure with dismiss button", async () => {

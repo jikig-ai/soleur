@@ -1,11 +1,11 @@
 /**
  * Validation logic for custom domain leader names (TR3).
- * Constraints: max 30 chars, alphanumeric + spaces only, no reserved words.
+ * Constraints: max 30 chars, single word (alphanumeric only, no spaces), no reserved words.
  * Used by both the API route and client-side validation.
  */
 
 export const MAX_NAME_LENGTH = 30;
-const VALID_PATTERN = /^[a-zA-Z0-9 ]+$/;
+const VALID_PATTERN = /^[a-zA-Z0-9]+$/;
 
 /** Words that must not be used as custom names (embedded in system prompts). */
 export const RESERVED_NAMES = [
@@ -35,7 +35,7 @@ export function validateCustomName(raw: string): ValidationResult {
   }
 
   if (!VALID_PATTERN.test(name)) {
-    return { valid: false, error: "Name must contain only alphanumeric characters and spaces" };
+    return { valid: false, error: "Name must be a single word (letters and numbers only, no spaces)" };
   }
 
   if (RESERVED_NAMES.includes(name.toLowerCase() as (typeof RESERVED_NAMES)[number])) {
