@@ -2,7 +2,25 @@
 title: "fix: KB delete button overlaps time label on hover"
 type: fix
 date: 2026-04-14
+deepened: 2026-04-14
 ---
+
+## Enhancement Summary
+
+**Deepened on:** 2026-04-14
+**Sections enhanced:** 2 (Proposed Solution, Test Scenarios)
+**Research agents used:** codebase pattern analysis, edge case review
+
+### Key Improvements
+
+1. Clarified conditional className for file nodes -- `isAttachment` must gate the hover classes to avoid hiding time labels on `.md` file rows
+2. Added `pointer-events-none` consideration for the time span to prevent click-through issues during the opacity transition
+3. Confirmed `group-hover:opacity-0` is already supported by the project's Tailwind setup (used in the same file as `group-hover:opacity-100`)
+
+### New Considerations Discovered
+
+- The time span is inside the `<Link>` element while the delete button is a sibling outside it -- the opacity swap is purely visual with no DOM restructuring needed
+- `transition-opacity` is already used on the action buttons, so adding it to the time spans ensures synchronized animation timing
 
 # fix: KB delete button overlaps time label on hover
 
@@ -29,6 +47,8 @@ Add `group-hover:opacity-0` to the time span's className in both file nodes and 
 
 ### File node time span (line 320-323)
 
+The time span is rendered for all file types, so the hover-hide classes must be conditional on `isAttachment`. `.md` files have no delete button, so their time label should remain visible on hover.
+
 Change:
 
 ```tsx
@@ -38,12 +58,18 @@ Change:
 To:
 
 ```tsx
-<span className="ml-auto shrink-0 text-xs text-neutral-600 group-hover:opacity-0 transition-opacity">
+<span className={`ml-auto shrink-0 text-xs text-neutral-600${isAttachment ? " group-hover:opacity-0 transition-opacity" : ""}`}>
 ```
 
-Only apply this when the file is an attachment (`isAttachment`) since .md files do not have a delete button and their time label should remain visible on hover.
+### Research Insights
+
+- **Conditional className:** Using template literal with ternary is the existing pattern in this component (see `isActive` and `isDeleting` ternaries on the Link element at line 311-315). This keeps the approach consistent.
+- **No `pointer-events-none` needed:** The time span is inside the `<Link>`, so clicks pass through to the link regardless. The delete button is a sibling `<button>` positioned with `absolute`, so it sits above the link in stacking order.
+- **Transition timing:** Both the time span fade-out and button fade-in use `transition-opacity`, which defaults to `150ms ease` in Tailwind. This creates a synchronized crossfade.
 
 ### Directory node time span (line 226-230)
+
+Directories always have an upload button (when not busy), so the hide class can be applied unconditionally.
 
 Change:
 
@@ -75,6 +101,11 @@ This aligns with the upload button's existing `transition-opacity` and `group-ho
 - Given a file tree with a directory, when hovering the directory row, then the time label fades out and the upload button fades in
 - Given a file row in its default (non-hovered) state, then the time label is visible and the delete/upload button is hidden
 - Given a file is being deleted (isDeleting state), then the "Deleting..." text is shown instead of the time label (no change in behavior)
+
+### Edge Cases
+
+- Given a directory in `isBusy` state (uploading/processing), when hovering, then no upload button appears and no time label is shown (existing `!isBusy` guard handles this -- no change needed)
+- Given a file row where `deleteState.status !== "idle"` (confirming or error), when hovering, then the delete button is already hidden and the time label opacity change is irrelevant (the confirmation/error UI is displayed below the row)
 
 ## Domain Review
 
