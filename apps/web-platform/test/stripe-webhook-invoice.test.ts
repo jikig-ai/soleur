@@ -5,15 +5,15 @@ import type Stripe from "stripe";
 // Mocks — vi.hoisted ensures these are available when vi.mock factories run
 // ---------------------------------------------------------------------------
 
-const { mockConstructEvent, mockUpdate, mockEq, mockIn, mockLogger } = vi.hoisted(
-  () => ({
+const { mockConstructEvent, mockUpdate, mockEq, mockIn, mockSelect, mockLogger } =
+  vi.hoisted(() => ({
     mockConstructEvent: vi.fn(),
     mockUpdate: vi.fn(),
     mockEq: vi.fn(),
     mockIn: vi.fn(),
+    mockSelect: vi.fn(),
     mockLogger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
-  }),
-);
+  }));
 
 vi.mock("@/lib/stripe", () => ({
   getStripe: () => ({
@@ -68,7 +68,19 @@ function makeEvent(
 describe("Stripe webhook — invoice payment recovery", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockIn.mockResolvedValue({ error: null });
+    mockSelect.mockResolvedValue({ data: [{ id: "user-123" }], error: null });
+    // mockIn is awaitable (legacy shape) AND exposes .select() for the
+    // invoice.paid guard which now reads matched rows for observability.
+    mockIn.mockImplementation(() => {
+      const result: { data: { id: string }[]; error: null } = {
+        data: [{ id: "user-123" }],
+        error: null,
+      };
+      return {
+        select: mockSelect,
+        then: (resolve: (value: typeof result) => unknown) => resolve(result),
+      };
+    });
     // mockEq returns a thenable that is awaitable (for .update().eq() chains,
     // used by customer.subscription.* handlers) AND exposes .in() (for the
     // invoice.paid guard which filters by current subscription_status).
@@ -182,7 +194,10 @@ describe("Stripe webhook — invoice payment recovery", () => {
         subscription: "sub_test456",
       });
       mockConstructEvent.mockReturnValue(event);
-      mockIn.mockResolvedValue({ error: { message: "db error" } });
+      mockSelect.mockResolvedValue({
+        data: null,
+        error: { message: "db error" },
+      });
 
       const res = await POST(makeRequest());
 
@@ -193,7 +208,7 @@ describe("Stripe webhook — invoice payment recovery", () => {
     test("no-op when current status is 'cancelled' (the bug fix)", async () => {
       // Simulate a replayed invoice.paid arriving for an already-cancelled
       // subscription. The atomic UPDATE ... WHERE status IN ('past_due','unpaid')
-      // matches zero rows. PostgREST returns { error: null } — NOT a 500.
+      // matches zero rows. PostgREST returns { data: [], error: null } — NOT a 500.
       const event = makeEvent("invoice.paid", {
         id: "inv_paid_replay",
         customer: CUSTOMER_ID,
@@ -201,7 +216,7 @@ describe("Stripe webhook — invoice payment recovery", () => {
       });
       mockConstructEvent.mockReturnValue(event);
       // 0 rows matched — no error returned by PostgREST.
-      mockIn.mockResolvedValue({ error: null });
+      mockSelect.mockResolvedValue({ data: [], error: null });
 
       const res = await POST(makeRequest());
 
@@ -211,6 +226,11 @@ describe("Stripe webhook — invoice payment recovery", () => {
         "unpaid",
       ]);
       expect(mockLogger.error).not.toHaveBeenCalled();
+      // Observability: matched=0 gets logged at info level for Better Stack alerts.
+      expect(mockLogger.info).toHaveBeenCalledWith(
+        expect.objectContaining({ customerId: CUSTOMER_ID, matched: 0 }),
+        expect.stringContaining("invoice.paid applied"),
+      );
     });
 
     test("applies update when current status is 'past_due'", async () => {
@@ -220,7 +240,10 @@ describe("Stripe webhook — invoice payment recovery", () => {
         subscription: "sub_test456",
       });
       mockConstructEvent.mockReturnValue(event);
-      mockIn.mockResolvedValue({ error: null });
+      mockSelect.mockResolvedValue({
+        data: [{ id: "user-123" }],
+        error: null,
+      });
 
       const res = await POST(makeRequest());
 
@@ -233,6 +256,10 @@ describe("Stripe webhook — invoice payment recovery", () => {
         "past_due",
         "unpaid",
       ]);
+      expect(mockLogger.info).toHaveBeenCalledWith(
+        expect.objectContaining({ customerId: CUSTOMER_ID, matched: 1 }),
+        expect.stringContaining("invoice.paid applied"),
+      );
     });
 
     test("applies update when current status is 'unpaid'", async () => {
@@ -242,7 +269,10 @@ describe("Stripe webhook — invoice payment recovery", () => {
         subscription: "sub_test456",
       });
       mockConstructEvent.mockReturnValue(event);
-      mockIn.mockResolvedValue({ error: null });
+      mockSelect.mockResolvedValue({
+        data: [{ id: "user-123" }],
+        error: null,
+      });
 
       const res = await POST(makeRequest());
 

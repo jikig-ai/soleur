@@ -147,11 +147,12 @@ export async function POST(request: Request) {
         // customer.subscription.updated is the source of truth for active
         // transitions; this is a belt-and-suspenders restore that must not
         // reactivate cancelled subs (idempotent against Stripe replays).
-        const { error } = await supabase
+        const { data, error } = await supabase
           .from("users")
           .update({ subscription_status: "active" })
           .eq("stripe_customer_id", customerId)
-          .in("subscription_status", ["past_due", "unpaid"]);
+          .in("subscription_status", ["past_due", "unpaid"])
+          .select("id");
 
         if (error) {
           logger.error(
@@ -163,6 +164,11 @@ export async function POST(request: Request) {
             { status: 500 },
           );
         }
+
+        logger.info(
+          { customerId, matched: data?.length ?? 0, invoiceId: invoice.id },
+          "Webhook: invoice.paid applied",
+        );
       }
       break;
     }
