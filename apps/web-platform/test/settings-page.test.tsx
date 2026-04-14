@@ -152,12 +152,6 @@ describe("Settings page sections", () => {
         repoUrl={null}
         repoStatus="not_connected"
         repoLastSyncedAt={null}
-        subscriptionStatus={null}
-        currentPeriodEnd={null}
-        cancelAtPeriodEnd={false}
-        conversationCount={0}
-        serviceTokenCount={0}
-        createdAt="2026-01-01T00:00:00.000Z"
       />,
     );
     expect(screen.getByText("API Key")).toBeInTheDocument();
@@ -176,12 +170,6 @@ describe("Settings page sections", () => {
         repoUrl={null}
         repoStatus="not_connected"
         repoLastSyncedAt={null}
-        subscriptionStatus={null}
-        currentPeriodEnd={null}
-        cancelAtPeriodEnd={false}
-        conversationCount={0}
-        serviceTokenCount={0}
-        createdAt="2026-01-01T00:00:00.000Z"
       />,
     );
     expect(screen.getByText("Account")).toBeInTheDocument();
@@ -201,12 +189,6 @@ describe("Settings page sections", () => {
         repoUrl={null}
         repoStatus="not_connected"
         repoLastSyncedAt={null}
-        subscriptionStatus={null}
-        currentPeriodEnd={null}
-        cancelAtPeriodEnd={false}
-        conversationCount={0}
-        serviceTokenCount={0}
-        createdAt="2026-01-01T00:00:00.000Z"
       />,
     );
     expect(screen.getByText("Danger Zone")).toBeInTheDocument();
@@ -225,12 +207,6 @@ describe("Settings page sections", () => {
         repoUrl={null}
         repoStatus="not_connected"
         repoLastSyncedAt={null}
-        subscriptionStatus={null}
-        currentPeriodEnd={null}
-        cancelAtPeriodEnd={false}
-        conversationCount={0}
-        serviceTokenCount={0}
-        createdAt="2026-01-01T00:00:00.000Z"
       />,
     );
     const headings = screen.getAllByRole("heading", { level: 2 });
@@ -253,12 +229,6 @@ describe("Settings page sections", () => {
         repoUrl={null}
         repoStatus="not_connected"
         repoLastSyncedAt={null}
-        subscriptionStatus={null}
-        currentPeriodEnd={null}
-        cancelAtPeriodEnd={false}
-        conversationCount={0}
-        serviceTokenCount={0}
-        createdAt="2026-01-01T00:00:00.000Z"
       />,
     );
     expect(screen.getByText(/no key configured/i)).toBeInTheDocument();
@@ -277,12 +247,6 @@ describe("Settings page sections", () => {
         repoUrl={null}
         repoStatus="not_connected"
         repoLastSyncedAt={null}
-        subscriptionStatus={null}
-        currentPeriodEnd={null}
-        cancelAtPeriodEnd={false}
-        conversationCount={0}
-        serviceTokenCount={0}
-        createdAt="2026-01-01T00:00:00.000Z"
       />,
     );
     expect(screen.getByText(/provider:/i)).toBeInTheDocument();
@@ -301,12 +265,6 @@ describe("Settings page sections", () => {
         repoUrl={null}
         repoStatus="not_connected"
         repoLastSyncedAt={null}
-        subscriptionStatus={null}
-        currentPeriodEnd={null}
-        cancelAtPeriodEnd={false}
-        conversationCount={0}
-        serviceTokenCount={0}
-        createdAt="2026-01-01T00:00:00.000Z"
       />,
     );
     // Project section should appear — look for heading rendered by ProjectSetupCard
@@ -326,12 +284,6 @@ describe("Settings page sections", () => {
         repoUrl={null}
         repoStatus="not_connected"
         repoLastSyncedAt={null}
-        subscriptionStatus={null}
-        currentPeriodEnd={null}
-        cancelAtPeriodEnd={false}
-        conversationCount={0}
-        serviceTokenCount={0}
-        createdAt="2026-01-01T00:00:00.000Z"
       />,
     );
     const headings = screen.getAllByRole("heading", { level: 2 });
