@@ -6,6 +6,26 @@
 **Closes:** #2102, #2103, #2104, #2105
 **Source:** Deferred P3 items from code review of PR #2081 (tracked in review issue #2099)
 
+## Enhancement Summary
+
+**Deepened on:** 2026-04-14
+**Sections enhanced:** 4 fixes + risks + testing
+**Research sources:** Context7 (`/supabase/postgrest-js` v2.58), WebSearch (Stripe webhook idempotency, Next.js 15 SSR/sessionStorage, in-memory rate limiting, Node.js setInterval leaks), project learnings (9 relevant WS/TOCTOU/webhook entries), infra inspection.
+
+### Key Improvements
+
+1. **Verified `.in()` on `.update()`** — Context7 confirms PostgREST supports `.update().in()` chaining (see [Modify Records with update()](#21-verified-postgrest-update-with-in-filter-context7)). No fallback needed.
+2. **Deployment topology confirms in-memory rate limit is correct** — `infra/server.tf` provisions a single `hcloud_server` without `count`/`for_each`. In-memory `SlidingWindowCounter` is the right tool for current scale; noted Redis migration trigger for future horizontal scale.
+3. **TOCTOU async-boundary pattern** — `2026-03-20-websocket-first-message-auth-toctou-race.md` documents the exact anti-pattern in our codebase. The refresh timer design must include a `ws.readyState !== WebSocket.OPEN` guard after the async DB query and before mutating session state.
+4. **Idempotency discovered as cross-cutting concern** — Stripe explicitly recommends storing processed `event.id`s as a second line of defense against retries. Scoped out of this PR (larger change) but recorded for follow-up tracking.
+5. **Graceful shutdown integration** — `2026-04-05-graceful-sigterm-shutdown-node-patterns.md` establishes that WebSocket cleanup must iterate `wss.clients`. The new `subscriptionRefreshTimer` must be cleared in the same shutdown path.
+
+### New Considerations Discovered
+
+- Per the 2026-02-12 learning on review-compound-before-commit, run `skill: soleur:compound` before the final commit.
+- Test framework caveat from `2026-03-27-ws-session-race-abort-before-replace.md`: `vi.mock()` hoisting is vitest-only; if tests ever run under bun, prefer dynamic imports with env set beforehand. Current project only uses vitest, so `vi.useFakeTimers()` and `vi.mock()` are safe — documented for future-proofing.
+- Sentry breadcrumb pattern from existing `logRateLimitRejection` auto-integrates with the new invoice throttle — no extra work.
+
 ## Summary
 
 Resolve four deferred P3 items from the invoice-recovery billing work (PR #2081):
@@ -82,7 +102,50 @@ case "invoice.paid": {
 }
 ```
 
-**Verification note:** PostgREST `.in()` on `.update()` is supported and translates to `WHERE status IN (...)` on the UPDATE statement. Confirm against the Supabase JS client version in use before shipping — the project is on a recent `@supabase/supabase-js`. The plan-review agent and implementation TDD step should both verify the exact syntax compiles and the resulting `filter` is applied (not dropped).
+**Verification note:** PostgREST `.in()` on `.update()` is supported and translates to `WHERE status IN (...)` on the UPDATE statement. Project pins `@supabase/supabase-js@^2.49.0`; postgrest-js v2.58 docs on Context7 explicitly show this exact pattern.
+
+#### 2.1 Verified: PostgREST update with .in() filter (Context7)
+
+Context7 (`/supabase/postgrest-js`, v2.58) confirms the exact pattern:
+
+```typescript
+const { data, error } = await postgrest
+  .from('users')
+  .update({ status: 'OFFLINE' })
+  .in('username', ['user1', 'user2', 'user3'])
+  .select()
+```
+
+And explicitly: _"General Filters can be used before and after invoking .update(). It is required to use at least one of these filters when using .update()."_ Our chain `.update(...).eq(customer_id, ...).in(status, [past_due, unpaid])` combines two filters — both apply to the WHERE clause on the UPDATE. No fallback SQL function needed.
+
+#### 2.2 Research Insight: Stripe webhook idempotency (WebSearch)
+
+Stripe's own docs recommend two complementary defenses that this fix partially implements:
+
+1. **State-aware guards** — "Always query your database for the current subscription state before applying payment-related state changes from webhook events, ensuring you never inadvertently reactivate a deliberately cancelled subscription through duplicate or out-of-order event processing." (sources: [Stripe Webhooks Guide](https://www.magicbell.com/blog/stripe-webhooks-guide), [Using webhooks with subscriptions](https://docs.stripe.com/billing/subscriptions/webhooks)) — **✅ this PR implements this.**
+2. **`event.id` deduplication** — Store processed event IDs and short-circuit replays. (source: [Handling Payment Webhooks Reliably](https://medium.com/@sohail_saifii/handling-payment-webhooks-reliably-idempotency-retries-validation-69b762720bf5)) — **Out of scope; larger change (requires a `stripe_webhook_events` table or cache). Track as a follow-up.**
+
+**Action:** After this PR merges, file a tracking issue for Stripe webhook `event.id` deduplication with rationale pulled from the Stripe docs. Milestone: Post-MVP / Later.
+
+#### 2.3 Anti-pattern avoided: check-then-update across async boundary
+
+An alternative design is SELECT-then-UPDATE:
+
+```ts
+// ANTI-PATTERN — DO NOT USE
+const { data } = await supabase.from("users").select("subscription_status").eq("stripe_customer_id", customerId).single();
+if (data?.subscription_status === "past_due" || data?.subscription_status === "unpaid") {
+  await supabase.from("users").update({ subscription_status: "active" }).eq("stripe_customer_id", customerId);
+}
+```
+
+This opens a TOCTOU window: between the SELECT and the UPDATE, a concurrent `customer.subscription.deleted` could flip the user to `cancelled`, and this handler would then overwrite it with `active`. The same anti-pattern is documented in `knowledge-base/project/learnings/2026-03-18-stop-hook-toctou-race-fix.md` (bash file-system variant) and `2026-03-20-websocket-first-message-auth-toctou-race.md` (WS async-with-state-mutation variant). Atomic `UPDATE ... WHERE status IN (...)` closes the window at the DB level.
+
+#### 2.4 Edge cases surfaced by research
+
+- **Out-of-order webhook delivery** — Stripe explicitly states "You might receive customer.subscription.deleted before customer.subscription.updated" ([Stripe docs](https://docs.stripe.com/billing/subscriptions/webhooks)). The `.in()` filter handles this correctly: a late `invoice.paid` after a processed `customer.subscription.deleted` finds `cancelled` status and no-ops.
+- **Null `subscription_status`** — Trial users or newly-signed-up rows may have `NULL`. The `.in()` filter excludes NULLs (SQL `IN` is NULL-safe in a reject-NULL way), so no special handling needed.
+- **Multiple users per customer** — A single Stripe customer is always one user in our schema (`stripe_customer_id` is unique per migration 021). The `.eq()` filter matches at most one row.
 
 **Test additions** (`test/stripe-webhook-invoice.test.ts`):
 
@@ -141,6 +204,25 @@ function dismissBanner() {
 - Dismiss, close tab, reopen in new tab → banner re-appears. ✅ (sessionStorage is tab-scoped)
 - Subscription recovers (status goes `past_due → active`) → the banner is already hidden by the `subscriptionStatus === "past_due"` guard. No need to clear the key — when the user next has a `past_due` event they get a fresh decision per-tab.
 - SSR: `useEffect` gate means no hydration mismatch; initial render always shows `bannerDismissed=false` matching the server.
+
+#### 3.1 Research Insight: SSR-safe sessionStorage pattern (WebSearch)
+
+Next.js 15 App Router explicitly validates the pattern used here: _"During React hydration, useEffect is called, which means browser APIs like window are available to use without hydration mismatches. This is the primary solution for accessing sessionStorage and other browser APIs."_ (source: [Next.js react-hydration-error](https://nextjs.org/docs/messages/react-hydration-error))
+
+The specific anti-pattern to avoid: _"Accessing window, document, localStorage, or navigator in the render path is a classic mismatch trigger. On the server those don't exist, so code branches will differ and the HTML will diverge."_ (source: [Fix Next.js 15 Hydration Errors](https://markaicode.com/nextjs-15-hydration-errors-fix/))
+
+Our implementation is compliant:
+
+- Initial render: `bannerDismissed = false` (deterministic; matches server).
+- `useEffect` reads sessionStorage post-hydration and may flip it to `true` on a second render — React's reconciler handles this without warning because it is a client-only update, not a hydration comparison.
+
+#### 3.2 Alternative rejected: `suppressHydrationWarning`
+
+The search results document `suppressHydrationWarning={true}` as a valid option but explicitly discourage it: _"silencing the warning doesn't fix the problem."_ Our useEffect pattern actually solves the underlying SSR mismatch instead of suppressing it.
+
+#### 3.3 Edge case surfaced by research
+
+**Safari private browsing** — Historically threw on `sessionStorage.setItem`. Modern Safari (14+) allows sessionStorage in private mode, but the try/catch in our design is defense-in-depth for older browsers and for runtime quota exceptions. The test `sessionStorage.setItem throws → banner still hides` is specifically for this case.
 
 **Test additions** (extend `billing-section.test.tsx` or add a small `dashboard-layout-banner.test.tsx`):
 
@@ -218,6 +300,62 @@ if (session.subscriptionRefreshTimer) clearInterval(session.subscriptionRefreshT
 - Not using Supabase Realtime/Postgres LISTEN here because (a) our WS server is a separate process that would need a persistent Supabase realtime connection per worker, and (b) the webhook → DB → refresh path is already within a 60s window which is far better than the current "indefinite" window. A realtime invalidation channel is a future enhancement.
 - Timer is `.unref()`'d so vitest doesn't hang the process.
 
+#### 4.1 Critical: Async-boundary guard (per `2026-03-20-websocket-first-message-auth-toctou-race.md`)
+
+The refresh timer has the same shape as the auth flow's TOCTOU bug: `await` a DB query, then mutate session state. The learning is explicit: _"Any time an async operation (network call, database query, file I/O) sits between a timer-based deadline and a state mutation, you have a TOCTOU window."_
+
+Update `refreshSubscriptionStatus` to guard socket state after the await, before mutating `session.subscriptionStatus` or calling `checkSubscriptionSuspended`:
+
+```ts
+async function refreshSubscriptionStatus(
+  userId: string,
+  session: ClientSession,
+): Promise<void> {
+  try {
+    const { data, error } = await supabase
+      .from("users")
+      .select("subscription_status")
+      .eq("id", userId)
+      .single();
+
+    // Guard: socket may have closed (disconnect, idle timeout, suspension)
+    // during the await. Do not mutate session state on a dead socket.
+    if (session.ws.readyState !== WebSocket.OPEN) return;
+
+    if (error || !data) return; // fail open — keep prior cached value
+    session.subscriptionStatus = data.subscription_status ?? undefined;
+    if (data.subscription_status === "unpaid") {
+      checkSubscriptionSuspended(userId, session);
+    }
+  } catch (err) {
+    log.warn({ userId, err }, "Subscription status refresh failed — keeping cached value");
+  }
+}
+```
+
+This guard is mandatory — without it the timer can run DB queries for users who already disconnected, leaking connections to Supabase and potentially calling `checkSubscriptionSuspended` on a CLOSING socket.
+
+#### 4.2 Research Insight: setInterval memory leak prevention (WebSearch)
+
+_"setInterval without clearInterval is a reference that prevents garbage collection of everything in its closure"_ (source: [Debugging Memory Leaks in React + Next.js](https://www.codewithseb.com/blog/debugging-memory-leaks-react-nextjs-guide)). The closure here captures `userId` (string, small) and `session` (the full object) — if we leak the interval, we leak the session and its WebSocket.
+
+**Mitigation layers:**
+
+1. **Timer stored on session** — `session.subscriptionRefreshTimer = timer` gives every cleanup path a handle.
+2. **Cleared on every teardown path** — normal close, idle timeout (`WS_IDLE_TIMEOUT_MS`), disconnect grace expiry, subscription suspension close. Grep `ws-handler.ts` for `clearTimeout(session.idleTimer)` and add `clearInterval(session.subscriptionRefreshTimer)` adjacent to each.
+3. **Graceful SIGTERM** — `2026-04-05-graceful-sigterm-shutdown-node-patterns.md` establishes iteration over `wss.clients` on SIGTERM. Ensure that iteration also clears per-session timers if present (belt-and-suspenders; `.unref()` already allows process exit, but explicit clear avoids a race during the 8s drain window).
+4. **`.unref()` on the interval** — prevents hung test processes and hung graceful shutdown.
+
+#### 4.3 Anti-pattern avoided: checking on every message
+
+An earlier review explicitly rejected this; re-documented here because it is the most tempting "simpler" alternative. The `2026-04-13-ws-session-cache-subscription-status.md` learning spells out: _"Querying [subscription_status] on every message is wasteful. The worst case with caching is a brief window where a newly-suspended user can send a few more messages before reconnecting."_ The periodic-refresh design preserves the caching benefit (no per-message DB call) while shrinking the "brief window" from "indefinite" to "≤60s."
+
+#### 4.4 Edge cases surfaced by research
+
+- **Clock drift / suspended laptop** — `setInterval` in Node.js is event-loop-based, not wall-clock. A sleeping process stops ticking the timer. On wake, the next tick fires immediately then resumes the 60s cadence. Acceptable behavior for our case.
+- **Supabase transient outage** — `refreshSubscriptionStatus` fails open (logs + preserves cached value). If the DB is down for 5 minutes, users stay on their cached status. This is symmetric with middleware's fail-open on the T&C query.
+- **User row deleted** — `.single()` returns `PGRST116` error. Our error branch returns without mutating state, preserving the cached status. A separate process deleting a user mid-session is an ops scenario, not a security one — acceptable.
+
 **Test additions** (extend `test/webhook-subscription.test.ts` or add a focused test):
 
 - Mock DB returns `unpaid` on refresh → verify `close` called with `SUBSCRIPTION_SUSPENDED`.
@@ -282,6 +420,29 @@ export async function GET() {
 - Limit of 10/min matches conservative expected UX (user reloads the billing page; invoices load once with 5-min browser cache). Env override keeps ops flexibility.
 - Not placed in middleware because the endpoint is a single GET and middleware doesn't currently handle rate-limit concerns — keep logic local per the share-endpoint pattern (`app/api/shared/[token]/route.ts`).
 
+#### 5.1 Deployment topology validates in-memory rate limiter (infra inspection)
+
+`apps/web-platform/infra/server.tf` provisions `resource "hcloud_server" "web"` **without `count` or `for_each`** — this is a single-instance deployment. In-memory `SlidingWindowCounter` is correct for current scale and matches the existing patterns (`shareEndpointThrottle`, `connectionThrottle`, `sessionThrottle`).
+
+Search results flag the scaling caveat explicitly: _"In-memory rate limiting approaches in Next.js won't scale for larger production deployments with multiple servers, and switching to solutions like Redis is recommended"_ (sources: [How to Build an In-Memory Rate Limiter in Next.js](https://www.freecodecamp.org/news/how-to-build-an-in-memory-rate-limiter-in-nextjs/), [Rate Limiting Next.js API Routes using Upstash Redis](https://upstash.com/blog/nextjs-ratelimiting)). The moment we add a second `hcloud_server` (or Fly/Render scale-out), every in-memory throttle becomes under-enforced by the instance count.
+
+**Action:** Add a comment to the new `invoiceEndpointThrottle` singleton noting the single-instance assumption, matching the pattern of other throttles in `rate-limiter.ts`. When the infra migrates to >1 instance, a tracking issue for Redis-backed throttles should exist. **Out of scope for this PR** but record as a follow-up if not already tracked.
+
+#### 5.2 Research Insight: Auth-then-rate-limit ordering (WebSearch + codebase)
+
+The share endpoint inverts this order (rate-limit first, then auth) because it is a public endpoint keyed by IP — unauthenticated requests must still be throttled to prevent scraping. For the invoice endpoint, the opposite is correct: auth first (user.id is the only sensible throttle key), then throttle. This prevents:
+
+- **Throttle pollution from scraping** — unauthenticated requests returning 401 don't consume a slot; otherwise a single `user_id=null` bucket would collect global unauth traffic.
+- **Incorrect key selection** — can't rate-limit by user ID until the user is identified.
+
+This asymmetry is intentional; future route additions should pick the correct pattern based on auth semantics, not copy-paste.
+
+#### 5.3 Edge cases surfaced by research
+
+- **Retry-After header formatting** — RFC 7231 allows either seconds or an HTTP-date. `Retry-After: 60` is seconds (simpler, and what clients expect from rate-limit responses). Consistent with the share-endpoint pattern, though the share endpoint omits the header entirely. Worth adding here since this is the first billing-route rate limit with a predictable window.
+- **Clock skew across requests** — `SlidingWindowCounter` uses `Date.now()` monotonically on the same process; no cross-request skew. If we ever replace with Redis ZADD-based sliding window, revisit.
+- **Auth check caching** — `supabase.auth.getUser()` makes a network call to Supabase Auth. This is cached within the request's cookie context so repeat calls in the same request are cheap; no additional memoization needed for our single auth call.
+
 **Test additions** (new `test/api-billing-invoices-ratelimit.test.ts`):
 
 - First 10 requests in a minute → 200.
@@ -342,6 +503,22 @@ export async function GET() {
 - **Risk:** `setInterval` leaks if a session teardown path is missed. Mitigation: add assertion tests that verify `clearInterval` is called on every teardown path (normal close, idle, disconnect grace expiry, subscription suspension close). `.unref()` so test processes exit cleanly.
 - **Risk:** Over-aggressive rate limit (10/min) blocks a legitimate power user. Mitigation: env-configurable. Also, the endpoint sets `Cache-Control: private, max-age=300` so repeated loads within 5 min hit the browser cache and never reach the server.
 - **Rollback:** Each fix is independent. If any causes production issues, revert the specific file via `git revert` of the relevant hunks — no cross-fix coupling.
+
+## Relevant Project Learnings
+
+These learnings from `knowledge-base/project/learnings/` apply directly to this plan and must be cross-referenced during implementation:
+
+| Learning | Applies to | Action |
+|----------|-----------|--------|
+| `2026-04-13-ws-session-cache-subscription-status.md` | #2104 | Establishes the cache-at-auth pattern this fix extends. The learning's closing line ("The worst case with caching is a brief window...") is exactly what #2104 closes. |
+| `2026-03-20-websocket-first-message-auth-toctou-race.md` | #2104 | **Mandatory pattern**: guard `ws.readyState !== WebSocket.OPEN` after any `await` before mutating session state. Already integrated into §4.1 above. |
+| `2026-03-27-ws-session-race-abort-before-replace.md` | #2104 | Reinforces the abort-before-replace pattern. Our refresh timer's `checkSubscriptionSuspended` call follows this — `close()` aborts the session cleanly. Also warns about `vi.mock` vs bun — not relevant to this project (vitest only) but noted. |
+| `2026-04-05-graceful-sigterm-shutdown-node-patterns.md` | #2104 | The SIGTERM handler iterates `wss.clients` — ensure it also clears `subscriptionRefreshTimer` on each session, or relies on `.unref()` to let the process exit (both are belt-and-suspenders). |
+| `2026-04-13-stripe-status-mapping-check-constraint.md` | #2102 | Status enum in DB is `active | cancelled | past_due | unpaid | incomplete | null`. The`.in([past_due, unpaid])` filter respects this enum — no constraint violation path. |
+| `2026-04-07-code-review-batch-ws-validation-error-logging-concurrency-comments.md` | #2104 | No empty catch blocks at system boundaries. Our refresh-timer `try/catch` logs via `log.warn`. Compliant. |
+| `2026-04-13-billing-review-findings-batch-fix.md` | All | Established that grouping multiple billing code-review fixes into one PR is the project-approved pattern. Precedent for this PR. |
+| `2026-02-12-review-compound-before-commit-workflow.md` | Phase 7 | Run `skill: soleur:compound` before shipping PR. Already in `tasks.md` Phase 7.2. |
+| `2026-03-18-stop-hook-toctou-race-fix.md` | #2102 | Defense-in-depth TOCTOU template — we use the atomic `UPDATE ... WHERE IN (...)` variant which closes the race at the DB level, avoiding the need for multi-layer re-checks. |
 
 ## Domain Review
 
