@@ -535,20 +535,20 @@ Total: 4 modified, 4 new (1 prod + 3 test).
 
 ## Acceptance Criteria
 
-- [ ] `lib/chat-state-machine.ts` exports `applyStreamEvent` as a pure function
-- [ ] `ws-streaming-state.test.ts` imports `applyStreamEvent` — no shadow `processEvents` function remains
-- [ ] `ws-client.ts` hook calls `applyStreamEvent` instead of inline switch logic for streaming events
-- [ ] `connect()` callback clears `activeStreamsRef.current`, calls `clearAllTimeouts()`, and resets `activeLeaderIds` at the top
-- [ ] Timeout callback verifies `current.state === "thinking" || current.state === "tool_use"` before applying `"error"`
-- [ ] `WSMessage.stream.partial` has TSDoc explaining client ignores it
-- [ ] `WSMessage.tool_use` no longer declares `tool: string` — only `leaderId` and `label`
-- [ ] `agent-runner.ts` emits `tool_use` with `label` only (no `tool` field)
-- [ ] `toolsUsed` on the client contains labels (`"Reading file..."`), not raw names (`"Read"`)
-- [ ] `MessageBubble` is wrapped in `React.memo`
-- [ ] History-loaded assistant messages have `state: "done"`
-- [ ] MessageBubble content chain has no `!messageState && ...` fallback — state-driven only, with a typed `switch` on `MessageState`
-- [ ] All existing web-platform tests still pass
-- [ ] New tests: reconnect cleanup, timeout guard, memo short-circuit — all green
+- [x] `lib/chat-state-machine.ts` exports `applyStreamEvent` as a pure function
+- [x] `ws-streaming-state.test.ts` imports `applyStreamEvent` — no shadow `processEvents` function remains
+- [x] `ws-client.ts` hook calls `applyStreamEvent` instead of inline switch logic for streaming events
+- [x] `connect()` callback clears `activeStreamsRef.current`, calls `clearAllTimeouts()`, and resets `activeLeaderIds` at the top
+- [x] Timeout callback verifies `current.state === "thinking" || current.state === "tool_use"` before applying `"error"`
+- [x] `WSMessage.stream.partial` has TSDoc explaining client ignores it
+- [x] `WSMessage.tool_use` no longer declares `tool: string` — only `leaderId` and `label`
+- [x] `agent-runner.ts` emits `tool_use` with `label` only (no `tool` field)
+- [x] `toolsUsed` on the client contains labels (`"Reading file..."`), not raw names (`"Read"`)
+- [x] `MessageBubble` is wrapped in `React.memo`
+- [x] History-loaded assistant messages have `state: "done"`
+- [x] MessageBubble content chain has no `!messageState && ...` fallback — state-driven only, with a typed `switch` on `MessageState`
+- [x] All existing web-platform tests still pass
+- [x] New tests: reconnect cleanup, timeout guard, memo short-circuit — all green
 
 ## Test Scenarios
 
