@@ -280,17 +280,17 @@ const PdfPreview = dynamic(
 
 ## Acceptance Criteria
 
-- [ ] PDF files render correctly in the KB viewer with visible page content
-- [ ] Page navigation (prev/next) works, showing current page and total pages
-- [ ] Download button remains functional
-- [ ] Loading state shown while PDF loads
-- [ ] Error state with download fallback shown when PDF fails to load
-- [ ] CSP `worker-src` updated to allow pdf.js worker (no other CSP relaxation)
-- [ ] `object-src 'none'` and `frame-src 'none'` remain unchanged
-- [ ] Component is dynamically imported (no pdf.js in non-PDF route bundles)
-- [ ] Both `bun.lock` and `package-lock.json` regenerated
-- [ ] Existing tests updated to reflect new component structure
-- [ ] Works on mobile viewport (PWA)
+- [x] PDF files render correctly in the KB viewer with visible page content
+- [x] Page navigation (prev/next) works, showing current page and total pages
+- [x] Download button remains functional
+- [x] Loading state shown while PDF loads
+- [x] Error state with download fallback shown when PDF fails to load
+- [x] CSP `worker-src` updated to allow pdf.js worker (no other CSP relaxation)
+- [x] `object-src 'none'` and `frame-src 'none'` remain unchanged
+- [x] Component is dynamically imported (no pdf.js in non-PDF route bundles)
+- [x] Both `bun.lock` and `package-lock.json` regenerated
+- [x] Existing tests updated to reflect new component structure
+- [x] Works on mobile viewport (PWA)
 
 ## Test Scenarios
 
