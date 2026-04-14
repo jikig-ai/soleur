@@ -145,14 +145,14 @@ Add a "Billing" tab to the `SETTINGS_TABS` array in `settings-shell.tsx`.
 
 ## Acceptance Criteria
 
-- [ ] Connected Services section no longer appears on the General settings page
-- [ ] Billing section no longer appears on the General settings page
-- [ ] New Billing page exists at `/dashboard/settings/billing`
-- [ ] Billing page shows all existing billing functionality (subscription status, manage/cancel buttons, invoice list)
-- [ ] "Billing" tab appears in the Settings sidebar navigation (both desktop sidebar and mobile tab bar)
-- [ ] All existing billing API routes (`/api/billing/portal`, `/api/billing/invoices`, `/api/checkout`) continue to work
-- [ ] The `CancelRetentionModal` continues to function on the new Billing page
-- [ ] General settings page still shows Account, Project, API Key, and Danger Zone sections
+- [x] Connected Services section no longer appears on the General settings page
+- [x] Billing section no longer appears on the General settings page
+- [x] New Billing page exists at `/dashboard/settings/billing`
+- [x] Billing page shows all existing billing functionality (subscription status, manage/cancel buttons, invoice list)
+- [x] "Billing" tab appears in the Settings sidebar navigation (both desktop sidebar and mobile tab bar)
+- [x] All existing billing API routes (`/api/billing/portal`, `/api/billing/invoices`, `/api/checkout`) continue to work
+- [x] The `CancelRetentionModal` continues to function on the new Billing page
+- [x] General settings page still shows Account, Project, API Key, and Danger Zone sections
 - [ ] No regressions in Team or Integrations pages
 
 ## Domain Review

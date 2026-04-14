@@ -17,12 +17,7 @@ export default async function SettingsPage() {
   const service = createServiceClient();
 
   // Parallelize all independent queries
-  const [
-    { data: apiKey },
-    { data: userData },
-    { count: conversationCount },
-    { count: serviceTokenCount },
-  ] = await Promise.all([
+  const [{ data: apiKey }, { data: userData }] = await Promise.all([
     service
       .from("api_keys")
       .select("provider, is_valid, updated_at")
@@ -32,19 +27,9 @@ export default async function SettingsPage() {
       .single(),
     service
       .from("users")
-      .select(
-        "repo_url, repo_status, repo_last_synced_at, subscription_status, current_period_end, cancel_at_period_end, created_at",
-      )
+      .select("repo_url, repo_status, repo_last_synced_at")
       .eq("id", user.id)
       .single(),
-    service
-      .from("conversations")
-      .select("*", { count: "exact", head: true })
-      .eq("user_id", user.id),
-    service
-      .from("service_tokens")
-      .select("*", { count: "exact", head: true })
-      .eq("user_id", user.id),
   ]);
 
   return (
@@ -57,12 +42,6 @@ export default async function SettingsPage() {
         repoUrl={userData?.repo_url ?? null}
         repoStatus={(userData?.repo_status as RepoStatus) ?? "not_connected"}
         repoLastSyncedAt={userData?.repo_last_synced_at ?? null}
-        subscriptionStatus={userData?.subscription_status ?? null}
-        currentPeriodEnd={userData?.current_period_end ?? null}
-        cancelAtPeriodEnd={userData?.cancel_at_period_end ?? false}
-        conversationCount={conversationCount ?? 0}
-        serviceTokenCount={serviceTokenCount ?? 0}
-        createdAt={userData?.created_at ?? new Date().toISOString()}
       />
     </SettingsShell>
   );

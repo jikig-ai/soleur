@@ -7,6 +7,7 @@ const SETTINGS_TABS = [
   { href: "/dashboard/settings", label: "General" },
   { href: "/dashboard/settings/team", label: "Team" },
   { href: "/dashboard/settings/services", label: "Integrations" },
+  { href: "/dashboard/settings/billing", label: "Billing" },
 ] as const;
 
 export function SettingsShell({ children }: { children: React.ReactNode }) {
