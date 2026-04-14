@@ -5,11 +5,12 @@ import type Stripe from "stripe";
 // Mocks — vi.hoisted ensures these are available when vi.mock factories run
 // ---------------------------------------------------------------------------
 
-const { mockConstructEvent, mockUpdate, mockEq, mockLogger } = vi.hoisted(
+const { mockConstructEvent, mockUpdate, mockEq, mockIn, mockLogger } = vi.hoisted(
   () => ({
     mockConstructEvent: vi.fn(),
     mockUpdate: vi.fn(),
     mockEq: vi.fn(),
+    mockIn: vi.fn(),
     mockLogger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
   }),
 );
@@ -67,7 +68,18 @@ function makeEvent(
 describe("Stripe webhook — invoice payment recovery", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockEq.mockResolvedValue({ error: null });
+    mockIn.mockResolvedValue({ error: null });
+    // mockEq returns a thenable that is awaitable (for .update().eq() chains,
+    // used by customer.subscription.* handlers) AND exposes .in() (for the
+    // invoice.paid guard which filters by current subscription_status).
+    mockEq.mockImplementation(() => {
+      const result: { error: null } = { error: null };
+      const chain = {
+        in: mockIn,
+        then: (resolve: (value: typeof result) => unknown) => resolve(result),
+      };
+      return chain;
+    });
     mockUpdate.mockReturnValue({ eq: mockEq });
   });
 
@@ -142,7 +154,7 @@ describe("Stripe webhook — invoice payment recovery", () => {
   });
 
   describe("invoice.paid", () => {
-    test("sets subscription_status to 'active'", async () => {
+    test("sets subscription_status to 'active' filtered by past_due/unpaid", async () => {
       const event = makeEvent("invoice.paid", {
         id: "inv_paid_123",
         customer: CUSTOMER_ID,
@@ -157,6 +169,10 @@ describe("Stripe webhook — invoice payment recovery", () => {
         expect.objectContaining({ subscription_status: "active" }),
       );
       expect(mockEq).toHaveBeenCalledWith("stripe_customer_id", CUSTOMER_ID);
+      expect(mockIn).toHaveBeenCalledWith("subscription_status", [
+        "past_due",
+        "unpaid",
+      ]);
     });
 
     test("returns 500 when DB update fails", async () => {
@@ -166,12 +182,79 @@ describe("Stripe webhook — invoice payment recovery", () => {
         subscription: "sub_test456",
       });
       mockConstructEvent.mockReturnValue(event);
-      mockEq.mockResolvedValue({ error: { message: "db error" } });
+      mockIn.mockResolvedValue({ error: { message: "db error" } });
 
       const res = await POST(makeRequest());
 
       expect(res.status).toBe(500);
       expect(mockLogger.error).toHaveBeenCalled();
+    });
+
+    test("no-op when current status is 'cancelled' (the bug fix)", async () => {
+      // Simulate a replayed invoice.paid arriving for an already-cancelled
+      // subscription. The atomic UPDATE ... WHERE status IN ('past_due','unpaid')
+      // matches zero rows. PostgREST returns { error: null } — NOT a 500.
+      const event = makeEvent("invoice.paid", {
+        id: "inv_paid_replay",
+        customer: CUSTOMER_ID,
+        subscription: "sub_test456",
+      });
+      mockConstructEvent.mockReturnValue(event);
+      // 0 rows matched — no error returned by PostgREST.
+      mockIn.mockResolvedValue({ error: null });
+
+      const res = await POST(makeRequest());
+
+      expect(res.status).toBe(200);
+      expect(mockIn).toHaveBeenCalledWith("subscription_status", [
+        "past_due",
+        "unpaid",
+      ]);
+      expect(mockLogger.error).not.toHaveBeenCalled();
+    });
+
+    test("applies update when current status is 'past_due'", async () => {
+      const event = makeEvent("invoice.paid", {
+        id: "inv_paid_pastdue",
+        customer: CUSTOMER_ID,
+        subscription: "sub_test456",
+      });
+      mockConstructEvent.mockReturnValue(event);
+      mockIn.mockResolvedValue({ error: null });
+
+      const res = await POST(makeRequest());
+
+      expect(res.status).toBe(200);
+      expect(mockUpdate).toHaveBeenCalledWith(
+        expect.objectContaining({ subscription_status: "active" }),
+      );
+      expect(mockEq).toHaveBeenCalledWith("stripe_customer_id", CUSTOMER_ID);
+      expect(mockIn).toHaveBeenCalledWith("subscription_status", [
+        "past_due",
+        "unpaid",
+      ]);
+    });
+
+    test("applies update when current status is 'unpaid'", async () => {
+      const event = makeEvent("invoice.paid", {
+        id: "inv_paid_unpaid",
+        customer: CUSTOMER_ID,
+        subscription: "sub_test456",
+      });
+      mockConstructEvent.mockReturnValue(event);
+      mockIn.mockResolvedValue({ error: null });
+
+      const res = await POST(makeRequest());
+
+      expect(res.status).toBe(200);
+      expect(mockUpdate).toHaveBeenCalledWith(
+        expect.objectContaining({ subscription_status: "active" }),
+      );
+      expect(mockEq).toHaveBeenCalledWith("stripe_customer_id", CUSTOMER_ID);
+      expect(mockIn).toHaveBeenCalledWith("subscription_status", [
+        "past_due",
+        "unpaid",
+      ]);
     });
   });
 

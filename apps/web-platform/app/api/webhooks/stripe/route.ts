@@ -143,10 +143,15 @@ export async function POST(request: Request) {
           : invoice.customer?.id;
 
       if (customerId) {
+        // Only restore active if currently past_due or unpaid.
+        // customer.subscription.updated is the source of truth for active
+        // transitions; this is a belt-and-suspenders restore that must not
+        // reactivate cancelled subs (idempotent against Stripe replays).
         const { error } = await supabase
           .from("users")
           .update({ subscription_status: "active" })
-          .eq("stripe_customer_id", customerId);
+          .eq("stripe_customer_id", customerId)
+          .in("subscription_status", ["past_due", "unpaid"]);
 
         if (error) {
           logger.error(
