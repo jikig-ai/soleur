@@ -68,9 +68,12 @@ echo "1"
 MOCK
   chmod +x "$mock_dir/seq"
 
-  # Mock flock (always succeeds -- lock not contended)
+  # Mock flock (always succeeds unless MOCK_FLOCK_CONTENDED=1)
   cat > "$mock_dir/flock" << 'MOCK'
 #!/bin/bash
+if [[ "${MOCK_FLOCK_CONTENDED:-}" == "1" ]]; then
+  exit 1
+fi
 exit 0
 MOCK
   chmod +x "$mock_dir/flock"
@@ -109,6 +112,10 @@ run_deploy() {
     trap 'rm -rf "$MOCK_DIR"' EXIT
 
     export CI_DEPLOY_LOCK="$MOCK_DIR/ci-deploy.lock"
+    # CI_DEPLOY_STATE defaults to a per-run temp path unless the caller already set one.
+    if [[ -z "${CI_DEPLOY_STATE:-}" ]]; then
+      export CI_DEPLOY_STATE="$MOCK_DIR/ci-deploy.state"
+    fi
     create_base_mocks "$MOCK_DIR"
 
     export DOPPLER_TOKEN="dp.st.prd.mock-token"
@@ -172,6 +179,9 @@ run_deploy_traced() {
     trap 'rm -rf "$MOCK_DIR"' EXIT
 
     export CI_DEPLOY_LOCK="$MOCK_DIR/ci-deploy.lock"
+    if [[ -z "${CI_DEPLOY_STATE:-}" ]]; then
+      export CI_DEPLOY_STATE="$MOCK_DIR/ci-deploy.state"
+    fi
     create_base_mocks "$MOCK_DIR"
 
     # Override: docker mock with trace markers and configurable failures
@@ -958,6 +968,156 @@ assert_env_file_cleanup "canary crash cleans up env file" \
   "export MOCK_DOCKER_RUN_FAIL_CANARY=1"
 
 assert_env_file_cleanup "successful deploy cleans up env file" ""
+
+echo ""
+echo "--- Deploy state file (#2185 observability) ---"
+
+# assert_state_contains: runs deploy, then parses the state file written by ci-deploy.sh.
+# Validates .exit_code and .reason via jq (falls back to grep if jq unavailable).
+# Signature: assert_state_contains <description> <expected_reason> <expected_exit_code> [<cmd>] [<extra_env>]
+assert_state_contains() {
+  local description="$1"
+  local expected_reason="$2"
+  local expected_exit_code="$3"
+  local cmd="${4:-deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0}"
+  local extra_env="${5:-}"
+
+  TOTAL=$((TOTAL + 1))
+
+  # State file lives outside the per-run MOCK_DIR so we can read it after the subshell cleans up.
+  local state_dir
+  state_dir=$(mktemp -d)
+  local state_file="$state_dir/ci-deploy.state"
+
+  local output actual_exit
+  output=$(
+    eval "$extra_env"
+    export CI_DEPLOY_STATE="$state_file"
+    run_deploy_traced "$cmd" 2>&1
+  ) && actual_exit=0 || actual_exit=$?
+
+  local actual_reason actual_exit_code
+  if [[ ! -f "$state_file" ]]; then
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: $description (state file was never written)"
+    echo "        output: $output"
+    rm -rf "$state_dir"
+    return
+  fi
+
+  if command -v jq >/dev/null 2>&1; then
+    actual_reason=$(jq -r '.reason // ""' "$state_file" 2>/dev/null || echo "<jq_parse_error>")
+    actual_exit_code=$(jq -r '.exit_code // ""' "$state_file" 2>/dev/null || echo "<jq_parse_error>")
+  else
+    # Fallback: crude grep-based parse (only used if jq missing from test environment).
+    actual_reason=$(grep -oE '"reason":"[^"]*"' "$state_file" | sed 's/.*:"\(.*\)"/\1/')
+    actual_exit_code=$(grep -oE '"exit_code":-?[0-9]+' "$state_file" | sed 's/.*://')
+  fi
+
+  if [[ "$actual_reason" == "$expected_reason" ]] && [[ "$actual_exit_code" == "$expected_exit_code" ]]; then
+    PASS=$((PASS + 1))
+    echo "  PASS: $description (reason=$actual_reason exit_code=$actual_exit_code script_exit=$actual_exit)"
+  else
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: $description"
+    echo "        expected: reason=$expected_reason exit_code=$expected_exit_code"
+    echo "        actual:   reason=$actual_reason exit_code=$actual_exit_code"
+    echo "        state:    $(cat "$state_file")"
+    echo "        output:   $output"
+  fi
+
+  rm -rf "$state_dir"
+}
+
+# Happy path -> reason="ok", exit_code=0
+assert_state_contains "happy path writes reason=ok" "ok" "0"
+
+# Low disk -> reason="insufficient_disk_space"
+assert_state_contains "low disk writes reason=insufficient_disk_space" \
+  "insufficient_disk_space" "1" \
+  "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0" \
+  "export MOCK_DF_LOW=1"
+
+# Flock contention -> reason="lock_contention"
+assert_state_contains "flock contention writes reason=lock_contention" \
+  "lock_contention" "1" \
+  "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0" \
+  "export MOCK_FLOCK_CONTENDED=1"
+
+# Docker pull failure -> unhandled exit path via set -e (we do not explicitly instrument this).
+# We expect exit_code=1; reason may be "unhandled" (from the EXIT trap) unless a handler is added.
+# Accept either to make the test robust if we later add a pull-specific handler.
+assert_state_contains_either() {
+  local description="$1"
+  local expected_reason_a="$2"
+  local expected_reason_b="$3"
+  local expected_exit_code="$4"
+  local cmd="${5:-deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0}"
+  local extra_env="${6:-}"
+
+  TOTAL=$((TOTAL + 1))
+
+  local state_dir
+  state_dir=$(mktemp -d)
+  local state_file="$state_dir/ci-deploy.state"
+
+  local output actual_exit
+  output=$(
+    eval "$extra_env"
+    export CI_DEPLOY_STATE="$state_file"
+    run_deploy_traced "$cmd" 2>&1
+  ) && actual_exit=0 || actual_exit=$?
+
+  local actual_reason actual_exit_code
+  if [[ ! -f "$state_file" ]]; then
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: $description (state file was never written)"
+    echo "        output: $output"
+    rm -rf "$state_dir"
+    return
+  fi
+
+  if command -v jq >/dev/null 2>&1; then
+    actual_reason=$(jq -r '.reason // ""' "$state_file" 2>/dev/null || echo "")
+    actual_exit_code=$(jq -r '.exit_code // ""' "$state_file" 2>/dev/null || echo "")
+  else
+    actual_reason=$(grep -oE '"reason":"[^"]*"' "$state_file" | sed 's/.*:"\(.*\)"/\1/')
+    actual_exit_code=$(grep -oE '"exit_code":-?[0-9]+' "$state_file" | sed 's/.*://')
+  fi
+
+  if { [[ "$actual_reason" == "$expected_reason_a" ]] || [[ "$actual_reason" == "$expected_reason_b" ]]; } && \
+     [[ "$actual_exit_code" == "$expected_exit_code" ]]; then
+    PASS=$((PASS + 1))
+    echo "  PASS: $description (reason=$actual_reason exit_code=$actual_exit_code)"
+  else
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: $description"
+    echo "        expected: reason=$expected_reason_a|$expected_reason_b exit_code=$expected_exit_code"
+    echo "        actual:   reason=$actual_reason exit_code=$actual_exit_code"
+    echo "        state:    $(cat "$state_file")"
+  fi
+
+  rm -rf "$state_dir"
+}
+
+# Docker pull failure -> exit_code=1, reason=unhandled (implicit via EXIT trap, no explicit handler)
+assert_state_contains_either "docker pull fail writes exit_code=1" \
+  "unhandled" "pull_failed" "1" \
+  "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0" \
+  "export MOCK_DOCKER_PULL_FAIL=1"
+
+# Canary run crash (docker run for canary fails) -> exit via set -e, reason=unhandled
+# (no explicit handler around `docker run ... canary` because it's controlled by set -e).
+assert_state_contains_either "canary container run crash writes exit_code=1" \
+  "unhandled" "canary_sandbox_failed" "1" \
+  "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0" \
+  "export MOCK_DOCKER_RUN_FAIL_CANARY=1"
+
+# Canary health check failure -> reason=canary_failed
+assert_state_contains "canary health failure writes reason=canary_failed" \
+  "canary_failed" "1" \
+  "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0" \
+  "export MOCK_CURL_CANARY_FAIL=1"
 
 echo ""
 echo "=== Results: $PASS/$TOTAL passed, $FAIL failed ==="

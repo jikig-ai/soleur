@@ -18,13 +18,17 @@ resource "hcloud_server" "web" {
   ssh_keys    = [hcloud_ssh_key.default.id]
 
   user_data = templatefile("${path.module}/cloud-init.yml", {
-    image_name              = var.image_name
-    ci_deploy_script_b64    = base64encode(file("${path.module}/ci-deploy.sh"))
-    disk_monitor_script_b64 = base64encode(file("${path.module}/disk-monitor.sh"))
-    tunnel_token            = cloudflare_zero_trust_tunnel_cloudflared.web.tunnel_token
-    webhook_deploy_secret   = var.webhook_deploy_secret
-    doppler_token           = var.doppler_token
-    resend_api_key          = var.resend_api_key
+    image_name                  = var.image_name
+    ci_deploy_script_b64        = base64encode(file("${path.module}/ci-deploy.sh"))
+    cat_deploy_state_script_b64 = base64encode(file("${path.module}/cat-deploy-state.sh"))
+    disk_monitor_script_b64     = base64encode(file("${path.module}/disk-monitor.sh"))
+    hooks_json_b64 = base64encode(templatefile("${path.module}/hooks.json.tmpl", {
+      webhook_deploy_secret = var.webhook_deploy_secret
+    }))
+    tunnel_token          = cloudflare_zero_trust_tunnel_cloudflared.web.tunnel_token
+    webhook_deploy_secret = var.webhook_deploy_secret
+    doppler_token         = var.doppler_token
+    resend_api_key        = var.resend_api_key
   })
 
   # cloud-init and ssh_keys are create-time attributes. After import,
@@ -87,9 +91,16 @@ resource "terraform_data" "deploy_pipeline_fix" {
   # AppArmor profile must be loaded before ci-deploy.sh references it (#1570).
   depends_on = [terraform_data.apparmor_bwrap_profile]
 
+  # hcloud_server.web has ignore_changes=[user_data], so cloud-init never re-applies
+  # to the existing server. This resource is the sole path for pushing ci-deploy.sh,
+  # webhook.service, cat-deploy-state.sh, and hooks.json updates to production (#2185).
   triggers_replace = sha256(join(",", [
     file("${path.module}/ci-deploy.sh"),
     file("${path.module}/webhook.service"),
+    file("${path.module}/cat-deploy-state.sh"),
+    templatefile("${path.module}/hooks.json.tmpl", {
+      webhook_deploy_secret = var.webhook_deploy_secret
+    }),
   ]))
 
   connection {
@@ -109,9 +120,26 @@ resource "terraform_data" "deploy_pipeline_fix" {
     destination = "/etc/systemd/system/webhook.service"
   }
 
+  provisioner "file" {
+    source      = "${path.module}/cat-deploy-state.sh"
+    destination = "/usr/local/bin/cat-deploy-state.sh"
+  }
+
+  provisioner "file" {
+    content = templatefile("${path.module}/hooks.json.tmpl", {
+      webhook_deploy_secret = var.webhook_deploy_secret
+    })
+    destination = "/etc/webhook/hooks.json"
+  }
+
   provisioner "remote-exec" {
     inline = [
       "chmod +x /usr/local/bin/ci-deploy.sh",
+      "chmod +x /usr/local/bin/cat-deploy-state.sh",
+      # hooks.json must be readable by the webhook (deploy group) but not world-readable --
+      # it contains the HMAC secret. Provisioner "file" uploads as root:root by default.
+      "chown root:deploy /etc/webhook/hooks.json",
+      "chmod 640 /etc/webhook/hooks.json",
       # Append DOPPLER_CONFIG_DIR and DOPPLER_ENABLE_VERSION_CHECK to webhook-deploy env file.
       # Redirects Doppler CLI config to /tmp (writable under PrivateTmp) instead of ~/.doppler
       # (blocked by ProtectHome=read-only). grep guard makes this idempotent.

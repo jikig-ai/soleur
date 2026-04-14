@@ -88,42 +88,24 @@ write_files:
     owner: root:root
     permissions: '0755'
 
+  # Deploy state reporter for /hooks/deploy-status (#2185).
+  # Content injected from cat-deploy-state.sh via Terraform base64encode(file()).
+  - path: /usr/local/bin/cat-deploy-state.sh
+    encoding: b64
+    content: ${cat_deploy_state_script_b64}
+    owner: root:root
+    permissions: '0755'
+
   # Webhook configuration for adnanh/webhook.
   # Validates HMAC-SHA256 signature, sets SSH_ORIGINAL_COMMAND from payload,
   # and invokes ci-deploy.sh asynchronously (#968).
   # Fire-and-forget: returns 202 immediately, deploy runs in background.
-  # CI verifies success by polling the app health endpoint.
+  # CI verifies success by polling /hooks/deploy-status (#2185) then /health.
+  # Content rendered from hooks.json.tmpl by Terraform (webhook_deploy_secret is
+  # interpolated at plan time; cat-deploy-state.sh serves GET /hooks/deploy-status).
   - path: /etc/webhook/hooks.json
-    content: |
-      [
-        {
-          "id": "deploy",
-          "execute-command": "/usr/local/bin/ci-deploy.sh",
-          "command-working-directory": "/",
-          "include-command-output-in-response": false,
-          "success-http-response-code": 202,
-          "response-message": "Deploy initiated",
-          "http-methods": ["POST"],
-          "trigger-rule-mismatch-http-response-code": 403,
-          "pass-environment-to-command": [
-            {
-              "source": "payload",
-              "name": "command",
-              "envname": "SSH_ORIGINAL_COMMAND"
-            }
-          ],
-          "trigger-rule": {
-            "match": {
-              "type": "payload-hmac-sha256",
-              "secret": "${webhook_deploy_secret}",
-              "parameter": {
-                "source": "header",
-                "name": "X-Signature-256"
-              }
-            }
-          }
-        }
-      ]
+    encoding: b64
+    content: ${hooks_json_b64}
     owner: root:deploy
     permissions: '0640'
 
