@@ -18,7 +18,7 @@
     "trigger-rule": {
       "match": {
         "type": "payload-hmac-sha256",
-        "secret": "${webhook_deploy_secret}",
+        "secret": ${jsonencode(webhook_deploy_secret)},
         "parameter": {
           "source": "header",
           "name": "X-Signature-256"
@@ -31,12 +31,12 @@
     "execute-command": "/usr/local/bin/cat-deploy-state.sh",
     "command-working-directory": "/",
     "include-command-output-in-response": true,
-    "http-methods": ["POST"],
+    "http-methods": ["GET"],
     "trigger-rule-mismatch-http-response-code": 403,
     "trigger-rule": {
       "match": {
         "type": "payload-hmac-sha256",
-        "secret": "${webhook_deploy_secret}",
+        "secret": ${jsonencode(webhook_deploy_secret)},
         "parameter": {
           "source": "header",
           "name": "X-Signature-256"

@@ -1,3 +1,12 @@
+locals {
+  # Rendered hooks.json content, shared between cloud-init user_data (fresh servers)
+  # and the deploy_pipeline_fix provisioner (existing server). Single source of truth
+  # avoids drift between the two code paths (#2201).
+  hooks_json = templatefile("${path.module}/hooks.json.tmpl", {
+    webhook_deploy_secret = var.webhook_deploy_secret
+  })
+}
+
 resource "hcloud_ssh_key" "default" {
   name       = "soleur-web-platform"
   public_key = file(var.ssh_key_path)
@@ -22,13 +31,11 @@ resource "hcloud_server" "web" {
     ci_deploy_script_b64        = base64encode(file("${path.module}/ci-deploy.sh"))
     cat_deploy_state_script_b64 = base64encode(file("${path.module}/cat-deploy-state.sh"))
     disk_monitor_script_b64     = base64encode(file("${path.module}/disk-monitor.sh"))
-    hooks_json_b64 = base64encode(templatefile("${path.module}/hooks.json.tmpl", {
-      webhook_deploy_secret = var.webhook_deploy_secret
-    }))
-    tunnel_token          = cloudflare_zero_trust_tunnel_cloudflared.web.tunnel_token
-    webhook_deploy_secret = var.webhook_deploy_secret
-    doppler_token         = var.doppler_token
-    resend_api_key        = var.resend_api_key
+    hooks_json_b64              = base64encode(local.hooks_json)
+    tunnel_token                = cloudflare_zero_trust_tunnel_cloudflared.web.tunnel_token
+    webhook_deploy_secret       = var.webhook_deploy_secret
+    doppler_token               = var.doppler_token
+    resend_api_key              = var.resend_api_key
   })
 
   # cloud-init and ssh_keys are create-time attributes. After import,
@@ -98,9 +105,7 @@ resource "terraform_data" "deploy_pipeline_fix" {
     file("${path.module}/ci-deploy.sh"),
     file("${path.module}/webhook.service"),
     file("${path.module}/cat-deploy-state.sh"),
-    templatefile("${path.module}/hooks.json.tmpl", {
-      webhook_deploy_secret = var.webhook_deploy_secret
-    }),
+    local.hooks_json,
   ]))
 
   connection {
@@ -126,9 +131,7 @@ resource "terraform_data" "deploy_pipeline_fix" {
   }
 
   provisioner "file" {
-    content = templatefile("${path.module}/hooks.json.tmpl", {
-      webhook_deploy_secret = var.webhook_deploy_secret
-    })
+    content     = local.hooks_json
     destination = "/etc/webhook/hooks.json"
   }
 
