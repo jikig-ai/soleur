@@ -1,6 +1,19 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import dynamic from "next/dynamic";
+
+const PdfPreview = dynamic(
+  () => import("./pdf-preview").then((mod) => mod.PdfPreview),
+  {
+    ssr: false,
+    loading: () => (
+      <div className="flex items-center justify-center p-8">
+        <div className="h-5 w-5 animate-spin rounded-full border-2 border-neutral-600 border-t-amber-400" />
+      </div>
+    ),
+  },
+);
 
 const IMAGE_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp"]);
 
@@ -75,30 +88,6 @@ function ImagePreview({ src, filename }: { src: string; filename: string }) {
           />
         </div>
       )}
-    </div>
-  );
-}
-
-function PdfPreview({ src, filename }: { src: string; filename: string }) {
-  return (
-    <div className="flex h-full flex-col gap-3 p-4">
-      <div className="flex items-center justify-between">
-        <span className="text-sm text-neutral-400">{filename}</span>
-        <a
-          href={src}
-          download={filename}
-          className="rounded-md border border-neutral-700 px-3 py-1 text-xs text-neutral-300 hover:bg-neutral-800"
-        >
-          Download
-        </a>
-      </div>
-      <embed
-        src={src}
-        type="application/pdf"
-        className="flex-1 rounded-lg border border-neutral-800"
-        style={{ minHeight: "70vh" }}
-        title={`PDF preview: ${filename}`}
-      />
     </div>
   );
 }
