@@ -8,15 +8,15 @@
 
 ## Phase 2: Core Implementation
 
-- [ ] 2.1 Add `atMentionVisible?: boolean` prop to `ChatInputProps` interface in `apps/web-platform/components/chat/chat-input.tsx`
-- [ ] 2.2 Modify `handleKeyDown` in ChatInput to early-return when `atMentionVisible` is true and Enter is pressed
-- [ ] 2.3 Add `atMentionVisible` to `handleKeyDown` dependency array
-- [ ] 2.4 Pass `atMentionVisible={atVisible}` from chat page to ChatInput in `apps/web-platform/app/(dashboard)/dashboard/chat/[conversationId]/page.tsx`
+- [x] 2.1 Add `atMentionVisible?: boolean` prop to `ChatInputProps` interface in `apps/web-platform/components/chat/chat-input.tsx`
+- [x] 2.2 Modify `handleKeyDown` in ChatInput to early-return when `atMentionVisible` is true and Enter is pressed
+- [x] 2.3 Add `atMentionVisible` to `handleKeyDown` dependency array
+- [x] 2.4 Pass `atMentionVisible={atVisible}` from chat page to ChatInput in `apps/web-platform/app/(dashboard)/dashboard/chat/[conversationId]/page.tsx`
 
 ## Phase 3: Testing
 
-- [ ] 3.1 Add test in `apps/web-platform/test/chat-input.test.tsx`: "does not send on Enter when atMentionVisible is true"
-- [ ] 3.2 Add test in `apps/web-platform/test/chat-input.test.tsx`: "sends on Enter when atMentionVisible is false (default behavior)"
-- [ ] 3.3 Verify existing AtMentionDropdown tests still pass
-- [ ] 3.4 Verify existing ChatInput tests still pass
-- [ ] 3.5 Run full test suite for web-platform
+- [x] 3.1 Add test in `apps/web-platform/test/chat-input.test.tsx`: "does not send on Enter when atMentionVisible is true"
+- [x] 3.2 Add test in `apps/web-platform/test/chat-input.test.tsx`: "sends on Enter when atMentionVisible is false (default behavior)"
+- [x] 3.3 Verify existing AtMentionDropdown tests still pass
+- [x] 3.4 Verify existing ChatInput tests still pass
+- [x] 3.5 Run full test suite for web-platform

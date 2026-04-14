@@ -90,13 +90,13 @@ Pass a prop or signal to `ChatInput` indicating whether the `@mention` dropdown 
 
 ## Acceptance Criteria
 
-- [ ] Pressing Enter while the `@mention` dropdown is visible selects the highlighted leader (does not send the message)
-- [ ] Pressing Enter while the `@mention` dropdown is NOT visible sends the message (existing behavior preserved)
-- [ ] Arrow keys continue to navigate the dropdown
-- [ ] Escape dismisses the dropdown
-- [ ] Shift+Enter still inserts a newline regardless of dropdown state
-- [ ] Clicking a leader in the dropdown still works
-- [ ] Mobile `@` button still triggers the dropdown
+- [x] Pressing Enter while the `@mention` dropdown is visible selects the highlighted leader (does not send the message)
+- [x] Pressing Enter while the `@mention` dropdown is NOT visible sends the message (existing behavior preserved)
+- [x] Arrow keys continue to navigate the dropdown
+- [x] Escape dismisses the dropdown
+- [x] Shift+Enter still inserts a newline regardless of dropdown state
+- [x] Clicking a leader in the dropdown still works
+- [x] Mobile `@` button still triggers the dropdown
 
 ## Domain Review
 
