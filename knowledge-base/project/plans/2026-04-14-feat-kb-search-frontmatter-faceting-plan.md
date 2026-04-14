@@ -169,10 +169,10 @@ Add `--tag` and `--category` flags to the `kb-search` skill so agents can filter
 
 Tracked in spec. Copy for implementation ticking:
 
-- [ ] FR1–FR15 (all listed in spec)
-- [ ] TR1–TR11 (all listed in spec)
-- [ ] TS1–TS7 (all listed in spec)
-- [ ] Index generation median < 5s on full corpus
+- [x] FR1–FR15 (all listed in spec)
+- [x] TR1–TR11 (all listed in spec)
+- [x] TS1–TS7 (all listed in spec)
+- [x] Index generation median < 5s on full corpus (measured 1.4–1.5s on 646-file corpus)
 
 ## Alternative Approaches Considered
 

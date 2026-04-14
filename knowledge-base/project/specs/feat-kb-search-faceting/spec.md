@@ -87,18 +87,18 @@ All scenarios are **bats** tests unless explicitly labeled otherwise.
 
 ## Acceptance Criteria (from #2211 + refinements)
 
-- [ ] `kb-search` accepts `--tag` and `--category` flags (FR1, FR2)
-- [ ] Flags combine with each other and with keyword (AND) (FR3, FR9)
-- [ ] Miss produces hint pointing at the artifact (FR4)
-- [ ] Generator emits `kb-tags.txt` and `kb-categories.txt` (FR6)
-- [ ] Compound's Related Docs Finder documents the pattern (FR8)
-- [ ] kb-search SKILL.md documents flags with examples (FR7)
-- [ ] Duplicate flag, unknown flag, missing artifact each produce explicit errors (FR10, FR11, FR12)
-- [ ] Fixed-string matching, not regex (FR13, TR8)
-- [ ] Scope is learnings/ only (FR14)
-- [ ] Default kb-search path unchanged (TR5)
-- [ ] `xargs` parallelism preserved; runtime < 5s (TR2, TS6)
-- [ ] All TS1–TS7 pass
+- [x] `kb-search` accepts `--tag` and `--category` flags (FR1, FR2)
+- [x] Flags combine with each other and with keyword (AND) (FR3, FR9)
+- [x] Miss produces hint pointing at the artifact (FR4)
+- [x] Generator emits `kb-tags.txt` and `kb-categories.txt` (FR6)
+- [x] Compound's Related Docs Finder documents the pattern (FR8)
+- [x] kb-search SKILL.md documents flags with examples (FR7)
+- [x] Duplicate flag, unknown flag, missing artifact each produce explicit errors (FR10, FR11, FR12)
+- [x] Fixed-string matching, not regex (FR13, TR8)
+- [x] Scope is learnings/ only (FR14)
+- [x] Default kb-search path unchanged (TR5)
+- [x] `xargs` parallelism preserved; runtime < 5s (TR2, TS6) — 1.4–1.5s median
+- [x] All TS1–TS7 pass (22 assertions, ALL TESTS PASSED)
 
 ## References
 

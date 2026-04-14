@@ -16,8 +16,12 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-KB_DIR="$REPO_ROOT/knowledge-base"
+# KB_DIR is overridable by env so tests can point at a fixture corpus.
+KB_DIR="${KB_DIR:-$REPO_ROOT/knowledge-base}"
 INDEX_FILE="$KB_DIR/INDEX.md"
+LEARNINGS_DIR="$KB_DIR/project/learnings"
+TAGS_FILE="$KB_DIR/kb-tags.txt"
+CATEGORIES_FILE="$KB_DIR/kb-categories.txt"
 
 if [[ "${1:-}" == "--help" ]]; then
   sed -n '2,/^$/s/^# //p' "$0"
@@ -101,3 +105,97 @@ printf '%s\0' "${all_files[@]}" | xargs -0 -P4 -n100 bash -c '
 } > "$INDEX_FILE"
 
 echo "Generated $INDEX_FILE ($total files indexed)"
+
+# ---------------------------------------------------------------------------
+# Facet extraction: emit kb-tags.txt and kb-categories.txt from learnings/.
+#
+# Scoped to knowledge-base/project/learnings/ per FR14. Output files are
+# sorted, unique, lowercased. Safe to regenerate at any time; regeneration
+# is deterministic across runs.
+#
+# Parsing rules (TR1, TR6, TR7, TR10, TR11):
+#   - Frontmatter delimited by the first pair of ^---$ lines (`c==1` idiom).
+#     Body ^---$ horizontal rules do not re-open frontmatter.
+#   - Inline tags: `tags: [a, b, c]` — split on commas, trim, strip outer quotes.
+#   - Block tags:  `tags:\n  - a\n  - b` — continue while lines match indent+dash.
+#     Exit block state on `^[a-z_]+:` (next sibling key).
+#   - Category: single scalar, strip outer quotes, lowercase.
+#   - Empty `tags: []` emits nothing.
+#   - Files without frontmatter or without these fields are silently skipped.
+#
+# Implementation: single awk invocation per xargs batch. Parallel-safe because
+# each batch writes independent lines to its own stdout stream, which xargs
+# concatenates into the downstream pipe. Lines are always smaller than
+# PIPE_BUF (4 KB), so atomic writes hold. Deduplication happens via
+# `sort -u` after collection (TR9 — no shared append target).
+# ---------------------------------------------------------------------------
+
+if [[ -d "$LEARNINGS_DIR" ]]; then
+  facets_tmp=$(mktemp)
+  trap 'rm -f "$tmpfile" "$facets_tmp"' EXIT
+
+  find "$LEARNINGS_DIR" -type f -not -type l -name '*.md' \
+    -not -path '*/archive/*' -print0 \
+    | xargs -0 -P4 -n100 awk '
+      FNR == 1 { c = 0; in_block = 0 }
+
+      /^---$/ { c++; next }
+      c != 1 { next }
+
+      # Block continuation: indented `- value`
+      in_block && /^[[:space:]]+-[[:space:]]+/ {
+        val = $0
+        sub(/^[[:space:]]+-[[:space:]]+/, "", val)
+        gsub(/^["\047]|["\047]$/, "", val)
+        val = tolower(val)
+        if (val != "") print "tag\t" val
+        next
+      }
+      # Block terminator: next top-level frontmatter key
+      in_block && /^[a-z_]+:/ { in_block = 0 }
+
+      # Empty inline array: tags: []
+      /^tags:[[:space:]]*\[[[:space:]]*\][[:space:]]*$/ { next }
+
+      # Inline form: tags: [a, b, c]
+      /^tags:[[:space:]]*\[.*\][[:space:]]*$/ {
+        line = $0
+        sub(/^tags:[[:space:]]*\[/, "", line)
+        sub(/\][[:space:]]*$/, "", line)
+        n = split(line, parts, /[[:space:]]*,[[:space:]]*/)
+        for (i = 1; i <= n; i++) {
+          val = parts[i]
+          gsub(/^["\047]|["\047]$/, "", val)
+          val = tolower(val)
+          if (val != "") print "tag\t" val
+        }
+        next
+      }
+
+      # Block form start: tags:\n  - a\n  - b
+      /^tags:[[:space:]]*$/ { in_block = 1; next }
+
+      # Category: single scalar
+      /^category:[[:space:]]*/ {
+        val = $0
+        sub(/^category:[[:space:]]*/, "", val)
+        gsub(/^["\047]|["\047]$/, "", val)
+        val = tolower(val)
+        if (val != "") print "cat\t" val
+      }
+    ' > "$facets_tmp"
+
+  # Split the tagged stream into two sorted, unique artifacts.
+  # `grep ... || true` avoids set -e tripping when a facet type has no entries.
+  { grep $'^tag\t' "$facets_tmp" || true; } | cut -f2 | LC_ALL=C sort -u > "$TAGS_FILE"
+  { grep $'^cat\t' "$facets_tmp" || true; } | cut -f2 | LC_ALL=C sort -u > "$CATEGORIES_FILE"
+
+  tag_count=$(wc -l < "$TAGS_FILE" | tr -d '[:space:]')
+  cat_count=$(wc -l < "$CATEGORIES_FILE" | tr -d '[:space:]')
+  echo "Generated $TAGS_FILE ($tag_count tags) and $CATEGORIES_FILE ($cat_count categories)"
+else
+  # Emit empty artifacts so downstream tooling has a stable contract.
+  : > "$TAGS_FILE"
+  : > "$CATEGORIES_FILE"
+  echo "Note: $LEARNINGS_DIR not found; emitted empty facet artifacts."
+fi
