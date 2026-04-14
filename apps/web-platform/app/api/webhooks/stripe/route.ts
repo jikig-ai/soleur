@@ -143,20 +143,39 @@ export async function POST(request: Request) {
           : invoice.customer?.id;
 
       if (customerId) {
-        const { error } = await supabase
+        const { data: user, error: fetchError } = await supabase
           .from("users")
-          .update({ subscription_status: "active" })
-          .eq("stripe_customer_id", customerId);
+          .select("subscription_status")
+          .eq("stripe_customer_id", customerId)
+          .single();
 
-        if (error) {
+        if (fetchError) {
           logger.error(
-            { error, customerId },
-            "Webhook: failed to update user on invoice.paid",
+            { error: fetchError, customerId },
+            "Webhook: failed to fetch user on invoice.paid",
           );
           return NextResponse.json(
-            { error: "DB update failed" },
+            { error: "DB fetch failed" },
             { status: 500 },
           );
+        }
+
+        if (user?.subscription_status === "past_due" || user?.subscription_status === "unpaid") {
+          const { error } = await supabase
+            .from("users")
+            .update({ subscription_status: "active" })
+            .eq("stripe_customer_id", customerId);
+
+          if (error) {
+            logger.error(
+              { error, customerId },
+              "Webhook: failed to update user on invoice.paid",
+            );
+            return NextResponse.json(
+              { error: "DB update failed" },
+              { status: 500 },
+            );
+          }
         }
       }
       break;
