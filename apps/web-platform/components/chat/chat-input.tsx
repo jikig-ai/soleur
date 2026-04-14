@@ -24,6 +24,8 @@ interface ChatInputProps {
   conversationId?: string;
   /** Insert text at the current cursor position (used by AtMentionDropdown selection). */
   insertRef?: React.MutableRefObject<((text: string, replaceFrom: number) => void) | null>;
+  /** When true, Enter key defers to the @mention dropdown instead of sending. */
+  atMentionVisible?: boolean;
 }
 
 export function ChatInput({
@@ -34,6 +36,7 @@ export function ChatInput({
   placeholder = "Ask your team anything... or @mention a leader",
   conversationId,
   insertRef,
+  atMentionVisible = false,
 }: ChatInputProps) {
   const [value, setValue] = useState("");
   const [attachments, setAttachments] = useState<PendingAttachment[]>([]);
@@ -213,11 +216,12 @@ export function ChatInput({
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
       if (e.key === "Enter" && !e.shiftKey) {
+        if (atMentionVisible) return;
         e.preventDefault();
         handleSubmit();
       }
     },
-    [handleSubmit],
+    [handleSubmit, atMentionVisible],
   );
 
   const handleChange = useCallback(

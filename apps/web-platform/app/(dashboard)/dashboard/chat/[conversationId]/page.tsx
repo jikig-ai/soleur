@@ -426,6 +426,7 @@ export default function ChatPage() {
               setAtVisible(true);
             }}
             onAtDismiss={() => setAtVisible(false)}
+            atMentionVisible={atVisible}
             disabled={status !== "connected"}
             placeholder={
               status === "connected"

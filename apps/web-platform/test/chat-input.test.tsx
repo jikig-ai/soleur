@@ -120,4 +120,13 @@ describe("ChatInput", () => {
     await userEvent.click(sendButton);
     expect(onSend).toHaveBeenCalledWith("click send");
   });
+
+  it("does not send on Enter when atMentionVisible is true", async () => {
+    const onSend = vi.fn();
+    setup({ onSend, atMentionVisible: true });
+    const textarea = screen.getByRole("textbox");
+    await userEvent.type(textarea, "hello");
+    await userEvent.keyboard("{Enter}");
+    expect(onSend).not.toHaveBeenCalled();
+  });
 });
