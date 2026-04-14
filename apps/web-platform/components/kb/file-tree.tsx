@@ -110,6 +110,7 @@ function TreeItem({
   const [deleteState, setDeleteState] = useState<DeleteState>({ status: "idle" });
   const [renameState, setRenameState] = useState<RenameState>({ status: "idle" });
   const renameInputRef = useRef<HTMLInputElement>(null);
+  const renameSubmittedRef = useRef(false);
 
   const renameFile = useCallback(async (filePath: string, newName: string) => {
     setRenameState({ status: "renaming" });
@@ -338,11 +339,13 @@ function TreeItem({
   const baseName = ext ? node.name.slice(0, -ext.length) : node.name;
 
   const handleRenameConfirm = useCallback((inputValue: string) => {
+    if (renameSubmittedRef.current) return;
     const trimmed = inputValue.trim();
     if (!trimmed || trimmed === baseName) {
       setRenameState({ status: "idle" });
       return;
     }
+    renameSubmittedRef.current = true;
     if (node.path) {
       renameFile(node.path, trimmed + ext);
     }
@@ -420,6 +423,7 @@ function TreeItem({
               onClick={(e) => {
                 e.preventDefault();
                 e.stopPropagation();
+                renameSubmittedRef.current = false;
                 setRenameState({ status: "editing", currentName: node.name });
               }}
               className="rounded p-1 text-neutral-500 hover:bg-neutral-700 hover:text-neutral-300"

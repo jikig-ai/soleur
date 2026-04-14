@@ -157,6 +157,12 @@ function setupFullMocks() {
   });
   // File exists on GitHub with a blob SHA
   mockGithubApiGet.mockImplementation((_id: number, path: string) => {
+    // Repo metadata API — returns default branch
+    if (path.match(/\/repos\/[^/]+\/[^/]+$/) && !path.includes("/contents/")) {
+      return Promise.resolve({
+        default_branch: "main",
+      });
+    }
     // Contents API — returns file metadata
     if (path.includes("/contents/")) {
       return Promise.resolve({
@@ -416,6 +422,7 @@ describe("PATCH /api/kb/file/[...path] (rename)", () => {
       .mockRejectedValueOnce(
         new Error("GitHub API request failed: 404 /repos/test-owner/test-repo/contents/knowledge-base/overview/renamed.png"),
       )
+      .mockResolvedValueOnce({ default_branch: "main" })
       .mockResolvedValueOnce({
         object: { sha: "commitsha000", type: "commit" },
       })
@@ -460,6 +467,7 @@ describe("PATCH /api/kb/file/[...path] (rename)", () => {
       .mockRejectedValueOnce(
         new Error("GitHub API request failed: 404 /repos/test-owner/test-repo/contents/knowledge-base/overview/renamed.png"),
       )
+      .mockResolvedValueOnce({ default_branch: "main" })
       .mockResolvedValueOnce({
         object: { sha: "commitsha000", type: "commit" },
       })
@@ -490,6 +498,7 @@ describe("PATCH /api/kb/file/[...path] (rename)", () => {
       .mockRejectedValueOnce(
         new Error("GitHub API request failed: 404 /repos/test-owner/test-repo/contents/knowledge-base/overview/renamed.png"),
       )
+      .mockResolvedValueOnce({ default_branch: "main" })
       .mockResolvedValueOnce({
         object: { sha: "commitsha000", type: "commit" },
       })
@@ -541,6 +550,7 @@ describe("PATCH /api/kb/file/[...path] (rename)", () => {
       .mockRejectedValueOnce(
         new Error("GitHub API request failed: 404 /repos/test-owner/test-repo/contents/knowledge-base/overview/renamed.png"),
       )
+      .mockResolvedValueOnce({ default_branch: "main" })
       .mockResolvedValueOnce({
         object: { sha: "commitsha000", type: "commit" },
       })
@@ -577,6 +587,7 @@ describe("PATCH /api/kb/file/[...path] (rename)", () => {
       .mockRejectedValueOnce(
         new Error("GitHub API request failed: 404 /repos/test-owner/test-repo/contents/knowledge-base/overview/renamed.png"),
       )
+      .mockResolvedValueOnce({ default_branch: "main" })
       .mockResolvedValueOnce({
         object: { sha: "commitsha000", type: "commit" },
       })

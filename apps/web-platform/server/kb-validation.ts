@@ -22,6 +22,10 @@ export function sanitizeFilename(
     return { valid: false, sanitized, error: "Empty filename" };
   }
 
+  if (sanitized.includes("/") || sanitized.includes("\\")) {
+    return { valid: false, sanitized, error: "Filename cannot contain path separators" };
+  }
+
   if (sanitized.startsWith(".")) {
     return { valid: false, sanitized, error: "Filename cannot start with a dot" };
   }

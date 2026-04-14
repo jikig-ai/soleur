@@ -404,8 +404,12 @@ export async function PATCH(
       // 404 is expected — destination doesn't exist, proceed
     }
 
-    // 3. GET current branch ref
-    const defaultBranch = userData.repo_url.includes("github.com") ? "main" : "main";
+    // 3. GET current branch ref (fetch actual default branch from repo metadata)
+    const repoMeta = await githubApiGet<{ default_branch: string }>(
+      userData.github_installation_id,
+      `/repos/${owner}/${repo}`,
+    );
+    const defaultBranch = repoMeta.default_branch;
     const refData = await githubApiGet<{ object: { sha: string } }>(
       userData.github_installation_id,
       `/repos/${owner}/${repo}/git/ref/heads/${defaultBranch}`,
@@ -432,22 +436,30 @@ export async function PATCH(
       },
     );
 
+    if (!treeData?.sha) {
+      throw new Error("GitHub API: tree creation returned no data");
+    }
+
     // 6. POST /git/commits
     const newCommit = await githubApiPost<{ sha: string }>(
       userData.github_installation_id,
       `/repos/${owner}/${repo}/git/commits`,
       {
         message: `Rename ${oldName} to ${sanitizedNewName} via Soleur`,
-        tree: treeData!.sha,
+        tree: treeData.sha,
         parents: [currentCommitSha],
       },
     );
+
+    if (!newCommit?.sha) {
+      throw new Error("GitHub API: commit creation returned no data");
+    }
 
     // 7. PATCH /git/refs to update branch pointer
     await githubApiPost(
       userData.github_installation_id,
       `/repos/${owner}/${repo}/git/refs/heads/${defaultBranch}`,
-      { sha: newCommit!.sha },
+      { sha: newCommit.sha },
       "PATCH",
     );
 
