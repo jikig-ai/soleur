@@ -184,6 +184,8 @@ describe("FileTree rename UI", () => {
   });
 
   it("cancels edit mode on Escape without making API call", () => {
+    const fetchSpy = vi.spyOn(global, "fetch");
+
     setupKbMock(makeTree([overviewDir]));
     render(<FileTree />);
 
@@ -200,7 +202,7 @@ describe("FileTree rename UI", () => {
     // Input should be gone
     expect(fileItem.querySelector("input[type='text']")).toBeNull();
     // No fetch call
-    expect(global.fetch).not.toHaveBeenCalled();
+    expect(fetchSpy).not.toHaveBeenCalled();
   });
 
   it("confirms rename on blur", async () => {
