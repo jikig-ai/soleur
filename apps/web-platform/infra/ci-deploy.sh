@@ -4,6 +4,9 @@ set -euo pipefail
 # Deploy script invoked by the webhook listener (adnanh/webhook).
 # The webhook sets SSH_ORIGINAL_COMMAND from the JSON payload's "command" field.
 # Parses it for structured "deploy <component> <image> <tag>" format.
+#
+# State file protocol and reason taxonomy:
+#   plugins/soleur/skills/postmerge/references/deploy-status-debugging.md
 
 readonly LOG_TAG="ci-deploy"
 
@@ -52,13 +55,22 @@ write_state() {
 # final_write_state records an explicit exit and touches a sentinel so the EXIT
 # trap does not overwrite the reason with "unhandled". Use at every known failure
 # or success exit.
+#
+# Sentinel is touched BEFORE write_state (issue #2199 fix 2): if SIGKILL lands
+# between mv and touch, the EXIT trap would see no sentinel and overwrite the
+# just-written explicit reason with "unhandled". Touching first means a kill
+# mid-write leaves the sentinel + (possibly old) state rather than no sentinel
+# + correct state -- the trap leaves the reason alone either way.
 final_write_state() {
-  write_state "$1" "$2"
   touch "${STATE_FILE}.final" 2>/dev/null || true
+  write_state "$1" "$2"
 }
 
-# Initial write: "running" (exit_code=-1 signals in-progress).
-write_state -1 "running"
+# Clear any stale sentinel from a prior SIGKILLed invocation (issue #2199 fix 3).
+# Without this, a previous run killed between final_write_state and the EXIT
+# trap's `rm -f` leaves the sentinel behind, causing this run's failure reason
+# to be silently skipped by the "unhandled" guard below.
+rm -f "${STATE_FILE}.final"
 
 # On any non-zero exit that did not call final_write_state, record "unhandled".
 # The sentinel file tells us whether an explicit reason was already written.
@@ -181,6 +193,12 @@ flock -n 200 || {
   final_write_state 1 "lock_contention"
   exit 1
 }
+
+# Initial "running" state write (issue #2199 fix 1): deferred until AFTER flock
+# acquisition and SSH_ORIGINAL_COMMAND parsing so COMPONENT/IMAGE/TAG are populated.
+# Writing earlier produced an empty-tag "running" state, and a loser that failed
+# flock -n would write "lock_contention" over the winner's in-progress state.
+write_state -1 "running"
 
 # Check available disk space (minimum 5GB required for image pull + extraction)
 AVAIL_KB=$(df --output=avail / | tail -1 | tr -d ' ')

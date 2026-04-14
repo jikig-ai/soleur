@@ -1119,6 +1119,135 @@ assert_state_contains "canary health failure writes reason=canary_failed" \
   "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0" \
   "export MOCK_CURL_CANARY_FAIL=1"
 
+# Issue #2199 fix 1: initial "running" write must happen AFTER command parsing,
+# so tag/component are populated (not empty strings).
+# We snapshot the state file mid-deploy by making `df` (called after the initial
+# "running" write) copy the live state file to a side location before returning.
+assert_initial_running_has_tag() {
+  TOTAL=$((TOTAL + 1))
+
+  local state_dir
+  state_dir=$(mktemp -d)
+  local state_file="$state_dir/ci-deploy.state"
+  local snapshot="$state_dir/running.snapshot"
+
+  local output actual_exit
+  output=$(
+    export SSH_ORIGINAL_COMMAND="deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0"
+    MOCK_DIR=$(mktemp -d)
+    trap 'rm -rf "$MOCK_DIR"' EXIT
+    export CI_DEPLOY_LOCK="$MOCK_DIR/ci-deploy.lock"
+    export CI_DEPLOY_STATE="$state_file"
+    export RUNNING_SNAPSHOT="$snapshot"
+    create_base_mocks "$MOCK_DIR"
+
+    # df runs immediately after the initial "running" write_state; snapshot state here.
+    cat > "$MOCK_DIR/df" << 'MOCK'
+#!/bin/bash
+if [[ -n "${RUNNING_SNAPSHOT:-}" ]] && [[ -f "${CI_DEPLOY_STATE:-}" ]]; then
+  cp "$CI_DEPLOY_STATE" "$RUNNING_SNAPSHOT"
+fi
+echo "Avail"
+echo "20000000"
+MOCK
+    chmod +x "$MOCK_DIR/df"
+
+    export DOPPLER_TOKEN="dp.st.prd.mock-token"
+    export PATH="$MOCK_DIR:$PATH"
+    bash "$DEPLOY_SCRIPT" 2>&1
+  ) && actual_exit=0 || actual_exit=$?
+
+  if [[ ! -f "$snapshot" ]]; then
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: initial running state snapshot was not captured"
+    echo "        output: $output"
+    rm -rf "$state_dir"
+    return
+  fi
+
+  local snap_reason snap_exit snap_tag snap_component
+  if command -v jq >/dev/null 2>&1; then
+    snap_reason=$(jq -r '.reason // ""' "$snapshot" 2>/dev/null)
+    snap_exit=$(jq -r '.exit_code // ""' "$snapshot" 2>/dev/null)
+    snap_tag=$(jq -r '.tag // ""' "$snapshot" 2>/dev/null)
+    snap_component=$(jq -r '.component // ""' "$snapshot" 2>/dev/null)
+  else
+    snap_reason=$(grep -oE '"reason":"[^"]*"' "$snapshot" | sed 's/.*:"\(.*\)"/\1/')
+    snap_exit=$(grep -oE '"exit_code":-?[0-9]+' "$snapshot" | sed 's/.*://')
+    snap_tag=$(grep -oE '"tag":"[^"]*"' "$snapshot" | sed 's/.*:"\(.*\)"/\1/')
+    snap_component=$(grep -oE '"component":"[^"]*"' "$snapshot" | sed 's/.*:"\(.*\)"/\1/')
+  fi
+
+  if [[ "$snap_reason" == "running" ]] && [[ "$snap_exit" == "-1" ]] && \
+     [[ "$snap_tag" == "v1.0.0" ]] && [[ "$snap_component" == "web-platform" ]]; then
+    PASS=$((PASS + 1))
+    echo "  PASS: initial running state has populated tag/component (tag=$snap_tag component=$snap_component)"
+  else
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: initial running state has populated tag/component"
+    echo "        expected: reason=running exit_code=-1 tag=v1.0.0 component=web-platform"
+    echo "        actual:   reason=$snap_reason exit_code=$snap_exit tag=$snap_tag component=$snap_component"
+    echo "        snapshot: $(cat "$snapshot")"
+  fi
+
+  rm -rf "$state_dir"
+}
+
+assert_initial_running_has_tag
+
+# Issue #2199 fix 3: a stale ${STATE_FILE}.final sentinel from a prior SIGKILLed
+# run must not suppress the current run's failure reason. We pre-create the
+# sentinel, trigger a known failure (low disk), and verify the explicit reason
+# is still written (not silently dropped by the EXIT trap's "unhandled" guard).
+assert_stale_sentinel_cleared() {
+  TOTAL=$((TOTAL + 1))
+
+  local state_dir
+  state_dir=$(mktemp -d)
+  local state_file="$state_dir/ci-deploy.state"
+  # Pre-create the stale sentinel as if a prior run was SIGKILLed.
+  touch "${state_file}.final"
+
+  local output actual_exit
+  output=$(
+    export CI_DEPLOY_STATE="$state_file"
+    export MOCK_DF_LOW=1
+    run_deploy_traced "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0" 2>&1
+  ) && actual_exit=0 || actual_exit=$?
+
+  local actual_reason actual_exit_code
+  if [[ ! -f "$state_file" ]]; then
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: stale sentinel test (state file was never written)"
+    echo "        output: $output"
+    rm -rf "$state_dir"
+    return
+  fi
+
+  if command -v jq >/dev/null 2>&1; then
+    actual_reason=$(jq -r '.reason // ""' "$state_file" 2>/dev/null)
+    actual_exit_code=$(jq -r '.exit_code // ""' "$state_file" 2>/dev/null)
+  else
+    actual_reason=$(grep -oE '"reason":"[^"]*"' "$state_file" | sed 's/.*:"\(.*\)"/\1/')
+    actual_exit_code=$(grep -oE '"exit_code":-?[0-9]+' "$state_file" | sed 's/.*://')
+  fi
+
+  if [[ "$actual_reason" == "insufficient_disk_space" ]] && [[ "$actual_exit_code" == "1" ]]; then
+    PASS=$((PASS + 1))
+    echo "  PASS: stale sentinel cleared; new run's explicit reason is preserved"
+  else
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: stale sentinel cleared; new run's explicit reason is preserved"
+    echo "        expected: reason=insufficient_disk_space exit_code=1"
+    echo "        actual:   reason=$actual_reason exit_code=$actual_exit_code"
+    echo "        state:    $(cat "$state_file")"
+  fi
+
+  rm -rf "$state_dir"
+}
+
+assert_stale_sentinel_cleared
+
 echo ""
 echo "=== Results: $PASS/$TOTAL passed, $FAIL failed ==="
 
