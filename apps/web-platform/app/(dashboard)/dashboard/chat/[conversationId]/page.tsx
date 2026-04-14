@@ -412,7 +412,7 @@ export default function ChatPage() {
             onSelect={(id) => {
               setAtVisible(false);
               if (insertRef.current) {
-                insertRef.current(`@${id}`, atPosition);
+                insertRef.current(`@${getDisplayName(id)}`, atPosition);
               }
             }}
             onDismiss={() => setAtVisible(false)}

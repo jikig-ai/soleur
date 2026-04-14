@@ -11,12 +11,14 @@ describe("validateCustomName", () => {
     expect(validateCustomName("Alex")).toEqual({ valid: true });
   });
 
-  test("accepts name with spaces", () => {
-    expect(validateCustomName("Alex Smith")).toEqual({ valid: true });
+  test("rejects name with spaces (single-word enforcement)", () => {
+    const result = validateCustomName("Alex Smith");
+    expect(result.valid).toBe(false);
+    expect(errorOf(result)).toMatch(/single word/i);
   });
 
-  test("accepts name with numbers", () => {
-    expect(validateCustomName("Agent 007")).toEqual({ valid: true });
+  test("accepts name with numbers (no spaces)", () => {
+    expect(validateCustomName("Agent007")).toEqual({ valid: true });
   });
 
   test("accepts single character name", () => {
@@ -44,7 +46,7 @@ describe("validateCustomName", () => {
   test("rejects name with special characters", () => {
     const result = validateCustomName("Alex!@#");
     expect(result.valid).toBe(false);
-    expect(errorOf(result)).toMatch(/alphanumeric/i);
+    expect(errorOf(result)).toMatch(/single word/i);
   });
 
   test("rejects name with angle brackets (XSS prevention)", () => {
@@ -93,6 +95,7 @@ describe("validateCustomName", () => {
   });
 
   test("trims leading/trailing whitespace before validation", () => {
+    // After trimming "  Alex  " becomes "Alex" which is valid single-word
     expect(validateCustomName("  Alex  ")).toEqual({ valid: true });
   });
 
