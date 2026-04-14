@@ -23,6 +23,7 @@ legal-compliance
 logic-errors
 logic_error
 marketing
+pecat
 performance
 performance-issues
 plugin-architecture

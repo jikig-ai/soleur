@@ -52,7 +52,8 @@ fi
 # Each batch processes ~100 files in a single bash process, 4 batches at a time.
 # Output: one "rel_path\ttitle" per line, sorted.
 tmpfile=$(mktemp)
-trap 'rm -f "$tmpfile"' EXIT
+facets_tmp=$(mktemp)
+trap 'rm -f "$tmpfile" "$facets_tmp"' EXIT
 
 printf '%s\0' "${all_files[@]}" | xargs -0 -P4 -n100 bash -c '
   KB_DIR="$1"; shift
@@ -131,9 +132,6 @@ echo "Generated $INDEX_FILE ($total files indexed)"
 # ---------------------------------------------------------------------------
 
 if [[ -d "$LEARNINGS_DIR" ]]; then
-  facets_tmp=$(mktemp)
-  trap 'rm -f "$tmpfile" "$facets_tmp"' EXIT
-
   find "$LEARNINGS_DIR" -type f -not -type l -name '*.md' \
     -not -path '*/archive/*' -print0 \
     | xargs -0 -P4 -n100 awk '
@@ -151,8 +149,10 @@ if [[ -d "$LEARNINGS_DIR" ]]; then
         if (val != "") print "tag\t" val
         next
       }
-      # Block terminator: next top-level frontmatter key
-      in_block && /^[a-z_]+:/ { in_block = 0 }
+      # Block terminator: any line that is not a continuation of the list.
+      # Matches the next top-level frontmatter key (alpha, digit, or underscore)
+      # or a blank/body line. Only indented "- value" lines stay in block state.
+      in_block && /^[^[:space:]-]/ { in_block = 0 }
 
       # Empty inline array: tags: []
       /^tags:[[:space:]]*\[[[:space:]]*\][[:space:]]*$/ { next }

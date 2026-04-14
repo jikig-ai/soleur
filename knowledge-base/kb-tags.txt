@@ -573,7 +573,7 @@ on-click-fetch
 onboarding
 onboarding describes dev plugin not platform
 one-shot
-open-red
+open-redrformance-issues
 openhands
 operations
 operator-precedence
@@ -947,8 +947,8 @@ tier-0
 tiered-gating
 timer-leak
 toctou
+token-bu
 token-budget
-token-buirect
 token-cache-isolation
 tokenization
 tool-integration

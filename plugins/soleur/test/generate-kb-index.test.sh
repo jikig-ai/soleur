@@ -134,6 +134,18 @@ second_sum=$(sha256sum "$kb/kb-tags.txt" | awk '{print $1}')
 assert_eq "$first_sum" "$second_sum" "TS5: regeneration is deterministic"
 
 # ---------------------------------------------------------------------------
+# TR6 — Best-effort extraction on dirty values, graceful skip of junk
+# ---------------------------------------------------------------------------
+echo ""
+echo "--- TR6: dirty tag values tolerated, clean siblings still captured ---"
+kb=$(setup_kb dirty dirty.md)
+run_generator "$kb"
+tags_out=$(cat "$kb/kb-tags.txt")
+assert_contains "$tags_out" "clean-tag" "dirty: clean sibling tag still captured"
+cats_out=$(cat "$kb/kb-categories.txt")
+assert_contains "$cats_out" "messy-category" "dirty: category still emitted (lowercased)"
+
+# ---------------------------------------------------------------------------
 # Artifact invariants — sorted, unique, lowercase, no blank lines
 # ---------------------------------------------------------------------------
 echo ""
