@@ -3,9 +3,22 @@ title: "feat: Team Settings Page improvements"
 type: feat
 date: 2026-04-14
 semver: patch
+deepened: 2026-04-14
 ---
 
 # feat: Team Settings Page improvements
+
+## Enhancement Summary
+
+**Deepened on:** 2026-04-14
+**Sections enhanced:** 2 (Proposed Solution, Test Scenarios)
+**Research sources:** Codebase patterns, billing learnings, Next.js App Router conventions
+
+### Key Improvements
+
+1. Added concrete billing page implementation template based on existing settings page pattern
+2. Added edge case for `settings-content.tsx` cleanup -- verify `Link` import can be removed after Connected Services section removal
+3. Added mobile tab bar width consideration for 4 tabs vs 3
 
 ## Overview
 
@@ -45,6 +58,64 @@ Create a new route at `/dashboard/settings/billing` that hosts the existing `Bil
 **Files to create:**
 
 - `apps/web-platform/app/(dashboard)/dashboard/settings/billing/page.tsx` -- new server component that fetches billing data and renders `BillingSection` wrapped in `SettingsShell`
+
+#### Implementation Template
+
+The billing page follows the same server component pattern as the General settings page. Key data fetching:
+
+```typescript
+// app/(dashboard)/dashboard/settings/billing/page.tsx
+import { redirect } from "next/navigation";
+import { createClient, createServiceClient } from "@/lib/supabase/server";
+import { BillingSection } from "@/components/settings/billing-section";
+import { SettingsShell } from "@/components/settings/settings-shell";
+
+export default async function BillingPage() {
+  const supabase = await createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+
+  if (!user) {
+    redirect("/login");
+  }
+
+  const service = createServiceClient();
+
+  const [
+    { data: userData },
+    { count: conversationCount },
+    { count: serviceTokenCount },
+  ] = await Promise.all([
+    service
+      .from("users")
+      .select("subscription_status, current_period_end, cancel_at_period_end, created_at")
+      .eq("id", user.id)
+      .single(),
+    service
+      .from("conversations")
+      .select("*", { count: "exact", head: true })
+      .eq("user_id", user.id),
+    service
+      .from("service_tokens")
+      .select("*", { count: "exact", head: true })
+      .eq("user_id", user.id),
+  ]);
+
+  return (
+    <SettingsShell>
+      <BillingSection
+        subscriptionStatus={userData?.subscription_status ?? null}
+        currentPeriodEnd={userData?.current_period_end ?? null}
+        cancelAtPeriodEnd={userData?.cancel_at_period_end ?? false}
+        conversationCount={conversationCount ?? 0}
+        serviceTokenCount={serviceTokenCount ?? 0}
+        createdAt={userData?.created_at ?? new Date().toISOString()}
+      />
+    </SettingsShell>
+  );
+}
+```
+
+Note: `conversationCount` and `serviceTokenCount` are needed by the `CancelRetentionModal` (rendered inside `BillingSection`) to show the user what they would lose by cancelling.
 
 ### 4. Add Billing to Settings Sidebar
 
@@ -108,6 +179,16 @@ This is a straightforward UI reorganization that moves existing components to be
 - Given a user on the Billing page with an active subscription, when they click "Cancel Subscription", then the retention modal should appear and function correctly
 - Given a user on the Billing page, when they click "Manage Subscription", then they should be redirected to the Stripe billing portal
 - Given a user on mobile, when they view the bottom tab bar, then they should see all four settings tabs including Billing
+
+## Edge Cases and Implementation Notes
+
+1. **`Link` import cleanup in settings-content.tsx**: After removing the Connected Services section, verify whether the `Link` import from `next/link` is still needed. The Connected Services section is the only place using `<Link>` in `settings-content.tsx`. If no other section uses it, remove the import to avoid unused import warnings.
+
+2. **Mobile tab bar with 4 tabs**: Adding a 4th tab to the mobile bottom tab bar (`flex-1` on each) changes the width from 33% to 25% per tab. At narrow viewport widths (320px), each tab gets 80px -- verify that "Integrations" text (longest label) does not overflow or get truncated. The current `text-xs font-medium` styling should accommodate this, but verify visually.
+
+3. **General page data fetching optimization**: After removing billing-related queries, the General settings page only needs `apiKey` and basic `userData` (repo fields). The `conversationCount` and `serviceTokenCount` queries can be removed entirely from the General page since they were only consumed by `BillingSection`. The `userData` select can be narrowed from including subscription fields to just `repo_url, repo_status, repo_last_synced_at`.
+
+4. **Active tab state for billing route**: The `settings-shell.tsx` active tab detection uses `pathname.startsWith(tab.href)` for non-root tabs. Since `/dashboard/settings/billing` does not share a prefix with any other tab, this works correctly without modification.
 
 ## Non-Goals
 
