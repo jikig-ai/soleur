@@ -2,7 +2,7 @@
 title: "Custom leader names as @mention handles"
 date: 2026-04-14
 issue: 2170
-status: draft
+status: complete
 ---
 
 # Custom Leader Names as @mention Handles
@@ -34,13 +34,13 @@ When users rename domain leaders via team settings, the @mention dropdown correc
 
 - TR1: No changes to server-side `parseAtMentions` regex — custom name resolution already works via reverse-lookup
 - TR2: No changes to WebSocket message protocol — messages are sent as plain text containing `@word` tokens
-- TR3: Single-word validation uses `/^\S+$/` pattern (no whitespace characters)
+- TR3: Single-word validation uses `/^[a-zA-Z0-9]+$/` pattern (alphanumeric only, no spaces or special characters)
 
 ## Acceptance Criteria
 
-- [ ] Selecting a renamed leader from dropdown inserts `@CustomName (RoleName)` into chat text
-- [ ] Selecting a non-renamed leader from dropdown inserts `@RoleName` into chat text
-- [ ] Server correctly routes messages containing `@CustomName` to the right leader
-- [ ] Setting a custom name with spaces returns 400 from the API
-- [ ] Setting a custom name with spaces shows inline error in the UI
-- [ ] Typing `@cto` manually still routes correctly (backward compatibility)
+- [x] Selecting a renamed leader from dropdown inserts `@CustomName (RoleName)` into chat text
+- [x] Selecting a non-renamed leader from dropdown inserts `@RoleName` into chat text
+- [x] Server correctly routes messages containing `@CustomName` to the right leader
+- [x] Setting a custom name with spaces returns 400 from the API
+- [x] Setting a custom name with spaces shows inline error in the UI
+- [x] Typing `@cto` manually still routes correctly (backward compatibility)
