@@ -56,7 +56,7 @@ export function buildCspHeader(options: {
     `connect-src 'self' ${appWsOrigin} ${supabaseConnect} https://*.ingest.sentry.io https://*.ingest.de.sentry.io https://fcm.googleapis.com https://updates.push.services.mozilla.com https://*.push.apple.com`,
     "object-src 'none'",
     "frame-src 'none'",
-    "worker-src 'self'",
+    "worker-src 'self' blob:", // blob: required by pdfjs-dist Web Worker (react-pdf)
     "base-uri 'self'",
     "form-action 'self'",
     "frame-ancestors 'none'",

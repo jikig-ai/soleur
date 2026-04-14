@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-04-13
-last_reviewed: 2026-04-13
+last_updated: 2026-04-14
+last_reviewed: 2026-04-14
 review_cadence: weekly
 owner: CPO
 depends_on:
@@ -73,7 +73,7 @@ This roadmap was reviewed by CTO, CLO, CFO, and CMO before finalization.
 |-----------|--------|
 | Phase 1 (Close the Loop) | Complete. Milestone closed. 0 open, 15 closed. |
 | Phase 2 (Secure for Beta) | Complete. Milestone closed. 0 open, 20 closed. |
-| Phase 3 (Make it Sticky) | In progress. 1 open, 30 closed (milestone). Core KB, inbox, token storage, onboarding, CI/CD, service automation, analytics, sharing, usage indicator, pricing page, start fresh onboarding, post-connect sync, chat attachments, review gate notifications, guided instructions fallback, subscription management, KB file upload, invoice history, migration 021 follow-through all done. Agent work visualization (#2004) moved to Phase 4. Remaining: service automation announcement (#1944). |
+| Phase 3 (Make it Sticky) | In progress. 7 open, 23 closed (milestone). Core KB, inbox, token storage, onboarding, CI/CD, service automation, analytics, sharing, usage indicator, pricing page, start fresh onboarding, post-connect sync, chat attachments, review gate notifications, guided instructions fallback, subscription management, KB file upload, invoice history, migration 021 follow-through all done. Agent work visualization (#2004) moved to Phase 4. Remaining: service automation announcement (#1944), QA gate (#2108), KB rename files (#2152), KB PDF preview (#2153), KB delete button layout (#2154), team settings improvements (#2155), custom @mention handles (#2170). |
 | Phase 4 (Validate + Scale) | Not started. 24 open, 11 closed. Blocked by Phase 3 completion + marketing/multi-user gates. Growth audit 2026-04-13 added 7 issues (6 marketing gate P0s + 1 outreach campaign). Agent work visualization (#2004) moved here from Phase 3. |
 | Phase 5 (Desktop Native App) | Defined. 5 open, 0 closed. Trigger-gated on user demand. |
 | Post-MVP / Later | 92 open, 343 closed. |
