@@ -199,12 +199,12 @@ it("renders custom icon when getIconPath returns a path", () => {
 
 ## Acceptance Criteria
 
-- [ ] Custom icons uploaded via team settings display on conversation list rows (both mobile and desktop layouts)
-- [ ] Custom icons display on incomplete foundation cards in the Command Center
-- [ ] Custom icons display in the "YOUR ORGANIZATION" leader strip
-- [ ] Default domain icons still display when no custom icon is set
-- [ ] Existing tests continue to pass (mock `useTeamNames` in `conversation-row.test.tsx`)
-- [ ] No new network requests introduced (icon paths come from the existing `TeamNamesProvider` context, which is already fetched once on mount)
+- [x] Custom icons uploaded via team settings display on conversation list rows (both mobile and desktop layouts)
+- [x] Custom icons display on incomplete foundation cards in the Command Center
+- [x] Custom icons display in the "YOUR ORGANIZATION" leader strip
+- [x] Default domain icons still display when no custom icon is set
+- [x] Existing tests continue to pass (mock `useTeamNames` in `conversation-row.test.tsx`)
+- [x] No new network requests introduced (icon paths come from the existing `TeamNamesProvider` context, which is already fetched once on mount)
 
 ## Test Scenarios
 

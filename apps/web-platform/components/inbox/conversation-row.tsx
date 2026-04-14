@@ -8,6 +8,7 @@ import type { ConversationWithPreview } from "@/hooks/use-conversations";
 import { relativeTime } from "@/lib/relative-time";
 import type { DomainLeaderId } from "@/server/domain-leaders";
 import { LeaderAvatar } from "@/components/leader-avatar";
+import { useTeamNames } from "@/hooks/use-team-names";
 
 const STATUS_ACTIONS: Partial<Record<ConversationStatus, { label: string; target: ConversationStatus }>> = {
   failed: { label: "Dismiss", target: "completed" },
@@ -142,6 +143,7 @@ interface ConversationRowProps {
 
 export function ConversationRow({ conversation, onArchive, onUnarchive, onStatusChange }: ConversationRowProps) {
   const router = useRouter();
+  const { getIconPath } = useTeamNames();
   const isDecision = conversation.status === "waiting_for_user";
   const isCompleted = conversation.status === "completed";
   const isArchived = conversation.archived_at !== null;
@@ -188,7 +190,7 @@ export function ConversationRow({ conversation, onArchive, onUnarchive, onStatus
         <div className="flex items-center justify-between">
           {conversation.domain_leader && (
             <div className="flex items-center gap-1.5">
-              <LeaderAvatar leaderId={conversation.domain_leader} size="md" />
+              <LeaderAvatar leaderId={conversation.domain_leader} size="md" customIconPath={getIconPath(conversation.domain_leader as DomainLeaderId)} />
             </div>
           )}
           {(onArchive || onUnarchive) && (
@@ -220,7 +222,7 @@ export function ConversationRow({ conversation, onArchive, onUnarchive, onStatus
           )}
         </div>
         {conversation.domain_leader && (
-          <LeaderAvatar leaderId={conversation.domain_leader} size="md" />
+          <LeaderAvatar leaderId={conversation.domain_leader} size="md" customIconPath={getIconPath(conversation.domain_leader as DomainLeaderId)} />
         )}
         <span className="shrink-0 text-xs text-neutral-500">
           {relativeTime(conversation.last_active)}
