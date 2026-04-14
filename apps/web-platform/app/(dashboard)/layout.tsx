@@ -6,6 +6,79 @@ import { usePathname, useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { TeamNamesProvider } from "@/hooks/use-team-names";
 
+const BANNER_DISMISS_KEY = "soleur:past_due_banner_dismissed";
+
+/**
+ * Past-due payment warning banner with sessionStorage-backed dismiss.
+ *
+ * Persists dismissal within a tab session so a page refresh does not re-show
+ * the banner, while a new tab still surfaces the warning (sessionStorage is
+ * tab-scoped).
+ *
+ * SSR-safe: the `window.sessionStorage` read is gated in a `useEffect` so the
+ * initial render (`dismissed = false`) matches the server output and hydrates
+ * cleanly; the post-hydration effect may flip state to `true`, which React
+ * reconciles as a client-only update.
+ */
+export function PaymentWarningBanner({
+  subscriptionStatus,
+}: {
+  subscriptionStatus: string | null;
+}) {
+  const [dismissed, setDismissed] = useState(false);
+
+  // Hydrate dismiss state from sessionStorage (client-only).
+  useEffect(() => {
+    try {
+      if (sessionStorage.getItem(BANNER_DISMISS_KEY) === "1") {
+        setDismissed(true);
+      }
+    } catch {
+      // sessionStorage unavailable (private mode, etc.) — keep default false.
+    }
+  }, []);
+
+  function dismissBanner() {
+    setDismissed(true);
+    try {
+      sessionStorage.setItem(BANNER_DISMISS_KEY, "1");
+    } catch {
+      // Persistence failed (quota, private mode) — in-memory state still hides
+      // the banner for the current mount, which is acceptable degradation.
+    }
+  }
+
+  if (subscriptionStatus !== "past_due" || dismissed) {
+    return null;
+  }
+
+  return (
+    <div className="border-b border-orange-800/50 bg-orange-950/30 px-4 py-3">
+      <div className="mx-auto flex max-w-4xl items-center justify-between gap-3">
+        <p className="text-sm text-neutral-200">
+          <span className="font-medium text-orange-400">Your last payment failed.</span>{" "}
+          Update your payment method to avoid service interruption.
+        </p>
+        <div className="flex shrink-0 items-center gap-2">
+          <a
+            href="/dashboard/settings"
+            className="rounded-lg bg-orange-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-orange-500"
+          >
+            Update Payment
+          </a>
+          <button
+            onClick={dismissBanner}
+            aria-label="Dismiss payment warning"
+            className="rounded p-1 text-neutral-400 hover:text-neutral-200"
+          >
+            <XIcon className="h-4 w-4" />
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 const NAV_ITEMS = [
   { href: "/dashboard", label: "Command Center", icon: GridIcon },
   { href: "/dashboard/kb", label: "Knowledge Base", icon: BookIcon },
@@ -27,7 +100,6 @@ export default function DashboardLayout({
   const [isAdmin, setIsAdmin] = useState(false);
   const [userEmail, setUserEmail] = useState<string | null>(null);
   const [subscriptionStatus, setSubscriptionStatus] = useState<string | null>(null);
-  const [bannerDismissed, setBannerDismissed] = useState(false);
 
   // Check admin status on mount
   useEffect(() => {
@@ -224,31 +296,7 @@ export default function DashboardLayout({
             </div>
           </div>
         )}
-        {subscriptionStatus === "past_due" && !bannerDismissed && (
-          <div className="border-b border-orange-800/50 bg-orange-950/30 px-4 py-3">
-            <div className="mx-auto flex max-w-4xl items-center justify-between gap-3">
-              <p className="text-sm text-neutral-200">
-                <span className="font-medium text-orange-400">Your last payment failed.</span>{" "}
-                Update your payment method to avoid service interruption.
-              </p>
-              <div className="flex shrink-0 items-center gap-2">
-                <a
-                  href="/dashboard/settings"
-                  className="rounded-lg bg-orange-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-orange-500"
-                >
-                  Update Payment
-                </a>
-                <button
-                  onClick={() => setBannerDismissed(true)}
-                  aria-label="Dismiss payment warning"
-                  className="rounded p-1 text-neutral-400 hover:text-neutral-200"
-                >
-                  <XIcon className="h-4 w-4" />
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
+        <PaymentWarningBanner subscriptionStatus={subscriptionStatus} />
         {children}
       </main>
     </div>

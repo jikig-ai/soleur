@@ -100,6 +100,11 @@ export class SlidingWindowCounter {
   get size(): number {
     return this.windows.size;
   }
+
+  /** Clear all tracked keys. For test isolation only — not for production use. */
+  reset(): void {
+    this.windows.clear();
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -199,6 +204,34 @@ const pruneShareInterval = setInterval(
   60_000,
 );
 pruneShareInterval.unref();
+
+// ---------------------------------------------------------------------------
+// HTTP rate limiter singleton for authenticated billing invoice endpoint
+// ---------------------------------------------------------------------------
+//
+// Keyed by authenticated user.id (UUID). Defense-in-depth behind Cloudflare's
+// IP-based rate limiting — user-ID keying prevents cross-user pollution on
+// shared IPs (e.g., corporate NAT) and applies consistently in all envs.
+//
+// Single-instance assumption: in-memory counter is correct for the current
+// Hetzner deployment (see apps/web-platform/infra/server.tf — no count/for_each).
+// When the infra scales to >1 instance, switch to Redis-backed throttling.
+
+export const invoiceEndpointThrottle = new SlidingWindowCounter({
+  windowMs: 60_000,
+  maxRequests: parseInt(process.env.INVOICE_RATE_LIMIT_PER_MIN ?? "10", 10),
+});
+
+const pruneInvoiceInterval = setInterval(
+  () => invoiceEndpointThrottle.prune(),
+  60_000,
+);
+pruneInvoiceInterval.unref();
+
+/** Test-only helper: clear the invoice throttle state between tests. */
+export function __resetInvoiceThrottleForTest(): void {
+  invoiceEndpointThrottle.reset();
+}
 
 // ---------------------------------------------------------------------------
 // Rate limit rejection logging + Sentry breadcrumbs
