@@ -979,7 +979,9 @@ assert_state_contains() {
   local description="$1"
   local expected_reason="$2"
   local expected_exit_code="$3"
-  local cmd="${4:-deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0}"
+  # Use ${4-default} (no colon) so an explicitly empty "" for cmd is preserved
+  # -- needed to exercise the command_missing branch.
+  local cmd="${4-deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0}"
   local extra_env="${5:-}"
 
   TOTAL=$((TOTAL + 1))
@@ -1044,16 +1046,73 @@ assert_state_contains "flock contention writes reason=lock_contention" \
   "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0" \
   "export MOCK_FLOCK_CONTENDED=1"
 
-# Docker pull failure -> unhandled exit path via set -e (we do not explicitly instrument this).
-# We expect exit_code=1; reason may be "unhandled" (from the EXIT trap) unless a handler is added.
-# Accept either to make the test robust if we later add a pull-specific handler.
-assert_state_contains_either() {
+# Docker pull failure -> unhandled exit path via set -e. Today's behavior: docker pull
+# failures fall through to the EXIT trap as "unhandled" (no explicit pull_failed handler).
+# When #2202's follow-up adds an explicit pull_failed reason, this assertion will fail
+# and force a single-direction update. See GitHub issue for the follow-up.
+assert_state_contains "docker pull fail writes reason=unhandled" \
+  "unhandled" "1" \
+  "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0" \
+  "export MOCK_DOCKER_PULL_FAIL=1"
+
+# Canary container run crash -> unhandled via set -e. Today's behavior: docker run
+# failures for the canary container fall through to the EXIT trap as "unhandled"
+# (no explicit canary_crashed handler). When the follow-up adds a canary_crashed
+# reason, this assertion will fail and force a single-direction update.
+assert_state_contains "canary container run crash writes reason=unhandled" \
+  "unhandled" "1" \
+  "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0" \
+  "export MOCK_DOCKER_RUN_FAIL_CANARY=1"
+
+# Canary health check failure -> reason=canary_failed
+assert_state_contains "canary health failure writes reason=canary_failed" \
+  "canary_failed" "1" \
+  "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0" \
+  "export MOCK_CURL_CANARY_FAIL=1"
+
+# -- Command parsing reason coverage (#2202) --
+# These validations run BEFORE flock and Doppler resolution, so run_deploy_traced
+# (with its generic docker/doppler mocks) exercises them correctly.
+
+# Empty SSH_ORIGINAL_COMMAND -> reason=command_missing
+assert_state_contains "empty command writes reason=command_missing" \
+  "command_missing" "1" \
+  ""
+
+# Wrong field count (not 4) -> reason=command_malformed
+assert_state_contains "malformed command writes reason=command_malformed" \
+  "command_malformed" "1" \
+  "deploy"
+
+# Unknown action verb -> reason=action_unknown
+assert_state_contains "unknown action writes reason=action_unknown" \
+  "action_unknown" "1" \
+  "notify web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0"
+
+# Unknown component -> reason=component_unknown
+assert_state_contains "unknown component writes reason=component_unknown" \
+  "component_unknown" "1" \
+  "deploy unknown-app ghcr.io/jikig-ai/soleur-web-platform v1.0.0"
+
+# Wrong image for component -> reason=image_mismatch
+assert_state_contains "wrong image writes reason=image_mismatch" \
+  "image_mismatch" "1" \
+  "deploy web-platform ghcr.io/jikig-ai/soleur-attacker-repo v1.0.0"
+
+# Malformed semver tag -> reason=tag_malformed
+assert_state_contains "bad tag writes reason=tag_malformed" \
+  "tag_malformed" "1" \
+  "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform latest"
+
+# -- Doppler reason coverage (#2202) --
+# Doppler reasons require run_deploy_doppler (restricted PATH + configurable doppler mock).
+# This helper is a variant of assert_state_contains that uses run_deploy_doppler.
+assert_state_contains_doppler() {
   local description="$1"
-  local expected_reason_a="$2"
-  local expected_reason_b="$3"
-  local expected_exit_code="$4"
-  local cmd="${5:-deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0}"
-  local extra_env="${6:-}"
+  local expected_reason="$2"
+  local expected_exit_code="$3"
+  local cmd="${4:-deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0}"
+  local extra_env="${5:-}"
 
   TOTAL=$((TOTAL + 1))
 
@@ -1065,7 +1124,7 @@ assert_state_contains_either() {
   output=$(
     eval "$extra_env"
     export CI_DEPLOY_STATE="$state_file"
-    run_deploy_traced "$cmd" 2>&1
+    run_deploy_doppler "$cmd" 2>&1
   ) && actual_exit=0 || actual_exit=$?
 
   local actual_reason actual_exit_code
@@ -1085,39 +1144,123 @@ assert_state_contains_either() {
     actual_exit_code=$(grep -oE '"exit_code":-?[0-9]+' "$state_file" | sed 's/.*://')
   fi
 
-  if { [[ "$actual_reason" == "$expected_reason_a" ]] || [[ "$actual_reason" == "$expected_reason_b" ]]; } && \
-     [[ "$actual_exit_code" == "$expected_exit_code" ]]; then
+  if [[ "$actual_reason" == "$expected_reason" ]] && [[ "$actual_exit_code" == "$expected_exit_code" ]]; then
     PASS=$((PASS + 1))
     echo "  PASS: $description (reason=$actual_reason exit_code=$actual_exit_code)"
   else
     FAIL=$((FAIL + 1))
     echo "  FAIL: $description"
-    echo "        expected: reason=$expected_reason_a|$expected_reason_b exit_code=$expected_exit_code"
+    echo "        expected: reason=$expected_reason exit_code=$expected_exit_code"
     echo "        actual:   reason=$actual_reason exit_code=$actual_exit_code"
     echo "        state:    $(cat "$state_file")"
+    echo "        output:   $output"
   fi
 
   rm -rf "$state_dir"
 }
 
-# Docker pull failure -> exit_code=1, reason=unhandled (implicit via EXIT trap, no explicit handler)
-assert_state_contains_either "docker pull fail writes exit_code=1" \
-  "unhandled" "pull_failed" "1" \
+# Doppler binary absent -> reason=doppler_unavailable
+assert_state_contains_doppler "missing doppler binary writes reason=doppler_unavailable" \
+  "doppler_unavailable" "1" \
   "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0" \
-  "export MOCK_DOCKER_PULL_FAIL=1"
+  "export MOCK_DOPPLER_MISSING=1"
 
-# Canary run crash (docker run for canary fails) -> exit via set -e, reason=unhandled
-# (no explicit handler around `docker run ... canary` because it's controlled by set -e).
-assert_state_contains_either "canary container run crash writes exit_code=1" \
-  "unhandled" "canary_sandbox_failed" "1" \
+# DOPPLER_TOKEN unset -> reason=doppler_token_missing
+assert_state_contains_doppler "unset DOPPLER_TOKEN writes reason=doppler_token_missing" \
+  "doppler_token_missing" "1" \
   "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0" \
-  "export MOCK_DOCKER_RUN_FAIL_CANARY=1"
+  "export MOCK_DOPPLER_TOKEN_UNSET=1"
 
-# Canary health check failure -> reason=canary_failed
-assert_state_contains "canary health failure writes reason=canary_failed" \
-  "canary_failed" "1" \
+# Doppler secrets download fails -> reason=doppler_fetch_failed
+assert_state_contains_doppler "doppler fetch failure writes reason=doppler_fetch_failed" \
+  "doppler_fetch_failed" "1" \
   "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0" \
-  "export MOCK_CURL_CANARY_FAIL=1"
+  "export MOCK_DOPPLER_FAIL=1"
+
+# -- Bwrap sandbox verification failure (#2202) --
+# canary_sandbox_failed is written when `docker exec soleur-web-platform-canary bwrap ...`
+# fails after the canary is running and healthy. Needs a custom docker mock that accepts
+# `run` and curl-health-check but fails on `exec ... bwrap`.
+assert_canary_sandbox_failed_state() {
+  TOTAL=$((TOTAL + 1))
+
+  local state_dir
+  state_dir=$(mktemp -d)
+  local state_file="$state_dir/ci-deploy.state"
+
+  local output actual_exit
+  output=$(
+    export SSH_ORIGINAL_COMMAND="deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0"
+    MOCK_DIR=$(mktemp -d)
+    trap 'rm -rf "$MOCK_DIR"' EXIT
+    export CI_DEPLOY_LOCK="$MOCK_DIR/ci-deploy.lock"
+    export CI_DEPLOY_STATE="$state_file"
+    create_base_mocks "$MOCK_DIR"
+
+    # Override: docker mock where bwrap exec fails (canary reports healthy first)
+    cat > "$MOCK_DIR/docker" << 'MOCK'
+#!/bin/bash
+if [[ "${1:-}" == "run" ]]; then echo "abc123"; fi
+if [[ "${1:-}" == "exec" ]]; then
+  for arg in "$@"; do
+    if [[ "$arg" == *"bwrap"* ]]; then
+      echo "bwrap: No permissions to create new namespace" >&2
+      exit 1
+    fi
+  done
+fi
+exit 0
+MOCK
+    chmod +x "$MOCK_DIR/docker"
+
+    export DOPPLER_TOKEN="dp.st.prd.mock-token"
+    export PATH="$MOCK_DIR:$PATH"
+    bash "$DEPLOY_SCRIPT" 2>&1
+  ) && actual_exit=0 || actual_exit=$?
+
+  local actual_reason actual_exit_code
+  if [[ ! -f "$state_file" ]]; then
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: canary_sandbox_failed writes reason (state file was never written)"
+    echo "        output: $output"
+    rm -rf "$state_dir"
+    return
+  fi
+
+  if command -v jq >/dev/null 2>&1; then
+    actual_reason=$(jq -r '.reason // ""' "$state_file" 2>/dev/null || echo "")
+    actual_exit_code=$(jq -r '.exit_code // ""' "$state_file" 2>/dev/null || echo "")
+  else
+    actual_reason=$(grep -oE '"reason":"[^"]*"' "$state_file" | sed 's/.*:"\(.*\)"/\1/')
+    actual_exit_code=$(grep -oE '"exit_code":-?[0-9]+' "$state_file" | sed 's/.*://')
+  fi
+
+  if [[ "$actual_reason" == "canary_sandbox_failed" ]] && [[ "$actual_exit_code" == "1" ]]; then
+    PASS=$((PASS + 1))
+    echo "  PASS: bwrap sandbox failure writes reason=canary_sandbox_failed"
+  else
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: bwrap sandbox failure writes reason=canary_sandbox_failed"
+    echo "        expected: reason=canary_sandbox_failed exit_code=1"
+    echo "        actual:   reason=$actual_reason exit_code=$actual_exit_code"
+    echo "        state:    $(cat "$state_file")"
+    echo "        output:   $output"
+  fi
+
+  rm -rf "$state_dir"
+}
+
+assert_canary_sandbox_failed_state
+
+# Production container start failure (after canary passes) -> reason=production_start_failed
+assert_state_contains "production start failure writes reason=production_start_failed" \
+  "production_start_failed" "1" \
+  "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0" \
+  "export MOCK_DOCKER_RUN_FAIL_PROD=1"
+
+# Note: no_handler is unreachable without modifying ci-deploy.sh (requires a
+# component allowlisted in ALLOWED_IMAGES but missing from the case statement).
+# Skipped per #2202 scope.
 
 # Issue #2199 fix 1: initial "running" write must happen AFTER command parsing,
 # so tag/component are populated (not empty strings).
