@@ -41,6 +41,13 @@ Learning files already carry validated YAML frontmatter (`tags`, `category`) but
 - **FR6** — `scripts/generate-kb-index.sh` emits two sibling artifacts: `knowledge-base/_tags.txt` and `knowledge-base/_categories.txt`. Each contains sorted unique values, one per line, lowercased.
 - **FR7** — `kb-search` SKILL.md documents both flags with at least one example per flag plus one combined example.
 - **FR8** — `compound-capture/SKILL.md` Step 3 documents the faceted-query pattern and when to prefer it over raw grep.
+- **FR9** — `--tag` and `--category` are each independently optional; any combination is valid (tag-only, category-only, tag+category, flag(s)+keyword, keyword-only, neither).
+- **FR10** — Duplicate flag usage (`--tag a --tag b`) errors with usage hint. Aligned with non-goal "no multi-tag OR/AND".
+- **FR11** — Unknown flags (e.g., `--taag`) error with an explicit usage line listing supported flags.
+- **FR12** — When `_tags.txt` / `_categories.txt` are missing at query time, the skill returns an actionable error: "Autocomplete artifacts missing. Run `bash scripts/generate-kb-index.sh` to regenerate." No crash, no silent empty.
+- **FR13** — Tag/category values are treated as literals during content matching (fixed-string, not regex). `--tag n+1` matches literal `n+1`, not `n` followed by `1`.
+- **FR14** — Faceted queries (`--tag` / `--category`) scope to `knowledge-base/project/learnings/` only. Other KB subtrees (specs, plans, brainstorms) are skipped for facet lookups regardless of their frontmatter.
+- **FR15** — For tag-only or category-only queries (no keyword), output is title + path per file. No content snippet is required (there's no matching line to show).
 
 ## Technical Requirements
 
@@ -49,7 +56,9 @@ Learning files already carry validated YAML frontmatter (`tags`, `category`) but
 - **TR3** — Tag/category matching is case-insensitive via lowercasing both the user input and the stored values at comparison time.
 - **TR4** — Autocomplete artifacts (`_tags.txt`, `_categories.txt`) must be under 5 KB each at current corpus size. They are committed to git (regenerated deterministically).
 - **TR5** — `kb-search` behaves identically to current behavior when no `--tag`/`--category` flag is passed. No new runtime dependencies reachable from the default path.
-- **TR6** — Tolerate known corpus drift: learnings with missing or malformed `tags:`/`category:` fields are silently skipped during index generation, not errored (per `2026-03-05-bulk-yaml-frontmatter-migration-patterns.md`).
+- **TR6** — Tolerate known corpus drift: learnings with missing or malformed `tags:`/`category:` fields are silently skipped during index generation, not errored (per `2026-03-05-bulk-yaml-frontmatter-migration-patterns.md`). Specifically handle: files with no frontmatter at all, empty `tags: []`, quoted values (`"foo"`, `'foo'`), inline array form (`tags: [a, b]`) AND block form (`tags:\n  - a\n  - b`).
+- **TR7** — Index generator strips surrounding quotes and lowercases before dedup so `"Eager-Loading"`, `eager-loading`, and `Eager-Loading` collapse to a single `eager-loading` entry.
+- **TR8** — kb-search filter stage uses `grep -Fx` against `_tags.txt` / `_categories.txt` for validation (fixed-string, whole-line) and `grep -F` for file-list content matching. No regex interpretation of tag/category values.
 
 ## Out of Scope (tracked elsewhere if needed)
 
@@ -67,6 +76,16 @@ Learning files already carry validated YAML frontmatter (`tags`, `category`) but
 - **TS5** — `/kb-search csrf` (no flags) behaves identically to pre-change kb-search.
 - **TS6** — `scripts/generate-kb-index.sh` produces `_tags.txt` and `_categories.txt` with sorted unique lowercased values, and runtime stays under 5s.
 - **TS7** — A malformed learning file (missing `tags:` field) does not break index generation; it is skipped silently.
+- **TS8** — `/kb-search --tag` (no value) errors with usage hint listing supported flags.
+- **TS9** — `/kb-search --tag eager-loading` (no keyword) returns tag-scoped file list (title + path), no content snippet needed.
+- **TS10** — `/kb-search --tag foo --category bar` (no keyword) returns AND intersection by title + path.
+- **TS11** — `/kb-search --taag eager-loading` (typo) errors on unknown flag with usage hint.
+- **TS12** — `/kb-search --tag n+1` treats `+` literally. No regex interpretation.
+- **TS13** — Index generator handles inline form (`tags: [a, b]`) equivalently to block form (`tags:\n  - a\n  - b`).
+- **TS14** — Index generator handles a file with NO frontmatter at all (skipped, no crash). Distinct from TS7 (has frontmatter, missing `tags:` field).
+- **TS15** — Missing `_tags.txt` at query time produces actionable error ("Run `bash scripts/generate-kb-index.sh`"), not silent empty.
+- **TS16** — `--tag a --tag b` (duplicate flag) errors with "multiple --tag values not supported".
+- **TS17** — Case-fold dedup: `Eager-Loading`, `eager-loading`, and `"eager-loading"` across the corpus collapse to one entry in `_tags.txt`.
 
 ## Acceptance Criteria (from #2211)
 
