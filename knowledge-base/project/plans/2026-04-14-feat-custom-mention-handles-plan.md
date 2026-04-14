@@ -60,11 +60,11 @@ In `apps/web-platform/components/settings/team-settings.tsx`, ensure the validat
 
 ## Acceptance Criteria
 
-- [ ] Selecting a renamed leader from dropdown inserts `@CustomName (RoleName)` into chat text
-- [ ] Selecting a non-renamed leader from dropdown inserts `@RoleName` into chat text
-- [ ] Server correctly routes messages containing `@CustomName` to the right leader
-- [ ] Setting a custom name with spaces returns 400 from the API
-- [ ] Typing `@cto` manually still routes correctly (backward compatibility)
+- [x] Selecting a renamed leader from dropdown inserts `@CustomName (RoleName)` into chat text
+- [x] Selecting a non-renamed leader from dropdown inserts `@RoleName` into chat text
+- [x] Server correctly routes messages containing `@CustomName` to the right leader
+- [x] Setting a custom name with spaces returns 400 from the API
+- [x] Typing `@cto` manually still routes correctly (backward compatibility)
 
 ## Domain Review
 
