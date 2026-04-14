@@ -7,8 +7,25 @@ set -euo pipefail
 #
 # State file protocol and reason taxonomy:
 #   plugins/soleur/skills/postmerge/references/deploy-status-debugging.md
+#
+# Deploy state file exit_code protocol (#2205):
+#   0   success
+#   >0  explicit failure (see reason field)
+#   -1  ci-deploy.sh is still running (EXIT_RUNNING)
+#   -2  no state file exists (cat-deploy-state.sh fallback; EXIT_NO_PRIOR)
+#   -3  corrupt/unparseable state (cat-deploy-state.sh future; EXIT_CORRUPT)
 
 readonly LOG_TAG="ci-deploy"
+
+# Sentinel exit codes persisted in STATE_FILE. Consumed by cat-deploy-state.sh
+# and the GitHub Actions "Verify deploy script completion" step. Keep in sync
+# with the case statement in .github/workflows/web-platform-release.yml.
+readonly EXIT_RUNNING=-1
+readonly EXIT_NO_PRIOR=-2
+
+# Minimum free disk space required before starting a deploy (image pull +
+# extraction headroom). 5GB expressed in KB to match `df --output=avail`.
+readonly MIN_DISK_KB=$((5 * 1024 * 1024))  # 5GB for image pull + extraction
 
 # -----------------------------------------------------------------------------
 # Deploy state observability (#2185)
@@ -198,12 +215,12 @@ flock -n 200 || {
 # acquisition and SSH_ORIGINAL_COMMAND parsing so COMPONENT/IMAGE/TAG are populated.
 # Writing earlier produced an empty-tag "running" state, and a loser that failed
 # flock -n would write "lock_contention" over the winner's in-progress state.
-write_state -1 "running"
+write_state "$EXIT_RUNNING" "running"
 
 # Check available disk space (minimum 5GB required for image pull + extraction)
 AVAIL_KB=$(df --output=avail / | tail -1 | tr -d ' ')
-if [[ "$AVAIL_KB" -lt 5242880 ]]; then
-  logger -t "$LOG_TAG" "REJECTED: insufficient disk space (${AVAIL_KB}KB available, 5GB required)"
+if [[ "$AVAIL_KB" -lt "$MIN_DISK_KB" ]]; then
+  logger -t "$LOG_TAG" "REJECTED: insufficient disk space (${AVAIL_KB}KB available, ${MIN_DISK_KB}KB required)"
   echo "Error: insufficient disk space for deploy" >&2
   final_write_state 1 "insufficient_disk_space"
   exit 1

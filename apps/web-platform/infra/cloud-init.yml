@@ -82,6 +82,7 @@ write_files:
 
   # CI deploy script invoked by the webhook listener.
   # Content injected from ci-deploy.sh via Terraform base64encode(file()).
+  # Keep in sync with terraform_data.deploy_pipeline_fix in server.tf (#2205).
   - path: /usr/local/bin/ci-deploy.sh
     encoding: b64
     content: ${ci_deploy_script_b64}
@@ -90,6 +91,7 @@ write_files:
 
   # Deploy state reporter for /hooks/deploy-status (#2185).
   # Content injected from cat-deploy-state.sh via Terraform base64encode(file()).
+  # Keep in sync with terraform_data.deploy_pipeline_fix in server.tf (#2205).
   - path: /usr/local/bin/cat-deploy-state.sh
     encoding: b64
     content: ${cat_deploy_state_script_b64}

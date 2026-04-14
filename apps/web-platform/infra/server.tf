@@ -94,6 +94,12 @@ resource "terraform_data" "disk_monitor_install" {
 # Shows as "will be created" in CI drift reports -- expected behavior (#1409).
 # Source of truth for webhook.service: cloud-init.yml (search "path: /etc/systemd/system/webhook.service").
 # The standalone webhook.service file keeps triggers_replace and the file provisioner in sync.
+#
+# NOTE (#2205): ci-deploy.sh, cat-deploy-state.sh, and hooks.json are ALSO
+# provisioned via cloud-init write_files for fresh servers. See cloud-init.yml
+# (search "path: /usr/local/bin/ci-deploy.sh" and "/usr/local/bin/cat-deploy-state.sh").
+# Both paths must stay in sync — a change here without updating cloud-init.yml
+# means new servers provisioned from scratch will miss the change.
 resource "terraform_data" "deploy_pipeline_fix" {
   # AppArmor profile must be loaded before ci-deploy.sh references it (#1570).
   depends_on = [terraform_data.apparmor_bwrap_profile]
