@@ -203,17 +203,17 @@ type RenameState =
 
 ## Acceptance Criteria
 
-- [ ] PATCH `/api/kb/file/[...path]` renames a file on GitHub atomically (single commit via Git Trees API) and syncs workspace
-- [ ] Security validations match DELETE route parity (CSRF, auth, path traversal, null bytes, symlinks, .md rejection)
-- [ ] Extension preservation enforced -- cannot change file extension during rename
-- [ ] Rename button (pencil icon) appears on hover for attachment files only
-- [ ] Clicking pencil enters inline edit mode with input pre-filled with current basename (without extension)
-- [ ] Extension displayed as static suffix next to input
-- [ ] Enter confirms rename, Escape cancels, blur confirms
-- [ ] Duplicate filename at destination returns 409
-- [ ] Error states display inline (same pattern as delete errors)
-- [ ] Tree refreshes after successful rename
-- [ ] `sanitizeFilename` extracted to shared module, upload route updated to import from it
+- [x] PATCH `/api/kb/file/[...path]` renames a file on GitHub atomically (single commit via Git Trees API) and syncs workspace
+- [x] Security validations match DELETE route parity (CSRF, auth, path traversal, null bytes, symlinks, .md rejection)
+- [x] Extension preservation enforced -- cannot change file extension during rename
+- [x] Rename button (pencil icon) appears on hover for attachment files only
+- [x] Clicking pencil enters inline edit mode with input pre-filled with current basename (without extension)
+- [x] Extension displayed as static suffix next to input
+- [x] Enter confirms rename, Escape cancels, blur confirms
+- [x] Duplicate filename at destination returns 409
+- [x] Error states display inline (same pattern as delete errors)
+- [x] Tree refreshes after successful rename
+- [x] `sanitizeFilename` extracted to shared module, upload route updated to import from it
 
 ## Domain Review
 
