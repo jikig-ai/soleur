@@ -210,21 +210,22 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
           }
           // Delegate state transitions to the pure state machine so tests
           // exercise the same code path as production (see #2124).
+          //
+          // Capture timerAction from the result so the hook honours the
+          // reducer's declared intent — single source of truth for timer
+          // lifecycle. setMessages may be invoked twice under StrictMode;
+          // since the reducer is pure, both invocations produce the same
+          // timerAction, so capturing the latest is safe.
+          let action: ReturnType<typeof applyStreamEvent>["timerAction"];
           setMessages((prev) => {
             const result = applyStreamEvent(prev, activeStreamsRef.current, msg);
             activeStreamsRef.current = result.activeStreams;
+            action = result.timerAction;
             return result.messages;
           });
-          // The hook owns side effects (timers). Timer intent is derived
-          // from the event type — simpler than threading the reducer's
-          // returned `timerAction` through the setState closure.
-          if (msg.type === "stream_start" || msg.type === "tool_use" || msg.type === "stream") {
-            resetLeaderTimeout(msg.leaderId);
-          } else if (msg.type === "stream_end") {
-            clearLeaderTimeout(msg.leaderId);
-          } else if (msg.type === "review_gate") {
-            clearAllTimeouts();
-          }
+          if (action?.type === "reset") resetLeaderTimeout(action.leaderId);
+          else if (action?.type === "clear") clearLeaderTimeout(action.leaderId);
+          else if (action?.type === "clear_all") clearAllTimeouts();
           // Keep activeLeaderIds in sync for UI consumers that track who's talking.
           if (msg.type === "stream_start" || msg.type === "stream_end" || msg.type === "review_gate") {
             setActiveLeaderIds(Array.from(activeStreamsRef.current.keys()) as DomainLeaderId[]);
