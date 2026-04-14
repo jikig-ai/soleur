@@ -452,20 +452,20 @@ This asymmetry is intentional; future route additions should pick the correct pa
 
 ## Acceptance Criteria
 
-- [ ] `invoice.paid` webhook is a no-op when current status is not `past_due` or `unpaid` (verified by unit tests for `cancelled` and `active` starting states).
-- [ ] `invoice.paid` still restores `past_due → active` and `unpaid → active` (no regression).
-- [ ] Past-due banner dismiss persists across same-tab reloads via sessionStorage.
-- [ ] Past-due banner re-appears in a fresh tab (sessionStorage is tab-scoped).
-- [ ] `sessionStorage` access is guarded against exceptions (private browsing).
-- [ ] WS `subscriptionStatus` cache is refreshed at least every `WS_SUBSCRIPTION_REFRESH_INTERVAL_MS` (default 60s) while a session is active.
-- [ ] A user suspended mid-session is closed within one refresh interval (≤60s by default) without requiring reconnect.
-- [ ] Refresh timer is cleared on session teardown (no leaked intervals — assertion in tests).
-- [ ] `GET /api/billing/invoices` returns 429 on the 11th request within a minute from the same authenticated user.
-- [ ] Rate limit is per-user (different users don't share the bucket).
-- [ ] Unauthenticated requests return 401 without consuming throttle slots.
-- [ ] All 1151+ existing tests still pass.
-- [ ] New tests for each of the four fixes pass.
-- [ ] `npx markdownlint-cli2 --fix` runs clean on this plan.
+- [x] `invoice.paid` webhook is a no-op when current status is not `past_due` or `unpaid` (verified by unit tests for `cancelled` and `active` starting states).
+- [x] `invoice.paid` still restores `past_due → active` and `unpaid → active` (no regression).
+- [x] Past-due banner dismiss persists across same-tab reloads via sessionStorage.
+- [x] Past-due banner re-appears in a fresh tab (sessionStorage is tab-scoped).
+- [x] `sessionStorage` access is guarded against exceptions (private browsing).
+- [x] WS `subscriptionStatus` cache is refreshed at least every `WS_SUBSCRIPTION_REFRESH_INTERVAL_MS` (default 60s) while a session is active.
+- [x] A user suspended mid-session is closed within one refresh interval (≤60s by default) without requiring reconnect.
+- [x] Refresh timer is cleared on session teardown (no leaked intervals — assertion in tests).
+- [x] `GET /api/billing/invoices` returns 429 on the 11th request within a minute from the same authenticated user.
+- [x] Rate limit is per-user (different users don't share the bucket).
+- [x] Unauthenticated requests return 401 without consuming throttle slots.
+- [x] All 1151+ existing tests still pass. (1314 pass, 1 pre-existing skip)
+- [x] New tests for each of the four fixes pass.
+- [x] `npx markdownlint-cli2 --fix` runs clean on this plan.
 
 ## Test Scenarios (TDD targets)
 
