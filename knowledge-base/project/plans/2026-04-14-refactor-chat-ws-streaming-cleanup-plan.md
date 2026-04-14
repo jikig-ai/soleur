@@ -5,6 +5,37 @@
 **Source:** PR #2115 post-merge review — 7 follow-up issues
 **Closes:** #2124, #2125, #2135, #2136, #2137, #2138, #2139
 
+## Enhancement Summary
+
+**Deepened on:** 2026-04-14
+**Sources consulted:**
+
+- React 19.2.4 official docs via Context7 (`/websites/react_dev_reference_react`) — `memo`, `useReducer`, Strict Mode purity, reducer extraction
+- WebSearch: "React 19 useReducer vs pure reducer extracted module WebSocket streaming state machine testing 2026"
+- 4 highly-relevant project learnings in `knowledge-base/project/learnings/`:
+  - `2026-04-02-defensive-state-clear-on-useeffect-remount.md` — "clear stale state before starting new state"
+  - `2026-04-06-chat-page-test-determinism-and-coverage.md` — `waitFor` over `setTimeout` for negative assertions; exact-string `getByText`
+  - `2026-04-12-testing-transient-react-state-in-async-flows.md` — controlling async resolution separately from state update
+  - `2026-03-30-tdd-enforcement-gap-and-react-test-setup.md` — vitest + happy-dom config for `.tsx` tests
+  - `2026-04-07-code-review-batch-ws-validation-error-logging-concurrency-comments.md` — silent-error-suppression anti-pattern
+  - `2026-03-20-bun-segfault-leaked-setinterval-timers.md` — timer-leak hazard in tests
+
+### Key Improvements Applied
+
+1. **Recommend `useReducer`, not a hand-rolled pure reducer called via `setState`.** React's docs explicitly frame reducer extraction as a `useReducer` pattern — that gives us the testable module for free, reduces hook surface area, and is the React-idiomatic answer to #2124. The hand-rolled approach in the original plan works but is non-native.
+2. **Reducer must stay pure under Strict Mode.** React 19 + Strict Mode double-invokes reducers during development. Any `Map` mutation in the reducer is a latent bug — the reducer must return a NEW `Map`, never mutate the ref'd one. Side effects (timeouts) are expressed as `TimeoutAction` commands returned from the reducer and applied by the hook in `useEffect` or immediately after `dispatch`.
+3. **Clear stale UI state on reconnect**, not just refs (applies lesson from `2026-04-02-defensive-state-clear-on-useeffect-remount.md`). The reconnect fix for #2135 should also clear `lastError` / `disconnectReason` if they were set by a prior non-transient close, mirroring the existing `reconnect()` callback pattern.
+4. **Test layer correction.** For #2136 timeout-guard test, use `vi.useFakeTimers()` + `vi.advanceTimersByTime(STUCK_TIMEOUT_MS)` rather than real setTimeout waits. Prevents racy tests and unnecessary slow suite. For `.tsx` component tests (#2137 memo), match the existing vitest config: `environmentMatchGlobs: [["test/**/*.tsx", "happy-dom"]]` — do not use `jsdom` (ESM compat issue documented in `2026-03-30-tdd-enforcement-gap-and-react-test-setup.md`).
+5. **Memo shallow-compare is safe for our props.** React docs confirm `memo` uses `Object.is` shallow comparison. The `toolsUsed` array reference is only rebuilt for the bubble receiving a `tool_use` event; inactive bubbles keep their array reference across `setMessages` calls (because `[...prev]` clones the outer array but inner objects keep identity unless the reducer spreads them). No `arePropsEqual` custom comparator needed.
+6. **Do not hoist the reducer to `useReducer`'s eager initializer** — pass `undefined` and use a lazy init if initial state is non-trivial. For this plan, initial state is `{ messages: [], activeStreams: new Map() }` — cheap enough to pass inline.
+7. **Timer-leak test hygiene.** Per `2026-03-20-bun-segfault-leaked-setinterval-timers.md`: add `afterEach(() => { vi.clearAllTimers(); vi.useRealTimers(); })` in any test file that uses fake timers to prevent leaks between tests.
+
+### New Considerations Discovered
+
+- **Strict Mode concurrent rendering implication:** React 19's concurrent mode may call the reducer multiple times before committing. Tests that assume "dispatch once → one state transition" must use the committed state (via `useReducer`'s return value in a test-hook wrapper), not the reducer function output alone. The plan's pure-function tests are fine (they call the reducer directly — deterministic).
+- **`toolsUsed` label change affects DB-persisted messages if ever added.** Currently `toolsUsed` is client-only (verified via grep — used only in `ws-client.ts` and `page.tsx`). If a future PR persists it to the `messages` table (e.g., for analytics), the schema must handle labels-not-raw-names. Note this in the PR body so the next dev doesn't design around raw names.
+- **Empty-DONE chip UX:** Per `2026-04-07-code-review-batch-...` learning, pay attention to silent-error swallowing patterns. The empty-DONE chip displays `toolsUsed` when `content === ""` — if `toolsUsed` is also empty (no text AND no tools), the current code renders `<MarkdownRenderer content="" />` which shows nothing. This is fine (silent stream_end with nothing to show), but worth adding a `data-testid="empty-done"` for future debugging.
+
 ## Summary
 
 PR #2115 landed the 4-state chat message lifecycle (thinking → tool_use → streaming → done/error) and fixed a cumulative-vs-delta streaming protocol mismatch. Review surfaced 7 cleanup issues that fall into four themes: **testability** (#2124 state machine re-implemented in tests), **lifecycle correctness** (#2135 reconnect leaks, #2136 timeout clobbers progressed state), **protocol hygiene** (#2125 dead `partial` field, #2138 raw tool name leak), and **rendering** (#2137 O(n) re-render per token, #2139 7-branch fallback chain). All fixes touch the same four files and share the same test surface, so batching them into one PR keeps the changeset coherent and the review efficient.
@@ -64,62 +95,117 @@ Split into five commits for reviewability (all squashed at merge). Order chosen 
 
 **New file:** `apps/web-platform/lib/chat-state-machine.ts`
 
-Extract a pure, synchronous reducer that takes `(messages, activeStreams, event) → { messages, activeStreams, timeoutAction }`. Pure reducer simplifies testing (no React, no refs, no `setTimeout`). The hook owns effects (setState, resetLeaderTimeout, clearLeaderTimeout) and delegates state transitions to the reducer.
+Extract a pure reducer. Two implementation approaches; **approach A (`useReducer`) is the recommendation** — it is React-idiomatic, eliminates the `activeStreamsRef` + `messages` state split, and gives tests a trivial import target.
+
+#### Approach A (recommended): `useReducer` with pure reducer
 
 ```ts
 // apps/web-platform/lib/chat-state-machine.ts
-import type { ChatMessage } from "./ws-client-types"; // move ChatMessage types out of ws-client too
+import type { ChatMessage } from "./ws-client-types";
 import type { WSMessage } from "./types";
 
-export type ActiveStreams = ReadonlyMap<string, number>;
-
-export type TimeoutAction =
-  | { kind: "reset"; leaderId: string }
-  | { kind: "clear"; leaderId: string }
-  | { kind: "clearAll" }
-  | { kind: "none" };
-
-export interface StateMachineResult {
+export interface ChatState {
   messages: ChatMessage[];
+  // leaderId → index into messages
   activeStreams: Map<string, number>;
-  timeoutAction: TimeoutAction;
 }
 
-export function applyStreamEvent(
-  prev: ChatMessage[],
-  streams: ActiveStreams,
-  event: WSMessage,
-): StateMachineResult { /* ... */ }
+export type ChatAction =
+  | { type: "ws_event"; event: WSMessage }
+  | { type: "load_history"; messages: ChatMessage[] }
+  | { type: "reset_connection" }
+  | { type: "timeout_fired"; leaderId: string }
+  | { type: "send_user_message"; content: string; attachments?: AttachmentRef[] }
+  | { type: "gate_selected"; gateId: string; selection: string };
+
+export const INITIAL_STATE: ChatState = {
+  messages: [],
+  activeStreams: new Map(),
+};
+
+export function chatReducer(state: ChatState, action: ChatAction): ChatState {
+  switch (action.type) {
+    case "ws_event":
+      return applyWsEvent(state, action.event);
+    case "load_history":
+      return state.activeStreams.size === 0
+        ? { ...state, messages: [...action.messages, ...state.messages] }
+        : state;
+    case "reset_connection":
+      return { messages: state.messages, activeStreams: new Map() };
+    case "timeout_fired":
+      return applyTimeout(state, action.leaderId);
+    // ... other actions
+  }
+}
 ```
 
-Handle only the streaming-relevant event types: `stream_start`, `tool_use`, `stream`, `stream_end`, `review_gate` (clears streams), `error` (clears streams), `session_ended` (clears streams). Non-streaming events (`auth_ok`, `session_started`, `usage_update`) stay in the hook — they don't touch `activeStreams` or messages.
-
-The hook collapses to (roughly):
+**Critical — purity under Strict Mode (React 19):** React 19 concurrent rendering invokes reducers multiple times before committing. Never mutate `state.activeStreams` in place. Always:
 
 ```ts
-case "stream":
-case "stream_start":
-case "tool_use":
-case "stream_end":
-case "review_gate":
-case "error":
-case "session_ended": {
-  const result = applyStreamEvent(prev, activeStreamsRef.current, msg);
-  setMessages(result.messages);
-  activeStreamsRef.current = result.activeStreams;
-  // Apply side effects
-  if (result.timeoutAction.kind === "reset") resetLeaderTimeout(result.timeoutAction.leaderId);
-  else if (result.timeoutAction.kind === "clear") clearLeaderTimeout(result.timeoutAction.leaderId);
-  else if (result.timeoutAction.kind === "clearAll") clearAllTimeouts();
-  // Update activeLeaderIds state
-  setActiveLeaderIds(Array.from(result.activeStreams.keys()) as DomainLeaderId[]);
-  break;
-}
+// ❌ WRONG — mutates the Map
+state.activeStreams.set(leaderId, idx);
+return { ...state };
+
+// ✅ CORRECT — returns a new Map
+const streams = new Map(state.activeStreams);
+streams.set(leaderId, idx);
+return { ...state, messages: [...state.messages, newMsg], activeStreams: streams };
 ```
 
-**Test migration:** rewrite `apps/web-platform/test/ws-streaming-state.test.ts` to import `applyStreamEvent` and drive it with the same event sequences. Delete the shadow `processEvents` function entirely. All 9 existing test cases must pass against the production reducer.
+**Side effects (timeouts) handled in the hook**, not in the reducer. The reducer returns state only. After `dispatch`, the hook inspects the diff and schedules/cancels timers:
 
-**DHH-check:** Don't over-engineer. The "state machine" is a switch statement on event type. No XState, no library. A plain function that returns `{ messages, activeStreams, timeoutAction }` is enough.
+```ts
+const [state, dispatch] = useReducer(chatReducer, INITIAL_STATE);
+
+// Inside ws.onmessage handler:
+const prevStreams = state.activeStreams;
+dispatch({ type: "ws_event", event: msg });
+
+// After dispatch, React re-renders with new state. In a useEffect tracking activeStreams,
+// schedule/cancel timers based on which leaders are active:
+useEffect(() => {
+  for (const leaderId of state.activeStreams.keys()) {
+    if (!timersRef.current.has(leaderId)) resetLeaderTimeout(leaderId);
+  }
+  for (const leaderId of timersRef.current.keys()) {
+    if (!state.activeStreams.has(leaderId)) clearLeaderTimeout(leaderId);
+  }
+}, [state.activeStreams]);
+```
+
+This separates the pure state machine (testable in isolation) from the effectful timer management (testable via fake timers in the hook).
+
+#### Approach B (fallback): pure function, called via `setState`
+
+If the `useReducer` migration is judged too invasive (larger diff, touches every call site of `setMessages`), fall back to the approach in the original plan: export `applyStreamEvent(prev, activeStreams, event) → { messages, activeStreams, timeoutAction }`. Same testability; hook keeps `useState` + ref plumbing.
+
+**Decision:** Start with Approach A. If the diff exceeds +250 lines in `ws-client.ts` or introduces hard conflicts with the other six fixes in this PR, fall back to Approach B and note it in the commit message. The testability outcome for #2124 is identical either way — it's an internal architecture choice.
+
+#### Test migration (applies to both approaches)
+
+Rewrite `apps/web-platform/test/ws-streaming-state.test.ts` to import either `chatReducer` (Approach A) or `applyStreamEvent` (Approach B) and drive it with the same event sequences. Delete the shadow `processEvents` function entirely. All 9 existing test cases must pass against the production reducer.
+
+Example (Approach A):
+
+```ts
+import { chatReducer, INITIAL_STATE } from "../lib/chat-state-machine";
+
+test("single agent lifecycle: thinking → streaming → done", () => {
+  let state = INITIAL_STATE;
+  for (const evt of [
+    { type: "stream_start", leaderId: "cmo" },
+    { type: "stream", content: "Hello", partial: true, leaderId: "cmo" },
+    { type: "stream_end", leaderId: "cmo" },
+  ]) {
+    state = chatReducer(state, { type: "ws_event", event: evt });
+  }
+  expect(state.messages[0].state).toBe("done");
+  expect(state.messages[0].content).toBe("Hello");
+});
+```
+
+**DHH-check:** `useReducer` is not overengineering here — it's React's native pattern for "state that's updated in response to many different kinds of events" (quoted from React docs). The hand-rolled alternative in the original plan is fine but reinvents `useReducer` with extra plumbing. No XState, no Redux, no library — just React's built-in hook.
 
 ### 2. Reconnect cleanup (#2135)
 
@@ -129,15 +215,41 @@ Add at the top of `connect()`, before `setStatus("connecting")`:
 
 ```ts
 // Clear stale state from any prior connection — incoming events on the new
-// socket must not mutate wrong message indices.
-activeStreamsRef.current.clear();
+// socket must not mutate wrong message indices. Applies the principle from
+// knowledge-base/project/learnings/2026-04-02-defensive-state-clear-on-useeffect-remount.md:
+// "clear stale state before starting new state" — symmetric across manual reconnect
+// and automatic reconnect.
+if (useReducerApproach) {
+  dispatch({ type: "reset_connection" });
+} else {
+  activeStreamsRef.current.clear();
+  setActiveLeaderIds([]);
+}
 clearAllTimeouts();
-setActiveLeaderIds([]);
 ```
 
 Update `clearAllTimeouts` in `connect`'s dependency array.
 
-**Test (new):** `test/ws-reconnect-cleanup.test.ts` — simulate events: `stream_start(cmo)` → socket drops → `connect()` called → verify `activeStreamsRef.size === 0` and no timers pending. Use the extracted state machine test harness where possible.
+**Additional research insight (applies lesson from `2026-04-02-defensive-state-clear-...`):** The existing `reconnect()` callback at `ws-client.ts:573-579` clears `lastError` and `disconnectReason`. The automatic reconnect path in `connect()` already does not clear these — but on a successful transient reconnect, a stale error card could remain visible. Audit: the `useEffect` at line 508-524 clears `lastError` and `disconnectReason` on mount, but not on automatic mid-session reconnects. **Low priority but related — document and defer to a follow-up issue if the diff doesn't touch this path, do NOT scope-creep into this PR.**
+
+**Test (new):** `test/ws-reconnect-cleanup.test.ts` — simulate events: `stream_start(cmo)` → socket drops → `connect()` called → verify `activeStreamsRef.size === 0` (or state.activeStreams.size === 0) and no timers pending. Use the extracted state machine test harness where possible.
+
+### Research Insights — reconnect cleanup
+
+**Best Practices:**
+
+- Clear maps, sets, and timer refs on every connection-lifecycle boundary, not just mount/unmount. Transient reconnects are the forgotten boundary.
+- Symmetric cleanup in both manual (`reconnect()`) and automatic (`connect()` on close) paths prevents drift.
+
+**Edge Cases:**
+
+- The `onclose` handler triggers a `setTimeout` → `connect()` cycle. If the timer fires but `mountedRef.current` is false (e.g., user navigated away), `connect()` is skipped. Good — no cleanup needed.
+- A race where `connect()` starts a new socket before the old socket's `onmessage` finishes dispatching: the new cleanup clears `activeStreams` before the in-flight message handler completes its `setMessages` call. The message handler already checks `if (!mountedRef.current) return` — verify this check happens on every event type (currently yes, line 206).
+
+**References:**
+
+- `knowledge-base/project/learnings/2026-04-02-defensive-state-clear-on-useeffect-remount.md`
+- `knowledge-base/project/learnings/2026-04-07-code-review-batch-ws-validation-error-logging-concurrency-comments.md` (silent error swallowing in reconnect paths)
 
 ### 3. Timeout state guard (#2136)
 
@@ -168,6 +280,35 @@ const timer = setTimeout(() => {
 ```
 
 **Test (new):** extend `ws-streaming-state.test.ts` (or a new `ws-timeout-guard.test.ts`) — seed a message at index 0 with `state: "streaming"`, fire the timeout callback, assert state is still `"streaming"`.
+
+### Research Insights — timeout guard
+
+**Test technique (from `2026-04-12-testing-transient-react-state-in-async-flows.md` + `2026-04-06-chat-page-test-determinism-...`):**
+
+Use `vi.useFakeTimers()` + `vi.advanceTimersByTime(STUCK_TIMEOUT_MS)` rather than wall-clock waits:
+
+```ts
+import { beforeEach, afterEach, describe, test, vi } from "vitest";
+
+describe("timeout guard", () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => { vi.clearAllTimers(); vi.useRealTimers(); }); // prevent timer leaks
+
+  test("timeout does not clobber streaming state", () => {
+    // ... dispatch stream_start, then stream event
+    vi.advanceTimersByTime(STUCK_TIMEOUT_MS);
+    // assert state still "streaming"
+  });
+});
+```
+
+**Timer-leak prevention:** `afterEach` with `vi.clearAllTimers()` is non-negotiable (see `2026-03-20-bun-segfault-leaked-setinterval-timers.md` — leaked timers caused bun test segfaults at ~1GB RSS). Same principle applies to vitest.
+
+**Edge case:** If the guard is inside the `setTimeout` callback but the closure captures the OLD `state`, the check becomes stale. Use the state-machine reducer approach (dispatch `{ type: "timeout_fired", leaderId }`) so the reducer reads the committed state at fire-time, not the closure-captured state.
+
+**References:**
+
+- [React useReducer — pure reducer requirement](https://react.dev/reference/react/useReducer)
 
 ### 4. Document `partial` field (#2125)
 
@@ -252,6 +393,72 @@ const MessageBubble = React.memo(function MessageBubble({ /* props */ }) {
 - Open chat with 20+ prior messages, stream a new assistant response, observe in React DevTools Profiler that only the active bubble re-renders during streaming (not all 20).
 
 **Test (new):** `test/message-bubble-memo.test.tsx` — render a list with 3 `MessageBubble`s, update one prop of the middle bubble, assert the other two did not re-render (using `React.Profiler` or a render counter ref).
+
+### Research Insights — MessageBubble memoization
+
+**React 19 confirmation (via Context7 / react.dev/reference/react/memo):**
+
+`memo` uses shallow comparison via `Object.is` on each prop. For each prop:
+
+- `role`, `content`, `leaderId`, `showFullTitle`, `toolLabel` — primitives, always stable comparison.
+- `messageState` — string union, stable comparison.
+- `attachments` — array reference from the message object. Unless the reducer spreads the message object (which it does on state transitions for that specific bubble), reference is stable across renders of OTHER bubbles.
+- `toolsUsed` — same as `attachments`. Reference only rebuilt on `tool_use` events for the specific active bubble.
+- `getDisplayName`, `getIconPath` — from `useTeamNames()`. **Must verify stability.**
+
+**Callback stability check (verified 2026-04-14):**
+
+Read `apps/web-platform/hooks/use-team-names.tsx` lines 123-147. `getDisplayName`, `getBadgeLabel`, and `getIconPath` are already `useCallback`-wrapped with correct deps (`[names]`, `[iconPaths]`). **No changes needed to the hook.**
+
+⚠️ **Unrelated finding (do NOT fix in this PR):** The context `value={{ ... }}` at `use-team-names.tsx:172-186` is a new object literal on every render. Every consumer of `useTeamNames()` re-renders when `TeamNamesProvider` re-renders, regardless of which fields they actually use. This is a separate optimization (wrap `value` in `useMemo`) and out of scope for this PR. Log as a follow-up issue after merge.
+
+**Performance test strategy (from `2026-04-06-chat-page-test-determinism-...`):**
+
+```tsx
+// test/message-bubble-memo.test.tsx
+test("memo prevents re-render of unchanged bubbles", async () => {
+  const renderCounts = { 0: 0, 1: 0, 2: 0 };
+
+  function CountingBubble(props: Props & { idx: number }) {
+    renderCounts[props.idx]++;
+    return <MessageBubble {...props} />;
+  }
+
+  const { rerender } = render(
+    <>
+      <CountingBubble idx={0} content="A" role="assistant" messageState="done" />
+      <CountingBubble idx={1} content="B" role="assistant" messageState="streaming" />
+      <CountingBubble idx={2} content="C" role="assistant" messageState="done" />
+    </>
+  );
+
+  rerender(
+    <>
+      <CountingBubble idx={0} content="A" role="assistant" messageState="done" />
+      <CountingBubble idx={1} content="B updated" role="assistant" messageState="streaming" />
+      <CountingBubble idx={2} content="C" role="assistant" messageState="done" />
+    </>
+  );
+
+  // Bubble 1 re-rendered (content changed); 0 and 2 did not
+  expect(renderCounts[0]).toBe(1);
+  expect(renderCounts[1]).toBe(2);
+  expect(renderCounts[2]).toBe(1);
+});
+```
+
+**Vitest config reminder (from `2026-03-30-tdd-enforcement-gap-and-react-test-setup.md`):**
+
+- Use `happy-dom`, not `jsdom` (ESM compat issue).
+- Use `esbuild: { jsx: "automatic" }`, not `@vitejs/plugin-react` (CJS config compat).
+- Verify `apps/web-platform/vitest.config.ts` already has `environmentMatchGlobs: [["test/**/*.tsx", "happy-dom"]]` — if not, add it before writing the `.tsx` test.
+
+**No custom `arePropsEqual` needed.** Our props are either primitives or references that are stable by default. Custom equality adds maintenance burden without measurable benefit.
+
+**References:**
+
+- [React memo reference](https://react.dev/reference/react/memo)
+- [React useCallback reference](https://react.dev/reference/react/useCallback)
 
 ### 7. Assign `state: "done"` to history messages + simplify rendering (#2139)
 
