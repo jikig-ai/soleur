@@ -506,11 +506,11 @@ describe("PATCH /api/kb/file/[...path] (rename)", () => {
     expect(res.status).toBe(502);
   });
 
-  // 19. Invalid characters in newName
-  test("returns 400 for invalid newName with control characters", async () => {
+  // 19. newName that becomes empty after control char stripping
+  test("returns 400 for newName that is only control characters", async () => {
     setupFullMocks();
 
-    const req = createRequest(["overview", "test.png"], { newName: "bad\x01name.png" });
+    const req = createRequest(["overview", "test.png"], { newName: "\x01\x02.png" });
     const res = await PATCH(req, { params: createParams(["overview", "test.png"]) });
     expect(res.status).toBe(400);
   });
