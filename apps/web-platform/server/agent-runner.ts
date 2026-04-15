@@ -1102,12 +1102,14 @@ When you need user input for important decisions, use the AskUserQuestion tool.`
                 });
               }
             } else if (block.type === "tool_use") {
-              // Emit tool_use event so client can show status chip
+              // Emit tool_use event so client can show status chip. Only the
+              // human-readable label crosses the wire — the raw SDK tool name
+              // (Read/Bash/Grep/...) is an internal implementation detail and
+              // must not leak to devtools or any WS inspector. See #2138.
               const toolName = (block as { name?: string }).name ?? "unknown";
               sendToClient(userId, {
                 type: "tool_use",
                 leaderId: streamLeaderId,
-                tool: toolName,
                 label: TOOL_LABELS[toolName] ?? "Working...",
               });
             }

@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import type { DomainLeaderId } from "@/server/domain-leaders";
-import { LEADER_BG_COLORS } from "./leader-colors";
+import { LeaderAvatar } from "@/components/leader-avatar";
 
 interface NamingNudgeProps {
   leaderId: DomainLeaderId;
@@ -28,11 +28,7 @@ export function NamingNudge({
 
   return (
     <div className="flex items-center gap-3 rounded-xl border border-amber-800/50 bg-amber-950/30 px-4 py-3">
-      <span
-        className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-xs font-semibold text-white ${LEADER_BG_COLORS[leaderId]}`}
-      >
-        {roleName}
-      </span>
+      <LeaderAvatar leaderId={leaderId} size="lg" />
       <div className="min-w-0 flex-1">
         <p className="text-sm font-medium text-amber-200">
           You just worked with your {roleName}.

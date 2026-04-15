@@ -294,15 +294,14 @@ describe("streaming lifecycle protocol", () => {
     expect(isClientMessage(msg!)).toBe(false);
   });
 
-  test("tool_use is a server message with tool and label", () => {
+  test("tool_use is a server message with leaderId and label (raw tool name stripped per #2138)", () => {
     const msg = parseMessage(
-      '{"type":"tool_use","leaderId":"cto","tool":"Read","label":"Reading file..."}',
+      '{"type":"tool_use","leaderId":"cto","label":"Reading file..."}',
     );
     expect(msg).not.toBeNull();
     expect(isServerMessage(msg!)).toBe(true);
     expect(isClientMessage(msg!)).toBe(false);
     if (msg!.type === "tool_use") {
-      expect(msg!.tool).toBe("Read");
       expect(msg!.label).toBe("Reading file...");
       expect(msg!.leaderId).toBe("cto");
     }
@@ -311,7 +310,7 @@ describe("streaming lifecycle protocol", () => {
   test("valid lifecycle sequence: stream_start → tool_use → stream (partial) → stream_end", () => {
     const sequence = [
       '{"type":"stream_start","leaderId":"cmo"}',
-      '{"type":"tool_use","leaderId":"cmo","tool":"Read","label":"Reading file..."}',
+      '{"type":"tool_use","leaderId":"cmo","label":"Reading file..."}',
       '{"type":"stream","content":"Hello","partial":true,"leaderId":"cmo"}',
       '{"type":"stream","content":"Hello world","partial":true,"leaderId":"cmo"}',
       '{"type":"stream_end","leaderId":"cmo"}',

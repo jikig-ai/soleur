@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
 import { ROUTABLE_DOMAIN_LEADERS } from "@/server/domain-leaders";
 import type { DomainLeaderId } from "@/server/domain-leaders";
-import { LEADER_BG_COLORS } from "./leader-colors";
+import { LeaderAvatar } from "@/components/leader-avatar";
 
 interface AtMentionDropdownProps {
   query: string;
@@ -105,13 +105,7 @@ export function AtMentionDropdown({
                 index === activeIndex ? "bg-neutral-800" : ""
               }`}
             >
-              <span
-                className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-xs font-semibold text-white ${LEADER_BG_COLORS[leader.id]}`}
-              >
-                {customNames[leader.id]
-                  ? customNames[leader.id].slice(0, 3).toUpperCase()
-                  : leader.name.slice(0, 3)}
-              </span>
+              <LeaderAvatar leaderId={leader.id} size="md" />
               <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-2">
                   <span className="text-sm font-semibold text-white">

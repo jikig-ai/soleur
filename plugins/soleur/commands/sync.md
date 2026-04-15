@@ -1,7 +1,7 @@
 ---
 name: sync
 description: Analyze codebase and populate knowledge-base with conventions, patterns, and technical debt
-argument-hint: "[area: conventions|architecture|testing|debt|project|all]"
+argument-hint: "[area: conventions|architecture|testing|debt|project|rule-prune|all]"
 ---
 
 # Sync Codebase to Knowledge Base
@@ -17,7 +17,12 @@ Analyze an existing codebase and populate knowledge-base files with coding conve
 
 <sync_area> #$ARGUMENTS </sync_area>
 
-**Valid areas:** `conventions`, `architecture`, `testing`, `debt`, `project`, `all` (default)
+**Valid areas:** `conventions`, `architecture`, `testing`, `debt`, `project`, `rule-prune`, `all` (default)
+
+**Note on `rule-prune`:** This area is excluded from `all` dispatch. It files
+GitHub issues for AGENTS.md rules with zero recorded hits; it should be run
+intentionally (weekly or monthly), not as part of every `/soleur:sync` call.
+Append `--weeks=<n>` (default 8) to override the staleness threshold.
 
 ## Execution Flow
 
@@ -61,7 +66,7 @@ Based on the area specified (or `all` if none):
 
 **1.1 Parse Area Filter**
 
-If `<sync_area>` is empty or `all`, analyze all areas. Otherwise, analyze only the specified area.
+If `<sync_area>` is empty or `all`, analyze all areas EXCEPT `rule-prune` (it must be invoked explicitly). Otherwise, analyze only the specified area. If the argument is `rule-prune`, skip all other phases and jump straight to Rule Prune Analysis below.
 
 **1.2 Codebase Analysis**
 
@@ -138,6 +143,21 @@ Generate or update project documentation by examining:
 - **New components**: Create new `.md` file from template
 - **Existing components**: Check if `updated` date is current; if not, offer to refresh
 - **Removed components**: Add `status: deprecated` to frontmatter (do not delete)
+
+#### Rule Prune Analysis
+
+Runs only when `<sync_area>` is literally `rule-prune`. Surfaces AGENTS.md rules that have zero recorded hits over the threshold window as GitHub issues milestoned to "Post-MVP / Later". Does NOT edit `AGENTS.md` — a human reviews each issue and decides whether to prune.
+
+1. **Parse `--weeks=<n>`** from `<sync_area>` additional tokens (e.g., `rule-prune --weeks=4`). Default: 8. Also supports `--dry-run`.
+2. **Ensure `knowledge-base/project/rule-metrics.json` exists.** If missing, instruct the user to run the aggregator first: `bash scripts/rule-metrics-aggregate.sh`. Do not create a stub file.
+3. **Invoke** `bash scripts/rule-prune.sh --weeks=<n>` (or with `--dry-run`). The script:
+   - Reads `knowledge-base/project/rule-metrics.json`.
+   - Filters rules with `hit_count == 0` AND `first_seen` older than the cutoff.
+   - For each candidate, checks via `gh issue list --search "<title> in:title"` whether an open issue already exists (idempotent).
+   - Files a new issue via `gh issue create --milestone "Post-MVP / Later"` for each new candidate. Issue body explicitly states that filing does NOT authorize removal; a human must edit AGENTS.md.
+4. **Report** the candidate count and list of filed issue URLs. No constitution / learnings promotion paths apply.
+
+Skip Phase 2 through Phase 4 when the area is `rule-prune` — the gh issue filing IS the output.
 
 **1.3 Assign Confidence Scores**
 
@@ -323,7 +343,7 @@ Scan accumulated learnings against skill, agent, and command definitions. Propos
 
 Skip Phase 4 with an info message if any of these conditions are true:
 
-- Area is a specific scope (`conventions`, `architecture`, `testing`, `debt`, `project`) -- Phase 4 only runs when area is `all` or unspecified
+- Area is a specific scope (`conventions`, `architecture`, `testing`, `debt`, `project`, `rule-prune`) -- Phase 4 only runs when area is `all` or unspecified
 - `knowledge-base/project/learnings/` directory does not exist
 - `plugins/soleur/` directory does not exist
 

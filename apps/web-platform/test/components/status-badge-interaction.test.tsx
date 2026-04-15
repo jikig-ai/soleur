@@ -2,10 +2,15 @@ import { render, screen, fireEvent } from "@testing-library/react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { ConversationRow } from "@/components/inbox/conversation-row";
 import type { ConversationWithPreview } from "@/hooks/use-conversations";
+import { createUseTeamNamesMock } from "../mocks/use-team-names";
 
 const mockPush = vi.fn();
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ push: mockPush }),
+}));
+
+vi.mock("@/hooks/use-team-names", () => ({
+  useTeamNames: () => createUseTeamNamesMock(),
 }));
 
 function makeConversation(

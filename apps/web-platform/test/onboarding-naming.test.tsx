@@ -93,10 +93,10 @@ describe("NamingOnboardingModal", () => {
     });
   });
 
-  it("shows colored badges for each leader", () => {
+  it("shows a LeaderAvatar for each leader", () => {
     renderModal();
-    // Check that badge elements exist (CMO, CTO etc.)
-    expect(screen.getByText("CMO")).toBeInTheDocument();
-    expect(screen.getByText("CTO")).toBeInTheDocument();
+    // Avatars render an aria-label like "CMO avatar" (icon-only; no text badge)
+    expect(screen.getByLabelText("CMO avatar")).toBeInTheDocument();
+    expect(screen.getByLabelText("CTO avatar")).toBeInTheDocument();
   });
 });

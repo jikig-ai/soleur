@@ -10,6 +10,9 @@
 
 set -euo pipefail
 
+# shellcheck source=lib/incidents.sh
+source "$(dirname "${BASH_SOURCE[0]}")/lib/incidents.sh"
+
 INPUT=$(cat)
 FILE_PATH=$(echo "$INPUT" | jq -r '.tool_input.file_path // ""')
 
@@ -37,6 +40,7 @@ WORKTREE_DIR="$GIT_ROOT/.worktrees"
 if [[ -d "$WORKTREE_DIR" ]] && [[ -n "$(ls -A "$WORKTREE_DIR" 2>/dev/null)" ]]; then
   # Worktrees exist but write targets main checkout -- block it
   WORKTREE_NAMES=$(ls "$WORKTREE_DIR" 2>/dev/null | head -3 | tr '\n' ', ' | sed 's/,$//')
+  emit_incident "guardrails-worktree-write-guard" "deny" "Never edit main when a worktree is active" "$FILE_PATH"
   jq -n --arg names "$WORKTREE_NAMES" --arg path "$GIT_ROOT/.worktrees/<name>/$RELATIVE_PATH" '{
     hookSpecificOutput: {
       permissionDecision: "deny",

@@ -34,7 +34,22 @@ describe("CSRF coverage", () => {
 
       if (EXEMPT_ROUTES.has(relativePath)) continue;
 
-      if (!content.includes("validateOrigin")) {
+      // CSRF protection is satisfied either by an inline validateOrigin call
+      // OR by proven delegation to the KB helper (scoped to kb routes).
+      // "Proven" means the helper must be invoked AND its {ok: false} result
+      // must trigger an early return — substring presence alone is too weak
+      // (would accept dead imports). See #2245.
+      const hasInline = content.includes("validateOrigin");
+      const isKbRoute = relativePath.startsWith("app/api/kb/");
+      const invokesKbHelper =
+        /const\s+\w+\s*=\s*await\s+authenticateAndResolveKbPath\s*\(/.test(
+          content,
+        );
+      const checksKbHelperResult =
+        /if\s*\(\s*!\s*\w+\.ok\s*\)\s*return\s+\w+\.response/.test(content);
+      const delegatesToKbHelper = isKbRoute && invokesKbHelper && checksKbHelperResult;
+
+      if (!hasInline && !delegatesToKbHelper) {
         unprotected.push(`${relativePath} (${match[2]})`);
       }
     }
