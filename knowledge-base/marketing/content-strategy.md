@@ -225,6 +225,7 @@ All content maps to one of four pillars. Each pillar targets a specific audience
 | Compound Engineering: How Every Project Makes the Next One Easier | Concept explainer | 1,500-2,000 | P3 | Month 3+. Audit P3-4. |
 | One Chat, 8 Departments: How We Built Domain Routing with Claude Haiku | Technical deep-dive | 2,000-2,500 | P1 | Month 1. Gap 13. Multi-leader streaming, assessment question classification, Map-based multiplexing. |
 | Why We Wrote 20 Architecture Decision Records for an AI Platform | Thought leadership | 1,500-2,000 | P2 | Month 2. Gap 13. ADR template with Cost Impacts, C4 diagrams, architecture-as-code skill. |
+| 53 Issues in 3 Days: When Agentic Code Review Defaults Compound Silently | Post-mortem / case study | 1,500-2,000 | P1 | Month 2 (scheduled after PR #2375 bakes 3-5 days). Issue #2399. Hook: "Our code-review agents filed 53 GitHub issues in 3 days. The bug wasn't the agents — it was one default in our skill definitions." Lesson: audit the defaults, not the agents. Target channels: blog primary, X/Twitter thread, HN submission Tue-Thu. |
 
 ### Pillar 3: Competitive Positioning
 
@@ -307,6 +308,7 @@ This calendar complements the perpetual cadence above. It defines what to write 
 | May 5-11 | Publish AI Agents guide. Begin "Soleur vs Polsia" comparison (audit P2-3). | 6-8 | 1 pillar + 1 comparison draft |
 | May 12-18 | Publish Soleur vs Polsia. Write "Why We Wrote 20 ADRs" (Gap 13, P2). | 6-8 | Comparison live + ADR thought leadership |
 | May 19-25 | Write "One-Person Billion-Dollar Company" (high social distribution potential). Distribution + analytics review. | 6-8 | Draft + status check |
+| Apr 20-22 (post-PR #2375 bake) | Draft "53 Issues in 3 Days" post-mortem (Issue #2399, Pillar 2). Cite 3-5 days of Phase 5.5 gate evidence. | 3-4 | Blog draft + X thread + HN submission plan |
 
 ### Month 3 (May 21 - June 20, 2026): Long-Tail + Off-Site
 
