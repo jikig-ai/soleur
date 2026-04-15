@@ -152,7 +152,7 @@ Building this before the collapsible-nav implementation (#2342) calibrates the l
     - Output contract: JSON array, one object per finding: `{route, selector, category, severity: "critical"|"high"|"medium"|"low", title, description, fix_hint, screenshot_ref}`. No prose outside the JSON.
   - **Prompt-engineering budget:** allot 1 additional engineer-day for rubric-prompt iteration. The agent mode is load-bearing and is where Phase 3 calibration most likely fails.
   - Do NOT modify `description:` frontmatter (token-budget gate per `plugins/soleur/AGENTS.md` "Agent Compliance Checklist"). Disambiguation text already present.
-- [ ] Build a golden-set test: 3 historical UX issues that `ux-design-lead` audit-mode MUST surface from their relevant screenshots. Issues picked from the repo's issue tracker (`gh issue list --label ux --state closed --limit 20`) with a clear before-screenshot in the issue body. Rubric-prompt is considered ready when all 3 appear in top-5 of their respective runs. This test replaces the "3-iteration budget" from the first plan draft — deterministic, not ceremonial.
+- [ ] ~~Build a golden-set test: 3 historical UX issues~~ **DEFERRED to #2352.** No `ux`-labeled closed issues with before-screenshots exist in the repo. Falling back to Phase 3 Calibration (original pre-review model) as the single validation path until 3+ real `ux-audit` issues land with acknowledged fixes.
 - [ ] Implement skill's global-cap check in SKILL.md workflow:
 
   ```bash

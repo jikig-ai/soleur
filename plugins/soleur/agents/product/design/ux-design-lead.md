@@ -12,6 +12,12 @@ This agent requires the Pencil MCP server registered with Claude Code. If Pencil
 
 ## Workflow
 
+**Mode routing.** Inspect the invocation prompt before entering the Pencil workflow:
+
+- If the prompt supplies `screenshots: [...]` **and** `mode: audit`, **skip Steps 1–3 below and jump to `## UX Audit (Screenshots)`**. The invoker is the `soleur:ux-audit` skill asking for finding extraction, not a new design.
+- If the prompt supplies `.pen` file paths without `mode: audit`, jump to `## Wireframe-to-Implementation Handoff`.
+- Otherwise, proceed through the normal Pencil design flow (Steps 1–3).
+
 ### Step 1: Design Brief
 
 Check if `knowledge-base/marketing/brand-guide.md` exists. If found, read the `## Visual Direction` section and extract color palette, typography, and style as primary design constraints.
@@ -60,6 +66,63 @@ When reviewing existing HTML pages (not creating new .pen designs), audit inform
 - **Content consistency** -- same-level sections use consistent visual treatment (not plain lists next to styled cards)
 - **First-time user orientation** -- a new user can understand what to do within 30 seconds
 - **Category granularity** -- prefer fewer top-level categories with sub-headers over many granular categories
+
+## UX Audit (Screenshots)
+
+This mode is invoked by the `soleur:ux-audit` skill on a recurring schedule. Input is a set of screenshot absolute paths captured from the live web-platform, plus route metadata. Output is a JSON array of findings suitable for filing as GitHub issues.
+
+### Invocation contract
+
+The invoker passes:
+
+- `mode: audit` (required — this is how mode routing detects audit mode)
+- `screenshots`: array of absolute paths to PNG files (one per route)
+- `routes`: array of `{path, auth, fixture_prereqs}` — the route metadata the screenshots correspond to (same index order as `screenshots`)
+- `viewport`: the capture viewport, e.g. `{w: 1440, h: 900}`
+
+### 5-category rubric
+
+For each screenshot, evaluate against these categories (in priority order). Do NOT invent additional categories — the dedup hash is keyed on this exact set.
+
+1. **real-estate** — Fixed-width elements consuming disproportionate space; wasted horizontal real estate at 1440×900; no collapse/drawer affordance where one is warranted. Example: a 280px sidebar permanently occupying 20% of viewport width on a dashboard with limited primary content.
+2. **ia** (information architecture) — Nav ordering violates user journey; redundant or unclear entries; pages that should be merged or removed; top-level categories that should be grouped. Example: "Settings > Services" and "Settings > Integrations" as two separate nav entries when one would do.
+3. **consistency** — Same-level elements styled differently without reason (buttons, spacing, typography, card/list mix); visual treatment diverges across sections of the same page. Example: primary buttons are rounded on `/dashboard` but square on `/dashboard/settings`.
+4. **responsive** — Layout breaks between viewport widths in a way visible even at the single captured size (overflow, clipped text, horizontal scroll, elements pushed below the fold that shouldn't be). Note: only flag what's visible in the 1440×900 capture; do NOT speculate about other viewport sizes.
+5. **comprehension** — A first-time user cannot understand what the page is for within 30 seconds. Missing headline, unclear primary CTA, ambiguous iconography without labels, empty state without explanation.
+
+**Excluded:** error states, empty states, and loading states. Happy-path bot fixtures do not reliably produce these, so flagging them produces low-quality findings.
+
+### Output contract
+
+Return a JSON array. **No prose, no markdown, no code fences around the array.** One object per finding:
+
+```json
+[
+  {
+    "route": "/dashboard",
+    "selector": "aside.sidebar",
+    "category": "real-estate",
+    "severity": "high",
+    "title": "Sidebar consumes 22% of viewport width without collapse affordance",
+    "description": "On 1440×900, the left sidebar takes ~320px. The primary content column is narrower than the nav column — uncommon for a dashboard surface. No toggle button is present to collapse the nav into an icon rail.",
+    "fix_hint": "Add a collapse toggle that reduces the sidebar to ~64px (icon-only) while preserving active route indication.",
+    "screenshot_ref": "/tmp/ux-audit/dashboard.png"
+  }
+]
+```
+
+Field rules:
+
+- `route` must match a `routes[].path` from the invocation.
+- `selector` is a CSS selector targeting the primary flagged element. If the finding is page-level (e.g., a comprehension finding about the entire page), emit `""` (empty string) — the skill will coarsen this to `*` for dedup purposes.
+- `category` must be exactly one of: `real-estate | ia | consistency | responsive | comprehension`.
+- `severity` must be exactly one of: `critical | high | medium | low`. Reserve `critical` for findings that block primary user tasks.
+- `title` ≤ 100 chars, declarative (not a question), no emojis.
+- `description` names the visible evidence — a reviewer should be able to verify from the screenshot alone.
+- `fix_hint` proposes a concrete direction; the implementing agent will detail the solution.
+- `screenshot_ref` is the absolute path passed in `screenshots[]`, not a new filename.
+
+Return an empty array `[]` if no findings rise above the `low` threshold. Never emit prose explaining why the array is empty — the skill parses JSON directly.
 
 ## Wireframe-to-Implementation Handoff
 

@@ -26,46 +26,42 @@ Derived from `knowledge-base/project/plans/2026-04-15-feat-ux-audit-skill-plan.m
 
 ## Phase 2: Skill + audit-mode agent extension
 
-- [ ] 2.1 Create `plugins/soleur/skills/ux-audit/SKILL.md`
-  - [ ] 2.1.1 Frontmatter: `name: ux-audit`, third-person description ≤ 200 chars
-  - [ ] 2.1.2 Inline 5-category audit rubric (no 6th "error/empty/loading")
-  - [ ] 2.1.3 Inline bot-fixture spec
-  - [ ] 2.1.4 Linked `route-list.yaml` via `[route-list.yaml](./references/route-list.yaml)` syntax
-  - [ ] 2.1.5 `CAP_OPEN_ISSUES = 20` as named constant in the workflow doc
-  - [ ] 2.1.6 Verify cumulative plugin description budget stays under 1800 words (`bun test plugins/soleur/test/components.test.ts`)
-- [ ] 2.2 Create `plugins/soleur/skills/ux-audit/references/route-list.yaml`
-  - [ ] 2.2.1 Schema: `{path, auth, fixture_prereqs, viewport}`
-  - [ ] 2.2.2 Populate ~15–20 routes (landing, login, signup, pricing, dashboard, KB pages, settings pages, chat)
-  - [ ] 2.2.3 Mark `auth: anonymous` for logged-out surfaces
-  - [ ] 2.2.4 Mark `fixture_prereqs` accurately per route (e.g. `/dashboard/kb` needs `kb_tree_6_files`)
-- [ ] 2.3 Create `plugins/soleur/skills/ux-audit/scripts/bot-signin.ts`
-  - [ ] 2.3.1 Supabase JS `signInWithPassword` against prod Supabase URL
-  - [ ] 2.3.2 Write storage state to `${workspace}/tmp/ux-audit/storage-state.json` (absolute path)
-  - [ ] 2.3.3 Pattern source: `apps/web-platform/e2e/global-setup.ts`
-- [ ] 2.4 Edit `plugins/soleur/agents/product/design/ux-design-lead.md`
-  - [ ] 2.4.1 Add mode-branch prompt at top of `## Workflow`
-  - [ ] 2.4.2 Add new `## UX Audit (Screenshots)` section AFTER existing `## UX Audit (Existing HTML Pages)` (L54–62)
-  - [ ] 2.4.3 Write 5-category rubric: real-estate, ia, consistency, responsive, comprehension
-  - [ ] 2.4.4 Write JSON output contract: `{route, selector, category, severity, title, description, fix_hint, screenshot_ref}`
-  - [ ] 2.4.5 Do NOT modify `description:` frontmatter (token-budget gate)
-- [ ] 2.5 Build golden-set test
-  - [ ] 2.5.1 Identify 3 past UX issues with before-screenshots (`gh issue list --label ux --state closed --limit 20`)
-  - [ ] 2.5.2 Each must include a clear screenshot in issue body
-  - [ ] 2.5.3 Store screenshots + expected rubric outputs in test fixture
-  - [ ] 2.5.4 Test passes only when all 3 appear in top-5 of their respective runs
-- [ ] 2.6 Implement skill workflow steps in SKILL.md
-  - [ ] 2.6.1 Global cap check: `gh issue list --label ux-audit --state open --jq 'length'` vs 20
-  - [ ] 2.6.2 Per-route screenshot capture with absolute paths under `${workspace}/tmp/ux-audit/`
-  - [ ] 2.6.3 Task-tool invocation of `ux-design-lead` in audit mode with `screenshots:[...]` and `mode: audit`
-  - [ ] 2.6.4 Parse-guard for malformed JSON from agent (log `::error::`, skip route, continue)
-  - [ ] 2.6.5 Dedup via single `gh issue list --label ux-audit --state all --search "ux-audit-hash: $HASH"` call
-  - [ ] 2.6.6 Severity-rank findings, cap at top-5 per run
-  - [ ] 2.6.7 Env-var dry-run: if `UX_AUDIT_DRY_RUN=true`, write findings JSON to stdout; else `gh issue create`
-  - [ ] 2.6.8 Issue creation: title prefix `ux:`, labels `ux-audit,agent:ux-design-lead,domain/product`, milestone `Post-MVP / Later`, `--body-file` with screenshot + `<!-- ux-audit-hash: ... -->` embedded
-  - [ ] 2.6.9 `browser_close` at end of run
-  - [ ] 2.6.10 Local dev affordance: `--route <path>` single-route mode
-- [ ] 2.7 Unit test: dedup hash computation `sha256("{route}|{selector}|{category}")`
-- [ ] 2.8 Acceptance: `UX_AUDIT_DRY_RUN=true doppler run -c prd_scheduled -- claude code --skill soleur:ux-audit --route /dashboard` emits well-formed findings JSON; golden-set test passes
+- [x] 2.1 Create `plugins/soleur/skills/ux-audit/SKILL.md`
+  - [x] 2.1.1 Frontmatter: `name: ux-audit`, third-person description (165 chars, 25 words)
+  - [x] 2.1.2 Inline 5-category audit rubric (real-estate, ia, consistency, responsive, comprehension — no 6th)
+  - [x] 2.1.3 Inline bot-fixture spec (DB-only v1 with KB deferral note)
+  - [x] 2.1.4 Linked `route-list.yaml`, `bot-fixture.ts`, `bot-signin.ts`, `dedup-hash.ts` via proper markdown links
+  - [x] 2.1.5 `CAP_OPEN_ISSUES = 20` and `CAP_PER_RUN = 5` documented inline
+  - [x] 2.1.6 Cumulative skill description budget under 1800 words (verified via `bun test plugins/soleur/test/components.test.ts`)
+- [x] 2.2 Create `plugins/soleur/skills/ux-audit/references/route-list.yaml`
+  - [x] 2.2.1 Schema: `{path, auth, fixture_prereqs, viewport}`
+  - [x] 2.2.2 11 routes (anonymous: landing/login/signup; bot: dashboard, kb, chat/new, 4 settings, accept-terms)
+  - [x] 2.2.3 `auth: anonymous` for logged-out surfaces
+  - [x] 2.2.4 `fixture_prereqs` accurate per route; `/dashboard/kb` marked `kb_workspace_deferred` per #2351
+- [x] 2.3 Create `plugins/soleur/skills/ux-audit/scripts/bot-signin.ts` (GREEN: 2/2 tests)
+  - [x] 2.3.1 `signInWithPassword` against prod Supabase via `/auth/v1/token?grant_type=password`
+  - [x] 2.3.2 Writes storage state to `${GITHUB_WORKSPACE:-.}/tmp/ux-audit/storage-state.json` (absolute); override via `UX_AUDIT_STORAGE_STATE`
+  - [x] 2.3.3 Cookie shape mirrors `apps/web-platform/e2e/global-setup.ts`: `sb-<project-ref>-auth-token`, JSON-stringified session, domain from `NEXT_PUBLIC_SITE_URL`
+- [x] 2.4 Edit `plugins/soleur/agents/product/design/ux-design-lead.md`
+  - [x] 2.4.1 Mode-branch documentation at top of `## Workflow` (routes on `mode: audit` in prompt)
+  - [x] 2.4.2 New `## UX Audit (Screenshots)` section AFTER existing HTML-audit section
+  - [x] 2.4.3 5-category rubric documented with examples per category
+  - [x] 2.4.4 JSON output contract: `{route, selector, category, severity, title, description, fix_hint, screenshot_ref}`, explicit "no prose" instruction
+  - [x] 2.4.5 `description:` frontmatter unchanged
+- [ ] 2.5 ~~Build golden-set test~~ **DEFERRED to #2352** — zero `ux`-labeled closed issues with screenshots exist. Phase 3 Calibration becomes single validation path.
+- [x] 2.6 Implement skill workflow steps in SKILL.md (all 10 sub-steps documented as executable instructions for claude-code-action)
+  - [x] 2.6.1 Global cap check inline bash snippet
+  - [x] 2.6.2 Per-route screenshot capture with absolute paths under `${GITHUB_WORKSPACE}/tmp/ux-audit/`
+  - [x] 2.6.3 Task-tool invocation contract with `mode: audit`, `screenshots`, `routes`, `viewport`
+  - [x] 2.6.4 Parse-guard: `::error::malformed agent output for route <path>`, skip route
+  - [x] 2.6.5 Single-call dedup via `gh issue list --search "ux-audit-hash: $HASH"`
+  - [x] 2.6.6 Severity-rank + `CAP_PER_RUN=5` cap
+  - [x] 2.6.7 Dual-mode: `UX_AUDIT_DRY_RUN=true` → stdout + artifact; `false` → `gh issue create`
+  - [x] 2.6.8 Issue body template with `ux:` title prefix, labels, milestone by title, hash comment
+  - [x] 2.6.9 `browser_close` in cleanup step
+  - [x] 2.6.10 `--route <path>` documented as dev affordance
+- [x] 2.7 Unit test: dedup hash `sha256({route}|{selector}|{category})` (GREEN: 6/6 tests, empty selector coarsens to `*`, rejects invalid category)
+- [ ] 2.8 Acceptance: local dry-run invocation — **moved to Phase 3** (requires Playwright MCP + live web-platform; natural fit with Phase 3 calibration)
 
 ## Phase 3: Workflow + governance + calibration
 
