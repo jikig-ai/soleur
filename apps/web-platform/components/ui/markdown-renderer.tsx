@@ -94,14 +94,16 @@ export function MarkdownRenderer({ content, nofollow }: MarkdownRendererProps) {
     : "noopener noreferrer";
 
   return (
-    <Markdown
-      remarkPlugins={REMARK_PLUGINS}
-      rehypePlugins={REHYPE_PLUGINS}
-      components={DEFAULT_COMPONENTS}
-      disallowedElements={DISALLOWED_ELEMENTS}
-      unwrapDisallowed
-    >
-      {content}
-    </Markdown>
+    <div className="min-w-0 [overflow-wrap:anywhere]">
+      <Markdown
+        remarkPlugins={REMARK_PLUGINS}
+        rehypePlugins={REHYPE_PLUGINS}
+        components={DEFAULT_COMPONENTS}
+        disallowedElements={DISALLOWED_ELEMENTS}
+        unwrapDisallowed
+      >
+        {content}
+      </Markdown>
+    </div>
   );
 }
