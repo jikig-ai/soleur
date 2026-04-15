@@ -9,8 +9,10 @@
  * accidental branch/ref deletion from cloud agents.
  */
 
-import { generateInstallationToken } from "./github-app";
+import { generateInstallationToken, GitHubApiError } from "./github-app";
 import { createChildLogger } from "./logger";
+
+export { GitHubApiError };
 
 const log = createChildLogger("github-api");
 
@@ -227,10 +229,11 @@ async function handleErrorResponse(
       { status: 403, path, body: bodyText.slice(0, 500) },
       "GitHub API 403 — possible permission gap",
     );
-    throw new Error(
+    throw new GitHubApiError(
       `GitHub API permission denied (403) for ${path}. ` +
       "Your Soleur GitHub App installation may need updated permissions. " +
       "Visit your GitHub App installation settings to approve new permissions.",
+      403,
     );
   }
 
@@ -238,5 +241,8 @@ async function handleErrorResponse(
     { status: response.status, path, body: bodyText.slice(0, 500) },
     "GitHub API request failed",
   );
-  throw new Error(`GitHub API request failed: ${response.status} ${path}`);
+  throw new GitHubApiError(
+    `GitHub API request failed: ${response.status} ${path}`,
+    response.status,
+  );
 }

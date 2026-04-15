@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { validateOrigin, rejectCsrf } from "@/lib/auth/validate-origin";
 import { isPathInWorkspace } from "@/server/sandbox";
-import { githubApiGet, githubApiPost } from "@/server/github-api";
+import { githubApiGet, githubApiPost, GitHubApiError } from "@/server/github-api";
 import { generateInstallationToken, randomCredentialPath } from "@/server/github-app";
 import { sanitizeFilename } from "@/server/kb-validation";
 import { execFile } from "node:child_process";
@@ -165,8 +165,7 @@ export async function POST(request: Request) {
         );
       } catch (err) {
         // 404 is expected (file doesn't exist) — continue with upload
-        const errMsg = err instanceof Error ? err.message : "";
-        if (!errMsg.includes("404")) {
+        if (!(err instanceof GitHubApiError) || err.statusCode !== 404) {
           throw err; // Re-throw non-404 errors
         }
       }
@@ -269,7 +268,7 @@ export async function POST(request: Request) {
       );
     }
 
-    if (error instanceof Error && error.message.includes("GitHub API")) {
+    if (error instanceof GitHubApiError) {
       logger.error(
         { err: error, userId: user.id, path: filePath },
         "kb/upload: GitHub API error",

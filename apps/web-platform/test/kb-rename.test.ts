@@ -16,19 +16,31 @@ const {
   mockWriteFileSync,
   mockUnlinkSync,
   mockLstat,
-} = vi.hoisted(() => ({
-  mockGetUser: vi.fn(),
-  mockFrom: vi.fn(),
-  mockGithubApiGet: vi.fn(),
-  mockGithubApiPost: vi.fn(),
-  mockGenerateInstallationToken: vi.fn(),
-  mockRandomCredentialPath: vi.fn(),
-  mockIsPathInWorkspace: vi.fn(),
-  mockExecFile: vi.fn(),
-  mockWriteFileSync: vi.fn(),
-  mockUnlinkSync: vi.fn(),
-  mockLstat: vi.fn(),
-}));
+  MockGitHubApiError,
+} = vi.hoisted(() => {
+  class MockGitHubApiError extends Error {
+    statusCode: number;
+    constructor(message: string, statusCode: number) {
+      super(message);
+      this.name = "GitHubApiError";
+      this.statusCode = statusCode;
+    }
+  }
+  return {
+    mockGetUser: vi.fn(),
+    mockFrom: vi.fn(),
+    mockGithubApiGet: vi.fn(),
+    mockGithubApiPost: vi.fn(),
+    mockGenerateInstallationToken: vi.fn(),
+    mockRandomCredentialPath: vi.fn(),
+    mockIsPathInWorkspace: vi.fn(),
+    mockExecFile: vi.fn(),
+    mockWriteFileSync: vi.fn(),
+    mockUnlinkSync: vi.fn(),
+    mockLstat: vi.fn(),
+    MockGitHubApiError,
+  };
+});
 
 vi.mock("@/lib/supabase/server", () => ({
   createClient: vi.fn(async () => ({
@@ -50,11 +62,13 @@ vi.mock("@/lib/auth/validate-origin", () => ({
 vi.mock("@/server/github-api", () => ({
   githubApiGet: mockGithubApiGet,
   githubApiPost: mockGithubApiPost,
+  GitHubApiError: MockGitHubApiError,
 }));
 
 vi.mock("@/server/github-app", () => ({
   generateInstallationToken: mockGenerateInstallationToken,
   randomCredentialPath: mockRandomCredentialPath,
+  GitHubApiError: MockGitHubApiError,
 }));
 
 vi.mock("@/server/sandbox", () => ({
@@ -357,7 +371,7 @@ describe("PATCH /api/kb/file/[...path] (rename)", () => {
   test("returns 404 when file not found on GitHub", async () => {
     setupFullMocks();
     mockGithubApiGet.mockRejectedValue(
-      new Error("GitHub API request failed: 404 /repos/test-owner/test-repo/contents/knowledge-base/overview/missing.png"),
+      new MockGitHubApiError("GitHub API request failed: 404 /repos/test-owner/test-repo/contents/knowledge-base/overview/missing.png", 404),
     );
 
     const req = createRequest(["overview", "missing.png"], { newName: "renamed.png" });
@@ -420,7 +434,7 @@ describe("PATCH /api/kb/file/[...path] (rename)", () => {
         type: "file",
       })
       .mockRejectedValueOnce(
-        new Error("GitHub API request failed: 404 /repos/test-owner/test-repo/contents/knowledge-base/overview/renamed.png"),
+        new MockGitHubApiError("GitHub API request failed: 404 /repos/test-owner/test-repo/contents/knowledge-base/overview/renamed.png", 404),
       )
       .mockResolvedValueOnce({ default_branch: "main" })
       .mockResolvedValueOnce({
@@ -465,7 +479,7 @@ describe("PATCH /api/kb/file/[...path] (rename)", () => {
         type: "file",
       })
       .mockRejectedValueOnce(
-        new Error("GitHub API request failed: 404 /repos/test-owner/test-repo/contents/knowledge-base/overview/renamed.png"),
+        new MockGitHubApiError("GitHub API request failed: 404 /repos/test-owner/test-repo/contents/knowledge-base/overview/renamed.png", 404),
       )
       .mockResolvedValueOnce({ default_branch: "main" })
       .mockResolvedValueOnce({
@@ -496,7 +510,7 @@ describe("PATCH /api/kb/file/[...path] (rename)", () => {
         type: "file",
       })
       .mockRejectedValueOnce(
-        new Error("GitHub API request failed: 404 /repos/test-owner/test-repo/contents/knowledge-base/overview/renamed.png"),
+        new MockGitHubApiError("GitHub API request failed: 404 /repos/test-owner/test-repo/contents/knowledge-base/overview/renamed.png", 404),
       )
       .mockResolvedValueOnce({ default_branch: "main" })
       .mockResolvedValueOnce({
@@ -507,7 +521,7 @@ describe("PATCH /api/kb/file/[...path] (rename)", () => {
         tree: { sha: "treesha000" },
       });
     mockGithubApiPost.mockRejectedValue(
-      new Error("GitHub API request failed: 500 /repos/test-owner/test-repo/git/trees"),
+      new MockGitHubApiError("GitHub API request failed: 500 /repos/test-owner/test-repo/git/trees", 500),
     );
 
     const req = createRequest(["overview", "test.png"], { newName: "renamed.png" });
@@ -548,7 +562,7 @@ describe("PATCH /api/kb/file/[...path] (rename)", () => {
         type: "file",
       })
       .mockRejectedValueOnce(
-        new Error("GitHub API request failed: 404 /repos/test-owner/test-repo/contents/knowledge-base/overview/renamed.png"),
+        new MockGitHubApiError("GitHub API request failed: 404 /repos/test-owner/test-repo/contents/knowledge-base/overview/renamed.png", 404),
       )
       .mockResolvedValueOnce({ default_branch: "main" })
       .mockResolvedValueOnce({
@@ -585,7 +599,7 @@ describe("PATCH /api/kb/file/[...path] (rename)", () => {
         type: "file",
       })
       .mockRejectedValueOnce(
-        new Error("GitHub API request failed: 404 /repos/test-owner/test-repo/contents/knowledge-base/overview/renamed.png"),
+        new MockGitHubApiError("GitHub API request failed: 404 /repos/test-owner/test-repo/contents/knowledge-base/overview/renamed.png", 404),
       )
       .mockResolvedValueOnce({ default_branch: "main" })
       .mockResolvedValueOnce({
