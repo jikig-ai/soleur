@@ -85,6 +85,15 @@ fi
 
 Do NOT use `jq empty` here — it's too permissive.
 
+## Session Errors
+
+Captured per AGENTS.md workflow-gate ("Every session error MUST produce either an AGENTS.md rule, a skill instruction edit, or a hook"):
+
+- **Plan filename prescription drift** — plan/tasks.md prescribed the learning as `2026-04-14-...-must-tolerate-non-json.md`, but the actual file was created as `2026-04-15-...-tolerate-non-json-bodies.md` (date bumped mid-session, slug tightened). Review quality-analyst flagged the mismatch. **Recovery:** updated tasks.md to reference the actual filename post-hoc. **Prevention:** plan skill should prescribe directory + topic only, not exact filenames with dates, since dates can drift across session boundaries.
+- **Reviewer false-positive on "broken link"** — pattern-recognition-specialist claimed `runtime-errors/2026-02-13-...` was broken; verification via Glob confirmed both directory and file exist. **Recovery:** verified before acting on the finding. **Prevention:** reviewer agent prompts should instruct "before reporting a broken link, verify via Glob/Read" — currently an implicit assumption.
+- **Acceptance-criteria checkboxes mixed pre-merge and post-merge actions without distinction** — plan's `## Acceptance Criteria` subsections for #2214/#2215 contained both pre-merge items (workflow edit, commit) and post-merge items (terraform apply, verification of live endpoint) in the same flat list. Review quality-analyst flagged ambiguity. **Recovery:** added `(post-merge action)` / `(ship applies)` suffixes. **Prevention:** plan skill's acceptance-criteria template should separate pre-merge from post-merge items into distinct subsections when a PR has post-merge operator actions.
+- **PreToolUse security-reminder hook on YAML edit caused retry** — first Edit of `.github/workflows/web-platform-release.yml` surfaced an advisory reminder about GitHub Actions workflow injection; the edit did not appear to apply on first pass. **Recovery:** grep-verified state, retried; second attempt succeeded. **Prevention:** none — advisory hook is working as designed. When the hook fires, always grep-verify before retrying (already implied, but worth noting).
+
 ## References
 
 - `.github/workflows/web-platform-release.yml` — the fixed step.
