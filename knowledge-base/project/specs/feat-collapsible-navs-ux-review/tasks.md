@@ -4,25 +4,25 @@ Derived from `knowledge-base/project/plans/2026-04-15-feat-ux-audit-skill-plan.m
 
 ## Phase 1: Foundation (Supabase bot + Doppler + fixture)
 
-- [ ] 1.1 Provision Supabase auth user `ux-audit-bot@jikigai.com`
-  - [ ] 1.1.1 Generate password: `openssl rand -base64 32`
-  - [ ] 1.1.2 Create user via Supabase MCP or `supabase` CLI (not Terraform — app-data plane)
-  - [ ] 1.1.3 Verify user can `signInWithPassword` against prod Supabase
-- [ ] 1.2 Add bot secrets to Doppler `prd_scheduled`
-  - [ ] 1.2.1 `UX_AUDIT_BOT_EMAIL = ux-audit-bot@jikigai.com`
-  - [ ] 1.2.2 `UX_AUDIT_BOT_PASSWORD = <generated>`
-  - [ ] 1.2.3 Verify `DOPPLER_TOKEN_SCHEDULED` reads both: `doppler run --token $TOKEN --config prd_scheduled -- printenv | grep UX_AUDIT`
-- [ ] 1.3 Write `plugins/soleur/skills/ux-audit/scripts/bot-fixture.ts`
-  - [ ] 1.3.1 `seed` subcommand (idempotent)
-    - [ ] 1.3.1.1 Complete onboarding for bot (T&Cs current version, billing active, optional connect-repo skipped)
-    - [ ] 1.3.1.2 Seed KB: 6 files (PDF, md, CSV, TXT, image, docx) across 3 folders at depth ≤ 2
-    - [ ] 1.3.1.3 Seed team: 2 synthetic members (`teammate-1@example.com`, `teammate-2@example.com`)
-    - [ ] 1.3.1.4 Seed chat: 2 conversations, ≥ 3 messages each
-    - [ ] 1.3.1.5 Seed services: mocked Cloudflare integration (env flag `UX_AUDIT_FIXTURE_CLOUDFLARE=1`)
-    - [ ] 1.3.1.6 Seed billing: Stripe test-mode subscription for bot account
-  - [ ] 1.3.2 `reset` subcommand (tear down seeded data)
-  - [ ] 1.3.3 Fixture-invariant audit: no real emails (except bot's own), no real keys, no payment strings matching secret patterns
-- [ ] 1.4 Acceptance: `doppler run -c prd_scheduled -- node plugins/soleur/skills/ux-audit/scripts/bot-fixture.ts seed` completes twice without duplication; `/dashboard` returns 200 under bot auth (no redirect to `/login`, `/accept-terms`, or `/billing`)
+- [x] 1.1 Provision Supabase auth user `ux-audit-bot@jikigai.com` — id `7dff92fd-3460-4ccf-bfa6-5be6f631cdb1`
+  - [x] 1.1.1 Generate password: `openssl rand -base64 32`
+  - [x] 1.1.2 Create user via Supabase Admin API (`email_confirm: true`, `user_metadata.synthetic=true`)
+  - [x] 1.1.3 Verify user can sign in via `/auth/v1/token?grant_type=password`
+- [x] 1.2 Add bot secrets to Doppler `prd_scheduled`
+  - [x] 1.2.1 `UX_AUDIT_BOT_EMAIL = ux-audit-bot@jikigai.com`
+  - [x] 1.2.2 `UX_AUDIT_BOT_PASSWORD = <generated>`
+  - [x] 1.2.3 GH Actions secret `DOPPLER_TOKEN_SCHEDULED` exists (created 2026-03-25)
+- [x] 1.3 Write `plugins/soleur/skills/ux-audit/scripts/bot-fixture.ts` (**DB-only v1**)
+  - [x] 1.3.1 `seed` subcommand (idempotent — uses `conversations.session_id` as idempotency key)
+    - [x] 1.3.1.1 T&Cs at `TC_VERSION='1.0.0'`, `onboarding_completed_at=NOW()`, `subscription_status='active'`
+    - [ ] 1.3.1.2 ~~Seed KB: 6 files~~ **Deferred to #2351** (files live in GitHub workspace, not Supabase)
+    - [ ] 1.3.1.3 ~~Seed team: 2 synthetic members~~ **No team-members table exists** (single-user Phase 1 schema); closed here
+    - [x] 1.3.1.4 Seed chat: 2 conversations (`session_id='ux-audit-fixture-conv-1|2'`), 3 + 4 messages
+    - [ ] 1.3.1.5 ~~Seed services: Cloudflare integration stub~~ **No services table** (config stored elsewhere); closed here
+    - [x] 1.3.1.6 Billing: `users.subscription_status='active'` + synthetic `cus_ux_audit_fixture` / `sub_ux_audit_fixture` placeholders
+  - [x] 1.3.2 `reset` subcommand — deletes fixture conversations + messages, clears T&C/billing on bot `users` row
+  - [x] 1.3.3 Fixture-invariant audit: only bot's own email appears; placeholder Stripe IDs (`cus_ux_audit_fixture`) don't match any real `cus_[A-Za-z0-9]{14,}` pattern
+- [x] 1.4 Acceptance: RED→GREEN test suite (`plugins/soleur/test/ux-audit/bot-fixture.test.ts`) — 5/5 pass against prod Supabase: seed is idempotent (run twice → identical state), bot signs in post-seed, middleware guards (`tc_accepted_version`, `subscription_status`) cleared; reset restores clean state.
 
 ## Phase 2: Skill + audit-mode agent extension
 

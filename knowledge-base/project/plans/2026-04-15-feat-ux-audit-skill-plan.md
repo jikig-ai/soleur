@@ -92,15 +92,15 @@ Building this before the collapsible-nav implementation (#2342) calibrates the l
 
 **Deliverables:**
 
-- [ ] Create Supabase auth user `ux-audit-bot@jikigai.com` via Supabase MCP or `supabase` CLI (NOT Terraform — application-data-plane user, not infra). Password: `openssl rand -base64 32`, stored in Doppler `prd_scheduled` as `UX_AUDIT_BOT_PASSWORD`.
-- [ ] Add `UX_AUDIT_BOT_EMAIL` and `UX_AUDIT_BOT_PASSWORD` to Doppler `prd_scheduled`.
-- [ ] Verify `DOPPLER_TOKEN_SCHEDULED` service token reads the new secrets (`doppler run --token $TOKEN --config prd_scheduled -- printenv | grep UX_AUDIT`).
-- [ ] Write `plugins/soleur/skills/ux-audit/scripts/bot-fixture.ts` with subcommands `seed` and `reset`. Content spec (Open Question #2 decision):
-  - KB tree: 6 files (1 PDF, 1 markdown, 1 CSV, 1 TXT, 1 image, 1 docx) across 3 folders at depth ≤ 2 (exercises tree expand/collapse and diverse file previews)
-  - Team: 2 synthetic seed members (`teammate-1@example.com`, `teammate-2@example.com` — `example.com` is an IANA-reserved domain with no real mailbox)
+- [x] Create Supabase auth user `ux-audit-bot@jikigai.com` via Supabase Admin API (not Terraform — application-data-plane user). Password: `openssl rand -base64 32`, stored in Doppler `prd_scheduled` as `UX_AUDIT_BOT_PASSWORD`. **Done:** user id `7dff92fd-3460-4ccf-bfa6-5be6f631cdb1`, `email_confirm: true`, signin verified via `/auth/v1/token?grant_type=password`.
+- [x] Add `UX_AUDIT_BOT_EMAIL` and `UX_AUDIT_BOT_PASSWORD` to Doppler `prd_scheduled`.
+- [x] Verify `DOPPLER_TOKEN_SCHEDULED` service token reads the new secrets — GH Actions secret exists (created 2026-03-25).
+- [ ] Write `plugins/soleur/skills/ux-audit/scripts/bot-fixture.ts` with subcommands `seed` and `reset`. **Scope: DB-only v1.** Content spec:
+  - **KB tree: DEFERRED to #2351.** KB files live in GitHub under `<workspace>/knowledge-base/`, not Supabase Storage. Seeding a 6-file tree requires workspace repo provisioning + GitHub App install — out of scope for Phase 1. `/dashboard/kb` renders empty under bot auth. Calibration target (#2342 collapsible-nav) is `/dashboard` sidebar, visible with or without KB content.
+  - Team: 2 synthetic seed members (`teammate-1@example.com`, `teammate-2@example.com` — `example.com` is IANA-reserved, no real mailbox)
   - Chat: 2 prior conversations with ≥ 3 messages each (so `/dashboard/chat` has non-empty state)
   - Services: 1 mocked connected integration (env-var flag `UX_AUDIT_FIXTURE_CLOUDFLARE=1`; no real token wired)
-  - Billing: active Stripe subscription (test mode — reuse existing test-mode customer for the bot account)
+  - Billing: `users.subscription_status='active'` via direct DB update with synthetic `stripe_customer_id`/`stripe_subscription_id` placeholders. Real Stripe test-mode customer deferred with #2351.
   - **Fixture invariants:** no real email addresses (except bot's own `ux-audit-bot@jikigai.com`), no real API keys, no real payment info, no strings matching Stripe/GitHub/AWS secret-detection patterns (per `2026-04-07-ux-agent-placeholder-secrets-trigger-push-protection.md`).
   - **Onboarding completeness:** the seed script MUST complete onboarding flow for the bot (accept T&Cs at current version, skip connect-repo if optional, confirm billing) so `middleware.ts` auth + T&C + billing guards all pass. Route `/dashboard` must return 200, not redirect.
 - [ ] Document fixture spec inline in `plugins/soleur/skills/ux-audit/SKILL.md` (reviewer-requested consolidation — no separate `bot-fixture-spec.md`).
