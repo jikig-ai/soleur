@@ -49,6 +49,7 @@ Single dry-run knob: `workflow_dispatch.inputs.dry_run` → `UX_AUDIT_DRY_RUN` e
 
 - `CAP_OPEN_ISSUES = 20` — global cap on open `ux-audit`-labeled issues; skill refuses to file when reached
 - `CAP_PER_RUN = 5` — severity-ranked top-N findings filed per run
+- `CAP_PER_ROUTE = 2` — no single route may contribute more than 2 findings to the top-N, so anonymous funnel pages (login/signup) cannot monopolize output and crowd out bot-authenticated dashboard findings. Ref #2378.
 - `FINDING_CATEGORIES = ["real-estate", "ia", "consistency", "responsive", "comprehension"]` — dedup hash keys on this exact set
 
 ## Workflow
@@ -107,7 +108,9 @@ Closed issues count. If the founder wants to resurface a closed finding, they re
 
 ### 6. Severity-rank + cap
 
-Sort surviving findings by severity (`critical` > `high` > `medium` > `low`) then stable by `route`. Take the top `CAP_PER_RUN = 5`.
+Sort surviving findings by severity (`critical` > `high` > `medium` > `low`) then stable by `route`. Then apply `CAP_PER_ROUTE = 2`: walk the sorted list and drop any finding that would be the 3rd+ entry for a route already seen. Finally, take the top `CAP_PER_RUN = 5` of what remains.
+
+The per-route cap runs **before** the global cap so dropped anonymous-route findings free up slots for dashboard findings rather than the reverse. If fewer than 5 findings survive both caps, file what remains — the output is intentionally under-filled rather than padded with dropped-route duplicates.
 
 ### 7. File issues (or dry-run to stdout)
 
