@@ -2,6 +2,38 @@
 
 **Type:** fix (UX / UI polish)
 **Branch:** `feat-kb-viewer-action-buttons-ux`
+
+## Enhancement Summary
+
+**Deepened on:** 2026-04-15
+**Sources consulted:**
+
+- Skill: `vercel-react-best-practices` (Vercel React/Next.js perf rules)
+- Skill: `web-design-guidelines` (accessibility / UI conventions)
+- Learning: `knowledge-base/project/learnings/2026-04-07-kb-viewer-react-context-layout-patterns.md`
+- Learning: `knowledge-base/project/learnings/2026-04-02-tailwind-v4-a11y-focus-ring-contrast-patterns.md`
+- Learning: `knowledge-base/project/learnings/workflow-issues/plan-prescribed-wrong-test-runner-20260411.md`
+- Live code: `apps/web-platform/app/globals.css` (verified global focus-ring), `apps/web-platform/package.json` (verified `scripts.test: "vitest"`), recent fix commit `c0b5ec8e` (SSR crash when PdfPreview imported statically)
+
+### Key enhancements applied
+
+1. **Accessibility confirmed by codebase rule** — `globals.css` has `@layer base { :where(a, button, ...):focus-visible { box-shadow: ... amber-500 ring } }`. The new Download anchor inherits this automatically; no explicit `focus:` utilities needed and no WCAG focus-ring work to do. (Learning: Tailwind v4 a11y patterns, 2026-04-02.)
+2. **Contrast** — button text color `text-neutral-300` on `neutral-950` is well above WCAG AA (7.85:1 at `neutral-400` already passes — `neutral-300` is stronger). Matches existing `SharePopover` button. (Learning: WCAG relative luminance calc, 2026-04-02.)
+3. **SSR safety locked-in** — `PdfPreview` is dynamic-imported with `ssr: false` both in `FilePreview` (dashboard) and in `app/shared/[token]/page.tsx` (shared). This plan does NOT change those import sites, so the recent SSR crash fix (commit `c0b5ec8e`) is preserved. Reviewers should check that no change accidentally removes `ssr: false`.
+4. **Breadcrumb directory segments remain non-clickable spans** — Already true in `kb-breadcrumb.tsx` (lines 8-14 use `<span>`, not `<Link>`), so decoding does not introduce the "silent redirect" class of bug documented in the KB viewer layout learning (finding #5). No regression risk.
+5. **Test command authority** — `apps/web-platform/package.json` has `scripts.test: "vitest"`. Plan tasks reference `package.json scripts.test` as source of truth and the worktree-safe invocation `node node_modules/vitest/vitest.mjs run` (AGENTS.md `cq-in-worktrees-run-vitest-via-node-node`). (Learning: plan-prescribed-wrong-test-runner, 2026-04-11.)
+6. **Re-render cost of `showDownload` prop is nil** — Both preview components are client components rendered once per file navigation. Adding a boolean prop does not trigger the stale-closure / memoization concerns called out by Vercel's `rerender-` category. No `useMemo` / `React.memo` needed.
+7. **Bundle-size neutral** — Plan adds no new imports. The Download `<a>` in the header re-uses inline SVG (same pattern already used for the chat icon), keeping the non-markdown branch of `[...path]/page.tsx` bundle unchanged beyond a handful of JSX nodes.
+8. **Deferred-download rule: error branch of `PdfPreview` keeps its own download link unconditionally** — Elevated to a hard acceptance criterion in Step 2 (Implementation). If the PDF fails to render, the outer header may never paint (error thrown inside the dynamic import's suspense boundary) and the built-in download is the user's last affordance.
+
+### Not applicable after review
+
+- `bundle-dynamic-imports` rule — already applied; no new heavy deps.
+- `server-*` rules — dashboard KB page is a `"use client"` component backed by an API route; this plan does not touch the server boundary.
+- Next.js `Image` migration — existing image previews use `<img>` with `eslint-disable` comments intentionally (KB files are arbitrary user content with unknown dimensions). Out of scope here.
+- CSRF / auth learnings — read-only download via signed/authenticated `GET /api/kb/content/...` that already exists; no state mutation.
+- `conversion-optimizer` / `copywriter` skills — no copy changes, no persuasive surface, no conversion path affected.
+
 **Target files:**
 
 - `apps/web-platform/app/(dashboard)/dashboard/kb/[...path]/page.tsx`
@@ -201,6 +233,47 @@ Then:
 
 **Markdown branch:** do NOT add a Download button -- markdown files have no meaningful "download" and the current UI does not offer one. Leave the markdown header as-is (Share + Chat only).
 
+### Research Insights (Step 5)
+
+**Accessibility (inherited, not added):**
+
+- `apps/web-platform/app/globals.css` already applies a global `focus-visible` ring to all `<a>` elements via `@layer base { :where(a, ...):focus-visible { ... } }`. The new Download anchor picks this up automatically -- do **not** add explicit `focus:ring-*` utilities (they would fight the base layer and cause inconsistent appearance).
+- The `aria-label="Download ${filename}"` is essential because the visible text is just "Download" -- without the label, a screen-reader user in a directory of many files has no way to distinguish which file this download targets. The Share and Chat buttons have static content contexts and don't need per-file labels.
+- WCAG AA contrast: `text-neutral-300 (#d4d4d4)` on `bg-neutral-950 (#0a0a0a)` computes to ~12:1 contrast ratio, well above the 4.5:1 AA threshold. Safe.
+
+**Keyboard/tab order:** Breadcrumb > Download > Share > Chat. This matches visual left-to-right reading order. No `tabindex` manipulation required.
+
+**Button ordering rationale (revisited):**
+
+Two competing orders were considered:
+
+| Order | Argument for | Argument against |
+|---|---|---|
+| **Download, Share, Chat** *(chosen)* | Reading order = cost-to-user order (read-only -> mutate share state -> navigate away) | Puts Download first even when Share is the more-used action for some users |
+| Share, Chat, Download | Keeps existing "Share, Chat" pair untouched visually; just appends Download | Breaks visual hierarchy: Chat is the amber CTA, putting Download after it makes Download look like an afterthought |
+
+Chosen order is also what the user's screenshot-derived request implies ("Download should sit next to Share and Chat about this"). If a reviewer strongly prefers the alternate order, it is a 10-second flip -- not worth pre-litigating.
+
+**Tailwind class re-use:**
+
+The Download anchor copies the exact class string from the `Share` trigger (`share-popover.tsx` line 131):
+
+```text
+inline-flex items-center gap-1.5 rounded-lg border border-neutral-700 px-3 py-1.5 text-xs font-medium text-neutral-300 transition-colors hover:border-neutral-500 hover:text-white
+```
+
+This guarantees visual parity. Do **not** introduce a new utility class or a shared component abstraction yet -- two buttons is not enough duplication to justify a `ToolbarButton` primitive (YAGNI per `code-simplicity-reviewer` heuristics). If a third matching button lands in this toolbar, extract then.
+
+**Icon sizing:**
+
+`width={14}` / `height={14}` matches the existing chat icon. Do not use `stroke-width="2"` without the matching `strokeLinecap="round" strokeLinejoin="round"` -- otherwise arrow corners render as hard miters and break visual parity with the chat icon.
+
+**Performance:**
+
+- No impact. Download anchor is plain HTML; it does not trigger React state. The `showDownload` prop on `PdfPreview` / `TextPreview` is a plain boolean; React's default equality check suffices.
+- No bundle growth. SVG path is inline JSX, no icon library import.
+- No waterfall. Download anchor does not prefetch; browser only fires the GET when user clicks.
+
 ### Step 6 -- Preserve shared viewer behavior
 
 File: `apps/web-platform/app/shared/[token]/page.tsx`
@@ -294,9 +367,39 @@ Tests: `decodes URL-encoded segments`, `returns raw segment when decoding throws
 ## Rollout
 
 - [ ] Implement per steps 1-7.
-- [ ] Run `bun test` (or the project's test script per `package.json scripts.test`) in `apps/web-platform/`.
-- [ ] Run the dev server, QA the four scenarios (PDF/TXT/markdown/CSV) in the dashboard + PDF in shared viewer, attach screenshots in PR.
+- [ ] Run tests. Verified canonical command for this worktree:
+
+  ```bash
+  cd apps/web-platform
+  node node_modules/vitest/vitest.mjs run test/file-preview.test.tsx test/kb-page-routing.test.tsx test/kb-breadcrumb.test.tsx 2>&1 | tail -n 200
+  ```
+
+  (`package.json scripts.test` is `vitest`; AGENTS.md `cq-in-worktrees-run-vitest-via-node-node` mandates the direct `node ...vitest.mjs` invocation inside worktrees because `npx` cache can resolve to a sibling worktree's vitest binary and produce phantom failures.)
+- [ ] Also run the full suite to confirm no other viewer tests regressed:
+
+  ```bash
+  node node_modules/vitest/vitest.mjs run 2>&1 | tail -n 200
+  ```
+
+- [ ] Run the dev server, QA the five scenarios (PDF / TXT / markdown / CSV-DOCX fallback / shared PDF), attach screenshots in PR body.
 - [ ] Ship via `/ship` with `patch` semver label (UX polish, no behavior-break).
+
+## Review Hooks
+
+Before PR review, spawn these reviewers explicitly (per `/soleur:review`):
+
+- **code-simplicity-reviewer** -- flags the `showDownload` prop as over-abstraction if it is only used in one call site. Counter-argument in plan: shared viewer relies on the default, so the prop has two call sites with divergent needs.
+- **test-design-reviewer** -- verifies the failing-first TDD ordering in `tasks.md` section 1.
+- **pattern-recognition-specialist** -- confirms prop-threading is consistent with how `nofollow` is threaded into `MarkdownRenderer` in the shared page (same "context-aware default, opt-out from dashboard" pattern).
+- **architecture-strategist** -- sanity-check that we are not leaking dashboard concerns into shared viewer code (we are not; we only add a prop whose default preserves shared behavior).
+
+## Success Metric
+
+Vertical pixels gained above the document viewer, measured at 1280x720 viewport:
+
+- Before: breadcrumb header (~49 px) + second filename/Download row (~45 px, `p-4` gap-3 row-h) = **~94 px** of chrome above the PDF.
+- After: breadcrumb header (~49 px), zero secondary rows = **~49 px** of chrome above the PDF.
+- **~45 px reclaimed for the document body** -- a ~7 % vertical improvement at laptop heights. This is the user-visible win.
 
 ## References
 
