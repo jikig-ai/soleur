@@ -161,6 +161,7 @@ After all research steps complete, consolidate findings:
 - Note external documentation URLs and best practices (if external research was done)
 - List related issues or PRs discovered
 - Capture CLAUDE.md conventions
+- **Reconcile spec claims against codebase reality.** If the repo-research-analyst returned any "Gap callouts" or equivalent mismatches, the plan MUST include a "Research Reconciliation — Spec vs. Codebase" section (3-column table: spec claim / reality / plan response) placed between "Overview" and "Implementation Phases". This prevents the plan from inheriting spec fiction (e.g., claimed infrastructure that doesn't exist) as phase estimates. See `knowledge-base/project/learnings/best-practices/2026-04-15-plan-skill-reconcile-spec-vs-codebase.md`.
 
 **Optional validation:** Briefly summarize findings and ask if anything looks off or missing before proceeding to planning.
 
