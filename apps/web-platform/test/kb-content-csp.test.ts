@@ -1,44 +1,48 @@
 /**
- * Focused CSP header contract test for the /api/kb/content binary response path.
- *
- * Integration coverage for the full route (auth, sandbox, filesystem) lives
- * elsewhere. This test asserts only that the binary branch emits the expected
- * Content-Security-Policy value alongside nosniff + Cache-Control, matching
- * the header object in `route.ts` around `new Response(buffer, { headers })`.
+ * Behavioral contract test for the CSP emitted on the binary branch of
+ * /api/kb/content/[...path]/route.ts. Imports the exported constant and
+ * asserts the policy's directive-level guarantees so the test survives
+ * cosmetic reformatting of the literal string.
  */
 import { describe, it, expect } from "vitest";
-import fs from "node:fs";
-import path from "node:path";
+import { KB_BINARY_RESPONSE_CSP } from "@/app/api/kb/content/[...path]/route";
 
-describe("binary response CSP header", () => {
-  it("applies default-src 'none'; style-src 'unsafe-inline'", () => {
-    const headers = {
-      "Content-Type": "image/png",
-      "Content-Disposition": 'inline; filename="x.png"',
-      "Content-Length": "100",
-      "X-Content-Type-Options": "nosniff",
-      "Cache-Control": "private, max-age=60",
-      "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'",
-    };
-    expect(headers["Content-Security-Policy"]).toBe(
-      "default-src 'none'; style-src 'unsafe-inline'",
-    );
-    expect(headers["X-Content-Type-Options"]).toBe("nosniff");
-    expect(headers["Cache-Control"]).toBe("private, max-age=60");
+function parseCsp(policy: string): Map<string, string[]> {
+  const directives = new Map<string, string[]>();
+  for (const raw of policy.split(";")) {
+    const trimmed = raw.trim();
+    if (!trimmed) continue;
+    const [name, ...sources] = trimmed.split(/\s+/);
+    directives.set(name.toLowerCase(), sources);
+  }
+  return directives;
+}
+
+describe("KB_BINARY_RESPONSE_CSP", () => {
+  const directives = parseCsp(KB_BINARY_RESPONSE_CSP);
+
+  it("locks default-src to 'none'", () => {
+    expect(directives.get("default-src")).toEqual(["'none'"]);
   });
 
-  it("route handler source contains the CSP header on the binary Response", () => {
-    // Guard against regression: the CSP literal must live in the binary
-    // branch of route.ts. This catches accidental removal even if the
-    // integration test doesn't assert response headers directly.
-    const routePath = path.resolve(
-      __dirname,
-      "../app/api/kb/content/[...path]/route.ts",
-    );
-    const source = fs.readFileSync(routePath, "utf8");
-    expect(source).toContain(
-      `"default-src 'none'; style-src 'unsafe-inline'"`,
-    );
-    expect(source).toContain(`"Content-Security-Policy"`);
+  it("allows inline styles only (required by react-pdf viewer)", () => {
+    expect(directives.get("style-src")).toEqual(["'unsafe-inline'"]);
+  });
+
+  it("blocks framing via frame-ancestors 'none'", () => {
+    // CSP frame-ancestors has no default fallback — must be explicit, or any
+    // origin can iframe user-uploaded SVG/PDF.
+    expect(directives.get("frame-ancestors")).toEqual(["'none'"]);
+  });
+
+  it("does not allow script, img, connect, or object sources", () => {
+    for (const directive of [
+      "script-src",
+      "img-src",
+      "connect-src",
+      "object-src",
+    ]) {
+      expect(directives.has(directive)).toBe(false);
+    }
   });
 });
