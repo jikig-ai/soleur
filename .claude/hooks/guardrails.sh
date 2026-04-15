@@ -146,48 +146,20 @@ if echo "$COMMAND" | grep -qE '(^|&&|\|\||;)\s*gh\s+issue\s+create'; then
   fi
 fi
 
-# guardrails:block-stash-in-worktrees — Block git stash in worktrees
-# Three-tier detection covers: path-based (tier 1), .git file marker (tier 2),
-# and subagent calls where .cwd is absent — block when secondary worktrees exist (tier 3).
+# guardrails:block-stash-in-worktrees — Block git stash unconditionally
+# Unconditional: CWD detection is unreliable in subagent contexts where the shell
+# CWD is a worktree but no explicit "cd" prefix appears in the command. Blocking
+# git stash everywhere is safe — AGENTS.md requires "commit WIP first" and there
+# is no legitimate automated use case for git stash in this repo.
 if echo "$COMMAND" | grep -qE '(^|&&|\|\||;)\s*git\s+stash'; then
-  # Resolve CWD: check cd target, git -C path, .cwd field, then hook CWD
-  STASH_GUARD_DIR=""
-  if echo "$COMMAND" | grep -qE '^\s*cd\s+'; then
-    STASH_GUARD_DIR=$(echo "$COMMAND" | sed -nE 's/^\s*cd\s+"?([^"&;]+)"?.*/\1/p' | xargs)
-  elif echo "$COMMAND" | grep -qoE 'git\s+-C\s+\S+'; then
-    STASH_GUARD_DIR=$(echo "$COMMAND" | grep -oE 'git\s+-C\s+\S+' | head -1 | sed -nE 's/git\s+-C\s+(\S+)/\1/p')
-  fi
-  if [ -z "$STASH_GUARD_DIR" ] || [ ! -d "$STASH_GUARD_DIR" ]; then
-    STASH_GUARD_CWD=$(echo "$INPUT" | jq -r '.cwd // ""')
-    if [ -n "$STASH_GUARD_CWD" ] && [ -d "$STASH_GUARD_CWD" ]; then
-      STASH_GUARD_DIR="$STASH_GUARD_CWD"
-    fi
-  fi
-  RESOLVE_DIR="${STASH_GUARD_DIR:-.}"
-  RESOLVED_ABS="$(cd "$RESOLVE_DIR" 2>/dev/null && pwd)"
-  IN_WORKTREE=false
-  # Tier 1: path contains .worktrees (standard worktree layout)
-  if echo "$RESOLVED_ABS" | grep -qF '.worktrees'; then
-    IN_WORKTREE=true
-  # Tier 2: .git is a file, not a directory (git's linked-worktree marker)
-  elif [ -n "$RESOLVED_ABS" ] && [ -f "$RESOLVED_ABS/.git" ] && [ ! -d "$RESOLVED_ABS/.git" ]; then
-    IN_WORKTREE=true
-  # Tier 3: CWD unresolved (subagent gap — .cwd absent from hook input) — block when
-  # secondary worktrees exist so a bare git stash with no explicit path is caught.
-  elif [ -z "$STASH_GUARD_DIR" ]; then
-    WT_COUNT=$(git -C "${CLAUDE_PROJECT_DIR:-.}" worktree list 2>/dev/null | wc -l)
-    [ "$WT_COUNT" -gt 1 ] && IN_WORKTREE=true
-  fi
-  if [ "$IN_WORKTREE" = true ]; then
-    emit_incident "hr-never-git-stash-in-worktrees" "deny" "Never git stash in worktrees" "$COMMAND"
-    jq -n '{
-      hookSpecificOutput: {
-        permissionDecision: "deny",
-        permissionDecisionReason: "BLOCKED: git stash in worktrees is not allowed. Use git show <commit>:<path> to inspect old code, or commit WIP first."
-      }
-    }'
-    exit 0
-  fi
+  emit_incident "hr-never-git-stash-in-worktrees" "deny" "Never git stash in worktrees" "$COMMAND"
+  jq -n '{
+    hookSpecificOutput: {
+      permissionDecision: "deny",
+      permissionDecisionReason: "BLOCKED: git stash is not allowed. Use git show <commit>:<path> to inspect old code, or commit WIP first."
+    }
+  }'
+  exit 0
 fi
 
 # All checks passed
