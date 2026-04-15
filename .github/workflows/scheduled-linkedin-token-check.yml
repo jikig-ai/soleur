@@ -89,6 +89,18 @@ jobs:
             exit 0
           fi
 
+          # Validate body is JSON before any jq -r call or downstream "token is valid"
+          # side effects (closing stale renewal issues). LinkedIn can return HTML under
+          # edge incidents (rate limit, maintenance, Cloudflare fronting). jq under the
+          # default strict shell (bash --noprofile --norc -eo pipefail) would crash the
+          # step, and without this guard the crash would follow the "token is valid"
+          # code path -- auto-closing any open renewal issue on unvalidated data.
+          # See AGENTS.md cq-ci-steps-polling-json-endpoints-under (#2214, #2236).
+          if ! jq -e . /tmp/li-response.json >/dev/null 2>&1; then
+            echo "::warning::LinkedIn API returned non-JSON body on HTTP $HTTP_CODE. Skipping this check -- will retry next cron."
+            exit 0
+          fi
+
           echo "LinkedIn token is valid (HTTP $HTTP_CODE)."
           echo "Token holder: $(jq -r '.name // "unknown"' /tmp/li-response.json)"
 

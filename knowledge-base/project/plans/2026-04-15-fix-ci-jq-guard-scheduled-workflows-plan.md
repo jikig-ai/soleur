@@ -200,14 +200,14 @@ The release workflow retries because deploys are inherently async — the endpoi
 
 ## Acceptance Criteria
 
-- [ ] `.github/workflows/scheduled-linkedin-token-check.yml` has a `jq -e . /tmp/li-response.json >/dev/null 2>&1` guard before the `$(jq -r ...)` call on line 93.
-- [ ] `.github/workflows/scheduled-cf-token-expiry-check.yml` has a `jq -e . "$TMPFILE" >/dev/null 2>&1` guard before the `jq -r` call on lines 64-67.
-- [ ] Both guards log a clear `::warning::` message identifying the vendor and HTTP code so triage is easy.
-- [ ] Both guards `exit 0` (not `continue` — single-shot workflows, not retry loops).
-- [ ] `actionlint .github/workflows/scheduled-linkedin-token-check.yml` passes.
-- [ ] `actionlint .github/workflows/scheduled-cf-token-expiry-check.yml` passes.
-- [ ] `shellcheck` on the `run:` blocks (if pre-commit runs it) passes.
-- [ ] Guards comment-reference AGENTS.md rule ID and issues `#2214, #2236` for future triage.
+- [x] `.github/workflows/scheduled-linkedin-token-check.yml` has a `jq -e . /tmp/li-response.json >/dev/null 2>&1` guard before the `$(jq -r ...)` call on line 93.
+- [x] `.github/workflows/scheduled-cf-token-expiry-check.yml` has a `jq -e . "$TMPFILE" >/dev/null 2>&1` guard before the `jq -r` call on lines 64-67.
+- [x] Both guards log a clear `::warning::` message identifying the vendor and HTTP code so triage is easy.
+- [x] Both guards `exit 0` (not `continue` — single-shot workflows, not retry loops).
+- [x] `actionlint .github/workflows/scheduled-linkedin-token-check.yml` passes.
+- [x] `actionlint .github/workflows/scheduled-cf-token-expiry-check.yml` passes.
+- [x] `shellcheck` on the `run:` blocks (if pre-commit runs it) passes.
+- [x] Guards comment-reference AGENTS.md rule ID and issues `#2214, #2236` for future triage.
 - [ ] Manual dispatch of both workflows on the feature branch succeeds end-to-end (the happy path — vendor returns valid JSON — must still work after the guard).
 
 ## Test Scenarios
