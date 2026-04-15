@@ -34,7 +34,13 @@ describe("CSRF coverage", () => {
 
       if (EXEMPT_ROUTES.has(relativePath)) continue;
 
-      if (!content.includes("validateOrigin")) {
+      // CSRF protection is satisfied either by an inline validateOrigin call
+      // OR by delegation to a helper that enforces it. KB routes now use
+      // authenticateAndResolveKbPath (see server/kb-route-helpers.ts, #2180).
+      const hasInline = content.includes("validateOrigin");
+      const delegatesToKbHelper = content.includes("authenticateAndResolveKbPath");
+
+      if (!hasInline && !delegatesToKbHelper) {
         unprotected.push(`${relativePath} (${match[2]})`);
       }
     }

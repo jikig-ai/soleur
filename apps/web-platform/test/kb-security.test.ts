@@ -77,9 +77,14 @@ describe("KB API security", () => {
       const content = readFileSync(filePath, "utf-8");
       const relativePath = filePath.split("/apps/web-platform/")[1];
 
+      // Auth enforcement is satisfied either by an inline getUser call OR by
+      // delegation to the shared helper, which performs the same check (#2180).
+      const hasInlineAuth = content.includes("supabase.auth.getUser");
+      const delegatesToHelper = content.includes("authenticateAndResolveKbPath");
+
       expect(
-        content.includes("supabase.auth.getUser"),
-        `${relativePath} missing auth check`,
+        hasInlineAuth || delegatesToHelper,
+        `${relativePath} missing auth check (inline getUser or authenticateAndResolveKbPath)`,
       ).toBe(true);
     }
   });
@@ -92,9 +97,14 @@ describe("KB API security", () => {
       const content = readFileSync(filePath, "utf-8");
       const relativePath = filePath.split("/apps/web-platform/")[1];
 
+      // Enforcement is satisfied either by an inline workspace_status check OR
+      // by delegation to the shared helper, which enforces it (#2180).
+      const hasInline = content.includes("workspace_status");
+      const delegatesToHelper = content.includes("authenticateAndResolveKbPath");
+
       expect(
-        content.includes("workspace_status"),
-        `${relativePath} missing workspace_status check`,
+        hasInline || delegatesToHelper,
+        `${relativePath} missing workspace_status check (inline or authenticateAndResolveKbPath)`,
       ).toBe(true);
     }
   });
