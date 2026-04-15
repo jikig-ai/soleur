@@ -32,6 +32,21 @@ export function KbChatSidebar({ open, onClose, contextPath }: KbChatSidebarProps
     return () => registerQuoteHandler(null);
   }, [open, registerQuoteHandler]);
 
+  // Focus management (TR9 / AC9): when the sidebar opens, move focus to
+  // the ChatInput textarea so keyboard users land in the compose surface
+  // without an extra Tab. We query the panel because ChatInput owns the
+  // textarea ref internally.
+  useEffect(() => {
+    if (!open) return;
+    const id = requestAnimationFrame(() => {
+      const textarea = document.querySelector<HTMLTextAreaElement>(
+        "[role=\"dialog\"] textarea",
+      );
+      textarea?.focus();
+    });
+    return () => cancelAnimationFrame(id);
+  }, [open]);
+
   const handleBeforeSend = useCallback(
     (message: string) => {
       // "kb.chat.selection_sent" fires when the user sends a message whose

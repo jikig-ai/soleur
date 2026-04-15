@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useContext } from "react";
+import { useContext, useEffect, useRef } from "react";
 import { KbChatContext } from "@/components/kb/kb-chat-context";
 
 export interface KbChatTriggerProps {
@@ -19,6 +19,19 @@ export interface KbChatTriggerProps {
  */
 export function KbChatTrigger({ fallbackHref }: KbChatTriggerProps) {
   const ctx = useContext(KbChatContext);
+  const buttonRef = useRef<HTMLButtonElement | null>(null);
+  const wasOpenRef = useRef(false);
+
+  // Focus management (TR9 / AC9): when the sidebar transitions from
+  // open → closed, return focus to this trigger so keyboard users land
+  // back on the control that opened it.
+  useEffect(() => {
+    const isOpen = !!ctx?.open;
+    if (wasOpenRef.current && !isOpen) {
+      buttonRef.current?.focus();
+    }
+    wasOpenRef.current = isOpen;
+  }, [ctx?.open]);
 
   const baseClass =
     "inline-flex items-center gap-1.5 rounded-lg border border-amber-500/50 px-3 py-1.5 text-xs font-medium text-amber-400 transition-colors hover:border-amber-400 hover:text-amber-300";
@@ -43,6 +56,7 @@ export function KbChatTrigger({ fallbackHref }: KbChatTriggerProps) {
 
   return (
     <button
+      ref={buttonRef}
       type="button"
       onClick={ctx.openSidebar}
       className={baseClass}

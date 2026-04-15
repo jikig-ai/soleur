@@ -737,12 +737,12 @@ the quote as the first block. iOS Safari works.
 + [ ] AC6: Full-page `/dashboard/chat/<id>` route unchanged after ChatSurface extraction.
 + [ ] AC7: Mobile renders draggable bottom sheet at ~60vh with three snap points; dragging below 10vh closes.
 + [x] AC8: Three Plausible goals fire: `kb.chat.opened`, `kb.chat.selection_sent`, `kb.chat.thread_resumed`.
-+ [ ] AC9: Panel a11y contract met: `aria-label`, `Escape` close, focus move on open, focus return on close.
++ [x] AC9: Panel a11y contract met: `aria-label`, `Escape` close, focus move on open, focus return on close.
 + [x] AC10: Long URLs and code blocks wrap (not scroll) inside 380px sidebar.
 + [ ] AC11: DB migration applied to prod (verified via Supabase REST API); backfill ran or explicitly skipped with rationale.
 + [ ] AC12: Legacy `?context=` URL shape unchanged.
 + [ ] AC13: All vitest scenarios pass.
-+ [ ] AC14: Flag off-path tested — `NEXT_PUBLIC_KB_CHAT_SIDEBAR=0` falls back to legacy navigation.
++ [x] AC14: Flag off-path tested — `NEXT_PUBLIC_KB_CHAT_SIDEBAR=0` falls back to legacy navigation.
 + [ ] AC15: Closing panel mid-stream aborts session; reopening shows user messages only.
 + [x] AC16: Selection > 8KB renders disabled pill; no oversize payload reaches server.
 + [ ] AC17: iOS Safari: native share menu suppressed on markdown selection when pill visible.
@@ -848,25 +848,56 @@ resolution that has no existing API. Session-state audit for
 
 1. **Resolve milestone conflict** (Known Blockers #1) — promote #2345 to Phase 3 P3 milestone OR pause build.
 2. Merge with `NEXT_PUBLIC_KB_CHAT_SIDEBAR=0` in prd Doppler config.
+
+        # dev config — flag on from day one so QA can exercise the sidebar
+        doppler secrets set NEXT_PUBLIC_KB_CHAT_SIDEBAR=1 -p soleur -c dev
+        # prd config — flag off at merge time
+        doppler secrets set NEXT_PUBLIC_KB_CHAT_SIDEBAR=0 -p soleur -c prd
+
 3. Apply Supabase migration to prod; verify via REST API (per AGENTS.md `wg-when-a-pr-includes-database-migrations`). Verify backfill worked in staging before applying to prod.
-4. Provision three Plausible goals via API.
-5. Manual QA on staging with flag on (desktop, mobile, iOS Safari).
+4. Provision three Plausible goals via API — `bash scripts/provision-plausible-goals.sh` (idempotent PUT upsert; see `knowledge-base/marketing/analytics/plausible-goals.md`).
+5. Manual QA on staging with flag on (desktop, mobile, iOS Safari). See QA checklist below.
 6. Founder sign-off.
-7. Flip prd flag to `1`.
+7. Flip prd flag to `1`:
+
+        doppler secrets set NEXT_PUBLIC_KB_CHAT_SIDEBAR=1 -p soleur -c prd
+        # Redeploy web-platform so the new env var reaches Next.js build output.
+
 8. One-week soak; monitor `kb.chat.opened` / `kb.chat.selection_sent` / `kb.chat.thread_resumed` in Plausible.
-9. Follow-up PR: remove flag + legacy "Ask about this document" → new-window fallback.
+9. Follow-up PR: remove flag + legacy "Ask about this document" → new-window fallback. Tracked in the flag-removal follow-up issue (Deferrals table).
+
+### Staging QA checklist (step 5)
+
+Run against staging with `NEXT_PUBLIC_KB_CHAT_SIDEBAR=1`:
+
++ [ ] Trigger label on a fresh doc reads "Ask about this document".
++ [ ] After sending one message, label updates to "Continue thread" with the dot indicator.
++ [ ] Closing + reopening the sidebar on the same doc resumes the thread (banner "Continuing from …") and fires `kb.chat.thread_resumed` in Plausible.
++ [ ] Selecting a passage shows the "Quote in chat" pill with ⌘⇧L hint.
++ [ ] Clicking the pill opens the sidebar (if closed), inserts `> text\n\n`, flashes amber, does not auto-send.
++ [ ] ⌘⇧L / Ctrl+Shift+L with selection in article fires the same flow without clicking.
++ [ ] Selection > 8KB renders the pill disabled with tooltip.
++ [ ] Navigating between KB files preserves per-path drafts.
++ [ ] Resize to 375px mobile width: bottom sheet drags between snap points; drag below 10vh closes.
++ [ ] iOS Safari: native share menu does not appear while pill is visible on selected text.
++ [ ] Flip flag to 0 on staging and re-verify the legacy `/dashboard/chat/new?context=...` link works.
+
+### Flag-off regression check (step 2 + 7 rollback)
+
+`NEXT_PUBLIC_KB_CHAT_SIDEBAR=0` must render the legacy link in both markdown and non-markdown KB branches. `KbChatTrigger` falls back to `<Link href={fallbackHref}>Chat about this</Link>` when the context value's `enabled` is false or the provider is absent entirely — covered by the existing `test/kb-chat-trigger.test.tsx`-style mounts inside the a11y + quote tests. Redeploy is required after a flip either direction because `NEXT_PUBLIC_*` vars are baked into the Next build.
 
 ## Deferrals (tracked as follow-up issues)
 
 Per AGENTS.md `wg-when-deferring-a-capability-create-a`, each deferral
 below must be filed as a GitHub issue before this plan is marked ready.
 
-| Deferral | Re-evaluation criterion | Target milestone |
-|---|---|---|
-| PDF text selection → chat | When react-pdf text-layer coords are stable | Post-MVP / Later |
-| Resizable sidebar splitter | First user complaint about fixed 380px | Post-MVP / Later |
-| `add_context` WS message + selections[] schema + UI flow (v1.1 — entire mid-session attach path) | User research shows demand for "attach without message" flow | Post-MVP / Later |
-| Runtime feature-flag primitive (replace env-var pattern) | Second feature needs FF rollout | Post-MVP / Later |
+| Deferral | Re-evaluation criterion | Target milestone | Issue |
+|---|---|---|---|
+| PDF text selection → chat | When react-pdf text-layer coords are stable | Post-MVP / Later | — |
+| Resizable sidebar splitter | First user complaint about fixed 380px | Post-MVP / Later | — |
+| `add_context` WS message + selections[] schema + UI flow (v1.1 — entire mid-session attach path) | User research shows demand for "attach without message" flow | Post-MVP / Later | — |
+| Runtime feature-flag primitive (replace env-var pattern) | Second feature needs FF rollout | Post-MVP / Later | — |
+| Remove `NEXT_PUBLIC_KB_CHAT_SIDEBAR` flag + legacy fallback | One-week prd soak clean (goals ≥ 25 unique / no Sentry spike / no regressions) | Post-MVP / Later | #2377 |
 | In-app keyboard-shortcuts help surface | 3+ shortcuts exist | Post-MVP / Later |
 | Empty-state suggested prompts | Validated via UX research | Post-MVP / Later |
 | Attach UX tuning for 380px sidebar | If 3.3 verification finds issues | Phase 3 or Post-MVP |
