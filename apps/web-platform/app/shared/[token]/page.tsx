@@ -2,9 +2,23 @@
 
 import { useState, useEffect, use } from "react";
 import Link from "next/link";
+import dynamic from "next/dynamic";
 import { MarkdownRenderer } from "@/components/ui/markdown-renderer";
 import { CtaBanner } from "@/components/shared/cta-banner";
-import { PdfPreview } from "@/components/kb/pdf-preview";
+
+// Dynamic import with ssr: false — pdf-preview touches `import.meta.url` and
+// pdfjs worker globals at module load, which fail during server render.
+const PdfPreview = dynamic(
+  () => import("@/components/kb/pdf-preview").then((mod) => mod.PdfPreview),
+  {
+    ssr: false,
+    loading: () => (
+      <div className="flex items-center justify-center p-8">
+        <div className="h-5 w-5 animate-spin rounded-full border-2 border-neutral-600 border-t-amber-400" />
+      </div>
+    ),
+  },
+);
 
 type SharedData =
   | { kind: "markdown"; content: string; path: string }
