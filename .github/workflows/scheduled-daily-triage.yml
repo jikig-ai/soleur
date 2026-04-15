@@ -73,7 +73,10 @@ jobs:
 
             ## Instructions
 
-            1. List open issues: `gh issue list --state open --limit 200 --json number,title,labels`
+            1. List open issues: `gh issue list --state open --limit 200 --json number,title,labels --jq 'map(select(.labels | map(.name) | index("ux-audit") | not))'`
+               The `--jq` filter excludes `ux-audit`-labeled issues (filed by the
+               soleur:ux-audit agent loop — they carry their own `domain/product`
+               label and do not need auto-triage).
             2. Filter: skip any issue that already has a label starting with `priority/`.
                These have already been triaged.
             3. For each remaining issue:

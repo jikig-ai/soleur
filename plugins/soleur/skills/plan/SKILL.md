@@ -397,39 +397,6 @@ Examples:
 - ❌ `knowledge-base/project/plans/2026-01-15-feat: user auth-plan.md` (invalid characters - colon and space)
 - ❌ `knowledge-base/project/plans/feat-user-auth-plan.md` (missing date prefix)
 
-## Save Tasks to Knowledge Base (if exists)
-
-**After writing the plan to `knowledge-base/project/plans/`, also create tasks.md if knowledge-base/ exists:**
-
-Check if `knowledge-base/` exists. If so, run `git branch --show-current` to get the current branch. If on a `feat-*` branch, create the spec directory with `mkdir -p knowledge-base/project/specs/<branch-name>`.
-
-**If knowledge-base/ exists and on a feature branch:**
-
-1. **Generate tasks.md** using `spec-templates` skill template:
-   - Extract actionable tasks from the plan
-   - Organize into phases (Setup, Core Implementation, Testing)
-   - Use hierarchical numbering (1.1, 2.1, 2.1.1, etc.)
-
-2. **Save tasks.md** to `knowledge-base/project/specs/feat-<name>/tasks.md`
-
-3. **Announce:** "Tasks saved to `knowledge-base/project/specs/feat-<name>/tasks.md`. Use `skill: soleur:work` to implement."
-
-4. **Commit and push plan artifacts:**
-
-   After both the plan file and tasks.md are written, commit and push everything:
-
-   ```bash
-   git add knowledge-base/project/plans/ knowledge-base/project/specs/feat-<name>/tasks.md
-   git commit -m "docs: create plan and tasks for feat-<name>"
-   git push
-   ```
-
-   If the push fails (no network), print a warning but continue.
-
-**If knowledge-base/ does NOT exist or not on feature branch:**
-
-- Plan saved to `knowledge-base/project/plans/` only (current behavior)
-
 ## Plan Review (Always Runs)
 
 After writing the plan file, automatically run `/plan_review <plan_file_path>` to get feedback from three specialized reviewers in parallel:
@@ -445,6 +412,41 @@ After writing the plan file, automatically run `/plan_review <plan_file_path>` t
 3. If Yes: apply all changes to the plan file
 4. If Partially: ask which changes to apply, then apply selected changes
 5. If Skip: continue unchanged
+
+**Why Plan Review runs BEFORE Save Tasks:** `tasks.md` is a derivative breakdown of the plan's phases. If review prompts material changes (phase cuts, deliverable rewrites), generating `tasks.md` beforehand would immediately go stale and require regeneration. Running review first → applying changes → then deriving tasks ensures `tasks.md` reflects the final plan as a single source of truth, and the commit below covers both files in one atomic history entry.
+
+## Save Tasks to Knowledge Base (if exists)
+
+**After Plan Review has applied any requested changes**, generate `tasks.md` from the finalized plan and commit all artifacts together:
+
+Check if `knowledge-base/` exists. If so, run `git branch --show-current` to get the current branch. If on a `feat-*` branch, create the spec directory with `mkdir -p knowledge-base/project/specs/<branch-name>`.
+
+**If knowledge-base/ exists and on a feature branch:**
+
+1. **Generate tasks.md** using `spec-templates` skill template, derived from the finalized (post-review) plan:
+   - Extract actionable tasks from the plan
+   - Organize into phases (Setup, Core Implementation, Testing)
+   - Use hierarchical numbering (1.1, 2.1, 2.1.1, etc.)
+
+2. **Save tasks.md** to `knowledge-base/project/specs/feat-<name>/tasks.md`
+
+3. **Announce:** "Tasks saved to `knowledge-base/project/specs/feat-<name>/tasks.md`. Use `skill: soleur:work` to implement."
+
+4. **Commit and push plan artifacts:**
+
+   Both the plan file and tasks.md are committed together so the final plan and its task breakdown land in the same history entry:
+
+   ```bash
+   git add knowledge-base/project/plans/ knowledge-base/project/specs/feat-<name>/tasks.md
+   git commit -m "docs: create plan and tasks for feat-<name>"
+   git push
+   ```
+
+   If the push fails (no network), print a warning but continue.
+
+**If knowledge-base/ does NOT exist or not on feature branch:**
+
+- Plan saved to `knowledge-base/project/plans/` only (current behavior)
 
 ## Exit Gate (direct invocation only)
 

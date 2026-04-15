@@ -9,7 +9,7 @@
   "plugins": [
     {
       "name": "soleur",
-      "description": "A full AI organization across engineering, finance, marketing, legal, operations, product, sales, and support. Agents, skills, and MCP servers that compound your company knowledge over time.",
+      "description": "A full AI organization across engineering, finance, marketing, legal, operations, product, sales, and support. Agents, skills, and MCP servers that compound your company knowledge over time. Includes soleur:ux-audit for recurring live-UI UX review.",
       "version": "0.0.0-dev",
       "author": {
         "name": "Jean Deruelle",
