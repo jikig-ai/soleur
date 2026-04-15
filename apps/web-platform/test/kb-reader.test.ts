@@ -355,27 +355,68 @@ describe("searchKb", () => {
     expect(match!.frontmatter).toEqual({ category: "test" });
   });
 
-  test("does not search binary/non-.md files", async () => {
-    fs.writeFileSync(path.join(kbRoot, "image.png"), "findme in png");
-    fs.writeFileSync(path.join(kbRoot, "data.csv"), "findme in csv");
-    fs.writeFileSync(path.join(kbRoot, "searchable.md"), "findme in markdown");
-    const result = await searchKb(kbRoot, "findme");
-    // Only the .md file should be searched
-    expect(result.results).toHaveLength(1);
-    expect(result.results[0].path).toBe("searchable.md");
+  test("finds binary files by filename match", async () => {
+    fs.writeFileSync(path.join(kbRoot, "invoice-q1.pdf"), "fake-pdf-bytes");
+    fs.writeFileSync(path.join(kbRoot, "diagram.png"), "fake-png-bytes");
+    const pdfHit = await searchKb(kbRoot, "invoice");
+    const pdfRow = pdfHit.results.find((r) => r.path === "invoice-q1.pdf");
+    expect(pdfRow).toBeDefined();
+    expect(pdfRow!.kind).toBe("filename");
+    const pngHit = await searchKb(kbRoot, "diagram");
+    expect(pngHit.results.some((r) => r.path === "diagram.png")).toBe(true);
   });
 
-  test("collectMdFiles still returns only .md files", async () => {
+  test("collectSearchableFiles returns all allowed extensions", async () => {
     fs.writeFileSync(path.join(kbRoot, "doc.md"), "markdown");
     fs.writeFileSync(path.join(kbRoot, "image.png"), "png");
-    fs.writeFileSync(path.join(kbRoot, "data.csv"), "csv");
-    // searchKb uses collectMdFiles internally — if it only finds .md files,
-    // then collectMdFiles is correctly filtering.
-    const result = await searchKb(kbRoot, "markdown");
-    expect(result.results).toHaveLength(1);
-    expect(result.results[0].path).toBe("doc.md");
-    // Also verify no results for content only in non-.md files
-    const pngResult = await searchKb(kbRoot, "png");
-    expect(pngResult.results).toHaveLength(0);
+    fs.writeFileSync(path.join(kbRoot, "data.csv"), "csv,row");
+    fs.writeFileSync(path.join(kbRoot, "spec.pdf"), "fake-pdf");
+    fs.writeFileSync(path.join(kbRoot, "report.docx"), "fake-docx");
+    // Filename match across all allowed extensions
+    const docResult = await searchKb(kbRoot, "doc");
+    const docPaths = new Set(docResult.results.map((r) => r.path));
+    expect(docPaths.has("doc.md")).toBe(true);
+    expect(docPaths.has("spec.pdf")).toBe(false); // "doc" not in "spec.pdf"
+    const imgResult = await searchKb(kbRoot, "image");
+    expect(imgResult.results.some((r) => r.path === "image.png")).toBe(true);
+    const reportResult = await searchKb(kbRoot, "report");
+    expect(reportResult.results.some((r) => r.path === "report.docx")).toBe(true);
+  });
+
+  test("content-searches .txt and .csv files", async () => {
+    fs.writeFileSync(path.join(kbRoot, "notes.txt"), "the quick brown fox");
+    fs.writeFileSync(path.join(kbRoot, "data.csv"), "id,name\n1,widget");
+    const txtHit = await searchKb(kbRoot, "brown");
+    const txtRow = txtHit.results.find((r) => r.path === "notes.txt");
+    expect(txtRow).toBeDefined();
+    expect(txtRow!.kind).toBe("content");
+    const csvHit = await searchKb(kbRoot, "widget");
+    const csvRow = csvHit.results.find((r) => r.path === "data.csv");
+    expect(csvRow).toBeDefined();
+    expect(csvRow!.kind).toBe("content");
+  });
+
+  test("does not read binary file bytes for content match", async () => {
+    // Bytes that would match "body" if scanned — must not surface
+    fs.writeFileSync(path.join(kbRoot, "a.pdf"), "header PDF body PDF");
+    const hit = await searchKb(kbRoot, "body");
+    expect(hit.results.find((r) => r.path === "a.pdf")).toBeUndefined();
+  });
+
+  test("content matches rank above pure filename matches", async () => {
+    fs.writeFileSync(path.join(kbRoot, "widget-spec.pdf"), "bytes");
+    fs.writeFileSync(path.join(kbRoot, "widget-notes.md"), "widget widget widget");
+    const hit = await searchKb(kbRoot, "widget");
+    expect(hit.results[0].path).toBe("widget-notes.md");
+    expect(hit.results[0].kind).toBe("content");
+    const last = hit.results[hit.results.length - 1];
+    expect(last.path).toBe("widget-spec.pdf");
+    expect(last.kind).toBe("filename");
+  });
+
+  test("filename match is case-insensitive on extension", async () => {
+    fs.writeFileSync(path.join(kbRoot, "Q1-Invoice.PDF"), "bytes");
+    const hit = await searchKb(kbRoot, "invoice");
+    expect(hit.results.some((r) => r.path === "Q1-Invoice.PDF")).toBe(true);
   });
 });

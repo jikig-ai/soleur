@@ -381,19 +381,19 @@ Extend `searchKb` in `apps/web-platform/server/kb-reader.ts` to:
 
 ## Acceptance Criteria
 
-- [ ] Uploading a PDF named `invoice-q1-2026.pdf` and searching for `invoice` returns the PDF in the search results (filename match).
-- [ ] Uploading a PNG named `architecture-diagram.png` and searching for `diagram` returns the PNG.
-- [ ] Uploading a CSV with the row `id,widget-name\n1,hammer` and searching for `hammer` returns the CSV (content match).
-- [ ] Uploading a TXT file with the word "roadmap" and searching for `roadmap` returns the TXT (content match).
-- [ ] PDF and DOCX are NOT content-searched — searching for a string that only appears in binary bytes of a PDF does not return the PDF.
-- [ ] A content match on a .md file ranks above a filename-only match on a PDF for the same query.
-- [ ] `SearchResult.kind` field is populated correctly on every result.
-- [ ] The UI shows "Filename match" labeling (or equivalent) on filename-only results, distinct from line-numbered content snippets.
-- [ ] All existing `kb-reader.test.ts` tests that were NOT encoding the bug remain green.
-- [ ] No new runtime dependencies added to `apps/web-platform/package.json`.
-- [ ] `collectSearchableFiles` skips symbolic links on both the directory and file branches (verified by a new negative-space test in `test/kb-security.test.ts`).
-- [ ] Extension matching is case-insensitive — `Q1-Invoice.PDF`, `DIAGRAM.PNG`, and `notes.TXT` all surface in results.
-- [ ] Filename-match RegExp is instantiated per-callback (not module-scoped) — enforces Promise.all regex-concurrency safety.
+- [x] Uploading a PDF named `invoice-q1-2026.pdf` and searching for `invoice` returns the PDF in the search results (filename match).
+- [x] Uploading a PNG named `architecture-diagram.png` and searching for `diagram` returns the PNG.
+- [x] Uploading a CSV with the row `id,widget-name\n1,hammer` and searching for `hammer` returns the CSV (content match).
+- [x] Uploading a TXT file with the word "roadmap" and searching for `roadmap` returns the TXT (content match).
+- [x] PDF and DOCX are NOT content-searched — searching for a string that only appears in binary bytes of a PDF does not return the PDF.
+- [x] A content match on a .md file ranks above a filename-only match on a PDF for the same query.
+- [x] `SearchResult.kind` field is populated correctly on every result.
+- [x] The UI shows "Filename match" labeling (or equivalent) on filename-only results, distinct from line-numbered content snippets.
+- [x] All existing `kb-reader.test.ts` tests that were NOT encoding the bug remain green.
+- [x] No new runtime dependencies added to `apps/web-platform/package.json`.
+- [x] `collectSearchableFiles` skips symbolic links on both the directory and file branches (verified by a new negative-space test in `test/kb-security.test.ts`).
+- [x] Extension matching is case-insensitive — `Q1-Invoice.PDF`, `DIAGRAM.PNG`, and `notes.TXT` all surface in results.
+- [x] Filename-match RegExp is instantiated per-callback (not module-scoped) — enforces Promise.all regex-concurrency safety.
 
 ## Test Scenarios
 

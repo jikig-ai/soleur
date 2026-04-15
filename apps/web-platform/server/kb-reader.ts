@@ -35,6 +35,7 @@ export interface SearchResult {
   path: string;
   frontmatter: Record<string, unknown>;
   matches: SearchMatch[];
+  kind: "content" | "filename";
 }
 
 // --- Errors ---
@@ -111,26 +112,55 @@ function parseFrontmatter(raw: string): {
   }
 }
 
-// Search only indexes .md files — binary files are not text-searchable.
-// This is intentional even though buildTree now includes all file types.
-async function collectMdFiles(
+// What the search corpus indexes. Mirrors apps/web-platform/app/api/kb/upload/route.ts
+// ALLOWED_EXTENSIONS plus .md (which is native KB content, not an "upload").
+// All entries MUST be lowercase — the lookup site lowercases ext before the .has check.
+const CONTENT_SEARCHABLE = new Set([".md", ".txt", ".csv"]);
+const FILENAME_SEARCHABLE = new Set([
+  ".md",
+  ".txt",
+  ".csv",
+  ".pdf",
+  ".docx",
+  ".png",
+  ".jpg",
+  ".jpeg",
+  ".gif",
+  ".webp",
+]);
+
+interface SearchableFile {
+  relativePath: string;
+  ext: string; // lowercase
+}
+
+async function collectSearchableFiles(
   dir: string,
   relativeTo: string,
-): Promise<string[]> {
-  const files: string[] = [];
+): Promise<SearchableFile[]> {
+  const files: SearchableFile[] = [];
   let entries: fs.Dirent[];
   try {
     entries = await fs.promises.readdir(dir, { withFileTypes: true });
   } catch {
     return files;
   }
-  const dirPromises: Promise<string[]>[] = [];
+  const dirPromises: Promise<SearchableFile[]>[] = [];
   for (const entry of entries) {
     const fullPath = path.join(dir, entry.name);
+    // Symlink guard on every branch: prevents enumeration escape via
+    // a planted symlink pointing at /etc/ or another workspace.
     if (entry.isDirectory() && !entry.isSymbolicLink()) {
-      dirPromises.push(collectMdFiles(fullPath, relativeTo));
-    } else if (entry.isFile() && !entry.isSymbolicLink() && entry.name.endsWith(".md")) {
-      files.push(path.relative(relativeTo, fullPath));
+      dirPromises.push(collectSearchableFiles(fullPath, relativeTo));
+    } else if (entry.isFile() && !entry.isSymbolicLink()) {
+      // path.extname preserves case (.PDF !== .pdf) — must lowercase before lookup.
+      const ext = path.extname(entry.name).toLowerCase();
+      if (FILENAME_SEARCHABLE.has(ext)) {
+        files.push({
+          relativePath: path.relative(relativeTo, fullPath),
+          ext,
+        });
+      }
     }
   }
   const nestedResults = await Promise.all(dirPromises);
@@ -138,6 +168,26 @@ async function collectMdFiles(
     files.push(...nested);
   }
   return files;
+}
+
+function matchFilename(
+  relativePath: string,
+  escapedQuery: string,
+): SearchMatch[] {
+  const basename = path.basename(relativePath);
+  // Per-callback RegExp: /gi is stateful via lastIndex. Sharing a single
+  // instance across concurrent Promise.all callbacks loses matches.
+  // matchAll returns a fresh iterator and avoids stateful lastIndex juggling.
+  const matches: SearchMatch[] = [];
+  for (const found of basename.matchAll(new RegExp(escapedQuery, "gi"))) {
+    const start = found.index ?? 0;
+    matches.push({
+      line: 0,
+      text: basename,
+      highlight: [start, start + found[0].length],
+    });
+  }
+  return matches;
 }
 
 // --- Public API ---
@@ -260,45 +310,32 @@ export async function searchKb(
   }
 
   const escapedQuery = escapeRegex(query);
-  const mdFiles = await collectMdFiles(kbRoot, kbRoot);
+  const files = await collectSearchableFiles(kbRoot, kbRoot);
 
-  // Flat-parallel: every file is read concurrently via Promise.all, unlike collectMdFiles
-  // and buildTree which use tree-recursive parallelism (bounded by directory depth).
+  // Flat-parallel: every file is read concurrently via Promise.all.
   // For very large KBs (10,000+ files), this is the first bottleneck — apply p-limit here.
   const searchResults = await Promise.all(
-    mdFiles.map(async (relativePath): Promise<SearchResult | null> => {
-      const fullPath = path.join(kbRoot, relativePath);
-      let raw: string;
-      try {
-        const stat = await fs.promises.stat(fullPath);
-        if (stat.size > KB_MAX_FILE_SIZE) return null;
-        raw = await fs.promises.readFile(fullPath, "utf-8");
-      } catch {
-        return null;
+    files.map(async (file): Promise<SearchResult | null> => {
+      const filenameMatches = matchFilename(file.relativePath, escapedQuery);
+
+      // Content search only on text-native types. Binaries (pdf/docx/images)
+      // get filename-only matches until a real text-extraction pipeline lands.
+      if (CONTENT_SEARCHABLE.has(file.ext)) {
+        const contentResult = await contentSearch(
+          path.join(kbRoot, file.relativePath),
+          file.relativePath,
+          escapedQuery,
+        );
+        if (contentResult) return contentResult;
       }
 
-      // Created per-callback to avoid lastIndex contention across concurrent callbacks.
-      // Do not hoist — RegExp with /g flag is stateful and shared instances would skip matches.
-      const regex = new RegExp(escapedQuery, "gi");
-      const lines = raw.split("\n");
-      const matches: SearchMatch[] = [];
-
-      for (let i = 0; i < lines.length; i++) {
-        const line = lines[i];
-        let match: RegExpExecArray | null;
-        regex.lastIndex = 0;
-        while ((match = regex.exec(line)) !== null) {
-          matches.push({
-            line: i + 1,
-            text: line,
-            highlight: [match.index, match.index + match[0].length],
-          });
-        }
-      }
-
-      if (matches.length > 0) {
-        const { frontmatter } = parseFrontmatter(raw);
-        return { path: relativePath, frontmatter, matches };
+      if (filenameMatches.length > 0) {
+        return {
+          path: file.relativePath,
+          frontmatter: {},
+          matches: filenameMatches,
+          kind: "filename",
+        };
       }
       return null;
     }),
@@ -308,12 +345,56 @@ export async function searchKb(
     (r): r is SearchResult => r !== null,
   );
 
-  // Sort by match count descending
-  results.sort((a, b) => b.matches.length - a.matches.length);
+  // Two-pass stable sort: content matches first (ranked by match count desc),
+  // then filename-only matches (alphabetical). Filename hits never outrank content hits.
+  const contentHits = results
+    .filter((r) => r.kind === "content")
+    .sort((a, b) => b.matches.length - a.matches.length);
+  const filenameHits = results
+    .filter((r) => r.kind === "filename")
+    .sort((a, b) => a.path.localeCompare(b.path));
+  const sorted = [...contentHits, ...filenameHits];
 
-  const total = results.length;
+  const total = sorted.length;
   return {
-    results: results.slice(0, MAX_SEARCH_RESULTS),
+    results: sorted.slice(0, MAX_SEARCH_RESULTS),
     total,
   };
+}
+
+async function contentSearch(
+  fullPath: string,
+  relativePath: string,
+  escapedQuery: string,
+): Promise<SearchResult | null> {
+  let raw: string;
+  try {
+    const stat = await fs.promises.stat(fullPath);
+    if (stat.size > KB_MAX_FILE_SIZE) return null;
+    raw = await fs.promises.readFile(fullPath, "utf-8");
+  } catch {
+    return null;
+  }
+
+  // Per-callback RegExp: /gi is stateful via lastIndex. matchAll returns
+  // a fresh iterator so we avoid manual lastIndex juggling.
+  const pattern = new RegExp(escapedQuery, "gi");
+  const lines = raw.split("\n");
+  const matches: SearchMatch[] = [];
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    for (const found of line.matchAll(pattern)) {
+      const start = found.index ?? 0;
+      matches.push({
+        line: i + 1,
+        text: line,
+        highlight: [start, start + found[0].length],
+      });
+    }
+  }
+
+  if (matches.length === 0) return null;
+  const { frontmatter } = parseFrontmatter(raw);
+  return { path: relativePath, frontmatter, matches, kind: "content" };
 }
