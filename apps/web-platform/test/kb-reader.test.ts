@@ -355,27 +355,120 @@ describe("searchKb", () => {
     expect(match!.frontmatter).toEqual({ category: "test" });
   });
 
-  test("does not search binary/non-.md files", async () => {
-    fs.writeFileSync(path.join(kbRoot, "image.png"), "findme in png");
-    fs.writeFileSync(path.join(kbRoot, "data.csv"), "findme in csv");
-    fs.writeFileSync(path.join(kbRoot, "searchable.md"), "findme in markdown");
-    const result = await searchKb(kbRoot, "findme");
-    // Only the .md file should be searched
-    expect(result.results).toHaveLength(1);
-    expect(result.results[0].path).toBe("searchable.md");
+  test("finds binary files by filename match", async () => {
+    fs.writeFileSync(path.join(kbRoot, "invoice-q1.pdf"), "fake-pdf-bytes");
+    fs.writeFileSync(path.join(kbRoot, "diagram.png"), "fake-png-bytes");
+    const pdfHit = await searchKb(kbRoot, "invoice");
+    const pdfRow = pdfHit.results.find((r) => r.path === "invoice-q1.pdf");
+    expect(pdfRow).toBeDefined();
+    expect(pdfRow!.kind).toBe("filename");
+    const pngHit = await searchKb(kbRoot, "diagram");
+    expect(pngHit.results.some((r) => r.path === "diagram.png")).toBe(true);
   });
 
-  test("collectMdFiles still returns only .md files", async () => {
+  test("collectSearchableFiles returns all allowed extensions", async () => {
     fs.writeFileSync(path.join(kbRoot, "doc.md"), "markdown");
     fs.writeFileSync(path.join(kbRoot, "image.png"), "png");
-    fs.writeFileSync(path.join(kbRoot, "data.csv"), "csv");
-    // searchKb uses collectMdFiles internally — if it only finds .md files,
-    // then collectMdFiles is correctly filtering.
-    const result = await searchKb(kbRoot, "markdown");
-    expect(result.results).toHaveLength(1);
-    expect(result.results[0].path).toBe("doc.md");
-    // Also verify no results for content only in non-.md files
-    const pngResult = await searchKb(kbRoot, "png");
-    expect(pngResult.results).toHaveLength(0);
+    fs.writeFileSync(path.join(kbRoot, "data.csv"), "csv,row");
+    fs.writeFileSync(path.join(kbRoot, "spec.pdf"), "fake-pdf");
+    fs.writeFileSync(path.join(kbRoot, "report.docx"), "fake-docx");
+    // Filename match across all allowed extensions
+    const docResult = await searchKb(kbRoot, "doc");
+    const docPaths = new Set(docResult.results.map((r) => r.path));
+    expect(docPaths.has("doc.md")).toBe(true);
+    expect(docPaths.has("spec.pdf")).toBe(false); // "doc" not in "spec.pdf"
+    const imgResult = await searchKb(kbRoot, "image");
+    expect(imgResult.results.some((r) => r.path === "image.png")).toBe(true);
+    const reportResult = await searchKb(kbRoot, "report");
+    expect(reportResult.results.some((r) => r.path === "report.docx")).toBe(true);
+  });
+
+  test("content-searches .txt and .csv files", async () => {
+    fs.writeFileSync(path.join(kbRoot, "notes.txt"), "the quick brown fox");
+    fs.writeFileSync(path.join(kbRoot, "data.csv"), "id,name\n1,widget");
+    const txtHit = await searchKb(kbRoot, "brown");
+    const txtRow = txtHit.results.find((r) => r.path === "notes.txt");
+    expect(txtRow).toBeDefined();
+    expect(txtRow!.kind).toBe("content");
+    const csvHit = await searchKb(kbRoot, "widget");
+    const csvRow = csvHit.results.find((r) => r.path === "data.csv");
+    expect(csvRow).toBeDefined();
+    expect(csvRow!.kind).toBe("content");
+  });
+
+  test("does not read binary file bytes for content match", async () => {
+    // Bytes that would match "body" if scanned — must not surface
+    fs.writeFileSync(path.join(kbRoot, "a.pdf"), "header PDF body PDF");
+    const hit = await searchKb(kbRoot, "body");
+    expect(hit.results.find((r) => r.path === "a.pdf")).toBeUndefined();
+  });
+
+  test("content matches rank above pure filename matches", async () => {
+    fs.writeFileSync(path.join(kbRoot, "widget-spec.pdf"), "bytes");
+    fs.writeFileSync(path.join(kbRoot, "widget-notes.md"), "widget widget widget");
+    const hit = await searchKb(kbRoot, "widget");
+    expect(hit.results[0].path).toBe("widget-notes.md");
+    expect(hit.results[0].kind).toBe("content");
+    const last = hit.results[hit.results.length - 1];
+    expect(last.path).toBe("widget-spec.pdf");
+    expect(last.kind).toBe("filename");
+  });
+
+  test("filename match is case-insensitive on extension", async () => {
+    fs.writeFileSync(path.join(kbRoot, "Q1-Invoice.PDF"), "bytes");
+    const hit = await searchKb(kbRoot, "invoice");
+    expect(hit.results.some((r) => r.path === "Q1-Invoice.PDF")).toBe(true);
+  });
+
+  test("filename match escapes special regex characters", async () => {
+    fs.writeFileSync(path.join(kbRoot, "foo[bar].pdf"), "bytes");
+    const hit = await searchKb(kbRoot, "foo[bar]");
+    expect(hit.results.some((r) => r.path === "foo[bar].pdf")).toBe(true);
+  });
+
+  test("filename match still surfaces oversized content-searchable files", async () => {
+    // 1 MB + 1 to exceed KB_MAX_FILE_SIZE — content search skips, filename match runs.
+    const big = "x".repeat(1024 * 1024 + 1);
+    fs.writeFileSync(path.join(kbRoot, "huge-report.csv"), big);
+    const hit = await searchKb(kbRoot, "report");
+    const row = hit.results.find((r) => r.path === "huge-report.csv");
+    expect(row).toBeDefined();
+    expect(row!.kind).toBe("filename");
+  });
+
+  test("searchKb skips symlinked directories under kbRoot", async () => {
+    // EPERM on Windows or sandboxed CI — skip cleanly when symlink fails.
+    try {
+      fs.symlinkSync("/etc", path.join(kbRoot, "link-to-etc"), "dir");
+    } catch {
+      return;
+    }
+    fs.writeFileSync(path.join(kbRoot, "real.md"), "findme in kb");
+    const result = await searchKb(kbRoot, "findme");
+    expect(
+      result.results.every((r) => !r.path.startsWith("link-to-etc")),
+    ).toBe(true);
+  });
+
+  test("searchKb completes quickly on dense matches and does not hang", async () => {
+    // Regression guard: matchAll should not stall on g-flag iteration even
+    // when many lines match. Bound completion time well under the per-file cap.
+    fs.writeFileSync(path.join(kbRoot, "blank.md"), "x\n".repeat(500));
+    const winner = await Promise.race([
+      searchKb(kbRoot, "x"),
+      new Promise((_, reject) =>
+        setTimeout(() => reject(new Error("timeout")), 2000),
+      ),
+    ]);
+    expect(winner).toBeDefined();
+  }, 3000);
+
+  test("contentSearch caps per-file matches at MAX_MATCHES_PER_FILE", async () => {
+    // 200 lines all matching — internal cap (50) prevents heap blow-up.
+    fs.writeFileSync(path.join(kbRoot, "many.md"), "match\n".repeat(200));
+    const result = await searchKb(kbRoot, "match");
+    const row = result.results.find((r) => r.path === "many.md");
+    expect(row).toBeDefined();
+    expect(row!.matches.length).toBeLessThanOrEqual(50);
   });
 });

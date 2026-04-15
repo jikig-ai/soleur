@@ -4,13 +4,21 @@ import { useState, useEffect, use } from "react";
 import Link from "next/link";
 import { MarkdownRenderer } from "@/components/ui/markdown-renderer";
 import { CtaBanner } from "@/components/shared/cta-banner";
+import { PdfPreview } from "@/components/kb/pdf-preview";
 
-interface SharedContent {
-  content: string;
-  path: string;
-}
+type SharedData =
+  | { kind: "markdown"; content: string; path: string }
+  | { kind: "pdf"; src: string; filename: string }
+  | { kind: "image"; src: string; alt: string }
+  | { kind: "download"; src: string; filename: string };
 
 type PageError = "not-found" | "revoked" | "unknown";
+
+function extractFilename(contentDisposition: string | null): string {
+  if (!contentDisposition) return "file";
+  const match = /filename="?([^";]+)"?/i.exec(contentDisposition);
+  return match?.[1] ?? "file";
+}
 
 export default function SharedDocumentPage({
   params,
@@ -18,7 +26,7 @@ export default function SharedDocumentPage({
   params: Promise<{ token: string }>;
 }) {
   const { token } = use(params);
-  const [data, setData] = useState<SharedContent | null>(null);
+  const [data, setData] = useState<SharedData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<PageError | null>(null);
 
@@ -43,8 +51,24 @@ export default function SharedDocumentPage({
           setLoading(false);
           return;
         }
-        const json = await res.json();
-        setData(json);
+        const contentType = res.headers.get("content-type") ?? "";
+        const disposition = res.headers.get("content-disposition");
+        const src = `/api/shared/${token}`;
+
+        if (contentType.startsWith("application/json")) {
+          const json = await res.json();
+          setData({ kind: "markdown", content: json.content, path: json.path });
+        } else if (contentType.startsWith("application/pdf")) {
+          setData({ kind: "pdf", src, filename: extractFilename(disposition) });
+        } else if (contentType.startsWith("image/")) {
+          setData({ kind: "image", src, alt: extractFilename(disposition) });
+        } else {
+          setData({
+            kind: "download",
+            src,
+            filename: extractFilename(disposition),
+          });
+        }
         setLoading(false);
       } catch {
         if (!cancelled) {
@@ -99,10 +123,46 @@ export default function SharedDocumentPage({
               />
             )}
 
-            {data && (
+            {data?.kind === "markdown" && (
               <article className="prose-kb">
                 <MarkdownRenderer content={data.content} nofollow />
               </article>
+            )}
+
+            {data?.kind === "pdf" && (
+              <div className="h-[80vh]">
+                <PdfPreview src={data.src} filename={data.filename} />
+              </div>
+            )}
+
+            {data?.kind === "image" && (
+              <div className="flex justify-center">
+                <img
+                  data-testid="shared-image"
+                  src={data.src}
+                  alt={data.alt}
+                  className="max-h-[80vh] max-w-full rounded-lg border border-neutral-800"
+                />
+              </div>
+            )}
+
+            {data?.kind === "download" && (
+              <div className="flex flex-col items-center justify-center py-20 text-center">
+                <h1 className="mb-2 text-lg font-semibold text-white">
+                  {data.filename}
+                </h1>
+                <p className="mb-6 text-sm text-neutral-400">
+                  Download to view this file.
+                </p>
+                <a
+                  data-testid="shared-download"
+                  href={data.src}
+                  download={data.filename}
+                  className="inline-flex items-center gap-2 rounded-lg border border-amber-500/50 px-4 py-2 text-sm font-medium text-amber-400 transition-colors hover:border-amber-400 hover:text-amber-300"
+                >
+                  Download {data.filename}
+                </a>
+              </div>
             )}
           </div>
         </main>

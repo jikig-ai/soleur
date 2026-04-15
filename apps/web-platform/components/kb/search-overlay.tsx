@@ -118,14 +118,20 @@ function SearchResultCard({ result }: { result: SearchResult }) {
       </div>
       <div className="space-y-1">
         {snippets.map((match, i) => (
-          <SnippetLine key={i} match={match} />
+          <SnippetLine key={i} match={match} kind={result.kind} />
         ))}
       </div>
     </Link>
   );
 }
 
-function SnippetLine({ match }: { match: SearchMatch }) {
+function SnippetLine({
+  match,
+  kind,
+}: {
+  match: SearchMatch;
+  kind: SearchResult["kind"];
+}) {
   const [start, end] = match.highlight;
   const before = match.text.substring(0, start);
   const highlighted = match.text.substring(start, end);
@@ -133,7 +139,9 @@ function SnippetLine({ match }: { match: SearchMatch }) {
 
   return (
     <div className="flex items-start gap-2 text-xs">
-      <span className="shrink-0 text-neutral-600">Line {match.line}</span>
+      <span className="shrink-0 text-neutral-600">
+        {kind === "filename" ? "Filename" : `Line ${match.line}`}
+      </span>
       <p className="truncate text-neutral-400">
         {before}
         <mark className="rounded bg-amber-500/20 px-0.5 text-amber-300">{highlighted}</mark>

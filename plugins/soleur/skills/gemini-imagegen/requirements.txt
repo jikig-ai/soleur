@@ -2,4 +2,4 @@
 # Full hash verification (--require-hashes) requires pip-compile for
 # transitive dependencies -- tracked as future enhancement.
 google-genai==1.66.0
-Pillow==12.1.1
+Pillow==12.2.0
