@@ -94,7 +94,7 @@ export function MarkdownRenderer({ content, nofollow }: MarkdownRendererProps) {
     : "noopener noreferrer";
 
   return (
-    <div className="min-w-0 break-words [overflow-wrap:anywhere]">
+    <div className="min-w-0 [overflow-wrap:anywhere]">
       <Markdown
         remarkPlugins={REMARK_PLUGINS}
         rehypePlugins={REHYPE_PLUGINS}

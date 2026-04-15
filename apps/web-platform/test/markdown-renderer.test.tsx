@@ -11,7 +11,6 @@ describe("MarkdownRenderer — chat markdown overflow (issue #2229)", () => {
 
     const cls = root!.className;
     expect(cls).toContain("min-w-0");
-    expect(cls).toContain("break-words");
     // Tailwind arbitrary value form for overflow-wrap: anywhere
     expect(cls).toContain("[overflow-wrap:anywhere]");
   });
