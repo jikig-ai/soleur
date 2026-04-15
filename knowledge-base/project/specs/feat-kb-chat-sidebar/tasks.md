@@ -10,16 +10,16 @@ Plan: `knowledge-base/project/plans/2026-04-15-feat-kb-chat-sidebar-plan.md`
 
 ## Phase 1 — Primitives (zero user-visible change)
 
-- [ ] 1.1 Create `apps/web-platform/hooks/use-media-query.ts` (SSR-safe hook). Test: `test/use-media-query.test.ts`.
-- [ ] 1.2 Create `apps/web-platform/components/ui/sheet.tsx` with right-side / bottom snap points; drag < 10vh = close. Test: `test/sheet.test.tsx`.
-- [ ] 1.3 Extract `<ChatSurface variant>` from `app/(dashboard)/dashboard/chat/[conversationId]/page.tsx`.
-  - [ ] 1.3.1 Create `components/chat/chat-surface.tsx` with full/sidebar variant branches.
-  - [ ] 1.3.2 Create `components/chat/message-bubble.tsx` (lifted + enable markdown on user bubbles so blockquotes render).
-  - [ ] 1.3.3 Create `components/chat/review-gate-card.tsx` (lifted).
-  - [ ] 1.3.4 Create `components/chat/status-indicator.tsx` (lifted).
-  - [ ] 1.3.5 Reduce `chat/[conversationId]/page.tsx` to thin shell around `<ChatSurface variant="full">`.
-  - [ ] 1.3.6 Apply `min-w-0` + `[overflow-wrap:anywhere]` throughout sidebar variant; code blocks wrap (not scroll).
-- [ ] 1.4 Tests: update `test/chat-page.test.tsx`; add `test/chat-surface-sidebar.test.tsx`.
+- [x] 1.1 Create `apps/web-platform/hooks/use-media-query.ts` (SSR-safe hook). Test: `test/use-media-query.test.tsx`.
+- [x] 1.2 Create `apps/web-platform/components/ui/sheet.tsx` with right-side / bottom snap points; drag < 10vh = close. Test: `test/sheet.test.tsx`.
+- [x] 1.3 Extract `<ChatSurface variant>` from `app/(dashboard)/dashboard/chat/[conversationId]/page.tsx`.
+  - [x] 1.3.1 Create `components/chat/chat-surface.tsx` with full/sidebar variant branches.
+  - [x] 1.3.2 Create `components/chat/message-bubble.tsx` (lifted + enable markdown on user bubbles so blockquotes render).
+  - [x] 1.3.3 Create `components/chat/review-gate-card.tsx` (lifted).
+  - [x] 1.3.4 Create `components/chat/status-indicator.tsx` (lifted).
+  - [x] 1.3.5 Reduce `chat/[conversationId]/page.tsx` to thin shell around `<ChatSurface variant="full">`.
+  - [x] 1.3.6 Apply `min-w-0` + `[overflow-wrap:anywhere]` throughout sidebar variant; code blocks wrap (not scroll).
+- [x] 1.4 Tests: existing `test/chat-page.test.tsx` passes unchanged (36 tests); added `test/chat-surface-sidebar.test.tsx` (5 tests).
 - [ ] 1.5 Regression: `/dashboard/chat/<id>` visually identical to main (screenshot-diff or manual).
 
 ## Phase 2 — KB sidebar shell + flag + first analytics emit
