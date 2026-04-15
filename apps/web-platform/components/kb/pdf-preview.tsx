@@ -11,9 +11,17 @@ pdfjs.GlobalWorkerOptions.workerSrc = new URL(
 interface PdfPreviewProps {
   src: string;
   filename: string;
+  /**
+   * Show the internal filename + Download row above the PDF viewer.
+   * Default `true` is required by `app/shared/[token]/page.tsx`, which
+   * renders `PdfPreview` directly with no external Download chrome.
+   * The dashboard opts out via `showDownload={false}` because it renders its
+   * own Download button in the outer page header.
+   */
+  showDownload?: boolean;
 }
 
-export function PdfPreview({ src, filename }: PdfPreviewProps) {
+export function PdfPreview({ src, filename, showDownload = true }: PdfPreviewProps) {
   const [numPages, setNumPages] = useState(0);
   const [pageNumber, setPageNumber] = useState(1);
   const [error, setError] = useState(false);
@@ -47,16 +55,18 @@ export function PdfPreview({ src, filename }: PdfPreviewProps) {
 
   return (
     <div className="flex h-full flex-col gap-3 p-4">
-      <div className="flex items-center justify-between">
-        <span className="text-sm text-neutral-400">{filename}</span>
-        <a
-          href={src}
-          download={filename}
-          className="rounded-md border border-neutral-700 px-3 py-1 text-xs text-neutral-300 hover:bg-neutral-800"
-        >
-          Download
-        </a>
-      </div>
+      {showDownload && (
+        <div className="flex items-center justify-between">
+          <span className="text-sm text-neutral-400">{filename}</span>
+          <a
+            href={src}
+            download={filename}
+            className="rounded-md border border-neutral-700 px-3 py-1 text-xs text-neutral-300 hover:bg-neutral-800"
+          >
+            Download
+          </a>
+        </div>
+      )}
 
       <div ref={containerRef} className="flex-1 overflow-auto rounded-lg border border-neutral-800 bg-neutral-900/50">
         <Document
