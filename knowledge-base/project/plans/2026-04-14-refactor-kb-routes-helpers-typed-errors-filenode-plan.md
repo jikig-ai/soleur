@@ -8,6 +8,24 @@
 **Source:** PR #2172 review follow-ups
 **Type:** refactor (non-functional; structure + typing only)
 
+## Enhancement Summary
+
+**Deepened on:** 2026-04-14
+**Sections enhanced:** GitHubApiError design, test-mocking strategy, risk table
+**Key corrections from deepen pass:**
+
+1. **CRITICAL:** `GitHubApiError` already exists at `apps/web-platform/server/github-app.ts:62` with field `statusCode` (not `status`). The original plan prescribed a new class — wrong. Correct approach: **re-export the existing class from `server/github-api.ts`** and have `handleErrorResponse` throw the existing class. Do NOT introduce a second `GitHubApiError` or rename the field.
+2. **Test mocking pattern correction:** Tests that need `instanceof GitHubApiError` in mocks must use the `vi.hoisted()` pattern (see learning `2026-04-10-vitest-hoisted-class-for-typed-error-mocking.md`). `importOriginal` inside `vi.mock("@/server/github-app")` or `vi.mock("@/server/github-api")` triggers transitive loader failures because the real modules pull in `@/server/logger.createChildLogger` which most test mocks don't provide. Use the hoisted class pattern proven by `test/create-route-error.test.ts:14-22`.
+3. **Symlink-check pattern:** `learning 2026-04-07-symlink-escape` confirms this module already enforces symlink rejection correctly for point-access (which this refactor preserves). No new enumeration risk because this refactor does not add recursive traversal.
+4. **Plan-review learning carry-forward:** Prior learnings (`2026-02-06-parallel-plan-review-catches-overengineering`, `2026-02-19-plan-review-catches-redundant-validation-gates`) warn that refactor plans tend to over-generalize helpers. The plan's "options bag" on `authenticateAndResolveKbPath` was flagged — kept minimal (`endpoint`, `blockMarkdown`) and added YAGNI note below.
+5. **Field name alignment:** All plan references to `err.status` were wrong; use `err.statusCode` to match the existing class contract. Updated throughout.
+
+**New considerations discovered:**
+
+- The existing `GitHubApiError` only carries `statusCode`, not `bodyText` or `path`. The plan's expanded shape (add `bodyText` and `path`) is **optional** and additive — only if a test or caller needs them. Prefer minimal change: just extend the constructor to accept optional `bodyText`/`path` as a follow-up if needed. Do not break existing `new GitHubApiError(message, status)` call sites.
+- `app/api/repo/create/route.ts:69` already uses `instanceof GitHubApiError && err.statusCode === 422` — the KB migration aligns with an established project convention, not a new one. This reduces review risk.
+
+
 ## Summary
 
 Address three code-review follow-ups from PR #2172 in one cohesive PR. All three items target the KB feature area and reinforce each other:
@@ -24,8 +42,8 @@ Address three code-review follow-ups from PR #2172 in one cohesive PR. All three
 
 ### #2149 — Typed GitHubApiError
 
-- `apps/web-platform/server/github-api.ts` — introduce `GitHubApiError` class; update `handleErrorResponse` to throw it; export the class
-- `apps/web-platform/app/api/kb/file/[...path]/route.ts` — replace `errMsg.includes("404")` / `includes("409")` / `includes("GitHub API")` with `instanceof GitHubApiError` + numeric `status` checks
+- `apps/web-platform/server/github-api.ts` — **re-export the existing `GitHubApiError` class from `@/server/github-app`**; update `handleErrorResponse` to throw it (instead of plain `Error`). Do NOT define a new class — the existing one at `server/github-app.ts:62` is already canonical and used by `app/api/repo/create/route.ts`.
+- `apps/web-platform/app/api/kb/file/[...path]/route.ts` — replace `errMsg.includes("404")` / `includes("409")` / `includes("GitHub API")` with `instanceof GitHubApiError` + `err.statusCode === N` checks (note field name: **`statusCode`**, not `status`)
 - `apps/web-platform/app/api/kb/upload/route.ts` — same replacements (both `errMsg.includes("404")` and `error.message.includes("GitHub API")`)
 
 ### #2180 — Extract helpers
@@ -41,8 +59,8 @@ Address three code-review follow-ups from PR #2172 in one cohesive PR. All three
 
 ### Tests (new + updated)
 
-- `apps/web-platform/test/github-api-error.test.ts` — **new** — unit tests for `GitHubApiError` class (instanceof, status, path, message shape)
-- `apps/web-platform/test/github-api.test.ts` — **update** — assert `handleErrorResponse` now throws `GitHubApiError` with correct `status` (404, 403, 409, 500)
+- `apps/web-platform/test/github-api.test.ts` — **update** — assert `handleErrorResponse` now throws `GitHubApiError` with correct `statusCode` (404, 403, 409, 500); assert re-export identity
+- (No new `github-api-error.test.ts` — the class already has coverage in `test/github-app-create-repo.test.ts`)
 - `apps/web-platform/test/kb-route-helpers.test.ts` — **new** — unit tests for `authenticateAndResolveKbPath` and `syncWorkspace` (each branch: unauth, workspace-not-ready, no-repo, empty path, null byte, `.md`, traversal, symlink, happy path)
 - `apps/web-platform/test/kb-delete.test.ts` — **update** — replace any assertions on string-matched 404 messages with `GitHubApiError.status`
 - `apps/web-platform/test/kb-rename.test.ts` — **update** — same
@@ -53,22 +71,30 @@ Address three code-review follow-ups from PR #2172 in one cohesive PR. All three
 
 ### 1. `GitHubApiError` (issue #2149)
 
+**Reuse the existing class** at `apps/web-platform/server/github-app.ts:62`:
+
+```typescript
+// apps/web-platform/server/github-app.ts (ALREADY EXISTS — DO NOT REDEFINE)
+export class GitHubApiError extends Error {
+  constructor(
+    message: string,
+    public readonly statusCode: number,
+  ) {
+    super(message);
+    this.name = "GitHubApiError";
+  }
+}
+```
+
+**Change in `server/github-api.ts`:** re-export the class and have `handleErrorResponse` throw it.
+
 ```typescript
 // apps/web-platform/server/github-api.ts
 
-export class GitHubApiError extends Error {
-  readonly status: number;
-  readonly path: string;
-  readonly bodyText: string;
+import { generateInstallationToken, GitHubApiError } from "./github-app";
+// ... existing imports ...
 
-  constructor(status: number, path: string, bodyText: string, message?: string) {
-    super(message ?? `GitHub API request failed: ${status} ${path}`);
-    this.name = "GitHubApiError";
-    this.status = status;
-    this.path = path;
-    this.bodyText = bodyText;
-  }
-}
+export { GitHubApiError };  // re-export for route-layer callers
 
 async function handleErrorResponse(
   response: Response,
@@ -79,21 +105,21 @@ async function handleErrorResponse(
   if (response.status === 403) {
     log.warn({ status: 403, path, body: bodyText.slice(0, 500) }, "GitHub API 403 — possible permission gap");
     throw new GitHubApiError(
-      403,
-      path,
-      bodyText,
       `GitHub API permission denied (403) for ${path}. ` +
       "Your Soleur GitHub App installation may need updated permissions. " +
       "Visit your GitHub App installation settings to approve new permissions.",
+      403,
     );
   }
 
   log.error({ status: response.status, path, body: bodyText.slice(0, 500) }, "GitHub API request failed");
-  throw new GitHubApiError(response.status, path, bodyText);
+  throw new GitHubApiError(`GitHub API request failed: ${response.status} ${path}`, response.status);
 }
 ```
 
-**Backward compatibility:** `GitHubApiError` extends `Error`, so existing `instanceof Error` + `.message.includes("GitHub API")` checks still pass during the transition. The message format is preserved verbatim (`"GitHub API request failed: {status} {path}"`), so any downstream code still grepping `.includes("GitHub API")` continues to match. The refactor migrates call sites to the typed form; the string form remains accurate as a safety net.
+**Why reuse, not re-introduce:** A second `GitHubApiError` class with a different field name (`status` vs `statusCode`) would fork the convention. `app/api/repo/create/route.ts:69` already uses `instanceof GitHubApiError && err.statusCode === 422`. One class, one field name, project-wide.
+
+**Backward compatibility:** `GitHubApiError extends Error`, so existing `instanceof Error` + `.message.includes("GitHub API")` checks still pass during the transition. The message format is preserved verbatim (`"GitHub API request failed: {status} {path}"`), so any downstream code still grepping for it continues to match. The refactor migrates call sites to the typed form; the string form remains an accurate safety net.
 
 **Callers updated (remove string matching):**
 
@@ -103,8 +129,10 @@ const errMsg = err instanceof Error ? err.message : "";
 if (errMsg.includes("404")) { ... }
 
 // After
-if (err instanceof GitHubApiError && err.status === 404) { ... }
+if (err instanceof GitHubApiError && err.statusCode === 404) { ... }
 ```
+
+**Optional follow-up (not in this PR):** If the KB routes ever need `path` or `bodyText` on the error (e.g., to return the GitHub error body to the client), extend the existing constructor to accept optional fields rather than forking. Current call sites don't need them — the 502 fallback already includes `error.message`.
 
 Call sites to migrate:
 
@@ -311,7 +339,7 @@ export async function DELETE(request, { params }) {
       if (Array.isArray(fileData)) return NextResponse.json({ error: "Cannot delete a directory" }, { status: 400 });
       fileSha = fileData.sha;
     } catch (err) {
-      if (err instanceof GitHubApiError && err.status === 404) {
+      if (err instanceof GitHubApiError && err.statusCode === 404) {
         return NextResponse.json({ error: "File not found" }, { status: 404 });
       }
       throw err;
@@ -333,7 +361,7 @@ export async function DELETE(request, { params }) {
       logger.info({ event: "kb_delete", userId: user.id, path: filePath }, "kb/delete: file deleted successfully");
       return NextResponse.json({ commitSha: result?.commit?.sha ?? null }, { status: 200 });
     } catch (deleteErr) {
-      if (deleteErr instanceof GitHubApiError && deleteErr.status === 409) {
+      if (deleteErr instanceof GitHubApiError && deleteErr.statusCode === 409) {
         return NextResponse.json(
           { error: "File was modified since it was last read. Please refresh and try again.", code: "SHA_MISMATCH" },
           { status: 409 },
@@ -424,8 +452,9 @@ Icons (`FolderIcon`, `FileTypeIcon`, `UploadIcon`, `PencilIcon`, `TrashIcon`) an
 
 ## Acceptance Criteria
 
-- [ ] `GitHubApiError` exported from `server/github-api.ts` with `status`, `path`, `bodyText`, and preserved message format
-- [ ] `handleErrorResponse` throws `GitHubApiError` (not plain `Error`)
+- [ ] `GitHubApiError` (the existing class from `server/github-app.ts`) is re-exported from `server/github-api.ts`
+- [ ] `handleErrorResponse` throws `GitHubApiError` (not plain `Error`), using the existing `statusCode` field; message format preserved
+- [ ] No duplicate `GitHubApiError` class introduced; no field rename
 - [ ] All 8 `errMsg.includes("404"|"409"|"GitHub API")` call sites in KB routes replaced with typed checks
 - [ ] `authenticateAndResolveKbPath` handles all 10 branches currently duplicated in PATCH + DELETE (CSRF, auth, workspace, no-repo, empty path, null byte, `.md` block, path traversal, symlink, invalid repo URL)
 - [ ] `syncWorkspace` handles credential-helper scaffolding and cleanup; returns `{ok}` discriminated result
@@ -440,19 +469,38 @@ Icons (`FolderIcon`, `FileTypeIcon`, `UploadIcon`, `PencilIcon`, `TrashIcon`) an
 
 ## Test Scenarios (write these first — TDD gate)
 
-### `github-api-error.test.ts` (new)
+### `github-api.test.ts` (update — no new `github-api-error.test.ts` file needed)
 
-1. `new GitHubApiError(404, "/path", "body")` — `instanceof Error` is true, `instanceof GitHubApiError` is true, `.status === 404`, `.path === "/path"`, `.message` matches `"GitHub API request failed: 404 /path"`
-2. Custom message override passes through
-3. `.bodyText` preserved
-4. `.name === "GitHubApiError"`
+The `GitHubApiError` class already has coverage via `test/github-app-create-repo.test.ts`. Add the KB-facing assertions here:
 
-### `github-api.test.ts` (update)
+1. `handleErrorResponse` with 404 throws `GitHubApiError` with `.statusCode === 404`, `instanceof Error` true
+2. `handleErrorResponse` with 403 throws `GitHubApiError` with `.statusCode === 403` and permission-denied message
+3. `handleErrorResponse` with 500 throws `GitHubApiError` with `.statusCode === 500` and default `"GitHub API request failed: 500 {path}"` message
+4. Existing `instanceof Error` + `.message.includes("GitHub API")` still passes (backward compat proof)
+5. `GitHubApiError` re-exported from `server/github-api.ts` is the same class reference as from `server/github-app.ts` (`GitHubApiErrorA === GitHubApiErrorB`)
 
-5. `handleErrorResponse` with 404 throws `GitHubApiError` with `.status === 404`
-6. `handleErrorResponse` with 403 throws `GitHubApiError` with `.status === 403` and permission-denied message
-7. `handleErrorResponse` with 500 throws `GitHubApiError` with `.status === 500` and default message
-8. Existing `instanceof Error` + `.message.includes("GitHub API")` still passes (backward compat)
+**Mocking pattern for new tests (per learning `2026-04-10-vitest-hoisted-class-for-typed-error-mocking.md`):**
+
+```typescript
+const { GitHubApiError, mockGet } = vi.hoisted(() => {
+  class GitHubApiError extends Error {
+    constructor(message: string, public readonly statusCode: number) {
+      super(message);
+      this.name = "GitHubApiError";
+    }
+  }
+  return { GitHubApiError, mockGet: vi.fn() };
+});
+
+vi.mock("@/server/github-api", () => ({
+  githubApiGet: mockGet,
+  githubApiPost: vi.fn(),
+  githubApiDelete: vi.fn(),
+  GitHubApiError,  // same reference route handler sees
+}));
+```
+
+Do NOT use `importOriginal` — it pulls in `@/server/logger` and breaks because logger mocks don't provide `createChildLogger`.
 
 ### `kb-route-helpers.test.ts` (new)
 
@@ -478,9 +526,10 @@ For `syncWorkspace`:
 
 ### `kb-delete.test.ts` + `kb-rename.test.ts` + `kb-upload.test.ts` (update existing)
 
-23. Any existing test that mocks a 404 via throwing `new Error("GitHub API request failed: 404 ...")` continues to pass
-24. New assertions: when route catches a GitHubApiError with `.status === 404`, response is 404 "File not found"
-25. When route catches a GitHubApiError with `.status === 409`, response is 409 "SHA_MISMATCH" (DELETE)
+23. Any existing test that mocks a 404 via throwing `new Error("GitHub API request failed: 404 ...")` continues to pass (the message format is preserved, so string-matching test doubles still work through the transition)
+24. New assertions: when route catches a `GitHubApiError` with `.statusCode === 404`, response is 404 "File not found"
+25. When route catches a `GitHubApiError` with `.statusCode === 409`, response is 409 "SHA_MISMATCH" (DELETE)
+26. Update existing tests in `kb-delete.test.ts`, `kb-rename.test.ts`, `kb-upload.test.ts` that throw a mock error to use `new GitHubApiError("...", 404)` (hoisted) rather than `new Error("... 404 ...")` — cleaner assertion, catches real regressions
 
 ### Component tests (verify unchanged)
 
@@ -490,9 +539,9 @@ For `syncWorkspace`:
 
 ## Implementation order (TDD)
 
-1. **RED #2149:** Write `github-api-error.test.ts` (fails — class doesn't exist) + updated assertions in `github-api.test.ts` (fails — still plain Error)
-2. **GREEN #2149:** Implement `GitHubApiError` class, update `handleErrorResponse`
-3. **REFACTOR #2149:** Update all 8 call sites in KB routes to use typed checks. Keep `instanceof Error && .message.includes("GitHub API")` ONLY where fallback is needed; prefer `instanceof GitHubApiError`
+1. **RED #2149:** Update `github-api.test.ts` to assert `handleErrorResponse` throws `GitHubApiError` with `.statusCode` (fails — still plain Error). Do NOT create a new `GitHubApiError` class; the existing one at `server/github-app.ts:62` is reused.
+2. **GREEN #2149:** Update `handleErrorResponse` in `server/github-api.ts` to throw the existing `GitHubApiError`. Re-export the class from `server/github-api.ts` so KB routes can import from one location.
+3. **REFACTOR #2149:** Update all 8 call sites in KB routes to use `instanceof GitHubApiError && err.statusCode === N`. Keep `instanceof Error && .message.includes("GitHub API")` ONLY as a fallback in outer catches where any non-typed error could flow through; prefer `instanceof GitHubApiError`.
 4. **RED #2180:** Write `kb-route-helpers.test.ts` (fails — file doesn't exist)
 5. **GREEN #2180:** Implement `authenticateAndResolveKbPath` and `syncWorkspace`
 6. **REFACTOR #2180:** Replace inline boilerplate in PATCH and DELETE with helpers. Confirm `kb-delete.test.ts` and `kb-rename.test.ts` still pass
@@ -507,6 +556,9 @@ For `syncWorkspace`:
 | Risk | Mitigation |
 | --- | --- |
 | Existing tests mock `new Error("GitHub API request failed: 404 ...")` — typed-check migration could break them | `GitHubApiError extends Error` + preserved message format → `instanceof Error` + `.message.includes("404")` both still match. Migrate mocks one at a time. |
+| Test mocks fail with "No createChildLogger export" when trying to `importOriginal` on `@/server/github-app` | Use `vi.hoisted()` pattern (learning 2026-04-10). Define `GitHubApiError` inside hoisted block, return from mock factory. Proven by `test/create-route-error.test.ts:14-22`. |
+| Someone adds a second `GitHubApiError` class (e.g., plan originally suggested this) | Plan explicitly forbids it. Grep check before merge: `grep -n "class GitHubApiError" apps/web-platform/server/` must return exactly one match at `github-app.ts:62`. |
+| Field-name drift (`status` vs `statusCode`) | Plan pinned to `statusCode` matching existing class. `tsc --noEmit` will catch any `.status` access. |
 | `authenticateAndResolveKbPath` option surface bloats over time | Start minimal (`endpoint`, `blockMarkdown`). If uploads want to reuse this helper later, add flags then. Don't pre-generalize. |
 | `syncWorkspace` signature tied to pino `Logger` type | Accept structural `{ error, info }` type if pino import causes circular deps. Prefer direct `Logger` for now (pino is already a peer dep everywhere this runs). |
 | `FileNode` split breaks hover-state coordination across file/directory siblings | There is no shared hover state — each `<div className="group">` is independent. Verified by reading lines 227 (directory group) and 374 (file group): both are self-contained. |

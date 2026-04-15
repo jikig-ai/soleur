@@ -12,21 +12,25 @@
 
 ## Phase 2 — #2149 Typed GitHubApiError (RED → GREEN → REFACTOR)
 
-- [ ] 2.1 RED: create `apps/web-platform/test/github-api-error.test.ts` with failing assertions for the `GitHubApiError` class (instanceof, status, path, bodyText, message format, name)
-- [ ] 2.2 RED: update `apps/web-platform/test/github-api.test.ts` to assert `handleErrorResponse` throws `GitHubApiError` with correct `.status` for 403/404/409/500
-- [ ] 2.3 GREEN: implement `GitHubApiError` class in `apps/web-platform/server/github-api.ts`
-- [ ] 2.4 GREEN: rewrite `handleErrorResponse` to throw `GitHubApiError` (preserving message format for backward compat)
-- [ ] 2.5 REFACTOR: migrate 8 call sites to `instanceof GitHubApiError && err.status === N`
-  - [ ] 2.5.1 `app/api/kb/file/[...path]/route.ts:126` (DELETE → GET 404)
-  - [ ] 2.5.2 `app/api/kb/file/[...path]/route.ts:190` (DELETE → DELETE 409)
-  - [ ] 2.5.3 `app/api/kb/file/[...path]/route.ts:204` (DELETE outer catch)
-  - [ ] 2.5.4 `app/api/kb/file/[...path]/route.ts:383` (PATCH → GET 404)
-  - [ ] 2.5.5 `app/api/kb/file/[...path]/route.ts:401` (PATCH → destination 404)
-  - [ ] 2.5.6 `app/api/kb/file/[...path]/route.ts:514` (PATCH outer catch)
-  - [ ] 2.5.7 `app/api/kb/upload/route.ts:169` (upload existence probe)
-  - [ ] 2.5.8 `app/api/kb/upload/route.ts:272` (upload outer catch)
-- [ ] 2.6 Run full KB test suite — confirm still green
-- [ ] 2.7 Commit: `refactor(kb): introduce GitHubApiError with numeric status field`
+**IMPORTANT:** `GitHubApiError` ALREADY EXISTS at `apps/web-platform/server/github-app.ts:62` with field `statusCode`. Reuse it — do NOT define a new class. Do NOT rename the field.
+
+- [ ] 2.1 Verify existing class: `grep -n "class GitHubApiError" apps/web-platform/server/` — expect exactly one hit at `github-app.ts:62`
+- [ ] 2.2 RED: update `apps/web-platform/test/github-api.test.ts` to assert `handleErrorResponse` throws `GitHubApiError` (from `@/server/github-api` re-export) with correct `.statusCode` for 403/404/409/500
+- [ ] 2.3 GREEN: in `server/github-api.ts`, import `GitHubApiError` from `./github-app` and re-export it. Update `handleErrorResponse` to throw `new GitHubApiError(message, status)` — preserving message format for backward compat
+- [ ] 2.4 REFACTOR: migrate 8 call sites to `instanceof GitHubApiError && err.statusCode === N`
+  - [ ] 2.4.1 `app/api/kb/file/[...path]/route.ts:126` (DELETE → GET 404)
+  - [ ] 2.4.2 `app/api/kb/file/[...path]/route.ts:190` (DELETE → DELETE 409)
+  - [ ] 2.4.3 `app/api/kb/file/[...path]/route.ts:204` (DELETE outer catch)
+  - [ ] 2.4.4 `app/api/kb/file/[...path]/route.ts:383` (PATCH → GET 404)
+  - [ ] 2.4.5 `app/api/kb/file/[...path]/route.ts:401` (PATCH → destination 404)
+  - [ ] 2.4.6 `app/api/kb/file/[...path]/route.ts:514` (PATCH outer catch)
+  - [ ] 2.4.7 `app/api/kb/upload/route.ts:169` (upload existence probe)
+  - [ ] 2.4.8 `app/api/kb/upload/route.ts:272` (upload outer catch)
+- [ ] 2.5 For any updated test: use `vi.hoisted()` class pattern (learning 2026-04-10) — NOT `importOriginal`
+- [ ] 2.6 Post-refactor grep check: `grep -rn "errMsg.includes" apps/web-platform/app/api/kb/` returns zero hits
+- [ ] 2.7 Post-refactor grep check: `grep -rn "class GitHubApiError" apps/web-platform/` returns exactly one hit (`server/github-app.ts:62`)
+- [ ] 2.8 Run full KB test suite — confirm still green
+- [ ] 2.9 Commit: `refactor(kb): thread typed GitHubApiError through KB routes`
 
 ## Phase 3 — #2180 Extract route helpers (RED → GREEN → REFACTOR)
 
