@@ -1,7 +1,6 @@
 import { redirect } from "next/navigation";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { SettingsContent } from "@/components/settings/settings-content";
-import { SettingsShell } from "@/components/settings/settings-shell";
 import type { RepoStatus } from "@/components/settings/project-setup-card";
 
 export default async function SettingsPage() {
@@ -33,16 +32,14 @@ export default async function SettingsPage() {
   ]);
 
   return (
-    <SettingsShell>
-      <SettingsContent
-        userEmail={user.email ?? ""}
-        hasApiKey={!!apiKey}
-        apiKeyProvider={apiKey?.provider ?? null}
-        apiKeyLastValidated={apiKey?.updated_at ?? null}
-        repoUrl={userData?.repo_url ?? null}
-        repoStatus={(userData?.repo_status as RepoStatus) ?? "not_connected"}
-        repoLastSyncedAt={userData?.repo_last_synced_at ?? null}
-      />
-    </SettingsShell>
+    <SettingsContent
+      userEmail={user.email ?? ""}
+      hasApiKey={!!apiKey}
+      apiKeyProvider={apiKey?.provider ?? null}
+      apiKeyLastValidated={apiKey?.updated_at ?? null}
+      repoUrl={userData?.repo_url ?? null}
+      repoStatus={(userData?.repo_status as RepoStatus) ?? "not_connected"}
+      repoLastSyncedAt={userData?.repo_last_synced_at ?? null}
+    />
   );
 }

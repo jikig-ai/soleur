@@ -518,14 +518,14 @@ const MessageBubble = memo(function MessageBubble({
 
   return (
     <div className={`flex ${isUser ? "justify-end" : "justify-start"}`}>
-      <div className={`flex max-w-[90%] gap-3 md:max-w-[80%] ${isUser ? "flex-row-reverse" : ""}`}>
+      <div className={`flex min-w-0 max-w-[90%] gap-3 md:max-w-[80%] ${isUser ? "flex-row-reverse" : ""}`}>
         {/* Leader avatar */}
         {leader && (
           <LeaderAvatar leaderId={leaderId!} size="md" className="mt-1" customIconPath={customIconPath} />
         )}
 
         <div
-          className={`relative rounded-xl px-4 py-3 text-sm leading-relaxed ${
+          className={`relative min-w-0 rounded-xl px-4 py-3 text-sm leading-relaxed ${
             isUser
               ? "bg-neutral-800 text-neutral-100"
               : `bg-neutral-900 text-neutral-200 ${borderStyle} ${leader && !isActive && !isError ? `border-l-2 ${colorClass}` : ""}`
