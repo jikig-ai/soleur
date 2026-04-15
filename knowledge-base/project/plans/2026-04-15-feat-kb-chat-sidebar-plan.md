@@ -52,7 +52,7 @@ additions beyond "implement the spec":
 |---|---|---|
 | TR8: "emit via the existing analytics layer" | No frontend analytics abstraction exists. Plausible is server-side-only (`server/service-tools.ts`). | Build `lib/analytics-client.ts` + `/api/analytics/track` route that forwards to Plausible. Provision goals via Plausible API before ship. Graceful skip on 402 (free tier). |
 | TR10: "gate behind feature flag `kb_chat_sidebar`" | No FF system exists. | Use `NEXT_PUBLIC_KB_CHAT_SIDEBAR` env var set via Doppler (`dev`, `prd` configs). Matches existing `NEXT_PUBLIC_*` precedent. |
-| FR2: "resolves or creates a conversation keyed by `context.path`" | No lookup API. `conversations` table has no `context_path` column. | Add `context_path TEXT` column + migration + index on `conversations`. Add WS message `resume_or_create_by_context { contextPath }` that the server uses to find-or-create a pending conversation. Backfill pre-migration rows from legacy `?context=` flow. |
+| FR2: "resolves or creates a conversation keyed by `context.path`" | No lookup API. `conversations` table has no `context_path` column. | Add `context_path TEXT` column + UNIQUE partial index on `(user_id, context_path) WHERE context_path IS NOT NULL`. Extend `start_session` with optional `resumeByContextPath` parameter — server looks up existing row or creates pending. No new WS message type (simpler than a dedicated `resume_or_create_by_context`; one code path for abort/validate/rate-limit). Backfill pre-migration rows as a separate follow-up migration if legacy shape matches. |
 
 Other delta notes:
 
@@ -174,24 +174,32 @@ in isolation without crashing.
 Goal: sidebar mounts, opens via "Ask about this document" button, survives KB
 navigation, resumes per-doc thread. Flag-gated and demoable.
 
-2.1 Database migration (Supabase):
+2.1 Database migration (Supabase) — **split into two files** so backfill
+    failure doesn't roll back the schema change:
 
-    - New file: `supabase/migrations/20260415_add_context_path_to_conversations.sql`:
+    - **Schema migration:** `supabase/migrations/20260415a_add_context_path_to_conversations.sql`:
 
       ```sql
       ALTER TABLE public.conversations
         ADD COLUMN context_path TEXT;
 
-      CREATE INDEX conversations_context_path_user_idx
+      -- UNIQUE partial index enforces one conversation per (user, doc path).
+      -- Combined with ON CONFLICT handling in start_session's
+      -- resumeByContextPath lookup, this resolves the two-tab race:
+      -- the second tab's create attempt sees the first tab's row.
+      CREATE UNIQUE INDEX conversations_context_path_user_uniq
         ON public.conversations (user_id, context_path)
         WHERE context_path IS NOT NULL;
+      ```
 
-      -- Backfill: legacy conversations created via ?context=<path> URL
-      -- store the path in the first message's context payload.
-      -- This backfill extracts context.path from the first message where
-      -- it parses as JSON and writes it to the new column so pre-migration
-      -- KB conversations show the "KB" inbox badge and dedup with
-      -- resume_or_create_by_context.
+    - **Backfill migration (separate, conditional):**
+      `supabase/migrations/20260415b_backfill_context_path.sql`. Only
+      applied if staging verification shows `messages.metadata->context->>'path'`
+      is populated for legacy `?context=` threads. Otherwise, accept that
+      pre-migration KB threads are un-badged and skip this file entirely
+      (noted in rollout checklist step 3). The backfill SQL:
+
+      ```sql
       UPDATE public.conversations c
       SET context_path = (
         SELECT (m.metadata->'context'->>'path')
@@ -205,61 +213,58 @@ navigation, resumes per-doc thread. Flag-gated and demoable.
       WHERE c.context_path IS NULL;
       ```
 
-    - **Caveat:** the backfill SELECT assumes `messages.metadata` stores the
-      legacy `context` payload. Verify shape via `server/ws-handler.ts`
-      before running — if legacy context was never persisted to messages,
-      skip the backfill and accept that pre-migration KB threads are
-      un-badged (documented in rollout). Run the backfill as a separate
-      follow-up migration if the SELECT doesn't return rows in staging.
-      (Resolves CPO finding #6 + SpecFlow gap #8.)
+      **If the UNIQUE index already exists and backfill would violate it**
+      (multiple legacy conversations sharing a path for one user), wrap
+      the UPDATE with a DISTINCT-aware subquery that picks the most recent
+      row only. Verify before running.
+
     - Update `apps/web-platform/lib/types.ts` `Conversation` interface to
       add `context_path?: string | null`.
 
-2.2 `apps/web-platform/lib/types.ts` — extend WS message union:
+2.2 `apps/web-platform/lib/types.ts` — extend `start_session` to accept an
+    optional `resumeByContextPath`:
 
     ```ts
-    | { type: "resume_or_create_by_context"; contextPath: string }
-    | { type: "add_context"; selections: Array<{ text: string }> }
+    | { type: "start_session"; leaderId?: DomainLeaderId; context?: ConversationContext; resumeByContextPath?: string }
     ```
 
-    Also extend `ConversationContext`:
+    No new message types in v1. `add_context` and `ConversationContext.selections[]`
+    are deferred to v1.1 — v1 delivers selections as quoted blockquotes in
+    the user message text (per spec TR3: "The sidebar always passes
+    `selections` through the chat input as a quoted block on send"). Server
+    has no v1 work to do with `selections[]` as a separate field; all the
+    content arrives inline in the user message.
 
-    ```ts
-    selections?: Array<{ text: string; startOffset?: number; endOffset?: number }>;
-    ```
+    Add `startSession({ leaderId?, context?, resumeByContextPath? })` entry
+    point on `UseWebSocketReturn` (or extend the existing `startSession`
+    signature).
 
-    Also add `sendAddContext`, `resumeOrCreateByContext` to
-    `UseWebSocketReturn`. (Collapsed from former Phase 5.1.)
+2.3 `apps/web-platform/server/context-validation.ts` — no v1 change. The
+    existing path/type/content validation already applies to `start_session`
+    context. Defer `selections[]` schema to v1.1 when `add_context` ships.
 
-2.3 `apps/web-platform/server/context-validation.ts` — add `selections[]`
-    schema validation: array of `{ text: string (≤ 8KB), startOffset?: number,
-    endOffset?: number }`, max 20 selections, total combined text ≤ 32KB
-    aggregate cap. Applied in `start_session` AND in the new
-    `add_context` handler BEFORE session mutation.
+2.4 `apps/web-platform/server/ws-handler.ts` — extend the existing
+    `case "start_session":` at L284 (not a new case) to handle the
+    `resumeByContextPath` parameter:
 
-2.4 `apps/web-platform/server/ws-handler.ts` — add two new cases to the
-    switch at L280:
+    - If `msg.resumeByContextPath` is set AND no explicit `conversationId`
+      in context: validate path (same regex), query `conversations WHERE
+      user_id = ? AND context_path = ? LIMIT 1` (UNIQUE index guarantees
+      at most one row). If found, emit `session_resumed { conversationId,
+      resumedFromTimestamp: updated_at, messageCount }` and skip pending
+      creation. If not found, fall through to the existing pending-creation
+      path with `contextPath` stored on the pending record — on first
+      message send, the `context_path` column is written with `ON CONFLICT
+      DO NOTHING` on the UNIQUE index to handle two-tab races gracefully.
+    - The existing `start_session` abort-active + validate-context
+      invariants (ws-handler.ts:302) apply unchanged. No new abort/validate
+      code path. (Resolves architecture finding #2 + simplicity finding #3:
+      one code path, not three.)
 
-    - `case "resume_or_create_by_context":` — validate path (same regex as
-      existing `path`), query `conversations WHERE user_id = ? AND
-      context_path = ? ORDER BY updated_at DESC LIMIT 1`. If found, emit
-      `session_resumed { conversationId, resumedFromTimestamp: updated_at,
-      messageCount }`. If not, create a pending session (UUID, no DB row
-      until first message, matching existing pattern from
-      `2026-04-11-deferred-ws-conversation-creation`) with `contextPath`
-      stored on the pending record. Call `abortActiveSession(userId,
-      session, "superseded")` before mutating state. (Session-state audit
-      includes: ensure `selections[]` is cleared on `close_conversation`
-      and reset on `superseded` abort, per
-      `deferred-ws-conversation-creation` learning.)
-    - `case "add_context":` — validate via `context-validation.ts`, append
-      `selections[]` to the active session's `context.selections`,
-      re-inject on the next LLM turn (handled in `agent-runner.ts`
-      system-prompt builder at L487).
-
-2.5 `apps/web-platform/server/agent-runner.ts` — update the system-prompt
-    builder (around L487) to surface `context.selections[]` as a formatted
-    quote block in the prompt. Only if non-empty.
+2.5 `apps/web-platform/server/agent-runner.ts` — no v1 change required
+    (selections arrive in user message text; system-prompt builder sees
+    them there without special handling). Defer selections-specific
+    prompt-building to v1.1 when `add_context` ships.
 
 2.6 `apps/web-platform/app/(dashboard)/dashboard/kb/layout.tsx` — mount the
     sidebar. Insert a third flex child inside the root `<div className="flex
@@ -311,9 +316,10 @@ navigation, resumes per-doc thread. Flag-gated and demoable.
     **Lifecycle:**
 
     - On open OR on `contextPath` change while open, sets `resolving = true`,
-      calls `sendResumeOrCreateByContext(contextPath)`. On response:
-      `conversationId` swaps, `resumedFrom` populated if server returned
-      `resumedFromTimestamp`, `resolving = false`.
+      calls `startSession({ resumeByContextPath: contextPath })`. On the
+      resulting `session_resumed` or `session_started` event:
+      `conversationId` swaps, `resumedFrom` populated if `resumedFromTimestamp`
+      present, `resolving = false`.
     - **Loading state:** while `resolving`, render a compact skeleton
       (header with filename, placeholder "Resolving thread…" text, no
       input). (Resolves SpecFlow gap #1.)
@@ -418,8 +424,11 @@ slice is independently demoable with flag flip.
 
 Goal: selected markdown text becomes a quoted input in the sidebar.
 
-4.1 `apps/web-platform/components/markdown/selection-toolbar.tsx` — new
-    primitive:
+4.1 `apps/web-platform/components/kb/selection-toolbar.tsx` — new
+    component (placed under `kb/` because the `articleRef` scoping and
+    iOS-Safari share-menu suppression are KB-article-specific; moving it
+    to a generic `components/markdown/` dir would fragment the layout for
+    a single file):
 
     - Props: `{ articleRef: RefObject<HTMLElement>, onAddToChat: (text:
       string) => void, maxBytes?: number }`.
@@ -451,15 +460,18 @@ Goal: selected markdown text becomes a quoted input in the sidebar.
 
 4.2 `apps/web-platform/app/(dashboard)/dashboard/kb/[...path]/page.tsx` —
     wrap the markdown `<article>` (L170) with a ref, render
-    `<SelectionToolbar articleRef={ref} onAddToChat={addQuoteToChat}>`
+    `<SelectionToolbar articleRef={ref} onAddToChat={kbChatContext.submitQuote}>`
     conditionally when `isMarkdown === true` and feature flag is on.
-    `addQuoteToChat` dispatches an event on `KbChatContext`.
+    The `submitQuote(text)` handler **lives on `KbChatContext`**, not in
+    `ChatInput`. It calls `openSidebar()` and forwards the text to the
+    sidebar's chat-input ref. This keeps `ChatInput` free of KB-domain
+    knowledge — it stays reusable by the full-page route where
+    `KbChatContext` doesn't exist.
 
 4.3 `apps/web-platform/components/chat/chat-input.tsx` — accept an
-    imperative handle (via `forwardRef` + `useImperativeHandle`) exposing
-    `insertQuote(text: string)` that:
+    optional imperative handle (via `forwardRef` + `useImperativeHandle`)
+    exposing `insertQuote(text: string)` that:
 
-    - Opens the sidebar if closed (via `KbChatContext.openSidebar()`).
     - Prepends `> <text>\n\n` to the current draft (or replaces cursor
       position if there's an active selection in the textarea).
     - Does NOT auto-send; user edits and presses Enter.
@@ -477,9 +489,17 @@ Goal: selected markdown text becomes a quoted input in the sidebar.
       a "Referenced passage" chip at the top of the sheet (first 60
       chars of selection + ellipsis) so the user has context of what
       they quoted. Chip dismisses on scroll or first new message. (Per
-      UX concern #8.)
-    - `track("kb.chat.selection_sent", { path })` fires when the quoted
-      message is actually sent (not on insert).
+      UX concern #8.) **The chip lives in `KbChatSidebar`, not
+      `ChatInput`** — sidebar-specific UX doesn't leak into the reusable
+      input component.
+    - `track("kb.chat.selection_sent", { path })` emits from
+      `KbChatSidebar`'s submit hook (not from ChatInput — same domain
+      leakage concern), when a message containing a blockquote is sent.
+
+    `ChatInput` is not aware of `KbChatContext`. The flow is:
+    `SelectionToolbar → KbChatContext.submitQuote(text) →
+    KbChatSidebar.handleQuote(text) { openSidebar();
+    chatInputRef.current?.insertQuote(text); }`.
 
 4.4 Keyboard shortcut: `Cmd/Ctrl+Shift+L` while focus is anywhere inside
     the markdown article triggers `addQuoteToChat(window.getSelection()
@@ -515,9 +535,19 @@ the quote as the first block. iOS Safari works.
 5.2 `apps/web-platform/app/api/analytics/track/route.ts` — new route.
     Forwards to Plausible custom goal endpoint. Per learnings
     (`2026-04-02-plausible-api-response-validation`, `2026-03-30-plausible-http-402`),
-    validate JSON response shape and treat HTTP 402 as graceful skip. No
-    PII in props; user_id is hashed or omitted. Auth: require authenticated
-    session cookie (reuse existing middleware pattern).
+    validate JSON response shape and treat HTTP 402 as graceful skip.
+
+    **Auth: same-origin check + IP rate-limit, not session cookie.** The
+    route forwards to a third-party goal API with no PII. Session-cookie
+    auth would over-constrain the route (future anon surfaces would need
+    to fork or loosen it). Enforce `Origin` header ∈ allow-list (self-host
+    + Vercel preview URLs) and a per-IP rate cap (e.g., 120 req/min).
+
+    **Omit user_id entirely** from props — do not hash. Hashing without a
+    documented salt rotation strategy produces a stable identifier in a
+    third-party tool that's hard to roll back. v1 ships with no user
+    dimension; add hashed-with-rotating-salt in a future iteration if
+    funnel analysis demands it.
 
 5.3 Provision three Plausible goals via API before first emit
     (per `2026-03-13-plausible-goals-api-provisioning-hardening`):
@@ -594,10 +624,11 @@ the quote as the first block. iOS Safari works.
 | `apps/web-platform/components/chat/review-gate-card.tsx` | lifted from page.tsx |
 | `apps/web-platform/components/chat/status-indicator.tsx` | lifted from page.tsx |
 | `apps/web-platform/components/chat/kb-chat-sidebar.tsx` | sidebar wrapper |
-| `apps/web-platform/components/markdown/selection-toolbar.tsx` | floating pill primitive |
+| `apps/web-platform/components/kb/selection-toolbar.tsx` | floating pill (KB-article-scoped) |
 | `apps/web-platform/lib/analytics-client.ts` | thin client for Plausible |
 | `apps/web-platform/app/api/analytics/track/route.ts` | server route to Plausible |
-| `supabase/migrations/20260415_add_context_path_to_conversations.sql` | DB migration + backfill |
+| `supabase/migrations/20260415a_add_context_path_to_conversations.sql` | schema migration (column + UNIQUE partial index) |
+| `supabase/migrations/20260415b_backfill_context_path.sql` | backfill migration (conditional; skip if legacy shape doesn't match) |
 | `apps/web-platform/test/chat-surface-sidebar.test.tsx` | sidebar variant tests |
 | `apps/web-platform/test/kb-chat-sidebar.test.tsx` | panel lifecycle tests |
 | `apps/web-platform/test/selection-toolbar.test.tsx` | selection primitive tests |
@@ -613,11 +644,9 @@ the quote as the first block. iOS Safari works.
 | `apps/web-platform/app/(dashboard)/dashboard/chat/[conversationId]/page.tsx` | reduce to thin shell around `<ChatSurface variant="full">` |
 | `apps/web-platform/app/(dashboard)/dashboard/kb/layout.tsx` | mount sidebar + `KbChatContext` + flag gate |
 | `apps/web-platform/app/(dashboard)/dashboard/kb/[...path]/page.tsx` | stateful trigger button; mount `SelectionToolbar` in markdown branch |
-| `apps/web-platform/lib/types.ts` | extend `ConversationContext`, `WSMessage` union, `Conversation` |
-| `apps/web-platform/lib/ws-client.ts` | add `sendAddContext`, `resumeOrCreateByContext` to `UseWebSocketReturn` |
-| `apps/web-platform/server/ws-handler.ts` | add `resume_or_create_by_context` and `add_context` cases to switch at L280; `selections[]` clearing in close/abort paths |
-| `apps/web-platform/server/context-validation.ts` | add `selections[]` schema |
-| `apps/web-platform/server/agent-runner.ts` | re-inject `context.selections` into system prompt at L487 |
+| `apps/web-platform/lib/types.ts` | extend `start_session` WSMessage with optional `resumeByContextPath`; extend `Conversation` with `context_path` |
+| `apps/web-platform/lib/ws-client.ts` | extend `startSession()` signature with optional `resumeByContextPath` |
+| `apps/web-platform/server/ws-handler.ts` | extend existing `start_session` case to handle `resumeByContextPath` lookup + fall-through to pending-creation |
 | `apps/web-platform/components/chat/chat-input.tsx` | expose `insertQuote` imperative handle; placeholder with shortcut hint |
 | `apps/web-platform/components/inbox/conversation-row.tsx` | render "KB" badge when `context_path` present |
 | `apps/web-platform/test/chat-page.test.tsx` | update mounts to `<ChatSurface variant="full">` |
@@ -650,10 +679,10 @@ the quote as the first block. iOS Safari works.
 6. `selection-toolbar.test.tsx` — pill appears for in-article selections; does not appear outside; dismisses on collapse, click-outside, Escape (and stops propagation); keyboard shortcut fires `onAddToChat`; oversized selection renders disabled pill with tooltip.
 7. `kb-chat-sidebar.test.tsx` — opens, sends `resume_or_create_by_context` on open and on path change, passes `conversationId` to ChatSurface; resolving state renders skeleton; timeout renders retry; `resumedFrom` renders banner that dismisses on first new message; draft persists across doc nav.
 8. `api/analytics-track.test.ts` — forwards to Plausible; 402 → 204 (graceful skip); invalid body → 400; unauthenticated → 401.
-9. WS-handler tests for `resume_or_create_by_context` — find-or-create logic, abort-before-await contract, pending-state respect, `selections[]` cleared on `superseded`/`user_closed`.
-10. WS-handler tests for `add_context` — validates via `context-validation.ts`; rejects oversize; mutates active session state.
-11. `context-validation.test.ts` — `selections[]` schema: accepts valid, rejects oversize text, rejects >20 entries, rejects missing `text`, enforces 32KB aggregate cap.
-12. Migration test (if Supabase test harness exists) — backfill extracts `context_path` from legacy message metadata; new inserts work; index honored.
+9. WS-handler tests for `start_session` with `resumeByContextPath` — find existing row emits `session_resumed`; miss falls through to pending-creation; abort-before-await invariant preserved; `ON CONFLICT DO NOTHING` on two-tab race.
+10. ~~WS-handler tests for `add_context`~~ — deferred to v1.1.
+11. ~~`context-validation.test.ts` `selections[]` schema~~ — deferred to v1.1.
+12. Migration test (if Supabase test harness exists) — UNIQUE partial index enforced; duplicate insert fails with expected PG error; new NULL-context_path inserts work; conditional backfill runs correctly in staging.
 
 **Integration / browser (Playwright):**
 
@@ -812,7 +841,7 @@ below must be filed as a GitHub issue before this plan is marked ready.
 |---|---|---|
 | PDF text selection → chat | When react-pdf text-layer coords are stable | Post-MVP / Later |
 | Resizable sidebar splitter | First user complaint about fixed 380px | Post-MVP / Later |
-| `add_context` UI flow (selection-without-send) | User research shows demand for "attach without message" flow | Post-MVP / Later |
+| `add_context` WS message + selections[] schema + UI flow (v1.1 — entire mid-session attach path) | User research shows demand for "attach without message" flow | Post-MVP / Later |
 | Runtime feature-flag primitive (replace env-var pattern) | Second feature needs FF rollout | Post-MVP / Later |
 | In-app keyboard-shortcuts help surface | 3+ shortcuts exist | Post-MVP / Later |
 | Empty-state suggested prompts | Validated via UX research | Post-MVP / Later |

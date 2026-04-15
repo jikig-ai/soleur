@@ -24,17 +24,18 @@ Plan: `knowledge-base/project/plans/2026-04-15-feat-kb-chat-sidebar-plan.md`
 
 ## Phase 2 — KB sidebar shell + flag + first analytics emit
 
-- [ ] 2.1 Migration `supabase/migrations/20260415_add_context_path_to_conversations.sql`:
-  - [ ] 2.1.1 Add `context_path TEXT` column + partial index.
-  - [ ] 2.1.2 Backfill from `messages.metadata` (verify shape before running; skip if wrong).
+- [ ] 2.1 Schema migration `supabase/migrations/20260415a_add_context_path_to_conversations.sql`:
+  - [ ] 2.1.1 `ALTER TABLE conversations ADD COLUMN context_path TEXT`.
+  - [ ] 2.1.2 `CREATE UNIQUE INDEX ... ON (user_id, context_path) WHERE context_path IS NOT NULL`.
   - [ ] 2.1.3 Update `Conversation` interface in `lib/types.ts`.
-- [ ] 2.2 Extend `lib/types.ts`: `ConversationContext.selections[]`, new `WSMessage` variants (`resume_or_create_by_context`, `add_context`), `UseWebSocketReturn.sendAddContext` + `resumeOrCreateByContext`.
-- [ ] 2.3 Extend `server/context-validation.ts` with `selections[]` schema (≤8KB/selection, ≤32KB total, ≤20 max).
-- [ ] 2.4 Extend `server/ws-handler.ts`:
-  - [ ] 2.4.1 `case "resume_or_create_by_context"` — find-or-create pending, abort-before-await, session-state audit for `selections[]` on abort/close.
-  - [ ] 2.4.2 `case "add_context"` — validate + append + re-inject on next turn.
-  - [ ] 2.4.3 Clear `selections[]` on `close_conversation`, `superseded` abort, `user_closed` abort.
-- [ ] 2.5 Update `server/agent-runner.ts` L487 to surface `context.selections[]` in system prompt.
+- [ ] 2.1b Backfill migration `supabase/migrations/20260415b_backfill_context_path.sql` (conditional — apply only if staging shows legacy shape matches; skip otherwise).
+- [ ] 2.2 Extend `lib/types.ts`: `start_session` WSMessage gains optional `resumeByContextPath`; `Conversation` gains `context_path`. (No `add_context` variant in v1 — deferred.)
+- [ ] 2.3 `server/context-validation.ts` — no v1 change (selections travel as blockquote text in user message, not as a separate field).
+- [ ] 2.4 Extend `server/ws-handler.ts` `case "start_session":` at L284 to handle `resumeByContextPath`:
+  - [ ] 2.4.1 If present + no explicit conversationId: query `conversations WHERE user_id=? AND context_path=? LIMIT 1`.
+  - [ ] 2.4.2 If found: emit `session_resumed { conversationId, resumedFromTimestamp, messageCount }`.
+  - [ ] 2.4.3 If miss: fall through to pending-creation with `contextPath` on pending record; first message write uses `ON CONFLICT DO NOTHING` against UNIQUE index.
+- [ ] 2.5 `server/agent-runner.ts` — no v1 change (selections arrive inline in user message text).
 - [ ] 2.6 Mount sidebar in `app/(dashboard)/dashboard/kb/layout.tsx`:
   - [ ] 2.6.1 Add `KbChatContext` provider.
   - [ ] 2.6.2 Lazy-load `KbChatSidebar` via `next/dynamic({ ssr: false })`.
@@ -47,6 +48,7 @@ Plan: `knowledge-base/project/plans/2026-04-15-feat-kb-chat-sidebar-plan.md`
   - [ ] 2.7.5 Close-mid-stream abort via `user_closed`.
   - [ ] 2.7.6 Doc-switch preserves Doc A's draft in `sessionStorage.drafts[contextPath]`.
   - [ ] 2.7.7 Emit `kb.chat.opened` + `kb.chat.thread_resumed` on resolve.
+  - [ ] 2.7.8 Expose `submitQuote(text)` on `KbChatContext` that calls `openSidebar()` + forwards to chat-input ref. Keeps `ChatInput` free of KB-domain knowledge.
 - [ ] 2.8 Update `app/(dashboard)/dashboard/kb/[...path]/page.tsx`:
   - [ ] 2.8.1 Stateful trigger label ("Ask about this document" / "Continue thread") in BOTH markdown and non-markdown branches.
   - [ ] 2.8.2 Flag off-path: legacy `/dashboard/chat/new?msg=...&context=...` link preserved.
@@ -63,7 +65,7 @@ Plan: `knowledge-base/project/plans/2026-04-15-feat-kb-chat-sidebar-plan.md`
 
 ## Phase 4 — Selection → quoted context
 
-- [ ] 4.1 Create `components/markdown/selection-toolbar.tsx`:
+- [ ] 4.1 Create `components/kb/selection-toolbar.tsx`:
   - [ ] 4.1.1 Scope to `articleRef`; ignore selections outside.
   - [ ] 4.1.2 Client-side size preflight (disabled state when >8KB).
   - [ ] 4.1.3 Portal-render anchored at `range.getBoundingClientRect()`.
@@ -75,8 +77,9 @@ Plan: `knowledge-base/project/plans/2026-04-15-feat-kb-chat-sidebar-plan.md`
   - [ ] 4.3.1 `forwardRef` + `useImperativeHandle` exposing `insertQuote(text)`.
   - [ ] 4.3.2 Prepend `> <text>\n\n` (append to draft when streaming).
   - [ ] 4.3.3 Scroll textarea into view + 400ms flash on inserted blockquote.
-  - [ ] 4.3.4 Mobile: "Referenced passage" chip at top of sheet.
-  - [ ] 4.3.5 Emit `kb.chat.selection_sent` when the quoted message sends.
+  - [ ] 4.3.4 `ChatInput` does NOT read `KbChatContext` — stays domain-free.
+- [ ] 4.3b Mobile "Referenced passage" chip rendered by `KbChatSidebar` (not `ChatInput`); dismisses on scroll or first new message.
+- [ ] 4.3c `KbChatSidebar` emits `kb.chat.selection_sent` on message-send when draft starts with a blockquote (not emitted by ChatInput).
 - [ ] 4.4 Keyboard shortcut `Cmd/Ctrl+Shift+L` in markdown article.
 - [ ] 4.5 Chat input placeholder with shortcut hint (sidebar variant).
 - [ ] 4.6 Tests: `test/selection-toolbar.test.tsx`, augmented `chat-input.test.tsx`.
