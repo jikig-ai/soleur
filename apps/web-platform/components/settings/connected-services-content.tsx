@@ -1,7 +1,6 @@
 "use client";
 
 import { useState } from "react";
-import Link from "next/link";
 import {
   PROVIDER_CONFIG,
   EXCLUDED_FROM_SERVICES_UI,
@@ -229,17 +228,8 @@ export function ConnectedServicesContent({ initialServices }: Props) {
   }
 
   return (
-    <div className="mx-auto max-w-2xl space-y-10 px-4 py-10">
+    <div className="space-y-10">
       <div>
-        <div className="mb-1 flex items-center gap-2">
-          <Link
-            href="/dashboard/settings"
-            className="text-sm text-neutral-500 transition-colors hover:text-neutral-300"
-          >
-            Settings
-          </Link>
-          <span className="text-neutral-600">/</span>
-        </div>
         <h1 className="text-2xl font-bold text-white">Connected Services</h1>
         <p className="mt-1 text-sm text-neutral-400">
           Manage API tokens for third-party services. Tokens are encrypted with
