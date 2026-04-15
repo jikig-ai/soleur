@@ -152,6 +152,74 @@ describe("start_session resumeByContextPath", () => {
     expect(mockInsert).not.toHaveBeenCalled();
   });
 
+  it("rejects non-string resumeByContextPath (review #2381)", async () => {
+    const { session, sent } = createMockSession();
+    sessions.set("user-1", session);
+
+    await handleMessage(
+      "user-1",
+      JSON.stringify({
+        type: "start_session",
+        resumeByContextPath: { path: "knowledge-base/x.md" },
+      }),
+    );
+
+    const err = sent.find((m) => m.type === "error");
+    expect(err).toBeTruthy();
+    expect(err.message).toMatch(/invalid/i);
+    expect(session.pending).toBeUndefined();
+    expect(mockMaybeSingle).not.toHaveBeenCalled();
+  });
+
+  it("rejects resumeByContextPath > 512 chars (review #2381)", async () => {
+    const { session, sent } = createMockSession();
+    sessions.set("user-1", session);
+
+    const long = "knowledge-base/" + "a".repeat(600);
+    await handleMessage(
+      "user-1",
+      JSON.stringify({ type: "start_session", resumeByContextPath: long }),
+    );
+
+    const err = sent.find((m) => m.type === "error");
+    expect(err).toBeTruthy();
+    expect(mockMaybeSingle).not.toHaveBeenCalled();
+  });
+
+  it("rejects resumeByContextPath without knowledge-base/ prefix (review #2381)", async () => {
+    const { session, sent } = createMockSession();
+    sessions.set("user-1", session);
+
+    await handleMessage(
+      "user-1",
+      JSON.stringify({
+        type: "start_session",
+        resumeByContextPath: "/etc/passwd",
+      }),
+    );
+
+    const err = sent.find((m) => m.type === "error");
+    expect(err).toBeTruthy();
+    expect(mockMaybeSingle).not.toHaveBeenCalled();
+  });
+
+  it("rejects resumeByContextPath with disallowed characters (review #2381)", async () => {
+    const { session, sent } = createMockSession();
+    sessions.set("user-1", session);
+
+    await handleMessage(
+      "user-1",
+      JSON.stringify({
+        type: "start_session",
+        resumeByContextPath: "knowledge-base/x; DROP TABLE conversations;",
+      }),
+    );
+
+    const err = sent.find((m) => m.type === "error");
+    expect(err).toBeTruthy();
+    expect(mockMaybeSingle).not.toHaveBeenCalled();
+  });
+
   it("start_session without resumeByContextPath behaves as before (pending)", async () => {
     const { session, sent } = createMockSession();
     sessions.set("user-1", session);

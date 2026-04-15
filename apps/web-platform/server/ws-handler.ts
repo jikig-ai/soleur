@@ -32,6 +32,31 @@ import {
 const log = createChildLogger("ws");
 
 // ---------------------------------------------------------------------------
+// Input validation helpers
+// ---------------------------------------------------------------------------
+
+const CONTEXT_PATH_MAX_LEN = 512;
+const CONTEXT_PATH_PREFIX = "knowledge-base/";
+// Conservative KB-path alphabet: letters, digits, `_`, `-`, `.`, `/`.
+// Matches what the client's `deriveContextPathFromPathname` can produce
+// from KB route segments.
+const CONTEXT_PATH_ALLOWED = /^[\w\-./]+$/;
+
+/**
+ * Validate an untrusted `context_path` string from the client before using
+ * it in DB equality filters. Returns the trimmed path when valid, else null.
+ * See review #2381 — the field previously went straight into `.eq()` with no
+ * typeof/length/prefix guard.
+ */
+function validateContextPath(v: unknown): string | null {
+  if (typeof v !== "string") return null;
+  if (v.length === 0 || v.length > CONTEXT_PATH_MAX_LEN) return null;
+  if (!v.startsWith(CONTEXT_PATH_PREFIX)) return null;
+  if (!CONTEXT_PATH_ALLOWED.test(v)) return null;
+  return v;
+}
+
+// ---------------------------------------------------------------------------
 // Supabase admin client (service role -- server-side only)
 // ---------------------------------------------------------------------------
 const supabase = createServiceClient();
@@ -259,8 +284,15 @@ async function createConversation(
   if (error) {
     // 23505 = unique_violation (postgres). When contextPath is set, this means
     // another tab created the same (user_id, context_path) row — use it instead.
-    const isUniqueViolation = (error as { code?: string }).code === "23505";
-    if (contextPath && isUniqueViolation) {
+    // We also disambiguate on the index name (conversations_context_path_user_uniq)
+    // so an unrelated unique constraint doesn't fall through into the context_path
+    // lookup. See review #2390.
+    const pgErr = error as { code?: string; message?: string; details?: string };
+    const isContextPathUniqueViolation =
+      pgErr.code === "23505" &&
+      (typeof pgErr.message === "string" &&
+        pgErr.message.includes("conversations_context_path_user_uniq"));
+    if (contextPath && isContextPathUniqueViolation) {
       const { data: existing, error: lookupErr } = await supabase
         .from("conversations")
         .select("id")
@@ -337,15 +369,30 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
 
         abortActiveSession(userId, session);
 
+        // Reject invalid resumeByContextPath up-front — see review #2381.
+        // The field was previously passed straight into `.eq()` with no
+        // typeof/length/prefix guard, opening DoS + type-confusion surfaces.
+        let validResumePath: string | null = null;
+        if (msg.resumeByContextPath !== undefined && msg.resumeByContextPath !== null) {
+          validResumePath = validateContextPath(msg.resumeByContextPath);
+          if (!validResumePath) {
+            sendToClient(userId, {
+              type: "error",
+              message: "Invalid resumeByContextPath",
+            });
+            return;
+          }
+        }
+
         // If client asked to resume by context_path (KB sidebar), look up
         // existing thread before deferring creation. UNIQUE partial index
         // on (user_id, context_path) guarantees at most one match.
-        if (msg.resumeByContextPath) {
+        if (validResumePath) {
           const { data: existing, error: lookupErr } = await supabase
             .from("conversations")
             .select("id, last_active, context_path")
             .eq("user_id", userId)
-            .eq("context_path", msg.resumeByContextPath)
+            .eq("context_path", validResumePath)
             .is("archived_at", null)
             .order("last_active", { ascending: false })
             .limit(1)
@@ -381,12 +428,12 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
           id: pendingId,
           leaderId: msg.leaderId,
           context: validatedContext,
-          contextPath: msg.resumeByContextPath,
+          contextPath: validResumePath ?? undefined,
         };
         session.conversationId = undefined;
 
         log.info(
-          { userId, leaderId: msg.leaderId ?? "auto-route", pendingId, contextPath: msg.resumeByContextPath },
+          { userId, leaderId: msg.leaderId ?? "auto-route", pendingId, contextPath: validResumePath },
           "start_session (deferred creation)",
         );
 
