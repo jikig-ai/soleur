@@ -29,6 +29,12 @@ export async function POST(request: Request) {
       { status: 400 },
     );
   }
+  if (body.documentPath.includes("\0")) {
+    return NextResponse.json(
+      { error: "Invalid document path" },
+      { status: 400 },
+    );
+  }
 
   const serviceClient = createServiceClient();
   const { data: userData } = await serviceClient

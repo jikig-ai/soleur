@@ -165,4 +165,32 @@ describe("GET /api/shared/[token] — binary vs markdown branching", () => {
     const res = await callGET(buildRequest("linktok"), "linktok");
     expect(res.status).toBe(403);
   });
+
+  it("returns 413 when the stored binary exceeds the size limit", async () => {
+    fs.writeFileSync(
+      path.join(kbRoot, "huge.pdf"),
+      Buffer.alloc(50 * 1024 * 1024 + 1),
+    );
+    mockShareAndOwner("huge.pdf");
+
+    const res = await callGET(buildRequest("hugetok"), "hugetok");
+    expect(res.status).toBe(413);
+  });
+
+  it("returns 403 when the stored path contains a null byte", async () => {
+    mockShareAndOwner("evil\0.pdf");
+    const res = await callGET(buildRequest("nulltok"), "nulltok");
+    expect(res.status).toBe(403);
+  });
+
+  it("emits RFC 6266 Content-Disposition with UTF-8 filename* for non-ASCII names", async () => {
+    fs.writeFileSync(path.join(kbRoot, "文档.pdf"), Buffer.from("PDF"));
+    mockShareAndOwner("文档.pdf");
+
+    const res = await callGET(buildRequest("utftok"), "utftok");
+    expect(res.status).toBe(200);
+    const disposition = res.headers.get("Content-Disposition");
+    expect(disposition).toContain("filename=");
+    expect(disposition).toMatch(/filename\*=UTF-8''/);
+  });
 });
