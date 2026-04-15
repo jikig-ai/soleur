@@ -28,15 +28,11 @@ if (hasCreds && BOT_EMAIL !== "ux-audit-bot@jikigai.com") {
   );
 }
 
-// CI guardrail: in CI, missing credentials means the deploy is misconfigured.
-// Local runs without creds silently skip; CI runs without creds must fail loudly.
-if (process.env.CI && !hasCreds) {
-  throw new Error(
-    "UX audit integration tests require SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, " +
-      "NEXT_PUBLIC_SUPABASE_ANON_KEY, UX_AUDIT_BOT_EMAIL, UX_AUDIT_BOT_PASSWORD in CI.",
-  );
-}
-
+// Note: these tests silent-skip when creds are absent (local dev w/o Doppler, or
+// the plugin CI test-all.sh which doesn't inject Supabase secrets). The CI
+// loud-fail guardrail is tracked separately in #2361 — it needs a dedicated
+// ux-audit smoke job that explicitly loads Doppler prd_scheduled, rather than
+// throwing at module load in the shared suite.
 const describeIfCreds = hasCreds ? describe : describe.skip;
 
 async function restGet(path: string): Promise<unknown> {
