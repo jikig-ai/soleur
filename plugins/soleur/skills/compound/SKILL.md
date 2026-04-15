@@ -262,8 +262,30 @@ After constitution promotion, compound routes the captured learning to the skill
 2. Route **two categories** of insights:
    - **Solution insight:** The main learning (what was solved and how). Propose a one-line bullet edit to the most relevant section of the target definition file.
    - **Error prevention:** For each session error that could have been prevented by a skill instruction, propose a one-line bullet to the skill that was active when the error occurred. Example: if a plan skill prescribed wrong paths, add a bullet to the plan skill's Sharp Edges saying "Verify relative paths by tracing each `../` step before prescribing them."
-3. **Headless mode:** If `HEADLESS_MODE=true`, do not apply the edit directly. Instead, file a GitHub issue to track the proposal. Use `gh issue create` with the title `compound: route-to-definition proposal for <target-file-basename>`, a body containing the proposed edit text and target file path and source learning file path, and `--milestone "Post-MVP / Later"`. If the proposed edit is not actionable (empty or target file missing), skip silently. Do not prompt.
-4. **Interactive mode:** User confirms with Accept/Skip/Edit
+3. **Default action (interactive and headless):** Apply the edit directly to the
+   target skill/agent/AGENTS.md file. Commit with `skill: route <basename>
+   <summary>`. Sanitize `<basename>` and `<summary>` before interpolation —
+   `BASENAME=$(basename "$TARGET" | tr -cd '[:alnum:]._-')` — or pass the
+   message via a heredoc (`git commit -m "$(cat <<EOF\nskill: route ...\nEOF\n)"`)
+   so backticks or `$(...)` in a learning-file-derived basename cannot
+   command-substitute. The edit surface is BOUNDED: a single bullet-point
+   append, a single Sharp Edges entry, or a ≤3-line instruction clarification.
+   Edits that change existing bullet semantics, span multiple files, or modify
+   AGENTS.md rule wording are OUT OF SCOPE for direct edit — file an issue
+   instead.
+
+4. **File-issue exception:** File a GitHub issue when the edit meets one of:
+   cross-skill (touches 2+ skill/agent files), contested-design (competing
+   valid approaches), agents-md-semantic-change (modifies existing rule text).
+   Title: `compound: route-to-definition proposal for <target-basename>`.
+   Body: proposed edit text + target path + source learning path + `## Scope-Out
+   Justification` naming the criterion. Flags: `--label deferred-scope-out
+   --milestone "Post-MVP / Later"`.
+
+5. **Interactive confirmation for direct edits:** If HEADLESS_MODE is unset,
+   show the proposed diff and ask Accept/Skip/Edit-then-Accept before committing.
+   In headless mode, apply directly without prompting — the bounded surface
+   (single bullet append) is safe without per-edit approval.
 
 See compound-capture Step 8 for the full flow.
 
