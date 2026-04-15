@@ -306,11 +306,13 @@ one of these four scope-out criteria:
 When filing:
 
 - The issue body MUST contain a `## Scope-Out Justification` section naming the
-    specific criterion and a 1-3 sentence rationale.
+  specific criterion and a 1-3 sentence rationale.
 - The issue MUST be created with `--label deferred-scope-out` and `--milestone`
-    (per guardrails:require-milestone).
+  (per guardrails:require-milestone).
 - The issue title MUST use a review-origin prefix (`review:`, `Code review #`,
-    `Refactor:`, `arch:`, `compound:`, `follow-through:`).
+  `Refactor:`, `arch:`, `compound:`, `follow-through:`).
+- Use `gh issue create --body-file <path>` — never `--body "$VAR"` — so
+  untrusted finding text (diffs, agent output) cannot shell-interpolate.
 
 Everything else (magic numbers, duplicated helpers, small refactors, missing
 tests for PR-introduced code, polish, naming, a11y on PR-introduced surfaces,
@@ -397,19 +399,19 @@ After creating all GitHub issues, present comprehensive summary:
 
 ### Next Steps
 
-1. **Address P1 Findings**: CRITICAL - must be fixed before merge
-
-   - Review each P1 issue in detail
-   - Implement fixes or request exemption
-   - Verify fixes before merging PR
-
-2. **View All Review Issues**:
+1. **Verify inline fixes landed**: Each finding above should have a commit on the PR branch.
 
    ```bash
-   gh issue list --label code-review  # View all review findings
+   git log --oneline origin/main..HEAD | grep '^[a-f0-9]* review:'
    ```
 
-3. **Resolve Issues**: Fix each issue on its branch, referencing the GitHub issue number in the commit
+2. **Inspect any scope-out issues**: Review findings filed as `deferred-scope-out` with justification.
+
+   ```bash
+   gh issue list --label deferred-scope-out --search "Ref #<PR_NUMBER>"
+   ```
+
+3. **Phase 5.5 gate self-check**: `/ship` will run the Review-Findings Exit Gate and block merge on any open review-origin issue cross-referencing the PR without the `deferred-scope-out` label. If the gate blocks, either fix inline and close the issue, or add the `deferred-scope-out` label + `## Scope-Out Justification`.
 ````
 
 ### Severity Breakdown:

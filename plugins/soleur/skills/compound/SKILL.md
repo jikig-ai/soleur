@@ -264,10 +264,15 @@ After constitution promotion, compound routes the captured learning to the skill
    - **Error prevention:** For each session error that could have been prevented by a skill instruction, propose a one-line bullet to the skill that was active when the error occurred. Example: if a plan skill prescribed wrong paths, add a bullet to the plan skill's Sharp Edges saying "Verify relative paths by tracing each `../` step before prescribing them."
 3. **Default action (interactive and headless):** Apply the edit directly to the
    target skill/agent/AGENTS.md file. Commit with `skill: route <basename>
-   <summary>`. The edit surface is BOUNDED: a single bullet-point append, a
-   single Sharp Edges entry, or a ≤3-line instruction clarification. Edits that
-   change existing bullet semantics, span multiple files, or modify AGENTS.md
-   rule wording are OUT OF SCOPE for direct edit — file an issue instead.
+   <summary>`. Sanitize `<basename>` and `<summary>` before interpolation —
+   `BASENAME=$(basename "$TARGET" | tr -cd '[:alnum:]._-')` — or pass the
+   message via a heredoc (`git commit -m "$(cat <<EOF\nskill: route ...\nEOF\n)"`)
+   so backticks or `$(...)` in a learning-file-derived basename cannot
+   command-substitute. The edit surface is BOUNDED: a single bullet-point
+   append, a single Sharp Edges entry, or a ≤3-line instruction clarification.
+   Edits that change existing bullet semantics, span multiple files, or modify
+   AGENTS.md rule wording are OUT OF SCOPE for direct edit — file an issue
+   instead.
 
 4. **File-issue exception:** File a GitHub issue when the edit meets one of:
    cross-skill (touches 2+ skill/agent files), contested-design (competing

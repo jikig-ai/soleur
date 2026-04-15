@@ -297,24 +297,33 @@ unrelated SHAs, timestamps, and inline numbers).
 
 ```bash
 PR_NUMBER=$(gh pr view --json number --jq .number)
+[[ "$PR_NUMBER" =~ ^[0-9]+$ ]] || { echo "Error: PR_NUMBER is not a positive integer: $PR_NUMBER"; exit 1; }
 UNRESOLVED=$(gh issue list \
   --state open \
   --search "-label:deferred-scope-out -label:synthetic-test" \
   --json number,title,body \
-  --jq '[.[]
+  --jq --arg pr "$PR_NUMBER" '[.[]
            | select(.title | test("^(review:|Code review #|Refactor:|arch:|compound:|follow-through:)"; "i"))
-           | select((.body // "") | test("(^|\\s)(Ref|Closes|Fixes) #'"$PR_NUMBER"'(\\s|$|[^0-9])"))
+           | select((.body // "") | test("(^|\\s)(Ref|Closes|Fixes) #" + $pr + "(\\s|$|[^0-9])"))
            | {number, title}]')
 COUNT=$(echo "$UNRESOLVED" | jq 'length')
 ```
 
 Notes:
 
+- `PR_NUMBER` is validated as digits-only before use; the jq program reads it
+  via `--arg pr` (never shell-interpolated into the regex) — blocks both
+  regex-metachar widening and shell/jq injection.
 - The regex anchors on keyword `Ref|Closes|Fixes` followed by `#<N>` followed
   by a non-digit or end-of-string — prevents `#23750` matching when
   `PR_NUMBER=2375`.
 - `synthetic-test` label excluded so Phase 3 validation test issues
   self-exclude.
+- Body-keyword detection only: issues linked via GitHub's sidebar "Development
+  → Link an issue" UI (without `Ref|Closes|Fixes #<N>` in the body) are NOT
+  detected. This is an accepted limitation — `Ref #N` is the canonical
+  cross-reference convention across this repo and the gate optimizes for
+  false-negative safety (missed detection) over false-positive merge-blocks.
 - Perf contract: under 5s on a repo with <1000 open issues. If the GitHub
   API returns 5xx, retry once with 2s backoff; on second failure, abort the
   gate with the API error surfaced — do NOT silent-pass.
