@@ -117,7 +117,7 @@ jobs:
               "https://deploy.soleur.ai/hooks/deploy-status" || echo "000")
             BODY=$(cat /tmp/status-body 2>/dev/null || echo "")
             if [ -z "$BODY" ]; then
-              echo "Attempt $i/$STATUS_POLL_MAX_ATTEMPTS: HTTP $HTTP_CODE, no body"
+              echo "Attempt $i/$STATUS_POLL_MAX_ATTEMPTS: HTTP $HTTP_CODE, empty body (endpoint not ready)"
               sleep "$STATUS_POLL_INTERVAL_S"
               continue
             fi

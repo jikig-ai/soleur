@@ -6,35 +6,35 @@
 
 ## Phase 1 — Workflow hardening (#2214)
 
-- [ ] 1.1 Re-read `.github/workflows/web-platform-release.yml` "Verify deploy script completion" step in the worktree (post-compaction read).
-- [ ] 1.2 Insert `jq -e . >/dev/null 2>&1` guard block between the empty-body check and the three `jq -r` parses, with the "endpoint not ready" log message and `continue`.
-- [ ] 1.3 Preserve the 12-space indentation of the existing `run: |` block (AGENTS.md hard rule: no base-indent violations).
-- [ ] 1.4 Run `actionlint .github/workflows/web-platform-release.yml` — expect zero errors.
-- [ ] 1.5 Local sanity-check the new branch logic with a simulated non-JSON body (see plan "Test Scenarios" → local dry-run).
-- [ ] 1.6 Local sanity-check the valid-JSON path still parses correctly.
+- [x] 1.1 Re-read `.github/workflows/web-platform-release.yml` "Verify deploy script completion" step in the worktree (post-compaction read).
+- [x] 1.2 Insert `jq -e . >/dev/null 2>&1` guard block between the empty-body check and the three `jq -r` parses, with the "endpoint not ready" log message and `continue`.
+- [x] 1.3 Preserve the 12-space indentation of the existing `run: |` block (AGENTS.md hard rule: no base-indent violations).
+- [x] 1.4 Run `actionlint .github/workflows/web-platform-release.yml` — expect zero errors.
+- [x] 1.5 Local sanity-check the new branch logic with a simulated non-JSON body (see plan "Test Scenarios" → local dry-run).
+- [x] 1.6 Local sanity-check the valid-JSON path still parses correctly.
 
 ## Phase 2 — Learning capture
 
-- [ ] 2.1 Write `knowledge-base/project/learnings/bug-fixes/2026-04-14-signed-get-verify-step-must-tolerate-non-json.md` documenting: the cold-start failure mode, the `bash -e` + `jq` interaction, the fix pattern (pre-parse guard with `jq -e .`), and the rule "any signed GET verify step in a release workflow must guard against non-JSON bodies."
+- [x] 2.1 Write `knowledge-base/project/learnings/bug-fixes/2026-04-15-signed-get-verify-step-tolerate-non-json-bodies.md` documenting: the cold-start failure mode, the `bash -e` + `jq` interaction, the fix pattern (pre-parse guard with `jq -e .`), and the rule "any signed GET verify step in a release workflow must guard against non-JSON bodies."
 
 ## Phase 3 — PR prep
 
-- [ ] 3.1 Run `npx markdownlint-cli2 --fix` on the new plan and learning files.
-- [ ] 3.2 Run `bash ./plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh` state checks (session-start hygiene already done).
-- [ ] 3.3 Commit: `fix(ci): tolerate non-JSON body in verify-deploy step (#2214, #2215)`.
-- [ ] 3.4 Push branch to remote.
-- [ ] 3.5 Open PR with `Closes #2214\nCloses #2215` in body and `## Changelog` section.
-- [ ] 3.6 Set labels: `semver:patch`, `bug`, `priority/p1-high`, `domain/engineering`.
+- [x] 3.1 Run `npx markdownlint-cli2 --fix` on the new plan and learning files.
+- [x] 3.2 Run `bash ./plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh` state checks (session-start hygiene already done).
+- [x] 3.3 Commit: `fix(ci): tolerate non-JSON body in verify-deploy step`.
+- [x] 3.4 Push branch to remote.
+- [ ] 3.5 Open PR with `Closes #2214\n Refs #2215` in body. (ship applies — draft PR #2226 already exists)
+- [ ] 3.6 Set labels: `semver:patch`, `bug`, `priority/p1-high`, `domain/engineering`. (ship applies)
 
-## Phase 4 — Review + merge
+## Phase 4 — Review + merge (post-implementation)
 
-- [ ] 4.1 Run `skill: soleur:review` (workflow + infra scope).
+- [x] 4.1 Run `skill: soleur:review` (workflow + infra scope).
 - [ ] 4.2 Run `skill: soleur:qa` if review flags runtime behavior uncertainty; otherwise skip (no UI surface).
 - [ ] 4.3 Run `skill: soleur:compound` to capture learnings before commit.
 - [ ] 4.4 Ship with `skill: soleur:ship`.
 - [ ] 4.5 After merge, run `skill: soleur:postmerge` to verify release workflow succeeds.
 
-## Phase 5 — Terraform apply (#2215 — operator action)
+## Phase 5 — Terraform apply (#2215 — operator action, post-merge)
 
 > Runs outside CI. Operator must have Doppler `prd_terraform` access and SSH agent with the server key.
 
