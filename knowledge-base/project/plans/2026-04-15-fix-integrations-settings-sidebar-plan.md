@@ -261,10 +261,10 @@ Not creating that issue now unless requested — it's not a regression, just a h
 
 ## Implementation Checklist
 
-- [ ] Read both target files to verify current state has not shifted since plan writing.
-- [ ] **Edit 1** — `settings/services/page.tsx`: add `SettingsShell` import, wrap `<ConnectedServicesContent ... />` in `<SettingsShell>`.
-- [ ] **Edit 2** — `connected-services-content.tsx`: change root `<div className="mx-auto max-w-2xl space-y-10 px-4 py-10">` to `<div className="space-y-10">`; remove the breadcrumb block (`<div className="mb-1 flex items-center gap-2">...</div>`); grep for remaining `Link` usages in the file; if none, remove `import Link from "next/link"`.
-- [ ] Run typecheck: `cd apps/web-platform && npx tsc --noEmit` (or project script).
+- [x] Read both target files to verify current state has not shifted since plan writing.
+- [x] **Edit 1** — `settings/services/page.tsx`: add `SettingsShell` import, wrap `<ConnectedServicesContent ... />` in `<SettingsShell>`.
+- [x] **Edit 2** — `connected-services-content.tsx`: change root `<div className="mx-auto max-w-2xl space-y-10 px-4 py-10">` to `<div className="space-y-10">`; remove the breadcrumb block (`<div className="mb-1 flex items-center gap-2">...</div>`); grep for remaining `Link` usages in the file; if none, remove `import Link from "next/link"`.
+- [x] Run typecheck: `cd apps/web-platform && npx tsc --noEmit` (or project script).
 - [ ] Run lint: project lint script on `apps/web-platform/`.
 - [ ] Run tests for `apps/web-platform/`. **Worktree note:** per AGENTS.md, run vitest via `node node_modules/vitest/vitest.mjs run` not `npx vitest`.
 - [ ] Manual QA via `soleur:qa` skill or local dev server: load `/dashboard/settings/services`, verify sidebar + active tab + no breadcrumb + no double-padding; resize to mobile; scroll to last provider card.

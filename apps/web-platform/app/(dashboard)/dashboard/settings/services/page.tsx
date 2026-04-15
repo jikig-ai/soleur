@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { ConnectedServicesContent } from "@/components/settings/connected-services-content";
+import { SettingsShell } from "@/components/settings/settings-shell";
 
 export default async function ConnectedServicesPage() {
   const supabase = await createClient();
@@ -18,5 +19,9 @@ export default async function ConnectedServicesPage() {
     .select("provider, is_valid, validated_at, updated_at")
     .eq("user_id", user.id);
 
-  return <ConnectedServicesContent initialServices={data ?? []} />;
+  return (
+    <SettingsShell>
+      <ConnectedServicesContent initialServices={data ?? []} />
+    </SettingsShell>
+  );
 }
