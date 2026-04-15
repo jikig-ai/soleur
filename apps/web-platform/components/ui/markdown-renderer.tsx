@@ -5,9 +5,10 @@ import remarkGfm from "remark-gfm";
 import rehypeHighlight from "rehype-highlight";
 import type { Components } from "react-markdown";
 
-// Module-level variable set before creating components — avoids threading
-// a prop through every component definition.
+// Module-level variables set before creating components — avoids threading
+// props through every component definition.
 let linkRel = "noopener noreferrer";
+let preWrap = false;
 
 function buildComponents(): Components {
   return {
@@ -46,7 +47,13 @@ function buildComponents(): Components {
     <td className="border border-neutral-700 px-3 py-1.5 text-neutral-300">{children}</td>
   ),
   pre: ({ children }) => (
-    <pre className="mb-3 overflow-x-auto rounded-lg bg-neutral-950 p-3 text-xs text-neutral-300">
+    <pre
+      className={
+        preWrap
+          ? "mb-3 min-w-0 whitespace-pre-wrap break-words rounded-lg bg-neutral-950 p-3 text-xs text-neutral-300 [overflow-wrap:anywhere]"
+          : "mb-3 overflow-x-auto rounded-lg bg-neutral-950 p-3 text-xs text-neutral-300"
+      }
+    >
       {children}
     </pre>
   ),
@@ -85,13 +92,18 @@ interface MarkdownRendererProps {
   content: string;
   /** Add rel="nofollow" to all links (used for public shared documents). */
   nofollow?: boolean;
+  /** When true, fenced code blocks wrap instead of scrolling horizontally.
+   *  Set by sidebar-variant callers where the 380px column makes horizontal
+   *  scroll unreadable. Plan Phase 3.1 / AC10. */
+  wrapCode?: boolean;
 }
 
-export function MarkdownRenderer({ content, nofollow }: MarkdownRendererProps) {
-  // Update module-level linkRel before rendering.
+export function MarkdownRenderer({ content, nofollow, wrapCode }: MarkdownRendererProps) {
+  // Update module-level flags before rendering.
   linkRel = nofollow
     ? "nofollow noopener noreferrer"
     : "noopener noreferrer";
+  preWrap = !!wrapCode;
 
   return (
     <div className="min-w-0 [overflow-wrap:anywhere]">

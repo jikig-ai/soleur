@@ -43,6 +43,7 @@ export const MessageBubble = memo(function MessageBubble({
   getDisplayName,
   getIconPath,
   attachments,
+  variant = "full",
 }: {
   role: "user" | "assistant";
   content: string;
@@ -54,6 +55,7 @@ export const MessageBubble = memo(function MessageBubble({
   getDisplayName?: (id: DomainLeaderId) => string;
   getIconPath?: (id: DomainLeaderId) => string | null;
   attachments?: AttachmentRef[];
+  variant?: "full" | "sidebar";
 }) {
   const isUser = role === "user";
   const leader = leaderId ? DOMAIN_LEADERS.find((l) => l.id === leaderId) : null;
@@ -74,7 +76,7 @@ export const MessageBubble = memo(function MessageBubble({
         : "border border-neutral-800";
 
   return (
-    <div className={`flex ${isUser ? "justify-end" : "justify-start"}`}>
+    <div className={`flex min-w-0 ${isUser ? "justify-end" : "justify-start"}`}>
       <div className={`flex min-w-0 max-w-[90%] gap-3 md:max-w-[80%] ${isUser ? "flex-row-reverse" : ""}`}>
         {leader && (
           <LeaderAvatar leaderId={leaderId!} size="md" className="mt-1" customIconPath={customIconPath} />
@@ -115,7 +117,7 @@ export const MessageBubble = memo(function MessageBubble({
             </div>
           )}
 
-          {renderBubbleContent({ isUser, messageState, content, toolLabel, toolsUsed, isDone })}
+          {renderBubbleContent({ isUser, messageState, content, toolLabel, toolsUsed, isDone, variant })}
 
           {attachments && attachments.length > 0 && (
             <AttachmentDisplay attachments={attachments} />
@@ -138,6 +140,7 @@ function renderBubbleContent({
   toolLabel,
   toolsUsed,
   isDone,
+  variant,
 }: {
   isUser: boolean;
   messageState: MessageState | undefined;
@@ -145,11 +148,13 @@ function renderBubbleContent({
   toolLabel: string | undefined;
   toolsUsed: string[] | undefined;
   isDone: boolean;
+  variant: "full" | "sidebar";
 }): React.ReactNode {
+  const wrapCode = variant === "sidebar";
   if (isUser) {
     return (
       <div className="min-w-0 [overflow-wrap:anywhere]">
-        <MarkdownRenderer content={content} />
+        <MarkdownRenderer content={content} wrapCode={wrapCode} />
       </div>
     );
   }
@@ -160,7 +165,7 @@ function renderBubbleContent({
       return toolLabel ? <ToolStatusChip label={toolLabel} /> : <ThinkingDots />;
     case "streaming":
       return (
-        <p className="whitespace-pre-wrap [overflow-wrap:anywhere]">
+        <p className="min-w-0 whitespace-pre-wrap [overflow-wrap:anywhere]">
           {content}
           <span className="animate-pulse text-amber-500">&#x258C;</span>
         </p>
@@ -188,9 +193,9 @@ function renderBubbleContent({
           </div>
         );
       }
-      return <MarkdownRenderer content={content} />;
+      return <MarkdownRenderer content={content} wrapCode={wrapCode} />;
     default:
       void isDone;
-      return <MarkdownRenderer content={content} />;
+      return <MarkdownRenderer content={content} wrapCode={wrapCode} />;
   }
 }

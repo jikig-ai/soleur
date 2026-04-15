@@ -259,7 +259,7 @@ export function ChatSurface({
   }
 
   const isFull = variant === "full";
-  const rootClass = isFull ? "flex h-[100dvh] flex-col md:h-full" : "flex h-full flex-col";
+  const rootClass = isFull ? "flex h-[100dvh] flex-col md:h-full" : "flex h-full min-w-0 flex-col";
   const widthWrapper = isFull ? "mx-auto max-w-3xl" : "max-w-none";
   const inputPadX = isFull ? "px-4 md:px-6" : "px-4";
 
@@ -384,6 +384,7 @@ export function ChatSurface({
                       getDisplayName={getDisplayName}
                       getIconPath={getIconPath}
                       attachments={msg.attachments}
+                      variant={variant}
                     />
                   )}
                 </div>

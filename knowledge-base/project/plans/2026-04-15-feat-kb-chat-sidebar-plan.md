@@ -396,26 +396,53 @@ unchanged.
 
 3.1 Apply `min-w-0` at every flex-item level inside the sidebar
     (per TR7 + learning). Verify with long-URL and code-block test
-    fixtures.
+    fixtures. **Done.** `variant` threaded through `ChatSurface` →
+    `MessageBubble` → `MarkdownRenderer`; sidebar variant swaps
+    `<pre>` from `overflow-x-auto` to
+    `whitespace-pre-wrap break-words [overflow-wrap:anywhere]`. Every
+    flex ancestor of message content now has `min-w-0`. Contract
+    tested in `test/chat-surface-sidebar-wrap.test.tsx`
+    (long URL + long code-block fixtures, plus a flex-ancestor audit
+    walker). Full-variant scroll behavior preserved.
 
 3.2 Verify `next/dynamic` bundle-split: inspect
     `.next/server/app/(dashboard)/dashboard/kb/layout.js` chunk after
     build; ChatSurface must not be in the synchronous layout bundle.
+    **Done.** `next build` succeeded; `/dashboard/kb/[...path]` route
+    = 5.79 kB / 276 kB First Load JS. KB layout chunk
+    (`.next/static/chunks/app/(dashboard)/dashboard/kb/layout-*.js`,
+    32 kB) contains zero references to `ChatSurface` / `MessageBubble`
+    / `MarkdownRenderer`. Chunk `3786-*.js` (47 kB) holds ChatSurface
+    and is loaded via `Promise.all([r.e(...), ...]).then(r.bind(r,787))`
+    — the canonical webpack lazy pattern emitted by `next/dynamic`.
 
 3.3 **Attach flow verification at 380px** — the chat input has an attach
     button (imported `AttachmentDisplay`). Verify file-picker + attachment
     preview card fits and is usable in the narrow sidebar. If not, scope
     a follow-up to tune the attach UX for sidebar width. (Per UX concern
-    #6.)
+    #6.) **Done (code review).** Paperclip button is `h-[44px] w-[44px]
+    shrink-0`; textarea is `flex-1`; preview strip is `flex flex-wrap
+    gap-2`; filename is `max-w-[120px] truncate`; progress bar is `w-16`.
+    At 380px sidebar with `px-4` input padding, usable width = 348px →
+    44px (attach) + 8px (gap) + 296px (textarea). Two attachment chips
+    fit per row. No follow-up needed.
 
 3.4 Visual QA checklist (Playwright screenshot pass):
     sidebar opens at 1440px, 1024px, 768px, 375px; markdown with long
     code block wraps (not scrolls) without overflow; file-tree + content
     + sidebar all visible at ≥1024px; mobile bottom-sheet snap points
-    work; thread-resumed banner renders and auto-dismisses.
+    work; thread-resumed banner renders and auto-dismisses. **Deferred
+    to /qa phase.** Running a real-browser pass requires Doppler-scoped
+    dev server + Supabase OAuth login, which the `/qa` skill handles
+    once for the full pipeline. Contract-level wrap/min-w-0 behavior is
+    covered by vitest (see 3.1); bundle-split is empirically verified
+    (see 3.2); Rollout Plan step 5 ("Manual QA on staging with flag on")
+    covers the real-device sweep before the prd flag flip.
 
 **Exit criterion:** Phase A value ships. The brainstorm's "80% value"
-slice is independently demoable with flag flip.
+slice is independently demoable with flag flip. **Met.** All contract
+tests pass (1419/1419 relevant; 1 skipped unchanged); tsc clean;
+bundle-split verified; narrow-column wrap verified.
 
 ### Phase 4 — Text selection → quoted context
 
@@ -711,7 +738,7 @@ the quote as the first block. iOS Safari works.
 + [ ] AC7: Mobile renders draggable bottom sheet at ~60vh with three snap points; dragging below 10vh closes.
 + [ ] AC8: Three Plausible goals fire: `kb.chat.opened`, `kb.chat.selection_sent`, `kb.chat.thread_resumed`.
 + [ ] AC9: Panel a11y contract met: `aria-label`, `Escape` close, focus move on open, focus return on close.
-+ [ ] AC10: Long URLs and code blocks wrap (not scroll) inside 380px sidebar.
++ [x] AC10: Long URLs and code blocks wrap (not scroll) inside 380px sidebar.
 + [ ] AC11: DB migration applied to prod (verified via Supabase REST API); backfill ran or explicitly skipped with rationale.
 + [ ] AC12: Legacy `?context=` URL shape unchanged.
 + [ ] AC13: All vitest scenarios pass.
