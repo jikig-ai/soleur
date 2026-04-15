@@ -9,6 +9,33 @@
 **Date:** 2026-04-15
 **Author:** Claude (one-shot pipeline)
 
+## Enhancement Summary
+
+**Deepened on:** 2026-04-15
+**Sections enhanced:** 6 (Problem, Proposed Fix, Design Decisions, Test Scenarios, Risks, Research Findings)
+**Research method:** inline (subagent Task tool unavailable in this harness — confined to high-signal direct research)
+**Sources consulted:**
+
+- `knowledge-base/project/learnings/bug-fixes/2026-04-15-signed-get-verify-step-tolerate-non-json-bodies.md` (canonical learning — edge-case matrix + rejected-alternatives rationale)
+- `knowledge-base/project/learnings/runtime-errors/2026-02-13-bash-operator-precedence-ssh-deploy-fallback.md` (referenced by the learning — justification for keeping `bash -e`)
+- PR #2226 commit `6e7b4181` diff (canonical pattern, exact token match)
+- Full workflow grep for `jq -r` across `.github/workflows/*.yml` (latent-bug-class sweep)
+- AGENTS.md rule `cq-ci-steps-polling-json-endpoints-under` (canonical rule text)
+
+### Key Improvements Added to the Plan
+
+1. **Guard placement correction (load-bearing).** The LinkedIn guard must protect BOTH the `jq -r` call on line 93 AND the subsequent `gh issue close` on line 102. A non-JSON 2xx body would currently not only crash the step but would first incorrectly auto-close any open "token expired" issue as stale. Injection point moved from "between 92 and 93" to "between 90 and 91" — after the HTTP check, before everything that trusts the body content.
+2. **Edge-case matrix adopted from the learning.** Replaced the hand-rolled shell sanity cases with the verified jq 1.8.1 / bash 5.x matrix from the learning file (7 rows including `{}`, `[]`, and `null` — the last is the key reason `jq empty` is forbidden).
+3. **Bash-e behavior clarification.** Documented that LinkedIn workflow does NOT set `set -e` explicitly but still has strict-mode behavior via GitHub Actions' default `bash --noprofile --norc -eo pipefail {0}` shell. The bug applies to both files because of this default — not because of the explicit `set -euo pipefail` in the CF workflow.
+4. **Alternatives-rejected section populated** from the learning file. Three rejected alternatives (drop `bash -e`, `set +e/-e` toggle, `jq empty`) now carry their actual rationale, including why `jq empty` is unsafe even under `// empty` defaults.
+5. **Latent-bug-class sweep performed.** Grepped all 5 other `jq -r` sites in `.github/workflows/*.yml`. Three are confirmed safe (trusted `gh` CLI output, filtered internal pipeline, or already guarded by #2226). One — `web-platform-release.yml:177-190` health-check loop — is a legitimate follow-up candidate. Filed as a non-goal with a tracking-issue task in Deferrals.
+6. **Empty-file and `$EXPIRES_AT` semantics cross-check.** Verified that the CF workflow's existing `[[ -z "$EXPIRES_AT" ]]` branch on line 69 continues to work correctly after the guard — the guard runs before `jq -r` sets `EXPIRES_AT`, so the branch semantics are preserved.
+
+### New Considerations Discovered
+
+- The learning's edge-case matrix shows `{}` and `[]` pass `jq -e .` (truthy output). For the LinkedIn workflow this is a non-issue because `jq -r '.name // "unknown"'` just prints "unknown". For the CF workflow, `.result[]` on `{}` yields empty (no rows), `EXPIRES_AT=""`, and the existing `[[ -z "$EXPIRES_AT" ]]` branch fires — correct behavior. No additional guard needed for these.
+- Workflow-gap reminder surfaced by the learning (Session Errors §4): plan acceptance-criteria checkboxes should separate pre-merge from post-merge items. This plan already does (Phase 5 post-merge is in tasks.md under Phase 7), so no change needed — but worth flagging for the implementation phase that the acceptance criteria list here is pre-merge only.
+
 ## Summary
 
 Two scheduled workflows call `jq -r` on vendor-API JSON responses under the GitHub Actions default `bash -e` without first validating that the response body is JSON. If the vendor (LinkedIn `/v2/userinfo`, Cloudflare `/accounts/.../access/service_tokens`) ever returns a non-JSON body — an edge error page, a rate-limit HTML payload, an auth challenge — `jq` exits non-zero inside `$(...)`, `bash -e` kills the step, and the scheduled job fails silently at 3am. This is the exact failure class fixed in PR #2226 (`#2214`).
@@ -71,12 +98,17 @@ For each file, add a `jq -e . >/dev/null 2>&1` pre-check between the HTTP status
 
 ### 1. scheduled-linkedin-token-check.yml
 
-**Location:** between line 92 (HTTP 2xx check passed) and line 93 (first `jq -r`).
+**Location:** between line 90 (HTTP 2xx check passed, `fi`) and line 92 (`echo "LinkedIn token is valid"`).
+
+**Placement rationale (load-bearing):** the guard must protect BOTH the `jq -r` call on line 93 AND the subsequent `gh issue close` block on lines 96-104. Without the guard, a non-JSON 2xx response would not only crash the step at the `jq -r` line — it would first execute the "close stale issue" block based on a body the workflow hasn't validated. Placing the guard *before* the "token is valid" echo ensures we don't act on a 2xx-with-garbage response at all.
 
 ```bash
-# Before the first jq -r call, validate that the body is JSON.
-# LinkedIn can return HTML under edge incidents; jq -r under bash -e
-# would crash the step and hide the fact that the token is actually valid.
+# After HTTP 2xx check, validate that the body is JSON.
+# LinkedIn can return HTML under edge incidents (rate limit, maintenance,
+# Cloudflare fronting). jq -r under GitHub Actions' default strict shell
+# (bash --noprofile --norc -eo pipefail) would crash the step AND the
+# failure would follow the "token is valid" code path — closing any open
+# "token expired" issue as if the body had been validated.
 # See AGENTS.md `cq-ci-steps-polling-json-endpoints-under` (#2214, #2236).
 if ! jq -e . /tmp/li-response.json >/dev/null 2>&1; then
   echo "::warning::LinkedIn API returned non-JSON body on HTTP $HTTP_CODE. Skipping this check -- will retry next cron."
@@ -87,7 +119,7 @@ echo "LinkedIn token is valid (HTTP $HTTP_CODE)."
 echo "Token holder: $(jq -r '.name // "unknown"' /tmp/li-response.json)"
 ```
 
-The dead-stale-issue close block (lines 96-104) also calls `gh issue list --jq '.[0].number // empty'` — but that runs against `gh`'s own structured output, not a vendor API, so it is out of scope for this guard.
+Note on downstream `gh` calls: the `gh issue list --jq '.[0].number // empty'` on lines 96-98 runs against `gh`'s own structured output (not a vendor body). `gh` guarantees well-formed JSON or a non-zero exit — so that `--jq` filter does not need its own guard.
 
 ### 2. scheduled-cf-token-expiry-check.yml
 
@@ -129,11 +161,33 @@ An HTTP 200 response with non-JSON body is precisely the case the HTTP check can
 
 ### Why not use `jq empty`?
 
-AGENTS.md explicitly forbids it: "too permissive — passes `null` through to field parsers." `jq -e .` rejects `null` (exits 1) and non-JSON (exits 5). This matters for the LinkedIn case where the response is `"$BODY"` (not a file) and upstream `null` would silently flow into `.name // "unknown"`.
+AGENTS.md explicitly forbids it: "too permissive — passes `null` through to field parsers." The learning file articulates this precisely:
 
-### Why not drop `set -e` / `set -euo pipefail` in the CF workflow?
+> `jq empty` succeeds on any valid JSON including `null`. Combined with the existing `// -99` defaults, a `null` body would yield `EXIT_CODE=-99`, hit the `*)` fast-fail branch, and fail the release — worse than "retry until timeout with a clear non-ready message."
 
-AGENTS.md explicitly forbids: "Do NOT drop `-e` from the step shell (silences real failures elsewhere in the loop)." `-e` catches legit failures in `curl`, `date -d`, and the HTTP validation block. Dropping it to paper over the jq issue would be a regression.
+For the CF workflow specifically: a `null` body under `jq empty` would pass the guard, then `.result[]` on `null` would crash `jq -r` with exit 5 (iteration over null) — the exact failure we're trying to prevent. `jq -e .` catches `null` at exit 1 before it reaches the field parser.
+
+### Why not drop `set -e` / `set -euo pipefail`?
+
+The learning file has a pointed rationale:
+
+> Disables defensive behavior for every other command (curl, cat, sleep, sed) in the loop. The current incident is scoped to jq; the fix should be too. See `2026-02-13-bash-operator-precedence-ssh-deploy-fallback.md` for why quiet failure-absorption in deploy-adjacent shell is a critical-severity anti-pattern.
+
+AGENTS.md matches: "Do NOT drop `-e` from the step shell (silences real failures elsewhere in the loop)." `-e` catches legit failures in `curl`, `date -d`, and the HTTP validation block.
+
+**Subtlety worth noting:** the LinkedIn workflow does NOT set `set -e` explicitly in its `run:` block — it relies on GitHub Actions' default shell `bash --noprofile --norc -eo pipefail {0}`. The CF workflow does set `set -euo pipefail` explicitly. The bug applies to **both** files because of the default — which is why neither can be "fixed" by inspecting the run block alone. Dropping `set -euo pipefail` from the CF file would still leave `-e` on via the default shell.
+
+### Why not `set +e` / `set -e` toggling around each jq call?
+
+Rejected in the learning:
+
+> Brittle — any future maintainer editing the block has to preserve the toggle correctly. Mixes with `continue` semantics.
+
+A single-line guard is maintainable; a toggle pair scattered across 5 lines is a maintenance hazard.
+
+### Why not retry-loop both workflows to match the release-verify pattern?
+
+The release workflow retries because deploys are inherently async — the endpoint is expected to be not-ready during cold-start. Scheduled health checks are instant queries; retrying would only mask the actual vendor-side state. The right behavior for a weekly cron is "try once, warn if weird, wait for next week." `exit 0 + ::warning::` achieves this without surface-area growth.
 
 ## Files to Change
 
@@ -172,31 +226,47 @@ Must exit 0 with no findings.
 
 ### 2. Shell-level unit check (local, pre-push)
 
-Extract the guard to a tiny shell sanity test — no test framework, just `bash -e`:
+The learning file codifies the verified edge-case matrix against `jq 1.8.1 / bash 5.x`. Reuse it here exactly so the guard's semantics are pinned to known behavior.
+
+| Input (written to `/tmp/t.json`) | `jq -e .` exit | Expected guard behavior |
+|---|---|---|
+| Valid JSON object (`{"name":"x"}` for LinkedIn shape; `{"result":[{"name":"x","expires_at":"..."}]}` for CF shape) | 0 | passes guard; proceeds to field parser |
+| Valid JSON object missing key (`{"other":"x"}`) | 0 | passes guard; `.name // "unknown"` prints "unknown" / CF `EXPIRES_AT=""` falls through to existing `[[ -z ]]` branch |
+| `null` literal | 1 | `::warning::`, `exit 0` (would crash without guard) |
+| Non-JSON plaintext (`Hook not found`) | 5 | `::warning::`, `exit 0` |
+| HTML error page (`<html>503</html>`) | 5 | `::warning::`, `exit 0` |
+| Empty file | 5 | `::warning::`, `exit 0` |
+| Empty JSON object `{}` | 0 | passes guard; LinkedIn prints "unknown"; CF falls through to `[[ -z "$EXPIRES_AT" ]]` branch (the `::warning::service token not found` path) |
+| Empty JSON array `[]` | 0 | passes guard; same CF fall-through |
+
+Runnable sanity script (copy-paste, no framework required):
 
 ```bash
-# Positive case: valid JSON should pass the guard
-echo '{"result":[{"name":"x","expires_at":"2026-05-01T00:00:00Z"}]}' > /tmp/t.json
-bash -euo pipefail -c 'jq -e . /tmp/t.json >/dev/null 2>&1 && echo "pass: valid JSON"'
+set -e
+check() {
+  local label="$1" expected_exit="$2" input="$3"
+  printf '%s' "$input" > /tmp/t.json
+  if jq -e . /tmp/t.json >/dev/null 2>&1; then actual=0; else actual=$?; fi
+  if [[ "$actual" == "$expected_exit" ]] || { [[ "$expected_exit" == "nonzero" ]] && [[ "$actual" != 0 ]]; }; then
+    echo "pass: $label (exit $actual)"
+  else
+    echo "FAIL: $label (got exit $actual, expected $expected_exit)" >&2
+    exit 1
+  fi
+}
 
-# Negative case 1: HTML body (simulates CF edge page)
-echo '<html>503 Service Unavailable</html>' > /tmp/t.json
-bash -euo pipefail -c 'if ! jq -e . /tmp/t.json >/dev/null 2>&1; then echo "pass: HTML rejected"; fi'
-
-# Negative case 2: plaintext (simulates adnanh/webhook 404-style body)
-echo 'Hook not found' > /tmp/t.json
-bash -euo pipefail -c 'if ! jq -e . /tmp/t.json >/dev/null 2>&1; then echo "pass: plaintext rejected"; fi'
-
-# Negative case 3: literal null (the reason jq -e beats jq empty)
-echo 'null' > /tmp/t.json
-bash -euo pipefail -c 'if ! jq -e . /tmp/t.json >/dev/null 2>&1; then echo "pass: null rejected"; fi'
-
-# Negative case 4: empty file
-: > /tmp/t.json
-bash -euo pipefail -c 'if ! jq -e . /tmp/t.json >/dev/null 2>&1; then echo "pass: empty rejected"; fi'
+check "valid JSON object"       0       '{"name":"x"}'
+check "JSON missing key"        0       '{"other":"x"}'
+check "null literal"            nonzero 'null'
+check "plaintext"               nonzero 'Hook not found'
+check "HTML"                    nonzero '<html>503</html>'
+check "empty file"              nonzero ''
+check "empty object"            0       '{}'
+check "empty array"             0       '[]'
+echo "All 8 cases pass."
 ```
 
-All five must print their pass message.
+All 8 rows must match the table. Any deviation indicates either a jq version mismatch or a plan-vs-reality drift worth investigating before proceeding.
 
 ### 3. End-to-end manual dispatch (post-push, pre-merge)
 
@@ -217,9 +287,11 @@ Per AGENTS.md `wg-after-merging-a-pr-that-adds-or-modifies`, run the same dispat
 
 ## Risks
 
-- **Vendor happy-path regression**: the guard runs BEFORE the `jq -r` so if the vendor returns valid JSON (99.9% case), behavior is unchanged. Verified by shell unit test case 1.
+- **Vendor happy-path regression**: the guard runs BEFORE the `jq -r` so if the vendor returns valid JSON (99.9% case), behavior is unchanged. Verified by shell unit test row 1.
 - **Hiding real auth failures**: the guard only fires when HTTP is 2xx AND body is non-JSON. HTTP 401 (expired token) is still handled upstream — the LinkedIn workflow creates its issue on HTTP 401 before reaching the `jq -r` line. Non-2xx paths are unchanged.
 - **Phantom-issue creation**: `exit 0` means a truly broken vendor would cause multiple successful-looking runs. Mitigation: the CF workflow's Terraform-managed notification policy is the primary alert; this workflow is the backup. For LinkedIn, the next weekly cron will retry. If the vendor stays broken for >1 week, the operator will notice the warning pile.
+- **Silent downstream action (LinkedIn)**: without the corrected placement (between lines 90-91, not 92-93), a non-JSON 2xx body would execute the `gh issue close` block on lines 96-104 *before* the `jq -r` crash. This would auto-close any open "token expired" issue as "token is valid" based on unvalidated data. The corrected placement prevents this. Verified by code-path reading during deepen.
+- **Edge-case drift**: `jq -e .` semantics are pinned to jq 1.8.1 (per learning). GitHub-hosted runners currently ship jq 1.7 as of 2026-04. The guard's behavior on `null`/empty/plaintext is stable across these versions; `{}` and `[]` passing the guard is also stable. If `ubuntu-latest` ever upgrades to a breaking jq release, the Phase 5 end-to-end dispatch catches it.
 
 ## Rollback
 
@@ -275,13 +347,30 @@ No other domains have signal:
 ## Non-Goals
 
 - **Not** adding a generic `jq` wrapper helper script. Two files do not justify abstraction; the guard is 5 lines with explicit intent.
-- **Not** touching the other `scheduled-*.yml` files. A full sweep across all scheduled workflows is tracked implicitly — if another file surfaces the same pattern during review (Sharp Edges §5), file it as a follow-up issue rather than scope-creep this fix.
 - **Not** changing the retry / single-shot semantics of either workflow.
 - **Not** adding a test framework for GitHub Actions workflow steps. Out of scope; shell sanity cases + `actionlint` + end-to-end dispatch are sufficient for this bug class.
+- **Not** touching `web-platform-release.yml:177-190` (the health-check loop). See Deferrals below.
+
+## Latent-Bug-Class Sweep
+
+Full grep of `jq -r` across `.github/workflows/*.yml`:
+
+| File:Line | Context | Risk | Action |
+|---|---|---|---|
+| `web-platform-release.yml:132-134` | `exit_code`, `reason`, `tag` on `/hooks/deploy-status` body | protected by `jq -e` guard added in PR #2226 | none (already fixed) |
+| `web-platform-release.yml:177-190` | `status`, `version`, `supabase`, `uptime` on `/health` body | **latent** — `curl -sf` with `\|\| echo ""` would pass through HTML-on-200 to `jq -r` | **follow-up** (see Deferrals) |
+| `scheduled-linkedin-token-check.yml:93` | `.name` on `/v2/userinfo` body | **target of this plan** | fixed here |
+| `scheduled-cf-token-expiry-check.yml:64-67` | `.result[].expires_at` on CF API body | **target of this plan** | fixed here |
+| `codeql-to-issues.yml:41-50` | `number`, `rule_id`, etc. on `gh api --jq` output | safe — `gh` CLI output, not vendor API; `gh` guarantees well-formed JSON or non-zero exit | none |
+| `reusable-release.yml:155-157` | `.title`, `.labels`, `.body` on `gh pr view --json` output | safe — same `gh` CLI guarantee | none |
 
 ## Deferrals
 
-None. Scope is fully contained in this PR.
+- **Follow-up issue:** apply `jq -e .` guard to `web-platform-release.yml:177-190` (the `Verify deploy health and version` step). The health-check loop reads `/health` via `curl -sf "https://app.soleur.ai/health"` with `|| echo ""` as the error fallback. `curl -sf` returns non-zero on HTTP 4xx/5xx (so errors become `""` and fall into the `[ -z "$HEALTH" ]` branch), **but** a 200-with-HTML body (Cloudflare edge page served on a healthy-looking upstream) would pass through `-sf` unaltered and then crash `jq -r` under the default strict shell. This is the same bug class as #2214 and #2236.
+
+  **Re-evaluation criteria:** file the issue before merging this PR. Target milestone: Phase 3: Make it Sticky (matches #2236). Out of scope for this PR because (a) #2236 specifically named only the two scheduled workflows, (b) the health-check is inside a retry loop so behavior would shift from `continue` to `exit 0 -> step failure` and would need retry-loop-style handling (the PR #2226 pattern), and (c) keeping scope tight reduces review surface.
+
+  **Action in tasks.md Phase 4:** create the follow-up issue with `gh issue create` before committing this PR, per AGENTS.md `wg-when-an-audit-identifies-pre-existing`. The issue reference then appears in this PR's commit message as a `Ref #<new>` follow-up marker.
 
 ## References
 
