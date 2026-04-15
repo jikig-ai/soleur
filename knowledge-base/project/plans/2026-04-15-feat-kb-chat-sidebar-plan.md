@@ -731,8 +731,8 @@ the quote as the first block. iOS Safari works.
 
 + [x] AC1: "Ask about this document" trigger opens sidebar (flag on) or legacy route (flag off).
 + [ ] AC2: Sidebar auto-resolves thread by `context.path`; resumed threads show "Continuing from [date]" banner that auto-dismisses on first new message.
-+ [ ] AC3: "Quote in chat" pill surfaces on markdown selection; inserts `> <text>` with flash confirmation.
-+ [ ] AC4: Keyboard shortcut `⌘⇧L` / `Ctrl+Shift+L` inserts quote without mouse; input placeholder surfaces the shortcut.
++ [x] AC3: "Quote in chat" pill surfaces on markdown selection; inserts `> <text>` with flash confirmation.
++ [x] AC4: Keyboard shortcut `⌘⇧L` / `Ctrl+Shift+L` inserts quote without mouse; input placeholder surfaces the shortcut.
 + [ ] AC5: Sidebar survives KB file-to-file navigation; drafts preserved per-path.
 + [ ] AC6: Full-page `/dashboard/chat/<id>` route unchanged after ChatSurface extraction.
 + [ ] AC7: Mobile renders draggable bottom sheet at ~60vh with three snap points; dragging below 10vh closes.
@@ -744,10 +744,10 @@ the quote as the first block. iOS Safari works.
 + [ ] AC13: All vitest scenarios pass.
 + [ ] AC14: Flag off-path tested — `NEXT_PUBLIC_KB_CHAT_SIDEBAR=0` falls back to legacy navigation.
 + [ ] AC15: Closing panel mid-stream aborts session; reopening shows user messages only.
-+ [ ] AC16: Selection > 8KB renders disabled pill; no oversize payload reaches server.
++ [x] AC16: Selection > 8KB renders disabled pill; no oversize payload reaches server.
 + [ ] AC17: iOS Safari: native share menu suppressed on markdown selection when pill visible.
 + [ ] AC18: Inbox row shows "KB" badge for conversations with `context_path`.
-+ [ ] AC19: Trigger label is stateful: "Ask about this document" (no thread) / "Continue thread" (thread exists).
++ [x] AC19: Trigger label is stateful: "Ask about this document" (no thread) / "Continue thread" (thread exists).
 + [ ] AC20: Two-tab scenario doesn't create duplicate conversations; supersede abort is graceful.
 
 ## Domain Review

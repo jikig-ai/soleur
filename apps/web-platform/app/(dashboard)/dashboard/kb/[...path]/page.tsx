@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, use } from "react";
+import { useState, useEffect, useRef, use, useContext } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { MarkdownRenderer } from "@/components/ui/markdown-renderer";
@@ -8,6 +8,8 @@ import { KbBreadcrumb } from "@/components/kb/kb-breadcrumb";
 import { SharePopover } from "@/components/kb/share-popover";
 import { FilePreview } from "@/components/kb/file-preview";
 import { KbChatTrigger } from "@/components/kb/kb-chat-trigger";
+import { KbChatContext } from "@/components/kb/kb-chat-context";
+import { SelectionToolbar } from "@/components/kb/selection-toolbar";
 import type { ContentResult } from "@/server/kb-reader";
 
 export default function KbContentPage({
@@ -23,6 +25,8 @@ export default function KbContentPage({
   const [content, setContent] = useState<ContentResult | null>(null);
   const [loading, setLoading] = useState(isMarkdown);
   const [error, setError] = useState<"not-found" | "unknown" | null>(null);
+  const articleRef = useRef<HTMLElement>(null);
+  const kbChat = useContext(KbChatContext);
 
   useEffect(() => {
     // Non-markdown files are rendered by FilePreview — no fetch needed
@@ -147,26 +151,28 @@ export default function KbContentPage({
         </div>
         <div className="flex items-center gap-2">
           <SharePopover documentPath={joinedPath} />
-          <Link
-            href={chatUrl}
-            className="inline-flex items-center gap-1.5 rounded-lg border border-amber-500/50 px-3 py-1.5 text-xs font-medium text-amber-400 transition-colors hover:border-amber-400 hover:text-amber-300"
-          >
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="shrink-0">
-              <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2Z" strokeLinecap="round" strokeLinejoin="round" />
-            </svg>
-            Chat about this
-          </Link>
+          <KbChatTrigger fallbackHref={chatUrl} />
         </div>
       </header>
 
       {/* Rendered markdown content */}
-      <article className="flex-1 overflow-y-auto px-4 py-6 md:px-8">
+      <article
+        ref={articleRef}
+        className="flex-1 overflow-y-auto px-4 py-6 md:px-8"
+        style={{ userSelect: "text" }}
+      >
         <div className="mx-auto max-w-3xl">
           <div className="prose-kb">
             <MarkdownRenderer content={content!.content} />
           </div>
         </div>
       </article>
+      {kbChat?.enabled && kbChat.submitQuote && (
+        <SelectionToolbar
+          articleRef={articleRef}
+          onAddToChat={kbChat.submitQuote}
+        />
+      )}
     </div>
   );
 }

@@ -6,7 +6,7 @@ import { useWebSocket } from "@/lib/ws-client";
 import type { ConversationContext, AttachmentRef } from "@/lib/types";
 import { ErrorCard } from "@/components/ui/error-card";
 import type { DomainLeaderId } from "@/server/domain-leaders";
-import { ChatInput } from "@/components/chat/chat-input";
+import { ChatInput, type ChatInputQuoteHandle } from "@/components/chat/chat-input";
 import { AtMentionDropdown } from "@/components/chat/at-mention-dropdown";
 import { useTeamNames } from "@/hooks/use-team-names";
 import { NotificationPrompt } from "@/components/chat/notification-prompt";
@@ -32,6 +32,13 @@ export interface ChatSurfaceProps {
   onThreadResumed?: (conversationId: string, timestamp: string, messageCount: number) => void;
   onRealConversationId?: (conversationId: string) => void;
   onMessageCountChange?: (count: number) => void;
+  /** Imperative handle for KB selection-toolbar quote insertion (sidebar only). */
+  quoteRef?: React.MutableRefObject<ChatInputQuoteHandle | null>;
+  /** Fires before sendMessage so sidebar callers can emit analytics (e.g.
+   *  kb.chat.selection_sent when the content starts with a blockquote). */
+  onBeforeSend?: (message: string) => void;
+  /** Override the default placeholder — used by KB sidebar to surface ⌘⇧L. */
+  placeholder?: string;
 }
 
 export function ChatSurface({
@@ -42,6 +49,9 @@ export function ChatSurface({
   onThreadResumed,
   onRealConversationId,
   onMessageCountChange,
+  quoteRef,
+  onBeforeSend,
+  placeholder,
 }: ChatSurfaceProps) {
   const searchParams = useSearchParams();
   const router = useRouter();
@@ -251,6 +261,7 @@ export function ChatSurface({
 
   function handleSend(message: string, attachments?: AttachmentRef[]) {
     if (status !== "connected") return;
+    onBeforeSend?.(message);
     if (attachments && attachments.length > 0) {
       sendMessage(message, attachments);
     } else {
@@ -453,10 +464,12 @@ export function ChatSurface({
             disabled={status !== "connected"}
             placeholder={
               status === "connected"
-                ? "Follow up or ask another question... Type @ to switch leader"
+                ? (placeholder ??
+                    "Follow up or ask another question... Type @ to switch leader")
                 : "Reconnecting..."
             }
             insertRef={insertRef}
+            quoteRef={quoteRef}
           />
         </div>
         {isFull && (

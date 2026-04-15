@@ -1,11 +1,15 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Sheet } from "@/components/ui/sheet";
 import { ChatSurface } from "@/components/chat/chat-surface";
+import type { ChatInputQuoteHandle } from "@/components/chat/chat-input";
 import { useKbChat } from "@/components/kb/kb-chat-context";
 import { track } from "@/lib/analytics-client";
 import type { ConversationContext } from "@/lib/types";
+
+const SIDEBAR_PLACEHOLDER =
+  "Ask about this document — ⌘⇧L to quote selection";
 
 export interface KbChatSidebarProps {
   open: boolean;
@@ -14,9 +18,31 @@ export interface KbChatSidebarProps {
 }
 
 export function KbChatSidebar({ open, onClose, contextPath }: KbChatSidebarProps) {
-  const { setMessageCount } = useKbChat();
+  const { setMessageCount, registerQuoteHandler } = useKbChat();
   const [resumedBanner, setResumedBanner] = useState<{ timestamp: string } | null>(null);
   const [openedEmitted, setOpenedEmitted] = useState<string | null>(null);
+  const quoteRef = useRef<ChatInputQuoteHandle | null>(null);
+
+  // Register an insertQuote handler with KbChatContext while mounted.
+  useEffect(() => {
+    if (!open) return;
+    registerQuoteHandler((text: string) => {
+      quoteRef.current?.insertQuote(text);
+    });
+    return () => registerQuoteHandler(null);
+  }, [open, registerQuoteHandler]);
+
+  const handleBeforeSend = useCallback(
+    (message: string) => {
+      // "kb.chat.selection_sent" fires when the user sends a message whose
+      // content starts with a markdown blockquote — i.e. a quote from the
+      // selection-toolbar flow. Domain leakage kept out of ChatInput.
+      if (/^\s*>/.test(message)) {
+        void track("kb.chat.selection_sent", { path: contextPath });
+      }
+    },
+    [contextPath],
+  );
 
   // Reset banner + re-arm analytics when the document path changes.
   useEffect(() => {
@@ -101,6 +127,9 @@ export function KbChatSidebar({ open, onClose, contextPath }: KbChatSidebarProps
             onRealConversationId={handleRealConversationId}
             onMessageCountChange={handleMessageCountChange}
             onClose={onClose}
+            quoteRef={quoteRef}
+            onBeforeSend={handleBeforeSend}
+            placeholder={SIDEBAR_PLACEHOLDER}
           />
         </div>
       </div>

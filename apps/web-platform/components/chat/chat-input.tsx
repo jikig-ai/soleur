@@ -14,6 +14,10 @@ interface PendingAttachment {
   uploaded?: AttachmentRef;
 }
 
+export interface ChatInputQuoteHandle {
+  insertQuote: (text: string) => void;
+}
+
 interface ChatInputProps {
   onSend: (message: string, attachments?: AttachmentRef[]) => void;
   onAtTrigger: (query: string, cursorPosition: number) => void;
@@ -24,6 +28,8 @@ interface ChatInputProps {
   conversationId?: string;
   /** Insert text at the current cursor position (used by AtMentionDropdown selection). */
   insertRef?: React.MutableRefObject<((text: string, replaceFrom: number) => void) | null>;
+  /** Imperative handle exposing `insertQuote(text)` for the KB selection flow. */
+  quoteRef?: React.MutableRefObject<ChatInputQuoteHandle | null>;
   /** When true, Enter key defers to the @mention dropdown instead of sending. */
   atMentionVisible?: boolean;
 }
@@ -36,6 +42,7 @@ export function ChatInput({
   placeholder = "Ask your team anything... or @mention a leader",
   conversationId,
   insertRef,
+  quoteRef,
   atMentionVisible = false,
 }: ChatInputProps) {
   const [value, setValue] = useState("");
@@ -43,6 +50,7 @@ export function ChatInput({
   const [attachError, setAttachError] = useState<string | null>(null);
   const [isUploading, setIsUploading] = useState(false);
   const [isDragOver, setIsDragOver] = useState(false);
+  const [flashQuote, setFlashQuote] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const activeXhrs = useRef<Map<string, XMLHttpRequest>>(new Map());
@@ -76,6 +84,33 @@ export function ChatInput({
       };
     }
   }, [insertRef, value]);
+
+  // Expose `insertQuote` for the KB selection-toolbar flow (Phase 4.3).
+  // Prepends "> <text>\n\n" when the draft is empty, or inserts the quoted
+  // block at the current cursor position when there is existing draft text.
+  // Does NOT auto-send; user edits and presses Enter.
+  useEffect(() => {
+    if (!quoteRef) return;
+    quoteRef.current = {
+      insertQuote: (text: string) => {
+        const textarea = textareaRef.current;
+        const quoted = `> ${text}\n\n`;
+        setValue((prev) => {
+          if (!prev) return quoted;
+          const cursor = textarea ? textarea.selectionStart : prev.length;
+          return prev.slice(0, cursor) + quoted + prev.slice(cursor);
+        });
+        setFlashQuote(true);
+        if (textarea) {
+          requestAnimationFrame(() => {
+            textarea.focus();
+            textarea.scrollIntoView({ block: "nearest" });
+          });
+        }
+        setTimeout(() => setFlashQuote(false), 400);
+      },
+    };
+  }, [quoteRef]);
 
   const validateAndAddFiles = useCallback(
     (files: FileList | File[]) => {
@@ -419,7 +454,10 @@ export function ChatInput({
             placeholder={placeholder}
             disabled={disabled || isUploading}
             rows={1}
-            className="w-full resize-none rounded-xl border border-neutral-700 bg-neutral-900 px-4 py-3 pr-12 text-sm text-white placeholder:text-neutral-500 focus:border-neutral-500 focus:outline-none disabled:opacity-50 min-h-[44px]"
+            className={
+              "w-full resize-none rounded-xl border border-neutral-700 bg-neutral-900 px-4 py-3 pr-12 text-sm text-white placeholder:text-neutral-500 focus:border-neutral-500 focus:outline-none disabled:opacity-50 min-h-[44px] transition-shadow" +
+              (flashQuote ? " ring-2 ring-amber-400" : "")
+            }
           />
           {/* Mobile @ button */}
           <button
