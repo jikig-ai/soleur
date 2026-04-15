@@ -77,9 +77,23 @@ describe("KB API security", () => {
       const content = readFileSync(filePath, "utf-8");
       const relativePath = filePath.split("/apps/web-platform/")[1];
 
+      // Auth enforcement is satisfied either by an inline getUser call OR by
+      // a proven delegation to the shared helper (#2180). "Proven" means the
+      // helper must be INVOKED (not just imported) AND its {ok: false} result
+      // must trigger an early return — substring presence alone is too weak
+      // and would accept dead imports or ignored results (see #2245).
+      const hasInlineAuth = content.includes("supabase.auth.getUser");
+      const invokesHelper =
+        /const\s+\w+\s*=\s*await\s+authenticateAndResolveKbPath\s*\(/.test(
+          content,
+        );
+      const checksHelperResult =
+        /if\s*\(\s*!\s*\w+\.ok\s*\)\s*return\s+\w+\.response/.test(content);
+      const delegatesToHelper = invokesHelper && checksHelperResult;
+
       expect(
-        content.includes("supabase.auth.getUser"),
-        `${relativePath} missing auth check`,
+        hasInlineAuth || delegatesToHelper,
+        `${relativePath} missing auth check (inline getUser or proven authenticateAndResolveKbPath delegation)`,
       ).toBe(true);
     }
   });
@@ -92,11 +106,33 @@ describe("KB API security", () => {
       const content = readFileSync(filePath, "utf-8");
       const relativePath = filePath.split("/apps/web-platform/")[1];
 
+      // Same proven-delegation pattern as the auth check above (#2245).
+      const hasInline = content.includes("workspace_status");
+      const invokesHelper =
+        /const\s+\w+\s*=\s*await\s+authenticateAndResolveKbPath\s*\(/.test(
+          content,
+        );
+      const checksHelperResult =
+        /if\s*\(\s*!\s*\w+\.ok\s*\)\s*return\s+\w+\.response/.test(content);
+      const delegatesToHelper = invokesHelper && checksHelperResult;
+
       expect(
-        content.includes("workspace_status"),
-        `${relativePath} missing workspace_status check`,
+        hasInline || delegatesToHelper,
+        `${relativePath} missing workspace_status check (inline or proven authenticateAndResolveKbPath delegation)`,
       ).toBe(true);
     }
+  });
+
+  it("kb-route-helpers enforces path containment, symlink rejection, and null-byte guard", () => {
+    // Architecture review finding D3: invariants moved to the helper when
+    // PR #2235 extracted auth/path-resolution logic. These negative-space
+    // assertions follow the code — a future refactor that removes any of
+    // these lines fails the test.
+    const helper = resolve(__dirname, "../server/kb-route-helpers.ts");
+    const content = readFileSync(helper, "utf-8");
+    expect(content).toContain("isPathInWorkspace(fullPath, kbRoot)");
+    expect(content).toContain("isSymbolicLink()");
+    expect(content).toContain('includes("\\0")');
   });
 
   it("all KB route handlers use structured logging for errors", () => {

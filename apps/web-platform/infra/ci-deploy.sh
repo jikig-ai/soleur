@@ -4,8 +4,96 @@ set -euo pipefail
 # Deploy script invoked by the webhook listener (adnanh/webhook).
 # The webhook sets SSH_ORIGINAL_COMMAND from the JSON payload's "command" field.
 # Parses it for structured "deploy <component> <image> <tag>" format.
+#
+# State file protocol and reason taxonomy:
+#   plugins/soleur/skills/postmerge/references/deploy-status-debugging.md
+#
+# Deploy state file exit_code protocol (#2205):
+#   0   success
+#   >0  explicit failure (see reason field)
+#   -1  ci-deploy.sh is still running (EXIT_RUNNING)
+#   -2  no state file exists (cat-deploy-state.sh fallback; EXIT_NO_PRIOR)
+#   -3  corrupt/unparseable state (cat-deploy-state.sh future; EXIT_CORRUPT)
 
 readonly LOG_TAG="ci-deploy"
+
+# Sentinel exit codes persisted in STATE_FILE. Consumed by cat-deploy-state.sh
+# and the GitHub Actions "Verify deploy script completion" step. Keep in sync
+# with the case statement in .github/workflows/web-platform-release.yml.
+readonly EXIT_RUNNING=-1
+readonly EXIT_NO_PRIOR=-2
+
+# Minimum free disk space required before starting a deploy (image pull +
+# extraction headroom). 5GB expressed in KB to match `df --output=avail`.
+readonly MIN_DISK_KB=$((5 * 1024 * 1024))  # 5GB for image pull + extraction
+
+# -----------------------------------------------------------------------------
+# Deploy state observability (#2185)
+# -----------------------------------------------------------------------------
+# adnanh/webhook returns success-http-response-code (202) the moment ci-deploy.sh
+# is spawned, independent of our exit code. Silent failures (flock contention,
+# Doppler transient, canary rollback) therefore produce 202 with no CI-visible
+# signal. We persist structured state to /var/lock/ci-deploy.state so that the
+# /hooks/deploy-status webhook endpoint (cat-deploy-state.sh) can surface it.
+STATE_FILE="${CI_DEPLOY_STATE:-/var/lock/ci-deploy.state}"
+START_TS=$(date +%s)
+# These are populated as the script parses SSH_ORIGINAL_COMMAND; surfaced in state.
+COMPONENT=""
+IMAGE=""
+TAG=""
+
+# write_state always returns 0 so a failure inside state-writing (e.g. disk-full)
+# never converts an explicit failure reason into an "unhandled" trap on re-entry.
+# Mktemp/mv themselves are logged to syslog if they fail, so the problem remains
+# visible via journalctl -u webhook.
+write_state() {
+  local exit_code="$1"
+  local reason="${2:-}"
+  local tmp
+  tmp=$(mktemp "${STATE_FILE}.XXXXXX" 2>/dev/null) || {
+    logger -t "$LOG_TAG" "write_state: mktemp failed for STATE_FILE=$STATE_FILE"
+    return 0
+  }
+  printf '{"start_ts":%d,"end_ts":%d,"exit_code":%d,"component":"%s","image":"%s","tag":"%s","reason":"%s"}\n' \
+    "$START_TS" "$(date +%s)" "$exit_code" "${COMPONENT:-}" "${IMAGE:-}" "${TAG:-}" "$reason" \
+    > "$tmp" 2>/dev/null || {
+    logger -t "$LOG_TAG" "write_state: printf/redirect failed"
+    rm -f "$tmp"
+    return 0
+  }
+  mv "$tmp" "$STATE_FILE" 2>/dev/null || {
+    logger -t "$LOG_TAG" "write_state: mv failed"
+    rm -f "$tmp"
+    return 0
+  }
+  return 0
+}
+
+# final_write_state records an explicit exit and touches a sentinel so the EXIT
+# trap does not overwrite the reason with "unhandled". Use at every known failure
+# or success exit.
+#
+# Sentinel is touched BEFORE write_state (issue #2199 fix 2): if SIGKILL lands
+# between mv and touch, the EXIT trap would see no sentinel and overwrite the
+# just-written explicit reason with "unhandled". Touching first means a kill
+# mid-write leaves the sentinel + (possibly old) state rather than no sentinel
+# + correct state -- the trap leaves the reason alone either way.
+final_write_state() {
+  touch "${STATE_FILE}.final" 2>/dev/null || true
+  write_state "$1" "$2"
+}
+
+# Clear any stale sentinel from a prior SIGKILLed invocation (issue #2199 fix 3).
+# Without this, a previous run killed between final_write_state and the EXIT
+# trap's `rm -f` leaves the sentinel behind, causing this run's failure reason
+# to be silently skipped by the "unhandled" guard below.
+rm -f "${STATE_FILE}.final"
+
+# On any non-zero exit that did not call final_write_state, record "unhandled".
+# The sentinel file tells us whether an explicit reason was already written.
+# We also clear the sentinel so a future run starts clean.
+# shellcheck disable=SC2064
+trap 'rc=$?; if [ "$rc" -ne 0 ] && [ ! -f "${STATE_FILE}.final" ]; then write_state "$rc" "unhandled"; fi; rm -f "${STATE_FILE}.final"' EXIT
 
 # Structured error output: on failure, emit the failing line number and exit code.
 # In async mode (include-command-output-in-response: false), stderr goes to syslog
@@ -18,12 +106,14 @@ resolve_env_file() {
   if ! command -v doppler >/dev/null 2>&1; then
     logger -t "$LOG_TAG" "FATAL: Doppler CLI not installed"
     echo "Error: Doppler CLI not installed on this server" >&2
+    final_write_state 1 "doppler_unavailable"
     exit 1
   fi
 
   if [[ -z "${DOPPLER_TOKEN:-}" ]]; then
     logger -t "$LOG_TAG" "FATAL: DOPPLER_TOKEN not set"
     echo "Error: DOPPLER_TOKEN environment variable not set" >&2
+    final_write_state 1 "doppler_token_missing"
     exit 1
   fi
 
@@ -39,6 +129,7 @@ resolve_env_file() {
     logger -t "$LOG_TAG" "FATAL: Doppler secrets download failed: $doppler_stderr"
     rm -f "$tmpenv" "$doppler_stderr_file"
     echo "Error: Failed to download secrets from Doppler: $doppler_stderr" >&2
+    final_write_state 1 "doppler_fetch_failed"
     exit 1
   fi
   rm -f "$doppler_stderr_file"
@@ -59,6 +150,7 @@ logger -t "$LOG_TAG" "SSH_ORIGINAL_COMMAND: ${SSH_ORIGINAL_COMMAND:0:200}"
 if [[ -z "${SSH_ORIGINAL_COMMAND:-}" ]]; then
   logger -t "$LOG_TAG" "REJECTED: no command provided"
   echo "Error: no command provided" >&2
+  final_write_state 1 "command_missing"
   exit 1
 fi
 
@@ -67,6 +159,7 @@ field_count=$(printf '%s\n' "$SSH_ORIGINAL_COMMAND" | wc -w)
 if [[ "$field_count" -ne 4 ]]; then
   logger -t "$LOG_TAG" "REJECTED: expected 4 fields, got $field_count"
   echo "Error: malformed command (expected 4 fields, got $field_count)" >&2
+  final_write_state 1 "command_malformed"
   exit 1
 fi
 
@@ -77,6 +170,7 @@ read -r ACTION COMPONENT IMAGE TAG <<< "$SSH_ORIGINAL_COMMAND"
 if [[ "$ACTION" != "deploy" ]]; then
   logger -t "$LOG_TAG" "REJECTED: unknown action '$ACTION'"
   echo "Error: unknown action '$ACTION'" >&2
+  final_write_state 1 "action_unknown"
   exit 1
 fi
 
@@ -84,6 +178,7 @@ fi
 if [[ -z "${ALLOWED_IMAGES[$COMPONENT]+x}" ]]; then
   logger -t "$LOG_TAG" "REJECTED: unknown component '$COMPONENT'"
   echo "Error: unknown component '$COMPONENT'" >&2
+  final_write_state 1 "component_unknown"
   exit 1
 fi
 
@@ -91,6 +186,7 @@ fi
 if [[ "$IMAGE" != "${ALLOWED_IMAGES[$COMPONENT]}" ]]; then
   logger -t "$LOG_TAG" "REJECTED: invalid image '$IMAGE' for component '$COMPONENT'"
   echo "Error: invalid image" >&2
+  final_write_state 1 "image_mismatch"
   exit 1
 fi
 
@@ -98,6 +194,7 @@ fi
 if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
   logger -t "$LOG_TAG" "REJECTED: invalid tag '$TAG'"
   echo "Error: invalid tag format" >&2
+  final_write_state 1 "tag_malformed"
   exit 1
 fi
 
@@ -107,13 +204,25 @@ logger -t "$LOG_TAG" "ACCEPTED: deploy $COMPONENT $IMAGE:$TAG"
 # CI_DEPLOY_LOCK is overridable for testing; production uses /var/lock/ci-deploy.lock.
 LOCK_FILE="${CI_DEPLOY_LOCK:-/var/lock/ci-deploy.lock}"
 exec 200>"$LOCK_FILE"
-flock -n 200 || { logger -t "$LOG_TAG" "REJECTED: another deploy in progress"; echo "Error: another deploy in progress" >&2; exit 1; }
+flock -n 200 || {
+  logger -t "$LOG_TAG" "REJECTED: another deploy in progress"
+  echo "Error: another deploy in progress" >&2
+  final_write_state 1 "lock_contention"
+  exit 1
+}
+
+# Initial "running" state write (issue #2199 fix 1): deferred until AFTER flock
+# acquisition and SSH_ORIGINAL_COMMAND parsing so COMPONENT/IMAGE/TAG are populated.
+# Writing earlier produced an empty-tag "running" state, and a loser that failed
+# flock -n would write "lock_contention" over the winner's in-progress state.
+write_state "$EXIT_RUNNING" "running"
 
 # Check available disk space (minimum 5GB required for image pull + extraction)
 AVAIL_KB=$(df --output=avail / | tail -1 | tr -d ' ')
-if [[ "$AVAIL_KB" -lt 5242880 ]]; then
-  logger -t "$LOG_TAG" "REJECTED: insufficient disk space (${AVAIL_KB}KB available, 5GB required)"
+if [[ "$AVAIL_KB" -lt "$MIN_DISK_KB" ]]; then
+  logger -t "$LOG_TAG" "REJECTED: insufficient disk space (${AVAIL_KB}KB available, ${MIN_DISK_KB}KB required)"
   echo "Error: insufficient disk space for deploy" >&2
+  final_write_state 1 "insufficient_disk_space"
   exit 1
 fi
 
@@ -131,7 +240,10 @@ case "$COMPONENT" in
     # Prepare environment (shared between canary and production)
     sudo chown 1001:1001 /mnt/data/workspaces
     ENV_FILE=$(resolve_env_file)
-    trap 'rm -f "$ENV_FILE"' EXIT
+    # Chain the env-file cleanup with the existing state-writing EXIT trap.
+    # Replacing the trap entirely would lose the "unhandled" reason capture.
+    # shellcheck disable=SC2064
+    trap 'rc=$?; rm -f "$ENV_FILE"; if [ "$rc" -ne 0 ] && [ ! -f "${STATE_FILE}.final" ]; then write_state "$rc" "unhandled"; fi; rm -f "${STATE_FILE}.final"' EXIT
 
     # Start canary on port 3001 (old container still serving on 80/3000)
     # Custom AppArmor profile: allows mount/umount/pivot_root for bwrap
@@ -168,6 +280,8 @@ case "$COMPONENT" in
         logger -t "$LOG_TAG" "DEPLOY_ROLLBACK: bwrap sandbox non-functional in $IMAGE:$TAG"
         { docker stop soleur-web-platform-canary 2>/dev/null || true; }
         { docker rm soleur-web-platform-canary 2>/dev/null || true; }
+        # ENV_FILE trap still runs to clean up the secrets file.
+        final_write_state 1 "canary_sandbox_failed"
         exit 1
       fi
       echo "Sandbox OK"
@@ -193,12 +307,14 @@ case "$COMPONENT" in
         { docker stop soleur-web-platform-canary 2>/dev/null || true; }
         { docker rm soleur-web-platform-canary 2>/dev/null || true; }
         echo "Deploy succeeded"
+        final_write_state 0 "ok"
         exit 0
       else
         # Production start failed after canary success (infra issue, not app)
         logger -t "$LOG_TAG" "DEPLOY_ERROR: production container failed to start after canary passed"
         { docker stop soleur-web-platform-canary 2>/dev/null || true; }
         { docker rm soleur-web-platform-canary 2>/dev/null || true; }
+        final_write_state 1 "production_start_failed"
         exit 1
       fi
     else
@@ -208,12 +324,14 @@ case "$COMPONENT" in
       { docker stop soleur-web-platform-canary 2>/dev/null || true; }
       { docker rm soleur-web-platform-canary 2>/dev/null || true; }
       logger -t "$LOG_TAG" "DEPLOY_ROLLBACK: canary failed for $IMAGE:$TAG, keeping previous version"
+      final_write_state 1 "canary_failed"
       exit 1
     fi
     ;;
   *)
     logger -t "$LOG_TAG" "ERROR: no deploy handler for '$COMPONENT'"
     echo "Error: no deploy handler for '$COMPONENT'" >&2
+    final_write_state 1 "no_handler"
     exit 1
     ;;
 esac

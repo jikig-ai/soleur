@@ -62,6 +62,8 @@ export interface ClientSession {
   idleTimer?: ReturnType<typeof setTimeout>;
   /** Cached subscription status — set at auth, refreshed by billing check timer. */
   subscriptionStatus?: string;
+  /** Periodic refresh timer for `subscriptionStatus` — cleared on every teardown path. */
+  subscriptionRefreshTimer?: ReturnType<typeof setInterval>;
 }
 
 /** Active connections keyed by Supabase user ID. */
@@ -125,6 +127,17 @@ const AUTH_TIMEOUT_MS = 5_000;
 /** Idle timeout: close connections with no user activity (default 30 min). */
 const WS_IDLE_TIMEOUT_MS = parseInt(process.env.WS_IDLE_TIMEOUT_MS ?? "1800000", 10);
 
+/**
+ * Subscription-status cache refresh cadence (default 60s). Bounds the TOCTOU
+ * window between a Stripe webhook flipping `users.subscription_status` to
+ * `unpaid` and the WS handler enforcing it on an already-authenticated
+ * long-lived session.
+ */
+const WS_SUBSCRIPTION_REFRESH_INTERVAL_MS = parseInt(
+  process.env.WS_SUBSCRIPTION_REFRESH_INTERVAL_MS ?? "60000",
+  10,
+);
+
 /** Reset the idle timer for a session. Called after auth and on each chat message. */
 function resetIdleTimer(userId: string, session: ClientSession): void {
   if (session.idleTimer) clearTimeout(session.idleTimer);
@@ -154,6 +167,67 @@ function checkSubscriptionSuspended(userId: string, session: ClientSession): boo
     return true;
   }
   return false;
+}
+
+/**
+ * Re-fetch `users.subscription_status` for this session and enforce suspension
+ * if it has flipped to `unpaid`. Fail-open on transient DB errors — keep the
+ * previously cached value rather than disrupting an active session.
+ *
+ * Exported only for tests. Includes a mandatory `ws.readyState` guard AFTER
+ * the await: the socket may have closed during the DB round-trip (disconnect,
+ * idle timeout, earlier suspension close). Mutating state on a dead socket
+ * leaks handles to Supabase and risks calling close() on an already-closing
+ * connection — see `2026-03-20-websocket-first-message-auth-toctou-race.md`.
+ */
+export async function refreshSubscriptionStatus(
+  userId: string,
+  session: ClientSession,
+): Promise<void> {
+  try {
+    const { data, error } = await supabase
+      .from("users")
+      .select("subscription_status")
+      .eq("id", userId)
+      .single();
+
+    // Guard: socket may have closed during the await. Do not mutate session
+    // state or call close() on a dead socket.
+    if (session.ws.readyState !== WebSocket.OPEN) return;
+
+    if (error || !data) return; // fail open — keep prior cached value
+    session.subscriptionStatus = data.subscription_status ?? undefined;
+    if (data.subscription_status === "unpaid") {
+      checkSubscriptionSuspended(userId, session);
+    }
+  } catch (err) {
+    log.warn(
+      { userId, err },
+      "Subscription status refresh failed — keeping cached value",
+    );
+  }
+}
+
+/**
+ * Start (or restart) the periodic subscription-status refresh timer for a
+ * session. Timer is `.unref()`'d so it never blocks process exit (tests,
+ * graceful SIGTERM drain). Cleared from every teardown path.
+ *
+ * Exported only for tests.
+ */
+export function startSubscriptionRefresh(
+  userId: string,
+  session: ClientSession,
+): void {
+  if (session.subscriptionRefreshTimer) {
+    clearInterval(session.subscriptionRefreshTimer);
+  }
+  const timer = setInterval(
+    () => void refreshSubscriptionStatus(userId, session),
+    WS_SUBSCRIPTION_REFRESH_INTERVAL_MS,
+  );
+  timer.unref?.();
+  session.subscriptionRefreshTimer = timer;
 }
 
 /**
@@ -624,6 +698,9 @@ export function setupWebSocket(server: HTTPServer) {
         // If user already has an open socket, close the old one
         const existing = sessions.get(userId);
         if (existing && existing.ws.readyState === WebSocket.OPEN) {
+          if (existing.subscriptionRefreshTimer) {
+            clearInterval(existing.subscriptionRefreshTimer);
+          }
           existing.ws.close(WS_CLOSE_CODES.SUPERSEDED, "Superseded by new connection");
         }
 
@@ -634,6 +711,7 @@ export function setupWebSocket(server: HTTPServer) {
           subscriptionStatus: userRow?.subscription_status ?? undefined,
         };
         sessions.set(userId, newSession);
+        startSubscriptionRefresh(userId, newSession);
         for (const [key, timer] of pendingDisconnects) {
           if (key.startsWith(`${userId}:`)) {
             clearTimeout(timer);
@@ -680,6 +758,9 @@ export function setupWebSocket(server: HTTPServer) {
         const current = sessions.get(userId);
         if (current?.ws === ws) {
           if (current.idleTimer) clearTimeout(current.idleTimer);
+          if (current.subscriptionRefreshTimer) {
+            clearInterval(current.subscriptionRefreshTimer);
+          }
           sessions.delete(userId);
           // Grace period: defer abort to allow reconnection
           if (current.conversationId) {

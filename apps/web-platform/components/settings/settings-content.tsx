@@ -1,8 +1,6 @@
-import Link from "next/link";
 import { KeyRotationForm } from "./key-rotation-form";
 import { DeleteAccountDialog } from "./delete-account-dialog";
 import { ProjectSetupCard, type RepoStatus } from "./project-setup-card";
-import { BillingSection } from "./billing-section";
 
 interface SettingsContentProps {
   userEmail: string;
@@ -12,12 +10,6 @@ interface SettingsContentProps {
   repoUrl: string | null;
   repoStatus: RepoStatus;
   repoLastSyncedAt: string | null;
-  subscriptionStatus: string | null;
-  currentPeriodEnd: string | null;
-  cancelAtPeriodEnd: boolean;
-  conversationCount: number;
-  serviceTokenCount: number;
-  createdAt: string;
 }
 
 export function SettingsContent({
@@ -28,12 +20,6 @@ export function SettingsContent({
   repoUrl,
   repoStatus,
   repoLastSyncedAt,
-  subscriptionStatus,
-  currentPeriodEnd,
-  cancelAtPeriodEnd,
-  conversationCount,
-  serviceTokenCount,
-  createdAt,
 }: SettingsContentProps) {
   return (
     <div className="space-y-10">
@@ -86,36 +72,6 @@ export function SettingsContent({
           <KeyRotationForm hasExistingKey={hasApiKey} />
         </div>
       </section>
-
-      {/* Connected Services Section */}
-      <section>
-        <h2 className="mb-4 text-lg font-semibold text-white">
-          Connected Services
-        </h2>
-        <div className="rounded-xl border border-neutral-800 bg-neutral-900/50 p-6">
-          <p className="mb-4 text-sm text-neutral-400">
-            Manage API tokens for Cloudflare, Stripe, GitHub, and other
-            third-party services. Tokens are encrypted and available to your
-            agent sessions.
-          </p>
-          <Link
-            href="/dashboard/settings/services"
-            className="inline-flex items-center rounded-lg bg-amber-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-amber-500"
-          >
-            Manage Services
-          </Link>
-        </div>
-      </section>
-
-      {/* Billing Section */}
-      <BillingSection
-        subscriptionStatus={subscriptionStatus}
-        currentPeriodEnd={currentPeriodEnd}
-        cancelAtPeriodEnd={cancelAtPeriodEnd}
-        conversationCount={conversationCount}
-        serviceTokenCount={serviceTokenCount}
-        createdAt={createdAt}
-      />
 
       {/* Danger Zone Section */}
       <section>

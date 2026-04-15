@@ -15,6 +15,9 @@ import type { ConversationStatus } from "@/lib/types";
 import type { DomainLeaderId } from "@/server/domain-leaders";
 import { DOMAIN_LEADERS, ROUTABLE_DOMAIN_LEADERS } from "@/server/domain-leaders";
 import { LeaderAvatar } from "@/components/leader-avatar";
+import { FoundationCards } from "@/components/dashboard/foundation-cards";
+import type { FoundationCard } from "@/components/dashboard/foundation-cards";
+import { useTeamNames } from "@/hooks/use-team-names";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -29,15 +32,6 @@ interface FirstRunAttachment {
 // ---------------------------------------------------------------------------
 // Foundation card definitions
 // ---------------------------------------------------------------------------
-
-interface FoundationCard {
-  id: string;
-  title: string;
-  leaderId: DomainLeaderId;
-  kbPath: string;
-  promptText: string;
-  done: boolean;
-}
 
 const FOUNDATION_PATHS = [
   { id: "vision", title: "Vision", leaderId: "cpo" as DomainLeaderId, kbPath: "overview/vision.md", promptText: "" },
@@ -120,6 +114,8 @@ export default function DashboardPage() {
   const [statusFilter, setStatusFilter] = useState<ConversationStatus | null>(null);
   const [domainFilter, setDomainFilter] = useState<DomainLeaderId | "general" | null>(null);
   const [archiveFilter, setArchiveFilter] = useState<ArchiveFilter>("active");
+
+  const { getIconPath } = useTeamNames();
 
   const { conversations, loading, error, refetch, archiveConversation, unarchiveConversation, updateStatus } = useConversations({
     statusFilter,
@@ -471,44 +467,11 @@ export default function DashboardPage() {
             <p className="mb-4 text-sm text-neutral-400">
               Complete these to brief your department leaders.
             </p>
-            <div className="grid w-full grid-cols-2 gap-3 md:grid-cols-4">
-              {foundationCards.map((card) =>
-                card.done ? (
-                  <a
-                    key={card.id}
-                    href={`/dashboard/kb/${card.kbPath}`}
-                    className="flex flex-col gap-2 rounded-xl border border-neutral-800/50 bg-neutral-900/30 p-4 text-left transition-colors hover:border-neutral-700"
-                  >
-                    <span className="text-lg text-green-500" aria-label="Complete">
-                      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                        <path d="M20 6 9 17l-5-5" />
-                      </svg>
-                    </span>
-                    <span className="text-sm font-medium text-neutral-400">
-                      {card.title}
-                    </span>
-                    <span className="text-xs text-neutral-600">
-                      View in Knowledge Base
-                    </span>
-                  </a>
-                ) : (
-                  <button
-                    key={card.id}
-                    type="button"
-                    onClick={() => handlePromptClick(card.promptText)}
-                    className="flex flex-col gap-2 rounded-xl border border-neutral-800 bg-neutral-900/50 p-4 text-left transition-colors hover:border-neutral-600"
-                  >
-                    <LeaderAvatar leaderId={card.leaderId} size="sm" />
-                    <span className="text-sm font-medium text-white">
-                      {card.title}
-                    </span>
-                    <span className="text-xs text-neutral-500">
-                      {card.promptText}
-                    </span>
-                  </button>
-                ),
-              )}
-            </div>
+            <FoundationCards
+              cards={foundationCards}
+              getIconPath={getIconPath}
+              onIncompleteClick={handlePromptClick}
+            />
           </div>
         )}
 
@@ -558,7 +521,7 @@ export default function DashboardPage() {
           </div>
         )}
 
-        <LeaderStrip onLeaderClick={handleLeaderClick} />
+        <LeaderStrip onLeaderClick={handleLeaderClick} getIconPath={getIconPath} />
       </div>
     );
   }
@@ -585,44 +548,11 @@ export default function DashboardPage() {
           <p className="mb-4 text-sm text-neutral-400">
             Complete these to brief your department leaders.
           </p>
-          <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-            {foundationCards.map((card) =>
-              card.done ? (
-                <a
-                  key={card.id}
-                  href={`/dashboard/kb/${card.kbPath}`}
-                  className="flex flex-col gap-2 rounded-xl border border-neutral-800/50 bg-neutral-900/30 p-4 text-left transition-colors hover:border-neutral-700"
-                >
-                  <span className="text-lg text-green-500" aria-label="Complete">
-                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                      <path d="M20 6 9 17l-5-5" />
-                    </svg>
-                  </span>
-                  <span className="text-sm font-medium text-neutral-400">
-                    {card.title}
-                  </span>
-                  <span className="text-xs text-neutral-600">
-                    View in Knowledge Base
-                  </span>
-                </a>
-              ) : (
-                <button
-                  key={card.id}
-                  type="button"
-                  onClick={() => handlePromptClick(card.promptText)}
-                  className="flex flex-col gap-2 rounded-xl border border-neutral-800 bg-neutral-900/50 p-4 text-left transition-colors hover:border-neutral-600"
-                >
-                  <LeaderAvatar leaderId={card.leaderId} size="sm" />
-                  <span className="text-sm font-medium text-white">
-                    {card.title}
-                  </span>
-                  <span className="text-xs text-neutral-500">
-                    {card.promptText}
-                  </span>
-                </button>
-              ),
-            )}
-          </div>
+          <FoundationCards
+            cards={foundationCards}
+            getIconPath={getIconPath}
+            onIncompleteClick={handlePromptClick}
+          />
         </div>
       )}
 
@@ -760,7 +690,7 @@ export default function DashboardPage() {
   );
 }
 
-function LeaderStrip({ onLeaderClick }: { onLeaderClick: (leaderId: string) => void }) {
+function LeaderStrip({ onLeaderClick, getIconPath }: { onLeaderClick: (leaderId: string) => void; getIconPath: (id: DomainLeaderId) => string | null }) {
   return (
     <>
       <p className="mb-4 text-xs font-medium tracking-widest text-neutral-400">
@@ -774,7 +704,7 @@ function LeaderStrip({ onLeaderClick }: { onLeaderClick: (leaderId: string) => v
             onClick={() => onLeaderClick(leader.id)}
             className="group flex items-center gap-1.5 rounded-lg px-2 py-1 transition-colors hover:bg-neutral-800/50"
           >
-            <LeaderAvatar leaderId={leader.id} size="sm" />
+            <LeaderAvatar leaderId={leader.id} size="sm" customIconPath={getIconPath(leader.id as DomainLeaderId)} />
             <span className="text-xs text-neutral-500 group-hover:text-neutral-300">
               {leader.name}
             </span>

@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, type Mock } from "vitest";
 import { render, screen, waitFor, fireEvent } from "@testing-library/react";
+import { createUseTeamNamesMock } from "./mocks/use-team-names";
 
 // Mock next/navigation — stable reference prevents useEffect re-fires
 const mockPush = vi.fn();
@@ -7,6 +8,10 @@ const mockRouter = { push: mockPush };
 vi.mock("next/navigation", () => ({
   useRouter: () => mockRouter,
   usePathname: () => "/dashboard",
+}));
+
+vi.mock("@/hooks/use-team-names", () => ({
+  useTeamNames: () => createUseTeamNamesMock(),
 }));
 
 // Supabase query builder mock (thenable, matches existing pattern)

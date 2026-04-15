@@ -1,10 +1,20 @@
 import { render, screen, within, fireEvent } from "@testing-library/react";
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, afterEach } from "vitest";
 import { ConversationRow } from "@/components/inbox/conversation-row";
 import type { ConversationWithPreview } from "@/hooks/use-conversations";
+import { createUseTeamNamesMock } from "../mocks/use-team-names";
 
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ push: vi.fn() }),
+}));
+
+const { mockGetIconPath } = vi.hoisted(() => ({
+  mockGetIconPath: vi.fn<(id: string) => string | null>(() => null),
+}));
+
+vi.mock("@/hooks/use-team-names", () => ({
+  useTeamNames: () =>
+    createUseTeamNamesMock({ getIconPath: mockGetIconPath }),
 }));
 
 function makeConversation(
@@ -63,6 +73,26 @@ describe("ConversationRow LeaderAvatar", () => {
 
     const badges = screen.queryAllByLabelText(/avatar/i);
     expect(badges).toHaveLength(0);
+  });
+});
+
+describe("ConversationRow custom icon", () => {
+  afterEach(() => {
+    mockGetIconPath.mockReset().mockReturnValue(null);
+  });
+
+  it("renders custom icon when getIconPath returns a path", () => {
+    mockGetIconPath.mockImplementation((id: string) =>
+      id === "cto" ? "settings/team-icons/cto.png" : null,
+    );
+
+    const { container } = render(
+      <ConversationRow conversation={makeConversation({ domain_leader: "cto" })} />,
+    );
+
+    const imgs = container.querySelectorAll('img[alt="CTO custom icon"]');
+    expect(imgs.length).toBeGreaterThanOrEqual(1);
+    expect(imgs[0]?.getAttribute("src")).toBe("/api/kb/content/settings/team-icons/cto.png");
   });
 });
 

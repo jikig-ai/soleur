@@ -2,8 +2,9 @@
 
 import { useState, useEffect, useRef, useCallback } from "react";
 import { createClient } from "@/lib/supabase/client";
-import { WS_CLOSE_CODES, type WSMessage, type MessageState, type ConversationContext, type AttachmentRef } from "@/lib/types";
+import { WS_CLOSE_CODES, type WSMessage, type ConversationContext, type AttachmentRef } from "@/lib/types";
 import type { DomainLeaderId } from "@/server/domain-leaders";
+import { applyStreamEvent, applyTimeout, type ChatMessage } from "@/lib/chat-state-machine";
 
 type ConnectionStatus = "connecting" | "connected" | "reconnecting" | "disconnected";
 
@@ -16,35 +17,8 @@ export interface WebSocketError {
   };
 }
 
-interface ChatMessageBase {
-  id: string;
-  role: "user" | "assistant";
-  content: string;
-  leaderId?: DomainLeaderId;
-  attachments?: AttachmentRef[];
-  state?: MessageState;
-  toolLabel?: string;
-  toolsUsed?: string[];
-}
-
-interface ChatTextMessage extends ChatMessageBase {
-  type: "text";
-}
-
-interface ChatGateMessage extends ChatMessageBase {
-  type: "review_gate";
-  gateId: string;
-  question: string;
-  options: string[];
-  header?: string;
-  descriptions?: Record<string, string | undefined>;
-  stepProgress?: { current: number; total: number };
-  resolved?: boolean;
-  selectedOption?: string;
-  gateError?: string;
-}
-
-type ChatMessage = ChatTextMessage | ChatGateMessage;
+// ChatMessage type is now re-exported from chat-state-machine (see import above)
+// to ensure the pure reducer and the hook share the same shape. See #2124.
 
 export interface UsageData {
   totalCostUsd: number;
@@ -123,20 +97,20 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
     timeoutTimersRef.current.clear();
   }, []);
 
-  /** Start/reset a 30s timeout for a leader — transitions to error on fire */
+  /** Start/reset a 30s timeout for a leader — transitions to error on fire
+   *  ONLY if the bubble is still in a transitional state (thinking/tool_use).
+   *  Guard lives in `applyTimeout` in chat-state-machine.ts so a slow first
+   *  token that arrived just before the timer fired cannot clobber a bubble
+   *  that has already progressed to streaming or done. See #2136. */
   const resetLeaderTimeout = useCallback((leaderId: string) => {
     clearLeaderTimeout(leaderId);
     const timer = setTimeout(() => {
       if (!mountedRef.current) return;
-      const idx = activeStreamsRef.current.get(leaderId);
-      if (idx === undefined) return;
       setMessages((prev) => {
-        if (idx >= prev.length) return prev;
-        const updated = [...prev];
-        updated[idx] = { ...updated[idx], state: "error" };
-        return updated;
+        const result = applyTimeout(prev, activeStreamsRef.current, leaderId);
+        activeStreamsRef.current = result.activeStreams;
+        return result.messages;
       });
-      activeStreamsRef.current.delete(leaderId);
       timeoutTimersRef.current.delete(leaderId);
     }, STUCK_TIMEOUT_MS);
     timeoutTimersRef.current.set(leaderId, timer);
@@ -174,6 +148,12 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
 
   const connect = useCallback(async () => {
     if (!mountedRef.current) return;
+    // Clear stale state from any prior connection — incoming events on the
+    // new socket must not mutate wrong message indices or resume timers
+    // that were tied to the previous socket. See #2135.
+    activeStreamsRef.current.clear();
+    clearAllTimeouts();
+    setActiveLeaderIds([]);
     setSessionConfirmed(false);
     setUsageData(null);
 
@@ -219,125 +199,37 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
           break;
         }
 
-        case "stream_start": {
-          // Store routing source from first stream_start
-          if (msg.source) {
+        case "stream_start":
+        case "tool_use":
+        case "stream":
+        case "stream_end":
+        case "review_gate": {
+          // Store routing source from the first stream_start
+          if (msg.type === "stream_start" && msg.source) {
             setRouteSource(msg.source);
           }
-          // Create a new empty message bubble for this leader with THINKING state
+          // Delegate state transitions to the pure state machine so tests
+          // exercise the same code path as production (see #2124).
+          //
+          // Capture timerAction from the result so the hook honours the
+          // reducer's declared intent — single source of truth for timer
+          // lifecycle. setMessages may be invoked twice under StrictMode;
+          // since the reducer is pure, both invocations produce the same
+          // timerAction, so capturing the latest is safe.
+          let action: ReturnType<typeof applyStreamEvent>["timerAction"];
           setMessages((prev) => {
-            const newMsg: ChatMessage = {
-              id: `stream-${msg.leaderId}-${crypto.randomUUID()}`,
-              role: "assistant",
-              content: "",
-              type: "text",
-              leaderId: msg.leaderId,
-              state: "thinking",
-              toolsUsed: [],
-            };
-            activeStreamsRef.current.set(msg.leaderId, prev.length);
+            const result = applyStreamEvent(prev, activeStreamsRef.current, msg);
+            activeStreamsRef.current = result.activeStreams;
+            action = result.timerAction;
+            return result.messages;
+          });
+          if (action?.type === "reset") resetLeaderTimeout(action.leaderId);
+          else if (action?.type === "clear") clearLeaderTimeout(action.leaderId);
+          else if (action?.type === "clear_all") clearAllTimeouts();
+          // Keep activeLeaderIds in sync for UI consumers that track who's talking.
+          if (msg.type === "stream_start" || msg.type === "stream_end" || msg.type === "review_gate") {
             setActiveLeaderIds(Array.from(activeStreamsRef.current.keys()) as DomainLeaderId[]);
-            return [...prev, newMsg];
-          });
-          // Start 30s timeout for stuck THINKING state
-          resetLeaderTimeout(msg.leaderId);
-          break;
-        }
-
-        case "tool_use": {
-          // Update bubble to TOOL_USE state with human-readable label
-          const toolIdx = activeStreamsRef.current.get(msg.leaderId);
-          if (toolIdx !== undefined) {
-            setMessages((prev) => {
-              if (toolIdx >= prev.length) return prev;
-              const updated = [...prev];
-              updated[toolIdx] = {
-                ...updated[toolIdx],
-                state: "tool_use",
-                toolLabel: msg.label,
-                toolsUsed: [...(updated[toolIdx].toolsUsed ?? []), msg.tool],
-              };
-              return updated;
-            });
           }
-          // Reset timeout — activity detected
-          resetLeaderTimeout(msg.leaderId);
-          break;
-        }
-
-        case "stream": {
-          const streamLeaderId = msg.leaderId;
-
-          setMessages((prev) => {
-            // Look up the message index for this leader's active stream
-            const idx = activeStreamsRef.current.get(streamLeaderId);
-
-            if (idx !== undefined && idx < prev.length) {
-              // REPLACE content (not append) — server sends cumulative snapshots
-              const updated = [...prev];
-              updated[idx] = {
-                ...updated[idx],
-                content: msg.content,
-                state: "streaming",
-                toolLabel: undefined,
-              };
-              return updated;
-            }
-
-            // No active stream for this leader (stream_start may have been missed)
-            // Create a new bubble with streaming state
-            const newMsg: ChatMessage = {
-              id: `stream-${streamLeaderId}-${crypto.randomUUID()}`,
-              role: "assistant",
-              content: msg.content,
-              type: "text",
-              leaderId: streamLeaderId,
-              state: "streaming",
-              toolsUsed: [],
-            };
-            activeStreamsRef.current.set(streamLeaderId, prev.length);
-            return [...prev, newMsg];
-          });
-          // Reset timeout — activity detected
-          resetLeaderTimeout(streamLeaderId);
-          break;
-        }
-
-        case "stream_end": {
-          // Finalize this leader's stream — set state to DONE
-          const endIdx = activeStreamsRef.current.get(msg.leaderId);
-          if (endIdx !== undefined) {
-            setMessages((prev) => {
-              if (endIdx >= prev.length) return prev;
-              const updated = [...prev];
-              updated[endIdx] = { ...updated[endIdx], state: "done" };
-              return updated;
-            });
-          }
-          activeStreamsRef.current.delete(msg.leaderId);
-          clearLeaderTimeout(msg.leaderId);
-          setActiveLeaderIds(Array.from(activeStreamsRef.current.keys()) as DomainLeaderId[]);
-          break;
-        }
-
-        case "review_gate": {
-          activeStreamsRef.current.clear();
-          clearAllTimeouts();
-          setMessages((prev) => [
-            ...prev,
-            {
-              id: `gate-${msg.gateId}`,
-              role: "assistant",
-              content: msg.question,
-              type: "review_gate",
-              gateId: msg.gateId,
-              question: msg.question,
-              options: msg.options,
-              header: msg.header,
-              descriptions: msg.descriptions,
-              stepProgress: msg.stepProgress,
-            },
-          ]);
           break;
         }
 
@@ -491,6 +383,11 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
           content: m.content,
           type: "text" as const,
           leaderId: m.leader_id ?? undefined,
+          // Assistant messages loaded from DB are persisted from stream_end —
+          // they are complete by definition. Assigning state: "done" up-front
+          // eliminates the fallback heuristic that the rendering chain used
+          // to infer completion from `!messageState && content !== ""`. See #2139.
+          state: m.role === "assistant" ? ("done" as const) : undefined,
         }));
 
         if (activeStreamsRef.current.size === 0) {

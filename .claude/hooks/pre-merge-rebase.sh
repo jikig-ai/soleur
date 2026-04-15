@@ -78,7 +78,11 @@ if [[ -z "$REVIEW_TODOS" ]] && [[ -z "$REVIEW_COMMIT" ]]; then
       --head "$CURRENT_BRANCH" --state open --json number --jq '.[0].number // empty' 2>/dev/null || true)
   fi
   if [[ -n "$PR_NUMBER" ]]; then
-    REVIEW_ISSUES=$(gh issue list --label code-review --state all --search "PR #${PR_NUMBER}" \
+    # Wrap the phrase in literal quotes so GitHub search treats "PR #N" as an
+    # exact phrase (otherwise `#123` tokenizes loosely and matches unrelated
+    # issues that happen to reference the PR prefix — confirmed in soleur/#2186
+    # session when search "PR #123" returned issues that never mentioned 123).
+    REVIEW_ISSUES=$(gh issue list --label code-review --state all --search "\"PR #${PR_NUMBER}\"" \
       --limit 1 --json number --jq '.[0].number // empty' 2>/dev/null || true)
   fi
 fi

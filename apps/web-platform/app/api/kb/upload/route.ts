@@ -2,8 +2,9 @@ import { NextResponse } from "next/server";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { validateOrigin, rejectCsrf } from "@/lib/auth/validate-origin";
 import { isPathInWorkspace } from "@/server/sandbox";
-import { githubApiGet, githubApiPost } from "@/server/github-api";
+import { githubApiGet, githubApiPost, GitHubApiError } from "@/server/github-api";
 import { generateInstallationToken, randomCredentialPath } from "@/server/github-app";
+import { sanitizeFilename } from "@/server/kb-validation";
 import { execFile } from "node:child_process";
 import { writeFileSync, unlinkSync } from "node:fs";
 import { promisify } from "node:util";
@@ -20,43 +21,7 @@ const execFileAsync = promisify(execFile);
 const ALLOWED_EXTENSIONS = new Set([
   "png", "jpg", "jpeg", "gif", "webp", "pdf", "csv", "txt", "docx",
 ]);
-const WINDOWS_RESERVED = new Set([
-  "con", "prn", "aux", "nul",
-  "com1", "com2", "com3", "com4", "com5", "com6", "com7", "com8", "com9",
-  "lpt1", "lpt2", "lpt3", "lpt4", "lpt5", "lpt6", "lpt7", "lpt8", "lpt9",
-]);
-const MAX_FILENAME_BYTES = 255;
 const MAX_FILE_SIZE = 20 * 1024 * 1024; // 20 MB
-
-// ---------------------------------------------------------------------------
-// Filename sanitization
-// ---------------------------------------------------------------------------
-
-function sanitizeFilename(
-  filename: string,
-): { valid: boolean; sanitized: string; error?: string } {
-  // Strip control chars (0x00-0x1F, 0x7F)
-  const sanitized = filename.replace(/[\x00-\x1f\x7f]/g, "");
-
-  if (!sanitized || sanitized.trim() === "") {
-    return { valid: false, sanitized, error: "Empty filename" };
-  }
-
-  if (sanitized.startsWith(".")) {
-    return { valid: false, sanitized, error: "Filename cannot start with a dot" };
-  }
-
-  if (new TextEncoder().encode(sanitized).length > MAX_FILENAME_BYTES) {
-    return { valid: false, sanitized, error: "Filename too long" };
-  }
-
-  const nameWithoutExt = sanitized.replace(/\.[^.]+$/, "").toLowerCase();
-  if (WINDOWS_RESERVED.has(nameWithoutExt)) {
-    return { valid: false, sanitized, error: "Reserved filename" };
-  }
-
-  return { valid: true, sanitized };
-}
 
 // ---------------------------------------------------------------------------
 // Route handler
@@ -200,8 +165,7 @@ export async function POST(request: Request) {
         );
       } catch (err) {
         // 404 is expected (file doesn't exist) — continue with upload
-        const errMsg = err instanceof Error ? err.message : "";
-        if (!errMsg.includes("404")) {
+        if (!(err instanceof GitHubApiError) || err.statusCode !== 404) {
           throw err; // Re-throw non-404 errors
         }
       }
@@ -304,7 +268,7 @@ export async function POST(request: Request) {
       );
     }
 
-    if (error instanceof Error && error.message.includes("GitHub API")) {
+    if (error instanceof GitHubApiError) {
       logger.error(
         { err: error, userId: user.id, path: filePath },
         "kb/upload: GitHub API error",

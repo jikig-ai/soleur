@@ -2,6 +2,7 @@ import { describe, test, expect, vi, beforeEach } from "vitest";
 import { render, screen } from "@testing-library/react";
 import { ErrorCard } from "../components/ui/error-card";
 import type { WebSocketError } from "@/lib/ws-client";
+import { createUseTeamNamesMock } from "./mocks/use-team-names";
 
 describe("ErrorCard component", () => {
   test("renders error message", () => {
@@ -110,16 +111,7 @@ vi.mock("next/navigation", () => ({
 }));
 
 vi.mock("@/hooks/use-team-names", () => ({
-  useTeamNames: () => ({
-    names: {},
-    nudgesDismissed: [],
-    namingPromptedAt: null,
-    loading: false,
-    updateName: vi.fn(),
-    dismissNudge: vi.fn(),
-    getDisplayName: (id: string) => id.toUpperCase(),
-    getBadgeLabel: (id: string) => id.toUpperCase().slice(0, 3),
-  }),
+  useTeamNames: () => createUseTeamNamesMock(),
   TeamNamesProvider: ({ children }: { children: React.ReactNode }) => children,
 }));
 

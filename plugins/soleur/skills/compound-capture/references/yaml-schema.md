@@ -15,6 +15,7 @@
 
 ## Optional Fields
 
+- **rule_id** (string): AGENTS.md rule slug this learning relates to. Must match `^(hr|wg|cq|rf|pdr|cm)-[a-z0-9-]{3,40}$` (e.g., `hr-never-git-stash-in-worktrees`). Hit/bypass counters for rules live in `knowledge-base/project/rule-metrics.json`, not in the learning frontmatter (see plan ADR-1).
 - **rails_version** (string): Rails version in X.Y.Z format
 - **tags** (array): Searchable keywords (lowercase, hyphen-separated)
 
@@ -26,6 +27,7 @@
 4. date must match YYYY-MM-DD format
 5. rails_version (if provided) must match X.Y.Z format
 6. tags should be lowercase, hyphen-separated
+7. rule_id (if provided) must match the six-section prefix pattern (hr, wg, cq, rf, pdr, cm)
 
 ## Example
 
