@@ -29,6 +29,9 @@ const ATTACHMENT_EXTENSIONS = new Set([".docx"]);
 
 const MAX_BINARY_SIZE = 50 * 1024 * 1024; // 50 MB
 
+export const KB_BINARY_RESPONSE_CSP =
+  "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'";
+
 export async function GET(
   _request: Request,
   { params }: { params: Promise<{ path: string[] }> },
@@ -135,6 +138,7 @@ export async function GET(
         "Content-Length": buffer.length.toString(),
         "X-Content-Type-Options": "nosniff",
         "Cache-Control": "private, max-age=60",
+        "Content-Security-Policy": KB_BINARY_RESPONSE_CSP,
       },
     });
   } catch {

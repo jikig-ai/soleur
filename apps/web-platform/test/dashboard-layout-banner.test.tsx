@@ -28,9 +28,11 @@ vi.mock("@/lib/supabase/client", () => ({
 }));
 
 // TeamNamesProvider is a simple passthrough during tests.
+import { createUseTeamNamesMock } from "./mocks/use-team-names";
+
 vi.mock("@/hooks/use-team-names", () => ({
   TeamNamesProvider: ({ children }: { children: React.ReactNode }) => children,
-  useTeamNames: () => ({}),
+  useTeamNames: () => createUseTeamNamesMock(),
 }));
 
 // Import AFTER the mocks. We test the exported PaymentWarningBanner.

@@ -2,6 +2,7 @@ import { render, screen, within, fireEvent } from "@testing-library/react";
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { ConversationRow } from "@/components/inbox/conversation-row";
 import type { ConversationWithPreview } from "@/hooks/use-conversations";
+import { createUseTeamNamesMock } from "../mocks/use-team-names";
 
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ push: vi.fn() }),
@@ -12,21 +13,8 @@ const { mockGetIconPath } = vi.hoisted(() => ({
 }));
 
 vi.mock("@/hooks/use-team-names", () => ({
-  useTeamNames: () => ({
-    names: {},
-    iconPaths: {},
-    nudgesDismissed: [],
-    namingPromptedAt: null,
-    loading: false,
-    error: null,
-    updateName: vi.fn(),
-    updateIcon: vi.fn(),
-    dismissNudge: vi.fn(),
-    refetch: vi.fn(),
-    getDisplayName: (id: string) => id.toUpperCase(),
-    getBadgeLabel: (id: string) => id.toUpperCase().slice(0, 3),
-    getIconPath: mockGetIconPath,
-  }),
+  useTeamNames: () =>
+    createUseTeamNamesMock({ getIconPath: mockGetIconPath }),
 }));
 
 function makeConversation(
