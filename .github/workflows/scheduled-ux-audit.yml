@@ -1,19 +1,26 @@
 # Recurring UX audit using the soleur:ux-audit skill.
 # Signs in as ux-audit-bot@jikigai.com, screenshots routes in route-list.yaml,
-# delegates analysis to ux-design-lead (audit mode), dedupes, and files capped
-# GitHub issues labeled `ux-audit`.
+# delegates analysis to ux-design-lead (audit mode), dedupes, and uploads
+# findings as a workflow artifact.
 #
 # Triggers:
 #   push (main)   — auto-run on merges that touch web-platform UI
 #   cron monthly  — safety net for quiet UI-change months
-#   manual        — dry_run input toggles filing vs stdout-only
+#   manual        — founder-triggered (no inputs; always dry-run)
 #
 # Security: no untrusted event inputs are interpolated in run: blocks. Agent
 # output is written to files inside the action and referenced via env vars.
 #
-# Pinned defaults: dry_run defaults to TRUE until calibration passes.
+# Dry-run is PERMANENT. Per plan #2341 Phase 3 and calibration outcome in
+# #2378 (runs 24469469972 + 24472727054), the agent produces valid findings
+# but does not reliably match the founder's prior for any specific calibration
+# signal (e.g. collapsible-nav on /dashboard). Rather than risk the agent
+# filing noise directly into the tracker, every run writes findings to the
+# workflow artifact only; the founder reads the artifact and files issues
+# manually on judgment. To resume automatic filing, edit this file to set
+# UX_AUDIT_DRY_RUN=false and document the calibration that justifies it.
 #
-# To test manually: gh workflow run scheduled-ux-audit.yml --field dry_run=true
+# To test manually: gh workflow run scheduled-ux-audit.yml
 
 name: "Scheduled: UX Audit"
 
@@ -25,12 +32,7 @@ on:
       - 'apps/web-platform/components/**'
   schedule:
     - cron: '0 9 1 * *'
-  workflow_dispatch:
-    inputs:
-      dry_run:
-        description: 'Write findings to stdout/artifact instead of filing issues'
-        type: boolean
-        default: true
+  workflow_dispatch: {}
 
 concurrency:
   group: schedule-ux-audit
@@ -122,7 +124,7 @@ jobs:
         uses: anthropics/claude-code-action@df37d2f0760a4b5683a6e617c9325bc1a36443f6 # v1.0.75
         env:
           GH_TOKEN: ${{ github.token }}
-          UX_AUDIT_DRY_RUN: ${{ inputs.dry_run || 'true' }}
+          UX_AUDIT_DRY_RUN: 'true'
           UX_AUDIT_STORAGE_STATE: ${{ github.workspace }}/tmp/ux-audit/storage-state.json
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
@@ -173,7 +175,7 @@ jobs:
           REPO: ${{ github.repository }}
           RUN_ID: ${{ github.run_id }}
           EVENT: ${{ github.event_name }}
-          DRY_RUN: ${{ inputs.dry_run || 'true' }}
+          DRY_RUN: 'true'
         run: |
           {
             echo 'body<<EOF_BODY'

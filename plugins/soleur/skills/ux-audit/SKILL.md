@@ -34,7 +34,7 @@ Skill(skill: "soleur:ux-audit")
 Skill(skill: "soleur:ux-audit", args: "--route /dashboard")
 ```
 
-Dry-run toggle: export `UX_AUDIT_DRY_RUN=true` before launching Claude Code (or set it via `workflow_dispatch.inputs.dry_run` in the workflow). The skill reads the env var at runtime.
+Dry-run toggle: export `UX_AUDIT_DRY_RUN=true` before launching Claude Code. The skill reads the env var at runtime. In the scheduled workflow (`.github/workflows/scheduled-ux-audit.yml`) the env is hardcoded to `'true'` per plan #2341 Phase 3 calibration outcome (#2378 MISS) — file mode must be re-enabled by editing the workflow directly, not via a workflow input.
 
 Env vars required (loaded from Doppler `prd_scheduled`, falling back to `prd`):
 
@@ -43,12 +43,13 @@ Env vars required (loaded from Doppler `prd_scheduled`, falling back to `prd`):
 - `UX_AUDIT_DRY_RUN` — `true` writes findings JSON to stdout + workflow artifact; `false` files issues
 - `GH_TOKEN` — for `gh issue create` / `gh issue list`
 
-Single dry-run knob: `workflow_dispatch.inputs.dry_run` → `UX_AUDIT_DRY_RUN` env. One plumbing path.
+Single dry-run knob: `UX_AUDIT_DRY_RUN` env. In the scheduled workflow it is hardcoded to `'true'`; locally it is controlled by the exported env var. One plumbing path either way.
 
 ## Constants (inline, not configurable)
 
 - `CAP_OPEN_ISSUES = 20` — global cap on open `ux-audit`-labeled issues; skill refuses to file when reached
 - `CAP_PER_RUN = 5` — severity-ranked top-N findings filed per run
+- `CAP_PER_ROUTE = 2` — no single route may contribute more than 2 findings to the top-N, so anonymous funnel pages (login/signup) cannot monopolize output and crowd out bot-authenticated dashboard findings. Ref #2378.
 - `FINDING_CATEGORIES = ["real-estate", "ia", "consistency", "responsive", "comprehension"]` — dedup hash keys on this exact set
 
 ## Workflow
@@ -107,7 +108,9 @@ Closed issues count. If the founder wants to resurface a closed finding, they re
 
 ### 6. Severity-rank + cap
 
-Sort surviving findings by severity (`critical` > `high` > `medium` > `low`) then stable by `route`. Take the top `CAP_PER_RUN = 5`.
+Sort surviving findings by severity (`critical` > `high` > `medium` > `low`) then stable by `route`. Then apply `CAP_PER_ROUTE = 2`: walk the sorted list and drop any finding that would be the 3rd+ entry for a route already seen. Finally, take the top `CAP_PER_RUN = 5` of what remains.
+
+The per-route cap runs **before** `CAP_PER_RUN` so dropped anonymous-route findings free up slots for dashboard findings rather than the reverse. (`CAP_OPEN_ISSUES` is a separate check at Step 2; it does not participate in this ordering.) If fewer than 5 findings survive both caps, file what remains — the output is intentionally under-filled rather than padded with dropped-route duplicates.
 
 ### 7. File issues (or dry-run to stdout)
 
