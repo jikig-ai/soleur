@@ -173,15 +173,15 @@ Edit `.github/workflows/rule-metrics-aggregate.yml`:
 
 ## Acceptance Criteria
 
-- [ ] `.github/workflows/rule-metrics-aggregate.yml` no longer contains `git push` to `main`. It uses `gh pr create` + synthetic check-runs + `gh pr merge --squash --auto`.
-- [ ] Workflow `permissions:` includes `pull-requests: write`, `checks: write`, `contents: write`, `statuses: write`. Does NOT include `actions: write` (least-privilege — this workflow dispatches no other workflows).
-- [ ] Bot commit author email is the canonical `41898282+github-actions[bot]@users.noreply.github.com`.
-- [ ] `scripts/backfill-rule-ids.py` is deleted.
-- [ ] `tests/scripts/test_backfill_rule_ids.py` is deleted.
-- [ ] `scripts/test-all.sh` no longer references `tests/scripts/backfill-rule-ids` (line removed; `lint-rule-ids` line kept).
-- [ ] `scripts/lint-rule-ids.py` and `tests/scripts/test_lint_rule_ids.py` are unchanged.
-- [ ] `bash scripts/test-all.sh` passes locally with one fewer suite than before.
-- [ ] `grep -rn "backfill-rule-ids\|test_backfill_rule_ids" .` returns only docs/plan references (no live code paths).
+- [x] `.github/workflows/rule-metrics-aggregate.yml` no longer contains `git push` to `main`. It uses `gh pr create` + synthetic check-runs + `gh pr merge --squash --auto`.
+- [x] Workflow `permissions:` includes `pull-requests: write`, `checks: write`, `contents: write`, `statuses: write`. Does NOT include `actions: write` (least-privilege — this workflow dispatches no other workflows).
+- [x] Bot commit author email is the canonical `41898282+github-actions[bot]@users.noreply.github.com`.
+- [x] `scripts/backfill-rule-ids.py` is deleted.
+- [x] `tests/scripts/test_backfill_rule_ids.py` is deleted.
+- [x] `scripts/test-all.sh` no longer references `tests/scripts/backfill-rule-ids` (line removed; `lint-rule-ids` line kept).
+- [x] `scripts/lint-rule-ids.py` and `tests/scripts/test_lint_rule_ids.py` are unchanged.
+- [x] `bash scripts/test-all.sh` passes locally with one fewer suite than before.
+- [x] `grep -rn "backfill-rule-ids\|test_backfill_rule_ids" .` returns only docs/plan references (no live code paths).
 - [ ] Post-merge: one `workflow_dispatch` run of `rule-metrics-aggregate.yml` concludes `success` (either no-op or merged bot PR).
 - [ ] PR body uses `Closes #2258` and `Closes #2264`.
 
