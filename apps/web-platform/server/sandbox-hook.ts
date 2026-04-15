@@ -53,7 +53,14 @@ export function createSandboxHook(workspacePath: string): HookCallback {
       }
     }
 
-    // All checks passed -- return empty to continue permission chain
-    return {};
+    // Explicit PreToolUse allow. SDK v0.2.80 rejected bare `{}` with
+    // ZodError: invalid_union. Hook schema differs from canUseTool —
+    // no updatedInput field here.
+    return {
+      hookSpecificOutput: {
+        hookEventName: "PreToolUse" as const,
+        permissionDecision: "allow" as const,
+      },
+    };
   };
 }

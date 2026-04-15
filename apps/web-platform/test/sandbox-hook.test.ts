@@ -37,6 +37,15 @@ function expectDenied(result: SyncHookJSONOutput, messageSubstring: string) {
   expect(result.systemMessage).toContain(messageSubstring);
 }
 
+// Reverting to `{}` would reintroduce the SDK v0.2.80 `ZodError:
+// invalid_union` in the web-UI chat. Keep this assertion strict.
+function expectExplicitAllow(result: SyncHookJSONOutput) {
+  expect(result.hookSpecificOutput).toEqual({
+    hookEventName: "PreToolUse",
+    permissionDecision: "allow",
+  });
+}
+
 describe("createSandboxHook - file tools", () => {
   test.each([
     { tool: "Read", input: { file_path: "/etc/passwd" } },
@@ -69,7 +78,7 @@ describe("createSandboxHook - file tools", () => {
     const result = await invokeHook("Read", {
       file_path: "/workspaces/user1/file.md",
     });
-    expect(result).toEqual({});
+    expectExplicitAllow(result);
   });
 
   test("allows Edit inside workspace", async () => {
@@ -78,12 +87,24 @@ describe("createSandboxHook - file tools", () => {
       old_string: "foo",
       new_string: "bar",
     });
-    expect(result).toEqual({});
+    expectExplicitAllow(result);
+  });
+
+  test("allows Write targeting a path whose parent dir does not yet exist", async () => {
+    // Regression: vision.md update triggers Write on
+    // <workspace>/knowledge-base/overview/vision.md even before the
+    // provisioner pre-creates overview/. The hook must allow because
+    // isPathInWorkspace walks up to the first existing ancestor.
+    const result = await invokeHook("Write", {
+      file_path: "/workspaces/user1/knowledge-base/overview/vision.md",
+      content: "# Vision\n",
+    });
+    expectExplicitAllow(result);
   });
 
   test("allows Read with empty file_path (not outside workspace)", async () => {
     const result = await invokeHook("Read", { file_path: "" });
-    expect(result).toEqual({});
+    expectExplicitAllow(result);
   });
 
   test("deny includes permissionDecisionReason", async () => {
@@ -94,12 +115,12 @@ describe("createSandboxHook - file tools", () => {
 
   test("allows Glob with no path (defaults to CWD)", async () => {
     const result = await invokeHook("Glob", { pattern: "*.ts" });
-    expect(result).toEqual({});
+    expectExplicitAllow(result);
   });
 
   test("allows Grep with no path (defaults to CWD)", async () => {
     const result = await invokeHook("Grep", { pattern: "TODO" });
-    expect(result).toEqual({});
+    expectExplicitAllow(result);
   });
 });
 
@@ -115,26 +136,26 @@ describe("createSandboxHook - Bash env access", () => {
 
   test("allows clean Bash command", async () => {
     const result = await invokeHook("Bash", { command: "ls -la" });
-    expect(result).toEqual({});
+    expectExplicitAllow(result);
   });
 
   test("allows Bash with empty command", async () => {
     const result = await invokeHook("Bash", { command: "" });
-    expect(result).toEqual({});
+    expectExplicitAllow(result);
   });
 });
 
 describe("createSandboxHook - non-matched tools pass through", () => {
-  test("returns empty for AskUserQuestion (not in FILE_TOOLS or Bash)", async () => {
+  test("returns explicit allow for AskUserQuestion (not in FILE_TOOLS or Bash)", async () => {
     const result = await invokeHook("AskUserQuestion", {
       question: "test?",
     });
-    expect(result).toEqual({});
+    expectExplicitAllow(result);
   });
 
-  test("returns empty for Agent tool", async () => {
+  test("returns explicit allow for Agent tool", async () => {
     const result = await invokeHook("Agent", { prompt: "do something" });
-    expect(result).toEqual({});
+    expectExplicitAllow(result);
   });
 });
 

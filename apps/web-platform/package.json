@@ -15,7 +15,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@anthropic-ai/claude-agent-sdk": "0.2.80",
+    "@anthropic-ai/claude-agent-sdk": "0.2.85",
     "@sentry/nextjs": "^10.46.0",
     "@supabase/ssr": "^0.6.0",
     "@supabase/supabase-js": "^2.49.0",

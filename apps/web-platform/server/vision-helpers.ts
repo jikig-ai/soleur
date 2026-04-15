@@ -71,8 +71,8 @@ export async function buildVisionEnhancementPrompt(
   }
 
   return (
-    "\n\nThe founder's vision document at knowledge-base/overview/vision.md " +
+    `\n\nThe founder's vision document at \`${visionPath}\` ` +
     "is a stub. Enhance it with structured sections: Mission, Target Audience, " +
-    "Value Proposition, Key Differentiators. Write the enhanced version to the same path."
+    `Value Proposition, Key Differentiators. Write the enhanced version to the same absolute path (\`${visionPath}\`).`
   );
 }

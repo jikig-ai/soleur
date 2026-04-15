@@ -135,6 +135,23 @@ describe("buildVisionEnhancementPrompt", () => {
     expect(result).toContain("Key Differentiators");
   });
 
+  it("emits an absolute workspace path so Write/Edit never receive a relative file_path", async () => {
+    mockStat.mockResolvedValueOnce({ size: 100 } as fs.Stats);
+
+    const result = await buildVisionEnhancementPrompt(WORKSPACE);
+
+    const absolute = path.join(
+      WORKSPACE,
+      "knowledge-base",
+      "overview",
+      "vision.md",
+    );
+    expect(result).toContain(absolute);
+    // Must not instruct the agent using a bare relative path that would
+    // resolve against the agent's CWD at tool-call time.
+    expect(result).not.toMatch(/(^|[^/])knowledge-base\/overview\/vision\.md/);
+  });
+
   it("returns null when vision.md is substantial (>= 500 bytes)", async () => {
     mockStat.mockResolvedValueOnce({ size: 1200 } as fs.Stats);
 
