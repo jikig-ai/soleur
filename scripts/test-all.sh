@@ -49,6 +49,10 @@ run_suite() {
   fi
 }
 
+run_suite "tests/hooks/incidents" bash tests/hooks/test_incidents.sh
+run_suite "tests/hooks/emissions" bash tests/hooks/test_hook_emissions.sh
+run_suite "tests/scripts/backfill-rule-ids" python3 -m unittest tests.scripts.test_backfill_rule_ids
+run_suite "tests/scripts/lint-rule-ids" python3 -m unittest tests.scripts.test_lint_rule_ids
 run_suite "test/content-publisher" bun test test/content-publisher.test.ts
 run_suite "test/x-community" bun test test/x-community.test.ts
 run_suite "test/pre-merge-rebase" bun test test/pre-merge-rebase.test.ts
