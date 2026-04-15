@@ -1,7 +1,6 @@
 import { redirect } from "next/navigation";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { BillingSection } from "@/components/settings/billing-section";
-import { SettingsShell } from "@/components/settings/settings-shell";
 
 export default async function BillingPage() {
   const supabase = await createClient();
@@ -35,15 +34,13 @@ export default async function BillingPage() {
     ]);
 
   return (
-    <SettingsShell>
-      <BillingSection
-        subscriptionStatus={userData?.subscription_status ?? null}
-        currentPeriodEnd={userData?.current_period_end ?? null}
-        cancelAtPeriodEnd={userData?.cancel_at_period_end ?? false}
-        conversationCount={conversationCount ?? 0}
-        serviceTokenCount={serviceTokenCount ?? 0}
-        createdAt={userData?.created_at ?? new Date().toISOString()}
-      />
-    </SettingsShell>
+    <BillingSection
+      subscriptionStatus={userData?.subscription_status ?? null}
+      currentPeriodEnd={userData?.current_period_end ?? null}
+      cancelAtPeriodEnd={userData?.cancel_at_period_end ?? false}
+      conversationCount={conversationCount ?? 0}
+      serviceTokenCount={serviceTokenCount ?? 0}
+      createdAt={userData?.created_at ?? new Date().toISOString()}
+    />
   );
 }
