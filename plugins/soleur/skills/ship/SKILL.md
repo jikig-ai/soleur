@@ -82,13 +82,15 @@ Search for todo files tagged as code-review findings:
 grep -rl "code-review" todos/ 2>/dev/null | head -1 || true
 ```
 
-**Step 2: Check commit history for review evidence (legacy).**
+**Step 2: Check commit history for review evidence.**
 
-If Step 1 found nothing, check for the review commit pattern:
+If Step 1 found nothing, check for review commit patterns (both legacy and new fix-inline convention from `rf-review-finding-default-fix-inline`):
 
 ```bash
-git log origin/main..HEAD --oneline | grep "refactor: add code review findings" || true
+git log origin/main..HEAD --oneline | grep -E "(refactor: add code review findings|^[a-f0-9]+ review: )" || true
 ```
+
+The `^[a-f0-9]+ review:` alternative matches the new convention — `review: <summary> (P<N>)` commits produced when findings are fixed inline per `rf-review-finding-default-fix-inline`.
 
 **Step 3: Check for GitHub issues with `code-review` label (current).**
 
@@ -117,8 +119,8 @@ If `gh` fails or is unavailable, treat as no output (fail open on Signal 3).
 **Note:** Three signals are checked, any one suffices:
 
 - Signal 1 (`todos/` grep): coupled to legacy review workflow (pre-#1329)
-- Signal 2 (commit message grep): coupled to legacy review SKILL.md Step 5 commit message (pre-#1329)
-- Signal 3 (`gh issue list`): coupled to `review-todo-structure.md` issue body template (`**Source:** PR #<number>`)
+- Signal 2 (commit message grep): matches legacy `refactor: add code review findings` OR new `review: <summary>` fix-inline commits (post-#2374)
+- Signal 3 (`gh issue list`): coupled to `review-todo-structure.md` issue body template (`**Source:** PR #<number>`). Expected to be empty under the new fix-inline default unless findings were scoped out — Signal 2 is the primary signal post-#2374.
 
 **If any step produced output:** Review evidence found. Continue to Phase 2.
 
@@ -280,6 +282,79 @@ Defense-in-depth check that review ran before shipping. Phase 1.5 catches this e
 **Headless mode:** Abort with: "Error: no review evidence found on this branch. Run `/review` before `/ship`, or use `/one-shot` for the full pipeline."
 
 **Interactive mode:** Display warning: "No code review was run before ship." Then invoke `skill: soleur:review`. After review completes, if findings include critical or high severity issues, resolve them before continuing to Phase 6.
+
+### Review-Findings Exit Gate (mandatory)
+
+Blocks merge when review findings from Phase 1.5 / Phase 5.5 Completion Gate
+remain unresolved — neither fixed inline nor formally scoped out with a
+`deferred-scope-out` label.
+
+**Trigger:** Always runs after the Code Review Completion Gate passes.
+
+**Detection:** Resolve the current PR number, then query for open, unresolved
+review-origin issues that cross-reference this PR via body regex
+`(Ref|Closes|Fixes) #<N>\b` — NOT `gh search`'s loose substring matcher
+(which would match any body containing "<N>" as a substring, including
+unrelated SHAs, timestamps, and inline numbers).
+
+```bash
+PR_NUMBER=$(gh pr view --json number --jq .number)
+[[ "$PR_NUMBER" =~ ^[0-9]+$ ]] || { echo "Error: PR_NUMBER is not a positive integer: $PR_NUMBER"; exit 1; }
+UNRESOLVED=$(gh issue list \
+  --state open \
+  --search "-label:deferred-scope-out -label:synthetic-test" \
+  --json number,title,body \
+  --jq '[.[]
+           | select(.title | test("^(review:|Code review #|Refactor:|arch:|compound:|follow-through:)"; "i"))
+           | select((.body // "") | test("(^|\\s)(Ref|Closes|Fixes) #'"$PR_NUMBER"'(\\s|$|[^0-9])"))
+           | {number, title}]')
+COUNT=$(echo "$UNRESOLVED" | jq 'length')
+```
+
+Notes:
+
+- `PR_NUMBER` is validated as digits-only before use (`[[ =~ ^[0-9]+$ ]]`).
+  This is the canonical defense against regex-metachar widening and shell/jq
+  injection — `gh issue list --jq` does not forward `--arg` to jq, so the
+  digits-only pre-check is the sole (and sufficient) safeguard. If this gate
+  is ever ported to two-stage piping (`gh ... --json ... | jq --arg pr ...`),
+  swap in `--arg` then.
+- The regex anchors on keyword `Ref|Closes|Fixes` followed by `#<N>` followed
+  by a non-digit or end-of-string — prevents `#23750` matching when
+  `PR_NUMBER=2375`.
+- `synthetic-test` label excluded so Phase 3 validation test issues
+  self-exclude.
+- Body-keyword detection only: issues linked via GitHub's sidebar "Development
+  → Link an issue" UI (without `Ref|Closes|Fixes #<N>` in the body) are NOT
+  detected. This is an accepted limitation — `Ref #N` is the canonical
+  cross-reference convention across this repo and the gate optimizes for
+  false-negative safety (missed detection) over false-positive merge-blocks.
+- Perf contract: under 5s on a repo with <1000 open issues. If the GitHub
+  API returns 5xx, retry once with 2s backoff; on second failure, abort the
+  gate with the API error surfaced — do NOT silent-pass.
+
+**If COUNT == 0:** Pass silently.
+
+**If COUNT > 0:** Abort with a structured error listing each unresolved issue
+number + title. Same abort path in both headless and interactive modes (no
+`--force` flag, no interactive remediation menu). Message:
+
+```text
+Error: N unresolved review-origin issues reference this PR.
+Resolve each by:
+  (a) Fixing inline on the branch and closing the issue, OR
+  (b) Adding a ## Scope-Out Justification section to the issue body AND
+      applying the deferred-scope-out label.
+
+Issues:
+  - #A: <title>
+  - #B: <title>
+```
+
+**Why:** In #2374, 53 review-origin issues accumulated in 3 days because
+findings were filed but never resolved before ship. This gate enforces the
+fix-inline default at the merge boundary. See rule
+`rf-review-finding-default-fix-inline`.
 
 ### Pre-Ship Domain Review (conditional)
 
