@@ -31,6 +31,8 @@ __pycache__/
 .mcp.local.json
 .claude/soleur-welcomed.local
 .claude/ralph-loop.*.local.md
+.claude/.rule-incidents.jsonl
+.claude/.rule-incidents-*.jsonl.gz
 .playwright-mcp/
 .env
 _site/

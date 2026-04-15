@@ -20,6 +20,10 @@ pre-commit:
       glob: "*.md"
       run: npx --yes markdownlint-cli {staged_files}
       stage_fixed: true
+    rule-id-lint:
+      priority: 4
+      glob: "AGENTS.md"
+      run: python3 scripts/lint-rule-ids.py {staged_files}
     web-platform-typecheck:
       priority: 5
       glob:
