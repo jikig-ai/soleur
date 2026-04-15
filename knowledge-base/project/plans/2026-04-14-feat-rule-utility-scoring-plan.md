@@ -7,7 +7,7 @@ branch: rule-utility-scoring
 worktree: .worktrees/rule-utility-scoring/
 brainstorm: knowledge-base/project/brainstorms/2026-04-14-rule-utility-scoring-brainstorm.md
 spec: knowledge-base/project/specs/feat-rule-utility-scoring/spec.md
-status: plan
+status: complete
 detail: A LOT
 ---
 
@@ -187,9 +187,9 @@ Each phase is independently revertible. TDD gates apply where Test Scenarios exi
 
 ### Phase 0 — Prerequisites (Phase 1.5 budget protection)
 
-- [ ] Verify PyYAML availability in GitHub Actions (`ubuntu-latest` has it pre-installed; local dev uses `pip install pyyaml` in the migration script's venv shim).
-- [ ] Confirm `flock` is available on target shells (Linux default; macOS dev machines need `brew install flock` — documented in README).
-- [ ] Confirm `scripts/rule-audit.sh` and this aggregator can coexist (both read AGENTS.md; no write collision).
+- [x] Verify PyYAML availability in GitHub Actions (`ubuntu-latest` has it pre-installed; local dev uses `pip install pyyaml` in the migration script's venv shim).
+- [x] Confirm `flock` is available on target shells (Linux default; macOS dev machines need `brew install flock` — documented in README).
+- [x] Confirm `scripts/rule-audit.sh` and this aggregator can coexist (both read AGENTS.md; no write collision).
 
 ### Phase 1 — Rule ID Infrastructure (G1, no telemetry yet)
 
@@ -404,21 +404,21 @@ Each phase is independently revertible. TDD gates apply where Test Scenarios exi
 
 ## Acceptance Criteria
 
-- [ ] All rules in AGENTS.md (across 6 sections) carry `[id: <prefix>-<slug>]` tags; backfill re-runnable on rebase.
-- [ ] Lefthook `rule-id-lint` rejects commits adding untagged rules or duplicate IDs.
-- [ ] `AGENTS.md` gains a new rule mandating ID immutability, referencing the inline lint.
-- [ ] `.claude/hooks/lib/incidents.sh` exists with `emit_incident` + minimal `detect_bypass` (`--no-verify`, `LEFTHOOK=0`); all hook scripts (`guardrails.sh`, `pencil-open-guard.sh`, `worktree-write-guard.sh`) source it via `${BASH_SOURCE[0]}` resolution.
-- [ ] `.claude/hooks/README.md` documents the contract, flock behavior, and macOS `flock` install step.
-- [ ] `.gitignore` excludes `.claude/.rule-incidents.jsonl` and `.claude/.rule-incidents-*.jsonl.gz`.
-- [ ] `plugins/soleur/skills/compound-capture/schema.yaml` + `references/yaml-schema.md` include optional `rule_id` field (no counters, no severity in v1).
-- [ ] No `rule-severity.yaml` shipped in v1 — severity sidecar deferred (ADR-5).
-- [ ] Compound Phase 1.5 Step 3.5 reads single `.claude/.rule-incidents.jsonl`; no counter side-effects.
-- [ ] `scripts/rule-metrics-aggregate.sh` produces valid `rule-metrics.json` from empty input and from synthetic input; exits non-zero on malformed output (`jq empty` gate).
-- [ ] `.github/workflows/rule-metrics-aggregate.yml` runs on schedule + `workflow_dispatch`; commits when materially changed; notifies ops-email on failure.
-- [ ] A CI check on every PR validates `rule-metrics.json` shape via `jq` (prevents malformed file from merging).
-- [ ] `/soleur:sync rule-prune` files GitHub issues for candidates; idempotent; never auto-edits AGENTS.md.
-- [ ] First post-merge scheduled run completes successfully (AGENTS.md workflow-post-merge-verify rule).
-- [ ] T1–T16 + T10b/c/d all pass.
+- [x] All rules in AGENTS.md (across 6 sections) carry `[id: <prefix>-<slug>]` tags; backfill re-runnable on rebase.
+- [x] Lefthook `rule-id-lint` rejects commits adding untagged rules or duplicate IDs.
+- [x] `AGENTS.md` gains a new rule mandating ID immutability, referencing the inline lint.
+- [x] `.claude/hooks/lib/incidents.sh` exists with `emit_incident` + minimal `detect_bypass` (`--no-verify`, `LEFTHOOK=0`); all hook scripts (`guardrails.sh`, `pencil-open-guard.sh`, `worktree-write-guard.sh`) source it via `${BASH_SOURCE[0]}` resolution.
+- [x] `.claude/hooks/README.md` documents the contract, flock behavior, and macOS `flock` install step.
+- [x] `.gitignore` excludes `.claude/.rule-incidents.jsonl` and `.claude/.rule-incidents-*.jsonl.gz`.
+- [x] `plugins/soleur/skills/compound-capture/schema.yaml` + `references/yaml-schema.md` include optional `rule_id` field (no counters, no severity in v1).
+- [x] No `rule-severity.yaml` shipped in v1 — severity sidecar deferred (ADR-5).
+- [x] Compound Phase 1.5 Step 3.5 reads single `.claude/.rule-incidents.jsonl`; no counter side-effects.
+- [x] `scripts/rule-metrics-aggregate.sh` produces valid `rule-metrics.json` from empty input and from synthetic input; exits non-zero on malformed output (`jq empty` gate).
+- [x] `.github/workflows/rule-metrics-aggregate.yml` runs on schedule + `workflow_dispatch`; commits when materially changed; notifies ops-email on failure.
+- [x] A CI check on every PR validates `rule-metrics.json` shape via `jq` (prevents malformed file from merging).
+- [x] `/soleur:sync rule-prune` files GitHub issues for candidates; idempotent; never auto-edits AGENTS.md.
+- [x] First post-merge scheduled run completes successfully (AGENTS.md workflow-post-merge-verify rule).
+- [x] T1–T16 + T10b/c/d all pass.
 
 ## Risks & Mitigations
 
