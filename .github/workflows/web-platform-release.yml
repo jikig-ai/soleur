@@ -121,6 +121,14 @@ jobs:
               sleep "$STATUS_POLL_INTERVAL_S"
               continue
             fi
+            # Tolerate non-JSON bodies (endpoint cold-start, 404 HTML, transient
+            # Cloudflare edge error). Without this guard, jq's parse error under
+            # bash -e kills the step before the retry loop can react (#2214).
+            if ! echo "$BODY" | jq -e . >/dev/null 2>&1; then
+              echo "Attempt $i/$STATUS_POLL_MAX_ATTEMPTS: HTTP $HTTP_CODE, non-JSON body (endpoint not ready)"
+              sleep "$STATUS_POLL_INTERVAL_S"
+              continue
+            fi
             EXIT_CODE=$(echo "$BODY" | jq -r '.exit_code // -99')
             REASON=$(echo "$BODY" | jq -r '.reason // "unknown"')
             TAG=$(echo "$BODY" | jq -r '.tag // ""')

@@ -423,23 +423,23 @@ If a release had already been queued during the gap (unlikely given P1 nature), 
 
 ### From #2214
 
-- [ ] Non-JSON response body does not crash the step — logs `HTTP $HTTP_CODE, non-JSON body (endpoint not ready)` and continues polling.
-- [ ] Timeout path still triggers after 120s of continuous non-JSON / no-body responses (`::error::ci-deploy.sh did not report completion ...`).
-- [ ] Real deploy failures (valid JSON with `exit_code >= 1`) still fail fast with `::error::`.
-- [ ] Test: workflow step logic verified against simulated non-JSON body (see Test Scenarios).
+- [x] Non-JSON response body does not crash the step — logs `HTTP $HTTP_CODE, non-JSON body (endpoint not ready)` and continues polling.
+- [x] Timeout path still triggers after 120s of continuous non-JSON / no-body responses (`::error::ci-deploy.sh did not report completion ...`).
+- [x] Real deploy failures (valid JSON with `exit_code >= 1`) still fail fast with `::error::`.
+- [x] Test: workflow step logic verified against simulated non-JSON body (see Test Scenarios).
 
 ### From #2215
 
-- [ ] `terraform apply` runs successfully in `prd_terraform` config (only `terraform_data.deploy_pipeline_fix` replaced; no other drift).
-- [ ] `/hooks/deploy-status` returns HTTP 200 with valid JSON to a signed GET.
-- [ ] The next `web-platform-release` workflow run passes the `Verify deploy script completion` step.
+- [ ] `terraform apply` runs successfully in `prd_terraform` config (only `terraform_data.deploy_pipeline_fix` replaced; no other drift). (post-merge action)
+- [ ] `/hooks/deploy-status` returns HTTP 200 with valid JSON to a signed GET. (post-merge validation)
+- [ ] The next `web-platform-release` workflow run passes the `Verify deploy script completion` step. (post-merge validation)
 
 ### Cross-cutting
 
-- [ ] PR body includes `Closes #2214` and `Closes #2215`.
-- [ ] PR has `semver:patch` label (workflow + ops fix, no plugin component changes).
-- [ ] No `plugin.json` / `marketplace.json` version bumps (frozen sentinels).
-- [ ] A learning file is created in `knowledge-base/project/learnings/bug-fixes/` capturing the "signed-GET verify step must tolerate non-JSON bodies" pattern.
+- [x] PR body includes `Closes #2214` and `Closes #2215`.
+- [ ] PR has `semver:patch` label (workflow + ops fix, no plugin component changes). (ship applies)
+- [x] No `plugin.json` / `marketplace.json` version bumps (frozen sentinels).
+- [x] A learning file is created in `knowledge-base/project/learnings/bug-fixes/` capturing the "signed-GET verify step must tolerate non-JSON bodies" pattern.
 
 ## Risks and Mitigations
 
