@@ -71,7 +71,13 @@ jobs:
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN_SCHEDULED }}
         run: |
-          doppler secrets download --project soleur --config prd_scheduled --no-file --format env-no-quotes | while IFS='=' read -r key value; do
+          # Use parameter expansion (not IFS='=' read) so values ending in '='
+          # — e.g. base64-padded passwords from `openssl rand -base64 N` — keep
+          # their trailing char. IFS='=' strips trailing delimiters from the
+          # last field on `read`.
+          doppler secrets download --project soleur --config prd_scheduled --no-file --format env-no-quotes | while IFS= read -r line; do
+            key="${line%%=*}"
+            value="${line#*=}"
             [ -z "$key" ] && continue
             printf '::add-mask::%s\n' "$value"
             printf '%s=%s\n' "$key" "$value" >> "$GITHUB_ENV"
@@ -82,7 +88,9 @@ jobs:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN_PRD }}
         run: |
           doppler secrets download --project soleur --config prd --no-file --format env-no-quotes \
-            --only-secrets SUPABASE_URL,SUPABASE_SERVICE_ROLE_KEY,NEXT_PUBLIC_SUPABASE_ANON_KEY,NEXT_PUBLIC_SITE_URL | while IFS='=' read -r key value; do
+            --only-secrets SUPABASE_URL,SUPABASE_SERVICE_ROLE_KEY,NEXT_PUBLIC_SUPABASE_ANON_KEY,NEXT_PUBLIC_SITE_URL | while IFS= read -r line; do
+            key="${line%%=*}"
+            value="${line#*=}"
             [ -z "$key" ] && continue
             printf '::add-mask::%s\n' "$value"
             printf '%s=%s\n' "$key" "$value" >> "$GITHUB_ENV"

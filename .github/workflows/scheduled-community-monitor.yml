@@ -53,7 +53,12 @@ jobs:
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN_SCHEDULED }}
         run: |
-          doppler secrets download --project soleur --config prd_scheduled --no-file --format env-no-quotes | while IFS='=' read -r key value; do
+          # Use parameter expansion so values ending in '=' (e.g. base64-padded
+          # secrets) keep their trailing char; IFS='=' read strips trailing
+          # delimiters from the last field.
+          doppler secrets download --project soleur --config prd_scheduled --no-file --format env-no-quotes | while IFS= read -r line; do
+            key="${line%%=*}"
+            value="${line#*=}"
             [ -z "$key" ] && continue
             printf '::add-mask::%s\n' "$value"
             printf '%s=%s\n' "$key" "$value" >> "$GITHUB_ENV"
