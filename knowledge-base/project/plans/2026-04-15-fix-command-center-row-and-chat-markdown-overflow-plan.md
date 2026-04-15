@@ -8,6 +8,84 @@ branch: feat-one-shot-2229-alignment-fix
 
 # fix: Command Center row shift and chat markdown horizontal overflow
 
+## Enhancement Summary
+
+**Deepened on:** 2026-04-15
+**Sections enhanced:** 5 (Root Cause Analysis, Files to Change, Test Scenarios, Risks, References)
+**Research sources:**
+
+- Tailwind CSS v4 docs via Context7 — `tabular-nums`, `font-variant-numeric`, flex
+  grow/shrink utilities (confirmed v4 has no native `overflow-wrap: anywhere`
+  utility — arbitrary value `[overflow-wrap:anywhere]` is the documented pattern).
+- react-markdown v10 docs via Context7 — confirmed the `<Markdown>` component
+  renders children directly (no own wrapper element), so wrapping the call site
+  in a styled `<div>` is the canonical place to apply container-level CSS such
+  as wrapping rules.
+- Project learning `knowledge-base/project/learnings/2026-04-02-tailwind-v4-a11y-focus-ring-contrast-patterns.md`
+  documents the exact `[overflow-wrap:anywhere]` arbitrary-value pattern in this
+  codebase — direct precedent for the markdown fix.
+- Project learning `knowledge-base/project/learnings/ui-bugs/multi-leader-session-collision-and-chat-ux-20260403.md`
+  documents prior chat markdown rendering work (introduction of `MarkdownRenderer`)
+  — confirms react-markdown is the right surface to modify.
+- Existing in-repo precedent: `app/(dashboard)/dashboard/chat/[conversationId]/page.tsx:598`
+  and `:607` already use `whitespace-pre-wrap [overflow-wrap:anywhere]` for user
+  bubbles and the streaming state — the fix simply extends the same treatment
+  to the `done`-state markdown rendering path.
+
+### Key Improvements
+
+1. Confirmed via Context7 Tailwind v4 docs that `tabular-nums` (mapping to
+   `font-variant-numeric: tabular-nums`) gives equal-width digit glyphs — exactly
+   the property that prevents horizontal-advance shift between `"5m ago"` and
+   `"10m ago"`. No need for a custom font feature override.
+2. Confirmed via Context7 react-markdown v10 docs that `<Markdown>` renders its
+   element tree directly into its parent (no implicit wrapper). Wrapping the call
+   site `<div>` in `MarkdownRenderer` with `min-w-0 break-words [overflow-wrap:anywhere]`
+   propagates wrapping to all descendant text without per-component overrides —
+   simpler and lower-risk than mutating every `h1`/`p`/`li` in the components map.
+3. Verified `w-16` (4rem ≈ 64px) accommodates the longest realistic relative-time
+   label (`"99mo ago"`, 8 chars at `text-xs`) by computing the width arithmetic
+   (each digit at `tabular-nums` Geist-sans `text-xs` is ~6.5px; 8 chars ≈ 52px,
+   leaving ~12px right-edge breathing room before truncation). Recommend `w-16`,
+   not `w-20`, to avoid unnecessary visual whitespace.
+4. Identified that the `min-w-0` requirement is **two-deep**: both the inner
+   bubble flex row (the `<div className="flex max-w-[90%] gap-3 md:max-w-[80%]">`
+   at `page.tsx:521`) AND the bubble body `<div>` at `page.tsx:527` need
+   `min-w-0`. Without `min-w-0` on the body itself, react-markdown's `<pre>` and
+   `<table>` `overflow-x-auto` containers cannot compute a stable width and still
+   bleed.
+5. Added a concrete snippet for the `MarkdownRenderer` change that preserves all
+   existing component overrides — the wrapping `<div>` is the only diff.
+6. Added a defensive note about `text-overflow: ellipsis` on the time span: with
+   `w-16` and `tabular-nums`, content longer than 8 chars (a 3-digit-month edge
+   case for archived multi-year-old conversations) overflows silently. The plan
+   now prescribes appending `truncate` to the time span class so the worst case
+   shows `"123m…"` instead of pushing the layout.
+
+### New Considerations Discovered
+
+- **`min-w-0` on a flex item with an `overflow-x-auto` descendant** is a known
+  load-bearing pattern in Tailwind/CSS Flexbox. Without it, an inner
+  `overflow-x-auto` container cannot compute its containing block width and the
+  scroll container expands rather than scrolls. This explains why the existing
+  `pre.overflow-x-auto` in `markdown-renderer.tsx:49` does not currently
+  prevent the bubble overflow — it works only when its ancestor enforces a
+  width via `min-w-0`.
+- **`whitespace-pre-wrap` is intentionally NOT recommended on the markdown
+  wrapper** — `react-markdown` hands `<p>` content to React as inline children,
+  and the markdown semantics already collapse whitespace correctly. Adding
+  `whitespace-pre-wrap` would cause double-spacing. The streaming state uses it
+  because the streaming state renders raw, unparsed token chunks where
+  preserving whitespace IS desired.
+- **Test reliability in jsdom**: `offsetWidth` returns `0` in jsdom unless a
+  layout engine is wired in. The `conversation-row.test.tsx` plan now prescribes
+  asserting on the rendered `class` list (deterministic) rather than on
+  `offsetWidth` (flaky). The class-list assertion is sufficient because Tailwind
+  `tabular-nums` and `w-16` are well-defined CSS utilities.
+- **Geist font and `tabular-nums`**: Geist Sans (the project's body font, set in
+  `app/layout.tsx`) supports the `tnum` OpenType feature, so `tabular-nums`
+  applies cleanly. No fallback font workaround needed.
+
 ## Problem
 
 Issue [#2229](https://github.com/jikig-ai/soleur/issues/2229) reports two related alignment
@@ -191,6 +269,88 @@ Fix:
 
 No new files are required in `knowledge-base/` or `components/` beyond the tests.
 
+### Research Insights — Concrete Snippets
+
+**1. `conversation-row.tsx` — desktop time span (line 227)**
+
+```tsx
+{/* Before */}
+<span className="shrink-0 text-xs text-neutral-500">
+  {relativeTime(conversation.last_active)}
+</span>
+
+{/* After */}
+<span className="w-16 shrink-0 truncate text-right text-xs tabular-nums text-neutral-500">
+  {relativeTime(conversation.last_active)}
+</span>
+```
+
+`tabular-nums` makes digits equal-width (Tailwind v4: `font-variant-numeric:
+tabular-nums`). `w-16` (4rem) reserves a deterministic horizontal slot so the
+trailing cluster (avatar, time, archive button) never shifts. `text-right`
+right-aligns the label inside the slot so the right edge is stable. `truncate`
+catches the rare 3-digit-month edge case (`"123mo ago"`) safely.
+
+**2. `markdown-renderer.tsx` — wrap the `<Markdown>` output (line 96-106)**
+
+```tsx
+{/* Before */}
+return (
+  <Markdown
+    remarkPlugins={REMARK_PLUGINS}
+    rehypePlugins={REHYPE_PLUGINS}
+    components={DEFAULT_COMPONENTS}
+    disallowedElements={DISALLOWED_ELEMENTS}
+    unwrapDisallowed
+  >
+    {content}
+  </Markdown>
+);
+
+{/* After */}
+return (
+  <div className="min-w-0 break-words [overflow-wrap:anywhere]">
+    <Markdown
+      remarkPlugins={REMARK_PLUGINS}
+      rehypePlugins={REHYPE_PLUGINS}
+      components={DEFAULT_COMPONENTS}
+      disallowedElements={DISALLOWED_ELEMENTS}
+      unwrapDisallowed
+    >
+      {content}
+    </Markdown>
+  </div>
+);
+```
+
+The `<div>` is the canonical place to apply container-level CSS in
+react-markdown v10 because `<Markdown>` itself has no DOM wrapper. `min-w-0`
+allows the wrapper to be narrower than its intrinsic content; `break-words`
+provides graceful CJK / hyphenated-word wrapping; `[overflow-wrap:anywhere]`
+forces breaks inside long unbroken tokens (URLs, identifiers) when no other
+break opportunity exists.
+
+**3. `chat/[conversationId]/page.tsx` — bubble flex containers (lines 519-533)**
+
+```tsx
+{/* Before */}
+<div className={`flex ${isUser ? "justify-end" : "justify-start"}`}>
+  <div className={`flex max-w-[90%] gap-3 md:max-w-[80%] ${isUser ? "flex-row-reverse" : ""}`}>
+    {leader && <LeaderAvatar ... />}
+    <div className={`relative rounded-xl px-4 py-3 text-sm leading-relaxed ${...}`}>
+
+{/* After */}
+<div className={`flex ${isUser ? "justify-end" : "justify-start"}`}>
+  <div className={`flex min-w-0 max-w-[90%] gap-3 md:max-w-[80%] ${isUser ? "flex-row-reverse" : ""}`}>
+    {leader && <LeaderAvatar ... />}
+    <div className={`relative min-w-0 rounded-xl px-4 py-3 text-sm leading-relaxed ${...}`}>
+```
+
+Both `min-w-0` additions are required: the inner flex row must allow itself to
+shrink below intrinsic content size, and the bubble body itself must do the
+same so its `overflow-x-auto` descendants (pre, table) compute a stable
+containing-block width.
+
 ## Test Scenarios
 
 ### Unit — `conversation-row.test.tsx`
@@ -228,6 +388,35 @@ No new files are required in `knowledge-base/` or `components/` beyond the tests
 2. Visit `/dashboard/chat/<id>` with a fixture message containing a long URL, a
    wide table, and a long code block. Assert `document.documentElement.scrollWidth
    === window.innerWidth` (no horizontal scroll).
+
+### Research Insights — Test Reliability
+
+**`offsetWidth` in jsdom is unreliable.** jsdom's CSSOM does not run a real
+layout engine — `HTMLElement.offsetWidth` returns `0` for any element that has
+not been measured. Tests that assert pixel-equal widths between two siblings
+will pass trivially (both `0 === 0`) and provide no signal. The plan now
+prefers class-list assertions (deterministic) and reserves any pixel
+verification for Playwright.
+
+**Recommended assertion patterns:**
+
+```ts
+// conversation-row.test.tsx — desktop time span
+const rows = screen.getAllByRole("button", { name: /5 minutes ago|12 minutes ago/ });
+const timeSpans = rows.map((r) => r.querySelector("[data-testid='conv-time'], span:last-of-type"));
+expect(timeSpans[0]).toHaveClass("w-16", "tabular-nums", "text-right");
+expect(timeSpans[1]).toHaveClass("w-16", "tabular-nums", "text-right");
+
+// markdown-renderer.test.tsx — wrapping classes
+const { container } = render(<MarkdownRenderer content={"a".repeat(500)} />);
+const wrapper = container.firstElementChild;
+expect(wrapper).toHaveClass("min-w-0", "break-words");
+expect(wrapper?.className).toContain("[overflow-wrap:anywhere]");
+```
+
+If a `data-testid` is desired on the time span for cleaner queries, add
+`data-testid="conv-time"` to the span in the same edit — minimal cost, large
+test-stability win.
 
 ## Implementation Plan
 
@@ -295,6 +484,24 @@ No new files are required in `knowledge-base/` or `components/` beyond the tests
   - **Mitigation:** Update the test file in the same commit. The existing test uses
     `screen.getByRole(...)` queries, not class-based assertions, so the risk is low.
 
+- **Risk:** Wrapping the `<Markdown>` output in a `<div>` may shift the layout if
+  any caller relies on the `MarkdownRenderer` producing inline content (no
+  containing block).
+  - **Mitigation:** Audit callers. Both call sites in `chat/[conversationId]/page.tsx`
+    (lines 635 and 641) render inside a sized bubble body; an extra `<div>` is
+    benign there. The KB viewer (if any) also renders into block contexts. No
+    inline-only callers exist in the current codebase.
+
+- **Risk:** `tabular-nums` only applies to the digits — the suffix (`"m ago"`,
+  `"mo ago"`) is still proportional and could shift slightly between `"m"` and
+  `"mo"` (one extra letter).
+  - **Mitigation:** With `text-right`, the right edge is anchored. The visible
+    shift between `"5m ago"` and `"5mo ago"` is the suffix-width delta of
+    one letter at `text-xs` (~5 px). Across an inbox where each row has its own
+    suffix, the avatar still sits at a fixed pixel offset from the row's right
+    edge, so adjacent-row alignment is preserved. The shift is invisible at
+    normal viewing distance.
+
 ## Alternative Approaches Considered
 
 | Approach | Pros | Cons | Decision |
@@ -343,3 +550,10 @@ purely a layout/CSS correction.
 - Tailwind `tabular-nums`: <https://tailwindcss.com/docs/font-variant-numeric>
 - CSS `overflow-wrap: anywhere`: <https://developer.mozilla.org/docs/Web/CSS/overflow-wrap>
 - Flexbox `min-width: 0` pattern: <https://developer.mozilla.org/docs/Web/CSS/min-width#flex_items>
+- react-markdown components API: <https://github.com/remarkjs/react-markdown#appendix-b-components>
+- Project learning — Tailwind v4 a11y patterns (confirms `[overflow-wrap:anywhere]`
+  arbitrary value): `knowledge-base/project/learnings/2026-04-02-tailwind-v4-a11y-focus-ring-contrast-patterns.md`
+- Project learning — multi-leader chat UX (MarkdownRenderer origin):
+  `knowledge-base/project/learnings/ui-bugs/multi-leader-session-collision-and-chat-ux-20260403.md`
+- In-repo precedent for `[overflow-wrap:anywhere]`:
+  `apps/web-platform/app/(dashboard)/dashboard/chat/[conversationId]/page.tsx:598,607`
