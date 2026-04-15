@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { createUseTeamNamesMock } from "./mocks/use-team-names";
 
 // Mock next/navigation — stable reference prevents useEffect re-fires
 const mockPush = vi.fn();
@@ -10,21 +11,7 @@ vi.mock("next/navigation", () => ({
 }));
 
 vi.mock("@/hooks/use-team-names", () => ({
-  useTeamNames: () => ({
-    names: {},
-    iconPaths: {},
-    nudgesDismissed: [],
-    namingPromptedAt: null,
-    loading: false,
-    error: null,
-    updateName: vi.fn(),
-    updateIcon: vi.fn(),
-    dismissNudge: vi.fn(),
-    refetch: vi.fn(),
-    getDisplayName: (id: string) => id.toUpperCase(),
-    getBadgeLabel: (id: string) => id.toUpperCase().slice(0, 3),
-    getIconPath: () => null,
-  }),
+  useTeamNames: () => createUseTeamNamesMock(),
 }));
 
 // Mock conversation data

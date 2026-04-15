@@ -10,6 +10,7 @@ import {
   KbValidationError,
 } from "@/server/kb-reader";
 import { isPathInWorkspace } from "@/server/sandbox";
+import { KB_BINARY_RESPONSE_CSP } from "@/lib/kb-csp";
 
 const CONTENT_TYPE_MAP: Record<string, string> = {
   ".png": "image/png",
@@ -135,6 +136,7 @@ export async function GET(
         "Content-Length": buffer.length.toString(),
         "X-Content-Type-Options": "nosniff",
         "Cache-Control": "private, max-age=60",
+        "Content-Security-Policy": KB_BINARY_RESPONSE_CSP,
       },
     });
   } catch {
