@@ -58,3 +58,4 @@ tmp/
 !knowledge-base/settings/team-icons/*.png
 !knowledge-base/settings/team-icons/*.svg
 !knowledge-base/settings/team-icons/*.webp
+apps/web-platform/supabase/.temp/
