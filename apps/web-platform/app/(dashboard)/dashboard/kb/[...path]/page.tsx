@@ -4,7 +4,7 @@ import { useState, useEffect, use } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { MarkdownRenderer } from "@/components/ui/markdown-renderer";
-import { KbBreadcrumb } from "@/components/kb/kb-breadcrumb";
+import { KbBreadcrumb, safeDecode } from "@/components/kb/kb-breadcrumb";
 import { SharePopover } from "@/components/kb/share-popover";
 import { FilePreview } from "@/components/kb/file-preview";
 import type { ContentResult } from "@/server/kb-reader";
@@ -100,7 +100,8 @@ export default function KbContentPage({
 
   // Non-markdown files get FilePreview
   if (!isMarkdown) {
-    const filename = pathSegments[pathSegments.length - 1] ?? joinedPath;
+    const rawFilename = pathSegments[pathSegments.length - 1] ?? joinedPath;
+    const filename = safeDecode(rawFilename);
     const contentUrl = `/api/kb/content/${joinedPath}`;
 
     return (

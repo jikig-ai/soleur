@@ -15,6 +15,13 @@ vi.mock("@/components/ui/markdown-renderer", () => ({
 
 vi.mock("@/components/kb/kb-breadcrumb", () => ({
   KbBreadcrumb: ({ path }: { path: string }) => <span data-testid="breadcrumb">{path}</span>,
+  safeDecode: (s: string) => {
+    try {
+      return decodeURIComponent(s);
+    } catch {
+      return s;
+    }
+  },
 }));
 
 vi.mock("@/components/kb/share-popover", () => ({
@@ -165,16 +172,15 @@ describe("KbContentPage routing", () => {
     const chatLink = header.querySelector('a[href^="/dashboard/chat/new"]');
     expect(chatLink).not.toBeNull();
 
-    // Order: Download -> Share -> Chat (by DOM position)
-    const nodes = [downloadAnchor!, share, chatLink!];
-    const positions = nodes.map((n) =>
-      Array.prototype.indexOf.call(
-        header.querySelectorAll("*"),
-        n,
-      ),
-    );
-    expect(positions[0]).toBeLessThan(positions[1]);
-    expect(positions[1]).toBeLessThan(positions[2]);
+    // Order: Download -> Share -> Chat
+    expect(
+      downloadAnchor!.compareDocumentPosition(share) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(
+      share.compareDocumentPosition(chatLink!) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
   });
 
   it("passes showDownload={false} to FilePreview on non-markdown branch", async () => {

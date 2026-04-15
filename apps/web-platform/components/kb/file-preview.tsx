@@ -21,12 +21,9 @@ interface FilePreviewProps {
   path: string;
   extension: string;
   /**
-   * Show the internal filename + Download row that PDF/text previews render
-   * above their content. Default true preserves the shared viewer
-   * (`/shared/[token]`) affordance — the dashboard opts out via
-   * `showDownload={false}` because it renders its own Download button in the
-   * outer page header. Does not affect `DownloadPreview` (which IS the
-   * download UI) or `ImagePreview`.
+   * Hide the internal filename/Download row (dashboard provides its own).
+   * See `PdfPreview` for semantics. Default `true`. Does not affect
+   * `DownloadPreview` (which IS the download UI) or `ImagePreview`.
    */
   showDownload?: boolean;
 }

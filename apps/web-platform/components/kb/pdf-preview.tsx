@@ -13,8 +13,9 @@ interface PdfPreviewProps {
   filename: string;
   /**
    * Show the internal filename + Download row above the PDF viewer.
-   * Default true preserves the shared viewer (`/shared/[token]`) affordance —
-   * the dashboard opts out via `showDownload={false}` because it renders its
+   * Default `true` is required by `app/shared/[token]/page.tsx`, which
+   * renders `PdfPreview` directly with no external Download chrome.
+   * The dashboard opts out via `showDownload={false}` because it renders its
    * own Download button in the outer page header.
    */
   showDownload?: boolean;

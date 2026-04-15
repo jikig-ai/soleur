@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import React from "react";
 import { FilePreview } from "@/components/kb/file-preview";
@@ -53,9 +53,16 @@ vi.mock("next/navigation", () => ({
   usePathname: () => "/dashboard/kb",
 }));
 
+const originalFetch = global.fetch;
+
 beforeEach(() => {
   vi.clearAllMocks();
   pdfMockBehavior.shouldError = false;
+});
+
+afterEach(() => {
+  // Prevent fetch stubs from leaking across tests.
+  global.fetch = originalFetch;
 });
 
 describe("FilePreview", () => {
@@ -179,6 +186,27 @@ describe("FilePreview", () => {
 
     await waitFor(() => {
       const downloadLink = container.querySelector('a[download]');
+      expect(downloadLink).not.toBeNull();
+    });
+  });
+
+  it("default showDownload renders internal Download row for PDF (preserves shared viewer affordance)", async () => {
+    // Regression guard: shared viewer (`/shared/[token]`) relies on this default.
+    const { container } = render(<FilePreview path="docs/report.pdf" extension=".pdf" />);
+    await waitFor(() => {
+      const downloadLink = container.querySelector('a[download]');
+      expect(downloadLink).not.toBeNull();
+    });
+  });
+
+  it("default showDownload renders internal Download row for .txt", async () => {
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      text: () => Promise.resolve("content"),
+    });
+    const { container } = render(<FilePreview path="notes/readme.txt" extension=".txt" />);
+    await waitFor(() => {
+      const downloadLink = container.querySelector("a[download]");
       expect(downloadLink).not.toBeNull();
     });
   });
