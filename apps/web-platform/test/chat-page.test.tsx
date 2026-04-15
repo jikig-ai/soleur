@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { createUseTeamNamesMock } from "./mocks/use-team-names";
 
 // Mock useWebSocket hook
 const mockStartSession = vi.fn();
@@ -31,16 +32,7 @@ vi.mock("@/lib/ws-client", () => ({
 
 // Mock useTeamNames hook
 vi.mock("@/hooks/use-team-names", () => ({
-  useTeamNames: () => ({
-    names: {},
-    nudgesDismissed: [],
-    namingPromptedAt: null,
-    loading: false,
-    updateName: vi.fn(),
-    dismissNudge: vi.fn(),
-    getDisplayName: (id: string) => id.toUpperCase(),
-    getBadgeLabel: (id: string) => id.toUpperCase().slice(0, 3),
-  }),
+  useTeamNames: () => createUseTeamNamesMock(),
   TeamNamesProvider: ({ children }: { children: React.ReactNode }) => children,
 }));
 
