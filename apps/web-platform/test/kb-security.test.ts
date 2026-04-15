@@ -123,6 +123,10 @@ describe("KB API security", () => {
     }
   });
 
+  // Behavioral coverage: searchKb symlink-skip is in test/kb-reader.test.ts.
+  // Behavioral coverage: case-insensitive extension match is in test/kb-reader.test.ts
+  // (`filename match is case-insensitive on extension`).
+
   it("kb-route-helpers enforces path containment, symlink rejection, and null-byte guard", () => {
     // Architecture review finding D3: invariants moved to the helper when
     // PR #2235 extracted auth/path-resolution logic. These negative-space
