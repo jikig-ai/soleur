@@ -39,6 +39,8 @@ export interface ChatSurfaceProps {
   onBeforeSend?: (message: string) => void;
   /** Override the default placeholder — used by KB sidebar to surface ⌘⇧L. */
   placeholder?: string;
+  /** Per-session storage key for the ChatInput draft (see AC5). */
+  draftKey?: string;
 }
 
 export function ChatSurface({
@@ -52,6 +54,7 @@ export function ChatSurface({
   quoteRef,
   onBeforeSend,
   placeholder,
+  draftKey,
 }: ChatSurfaceProps) {
   const searchParams = useSearchParams();
   const router = useRouter();
@@ -470,6 +473,7 @@ export function ChatSurface({
             }
             insertRef={insertRef}
             quoteRef={quoteRef}
+            draftKey={draftKey}
           />
         </div>
         {isFull && (

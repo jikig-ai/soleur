@@ -730,25 +730,25 @@ the quote as the first block. iOS Safari works.
 ## Acceptance Criteria
 
 + [x] AC1: "Ask about this document" trigger opens sidebar (flag on) or legacy route (flag off).
-+ [ ] AC2: Sidebar auto-resolves thread by `context.path`; resumed threads show "Continuing from [date]" banner that auto-dismisses on first new message.
++ [x] AC2: Sidebar auto-resolves thread by `context.path`; resumed threads show "Continuing from [date]" banner that auto-dismisses on first new message.
 + [x] AC3: "Quote in chat" pill surfaces on markdown selection; inserts `> <text>` with flash confirmation.
 + [x] AC4: Keyboard shortcut `⌘⇧L` / `Ctrl+Shift+L` inserts quote without mouse; input placeholder surfaces the shortcut.
-+ [ ] AC5: Sidebar survives KB file-to-file navigation; drafts preserved per-path.
-+ [ ] AC6: Full-page `/dashboard/chat/<id>` route unchanged after ChatSurface extraction.
-+ [ ] AC7: Mobile renders draggable bottom sheet at ~60vh with three snap points; dragging below 10vh closes.
++ [x] AC5: Sidebar survives KB file-to-file navigation; drafts preserved per-path.
++ [x] AC6: Full-page `/dashboard/chat/<id>` route unchanged after ChatSurface extraction.
++ [x] AC7: Mobile renders draggable bottom sheet at ~60vh with three snap points; dragging below 10vh closes.
 + [x] AC8: Three Plausible goals fire: `kb.chat.opened`, `kb.chat.selection_sent`, `kb.chat.thread_resumed`.
 + [x] AC9: Panel a11y contract met: `aria-label`, `Escape` close, focus move on open, focus return on close.
 + [x] AC10: Long URLs and code blocks wrap (not scroll) inside 380px sidebar.
-+ [ ] AC11: DB migration applied to prod (verified via Supabase REST API); backfill ran or explicitly skipped with rationale.
-+ [ ] AC12: Legacy `?context=` URL shape unchanged.
-+ [ ] AC13: All vitest scenarios pass.
++ [ ] AC11: DB migration applied to prod (verified via Supabase REST API); backfill ran or explicitly skipped with rationale. *(Rollout step 3 — verified post-merge, not pre-merge.)*
++ [x] AC12: Legacy `?context=` URL shape unchanged.
++ [x] AC13: All vitest scenarios pass.
 + [x] AC14: Flag off-path tested — `NEXT_PUBLIC_KB_CHAT_SIDEBAR=0` falls back to legacy navigation.
-+ [ ] AC15: Closing panel mid-stream aborts session; reopening shows user messages only.
++ [x] AC15: Closing panel mid-stream aborts session; reopening shows user messages only.
 + [x] AC16: Selection > 8KB renders disabled pill; no oversize payload reaches server.
-+ [ ] AC17: iOS Safari: native share menu suppressed on markdown selection when pill visible.
-+ [ ] AC18: Inbox row shows "KB" badge for conversations with `context_path`.
++ [ ] AC17: iOS Safari: native share menu suppressed on markdown selection when pill visible. *(Implemented via `contextmenu` preventDefault on articleRef in SelectionToolbar; real-device verification deferred to Rollout step 5 / `/qa`.)*
++ [x] AC18: Inbox row shows "KB" badge for conversations with `context_path`.
 + [x] AC19: Trigger label is stateful: "Ask about this document" (no thread) / "Continue thread" (thread exists).
-+ [ ] AC20: Two-tab scenario doesn't create duplicate conversations; supersede abort is graceful.
++ [x] AC20: Two-tab scenario doesn't create duplicate conversations; supersede abort is graceful. *(Implemented via UNIQUE partial index on `(user_id, context_path)` + `23505 unique_violation` catch in `server/ws-handler.ts:createConversation` that falls back to the existing row. Two-tab real-browser verification deferred to Rollout step 5.)*
 
 ## Domain Review
 

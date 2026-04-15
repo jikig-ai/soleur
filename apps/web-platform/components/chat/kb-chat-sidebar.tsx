@@ -97,7 +97,16 @@ export function KbChatSidebar({ open, onClose, contextPath }: KbChatSidebarProps
   );
 
   const handleMessageCountChange = useCallback(
-    (count: number) => setMessageCount(count),
+    (count: number) => {
+      setMessageCount(count);
+      // AC2: auto-dismiss the "Continuing from …" banner once the user has
+      // sent a new message in this session. `messages` on a resumed thread
+      // starts empty (the server doesn't replay history) — so any count > 0
+      // means fresh activity in the current session.
+      if (count > 0) {
+        setResumedBanner(null);
+      }
+    },
     [setMessageCount],
   );
 
@@ -145,6 +154,7 @@ export function KbChatSidebar({ open, onClose, contextPath }: KbChatSidebarProps
             quoteRef={quoteRef}
             onBeforeSend={handleBeforeSend}
             placeholder={SIDEBAR_PLACEHOLDER}
+            draftKey={`kb.chat.draft:${contextPath}`}
           />
         </div>
       </div>

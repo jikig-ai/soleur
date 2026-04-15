@@ -30,6 +30,10 @@ interface ChatInputProps {
   insertRef?: React.MutableRefObject<((text: string, replaceFrom: number) => void) | null>;
   /** Imperative handle exposing `insertQuote(text)` for the KB selection flow. */
   quoteRef?: React.MutableRefObject<ChatInputQuoteHandle | null>;
+  /** When set, the draft text is persisted to sessionStorage under this key
+   *  and rehydrated on mount. Used by the KB sidebar to preserve drafts
+   *  per-document across navigation. */
+  draftKey?: string;
   /** When true, Enter key defers to the @mention dropdown instead of sending. */
   atMentionVisible?: boolean;
 }
@@ -43,14 +47,51 @@ export function ChatInput({
   conversationId,
   insertRef,
   quoteRef,
+  draftKey,
   atMentionVisible = false,
 }: ChatInputProps) {
-  const [value, setValue] = useState("");
+  const [value, setValue] = useState<string>(() => {
+    // Rehydrate from sessionStorage on mount when a draftKey is given.
+    if (typeof window === "undefined" || !draftKey) return "";
+    try {
+      return window.sessionStorage.getItem(draftKey) ?? "";
+    } catch {
+      return "";
+    }
+  });
   const [attachments, setAttachments] = useState<PendingAttachment[]>([]);
   const [attachError, setAttachError] = useState<string | null>(null);
   const [isUploading, setIsUploading] = useState(false);
   const [isDragOver, setIsDragOver] = useState(false);
   const [flashQuote, setFlashQuote] = useState(false);
+
+  // AC5 per-path drafts: when `draftKey` changes (e.g. KB doc A → doc B),
+  // rehydrate the textarea with the new key's stored value. Skip on the
+  // very first render because the initial useState reader already handled
+  // it without triggering a re-render that could clobber a parent-supplied
+  // `value` prop (we don't have one, but it keeps the effect idempotent).
+  const prevDraftKeyRef = useRef<string | undefined>(draftKey);
+  useEffect(() => {
+    if (prevDraftKeyRef.current === draftKey) return;
+    prevDraftKeyRef.current = draftKey;
+    if (typeof window === "undefined") return;
+    if (!draftKey) { setValue(""); return; }
+    try {
+      setValue(window.sessionStorage.getItem(draftKey) ?? "");
+    } catch { /* noop */ }
+  }, [draftKey]);
+
+  // Persist current draft whenever value changes (and a draftKey is set).
+  useEffect(() => {
+    if (typeof window === "undefined" || !draftKey) return;
+    try {
+      if (value) {
+        window.sessionStorage.setItem(draftKey, value);
+      } else {
+        window.sessionStorage.removeItem(draftKey);
+      }
+    } catch { /* noop */ }
+  }, [draftKey, value]);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const activeXhrs = useRef<Map<string, XMLHttpRequest>>(new Map());
