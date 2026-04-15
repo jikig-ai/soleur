@@ -16,19 +16,31 @@ const {
   mockWriteFileSync,
   mockUnlinkSync,
   mockLstat,
-} = vi.hoisted(() => ({
-  mockGetUser: vi.fn(),
-  mockFrom: vi.fn(),
-  mockGithubApiGet: vi.fn(),
-  mockGithubApiDelete: vi.fn(),
-  mockGenerateInstallationToken: vi.fn(),
-  mockRandomCredentialPath: vi.fn(),
-  mockIsPathInWorkspace: vi.fn(),
-  mockExecFile: vi.fn(),
-  mockWriteFileSync: vi.fn(),
-  mockUnlinkSync: vi.fn(),
-  mockLstat: vi.fn(),
-}));
+  MockGitHubApiError,
+} = vi.hoisted(() => {
+  class MockGitHubApiError extends Error {
+    statusCode: number;
+    constructor(message: string, statusCode: number) {
+      super(message);
+      this.name = "GitHubApiError";
+      this.statusCode = statusCode;
+    }
+  }
+  return {
+    mockGetUser: vi.fn(),
+    mockFrom: vi.fn(),
+    mockGithubApiGet: vi.fn(),
+    mockGithubApiDelete: vi.fn(),
+    mockGenerateInstallationToken: vi.fn(),
+    mockRandomCredentialPath: vi.fn(),
+    mockIsPathInWorkspace: vi.fn(),
+    mockExecFile: vi.fn(),
+    mockWriteFileSync: vi.fn(),
+    mockUnlinkSync: vi.fn(),
+    mockLstat: vi.fn(),
+    MockGitHubApiError,
+  };
+});
 
 vi.mock("@/lib/supabase/server", () => ({
   createClient: vi.fn(async () => ({
@@ -50,11 +62,13 @@ vi.mock("@/lib/auth/validate-origin", () => ({
 vi.mock("@/server/github-api", () => ({
   githubApiGet: mockGithubApiGet,
   githubApiDelete: mockGithubApiDelete,
+  GitHubApiError: MockGitHubApiError,
 }));
 
 vi.mock("@/server/github-app", () => ({
   generateInstallationToken: mockGenerateInstallationToken,
   randomCredentialPath: mockRandomCredentialPath,
+  GitHubApiError: MockGitHubApiError,
 }));
 
 vi.mock("@/server/sandbox", () => ({
@@ -251,7 +265,7 @@ describe("DELETE /api/kb/file/[...path]", () => {
   test("returns 404 when file does not exist on GitHub", async () => {
     setupFullMocks();
     mockGithubApiGet.mockRejectedValue(
-      new Error("GitHub API request failed: 404 /repos/test-owner/test-repo/contents/knowledge-base/overview/missing.png"),
+      new MockGitHubApiError("GitHub API request failed: 404 /repos/test-owner/test-repo/contents/knowledge-base/overview/missing.png", 404),
     );
 
     const req = createRequest(["overview", "missing.png"], "https://app.soleur.ai");
@@ -311,7 +325,7 @@ describe("DELETE /api/kb/file/[...path]", () => {
   test("returns 409 when GitHub returns SHA mismatch", async () => {
     setupFullMocks();
     mockGithubApiDelete.mockRejectedValue(
-      new Error("GitHub API request failed: 409 /repos/test-owner/test-repo/contents/knowledge-base/overview/test.png"),
+      new MockGitHubApiError("GitHub API request failed: 409 /repos/test-owner/test-repo/contents/knowledge-base/overview/test.png", 409),
     );
 
     const req = createRequest(["overview", "test.png"], "https://app.soleur.ai");

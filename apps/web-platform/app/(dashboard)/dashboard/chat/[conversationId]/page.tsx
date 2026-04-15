@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useEffect, useCallback } from "react";
+import React, { memo, useState, useRef, useEffect, useCallback } from "react";
 import { useParams, useSearchParams, useRouter, usePathname } from "next/navigation";
 import { MarkdownRenderer } from "@/components/ui/markdown-renderer";
 import { useWebSocket } from "@/lib/ws-client";
@@ -469,7 +469,11 @@ function ThinkingDots() {
 }
 
 
-function MessageBubble({
+// Wrapped in React.memo so token streaming (10-50 Hz) doesn't re-render every
+// bubble in a long thread. `getDisplayName`/`getIconPath` are already
+// `useCallback`-stable in `use-team-names.tsx`; other props are primitives or
+// references that only change for the active bubble. See #2137.
+const MessageBubble = memo(function MessageBubble({
   role,
   content,
   leaderId,
@@ -557,35 +561,11 @@ function MessageBubble({
             </div>
           )}
 
-          {/* State-driven content rendering */}
-          {messageState === "thinking" || (!messageState && content === "" && role === "assistant") ? (
-            <ThinkingDots />
-          ) : messageState === "tool_use" && toolLabel ? (
-            <ToolStatusChip label={toolLabel} />
-          ) : messageState === "error" ? (
-            <div className="flex items-center gap-2 text-red-400">
-              <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
-                <circle cx="7" cy="7" r="6" stroke="currentColor" strokeWidth="1.2" />
-                <path d="M7 4v3.5M7 9.5v.01" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
-              </svg>
-              <span className="text-sm">Agent stopped responding</span>
-            </div>
-          ) : isDone && content === "" && toolsUsed && toolsUsed.length > 0 ? (
-            <div className="flex items-center gap-1.5 text-xs text-neutral-500">
-              <span>Used:</span>
-              {toolsUsed.map((t, i) => (
-                <span key={i} className="rounded bg-neutral-800 px-1.5 py-0.5">{t}</span>
-              ))}
-            </div>
-          ) : messageState === "streaming" || (content === "" && role === "assistant" && !isDone) ? (
-            <p className="whitespace-pre-wrap [overflow-wrap:anywhere]">
-              {content}<span className="animate-pulse text-amber-500">&#x258C;</span>
-            </p>
-          ) : isUser ? (
-            <p className="whitespace-pre-wrap [overflow-wrap:anywhere]">{content}</p>
-          ) : (
-            <MarkdownRenderer content={content} />
-          )}
+          {/* State-driven content rendering. Assistant messages always have
+              a state (assigned at stream_start for live bubbles, "done" for
+              history-loaded ones — see #2139). User messages short-circuit
+              before the switch. */}
+          {renderBubbleContent({ isUser, messageState, content, toolLabel, toolsUsed, isDone })}
 
           {attachments && attachments.length > 0 && (
             <AttachmentDisplay attachments={attachments} />
@@ -594,6 +574,72 @@ function MessageBubble({
       </div>
     </div>
   );
+});
+
+/** Render the inner content of a MessageBubble based on its state. Extracted
+ *  to collapse the previous 7-branch ternary chain into a readable switch.
+ *  See #2139. */
+function renderBubbleContent({
+  isUser,
+  messageState,
+  content,
+  toolLabel,
+  toolsUsed,
+  isDone,
+}: {
+  isUser: boolean;
+  messageState: MessageState | undefined;
+  content: string;
+  toolLabel: string | undefined;
+  toolsUsed: string[] | undefined;
+  isDone: boolean;
+}): React.ReactNode {
+  if (isUser) {
+    return <p className="whitespace-pre-wrap [overflow-wrap:anywhere]">{content}</p>;
+  }
+  switch (messageState) {
+    case "thinking":
+      return <ThinkingDots />;
+    case "tool_use":
+      return toolLabel ? <ToolStatusChip label={toolLabel} /> : <ThinkingDots />;
+    case "streaming":
+      return (
+        <p className="whitespace-pre-wrap [overflow-wrap:anywhere]">
+          {content}
+          <span className="animate-pulse text-amber-500">&#x258C;</span>
+        </p>
+      );
+    case "error":
+      return (
+        <div className="flex items-center gap-2 text-red-400">
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
+            <circle cx="7" cy="7" r="6" stroke="currentColor" strokeWidth="1.2" />
+            <path d="M7 4v3.5M7 9.5v.01" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+          </svg>
+          <span className="text-sm">Agent stopped responding</span>
+        </div>
+      );
+    case "done":
+      if (content === "" && toolsUsed && toolsUsed.length > 0) {
+        return (
+          <div className="flex items-center gap-1.5 text-xs text-neutral-500">
+            <span>Used:</span>
+            {toolsUsed.map((t, i) => (
+              <span key={i} className="rounded bg-neutral-800 px-1.5 py-0.5">
+                {t}
+              </span>
+            ))}
+          </div>
+        );
+      }
+      return <MarkdownRenderer content={content} />;
+    default:
+      // Defensive fallback: any assistant message that slipped through
+      // without a state (e.g., a future event that spawns a bubble). Suppress
+      // unused-variable lint — `isDone` is documented for future readers.
+      void isDone;
+      return <MarkdownRenderer content={content} />;
+  }
 }
 
 function ToolStatusChip({ label }: { label: string }) {

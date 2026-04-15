@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-04-15T08:12:34Z",
+  "generated_at": "2026-04-15T08:32:59Z",
   "rules": [
     {
       "id": "cm-challenge-reasoning-instead-of",
@@ -70,6 +70,26 @@
       "last_hit": null,
       "first_seen": null,
       "rule_text_prefix": "Before pushing `package.json` changes, verify deps"
+    },
+    {
+      "id": "cq-ci-steps-polling-json-endpoints-under",
+      "section": "Code Quality",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "prevented_errors": 0,
+      "last_hit": null,
+      "first_seen": null,
+      "rule_text_prefix": "CI steps polling JSON endpoints under `bash -e` mu"
+    },
+    {
+      "id": "cq-deploy-webhook-observability-debug",
+      "section": "Code Quality",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "prevented_errors": 0,
+      "last_hit": null,
+      "first_seen": null,
+      "rule_text_prefix": "For deploy webhook observability debugging, fetch "
     },
     {
       "id": "cq-doppler-service-tokens-are-per-config",
@@ -733,8 +753,8 @@
     }
   ],
   "summary": {
-    "total_rules_tagged": 73,
-    "rules_unused_over_8w": 73,
+    "total_rules_tagged": 75,
+    "rules_unused_over_8w": 75,
     "rules_bypassed_over_baseline": 0,
     "orphan_rule_ids": []
   }

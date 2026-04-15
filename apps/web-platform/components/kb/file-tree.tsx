@@ -86,9 +86,22 @@ type DeleteState =
 
 type RenameState =
   | { status: "idle" }
-  | { status: "editing"; currentName: string }
+  | { status: "editing" }
   | { status: "renaming" }
   | { status: "error"; message: string };
+
+type TreeItemProps = {
+  node: TreeNode;
+  depth: number;
+  parentPath: string;
+  expanded: Set<string>;
+  onToggle: (path: string) => void;
+};
+
+type FileNodeProps = {
+  node: TreeNode;
+  depth: number;
+};
 
 function TreeItem({
   node,
@@ -96,57 +109,10 @@ function TreeItem({
   parentPath,
   expanded,
   onToggle,
-}: {
-  node: TreeNode;
-  depth: number;
-  parentPath: string;
-  expanded: Set<string>;
-  onToggle: (path: string) => void;
-}) {
-  const pathname = usePathname();
+}: TreeItemProps) {
   const { refreshTree } = useKb();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [uploadState, setUploadState] = useState<UploadState>({ status: "idle" });
-  const [deleteState, setDeleteState] = useState<DeleteState>({ status: "idle" });
-  const [renameState, setRenameState] = useState<RenameState>({ status: "idle" });
-  const renameInputRef = useRef<HTMLInputElement>(null);
-  const renameSubmittedRef = useRef(false);
-
-  const renameFile = useCallback(async (filePath: string, newName: string) => {
-    setRenameState({ status: "renaming" });
-    try {
-      const res = await fetch(`/api/kb/file/${filePath}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ newName }),
-      });
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({ error: "Rename failed" }));
-        setRenameState({ status: "error", message: body.error || "Rename failed" });
-        return;
-      }
-      setRenameState({ status: "idle" });
-      await refreshTree();
-    } catch {
-      setRenameState({ status: "error", message: "Network error. Please try again." });
-    }
-  }, [refreshTree]);
-
-  const deleteFile = useCallback(async (filePath: string) => {
-    setDeleteState({ status: "deleting" });
-    try {
-      const res = await fetch(`/api/kb/file/${filePath}`, { method: "DELETE" });
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({ error: "Delete failed" }));
-        setDeleteState({ status: "error", message: body.error || "Delete failed" });
-        return;
-      }
-      setDeleteState({ status: "idle" });
-      await refreshTree();
-    } catch {
-      setDeleteState({ status: "error", message: "Network error. Please try again." });
-    }
-  }, [refreshTree]);
 
   // Cap visual indent at 3 levels
   const indent = Math.min(depth, 3);
@@ -217,100 +183,100 @@ function TreeItem({
     uploadFile(file, dirKey);
   }, [parentPath, node.name, uploadFile]);
 
-  if (node.type === "directory") {
-    const dirKey = parentPath ? `${parentPath}/${node.name}` : node.name;
-    const isExpanded = expanded.has(dirKey);
-    const isBusy = uploadState.status === "uploading" || uploadState.status === "processing";
+  const dirKey = parentPath ? `${parentPath}/${node.name}` : node.name;
+  const isExpanded = expanded.has(dirKey);
+  const isBusy = uploadState.status === "uploading" || uploadState.status === "processing";
 
-    return (
-      <li>
-        <div className="group relative">
-          <button
-            onClick={() => onToggle(dirKey)}
-            className={`flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm text-neutral-300 hover:bg-neutral-800/50 ${
-              isBusy ? "bg-amber-500/10" : ""
-            }`}
-            style={{ paddingLeft }}
-            aria-expanded={isExpanded}
-          >
-            {uploadState.status === "uploading" ? (
-              <UploadProgress percent={uploadState.progress} />
-            ) : uploadState.status === "processing" ? (
-              <UploadProgress percent={-1} />
-            ) : (
-              <svg
-                width="12"
-                height="12"
-                viewBox="0 0 12 12"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="1.5"
-                className={`shrink-0 transition-transform ${isExpanded ? "rotate-90" : ""}`}
-              >
-                <path d="M4.5 2.5 8 6 4.5 9.5" strokeLinecap="round" strokeLinejoin="round" />
-              </svg>
-            )}
-            <FolderIcon />
-            <span className="truncate font-medium">{node.name}</span>
-            {node.modifiedAt && !isBusy && (
-              <span className="ml-auto shrink-0 text-xs text-neutral-600 group-hover:opacity-0 transition-opacity">
-                {formatRelativeTime(node.modifiedAt)}
-              </span>
-            )}
-          </button>
-          {!isBusy && (
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                fileInputRef.current?.click();
-              }}
-              className="absolute right-1 top-1/2 -translate-y-1/2 rounded p-1 text-neutral-500 opacity-0 transition-opacity hover:bg-neutral-700 hover:text-neutral-300 group-hover:opacity-100"
-              title="Upload file"
-              aria-label={`Upload file to ${node.name}`}
+  return (
+    <li>
+      <div className="group relative">
+        <button
+          onClick={() => onToggle(dirKey)}
+          className={`flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm text-neutral-300 hover:bg-neutral-800/50 ${
+            isBusy ? "bg-amber-500/10" : ""
+          }`}
+          style={{ paddingLeft }}
+          aria-expanded={isExpanded}
+        >
+          {uploadState.status === "uploading" ? (
+            <UploadProgress percent={uploadState.progress} />
+          ) : uploadState.status === "processing" ? (
+            <UploadProgress percent={-1} />
+          ) : (
+            <svg
+              width="12"
+              height="12"
+              viewBox="0 0 12 12"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.5"
+              className={`shrink-0 transition-transform ${isExpanded ? "rotate-90" : ""}`}
             >
-              <UploadIcon />
-            </button>
+              <path d="M4.5 2.5 8 6 4.5 9.5" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
           )}
-          <input
-            ref={fileInputRef}
-            type="file"
-            accept={ALLOWED_ACCEPT}
-            onChange={handleFileSelect}
-            className="hidden"
-            aria-hidden="true"
-          />
+          <FolderIcon />
+          <span className="truncate font-medium">{node.name}</span>
+          {node.modifiedAt && !isBusy && (
+            <span className="ml-auto shrink-0 text-xs text-neutral-600 group-hover:opacity-0 transition-opacity">
+              {formatRelativeTime(node.modifiedAt)}
+            </span>
+          )}
+        </button>
+        {!isBusy && (
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              fileInputRef.current?.click();
+            }}
+            className="absolute right-1 top-1/2 -translate-y-1/2 rounded p-1 text-neutral-500 opacity-0 transition-opacity hover:bg-neutral-700 hover:text-neutral-300 group-hover:opacity-100"
+            title="Upload file"
+            aria-label={`Upload file to ${node.name}`}
+          >
+            <UploadIcon />
+          </button>
+        )}
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept={ALLOWED_ACCEPT}
+          onChange={handleFileSelect}
+          className="hidden"
+          aria-hidden="true"
+        />
+      </div>
+      {uploadState.status === "error" && (
+        <div className="mx-2 mt-1 flex items-center gap-1.5 rounded bg-red-500/10 px-2 py-1 text-xs text-red-400" style={{ marginLeft: paddingLeft }}>
+          <span className="flex-1">{uploadState.message}</span>
+          <button onClick={() => setUploadState({ status: "idle" })} className="shrink-0 hover:text-red-300" aria-label="Dismiss error">&times;</button>
         </div>
-        {uploadState.status === "error" && (
-          <div className="mx-2 mt-1 flex items-center gap-1.5 rounded bg-red-500/10 px-2 py-1 text-xs text-red-400" style={{ marginLeft: paddingLeft }}>
-            <span className="flex-1">{uploadState.message}</span>
-            <button onClick={() => setUploadState({ status: "idle" })} className="shrink-0 hover:text-red-300" aria-label="Dismiss error">&times;</button>
+      )}
+      {uploadState.status === "duplicate" && (
+        <div className="mx-2 mt-1 rounded bg-amber-500/10 px-2 py-1.5 text-xs text-amber-400" style={{ marginLeft: paddingLeft }}>
+          <p className="mb-1.5">&ldquo;{uploadState.filename}&rdquo; already exists. Replace?</p>
+          <div className="flex gap-2">
+            <button
+              onClick={() => {
+                const { file, targetDir, sha } = uploadState;
+                uploadFile(file, targetDir, sha);
+              }}
+              className="rounded bg-amber-500/20 px-2 py-0.5 text-amber-300 hover:bg-amber-500/30"
+            >
+              Replace
+            </button>
+            <button
+              onClick={() => setUploadState({ status: "idle" })}
+              className="rounded px-2 py-0.5 text-neutral-400 hover:text-neutral-300"
+            >
+              Cancel
+            </button>
           </div>
-        )}
-        {uploadState.status === "duplicate" && (
-          <div className="mx-2 mt-1 rounded bg-amber-500/10 px-2 py-1.5 text-xs text-amber-400" style={{ marginLeft: paddingLeft }}>
-            <p className="mb-1.5">&ldquo;{uploadState.filename}&rdquo; already exists. Replace?</p>
-            <div className="flex gap-2">
-              <button
-                onClick={() => {
-                  const { file, targetDir, sha } = uploadState;
-                  uploadFile(file, targetDir, sha);
-                }}
-                className="rounded bg-amber-500/20 px-2 py-0.5 text-amber-300 hover:bg-amber-500/30"
-              >
-                Replace
-              </button>
-              <button
-                onClick={() => setUploadState({ status: "idle" })}
-                className="rounded px-2 py-0.5 text-neutral-400 hover:text-neutral-300"
-              >
-                Cancel
-              </button>
-            </div>
-          </div>
-        )}
-        {isExpanded && node.children && (
-          <ul className="space-y-0.5">
-            {node.children.map((child) => (
+        </div>
+      )}
+      {isExpanded && node.children && (
+        <ul className="space-y-0.5">
+          {node.children.map((child) => (
+            child.type === "directory" ? (
               <TreeItem
                 key={child.name}
                 node={child}
@@ -319,14 +285,71 @@ function TreeItem({
                 expanded={expanded}
                 onToggle={onToggle}
               />
-            ))}
-          </ul>
-        )}
-      </li>
-    );
-  }
+            ) : (
+              <FileNode
+                key={child.name}
+                node={child}
+                depth={depth + 1}
+              />
+            )
+          ))}
+        </ul>
+      )}
+    </li>
+  );
+}
 
-  // File node
+function FileNode({
+  node,
+  depth,
+}: FileNodeProps) {
+  const pathname = usePathname();
+  const { refreshTree } = useKb();
+  const [deleteState, setDeleteState] = useState<DeleteState>({ status: "idle" });
+  const [renameState, setRenameState] = useState<RenameState>({ status: "idle" });
+  const renameInputRef = useRef<HTMLInputElement>(null);
+  const renameSubmittedRef = useRef(false);
+
+  // Cap visual indent at 3 levels
+  const indent = Math.min(depth, 3);
+  const paddingLeft = `${indent * 12 + 8}px`;
+
+  const renameFile = useCallback(async (filePath: string, newName: string) => {
+    setRenameState({ status: "renaming" });
+    try {
+      const res = await fetch(`/api/kb/file/${filePath}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ newName }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({ error: "Rename failed" }));
+        setRenameState({ status: "error", message: body.error || "Rename failed" });
+        return;
+      }
+      setRenameState({ status: "idle" });
+      await refreshTree();
+    } catch {
+      setRenameState({ status: "error", message: "Network error. Please try again." });
+    }
+  }, [refreshTree]);
+
+  const deleteFile = useCallback(async (filePath: string) => {
+    setDeleteState({ status: "deleting" });
+    try {
+      const res = await fetch(`/api/kb/file/${filePath}`, { method: "DELETE" });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({ error: "Delete failed" }));
+        setDeleteState({ status: "error", message: body.error || "Delete failed" });
+        return;
+      }
+      setDeleteState({ status: "idle" });
+      await refreshTree();
+    } catch {
+      setDeleteState({ status: "error", message: "Network error. Please try again." });
+    }
+  }, [refreshTree]);
+
   const filePath = `/dashboard/kb/${node.path}`;
   const isActive = pathname === filePath;
   const isAttachment = node.extension !== ".md";
@@ -424,7 +447,7 @@ function TreeItem({
                 e.preventDefault();
                 e.stopPropagation();
                 renameSubmittedRef.current = false;
-                setRenameState({ status: "editing", currentName: node.name });
+                setRenameState({ status: "editing" });
               }}
               className="rounded p-1 text-neutral-500 hover:bg-neutral-700 hover:text-neutral-300"
               title="Rename file"

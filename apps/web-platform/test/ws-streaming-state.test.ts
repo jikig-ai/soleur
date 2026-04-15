@@ -1,88 +1,28 @@
 import { describe, test, expect } from "vitest";
-import type { MessageState } from "../lib/types";
-
-// Test the client-side streaming state machine logic.
-// These tests validate the state transitions and content handling
-// that ws-client.ts must implement for the 4-state message lifecycle.
-
-/** Minimal chat message shape matching ws-client.ts ChatMessage */
-interface TestMessage {
-  id: string;
-  role: "user" | "assistant";
-  content: string;
-  state?: MessageState;
-  toolLabel?: string;
-  toolsUsed?: string[];
-  leaderId?: string;
-}
+import {
+  applyStreamEvent,
+  applyTimeout,
+  type ChatMessage,
+} from "../lib/chat-state-machine";
+import type { MessageState, WSMessage } from "../lib/types";
 
 /**
- * Simulate the client state machine by processing a sequence of WS events.
- * This mirrors the logic that ws-client.ts must implement.
+ * Tests import `applyStreamEvent` from production (`lib/chat-state-machine.ts`)
+ * so any behavior drift in the state machine surfaces here immediately —
+ * previously a shadow copy of the logic lived in this file, which defeated
+ * the purpose of the coverage (see #2124).
  */
-function processEvents(events: Array<Record<string, unknown>>): TestMessage[] {
-  const messages: TestMessage[] = [];
-  const activeStreams = new Map<string, number>();
 
+type StreamEvent = Parameters<typeof applyStreamEvent>[2];
+
+function processEvents(events: StreamEvent[]): ChatMessage[] {
+  let messages: ChatMessage[] = [];
+  let activeStreams = new Map<string, number>();
   for (const evt of events) {
-    const leaderId = evt.leaderId as string;
-
-    switch (evt.type) {
-      case "stream_start": {
-        const msg: TestMessage = {
-          id: `stream-${leaderId}-${crypto.randomUUID()}`,
-          role: "assistant",
-          content: "",
-          state: "thinking",
-          leaderId,
-          toolsUsed: [],
-        };
-        activeStreams.set(leaderId, messages.length);
-        messages.push(msg);
-        break;
-      }
-
-      case "tool_use": {
-        const idx = activeStreams.get(leaderId);
-        if (idx !== undefined && idx < messages.length) {
-          messages[idx] = {
-            ...messages[idx],
-            state: "tool_use",
-            toolLabel: evt.label as string,
-            toolsUsed: [...(messages[idx].toolsUsed ?? []), evt.tool as string],
-          };
-        }
-        break;
-      }
-
-      case "stream": {
-        const idx = activeStreams.get(leaderId);
-        if (idx !== undefined && idx < messages.length) {
-          // REPLACE content (not append) — server sends cumulative snapshots
-          messages[idx] = {
-            ...messages[idx],
-            content: evt.content as string,
-            state: "streaming",
-            toolLabel: undefined,
-          };
-        }
-        break;
-      }
-
-      case "stream_end": {
-        const idx = activeStreams.get(leaderId);
-        if (idx !== undefined && idx < messages.length) {
-          messages[idx] = {
-            ...messages[idx],
-            state: "done",
-          };
-        }
-        activeStreams.delete(leaderId);
-        break;
-      }
-    }
+    const result = applyStreamEvent(messages, activeStreams, evt);
+    messages = result.messages;
+    activeStreams = result.activeStreams;
   }
-
   return messages;
 }
 
@@ -91,9 +31,14 @@ describe("client streaming state machine", () => {
     const messages = processEvents([
       { type: "stream_start", leaderId: "cmo" },
       { type: "stream", content: "Hello", partial: true, leaderId: "cmo" },
-      { type: "stream", content: "Hello world", partial: true, leaderId: "cmo" },
+      {
+        type: "stream",
+        content: "Hello world",
+        partial: true,
+        leaderId: "cmo",
+      },
       { type: "stream_end", leaderId: "cmo" },
-    ]);
+    ] as WSMessage[] as StreamEvent[]);
 
     expect(messages).toHaveLength(1);
     expect(messages[0].state).toBe("done");
@@ -103,17 +48,25 @@ describe("client streaming state machine", () => {
   test("lifecycle with tool_use: thinking → tool_use → streaming → done", () => {
     const messages = processEvents([
       { type: "stream_start", leaderId: "cto" },
-      { type: "tool_use", leaderId: "cto", tool: "Read", label: "Reading file..." },
-      { type: "tool_use", leaderId: "cto", tool: "Bash", label: "Running command..." },
-      { type: "stream", content: "Result text", partial: true, leaderId: "cto" },
+      { type: "tool_use", leaderId: "cto", label: "Reading file..." },
+      { type: "tool_use", leaderId: "cto", label: "Running command..." },
+      {
+        type: "stream",
+        content: "Result text",
+        partial: true,
+        leaderId: "cto",
+      },
       { type: "stream_end", leaderId: "cto" },
-    ]);
+    ] as WSMessage[] as StreamEvent[]);
 
     expect(messages).toHaveLength(1);
     expect(messages[0].state).toBe("done");
     expect(messages[0].content).toBe("Result text");
-    // Both tools recorded
-    expect(messages[0].toolsUsed).toEqual(["Read", "Bash"]);
+    // toolsUsed now stores human-readable labels (not raw SDK tool names) — see #2138
+    expect(messages[0].toolsUsed).toEqual([
+      "Reading file...",
+      "Running command...",
+    ]);
   });
 
   test("replace semantics: 3 cumulative partials = final text, not 3x", () => {
@@ -123,61 +76,30 @@ describe("client streaming state machine", () => {
       { type: "stream", content: "AB", partial: true, leaderId: "cmo" },
       { type: "stream", content: "ABC", partial: true, leaderId: "cmo" },
       { type: "stream_end", leaderId: "cmo" },
-    ]);
+    ] as WSMessage[] as StreamEvent[]);
 
     expect(messages[0].content).toBe("ABC");
-    // NOT "AABABC" (the append bug)
     expect(messages[0].content).not.toBe("AABABC");
   });
 
   test("state transitions are one-directional", () => {
-    const states: MessageState[] = [];
-    const events = [
+    const events: StreamEvent[] = [
       { type: "stream_start", leaderId: "cmo" },
-      { type: "tool_use", leaderId: "cmo", tool: "Read", label: "Reading file..." },
+      { type: "tool_use", leaderId: "cmo", label: "Reading file..." },
       { type: "stream", content: "text", partial: true, leaderId: "cmo" },
       { type: "stream_end", leaderId: "cmo" },
-    ];
+    ] as WSMessage[] as StreamEvent[];
 
-    // Process each event and capture intermediate states
-    const messages: TestMessage[] = [];
-    const activeStreams = new Map<string, number>();
-
+    const states: MessageState[] = [];
+    let messages: ChatMessage[] = [];
+    let activeStreams = new Map<string, number>();
     for (const evt of events) {
-      const leaderId = evt.leaderId as string;
-      switch (evt.type) {
-        case "stream_start": {
-          const msg: TestMessage = {
-            id: "test",
-            role: "assistant",
-            content: "",
-            state: "thinking",
-            leaderId,
-            toolsUsed: [],
-          };
-          activeStreams.set(leaderId, messages.length);
-          messages.push(msg);
-          break;
-        }
-        case "tool_use": {
-          const idx = activeStreams.get(leaderId)!;
-          messages[idx] = { ...messages[idx], state: "tool_use" };
-          break;
-        }
-        case "stream": {
-          const idx = activeStreams.get(leaderId)!;
-          messages[idx] = { ...messages[idx], content: evt.content as string, state: "streaming" };
-          break;
-        }
-        case "stream_end": {
-          const idx = activeStreams.get(leaderId)!;
-          messages[idx] = { ...messages[idx], state: "done" };
-          activeStreams.delete(leaderId);
-          break;
-        }
-      }
-      const idx = activeStreams.get(leaderId) ?? messages.length - 1;
-      states.push(messages[idx].state!);
+      const result = applyStreamEvent(messages, activeStreams, evt);
+      messages = result.messages;
+      activeStreams = result.activeStreams;
+      // After stream_end the map no longer has the leader; peek at the last message.
+      const state = messages[messages.length - 1]?.state;
+      if (state) states.push(state);
     }
 
     expect(states).toEqual(["thinking", "tool_use", "streaming", "done"]);
@@ -187,14 +109,23 @@ describe("client streaming state machine", () => {
     const messages = processEvents([
       { type: "stream_start", leaderId: "cmo" },
       { type: "stream_start", leaderId: "cto" },
-      { type: "stream", content: "CMO says hello", partial: true, leaderId: "cmo" },
-      { type: "stream", content: "CTO says world", partial: true, leaderId: "cto" },
+      {
+        type: "stream",
+        content: "CMO says hello",
+        partial: true,
+        leaderId: "cmo",
+      },
+      {
+        type: "stream",
+        content: "CTO says world",
+        partial: true,
+        leaderId: "cto",
+      },
       { type: "stream_end", leaderId: "cmo" },
       { type: "stream_end", leaderId: "cto" },
-    ]);
+    ] as WSMessage[] as StreamEvent[]);
 
     expect(messages).toHaveLength(2);
-    // No cross-contamination
     expect(messages[0].content).toBe("CMO says hello");
     expect(messages[0].leaderId).toBe("cmo");
     expect(messages[0].state).toBe("done");
@@ -209,24 +140,26 @@ describe("client streaming state machine", () => {
       { type: "stream_start", leaderId: "cmo" },
       { type: "stream", content: "Hello", partial: true, leaderId: "cmo" },
       { type: "stream_end", leaderId: "cmo" },
-    ]);
+    ] as WSMessage[] as StreamEvent[]);
 
     expect(messages).toHaveLength(1);
   });
 
-  test("multiple sequential tool_use events: each replaces previous label", () => {
+  test("multiple sequential tool_use events: all labels recorded", () => {
     const messages = processEvents([
       { type: "stream_start", leaderId: "cto" },
-      { type: "tool_use", leaderId: "cto", tool: "Read", label: "Reading file..." },
-      { type: "tool_use", leaderId: "cto", tool: "Grep", label: "Searching code..." },
-      { type: "tool_use", leaderId: "cto", tool: "Bash", label: "Running command..." },
+      { type: "tool_use", leaderId: "cto", label: "Reading file..." },
+      { type: "tool_use", leaderId: "cto", label: "Searching code..." },
+      { type: "tool_use", leaderId: "cto", label: "Running command..." },
       { type: "stream", content: "Done", partial: true, leaderId: "cto" },
       { type: "stream_end", leaderId: "cto" },
-    ]);
+    ] as WSMessage[] as StreamEvent[]);
 
-    // All tools recorded
-    expect(messages[0].toolsUsed).toEqual(["Read", "Grep", "Bash"]);
-    // Final state after stream is streaming, then done
+    expect(messages[0].toolsUsed).toEqual([
+      "Reading file...",
+      "Searching code...",
+      "Running command...",
+    ]);
     expect(messages[0].state).toBe("done");
   });
 
@@ -234,23 +167,124 @@ describe("client streaming state machine", () => {
     const messages = processEvents([
       { type: "stream_start", leaderId: "cmo" },
       { type: "stream_end", leaderId: "cmo" },
-    ]);
+    ] as WSMessage[] as StreamEvent[]);
 
-    // UUID pattern: 8-4-4-4-12 hex chars
-    const uuidPattern = /^stream-cmo-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+    const uuidPattern =
+      /^stream-cmo-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
     expect(messages[0].id).toMatch(uuidPattern);
   });
 
   test("empty DONE state: tools used but no text content", () => {
     const messages = processEvents([
       { type: "stream_start", leaderId: "cto" },
-      { type: "tool_use", leaderId: "cto", tool: "Read", label: "Reading file..." },
-      { type: "tool_use", leaderId: "cto", tool: "Bash", label: "Running command..." },
+      { type: "tool_use", leaderId: "cto", label: "Reading file..." },
+      { type: "tool_use", leaderId: "cto", label: "Running command..." },
       { type: "stream_end", leaderId: "cto" },
-    ]);
+    ] as WSMessage[] as StreamEvent[]);
 
     expect(messages[0].state).toBe("done");
     expect(messages[0].content).toBe("");
-    expect(messages[0].toolsUsed).toEqual(["Read", "Bash"]);
+    expect(messages[0].toolsUsed).toEqual([
+      "Reading file...",
+      "Running command...",
+    ]);
+  });
+
+  test("timerAction is returned on every state-transition event", () => {
+    const start = applyStreamEvent(
+      [],
+      new Map(),
+      { type: "stream_start", leaderId: "cmo" } as StreamEvent,
+    );
+    expect(start.timerAction).toEqual({ type: "reset", leaderId: "cmo" });
+
+    const end = applyStreamEvent(
+      start.messages,
+      start.activeStreams,
+      { type: "stream_end", leaderId: "cmo" } as StreamEvent,
+    );
+    expect(end.timerAction).toEqual({ type: "clear", leaderId: "cmo" });
+  });
+});
+
+describe("timeout guard (#2136)", () => {
+  test("timeout does not clobber a bubble in 'streaming' state", () => {
+    // Seed: thinking → streaming (via a stream event); then fire timeout.
+    let messages: ChatMessage[] = [];
+    let activeStreams = new Map<string, number>();
+    const s1 = applyStreamEvent(messages, activeStreams, {
+      type: "stream_start",
+      leaderId: "cmo",
+    } as StreamEvent);
+    messages = s1.messages;
+    activeStreams = s1.activeStreams;
+    const s2 = applyStreamEvent(messages, activeStreams, {
+      type: "stream",
+      content: "partial",
+      partial: true,
+      leaderId: "cmo",
+    } as StreamEvent);
+    messages = s2.messages;
+    activeStreams = s2.activeStreams;
+    expect(messages[0].state).toBe("streaming");
+
+    const timedOut = applyTimeout(messages, activeStreams, "cmo");
+    // Still streaming — timeout is stale, must not overwrite.
+    expect(timedOut.messages[0].state).toBe("streaming");
+  });
+
+  test("timeout does not clobber a bubble in 'done' state", () => {
+    let messages: ChatMessage[] = [];
+    let activeStreams = new Map<string, number>();
+    const s1 = applyStreamEvent(messages, activeStreams, {
+      type: "stream_start",
+      leaderId: "cmo",
+    } as StreamEvent);
+    messages = s1.messages;
+    activeStreams = s1.activeStreams;
+    const s2 = applyStreamEvent(messages, activeStreams, {
+      type: "stream_end",
+      leaderId: "cmo",
+    } as StreamEvent);
+    messages = s2.messages;
+    activeStreams = s2.activeStreams;
+
+    const timedOut = applyTimeout(messages, activeStreams, "cmo");
+    expect(timedOut.messages[0].state).toBe("done");
+  });
+
+  test("timeout transitions a stuck 'thinking' bubble to 'error'", () => {
+    const s1 = applyStreamEvent(
+      [],
+      new Map(),
+      { type: "stream_start", leaderId: "cmo" } as StreamEvent,
+    );
+    expect(s1.messages[0].state).toBe("thinking");
+
+    const timedOut = applyTimeout(s1.messages, s1.activeStreams, "cmo");
+    expect(timedOut.messages[0].state).toBe("error");
+    // leader should no longer be in active streams — bubble is terminal now
+    expect(timedOut.activeStreams.has("cmo")).toBe(false);
+  });
+
+  test("timeout transitions a stuck 'tool_use' bubble to 'error'", () => {
+    let messages: ChatMessage[] = [];
+    let activeStreams = new Map<string, number>();
+    const s1 = applyStreamEvent(messages, activeStreams, {
+      type: "stream_start",
+      leaderId: "cmo",
+    } as StreamEvent);
+    messages = s1.messages;
+    activeStreams = s1.activeStreams;
+    const s2 = applyStreamEvent(messages, activeStreams, {
+      type: "tool_use",
+      leaderId: "cmo",
+      label: "Reading file...",
+    } as StreamEvent);
+    messages = s2.messages;
+    activeStreams = s2.activeStreams;
+
+    const timedOut = applyTimeout(messages, activeStreams, "cmo");
+    expect(timedOut.messages[0].state).toBe("error");
   });
 });
