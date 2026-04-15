@@ -110,7 +110,7 @@ Closed issues count. If the founder wants to resurface a closed finding, they re
 
 Sort surviving findings by severity (`critical` > `high` > `medium` > `low`) then stable by `route`. Then apply `CAP_PER_ROUTE = 2`: walk the sorted list and drop any finding that would be the 3rd+ entry for a route already seen. Finally, take the top `CAP_PER_RUN = 5` of what remains.
 
-The per-route cap runs **before** the global cap so dropped anonymous-route findings free up slots for dashboard findings rather than the reverse. If fewer than 5 findings survive both caps, file what remains — the output is intentionally under-filled rather than padded with dropped-route duplicates.
+The per-route cap runs **before** `CAP_PER_RUN` so dropped anonymous-route findings free up slots for dashboard findings rather than the reverse. (`CAP_OPEN_ISSUES` is a separate check at Step 2; it does not participate in this ordering.) If fewer than 5 findings survive both caps, file what remains — the output is intentionally under-filled rather than padded with dropped-route duplicates.
 
 ### 7. File issues (or dry-run to stdout)
 
