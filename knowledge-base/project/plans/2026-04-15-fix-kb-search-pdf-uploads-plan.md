@@ -4,7 +4,7 @@ date: 2026-04-15
 issue: 2230
 branch: feat-kb-search-pdf-uploads
 pr: null
-status: plan
+status: plan-deepened
 type: fix
 priority: p1-high
 milestone: "Phase 3: Make it Sticky"
@@ -13,6 +13,24 @@ milestone: "Phase 3: Make it Sticky"
 # Plan: KB Search Returns Uploaded Files
 
 > Fixes #2230. The current KB search only indexes `.md` files, so every non-markdown upload (PDF, DOCX, CSV, TXT, PNG/JPG/GIF/WEBP) is invisible to search. In the bug report, the user uploaded a PDF and searched for it — only `vision.md` was returned because the PDF was never scanned.
+
+## Enhancement Summary
+
+**Deepened on:** 2026-04-15
+**Sections enhanced:** Context, Implementation Phases, Acceptance Criteria, Sharp Edges
+**Learnings applied:**
+
+1. `2026-04-07-promise-all-parallel-fs-io-patterns.md` — reuse per-callback RegExp pattern; keep flat `Promise.all` shape; note libuv fd ceiling.
+2. `2026-04-07-symlink-escape-recursive-directory-traversal.md` — preserve `!entry.isSymbolicLink()` on every new recursion branch; add negative-space test.
+3. `2026-04-11-plan-prescribed-wrong-test-runner.md` — anchor test commands to `package.json` `scripts.test` (vitest, confirmed).
+
+### Key Improvements
+
+1. **Case-normalized extension check.** `path.extname` preserves case (`.PDF` not `.pdf`). Adding an explicit `.toLowerCase()` before `FILENAME_SEARCHABLE.has(ext)` — otherwise `Q1-Invoice.PDF` would be dropped even after the fix.
+2. **Symlink defense carried forward.** The existing `collectMdFiles` guards against symlink escape (see learning). The renamed `collectSearchableFiles` preserves these checks verbatim, and a negative-space security test asserts they stay.
+3. **Security test extension.** Extend `test/kb-security.test.ts` to assert `collectSearchableFiles` keeps `!entry.isSymbolicLink()` — prevents silent regression.
+4. **FormData-style field-name contract.** None needed (no API surface change) — flagged to prevent churn.
+5. **Test-runner anchoring.** All test commands normalized to `npx vitest run` (per `apps/web-platform/package.json` `scripts.test: "vitest"`). Worktree-safe invocation via `node node_modules/vitest/vitest.mjs run` kept in place per AGENTS.md `cq-in-worktrees-run-vitest`.
 
 ## Overview
 
@@ -34,6 +52,34 @@ Extend `searchKb` in `apps/web-platform/server/kb-reader.ts` to:
 - **Why CSV/TXT content search is in scope**: They are UTF-8 text and grep-compatible with zero marginal code — the same regex loop works if we just stop filtering the extension. Not adding them would be worse than the status quo because users who upload a CSV reasonably expect "find a string inside my CSV" to work.
 - **No new infrastructure**: Zero dependencies added, no new endpoints, no migration. All changes live in one server module, one component, and one test file.
 - **Brainstorm carry-forward**: This is a bug fix on a merged feature (KB search shipped in #2212). No brainstorm document exists — skipping idea refinement is appropriate. Direction is unambiguous (make uploads searchable).
+
+### Research Insights
+
+**Existing patterns to reuse (from `knowledge-base/project/learnings/2026-04-07-promise-all-parallel-fs-io-patterns.md`):**
+
+- Keep the **flat-parallel shape** in `searchKb` — `Promise.all` over all files. This is the established pattern; do not refactor to p-limit in this PR (already flagged as future work in the existing `searchKb` comment).
+- **Per-callback RegExp is mandatory** under `Promise.all` because `g`-flag regex is stateful via `lastIndex`. Applies identically to the new `matchFilename` helper: instantiate the regex **inside** the map callback, not at module scope.
+- **Promise.all vs allSettled**: the existing try/catch-returns-null inside each callback makes `Promise.all` correct. Preserve this; do not introduce `allSettled`.
+- **libuv threadpool ceiling**: default 4 threads. Expanding from .md-only to 9 extensions 2–3× the queued `fs.stat` / `fs.readFile` calls. This is still within safe territory for Phase-3 workspaces (typically < 500 files). No change needed, but for KBs > 10,000 files the flat `Promise.all` will be the first bottleneck.
+
+**Security patterns to preserve (from `knowledge-base/project/learnings/2026-04-07-symlink-escape-recursive-directory-traversal.md`):**
+
+- `collectMdFiles` currently guards: `entry.isDirectory() && !entry.isSymbolicLink()` and `entry.isFile() && !entry.isSymbolicLink()`. The renamed `collectSearchableFiles` MUST keep both guards on every branch. An agent planting a symlink under `knowledge-base/` and enumerating via search would otherwise leak files from `/etc/` or another workspace.
+- **Defense-in-depth**: point-access (`readContent`) validates via `isPathInWorkspace`; enumeration (`collectSearchableFiles`) skips symlinks. Both must be intact. Verification: add a negative-space test to `test/kb-security.test.ts` asserting the new function name still contains `!entry.isSymbolicLink()` on every branch.
+- **`collectSearchableFiles` does not read file bytes** — filename match works on the path alone, so symlink-follow to read content is impossible by construction. The symlink guard matters only for enumeration leakage, not content leakage.
+
+**Test-runner anchoring (from `knowledge-base/project/learnings/workflow-issues/plan-prescribed-wrong-test-runner-20260411.md`):**
+
+- `apps/web-platform/package.json` `scripts.test` is `vitest`. All local invocations use vitest.
+- Worktree-safe invocation: `node node_modules/vitest/vitest.mjs run test/kb-reader.test.ts` (AGENTS.md `cq-in-worktrees-run-vitest`). Do NOT use `npx vitest` — the npx cache is shared across worktrees and can resolve to a stale installation.
+- Do NOT use `bun test` — the project uses vitest, not bun's built-in runner. `bun test` will silently return "no test files found".
+
+**Case-normalization (from inspection of `path.extname`):**
+
+- `path.extname("Q1-Invoice.PDF")` returns `.PDF` (preserves case). The upload route sanitizes via `split(".").pop()?.toLowerCase()` before checking `ALLOWED_EXTENSIONS`, but the search path gets extensions from `path.extname` in a case-sensitive form.
+- `FILENAME_SEARCHABLE` and `CONTENT_SEARCHABLE` MUST contain lowercase entries and the check site MUST lowercase the extname first:
+      `const ext = path.extname(entry.name).toLowerCase();`
+- Miss this and the fix only works for lowercase uploads — breaking the acceptance test for `Q1-Invoice.PDF`.
 
 ## Files to Modify
 
@@ -121,6 +167,7 @@ Extend `searchKb` in `apps/web-platform/server/kb-reader.ts` to:
    // Single source of truth for what search indexes. Mirror of
    // apps/web-platform/app/api/kb/upload/route.ts ALLOWED_EXTENSIONS
    // plus .md (which is native KB content, not an "upload").
+   // All entries MUST be lowercase — the lookup site lowercases ext before check.
    const CONTENT_SEARCHABLE = new Set([".md", ".txt", ".csv"]);
    const FILENAME_SEARCHABLE = new Set([
      ".md", ".txt", ".csv",
@@ -130,17 +177,47 @@ Extend `searchKb` in `apps/web-platform/server/kb-reader.ts` to:
 
    interface SearchableFile {
      relativePath: string;
-     ext: string;
+     ext: string; // lowercase
    }
 
    async function collectSearchableFiles(
      dir: string,
      relativeTo: string,
    ): Promise<SearchableFile[]> {
-     // Same structure as collectMdFiles, but gate on FILENAME_SEARCHABLE.
-     // ...
+     const files: SearchableFile[] = [];
+     let entries: fs.Dirent[];
+     try {
+       entries = await fs.promises.readdir(dir, { withFileTypes: true });
+     } catch {
+       return files;
+     }
+     const dirPromises: Promise<SearchableFile[]>[] = [];
+     for (const entry of entries) {
+       const fullPath = path.join(dir, entry.name);
+       // Symlink guard: prevents enumeration escape (learning 2026-04-07).
+       if (entry.isDirectory() && !entry.isSymbolicLink()) {
+         dirPromises.push(collectSearchableFiles(fullPath, relativeTo));
+       } else if (entry.isFile() && !entry.isSymbolicLink()) {
+         const ext = path.extname(entry.name).toLowerCase();
+         if (FILENAME_SEARCHABLE.has(ext)) {
+           files.push({
+             relativePath: path.relative(relativeTo, fullPath),
+             ext,
+           });
+         }
+       }
+     }
+     const nestedResults = await Promise.all(dirPromises);
+     for (const nested of nestedResults) {
+       files.push(...nested);
+     }
+     return files;
    }
    ```
+
+   **Why lowercase `ext`**: `path.extname` preserves case (`.PDF` not `.pdf`). Without `.toLowerCase()`, an uploaded `Q1-Invoice.PDF` would be filtered out even with the fix in place.
+
+   **Why keep `!entry.isSymbolicLink()` on every branch**: Enumeration leakage is not covered by `readContent`'s `isPathInWorkspace` check. The guard MUST live on both `isDirectory` and `isFile` branches (learning 2026-04-07).
 
 2. Update `SearchResult`:
 
@@ -186,6 +263,31 @@ Extend `searchKb` in `apps/web-platform/server/kb-reader.ts` to:
 
 4. `matchFilename(relativePath, escapedQuery)` returns a `SearchMatch[]` where `line: 0`, `text: <basename>`, `highlight: [start, end]` if the basename regex-matches. Use the basename (not the full relative path) for both match text and highlight offsets — directory segments are not meaningful for filename match.
 
+   ```ts
+   function matchFilename(
+     relativePath: string,
+     escapedQuery: string,
+   ): SearchMatch[] {
+     const basename = path.basename(relativePath);
+     // Per-callback RegExp instance — /gi is stateful via lastIndex and would
+     // misbehave if shared across concurrent map callbacks in Promise.all.
+     // (Pattern from learning 2026-04-07-promise-all-parallel-fs-io-patterns.)
+     const re = new RegExp(escapedQuery, "gi");
+     const matches: SearchMatch[] = [];
+     let found: RegExpExecArray | null;
+     while ((found = re.exec(basename)) !== null) {
+       matches.push({
+         line: 0,
+         text: basename,
+         highlight: [found.index, found.index + found[0].length],
+       });
+       // Guard against zero-width matches causing infinite loops
+       if (found.index === re.lastIndex) re.lastIndex++;
+     }
+     return matches;
+   }
+   ```
+
 5. Sorting: content matches rank by `matches.length` descending (current behavior). Filename-only results rank below any content result and are sorted alphabetically by path. Implementation: stable two-pass sort (content group first, then filename group).
 
 6. Run tests — expect GREEN:
@@ -212,6 +314,51 @@ Extend `searchKb` in `apps/web-platform/server/kb-reader.ts` to:
 2. Route icon variant through `file-tree.tsx`'s existing ext→icon logic (or inline: .pdf → PDF icon, image ext → image icon). No new SVGs — reuse the generic document icon as the fallback.
 
 3. Manual QA: start the dev server, upload a PDF via the KB uploader, search for a substring of the filename, verify it appears with "Filename match" label.
+
+### Phase D.5 — Security regression test (~15 min)
+
+1. Extend `apps/web-platform/test/kb-security.test.ts` with a negative-space test that asserts the renamed enumeration function retains its symlink guard:
+
+   ```ts
+   it("kb-reader collectSearchableFiles skips symlinks on every branch", () => {
+     const kbReader = resolve(__dirname, "../server/kb-reader.ts");
+     const content = readFileSync(kbReader, "utf-8");
+
+     // Enumeration must skip symlinks (defense against enumeration escape —
+     // learning 2026-04-07-symlink-escape-recursive-directory-traversal).
+     // Count must match the number of branches in collectSearchableFiles
+     // (currently 2: directory branch + file branch).
+     const matches = content.match(/!entry\.isSymbolicLink\(\)/g) ?? [];
+     expect(matches.length).toBeGreaterThanOrEqual(2);
+   });
+
+   it("kb-reader lowercases extname before FILENAME_SEARCHABLE check", () => {
+     const kbReader = resolve(__dirname, "../server/kb-reader.ts");
+     const content = readFileSync(kbReader, "utf-8");
+
+     // Must lowercase extname — path.extname preserves case, so Q1-Invoice.PDF
+     // would be dropped without explicit .toLowerCase().
+     expect(content).toMatch(/path\.extname\([^)]*\)\.toLowerCase\(\)/);
+   });
+   ```
+
+2. Add an integration test for symlink skip in `test/kb-reader.test.ts` (only if the CI environment allows `fs.symlinkSync` — it may fail on Windows runners; skip gracefully):
+
+   ```ts
+   test("searchKb skips symlinked directories under kbRoot", () => {
+     // Skip on platforms without symlink permission
+     try {
+       fs.symlinkSync("/etc", path.join(kbRoot, "link-to-etc"), "dir");
+     } catch (err) {
+       // EPERM on Windows without admin, or sandboxed CI — skip test
+       return;
+     }
+     // Create a real file so searchKb has something to find
+     fs.writeFileSync(path.join(kbRoot, "real.md"), "findme in kb");
+     const result = await searchKb(kbRoot, "findme");
+     expect(result.results.every((r) => !r.path.startsWith("link-to-etc"))).toBe(true);
+   });
+   ```
 
 ### Phase D — Regression guard (~15 min)
 
@@ -244,6 +391,9 @@ Extend `searchKb` in `apps/web-platform/server/kb-reader.ts` to:
 - [ ] The UI shows "Filename match" labeling (or equivalent) on filename-only results, distinct from line-numbered content snippets.
 - [ ] All existing `kb-reader.test.ts` tests that were NOT encoding the bug remain green.
 - [ ] No new runtime dependencies added to `apps/web-platform/package.json`.
+- [ ] `collectSearchableFiles` skips symbolic links on both the directory and file branches (verified by a new negative-space test in `test/kb-security.test.ts`).
+- [ ] Extension matching is case-insensitive — `Q1-Invoice.PDF`, `DIAGRAM.PNG`, and `notes.TXT` all surface in results.
+- [ ] Filename-match RegExp is instantiated per-callback (not module-scoped) — enforces Promise.all regex-concurrency safety.
 
 ## Test Scenarios
 
@@ -257,6 +407,11 @@ Extend `searchKb` in `apps/web-platform/server/kb-reader.ts` to:
 | T6 | Upload `Q1-INVOICE.PDF` (uppercase), search "invoice" | Returned (case-insensitive filename match) |
 | T7 | Upload `.hidden.txt` (no allowed extension match), search "any" | NOT returned (unchanged — hidden files ignored by upload pipeline anyway) |
 | T8 | Query with special regex chars (`foo[bar]`) vs filename `foo[bar].pdf` | Returned (regex escape applied to filename path too) |
+| T9 | Symlink under kbRoot pointing to `/etc/` | Skipped entirely — no `/etc/*` paths leak into results |
+| T10 | Empty query | Throws `KbValidationError` (unchanged) |
+| T11 | File exactly at `KB_MAX_FILE_SIZE` boundary | Content-search skipped (unchanged guard) but filename match still runs |
+| T12 | Zero-width regex (query that matches empty string, e.g. via lookahead) | Does NOT infinite-loop in `matchFilename` (lastIndex advancement guard) |
+| T13 | Mixed case basename with non-ASCII chars (`naïve-notes.md`) | Basename preserves UTF-8 in result snippet |
 
 ## Non-Goals (Out of Scope)
 
@@ -285,6 +440,11 @@ No cross-domain implications beyond engineering — this is a bug-fix restoratio
 - `searchKb` runs `Promise.all` over the full searchable file list. Expanding from `.md` only to 9 extensions can 2–3× the file count. Keep the existing `MAX_CONCURRENT_STAT` + `KB_MAX_FILE_SIZE` guards in place; do not read binary file contents to inspect size — stat is sufficient. A p-limit refactor is out of scope (already flagged in the existing searchKb comment).
 - The UI currently renders `result.matches.slice(0, 3)` and includes line numbers. For `kind: "filename"`, `match.line = 0` must render as "Filename match" without "Line 0" text. Do not attempt to generalize the snippet component — a narrow `kind` switch is clearer.
 - Do NOT edit `apps/web-platform/app/api/kb/upload/route.ts` — the allowed-extension set is already correct; the fix is purely in the search path.
+- `path.extname` **preserves case**. The `FILENAME_SEARCHABLE` / `CONTENT_SEARCHABLE` sets are lowercase — callers MUST lowercase the extname before the `.has()` check, or `Q1-Invoice.PDF` silently drops. This is subtle: the upload route lowercases via a different code path (`split(".").pop()?.toLowerCase()`), so the same files appear inconsistently handled between read and write if the search fix misses this step.
+- Regex stateful-ness under `Promise.all`: do NOT hoist the `matchFilename` regex to module scope. `/gi` is stateful via `lastIndex`; sharing a single instance across concurrent callbacks produces lost matches or infinite loops (pattern documented in learning 2026-04-07). The existing `searchKb` content loop already follows this rule — `matchFilename` must too.
+- Zero-width regex guard: `re.exec` can return a zero-length match at the same `lastIndex` forever. Always advance `re.lastIndex++` when `found.index === re.lastIndex` to break infinite loops. Applies even if the regex source comes from `escapeRegex` (which escapes `*+?` etc.) because user input could still produce empty captures in edge cases.
+- Symlink enumeration escape: `collectSearchableFiles` MUST retain `!entry.isSymbolicLink()` on both the `isDirectory` and `isFile` branches. `readContent`'s `isPathInWorkspace` does NOT cover enumeration — a malicious agent could plant a symlink pointing at another workspace or `/etc/`, and enumeration would leak filenames. Negative-space test in `test/kb-security.test.ts` must assert this.
+- Do NOT run `bun test` — project uses vitest (`apps/web-platform/package.json` `scripts.test`). `bun test` silently returns "no test files found" (learning 2026-04-11).
 
 ## Rollout
 

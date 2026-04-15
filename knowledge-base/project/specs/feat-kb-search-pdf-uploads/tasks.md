@@ -29,21 +29,31 @@ Tracks implementation of the fix for #2230 — uploaded PDFs (and other non-.md 
 
 ## 3. Core Implementation
 
-- [ ] 3.1 In `apps/web-platform/server/kb-reader.ts`, define module-scoped constants `CONTENT_SEARCHABLE` (`.md/.txt/.csv`) and `FILENAME_SEARCHABLE` (full upload set + `.md`).
+- [ ] 3.1 In `apps/web-platform/server/kb-reader.ts`, define module-scoped constants `CONTENT_SEARCHABLE` (`.md/.txt/.csv`) and `FILENAME_SEARCHABLE` (full upload set + `.md`). All entries lowercase.
 - [ ] 3.2 Rename `collectMdFiles` → `collectSearchableFiles`. Return `{ relativePath, ext }[]`. Gate on `FILENAME_SEARCHABLE`.
-- [ ] 3.3 Extend `SearchResult` interface with `kind: "content" | "filename"`.
-- [ ] 3.4 Add `matchFilename(basename, escapedQuery)` helper returning `SearchMatch[]` using `path.basename(relativePath)` as text; `line: 0`.
-- [ ] 3.5 Rewrite `searchKb` loop: run content-search only when `CONTENT_SEARCHABLE.has(ext)`, fall back to filename-match for other types or when content returned zero matches.
-- [ ] 3.6 Implement two-pass sort: content results first (by `matches.length` desc), then filename-only results (alphabetical by path).
-- [ ] 3.7 Keep `KB_MAX_FILE_SIZE` stat guard and `MAX_SEARCH_RESULTS = 100` cap unchanged.
-- [ ] 3.8 Preserve existing regex escape (`escapeRegex`) and per-callback RegExp instantiation (stateful `/g`).
-- [ ] 3.9 Run vitest — confirm GREEN on all new tests and all unchanged legacy tests.
+- [ ] 3.3 **Preserve `!entry.isSymbolicLink()` on BOTH isDirectory and isFile branches** (security — learning 2026-04-07-symlink-escape).
+- [ ] 3.4 **Lowercase the extname before set check**: `const ext = path.extname(entry.name).toLowerCase()`. `path.extname` preserves case; `Q1-Invoice.PDF` would drop otherwise.
+- [ ] 3.5 Extend `SearchResult` interface with `kind: "content" | "filename"`.
+- [ ] 3.6 Add `matchFilename(relativePath, escapedQuery)` helper returning `SearchMatch[]` using `path.basename(relativePath)` as text; `line: 0`.
+- [ ] 3.7 **Per-callback RegExp inside `matchFilename`** — do NOT hoist to module scope (learning 2026-04-07-promise-all-parallel-fs-io-patterns; `/gi` is stateful via `lastIndex`).
+- [ ] 3.8 Zero-width regex guard in `matchFilename`: `if (found.index === re.lastIndex) re.lastIndex++`.
+- [ ] 3.9 Rewrite `searchKb` loop: run content-search only when `CONTENT_SEARCHABLE.has(ext)`, fall back to filename-match for other types or when content returned zero matches.
+- [ ] 3.10 Implement two-pass sort: content results first (by `matches.length` desc), then filename-only results (alphabetical by path).
+- [ ] 3.11 Keep `KB_MAX_FILE_SIZE` stat guard and `MAX_SEARCH_RESULTS = 100` cap unchanged.
+- [ ] 3.12 Preserve existing regex escape (`escapeRegex`) and per-callback RegExp instantiation in the content loop.
+- [ ] 3.13 Run vitest — confirm GREEN on all new tests and all unchanged legacy tests.
 
 ## 4. UI Polish
 
 - [ ] 4.1 Edit `apps/web-platform/components/kb/search-overlay.tsx` `SnippetLine` to branch on `kind`. Render "Filename match" label when `kind === "filename"`.
 - [ ] 4.2 Pass `kind` into `SnippetLine` from `SearchResultCard`.
 - [ ] 4.3 Optional (skip if time-boxed): add file-type icon variant for PDF/image — reuse inline SVG patterns from `file-tree.tsx`. Fallback to existing document icon.
+
+## 4.5 Security Regression Test
+
+- [ ] 4.5.1 Add a negative-space test in `apps/web-platform/test/kb-security.test.ts` asserting `!entry.isSymbolicLink()` appears ≥ 2 times in kb-reader.ts (matches directory + file branches).
+- [ ] 4.5.2 Add a test asserting `path.extname(...).toLowerCase()` pattern is present in kb-reader.ts (case-sensitivity regression guard).
+- [ ] 4.5.3 Add an integration test in `kb-reader.test.ts` that creates a symlink to `/etc` under `kbRoot` and verifies `searchKb` does not leak `link-to-etc/*` paths. Wrap `fs.symlinkSync` in try/catch to skip gracefully on runners without symlink permission.
 
 ## 5. Regression Guard
 
