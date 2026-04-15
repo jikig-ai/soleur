@@ -135,6 +135,8 @@ export async function GET(
         "Content-Length": buffer.length.toString(),
         "X-Content-Type-Options": "nosniff",
         "Cache-Control": "private, max-age=60",
+        "Content-Security-Policy":
+          "default-src 'none'; style-src 'unsafe-inline'",
       },
     });
   } catch {
