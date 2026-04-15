@@ -286,7 +286,39 @@ Run the Task code-simplicity-reviewer() to see if we can simplify the code.
 
 ### 5. Findings Synthesis and GitHub Issue Creation
 
-<critical_requirement> ALL findings MUST be stored as GitHub issues via `gh issue create`. Create issues immediately after synthesis - do NOT present findings for user approval first. Every issue must include `--milestone` (AGENTS.md guardrails:require-milestone). </critical_requirement>
+<critical_requirement>
+Each finding's default action is to FIX IT INLINE on the PR branch: make the edit,
+commit with a message `review: <summary> (P<N>)`, and push. Apply to P1, P2, P3
+equally.
+
+Filing a GitHub issue instead of fixing is allowed ONLY when the finding meets
+one of these four scope-out criteria:
+
+  1. **cross-cutting-refactor** — fix requires touching files materially
+     unrelated to the PR's core change.
+  2. **contested-design** — multiple valid fix approaches; choice requires design
+     input that doesn't belong in this PR's scope.
+  3. **architectural-pivot** — fix would change a pattern used across the
+     codebase and deserves its own planning cycle.
+  4. **pre-existing-unrelated** — finding existed on `main` before this PR and
+     is not exacerbated by the PR's changes. (Does NOT block merge.)
+
+When filing:
+
+- The issue body MUST contain a `## Scope-Out Justification` section naming the
+    specific criterion and a 1-3 sentence rationale.
+- The issue MUST be created with `--label deferred-scope-out` and `--milestone`
+    (per guardrails:require-milestone).
+- The issue title MUST use a review-origin prefix (`review:`, `Code review #`,
+    `Refactor:`, `arch:`, `compound:`, `follow-through:`).
+
+Everything else (magic numbers, duplicated helpers, small refactors, missing
+tests for PR-introduced code, polish, naming, a11y on PR-introduced surfaces,
+performance issues introduced by the PR) MUST be fixed inline.
+
+Filing without scope-out justification will be caught by /ship Phase 5.5 Review-
+Findings Exit Gate and BLOCK merge. See rule rf-review-finding-default-fix-inline.
+</critical_requirement>
 
 #### Step 1: Synthesize All Findings
 
@@ -305,11 +337,11 @@ Remove duplicates, prioritize by severity and impact.
 
 </synthesis_tasks>
 
-**Coupling note:** Ship Phase 1.5, Phase 5.5, and pre-merge hook pre-merge:review-evidence-gate detect review evidence by searching for GitHub issues with the `code-review` label whose body contains `PR #<number>`. If the issue body template or label changes, update detection logic in `ship/SKILL.md` and `.claude/hooks/pre-merge-rebase.sh`.
+**Coupling note:** Ship Phase 1.5, Phase 5.5, and pre-merge hook pre-merge:review-evidence-gate detect review evidence by searching for GitHub issues with the `code-review` label whose body contains `PR #<number>`. If the issue body template or label changes, update detection logic in `ship/SKILL.md` and `.claude/hooks/pre-merge-rebase.sh`. Phase 5.5 Review-Findings Exit Gate (new in #2374) additionally detects open review-origin issues cross-referencing the PR by body regex `(Ref|Closes|Fixes) #<N>\b` without `deferred-scope-out` label; filing without scope-out justification will block merge.
 
 #### Step 2: Create GitHub Issues
 
-<critical_instruction> Create GitHub issues for ALL findings immediately using `gh issue create` with `--body-file`. Do NOT present findings one-by-one asking for user approval. Create all issues, then summarize results to user. </critical_instruction>
+<critical_instruction> Fix inline or, where a scope-out criterion applies, create a `deferred-scope-out` issue. Do NOT present findings for per-item user approval. </critical_instruction>
 
 **Read `plugins/soleur/skills/review/references/review-todo-structure.md` now** for the complete GitHub issue creation flow: label prerequisite, issue body template, `--body-file` pattern, label/milestone selection, duplicate detection, error handling, and batch strategy.
 
@@ -329,21 +361,27 @@ After creating all GitHub issues, present comprehensive summary:
 - **P2 IMPORTANT:** [count] - Should Fix
 - **P3 NICE-TO-HAVE:** [count] - Enhancements
 
-### Created GitHub Issues
+### Fixed Inline
 
 **P1 - Critical (BLOCKS MERGE):**
 
-- #NNN - review: {description}
-- #NNN - review: {description}
+- {description} — commit {sha}
+- {description} — commit {sha}
 
 **P2 - Important:**
 
-- #NNN - review: {description}
-- #NNN - review: {description}
+- {description} — commit {sha}
 
 **P3 - Nice-to-Have:**
 
-- #NNN - review: {description}
+- {description} — commit {sha}
+
+### Filed as Deferred Scope-Out
+
+**Scope-out criterion required per finding (cross-cutting-refactor | contested-design | architectural-pivot | pre-existing-unrelated):**
+
+- #NNN - review: {description} — criterion: {name} — rationale: {1-3 sentences}
+- #NNN - review: {description} — criterion: {name} — rationale: {1-3 sentences}
 
 **Failed (if any):**
 

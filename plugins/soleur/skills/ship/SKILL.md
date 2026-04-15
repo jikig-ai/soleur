@@ -281,6 +281,67 @@ Defense-in-depth check that review ran before shipping. Phase 1.5 catches this e
 
 **Interactive mode:** Display warning: "No code review was run before ship." Then invoke `skill: soleur:review`. After review completes, if findings include critical or high severity issues, resolve them before continuing to Phase 6.
 
+### Review-Findings Exit Gate (mandatory)
+
+Blocks merge when review findings from Phase 1.5 / Phase 5.5 Completion Gate
+remain unresolved — neither fixed inline nor formally scoped out with a
+`deferred-scope-out` label.
+
+**Trigger:** Always runs after the Code Review Completion Gate passes.
+
+**Detection:** Resolve the current PR number, then query for open, unresolved
+review-origin issues that cross-reference this PR via body regex
+`(Ref|Closes|Fixes) #<N>\b` — NOT `gh search`'s loose substring matcher
+(which would match any body containing "<N>" as a substring, including
+unrelated SHAs, timestamps, and inline numbers).
+
+```bash
+PR_NUMBER=$(gh pr view --json number --jq .number)
+UNRESOLVED=$(gh issue list \
+  --state open \
+  --search "-label:deferred-scope-out -label:synthetic-test" \
+  --json number,title,body \
+  --jq '[.[]
+           | select(.title | test("^(review:|Code review #|Refactor:|arch:|compound:|follow-through:)"; "i"))
+           | select((.body // "") | test("(^|\\s)(Ref|Closes|Fixes) #'"$PR_NUMBER"'(\\s|$|[^0-9])"))
+           | {number, title}]')
+COUNT=$(echo "$UNRESOLVED" | jq 'length')
+```
+
+Notes:
+
+- The regex anchors on keyword `Ref|Closes|Fixes` followed by `#<N>` followed
+  by a non-digit or end-of-string — prevents `#23750` matching when
+  `PR_NUMBER=2375`.
+- `synthetic-test` label excluded so Phase 3 validation test issues
+  self-exclude.
+- Perf contract: under 5s on a repo with <1000 open issues. If the GitHub
+  API returns 5xx, retry once with 2s backoff; on second failure, abort the
+  gate with the API error surfaced — do NOT silent-pass.
+
+**If COUNT == 0:** Pass silently.
+
+**If COUNT > 0:** Abort with a structured error listing each unresolved issue
+number + title. Same abort path in both headless and interactive modes (no
+`--force` flag, no interactive remediation menu). Message:
+
+```text
+Error: N unresolved review-origin issues reference this PR.
+Resolve each by:
+  (a) Fixing inline on the branch and closing the issue, OR
+  (b) Adding a ## Scope-Out Justification section to the issue body AND
+      applying the deferred-scope-out label.
+
+Issues:
+  - #A: <title>
+  - #B: <title>
+```
+
+**Why:** In #2374, 53 review-origin issues accumulated in 3 days because
+findings were filed but never resolved before ship. This gate enforces the
+fix-inline default at the merge boundary. See rule
+`rf-review-finding-default-fix-inline`.
+
 ### Pre-Ship Domain Review (conditional)
 
 Domain leaders are consulted at brainstorm time but not at ship time. The actual deliverables may have implications the brainstorm couldn't predict. This phase runs three conditional gates in parallel.
