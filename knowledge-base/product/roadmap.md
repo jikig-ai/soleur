@@ -344,6 +344,7 @@ Low-priority improvements deferred until after validation. Revisit when the plat
 | L5 | Heading hierarchy issues on homepage and getting-started (h3 should be h2) | P1 | [#2072](https://github.com/jikig-ai/soleur/issues/2072) | Not started |
 | L6 | html lang="en" vs en-US inconsistency (align to en-US) | P1 | [#2074](https://github.com/jikig-ai/soleur/issues/2074) | Not started |
 | L7 | All blog posts share same generic OG image (create unique per-post images) | P2 | [#2075](https://github.com/jikig-ai/soleur/issues/2075) | Not started |
+| L8 | KB chat sidebar (in-doc chat panel + selection-as-context, replaces "Chat about this" new-window) | P3 | [#2345](https://github.com/jikig-ai/soleur/issues/2345) | Not started |
 
 ---
 
