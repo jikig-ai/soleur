@@ -1,0 +1,196 @@
+# Recurring UX audit using the soleur:ux-audit skill.
+# Signs in as ux-audit-bot@jikigai.com, screenshots routes in route-list.yaml,
+# delegates analysis to ux-design-lead (audit mode), dedupes, and uploads
+# findings as a workflow artifact.
+#
+# Triggers:
+#   push (main)   — auto-run on merges that touch web-platform UI
+#   cron monthly  — safety net for quiet UI-change months
+#   manual        — founder-triggered (no inputs; always dry-run)
+#
+# Security: no untrusted event inputs are interpolated in run: blocks. Agent
+# output is written to files inside the action and referenced via env vars.
+#
+# Dry-run is PERMANENT. Per plan #2341 Phase 3 and calibration outcome in
+# #2378 (runs 24469469972 + 24472727054), the agent produces valid findings
+# but does not reliably match the founder's prior for any specific calibration
+# signal (e.g. collapsible-nav on /dashboard). Rather than risk the agent
+# filing noise directly into the tracker, every run writes findings to the
+# workflow artifact only; the founder reads the artifact and files issues
+# manually on judgment. To resume automatic filing, edit this file to set
+# UX_AUDIT_DRY_RUN=false and document the calibration that justifies it.
+#
+# To test manually: gh workflow run scheduled-ux-audit.yml
+
+name: "Scheduled: UX Audit"
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'apps/web-platform/app/**'
+      - 'apps/web-platform/components/**'
+  schedule:
+    - cron: '0 9 1 * *'
+  workflow_dispatch: {}
+
+concurrency:
+  group: schedule-ux-audit
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+  id-token: write
+
+jobs:
+  ux-audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Ensure labels exist
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh label create "ux-audit" \
+            --description "Issue filed by soleur:ux-audit agent loop" \
+            --color "D4C5F9" 2>/dev/null || true
+          gh label create "agent:ux-design-lead" \
+            --description "Agent-authored by ux-design-lead" \
+            --color "C2E0C6" 2>/dev/null || true
+          gh label create "domain/product" \
+            --description "Specs, UX design, business validation (CPO)" \
+            --color "5319E7" 2>/dev/null || true
+
+      - name: Install Doppler CLI
+        uses: DopplerHQ/cli-action@014df23b1329b615816a38eb5f473bb9000700b1 # v3
+
+      - name: Inject Doppler secrets (prd_scheduled)
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN_SCHEDULED }}
+        run: |
+          # Use parameter expansion (not IFS='=' read) so values ending in '='
+          # — e.g. base64-padded passwords from `openssl rand -base64 N` — keep
+          # their trailing char. IFS='=' strips trailing delimiters from the
+          # last field on `read`.
+          doppler secrets download --project soleur --config prd_scheduled --no-file --format env-no-quotes | while IFS= read -r line; do
+            key="${line%%=*}"
+            value="${line#*=}"
+            [ -z "$key" ] && continue
+            printf '::add-mask::%s\n' "$value"
+            printf '%s=%s\n' "$key" "$value" >> "$GITHUB_ENV"
+          done
+
+      - name: Inject Doppler secrets (prd — Supabase URL + keys)
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN_PRD }}
+        run: |
+          doppler secrets download --project soleur --config prd --no-file --format env-no-quotes \
+            --only-secrets SUPABASE_URL,SUPABASE_SERVICE_ROLE_KEY,NEXT_PUBLIC_SUPABASE_ANON_KEY,NEXT_PUBLIC_SITE_URL | while IFS= read -r line; do
+            key="${line%%=*}"
+            value="${line#*=}"
+            [ -z "$key" ] && continue
+            printf '::add-mask::%s\n' "$value"
+            printf '%s=%s\n' "$key" "$value" >> "$GITHUB_ENV"
+          done
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@3d267786b128fe76c2f16a390aa2448b815359f3 # v2.1.2
+        with:
+          bun-version-file: .bun-version
+
+      - name: Install Playwright Chromium (pinned to web-platform version)
+        run: |
+          PLAYWRIGHT_VERSION=$(node -e 'console.log(require("./apps/web-platform/package.json").devDependencies["@playwright/test"].replace(/^[^\d]+/,""))')
+          echo "Installing @playwright/test@$PLAYWRIGHT_VERSION"
+          npx --yes "@playwright/test@$PLAYWRIGHT_VERSION" install --with-deps chromium
+
+      - name: Prepare audit workspace
+        run: mkdir -p "${GITHUB_WORKSPACE}/tmp/ux-audit"
+
+      - name: Seed bot fixture (DB-only v1)
+        run: bun plugins/soleur/skills/ux-audit/scripts/bot-fixture.ts seed
+
+      - name: Sign in as bot (write storageState)
+        env:
+          UX_AUDIT_STORAGE_STATE: ${{ github.workspace }}/tmp/ux-audit/storage-state.json
+        run: bun plugins/soleur/skills/ux-audit/scripts/bot-signin.ts
+
+      - name: Run ux-audit skill
+        uses: anthropics/claude-code-action@df37d2f0760a4b5683a6e617c9325bc1a36443f6 # v1.0.75
+        env:
+          GH_TOKEN: ${{ github.token }}
+          UX_AUDIT_DRY_RUN: 'true'
+          UX_AUDIT_STORAGE_STATE: ${{ github.workspace }}/tmp/ux-audit/storage-state.json
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          plugin_marketplaces: 'https://github.com/jikig-ai/soleur.git'
+          plugins: 'soleur@soleur'
+          claude_args: '--model claude-opus-4-6 --max-turns 60 --allowedTools Bash,Read,Write,Edit,Glob,Grep,Task,mcp__playwright__browser_navigate,mcp__playwright__browser_take_screenshot,mcp__playwright__browser_resize,mcp__playwright__browser_close,mcp__playwright__browser_wait_for'
+          prompt: |
+            IMPORTANT: This is an automated CI workflow. Do NOT push directly
+            to main. Do NOT create commits. The skill only creates GitHub
+            issues when UX_AUDIT_DRY_RUN=false; in dry-run mode it writes
+            findings to stdout and to
+            ${GITHUB_WORKSPACE}/tmp/ux-audit/findings.json only.
+
+            MILESTONE RULE: Every gh issue create command MUST include
+            --milestone "Post-MVP / Later".
+
+            Run /soleur:ux-audit against the route list at
+            plugins/soleur/skills/ux-audit/references/route-list.yaml. The bot
+            fixture has already been seeded and storageState.json written to
+            ${UX_AUDIT_STORAGE_STATE}. Follow SKILL.md exactly.
+
+            Cap enforcement is mandatory:
+              CAP_OPEN_ISSUES = 20   (refuse to file when reached)
+              CAP_PER_RUN     = 5    (severity-ranked top-N filed per run)
+
+            Injection safety: all finding fields (title, body, hash) must be
+            written to files or env vars before `gh issue create` — never
+            interpolate agent output into bash `run:` commands directly.
+
+      - name: Upload findings JSON artifact
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ux-audit-findings
+          path: ${{ github.workspace }}/tmp/ux-audit/findings.json
+          if-no-files-found: ignore
+          retention-days: 30
+
+      - name: Reset bot fixture
+        if: always()
+        run: bun plugins/soleur/skills/ux-audit/scripts/bot-fixture.ts reset || true
+
+      - name: Construct failure email body
+        if: failure()
+        id: failbody
+        env:
+          SERVER_URL: ${{ github.server_url }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+          EVENT: ${{ github.event_name }}
+          DRY_RUN: 'true'
+        run: |
+          {
+            echo 'body<<EOF_BODY'
+            echo "<p><strong>Scheduled: UX Audit</strong> failed.</p>"
+            printf '<p>Run: <a href="%s/%s/actions/runs/%s">#%s</a></p>\n' \
+              "$SERVER_URL" "$REPO" "$RUN_ID" "$RUN_ID"
+            printf '<p>Trigger: <code>%s</code>  &middot;  Dry-run: <code>%s</code></p>\n' \
+              "$EVENT" "$DRY_RUN"
+            echo 'EOF_BODY'
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Email notification (failure)
+        if: failure()
+        uses: ./.github/actions/notify-ops-email
+        with:
+          subject: '[FAIL] Scheduled: UX Audit workflow failed'
+          body: ${{ steps.failbody.outputs.body }}
+          resend-api-key: ${{ secrets.RESEND_API_KEY }}

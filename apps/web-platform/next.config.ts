@@ -4,6 +4,11 @@ import { buildSecurityHeaders } from "./lib/security-headers";
 
 const securityHeaders = buildSecurityHeaders();
 
+// Dev server may fall back to an alternate port (e.g. 3001) when 3000 is
+// taken by a concurrent worktree. Track the actual bound port so Server
+// Actions accept the origin instead of returning 500.
+const devPort = process.env.PORT || "3000";
+
 const nextConfig: NextConfig = {
   // Custom server handles HTTP — disable standalone output
   output: undefined,
@@ -14,7 +19,11 @@ const nextConfig: NextConfig = {
     serverActions: {
       allowedOrigins:
         process.env.NODE_ENV === "development"
-          ? ["app.soleur.ai", "localhost:3000"]
+          ? [
+              "app.soleur.ai",
+              `localhost:${devPort}`,
+              `127.0.0.1:${devPort}`,
+            ]
           : ["app.soleur.ai"],
     },
     // Next.js clones the request body when middleware modifies headers.

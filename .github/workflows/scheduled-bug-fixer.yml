@@ -102,6 +102,7 @@ jobs:
                 ($ENV.OPEN_FIXES | split(",") | map(select(length > 0)) | map(tonumber? // empty)) as $skip_nums |
                 [.[] | select(
                   (.labels | map(.name) | index("bot-fix/attempted") | not) and
+                  (.labels | map(.name) | index("ux-audit") | not) and
                   (.number | IN($skip_nums[]) | not)
                 )] | sort_by(.createdAt) | .[0].number // empty')
 

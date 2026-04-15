@@ -1,0 +1,86 @@
+# ux-audit route list
+#
+# Each route is screenshotted at viewport.w × viewport.h, then delegated to
+# ux-design-lead (audit mode) for 5-category rubric analysis.
+#
+# Fields:
+#   path             URL path, relative to NEXT_PUBLIC_SITE_URL
+#   auth             "anonymous" (no session) | "bot" (authenticated as ux-audit-bot@jikigai.com)
+#   fixture_prereqs  required state before navigating — if unmet, route is skipped with a logged reason
+#                    (bot-fixture.ts seed idempotently satisfies: tcs_accepted, billing_active, chat_conversations)
+#                    "kb_workspace_deferred" means the route will render empty KB until #2351 lands
+#   viewport         fixed capture size; ICP is solo founder on 1440×900 laptop (TR7)
+#
+# Order matters. Routes are audited top-to-bottom. Bot-authenticated dashboard
+# surfaces are listed FIRST because they are the primary ICP surface — the
+# anonymous funnel (/, /login, /signup) is a one-time experience, while the
+# dashboard is where founders spend every working session. When severity-rank
+# + CAP_PER_RUN trimming drops findings, anonymous-surface findings should be
+# the ones to drop, not dashboard findings. Ref #2378.
+
+routes:
+  # --- Authenticated core (primary ICP surface — audit first) ---
+  - path: /dashboard
+    auth: bot
+    fixture_prereqs: [tcs_accepted, billing_active]
+    viewport: {w: 1440, h: 900}
+
+  - path: /dashboard/kb
+    auth: bot
+    fixture_prereqs: [tcs_accepted, billing_active, kb_workspace_deferred]
+    viewport: {w: 1440, h: 900}
+
+  - path: /dashboard/chat/new
+    auth: bot
+    fixture_prereqs: [tcs_accepted, billing_active]
+    viewport: {w: 1440, h: 900}
+
+  # --- Settings ---
+  - path: /dashboard/settings
+    auth: bot
+    fixture_prereqs: [tcs_accepted, billing_active]
+    viewport: {w: 1440, h: 900}
+
+  - path: /dashboard/settings/services
+    auth: bot
+    fixture_prereqs: [tcs_accepted, billing_active]
+    viewport: {w: 1440, h: 900}
+
+  - path: /dashboard/settings/billing
+    auth: bot
+    fixture_prereqs: [tcs_accepted, billing_active]
+    viewport: {w: 1440, h: 900}
+
+  - path: /dashboard/settings/team
+    auth: bot
+    fixture_prereqs: [tcs_accepted, billing_active]
+    viewport: {w: 1440, h: 900}
+
+  # --- Terms acceptance (bot-authenticated but pre-T&C state is transient; captured for copy review) ---
+  - path: /accept-terms
+    auth: bot
+    fixture_prereqs: []
+    viewport: {w: 1440, h: 900}
+
+  # --- Anonymous surfaces (secondary — one-time funnel pages) ---
+  - path: /
+    auth: anonymous
+    fixture_prereqs: []
+    viewport: {w: 1440, h: 900}
+
+  - path: /login
+    auth: anonymous
+    fixture_prereqs: []
+    viewport: {w: 1440, h: 900}
+
+  - path: /signup
+    auth: anonymous
+    fixture_prereqs: []
+    viewport: {w: 1440, h: 900}
+
+# Routes deliberately excluded:
+#   /dashboard/chat/[conversationId]     dynamic param; covered by /dashboard/chat/new render
+#   /dashboard/kb/[...path]              dynamic catch-all; covered by /dashboard/kb root
+#   /shared/[token]                      requires a valid share token
+#   /dashboard/admin/analytics           admin-only role gate; not bot-accessible
+#   /setup-key, /connect-repo            onboarding-only; bot fixture skips these flows

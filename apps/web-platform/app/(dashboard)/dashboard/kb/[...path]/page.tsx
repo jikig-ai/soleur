@@ -4,7 +4,7 @@ import { useState, useEffect, useRef, use, useContext } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { MarkdownRenderer } from "@/components/ui/markdown-renderer";
-import { KbBreadcrumb } from "@/components/kb/kb-breadcrumb";
+import { KbBreadcrumb, safeDecode } from "@/components/kb/kb-breadcrumb";
 import { SharePopover } from "@/components/kb/share-popover";
 import { FilePreview } from "@/components/kb/file-preview";
 import { KbChatTrigger } from "@/components/kb/kb-chat-trigger";
@@ -105,6 +105,10 @@ export default function KbContentPage({
 
   // Non-markdown files get FilePreview
   if (!isMarkdown) {
+    const rawFilename = pathSegments[pathSegments.length - 1] ?? joinedPath;
+    const filename = safeDecode(rawFilename);
+    const contentUrl = `/api/kb/content/${joinedPath}`;
+
     return (
       <div className="flex h-full flex-col">
         <header className="flex shrink-0 items-center justify-between border-b border-neutral-800 px-4 py-3 md:px-6">
@@ -121,12 +125,25 @@ export default function KbContentPage({
             <KbBreadcrumb path={joinedPath} />
           </div>
           <div className="flex items-center gap-2">
+            <a
+              href={contentUrl}
+              download={filename}
+              aria-label={`Download ${filename}`}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-neutral-700 px-3 py-1.5 text-xs font-medium text-neutral-300 transition-colors hover:border-neutral-500 hover:text-white"
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="shrink-0">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" strokeLinecap="round" strokeLinejoin="round" />
+                <polyline points="7 10 12 15 17 10" strokeLinecap="round" strokeLinejoin="round" />
+                <line x1="12" y1="15" x2="12" y2="3" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+              Download
+            </a>
             <SharePopover documentPath={joinedPath} />
             <KbChatTrigger fallbackHref={chatUrl} />
           </div>
         </header>
         <div className="flex-1 overflow-y-auto">
-          <FilePreview path={joinedPath} extension={extension} />
+          <FilePreview path={joinedPath} extension={extension} showDownload={false} />
         </div>
       </div>
     );
