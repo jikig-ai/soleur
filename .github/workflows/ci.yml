@@ -26,6 +26,22 @@ jobs:
       - name: Lint bot synthetic completeness
         run: bash scripts/lint-bot-synthetic-completeness.sh
 
+  rule-metrics-shape:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - name: Validate rule-metrics.json shape
+        env:
+          METRICS_FILE: knowledge-base/project/rule-metrics.json
+        run: |
+          if [[ ! -f "$METRICS_FILE" ]]; then
+            echo "No $METRICS_FILE yet — skipping shape check."
+            exit 0
+          fi
+          jq empty "$METRICS_FILE"
+          jq -e 'has("generated_at") and has("rules") and has("summary")' "$METRICS_FILE" >/dev/null
+          jq -e '.summary | has("total_rules_tagged") and has("rules_unused_over_8w") and has("rules_bypassed_over_baseline") and has("orphan_rule_ids")' "$METRICS_FILE" >/dev/null
+
   lockfile-sync:
     runs-on: ubuntu-latest
     steps:

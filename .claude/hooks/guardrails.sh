@@ -15,8 +15,20 @@
 
 set -euo pipefail
 
+# shellcheck source=lib/incidents.sh
+source "$(dirname "${BASH_SOURCE[0]}")/lib/incidents.sh"
+
 INPUT=$(cat)
 COMMAND=$(echo "$INPUT" | jq -r '.tool_input.command // ""')
+TOOL_NAME=$(echo "$INPUT" | jq -r '.tool_name // ""' 2>/dev/null || echo "")
+
+# Bypass preflight — records (does NOT block) when a known bypass flag is used.
+# v1 scope: --no-verify, LEFTHOOK=0. Extend detect_bypass (lib/incidents.sh)
+# once data justifies broader detection.
+_bypass_rid=$(detect_bypass "$TOOL_NAME" "$COMMAND")
+if [[ -n "$_bypass_rid" ]]; then
+  emit_incident "$_bypass_rid" "bypass" "${COMMAND:0:50}" "$COMMAND"
+fi
 
 # guardrails:block-commit-on-main — Block git commit on main branch
 # Match git commit at start of string OR after chain operators (&&, ||, ;)
@@ -44,6 +56,7 @@ if echo "$COMMAND" | grep -qE '(^|&&|\|\||;)\s*git\s+commit'; then
     fi
   fi
   if [ "$BRANCH" = "main" ] || [ "$BRANCH" = "master" ]; then
+    emit_incident "guardrails-block-commit-on-main" "deny" "Never allow agents to work directly on default branch" "$COMMAND"
     jq -n '{
       hookSpecificOutput: {
         permissionDecision: "deny",
@@ -59,6 +72,7 @@ fi
 # Uses a single pattern to avoid false positives when .worktrees/ appears in
 # unrelated text (e.g., inside a gh issue comment body or heredoc).
 if echo "$COMMAND" | grep -qE 'rm\s+(-[a-zA-Z]*r[a-zA-Z]*f[a-zA-Z]*|-[a-zA-Z]*f[a-zA-Z]*r[a-zA-Z]*)\s+\S*\.worktrees/'; then
+  emit_incident "guardrails-block-rm-rf-worktrees" "deny" "Never rm -rf on a worktree path" "$COMMAND"
   jq -n '{
     hookSpecificOutput: {
       permissionDecision: "deny",
@@ -72,6 +86,7 @@ fi
 if echo "$COMMAND" | grep -qE 'gh\s+pr\s+merge.*--delete-branch'; then
   WORKTREE_COUNT=$(git worktree list 2>/dev/null | wc -l)
   if [ "$WORKTREE_COUNT" -gt 1 ]; then
+    emit_incident "guardrails-block-delete-branch" "deny" "Never use --delete-branch with gh pr merge" "$COMMAND"
     jq -n '{
       hookSpecificOutput: {
         permissionDecision: "deny",
@@ -106,6 +121,7 @@ if echo "$COMMAND" | grep -qE '(^|&&|\|\||;)\s*git\s+(-C\s+\S+\s+)?(commit|merge
     STAGED_DIFF=$(git diff --cached 2>/dev/null || true)
   fi
   if echo "$STAGED_DIFF" | grep -qE '^\+(<{7}|={7}|>{7})'; then
+    emit_incident "guardrails-block-conflict-markers" "deny" "Resolve conflicts before committing" "$COMMAND"
     jq -n '{
       hookSpecificOutput: {
         permissionDecision: "deny",
@@ -119,6 +135,7 @@ fi
 # guardrails:require-milestone — Block gh issue create without --milestone
 if echo "$COMMAND" | grep -qE '(^|&&|\|\||;)\s*gh\s+issue\s+create'; then
   if ! echo "$COMMAND" | grep -qF -- '--milestone'; then
+    emit_incident "guardrails-require-milestone" "deny" "gh issue create must include --milestone" "$COMMAND"
     jq -n '{
       hookSpecificOutput: {
         permissionDecision: "deny",
@@ -146,6 +163,7 @@ if echo "$COMMAND" | grep -qE '(^|&&|\|\||;)\s*git\s+stash'; then
   fi
   RESOLVE_DIR="${STASH_GUARD_DIR:-.}"
   if echo "$(cd "$RESOLVE_DIR" 2>/dev/null && pwd)" | grep -qF '.worktrees'; then
+    emit_incident "hr-never-git-stash-in-worktrees" "deny" "Never git stash in worktrees" "$COMMAND"
     jq -n '{
       hookSpecificOutput: {
         permissionDecision: "deny",

@@ -1,0 +1,57 @@
+# Weekly aggregator for AGENTS.md rule utility metrics.
+# Rolls up .claude/.rule-incidents.jsonl + AGENTS.md into
+# knowledge-base/project/rule-metrics.json and commits when materially changed.
+#
+# See knowledge-base/project/plans/2026-04-14-feat-rule-utility-scoring-plan.md
+# Related: #2210
+#
+# Security: No untrusted event inputs used in run: commands. Uses only
+# GITHUB_TOKEN and repo-local files.
+
+name: "Scheduled: Rule Metrics Aggregate"
+
+on:
+  schedule:
+    - cron: '0 0 * * 0'   # Sunday 00:00 UTC
+  workflow_dispatch:
+
+concurrency:
+  group: scheduled-rule-metrics-aggregate
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  aggregate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Run aggregator
+        env:
+          AGGREGATOR_ROTATE: '1'
+        run: bash scripts/rule-metrics-aggregate.sh
+
+      - name: Commit rule-metrics.json if changed
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add knowledge-base/project/rule-metrics.json
+          if ! git diff --cached --quiet; then
+            git commit -m "chore(rule-metrics): weekly aggregate"
+            git push
+          else
+            echo "No material changes — skipping commit."
+          fi
+
+      - name: Email notification (failure)
+        if: failure()
+        uses: ./.github/actions/notify-ops-email
+        with:
+          subject: '[FAIL] Scheduled: Rule Metrics Aggregate failed'
+          body: '<p><strong>Scheduled: Rule Metrics Aggregate</strong> failed.</p><p><a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}">View run</a></p>'
+          resend-api-key: ${{ secrets.RESEND_API_KEY }}

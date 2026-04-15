@@ -124,3 +124,18 @@ jobs:
             Then output your conclusion:
             - If all guards PASS: "CONCLUSION: All PreToolUse hooks fire in claude-code-action."
             - If any guard FAIL: "CONCLUSION: Some hooks do NOT fire. Fallback guards needed."
+
+      - name: Assert rule-incident telemetry emitted
+        if: always()
+        env:
+          INCIDENTS_FILE: .claude/.rule-incidents.jsonl
+        run: |
+          if [[ ! -s "$INCIDENTS_FILE" ]]; then
+            echo "::warning::rule-incidents jsonl was not written; telemetry may be broken"
+            exit 0
+          fi
+          echo "=== rule-incidents.jsonl ==="
+          cat "$INCIDENTS_FILE"
+          echo "=== validation ==="
+          jq empty "$INCIDENTS_FILE" || { echo "::error::jsonl is malformed"; exit 1; }
+          echo "jsonl is valid; $(wc -l < "$INCIDENTS_FILE") events recorded."

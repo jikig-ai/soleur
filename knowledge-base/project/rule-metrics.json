@@ -1,0 +1,761 @@
+{
+  "generated_at": "2026-04-15T08:32:59Z",
+  "rules": [
+    {
+      "id": "cm-challenge-reasoning-instead-of",
+      "section": "Communication",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "prevented_errors": 0,
+      "last_hit": null,
+      "first_seen": null,
+      "rule_text_prefix": "Challenge reasoning instead of validating. No flat"
+    },
+    {
+      "id": "cm-delegate-verbose-exploration-3-file",
+      "section": "Communication",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "prevented_errors": 0,
+      "last_hit": null,
+      "first_seen": null,
+      "rule_text_prefix": "Delegate verbose exploration (3+ file reads, resea"
+    },
+    {
+      "id": "cm-when-proposing-to-clear-context-or",
+      "section": "Communication",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "prevented_errors": 0,
+      "last_hit": null,
+      "first_seen": null,
+      "rule_text_prefix": "When proposing to clear context or resume from a f"
+    },
+    {
+      "id": "cq-after-completing-a-playwright-task-call",
+      "section": "Code Quality",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "prevented_errors": 0,
+      "last_hit": null,
+      "first_seen": null,
+      "rule_text_prefix": "After completing a Playwright task, call `browser_"
+    },
+    {
+      "id": "cq-always-run-npx-markdownlint-cli2-fix-on",
+      "section": "Code Quality",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "prevented_errors": 0,
+      "last_hit": null,
+      "first_seen": null,
+      "rule_text_prefix": "Always run `npx markdownlint-cli2 --fix` on change"
+    },
+    {
+      "id": "cq-before-calling-mcp-pencil-open-document",
+      "section": "Code Quality",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "prevented_errors": 0,
+      "last_hit": null,
+      "first_seen": null,
+      "rule_text_prefix": "Before calling `mcp__pencil__open_document`, ensur"
+    },
+    {
+      "id": "cq-before-pushing-package-json-changes",
+      "section": "Code Quality",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "prevented_errors": 0,
+      "last_hit": null,
+      "first_seen": null,
+      "rule_text_prefix": "Before pushing `package.json` changes, verify deps"
+    },
+    {
+      "id": "cq-ci-steps-polling-json-endpoints-under",
+      "section": "Code Quality",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "prevented_errors": 0,
+      "last_hit": null,
+      "first_seen": null,
+      "rule_text_prefix": "CI steps polling JSON endpoints under `bash -e` mu"
+    },
+    {
+      "id": "cq-deploy-webhook-observability-debug",
+      "section": "Code Quality",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "prevented_errors": 0,
+      "last_hit": null,
+      "first_seen": null,
+      "rule_text_prefix": "For deploy webhook observability debugging, fetch "
+    },
+    {
+      "id": "cq-doppler-service-tokens-are-per-config",
+      "section": "Code Quality",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "prevented_errors": 0,
+      "last_hit": null,
+      "first_seen": null,
+      "rule_text_prefix": "Doppler service tokens are per-config — use conf"
+    },
+    {
+      "id": "cq-ensure-dependencies-are-installed-at-the",
+      "section": "Code Quality",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "prevented_errors": 0,
+      "last_hit": null,
+      "first_seen": null,
+      "rule_text_prefix": "Ensure dependencies are installed at the correct p"
+    },
+    {
+      "id": "cq-for-production-debugging-use",
+      "section": "Code Quality",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "prevented_errors": 0,
+      "last_hit": null,
+      "first_seen": null,
+      "rule_text_prefix": "For production debugging, use observability tools "
+    },
+    {
+      "id": "cq-in-worktrees-run-vitest-via-node-node",
+      "section": "Code Quality",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "prevented_errors": 0,
+      "last_hit": null,
+      "first_seen": null,
+      "rule_text_prefix": "In worktrees, run vitest via `node node_modules/vi"
+    },
+    {
+      "id": "cq-never-skip-hooks",
+      "section": "Code Quality",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "prevented_errors": 0,
+      "last_hit": null,
+      "first_seen": null,
+      "rule_text_prefix": "Never skip pre-commit or pre-push hooks with `--no"
+    },
+    {
+      "id": "cq-playwright-mcp-uses-isolated-mode-mcp",
+      "section": "Code Quality",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "prevented_errors": 0,
+      "last_hit": null,
+      "first_seen": null,
+      "rule_text_prefix": "Playwright MCP uses `--isolated` mode (`.mcp.json`"
+    },
+    {
+      "id": "cq-rule-ids-are-immutable",
+      "section": "Code Quality",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "prevented_errors": 0,
+      "last_hit": null,
+      "first_seen": null,
+      "rule_text_prefix": "Rule IDs (``) on AGENTS.md rules are immutable onc"
+    },
+    {
+      "id": "cq-when-lefthook-hangs-in-a-worktree-60s",
+      "section": "Code Quality",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "prevented_errors": 0,
+      "last_hit": null,
+      "first_seen": null,
+      "rule_text_prefix": "When lefthook hangs in a worktree (>60s), kill (`p"
+    },
+    {
+      "id": "cq-when-running-terraform-commands-locally",
+      "section": "Code Quality",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "prevented_errors": 0,
+      "last_hit": null,
+      "first_seen": null,
+      "rule_text_prefix": "When running terraform commands locally with Doppl"
+    },
+    {
+      "id": "cq-write-failing-tests-before",
+      "section": "Code Quality",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "prevented_errors": 0,
+      "last_hit": null,
+      "first_seen": null,
+      "rule_text_prefix": "Write failing tests BEFORE implementation code whe"
+    },
+    {
+      "id": "hr-all-infrastructure-provisioning-servers",
+      "section": "Hard Rules",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "prevented_errors": 0,
+      "last_hit": null,
+      "first_seen": null,
+      "rule_text_prefix": "All infrastructure provisioning (servers, volumes,"
+    },
+    {
+      "id": "hr-always-read-a-file-before-editing-it",
+      "section": "Hard Rules",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "prevented_errors": 0,
+      "last_hit": null,
+      "first_seen": null,
+      "rule_text_prefix": "Always read a file before editing it. The Edit too"
+    },
+    {
+      "id": "hr-before-asserting-github-issue-status",
+      "section": "Hard Rules",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "prevented_errors": 0,
+      "last_hit": null,
+      "first_seen": null,
+      "rule_text_prefix": "Before asserting GitHub issue status, verify via `"
+    },
+    {
+      "id": "hr-before-running-git-commands-on-a",
+      "section": "Hard Rules",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "prevented_errors": 0,
+      "last_hit": null,
+      "first_seen": null,
+      "rule_text_prefix": "Before running git commands on a directory (e.g., "
+    },
+    {
+      "id": "hr-before-shipping-ship-phase-5-5-runs",
+      "section": "Hard Rules",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "prevented_errors": 0,
+      "last_hit": null,
+      "first_seen": null,
+      "rule_text_prefix": "Before shipping, `/ship` Phase 5.5 runs conditiona"
+    },
+    {
+      "id": "hr-every-new-terraform-root-must-include-an",
+      "section": "Hard Rules",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "prevented_errors": 0,
+      "last_hit": null,
+      "first_seen": null,
+      "rule_text_prefix": "Every new Terraform root must include an R2 remote"
+    },
+    {
+      "id": "hr-exhaust-all-automated-options-before",
+      "section": "Hard Rules",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "prevented_errors": 0,
+      "last_hit": null,
+      "first_seen": null,
+      "rule_text_prefix": "Exhaust all automated options before suggesting ma"
+    },
+    {
+      "id": "hr-github-actions-workflow-notifications",
+      "section": "Hard Rules",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "prevented_errors": 0,
+      "last_hit": null,
+      "first_seen": null,
+      "rule_text_prefix": "GitHub Actions workflow notifications must use ema"
+    },
+    {
+      "id": "hr-github-api-endpoints-with-enum",
+      "section": "Hard Rules",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "prevented_errors": 0,
+      "last_hit": null,
+      "first_seen": null,
+      "rule_text_prefix": "GitHub API endpoints with enum parameters (e.g., `"
+    },
+    {
+      "id": "hr-in-github-actions-run-blocks-never-use",
+      "section": "Hard Rules",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "prevented_errors": 0,
+      "last_hit": null,
+      "first_seen": null,
+      "rule_text_prefix": "In GitHub Actions `run:` blocks, never use heredoc"
+    },
+    {
+      "id": "hr-mcp-tools-playwright-etc-resolve-paths",
+      "section": "Hard Rules",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "prevented_errors": 0,
+      "last_hit": null,
+      "first_seen": null,
+      "rule_text_prefix": "MCP tools (Playwright, etc.) resolve paths from th"
+    },
+    {
+      "id": "hr-never-git-stash-in-worktrees",
+      "section": "Hard Rules",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "prevented_errors": 0,
+      "last_hit": null,
+      "first_seen": null,
+      "rule_text_prefix": "Never `git stash` in worktrees [hook-enforced: gua"
+    },
+    {
+      "id": "hr-never-label-any-step-as-manual-without",
+      "section": "Hard Rules",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "prevented_errors": 0,
+      "last_hit": null,
+      "first_seen": null,
+      "rule_text_prefix": "Never label any step as \"manual\" without first att"
+    },
+    {
+      "id": "hr-never-run-commands-with-unbounded-output",
+      "section": "Hard Rules",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "prevented_errors": 0,
+      "last_hit": null,
+      "first_seen": null,
+      "rule_text_prefix": "Never run commands with unbounded output in subage"
+    },
+    {
+      "id": "hr-never-use-sleep-2-seconds-in-foreground",
+      "section": "Hard Rules",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "prevented_errors": 0,
+      "last_hit": null,
+      "first_seen": null,
+      "rule_text_prefix": "Never use `sleep` >= 2 seconds in foreground Bash "
+    },
+    {
+      "id": "hr-never-write-to-claude-code-memory-claude",
+      "section": "Hard Rules",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "prevented_errors": 0,
+      "last_hit": null,
+      "first_seen": null,
+      "rule_text_prefix": "Never write to Claude Code memory (`~/.claude/proj"
+    },
+    {
+      "id": "hr-new-skills-agents-or-user-facing",
+      "section": "Hard Rules",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "prevented_errors": 0,
+      "last_hit": null,
+      "first_seen": null,
+      "rule_text_prefix": "New skills, agents, or user-facing capabilities mu"
+    },
+    {
+      "id": "hr-the-bash-tool-runs-in-a-non-interactive",
+      "section": "Hard Rules",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "prevented_errors": 0,
+      "last_hit": null,
+      "first_seen": null,
+      "rule_text_prefix": "The Bash tool runs in a non-interactive shell with"
+    },
+    {
+      "id": "hr-the-host-terminal-is-warp",
+      "section": "Hard Rules",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "prevented_errors": 0,
+      "last_hit": null,
+      "first_seen": null,
+      "rule_text_prefix": "The host terminal is Warp. Do not attempt automate"
+    },
+    {
+      "id": "hr-when-a-command-exits-non-zero-or-prints",
+      "section": "Hard Rules",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "prevented_errors": 0,
+      "last_hit": null,
+      "first_seen": null,
+      "rule_text_prefix": "When a command exits non-zero or prints a warning,"
+    },
+    {
+      "id": "hr-when-a-plan-specifies-relative-paths-e-g",
+      "section": "Hard Rules",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "prevented_errors": 0,
+      "last_hit": null,
+      "first_seen": null,
+      "rule_text_prefix": "When a plan specifies relative paths (e.g., `sourc"
+    },
+    {
+      "id": "hr-when-a-workflow-concludes-with-an",
+      "section": "Hard Rules",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "prevented_errors": 0,
+      "last_hit": null,
+      "first_seen": null,
+      "rule_text_prefix": "When a workflow concludes with an actionable next "
+    },
+    {
+      "id": "hr-when-in-a-worktree-never-read-from-bare",
+      "section": "Hard Rules",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "prevented_errors": 0,
+      "last_hit": null,
+      "first_seen": null,
+      "rule_text_prefix": "When in a worktree, never read from bare repo path"
+    },
+    {
+      "id": "hr-when-triaging-a-batch-of-issues-never",
+      "section": "Hard Rules",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "prevented_errors": 0,
+      "last_hit": null,
+      "first_seen": null,
+      "rule_text_prefix": "When triaging a batch of issues, never defer an is"
+    },
+    {
+      "id": "pdr-do-not-route-on-trivial-messages-yes",
+      "section": "Passive Domain Routing",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "prevented_errors": 0,
+      "last_hit": null,
+      "first_seen": null,
+      "rule_text_prefix": "Do not route on trivial messages (\"yes\", \"continue"
+    },
+    {
+      "id": "pdr-when-a-user-message-contains-a-clear",
+      "section": "Passive Domain Routing",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "prevented_errors": 0,
+      "last_hit": null,
+      "first_seen": null,
+      "rule_text_prefix": "When a user message contains a clear, actionable d"
+    },
+    {
+      "id": "rf-after-merging-read-files-from-the-merged",
+      "section": "Review & Feedback",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "prevented_errors": 0,
+      "last_hit": null,
+      "first_seen": null,
+      "rule_text_prefix": "After merging, read files from the merged branch ("
+    },
+    {
+      "id": "rf-before-shipping-verify-1-review-comments",
+      "section": "Review & Feedback",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "prevented_errors": 0,
+      "last_hit": null,
+      "first_seen": null,
+      "rule_text_prefix": "Before shipping, verify: (1) review comments resol"
+    },
+    {
+      "id": "rf-before-spawning-review-agents-push-the",
+      "section": "Review & Feedback",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "prevented_errors": 0,
+      "last_hit": null,
+      "first_seen": null,
+      "rule_text_prefix": "Before spawning review agents, push the branch to "
+    },
+    {
+      "id": "rf-never-skip-qa-review-before-merging",
+      "section": "Review & Feedback",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "prevented_errors": 0,
+      "last_hit": null,
+      "first_seen": null,
+      "rule_text_prefix": "Never skip QA/review before merging. Full pipeline"
+    },
+    {
+      "id": "rf-when-a-reviewer-or-user-says-to-keep-a",
+      "section": "Review & Feedback",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "prevented_errors": 0,
+      "last_hit": null,
+      "first_seen": null,
+      "rule_text_prefix": "When a reviewer or user says to keep a feature/pha"
+    },
+    {
+      "id": "wg-after-a-pr-merges-to-main-verify-all",
+      "section": "Workflow Gates",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "prevented_errors": 0,
+      "last_hit": null,
+      "first_seen": null,
+      "rule_text_prefix": "After a PR merges to main, verify all release/depl"
+    },
+    {
+      "id": "wg-after-marking-a-pr-ready-run-gh-pr-merge",
+      "section": "Workflow Gates",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "prevented_errors": 0,
+      "last_hit": null,
+      "first_seen": null,
+      "rule_text_prefix": "After marking a PR ready, run `gh pr merge <number"
+    },
+    {
+      "id": "wg-after-merging-a-pr-that-adds-or-modifies",
+      "section": "Workflow Gates",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "prevented_errors": 0,
+      "last_hit": null,
+      "first_seen": null,
+      "rule_text_prefix": "After merging a PR that adds or modifies a GitHub "
+    },
+    {
+      "id": "wg-at-session-start-after-cleanup-merged",
+      "section": "Workflow Gates",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "prevented_errors": 0,
+      "last_hit": null,
+      "first_seen": null,
+      "rule_text_prefix": "At session start (after `cleanup-merged` has fetch"
+    },
+    {
+      "id": "wg-at-session-start-run-bash-plugins-soleur",
+      "section": "Workflow Gates",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "prevented_errors": 0,
+      "last_hit": null,
+      "first_seen": null,
+      "rule_text_prefix": "At session start, run `bash ./plugins/soleur/skill"
+    },
+    {
+      "id": "wg-before-every-commit-run-compound-skill",
+      "section": "Workflow Gates",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "prevented_errors": 0,
+      "last_hit": null,
+      "first_seen": null,
+      "rule_text_prefix": "Before every commit, run compound (`skill: soleur:"
+    },
+    {
+      "id": "wg-every-feature-listed-in-a-roadmap-phase",
+      "section": "Workflow Gates",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "prevented_errors": 0,
+      "last_hit": null,
+      "first_seen": null,
+      "rule_text_prefix": "Every feature listed in a roadmap phase table MUST"
+    },
+    {
+      "id": "wg-every-session-error-must-produce-either",
+      "section": "Workflow Gates",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "prevented_errors": 0,
+      "last_hit": null,
+      "first_seen": null,
+      "rule_text_prefix": "Every session error MUST produce either an AGENTS."
+    },
+    {
+      "id": "wg-for-user-facing-pages-with-a-product-ux",
+      "section": "Workflow Gates",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "prevented_errors": 0,
+      "last_hit": null,
+      "first_seen": null,
+      "rule_text_prefix": "For user-facing pages with a Product/UX Gate, spec"
+    },
+    {
+      "id": "wg-never-bump-version-files-in-feature",
+      "section": "Workflow Gates",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "prevented_errors": 0,
+      "last_hit": null,
+      "first_seen": null,
+      "rule_text_prefix": "Never bump version files in feature branches. Vers"
+    },
+    {
+      "id": "wg-use-closes-n-in-pr-body-not-title-to",
+      "section": "Workflow Gates",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "prevented_errors": 0,
+      "last_hit": null,
+      "first_seen": null,
+      "rule_text_prefix": "Use `Closes #N` in PR **body** (not title) to auto"
+    },
+    {
+      "id": "wg-use-ship-to-automate-the-full-commit",
+      "section": "Workflow Gates",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "prevented_errors": 0,
+      "last_hit": null,
+      "first_seen": null,
+      "rule_text_prefix": "Use `/ship` to automate the full commit/push/PR wo"
+    },
+    {
+      "id": "wg-when-a-feature-creates-external",
+      "section": "Workflow Gates",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "prevented_errors": 0,
+      "last_hit": null,
+      "first_seen": null,
+      "rule_text_prefix": "When a feature creates external resources (Cloud t"
+    },
+    {
+      "id": "wg-when-a-feature-stores-user-generated",
+      "section": "Workflow Gates",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "prevented_errors": 0,
+      "last_hit": null,
+      "first_seen": null,
+      "rule_text_prefix": "When a feature stores user-generated content, veri"
+    },
+    {
+      "id": "wg-when-a-pr-includes-database-migrations",
+      "section": "Workflow Gates",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "prevented_errors": 0,
+      "last_hit": null,
+      "first_seen": null,
+      "rule_text_prefix": "When a PR includes database migrations (`supabase/"
+    },
+    {
+      "id": "wg-when-a-research-sprint-produces",
+      "section": "Workflow Gates",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "prevented_errors": 0,
+      "last_hit": null,
+      "first_seen": null,
+      "rule_text_prefix": "When a research sprint produces recommendations, r"
+    },
+    {
+      "id": "wg-when-a-test-runner-crashes-segfault-oom",
+      "section": "Workflow Gates",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "prevented_errors": 0,
+      "last_hit": null,
+      "first_seen": null,
+      "rule_text_prefix": "When a test runner crashes (segfault, OOM, abort),"
+    },
+    {
+      "id": "wg-when-a-workflow-gap-causes-a-mistake-fix",
+      "section": "Workflow Gates",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "prevented_errors": 0,
+      "last_hit": null,
+      "first_seen": null,
+      "rule_text_prefix": "When a workflow gap causes a mistake, fix the skil"
+    },
+    {
+      "id": "wg-when-an-audit-identifies-pre-existing",
+      "section": "Workflow Gates",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "prevented_errors": 0,
+      "last_hit": null,
+      "first_seen": null,
+      "rule_text_prefix": "When an audit identifies pre-existing issues, crea"
+    },
+    {
+      "id": "wg-when-closing-a-phase-milestone-update",
+      "section": "Workflow Gates",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "prevented_errors": 0,
+      "last_hit": null,
+      "first_seen": null,
+      "rule_text_prefix": "When closing a phase milestone, update the `## Cur"
+    },
+    {
+      "id": "wg-when-deferring-a-capability-create-a",
+      "section": "Workflow Gates",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "prevented_errors": 0,
+      "last_hit": null,
+      "first_seen": null,
+      "rule_text_prefix": "When deferring a capability, create a GitHub issue"
+    },
+    {
+      "id": "wg-when-fixing-a-workflow-gates-detection",
+      "section": "Workflow Gates",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "prevented_errors": 0,
+      "last_hit": null,
+      "first_seen": null,
+      "rule_text_prefix": "When fixing a workflow gate's detection logic, ret"
+    },
+    {
+      "id": "wg-when-moving-github-issues-between",
+      "section": "Workflow Gates",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "prevented_errors": 0,
+      "last_hit": null,
+      "first_seen": null,
+      "rule_text_prefix": "When moving GitHub issues between milestones, defe"
+    },
+    {
+      "id": "wg-when-tests-fail-and-are-confirmed-pre",
+      "section": "Workflow Gates",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "prevented_errors": 0,
+      "last_hit": null,
+      "first_seen": null,
+      "rule_text_prefix": "When tests fail and are confirmed pre-existing (sa"
+    },
+    {
+      "id": "wg-zero-agents-until-user-confirms",
+      "section": "Workflow Gates",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "prevented_errors": 0,
+      "last_hit": null,
+      "first_seen": null,
+      "rule_text_prefix": "Zero agents until user confirms direction. Present"
+    }
+  ],
+  "summary": {
+    "total_rules_tagged": 75,
+    "rules_unused_over_8w": 75,
+    "rules_bypassed_over_baseline": 0,
+    "orphan_rule_ids": []
+  }
+}

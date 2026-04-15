@@ -113,6 +113,11 @@ required_fields:
     description: "Impact severity"
 
 optional_fields:
+  rule_id:
+    type: string
+    pattern: '^(hr|wg|cq|rf|pdr|cm)-[a-z0-9-]{3,40}$'
+    description: "AGENTS.md rule slug that motivated this learning (e.g., 'hr-never-git-stash-in-worktrees'). Counters live in knowledge-base/project/rule-metrics.json, not here (see plan ADR-1)."
+
   rails_version:
     type: string
     pattern: '^\d+\.\d+\.\d+$'
