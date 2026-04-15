@@ -11,15 +11,30 @@ Recurring UX-review agent loop. Scheduled via `.github/workflows/scheduled-ux-au
 
 ## Invocation
 
-```bash
-# Dry-run against a single route (local dev, no issues filed)
-UX_AUDIT_DRY_RUN=true doppler run -c prd_scheduled -- \
-  claude code --skill soleur:ux-audit --route /dashboard
+**Primary:** the scheduled workflow (`.github/workflows/scheduled-ux-audit.yml`) runs this skill via `claude-code-action`. That's the production path.
 
-# Full run (workflow default — cron/push with dry_run=false once calibrated)
-UX_AUDIT_DRY_RUN=false doppler run -c prd_scheduled -- \
-  claude code --skill soleur:ux-audit
+**Local / dev:** invoke from a Claude Code session (terminal, IDE, web) with Doppler secrets loaded into the environment. The skill is registered as `soleur:ux-audit`:
+
+```bash
+# Load credentials (one terminal session)
+doppler run -c prd_scheduled -- \
+  doppler run -c prd --fallback-only -- \
+  claude
+
+# Then inside Claude Code, invoke the skill via its slash form:
+/soleur:ux-audit
+# Or with a single-route override:
+/soleur:ux-audit --route /dashboard
 ```
+
+**From another agent:** use the Skill tool:
+
+```text
+Skill(skill: "soleur:ux-audit")
+Skill(skill: "soleur:ux-audit", args: "--route /dashboard")
+```
+
+Dry-run toggle: export `UX_AUDIT_DRY_RUN=true` before launching Claude Code (or set it via `workflow_dispatch.inputs.dry_run` in the workflow). The skill reads the env var at runtime.
 
 Env vars required (loaded from Doppler `prd_scheduled`, falling back to `prd`):
 

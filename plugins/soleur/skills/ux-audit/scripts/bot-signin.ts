@@ -43,14 +43,27 @@ function defaultStoragePath(): string {
   return resolve(workspace, "tmp/ux-audit/storage-state.json");
 }
 
-async function signIn(): Promise<{
+interface Session {
   access_token: string;
   refresh_token: string;
   expires_in: number;
   expires_at: number;
   token_type: string;
   user: unknown;
-}> {
+}
+
+function isSession(x: unknown): x is Session {
+  if (typeof x !== "object" || x === null) return false;
+  const s = x as Record<string, unknown>;
+  return (
+    typeof s.access_token === "string" &&
+    typeof s.refresh_token === "string" &&
+    typeof s.expires_at === "number" &&
+    typeof s.token_type === "string"
+  );
+}
+
+async function signIn(): Promise<Session> {
   const supabaseUrl = env("SUPABASE_URL");
   const anonKey = env("NEXT_PUBLIC_SUPABASE_ANON_KEY");
   const email = env("UX_AUDIT_BOT_EMAIL");
@@ -72,7 +85,12 @@ async function signIn(): Promise<{
       ?? `http ${res.status}`;
     throw new Error(`signin failed: invalid credentials (${msg})`);
   }
-  return body as Awaited<ReturnType<typeof signIn>>;
+  if (!isSession(body)) {
+    throw new Error(
+      `signin returned malformed session (missing access_token, refresh_token, expires_at, or token_type)`,
+    );
+  }
+  return body;
 }
 
 async function main() {
@@ -99,8 +117,9 @@ async function main() {
   };
 
   const outPath = process.env.UX_AUDIT_STORAGE_STATE ?? defaultStoragePath();
-  mkdirSync(dirname(outPath), { recursive: true });
-  writeFileSync(outPath, JSON.stringify(storageState, null, 2));
+  // 0700 dir + 0600 file: storageState contains a long-lived refresh_token.
+  mkdirSync(dirname(outPath), { recursive: true, mode: 0o700 });
+  writeFileSync(outPath, JSON.stringify(storageState, null, 2), { mode: 0o600 });
   console.log(`[signin] wrote storageState to ${outPath} (cookie ${cookieName} for ${domain})`);
 }
 

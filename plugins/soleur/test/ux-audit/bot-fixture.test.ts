@@ -17,6 +17,26 @@ const hasCreds = Boolean(
   SUPABASE_URL && SERVICE_KEY && BOT_EMAIL && BOT_PASSWORD && ANON_KEY,
 );
 
+// Blast-radius guard: the `reset` call in beforeAll deletes all conversations
+// for BOT_EMAIL against prod Supabase. Refuse to run if the env points at
+// anything other than the synthetic bot. A mis-set env var should crash the
+// suite loudly, not silently wipe a real user's chat history.
+if (hasCreds && BOT_EMAIL !== "ux-audit-bot@jikigai.com") {
+  throw new Error(
+    `UX_AUDIT_BOT_EMAIL must be "ux-audit-bot@jikigai.com" for these tests ` +
+      `(got "${BOT_EMAIL}"). Running against any other email risks data loss.`,
+  );
+}
+
+// CI guardrail: in CI, missing credentials means the deploy is misconfigured.
+// Local runs without creds silently skip; CI runs without creds must fail loudly.
+if (process.env.CI && !hasCreds) {
+  throw new Error(
+    "UX audit integration tests require SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, " +
+      "NEXT_PUBLIC_SUPABASE_ANON_KEY, UX_AUDIT_BOT_EMAIL, UX_AUDIT_BOT_PASSWORD in CI.",
+  );
+}
+
 const describeIfCreds = hasCreds ? describe : describe.skip;
 
 async function restGet(path: string): Promise<unknown> {
@@ -77,8 +97,7 @@ describeIfCreds("bot-fixture (DB-only v1)", () => {
     expect(r.status).toBe(0);
     const row = await getUserRow(botId);
     expect(row.tc_accepted_version).toBe("1.0.0");
-    expect(["active", "none"]).toContain(row.subscription_status);
-    expect(row.subscription_status).not.toBe("unpaid");
+    expect(row.subscription_status).toBe("active");
   });
 
   test("seed inserts exactly 2 conversations with >=3 messages each", async () => {

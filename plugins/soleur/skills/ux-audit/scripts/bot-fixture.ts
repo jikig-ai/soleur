@@ -118,6 +118,9 @@ async function insertConversation(
     throw new Error(`POST conversations failed: ${res.status} ${body}`);
   }
   const rows = (await res.json()) as Array<{ id: string }>;
+  if (!rows[0]) {
+    throw new Error(`POST conversations returned empty array — representation missing`);
+  }
   return rows[0].id;
 }
 
