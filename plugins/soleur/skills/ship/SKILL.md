@@ -82,13 +82,15 @@ Search for todo files tagged as code-review findings:
 grep -rl "code-review" todos/ 2>/dev/null | head -1 || true
 ```
 
-**Step 2: Check commit history for review evidence (legacy).**
+**Step 2: Check commit history for review evidence.**
 
-If Step 1 found nothing, check for the review commit pattern:
+If Step 1 found nothing, check for review commit patterns (both legacy and new fix-inline convention from `rf-review-finding-default-fix-inline`):
 
 ```bash
-git log origin/main..HEAD --oneline | grep "refactor: add code review findings" || true
+git log origin/main..HEAD --oneline | grep -E "(refactor: add code review findings|^[a-f0-9]+ review: )" || true
 ```
+
+The `^[a-f0-9]+ review:` alternative matches the new convention — `review: <summary> (P<N>)` commits produced when findings are fixed inline per `rf-review-finding-default-fix-inline`.
 
 **Step 3: Check for GitHub issues with `code-review` label (current).**
 
@@ -117,8 +119,8 @@ If `gh` fails or is unavailable, treat as no output (fail open on Signal 3).
 **Note:** Three signals are checked, any one suffices:
 
 - Signal 1 (`todos/` grep): coupled to legacy review workflow (pre-#1329)
-- Signal 2 (commit message grep): coupled to legacy review SKILL.md Step 5 commit message (pre-#1329)
-- Signal 3 (`gh issue list`): coupled to `review-todo-structure.md` issue body template (`**Source:** PR #<number>`)
+- Signal 2 (commit message grep): matches legacy `refactor: add code review findings` OR new `review: <summary>` fix-inline commits (post-#2374)
+- Signal 3 (`gh issue list`): coupled to `review-todo-structure.md` issue body template (`**Source:** PR #<number>`). Expected to be empty under the new fix-inline default unless findings were scoped out — Signal 2 is the primary signal post-#2374.
 
 **If any step produced output:** Review evidence found. Continue to Phase 2.
 
