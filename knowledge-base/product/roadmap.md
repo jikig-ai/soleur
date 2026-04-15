@@ -73,7 +73,7 @@ This roadmap was reviewed by CTO, CLO, CFO, and CMO before finalization.
 |-----------|--------|
 | Phase 1 (Close the Loop) | Complete. Milestone closed. 0 open, 15 closed. |
 | Phase 2 (Secure for Beta) | Complete. Milestone closed. 0 open, 20 closed. |
-| Phase 3 (Make it Sticky) | In progress. 7 open, 23 closed (milestone). Core KB, inbox, token storage, onboarding, CI/CD, service automation, analytics, sharing, usage indicator, pricing page, start fresh onboarding, post-connect sync, chat attachments, review gate notifications, guided instructions fallback, subscription management, KB file upload, invoice history, migration 021 follow-through all done. Agent work visualization (#2004) moved to Phase 4. Remaining: service automation announcement (#1944), QA gate (#2108), KB rename files (#2152), KB PDF preview (#2153), KB delete button layout (#2154), team settings improvements (#2155), custom @mention handles (#2170). |
+| Phase 3 (Make it Sticky) | In progress. 8 open, 23 closed (milestone). Core KB, inbox, token storage, onboarding, CI/CD, service automation, analytics, sharing, usage indicator, pricing page, start fresh onboarding, post-connect sync, chat attachments, review gate notifications, guided instructions fallback, subscription management, KB file upload, invoice history, migration 021 follow-through all done. Agent work visualization (#2004) moved to Phase 4. KB chat sidebar (#2345) promoted from Post-MVP to Phase 3 P3 on 2026-04-15 (plan + wireframes written, implementation pending). Remaining: service automation announcement (#1944), QA gate (#2108), KB rename files (#2152), KB PDF preview (#2153), KB delete button layout (#2154), team settings improvements (#2155), custom @mention handles (#2170), KB chat sidebar (#2345). |
 | Phase 4 (Validate + Scale) | Not started. 24 open, 11 closed. Blocked by Phase 3 completion + marketing/multi-user gates. Growth audit 2026-04-13 added 7 issues (6 marketing gate P0s + 1 outreach campaign). Agent work visualization (#2004) moved here from Phase 3. |
 | Phase 5 (Desktop Native App) | Defined. 5 open, 0 closed. Trigger-gated on user demand. |
 | Post-MVP / Later | 92 open, 343 closed. |
@@ -202,6 +202,7 @@ This roadmap was reviewed by CTO, CLO, CFO, and CMO before finalization.
 | 3.20 | KB file upload (images, PDFs, CSV, TXT, DOCX via GitHub Contents API, per-directory upload button, binary file preview) | P3 | [#1974](https://github.com/jikig-ai/soleur/issues/1974) | Done |
 | 3.21 | Agent work visualization in UX (show agent activity, progress, and outputs) | P2 | [#2004](https://github.com/jikig-ai/soleur/issues/2004) | Moved to Phase 4 |
 | 3.22 | Service automation feature announcement (marketing content for launch) | P3 | [#1944](https://github.com/jikig-ai/soleur/issues/1944) | Not started |
+| 3.23 | KB chat sidebar (in-doc chat panel + selection-as-context, replaces "Chat about this" new-window) | P3 | [#2345](https://github.com/jikig-ai/soleur/issues/2345) | In progress (plan + wireframes done 2026-04-15) |
 
 **Why 3.1-3.2 matter:** The knowledge base is the compounding moat. If founders cannot see plans, brainstorms, brand guides, and competitive analyses their agents produced, the value is invisible. The KB viewer closes the review loop.
 
@@ -344,7 +345,6 @@ Low-priority improvements deferred until after validation. Revisit when the plat
 | L5 | Heading hierarchy issues on homepage and getting-started (h3 should be h2) | P1 | [#2072](https://github.com/jikig-ai/soleur/issues/2072) | Not started |
 | L6 | html lang="en" vs en-US inconsistency (align to en-US) | P1 | [#2074](https://github.com/jikig-ai/soleur/issues/2074) | Not started |
 | L7 | All blog posts share same generic OG image (create unique per-post images) | P2 | [#2075](https://github.com/jikig-ai/soleur/issues/2075) | Not started |
-| L8 | KB chat sidebar (in-doc chat panel + selection-as-context, replaces "Chat about this" new-window) | P3 | [#2345](https://github.com/jikig-ai/soleur/issues/2345) | Not started |
 
 ---
 
