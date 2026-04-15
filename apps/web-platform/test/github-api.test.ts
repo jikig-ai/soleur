@@ -38,7 +38,9 @@ afterAll(() => {
 import {
   githubApiGet,
   githubApiPost,
+  GitHubApiError,
 } from "../server/github-api";
+import { GitHubApiError as GitHubApiErrorFromApp } from "../server/github-app";
 
 describe("github-api fetch wrapper", () => {
   beforeEach(() => {
@@ -175,6 +177,83 @@ describe("github-api fetch wrapper", () => {
 
       // No fetch calls should have been made (except none)
       expect(mockFetch).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("handleErrorResponse — typed errors (#2149)", () => {
+    test("404 response throws GitHubApiError with statusCode 404", async () => {
+      const installationId = uniqueInstallationId();
+      mockTokenResponse();
+      mockFetch.mockResolvedValueOnce({
+        ok: false,
+        status: 404,
+        text: async () => "Not Found",
+      });
+
+      let caught: unknown;
+      try {
+        await githubApiGet(installationId, "/repos/alice/my-repo/contents/missing.md");
+      } catch (err) {
+        caught = err;
+      }
+
+      expect(caught).toBeInstanceOf(GitHubApiError);
+      expect((caught as GitHubApiError).statusCode).toBe(404);
+      expect((caught as GitHubApiError).message).toMatch(/404/);
+    });
+
+    test("403 response throws GitHubApiError with statusCode 403 and permission-denied message", async () => {
+      const installationId = uniqueInstallationId();
+      mockTokenResponse();
+      mockFetch.mockResolvedValueOnce({
+        ok: false,
+        status: 403,
+        text: async () => JSON.stringify({
+          message: "Resource not accessible by integration",
+        }),
+      });
+
+      let caught: unknown;
+      try {
+        await githubApiGet(installationId, "/repos/alice/my-repo/contents/secret.md");
+      } catch (err) {
+        caught = err;
+      }
+
+      expect(caught).toBeInstanceOf(GitHubApiError);
+      expect((caught as GitHubApiError).statusCode).toBe(403);
+      expect((caught as GitHubApiError).message).toMatch(/permission denied/i);
+    });
+
+    test("500 response throws GitHubApiError with statusCode 500 and default message format", async () => {
+      const installationId = uniqueInstallationId();
+      mockTokenResponse();
+      // 500 retries twice (MAX_RETRIES=2) before surfacing — mock all 3 attempts
+      for (let i = 0; i < 3; i++) {
+        mockFetch.mockResolvedValueOnce({
+          ok: false,
+          status: 500,
+          text: async () => "Internal Server Error",
+        });
+      }
+
+      let caught: unknown;
+      try {
+        await githubApiGet(installationId, "/repos/alice/my-repo/contents/boom.md");
+      } catch (err) {
+        caught = err;
+      }
+
+      expect(caught).toBeInstanceOf(GitHubApiError);
+      expect((caught as GitHubApiError).statusCode).toBe(500);
+      expect((caught as GitHubApiError).message).toMatch(
+        /GitHub API request failed: 500/,
+      );
+    });
+
+    test("GitHubApiError re-exported from github-api is the same class as from github-app", () => {
+      // Class identity check — the re-export must not create a phantom second class
+      expect(GitHubApiError).toBe(GitHubApiErrorFromApp);
     });
   });
 });

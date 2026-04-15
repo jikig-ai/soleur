@@ -15,18 +15,30 @@ const {
   mockExecFile,
   mockWriteFileSync,
   mockUnlinkSync,
-} = vi.hoisted(() => ({
-  mockGetUser: vi.fn(),
-  mockFrom: vi.fn(),
-  mockGithubApiGet: vi.fn(),
-  mockGithubApiPost: vi.fn(),
-  mockGenerateInstallationToken: vi.fn(),
-  mockRandomCredentialPath: vi.fn(),
-  mockIsPathInWorkspace: vi.fn(),
-  mockExecFile: vi.fn(),
-  mockWriteFileSync: vi.fn(),
-  mockUnlinkSync: vi.fn(),
-}));
+  MockGitHubApiError,
+} = vi.hoisted(() => {
+  class MockGitHubApiError extends Error {
+    statusCode: number;
+    constructor(message: string, statusCode: number) {
+      super(message);
+      this.name = "GitHubApiError";
+      this.statusCode = statusCode;
+    }
+  }
+  return {
+    mockGetUser: vi.fn(),
+    mockFrom: vi.fn(),
+    mockGithubApiGet: vi.fn(),
+    mockGithubApiPost: vi.fn(),
+    mockGenerateInstallationToken: vi.fn(),
+    mockRandomCredentialPath: vi.fn(),
+    mockIsPathInWorkspace: vi.fn(),
+    mockExecFile: vi.fn(),
+    mockWriteFileSync: vi.fn(),
+    mockUnlinkSync: vi.fn(),
+    MockGitHubApiError,
+  };
+});
 
 vi.mock("@/lib/supabase/server", () => ({
   createClient: vi.fn(async () => ({
@@ -48,11 +60,13 @@ vi.mock("@/lib/auth/validate-origin", () => ({
 vi.mock("@/server/github-api", () => ({
   githubApiGet: mockGithubApiGet,
   githubApiPost: mockGithubApiPost,
+  GitHubApiError: MockGitHubApiError,
 }));
 
 vi.mock("@/server/github-app", () => ({
   generateInstallationToken: mockGenerateInstallationToken,
   randomCredentialPath: mockRandomCredentialPath,
+  GitHubApiError: MockGitHubApiError,
 }));
 
 vi.mock("@/server/sandbox", () => ({
@@ -149,7 +163,7 @@ function setupFullMocks() {
   mockGenerateInstallationToken.mockResolvedValue("test-token");
   mockRandomCredentialPath.mockReturnValue("/tmp/git-cred-test-uuid");
   // File does not exist (404 from GitHub)
-  mockGithubApiGet.mockRejectedValue(new Error("GitHub API request failed: 404 /repos/test-owner/test-repo/contents/knowledge-base/uploads/test.png"));
+  mockGithubApiGet.mockRejectedValue(new MockGitHubApiError("GitHub API request failed: 404 /repos/test-owner/test-repo/contents/knowledge-base/uploads/test.png", 404));
   // Successful PUT
   mockGithubApiPost.mockResolvedValue({
     content: { sha: "newsha123", path: "knowledge-base/uploads/test.png" },
@@ -366,8 +380,8 @@ describe("POST /api/kb/upload", () => {
   test("returns 502 when GitHub API returns an error during upload", async () => {
     setupFullMocks();
     // Override: GitHub PUT fails with a non-404 error
-    mockGithubApiGet.mockRejectedValue(new Error("GitHub API request failed: 404 /repos/test-owner/test-repo/contents/knowledge-base/uploads/test.png"));
-    mockGithubApiPost.mockRejectedValue(new Error("GitHub API request failed: 500 /repos/test-owner/test-repo/contents/knowledge-base/uploads/test.png"));
+    mockGithubApiGet.mockRejectedValue(new MockGitHubApiError("GitHub API request failed: 404 /repos/test-owner/test-repo/contents/knowledge-base/uploads/test.png", 404));
+    mockGithubApiPost.mockRejectedValue(new MockGitHubApiError("GitHub API request failed: 500 /repos/test-owner/test-repo/contents/knowledge-base/uploads/test.png", 500));
 
     const formData = createFormData(makeTestFile(), "uploads");
     const res = await POST(createRequest(formData, "https://app.soleur.ai"));
