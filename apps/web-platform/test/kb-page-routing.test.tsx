@@ -93,4 +93,36 @@ describe("KbContentPage routing", () => {
       expect(getByTestId("breadcrumb").textContent).toBe("assets/logo.png");
     });
   });
+
+  it("renders Share button on .pdf branch", async () => {
+    const { default: KbContentPage } = await import(
+      "@/app/(dashboard)/dashboard/kb/[...path]/page"
+    );
+
+    const { getByTestId } = await act(() =>
+      renderWithSuspense(
+        <KbContentPage params={Promise.resolve({ path: ["docs", "report.pdf"] })} />,
+      ),
+    );
+
+    await waitFor(() => {
+      expect(getByTestId("share")).toBeTruthy();
+    });
+  });
+
+  it("renders Share button on .png branch", async () => {
+    const { default: KbContentPage } = await import(
+      "@/app/(dashboard)/dashboard/kb/[...path]/page"
+    );
+
+    const { getByTestId } = await act(() =>
+      renderWithSuspense(
+        <KbContentPage params={Promise.resolve({ path: ["assets", "logo.png"] })} />,
+      ),
+    );
+
+    await waitFor(() => {
+      expect(getByTestId("share")).toBeTruthy();
+    });
+  });
 });

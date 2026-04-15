@@ -175,22 +175,22 @@ The component is already path-agnostic — it posts whatever `documentPath` it r
 
 ## Acceptance Criteria
 
-- [ ] Viewing an uploaded PDF in the KB shows the same "Share" button as `vision.md`.
-- [ ] Viewing an uploaded image/CSV/TXT/DOCX in the KB shows the "Share" button.
-- [ ] Clicking "Share" on a PDF generates a `/shared/<token>` link successfully.
+- [x] Viewing an uploaded PDF in the KB shows the same "Share" button as `vision.md`.
+- [x] Viewing an uploaded image/CSV/TXT/DOCX in the KB shows the "Share" button.
+- [x] Clicking "Share" on a PDF generates a `/shared/<token>` link successfully.
 - [ ] Opening the generated link in a private window renders the PDF inline (embedded preview) with the Soleur branded header and CTA banner.
 - [ ] Opening a revoked PDF share link returns the existing "revoked" error UI.
 - [ ] Opening a share for a deleted file returns 404 with the existing error UI.
-- [ ] Share creation for a path that does not exist returns 404.
-- [ ] Share creation for a symlink or directory returns 400.
-- [ ] Markdown sharing behavior is unchanged (regression guard).
-- [ ] The existing `kb-share-md-only.test.ts` test file is replaced with `kb-share-allowed-paths.test.ts` asserting the new "path must be an existing KB file" semantics (see Test Scenarios).
+- [x] Share creation for a path that does not exist returns 404.
+- [x] Share creation for a symlink or directory returns 400.
+- [x] Markdown sharing behavior is unchanged (regression guard).
+- [x] The existing `kb-share-md-only.test.ts` test file is replaced with `kb-share-allowed-paths.test.ts` asserting the new "path must be an existing KB file" semantics (see Test Scenarios).
 
 ## Test Scenarios
 
 ### New tests
 
-- [ ] `test/kb-share-allowed-paths.test.ts` (replaces `kb-share-md-only.test.ts`):
+- [x] `test/kb-share-allowed-paths.test.ts` (replaces `kb-share-md-only.test.ts`):
   - allows `.md` path that exists
   - allows `.pdf` path that exists
   - allows `.png` path that exists
@@ -198,24 +198,24 @@ The component is already path-agnostic — it posts whatever `documentPath` it r
   - rejects symlink → 400
   - rejects directory → 400
   - rejects path outside kbRoot → 400 (already covered by `isPathInWorkspace` but keep the assertion explicit)
-- [ ] `test/kb-page-routing.test.tsx` — extend existing `.pdf` test to assert `getByTestId("share")` is present in both markdown and non-markdown branches.
-- [ ] `test/shared-page-binary.test.ts` (new) — asserts `/api/shared/[token]` returns `application/pdf` binary response for a PDF share, and `application/json` for a markdown share.
-- [ ] `test/shared-page-ui.test.tsx` (new) — asserts the `/shared/[token]` page renders `<PdfPreview>` when API returns `application/pdf` and `<MarkdownRenderer>` when API returns JSON.
+- [x] `test/kb-page-routing.test.tsx` — extend existing `.pdf` test to assert `getByTestId("share")` is present in both markdown and non-markdown branches.
+- [x] `test/shared-page-binary.test.ts` (new) — asserts `/api/shared/[token]` returns `application/pdf` binary response for a PDF share, and `application/json` for a markdown share.
+- [x] `test/shared-page-ui.test.tsx` (new) — asserts the `/shared/[token]` page renders `<PdfPreview>` when API returns `application/pdf` and `<MarkdownRenderer>` when API returns JSON.
 
 ### Existing tests to update
 
-- [ ] `test/kb-share-md-only.test.ts` — delete (behavior inverted).
-- [ ] `test/share-links.test.ts` — review for assertions that bake in `.md`-only and update accordingly.
+- [x] `test/kb-share-md-only.test.ts` — delete (behavior inverted).
+- [x] `test/share-links.test.ts` — review for assertions that bake in `.md`-only and update accordingly.
 
 ### Additional test coverage (from deepening)
 
-- [ ] **Negative-space security tests** (from `2026-04-07-symlink-escape-recursive-directory-traversal` learning pattern):
+- [x] **Negative-space security tests** (from `2026-04-07-symlink-escape-recursive-directory-traversal` learning pattern):
   - Owner API rejects symlink share creation with 400.
   - Public API rejects symlinked document_path at serve time with 403 (even if the DB row exists, defense-in-depth).
   - Owner API rejects oversize file (>50 MB) share creation with 413.
-- [ ] **Content-Disposition filename sanitization test** (from `2026-04-12-binary-content-serving-security-headers`): send a share for a file whose path contains `"` or `\n` → assert the response `Content-Disposition` header has those characters replaced with `_`. (In practice the upload layer already sanitizes filenames, but the helper must not trust that.)
-- [ ] **Async I/O regression guard**: no `readFileSync` introduced — either an eslint rule assertion or a simple grep test in CI (`grep -R "readFileSync" apps/web-platform/server/kb-binary-response.ts && exit 1`).
-- [ ] **Refactor regression guard**: the helper-extraction refactor of `/api/kb/content` must keep existing tests green without modification. If any `kb-content-*.test.ts` test requires updates beyond import paths, that's a signal the refactor changed behavior — stop and reconsider.
+- [x] **Content-Disposition filename sanitization test** (from `2026-04-12-binary-content-serving-security-headers`): send a share for a file whose path contains `"` or `\n` → assert the response `Content-Disposition` header has those characters replaced with `_`. (In practice the upload layer already sanitizes filenames, but the helper must not trust that.)
+- [x] **Async I/O regression guard**: no `readFileSync` introduced — either an eslint rule assertion or a simple grep test in CI (`grep -R "readFileSync" apps/web-platform/server/kb-binary-response.ts && exit 1`).
+- [x] **Refactor regression guard**: the helper-extraction refactor of `/api/kb/content` must keep existing tests green without modification. If any `kb-content-*.test.ts` test requires updates beyond import paths, that's a signal the refactor changed behavior — stop and reconsider.
 
 ## Security Review
 

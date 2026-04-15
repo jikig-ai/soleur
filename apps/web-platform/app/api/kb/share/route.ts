@@ -1,9 +1,11 @@
+import fs from "node:fs";
+import path from "node:path";
 import { randomBytes } from "crypto";
 import { NextResponse } from "next/server";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { validateOrigin, rejectCsrf } from "@/lib/auth/validate-origin";
 import { isPathInWorkspace } from "@/server/sandbox";
-import path from "path";
+import { MAX_BINARY_SIZE } from "@/server/kb-binary-response";
 import logger from "@/server/logger";
 
 /** POST — generate a share link for a KB document. */
@@ -28,14 +30,6 @@ export async function POST(request: Request) {
     );
   }
 
-  // Only markdown files can be shared
-  if (!body.documentPath.endsWith(".md")) {
-    return NextResponse.json(
-      { error: "Only markdown files can be shared" },
-      { status: 400 },
-    );
-  }
-
   const serviceClient = createServiceClient();
   const { data: userData } = await serviceClient
     .from("users")
@@ -47,11 +41,29 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Workspace not ready" }, { status: 503 });
   }
 
-  // Validate the document exists in the user's workspace.
+  // Validate the document exists in the user's workspace and is a regular
+  // file (not a directory, not a symlink) within the size limit. Symlink +
+  // size checks are point-of-use per the service-role-idor learning: every
+  // operation re-validates, even on owner-supplied paths.
   const kbRoot = path.join(userData.workspace_path, "knowledge-base");
   const fullPath = path.join(kbRoot, body.documentPath);
   if (!isPathInWorkspace(fullPath, kbRoot)) {
     return NextResponse.json({ error: "Invalid document path" }, { status: 400 });
+  }
+  let lstat: fs.Stats;
+  try {
+    lstat = await fs.promises.lstat(fullPath);
+  } catch {
+    return NextResponse.json({ error: "File not found" }, { status: 404 });
+  }
+  if (lstat.isSymbolicLink() || !lstat.isFile()) {
+    return NextResponse.json({ error: "Invalid document path" }, { status: 400 });
+  }
+  if (lstat.size > MAX_BINARY_SIZE) {
+    return NextResponse.json(
+      { error: "File exceeds maximum size limit" },
+      { status: 413 },
+    );
   }
 
   // Check if an active (non-revoked) share already exists for this document.
