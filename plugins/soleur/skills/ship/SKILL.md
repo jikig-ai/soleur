@@ -302,18 +302,21 @@ UNRESOLVED=$(gh issue list \
   --state open \
   --search "-label:deferred-scope-out -label:synthetic-test" \
   --json number,title,body \
-  --jq --arg pr "$PR_NUMBER" '[.[]
+  --jq '[.[]
            | select(.title | test("^(review:|Code review #|Refactor:|arch:|compound:|follow-through:)"; "i"))
-           | select((.body // "") | test("(^|\\s)(Ref|Closes|Fixes) #" + $pr + "(\\s|$|[^0-9])"))
+           | select((.body // "") | test("(^|\\s)(Ref|Closes|Fixes) #'"$PR_NUMBER"'(\\s|$|[^0-9])"))
            | {number, title}]')
 COUNT=$(echo "$UNRESOLVED" | jq 'length')
 ```
 
 Notes:
 
-- `PR_NUMBER` is validated as digits-only before use; the jq program reads it
-  via `--arg pr` (never shell-interpolated into the regex) — blocks both
-  regex-metachar widening and shell/jq injection.
+- `PR_NUMBER` is validated as digits-only before use (`[[ =~ ^[0-9]+$ ]]`).
+  This is the canonical defense against regex-metachar widening and shell/jq
+  injection — `gh issue list --jq` does not forward `--arg` to jq, so the
+  digits-only pre-check is the sole (and sufficient) safeguard. If this gate
+  is ever ported to two-stage piping (`gh ... --json ... | jq --arg pr ...`),
+  swap in `--arg` then.
 - The regex anchors on keyword `Ref|Closes|Fixes` followed by `#<N>` followed
   by a non-digit or end-of-string — prevents `#23750` matching when
   `PR_NUMBER=2375`.
