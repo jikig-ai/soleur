@@ -60,6 +60,16 @@ jobs:
             exit 0
           fi
 
+          # Validate body is JSON before any jq -r call. Cloudflare's API is
+          # normally reliable, but edge incidents and rate-limit HTML pages have
+          # been observed. Under set -euo pipefail, a jq parse error would crash
+          # this single-shot check and create a false operator signal.
+          # See AGENTS.md cq-ci-steps-polling-json-endpoints-under (#2214, #2236).
+          if ! jq -e . "$TMPFILE" >/dev/null 2>&1; then
+            echo "::warning::Cloudflare API returned non-JSON body on HTTP $HTTP_CODE. Skipping this check -- will retry next cron."
+            exit 0
+          fi
+
           # Find the deploy token by name
           EXPIRES_AT=$(jq -r \
             --arg name "$TOKEN_NAME" \
