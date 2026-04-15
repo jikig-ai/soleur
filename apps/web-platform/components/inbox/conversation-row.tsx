@@ -224,7 +224,7 @@ export function ConversationRow({ conversation, onArchive, onUnarchive, onStatus
         {conversation.domain_leader && (
           <LeaderAvatar leaderId={conversation.domain_leader} size="md" customIconPath={getIconPath(conversation.domain_leader as DomainLeaderId)} />
         )}
-        <span className="shrink-0 text-xs text-neutral-500">
+        <span className="w-16 shrink-0 truncate text-right text-xs tabular-nums text-neutral-500">
           {relativeTime(conversation.last_active)}
         </span>
         {(onArchive || onUnarchive) && (

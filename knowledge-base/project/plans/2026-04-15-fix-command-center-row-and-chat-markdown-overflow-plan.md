@@ -223,17 +223,17 @@ Fix:
 
 ## Acceptance Criteria
 
-- [ ] In a Command Center inbox with rows displaying times spanning single-digit and
+- [x] In a Command Center inbox with rows displaying times spanning single-digit and
       two-digit values (e.g., "5m ago", "12m ago", "3h ago", "10h ago", "1d ago"),
       the LeaderAvatar column and the ArchiveButton column are vertically aligned
       across every row (pixel-perfect equality of the avatar centre and the button
       centre).
-- [ ] Rendering a chat message containing a 300-character single-line code snippet,
+- [x] Rendering a chat message containing a 300-character single-line code snippet,
       a wide GFM table, and a bare 200-character URL does **not** introduce a
       horizontal scroll bar on the chat scroller (`.flex-1.overflow-y-auto` parent).
-- [ ] The message bubble never exceeds its declared `max-w-[80%]` on desktop
+- [x] The message bubble never exceeds its declared `max-w-[80%]` on desktop
       (`md:` breakpoint) regardless of content length.
-- [ ] Existing vitest suites for `command-center` and markdown rendering continue to
+- [x] Existing vitest suites for `command-center` and markdown rendering continue to
       pass; new tests cover both defects.
 - [ ] Playwright E2E run for the dashboard and chat routes shows no regression in
       screenshots beyond the fixed alignment.
