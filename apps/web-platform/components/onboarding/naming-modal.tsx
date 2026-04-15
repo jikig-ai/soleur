@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { ROUTABLE_DOMAIN_LEADERS } from "@/server/domain-leaders";
-import { LEADER_BG_COLORS } from "@/components/chat/leader-colors";
+import { LeaderAvatar } from "@/components/leader-avatar";
 
 interface NamingOnboardingModalProps {
   onSave: (leaderId: string, name: string) => Promise<void>;
@@ -44,11 +44,7 @@ export function NamingOnboardingModal({
         <div className="space-y-3">
           {ROUTABLE_DOMAIN_LEADERS.map((leader) => (
             <div key={leader.id} className="flex items-center gap-4">
-              <span
-                className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-xs font-semibold text-white ${LEADER_BG_COLORS[leader.id]}`}
-              >
-                {leader.name}
-              </span>
+              <LeaderAvatar leaderId={leader.id} size="lg" />
               <span className="min-w-0 flex-1 text-sm text-neutral-300">
                 {leader.title}
               </span>
