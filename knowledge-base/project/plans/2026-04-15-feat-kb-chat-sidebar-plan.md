@@ -32,16 +32,13 @@ gains a `selections[]` field plus two new message variants
 (`resume_or_create_by_context`, `add_context`). Legacy `?context=` URLs keep
 working.
 
-## Known Blockers (resolve before implementation)
+## Known Blockers
 
-1. **Milestone conflict.** Issue #2345 is on the `Post-MVP / Later` milestone,
-   but branch `kb-chat-sidebar`, worktree, and PR #2347 all exist as active
-   work. Per AGENTS.md `wg-when-moving-github-issues-between`, the roadmap
-   document must be updated in the same action as any milestone change.
-   **Decision required before Phase 1:** (a) promote #2345 into Phase 3 P3
-   (fits scope; Phase 3 milestone due 2026-04-17) and update
-   `knowledge-base/product/roadmap.md` L8 row in same commit, or (b) pause
-   implementation and route through triage. CPO recommends (a).
+1. **Milestone conflict — RESOLVED 2026-04-15.** Issue #2345 promoted from
+   `Post-MVP / Later` to `Phase 3: Make it Sticky` (row 3.23 in roadmap,
+   P3 priority). `gh issue edit 2345 --milestone "Phase 3: Make it Sticky"`
+   + roadmap update committed in same action (commit `4561b1f4`) per
+   AGENTS.md `wg-when-moving-github-issues-between`.
 
 ## Research Reconciliation — Spec vs. Codebase
 
@@ -56,27 +53,27 @@ additions beyond "implement the spec":
 
 Other delta notes:
 
-- `MessageBubble` + `ReviewGateCard` are inlined in `chat/[conversationId]/page.tsx` (L476, L654), not already in `components/chat/`. Extraction of `ChatSurface` lifts them into `components/chat/message-bubble.tsx` and `components/chat/review-gate-card.tsx`.
-- `useWebSocket` lives in `apps/web-platform/lib/ws-client.ts`, not `hooks/`.
-- No `/dashboard/chat` inbox route exists — the inbox is on `/dashboard` home via `useConversations`. The "KB badge" per FR2 is a rendering change in `components/inbox/conversation-row.tsx`.
-- No `useMediaQuery` / `useBreakpoint` hook exists. Build alongside `Sheet`, mirroring `app/(dashboard)/layout.tsx:158-165`.
-- KB viewer renders in both markdown and non-markdown branches of `kb/[...path]/page.tsx` (L120–128, L157–165). Sidebar opener must land in **both** branches; selection is markdown-only.
++ `MessageBubble` + `ReviewGateCard` are inlined in `chat/[conversationId]/page.tsx` (L476, L654), not already in `components/chat/`. Extraction of `ChatSurface` lifts them into `components/chat/message-bubble.tsx` and `components/chat/review-gate-card.tsx`.
++ `useWebSocket` lives in `apps/web-platform/lib/ws-client.ts`, not `hooks/`.
++ No `/dashboard/chat` inbox route exists — the inbox is on `/dashboard` home via `useConversations`. The "KB badge" per FR2 is a rendering change in `components/inbox/conversation-row.tsx`.
++ No `useMediaQuery` / `useBreakpoint` hook exists. Build alongside `Sheet`, mirroring `app/(dashboard)/layout.tsx:158-165`.
++ KB viewer renders in both markdown and non-markdown branches of `kb/[...path]/page.tsx` (L120–128, L157–165). Sidebar opener must land in **both** branches; selection is markdown-only.
 
 ## Research Findings (short form)
 
 ### Institutional learnings that shape the plan
 
-- `ui-bugs/2026-04-10-kb-nav-tree-disappears-on-file-select.md` → sidebar mounts directly inside `kb/layout.tsx`, never through `children`.
-- `ui-bugs/2026-04-15-flex-column-width-and-markdown-overflow-2229.md` → apply `min-w-0` at every flex level in the sidebar; wrap chat markdown in `[overflow-wrap:anywhere]`.
-- `2026-04-07-code-review-batch-ws-validation-error-logging-concurrency-comments.md` → `selections[]` MUST be validated in `server/context-validation.ts` in `start_session` before side effects.
-- `2026-04-11-deferred-ws-conversation-creation-and-pending-state.md` → `resume_or_create_by_context` must respect the "pending conversation" state (no DB row until first message). Audit `resume_session` + `close_conversation` for `selections[]` clearing.
-- `2026-04-13-websocket-cumulative-vs-delta-streaming-fix.md` → adding `WSMessage` variants requires running `tsc --noEmit` to update every exhaustive switch.
-- `2026-03-27-ws-session-race-abort-before-replace.md` → new handler that changes session state calls `abortActiveSession(userId, session, "superseded")` **before** any `await`.
-- `2026-03-28-csp-connect-src-websocket-scheme-mismatch.md` → same WS host as current chat = no CSP change. Verify during QA.
-- `2026-04-14-next-dynamic-testing-pattern-vitest.md` → mock `next/dynamic` via `React.lazy` + `Suspense` in tests.
-- `2026-04-06-chat-page-test-determinism-and-coverage.md` → RTL negative assertions use `waitFor`, not `setTimeout`.
-- `2026-02-17-backdrop-filter-breaks-fixed-positioning.md` → dashboard header may create a containing-block trap. Verify floating pill and bottom-sheet are not trapped.
-- `2026-04-15-kb-share-binary-files-lifecycle.md` → sidebar opener lands in BOTH markdown and non-markdown branches of `kb/[...path]/page.tsx`.
++ `ui-bugs/2026-04-10-kb-nav-tree-disappears-on-file-select.md` → sidebar mounts directly inside `kb/layout.tsx`, never through `children`.
++ `ui-bugs/2026-04-15-flex-column-width-and-markdown-overflow-2229.md` → apply `min-w-0` at every flex level in the sidebar; wrap chat markdown in `[overflow-wrap:anywhere]`.
++ `2026-04-07-code-review-batch-ws-validation-error-logging-concurrency-comments.md` → `selections[]` MUST be validated in `server/context-validation.ts` in `start_session` before side effects.
++ `2026-04-11-deferred-ws-conversation-creation-and-pending-state.md` → `resume_or_create_by_context` must respect the "pending conversation" state (no DB row until first message). Audit `resume_session` + `close_conversation` for `selections[]` clearing.
++ `2026-04-13-websocket-cumulative-vs-delta-streaming-fix.md` → adding `WSMessage` variants requires running `tsc --noEmit` to update every exhaustive switch.
++ `2026-03-27-ws-session-race-abort-before-replace.md` → new handler that changes session state calls `abortActiveSession(userId, session, "superseded")` **before** any `await`.
++ `2026-03-28-csp-connect-src-websocket-scheme-mismatch.md` → same WS host as current chat = no CSP change. Verify during QA.
++ `2026-04-14-next-dynamic-testing-pattern-vitest.md` → mock `next/dynamic` via `React.lazy` + `Suspense` in tests.
++ `2026-04-06-chat-page-test-determinism-and-coverage.md` → RTL negative assertions use `waitFor`, not `setTimeout`.
++ `2026-02-17-backdrop-filter-breaks-fixed-positioning.md` → dashboard header may create a containing-block trap. Verify floating pill and bottom-sheet are not trapped.
++ `2026-04-15-kb-share-binary-files-lifecycle.md` → sidebar opener lands in BOTH markdown and non-markdown branches of `kb/[...path]/page.tsx`.
 
 ### Community / functional discovery
 
@@ -705,26 +702,26 @@ the quote as the first block. iOS Safari works.
 
 ## Acceptance Criteria
 
-- [ ] AC1: "Ask about this document" trigger opens sidebar (flag on) or legacy route (flag off).
-- [ ] AC2: Sidebar auto-resolves thread by `context.path`; resumed threads show "Continuing from [date]" banner that auto-dismisses on first new message.
-- [ ] AC3: "Quote in chat" pill surfaces on markdown selection; inserts `> <text>` with flash confirmation.
-- [ ] AC4: Keyboard shortcut `⌘⇧L` / `Ctrl+Shift+L` inserts quote without mouse; input placeholder surfaces the shortcut.
-- [ ] AC5: Sidebar survives KB file-to-file navigation; drafts preserved per-path.
-- [ ] AC6: Full-page `/dashboard/chat/<id>` route unchanged after ChatSurface extraction.
-- [ ] AC7: Mobile renders draggable bottom sheet at ~60vh with three snap points; dragging below 10vh closes.
-- [ ] AC8: Three Plausible goals fire: `kb.chat.opened`, `kb.chat.selection_sent`, `kb.chat.thread_resumed`.
-- [ ] AC9: Panel a11y contract met: `aria-label`, `Escape` close, focus move on open, focus return on close.
-- [ ] AC10: Long URLs and code blocks wrap (not scroll) inside 380px sidebar.
-- [ ] AC11: DB migration applied to prod (verified via Supabase REST API); backfill ran or explicitly skipped with rationale.
-- [ ] AC12: Legacy `?context=` URL shape unchanged.
-- [ ] AC13: All vitest scenarios pass.
-- [ ] AC14: Flag off-path tested — `NEXT_PUBLIC_KB_CHAT_SIDEBAR=0` falls back to legacy navigation.
-- [ ] AC15: Closing panel mid-stream aborts session; reopening shows user messages only.
-- [ ] AC16: Selection > 8KB renders disabled pill; no oversize payload reaches server.
-- [ ] AC17: iOS Safari: native share menu suppressed on markdown selection when pill visible.
-- [ ] AC18: Inbox row shows "KB" badge for conversations with `context_path`.
-- [ ] AC19: Trigger label is stateful: "Ask about this document" (no thread) / "Continue thread" (thread exists).
-- [ ] AC20: Two-tab scenario doesn't create duplicate conversations; supersede abort is graceful.
++ [ ] AC1: "Ask about this document" trigger opens sidebar (flag on) or legacy route (flag off).
++ [ ] AC2: Sidebar auto-resolves thread by `context.path`; resumed threads show "Continuing from [date]" banner that auto-dismisses on first new message.
++ [ ] AC3: "Quote in chat" pill surfaces on markdown selection; inserts `> <text>` with flash confirmation.
++ [ ] AC4: Keyboard shortcut `⌘⇧L` / `Ctrl+Shift+L` inserts quote without mouse; input placeholder surfaces the shortcut.
++ [ ] AC5: Sidebar survives KB file-to-file navigation; drafts preserved per-path.
++ [ ] AC6: Full-page `/dashboard/chat/<id>` route unchanged after ChatSurface extraction.
++ [ ] AC7: Mobile renders draggable bottom sheet at ~60vh with three snap points; dragging below 10vh closes.
++ [ ] AC8: Three Plausible goals fire: `kb.chat.opened`, `kb.chat.selection_sent`, `kb.chat.thread_resumed`.
++ [ ] AC9: Panel a11y contract met: `aria-label`, `Escape` close, focus move on open, focus return on close.
++ [ ] AC10: Long URLs and code blocks wrap (not scroll) inside 380px sidebar.
++ [ ] AC11: DB migration applied to prod (verified via Supabase REST API); backfill ran or explicitly skipped with rationale.
++ [ ] AC12: Legacy `?context=` URL shape unchanged.
++ [ ] AC13: All vitest scenarios pass.
++ [ ] AC14: Flag off-path tested — `NEXT_PUBLIC_KB_CHAT_SIDEBAR=0` falls back to legacy navigation.
++ [ ] AC15: Closing panel mid-stream aborts session; reopening shows user messages only.
++ [ ] AC16: Selection > 8KB renders disabled pill; no oversize payload reaches server.
++ [ ] AC17: iOS Safari: native share menu suppressed on markdown selection when pill visible.
++ [ ] AC18: Inbox row shows "KB" badge for conversations with `context_path`.
++ [ ] AC19: Trigger label is stateful: "Ask about this document" (no thread) / "Continue thread" (thread exists).
++ [ ] AC20: Two-tab scenario doesn't create duplicate conversations; supersede abort is graceful.
 
 ## Domain Review
 
@@ -735,9 +732,9 @@ the quote as the first block. iOS Safari works.
 **Status:** reviewed
 **Assessment:**
 
-- Carry-forward (brainstorm): Sidebar approach beats new-window; doc-per-thread matches mental model; mobile/cramping/nav-continuity are sharp edges.
-- Plan-level (fresh): Phase A rework to include flag plumbing + one analytics emit (CPO blocking finding #1 — resolved). Phase 5 collapsed (CPO finding #2 — resolved). Doc-switch draft preservation added (CPO finding #3 + SpecFlow gap #8 — resolved). Milestone conflict surfaced in Known Blockers section for user decision (CPO finding #4).
-- Empty-state copy spec added. External feature name: plan prose + UI copy uses "Ask this document" framing throughout (not "KB chat sidebar").
++ Carry-forward (brainstorm): Sidebar approach beats new-window; doc-per-thread matches mental model; mobile/cramping/nav-continuity are sharp edges.
++ Plan-level (fresh): Phase A rework to include flag plumbing + one analytics emit (CPO blocking finding #1 — resolved). Phase 5 collapsed (CPO finding #2 — resolved). Doc-switch draft preservation added (CPO finding #3 + SpecFlow gap #8 — resolved). Milestone conflict surfaced in Known Blockers section for user decision (CPO finding #4).
++ Empty-state copy spec added. External feature name: plan prose + UI copy uses "Ask this document" framing throughout (not "KB chat sidebar").
 
 ### Marketing (CMO)
 
@@ -784,41 +781,41 @@ resolution that has no existing API. Session-state audit for
 
 **CPO plan-level review:**
 
-- Finding #1 (BLOCKING): flag + `kb.chat.opened` emit moved into Phase A — resolved.
-- Finding #2 (HIGH): Phase 5 collapsed into Phase 2 — resolved.
-- Finding #3 (HIGH): draft preservation on doc-switch — added to 2.7 + 2.10 + test 14.
-- Finding #4 (MEDIUM): milestone conflict — surfaced in Known Blockers section; user decision required.
-- Concurrent-tabs race: test scenario 26 added.
-- KB badge backfill: added to migration 2.1.
-- External feature name: plan now uses "Ask this document" framing per copywriter.
++ Finding #1 (BLOCKING): flag + `kb.chat.opened` emit moved into Phase A — resolved.
++ Finding #2 (HIGH): Phase 5 collapsed into Phase 2 — resolved.
++ Finding #3 (HIGH): draft preservation on doc-switch — added to 2.7 + 2.10 + test 14.
++ Finding #4 (MEDIUM): milestone conflict — surfaced in Known Blockers section; user decision required.
++ Concurrent-tabs race: test scenario 26 added.
++ KB badge backfill: added to migration 2.1.
++ External feature name: plan now uses "Ask this document" framing per copywriter.
 
 **ux-design-lead (wireframes at `knowledge-base/project/specs/feat-kb-chat-sidebar/wireframes.pen`, 9 screens + 3x PNG exports):**
 
-- Code-block treatment in sidebar: wrap (not scroll) — resolved in 1.3.
-- Mid-stream file switch: covered by 2.7 `user_closed` abort + draft preservation.
-- iOS Safari pill/native-menu collision: `user-select` + `contextmenu` suppression added to 4.1.
-- Resumed-thread banner auto-dismiss: added to 2.7.
-- Flag state QA: both states tested in 7.2.
-- Attach flow at 380px: verification added to 3.3.
-- Empty-state prompts: NOT added as a feature in v1 (out of spec scope; separate follow-up if validated).
-- Mobile sheet covering selection: "Referenced passage" chip added to 4.3.
++ Code-block treatment in sidebar: wrap (not scroll) — resolved in 1.3.
++ Mid-stream file switch: covered by 2.7 `user_closed` abort + draft preservation.
++ iOS Safari pill/native-menu collision: `user-select` + `contextmenu` suppression added to 4.1.
++ Resumed-thread banner auto-dismiss: added to 2.7.
++ Flag state QA: both states tested in 7.2.
++ Attach flow at 380px: verification added to 3.3.
++ Empty-state prompts: NOT added as a feature in v1 (out of spec scope; separate follow-up if validated).
++ Mobile sheet covering selection: "Referenced passage" chip added to 4.3.
 
 **copywriter (7 surfaces + 6 plan-copy edits integrated):**
 
-- Pill label → "Quote in chat" (replaced "Add to chat" throughout plan).
-- Sidebar header → filename in `JetBrains Mono`.
-- Empty state → "Ask about this document." / "Select any passage to quote it, or type a question below."
-- Thread-resumed banner → "Continuing from [date]".
-- Mobile drag-handle aria → "Resize panel" / tooltip "Drag to expand".
-- Input placeholder → "Ask about this document — ⌘⇧L to quote selection".
-- Close aria → "Close panel".
-- Stateful trigger label → "Ask about this document" / "Continue thread".
-- `<aside aria-label>` → "Document conversation".
++ Pill label → "Quote in chat" (replaced "Add to chat" throughout plan).
++ Sidebar header → filename in `JetBrains Mono`.
++ Empty state → "Ask about this document." / "Select any passage to quote it, or type a question below."
++ Thread-resumed banner → "Continuing from [date]".
++ Mobile drag-handle aria → "Resize panel" / tooltip "Drag to expand".
++ Input placeholder → "Ask about this document — ⌘⇧L to quote selection".
++ Close aria → "Close panel".
++ Stateful trigger label → "Ask about this document" / "Continue thread".
++ `<aside aria-label>` → "Document conversation".
 
 **Brainstorm-recommended specialists:**
 
-- ux-design-lead — invoked (covered by UX Gate pipeline).
-- copywriter — invoked (covered by UX Gate Content Review Gate).
++ ux-design-lead — invoked (covered by UX Gate pipeline).
++ copywriter — invoked (covered by UX Gate Content Review Gate).
 
 ## Rollout Plan
 

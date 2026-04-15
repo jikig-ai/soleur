@@ -5,7 +5,7 @@ Plan: `knowledge-base/project/plans/2026-04-15-feat-kb-chat-sidebar-plan.md`
 
 ## Phase 0 — Gate
 
-- [ ] 0.1 Resolve milestone conflict (#2345 on `Post-MVP / Later` vs active PR #2347). CPO recommends promoting to Phase 3 P3. Update `knowledge-base/product/roadmap.md` L8 row in same commit per AGENTS.md `wg-when-moving-github-issues-between`.
+- [x] 0.1 Milestone resolved — #2345 promoted to Phase 3 P3 (roadmap row 3.23), commit `4561b1f4`, 2026-04-15.
 - [ ] 0.2 Confirm Doppler `dev` config has `NEXT_PUBLIC_KB_CHAT_SIDEBAR=1` available for local QA.
 
 ## Phase 1 — Primitives (zero user-visible change)
