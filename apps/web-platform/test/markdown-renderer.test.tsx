@@ -29,4 +29,34 @@ describe("MarkdownRenderer — chat markdown overflow (issue #2229)", () => {
     const tableWrap = container.querySelector("div.overflow-x-auto");
     expect(tableWrap).not.toBeNull();
   });
+
+  it("co-mounted instances do NOT share `wrapCode` / `nofollow` — review #2380", () => {
+    const md = "```ts\nconst x = 1;\n```\n\n[link](https://example.com)";
+    const { container } = render(
+      <div>
+        <div data-testid="sidebar">
+          <MarkdownRenderer content={md} wrapCode={true} nofollow={false} />
+        </div>
+        <div data-testid="full">
+          <MarkdownRenderer content={md} wrapCode={false} nofollow={true} />
+        </div>
+      </div>,
+    );
+
+    const sidebarPre = container
+      .querySelector('[data-testid="sidebar"] pre') as HTMLPreElement;
+    const fullPre = container
+      .querySelector('[data-testid="full"] pre') as HTMLPreElement;
+    expect(sidebarPre.className).toMatch(/whitespace-pre-wrap/);
+    expect(sidebarPre.className).not.toMatch(/overflow-x-auto/);
+    expect(fullPre.className).toMatch(/overflow-x-auto/);
+    expect(fullPre.className).not.toMatch(/whitespace-pre-wrap/);
+
+    const sidebarA = container
+      .querySelector('[data-testid="sidebar"] a') as HTMLAnchorElement;
+    const fullA = container
+      .querySelector('[data-testid="full"] a') as HTMLAnchorElement;
+    expect(sidebarA.getAttribute("rel")).toBe("noopener noreferrer");
+    expect(fullA.getAttribute("rel")).toBe("nofollow noopener noreferrer");
+  });
 });

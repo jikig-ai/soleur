@@ -169,6 +169,11 @@ export function ConversationRow({ conversation, onArchive, onUnarchive, onStatus
         <div className="flex items-center justify-between gap-2">
           <div className="flex items-center gap-2">
             <StatusBadge status={conversation.status} onAction={handleStatusAction} />
+            {conversation.context_path && (
+              <span className="inline-flex items-center rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] font-medium text-amber-400">
+                KB
+              </span>
+            )}
             {isArchived && (
               <span className="inline-flex items-center rounded-full bg-neutral-800 px-2 py-0.5 text-[10px] font-medium text-neutral-400">
                 Archived
@@ -206,6 +211,11 @@ export function ConversationRow({ conversation, onArchive, onUnarchive, onStatus
       {/* Desktop: horizontal row */}
       <div className="hidden w-full items-center gap-4 md:flex">
         <StatusBadge status={conversation.status} onAction={handleStatusAction} />
+        {conversation.context_path && (
+          <span className="inline-flex items-center rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] font-medium text-amber-400">
+            KB
+          </span>
+        )}
         {isArchived && (
           <span className="inline-flex items-center rounded-full bg-neutral-800 px-2 py-0.5 text-[10px] font-medium text-neutral-400">
             Archived

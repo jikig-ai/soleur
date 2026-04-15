@@ -32,6 +32,31 @@ import {
 const log = createChildLogger("ws");
 
 // ---------------------------------------------------------------------------
+// Input validation helpers
+// ---------------------------------------------------------------------------
+
+const CONTEXT_PATH_MAX_LEN = 512;
+const CONTEXT_PATH_PREFIX = "knowledge-base/";
+// Conservative KB-path alphabet: letters, digits, `_`, `-`, `.`, `/`.
+// Matches what the client's `deriveContextPathFromPathname` can produce
+// from KB route segments.
+const CONTEXT_PATH_ALLOWED = /^[\w\-./]+$/;
+
+/**
+ * Validate an untrusted `context_path` string from the client before using
+ * it in DB equality filters. Returns the trimmed path when valid, else null.
+ * See review #2381 — the field previously went straight into `.eq()` with no
+ * typeof/length/prefix guard.
+ */
+function validateContextPath(v: unknown): string | null {
+  if (typeof v !== "string") return null;
+  if (v.length === 0 || v.length > CONTEXT_PATH_MAX_LEN) return null;
+  if (!v.startsWith(CONTEXT_PATH_PREFIX)) return null;
+  if (!CONTEXT_PATH_ALLOWED.test(v)) return null;
+  return v;
+}
+
+// ---------------------------------------------------------------------------
 // Supabase admin client (service role -- server-side only)
 // ---------------------------------------------------------------------------
 const supabase = createServiceClient();
@@ -47,6 +72,8 @@ export interface PendingConversation {
   id: string;
   leaderId?: DomainLeaderId;
   context?: ConversationContext;
+  /** KB document path that will become conversations.context_path at materialization. */
+  contextPath?: string;
 }
 
 export interface ClientSession {
@@ -232,11 +259,16 @@ export function startSubscriptionRefresh(
 
 /**
  * Create a conversation row in the database and return its ID.
+ *
+ * When `contextPath` is set, a unique-index conflict on
+ * (user_id, context_path) means another tab raced us — we look up the
+ * existing row and return its id instead of duplicating.
  */
 async function createConversation(
   userId: string,
   leaderId?: DomainLeaderId,
   id?: string,
+  contextPath?: string,
 ): Promise<string> {
   if (!id) id = randomUUID();
 
@@ -246,9 +278,36 @@ async function createConversation(
     domain_leader: leaderId ?? null,
     status: "active" as Conversation["status"],
     last_active: new Date().toISOString(),
+    context_path: contextPath ?? null,
   });
 
   if (error) {
+    // 23505 = unique_violation (postgres). When contextPath is set, this means
+    // another tab created the same (user_id, context_path) row — use it instead.
+    // We also disambiguate on the index name (conversations_context_path_user_uniq)
+    // so an unrelated unique constraint doesn't fall through into the context_path
+    // lookup. See review #2390.
+    const pgErr = error as { code?: string; message?: string; details?: string };
+    const isContextPathUniqueViolation =
+      pgErr.code === "23505" &&
+      (typeof pgErr.message === "string" &&
+        pgErr.message.includes("conversations_context_path_user_uniq"));
+    if (contextPath && isContextPathUniqueViolation) {
+      const { data: existing, error: lookupErr } = await supabase
+        .from("conversations")
+        .select("id")
+        .eq("user_id", userId)
+        .eq("context_path", contextPath)
+        .is("archived_at", null)
+        .order("last_active", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      if (lookupErr || !existing) {
+        throw new Error(`Failed to resolve existing context_path conversation: ${lookupErr?.message ?? "not found"}`);
+      }
+      return (existing as { id: string }).id;
+    }
     throw new Error(`Failed to create conversation: ${error.message}`);
   }
 
@@ -310,13 +369,73 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
 
         abortActiveSession(userId, session);
 
+        // Reject invalid resumeByContextPath up-front — see review #2381.
+        // The field was previously passed straight into `.eq()` with no
+        // typeof/length/prefix guard, opening DoS + type-confusion surfaces.
+        let validResumePath: string | null = null;
+        if (msg.resumeByContextPath !== undefined && msg.resumeByContextPath !== null) {
+          validResumePath = validateContextPath(msg.resumeByContextPath);
+          if (!validResumePath) {
+            sendToClient(userId, {
+              type: "error",
+              message: "Invalid resumeByContextPath",
+            });
+            return;
+          }
+        }
+
+        // If client asked to resume by context_path (KB sidebar), look up
+        // existing thread before deferring creation. UNIQUE partial index
+        // on (user_id, context_path) guarantees at most one match.
+        if (validResumePath) {
+          const { data: existing, error: lookupErr } = await supabase
+            .from("conversations")
+            .select("id, last_active, context_path")
+            .eq("user_id", userId)
+            .eq("context_path", validResumePath)
+            .is("archived_at", null)
+            .order("last_active", { ascending: false })
+            .limit(1)
+            .maybeSingle();
+
+          if (!lookupErr && existing) {
+            const row = existing as { id: string; last_active: string };
+            const { count: messageCount, error: countErr } = await supabase
+              .from("messages")
+              .select("id", { count: "exact", head: true })
+              .eq("conversation_id", row.id);
+
+            session.conversationId = row.id;
+            session.pending = undefined;
+            resetIdleTimer(userId, session);
+
+            sendToClient(userId, {
+              type: "session_resumed",
+              conversationId: row.id,
+              resumedFromTimestamp: row.last_active,
+              messageCount: countErr ? 0 : (messageCount ?? 0),
+            });
+
+            log.info({ userId, conversationId: row.id }, "start_session resumed by context_path");
+            break;
+          }
+        }
+
         // Defer conversation creation: generate UUID but don't insert into DB.
         // The row is created on the first real chat message.
         const pendingId = randomUUID();
-        session.pending = { id: pendingId, leaderId: msg.leaderId, context: validatedContext };
+        session.pending = {
+          id: pendingId,
+          leaderId: msg.leaderId,
+          context: validatedContext,
+          contextPath: validResumePath ?? undefined,
+        };
         session.conversationId = undefined;
 
-        log.info({ userId, leaderId: msg.leaderId ?? "auto-route", pendingId }, "start_session (deferred creation)");
+        log.info(
+          { userId, leaderId: msg.leaderId ?? "auto-route", pendingId, contextPath: validResumePath },
+          "start_session (deferred creation)",
+        );
 
         sendToClient(userId, { type: "session_started", conversationId: session.pending.id });
         resetIdleTimer(userId, session);
@@ -442,9 +561,11 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
         }
 
         try {
-          const { id: pendingId, leaderId: pendingLeader, context: pendingContext } = session.pending;
-          await createConversation(userId, pendingLeader, pendingId);
-          session.conversationId = pendingId;
+          const { id: pendingId, leaderId: pendingLeader, context: pendingContext, contextPath: pendingContextPath } = session.pending;
+          // createConversation handles unique-violation on (user_id, context_path)
+          // by resolving to the existing row (two-tab race).
+          const resolvedId = await createConversation(userId, pendingLeader, pendingId, pendingContextPath);
+          session.conversationId = resolvedId;
           session.pending = undefined;
 
           log.info({ conversationId: session.conversationId, leaderId: pendingLeader ?? "auto-route" }, "Conversation materialized on first message");
@@ -547,6 +668,7 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
     case "tool_use":
     case "review_gate":
     case "session_started":
+    case "session_resumed":
     case "session_ended":
     case "usage_update":
     case "error": {

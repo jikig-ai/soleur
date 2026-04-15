@@ -1,10 +1,13 @@
 "use client";
 
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import type { ReactNode } from "react";
 import { usePathname, useRouter } from "next/navigation";
+import dynamic from "next/dynamic";
 import { KbContext } from "@/components/kb/kb-context";
 import type { KbContextValue } from "@/components/kb/kb-context";
+import { KbChatContext } from "@/components/kb/kb-chat-context";
+import type { KbChatContextValue } from "@/components/kb/kb-chat-context";
 import { FileTree } from "@/components/kb/file-tree";
 import { SearchOverlay } from "@/components/kb/search-overlay";
 import { getAncestorPaths } from "@/components/kb/get-ancestor-paths";
@@ -18,6 +21,21 @@ import {
   WorkspaceNotReady,
 } from "@/components/kb";
 import type { TreeNode } from "@/server/kb-reader";
+
+const KbChatSidebar = dynamic(
+  () => import("@/components/chat/kb-chat-sidebar").then((m) => m.KbChatSidebar),
+  { ssr: false, loading: () => null },
+);
+
+const KB_CHAT_SIDEBAR_FLAG = process.env.NEXT_PUBLIC_KB_CHAT_SIDEBAR === "1";
+const KB_SIDEBAR_OPEN_KEY = "kb.chat.sidebarOpen";
+
+function deriveContextPathFromPathname(pathname: string): string | null {
+  if (!pathname.startsWith("/dashboard/kb/")) return null;
+  if (pathname === "/dashboard/kb" || pathname === "/dashboard/kb/") return null;
+  const rel = decodeURIComponent(pathname.slice("/dashboard/kb/".length));
+  return rel ? `knowledge-base/${rel}` : null;
+}
 
 export default function KbLayout({ children }: { children: ReactNode }) {
   const pathname = usePathname();
@@ -117,15 +135,73 @@ export default function KbLayout({ children }: { children: ReactNode }) {
     refreshTree,
   }), [tree, loading, error, expanded, toggleExpanded, refreshTree]);
 
+  // --- Chat sidebar state -------------------------------------------------
+  const contextPath = useMemo(() => deriveContextPathFromPathname(pathname), [pathname]);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [messageCount, setMessageCount] = useState(0);
+  const quoteHandlerRef = useRef<((text: string) => void) | null>(null);
+
+  // Restore sidebarOpen from sessionStorage on mount (per-tab persistence)
+  useEffect(() => {
+    if (!KB_CHAT_SIDEBAR_FLAG) return;
+    try {
+      const saved = sessionStorage.getItem(KB_SIDEBAR_OPEN_KEY);
+      if (saved === "1") setSidebarOpen(true);
+    } catch { /* sessionStorage unavailable */ }
+  }, []);
+
+  const openSidebar = useCallback(() => {
+    setSidebarOpen(true);
+    try { sessionStorage.setItem(KB_SIDEBAR_OPEN_KEY, "1"); } catch { /* noop */ }
+  }, []);
+
+  const closeSidebar = useCallback(() => {
+    setSidebarOpen(false);
+    try { sessionStorage.setItem(KB_SIDEBAR_OPEN_KEY, "0"); } catch { /* noop */ }
+  }, []);
+
+  const registerQuoteHandler = useCallback(
+    (handler: ((text: string) => void) | null) => {
+      quoteHandlerRef.current = handler;
+    },
+    [],
+  );
+
+  const submitQuote = useCallback(
+    (text: string) => {
+      setSidebarOpen(true);
+      try { sessionStorage.setItem(KB_SIDEBAR_OPEN_KEY, "1"); } catch { /* noop */ }
+      // Give the sidebar a tick to mount + register its handler before inserting.
+      queueMicrotask(() => {
+        quoteHandlerRef.current?.(text);
+      });
+    },
+    [],
+  );
+
+  const chatCtxValue: KbChatContextValue = useMemo(() => ({
+    open: sidebarOpen,
+    openSidebar,
+    closeSidebar,
+    contextPath,
+    enabled: KB_CHAT_SIDEBAR_FLAG,
+    submitQuote,
+    registerQuoteHandler,
+    messageCount,
+    setMessageCount,
+  }), [sidebarOpen, openSidebar, closeSidebar, contextPath, submitQuote, registerQuoteHandler, messageCount]);
+
   // Full-width states: loading, errors, or empty KB (no sidebar needed)
   if (loading || error || (!loading && !hasTreeContent)) {
     return (
       <KbContext value={ctxValue}>
-        {loading && <LoadingSkeleton />}
-        {error === "workspace-not-ready" && <WorkspaceNotReady />}
-        {error === "not-found" && <NoProjectState />}
-        {error === "unknown" && <UnknownError />}
-        {!loading && !error && !hasTreeContent && <EmptyState />}
+        <KbChatContext value={chatCtxValue}>
+          {loading && <LoadingSkeleton />}
+          {error === "workspace-not-ready" && <WorkspaceNotReady />}
+          {error === "not-found" && <NoProjectState />}
+          {error === "unknown" && <UnknownError />}
+          {!loading && !error && !hasTreeContent && <EmptyState />}
+        </KbChatContext>
       </KbContext>
     );
   }
@@ -133,39 +209,49 @@ export default function KbLayout({ children }: { children: ReactNode }) {
   // Two-panel layout: tree sidebar + content area
   return (
     <KbContext value={ctxValue}>
-      <div className="flex h-full">
-        {/* Tree sidebar — visible on desktop always, on mobile only at root */}
-        <aside
-          className={`w-full shrink-0 overflow-y-auto border-r border-neutral-800 md:block md:w-64 ${
-            isContentView ? "hidden" : "block"
-          }`}
-        >
-          <div className="flex h-full flex-col">
-            <header className="shrink-0 px-4 pb-3 pt-4">
-              <h1 className="font-serif text-lg font-medium tracking-tight text-white">
-                Knowledge Base
-              </h1>
-            </header>
-            <div className="shrink-0 px-3 pb-3">
-              <SearchOverlay />
+      <KbChatContext value={chatCtxValue}>
+        <div className="flex h-full">
+          {/* Tree sidebar — visible on desktop always, on mobile only at root */}
+          <aside
+            className={`w-full shrink-0 overflow-y-auto border-r border-neutral-800 md:block md:w-64 ${
+              isContentView ? "hidden" : "block"
+            }`}
+          >
+            <div className="flex h-full flex-col">
+              <header className="shrink-0 px-4 pb-3 pt-4">
+                <h1 className="font-serif text-lg font-medium tracking-tight text-white">
+                  Knowledge Base
+                </h1>
+              </header>
+              <div className="shrink-0 px-3 pb-3">
+                <SearchOverlay />
+              </div>
+              <div className="flex-1 overflow-y-auto px-2 pb-4">
+                <FileTree />
+              </div>
             </div>
-            <div className="flex-1 overflow-y-auto px-2 pb-4">
-              <FileTree />
-            </div>
-          </div>
-        </aside>
+          </aside>
 
-        {/* Content area — visible on desktop always, on mobile only when viewing content */}
-        <div
-          className={`min-w-0 flex-1 overflow-y-auto md:block ${
-            isContentView ? "block" : "hidden"
-          }`}
-        >
-          <KbErrorBoundary>
-            {isContentView ? children : <DesktopPlaceholder />}
-          </KbErrorBoundary>
+          {/* Content area — visible on desktop always, on mobile only when viewing content */}
+          <div
+            className={`min-w-0 flex-1 overflow-y-auto md:block ${
+              isContentView ? "block" : "hidden"
+            }`}
+          >
+            <KbErrorBoundary>
+              {isContentView ? children : <DesktopPlaceholder />}
+            </KbErrorBoundary>
+          </div>
+
+          {KB_CHAT_SIDEBAR_FLAG && contextPath && (
+            <KbChatSidebar
+              open={sidebarOpen}
+              onClose={closeSidebar}
+              contextPath={contextPath}
+            />
+          )}
         </div>
-      </div>
+      </KbChatContext>
     </KbContext>
   );
 }

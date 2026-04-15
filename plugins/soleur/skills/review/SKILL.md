@@ -465,6 +465,16 @@ After creating all GitHub issues, present comprehensive summary:
 
 **Read `plugins/soleur/skills/review/references/review-e2e-testing.md` now** for project type detection, testing offers (Web/iOS/Hybrid), and subagent procedures for browser and Xcode testing.
 
+### Defect Classes This Review Reliably Catches
+
+Multi-agent parallel review has been shown to catch bugs in shipped, green-CI code across these classes (each a real P1 caught on PR #2347):
+
+- **Shared mutable state across co-mounted instances** — module-level `let` bindings captured by a once-built object that multiple components import. Pattern-recognition and code-quality agents spot the closure capture in seconds; unit tests rarely co-mount instances.
+- **Validator scope on sibling message fields** — new top-level fields added to a schema whose existing validator covers only one field. Security-sentinel asks "what if the client sends X?" for every permutation without waiting for the test author to imagine it.
+- **DB partial-index predicate drift** — the application's query filter (`.is("archived_at", null)`) no longer matches the index's `WHERE` clause. Data-integrity-guardian reads both files and compares WHERE clauses symbolically; the bug stays silent until a user archives a row.
+
+See `knowledge-base/project/learnings/2026-04-15-multi-agent-review-catches-bugs-tests-miss.md` for the full pattern catalogue.
+
 ### Sharp Edges: Review Agent Limitations
 
 Review agent suggestions that modify workflow `if` conditions or event filters must be smoke tested against the full user journey (not just the reduced trigger case) before shipping -- agents optimize locally and can break flows they don't fully model.
