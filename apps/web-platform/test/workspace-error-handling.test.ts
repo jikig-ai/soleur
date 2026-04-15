@@ -20,6 +20,10 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.restoreAllMocks();
+  // Clear module-level mocks so mocks set via vi.doMock in one test don't leak
+  // into the next (vi.resetModules alone doesn't clear vi.doMock registrations).
+  vi.doUnmock("child_process");
+  vi.doUnmock("../server/github-app");
   try {
     rmSync(TEST_WORKSPACES, { recursive: true, force: true });
   } catch {}
@@ -48,10 +52,34 @@ describe("provisionWorkspaceWithRepo error wrapping", () => {
       randomCredentialPath: vi.fn().mockReturnValue(`/tmp/git-cred-${randomUUID()}`),
     }));
 
+    // Stub execFileSync so git clone throws synchronously with a realistic stderr
+    // buffer. This makes the test deterministic and network-independent — the
+    // production error-wrapping code at workspace.ts:172 reads .stderr?.toString()
+    // and produces the "Git clone failed: ..." message we assert below.
+    vi.doMock("child_process", async () => {
+      const actual = await vi.importActual<typeof import("child_process")>("child_process");
+      return {
+        ...actual,
+        execFileSync: vi.fn().mockImplementation((cmd: string, args: string[]) => {
+          if (cmd === "git" && Array.isArray(args) && args.includes("clone")) {
+            const err: Error & { stderr?: Buffer } = new Error("git exited 128");
+            err.stderr = Buffer.from(
+              "fatal: repository 'https://github.com/nonexistent/fake-repo-xxx/' not found\n",
+            );
+            throw err;
+          }
+          // Other git invocations (config user.name/user.email) shouldn't be reached
+          // because the clone failure rejects first; return empty buffer defensively.
+          return Buffer.from("");
+        }),
+      };
+    });
+
     const { provisionWorkspaceWithRepo } = await import("../server/workspace");
     const userId = randomUUID();
 
-    // Clone will fail because the repo URL is fake — git stderr should be in the message
+    // Clone will fail because execFileSync is stubbed to throw — git stderr
+    // flows through the production error-wrapping path.
     await expect(
       provisionWorkspaceWithRepo(userId, "https://github.com/nonexistent/fake-repo-xxx", 12345),
     ).rejects.toThrow(/Git clone failed/);

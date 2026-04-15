@@ -7,7 +7,7 @@ const mockStartSession = vi.fn();
 const mockSendMessage = vi.fn();
 const mockSendReviewGateResponse = vi.fn();
 
-type MockTextMessage = { id: string; role: "user" | "assistant"; content: string; type: "text"; leaderId?: string };
+type MockTextMessage = { id: string; role: "user" | "assistant"; content: string; type: "text"; leaderId?: string; state?: "thinking" | "tool_use" | "streaming" | "done" | "error" };
 type MockGateMessage = { id: string; role: "user" | "assistant"; content: string; type: "review_gate"; leaderId?: string; gateId: string; question: string; options: string[]; header?: string; descriptions?: Record<string, string | undefined>; stepProgress?: { current: number; total: number }; resolved?: boolean; selectedOption?: string; gateError?: string };
 type MockChatMessage = MockTextMessage | MockGateMessage;
 
@@ -246,19 +246,22 @@ describe("ChatPage", () => {
     expect(screen.getByText("help with pricing")).toBeInTheDocument();
   });
 
-  it("shows thinking dots when assistant message has empty content", async () => {
+  it("shows thinking dots when assistant bubble is in 'thinking' state", async () => {
+    // Post-#2139: assistant bubbles always carry a state. Live bubbles set
+    // it at stream_start; history-loaded bubbles get "done" at hydration.
+    // The previous fallback heuristic (`!messageState && content === ""`)
+    // was removed because it silently covered for a missing-state bug.
     wsReturn.messages = [
-      { id: "s1", role: "assistant", content: "", type: "text", leaderId: "cpo" },
+      { id: "s1", role: "assistant", content: "", type: "text", leaderId: "cpo", state: "thinking" },
     ];
     await renderChatPage();
-    // Thinking indicator should be present (3 pulsing dots)
     const dots = document.querySelectorAll("[data-testid='thinking-dots'] span");
     expect(dots.length).toBe(3);
   });
 
-  it("hides thinking dots when assistant content is non-empty", async () => {
+  it("hides thinking dots when assistant bubble is 'done' with content", async () => {
     wsReturn.messages = [
-      { id: "s1", role: "assistant", content: "Here is my response", type: "text", leaderId: "cpo" },
+      { id: "s1", role: "assistant", content: "Here is my response", type: "text", leaderId: "cpo", state: "done" },
     ];
     await renderChatPage();
     const dots = document.querySelectorAll("[data-testid='thinking-dots']");
