@@ -86,7 +86,7 @@ type DeleteState =
 
 type RenameState =
   | { status: "idle" }
-  | { status: "editing"; currentName: string }
+  | { status: "editing" }
   | { status: "renaming" }
   | { status: "error"; message: string };
 
@@ -101,7 +101,6 @@ type TreeItemProps = {
 type FileNodeProps = {
   node: TreeNode;
   depth: number;
-  parentPath: string;
 };
 
 function TreeItem({
@@ -291,7 +290,6 @@ function TreeItem({
                 key={child.name}
                 node={child}
                 depth={depth + 1}
-                parentPath={dirKey}
               />
             )
           ))}
@@ -449,7 +447,7 @@ function FileNode({
                 e.preventDefault();
                 e.stopPropagation();
                 renameSubmittedRef.current = false;
-                setRenameState({ status: "editing", currentName: node.name });
+                setRenameState({ status: "editing" });
               }}
               className="rounded p-1 text-neutral-500 hover:bg-neutral-700 hover:text-neutral-300"
               title="Rename file"
