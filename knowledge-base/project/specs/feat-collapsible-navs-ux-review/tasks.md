@@ -1,0 +1,156 @@
+# Tasks: soleur:ux-audit recurring UX-review agent loop
+
+Derived from `knowledge-base/project/plans/2026-04-15-feat-ux-audit-skill-plan.md`. Owns #2341. Blocks #2342.
+
+## Phase 1: Foundation (Supabase bot + Doppler + fixture)
+
+- [ ] 1.1 Provision Supabase auth user `ux-audit-bot@jikigai.com`
+  - [ ] 1.1.1 Generate password: `openssl rand -base64 32`
+  - [ ] 1.1.2 Create user via Supabase MCP or `supabase` CLI (not Terraform — app-data plane)
+  - [ ] 1.1.3 Verify user can `signInWithPassword` against prod Supabase
+- [ ] 1.2 Add bot secrets to Doppler `prd_scheduled`
+  - [ ] 1.2.1 `UX_AUDIT_BOT_EMAIL = ux-audit-bot@jikigai.com`
+  - [ ] 1.2.2 `UX_AUDIT_BOT_PASSWORD = <generated>`
+  - [ ] 1.2.3 Verify `DOPPLER_TOKEN_SCHEDULED` reads both: `doppler run --token $TOKEN --config prd_scheduled -- printenv | grep UX_AUDIT`
+- [ ] 1.3 Write `plugins/soleur/skills/ux-audit/scripts/bot-fixture.ts`
+  - [ ] 1.3.1 `seed` subcommand (idempotent)
+    - [ ] 1.3.1.1 Complete onboarding for bot (T&Cs current version, billing active, optional connect-repo skipped)
+    - [ ] 1.3.1.2 Seed KB: 6 files (PDF, md, CSV, TXT, image, docx) across 3 folders at depth ≤ 2
+    - [ ] 1.3.1.3 Seed team: 2 synthetic members (`teammate-1@example.com`, `teammate-2@example.com`)
+    - [ ] 1.3.1.4 Seed chat: 2 conversations, ≥ 3 messages each
+    - [ ] 1.3.1.5 Seed services: mocked Cloudflare integration (env flag `UX_AUDIT_FIXTURE_CLOUDFLARE=1`)
+    - [ ] 1.3.1.6 Seed billing: Stripe test-mode subscription for bot account
+  - [ ] 1.3.2 `reset` subcommand (tear down seeded data)
+  - [ ] 1.3.3 Fixture-invariant audit: no real emails (except bot's own), no real keys, no payment strings matching secret patterns
+- [ ] 1.4 Acceptance: `doppler run -c prd_scheduled -- node plugins/soleur/skills/ux-audit/scripts/bot-fixture.ts seed` completes twice without duplication; `/dashboard` returns 200 under bot auth (no redirect to `/login`, `/accept-terms`, or `/billing`)
+
+## Phase 2: Skill + audit-mode agent extension
+
+- [ ] 2.1 Create `plugins/soleur/skills/ux-audit/SKILL.md`
+  - [ ] 2.1.1 Frontmatter: `name: ux-audit`, third-person description ≤ 200 chars
+  - [ ] 2.1.2 Inline 5-category audit rubric (no 6th "error/empty/loading")
+  - [ ] 2.1.3 Inline bot-fixture spec
+  - [ ] 2.1.4 Linked `route-list.yaml` via `[route-list.yaml](./references/route-list.yaml)` syntax
+  - [ ] 2.1.5 `CAP_OPEN_ISSUES = 20` as named constant in the workflow doc
+  - [ ] 2.1.6 Verify cumulative plugin description budget stays under 1800 words (`bun test plugins/soleur/test/components.test.ts`)
+- [ ] 2.2 Create `plugins/soleur/skills/ux-audit/references/route-list.yaml`
+  - [ ] 2.2.1 Schema: `{path, auth, fixture_prereqs, viewport}`
+  - [ ] 2.2.2 Populate ~15–20 routes (landing, login, signup, pricing, dashboard, KB pages, settings pages, chat)
+  - [ ] 2.2.3 Mark `auth: anonymous` for logged-out surfaces
+  - [ ] 2.2.4 Mark `fixture_prereqs` accurately per route (e.g. `/dashboard/kb` needs `kb_tree_6_files`)
+- [ ] 2.3 Create `plugins/soleur/skills/ux-audit/scripts/bot-signin.ts`
+  - [ ] 2.3.1 Supabase JS `signInWithPassword` against prod Supabase URL
+  - [ ] 2.3.2 Write storage state to `${workspace}/tmp/ux-audit/storage-state.json` (absolute path)
+  - [ ] 2.3.3 Pattern source: `apps/web-platform/e2e/global-setup.ts`
+- [ ] 2.4 Edit `plugins/soleur/agents/product/design/ux-design-lead.md`
+  - [ ] 2.4.1 Add mode-branch prompt at top of `## Workflow`
+  - [ ] 2.4.2 Add new `## UX Audit (Screenshots)` section AFTER existing `## UX Audit (Existing HTML Pages)` (L54–62)
+  - [ ] 2.4.3 Write 5-category rubric: real-estate, ia, consistency, responsive, comprehension
+  - [ ] 2.4.4 Write JSON output contract: `{route, selector, category, severity, title, description, fix_hint, screenshot_ref}`
+  - [ ] 2.4.5 Do NOT modify `description:` frontmatter (token-budget gate)
+- [ ] 2.5 Build golden-set test
+  - [ ] 2.5.1 Identify 3 past UX issues with before-screenshots (`gh issue list --label ux --state closed --limit 20`)
+  - [ ] 2.5.2 Each must include a clear screenshot in issue body
+  - [ ] 2.5.3 Store screenshots + expected rubric outputs in test fixture
+  - [ ] 2.5.4 Test passes only when all 3 appear in top-5 of their respective runs
+- [ ] 2.6 Implement skill workflow steps in SKILL.md
+  - [ ] 2.6.1 Global cap check: `gh issue list --label ux-audit --state open --jq 'length'` vs 20
+  - [ ] 2.6.2 Per-route screenshot capture with absolute paths under `${workspace}/tmp/ux-audit/`
+  - [ ] 2.6.3 Task-tool invocation of `ux-design-lead` in audit mode with `screenshots:[...]` and `mode: audit`
+  - [ ] 2.6.4 Parse-guard for malformed JSON from agent (log `::error::`, skip route, continue)
+  - [ ] 2.6.5 Dedup via single `gh issue list --label ux-audit --state all --search "ux-audit-hash: $HASH"` call
+  - [ ] 2.6.6 Severity-rank findings, cap at top-5 per run
+  - [ ] 2.6.7 Env-var dry-run: if `UX_AUDIT_DRY_RUN=true`, write findings JSON to stdout; else `gh issue create`
+  - [ ] 2.6.8 Issue creation: title prefix `ux:`, labels `ux-audit,agent:ux-design-lead,domain/product`, milestone `Post-MVP / Later`, `--body-file` with screenshot + `<!-- ux-audit-hash: ... -->` embedded
+  - [ ] 2.6.9 `browser_close` at end of run
+  - [ ] 2.6.10 Local dev affordance: `--route <path>` single-route mode
+- [ ] 2.7 Unit test: dedup hash computation `sha256("{route}|{selector}|{category}")`
+- [ ] 2.8 Acceptance: `UX_AUDIT_DRY_RUN=true doppler run -c prd_scheduled -- claude code --skill soleur:ux-audit --route /dashboard` emits well-formed findings JSON; golden-set test passes
+
+## Phase 3: Workflow + governance + calibration
+
+- [ ] 3.1 Scaffold `.github/workflows/scheduled-ux-audit.yml` via `soleur:schedule`
+  - [ ] 3.1.1 Template source: `.github/workflows/scheduled-competitive-analysis.yml`
+  - [ ] 3.1.2 Pinned action SHAs (checkout, claude-code-action)
+- [ ] 3.2 Configure workflow triggers
+  - [ ] 3.2.1 `push: branches: [main]` AND `paths: [apps/web-platform/app/**, apps/web-platform/components/**]`
+  - [ ] 3.2.2 `schedule: cron: '0 9 1 * *'`
+  - [ ] 3.2.3 `workflow_dispatch: inputs: dry_run: {type: boolean, default: true}`
+- [ ] 3.3 Configure workflow job
+  - [ ] 3.3.1 `timeout-minutes: 45`
+  - [ ] 3.3.2 `permissions: {contents: write, issues: write, pull-requests: write, id-token: write}`
+  - [ ] 3.3.3 `concurrency: {group: schedule-ux-audit, cancel-in-progress: false}`
+- [ ] 3.4 Wire Doppler load step (mirror `scheduled-community-monitor.yml:49–60`)
+  - [ ] 3.4.1 Gate on `secrets.DOPPLER_TOKEN_SCHEDULED`
+  - [ ] 3.4.2 `doppler secrets download --project soleur --config prd_scheduled --no-file --format env-no-quotes` → `::add-mask::` + `$GITHUB_ENV`
+- [ ] 3.5 Wire Playwright setup with pinned version
+  - [ ] 3.5.1 Read version from `apps/web-platform/package.json` `devDependencies.playwright`
+  - [ ] 3.5.2 `npx playwright@<version> install chromium --with-deps`
+- [ ] 3.6 Wire skill invocation step
+  - [ ] 3.6.1 Env: `UX_AUDIT_DRY_RUN: ${{ inputs.dry_run || 'false' }}`, `UX_AUDIT_BOT_EMAIL`, `UX_AUDIT_BOT_PASSWORD`
+  - [ ] 3.6.2 `claude_args: '--model ... --max-turns 60 --allowedTools Bash,Read,Write,Edit,Glob,Grep,Task,mcp__playwright__*'`
+  - [ ] 3.6.3 All agent-generated finding data via `env:` vars into subsequent steps (never inline in `run:`)
+- [ ] 3.7 Wire labels pre-creation step
+  - [ ] 3.7.1 `gh label create ux-audit --color D4C5F9 --description "Issue filed by soleur:ux-audit agent loop" 2>/dev/null || true`
+  - [ ] 3.7.2 `gh label create agent:ux-design-lead --color C2E0C6 --description "Agent-authored by ux-design-lead" 2>/dev/null || true`
+  - [ ] 3.7.3 `gh label create domain/product --color 5319E7 --description "..." 2>/dev/null || true`
+- [ ] 3.8 Wire failure notification
+  - [ ] 3.8.1 `if: failure()` step invokes `./.github/actions/notify-ops-email`
+  - [ ] 3.8.2 Construct HTML body in preceding step (not inline, per `hr-in-github-actions-run-blocks-never-use`)
+- [ ] 3.9 Edit `.github/workflows/scheduled-daily-triage.yml:76` — add `ux-audit` jq exclusion
+- [ ] 3.10 Edit `.github/workflows/scheduled-bug-fixer.yml:96–106` — extend `select()` to exclude `ux-audit`
+- [ ] 3.11 Add expense ledger line to `knowledge-base/operations/expenses.md`
+- [ ] 3.12 Pin TR4 decision: `gh issue comment 2343 --body "First consumer at plugins/soleur/skills/ux-audit/references/route-list.yaml. Extract when second consumer arrives."`
+- [ ] 3.13 Update plugin metadata
+  - [ ] 3.13.1 `plugin.json`: `description:` mentions `ux-audit` (do NOT edit `version`)
+  - [ ] 3.13.2 `marketplace.json`: description updated (do NOT edit `version`)
+  - [ ] 3.13.3 `plugins/soleur/README.md`: skill count incremented via `soleur:release-docs` at ship time
+- [ ] 3.14 Calibration
+  - [ ] 3.14.1 `gh workflow run scheduled-ux-audit.yml --ref collapsible-navs-ux-review --field dry_run=true`
+  - [ ] 3.14.2 Download findings JSON artifact
+  - [ ] 3.14.3 Assess top-5: does a `real-estate` or `ia` finding reference sidebars / nav / fixed-width real estate?
+  - [ ] 3.14.4 **PASS path:** flip cron/push default to `dry_run=false`; commit `knowledge-base/project/learnings/2026-04-<day>-ux-audit-calibration.md` with passing rubric phrasing
+  - [ ] 3.14.5 **MISS path:** tune rubric once; re-run dry
+  - [ ] 3.14.6 **STILL MISS path:** ship with `dry_run` default permanently `true` (filing disabled); `gh issue create --title "ux-audit calibration failed" --milestone "Post-MVP / Later"` with rubric attempts; unblock #2342 manually on founder judgment
+- [ ] 3.15 Acceptance: workflow `gh workflow run` success within 45 min; calibration resolves via one of the 3 paths; `ux-audit` labels do NOT appear in next run of `scheduled-daily-triage.yml` or `scheduled-bug-fixer.yml` candidate lists
+
+## Phase 4: Testing
+
+- [ ] 4.1 Acceptance test suite (workflow-level)
+  - [ ] 4.1.1 Dry-run produces JSON artifact with ≥ 1 finding/route, no `gh issue create` calls
+  - [ ] 4.1.2 Dedup: run #1 files N → run #2 (unchanged UI) reports `dedup-suppressed: N, filed: 0`
+  - [ ] 4.1.3 Global cap: 20 open issues → 21st finding suppressed with `::warning::`
+  - [ ] 4.1.4 Failure email: inject deliberate failure step on test branch → verify `ops@jikigai.com` receives email
+  - [ ] 4.1.5 Auto-triage exclusion: open test `ux-audit` issue → run `scheduled-daily-triage.yml` → verify not in candidate list
+  - [ ] 4.1.6 Auto-fix exclusion: open test `ux-audit` issue with `priority/p1` → run `scheduled-bug-fixer.yml` → verify not selected
+  - [ ] 4.1.7 Branch filter: push to feature branch touching `apps/web-platform/app/**` → verify workflow does NOT trigger
+- [ ] 4.2 Regression tests
+  - [ ] 4.2.1 `ux-design-lead` without `mode: audit` → Pencil flow unchanged
+  - [ ] 4.2.2 `/soleur:qa` on UI diff → behaves identically to pre-ux-audit baseline
+- [ ] 4.3 Edge cases
+  - [ ] 4.3.1 Unmet `fixture_prereqs` → route skipped, logged, not aborted
+  - [ ] 4.3.2 Expired bot creds → fast-fail → notify-ops-email
+  - [ ] 4.3.3 Malformed agent JSON → `::error::` logged, route skipped
+  - [ ] 4.3.4 Empty selector → hash coarsens to `{route}|*|{category}`
+- [ ] 4.4 Integration verification (for `/soleur:qa`)
+  - [ ] 4.4.1 `gh issue list --label ux-audit --state open --jq 'length'` ≤ 20
+  - [ ] 4.4.2 `doppler secrets get UX_AUDIT_BOT_EMAIL --config prd_scheduled --plain` = `ux-audit-bot@jikigai.com`
+  - [ ] 4.4.3 Browser: bot sign-in → `/dashboard/kb` → ≥ 6 KB files visible
+  - [ ] 4.4.4 `gh workflow run scheduled-ux-audit.yml --ref main --field dry_run=true` → `conclusion=success` ≤ 45 min
+- [ ] 4.5 NFR verifications
+  - [ ] 4.5.1 Run `/soleur:architecture assess` vs `knowledge-base/engineering/architecture/nfr-register.md`; attach output to PR
+  - [ ] 4.5.2 Verify `/ship` Phase 5.5 CMO content-opportunity gate fires at this PR (file-path match)
+
+## Phase 5: Ship
+
+- [ ] 5.1 Commit artifacts
+- [ ] 5.2 PR body: `Closes #2341`, `Ref #2343`, `Ref #2344`, `## Changelog` section
+- [ ] 5.3 Apply `semver:minor` label (new skill)
+- [ ] 5.4 Run `/soleur:review` before marking ready
+- [ ] 5.5 Run `/soleur:qa` with screenshots if any UI-adjacent changes
+- [ ] 5.6 Run `/soleur:ship` — enforces compound + CMO/COO gates
+- [ ] 5.7 Post-merge: `gh workflow run scheduled-ux-audit.yml --ref main --field dry_run=true` and verify (per `wg-after-merging-a-pr-that-adds-or-modifies`)
+- [ ] 5.8 Verify release workflow green (per `wg-after-a-pr-merges-to-main-verify-all`)
+- [ ] 5.9 File follow-up issues
+  - [ ] 5.9.1 `feat(marketing-site): "Built by agents, in public" link to ux-audit issue query`
+  - [ ] 5.9.2 If calibration passed: draft blog post "We gave our UX reviewer a cron job" via copywriter (CMO content-opportunity gate)
