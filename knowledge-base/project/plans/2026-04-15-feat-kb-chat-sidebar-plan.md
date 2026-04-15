@@ -702,7 +702,7 @@ the quote as the first block. iOS Safari works.
 
 ## Acceptance Criteria
 
-+ [ ] AC1: "Ask about this document" trigger opens sidebar (flag on) or legacy route (flag off).
++ [x] AC1: "Ask about this document" trigger opens sidebar (flag on) or legacy route (flag off).
 + [ ] AC2: Sidebar auto-resolves thread by `context.path`; resumed threads show "Continuing from [date]" banner that auto-dismisses on first new message.
 + [ ] AC3: "Quote in chat" pill surfaces on markdown selection; inserts `> <text>` with flash confirmation.
 + [ ] AC4: Keyboard shortcut `⌘⇧L` / `Ctrl+Shift+L` inserts quote without mouse; input placeholder surfaces the shortcut.

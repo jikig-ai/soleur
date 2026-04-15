@@ -56,7 +56,7 @@ export type WSMessage =
   | { type: "auth"; token: string }
   | { type: "auth_ok" }
   | { type: "chat"; content: string; attachments?: AttachmentRef[] }
-  | { type: "start_session"; leaderId?: DomainLeaderId; context?: ConversationContext }
+  | { type: "start_session"; leaderId?: DomainLeaderId; context?: ConversationContext; resumeByContextPath?: string }
   | { type: "resume_session"; conversationId: string }
   | { type: "close_conversation" }
   | { type: "review_gate_response"; gateId: string; selection: string }
@@ -77,6 +77,7 @@ export type WSMessage =
   | { type: "tool_use"; leaderId: DomainLeaderId; label: string }
   | { type: "review_gate"; gateId: string; question: string; header?: string; options: string[]; descriptions?: Record<string, string | undefined>; stepProgress?: { current: number; total: number } }
   | { type: "session_started"; conversationId: string }
+  | { type: "session_resumed"; conversationId: string; resumedFromTimestamp: string; messageCount: number }
   | { type: "session_ended"; reason: string }
   | { type: "usage_update"; conversationId: string; totalCostUsd: number; inputTokens: number; outputTokens: number }
   | { type: "error"; message: string; errorCode?: WSErrorCode; gateId?: string };
@@ -123,6 +124,7 @@ export interface Conversation {
   last_active: string;
   created_at: string;
   archived_at: string | null;
+  context_path?: string | null;
 }
 
 export type ConversationStatus = Conversation["status"];

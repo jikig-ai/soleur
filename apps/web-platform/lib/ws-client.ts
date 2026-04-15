@@ -26,9 +26,21 @@ export interface UsageData {
   outputTokens: number;
 }
 
+export interface StartSessionOptions {
+  leaderId?: DomainLeaderId;
+  context?: ConversationContext;
+  resumeByContextPath?: string;
+}
+
+export interface ResumedFrom {
+  conversationId: string;
+  timestamp: string;
+  messageCount: number;
+}
+
 interface UseWebSocketReturn {
   messages: ChatMessage[];
-  startSession: (leaderId?: DomainLeaderId, context?: ConversationContext) => void;
+  startSession: (optsOrLeaderId?: StartSessionOptions | DomainLeaderId, context?: ConversationContext) => void;
   resumeSession: (conversationId: string) => void;
   sendMessage: (content: string, attachments?: AttachmentRef[]) => void;
   sendReviewGateResponse: (gateId: string, selection: string) => void;
@@ -42,6 +54,8 @@ interface UseWebSocketReturn {
   usageData: UsageData | null;
   /** The real conversation UUID from session_started (pending ID that becomes the row ID). */
   realConversationId: string | null;
+  /** Populated when the server resolved an existing thread via resumeByContextPath. */
+  resumedFrom: ResumedFrom | null;
 }
 
 const MAX_BACKOFF = 30_000;
@@ -68,6 +82,7 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
   const [activeLeaderIds, setActiveLeaderIds] = useState<DomainLeaderId[]>([]);
   const [sessionConfirmed, setSessionConfirmed] = useState(false);
   const [realConversationId, setRealConversationId] = useState<string | null>(null);
+  const [resumedFrom, setResumedFrom] = useState<ResumedFrom | null>(null);
   const [usageData, setUsageData] = useState<UsageData | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const backoffRef = useRef(INITIAL_BACKOFF);
@@ -297,6 +312,18 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
 
         case "session_started": {
           if (msg.conversationId) setRealConversationId(msg.conversationId);
+          setResumedFrom(null);
+          setSessionConfirmed(true);
+          break;
+        }
+
+        case "session_resumed": {
+          setRealConversationId(msg.conversationId);
+          setResumedFrom({
+            conversationId: msg.conversationId,
+            timestamp: msg.resumedFromTimestamp,
+            messageCount: msg.messageCount,
+          });
           setSessionConfirmed(true);
           break;
         }
@@ -421,9 +448,19 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
   }, [connect, conversationId, clearAllTimeouts]);
 
   const startSession = useCallback(
-    (leaderId?: DomainLeaderId, context?: ConversationContext) => {
+    (optsOrLeaderId?: StartSessionOptions | DomainLeaderId, contextArg?: ConversationContext) => {
+      const opts: StartSessionOptions =
+        typeof optsOrLeaderId === "object" && optsOrLeaderId !== null
+          ? optsOrLeaderId
+          : { leaderId: optsOrLeaderId, context: contextArg };
       setSessionConfirmed(false);
-      send({ type: "start_session", leaderId, context });
+      setResumedFrom(null);
+      send({
+        type: "start_session",
+        leaderId: opts.leaderId,
+        context: opts.context,
+        resumeByContextPath: opts.resumeByContextPath,
+      });
     },
     [send],
   );
@@ -475,5 +512,5 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
     connect();
   }, [connect]);
 
-  return { messages, startSession, resumeSession, sendMessage, sendReviewGateResponse, status, sessionConfirmed, disconnectReason, lastError, reconnect, routeSource, activeLeaderIds, usageData, realConversationId };
+  return { messages, startSession, resumeSession, sendMessage, sendReviewGateResponse, status, sessionConfirmed, disconnectReason, lastError, reconnect, routeSource, activeLeaderIds, usageData, realConversationId, resumedFrom };
 }

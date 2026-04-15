@@ -23,13 +23,25 @@ export interface ChatSurfaceProps {
   variant: ChatSurfaceVariant;
   onClose?: () => void;
   initialContext?: ConversationContext;
-  onThreadResumed?: (conversationId: string, createdAt: string) => void;
+  /**
+   * When set AND conversationId === "new", the sidebar starts a session
+   * that looks up an existing (user_id, context_path) row and resumes it
+   * instead of creating a fresh pending conversation.
+   */
+  resumeByContextPath?: string;
+  onThreadResumed?: (conversationId: string, timestamp: string, messageCount: number) => void;
+  onRealConversationId?: (conversationId: string) => void;
+  onMessageCountChange?: (count: number) => void;
 }
 
 export function ChatSurface({
   conversationId,
   variant,
   initialContext,
+  resumeByContextPath,
+  onThreadResumed,
+  onRealConversationId,
+  onMessageCountChange,
 }: ChatSurfaceProps) {
   const searchParams = useSearchParams();
   const router = useRouter();
@@ -53,6 +65,7 @@ export function ChatSurface({
     activeLeaderIds,
     usageData,
     realConversationId,
+    resumedFrom,
   } = useWebSocket(conversationId);
 
   const { names: customNames, getDisplayName, getIconPath, loading: teamNamesLoading } = useTeamNames();
@@ -115,14 +128,38 @@ export function ChatSurface({
 
     if (conversationId === "new") {
       if (!contextLoading) {
-        startSession(leaderId ?? undefined, kbContext);
+        if (resumeByContextPath) {
+          startSession({
+            leaderId: leaderId ?? undefined,
+            context: kbContext,
+            resumeByContextPath,
+          });
+        } else {
+          startSession(leaderId ?? undefined, kbContext);
+        }
         setSessionStarted(true);
       }
     } else {
       resumeSession(conversationId);
       setSessionStarted(true);
     }
-  }, [status, conversationId, leaderId, sessionStarted, startSession, resumeSession, contextLoading, kbContext]);
+  }, [status, conversationId, leaderId, sessionStarted, startSession, resumeSession, contextLoading, kbContext, resumeByContextPath]);
+
+  useEffect(() => {
+    if (resumedFrom && onThreadResumed) {
+      onThreadResumed(resumedFrom.conversationId, resumedFrom.timestamp, resumedFrom.messageCount);
+    }
+  }, [resumedFrom, onThreadResumed]);
+
+  useEffect(() => {
+    if (realConversationId && onRealConversationId) {
+      onRealConversationId(realConversationId);
+    }
+  }, [realConversationId, onRealConversationId]);
+
+  useEffect(() => {
+    onMessageCountChange?.(messages.length);
+  }, [messages.length, onMessageCountChange]);
 
   useEffect(() => {
     if (status === "reconnecting") {
