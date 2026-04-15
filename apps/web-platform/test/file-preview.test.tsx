@@ -183,6 +183,48 @@ describe("FilePreview", () => {
     });
   });
 
+  it("hides internal filename/Download row for PDF when showDownload={false}", async () => {
+    const { container } = render(
+      <FilePreview path="docs/report.pdf" extension=".pdf" showDownload={false} />,
+    );
+    await waitFor(() => {
+      const pdfDoc = container.querySelector('[data-testid="pdf-document"]');
+      expect(pdfDoc).not.toBeNull();
+    });
+    const downloadLink = container.querySelector("a[download]");
+    expect(downloadLink).toBeNull();
+  });
+
+  it("PDF error fallback still renders download link with showDownload={false}", async () => {
+    pdfMockBehavior.shouldError = true;
+    const { container } = render(
+      <FilePreview path="docs/broken.pdf" extension=".pdf" showDownload={false} />,
+    );
+    await waitFor(() => {
+      expect(screen.getByText("Unable to preview this PDF")).toBeDefined();
+    });
+    const downloadLink = container.querySelector("a[download]");
+    expect(downloadLink).not.toBeNull();
+    expect(downloadLink?.getAttribute("href")).toBe("/api/kb/content/docs/broken.pdf");
+  });
+
+  it("hides internal filename/Download row for .txt when showDownload={false}", async () => {
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      text: () => Promise.resolve("Hello world content"),
+    });
+
+    const { container } = render(
+      <FilePreview path="notes/readme.txt" extension=".txt" showDownload={false} />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("Hello world content")).toBeDefined();
+    });
+    const downloadLink = container.querySelector("a[download]");
+    expect(downloadLink).toBeNull();
+  });
+
   it("opens lightbox when image is clicked", async () => {
     const { container } = render(<FilePreview path="assets/logo.png" extension=".png" />);
 

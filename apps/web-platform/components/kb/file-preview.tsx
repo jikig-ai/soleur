@@ -20,9 +20,18 @@ const IMAGE_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp"]);
 interface FilePreviewProps {
   path: string;
   extension: string;
+  /**
+   * Show the internal filename + Download row that PDF/text previews render
+   * above their content. Default true preserves the shared viewer
+   * (`/shared/[token]`) affordance — the dashboard opts out via
+   * `showDownload={false}` because it renders its own Download button in the
+   * outer page header. Does not affect `DownloadPreview` (which IS the
+   * download UI) or `ImagePreview`.
+   */
+  showDownload?: boolean;
 }
 
-export function FilePreview({ path, extension }: FilePreviewProps) {
+export function FilePreview({ path, extension, showDownload = true }: FilePreviewProps) {
   const contentUrl = `/api/kb/content/${path}`;
   const ext = extension.toLowerCase();
   const filename = path.split("/").pop() || path;
@@ -32,11 +41,11 @@ export function FilePreview({ path, extension }: FilePreviewProps) {
   }
 
   if (ext === ".pdf") {
-    return <PdfPreview src={contentUrl} filename={filename} />;
+    return <PdfPreview src={contentUrl} filename={filename} showDownload={showDownload} />;
   }
 
   if (ext === ".txt") {
-    return <TextPreview src={contentUrl} filename={filename} />;
+    return <TextPreview src={contentUrl} filename={filename} showDownload={showDownload} />;
   }
 
   // CSV, DOCX, and other types — download link
@@ -92,7 +101,15 @@ function ImagePreview({ src, filename }: { src: string; filename: string }) {
   );
 }
 
-function TextPreview({ src, filename }: { src: string; filename: string }) {
+function TextPreview({
+  src,
+  filename,
+  showDownload = true,
+}: {
+  src: string;
+  filename: string;
+  showDownload?: boolean;
+}) {
   const [text, setText] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
@@ -133,16 +150,18 @@ function TextPreview({ src, filename }: { src: string; filename: string }) {
 
   return (
     <div className="flex flex-col gap-3 p-4">
-      <div className="flex items-center justify-between">
-        <span className="text-sm text-neutral-400">{filename}</span>
-        <a
-          href={src}
-          download={filename}
-          className="rounded-md border border-neutral-700 px-3 py-1 text-xs text-neutral-300 hover:bg-neutral-800"
-        >
-          Download
-        </a>
-      </div>
+      {showDownload && (
+        <div className="flex items-center justify-between">
+          <span className="text-sm text-neutral-400">{filename}</span>
+          <a
+            href={src}
+            download={filename}
+            className="rounded-md border border-neutral-700 px-3 py-1 text-xs text-neutral-300 hover:bg-neutral-800"
+          >
+            Download
+          </a>
+        </div>
+      )}
       <pre className="max-h-[70vh] overflow-auto rounded-lg border border-neutral-800 bg-neutral-900/50 p-4 text-sm text-neutral-300">
         {text}
       </pre>

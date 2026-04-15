@@ -366,8 +366,8 @@ Tests: `decodes URL-encoded segments`, `returns raw segment when decoding throws
 
 ## Rollout
 
-- [ ] Implement per steps 1-7.
-- [ ] Run tests. Verified canonical command for this worktree:
+- [x] Implement per steps 1-7.
+- [x] Run tests. Verified canonical command for this worktree:
 
   ```bash
   cd apps/web-platform
@@ -375,7 +375,7 @@ Tests: `decodes URL-encoded segments`, `returns raw segment when decoding throws
   ```
 
   (`package.json scripts.test` is `vitest`; AGENTS.md `cq-in-worktrees-run-vitest-via-node-node` mandates the direct `node ...vitest.mjs` invocation inside worktrees because `npx` cache can resolve to a sibling worktree's vitest binary and produce phantom failures.)
-- [ ] Also run the full suite to confirm no other viewer tests regressed:
+- [x] Also run the full suite to confirm no other viewer tests regressed:
 
   ```bash
   node node_modules/vitest/vitest.mjs run 2>&1 | tail -n 200

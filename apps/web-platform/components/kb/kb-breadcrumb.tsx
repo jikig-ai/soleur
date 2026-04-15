@@ -1,5 +1,13 @@
 "use client";
 
+function safeDecode(segment: string): string {
+  try {
+    return decodeURIComponent(segment);
+  } catch {
+    return segment;
+  }
+}
+
 export function KbBreadcrumb({ path }: { path: string }) {
   const segments = path.split("/");
 
@@ -9,7 +17,7 @@ export function KbBreadcrumb({ path }: { path: string }) {
         <span key={i} className="flex items-center gap-1">
           {i > 0 && <span>/</span>}
           <span className={i === segments.length - 1 ? "text-neutral-300" : ""}>
-            {segment}
+            {safeDecode(segment)}
           </span>
         </span>
       ))}
