@@ -60,10 +60,21 @@ export type WSMessage =
   | { type: "resume_session"; conversationId: string }
   | { type: "close_conversation" }
   | { type: "review_gate_response"; gateId: string; selection: string }
-  | { type: "stream"; content: string; partial: boolean; leaderId: DomainLeaderId }
+  | {
+      type: "stream";
+      content: string;
+      /**
+       * Server-side diagnostic: `true` for streamed deltas, `false` for the
+       * final consolidated text on completion. The client uses replace
+       * semantics regardless — it treats every `stream` event as a cumulative
+       * snapshot. Do not branch on this field on the client.
+       */
+      partial: boolean;
+      leaderId: DomainLeaderId;
+    }
   | { type: "stream_start"; leaderId: DomainLeaderId; source?: "auto" | "mention" }
   | { type: "stream_end"; leaderId: DomainLeaderId }
-  | { type: "tool_use"; leaderId: DomainLeaderId; tool: string; label: string }
+  | { type: "tool_use"; leaderId: DomainLeaderId; label: string }
   | { type: "review_gate"; gateId: string; question: string; header?: string; options: string[]; descriptions?: Record<string, string | undefined>; stepProgress?: { current: number; total: number } }
   | { type: "session_started"; conversationId: string }
   | { type: "session_ended"; reason: string }
