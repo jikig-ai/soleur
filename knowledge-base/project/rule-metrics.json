@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-04-15T08:32:59Z",
+  "generated_at": "2026-04-15T09:35:31Z",
   "rules": [
     {
       "id": "cm-challenge-reasoning-instead-of",
@@ -99,7 +99,7 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": "Doppler service tokens are per-config — use conf"
+      "rule_text_prefix": "Doppler service tokens are per-config — use config"
     },
     {
       "id": "cq-ensure-dependencies-are-installed-at-the",
