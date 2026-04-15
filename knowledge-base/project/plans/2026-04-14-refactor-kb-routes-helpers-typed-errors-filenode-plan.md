@@ -25,7 +25,6 @@
 - The existing `GitHubApiError` only carries `statusCode`, not `bodyText` or `path`. The plan's expanded shape (add `bodyText` and `path`) is **optional** and additive — only if a test or caller needs them. Prefer minimal change: just extend the constructor to accept optional `bodyText`/`path` as a follow-up if needed. Do not break existing `new GitHubApiError(message, status)` call sites.
 - `app/api/repo/create/route.ts:69` already uses `instanceof GitHubApiError && err.statusCode === 422` — the KB migration aligns with an established project convention, not a new one. This reduces review risk.
 
-
 ## Summary
 
 Address three code-review follow-ups from PR #2172 in one cohesive PR. All three items target the KB feature area and reinforce each other:
@@ -452,20 +451,20 @@ Icons (`FolderIcon`, `FileTypeIcon`, `UploadIcon`, `PencilIcon`, `TrashIcon`) an
 
 ## Acceptance Criteria
 
-- [ ] `GitHubApiError` (the existing class from `server/github-app.ts`) is re-exported from `server/github-api.ts`
-- [ ] `handleErrorResponse` throws `GitHubApiError` (not plain `Error`), using the existing `statusCode` field; message format preserved
-- [ ] No duplicate `GitHubApiError` class introduced; no field rename
-- [ ] All 8 `errMsg.includes("404"|"409"|"GitHub API")` call sites in KB routes replaced with typed checks
-- [ ] `authenticateAndResolveKbPath` handles all 10 branches currently duplicated in PATCH + DELETE (CSRF, auth, workspace, no-repo, empty path, null byte, `.md` block, path traversal, symlink, invalid repo URL)
-- [ ] `syncWorkspace` handles credential-helper scaffolding and cleanup; returns `{ok}` discriminated result
-- [ ] PATCH and DELETE handlers use both helpers
-- [ ] No behavioral changes: every existing `kb-delete`, `kb-rename`, `kb-upload` test passes unchanged
-- [ ] `FileNode` component extracted; `TreeItem` now handles directories only
-- [ ] `file-tree-delete.test.tsx`, `file-tree-rename.test.tsx`, `file-tree-upload.test.tsx` all pass without modification
-- [ ] New tests: `github-api-error.test.ts`, `kb-route-helpers.test.ts`
-- [ ] `node node_modules/vitest/vitest.mjs run` passes green on all KB/github-api tests
-- [ ] `tsc --noEmit` clean
-- [ ] `eslint` clean for changed files
+- [x] `GitHubApiError` (the existing class from `server/github-app.ts`) is re-exported from `server/github-api.ts`
+- [x] `handleErrorResponse` throws `GitHubApiError` (not plain `Error`), using the existing `statusCode` field; message format preserved
+- [x] No duplicate `GitHubApiError` class introduced; no field rename
+- [x] All 8 `errMsg.includes("404"|"409"|"GitHub API")` call sites in KB routes replaced with typed checks
+- [x] `authenticateAndResolveKbPath` handles all 10 branches currently duplicated in PATCH + DELETE (CSRF, auth, workspace, no-repo, empty path, null byte, `.md` block, path traversal, symlink, invalid repo URL)
+- [x] `syncWorkspace` handles credential-helper scaffolding and cleanup; returns `{ok}` discriminated result
+- [x] PATCH and DELETE handlers use both helpers
+- [x] No behavioral changes: every existing `kb-delete`, `kb-rename`, `kb-upload` test passes unchanged
+- [x] `FileNode` component extracted; `TreeItem` now handles directories only
+- [x] `file-tree-delete.test.tsx`, `file-tree-rename.test.tsx`, `file-tree-upload.test.tsx` all pass without modification
+- [x] New tests: `github-api-error.test.ts`, `kb-route-helpers.test.ts`
+- [x] `node node_modules/vitest/vitest.mjs run` passes green on all KB/github-api tests
+- [x] `tsc --noEmit` clean
+- [x] `eslint` clean for changed files
 
 ## Test Scenarios (write these first — TDD gate)
 
@@ -604,14 +603,14 @@ This is a pure internal refactor with no user-visible changes, no new pages, no 
 
 ## Definition of Done
 
-- [ ] All acceptance criteria checked
-- [ ] All test scenarios green locally (`node node_modules/vitest/vitest.mjs run`)
-- [ ] `tsc --noEmit` clean
-- [ ] `eslint` clean on changed files
-- [ ] No new ESLint warnings introduced
-- [ ] Diff reviewed for byte-for-byte response preservation (DELETE + PATCH + upload response JSON shapes unchanged)
-- [ ] PR title: `refactor(kb): extract route helpers, typed GitHub errors, FileNode component split`
-- [ ] PR body includes `Closes #2180`, `Closes #2150`, `Closes #2149`
-- [ ] Semver label: `type/chore` (no user-visible change)
-- [ ] Compound run before commit
-- [ ] Plan review (DHH / Kieran / code-simplicity) addressed
+- [x] All acceptance criteria checked
+- [x] All test scenarios green locally (`node node_modules/vitest/vitest.mjs run`)
+- [x] `tsc --noEmit` clean
+- [x] `eslint` clean on changed files
+- [x] No new ESLint warnings introduced
+- [x] Diff reviewed for byte-for-byte response preservation (DELETE + PATCH + upload response JSON shapes unchanged)
+- [x] PR title: `refactor(kb): extract route helpers, typed GitHub errors, FileNode component split`
+- [x] PR body includes `Closes #2180`, `Closes #2150`, `Closes #2149`
+- [x] Semver label: `type/chore` (no user-visible change)
+- [x] Compound run before commit
+- [x] Plan review (DHH / Kieran / code-simplicity) addressed
