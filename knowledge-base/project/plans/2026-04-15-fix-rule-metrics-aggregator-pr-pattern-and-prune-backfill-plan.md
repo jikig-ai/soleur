@@ -3,9 +3,30 @@ title: "Fix rule-metrics aggregator to use PR pattern and prune backfill script"
 date: 2026-04-15
 issues: ["#2258", "#2264"]
 status: planned
+deepened: 2026-04-15
 ---
 
 # fix: rule-metrics aggregator PR pattern + prune backfill migration script
+
+## Enhancement Summary
+
+**Deepened on:** 2026-04-15
+**Sections enhanced:** Permissions block, Phase 1 step 1, Phase 1 step 2, Risks, Pre-flight checks (new section), References
+
+### Key Improvements from Deepening
+
+1. **Removed `actions: write` from proposed permissions** — `scheduled-weekly-analytics.yml` includes it because that workflow dispatches three other workflows (`scheduled-seo-aeo-audit.yml`, etc.) under a KPI-miss branch. The rule-metrics aggregator dispatches nothing. Per `2026-02-21-github-actions-workflow-security-patterns.md` (least-privilege principle) and the SHA-pinning convention, drop `actions: write`. Keep `contents`, `pull-requests`, `checks`, `statuses` — minimum needed for create-branch + push + open-PR + post check-runs.
+2. **Confirmed Check Runs vs Statuses distinction** — per learning `2026-03-23-skip-ci-blocks-auto-merge-on-scheduled-prs.md`, rulesets require **Check Runs** (Checks API: `POST /repos/.../check-runs`), not commit Statuses (Status API). The plan already uses `gh api repos/${{ github.repository }}/check-runs` (Checks API) per the analytics precedent. Explicitly call this out so future maintainers don't "simplify" to the Status API.
+3. **Pre-flight checks added** — verify `allow_auto_merge: true` and Check Runs API path before merge (already verified at deepening time: `gh api repos/jikig-ai/soleur --jq '.allow_auto_merge'` returns `true`).
+4. **No `[skip ci]` confirmation** — per `2026-03-23-skip-ci-blocks-auto-merge-on-scheduled-prs.md`, never use `[skip ci]` in commit messages on bot PRs targeting required-check rulesets. Plan does not use it; deepening explicitly affirms.
+5. **Bot identity must match `cla-check` integration_id constraint** — per `2026-03-19-github-actions-bypass-actor-not-feasible.md`, the `cla-check` ruleset is locked to `integration_id: 15368` (the `github-actions` app). Synthetic `cla-check` posts via `gh api ... -H "Authorization: Bearer ${{ github.token }}"` (which `gh` does by default in workflows) authenticate as that integration. **Do not** post the synthetic check from any other token (e.g., a PAT) — it will be rejected. Keep `GH_TOKEN: ${{ github.token }}` exactly as the analytics workflow does.
+6. **Rotation behavior is unaffected** — `.claude/.rule-incidents.jsonl` rotation in `scripts/rule-metrics-aggregate.sh:175-183` writes to `.claude/.rule-incidents-YYYY-MM.jsonl.gz` which is gitignored. Switching from direct-push to PR-pattern is invisible to rotation: rotation already happens inside the runner sandbox and is discarded at runner shutdown.
+
+### New Considerations Discovered
+
+- **The first manual `workflow_dispatch` after merge may produce no PR** — the JSON might be byte-identical to `fd3e9d9b` if no incidents have accumulated. That is a valid pass for the #2264 acceptance gate (the early-exit path is exercised). If we want to *prove* the PR-creation path works in production, append a single throwaway incident to `.claude/.rule-incidents.jsonl` locally and run the script in `--dry-run` to confirm a non-empty diff *would* be produced — but do not commit the seeded incidents file (it's gitignored anyway). This is documented in Risks; deepening leaves the decision (accept early-exit pass vs. seed-and-dispatch) to the implementer.
+- **GitHub Actions does not retry the schedule on failure** — the failed run `24444855398` did not retrigger. The next scheduled run is Sunday 2026-04-19 00:00 UTC. If we don't manually dispatch post-merge (Phase 4 step 1), the gate in #2264 stays unsatisfied until Sunday. Phase 4 already prescribes manual dispatch; deepening reinforces it.
+- **`actions/checkout` SHA is already pinned correctly** in the existing workflow (`34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1`). Per `2026-02-21-github-actions-workflow-security-patterns.md`, no change needed — but verify after edit that we did not regress to `@v4`.
 
 ## Overview
 
@@ -54,22 +75,52 @@ This context shifts the framing of #2258: Option A from the issue (open a PR) is
 
 ## Plan
 
+### Phase 0 — Pre-flight checks (one-time, can be done from any context before edit)
+
+These three preconditions were verified at deepening time on 2026-04-15. Re-verify before merging if the PR sits open longer than 24 hours, since repo settings can change.
+
+1. **Auto-merge is enabled on the repo:**
+
+   ```bash
+   gh api repos/jikig-ai/soleur --jq '.allow_auto_merge'
+   # Expected: true   (verified 2026-04-15)
+   ```
+
+   If `false`, `gh pr merge --squash --auto` will fail immediately (per `2026-03-02-github-actions-auto-push-vs-pr-for-bot-content.md`). Toggle it on before merging this PR.
+
+2. **The four required check names from `CI Required` ruleset 14145388 + `CLA Required` ruleset 13304872 are unchanged:** `test`, `dependency-review`, `e2e`, `cla-check`.
+
+   ```bash
+   gh api repos/jikig-ai/soleur/rulesets/14145388 --jq '.rules[] | select(.type=="required_status_checks") | .parameters.required_status_checks[].context'
+   # Expected: test, dependency-review, e2e   (verified 2026-04-15)
+   ```
+
+   If different, update the synthetic check-run names in Phase 1 step 2.6 to match. The plan must mirror reality, not assumptions.
+
+3. **The `cla-check` integration_id constraint is `15368` (the `github-actions` app):**
+
+   ```bash
+   gh api repos/jikig-ai/soleur/rulesets/13304872 --jq '.rules[] | select(.type=="required_status_checks") | .parameters.required_status_checks[]'
+   # Expected: {"context":"cla-check","integration_id":15368}
+   ```
+
+   This is satisfied by `gh api ... -f name=cla-check ...` running with `GH_TOKEN: ${{ github.token }}` (which authenticates as integration 15368). Per `2026-03-19-github-actions-bypass-actor-not-feasible.md`, no other token will satisfy this constraint — do not switch to a PAT.
+
 ### Phase 1 — Convert `rule-metrics-aggregate.yml` to PR-based commit pattern
 
 Edit `.github/workflows/rule-metrics-aggregate.yml`:
 
-1. Expand `permissions:` to match `scheduled-weekly-analytics.yml`:
+1. Expand `permissions:` (least-privilege subset of `scheduled-weekly-analytics.yml` — drop `actions: write` because this workflow does not dispatch other workflows):
 
    ```yaml
    permissions:
-     actions: write
      checks: write
      contents: write
      pull-requests: write
      statuses: write
    ```
 
-   Rationale: `pull-requests: write` is needed for `gh pr create`. `checks: write` is needed for the synthetic check-runs. `statuses: write` is kept defensively in case any ruleset uses commit-statuses rather than check-runs (the analytics workflow includes it). `actions: write` matches the analytics precedent (used for workflow dispatch in some derivatives) and costs nothing here.
+   Rationale: `pull-requests: write` is needed for `gh pr create`. `checks: write` is needed for the synthetic Check Runs (per `2026-03-23-skip-ci-blocks-auto-merge-on-scheduled-prs.md`, rulesets require Check Runs from the Checks API, not commit Statuses from the Status API). `statuses: write` is kept defensively in case the ruleset configuration ever shifts to require statuses (the analytics workflow keeps it for the same reason). `contents: write` is needed to push the bot branch. `actions: write` is **omitted** — the analytics workflow includes it only because it dispatches three remediation workflows on KPI miss; this aggregator dispatches none. Per `2026-02-21-github-actions-workflow-security-patterns.md`, prefer least-privilege.
 
 2. Replace the `Commit rule-metrics.json if changed` step with a `Create PR with rule-metrics snapshot` step modelled on lines 68–119 of `scheduled-weekly-analytics.yml`:
 
@@ -78,7 +129,7 @@ Edit `.github/workflows/rule-metrics-aggregate.yml`:
    - Early-exit with `exit 0` if `git diff --cached --quiet` (no material change → no PR, mirrors current "skip commit" message).
    - Otherwise: create branch `ci/rule-metrics-$(date -u +%Y-%m-%d)`, commit with `chore(rule-metrics): weekly aggregate`, push with `-u origin`.
    - `gh pr create` with title `chore(rule-metrics): weekly aggregate $(date -u +%Y-%m-%d)`, body explaining the source and pointing reviewers at the diff.
-   - Post four synthetic check-runs (`test`, `cla-check`, `dependency-review`, `e2e`) on the branch HEAD via `gh api repos/${{ github.repository }}/check-runs` with `status=completed`, `conclusion=success`. Output title/summary should reflect "Bot PR — rule metrics aggregation only, no code changes."
+   - Post four synthetic **Check Runs** (NOT commit Statuses) — `test`, `cla-check`, `dependency-review`, `e2e` — on the branch HEAD via `gh api repos/${{ github.repository }}/check-runs` with `status=completed`, `conclusion=success`. Output title/summary should reflect "Bot PR — rule metrics aggregation only, no code changes." **Critical:** the endpoint must be `/check-runs` (Checks API). The Status API endpoint `/statuses/<sha>` produces a different GitHub primitive that does NOT satisfy ruleset 14145388 (which requires Check Runs from `integration_id: 15368`). See learning `2026-03-23-skip-ci-blocks-auto-merge-on-scheduled-prs.md` — this confusion has caused stuck bot PRs in the past.
    - `gh pr merge "$BRANCH" --squash --auto`.
 
 3. Keep the existing `Email notification (failure)` step unchanged.
@@ -123,7 +174,7 @@ Edit `.github/workflows/rule-metrics-aggregate.yml`:
 ## Acceptance Criteria
 
 - [ ] `.github/workflows/rule-metrics-aggregate.yml` no longer contains `git push` to `main`. It uses `gh pr create` + synthetic check-runs + `gh pr merge --squash --auto`.
-- [ ] Workflow `permissions:` includes `pull-requests: write`, `checks: write`, `contents: write`, `statuses: write`, `actions: write`.
+- [ ] Workflow `permissions:` includes `pull-requests: write`, `checks: write`, `contents: write`, `statuses: write`. Does NOT include `actions: write` (least-privilege — this workflow dispatches no other workflows).
 - [ ] Bot commit author email is the canonical `41898282+github-actions[bot]@users.noreply.github.com`.
 - [ ] `scripts/backfill-rule-ids.py` is deleted.
 - [ ] `tests/scripts/test_backfill_rule_ids.py` is deleted.
@@ -202,6 +253,12 @@ This plan touches a CI workflow with conditional bash logic — exactly the clas
 - PR #2213 — feat(rule-utility): telemetry, weekly aggregator, and /soleur:sync rule-prune (merged at `fd3e9d9b`)
 - Failed run: `https://github.com/jikig-ai/soleur/actions/runs/24444855398`
 - Reference workflow: `.github/workflows/scheduled-weekly-analytics.yml` (lines 29–34, 68–119)
-- Learning: `knowledge-base/project/learnings/2026-03-19-content-publisher-cla-ruleset-push-rejection.md`
+- Learning: `knowledge-base/project/learnings/2026-03-19-content-publisher-cla-ruleset-push-rejection.md` — canonical PR-pattern solution.
+- Learning: `knowledge-base/project/learnings/2026-03-23-skip-ci-blocks-auto-merge-on-scheduled-prs.md` — Check Runs vs Statuses; never use `[skip ci]`.
+- Learning: `knowledge-base/project/learnings/2026-03-19-github-actions-bypass-actor-not-feasible.md` — why `cla-check` integration_id constraint mandates `GH_TOKEN: ${{ github.token }}`.
+- Learning: `knowledge-base/project/learnings/2026-03-02-github-actions-auto-push-vs-pr-for-bot-content.md` — the three preconditions checked in Phase 0.
+- Learning: `knowledge-base/project/learnings/2026-04-02-yaml-literal-block-heredoc-breakage.md` — why no heredocs in `run:` blocks.
+- Learning: `knowledge-base/project/learnings/integration-issues/github-token-pr-no-ci-trigger-ContentPublisher-20260326.md` — why CI never runs on `GITHUB_TOKEN`-created PRs (mandates synthetic check-runs).
+- Learning: `knowledge-base/project/learnings/2026-02-21-github-actions-workflow-security-patterns.md` — least-privilege permissions, SHA-pinned actions.
 - Original aggregator plan: `knowledge-base/project/plans/2026-04-14-feat-rule-utility-scoring-plan.md`
 - AGENTS.md rules consulted: `hr-in-github-actions-run-blocks-never-use`, `hr-never-use-sleep-2-seconds-in-foreground`, `wg-after-merging-a-pr-that-adds-or-modifies`, `wg-use-closes-n-in-pr-body-not-title-to`, `cq-write-failing-tests-before` (exemption), `cq-always-run-npx-markdownlint-cli2-fix-on`.

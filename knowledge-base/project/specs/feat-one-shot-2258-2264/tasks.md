@@ -2,6 +2,12 @@
 
 Source plan: `knowledge-base/project/plans/2026-04-15-fix-rule-metrics-aggregator-pr-pattern-and-prune-backfill-plan.md`
 
+## 0. Pre-flight (deepening Phase 0)
+
+- [ ] 0.1 `gh api repos/jikig-ai/soleur --jq '.allow_auto_merge'` returns `true`. If `false`, enable before merging.
+- [ ] 0.2 `gh api repos/jikig-ai/soleur/rulesets/14145388 --jq '.rules[] | select(.type=="required_status_checks") | .parameters.required_status_checks[].context'` returns exactly `test`, `dependency-review`, `e2e`. If different, update synthetic check-run names in 2.2.6.
+- [ ] 0.3 `gh api repos/jikig-ai/soleur/rulesets/13304872 --jq '.rules[] | select(.type=="required_status_checks") | .parameters.required_status_checks[]'` returns `cla-check` with `integration_id: 15368`.
+
 ## 1. Setup
 
 - [ ] 1.1 Confirm worktree is on branch `feat-one-shot-2258-2264` and remote is set.
@@ -9,14 +15,14 @@ Source plan: `knowledge-base/project/plans/2026-04-15-fix-rule-metrics-aggregato
 
 ## 2. Workflow conversion (#2258)
 
-- [ ] 2.1 Edit `.github/workflows/rule-metrics-aggregate.yml`: expand `permissions:` block to include `actions: write`, `checks: write`, `pull-requests: write`, `statuses: write` (keep existing `contents: write`).
+- [ ] 2.1 Edit `.github/workflows/rule-metrics-aggregate.yml`: expand `permissions:` block to include `checks: write`, `pull-requests: write`, `statuses: write` (keep existing `contents: write`). Do NOT add `actions: write` (least-privilege; this workflow dispatches no other workflows).
 - [ ] 2.2 Replace the `Commit rule-metrics.json if changed` step with `Create PR with rule-metrics snapshot` step modelled on `scheduled-weekly-analytics.yml` lines 68–119.
   - [ ] 2.2.1 Use git author email `41898282+github-actions[bot]@users.noreply.github.com`.
   - [ ] 2.2.2 Branch name: `ci/rule-metrics-$(date -u +%Y-%m-%d)`.
   - [ ] 2.2.3 Commit message: `chore(rule-metrics): weekly aggregate`.
   - [ ] 2.2.4 PR title: `chore(rule-metrics): weekly aggregate $(date -u +%Y-%m-%d)`.
   - [ ] 2.2.5 PR body: short single-line `--body` referencing the source script and pointing reviewers at the diff (no heredoc).
-  - [ ] 2.2.6 Post four synthetic check-runs via `gh api`: `test`, `cla-check`, `dependency-review`, `e2e`, all `status=completed conclusion=success`.
+  - [ ] 2.2.6 Post four synthetic **Check Runs** (NOT commit Statuses) via `gh api repos/${{ github.repository }}/check-runs`: `test`, `cla-check`, `dependency-review`, `e2e`, all `status=completed conclusion=success`. Use `GH_TOKEN: ${{ github.token }}` (required to satisfy `cla-check` `integration_id: 15368`).
   - [ ] 2.2.7 Final `gh pr merge "$BRANCH" --squash --auto`.
   - [ ] 2.2.8 Early-exit with `exit 0` if `git diff --cached --quiet` (no changes path).
 - [ ] 2.3 Update workflow header comment: replace "commits when materially changed" with "opens a PR when materially changed" and link issue #2258.
