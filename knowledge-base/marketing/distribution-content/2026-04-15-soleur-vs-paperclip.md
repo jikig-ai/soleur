@@ -3,7 +3,7 @@ title: "Soleur vs. Paperclip: Domain Intelligence vs. AI Company Orchestration"
 type: comparison
 publish_date: "2026-04-15"
 channels: discord, x, bluesky, linkedin-company
-status: scheduled
+status: published
 ---
 
 ## Discord
