@@ -15,6 +15,13 @@ vi.mock("@/components/ui/markdown-renderer", () => ({
 
 vi.mock("@/components/kb/kb-breadcrumb", () => ({
   KbBreadcrumb: ({ path }: { path: string }) => <span data-testid="breadcrumb">{path}</span>,
+  safeDecode: (s: string) => {
+    try {
+      return decodeURIComponent(s);
+    } catch {
+      return s;
+    }
+  },
 }));
 
 vi.mock("@/components/kb/share-popover", () => ({
@@ -22,8 +29,21 @@ vi.mock("@/components/kb/share-popover", () => ({
 }));
 
 vi.mock("@/components/kb/file-preview", () => ({
-  FilePreview: ({ path, extension }: { path: string; extension: string }) => (
-    <div data-testid="file-preview" data-path={path} data-extension={extension} />
+  FilePreview: ({
+    path,
+    extension,
+    showDownload,
+  }: {
+    path: string;
+    extension: string;
+    showDownload?: boolean;
+  }) => (
+    <div
+      data-testid="file-preview"
+      data-path={path}
+      data-extension={extension}
+      data-show-download={showDownload === undefined ? "unset" : String(showDownload)}
+    />
   ),
 }));
 
@@ -123,6 +143,59 @@ describe("KbContentPage routing", () => {
 
     await waitFor(() => {
       expect(getByTestId("share")).toBeTruthy();
+    });
+  });
+
+  it("renders Download/Share/Chat in header for non-markdown files (order preserved)", async () => {
+    const { default: KbContentPage } = await import(
+      "@/app/(dashboard)/dashboard/kb/[...path]/page"
+    );
+
+    const { container, getByTestId } = await act(() =>
+      renderWithSuspense(
+        <KbContentPage params={Promise.resolve({ path: ["docs", "report.pdf"] })} />,
+      ),
+    );
+
+    const header = await waitFor(() => {
+      const el = container.querySelector("header");
+      if (!el) throw new Error("header not found");
+      return el;
+    });
+
+    const downloadAnchor = header.querySelector('a[download]');
+    expect(downloadAnchor).not.toBeNull();
+    expect(downloadAnchor?.getAttribute("href")).toBe("/api/kb/content/docs/report.pdf");
+    expect(downloadAnchor?.getAttribute("download")).toBe("report.pdf");
+
+    const share = getByTestId("share");
+    const chatLink = header.querySelector('a[href^="/dashboard/chat/new"]');
+    expect(chatLink).not.toBeNull();
+
+    // Order: Download -> Share -> Chat
+    expect(
+      downloadAnchor!.compareDocumentPosition(share) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(
+      share.compareDocumentPosition(chatLink!) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+
+  it("passes showDownload={false} to FilePreview on non-markdown branch", async () => {
+    const { default: KbContentPage } = await import(
+      "@/app/(dashboard)/dashboard/kb/[...path]/page"
+    );
+
+    const { getByTestId } = await act(() =>
+      renderWithSuspense(
+        <KbContentPage params={Promise.resolve({ path: ["docs", "report.pdf"] })} />,
+      ),
+    );
+
+    await waitFor(() => {
+      expect(getByTestId("file-preview").getAttribute("data-show-download")).toBe("false");
     });
   });
 });

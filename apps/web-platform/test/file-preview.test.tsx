@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import React from "react";
 import { FilePreview } from "@/components/kb/file-preview";
@@ -53,9 +53,16 @@ vi.mock("next/navigation", () => ({
   usePathname: () => "/dashboard/kb",
 }));
 
+const originalFetch = global.fetch;
+
 beforeEach(() => {
   vi.clearAllMocks();
   pdfMockBehavior.shouldError = false;
+});
+
+afterEach(() => {
+  // Prevent fetch stubs from leaking across tests.
+  global.fetch = originalFetch;
 });
 
 describe("FilePreview", () => {
@@ -181,6 +188,69 @@ describe("FilePreview", () => {
       const downloadLink = container.querySelector('a[download]');
       expect(downloadLink).not.toBeNull();
     });
+  });
+
+  it("default showDownload renders internal Download row for PDF (preserves shared viewer affordance)", async () => {
+    // Regression guard: shared viewer (`/shared/[token]`) relies on this default.
+    const { container } = render(<FilePreview path="docs/report.pdf" extension=".pdf" />);
+    await waitFor(() => {
+      const downloadLink = container.querySelector('a[download]');
+      expect(downloadLink).not.toBeNull();
+    });
+  });
+
+  it("default showDownload renders internal Download row for .txt", async () => {
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      text: () => Promise.resolve("content"),
+    });
+    const { container } = render(<FilePreview path="notes/readme.txt" extension=".txt" />);
+    await waitFor(() => {
+      const downloadLink = container.querySelector("a[download]");
+      expect(downloadLink).not.toBeNull();
+    });
+  });
+
+  it("hides internal filename/Download row for PDF when showDownload={false}", async () => {
+    const { container } = render(
+      <FilePreview path="docs/report.pdf" extension=".pdf" showDownload={false} />,
+    );
+    await waitFor(() => {
+      const pdfDoc = container.querySelector('[data-testid="pdf-document"]');
+      expect(pdfDoc).not.toBeNull();
+    });
+    const downloadLink = container.querySelector("a[download]");
+    expect(downloadLink).toBeNull();
+  });
+
+  it("PDF error fallback still renders download link with showDownload={false}", async () => {
+    pdfMockBehavior.shouldError = true;
+    const { container } = render(
+      <FilePreview path="docs/broken.pdf" extension=".pdf" showDownload={false} />,
+    );
+    await waitFor(() => {
+      expect(screen.getByText("Unable to preview this PDF")).toBeDefined();
+    });
+    const downloadLink = container.querySelector("a[download]");
+    expect(downloadLink).not.toBeNull();
+    expect(downloadLink?.getAttribute("href")).toBe("/api/kb/content/docs/broken.pdf");
+  });
+
+  it("hides internal filename/Download row for .txt when showDownload={false}", async () => {
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      text: () => Promise.resolve("Hello world content"),
+    });
+
+    const { container } = render(
+      <FilePreview path="notes/readme.txt" extension=".txt" showDownload={false} />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("Hello world content")).toBeDefined();
+    });
+    const downloadLink = container.querySelector("a[download]");
+    expect(downloadLink).toBeNull();
   });
 
   it("opens lightbox when image is clicked", async () => {
