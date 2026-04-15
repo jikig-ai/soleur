@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
-import { SlidingWindowCounter } from "@/server/rate-limiter";
 import { createChildLogger } from "@/server/logger";
 import { validateOrigin, rejectCsrf } from "@/lib/auth/validate-origin";
+import { analyticsTrackThrottle } from "./throttle";
 
 // Phase 5.2: same-origin-checked, per-IP rate-limited analytics forwarder.
 //
@@ -11,18 +11,11 @@ import { validateOrigin, rejectCsrf } from "@/lib/auth/validate-origin";
 // rate cap. We strip any `user_id`/`userId` from forwarded props so a stable
 // identifier never reaches a third-party tool without a documented salt
 // rotation strategy (see plan 5.2 + learning 2026-03-30-plausible-http-402).
+//
+// Non-HTTP-method exports are forbidden in Next.js 15 App Router route files.
+// The throttle + test reset helper live in ./throttle.ts.
 
 const log = createChildLogger("analytics-track");
-
-const RATE_PER_MIN = parseInt(
-  process.env.ANALYTICS_TRACK_RATE_PER_MIN ?? "120",
-  10,
-);
-
-export const analyticsTrackThrottle = new SlidingWindowCounter({
-  windowMs: 60_000,
-  maxRequests: RATE_PER_MIN,
-});
 
 function clientIp(req: Request): string {
   const xff = req.headers.get("x-forwarded-for");
@@ -134,9 +127,4 @@ export async function POST(req: Request): Promise<Response> {
 
 export async function GET(): Promise<Response> {
   return NextResponse.json({ error: "method_not_allowed" }, { status: 405 });
-}
-
-/** Test-only helper: clear the in-memory throttle between tests. */
-export function __resetAnalyticsTrackThrottleForTest(): void {
-  analyticsTrackThrottle.reset();
 }
