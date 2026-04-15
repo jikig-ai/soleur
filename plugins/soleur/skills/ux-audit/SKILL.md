@@ -34,7 +34,7 @@ Skill(skill: "soleur:ux-audit")
 Skill(skill: "soleur:ux-audit", args: "--route /dashboard")
 ```
 
-Dry-run toggle: export `UX_AUDIT_DRY_RUN=true` before launching Claude Code (or set it via `workflow_dispatch.inputs.dry_run` in the workflow). The skill reads the env var at runtime.
+Dry-run toggle: export `UX_AUDIT_DRY_RUN=true` before launching Claude Code. The skill reads the env var at runtime. In the scheduled workflow (`.github/workflows/scheduled-ux-audit.yml`) the env is hardcoded to `'true'` per plan #2341 Phase 3 calibration outcome (#2378 MISS) — file mode must be re-enabled by editing the workflow directly, not via a workflow input.
 
 Env vars required (loaded from Doppler `prd_scheduled`, falling back to `prd`):
 
@@ -43,7 +43,7 @@ Env vars required (loaded from Doppler `prd_scheduled`, falling back to `prd`):
 - `UX_AUDIT_DRY_RUN` — `true` writes findings JSON to stdout + workflow artifact; `false` files issues
 - `GH_TOKEN` — for `gh issue create` / `gh issue list`
 
-Single dry-run knob: `workflow_dispatch.inputs.dry_run` → `UX_AUDIT_DRY_RUN` env. One plumbing path.
+Single dry-run knob: `UX_AUDIT_DRY_RUN` env. In the scheduled workflow it is hardcoded to `'true'`; locally it is controlled by the exported env var. One plumbing path either way.
 
 ## Constants (inline, not configurable)
 
