@@ -6,6 +6,27 @@ date: 2026-04-15
 
 # fix: KB Tree PDF to vision.md write fails with ZodError invalid_union on Write/Edit
 
+## Enhancement Summary
+
+**Deepened on:** 2026-04-15
+**Sections enhanced:** Overview, Problem Statement, Proposed Solution, Technical Considerations, Acceptance Criteria, Risks
+**Research sources:** Context7 (`/nothflare/claude-agent-sdk-docs`), official docs at `code.claude.com/docs/en/agent-sdk/hooks` and `/permissions`, SDK changelog (`github.com/anthropics/claude-agent-sdk-typescript/blob/main/CHANGELOG.md`), WebSearch for v0.2.80 issues, local SDK `.d.ts` inspection at v0.2.80, 3 relevant learnings cross-checked.
+
+### Key Improvements Over v1
+
+1. **Confirmed the bug is very likely an SDK regression fixed upstream.** SDK changelog shows v0.2.81 fixed a `canUseTool` bug and v0.2.85 fixed "PreToolUse hooks with `permissionDecision: 'ask'` being ignored in SDK mode". Our pinned v0.2.80 sits between these fixes. **Phase 0 is now "upgrade SDK to >= 0.2.85 and re-test"** -- the platform fix may be a one-line package.json bump.
+2. **Authoritative hook-output contract documented.** Per official docs: returning `{}` from a PreToolUse hook is **explicitly valid** and allows the operation. `hookEventName` is required **inside** `hookSpecificOutput` when it IS present, but not when the output is `{}`. The existing sandbox-hook allow path is therefore spec-compliant; hypothesis #2 in v1 is rejected.
+3. **`PermissionResult` allow-branch contract clarified.** Our installed v0.2.80 `.d.ts` declares `updatedInput?: Record<string, unknown>` (optional). Public docs in 2026 (nothflare mirror) declare `updatedInput: ToolInput` (required, no `?`). This is the **strongest remaining hypothesis** -- if the CLI's runtime Zod schema requires `updatedInput` on allow but our code returns `{ behavior: "allow" }` without it, every file-tool call produces exactly the reported symptom. **Fix:** always return `{ behavior: "allow", updatedInput: toolInput }` (echo the input back).
+4. **Additional hypothesis added.** Claude Code's internal "file must be read first" state tracking (GitHub issue #16546) causes Edit failures on files that weren't Read in the current session. Our `agent-runner.ts` session-resume path may lose file-read state between turns. This is orthogonal to the ZodError but produces a similar user experience.
+5. **New sharp edge:** `permissionMode: "acceptEdits"` auto-approves Write/Edit inside cwd + `additionalDirectories`, bypassing canUseTool. Tempting quick-fix but weakens defense-in-depth. Documented as a rejected alternative.
+
+### New Considerations Discovered
+
+- **SDK version is a first-class input.** Pin exact version, capture in Sentry tags, upgrade in Phase 0.
+- **Deny-rules precede canUseTool.** Adding `disallowedTools: ["WebSearch", "WebFetch"]` (already present) is a stronger fence than relying on canUseTool's deny-by-default.
+- **Permission evaluation order** (per docs): hooks → deny rules → permission mode → allow rules → canUseTool. Our plan must respect this when changing any layer.
+- **`systemMessage` shows a warning to the user**, `additionalContext` injects into the conversation for the model. Our sandbox-hook uses `systemMessage` on deny correctly; the ZodError leaking to the user suggests the SDK is routing a Zod issue's message through this same channel.
+
 ## Overview
 
 When a user uploads a PDF through the KB Tree web UI and asks the dashboard agent (e.g., Oleg/CTO) to update `knowledge-base/overview/vision.md` with the extracted content, both `Write` and `Edit` tool calls fail. The agent surfaces a user-visible explanation that "Write/Edit tools are throwing an internal permission validation error (a `ZodError`)" and that the filesystem is "read-only" in Bash. The agent concludes this is a platform bug and tells the user to copy-paste markdown manually.
@@ -70,13 +91,61 @@ The user's recommended workaround ("copy the markdown manually to `knowledge-bas
 
 Root-cause the ZodError, fix the broken permission-chain output shape, and add regression coverage. The sequence is:
 
+0. **SDK upgrade gate (new from deepen-plan research).** Upgrade `@anthropic-ai/claude-agent-sdk` from `0.2.80` to the latest `0.2.x` (>= `0.2.85` per changelog findings). Two upstream fixes in this window are directly relevant: v0.2.81 fixed a `canUseTool` bug around bypass-immune safety checks / `addRules` suggestions; v0.2.85 fixed "PreToolUse hooks with `permissionDecision: 'ask'` being ignored in SDK mode". If the reproduction succeeds post-upgrade without any other change, file a tracking issue referencing the upstream fix and ship the bump alone. If the bug persists, continue to step 1.
 1. **Reproduce** the bug against a dev workspace with a provisioned user, upload a PDF via KB Tree, and ask the dashboard agent to update `knowledge-base/overview/vision.md`. Capture the exact Zod issue path from server logs / Sentry.
-2. **Classify** which permission-chain step emits the invalid output. Six hypotheses (ranked by prior probability below) -- the reproduction + SDK debug logs narrow this to one.
+2. **Classify** which permission-chain step emits the invalid output. Six hypotheses (re-ranked below with deepen-plan evidence) -- the reproduction + SDK debug logs narrow this to one.
 3. **Fix** the identified root cause with a minimal diff, preserving all existing defense-in-depth layers.
 4. **Defense-in-depth additions** that address the broader class of bugs:
    a. Pre-create `knowledge-base/overview/` in `provisionWorkspace` so the first Write never targets a non-existent ancestor directory.
    b. Change `buildVisionEnhancementPrompt` to emit an **absolute** path (`${workspacePath}/knowledge-base/overview/vision.md`) so the agent never passes a relative `file_path` to Write/Edit.
    c. Wrap the `canUseTool` callback and PreToolUse hook in a shape-validation layer that log.error's any malformed decision (using the SDK's exported zod schemas where available) instead of silently returning it to the CLI.
+   d. **Echo `updatedInput` on allow.** Change every `return { behavior: "allow" as const }` in `canUseTool` to `return { behavior: "allow" as const, updatedInput: toolInput }`. Per public docs, `updatedInput` may be required on the allow branch. Echoing the input back is a no-op in behavior but satisfies both the permissive (optional in 0.2.80 .d.ts) and strict (required in 2026 docs) schemas.
+
+### Research Insights (from deepen-plan)
+
+**Permission evaluation order (official docs, `code.claude.com/docs/en/agent-sdk/permissions`):**
+
+1. Hooks run first (allow, deny, or continue).
+2. Deny rules (`disallowedTools`, settings.json) -- block even in `bypassPermissions`.
+3. Permission mode -- `bypassPermissions` approves, `acceptEdits` approves file ops inside cwd, others fall through.
+4. Allow rules (`allowedTools`, settings.json).
+5. `canUseTool` callback -- last resort; skipped in `dontAsk` mode.
+
+Our `permissionMode: "default"` (agent-runner.ts:790) and `settingSources: []` (line 794) mean steps 2-4 are minimal and the full brunt of decisions lands on hooks (step 1) and canUseTool (step 5). Both must return shape-valid output.
+
+**Hook output contract (official docs):**
+
+- `{}` is a valid return from PreToolUse hooks to allow the operation. **Hypothesis #2 from v1 (explicit hookEventName required on allow) is rejected.** Confirmed via both nothflare docs and official `code.claude.com` example `protectEnvFiles`.
+- `hookEventName` is required **inside** `hookSpecificOutput` when the object is present -- it identifies which hook type the output is for.
+- For PreToolUse, `permissionDecision` must be `"allow" | "deny" | "ask"`. Top-level `decision`/`reason` fields are **deprecated for this event** (per WebSearch summary); always use `hookSpecificOutput.permissionDecision` / `permissionDecisionReason`. Our sandbox-hook already does this correctly.
+- `updatedInput` must live inside `hookSpecificOutput`, not at the top level. Only applies when also setting `permissionDecision: "allow"`.
+- `systemMessage` injects a message visible to the model; `additionalContext` appends to tool result on PostToolUse.
+
+**`PermissionResult` allow-branch ambiguity (root of our hypothesis #3, now #1):**
+
+| Source | allow.updatedInput | allow.updatedPermissions |
+|--------|-------------------|---------------------------|
+| Local `node_modules/@anthropic-ai/claude-agent-sdk/sdk.d.ts@0.2.80:1280` | `?:` (optional) | `?:` (optional) |
+| Context7 `/nothflare/claude-agent-sdk-docs` typescript.md | Required (no `?`) | `?:` (optional) |
+| Official docs `code.claude.com/permissions` example | Returned when modifying input, not shown as "required" for plain allow | n/a |
+
+Two possibilities:
+
+- The `.d.ts` is correct and `updatedInput` truly is optional; our `invalid_union` is from another cause.
+- The runtime Zod schema in the CLI is stricter than the published `.d.ts` and requires `updatedInput` on allow; the `.d.ts` is lagging. This would fit the symptoms exactly and would be fixed by the Phase 4d mitigation (always echo `updatedInput`).
+
+**Relevant SDK bugs (upstream changelog):**
+
+- v0.2.81: "Fixed `canUseTool` not providing a working `addRules` suggestion when a write under `.claude/skills/{name}/` hits the bypass-immune safety check." Our code does not write under `.claude/skills/` during the vision flow, but this shows the `canUseTool` validation surface was actively broken in v0.2.80.
+- v0.2.85: "Fixed PreToolUse hooks with `permissionDecision: 'ask'` being ignored in SDK mode." We never use `"ask"`, but this confirms active churn in PreToolUse decision handling between 0.2.80 and 0.2.85.
+
+**Claude Code file-state tracking (orthogonal symptom, anthropics/claude-code#16546):**
+
+- The Edit tool enforces "file must have been Read in this session before Edit." If the model tries Edit on a file it hasn't Read, the tool returns a specific error (not a ZodError).
+- The Write tool enforces a similar check for existing files (learning `kb-upload-missing-credential-helper-20260413.md` line 44 observed: "Write tool rejected /tmp files -- Attempted to use the Write tool on `/tmp/review-finding-*.md` files that hadn't been Read first").
+- On SDK session resume, this in-memory state tracking may be lost between turns. If the user's chat spans multiple SDK sessions (resume flow in `sendUserMessage`), the second turn's agent has no record of reading vision.md from the first turn.
+- **Not a direct cause of ZodError**, but could produce a user-visible "permission error" that the model then incorrectly labels as a platform bug. Verify during reproduction by checking server logs for the specific error string.
+
 5. **Regression tests:**
    - Unit test: `canUseTool` returns shape-valid `PermissionResult` for Write/Edit targeting an existing file within workspace.
    - Unit test: `canUseTool` returns shape-valid `{ behavior: "deny", message: string }` for Write targeting a path outside the workspace (message is never undefined).
@@ -84,21 +153,23 @@ Root-cause the ZodError, fix the broken permission-chain output shape, and add r
    - Unit test: `provisionWorkspace` creates `knowledge-base/overview/` alongside the `project/` subdirectories.
    - Integration test (vitest + mock SDK): sending the prompt "Update vision.md with this content: <markdown>" results in a `Write` tool call whose `file_path` starts with the workspace root and which passes both the hook and canUseTool.
 
-### Root-cause hypotheses (ranked)
+### Root-cause hypotheses (re-ranked after deepen-plan research)
 
-The reproduction will narrow this to one. All six must be investigated before writing code:
+The reproduction will narrow this to one. The ranking below reflects the deepen-plan evidence -- the top hypothesis is now "SDK regression, fixed upstream":
 
-1. **Highest: `isPathInWorkspace` returns `false` for a path in a non-existent subdirectory.** `resolveRealPath(/workspaces/<uid>/knowledge-base/overview/vision.md)` calls `fs.realpathSync` → `ENOENT` → `resolveParentRealPath` walks up. `knowledge-base/overview/` does not exist (provisioner only creates `project/`). Walk continues to `knowledge-base/`, which is a real directory, so `realpathSync` returns that canonical path. Re-appends `overview/vision.md`. Result: `/workspaces/<uid>/knowledge-base/overview/vision.md` (string-joined). The containment check passes. **BUT** the `canUseTool` callback's deny branch returns `{ behavior: "deny", message: "Access denied: outside workspace..." }` -- valid. This branch should **not** fire for the legitimate path. If it does (e.g., a symlink target escapes workspace, or `realpathSync` on `/workspaces/` hits an unexpected mount state), the deny message is a proper string. This alone does **not** cause `invalid_union`.
+1. **HIGHEST (new top rank): SDK regression in v0.2.80, fixed in v0.2.81 / v0.2.85.** Changelog shows active bug-fix churn in `canUseTool` and `PreToolUse` decision handling in exactly the version window we're pinned to. This is the cheapest hypothesis to test (one-line package.json bump + reproduction re-run). **Expected probability: 40-50%.**
 
-2. **Very high: `hookSpecificOutput` discriminated-union mismatch when PreToolUse hook returns `{}` (allow).** The sandbox-hook's allow path returns `{}` -- no `hookSpecificOutput`, no `systemMessage`. Per SDK `SyncHookJSONOutput`, all fields are optional, so `{}` should validate. **However:** if the CLI's internal validator uses a discriminated union keyed on `hookEventName` and the field is missing, the CLI may synthesize a "no decision" object that then fails a stricter downstream schema when the tool is Write/Edit (file tools have stricter validation than Read). Fix: always return an explicit `{ hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "allow" } }` on the allow path.
+2. **HIGH: `PermissionResult` allow branch missing `updatedInput`.** Our `canUseTool` returns `{ behavior: "allow" as const }` on the file-tool path (agent-runner.ts:881), the Agent path (line 958), safe-tools path (line 966), platform-tool auto-approve (line 1039), and plugin-mcp path (line 1052). Public docs show `updatedInput` as required on allow; our local `.d.ts@0.2.80` shows it as optional. If the runtime Zod schema follows the docs rather than the `.d.ts`, every allow return fails discriminated-union parse. **Fix is trivial: echo `toolInput` back via `updatedInput: toolInput`. This is a no-op behaviorally but satisfies both schemas.** **Expected probability: 25-30%.**
 
-3. **High: `canUseTool` deny branch missing required `message` field in some code path.** The SDK type requires `message: string` on `{ behavior: "deny" }`. A code path that returns `{ behavior: "deny" }` without `message` -- or with `message: undefined` / `message: null` -- fails the discriminated-union parse with `invalid_union`. Scan every return statement in `agent-runner.ts:858-1060`. Current code all looks correct on file-tool path (line 872), the deny-by-default (line 1057), platform-tool blocked (line 981), and platform-tool rejected (line 1027). But a programmer error in a later branch (e.g., a future edit inserting `{ behavior: "deny" }`) would produce exactly this symptom.
+3. **MEDIUM: Path-validation false negative due to missing `knowledge-base/overview/` directory.** `provisionWorkspace` creates `project/` but not `overview/`. `isPathInWorkspace` for `<workspace>/knowledge-base/overview/vision.md` calls `resolveRealPath` → `ENOENT` → `resolveParentRealPath` walks up. Walk should resolve to `<workspace>/knowledge-base/` (exists) and re-append `overview/vision.md`. Containment check should pass. **But** if any intermediate segment is a symlink or if the walk hits EACCES (e.g., bubblewrap mount permissions), the helper returns `null` → isPathInWorkspace returns `false` → canUseTool denies. The user then sees "Access denied: outside workspace" which is NOT a ZodError but could be mislabeled by the agent. **Fix: pre-create `overview/` in provisioner; verify no ELOOP/EACCES paths in the realpath walk.** **Expected probability: 10-15%.**
 
-4. **Medium: relative `file_path` from the model.** `buildVisionEnhancementPrompt` says "Write the enhanced version to the same path" referring to `knowledge-base/overview/vision.md` (relative). If the model passes `file_path: "knowledge-base/overview/vision.md"` (relative), the SDK type `FileWriteInput.file_path` is `string` (not URL, not "absolute"), so Zod parses it fine. The CLI then resolves it against `cwd` (the workspace). Downstream `realpathSync` on the resolved absolute path works the same as hypothesis (1). **Not** a direct cause of ZodError but worth fixing for clarity.
+4. **MEDIUM: Claude Code file-state tracking (Edit requires prior Read).** anthropics/claude-code#16546 documents Edit tool enforcement. If the model hasn't Read vision.md in this SDK session and tries Edit, the tool returns a specific error. On SDK session resume (multi-turn), the read state may be lost. **Not a ZodError** but user-visible permission error the model may mislabel. Mitigation: add `Read` before `Edit` in the dashboard-agent system prompt when it wants to modify existing files; or instruct the model to use `Write` (full replace) for this flow. **Expected probability: 5-10%.**
 
-5. **Medium: SDK tool-input validation mismatch after v0.2.80 update.** If the CLI now validates `FileEditInput` with a discriminated union (e.g., `old_string` vs a hypothetical `patch` variant), the model's invocation may not satisfy the new shape. Mitigation: pin the SDK version, read the CHANGELOG for 0.2.80, grep for schema changes.
+5. **LOW: Relative `file_path` in `buildVisionEnhancementPrompt`.** SDK `FileWriteInput.file_path: string` accepts relative; CLI resolves against cwd. Not a ZodError cause but worth fixing for clarity. **Fix in Phase 4b regardless.** **Expected probability: <5%.**
 
-6. **Low: `permissionDecisionReason` required when `permissionDecision` is set.** Per SDK type (`PreToolUseHookSpecificOutput`), both are optional. But the CLI may require `permissionDecisionReason` when `permissionDecision === "deny"` and fail `invalid_union` when it's missing. sandbox-hook already provides `permissionDecisionReason` on deny, so unlikely.
+6. **LOW: hookSpecificOutput discriminated-union mismatch on allow (`{}` return).** Rejected after deepen-plan research: official docs explicitly state "Return empty object to allow the operation." The v1 hypothesis #2 is wrong. **Expected probability: <5%.** Kept in the list for completeness.
+
+7. **LOW: Programmer error in a canUseTool deny branch (missing `message`).** Scan of current code (agent-runner.ts:858-1060) shows all deny returns include a string `message`. No gap found. **Expected probability: <2%.**
 
 ### Why the Bash "Read-only file system" is orthogonal
 

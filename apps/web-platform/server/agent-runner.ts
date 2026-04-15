@@ -878,7 +878,13 @@ When you need user input for important decisions, use the AskUserQuestion tool.`
                 "Tool invoked without recognized path parameter; SDK may have changed parameter names (see #891)",
               );
             }
-            return { behavior: "allow" as const };
+            // Echo toolInput back via updatedInput. The SDK's runtime
+            // PermissionResult schema has historically flagged the
+            // bare `{ behavior: "allow" }` shape as `invalid_union`
+            // on Write/Edit (public docs mark updatedInput as
+            // required on allow; local .d.ts marks it optional).
+            // Echoing is a no-op behaviorally but satisfies both.
+            return { behavior: "allow" as const, updatedInput: toolInput };
           }
 
           // Review gates: intercept AskUserQuestion
@@ -955,7 +961,7 @@ When you need user input for important decisions, use the AskUserQuestion tool.`
             if (subagentCtx) {
               log.info({ sec: true, agentId: options.agentID }, "Agent tool invoked by subagent");
             }
-            return { behavior: "allow" as const };
+            return { behavior: "allow" as const, updatedInput: toolInput };
           }
 
           // Safe SDK tools: no filesystem path inputs, allowed without checks.
@@ -963,7 +969,7 @@ When you need user input for important decisions, use the AskUserQuestion tool.`
           // LS removed (#891) -- it accepts path inputs and routes through
           // isPathInWorkspace. NotebookRead removed -- SDK reads via Read tool.
           if (isSafeTool(toolName)) {
-            return { behavior: "allow" as const };
+            return { behavior: "allow" as const, updatedInput: toolInput };
           }
 
           // Tiered gating for in-process MCP server tools (#1926).
@@ -1028,7 +1034,7 @@ When you need user input for important decisions, use the AskUserQuestion tool.`
                 };
               }
 
-              return { behavior: "allow" as const };
+              return { behavior: "allow" as const, updatedInput: toolInput };
             }
 
             // auto-approve: read-only tools pass through
@@ -1036,7 +1042,7 @@ When you need user input for important decisions, use the AskUserQuestion tool.`
               { sec: true, tool: toolName, tier, decision: "auto-approved", repo: `${repoOwner}/${repoName}` },
               "Platform tool auto-approved",
             );
-            return { behavior: "allow" as const };
+            return { behavior: "allow" as const, updatedInput: toolInput };
           }
 
           // Allow plugin MCP tools from servers registered in plugin.json.
@@ -1049,7 +1055,7 @@ When you need user input for important decisions, use the AskUserQuestion tool.`
             )
           ) {
             log.info({ sec: true, toolName, agentId: options.agentID }, "Plugin MCP tool invoked");
-            return { behavior: "allow" as const };
+            return { behavior: "allow" as const, updatedInput: toolInput };
           }
 
           // Deny-by-default: block unrecognized tools

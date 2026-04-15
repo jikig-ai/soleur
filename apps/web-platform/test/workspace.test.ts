@@ -36,6 +36,9 @@ describe("workspace provisioning", () => {
     expect(existsSync(join(path, "knowledge-base/project/specs"))).toBe(true);
     expect(existsSync(join(path, "knowledge-base/project/plans"))).toBe(true);
     expect(existsSync(join(path, "knowledge-base/project/learnings"))).toBe(true);
+    // knowledge-base/overview/ must exist so the first Write targeting
+    // vision.md never hits a non-existent ancestor during path validation.
+    expect(existsSync(join(path, "knowledge-base/overview"))).toBe(true);
   });
 
   test("creates .claude/settings.json with empty permissions for canUseTool routing", async () => {

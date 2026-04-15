@@ -58,6 +58,7 @@ export async function provisionWorkspace(userId: string): Promise<string> {
   // 2. Create knowledge-base subdirectories
   const kbRoot = join(workspacePath, "knowledge-base");
   ensureDir(kbRoot);
+  ensureDir(join(kbRoot, "overview"));
   const projectDir = join(kbRoot, "project");
   ensureDir(projectDir);
   for (const sub of KNOWLEDGE_BASE_DIRS) {
@@ -235,6 +236,7 @@ export async function provisionWorkspaceWithRepo(
   // 9. Scaffold knowledge-base/ subdirectories if they don't exist in the clone
   const kbRoot = join(workspacePath, "knowledge-base");
   ensureDir(kbRoot);
+  ensureDir(join(kbRoot, "overview"));
   const projectDir = join(kbRoot, "project");
   ensureDir(projectDir);
   for (const sub of KNOWLEDGE_BASE_DIRS) {
