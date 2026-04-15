@@ -26,7 +26,6 @@ permissions:
   checks: write
   contents: write
   pull-requests: write
-  statuses: write
 
 jobs:
   aggregate:
