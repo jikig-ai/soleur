@@ -10,6 +10,7 @@ import {
   KbValidationError,
 } from "@/server/kb-reader";
 import { isPathInWorkspace } from "@/server/sandbox";
+import { KB_BINARY_RESPONSE_CSP } from "@/lib/kb-csp";
 
 const CONTENT_TYPE_MAP: Record<string, string> = {
   ".png": "image/png",
@@ -28,9 +29,6 @@ const CONTENT_TYPE_MAP: Record<string, string> = {
 const ATTACHMENT_EXTENSIONS = new Set([".docx"]);
 
 const MAX_BINARY_SIZE = 50 * 1024 * 1024; // 50 MB
-
-export const KB_BINARY_RESPONSE_CSP =
-  "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'";
 
 export async function GET(
   _request: Request,

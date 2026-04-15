@@ -5,7 +5,7 @@
  * cosmetic reformatting of the literal string.
  */
 import { describe, it, expect } from "vitest";
-import { KB_BINARY_RESPONSE_CSP } from "@/app/api/kb/content/[...path]/route";
+import { KB_BINARY_RESPONSE_CSP } from "@/lib/kb-csp";
 
 function parseCsp(policy: string): Map<string, string[]> {
   const directives = new Map<string, string[]>();
