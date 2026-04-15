@@ -469,6 +469,8 @@ After creating all GitHub issues, present comprehensive summary:
 
 Review agent suggestions that modify workflow `if` conditions or event filters must be smoke tested against the full user journey (not just the reduced trigger case) before shipping -- agents optimize locally and can break flows they don't fully model.
 
+When a reviewer prescribes `--arg` for jq injection defense in a `gh ... --jq` context, verify the CLI forwards jq flags before implementing. `gh --jq` accepts a single expression string and does NOT forward `--arg`, `--argjson`, or `--slurp` to the underlying jq binary — applying the fix produces `unknown arguments` at runtime. Fall back to shape-validating the shell variable (e.g., `[[ "$VAR" =~ ^[0-9]+$ ]]`) before interpolation, or pipe to a second-stage standalone `jq --arg`. See `knowledge-base/project/learnings/2026-04-15-gh-jq-does-not-forward-arg-to-jq.md`.
+
 ### Important: P1 Findings Block Merge
 
 Any **P1 (CRITICAL)** findings must be addressed before merging the PR. Present these prominently and ensure they're resolved before accepting the PR.
