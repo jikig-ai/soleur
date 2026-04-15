@@ -10,25 +10,16 @@
 #                    (bot-fixture.ts seed idempotently satisfies: tcs_accepted, billing_active, chat_conversations)
 #                    "kb_workspace_deferred" means the route will render empty KB until #2351 lands
 #   viewport         fixed capture size; ICP is solo founder on 1440×900 laptop (TR7)
+#
+# Order matters. Routes are audited top-to-bottom. Bot-authenticated dashboard
+# surfaces are listed FIRST because they are the primary ICP surface — the
+# anonymous funnel (/, /login, /signup) is a one-time experience, while the
+# dashboard is where founders spend every working session. When severity-rank
+# + CAP_PER_RUN trimming drops findings, anonymous-surface findings should be
+# the ones to drop, not dashboard findings. Ref #2378.
 
 routes:
-  # --- Anonymous surfaces ---
-  - path: /
-    auth: anonymous
-    fixture_prereqs: []
-    viewport: {w: 1440, h: 900}
-
-  - path: /login
-    auth: anonymous
-    fixture_prereqs: []
-    viewport: {w: 1440, h: 900}
-
-  - path: /signup
-    auth: anonymous
-    fixture_prereqs: []
-    viewport: {w: 1440, h: 900}
-
-  # --- Authenticated core ---
+  # --- Authenticated core (primary ICP surface — audit first) ---
   - path: /dashboard
     auth: bot
     fixture_prereqs: [tcs_accepted, billing_active]
@@ -68,6 +59,22 @@ routes:
   # --- Terms acceptance (bot-authenticated but pre-T&C state is transient; captured for copy review) ---
   - path: /accept-terms
     auth: bot
+    fixture_prereqs: []
+    viewport: {w: 1440, h: 900}
+
+  # --- Anonymous surfaces (secondary — one-time funnel pages) ---
+  - path: /
+    auth: anonymous
+    fixture_prereqs: []
+    viewport: {w: 1440, h: 900}
+
+  - path: /login
+    auth: anonymous
+    fixture_prereqs: []
+    viewport: {w: 1440, h: 900}
+
+  - path: /signup
+    auth: anonymous
     fixture_prereqs: []
     viewport: {w: 1440, h: 900}
 
