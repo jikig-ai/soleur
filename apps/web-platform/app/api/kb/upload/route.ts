@@ -11,6 +11,7 @@ import { promisify } from "node:util";
 import path from "path";
 import logger from "@/server/logger";
 import * as Sentry from "@sentry/nextjs";
+import { KB_UPLOAD_EXTENSIONS } from "@/lib/kb-constants";
 
 const execFileAsync = promisify(execFile);
 
@@ -18,9 +19,7 @@ const execFileAsync = promisify(execFile);
 // Constants
 // ---------------------------------------------------------------------------
 
-const ALLOWED_EXTENSIONS = new Set([
-  "png", "jpg", "jpeg", "gif", "webp", "pdf", "csv", "txt", "docx",
-]);
+const ALLOWED_EXTENSIONS = new Set<string>(KB_UPLOAD_EXTENSIONS);
 const MAX_FILE_SIZE = 20 * 1024 * 1024; // 20 MB
 
 // ---------------------------------------------------------------------------

@@ -419,4 +419,56 @@ describe("searchKb", () => {
     const hit = await searchKb(kbRoot, "invoice");
     expect(hit.results.some((r) => r.path === "Q1-Invoice.PDF")).toBe(true);
   });
+
+  test("filename match escapes special regex characters", async () => {
+    fs.writeFileSync(path.join(kbRoot, "foo[bar].pdf"), "bytes");
+    const hit = await searchKb(kbRoot, "foo[bar]");
+    expect(hit.results.some((r) => r.path === "foo[bar].pdf")).toBe(true);
+  });
+
+  test("filename match still surfaces oversized content-searchable files", async () => {
+    // 1 MB + 1 to exceed KB_MAX_FILE_SIZE — content search skips, filename match runs.
+    const big = "x".repeat(1024 * 1024 + 1);
+    fs.writeFileSync(path.join(kbRoot, "huge-report.csv"), big);
+    const hit = await searchKb(kbRoot, "report");
+    const row = hit.results.find((r) => r.path === "huge-report.csv");
+    expect(row).toBeDefined();
+    expect(row!.kind).toBe("filename");
+  });
+
+  test("searchKb skips symlinked directories under kbRoot", async () => {
+    // EPERM on Windows or sandboxed CI — skip cleanly when symlink fails.
+    try {
+      fs.symlinkSync("/etc", path.join(kbRoot, "link-to-etc"), "dir");
+    } catch {
+      return;
+    }
+    fs.writeFileSync(path.join(kbRoot, "real.md"), "findme in kb");
+    const result = await searchKb(kbRoot, "findme");
+    expect(
+      result.results.every((r) => !r.path.startsWith("link-to-etc")),
+    ).toBe(true);
+  });
+
+  test("searchKb completes quickly on dense matches and does not hang", async () => {
+    // Regression guard: matchAll should not stall on g-flag iteration even
+    // when many lines match. Bound completion time well under the per-file cap.
+    fs.writeFileSync(path.join(kbRoot, "blank.md"), "x\n".repeat(500));
+    const winner = await Promise.race([
+      searchKb(kbRoot, "x"),
+      new Promise((_, reject) =>
+        setTimeout(() => reject(new Error("timeout")), 2000),
+      ),
+    ]);
+    expect(winner).toBeDefined();
+  }, 3000);
+
+  test("contentSearch caps per-file matches at MAX_MATCHES_PER_FILE", async () => {
+    // 200 lines all matching — internal cap (50) prevents heap blow-up.
+    fs.writeFileSync(path.join(kbRoot, "many.md"), "match\n".repeat(200));
+    const result = await searchKb(kbRoot, "match");
+    const row = result.results.find((r) => r.path === "many.md");
+    expect(row).toBeDefined();
+    expect(row!.matches.length).toBeLessThanOrEqual(50);
+  });
 });

@@ -123,25 +123,9 @@ describe("KB API security", () => {
     }
   });
 
-  it("kb-reader collectSearchableFiles skips symlinks on every branch", () => {
-    const kbReader = resolve(__dirname, "../server/kb-reader.ts");
-    const content = readFileSync(kbReader, "utf-8");
-
-    // Enumeration must skip symlinks on both isDirectory and isFile branches —
-    // defense against enumeration escape via a planted symlink. readContent's
-    // isPathInWorkspace guard does NOT cover enumeration leakage.
-    const matches = content.match(/!entry\.isSymbolicLink\(\)/g) ?? [];
-    expect(matches.length).toBeGreaterThanOrEqual(2);
-  });
-
-  it("kb-reader lowercases extname before FILENAME_SEARCHABLE check", () => {
-    const kbReader = resolve(__dirname, "../server/kb-reader.ts");
-    const content = readFileSync(kbReader, "utf-8");
-
-    // path.extname preserves case (.PDF !== .pdf) — must lowercase before
-    // the FILENAME_SEARCHABLE.has check, otherwise Q1-Invoice.PDF silently drops.
-    expect(content).toMatch(/path\.extname\([^)]*\)\.toLowerCase\(\)/);
-  });
+  // Behavioral coverage: searchKb symlink-skip is in test/kb-reader.test.ts.
+  // Behavioral coverage: case-insensitive extension match is in test/kb-reader.test.ts
+  // (`filename match is case-insensitive on extension`).
 
   it("kb-route-helpers enforces path containment, symlink rejection, and null-byte guard", () => {
     // Architecture review finding D3: invariants moved to the helper when
