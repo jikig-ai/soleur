@@ -53,12 +53,9 @@ export function createSandboxHook(workspacePath: string): HookCallback {
       }
     }
 
-    // All checks passed. Return an explicit PreToolUse allow output
-    // instead of `{}`. In SDK v0.2.80 the runtime Zod schema for hook
-    // outputs produced `invalid_union` errors on the bare `{}` allow
-    // path in some tool-call paths, which surfaced to the user as a
-    // ZodError on Write/Edit. Shipping an explicit discriminated-union
-    // branch satisfies both the permissive and strict schema variants.
+    // Explicit PreToolUse allow. SDK v0.2.80 rejected bare `{}` with
+    // ZodError: invalid_union. Hook schema differs from canUseTool —
+    // no updatedInput field here.
     return {
       hookSpecificOutput: {
         hookEventName: "PreToolUse" as const,

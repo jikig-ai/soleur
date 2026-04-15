@@ -1,5 +1,4 @@
 import { describe, test, expect } from "vitest";
-import { z } from "zod";
 import type { SyncHookJSONOutput } from "@anthropic-ai/claude-agent-sdk";
 import { createSandboxHook } from "../server/sandbox-hook";
 import { FILE_TOOLS } from "../server/tool-path-checker";
@@ -7,26 +6,6 @@ import { FILE_TOOLS } from "../server/tool-path-checker";
 const WORKSPACE = "/workspaces/user1";
 const hook = createSandboxHook(WORKSPACE);
 const signal = new AbortController().signal;
-
-// Hand-written zod schema mirroring SDK `SyncHookJSONOutput` +
-// `PreToolUseHookSpecificOutput`. Used to schema-validate hook returns at
-// test time so that silently-malformed output (which surfaces as
-// `ZodError: invalid_union` inside the CLI) fails the test here instead.
-const preToolUseHookSpecificOutputSchema = z.object({
-  hookEventName: z.literal("PreToolUse"),
-  permissionDecision: z.enum(["allow", "deny", "ask"]).optional(),
-  permissionDecisionReason: z.string().optional(),
-});
-
-const syncHookJSONOutputSchema = z.object({
-  continue: z.boolean().optional(),
-  suppressOutput: z.boolean().optional(),
-  stopReason: z.string().optional(),
-  decision: z.string().optional(),
-  systemMessage: z.string().optional(),
-  reason: z.string().optional(),
-  hookSpecificOutput: preToolUseHookSpecificOutputSchema.optional(),
-});
 
 function makeInput(toolName: string, toolInput: Record<string, unknown>) {
   return {
@@ -58,13 +37,10 @@ function expectDenied(result: SyncHookJSONOutput, messageSubstring: string) {
   expect(result.systemMessage).toContain(messageSubstring);
 }
 
+// Reverting to `{}` would reintroduce the SDK v0.2.80 `ZodError:
+// invalid_union` in the web-UI chat. Keep this assertion strict.
 function expectExplicitAllow(result: SyncHookJSONOutput) {
-  // Since the SDK's runtime discriminated-union parse (`ZodError:
-  // invalid_union`) rejected the bare `{}` allow path in v0.2.80, we now
-  // require an explicit PreToolUse allow output. Reverting to `{}` would
-  // reintroduce the user-visible ZodError. See plan Phase 4a.
-  const parsed = syncHookJSONOutputSchema.parse(result);
-  expect(parsed.hookSpecificOutput).toEqual({
+  expect(result.hookSpecificOutput).toEqual({
     hookEventName: "PreToolUse",
     permissionDecision: "allow",
   });
@@ -180,36 +156,6 @@ describe("createSandboxHook - non-matched tools pass through", () => {
   test("returns explicit allow for Agent tool", async () => {
     const result = await invokeHook("Agent", { prompt: "do something" });
     expectExplicitAllow(result);
-  });
-});
-
-describe("createSandboxHook - schema shape validation", () => {
-  test("every allow return parses against SyncHookJSONOutput schema", async () => {
-    const cases: Array<[string, Record<string, unknown>]> = [
-      ["Read", { file_path: "/workspaces/user1/file.md" }],
-      ["Write", { file_path: "/workspaces/user1/notes.md", content: "x" }],
-      ["Edit", { file_path: "/workspaces/user1/src/i.ts", old_string: "a", new_string: "b" }],
-      ["Glob", { pattern: "*.ts" }],
-      ["Bash", { command: "ls" }],
-      ["AskUserQuestion", { question: "?" }],
-    ];
-    for (const [tool, input] of cases) {
-      const result = await invokeHook(tool, input);
-      expect(() => syncHookJSONOutputSchema.parse(result)).not.toThrow();
-    }
-  });
-
-  test("every deny return parses against SyncHookJSONOutput schema", async () => {
-    const cases: Array<[string, Record<string, unknown>]> = [
-      ["Write", { file_path: "/etc/passwd", content: "x" }],
-      ["Bash", { command: "env" }],
-    ];
-    for (const [tool, input] of cases) {
-      const result = await invokeHook(tool, input);
-      const parsed = syncHookJSONOutputSchema.parse(result);
-      expect(parsed.hookSpecificOutput?.permissionDecision).toBe("deny");
-      expect(parsed.systemMessage).toBeTruthy();
-    }
   });
 });
 

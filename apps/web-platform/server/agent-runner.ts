@@ -45,6 +45,15 @@ import { githubApiGet } from "./github-api";
 
 const log = createChildLogger("agent");
 
+// canUseTool allow branches must echo toolInput as updatedInput. SDK
+// v0.2.80 surfaced `ZodError: invalid_union` on Write/Edit when the
+// allow return omitted updatedInput. Echoing is behaviorally a no-op
+// and satisfies both the permissive (updatedInput optional) and strict
+// (updatedInput required) variants of the PermissionResult schema.
+function allow(toolInput: Record<string, unknown>) {
+  return { behavior: "allow" as const, updatedInput: toolInput };
+}
+
 let _supabase: ReturnType<typeof createServiceClient>;
 function supabase() { return _supabase ??= createServiceClient(); }
 
@@ -878,13 +887,7 @@ When you need user input for important decisions, use the AskUserQuestion tool.`
                 "Tool invoked without recognized path parameter; SDK may have changed parameter names (see #891)",
               );
             }
-            // Echo toolInput back via updatedInput. The SDK's runtime
-            // PermissionResult schema has historically flagged the
-            // bare `{ behavior: "allow" }` shape as `invalid_union`
-            // on Write/Edit (public docs mark updatedInput as
-            // required on allow; local .d.ts marks it optional).
-            // Echoing is a no-op behaviorally but satisfies both.
-            return { behavior: "allow" as const, updatedInput: toolInput };
+            return allow(toolInput);
           }
 
           // Review gates: intercept AskUserQuestion
@@ -961,7 +964,7 @@ When you need user input for important decisions, use the AskUserQuestion tool.`
             if (subagentCtx) {
               log.info({ sec: true, agentId: options.agentID }, "Agent tool invoked by subagent");
             }
-            return { behavior: "allow" as const, updatedInput: toolInput };
+            return allow(toolInput);
           }
 
           // Safe SDK tools: no filesystem path inputs, allowed without checks.
@@ -969,7 +972,7 @@ When you need user input for important decisions, use the AskUserQuestion tool.`
           // LS removed (#891) -- it accepts path inputs and routes through
           // isPathInWorkspace. NotebookRead removed -- SDK reads via Read tool.
           if (isSafeTool(toolName)) {
-            return { behavior: "allow" as const, updatedInput: toolInput };
+            return allow(toolInput);
           }
 
           // Tiered gating for in-process MCP server tools (#1926).
@@ -1034,7 +1037,7 @@ When you need user input for important decisions, use the AskUserQuestion tool.`
                 };
               }
 
-              return { behavior: "allow" as const, updatedInput: toolInput };
+              return allow(toolInput);
             }
 
             // auto-approve: read-only tools pass through
@@ -1042,7 +1045,7 @@ When you need user input for important decisions, use the AskUserQuestion tool.`
               { sec: true, tool: toolName, tier, decision: "auto-approved", repo: `${repoOwner}/${repoName}` },
               "Platform tool auto-approved",
             );
-            return { behavior: "allow" as const, updatedInput: toolInput };
+            return allow(toolInput);
           }
 
           // Allow plugin MCP tools from servers registered in plugin.json.
@@ -1055,7 +1058,7 @@ When you need user input for important decisions, use the AskUserQuestion tool.`
             )
           ) {
             log.info({ sec: true, toolName, agentId: options.agentID }, "Plugin MCP tool invoked");
-            return { behavior: "allow" as const, updatedInput: toolInput };
+            return allow(toolInput);
           }
 
           // Deny-by-default: block unrecognized tools

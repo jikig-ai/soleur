@@ -70,10 +70,6 @@ export async function buildVisionEnhancementPrompt(
     return null;
   }
 
-  // Emit the absolute workspace path so the agent always passes a
-  // fully-qualified `file_path` to Write/Edit. A relative path would
-  // resolve against the agent's CWD at tool-call time, which is brittle
-  // inside the SDK sandbox.
   return (
     `\n\nThe founder's vision document at \`${visionPath}\` ` +
     "is a stub. Enhance it with structured sections: Mission, Target Audience, " +
