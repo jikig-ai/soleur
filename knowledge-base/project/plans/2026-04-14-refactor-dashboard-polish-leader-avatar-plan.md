@@ -320,17 +320,17 @@ Drop: the three "applies correct size classes" tests (`h-5 w-5`, `h-7 w-7`, `h-8
 
 ## Acceptance Criteria
 
-- [ ] `naming-nudge.tsx`, `naming-modal.tsx`, `at-mention-dropdown.tsx` import `LeaderAvatar` and no longer import `LEADER_BG_COLORS` directly for inline badges
-- [ ] No grep hits for `LEADER_BG_COLORS\[` outside `components/leader-avatar.tsx` and `components/chat/leader-colors.ts`
-- [ ] `DOMAIN_LEADERS` entries have no `color` field; TypeScript type `(typeof DOMAIN_LEADERS)[number]` no longer exposes `color`
-- [ ] `/api/kb/content/[...path]` binary responses include header `Content-Security-Policy: default-src 'none'; style-src 'unsafe-inline'`
-- [ ] `leader-avatar.test.tsx` contains no `toContain("bg-")`, `toContain("h-")`, or `toContain("w-")` assertions
-- [ ] `FoundationCards` component exists at `components/dashboard/foundation-cards.tsx` and is used in both branches of `dashboard/page.tsx`
-- [ ] `test/mocks/use-team-names.ts` exports `createUseTeamNamesMock`
-- [ ] All 7+ test files use the shared factory; no duplicated inline mock literals for `useTeamNames` remain
-- [ ] `error-states.test.tsx` and `chat-page-resume.test.tsx` mocks include `iconPaths`, `updateIcon`, `refetch`, `getIconPath` (via shared factory)
-- [ ] `node node_modules/vitest/vitest.mjs run` passes in the worktree (zero new failures vs. main)
-- [ ] TypeScript compiles without errors (`npx tsc --noEmit`)
+- [x] `naming-nudge.tsx`, `naming-modal.tsx`, `at-mention-dropdown.tsx` import `LeaderAvatar` and no longer import `LEADER_BG_COLORS` directly for inline badges
+- [x] No grep hits for `LEADER_BG_COLORS\[` outside `components/leader-avatar.tsx` and `components/chat/leader-colors.ts`
+- [x] `DOMAIN_LEADERS` entries have no `color` field; TypeScript type `(typeof DOMAIN_LEADERS)[number]` no longer exposes `color`
+- [x] `/api/kb/content/[...path]` binary responses include header `Content-Security-Policy: default-src 'none'; style-src 'unsafe-inline'`
+- [x] `leader-avatar.test.tsx` contains no `toContain("bg-")`, `toContain("h-")`, or `toContain("w-")` assertions
+- [x] `FoundationCards` component exists at `components/dashboard/foundation-cards.tsx` and is used in both branches of `dashboard/page.tsx`
+- [x] `test/mocks/use-team-names.ts` exports `createUseTeamNamesMock`
+- [x] All 7+ test files use the shared factory; no duplicated inline mock literals for `useTeamNames` remain
+- [x] `error-states.test.tsx` and `chat-page-resume.test.tsx` mocks include `iconPaths`, `updateIcon`, `refetch`, `getIconPath` (via shared factory)
+- [x] `node node_modules/vitest/vitest.mjs run` passes in the worktree (zero new failures vs. main)
+- [x] TypeScript compiles without errors (`npx tsc --noEmit`)
 
 ## Test Scenarios
 
