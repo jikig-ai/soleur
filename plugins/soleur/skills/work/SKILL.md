@@ -274,6 +274,8 @@ Run these checks before proceeding to Phase 1. A FAIL blocks execution with a re
 
    The `wip:` prefix is intentional -- UX artifacts are valuable at every revision stage, and WIP commits are squashed on merge with no impact on final git history. Do not run compound before UX WIP commits -- compound runs once in Phase 4.
 
+   **Compound-before-commit scope:** AGENTS.md Workflow Gates says "Before every commit, run compound." Within this skill, that rule applies to the **final Phase 4 commit** (the one that closes the feature), not to Phase 2 incremental commits. Running compound per incremental commit is recursive (compound creates commits) and defeats the point of incremental checkpoints. A single compound at Phase 4 covers the whole feature's session-error inventory and learnings.
+
    **Commit workflow:**
 
    ```bash
