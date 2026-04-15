@@ -179,7 +179,7 @@ Building this before the collapsible-nav implementation (#2342) calibrates the l
 
 **Deliverables:**
 
-- [ ] Run `soleur:schedule` to scaffold `.github/workflows/scheduled-ux-audit.yml`. Template source: `.github/workflows/scheduled-competitive-analysis.yml`.
+- [x] Run `soleur:schedule` to scaffold `.github/workflows/scheduled-ux-audit.yml`. Template source: `.github/workflows/scheduled-competitive-analysis.yml` + `scheduled-community-monitor.yml` (for Doppler injection pattern).
 - [ ] Edit generated workflow:
   - Triggers:
 
@@ -226,7 +226,7 @@ Building this before the collapsible-nav implementation (#2342) calibrates the l
   | Anthropic API (ux-audit) | Anthropic | api | ~$15/month | active | - | Event-driven + monthly cron. ~$3–$12/run × ≤3/month. See scheduled-ux-audit.yml |
   ```
 
-- [ ] Pin the TR5 decision on #2343 via `gh issue comment 2343 --body "First consumer ships at plugins/soleur/skills/ux-audit/references/route-list.yaml. Extract to apps/web-platform/src/routes.manifest.ts when a second consumer (e.g. /soleur:qa, /soleur:test-browser) arrives. Keeping separate until shape pressure exists."`
+- [x] Pin the TR5 decision on #2343 via `gh issue comment 2343` — done (comment id `4252958437`).
 - [ ] Update `plugins/soleur/README.md` skill count (via `soleur:release-docs` skill at ship time).
 - [ ] Update `plugins/soleur/plugin.json` `description:` to mention `ux-audit`. Do NOT touch `version` field (frozen sentinel). Same for `marketplace.json` description.
 
