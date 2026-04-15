@@ -59,25 +59,34 @@ rules_tsv=$(awk '
 ' "$AGENTS_MD")
 
 # --- Counts from jsonl ----------------------------------------------------
-# `jq -s` reads the whole stream. Empty / missing file is handled gracefully.
+# Per-line parse via `jq -R 'fromjson?'` so a single malformed line from a
+# crash-mid-write or OOM does NOT abort the whole weekly aggregation. Bad
+# lines are dropped with a stderr warning; valid lines are still counted.
 jq_counts='{}'
 if [[ -s "$INCIDENTS" ]]; then
-  # Build {rule_id: {deny, bypass, last_hit, first_seen}}
-  if ! jq -s . "$INCIDENTS" >/dev/null 2>&1; then
-    echo "ERROR: $INCIDENTS contains malformed JSON" >&2
-    exit 3
+  total_lines=$(wc -l < "$INCIDENTS")
+  # Tolerant parse: fromjson? yields null on parse failure; select(.) drops nulls.
+  valid_stream=$(jq -R 'fromjson? | select(.)' < "$INCIDENTS" 2>/dev/null || echo "")
+  valid_lines=0
+  [[ -n "$valid_stream" ]] && valid_lines=$(echo "$valid_stream" | jq -s 'length')
+  bad_lines=$(( total_lines - valid_lines ))
+  if [[ "$bad_lines" -gt 0 ]]; then
+    # GitHub Actions picks up `::warning::` for workflow annotations; harmless locally.
+    echo "::warning::Dropped $bad_lines malformed line(s) from $INCIDENTS (kept $valid_lines)" >&2
   fi
-  jq_counts=$(jq -s '
-    reduce .[] as $e ({};
-      (.[$e.rule_id] //= {hit_count:0, bypass_count:0, last_hit:null, first_seen:null}) |
-      (if $e.event_type == "deny"  then .[$e.rule_id].hit_count    += 1 else . end) |
-      (if $e.event_type == "bypass" then .[$e.rule_id].bypass_count += 1 else . end) |
-      (if .[$e.rule_id].first_seen == null or ($e.timestamp < .[$e.rule_id].first_seen)
-         then .[$e.rule_id].first_seen = $e.timestamp else . end) |
-      (if .[$e.rule_id].last_hit   == null or ($e.timestamp > .[$e.rule_id].last_hit)
-         then .[$e.rule_id].last_hit   = $e.timestamp else . end)
-    )
-  ' "$INCIDENTS")
+  if [[ "$valid_lines" -gt 0 ]]; then
+    jq_counts=$(echo "$valid_stream" | jq -s '
+      reduce .[] as $e ({};
+        (.[$e.rule_id] //= {hit_count:0, bypass_count:0, last_hit:null, first_seen:null}) |
+        (if $e.event_type == "deny"  then .[$e.rule_id].hit_count    += 1 else . end) |
+        (if $e.event_type == "bypass" then .[$e.rule_id].bypass_count += 1 else . end) |
+        (if .[$e.rule_id].first_seen == null or ($e.timestamp < .[$e.rule_id].first_seen)
+           then .[$e.rule_id].first_seen = $e.timestamp else . end) |
+        (if .[$e.rule_id].last_hit   == null or ($e.timestamp > .[$e.rule_id].last_hit)
+           then .[$e.rule_id].last_hit   = $e.timestamp else . end)
+      )
+    ')
+  fi
 fi
 
 # --- Stitch rules + counts into the final report --------------------------
@@ -105,6 +114,11 @@ report=$(jq -n \
         rule_text_prefix: $r.rule_text_prefix
       }
     ) | sort_by(.hit_count, .id)) as $enriched |
+    # Orphan events: rule_ids in the jsonl that don'"'"'t match any AGENTS.md id.
+    # Surfacing these prevents silent data loss when a hook emits a rule_id
+    # that was renamed / removed / never tagged (e.g., historical sentinel names).
+    ($rules | map(.id)) as $known_ids |
+    ($counts | keys | map(select(. as $id | ($known_ids | index($id)) | not))) as $orphan_ids |
     {
       generated_at: $generated_at,
       rules: $enriched,
@@ -115,7 +129,8 @@ report=$(jq -n \
           | length),
         rules_bypassed_over_baseline: ($enriched
           | map(select(.bypass_count > 0))
-          | length)
+          | length),
+        orphan_rule_ids: $orphan_ids
       }
     }
   ')

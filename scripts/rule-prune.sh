@@ -61,7 +61,9 @@ fi
 
 filed=0
 skipped=0
-printf '%s\n' "$candidates" | while IFS=$'\t' read -r id section first_seen prefix; do
+# Process substitution so counter mutations land in the parent shell,
+# not a subshell created by a pipeline.
+while IFS=$'\t' read -r id section first_seen prefix; do
   title="rule-prune: consider retiring $id"
   # Idempotency: does an open issue with this exact title already exist?
   existing=$(gh issue list --search "$title in:title" 2>/dev/null \
@@ -69,6 +71,7 @@ printf '%s\n' "$candidates" | while IFS=$'\t' read -r id section first_seen pref
     || echo "0")
   if [[ "${existing:-0}" -gt 0 ]]; then
     echo "[skip] issue already exists: $title"
+    skipped=$((skipped + 1))
     continue
   fi
 
@@ -95,12 +98,14 @@ printf '%s\n' "$candidates" | while IFS=$'\t' read -r id section first_seen pref
     echo "_Filed by \`scripts/rule-prune.sh --weeks=${WEEKS}\`. See plan #2210._"
   } > "$body_file"
 
-  gh issue create \
+  if gh issue create \
     --title "$title" \
     --body-file "$body_file" \
-    --milestone "Post-MVP / Later" >/dev/null \
-    && echo "[filed] $title"
+    --milestone "Post-MVP / Later" >/dev/null; then
+    echo "[filed] $title"
+    filed=$((filed + 1))
+  fi
   rm -f "$body_file"
-done
+done < <(printf '%s\n' "$candidates")
 
-echo "Done. Candidates: $candidate_count."
+echo "Done. Candidates: $candidate_count. Filed: $filed. Skipped: $skipped."

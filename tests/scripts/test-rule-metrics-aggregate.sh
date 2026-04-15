@@ -123,6 +123,35 @@ t_dry_run() {
 }
 
 # Entry
+# T5: malformed jsonl lines → skipped with stderr warning, not a hard fail
+t_malformed_tolerance() {
+  local root; root=$(_setup)
+  # Write one valid line, one malformed line, one more valid line
+  jq -nc '{timestamp:"2026-04-10T00:00:00Z", rule_id:"hr-rule-a", event_type:"deny", rule_text_prefix:"", command_snippet:""}' \
+    >> "$root/.claude/.rule-incidents.jsonl"
+  echo "this is not JSON" >> "$root/.claude/.rule-incidents.jsonl"
+  jq -nc '{timestamp:"2026-04-11T00:00:00Z", rule_id:"hr-rule-a", event_type:"deny", rule_text_prefix:"", command_snippet:""}' \
+    >> "$root/.claude/.rule-incidents.jsonl"
+
+  local err; err="$root/err.log"
+  INCIDENTS_REPO_ROOT="$root" bash "$SCRIPT" 2> "$err" >/dev/null || {
+    _report "malformed lines do not abort aggregation" fail "exit non-zero; stderr: $(cat "$err")"
+    rm -rf "$root"; return
+  }
+
+  grep -q 'Dropped 1 malformed line' "$err" \
+    || { _report "malformed: warning emitted" fail "$(cat "$err")"; rm -rf "$root"; return; }
+
+  local a_hits
+  a_hits=$(jq '.rules[] | select(.id == "hr-rule-a") | .hit_count' < "$root/knowledge-base/project/rule-metrics.json")
+  if [[ "$a_hits" == "2" ]]; then
+    _report "malformed: valid lines counted despite corruption" ok
+  else
+    _report "malformed: valid lines counted despite corruption" fail "got $a_hits"
+  fi
+  rm -rf "$root"
+}
+
 if [[ ! -f "$SCRIPT" ]]; then
   echo "ERROR: $SCRIPT does not exist — RED phase expected this." >&2
   exit 1
@@ -132,6 +161,7 @@ t_empty
 t_counts
 t_idempotent
 t_dry_run
+t_malformed_tolerance
 
 echo "=== $pass passed, $fail failed ==="
 [[ "$fail" -eq 0 ]]

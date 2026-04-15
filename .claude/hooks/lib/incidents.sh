@@ -64,11 +64,24 @@ emit_incident() {
 #   --no-verify   → cq-never-skip-hooks
 #   LEFTHOOK=0    → cq-lefthook-worktree-hang
 # Deferred to v2: --force on main, --no-gpg-sign, --amend after a prior deny.
+#
+# Patterns anchor on bash-adjacent context ("git ", "git\t", LEFTHOOK=0 at
+# command start or after a chain operator) to skip substrings embedded in
+# echoed strings, heredoc bodies, PR body text, etc.
 detect_bypass() {
   local cmd="${2:-}"
-  case "$cmd" in
-    *--no-verify*) echo "cq-never-skip-hooks" ;;
-    *LEFTHOOK=0*)  echo "cq-lefthook-worktree-hang" ;;
-    *)             : ;;
-  esac
+  # --no-verify: only recognize when it's a flag to a git invocation in the
+  # command. Matches "git ... --no-verify" and "git -C foo commit --no-verify"
+  # but not 'echo "avoid --no-verify"' or 'gh pr create --body "don\'t --no-verify"'.
+  if [[ "$cmd" =~ (^|[[:space:]]|\&\&|\|\||\;)[[:space:]]*git[[:space:]].*--no-verify ]]; then
+    echo "cq-never-skip-hooks"
+    return
+  fi
+  # LEFTHOOK=0: recognize only when it's an environment prefix at the start
+  # of the command (standard env-assign-before-command position) or after a
+  # chain operator. Not `echo "LEFTHOOK=0 is bad"`.
+  if [[ "$cmd" =~ (^|\&\&|\|\||\;)[[:space:]]*LEFTHOOK=0[[:space:]] ]]; then
+    echo "cq-when-lefthook-hangs-in-a-worktree-60s"
+    return
+  fi
 }

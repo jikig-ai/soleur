@@ -138,13 +138,27 @@ t_detect_bypass() {
   [[ "$r" == "cq-never-skip-hooks" ]] || { _report "detect_bypass --no-verify" fail "got=$r"; return; }
 
   r=$(detect_bypass "Bash" "LEFTHOOK=0 git commit -m foo")
-  [[ "$r" == "cq-lefthook-worktree-hang" ]] || { _report "detect_bypass LEFTHOOK=0" fail "got=$r"; return; }
+  [[ "$r" == "cq-when-lefthook-hangs-in-a-worktree-60s" ]] || { _report "detect_bypass LEFTHOOK=0" fail "got=$r"; return; }
 
   r=$(detect_bypass "Bash" "git push --force origin feature")
   [[ -z "$r" ]] || { _report "detect_bypass ignores --force (v1)" fail "got=$r"; return; }
 
   r=$(detect_bypass "Bash" "git commit --amend")
   [[ -z "$r" ]] || { _report "detect_bypass ignores --amend (v1)" fail "got=$r"; return; }
+
+  # False-positive guards: substring occurrences in non-git contexts must not trip
+  r=$(detect_bypass "Bash" 'echo "do not use --no-verify"')
+  [[ -z "$r" ]] || { _report "detect_bypass ignores --no-verify in echo string" fail "got=$r"; return; }
+
+  r=$(detect_bypass "Bash" 'gh pr comment 1 --body "--no-verify was used"')
+  [[ -z "$r" ]] || { _report "detect_bypass ignores --no-verify in gh body" fail "got=$r"; return; }
+
+  r=$(detect_bypass "Bash" 'echo "LEFTHOOK=0 is banned"')
+  [[ -z "$r" ]] || { _report "detect_bypass ignores LEFTHOOK=0 in echo string" fail "got=$r"; return; }
+
+  # Positive after chain operator still matches
+  r=$(detect_bypass "Bash" "cd /tmp && git commit --no-verify -m foo")
+  [[ "$r" == "cq-never-skip-hooks" ]] || { _report "detect_bypass chained --no-verify" fail "got=$r"; return; }
 
   _report "detect_bypass v1 scope" ok
 }

@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-04-15T07:48:51Z",
+  "generated_at": "2026-04-15T08:12:34Z",
   "rules": [
     {
       "id": "cm-challenge-reasoning-instead-of",
@@ -110,6 +110,16 @@
       "last_hit": null,
       "first_seen": null,
       "rule_text_prefix": "In worktrees, run vitest via `node node_modules/vi"
+    },
+    {
+      "id": "cq-never-skip-hooks",
+      "section": "Code Quality",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "prevented_errors": 0,
+      "last_hit": null,
+      "first_seen": null,
+      "rule_text_prefix": "Never skip pre-commit or pre-push hooks with `--no"
     },
     {
       "id": "cq-playwright-mcp-uses-isolated-mode-mcp",
@@ -723,8 +733,9 @@
     }
   ],
   "summary": {
-    "total_rules_tagged": 72,
-    "rules_unused_over_8w": 72,
-    "rules_bypassed_over_baseline": 0
+    "total_rules_tagged": 73,
+    "rules_unused_over_8w": 73,
+    "rules_bypassed_over_baseline": 0,
+    "orphan_rule_ids": []
   }
 }

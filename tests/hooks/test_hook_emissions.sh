@@ -51,7 +51,7 @@ _check "guardrails: --no-verify bypass preflight" "cq-never-skip-hooks"
 # --- guardrails: bypass preflight (LEFTHOOK=0)
 echo '{"tool_name":"Bash","tool_input":{"command":"LEFTHOOK=0 git commit -m foo"}}' \
   | bash "$WORK/.claude/hooks/guardrails.sh" >/dev/null 2>&1 || true
-_check "guardrails: LEFTHOOK=0 bypass preflight" "cq-lefthook-worktree-hang"
+_check "guardrails: LEFTHOOK=0 bypass preflight" "cq-when-lefthook-hangs-in-a-worktree-60s"
 
 # --- guardrails: rm -rf worktrees
 echo '{"tool_name":"Bash","tool_input":{"command":"rm -rf .worktrees/foo"}}' \

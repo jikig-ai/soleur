@@ -54,7 +54,7 @@ the sourced file, not the library itself.
 uses a known skip flag:
 
 - `--no-verify` → `cq-never-skip-hooks`
-- `LEFTHOOK=0`  → `cq-lefthook-worktree-hang`
+- `LEFTHOOK=0`  → `cq-when-lefthook-hangs-in-a-worktree-60s`
 
 Deferred to v2 until the dataset shows it: `--force` on main, `--no-gpg-sign`,
 `--amend` after a same-session deny.
