@@ -736,7 +736,7 @@ the quote as the first block. iOS Safari works.
 + [ ] AC5: Sidebar survives KB file-to-file navigation; drafts preserved per-path.
 + [ ] AC6: Full-page `/dashboard/chat/<id>` route unchanged after ChatSurface extraction.
 + [ ] AC7: Mobile renders draggable bottom sheet at ~60vh with three snap points; dragging below 10vh closes.
-+ [ ] AC8: Three Plausible goals fire: `kb.chat.opened`, `kb.chat.selection_sent`, `kb.chat.thread_resumed`.
++ [x] AC8: Three Plausible goals fire: `kb.chat.opened`, `kb.chat.selection_sent`, `kb.chat.thread_resumed`.
 + [ ] AC9: Panel a11y contract met: `aria-label`, `Escape` close, focus move on open, focus return on close.
 + [x] AC10: Long URLs and code blocks wrap (not scroll) inside 380px sidebar.
 + [ ] AC11: DB migration applied to prod (verified via Supabase REST API); backfill ran or explicitly skipped with rationale.

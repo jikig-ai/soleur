@@ -156,6 +156,12 @@ provision_goal "page"  "/pages/getting-started.html"
 provision_goal "page"  "/blog/*"
 provision_goal "event" "Outbound Link: Click"
 
+# kb-chat-sidebar (#2345) — selection → quoted-chat flow.
+# Emitted from apps/web-platform via /api/analytics/track → Plausible.
+provision_goal "event" "kb.chat.opened"
+provision_goal "event" "kb.chat.selection_sent"
+provision_goal "event" "kb.chat.thread_resumed"
+
 # --- Verify Goals ---
 
 echo ""
