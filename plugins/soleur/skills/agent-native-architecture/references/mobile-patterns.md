@@ -464,13 +464,13 @@ Use the cheapest model that achieves the outcome:
 enum ModelTier {
     case fast      // claude-haiku-4-5: ~$1/1M input, $5/1M output
     case balanced  // claude-sonnet-4-6: ~$3/1M input, $15/1M output
-    case powerful  // claude-opus-4-6: ~$5/1M input, $25/1M output
+    case powerful  // claude-opus-4-7: ~$5/1M input, $25/1M output
 
     var modelId: String {
         switch self {
         case .fast: return "claude-haiku-4-5"
         case .balanced: return "claude-sonnet-4-6"
-        case .powerful: return "claude-opus-4-6"
+        case .powerful: return "claude-opus-4-7"
         }
     }
 }
