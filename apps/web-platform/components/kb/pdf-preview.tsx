@@ -33,12 +33,32 @@ export function PdfPreview({ src, filename, showDownload = true }: PdfPreviewPro
   useEffect(() => {
     const el = containerRef.current;
     if (!el) return;
+
+    // Initial measurement fires immediately; subsequent resize events are
+    // debounced 150ms so the PDF doesn't re-rasterize on every pixel of panel
+    // drag. Each width change triggers a PDF.js canvas render (~50-200ms).
+    let initialized = false;
+    let timeout: ReturnType<typeof setTimeout> | null = null;
+
     const observer = new ResizeObserver(([entry]) => {
-      setContainerWidth(entry.contentRect.width);
-      setContainerHeight(entry.contentRect.height);
+      const { width, height } = entry.contentRect;
+      if (!initialized) {
+        initialized = true;
+        setContainerWidth(width);
+        setContainerHeight(height);
+        return;
+      }
+      if (timeout !== null) clearTimeout(timeout);
+      timeout = setTimeout(() => {
+        setContainerWidth(width);
+        setContainerHeight(height);
+      }, 150);
     });
     observer.observe(el);
-    return () => observer.disconnect();
+    return () => {
+      observer.disconnect();
+      if (timeout !== null) clearTimeout(timeout);
+    };
   }, []);
 
   // Size the page to fit within the container without scrolling.
