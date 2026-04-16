@@ -315,7 +315,7 @@ export default function KbLayout({ children }: { children: ReactNode }) {
           </svg>
         </button>
       )}
-      <div className="min-h-0 flex-1 overflow-y-auto">
+      <div className={`min-h-0 flex-1 overflow-y-auto ${kbCollapsed ? "pl-10" : ""}`}>
         <KbErrorBoundary>
           {isContentView ? children : <DesktopPlaceholder />}
         </KbErrorBoundary>
