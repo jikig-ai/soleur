@@ -144,7 +144,7 @@ export default function SharedDocumentPage({
             )}
 
             {data?.kind === "pdf" && (
-              <div className="h-[80vh]">
+              <div className="h-[70vh]">
                 <PdfPreview src={data.src} filename={data.filename} />
               </div>
             )}
