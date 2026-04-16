@@ -130,10 +130,10 @@ describe("ChatInput", () => {
     expect(onSend).not.toHaveBeenCalled();
   });
 
-  it("textarea has fixed h-[44px] height to align with buttons", () => {
+  it("textarea has auto-growing height constraints", () => {
     setup();
     const textarea = screen.getByRole("textbox");
-    expect(textarea.className).toContain("h-[44px]");
-    expect(textarea.className).not.toContain("min-h-[44px]");
+    expect(textarea.className).toContain("min-h-[44px]");
+    expect(textarea.className).toContain("max-h-[100px]");
   });
 });

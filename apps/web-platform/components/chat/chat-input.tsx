@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useCallback, useEffect } from "react";
+import { useState, useRef, useCallback, useEffect, useLayoutEffect } from "react";
 import type { AttachmentRef } from "@/lib/types";
 import { validateFiles } from "@/lib/validate-files";
 import { uploadWithProgress } from "@/lib/upload-with-progress";
@@ -95,6 +95,16 @@ export function ChatInput({
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const activeXhrs = useRef<Map<string, XMLHttpRequest>>(new Map());
+
+  // Auto-resize textarea height based on content (capped at ~5 lines / 100px).
+  // useLayoutEffect prevents flicker; keying on `value` covers typing, paste,
+  // programmatic changes (quote insertion, draft rehydration, @-mention).
+  useLayoutEffect(() => {
+    const el = textareaRef.current;
+    if (!el) return;
+    el.style.height = "auto"; // Reset to measure true scrollHeight
+    el.style.height = `${Math.min(el.scrollHeight, 100)}px`;
+  }, [value]);
 
   // Clear error after 3 seconds
   useEffect(() => {
@@ -496,7 +506,7 @@ export function ChatInput({
             disabled={disabled || isUploading}
             rows={1}
             className={
-              "w-full resize-none rounded-xl border border-neutral-700 bg-neutral-900 px-4 py-2.5 pr-12 text-sm text-white placeholder:text-neutral-500 focus:border-neutral-500 focus:outline-none disabled:opacity-50 h-[44px] transition-shadow" +
+              "w-full resize-none rounded-xl border border-neutral-700 bg-neutral-900 px-4 py-2.5 pr-12 text-sm text-white placeholder:text-neutral-500 focus:border-neutral-500 focus:outline-none disabled:opacity-50 min-h-[44px] max-h-[100px] overflow-y-auto transition-shadow" +
               (flashQuote ? " ring-2 ring-amber-400" : "")
             }
           />

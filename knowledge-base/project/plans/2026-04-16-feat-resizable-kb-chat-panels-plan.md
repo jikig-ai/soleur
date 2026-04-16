@@ -125,12 +125,12 @@ useLayoutEffect(() => {
 
 **Acceptance criteria:**
 
-- [ ] Textarea starts at 1 line (~44px)
-- [ ] Textarea grows to match content up to 5 lines (~100px)
-- [ ] Beyond 5 lines, textarea scrolls internally
-- [ ] On submit, textarea resets to 1 line
-- [ ] Paste multi-line content triggers immediate resize
-- [ ] No visual jank during growth (no layout shift)
+- [x] Textarea starts at 1 line (~44px)
+- [x] Textarea grows to match content up to 5 lines (~100px)
+- [x] Beyond 5 lines, textarea scrolls internally
+- [x] On submit, textarea resets to 1 line
+- [x] Paste multi-line content triggers immediate resize
+- [x] No visual jank during growth (no layout shift)
 
 #### Phase 2: Install react-resizable-panels + Restructure Layout
 

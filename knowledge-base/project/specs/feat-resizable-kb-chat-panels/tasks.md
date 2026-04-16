@@ -2,12 +2,12 @@
 
 ## Phase 1: Auto-Growing Chat Input
 
-- [ ] 1.1 Remove `h-[44px]` from textarea className in `chat-input.tsx:489-502`
-- [ ] 1.2 Add `min-h-[44px] max-h-[100px]` as base CSS constraints
-- [ ] 1.3 Add `useLayoutEffect` keyed on `value` to set `style.height` via ref (scrollHeight approach)
-- [ ] 1.4 Add `overflow-y: auto` to textarea for internal scrolling beyond max height
-- [ ] 1.5 Verify submit resets height (clearing `value` triggers `useLayoutEffect`)
-- [ ] 1.6 Write tests: auto-grow on type, paste multi-line, programmatic value change (quote insertion), submit reset
+- [x] 1.1 Remove `h-[44px]` from textarea className in `chat-input.tsx:489-502`
+- [x] 1.2 Add `min-h-[44px] max-h-[100px]` as base CSS constraints
+- [x] 1.3 Add `useLayoutEffect` keyed on `value` to set `style.height` via ref (scrollHeight approach)
+- [x] 1.4 Add `overflow-y: auto` to textarea for internal scrolling beyond max height
+- [x] 1.5 Verify submit resets height (clearing `value` triggers `useLayoutEffect`)
+- [x] 1.6 Write tests: auto-grow on type, paste multi-line, programmatic value change (quote insertion), submit reset
 
 ## Phase 2: Install react-resizable-panels + Restructure Layout
 
