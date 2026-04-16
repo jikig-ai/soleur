@@ -188,8 +188,8 @@ it("dashboard file preview wraps PDF in height-constrained container", () => {
 
 ## Acceptance Criteria
 
-- [ ] PDF page navigation controls (Previous, page counter, Next) are visible without scrolling when viewing a multi-page PDF in the dashboard KB viewer
-- [ ] PDF page navigation controls are visible without scrolling when viewing a multi-page PDF via a shared link (`/shared/[token]`)
+- [x] PDF page navigation controls (Previous, page counter, Next) are visible without scrolling when viewing a multi-page PDF in the dashboard KB viewer
+- [x] PDF page navigation controls are visible without scrolling when viewing a multi-page PDF via a shared link (`/shared/[token]`)
 - [ ] The PDF document content area scrolls internally when the PDF page is taller than the available space
 - [ ] Single-page PDFs (no pagination controls) still render correctly with no blank space where controls would be
 - [ ] Image preview, text preview, and download preview in the dashboard are unaffected
