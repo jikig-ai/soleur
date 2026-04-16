@@ -121,4 +121,51 @@ describe("FoundationCards", () => {
     expect(calls).toContain("cmo");
     expect(calls).toContain("cpo");
   });
+
+  describe("chip rendering for completed cards", () => {
+    it("renders completed cards as compact chips separate from the active grid", () => {
+      const { container } = renderCards();
+      // Completed cards should be in a chips row (flex container), not the grid
+      const chipsRow = container.querySelector("[data-testid='completed-chips']");
+      expect(chipsRow).toBeInTheDocument();
+
+      // Chips should contain links for completed cards
+      const chipLinks = chipsRow!.querySelectorAll("a");
+      expect(chipLinks).toHaveLength(2); // Vision + Legal
+    });
+
+    it("renders incomplete cards in the active grid only", () => {
+      const { container } = renderCards();
+      const activeGrid = container.querySelector("[data-testid='active-grid']");
+      expect(activeGrid).toBeInTheDocument();
+
+      const gridButtons = activeGrid!.querySelectorAll("button");
+      expect(gridButtons).toHaveLength(2); // Brand + Validation
+    });
+
+    it("renders nothing when all cards are complete", () => {
+      const allDone = mixedCards.map((c) => ({ ...c, done: true }));
+      const { container } = renderCards(allDone);
+      // Only chips, no active grid
+      const activeGrid = container.querySelector("[data-testid='active-grid']");
+      expect(activeGrid).not.toBeInTheDocument();
+
+      const chipsRow = container.querySelector("[data-testid='completed-chips']");
+      expect(chipsRow).toBeInTheDocument();
+      expect(chipsRow!.querySelectorAll("a")).toHaveLength(4);
+    });
+
+    it("renders no chips row when no cards are complete", () => {
+      const noneDone = mixedCards.map((c) => ({ ...c, done: false }));
+      const { container } = renderCards(noneDone);
+      const chipsRow = container.querySelector("[data-testid='completed-chips']");
+      expect(chipsRow).not.toBeInTheDocument();
+    });
+
+    it("chip links navigate to the KB path", () => {
+      renderCards();
+      const visionChip = screen.getByRole("link", { name: /Vision/ });
+      expect(visionChip).toHaveAttribute("href", "/dashboard/kb/overview/vision.md");
+    });
+  });
 });
