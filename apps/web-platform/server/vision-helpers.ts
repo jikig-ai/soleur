@@ -70,9 +70,10 @@ export async function buildVisionEnhancementPrompt(
     return null;
   }
 
+  const relativePath = "knowledge-base/overview/vision.md";
   return (
-    `\n\nThe founder's vision document at \`${visionPath}\` ` +
+    `\n\nThe founder's vision document at \`${relativePath}\` ` +
     "is a stub. Enhance it with structured sections: Mission, Target Audience, " +
-    `Value Proposition, Key Differentiators. Write the enhanced version to the same absolute path (\`${visionPath}\`).`
+    `Value Proposition, Key Differentiators. Write the enhanced version to \`${relativePath}\`.`
   );
 }

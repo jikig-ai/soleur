@@ -476,6 +476,11 @@ export function ChatSurface({
             draftKey={draftKey}
           />
         </div>
+        {!isFull && usageData && usageData.totalCostUsd > 0 && (
+          <div className="mt-1 px-1 text-xs text-neutral-500">
+            ~${usageData.totalCostUsd.toFixed(4)} estimated
+          </div>
+        )}
         {isFull && (
           <div className="mx-auto mt-1 flex max-w-3xl items-center justify-between text-xs text-neutral-400">
             <span className="md:hidden">

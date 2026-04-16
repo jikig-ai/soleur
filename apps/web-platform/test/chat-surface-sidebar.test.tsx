@@ -112,4 +112,16 @@ describe("ChatSurface variant=\"sidebar\"", () => {
     await renderSidebar();
     expect(mockResumeSession).toHaveBeenCalledWith("abc");
   });
+
+  it("renders cost estimate when usageData.totalCostUsd > 0", async () => {
+    wsReturn.usageData = { totalCostUsd: 0.0123 };
+    await renderSidebar();
+    expect(screen.getByText(/~\$0\.0123/)).toBeInTheDocument();
+  });
+
+  it("does NOT render cost estimate when usageData is null", async () => {
+    wsReturn.usageData = null;
+    await renderSidebar();
+    expect(screen.queryByText(/~\$/)).toBeNull();
+  });
 });

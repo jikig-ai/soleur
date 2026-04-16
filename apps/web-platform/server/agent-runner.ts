@@ -478,13 +478,17 @@ export async function startAgentSession(
     // Build system prompt for the domain leader
     let systemPrompt = `You are the ${leader.title} (${leader.name}) for this user's business. ${leader.description}
 
-Use the tools available to you to read and write to the knowledge-base directory. The user's workspace is at ${workspacePath}.
+Use the tools available to you to read and write to the knowledge-base directory. Files are relative to the current working directory.
+
+Never mention file system paths, workspace paths, or internal directory structures in your responses — refer to files by their knowledge-base-relative path (e.g. "overview/vision.md" not "/workspaces/.../knowledge-base/overview/vision.md").
 
 When you need user input for important decisions, use the AskUserQuestion tool.`;
 
     // Inject artifact context when conversation started from a specific page
     if (context?.content) {
       systemPrompt += `\n\nThe user is currently viewing: ${context.path}\n\nArtifact content:\n${context.content}\n\nAnswer in the context of this artifact.`;
+    } else if (context?.path) {
+      systemPrompt += `\n\nThe user is currently viewing the file at: ${context.path}\n\nRead this file first using the Read tool, then answer questions in the context of this document. Focus on the document content — do not search the knowledge-base directory for other files unless the user specifically asks.`;
     }
 
     // CPO-scoped: enhance minimal vision.md with structured sections

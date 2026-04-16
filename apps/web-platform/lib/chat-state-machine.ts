@@ -116,7 +116,7 @@ export function applyStreamEvent(
       return {
         messages: updated,
         activeStreams,
-        timerAction: { type: "reset", leaderId: event.leaderId },
+        timerAction: undefined,
       };
     }
 
@@ -199,7 +199,7 @@ export function applyStreamEvent(
 }
 
 /**
- * Apply the 30s stuck-state timeout for a leader. Only transitions a bubble
+ * Apply the stuck-state timeout for a leader. Only transitions a bubble
  * to "error" if it is still in a transitional state (thinking/tool_use).
  * Bubbles that have already progressed to streaming/done/error are left
  * alone — the timeout is stale and should no-op.
