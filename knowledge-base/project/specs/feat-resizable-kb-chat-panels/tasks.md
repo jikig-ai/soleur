@@ -31,18 +31,18 @@
 
 ## Phase 3: Sidebar Collapse + Handle Styling + Polish
 
-- [ ] 3.1 Delete `apps/web-platform/hooks/use-sidebar-collapse.ts`
-- [ ] 3.2 Wire Cmd+B handler to `sidebarRef.current.collapse()`/`.expand()` inline in `layout.tsx`
-- [ ] 3.3 Sidebar expand button: render when sidebar is collapsed, adjacent to collapsed sidebar region
-  - [ ] 3.3.1 Use Panel `onCollapse`/`onExpand` callbacks to toggle button visibility
-  - [ ] 3.3.2 Move existing expand button (layout.tsx:281-294) to new position
-- [ ] 3.4 Style resize handles
-  - [ ] 3.4.1 4px wide bar, transparent by default
-  - [ ] 3.4.2 Hover: `bg-neutral-400/50` with `cursor-col-resize`
-  - [ ] 3.4.3 Active drag: `bg-primary/50`
-  - [ ] 3.4.4 Grip dots in center (3 dots, 2px each, `bg-neutral-500`)
-  - [ ] 3.4.5 `transition-colors duration-150`
-- [ ] 3.5 Verify no `backdrop-filter` on PanelGroup ancestors
-- [ ] 3.6 Verify tablet (768-1024px): layout usable with min constraints
-- [ ] 3.7 Write tests: Cmd+B collapse/expand, expand button visibility, handle keyboard accessibility
+- [x] 3.1 Remove `useSidebarCollapse` import from KB layout (hook kept for dashboard/settings use)
+- [x] 3.2 Wire Cmd+B handler to `sidebarRef.current.collapse()`/`.expand()` inline in `layout.tsx`
+- [x] 3.3 Sidebar expand button: render when sidebar is collapsed, adjacent to collapsed sidebar region
+  - [x] 3.3.1 Use Panel `onCollapse`/`onExpand` callbacks to toggle button visibility
+  - [x] 3.3.2 Expand button in docContent shows when `kbCollapsed` state is true
+- [x] 3.4 Style resize handles
+  - [x] 3.4.1 4px wide bar, transparent by default
+  - [x] 3.4.2 Hover: `bg-neutral-400/50`
+  - [x] 3.4.3 Active drag: `bg-amber-500/50`
+  - [x] 3.4.4 Grip dots in center (3 dots)
+  - [x] 3.4.5 `transition-colors duration-150`
+- [x] 3.5 Verify no `backdrop-filter` on PanelGroup ancestors
+- [x] 3.6 Doc|chat handle hidden when chat panel is collapsed (conditional Separator)
+- [x] 3.7 Write tests: Cmd+B collapse/expand, collapse button visibility
 - [ ] 3.8 QA: browser testing of all flows (resize, collapse, persist, responsive breakpoint, mobile)

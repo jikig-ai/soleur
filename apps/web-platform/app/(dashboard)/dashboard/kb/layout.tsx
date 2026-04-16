@@ -1,7 +1,6 @@
 "use client";
 
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
-import { useSidebarCollapse } from "@/hooks/use-sidebar-collapse";
 import { useMediaQuery } from "@/hooks/use-media-query";
 import type { ReactNode } from "react";
 import { usePathname, useRouter } from "next/navigation";
@@ -48,7 +47,9 @@ export default function KbLayout({ children }: { children: ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
   const isDesktop = useMediaQuery("(min-width: 768px)");
+  const sidebarPanelRef = usePanelRef();
   const chatPanelRef = usePanelRef();
+  const [kbCollapsed, setKbCollapsed] = useState(false);
   const [tree, setTree] = useState<TreeNode | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<KbContextValue["error"]>(null);
@@ -143,7 +144,17 @@ export default function KbLayout({ children }: { children: ReactNode }) {
     });
   }, [pathname]);
 
-  const [kbCollapsed, toggleKbCollapsed] = useSidebarCollapse("soleur:sidebar.kb.collapsed");
+  const toggleKbCollapsed = useCallback(() => {
+    if (isDesktop) {
+      if (sidebarPanelRef.current?.isCollapsed()) {
+        sidebarPanelRef.current.expand();
+      } else {
+        sidebarPanelRef.current?.collapse();
+      }
+    } else {
+      setKbCollapsed((prev) => !prev);
+    }
+  }, [isDesktop, sidebarPanelRef]);
 
   // Cmd+B / Ctrl+B toggles KB file tree sidebar (only on KB routes, not in inputs)
   useEffect(() => {
@@ -284,7 +295,7 @@ export default function KbLayout({ children }: { children: ReactNode }) {
   const docContent = (
     <>
       {kbCollapsed && (
-        <div className="hidden shrink-0 items-center px-2 py-5 md:flex">
+        <div className="flex shrink-0 items-center px-2 py-5">
           <button
             onClick={toggleKbCollapsed}
             aria-label="Expand file tree"
@@ -313,18 +324,27 @@ export default function KbLayout({ children }: { children: ReactNode }) {
           <Group direction="horizontal" autoSaveId="kb-panels" className="h-full">
             {/* Sidebar panel */}
             <Panel
+              panelRef={sidebarPanelRef}
               defaultSize={18}
               minSize={10}
               maxSize={25}
               collapsible
               collapsedSize={0}
+              onCollapse={() => setKbCollapsed(true)}
+              onExpand={() => setKbCollapsed(false)}
             >
               <div className="min-w-0 h-full overflow-y-auto border-r border-neutral-800">
                 {sidebarContent}
               </div>
             </Panel>
 
-            <Separator />
+            <Separator className="group relative w-1 bg-transparent transition-colors duration-150 hover:bg-neutral-400/50 active:bg-amber-500/50 data-[resize-handle-active]:bg-amber-500/50">
+              <div className="absolute inset-y-0 left-1/2 flex -translate-x-1/2 flex-col items-center justify-center gap-0.5">
+                <span className="h-0.5 w-0.5 rounded-full bg-neutral-600 group-hover:bg-neutral-400" />
+                <span className="h-0.5 w-0.5 rounded-full bg-neutral-600 group-hover:bg-neutral-400" />
+                <span className="h-0.5 w-0.5 rounded-full bg-neutral-600 group-hover:bg-neutral-400" />
+              </div>
+            </Separator>
 
             {/* Document viewer panel */}
             <Panel defaultSize={60} minSize={30}>
@@ -333,7 +353,15 @@ export default function KbLayout({ children }: { children: ReactNode }) {
               </div>
             </Panel>
 
-            <Separator />
+            {showChat && (
+              <Separator className="group relative w-1 bg-transparent transition-colors duration-150 hover:bg-neutral-400/50 active:bg-amber-500/50 data-[resize-handle-active]:bg-amber-500/50">
+                <div className="absolute inset-y-0 left-1/2 flex -translate-x-1/2 flex-col items-center justify-center gap-0.5">
+                  <span className="h-0.5 w-0.5 rounded-full bg-neutral-600 group-hover:bg-neutral-400" />
+                  <span className="h-0.5 w-0.5 rounded-full bg-neutral-600 group-hover:bg-neutral-400" />
+                  <span className="h-0.5 w-0.5 rounded-full bg-neutral-600 group-hover:bg-neutral-400" />
+                </div>
+              </Separator>
+            )}
 
             {/* Chat panel — always present, collapses to 0% when inactive */}
             <Panel

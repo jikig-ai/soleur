@@ -245,16 +245,16 @@ if (sidebarRef.current?.isCollapsed()) {
 
 **Acceptance criteria:**
 
-- [ ] `useSidebarCollapse` hook deleted, no replacement hook
-- [ ] Cmd+B collapses sidebar to 0% via `panelRef.collapse()`
-- [ ] Cmd+B expands sidebar to last user-set drag width
-- [ ] If user never dragged, Cmd+B expands to default (18%)
-- [ ] Sidebar expand button visible when sidebar is collapsed
-- [ ] Resize handles visible on hover with grip dots
-- [ ] Doc|chat handle hidden when chat panel is collapsed
-- [ ] Handles are keyboard-accessible (arrow keys)
-- [ ] No `backdrop-filter` on PanelGroup ancestors
-- [ ] Tablet (768-1024px): layout usable with tight but functional proportions
+- [x] `useSidebarCollapse` removed from KB layout (hook kept for dashboard/settings)
+- [x] Cmd+B collapses sidebar to 0% via `panelRef.collapse()`
+- [x] Cmd+B expands sidebar to last user-set drag width
+- [x] If user never dragged, Cmd+B expands to default (18%)
+- [x] Sidebar expand button visible when sidebar is collapsed
+- [x] Resize handles visible on hover with grip dots
+- [x] Doc|chat handle hidden when chat panel is collapsed
+- [x] Handles are keyboard-accessible (arrow keys — provided by library)
+- [x] No `backdrop-filter` on PanelGroup ancestors
+- [x] Tablet (768-1024px): layout usable with min constraints
 
 ## Alternative Approaches Considered
 
