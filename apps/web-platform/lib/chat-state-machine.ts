@@ -116,7 +116,11 @@ export function applyStreamEvent(
       return {
         messages: updated,
         activeStreams,
-        timerAction: undefined,
+        // Reset the stuck-state timer on each tool_use — long-running tools
+        // (Read on large files, Bash commands, web searches) can exceed the
+        // 45s timeout. Each new tool_use proves the agent is still active.
+        // See #2430.
+        timerAction: { type: "reset", leaderId: event.leaderId },
       };
     }
 

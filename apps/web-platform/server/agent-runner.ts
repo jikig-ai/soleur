@@ -1510,6 +1510,7 @@ export async function sendUserMessage(
       (conv.domain_leader as DomainLeaderId) ?? undefined,
       resumeSessionId,
       augmentedContent,
+      conversationContext, // Pass context so system prompt includes document (#2430)
     ).catch(async (err) => {
       log.warn({ err }, "SDK resume failed, falling back to message replay");
       // Clear stale session_id
@@ -1531,6 +1532,7 @@ export async function sendUserMessage(
         (conv.domain_leader as DomainLeaderId) ?? undefined,
         undefined,
         replayPrompt,
+        conversationContext, // Pass context so system prompt includes document (#2430)
       ).catch(handleSessionError);
     });
   } else {
@@ -1546,6 +1548,7 @@ export async function sendUserMessage(
       (conv.domain_leader as DomainLeaderId) ?? undefined,
       undefined,
       prompt,
+      conversationContext, // Pass context so system prompt includes document (#2430)
     ).catch(handleSessionError);
   }
 }
