@@ -14,8 +14,7 @@ export interface KbChatSidebarProps {
  * On desktop, the layout renders KbChatContent directly inside a Panel.
  */
 export function KbChatSidebar({ open, onClose, contextPath }: KbChatSidebarProps) {
-  const filename = contextPath.split("/").pop() ?? contextPath;
-  const ariaLabel = `Conversation about ${filename}`;
+  const ariaLabel = `Conversation about ${contextPath.split("/").pop() ?? contextPath}`;
 
   return (
     <Sheet open={open} onClose={onClose} aria-label={ariaLabel}>

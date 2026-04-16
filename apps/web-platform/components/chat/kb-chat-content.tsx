@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ChatSurface } from "@/components/chat/chat-surface";
 import type { ChatInputQuoteHandle } from "@/components/chat/chat-input";
 import { useKbChat } from "@/components/kb/kb-chat-context";
@@ -69,10 +69,10 @@ export function KbChatContent({ contextPath, onClose, visible }: KbChatContentPr
 
   const filename = contextPath.split("/").pop() ?? contextPath;
 
-  const initialContext: ConversationContext = {
+  const initialContext: ConversationContext = useMemo(() => ({
     path: contextPath,
-    type: "kb-viewer",
-  };
+    type: "kb-viewer" as const,
+  }), [contextPath]);
 
   const handleThreadResumed = useCallback(
     (_conversationId: string, timestamp: string, messageCount: number) => {

@@ -1,6 +1,9 @@
 "use client";
 
-import { useState, useRef, useCallback, useEffect, useLayoutEffect } from "react";
+import { useState, useRef, useCallback, useEffect, useLayoutEffect as reactUseLayoutEffect } from "react";
+
+const useIsomorphicLayoutEffect =
+  typeof window !== "undefined" ? reactUseLayoutEffect : useEffect;
 import type { AttachmentRef } from "@/lib/types";
 import { validateFiles } from "@/lib/validate-files";
 import { uploadWithProgress } from "@/lib/upload-with-progress";
@@ -97,9 +100,9 @@ export function ChatInput({
   const activeXhrs = useRef<Map<string, XMLHttpRequest>>(new Map());
 
   // Auto-resize textarea height based on content (capped at ~5 lines / 100px).
-  // useLayoutEffect prevents flicker; keying on `value` covers typing, paste,
-  // programmatic changes (quote insertion, draft rehydration, @-mention).
-  useLayoutEffect(() => {
+  // useIsomorphicLayoutEffect prevents flicker on the client while avoiding
+  // SSR warnings; keying on `value` covers typing, paste, programmatic changes.
+  useIsomorphicLayoutEffect(() => {
     const el = textareaRef.current;
     if (!el) return;
     el.style.height = "auto"; // Reset to measure true scrollHeight

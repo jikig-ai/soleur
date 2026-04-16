@@ -47,38 +47,39 @@ const mockCollapse = vi.fn();
 const mockExpand = vi.fn();
 let mockIsCollapsed = false;
 
-vi.mock("react-resizable-panels", () => {
-  const React = require("react");
-  return {
-    Group: React.forwardRef(function MockGroup(props: Record<string, unknown>, ref: unknown) {
-      return React.createElement("div", { "data-testid": "panel-group", ref }, props.children);
-    }),
-    Panel: React.forwardRef(function MockPanel(props: Record<string, unknown>, ref: unknown) {
-      // Wire up panelRef mock
-      if (props.panelRef && typeof props.panelRef === "object") {
-        const panelRef = props.panelRef as { current: unknown };
-        panelRef.current = {
-          collapse: mockCollapse,
-          expand: mockExpand,
-          isCollapsed: () => mockIsCollapsed,
-        };
-      }
-      return React.createElement("div", { "data-testid": "panel", ref }, props.children);
-    }),
-    Separator: function MockSeparator() {
-      return React.createElement("div", { "data-testid": "panel-separator" });
-    },
-    usePanelRef: () => ({
-      current: {
+const { React: MockReact } = vi.hoisted(() => {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  return { React: require("react") };
+});
+
+vi.mock("react-resizable-panels", () => ({
+  Group: MockReact.forwardRef(function MockGroup(props: Record<string, unknown>, ref: unknown) {
+    return MockReact.createElement("div", { "data-testid": "panel-group", ref }, props.children);
+  }),
+  Panel: MockReact.forwardRef(function MockPanel(props: Record<string, unknown>, ref: unknown) {
+    if (props.panelRef && typeof props.panelRef === "object") {
+      const panelRef = props.panelRef as { current: unknown };
+      panelRef.current = {
         collapse: mockCollapse,
         expand: mockExpand,
         isCollapsed: () => mockIsCollapsed,
-      },
-    }),
-    useGroupRef: () => ({ current: null }),
-    useDefaultLayout: () => ({ defaultLayout: undefined, onLayoutChanged: vi.fn() }),
-  };
-});
+      };
+    }
+    return MockReact.createElement("div", { "data-testid": "panel", ref }, props.children);
+  }),
+  Separator: function MockSeparator() {
+    return MockReact.createElement("div", { "data-testid": "panel-separator" });
+  },
+  usePanelRef: () => ({
+    current: {
+      collapse: mockCollapse,
+      expand: mockExpand,
+      isCollapsed: () => mockIsCollapsed,
+    },
+  }),
+  useGroupRef: () => ({ current: null }),
+  useDefaultLayout: () => ({ defaultLayout: undefined, onLayoutChanged: vi.fn() }),
+}));
 
 import KbLayout from "@/app/(dashboard)/dashboard/kb/layout";
 
@@ -105,16 +106,6 @@ describe("KB panel collapse (Phase 3)", () => {
         json: () => Promise.resolve({}),
       });
     }));
-  });
-
-  it("does not import useSidebarCollapse hook", async () => {
-    // Verify the hook is not used by checking that the layout module
-    // doesn't reference it. This is a structural check.
-    const layoutSource = await import("@/app/(dashboard)/dashboard/kb/layout");
-    // If useSidebarCollapse were still imported, it would be in the module's
-    // scope. We verify indirectly: the desktop layout uses Panel collapse
-    // instead of the hook's boolean state.
-    expect(layoutSource).toBeDefined();
   });
 
   it("Cmd+B on desktop triggers panel collapse API", async () => {

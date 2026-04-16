@@ -34,6 +34,21 @@ const KbChatContent = dynamic(
   { ssr: false, loading: () => null },
 );
 
+function ResizeHandle(props: { style?: React.CSSProperties }) {
+  return (
+    <Separator
+      className="group relative w-1 bg-transparent transition-colors duration-150 hover:bg-neutral-400/50 active:bg-amber-500/50 data-[resize-handle-active]:bg-amber-500/50"
+      style={props.style}
+    >
+      <div className="absolute inset-y-0 left-1/2 flex -translate-x-1/2 flex-col items-center justify-center gap-0.5">
+        <span className="h-0.5 w-0.5 rounded-full bg-neutral-600 group-hover:bg-neutral-400" />
+        <span className="h-0.5 w-0.5 rounded-full bg-neutral-600 group-hover:bg-neutral-400" />
+        <span className="h-0.5 w-0.5 rounded-full bg-neutral-600 group-hover:bg-neutral-400" />
+      </div>
+    </Separator>
+  );
+}
+
 const KB_SIDEBAR_OPEN_KEY = "kb.chat.sidebarOpen";
 
 function deriveContextPathFromPathname(pathname: string): string | null {
@@ -49,7 +64,24 @@ export default function KbLayout({ children }: { children: ReactNode }) {
   const isDesktop = useMediaQuery("(min-width: 768px)");
   const sidebarPanelRef = usePanelRef();
   const chatPanelRef = usePanelRef();
-  const { defaultLayout, onLayoutChanged } = useDefaultLayout({ id: "kb-panels" });
+  const { defaultLayout, onLayoutChanged } = useDefaultLayout({
+    id: "kb-panels",
+    storage: {
+      getItem(key: string) {
+        try {
+          const val = localStorage.getItem(key);
+          if (val) JSON.parse(val); // validate before returning
+          return val;
+        } catch {
+          localStorage.removeItem(key);
+          return null;
+        }
+      },
+      setItem(key: string, value: string) {
+        try { localStorage.setItem(key, value); } catch { /* quota exceeded */ }
+      },
+    },
+  });
   const [kbCollapsed, setKbCollapsed] = useState(false);
   const [tree, setTree] = useState<TreeNode | null>(null);
   const [loading, setLoading] = useState(true);
@@ -332,7 +364,7 @@ export default function KbLayout({ children }: { children: ReactNode }) {
               collapsible
               collapsedSize={0}
               onResize={(size) => {
-                setKbCollapsed(size.asPercentage === 0);
+                setKbCollapsed(size.asPercentage < 1);
               }}
             >
               <div className="min-w-0 h-full overflow-y-auto border-r border-neutral-800">
@@ -340,13 +372,7 @@ export default function KbLayout({ children }: { children: ReactNode }) {
               </div>
             </Panel>
 
-            <Separator className="group relative w-1 bg-transparent transition-colors duration-150 hover:bg-neutral-400/50 active:bg-amber-500/50 data-[resize-handle-active]:bg-amber-500/50">
-              <div className="absolute inset-y-0 left-1/2 flex -translate-x-1/2 flex-col items-center justify-center gap-0.5">
-                <span className="h-0.5 w-0.5 rounded-full bg-neutral-600 group-hover:bg-neutral-400" />
-                <span className="h-0.5 w-0.5 rounded-full bg-neutral-600 group-hover:bg-neutral-400" />
-                <span className="h-0.5 w-0.5 rounded-full bg-neutral-600 group-hover:bg-neutral-400" />
-              </div>
-            </Separator>
+            <ResizeHandle />
 
             {/* Document viewer panel */}
             <Panel defaultSize={60} minSize={30}>
@@ -355,15 +381,8 @@ export default function KbLayout({ children }: { children: ReactNode }) {
               </div>
             </Panel>
 
-            {showChat && (
-              <Separator className="group relative w-1 bg-transparent transition-colors duration-150 hover:bg-neutral-400/50 active:bg-amber-500/50 data-[resize-handle-active]:bg-amber-500/50">
-                <div className="absolute inset-y-0 left-1/2 flex -translate-x-1/2 flex-col items-center justify-center gap-0.5">
-                  <span className="h-0.5 w-0.5 rounded-full bg-neutral-600 group-hover:bg-neutral-400" />
-                  <span className="h-0.5 w-0.5 rounded-full bg-neutral-600 group-hover:bg-neutral-400" />
-                  <span className="h-0.5 w-0.5 rounded-full bg-neutral-600 group-hover:bg-neutral-400" />
-                </div>
-              </Separator>
-            )}
+            {/* Always render Separator to maintain stable Panel-Separator-Panel child order */}
+            <ResizeHandle style={showChat ? undefined : { display: "none" }} />
 
             {/* Chat panel — always present, collapses to 0% when inactive */}
             <Panel
@@ -379,7 +398,7 @@ export default function KbLayout({ children }: { children: ReactNode }) {
                   <KbChatContent
                     contextPath={contextPath}
                     onClose={closeSidebar}
-                    visible={sidebarOpen}
+                    visible={showChat}
                   />
                 )}
               </div>

@@ -31,26 +31,28 @@ const capturedGroupProps: Record<string, unknown>[] = [];
 const capturedPanelProps: Record<string, unknown>[] = [];
 const capturedSeparatorProps: Record<string, unknown>[] = [];
 
-vi.mock("react-resizable-panels", () => {
-  const React = require("react");
-  return {
-    Group: React.forwardRef(function MockGroup(props: Record<string, unknown>, ref: unknown) {
-      capturedGroupProps.push(props);
-      return React.createElement("div", { "data-testid": "panel-group", ref }, props.children);
-    }),
-    Panel: React.forwardRef(function MockPanel(props: Record<string, unknown>, ref: unknown) {
-      capturedPanelProps.push(props);
-      return React.createElement("div", { "data-testid": "panel", "data-default-size": props.defaultSize, ref }, props.children);
-    }),
-    Separator: function MockSeparator(props: Record<string, unknown>) {
-      capturedSeparatorProps.push(props);
-      return React.createElement("div", { "data-testid": "panel-separator" });
-    },
-    usePanelRef: () => ({ current: { collapse: vi.fn(), expand: vi.fn(), isCollapsed: () => false } }),
-    useGroupRef: () => ({ current: null }),
-    useDefaultLayout: () => ({ defaultLayout: undefined, onLayoutChanged: vi.fn() }),
-  };
+const { React: MockReact } = vi.hoisted(() => {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  return { React: require("react") };
 });
+
+vi.mock("react-resizable-panels", () => ({
+  Group: MockReact.forwardRef(function MockGroup(props: Record<string, unknown>, ref: unknown) {
+    capturedGroupProps.push(props);
+    return MockReact.createElement("div", { "data-testid": "panel-group", ref }, props.children);
+  }),
+  Panel: MockReact.forwardRef(function MockPanel(props: Record<string, unknown>, ref: unknown) {
+    capturedPanelProps.push(props);
+    return MockReact.createElement("div", { "data-testid": "panel", "data-default-size": props.defaultSize, ref }, props.children);
+  }),
+  Separator: function MockSeparator(props: Record<string, unknown>) {
+    capturedSeparatorProps.push(props);
+    return MockReact.createElement("div", { "data-testid": "panel-separator" });
+  },
+  usePanelRef: () => ({ current: { collapse: vi.fn(), expand: vi.fn(), isCollapsed: () => false } }),
+  useGroupRef: () => ({ current: null }),
+  useDefaultLayout: () => ({ defaultLayout: undefined, onLayoutChanged: vi.fn() }),
+}));
 
 vi.mock("@/hooks/use-team-names", () => ({
   useTeamNames: () => ({ names: {}, getDisplayName: (id: string) => id, getIconPath: () => null, loading: false }),
