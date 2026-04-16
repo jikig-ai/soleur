@@ -255,7 +255,9 @@ export default function KbLayout({ children }: { children: ReactNode }) {
   }), [sidebarOpen, openSidebar, closeSidebar, contextPath, kbChatFlag, submitQuote, registerQuoteHandler, messageCount]);
 
   // Whether to show the chat panel as a resizable column on desktop.
-  const showChat = kbChatFlag && !!contextPath;
+  // sidebarOpen is user-controlled: clicking X (`closeSidebar`) sets it false
+  // and unmounts the chat Panel; "Continue thread" (`openSidebar`) re-opens it.
+  const showChat = kbChatFlag && !!contextPath && sidebarOpen;
 
   // Full-width states: loading, errors, or empty KB (no sidebar needed)
   if (loading || error || (!loading && !hasTreeContent)) {
@@ -302,7 +304,7 @@ export default function KbLayout({ children }: { children: ReactNode }) {
   const docContent = (
     <>
       {kbCollapsed && (
-        <div className="flex shrink-0 items-center px-2 py-5">
+        <div className="flex shrink-0 items-center px-2 py-2">
           <button
             onClick={toggleKbCollapsed}
             aria-label="Expand file tree"
