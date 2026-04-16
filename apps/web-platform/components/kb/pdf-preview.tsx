@@ -21,10 +21,23 @@ interface PdfPreviewProps {
   showDownload?: boolean;
 }
 
+// PDF.js document loading options.
+// - disableRange/Stream/AutoFetch must all be false for progressive rendering
+// - rangeChunkSize: 128KB chunks keep first render fast while avoiding too
+//   many round-trips on long documents
+// Memoized at module scope since these never change across renders.
+const PDF_DOCUMENT_OPTIONS = {
+  disableRange: false,
+  disableStream: false,
+  disableAutoFetch: false,
+  rangeChunkSize: 131072,
+};
+
 export function PdfPreview({ src, filename, showDownload = true }: PdfPreviewProps) {
   const [numPages, setNumPages] = useState(0);
   const [pageNumber, setPageNumber] = useState(1);
   const [error, setError] = useState(false);
+  const [loadProgress, setLoadProgress] = useState<{ loaded: number; total: number } | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const [containerWidth, setContainerWidth] = useState<number>();
   const [containerHeight, setContainerHeight] = useState<number>();
@@ -105,12 +118,32 @@ export function PdfPreview({ src, filename, showDownload = true }: PdfPreviewPro
       <div ref={containerRef} className="min-h-0 flex-1 flex items-center justify-center overflow-auto rounded-lg border border-neutral-800 bg-neutral-900/50">
         <Document
           file={src}
-          onLoadSuccess={({ numPages: n }) => setNumPages(n)}
+          options={PDF_DOCUMENT_OPTIONS}
+          onLoadSuccess={({ numPages: n }) => {
+            setNumPages(n);
+            setLoadProgress(null);
+          }}
           onLoadError={() => setError(true)}
+          onLoadProgress={({ loaded, total }) => {
+            if (total) setLoadProgress({ loaded, total });
+          }}
           className="flex items-center justify-center"
           loading={
-            <div className="flex items-center justify-center p-8">
+            <div className="flex flex-col items-center justify-center gap-3 p-8">
               <div className="h-5 w-5 animate-spin rounded-full border-2 border-neutral-600 border-t-amber-400" />
+              {loadProgress && loadProgress.total > 0 && (
+                <div className="w-48 text-center">
+                  <div className="h-1 w-full overflow-hidden rounded-full bg-neutral-800">
+                    <div
+                      className="h-full bg-amber-400 transition-[width] duration-150"
+                      style={{ width: `${Math.min(100, (loadProgress.loaded / loadProgress.total) * 100)}%` }}
+                    />
+                  </div>
+                  <p className="mt-2 text-xs text-neutral-500">
+                    Loading {Math.round(loadProgress.loaded / 1024)}KB / {Math.round(loadProgress.total / 1024)}KB
+                  </p>
+                </div>
+              )}
             </div>
           }
         >
