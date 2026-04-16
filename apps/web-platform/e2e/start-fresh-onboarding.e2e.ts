@@ -300,7 +300,7 @@ test.describe("Start Fresh onboarding: command center state", () => {
 
     // All foundations complete but operational tasks remain — shows tasks, not "ready"
     await expect(page.getByText("No conversations yet.")).toBeVisible({ timeout: 15_000 });
-    await expect(page.getByText("FOUNDATIONS")).toBeVisible();
+    await expect(page.getByText("FOUNDATIONS").first()).toBeVisible();
   });
 
   test("operational tasks render when foundations are complete", async ({ page }) => {
