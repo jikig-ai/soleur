@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, type MockInstance, beforeEach, afterEach } from "vitest";
 import { renderHook, act, waitFor } from "@testing-library/react";
 
 // --- Mocks ---
@@ -54,7 +54,7 @@ const historyMessages = [
 
 describe("useWebSocket — resume history fetch (AC1, AC3, AC4)", () => {
   let originalWebSocket: typeof globalThis.WebSocket;
-  let fetchSpy: ReturnType<typeof vi.spyOn>;
+  let fetchSpy: MockInstance;
 
   beforeEach(() => {
     vi.clearAllMocks();
