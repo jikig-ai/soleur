@@ -54,15 +54,23 @@ describe("Sheet", () => {
     expect(screen.getByText("visible content")).toBeInTheDocument();
   });
 
-  it("renders with right-side classes on desktop", () => {
+  it("renders desktop sheet inline (not portaled to body, not fixed)", () => {
     installMatchMedia(true);
-    render(
-      <Sheet open={true} onClose={() => {}} aria-label="Desktop sheet">
-        <p>x</p>
-      </Sheet>,
+    const { container } = render(
+      <div data-testid="parent-container">
+        <Sheet open={true} onClose={() => {}} aria-label="Desktop sheet">
+          <p>x</p>
+        </Sheet>
+      </div>,
     );
     const panel = screen.getByRole("dialog", { name: "Desktop sheet" });
-    expect(panel.className).toMatch(/right-0/);
+    // Should render inside the parent container, not portaled to document.body
+    const parent = container.querySelector("[data-testid='parent-container']");
+    expect(parent?.contains(panel)).toBe(true);
+    // Should NOT have fixed positioning
+    expect(panel.className).not.toMatch(/\bfixed\b/);
+    // Should have shrink-0 for flex layout
+    expect(panel.className).toMatch(/shrink-0/);
     // Desktop has no drag handle
     expect(screen.queryByLabelText(/resize panel/i)).toBeNull();
   });
