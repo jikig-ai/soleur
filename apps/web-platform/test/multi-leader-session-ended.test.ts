@@ -159,7 +159,7 @@ describe("multi-leader session_ended (#2428)", () => {
     );
 
     const sessionEndedCalls = mockSendToClient.mock.calls.filter(
-      ([, msg]: [string, { type: string }]) => msg.type === "session_ended",
+      (call) => (call[1] as { type: string }).type === "session_ended",
     );
     expect(sessionEndedCalls).toHaveLength(0);
   });
@@ -171,7 +171,7 @@ describe("multi-leader session_ended (#2428)", () => {
     await startAgentSession("user-1", "conv-1", "cpo");
 
     const sessionEndedCalls = mockSendToClient.mock.calls.filter(
-      ([, msg]: [string, { type: string }]) => msg.type === "session_ended",
+      (call) => (call[1] as { type: string }).type === "session_ended",
     );
     expect(sessionEndedCalls).toHaveLength(1);
     expect(sessionEndedCalls[0][1]).toEqual({
@@ -190,7 +190,7 @@ describe("multi-leader session_ended (#2428)", () => {
     );
 
     const streamEndCalls = mockSendToClient.mock.calls.filter(
-      ([, msg]: [string, { type: string }]) => msg.type === "stream_end",
+      (call) => (call[1] as { type: string }).type === "stream_end",
     );
     expect(streamEndCalls).toHaveLength(1);
     expect(streamEndCalls[0][1].leaderId).toBe("cpo");
