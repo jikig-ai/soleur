@@ -11,23 +11,23 @@
 
 ## Phase 2: Install react-resizable-panels + Restructure Layout
 
-- [ ] 2.1 Install `react-resizable-panels` in `apps/web-platform/`
-- [ ] 2.2 Regenerate both `bun.lock` and `package-lock.json`; verify no peer conflicts with `npm ls`
+- [x] 2.1 Install `react-resizable-panels` in `apps/web-platform/`
+- [x] 2.2 Regenerate both `bun.lock` and `package-lock.json`; verify no peer conflicts with `npm ls`
 - [x] 2.3 Extract `KbChatContent` from `KbChatSidebar` into `kb-chat-content.tsx`
   - [x] 2.3.1 Move chat messages list, input area, and header into `KbChatContent`
   - [x] 2.3.2 `KbChatSidebar` becomes thin wrapper: on mobile, renders `KbChatContent` inside Sheet
-- [ ] 2.4 Replace flat flex div in `layout.tsx:241-310` with inline PanelGroup
-  - [ ] 2.4.1 Three Panels: sidebar (18% default, 10% min, 25% max), doc viewer (60% default, 30% min), chat (22% default, 20% min, 40% max)
-  - [ ] 2.4.2 Two `PanelResizeHandle` components (sidebar|doc and doc|chat)
-  - [ ] 2.4.3 Single `autoSaveId="kb-panels"`
-  - [ ] 2.4.4 Wrap in `useMediaQuery("(min-width: 768px)")` check; below md render existing mobile layout
-  - [ ] 2.4.5 Add `min-w-0` to all Panel children
-- [ ] 2.5 Chat panel: `collapsible` + `collapsedSize={0}`
-  - [ ] 2.5.1 Collapse via `chatPanelRef.collapse()` when `contextPath` is null or chat flag off
-  - [ ] 2.5.2 Expand via `chatPanelRef.expand()` when document selected + chat flag on
-  - [ ] 2.5.3 Hide doc|chat resize handle when chat panel is collapsed
-- [ ] 2.6 Reconcile `sidebarOpen` boolean: redundant on desktop (Panel API replaces it), keep for mobile Sheet
-- [ ] 2.7 Write tests: PanelGroup renders on desktop, mobile layout unchanged, chat panel collapses/expands on navigation
+- [x] 2.4 Replace flat flex div in `layout.tsx:241-310` with inline PanelGroup
+  - [x] 2.4.1 Three Panels: sidebar (18% default, 10% min, 25% max), doc viewer (60% default, 30% min), chat (22% default, 20% min, 40% max)
+  - [x] 2.4.2 Two Separator components (sidebar|doc and doc|chat)
+  - [x] 2.4.3 Single `autoSaveId="kb-panels"`
+  - [x] 2.4.4 Wrap in `useMediaQuery("(min-width: 768px)")` check; below md render existing mobile layout
+  - [x] 2.4.5 Add `min-w-0` to all Panel children
+- [x] 2.5 Chat panel: `collapsible` + `collapsedSize={0}`
+  - [x] 2.5.1 Collapse via `chatPanelRef.collapse()` when `contextPath` is null or chat flag off
+  - [x] 2.5.2 Expand via `chatPanelRef.expand()` when document selected + chat flag on
+  - [ ] 2.5.3 Hide doc|chat resize handle when chat panel is collapsed (Phase 3)
+- [x] 2.6 Reconcile `sidebarOpen` boolean: redundant on desktop (Panel API replaces it), keep for mobile Sheet
+- [x] 2.7 Write tests: PanelGroup renders on desktop, mobile layout unchanged, chat panel collapses/expands on navigation
 
 ## Phase 3: Sidebar Collapse + Handle Styling + Polish
 

@@ -36,6 +36,11 @@ vi.mock("@/components/kb/get-ancestor-paths", () => ({
   getAncestorPaths: () => [],
 }));
 
+// Force mobile layout for sidebar collapse tests (desktop uses PanelGroup)
+vi.mock("@/hooks/use-media-query", () => ({
+  useMediaQuery: () => false,
+}));
+
 import KbLayout from "@/app/(dashboard)/dashboard/kb/layout";
 
 describe("KB sidebar collapse", () => {

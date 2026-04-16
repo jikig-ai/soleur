@@ -180,15 +180,15 @@ cd apps/web-platform && bun add react-resizable-panels && bun install && npm ins
 
 **Acceptance criteria:**
 
-- [ ] `react-resizable-panels` installed and importable
-- [ ] Both `bun.lock` and `package-lock.json` regenerated
-- [ ] PanelGroup renders inline in `layout.tsx` (no wrapper component)
-- [ ] `KbChatContent` extracted; Sheet untouched
-- [ ] Two `PanelResizeHandle` components in three-panel mode
-- [ ] Chat panel collapses to 0% at KB root (no document selected)
-- [ ] Chat panel expands when document is selected + chat flag on
-- [ ] Mobile layout unchanged (Sheet-based chat, collapsible sidebar)
-- [ ] `min-w-0` on all Panel children
+- [x] `react-resizable-panels` installed and importable
+- [x] Both `bun.lock` and `package-lock.json` regenerated
+- [x] PanelGroup renders inline in `layout.tsx` (no wrapper component)
+- [x] `KbChatContent` extracted; Sheet untouched
+- [x] Two Separator components in three-panel mode
+- [x] Chat panel collapses to 0% at KB root (no document selected)
+- [x] Chat panel expands when document is selected + chat flag on
+- [x] Mobile layout unchanged (Sheet-based chat, collapsible sidebar)
+- [x] `min-w-0` on all Panel children
 
 #### Phase 3: Sidebar Collapse + Handle Styling + Polish
 
