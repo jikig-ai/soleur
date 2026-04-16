@@ -309,7 +309,7 @@ Run these checks before proceeding to Phase 1. A FAIL blocks execution with a re
    - **RED**: Write a failing test before implementing any new behavior
    - **GREEN**: Write the minimum code to make the test pass
    - **REFACTOR**: Improve code while keeping tests green
-   - Run the full test suite after each RED/GREEN/REFACTOR cycle
+   - Run the full test suite after each RED/GREEN/REFACTOR cycle. When running test suites via Bash, always capture both failure details AND summary in a single run — use `grep -E "(FAIL|ERROR|Test Files|Tests )"` or `| tail -30`, never `| tail -10` which discards failure names and forces a wasteful second run. **Why:** In PR #2430, `| tail -10` discarded failing test names, requiring a full re-run just to identify which 2 of 1580 tests failed.
    - Fix failures immediately -- never move to the next task with failing tests
    - When a class becomes hard to test (too many dependencies), extract an interface and inject dependencies. See the `/atdd-developer` skill for detailed TDD guidance.
 
