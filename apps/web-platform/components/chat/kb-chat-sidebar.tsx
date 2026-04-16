@@ -141,7 +141,7 @@ export function KbChatSidebar({ open, onClose, contextPath }: KbChatSidebarProps
         </header>
         {resumedBanner && (
           <div className="shrink-0 border-b border-neutral-800 bg-neutral-900/60 px-3 py-1.5 text-xs text-neutral-400">
-            Continuing from {new Date(resumedBanner.timestamp).toLocaleDateString()}
+            Continuing from {new Date(resumedBanner.timestamp).toLocaleString(undefined, { dateStyle: "short", timeStyle: "short" })}
           </div>
         )}
         <div className="flex min-h-0 min-w-0 flex-1 flex-col">

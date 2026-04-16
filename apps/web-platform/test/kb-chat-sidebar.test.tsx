@@ -157,4 +157,20 @@ describe("KbChatSidebar", () => {
     await renderSidebar(false);
     expect(screen.queryByLabelText("Close panel")).toBeNull();
   });
+
+  it("includes time in the resumed banner, not just date (AC2)", async () => {
+    wsReturn.resumedFrom = {
+      conversationId: "existing-xyz",
+      timestamp: "2026-04-16T14:15:00Z",
+      messageCount: 5,
+    };
+    wsReturn.realConversationId = "existing-xyz";
+    await renderSidebar(true);
+    const banner = screen.getByText(/Continuing from/);
+    const text = banner.textContent ?? "";
+    // The banner must include a time component (colon-separated hours:minutes),
+    // not just a date. toLocaleDateString() produces "4/16/2026" without time;
+    // toLocaleString() with timeStyle produces something like "2:15 PM".
+    expect(text).toMatch(/\d{1,2}:\d{2}/);
+  });
 });
