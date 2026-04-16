@@ -2,9 +2,28 @@
 title: "fix: PDF viewer height overflow hides pagination controls"
 type: fix
 date: 2026-04-16
+deepened: 2026-04-16
 ---
 
 # fix: PDF viewer height overflow hides pagination controls
+
+## Enhancement Summary
+
+**Deepened on:** 2026-04-16
+**Sections enhanced:** 4 (Root Cause, Phase 1, Phase 2, Phase 3)
+**Research sources:** Context7 (react-pdf, Tailwind CSS), project learnings (3 relevant)
+
+### Key Improvements
+
+1. Added precise CSS spec citation for `min-height: auto` behavior in flex containers
+2. Confirmed react-pdf `width` prop approach is correct; added `devicePixelRatio` performance note
+3. Added `overflow-hidden` as alternative to `min-h-0` with tradeoff analysis
+4. Added edge case: the `overflow-y-auto` on the markdown content wrapper must NOT be changed (only the file preview wrapper)
+
+### New Considerations Discovered
+
+- The `min-h-0` fix must be applied ONLY to the file preview wrapper (line 145), not the markdown content wrapper (line 178) which correctly uses `overflow-y-auto` for long documents
+- react-pdf renders at native `devicePixelRatio` by default, which can cause performance issues on 3x displays; a `devicePixelRatio={Math.min(2, window.devicePixelRatio)}` cap on the `Page` component would improve mobile performance (out of scope but noted)
 
 The PDF viewer's page navigation controls (Previous/Next buttons and page counter) are cut off below the viewport. Users must scroll down past the PDF content area to reach them, making multi-page PDF navigation difficult to discover and use.
 
@@ -26,6 +45,12 @@ The height chain:
 6. Pagination: `div.flex.items-center.justify-center.gap-3` -- pushed below fold
 
 The problem is at level 3: `flex-1 overflow-y-auto` creates a scrollable container whose children can grow beyond the viewport. The `h-full` on `PdfPreview` does not constrain because the parent has no explicit height -- it grows with content.
+
+### Research Insights: CSS Spec Behavior
+
+Per CSS Flexible Box Layout Module Level 1 (Section 4.5), the default `min-height` for flex items in a column flex container is `auto`, which resolves to the content's intrinsic minimum height. This prevents flex items from shrinking below their content size, even when `flex: 1` (i.e., `flex-shrink: 1`) is set. Setting `min-height: 0` (`min-h-0` in Tailwind) overrides this default and allows the item to shrink to zero, enabling the flex container to constrain its children to the available space.
+
+This is the same pattern documented in the project learning `2026-04-15-flex-column-width-and-markdown-overflow-2229.md` (horizontal axis: `min-w-0`) and `2026-02-17-backdrop-filter-breaks-fixed-positioning.md` (height calculation gotchas in nested containers). The key principle: **`min-h-0` must be applied at every flex-item level between the viewport-height ancestor (`h-dvh`) and the component that needs bounded height (`h-full`)**.
 
 ### Shared page context (`app/shared/[token]/page.tsx`)
 
@@ -50,6 +75,31 @@ Specifically, change line 145:
 ```
 
 The `min-h-0` is critical: in a flex column, flex items default to `min-height: auto`, which prevents them from shrinking below their content size. Adding `min-h-0` allows the flex item to shrink, giving `h-full` on `PdfPreview` a bounded reference height. This follows the same pattern documented in the `2026-04-15-flex-column-width-and-markdown-overflow-2229.md` learning (the `min-w-0` pattern but for the vertical axis).
+
+**Alternative considered: `overflow-hidden` instead of `min-h-0`**
+
+Changing from `overflow-y-auto` to `overflow-hidden` would also contain the height, because `overflow: hidden` establishes a block formatting context that constrains children. However, `overflow-hidden` clips any content that overflows, which could hide content if a non-PDF file type (e.g., a tall image or long download UI) rendered inside this wrapper. `min-h-0` is the more surgical fix: it addresses the flex minimum size constraint directly without changing overflow behavior.
+
+### Research Insights: Height Chain Verification
+
+The full height chain from viewport to PdfPreview pagination must propagate bounded height at every level:
+
+```text
+div.flex.h-dvh.flex-col.md:flex-row     (dashboard layout -- viewport height)
+  main.flex-1.overflow-y-auto            (main content -- scrolls, BUT kb layout is nested inside)
+    div.flex.h-full                       (kb layout -- fills main)
+      div.min-w-0.flex-1.overflow-y-auto  (kb content area -- scrolls on content pages)
+        div.flex.h-full.flex-col          (file page wrapper -- fills content area)
+          header.shrink-0                 (page header -- fixed height)
+          div.min-h-0.flex-1             ** FIX: was flex-1.overflow-y-auto **
+            PdfPreview (h-full flex-col)
+              div.flex-1.overflow-auto    (PDF canvas -- scrolls internally)
+              div (pagination -- stays visible)
+```
+
+The `overflow-y-auto` on the kb content area (`min-w-0 flex-1 overflow-y-auto` in `kb/layout.tsx` line 277) is correct and must remain -- it handles scrolling for markdown content pages. The fix targets only the file preview content wrapper INSIDE the file page, not the layout-level scroller.
+
+**Critical: do NOT change the markdown content wrapper** on line 178 of the same file (`className="flex-1 overflow-y-auto px-4 py-6 md:px-8"`). That wrapper correctly scrolls long markdown documents. Only the file preview wrapper on line 145 needs the fix.
 
 ### Phase 2: Fix shared page PDF viewer height
 
@@ -94,6 +144,14 @@ The `PdfPreview` component's internal layout is already correct:
 - Pagination: `flex items-center justify-center gap-3` -- fixed at bottom (not flex-1)
 
 No changes needed to this file. The pagination controls will naturally stay visible when the parent provides a bounded height.
+
+### Research Insights: react-pdf Container Sizing
+
+Per react-pdf documentation (Context7, wojtekmaj/react-pdf v10):
+
+- The `Page` component's `width` prop controls rendering size. The component already uses `ResizeObserver` to track `containerWidth` and passes it as `width={containerWidth}` -- this is the recommended pattern.
+- **Do not resize the `<canvas>` element using CSS.** Resizing with CSS affects only the canvas layer, leaving text and annotation layers misaligned. Size must be controlled via `width`/`height`/`scale` props.
+- **Performance note (out of scope):** react-pdf renders at native `devicePixelRatio` by default. On 3x displays, this means 9x the pixel count. Adding `devicePixelRatio={Math.min(2, window.devicePixelRatio)}` to the `Page` component would cap rendering density and improve mobile performance. This is a separate enhancement, not part of this fix.
 
 ### Phase 4: Update tests
 
@@ -150,12 +208,19 @@ No cross-domain implications detected -- CSS bug fix in existing UI components.
 - Given a tall single-page PDF in the dashboard, when the page loads, then the PDF content scrolls within its container and no pagination controls appear
 - Given an image file in the dashboard KB viewer, when the page loads, then the image preview renders correctly (regression check)
 - Given a .txt file in the dashboard KB viewer, when the page loads, then the text preview renders correctly (regression check)
+- Given a multi-page PDF in the dashboard with the KB file tree sidebar collapsed (Cmd+B), when the viewport is narrow (768px width), then the pagination controls are still visible
+- Given a multi-page PDF in the dashboard with the chat sidebar open, when the viewport is standard width (1280px), then the pagination controls are still visible despite reduced content area width
+- Given the shared page viewed on a short viewport (768px height), when a multi-page PDF loads, then the pagination controls are visible within the `h-[70vh]` container without scrolling the outer page
 
 ## Context
 
 ### Relevant learnings
 
 - `knowledge-base/project/learnings/ui-bugs/2026-04-15-flex-column-width-and-markdown-overflow-2229.md`: Documents the `min-w-0` / `min-h-0` pattern for flex containers. Key insight: flex items default to `min-height: auto` (or `min-width: auto`), preventing shrinking below content size. Adding `min-h-0` at each flex level is required to propagate height constraints.
+- `knowledge-base/project/learnings/2026-04-07-kb-viewer-react-context-layout-patterns.md`: Documents KB two-panel layout patterns, including the App Router layout persistence model and context-driven sidebar state.
+- `knowledge-base/project/learnings/ui-bugs/2026-04-10-kb-nav-tree-disappears-on-file-select.md`: Documents the fix for sidebar disappearing on navigation -- the same layout file we are modifying. Confirms `FileTree` is rendered directly in layout, not via children.
+- `knowledge-base/project/learnings/2026-04-15-kb-share-binary-files-lifecycle.md`: Documents the shared page binary file viewer implementation, including the `PdfPreview` reuse pattern and CSP configuration. Confirms the shared page's `h-[80vh]` wrapper was an MVP choice.
+- `knowledge-base/project/learnings/2026-02-17-backdrop-filter-breaks-fixed-positioning.md`: Documents height calculation gotchas in CSS when containing blocks are established by unexpected properties. Same class of issue: viewport-relative sizing assumptions broken by intermediate containers.
 
 ### Key file paths
 

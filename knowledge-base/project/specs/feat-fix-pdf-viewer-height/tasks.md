@@ -26,3 +26,6 @@ date: 2026-04-16
 - [ ] 4.1 Navigate to a multi-page PDF in the dashboard KB viewer and verify pagination controls are visible without scrolling
 - [ ] 4.2 Navigate to a shared PDF link and verify pagination controls are visible without scrolling
 - [ ] 4.3 Verify image preview, text preview, and download preview are unaffected in the dashboard
+- [ ] 4.4 Test with KB file tree sidebar collapsed (Cmd+B) on narrow viewport (768px width)
+- [ ] 4.5 Test with chat sidebar open on standard viewport (1280px width)
+- [ ] 4.6 Test shared page on short viewport (768px height) -- pagination must be visible within `h-[70vh]`
