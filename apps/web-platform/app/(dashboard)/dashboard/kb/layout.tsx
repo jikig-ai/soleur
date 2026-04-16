@@ -5,7 +5,7 @@ import { useMediaQuery } from "@/hooks/use-media-query";
 import type { ReactNode } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import dynamic from "next/dynamic";
-import { Group, Panel, Separator, usePanelRef, useDefaultLayout } from "react-resizable-panels";
+import { Group, Panel, Separator, usePanelRef } from "react-resizable-panels";
 import { KbContext } from "@/components/kb/kb-context";
 import type { KbContextValue } from "@/components/kb/kb-context";
 import { KbChatContext } from "@/components/kb/kb-chat-context";
@@ -64,24 +64,6 @@ export default function KbLayout({ children }: { children: ReactNode }) {
   const isDesktop = useMediaQuery("(min-width: 768px)");
   const sidebarPanelRef = usePanelRef();
   const chatPanelRef = usePanelRef();
-  const { defaultLayout, onLayoutChanged } = useDefaultLayout({
-    id: "kb-panels",
-    storage: {
-      getItem(key: string) {
-        try {
-          const val = localStorage.getItem(key);
-          if (val) JSON.parse(val); // validate before returning
-          return val;
-        } catch {
-          localStorage.removeItem(key);
-          return null;
-        }
-      },
-      setItem(key: string, value: string) {
-        try { localStorage.setItem(key, value); } catch { /* quota exceeded */ }
-      },
-    },
-  });
   const [kbCollapsed, setKbCollapsed] = useState(false);
   const [tree, setTree] = useState<TreeNode | null>(null);
   const [loading, setLoading] = useState(true);
@@ -272,16 +254,8 @@ export default function KbLayout({ children }: { children: ReactNode }) {
     setMessageCount,
   }), [sidebarOpen, openSidebar, closeSidebar, contextPath, kbChatFlag, submitQuote, registerQuoteHandler, messageCount]);
 
-  // Collapse/expand chat panel based on contextPath and feature flag.
+  // Whether to show the chat panel as a resizable column on desktop.
   const showChat = kbChatFlag && !!contextPath;
-  useEffect(() => {
-    if (!isDesktop) return;
-    if (showChat) {
-      chatPanelRef.current?.expand();
-    } else {
-      chatPanelRef.current?.collapse();
-    }
-  }, [showChat, isDesktop, chatPanelRef]);
 
   // Full-width states: loading, errors, or empty KB (no sidebar needed)
   if (loading || error || (!loading && !hasTreeContent)) {
@@ -354,15 +328,15 @@ export default function KbLayout({ children }: { children: ReactNode }) {
     return (
       <KbContext value={ctxValue}>
         <KbChatContext value={chatCtxValue}>
-          <Group orientation="horizontal" defaultLayout={defaultLayout} onLayoutChanged={onLayoutChanged} className="h-full">
+          <Group orientation="horizontal" className="h-full">
             {/* Sidebar panel */}
             <Panel
               panelRef={sidebarPanelRef}
-              defaultSize={18}
-              minSize={10}
-              maxSize={25}
+              defaultSize={showChat ? "18%" : "22%"}
+              minSize="10%"
+              maxSize="30%"
               collapsible
-              collapsedSize={0}
+              collapsedSize="0%"
               onResize={(size) => {
                 setKbCollapsed(size.asPercentage < 1);
               }}
@@ -374,35 +348,33 @@ export default function KbLayout({ children }: { children: ReactNode }) {
 
             <ResizeHandle />
 
-            {/* Document viewer panel */}
-            <Panel defaultSize={60} minSize={30}>
+            {/* Document viewer panel — fills remaining space */}
+            <Panel minSize="40%">
               <div className="min-w-0 flex flex-1 flex-col h-full">
                 {docContent}
               </div>
             </Panel>
 
-            {/* Always render Separator to maintain stable Panel-Separator-Panel child order */}
-            <ResizeHandle style={showChat ? undefined : { display: "none" }} />
-
-            {/* Chat panel — always present, collapses to 0% when inactive */}
-            <Panel
-              panelRef={chatPanelRef}
-              defaultSize={22}
-              minSize={20}
-              maxSize={40}
-              collapsible
-              collapsedSize={0}
-            >
-              <div className="min-w-0 h-full border-l border-neutral-800">
-                {showChat && contextPath && (
-                  <KbChatContent
-                    contextPath={contextPath}
-                    onClose={closeSidebar}
-                    visible={showChat}
-                  />
-                )}
-              </div>
-            </Panel>
+            {/* Chat panel — only rendered when active, conditionally with its preceding Separator */}
+            {showChat && contextPath && (
+              <>
+                <ResizeHandle />
+                <Panel
+                  panelRef={chatPanelRef}
+                  defaultSize="22%"
+                  minSize="20%"
+                  maxSize="40%"
+                >
+                  <div className="min-w-0 h-full border-l border-neutral-800">
+                    <KbChatContent
+                      contextPath={contextPath}
+                      onClose={closeSidebar}
+                      visible={true}
+                    />
+                  </div>
+                </Panel>
+              </>
+            )}
           </Group>
         </KbChatContext>
       </KbContext>
