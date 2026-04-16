@@ -89,6 +89,9 @@ beforeEach(() => {
   mockPathname = "/dashboard/kb/knowledge-base/product/roadmap.md";
   mockIsDesktop = true;
   sessionStorage.clear();
+  // Simulate user having opened the chat sidebar — showChat now depends on
+  // sidebarOpen so tests asserting 3-panel layout must set this flag.
+  sessionStorage.setItem("kb.chat.sidebarOpen", "1");
   global.fetch = vi.fn().mockImplementation((url: string) => {
     if (url === "/api/flags") {
       return Promise.resolve({
