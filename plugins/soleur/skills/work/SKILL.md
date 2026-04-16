@@ -142,6 +142,8 @@ Run these checks before proceeding to Phase 1. A FAIL blocks execution with a re
 
    **Anti-pattern to avoid:** Creating a task list like `[implement A, implement B, implement C, ..., write tests, lint]`. This structure guarantees TDD violation because the agent executes tasks in order. The correct structure is `[RED: test A, GREEN: implement A, RED: test B, GREEN: implement B, ..., lint]`.
 
+   **Post-creation validation (HARD GATE):** After creating all tasks, scan the task list for any non-exempt implementation task (GREEN) that does NOT have a corresponding RED test task in its `blockedBy` list. If found, restructure the task list before proceeding. Do not start Phase 2 with an invalid task structure. **Why:** In PR #2428, the agent created flat tasks ("Fix X", "Write tests") and started implementation before tests — the user had to intervene and force a restructure. The anti-pattern instruction was not enough without a validation gate.
+
 ### Phase 2: Execute
 
 1. **Execution Mode Selection** (HARD GATE — must complete before executing ANY task)
