@@ -496,7 +496,7 @@ export function ChatInput({
             disabled={disabled || isUploading}
             rows={1}
             className={
-              "w-full resize-none rounded-xl border border-neutral-700 bg-neutral-900 px-4 py-3 pr-12 text-sm text-white placeholder:text-neutral-500 focus:border-neutral-500 focus:outline-none disabled:opacity-50 min-h-[44px] transition-shadow" +
+              "w-full resize-none rounded-xl border border-neutral-700 bg-neutral-900 px-4 py-2.5 pr-12 text-sm text-white placeholder:text-neutral-500 focus:border-neutral-500 focus:outline-none disabled:opacity-50 h-[44px] transition-shadow" +
               (flashQuote ? " ring-2 ring-amber-400" : "")
             }
           />

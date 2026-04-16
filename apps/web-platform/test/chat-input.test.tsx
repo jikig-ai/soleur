@@ -129,4 +129,11 @@ describe("ChatInput", () => {
     await userEvent.keyboard("{Enter}");
     expect(onSend).not.toHaveBeenCalled();
   });
+
+  it("textarea has fixed h-[44px] height to align with buttons", () => {
+    setup();
+    const textarea = screen.getByRole("textbox");
+    expect(textarea.className).toContain("h-[44px]");
+    expect(textarea.className).not.toContain("min-h-[44px]");
+  });
 });

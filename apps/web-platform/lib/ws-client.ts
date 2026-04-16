@@ -60,7 +60,7 @@ interface UseWebSocketReturn {
 
 const MAX_BACKOFF = 30_000;
 const INITIAL_BACKOFF = 1_000;
-const STUCK_TIMEOUT_MS = 30_000;
+const STUCK_TIMEOUT_MS = 45_000;
 
 /** Close codes where reconnecting will never succeed. */
 export const NON_TRANSIENT_CLOSE_CODES: Record<number, { target?: string; reason: string }> = {
@@ -92,7 +92,7 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
   /** Map of active leader streams: leaderId → message index in the messages array */
   const activeStreamsRef = useRef<Map<string, number>>(new Map());
 
-  /** Map of per-leader timeout timers for stuck THINKING/TOOL_USE states (30s) */
+  /** Map of per-leader timeout timers for stuck THINKING/TOOL_USE states (STUCK_TIMEOUT_MS) */
   const timeoutTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
 
   /** Clear a single leader's timeout timer */
@@ -112,7 +112,7 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
     timeoutTimersRef.current.clear();
   }, []);
 
-  /** Start/reset a 30s timeout for a leader — transitions to error on fire
+  /** Start/reset the stuck-state timeout for a leader — transitions to error on fire
    *  ONLY if the bubble is still in a transitional state (thinking/tool_use).
    *  Guard lives in `applyTimeout` in chat-state-machine.ts so a slow first
    *  token that arrived just before the timer fired cannot clobber a bubble
