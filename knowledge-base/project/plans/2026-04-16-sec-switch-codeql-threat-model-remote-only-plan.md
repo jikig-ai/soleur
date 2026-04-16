@@ -145,7 +145,7 @@ sources to network requests only.
   javascript-typescript, python, typescript)
 - [ ] CodeQL re-analysis completes successfully after the config change
 - [ ] Previously dismissed alerts remain dismissed (not re-opened by the config change)
-- [ ] Spec documentation updated to reflect the new threat model
+- [x] Spec documentation updated to reflect the new threat model
 
 ## Test Scenarios
 

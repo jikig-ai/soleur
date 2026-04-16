@@ -21,3 +21,12 @@ None
 
 - soleur:plan -- created initial plan with local research, domain review, API verification, and learnings integration
 - soleur:deepen-plan -- enhanced plan with external research, learnings integration, live API queries
+
+## Threat Model Update (2026-04-16)
+
+- **Change:** Switched CodeQL threat model from `remote_and_local` to `remote`
+- **Issue:** #2418
+- **Reason:** 100 false positives from `local` taint sources (env vars, file paths)
+  dismissed in PR #2416. Switching to `remote` prevents recurrence on future PRs.
+- **API:** `gh api -X PATCH repos/jikig-ai/soleur/code-scanning/default-setup`
+  with `"threat_model": "remote"`

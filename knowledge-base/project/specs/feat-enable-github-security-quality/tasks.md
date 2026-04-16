@@ -27,6 +27,13 @@ date: 2026-04-10
 - [x] 2.4 Triage any initial code scanning alerts
   - 84 alerts (63 error, 21 warning) across 11 rules. Tracking issue #1894 created
 
+## Phase 2b: Threat Model Tuning
+
+- [x] 2b.1 Switch CodeQL threat model from `remote_and_local` to `remote`
+  - [Updated 2026-04-16] Threat model switched to `remote` only (see #2418).
+    100 false positives from `local` taint sources (env vars, file paths) were
+    dismissed in PR #2416. Switching to `remote` prevents recurrence on future PRs.
+
 ## Phase 3: Verification
 
 - [x] 3.1 Verify all features via API
