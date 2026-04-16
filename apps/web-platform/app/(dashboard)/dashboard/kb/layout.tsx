@@ -1,10 +1,11 @@
 "use client";
 
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
-import { useSidebarCollapse } from "@/hooks/use-sidebar-collapse";
+import { useMediaQuery } from "@/hooks/use-media-query";
 import type { ReactNode } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import dynamic from "next/dynamic";
+import { Group, Panel, Separator, usePanelRef, useDefaultLayout } from "react-resizable-panels";
 import { KbContext } from "@/components/kb/kb-context";
 import type { KbContextValue } from "@/components/kb/kb-context";
 import { KbChatContext } from "@/components/kb/kb-chat-context";
@@ -28,6 +29,26 @@ const KbChatSidebar = dynamic(
   { ssr: false, loading: () => null },
 );
 
+const KbChatContent = dynamic(
+  () => import("@/components/chat/kb-chat-content").then((m) => m.KbChatContent),
+  { ssr: false, loading: () => null },
+);
+
+function ResizeHandle(props: { style?: React.CSSProperties }) {
+  return (
+    <Separator
+      className="group relative w-1 bg-transparent transition-colors duration-150 hover:bg-neutral-400/50 active:bg-amber-500/50 data-[resize-handle-active]:bg-amber-500/50"
+      style={props.style}
+    >
+      <div className="absolute inset-y-0 left-1/2 flex -translate-x-1/2 flex-col items-center justify-center gap-0.5">
+        <span className="h-0.5 w-0.5 rounded-full bg-neutral-600 group-hover:bg-neutral-400" />
+        <span className="h-0.5 w-0.5 rounded-full bg-neutral-600 group-hover:bg-neutral-400" />
+        <span className="h-0.5 w-0.5 rounded-full bg-neutral-600 group-hover:bg-neutral-400" />
+      </div>
+    </Separator>
+  );
+}
+
 const KB_SIDEBAR_OPEN_KEY = "kb.chat.sidebarOpen";
 
 function deriveContextPathFromPathname(pathname: string): string | null {
@@ -40,6 +61,28 @@ function deriveContextPathFromPathname(pathname: string): string | null {
 export default function KbLayout({ children }: { children: ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
+  const isDesktop = useMediaQuery("(min-width: 768px)");
+  const sidebarPanelRef = usePanelRef();
+  const chatPanelRef = usePanelRef();
+  const { defaultLayout, onLayoutChanged } = useDefaultLayout({
+    id: "kb-panels",
+    storage: {
+      getItem(key: string) {
+        try {
+          const val = localStorage.getItem(key);
+          if (val) JSON.parse(val); // validate before returning
+          return val;
+        } catch {
+          localStorage.removeItem(key);
+          return null;
+        }
+      },
+      setItem(key: string, value: string) {
+        try { localStorage.setItem(key, value); } catch { /* quota exceeded */ }
+      },
+    },
+  });
+  const [kbCollapsed, setKbCollapsed] = useState(false);
   const [tree, setTree] = useState<TreeNode | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<KbContextValue["error"]>(null);
@@ -134,7 +177,17 @@ export default function KbLayout({ children }: { children: ReactNode }) {
     });
   }, [pathname]);
 
-  const [kbCollapsed, toggleKbCollapsed] = useSidebarCollapse("soleur:sidebar.kb.collapsed");
+  const toggleKbCollapsed = useCallback(() => {
+    if (isDesktop) {
+      if (sidebarPanelRef.current?.isCollapsed()) {
+        sidebarPanelRef.current.expand();
+      } else {
+        sidebarPanelRef.current?.collapse();
+      }
+    } else {
+      setKbCollapsed((prev) => !prev);
+    }
+  }, [isDesktop, sidebarPanelRef]);
 
   // Cmd+B / Ctrl+B toggles KB file tree sidebar (only on KB routes, not in inputs)
   useEffect(() => {
@@ -219,6 +272,17 @@ export default function KbLayout({ children }: { children: ReactNode }) {
     setMessageCount,
   }), [sidebarOpen, openSidebar, closeSidebar, contextPath, kbChatFlag, submitQuote, registerQuoteHandler, messageCount]);
 
+  // Collapse/expand chat panel based on contextPath and feature flag.
+  const showChat = kbChatFlag && !!contextPath;
+  useEffect(() => {
+    if (!isDesktop) return;
+    if (showChat) {
+      chatPanelRef.current?.expand();
+    } else {
+      chatPanelRef.current?.collapse();
+    }
+  }, [showChat, isDesktop, chatPanelRef]);
+
   // Full-width states: loading, errors, or empty KB (no sidebar needed)
   if (loading || error || (!loading && !hasTreeContent)) {
     return (
@@ -234,69 +298,136 @@ export default function KbLayout({ children }: { children: ReactNode }) {
     );
   }
 
-  // Two-panel layout: tree sidebar + content area
+  // Sidebar content shared between desktop (Panel) and mobile (flat flex)
+  const sidebarContent = (
+    <div className="flex h-full flex-col">
+      <header className="flex shrink-0 items-center justify-between px-4 pb-3 pt-4">
+        <h1 className="font-serif text-lg font-medium tracking-tight text-white">
+          Knowledge Base
+        </h1>
+        <button
+          onClick={toggleKbCollapsed}
+          aria-label="Collapse file tree"
+          title="Collapse file tree (⌘B)"
+          className="hidden md:flex h-6 w-6 items-center justify-center rounded text-neutral-400 hover:bg-neutral-800 hover:text-white"
+        >
+          <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 19.5 8.25 12l7.5-7.5" />
+          </svg>
+        </button>
+      </header>
+      <div className="shrink-0 px-3 pb-3">
+        <SearchOverlay />
+      </div>
+      <div className="flex-1 overflow-y-auto px-2 pb-4">
+        <FileTree />
+      </div>
+    </div>
+  );
+
+  const docContent = (
+    <>
+      {kbCollapsed && (
+        <div className="flex shrink-0 items-center px-2 py-5">
+          <button
+            onClick={toggleKbCollapsed}
+            aria-label="Expand file tree"
+            title="Expand file tree (⌘B)"
+            className="flex h-6 w-6 items-center justify-center rounded text-neutral-400 hover:bg-neutral-800 hover:text-white"
+          >
+            <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="m8.25 4.5 7.5 7.5-7.5 7.5" />
+            </svg>
+          </button>
+        </div>
+      )}
+      <div className="min-h-0 flex-1 overflow-y-auto">
+        <KbErrorBoundary>
+          {isContentView ? children : <DesktopPlaceholder />}
+        </KbErrorBoundary>
+      </div>
+    </>
+  );
+
+  // Desktop: resizable three-panel layout via react-resizable-panels
+  if (isDesktop) {
+    return (
+      <KbContext value={ctxValue}>
+        <KbChatContext value={chatCtxValue}>
+          <Group orientation="horizontal" defaultLayout={defaultLayout} onLayoutChanged={onLayoutChanged} className="h-full">
+            {/* Sidebar panel */}
+            <Panel
+              panelRef={sidebarPanelRef}
+              defaultSize={18}
+              minSize={10}
+              maxSize={25}
+              collapsible
+              collapsedSize={0}
+              onResize={(size) => {
+                setKbCollapsed(size.asPercentage < 1);
+              }}
+            >
+              <div className="min-w-0 h-full overflow-y-auto border-r border-neutral-800">
+                {sidebarContent}
+              </div>
+            </Panel>
+
+            <ResizeHandle />
+
+            {/* Document viewer panel */}
+            <Panel defaultSize={60} minSize={30}>
+              <div className="min-w-0 flex flex-1 flex-col h-full">
+                {docContent}
+              </div>
+            </Panel>
+
+            {/* Always render Separator to maintain stable Panel-Separator-Panel child order */}
+            <ResizeHandle style={showChat ? undefined : { display: "none" }} />
+
+            {/* Chat panel — always present, collapses to 0% when inactive */}
+            <Panel
+              panelRef={chatPanelRef}
+              defaultSize={22}
+              minSize={20}
+              maxSize={40}
+              collapsible
+              collapsedSize={0}
+            >
+              <div className="min-w-0 h-full border-l border-neutral-800">
+                {showChat && contextPath && (
+                  <KbChatContent
+                    contextPath={contextPath}
+                    onClose={closeSidebar}
+                    visible={showChat}
+                  />
+                )}
+              </div>
+            </Panel>
+          </Group>
+        </KbChatContext>
+      </KbContext>
+    );
+  }
+
+  // Mobile: existing flat flex layout with Sheet-based chat
   return (
     <KbContext value={ctxValue}>
       <KbChatContext value={chatCtxValue}>
         <div className="flex h-full">
-          {/* Tree sidebar — visible on desktop always, on mobile only at root */}
           <aside
             inert={kbCollapsed || undefined}
-            className={`w-full shrink-0 overflow-y-auto border-r border-neutral-800 md:block
-              md:transition-[width] md:duration-200 md:ease-out
-              ${kbCollapsed ? "md:w-0 md:overflow-hidden md:border-r-0" : "md:w-64"}
+            className={`w-full shrink-0 overflow-y-auto border-r border-neutral-800
               ${isContentView ? "hidden" : "block"}`}
           >
-            <div className="flex h-full flex-col">
-              <header className="flex shrink-0 items-center justify-between px-4 pb-3 pt-4">
-                <h1 className="font-serif text-lg font-medium tracking-tight text-white">
-                  Knowledge Base
-                </h1>
-                <button
-                  onClick={toggleKbCollapsed}
-                  aria-label="Collapse file tree"
-                  title="Collapse file tree (⌘B)"
-                  className="hidden md:flex h-6 w-6 items-center justify-center rounded text-neutral-400 hover:bg-neutral-800 hover:text-white"
-                >
-                  <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 19.5 8.25 12l7.5-7.5" />
-                  </svg>
-                </button>
-              </header>
-              <div className="shrink-0 px-3 pb-3">
-                <SearchOverlay />
-              </div>
-              <div className="flex-1 overflow-y-auto px-2 pb-4">
-                <FileTree />
-              </div>
-            </div>
+            {sidebarContent}
           </aside>
 
-          {/* Content area — visible on desktop always, on mobile only when viewing content */}
           <div
             className={`min-w-0 flex-1 ${
               isContentView ? "" : "hidden"
-            } md:flex md:flex-col`}
+            } flex flex-col`}
           >
-            {kbCollapsed && (
-              <div className="hidden shrink-0 items-center px-2 py-5 md:flex">
-                <button
-                  onClick={toggleKbCollapsed}
-                  aria-label="Expand file tree"
-                  title="Expand file tree (⌘B)"
-                  className="flex h-6 w-6 items-center justify-center rounded text-neutral-400 hover:bg-neutral-800 hover:text-white"
-                >
-                  <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-                    <path strokeLinecap="round" strokeLinejoin="round" d="m8.25 4.5 7.5 7.5-7.5 7.5" />
-                  </svg>
-                </button>
-              </div>
-            )}
-            <div className="min-h-0 flex-1 overflow-y-auto">
-              <KbErrorBoundary>
-                {isContentView ? children : <DesktopPlaceholder />}
-              </KbErrorBoundary>
-            </div>
+            {docContent}
           </div>
 
           {kbChatFlag && contextPath && (
