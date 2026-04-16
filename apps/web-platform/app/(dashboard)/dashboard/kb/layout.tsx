@@ -308,7 +308,7 @@ export default function KbLayout({ children }: { children: ReactNode }) {
           onClick={toggleKbCollapsed}
           aria-label="Expand file tree"
           title="Expand file tree (⌘B)"
-          className="absolute left-2 top-3 z-10 flex h-6 w-6 items-center justify-center rounded text-neutral-400 hover:bg-neutral-800 hover:text-white"
+          className="absolute left-2 top-5 z-10 flex h-6 w-6 items-center justify-center rounded text-neutral-400 hover:bg-neutral-800 hover:text-white"
         >
           <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
             <path strokeLinecap="round" strokeLinejoin="round" d="m8.25 4.5 7.5 7.5-7.5 7.5" />
