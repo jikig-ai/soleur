@@ -64,7 +64,7 @@ export async function handleConversationMessages(
   res.writeHead(200, { "Content-Type": "application/json" });
   res.end(JSON.stringify({
     messages: messages ?? [],
-    totalCostUsd: Number(conv.total_cost_usd) || 0,
+    totalCostUsd: Number(conv.total_cost_usd ?? 0),
     inputTokens: conv.input_tokens ?? 0,
     outputTokens: conv.output_tokens ?? 0,
   }));

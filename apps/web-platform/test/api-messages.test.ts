@@ -80,11 +80,9 @@ describe("handleConversationMessages", () => {
       { id: "msg-1", role: "user", content: "hello", leader_id: null, created_at: "2026-01-01" },
     ]);
 
-    let callCount = 0;
     mockFrom.mockImplementation((table: string) => {
       if (table === "conversations") return convChain;
       if (table === "messages") return msgChain;
-      callCount++;
       return mockQueryChain(null);
     });
 

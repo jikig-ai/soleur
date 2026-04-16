@@ -430,6 +430,14 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
     return { messages: mapped, costData };
   }
 
+  /** Seed usageData from fetched cost data. Uses functional updater so a
+   *  racing usage_update WS event is never overwritten by stale history. */
+  function seedCostData(costData: UsageData | null) {
+    if (costData) {
+      setUsageData(prev => prev ?? costData);
+    }
+  }
+
   // Fetch conversation history on mount (once per conversationId)
   useEffect(() => {
     if (conversationId === "new") return;
@@ -443,9 +451,7 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
         if (activeStreamsRef.current.size === 0) {
           setMessages(prev => [...result.messages, ...prev]);
         }
-        if (result.costData) {
-          setUsageData(prev => prev ?? result.costData);
-        }
+        seedCostData(result.costData);
       } catch (err) {
         if (err instanceof DOMException && err.name === "AbortError") return;
         console.error("Failed to load history:", err);
@@ -480,9 +486,7 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
           const unique = result.messages.filter(m => !existingIds.has(m.id));
           return [...unique, ...prev];
         });
-        if (result.costData) {
-          setUsageData(prev => prev ?? result.costData);
-        }
+        seedCostData(result.costData);
       } catch (err) {
         if (err instanceof DOMException && err.name === "AbortError") return;
         console.error("Failed to load resume history:", err);
