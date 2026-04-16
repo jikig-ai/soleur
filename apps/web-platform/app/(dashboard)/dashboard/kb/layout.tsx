@@ -304,18 +304,16 @@ export default function KbLayout({ children }: { children: ReactNode }) {
   const docContent = (
     <>
       {kbCollapsed && (
-        <div className="flex shrink-0 items-center px-2 py-2">
-          <button
-            onClick={toggleKbCollapsed}
-            aria-label="Expand file tree"
-            title="Expand file tree (⌘B)"
-            className="flex h-6 w-6 items-center justify-center rounded text-neutral-400 hover:bg-neutral-800 hover:text-white"
-          >
-            <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="m8.25 4.5 7.5 7.5-7.5 7.5" />
-            </svg>
-          </button>
-        </div>
+        <button
+          onClick={toggleKbCollapsed}
+          aria-label="Expand file tree"
+          title="Expand file tree (⌘B)"
+          className="absolute left-2 top-3 z-10 flex h-6 w-6 items-center justify-center rounded text-neutral-400 hover:bg-neutral-800 hover:text-white"
+        >
+          <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="m8.25 4.5 7.5 7.5-7.5 7.5" />
+          </svg>
+        </button>
       )}
       <div className="min-h-0 flex-1 overflow-y-auto">
         <KbErrorBoundary>
@@ -352,7 +350,7 @@ export default function KbLayout({ children }: { children: ReactNode }) {
 
             {/* Document viewer panel — fills remaining space */}
             <Panel minSize="40%">
-              <div className="min-w-0 flex flex-1 flex-col h-full">
+              <div className="relative min-w-0 flex flex-1 flex-col h-full">
                 {docContent}
               </div>
             </Panel>
