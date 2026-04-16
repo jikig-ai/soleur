@@ -158,7 +158,7 @@ export default function KbLayout({ children }: { children: ReactNode }) {
       const saved = sessionStorage.getItem(KB_SIDEBAR_OPEN_KEY);
       if (saved === "1") setSidebarOpen(true);
     } catch { /* sessionStorage unavailable */ }
-  }, []);
+  }, [kbChatFlag]);
 
   const openSidebar = useCallback(() => {
     setSidebarOpen(true);
@@ -199,7 +199,7 @@ export default function KbLayout({ children }: { children: ReactNode }) {
     registerQuoteHandler,
     messageCount,
     setMessageCount,
-  }), [sidebarOpen, openSidebar, closeSidebar, contextPath, submitQuote, registerQuoteHandler, messageCount]);
+  }), [sidebarOpen, openSidebar, closeSidebar, contextPath, kbChatFlag, submitQuote, registerQuoteHandler, messageCount]);
 
   // Full-width states: loading, errors, or empty KB (no sidebar needed)
   if (loading || error || (!loading && !hasTreeContent)) {
