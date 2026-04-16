@@ -389,6 +389,11 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
     targetId: string,
     signal: AbortSignal,
   ): Promise<ChatMessage[] | null> {
+    // Validate targetId is a safe path segment to satisfy CodeQL's
+    // request-forgery check. Allows UUIDs and alphanumeric IDs only.
+    // The server enforces ownership via user_id.
+    if (!/^[0-9a-zA-Z-]+$/.test(targetId)) return null;
+
     const supabase = createClient();
     const { data: { session } } = await supabase.auth.getSession();
     if (!session?.access_token) return null;
