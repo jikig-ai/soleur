@@ -95,10 +95,13 @@ describe("KbChatSidebar — resumed banner auto-dismiss (AC2)", () => {
     const { rerender } = await renderSidebar();
     expect(screen.getByText(/continuing from/i)).toBeTruthy();
 
-    // Simulate: user sends a new message. The WS client's `messages` state
-    // goes from [] to [user], triggering ChatSurface's onMessageCountChange
-    // with count=1.
+    // Simulate: history loads first (3 historical messages), then user sends
+    // a new message (count goes from 3 → 4). The banner should dismiss only
+    // when count exceeds the historical message count (3).
     wsReturn.messages = [
+      { id: "hist-1", role: "user", content: "old question", type: "text" },
+      { id: "hist-2", role: "assistant", content: "old answer", type: "text" },
+      { id: "hist-3", role: "user", content: "follow-up", type: "text" },
       { id: "u1", role: "user", content: "new question", type: "text" },
     ];
     const { KbChatSidebar } = await import("@/components/chat/kb-chat-sidebar");
@@ -126,6 +129,96 @@ describe("KbChatSidebar — resumed banner auto-dismiss (AC2)", () => {
       );
     });
 
+    expect(screen.queryByText(/continuing from/i)).toBeNull();
+  });
+
+  it("does NOT dismiss the banner when history messages load (AC7)", async () => {
+    // Simulate: history loads, populating messages from 0 → 3.
+    // The banner must persist because these are historical messages, not
+    // fresh user activity. The old guard (count > 0) would dismiss here.
+    wsReturn.messages = [
+      { id: "hist-1", role: "user", content: "old question", type: "text" },
+      { id: "hist-2", role: "assistant", content: "old answer", type: "text" },
+      { id: "hist-3", role: "user", content: "follow-up", type: "text" },
+    ];
+    const { KbChatSidebar } = await import("@/components/chat/kb-chat-sidebar");
+    const { KbChatContext } = await import("@/components/kb/kb-chat-context");
+    const ctx = {
+      open: true,
+      openSidebar: vi.fn(),
+      closeSidebar: vi.fn(),
+      contextPath: "knowledge-base/x.md",
+      enabled: true,
+      submitQuote: vi.fn(),
+      registerQuoteHandler: vi.fn(),
+      messageCount: 3,
+      setMessageCount: vi.fn(),
+    };
+    const { rerender } = await renderSidebar();
+    expect(screen.getByText(/continuing from/i)).toBeTruthy();
+
+    act(() => {
+      rerender(
+        <KbChatContext value={ctx}>
+          <KbChatSidebar
+            open={true}
+            onClose={vi.fn()}
+            contextPath="knowledge-base/x.md"
+          />
+        </KbChatContext>,
+      );
+    });
+
+    // Banner should STILL be visible — history load is not a dismiss trigger
+    expect(screen.getByText(/continuing from/i)).toBeTruthy();
+  });
+
+  it("dismisses banner when user sends AFTER history loads (AC7)", async () => {
+    // First: history loads (3 messages)
+    wsReturn.messages = [
+      { id: "hist-1", role: "user", content: "old question", type: "text" },
+      { id: "hist-2", role: "assistant", content: "old answer", type: "text" },
+      { id: "hist-3", role: "user", content: "follow-up", type: "text" },
+    ];
+    const { KbChatSidebar } = await import("@/components/chat/kb-chat-sidebar");
+    const { KbChatContext } = await import("@/components/kb/kb-chat-context");
+    const makeCtx = (count: number) => ({
+      open: true,
+      openSidebar: vi.fn(),
+      closeSidebar: vi.fn(),
+      contextPath: "knowledge-base/x.md",
+      enabled: true,
+      submitQuote: vi.fn(),
+      registerQuoteHandler: vi.fn(),
+      messageCount: count,
+      setMessageCount: vi.fn(),
+    });
+    const { rerender } = await renderSidebar();
+
+    // History loads — banner persists
+    act(() => {
+      rerender(
+        <KbChatContext value={makeCtx(3)}>
+          <KbChatSidebar open={true} onClose={vi.fn()} contextPath="knowledge-base/x.md" />
+        </KbChatContext>,
+      );
+    });
+    expect(screen.getByText(/continuing from/i)).toBeTruthy();
+
+    // User sends a NEW message — count goes from 3 → 4
+    wsReturn.messages = [
+      ...wsReturn.messages,
+      { id: "u1", role: "user", content: "new question", type: "text" },
+    ];
+    act(() => {
+      rerender(
+        <KbChatContext value={makeCtx(4)}>
+          <KbChatSidebar open={true} onClose={vi.fn()} contextPath="knowledge-base/x.md" />
+        </KbChatContext>,
+      );
+    });
+
+    // NOW the banner should be dismissed
     expect(screen.queryByText(/continuing from/i)).toBeNull();
   });
 });
