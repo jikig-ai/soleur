@@ -13,9 +13,9 @@
 
 - [ ] 2.1 Install `react-resizable-panels` in `apps/web-platform/`
 - [ ] 2.2 Regenerate both `bun.lock` and `package-lock.json`; verify no peer conflicts with `npm ls`
-- [ ] 2.3 Extract `KbChatContent` from `KbChatSidebar` into `kb-chat-content.tsx`
-  - [ ] 2.3.1 Move chat messages list, input area, and header into `KbChatContent`
-  - [ ] 2.3.2 `KbChatSidebar` becomes thin wrapper: on mobile, renders `KbChatContent` inside Sheet
+- [x] 2.3 Extract `KbChatContent` from `KbChatSidebar` into `kb-chat-content.tsx`
+  - [x] 2.3.1 Move chat messages list, input area, and header into `KbChatContent`
+  - [x] 2.3.2 `KbChatSidebar` becomes thin wrapper: on mobile, renders `KbChatContent` inside Sheet
 - [ ] 2.4 Replace flat flex div in `layout.tsx:241-310` with inline PanelGroup
   - [ ] 2.4.1 Three Panels: sidebar (18% default, 10% min, 25% max), doc viewer (60% default, 30% min), chat (22% default, 20% min, 40% max)
   - [ ] 2.4.2 Two `PanelResizeHandle` components (sidebar|doc and doc|chat)
