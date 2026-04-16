@@ -5,14 +5,23 @@ import type Stripe from "stripe";
 // Mocks — vi.hoisted ensures these are available when vi.mock factories run
 // ---------------------------------------------------------------------------
 
-const { mockConstructEvent, mockUpdate, mockEq, mockLogger } = vi.hoisted(
-  () => ({
-    mockConstructEvent: vi.fn(),
-    mockUpdate: vi.fn(),
-    mockEq: vi.fn(),
-    mockLogger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
-  }),
-);
+const {
+  mockConstructEvent,
+  mockUpdate,
+  mockUpdateEq,
+  mockSelect,
+  mockSelectEq,
+  mockSingle,
+  mockLogger,
+} = vi.hoisted(() => ({
+  mockConstructEvent: vi.fn(),
+  mockUpdate: vi.fn(),
+  mockUpdateEq: vi.fn(),
+  mockSelect: vi.fn(),
+  mockSelectEq: vi.fn(),
+  mockSingle: vi.fn(),
+  mockLogger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+}));
 
 vi.mock("@/lib/stripe", () => ({
   getStripe: () => ({
@@ -24,6 +33,7 @@ vi.mock("@/lib/supabase/server", () => ({
   createServiceClient: () => ({
     from: () => ({
       update: mockUpdate,
+      select: mockSelect,
     }),
   }),
 }));
@@ -67,8 +77,16 @@ function makeEvent(
 describe("Stripe webhook — invoice payment recovery", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockEq.mockResolvedValue({ error: null });
-    mockUpdate.mockReturnValue({ eq: mockEq });
+    // Wire select chain: from().select().eq().single()
+    mockSingle.mockResolvedValue({
+      data: { subscription_status: "past_due" },
+      error: null,
+    });
+    mockSelectEq.mockReturnValue({ single: mockSingle });
+    mockSelect.mockReturnValue({ eq: mockSelectEq });
+    // Wire update chain: from().update().eq()
+    mockUpdateEq.mockResolvedValue({ error: null });
+    mockUpdate.mockReturnValue({ eq: mockUpdateEq });
   });
 
   describe("customer.subscription.updated — unpaid status", () => {
@@ -142,7 +160,7 @@ describe("Stripe webhook — invoice payment recovery", () => {
   });
 
   describe("invoice.paid", () => {
-    test("sets subscription_status to 'active'", async () => {
+    test("sets subscription_status to 'active' when user is past_due", async () => {
       const event = makeEvent("invoice.paid", {
         id: "inv_paid_123",
         customer: CUSTOMER_ID,
@@ -153,10 +171,69 @@ describe("Stripe webhook — invoice payment recovery", () => {
       const res = await POST(makeRequest());
 
       expect(res.status).toBe(200);
+      expect(mockSelect).toHaveBeenCalledWith("subscription_status");
+      expect(mockSelectEq).toHaveBeenCalledWith(
+        "stripe_customer_id",
+        CUSTOMER_ID,
+      );
       expect(mockUpdate).toHaveBeenCalledWith(
         expect.objectContaining({ subscription_status: "active" }),
       );
-      expect(mockEq).toHaveBeenCalledWith("stripe_customer_id", CUSTOMER_ID);
+    });
+
+    test("skips update when user is already active", async () => {
+      mockSingle.mockResolvedValue({
+        data: { subscription_status: "active" },
+        error: null,
+      });
+      const event = makeEvent("invoice.paid", {
+        id: "inv_paid_123",
+        customer: CUSTOMER_ID,
+        subscription: "sub_test456",
+      });
+      mockConstructEvent.mockReturnValue(event);
+
+      const res = await POST(makeRequest());
+
+      expect(res.status).toBe(200);
+      expect(mockUpdate).not.toHaveBeenCalled();
+    });
+
+    test("skips update when user is cancelled", async () => {
+      mockSingle.mockResolvedValue({
+        data: { subscription_status: "cancelled" },
+        error: null,
+      });
+      const event = makeEvent("invoice.paid", {
+        id: "inv_paid_123",
+        customer: CUSTOMER_ID,
+        subscription: "sub_test456",
+      });
+      mockConstructEvent.mockReturnValue(event);
+
+      const res = await POST(makeRequest());
+
+      expect(res.status).toBe(200);
+      expect(mockUpdate).not.toHaveBeenCalled();
+    });
+
+    test("returns 500 when DB fetch fails", async () => {
+      mockSingle.mockResolvedValue({
+        data: null,
+        error: { message: "db error" },
+      });
+      const event = makeEvent("invoice.paid", {
+        id: "inv_paid_123",
+        customer: CUSTOMER_ID,
+        subscription: "sub_test456",
+      });
+      mockConstructEvent.mockReturnValue(event);
+
+      const res = await POST(makeRequest());
+
+      expect(res.status).toBe(500);
+      expect(mockLogger.error).toHaveBeenCalled();
+      expect(mockUpdate).not.toHaveBeenCalled();
     });
 
     test("returns 500 when DB update fails", async () => {
@@ -166,7 +243,7 @@ describe("Stripe webhook — invoice payment recovery", () => {
         subscription: "sub_test456",
       });
       mockConstructEvent.mockReturnValue(event);
-      mockEq.mockResolvedValue({ error: { message: "db error" } });
+      mockUpdateEq.mockResolvedValue({ error: { message: "db error" } });
 
       const res = await POST(makeRequest());
 
