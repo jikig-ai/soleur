@@ -1,10 +1,11 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { TeamNamesProvider } from "@/hooks/use-team-names";
+import { useSidebarCollapse } from "@/hooks/use-sidebar-collapse";
 
 const BANNER_DISMISS_KEY = "soleur:past_due_banner_dismissed";
 
@@ -100,6 +101,7 @@ export default function DashboardLayout({
   const [isAdmin, setIsAdmin] = useState(false);
   const [userEmail, setUserEmail] = useState<string | null>(null);
   const [subscriptionStatus, setSubscriptionStatus] = useState<string | null>(null);
+  const [collapsed, toggleCollapsed] = useSidebarCollapse("soleur:sidebar.main.collapsed");
 
   // Check admin status on mount
   useEffect(() => {
@@ -141,6 +143,23 @@ export default function DashboardLayout({
     document.addEventListener("keydown", handleKeyDown);
     return () => document.removeEventListener("keydown", handleKeyDown);
   }, []);
+
+  // Cmd/Ctrl+B toggles sidebar on non-KB, non-Settings routes
+  useEffect(() => {
+    function handleToggleShortcut(e: KeyboardEvent) {
+      if (!(e.metaKey || e.ctrlKey) || e.key !== "b") return;
+      // Skip when typing in form elements
+      const tag = (e.target as HTMLElement)?.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA") return;
+      if ((e.target as HTMLElement)?.isContentEditable) return;
+      // Only fire on routes that are NOT KB or Settings
+      if (pathname.startsWith("/dashboard/kb") || pathname.startsWith("/dashboard/settings")) return;
+      e.preventDefault();
+      toggleCollapsed();
+    }
+    document.addEventListener("keydown", handleToggleShortcut);
+    return () => document.removeEventListener("keydown", handleToggleShortcut);
+  }, [pathname, toggleCollapsed]);
 
   // Body scroll lock when drawer is open
   useEffect(() => {
@@ -203,12 +222,14 @@ export default function DashboardLayout({
           fixed inset-y-0 left-0 z-50 flex w-64 flex-col border-r border-neutral-800 bg-neutral-900
           transition-transform duration-200 ease-out
           ${drawerOpen ? "translate-x-0" : "-translate-x-full"}
-          md:relative md:z-auto md:w-56 md:translate-x-0 md:transition-none
+          md:relative md:z-auto md:translate-x-0
+          md:transition-[width] md:duration-200 md:ease-out
+          ${collapsed ? "md:w-14" : "md:w-56"}
         `}
       >
         {/* Brand + close button */}
-        <div className="flex items-center justify-between px-5 py-5 safe-top">
-          <span className="text-lg font-semibold tracking-tight text-white">
+        <div className={`flex items-center justify-between safe-top ${collapsed ? "px-2 py-5" : "px-5 py-5"}`}>
+          <span className={`text-lg font-semibold tracking-tight text-white overflow-hidden whitespace-nowrap ${collapsed ? "md:hidden" : ""}`}>
             Soleur
           </span>
           <button
@@ -221,7 +242,7 @@ export default function DashboardLayout({
         </div>
 
         {/* Navigation */}
-        <nav className="flex-1 space-y-1 px-3">
+        <nav className={`flex-1 space-y-1 ${collapsed ? "px-1" : "px-3"}`}>
           {navItems.map((item) => {
             const active =
               item.href === "/dashboard"
@@ -232,22 +253,25 @@ export default function DashboardLayout({
               <Link
                 key={item.href}
                 href={item.href}
+                title={collapsed ? item.label : undefined}
                 className={`flex min-h-[44px] items-center gap-3 rounded-lg px-3 py-2 text-sm transition-colors ${
                   active
                     ? "bg-neutral-800 text-white"
                     : "text-neutral-400 hover:bg-neutral-800/50 hover:text-neutral-200"
-                }`}
+                } ${collapsed ? "md:justify-center md:gap-0 md:px-0" : ""}`}
               >
                 <item.icon className="h-4 w-4 shrink-0" />
-                {item.label}
+                <span className={`overflow-hidden whitespace-nowrap ${collapsed ? "md:hidden" : ""}`}>
+                  {item.label}
+                </span>
               </Link>
             );
           })}
         </nav>
 
         {/* Footer links */}
-        <div className="border-t border-neutral-800 p-3 safe-bottom">
-          {userEmail && (
+        <div className={`border-t border-neutral-800 safe-bottom ${collapsed ? "p-1" : "p-3"}`}>
+          {userEmail && !collapsed && (
             <p
               className="truncate px-3 py-1 text-xs text-neutral-500"
               title={userEmail}
@@ -259,17 +283,32 @@ export default function DashboardLayout({
             href="https://soleur-ai.betteruptime.com/"
             target="_blank"
             rel="noopener noreferrer"
-            className="flex min-h-[44px] w-full items-center gap-3 rounded-lg px-3 py-2 text-sm text-neutral-400 transition-colors hover:bg-neutral-800/50 hover:text-neutral-200"
+            title={collapsed ? "Status" : undefined}
+            className={`flex min-h-[44px] w-full items-center gap-3 rounded-lg px-3 py-2 text-sm text-neutral-400 transition-colors hover:bg-neutral-800/50 hover:text-neutral-200 ${collapsed ? "md:justify-center md:gap-0 md:px-0" : ""}`}
           >
             <StatusIcon className="h-4 w-4 shrink-0" />
-            Status
+            <span className={`overflow-hidden whitespace-nowrap ${collapsed ? "md:hidden" : ""}`}>Status</span>
           </a>
           <button
             onClick={handleSignOut}
-            className="flex min-h-[44px] w-full items-center gap-3 rounded-lg px-3 py-2 text-sm text-neutral-400 transition-colors hover:bg-neutral-800/50 hover:text-neutral-200"
+            title={collapsed ? "Sign out" : undefined}
+            className={`flex min-h-[44px] w-full items-center gap-3 rounded-lg px-3 py-2 text-sm text-neutral-400 transition-colors hover:bg-neutral-800/50 hover:text-neutral-200 ${collapsed ? "md:justify-center md:gap-0 md:px-0" : ""}`}
           >
             <LogOutIcon className="h-4 w-4 shrink-0" />
-            Sign out
+            <span className={`overflow-hidden whitespace-nowrap ${collapsed ? "md:hidden" : ""}`}>Sign out</span>
+          </button>
+          {/* Collapse toggle — hidden on mobile, visible on md+ */}
+          <button
+            onClick={toggleCollapsed}
+            aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+            className={`hidden md:flex min-h-[44px] w-full items-center gap-3 rounded-lg px-3 py-2 text-sm text-neutral-400 transition-colors hover:bg-neutral-800/50 hover:text-neutral-200 ${collapsed ? "md:justify-center md:gap-0 md:px-0" : ""}`}
+          >
+            {collapsed ? (
+              <ChevronRightIcon className="h-4 w-4 shrink-0" />
+            ) : (
+              <ChevronLeftIcon className="h-4 w-4 shrink-0" />
+            )}
+            <span className={`overflow-hidden whitespace-nowrap ${collapsed ? "md:hidden" : ""}`}>Collapse</span>
           </button>
         </div>
       </aside>
@@ -432,6 +471,42 @@ function LogOutIcon({ className }: { className?: string }) {
         strokeLinecap="round"
         strokeLinejoin="round"
         d="M15.75 9V5.25A2.25 2.25 0 0 0 13.5 3h-6a2.25 2.25 0 0 0-2.25 2.25v13.5A2.25 2.25 0 0 0 7.5 21h6a2.25 2.25 0 0 0 2.25-2.25V15m3 0 3-3m0 0-3-3m3 3H9"
+      />
+    </svg>
+  );
+}
+
+function ChevronLeftIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      className={className}
+      fill="none"
+      viewBox="0 0 24 24"
+      stroke="currentColor"
+      strokeWidth={1.5}
+    >
+      <path
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        d="M15.75 19.5 8.25 12l7.5-7.5"
+      />
+    </svg>
+  );
+}
+
+function ChevronRightIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      className={className}
+      fill="none"
+      viewBox="0 0 24 24"
+      stroke="currentColor"
+      strokeWidth={1.5}
+    >
+      <path
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        d="m8.25 4.5 7.5 7.5-7.5 7.5"
       />
     </svg>
   );
