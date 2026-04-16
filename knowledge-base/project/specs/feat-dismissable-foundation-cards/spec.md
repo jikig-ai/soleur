@@ -1,7 +1,7 @@
 ---
 title: Dismissable Foundation Cards — Progressive Task Surfacing
 status: draft
-issue: TBD
+issue: 2413
 branch: feat-dismissable-foundation-cards
 date: 2026-04-16
 ---
