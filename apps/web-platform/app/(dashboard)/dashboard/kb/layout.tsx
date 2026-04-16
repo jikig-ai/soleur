@@ -274,25 +274,29 @@ export default function KbLayout({ children }: { children: ReactNode }) {
 
           {/* Content area — visible on desktop always, on mobile only when viewing content */}
           <div
-            className={`min-w-0 flex-1 overflow-y-auto md:block ${
-              isContentView ? "block" : "hidden"
-            }`}
+            className={`min-w-0 flex-1 ${
+              isContentView ? "" : "hidden"
+            } md:flex md:flex-col`}
           >
             {kbCollapsed && (
-              <button
-                onClick={toggleKbCollapsed}
-                aria-label="Expand file tree"
-                title="Expand file tree (⌘B)"
-                className="hidden md:flex m-2 h-8 w-8 items-center justify-center rounded-lg border border-neutral-800 text-neutral-400 hover:bg-neutral-800 hover:text-white"
-              >
-                <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="m8.25 4.5 7.5 7.5-7.5 7.5" />
-                </svg>
-              </button>
+              <div className="hidden shrink-0 items-center px-2 py-5 md:flex">
+                <button
+                  onClick={toggleKbCollapsed}
+                  aria-label="Expand file tree"
+                  title="Expand file tree (⌘B)"
+                  className="flex h-6 w-6 items-center justify-center rounded text-neutral-400 hover:bg-neutral-800 hover:text-white"
+                >
+                  <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="m8.25 4.5 7.5 7.5-7.5 7.5" />
+                  </svg>
+                </button>
+              </div>
             )}
-            <KbErrorBoundary>
-              {isContentView ? children : <DesktopPlaceholder />}
-            </KbErrorBoundary>
+            <div className="min-h-0 flex-1 overflow-y-auto">
+              <KbErrorBoundary>
+                {isContentView ? children : <DesktopPlaceholder />}
+              </KbErrorBoundary>
+            </div>
           </div>
 
           {kbChatFlag && contextPath && (
