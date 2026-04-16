@@ -46,7 +46,7 @@ describe("validateConversationContext", () => {
         path: "../../../etc/passwd",
         type: "kb-viewer",
       }),
-    ).toThrow("path must match");
+    ).toThrow("path must be a valid file path");
   });
 
   it("rejects path with dot-dot segments", () => {
@@ -55,16 +55,19 @@ describe("validateConversationContext", () => {
         path: "knowledge-base/../../secret.md",
         type: "kb-viewer",
       }),
-    ).toThrow("path must match");
+    ).toThrow("path must be a valid file path");
   });
 
-  it("rejects non-.md path extensions", () => {
-    expect(() =>
-      validateConversationContext({
-        path: "file.js",
-        type: "kb-viewer",
-      }),
-    ).toThrow("path must match");
+  it("accepts non-.md path extensions", () => {
+    const result = validateConversationContext({
+      path: "file.js",
+      type: "kb-viewer",
+    });
+    expect(result).toEqual({
+      path: "file.js",
+      type: "kb-viewer",
+      content: undefined,
+    });
   });
 
   it("rejects path with null bytes", () => {
@@ -73,16 +76,61 @@ describe("validateConversationContext", () => {
         path: "file\0.md",
         type: "kb-viewer",
       }),
-    ).toThrow("path must match");
+    ).toThrow("path must be a valid file path");
   });
 
-  it("rejects path with spaces", () => {
+  it("accepts path with spaces", () => {
+    const result = validateConversationContext({
+      path: "my file.md",
+      type: "kb-viewer",
+    });
+    expect(result).toEqual({
+      path: "my file.md",
+      type: "kb-viewer",
+      content: undefined,
+    });
+  });
+
+  it("accepts .pdf paths", () => {
+    const result = validateConversationContext({
+      path: "docs/report.pdf",
+      type: "kb-viewer",
+    });
+    expect(result).toEqual({
+      path: "docs/report.pdf",
+      type: "kb-viewer",
+      content: undefined,
+    });
+  });
+
+  it("accepts unicode filenames", () => {
+    const result = validateConversationContext({
+      path: "docs/café-menu.md",
+      type: "kb-viewer",
+    });
+    expect(result).toEqual({
+      path: "docs/café-menu.md",
+      type: "kb-viewer",
+      content: undefined,
+    });
+  });
+
+  it("rejects empty string path", () => {
     expect(() =>
       validateConversationContext({
-        path: "my file.md",
+        path: "",
         type: "kb-viewer",
       }),
-    ).toThrow("path must match");
+    ).toThrow("path must be a valid file path");
+  });
+
+  it("rejects path with no extension", () => {
+    expect(() =>
+      validateConversationContext({
+        path: "README",
+        type: "kb-viewer",
+      }),
+    ).toThrow("path must be a valid file path");
   });
 
   it("rejects unknown context type", () => {
