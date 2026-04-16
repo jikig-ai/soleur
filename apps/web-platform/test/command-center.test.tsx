@@ -386,10 +386,12 @@ describe("Command Center", () => {
       expect(screen.getByText(/no conversations yet/i)).toBeInTheDocument();
     });
 
-    // Vision is a stub — should NOT have green checkmark
+    // Vision is a stub — should NOT be in completed chips
     // Only 3 of 4 foundations complete (brand, validation, legal)
-    const completeLabels = screen.getAllByLabelText("Complete");
-    expect(completeLabels).toHaveLength(3);
+    const chipsRow = document.querySelector("[data-testid='completed-chips']");
+    expect(chipsRow).not.toBeNull();
+    const chipLinks = chipsRow!.querySelectorAll("a");
+    expect(chipLinks).toHaveLength(3);
   });
 
   it("navigates to new conversation when button is clicked", async () => {

@@ -245,9 +245,10 @@ describe("Start Fresh Onboarding - KB State Derivation", () => {
       expect(screen.getByText(/complete these to brief your department leaders/i)).toBeInTheDocument();
     });
 
-    // Vision and Brand should be complete (checkmark accessible text)
-    const completeLabels = screen.getAllByLabelText("Complete");
-    expect(completeLabels).toHaveLength(2);
+    // Vision and Brand should be complete (shown as chips)
+    const chipsRow = document.querySelector("[data-testid='completed-chips']");
+    expect(chipsRow).not.toBeNull();
+    expect(chipsRow!.querySelectorAll("a")).toHaveLength(2);
 
     // Business Validation and Legal should be not-done (clickable prompts)
     expect(screen.getByText("Business Validation")).toBeInTheDocument();
