@@ -25,7 +25,7 @@ let wsReturn = {
   routeSource: null as "auto" | "mention" | null,
   activeLeaderIds: [] as string[],
   sessionConfirmed: false,
-  usageData: null,
+  usageData: null as import("@/lib/ws-client").UsageData | null,
 };
 
 vi.mock("@/lib/ws-client", () => ({
@@ -126,6 +126,23 @@ describe("ChatPage — existing conversation (resume_session)", () => {
     // resumeSession should have been called a second time
     await waitFor(() => {
       expect(mockResumeSession).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  it("displays cost estimate when usageData is present on resume", async () => {
+    wsReturn.status = "connected";
+    wsReturn.sessionConfirmed = true;
+    wsReturn.usageData = {
+      totalCostUsd: 0.0042,
+      inputTokens: 1200,
+      outputTokens: 300,
+    };
+
+    const { container } = await renderChatPage();
+
+    await waitFor(() => {
+      // The cost display uses ~$X.XXXX format
+      expect(container.textContent).toContain("~$0.0042");
     });
   });
 

@@ -131,7 +131,7 @@ jobs:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           plugin_marketplaces: 'https://github.com/jikig-ai/soleur.git'
           plugins: 'soleur@soleur'
-          claude_args: '--model claude-opus-4-6 --max-turns 60 --allowedTools Bash,Read,Write,Edit,Glob,Grep,Task,mcp__playwright__browser_navigate,mcp__playwright__browser_take_screenshot,mcp__playwright__browser_resize,mcp__playwright__browser_close,mcp__playwright__browser_wait_for'
+          claude_args: '--model claude-opus-4-7 --max-turns 60 --allowedTools Bash,Read,Write,Edit,Glob,Grep,Task,mcp__playwright__browser_navigate,mcp__playwright__browser_take_screenshot,mcp__playwright__browser_resize,mcp__playwright__browser_close,mcp__playwright__browser_wait_for'
           prompt: |
             IMPORTANT: This is an automated CI workflow. Do NOT push directly
             to main. Do NOT create commits. The skill only creates GitHub

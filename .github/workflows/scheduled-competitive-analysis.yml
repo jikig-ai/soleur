@@ -46,7 +46,7 @@ jobs:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           plugin_marketplaces: 'https://github.com/jikig-ai/soleur.git'
           plugins: 'soleur@soleur'
-          claude_args: '--model claude-opus-4-6 --max-turns 45 --allowedTools Bash,Read,Write,Edit,Glob,Grep,WebSearch,WebFetch,Task'
+          claude_args: '--model claude-opus-4-7 --max-turns 45 --allowedTools Bash,Read,Write,Edit,Glob,Grep,WebSearch,WebFetch,Task'
           prompt: |
             IMPORTANT: This is an automated CI workflow. The AGENTS.md rule
             Do NOT push directly to main.
