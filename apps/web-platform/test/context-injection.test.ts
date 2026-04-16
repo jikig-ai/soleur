@@ -172,10 +172,10 @@ describe("document context injection (#2428)", () => {
     expect(options.systemPrompt).not.toContain("Artifact content:");
   });
 
-  test("text file over 100KB: assertive Read instruction with size info", async () => {
+  test("text file over 50KB: assertive Read instruction with size info", async () => {
     setupMocks();
 
-    const largeContent = "x".repeat(150_000);
+    const largeContent = "x".repeat(60_000);
     mockReadFile.mockResolvedValue(largeContent);
 
     const context: ConversationContext = {

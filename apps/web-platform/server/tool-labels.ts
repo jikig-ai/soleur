@@ -75,13 +75,19 @@ export function buildToolLabel(
     case "Grep": {
       const pattern = input?.pattern;
       if (typeof pattern !== "string") return FALLBACK_LABELS.Grep;
-      return `Searching for "${pattern}"...`;
+      const truncatedGrep = pattern.length > MAX_BASH_CMD_LENGTH
+        ? pattern.slice(0, MAX_BASH_CMD_LENGTH) + "..."
+        : pattern;
+      return `Searching for "${truncatedGrep}"...`;
     }
 
     case "Glob": {
       const pattern = input?.pattern;
       if (typeof pattern !== "string") return FALLBACK_LABELS.Glob;
-      return `Finding ${pattern}...`;
+      const truncatedGlob = pattern.length > MAX_BASH_CMD_LENGTH
+        ? pattern.slice(0, MAX_BASH_CMD_LENGTH) + "..."
+        : pattern;
+      return `Finding ${truncatedGlob}...`;
     }
 
     case "WebSearch":

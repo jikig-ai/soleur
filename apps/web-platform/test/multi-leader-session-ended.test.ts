@@ -101,9 +101,7 @@ vi.mock("../server/service-tools", () => ({
 
 import { startAgentSession } from "../server/agent-runner";
 import {
-  DEFAULT_API_KEY_ROW,
   createSupabaseMockImpl,
-  createQueryMock,
 } from "./helpers/agent-runner-mocks";
 
 // ---------------------------------------------------------------------------

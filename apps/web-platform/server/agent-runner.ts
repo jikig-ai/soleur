@@ -485,7 +485,7 @@ When you need user input for important decisions, use the AskUserQuestion tool.`
     // All branches include "do not ask which document" to prevent the agent
     // from ignoring the open document and asking clarifying questions (#2428).
     const CONTEXT_NO_ASK = "Do not ask which document the user is referring to — it is the document described above.";
-    const MAX_INLINE_BYTES = 100_000;
+    const MAX_INLINE_BYTES = 50_000; // ~12-15K tokens — keeps cost bounded
 
     if (context?.content) {
       systemPrompt += `\n\nThe user is currently viewing: ${context.path}\n\nArtifact content:\n${context.content}\n\nAnswer in the context of this artifact. ${CONTEXT_NO_ASK}`;
