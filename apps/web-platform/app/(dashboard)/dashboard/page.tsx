@@ -13,7 +13,7 @@ import { validateFiles } from "@/lib/validate-files";
 import { setPendingFiles } from "@/lib/pending-attachments";
 import type { ConversationStatus } from "@/lib/types";
 import type { DomainLeaderId } from "@/server/domain-leaders";
-import { DOMAIN_LEADERS, ROUTABLE_DOMAIN_LEADERS } from "@/server/domain-leaders";
+import { ROUTABLE_DOMAIN_LEADERS } from "@/server/domain-leaders";
 import { LeaderAvatar } from "@/components/leader-avatar";
 import { FoundationCards } from "@/components/dashboard/foundation-cards";
 import type { FoundationCard } from "@/components/dashboard/foundation-cards";
@@ -68,30 +68,16 @@ function flattenTree(
 }
 
 // ---------------------------------------------------------------------------
-// Static suggested prompts (shown when all foundations are complete)
+// Operational tasks (shown progressively as foundations complete)
 // ---------------------------------------------------------------------------
 
-const SUGGESTED_PROMPTS = [
-  {
-    icon: "📊",
-    title: "Review my go-to-market strategy",
-    leaders: ["cmo", "cro"] as DomainLeaderId[],
-  },
-  {
-    icon: "📋",
-    title: "Draft a privacy policy for my SaaS",
-    leaders: ["clo", "cpo"] as DomainLeaderId[],
-  },
-  {
-    icon: "💰",
-    title: "Plan Q2 budget and runway",
-    leaders: ["cfo", "coo"] as DomainLeaderId[],
-  },
-  {
-    icon: "🗺️",
-    title: "Prioritize my product roadmap",
-    leaders: ["cpo", "cto"] as DomainLeaderId[],
-  },
+const OPERATIONAL_TASKS = [
+  { id: "pricing", title: "Set pricing strategy", leaderId: "cmo" as DomainLeaderId, kbPath: "product/pricing-strategy.md", promptText: "Design a pricing strategy for my product — tiers, value metrics, and competitive positioning." },
+  { id: "competitive", title: "Create competitive analysis", leaderId: "cpo" as DomainLeaderId, kbPath: "product/competitive-analysis.md", promptText: "Run a competitive analysis — identify key competitors, positioning gaps, and differentiation opportunities." },
+  { id: "launch", title: "Plan marketing launch", leaderId: "cmo" as DomainLeaderId, kbPath: "marketing/launch-plan.md", promptText: "Create a marketing launch plan — channels, timeline, and messaging strategy." },
+  { id: "hiring", title: "Define hiring plan", leaderId: "coo" as DomainLeaderId, kbPath: "operations/hiring-plan.md", promptText: "Build a hiring plan — roles needed, timeline, and budget." },
+  { id: "distribution", title: "Build distribution strategy", leaderId: "cmo" as DomainLeaderId, kbPath: "marketing/distribution-strategy.md", promptText: "Design a distribution strategy — channels, partnerships, and growth loops." },
+  { id: "financial", title: "Set up financial projections", leaderId: "cfo" as DomainLeaderId, kbPath: "finance/financial-projections.md", promptText: "Create financial projections — revenue model, burn rate, and runway forecast." },
 ];
 
 const STATUS_OPTIONS: { value: ConversationStatus | ""; label: string }[] = [
@@ -177,7 +163,14 @@ export default function DashboardPage() {
       kbFiles.has(f.kbPath) &&
       (kbFiles.get(f.kbPath)?.size ?? 0) >= FOUNDATION_MIN_CONTENT_BYTES,
   }));
-  const allFoundationsComplete = foundationCards.every((c) => c.done);
+  const operationalCards: FoundationCard[] = OPERATIONAL_TASKS.map((t) => ({
+    ...t,
+    done:
+      kbFiles.has(t.kbPath) &&
+      (kbFiles.get(t.kbPath)?.size ?? 0) >= FOUNDATION_MIN_CONTENT_BYTES,
+  }));
+  const allCards = [...foundationCards, ...operationalCards];
+  const allTasksComplete = allCards.every((c) => c.done);
 
   // ---------------------------------------------------------------------------
   // First-run attachment state
@@ -457,9 +450,9 @@ export default function DashboardPage() {
 
   if (conversations.length === 0 && !hasActiveFilter) {
     return (
-      <div className={`mx-auto flex min-h-[calc(100dvh-4rem)] max-w-3xl flex-col items-center px-4 py-10 ${visionExists && !allFoundationsComplete ? "pt-10" : "justify-center"}`}>
-        {/* Foundation cards (only when incomplete) */}
-        {visionExists && !allFoundationsComplete && (
+      <div className={`mx-auto flex min-h-[calc(100dvh-4rem)] max-w-3xl flex-col items-center px-4 py-10 ${visionExists && !allTasksComplete ? "pt-10" : "justify-center"}`}>
+        {/* Foundation + operational cards (hidden when all complete) */}
+        {visionExists && !allTasksComplete && (
           <div className="mb-10 w-full">
             <p className="mb-2 text-xs font-medium tracking-widest text-amber-500">
               FOUNDATIONS
@@ -468,7 +461,7 @@ export default function DashboardPage() {
               Complete these to brief your department leaders.
             </p>
             <FoundationCards
-              cards={foundationCards}
+              cards={allCards}
               getIconPath={getIconPath}
               onIncompleteClick={handlePromptClick}
             />
@@ -479,7 +472,7 @@ export default function DashboardPage() {
           COMMAND CENTER
         </p>
         <h1 className="mb-3 text-center text-3xl font-semibold text-white md:text-4xl">
-          {allFoundationsComplete
+          {allTasksComplete
             ? "Your organization is ready."
             : "No conversations yet."}
         </h1>
@@ -494,32 +487,6 @@ export default function DashboardPage() {
         >
           New conversation
         </button>
-
-        {/* Suggested prompts (only when all foundations complete) */}
-        {allFoundationsComplete && (
-          <div className="mb-10 grid w-full grid-cols-2 gap-3 md:grid-cols-4">
-            {SUGGESTED_PROMPTS.map((prompt) => (
-              <button
-                key={prompt.title}
-                type="button"
-                onClick={() => handlePromptClick(prompt.title)}
-                className="flex flex-col gap-2 rounded-xl border border-neutral-800 bg-neutral-900/50 p-4 text-left transition-colors hover:border-neutral-600"
-              >
-                <span className="text-lg">{prompt.icon}</span>
-                <span className="text-sm font-medium text-white">
-                  {prompt.title}
-                </span>
-                <div className="flex gap-1">
-                  {prompt.leaders.map((id) => (
-                    <span key={id} className="text-xs text-neutral-500">
-                      {ROUTABLE_DOMAIN_LEADERS.find((l) => l.id === id)?.name}
-                    </span>
-                  ))}
-                </div>
-              </button>
-            ))}
-          </div>
-        )}
 
         <LeaderStrip onLeaderClick={handleLeaderClick} getIconPath={getIconPath} />
       </div>
@@ -539,8 +506,8 @@ export default function DashboardPage() {
         </h1>
       </div>
 
-      {/* Foundation cards (only when incomplete) */}
-      {visionExists && !allFoundationsComplete && (
+      {/* Foundation + operational cards (hidden when all complete) */}
+      {visionExists && !allTasksComplete && (
         <div className="mb-6">
           <p className="mb-2 text-xs font-medium tracking-widest text-amber-500">
             FOUNDATIONS
@@ -549,7 +516,7 @@ export default function DashboardPage() {
             Complete these to brief your department leaders.
           </p>
           <FoundationCards
-            cards={foundationCards}
+            cards={allCards}
             getIconPath={getIconPath}
             onIncompleteClick={handlePromptClick}
           />

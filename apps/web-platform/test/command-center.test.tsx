@@ -160,9 +160,58 @@ describe("Command Center", () => {
     });
   });
 
-  it("shows empty state with suggested prompts when user has no conversations", async () => {
+  it("shows operational tasks alongside foundation chips when all foundations are complete", async () => {
     conversationBuilder = createQueryBuilder([]);
     messageBuilder = createQueryBuilder([]);
+
+    const { default: DashboardPage } = await import(
+      "@/app/(dashboard)/dashboard/page"
+    );
+    render(<DashboardPage />);
+
+    // All 4 foundations complete → show as chips, operational tasks in grid
+    await waitFor(() => {
+      expect(screen.getByText(/no conversations yet/i)).toBeInTheDocument();
+    });
+    // Foundation chips should be present
+    expect(screen.getByText("Vision")).toBeInTheDocument();
+    // Operational task buttons should appear
+    expect(screen.getByText("Set pricing strategy")).toBeInTheDocument();
+    expect(screen.getByText("Create competitive analysis")).toBeInTheDocument();
+  });
+
+  it("shows 'organization is ready' when all cards are complete", async () => {
+    conversationBuilder = createQueryBuilder([]);
+    messageBuilder = createQueryBuilder([]);
+
+    // Mock KB tree with ALL files (4 foundation + 6 operational)
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: () =>
+        Promise.resolve({
+          tree: {
+            name: "knowledge-base",
+            type: "directory",
+            children: [
+              { name: "overview", type: "directory", children: [{ name: "vision.md", type: "file", path: "overview/vision.md", size: 1000 }] },
+              { name: "marketing", type: "directory", children: [
+                { name: "brand-guide.md", type: "file", path: "marketing/brand-guide.md", size: 1000 },
+                { name: "launch-plan.md", type: "file", path: "marketing/launch-plan.md", size: 1000 },
+                { name: "distribution-strategy.md", type: "file", path: "marketing/distribution-strategy.md", size: 1000 },
+              ] },
+              { name: "product", type: "directory", children: [
+                { name: "business-validation.md", type: "file", path: "product/business-validation.md", size: 1000 },
+                { name: "pricing-strategy.md", type: "file", path: "product/pricing-strategy.md", size: 1000 },
+                { name: "competitive-analysis.md", type: "file", path: "product/competitive-analysis.md", size: 1000 },
+              ] },
+              { name: "legal", type: "directory", children: [{ name: "privacy-policy.md", type: "file", path: "legal/privacy-policy.md", size: 1000 }] },
+              { name: "operations", type: "directory", children: [{ name: "hiring-plan.md", type: "file", path: "operations/hiring-plan.md", size: 1000 }] },
+              { name: "finance", type: "directory", children: [{ name: "financial-projections.md", type: "file", path: "finance/financial-projections.md", size: 1000 }] },
+            ],
+          },
+        }),
+    });
 
     const { default: DashboardPage } = await import(
       "@/app/(dashboard)/dashboard/page"
