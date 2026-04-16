@@ -255,6 +255,7 @@ export default function KbLayout({ children }: { children: ReactNode }) {
                 <button
                   onClick={toggleKbCollapsed}
                   aria-label="Collapse file tree"
+                  title="Collapse file tree (⌘B)"
                   className="hidden md:flex h-6 w-6 items-center justify-center rounded text-neutral-400 hover:bg-neutral-800 hover:text-white"
                 >
                   <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
@@ -281,6 +282,7 @@ export default function KbLayout({ children }: { children: ReactNode }) {
               <button
                 onClick={toggleKbCollapsed}
                 aria-label="Expand file tree"
+                title="Expand file tree (⌘B)"
                 className="hidden md:flex m-2 h-8 w-8 items-center justify-center rounded-lg border border-neutral-800 text-neutral-400 hover:bg-neutral-800 hover:text-white"
               >
                 <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>

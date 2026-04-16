@@ -227,7 +227,7 @@ export default function DashboardLayout({
           ${collapsed ? "md:w-14" : "md:w-56"}
         `}
       >
-        {/* Brand + close button */}
+        {/* Brand + close/collapse buttons */}
         <div className={`flex items-center justify-between safe-top ${collapsed ? "px-2 py-5" : "px-5 py-5"}`}>
           <span className={`text-lg font-semibold tracking-tight text-white overflow-hidden whitespace-nowrap ${collapsed ? "md:hidden" : ""}`}>
             Soleur
@@ -238,6 +238,19 @@ export default function DashboardLayout({
             className="flex h-10 w-10 items-center justify-center rounded-lg text-neutral-400 hover:bg-neutral-800 hover:text-white md:hidden"
           >
             <XIcon className="h-5 w-5" />
+          </button>
+          {/* Collapse toggle — hidden on mobile, visible on md+ */}
+          <button
+            onClick={toggleCollapsed}
+            aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+            title={collapsed ? "Expand sidebar (⌘B)" : "Collapse sidebar (⌘B)"}
+            className="hidden md:flex h-6 w-6 items-center justify-center rounded text-neutral-400 hover:bg-neutral-800 hover:text-white"
+          >
+            {collapsed ? (
+              <ChevronRightIcon className="h-4 w-4" />
+            ) : (
+              <ChevronLeftIcon className="h-4 w-4" />
+            )}
           </button>
         </div>
 
@@ -296,19 +309,6 @@ export default function DashboardLayout({
           >
             <LogOutIcon className="h-4 w-4 shrink-0" />
             <span className={`overflow-hidden whitespace-nowrap ${collapsed ? "md:hidden" : ""}`}>Sign out</span>
-          </button>
-          {/* Collapse toggle — hidden on mobile, visible on md+ */}
-          <button
-            onClick={toggleCollapsed}
-            aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
-            className={`hidden md:flex min-h-[44px] w-full items-center gap-3 rounded-lg px-3 py-2 text-sm text-neutral-400 transition-colors hover:bg-neutral-800/50 hover:text-neutral-200 ${collapsed ? "md:justify-center md:gap-0 md:px-0" : ""}`}
-          >
-            {collapsed ? (
-              <ChevronRightIcon className="h-4 w-4 shrink-0" />
-            ) : (
-              <ChevronLeftIcon className="h-4 w-4 shrink-0" />
-            )}
-            <span className={`overflow-hidden whitespace-nowrap ${collapsed ? "md:hidden" : ""}`}>Collapse</span>
           </button>
         </div>
       </aside>
