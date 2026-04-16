@@ -23,7 +23,7 @@ function thinkingMessage(leaderId: string): ChatMessage {
 // ---------------------------------------------------------------------------
 
 describe("chat-state-machine timeout behavior", () => {
-  test("tool_use event does NOT reset the timer (timerAction is null)", () => {
+  test("tool_use event resets the timer (#2430)", () => {
     const prev: ChatMessage[] = [thinkingMessage("cpo")];
     const streams = new Map([["cpo", 0]]);
 
@@ -33,8 +33,9 @@ describe("chat-state-machine timeout behavior", () => {
       label: "Read",
     } as any);
 
-    // timerAction must be undefined (no-op) — not a reset
-    expect(result.timerAction).toBeUndefined();
+    // tool_use resets the timer — long-running tools should not trigger
+    // "Agent stopped responding" while the agent is actively working.
+    expect(result.timerAction).toEqual({ type: "reset", leaderId: "cpo" });
   });
 
   test("stream event resets the timer", () => {

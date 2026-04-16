@@ -288,3 +288,47 @@ describe("timeout guard (#2136)", () => {
     expect(timedOut.messages[0].state).toBe("error");
   });
 });
+
+describe("tool_use timer reset (#2430)", () => {
+  test("tool_use event returns timerAction 'reset' to restart stuck-state timer", () => {
+    const s1 = applyStreamEvent(
+      [],
+      new Map(),
+      { type: "stream_start", leaderId: "cmo" } as StreamEvent,
+    );
+
+    const s2 = applyStreamEvent(
+      s1.messages,
+      s1.activeStreams,
+      { type: "tool_use", leaderId: "cmo", label: "Reading file..." } as StreamEvent,
+    );
+
+    expect(s2.timerAction).toEqual({ type: "reset", leaderId: "cmo" });
+  });
+
+  test("each successive tool_use resets the timer", () => {
+    let messages: ChatMessage[] = [];
+    let activeStreams = new Map<string, number>();
+
+    const s1 = applyStreamEvent(messages, activeStreams, {
+      type: "stream_start",
+      leaderId: "cto",
+    } as StreamEvent);
+    messages = s1.messages;
+    activeStreams = s1.activeStreams;
+
+    const s2 = applyStreamEvent(messages, activeStreams, {
+      type: "tool_use",
+      leaderId: "cto",
+      label: "Reading file...",
+    } as StreamEvent);
+    expect(s2.timerAction).toEqual({ type: "reset", leaderId: "cto" });
+
+    const s3 = applyStreamEvent(s2.messages, s2.activeStreams, {
+      type: "tool_use",
+      leaderId: "cto",
+      label: "Searching code...",
+    } as StreamEvent);
+    expect(s3.timerAction).toEqual({ type: "reset", leaderId: "cto" });
+  });
+});
