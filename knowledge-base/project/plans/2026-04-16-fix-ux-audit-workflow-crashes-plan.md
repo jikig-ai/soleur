@@ -142,9 +142,9 @@ Files to modify:
 
 ## Acceptance Criteria
 
-- [ ] `push` trigger is removed from `scheduled-ux-audit.yml`
-- [ ] `--only-secrets` flag is replaced with `grep -E` filter restricting to 4 named secrets
-- [ ] Workflow header comment documents the `push` trigger removal with rationale
+- [x] `push` trigger is removed from `scheduled-ux-audit.yml`
+- [x] `--only-secrets` flag is replaced with `grep -E` filter restricting to 4 named secrets
+- [x] Workflow header comment documents the `push` trigger removal with rationale
 - [ ] Manual `workflow_dispatch` run succeeds past the Doppler and `claude-code-action` steps
 
 ## Test Scenarios
