@@ -212,6 +212,7 @@ rendered output. This tests the display path without testing the hook internals.
 **Testing the race condition (usage_update before fetch):**
 
 This is best tested at the unit level by simulating the sequence:
+
 1. `setUsageData` called with `{ totalCostUsd: 0.001, ... }` (from WS event)
 2. `setUsageData(prev => prev ?? historicalData)` called (from fetch)
 3. Assert `usageData` retains the WS event value (0.001), not the historical value
@@ -221,11 +222,11 @@ the API response timing relative to WS events.
 
 ## Acceptance Criteria
 
-- [ ] Resumed KB chat sidebar shows cost estimate from prior conversation turns
-- [ ] Cost estimate continues accumulating correctly after new messages in a resumed session
-- [ ] Cost display shows `$0.0000` format consistent with non-resumed sessions
-- [ ] No regression: new conversations still start with no cost display until first usage_update
-- [ ] Both resume paths work: sidebar resume (resumeByContextPath) and direct resume (resume_session)
+- [x] Resumed KB chat sidebar shows cost estimate from prior conversation turns
+- [x] Cost estimate continues accumulating correctly after new messages in a resumed session
+- [x] Cost display shows `$0.0000` format consistent with non-resumed sessions
+- [x] No regression: new conversations still start with no cost display until first usage_update
+- [x] Both resume paths work: sidebar resume (resumeByContextPath) and direct resume (resume_session)
 
 ## Test Scenarios
 
