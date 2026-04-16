@@ -159,12 +159,12 @@ Place after the ChatInput component, inside the input container div.
 
 ## Acceptance Criteria
 
-- [ ] **AC1 (Bug #2):** When asking about a document in the KB sidebar, agents read the specific document file rather than searching the knowledge-base directory
-- [ ] **AC2 (Bug #5):** Agent responses never contain absolute workspace paths like `/workspaces/52af49c2-...`
-- [ ] **AC3 (Bug #1):** CMO agent does not show "Agent stopped responding" within 45s of starting
-- [ ] **AC4 (Bug #4):** An agent doing sequential tool_use calls for >45s without streaming output transitions to error state
-- [ ] **AC5 (Bug #3):** The chat input textarea, paperclip button, and send button all render at the same height with vertical center alignment
-- [ ] **AC6 (Bug #6):** The sidebar variant displays the cost estimate (`~$X.XXXX estimated`) below the input area
+- [x] **AC1 (Bug #2):** When asking about a document in the KB sidebar, agents read the specific document file rather than searching the knowledge-base directory
+- [x] **AC2 (Bug #5):** Agent responses never contain absolute workspace paths like `/workspaces/52af49c2-...`
+- [x] **AC3 (Bug #1):** CMO agent does not show "Agent stopped responding" within 45s of starting
+- [x] **AC4 (Bug #4):** An agent doing sequential tool_use calls for >45s without streaming output transitions to error state
+- [x] **AC5 (Bug #3):** The chat input textarea, paperclip button, and send button all render at the same height with vertical center alignment
+- [x] **AC6 (Bug #6):** The sidebar variant displays the cost estimate (`~$X.XXXX estimated`) below the input area
 
 ## Test Scenarios
 
