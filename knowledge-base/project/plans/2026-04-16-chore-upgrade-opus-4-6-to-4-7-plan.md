@@ -14,10 +14,10 @@ Ref #2439
 
 ## Acceptance Criteria
 
-- [ ] `grep -rn "claude-opus-4-6" .github/ plugins/` returns zero results
-- [ ] `grep -rn "Opus 4\.6" plugins/soleur/skills/` returns zero in non-archived files
-- [ ] No changes to archived/historical files
-- [ ] Model ID learning file updated with Opus 4.7 row and thinking API format note
+- [x] `grep -rn "claude-opus-4-6" .github/ plugins/` returns zero results
+- [x] `grep -rn "Opus 4\.6" plugins/soleur/skills/` returns zero in non-archived files
+- [x] No changes to archived/historical files
+- [x] Model ID learning file updated with Opus 4.7 row and thinking API format note
 
 ## Implementation
 

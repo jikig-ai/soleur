@@ -32,9 +32,20 @@ Using `replace_all` for `anthropic/claude-3-5-sonnet-20241022` caught all instan
 
 | Tier | API Alias | Dated ID | Pricing |
 |------|-----------|----------|---------|
+| Opus 4.7 | `claude-opus-4-7` | `claude-opus-4-7` | $5/1M input, $25/1M output |
 | Opus 4.6 | `claude-opus-4-6` | `claude-opus-4-6` | $5/1M input, $25/1M output |
 | Sonnet 4.6 | `claude-sonnet-4-6` | `claude-sonnet-4-6` | $3/1M input, $15/1M output |
 | Haiku 4.5 | `claude-haiku-4-5` | `claude-haiku-4-5-20251001` | $1/1M input, $5/1M output |
+
+### 5. Opus 4.7 thinking API format change (Apr 2026)
+
+Opus 4.7 uses a different thinking API format from Opus 4.6 and Sonnet 4.6:
+
+- Old (Opus 4.6, Sonnet 4.6): `thinking.type: "enabled"`, `thinking.budget_tokens: N`
+- New (Opus 4.7): `thinking.type: "adaptive"`, `output_config.effort: "low"|"medium"|"high"|"xhigh"`
+
+The `xhigh` effort level is new to Opus 4.7. Sonnet 4.6 still uses the old `enabled` format.
+Verify the thinking format against the model being used before making API calls.
 
 ## Solution
 
