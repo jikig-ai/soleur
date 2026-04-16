@@ -429,6 +429,60 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
     return () => controller.abort();
   }, [conversationId]);
 
+  // Fetch history for resumed sessions where conversationId="new" (sidebar resume path).
+  // The existing effect above skips "new" IDs. When the server responds with
+  // session_resumed, realConversationId transitions from null → UUID. This effect
+  // catches that transition and fetches history for the resolved conversation. #2425
+  useEffect(() => {
+    if (!realConversationId) return;
+    if (realConversationId === conversationId) return; // existing effect handles this
+    if (conversationId !== "new") return; // only the sidebar resume path
+
+    const controller = new AbortController();
+
+    (async () => {
+      try {
+        const supabase = createClient();
+        const { data: { session } } = await supabase.auth.getSession();
+        if (!session?.access_token) return;
+
+        const res = await fetch(
+          `/api/conversations/${realConversationId}/messages`,
+          {
+            headers: { Authorization: `Bearer ${session.access_token}` },
+            signal: controller.signal,
+          },
+        );
+        if (!res.ok) return;
+
+        const { messages: history } = await res.json();
+        const mapped: ChatMessage[] = history.map((m: { id: string; role: string; content: string; leader_id: string | null }) => ({
+          id: m.id,
+          role: m.role as "user" | "assistant",
+          content: m.content,
+          type: "text" as const,
+          leaderId: m.leader_id ?? undefined,
+          state: m.role === "assistant" ? ("done" as const) : undefined,
+        }));
+
+        // Deduplicate: filter out any messages already present from stream events
+        // that arrived while the fetch was in-flight (AC4). More robust than the
+        // activeStreamsRef.size === 0 guard: handles the window where a stream
+        // event arrives and completes before the fetch resolves.
+        setMessages(prev => {
+          const existingIds = new Set(prev.map(m => m.id));
+          const unique = mapped.filter(m => !existingIds.has(m.id));
+          return [...unique, ...prev];
+        });
+      } catch (err) {
+        if (err instanceof DOMException && err.name === "AbortError") return;
+        console.error("Failed to load resume history:", err);
+      }
+    })();
+
+    return () => controller.abort();
+  }, [realConversationId, conversationId]);
+
   useEffect(() => {
     mountedRef.current = true;
     setLastError(null);
