@@ -8,7 +8,7 @@ export interface KbChatContextValue {
   closeSidebar: () => void;
   /** Current KB document path the sidebar is scoped to (null if not in a file view). */
   contextPath: string | null;
-  /** True when feature flag NEXT_PUBLIC_KB_CHAT_SIDEBAR is enabled. */
+  /** True when feature flag FLAG_KB_CHAT_SIDEBAR is enabled (runtime, fetched from /api/flags). */
   enabled: boolean;
   /** Insert quoted text into the sidebar's chat input and open if closed. */
   submitQuote: (text: string) => void;
