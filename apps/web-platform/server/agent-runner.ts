@@ -1,7 +1,7 @@
 import { query, tool, createSdkMcpServer } from "@anthropic-ai/claude-agent-sdk";
 import { randomUUID } from "crypto";
 import { readFileSync, writeFileSync, mkdirSync } from "fs";
-import { writeFile, mkdir } from "fs/promises";
+import { readFile, writeFile, mkdir } from "fs/promises";
 import path from "path";
 import { z } from "zod/v4";
 
@@ -60,16 +60,7 @@ function supabase() { return _supabase ??= createServiceClient(); }
 const PLUGIN_PATH =
   process.env.SOLEUR_PLUGIN_PATH || "/app/shared/plugins/soleur";
 
-// Human-readable labels for tool_use WS events
-const TOOL_LABELS: Record<string, string> = {
-  Read: "Reading file...",
-  Bash: "Running command...",
-  Edit: "Editing file...",
-  Write: "Writing file...",
-  WebSearch: "Searching web...",
-  Grep: "Searching code...",
-  Glob: "Finding files...",
-};
+import { buildToolLabel } from "./tool-labels";
 
 // ---------------------------------------------------------------------------
 // Workspace permissions migration (#725)
@@ -401,6 +392,10 @@ export async function startAgentSession(
   userMessage?: string,
   context?: import("@/lib/types").ConversationContext,
   routeSource?: "auto" | "mention",
+  /** When true, do NOT send session_ended after the result message.
+   *  Used by dispatchToLeaders so the orchestrator sends a single
+   *  session_ended after all leaders finish (see #2428). */
+  skipSessionEnded?: boolean,
 ): Promise<void> {
   const key = sessionKey(userId, conversationId, leaderId);
 
@@ -484,11 +479,42 @@ Never mention file system paths, workspace paths, or internal directory structur
 
 When you need user input for important decisions, use the AskUserQuestion tool.`;
 
-    // Inject artifact context when conversation started from a specific page
+    // Inject artifact context when conversation started from a specific page.
+    // Three tiers: (1) client-provided content, (2) server-read content,
+    // (3) assertive Read instruction when content can't be inlined.
+    // All branches include "do not ask which document" to prevent the agent
+    // from ignoring the open document and asking clarifying questions (#2428).
+    const CONTEXT_NO_ASK = "Do not ask which document the user is referring to — it is the document described above.";
+    const MAX_INLINE_BYTES = 50_000; // ~12-15K tokens — keeps cost bounded
+
     if (context?.content) {
-      systemPrompt += `\n\nThe user is currently viewing: ${context.path}\n\nArtifact content:\n${context.content}\n\nAnswer in the context of this artifact.`;
+      systemPrompt += `\n\nThe user is currently viewing: ${context.path}\n\nArtifact content:\n${context.content}\n\nAnswer in the context of this artifact. ${CONTEXT_NO_ASK}`;
     } else if (context?.path) {
-      systemPrompt += `\n\nThe user is currently viewing the file at: ${context.path}\n\nRead this file first using the Read tool, then answer questions in the context of this document. Focus on the document content — do not search the knowledge-base directory for other files unless the user specifically asks.`;
+      const fullPath = path.join(workspacePath, context.path);
+      const isPdf = context.path.toLowerCase().endsWith(".pdf");
+      const pathSafe = isPathInWorkspace(fullPath, workspacePath);
+
+      if (!pathSafe) {
+        // Path traversal attempt — inject nothing, log warning
+        log.warn({ path: context.path, userId }, "Context path failed workspace validation");
+      } else if (isPdf) {
+        // PDFs can't be read as text — instruct agent assertively
+        systemPrompt += `\n\nThe user is currently viewing the PDF document: ${context.path}\n\nThis is a PDF file. Use the Read tool to read "${context.path}" — it supports PDF files. Answer all questions in the context of this document. ${CONTEXT_NO_ASK}`;
+      } else {
+        // Attempt to read the file server-side and inject content
+        try {
+          const content = await readFile(fullPath, "utf-8");
+          if (content.length <= MAX_INLINE_BYTES) {
+            systemPrompt += `\n\nThe user is currently viewing: ${context.path}\n\nDocument content:\n${content}\n\nAnswer in the context of this document. ${CONTEXT_NO_ASK}`;
+          } else {
+            // File too large to inline — instruct agent to Read it
+            systemPrompt += `\n\nThe user is currently viewing: ${context.path} (${Math.round(content.length / 1024)}KB)\n\nThis file is too large to include inline. Use the Read tool to read "${context.path}" and answer questions in its context. ${CONTEXT_NO_ASK}`;
+          }
+        } catch {
+          // Read failed — fall back to assertive Read instruction
+          systemPrompt += `\n\nThe user is currently viewing: ${context.path}\n\nRead this file first using the Read tool, then answer questions in the context of this document. Focus on the document content — do not search the knowledge-base directory for other files unless the user specifically asks. ${CONTEXT_NO_ASK}`;
+        }
+      }
     }
 
     // CPO-scoped: enhance minimal vision.md with structured sections
@@ -1119,11 +1145,12 @@ When you need user input for important decisions, use the AskUserQuestion tool.`
               // human-readable label crosses the wire — the raw SDK tool name
               // (Read/Bash/Grep/...) is an internal implementation detail and
               // must not leak to devtools or any WS inspector. See #2138.
-              const toolName = (block as { name?: string }).name ?? "unknown";
+              const toolBlock = block as { name?: string; input?: Record<string, unknown> };
+              const toolName = toolBlock.name ?? "unknown";
               sendToClient(userId, {
                 type: "tool_use",
                 leaderId: streamLeaderId,
-                label: TOOL_LABELS[toolName] ?? "Working...",
+                label: buildToolLabel(toolName, toolBlock.input, workspacePath),
               });
             }
           }
@@ -1174,10 +1201,15 @@ When you need user input for important decisions, use the AskUserQuestion tool.`
         // continues until explicit close or inactivity timeout.
         await updateConversationStatus(conversationId, "waiting_for_user");
 
-        sendToClient(userId, {
-          type: "session_ended",
-          reason: "turn_complete",
-        });
+        // In multi-leader mode, dispatchToLeaders sends a single session_ended
+        // after all leaders finish — individual leaders must not send it or the
+        // client clears all active streams prematurely (see #2428).
+        if (!skipSessionEnded) {
+          sendToClient(userId, {
+            type: "session_ended",
+            reason: "turn_complete",
+          });
+        }
       } else if (
         // Partial messages (streaming text deltas — cumulative snapshots)
         "message" in message &&
@@ -1272,13 +1304,14 @@ async function dispatchToLeaders(
     return;
   }
 
-  // Multiple leaders — dispatch in parallel
-  // Each leader runs its own startAgentSession with its own system prompt.
-  // stream_start/stream/stream_end messages are tagged with leaderId so the
-  // client can multiplex them into separate bubbles.
+  // Multiple leaders — dispatch in parallel with skipSessionEnded.
+  // Each leader sends its own stream_start/stream/stream_end events (tagged
+  // with leaderId), but does NOT send session_ended. A single session_ended
+  // is sent here after all leaders finish so the client doesn't clear active
+  // streams prematurely when the first leader completes (see #2428).
   const results = await Promise.allSettled(
     leaders.map((leaderId) =>
-      startAgentSession(userId, conversationId, leaderId, undefined, message, context, routeSource),
+      startAgentSession(userId, conversationId, leaderId, undefined, message, context, routeSource, true),
     ),
   );
 
@@ -1291,6 +1324,9 @@ async function dispatchToLeaders(
       );
     }
   }
+
+  // All leaders done (success or failure) — send single session_ended
+  sendToClient(userId, { type: "session_ended", reason: "turn_complete" });
 }
 
 // ---------------------------------------------------------------------------
