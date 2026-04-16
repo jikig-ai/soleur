@@ -214,16 +214,15 @@ describe("useWebSocket — resume history fetch (AC1, AC3, AC4)", () => {
     // Clear the fetch spy calls from the existing effect
     fetchSpy.mockClear();
 
-    // Give effects time to run
-    await act(async () => {
-      await new Promise((r) => setTimeout(r, 50));
+    // Wait for any pending effects to settle deterministically
+    await waitFor(() => {
+      // No additional fetch calls from the resume effect — the guard
+      // (realConversationId === conversationId) prevents the resume
+      // effect from firing when both IDs match.
+      const resumeFetchCalls = fetchSpy.mock.calls.filter(
+        (call) => typeof call[0] === "string" && call[0].includes("conv-known-456"),
+      );
+      expect(resumeFetchCalls.length).toBe(0);
     });
-
-    // No additional fetch calls from the resume effect
-    const resumeFetchCalls = fetchSpy.mock.calls.filter(
-      (call) => typeof call[0] === "string" && call[0].includes("conv-known-456"),
-    );
-    // May be 0 or 1 (from the existing effect), but NOT from the new resume effect
-    expect(resumeFetchCalls.length).toBeLessThanOrEqual(1);
   });
 });
