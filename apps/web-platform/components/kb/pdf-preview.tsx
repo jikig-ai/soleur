@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Document, Page, pdfjs } from "react-pdf";
 
 pdfjs.GlobalWorkerOptions.workerSrc = new URL(
@@ -27,16 +27,30 @@ export function PdfPreview({ src, filename, showDownload = true }: PdfPreviewPro
   const [error, setError] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
   const [containerWidth, setContainerWidth] = useState<number>();
+  const [containerHeight, setContainerHeight] = useState<number>();
+  const [pageDims, setPageDims] = useState<{ width: number; height: number } | null>(null);
 
   useEffect(() => {
     const el = containerRef.current;
     if (!el) return;
     const observer = new ResizeObserver(([entry]) => {
       setContainerWidth(entry.contentRect.width);
+      setContainerHeight(entry.contentRect.height);
     });
     observer.observe(el);
     return () => observer.disconnect();
   }, []);
+
+  // Size the page to fit within the container without scrolling.
+  // When the container is wide (sidebars collapsed), a full-width page
+  // would be taller than the container. Constrain width so the rendered
+  // height stays within bounds.
+  const effectiveWidth = useMemo(() => {
+    if (!containerWidth) return undefined;
+    if (!containerHeight || !pageDims) return containerWidth;
+    const maxWidthFromHeight = containerHeight * (pageDims.width / pageDims.height);
+    return Math.min(containerWidth, maxWidthFromHeight);
+  }, [containerWidth, containerHeight, pageDims]);
 
   if (error) {
     return (
@@ -68,11 +82,12 @@ export function PdfPreview({ src, filename, showDownload = true }: PdfPreviewPro
         </div>
       )}
 
-      <div ref={containerRef} className="min-h-0 flex-1 overflow-auto rounded-lg border border-neutral-800 bg-neutral-900/50">
+      <div ref={containerRef} className="min-h-0 flex-1 flex items-center justify-center overflow-auto rounded-lg border border-neutral-800 bg-neutral-900/50">
         <Document
           file={src}
           onLoadSuccess={({ numPages: n }) => setNumPages(n)}
           onLoadError={() => setError(true)}
+          className="flex items-center justify-center"
           loading={
             <div className="flex items-center justify-center p-8">
               <div className="h-5 w-5 animate-spin rounded-full border-2 border-neutral-600 border-t-amber-400" />
@@ -81,9 +96,13 @@ export function PdfPreview({ src, filename, showDownload = true }: PdfPreviewPro
         >
           <Page
             pageNumber={pageNumber}
-            width={containerWidth}
+            width={effectiveWidth}
             renderTextLayer={false}
             renderAnnotationLayer={false}
+            onLoadSuccess={(page) => {
+              const viewport = page.getViewport({ scale: 1 });
+              setPageDims({ width: viewport.width, height: viewport.height });
+            }}
           />
         </Document>
       </div>
