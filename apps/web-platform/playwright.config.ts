@@ -56,7 +56,7 @@ export default defineConfig({
   webServer: [
     // Server for public page tests (original config — fake unreachable Supabase URL)
     {
-      command: `tsx server/index.ts`,
+      command: `npm run dev`,
       port: PUBLIC_PORT,
       timeout: 120_000,
       reuseExistingServer: !process.env.CI,
@@ -69,7 +69,7 @@ export default defineConfig({
     },
     // Server for authenticated tests (mock Supabase for middleware auth)
     {
-      command: `tsx server/index.ts`,
+      command: `npm run dev`,
       port: AUTH_PORT,
       timeout: 120_000,
       reuseExistingServer: !process.env.CI,

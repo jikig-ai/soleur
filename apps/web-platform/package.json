@@ -4,7 +4,7 @@
   "type": "module",
   "private": true,
   "scripts": {
-    "dev": "tsx server/index.ts",
+    "dev": "esbuild server/index.ts --bundle --platform=node --target=node22 --format=esm --packages=external --outfile=.next/dev-server.mjs && node .next/dev-server.mjs",
     "build": "next build",
     "build:server": "esbuild server/index.ts --bundle --platform=node --target=node22 --outfile=dist/server/index.cjs --external:next --external:react --external:react-dom --external:@supabase/supabase-js --external:@supabase/ssr --external:ws --external:stripe --external:@anthropic-ai/claude-agent-sdk --external:pino --external:@sentry/nextjs",
     "start": "NODE_ENV=production node dist/server/index.cjs",
