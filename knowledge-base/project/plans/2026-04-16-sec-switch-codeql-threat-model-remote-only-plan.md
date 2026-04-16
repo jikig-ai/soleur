@@ -6,6 +6,34 @@ date: 2026-04-16
 
 # sec: Switch CodeQL threat model from remote_and_local to remote only
 
+## Enhancement Summary
+
+**Deepened on:** 2026-04-16
+**Sections enhanced:** 2 (Proposed Solution, Implementation Phase 1)
+**Research sources:** Context7 GitHub REST API docs, institutional learnings (3 files),
+live API verification
+
+### Key Improvements
+
+1. **Fixed broken API call format** -- replaced `--field` with `--input -` heredoc for array
+   parameters, preventing HTTP 422 (institutional learning
+   `2026-04-10-github-security-enablement-api-patterns.md`)
+2. **Corrected language list expectation** -- current config has 5 language entries (GitHub
+   auto-expands `javascript-typescript`), not 3. Verification step now checks for all 5.
+3. **Added post-PATCH verification for silent failures** -- GitHub API can return 200 OK
+   without applying changes (learning from secret scanning enablement); plan now includes
+   immediate GET verification after PATCH.
+
+### Relevant Institutional Learnings Applied
+
+- `2026-04-10-github-security-enablement-api-patterns.md` -- `--field` wraps arrays as
+  strings; use `--input -` with heredoc. After any settings PATCH, immediately re-read to
+  verify the change was applied.
+- `2026-04-10-codeql-api-dismissal-format.md` -- GitHub API enum format uses space-separated
+  strings, not snake_case. (Not directly applicable here but context for the API surface.)
+- `2026-04-13-codeql-to-issues-invalid-workflow-trigger.md` -- CodeQL alert polling pattern
+  context; confirms the daily cron + deduplication approach for alert-to-issue tracking.
+
 ## Overview
 
 Switch the CodeQL default setup threat model from `remote_and_local` to `remote` to reduce
@@ -38,18 +66,30 @@ continue to trigger false positives for the same patterns, creating ongoing tria
 
 ## Proposed Solution
 
-A single GitHub API call to update the CodeQL default setup configuration:
+A single GitHub API call to update the CodeQL default setup configuration. Use `--input -`
+with a heredoc JSON body, not `--field`, because `--field` wraps arrays as strings causing
+HTTP 422 (documented in learning `2026-04-10-github-security-enablement-api-patterns.md`):
 
 ```bash
 gh api -X PATCH repos/jikig-ai/soleur/code-scanning/default-setup \
-  --field state=configured \
-  --field query_suite=extended \
-  --field 'languages=["actions","javascript-typescript","python"]' \
-  --field threat_model=remote
+  --input - <<'JSONEOF'
+{
+  "state": "configured",
+  "query_suite": "extended",
+  "languages": ["actions", "javascript-typescript", "python"],
+  "threat_model": "remote"
+}
+JSONEOF
 ```
 
-This preserves the `extended` query suite and explicitly includes the language list (the PATCH
-endpoint may reset omitted fields) while restricting taint sources to network requests only.
+**Note on languages:** The current GET response shows 5 language entries (`actions`,
+`javascript`, `javascript-typescript`, `python`, `typescript`) because GitHub auto-expands
+`javascript-typescript` into separate entries. Sending `["actions", "javascript-typescript",
+"python"]` in the PATCH is correct -- GitHub re-derives the expanded set. Verify via GET after
+PATCH that all 5 entries are still present.
+
+This preserves the `extended` query suite and all language coverage while restricting taint
+sources to network requests only.
 
 ### Why this is safe
 
@@ -67,19 +107,23 @@ endpoint may reset omitted fields) while restricting taint sources to network re
 ### Phase 1: Switch threat model and verify
 
 1. Run the PATCH API call to update `threat_model` from `remote_and_local` to `remote`.
-   Include `languages` in the PATCH to prevent the API from resetting the language list to
-   defaults (the GitHub default setup PATCH may reset omitted fields):
+   Use `--input -` with heredoc (not `--field` -- `--field` wraps arrays as strings, HTTP 422):
 
    ```bash
    gh api -X PATCH repos/jikig-ai/soleur/code-scanning/default-setup \
-     --field state=configured \
-     --field query_suite=extended \
-     --field 'languages=["actions","javascript-typescript","python"]' \
-     --field threat_model=remote
+     --input - <<'JSONEOF'
+   {
+     "state": "configured",
+     "query_suite": "extended",
+     "languages": ["actions", "javascript-typescript", "python"],
+     "threat_model": "remote"
+   }
+   JSONEOF
    ```
 
 2. Verify the change via GET: `gh api repos/jikig-ai/soleur/code-scanning/default-setup`
-   -- confirm `threat_model` is `remote` and `languages` are preserved
+   -- confirm `threat_model` is `remote` and all 5 language entries are preserved
+   (`actions`, `javascript`, `javascript-typescript`, `python`, `typescript`)
 3. Poll for re-analysis completion via the analyses endpoint:
    `gh api repos/jikig-ai/soleur/code-scanning/analyses?tool_name=CodeQL --jq '.[0] | {created_at, results_count}'`
    -- wait for a new analysis with `created_at` after the config change timestamp
@@ -97,7 +141,8 @@ endpoint may reset omitted fields) while restricting taint sources to network re
 ## Acceptance Criteria
 
 - [ ] CodeQL default setup `threat_model` field reads `remote` (not `remote_and_local`)
-- [ ] Language list preserved after PATCH (actions, javascript-typescript, python)
+- [ ] Language list preserved after PATCH (all 5 entries: actions, javascript,
+  javascript-typescript, python, typescript)
 - [ ] CodeQL re-analysis completes successfully after the config change
 - [ ] Previously dismissed alerts remain dismissed (not re-opened by the config change)
 - [ ] Spec documentation updated to reflect the new threat model
