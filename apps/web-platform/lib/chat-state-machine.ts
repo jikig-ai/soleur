@@ -116,7 +116,7 @@ export function applyStreamEvent(
       return {
         messages: updated,
         activeStreams,
-        timerAction: { type: "reset", leaderId: event.leaderId },
+        timerAction: null,
       };
     }
 

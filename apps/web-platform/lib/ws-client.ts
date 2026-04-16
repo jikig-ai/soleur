@@ -60,7 +60,7 @@ interface UseWebSocketReturn {
 
 const MAX_BACKOFF = 30_000;
 const INITIAL_BACKOFF = 1_000;
-const STUCK_TIMEOUT_MS = 30_000;
+const STUCK_TIMEOUT_MS = 45_000;
 
 /** Close codes where reconnecting will never succeed. */
 export const NON_TRANSIENT_CLOSE_CODES: Record<number, { target?: string; reason: string }> = {
