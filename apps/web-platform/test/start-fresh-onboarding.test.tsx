@@ -162,7 +162,7 @@ describe("Start Fresh Onboarding - KB State Derivation", () => {
     expect(screen.getByText(/no conversations yet/i)).toBeInTheDocument();
   });
 
-  it("shows Command Center when all 4 foundation files exist", async () => {
+  it("shows operational tasks when all 4 foundation files exist", async () => {
     fetchMock.mockResolvedValueOnce({
       ok: true,
       status: 200,
@@ -173,6 +173,40 @@ describe("Start Fresh Onboarding - KB State Derivation", () => {
             "marketing/brand-guide.md",
             "product/business-validation.md",
             "legal/privacy-policy.md",
+          ]),
+        }),
+    });
+
+    const { default: DashboardPage } = await import(
+      "@/app/(dashboard)/dashboard/page"
+    );
+    render(<DashboardPage />);
+
+    // All foundations complete → show as chips, operational tasks appear
+    await waitFor(() => {
+      expect(screen.getByText(/no conversations yet/i)).toBeInTheDocument();
+    });
+    // Operational tasks should be visible in the grid
+    expect(screen.getByText("Set pricing strategy")).toBeInTheDocument();
+  });
+
+  it("shows 'organization is ready' when all foundation and operational files exist", async () => {
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: () =>
+        Promise.resolve({
+          tree: buildMockTree([
+            "overview/vision.md",
+            "marketing/brand-guide.md",
+            "marketing/launch-plan.md",
+            "marketing/distribution-strategy.md",
+            "product/business-validation.md",
+            "product/pricing-strategy.md",
+            "product/competitive-analysis.md",
+            "legal/privacy-policy.md",
+            "operations/hiring-plan.md",
+            "finance/financial-projections.md",
           ]),
         }),
     });
