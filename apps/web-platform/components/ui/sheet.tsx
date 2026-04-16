@@ -70,7 +70,7 @@ export function Sheet({
   const vh = typeof window !== "undefined" ? window.innerHeight : 800;
 
   const desktopClasses =
-    "fixed right-0 top-0 z-40 flex h-[100dvh] w-[380px] flex-col border-l border-neutral-800 bg-neutral-950 shadow-2xl";
+    "z-40 flex h-full w-[380px] shrink-0 flex-col border-l border-neutral-800 bg-neutral-950 shadow-2xl";
 
   const mobileHeight =
     dragHeight !== null ? dragHeight : Math.round(vh * SNAP_VH[snap]);
@@ -146,5 +146,8 @@ export function Sheet({
     </div>
   );
 
+  // Desktop: render inline as a flex child so the content area shrinks.
+  // Mobile: portal to body for bottom-sheet overlay behavior.
+  if (resolvedSide === "right") return panel;
   return createPortal(panel, document.body);
 }
