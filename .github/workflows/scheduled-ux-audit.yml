@@ -4,9 +4,13 @@
 # findings as a workflow artifact.
 #
 # Triggers:
-#   push (main)   — auto-run on merges that touch web-platform UI
 #   cron monthly  — safety net for quiet UI-change months
 #   manual        — founder-triggered (no inputs; always dry-run)
+#
+# The push trigger was removed because claude-code-action does not support
+# push events (throws "Unsupported event type: push"). If dry-run mode is
+# ever disabled, re-add push via the workflow_run pattern — see plan
+# 2026-04-16-fix-ux-audit-workflow-crashes-plan.md. Ref: #2376.
 #
 # Security: no untrusted event inputs are interpolated in run: blocks. Agent
 # output is written to files inside the action and referenced via env vars.
@@ -25,11 +29,6 @@
 name: "Scheduled: UX Audit"
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - 'apps/web-platform/app/**'
-      - 'apps/web-platform/components/**'
   schedule:
     - cron: '0 9 1 * *'
   workflow_dispatch: {}
@@ -89,8 +88,10 @@ jobs:
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN_PRD }}
         run: |
+          allowed="SUPABASE_URL|SUPABASE_SERVICE_ROLE_KEY|NEXT_PUBLIC_SUPABASE_ANON_KEY|NEXT_PUBLIC_SITE_URL"
           doppler secrets download --project soleur --config prd --no-file --format env-no-quotes \
-            --only-secrets SUPABASE_URL,SUPABASE_SERVICE_ROLE_KEY,NEXT_PUBLIC_SUPABASE_ANON_KEY,NEXT_PUBLIC_SITE_URL | while IFS= read -r line; do
+            | grep -E "^($allowed)=" \
+            | while IFS= read -r line; do
             key="${line%%=*}"
             value="${line#*=}"
             [ -z "$key" ] && continue
