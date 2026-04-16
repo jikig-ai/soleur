@@ -147,6 +147,8 @@ if echo "$COMMAND" | grep -qE '(^|&&|\|\||;)\s*gh\s+issue\s+create'; then
 fi
 
 # guardrails:block-stash-in-worktrees — Block git stash in worktrees
+# Three-tier detection covers: path-based (tier 1), .git file marker (tier 2),
+# and subagent calls where .cwd is absent — block when secondary worktrees exist (tier 3).
 if echo "$COMMAND" | grep -qE '(^|&&|\|\||;)\s*git\s+stash'; then
   # Resolve CWD: check cd target, git -C path, .cwd field, then hook CWD
   STASH_GUARD_DIR=""
@@ -162,7 +164,21 @@ if echo "$COMMAND" | grep -qE '(^|&&|\|\||;)\s*git\s+stash'; then
     fi
   fi
   RESOLVE_DIR="${STASH_GUARD_DIR:-.}"
-  if echo "$(cd "$RESOLVE_DIR" 2>/dev/null && pwd)" | grep -qF '.worktrees'; then
+  RESOLVED_ABS="$(cd "$RESOLVE_DIR" 2>/dev/null && pwd)"
+  IN_WORKTREE=false
+  # Tier 1: path contains .worktrees (standard worktree layout)
+  if echo "$RESOLVED_ABS" | grep -qF '.worktrees'; then
+    IN_WORKTREE=true
+  # Tier 2: .git is a file, not a directory (git's linked-worktree marker)
+  elif [ -n "$RESOLVED_ABS" ] && [ -f "$RESOLVED_ABS/.git" ] && [ ! -d "$RESOLVED_ABS/.git" ]; then
+    IN_WORKTREE=true
+  # Tier 3: CWD unresolved (subagent gap — .cwd absent from hook input) — block when
+  # secondary worktrees exist so a bare git stash with no explicit path is caught.
+  elif [ -z "$STASH_GUARD_DIR" ]; then
+    WT_COUNT=$(git -C "${CLAUDE_PROJECT_DIR:-.}" worktree list 2>/dev/null | wc -l)
+    [ "$WT_COUNT" -gt 1 ] && IN_WORKTREE=true
+  fi
+  if [ "$IN_WORKTREE" = true ]; then
     emit_incident "hr-never-git-stash-in-worktrees" "deny" "Never git stash in worktrees" "$COMMAND"
     jq -n '{
       hookSpecificOutput: {
