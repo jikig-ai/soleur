@@ -60,10 +60,12 @@ fi
 # Check 1 (legacy): todo files tagged "code-review"
 REVIEW_TODOS=$(grep -rl "code-review" "$WORK_DIR/todos/" 2>/dev/null | head -1 || true)
 
-# Check 2 (legacy): review commit (coupled to review SKILL.md Step 5 commit message;
-# uses locally-cached origin/main — may be stale if not recently fetched)
+# Check 2: review commit (coupled to review SKILL.md Step 5 commit message;
+# uses locally-cached origin/main — may be stale if not recently fetched).
+# Matches legacy "refactor: add code review findings" AND new "review: <summary> (P<N>)"
+# fix-inline convention from rf-review-finding-default-fix-inline (post-#2374).
 REVIEW_COMMIT=$(git -C "$WORK_DIR" log origin/main..HEAD --oneline 2>/dev/null \
-  | grep "refactor: add code review findings" || true)
+  | grep -E "(refactor: add code review findings|review: )" || true)
 
 # Check 3 (current): GitHub issues with "code-review" label referencing this PR.
 # Coupled to review-todo-structure.md issue body template ("**Source:** PR #<number>").

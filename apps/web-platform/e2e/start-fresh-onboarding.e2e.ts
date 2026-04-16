@@ -218,16 +218,16 @@ test.describe("Start Fresh onboarding: foundations state", () => {
     await expect(page.getByText("No conversations yet.")).toBeVisible();
   });
 
-  test("vision card shows checkmark when complete", async ({ page }) => {
+  test("vision card shows as chip when complete", async ({ page }) => {
     await setupDashboardMocks(page, ["overview/vision.md"]);
     await gotoDashboard(page);
 
     await expect(page.getByText("Complete these to brief your department leaders.")).toBeVisible({ timeout: 10_000 });
 
-    const visionCard = page.locator('a[href="/dashboard/kb/overview/vision.md"]');
-    await expect(visionCard).toBeVisible();
-    await expect(visionCard.getByText("Vision")).toBeVisible();
-    await expect(visionCard.getByText("View in Knowledge Base")).toBeVisible();
+    // Completed cards render as compact chips (link with title, no "View in KB")
+    const visionChip = page.locator('a[href="/dashboard/kb/overview/vision.md"]');
+    await expect(visionChip).toBeVisible();
+    await expect(visionChip.getByText("Vision")).toBeVisible();
   });
 
   test("incomplete cards show as clickable prompts", async ({ page }) => {
@@ -294,33 +294,34 @@ const ALL_FOUNDATION_FILES = [
 ];
 
 test.describe("Start Fresh onboarding: command center state", () => {
-  test("shows Command Center when all 4 foundation files exist", async ({ page }) => {
+  test("shows operational tasks when all 4 foundation files exist", async ({ page }) => {
     await setupDashboardMocks(page, ALL_FOUNDATION_FILES);
     await gotoDashboard(page);
 
-    await expect(page.getByText("Your organization is ready.")).toBeVisible({ timeout: 15_000 });
-    await expect(page.getByText("COMMAND CENTER").first()).toBeVisible();
+    // All foundations complete but operational tasks remain — shows tasks, not "ready"
+    await expect(page.getByText("No conversations yet.")).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByText("FOUNDATIONS").first()).toBeVisible();
   });
 
-  test("suggested prompts render in command center", async ({ page }) => {
+  test("operational tasks render when foundations are complete", async ({ page }) => {
     await setupDashboardMocks(page, ALL_FOUNDATION_FILES);
     await gotoDashboard(page);
 
-    await expect(page.getByText("Your organization is ready.")).toBeVisible({ timeout: 15_000 });
-    await expect(page.getByText("Review my go-to-market strategy")).toBeVisible();
-    await expect(page.getByText("Draft a privacy policy for my SaaS")).toBeVisible();
-    await expect(page.getByText("Plan Q2 budget and runway")).toBeVisible();
-    await expect(page.getByText("Prioritize my product roadmap")).toBeVisible();
+    await expect(page.getByText("No conversations yet.")).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByText("Set pricing strategy")).toBeVisible();
+    await expect(page.getByText("Create competitive analysis")).toBeVisible();
+    await expect(page.getByText("Plan marketing launch")).toBeVisible();
+    await expect(page.getByText("Define hiring plan")).toBeVisible();
   });
 
-  test("suggested prompt click navigates to chat", async ({ page }) => {
+  test("operational task click navigates to chat", async ({ page }) => {
     await setupDashboardMocks(page, ALL_FOUNDATION_FILES);
     await gotoDashboard(page);
 
-    await expect(page.getByText("Your organization is ready.")).toBeVisible({ timeout: 15_000 });
-    await page.getByText("Review my go-to-market strategy").click();
+    await expect(page.getByText("No conversations yet.")).toBeVisible({ timeout: 15_000 });
+    await page.getByText("Set pricing strategy").click();
     await page.waitForURL("**/dashboard/chat/new?msg=**", { timeout: 10_000 });
-    expect(page.url()).toContain("msg=Review+my+go-to-market+strategy");
+    expect(page.url()).toContain("msg=Design+a+pricing+strategy");
   });
 });
 
