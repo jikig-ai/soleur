@@ -25,7 +25,7 @@ let wsReturn = {
   routeSource: null as "auto" | "mention" | null,
   activeLeaderIds: [] as string[],
   sessionConfirmed: false,
-  usageData: null,
+  usageData: null as import("@/lib/ws-client").UsageData | null,
 };
 
 vi.mock("@/lib/ws-client", () => ({
