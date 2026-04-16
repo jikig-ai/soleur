@@ -33,8 +33,8 @@ describe("chat-state-machine timeout behavior", () => {
       label: "Read",
     } as any);
 
-    // timerAction must be null (no-op) — not a reset
-    expect(result.timerAction).toBeNull();
+    // timerAction must be undefined (no-op) — not a reset
+    expect(result.timerAction).toBeUndefined();
   });
 
   test("stream event resets the timer", () => {
