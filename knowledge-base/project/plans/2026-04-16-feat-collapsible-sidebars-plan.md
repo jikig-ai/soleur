@@ -115,16 +115,16 @@ toggles the file tree sidebar (left panel, primary navigation). The chat sidebar
 
 ## Acceptance Criteria
 
-- [ ] Main sidebar collapses to icon-only (56px) on desktop when toggle clicked
-- [ ] KB file tree collapses to hidden (0px) on desktop when toggle clicked
-- [ ] Settings nav collapses to hidden (0px) on desktop when toggle clicked
-- [ ] Each sidebar's collapse state persists in `localStorage` across page refreshes
-- [ ] `Cmd/Ctrl+B` toggles the contextually-relevant sidebar
-- [ ] Collapse animation is smooth (200ms width transition)
-- [ ] Mobile behavior unchanged for all three surfaces
-- [ ] Keyboard shortcut does nothing when focus is in input/textarea/contenteditable
-- [ ] Sidebars default to expanded on first visit (no localStorage entry)
-- [ ] Private browsing mode (localStorage unavailable) degrades gracefully — sidebars work but don't persist
+- [x] Main sidebar collapses to icon-only (56px) on desktop when toggle clicked
+- [x] KB file tree collapses to hidden (0px) on desktop when toggle clicked
+- [x] Settings nav collapses to hidden (0px) on desktop when toggle clicked
+- [x] Each sidebar's collapse state persists in `localStorage` across page refreshes
+- [x] `Cmd/Ctrl+B` toggles the contextually-relevant sidebar
+- [x] Collapse animation is smooth (200ms width transition)
+- [x] Mobile behavior unchanged for all three surfaces
+- [x] Keyboard shortcut does nothing when focus is in input/textarea/contenteditable
+- [x] Sidebars default to expanded on first visit (no localStorage entry)
+- [x] Private browsing mode (localStorage unavailable) degrades gracefully — sidebars work but don't persist
 
 ## Test Scenarios
 
