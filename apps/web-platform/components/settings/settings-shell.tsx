@@ -33,7 +33,9 @@ export function SettingsShell({ children }: { children: React.ReactNode }) {
   return (
     <div className="flex min-h-full">
       {/* Settings sidebar — hidden on mobile, shown on md+ */}
-      <nav className={`hidden shrink-0 border-r border-neutral-800 md:block
+      <nav
+        inert={settingsCollapsed || undefined}
+        className={`hidden shrink-0 border-r border-neutral-800 md:block
         md:transition-[width] md:duration-200 md:ease-out
         ${settingsCollapsed ? "md:w-0 md:overflow-hidden md:border-r-0" : "w-48 px-4 py-10"}`}>
         <h2 className="mb-4 text-xs font-medium uppercase tracking-wider text-neutral-500">

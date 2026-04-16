@@ -241,6 +241,7 @@ export default function KbLayout({ children }: { children: ReactNode }) {
         <div className="flex h-full">
           {/* Tree sidebar — visible on desktop always, on mobile only at root */}
           <aside
+            inert={kbCollapsed || undefined}
             className={`w-full shrink-0 overflow-y-auto border-r border-neutral-800 md:block
               md:transition-[width] md:duration-200 md:ease-out
               ${kbCollapsed ? "md:w-0 md:overflow-hidden md:border-r-0" : "md:w-64"}
