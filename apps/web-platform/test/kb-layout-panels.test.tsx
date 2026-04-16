@@ -124,7 +124,7 @@ describe("KbLayout — resizable panels", () => {
     });
   });
 
-  it("renders three Panels: sidebar, doc viewer, chat", async () => {
+  it("renders three Panels when chat is active: sidebar, doc viewer, chat", async () => {
     await renderLayout();
     await waitFor(() => {
       const panels = screen.getAllByTestId("panel");
@@ -132,7 +132,7 @@ describe("KbLayout — resizable panels", () => {
     });
   });
 
-  it("renders two Separators between panels", async () => {
+  it("renders two Separators when chat is active", async () => {
     await renderLayout();
     await waitFor(() => {
       const separators = screen.getAllByTestId("panel-separator");
@@ -140,28 +140,28 @@ describe("KbLayout — resizable panels", () => {
     });
   });
 
-  it("Group has onLayoutChanged for persistence", async () => {
+  it("Group uses horizontal orientation", async () => {
     await renderLayout();
     await waitFor(() => {
-      expect(capturedGroupProps.some((p) => typeof p.onLayoutChanged === "function")).toBe(true);
+      expect(capturedGroupProps.some((p) => p.orientation === "horizontal")).toBe(true);
     });
   });
 
-  it("sidebar Panel has defaultSize=18, minSize=10, maxSize=25", async () => {
+  it("sidebar Panel uses percentage sizes (string format, not px)", async () => {
     await renderLayout();
     await waitFor(() => {
       const sidebar = capturedPanelProps.find(
-        (p) => p.defaultSize === 18 && p.minSize === 10 && p.maxSize === 25,
+        (p) => (p.defaultSize === "18%" || p.defaultSize === "22%") && p.minSize === "10%" && p.maxSize === "30%",
       );
       expect(sidebar).toBeTruthy();
     });
   });
 
-  it("chat Panel has defaultSize=22, minSize=20, maxSize=40, collapsible", async () => {
+  it("chat Panel uses percentage sizes when visible", async () => {
     await renderLayout();
     await waitFor(() => {
       const chat = capturedPanelProps.find(
-        (p) => p.defaultSize === 22 && p.minSize === 20 && p.maxSize === 40 && p.collapsible,
+        (p) => p.defaultSize === "22%" && p.minSize === "20%" && p.maxSize === "40%",
       );
       expect(chat).toBeTruthy();
     });
@@ -181,15 +181,15 @@ describe("KbLayout — resizable panels", () => {
     });
   });
 
-  it("chat panel collapses at KB root (no document selected)", async () => {
+  it("chat panel is not rendered at KB root (no document selected)", async () => {
     mockPathname = "/dashboard/kb";
     await renderLayout();
     await waitFor(() => {
-      // At KB root, contextPath is null, so chat panel should not render
-      // (or should collapse). With the plan's approach, chat Panel is always
-      // present but collapsed. Since we can't test imperative collapse in
-      // happy-dom, verify chat content is not rendered.
+      // At KB root, contextPath is null, so the chat panel + its separator are
+      // not rendered at all. Only 2 panels (sidebar + doc) and 1 separator.
       expect(screen.queryByText("Close panel")).toBeNull();
+      expect(screen.getAllByTestId("panel").length).toBe(2);
+      expect(screen.getAllByTestId("panel-separator").length).toBe(1);
     });
   });
 
