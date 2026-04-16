@@ -61,13 +61,13 @@ This produces "4/16/2026" with no time. The fix: use `toLocaleString()` with opt
 
 ## Acceptance Criteria
 
-- [ ] **AC1:** When resuming a KB Chat sidebar conversation, prior messages are visible in the chat area
-- [ ] **AC2:** The "Continuing from" banner includes both date and time (e.g., "Continuing from 4/16/2026, 2:15 PM")
-- [ ] **AC3:** Messages loaded from history display in chronological order (oldest first)
-- [ ] **AC4:** History messages do not duplicate if a new message arrives from a live stream while history is loading
-- [ ] **AC5:** The "Send a message to get started" placeholder does NOT appear when history messages are present
-- [ ] **AC6:** Auto-scroll to the bottom of the chat after history is loaded
-- [ ] **AC7:** The "Continuing from" banner remains visible after history messages load (not dismissed prematurely by the message count change handler)
+- [x] **AC1:** When resuming a KB Chat sidebar conversation, prior messages are visible in the chat area
+- [x] **AC2:** The "Continuing from" banner includes both date and time (e.g., "Continuing from 4/16/2026, 2:15 PM")
+- [x] **AC3:** Messages loaded from history display in chronological order (oldest first)
+- [x] **AC4:** History messages do not duplicate if a new message arrives from a live stream while history is loading
+- [x] **AC5:** The "Send a message to get started" placeholder does NOT appear when history messages are present
+- [x] **AC6:** Auto-scroll to the bottom of the chat after history is loaded
+- [x] **AC7:** The "Continuing from" banner remains visible after history messages load (not dismissed prematurely by the message count change handler)
 
 ## Implementation Phases
 
