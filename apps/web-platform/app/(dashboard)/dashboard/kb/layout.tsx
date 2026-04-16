@@ -27,7 +27,6 @@ const KbChatSidebar = dynamic(
   { ssr: false, loading: () => null },
 );
 
-const KB_CHAT_SIDEBAR_FLAG = process.env.NEXT_PUBLIC_KB_CHAT_SIDEBAR === "1";
 const KB_SIDEBAR_OPEN_KEY = "kb.chat.sidebarOpen";
 
 function deriveContextPathFromPathname(pathname: string): string | null {
@@ -44,6 +43,17 @@ export default function KbLayout({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<KbContextValue["error"]>(null);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
+
+  // Runtime feature flag — fetched from /api/flags (not build-time NEXT_PUBLIC_*)
+  const [kbChatFlag, setKbChatFlag] = useState(false);
+  useEffect(() => {
+    fetch("/api/flags")
+      .then((r) => r.json())
+      .then((flags: Record<string, boolean>) => {
+        setKbChatFlag(flags["kb-chat-sidebar"] ?? false);
+      })
+      .catch(() => {}); // flags stay off if fetch fails
+  }, []);
 
   const fetchTree = useCallback(async (signal?: AbortSignal) => {
     try {
@@ -143,7 +153,7 @@ export default function KbLayout({ children }: { children: ReactNode }) {
 
   // Restore sidebarOpen from sessionStorage on mount (per-tab persistence)
   useEffect(() => {
-    if (!KB_CHAT_SIDEBAR_FLAG) return;
+    if (!kbChatFlag) return;
     try {
       const saved = sessionStorage.getItem(KB_SIDEBAR_OPEN_KEY);
       if (saved === "1") setSidebarOpen(true);
@@ -184,7 +194,7 @@ export default function KbLayout({ children }: { children: ReactNode }) {
     openSidebar,
     closeSidebar,
     contextPath,
-    enabled: KB_CHAT_SIDEBAR_FLAG,
+    enabled: kbChatFlag,
     submitQuote,
     registerQuoteHandler,
     messageCount,
@@ -243,7 +253,7 @@ export default function KbLayout({ children }: { children: ReactNode }) {
             </KbErrorBoundary>
           </div>
 
-          {KB_CHAT_SIDEBAR_FLAG && contextPath && (
+          {kbChatFlag && contextPath && (
             <KbChatSidebar
               open={sidebarOpen}
               onClose={closeSidebar}
