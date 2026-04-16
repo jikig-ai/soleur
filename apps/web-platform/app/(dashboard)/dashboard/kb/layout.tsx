@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
+import { useSidebarCollapse } from "@/hooks/use-sidebar-collapse";
 import type { ReactNode } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import dynamic from "next/dynamic";
@@ -133,6 +134,23 @@ export default function KbLayout({ children }: { children: ReactNode }) {
     });
   }, [pathname]);
 
+  const [kbCollapsed, toggleKbCollapsed] = useSidebarCollapse("soleur:sidebar.kb.collapsed");
+
+  // Cmd+B / Ctrl+B toggles KB file tree sidebar (only on KB routes, not in inputs)
+  useEffect(() => {
+    function handleToggleShortcut(e: KeyboardEvent) {
+      if (!(e.metaKey || e.ctrlKey) || e.key !== "b") return;
+      const tag = (e.target as HTMLElement)?.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA") return;
+      if ((e.target as HTMLElement)?.isContentEditable) return;
+      if (!pathname.startsWith("/dashboard/kb")) return;
+      e.preventDefault();
+      toggleKbCollapsed();
+    }
+    document.addEventListener("keydown", handleToggleShortcut);
+    return () => document.removeEventListener("keydown", handleToggleShortcut);
+  }, [pathname, toggleKbCollapsed]);
+
   const isContentView = pathname !== "/dashboard/kb";
   const hasTreeContent = tree?.children && tree.children.length > 0;
 
@@ -223,15 +241,25 @@ export default function KbLayout({ children }: { children: ReactNode }) {
         <div className="flex h-full">
           {/* Tree sidebar — visible on desktop always, on mobile only at root */}
           <aside
-            className={`w-full shrink-0 overflow-y-auto border-r border-neutral-800 md:block md:w-64 ${
-              isContentView ? "hidden" : "block"
-            }`}
+            className={`w-full shrink-0 overflow-y-auto border-r border-neutral-800 md:block
+              md:transition-[width] md:duration-200 md:ease-out
+              ${kbCollapsed ? "md:w-0 md:overflow-hidden md:border-r-0" : "md:w-64"}
+              ${isContentView ? "hidden" : "block"}`}
           >
             <div className="flex h-full flex-col">
-              <header className="shrink-0 px-4 pb-3 pt-4">
+              <header className="flex shrink-0 items-center justify-between px-4 pb-3 pt-4">
                 <h1 className="font-serif text-lg font-medium tracking-tight text-white">
                   Knowledge Base
                 </h1>
+                <button
+                  onClick={toggleKbCollapsed}
+                  aria-label="Collapse file tree"
+                  className="hidden md:flex h-6 w-6 items-center justify-center rounded text-neutral-400 hover:bg-neutral-800 hover:text-white"
+                >
+                  <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 19.5 8.25 12l7.5-7.5" />
+                  </svg>
+                </button>
               </header>
               <div className="shrink-0 px-3 pb-3">
                 <SearchOverlay />
@@ -248,6 +276,17 @@ export default function KbLayout({ children }: { children: ReactNode }) {
               isContentView ? "block" : "hidden"
             }`}
           >
+            {kbCollapsed && (
+              <button
+                onClick={toggleKbCollapsed}
+                aria-label="Expand file tree"
+                className="hidden md:flex m-2 h-8 w-8 items-center justify-center rounded-lg border border-neutral-800 text-neutral-400 hover:bg-neutral-800 hover:text-white"
+              >
+                <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="m8.25 4.5 7.5 7.5-7.5 7.5" />
+                </svg>
+              </button>
+            )}
             <KbErrorBoundary>
               {isContentView ? children : <DesktopPlaceholder />}
             </KbErrorBoundary>
