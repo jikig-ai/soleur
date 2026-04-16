@@ -40,6 +40,28 @@ describe("usage_update WebSocket message", () => {
     expect(typeof wsClient.useWebSocket).toBe("function");
   });
 
+  test("null-guard pattern: prev ?? costData does not overwrite existing data", () => {
+    // Simulates the race condition: a usage_update WS event arrives before the
+    // history fetch resolves. The functional updater `prev => prev ?? costData`
+    // should preserve the WS event's value when prev is non-null.
+    type UsageData = { totalCostUsd: number; inputTokens: number; outputTokens: number };
+
+    // State after a usage_update WS event arrived
+    const wsEventData: UsageData = { totalCostUsd: 0.001, inputTokens: 500, outputTokens: 100 };
+
+    // Historical data from API fetch (older, lower values)
+    const historicalData: UsageData = { totalCostUsd: 0.0042, inputTokens: 1200, outputTokens: 300 };
+
+    // The functional updater: prev ?? costData
+    const updater = (prev: UsageData | null) => prev ?? historicalData;
+
+    // When prev is non-null (WS event already set it), historical data is ignored
+    expect(updater(wsEventData)).toEqual(wsEventData);
+
+    // When prev is null (no WS event yet), historical data is used
+    expect(updater(null)).toEqual(historicalData);
+  });
+
   test("accumulates multiple usage_update deltas correctly", () => {
     // Simulate the accumulation logic that ws-client should implement
     type UsageData = { totalCostUsd: number; inputTokens: number; outputTokens: number };

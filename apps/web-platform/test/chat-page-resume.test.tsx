@@ -129,6 +129,23 @@ describe("ChatPage — existing conversation (resume_session)", () => {
     });
   });
 
+  it("displays cost estimate when usageData is present on resume", async () => {
+    wsReturn.status = "connected";
+    wsReturn.sessionConfirmed = true;
+    wsReturn.usageData = {
+      totalCostUsd: 0.0042,
+      inputTokens: 1200,
+      outputTokens: 300,
+    };
+
+    const { container } = await renderChatPage();
+
+    await waitFor(() => {
+      // The cost display uses ~$X.XXXX format
+      expect(container.textContent).toContain("~$0.0042");
+    });
+  });
+
   it("sends initial ?msg= after sessionConfirmed on existing conversation", async () => {
     mockSearchParams.set("msg", "here is the document");
     wsReturn.status = "connected";
