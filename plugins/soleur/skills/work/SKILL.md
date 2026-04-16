@@ -246,6 +246,7 @@ Run these checks before proceeding to Phase 1. A FAIL blocks execution with a re
    - When creating test files with `vi.mock()` factories that reference shared variables, use `vi.hoisted()` from the start -- vitest hoists `vi.mock` to the top of the file before `const`/`let` declarations execute.
    - When testing decorative images (alt="") with happy-dom, use container.querySelector instead of screen.getAllByRole("img", { hidden: true }) -- happy-dom excludes presentational elements from role queries even with hidden: true.
    - When adding `sessionStorage` usage to React components, ensure the component's test file includes `sessionStorage.clear()` in its `beforeEach` block. Shared jsdom environments leak sessionStorage between tests, causing ordering-dependent failures.
+   - When adding a new npm dependency, check the installed major version (`node -e "console.log(require('<pkg>/package.json').version)"`) and read the type definitions before using API from docs or training data. Library APIs change across major versions (e.g., `react-resizable-panels` v4 uses `Group`/`Separator`/`orientation`/`useDefaultLayout`, not v2's `PanelGroup`/`PanelResizeHandle`/`direction`/`autoSaveId`).
 
    **Test environment setup:** If the project's test runner cannot run the type of test needed (e.g., React component tests require jsdom but vitest is configured for node), set up the test environment BEFORE starting the task. This is part of RED — the test infrastructure must exist for the test to fail properly.
 
