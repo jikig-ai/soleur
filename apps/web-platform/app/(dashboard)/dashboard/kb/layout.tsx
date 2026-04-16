@@ -5,7 +5,7 @@ import { useMediaQuery } from "@/hooks/use-media-query";
 import type { ReactNode } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import dynamic from "next/dynamic";
-import { Group, Panel, Separator, usePanelRef } from "react-resizable-panels";
+import { Group, Panel, Separator, usePanelRef, useDefaultLayout } from "react-resizable-panels";
 import { KbContext } from "@/components/kb/kb-context";
 import type { KbContextValue } from "@/components/kb/kb-context";
 import { KbChatContext } from "@/components/kb/kb-chat-context";
@@ -49,6 +49,7 @@ export default function KbLayout({ children }: { children: ReactNode }) {
   const isDesktop = useMediaQuery("(min-width: 768px)");
   const sidebarPanelRef = usePanelRef();
   const chatPanelRef = usePanelRef();
+  const { defaultLayout, onLayoutChanged } = useDefaultLayout({ id: "kb-panels" });
   const [kbCollapsed, setKbCollapsed] = useState(false);
   const [tree, setTree] = useState<TreeNode | null>(null);
   const [loading, setLoading] = useState(true);
@@ -321,7 +322,7 @@ export default function KbLayout({ children }: { children: ReactNode }) {
     return (
       <KbContext value={ctxValue}>
         <KbChatContext value={chatCtxValue}>
-          <Group direction="horizontal" autoSaveId="kb-panels" className="h-full">
+          <Group orientation="horizontal" defaultLayout={defaultLayout} onLayoutChanged={onLayoutChanged} className="h-full">
             {/* Sidebar panel */}
             <Panel
               panelRef={sidebarPanelRef}
@@ -330,8 +331,9 @@ export default function KbLayout({ children }: { children: ReactNode }) {
               maxSize={25}
               collapsible
               collapsedSize={0}
-              onCollapse={() => setKbCollapsed(true)}
-              onExpand={() => setKbCollapsed(false)}
+              onResize={(size) => {
+                setKbCollapsed(size.asPercentage === 0);
+              }}
             >
               <div className="min-w-0 h-full overflow-y-auto border-r border-neutral-800">
                 {sidebarContent}

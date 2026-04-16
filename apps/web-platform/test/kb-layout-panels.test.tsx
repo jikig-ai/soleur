@@ -48,6 +48,7 @@ vi.mock("react-resizable-panels", () => {
     },
     usePanelRef: () => ({ current: { collapse: vi.fn(), expand: vi.fn(), isCollapsed: () => false } }),
     useGroupRef: () => ({ current: null }),
+    useDefaultLayout: () => ({ defaultLayout: undefined, onLayoutChanged: vi.fn() }),
   };
 });
 
@@ -137,10 +138,10 @@ describe("KbLayout — resizable panels", () => {
     });
   });
 
-  it("Group has autoSaveId='kb-panels'", async () => {
+  it("Group has onLayoutChanged for persistence", async () => {
     await renderLayout();
     await waitFor(() => {
-      expect(capturedGroupProps.some((p) => p.autoSaveId === "kb-panels")).toBe(true);
+      expect(capturedGroupProps.some((p) => typeof p.onLayoutChanged === "function")).toBe(true);
     });
   });
 

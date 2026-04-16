@@ -76,6 +76,7 @@ vi.mock("react-resizable-panels", () => {
       },
     }),
     useGroupRef: () => ({ current: null }),
+    useDefaultLayout: () => ({ defaultLayout: undefined, onLayoutChanged: vi.fn() }),
   };
 });
 
