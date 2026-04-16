@@ -9,9 +9,12 @@
 
 - [ ] 2.1 Add `min-h-0` to the outer wrapper in `pdf-preview.tsx` (`<div className="flex h-full flex-col">` -> `<div className="flex min-h-0 h-full flex-col">`)
 - [ ] 2.2 Add `min-h-0` to the inner flex-1 container in `pdf-preview.tsx` that wraps `<Document>`
-- [ ] 2.3 Add canvas height constraint via Tailwind utility: `[&_canvas]:max-h-full [&_canvas]:w-auto [&_canvas]:mx-auto` on the container
-- [ ] 2.4 Add `min-h-0` to the file preview wrapper in `[...path]/page.tsx` (`<div className="flex-1 overflow-y-auto">` -> `<div className="min-h-0 flex-1 overflow-y-auto">`)
-- [ ] 2.5 Verify the KB layout content area div also has `min-h-0` if needed
+- [ ] 2.3 Extend ResizeObserver to also capture `containerHeight` (not just width)
+- [ ] 2.4 Store PDF page original dimensions via `onLoadSuccess` callback on `<Page>` (provides `originalWidth`, `originalHeight`)
+- [ ] 2.5 Compute `effectiveWidth = Math.min(containerWidth, containerHeight * (originalWidth / originalHeight))` accounting for padding and pagination height
+- [ ] 2.6 Pass `effectiveWidth` as the `width` prop to `<Page>` (do NOT use CSS canvas resizing -- react-pdf requires programmatic sizing)
+- [ ] 2.7 Add `min-h-0` to the file preview wrapper in `[...path]/page.tsx` (`<div className="flex-1 overflow-y-auto">` -> `<div className="min-h-0 flex-1 overflow-y-auto">`)
+- [ ] 2.8 Verify the KB layout content area div also has `min-h-0` if needed
 
 ## Phase 3: Core Implementation -- KB Collapse Icon Alignment
 
@@ -29,3 +32,4 @@
 - [ ] 4.6 Verify KB expand icon aligns vertically with main sidebar collapse icon when both collapsed
 - [ ] 4.7 Verify Cmd+B shortcut still toggles the correct sidebar
 - [ ] 4.8 Verify mobile layout is unaffected (below md breakpoint)
+- [ ] 4.9 Verify shared viewer at `/shared/[token]/page.tsx` still renders PDFs correctly (regression: showDownload=true default)

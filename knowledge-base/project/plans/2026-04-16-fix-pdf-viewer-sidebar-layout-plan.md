@@ -2,9 +2,22 @@
 title: "fix: PDF viewer truncation and KB sidebar collapse icon misalignment"
 type: fix
 date: 2026-04-16
+deepened: 2026-04-16
 ---
 
 # fix: PDF viewer truncation and KB sidebar collapse icon misalignment
+
+## Enhancement Summary
+
+**Deepened on:** 2026-04-16
+**Sections enhanced:** 3 (Proposed Solution, Alternative Approaches, Context)
+**Research sources:** react-pdf v10 docs (Context7), CSS flexbox spec, project learnings
+
+### Key Improvements
+
+1. **Corrected the CSS canvas constraint approach** -- react-pdf docs explicitly warn against resizing `<canvas>` via CSS (`[&_canvas]:max-h-full` would cause layer misalignment). Replaced with proper `min-h-0` flex containment that lets the existing `overflow-auto` handle scrollable PDF content.
+2. **Added height-based width calculation as the recommended approach** -- When the PDF page is taller than the container, compute a `maxWidth` from the container height and the PDF aspect ratio, then pass `Math.min(containerWidth, maxWidth)` as the `width` prop. This ensures the canvas fits without scrolling.
+3. **Documented react-pdf v10 constraint** -- `height` prop is ignored when `width` is set; sizing must go through `width` or `scale` only.
 
 ## Overview
 
@@ -40,20 +53,52 @@ The KB sidebar expand button (shown when KB sidebar is collapsed) is rendered in
 
 ### Fix 1: PDF height constraint
 
-Replace the `h-full` approach with a proper height containment strategy. The PdfPreview component should use `min-h-0` + `flex-1` in its ancestor chain to allow the flexbox layout to properly constrain the height, and the PDF container should use `object-contain`-style rendering with `max-h` constraints rather than relying on an unbroken `h-full` chain.
+Replace the `h-full` approach with a proper height containment strategy using `min-h-0` on flex items to fix the height chain, combined with container-height-aware width calculation to ensure the PDF fits without scrolling.
+
+### Research Insights -- react-pdf canvas sizing
+
+**Critical constraint from react-pdf v10 docs:**
+
+> "Avoid resizing the `<canvas>` element using CSS alone. Resizing the canvas with CSS affects only that layer, leaving other layers like the text and annotation layers out of sync. React-PDF requires precise knowledge of the rendering dimensions."
+
+This means the originally proposed `[&_canvas]:max-h-full [&_canvas]:w-auto` CSS approach is **incorrect** -- it would resize the canvas visually but leave react-pdf's internal rendering dimensions unchanged, causing layer misalignment.
+
+**react-pdf v10 `<Page>` sizing rules:**
+
+- If `width` is set, `height` is ignored (react-pdf calculates height from aspect ratio)
+- If only `height` is set, width is calculated from aspect ratio
+- If neither is set, the page renders at its intrinsic size
+- Sizing must go through the `width`, `height`, or `scale` props -- not CSS on the canvas
+
+**Recommended approach: height-aware width calculation**
+
+Since the component already uses a ResizeObserver to track `containerWidth`, extend it to also track `containerHeight`. Then compute the maximum width that would produce a page fitting within the container height:
+
+```text
+maxWidthFromHeight = containerHeight * (pageOriginalWidth / pageOriginalHeight)
+effectiveWidth = Math.min(containerWidth, maxWidthFromHeight)
+```
+
+Pass `effectiveWidth` as the `width` prop to `<Page>`. This ensures react-pdf renders the canvas at exactly the right dimensions to fit the container -- no CSS resizing, no scrolling.
 
 **Specific changes:**
 
 1. In `components/kb/pdf-preview.tsx`:
    - Change the outer wrapper from `h-full` to `min-h-0 h-full` (flex item height containment)
-   - Add `min-h-0` to the `flex-1` container div that wraps the `<Document>` -- this ensures the flex item can shrink below its content size
-   - Add `[&_canvas]:max-h-full [&_canvas]:w-auto [&_canvas]:mx-auto` to the container to constrain the rendered canvas to fit within the available space while maintaining aspect ratio
-   - OR: Instead of constraining canvas via CSS, track container height with ResizeObserver (already tracking width) and pass the `height` prop to `<Page>` when the computed height (from width + aspect ratio) exceeds the container height
+   - Add `min-h-0` to the `flex-1` container div that wraps `<Document>` -- this ensures the flex item can shrink below its content size
+   - Extend the existing ResizeObserver to also capture `containerHeight` (`entry.contentRect.height`)
+   - Store the PDF page's original dimensions from `onLoadSuccess` callback on `<Page>` (provides `originalWidth` and `originalHeight`)
+   - Compute `effectiveWidth = Math.min(containerWidth, containerHeight * (originalWidth / originalHeight))` when both container dimensions and page dimensions are available
+   - Pass `effectiveWidth` (instead of raw `containerWidth`) as the `width` prop to `<Page>`
+   - Account for padding: subtract the `p-4` padding (32px total vertical, 32px total horizontal) from container dimensions before calculation
+   - Remove `gap-3` from the outer flex column and account for the pagination controls height (~40px) in the available height calculation
 
 2. In `app/(dashboard)/dashboard/kb/[...path]/page.tsx`:
-   - Ensure the file preview wrapper `<div class="flex-1 overflow-y-auto">` also has `min-h-0` so the flex height containment is unbroken
+   - Add `min-h-0` to the file preview wrapper `<div class="flex-1 overflow-y-auto">` so the flex height containment is unbroken
 
-The preferred approach is **option 1** (CSS containment via `min-h-0` + canvas `max-h-full`), because it avoids adding JS complexity and works naturally with flexbox.
+**Fallback behavior:** If the page dimensions are not yet known (before `onLoadSuccess` fires), use `containerWidth` as before -- the page may initially render taller than the container, but once dimensions are known, the next render will fit. This avoids a blank frame on initial load.
+
+**Simpler alternative (if height-aware calculation is too complex):** Just ensure the `min-h-0` chain is unbroken and rely on the existing `overflow-auto` on the container div. This means the PDF page may be taller than the visible area and require scrolling within the viewer pane, but it would never be truncated/clipped. This is acceptable UX and significantly simpler to implement. The height-aware width calculation is the premium approach that eliminates scrolling entirely.
 
 ### Fix 2: KB sidebar collapse icon alignment
 
@@ -112,13 +157,52 @@ Move the KB sidebar expand button (when collapsed) from its current floating pos
 
 The CSS `h-full` chain from `h-dvh` on the outermost div down to PdfPreview's container is fragile. It works when the total content height fits the viewport but breaks when sidebar width changes cause the PDF to compute a taller intrinsic height. The `overflow-y-auto` on intermediate containers creates scroll contexts that mask the overflow rather than constraining children. Adding `min-h-0` to flex items in the chain allows flexbox to properly distribute space and constrain the PDF canvas height.
 
+### Research Insights -- CSS flexbox height containment
+
+**The `min-h-0` pattern:** In CSS flexbox, flex items have `min-height: auto` by default, which prevents them from shrinking below their content size. When a flex column has `flex: 1` items containing content taller than the container, the item refuses to shrink, pushing content outside the container (the "truncation" visible in the screenshots). Adding `min-h-0` (Tailwind: `min-h-0`) overrides this default, allowing the flex item to shrink to fit its allocated space. This is the canonical fix for "flex item won't shrink in column direction."
+
+**Height chain verification for this bug:**
+
+```text
+h-dvh (dashboard layout)
+  -> flex-1 overflow-y-auto (main)         <- scroll container, provides height context
+    -> h-full flex (kb layout)             <- needs parent height (gets it from flex-1)
+      -> flex-1 overflow-y-auto (content)  <- MISSING min-h-0 -- won't shrink below content
+        -> h-full flex-col (kb page)       <- MISSING min-h-0
+          -> flex-1 overflow-y-auto (preview wrapper) <- MISSING min-h-0
+            -> h-full flex-col (PdfPreview)  <- MISSING min-h-0
+              -> flex-1 overflow-auto (container) <- MISSING min-h-0
+                -> canvas (intrinsic height from react-pdf)
+```
+
+Every flex item in the chain from `<main>` to the canvas container needs `min-h-0` to allow proper height constraint propagation. Missing it at any level breaks the chain.
+
+### Research Insights -- Learning: KB viewer action-button consolidation
+
+From `knowledge-base/project/learnings/2026-04-15-kb-viewer-consolidate-action-buttons.md`:
+
+- The `showDownload` prop on `PdfPreview` defaults to `true` for the shared viewer (`/shared/[token]/page.tsx`) which renders `PdfPreview` directly (not via `FilePreview`). Changes to `PdfPreview`'s layout structure must preserve this default behavior.
+- The `safeDecode` helper in `kb-breadcrumb.tsx` is used in the KB content page for filename derivation. Changes to the page layout must not break this import.
+- When adding exports to modified modules, check for `vi.mock` factories in tests that need updating.
+- Port collisions are a known issue when running dev servers across worktrees. QA should use `PORT=3001` fallback.
+
+### Edge Cases
+
+- **Payment banner visible:** When `subscriptionStatus === "past_due"` or `"unpaid"`, the dashboard layout renders a banner above `{children}` that consumes ~44px of vertical space. The height-aware width calculation must account for this by using the actual measured container height (via ResizeObserver), not a computed value.
+- **Multi-page PDF with pagination controls:** The pagination bar consumes ~40px below the PDF canvas. The available height for the canvas must subtract this when computing `effectiveWidth`.
+- **Single-page PDF:** No pagination controls rendered, so full container height is available for the canvas.
+- **Zero-width container during sidebar animation:** The `md:transition-[width] md:duration-200` on sidebars means the container width changes gradually. The ResizeObserver fires multiple times during animation. The current implementation handles this correctly (each resize triggers a state update), but rapid state updates may cause visible re-rendering. Consider using `requestAnimationFrame` debouncing if flicker is observed.
+- **Shared viewer at `/shared/[token]/page.tsx`:** Renders `PdfPreview` directly without the dashboard/KB layout wrapper. Changes to `PdfPreview`'s height calculation must work both with and without the flex containment chain. The `h-full` + `min-h-0` approach is safe because `min-h-0` has no effect when not inside a flex container.
+
 ## Alternative Approaches Considered
 
 | Approach | Reason Not Chosen |
 |----------|-------------------|
-| Use `height` prop on `<Page>` with JS calculation | Adds unnecessary JS complexity; CSS containment is sufficient |
-| Use `object-fit: contain` on canvas directly | `react-pdf` renders a `<canvas>` element whose dimensions are set programmatically; CSS `object-fit` does not affect canvas rendering |
+| CSS `[&_canvas]:max-h-full` on container | react-pdf docs explicitly warn: "avoid resizing the canvas element using CSS alone" -- causes layer misalignment between canvas, text layer, and annotation layer |
+| Use `height` prop on `<Page>` instead of `width` | When `width` is set, `height` is ignored (react-pdf v10 behavior). Using only `height` would lose responsive width-to-container behavior |
+| Use `object-fit: contain` on canvas directly | Same as CSS resize -- react-pdf manages canvas dimensions programmatically; CSS overrides desync layers |
 | Set fixed `max-height` (e.g., `calc(100vh - 120px)`) | Fragile -- depends on header heights staying fixed; breaks with payment banners or variable-height headers |
+| `min-h-0` only (no width calculation) | Viable as simpler alternative. Fixes truncation by allowing proper flex shrinking, but page may still be taller than viewport requiring in-pane scrolling. Acceptable UX but not optimal |
 
 ## Domain Review
 
@@ -137,7 +221,10 @@ This is a bug fix restoring correct rendering behavior, not a new UI feature. No
 ## References
 
 - Learning: [KB viewer layout patterns](../../learnings/2026-04-07-kb-viewer-react-context-layout-patterns.md)
+- Learning: [KB viewer action-button consolidation](../../learnings/2026-04-15-kb-viewer-consolidate-action-buttons.md)
 - PR #2423: Sidebar collapse toggle unification
 - PR #2415: Collapsible sidebars with Cmd+B shortcut
 - PR #2412: KB chat sidebar inline rendering on desktop
-- [react-pdf docs](https://www.npmjs.com/package/react-pdf) -- `<Page>` component accepts `width` and `height` props
+- [react-pdf v10 README](https://github.com/wojtekmaj/react-pdf/blob/v10.1.0/README.md) -- `<Page>` props: `width` takes precedence over `height`; avoid CSS canvas resizing
+- [react-pdf FAQ: layer misalignment](https://github.com/wojtekmaj/react-pdf/wiki/Frequently-Asked-Questions) -- "avoid resizing the canvas element using CSS alone"
+- [CSS flexbox `min-height: auto`](https://www.w3.org/TR/css-flexbox-1/#min-size-auto) -- W3C spec: flex items default to `min-height: auto`, which prevents shrinking below content size
