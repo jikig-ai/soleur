@@ -133,6 +133,25 @@ describe("validateConversationContext", () => {
     ).toThrow("path must be a valid file path");
   });
 
+  it("rejects dotfiles (leading dot, no real extension)", () => {
+    expect(() =>
+      validateConversationContext({
+        path: ".env",
+        type: "kb-viewer",
+      }),
+    ).toThrow("path must be a valid file path");
+  });
+
+  it("rejects paths exceeding 512 characters", () => {
+    const longPath = "a/".repeat(255) + "file.md";
+    expect(() =>
+      validateConversationContext({
+        path: longPath,
+        type: "kb-viewer",
+      }),
+    ).toThrow("path must be a valid file path");
+  });
+
   it("rejects unknown context type", () => {
     expect(() =>
       validateConversationContext({

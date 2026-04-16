@@ -7,12 +7,12 @@ import { KB_MAX_FILE_SIZE } from "@/lib/kb-constants";
  * Rejects: "..", leading "/", null bytes.
  */
 function isSafePath(path: string): boolean {
-  if (!path || path.includes("..") || path.startsWith("/") || path.includes("\0")) {
+  if (!path || path.length > 512 || path.includes("..") || path.startsWith("/") || path.includes("\0")) {
     return false;
   }
-  // Must have a file extension (contains at least one dot after the last slash)
+  // Must have a real file extension (dot that is not the first character)
   const filename = path.split("/").pop() ?? "";
-  return filename.includes(".");
+  return filename.lastIndexOf(".") > 0;
 }
 /** Allowed context types */
 const ALLOWED_CONTEXT_TYPES = new Set(["kb-viewer"]);
