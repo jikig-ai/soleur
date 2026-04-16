@@ -140,11 +140,11 @@ sources to network requests only.
 
 ## Acceptance Criteria
 
-- [ ] CodeQL default setup `threat_model` field reads `remote` (not `remote_and_local`)
-- [ ] Language list preserved after PATCH (all 5 entries: actions, javascript,
+- [x] CodeQL default setup `threat_model` field reads `remote` (not `remote_and_local`)
+- [x] Language list preserved after PATCH (all 5 entries: actions, javascript,
   javascript-typescript, python, typescript)
-- [ ] CodeQL re-analysis completes successfully after the config change
-- [ ] Previously dismissed alerts remain dismissed (not re-opened by the config change)
+- [x] CodeQL re-analysis completes successfully after the config change
+- [x] Previously dismissed alerts remain dismissed (not re-opened by the config change)
 - [x] Spec documentation updated to reflect the new threat model
 
 ## Test Scenarios
