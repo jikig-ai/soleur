@@ -38,9 +38,21 @@ export function SettingsShell({ children }: { children: React.ReactNode }) {
         className={`hidden shrink-0 border-r border-neutral-800 md:block
         md:transition-[width] md:duration-200 md:ease-out
         ${settingsCollapsed ? "md:w-0 md:overflow-hidden md:border-r-0" : "w-48 px-4 py-10"}`}>
-        <h2 className="mb-4 text-xs font-medium uppercase tracking-wider text-neutral-500">
-          Settings
-        </h2>
+        <div className="mb-4 flex items-center justify-between">
+          <h2 className="text-xs font-medium uppercase tracking-wider text-neutral-500">
+            Settings
+          </h2>
+          <button
+            onClick={toggleSettingsCollapsed}
+            aria-label="Collapse settings nav"
+            title="Collapse settings nav (⌘B)"
+            className="flex h-6 w-6 items-center justify-center rounded text-neutral-400 hover:bg-neutral-800 hover:text-white"
+          >
+            <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 19.5 8.25 12l7.5-7.5" />
+            </svg>
+          </button>
+        </div>
         <ul className="space-y-1">
           {SETTINGS_TABS.map((tab) => {
             const active =
@@ -64,16 +76,6 @@ export function SettingsShell({ children }: { children: React.ReactNode }) {
             );
           })}
         </ul>
-        <button
-          onClick={toggleSettingsCollapsed}
-          aria-label="Collapse settings nav"
-          className="mt-6 flex w-full items-center gap-2 rounded-lg px-3 py-2 text-xs text-neutral-500 transition-colors hover:bg-neutral-800/50 hover:text-neutral-200"
-        >
-          <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-            <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 19.5 8.25 12l7.5-7.5" />
-          </svg>
-          Collapse
-        </button>
       </nav>
 
       {/* Mobile tab bar */}
@@ -104,6 +106,7 @@ export function SettingsShell({ children }: { children: React.ReactNode }) {
           <button
             onClick={toggleSettingsCollapsed}
             aria-label="Expand settings nav"
+            title="Expand settings nav (⌘B)"
             className="hidden md:flex mb-4 h-8 w-8 items-center justify-center rounded-lg border border-neutral-800 text-neutral-400 hover:bg-neutral-800 hover:text-white"
           >
             <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
