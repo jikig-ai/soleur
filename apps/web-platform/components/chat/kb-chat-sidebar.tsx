@@ -21,6 +21,7 @@ export function KbChatSidebar({ open, onClose, contextPath }: KbChatSidebarProps
   const { setMessageCount, registerQuoteHandler } = useKbChat();
   const [resumedBanner, setResumedBanner] = useState<{ timestamp: string } | null>(null);
   const [openedEmitted, setOpenedEmitted] = useState<string | null>(null);
+  const historicalCountRef = useRef<number>(0);
   const quoteRef = useRef<ChatInputQuoteHandle | null>(null);
 
   // Register an insertQuote handler with KbChatContext while mounted.
@@ -63,6 +64,7 @@ export function KbChatSidebar({ open, onClose, contextPath }: KbChatSidebarProps
   useEffect(() => {
     setResumedBanner(null);
     setOpenedEmitted(null);
+    historicalCountRef.current = 0;
   }, [contextPath]);
 
   // Derive a file name from the context path for the header display.
@@ -76,6 +78,7 @@ export function KbChatSidebar({ open, onClose, contextPath }: KbChatSidebarProps
   const handleThreadResumed = useCallback(
     (_conversationId: string, timestamp: string, messageCount: number) => {
       setResumedBanner({ timestamp });
+      historicalCountRef.current = messageCount;
       setMessageCount(messageCount);
       if (openedEmitted !== contextPath) {
         void track("kb.chat.opened", { path: contextPath });
@@ -99,11 +102,11 @@ export function KbChatSidebar({ open, onClose, contextPath }: KbChatSidebarProps
   const handleMessageCountChange = useCallback(
     (count: number) => {
       setMessageCount(count);
-      // AC2: auto-dismiss the "Continuing from …" banner once the user has
-      // sent a new message in this session. `messages` on a resumed thread
-      // starts empty (the server doesn't replay history) — so any count > 0
-      // means fresh activity in the current session.
-      if (count > 0) {
+      // AC2+AC7: auto-dismiss the "Continuing from …" banner once the user
+      // sends a NEW message — i.e. count exceeds the historical message count.
+      // History loading (count going from 0 → historicalCount) must NOT dismiss
+      // the banner; only fresh user activity beyond the historical count does.
+      if (count > historicalCountRef.current) {
         setResumedBanner(null);
       }
     },
@@ -138,7 +141,7 @@ export function KbChatSidebar({ open, onClose, contextPath }: KbChatSidebarProps
         </header>
         {resumedBanner && (
           <div className="shrink-0 border-b border-neutral-800 bg-neutral-900/60 px-3 py-1.5 text-xs text-neutral-400">
-            Continuing from {new Date(resumedBanner.timestamp).toLocaleDateString()}
+            Continuing from {new Date(resumedBanner.timestamp).toLocaleString(undefined, { dateStyle: "short", timeStyle: "short" })}
           </div>
         )}
         <div className="flex min-h-0 min-w-0 flex-1 flex-col">

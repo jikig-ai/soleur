@@ -383,6 +383,46 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
     };
   }, [getWsUrlAndToken, teardown]);
 
+  /** Fetch and map conversation history from the messages API. Shared by
+   *  the mount-time effect (non-"new" IDs) and the resume effect ("new" → UUID). */
+  async function fetchConversationHistory(
+    targetId: string,
+    signal: AbortSignal,
+  ): Promise<ChatMessage[] | null> {
+    // Validate targetId is a safe path segment to satisfy CodeQL's
+    // request-forgery check. Allows UUIDs and alphanumeric IDs only.
+    // The server enforces ownership via user_id.
+    if (!/^[0-9a-zA-Z-]+$/.test(targetId)) return null;
+
+    const supabase = createClient();
+    const { data: { session } } = await supabase.auth.getSession();
+    if (!session?.access_token) return null;
+
+    const res = await fetch(
+      `/api/conversations/${targetId}/messages`,
+      {
+        headers: { Authorization: `Bearer ${session.access_token}` },
+        signal,
+      },
+    );
+    if (!res.ok) {
+      console.warn(`History fetch failed for ${targetId}: ${res.status}`);
+      return null;
+    }
+
+    const { messages: history } = await res.json();
+    return history.map((m: { id: string; role: string; content: string; leader_id: string | null }) => ({
+      id: m.id,
+      role: m.role as "user" | "assistant",
+      content: m.content,
+      type: "text" as const,
+      leaderId: m.leader_id ?? undefined,
+      // Assistant messages loaded from DB are persisted from stream_end —
+      // they are complete by definition. See #2139.
+      state: m.role === "assistant" ? ("done" as const) : undefined,
+    }));
+  }
+
   // Fetch conversation history on mount (once per conversationId)
   useEffect(() => {
     if (conversationId === "new") return;
@@ -390,32 +430,8 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
 
     (async () => {
       try {
-        const supabase = createClient();
-        const { data: { session } } = await supabase.auth.getSession();
-        if (!session?.access_token) return;
-
-        const res = await fetch(
-          `/api/conversations/${conversationId}/messages`,
-          {
-            headers: { Authorization: `Bearer ${session.access_token}` },
-            signal: controller.signal,
-          },
-        );
-        if (!res.ok) return;
-
-        const { messages: history } = await res.json();
-        const mapped: ChatMessage[] = history.map((m: { id: string; role: string; content: string; leader_id: string | null }) => ({
-          id: m.id,
-          role: m.role as "user" | "assistant",
-          content: m.content,
-          type: "text" as const,
-          leaderId: m.leader_id ?? undefined,
-          // Assistant messages loaded from DB are persisted from stream_end —
-          // they are complete by definition. Assigning state: "done" up-front
-          // eliminates the fallback heuristic that the rendering chain used
-          // to infer completion from `!messageState && content !== ""`. See #2139.
-          state: m.role === "assistant" ? ("done" as const) : undefined,
-        }));
+        const mapped = await fetchConversationHistory(conversationId, controller.signal);
+        if (!mapped || !mountedRef.current) return;
 
         if (activeStreamsRef.current.size === 0) {
           setMessages(prev => [...mapped, ...prev]);
@@ -428,6 +444,40 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
 
     return () => controller.abort();
   }, [conversationId]);
+
+  // Fetch history for resumed sessions where conversationId="new" (sidebar resume path).
+  // The existing effect above skips "new" IDs. When the server responds with
+  // session_resumed, realConversationId transitions from null → UUID. This effect
+  // catches that transition and fetches history for the resolved conversation. #2425
+  useEffect(() => {
+    if (!realConversationId) return;
+    if (realConversationId === conversationId) return; // existing effect handles this
+    if (conversationId !== "new") return; // only the sidebar resume path
+
+    const controller = new AbortController();
+
+    (async () => {
+      try {
+        const mapped = await fetchConversationHistory(realConversationId, controller.signal);
+        if (!mapped || !mountedRef.current) return;
+
+        // Deduplicate: filter out any messages already present from stream events
+        // that arrived while the fetch was in-flight. More robust than the
+        // activeStreamsRef.size === 0 guard: handles the window where a stream
+        // event arrives and completes before the fetch resolves.
+        setMessages(prev => {
+          const existingIds = new Set(prev.map(m => m.id));
+          const unique = mapped.filter(m => !existingIds.has(m.id));
+          return [...unique, ...prev];
+        });
+      } catch (err) {
+        if (err instanceof DOMException && err.name === "AbortError") return;
+        console.error("Failed to load resume history:", err);
+      }
+    })();
+
+    return () => controller.abort();
+  }, [realConversationId, conversationId]);
 
   useEffect(() => {
     mountedRef.current = true;
