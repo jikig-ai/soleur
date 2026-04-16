@@ -388,7 +388,7 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
   async function fetchConversationHistory(
     targetId: string,
     signal: AbortSignal,
-  ): Promise<ChatMessage[] | null> {
+  ): Promise<{ messages: ChatMessage[]; costData: UsageData | null } | null> {
     // Validate targetId is a safe path segment to satisfy CodeQL's
     // request-forgery check. Allows UUIDs and alphanumeric IDs only.
     // The server enforces ownership via user_id.
@@ -410,8 +410,8 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
       return null;
     }
 
-    const { messages: history } = await res.json();
-    return history.map((m: { id: string; role: string; content: string; leader_id: string | null }) => ({
+    const json = await res.json();
+    const mapped = json.messages.map((m: { id: string; role: string; content: string; leader_id: string | null }) => ({
       id: m.id,
       role: m.role as "user" | "assistant",
       content: m.content,
@@ -421,6 +421,21 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
       // they are complete by definition. See #2139.
       state: m.role === "assistant" ? ("done" as const) : undefined,
     }));
+
+    const costData: UsageData | null =
+      json.totalCostUsd > 0
+        ? { totalCostUsd: json.totalCostUsd, inputTokens: json.inputTokens, outputTokens: json.outputTokens }
+        : null;
+
+    return { messages: mapped, costData };
+  }
+
+  /** Seed usageData from fetched cost data. Uses functional updater so a
+   *  racing usage_update WS event is never overwritten by stale history. */
+  function seedCostData(costData: UsageData | null) {
+    if (costData) {
+      setUsageData(prev => prev ?? costData);
+    }
   }
 
   // Fetch conversation history on mount (once per conversationId)
@@ -430,12 +445,13 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
 
     (async () => {
       try {
-        const mapped = await fetchConversationHistory(conversationId, controller.signal);
-        if (!mapped || !mountedRef.current) return;
+        const result = await fetchConversationHistory(conversationId, controller.signal);
+        if (!result || !mountedRef.current) return;
 
         if (activeStreamsRef.current.size === 0) {
-          setMessages(prev => [...mapped, ...prev]);
+          setMessages(prev => [...result.messages, ...prev]);
         }
+        seedCostData(result.costData);
       } catch (err) {
         if (err instanceof DOMException && err.name === "AbortError") return;
         console.error("Failed to load history:", err);
@@ -458,8 +474,8 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
 
     (async () => {
       try {
-        const mapped = await fetchConversationHistory(realConversationId, controller.signal);
-        if (!mapped || !mountedRef.current) return;
+        const result = await fetchConversationHistory(realConversationId, controller.signal);
+        if (!result || !mountedRef.current) return;
 
         // Deduplicate: filter out any messages already present from stream events
         // that arrived while the fetch was in-flight. More robust than the
@@ -467,9 +483,10 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
         // event arrives and completes before the fetch resolves.
         setMessages(prev => {
           const existingIds = new Set(prev.map(m => m.id));
-          const unique = mapped.filter(m => !existingIds.has(m.id));
+          const unique = result.messages.filter(m => !existingIds.has(m.id));
           return [...unique, ...prev];
         });
+        seedCostData(result.costData);
       } catch (err) {
         if (err instanceof DOMException && err.name === "AbortError") return;
         console.error("Failed to load resume history:", err);

@@ -196,6 +196,43 @@ describe("useWebSocket — resume history fetch (AC1, AC3, AC4)", () => {
     });
   });
 
+  it("seeds usageData from cost fields in the history response", async () => {
+    // Override fetch mock to include cost data in response
+    fetchSpy.mockResolvedValue(
+      new Response(JSON.stringify({
+        messages: historyMessages,
+        totalCostUsd: 0.0042,
+        inputTokens: 1200,
+        outputTokens: 300,
+      }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+
+    const { useWebSocket } = await import("@/lib/ws-client");
+    const { result } = renderHook(() => useWebSocket("new"));
+
+    await connectAndAuth(result);
+
+    serverSend({
+      type: "session_resumed",
+      conversationId: "conv-existing-123",
+      resumedFromTimestamp: "2026-04-16T14:15:00Z",
+      messageCount: 3,
+    });
+
+    // Wait for history to load AND usageData to be seeded
+    await waitFor(() => {
+      expect(result.current.messages.length).toBe(3);
+      expect(result.current.usageData).toEqual({
+        totalCostUsd: 0.0042,
+        inputTokens: 1200,
+        outputTokens: 300,
+      });
+    });
+  });
+
   it("does NOT fetch history when conversationId is not 'new'", async () => {
     const { useWebSocket } = await import("@/lib/ws-client");
     // Using a real conversation ID (not "new") — the existing effect handles this
