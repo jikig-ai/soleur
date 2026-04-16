@@ -220,6 +220,57 @@ describe("start_session resumeByContextPath", () => {
     expect(mockMaybeSingle).not.toHaveBeenCalled();
   });
 
+  it("accepts resumeByContextPath with spaces and unicode (review #2412)", async () => {
+    const { session, sent } = createMockSession();
+    sessions.set("user-1", session);
+
+    await handleMessage(
+      "user-1",
+      JSON.stringify({
+        type: "start_session",
+        resumeByContextPath: "knowledge-base/overview/Au Chat Pôtan - Pitch Projet.pdf",
+      }),
+    );
+
+    // Should NOT get an error — path is valid
+    const err = sent.find((m) => m.type === "error" && /invalid resumeByContextPath/i.test(m.message));
+    expect(err).toBeUndefined();
+  });
+
+  it("rejects resumeByContextPath with path traversal (review #2412)", async () => {
+    const { session, sent } = createMockSession();
+    sessions.set("user-1", session);
+
+    await handleMessage(
+      "user-1",
+      JSON.stringify({
+        type: "start_session",
+        resumeByContextPath: "knowledge-base/../../../etc/passwd",
+      }),
+    );
+
+    const err = sent.find((m) => m.type === "error");
+    expect(err).toBeTruthy();
+    expect(mockMaybeSingle).not.toHaveBeenCalled();
+  });
+
+  it("rejects resumeByContextPath with dotfile (review #2412)", async () => {
+    const { session, sent } = createMockSession();
+    sessions.set("user-1", session);
+
+    await handleMessage(
+      "user-1",
+      JSON.stringify({
+        type: "start_session",
+        resumeByContextPath: "knowledge-base/.env",
+      }),
+    );
+
+    const err = sent.find((m) => m.type === "error");
+    expect(err).toBeTruthy();
+    expect(mockMaybeSingle).not.toHaveBeenCalled();
+  });
+
   it("start_session without resumeByContextPath behaves as before (pending)", async () => {
     const { session, sent } = createMockSession();
     sessions.set("user-1", session);

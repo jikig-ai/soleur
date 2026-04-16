@@ -20,62 +20,68 @@ interface FoundationCardsProps {
 }
 
 /**
- * Grid of foundation status cards (Vision, Brand, Validation, Legal).
+ * Foundation and operational task cards with progressive surfacing.
  *
- * Each card renders as either:
- * - `<a href>` (completed) — links to the KB path for viewing.
- * - `<button>` (incomplete) — invokes `onIncompleteClick` with the suggested prompt.
+ * Completed cards render as compact chips above the active grid.
+ * Incomplete cards render in the grid as clickable buttons.
  *
  * The outer section wrapper (FOUNDATIONS header, description copy, container
- * classes) is owned by the caller — this component renders only the inner grid.
+ * classes) is owned by the caller — this component renders only the inner
+ * chips row and grid.
  */
 export function FoundationCards({
   cards,
   getIconPath,
   onIncompleteClick,
 }: FoundationCardsProps): ReactElement {
+  const completed = cards.filter((c) => c.done);
+  const active = cards.filter((c) => !c.done);
+
   return (
-    <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-      {cards.map((card) =>
-        card.done ? (
-          <a
-            key={card.id}
-            href={`/dashboard/kb/${card.kbPath}`}
-            className="flex flex-col gap-2 rounded-xl border border-neutral-800/50 bg-neutral-900/30 p-4 text-left transition-colors hover:border-neutral-700"
-          >
-            <span className="text-lg text-green-500" aria-label="Complete">
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+    <>
+      {/* Completed chips */}
+      {completed.length > 0 && (
+        <div data-testid="completed-chips" className="mb-3 flex flex-wrap gap-2">
+          {completed.map((card) => (
+            <a
+              key={card.id}
+              href={`/dashboard/kb/${card.kbPath}`}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-neutral-800/50 bg-neutral-900/30 px-3 py-1.5 text-sm text-neutral-400 transition-colors hover:border-neutral-700 hover:text-neutral-300"
+            >
+              <svg className="h-3.5 w-3.5 text-green-500" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                 <path d="M20 6 9 17l-5-5" />
               </svg>
-            </span>
-            <span className="text-sm font-medium text-neutral-400">
               {card.title}
-            </span>
-            <span className="text-xs text-neutral-600">
-              View in Knowledge Base
-            </span>
-          </a>
-        ) : (
-          <button
-            key={card.id}
-            type="button"
-            onClick={() => onIncompleteClick(card.promptText)}
-            className="flex flex-col gap-2 rounded-xl border border-neutral-800 bg-neutral-900/50 p-4 text-left transition-colors hover:border-neutral-600"
-          >
-            <LeaderAvatar
-              leaderId={card.leaderId}
-              size="sm"
-              customIconPath={getIconPath(card.leaderId)}
-            />
-            <span className="text-sm font-medium text-white">
-              {card.title}
-            </span>
-            <span className="text-xs text-neutral-500">
-              {card.promptText}
-            </span>
-          </button>
-        ),
+            </a>
+          ))}
+        </div>
       )}
-    </div>
+
+      {/* Active card grid */}
+      {active.length > 0 && (
+        <div data-testid="active-grid" className="grid grid-cols-2 gap-3 md:grid-cols-4">
+          {active.map((card) => (
+            <button
+              key={card.id}
+              type="button"
+              onClick={() => onIncompleteClick(card.promptText)}
+              className="flex flex-col gap-2 rounded-xl border border-neutral-800 bg-neutral-900/50 p-4 text-left transition-colors hover:border-neutral-600"
+            >
+              <LeaderAvatar
+                leaderId={card.leaderId}
+                size="sm"
+                customIconPath={getIconPath(card.leaderId)}
+              />
+              <span className="text-sm font-medium text-white">
+                {card.title}
+              </span>
+              <span className="text-xs text-neutral-500">
+                {card.promptText}
+              </span>
+            </button>
+          ))}
+        </div>
+      )}
+    </>
   );
 }
