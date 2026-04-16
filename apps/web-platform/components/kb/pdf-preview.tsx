@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Document, Page, pdfjs } from "react-pdf";
 
 pdfjs.GlobalWorkerOptions.workerSrc = new URL(
@@ -27,29 +27,16 @@ export function PdfPreview({ src, filename, showDownload = true }: PdfPreviewPro
   const [error, setError] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
   const [containerWidth, setContainerWidth] = useState<number>();
-  const [containerHeight, setContainerHeight] = useState<number>();
-  const [pageDims, setPageDims] = useState<{ width: number; height: number } | null>(null);
 
   useEffect(() => {
     const el = containerRef.current;
     if (!el) return;
     const observer = new ResizeObserver(([entry]) => {
       setContainerWidth(entry.contentRect.width);
-      setContainerHeight(entry.contentRect.height);
     });
     observer.observe(el);
     return () => observer.disconnect();
   }, []);
-
-  // Constrain width so the rendered page fits within the container height.
-  // react-pdf computes canvas height from width * (pageH / pageW), so we
-  // reverse that to find the max width that keeps height <= containerHeight.
-  const effectiveWidth = useMemo(() => {
-    if (!containerWidth) return undefined;
-    if (!containerHeight || !pageDims) return containerWidth;
-    const maxWidthFromHeight = containerHeight * (pageDims.width / pageDims.height);
-    return Math.min(containerWidth, maxWidthFromHeight);
-  }, [containerWidth, containerHeight, pageDims]);
 
   if (error) {
     return (
@@ -94,14 +81,9 @@ export function PdfPreview({ src, filename, showDownload = true }: PdfPreviewPro
         >
           <Page
             pageNumber={pageNumber}
-            width={effectiveWidth}
+            width={containerWidth}
             renderTextLayer={false}
             renderAnnotationLayer={false}
-            className="mx-auto"
-            onLoadSuccess={(page) => {
-              const viewport = page.getViewport({ scale: 1 });
-              setPageDims({ width: viewport.width, height: viewport.height });
-            }}
           />
         </Document>
       </div>
