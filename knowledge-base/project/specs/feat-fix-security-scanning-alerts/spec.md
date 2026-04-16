@@ -41,6 +41,6 @@ findings because CodeQL is not a required status check.
 
 ## Acceptance Criteria
 
-- [ ] `gh api repos/jikig-ai/soleur/code-scanning/alerts --jq '[.[] | select(.state == "open") | select(.rule.security_severity_level == "critical" or .rule.security_severity_level == "high")] | length'` returns `0`
-- [ ] "CI Required" ruleset includes CodeQL status check
-- [ ] Next PR to main shows CodeQL as a required check
+- [x] `gh api repos/jikig-ai/soleur/code-scanning/alerts --jq '[.[] | select(.state == "open") | select(.rule.security_severity_level == "critical" or .rule.security_severity_level == "high")] | length'` returns `0`
+- [x] "CI Required" ruleset includes CodeQL status check
+- [x] Next PR to main shows CodeQL as a required check

@@ -27,9 +27,9 @@ flow. Every flagged file has proper defenses: hardcoded env-var URLs, symlink re
 
 ## Acceptance Criteria
 
-- [ ] Zero open CodeQL alerts: `gh api repos/jikig-ai/soleur/code-scanning/alerts --jq '[.[] | select(.state == "open")] | length'` returns `0`
-- [ ] "CI Required" ruleset includes 4 required status checks (test, dependency-review, e2e, CodeQL)
-- [ ] PR #2416 shows CodeQL as a required check with status `success` (not just `expected`)
+- [x] Zero open CodeQL alerts: `gh api repos/jikig-ai/soleur/code-scanning/alerts --jq '[.[] | select(.state == "open")] | length'` returns `0`
+- [x] "CI Required" ruleset includes 4 required status checks (test, dependency-review, e2e, CodeQL)
+- [x] PR #2416 shows CodeQL as a required check with status `success` (not just `expected`)
 
 ## Test Scenarios
 
