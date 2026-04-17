@@ -1,10 +1,19 @@
 import { describe, test, expect, vi, beforeEach, afterEach } from "vitest";
-import { mockQueryChain } from "./helpers/mock-supabase";
+import { mockQueryChain, mockRpcResult } from "./helpers/mock-supabase";
 
-const { mockFrom } = vi.hoisted(() => ({ mockFrom: vi.fn() }));
+const { mockFrom, mockRpc } = vi.hoisted(() => ({
+  mockFrom: vi.fn(),
+  mockRpc: vi.fn(),
+}));
 
 vi.mock("@/lib/supabase/service", () => ({
-  createServiceClient: vi.fn(() => ({ from: mockFrom })),
+  createServiceClient: vi.fn(() => ({ from: mockFrom, rpc: mockRpc })),
+}));
+
+// Silence expected `reportSilentFallback` output in error-path tests. The
+// helper writes to pino + Sentry; we only care that the loader returns null.
+vi.mock("@/server/observability", () => ({
+  reportSilentFallback: vi.fn(),
 }));
 
 import {
@@ -31,8 +40,9 @@ describe("loadApiUsageForUser", () => {
 
   test("returns empty rows + 0 MTD when user has no conversations", async () => {
     const listChain = mockQueryChain([], null);
-    const monthChain = mockQueryChain([], null, 0);
-    mockFrom.mockImplementationOnce(() => listChain).mockImplementationOnce(() => monthChain);
+    mockFrom.mockImplementationOnce(() => listChain);
+    // Zero-match RPC returns an empty array, NOT [{total: null, n: 0}].
+    mockRpc.mockReturnValueOnce(mockRpcResult([]));
 
     const result = await loadApiUsageForUser(VALID_UUID);
 
@@ -68,12 +78,11 @@ describe("loadApiUsageForUser", () => {
       ],
       null,
     );
-    const monthChain = mockQueryChain(
-      [{ total_cost_usd: "0.004200" }, { total_cost_usd: "0.012500" }],
-      null,
-      2,
+    mockFrom.mockImplementationOnce(() => listChain);
+    // Postgres SUM(0.004200, 0.012500) = 0.016700 exact.
+    mockRpc.mockReturnValueOnce(
+      mockRpcResult([{ total: "0.016700", n: 2 }]),
     );
-    mockFrom.mockImplementationOnce(() => listChain).mockImplementationOnce(() => monthChain);
 
     const result = await loadApiUsageForUser(VALID_UUID);
 
@@ -101,8 +110,8 @@ describe("loadApiUsageForUser", () => {
       ],
       null,
     );
-    const monthChain = mockQueryChain([], null, 0);
-    mockFrom.mockImplementationOnce(() => listChain).mockImplementationOnce(() => monthChain);
+    mockFrom.mockImplementationOnce(() => listChain);
+    mockRpc.mockReturnValueOnce(mockRpcResult([]));
 
     const result = await loadApiUsageForUser(VALID_UUID);
 
@@ -112,25 +121,27 @@ describe("loadApiUsageForUser", () => {
     expect(result!.mtdCount).toBe(0);
   });
 
-  test("month query uses UTC boundary", async () => {
+  test("month query uses RPC with UTC boundary", async () => {
     const listChain = mockQueryChain([], null);
-    const monthChain = mockQueryChain([], null, 0);
-    mockFrom.mockImplementationOnce(() => listChain).mockImplementationOnce(() => monthChain);
+    mockFrom.mockImplementationOnce(() => listChain);
+    mockRpc.mockReturnValueOnce(mockRpcResult([]));
 
     await loadApiUsageForUser(VALID_UUID);
 
-    // This test's timezone-decision contract: month boundary is UTC midnight
-    // of month-1. See plan §"Timezone Decision (Kieran P0)".
-    expect(monthChain.gte).toHaveBeenCalledWith(
-      "created_at",
-      "2026-04-01T00:00:00.000Z",
-    );
+    // Month boundary is UTC midnight of the 1st, passed as the `since`
+    // RPC argument. Arg names match SQL parameter names (uid, since) —
+    // snake_case vs camelCase is preserved literally by Supabase JS v2.
+    expect(mockRpc).toHaveBeenCalledTimes(1);
+    expect(mockRpc).toHaveBeenCalledWith("sum_user_mtd_cost", {
+      uid: VALID_UUID,
+      since: "2026-04-01T00:00:00.000Z",
+    });
   });
 
   test("list query enforces order, limit, and cost > 0 filter (AC3 regression guard)", async () => {
     const listChain = mockQueryChain([], null);
-    const monthChain = mockQueryChain([], null, 0);
-    mockFrom.mockImplementationOnce(() => listChain).mockImplementationOnce(() => monthChain);
+    mockFrom.mockImplementationOnce(() => listChain);
+    mockRpc.mockReturnValueOnce(mockRpcResult([]));
 
     await loadApiUsageForUser(VALID_UUID);
 
@@ -142,17 +153,21 @@ describe("loadApiUsageForUser", () => {
     expect(listChain.eq).toHaveBeenCalledWith("user_id", VALID_UUID);
   });
 
-  test("month-scope query enforces cost > 0 filter and defensive limit", async () => {
+  test("MTD sum uses RPC — no client-side reduce, no second .from() call", async () => {
     const listChain = mockQueryChain([], null);
-    const monthChain = mockQueryChain([], null, 0);
-    mockFrom.mockImplementationOnce(() => listChain).mockImplementationOnce(() => monthChain);
+    mockFrom.mockImplementationOnce(() => listChain);
+    mockRpc.mockReturnValueOnce(mockRpcResult([{ total: "1.234567", n: 3 }]));
 
-    await loadApiUsageForUser(VALID_UUID);
+    const result = await loadApiUsageForUser(VALID_UUID);
 
-    expect(monthChain.gt).toHaveBeenCalledWith("total_cost_usd", 0);
-    expect(monthChain.eq).toHaveBeenCalledWith("user_id", VALID_UUID);
-    // Defensive cap — see MTD_SCOPE_LIMIT in server/api-usage.ts.
-    expect(monthChain.limit).toHaveBeenCalledWith(1000);
+    // Exactly one .from() call (list query); month scope is an RPC.
+    expect(mockFrom).toHaveBeenCalledTimes(1);
+    expect(mockFrom).toHaveBeenCalledWith("conversations");
+    expect(mockRpc).toHaveBeenCalledTimes(1);
+    // Total is read directly from the single NUMERIC string in the RPC
+    // body, not summed in JS.
+    expect(result!.mtdTotalUsd).toBeCloseTo(1.234567, 6);
+    expect(result!.mtdCount).toBe(3);
   });
 
   test("resolves domain labels: known → domain, null → '—', unknown → '—'", async () => {
@@ -165,8 +180,8 @@ describe("loadApiUsageForUser", () => {
       ],
       null,
     );
-    const monthChain = mockQueryChain([], null, 3);
-    mockFrom.mockImplementationOnce(() => listChain).mockImplementationOnce(() => monthChain);
+    mockFrom.mockImplementationOnce(() => listChain);
+    mockRpc.mockReturnValueOnce(mockRpcResult([{ total: "0.003000", n: 3 }]));
 
     const result = await loadApiUsageForUser(VALID_UUID);
 
@@ -178,17 +193,19 @@ describe("loadApiUsageForUser", () => {
 
   test("returns null when list query errors", async () => {
     const listChain = mockQueryChain(null, { message: "boom" });
-    const monthChain = mockQueryChain([], null, 0);
-    mockFrom.mockImplementationOnce(() => listChain).mockImplementationOnce(() => monthChain);
+    mockFrom.mockImplementationOnce(() => listChain);
+    mockRpc.mockReturnValueOnce(mockRpcResult([]));
 
     const result = await loadApiUsageForUser(VALID_UUID);
     expect(result).toBeNull();
   });
 
-  test("returns null when month query errors", async () => {
+  test("returns null when month RPC errors", async () => {
     const listChain = mockQueryChain([], null);
-    const monthChain = mockQueryChain(null, { message: "boom" }, null);
-    mockFrom.mockImplementationOnce(() => listChain).mockImplementationOnce(() => monthChain);
+    mockFrom.mockImplementationOnce(() => listChain);
+    mockRpc.mockReturnValueOnce(
+      mockRpcResult(null, { code: "XX000", message: "boom" }),
+    );
 
     const result = await loadApiUsageForUser(VALID_UUID);
     expect(result).toBeNull();
@@ -196,8 +213,10 @@ describe("loadApiUsageForUser", () => {
 
   test("returns null when both queries error", async () => {
     const listChain = mockQueryChain(null, { message: "boom" });
-    const monthChain = mockQueryChain(null, { message: "boom" }, null);
-    mockFrom.mockImplementationOnce(() => listChain).mockImplementationOnce(() => monthChain);
+    mockFrom.mockImplementationOnce(() => listChain);
+    mockRpc.mockReturnValueOnce(
+      mockRpcResult(null, { code: "XX000", message: "boom" }),
+    );
 
     const result = await loadApiUsageForUser(VALID_UUID);
     expect(result).toBeNull();
@@ -218,8 +237,10 @@ describe("loadApiUsageForUser", () => {
       ],
       null,
     );
-    const monthChain = mockQueryChain([{ total_cost_usd: "0.123456" }], null, 1);
-    mockFrom.mockImplementationOnce(() => listChain).mockImplementationOnce(() => monthChain);
+    mockFrom.mockImplementationOnce(() => listChain);
+    mockRpc.mockReturnValueOnce(
+      mockRpcResult([{ total: "0.123456", n: 1 }]),
+    );
 
     const result = await loadApiUsageForUser(VALID_UUID);
 
@@ -228,6 +249,8 @@ describe("loadApiUsageForUser", () => {
     expect(typeof result!.rows[0].outputTokens).toBe("number");
     expect(typeof result!.rows[0].costUsd).toBe("number");
     expect(result!.rows[0].costUsd).toBeCloseTo(0.123456, 6);
+    expect(typeof result!.mtdTotalUsd).toBe("number");
+    expect(result!.mtdTotalUsd).toBeCloseTo(0.123456, 6);
   });
 
   test("throws on non-UUID input before hitting Supabase", async () => {
