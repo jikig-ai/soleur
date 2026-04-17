@@ -178,7 +178,7 @@ jobs:
               # healthy upstream). Without this guard, jq's parse error under bash -e kills
               # the step before the retry loop can react (#2214, #2236).
               # AGENTS.md: cq-ci-steps-polling-json-endpoints-under.
-              # Mirrors the twin guard at lines 124-131 in the same file.
+              # Mirrors the twin guard in the "Verify deploy script completion" step above.
               if ! echo "$HEALTH" | jq -e . >/dev/null 2>&1; then
                 echo "Attempt $i/$HEALTH_POLL_MAX_ATTEMPTS: non-JSON body from /health, retrying"
                 sleep "$HEALTH_POLL_INTERVAL_S"
