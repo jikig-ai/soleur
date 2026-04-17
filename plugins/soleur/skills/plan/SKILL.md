@@ -167,14 +167,14 @@ After all research steps complete, consolidate findings:
 
 ### 1.7.5. Code-Review Overlap Check
 
-After consolidating research and before writing the plan structure, check whether any open code-review issues touch files the plan intends to modify. This prevents two failure modes:
+After the plan draft has enumerated its `## Files to Edit` and `## Files to Create` sections (i.e., run this check AFTER Step 2 Issue Planning produces the file list, and BEFORE Step 4 Detail Level selection), verify whether any open code-review issues touch files the plan intends to modify. This prevents two failure modes:
 
 - **Rework:** a pre-existing scope-out names a file the plan will rewrite — if unnoticed, the plan ships, then the scope-out surfaces and drives a second refactor PR that could have been folded in.
 - **Double-counting:** the review phase files a new scope-out for a concern a still-open issue already tracks.
 
 **Procedure:**
 
-1. Enumerate the files the plan will modify. Source both the `## Files to edit` and `## Files to create` sections from research findings. If those sections are not yet drafted, extract the file paths mentioned in the feature description and research output.
+1. Read the plan's `## Files to Edit` and `## Files to Create` sections (the plan draft exists by this point). Extract every file path. If the plan is still being drafted and those sections are not yet written, defer this check until they exist rather than guessing from the feature description — guessing produces false negatives.
 
 2. Query open code-review issues. **Use two-stage piping (`--json` then a standalone `jq --arg`), not single-stage `gh --jq` with `--arg`.** The `gh` CLI does NOT forward `--arg` to its embedded jq; a single-stage form produces `unknown arguments` at runtime. See learning `knowledge-base/project/learnings/2026-04-15-gh-jq-does-not-forward-arg-to-jq.md`.
 

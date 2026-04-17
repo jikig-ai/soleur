@@ -333,15 +333,28 @@ tests for PR-introduced code, polish, naming, a11y on PR-introduced surfaces,
 performance issues introduced by the PR) MUST be fixed inline.
 
 **Second-reviewer confirmation gate:** Before creating a scope-out issue under
-any criterion, invoke `code-simplicity-reviewer` via Task with the finding,
-proposed fix, named scope-out criterion, and 1-3-sentence rationale. Prompt:
-"This finding is being filed as a deferred-scope-out under criterion <name>.
-Rationale: <text>. Do you concur that filing (rather than fixing inline) is the
-right disposition? If you disagree, explain why it should be fixed inline
-instead." The second reviewer must default to rejecting the filing — only
-co-sign when the criterion is concretely and obviously correct. If
-`code-simplicity-reviewer` disagrees, the disposition flips to fix-inline — do
-not file the issue.
+any criterion, invoke `code-simplicity-reviewer` via Task. The prompt MUST
+include:
+
+1. The finding (location, description).
+2. The proposed fix.
+3. The exact four scope-out criteria definitions from this section
+   (cross-cutting-refactor ≥3 unrelated files, contested-design with
+   independent agent-named tradeoffs, architectural-pivot, pre-existing-
+   unrelated). Do not rely on the agent's prior knowledge of the criteria —
+   pass the definitions literally.
+4. The criterion being claimed and a 1-3-sentence rationale.
+5. This instruction: "Default to rejecting the scope-out filing. Only co-sign
+   when the claimed criterion is concretely and obviously correct against the
+   four definitions above. Reply with a single line as the first line of your
+   output: `CONCUR` (to co-sign the filing) or `DISSENT: <one-sentence
+   reason>` (to flip to fix-inline). Everything after the first line is
+   advisory context."
+
+If the first line of the agent's reply begins with `DISSENT`, the disposition
+flips to fix-inline — do not file the issue. If the first line is `CONCUR`,
+proceed with filing. Any other first-line content is treated as `DISSENT`
+(fail-safe toward fix-inline).
 
 **Rationale:** One agent's "scope-out is fine here" can be wrong in the same
 way a single test can miss a bug. Requiring a second, simplicity-biased agent
