@@ -1,0 +1,74 @@
+# Custom semgrep rules that mirror CodeQL queries we care about but which are
+# NOT covered by the public rule packs (p/javascript, p/owasp-top-ten,
+# p/security-audit, --config=auto). Loaded alongside the stock rule packs.
+#
+# Coverage goal: close the "CI CodeQL surprises us after push" gap for
+# JS/TS patterns we've already been burned by.
+#
+# Rule numbering: prefix every rule ID with `soleur.` so they are visibly
+# distinct from upstream rules in semgrep output.
+#
+# Starter file — add a new rule any time CodeQL flags a pattern in CI that
+# semgrep didn't catch locally. The rule does not have to be perfect; it
+# only has to catch the exact shape of the real violation so we regress-
+# test future changes against our own past mistakes.
+
+rules:
+  # Mirrors CodeQL js/file-system-race.
+  # Origin: PR #2463 flagged stat + readFile on the same path as a TOCTOU.
+  # The fix is O_NOFOLLOW + fstat on an fd handle.
+  - id: soleur.js-file-system-race-stat-then-readfile
+    patterns:
+      - pattern-inside: |
+          function $F(...) {
+            ...
+          }
+      - pattern-either:
+          - pattern: |
+              await fs.promises.stat($PATH)
+              ...
+              await fs.promises.readFile($PATH)
+          - pattern: |
+              fs.statSync($PATH)
+              ...
+              fs.readFileSync($PATH)
+    message: |
+      Possible TOCTOU race: fs.promises.stat($PATH) followed by
+      fs.promises.readFile($PATH) on the same path (CodeQL js/file-system-race).
+      An attacker can swap the file between the two syscalls. Switch to an
+      fd-based read: fs.promises.open(path, O_RDONLY | O_NOFOLLOW) then
+      handle.stat() and handle.readFile().
+    severity: WARNING
+    languages: [javascript, typescript]
+    metadata:
+      category: security
+      cwe: "CWE-367: Time-of-check to Time-of-use"
+      owasp: "A01:2021 - Broken Access Control"
+      mirrors: "CodeQL: js/file-system-race"
+      soleur-origin: "PR #2463"
+
+  # Mirrors CodeQL js/file-system-race variant with an lstat pre-check that
+  # is superseded by an O_NOFOLLOW fd path. The pre-check is dead code and
+  # widens the TOCTOU window.
+  - id: soleur.js-file-system-race-lstat-before-open
+    patterns:
+      - pattern-inside: |
+          function $F(...) {
+            ...
+          }
+      - pattern: |
+          await fs.promises.lstat($PATH)
+          ...
+          await fs.promises.open($PATH, ...)
+    message: |
+      Redundant lstat pre-check ahead of fs.promises.open($PATH). The open
+      call with O_NOFOLLOW and the subsequent fd-level fstat are the
+      authoritative checks; the lstat only widens the TOCTOU window.
+      Remove the lstat and rely on the fd path (CodeQL js/file-system-race).
+    severity: WARNING
+    languages: [javascript, typescript]
+    metadata:
+      category: security
+      cwe: "CWE-367: Time-of-check to Time-of-use"
+      mirrors: "CodeQL: js/file-system-race"
+      soleur-origin: "PR #2463"

@@ -156,15 +156,18 @@ These agents are run ONLY when the PR matches specific criteria. Check the PR fi
 
 - `test-design-reviewer`: Scores tests against Farley's 8 properties, produces a weighted Test Quality Score with letter grade and top 3 improvement recommendations
 
-**If semgrep CLI is installed (`which semgrep` succeeds) and PR modifies source code files:**
+**If PR modifies source code files, semgrep-sast is a mandatory gate:**
 
 14. Task semgrep-sast(PR content) - Deterministic SAST scanning for known vulnerability patterns
 
 **When to run SAST agent:**
 
-- `which semgrep` returns 0 (semgrep binary found in PATH)
 - PR modifies source code files (*.py,*.js, *.ts,*.rb, *.go,*.java, *.rs,*.swift, *.kt, etc.)
 - Not needed for documentation-only or config-only changes
+
+**Bootstrap (mandatory before spawning the agent):** Run [ensure-semgrep.sh](./scripts/ensure-semgrep.sh) from the repo root. The script checks PATH first, then auto-installs via brew → pipx → `pip --user` in that order. Exits 0 when semgrep is reachable. Exit 1 means an install was attempted and failed; exit 2 means no install path was available (no brew, pipx, or python3 with pip). On non-zero exit, print the script's stderr to the user and abort the review. Do NOT silently skip — the deterministic SAST pass is what catches CodeQL-equivalent patterns like `js/file-system-race` before push.
+
+**Custom rules file:** [semgrep-custom-rules.yaml](./references/semgrep-custom-rules.yaml) ships alongside the public rule packs and covers CodeQL queries the public packs miss (e.g. the TOCTOU patterns that blocked PR #2463 in CI). The semgrep-sast agent loads it via `--config=plugins/soleur/skills/review/references/semgrep-custom-rules.yaml`. Extend it whenever a CodeQL finding in CI was not caught locally — the goal is no-surprises on CI.
 
 **What this agent checks:**
 

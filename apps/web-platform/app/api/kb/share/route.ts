@@ -6,6 +6,7 @@ import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { validateOrigin, rejectCsrf } from "@/lib/auth/validate-origin";
 import { isPathInWorkspace } from "@/server/sandbox";
 import { MAX_BINARY_SIZE } from "@/server/kb-binary-response";
+import { hashStream } from "@/server/kb-content-hash";
 import logger from "@/server/logger";
 
 /** POST — generate a share link for a KB document. */
@@ -48,44 +49,78 @@ export async function POST(request: Request) {
   }
 
   // Validate the document exists in the user's workspace and is a regular
-  // file (not a directory, not a symlink) within the size limit. Symlink +
-  // size checks are point-of-use per the service-role-idor learning: every
-  // operation re-validates, even on owner-supplied paths.
+  // file. Symlink + size + type checks are done via O_NOFOLLOW + fstat on
+  // the fd we hash from — no pre-lstat, since the pre-lstat only opens a
+  // TOCTOU window the fd path already closes (CodeQL js/file-system-race).
   const kbRoot = path.join(userData.workspace_path, "knowledge-base");
   const fullPath = path.join(kbRoot, body.documentPath);
   if (!isPathInWorkspace(fullPath, kbRoot)) {
     return NextResponse.json({ error: "Invalid document path" }, { status: 400 });
   }
-  let lstat: fs.Stats;
+
+  let contentHash: string;
+  let handle: fs.promises.FileHandle;
   try {
-    lstat = await fs.promises.lstat(fullPath);
-  } catch {
+    handle = await fs.promises.open(
+      fullPath,
+      fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW,
+    );
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === "ELOOP" || code === "EMLINK") {
+      return NextResponse.json({ error: "Invalid document path" }, { status: 400 });
+    }
     return NextResponse.json({ error: "File not found" }, { status: 404 });
   }
-  if (lstat.isSymbolicLink() || !lstat.isFile()) {
-    return NextResponse.json({ error: "Invalid document path" }, { status: 400 });
-  }
-  if (lstat.size > MAX_BINARY_SIZE) {
-    return NextResponse.json(
-      { error: "File exceeds maximum size limit" },
-      { status: 413 },
-    );
+  try {
+    const fdStat = await handle.stat();
+    if (!fdStat.isFile()) {
+      return NextResponse.json({ error: "Invalid document path" }, { status: 400 });
+    }
+    if (fdStat.size > MAX_BINARY_SIZE) {
+      return NextResponse.json(
+        { error: "File exceeds maximum size limit" },
+        { status: 413 },
+      );
+    }
+    contentHash = await hashStream(handle.createReadStream({ autoClose: false }));
+  } finally {
+    await handle.close().catch(() => {});
   }
 
   // Check if an active (non-revoked) share already exists for this document.
+  // If the stored hash still matches the current file, return the existing
+  // token (idempotent happy path). If the hash differs, the user is re-sharing
+  // a modified file — revoke the stale row and fall through to issue a fresh
+  // token. This keeps creation user-friendly after legitimate edits without
+  // coupling it to the view-time 410 branch.
   const { data: existing } = await serviceClient
     .from("kb_share_links")
-    .select("token")
+    .select("id, token, content_sha256")
     .eq("user_id", user.id)
     .eq("document_path", body.documentPath)
     .eq("revoked", false)
     .maybeSingle();
 
   if (existing) {
-    return NextResponse.json({
-      token: existing.token,
-      url: `/shared/${existing.token}`,
-    });
+    if (existing.content_sha256 === contentHash) {
+      return NextResponse.json({
+        token: existing.token,
+        url: `/shared/${existing.token}`,
+      });
+    }
+    await serviceClient
+      .from("kb_share_links")
+      .update({ revoked: true })
+      .eq("id", existing.id);
+    logger.info(
+      {
+        event: "share_reissued_on_content_drift",
+        userId: user.id,
+        documentPath: body.documentPath,
+      },
+      "kb/share: revoked stale share and issuing new token (content changed)",
+    );
   }
 
   // Generate a new cryptographically random token.
@@ -96,9 +131,34 @@ export async function POST(request: Request) {
       user_id: user.id,
       token,
       document_path: body.documentPath,
+      content_sha256: contentHash,
     });
 
   if (insertError) {
+    // 23505 = unique_violation. The partial unique index
+    // kb_share_links_one_active_per_doc guarantees one active share per
+    // (user_id, document_path), so a concurrent POST won that race. Read
+    // the winner's row and return its token if hashes match; otherwise
+    // surface the conflict as 409 (user can retry).
+    if ((insertError as { code?: string }).code === "23505") {
+      const { data: winner } = await serviceClient
+        .from("kb_share_links")
+        .select("token, content_sha256")
+        .eq("user_id", user.id)
+        .eq("document_path", body.documentPath)
+        .eq("revoked", false)
+        .maybeSingle();
+      if (winner && winner.content_sha256 === contentHash) {
+        return NextResponse.json({
+          token: winner.token,
+          url: `/shared/${winner.token}`,
+        });
+      }
+      return NextResponse.json(
+        { error: "Concurrent share creation — retry" },
+        { status: 409 },
+      );
+    }
     logger.error({ err: insertError }, "kb/share: failed to create share link");
     return NextResponse.json(
       { error: "Failed to create share link" },
