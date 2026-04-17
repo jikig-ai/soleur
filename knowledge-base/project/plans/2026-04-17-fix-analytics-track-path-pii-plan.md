@@ -5,9 +5,42 @@ spec: knowledge-base/project/specs/feat-fix-analytics-track-path-pii/spec.md
 brainstorm: knowledge-base/project/brainstorms/2026-04-17-analytics-track-path-pii-brainstorm.md
 branch: fix-analytics-track-path-pii
 status: ready-for-review
+deepened: 2026-04-17
 ---
 
 # Plan: Fix analytics-track `path` prop PII leak (#2462)
+
+## Enhancement Summary
+
+**Deepened on:** 2026-04-17
+**Sections enhanced:** Phase 2 (regex correctness), Phase 1 (test cases), Risks & Sharp Edges (ReDoS + query-string behavior)
+**Research method:** Executable regex verification against all 11 planned test scenarios via Node.js runtime (not just static review).
+
+### Key Improvements
+
+1. **Critical regex fix — email pattern must exclude `/`.** The originally-planned
+   `EMAIL_RE = /\S+@\S+\.\S+/g` is catastrophically greedy: `\S` matches
+   forward slashes, so `/users/alice@example.com/settings` matches as ONE
+   giant email `users/alice@example.com/settings` and the entire path
+   collapses to `[email]`. Verified by running the planned regex against spec
+   cases 1, 7, 13, 14 — all four fail with the greedy pattern. The correct
+   pattern is `/[^\s/]+@[^\s/]+\.[^\s/]+/g` (exclude whitespace AND slashes),
+   which passes all 11 cases including multi-segment paths and same-pattern
+   duplicates. This fix MUST be in Phase 2 — without it, the feature ships
+   broken and RED tests catch it but the planned implementation is wrong.
+2. **Query-string defense-in-depth (documented, not scoped out).** Spec §"Out
+   of Scope" says "Plausible strips query strings" — true, but if a caller
+   DOES send `/?email=a@b.com`, the scrubber still fires and produces
+   `/?email=[email]`. This is the correct behavior: belt-and-suspenders. The
+   plan now documents this explicitly in Risks so a future reviewer doesn't
+   "simplify" by short-circuiting on `?`.
+3. **Expanded edge-case test coverage.** Added two new cases (16 and 17)
+   covering plus-addressing / multi-part TLD emails and non-email `@handle`
+   strings (e.g., `/twitter/@handle` — must NOT scrub because there's no
+   `.TLD` suffix). These guard against regex drift during future edits.
+4. **ReDoS smoke-test verified, not just argued.** A 2000-char no-match
+   input scrubs in ~5ms. The plan already asserted "no ReDoS exposure" —
+   deepening verified it empirically.
 
 ## Overview
 
@@ -38,6 +71,7 @@ output for paths that contain none of the three patterns (TR5).
 | Tests live at `apps/web-platform/app/api/analytics/track/__tests__/sanitize.test.ts` (TR3, "verify at plan time") | Tests live at `apps/web-platform/test/api-analytics-track.test.ts` (top-level `test/` convention per `vitest.config.ts` projects config — `include: ["test/**/*.test.ts", "lib/**/*.test.ts"]`). No colocated `__tests__` dir exists in this app. | Add new pure-function tests at `apps/web-platform/test/sanitize-props.test.ts` (unit project), and add one integration assertion for scrub-at-the-route to the existing `apps/web-platform/test/api-analytics-track.test.ts`. |
 | Spec hints route-level `log.debug({scrubbed}, ...)` already exists for `dropped` | Confirmed: `route.ts:73-76` already logs `dropped` at debug via `log.debug({ dropped }, "...")`. | Mirror the exact pattern for `scrubbed`. One extra `if (scrubbed.length > 0) log.debug(...)` line. |
 | Spec calls scrub "only applies to `path` key" (FR5) | `ALLOWED_PROP_KEYS` is currently `Set(["path"])` — `path` is the only allowlisted key. | Scrub logic keys on the literal string `"path"` inside `sanitizeProps`. If a future PR adds a new allowlisted key, its security review decides whether the scrubber applies. |
+| Spec FR1 states email pattern is `\S+@\S+\.\S+` | `\S` matches `/`, making the pattern greedy across path segments. On `/users/alice@example.com/settings` the WHOLE path matches as one email and collapses to `[email]`. Verified empirically. | Use `[^\s/]+@[^\s/]+\.[^\s/]+` instead (exclude slashes). Semantics preserved: still matches any non-whitespace non-slash on either side of `@` plus `.` plus non-whitespace non-slash. Spec intent ("scrub literal email addresses") fully met; the slash exclusion is the bounding constraint required to keep matches within a single path segment. Plan-level deviation from spec FR1 text noted explicitly so a future reader doesn't "fix" the regex back to the greedy form. |
 
 ## Open Code-Review Overlap
 
@@ -127,6 +161,24 @@ Extra RED cases (locks in design decisions beyond the 10-case minimum):
   `sanitizeProps({ path: "x", email: "a@b.com", fingerprint: "f" })` →
   `clean: { path: "x" }`, `dropped: ["email","fingerprint"]`,
   `scrubbed: []`.
+- **Case 16 — email greed regression guard (deepen finding):** the planned
+  spec regex `\S+@\S+\.\S+` would match the ENTIRE path
+  `/users/alice@example.com/settings` as one greedy email and collapse it to
+  `[email]`. The correct `[^\s/]+@[^\s/]+\.[^\s/]+` bounds to segment.
+  Additionally test realistic email variants within a path:
+  - `/u/alice.bob@example.co.uk/s` → `/u/[email]/s` (multi-part TLD).
+  - `/u/alice+tag@example.com/x` → `/u/[email]/x` (plus-addressing).
+  - `/u/a_b-c@ex-am.co/x` → `/u/[email]/x` (underscores + hyphens in
+    local-part and domain).
+  Each case asserts `scrubbed === ["email"]`. These lock in the segment-
+  bounded pattern so a future "simplification" back to `\S+` is caught.
+- **Case 17 — non-email `@` should NOT scrub:** `/twitter/@handle` and
+  `/u/@/x` and `/u/a@b/x` (missing TLD) → output equal to input AND
+  `scrubbed === []`. The email regex requires a literal `.` followed by a
+  non-slash non-whitespace token after `@`, so a bare social-media handle
+  or a malformed input without a TLD suffix is not treated as PII. Important
+  because apps may route via handles (`/@username`-style patterns are
+  common on Mastodon-style paths). This is a negative-test guard.
 
 **Why RED-first:** AGENTS.md `cq-write-failing-tests-before` — the plan has
 Test Scenarios and Acceptance Criteria, so tests must fail before
@@ -195,7 +247,14 @@ const MAX_DROPPED_KEYS_LOGGED = 20;
 // Scope per FR5: patterns apply ONLY when the prop key is "path". Adding a
 // new allowlisted key requires a per-key security review that decides
 // whether the scrubber applies.
-const EMAIL_RE = /\S+@\S+\.\S+/g;
+// IMPORTANT: the email character class excludes whitespace AND forward slashes.
+// Using `\S+@\S+\.\S+` (the spec's stated pattern) is catastrophically greedy
+// on path strings: `\S` matches `/`, so `/users/alice@example.com/settings`
+// would match as ONE token `users/alice@example.com/settings` and the entire
+// path would collapse to `[email]`. Excluding `/` bounds matches to the
+// containing path segment. Verified against all 11 planned test cases via
+// a Node runtime check during plan-deepen (see plan Enhancement Summary).
+const EMAIL_RE = /[^\s/]+@[^\s/]+\.[^\s/]+/g;
 const UUID_V4_RE = /[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/gi;
 const LONG_DIGIT_RUN_RE = /\d{6,}/g;
 
@@ -356,7 +415,7 @@ normal operation.
 
 1. **Unit tests (sanitize-props.test.ts):** `cd apps/web-platform &&
    ./node_modules/.bin/vitest run test/sanitize-props.test.ts`. Expect all
-   15 cases (10 from spec + 5 edge cases) GREEN.
+   17 case-groups (10 from spec + 7 edge cases including the deepen-discovered email-greed guards) GREEN.
 2. **Integration tests (api-analytics-track.test.ts):** `cd apps/web-platform
    && ./node_modules/.bin/vitest run test/api-analytics-track.test.ts`.
    Expect all existing T1–T7 tests still GREEN plus new T8 GREEN.
@@ -386,9 +445,11 @@ normal operation.
 
 ## Files to Create
 
-- `apps/web-platform/test/sanitize-props.test.ts` — 15-case unit suite for
-  `sanitizeProps` covering spec §"Test Scenarios" plus ordering / uniqueness
-  edge cases.
+- `apps/web-platform/test/sanitize-props.test.ts` — unit suite for
+  `sanitizeProps` covering spec §"Test Scenarios" (cases 1–10) plus seven
+  edge-case groups (cases 11–17): uppercase UUID, scrub-before-slice, unique
+  scrubbed array, multi-pattern order stability, dropped-key regression,
+  email greed guard (multi-variant), and non-email `@` negative.
 
 ## Acceptance Criteria
 
@@ -500,8 +561,31 @@ client-library JSDoc. No new `components/**/*.tsx`, `app/**/page.tsx`, or
   by narrowing the pattern — not a silent correctness failure.
 - **No test for regex catastrophic backtracking:** All three patterns are
   linear in input size (no nested quantifiers, no `.*.*`). EMAIL regex uses
-  `\S+` which is O(n); UUID regex is fixed-length; digit-run regex is simple
-  `\d{6,}`. No ReDoS exposure.
+  `[^\s/]+` which is O(n); UUID regex is fixed-length; digit-run regex is
+  simple `\d{6,}`. **Deepen verification:** a 2000-char no-match input
+  scrubs in ~5ms on a local Node.js 20 runtime. No ReDoS exposure.
+- **Email regex greed (deepen finding — applied in Phase 2):** the spec's
+  stated pattern `\S+@\S+\.\S+` is WRONG for path strings — `\S` matches
+  `/`, causing the entire multi-segment path to match as one token. The
+  plan's Phase 2 uses `[^\s/]+@[^\s/]+\.[^\s/]+` instead. Cases 1, 7, 13,
+  14 of the spec test table are the empirical guards against reintroducing
+  the greedy form.
+- **Query-string pass-through is NOT short-circuited:** spec §"Out of
+  Scope" says Plausible strips query strings, so the plan doesn't special-
+  case `?...` parsing. However, if a caller DOES include PII in a query
+  string (`/u/?email=a@b.com`), the scrubber still fires because it runs
+  over the whole string regardless of where `?` is. Verified: this
+  produces `/u/?email=[email]`. This is the correct defense-in-depth
+  behavior — a future reviewer must NOT "optimize" by splitting on `?` and
+  skipping the tail.
+- **Related scope-out #2461 (shared `lib/log-sanitize.ts`):** if that PR
+  ships before this one is merged, `sanitize.ts` may move some logic into
+  the shared helper. The plan's test file `test/sanitize-props.test.ts`
+  imports `sanitizeProps` directly from `@/app/api/analytics/track/sanitize`,
+  NOT a substring check on the helper name, so it stays correct across the
+  extraction. Per learning
+  `2026-04-15-negative-space-tests-must-follow-extracted-logic`, we avoid
+  substring-based coupling from the start.
 - **Worktree vitest:** Run via `./node_modules/.bin/vitest` from
   `apps/web-platform/`, not `npx vitest` at repo root
   (`cq-in-worktrees-run-vitest-via-node-node`).

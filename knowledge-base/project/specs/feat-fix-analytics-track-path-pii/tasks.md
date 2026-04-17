@@ -43,6 +43,14 @@ Derived from `2026-04-17-fix-analytics-track-path-pii-plan.md`. Execute via
         one path produces `scrubbed: ["email","uuid","id"]` in that order.
   - [ ] **1.1.15** Add case 15: non-allowlisted keys still flow to
         `dropped`, unaffected by scrub changes.
+  - [ ] **1.1.16** Add case 16: email greed guard — assert
+        `/users/alice@example.com/settings` scrubs ONLY the email segment
+        (NOT the whole path), and realistic variants scrub correctly:
+        `/u/alice.bob@example.co.uk/s`, `/u/alice+tag@example.com/x`,
+        `/u/a_b-c@ex-am.co/x`. Each asserts `scrubbed === ["email"]`.
+  - [ ] **1.1.17** Add case 17: non-email `@` negative — `/twitter/@handle`,
+        `/u/@/x`, `/u/a@b/x` (no TLD) return input unchanged with
+        `scrubbed === []`.
 - [ ] **1.2** Add T8 integration test to
       `apps/web-platform/test/api-analytics-track.test.ts`:
   - [ ] **1.2.1** Assert forwarded payload has scrubbed path.
@@ -59,7 +67,12 @@ Derived from `2026-04-17-fix-analytics-track-path-pii-plan.md`. Execute via
 
 - [ ] **2.1** Edit `apps/web-platform/app/api/analytics/track/sanitize.ts`:
   - [ ] **2.1.1** Add module-scope constants `EMAIL_RE`, `UUID_V4_RE`,
-        `LONG_DIGIT_RUN_RE`.
+        `LONG_DIGIT_RUN_RE`. **Note:** `EMAIL_RE` MUST be
+        `/[^\s/]+@[^\s/]+\.[^\s/]+/g` (exclude slashes) — the greedy
+        `/\S+@\S+\.\S+/g` from the spec would match across path segments
+        and collapse `/users/alice@example.com/settings` to `[email]`
+        wholesale. Plan §"Enhancement Summary" and §"Risks & Sharp Edges"
+        document the deepen-discovered fix.
   - [ ] **2.1.2** Add private `scrubPath(value: string)` helper returning
         `{ clean, scrubbed }` in order email → uuid → id.
   - [ ] **2.1.3** Widen `sanitizeProps` return type to
