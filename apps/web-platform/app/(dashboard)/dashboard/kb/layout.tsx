@@ -399,31 +399,33 @@ export default function KbLayout({ children }: { children: ReactNode }) {
   return (
     <KbContext value={ctxValue}>
       <KbChatContext value={chatCtxValue}>
-        <div className="flex h-full">
-          <aside
-            inert={kbCollapsed || undefined}
-            className={`w-full shrink-0 overflow-y-auto border-r border-neutral-800
-              ${isContentView ? "hidden" : "block"}`}
-          >
-            {sidebarContent}
-          </aside>
+        <KbChatQuoteBridgeProvider onOpenSidebar={openSidebar}>
+          <div className="flex h-full">
+            <aside
+              inert={kbCollapsed || undefined}
+              className={`w-full shrink-0 overflow-y-auto border-r border-neutral-800
+                ${isContentView ? "hidden" : "block"}`}
+            >
+              {sidebarContent}
+            </aside>
 
-          <div
-            className={`min-w-0 flex-1 ${
-              isContentView ? "" : "hidden"
-            } flex flex-col`}
-          >
-            {docContent}
+            <div
+              className={`min-w-0 flex-1 ${
+                isContentView ? "" : "hidden"
+              } flex flex-col`}
+            >
+              {docContent}
+            </div>
+
+            {kbChatFlag && contextPath && (
+              <KbChatSidebar
+                open={sidebarOpen}
+                onClose={closeSidebar}
+                contextPath={contextPath}
+              />
+            )}
           </div>
-
-          {kbChatFlag && contextPath && (
-            <KbChatSidebar
-              open={sidebarOpen}
-              onClose={closeSidebar}
-              contextPath={contextPath}
-            />
-          )}
-        </div>
+        </KbChatQuoteBridgeProvider>
       </KbChatContext>
     </KbContext>
   );

@@ -2,24 +2,23 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-// Phase 0 RED — GET /api/conversations?context_path=<path>
+// Phase 0 RED — GET /api/conversations?contextPath=<path>
 // Contract:
-//   - 200 + JSON { conversationId, context_path, last_active, message_count }
-//     when a row exists
+//   - 200 + JSON { conversationId, contextPath, lastActive, messageCount }
+//     when a row exists (camelCase — matches sibling /api/chat/thread-info)
 //   - 200 + JSON null when no row matches (not an error state)
 //   - 400 on missing/invalid path
 //   - 401 when unauthenticated
-//   - 500 on internal lookup error (mirrors to reportSilentFallback)
+//   - 500 on internal lookup error (helper mirrors to Sentry)
 //
 // Also asserts the route DELEGATES to server/lookup-conversation-for-path
 // (negative-space test: imports AND invokes AND branches on result).
 
 // --- Mock infrastructure --------------------------------------------------
 
-const { mockGetUser, mockLookup, mockReportSilentFallback } = vi.hoisted(() => ({
+const { mockGetUser, mockLookup } = vi.hoisted(() => ({
   mockGetUser: vi.fn(),
   mockLookup: vi.fn(),
-  mockReportSilentFallback: vi.fn(),
 }));
 
 vi.mock("@/lib/supabase/server", () => ({
@@ -31,10 +30,6 @@ vi.mock("@/lib/supabase/server", () => ({
 
 vi.mock("@/server/lookup-conversation-for-path", () => ({
   lookupConversationForPath: (...args: unknown[]) => mockLookup(...args),
-}));
-
-vi.mock("@/server/observability", () => ({
-  reportSilentFallback: (...args: unknown[]) => mockReportSilentFallback(...args),
 }));
 
 async function importRoute() {
@@ -55,26 +50,26 @@ describe("GET /api/conversations", () => {
     const { GET } = await importRoute();
     const res = await GET(
       makeRequest(
-        "https://app.soleur.ai/api/conversations?context_path=knowledge-base/x.md",
+        "https://app.soleur.ai/api/conversations?contextPath=knowledge-base/x.md",
       ),
     );
     expect(res.status).toBe(401);
     expect(mockLookup).not.toHaveBeenCalled();
   });
 
-  it("returns 400 when context_path is missing", async () => {
+  it("returns 400 when contextPath is missing", async () => {
     mockGetUser.mockResolvedValue({ data: { user: { id: "u1" } } });
     const { GET } = await importRoute();
     const res = await GET(makeRequest("https://app.soleur.ai/api/conversations"));
     expect(res.status).toBe(400);
   });
 
-  it("returns 400 when context_path is invalid (no knowledge-base prefix)", async () => {
+  it("returns 400 when contextPath is invalid (no knowledge-base prefix)", async () => {
     mockGetUser.mockResolvedValue({ data: { user: { id: "u1" } } });
     const { GET } = await importRoute();
     const res = await GET(
       makeRequest(
-        "https://app.soleur.ai/api/conversations?context_path=not-a-kb-path.md",
+        "https://app.soleur.ai/api/conversations?contextPath=not-a-kb-path.md",
       ),
     );
     expect(res.status).toBe(400);
@@ -94,16 +89,16 @@ describe("GET /api/conversations", () => {
     const { GET } = await importRoute();
     const res = await GET(
       makeRequest(
-        "https://app.soleur.ai/api/conversations?context_path=knowledge-base/product/roadmap.md",
+        "https://app.soleur.ai/api/conversations?contextPath=knowledge-base/product/roadmap.md",
       ),
     );
     expect(res.status).toBe(200);
     const json = await res.json();
     expect(json).toEqual({
       conversationId: "conv-123",
-      context_path: "knowledge-base/product/roadmap.md",
-      last_active: "2026-04-15T10:00:00Z",
-      message_count: 7,
+      contextPath: "knowledge-base/product/roadmap.md",
+      lastActive: "2026-04-15T10:00:00Z",
+      messageCount: 7,
     });
     expect(mockLookup).toHaveBeenCalledWith(
       "u1",
@@ -117,7 +112,7 @@ describe("GET /api/conversations", () => {
     const { GET } = await importRoute();
     const res = await GET(
       makeRequest(
-        "https://app.soleur.ai/api/conversations?context_path=knowledge-base/product/roadmap.md",
+        "https://app.soleur.ai/api/conversations?contextPath=knowledge-base/product/roadmap.md",
       ),
     );
     expect(res.status).toBe(200);
@@ -125,17 +120,16 @@ describe("GET /api/conversations", () => {
     expect(json).toBeNull();
   });
 
-  it("returns 500 when the lookup helper errors (and mirrors to Sentry)", async () => {
+  it("returns 500 when the lookup helper errors (helper mirrors to Sentry)", async () => {
     mockGetUser.mockResolvedValue({ data: { user: { id: "u1" } } });
     mockLookup.mockResolvedValue({ ok: false, error: "lookup_failed" });
     const { GET } = await importRoute();
     const res = await GET(
       makeRequest(
-        "https://app.soleur.ai/api/conversations?context_path=knowledge-base/product/roadmap.md",
+        "https://app.soleur.ai/api/conversations?contextPath=knowledge-base/product/roadmap.md",
       ),
     );
     expect(res.status).toBe(500);
-    expect(mockReportSilentFallback).toHaveBeenCalled();
   });
 
   // ---------------------------------------------------------------------

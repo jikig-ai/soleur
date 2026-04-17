@@ -1,18 +1,7 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { lookupConversationForPath } from "@/server/lookup-conversation-for-path";
-
-const CONTEXT_PATH_MAX_LEN = 512;
-const CONTEXT_PATH_PREFIX = "knowledge-base/";
-
-function validateContextPath(v: string | null): string | null {
-  if (!v || v.length === 0 || v.length > CONTEXT_PATH_MAX_LEN) return null;
-  if (!v.startsWith(CONTEXT_PATH_PREFIX)) return null;
-  if (v.includes("..") || v.includes("\0")) return null;
-  const filename = v.split("/").pop() ?? "";
-  if (filename.lastIndexOf(".") <= 0) return null;
-  return v;
-}
+import { validateContextPath } from "@/server/validate-context-path";
 
 export async function GET(req: Request) {
   const supabase = await createClient();

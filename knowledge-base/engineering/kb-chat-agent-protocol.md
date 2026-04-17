@@ -31,14 +31,13 @@ Idempotency contract:
   skipped; a new row is created in their place.
 
 HTTP agents that need to discover whether a row already exists can use
-`GET /api/conversations?context_path=<path>` (see below). The response
-is `null` when no row exists, so a POST of a new message to a fresh
-conversation is always valid.
+`GET /api/conversations?contextPath=<path>` (see below). The response
+is `null` when no row exists.
 
 ### Discovery endpoint
 
 ```http
-GET /api/conversations?context_path=knowledge-base/product/roadmap.md
+GET /api/conversations?contextPath=knowledge-base/product/roadmap.md
 ```
 
 Response (200):
@@ -46,9 +45,9 @@ Response (200):
 ```json
 {
   "conversationId": "c_abc123",
-  "context_path": "knowledge-base/product/roadmap.md",
-  "last_active": "2026-04-17T10:00:00.000Z",
-  "message_count": 7
+  "contextPath": "knowledge-base/product/roadmap.md",
+  "lastActive": "2026-04-17T10:00:00.000Z",
+  "messageCount": 7
 }
 ```
 
@@ -59,6 +58,13 @@ null
 ```
 
 Errors: `400` (bad path), `401` (unauthenticated), `500` (lookup error).
+
+> **Read-only today.** Agents can discover existing threads via this
+> endpoint. Posting new messages and archiving threads is currently
+> WebSocket-only (see `server/ws-handler.ts` `start_session`). HTTP
+> write endpoints (`POST /api/conversations/:id/messages`, `PATCH
+> /api/conversations/:id` for archive) are tracked as follow-up work —
+> this doc will be updated when they land.
 
 ## 2. Quote-prepend convention
 
@@ -76,24 +82,15 @@ The existing draft is pushed two newlines below. If the draft is
 empty, the block sits at the top.
 
 Agents that want to produce the same effect from outside the browser
-do not need a separate endpoint. They just send a message whose content
-starts with `>` — the server already treats this as a normal message
+send a message whose content starts with `>` over the WebSocket
+transport (HTTP message-post is not yet available — see the read-only
+note above). The server treats the leading `>` as a normal message
 body (no special interpretation) and the Markdown renderer handles the
 display. Analytics marks this pattern via the `kb.chat.selection_sent`
-goal, which fires client-side when `/^\s*>/` matches.
-
-### Example: CLI agent posting a quoted message
-
-```bash
-MESSAGE="> The pricing section needs a research link for the \$49 tier claim.
-
-Can you pull Gartner's 2025 SaaS benchmark?"
-
-# Via the /api/messages endpoint (hypothetical — use your real post path)
-curl -X POST /api/messages \
-  -H "Content-Type: application/json" \
-  -d "{\"conversationId\": \"c_abc123\", \"content\": $(jq -Rs . <<< "$MESSAGE")}"
-```
+goal, which fires client-side when `/^\s*>/` matches — the goal does
+not currently distinguish human selection from agent-seeded quote, so
+dashboards should treat it as an upper bound on human quotes until a
+`source` tag lands.
 
 ## Related code
 

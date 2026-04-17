@@ -124,12 +124,11 @@ export function ChatInput({
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const activeXhrs = useRef<Map<string, XMLHttpRequest>>(new Map());
-  // Timers owned by the insertQuote imperative handle. Tracked via refs so
-  // each invocation can cancel the prior pending callbacks (no queue growth
-  // under rapid selection-to-quote bursts) and the effect's cleanup can
-  // cancel any pending callback on unmount (no unmounted-setState warnings).
+  // Timer owned by the insertQuote callback. Tracked via ref so each
+  // invocation can cancel the prior pending flash (no queue growth under
+  // rapid selection-to-quote bursts) and the effect's cleanup can cancel
+  // any pending callback on unmount (no unmounted-setState warnings).
   const flashTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const quoteRafRef = useRef<number | null>(null);
 
   // Auto-resize textarea height based on content (default ~2 lines, capped at ~6 lines / 140px).
   // useIsomorphicLayoutEffect prevents flicker on the client while avoiding
@@ -209,10 +208,6 @@ export function ChatInput({
       if (flashTimerRef.current !== null) {
         clearTimeout(flashTimerRef.current);
         flashTimerRef.current = null;
-      }
-      if (quoteRafRef.current !== null) {
-        cancelAnimationFrame(quoteRafRef.current);
-        quoteRafRef.current = null;
       }
       if (quoteRef) quoteRef.current = null;
     };
