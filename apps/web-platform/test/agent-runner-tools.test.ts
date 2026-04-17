@@ -165,7 +165,7 @@ describe("agent-runner MCP tool wiring", () => {
     expect(options.allowedTools).toContain("mcp__soleur_platform__create_pull_request");
   });
 
-  test("omits mcpServers when user has no installationId", async () => {
+  test("omits GitHub platform tools when user has no installationId", async () => {
     setupSupabaseMock({
       workspace_path: "/tmp/test-workspace",
       repo_status: null,
@@ -179,8 +179,14 @@ describe("agent-runner MCP tool wiring", () => {
     expect(mockQuery).toHaveBeenCalledOnce();
     const options = mockQuery.mock.calls[0][0].options;
 
-    // mcpServers should NOT be present
-    expect(options.mcpServers).toBeUndefined();
+    // KB share tools register unconditionally (#2309) so mcpServers is
+    // defined — but the GitHub-specific tool names must not appear.
+    expect(options.allowedTools).not.toContain(
+      "mcp__soleur_platform__create_pull_request",
+    );
+    expect(options.allowedTools).not.toContain(
+      "mcp__soleur_platform__github_read_ci_status",
+    );
   });
 
   test("canUseTool allows registered platform MCP tools", async () => {
@@ -229,7 +235,7 @@ describe("agent-runner MCP tool wiring", () => {
     expect(result.behavior).toBe("deny");
   });
 
-  test("omits mcpServers when repo_url owner contains URL-encoded traversal", async () => {
+  test("omits GitHub platform tools when repo_url owner contains URL-encoded traversal", async () => {
     // %2F decodes to '/' inside a segment — the regex rejects '%'
     setupSupabaseMock({
       workspace_path: "/tmp/test-workspace",
@@ -243,10 +249,12 @@ describe("agent-runner MCP tool wiring", () => {
 
     expect(mockQuery).toHaveBeenCalledOnce();
     const options = mockQuery.mock.calls[0][0].options;
-    expect(options.mcpServers).toBeUndefined();
+    expect(options.allowedTools).not.toContain(
+      "mcp__soleur_platform__create_pull_request",
+    );
   });
 
-  test("omits mcpServers when repo_url has missing segments", async () => {
+  test("omits GitHub platform tools when repo_url has missing segments", async () => {
     setupSupabaseMock({
       workspace_path: "/tmp/test-workspace",
       repo_status: "ready",
@@ -259,10 +267,12 @@ describe("agent-runner MCP tool wiring", () => {
 
     expect(mockQuery).toHaveBeenCalledOnce();
     const options = mockQuery.mock.calls[0][0].options;
-    expect(options.mcpServers).toBeUndefined();
+    expect(options.allowedTools).not.toContain(
+      "mcp__soleur_platform__create_pull_request",
+    );
   });
 
-  test("omits mcpServers when repo_url is not a valid URL", async () => {
+  test("omits GitHub platform tools when repo_url is not a valid URL", async () => {
     setupSupabaseMock({
       workspace_path: "/tmp/test-workspace",
       repo_status: "ready",
@@ -275,10 +285,12 @@ describe("agent-runner MCP tool wiring", () => {
 
     expect(mockQuery).toHaveBeenCalledOnce();
     const options = mockQuery.mock.calls[0][0].options;
-    expect(options.mcpServers).toBeUndefined();
+    expect(options.allowedTools).not.toContain(
+      "mcp__soleur_platform__create_pull_request",
+    );
   });
 
-  test("omits mcpServers when repo_url owner contains special characters", async () => {
+  test("omits GitHub platform tools when repo_url owner contains special characters", async () => {
     setupSupabaseMock({
       workspace_path: "/tmp/test-workspace",
       repo_status: "ready",
@@ -291,7 +303,9 @@ describe("agent-runner MCP tool wiring", () => {
 
     expect(mockQuery).toHaveBeenCalledOnce();
     const options = mockQuery.mock.calls[0][0].options;
-    expect(options.mcpServers).toBeUndefined();
+    expect(options.allowedTools).not.toContain(
+      "mcp__soleur_platform__create_pull_request",
+    );
   });
 
   test("canUseTool allows plugin MCP tools from registered servers", async () => {

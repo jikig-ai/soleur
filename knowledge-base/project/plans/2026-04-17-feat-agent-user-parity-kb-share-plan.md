@@ -33,13 +33,13 @@ This is the same extraction + registration pattern PR #2282 already used for `re
 
 From issue #2309:
 
-- [ ] `kb_share_create`, `kb_share_list`, `kb_share_revoke` tools registered in `agent-runner.ts`.
-- [ ] Shared core module (`server/kb-share.ts`) used by both HTTP routes and MCP tools so there's one hardened implementation.
-- [ ] System prompt updated so the agent knows the tools exist whenever they are registered (#2315 folded in).
-- [ ] Test coverage for each tool: happy path, idempotent create on unchanged content, stale-hash re-issue, not-found, forbidden (other user's token), ownership mismatch on revoke, and null-byte rejection.
-- [ ] Integration test: agent receives "generate a share link for README.md" prompt and returns a working URL — verified via SDK harness or by direct tool invocation in the test.
-- [ ] Tool-tier mapping: `kb_share_create` and `kb_share_revoke` = `gated` (require review-gate approval); `kb_share_list` = `auto-approve` (read-only).
-- [ ] All existing share tests (`kb-share-allowed-paths`, `kb-share-content-hash`, `share-links`, `shared-page-*`) pass without modification.
+- [x] `kb_share_create`, `kb_share_list`, `kb_share_revoke` tools registered in `agent-runner.ts`.
+- [x] Shared core module (`server/kb-share.ts`) used by both HTTP routes and MCP tools so there's one hardened implementation.
+- [x] System prompt updated so the agent knows the tools exist whenever they are registered (#2315 folded in).
+- [x] Test coverage for each tool: happy path, idempotent create on unchanged content, stale-hash re-issue, not-found, forbidden (other user's token), ownership mismatch on revoke, and null-byte rejection.
+- [x] Integration test: agent receives "generate a share link for README.md" prompt and returns a working URL — verified via SDK harness or by direct tool invocation in the test.
+- [x] Tool-tier mapping: `kb_share_create` and `kb_share_revoke` = `gated` (require review-gate approval); `kb_share_list` = `auto-approve` (read-only).
+- [x] All existing share tests (`kb-share-allowed-paths`, `kb-share-content-hash`, `share-links`, `shared-page-*`) pass without modification.
 
 ## Research Reconciliation — Spec vs. Codebase
 
@@ -487,16 +487,16 @@ Dead ends identified and handled:
 
 ## Acceptance Checklist (Ship Gate)
 
-- [ ] All 29 new tests pass.
-- [ ] All pre-existing share tests pass unchanged.
-- [ ] `cd apps/web-platform && ./node_modules/.bin/vitest run` is green repo-wide.
-- [ ] `npx tsc --noEmit` in `apps/web-platform/` is clean.
-- [ ] `npx markdownlint-cli2 --fix` clean on this plan file.
+- [x] All 29 new tests pass.
+- [x] All pre-existing share tests pass unchanged.
+- [x] `cd apps/web-platform && ./node_modules/.bin/vitest run` is green repo-wide.
+- [x] `npx tsc --noEmit` in `apps/web-platform/` is clean.
+- [x] `npx markdownlint-cli2 --fix` clean on this plan file.
 - [ ] Manual QA: the five screenshots captured and attached to PR.
 - [ ] PR body contains `Closes #2309`, `Closes #2298`, `Closes #2315`.
 - [ ] PR body notes `Ref #2322 (deferred)`, `Ref #1662 (partially addressed — pattern set, prior tools remain inline)`.
 - [ ] Semver label: `semver:minor` (new agent capability).
-- [ ] CMO not required (no user-facing copy).
+- [x] CMO not required (no user-facing copy).
 - [ ] Compound skill run before commit (per `wg-before-every-commit-run-compound-skill`).
 
 ## Research Insights & Learnings Applied

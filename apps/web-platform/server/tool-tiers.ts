@@ -28,6 +28,12 @@ export const TOOL_TIER_MAP: Record<string, ToolTier> = {
   // Phase 4: Push branches and open PRs (gated — write action)
   "mcp__soleur_platform__github_push_branch": "gated",
   "mcp__soleur_platform__create_pull_request": "gated",
+
+  // KB share tools (#2309): list is read-only, create/revoke are
+  // user-visible side effects (public URL / permanent revocation) → gated.
+  "mcp__soleur_platform__kb_share_list": "auto-approve",
+  "mcp__soleur_platform__kb_share_create": "gated",
+  "mcp__soleur_platform__kb_share_revoke": "gated",
 };
 
 /**
@@ -57,6 +63,13 @@ export function buildGateMessage(
       return `Agent wants to push to branch **${toolInput.branch ?? "unknown"}**. Allow?`;
     case "create_pull_request":
       return `Agent wants to open PR: **${toolInput.title ?? "untitled"}** (${toolInput.base ?? "main"} ← ${toolInput.head ?? "unknown"}). Allow?`;
+    case "kb_share_create":
+      return `Agent wants to create a public share link for **${toolInput.documentPath ?? "unknown"}**. Allow?`;
+    case "kb_share_revoke": {
+      const raw = String(toolInput.token ?? "unknown");
+      const preview = raw.length > 12 ? `${raw.slice(0, 12)}…` : raw;
+      return `Agent wants to revoke share token **${preview}**. This is permanent. Allow?`;
+    }
     default:
       return `Agent wants to use **${shortName}**. Allow?`;
   }

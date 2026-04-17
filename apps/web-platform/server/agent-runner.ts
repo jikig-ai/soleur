@@ -42,6 +42,8 @@ import { readCiStatus, readWorkflowLogs } from "./ci-tools";
 import { triggerWorkflow, createRateLimiter } from "./trigger-workflow";
 import { pushBranch } from "./push-branch";
 import { githubApiGet } from "./github-api";
+import { MAX_BINARY_SIZE } from "./kb-binary-response";
+import { buildKbShareTools } from "./kb-share-tools";
 
 const log = createChildLogger("agent");
 
@@ -536,6 +538,25 @@ When you need user input for important decisions, use the AskUserQuestion tool.`
       systemPrompt += `\n\n## Connected Services\n${serviceList}`;
     }
 
+    // Announce KB share capability (closes #2315). Without this block the
+    // agent cannot discover kb_share_* from natural-language requests like
+    // "share the Q1 report."
+    const kbShareSizeMb = Math.round(MAX_BINARY_SIZE / 1024 / 1024);
+    systemPrompt += `
+
+## Knowledge-base sharing
+
+You can generate public read-only share links for any file in the knowledge-base
+using kb_share_create. Any file type is allowed (markdown, PDF, image, docx).
+Links are revocable via kb_share_revoke. Use kb_share_list to check what is
+currently shared before generating a new link — this surfaces duplicates and
+revoked links.
+
+Share links expose the file contents to anyone who has the URL. Before creating
+a link for a file that looks sensitive (credentials, personal data, unreleased
+strategy), confirm with AskUserQuestion first. Files over ${kbShareSizeMb} MB
+cannot be shared.`;
+
     // ---------------------------------------------------------------------------
     // In-process MCP server for platform tools (PR creation, etc.)
     // Only available when user has a GitHub App installation with a connected repo.
@@ -806,6 +827,24 @@ When you need user input for important decisions, use the AskUserQuestion tool.`
         "mcp__soleur_platform__plausible_get_stats",
       );
     }
+
+    // KB share tools (#2309): registered independently of GitHub installation
+    // or service tokens — only prerequisite is a ready workspace (guaranteed
+    // above by the ERR_WORKSPACE_NOT_PROVISIONED guard). Mirrors the
+    // SharePopover UI in the KB viewer so the agent and the user have
+    // identical capability.
+    const kbShareTools = buildKbShareTools({
+      serviceClient: supabase(),
+      userId,
+      kbRoot: path.join(workspacePath, "knowledge-base"),
+      baseUrl: process.env.NEXT_PUBLIC_APP_URL ?? "https://app.soleur.ai",
+    });
+    platformTools.push(...kbShareTools);
+    platformToolNames.push(
+      "mcp__soleur_platform__kb_share_create",
+      "mcp__soleur_platform__kb_share_list",
+      "mcp__soleur_platform__kb_share_revoke",
+    );
 
     // Build MCP server if any platform tools are registered
     if (platformTools.length > 0) {
