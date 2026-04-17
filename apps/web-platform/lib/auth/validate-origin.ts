@@ -1,4 +1,5 @@
 import logger from "@/server/logger";
+import { sanitizeForLog } from "@/lib/log-sanitize";
 
 const PRODUCTION_ORIGINS = new Set(["https://app.soleur.ai"]);
 const DEV_ORIGINS = new Set([
@@ -39,7 +40,7 @@ export function validateOrigin(request: Request): {
 }
 
 export function rejectCsrf(route: string, origin: string | null): Response {
-  const sanitized = (origin ?? "none").slice(0, 100).replace(/[\x00-\x1f]/g, "");
+  const sanitized = sanitizeForLog(origin ?? "none", 100);
   logger.warn({ route, rejectedOrigin: sanitized }, "CSRF: rejected origin");
   return Response.json({ error: "Forbidden" }, { status: 403 });
 }

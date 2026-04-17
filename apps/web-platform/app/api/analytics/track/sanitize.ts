@@ -1,6 +1,8 @@
 // Allowlist-based prop sanitization + log sanitization for
 // /api/analytics/track. Sibling module per cq-nextjs-route-files-http-only-exports.
 
+import { sanitizeForLog } from "@/lib/log-sanitize";
+
 // Adding a key requires security review — keep this module as the single chokepoint.
 const ALLOWED_PROP_KEYS = new Set<string>(["path"]);
 
@@ -123,12 +125,6 @@ export function sanitizeProps(
   return { clean, dropped, scrubbed: scrubbedOut };
 }
 
-// Strip C0 control characters, DEL, and Unicode line/paragraph separators
-// before strings reach structured logs. U+2028 and U+2029 are especially
-// important: JSON loggers pass them through, but many log viewers and
-// JavaScript consumers treat them as line terminators — re-enabling log
-// injection through a "sanitized" goal. Pattern source: rejectCsrf in
-// lib/auth/validate-origin.ts.
-export function sanitizeForLog(s: string): string {
-  return s.replace(/[\x00-\x1f\x7f\u2028\u2029]/g, "");
-}
+// Re-export the shared log sanitizer. Body lives in lib/log-sanitize.ts so
+// rejectCsrf (in lib/auth/validate-origin.ts) shares the same regex.
+export { sanitizeForLog };

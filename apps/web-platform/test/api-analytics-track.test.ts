@@ -286,11 +286,14 @@ describe("POST /api/analytics/track", () => {
     }
   });
 
-  test("T2b: throttle module source installs a periodic prune interval", () => {
-    // Negative-space guard: behavioral tests in T2a can still pass after a
-    // refactor that removes the interval while leaving .prune() intact. The
-    // source-grep pins the wiring. Style: csrf-coverage.test.ts and learning
-    // 2026-04-15-negative-space-tests-must-follow-extracted-logic.
+  test("T2b: throttle module delegates prune wiring to shared helper", () => {
+    // Negative-space guard. After the startPruneInterval extraction, the raw
+    // setInterval/unref wiring lives in server/rate-limiter.ts, not throttle.ts.
+    // Per learning 2026-04-15-negative-space-tests-must-follow-extracted-logic,
+    // this test now runs at two layers: (1) delegation on the caller, (2)
+    // invariant on the helper. The helper-side invariant is owned by
+    // test/rate-limiter.test.ts ("helper body installs setInterval + prune +
+    // unref").
     const throttlePath = join(
       __dirname,
       "..",
@@ -301,10 +304,12 @@ describe("POST /api/analytics/track", () => {
       "throttle.ts",
     );
     const throttleSource = readFileSync(throttlePath, "utf-8");
+    // Layer 1: throttle.ts proves it calls the shared helper with the right
+    // counter. No raw setInterval should remain here — if it does, the
+    // extraction was incomplete.
     expect(throttleSource).toMatch(
-      /setInterval\([\s\S]*analyticsTrackThrottle\.prune\(\)[\s\S]*60_?000/,
+      /startPruneInterval\(\s*analyticsTrackThrottle\s*\)/,
     );
-    expect(throttleSource).toMatch(/\.unref\(\)/);
   });
 
   test("T3: drops non-allowlisted prop keys (email, sessionId, fingerprint, deviceId, ip)", async () => {

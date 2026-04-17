@@ -7,16 +7,13 @@
 import { createServiceClient } from "@/lib/supabase/service";
 import { DOMAIN_LEADERS } from "@/server/domain-leaders";
 import { relativeTime } from "@/lib/relative-time";
+import { reportSilentFallback } from "@/server/observability";
 
 // Re-exported so consumers import time-formatting from the same module as the
 // loader. Canonical implementation lives in @/lib/relative-time.
 export { relativeTime };
 
 export const MAX_USAGE_ROWS = 50;
-// Defensive cap for the month-scope select; client-side sum stops being
-// trustworthy above this and should be replaced by a Postgres aggregate
-// (tracked as a follow-up issue).
-const MTD_SCOPE_LIMIT = 1000;
 
 export interface ApiUsageRow {
   id: string;
@@ -68,8 +65,12 @@ interface ConversationListRow {
   total_cost_usd: number | string | null;
 }
 
-interface MonthScopeRow {
-  total_cost_usd: number | string | null;
+// Typed explicitly instead of inferring from the client — Supabase JS v2
+// RPC return inference can collapse to `never` in some consumer contexts
+// (see learning 2026-04-05-supabase-returntype-resolves-to-never).
+interface MonthSumRow {
+  total: string | number | null;
+  n: number | null;
 }
 
 export async function loadApiUsageForUser(
@@ -92,29 +93,25 @@ export async function loadApiUsageForUser(
       .gt("total_cost_usd", 0)
       .order("created_at", { ascending: false })
       .limit(MAX_USAGE_ROWS),
-    service
-      .from("conversations")
-      .select("total_cost_usd", { count: "exact" })
-      .eq("user_id", userId)
-      .gt("total_cost_usd", 0)
-      .gte("created_at", monthStartIso)
-      .limit(MTD_SCOPE_LIMIT),
+    service.rpc("sum_user_mtd_cost", {
+      uid: userId,
+      since: monthStartIso,
+    }),
   ]);
 
   if (listRes.error || monthRes.error) {
-    // Non-PII observability trace. Omit userId; keep just the op label and
-    // the error code so a future Sentry hookup picks it up without leaking
-    // identifiers into logs.
-    console.error("[api-usage] load failed", {
+    reportSilentFallback(listRes.error ?? monthRes.error, {
+      feature: "api-usage",
       op: "loadApiUsageForUser",
-      listCode: listRes.error?.code ?? null,
-      monthCode: monthRes.error?.code ?? null,
+      extra: {
+        listCode: listRes.error?.code ?? null,
+        monthCode: monthRes.error?.code ?? null,
+      },
     });
     return null;
   }
 
   const listData = (listRes.data ?? []) as ConversationListRow[];
-  const monthData = (monthRes.data ?? []) as MonthScopeRow[];
 
   const rows: ApiUsageRow[] = listData.map((r) => ({
     id: r.id,
@@ -125,11 +122,15 @@ export async function loadApiUsageForUser(
     costUsd: Number(r.total_cost_usd ?? 0),
   }));
 
-  const mtdTotalUsd = monthData.reduce(
-    (sum, r) => sum + Number(r.total_cost_usd ?? 0),
-    0,
-  );
-  const mtdCount = Number(monthRes.count ?? 0);
+  // PostgREST returns NUMERIC as a JS string to preserve 12,6 precision.
+  // RPC returns a TABLE: [{ total: "0.042300", n: 2 }]. The aggregate has
+  // no GROUP BY so zero-match still emits one row -- COALESCE gives
+  // [{ total: "0", n: 0 }]. The `?? 0` guards the defensive-undefined
+  // path anyway (e.g. if the RPC response shape drifts in a future
+  // supabase-js release).
+  const monthRow = (monthRes.data as MonthSumRow[] | null)?.[0];
+  const mtdTotalUsd = Number(monthRow?.total ?? 0);
+  const mtdCount = Number(monthRow?.n ?? 0);
 
   return { mtdTotalUsd, mtdCount, rows };
 }
