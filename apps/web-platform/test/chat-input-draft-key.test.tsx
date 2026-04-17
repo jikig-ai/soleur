@@ -6,12 +6,17 @@ import { ChatInput } from "@/components/chat/chat-input";
 // AC5: per-path draft persistence. When `draftKey` is set, the textarea
 // value is mirrored to sessionStorage under that key and restored on mount.
 // Switching draftKey (doc → doc) rehydrates the other doc's draft.
+//
+// Persistence is debounced 250ms (issue #2389 task 9C); tests advance fake
+// timers to let the trailing write land before asserting sessionStorage.
 
 describe("ChatInput — draftKey (AC5)", () => {
   beforeEach(() => {
     try { sessionStorage.clear(); } catch { /* jsdom only */ }
+    vi.useFakeTimers({ shouldAdvanceTime: false });
   });
   afterEach(() => {
+    vi.useRealTimers();
     try { sessionStorage.clear(); } catch { /* noop */ }
   });
 
@@ -34,6 +39,7 @@ describe("ChatInput — draftKey (AC5)", () => {
     render(<ChatInput {...commonProps} draftKey="kb.chat.draft:knowledge-base/a.md" />);
     const ta = document.querySelector("textarea") as HTMLTextAreaElement;
     act(() => setValue(ta, "draft for A"));
+    act(() => { vi.advanceTimersByTime(260); });
     expect(sessionStorage.getItem("kb.chat.draft:knowledge-base/a.md")).toBe(
       "draft for A",
     );
@@ -73,6 +79,9 @@ describe("ChatInput — draftKey (AC5)", () => {
     act(() => {
       fireEvent.keyDown(ta, { key: "Enter" });
     });
+    // Debounced persist fires after 250ms; the send clears value to "" which
+    // triggers removeItem via the same effect.
+    act(() => { vi.advanceTimersByTime(260); });
     expect(sessionStorage.getItem("kb.chat.draft:knowledge-base/a.md")).toBeNull();
   });
 });

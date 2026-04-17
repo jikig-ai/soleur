@@ -2,13 +2,9 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ChatSurface } from "@/components/chat/chat-surface";
-import type { ChatInputQuoteHandle } from "@/components/chat/chat-input";
 import { useKbChat } from "@/components/kb/kb-chat-context";
 import { track } from "@/lib/analytics-client";
 import type { ConversationContext } from "@/lib/types";
-
-const SIDEBAR_PLACEHOLDER =
-  "Ask about this document — ⌘⇧L to quote selection";
 
 export interface KbChatContentProps {
   contextPath: string;
@@ -34,13 +30,14 @@ export function KbChatContent({ contextPath, onClose, visible }: KbChatContentPr
   const [hasRealConversation, setHasRealConversation] = useState(false);
   const [hasResumed, setHasResumed] = useState(false);
   const historicalCountRef = useRef<number>(0);
-  const quoteRef = useRef<ChatInputQuoteHandle | null>(null);
+  const quoteRef = useRef<((text: string) => void) | null>(null);
+  const focusRef = useRef<(() => void) | null>(null);
 
   // Register an insertQuote handler with KbChatContext while visible.
   useEffect(() => {
     if (!visible) return;
     registerQuoteHandler((text: string) => {
-      quoteRef.current?.insertQuote(text);
+      quoteRef.current?.(text);
     });
     return () => registerQuoteHandler(null);
   }, [visible, registerQuoteHandler]);
@@ -48,11 +45,13 @@ export function KbChatContent({ contextPath, onClose, visible }: KbChatContentPr
   // Focus management: when visible, move focus to the ChatInput textarea.
   // Use the imperative handle instead of a DOM query so focus is scoped to
   // this component's own input even when another [data-kb-chat] scope
-  // exists in the document (e.g., a leftover from a prior mount).
+  // exists in the document (e.g., a leftover from a prior mount). The rAF
+  // defers focus until after the Sheet portal mounts on mobile — removing
+  // it would focus a node that has not yet attached to document.
   useEffect(() => {
     if (!visible) return;
     const id = requestAnimationFrame(() => {
-      quoteRef.current?.focus();
+      focusRef.current?.();
     });
     return () => cancelAnimationFrame(id);
   }, [visible]);
@@ -164,8 +163,9 @@ export function KbChatContent({ contextPath, onClose, visible }: KbChatContentPr
           onMessageCountChange={handleMessageCountChange}
           onClose={onClose}
           quoteRef={quoteRef}
+          focusRef={focusRef}
           onBeforeSend={handleBeforeSend}
-          placeholder={SIDEBAR_PLACEHOLDER}
+          placeholder="Ask about this document — ⌘⇧L to quote selection"
           draftKey={`kb.chat.draft:${contextPath}`}
         />
       </div>

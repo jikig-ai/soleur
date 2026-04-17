@@ -7,6 +7,7 @@ const useIsomorphicLayoutEffect =
 import type { AttachmentRef } from "@/lib/types";
 import { validateFiles } from "@/lib/validate-files";
 import { uploadWithProgress } from "@/lib/upload-with-progress";
+import { safeSession } from "@/lib/safe-session";
 
 interface PendingAttachment {
   id: string;
@@ -15,11 +16,6 @@ interface PendingAttachment {
   progress: number;
   error?: string;
   uploaded?: AttachmentRef;
-}
-
-export interface ChatInputQuoteHandle {
-  insertQuote: (text: string) => void;
-  focus: () => void;
 }
 
 interface ChatInputProps {
@@ -32,8 +28,10 @@ interface ChatInputProps {
   conversationId?: string;
   /** Insert text at the current cursor position (used by AtMentionDropdown selection). */
   insertRef?: React.MutableRefObject<((text: string, replaceFrom: number) => void) | null>;
-  /** Imperative handle exposing `insertQuote(text)` for the KB selection flow. */
-  quoteRef?: React.MutableRefObject<ChatInputQuoteHandle | null>;
+  /** Callback ref that invokes insertQuote for the KB selection-toolbar flow. */
+  quoteRef?: React.MutableRefObject<((text: string) => void) | null>;
+  /** Callback ref that focuses the textarea imperatively. */
+  focusRef?: React.MutableRefObject<(() => void) | null>;
   /** When set, the draft text is persisted to sessionStorage under this key
    *  and rehydrated on mount. Used by the KB sidebar to preserve drafts
    *  per-document across navigation. */
@@ -51,17 +49,14 @@ export function ChatInput({
   conversationId,
   insertRef,
   quoteRef,
+  focusRef,
   draftKey,
   atMentionVisible = false,
 }: ChatInputProps) {
   const [value, setValue] = useState<string>(() => {
     // Rehydrate from sessionStorage on mount when a draftKey is given.
-    if (typeof window === "undefined" || !draftKey) return "";
-    try {
-      return window.sessionStorage.getItem(draftKey) ?? "";
-    } catch {
-      return "";
-    }
+    if (!draftKey) return "";
+    return safeSession(draftKey) ?? "";
   });
   const [attachments, setAttachments] = useState<PendingAttachment[]>([]);
   const [attachError, setAttachError] = useState<string | null>(null);
@@ -78,24 +73,54 @@ export function ChatInput({
   useEffect(() => {
     if (prevDraftKeyRef.current === draftKey) return;
     prevDraftKeyRef.current = draftKey;
-    if (typeof window === "undefined") return;
     if (!draftKey) { setValue(""); return; }
-    try {
-      setValue(window.sessionStorage.getItem(draftKey) ?? "");
-    } catch { /* noop */ }
+    setValue(safeSession(draftKey) ?? "");
   }, [draftKey]);
 
-  // Persist current draft whenever value changes (and a draftKey is set).
+  // Persist current draft whenever value changes (9C: 250ms trailing
+  // debounce so rapid typing coalesces into one sessionStorage write).
+  // Pending write is held in a ref so (a) flush-on-unmount can complete
+  // the final keystroke, (b) a draftKey change cancels + rehydrates.
+  const pendingDraftRef = useRef<{ key: string; value: string } | null>(null);
+  const persistTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   useEffect(() => {
-    if (typeof window === "undefined" || !draftKey) return;
-    try {
-      if (value) {
-        window.sessionStorage.setItem(draftKey, value);
-      } else {
-        window.sessionStorage.removeItem(draftKey);
+    if (!draftKey) return;
+    // Queue the next trailing write. Each rerender clears the prior timer
+    // via cleanup; the pendingRef captures the latest (key, value) so the
+    // unmount-flush effect can write it synchronously.
+    pendingDraftRef.current = { key: draftKey, value };
+    if (persistTimerRef.current !== null) {
+      clearTimeout(persistTimerRef.current);
+    }
+    persistTimerRef.current = setTimeout(() => {
+      const pending = pendingDraftRef.current;
+      if (!pending) return;
+      safeSession(pending.key, pending.value || null);
+      pendingDraftRef.current = null;
+      persistTimerRef.current = null;
+    }, 250);
+    return () => {
+      if (persistTimerRef.current !== null) {
+        clearTimeout(persistTimerRef.current);
+        persistTimerRef.current = null;
       }
-    } catch { /* noop */ }
+    };
   }, [draftKey, value]);
+
+  // Flush the pending draft write on unmount so the final keystroke reaches
+  // sessionStorage even if the component tears down inside the 250ms window
+  // (see test/chat-input-draft-debounce.test.tsx "flushes pending write on
+  // unmount"). Runs exactly once at unmount via the [] dep list + ref.
+  useEffect(() => {
+    return () => {
+      const pending = pendingDraftRef.current;
+      if (pending) {
+        safeSession(pending.key, pending.value || null);
+        pendingDraftRef.current = null;
+      }
+    };
+  }, []);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const activeXhrs = useRef<Map<string, XMLHttpRequest>>(new Map());
@@ -123,66 +148,62 @@ export function ChatInput({
     return () => clearTimeout(timer);
   }, [attachError]);
 
-  // Expose insert function to parent for @-mention selection
+  // Expose insert function to parent for @-mention selection.
+  // Functional setValue avoids a stale-closure dependency on `value`; the
+  // effect depends only on [insertRef]. Cursor restoration is kept inside
+  // the single retained requestAnimationFrame — it must run after React
+  // commits the new value so selectionStart/End target the post-commit DOM.
   useEffect(() => {
-    if (insertRef) {
-      insertRef.current = (text: string, replaceFrom: number) => {
-        const textarea = textareaRef.current;
-        if (!textarea) return;
+    if (!insertRef) return;
+    insertRef.current = (text: string, replaceFrom: number) => {
+      const textarea = textareaRef.current;
+      if (!textarea) return;
 
-        const cursor = textarea.selectionStart;
-        const before = value.slice(0, replaceFrom);
-        const after = value.slice(cursor);
-        const newValue = before + text + " " + after;
-        setValue(newValue);
+      const cursor = textarea.selectionStart;
+      const newCursor = replaceFrom + text.length + 1;
+      setValue((prev) => {
+        const before = prev.slice(0, replaceFrom);
+        const after = prev.slice(cursor);
+        return before + text + " " + after;
+      });
 
-        const newCursor = replaceFrom + text.length + 1;
-        requestAnimationFrame(() => {
-          textarea.selectionStart = newCursor;
-          textarea.selectionEnd = newCursor;
-          textarea.focus();
-        });
-      };
-    }
-  }, [insertRef, value]);
+      requestAnimationFrame(() => {
+        textarea.selectionStart = newCursor;
+        textarea.selectionEnd = newCursor;
+        textarea.focus();
+      });
+    };
+    return () => {
+      if (insertRef) insertRef.current = null;
+    };
+  }, [insertRef]);
 
-  // Expose `insertQuote` for the KB selection-toolbar flow (Phase 4.3).
-  // Prepends "> <text>\n\n" when the draft is empty, or inserts the quoted
-  // block at the current cursor position when there is existing draft text.
-  // Does NOT auto-send; user edits and presses Enter.
+  // Expose `insertQuote` for the KB selection-toolbar flow (Phase 4.3) as a
+  // callback ref: `quoteRef.current?.(text)`. Prepends "> <text>\n\n" when
+  // the draft is empty, or inserts the quoted block at the current cursor
+  // position when there is existing draft text. Does NOT auto-send.
   useEffect(() => {
     if (!quoteRef) return;
-    quoteRef.current = {
-      insertQuote: (text: string) => {
-        const textarea = textareaRef.current;
-        const quoted = `> ${text}\n\n`;
-        setValue((prev) => {
-          if (!prev) return quoted;
-          const cursor = textarea ? textarea.selectionStart : prev.length;
-          return prev.slice(0, cursor) + quoted + prev.slice(cursor);
-        });
-        setFlashQuote(true);
-        if (textarea) {
-          if (quoteRafRef.current !== null) {
-            cancelAnimationFrame(quoteRafRef.current);
-          }
-          quoteRafRef.current = requestAnimationFrame(() => {
-            textarea.focus();
-            textarea.scrollIntoView({ block: "nearest" });
-            quoteRafRef.current = null;
-          });
-        }
-        if (flashTimerRef.current !== null) {
-          clearTimeout(flashTimerRef.current);
-        }
-        flashTimerRef.current = setTimeout(() => {
-          setFlashQuote(false);
-          flashTimerRef.current = null;
-        }, 400);
-      },
-      focus: () => {
-        textareaRef.current?.focus();
-      },
+    quoteRef.current = (text: string) => {
+      const textarea = textareaRef.current;
+      const quoted = `> ${text}\n\n`;
+      setValue((prev) => {
+        if (!prev) return quoted;
+        const cursor = textarea ? textarea.selectionStart : prev.length;
+        return prev.slice(0, cursor) + quoted + prev.slice(cursor);
+      });
+      setFlashQuote(true);
+      if (textarea) {
+        textarea.focus();
+        textarea.scrollIntoView({ block: "nearest" });
+      }
+      if (flashTimerRef.current !== null) {
+        clearTimeout(flashTimerRef.current);
+      }
+      flashTimerRef.current = setTimeout(() => {
+        setFlashQuote(false);
+        flashTimerRef.current = null;
+      }, 400);
     };
     return () => {
       if (flashTimerRef.current !== null) {
@@ -196,6 +217,17 @@ export function ChatInput({
       if (quoteRef) quoteRef.current = null;
     };
   }, [quoteRef]);
+
+  // Separate callback ref for imperative focus() from portal-mounted parents.
+  useEffect(() => {
+    if (!focusRef) return;
+    focusRef.current = () => {
+      textareaRef.current?.focus();
+    };
+    return () => {
+      if (focusRef) focusRef.current = null;
+    };
+  }, [focusRef]);
 
   const validateAndAddFiles = useCallback(
     (files: FileList | File[]) => {
@@ -372,20 +404,20 @@ export function ChatInput({
     if (!textarea) return;
 
     const cursor = textarea.selectionStart;
-    const before = value.slice(0, cursor);
-    const after = value.slice(cursor);
-    const newValue = before + "@" + after;
-    setValue(newValue);
-
     const newCursor = cursor + 1;
-    requestAnimationFrame(() => {
-      textarea.selectionStart = newCursor;
-      textarea.selectionEnd = newCursor;
-      textarea.focus();
+    setValue((prev) => {
+      const before = prev.slice(0, cursor);
+      const after = prev.slice(cursor);
+      return before + "@" + after;
     });
+    // Focus restoration is safe to do synchronously here — the next render
+    // commits the new value and the textarea stays mounted.
+    textarea.selectionStart = newCursor;
+    textarea.selectionEnd = newCursor;
+    textarea.focus();
 
     onAtTrigger("", cursor);
-  }, [value, onAtTrigger]);
+  }, [onAtTrigger]);
 
   // Drag-and-drop handlers
   const handleDragOver = useCallback((e: React.DragEvent) => {

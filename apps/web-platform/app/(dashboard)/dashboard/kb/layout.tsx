@@ -10,6 +10,7 @@ import { KbContext } from "@/components/kb/kb-context";
 import type { KbContextValue } from "@/components/kb/kb-context";
 import { KbChatContext } from "@/components/kb/kb-chat-context";
 import type { KbChatContextValue } from "@/components/kb/kb-chat-context";
+import { safeSession } from "@/lib/safe-session";
 import { FileTree } from "@/components/kb/file-tree";
 import { SearchOverlay } from "@/components/kb/search-overlay";
 import { getAncestorPaths } from "@/components/kb/get-ancestor-paths";
@@ -121,10 +122,6 @@ export default function KbLayout({ children }: { children: ReactNode }) {
     return () => { controller.abort(); };
   }, [fetchTree]);
 
-  const refreshTree = useCallback(async () => {
-    await fetchTree();
-  }, [fetchTree]);
-
   const toggleExpanded = useCallback((path: string) => {
     setExpanded((prev) => {
       const next = new Set(prev);
@@ -195,8 +192,8 @@ export default function KbLayout({ children }: { children: ReactNode }) {
     error,
     expanded,
     toggleExpanded,
-    refreshTree,
-  }), [tree, loading, error, expanded, toggleExpanded, refreshTree]);
+    refreshTree: fetchTree,
+  }), [tree, loading, error, expanded, toggleExpanded, fetchTree]);
 
   // --- Chat sidebar state -------------------------------------------------
   const contextPath = useMemo(() => deriveContextPathFromPathname(pathname), [pathname]);
@@ -207,20 +204,17 @@ export default function KbLayout({ children }: { children: ReactNode }) {
   // Restore sidebarOpen from sessionStorage on mount (per-tab persistence)
   useEffect(() => {
     if (!kbChatFlag) return;
-    try {
-      const saved = sessionStorage.getItem(KB_SIDEBAR_OPEN_KEY);
-      if (saved === "1") setSidebarOpen(true);
-    } catch { /* sessionStorage unavailable */ }
+    if (safeSession(KB_SIDEBAR_OPEN_KEY) === "1") setSidebarOpen(true);
   }, [kbChatFlag]);
 
   const openSidebar = useCallback(() => {
     setSidebarOpen(true);
-    try { sessionStorage.setItem(KB_SIDEBAR_OPEN_KEY, "1"); } catch { /* noop */ }
+    safeSession(KB_SIDEBAR_OPEN_KEY, "1");
   }, []);
 
   const closeSidebar = useCallback(() => {
     setSidebarOpen(false);
-    try { sessionStorage.setItem(KB_SIDEBAR_OPEN_KEY, "0"); } catch { /* noop */ }
+    safeSession(KB_SIDEBAR_OPEN_KEY, "0");
   }, []);
 
   // Close the chat panel when the user navigates to a different document.
@@ -270,7 +264,7 @@ export default function KbLayout({ children }: { children: ReactNode }) {
   const submitQuote = useCallback(
     (text: string) => {
       setSidebarOpen(true);
-      try { sessionStorage.setItem(KB_SIDEBAR_OPEN_KEY, "1"); } catch { /* noop */ }
+      safeSession(KB_SIDEBAR_OPEN_KEY, "1");
       // Give the sidebar a tick to mount + register its handler before inserting.
       queueMicrotask(() => {
         quoteHandlerRef.current?.(text);

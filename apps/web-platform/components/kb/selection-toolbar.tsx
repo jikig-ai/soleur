@@ -19,16 +19,6 @@ interface PillState {
 
 const DEFAULT_MAX_BYTES = 8 * 1024;
 
-function isDescendant(node: Node | null, ancestor: Element | null): boolean {
-  if (!node || !ancestor) return false;
-  let n: Node | null = node;
-  while (n) {
-    if (n === ancestor) return true;
-    n = n.parentNode;
-  }
-  return false;
-}
-
 function isShortcutKey(e: KeyboardEvent): boolean {
   if (!e.shiftKey) return false;
   if (!(e.ctrlKey || e.metaKey)) return false;
@@ -76,9 +66,10 @@ export function SelectionToolbar({
         return;
       }
       // Both endpoints must live inside the article.
+      // Element.contains accepts Node | null; returns false on null.
       if (
-        !isDescendant(sel.anchorNode, article) ||
-        !isDescendant(sel.focusNode, article)
+        !article.contains(sel.anchorNode) ||
+        !article.contains(sel.focusNode)
       ) {
         setPill(null);
         return;
@@ -124,8 +115,8 @@ export function SelectionToolbar({
       const text = sel?.toString() ?? "";
       if (!text.trim()) return;
       if (
-        !isDescendant(sel?.anchorNode ?? null, article) ||
-        !isDescendant(sel?.focusNode ?? null, article)
+        !article.contains(sel?.anchorNode ?? null) ||
+        !article.contains(sel?.focusNode ?? null)
       ) {
         return;
       }

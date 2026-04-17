@@ -1,16 +1,15 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, act } from "@testing-library/react";
 import { useRef } from "react";
-import { ChatInput, type ChatInputQuoteHandle } from "@/components/chat/chat-input";
+import { ChatInput } from "@/components/chat/chat-input";
 
-// Phase 4.3: ChatInput exposes an imperative `quoteRef.current.insertQuote(text)`
-// that prepends "> text\n\n" to the draft (or inserts at cursor if there is
+// Phase 4.3 (updated for #2387 7C callback-ref shape):
+// ChatInput exposes an imperative `quoteRef.current(text)` callback that
+// prepends "> text\n\n" to the draft (or inserts at cursor if there is
 // already a draft), does NOT auto-send, and briefly flashes an amber ring
 // class on the inserted blockquote as a landing confirmation.
 
-// Use the exported handle type so the local harness stays in sync when
-// the interface grows (e.g., #2384 5B added `focus()`).
-type QuoteHandle = ChatInputQuoteHandle;
+type QuoteHandle = (text: string) => void;
 
 function Harness({
   onSend,
@@ -42,7 +41,7 @@ function Harness({
   );
 }
 
-describe("ChatInput insertQuote", () => {
+describe("ChatInput insertQuote (callback ref)", () => {
   beforeEach(() => {
     vi.useFakeTimers();
   });
@@ -56,7 +55,7 @@ describe("ChatInput insertQuote", () => {
     render(<Harness onSend={vi.fn()} onReady={(h) => { handle = h; }} />);
     screen.getByTestId("ready").click();
     expect(handle).not.toBeNull();
-    act(() => { handle!.insertQuote("quoted passage"); });
+    act(() => { handle!("quoted passage"); });
     const ta = getTextarea();
     expect(ta.value).toBe("> quoted passage\n\n");
   });
@@ -69,11 +68,10 @@ describe("ChatInput insertQuote", () => {
     const ta = getTextarea();
     act(() => {
       ta.value = "existing text";
-      ta.selectionStart = 8; // between "existing" and " text"
+      ta.selectionStart = 8;
       ta.selectionEnd = 8;
       ta.dispatchEvent(new Event("input", { bubbles: true }));
     });
-    // React controlled value: sync via fireEvent.change style.
     act(() => {
       const nativeInputValueSetter = Object.getOwnPropertyDescriptor(
         window.HTMLTextAreaElement.prototype,
@@ -85,9 +83,8 @@ describe("ChatInput insertQuote", () => {
       ta.selectionEnd = 8;
     });
 
-    act(() => { handle!.insertQuote("QQ"); });
+    act(() => { handle!("QQ"); });
     expect(ta.value).toContain("> QQ\n\n");
-    // Must NOT auto-send.
   });
 
   it("does not auto-send after insert", async () => {
@@ -95,7 +92,7 @@ describe("ChatInput insertQuote", () => {
     let handle: QuoteHandle | null = null;
     render(<Harness onSend={onSend} onReady={(h) => { handle = h; }} />);
     screen.getByTestId("ready").click();
-    act(() => { handle!.insertQuote("x"); });
+    act(() => { handle!("x"); });
     expect(onSend).not.toHaveBeenCalled();
   });
 
@@ -103,10 +100,9 @@ describe("ChatInput insertQuote", () => {
     let handle: QuoteHandle | null = null;
     render(<Harness onSend={vi.fn()} onReady={(h) => { handle = h; }} />);
     screen.getByTestId("ready").click();
-    act(() => { handle!.insertQuote("hi"); });
+    act(() => { handle!("hi"); });
     const ta = getTextarea();
     expect(ta.className).toMatch(/ring-(2|amber)/);
-    // After ~500ms the ring class is removed.
     act(() => { vi.advanceTimersByTime(600); });
     expect(ta.className).not.toMatch(/\bring-2\b/);
   });
@@ -117,17 +113,13 @@ describe("ChatInput insertQuote", () => {
       <Harness onSend={vi.fn()} onReady={(h) => { handle = h; }} />,
     );
     screen.getByTestId("ready").click();
-    // One call primes the pending timer baseline.
-    act(() => { handle!.insertQuote("first"); });
+    act(() => { handle!("first"); });
     const firstCount = vi.getTimerCount();
-    // Four additional rapid calls must NOT grow the pending-timer queue —
-    // each call clears the prior timer and re-schedules one fresh one.
     for (let i = 0; i < 4; i++) {
-      act(() => { handle!.insertQuote("line " + i); });
+      act(() => { handle!("line " + i); });
     }
     expect(vi.getTimerCount()).toBe(firstCount);
     unmount();
-    // Unmount cleanup must cancel every pending timer scheduled by the handle.
     expect(vi.getTimerCount()).toBe(0);
   });
 
