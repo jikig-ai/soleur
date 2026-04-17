@@ -730,3 +730,240 @@ MOCK
     expect(decode(result.stderr)).toContain("Bluesky posting failed");
   });
 });
+
+// ---------------------------------------------------------------------------
+// validate_no_liquid_markers
+// ---------------------------------------------------------------------------
+
+describe("validate_no_liquid_markers", () => {
+  function writeFixture(frontmatter: string, body: string): string {
+    const path = `/tmp/liquid-fixture-${Math.random().toString(36).slice(2)}.md`;
+    const content = `---\n${frontmatter}\n---\n\n${body}\n`;
+    Bun.write(path, content);
+    return path;
+  }
+
+  test("returns 0 for file with clean body", () => {
+    const result = Bun.spawnSync(["bash", "-c", `
+      set -euo pipefail
+      source '${SCRIPT_PATH}'
+      tmpfile=$(mktemp)
+      cat > "$tmpfile" <<'EOF'
+---
+title: "Clean"
+status: scheduled
+---
+
+## Discord
+
+Blog post: https://soleur.ai/blog/x/?utm_source=discord
+EOF
+      validate_no_liquid_markers "$tmpfile"
+      exit_code=$?
+      rm -f "$tmpfile"
+      exit $exit_code
+    `], { env: BASE_ENV });
+    expect(result.exitCode).toBe(0);
+  });
+
+  test("returns 1 for file with {{ in body", () => {
+    const result = Bun.spawnSync(["bash", "-c", `
+      set -euo pipefail
+      source '${SCRIPT_PATH}'
+      tmpfile=$(mktemp)
+      cat > "$tmpfile" <<'EOF'
+---
+title: "Dirty"
+status: scheduled
+---
+
+## Discord
+
+Blog post: <{{ site.url }}blog/x/>
+EOF
+      set +e
+      validate_no_liquid_markers "$tmpfile"
+      exit_code=$?
+      set -e
+      rm -f "$tmpfile"
+      exit $exit_code
+    `], { env: BASE_ENV });
+    expect(result.exitCode).toBe(1);
+    expect(decode(result.stderr)).toContain("unrendered Liquid marker");
+    expect(decode(result.stderr)).toContain("{{ site.url }}");
+  });
+
+  test("returns 1 for file with {% tag %} in body", () => {
+    const result = Bun.spawnSync(["bash", "-c", `
+      set -euo pipefail
+      source '${SCRIPT_PATH}'
+      tmpfile=$(mktemp)
+      cat > "$tmpfile" <<'EOF'
+---
+title: "Dirty Tag"
+---
+
+## Discord
+
+{% if foo %}bar{% endif %}
+EOF
+      set +e
+      validate_no_liquid_markers "$tmpfile"
+      exit_code=$?
+      set -e
+      rm -f "$tmpfile"
+      exit $exit_code
+    `], { env: BASE_ENV });
+    expect(result.exitCode).toBe(1);
+    expect(decode(result.stderr)).toContain("unrendered Liquid marker");
+  });
+
+  test("returns 0 when Liquid-like braces appear only in frontmatter keys", () => {
+    // Frontmatter may contain URL-like paths or JSON-encoded values with braces.
+    // The validator must scope to body-only to avoid false positives.
+    const result = Bun.spawnSync(["bash", "-c", `
+      set -euo pipefail
+      source '${SCRIPT_PATH}'
+      tmpfile=$(mktemp)
+      cat > "$tmpfile" <<'EOF'
+---
+title: "Frontmatter Braces"
+note: "{{ ignored }}"
+---
+
+## Discord
+
+Clean body content, no markers.
+EOF
+      validate_no_liquid_markers "$tmpfile"
+      exit_code=$?
+      rm -f "$tmpfile"
+      exit $exit_code
+    `], { env: BASE_ENV });
+    expect(result.exitCode).toBe(0);
+  });
+
+  test("reports file path and line number in stderr", () => {
+    const result = Bun.spawnSync(["bash", "-c", `
+      set -euo pipefail
+      source '${SCRIPT_PATH}'
+      tmpfile=$(mktemp)
+      cat > "$tmpfile" <<'EOF'
+---
+title: "Line Test"
+---
+
+## Discord
+
+Line one clean.
+Line two: {{ bad }}
+EOF
+      set +e
+      validate_no_liquid_markers "$tmpfile"
+      set -e
+      rm -f "$tmpfile"
+    `], { env: BASE_ENV });
+    const stderr = decode(result.stderr);
+    expect(stderr).toContain("{{ bad }}");
+  });
+
+  // Use the sample-content-with-markers fixture (path reuse for sanity)
+  test("integration: existing SAMPLE_CONTENT (clean) passes validator", () => {
+    const result = runFunction(
+      `validate_no_liquid_markers "${SAMPLE_CONTENT}"`
+    );
+    expect(result.exitCode).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Main loop integration: Liquid-marker gate blocks posting
+// ---------------------------------------------------------------------------
+
+describe("main loop Liquid-marker gate", () => {
+  test("main() skips channel posting and calls create_liquid_marker_fallback_issue when body has markers", () => {
+    const result = Bun.spawnSync(["bash", "-c", `
+      set -euo pipefail
+
+      # Build an isolated content dir with a dirty file scheduled for today
+      tmpdir=$(mktemp -d)
+      today=$(date +%Y-%m-%d)
+      cat > "$tmpdir/dirty.md" <<EOF
+---
+title: "Dirty Fixture"
+type: feature-launch
+publish_date: "$today"
+channels: discord
+status: scheduled
+---
+
+## Discord
+
+Blog: <{{ site.url }}blog/x/>
+EOF
+
+      # Run the publisher with CONTENT_DIR pointed at our temp dir by sourcing
+      # and mocking the helpers that touch the outside world.
+      source '${SCRIPT_PATH}'
+      CONTENT_DIR="$tmpdir"
+
+      # Stubs — must be exported and defined AFTER sourcing so they override.
+      post_discord() { echo "[mock] post_discord called" ; return 0; }
+      create_liquid_marker_fallback_issue() { echo "[mock] fallback_issue: \$1" ; return 0; }
+      create_dedup_issue() { echo "[mock] dedup_issue: \$1" ; return 0; }
+      post_discord_warning() { return 0; }
+      sleep() { :; }
+
+      export DISCORD_BLOG_WEBHOOK_URL="https://example.invalid/webhook"
+
+      main 2>&1 || true
+      rm -rf "$tmpdir"
+    `], { env: BASE_ENV });
+
+    const combined = decode(result.stdout) + decode(result.stderr);
+    // Post MUST be blocked
+    expect(combined).not.toContain("[mock] post_discord called");
+    // Fallback issue MUST be created
+    expect(combined).toContain("[mock] fallback_issue:");
+  });
+
+  test("main() proceeds to post when body is clean", () => {
+    const result = Bun.spawnSync(["bash", "-c", `
+      set -euo pipefail
+
+      tmpdir=$(mktemp -d)
+      today=$(date +%Y-%m-%d)
+      cat > "$tmpdir/clean.md" <<EOF
+---
+title: "Clean Fixture"
+type: feature-launch
+publish_date: "$today"
+channels: discord
+status: scheduled
+---
+
+## Discord
+
+Blog: https://soleur.ai/blog/x/?utm_source=discord
+EOF
+
+      source '${SCRIPT_PATH}'
+      CONTENT_DIR="$tmpdir"
+
+      post_discord() { echo "[mock] post_discord called with: \$1" ; return 0; }
+      create_liquid_marker_fallback_issue() { echo "[mock] fallback_issue: should not be called" ; return 0; }
+      create_dedup_issue() { return 0; }
+      post_discord_warning() { return 0; }
+      sleep() { :; }
+
+      export DISCORD_BLOG_WEBHOOK_URL="https://example.invalid/webhook"
+
+      main 2>&1 || true
+      rm -rf "$tmpdir"
+    `], { env: BASE_ENV });
+
+    const combined = decode(result.stdout) + decode(result.stderr);
+    expect(combined).toContain("[mock] post_discord called");
+    expect(combined).not.toContain("[mock] fallback_issue:");
+  });
+});
