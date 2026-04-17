@@ -235,6 +235,31 @@ export default function KbLayout({ children }: { children: ReactNode }) {
     closeSidebar();
   }, [contextPath, closeSidebar]);
 
+  // Prefetch message count for the current document so the toolbar trigger
+  // shows "Continue thread" vs "Ask about this document" accurately even
+  // while the chat panel is closed. Without this, messageCount stays stale
+  // from the previously-mounted ChatSurface.
+  useEffect(() => {
+    if (!kbChatFlag) return;
+    if (!contextPath) {
+      setMessageCount(0);
+      return;
+    }
+    setMessageCount(0);
+    const controller = new AbortController();
+    fetch(`/api/chat/thread-info?contextPath=${encodeURIComponent(contextPath)}`, {
+      signal: controller.signal,
+    })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data: { messageCount?: number } | null) => {
+        if (data && typeof data.messageCount === "number") {
+          setMessageCount(data.messageCount);
+        }
+      })
+      .catch(() => { /* abort or network error — label stays at default */ });
+    return () => controller.abort();
+  }, [contextPath, kbChatFlag]);
+
   const registerQuoteHandler = useCallback(
     (handler: ((text: string) => void) | null) => {
       quoteHandlerRef.current = handler;
