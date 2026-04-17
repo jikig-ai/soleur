@@ -72,17 +72,32 @@ else
 fi
 
 # Single pure-jq pipeline: parse file paths from each issue body, pick the
-# most-referenced path per issue, derive its "area" (top-two path segments or
-# top-one if the path has only one segment), group issues by area, sort by
-# count desc. Uses a non-capturing extension regex so `scan` returns full
-# matches, not captured extensions.
+# "top" path per issue, derive its "area" (top two path segments). Ranking:
+#   1. Qualified paths (containing "/") outrank bare filenames — shorthand
+#      refs like `chat-input.tsx:17` must not beat the qualified
+#      `apps/web-platform/components/chat/chat-input.tsx:107`.
+#   2. Among qualified paths, deepest wins — a 5-segment
+#      `apps/web-platform/server/rate-limiter.ts` outranks a 2-segment
+#      `server/ws-handler.ts` in the same body, since issue authors
+#      typically give one fully-qualified citation and shorthand the rest.
+#   3. Ties broken by frequency.
+#   4. Fall back to bare filenames only when no qualified path exists.
+# Non-capturing extension regex so `scan` returns full matches, not
+# captured extensions.
 CLUSTERS_JSON="$(jq '
   [ .[] as $i
     | ($i.body // "")
     | [ scan("[A-Za-z0-9_./\\-]+\\.(?:ts|tsx|js|jsx|py|rb|go|md|sh|yml|yaml|sql|tf|njk)\\b") ]
       as $paths
     | select(($paths | length) > 0)
-    | ($paths | group_by(.) | max_by(length) | .[0]) as $top
+    | ([ $paths[] | select(contains("/")) ]) as $qualified
+    | ( if ($qualified | length) > 0
+        then ($qualified
+              | group_by(.)
+              | max_by([(.[0] | split("/") | length), length])
+              | .[0])
+        else ($paths | group_by(.) | max_by(length) | .[0])
+        end ) as $top
     | ($top | split("/")) as $parts
     | ( if ($parts | length) >= 2
         then "\($parts[0])/\($parts[1])"
