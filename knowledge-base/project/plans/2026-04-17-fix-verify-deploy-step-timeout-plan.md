@@ -6,7 +6,46 @@
 **Date:** 2026-04-17
 **Type:** Bug fix (CI / polling window)
 **Scope:** Single file, 1-line env value edit (and a brief comment refresh)
-**Related:** #2205 (named-bounds introduction), #2214 (non-JSON body guard), #2199 (lock_contention state)
+**Related:** #2205 (named-bounds introduction), #2214 (non-JSON body guard at this same step), #2199 (lock_contention state), #968 (async webhook migration — established the 300s health-check window), #2226 (predecessor fix to the same `Verify deploy script completion` step)
+
+## Enhancement Summary
+
+**Deepened on:** 2026-04-17
+**Scope:** Targeted (trivial single-file 1-line env value edit; full multi-agent fan-out is YAGNI here).
+**Research surfaces consulted:**
+
+- `.github/workflows/web-platform-release.yml` (full file read — all poll loops, all step env configs, concurrency group)
+- `apps/web-platform/infra/ci-deploy.sh` (state-file write ordering, flock semantics, EXIT trap behavior)
+- AGENTS.md rules `wg-after-a-pr-merges-to-main-verify-all`, `cq-ci-steps-polling-json-endpoints-under`, `cq-deploy-webhook-observability-debug`
+- Learning `2026-03-21-async-webhook-deploy-cloudflare-timeout.md` (establishes why the health-poll step uses 30 × 10 = 300s — "Docker image pull + container restart routinely takes 60-180 seconds")
+- Learning `2026-04-15-signed-get-verify-step-tolerate-non-json-bodies.md` (the most recent prior fix to this exact step — #2214/#2226)
+- Learning `2026-03-20-ci-deploy-reliability-and-mock-trace-testing.md` (skip_deploy preservation pattern — N/A here since we only touch env vars)
+- `git log` on `.github/workflows/web-platform-release.yml` (20 most recent commits — no prior PR has raised `STATUS_POLL_MAX_ATTEMPTS` in response to a real timing incident)
+- `gh issue list --label code-review --state open` + jq overlap check on the file path (0 matches)
+- Local `actionlint` invocation on the pre-edit file (clean)
+
+### Key Validations from Research
+
+1. **The 300s ceiling has prior art and is principled, not arbitrary.** The downstream `Verify deploy health and version` step already uses 30 attempts × 10s interval = 300s. That value was chosen in #968 (async webhook migration) specifically because "Docker image pull + container restart routinely takes 60-180 seconds" (per the 2026-03-21 learning). The verify-completion step reads a state file that `ci-deploy.sh` writes AFTER pull + canary + health + promote, which can take the same 60-180s range. A 120s ceiling is tighter than the worst-case runtime of the very thing it is supposed to observe — it was always going to produce false negatives under real load. Aligning to 300s eliminates that class.
+
+2. **Choosing MAX_ATTEMPTS=60, INTERVAL_S=5 (over INTERVAL_S=10) is load-bearing.** Keeping the 5s interval preserves fail-fast detection of early non-zero exits. `ci-deploy.sh` writes terminal state (`insufficient_disk_space` at line 225, `lock_contention` at line 210, `unhandled` via EXIT trap at line 96) within seconds. The verify step's `*)` case exits 1 on any non-`-1`/`-2`/`-3`/`0` exit code. A 5s interval catches these ~5s after they happen; a 10s interval would double that window for no benefit, since the 300s-ceiling story is driven by worst-case pull+start, not by throttling curl.
+
+3. **No retry or protocol change is needed beyond the ceiling bump.** The issue body suggested a secondary "graceful retry after lock clears" fix. The `flock -n` + `lock_contention` + state-file path in `ci-deploy.sh` is already correct: a loser writes `lock_contention` via `final_write_state` (line 210) with a non-`-1`/`-2`/`-3`/`0` exit code, which the verify step's `*)` case correctly reports as a failure. The rerun false-negative in run 24583922171 happened specifically because the original attempt's verify step timed out (producing a failed workflow), which triggered the human `gh run rerun --failed`, which POSTed a fresh deploy. If the original verify step had succeeded under a 300s ceiling, the rerun would never have fired. Fix the ceiling → the rerun class disappears. Adding lock-aware retry logic is redundant and adds surface area.
+
+4. **The existing jq-e guard (#2214) still works.** The guard at lines 127-131 will still correctly skip cold-start / non-JSON responses without being affected by the MAX_ATTEMPTS bump. The bump simply gives the loop more chances to see a valid JSON `exit_code=0, tag=vX.Y.Z` response.
+
+5. **No shellcheck / actionlint risk.** Changing an integer env value does not introduce lint findings. Verified: `actionlint` on the current file exits clean; the edit only changes `24` to `60`.
+
+6. **No code-review issue overlap.** `gh issue list --label code-review --state open` + `jq '.body | contains(".github/workflows/web-platform-release.yml")'` returned 0 matches — no fold-in, no acknowledgment, no defer needed.
+
+7. **No cross-workflow sweep needed.** The issue is specific to this step. No other workflow uses `STATUS_POLL_*` env vars (`grep` confirms — the constants are not shared). The downstream `HEALTH_POLL_*` bounds are intentionally separate and already correct.
+
+### New Considerations Discovered
+
+- **Add a one-line cross-reference to the new 300s rationale in the comment block.** Reviewers should be able to scan the comment and see why 300s, not 120s, and why INTERVAL_S stays at 5. Added to the acceptance criteria.
+- **Acceptance criterion: dynamic-window error message is self-updating.** Line 162's `$((STATUS_POLL_MAX_ATTEMPTS * STATUS_POLL_INTERVAL_S))s` will read "300s" after the bump — confirmed at read time. No string literal edit needed.
+- **Post-merge verification must be passive.** The plan already notes "do NOT trigger `gh workflow run web-platform-release.yml` synthetically." The workflow is triggered by tag push / reusable release — synthetic dispatch would fail because it expects release-context inputs. Piggyback on the next organic release.
+- **No Sentry alert needed for verify-step timeouts.** The `::error::` annotation is already picked up by the post-merge monitor. Adding Sentry is a separate observability decision (cq-silent-fallback-must-mirror-to-sentry does not apply — this is a workflow step annotation, not a server-side silent fallback).
 
 ## Overview
 
@@ -108,8 +147,14 @@ No other changes. The existing error message (line 162: `ci-deploy.sh did not re
 
 ## Risks
 
-- **Longer worst-case hold on the workflow runner.** If ci-deploy.sh genuinely hangs (never writes a terminal state), this step will now block for 300s instead of 120s. This is acceptable because: (a) ci-deploy.sh has an EXIT trap at line 96 that writes `"unhandled"` on any non-zero exit, so a real crash surfaces as `EXIT_CODE != 0` and the verify step's `*)` case exits 1 immediately; (b) a hanging ci-deploy.sh is already a Sentry-worthy incident — spending 3 minutes to confirm it is cheap relative to the false-negative noise we're eliminating.
+- **Longer worst-case hold on the workflow runner.** If ci-deploy.sh genuinely hangs (never writes a terminal state), this step will now block for 300s instead of 120s. This is acceptable because:
+  - `ci-deploy.sh` has an EXIT trap at line 96 that writes `"unhandled"` on any non-zero exit, so a real crash surfaces as `EXIT_CODE != 0` and the verify step's `*)` case exits 1 immediately (< 5s after the crash given INTERVAL_S=5).
+  - Terminal-state writes for `lock_contention` (line 210), `insufficient_disk_space` (line 225), and `unhandled` (EXIT trap) all go through `final_write_state`, which touches `${STATE_FILE}.final` — caught on the next `/hooks/deploy-status` poll within 5s.
+  - A hanging ci-deploy.sh is already a Sentry-worthy incident — spending 3 minutes to confirm it is cheap relative to the false-negative noise we're eliminating.
+  - Observed runtime reference: the 2026-03-21 async-webhook learning documents Docker pull + container restart at 60-180s. ci-deploy.sh's full path (prune + pull + canary + health + promote + state-write) realistically reaches 120-240s on the current web-platform server for a cold cache. 300s gives a 25-150% safety margin; 120s gives 0-100% and was demonstrably insufficient on run 24583922171.
 - **None for the retry path.** The rerun behavior is unchanged: `gh run rerun --failed` still re-POSTs to `/hooks/deploy`, which still fails `flock -n` if a deploy is in flight. The fix simply makes reruns rare because the first attempt will almost always complete within 300s.
+- **No regression risk for other steps.** The change is an env value on one step. No other step in the workflow reads `STATUS_POLL_*` (confirmed via grep of the workflow file). The adjacent `Verify deploy health and version` step reads `HEALTH_POLL_*` — a separate namespace.
+- **No Cloudflare edge timeout risk.** The `/hooks/deploy-status` endpoint is GET + signed, responds in < 1s (adnanh/webhook reads a JSON state file), and is well inside the Cloudflare 120s per-request limit. Each poll is an independent short request — the 300s window is wall-clock, not per-request.
 
 ## Rollback Plan
 
