@@ -209,7 +209,7 @@ extract_section() {
 
 extract_tweets() {
   local file="$1"
-  local x_section
+  local x_section mode
 
   x_section=$(extract_section "$file" "X/Twitter Thread")
   if [[ -z "$x_section" ]]; then
@@ -217,19 +217,65 @@ extract_tweets() {
     return 1
   fi
 
-  # Split on **Tweet N pattern, output RS-separated (\x1e) for safe multi-line handling.
-  # Uses \x1e (ASCII Record Separator) because mawk silently drops \0.
-  # Strips the label line (e.g., "**Tweet 1 (Hook) -- 272 chars:**").
-  echo "$x_section" | awk '
-    /^\*\*Tweet [0-9]/ { if (buf != "") { printf "%s\x1e", buf }; buf=""; next }
-    {
-      line = $0
-      gsub(/^[[:space:]]+|[[:space:]]+$/, "", line)
-      if (buf != "") buf = buf "\n" line
-      else buf = line
-    }
-    END { if (buf != "") printf "%s\x1e", buf }
-  '
+  # Two authoring formats are supported:
+  #  (a) Labeled format: each tweet preceded by `**Tweet N (...) -- N chars:**` (label dropped).
+  #  (b) Numbered format: no label; tweets 2+ begin with `N/ ` on a fresh line. The hook
+  #      is the blob before the first `N/` marker. The `N/ ` prefix is preserved so the
+  #      posted tweet keeps its thread-position cue.
+  # Detect mode so `N/ ` lines inside a labeled tweet body (which are legitimate
+  # tweet content in the labeled convention) are not mistakenly treated as tweet
+  # boundaries. Label detection tolerates leading whitespace (`  **Tweet 1 ...`).
+  mode="labeled"
+  if ! echo "$x_section" | grep -qE '^[[:space:]]*\*\*Tweet[[:space:]]+[0-9]'; then
+    mode="numbered"
+  fi
+
+  # Output RS-separated (\x1e) for safe multi-line handling. mawk silently drops \0.
+  if [[ "$mode" == "labeled" ]]; then
+    echo "$x_section" | awk '
+      /^[[:space:]]*\*\*Tweet[[:space:]]+[0-9]/ { if (buf != "") { printf "%s\x1e", buf }; buf=""; next }
+      {
+        line = $0
+        gsub(/^[[:space:]]+|[[:space:]]+$/, "", line)
+        if (buf != "") buf = buf "\n" line
+        else buf = line
+      }
+      END { if (buf != "") printf "%s\x1e", buf }
+    '
+  else
+    # Numbered mode: only split when the line starts with `<expected>/ ` where
+    # `expected` begins at 2 (hook is tweet 1, un-prefixed) and increments after
+    # each match. This prevents prose like `3/5 users` or `1/3 of devs` from
+    # being miscounted as a tweet boundary.
+    echo "$x_section" | awk '
+      BEGIN { expected = 2 }
+      {
+        line = $0
+        gsub(/^[[:space:]]+|[[:space:]]+$/, "", line)
+      }
+      # Boundary detected: line starts with the expected sequence number + "/ ".
+      # Use substr/match to parse rather than regex interpolation.
+      {
+        is_boundary = 0
+        if (match(line, /^[0-9]+\/ /)) {
+          prefix = substr(line, RSTART, RLENGTH)
+          n = substr(prefix, 1, length(prefix) - 2) + 0
+          if (n == expected) { is_boundary = 1 }
+        }
+      }
+      is_boundary {
+        if (buf != "") { printf "%s\x1e", buf }
+        buf = line
+        expected++
+        next
+      }
+      {
+        if (buf != "") buf = buf "\n" line
+        else buf = line
+      }
+      END { if (buf != "") printf "%s\x1e", buf }
+    '
+  fi
 }
 
 # --- Discord Posting ---
