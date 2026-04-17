@@ -8,6 +8,29 @@ date: 2026-04-17
 
 Focused refactor PR draining 5 code-review findings against `app/shared/[token]/page.tsx` and `app/(dashboard)/dashboard/kb/[...path]/page.tsx`, modeled on the net-negative #2486 cleanup pattern.
 
+## Enhancement Summary
+
+**Deepened on:** 2026-04-17
+**Sections enhanced:** Overview, Files to Edit, Files to Create, Implementation Phases, Acceptance Criteria, Test Scenarios, Risks
+**Research inputs:** `kb-binary-response.ts` (RFC 5987 encoding reality), `server/observability.ts` (reportSilentFallback helper), learning `2026-04-05-god-component-extraction-refactoring.md` (smart-parent / dumb-children extraction boundary), AGENTS.md rules `cq-write-failing-tests-before`, `cq-silent-fallback-must-mirror-to-sentry`, `cq-vite-test-files-esm-only`, `cq-in-worktrees-run-vitest-via-node-node`.
+
+### Key Improvements Applied
+
+1. **`extractFilename` RFC 5987 awareness** — the server emits `filename*=UTF-8''<percent-encoded>` as the canonical encoding; the original regex only parses the ASCII-fallback `filename="…"` half. When the filename contains non-ASCII bytes, the ASCII fallback replaces them with `_`, so parsing the `filename*` half first gives the true name. Updated the helper contract to prefer `filename*` and decode it via `decodeURIComponent`, falling back to `filename=` on failure.
+2. **Smart-parent / dumb-children boundary** — learning `2026-04-05-god-component-extraction-refactoring.md` confirms the extraction pattern: parent keeps state / effects / handlers, children receive props only. `KbContentHeader` stays a dumb component (props in, JSX out). `classifyResponse` stays pure (no React imports). The plan already implements this; made it explicit.
+3. **Paired props as discriminated union** — `KbContentHeader`'s `downloadHref` / `downloadFilename` props are now a true discriminated union (`{ download?: { href: string; filename: string } }`) rather than two optional strings, so TS rejects `downloadHref` without `downloadFilename` at compile time.
+4. **Test-mode guard for `classify-response.test.ts`** — AGENTS.md `cq-vite-test-files-esm-only` applies: static `import` only, no `require()`. Test plan uses `vi.mock('@/lib/…')` for any transitive imports and constructs `Response` objects directly (no fetch mocking needed for a pure helper).
+5. **vitest invocation** — AGENTS.md `cq-in-worktrees-run-vitest-via-node-node` applies: run from `apps/web-platform/` with `./node_modules/.bin/vitest run`, never `npx vitest` (stale cache across worktrees).
+6. **Silent-fallback observability** — the 404-message rewrite in `/api/shared/[token]` does NOT introduce a new silent fallback (the branch already returns 404; we only change the message), so AGENTS.md `cq-silent-fallback-must-mirror-to-sentry` does not require a new `reportSilentFallback` call. Flagged explicitly so reviewers don't insist on one.
+7. **Telemetry grep migration** — downstream Sentry/log greps keyed on `"Invalid document path"` for the share-POST symlink case must migrate to the `code: "symlink-rejected"` tag. Plan body and PR body now carry the migration note.
+8. **Shared-page error-message user impact** — the shared viewer renders its own `ErrorMessage` component based on the `error` state, not the raw server body. The server-side 404 message realignment is therefore invisible to the viewer user but visible to direct API consumers (curl, agents, MCP tools). Documented so reviewers don't conflate the two audiences.
+
+### New Considerations Discovered
+
+- The `token` identifier in `classifyResponse(res, token)` is currently unused in the helper's pure form (URL construction happens in `src = /api/shared/${token}`). Keeping it as a parameter documents the contract and allows future basename derivation from the token's stored `document_path` (when a sibling endpoint exposes it).
+- `SharedData.image`'s field rename from `alt` to `filename` is a semantic correction, not a cosmetic one: the field holds a filename (not alt text). The page composes `alt="Shared image"` + `title={filename}` at render.
+- The 6-width dashboard skeleton vs 5-width shared skeleton is intentional in the plan; consider tying widths to content type in a future iteration (markdown body → 5 rows, file preview → 6 rows with a filename row). Not in scope for this PR.
+
 ## Overview
 
 Five open `code-review` issues (#2321, #2318, #2312, #2306, #2301) all sit on the shared-viewer + dashboard-KB page boundary. Each is small, low-risk, and shares the same theme: page-level concerns duplicated across the authenticated owner surface and the public `/shared/[token]` surface. Closing them as five separate PRs would triple review overhead without architectural payoff. Closing them as one PR:
@@ -106,11 +129,18 @@ Checked all planned `Files to edit` + `Files to create` against open `code-revie
   - Add `KbContentSkeleton` to `components/kb/index.ts`.
 
 - `apps/web-platform/components/kb/kb-content-header.tsx`
-  - Named export `KbContentHeader` with props:
-    - `joinedPath: string` (for `KbBreadcrumb`)
-    - `chatUrl: string` (for `KbChatTrigger` fallback)
-    - `downloadHref?: string` — when present, renders the Download anchor; when absent, no download affordance (matches the current markdown-branch behavior).
-    - `downloadFilename?: string` — paired with `downloadHref`. Required if `downloadHref` is set (enforced at the type level with a discriminated union or paired props).
+  - Named export `KbContentHeader` with props (discriminated union for paired download props):
+
+    ```ts
+    type KbContentHeaderProps = {
+      joinedPath: string;
+      chatUrl: string;
+      // Single optional object — `href` without `filename` is not expressible.
+      download?: { href: string; filename: string };
+    };
+    ```
+
+    Rationale: two parallel optional strings allow the "href set, filename missing" miscompile. A single optional object makes the paired contract load-bearing at the type level. The dashboard page passes `download={{ href: contentUrl, filename }}` on the FilePreview branch and omits `download` on the markdown branch.
   - Reuses `KbBreadcrumb`, `SharePopover`, `KbChatTrigger` — no new dependencies.
   - Add to `components/kb/index.ts`.
 
@@ -119,6 +149,19 @@ Checked all planned `Files to edit` + `Files to create` against open `code-revie
   - Absorbs `extractFilename` as a private helper inside the module.
   - Pure (no React, no state writes) — unit-testable without mocking `fetch`.
   - Exported `SharedData` / `PageError` types move here (or stay in the page module if re-exported).
+
+  **`extractFilename` contract (deepened for RFC 5987):**
+
+  The helper must parse the RFC 5987 `filename*=UTF-8''<percent-encoded>` token FIRST, then fall back to the ASCII `filename="…"` token. Server emits BOTH forms (see `server/kb-binary-response.ts` `formatContentDisposition`), but the star form carries the true UTF-8 filename; the ASCII form replaces non-ASCII bytes with `_`.
+
+  Behavior spec:
+
+  - Input `null` → return `null`.
+  - Input contains `filename*=UTF-8''...` → decode via `decodeURIComponent`; on decode throw, fall through to ASCII.
+  - Input has only `filename="..."` → return the quoted value.
+  - Input has neither → return `null`.
+
+  Returning `null` (not the string `"file"`) is the core change — callers treat `null` as "unknown filename" and pick a sensible fallback at the usage site (image `alt` becomes `"Shared image"` with no `title`; download button falls back to the token's last path segment or the string `"download"`).
 
 - `apps/web-platform/test/classify-response.test.ts`
   - Tests for every response-shape branch: 404, 410 revoked, 410 content-changed, 410 legacy-null-hash, !ok generic, markdown JSON, PDF, image, download, and a network throw.
@@ -224,9 +267,17 @@ Run `./node_modules/.bin/vitest run` (from `apps/web-platform/`) and confirm all
 - `!ok` 500 → `{ error: "unknown" }`.
 - `200` with `application/json` body `{ content, path }` → `{ data: { kind: "markdown", content, path } }`.
 - `200` with `application/pdf` and `Content-Disposition: attachment; filename="doc.pdf"` → `{ data: { kind: "pdf", src: "/api/shared/...", filename: "doc.pdf" } }`.
-- `200` with `image/png` and no `Content-Disposition` → `{ data: { kind: "image", src, filename: "<token-derived basename or null>" } }`. **Never** the string `"file"`.
+- `200` with `image/png` and no `Content-Disposition` → `{ data: { kind: "image", src, filename: null } }`. **Never** the string `"file"`.
 - `200` with `application/octet-stream` → `{ data: { kind: "download", src, filename: ... } }`.
 - `fetch` throw → `{ error: "unknown" }`.
+
+### extractFilename RFC 5987 coverage (unit)
+
+- Input `attachment; filename="fallback.jpg"; filename*=UTF-8''caf%C3%A9.jpg` → returns `café.jpg` (star form preferred).
+- Input `attachment; filename="plain.jpg"` (no star) → returns `plain.jpg`.
+- Input `attachment; filename*=UTF-8''%invalid%` (malformed percent-encoding) → falls back to the ASCII `filename=` half if present; returns `null` if neither decodes.
+- Input `null` or `attachment` with no filename at all → returns `null`.
+- Input `inline; filename="file with spaces.pdf"` → returns `file with spaces.pdf` (existing behavior preserved).
 
 ### KbContentHeader (render)
 
@@ -272,6 +323,10 @@ Run `./node_modules/.bin/vitest run` (from `apps/web-platform/`) and confirm all
 - **Test-suite breadth.** Several test files pin status codes and messages precisely. Plan accounts for this explicitly under "Files to Edit" — if grep turns up additional test files at GREEN time, update them with the same pattern. Acceptance gate is `vitest run` green and `tsc --noEmit` clean.
 - **Telemetry drift.** Downstream tooling that greps Sentry logs for `"Invalid document path"` on the share POST will miss 403s after this PR. Mitigation: the `code: "symlink-rejected"` tag on the JSON body is preserved and queryable in Sentry structured data — grepping should key on that tag, not the message string. Note this in PR body.
 - **Cache-Control / ETag behavior unaffected.** This PR does not touch `buildBinaryResponse` or the hash verdict cache. The #2486 changes (strong ETag, weak ETag, conditional 304) are preserved.
+- **Vitest in worktree (AGENTS.md `cq-in-worktrees-run-vitest-via-node-node`).** Always `cd apps/web-platform && ./node_modules/.bin/vitest run` — never `npx vitest`. The npx cache resolves across worktrees and produces phantom failures from a stale worktree's vitest.
+- **Test-file module system (AGENTS.md `cq-vite-test-files-esm-only`).** The four new `.test.tsx` / `.test.ts` files must use static `import` statements — no `require()`. Vite transforms `require()` in ESM files to `Failed to resolve import` at transform time, which masks the RED assertion.
+- **No new silent fallbacks (AGENTS.md `cq-silent-fallback-must-mirror-to-sentry`).** The 404-message rewrite in `/api/shared/[token]` reshapes an existing error path — the 404 already returned a JSON error body, we only change the string. No new `reportSilentFallback` call is needed. Flagged here so a review agent doesn't insist on one.
+- **Shared-page user impact is nil for the 404-message change.** The viewer renders `ErrorMessage` based on the `PageError` state, not the server string. Direct API consumers (curl, MCP tools, agents, logs) see the new message; end users see the existing `ErrorMessage` copy. Document this in the PR body so reviewers don't debate the UX impact.
 
 ## Domain Review
 
