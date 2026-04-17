@@ -1,4 +1,4 @@
-import { describe, test, expect, vi, beforeEach } from "vitest";
+import { describe, test, expect, vi, beforeEach, afterEach } from "vitest";
 import { mockQueryChain } from "./helpers/mock-supabase";
 
 const { mockFrom } = vi.hoisted(() => ({ mockFrom: vi.fn() }));
@@ -12,7 +12,7 @@ import {
   computeMonthStartIso,
   resolveDomainLabel,
   formatUsd,
-  formatRelativeTime,
+  MAX_USAGE_ROWS,
 } from "@/server/api-usage";
 
 const VALID_UUID = "11111111-1111-1111-1111-111111111111";
@@ -20,6 +20,13 @@ const VALID_UUID = "11111111-1111-1111-1111-111111111111";
 describe("loadApiUsageForUser", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.useFakeTimers();
+    // Fixed anchor avoids the month-rollover flake documented in the plan.
+    vi.setSystemTime(new Date("2026-04-17T12:00:00Z"));
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   test("returns empty rows + 0 MTD when user has no conversations", async () => {
@@ -112,12 +119,40 @@ describe("loadApiUsageForUser", () => {
 
     await loadApiUsageForUser(VALID_UUID);
 
-    const now = new Date();
-    const expectedMonthStart = new Date(
-      Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1),
-    ).toISOString();
+    // This test's timezone-decision contract: month boundary is UTC midnight
+    // of month-1. See plan §"Timezone Decision (Kieran P0)".
+    expect(monthChain.gte).toHaveBeenCalledWith(
+      "created_at",
+      "2026-04-01T00:00:00.000Z",
+    );
+  });
 
-    expect(monthChain.gte).toHaveBeenCalledWith("created_at", expectedMonthStart);
+  test("list query enforces order, limit, and cost > 0 filter (AC3 regression guard)", async () => {
+    const listChain = mockQueryChain([], null);
+    const monthChain = mockQueryChain([], null, 0);
+    mockFrom.mockImplementationOnce(() => listChain).mockImplementationOnce(() => monthChain);
+
+    await loadApiUsageForUser(VALID_UUID);
+
+    expect(listChain.order).toHaveBeenCalledWith("created_at", {
+      ascending: false,
+    });
+    expect(listChain.limit).toHaveBeenCalledWith(MAX_USAGE_ROWS);
+    expect(listChain.gt).toHaveBeenCalledWith("total_cost_usd", 0);
+    expect(listChain.eq).toHaveBeenCalledWith("user_id", VALID_UUID);
+  });
+
+  test("month-scope query enforces cost > 0 filter and defensive limit", async () => {
+    const listChain = mockQueryChain([], null);
+    const monthChain = mockQueryChain([], null, 0);
+    mockFrom.mockImplementationOnce(() => listChain).mockImplementationOnce(() => monthChain);
+
+    await loadApiUsageForUser(VALID_UUID);
+
+    expect(monthChain.gt).toHaveBeenCalledWith("total_cost_usd", 0);
+    expect(monthChain.eq).toHaveBeenCalledWith("user_id", VALID_UUID);
+    // Defensive cap — see MTD_SCOPE_LIMIT in server/api-usage.ts.
+    expect(monthChain.limit).toHaveBeenCalledWith(1000);
   });
 
   test("resolves domain labels: known → domain, null → '—', unknown → '—'", async () => {
@@ -274,32 +309,6 @@ describe("formatUsd", () => {
   });
 });
 
-describe("formatRelativeTime", () => {
-  const now = new Date("2026-04-17T12:00:00Z");
-
-  test("within a minute → just now", () => {
-    const past = new Date(now.getTime() - 30 * 1000);
-    expect(formatRelativeTime(past, now)).toBe("just now");
-  });
-
-  test("minutes ago", () => {
-    const past = new Date(now.getTime() - 5 * 60 * 1000);
-    expect(formatRelativeTime(past, now)).toBe("5m ago");
-  });
-
-  test("hours ago", () => {
-    const past = new Date(now.getTime() - 2 * 60 * 60 * 1000);
-    expect(formatRelativeTime(past, now)).toBe("2h ago");
-  });
-
-  test("days ago", () => {
-    const past = new Date(now.getTime() - 3 * 24 * 60 * 60 * 1000);
-    expect(formatRelativeTime(past, now)).toBe("3d ago");
-  });
-
-  test("more than 30 days falls back to MMM D", () => {
-    const past = new Date("2026-02-14T12:00:00Z");
-    const formatted = formatRelativeTime(past, now);
-    expect(formatted).toMatch(/^Feb\s+1[34]$/);
-  });
-});
+// relativeTime itself is tested in @/lib/relative-time's own suite; api-usage
+// re-exports it so consumers have a single import site, but we don't
+// double-cover the helper's unit behavior here.

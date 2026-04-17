@@ -6,6 +6,17 @@
 
 import { createServiceClient } from "@/lib/supabase/service";
 import { DOMAIN_LEADERS } from "@/server/domain-leaders";
+import { relativeTime } from "@/lib/relative-time";
+
+// Re-exported so consumers import time-formatting from the same module as the
+// loader. Canonical implementation lives in @/lib/relative-time.
+export { relativeTime };
+
+export const MAX_USAGE_ROWS = 50;
+// Defensive cap for the month-scope select; client-side sum stops being
+// trustworthy above this and should be replaced by a Postgres aggregate
+// (tracked as a follow-up issue).
+const MTD_SCOPE_LIMIT = 1000;
 
 export interface ApiUsageRow {
   id: string;
@@ -48,23 +59,6 @@ export function formatUsd(n: number): string {
   return `$${n.toFixed(2)}`;
 }
 
-export function formatRelativeTime(date: Date, now: Date = new Date()): string {
-  const diffMs = now.getTime() - date.getTime();
-  const diffSec = Math.floor(diffMs / 1000);
-  if (diffSec < 60) return "just now";
-  const diffMin = Math.floor(diffSec / 60);
-  if (diffMin < 60) return `${diffMin}m ago`;
-  const diffHr = Math.floor(diffMin / 60);
-  if (diffHr < 24) return `${diffHr}h ago`;
-  const diffDay = Math.floor(diffHr / 24);
-  if (diffDay < 30) return `${diffDay}d ago`;
-  return date.toLocaleDateString("en-US", {
-    month: "short",
-    day: "numeric",
-    timeZone: "UTC",
-  });
-}
-
 interface ConversationListRow {
   id: string;
   domain_leader: string | null;
@@ -97,16 +91,27 @@ export async function loadApiUsageForUser(
       .eq("user_id", userId)
       .gt("total_cost_usd", 0)
       .order("created_at", { ascending: false })
-      .limit(50),
+      .limit(MAX_USAGE_ROWS),
     service
       .from("conversations")
       .select("total_cost_usd", { count: "exact" })
       .eq("user_id", userId)
       .gt("total_cost_usd", 0)
-      .gte("created_at", monthStartIso),
+      .gte("created_at", monthStartIso)
+      .limit(MTD_SCOPE_LIMIT),
   ]);
 
-  if (listRes.error || monthRes.error) return null;
+  if (listRes.error || monthRes.error) {
+    // Non-PII observability trace. Omit userId; keep just the op label and
+    // the error code so a future Sentry hookup picks it up without leaking
+    // identifiers into logs.
+    console.error("[api-usage] load failed", {
+      op: "loadApiUsageForUser",
+      listCode: listRes.error?.code ?? null,
+      monthCode: monthRes.error?.code ?? null,
+    });
+    return null;
+  }
 
   const listData = (listRes.data ?? []) as ConversationListRow[];
   const monthData = (monthRes.data ?? []) as MonthScopeRow[];

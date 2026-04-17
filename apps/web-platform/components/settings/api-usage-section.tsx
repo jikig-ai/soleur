@@ -1,27 +1,13 @@
 import Link from "next/link";
 import {
   loadApiUsageForUser,
-  formatRelativeTime,
+  relativeTime,
   formatUsd,
+  MAX_USAGE_ROWS,
   type ApiUsageRow,
 } from "@/server/api-usage";
 import { ApiUsageRetryButton } from "./api-usage-retry-button";
 import { ApiUsageInfoTooltip } from "./api-usage-info-tooltip";
-
-const MONTH_NAMES = [
-  "January",
-  "February",
-  "March",
-  "April",
-  "May",
-  "June",
-  "July",
-  "August",
-  "September",
-  "October",
-  "November",
-  "December",
-];
 
 interface ApiUsageSectionProps {
   userId: string;
@@ -117,7 +103,10 @@ function UsageBody({
   if (isEmpty) return <EmptyState />;
 
   const now = new Date();
-  const monthName = MONTH_NAMES[now.getUTCMonth()];
+  const monthName = now.toLocaleString("en-US", {
+    month: "long",
+    timeZone: "UTC",
+  });
   const conversationsLabel = mtdCount === 1 ? "conversation" : "conversations";
   const zeroMtdWithHistory = mtdTotalUsd === 0 && rows.length > 0;
 
@@ -129,13 +118,13 @@ function UsageBody({
       </p>
       {zeroMtdWithHistory && (
         <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
-          Showing your last 50 conversations with cost. Nothing billed this
-          month yet.
+          Showing your last {MAX_USAGE_ROWS} conversations with cost.
+          Nothing billed this month yet.
         </p>
       )}
 
       <div className="mt-4 overflow-hidden rounded-md border border-zinc-200 dark:border-zinc-800">
-        <UsageList rows={rows} now={now} />
+        <UsageList rows={rows} />
       </div>
 
       <p className="mt-3 text-xs text-zinc-500 dark:text-zinc-400">
@@ -147,13 +136,13 @@ function UsageBody({
   );
 }
 
-function UsageList({ rows, now }: { rows: ApiUsageRow[]; now: Date }) {
+function UsageList({ rows }: { rows: ApiUsageRow[] }) {
   return (
     <ul className="divide-y divide-zinc-200 dark:divide-zinc-800">
       {rows.map((row) => (
         <li
           key={row.id}
-          className="flex cursor-default flex-wrap items-baseline gap-x-4 gap-y-1 px-4 py-3"
+          className="flex flex-wrap items-baseline gap-x-4 gap-y-1 px-4 py-3"
         >
           <span className="flex-1 min-w-[180px] text-sm text-zinc-900 dark:text-zinc-100">
             <span className="font-medium">[{row.domainLabel}]</span>
@@ -161,7 +150,7 @@ function UsageList({ rows, now }: { rows: ApiUsageRow[]; now: Date }) {
               ·
             </span>
             <span className="text-zinc-600 dark:text-zinc-400">
-              {formatRelativeTime(row.createdAt, now)}
+              {relativeTime(row.createdAt.toISOString())}
             </span>
           </span>
           <span className="text-xs text-zinc-600 dark:text-zinc-400">

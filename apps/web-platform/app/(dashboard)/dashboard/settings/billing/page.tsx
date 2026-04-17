@@ -3,10 +3,10 @@ import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { BillingSection } from "@/components/settings/billing-section";
 import { ApiUsageSection } from "@/components/settings/api-usage-section";
 
-// Force dynamic rendering so the API Usage section's <RetryButton> can call
-// router.refresh() and actually re-fetch data. Default caching would serve
-// stale data after a retry.
-export const dynamic = "force-dynamic";
+// Dynamic rendering is already forced by the cookies()/getUser() call in
+// createClient() below, so no explicit `export const dynamic` is required.
+// router.refresh() from <ApiUsageRetryButton> re-runs the full RSC tree,
+// which re-invokes the loader.
 
 export default async function BillingPage() {
   const supabase = await createClient();
