@@ -263,6 +263,19 @@ export function startSubscriptionRefresh(
 }
 
 /**
+ * Guard for the (user_id, context_path) partial UNIQUE index violation.
+ * Exported for regression coverage — asserts that a 23505 on an unrelated
+ * index (e.g., `conversations_pkey`) does NOT fall through to the
+ * context_path lookup. See issue #2390.
+ */
+export function isContextPathUniqueViolation(err: unknown): boolean {
+  const pgErr = err as { code?: string; message?: string } | null;
+  if (!pgErr || pgErr.code !== "23505") return false;
+  return typeof pgErr.message === "string" &&
+    pgErr.message.includes("conversations_context_path_user_uniq");
+}
+
+/**
  * Create a conversation row in the database and return its ID.
  *
  * When `contextPath` is set, a unique-index conflict on
@@ -289,15 +302,10 @@ async function createConversation(
   if (error) {
     // 23505 = unique_violation (postgres). When contextPath is set, this means
     // another tab created the same (user_id, context_path) row — use it instead.
-    // We also disambiguate on the index name (conversations_context_path_user_uniq)
-    // so an unrelated unique constraint doesn't fall through into the context_path
-    // lookup. See review #2390.
-    const pgErr = error as { code?: string; message?: string; details?: string };
-    const isContextPathUniqueViolation =
-      pgErr.code === "23505" &&
-      (typeof pgErr.message === "string" &&
-        pgErr.message.includes("conversations_context_path_user_uniq"));
-    if (contextPath && isContextPathUniqueViolation) {
+    // We disambiguate on the index name (conversations_context_path_user_uniq)
+    // so an unrelated unique constraint (e.g., conversations_pkey id collision)
+    // does NOT fall through into the context_path lookup. See review #2390.
+    if (contextPath && isContextPathUniqueViolation(error)) {
       const { data: existing, error: lookupErr } = await supabase
         .from("conversations")
         .select("id")
