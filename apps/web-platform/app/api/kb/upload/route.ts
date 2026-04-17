@@ -5,6 +5,7 @@ import { isPathInWorkspace } from "@/server/sandbox";
 import { githubApiGet, githubApiPost, GitHubApiError } from "@/server/github-api";
 import { generateInstallationToken, randomCredentialPath } from "@/server/github-app";
 import { sanitizeFilename } from "@/server/kb-validation";
+import { resolveUserKbRoot } from "@/server/kb-route-helpers";
 import { linearizePdf } from "@/server/pdf-linearize";
 import { execFile } from "node:child_process";
 import { writeFileSync, unlinkSync } from "node:fs";
@@ -44,21 +45,19 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  // Fetch workspace data
+  // Fetch workspace data. resolveUserKbRoot centralizes the "user row
+  // → kbRoot + extras" pattern shared with /api/kb/share and
+  // /api/kb/file/*.
   const serviceClient = createServiceClient();
-  const { data: userData } = await serviceClient
-    .from("users")
-    .select("workspace_path, workspace_status, repo_url, github_installation_id")
-    .eq("id", user.id)
-    .single();
-
-  if (!userData?.workspace_path || userData.workspace_status !== "ready") {
-    return NextResponse.json({ error: "Workspace not ready" }, { status: 503 });
-  }
-
-  if (!userData.repo_url || !userData.github_installation_id) {
-    return NextResponse.json({ error: "No repository connected" }, { status: 400 });
-  }
+  const workspace = await resolveUserKbRoot(serviceClient, user.id, {
+    extras: ["repo_url", "github_installation_id"] as const,
+  });
+  if (!workspace.ok) return workspace.response;
+  const userData = {
+    workspace_path: workspace.workspacePath,
+    repo_url: workspace.extras.repo_url,
+    github_installation_id: workspace.extras.github_installation_id,
+  };
 
   // Parse FormData
   let formData: FormData;

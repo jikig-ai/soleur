@@ -6,11 +6,12 @@ import { promisify } from "node:util";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { validateOrigin, rejectCsrf } from "@/lib/auth/validate-origin";
 import { isPathInWorkspace } from "@/server/sandbox";
-import {
-  generateInstallationToken,
-  randomCredentialPath,
-} from "@/server/github-app";
 import type { Logger } from "pino";
+
+// github-app imports are lazily loaded inside syncWorkspace so that routes
+// which only need authenticateAndResolveKbPath / resolveUserKbRoot don't
+// drag github-app + its logger child into their test-mock surface. The
+// file-route already mocks github-app; share/upload do not need to.
 
 const execFileAsync = promisify(execFile);
 
@@ -147,6 +148,90 @@ export async function authenticateAndResolveKbPath(
   }
 }
 
+type ResolveUserKbRootExtras = "repo_url" | "github_installation_id";
+
+export type ResolveUserKbRootResult<E extends ResolveUserKbRootExtras = never> =
+  | {
+      ok: true;
+      workspacePath: string;
+      kbRoot: string;
+      extras: { [K in E]: K extends "repo_url" ? string : number };
+    }
+  | { ok: false; response: Response };
+
+/**
+ * Resolve the authenticated user's KB root and workspace status. Returns
+ * either { ok: true, kbRoot, workspacePath } or an { ok: false, response }
+ * holding the appropriate NextResponse to return from the route handler.
+ *
+ * Routes that need GitHub repo metadata (upload) can pass `extras: ["repo_url",
+ * "github_installation_id"]` to receive those fields plus a 400 "No repository
+ * connected" error if either is unset — this mirrors the inline block the
+ * upload route used to carry.
+ *
+ * Note: the file-route helper (`authenticateAndResolveKbPath`) already does
+ * auth + CSRF + path-segment validation in one pass for PATCH/DELETE on URL-
+ * segment endpoints. `resolveUserKbRoot` is the simpler building block for
+ * endpoints where the relative path comes from the request body (upload,
+ * share). Both helpers live in this file intentionally: they are the two
+ * "workspace entry points" for KB endpoints.
+ */
+export async function resolveUserKbRoot<
+  E extends ResolveUserKbRootExtras = never,
+>(
+  serviceClient: ReturnType<typeof createServiceClient>,
+  userId: string,
+  opts?: { extras?: readonly E[] },
+): Promise<ResolveUserKbRootResult<E>> {
+  const selectCols =
+    opts?.extras && opts.extras.length > 0
+      ? `workspace_path, workspace_status, ${opts.extras.join(", ")}`
+      : "workspace_path, workspace_status";
+
+  const { data: userData } = await serviceClient
+    .from("users")
+    .select(selectCols)
+    .eq("id", userId)
+    .single<Record<string, unknown>>();
+
+  if (
+    !userData?.workspace_path ||
+    userData.workspace_status !== "ready"
+  ) {
+    return {
+      ok: false,
+      response: NextResponse.json(
+        { error: "Workspace not ready" },
+        { status: 503 },
+      ),
+    };
+  }
+
+  if (opts?.extras) {
+    for (const k of opts.extras) {
+      if (userData[k] === null || userData[k] === undefined) {
+        return {
+          ok: false,
+          response: NextResponse.json(
+            { error: "No repository connected" },
+            { status: 400 },
+          ),
+        };
+      }
+    }
+  }
+
+  const workspacePath = userData.workspace_path as string;
+  const kbRoot = path.join(workspacePath, "knowledge-base");
+  const extras = {} as { [K in E]: K extends "repo_url" ? string : number };
+  if (opts?.extras) {
+    for (const k of opts.extras) {
+      (extras as Record<string, unknown>)[k] = userData[k];
+    }
+  }
+  return { ok: true, workspacePath, kbRoot, extras };
+}
+
 /**
  * Pull the workspace to sync local files with the remote repo after a
  * successful GitHub mutation. Uses an installation-scoped credential helper.
@@ -161,6 +246,9 @@ export async function syncWorkspace(
   log: Logger,
   context: { userId: string; op: "delete" | "rename" | "upload" },
 ): Promise<{ ok: true } | { ok: false; error: unknown }> {
+  const { generateInstallationToken, randomCredentialPath } = await import(
+    "@/server/github-app"
+  );
   let helperPath: string | null = null;
   try {
     const token = await generateInstallationToken(installationId);
