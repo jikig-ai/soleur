@@ -8,6 +8,21 @@ import { sanitizeProps, sanitizeForLog } from "./sanitize";
 // Same-origin-checked, per-IP rate-limited Plausible forwarder. No session
 // required — callers are browsers on allow-listed Origins. Props are
 // allowlisted in ./sanitize.ts to keep PII out of third-party telemetry.
+//
+// HTTP caller contract (mirrors the JSDoc on lib/analytics-client.ts#track
+// for agent-SDK / MCP consumers that hit this route directly):
+//
+// - POST JSON body: `{ goal: string (≤120 chars), props?: Record<string, unknown> }`.
+// - The only allowlisted `props` key today is `path`. All others are dropped.
+// - Callers MUST pass a NORMALIZED `path` — dynamic segments replaced with
+//   stable placeholders (Next.js-style): `/users/[uid]/settings`, NOT
+//   `/users/alice@example.com/settings`.
+// - The server enforces defense-in-depth: emails, UUIDs, and 6+ digit runs
+//   in `path` are replaced with fixed sentinels `[email]`, `[uuid]`, `[id]`
+//   before forwarding. The scrubber is a safety net, not the happy path.
+// - Response is 204 on success (forwarded), 204 on graceful skip (missing
+//   PLAUSIBLE_SITE_ID, 402 from Plausible), 400 on malformed body, 403 on
+//   rejected origin, 429 on per-IP rate limit.
 
 const log = createChildLogger("analytics-track");
 

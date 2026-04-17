@@ -455,33 +455,33 @@ normal operation.
 
 Mirrored from spec §"Acceptance Criteria" + brainstorm §"Acceptance Criteria":
 
-- [ ] `sanitizeProps({ path: "/users/alice@example.com/settings" }).clean.path` →
+- [x] `sanitizeProps({ path: "/users/alice@example.com/settings" }).clean.path` →
       `/users/[email]/settings` AND `.scrubbed` equals `["email"]`.
-- [ ] `sanitizeProps({ path: "/u/550e8400-e29b-41d4-a716-446655440000/settings" }).clean.path` →
+- [x] `sanitizeProps({ path: "/u/550e8400-e29b-41d4-a716-446655440000/settings" }).clean.path` →
       `/u/[uuid]/settings` AND `.scrubbed` equals `["uuid"]`.
-- [ ] `sanitizeProps({ path: "/billing/customer/123456/invoices" }).clean.path` →
+- [x] `sanitizeProps({ path: "/billing/customer/123456/invoices" }).clean.path` →
       `/billing/customer/[id]/invoices` AND `.scrubbed` equals `["id"]`.
-- [ ] `sanitizeProps({ path: "/blog/2026-04-17-foo" }).clean.path` →
+- [x] `sanitizeProps({ path: "/blog/2026-04-17-foo" }).clean.path` →
       `/blog/2026-04-17-foo` (date hyphens split runs to ≤4 digits).
-- [ ] `sanitizeProps({ path: "/docs/v12.4.1/install" }).clean.path` →
+- [x] `sanitizeProps({ path: "/docs/v12.4.1/install" }).clean.path` →
       `/docs/v12.4.1/install` (version-number dots preserved).
-- [ ] `sanitizeProps({ path: "/?q=hello" }).clean.path` → `/?q=hello` (query
+- [x] `sanitizeProps({ path: "/?q=hello" }).clean.path` → `/?q=hello` (query
       strings pass through unchanged; Plausible strips them anyway).
-- [ ] Uppercase UUID scrubs: `/u/550E8400-E29B-41D4-A716-446655440000` →
+- [x] Uppercase UUID scrubs: `/u/550E8400-E29B-41D4-A716-446655440000` →
       `/u/[uuid]`.
-- [ ] Scrub runs BEFORE length-cap slice (email at char 195 scrubs to
+- [x] Scrub runs BEFORE length-cap slice (email at char 195 scrubs to
       `[email]` without truncation mid-pattern).
-- [ ] `scrubbed` array is unique-per-pattern (two emails → one `"email"`
+- [x] `scrubbed` array is unique-per-pattern (two emails → one `"email"`
       entry) and ordered `email → uuid → id`.
-- [ ] Route-level `log.debug({ scrubbed }, ...)` fires when
+- [x] Route-level `log.debug({ scrubbed }, ...)` fires when
       `scrubbed.length > 0`; raw/original path value never appears in any
       debug log field.
-- [ ] JSDoc on `lib/analytics-client.ts#track` documents the caller contract
+- [x] JSDoc on `lib/analytics-client.ts#track` documents the caller contract
       with a `/users/[uid]/settings` example.
-- [ ] Existing tests T1–T7 in `api-analytics-track.test.ts` continue to pass
+- [x] Existing tests T1–T7 in `api-analytics-track.test.ts` continue to pass
       unchanged.
-- [ ] New tests added RED-first (fail before implementation, pass after).
-- [ ] `sanitizeProps({ path: "knowledge-base/x.md" })` produces byte-identical
+- [x] New tests added RED-first (fail before implementation, pass after).
+- [x] `sanitizeProps({ path: "knowledge-base/x.md" })` produces byte-identical
       `clean.path` to pre-change behavior (TR5 regression guard).
 
 ## Test Scenarios

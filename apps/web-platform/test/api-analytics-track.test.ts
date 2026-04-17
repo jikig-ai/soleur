@@ -447,8 +447,11 @@ describe("POST /api/analytics/track", () => {
     expect(payload.props.path).toBe("/users/[email]/settings");
 
     // Debug log fires with pattern NAMES only — never the raw value.
-    const scrubCall = logDebug.mock.calls.find(([, msg]) =>
-      typeof msg === "string" && msg.includes("scrubbed"),
+    // Match on context shape (ctx.scrubbed is an array), not on message
+    // substring — renaming the log message should not break the security
+    // invariant this test pins. See test-design-reviewer P2 on PR #2462.
+    const scrubCall = logDebug.mock.calls.find(
+      ([ctx]) => Array.isArray((ctx as { scrubbed?: unknown })?.scrubbed),
     );
     expect(scrubCall).toBeDefined();
     const [ctx] = scrubCall!;

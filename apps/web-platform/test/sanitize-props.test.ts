@@ -181,4 +181,97 @@ describe("sanitizeProps — path PII scrub", () => {
     expect(out.dropped).toEqual([]);
     expect(out.scrubbed).toEqual([]);
   });
+
+  // --- Review findings (PR #2462 multi-agent review) ---
+
+  test("R1 — ReDoS bound: 100KB input scrubs in <100ms", () => {
+    // Review P1 (security-sentinel): without a length bound, EMAIL_RE on
+    // 100KB of 'a' + '@' causes quadratic backtracking. scrubPath now caps
+    // input at MAX_SCRUB_INPUT_LEN = 400 before regex. Runtime bounded.
+    const pathological =
+      "/u/" + "a".repeat(50_000) + "@" + "b".repeat(50_000) + ".com";
+    const t0 = Date.now();
+    const out = sanitizeProps({ path: pathological });
+    const elapsed = Date.now() - t0;
+    expect(elapsed).toBeLessThan(100);
+    expect(typeof out.clean.path).toBe("string");
+    expect((out.clean.path as string).length).toBeLessThanOrEqual(200);
+  });
+
+  test("R2 — non-v4 UUID (v1, v7) also scrubs (review P2)", () => {
+    // Review P2 (security-sentinel): v1 UUIDs encode MAC + timestamp —
+    // stronger PII than v4. Restricting the regex to v4 would leak v1.
+    // The regex now matches any 8-4-4-4-12 hex shape.
+    const v1 = sanitizeProps({ path: "/u/550e8400-e29b-11d4-a716-446655440000" });
+    expect(v1.clean.path).toBe("/u/[uuid]");
+    expect(v1.scrubbed).toContain("uuid");
+
+    const v7 = sanitizeProps({ path: "/u/018fabcd-1234-7000-8000-abcdef012345" });
+    expect(v7.clean.path).toBe("/u/[uuid]");
+    expect(v7.scrubbed).toContain("uuid");
+  });
+
+  test("R3 — CRLF / U+2028 / U+2029 / DEL are stripped from path before Plausible", () => {
+    // Review P2 (security-sentinel): path never ran through sanitizeForLog.
+    // Plausible's CSV export + log viewers treat LS/PS as row breaks — log
+    // injection into the analytics pipeline.
+    const out = sanitizeProps({
+      path: "/kb\u2028fake_admin_view\nextra\u2029end\x7fdel",
+    });
+    expect(out.clean.path).toBe("/kbfake_admin_viewextraenddel");
+    expect(out.clean.path).not.toMatch(/[\n\r\u2028\u2029\x7f]/);
+  });
+
+  test("R4 — percent-encoded @ (%40) scrubs as email (review P3)", () => {
+    const out = sanitizeProps({ path: "/u/alice%40example.com/settings" });
+    expect(out.clean.path).toBe("/u/[email]/settings");
+    expect(out.scrubbed).toContain("email");
+  });
+
+  test("R5 — percent-encoded hyphen (%2D) UUID scrubs (review P3)", () => {
+    const out = sanitizeProps({
+      path: "/u/550e8400%2De29b%2D41d4%2Da716%2D446655440000/x",
+    });
+    expect(out.clean.path).toBe("/u/[uuid]/x");
+    expect(out.scrubbed).toContain("uuid");
+  });
+
+  test("R6 — NBSP / tab adjacent to @ does NOT bypass email scrub (review P3)", () => {
+    // Email local/domain character class now excludes whitespace AND @ AND /.
+    // NBSP (\u00A0) is whitespace per \s, so NBSP-prefix splits into two
+    // non-email segments — correct rejection, not a bypass.
+    const nbsp = sanitizeProps({ path: "/u/alice\u00A0bob@example.com/x" });
+    // The scrub matches "bob@example.com" — segment-bounded, not the full
+    // local. This is the correct defense: no leaked literal `@example.com`.
+    expect(nbsp.clean.path).toBe("/u/alice\u00A0[email]/x");
+    expect(nbsp.scrubbed).toContain("email");
+  });
+
+  test("R7 — scrubbed return type is ScrubPatternName[] (union, not string[])", () => {
+    // Review P2 (architecture): type narrows to a literal union so callers
+    // get compile-time safety on `scrubbed.includes("emial")` typos.
+    const out = sanitizeProps({ path: "/u/a@b.com" });
+    // Runtime check: each entry is one of the three known names.
+    for (const name of out.scrubbed) {
+      expect(["email", "uuid", "id"]).toContain(name);
+    }
+  });
+
+  test("R8 — UUID with 12-digit numeric tail scrubs as uuid only (not uuid+id)", () => {
+    // Review P3 (test-design): pattern-interaction edge case. Scrub order
+    // email→uuid→id means UUID collapses first; the 12-digit tail is gone
+    // before LONG_DIGIT_RUN_RE runs. Pins the order invariant.
+    const out = sanitizeProps({
+      path: "/u/550e8400-e29b-41d4-a716-123456789012",
+    });
+    expect(out.clean.path).toBe("/u/[uuid]");
+    expect(out.scrubbed).toEqual(["uuid"]);
+  });
+
+  test("R9 — IDN email with Latin-extended local scrubs", () => {
+    // Review P3 (test-design): IDN/Unicode email coverage gap.
+    const out = sanitizeProps({ path: "/u/müller@domain.de/x" });
+    expect(out.clean.path).toBe("/u/[email]/x");
+    expect(out.scrubbed).toContain("email");
+  });
 });
