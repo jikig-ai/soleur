@@ -238,6 +238,12 @@ describe("POST /api/analytics/track", () => {
   // -------------------------------------------------------------------------
 
   test("T1: prefers cf-connecting-ip over rotating x-forwarded-for for rate-limit keying", async () => {
+    // Guard against silent coupling: the rate cap is read at module-load in
+    // throttle.ts. If this env var is missing or resetModules gets dropped,
+    // the test silently runs against the 120/min default and only fails at
+    // 121 requests. Assert the contract explicitly.
+    expect(process.env.ANALYTICS_TRACK_RATE_PER_MIN).toBe("3");
+
     mockFetch.mockResolvedValue(new Response("", { status: 202 }));
     const { POST } = await importRoute();
     const cfIp = "7.7.7.7";
@@ -254,13 +260,13 @@ describe("POST /api/analytics/track", () => {
       );
       statuses.push(res.status);
     }
-    // First three requests allowed (ANALYTICS_TRACK_RATE_PER_MIN=3), fourth blocked.
-    // Pre-fix: route keys on x-forwarded-for first; all four return 204.
+    // First three requests allowed, fourth blocked. Pre-fix: route keys on
+    // x-forwarded-for first; all four return 204.
     expect(statuses.slice(0, 3)).toEqual([204, 204, 204]);
     expect(statuses[3]).toBe(429);
   });
 
-  test("T2: throttle.prune reduces .size after window and module schedules periodic prune", async () => {
+  test("T2a: analyticsTrackThrottle.prune() reclaims entries expired past the window", async () => {
     const { analyticsTrackThrottle, __resetAnalyticsTrackThrottleForTest } =
       await import("@/app/api/analytics/track/throttle");
     __resetAnalyticsTrackThrottleForTest();
@@ -278,11 +284,13 @@ describe("POST /api/analytics/track", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
 
-    // Negative-space assertion: the module must install a periodic prune.
-    // Protects against a future refactor that removes the interval while
-    // leaving the `.prune()` method intact (behavioral tests alone can't
-    // catch this — see learning 2026-04-15-negative-space-tests).
+  test("T2b: throttle module source installs a periodic prune interval", () => {
+    // Negative-space guard: behavioral tests in T2a can still pass after a
+    // refactor that removes the interval while leaving .prune() intact. The
+    // source-grep pins the wiring. Style: csrf-coverage.test.ts and learning
+    // 2026-04-15-negative-space-tests-must-follow-extracted-logic.
     const throttlePath = join(
       __dirname,
       "..",
@@ -296,6 +304,7 @@ describe("POST /api/analytics/track", () => {
     expect(throttleSource).toMatch(
       /setInterval\([\s\S]*analyticsTrackThrottle\.prune\(\)[\s\S]*60_?000/,
     );
+    expect(throttleSource).toMatch(/\.unref\(\)/);
   });
 
   test("T3: drops non-allowlisted prop keys (email, sessionId, fingerprint, deviceId, ip)", async () => {
@@ -348,9 +357,16 @@ describe("POST /api/analytics/track", () => {
       body: { goal: "kb.chat.opened\n[FAKE] fake-event" },
     });
     await POST(req);
-    expect(logWarn).toHaveBeenCalled();
-    const [ctx] = logWarn.mock.calls[0];
-    expect(ctx).toEqual({ goal: "kb.chat.opened[FAKE] fake-event" });
+    // toMatchObject + .find tolerate future context-field additions (e.g.,
+    // adding `status: 402`) and additional log lines; they still fail if the
+    // goal is not stripped.
+    const warnCall = logWarn.mock.calls.find(([, msg]) =>
+      typeof msg === "string" && msg.includes("402"),
+    );
+    expect(warnCall).toBeDefined();
+    const [ctx] = warnCall!;
+    expect(ctx).toMatchObject({ goal: "kb.chat.opened[FAKE] fake-event" });
+    expect(ctx.goal).not.toMatch(/[\x00-\x1f]/);
   });
 
   test("T5b: strips control characters from goal and err before logging (catch branch)", async () => {
@@ -361,11 +377,64 @@ describe("POST /api/analytics/track", () => {
       body: { goal: "kb.opened\r\nLINE2" },
     });
     await POST(req);
-    expect(logWarn).toHaveBeenCalled();
-    const [ctx] = logWarn.mock.calls[0];
+    const warnCall = logWarn.mock.calls.find(([, msg]) =>
+      typeof msg === "string" && msg.includes("forward failed"),
+    );
+    expect(warnCall).toBeDefined();
+    const [ctx] = warnCall!;
     expect(typeof ctx.err).toBe("string");
     expect(ctx.err).not.toMatch(/[\x00-\x1f]/);
     expect(ctx.goal).toBe("kb.openedLINE2");
     expect(ctx.err).toContain("network downINJECTED");
+  });
+
+  test("T5c: strips Unicode line separators U+2028/U+2029 and DEL from logged goal", async () => {
+    mockFetch.mockResolvedValue(new Response("{}", { status: 402 }));
+    const { POST } = await importRoute();
+    // U+2028 (line separator), U+2029 (paragraph separator), and DEL (0x7f)
+    // are passed through by JSON loggers but rendered as line breaks by many
+    // downstream log viewers — re-enabling log injection.
+    const req = makeRequest("https://app.soleur.ai/api/analytics/track", {
+      origin: "https://app.soleur.ai",
+      body: { goal: "kb\u2028.open\u2029ed\x7f[INJECTED]" },
+    });
+    await POST(req);
+    const warnCall = logWarn.mock.calls.find(([, msg]) =>
+      typeof msg === "string" && msg.includes("402"),
+    );
+    expect(warnCall).toBeDefined();
+    const [ctx] = warnCall!;
+    expect(ctx.goal).toBe("kb.opened[INJECTED]");
+    expect(ctx.goal).not.toMatch(/[\u2028\u2029\x7f]/);
+  });
+
+  test("T6: non-string prop values for allowlisted keys are forwarded untouched (but counted as 1 key)", async () => {
+    mockFetch.mockResolvedValue(new Response("", { status: 202 }));
+    const { POST } = await importRoute();
+    // The allowlist cap is applied per-key; the value type is not mutated for
+    // non-strings. Document the current behavior so a future regression
+    // accidentally coercing non-strings is caught.
+    const req = makeRequest("https://app.soleur.ai/api/analytics/track", {
+      origin: "https://app.soleur.ai",
+      body: { goal: "kb.chat.opened", props: { path: 42 } },
+    });
+    const res = await POST(req);
+    expect(res.status).toBe(204);
+    const [, init] = mockFetch.mock.calls[0];
+    const payload = JSON.parse(String((init as RequestInit).body));
+    expect(payload.props).toEqual({ path: 42 });
+  });
+
+  test("T7: rejects body with more than MAX_PROP_KEYS (20) props with 400", async () => {
+    const { POST } = await importRoute();
+    const tooManyProps: Record<string, unknown> = {};
+    for (let i = 0; i < 25; i++) tooManyProps[`k${i}`] = "v";
+    const req = makeRequest("https://app.soleur.ai/api/analytics/track", {
+      origin: "https://app.soleur.ai",
+      body: { goal: "kb.chat.opened", props: tooManyProps },
+    });
+    const res = await POST(req);
+    expect(res.status).toBe(400);
+    expect(mockFetch).not.toHaveBeenCalled();
   });
 });

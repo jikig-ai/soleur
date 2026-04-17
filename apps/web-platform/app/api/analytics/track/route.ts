@@ -5,21 +5,15 @@ import { extractClientIpFromHeaders } from "@/server/rate-limiter";
 import { analyticsTrackThrottle } from "./throttle";
 import { sanitizeProps, sanitizeForLog } from "./sanitize";
 
-// Phase 5.2: same-origin-checked, per-IP rate-limited analytics forwarder.
-//
-// The Plausible Events API has no PII requirement, so this route does NOT
-// require a session cookie — that would over-constrain it for future anon
-// surfaces (landing page, share pages). Auth = Origin allow-list + per-IP
-// rate cap.
-//
-// Forwarded props are allowlisted (see ./sanitize.ts) so new PII-like keys
-// cannot leak to a third party without an explicit code review.
-//
-// Non-HTTP-method exports are forbidden in Next.js 15 App Router route files.
-// The throttle + prune interval live in ./throttle.ts; sanitization helpers
-// live in ./sanitize.ts (see cq-nextjs-route-files-http-only-exports).
+// Same-origin-checked, per-IP rate-limited Plausible forwarder. No session
+// required — callers are browsers on allow-listed Origins. Props are
+// allowlisted in ./sanitize.ts to keep PII out of third-party telemetry.
 
 const log = createChildLogger("analytics-track");
+
+const MAX_GOAL_LEN = 120;
+const MAX_PROP_KEYS = 20;
+const MAX_ERR_LOG_LEN = 500;
 
 interface TrackBody {
   goal: string;
@@ -29,22 +23,28 @@ interface TrackBody {
 function isTrackBody(v: unknown): v is TrackBody {
   if (!v || typeof v !== "object") return false;
   const g = (v as { goal?: unknown }).goal;
-  return typeof g === "string" && g.length > 0 && g.length <= 120;
+  if (typeof g !== "string" || g.length === 0 || g.length > MAX_GOAL_LEN) {
+    return false;
+  }
+  const p = (v as { props?: unknown }).props;
+  if (p !== undefined) {
+    if (typeof p !== "object" || p === null || Array.isArray(p)) return false;
+    if (Object.keys(p as Record<string, unknown>).length > MAX_PROP_KEYS) {
+      return false;
+    }
+  }
+  return true;
 }
 
 export async function POST(req: Request): Promise<Response> {
   const { valid, origin } = validateOrigin(req);
-  // This route is explicitly browser-only, so also reject missing Origin —
-  // unlike the repo-wide validateOrigin default (which allows null Origin
-  // for non-browser clients). Non-browser analytics would indicate either
-  // misuse or a server-side caller that should emit goals directly.
+  // Browser-only: reject null Origin (validateOrigin otherwise allows it for
+  // non-browser clients, but analytics from non-browsers should emit directly).
   if (!valid || !origin) {
     return rejectCsrf("/api/analytics/track", origin);
   }
 
-  // Trust cf-connecting-ip first; XFF is spoofable when traffic bypasses
-  // Cloudflare (direct-to-origin). See server/rate-limiter.ts:180 and
-  // learning websocket-rate-limiting-xff-trust-20260329.md.
+  // cf-connecting-ip first; XFF is spoofable when traffic bypasses Cloudflare.
   const ip = extractClientIpFromHeaders(req.headers);
   if (!analyticsTrackThrottle.isAllowed(ip)) {
     return NextResponse.json(
@@ -66,7 +66,7 @@ export async function POST(req: Request): Promise<Response> {
   const siteId = process.env.PLAUSIBLE_SITE_ID;
   const eventsUrl = process.env.PLAUSIBLE_EVENTS_URL ?? "https://plausible.io/api/event";
   if (!siteId) {
-    // Graceful skip — analytics must never block UX. No forwarding possible.
+    // Graceful skip — analytics must never block UX.
     return new NextResponse(null, { status: 204 });
   }
 
@@ -88,8 +88,7 @@ export async function POST(req: Request): Promise<Response> {
       headers: {
         "content-type": "application/json",
         "user-agent": req.headers.get("user-agent") ?? "soleur-analytics/1.0",
-        // Forward the trusted IP so Plausible's geo-IP lookup gets the real
-        // client. Plausible reads X-Forwarded-For specifically.
+        // Forward the trusted IP so Plausible geo-IP sees the real client.
         "x-forwarded-for": ip,
       },
       body: JSON.stringify(payload),
@@ -105,22 +104,18 @@ export async function POST(req: Request): Promise<Response> {
       return new NextResponse(null, { status: 204 });
     }
 
-    // Learning 2026-04-02: tolerate non-JSON bodies. We never parse the
-    // response body further; reading it here just drains the stream.
-    try {
-      const ct = res.headers.get("content-type") ?? "";
-      if (ct.includes("application/json")) {
-        await res.json().catch(() => undefined);
-      } else {
-        await res.text().catch(() => undefined);
-      }
-    } catch {
-      /* ignore */
+    // Learning 2026-04-02: tolerate non-JSON bodies. We never parse further;
+    // reading just drains the stream. Inner .catch() makes this safe on its own.
+    const ct = res.headers.get("content-type") ?? "";
+    if (ct.includes("application/json")) {
+      await res.json().catch(() => undefined);
+    } else {
+      await res.text().catch(() => undefined);
     }
   } catch (err) {
     log.warn(
       {
-        err: sanitizeForLog(String(err)),
+        err: sanitizeForLog(String(err).slice(0, MAX_ERR_LOG_LEN)),
         goal: sanitizeForLog(parsed.goal),
       },
       "Plausible forward failed",
