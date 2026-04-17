@@ -64,6 +64,29 @@ jobs:
             exit 1
           fi
 
+  # next build runs the App Router route-file validator that vitest and `tsc --noEmit`
+  # skip — catches non-HTTP exports from `app/**/route.{ts,tsx}` before merge instead
+  # of inside the post-merge Docker build (#2347/#2401 outage).
+  web-platform-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/web-platform/package-lock.json
+
+      - name: Install web-platform dependencies
+        working-directory: apps/web-platform
+        run: npm ci
+
+      - name: Build (next build runs the route-file validator)
+        working-directory: apps/web-platform
+        run: npm run build
+
   test:
     runs-on: ubuntu-latest
 

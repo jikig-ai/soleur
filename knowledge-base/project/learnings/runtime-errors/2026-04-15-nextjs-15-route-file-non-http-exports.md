@@ -191,4 +191,4 @@ cost. File #2402 tracks adding both.
 - Failing release run: [24477947581](https://github.com/jikig-ai/soleur/actions/runs/24477947581)
 - Hotfix PR: #2401 (merged commit `1f8ebc96`)
 - Passing release run: 24478421955
-- Follow-up guard: #2402 (add `next build` to PR CI + route-export lint)
+- Follow-up guard: #2402 (add `next build` to PR CI + route-export lint) — resolved by PR #2444 which adds the `web-platform-build` job to `.github/workflows/ci.yml` running `next build` on every PR.

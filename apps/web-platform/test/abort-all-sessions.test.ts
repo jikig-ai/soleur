@@ -77,6 +77,11 @@ vi.mock("../server/session-sync", () => ({
   syncPush: vi.fn(),
 }));
 
+vi.mock("../server/observability", () => ({
+  reportSilentFallback: vi.fn(),
+  reportSilentFallbackWarning: vi.fn(),
+}));
+
 import { abortAllSessions, startAgentSession } from "../server/agent-runner";
 import { query } from "@anthropic-ai/claude-agent-sdk";
 

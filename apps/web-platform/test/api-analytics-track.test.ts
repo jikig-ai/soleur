@@ -286,11 +286,14 @@ describe("POST /api/analytics/track", () => {
     }
   });
 
-  test("T2b: throttle module source installs a periodic prune interval", () => {
-    // Negative-space guard: behavioral tests in T2a can still pass after a
-    // refactor that removes the interval while leaving .prune() intact. The
-    // source-grep pins the wiring. Style: csrf-coverage.test.ts and learning
-    // 2026-04-15-negative-space-tests-must-follow-extracted-logic.
+  test("T2b: throttle module delegates prune wiring to shared helper", () => {
+    // Negative-space guard. After the startPruneInterval extraction, the raw
+    // setInterval/unref wiring lives in server/rate-limiter.ts, not throttle.ts.
+    // Per learning 2026-04-15-negative-space-tests-must-follow-extracted-logic,
+    // this test now runs at two layers: (1) delegation on the caller, (2)
+    // invariant on the helper. The helper-side invariant is owned by
+    // test/rate-limiter.test.ts ("helper body installs setInterval + prune +
+    // unref").
     const throttlePath = join(
       __dirname,
       "..",
@@ -301,10 +304,12 @@ describe("POST /api/analytics/track", () => {
       "throttle.ts",
     );
     const throttleSource = readFileSync(throttlePath, "utf-8");
+    // Layer 1: throttle.ts proves it calls the shared helper with the right
+    // counter. No raw setInterval should remain here — if it does, the
+    // extraction was incomplete.
     expect(throttleSource).toMatch(
-      /setInterval\([\s\S]*analyticsTrackThrottle\.prune\(\)[\s\S]*60_?000/,
+      /startPruneInterval\(\s*analyticsTrackThrottle\s*\)/,
     );
-    expect(throttleSource).toMatch(/\.unref\(\)/);
   });
 
   test("T3: drops non-allowlisted prop keys (email, sessionId, fingerprint, deviceId, ip)", async () => {
@@ -423,6 +428,42 @@ describe("POST /api/analytics/track", () => {
     const [, init] = mockFetch.mock.calls[0];
     const payload = JSON.parse(String((init as RequestInit).body));
     expect(payload.props).toEqual({ path: 42 });
+  });
+
+  test("T8: logs scrub pattern names at debug when path contains PII (never raw value)", async () => {
+    // #2462 — sanitizeProps scrubs PII tokens from the `path` value and the
+    // route mirrors the existing `dropped` log pattern to emit a debug line
+    // with the pattern names only. The raw value must never appear in any
+    // debug context field.
+    mockFetch.mockResolvedValue(new Response("", { status: 202 }));
+    const { POST } = await importRoute();
+    const req = makeRequest("https://app.soleur.ai/api/analytics/track", {
+      origin: "https://app.soleur.ai",
+      body: {
+        goal: "kb.chat.opened",
+        props: { path: "/users/alice@example.com/settings" },
+      },
+    });
+    await POST(req);
+
+    // Forwarded payload is scrubbed.
+    const [, init] = mockFetch.mock.calls[0];
+    const payload = JSON.parse(String((init as RequestInit).body));
+    expect(payload.props.path).toBe("/users/[email]/settings");
+
+    // Debug log fires with pattern NAMES only — never the raw value.
+    // Match on context shape (ctx.scrubbed is an array), not on message
+    // substring — renaming the log message should not break the security
+    // invariant this test pins. See test-design-reviewer P2 on PR #2462.
+    const scrubCall = logDebug.mock.calls.find(
+      ([ctx]) => Array.isArray((ctx as { scrubbed?: unknown })?.scrubbed),
+    );
+    expect(scrubCall).toBeDefined();
+    const [ctx] = scrubCall!;
+    expect(ctx).toMatchObject({ scrubbed: ["email"] });
+    // The raw value (pre-scrub) must never appear in ANY debug ctx field.
+    const allDebugCtx = JSON.stringify(logDebug.mock.calls);
+    expect(allDebugCtx).not.toContain("alice@example.com");
   });
 
   test("T7: rejects body with more than MAX_PROP_KEYS (20) props with 400", async () => {

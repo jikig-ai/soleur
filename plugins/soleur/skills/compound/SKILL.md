@@ -263,8 +263,15 @@ After constitution promotion, compound routes the captured learning to the skill
    - **Solution insight:** The main learning (what was solved and how). Propose a one-line bullet edit to the most relevant section of the target definition file.
    - **Error prevention:** For each session error that could have been prevented by a skill instruction, propose a one-line bullet to the skill that was active when the error occurred. Example: if a plan skill prescribed wrong paths, add a bullet to the plan skill's Sharp Edges saying "Verify relative paths by tracing each `../` step before prescribing them."
 3. **Default action (interactive and headless):** Apply the edit directly to the
-   target skill/agent/AGENTS.md file. Commit with `skill: route <basename>
-   <summary>`. Sanitize `<basename>` and `<summary>` before interpolation —
+   target skill/agent/AGENTS.md file. **Always use worktree-absolute paths**
+   (`<worktree-root>/plugins/soleur/skills/<skill>/SKILL.md`) for Edit/Write
+   calls — never `../../plugins/...` relatives from inside a worktree, which
+   escape the worktree and resolve to the bare repo root where tracked files
+   exist as stale synced copies. Verify after the edit with `git status
+   --short` in the worktree: if the expected file is not listed as modified,
+   the edit landed outside the working tree and must be re-applied. Commit
+   with `skill: route <basename> <summary>`. Sanitize `<basename>` and
+   `<summary>` before interpolation —
    `BASENAME=$(basename "$TARGET" | tr -cd '[:alnum:]._-')` — or pass the
    message via a heredoc (`git commit -m "$(cat <<EOF\nskill: route ...\nEOF\n)"`)
    so backticks or `$(...)` in a learning-file-derived basename cannot
