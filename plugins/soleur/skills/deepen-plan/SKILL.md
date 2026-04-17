@@ -480,6 +480,7 @@ Before finalizing:
 - [ ] Code examples are syntactically correct
 - [ ] Links are valid and relevant
 - [ ] No contradictions between sections
+- [ ] Explicit string literals (error messages, log strings, Sentry messages, feature flags) match across Helper Contract / Acceptance Criteria / Test Scenarios / Test Implementation Sketch. Verbatim-preserved strings (e.g., for dashboard/alert continuity) are the highest-risk drift class — grep the whole plan for each quoted literal and confirm one canonical value.
 - [ ] Enhancement summary accurately reflects changes
 
 ## Post-Enhancement Options

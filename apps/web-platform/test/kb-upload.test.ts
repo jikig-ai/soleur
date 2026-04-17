@@ -586,6 +586,8 @@ describe("POST /api/kb/upload", () => {
       expect.stringMatching(/pdf linearization failed/i),
     );
 
+    // Post-refactor: warnSilentFallback emits feature+op tags (reason moves
+    // to `extra`). Sentry message string is preserved for dashboard continuity.
     const Sentry = await import("@sentry/nextjs");
     expect(Sentry.captureMessage).toHaveBeenCalledWith(
       "pdf linearization failed",
@@ -593,7 +595,7 @@ describe("POST /api/kb/upload", () => {
         level: "warning",
         tags: expect.objectContaining({
           feature: "kb-upload",
-          reason: "non_zero_exit",
+          op: "linearize",
         }),
         extra: expect.objectContaining({
           reason: "non_zero_exit",
