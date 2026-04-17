@@ -247,10 +247,16 @@ export async function buildTree(
   return root;
 }
 
-export async function readContent(
+/**
+ * Read a markdown file's raw bytes AND UTF-8 text in a single disk pass.
+ * The `buffer` is the un-parsed, un-trimmed file content — callers that need
+ * an integrity hash MUST hash the buffer, not the post-frontmatter `content`
+ * string, otherwise frontmatter-only edits silently pass verification.
+ */
+export async function readContentRaw(
   kbRoot: string,
   relativePath: string,
-): Promise<ContentResult> {
+): Promise<{ buffer: Buffer; raw: string; path: string }> {
   // Null byte check (CWE-158)
   if (relativePath.includes("\0")) {
     throw new KbAccessDeniedError();
@@ -268,7 +274,6 @@ export async function readContent(
     throw new KbAccessDeniedError();
   }
 
-  // File size guard
   let stat: fs.Stats;
   try {
     stat = await fs.promises.stat(fullPath);
@@ -284,9 +289,17 @@ export async function readContent(
     throw new KbValidationError("File exceeds maximum size limit");
   }
 
-  const raw = await fs.promises.readFile(fullPath, "utf-8");
-  const { frontmatter, content } = parseFrontmatter(raw);
+  const buffer = await fs.promises.readFile(fullPath);
+  const raw = buffer.toString("utf-8");
+  return { buffer, raw, path: relativePath };
+}
 
+export async function readContent(
+  kbRoot: string,
+  relativePath: string,
+): Promise<ContentResult> {
+  const { raw } = await readContentRaw(kbRoot, relativePath);
+  const { frontmatter, content } = parseFrontmatter(raw);
   return { path: relativePath, frontmatter, content };
 }
 

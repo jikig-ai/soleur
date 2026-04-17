@@ -6,6 +6,7 @@ import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { validateOrigin, rejectCsrf } from "@/lib/auth/validate-origin";
 import { isPathInWorkspace } from "@/server/sandbox";
 import { MAX_BINARY_SIZE } from "@/server/kb-binary-response";
+import { hashStream } from "@/server/kb-content-hash";
 import logger from "@/server/logger";
 
 /** POST — generate a share link for a KB document. */
@@ -72,20 +73,72 @@ export async function POST(request: Request) {
     );
   }
 
+  // Hash the file through an O_NOFOLLOW fd. Stream-hashing avoids a second
+  // 50 MB buffer allocation and the fd-level fstat re-validates the type/size
+  // post-lstat, closing any symlink-swap window between lstat and open.
+  let contentHash: string;
+  let handle: fs.promises.FileHandle;
+  try {
+    handle = await fs.promises.open(
+      fullPath,
+      fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW,
+    );
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === "ELOOP" || code === "EMLINK") {
+      return NextResponse.json({ error: "Invalid document path" }, { status: 400 });
+    }
+    return NextResponse.json({ error: "File not found" }, { status: 404 });
+  }
+  try {
+    const fdStat = await handle.stat();
+    if (!fdStat.isFile()) {
+      return NextResponse.json({ error: "Invalid document path" }, { status: 400 });
+    }
+    if (fdStat.size > MAX_BINARY_SIZE) {
+      return NextResponse.json(
+        { error: "File exceeds maximum size limit" },
+        { status: 413 },
+      );
+    }
+    contentHash = await hashStream(handle.createReadStream({ autoClose: false }));
+  } finally {
+    await handle.close().catch(() => {});
+  }
+
   // Check if an active (non-revoked) share already exists for this document.
+  // If the stored hash still matches the current file, return the existing
+  // token (idempotent happy path). If the hash differs, the user is re-sharing
+  // a modified file — revoke the stale row and fall through to issue a fresh
+  // token. This keeps creation user-friendly after legitimate edits without
+  // coupling it to the view-time 410 branch.
   const { data: existing } = await serviceClient
     .from("kb_share_links")
-    .select("token")
+    .select("id, token, content_sha256")
     .eq("user_id", user.id)
     .eq("document_path", body.documentPath)
     .eq("revoked", false)
     .maybeSingle();
 
   if (existing) {
-    return NextResponse.json({
-      token: existing.token,
-      url: `/shared/${existing.token}`,
-    });
+    if (existing.content_sha256 === contentHash) {
+      return NextResponse.json({
+        token: existing.token,
+        url: `/shared/${existing.token}`,
+      });
+    }
+    await serviceClient
+      .from("kb_share_links")
+      .update({ revoked: true })
+      .eq("id", existing.id);
+    logger.info(
+      {
+        event: "share_reissued_on_content_drift",
+        userId: user.id,
+        documentPath: body.documentPath,
+      },
+      "kb/share: revoked stale share and issuing new token (content changed)",
+    );
   }
 
   // Generate a new cryptographically random token.
@@ -96,6 +149,7 @@ export async function POST(request: Request) {
       user_id: user.id,
       token,
       document_path: body.documentPath,
+      content_sha256: contentHash,
     });
 
   if (insertError) {

@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { createHash } from "node:crypto";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 const mocks = vi.hoisted(() => ({
@@ -39,10 +40,23 @@ function callGET(request: Request, token: string) {
   return GET(request, { params: Promise.resolve({ token }) });
 }
 
+function hashFile(absPath: string): string | null {
+  try {
+    const buf = fs.readFileSync(absPath);
+    return createHash("sha256").update(buf).digest("hex");
+  } catch {
+    return null;
+  }
+}
+
 function mockShareAndOwner(
   documentPath: string,
-  opts: { revoked?: boolean } = {},
+  opts: { revoked?: boolean; contentHash?: string | null } = {},
 ) {
+  const resolvedHash =
+    opts.contentHash === undefined
+      ? hashFile(path.join(kbRoot, documentPath)) ?? "0".repeat(64)
+      : opts.contentHash;
   let fromCallCount = 0;
   mocks.mockServiceFrom.mockImplementation(() => {
     fromCallCount++;
@@ -55,6 +69,7 @@ function mockShareAndOwner(
                 document_path: documentPath,
                 user_id: "user-1",
                 revoked: Boolean(opts.revoked),
+                content_sha256: resolvedHash,
               },
               error: null,
             }),

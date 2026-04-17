@@ -323,7 +323,7 @@ Record all four screenshots in the PR body.
 
 ## Acceptance Criteria
 
-- [ ] Migration `026_kb_share_links_content_sha256.sql` applied on prod via the Supabase runbook; REST probe confirms column presence AND check constraint AND NOT NULL.
+- [ ] (post-merge) Migration `026_kb_share_links_content_sha256.sql` applied on prod via the Supabase runbook; REST probe confirms column presence AND check constraint AND NOT NULL.
 - [ ] Pre-apply row count audit documented in PR body (actual number from prod REST probe).
 - [ ] Pre-existing rows marked `revoked = true` (or explicit operator override path documented) so no legacy token can view anything post-deploy.
 - [ ] `POST /api/kb/share` computes SHA-256 via `hashStream` (not `hashBytes` over `readFile`) and stores in `content_sha256` on every new row. Insert payload covered by vitest.
