@@ -1,6 +1,12 @@
 import { redirect } from "next/navigation";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { BillingSection } from "@/components/settings/billing-section";
+import { ApiUsageSection } from "@/components/settings/api-usage-section";
+
+// Force dynamic rendering so the API Usage section's <RetryButton> can call
+// router.refresh() and actually re-fetch data. Default caching would serve
+// stale data after a retry.
+export const dynamic = "force-dynamic";
 
 export default async function BillingPage() {
   const supabase = await createClient();
@@ -34,13 +40,16 @@ export default async function BillingPage() {
     ]);
 
   return (
-    <BillingSection
-      subscriptionStatus={userData?.subscription_status ?? null}
-      currentPeriodEnd={userData?.current_period_end ?? null}
-      cancelAtPeriodEnd={userData?.cancel_at_period_end ?? false}
-      conversationCount={conversationCount ?? 0}
-      serviceTokenCount={serviceTokenCount ?? 0}
-      createdAt={userData?.created_at ?? new Date().toISOString()}
-    />
+    <>
+      <BillingSection
+        subscriptionStatus={userData?.subscription_status ?? null}
+        currentPeriodEnd={userData?.current_period_end ?? null}
+        cancelAtPeriodEnd={userData?.cancel_at_period_end ?? false}
+        conversationCount={conversationCount ?? 0}
+        serviceTokenCount={serviceTokenCount ?? 0}
+        createdAt={userData?.created_at ?? new Date().toISOString()}
+      />
+      <ApiUsageSection userId={user.id} />
+    </>
   );
 }
