@@ -8,9 +8,10 @@ import {
   KbAccessDeniedError,
 } from "@/server/kb-reader";
 import {
-  readBinaryFile,
+  validateBinaryFile,
   buildBinaryResponse,
   openBinaryStream,
+  BinaryOpenError,
 } from "@/server/kb-binary-response";
 import { hashBytes, hashStream } from "@/server/kb-content-hash";
 import { shareHashVerdictCache } from "@/server/share-hash-verdict-cache";
@@ -158,7 +159,7 @@ export async function GET(
   // Binary branch — validate metadata without reading bytes, then either
   // trust the verdict cache (fast path) or hash via a fresh stream before
   // serving (slow path: first view OR file mutated since last verify).
-  const binary = await readBinaryFile(kbRoot, shareLink.document_path);
+  const binary = await validateBinaryFile(kbRoot, shareLink.document_path);
   if (!binary.ok) {
     if (binary.status === 403) {
       logger.warn(
@@ -171,32 +172,47 @@ export async function GET(
 
   const cachedVerdict = shareHashVerdictCache.get(
     token,
+    binary.ino,
     binary.mtimeMs,
     binary.size,
   );
 
   if (cachedVerdict !== true) {
     // Cache miss — drain a fresh stream through SHA-256 and compare
-    // before shipping any bytes. buildBinaryResponse opens another
-    // stream for the response body (fd lifetime is tied to each
-    // stream via autoClose: true).
-    let hashStreamObj;
-    try {
-      hashStreamObj = await openBinaryStream(binary.filePath);
-    } catch (err) {
-      logger.error(
-        { err, token, path: shareLink.document_path },
-        "shared: failed to open hash stream",
-      );
-      return NextResponse.json(
-        { error: "Document no longer available" },
-        { status: 404 },
-      );
-    }
+    // before shipping any bytes. The expected { ino, size } tuple on
+    // openBinaryStream rejects any rename/link swap between validate and
+    // hash — if the inode drifted, BinaryOpenError("content-changed") is
+    // thrown and surfaces as 410.
     let currentHash: string;
     try {
+      const hashStreamObj = await openBinaryStream(binary.filePath, {
+        expected: { ino: binary.ino, size: binary.size },
+      });
       currentHash = await hashStream(hashStreamObj);
     } catch (err) {
+      if (err instanceof BinaryOpenError) {
+        if (err.code === "content-changed") {
+          logger.info(
+            {
+              event: "shared_content_mismatch",
+              token,
+              documentPath: shareLink.document_path,
+              kind: "binary",
+              reason: "inode-drift",
+            },
+            "shared: inode drift between validate and hash",
+          );
+          return contentChangedResponse();
+        }
+        logger.warn(
+          { err: err.message, code: err.code, token, path: shareLink.document_path },
+          "shared: open failed on hash pass",
+        );
+        return NextResponse.json(
+          { error: err.message },
+          { status: err.status },
+        );
+      }
       logger.error(
         { err, token, path: shareLink.document_path },
         "shared: hash stream drain failed",
@@ -218,7 +234,7 @@ export async function GET(
       );
       return contentChangedResponse();
     }
-    shareHashVerdictCache.set(token, binary.mtimeMs, binary.size);
+    shareHashVerdictCache.set(token, binary.ino, binary.mtimeMs, binary.size);
   }
 
   logger.info(
@@ -231,5 +247,25 @@ export async function GET(
     },
     "shared: document viewed",
   );
-  return await buildBinaryResponse(binary, request);
+  try {
+    return await buildBinaryResponse(binary, request);
+  } catch (err) {
+    if (err instanceof BinaryOpenError && err.code === "content-changed") {
+      logger.info(
+        {
+          event: "shared_content_mismatch",
+          token,
+          documentPath: shareLink.document_path,
+          kind: "binary",
+          reason: "inode-drift-serve",
+        },
+        "shared: inode drift between hash and serve",
+      );
+      return contentChangedResponse();
+    }
+    if (err instanceof BinaryOpenError) {
+      return NextResponse.json({ error: err.message }, { status: err.status });
+    }
+    throw err;
+  }
 }

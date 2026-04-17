@@ -110,6 +110,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  __resetShareHashVerdictCacheForTest();
   fs.rmSync(tmpWorkspace, { recursive: true, force: true });
 });
 
@@ -173,7 +174,15 @@ describe("GET /api/shared/[token] — verdict cache (streaming)", () => {
     const second = await callGET(buildRequest("tok-mtime"), "tok-mtime");
     expect(second.status).toBe(410); // content-changed
     expect(hashStreamSpy).toHaveBeenCalledTimes(2);
-    expect(shareHashVerdictCache.get("tok-mtime", future.getTime(), newBytes.length)).toBeNull();
+    const stat = fs.statSync(filePath);
+    expect(
+      shareHashVerdictCache.get(
+        "tok-mtime",
+        stat.ino,
+        stat.mtimeMs,
+        stat.size,
+      ),
+    ).toBeNull();
   });
 
   it("streaming response body contains the full file bytes", async () => {
@@ -186,5 +195,48 @@ describe("GET /api/shared/[token] — verdict cache (streaming)", () => {
     expect(res.status).toBe(200);
     const body = await res.arrayBuffer();
     expect(Buffer.from(body).equals(bytes)).toBe(true);
+  });
+
+  it("hash mismatch on first view returns 410 and does NOT cache the verdict", async () => {
+    const actualBytes = Buffer.from("these are the real file bytes");
+    const storedHash = hashBytes(Buffer.from("something else was stored"));
+    const filePath = path.join(kbRoot, "doc.pdf");
+    fs.writeFileSync(filePath, actualBytes);
+    mockShareAndOwner("doc.pdf", { contentHash: storedHash });
+
+    const res = await callGET(buildRequest("tok-mismatch"), "tok-mismatch");
+    expect(res.status).toBe(410);
+    const body = await res.json();
+    expect(body.code).toBe("content-changed");
+
+    const stat = fs.statSync(filePath);
+    expect(
+      shareHashVerdictCache.get(
+        "tok-mismatch",
+        stat.ino,
+        stat.mtimeMs,
+        stat.size,
+      ),
+    ).toBeNull();
+  });
+
+  it("stores the exact validated tuple on cache set (ino, mtimeMs, size)", async () => {
+    const bytes = Buffer.from("payload to hash");
+    const filePath = path.join(kbRoot, "doc.pdf");
+    fs.writeFileSync(filePath, bytes);
+    const hash = hashBytes(bytes);
+    mockShareAndOwner("doc.pdf", { contentHash: hash });
+
+    const res = await callGET(buildRequest("tok-tuple"), "tok-tuple");
+    expect(res.status).toBe(200);
+    const stat = fs.statSync(filePath);
+    expect(
+      shareHashVerdictCache.get(
+        "tok-tuple",
+        stat.ino,
+        stat.mtimeMs,
+        stat.size,
+      ),
+    ).toBe(true);
   });
 });

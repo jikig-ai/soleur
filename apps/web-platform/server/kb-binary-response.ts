@@ -23,14 +23,16 @@ export const CONTENT_TYPE_MAP: Record<string, string> = {
 export const ATTACHMENT_EXTENSIONS = new Set([".docx"]);
 
 /**
- * Successful result of readBinaryFile. Holds validated metadata; does NOT
- * hold the file bytes in memory. Response bodies open a fresh stream via
- * openBinaryStream(filePath, …) so peak RSS per request stays ~64 KB
- * (default createReadStream chunk size) instead of ~size bytes.
+ * Validated metadata from validateBinaryFile. Carries (ino, mtimeMs, size)
+ * so callers of openBinaryStream can pass `expected` and reject a second
+ * open if the underlying inode drifted between validation and serve. This
+ * closes the TOCTOU window that would otherwise open between two separate
+ * fds on the same path.
  */
 export interface BinaryFileMetadata {
   ok: true;
   filePath: string;
+  ino: number;
   size: number;
   mtimeMs: number;
   contentType: string;
@@ -46,6 +48,17 @@ export type BinaryReadResult =
       error: string;
     };
 
+export class BinaryOpenError extends Error {
+  constructor(
+    public readonly status: 403 | 404 | 500 | 503,
+    message: string,
+    public readonly code?: string,
+  ) {
+    super(message);
+    this.name = "BinaryOpenError";
+  }
+}
+
 export function formatContentDisposition(
   disposition: "inline" | "attachment",
   rawName: string,
@@ -57,20 +70,19 @@ export function formatContentDisposition(
 }
 
 /**
- * Validate a KB-relative path + collect metadata. Opens with O_NOFOLLOW,
- * fstats against the fd to close the symlink-swap window, then closes the
- * fd and returns metadata only. Callers stream bytes separately via
- * openBinaryStream(result.filePath, …), which opens another O_NOFOLLOW fd.
+ * Validate a KB-relative path and collect metadata. Opens with O_NOFOLLOW
+ * to refuse symlinks, fstats against the held fd to capture ino/size/mtimeMs,
+ * then closes the fd and returns metadata only — no bytes in memory.
  *
- * This decouples validation from byte transfer. The trade-off: there is a
- * small TOCTOU window between this function returning and openBinaryStream
- * opening — the file could be swapped. isPathInWorkspace and O_NOFOLLOW
- * still apply to the second open, so symlink replacement is rejected, and
- * the verdict cache in share-hash-verdict-cache.ts keys on (token,
- * mtimeMs, size) so a mutation between validate and stream will not be
- * served from a stale verdict.
+ * Response bodies are opened separately via `openBinaryStream(filePath,
+ * { expected: { ino, size } })`. The `expected` tuple guards against a
+ * rename-swap TOCTOU between validate and serve: if the second fd points
+ * at a different inode or size, openBinaryStream throws BinaryOpenError.
+ *
+ * Name note: called "validate" (not "read") because it no longer reads
+ * file bytes — pre-#2316 it did; the rename avoids perpetuating the lie.
  */
-export async function readBinaryFile(
+export async function validateBinaryFile(
   kbRoot: string,
   relativePath: string,
 ): Promise<BinaryReadResult> {
@@ -109,6 +121,7 @@ export async function readBinaryFile(
     return {
       ok: true,
       filePath: fullPath,
+      ino: stat.ino,
       size: stat.size,
       mtimeMs: stat.mtimeMs,
       contentType,
@@ -123,27 +136,71 @@ export async function readBinaryFile(
 }
 
 /**
- * Open a fresh O_NOFOLLOW read stream for an already-validated filePath.
- * The returned Node Readable is backed by the opened FileHandle with
- * autoClose: true, so fd lifetime is tied to the stream. Pass start/end
- * for Range requests; omit for full-file reads.
+ * Deprecated alias preserved for backward compatibility during the rename
+ * landing. Will be removed once all callers migrate to validateBinaryFile.
  *
- * Returns a Node Readable (not a web ReadableStream) so callers can either:
- *   - wrap via Readable.toWeb(stream) for Response bodies, or
- *   - pipe directly into hashStream() from kb-content-hash.ts.
+ * @deprecated Use validateBinaryFile.
+ */
+export const readBinaryFile = validateBinaryFile;
+
+/**
+ * Open a fresh O_NOFOLLOW read stream for a filePath previously validated
+ * by validateBinaryFile. The returned Node Readable is backed by the
+ * opened FileHandle with autoClose: true — fd lifetime is tied to the
+ * stream.
+ *
+ * Pass `expected: { ino, size }` to close the TOCTOU window: if the
+ * freshly opened fd points at a different inode or the size changed, the
+ * stream is closed and a BinaryOpenError("content-changed") is thrown.
+ * Callers that know the expected inode (from a prior validateBinaryFile)
+ * SHOULD pass it; callers that do not (e.g., a path the caller just
+ * validated inline) MAY omit it.
+ *
+ * Caller remains responsible for running path containment checks
+ * (isPathInWorkspace) BEFORE invoking this helper — openBinaryStream
+ * trusts filePath and only enforces O_NOFOLLOW + optional inode identity.
  */
 export async function openBinaryStream(
   filePath: string,
-  opts?: { start?: number; end?: number },
+  opts?: { start?: number; end?: number; expected?: { ino: number; size: number } },
 ): Promise<Readable> {
-  const handle = await fs.promises.open(
-    filePath,
-    fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW,
-  );
+  let handle: fs.promises.FileHandle;
+  try {
+    handle = await fs.promises.open(
+      filePath,
+      fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW,
+    );
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === "ENOENT") {
+      throw new BinaryOpenError(404, "File not found", code);
+    }
+    if (code === "ELOOP" || code === "EMLINK") {
+      throw new BinaryOpenError(403, "Access denied", code);
+    }
+    if (code === "EACCES" || code === "EPERM") {
+      throw new BinaryOpenError(403, "Access denied", code);
+    }
+    if (code === "EMFILE" || code === "ENFILE") {
+      throw new BinaryOpenError(503, "Server is out of file descriptors", code);
+    }
+    throw new BinaryOpenError(500, "Failed to open file", code);
+  }
+  if (opts?.expected) {
+    const stat = await handle.stat().catch(() => null);
+    if (!stat || stat.ino !== opts.expected.ino || stat.size !== opts.expected.size) {
+      await handle.close().catch(() => {});
+      throw new BinaryOpenError(
+        404,
+        "File changed between validation and read",
+        "content-changed",
+      );
+    }
+  }
   return handle.createReadStream({
     autoClose: true,
-    ...(opts?.start !== undefined ? { start: opts.start } : {}),
-    ...(opts?.end !== undefined ? { end: opts.end } : {}),
+    start: opts?.start,
+    end: opts?.end,
   });
 }
 
@@ -152,6 +209,7 @@ export async function buildBinaryResponse(
   request?: Request,
 ): Promise<Response> {
   const size = meta.size;
+  const expected = { ino: meta.ino, size: meta.size };
   const commonHeaders: Record<string, string> = {
     "Content-Type": meta.contentType,
     "Content-Disposition": formatContentDisposition(meta.disposition, meta.rawName),
@@ -181,7 +239,7 @@ export async function buildBinaryResponse(
         });
       }
       const chunkLength = end - start + 1;
-      const nodeStream = await openBinaryStream(meta.filePath, { start, end });
+      const nodeStream = await openBinaryStream(meta.filePath, { start, end, expected });
       return new Response(
         Readable.toWeb(nodeStream) as ReadableStream<Uint8Array>,
         {
@@ -197,7 +255,7 @@ export async function buildBinaryResponse(
     // Malformed Range header: fall through to full response.
   }
 
-  const nodeStream = await openBinaryStream(meta.filePath);
+  const nodeStream = await openBinaryStream(meta.filePath, { expected });
   return new Response(
     Readable.toWeb(nodeStream) as ReadableStream<Uint8Array>,
     {

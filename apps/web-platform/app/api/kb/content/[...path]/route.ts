@@ -8,7 +8,11 @@ import {
   KbAccessDeniedError,
   KbValidationError,
 } from "@/server/kb-reader";
-import { readBinaryFile, buildBinaryResponse } from "@/server/kb-binary-response";
+import {
+  validateBinaryFile,
+  buildBinaryResponse,
+  BinaryOpenError,
+} from "@/server/kb-binary-response";
 
 export async function GET(
   request: Request,
@@ -74,9 +78,20 @@ export async function GET(
   // Binary file serving — owner route streams unconditionally (no hash
   // gate). The share route adds a content-hash verdict cache on top of
   // the same helpers.
-  const result = await readBinaryFile(kbRoot, relativePath);
+  const result = await validateBinaryFile(kbRoot, relativePath);
   if (!result.ok) {
     return NextResponse.json({ error: result.error }, { status: result.status });
   }
-  return await buildBinaryResponse(result, request);
+  try {
+    return await buildBinaryResponse(result, request);
+  } catch (err) {
+    if (err instanceof BinaryOpenError) {
+      logger.warn(
+        { err: err.message, code: err.code, path: relativePath },
+        "kb/content: open failed on serve",
+      );
+      return NextResponse.json({ error: err.message }, { status: err.status });
+    }
+    throw err;
+  }
 }
