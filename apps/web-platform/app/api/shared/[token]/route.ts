@@ -2,7 +2,8 @@ import { NextResponse } from "next/server";
 import path from "node:path";
 import { createServiceClient } from "@/lib/supabase/server";
 import {
-  readContent,
+  readContentRaw,
+  parseFrontmatter,
   KbNotFoundError,
   KbAccessDeniedError,
 } from "@/server/kb-reader";
@@ -10,6 +11,7 @@ import {
   readBinaryFile,
   buildBinaryResponse,
 } from "@/server/kb-binary-response";
+import { hashBytes } from "@/server/kb-content-hash";
 import {
   shareEndpointThrottle,
   extractClientIpFromHeaders,
@@ -17,11 +19,32 @@ import {
 } from "@/server/rate-limiter";
 import logger from "@/server/logger";
 
+function contentChangedResponse() {
+  return NextResponse.json(
+    {
+      error: "The shared file has been modified since it was shared.",
+      code: "content-changed",
+    },
+    { status: 410 },
+  );
+}
+
+function legacyNullHashResponse() {
+  return NextResponse.json(
+    {
+      error: "This link is from an older share system and is no longer valid.",
+      code: "legacy-null-hash",
+    },
+    { status: 410 },
+  );
+}
+
 export async function GET(
   request: Request,
   { params }: { params: Promise<{ token: string }> },
 ) {
-  // Rate limiting.
+  // Rate limiting — must precede any filesystem / hash work to avoid DoS via
+  // repeated 50 MB hashing requests.
   const clientIp = extractClientIpFromHeaders(request.headers);
   if (!shareEndpointThrottle.isAllowed(clientIp)) {
     logRateLimitRejection("share-endpoint", clientIp);
@@ -37,7 +60,7 @@ export async function GET(
   // Look up share link.
   const { data: shareLink, error: fetchError } = await serviceClient
     .from("kb_share_links")
-    .select("document_path, user_id, revoked")
+    .select("document_path, user_id, revoked, content_sha256")
     .eq("token", token)
     .single();
 
@@ -47,9 +70,19 @@ export async function GET(
 
   if (shareLink.revoked) {
     return NextResponse.json(
-      { error: "This link has been disabled" },
+      { error: "This link has been disabled", code: "revoked" },
       { status: 410 },
     );
+  }
+
+  if (!shareLink.content_sha256) {
+    // Legacy row from before content-hash binding. Treat as invalid — the
+    // migration should have revoked these, but belt-and-suspenders.
+    logger.warn(
+      { event: "shared_legacy_null_hash", token, documentPath: shareLink.document_path },
+      "shared: legacy row without content hash",
+    );
+    return legacyNullHashResponse();
   }
 
   // Resolve owner's workspace.
@@ -69,20 +102,33 @@ export async function GET(
   const kbRoot = path.join(owner.workspace_path, "knowledge-base");
   const ext = path.extname(shareLink.document_path).toLowerCase();
 
-  // Fork on extension. Markdown (or extensionless) uses readContent and
-  // returns JSON as before; everything else streams the binary via the
-  // shared helper. Point-of-use path containment + symlink + size guards
-  // are re-validated inside readBinaryFile, per the service-role-idor
-  // learning — don't trust that the owner's stored document_path is safe.
+  // Markdown / extensionless branch.
   if (ext === ".md" || ext === "") {
     try {
-      const result = await readContent(kbRoot, shareLink.document_path);
+      const { buffer, raw } = await readContentRaw(
+        kbRoot,
+        shareLink.document_path,
+      );
+      const currentHash = hashBytes(buffer);
+      if (currentHash !== shareLink.content_sha256) {
+        logger.info(
+          {
+            event: "shared_content_mismatch",
+            token,
+            documentPath: shareLink.document_path,
+            kind: "markdown",
+          },
+          "shared: content hash mismatch",
+        );
+        return contentChangedResponse();
+      }
+      const { content } = parseFrontmatter(raw);
       logger.info(
         { event: "shared_page_viewed", token, documentPath: shareLink.document_path },
         "shared: document viewed",
       );
       return NextResponse.json({
-        content: result.content,
+        content,
         path: shareLink.document_path,
       });
     } catch (err) {
@@ -107,6 +153,7 @@ export async function GET(
     }
   }
 
+  // Binary branch.
   const binary = await readBinaryFile(kbRoot, shareLink.document_path);
   if (!binary.ok) {
     if (binary.status === 403) {
@@ -117,6 +164,21 @@ export async function GET(
     }
     return NextResponse.json({ error: binary.error }, { status: binary.status });
   }
+
+  const currentHash = hashBytes(binary.buffer);
+  if (currentHash !== shareLink.content_sha256) {
+    logger.info(
+      {
+        event: "shared_content_mismatch",
+        token,
+        documentPath: shareLink.document_path,
+        kind: "binary",
+      },
+      "shared: content hash mismatch",
+    );
+    return contentChangedResponse();
+  }
+
   logger.info(
     {
       event: "shared_page_viewed",
