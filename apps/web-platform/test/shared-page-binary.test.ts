@@ -4,6 +4,7 @@ import path from "node:path";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 import { hashBytes } from "@/server/kb-content-hash";
+import { MAX_BINARY_SIZE } from "@/server/kb-limits";
 import { shareSupabaseFromMock } from "./helpers/share-mocks";
 
 const mocks = vi.hoisted(() => ({
@@ -168,7 +169,7 @@ describe("GET /api/shared/[token] — binary vs markdown branching", () => {
   it("returns 413 when the stored binary exceeds the size limit", async () => {
     fs.writeFileSync(
       path.join(kbRoot, "huge.pdf"),
-      Buffer.alloc(50 * 1024 * 1024 + 1),
+      Buffer.alloc(MAX_BINARY_SIZE + 1),
     );
     mockShareAndOwner("huge.pdf");
 

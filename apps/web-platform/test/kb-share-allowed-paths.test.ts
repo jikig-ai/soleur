@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { MAX_BINARY_SIZE } from "@/server/kb-limits";
 
 const mocks = vi.hoisted(() => ({
   mockGetUser: vi.fn(),
@@ -141,7 +142,7 @@ describe("KB share allowed paths — existence + filetype validation", () => {
   });
 
   it("rejects oversize files with 413", async () => {
-    const big = Buffer.alloc(50 * 1024 * 1024 + 1);
+    const big = Buffer.alloc(MAX_BINARY_SIZE + 1);
     fs.writeFileSync(path.join(kbRoot, "huge.pdf"), big);
     const res = await POST(createShareRequest("huge.pdf"));
     expect(res.status).toBe(413);

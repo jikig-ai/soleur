@@ -12,28 +12,11 @@ import {
   SHARED_CONTENT_KIND_HEADER,
   type SharedContentKind,
 } from "@/lib/shared-kind";
+import { MAX_BINARY_SIZE, CONTENT_TYPE_MAP } from "@/server/kb-limits";
 import { getKbExtension } from "@/lib/kb-extensions";
 
 export { SHARED_CONTENT_KIND_HEADER };
 export type { SharedContentKind };
-
-export const MAX_BINARY_SIZE = 50 * 1024 * 1024; // 50 MB
-
-export const CONTENT_TYPE_MAP: Record<string, string> = {
-  ".png": "image/png",
-  ".jpg": "image/jpeg",
-  ".jpeg": "image/jpeg",
-  ".gif": "image/gif",
-  ".webp": "image/webp",
-  ".svg": "image/svg+xml",
-  ".pdf": "application/pdf",
-  ".csv": "text/csv",
-  ".txt": "text/plain",
-  ".docx":
-    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-};
-
-export const ATTACHMENT_EXTENSIONS = new Set([".docx"]);
 
 /** Derive the shared-content kind from validated binary metadata. */
 export function deriveBinaryKind(
@@ -140,7 +123,9 @@ export async function validateBinaryFile(
     }
     const ext = getKbExtension(relativePath);
     const contentType = CONTENT_TYPE_MAP[ext] || "application/octet-stream";
-    const disposition = ATTACHMENT_EXTENSIONS.has(ext) ? "attachment" : "inline";
+    // Inline the single attachment-only check. Extend via kb-file-kind.ts
+    // (classifyByExtension) when adding more attachment-only types.
+    const disposition = ext === ".docx" ? "attachment" : "inline";
     const rawName = path.basename(relativePath);
     return {
       filePath: fullPath,
