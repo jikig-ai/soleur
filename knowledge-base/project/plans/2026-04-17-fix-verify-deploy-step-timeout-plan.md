@@ -121,7 +121,7 @@ No other changes. The existing error message (line 162: `ci-deploy.sh did not re
 
 ## Acceptance Criteria
 
-- [x] `.github/workflows/web-platform-release.yml:106` reads `STATUS_POLL_MAX_ATTEMPTS: 60`.
+- [x] `.github/workflows/web-platform-release.yml:107` reads `STATUS_POLL_MAX_ATTEMPTS: 60`.
 - [x] `STATUS_POLL_INTERVAL_S` remains `5`.
 - [x] Comment block above the env vars documents the change, references `#2519`, and notes alignment with the downstream health-check step.
 - [x] `actionlint` passes (locally and via lefthook pre-push).
