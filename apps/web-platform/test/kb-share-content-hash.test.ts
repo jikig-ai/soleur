@@ -32,6 +32,7 @@ vi.mock("@/server/logger", () => ({
 }));
 
 import { POST } from "@/app/api/kb/share/route";
+import { shareSupabaseFromMock } from "./helpers/share-mocks";
 
 function hex(buf: Buffer): string {
   return createHash("sha256").update(buf).digest("hex");
@@ -72,47 +73,18 @@ beforeEach(() => {
     data: { user: { id: "user-1" } },
   });
 
-  const makeChain = (terminal: Record<string, unknown>) => {
-    const chain: Record<string, unknown> = { ...terminal };
-    chain.eq = vi.fn().mockReturnValue(chain);
-    return chain;
-  };
-
-  let fromCallCount = 0;
-  mocks.mockServiceFrom.mockImplementation(() => {
-    fromCallCount++;
-    if (fromCallCount === 1) {
-      // users lookup
-      return {
-        select: vi.fn().mockReturnValue(
-          makeChain({
-            single: vi.fn().mockResolvedValue({
-              data: {
-                workspace_path: tmpWorkspace,
-                workspace_status: "ready",
-              },
-              error: null,
-            }),
-          }),
-        ),
-      };
-    }
-    // kb_share_links — select for existing share, then insert, plus update for revoke.
-    return {
-      select: vi.fn().mockReturnValue(
-        makeChain({
-          maybeSingle: vi.fn().mockResolvedValue({
-            data: existingShare,
-            error: null,
-          }),
-        }),
-      ),
-      insert: insertSpy,
-      update: vi.fn().mockReturnValue({
-        eq: vi.fn().mockReturnValue(updateSpy()),
-      }),
-    };
-  });
+  mocks.mockServiceFrom.mockImplementation(
+    shareSupabaseFromMock({
+      users: { workspacePath: tmpWorkspace, workspaceStatus: "ready" },
+      kb_share_links: {
+        // existingShare is mutated per-test; getter resolves at call time.
+        shareRow: () => existingShare,
+        shareError: null,
+        insertSpy,
+        updateSpy,
+      },
+    }),
+  );
 });
 
 afterEach(() => {

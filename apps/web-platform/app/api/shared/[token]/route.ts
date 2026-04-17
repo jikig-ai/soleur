@@ -248,7 +248,11 @@ export async function GET(
     "shared: document viewed",
   );
   try {
-    return await buildBinaryResponse(binary, request);
+    return await buildBinaryResponse(binary, request, {
+      // Strong ETag from the stored content hash: a repeat view with a
+      // matching If-None-Match returns 304 without re-opening the fd.
+      strongETag: shareLink.content_sha256,
+    });
   } catch (err) {
     if (err instanceof BinaryOpenError && err.code === "content-changed") {
       logger.info(

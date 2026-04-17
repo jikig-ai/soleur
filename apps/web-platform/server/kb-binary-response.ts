@@ -204,12 +204,56 @@ export async function openBinaryStream(
   });
 }
 
+/**
+ * Build an ETag for a binary response. Strong ETag (caller-supplied
+ * content hash, e.g. `kb_share_links.content_sha256`) is used verbatim
+ * inside double quotes. Otherwise a weak ETag is derived from the fstat
+ * tuple `W/"<ino>-<size>-<mtimeMs>"` — cheap, stable for unchanged
+ * content, and invalidates on any mutation tracked by fstat.
+ */
+function buildETag(meta: BinaryFileMetadata, strongETag?: string): string {
+  if (strongETag) return `"${strongETag}"`;
+  return `W/"${meta.ino}-${meta.size}-${Math.floor(meta.mtimeMs)}"`;
+}
+
+/**
+ * RFC 7232 If-None-Match: weak-equality comparison (sufficient for GET).
+ * Handles `*` wildcard and strips `W/` prefix before comparing so weak
+ * and strong ETags with the same opaque value match. Multiple
+ * comma-separated candidates are accepted.
+ */
+function matchesIfNoneMatch(ifNoneMatch: string, etag: string): boolean {
+  if (ifNoneMatch.trim() === "*") return true;
+  const normalize = (s: string) => s.trim().replace(/^W\//, "");
+  const candidates = new Set(ifNoneMatch.split(",").map((s) => normalize(s)));
+  return candidates.has(normalize(etag));
+}
+
 export async function buildBinaryResponse(
   meta: BinaryFileMetadata,
   request?: Request,
+  opts?: { strongETag?: string },
 ): Promise<Response> {
   const size = meta.size;
   const expected = { ino: meta.ino, size: meta.size };
+  const etag = buildETag(meta, opts?.strongETag);
+
+  // Conditional GET short-circuit: If-None-Match matches → 304 with no
+  // body and no fd open. Saves bytes AND the validate+stream round-trip
+  // for clients that hold a valid cache entry. Works for full and Range
+  // requests (RFC 7232 permits honoring If-None-Match on the overall
+  // resource ETag even when a Range header is present).
+  const ifNoneMatch = request?.headers.get("if-none-match");
+  if (ifNoneMatch && matchesIfNoneMatch(ifNoneMatch, etag)) {
+    return new Response(null, {
+      status: 304,
+      headers: {
+        ETag: etag,
+        "Cache-Control": "private, max-age=60",
+      },
+    });
+  }
+
   const commonHeaders: Record<string, string> = {
     "Content-Type": meta.contentType,
     "Content-Disposition": formatContentDisposition(meta.disposition, meta.rawName),
@@ -217,6 +261,7 @@ export async function buildBinaryResponse(
     "Cache-Control": "private, max-age=60",
     "Content-Security-Policy": KB_BINARY_RESPONSE_CSP,
     "Accept-Ranges": "bytes",
+    ETag: etag,
   };
 
   const rangeHeader = request?.headers.get("range");

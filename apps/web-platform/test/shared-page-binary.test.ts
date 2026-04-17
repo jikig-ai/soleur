@@ -4,6 +4,7 @@ import path from "node:path";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 import { hashBytes } from "@/server/kb-content-hash";
+import { shareSupabaseFromMock } from "./helpers/share-mocks";
 
 const mocks = vi.hoisted(() => ({
   mockServiceFrom: vi.fn(),
@@ -57,50 +58,27 @@ function mockShareAndOwner(
     opts.contentHash === undefined
       ? hashFile(path.join(kbRoot, documentPath)) ?? "0".repeat(64)
       : opts.contentHash;
-  let fromCallCount = 0;
-  mocks.mockServiceFrom.mockImplementation(() => {
-    fromCallCount++;
-    if (fromCallCount === 1) {
-      return {
-        select: vi.fn().mockReturnValue({
-          eq: vi.fn().mockReturnValue({
-            single: vi.fn().mockResolvedValue({
-              data: {
-                document_path: documentPath,
-                user_id: "user-1",
-                revoked: Boolean(opts.revoked),
-                content_sha256: resolvedHash,
-              },
-              error: null,
-            }),
-          }),
-        }),
-      };
-    }
-    return {
-      select: vi.fn().mockReturnValue({
-        eq: vi.fn().mockReturnValue({
-          single: vi.fn().mockResolvedValue({
-            data: {
-              workspace_path: tmpWorkspace,
-              workspace_status: "ready",
-            },
-            error: null,
-          }),
-        }),
-      }),
-    };
-  });
+  mocks.mockServiceFrom.mockImplementation(
+    shareSupabaseFromMock({
+      users: { workspacePath: tmpWorkspace, workspaceStatus: "ready" },
+      kb_share_links: {
+        shareRow: {
+          document_path: documentPath,
+          user_id: "user-1",
+          revoked: Boolean(opts.revoked),
+          content_sha256: resolvedHash,
+        },
+      },
+    }),
+  );
 }
 
 function mockShareNotFound() {
-  mocks.mockServiceFrom.mockImplementation(() => ({
-    select: vi.fn().mockReturnValue({
-      eq: vi.fn().mockReturnValue({
-        single: vi.fn().mockResolvedValue({ data: null, error: null }),
-      }),
+  mocks.mockServiceFrom.mockImplementation(
+    shareSupabaseFromMock({
+      kb_share_links: { shareRow: null, shareError: null },
     }),
-  }));
+  );
 }
 
 beforeEach(() => {

@@ -34,6 +34,7 @@ vi.mock("@/server/logger", () => ({
 }));
 
 import { GET } from "@/app/api/shared/[token]/route";
+import { shareSupabaseFromMock } from "./helpers/share-mocks";
 
 function hex(buf: Buffer): string {
   return createHash("sha256").update(buf).digest("hex");
@@ -44,43 +45,17 @@ let kbRoot: string;
 let shareRow: Record<string, unknown> | null;
 
 function mockShareLookup() {
-  const makeChain = (terminal: Record<string, unknown>) => {
-    const chain: Record<string, unknown> = { ...terminal };
-    chain.eq = vi.fn().mockReturnValue(chain);
-    return chain;
-  };
-
-  let fromCalls = 0;
-  mocks.mockServiceFrom.mockImplementation(() => {
-    fromCalls++;
-    if (fromCalls === 1) {
-      // kb_share_links lookup by token
-      return {
-        select: vi.fn().mockReturnValue(
-          makeChain({
-            single: vi.fn().mockResolvedValue({
-              data: shareRow,
-              error: shareRow ? null : new Error("not found"),
-            }),
-          }),
-        ),
-      };
-    }
-    // users lookup for owner workspace
-    return {
-      select: vi.fn().mockReturnValue(
-        makeChain({
-          single: vi.fn().mockResolvedValue({
-            data: {
-              workspace_path: tmpWorkspace,
-              workspace_status: "ready",
-            },
-            error: null,
-          }),
-        }),
-      ),
-    };
-  });
+  // shareRow is mutated per-test; pass getters so the helper resolves at
+  // call time rather than snapshotting the initial null.
+  mocks.mockServiceFrom.mockImplementation(
+    shareSupabaseFromMock({
+      users: { workspacePath: tmpWorkspace, workspaceStatus: "ready" },
+      kb_share_links: {
+        shareRow: () => shareRow,
+        shareError: () => (shareRow ? null : new Error("not found")),
+      },
+    }),
+  );
 }
 
 function getReq(): Request {
