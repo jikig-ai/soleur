@@ -102,4 +102,22 @@ assert_eq "apps/web-platform" "$first_area" "mixed-depth: deepest qualified path
 first_count=$(echo "$json_out" | jq -r '.[0].count')
 assert_eq "3" "$first_count" "mixed-depth: all 3 issues fold into apps/web-platform"
 
+# ---------------------------------------------------------------------------
+# T10 — --label flag: parses, validates non-empty, and passes through to the
+# fixture path unchanged. Fixtures bypass the live `gh label list` check, so
+# this test exercises the argv plumbing only (live label validation is tested
+# implicitly by CI runs; failing live would exit 2 with the guard message).
+# ---------------------------------------------------------------------------
+echo ""
+echo "--- T10: --label flag plumbing ---"
+out=$(bash "$HELPER" --label code-review --fixture "$FIXTURE_DIR/clustered.json" --top-n 1 --min-cluster-size 3)
+assert_contains "$out" "apps/web-platform" "label: custom label still clusters via fixture"
+
+set +e
+err=$(bash "$HELPER" --label "" --fixture "$FIXTURE_DIR/clustered.json" 2>&1)
+rc=$?
+set -e
+assert_eq "2" "$rc" "label: empty --label exits 2"
+assert_contains "$err" "--label must be non-empty" "label: empty --label prints guard message"
+
 print_results

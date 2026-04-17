@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, waitFor, act } from "@testing-library/react";
 import { Suspense } from "react";
+import { SHARED_CONTENT_KIND_HEADER } from "@/lib/shared-kind";
 
 vi.mock("@/components/ui/markdown-renderer", () => ({
   MarkdownRenderer: ({ content }: { content: string }) => (
@@ -31,8 +32,11 @@ function renderWithSuspense(ui: React.ReactNode) {
   return render(<Suspense fallback={<div>Loading...</div>}>{ui}</Suspense>);
 }
 
-function mockFetchBinary(contentType: string, disposition: string | null) {
-  const headers = new Map<string, string>([["content-type", contentType]]);
+function mockFetchImage(disposition: string | null) {
+  const headers = new Map<string, string>([
+    ["content-type", "image/png"],
+    [SHARED_CONTENT_KIND_HEADER.toLowerCase(), "image"],
+  ]);
   if (disposition) headers.set("content-disposition", disposition);
   vi.stubGlobal(
     "fetch",
@@ -50,7 +54,7 @@ function mockFetchBinary(contentType: string, disposition: string | null) {
 
 describe("SharedDocumentPage — image a11y", () => {
   it('uses alt="Shared image" instead of the filename', async () => {
-    mockFetchBinary("image/png", 'inline; filename="photo_001.jpg"');
+    mockFetchImage('inline; filename="photo_001.jpg"');
 
     const { default: SharedDocumentPage } = await import(
       "@/app/shared/[token]/page"
@@ -73,7 +77,7 @@ describe("SharedDocumentPage — image a11y", () => {
   });
 
   it('uses alt="Shared image" with no title when Content-Disposition is missing', async () => {
-    mockFetchBinary("image/png", null);
+    mockFetchImage(null);
 
     const { default: SharedDocumentPage } = await import(
       "@/app/shared/[token]/page"
