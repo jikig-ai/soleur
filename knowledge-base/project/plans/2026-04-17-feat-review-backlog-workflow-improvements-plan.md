@@ -6,9 +6,32 @@ branch: feat-review-backlog-workflow-improvements
 related_prs: [2463, 2477, 2486]
 related_brainstorm: knowledge-base/project/brainstorms/2026-04-15-review-workflow-hardening-brainstorm.md
 related_rule: rf-review-finding-default-fix-inline
+deepened: 2026-04-17
 ---
 
 # Review Backlog Workflow Improvements — Stop Net-Positive Scope-Out Filings
+
+## Enhancement Summary
+
+**Deepened on:** 2026-04-17
+**Lenses applied:** simplicity/YAGNI, architecture, code-quality, pattern-recognition
+**Verified against:** live `gh label list`, live `gh issue list --label deferred-scope-out --state open` (22 open, 15+ in "Post-MVP / Later"), live `plugins/soleur/test/` conventions, live `plugins/soleur/skills/schedule/SKILL.md`.
+
+### Key Improvements Applied
+
+1. **Default milestone corrected.** `cleanup-scope-outs` defaults to `Post-MVP / Later` (where the backlog actually lives — 15+ issues), not "current Phase" (only 1 issue). Defaulting to current Phase would return an empty set and the skill would appear broken on first run.
+2. **Sub-grouping trigger dropped (YAGNI).** The spec had >10-issues-in-area triggering sub-directory grouping. Measured: no single area exceeds 10 today. Defer the sub-group logic until the trigger actually fires.
+3. **`gh ... --jq` does not forward `--arg` (learning 2026-04-15).** The Phase 1.7.5 query example now uses a two-stage pipe (`gh ... --json ... | jq --arg ...`) — the single-stage form would fail at runtime with "unknown arguments".
+4. **`gh issue list --milestone` takes title (rule `cq-gh-issue-create-milestone-takes-title`).** Helper script MUST quote the milestone title literally and never pass a numeric ID.
+5. **`/soleur:schedule` is a real post-merge option.** The existing `schedule` skill can cron the `cleanup-scope-outs` skill directly — documented as a follow-up action, not a dependency.
+6. **T5 simplified.** Dropped the "block issue creation at grep time" enforcement (over-engineered); the review skill's instruction to include `Re-eval by:` is sufficient, and Phase 5.5's exit gate catches violations.
+
+### New Considerations Discovered
+
+- **Backlog baseline is larger than the brief suggested.** Live count at plan time: **22 open `deferred-scope-out` issues** (not the 5 implied by the sample). Most under "Post-MVP / Later" with file paths in bodies — excellent cleanup targets.
+- **Risk of cluster bias.** Live sampling: `apps/web-platform/app/api/kb/` appears in 5+ bodies. The skill will always pick this cluster first unless rotated. Ship with "show all clusters" output so human can override.
+- **Phase 5.5 exit gate already handles unresolved scope-outs per PR.** The new `Re-eval by:` requirement should NOT change that gate — it's orthogonal. Coupling note added below.
+- **Rule ID stability.** AGENTS.md rule `rf-review-finding-default-fix-inline` is immutable (rule `cq-rule-ids-are-immutable`). These improvements deliberately do NOT rename it; they reinforce it.
 
 ## Overview
 
@@ -161,14 +184,14 @@ two failure modes:
 
 1. Enumerate the files the plan will modify (`## Files to edit` and `## Files
    to create` sections from the research findings).
-2. Query open code-review issues:
+2. Query open code-review issues. **Use two-stage piping (`--json` then `jq --arg`), not single-stage `--jq`.** The `gh` CLI does NOT forward `--arg` to its embedded jq; a single-stage form produces `unknown arguments` at runtime. See learning `knowledge-base/project/learnings/2026-04-15-gh-jq-does-not-forward-arg-to-jq.md`.
 
     ```bash
     gh issue list --label code-review --state open \
       --json number,title,body --limit 200 > /tmp/open-review-issues.json
     ```
 
-3. For each planned file path, search the issue bodies:
+3. For each planned file path, search the issue bodies using a **standalone jq** with `--arg` (safe against regex metacharacters in paths):
 
     ```bash
     jq -r --arg path "<file-path>" '
@@ -338,11 +361,15 @@ description: "This skill should be used when draining the deferred-scope-out bac
 
 1. **Prerequisites check.** Require `gh` authenticated, `jq` available, repo is a git worktree.
 
-2. **Determine target milestone.** Default: current open Phase milestone. Allow `$ARGUMENTS` to override with `--milestone "Post-MVP / Later"` or a specific milestone title.
+2. **Determine target milestone.** Default: **`Post-MVP / Later`** — verified at plan time to hold 15+ of the 22 open `deferred-scope-out` issues, vs. 1 in the current Phase milestone. Defaulting to "current Phase" would return an empty cluster set on first run and make the skill appear broken. Allow `$ARGUMENTS` to override with `--milestone "Phase <N>"` or any milestone title.
+
+    **IMPORTANT** (rule `cq-gh-issue-create-milestone-takes-title`): all `gh` milestone flags take the **title**, not the numeric ID. Quote the title literally — never substitute the milestone number.
 
     ```bash
-    MILESTONE="$(gh api repos/:owner/:repo/milestones \
-      --jq '[.[] | select(.state=="open") | select(.title | startswith("Phase"))] | sort_by(.due_on) | .[0].title // "Post-MVP / Later"')"
+    MILESTONE="${ARG_MILESTONE:-Post-MVP / Later}"
+    # Validate milestone title exists before use:
+    gh api repos/:owner/:repo/milestones --jq '.[] | .title' | grep -Fxq "$MILESTONE" \
+      || { echo "Error: milestone title '$MILESTONE' not found"; exit 1; }
     ```
 
 3. **Query open scope-outs.** Use the helper script:
@@ -394,13 +421,22 @@ Responsibilities:
 - Query `gh issue list --label deferred-scope-out --state open --milestone "$MILESTONE" --json number,title,body,labels --limit 200`.
 - For each issue body, extract file paths using a regex over common extensions (ts/tsx/js/jsx/py/rb/go/md/sh/yml/yaml/sql/tf). Skip issues with zero file paths — they can't be grouped.
 - Assign each issue to a **code area** = the top-level directory of its most-referenced file path (e.g., `apps/web-platform`, `plugins/soleur`, `knowledge-base`, `.github`).
-- Sub-group by **second-level directory** when the area has >10 issues (e.g., `apps/web-platform/app/api` vs. `apps/web-platform/server`). This keeps clusters focused.
+- **Do NOT sub-group by second-level directory in the initial version** (YAGNI). Current backlog: no single area exceeds 10 issues. If that changes later, add sub-grouping as a follow-up with a tracking issue — don't build the branch now for a case that doesn't exist.
 - Output JSON to stdout: `[{area, issues: [{number, title, files}], count}]` sorted by `count` desc.
-- Shape and size: aim for ≤150 lines of bash, no new dependencies beyond `gh`, `jq`, `grep`, `awk`.
+- **Output all clusters, not just the top one.** The calling skill decides which to pick; the helper only reports. This prevents blind cluster bias (e.g., always picking `apps/web-platform/app/api/kb/` because it dominates the backlog).
+- Shape and size: aim for ≤120 lines of bash (smaller than the 150 target without sub-grouping), no new dependencies beyond `gh`, `jq`, `grep`, `awk`.
 
 **Test plan for the helper script:** Shell test (`group-by-area.test.sh`) feeds a fixture JSON file (one with clustered paths, one with dispersed paths, one empty) and asserts the grouping, sort order, and zero-cluster exit code. Uses the existing `.test.sh` convention (per AGENTS.md rule `cq-*`); no new test framework.
 
-**Integration with existing `/soleur:schedule`:** not required in scope, but the SKILL.md should note that `cleanup-scope-outs` can be invoked on a weekly cron via `/soleur:schedule` once the backlog-drain cadence is chosen. This is a post-merge follow-up, not required for this plan.
+**Integration with existing `/soleur:schedule`:** verified live — `plugins/soleur/skills/schedule/SKILL.md` accepts any soleur skill as `--skill <name>` and generates a standalone `.github/workflows/scheduled-<name>.yml`. After merge, invoke:
+
+```bash
+# Example post-merge scheduling command (NOT executed by this plan):
+/soleur:schedule create --name weekly-scope-out-cleanup \
+  --skill cleanup-scope-outs --cron "0 14 * * 1" --model claude-sonnet-4-6
+```
+
+This is a post-merge follow-up, not required for this plan — but it's the pipeline that turns "manual cadence tool" into "programmatic backlog opener." Track as a separate issue after shipping (see Phase 6 Defer-Tracking).
 
 **Pipeline detection:** if the calling context already contains a `RETURN CONTRACT` (i.e., cleanup-scope-outs is being driven by another skill), skip interactive prompts and run headless. Follows the plan/review/ship pattern.
 
@@ -458,7 +494,7 @@ Result: **no overlap with existing scope-outs**. This plan introduces new surfac
 - [ ] `plugins/soleur/skills/review/SKILL.md` Step 1 Synthesize requires tagging each finding with `pr-introduced` or `pre-existing`.
 - [ ] `pr-introduced` findings are fix-inline-only (no scope-out allowed).
 - [ ] `pre-existing` findings route to one of three explicit buckets: fix inline, scope-out with re-evaluation deadline, or wontfix.
-- [ ] Open-ended scope-outs (no phase milestone, no trigger condition) are prohibited.
+- [ ] Open-ended scope-outs (no phase milestone, no trigger condition) are prohibited by skill instruction. Enforcement is instruction-level (review skill template) and Phase 5.5-gate-level (exit gate blocks merge on un-justified issues) — not a separate pre-commit linter. Revisit if instruction-level enforcement produces violations.
 - [ ] Issue body template in `review-todo-structure.md` includes `Provenance:` and conditional `Re-eval by:` fields.
 - [ ] Review summary report shows provenance counts and pre-existing disposition breakdown.
 
@@ -466,10 +502,16 @@ Result: **no overlap with existing scope-outs**. This plan introduces new surfac
 
 - [ ] `plugins/soleur/skills/cleanup-scope-outs/SKILL.md` exists and follows skill-compliance checklist (frontmatter, word count, references linked properly).
 - [ ] Skill reads arguments to optionally override milestone, N, min-cluster-size.
-- [ ] Helper script `group-by-area.sh` queries deferred-scope-out issues, parses file paths from bodies, groups by area, returns sorted JSON.
+- [ ] Default milestone is `Post-MVP / Later` (verified at plan time to be where 15+ of 22 open scope-outs live).
+- [ ] Helper script uses two-stage piping (`gh ... --json ... | jq ...`) — never single-stage `gh ... --jq` with `--arg`.
+- [ ] Helper script quotes milestone as **title** (not numeric ID) — aligns with rule `cq-gh-issue-create-milestone-takes-title`.
+- [ ] Helper script validates milestone title exists before querying issues (fail fast with clear error).
+- [ ] Helper script outputs ALL clusters sorted by size desc (not just top) — calling skill picks.
+- [ ] Helper script does NOT include sub-grouping by second-level directory (YAGNI — deferred until a single area exceeds 10 issues).
 - [ ] Skill delegates to `/soleur:one-shot` with a scope argument that lists all N issue numbers and their file paths.
 - [ ] Exits 0 with a clear message when no cluster meets `min-cluster-size` (does NOT force a low-value PR).
 - [ ] SKILL.md references PR #2486 as the reference example pattern.
+- [ ] SKILL.md cross-references `/soleur:schedule` as the post-merge follow-up for programmatic cadence.
 - [ ] A shell test (`group-by-area.test.sh`) covers the three cluster shapes (clustered / dispersed / empty) and passes.
 
 ### Cross-cutting
@@ -520,13 +562,13 @@ Follows existing convention: tests are derived from acceptance criteria and stor
 
 **Verification:** Synthetic PR on a branch with a new file + intentional issue (e.g., magic number in new code). Run `/soleur:review`. Assert no scope-out issue is filed and a fix commit lands on the branch.
 
-### T5 — Pre-existing finding with no deadline is rejected
+### T5 — Pre-existing finding carries a deadline
 
-**Given** a pre-existing finding that would be filed with no `Re-eval by:` value,
-**when** review attempts to create the scope-out issue,
-**then** issue creation is blocked until a phase milestone or trigger condition is provided.
+**Given** a pre-existing finding being filed as a scope-out,
+**when** the review skill constructs the issue body,
+**then** the body MUST include a `Re-eval by:` field naming either a target phase milestone or a concrete trigger condition.
 
-**Verification:** Grep the issue body before `gh issue create` runs; if `Provenance: pre-existing` is present but `Re-eval by:` is missing, the pipeline stops and errors.
+**Verification:** Instruction-level, not code-level. The review skill's issue body template (`review-todo-structure.md`) requires the field when `Provenance: pre-existing`. A missing `Re-eval by:` field in a filed issue is caught at human review of the `/soleur:review` output summary (which shows the full filed issue body). Over-engineered alternatives (pre-commit grep block, CI linter on issue bodies) are deferred until violations are actually observed — the existing Phase 5.5 exit gate already blocks merge on un-justified scope-outs, which is the higher-value enforcement layer.
 
 ### T6 — cleanup-scope-outs skill picks correct cluster
 
@@ -631,6 +673,8 @@ Per `wg-when-deferring-a-capability-create-a`, file GitHub issues for:
 - Rolling cap / throttle (brainstorm #4) — milestone Phase 3 or later.
 - Telemetry / auto-detection of backlog growth (brainstorm Auto-Detection Design) — milestone Phase 3 or later.
 - Analogous tightening of compound's route-to-definition criteria — milestone Post-MVP / Later.
+- **Schedule `cleanup-scope-outs` weekly via `/soleur:schedule`** — milestone Phase 3 or later. Rationale: turns manual cadence tool into programmatic opener. Depends on this PR landing first, so it can't go into this PR body. Track as a separate issue.
+- Sub-grouping by second-level directory in `group-by-area.sh` — milestone Post-MVP / Later. Trigger condition: any single code area accumulates >10 open scope-outs. Not worth building until observed.
 
 Each issue gets `deferred-scope-out` label and a `## Scope-Out Justification` section (consistent with the pattern the skill now enforces on review).
 
@@ -643,7 +687,8 @@ Each issue gets `deferred-scope-out` label and a `## Scope-Out Justification` se
 | `code-simplicity-reviewer` becomes a rubber-stamp | Medium | Medium | The agent's prompt must include "default to rejecting scope-outs; only co-sign if the criterion is concretely and obviously correct." Watch the reject rate after rollout; if it never rejects, re-prompt the agent or replace the gate. |
 | Provenance classification is ambiguous (refactored-not-introduced code) | Medium | Low | Rule: ambiguous = pr-introduced. Defaults to fix-inline, which is the safer failure mode. The plan calls this out explicitly. |
 | `group-by-area.sh` parses false-positive file paths from issue bodies | Low | Low | File-extension regex + top-level-dir grouping limits false positives. Visual sanity check in the skill's interactive output. |
-| Cluster selection bias — always picks `apps/web-platform` because it dominates | Medium | Low | The skill's output shows ALL clusters, not just the top one. The user can override the default. In headless mode (future scheduled runs), rotate through clusters over time. |
+| Cluster selection bias — always picks `apps/web-platform` because it dominates | Medium | Low | The helper script outputs ALL clusters (not just top). The user picks interactively; headless mode auto-picks top but can be overridden with `--area <name>` on invocation. Future: scheduled runs can rotate through clusters (e.g., week 1: apps/web-platform; week 2: plugins/soleur). Track as enhancement after observing behavior. |
+| Empty result on first run — user expects output but gets "no cluster available" | Low (now) | Low | Plan-time verification showed 22 open scope-outs, 15+ in `Post-MVP / Later`. Default milestone set to `Post-MVP / Later` so first run returns non-empty. If backlog ever drains below 3 in all areas, the skill's "No cluster available" message is the correct UX — success, not failure. |
 | Existing scope-outs filed before provenance tagging have no `Provenance:` field | N/A | N/A | Backfill not required. The new field only applies to new issues. The cleanup-scope-outs skill parses file paths regardless of whether `Provenance:` is present. |
 | Net-filing metric doesn't drop | High | Medium | Explicit re-evaluation after 2 weeks. If net filings stay ≥0 per 3-PR window, implement the deferred rolling cap (#4). |
 

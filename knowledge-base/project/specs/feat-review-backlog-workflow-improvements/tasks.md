@@ -62,7 +62,7 @@ Derived from `knowledge-base/project/plans/2026-04-17-feat-review-backlog-workfl
 ### 3.2 SKILL.md content
 
 - 3.2.1 Prerequisites section (gh auth, jq, git worktree)
-- 3.2.2 Determine-target-milestone section (default current Phase)
+- 3.2.2 Determine-target-milestone section (**default `Post-MVP / Later`** — 15+ of 22 open scope-outs live there at plan time)
 - 3.2.3 Query-scope-outs section (invokes helper script)
 - 3.2.4 Pick-cluster section (interactive + headless modes)
 - 3.2.5 Build-one-shot-scope-argument section
@@ -70,16 +70,18 @@ Derived from `knowledge-base/project/plans/2026-04-17-feat-review-backlog-workfl
 - 3.2.7 Post-delegation backlog-delta reporting
 - 3.2.8 Reference PR #2486 as the pattern example
 - 3.2.9 Pipeline-detection note (skip interactive if RETURN CONTRACT present)
+- 3.2.10 Cross-reference `/soleur:schedule` as post-merge follow-up for programmatic cadence
 
 ### 3.3 Helper script `group-by-area.sh`
 
-- 3.3.1 Accept `--milestone`, `--top-n`, `--min-cluster-size` args with defaults
-- 3.3.2 Query `gh issue list --label deferred-scope-out --state open --milestone "$MILESTONE" --json number,title,body,labels --limit 200`
-- 3.3.3 File-path regex over extensions: ts/tsx/js/jsx/py/rb/go/md/sh/yml/yaml/sql/tf
-- 3.3.4 Group by top-level directory; sub-group by second-level when area has >10 issues
-- 3.3.5 Output JSON to stdout sorted by cluster size desc
-- 3.3.6 Skip issues with zero file paths (can't be grouped)
-- 3.3.7 Keep under 150 lines of bash, no new deps
+- 3.3.1 Accept `--milestone`, `--top-n`, `--min-cluster-size` args with defaults (milestone default: `Post-MVP / Later`)
+- 3.3.2 Validate milestone title exists before use: `gh api repos/:owner/:repo/milestones --jq '.[] | .title' | grep -Fxq "$MILESTONE"` — fail fast with clear error
+- 3.3.3 Query `gh issue list --label deferred-scope-out --state open --milestone "$MILESTONE" --json number,title,body,labels --limit 200` (milestone TITLE, not numeric ID — rule `cq-gh-issue-create-milestone-takes-title`)
+- 3.3.4 File-path regex over extensions: ts/tsx/js/jsx/py/rb/go/md/sh/yml/yaml/sql/tf. Use standalone `jq --arg path ...` for safety against regex metacharacters in paths
+- 3.3.5 Group by top-level directory ONLY (no second-level sub-grouping — YAGNI, deferred until any single area exceeds 10 issues)
+- 3.3.6 Output ALL clusters as JSON to stdout, sorted by cluster size desc (not just the top one — calling skill picks)
+- 3.3.7 Skip issues with zero file paths (can't be grouped)
+- 3.3.8 Keep under 120 lines of bash, no new deps
 
 ### 3.4 Verify tests pass
 
@@ -105,6 +107,8 @@ Derived from `knowledge-base/project/plans/2026-04-17-feat-review-backlog-workfl
 - 6.1 File issue: Rolling cap / throttle (brainstorm proposal #4) — label `deferred-scope-out`, milestone Phase 3 or Post-MVP, with Scope-Out Justification
 - 6.2 File issue: Telemetry / auto-detection of backlog growth — label `deferred-scope-out`, milestone Phase 3 or Post-MVP
 - 6.3 File issue: Analogous tightening of compound's route-to-definition criteria — label `deferred-scope-out`, milestone Post-MVP / Later
+- 6.4 File issue: Schedule `cleanup-scope-outs` weekly via `/soleur:schedule` after this PR lands — milestone Phase 3 or later
+- 6.5 File issue: Sub-grouping by second-level directory in `group-by-area.sh` — milestone Post-MVP / Later, trigger "any single code area exceeds 10 open scope-outs"
 
 ## Phase 7 — Ship
 
