@@ -1,0 +1,20 @@
+[
+  {
+    "number": 3001,
+    "title": "review: chat-input cleanup",
+    "body": "## Problem\n\napps/web-platform/components/chat/chat-input.tsx:107-127 does X.\n\nAlso: chat-input.tsx:17-19, chat-input.tsx:58, chat-input.tsx:120-124.\n\n## Proposed Fix\n\nInline.",
+    "labels": [{"name": "deferred-scope-out"}]
+  },
+  {
+    "number": 3002,
+    "title": "review: sheet cleanup",
+    "body": "## Problem\n\napps/web-platform/components/ui/sheet.tsx:10-14 has YAGNI.\n\nAlso: sheet.tsx:21, sheet.tsx:38, sheet.tsx:48-50.\n\n## Proposed Fix\n\nRemove.",
+    "labels": [{"name": "deferred-scope-out"}]
+  },
+  {
+    "number": 3003,
+    "title": "review: selection-toolbar opts",
+    "body": "## Problem\n\napps/web-platform/components/kb/selection-toolbar.tsx:22-30 — native API equivalent.\n\nAlso: selection-toolbar.tsx:30, selection-toolbar.tsx:45.\n\n## Proposed Fix\n\nInline.",
+    "labels": [{"name": "deferred-scope-out"}]
+  }
+]
