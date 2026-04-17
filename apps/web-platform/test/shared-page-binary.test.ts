@@ -186,4 +186,36 @@ describe("GET /api/shared/[token] — binary vs markdown branching", () => {
     expect(disposition).toContain("filename=");
     expect(disposition).toMatch(/filename\*=UTF-8''/);
   });
+
+  it("emits X-Soleur-Kind: pdf for a PDF share", async () => {
+    fs.writeFileSync(path.join(kbRoot, "report.pdf"), Buffer.from("PDFBYTES"));
+    mockShareAndOwner("report.pdf");
+    const res = await callGET(buildRequest("pdf-kind"), "pdf-kind");
+    expect(res.status).toBe(200);
+    expect(res.headers.get("X-Soleur-Kind")).toBe("pdf");
+  });
+
+  it("emits X-Soleur-Kind: image for a PNG share", async () => {
+    fs.writeFileSync(path.join(kbRoot, "logo.png"), Buffer.from("PNG"));
+    mockShareAndOwner("logo.png");
+    const res = await callGET(buildRequest("img-kind"), "img-kind");
+    expect(res.status).toBe(200);
+    expect(res.headers.get("X-Soleur-Kind")).toBe("image");
+  });
+
+  it("emits X-Soleur-Kind: download for a .docx attachment", async () => {
+    fs.writeFileSync(path.join(kbRoot, "doc.docx"), Buffer.from("DOCX"));
+    mockShareAndOwner("doc.docx");
+    const res = await callGET(buildRequest("dl-kind"), "dl-kind");
+    expect(res.status).toBe(200);
+    expect(res.headers.get("X-Soleur-Kind")).toBe("download");
+  });
+
+  it("emits X-Soleur-Kind: markdown on a .md share", async () => {
+    fs.writeFileSync(path.join(kbRoot, "note.md"), "# Note");
+    mockShareAndOwner("note.md");
+    const res = await callGET(buildRequest("md-kind"), "md-kind");
+    expect(res.status).toBe(200);
+    expect(res.headers.get("X-Soleur-Kind")).toBe("markdown");
+  });
 });

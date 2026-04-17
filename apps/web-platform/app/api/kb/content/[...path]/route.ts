@@ -6,6 +6,7 @@ import {
   readContent,
   KbNotFoundError,
   KbAccessDeniedError,
+  KbFileTooLargeError,
   KbValidationError,
 } from "@/server/kb-reader";
 import {
@@ -78,13 +79,19 @@ export async function GET(
   // Binary file serving — owner route streams unconditionally (no hash
   // gate). The share route adds a content-hash verdict cache on top of
   // the same helpers.
-  const result = await validateBinaryFile(kbRoot, relativePath);
-  if (!result.ok) {
-    return NextResponse.json({ error: result.error }, { status: result.status });
-  }
   try {
-    return await buildBinaryResponse(result, request);
+    const meta = await validateBinaryFile(kbRoot, relativePath);
+    return await buildBinaryResponse(meta, request);
   } catch (err) {
+    if (err instanceof KbAccessDeniedError) {
+      return NextResponse.json({ error: "Access denied" }, { status: 403 });
+    }
+    if (err instanceof KbNotFoundError) {
+      return NextResponse.json({ error: "File not found" }, { status: 404 });
+    }
+    if (err instanceof KbFileTooLargeError) {
+      return NextResponse.json({ error: err.message }, { status: 413 });
+    }
     if (err instanceof BinaryOpenError) {
       logger.warn(
         { err: err.message, code: err.code, path: relativePath },
@@ -92,6 +99,10 @@ export async function GET(
       );
       return NextResponse.json({ error: err.message }, { status: err.status });
     }
-    throw err;
+    logger.error({ err, path: relativePath }, "kb/content: unexpected error");
+    return NextResponse.json(
+      { error: "An unexpected error occurred" },
+      { status: 500 },
+    );
   }
 }

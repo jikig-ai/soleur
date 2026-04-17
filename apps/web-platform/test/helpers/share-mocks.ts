@@ -78,7 +78,7 @@ export function shareSupabaseFromMock(
       case "users":
         return usersChain(opts.users ?? null);
       case "kb_share_links":
-        return kbShareLinksChain(opts.kb_share_links ?? {});
+        return kbShareLinksChain(opts.kb_share_links ?? {}, opts.users ?? null);
       default:
         throw new Error(
           `shareSupabaseFromMock: unmocked table "${table}" — configure it in the helper call`,
@@ -110,9 +110,30 @@ function usersChain(row: UsersRowFixture | null) {
   };
 }
 
-function kbShareLinksChain(fixture: KbShareLinksFixture) {
+function kbShareLinksChain(
+  fixture: KbShareLinksFixture,
+  usersFixture: UsersRowFixture | null,
+) {
+  const usersNested = usersFixture
+    ? {
+        workspace_path: usersFixture.workspacePath,
+        workspace_status: usersFixture.workspaceStatus ?? "ready",
+      }
+    : null;
+  // When a route uses PostgREST embedded resources (e.g.,
+  // `.select("…, users!inner(…)")`) the nested row appears under
+  // `shareRow.users`. Auto-attach the users fixture so tests don't have
+  // to know which query shape the route uses. If the shareRow already
+  // defines `users`, it wins — an explicit override beats the default.
+  const attachUsers = <T extends Record<string, unknown> | null>(
+    row: T,
+  ): T => {
+    if (!row || !usersNested) return row;
+    if ("users" in row) return row;
+    return { ...row, users: usersNested } as T;
+  };
   const single = vi.fn().mockImplementation(async () => {
-    const row = resolve(fixture.shareRow ?? null);
+    const row = attachUsers(resolve(fixture.shareRow ?? null));
     const errOverride = fixture.shareError
       ? resolve(fixture.shareError)
       : undefined;
@@ -127,7 +148,7 @@ function kbShareLinksChain(fixture: KbShareLinksFixture) {
     };
   });
   const maybeSingle = vi.fn().mockImplementation(async () => ({
-    data: resolve(fixture.shareRow ?? null),
+    data: attachUsers(resolve(fixture.shareRow ?? null)),
     error: fixture.shareError ? resolve(fixture.shareError) ?? null : null,
   }));
   // List query (order(...)) awaits to { data, error } directly.

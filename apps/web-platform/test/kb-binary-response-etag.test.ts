@@ -28,7 +28,7 @@ function req(headers: Record<string, string> = {}): Request {
 describe("buildBinaryResponse — ETag / If-None-Match", () => {
   it("emits a weak ETag when no strong ETag is supplied", async () => {
     const meta = await validateBinaryFile(tmpDir, "doc.pdf");
-    if (!meta.ok) throw new Error("validate failed");
+
     const res = await buildBinaryResponse(meta, req());
     expect(res.status).toBe(200);
     const etag = res.headers.get("ETag");
@@ -37,7 +37,7 @@ describe("buildBinaryResponse — ETag / If-None-Match", () => {
 
   it("emits the supplied strong ETag verbatim", async () => {
     const meta = await validateBinaryFile(tmpDir, "doc.pdf");
-    if (!meta.ok) throw new Error("validate failed");
+
     const sha = "a".repeat(64);
     const res = await buildBinaryResponse(meta, req(), { strongETag: sha });
     expect(res.headers.get("ETag")).toBe(`"${sha}"`);
@@ -45,7 +45,7 @@ describe("buildBinaryResponse — ETag / If-None-Match", () => {
 
   it("returns 304 when If-None-Match matches the strong ETag", async () => {
     const meta = await validateBinaryFile(tmpDir, "doc.pdf");
-    if (!meta.ok) throw new Error("validate failed");
+
     const sha = "b".repeat(64);
     const etag = `"${sha}"`;
     const res = await buildBinaryResponse(
@@ -61,7 +61,7 @@ describe("buildBinaryResponse — ETag / If-None-Match", () => {
 
   it("returns 304 when If-None-Match matches the weak ETag (fstat tuple)", async () => {
     const meta = await validateBinaryFile(tmpDir, "doc.pdf");
-    if (!meta.ok) throw new Error("validate failed");
+
     // Build the expected weak ETag the same way the helper does.
     const weak = `W/"${meta.ino}-${meta.size}-${Math.floor(meta.mtimeMs)}"`;
     const res = await buildBinaryResponse(meta, req({ "if-none-match": weak }));
@@ -71,14 +71,14 @@ describe("buildBinaryResponse — ETag / If-None-Match", () => {
 
   it("treats `*` as a wildcard If-None-Match match", async () => {
     const meta = await validateBinaryFile(tmpDir, "doc.pdf");
-    if (!meta.ok) throw new Error("validate failed");
+
     const res = await buildBinaryResponse(meta, req({ "if-none-match": "*" }));
     expect(res.status).toBe(304);
   });
 
   it("serves 200 + body when If-None-Match does not match", async () => {
     const meta = await validateBinaryFile(tmpDir, "doc.pdf");
-    if (!meta.ok) throw new Error("validate failed");
+
     const res = await buildBinaryResponse(
       meta,
       req({ "if-none-match": '"different-hash"' }),
@@ -92,7 +92,7 @@ describe("buildBinaryResponse — ETag / If-None-Match", () => {
 
   it("weak-equal: If-None-Match with W/ prefix matches strong ETag", async () => {
     const meta = await validateBinaryFile(tmpDir, "doc.pdf");
-    if (!meta.ok) throw new Error("validate failed");
+
     const sha = "c".repeat(64);
     const res = await buildBinaryResponse(
       meta,
@@ -104,7 +104,7 @@ describe("buildBinaryResponse — ETag / If-None-Match", () => {
 
   it("If-None-Match with multiple candidates matches any one", async () => {
     const meta = await validateBinaryFile(tmpDir, "doc.pdf");
-    if (!meta.ok) throw new Error("validate failed");
+
     const sha = "d".repeat(64);
     const res = await buildBinaryResponse(
       meta,
@@ -116,7 +116,7 @@ describe("buildBinaryResponse — ETag / If-None-Match", () => {
 
   it("304 short-circuits Range requests when ETag matches the whole resource", async () => {
     const meta = await validateBinaryFile(tmpDir, "doc.pdf");
-    if (!meta.ok) throw new Error("validate failed");
+
     const sha = "e".repeat(64);
     const res = await buildBinaryResponse(
       meta,
