@@ -6,14 +6,9 @@ import {
   readContent,
   KbNotFoundError,
   KbAccessDeniedError,
-  KbFileTooLargeError,
   KbValidationError,
 } from "@/server/kb-reader";
-import {
-  validateBinaryFile,
-  buildBinaryResponse,
-  BinaryOpenError,
-} from "@/server/kb-binary-response";
+import { serveKbFile, serveBinary } from "@/server/kb-serve";
 
 export async function GET(
   request: Request,
@@ -51,58 +46,40 @@ export async function GET(
   }
 
   const kbRoot = path.join(userData.workspace_path, "knowledge-base");
-  const ext = path.extname(relativePath).toLowerCase();
 
-  // Fork: .md (or no extension) → readContent, non-.md → binary serving
-  if (ext === ".md" || ext === "") {
-    try {
-      const result = await readContent(kbRoot, relativePath);
-      return NextResponse.json(result);
-    } catch (err) {
-      if (err instanceof KbAccessDeniedError) {
-        return NextResponse.json({ error: "Access denied" }, { status: 403 });
+  return serveKbFile(kbRoot, relativePath, {
+    request,
+    onMarkdown: async (root, rel) => {
+      try {
+        const result = await readContent(root, rel);
+        return NextResponse.json(result);
+      } catch (err) {
+        if (err instanceof KbAccessDeniedError) {
+          return NextResponse.json({ error: "Access denied" }, { status: 403 });
+        }
+        if (err instanceof KbNotFoundError) {
+          return NextResponse.json({ error: "File not found" }, { status: 404 });
+        }
+        if (err instanceof KbValidationError) {
+          return NextResponse.json({ error: err.message }, { status: 400 });
+        }
+        logger.error({ err }, "kb/content: unexpected error");
+        return NextResponse.json(
+          { error: "An unexpected error occurred" },
+          { status: 500 },
+        );
       }
-      if (err instanceof KbNotFoundError) {
-        return NextResponse.json({ error: "File not found" }, { status: 404 });
-      }
-      if (err instanceof KbValidationError) {
-        return NextResponse.json({ error: err.message }, { status: 400 });
-      }
-      logger.error({ err }, "kb/content: unexpected error");
-      return NextResponse.json(
-        { error: "An unexpected error occurred" },
-        { status: 500 },
-      );
-    }
-  }
-
-  // Binary file serving — owner route streams unconditionally (no hash
-  // gate). The share route adds a content-hash verdict cache on top of
-  // the same helpers.
-  try {
-    const meta = await validateBinaryFile(kbRoot, relativePath);
-    return await buildBinaryResponse(meta, request);
-  } catch (err) {
-    if (err instanceof KbAccessDeniedError) {
-      return NextResponse.json({ error: "Access denied" }, { status: 403 });
-    }
-    if (err instanceof KbNotFoundError) {
-      return NextResponse.json({ error: "File not found" }, { status: 404 });
-    }
-    if (err instanceof KbFileTooLargeError) {
-      return NextResponse.json({ error: err.message }, { status: 413 });
-    }
-    if (err instanceof BinaryOpenError) {
-      logger.warn(
-        { err: err.message, code: err.code, path: relativePath },
-        "kb/content: open failed on serve",
-      );
-      return NextResponse.json({ error: err.message }, { status: err.status });
-    }
-    logger.error({ err, path: relativePath }, "kb/content: unexpected error");
-    return NextResponse.json(
-      { error: "An unexpected error occurred" },
-      { status: 500 },
-    );
-  }
+    },
+    onBinary: (root, rel) =>
+      serveBinary(root, rel, {
+        request,
+        onError: (status, message, code) => {
+          if (status !== 404 && status !== 403) return;
+          logger.warn(
+            { err: message, code, path: rel },
+            "kb/content: open failed on serve",
+          );
+        },
+      }),
+  });
 }

@@ -1,5 +1,7 @@
 export { DesktopPlaceholder } from "./desktop-placeholder";
 export { EmptyState } from "./empty-state";
+export { KbContentHeader } from "./kb-content-header";
+export { KbContentSkeleton } from "./kb-content-skeleton";
 export { KbErrorBoundary } from "./kb-error-boundary";
 export { LoadingSkeleton } from "./loading-skeleton";
 export { NoProjectState } from "./no-project-state";

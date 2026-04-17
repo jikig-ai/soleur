@@ -9,7 +9,7 @@ import { pipeline } from "node:stream/promises";
 
 /**
  * SHA-256 of a byte buffer, lowercase hex. Use when the caller already
- * holds the full buffer (e.g. readBinaryFile returns buffer).
+ * holds the full buffer (e.g. markdown files read via readContentRaw).
  */
 export function hashBytes(buf: Buffer): string {
   return createHash("sha256").update(buf).digest("hex");

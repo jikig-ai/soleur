@@ -130,10 +130,12 @@ describe("GET /api/shared/[token] — binary vs markdown branching", () => {
     expect(res.headers.get("Content-Disposition")).toContain("inline");
   });
 
-  it("returns 404 when the binary file has been deleted", async () => {
+  it("returns 404 with Document no longer available when the binary file has been deleted", async () => {
     mockShareAndOwner("gone.pdf");
     const res = await callGET(buildRequest("gone"), "gone");
     expect(res.status).toBe(404);
+    const body = await res.json();
+    expect(body.error).toBe("Document no longer available");
   });
 
   it("returns 410 for a revoked binary share", async () => {
@@ -149,7 +151,7 @@ describe("GET /api/shared/[token] — binary vs markdown branching", () => {
     expect(res.status).toBe(404);
   });
 
-  it("returns 403 when the stored path is a symlink", async () => {
+  it("returns 403 when the stored path is a symlink, preserving the original access-denied message", async () => {
     const outside = path.join(tmpWorkspace, "outside.pdf");
     fs.writeFileSync(outside, "secret");
     fs.symlinkSync(outside, path.join(kbRoot, "link.pdf"));
@@ -157,6 +159,10 @@ describe("GET /api/shared/[token] — binary vs markdown branching", () => {
 
     const res = await callGET(buildRequest("linktok"), "linktok");
     expect(res.status).toBe(403);
+    const body = await res.json();
+    // 403 must NOT be rewritten to the 404 opaque copy — only 404 is masked.
+    expect(body.error).not.toBe("Document no longer available");
+    expect(body.error).toBe("Access denied");
   });
 
   it("returns 413 when the stored binary exceeds the size limit", async () => {

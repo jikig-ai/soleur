@@ -10,15 +10,15 @@ import {
 } from "@/server/kb-reader";
 import {
   validateBinaryFile,
-  buildBinaryResponse,
-  openBinaryStream,
-  deriveBinaryKind,
-  SHARED_CONTENT_KIND_HEADER,
   BinaryOpenError,
-  type BinaryFileMetadata,
 } from "@/server/kb-binary-response";
-import { hashBytes, hashStream } from "@/server/kb-content-hash";
-import { shareHashVerdictCache } from "@/server/share-hash-verdict-cache";
+import { hashBytes } from "@/server/kb-content-hash";
+import {
+  contentChangedResponse,
+  serveKbFile,
+  serveSharedBinaryWithHashGate,
+  SHARED_CONTENT_KIND_HEADER,
+} from "@/server/kb-serve";
 import {
   shareEndpointThrottle,
   extractClientIpFromHeaders,
@@ -27,16 +27,23 @@ import {
 import logger from "@/server/logger";
 import { reportSilentFallback } from "@/server/observability";
 
-function contentChangedResponse() {
+// Opaque public-facing 404 copy. Used by every 404 path on this endpoint —
+// missing workspace and missing file (markdown or binary, surfaced through
+// KbNotFoundError by kb-reader/validateBinaryFile). Centralizes the string
+// so a future drift in one branch cannot silently break the privacy posture.
+const SHARED_NOT_FOUND_MESSAGE = "Document no longer available";
+
+function notFoundResponse() {
   return NextResponse.json(
-    {
-      error: "The shared file has been modified since it was shared.",
-      code: "content-changed",
-    },
-    { status: 410 },
+    { error: SHARED_NOT_FOUND_MESSAGE },
+    { status: 404 },
   );
 }
 
+// Kept route-private (not in kb-serve.ts) because "legacy-null-hash" is a
+// share-specific migration artifact: only pre-#2326 share rows can carry a
+// null content_sha256. contentChangedResponse, by contrast, lives in
+// kb-serve.ts because any hash-gated flow can emit it.
 function legacyNullHashResponse() {
   return NextResponse.json(
     {
@@ -90,9 +97,6 @@ export async function GET(
       document_path: string;
       revoked: boolean;
       content_sha256: string | null;
-      // PostgREST embedded many-to-one returns a single object; some
-      // client/server-type combinations surface it as an array. Normalize
-      // below so the route is robust to both shapes.
       users:
         | { workspace_path: string | null; workspace_status: string | null }
         | { workspace_path: string | null; workspace_status: string | null }[]
@@ -111,8 +115,6 @@ export async function GET(
   }
 
   if (!shareLink.content_sha256) {
-    // Legacy row from before content-hash binding. Treat as invalid — the
-    // migration should have revoked these, but belt-and-suspenders.
     logger.warn(
       { event: "shared_legacy_null_hash", token, documentPath: shareLink.document_path },
       "shared: legacy row without content hash",
@@ -125,128 +127,64 @@ export async function GET(
     : shareLink.users;
   if (!owner?.workspace_path || owner.workspace_status !== "ready") {
     logSharedFailed(token, shareLink.document_path, "workspace-unavailable");
-    return NextResponse.json(
-      { error: "Document no longer available" },
-      { status: 404 },
-    );
+    return notFoundResponse();
   }
 
   const kbRoot = path.join(owner.workspace_path, "knowledge-base");
-  const ext = path.extname(shareLink.document_path).toLowerCase();
   const contentSha256 = shareLink.content_sha256;
   const documentPath = shareLink.document_path;
 
-  // Markdown / extensionless branch.
-  if (ext === ".md" || ext === "") {
-    try {
-      const { buffer, raw } = await readContentRaw(kbRoot, documentPath);
-      const currentHash = hashBytes(buffer);
-      if (currentHash !== contentSha256) {
+  return serveKbFile(kbRoot, documentPath, {
+    request,
+    onMarkdown: async (root, rel) => {
+      try {
+        const { buffer, raw } = await readContentRaw(root, rel);
+        const currentHash = hashBytes(buffer);
+        if (currentHash !== contentSha256) {
+          logger.info(
+            {
+              event: "shared_content_mismatch",
+              token,
+              documentPath: rel,
+              kind: "markdown",
+            },
+            "shared: content hash mismatch",
+          );
+          return contentChangedResponse();
+        }
+        const { content } = parseFrontmatter(raw);
         logger.info(
           {
-            event: "shared_content_mismatch",
+            event: "shared_page_viewed",
             token,
-            documentPath,
+            documentPath: rel,
             kind: "markdown",
           },
-          "shared: content hash mismatch",
+          "shared: document viewed",
         );
-        return contentChangedResponse();
-      }
-      const { content } = parseFrontmatter(raw);
-      logger.info(
-        {
-          event: "shared_page_viewed",
-          token,
-          documentPath,
-          kind: "markdown",
-        },
-        "shared: document viewed",
-      );
-      return NextResponse.json(
-        { content, path: documentPath },
-        { headers: { [SHARED_CONTENT_KIND_HEADER]: "markdown" } },
-      );
-    } catch (err) {
-      return mapSharedError(err, token, documentPath);
-    }
-  }
-
-  // Binary branch — validate metadata without reading bytes, then either
-  // trust the verdict cache (fast path) or hash via a fresh stream before
-  // serving (slow path: first view OR file mutated since last verify).
-  try {
-    const binary = await validateBinaryFile(kbRoot, documentPath);
-
-    const cachedVerdict = shareHashVerdictCache.get(
-      token,
-      binary.ino,
-      binary.mtimeMs,
-      binary.size,
-    );
-
-    if (cachedVerdict !== true) {
-      const hashResult = await hashAndVerify(binary, contentSha256);
-      if (hashResult !== "match") {
-        logger.info(
-          {
-            event: "shared_content_mismatch",
-            token,
-            documentPath,
-            kind: "binary",
-            reason: hashResult,
-          },
-          "shared: content hash mismatch",
+        return NextResponse.json(
+          { content, path: rel },
+          { headers: { [SHARED_CONTENT_KIND_HEADER]: "markdown" } },
         );
-        return contentChangedResponse();
+      } catch (err) {
+        return mapSharedError(err, token, rel);
       }
-      shareHashVerdictCache.set(token, binary.ino, binary.mtimeMs, binary.size);
-    }
-
-    logger.info(
-      {
-        event: "shared_page_viewed",
-        token,
-        documentPath,
-        kind: deriveBinaryKind(binary),
-        contentType: binary.contentType,
-        cached: cachedVerdict === true,
-      },
-      "shared: document viewed",
-    );
-    return await buildBinaryResponse(binary, request, {
-      // Strong ETag from the stored content hash: a repeat view with a
-      // matching If-None-Match returns 304 without re-opening the fd.
-      strongETag: contentSha256,
-    });
-  } catch (err) {
-    return mapSharedError(err, token, documentPath);
-  }
-}
-
-/**
- * Hash the currently-on-disk bytes and compare to the stored hash. Returns
- * "match" on success, a reason string on mismatch (surfaces in the
- * shared_content_mismatch log), and re-throws `BinaryOpenError` /
- * KB errors so the route-level catch can map them to HTTP responses.
- */
-async function hashAndVerify(
-  meta: BinaryFileMetadata,
-  expectedHash: string,
-): Promise<"match" | "inode-drift" | "hash-mismatch"> {
-  let currentHash: string;
-  try {
-    const hashStreamObj = await openBinaryStream(meta.filePath, {
-      expected: { ino: meta.ino, size: meta.size },
-    });
-    currentHash = await hashStream(hashStreamObj);
-  } catch (err) {
-    if (err instanceof BinaryOpenError && err.code === "content-changed") {
-      return "inode-drift";
-    }
-    throw err;
-  }
-  return currentHash === expectedHash ? "match" : "hash-mismatch";
+    },
+    onBinary: async (root, rel) => {
+      try {
+        const binary = await validateBinaryFile(root, rel);
+        return await serveSharedBinaryWithHashGate({
+          expectedHash: contentSha256,
+          meta: binary,
+          request,
+          logger,
+          logContext: { token, documentPath: rel },
+        });
+      } catch (err) {
+        return mapSharedError(err, token, rel);
+      }
+    },
+  });
 }
 
 function mapSharedError(
@@ -264,10 +202,7 @@ function mapSharedError(
   }
   if (err instanceof KbNotFoundError) {
     logSharedFailed(token, documentPath, "not-found");
-    return NextResponse.json(
-      { error: "Document no longer available" },
-      { status: 404 },
-    );
+    return notFoundResponse();
   }
   if (err instanceof KbFileTooLargeError) {
     logSharedFailed(token, documentPath, "file-too-large");
@@ -294,7 +229,6 @@ function mapSharedError(
     logSharedFailed(token, documentPath, `binary-open:${err.code ?? "unknown"}`);
     return NextResponse.json({ error: err.message }, { status: err.status });
   }
-  // Unknown error — mirror to Sentry so the silent-fallback rule is honored.
   reportSilentFallback(err, {
     feature: "shared-token",
     op: "serve",
