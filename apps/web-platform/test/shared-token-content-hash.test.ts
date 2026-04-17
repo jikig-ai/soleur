@@ -7,6 +7,9 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 const mocks = vi.hoisted(() => ({
   mockServiceFrom: vi.fn(),
   mockIsAllowed: vi.fn(),
+  mockLoggerInfo: vi.fn(),
+  mockLoggerWarn: vi.fn(),
+  mockLoggerError: vi.fn(),
 }));
 
 vi.mock("@/lib/supabase/server", () => ({
@@ -22,7 +25,12 @@ vi.mock("@/server/rate-limiter", () => ({
 }));
 
 vi.mock("@/server/logger", () => ({
-  default: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() },
+  default: {
+    info: mocks.mockLoggerInfo,
+    error: mocks.mockLoggerError,
+    warn: mocks.mockLoggerWarn,
+    debug: vi.fn(),
+  },
 }));
 
 import { GET } from "@/app/api/shared/[token]/route";
@@ -112,6 +120,10 @@ describe("GET /api/shared/[token] — content hash verification", () => {
     expect(res.status).toBe(200);
     const body = await res.json();
     expect(body.content).toContain("Body text.");
+    expect(mocks.mockLoggerInfo).toHaveBeenCalledWith(
+      expect.objectContaining({ event: "shared_page_viewed" }),
+      expect.any(String),
+    );
   });
 
   it("returns 410 with code content-changed when markdown body drifts", async () => {

@@ -153,6 +153,30 @@ export async function POST(request: Request) {
     });
 
   if (insertError) {
+    // 23505 = unique_violation. The partial unique index
+    // kb_share_links_one_active_per_doc guarantees one active share per
+    // (user_id, document_path), so a concurrent POST won that race. Read
+    // the winner's row and return its token if hashes match; otherwise
+    // surface the conflict as 409 (user can retry).
+    if ((insertError as { code?: string }).code === "23505") {
+      const { data: winner } = await serviceClient
+        .from("kb_share_links")
+        .select("token, content_sha256")
+        .eq("user_id", user.id)
+        .eq("document_path", body.documentPath)
+        .eq("revoked", false)
+        .maybeSingle();
+      if (winner && winner.content_sha256 === contentHash) {
+        return NextResponse.json({
+          token: winner.token,
+          url: `/shared/${winner.token}`,
+        });
+      }
+      return NextResponse.json(
+        { error: "Concurrent share creation — retry" },
+        { status: 409 },
+      );
+    }
     logger.error({ err: insertError }, "kb/share: failed to create share link");
     return NextResponse.json(
       { error: "Failed to create share link" },

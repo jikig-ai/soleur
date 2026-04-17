@@ -1,8 +1,9 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { createHash } from "node:crypto";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+
+import { hashBytes } from "@/server/kb-content-hash";
 
 const mocks = vi.hoisted(() => ({
   mockServiceFrom: vi.fn(),
@@ -42,8 +43,7 @@ function callGET(request: Request, token: string) {
 
 function hashFile(absPath: string): string | null {
   try {
-    const buf = fs.readFileSync(absPath);
-    return createHash("sha256").update(buf).digest("hex");
+    return hashBytes(fs.readFileSync(absPath));
   } catch {
     return null;
   }

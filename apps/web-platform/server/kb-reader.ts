@@ -99,7 +99,7 @@ async function mapWithConcurrency<T, R>(
   return results;
 }
 
-function parseFrontmatter(raw: string): {
+export function parseFrontmatter(raw: string): {
   frontmatter: Record<string, unknown>;
   content: string;
 } {
@@ -252,6 +252,12 @@ export async function buildTree(
  * The `buffer` is the un-parsed, un-trimmed file content — callers that need
  * an integrity hash MUST hash the buffer, not the post-frontmatter `content`
  * string, otherwise frontmatter-only edits silently pass verification.
+ *
+ * Safe for markdown only — size is bounded by `KB_MAX_FILE_SIZE` (~1 MB).
+ * Do NOT reuse this helper for the binary path; the size ceiling there
+ * (`MAX_BINARY_SIZE`, 50 MB) would double-allocate as `buffer + utf-8 raw`.
+ * Binary hashing should use `hashBytes` over the buffer returned by
+ * `readBinaryFile`, or `hashStream` with a fd-owned ReadStream.
  */
 export async function readContentRaw(
   kbRoot: string,

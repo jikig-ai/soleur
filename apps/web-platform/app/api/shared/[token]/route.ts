@@ -3,10 +3,10 @@ import path from "node:path";
 import { createServiceClient } from "@/lib/supabase/server";
 import {
   readContentRaw,
+  parseFrontmatter,
   KbNotFoundError,
   KbAccessDeniedError,
 } from "@/server/kb-reader";
-import matter from "gray-matter";
 import {
   readBinaryFile,
   buildBinaryResponse,
@@ -122,14 +122,13 @@ export async function GET(
         );
         return contentChangedResponse();
       }
-      // engines: {} disables custom YAML engines per kb-reader convention.
-      const parsed = matter(raw, { engines: {} });
+      const { content } = parseFrontmatter(raw);
       logger.info(
         { event: "shared_page_viewed", token, documentPath: shareLink.document_path },
         "shared: document viewed",
       );
       return NextResponse.json({
-        content: parsed.content.trim(),
+        content,
         path: shareLink.document_path,
       });
     } catch (err) {
