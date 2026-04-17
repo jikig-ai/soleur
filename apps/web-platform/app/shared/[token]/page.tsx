@@ -6,6 +6,7 @@ import dynamic from "next/dynamic";
 import { MarkdownRenderer } from "@/components/ui/markdown-renderer";
 import { CtaBanner } from "@/components/shared/cta-banner";
 import { KbContentSkeleton } from "@/components/kb/kb-content-skeleton";
+import { SHARED_CONTENT_KIND_HEADER } from "@/lib/shared-kind";
 import {
   classifyResponse,
   type PageError,
@@ -38,8 +39,31 @@ export default function SharedDocumentPage({
 
   useEffect(() => {
     let cancelled = false;
-    fetch(`/api/shared/${token}`)
-      .then((res) => classifyResponse(res, token))
+    async function run(): Promise<{ data: SharedData } | { error: PageError }> {
+      // HEAD first — discriminate content kind (and short-circuit error
+      // states) without paying a full GET that the browser would repeat
+      // as the embed's `<src>` fetch. On cold PDF views this eliminates
+      // one 50 MB server-side stream (see #2324). For binary kinds the
+      // HEAD response alone carries all the headers classifyResponse
+      // needs; markdown requires a follow-up GET for the JSON body; and
+      // 410 requires a GET to read the JSON `code` field so revoked vs.
+      // content-changed can be discriminated.
+      const headRes = await fetch(`/api/shared/${token}`, { method: "HEAD" });
+      if (headRes.status === 410) {
+        const getRes = await fetch(`/api/shared/${token}`);
+        return classifyResponse(getRes, token);
+      }
+      if (!headRes.ok) {
+        return classifyResponse(headRes, token);
+      }
+      const kind = headRes.headers.get(SHARED_CONTENT_KIND_HEADER);
+      if (kind === "markdown") {
+        const getRes = await fetch(`/api/shared/${token}`);
+        return classifyResponse(getRes, token);
+      }
+      return classifyResponse(headRes, token);
+    }
+    run()
       .catch((): { error: PageError } => ({ error: "unknown" }))
       .then((result) => {
         if (cancelled) return;

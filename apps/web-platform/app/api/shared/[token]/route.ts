@@ -10,20 +10,27 @@ import {
 } from "@/server/kb-reader";
 import {
   validateBinaryFile,
+  buildBinaryHeadResponse,
+  build304Response,
+  formatStrongETag,
+  ifNoneMatchMatches,
+  openBinaryStream,
   BinaryOpenError,
 } from "@/server/kb-binary-response";
-import { hashBytes } from "@/server/kb-content-hash";
+import { hashBytes, hashStream } from "@/server/kb-content-hash";
 import {
   contentChangedResponse,
   serveKbFile,
   serveSharedBinaryWithHashGate,
   SHARED_CONTENT_KIND_HEADER,
 } from "@/server/kb-serve";
+import { shareHashVerdictCache } from "@/server/share-hash-verdict-cache";
 import {
   shareEndpointThrottle,
   extractClientIpFromHeaders,
   logRateLimitRejection,
 } from "@/server/rate-limiter";
+import { isMarkdownKbPath } from "@/lib/kb-extensions";
 import logger from "@/server/logger";
 import { reportSilentFallback } from "@/server/observability";
 
@@ -66,52 +73,87 @@ function logSharedFailed(
   );
 }
 
-export async function GET(
+/**
+ * For HEAD responses derived from a JSON-bodied error response, drop the
+ * body-describing headers so the empty body is not accompanied by a
+ * misleading Content-Type: application/json / Content-Length: N. All
+ * other headers are preserved so HEAD clients can still act on them.
+ */
+function stripBodyHeadersFromResponse(source: Response): Response {
+  const headers = new Headers(source.headers);
+  headers.delete("Content-Type");
+  headers.delete("Content-Length");
+  return new Response(null, { status: source.status, headers });
+}
+
+type ShareRow = {
+  document_path: string;
+  revoked: boolean;
+  content_sha256: string | null;
+  users:
+    | { workspace_path: string | null; workspace_status: string | null }
+    | { workspace_path: string | null; workspace_status: string | null }[]
+    | null;
+};
+
+/**
+ * Run the rate-limit + share-lookup + null-hash + upstream If-None-Match
+ * pre-gate pipeline. Returns an early Response for error / 304 paths or a
+ * resolved share context (kbRoot + documentPath + strongETag + ownership
+ * confirmed) for the dispatch branches.
+ *
+ * Both GET and HEAD delegate here so the security and 304 semantics never
+ * drift.
+ */
+async function prepareSharedRequest(
   request: Request,
-  { params }: { params: Promise<{ token: string }> },
-) {
-  // Rate limiting — must precede any filesystem / hash work to avoid DoS via
-  // repeated 50 MB hashing requests.
+  token: string,
+): Promise<
+  | { kind: "response"; response: Response }
+  | {
+      kind: "ready";
+      kbRoot: string;
+      documentPath: string;
+      contentSha256: string;
+      strongETag: string;
+    }
+> {
   const clientIp = extractClientIpFromHeaders(request.headers);
   if (!shareEndpointThrottle.isAllowed(clientIp)) {
     logRateLimitRejection("share-endpoint", clientIp);
-    return NextResponse.json(
-      { error: "Too many requests" },
-      { status: 429 },
-    );
+    return {
+      kind: "response",
+      response: NextResponse.json(
+        { error: "Too many requests" },
+        { status: 429 },
+      ),
+    };
   }
 
-  const { token } = await params;
   const serviceClient = createServiceClient();
-
-  // Single round-trip: PostgREST embedded resource pulls the owner row via
-  // the FK `kb_share_links.user_id -> users.id` (see migration 017). Saves
-  // one Supabase network hop per view vs. the previous sequential pair.
   const { data: shareLink, error: fetchError } = await serviceClient
     .from("kb_share_links")
     .select(
       "document_path, revoked, content_sha256, users!inner(workspace_path, workspace_status)",
     )
     .eq("token", token)
-    .single<{
-      document_path: string;
-      revoked: boolean;
-      content_sha256: string | null;
-      users:
-        | { workspace_path: string | null; workspace_status: string | null }
-        | { workspace_path: string | null; workspace_status: string | null }[]
-        | null;
-    }>();
+    .single<ShareRow>();
 
   if (fetchError || !shareLink) {
-    return NextResponse.json({ error: "Not found" }, { status: 404 });
+    return {
+      kind: "response",
+      response: NextResponse.json({ error: "Not found" }, { status: 404 }),
+    };
   }
 
   if (shareLink.revoked) {
-    return NextResponse.json(
-      { error: "This link has been disabled", code: "revoked" },
-      { status: 410 },
-    );
+    return {
+      kind: "response",
+      response: NextResponse.json(
+        { error: "This link has been disabled", code: "revoked" },
+        { status: 410 },
+      ),
+    };
   }
 
   if (!shareLink.content_sha256) {
@@ -119,7 +161,18 @@ export async function GET(
       { event: "shared_legacy_null_hash", token, documentPath: shareLink.document_path },
       "shared: legacy row without content hash",
     );
-    return legacyNullHashResponse();
+    return { kind: "response", response: legacyNullHashResponse() };
+  }
+
+  // If-None-Match fast path: the share row's content_sha256 is the
+  // strong ETag we would emit on a 200. When the client already has a
+  // matching validator, short-circuit to 304 — skipping owner lookup,
+  // filesystem validation, and the hash drain. Bandwidth AND work saved;
+  // safe because a 304 reveals no bytes.
+  const strongETag = formatStrongETag(shareLink.content_sha256);
+  const ifNoneMatch = request.headers.get("if-none-match");
+  if (ifNoneMatch && ifNoneMatchMatches(ifNoneMatch, strongETag)) {
+    return { kind: "response", response: build304Response(strongETag) };
   }
 
   const owner = Array.isArray(shareLink.users)
@@ -127,12 +180,27 @@ export async function GET(
     : shareLink.users;
   if (!owner?.workspace_path || owner.workspace_status !== "ready") {
     logSharedFailed(token, shareLink.document_path, "workspace-unavailable");
-    return notFoundResponse();
+    return { kind: "response", response: notFoundResponse() };
   }
 
-  const kbRoot = path.join(owner.workspace_path, "knowledge-base");
-  const contentSha256 = shareLink.content_sha256;
-  const documentPath = shareLink.document_path;
+  return {
+    kind: "ready",
+    kbRoot: path.join(owner.workspace_path, "knowledge-base"),
+    documentPath: shareLink.document_path,
+    contentSha256: shareLink.content_sha256,
+    strongETag,
+  };
+}
+
+export async function GET(
+  request: Request,
+  { params }: { params: Promise<{ token: string }> },
+) {
+  const { token } = await params;
+  const prepared = await prepareSharedRequest(request, token);
+  if (prepared.kind === "response") return prepared.response;
+
+  const { kbRoot, documentPath, contentSha256 } = prepared;
 
   return serveKbFile(kbRoot, documentPath, {
     request,
@@ -185,6 +253,135 @@ export async function GET(
       }
     },
   });
+}
+
+export async function HEAD(
+  request: Request,
+  { params }: { params: Promise<{ token: string }> },
+) {
+  const { token } = await params;
+  const prepared = await prepareSharedRequest(request, token);
+  if (prepared.kind === "response") {
+    // HEAD must not carry a body (RFC 7231 §4.3.2). Preserve status +
+    // non-body headers (Retry-After on 429, ETag/Cache-Control on 304);
+    // strip Content-Type / Content-Length set by NextResponse.json.
+    return stripBodyHeadersFromResponse(prepared.response);
+  }
+
+  const { kbRoot, documentPath, contentSha256, strongETag } = prepared;
+
+  if (isMarkdownKbPath(documentPath)) {
+    // Markdown HEAD: the client uses this to branch on kind before
+    // issuing a follow-up GET. Preserve the same hash-gate that GET
+    // applies so an HTTP 200 here never lies about a file that would
+    // 410 on GET.
+    try {
+      const { buffer } = await readContentRaw(kbRoot, documentPath);
+      const currentHash = hashBytes(buffer);
+      if (currentHash !== contentSha256) {
+        logger.info(
+          {
+            event: "shared_content_mismatch",
+            token,
+            documentPath,
+            kind: "markdown",
+          },
+          "shared: content hash mismatch (head)",
+        );
+        return stripBodyHeadersFromResponse(contentChangedResponse());
+      }
+      logger.info(
+        {
+          event: "shared_page_head",
+          token,
+          documentPath,
+          kind: "markdown",
+        },
+        "shared: document head",
+      );
+      return new Response(null, {
+        status: 200,
+        headers: {
+          "Content-Type": "application/json",
+          [SHARED_CONTENT_KIND_HEADER]: "markdown",
+        },
+      });
+    } catch (err) {
+      return stripBodyHeadersFromResponse(
+        mapSharedError(err, token, documentPath),
+      );
+    }
+  }
+
+  // Binary HEAD: run the same hash gate as GET (share verdict cache +
+  // on-miss SHA-256 drain) so a mutated file 410s on HEAD and GET
+  // consistently. buildBinaryHeadResponse opens zero fds on the 200 and
+  // 304 paths.
+  try {
+    const binary = await validateBinaryFile(kbRoot, documentPath);
+    const cachedVerdict = shareHashVerdictCache.get(
+      token,
+      binary.ino,
+      binary.mtimeMs,
+      binary.size,
+    );
+
+    if (cachedVerdict !== true) {
+      let currentHash: string;
+      try {
+        const stream = await openBinaryStream(binary.filePath, {
+          expected: { ino: binary.ino, size: binary.size },
+        });
+        currentHash = await hashStream(stream);
+      } catch (err) {
+        if (err instanceof BinaryOpenError && err.code === "content-changed") {
+          logger.info(
+            {
+              event: "shared_content_mismatch",
+              token,
+              documentPath,
+              kind: "binary",
+              reason: "inode-drift-head",
+            },
+            "shared: inode drift between validate and hash (head)",
+          );
+          return stripBodyHeadersFromResponse(contentChangedResponse());
+        }
+        throw err;
+      }
+      if (currentHash !== contentSha256) {
+        logger.info(
+          {
+            event: "shared_content_mismatch",
+            token,
+            documentPath,
+            kind: "binary",
+            reason: "hash-mismatch-head",
+          },
+          "shared: content hash mismatch (head)",
+        );
+        return stripBodyHeadersFromResponse(contentChangedResponse());
+      }
+      shareHashVerdictCache.set(token, binary.ino, binary.mtimeMs, binary.size);
+    }
+
+    logger.info(
+      {
+        event: "shared_page_head",
+        token,
+        documentPath,
+        contentType: binary.contentType,
+        cached: cachedVerdict === true,
+        kind: "binary",
+      },
+      "shared: document head",
+    );
+    return buildBinaryHeadResponse(binary, request, { strongETag });
+  } catch (err) {
+    return stripBodyHeadersFromResponse(
+      mapSharedError(err, token, documentPath),
+    );
+  }
 }
 
 function mapSharedError(

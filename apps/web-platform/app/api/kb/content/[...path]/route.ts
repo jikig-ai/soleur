@@ -6,8 +6,14 @@ import {
   readContent,
   KbNotFoundError,
   KbAccessDeniedError,
+  KbFileTooLargeError,
   KbValidationError,
 } from "@/server/kb-reader";
+import {
+  validateBinaryFile,
+  buildBinaryHeadResponse,
+  BinaryOpenError,
+} from "@/server/kb-binary-response";
 import { serveKbFile, serveBinary } from "@/server/kb-serve";
 
 export async function GET(
@@ -82,4 +88,73 @@ export async function GET(
         },
       }),
   });
+}
+
+export async function HEAD(
+  request: Request,
+  { params }: { params: Promise<{ path: string[] }> },
+) {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+
+  if (!user) {
+    return new Response(null, { status: 401 });
+  }
+
+  const serviceClient = createServiceClient();
+  const { data: userData, error: fetchError } = await serviceClient
+    .from("users")
+    .select("workspace_path, workspace_status")
+    .eq("id", user.id)
+    .single();
+
+  if (fetchError || !userData?.workspace_path) {
+    return new Response(null, { status: 404 });
+  }
+
+  if (userData.workspace_status !== "ready") {
+    return new Response(null, { status: 503 });
+  }
+
+  const { path: pathSegments } = await params;
+  const relativePath = pathSegments.join("/");
+
+  if (!relativePath) {
+    return new Response(null, { status: 404 });
+  }
+
+  const kbRoot = path.join(userData.workspace_path, "knowledge-base");
+  const ext = path.extname(relativePath).toLowerCase();
+
+  // Markdown HEAD: emit the same Content-Type the GET JSON response
+  // would, with an empty body. Clients use this to branch on kind
+  // before issuing the follow-up GET.
+  if (ext === ".md" || ext === "") {
+    return new Response(null, {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    });
+  }
+
+  try {
+    const meta = await validateBinaryFile(kbRoot, relativePath);
+    return buildBinaryHeadResponse(meta, request);
+  } catch (err) {
+    if (err instanceof KbAccessDeniedError) {
+      return new Response(null, { status: 403 });
+    }
+    if (err instanceof KbNotFoundError) {
+      return new Response(null, { status: 404 });
+    }
+    if (err instanceof KbFileTooLargeError) {
+      return new Response(null, { status: 413 });
+    }
+    if (err instanceof BinaryOpenError) {
+      return new Response(null, { status: err.status });
+    }
+    logger.error({ err, path: relativePath }, "kb/content: HEAD unexpected error");
+    return new Response(null, { status: 500 });
+  }
 }
