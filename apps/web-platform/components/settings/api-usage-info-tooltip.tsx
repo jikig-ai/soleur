@@ -17,7 +17,7 @@ export function ApiUsageInfoTooltip({
   return (
     <details className="group relative inline-block">
       <summary
-        className="inline-flex cursor-pointer list-none items-center gap-1 rounded text-xs text-zinc-500 hover:text-zinc-700 focus:outline-none focus:ring-1 focus:ring-zinc-400 dark:text-zinc-400 dark:hover:text-zinc-200 [&::-webkit-details-marker]:hidden"
+        className="inline-flex cursor-pointer list-none items-center gap-1 whitespace-nowrap rounded text-xs text-zinc-500 hover:text-zinc-700 focus:outline-none focus:ring-1 focus:ring-zinc-400 dark:text-zinc-400 dark:hover:text-zinc-200 [&::-webkit-details-marker]:hidden"
       >
         <span
           aria-hidden="true"
