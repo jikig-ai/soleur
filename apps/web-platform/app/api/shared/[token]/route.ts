@@ -7,14 +7,13 @@ import {
   KbNotFoundError,
   KbAccessDeniedError,
 } from "@/server/kb-reader";
+import { validateBinaryFile } from "@/server/kb-binary-response";
+import { hashBytes } from "@/server/kb-content-hash";
 import {
-  validateBinaryFile,
-  buildBinaryResponse,
-  openBinaryStream,
-  BinaryOpenError,
-} from "@/server/kb-binary-response";
-import { hashBytes, hashStream } from "@/server/kb-content-hash";
-import { shareHashVerdictCache } from "@/server/share-hash-verdict-cache";
+  contentChangedResponse,
+  serveKbFile,
+  serveBinaryWithHashGate,
+} from "@/server/kb-serve";
 import {
   shareEndpointThrottle,
   extractClientIpFromHeaders,
@@ -22,16 +21,6 @@ import {
 } from "@/server/rate-limiter";
 import logger from "@/server/logger";
 import * as Sentry from "@sentry/nextjs";
-
-function contentChangedResponse() {
-  return NextResponse.json(
-    {
-      error: "The shared file has been modified since it was shared.",
-      code: "content-changed",
-    },
-    { status: 410 },
-  );
-}
 
 function legacyNullHashResponse() {
   return NextResponse.json(
@@ -80,8 +69,6 @@ export async function GET(
   }
 
   if (!shareLink.content_sha256) {
-    // Legacy row from before content-hash binding. Treat as invalid — the
-    // migration should have revoked these, but belt-and-suspenders.
     logger.warn(
       { event: "shared_legacy_null_hash", token, documentPath: shareLink.document_path },
       "shared: legacy row without content hash",
@@ -104,177 +91,81 @@ export async function GET(
   }
 
   const kbRoot = path.join(owner.workspace_path, "knowledge-base");
-  const ext = path.extname(shareLink.document_path).toLowerCase();
 
-  // Markdown / extensionless branch.
-  if (ext === ".md" || ext === "") {
-    try {
-      const { buffer, raw } = await readContentRaw(
-        kbRoot,
-        shareLink.document_path,
-      );
-      const currentHash = hashBytes(buffer);
-      if (currentHash !== shareLink.content_sha256) {
-        logger.info(
-          {
-            event: "shared_content_mismatch",
-            token,
-            documentPath: shareLink.document_path,
-            kind: "markdown",
-          },
-          "shared: content hash mismatch",
-        );
-        return contentChangedResponse();
-      }
-      const { content } = parseFrontmatter(raw);
-      logger.info(
-        { event: "shared_page_viewed", token, documentPath: shareLink.document_path },
-        "shared: document viewed",
-      );
-      return NextResponse.json({
-        content,
-        path: shareLink.document_path,
-      });
-    } catch (err) {
-      if (err instanceof KbAccessDeniedError) {
-        logger.warn(
-          { token, path: shareLink.document_path },
-          "shared: path traversal attempt blocked",
-        );
-        return NextResponse.json({ error: "Access denied" }, { status: 403 });
-      }
-      if (err instanceof KbNotFoundError) {
-        return NextResponse.json(
-          { error: "Document no longer available" },
-          { status: 404 },
-        );
-      }
-      logger.error({ err, token }, "shared: unexpected error");
-      Sentry.captureException(err, {
-        tags: { feature: "shared-token" },
-        extra: { token },
-      });
-      return NextResponse.json(
-        { error: "An unexpected error occurred" },
-        { status: 500 },
-      );
-    }
-  }
-
-  // Binary branch — validate metadata without reading bytes, then either
-  // trust the verdict cache (fast path) or hash via a fresh stream before
-  // serving (slow path: first view OR file mutated since last verify).
-  const binary = await validateBinaryFile(kbRoot, shareLink.document_path);
-  if (!binary.ok) {
-    if (binary.status === 403) {
-      logger.warn(
-        { token, path: shareLink.document_path },
-        "shared: binary access denied (symlink / outside root)",
-      );
-    }
-    return NextResponse.json({ error: binary.error }, { status: binary.status });
-  }
-
-  const cachedVerdict = shareHashVerdictCache.get(
-    token,
-    binary.ino,
-    binary.mtimeMs,
-    binary.size,
-  );
-
-  if (cachedVerdict !== true) {
-    // Cache miss — drain a fresh stream through SHA-256 and compare
-    // before shipping any bytes. The expected { ino, size } tuple on
-    // openBinaryStream rejects any rename/link swap between validate and
-    // hash — if the inode drifted, BinaryOpenError("content-changed") is
-    // thrown and surfaces as 410.
-    let currentHash: string;
-    try {
-      const hashStreamObj = await openBinaryStream(binary.filePath, {
-        expected: { ino: binary.ino, size: binary.size },
-      });
-      currentHash = await hashStream(hashStreamObj);
-    } catch (err) {
-      if (err instanceof BinaryOpenError) {
-        if (err.code === "content-changed") {
+  return serveKbFile(kbRoot, shareLink.document_path, {
+    request,
+    onMarkdown: async (root, rel) => {
+      try {
+        const { buffer, raw } = await readContentRaw(root, rel);
+        const currentHash = hashBytes(buffer);
+        if (currentHash !== shareLink.content_sha256) {
           logger.info(
             {
               event: "shared_content_mismatch",
               token,
-              documentPath: shareLink.document_path,
-              kind: "binary",
-              reason: "inode-drift",
+              documentPath: rel,
+              kind: "markdown",
             },
-            "shared: inode drift between validate and hash",
+            "shared: content hash mismatch",
           );
           return contentChangedResponse();
         }
-        logger.warn(
-          { err: err.message, code: err.code, token, path: shareLink.document_path },
-          "shared: open failed on hash pass",
+        const { content } = parseFrontmatter(raw);
+        logger.info(
+          { event: "shared_page_viewed", token, documentPath: rel },
+          "shared: document viewed",
         );
+        return NextResponse.json({
+          content,
+          path: rel,
+        });
+      } catch (err) {
+        if (err instanceof KbAccessDeniedError) {
+          logger.warn(
+            { token, path: rel },
+            "shared: path traversal attempt blocked",
+          );
+          return NextResponse.json({ error: "Access denied" }, { status: 403 });
+        }
+        if (err instanceof KbNotFoundError) {
+          return NextResponse.json(
+            { error: "Document no longer available" },
+            { status: 404 },
+          );
+        }
+        logger.error({ err, token }, "shared: unexpected error");
+        Sentry.captureException(err, {
+          tags: { feature: "shared-token" },
+          extra: { token },
+        });
         return NextResponse.json(
-          { error: err.message },
-          { status: err.status },
+          { error: "An unexpected error occurred" },
+          { status: 500 },
         );
       }
-      logger.error(
-        { err, token, path: shareLink.document_path },
-        "shared: hash stream drain failed",
-      );
-      return NextResponse.json(
-        { error: "An unexpected error occurred" },
-        { status: 500 },
-      );
-    }
-    if (currentHash !== shareLink.content_sha256) {
-      logger.info(
-        {
-          event: "shared_content_mismatch",
-          token,
-          documentPath: shareLink.document_path,
-          kind: "binary",
-        },
-        "shared: content hash mismatch",
-      );
-      return contentChangedResponse();
-    }
-    shareHashVerdictCache.set(token, binary.ino, binary.mtimeMs, binary.size);
-  }
-
-  logger.info(
-    {
-      event: "shared_page_viewed",
-      token,
-      documentPath: shareLink.document_path,
-      contentType: binary.contentType,
-      cached: cachedVerdict === true,
     },
-    "shared: document viewed",
-  );
-  try {
-    return await buildBinaryResponse(binary, request, {
-      // Strong ETag from the stored content hash: a repeat view with a
-      // matching If-None-Match returns 304 without re-opening the fd.
-      strongETag: shareLink.content_sha256,
-    });
-  } catch (err) {
-    if (err instanceof BinaryOpenError && err.code === "content-changed") {
-      logger.info(
-        {
-          event: "shared_content_mismatch",
-          token,
-          documentPath: shareLink.document_path,
-          kind: "binary",
-          reason: "inode-drift-serve",
-        },
-        "shared: inode drift between hash and serve",
-      );
-      return contentChangedResponse();
-    }
-    if (err instanceof BinaryOpenError) {
-      return NextResponse.json({ error: err.message }, { status: err.status });
-    }
-    throw err;
-  }
+    onBinary: async (root, rel) => {
+      const binary = await validateBinaryFile(root, rel);
+      if (!binary.ok) {
+        if (binary.status === 403) {
+          logger.warn(
+            { token, path: rel },
+            "shared: binary access denied (symlink / outside root)",
+          );
+        }
+        return NextResponse.json(
+          { error: binary.error },
+          { status: binary.status },
+        );
+      }
+      return serveBinaryWithHashGate({
+        token,
+        expectedHash: shareLink.content_sha256,
+        meta: binary,
+        request,
+        logger,
+        logContext: { token, documentPath: rel },
+      });
+    },
+  });
 }

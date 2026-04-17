@@ -1,0 +1,144 @@
+import fs from "fs";
+import os from "os";
+import path from "path";
+import { describe, test, expect, beforeEach, afterEach, vi } from "vitest";
+import { serveBinary, serveKbFile } from "@/server/kb-serve";
+
+let tmpWorkspace: string;
+let kbRoot: string;
+
+function buildRequest(): Request {
+  return new Request("http://localhost:3000/anything");
+}
+
+beforeEach(() => {
+  tmpWorkspace = fs.mkdtempSync(path.join(os.tmpdir(), "kb-serve-test-"));
+  kbRoot = path.join(tmpWorkspace, "knowledge-base");
+  fs.mkdirSync(kbRoot, { recursive: true });
+});
+
+afterEach(() => {
+  fs.rmSync(tmpWorkspace, { recursive: true, force: true });
+});
+
+describe("serveBinary", () => {
+  test("path traversal returns 403 with { error: 'Access denied' }", async () => {
+    const res = await serveBinary(kbRoot, "../../etc/passwd.png", {
+      request: buildRequest(),
+    });
+    expect(res.status).toBe(403);
+    expect(await res.json()).toEqual({ error: "Access denied" });
+  });
+
+  test("symlink returns 403", async () => {
+    const outside = path.join(tmpWorkspace, "secret.txt");
+    fs.writeFileSync(outside, "secret");
+    fs.symlinkSync(outside, path.join(kbRoot, "link.png"));
+
+    const res = await serveBinary(kbRoot, "link.png", { request: buildRequest() });
+    expect(res.status).toBe(403);
+    expect(await res.json()).toEqual({ error: "Access denied" });
+  });
+
+  test("missing file returns 404", async () => {
+    const res = await serveBinary(kbRoot, "missing.png", {
+      request: buildRequest(),
+    });
+    expect(res.status).toBe(404);
+    expect(await res.json()).toEqual({ error: "File not found" });
+  });
+
+  test("file exceeding MAX_BINARY_SIZE returns 413", async () => {
+    const big = path.join(kbRoot, "huge.pdf");
+    const fd = fs.openSync(big, "w");
+    fs.ftruncateSync(fd, 51 * 1024 * 1024);
+    fs.closeSync(fd);
+
+    const res = await serveBinary(kbRoot, "huge.pdf", { request: buildRequest() });
+    expect(res.status).toBe(413);
+    expect(await res.json()).toEqual({ error: "File exceeds maximum size limit" });
+  });
+
+  test("valid PNG returns 200 with expected headers", async () => {
+    fs.writeFileSync(path.join(kbRoot, "logo.png"), Buffer.from("fake-png"));
+
+    const res = await serveBinary(kbRoot, "logo.png", { request: buildRequest() });
+    expect(res.status).toBe(200);
+    expect(res.headers.get("Content-Type")).toBe("image/png");
+    expect(res.headers.get("Accept-Ranges")).toBe("bytes");
+    expect(res.headers.get("ETag")).toBeTruthy();
+  });
+
+  test("invokes onError with (status, message) on validate rejection", async () => {
+    const onError = vi.fn();
+    const res = await serveBinary(kbRoot, "missing.png", {
+      request: buildRequest(),
+      onError,
+    });
+    expect(res.status).toBe(404);
+    expect(onError).toHaveBeenCalledWith(404, "File not found");
+  });
+});
+
+describe("serveKbFile dispatcher", () => {
+  test(".md path routes to onMarkdown", async () => {
+    const onMarkdown = vi.fn(async () => new Response("md", { status: 200 }));
+    await serveKbFile(kbRoot, "foo.md", {
+      request: buildRequest(),
+      onMarkdown,
+    });
+    expect(onMarkdown).toHaveBeenCalledWith(kbRoot, "foo.md");
+  });
+
+  test("extensionless path routes to onMarkdown", async () => {
+    const onMarkdown = vi.fn(async () => new Response("md", { status: 200 }));
+    await serveKbFile(kbRoot, "notes", {
+      request: buildRequest(),
+      onMarkdown,
+    });
+    expect(onMarkdown).toHaveBeenCalledWith(kbRoot, "notes");
+  });
+
+  test("uppercase .MD routes to onMarkdown (case-fold regression)", async () => {
+    const onMarkdown = vi.fn(async () => new Response("md", { status: 200 }));
+    await serveKbFile(kbRoot, "NOTES.MD", {
+      request: buildRequest(),
+      onMarkdown,
+    });
+    expect(onMarkdown).toHaveBeenCalledWith(kbRoot, "NOTES.MD");
+  });
+
+  test("binary path routes to onBinary override when provided", async () => {
+    const onMarkdown = vi.fn();
+    const onBinary = vi.fn(async () => new Response("bin", { status: 200 }));
+    await serveKbFile(kbRoot, "foo.pdf", {
+      request: buildRequest(),
+      onMarkdown,
+      onBinary,
+    });
+    expect(onMarkdown).not.toHaveBeenCalled();
+    expect(onBinary).toHaveBeenCalledWith(kbRoot, "foo.pdf");
+  });
+
+  test("uppercase .PDF routes to binary (case-fold regression)", async () => {
+    const onMarkdown = vi.fn();
+    const onBinary = vi.fn(async () => new Response("bin", { status: 200 }));
+    await serveKbFile(kbRoot, "foo.PDF", {
+      request: buildRequest(),
+      onMarkdown,
+      onBinary,
+    });
+    expect(onMarkdown).not.toHaveBeenCalled();
+    expect(onBinary).toHaveBeenCalledWith(kbRoot, "foo.PDF");
+  });
+
+  test("binary path without onBinary falls through to serveBinary default", async () => {
+    fs.writeFileSync(path.join(kbRoot, "logo.png"), Buffer.from("data"));
+    const res = await serveKbFile(kbRoot, "logo.png", {
+      request: buildRequest(),
+      onMarkdown: vi.fn(),
+    });
+    expect(res.status).toBe(200);
+    expect(res.headers.get("Content-Type")).toBe("image/png");
+  });
+});

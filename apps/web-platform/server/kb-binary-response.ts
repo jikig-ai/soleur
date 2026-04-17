@@ -3,6 +3,7 @@ import path from "node:path";
 import { Readable } from "node:stream";
 import { isPathInWorkspace } from "@/server/sandbox";
 import { KB_BINARY_RESPONSE_CSP } from "@/lib/kb-csp";
+import { getKbExtension } from "@/lib/kb-extensions";
 
 export const MAX_BINARY_SIZE = 50 * 1024 * 1024; // 50 MB
 
@@ -114,7 +115,7 @@ export async function validateBinaryFile(
     if (stat.size > MAX_BINARY_SIZE) {
       return { ok: false, status: 413, error: "File exceeds maximum size limit" };
     }
-    const ext = path.extname(relativePath).toLowerCase();
+    const ext = getKbExtension(relativePath);
     const contentType = CONTENT_TYPE_MAP[ext] || "application/octet-stream";
     const disposition = ATTACHMENT_EXTENSIONS.has(ext) ? "attachment" : "inline";
     const rawName = path.basename(relativePath);
