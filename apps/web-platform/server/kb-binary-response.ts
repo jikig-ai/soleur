@@ -241,6 +241,89 @@ function matchesIfNoneMatch(ifNoneMatch: string, etag: string): boolean {
   return candidates.has(normalize(etag));
 }
 
+/**
+ * Builds a 304 Not Modified response with the ETag and Cache-Control
+ * headers that a conditional GET or HEAD would return. Shared by
+ * buildBinaryResponse, buildBinaryHeadResponse, and upstream share-route
+ * helpers that short-circuit before any filesystem work when the client's
+ * If-None-Match matches the stored content hash.
+ */
+export function build304Response(etag: string): Response {
+  return new Response(null, {
+    status: 304,
+    headers: {
+      ETag: etag,
+      "Cache-Control": "private, max-age=60",
+    },
+  });
+}
+
+/** Format a strong ETag (double-quoted sha) from a raw content hash. */
+export function formatStrongETag(contentSha256: string): string {
+  return `"${contentSha256}"`;
+}
+
+/**
+ * RFC 7232 If-None-Match weak-equality comparison. Re-exported so upstream
+ * callers (share-route helpers) can emit conditional-response short-circuits
+ * using the same comparison the main builders use.
+ */
+export function ifNoneMatchMatches(
+  ifNoneMatch: string,
+  etag: string,
+): boolean {
+  return matchesIfNoneMatch(ifNoneMatch, etag);
+}
+
+/**
+ * Pure header derivation shared by GET and HEAD response builders. Emits
+ * the body-agnostic header set a 200 binary response needs. Does NOT
+ * include Content-Length or Content-Range — those vary by response shape
+ * (full body vs. Range vs. HEAD) and are set by the caller.
+ */
+export function buildBinaryHeaders(
+  payload: BinaryFileMetadata,
+  opts?: { strongETag?: string },
+): Record<string, string> {
+  return {
+    "Content-Type": payload.contentType,
+    "Content-Disposition": formatContentDisposition(payload.disposition, payload.rawName),
+    "X-Content-Type-Options": "nosniff",
+    "Cache-Control": "private, max-age=60",
+    "Content-Security-Policy": KB_BINARY_RESPONSE_CSP,
+    "Accept-Ranges": "bytes",
+    [SHARED_CONTENT_KIND_HEADER]: deriveBinaryKind(payload),
+    ETag: buildETag(payload, opts?.strongETag),
+  };
+}
+
+/**
+ * HEAD-equivalent of buildBinaryResponse: returns 200 with an empty body
+ * plus Content-Length matching what GET would return (RFC 7231 §4.3.2),
+ * or 304 when If-None-Match matches. Never opens a file descriptor — the
+ * size is taken from the validated metadata and the ETag comparison runs
+ * against the in-memory tuple. This is what lets a HEAD on a cached
+ * share short-circuit before the hash drain.
+ */
+export function buildBinaryHeadResponse(
+  payload: BinaryFileMetadata,
+  request?: Request,
+  opts?: { strongETag?: string },
+): Response {
+  const etag = buildETag(payload, opts?.strongETag);
+  const ifNoneMatch = request?.headers.get("if-none-match");
+  if (ifNoneMatch && matchesIfNoneMatch(ifNoneMatch, etag)) {
+    return build304Response(etag);
+  }
+  return new Response(null, {
+    status: 200,
+    headers: {
+      ...buildBinaryHeaders(payload, opts),
+      "Content-Length": payload.size.toString(),
+    },
+  });
+}
+
 export async function buildBinaryResponse(
   meta: BinaryFileMetadata,
   request?: Request,
@@ -257,25 +340,10 @@ export async function buildBinaryResponse(
   // resource ETag even when a Range header is present).
   const ifNoneMatch = request?.headers.get("if-none-match");
   if (ifNoneMatch && matchesIfNoneMatch(ifNoneMatch, etag)) {
-    return new Response(null, {
-      status: 304,
-      headers: {
-        ETag: etag,
-        "Cache-Control": "private, max-age=60",
-      },
-    });
+    return build304Response(etag);
   }
 
-  const commonHeaders: Record<string, string> = {
-    "Content-Type": meta.contentType,
-    "Content-Disposition": formatContentDisposition(meta.disposition, meta.rawName),
-    "X-Content-Type-Options": "nosniff",
-    "Cache-Control": "private, max-age=60",
-    "Content-Security-Policy": KB_BINARY_RESPONSE_CSP,
-    "Accept-Ranges": "bytes",
-    [SHARED_CONTENT_KIND_HEADER]: deriveBinaryKind(meta),
-    ETag: etag,
-  };
+  const commonHeaders = buildBinaryHeaders(meta, opts);
 
   const rangeHeader = request?.headers.get("range");
   if (rangeHeader) {

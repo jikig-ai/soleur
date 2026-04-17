@@ -76,18 +76,24 @@ export default function SharedDocumentPage({
     let cancelled = false;
     async function fetchSharedContent() {
       try {
-        const res = await fetch(`/api/shared/${token}`);
+        // HEAD first — discriminate content kind (and short-circuit error
+        // states) without paying a full GET that the browser would repeat
+        // as the embed's `<src>` fetch. On cold views this saves one full
+        // server-side stream (50 MB for a PDF view — see PR #2324).
+        const headRes = await fetch(`/api/shared/${token}`, { method: "HEAD" });
         if (cancelled) return;
-        if (res.status === 404) {
+        if (headRes.status === 404) {
           setError("not-found");
           setLoading(false);
           return;
         }
-        if (res.status === 410) {
-          // Discriminate via response body `code` so we can show tailored
-          // copy for content-changed without disturbing the existing revoked
-          // path. Fall back to "revoked" copy if the body is missing/unparseable.
-          const body = await res.json().catch(() => null);
+        if (headRes.status === 410) {
+          // HEAD has no body, so discriminate revoked vs content-changed
+          // via a single follow-up GET that reads the JSON `code` field.
+          const body = await fetch(`/api/shared/${token}`)
+            .then((r) => r.json())
+            .catch(() => null);
+          if (cancelled) return;
           const code = body && typeof body === "object" ? body.code : null;
           if (code === "content-changed" || code === "legacy-null-hash") {
             setError("content-changed");
@@ -97,17 +103,17 @@ export default function SharedDocumentPage({
           setLoading(false);
           return;
         }
-        if (!res.ok) {
+        if (!headRes.ok) {
           setError("unknown");
           setLoading(false);
           return;
         }
-        // Server-declared kind — branch on X-Soleur-Kind (emitted by
-        // /api/shared/[token] for every success response) rather than
-        // sniffing the content-type string. Keeps the UI decoupled from
-        // the transport mime map and makes "new kind added without a
-        // render branch" a compile error (exhaustive switch below).
-        const headerKind = res.headers.get(SHARED_CONTENT_KIND_HEADER);
+
+        // Server-declared kind — branch on X-Soleur-Kind from the HEAD
+        // response. The UI stays decoupled from the transport mime map
+        // and adding a new SharedKind without a render branch is a
+        // compile error (exhaustive switch below).
+        const headerKind = headRes.headers.get(SHARED_CONTENT_KIND_HEADER);
         const kind: SharedKind | null = isSharedContentKind(headerKind)
           ? headerKind
           : null;
@@ -116,12 +122,21 @@ export default function SharedDocumentPage({
           setLoading(false);
           return;
         }
-        const disposition = res.headers.get("content-disposition");
+        const disposition = headRes.headers.get("content-disposition");
         const label = extractFilename(disposition) ?? basenameFromToken(token);
         const src = `/api/shared/${token}`;
 
         switch (kind) {
           case "markdown": {
+            // Markdown branch — issue the GET to retrieve the rendered
+            // content + canonical path from the JSON payload.
+            const res = await fetch(src);
+            if (cancelled) return;
+            if (!res.ok) {
+              setError("unknown");
+              setLoading(false);
+              return;
+            }
             const json = await res.json();
             setData({
               kind: "markdown",
@@ -131,6 +146,9 @@ export default function SharedDocumentPage({
             break;
           }
           case "pdf":
+            // Binary branches: the embed (`<PdfPreview src>` / `<img
+            // src>` / `<a href>`) issues the single GET the browser
+            // needs. The page itself does not re-fetch.
             setData({ kind: "pdf", src, filename: label });
             break;
           case "image":
