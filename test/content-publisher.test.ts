@@ -736,13 +736,6 @@ MOCK
 // ---------------------------------------------------------------------------
 
 describe("validate_no_liquid_markers", () => {
-  function writeFixture(frontmatter: string, body: string): string {
-    const path = `/tmp/liquid-fixture-${Math.random().toString(36).slice(2)}.md`;
-    const content = `---\n${frontmatter}\n---\n\n${body}\n`;
-    Bun.write(path, content);
-    return path;
-  }
-
   test("returns 0 for file with clean body", () => {
     const result = Bun.spawnSync(["bash", "-c", `
       set -euo pipefail
@@ -873,6 +866,89 @@ EOF
       `validate_no_liquid_markers "${SAMPLE_CONTENT}"`
     );
     expect(result.exitCode).toBe(0);
+  });
+
+  test("returns 0 for empty file (no frontmatter, no body)", () => {
+    const result = Bun.spawnSync(["bash", "-c", `
+      set -euo pipefail
+      source '${SCRIPT_PATH}'
+      tmpfile=$(mktemp)
+      : > "$tmpfile"
+      validate_no_liquid_markers "$tmpfile"
+      exit_code=$?
+      rm -f "$tmpfile"
+      exit $exit_code
+    `], { env: BASE_ENV });
+    expect(result.exitCode).toBe(0);
+  });
+
+  test("returns 0 for file with no frontmatter (no `---` fences)", () => {
+    const result = Bun.spawnSync(["bash", "-c", `
+      set -euo pipefail
+      source '${SCRIPT_PATH}'
+      tmpfile=$(mktemp)
+      cat > "$tmpfile" <<'EOF'
+# Just a heading
+
+Prose with no braces.
+EOF
+      validate_no_liquid_markers "$tmpfile"
+      exit_code=$?
+      rm -f "$tmpfile"
+      exit $exit_code
+    `], { env: BASE_ENV });
+    expect(result.exitCode).toBe(0);
+  });
+
+  test("reports file-relative line numbers, not body-relative", () => {
+    // Marker is on file line 8, body line 2 — validator must emit 8.
+    const result = Bun.spawnSync(["bash", "-c", `
+      set -euo pipefail
+      source '${SCRIPT_PATH}'
+      tmpfile=$(mktemp)
+      cat > "$tmpfile" <<'EOF'
+---
+title: "Line Number Test"
+status: scheduled
+---
+
+## Discord
+
+Blog: <{{ site.url }}blog/x/>
+EOF
+      set +e
+      validate_no_liquid_markers "$tmpfile" 2>&1 >/dev/null | head -1
+      set -e
+      rm -f "$tmpfile"
+    `], { env: BASE_ENV });
+    const stderr = decode(result.stderr) + decode(result.stdout);
+    // File-relative line 8 should appear, body-relative 2 alone should not.
+    expect(stderr).toMatch(/:8:/);
+  });
+
+  test("reports multiple markers on separate lines", () => {
+    const result = Bun.spawnSync(["bash", "-c", `
+      set -euo pipefail
+      source '${SCRIPT_PATH}'
+      tmpfile=$(mktemp)
+      cat > "$tmpfile" <<'EOF'
+---
+title: "Multi"
+---
+
+## Discord
+
+First marker: {{ a }}
+Second marker: {{ b }}
+EOF
+      set +e
+      validate_no_liquid_markers "$tmpfile"
+      set -e
+      rm -f "$tmpfile"
+    `], { env: BASE_ENV });
+    const stderr = decode(result.stderr);
+    expect(stderr).toContain("{{ a }}");
+    expect(stderr).toContain("{{ b }}");
   });
 });
 

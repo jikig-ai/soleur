@@ -82,19 +82,33 @@ get_frontmatter_field() {
 # relative URL paths, etc.) and are never posted to third parties directly.
 #
 # Returns 0 if clean, 1 if any marker is found. Prints offending lines to
-# stderr in `<file>:<body-relative-line>: unrendered Liquid marker: <line>`
-# format.
+# stderr in `<file>:<file-relative-line>: unrendered Liquid marker: <content>`
+# format (matches scripts/lint-distribution-content.sh for operator grepability).
+
+# Strip C0/C1 control bytes and Unicode line separators (U+2028/U+2029).
+# Content bytes from third-party markdown flow into stderr and issue bodies;
+# escape sequences in those bytes can rewrite terminal titles, inject cursor
+# control in CI logs, or trigger OSC 52 clipboard hijack. echo (no -e) does
+# not interpret them, but many terminals do on raw output.
+_liquid_strip_controls() {
+  printf '%s' "$1" | LC_ALL=C tr -d '\000-\010\013\014\016-\037\177' | sed 's/\xe2\x80\xa8//g; s/\xe2\x80\xa9//g'
+}
+
 validate_no_liquid_markers() {
   local file="$1"
-  local body offenders
+  local body offenders offset
 
-  # Select body only (lines after the second `---`), then grep for any of the
-  # four Liquid/Jinja delimiters as fixed strings. `grep -n` prints line numbers
-  # that are body-relative, which is enough to locate the offender within the
-  # section the LLM authored.
   body=$(awk '/^---$/{c++; next} c==2' "$file")
   if [[ -z "$body" ]]; then
     return 0
+  fi
+
+  # Offset = line number of the second `---` in the source file. grep -n
+  # against the body gives body-relative numbers; adding offset yields
+  # file-relative numbers that a human can open directly in an editor.
+  offset=$(awk '/^---$/{c++; if (c==2) { print NR; exit } }' "$file")
+  if [[ -z "$offset" ]]; then
+    offset=0
   fi
 
   offenders=$(printf '%s\n' "$body" | grep -nF -e '{{' -e '}}' -e '{%' -e '%}' || true)
@@ -102,22 +116,39 @@ validate_no_liquid_markers() {
     return 0
   fi
 
-  while IFS= read -r line; do
-    echo "$file:$line: unrendered Liquid marker: ${line#*:}" >&2
+  local hit body_lineno content file_lineno safe_content
+  while IFS= read -r hit; do
+    body_lineno="${hit%%:*}"
+    content="${hit#*:}"
+    file_lineno=$((body_lineno + offset))
+    safe_content=$(_liquid_strip_controls "$content")
+    echo "$file:$file_lineno: unrendered Liquid marker: $safe_content" >&2
   done <<< "$offenders"
   return 1
+}
+
+# Redact token-like values before embedding offending lines in a public
+# GitHub issue body. Heuristic only — catches the common case of an
+# authoring mistake that embeds a secret via template syntax.
+_liquid_redact_secrets() {
+  sed -E 's/((token|secret|key|password|api[_-]?key)[[:space:]]*[:=][[:space:]]*)[^[:space:]"]+/\1[REDACTED]/gi'
 }
 
 create_liquid_marker_fallback_issue() {
   local file="$1"
   local offenders="${2:-}"
-  local base
+  local base safe_offenders
   base=$(basename "$file" .md)
+
+  # Sanitize offender content before embedding in a public issue body:
+  # strip control bytes, redact token-like values, escape triple-backticks
+  # that would terminate the fenced code block.
+  safe_offenders=$(_liquid_strip_controls "$offenders" | _liquid_redact_secrets | sed 's/```/`\xe2\x80\x8b``/g')
 
   local title="[Content Publisher] Unrendered Liquid markers in $base -- post blocked"
   local offender_section=""
-  if [[ -n "$offenders" ]]; then
-    offender_section=$(printf '\n\n**Offending lines:**\n```\n%s\n```' "${offenders:0:1500}")
+  if [[ -n "$safe_offenders" ]]; then
+    offender_section=$(printf '\n\n**Offending lines:**\n```\n%s\n```' "${safe_offenders:0:1500}")
   fi
   local body
   body=$(printf '## Unrendered Liquid Markers Detected\n\nThe content publisher refused to post **%s** because its body contains one or more Liquid/Jinja template markers (`{{`, `}}`, `{%%`, `%%}`).%s\n\nDistribution content is piped to third-party APIs verbatim — template markers are never resolved. Fix the source file, re-set `status: scheduled`, and the next cron run will publish.' \

@@ -215,18 +215,14 @@ Using the blog post content, stats values, article URL, and brand guide as conte
 
 Before presenting variants (Phase 6), scan every generated section for unresolved Liquid/Jinja template markers: `{{`, `}}`, `{%`, `%}`.
 
-This is a mechanical check, not an LLM judgment. Distribution content is piped to third-party APIs verbatim -- Discord webhooks, X/Twitter, LinkedIn, Bluesky. There is no Eleventy render pass between the content file and those APIs, so a literal `{{ site.url }}` becomes a literal `{{ site.url }}` in the posted message.
+You MUST run the committed linter on the assembled variant text (write it to a temp file with a minimal `---\n---\n` frontmatter preamble, then `bash scripts/lint-distribution-content.sh <tmpfile>`). Do NOT substitute an LLM visual inspection — the rule is "delegate to the deterministic tool that `lefthook` and `content-publisher.sh` both enforce against." Exit code 0 means clean; exit 1 means markers found.
 
 **Procedure:**
 
-1. For each variant section, `grep -F -e '{{' -e '}}' -e '{%' -e '%}'` across its content.
-2. If any marker is found, do NOT proceed to Phase 6. Instead:
-   - Print the offending section name and the offending substring.
-   - Regenerate that section once with explicit substitution of `site.url` (resolved value: `https://soleur.ai`) and any `{{ stats.* }}` placeholders using the values from Phase 2.
-   - Re-run marker validation.
-3. If the re-generation still produces markers, STOP and surface to the user: "Auto-regeneration did not resolve Liquid markers -- manual intervention required." Do not loop further (prevents runaway LLM cost).
-
-**Why the re-generation cap is 1:** if the LLM fails twice in a row to resolve a known-substitutable variable, the issue is in the prompt context, not randomness. Escalate to the user instead of looping.
+1. Assemble each generated variant into a `tmpfile` with a minimal frontmatter preamble.
+2. Run `bash scripts/lint-distribution-content.sh <tmpfile>`.
+3. If exit 1, do NOT proceed to Phase 6. Regenerate the offending section with explicit substitution of `site.url` (resolved value: `https://soleur.ai`) and any `{{ stats.* }}` placeholders using Phase 2 values. Re-run the linter against the new output.
+4. If the re-generation still produces markers, STOP and surface to the user: "Auto-regeneration did not resolve Liquid markers -- manual intervention required." Do not loop further.
 
 Template markers in distribution content files are always a bug.
 

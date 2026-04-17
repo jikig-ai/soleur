@@ -16,6 +16,14 @@
 
 set -euo pipefail
 
+# Strip C0/C1 control bytes and Unicode line separators (U+2028/U+2029) from
+# content bytes before echoing to stderr. Content files are third-party
+# markdown; escape sequences can rewrite terminal titles or inject cursor
+# control in CI logs on raw output.
+_strip_controls() {
+  printf '%s' "$1" | LC_ALL=C tr -d '\000-\010\013\014\016-\037\177' | sed 's/\xe2\x80\xa8//g; s/\xe2\x80\xa9//g'
+}
+
 if [[ $# -eq 0 ]]; then
   exit 0
 fi
@@ -29,6 +37,9 @@ for file in "$@"; do
     missing_file=1
     continue
   fi
+
+  # Declared here so ShellCheck doesn't flag them as unset below.
+  body="" offset="" offenders="" hit="" body_lineno="" content="" file_lineno="" safe_content=""
 
   # Body only: bytes after the second `---`. Frontmatter may legitimately
   # contain brace-like strings (JSON-encoded values, URL paths); never posted.
@@ -53,7 +64,8 @@ for file in "$@"; do
     body_lineno="${hit%%:*}"
     content="${hit#*:}"
     file_lineno=$((body_lineno + offset))
-    echo "$file:$file_lineno: unrendered Liquid marker: $content" >&2
+    safe_content=$(_strip_controls "$content")
+    echo "$file:$file_lineno: unrendered Liquid marker: $safe_content" >&2
   done <<< "$offenders"
   found_markers=1
 done

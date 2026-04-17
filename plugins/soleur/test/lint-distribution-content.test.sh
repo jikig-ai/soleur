@@ -115,4 +115,72 @@ set -e
 [[ "$exit_code" != "0" ]] && { echo "  PASS: missing file exits non-zero"; PASS=$((PASS + 1)); } \
   || { echo "  FAIL: missing file should exit non-zero"; FAIL=$((FAIL + 1)); }
 
+# Test 9: Empty file (no frontmatter, no body) passes
+empty="$TMPDIR_BASE/empty.md"
+: > "$empty"
+set +e
+bash "$LINT_SCRIPT" "$empty" >/dev/null 2>&1
+exit_code=$?
+set -e
+assert_eq "0" "$exit_code" "empty file exits 0"
+
+# Test 10: File with no frontmatter fences passes when body has no markers
+no_fm="$TMPDIR_BASE/no-frontmatter.md"
+{
+  echo "# Heading only"
+  echo ""
+  echo "Prose with no braces."
+} > "$no_fm"
+set +e
+bash "$LINT_SCRIPT" "$no_fm" >/dev/null 2>&1
+exit_code=$?
+set -e
+assert_eq "0" "$exit_code" "file without frontmatter exits 0 when body is clean"
+
+# Test 11: File-relative line numbers are reported (not body-relative)
+line_test=$(write_fixture "line-test" "## Discord
+
+Blog: <{{ site.url }}blog/x/>")
+# The marker is on file line 8 (after 4-line frontmatter + blank + heading + blank),
+# not body line 3. Assert the emitted line number is file-relative.
+set +e
+stderr=$(bash "$LINT_SCRIPT" "$line_test" 2>&1 >/dev/null)
+set -e
+assert_contains "$stderr" ":8:" "file-relative line number is reported (line 8)"
+
+# Test 12: Multiple markers on separate lines — all reported
+multi=$(write_fixture "multi" "## Discord
+
+First: {{ a }}
+Second: {{ b }}")
+set +e
+stderr=$(bash "$LINT_SCRIPT" "$multi" 2>&1 >/dev/null)
+set -e
+assert_contains "$stderr" "{{ a }}" "first marker reported"
+assert_contains "$stderr" "{{ b }}" "second marker reported"
+
+# Test 13: Control bytes in offending line are stripped from stderr
+ctrl="$TMPDIR_BASE/ctrl.md"
+{
+  echo "---"
+  echo "title: \"Control\""
+  echo "---"
+  echo ""
+  echo "## Discord"
+  echo ""
+  # Write a literal ESC (0x1b) byte + OSC-like sequence alongside the marker
+  printf 'Blog: \x1b]0;hijack\x07{{ x }}\n'
+} > "$ctrl"
+set +e
+stderr=$(bash "$LINT_SCRIPT" "$ctrl" 2>&1 >/dev/null)
+set -e
+# The ESC byte (0x1b) must not appear in stderr after sanitization.
+if ! printf '%s' "$stderr" | grep -q $'\x1b'; then
+  echo "  PASS: control bytes stripped from stderr"
+  PASS=$((PASS + 1))
+else
+  echo "  FAIL: stderr still contains ESC byte"
+  FAIL=$((FAIL + 1))
+fi
+
 print_results
