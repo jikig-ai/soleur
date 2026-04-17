@@ -211,6 +211,25 @@ Using the blog post content, stats values, article URL, and brand guide as conte
 
 ## Approval Flow
 
+### Phase 5.5: Marker Validation (hard gate)
+
+Before presenting variants (Phase 6), scan every generated section for unresolved Liquid/Jinja template markers: `{{`, `}}`, `{%`, `%}`.
+
+This is a mechanical check, not an LLM judgment. Distribution content is piped to third-party APIs verbatim -- Discord webhooks, X/Twitter, LinkedIn, Bluesky. There is no Eleventy render pass between the content file and those APIs, so a literal `{{ site.url }}` becomes a literal `{{ site.url }}` in the posted message.
+
+**Procedure:**
+
+1. For each variant section, `grep -F -e '{{' -e '}}' -e '{%' -e '%}'` across its content.
+2. If any marker is found, do NOT proceed to Phase 6. Instead:
+   - Print the offending section name and the offending substring.
+   - Regenerate that section once with explicit substitution of `site.url` (resolved value: `https://soleur.ai`) and any `{{ stats.* }}` placeholders using the values from Phase 2.
+   - Re-run marker validation.
+3. If the re-generation still produces markers, STOP and surface to the user: "Auto-regeneration did not resolve Liquid markers -- manual intervention required." Do not loop further (prevents runaway LLM cost).
+
+**Why the re-generation cap is 1:** if the LLM fails twice in a row to resolve a known-substitutable variable, the issue is in the prompt context, not randomness. Escalate to the user instead of looping.
+
+Template markers in distribution content files are always a bug.
+
 ### Phase 6: Present All Variants
 
 Display all variants in a summary view with clear headers and character counts:
@@ -413,6 +432,12 @@ status: draft
 <bluesky content>
 ```
 
+**Step 5: Pre-write marker validation (belt-and-suspenders)**
+
+Before writing the assembled content to disk, scan the full content buffer one final time for `{{`, `}}`, `{%`, `%}`. This repeats the Phase 5.5 check against the fully assembled file (including headings, frontmatter, and inter-section transitions). If any marker is present, STOP and do not write the file. Regenerate the offending section or escalate to the user.
+
+Writing a content file that contains Liquid markers is a workflow violation -- `lefthook`'s `distribution-content-liquid-guard` will reject the commit, and if the file is somehow committed, `content-publisher.sh`'s runtime gate will refuse to post it. Catch it here so the skill does not produce a broken artifact in the first place.
+
 ### Phase 10: Summary & Next Steps
 
 Output the file path, channel status, and instructions:
@@ -448,6 +473,7 @@ Next steps:
 - If the brand guide's channel notes section is missing for a platform, generate content using only the `## Voice` section (no error)
 - If the user selects "Edit" for Discord, incorporate their feedback and regenerate -- do not present the same draft
 - Template variables in blog source (`{{ stats.agents }}` etc.) are resolved by passing current stats as LLM context -- the LLM substitutes actual values during generation
+- Distribution content files are raw API payloads (Discord webhook `content` field, X tweet text, LinkedIn share text), NOT Eleventy templates. Liquid/Jinja markers (`{{`, `}}`, `{%`, `%}`) in the body will be posted verbatim to third parties -- a `{{ site.url }}` becomes a literal `{{ site.url }}` in the Discord message. Phase 5.5 and Phase 9 Step 5 enforce this mechanically; do NOT weaken these gates
 - Markup artifacts (JSON-LD scripts, HTML details/summary tags, Nunjucks tags) in the blog source are ignored during generation -- they are meaningless in social posts
 - Missing `DISCORD_BLOG_WEBHOOK_URL` and `DISCORD_WEBHOOK_URL` does not block execution -- Discord is included in the content file's `channels` field for cron publishing
 - New content files use the blog post slug as filename. If an existing file with a numeric prefix matches the slug (e.g., `06-<slug>.md`), the existing filename is preserved
