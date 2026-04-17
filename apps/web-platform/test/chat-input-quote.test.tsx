@@ -1,16 +1,16 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, act } from "@testing-library/react";
 import { useRef } from "react";
-import { ChatInput } from "@/components/chat/chat-input";
+import { ChatInput, type ChatInputQuoteHandle } from "@/components/chat/chat-input";
 
 // Phase 4.3: ChatInput exposes an imperative `quoteRef.current.insertQuote(text)`
 // that prepends "> text\n\n" to the draft (or inserts at cursor if there is
 // already a draft), does NOT auto-send, and briefly flashes an amber ring
 // class on the inserted blockquote as a landing confirmation.
 
-interface QuoteHandle {
-  insertQuote: (text: string) => void;
-}
+// Use the exported handle type so the local harness stays in sync when
+// the interface grows (e.g., #2384 5B added `focus()`).
+type QuoteHandle = ChatInputQuoteHandle;
 
 function Harness({
   onSend,

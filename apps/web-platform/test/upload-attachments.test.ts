@@ -36,12 +36,17 @@ function fakePresignErr(status: number) {
 }
 
 describe("uploadPendingFiles", () => {
-  let fetchSpy: ReturnType<typeof vi.spyOn>;
+  // Cast sidesteps vi.spyOn's stricter generic on `typeof globalThis`
+  // (which does not always expose `fetch` as a valid key).
+  let fetchSpy: ReturnType<typeof vi.fn>;
 
   beforeEach(() => {
     mockUpload.mockReset();
     mockSentry.mockReset();
-    fetchSpy = vi.spyOn(globalThis, "fetch");
+    fetchSpy = vi.spyOn(
+      globalThis as unknown as { fetch: typeof fetch },
+      "fetch",
+    ) as unknown as ReturnType<typeof vi.fn>;
     mockUpload.mockImplementation(() => ({
       promise: Promise.resolve(),
       xhr: {} as XMLHttpRequest,
