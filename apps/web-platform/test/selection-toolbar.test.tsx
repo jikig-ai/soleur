@@ -2,6 +2,12 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, act, fireEvent } from "@testing-library/react";
 import { useRef } from "react";
 
+// The selection-toolbar coalesces setPill via a single-slot rAF (Phase 3
+// task 9A). Fake timers don't auto-run rAF callbacks, so tests that assert
+// on pill state immediately after a selection change must advance at least
+// one frame.
+const FRAME_MS = 20;
+
 // Tests for Phase 4.1: components/kb/selection-toolbar.tsx
 //   - Pill appears when a selection lives inside the articleRef
 //   - 8KB preflight: > maxBytes renders disabled pill
@@ -26,11 +32,15 @@ function setSelection(node: Node, text: string) {
   Object.defineProperty(sel, "toString", { value: () => text, configurable: true });
   // anchor/focus nodes default to the range's start/end containers.
   document.dispatchEvent(new Event("selectionchange"));
+  // Flush the component's single-slot rAF so pill state updates synchronously
+  // from the test's perspective (matches browser behavior after 1 frame).
+  vi.advanceTimersByTime(FRAME_MS);
 }
 
 function clearSelection() {
   window.getSelection()!.removeAllRanges();
   document.dispatchEvent(new Event("selectionchange"));
+  vi.advanceTimersByTime(FRAME_MS);
 }
 
 import { SelectionToolbar } from "@/components/kb/selection-toolbar";
