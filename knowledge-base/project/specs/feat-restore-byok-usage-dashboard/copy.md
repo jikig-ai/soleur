@@ -17,24 +17,31 @@ Pattern: `$4.27 in April · 38 conversations`
 
 Format: `${total} in {Month} · {n} conversations`
 
+## 2b. Zero-MTD-with-history helper line (120)
+
+Rendered when the month-to-date total is `$0` but the list below is non-empty.
+
+`Showing your last 50 conversations with cost. Nothing billed this month yet.`
+
 ## 3. Column headers (14 each)
 
 | Field | Header |
 |---|---|
 | time | `When` |
 | domain | `Domain` |
-| model | `Model` |
 | input tokens | `Input` |
 | output tokens | `Output` |
 | cost | `Cost` |
 
+(`Model` column descoped — no `model` field is persisted on `conversations`. Follow-up issue tracks re-introduction.)
+
 ## 4. Per-row secondary label pattern (40)
 
-Pattern: `[Marketing] · claude-sonnet-4-5 · 2h ago`
+Pattern: `[Marketing] · 2h ago`
 
-Format: `[{Domain}] · {model-id} · {relativeTime}`
+Format: `[{Department}] · {relativeTime}`
 
-Rules: domain in brackets, model ID verbatim from API, relative time (`2h ago`, `3d ago`). Separator is ` · ` (space-middot-space).
+Rules: department name in brackets (resolved from `DOMAIN_LEADERS[id].domain`, never the role abbreviation), relative time (`2h ago`, `3d ago`). Separator is ` · ` (space-middot-space). Unknown or null domain leader renders as `—`.
 
 ## 5. Empty state
 
@@ -64,6 +71,12 @@ Rules: domain in brackets, model ID verbatim from API, relative time (`2h ago`, 
 - **Body (120):** `The dashboard couldn't reach the usage service. Your API key and billing are unaffected. Try again in a moment.`
 - **Retry action (16):** `Retry`
 
+Implementation note: the error UI is rendered from the server component
+branch, but the `Retry` button is a tiny client island
+(`components/billing/retry-button.tsx`) that calls `router.refresh()`.
+Containing page must set `export const dynamic = "force-dynamic"` so
+`router.refresh()` re-fetches the data loader.
+
 ---
 
 ## Character count audit
@@ -73,8 +86,9 @@ Rules: domain in brackets, model ID verbatim from API, relative time (`2h ago`, 
 | 1a | Header | 30 | 9 |
 | 1b | Subhead | 100 | 92 |
 | 2 | MTD line (sample) | 60 | 28 |
+| 2b | Zero-MTD helper line | 120 | 79 |
 | 3 | Column headers | 14 | 4–6 each |
-| 4 | Row label (sample) | 40 | 38 |
+| 4 | Row label (sample) | 40 | 19 |
 | 5a | Empty headline | 40 | 29 |
 | 5b | Empty body | 140 | 138 |
 | 5c | Empty CTA | 24 | 19 |

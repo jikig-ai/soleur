@@ -7,7 +7,7 @@ milestone: "Phase 3: Make it Sticky"
 status: Ready for planning
 brainstorm: knowledge-base/project/brainstorms/2026-04-17-restore-byok-usage-dashboard-brainstorm.md
 copy: knowledge-base/project/specs/feat-restore-byok-usage-dashboard/copy.md
-bundled_with: "#2436"
+related: "#2436 (API shape already on main — no bundled work)"
 ---
 
 # Spec: Restore BYOK Usage Dashboard
@@ -34,16 +34,17 @@ reopened to track this restoration.
   the latest 50 conversations with `total_cost_usd > 0`.
 - Use "Actual API cost" language (no "estimated", no tilde-prefixed values)
   to reinforce the no-markup positioning.
-- Bundle with #2436 so the dashboard list and the resumed chat cost badge
-  both consume the same camelCase-typed API shape.
+- Consume the camelCase-typed API shape from #2436 (already on main) so the
+  dashboard list and the resumed chat cost badge stay consistent.
 
 ## Non-Goals
 
 - **New top-level `/dashboard/usage` route or nav entry** — settings-tab
   placement per brainstorm decision.
 - **Per-model cost breakdown** — `model_usage` JSONB was cut during the
-  prior review cycle; schema does not store multi-model per-conversation
-  data. Show the last model used only.
+  prior review cycle; the `conversations` table stores NO `model` column
+  at all. Model column descoped entirely. Tracked as follow-up
+  ("Persist last-used model per conversation").
 - **3-view toggle** (per-conversation / tokens / per-domain) — single list
   with columns serves all three views.
 - **Date-range picker / week/day bucketing** — follow-up issue.
@@ -68,10 +69,10 @@ reopened to track this restoration.
   `idx_conversations_user_cost` from migration 017.
 - **FR4.** Each row renders:
   relative time (e.g. `2h ago`), domain-leader department label
-  (`[Marketing]` style — department name, not role), model id (last model
-  used), input tokens, output tokens, USD cost to 4 decimal places.
-  Column headers per `copy.md §3`; row secondary label pattern per
-  `copy.md §4`.
+  (`[Marketing]` style — department name, not role), input tokens,
+  output tokens, USD cost (4 decimal places when sub-cent; 2 decimal
+  places when ≥ $0.01). Column headers per `copy.md §3`; row secondary
+  label pattern per `copy.md §4`.
 - **FR5.** Empty state renders when query returns zero rows: headline, body,
   primary CTA per `copy.md §5`. CTA links to `/dashboard` (start a
   conversation).
@@ -81,9 +82,12 @@ reopened to track this restoration.
 - **FR7.** Tooltip affordances for "what is a token?" and "why does cost
   vary?" per `copy.md §6–7`. May be rendered as info icons beside the
   section header or as help links at the bottom.
-- **FR8.** Error state: if the Supabase query returns `{ error }`, render
-  error UI per `copy.md §10` (headline, body, retry action). Retry action
-  re-runs the query.
+- **FR8.** Error state: if the data loader returns `null` (any query
+  error), render error UI per `copy.md §10`. Retry action lives in a
+  tiny client island (`<RetryButton>`) and calls `router.refresh()` —
+  a server component cannot re-run its own query on a click handler.
+  Requires `export const dynamic = "force-dynamic"` on the containing
+  page so `router.refresh()` actually re-fetches.
 - **FR9.** Loading state: SSR-first means no client-side spinner on first
   paint. If later iterations add client revalidation, show copy per
   `copy.md §9`.
@@ -91,10 +95,9 @@ reopened to track this restoration.
   `DOMAIN_LEADERS` registry — display the department `name`, not the id
   (e.g. `Marketing`, not `cmo`). If `domain_leader` is null (legacy
   conversations), render `—`.
-- **FR11.** Bundled from #2436: `/api/conversations/:id/messages` returns
-  `totalCostUsd`, `inputTokens`, `outputTokens` as numbers (not PostgREST
-  NUMERIC strings) so that chat cost badge seeding from history and
-  dashboard list display share a single typed API shape.
+- **FR11.** #2436 already landed the camelCase API shape on main
+  (`server/api-messages.ts:40,65-70`). This PR consumes the shape; no
+  API change required here.
 
 ## Technical Requirements
 
@@ -147,8 +150,8 @@ reopened to track this restoration.
    current calendar month.
 3. List shows latest 50 conversations (newest first) filtered to
    `total_cost_usd > 0` and scoped to the authenticated user.
-4. Each row shows relative time, `[Department]` label, model id, input
-   tokens, output tokens, USD cost.
+4. Each row shows relative time, `[Department]` label, input tokens,
+   output tokens, USD cost (no model — descoped).
 5. Empty state, error state, loading state render correct copy from
    `copy.md`.
 6. No "estimated", "approximate", "~", or similar hedging language in the
@@ -166,9 +169,9 @@ reopened to track this restoration.
 1. **Precision for non-sub-cent values**: 2dp (`$4.27`) or 4dp (`$4.2731`)
    for the month total and for rows ≥ $0.01? Default: 2dp for totals, 4dp
    for per-row when < $0.01 else 2dp. Confirm during implementation.
-2. **Multi-model conversations**: render only the last model (simple) or
-   annotate `model-id (+N)` when churn detected? Default: last only; revisit
-   post-beta.
+2. **Multi-model conversations** — CLOSED. No `model` column exists on
+   `conversations`; Model column descoped entirely. Re-introduction
+   tracked by follow-up issue "Persist last-used model per conversation".
 3. **Retention policy**: no documented policy for `total_cost_usd` data.
    Blocks Phase 4 recruitment; resolved by roadmap items 2.4 / 2.9, not
    by this PR.
@@ -181,7 +184,7 @@ reopened to track this restoration.
 - Copy: `knowledge-base/project/specs/feat-restore-byok-usage-dashboard/copy.md`
 - Original ship: PR #1867 (commit `086cf1ab`)
 - Regression: PR #2036 (commit `f4fcb738`)
-- Bundled issue: #2436 (fix-kb-chat-cost-estimate-resume)
+- Related: #2436 fix-kb-chat-cost-estimate-resume (API shape shipped on main — `server/api-messages.ts:40,65-70`)
 - Migration: `apps/web-platform/supabase/migrations/017_conversation_cost_tracking.sql`
 - Capture: `apps/web-platform/server/agent-runner.ts:1164-1190`
 - Stream: `apps/web-platform/lib/ws-client.ts:86, 331-338, 435+`
