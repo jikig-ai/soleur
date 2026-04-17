@@ -9,6 +9,7 @@ import { SharePopover } from "@/components/kb/share-popover";
 import { FilePreview } from "@/components/kb/file-preview";
 import { KbChatTrigger } from "@/components/kb/kb-chat-trigger";
 import { KbChatContext } from "@/components/kb/kb-chat-context";
+import { KbChatQuoteBridgeContext } from "@/components/kb/kb-chat-quote-bridge";
 import { SelectionToolbar } from "@/components/kb/selection-toolbar";
 import type { ContentResult } from "@/server/kb-reader";
 
@@ -27,6 +28,7 @@ export default function KbContentPage({
   const [error, setError] = useState<"not-found" | "unknown" | null>(null);
   const articleRef = useRef<HTMLElement>(null);
   const kbChat = useContext(KbChatContext);
+  const quoteBridge = useContext(KbChatQuoteBridgeContext);
 
   useEffect(() => {
     // Non-markdown files are rendered by FilePreview — no fetch needed
@@ -184,10 +186,10 @@ export default function KbContentPage({
           </div>
         </div>
       </article>
-      {kbChat?.enabled && kbChat.submitQuote && (
+      {kbChat?.enabled && quoteBridge && (
         <SelectionToolbar
           articleRef={articleRef}
-          onAddToChat={kbChat.submitQuote}
+          onAddToChat={quoteBridge.submitQuote}
         />
       )}
     </div>

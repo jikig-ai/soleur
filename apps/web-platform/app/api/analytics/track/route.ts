@@ -126,14 +126,10 @@ export async function POST(req: Request): Promise<Response> {
       return new NextResponse(null, { status: 204 });
     }
 
-    // Learning 2026-04-02: tolerate non-JSON bodies. We never parse further;
-    // reading just drains the stream. Inner .catch() makes this safe on its own.
-    const ct = res.headers.get("content-type") ?? "";
-    if (ct.includes("application/json")) {
-      await res.json().catch(() => undefined);
-    } else {
-      await res.text().catch(() => undefined);
-    }
+    // Body intentionally not drained — undici releases the socket when
+    // the Response is GC'd. Historical drain (removed #2387 7E) was
+    // defensive against a parsing concern, not a socket-leak one.
+    void res;
   } catch (err) {
     log.warn(
       {

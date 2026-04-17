@@ -10,6 +10,8 @@ import { KbContext } from "@/components/kb/kb-context";
 import type { KbContextValue } from "@/components/kb/kb-context";
 import { KbChatContext } from "@/components/kb/kb-chat-context";
 import type { KbChatContextValue } from "@/components/kb/kb-chat-context";
+import { KbChatQuoteBridgeProvider } from "@/components/kb/kb-chat-quote-bridge";
+import { safeSession } from "@/lib/safe-session";
 import { FileTree } from "@/components/kb/file-tree";
 import { SearchOverlay } from "@/components/kb/search-overlay";
 import { getAncestorPaths } from "@/components/kb/get-ancestor-paths";
@@ -121,10 +123,6 @@ export default function KbLayout({ children }: { children: ReactNode }) {
     return () => { controller.abort(); };
   }, [fetchTree]);
 
-  const refreshTree = useCallback(async () => {
-    await fetchTree();
-  }, [fetchTree]);
-
   const toggleExpanded = useCallback((path: string) => {
     setExpanded((prev) => {
       const next = new Set(prev);
@@ -195,32 +193,28 @@ export default function KbLayout({ children }: { children: ReactNode }) {
     error,
     expanded,
     toggleExpanded,
-    refreshTree,
-  }), [tree, loading, error, expanded, toggleExpanded, refreshTree]);
+    refreshTree: fetchTree,
+  }), [tree, loading, error, expanded, toggleExpanded, fetchTree]);
 
   // --- Chat sidebar state -------------------------------------------------
   const contextPath = useMemo(() => deriveContextPathFromPathname(pathname), [pathname]);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [messageCount, setMessageCount] = useState(0);
-  const quoteHandlerRef = useRef<((text: string) => void) | null>(null);
 
   // Restore sidebarOpen from sessionStorage on mount (per-tab persistence)
   useEffect(() => {
     if (!kbChatFlag) return;
-    try {
-      const saved = sessionStorage.getItem(KB_SIDEBAR_OPEN_KEY);
-      if (saved === "1") setSidebarOpen(true);
-    } catch { /* sessionStorage unavailable */ }
+    if (safeSession(KB_SIDEBAR_OPEN_KEY) === "1") setSidebarOpen(true);
   }, [kbChatFlag]);
 
   const openSidebar = useCallback(() => {
     setSidebarOpen(true);
-    try { sessionStorage.setItem(KB_SIDEBAR_OPEN_KEY, "1"); } catch { /* noop */ }
+    safeSession(KB_SIDEBAR_OPEN_KEY, "1");
   }, []);
 
   const closeSidebar = useCallback(() => {
     setSidebarOpen(false);
-    try { sessionStorage.setItem(KB_SIDEBAR_OPEN_KEY, "0"); } catch { /* noop */ }
+    safeSession(KB_SIDEBAR_OPEN_KEY, "0");
   }, []);
 
   // Close the chat panel when the user navigates to a different document.
@@ -260,36 +254,15 @@ export default function KbLayout({ children }: { children: ReactNode }) {
     return () => controller.abort();
   }, [contextPath, kbChatFlag]);
 
-  const registerQuoteHandler = useCallback(
-    (handler: ((text: string) => void) | null) => {
-      quoteHandlerRef.current = handler;
-    },
-    [],
-  );
-
-  const submitQuote = useCallback(
-    (text: string) => {
-      setSidebarOpen(true);
-      try { sessionStorage.setItem(KB_SIDEBAR_OPEN_KEY, "1"); } catch { /* noop */ }
-      // Give the sidebar a tick to mount + register its handler before inserting.
-      queueMicrotask(() => {
-        quoteHandlerRef.current?.(text);
-      });
-    },
-    [],
-  );
-
   const chatCtxValue: KbChatContextValue = useMemo(() => ({
     open: sidebarOpen,
     openSidebar,
     closeSidebar,
     contextPath,
     enabled: kbChatFlag,
-    submitQuote,
-    registerQuoteHandler,
     messageCount,
     setMessageCount,
-  }), [sidebarOpen, openSidebar, closeSidebar, contextPath, kbChatFlag, submitQuote, registerQuoteHandler, messageCount]);
+  }), [sidebarOpen, openSidebar, closeSidebar, contextPath, kbChatFlag, messageCount]);
 
   // Whether to show the chat panel as a resizable column on desktop.
   // sidebarOpen is user-controlled: clicking X (`closeSidebar`) sets it false
@@ -301,11 +274,13 @@ export default function KbLayout({ children }: { children: ReactNode }) {
     return (
       <KbContext value={ctxValue}>
         <KbChatContext value={chatCtxValue}>
+          <KbChatQuoteBridgeProvider onOpenSidebar={openSidebar}>
           {loading && <LoadingSkeleton />}
           {error === "workspace-not-ready" && <WorkspaceNotReady />}
           {error === "not-found" && <NoProjectState />}
           {error === "unknown" && <UnknownError />}
           {!loading && !error && !hasTreeContent && <EmptyState />}
+          </KbChatQuoteBridgeProvider>
         </KbChatContext>
       </KbContext>
     );
@@ -365,6 +340,7 @@ export default function KbLayout({ children }: { children: ReactNode }) {
     return (
       <KbContext value={ctxValue}>
         <KbChatContext value={chatCtxValue}>
+          <KbChatQuoteBridgeProvider onOpenSidebar={openSidebar}>
           <Group orientation="horizontal" className="h-full">
             {/* Sidebar panel */}
             <Panel
@@ -413,6 +389,7 @@ export default function KbLayout({ children }: { children: ReactNode }) {
               </>
             )}
           </Group>
+          </KbChatQuoteBridgeProvider>
         </KbChatContext>
       </KbContext>
     );
@@ -422,31 +399,33 @@ export default function KbLayout({ children }: { children: ReactNode }) {
   return (
     <KbContext value={ctxValue}>
       <KbChatContext value={chatCtxValue}>
-        <div className="flex h-full">
-          <aside
-            inert={kbCollapsed || undefined}
-            className={`w-full shrink-0 overflow-y-auto border-r border-neutral-800
-              ${isContentView ? "hidden" : "block"}`}
-          >
-            {sidebarContent}
-          </aside>
+        <KbChatQuoteBridgeProvider onOpenSidebar={openSidebar}>
+          <div className="flex h-full">
+            <aside
+              inert={kbCollapsed || undefined}
+              className={`w-full shrink-0 overflow-y-auto border-r border-neutral-800
+                ${isContentView ? "hidden" : "block"}`}
+            >
+              {sidebarContent}
+            </aside>
 
-          <div
-            className={`min-w-0 flex-1 ${
-              isContentView ? "" : "hidden"
-            } flex flex-col`}
-          >
-            {docContent}
+            <div
+              className={`min-w-0 flex-1 ${
+                isContentView ? "" : "hidden"
+              } flex flex-col`}
+            >
+              {docContent}
+            </div>
+
+            {kbChatFlag && contextPath && (
+              <KbChatSidebar
+                open={sidebarOpen}
+                onClose={closeSidebar}
+                contextPath={contextPath}
+              />
+            )}
           </div>
-
-          {kbChatFlag && contextPath && (
-            <KbChatSidebar
-              open={sidebarOpen}
-              onClose={closeSidebar}
-              contextPath={contextPath}
-            />
-          )}
-        </div>
+        </KbChatQuoteBridgeProvider>
       </KbChatContext>
     </KbContext>
   );

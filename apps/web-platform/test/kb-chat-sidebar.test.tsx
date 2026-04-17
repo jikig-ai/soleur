@@ -80,24 +80,27 @@ describe("KbChatSidebar", () => {
   async function renderSidebar(open = true) {
     const { KbChatSidebar } = await import("@/components/chat/kb-chat-sidebar");
     const { KbChatContext } = await import("@/components/kb/kb-chat-context");
+    const { KbChatQuoteBridgeProvider } = await import(
+      "@/components/kb/kb-chat-quote-bridge"
+    );
     const ctxValue = {
       open,
       openSidebar: vi.fn(),
       closeSidebar: vi.fn(),
       contextPath: "knowledge-base/product/roadmap.md",
       enabled: true,
-      submitQuote: vi.fn(),
-      registerQuoteHandler: vi.fn(),
       messageCount: 0,
       setMessageCount: vi.fn(),
     };
     return render(
       <KbChatContext value={ctxValue}>
+        <KbChatQuoteBridgeProvider onOpenSidebar={vi.fn()}>
         <KbChatSidebar
           open={open}
           onClose={vi.fn()}
           contextPath="knowledge-base/product/roadmap.md"
         />
+        </KbChatQuoteBridgeProvider>
       </KbChatContext>,
     );
   }

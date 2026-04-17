@@ -2,13 +2,10 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ChatSurface } from "@/components/chat/chat-surface";
-import type { ChatInputQuoteHandle } from "@/components/chat/chat-input";
 import { useKbChat } from "@/components/kb/kb-chat-context";
+import { useKbChatQuoteBridge } from "@/components/kb/kb-chat-quote-bridge";
 import { track } from "@/lib/analytics-client";
 import type { ConversationContext } from "@/lib/types";
-
-const SIDEBAR_PLACEHOLDER =
-  "Ask about this document — ⌘⇧L to quote selection";
 
 export interface KbChatContentProps {
   contextPath: string;
@@ -18,7 +15,8 @@ export interface KbChatContentProps {
 }
 
 export function KbChatContent({ contextPath, onClose, visible }: KbChatContentProps) {
-  const { setMessageCount, registerQuoteHandler } = useKbChat();
+  const { setMessageCount } = useKbChat();
+  const { registerQuoteHandler } = useKbChatQuoteBridge();
   const [resumedBanner, setResumedBanner] = useState<{ timestamp: string } | null>(null);
   // Tracks which contextPaths have already emitted kb.chat.opened in THIS
   // mount session. Ref (not state) so two handlers firing in the same React
@@ -34,13 +32,14 @@ export function KbChatContent({ contextPath, onClose, visible }: KbChatContentPr
   const [hasRealConversation, setHasRealConversation] = useState(false);
   const [hasResumed, setHasResumed] = useState(false);
   const historicalCountRef = useRef<number>(0);
-  const quoteRef = useRef<ChatInputQuoteHandle | null>(null);
+  const quoteRef = useRef<((text: string) => void) | null>(null);
+  const focusRef = useRef<(() => void) | null>(null);
 
   // Register an insertQuote handler with KbChatContext while visible.
   useEffect(() => {
     if (!visible) return;
     registerQuoteHandler((text: string) => {
-      quoteRef.current?.insertQuote(text);
+      quoteRef.current?.(text);
     });
     return () => registerQuoteHandler(null);
   }, [visible, registerQuoteHandler]);
@@ -48,11 +47,13 @@ export function KbChatContent({ contextPath, onClose, visible }: KbChatContentPr
   // Focus management: when visible, move focus to the ChatInput textarea.
   // Use the imperative handle instead of a DOM query so focus is scoped to
   // this component's own input even when another [data-kb-chat] scope
-  // exists in the document (e.g., a leftover from a prior mount).
+  // exists in the document (e.g., a leftover from a prior mount). The rAF
+  // defers focus until after the Sheet portal mounts on mobile — removing
+  // it would focus a node that has not yet attached to document.
   useEffect(() => {
     if (!visible) return;
     const id = requestAnimationFrame(() => {
-      quoteRef.current?.focus();
+      focusRef.current?.();
     });
     return () => cancelAnimationFrame(id);
   }, [visible]);
@@ -60,7 +61,16 @@ export function KbChatContent({ contextPath, onClose, visible }: KbChatContentPr
   const handleBeforeSend = useCallback(
     (message: string) => {
       if (/^\s*>/.test(message)) {
-        void track("kb.chat.selection_sent", { path: contextPath });
+        // `source: "human"` since this fires from the KbChatContent surface
+        // (humans clicking the quote pill or typing a blockquote in the
+        // sidebar). Agent-seeded quotes will emit `source: "agent"` when
+        // the HTTP message-post path lands — tagging now prevents
+        // retroactive metric-drift (no server-side record of per-event
+        // source exists).
+        void track("kb.chat.selection_sent", {
+          path: contextPath,
+          source: "human",
+        });
       }
     },
     [contextPath],
@@ -158,15 +168,18 @@ export function KbChatContent({ contextPath, onClose, visible }: KbChatContentPr
           conversationId="new"
           variant="sidebar"
           initialContext={initialContext}
-          resumeByContextPath={contextPath}
-          onThreadResumed={handleThreadResumed}
-          onRealConversationId={handleRealConversationId}
-          onMessageCountChange={handleMessageCountChange}
           onClose={onClose}
-          quoteRef={quoteRef}
-          onBeforeSend={handleBeforeSend}
-          placeholder={SIDEBAR_PLACEHOLDER}
-          draftKey={`kb.chat.draft:${contextPath}`}
+          sidebarProps={{
+            resumeByContextPath: contextPath,
+            onThreadResumed: handleThreadResumed,
+            onRealConversationId: handleRealConversationId,
+            onMessageCountChange: handleMessageCountChange,
+            quoteRef,
+            focusRef,
+            onBeforeSend: handleBeforeSend,
+            placeholder: "Ask about this document — ⌘⇧L to quote selection",
+            draftKey: `kb.chat.draft:${contextPath}`,
+          }}
         />
       </div>
     </div>

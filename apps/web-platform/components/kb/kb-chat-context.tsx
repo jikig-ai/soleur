@@ -2,6 +2,12 @@
 
 import { createContext, useContext } from "react";
 
+/**
+ * Sidebar-lifecycle state for the KB chat panel. The imperative quote
+ * bridge (submitQuote / registerQuoteHandler) lives in a separate context
+ * — see `kb-chat-quote-bridge.tsx` — so quote-handler swaps don't re-render
+ * consumers that only read open/closed state.
+ */
 export interface KbChatContextValue {
   open: boolean;
   openSidebar: () => void;
@@ -10,10 +16,6 @@ export interface KbChatContextValue {
   contextPath: string | null;
   /** True when feature flag FLAG_KB_CHAT_SIDEBAR is enabled (runtime, fetched from /api/flags). */
   enabled: boolean;
-  /** Insert quoted text into the sidebar's chat input and open if closed. */
-  submitQuote: (text: string) => void;
-  /** Register an insertQuote handler from the active sidebar (for selection-toolbar). */
-  registerQuoteHandler: (handler: ((text: string) => void) | null) => void;
   /** Thread state for stateful trigger labels ("Ask" vs "Continue thread"). */
   messageCount: number;
   setMessageCount: (n: number) => void;

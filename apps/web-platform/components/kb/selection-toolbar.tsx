@@ -19,16 +19,6 @@ interface PillState {
 
 const DEFAULT_MAX_BYTES = 8 * 1024;
 
-function isDescendant(node: Node | null, ancestor: Element | null): boolean {
-  if (!node || !ancestor) return false;
-  let n: Node | null = node;
-  while (n) {
-    if (n === ancestor) return true;
-    n = n.parentNode;
-  }
-  return false;
-}
-
 function isShortcutKey(e: KeyboardEvent): boolean {
   if (!e.shiftKey) return false;
   if (!(e.ctrlKey || e.metaKey)) return false;
@@ -54,33 +44,53 @@ export function SelectionToolbar({
   const [pill, setPill] = useState<PillState | null>(null);
   const [mounted, setMounted] = useState(false);
   const pillRef = useRef<HTMLButtonElement | null>(null);
+  // One TextEncoder per instance — `new Blob([text]).size` allocates a
+  // full Blob per keystroke during drag-select; encode().byteLength reads
+  // the same UTF-8 length without the allocation.
+  const encoderRef = useRef<TextEncoder | null>(null);
+  function measureBytes(text: string): number {
+    if (!encoderRef.current) encoderRef.current = new TextEncoder();
+    return encoderRef.current.encode(text).byteLength;
+  }
 
   useEffect(() => setMounted(true), []);
 
-  // Subscribe to selectionchange and compute pill state.
+  // Subscribe to selectionchange and compute pill state. `selectionchange`
+  // fires at mousemove frequency during drag-select; coalesce setPill via
+  // a single-slot rAF so React only re-renders once per frame.
   useEffect(() => {
+    let rafId: number | null = null;
+    function scheduleSetPill(next: PillState | null) {
+      if (rafId !== null) cancelAnimationFrame(rafId);
+      rafId = requestAnimationFrame(() => {
+        rafId = null;
+        setPill(next);
+      });
+    }
+
     function onSelectionChange() {
       const sel = typeof window !== "undefined" ? window.getSelection() : null;
       const article = articleRef.current;
       if (!sel || !article) {
-        setPill(null);
+        scheduleSetPill(null);
         return;
       }
       if (sel.rangeCount === 0 || sel.isCollapsed) {
-        setPill(null);
+        scheduleSetPill(null);
         return;
       }
       const text = sel.toString();
       if (!text || !text.trim()) {
-        setPill(null);
+        scheduleSetPill(null);
         return;
       }
       // Both endpoints must live inside the article.
+      // Element.contains accepts Node | null; returns false on null.
       if (
-        !isDescendant(sel.anchorNode, article) ||
-        !isDescendant(sel.focusNode, article)
+        !article.contains(sel.anchorNode) ||
+        !article.contains(sel.focusNode)
       ) {
-        setPill(null);
+        scheduleSetPill(null);
         return;
       }
       let top = 0;
@@ -93,12 +103,18 @@ export function SelectionToolbar({
       } catch {
         /* jsdom: getBoundingClientRect may throw on detached ranges */
       }
-      const bytes = new Blob([text]).size;
-      setPill({ text, bytes, top, left });
+      const bytes = measureBytes(text);
+      scheduleSetPill({ text, bytes, top, left });
     }
 
     document.addEventListener("selectionchange", onSelectionChange);
-    return () => document.removeEventListener("selectionchange", onSelectionChange);
+    return () => {
+      document.removeEventListener("selectionchange", onSelectionChange);
+      if (rafId !== null) {
+        cancelAnimationFrame(rafId);
+        rafId = null;
+      }
+    };
   }, [articleRef]);
 
   // Escape dismisses the pill; stopPropagation so the sidebar's Escape
@@ -124,12 +140,12 @@ export function SelectionToolbar({
       const text = sel?.toString() ?? "";
       if (!text.trim()) return;
       if (
-        !isDescendant(sel?.anchorNode ?? null, article) ||
-        !isDescendant(sel?.focusNode ?? null, article)
+        !article.contains(sel?.anchorNode ?? null) ||
+        !article.contains(sel?.focusNode ?? null)
       ) {
         return;
       }
-      const bytes = new Blob([text]).size;
+      const bytes = measureBytes(text);
       if (bytes > maxBytes) return;
       e.preventDefault();
       e.stopPropagation();
