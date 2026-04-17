@@ -22,17 +22,21 @@ interface PdfPreviewProps {
 }
 
 // PDF.js document loading options.
-// - disableRange/Stream: false so range requests are used (need Accept-Ranges)
-// - disableAutoFetch: true so PDF.js only fetches what's needed for the
-//   currently-rendered page. With `false` (default), PDF.js eagerly prefetches
-//   the entire document in the background even though `getDocument` resolves
-//   after the xref is parsed — this makes the progress bar fill to 100%
-//   before page 1 renders, defeating the point of streaming.
-// - rangeChunkSize: 128KB chunks keep first render fast
+// - disableRange: false — enable HTTP Range requests so PDF.js can fetch
+//   specific byte ranges (e.g. just page 1 for a linearized PDF).
+// - disableStream: true — force range-only mode. With `false`, PDF.js opens
+//   an additional full-body fetch() in parallel and reads it as a ReadableStream.
+//   Intent is that it gets cancelled once ranges are known, but Cloudflare
+//   buffers responses so the full body transfers anyway — the 14 MB PDF
+//   downloads in its entirety before page 1 appears, defeating both
+//   `disableAutoFetch` and server-side linearization.
+// - disableAutoFetch: true — don't prefetch unseen pages; only fetch what the
+//   current page needs (works with `disableStream: true`).
+// - rangeChunkSize: 128KB chunks keep first render fast.
 // Memoized at module scope since these never change across renders.
 const PDF_DOCUMENT_OPTIONS = {
   disableRange: false,
-  disableStream: false,
+  disableStream: true,
   disableAutoFetch: true,
   rangeChunkSize: 131072,
 };
