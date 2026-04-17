@@ -27,10 +27,23 @@ import {
 import logger from "@/server/logger";
 import { reportSilentFallback } from "@/server/observability";
 
+// Opaque public-facing 404 copy. Used by every 404 path on this endpoint —
+// missing workspace and missing file (markdown or binary, surfaced through
+// KbNotFoundError by kb-reader/validateBinaryFile). Centralizes the string
+// so a future drift in one branch cannot silently break the privacy posture.
+const SHARED_NOT_FOUND_MESSAGE = "Document no longer available";
+
+function notFoundResponse() {
+  return NextResponse.json(
+    { error: SHARED_NOT_FOUND_MESSAGE },
+    { status: 404 },
+  );
+}
+
 // Kept route-private (not in kb-serve.ts) because "legacy-null-hash" is a
 // share-specific migration artifact: only pre-#2326 share rows can carry a
-// null content_sha256. contentChangedResponse, by contrast, serves any
-// future hash-gated flow and therefore lives in the shared module.
+// null content_sha256. contentChangedResponse, by contrast, lives in
+// kb-serve.ts because any hash-gated flow can emit it.
 function legacyNullHashResponse() {
   return NextResponse.json(
     {
@@ -114,10 +127,7 @@ export async function GET(
     : shareLink.users;
   if (!owner?.workspace_path || owner.workspace_status !== "ready") {
     logSharedFailed(token, shareLink.document_path, "workspace-unavailable");
-    return NextResponse.json(
-      { error: "Document no longer available" },
-      { status: 404 },
-    );
+    return notFoundResponse();
   }
 
   const kbRoot = path.join(owner.workspace_path, "knowledge-base");
@@ -192,10 +202,7 @@ function mapSharedError(
   }
   if (err instanceof KbNotFoundError) {
     logSharedFailed(token, documentPath, "not-found");
-    return NextResponse.json(
-      { error: "Document no longer available" },
-      { status: 404 },
-    );
+    return notFoundResponse();
   }
   if (err instanceof KbFileTooLargeError) {
     logSharedFailed(token, documentPath, "file-too-large");

@@ -5,11 +5,12 @@ import Link from "next/link";
 import dynamic from "next/dynamic";
 import { MarkdownRenderer } from "@/components/ui/markdown-renderer";
 import { CtaBanner } from "@/components/shared/cta-banner";
+import { KbContentSkeleton } from "@/components/kb/kb-content-skeleton";
 import {
-  SHARED_CONTENT_KIND_HEADER,
-  isSharedContentKind,
-  type SharedContentKind,
-} from "@/lib/shared-kind";
+  classifyResponse,
+  type PageError,
+  type SharedData,
+} from "./classify-response";
 
 // Dynamic import with ssr: false — pdf-preview touches `import.meta.url` and
 // pdfjs worker globals at module load, which fail during server render.
@@ -25,43 +26,6 @@ const PdfPreview = dynamic(
   },
 );
 
-type SharedKind = SharedContentKind;
-
-type SharedData =
-  | { kind: "markdown"; content: string; path: string }
-  | { kind: "pdf"; src: string; filename: string }
-  | { kind: "image"; src: string; alt: string }
-  | { kind: "download"; src: string; filename: string };
-
-type PageError = "not-found" | "revoked" | "content-changed" | "unknown";
-
-/**
- * Parse a `Content-Disposition` filename per RFC 5987. Prefers the
- * `filename*=UTF-8''...` encoding (non-ASCII safe) and falls back to the
- * ASCII `filename="..."` form. Returns `null` when neither is present so
- * callers can substitute a stable fallback instead of the literal "file".
- */
-function extractFilename(contentDisposition: string | null): string | null {
-  if (!contentDisposition) return null;
-  const utf8 = contentDisposition.match(/filename\*\s*=\s*UTF-8''([^;]+)/i);
-  if (utf8?.[1]) {
-    try {
-      return decodeURIComponent(utf8[1].trim());
-    } catch {
-      // Fall through to ASCII filename.
-    }
-  }
-  const ascii = contentDisposition.match(/filename\s*=\s*"?([^";]+)"?/i);
-  return ascii?.[1]?.trim() || null;
-}
-
-function basenameFromToken(token: string): string {
-  // Last-resort label when both RFC 5987 and ASCII filename parsing fail.
-  // Only hit on a server that violates the Content-Disposition contract.
-  return `shared-${token}`;
-}
-
-
 export default function SharedDocumentPage({
   params,
 }: {
@@ -74,90 +38,18 @@ export default function SharedDocumentPage({
 
   useEffect(() => {
     let cancelled = false;
-    async function fetchSharedContent() {
-      try {
-        const res = await fetch(`/api/shared/${token}`);
+    fetch(`/api/shared/${token}`)
+      .then((res) => classifyResponse(res, token))
+      .catch((): { error: PageError } => ({ error: "unknown" }))
+      .then((result) => {
         if (cancelled) return;
-        if (res.status === 404) {
-          setError("not-found");
-          setLoading(false);
-          return;
-        }
-        if (res.status === 410) {
-          // Discriminate via response body `code` so we can show tailored
-          // copy for content-changed without disturbing the existing revoked
-          // path. Fall back to "revoked" copy if the body is missing/unparseable.
-          const body = await res.json().catch(() => null);
-          const code = body && typeof body === "object" ? body.code : null;
-          if (code === "content-changed" || code === "legacy-null-hash") {
-            setError("content-changed");
-          } else {
-            setError("revoked");
-          }
-          setLoading(false);
-          return;
-        }
-        if (!res.ok) {
-          setError("unknown");
-          setLoading(false);
-          return;
-        }
-        // Server-declared kind — branch on X-Soleur-Kind (emitted by
-        // /api/shared/[token] for every success response) rather than
-        // sniffing the content-type string. Keeps the UI decoupled from
-        // the transport mime map and makes "new kind added without a
-        // render branch" a compile error (exhaustive switch below).
-        const headerKind = res.headers.get(SHARED_CONTENT_KIND_HEADER);
-        const kind: SharedKind | null = isSharedContentKind(headerKind)
-          ? headerKind
-          : null;
-        if (!kind) {
-          setError("unknown");
-          setLoading(false);
-          return;
-        }
-        const disposition = res.headers.get("content-disposition");
-        const label = extractFilename(disposition) ?? basenameFromToken(token);
-        const src = `/api/shared/${token}`;
-
-        switch (kind) {
-          case "markdown": {
-            const json = await res.json();
-            setData({
-              kind: "markdown",
-              content: json.content,
-              path: json.path,
-            });
-            break;
-          }
-          case "pdf":
-            setData({ kind: "pdf", src, filename: label });
-            break;
-          case "image":
-            setData({ kind: "image", src, alt: label });
-            break;
-          case "download":
-            setData({ kind: "download", src, filename: label });
-            break;
-          default: {
-            // Exhaustiveness guard — adding a new SharedKind without a
-            // render branch fails the build here instead of silently
-            // falling through to `download`.
-            const _exhaustive: never = kind;
-            void _exhaustive;
-            setError("unknown");
-          }
-        }
+        if ("error" in result) setError(result.error);
+        else setData(result.data);
         setLoading(false);
-      } catch {
-        if (!cancelled) {
-          setError("unknown");
-          setLoading(false);
-        }
-      }
-    }
-    fetchSharedContent();
-    return () => { cancelled = true; };
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [token]);
 
   return (
@@ -179,7 +71,7 @@ export default function SharedDocumentPage({
         {/* Content */}
         <main className="px-4 pb-20 pt-6">
           <div className="mx-auto max-w-3xl">
-            {loading && <LoadingSkeleton />}
+            {loading && <KbContentSkeleton />}
 
             {error === "not-found" && (
               <ErrorMessage
@@ -226,7 +118,8 @@ export default function SharedDocumentPage({
                 <img
                   data-testid="shared-image"
                   src={data.src}
-                  alt={data.alt}
+                  alt="Shared image"
+                  title={data.filename ?? undefined}
                   className="max-h-[80vh] max-w-full rounded-lg border border-neutral-800"
                 />
               </div>
@@ -271,23 +164,6 @@ function ErrorMessage({ title, message }: { title: string; message: string }) {
       >
         Learn about Soleur
       </Link>
-    </div>
-  );
-}
-
-function LoadingSkeleton() {
-  return (
-    <div className="space-y-4">
-      <div className="h-8 w-64 animate-pulse rounded bg-neutral-800" />
-      <div className="space-y-2">
-        {["85%", "70%", "90%", "65%", "80%"].map((w, i) => (
-          <div
-            key={i}
-            className="h-4 animate-pulse rounded bg-neutral-800"
-            style={{ width: w }}
-          />
-        ))}
-      </div>
     </div>
   );
 }

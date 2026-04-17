@@ -4,10 +4,10 @@ import { useState, useEffect, useRef, use, useContext } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { MarkdownRenderer } from "@/components/ui/markdown-renderer";
-import { KbBreadcrumb, safeDecode } from "@/components/kb/kb-breadcrumb";
-import { SharePopover } from "@/components/kb/share-popover";
+import { safeDecode } from "@/components/kb/kb-breadcrumb";
 import { FilePreview } from "@/components/kb/file-preview";
-import { KbChatTrigger } from "@/components/kb/kb-chat-trigger";
+import { KbContentHeader } from "@/components/kb/kb-content-header";
+import { KbContentSkeleton } from "@/components/kb/kb-content-skeleton";
 import { KbChatContext } from "@/components/kb/kb-chat-context";
 import { KbChatQuoteBridgeContext } from "@/components/kb/kb-chat-quote-bridge";
 import { SelectionToolbar } from "@/components/kb/selection-toolbar";
@@ -71,7 +71,16 @@ export default function KbContentPage({
   }, [joinedPath, router, isMarkdown]);
 
   if (loading) {
-    return <ContentSkeleton />;
+    return (
+      <div className="p-6 md:p-8">
+        <div className="mx-auto max-w-3xl space-y-4">
+          <div className="h-4 w-48 animate-pulse rounded bg-neutral-800" />
+          <KbContentSkeleton
+            widths={["85%", "70%", "90%", "65%", "80%", "75%"]}
+          />
+        </div>
+      </div>
+    );
   }
 
   if (error === "not-found") {
@@ -114,37 +123,11 @@ export default function KbContentPage({
 
     return (
       <div className="flex h-full flex-col">
-        <header className="flex shrink-0 items-center justify-between border-b border-neutral-800 px-4 py-3 md:px-6">
-          <div className="flex items-center gap-2">
-            <Link
-              href="/dashboard/kb"
-              aria-label="Back to file tree"
-              className="flex items-center text-neutral-400 hover:text-white md:hidden"
-            >
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <polyline points="15 18 9 12 15 6" />
-              </svg>
-            </Link>
-            <KbBreadcrumb path={joinedPath} />
-          </div>
-          <div className="flex items-center gap-2">
-            <a
-              href={contentUrl}
-              download={filename}
-              aria-label={`Download ${filename}`}
-              className="inline-flex items-center gap-1.5 rounded-lg border border-neutral-700 px-3 py-1.5 text-xs font-medium text-neutral-300 transition-colors hover:border-neutral-500 hover:text-white"
-            >
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="shrink-0">
-                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" strokeLinecap="round" strokeLinejoin="round" />
-                <polyline points="7 10 12 15 17 10" strokeLinecap="round" strokeLinejoin="round" />
-                <line x1="12" y1="15" x2="12" y2="3" strokeLinecap="round" strokeLinejoin="round" />
-              </svg>
-              Download
-            </a>
-            <SharePopover documentPath={joinedPath} />
-            <KbChatTrigger fallbackHref={chatUrl} />
-          </div>
-        </header>
+        <KbContentHeader
+          joinedPath={joinedPath}
+          chatUrl={chatUrl}
+          download={{ href: contentUrl, filename }}
+        />
         <div className="min-h-0 flex-1">
           <FilePreview path={joinedPath} extension={extension} showDownload={false} />
         </div>
@@ -154,26 +137,7 @@ export default function KbContentPage({
 
   return (
     <div className="flex h-full flex-col">
-      {/* Header with back arrow, breadcrumb, and chat link */}
-      <header className="flex shrink-0 items-center justify-between border-b border-neutral-800 px-4 py-3 md:px-6">
-        <div className="flex items-center gap-2">
-          {/* Mobile back arrow */}
-          <Link
-            href="/dashboard/kb"
-            aria-label="Back to file tree"
-            className="flex items-center text-neutral-400 hover:text-white md:hidden"
-          >
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <polyline points="15 18 9 12 15 6" />
-            </svg>
-          </Link>
-          <KbBreadcrumb path={joinedPath} />
-        </div>
-        <div className="flex items-center gap-2">
-          <SharePopover documentPath={joinedPath} />
-          <KbChatTrigger fallbackHref={chatUrl} />
-        </div>
-      </header>
+      <KbContentHeader joinedPath={joinedPath} chatUrl={chatUrl} />
 
       {/* Rendered markdown content */}
       <article
@@ -197,24 +161,3 @@ export default function KbContentPage({
   );
 }
 
-const CONTENT_SKELETON_WIDTHS = ["85%", "70%", "90%", "65%", "80%", "75%"];
-
-function ContentSkeleton() {
-  return (
-    <div className="p-6 md:p-8">
-      <div className="mx-auto max-w-3xl space-y-4">
-        <div className="h-4 w-48 animate-pulse rounded bg-neutral-800" />
-        <div className="h-8 w-64 animate-pulse rounded bg-neutral-800" />
-        <div className="space-y-2">
-          {CONTENT_SKELETON_WIDTHS.map((w, i) => (
-            <div
-              key={i}
-              className="h-4 animate-pulse rounded bg-neutral-800"
-              style={{ width: w }}
-            />
-          ))}
-        </div>
-      </div>
-    </div>
-  );
-}
