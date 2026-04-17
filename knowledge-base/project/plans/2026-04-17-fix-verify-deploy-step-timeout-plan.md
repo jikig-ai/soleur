@@ -121,12 +121,12 @@ No other changes. The existing error message (line 162: `ci-deploy.sh did not re
 
 ## Acceptance Criteria
 
-- [ ] `.github/workflows/web-platform-release.yml:101` reads `STATUS_POLL_MAX_ATTEMPTS: 60`.
-- [ ] `STATUS_POLL_INTERVAL_S` remains `5`.
-- [ ] Comment block above the env vars documents the change, references `#2519`, and notes alignment with the downstream health-check step.
-- [ ] `actionlint` passes (locally and via lefthook pre-push).
+- [x] `.github/workflows/web-platform-release.yml:106` reads `STATUS_POLL_MAX_ATTEMPTS: 60`.
+- [x] `STATUS_POLL_INTERVAL_S` remains `5`.
+- [x] Comment block above the env vars documents the change, references `#2519`, and notes alignment with the downstream health-check step.
+- [x] `actionlint` passes (locally and via lefthook pre-push).
 - [ ] `yamllint` passes if configured.
-- [ ] No other steps / workflows are modified.
+- [x] No other steps / workflows are modified.
 - [ ] Post-merge: the next release workflow run (triggered by merge of this PR or the next PR after it) completes the `Verify deploy script completion` step under the new ceiling with HTTP 200 + `exit_code=0` + `tag=vX.Y.Z` match — verified via `gh run view <run-id> --log` on the job.
 - [ ] Post-merge verification uses `gh workflow run web-platform-release.yml` only if no organic release triggers happen soon; else piggyback on the natural next release.
 
