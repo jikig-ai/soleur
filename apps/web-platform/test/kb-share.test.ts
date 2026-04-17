@@ -192,8 +192,9 @@ describe("createShare — validation failures", () => {
 
     expect(result.ok).toBe(false);
     if (result.ok) throw new Error("unreachable");
-    expect(result.status).toBe(400);
+    expect(result.status).toBe(403);
     expect(result.code).toBe("symlink-rejected");
+    expect(result.error).toBe("Access denied");
   });
 
   it("rejects missing file with status 404 code not-found", async () => {
