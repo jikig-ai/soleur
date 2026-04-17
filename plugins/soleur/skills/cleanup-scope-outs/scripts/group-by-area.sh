@@ -1,16 +1,21 @@
 #!/usr/bin/env bash
-# Queries open deferred-scope-out issues, parses file paths from their bodies,
-# groups issues by top-level directory ("code area"), and reports clusters
-# sorted by size descending.
+# Queries open issues carrying a given label, parses file paths from their
+# bodies, groups issues by top-level directory ("code area"), and reports
+# clusters sorted by size descending.
 #
 # Usage:
-#   group-by-area.sh [--milestone <title>] [--top-n N] [--min-cluster-size M]
-#                    [--format text|json] [--fixture <path>]
+#   group-by-area.sh [--label <name>] [--milestone <title>] [--top-n N]
+#                    [--min-cluster-size M] [--format text|json]
+#                    [--fixture <path>]
 #
+# --label defaults to `deferred-scope-out` (the original use case). Any other
+# GitHub label works — e.g., `code-review` drains unresolved review findings
+# rather than deferred ones.
 # --fixture is test-only: reads the issue JSON from a file instead of `gh`.
 
 set -euo pipefail
 
+LABEL="deferred-scope-out"
 MILESTONE="Post-MVP / Later"
 TOP_N=0           # 0 = all clusters
 MIN_CLUSTER_SIZE=3
@@ -19,7 +24,7 @@ FIXTURE=""
 
 usage() {
   cat <<'EOF'
-Usage: group-by-area.sh [--milestone <title>] [--top-n N]
+Usage: group-by-area.sh [--label <name>] [--milestone <title>] [--top-n N]
                         [--min-cluster-size M] [--format text|json]
                         [--fixture <path>]
 EOF
@@ -27,6 +32,7 @@ EOF
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    --label)             LABEL="$2";            shift 2 ;;
     --milestone)         MILESTONE="$2";        shift 2 ;;
     --top-n)             TOP_N="$2";            shift 2 ;;
     --min-cluster-size)  MIN_CLUSTER_SIZE="$2"; shift 2 ;;
@@ -36,6 +42,9 @@ while [[ $# -gt 0 ]]; do
     *) echo "Unknown argument: $1" >&2; exit 2 ;;
   esac
 done
+
+[[ -n "$LABEL" ]] \
+  || { echo "Error: --label must be non-empty" >&2; exit 2; }
 
 # Validate numeric args before they reach jq --argjson or bash arithmetic.
 [[ "$TOP_N" =~ ^[0-9]+$ ]] \
@@ -63,10 +72,19 @@ else
     exit 2
   fi
 
+  # Validate label exists before querying (rule cq-gh-issue-label-verify-name).
+  # `gh label list` returns tab-separated name<TAB>description<TAB>color; match
+  # the first column exactly.
+  if ! gh label list --limit 200 2>/dev/null \
+        | awk -F'\t' '{print $1}' | grep -Fxq "$LABEL"; then
+    echo "Error: label '$LABEL' not found in repo" >&2
+    exit 2
+  fi
+
   # Two-stage piping: gh --json ... | jq. Never single-stage `gh --jq` with
   # `--arg`, which silently drops flags (learning 2026-04-15).
   ISSUES_JSON="$(gh issue list \
-    --label deferred-scope-out --state open \
+    --label "$LABEL" --state open \
     --milestone "$MILESTONE" \
     --json number,title,body,labels --limit 200)"
 fi

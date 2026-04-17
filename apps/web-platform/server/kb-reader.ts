@@ -69,6 +69,13 @@ export class KbValidationError extends Error {
   }
 }
 
+export class KbFileTooLargeError extends Error {
+  constructor(message = "File exceeds maximum size limit") {
+    super(message);
+    this.name = "KbFileTooLargeError";
+  }
+}
+
 // --- Helpers ---
 
 function escapeRegex(str: string): string {

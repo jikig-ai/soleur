@@ -3,7 +3,18 @@ import path from "node:path";
 import { Readable } from "node:stream";
 import { isPathInWorkspace } from "@/server/sandbox";
 import { KB_BINARY_RESPONSE_CSP } from "@/lib/kb-csp";
-import { getKbExtension } from "@/lib/kb-extensions";
+import {
+  KbAccessDeniedError,
+  KbFileTooLargeError,
+  KbNotFoundError,
+} from "@/server/kb-reader";
+import {
+  SHARED_CONTENT_KIND_HEADER,
+  type SharedContentKind,
+} from "@/lib/shared-kind";
+
+export { SHARED_CONTENT_KIND_HEADER };
+export type { SharedContentKind };
 
 export const MAX_BINARY_SIZE = 50 * 1024 * 1024; // 50 MB
 
@@ -23,6 +34,16 @@ export const CONTENT_TYPE_MAP: Record<string, string> = {
 
 export const ATTACHMENT_EXTENSIONS = new Set([".docx"]);
 
+/** Derive the shared-content kind from validated binary metadata. */
+export function deriveBinaryKind(
+  meta: Pick<BinaryFileMetadata, "contentType" | "disposition">,
+): Exclude<SharedContentKind, "markdown"> {
+  if (meta.disposition === "attachment") return "download";
+  if (meta.contentType === "application/pdf") return "pdf";
+  if (meta.contentType.startsWith("image/")) return "image";
+  return "download";
+}
+
 /**
  * Validated metadata from validateBinaryFile. Carries (ino, mtimeMs, size)
  * so callers of openBinaryStream can pass `expected` and reject a second
@@ -31,7 +52,6 @@ export const ATTACHMENT_EXTENSIONS = new Set([".docx"]);
  * fds on the same path.
  */
 export interface BinaryFileMetadata {
-  ok: true;
   filePath: string;
   ino: number;
   size: number;
@@ -40,14 +60,6 @@ export interface BinaryFileMetadata {
   disposition: "inline" | "attachment";
   rawName: string;
 }
-
-export type BinaryReadResult =
-  | BinaryFileMetadata
-  | {
-      ok: false;
-      status: 403 | 404 | 413;
-      error: string;
-    };
 
 export class BinaryOpenError extends Error {
   constructor(
@@ -80,19 +92,26 @@ export function formatContentDisposition(
  * rename-swap TOCTOU between validate and serve: if the second fd points
  * at a different inode or size, openBinaryStream throws BinaryOpenError.
  *
- * Name note: called "validate" (not "read") because it no longer reads
- * file bytes — pre-#2316 it did; the rename avoids perpetuating the lie.
+ * Throws:
+ * - `KbAccessDeniedError` for null bytes, paths outside the workspace,
+ *   symlinks (ELOOP/EMLINK), non-regular files, and EACCES/EPERM.
+ * - `KbFileTooLargeError` when the file exceeds `MAX_BINARY_SIZE`.
+ * - `KbNotFoundError` for ENOENT (and any other open failure that does
+ *   not map to one of the classes above).
+ *
+ * Error-shape mirrors `readContent` / `readContentRaw` in `kb-reader.ts`
+ * so both routes dispatch via a single `instanceof` chain.
  */
 export async function validateBinaryFile(
   kbRoot: string,
   relativePath: string,
-): Promise<BinaryReadResult> {
+): Promise<BinaryFileMetadata> {
   if (relativePath.includes("\0")) {
-    return { ok: false, status: 403, error: "Access denied" };
+    throw new KbAccessDeniedError();
   }
   const fullPath = path.join(kbRoot, relativePath);
   if (!isPathInWorkspace(fullPath, kbRoot)) {
-    return { ok: false, status: 403, error: "Access denied" };
+    throw new KbAccessDeniedError();
   }
   let handle: fs.promises.FileHandle;
   try {
@@ -103,24 +122,26 @@ export async function validateBinaryFile(
   } catch (err) {
     const code = (err as NodeJS.ErrnoException).code;
     if (code === "ELOOP" || code === "EMLINK") {
-      return { ok: false, status: 403, error: "Access denied" };
+      throw new KbAccessDeniedError();
     }
-    return { ok: false, status: 404, error: "File not found" };
+    if (code === "EACCES" || code === "EPERM") {
+      throw new KbAccessDeniedError();
+    }
+    throw new KbNotFoundError();
   }
   try {
     const stat = await handle.stat();
     if (!stat.isFile()) {
-      return { ok: false, status: 403, error: "Access denied" };
+      throw new KbAccessDeniedError();
     }
     if (stat.size > MAX_BINARY_SIZE) {
-      return { ok: false, status: 413, error: "File exceeds maximum size limit" };
+      throw new KbFileTooLargeError();
     }
     const ext = getKbExtension(relativePath);
     const contentType = CONTENT_TYPE_MAP[ext] || "application/octet-stream";
     const disposition = ATTACHMENT_EXTENSIONS.has(ext) ? "attachment" : "inline";
     const rawName = path.basename(relativePath);
     return {
-      ok: true,
       filePath: fullPath,
       ino: stat.ino,
       size: stat.size,
@@ -129,8 +150,6 @@ export async function validateBinaryFile(
       disposition,
       rawName,
     };
-  } catch {
-    return { ok: false, status: 404, error: "File not found" };
   } finally {
     await handle.close().catch(() => {});
   }
@@ -254,6 +273,7 @@ export async function buildBinaryResponse(
     "Cache-Control": "private, max-age=60",
     "Content-Security-Policy": KB_BINARY_RESPONSE_CSP,
     "Accept-Ranges": "bytes",
+    [SHARED_CONTENT_KIND_HEADER]: deriveBinaryKind(meta),
     ETag: etag,
   };
 

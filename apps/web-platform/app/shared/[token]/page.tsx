@@ -5,6 +5,11 @@ import Link from "next/link";
 import dynamic from "next/dynamic";
 import { MarkdownRenderer } from "@/components/ui/markdown-renderer";
 import { CtaBanner } from "@/components/shared/cta-banner";
+import {
+  SHARED_CONTENT_KIND_HEADER,
+  isSharedContentKind,
+  type SharedContentKind,
+} from "@/lib/shared-kind";
 
 // Dynamic import with ssr: false — pdf-preview touches `import.meta.url` and
 // pdfjs worker globals at module load, which fail during server render.
@@ -20,6 +25,8 @@ const PdfPreview = dynamic(
   },
 );
 
+type SharedKind = SharedContentKind;
+
 type SharedData =
   | { kind: "markdown"; content: string; path: string }
   | { kind: "pdf"; src: string; filename: string }
@@ -28,11 +35,32 @@ type SharedData =
 
 type PageError = "not-found" | "revoked" | "content-changed" | "unknown";
 
-function extractFilename(contentDisposition: string | null): string {
-  if (!contentDisposition) return "file";
-  const match = /filename="?([^";]+)"?/i.exec(contentDisposition);
-  return match?.[1] ?? "file";
+/**
+ * Parse a `Content-Disposition` filename per RFC 5987. Prefers the
+ * `filename*=UTF-8''...` encoding (non-ASCII safe) and falls back to the
+ * ASCII `filename="..."` form. Returns `null` when neither is present so
+ * callers can substitute a stable fallback instead of the literal "file".
+ */
+function extractFilename(contentDisposition: string | null): string | null {
+  if (!contentDisposition) return null;
+  const utf8 = contentDisposition.match(/filename\*\s*=\s*UTF-8''([^;]+)/i);
+  if (utf8?.[1]) {
+    try {
+      return decodeURIComponent(utf8[1].trim());
+    } catch {
+      // Fall through to ASCII filename.
+    }
+  }
+  const ascii = contentDisposition.match(/filename\s*=\s*"?([^";]+)"?/i);
+  return ascii?.[1]?.trim() || null;
 }
+
+function basenameFromToken(token: string): string {
+  // Last-resort label when both RFC 5987 and ASCII filename parsing fail.
+  // Only hit on a server that violates the Content-Disposition contract.
+  return `shared-${token}`;
+}
+
 
 export default function SharedDocumentPage({
   params,
@@ -74,23 +102,51 @@ export default function SharedDocumentPage({
           setLoading(false);
           return;
         }
-        const contentType = res.headers.get("content-type") ?? "";
+        // Server-declared kind — branch on X-Soleur-Kind (emitted by
+        // /api/shared/[token] for every success response) rather than
+        // sniffing the content-type string. Keeps the UI decoupled from
+        // the transport mime map and makes "new kind added without a
+        // render branch" a compile error (exhaustive switch below).
+        const headerKind = res.headers.get(SHARED_CONTENT_KIND_HEADER);
+        const kind: SharedKind | null = isSharedContentKind(headerKind)
+          ? headerKind
+          : null;
+        if (!kind) {
+          setError("unknown");
+          setLoading(false);
+          return;
+        }
         const disposition = res.headers.get("content-disposition");
+        const label = extractFilename(disposition) ?? basenameFromToken(token);
         const src = `/api/shared/${token}`;
 
-        if (contentType.startsWith("application/json")) {
-          const json = await res.json();
-          setData({ kind: "markdown", content: json.content, path: json.path });
-        } else if (contentType.startsWith("application/pdf")) {
-          setData({ kind: "pdf", src, filename: extractFilename(disposition) });
-        } else if (contentType.startsWith("image/")) {
-          setData({ kind: "image", src, alt: extractFilename(disposition) });
-        } else {
-          setData({
-            kind: "download",
-            src,
-            filename: extractFilename(disposition),
-          });
+        switch (kind) {
+          case "markdown": {
+            const json = await res.json();
+            setData({
+              kind: "markdown",
+              content: json.content,
+              path: json.path,
+            });
+            break;
+          }
+          case "pdf":
+            setData({ kind: "pdf", src, filename: label });
+            break;
+          case "image":
+            setData({ kind: "image", src, alt: label });
+            break;
+          case "download":
+            setData({ kind: "download", src, filename: label });
+            break;
+          default: {
+            // Exhaustiveness guard — adding a new SharedKind without a
+            // render branch fails the build here instead of silently
+            // falling through to `download`.
+            const _exhaustive: never = kind;
+            void _exhaustive;
+            setError("unknown");
+          }
         }
         setLoading(false);
       } catch {
