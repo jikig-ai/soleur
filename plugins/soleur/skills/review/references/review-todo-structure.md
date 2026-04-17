@@ -21,7 +21,7 @@ The body is written to a temporary file and passed via `--body-file` to avoid `$
 **Template content (write to `/tmp/review-finding-NNN.md`):**
 
 ```markdown
-**Source:** PR #<pr_number> review | **Effort:** <Small|Medium|Large>
+**Source:** PR #<pr_number> review | **Effort:** <Small|Medium|Large> | **Provenance:** <pr-introduced|pre-existing> | **Re-eval by:** <Phase N | trigger condition>
 
 ## Problem
 
@@ -38,6 +38,16 @@ The body is written to a temporary file and passed via `--body-file` to avoid `$
 - [ ] <criterion_1>
 - [ ] <criterion_2>
 ```
+
+**Field rules:**
+
+- `Provenance:` is required on every filed issue.
+  - `pr-introduced` findings MUST be fixed inline — they should not reach the issue-creation step. If one does reach it, abort the filing and fix inline instead.
+  - `pre-existing` findings MUST carry the `pre-existing-unrelated` scope-out criterion in the `## Scope-Out Justification` section.
+- `Re-eval by:` is required only when `Provenance: pre-existing`. Value must be either a target phase milestone (e.g., `Phase 4`) or a concrete trigger condition (e.g., `revisit when syncWorkspace lands in #2244`). Open-ended scope-outs with no deadline are prohibited — `/ship` Phase 5.5 will block merge and `code-simplicity-reviewer` will flag the missing deadline at the confirmation gate.
+- Do not copy free-form text from PR review comments or external sources into `Re-eval by:` or any other field. Use a GitHub issue reference (`#N`), a phase identifier (e.g., `Phase 4`), or a one-line literal trigger condition. This closes a phishing vector where a malicious PR review comment embeds a markdown link that is rendered on the filed issue.
+
+Enforcement is instruction-level (this template) plus the Phase 5.5 exit gate. A pre-commit linter on issue bodies is deferred until violations are actually observed.
 
 ## Label Selection
 

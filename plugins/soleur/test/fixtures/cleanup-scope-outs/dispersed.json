@@ -1,0 +1,32 @@
+[
+  {
+    "number": 100,
+    "title": "review: one",
+    "body": "File: apps/web-platform/app/one.ts",
+    "labels": [{"name": "deferred-scope-out"}]
+  },
+  {
+    "number": 101,
+    "title": "review: two",
+    "body": "File: plugins/soleur/skills/two/SKILL.md",
+    "labels": [{"name": "deferred-scope-out"}]
+  },
+  {
+    "number": 102,
+    "title": "review: three",
+    "body": "File: knowledge-base/project/three.md",
+    "labels": [{"name": "deferred-scope-out"}]
+  },
+  {
+    "number": 103,
+    "title": "review: four",
+    "body": "File: .github/workflows/four.yml",
+    "labels": [{"name": "deferred-scope-out"}]
+  },
+  {
+    "number": 104,
+    "title": "review: five",
+    "body": "File: docs/five.md",
+    "labels": [{"name": "deferred-scope-out"}]
+  }
+]

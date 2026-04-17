@@ -165,6 +165,47 @@ After all research steps complete, consolidate findings:
 
 **Optional validation:** Briefly summarize findings and ask if anything looks off or missing before proceeding to planning.
 
+### 1.7.5. Code-Review Overlap Check
+
+After the plan draft has enumerated its `## Files to Edit` and `## Files to Create` sections (i.e., run this check AFTER Step 2 Issue Planning produces the file list, and BEFORE Step 4 Detail Level selection), verify whether any open code-review issues touch files the plan intends to modify. This prevents two failure modes:
+
+- **Rework:** a pre-existing scope-out names a file the plan will rewrite — if unnoticed, the plan ships, then the scope-out surfaces and drives a second refactor PR that could have been folded in.
+- **Double-counting:** the review phase files a new scope-out for a concern a still-open issue already tracks.
+
+**Procedure:**
+
+1. Read the plan's `## Files to Edit` and `## Files to Create` sections (the plan draft exists by this point). Extract every file path. If the plan is still being drafted and those sections are not yet written, defer this check until they exist rather than guessing from the feature description — guessing produces false negatives.
+
+2. Query open code-review issues. **Use two-stage piping (`--json` then a standalone `jq --arg`), not single-stage `gh --jq` with `--arg`.** The `gh` CLI does NOT forward `--arg` to its embedded jq; a single-stage form produces `unknown arguments` at runtime. See learning `knowledge-base/project/learnings/2026-04-15-gh-jq-does-not-forward-arg-to-jq.md`.
+
+    ```bash
+    gh issue list --label code-review --state open \
+      --json number,title,body --limit 200 > /tmp/open-review-issues.json
+    ```
+
+3. For each planned file path, search the issue bodies using standalone `jq` with `--arg` (safe against regex metacharacters in paths):
+
+    ```bash
+    jq -r --arg path "<file-path>" '
+      .[] | select(.body // "" | contains($path))
+      | "#\(.number): \(.title)"
+    ' /tmp/open-review-issues.json
+    ```
+
+4. If any matches are returned, write a `## Open Code-Review Overlap` section to the plan file with a one-line bullet per match and an explicit disposition for each:
+
+    > X open scope-outs touch these files: #2466 (Range cache), #2483 (helper extraction). Fold in / acknowledge / defer: …
+
+    For each match, the planner MUST explicitly choose one of:
+
+    - **Fold in:** plan extends to close the scope-out in the same PR. Add the scope-out's file paths to `## Files to edit` and note `Closes #<N>` in the PR-body reminder.
+    - **Acknowledge:** plan deliberately does NOT fix the scope-out (e.g., different concern, needs its own cycle). Record a 1-sentence rationale. The scope-out remains open.
+    - **Defer:** plan is not the right place; update the scope-out issue with a re-evaluation note (e.g., "revisit after feat-X lands"). Do NOT silently leave the overlap unaddressed — the reviewer will re-surface it.
+
+5. If no matches, still record `## Open Code-Review Overlap` with `None` so the next planner can see the check ran.
+
+**Why this matters:** In the 2026-04-17 window, PR #2486 closed three scope-outs (#2467 + #2468 + #2469) because the planner noticed the overlap. PRs #2463 and #2477 grew the backlog instead because no overlap check ran. This phase makes the #2486 pattern the default, not the exception. See `knowledge-base/project/learnings/best-practices/2026-04-17-review-backlog-net-positive-filing.md`.
+
 ### 2. Issue Planning & Structure
 
 <thinking>
