@@ -109,11 +109,16 @@ export class SlidingWindowCounter {
 
 /**
  * Start a periodic prune interval for a SlidingWindowCounter and mark the
- * timer as unref'd so it never blocks process exit. Dedupes the pattern used
- * by shareEndpointThrottle, invoiceEndpointThrottle, connectionThrottle,
- * sessionThrottle (this file), and analyticsTrackThrottle
- * (app/api/analytics/track/throttle.ts). The single-instance-assumption
- * caveat on invoiceEndpointThrottle applies equally to every caller.
+ * timer as unref'd so it never blocks process exit. Used for every
+ * module-level SlidingWindowCounter singleton in this file and in sibling
+ * per-route modules (e.g., app/api/analytics/track/throttle.ts). The
+ * single-instance-assumption caveat on invoiceEndpointThrottle below
+ * applies equally to every caller.
+ *
+ * Returns the timer handle so callers can optionally hold a reference for
+ * test-time clearInterval. Module singletons typically discard the return
+ * value — the helper's internal `unref()` is what keeps the timer from
+ * blocking exit.
  */
 export function startPruneInterval(
   counter: SlidingWindowCounter,
@@ -210,10 +215,10 @@ export function extractClientIp(req: IncomingMessage): string {
  *
  * When `cf-connecting-ip` is absent this returns `"unknown"` rather than
  * falling back to a socket IP. The Web-API Request has no access to the
- * underlying `socket.remoteAddress`, so the only remaining candidate would
- * be `x-forwarded-for` — which is spoofable in any non-Cloudflare path and
- * would silently share one bucket with a real direct-to-origin IP.
- * Collapsing to `"unknown"` fails closed.
+ * underlying `socket.remoteAddress`. We deliberately do NOT consult
+ * `x-forwarded-for` here either — it is spoofable in any non-Cloudflare
+ * path and would silently share one bucket with a real direct-to-origin
+ * IP. Collapsing to `"unknown"` fails closed.
  *
  * This is intentionally asymmetric with `extractClientIp` (the
  * `IncomingMessage` variant), which does have socket access and can fall
@@ -241,7 +246,7 @@ export const shareEndpointThrottle = new SlidingWindowCounter({
   maxRequests: parseInt(process.env.SHARE_RATE_LIMIT_PER_MIN ?? "60", 10),
 });
 
-const pruneShareInterval = startPruneInterval(shareEndpointThrottle);
+startPruneInterval(shareEndpointThrottle);
 
 // ---------------------------------------------------------------------------
 // HTTP rate limiter singleton for authenticated billing invoice endpoint
@@ -260,7 +265,7 @@ export const invoiceEndpointThrottle = new SlidingWindowCounter({
   maxRequests: parseInt(process.env.INVOICE_RATE_LIMIT_PER_MIN ?? "10", 10),
 });
 
-const pruneInvoiceInterval = startPruneInterval(invoiceEndpointThrottle);
+startPruneInterval(invoiceEndpointThrottle);
 
 /** Test-only helper: clear the invoice throttle state between tests. */
 export function __resetInvoiceThrottleForTest(): void {
@@ -305,6 +310,6 @@ export const pendingConnections = new PendingConnectionTracker(
 // Periodic cleanup to prevent unbounded memory growth from stale entries.
 // Lazy eviction in isAllowed() only cleans keys that are actively checked —
 // IPs that connect once and never return accumulate until pruned.
-const pruneConnectionInterval = startPruneInterval(connectionThrottle);
+startPruneInterval(connectionThrottle);
 
-const pruneSessionInterval = startPruneInterval(sessionThrottle, 300_000);
+startPruneInterval(sessionThrottle, 300_000);

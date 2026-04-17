@@ -271,7 +271,9 @@ describe("startPruneInterval", () => {
       const spy = vi.spyOn(counter, "prune");
       const handle = startPruneInterval(counter);
       try {
-        await vi.advanceTimersByTimeAsync(60_000);
+        await vi.advanceTimersByTimeAsync(59_999);
+        expect(spy).toHaveBeenCalledTimes(0);
+        await vi.advanceTimersByTimeAsync(1);
         expect(spy).toHaveBeenCalledTimes(1);
         await vi.advanceTimersByTimeAsync(60_000);
         expect(spy).toHaveBeenCalledTimes(2);
@@ -315,8 +317,10 @@ describe("startPruneInterval", () => {
       join(__dirname, "..", "server", "rate-limiter.ts"),
       "utf-8",
     );
+    // Non-greedy `[\s\S]*?` anchors the match to the helper body — a later
+    // `setInterval(...).unref()` elsewhere in the file must not satisfy it.
     expect(source).toMatch(
-      /export function startPruneInterval[\s\S]*setInterval\([\s\S]*\.prune\(\)[\s\S]*\.unref\(\)/,
+      /export function startPruneInterval[\s\S]*?setInterval\([\s\S]*?\.prune\(\)[\s\S]*?\.unref\(\)/,
     );
   });
 });

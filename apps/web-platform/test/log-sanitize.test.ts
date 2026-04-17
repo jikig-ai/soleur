@@ -6,6 +6,12 @@ describe("sanitizeForLog", () => {
     expect(sanitizeForLog("a\x00b\x1fc\x7fd")).toBe("abcd");
   });
 
+  test("regex is global — strips every occurrence, not just the first", () => {
+    // Pins the /g flag. A regression to a non-global regex would still pass
+    // the previous tests when they happen to contain only one offender.
+    expect(sanitizeForLog("a\x00b\x00c\x00d")).toBe("abcd");
+  });
+
   test("strips U+2028 and U+2029 line/paragraph separators", () => {
     expect(sanitizeForLog("a\u2028b\u2029c")).toBe("abc");
   });

@@ -16,10 +16,8 @@ export const analyticsTrackThrottle = new SlidingWindowCounter({
   maxRequests: RATE_PER_MIN,
 });
 
-// Periodic cleanup prevents unbounded memory growth from one-hit IPs that
-// lazy eviction never re-checks. Matches shareEndpointThrottle /
-// invoiceEndpointThrottle in server/rate-limiter.ts.
-const pruneAnalyticsInterval = startPruneInterval(analyticsTrackThrottle);
+// Periodic cleanup; see startPruneInterval docblock.
+startPruneInterval(analyticsTrackThrottle);
 
 /** Test-only helper: clear the in-memory throttle between tests. */
 export function __resetAnalyticsTrackThrottleForTest(): void {
