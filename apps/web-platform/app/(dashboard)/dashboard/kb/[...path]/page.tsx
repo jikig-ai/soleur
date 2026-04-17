@@ -11,7 +11,7 @@ import { KbChatTrigger } from "@/components/kb/kb-chat-trigger";
 import { KbChatContext } from "@/components/kb/kb-chat-context";
 import { KbChatQuoteBridgeContext } from "@/components/kb/kb-chat-quote-bridge";
 import { SelectionToolbar } from "@/components/kb/selection-toolbar";
-import { isMarkdownKbPath } from "@/lib/kb-extensions";
+import { getKbExtension, isMarkdownKbPath } from "@/lib/kb-extensions";
 import type { ContentResult } from "@/server/kb-reader";
 
 export default function KbContentPage({
@@ -22,7 +22,7 @@ export default function KbContentPage({
   const { path: pathSegments } = use(params);
   const router = useRouter();
   const joinedPath = pathSegments.join("/");
-  const extension = joinedPath.includes(".") ? `.${joinedPath.split(".").pop()}` : "";
+  const extension = getKbExtension(joinedPath);
   const isMarkdown = isMarkdownKbPath(joinedPath);
   const [content, setContent] = useState<ContentResult | null>(null);
   const [loading, setLoading] = useState(isMarkdown);

@@ -5,7 +5,10 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { hashBytes } from "@/server/kb-content-hash";
 import { validateBinaryFile } from "@/server/kb-binary-response";
 import { __resetShareHashVerdictCacheForTest } from "@/server/share-hash-verdict-cache";
-import { serveBinaryWithHashGate } from "@/server/kb-serve";
+import { serveSharedBinaryWithHashGate } from "@/server/kb-serve";
+
+// A 64-char hex string that will never match a real content_sha256.
+const WRONG_HASH = "0".repeat(64);
 
 const loggerStub = {
   info: vi.fn(),
@@ -19,8 +22,11 @@ const loggerStub = {
   level: "info",
 };
 
+vi.mock("@/server/observability", () => ({
+  reportSilentFallback: vi.fn(),
+}));
+
 function logger() {
-  // Cast to any for test purposes — the helper only uses info/warn/error.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   return loggerStub as any;
 }
@@ -44,7 +50,7 @@ afterEach(() => {
   fs.rmSync(tmpWorkspace, { recursive: true, force: true });
 });
 
-describe("serveBinaryWithHashGate", () => {
+describe("serveSharedBinaryWithHashGate", () => {
   it("cache miss + hash match: serves 200 with strong ETag", async () => {
     const bytes = Buffer.from("fake-png-content");
     const expectedHash = hashBytes(bytes);
@@ -53,8 +59,7 @@ describe("serveBinaryWithHashGate", () => {
     const meta = await validateBinaryFile(kbRoot, "logo.png");
     if (!meta.ok) throw new Error("meta not ok");
 
-    const res = await serveBinaryWithHashGate({
-      token: "tok",
+    const res = await serveSharedBinaryWithHashGate({
       expectedHash,
       meta,
       request: buildRequest(),
@@ -81,8 +86,7 @@ describe("serveBinaryWithHashGate", () => {
     if (!meta.ok) throw new Error("meta not ok");
 
     // Prime the cache
-    await serveBinaryWithHashGate({
-      token: "tok",
+    await serveSharedBinaryWithHashGate({
       expectedHash,
       meta,
       request: buildRequest(),
@@ -91,8 +95,7 @@ describe("serveBinaryWithHashGate", () => {
     });
     loggerStub.info.mockClear();
 
-    const res = await serveBinaryWithHashGate({
-      token: "tok",
+    const res = await serveSharedBinaryWithHashGate({
       expectedHash,
       meta,
       request: buildRequest(),
@@ -116,9 +119,8 @@ describe("serveBinaryWithHashGate", () => {
     const meta = await validateBinaryFile(kbRoot, "mismatch.png");
     if (!meta.ok) throw new Error("meta not ok");
 
-    const res = await serveBinaryWithHashGate({
-      token: "tok",
-      expectedHash: "deadbeef-wrong-hash",
+    const res = await serveSharedBinaryWithHashGate({
+      expectedHash: WRONG_HASH,
       meta,
       request: buildRequest(),
       logger: logger(),
@@ -149,8 +151,7 @@ describe("serveBinaryWithHashGate", () => {
     fs.rmSync(filePath);
     fs.writeFileSync(filePath, Buffer.from("different-size-bytes"));
 
-    const res = await serveBinaryWithHashGate({
-      token: "tok",
+    const res = await serveSharedBinaryWithHashGate({
       expectedHash,
       meta,
       request: buildRequest(),
@@ -170,6 +171,49 @@ describe("serveBinaryWithHashGate", () => {
     );
   });
 
+  it("inode drift between hash and serve: returns 410 with reason=inode-drift-serve", async () => {
+    const bytes = Buffer.from("serve-drift-bytes");
+    const expectedHash = hashBytes(bytes);
+    const filePath = path.join(kbRoot, "serve-drift.png");
+    fs.writeFileSync(filePath, bytes);
+    const meta = await validateBinaryFile(kbRoot, "serve-drift.png");
+    if (!meta.ok) throw new Error("meta not ok");
+
+    // Prime the cache so the helper skips the hash pass and goes straight
+    // to buildBinaryResponse — where we want the TOCTOU drift to trigger.
+    await serveSharedBinaryWithHashGate({
+      expectedHash,
+      meta,
+      request: buildRequest(),
+      logger: logger(),
+      logContext: { token: "tok", documentPath: "serve-drift.png" },
+    });
+    loggerStub.info.mockClear();
+
+    // Swap inode+size between the cached verdict and the serve-stream open.
+    fs.rmSync(filePath);
+    fs.writeFileSync(filePath, Buffer.from("different-size-bytes-now-serving"));
+
+    const res = await serveSharedBinaryWithHashGate({
+      expectedHash,
+      meta,
+      request: buildRequest(),
+      logger: logger(),
+      logContext: { token: "tok", documentPath: "serve-drift.png" },
+    });
+    expect(res.status).toBe(410);
+    const body = await res.json();
+    expect(body).toMatchObject({ code: "content-changed" });
+    expect(loggerStub.info).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: "shared_content_mismatch",
+        kind: "binary",
+        reason: "inode-drift-serve",
+      }),
+      expect.any(String),
+    );
+  });
+
   it("BinaryOpenError (non content-changed) during hash: returns helper status", async () => {
     const bytes = Buffer.from("hash-fail-bytes");
     const expectedHash = hashBytes(bytes);
@@ -182,8 +226,7 @@ describe("serveBinaryWithHashGate", () => {
     // BinaryOpenError(404) with no code.
     fs.rmSync(filePath);
 
-    const res = await serveBinaryWithHashGate({
-      token: "tok",
+    const res = await serveSharedBinaryWithHashGate({
       expectedHash,
       meta,
       request: buildRequest(),

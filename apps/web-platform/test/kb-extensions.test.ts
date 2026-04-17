@@ -36,6 +36,24 @@ describe("getKbExtension", () => {
   it("ignores dots in directory segments", () => {
     expect(getKbExtension("v1.2/readme")).toBe("");
   });
+
+  it("returns trailing-dot as the extension (matches path.extname)", () => {
+    expect(getKbExtension("foo.")).toBe(".");
+  });
+
+  it("handles double-leading-dot filenames", () => {
+    // Diverges intentionally from path.extname("..bashrc") === "":
+    // getKbExtension treats the second dot as the extension marker.
+    // Safe because ".bashrc" is not in CONTENT_TYPE_MAP — falls through
+    // to application/octet-stream on both code paths.
+    expect(getKbExtension("..bashrc")).toBe(".bashrc");
+  });
+
+  it("treats backslash as a filename character on POSIX (not a separator)", () => {
+    // Windows-style paths on a POSIX server: the entire string is the
+    // basename, extension is computed from the last '.'.
+    expect(getKbExtension("dir\\file.md")).toBe(".md");
+  });
 });
 
 describe("isMarkdownKbPath", () => {

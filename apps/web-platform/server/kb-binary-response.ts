@@ -137,14 +137,6 @@ export async function validateBinaryFile(
 }
 
 /**
- * Deprecated alias preserved for backward compatibility during the rename
- * landing. Will be removed once all callers migrate to validateBinaryFile.
- *
- * @deprecated Use validateBinaryFile.
- */
-export const readBinaryFile = validateBinaryFile;
-
-/**
  * Open a fresh O_NOFOLLOW read stream for a filePath previously validated
  * by validateBinaryFile. The returned Node Readable is backed by the
  * opened FileHandle with autoClose: true — fd lifetime is tied to the

@@ -12,7 +12,7 @@ import { hashBytes } from "@/server/kb-content-hash";
 import {
   contentChangedResponse,
   serveKbFile,
-  serveBinaryWithHashGate,
+  serveSharedBinaryWithHashGate,
 } from "@/server/kb-serve";
 import {
   shareEndpointThrottle,
@@ -22,6 +22,10 @@ import {
 import logger from "@/server/logger";
 import * as Sentry from "@sentry/nextjs";
 
+// Kept route-private (not in kb-serve.ts) because "legacy-null-hash" is a
+// share-specific migration artifact: only pre-#2326 share rows can carry a
+// null content_sha256. contentChangedResponse, by contrast, serves any
+// future hash-gated flow and therefore lives in the shared module.
 function legacyNullHashResponse() {
   return NextResponse.json(
     {
@@ -158,8 +162,7 @@ export async function GET(
           { status: binary.status },
         );
       }
-      return serveBinaryWithHashGate({
-        token,
+      return serveSharedBinaryWithHashGate({
         expectedHash: shareLink.content_sha256,
         meta: binary,
         request,
