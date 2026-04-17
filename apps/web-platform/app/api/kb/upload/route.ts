@@ -6,7 +6,7 @@ import { githubApiGet, githubApiPost, GitHubApiError } from "@/server/github-api
 import { generateInstallationToken, randomCredentialPath } from "@/server/github-app";
 import { sanitizeFilename } from "@/server/kb-validation";
 import { resolveUserKbRoot } from "@/server/kb-route-helpers";
-import { linearizePdf } from "@/server/pdf-linearize";
+import { prepareUploadPayload } from "@/server/kb-upload-payload";
 import { execFile } from "node:child_process";
 import { writeFileSync, unlinkSync } from "node:fs";
 import { promisify } from "node:util";
@@ -173,43 +173,12 @@ export async function POST(request: Request) {
       }
     }
 
-    // Stream chunks to avoid holding File blob + ArrayBuffer simultaneously.
-    const chunks: Uint8Array[] = [];
-    const reader = file.stream().getReader();
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      chunks.push(value);
-    }
-    const buffer: Buffer = Buffer.concat(chunks);
-    let payloadBuffer: Buffer = buffer;
-
-    if (ext === "pdf") {
-      const t0 = Date.now();
-      const result = await linearizePdf(buffer);
-      if (result.ok) {
-        payloadBuffer = result.buffer;
-      } else if (result.reason !== "skip_signed") {
-        // skip_signed is an intentional pass-through (signed PDFs would be
-        // invalidated by linearization), not a failure — silent in both sinks.
-        const logCtx = {
-          reason: result.reason,
-          detail: result.detail,
-          inputSize: buffer.length,
-          durationMs: Date.now() - t0,
-          userId: user.id,
-          path: filePath,
-        };
-        logger.warn(logCtx, "pdf linearization failed, committing original");
-        // Pino stdout-only is invisible post-deploy; mirror to Sentry as a
-        // warning (not an exception) so silent fallbacks remain observable.
-        Sentry.captureMessage("pdf linearization failed", {
-          level: "warning",
-          tags: { feature: "kb-upload", reason: result.reason },
-          extra: logCtx,
-        });
-      }
-    }
+    const payloadBuffer = await prepareUploadPayload(
+      file,
+      sanitizedName,
+      user.id,
+      filePath,
+    );
 
     const base64Content = payloadBuffer.toString("base64");
 
