@@ -126,5 +126,5 @@ export async function GET(
     },
     "shared: document viewed",
   );
-  return buildBinaryResponse(binary);
+  return buildBinaryResponse(binary, request);
 }

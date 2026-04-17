@@ -280,4 +280,97 @@ describe("GET /api/kb/content/[...path] — binary files", () => {
     expect(res.status).toBe(200);
     expect(res.headers.get("Content-Length")).toBe(data.length.toString());
   });
+
+  test("binary response advertises Accept-Ranges: bytes", async () => {
+    mockGetUser.mockResolvedValue({
+      data: { user: { id: "user-1" } },
+      error: null,
+    });
+    mockFrom.mockReturnValue(
+      mockQueryBuilder({
+        workspace_path: tmpWorkspace,
+        workspace_status: "ready",
+      }),
+    );
+
+    fs.writeFileSync(path.join(kbRoot, "doc.pdf"), Buffer.from("fake-pdf"));
+
+    const res = await callGET(buildRequest("doc.pdf"), ["doc.pdf"]);
+    expect(res.status).toBe(200);
+    expect(res.headers.get("Accept-Ranges")).toBe("bytes");
+  });
+
+  test("Range request returns 206 Partial Content with sliced body", async () => {
+    mockGetUser.mockResolvedValue({
+      data: { user: { id: "user-1" } },
+      error: null,
+    });
+    mockFrom.mockReturnValue(
+      mockQueryBuilder({
+        workspace_path: tmpWorkspace,
+        workspace_status: "ready",
+      }),
+    );
+
+    const payload = Buffer.from("0123456789abcdef"); // 16 bytes
+    fs.writeFileSync(path.join(kbRoot, "doc.pdf"), payload);
+
+    const req = new Request("http://localhost:3000/api/kb/content/doc.pdf", {
+      headers: { Range: "bytes=4-9" },
+    });
+    const res = await callGET(req, ["doc.pdf"]);
+    expect(res.status).toBe(206);
+    expect(res.headers.get("Content-Range")).toBe("bytes 4-9/16");
+    expect(res.headers.get("Content-Length")).toBe("6");
+    const body = Buffer.from(await res.arrayBuffer());
+    expect(body.toString()).toBe("456789");
+  });
+
+  test("Range request with open-ended end returns up to EOF", async () => {
+    mockGetUser.mockResolvedValue({
+      data: { user: { id: "user-1" } },
+      error: null,
+    });
+    mockFrom.mockReturnValue(
+      mockQueryBuilder({
+        workspace_path: tmpWorkspace,
+        workspace_status: "ready",
+      }),
+    );
+
+    const payload = Buffer.from("0123456789");
+    fs.writeFileSync(path.join(kbRoot, "doc.pdf"), payload);
+
+    const req = new Request("http://localhost:3000/api/kb/content/doc.pdf", {
+      headers: { Range: "bytes=3-" },
+    });
+    const res = await callGET(req, ["doc.pdf"]);
+    expect(res.status).toBe(206);
+    expect(res.headers.get("Content-Range")).toBe("bytes 3-9/10");
+    const body = Buffer.from(await res.arrayBuffer());
+    expect(body.toString()).toBe("3456789");
+  });
+
+  test("Out-of-range request returns 416", async () => {
+    mockGetUser.mockResolvedValue({
+      data: { user: { id: "user-1" } },
+      error: null,
+    });
+    mockFrom.mockReturnValue(
+      mockQueryBuilder({
+        workspace_path: tmpWorkspace,
+        workspace_status: "ready",
+      }),
+    );
+
+    const payload = Buffer.from("short");
+    fs.writeFileSync(path.join(kbRoot, "doc.pdf"), payload);
+
+    const req = new Request("http://localhost:3000/api/kb/content/doc.pdf", {
+      headers: { Range: "bytes=100-200" },
+    });
+    const res = await callGET(req, ["doc.pdf"]);
+    expect(res.status).toBe(416);
+    expect(res.headers.get("Content-Range")).toBe("bytes */5");
+  });
 });
