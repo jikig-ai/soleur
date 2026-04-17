@@ -37,7 +37,7 @@ RUN npm install -g @anthropic-ai/claude-code@2.1.79
 # Install git (workspace provisioning) + bubblewrap/socat (Agent SDK sandbox)
 # ca-certificates: required for git HTTPS clone — node:22-slim omits it (#1645)
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates git bubblewrap socat \
+    ca-certificates git bubblewrap socat qpdf \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

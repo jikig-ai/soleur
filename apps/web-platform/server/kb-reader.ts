@@ -99,7 +99,7 @@ async function mapWithConcurrency<T, R>(
   return results;
 }
 
-function parseFrontmatter(raw: string): {
+export function parseFrontmatter(raw: string): {
   frontmatter: Record<string, unknown>;
   content: string;
 } {
@@ -247,10 +247,22 @@ export async function buildTree(
   return root;
 }
 
-export async function readContent(
+/**
+ * Read a markdown file's raw bytes AND UTF-8 text in a single disk pass.
+ * The `buffer` is the un-parsed, un-trimmed file content — callers that need
+ * an integrity hash MUST hash the buffer, not the post-frontmatter `content`
+ * string, otherwise frontmatter-only edits silently pass verification.
+ *
+ * Safe for markdown only — size is bounded by `KB_MAX_FILE_SIZE` (~1 MB).
+ * Do NOT reuse this helper for the binary path; the size ceiling there
+ * (`MAX_BINARY_SIZE`, 50 MB) would double-allocate as `buffer + utf-8 raw`.
+ * Binary hashing should use `hashBytes` over the buffer returned by
+ * `readBinaryFile`, or `hashStream` with a fd-owned ReadStream.
+ */
+export async function readContentRaw(
   kbRoot: string,
   relativePath: string,
-): Promise<ContentResult> {
+): Promise<{ buffer: Buffer; raw: string; path: string }> {
   // Null byte check (CWE-158)
   if (relativePath.includes("\0")) {
     throw new KbAccessDeniedError();
@@ -268,25 +280,44 @@ export async function readContent(
     throw new KbAccessDeniedError();
   }
 
-  // File size guard
-  let stat: fs.Stats;
+  // O_NOFOLLOW refuses symlinks at open time; fstat + read run against the
+  // fd so the bytes we return came from the inode we stat'd. Closes the
+  // stat→readFile TOCTOU window (CodeQL js/file-system-race).
+  let handle: fs.promises.FileHandle;
   try {
-    stat = await fs.promises.stat(fullPath);
-  } catch {
+    handle = await fs.promises.open(
+      fullPath,
+      fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW,
+    );
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === "ELOOP" || code === "EMLINK") {
+      throw new KbAccessDeniedError();
+    }
     throw new KbNotFoundError();
   }
-
-  if (!stat.isFile()) {
-    throw new KbNotFoundError();
+  try {
+    const stat = await handle.stat();
+    if (!stat.isFile()) {
+      throw new KbNotFoundError();
+    }
+    if (stat.size > KB_MAX_FILE_SIZE) {
+      throw new KbValidationError("File exceeds maximum size limit");
+    }
+    const buffer = await handle.readFile();
+    const raw = buffer.toString("utf-8");
+    return { buffer, raw, path: relativePath };
+  } finally {
+    await handle.close().catch(() => {});
   }
+}
 
-  if (stat.size > KB_MAX_FILE_SIZE) {
-    throw new KbValidationError("File exceeds maximum size limit");
-  }
-
-  const raw = await fs.promises.readFile(fullPath, "utf-8");
+export async function readContent(
+  kbRoot: string,
+  relativePath: string,
+): Promise<ContentResult> {
+  const { raw } = await readContentRaw(kbRoot, relativePath);
   const { frontmatter, content } = parseFrontmatter(raw);
-
   return { path: relativePath, frontmatter, content };
 }
 
