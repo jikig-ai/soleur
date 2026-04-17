@@ -81,6 +81,7 @@ vi.mock("@/server/logger", () => ({
 
 vi.mock("@sentry/nextjs", () => ({
   captureException: vi.fn(),
+  captureMessage: vi.fn(),
 }));
 
 vi.mock("node:child_process", () => ({
@@ -584,6 +585,37 @@ describe("POST /api/kb/upload", () => {
       }),
       expect.stringMatching(/pdf linearization failed/i),
     );
+
+    const Sentry = await import("@sentry/nextjs");
+    expect(Sentry.captureMessage).toHaveBeenCalledWith(
+      "pdf linearization failed",
+      expect.objectContaining({
+        level: "warning",
+        tags: expect.objectContaining({
+          feature: "kb-upload",
+          reason: "non_zero_exit",
+        }),
+        extra: expect.objectContaining({
+          reason: "non_zero_exit",
+          inputSize: original.length,
+          userId: TEST_USER_ID,
+        }),
+      }),
+    );
+  });
+
+  test("PDF upload: skip_signed is silent in BOTH pino and Sentry", async () => {
+    setupFullMocks();
+    mockLinearize.mockResolvedValue({ ok: false, reason: "skip_signed" });
+
+    const formData = createFormData(makePdfFile("signed.pdf"), "uploads");
+    const res = await POST(createRequest(formData, "https://app.soleur.ai"));
+    expect(res.status).toBe(201);
+
+    const loggerMod = await import("@/server/logger");
+    const Sentry = await import("@sentry/nextjs");
+    expect(loggerMod.default.warn).not.toHaveBeenCalled();
+    expect(Sentry.captureMessage).not.toHaveBeenCalled();
   });
 
   test("non-PDF upload: does not invoke linearize", async () => {

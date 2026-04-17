@@ -192,18 +192,23 @@ export async function POST(request: Request) {
         payloadBuffer = result.buffer;
       } else if (result.reason !== "skip_signed") {
         // skip_signed is an intentional pass-through (signed PDFs would be
-        // invalidated by linearization), not a failure — no warn.
-        logger.warn(
-          {
-            reason: result.reason,
-            detail: result.detail,
-            inputSize: buffer.length,
-            durationMs: Date.now() - t0,
-            userId: user.id,
-            path: filePath,
-          },
-          "pdf linearization failed, committing original",
-        );
+        // invalidated by linearization), not a failure — silent in both sinks.
+        const logCtx = {
+          reason: result.reason,
+          detail: result.detail,
+          inputSize: buffer.length,
+          durationMs: Date.now() - t0,
+          userId: user.id,
+          path: filePath,
+        };
+        logger.warn(logCtx, "pdf linearization failed, committing original");
+        // Pino stdout-only is invisible post-deploy; mirror to Sentry as a
+        // warning (not an exception) so silent fallbacks remain observable.
+        Sentry.captureMessage("pdf linearization failed", {
+          level: "warning",
+          tags: { feature: "kb-upload", reason: result.reason },
+          extra: logCtx,
+        });
       }
     }
 
