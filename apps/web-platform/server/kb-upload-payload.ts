@@ -6,6 +6,13 @@ import { warnSilentFallback } from "@/server/observability";
 // `message:"pdf linearization failed"` continue to work after this refactor.
 const SENTRY_MESSAGE = "pdf linearization failed";
 
+export interface PrepareUploadContext {
+  /** Authenticated user id, recorded in the silent-fallback extras. */
+  userId: string;
+  /** Target repo path, recorded in the silent-fallback extras. */
+  path: string;
+}
+
 /**
  * Read an upload File stream into a Buffer, applying PDF linearization when
  * the sanitized extension is `.pdf`. On linearize failure (excluding the
@@ -18,8 +25,7 @@ const SENTRY_MESSAGE = "pdf linearization failed";
 export async function prepareUploadPayload(
   file: File,
   sanitizedName: string,
-  userId: string,
-  filePath: string,
+  ctx: PrepareUploadContext,
 ): Promise<Buffer> {
   const chunks: Uint8Array[] = [];
   const reader = file.stream().getReader();
@@ -50,8 +56,8 @@ export async function prepareUploadPayload(
       detail: result.detail,
       inputSize: buffer.length,
       durationMs: Date.now() - t0,
-      userId,
-      path: filePath,
+      userId: ctx.userId,
+      path: ctx.path,
     },
   });
   return buffer;

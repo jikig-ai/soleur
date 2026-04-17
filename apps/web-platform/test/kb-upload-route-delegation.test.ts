@@ -1,8 +1,12 @@
-// Proof-of-delegation regression gate: route.ts source must actually invoke
-// the extracted helper and must not contain an inline linearizePdf call.
-// Catches the failure mode documented in
+// Negative-space regression gate per
 // knowledge-base/project/learnings/best-practices/2026-04-15-negative-space-tests-must-follow-extracted-logic.md
-// without polluting kb-upload.test.ts's node:fs mock.
+//
+// The route-level PDF tests in kb-upload.test.ts already prove behavioral
+// delegation (mockLinearize fires through the helper, bytes reach the PUT
+// body) — this file covers the one thing mock-based tests CANNOT: asserting
+// a specific symbol is absent from the route source. Without this, a future
+// edit could re-introduce an inline linearizePdf call alongside the helper
+// and all behavioral tests would still pass.
 
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
@@ -13,18 +17,8 @@ const routeSrc = readFileSync(
   "utf-8",
 );
 
-describe("route delegates to prepareUploadPayload helper", () => {
-  it("imports the helper", () => {
-    expect(routeSrc).toMatch(
-      /import\s*\{\s*prepareUploadPayload\s*\}\s*from\s*["']@\/server\/kb-upload-payload["']/,
-    );
-  });
-
-  it("awaits the helper invocation", () => {
-    expect(routeSrc).toMatch(/await\s+prepareUploadPayload\s*\(/);
-  });
-
-  it("does not keep the inline linearize block after extraction", () => {
+describe("route delegates PDF linearization exclusively via prepareUploadPayload", () => {
+  it("route source contains no inline linearizePdf() call (would double-transform PDFs)", () => {
     expect(routeSrc).not.toMatch(/linearizePdf\s*\(/);
   });
 });

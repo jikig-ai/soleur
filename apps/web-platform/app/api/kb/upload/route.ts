@@ -173,12 +173,10 @@ export async function POST(request: Request) {
       }
     }
 
-    const payloadBuffer = await prepareUploadPayload(
-      file,
-      sanitizedName,
-      user.id,
-      filePath,
-    );
+    const payloadBuffer = await prepareUploadPayload(file, sanitizedName, {
+      userId: user.id,
+      path: filePath,
+    });
 
     const base64Content = payloadBuffer.toString("base64");
 

@@ -43,7 +43,10 @@ beforeEach(() => {
 describe("prepareUploadPayload", () => {
   it("non-PDF passthrough returns raw buffer without invoking linearize or warn", async () => {
     const f = fakeFile(new Uint8Array([1, 2, 3]));
-    const out = await prepareUploadPayload(f, "notes.md", "u1", "path/notes.md");
+    const out = await prepareUploadPayload(f, "notes.md", {
+      userId: "u1",
+      path: "path/notes.md",
+    });
     expect(out).toEqual(Buffer.from([1, 2, 3]));
     expect(mockLinearize).not.toHaveBeenCalled();
     expect(mockWarn).not.toHaveBeenCalled();
@@ -55,7 +58,10 @@ describe("prepareUploadPayload", () => {
       buffer: Buffer.from("linearized"),
     });
     const f = fakeFile(new Uint8Array([0x25, 0x50]));
-    const out = await prepareUploadPayload(f, "doc.pdf", "u1", "path/doc.pdf");
+    const out = await prepareUploadPayload(f, "doc.pdf", {
+      userId: "u1",
+      path: "path/doc.pdf",
+    });
     expect(out).toEqual(Buffer.from("linearized"));
     expect(mockLinearize).toHaveBeenCalledTimes(1);
     expect(mockWarn).not.toHaveBeenCalled();
@@ -68,12 +74,10 @@ describe("prepareUploadPayload", () => {
       detail: "exit=2 stderr=...",
     });
     const f = fakeFile(new Uint8Array([0x11, 0x22, 0x33]));
-    const out = await prepareUploadPayload(
-      f,
-      "broken.pdf",
-      "u2",
-      "path/broken.pdf",
-    );
+    const out = await prepareUploadPayload(f, "broken.pdf", {
+      userId: "u2",
+      path: "path/broken.pdf",
+    });
     expect(out).toEqual(Buffer.from([0x11, 0x22, 0x33]));
     expect(mockWarn).toHaveBeenCalledTimes(1);
     expect(mockWarn).toHaveBeenCalledWith(
@@ -97,12 +101,10 @@ describe("prepareUploadPayload", () => {
   it("signed-PDF skip returns raw buffer silently", async () => {
     mockLinearize.mockResolvedValue({ ok: false, reason: "skip_signed" });
     const f = fakeFile(new Uint8Array([0x99]));
-    const out = await prepareUploadPayload(
-      f,
-      "signed.pdf",
-      "u1",
-      "path/signed.pdf",
-    );
+    const out = await prepareUploadPayload(f, "signed.pdf", {
+      userId: "u1",
+      path: "path/signed.pdf",
+    });
     expect(out).toEqual(Buffer.from([0x99]));
     expect(mockWarn).not.toHaveBeenCalled();
   });
