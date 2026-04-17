@@ -111,6 +111,26 @@ describe("ChatInput insertQuote", () => {
     expect(ta.className).not.toMatch(/\bring-2\b/);
   });
 
+  it("does not leak timers on rapid reinsertion or unmount (#2384 5A)", () => {
+    let handle: QuoteHandle | null = null;
+    const { unmount } = render(
+      <Harness onSend={vi.fn()} onReady={(h) => { handle = h; }} />,
+    );
+    screen.getByTestId("ready").click();
+    // One call primes the pending timer baseline.
+    act(() => { handle!.insertQuote("first"); });
+    const firstCount = vi.getTimerCount();
+    // Four additional rapid calls must NOT grow the pending-timer queue —
+    // each call clears the prior timer and re-schedules one fresh one.
+    for (let i = 0; i < 4; i++) {
+      act(() => { handle!.insertQuote("line " + i); });
+    }
+    expect(vi.getTimerCount()).toBe(firstCount);
+    unmount();
+    // Unmount cleanup must cancel every pending timer scheduled by the handle.
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it("renders the sidebar placeholder when passed through", () => {
     render(
       <Harness

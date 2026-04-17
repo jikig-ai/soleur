@@ -19,6 +19,7 @@ interface PendingAttachment {
 
 export interface ChatInputQuoteHandle {
   insertQuote: (text: string) => void;
+  focus: () => void;
 }
 
 interface ChatInputProps {
@@ -98,6 +99,12 @@ export function ChatInput({
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const activeXhrs = useRef<Map<string, XMLHttpRequest>>(new Map());
+  // Timers owned by the insertQuote imperative handle. Tracked via refs so
+  // each invocation can cancel the prior pending callbacks (no queue growth
+  // under rapid selection-to-quote bursts) and the effect's cleanup can
+  // cancel any pending callback on unmount (no unmounted-setState warnings).
+  const flashTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const quoteRafRef = useRef<number | null>(null);
 
   // Auto-resize textarea height based on content (capped at ~5 lines / 100px).
   // useIsomorphicLayoutEffect prevents flicker on the client while avoiding
@@ -156,13 +163,37 @@ export function ChatInput({
         });
         setFlashQuote(true);
         if (textarea) {
-          requestAnimationFrame(() => {
+          if (quoteRafRef.current !== null) {
+            cancelAnimationFrame(quoteRafRef.current);
+          }
+          quoteRafRef.current = requestAnimationFrame(() => {
             textarea.focus();
             textarea.scrollIntoView({ block: "nearest" });
+            quoteRafRef.current = null;
           });
         }
-        setTimeout(() => setFlashQuote(false), 400);
+        if (flashTimerRef.current !== null) {
+          clearTimeout(flashTimerRef.current);
+        }
+        flashTimerRef.current = setTimeout(() => {
+          setFlashQuote(false);
+          flashTimerRef.current = null;
+        }, 400);
       },
+      focus: () => {
+        textareaRef.current?.focus();
+      },
+    };
+    return () => {
+      if (flashTimerRef.current !== null) {
+        clearTimeout(flashTimerRef.current);
+        flashTimerRef.current = null;
+      }
+      if (quoteRafRef.current !== null) {
+        cancelAnimationFrame(quoteRafRef.current);
+        quoteRafRef.current = null;
+      }
+      if (quoteRef) quoteRef.current = null;
     };
   }, [quoteRef]);
 
