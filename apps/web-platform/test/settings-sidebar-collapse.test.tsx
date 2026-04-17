@@ -110,4 +110,27 @@ describe("Settings sidebar collapse", () => {
       expect(screen.getAllByLabelText("Expand settings nav").length).toBe(1);
     });
   });
+
+  // Alignment contract for the expanded-state collapse chevron.
+  // Main nav header at apps/web-platform/app/(dashboard)/layout.tsx uses py-5;
+  // the settings <nav> must match so both <` chevrons land on the same y-row.
+  describe("collapse button alignment with main nav chevron (expanded state)", () => {
+    it("nav wrapper uses py-5 to align chevron y-origin with main nav header", () => {
+      render(<SettingsShell><div>content</div></SettingsShell>);
+      const collapseBtn = screen.getByLabelText("Collapse settings nav");
+      const navEl = collapseBtn.closest("nav");
+      expect(navEl).not.toBeNull();
+      expect(navEl).toHaveClass("py-5");
+      expect(navEl?.className).not.toMatch(/\bpy-10\b/);
+    });
+
+    it("collapse button keeps h-6 w-6 geometry matching main nav toggle", () => {
+      render(<SettingsShell><div>content</div></SettingsShell>);
+      const btn = screen.getByLabelText("Collapse settings nav");
+      expect(btn).toHaveClass("h-6", "w-6", "rounded");
+      expect(btn.className).not.toMatch(/\bborder(-|\s|$)/);
+      const svg = btn.querySelector("svg");
+      expect(svg).toHaveClass("h-4", "w-4");
+    });
+  });
 });
