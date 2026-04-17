@@ -76,7 +76,7 @@ describe("safeSession", () => {
 
   it("is a no-op read returning null when window is undefined (SSR)", async () => {
     const originalWindow = globalThis.window;
-    // @ts-expect-error — simulate SSR by deleting window
+    // Simulate SSR by deleting window — cast to optional makes delete legal.
     delete (globalThis as { window?: unknown }).window;
     try {
       // Import fresh after window removal so module-scope typeof check is accurate.
