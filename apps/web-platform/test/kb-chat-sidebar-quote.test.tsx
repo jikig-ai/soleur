@@ -142,6 +142,7 @@ describe("KbChatSidebar — quote wiring", () => {
     expect(mockSendMessage).toHaveBeenCalled();
     expect(mockTrack).toHaveBeenCalledWith("kb.chat.selection_sent", {
       path: "knowledge-base/overview/constitution.md",
+      source: "human",
     });
   });
 

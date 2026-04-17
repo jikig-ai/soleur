@@ -61,7 +61,16 @@ export function KbChatContent({ contextPath, onClose, visible }: KbChatContentPr
   const handleBeforeSend = useCallback(
     (message: string) => {
       if (/^\s*>/.test(message)) {
-        void track("kb.chat.selection_sent", { path: contextPath });
+        // `source: "human"` since this fires from the KbChatContent surface
+        // (humans clicking the quote pill or typing a blockquote in the
+        // sidebar). Agent-seeded quotes will emit `source: "agent"` when
+        // the HTTP message-post path lands — tagging now prevents
+        // retroactive metric-drift (no server-side record of per-event
+        // source exists).
+        void track("kb.chat.selection_sent", {
+          path: contextPath,
+          source: "human",
+        });
       }
     },
     [contextPath],
