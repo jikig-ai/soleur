@@ -8,6 +8,7 @@ export type SharedData =
   | { kind: "markdown"; content: string; path: string }
   | { kind: "pdf"; src: string; filename: string }
   | { kind: "image"; src: string; filename: string | null }
+  | { kind: "text"; src: string; filename: string }
   | { kind: "download"; src: string; filename: string };
 
 export type PageError = "not-found" | "revoked" | "content-changed" | "unknown";
@@ -87,6 +88,10 @@ export async function classifyResponse(
         // Image returns `null` when filename is unknown (never "file") so
         // the renderer can choose between `title={filename}` and no title.
         return { data: { kind: "image", src, filename } };
+      case "text":
+        return {
+          data: { kind: "text", src, filename: filename ?? basenameFromToken(token) },
+        };
       case "download":
         return {
           data: {

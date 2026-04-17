@@ -13,19 +13,26 @@ import {
   type SharedContentKind,
 } from "@/lib/shared-kind";
 import { MAX_BINARY_SIZE, CONTENT_TYPE_MAP } from "@/server/kb-limits";
+import { classifyByContentType } from "@/lib/kb-file-kind";
 import { getKbExtension } from "@/lib/kb-extensions";
 
 export { SHARED_CONTENT_KIND_HEADER };
 export type { SharedContentKind };
 
-/** Derive the shared-content kind from validated binary metadata. */
+/**
+ * Derive the shared-content kind from validated binary metadata.
+ * Delegates to `classifyByContentType` so the `X-Soleur-Kind` header
+ * and the client-side viewer share a single classifier. The narrowing
+ * to `Exclude<SharedContentKind, "markdown">` is a type-level safety
+ * rail — `classifyByContentType` cannot return `"markdown"` today,
+ * but preserving the narrower return type keeps `kb-serve.ts`'s
+ * downstream consumers typed against the binary-only variants.
+ */
 export function deriveBinaryKind(
   meta: Pick<BinaryFileMetadata, "contentType" | "disposition">,
 ): Exclude<SharedContentKind, "markdown"> {
-  if (meta.disposition === "attachment") return "download";
-  if (meta.contentType === "application/pdf") return "pdf";
-  if (meta.contentType.startsWith("image/")) return "image";
-  return "download";
+  const kind = classifyByContentType(meta.contentType, meta.disposition);
+  return kind === "markdown" ? "download" : kind;
 }
 
 /**
