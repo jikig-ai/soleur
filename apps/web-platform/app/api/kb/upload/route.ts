@@ -5,6 +5,7 @@ import { isPathInWorkspace } from "@/server/sandbox";
 import { githubApiGet, githubApiPost, GitHubApiError } from "@/server/github-api";
 import { generateInstallationToken, randomCredentialPath } from "@/server/github-app";
 import { sanitizeFilename } from "@/server/kb-validation";
+import { linearizePdf } from "@/server/pdf-linearize";
 import { execFile } from "node:child_process";
 import { writeFileSync, unlinkSync } from "node:fs";
 import { promisify } from "node:util";
@@ -21,6 +22,9 @@ const execFileAsync = promisify(execFile);
 
 const ALLOWED_EXTENSIONS = new Set<string>(KB_UPLOAD_EXTENSIONS);
 const MAX_FILE_SIZE = 20 * 1024 * 1024; // 20 MB
+
+// Linearizing a 20MB PDF + GitHub commit can exceed the Next.js default 10s.
+export const maxDuration = 30;
 
 // ---------------------------------------------------------------------------
 // Route handler
@@ -180,7 +184,30 @@ export async function POST(request: Request) {
       if (done) break;
       chunks.push(value);
     }
-    const base64Content = Buffer.concat(chunks).toString("base64");
+    const buffer: Buffer = Buffer.concat(chunks);
+    let payloadBuffer: Buffer = buffer;
+
+    if (sanitizedName.toLowerCase().endsWith(".pdf")) {
+      const t0 = Date.now();
+      const result = await linearizePdf(buffer);
+      if (result.ok) {
+        payloadBuffer = result.buffer;
+      } else {
+        logger.warn(
+          {
+            reason: result.reason,
+            detail: result.detail,
+            inputSize: buffer.length,
+            durationMs: Date.now() - t0,
+            userId: user.id,
+            path: filePath,
+          },
+          "pdf linearization failed, committing original",
+        );
+      }
+    }
+
+    const base64Content = payloadBuffer.toString("base64");
 
     // Upload via GitHub Contents API (PUT)
     const result = await githubApiPost<{
