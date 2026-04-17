@@ -107,6 +107,28 @@ export class SlidingWindowCounter {
   }
 }
 
+/**
+ * Start a periodic prune interval for a SlidingWindowCounter and mark the
+ * timer as unref'd so it never blocks process exit. Used for every
+ * module-level SlidingWindowCounter singleton in this file and in sibling
+ * per-route modules (e.g., app/api/analytics/track/throttle.ts). The
+ * single-instance-assumption caveat on invoiceEndpointThrottle below
+ * applies equally to every caller.
+ *
+ * Returns the timer handle so callers can optionally hold a reference for
+ * test-time clearInterval. Module singletons typically discard the return
+ * value — the helper's internal `unref()` is what keeps the timer from
+ * blocking exit.
+ */
+export function startPruneInterval(
+  counter: SlidingWindowCounter,
+  ms = 60_000,
+): NodeJS.Timeout {
+  const handle = setInterval(() => counter.prune(), ms);
+  handle.unref();
+  return handle;
+}
+
 // ---------------------------------------------------------------------------
 // PendingConnectionTracker — tracks unauthenticated sockets per IP
 // ---------------------------------------------------------------------------
@@ -149,6 +171,16 @@ export class PendingConnectionTracker {
 // IP extraction — Cloudflare-aware
 // ---------------------------------------------------------------------------
 
+/**
+ * Extract the client IP from a raw Node `IncomingMessage` (the WS upgrade
+ * path; see `server/ws-handler.ts` for the caller). When `cf-connecting-ip`
+ * is absent we fall back to `socket.remoteAddress`, which cannot be spoofed
+ * at the TCP level.
+ *
+ * This deliberately diverges from `extractClientIpFromHeaders` (which has
+ * no socket access and collapses missing `cf-connecting-ip` to `"unknown"`).
+ * The asymmetry is intentional — see that function's docblock below.
+ */
 export function extractClientIp(req: IncomingMessage): string {
   // Trust cf-connecting-ip (set by Cloudflare, not spoofable when traffic
   // flows through the proxy). This is the only reliable header in production.
@@ -176,7 +208,22 @@ export function extractClientIp(req: IncomingMessage): string {
 // IP extraction — Next.js API routes (Web Request API)
 // ---------------------------------------------------------------------------
 
-/** Extract client IP from a Next.js API route Request (Web API headers). */
+/**
+ * Extract the client IP from a Next.js App Router `Request.headers` object
+ * (Web-API `Headers`). Used by `/api/analytics/track`, `/api/shared/[token]`,
+ * and any other route handler that does per-IP rate limiting.
+ *
+ * When `cf-connecting-ip` is absent this returns `"unknown"` rather than
+ * falling back to a socket IP. The Web-API Request has no access to the
+ * underlying `socket.remoteAddress`. We deliberately do NOT consult
+ * `x-forwarded-for` here either — it is spoofable in any non-Cloudflare
+ * path and would silently share one bucket with a real direct-to-origin
+ * IP. Collapsing to `"unknown"` fails closed.
+ *
+ * This is intentionally asymmetric with `extractClientIp` (the
+ * `IncomingMessage` variant), which does have socket access and can fall
+ * back safely.
+ */
 export function extractClientIpFromHeaders(headers: Headers): string {
   const cfIp = headers.get("cf-connecting-ip");
   if (cfIp) return cfIp;
@@ -199,11 +246,7 @@ export const shareEndpointThrottle = new SlidingWindowCounter({
   maxRequests: parseInt(process.env.SHARE_RATE_LIMIT_PER_MIN ?? "60", 10),
 });
 
-const pruneShareInterval = setInterval(
-  () => shareEndpointThrottle.prune(),
-  60_000,
-);
-pruneShareInterval.unref();
+startPruneInterval(shareEndpointThrottle);
 
 // ---------------------------------------------------------------------------
 // HTTP rate limiter singleton for authenticated billing invoice endpoint
@@ -222,11 +265,7 @@ export const invoiceEndpointThrottle = new SlidingWindowCounter({
   maxRequests: parseInt(process.env.INVOICE_RATE_LIMIT_PER_MIN ?? "10", 10),
 });
 
-const pruneInvoiceInterval = setInterval(
-  () => invoiceEndpointThrottle.prune(),
-  60_000,
-);
-pruneInvoiceInterval.unref();
+startPruneInterval(invoiceEndpointThrottle);
 
 /** Test-only helper: clear the invoice throttle state between tests. */
 export function __resetInvoiceThrottleForTest(): void {
@@ -271,14 +310,6 @@ export const pendingConnections = new PendingConnectionTracker(
 // Periodic cleanup to prevent unbounded memory growth from stale entries.
 // Lazy eviction in isAllowed() only cleans keys that are actively checked —
 // IPs that connect once and never return accumulate until pruned.
-const pruneConnectionInterval = setInterval(
-  () => connectionThrottle.prune(),
-  60_000,
-);
-pruneConnectionInterval.unref();
+startPruneInterval(connectionThrottle);
 
-const pruneSessionInterval = setInterval(
-  () => sessionThrottle.prune(),
-  300_000,
-);
-pruneSessionInterval.unref();
+startPruneInterval(sessionThrottle, 300_000);
