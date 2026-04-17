@@ -21,10 +21,27 @@ interface PdfPreviewProps {
   showDownload?: boolean;
 }
 
+// PDF.js document loading options.
+// - disableRange/Stream: false so range requests are used (need Accept-Ranges)
+// - disableAutoFetch: true so PDF.js only fetches what's needed for the
+//   currently-rendered page. With `false` (default), PDF.js eagerly prefetches
+//   the entire document in the background even though `getDocument` resolves
+//   after the xref is parsed — this makes the progress bar fill to 100%
+//   before page 1 renders, defeating the point of streaming.
+// - rangeChunkSize: 128KB chunks keep first render fast
+// Memoized at module scope since these never change across renders.
+const PDF_DOCUMENT_OPTIONS = {
+  disableRange: false,
+  disableStream: false,
+  disableAutoFetch: true,
+  rangeChunkSize: 131072,
+};
+
 export function PdfPreview({ src, filename, showDownload = true }: PdfPreviewProps) {
   const [numPages, setNumPages] = useState(0);
   const [pageNumber, setPageNumber] = useState(1);
   const [error, setError] = useState(false);
+  const [loadProgress, setLoadProgress] = useState<{ loaded: number; total: number } | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const [containerWidth, setContainerWidth] = useState<number>();
   const [containerHeight, setContainerHeight] = useState<number>();
@@ -33,12 +50,32 @@ export function PdfPreview({ src, filename, showDownload = true }: PdfPreviewPro
   useEffect(() => {
     const el = containerRef.current;
     if (!el) return;
+
+    // Initial measurement fires immediately; subsequent resize events are
+    // debounced 150ms so the PDF doesn't re-rasterize on every pixel of panel
+    // drag. Each width change triggers a PDF.js canvas render (~50-200ms).
+    let initialized = false;
+    let timeout: ReturnType<typeof setTimeout> | null = null;
+
     const observer = new ResizeObserver(([entry]) => {
-      setContainerWidth(entry.contentRect.width);
-      setContainerHeight(entry.contentRect.height);
+      const { width, height } = entry.contentRect;
+      if (!initialized) {
+        initialized = true;
+        setContainerWidth(width);
+        setContainerHeight(height);
+        return;
+      }
+      if (timeout !== null) clearTimeout(timeout);
+      timeout = setTimeout(() => {
+        setContainerWidth(width);
+        setContainerHeight(height);
+      }, 150);
     });
     observer.observe(el);
-    return () => observer.disconnect();
+    return () => {
+      observer.disconnect();
+      if (timeout !== null) clearTimeout(timeout);
+    };
   }, []);
 
   // Size the page to fit within the container without scrolling.
@@ -85,12 +122,32 @@ export function PdfPreview({ src, filename, showDownload = true }: PdfPreviewPro
       <div ref={containerRef} className="min-h-0 flex-1 flex items-center justify-center overflow-auto rounded-lg border border-neutral-800 bg-neutral-900/50">
         <Document
           file={src}
-          onLoadSuccess={({ numPages: n }) => setNumPages(n)}
+          options={PDF_DOCUMENT_OPTIONS}
+          onLoadSuccess={({ numPages: n }) => {
+            setNumPages(n);
+            setLoadProgress(null);
+          }}
           onLoadError={() => setError(true)}
+          onLoadProgress={({ loaded, total }) => {
+            if (total) setLoadProgress({ loaded, total });
+          }}
           className="flex items-center justify-center"
           loading={
-            <div className="flex items-center justify-center p-8">
+            <div className="flex flex-col items-center justify-center gap-3 p-8">
               <div className="h-5 w-5 animate-spin rounded-full border-2 border-neutral-600 border-t-amber-400" />
+              {loadProgress && loadProgress.total > 0 && (
+                <div className="w-48 text-center">
+                  <div className="h-1 w-full overflow-hidden rounded-full bg-neutral-800">
+                    <div
+                      className="h-full bg-amber-400 transition-[width] duration-150"
+                      style={{ width: `${Math.min(100, (loadProgress.loaded / loadProgress.total) * 100)}%` }}
+                    />
+                  </div>
+                  <p className="mt-2 text-xs text-neutral-500">
+                    Loading {Math.round(loadProgress.loaded / 1024)}KB / {Math.round(loadProgress.total / 1024)}KB
+                  </p>
+                </div>
+              )}
             </div>
           }
         >

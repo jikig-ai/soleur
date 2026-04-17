@@ -133,7 +133,7 @@ describe("ChatInput", () => {
   it("textarea has auto-growing height constraints", () => {
     setup();
     const textarea = screen.getByRole("textbox");
-    expect(textarea.className).toContain("min-h-[44px]");
-    expect(textarea.className).toContain("max-h-[100px]");
+    expect(textarea.className).toContain("min-h-[72px]");
+    expect(textarea.className).toContain("max-h-[140px]");
   });
 });
