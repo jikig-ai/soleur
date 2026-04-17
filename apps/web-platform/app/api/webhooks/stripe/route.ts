@@ -3,6 +3,7 @@ import { getStripe } from "@/lib/stripe";
 import { createServiceClient } from "@/lib/supabase/server";
 import type Stripe from "stripe";
 import logger from "@/server/logger";
+import * as Sentry from "@sentry/nextjs";
 
 // Map Stripe subscription statuses to the CHECK constraint values.
 // Stripe sends: active, canceled, incomplete, incomplete_expired, past_due, trialing, unpaid, paused.
@@ -52,6 +53,14 @@ export async function POST(request: Request) {
   } catch (err) {
     const message = err instanceof Error ? err.message : "Unknown error";
     logger.error({ err: message }, "Stripe webhook signature verification failed");
+    // Security-relevant: a spike in signature failures is an attack signal.
+    // captureMessage (not captureException) — the original err may be a
+    // thrown string and we already reduced it to a sanitized message.
+    Sentry.captureMessage("Stripe webhook signature verification failed", {
+      level: "error",
+      tags: { feature: "stripe-webhook", op: "signature" },
+      extra: { message },
+    });
     return NextResponse.json({ error: "Invalid signature" }, { status: 400 });
   }
 
@@ -74,6 +83,10 @@ export async function POST(request: Request) {
 
         if (error) {
           logger.error({ error, userId }, "Webhook: failed to update user on checkout.session.completed");
+          Sentry.captureException(error, {
+            tags: { feature: "stripe-webhook", op: "checkout.session.completed" },
+            extra: { userId },
+          });
           return NextResponse.json({ error: "DB update failed" }, { status: 500 });
         }
       }
@@ -97,6 +110,10 @@ export async function POST(request: Request) {
 
       if (error) {
         logger.error({ error, customerId }, "Webhook: failed to update user on customer.subscription.updated");
+        Sentry.captureException(error, {
+          tags: { feature: "stripe-webhook", op: "customer.subscription.updated" },
+          extra: { customerId },
+        });
         return NextResponse.json({ error: "DB update failed" }, { status: 500 });
       }
       break;
@@ -117,6 +134,10 @@ export async function POST(request: Request) {
 
       if (error) {
         logger.error({ error, customerId }, "Webhook: failed to update user on customer.subscription.deleted");
+        Sentry.captureException(error, {
+          tags: { feature: "stripe-webhook", op: "customer.subscription.deleted" },
+          extra: { customerId },
+        });
         return NextResponse.json({ error: "DB update failed" }, { status: 500 });
       }
       break;

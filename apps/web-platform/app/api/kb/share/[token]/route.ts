@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { validateOrigin, rejectCsrf } from "@/lib/auth/validate-origin";
 import logger from "@/server/logger";
+import * as Sentry from "@sentry/nextjs";
 
 /** DELETE — revoke a share link (permanent). */
 export async function DELETE(
@@ -48,6 +49,10 @@ export async function DELETE(
 
   if (updateError) {
     logger.error({ err: updateError }, "kb/share: failed to revoke share link");
+    Sentry.captureException(updateError, {
+      tags: { feature: "kb-share", op: "revoke" },
+      extra: { userId: user.id, token },
+    });
     return NextResponse.json(
       { error: "Failed to revoke share link" },
       { status: 500 },

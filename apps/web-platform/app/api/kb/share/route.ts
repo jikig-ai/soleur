@@ -8,6 +8,7 @@ import { isPathInWorkspace } from "@/server/sandbox";
 import { MAX_BINARY_SIZE } from "@/server/kb-binary-response";
 import { hashStream } from "@/server/kb-content-hash";
 import logger from "@/server/logger";
+import * as Sentry from "@sentry/nextjs";
 
 /** POST — generate a share link for a KB document. */
 export async function POST(request: Request) {
@@ -160,6 +161,10 @@ export async function POST(request: Request) {
       );
     }
     logger.error({ err: insertError }, "kb/share: failed to create share link");
+    Sentry.captureException(insertError, {
+      tags: { feature: "kb-share", op: "create" },
+      extra: { userId: user.id, documentPath: body.documentPath },
+    });
     return NextResponse.json(
       { error: "Failed to create share link" },
       { status: 500 },
@@ -202,6 +207,10 @@ export async function GET(request: Request) {
 
   if (error) {
     logger.error({ err: error }, "kb/share: failed to list shares");
+    Sentry.captureException(error, {
+      tags: { feature: "kb-share", op: "list" },
+      extra: { userId: user.id, documentPath },
+    });
     return NextResponse.json(
       { error: "Failed to list shares" },
       { status: 500 },

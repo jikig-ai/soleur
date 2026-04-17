@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { validateOrigin, rejectCsrf } from "@/lib/auth/validate-origin";
 import logger from "@/server/logger";
+import * as Sentry from "@sentry/nextjs";
 import { randomUUID } from "crypto";
 import {
   ALLOWED_ATTACHMENT_TYPES,
@@ -81,6 +82,18 @@ export async function POST(request: Request) {
 
   if (error || !data) {
     logger.error({ err: error, storagePath }, "Failed to create signed upload URL");
+    if (error) {
+      Sentry.captureException(error, {
+        tags: { feature: "attachments", op: "presign" },
+        extra: { storagePath, userId: user.id },
+      });
+    } else {
+      Sentry.captureMessage("signed upload URL returned no data", {
+        level: "error",
+        tags: { feature: "attachments", op: "presign" },
+        extra: { storagePath, userId: user.id },
+      });
+    }
     return NextResponse.json({ error: "upload_failed" }, { status: 500 });
   }
 

@@ -4,6 +4,7 @@ import { encryptKey } from "@/server/byok";
 import { validateToken } from "@/server/token-validators";
 import { validateOrigin, rejectCsrf } from "@/lib/auth/validate-origin";
 import logger from "@/server/logger";
+import * as Sentry from "@sentry/nextjs";
 
 export async function POST(request: Request) {
   const { valid: originValid, origin } = validateOrigin(request);
@@ -58,6 +59,10 @@ export async function POST(request: Request) {
 
   if (dbError) {
     logger.error({ err: dbError }, "Failed to store API key");
+    Sentry.captureException(dbError, {
+      tags: { feature: "api-keys", op: "store" },
+      extra: { userId: user.id, provider: "anthropic" },
+    });
     return NextResponse.json(
       { error: "Failed to store key" },
       { status: 500 },

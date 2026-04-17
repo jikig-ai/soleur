@@ -21,6 +21,7 @@ import {
   logRateLimitRejection,
 } from "@/server/rate-limiter";
 import logger from "@/server/logger";
+import * as Sentry from "@sentry/nextjs";
 
 function contentChangedResponse() {
   return NextResponse.json(
@@ -149,6 +150,10 @@ export async function GET(
         );
       }
       logger.error({ err, token }, "shared: unexpected error");
+      Sentry.captureException(err, {
+        tags: { feature: "shared-token" },
+        extra: { token },
+      });
       return NextResponse.json(
         { error: "An unexpected error occurred" },
         { status: 500 },
