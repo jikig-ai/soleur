@@ -106,6 +106,15 @@ If the feature description references an external platform, marketplace, or serv
 
 #### 1.1 Research (Context Gathering)
 
+**Pre-research: check existing KB artifacts first.** Before spawning any agents, run one local check for prior brainstorms and specs matching the feature's topic keywords:
+
+```bash
+find knowledge-base/project/brainstorms knowledge-base/project/specs \
+  -maxdepth 3 -iname "*<keyword>*" 2>/dev/null | head -n 20
+```
+
+If prior artifacts exist, read them and frame the research agent prompts as "given these prior decisions, what's changed and what gaps remain?" rather than "research this topic cold." **Why:** In the 2026-04-17 BYOK usage dashboard brainstorm, the prior `2026-04-10-byok-cost-tracking-brainstorm.md` and `specs/feat-byok-cost-tracking/spec.md` had already decided scope; agents rediscovered them mid-session instead of building on them. See `knowledge-base/project/learnings/2026-04-17-brainstorm-verify-existing-artifacts-and-mount-sites.md`.
+
 Run these agents **in parallel** to gather context before dialogue:
 
 - Task repo-research-analyst(feature_description)
@@ -115,6 +124,8 @@ Run these agents **in parallel** to gather context before dialogue:
 
 - **Repo research:** existing patterns, similar features, CLAUDE.md guidance
 - **Learnings:** documented solutions in `knowledge-base/project/learnings/` -- past gotchas, patterns, lessons learned that might inform WHAT to build
+
+**Verifying "is X mounted/wired/enabled?" claims.** When a research agent (or your own reasoning) asserts that a component is not present, not mounted, or not wired up, verify by grepping for the **specific consuming symbol** (a variable, hook, state field, or imported component name) rather than relying on absence of a generic phrase. Absence of the feature name in search results is not evidence of absence in code. **Why:** In the 2026-04-17 session, the Explore agent reported the chat cost badge was "not confirmed to be rendered" because it grepped "cost badge" (no code match); the badge was in fact mounted via `usageData.totalCostUsd` in `chat-surface.tsx`, which a targeted grep for the state identifier would have caught.
 
 If either agent fails or returns empty, proceed with whatever results are available. Weave findings naturally into your first question rather than presenting a formal summary.
 
