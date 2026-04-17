@@ -21,12 +21,12 @@ Write failing tests before implementation code (per rule `cq-write-failing-tests
 
 ## Phase 1 — Helper Module (TDD)
 
-- [ ] **1.1** Write failing tests at `apps/web-platform/test/pdf-linearize.test.ts` covering: (a) exit 0 + stdout returns `{ ok: true, buffer }`, (b) non-zero exit returns `{ ok: false, reason: "non_zero_exit", detail: <stderr> }`, (c) OS-killed (`code=null, signal=SIGKILL`) returns `non_zero_exit` with signal in detail, (d) spawn error (ENOENT) returns `{ ok: false, reason: "spawn_error" }`, (e) subprocess never closes → timeout fires, child is SIGKILLed, returns `reason: "timeout"`. Use `vi.hoisted()` for the `mockSpawn`, `PassThrough` streams in the `fakeChild`, `vi.useFakeTimers()` for the timeout test. Import with relative path `../server/pdf-linearize` (not `@/` alias).
-- [ ] **1.2** Run tests — all 5 FAIL with "Cannot find module `../server/pdf-linearize`". Record RED snapshot.
-- [ ] **1.3** Implement `apps/web-platform/server/pdf-linearize.ts` per plan Task 1.2 code block. Key invariants: `let timer` declared before `settle` closure, inline env allowlist (no helper function), no `opts` parameter (module-level `TIMEOUT_MS = 10_000`), `stdout_closed` NOT in the reason union, no logger import (keeps module pure).
-- [ ] **1.4** Run tests — all 5 PASS. Record GREEN snapshot.
-- [ ] **1.5** Run typecheck: `cd apps/web-platform && npm run typecheck` (or `npx tsc --noEmit` if no typecheck script). Must pass.
-- [ ] **1.6** Verify no env spread: `grep -n '\.\.\.process\.env' apps/web-platform/server/pdf-linearize.ts` returns empty.
+- [x] **1.1** Write failing tests at `apps/web-platform/test/pdf-linearize.test.ts` covering: (a) exit 0 + stdout returns `{ ok: true, buffer }`, (b) non-zero exit returns `{ ok: false, reason: "non_zero_exit", detail: <stderr> }`, (c) OS-killed (`code=null, signal=SIGKILL`) returns `non_zero_exit` with signal in detail, (d) spawn error (ENOENT) returns `{ ok: false, reason: "spawn_error" }`, (e) subprocess never closes → timeout fires, child is SIGKILLed, returns `reason: "timeout"`. Use `vi.hoisted()` for the `mockSpawn`, `PassThrough` streams in the `fakeChild`, `vi.useFakeTimers()` for the timeout test. Import with relative path `../server/pdf-linearize` (not `@/` alias).
+- [x] **1.2** Run tests — all 5 FAIL with "Cannot find module `../server/pdf-linearize`". Record RED snapshot.
+- [x] **1.3** Implement `apps/web-platform/server/pdf-linearize.ts` per plan Task 1.2 code block. Key invariants: `let timer` declared before `settle` closure, inline env allowlist (no helper function), no `opts` parameter (module-level `TIMEOUT_MS = 10_000`), `stdout_closed` NOT in the reason union, no logger import (keeps module pure).
+- [x] **1.4** Run tests — all 5 PASS. Record GREEN snapshot.
+- [x] **1.5** Run typecheck: `cd apps/web-platform && npm run typecheck` (or `npx tsc --noEmit` if no typecheck script). Must pass.
+- [x] **1.6** Verify no env spread: `grep -n '\.\.\.process\.env' apps/web-platform/server/pdf-linearize.ts` returns empty.
 
 ## Phase 2 — Dockerfile runner stage (with preflight)
 
