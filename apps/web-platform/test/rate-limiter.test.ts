@@ -1,8 +1,11 @@
 import { describe, test, expect, vi, beforeEach, afterEach } from "vitest";
+import { readFileSync } from "fs";
+import { join } from "path";
 import {
   SlidingWindowCounter,
   PendingConnectionTracker,
   extractClientIp,
+  startPruneInterval,
 } from "../server/rate-limiter";
 import type { IncomingMessage } from "http";
 import type { Socket } from "net";
@@ -237,5 +240,83 @@ describe("extractClientIp", () => {
       "x-forwarded-for": "5.6.7.8",
     });
     expect(extractClientIp(req)).toBe("1.2.3.4");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// startPruneInterval — shared helper for periodic prune wiring
+// ---------------------------------------------------------------------------
+
+describe("startPruneInterval", () => {
+  test("returns a Node Timeout handle that exposes .unref()", () => {
+    const counter = new SlidingWindowCounter({
+      windowMs: 60_000,
+      maxRequests: 1,
+    });
+    const handle = startPruneInterval(counter);
+    try {
+      expect(typeof handle.unref).toBe("function");
+    } finally {
+      clearInterval(handle);
+    }
+  });
+
+  test("invokes counter.prune() on each tick at the default 60s cadence", async () => {
+    vi.useFakeTimers();
+    try {
+      const counter = new SlidingWindowCounter({
+        windowMs: 60_000,
+        maxRequests: 1,
+      });
+      const spy = vi.spyOn(counter, "prune");
+      const handle = startPruneInterval(counter);
+      try {
+        await vi.advanceTimersByTimeAsync(60_000);
+        expect(spy).toHaveBeenCalledTimes(1);
+        await vi.advanceTimersByTimeAsync(60_000);
+        expect(spy).toHaveBeenCalledTimes(2);
+      } finally {
+        clearInterval(handle);
+      }
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test("accepts a custom interval", async () => {
+    vi.useFakeTimers();
+    try {
+      const counter = new SlidingWindowCounter({
+        windowMs: 60_000,
+        maxRequests: 1,
+      });
+      const spy = vi.spyOn(counter, "prune");
+      const handle = startPruneInterval(counter, 5_000);
+      try {
+        await vi.advanceTimersByTimeAsync(4_999);
+        expect(spy).toHaveBeenCalledTimes(0);
+        await vi.advanceTimersByTimeAsync(1);
+        expect(spy).toHaveBeenCalledTimes(1);
+        await vi.advanceTimersByTimeAsync(5_000);
+        expect(spy).toHaveBeenCalledTimes(2);
+      } finally {
+        clearInterval(handle);
+      }
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test("helper body installs setInterval + prune + unref (Layer-2 invariant)", () => {
+    // Negative-space guard per learning 2026-04-15-negative-space-tests-must-
+    // follow-extracted-logic: a silent regression that removes .unref() from
+    // the helper must fail a test.
+    const source = readFileSync(
+      join(__dirname, "..", "server", "rate-limiter.ts"),
+      "utf-8",
+    );
+    expect(source).toMatch(
+      /export function startPruneInterval[\s\S]*setInterval\([\s\S]*\.prune\(\)[\s\S]*\.unref\(\)/,
+    );
   });
 });
