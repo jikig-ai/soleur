@@ -365,7 +365,7 @@ describe("POST /api/analytics/track", () => {
     const [ctx] = logWarn.mock.calls[0];
     expect(typeof ctx.err).toBe("string");
     expect(ctx.err).not.toMatch(/[\x00-\x1f]/);
-    expect(ctx.goal).toBe("kb.opendLINE2");
+    expect(ctx.goal).toBe("kb.openedLINE2");
     expect(ctx.err).toContain("network downINJECTED");
   });
 });

@@ -1,29 +1,25 @@
 import { NextResponse } from "next/server";
 import { createChildLogger } from "@/server/logger";
 import { validateOrigin, rejectCsrf } from "@/lib/auth/validate-origin";
+import { extractClientIpFromHeaders } from "@/server/rate-limiter";
 import { analyticsTrackThrottle } from "./throttle";
+import { sanitizeProps, sanitizeForLog } from "./sanitize";
 
 // Phase 5.2: same-origin-checked, per-IP rate-limited analytics forwarder.
 //
 // The Plausible Events API has no PII requirement, so this route does NOT
 // require a session cookie — that would over-constrain it for future anon
 // surfaces (landing page, share pages). Auth = Origin allow-list + per-IP
-// rate cap. We strip any `user_id`/`userId` from forwarded props so a stable
-// identifier never reaches a third-party tool without a documented salt
-// rotation strategy (see plan 5.2 + learning 2026-03-30-plausible-http-402).
+// rate cap.
+//
+// Forwarded props are allowlisted (see ./sanitize.ts) so new PII-like keys
+// cannot leak to a third party without an explicit code review.
 //
 // Non-HTTP-method exports are forbidden in Next.js 15 App Router route files.
-// The throttle + test reset helper live in ./throttle.ts.
+// The throttle + prune interval live in ./throttle.ts; sanitization helpers
+// live in ./sanitize.ts (see cq-nextjs-route-files-http-only-exports).
 
 const log = createChildLogger("analytics-track");
-
-function clientIp(req: Request): string {
-  const xff = req.headers.get("x-forwarded-for");
-  if (xff) return xff.split(",")[0]!.trim();
-  const real = req.headers.get("x-real-ip");
-  if (real) return real;
-  return "unknown";
-}
 
 interface TrackBody {
   goal: string;
@@ -36,16 +32,6 @@ function isTrackBody(v: unknown): v is TrackBody {
   return typeof g === "string" && g.length > 0 && g.length <= 120;
 }
 
-function stripUserIds(props: Record<string, unknown> | undefined): Record<string, unknown> {
-  if (!props) return {};
-  const clean: Record<string, unknown> = {};
-  for (const [k, v] of Object.entries(props)) {
-    if (k === "user_id" || k === "userId") continue;
-    clean[k] = v;
-  }
-  return clean;
-}
-
 export async function POST(req: Request): Promise<Response> {
   const { valid, origin } = validateOrigin(req);
   // This route is explicitly browser-only, so also reject missing Origin —
@@ -56,7 +42,10 @@ export async function POST(req: Request): Promise<Response> {
     return rejectCsrf("/api/analytics/track", origin);
   }
 
-  const ip = clientIp(req);
+  // Trust cf-connecting-ip first; XFF is spoofable when traffic bypasses
+  // Cloudflare (direct-to-origin). See server/rate-limiter.ts:180 and
+  // learning websocket-rate-limiting-xff-trust-20260329.md.
+  const ip = extractClientIpFromHeaders(req.headers);
   if (!analyticsTrackThrottle.isAllowed(ip)) {
     return NextResponse.json(
       { error: "rate_limited" },
@@ -81,11 +70,16 @@ export async function POST(req: Request): Promise<Response> {
     return new NextResponse(null, { status: 204 });
   }
 
+  const { clean: safeProps, dropped } = sanitizeProps(parsed.props);
+  if (dropped.length > 0) {
+    log.debug({ dropped }, "analytics.track dropped non-allowlisted props");
+  }
+
   const payload = {
     name: parsed.goal,
     domain: siteId,
     url: origin ?? "",
-    props: stripUserIds(parsed.props),
+    props: safeProps,
   };
 
   try {
@@ -94,6 +88,8 @@ export async function POST(req: Request): Promise<Response> {
       headers: {
         "content-type": "application/json",
         "user-agent": req.headers.get("user-agent") ?? "soleur-analytics/1.0",
+        // Forward the trusted IP so Plausible's geo-IP lookup gets the real
+        // client. Plausible reads X-Forwarded-For specifically.
         "x-forwarded-for": ip,
       },
       body: JSON.stringify(payload),
@@ -102,7 +98,10 @@ export async function POST(req: Request): Promise<Response> {
     if (res.status === 402) {
       // Learning 2026-03-30: free plans reject custom props with 402. Treat
       // as graceful skip so the client never sees the error.
-      log.warn({ goal: parsed.goal }, "Plausible returned 402 — plan quota exhausted");
+      log.warn(
+        { goal: sanitizeForLog(parsed.goal) },
+        "Plausible returned 402 — plan quota exhausted",
+      );
       return new NextResponse(null, { status: 204 });
     }
 
@@ -119,7 +118,13 @@ export async function POST(req: Request): Promise<Response> {
       /* ignore */
     }
   } catch (err) {
-    log.warn({ err: String(err), goal: parsed.goal }, "Plausible forward failed");
+    log.warn(
+      {
+        err: sanitizeForLog(String(err)),
+        goal: sanitizeForLog(parsed.goal),
+      },
+      "Plausible forward failed",
+    );
   }
 
   return new NextResponse(null, { status: 204 });

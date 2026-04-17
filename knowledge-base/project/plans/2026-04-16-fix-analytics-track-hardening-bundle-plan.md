@@ -57,15 +57,15 @@ PR #2347 introduced `/api/analytics/track` (server-side Plausible forwarder) and
 
 ## Acceptance Criteria
 
-- [ ] `analyticsTrackThrottle` has an associated `setInterval(..., 60_000).unref()` pruner colocated in `throttle.ts`, matching the `shareEndpointThrottle` / `invoiceEndpointThrottle` pattern.
-- [ ] `route.ts` no longer defines a local `clientIp()` helper; it calls `extractClientIpFromHeaders(req.headers)` from `@/server/rate-limiter` instead.
-- [ ] `stripUserIds` is replaced by an allowlist (`sanitizeProps`) containing exactly `path`. String values are truncated at 200 chars. Unknown keys drop with a `log.debug({ dropped }, ...)` line.
-- [ ] Every `log.warn` / `log.info` that includes `goal` or `err` first passes the value through a `sanitizeForLog()` helper that strips `[\x00-\x1f]`.
-- [ ] No non-HTTP-method exports added to `route.ts` (guardrail: `cq-nextjs-route-files-http-only-exports`). Helpers live in `./throttle.ts` or a new `./sanitize.ts`. A grep check in Phase 3 confirms.
-- [ ] Test harness adds shared hoisted `logWarn` / `logInfo` / `logDebug` spies, and `makeRequest` accepts a `cfConnectingIp` option (prerequisites for T1 and T5).
-- [ ] Test file `test/api-analytics-track.test.ts` adds T1–T5 (see Test Scenarios). T2 includes a grep-based negative-space assertion that `setInterval(..., 60_000)` exists in `throttle.ts`.
-- [ ] All existing tests in `test/api-analytics-track.test.ts` still pass (including the now-redundant `"strips user_id from forwarded props"` case, which still passes under the allowlist).
-- [ ] `next build` succeeds locally (route-file validator only runs under real build — mandatory per the #2401 learning).
+- [x] `analyticsTrackThrottle` has an associated `setInterval(..., 60_000).unref()` pruner colocated in `throttle.ts`, matching the `shareEndpointThrottle` / `invoiceEndpointThrottle` pattern.
+- [x] `route.ts` no longer defines a local `clientIp()` helper; it calls `extractClientIpFromHeaders(req.headers)` from `@/server/rate-limiter` instead.
+- [x] `stripUserIds` is replaced by an allowlist (`sanitizeProps`) containing exactly `path`. String values are truncated at 200 chars. Unknown keys drop with a `log.debug({ dropped }, ...)` line.
+- [x] Every `log.warn` / `log.info` that includes `goal` or `err` first passes the value through a `sanitizeForLog()` helper that strips `[\x00-\x1f]`.
+- [x] No non-HTTP-method exports added to `route.ts` (guardrail: `cq-nextjs-route-files-http-only-exports`). Helpers live in `./throttle.ts` or a new `./sanitize.ts`. A grep check in Phase 3 confirms.
+- [x] Test harness adds shared hoisted `logWarn` / `logInfo` / `logDebug` spies, and `makeRequest` accepts a `cfConnectingIp` option (prerequisites for T1 and T5).
+- [x] Test file `test/api-analytics-track.test.ts` adds T1–T5 (see Test Scenarios). T2 includes a grep-based negative-space assertion that `setInterval(..., 60_000)` exists in `throttle.ts`.
+- [x] All existing tests in `test/api-analytics-track.test.ts` still pass (including the now-redundant `"strips user_id from forwarded props"` case, which still passes under the allowlist).
+- [x] `next build` succeeds locally (route-file validator only runs under real build — mandatory per the #2401 learning).
 
 ## Non-Goals
 
@@ -337,12 +337,12 @@ The `ALLOWED_PROP_KEYS` set and `MAX_PROP_STRING_LEN` constant remain module-pri
 
 ### Phase 3 — Verification (REFACTOR / VALIDATE)
 
-- [ ] `cd apps/web-platform && ./node_modules/.bin/vitest run test/api-analytics-track.test.ts` — all tests green.
-- [ ] `cd apps/web-platform && ./node_modules/.bin/vitest run` (full suite) — no regressions elsewhere.
-- [ ] `cd apps/web-platform && npm run build` — the Next.js 15 route-file validator passes (only the real build catches non-HTTP exports; `tsc --noEmit` and vitest do not). **Why required:** issue #2401 was a 15-min prod outage precisely because this step was skipped.
-- [ ] `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` (or equivalent `npm run typecheck`) — clean.
-- [ ] `cd apps/web-platform && npm run lint` — clean.
-- [ ] Manually re-read `route.ts` to confirm only `POST` / `GET` are exported.
+- [x] `cd apps/web-platform && ./node_modules/.bin/vitest run test/api-analytics-track.test.ts` — all tests green.
+- [x] `cd apps/web-platform && ./node_modules/.bin/vitest run` (full suite) — no regressions elsewhere.
+- [x] `cd apps/web-platform && npm run build` — the Next.js 15 route-file validator passes (only the real build catches non-HTTP exports; `tsc --noEmit` and vitest do not). **Why required:** issue #2401 was a 15-min prod outage precisely because this step was skipped.
+- [x] `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` (or equivalent `npm run typecheck`) — clean.
+- [x] `cd apps/web-platform && npm run lint` — clean.
+- [x] Manually re-read `route.ts` to confirm only `POST` / `GET` are exported.
 
 ## Test Scenarios
 

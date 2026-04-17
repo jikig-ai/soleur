@@ -16,6 +16,16 @@ export const analyticsTrackThrottle = new SlidingWindowCounter({
   maxRequests: RATE_PER_MIN,
 });
 
+// Periodic cleanup to prevent unbounded memory growth. Lazy eviction in
+// isAllowed() only reclaims keys that are re-checked, so one-hit IPs
+// accumulate in the windows Map indefinitely. Pattern matches
+// shareEndpointThrottle / invoiceEndpointThrottle in server/rate-limiter.ts.
+const pruneAnalyticsTrackInterval = setInterval(
+  () => analyticsTrackThrottle.prune(),
+  60_000,
+);
+pruneAnalyticsTrackInterval.unref();
+
 /** Test-only helper: clear the in-memory throttle between tests. */
 export function __resetAnalyticsTrackThrottleForTest(): void {
   analyticsTrackThrottle.reset();
