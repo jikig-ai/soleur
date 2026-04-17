@@ -1,6 +1,6 @@
 ---
 name: social-distribute
-description: "This skill should be used when distributing a blog article across social platforms. It generates platform-specific content variants for Discord, X/Twitter, IndieHackers, Reddit, Hacker News, LinkedIn Personal, and LinkedIn Company Page, and writes a persistent content file for automated publishing."
+description: "This skill should be used when distributing a blog article across social platforms (Discord, X/Twitter, IndieHackers, Reddit, Hacker News, LinkedIn). Writes a persistent content file for automated publishing."
 ---
 
 # Social Distribute

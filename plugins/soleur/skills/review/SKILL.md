@@ -297,14 +297,25 @@ equally.
 Filing a GitHub issue instead of fixing is allowed ONLY when the finding meets
 one of these four scope-out criteria:
 
-  1. **cross-cutting-refactor** — fix requires touching files materially
-     unrelated to the PR's core change.
-  2. **contested-design** — multiple valid fix approaches; choice requires design
-     input that doesn't belong in this PR's scope.
+  1. **cross-cutting-refactor** — fix requires touching **≥3 files** that are
+     **materially unrelated to this PR's core change**, where **core change =
+     files named in the PR's linked issue, OR files in the same top-level
+     directory (e.g., `apps/web-platform/`, `plugins/soleur/`) as the primary
+     changed file**. Bare multi-file fixes do NOT qualify; the unrelatedness
+     must be concrete and defensible — count specific files or drop the
+     scope-out.
+  2. **contested-design** — multiple valid fix approaches AND the review
+     **agent** (not the PR author) independently names ≥2 concrete approaches
+     that trade off differently on durability, cost, or complexity AND
+     recommends a design cycle outside this PR. Author-initiated
+     contested-design claims ("I don't feel like implementing approach X
+     here") do NOT qualify; the agent must independently surface the tradeoff.
   3. **architectural-pivot** — fix would change a pattern used across the
      codebase and deserves its own planning cycle.
   4. **pre-existing-unrelated** — finding existed on `main` before this PR and
-     is not exacerbated by the PR's changes. (Does NOT block merge.)
+     is not exacerbated by the PR's changes. (Does NOT block merge.) **Only
+     reachable through the `pre-existing` branch of the provenance triage in
+     Step 1 below — never applies to `pr-introduced` findings.**
 
 When filing:
 
@@ -320,6 +331,23 @@ When filing:
 Everything else (magic numbers, duplicated helpers, small refactors, missing
 tests for PR-introduced code, polish, naming, a11y on PR-introduced surfaces,
 performance issues introduced by the PR) MUST be fixed inline.
+
+**Second-reviewer confirmation gate:** Before creating a scope-out issue under
+any criterion, invoke `code-simplicity-reviewer` via Task with the finding,
+proposed fix, named scope-out criterion, and 1-3-sentence rationale. Prompt:
+"This finding is being filed as a deferred-scope-out under criterion <name>.
+Rationale: <text>. Do you concur that filing (rather than fixing inline) is the
+right disposition? If you disagree, explain why it should be fixed inline
+instead." The second reviewer must default to rejecting the filing — only
+co-sign when the criterion is concretely and obviously correct. If
+`code-simplicity-reviewer` disagrees, the disposition flips to fix-inline — do
+not file the issue.
+
+**Rationale:** One agent's "scope-out is fine here" can be wrong in the same
+way a single test can miss a bug. Requiring a second, simplicity-biased agent
+to co-sign blocks the most common regression pattern: an agent-author pair
+rationalizing a filing that a fresh pair of eyes would reject. See
+`knowledge-base/project/learnings/2026-04-15-multi-agent-review-catches-bugs-tests-miss.md`.
 
 Filing without scope-out justification will be caught by /ship Phase 5.5 Review-
 Findings Exit Gate and BLOCK merge. See rule rf-review-finding-default-fix-inline.
@@ -339,6 +367,37 @@ Remove duplicates, prioritize by severity and impact.
 - [ ] Assign severity levels: CRITICAL (P1), IMPORTANT (P2), NICE-TO-HAVE (P3)
 - [ ] Remove duplicate or overlapping findings
 - [ ] Estimate effort for each finding (Small/Medium/Large)
+- [ ] Tag each finding with **provenance**: `pr-introduced` or `pre-existing`.
+      A finding is **pr-introduced** if the code the finding critiques was added
+      or modified by this PR's diff (verify with `git log -L :<function>:<file>
+      origin/main..HEAD` or `git diff origin/main...HEAD -- <file>`). A finding
+      is **pre-existing** if the code existed on `main` before this PR and the
+      PR neither changed nor moved it. Provenance-ambiguous findings (e.g., a
+      helper the PR refactored but didn't introduce) default to
+      **pr-introduced** — the PR touched it, the PR owns the fix.
+
+**Disposition by provenance:**
+
+- **pr-introduced:** MUST be fixed inline. No scope-out allowed regardless of
+  criterion — the PR introduced the concern, the PR resolves it. If a fix is
+  genuinely too large, reduce the PR (split or revert the offending commit)
+  rather than filing a scope-out.
+- **pre-existing:** Triage into exactly one of three buckets:
+    1. **Fix inline** — small, load-bearing, cheap to include. Default for
+       sub-20-line fixes on files the PR already touches.
+    2. **File as scope-out** — legitimately needs its own cycle. MUST carry
+       the `pre-existing-unrelated` criterion AND a re-evaluation deadline
+       (a target phase milestone such as `Phase 4`, or a concrete trigger
+       condition such as "revisit when syncWorkspace lands in #2244").
+       Open-ended scope-outs with no deadline are NOT permitted — they become
+       the backlog this rule exists to drain.
+    3. **Close as wontfix** — polish-only, low-value noise, or concern already
+       covered by existing code. Close immediately (do not file) with a
+       1-sentence rationale in the summary report.
+
+The `pr-introduced → fix inline` rule is the mechanical version of rule
+`rf-review-finding-default-fix-inline`: it removes the judgment loophole ("is
+this really cross-cutting?") for findings the PR itself introduced.
 
 </synthesis_tasks>
 
@@ -365,6 +424,8 @@ After creating all GitHub issues, present comprehensive summary:
 - **P1 CRITICAL:** [count] - BLOCKS MERGE
 - **P2 IMPORTANT:** [count] - Should Fix
 - **P3 NICE-TO-HAVE:** [count] - Enhancements
+- **By provenance:** [pr-introduced count] pr-introduced, [pre-existing count] pre-existing
+- **Pre-existing disposition:** [fix-inline count] fixed, [scope-out count] scoped-out, [wontfix count] wontfix
 
 ### Fixed Inline
 
