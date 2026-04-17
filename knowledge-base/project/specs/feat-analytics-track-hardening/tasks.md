@@ -8,13 +8,15 @@
 
 ## Phase 1 — Tests First (RED)
 
-- [ ] 1.1 Extend `apps/web-platform/test/api-analytics-track.test.ts` mock of `createChildLogger` to expose shared spies (so T5 can assert on `log.warn` calls)
-- [ ] 1.2 Add test T1: `prefers cf-connecting-ip over x-forwarded-for for rate-limit keying` (sets `ANALYTICS_TRACK_RATE_PER_MIN=3`, rotates XFF, asserts 429 on request 4+)
-- [ ] 1.3 Add test T2: `throttle pruner removes idle keys` (direct `.prune()` call with fake timers; asserts `.size` transitions 0→1→0)
-- [ ] 1.4 Add test T3: `strips non-allowlisted prop keys (email, sessionId, fingerprint, deviceId, ip, user_id, userId)` (asserts forwarded `payload.props === { path: "x" }`)
-- [ ] 1.5 Add test T4: `truncates prop string values at 200 chars` (asserts `payload.props.path.length === 200` when input is 500 chars)
-- [ ] 1.6 Add test T5: `strips control characters from goal before logging` (covers both 402 branch and fetch-rejection branch; asserts `log.warn` goal has no `\n`)
-- [ ] 1.7 Run `cd apps/web-platform && ./node_modules/.bin/vitest run test/api-analytics-track.test.ts` — confirm T1–T5 fail (RED)
+- [ ] 1.1a **Harness prep:** replace `vi.mock("@/server/logger", ...)` with hoisted shared spies (`logWarn`, `logInfo`, `logDebug`). Reset them in `beforeEach`. (Required for T5 — without this, fresh spies per call make assertions impossible.)
+- [ ] 1.1b **Harness prep:** extend `makeRequest` helper with optional `cfConnectingIp` parameter that sets the `cf-connecting-ip` header. (Required for T1.)
+- [ ] 1.2 Add test T1: `prefers cf-connecting-ip over x-forwarded-for for rate-limit keying` (sets `ANALYTICS_TRACK_RATE_PER_MIN=3` via existing beforeEach, rotates `forwardedFor` across 4 requests with stable `cfConnectingIp: "7.7.7.7"`, asserts request 4 returns 429)
+- [ ] 1.3 Add test T2: `throttle pruner removes idle keys after window` (calls `__resetAnalyticsTrackThrottleForTest`, seeds 2 keys, uses `vi.useFakeTimers({ now: Date.now() })` + `vi.advanceTimersByTime(61_000)`, calls `.prune()` directly, asserts `.size === 0`; also asserts grep of `throttle.ts` contains `setInterval(...analyticsTrackThrottle.prune...)` as negative-space guard)
+- [ ] 1.4 Add test T3: `strips non-allowlisted prop keys (email, sessionId, session_id, fingerprint, deviceId, device_id, ip, user_id, userId)` (asserts forwarded `payload.props` deep-equals `{ path: "x" }`)
+- [ ] 1.5 Add test T4: `truncates prop string values at 200 chars` (500-char path input → asserts `payload.props.path.length === 200`)
+- [ ] 1.6a Add test T5a: `strips control characters from goal before logging (402 branch)` — mocks fetch with 402, body goal `"kb.chat.opened\n[FAKE] fake-event"`, asserts `logWarn.toHaveBeenCalledWith({ goal: "kb.chat.opened[FAKE] fake-event" }, expect.any(String))`
+- [ ] 1.6b Add test T5b: `strips control characters from goal and err before logging (catch branch)` — mocks fetch rejection with `"network down\nINJECTED"`, body goal `"kb.opened\r\nLINE2"`, asserts neither value in `logWarn` call contains control chars
+- [ ] 1.7 Run `cd apps/web-platform && ./node_modules/.bin/vitest run test/api-analytics-track.test.ts` — confirm T1, T3, T4, T5a, T5b fail (RED); T2 passes trivially (regression guard)
 - [ ] 1.8 Commit: `test(analytics): add failing cases for track hardening bundle (#2383)`
 
 ## Phase 2 — Implementation (GREEN)
@@ -60,7 +62,7 @@
 
 ### 2.5 Route-file export audit
 
-- [ ] 2.5.1 Confirm `route.ts` exports only `POST` and `GET` (no helpers, no singletons) — guardrail `cq-nextjs-route-files-http-only-exports`
+- [ ] 2.5.1 Run `cd apps/web-platform && grep -nE "^export " app/api/analytics/track/route.ts` — expected output is exactly two lines: `export async function POST` and `export async function GET`. Any other line blocks the commit (guardrail `cq-nextjs-route-files-http-only-exports`)
 
 ### 2.6 Commit
 

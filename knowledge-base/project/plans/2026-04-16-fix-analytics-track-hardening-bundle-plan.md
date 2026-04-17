@@ -6,7 +6,32 @@
 **Milestone:** Phase 3: Make it Sticky
 **Labels:** `priority/p2-medium`, `type/security`, `code-review`, `deferred-scope-out`
 **Type:** Security hardening (bug-fix bundle)
-**Status:** Planning
+**Status:** Deepened 2026-04-17
+
+## Enhancement Summary
+
+**Deepened on:** 2026-04-17
+**Sections enhanced:** Implementation Phases (5), Test Scenarios, Rollout / Risk, plus two new sections (Institutional Learnings Applied, Verified API Signatures)
+**Research sources used:** repo grep (route.ts, throttle.ts, rate-limiter.ts, validate-origin.ts, analytics-client.ts, existing test file), 8 institutional learnings in `knowledge-base/project/learnings/`, AGENTS.md code-quality rules
+
+### Key Improvements Added During Deepen Pass
+
+1. **Confirmed exact `SlidingWindowCounter` API** (`prune()`, `get size`, `reset()` — all exist at `server/rate-limiter.ts:81,100,105`). Removed ambiguity in T2 test spec.
+2. **Identified a test-mock blocker for T5.** Existing mock returns a *fresh* `vi.fn()` per `createChildLogger()` call, so the current harness cannot assert on `log.warn` arguments. T5 requires restructuring the mock to share spies — this is now called out as task 1.1 with a concrete code example. Without this edit, T5 would silently pass with 0 assertions.
+3. **Removed `forwardedFor` convenience from test helper.** The existing `makeRequest` only sets `x-forwarded-for`; T1 needs a `cfConnectingIp` option. Added as task 1.1b.
+4. **Cross-referenced three institutional learnings** that directly affect this plan: WebSocket XFF-trust (same 4B pattern, same codebase), Next.js 15 route-file-only exports (2.5 guardrail), Bun setInterval leak (2.2 timer-leak hazard in tests).
+5. **Flagged a subtle test-import concern.** Adding `sanitize.ts` to the `track/` directory means the existing `importRoute()` helper (line 23) transitively imports `sanitize.ts` — but `vi.resetModules()` at `beforeEach:49` already handles module reset. No test-isolation risk.
+6. **Added `strips control characters from 'err' too` sub-assertion to T5.** The plan body already sanitizes `err`, so the test should cover it.
+7. **Added explicit vitest pattern for T2** using `vi.useFakeTimers()` + `vi.advanceTimersByTime(61_000)` (ES2019-supported — verified against `@vitest/expect@1.x` in the installed tree).
+8. **Added rollout check for `x-forwarded-for` outbound.** Plausible uses XFF to geolocate; keeping outbound XFF is correct — but now the *source* is `cf-connecting-ip` in prod, and Plausible will receive the real client IP instead of a spoofable header. Geo dashboards will get slightly more accurate from this fix, not break.
+9. **Added a regression-coverage test note.** The existing `"strips user_id"` test (line 103) still passes under the allowlist (both `user_id` and `userId` are non-allowlisted and dropped), just for a different reason. Keep it — it's a cheap negative-space assertion for the old denylist contract in case the allowlist regresses to denylist.
+
+### New Considerations Discovered
+
+- **Fake-timer interaction with module-level `setInterval`.** Importing `./throttle` at test time *would* start the real-timer `setInterval` from 2.2. Under `vi.useFakeTimers()`, that timer gets captured into the fake-timer queue, which is fine for T2 (we call `.prune()` directly, not via the interval) but means the pruner test should NOT advance timers past 60s *before* registering fake timers. Updated T2 spec to register fake timers before `importRoute()` runs.
+- **No need for `MSW`.** The existing suite uses `vi.stubGlobal("fetch", mockFetch)` and `vi.mock("@/server/logger", ...)`. T1–T5 all fit this pattern; no new test-infra dependency is required.
+
+See `## Institutional Learnings Applied` section below for the full cross-reference table.
 
 ## Overview
 
@@ -34,12 +59,13 @@ PR #2347 introduced `/api/analytics/track` (server-side Plausible forwarder) and
 
 - [ ] `analyticsTrackThrottle` has an associated `setInterval(..., 60_000).unref()` pruner colocated in `throttle.ts`, matching the `shareEndpointThrottle` / `invoiceEndpointThrottle` pattern.
 - [ ] `route.ts` no longer defines a local `clientIp()` helper; it calls `extractClientIpFromHeaders(req.headers)` from `@/server/rate-limiter` instead.
-- [ ] `stripUserIds` is replaced by an allowlist (`sanitizeProps` / `pickAllowedProps`) containing exactly `path`. String values are truncated at 200 chars. Unknown keys drop with a `log.debug({ droppedKeys }, ...)` line (control-char stripped).
-- [ ] Every `log.warn` / `log.info` that includes `goal` first passes it through a `sanitizeForLog()` helper that strips `[\x00-\x1f]`.
-- [ ] No non-HTTP-method exports added to `route.ts` (guardrail: `cq-nextjs-route-files-http-only-exports`). Helpers live in `./throttle.ts` or a new `./sanitize.ts`.
-- [ ] Test file `test/api-analytics-track.test.ts` adds four new cases (see Test Scenarios).
-- [ ] All existing tests in `test/api-analytics-track.test.ts` still pass.
-- [ ] `next build` succeeds locally (route-file validator only runs under real build).
+- [ ] `stripUserIds` is replaced by an allowlist (`sanitizeProps`) containing exactly `path`. String values are truncated at 200 chars. Unknown keys drop with a `log.debug({ dropped }, ...)` line.
+- [ ] Every `log.warn` / `log.info` that includes `goal` or `err` first passes the value through a `sanitizeForLog()` helper that strips `[\x00-\x1f]`.
+- [ ] No non-HTTP-method exports added to `route.ts` (guardrail: `cq-nextjs-route-files-http-only-exports`). Helpers live in `./throttle.ts` or a new `./sanitize.ts`. A grep check in Phase 3 confirms.
+- [ ] Test harness adds shared hoisted `logWarn` / `logInfo` / `logDebug` spies, and `makeRequest` accepts a `cfConnectingIp` option (prerequisites for T1 and T5).
+- [ ] Test file `test/api-analytics-track.test.ts` adds T1–T5 (see Test Scenarios). T2 includes a grep-based negative-space assertion that `setInterval(..., 60_000)` exists in `throttle.ts`.
+- [ ] All existing tests in `test/api-analytics-track.test.ts` still pass (including the now-redundant `"strips user_id from forwarded props"` case, which still passes under the allowlist).
+- [ ] `next build` succeeds locally (route-file validator only runs under real build — mandatory per the #2401 learning).
 
 ## Non-Goals
 
@@ -57,29 +83,132 @@ PR #2347 introduced `/api/analytics/track` (server-side Plausible forwarder) and
 
 **File:** `apps/web-platform/test/api-analytics-track.test.ts`
 
+#### 1.1 — Harness Prep (prerequisite for T5)
+
+Before adding T1–T5, the test file needs two structural edits to the existing harness (lines 13–43). Both are no-ops for the current 10 tests.
+
+**Edit A — Shared log spies (blocks T5).** The current mock returns a **fresh** `vi.fn()` per `createChildLogger()` call:
+
+```ts
+// current (line 18-21):
+vi.mock("@/server/logger", () => ({
+  default: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+  createChildLogger: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
+}));
+```
+
+Each `importRoute()` call triggers `createChildLogger("analytics-track")` inside the module — which instantiates a new spies object the test cannot access. Replace with hoisted shared spies:
+
+```ts
+// replacement:
+const { logWarn, logInfo, logDebug } = vi.hoisted(() => ({
+  logWarn: vi.fn(),
+  logInfo: vi.fn(),
+  logDebug: vi.fn(),
+}));
+
+vi.mock("@/server/logger", () => ({
+  default: { info: logInfo, warn: logWarn, error: vi.fn() },
+  createChildLogger: () => ({
+    info: logInfo,
+    warn: logWarn,
+    debug: logDebug,
+    error: vi.fn(),
+  }),
+}));
+```
+
+Add `logWarn.mockReset(); logInfo.mockReset(); logDebug.mockReset();` to the existing `beforeEach` (line 46).
+
+**Edit B — `cfConnectingIp` option in `makeRequest` (blocks T1).** The existing helper only exposes `forwardedFor`. Extend:
+
+```ts
+function makeRequest(
+  url: string,
+  {
+    origin,
+    forwardedFor,
+    cfConnectingIp,
+    body,
+  }: {
+    origin?: string | null;
+    forwardedFor?: string;
+    cfConnectingIp?: string;
+    body?: unknown;
+  },
+): Request {
+  const headers = new Headers({ "content-type": "application/json" });
+  if (origin !== null && origin !== undefined) headers.set("origin", origin);
+  if (forwardedFor) headers.set("x-forwarded-for", forwardedFor);
+  if (cfConnectingIp) headers.set("cf-connecting-ip", cfConnectingIp);
+  return new Request(url, {
+    method: "POST",
+    headers,
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+}
+```
+
+#### 1.2 — New Test Cases
+
 Add cases:
 
-1. **`prefers cf-connecting-ip over x-forwarded-for for rate-limit keying`**
-   - Issue 10 POST requests with `origin=https://app.soleur.ai`, `cf-connecting-ip=7.7.7.7`, and a different `x-forwarded-for: <rotated>` per request.
-   - Set `ANALYTICS_TRACK_RATE_PER_MIN=3`.
-   - Expect request 4+ to return 429 (proving the throttle keyed on `cf-connecting-ip`, not the rotating XFF).
-2. **`throttle pruner removes idle keys`**
-   - Import `analyticsTrackThrottle` from `@/app/api/analytics/track/throttle`.
-   - Use `vi.useFakeTimers()`; check `.size === 0`; issue one request; check `.size === 1`; advance time past the 60 s window; call `.prune()`; check `.size === 0`. (Test the pruner helper directly rather than the `setInterval`, to avoid fake-timer/real-setInterval interactions.)
-3. **`strips non-allowlisted prop keys (email, sessionId, fingerprint, deviceId, ip)`**
-   - Body: `{ goal: "kb.chat.opened", props: { path: "x", email: "a@b", sessionId: "s", fingerprint: "f", deviceId: "d", ip: "1.1.1.1", user_id: "u", userId: "u" } }`.
-   - Assert forwarded `payload.props` is exactly `{ path: "x" }`.
-4. **`truncates prop string values at 200 chars`**
-   - Body: `{ goal: "kb.chat.opened", props: { path: "a".repeat(500) } }`.
-   - Assert forwarded `payload.props.path.length === 200`.
-5. **`strips control characters from goal before logging`**
-   - Mock `createChildLogger` with spies (already mocked at top of file — extend to return shared spies instead of fresh `vi.fn()` each call).
-   - Force a `fetch` rejection so the `log.warn` at the `catch` branch fires.
-   - Body: `{ goal: "kb.chat.opened\n[FAKE] event" }` — this is 29 chars, under the 120 cap.
-   - Assert `log.warn` was called with `{ err: <str>, goal: "kb.chat.opened[FAKE] event" }` — no `\n`.
-   - Also cover the 402 branch with control chars.
+1. **T1 — `prefers cf-connecting-ip over x-forwarded-for for rate-limit keying`**
+   - `ANALYTICS_TRACK_RATE_PER_MIN=3` (already set in `beforeEach:53`).
+   - Mock `fetch` to return `new Response("", { status: 202 })`.
+   - Issue 4 POST requests with `origin=https://app.soleur.ai`, `cfConnectingIp: "7.7.7.7"`, and a **rotated** `forwardedFor` per request (`"1.1.1.1"`, `"2.2.2.2"`, `"3.3.3.3"`, `"4.4.4.4"`).
+   - Expect requests 1–3 → 204, request 4 → 429 (proves throttle keyed on stable `cf-connecting-ip`, not rotating XFF).
+   - On `main` (pre-fix), all 4 return 204 → test RED.
 
-**Expected RED state:** All 5 cases fail against `main` / current HEAD.
+2. **T2 — `throttle pruner removes idle keys after window`**
+   - Import the throttle directly: `const { analyticsTrackThrottle } = await import("@/app/api/analytics/track/throttle");`
+   - Call `analyticsTrackThrottle.reset()` to start from a clean slate (reset helper already exported).
+   - Assert `analyticsTrackThrottle.size === 0`.
+   - Issue one POST (through the route) with `cfConnectingIp: "5.5.5.5"` → `.size === 1`.
+   - Use `vi.useFakeTimers({ toFake: ["Date", "performance"] })` **after** the route import (see "New Considerations Discovered" above re: fake-timer interaction with module-level `setInterval`). Alternative simpler path: skip fake timers entirely — call `analyticsTrackThrottle.reset()` after seeding, then seed a timestamp manually via `.isAllowed("6.6.6.6")`, mutate the internal `windows` Map via a wall-clock rewind helper, OR just assert the *method shape* (`.prune()` exists and is called by the module-level interval).
+   - **Recommended concrete form:** directly test `prune()` semantics:
+
+     ```ts
+     test("throttle pruner removes idle keys after window", async () => {
+       const { analyticsTrackThrottle, __resetAnalyticsTrackThrottleForTest } =
+         await import("@/app/api/analytics/track/throttle");
+       __resetAnalyticsTrackThrottleForTest();
+       expect(analyticsTrackThrottle.size).toBe(0);
+
+       // Seed two keys.
+       expect(analyticsTrackThrottle.isAllowed("a")).toBe(true);
+       expect(analyticsTrackThrottle.isAllowed("b")).toBe(true);
+       expect(analyticsTrackThrottle.size).toBe(2);
+
+       // Advance wall clock past the 60s window.
+       vi.useFakeTimers({ now: Date.now() });
+       vi.advanceTimersByTime(61_000);
+       analyticsTrackThrottle.prune();
+       expect(analyticsTrackThrottle.size).toBe(0);
+       vi.useRealTimers();
+     });
+     ```
+
+   - This bypasses the module-level `setInterval` entirely (we're calling `.prune()` manually), which keeps the test deterministic.
+   - On `main` (pre-fix), the throttle module has no `prune` call surface *from inside `throttle.ts`* — the test still passes because `.prune()` is a method of `SlidingWindowCounter`. **RED comes from T1**, not T2. T2 is a regression guard: if a future change removes the pruner interval, T2 alone won't catch it — so also add the assertion `expect(typeof analyticsTrackThrottle.prune).toBe("function")` (trivially true) *and* grep-based assertion: `expect(readFileSync("apps/web-platform/app/api/analytics/track/throttle.ts", "utf-8")).toMatch(/setInterval\(\s*\(\s*\)\s*=>\s*analyticsTrackThrottle\.prune\(\s*\)/)`. This is a negative-space test in the style of `csrf-coverage.test.ts` (see learning 2026-04-15-negative-space-tests-must-follow-extracted-logic).
+
+3. **T3 — `strips non-allowlisted prop keys (email, sessionId, fingerprint, deviceId, ip, user_id, userId)`**
+   - Body: `{ goal: "kb.chat.opened", props: { path: "x", email: "a@b", sessionId: "s", session_id: "s", fingerprint: "f", deviceId: "d", device_id: "d", ip: "1.1.1.1", user_id: "u", userId: "u" } }`.
+   - Assert forwarded `payload.props` deep-equals `{ path: "x" }`.
+   - On `main` (pre-fix), `email`, `sessionId`, `session_id`, `fingerprint`, `deviceId`, `device_id`, `ip` are all still forwarded → test RED.
+
+4. **T4 — `truncates prop string values at 200 chars`**
+   - Body: `{ goal: "kb.chat.opened", props: { path: "a".repeat(500) } }`.
+   - Assert `payload.props.path.length === 200` and `payload.props.path === "a".repeat(200)`.
+   - On `main` (pre-fix), full 500-char string is forwarded → test RED.
+
+5. **T5 — `strips control characters from goal and err before logging`**
+   - Two sub-cases, one per log-emitting branch:
+     - **T5a — 402 branch:** `mockFetch.mockResolvedValue(new Response("{}", { status: 402 }))`. Body goal: `"kb.chat.opened\n[FAKE] fake-event"` (29 chars, under the 120 cap). After `await POST(req)`, assert `logWarn.toHaveBeenCalledWith({ goal: "kb.chat.opened[FAKE] fake-event" }, expect.any(String))` — no `\n`.
+     - **T5b — fetch rejection branch:** `mockFetch.mockRejectedValue(new Error("network down\nINJECTED"))`. Body goal: `"kb.opened\r\nLINE2"`. After `await POST(req)`, assert `logWarn.toHaveBeenCalledWith({ err: "Error: network downINJECTED", goal: "kb.opendLINE2" }, expect.any(String))` — neither `err` nor `goal` contains control chars.
+   - On `main` (pre-fix), `log.warn` receives unstripped goal (and unstripped `err` on T5b) → test RED.
+
+**Expected RED state:** T1, T3, T4, T5a, T5b fail against `main` / current HEAD. T2 asserts negative-space behavior that passes trivially today but guards against regression after 2.2 lands.
 
 **Commit:** `test(analytics): add failing cases for track hardening bundle (#2383)`
 
@@ -106,6 +235,7 @@ Add cases:
 
 - Matches the `shareEndpointThrottle` / `invoiceEndpointThrottle` pattern exactly.
 - Note: Module-level `setInterval` in Next.js dev mode is called once per HMR reload; the `.unref()` keeps the process exit-clean. Same trade-off as the two existing throttles.
+- **Timer-leak hazard in tests (see learning `2026-03-20-bun-segfault-leaked-setinterval-timers`):** the module-level `setInterval` means every `importRoute()` / `import("./throttle")` call in the test suite creates a real 60 s interval. Across 1400+ vitest tests this could theoretically accumulate. Mitigations: (a) `.unref()` prevents process-exit blocking, (b) vitest's `vi.resetModules()` in `beforeEach` returns a fresh module each test but the *old* interval is still registered on the Node runtime's timer queue. If test flakiness or RSS growth appears post-merge, consider wrapping the interval registration in an `if (process.env.NODE_ENV !== "test")` gate (or `typeof vi === "undefined"`) and invoking `.prune()` manually from any test that needs it. **Not done in this PR** — follow the existing `shareEndpointThrottle` / `invoiceEndpointThrottle` convention which has no such gate and has shipped cleanly.
 
 #### 2.3 — Fix 4C: Allowlist-based prop sanitization
 
@@ -181,6 +311,28 @@ Add cases:
 
 Before committing, confirm `route.ts` exports **only** `POST` and `GET`. Any helper must live in `./throttle.ts` or `./sanitize.ts`. This guardrail is enforced by `cq-nextjs-route-files-http-only-exports` (the hotfix #2401 learning from `knowledge-base/project/learnings/runtime-errors/2026-04-15-nextjs-15-route-file-non-http-exports.md`).
 
+**Concrete check (copy-paste in Phase 3):**
+
+```bash
+cd apps/web-platform && grep -nE "^export " app/api/analytics/track/route.ts
+# Expected output (exactly two lines):
+# export async function POST(req: Request): Promise<Response> {
+# export async function GET(): Promise<Response> {
+```
+
+Any other `export` line is a blocker.
+
+#### 2.6 — sanitize.ts export surface
+
+For clarity, `sanitize.ts` exports exactly:
+
+- `sanitizeProps(props: Record<string, unknown> | undefined): { clean: Record<string, unknown>; dropped: string[] }`
+- `sanitizeForLog(s: string): string`
+
+The `ALLOWED_PROP_KEYS` set and `MAX_PROP_STRING_LEN` constant remain module-private. A future expansion of the allowlist (e.g., adding `referrer`) requires a PR touching this file specifically — which makes it easy for CODEOWNERS-style security review to gate.
+
+**Not exported on purpose:** `MAX_PROP_STRING_LEN` is deliberately not tweakable by callers. If a future Plausible goal needs a longer prop, the decision is a one-line constant edit here, not a runtime flag.
+
 **Commit:** `fix(analytics): harden /api/analytics/track (mem leak, IP spoof, PII, log injection) (#2383)`
 
 ### Phase 3 — Verification (REFACTOR / VALIDATE)
@@ -196,13 +348,14 @@ Before committing, confirm `route.ts` exports **only** `POST` and `GET`. Any hel
 
 Cases to add to `test/api-analytics-track.test.ts` (covered by Phase 1):
 
-| # | Name | Asserts |
-| --- | --- | --- |
-| T1 | `prefers cf-connecting-ip over x-forwarded-for for rate-limit keying` | Fix 4B: throttle keyed on CF IP, not rotating XFF |
-| T2 | `throttle pruner removes idle keys` | Fix 4A: `.prune()` reduces `.size` after window |
-| T3 | `strips non-allowlisted prop keys` | Fix 4C: only `path` forwarded |
-| T4 | `truncates prop string values at 200 chars` | Fix 4C: length cap |
-| T5 | `strips control characters from goal before logging` | Fix 4D: `\n` removed from log payload |
+| # | Name | Asserts | RED on main? |
+| --- | --- | --- | --- |
+| T1 | `prefers cf-connecting-ip over x-forwarded-for for rate-limit keying` | Fix 4B: throttle keyed on CF IP, not rotating XFF | Yes (4th request returns 204 instead of 429) |
+| T2 | `throttle pruner removes idle keys after window` | Fix 4A (regression guard): `.prune()` reduces `.size`; `setInterval(..., 60_000)` exists in `throttle.ts` via grep | No (method shape passes; grep is the guard) |
+| T3 | `strips non-allowlisted prop keys (email, sessionId, fingerprint, deviceId, ip)` | Fix 4C: only `path` forwarded | Yes |
+| T4 | `truncates prop string values at 200 chars` | Fix 4C: length cap | Yes |
+| T5a | `strips control characters from goal before logging (402 branch)` | Fix 4D: `\n` removed from `log.warn` goal on 402 | Yes |
+| T5b | `strips control characters from goal and err before logging (catch branch)` | Fix 4D: `\n` removed from both `goal` and `err` on fetch rejection | Yes |
 
 Existing cases (`rejects disallowed Origin`, `rejects missing Origin`, `forwards goal + props`, `strips user_id` (now redundant — subsumed by T3), `HTTP 402 graceful`, `non-JSON response`, `per-IP rate limit`, `GET 405`, `missing PLAUSIBLE_SITE_ID`, `invalid body 400`) must all still pass.
 
@@ -241,12 +394,47 @@ No cross-domain implications detected — this is a security hardening bundle sc
 | `apps/web-platform/app/api/analytics/track/sanitize.ts` | **New.** Exports `sanitizeProps(props)` (allowlist + length cap) and `sanitizeForLog(s)` (C0 control-char strip). |
 | `apps/web-platform/test/api-analytics-track.test.ts` | Add T1–T5 (see Test Scenarios). |
 
+## Institutional Learnings Applied
+
+Cross-reference of `knowledge-base/project/learnings/` entries that directly influenced this plan. Each one turned a potential bug into a known-safe choice.
+
+| Learning | How it applies to this plan |
+| --- | --- |
+| `security-issues/websocket-rate-limiting-xff-trust-20260329.md` | Direct precedent for Fix 4B. Same codebase, same reasoning: when behind Cloudflare, trusting `x-forwarded-for` as a fallback = IP spoof. The WebSocket handler was hardened by the same review author. The learning's "Key Insight" — *"Only trust the proxy's own header (`cf-connecting-ip`). The fallback should be `remoteAddress` (TCP-level, not spoofable)"* — is exactly what `extractClientIpFromHeaders` implements (with XFF as the dev-mode-only fallback). **Implication:** the review history for that learning includes 3 independent reviewers flagging the absence of periodic `prune()` — which this plan also fixes (4A). |
+| `runtime-errors/2026-04-15-nextjs-15-route-file-non-http-exports.md` | Origin of the `cq-nextjs-route-files-http-only-exports` guardrail. The `throttle.ts` sibling module pattern this plan extends came from hotfix #2401 for exactly this route. **Implication:** `sanitize.ts` must also be a sibling module, not a `route.ts` export. Phase 2.5 now has a `grep` check to confirm. |
+| `2026-03-20-bun-segfault-leaked-setinterval-timers.md` | Warning about module-level `setInterval` in test runners. Not a blocker (the existing `shareEndpointThrottle` / `invoiceEndpointThrottle` use the same pattern without issue on vitest), but documented as a monitoring note in Phase 2.2. |
+| `2026-03-30-plausible-http-402-graceful-skip.md` | Confirms the 402 branch of `route.ts:105` is correct behavior (graceful skip, don't propagate to client). This plan preserves that branch verbatim and only adds `sanitizeForLog(parsed.goal)` to the log call. |
+| `2026-03-20-csrf-three-layer-defense-nextjs-api-routes.md` | Confirms `validateOrigin` + `rejectCsrf` usage at `route.ts:50-57` is correct. **Also:** the `rejectCsrf` implementation at `validate-origin.ts:42` already calls `.slice(0, 100).replace(/[\x00-\x1f]/g, "")` on the origin — the exact same pattern we're porting to the `goal` field. This is the pattern source cited in issue #2383. |
+| `best-practices/2026-04-15-negative-space-tests-must-follow-extracted-logic.md` | Directly informs T2's regression guard. T2 now includes a grep-based assertion that the `setInterval` call exists in `throttle.ts` — a negative-space test in the style of `csrf-coverage.test.ts`. Without it, a future refactor removing the pruner would pass all behavioral tests. |
+| `2026-04-02-plausible-api-response-validation-prevention.md` | Confirms the existing non-JSON tolerance at `route.ts:111-120` is correct. Plan preserves it verbatim — not in scope. |
+| `best-practices/2026-04-15-plan-skill-reconcile-spec-vs-codebase.md` | The "Research Reconciliation — Spec vs. Codebase" section at the top of this plan follows this learning's prescribed format (3-column table, placed between Overview and Implementation Phases). |
+
+## Verified API Signatures
+
+Signatures verified by direct file read at plan time (2026-04-17). These are the APIs the plan relies on — any deviation during implementation should update the plan first.
+
+| Symbol | File : line | Signature | Used by |
+| --- | --- | --- | --- |
+| `SlidingWindowCounter.isAllowed` | `server/rate-limiter.ts:53` | `isAllowed(key: string): boolean` | `route.ts:60` (unchanged) |
+| `SlidingWindowCounter.prune` | `server/rate-limiter.ts:81` | `prune(): void` | new interval in `throttle.ts` (2.2) |
+| `SlidingWindowCounter.size` | `server/rate-limiter.ts:100` | `get size(): number` | T2 assertions |
+| `SlidingWindowCounter.reset` | `server/rate-limiter.ts:105` | `reset(): void` | already wrapped by `__resetAnalyticsTrackThrottleForTest` in `throttle.ts:20` |
+| `extractClientIpFromHeaders` | `server/rate-limiter.ts:180` | `extractClientIpFromHeaders(headers: Headers): string` — prefers `cf-connecting-ip`, falls back to `x-forwarded-for` first comma-split value, returns `"unknown"` otherwise | `route.ts` (replaces local `clientIp(req)`) |
+| `validateOrigin` | `lib/auth/validate-origin.ts:14` | `validateOrigin(request: Request): { valid: boolean; origin: string \| null }` | `route.ts:50` (unchanged) |
+| `rejectCsrf` | `lib/auth/validate-origin.ts:41` | `rejectCsrf(route: string, origin: string \| null): Response` — already sanitizes origin with `.replace(/[\x00-\x1f]/g, "")` | `route.ts:56` (unchanged; pattern source for `sanitizeForLog`) |
+| `track` (client) | `lib/analytics-client.ts:5` | `track(goal: string, props?: Record<string, unknown>): Promise<void>` — **caller contract preserved; no change needed** | all UI call sites (unchanged) |
+
 ## References
 
 - Issue: [#2383](https://github.com/jikig-ai/soleur/issues/2383)
 - Origin PR: [#2347](https://github.com/jikig-ai/soleur/pull/2347) (kb-chat-sidebar)
 - Hotfix precedent: [#2401](https://github.com/jikig-ai/soleur/pull/2401) (non-HTTP exports in route file — prevents the Docker build outage)
 - Learning: `knowledge-base/project/learnings/runtime-errors/2026-04-15-nextjs-15-route-file-non-http-exports.md`
+- Learning: `knowledge-base/project/learnings/security-issues/websocket-rate-limiting-xff-trust-20260329.md`
+- Learning: `knowledge-base/project/learnings/2026-03-20-csrf-three-layer-defense-nextjs-api-routes.md`
+- Learning: `knowledge-base/project/learnings/2026-03-20-bun-segfault-leaked-setinterval-timers.md`
+- Learning: `knowledge-base/project/learnings/2026-03-30-plausible-http-402-graceful-skip.md`
+- Learning: `knowledge-base/project/learnings/best-practices/2026-04-15-negative-space-tests-must-follow-extracted-logic.md`
 - Pattern source: `apps/web-platform/server/rate-limiter.ts:180-229` (`extractClientIpFromHeaders`, `shareEndpointThrottle` / `invoiceEndpointThrottle` pruners)
 - Log-sanitize pattern source: `apps/web-platform/lib/auth/validate-origin.ts:42` (`rejectCsrf`)
-- AGENTS.md guardrails: `cq-nextjs-route-files-http-only-exports`, `cq-write-failing-tests-before`, `cq-in-worktrees-run-vitest-via-node-node`
+- AGENTS.md guardrails: `cq-nextjs-route-files-http-only-exports`, `cq-write-failing-tests-before`, `cq-in-worktrees-run-vitest-via-node-node`, `cq-vite-test-files-esm-only`, `cq-markdownlint-fix-target-specific-paths`
