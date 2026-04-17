@@ -263,8 +263,9 @@ export async function buildTree(
  * Safe for markdown only — size is bounded by `KB_MAX_FILE_SIZE` (~1 MB).
  * Do NOT reuse this helper for the binary path; the size ceiling there
  * (`MAX_BINARY_SIZE`, 50 MB) would double-allocate as `buffer + utf-8 raw`.
- * Binary hashing should use `hashBytes` over the buffer returned by
- * `readBinaryFile`, or `hashStream` with a fd-owned ReadStream.
+ * Binary hashing should use `hashStream` with a fd-owned ReadStream
+ * (see `openBinaryStream` + `hashStream`) — binary bytes are never held
+ * entirely in memory.
  */
 export async function readContentRaw(
   kbRoot: string,

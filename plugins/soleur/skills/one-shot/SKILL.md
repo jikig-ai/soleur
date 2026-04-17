@@ -13,10 +13,10 @@ bash ./plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh --yes crea
 
 Then `cd` into the worktree path printed by the script. Parallel agents on the same repo cause silent merge conflicts when both work on main.
 
-**Step 0c: Create draft PR.** After creating the feature branch, create a draft PR:
+**Step 0c: Create draft PR.** After creating the feature branch, create a draft PR from inside the worktree (the script errors with "Cannot run from bare repo root" otherwise, and the Bash tool does NOT persist CWD across calls — use a single `cd && bash` to be explicit):
 
 ```bash
-bash ./plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh draft-pr
+cd <worktree-path> && bash ./plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh draft-pr
 ```
 
 If this fails (no network, or "No commits between main and <branch>"), print a warning but continue. The branch exists locally and the `/ship` phase will create the PR after implementation commits exist.
