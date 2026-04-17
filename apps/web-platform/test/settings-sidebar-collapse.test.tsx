@@ -62,6 +62,9 @@ describe("Settings sidebar collapse", () => {
     expect(mobileBar).toBeInTheDocument();
   });
 
+  // Alignment contract — mirrors KB layout precedent at
+  // apps/web-platform/app/(dashboard)/dashboard/kb/layout.tsx:318-328.
+  // If KB's expand-chevron recipe changes, update these assertions to match.
   describe("expand button alignment with main nav chevron", () => {
     it("expand button has KB-style absolute positioning classes when collapsed", async () => {
       render(<SettingsShell><div>content</div></SettingsShell>);
@@ -97,9 +100,8 @@ describe("Settings sidebar collapse", () => {
       render(<SettingsShell><div>content</div></SettingsShell>);
       await userEvent.click(screen.getByLabelText("Collapse settings nav"));
       const expandBtn = screen.getByLabelText("Expand settings nav");
-      const parent = expandBtn.parentElement;
-      expect(parent).not.toBeNull();
-      expect(parent!).toHaveClass("relative");
+      const positionedAncestor = expandBtn.closest(".relative");
+      expect(positionedAncestor).not.toBeNull();
     });
 
     it("exactly one expand button exists after collapsing", async () => {
