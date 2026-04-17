@@ -12,6 +12,7 @@ import {
   SHARED_CONTENT_KIND_HEADER,
   type SharedContentKind,
 } from "@/lib/shared-kind";
+import { getKbExtension } from "@/lib/kb-extensions";
 
 export { SHARED_CONTENT_KIND_HEADER };
 export type { SharedContentKind };
@@ -137,7 +138,7 @@ export async function validateBinaryFile(
     if (stat.size > MAX_BINARY_SIZE) {
       throw new KbFileTooLargeError();
     }
-    const ext = path.extname(relativePath).toLowerCase();
+    const ext = getKbExtension(relativePath);
     const contentType = CONTENT_TYPE_MAP[ext] || "application/octet-stream";
     const disposition = ATTACHMENT_EXTENSIONS.has(ext) ? "attachment" : "inline";
     const rawName = path.basename(relativePath);

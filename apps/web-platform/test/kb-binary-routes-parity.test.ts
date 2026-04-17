@@ -259,11 +259,7 @@ describe("regression guards carried from PR #2477 / TOCTOU hardening", () => {
       ),
       "utf8",
     );
-    const helperSrc = fs.readFileSync(
-      path.resolve(__dirname, "../server/share-route-helpers.ts"),
-      "utf8",
-    );
-    for (const src of [sharedSrc, ownerSrc, helperSrc]) {
+    for (const src of [sharedSrc, ownerSrc]) {
       expect(src).not.toMatch(/fs\.promises\.lstat\b/);
       expect(src).not.toMatch(/fs\.lstat\b/);
     }

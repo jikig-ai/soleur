@@ -205,10 +205,10 @@ describe("SharedDocumentPage — server-declared kind branching", () => {
     });
   });
 
-  it("falls back to a token-derived label when Content-Disposition is absent", async () => {
-    // No Content-Disposition header — the viewer must not render the
-    // literal string "file"; use a stable token-derived label instead
-    // so screen readers hear something meaningful.
+  it('renders alt="Shared image" (not a filename) when Content-Disposition is absent', async () => {
+    // Per #2306 a11y: the image alt is the constant "Shared image" — filenames
+    // (or token-derived labels) are not useful to screen readers and go to
+    // `title` instead. No `title` is set when the filename is unknown.
     const headers = new Map([
       ["content-type", "image/png"],
       ["x-soleur-kind", "image"],
@@ -234,10 +234,13 @@ describe("SharedDocumentPage — server-declared kind branching", () => {
     );
 
     await waitFor(() => {
-      const img = container.querySelector("img[data-testid='shared-image']");
+      const img = container.querySelector<HTMLImageElement>(
+        "img[data-testid='shared-image']",
+      );
       expect(img).toBeTruthy();
-      expect(img?.getAttribute("alt")).toBe("shared-img42");
+      expect(img?.getAttribute("alt")).toBe("Shared image");
       expect(img?.getAttribute("alt")).not.toBe("file");
+      expect(img?.hasAttribute("title")).toBe(false);
     });
   });
 });
