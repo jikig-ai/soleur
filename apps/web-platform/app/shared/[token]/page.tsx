@@ -38,23 +38,15 @@ export default function SharedDocumentPage({
 
   useEffect(() => {
     let cancelled = false;
-    (async () => {
-      try {
-        const res = await fetch(`/api/shared/${token}`);
+    fetch(`/api/shared/${token}`)
+      .then((res) => classifyResponse(res, token))
+      .catch((): { error: PageError } => ({ error: "unknown" }))
+      .then((result) => {
         if (cancelled) return;
-        const result = await classifyResponse(res, token);
-        if (cancelled) return;
-        if ("error" in result) {
-          setError(result.error);
-        } else {
-          setData(result.data);
-        }
-      } catch {
-        if (!cancelled) setError("unknown");
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    })();
+        if ("error" in result) setError(result.error);
+        else setData(result.data);
+        setLoading(false);
+      });
     return () => {
       cancelled = true;
     };
@@ -127,7 +119,7 @@ export default function SharedDocumentPage({
                   data-testid="shared-image"
                   src={data.src}
                   alt="Shared image"
-                  {...(data.filename ? { title: data.filename } : {})}
+                  title={data.filename ?? undefined}
                   className="max-h-[80vh] max-w-full rounded-lg border border-neutral-800"
                 />
               </div>

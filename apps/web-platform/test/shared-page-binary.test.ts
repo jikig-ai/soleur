@@ -151,7 +151,7 @@ describe("GET /api/shared/[token] — binary vs markdown branching", () => {
     expect(res.status).toBe(404);
   });
 
-  it("returns 403 when the stored path is a symlink", async () => {
+  it("returns 403 when the stored path is a symlink, preserving the original access-denied message", async () => {
     const outside = path.join(tmpWorkspace, "outside.pdf");
     fs.writeFileSync(outside, "secret");
     fs.symlinkSync(outside, path.join(kbRoot, "link.pdf"));
@@ -159,6 +159,10 @@ describe("GET /api/shared/[token] — binary vs markdown branching", () => {
 
     const res = await callGET(buildRequest("linktok"), "linktok");
     expect(res.status).toBe(403);
+    const body = await res.json();
+    // 403 must NOT be rewritten to the 404 opaque copy — only 404 is masked.
+    expect(body.error).not.toBe("Document no longer available");
+    expect(body.error).toBe("Access denied");
   });
 
   it("returns 413 when the stored binary exceeds the size limit", async () => {

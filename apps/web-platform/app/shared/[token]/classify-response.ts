@@ -39,32 +39,20 @@ export function extractFilename(contentDisposition: string | null): string | nul
   return asciiMatch?.[1]?.trim() ?? null;
 }
 
-function fallbackDownloadFilename(filename: string | null): string {
-  return filename ?? "download";
-}
-
 export async function classifyResponse(
   res: Response,
   token: string,
 ): Promise<ClassifyResult> {
   try {
-    if (res.status === 404) {
-      return { error: "not-found" };
-    }
+    if (res.status === 404) return { error: "not-found" };
     if (res.status === 410) {
-      const body = await res.json().catch(() => null);
-      const code =
-        body && typeof body === "object"
-          ? (body as { code?: unknown }).code
-          : null;
-      if (code === "content-changed" || code === "legacy-null-hash") {
-        return { error: "content-changed" };
-      }
-      return { error: "revoked" };
+      const body = (await res.json().catch(() => null)) as { code?: string } | null;
+      const code = body?.code;
+      return code === "content-changed" || code === "legacy-null-hash"
+        ? { error: "content-changed" }
+        : { error: "revoked" };
     }
-    if (!res.ok) {
-      return { error: "unknown" };
-    }
+    if (!res.ok) return { error: "unknown" };
 
     const contentType = res.headers.get("content-type") ?? "";
     const disposition = res.headers.get("content-disposition");
@@ -80,21 +68,13 @@ export async function classifyResponse(
     const filename = extractFilename(disposition);
 
     if (contentType.startsWith("application/pdf")) {
-      return {
-        data: { kind: "pdf", src, filename: fallbackDownloadFilename(filename) },
-      };
+      return { data: { kind: "pdf", src, filename: filename ?? "download" } };
     }
-
     if (contentType.startsWith("image/")) {
       return { data: { kind: "image", src, filename } };
     }
-
     return {
-      data: {
-        kind: "download",
-        src,
-        filename: fallbackDownloadFilename(filename),
-      },
+      data: { kind: "download", src, filename: filename ?? "download" },
     };
   } catch {
     return { error: "unknown" };

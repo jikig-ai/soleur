@@ -182,10 +182,7 @@ export async function createShare(
   } catch (err) {
     const code = (err as NodeJS.ErrnoException).code;
     if (code === "ELOOP" || code === "EMLINK") {
-      // 403 matches the canonical KbAccessDeniedError shape used by the
-      // read-side routes. The `code` tag is preserved for telemetry
-      // continuity; downstream Sentry/log queries should key on `code:
-      // "symlink-rejected"` rather than the error message string.
+      // 403 to match KbAccessDeniedError; telemetry keys on `code`.
       return {
         ok: false,
         status: 403,

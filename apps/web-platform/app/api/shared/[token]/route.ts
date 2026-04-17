@@ -23,6 +23,18 @@ import {
 import logger from "@/server/logger";
 import * as Sentry from "@sentry/nextjs";
 
+// Opaque public-facing 404 copy. Used by every 404 path on this endpoint —
+// missing workspace, missing markdown file, missing binary file — so private
+// error strings (e.g. validateBinaryFile's "File not found") never leak.
+const SHARED_NOT_FOUND_MESSAGE = "Document no longer available";
+
+function notFoundResponse() {
+  return NextResponse.json(
+    { error: SHARED_NOT_FOUND_MESSAGE },
+    { status: 404 },
+  );
+}
+
 function contentChangedResponse() {
   return NextResponse.json(
     {
@@ -97,10 +109,7 @@ export async function GET(
     .single();
 
   if (!owner?.workspace_path || owner.workspace_status !== "ready") {
-    return NextResponse.json(
-      { error: "Document no longer available" },
-      { status: 404 },
-    );
+    return notFoundResponse();
   }
 
   const kbRoot = path.join(owner.workspace_path, "knowledge-base");
@@ -144,10 +153,7 @@ export async function GET(
         return NextResponse.json({ error: "Access denied" }, { status: 403 });
       }
       if (err instanceof KbNotFoundError) {
-        return NextResponse.json(
-          { error: "Document no longer available" },
-          { status: 404 },
-        );
+        return notFoundResponse();
       }
       logger.error({ err, token }, "shared: unexpected error");
       Sentry.captureException(err, {
@@ -172,13 +178,12 @@ export async function GET(
         "shared: binary access denied (symlink / outside root)",
       );
     }
-    // Align the shared endpoint's 404 copy across markdown and binary
-    // branches. validateBinaryFile returns "File not found" (owner-facing
-    // phrasing); the public shared route presents the opaque
-    // "Document no longer available" phrasing instead.
-    const message =
-      binary.status === 404 ? "Document no longer available" : binary.error;
-    return NextResponse.json({ error: message }, { status: binary.status });
+    // 404 is re-wrapped to the shared route's opaque copy; other statuses
+    // (403, 413) pass through with their original messages.
+    if (binary.status === 404) {
+      return notFoundResponse();
+    }
+    return NextResponse.json({ error: binary.error }, { status: binary.status });
   }
 
   const cachedVerdict = shareHashVerdictCache.get(

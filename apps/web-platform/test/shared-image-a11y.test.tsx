@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, waitFor, act } from "@testing-library/react";
 import { Suspense } from "react";
 
@@ -19,7 +19,12 @@ vi.mock("@/components/kb/pdf-preview", () => ({
 }));
 
 beforeEach(() => {
+  vi.resetModules();
   vi.clearAllMocks();
+});
+
+afterEach(() => {
+  vi.unstubAllGlobals();
 });
 
 function renderWithSuspense(ui: React.ReactNode) {
@@ -29,15 +34,18 @@ function renderWithSuspense(ui: React.ReactNode) {
 function mockFetchBinary(contentType: string, disposition: string | null) {
   const headers = new Map<string, string>([["content-type", contentType]]);
   if (disposition) headers.set("content-disposition", disposition);
-  global.fetch = vi.fn(() =>
-    Promise.resolve({
-      ok: true,
-      status: 200,
-      headers: {
-        get: (name: string) => headers.get(name.toLowerCase()) ?? null,
-      },
-    }),
-  ) as unknown as typeof fetch;
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(() =>
+      Promise.resolve({
+        ok: true,
+        status: 200,
+        headers: {
+          get: (name: string) => headers.get(name.toLowerCase()) ?? null,
+        },
+      }),
+    ),
+  );
 }
 
 describe("SharedDocumentPage — image a11y", () => {
