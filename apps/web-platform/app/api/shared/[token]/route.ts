@@ -10,8 +10,10 @@ import {
 import {
   readBinaryFile,
   buildBinaryResponse,
+  openBinaryStream,
 } from "@/server/kb-binary-response";
-import { hashBytes } from "@/server/kb-content-hash";
+import { hashBytes, hashStream } from "@/server/kb-content-hash";
+import { shareHashVerdictCache } from "@/server/share-hash-verdict-cache";
 import {
   shareEndpointThrottle,
   extractClientIpFromHeaders,
@@ -153,7 +155,9 @@ export async function GET(
     }
   }
 
-  // Binary branch.
+  // Binary branch — validate metadata without reading bytes, then either
+  // trust the verdict cache (fast path) or hash via a fresh stream before
+  // serving (slow path: first view OR file mutated since last verify).
   const binary = await readBinaryFile(kbRoot, shareLink.document_path);
   if (!binary.ok) {
     if (binary.status === 403) {
@@ -165,18 +169,56 @@ export async function GET(
     return NextResponse.json({ error: binary.error }, { status: binary.status });
   }
 
-  const currentHash = hashBytes(binary.buffer);
-  if (currentHash !== shareLink.content_sha256) {
-    logger.info(
-      {
-        event: "shared_content_mismatch",
-        token,
-        documentPath: shareLink.document_path,
-        kind: "binary",
-      },
-      "shared: content hash mismatch",
-    );
-    return contentChangedResponse();
+  const cachedVerdict = shareHashVerdictCache.get(
+    token,
+    binary.mtimeMs,
+    binary.size,
+  );
+
+  if (cachedVerdict !== true) {
+    // Cache miss — drain a fresh stream through SHA-256 and compare
+    // before shipping any bytes. buildBinaryResponse opens another
+    // stream for the response body (fd lifetime is tied to each
+    // stream via autoClose: true).
+    let hashStreamObj;
+    try {
+      hashStreamObj = await openBinaryStream(binary.filePath);
+    } catch (err) {
+      logger.error(
+        { err, token, path: shareLink.document_path },
+        "shared: failed to open hash stream",
+      );
+      return NextResponse.json(
+        { error: "Document no longer available" },
+        { status: 404 },
+      );
+    }
+    let currentHash: string;
+    try {
+      currentHash = await hashStream(hashStreamObj);
+    } catch (err) {
+      logger.error(
+        { err, token, path: shareLink.document_path },
+        "shared: hash stream drain failed",
+      );
+      return NextResponse.json(
+        { error: "An unexpected error occurred" },
+        { status: 500 },
+      );
+    }
+    if (currentHash !== shareLink.content_sha256) {
+      logger.info(
+        {
+          event: "shared_content_mismatch",
+          token,
+          documentPath: shareLink.document_path,
+          kind: "binary",
+        },
+        "shared: content hash mismatch",
+      );
+      return contentChangedResponse();
+    }
+    shareHashVerdictCache.set(token, binary.mtimeMs, binary.size);
   }
 
   logger.info(
@@ -185,8 +227,9 @@ export async function GET(
       token,
       documentPath: shareLink.document_path,
       contentType: binary.contentType,
+      cached: cachedVerdict === true,
     },
     "shared: document viewed",
   );
-  return buildBinaryResponse(binary, request);
+  return await buildBinaryResponse(binary, request);
 }

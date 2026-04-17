@@ -71,11 +71,12 @@ export async function GET(
     }
   }
 
-  // Binary file serving — delegate to shared helper so owner and public
-  // (/api/shared/[token]) routes share one hardened implementation.
+  // Binary file serving — owner route streams unconditionally (no hash
+  // gate). The share route adds a content-hash verdict cache on top of
+  // the same helpers.
   const result = await readBinaryFile(kbRoot, relativePath);
   if (!result.ok) {
     return NextResponse.json({ error: result.error }, { status: result.status });
   }
-  return buildBinaryResponse(result, request);
+  return await buildBinaryResponse(result, request);
 }

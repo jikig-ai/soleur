@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { Readable } from "node:stream";
 import { isPathInWorkspace } from "@/server/sandbox";
 import { KB_BINARY_RESPONSE_CSP } from "@/lib/kb-csp";
 
@@ -21,44 +22,58 @@ export const CONTENT_TYPE_MAP: Record<string, string> = {
 
 export const ATTACHMENT_EXTENSIONS = new Set([".docx"]);
 
+/**
+ * Successful result of readBinaryFile. Holds validated metadata; does NOT
+ * hold the file bytes in memory. Response bodies open a fresh stream via
+ * openBinaryStream(filePath, …) so peak RSS per request stays ~64 KB
+ * (default createReadStream chunk size) instead of ~size bytes.
+ */
+export interface BinaryFileMetadata {
+  ok: true;
+  filePath: string;
+  size: number;
+  mtimeMs: number;
+  contentType: string;
+  disposition: "inline" | "attachment";
+  rawName: string;
+}
+
 export type BinaryReadResult =
-  | {
-      ok: true;
-      buffer: Buffer;
-      contentType: string;
-      disposition: "inline" | "attachment";
-      rawName: string;
-    }
+  | BinaryFileMetadata
   | {
       ok: false;
       status: 403 | 404 | 413;
       error: string;
     };
 
-/**
- * Build an RFC 6266 Content-Disposition header value with both an ASCII
- * fallback (`filename="..."`) and a UTF-8 RFC 5987 encoded form
- * (`filename*=UTF-8''...`). Strips control characters from the fallback to
- * keep the header parseable across browsers and proxies.
- */
 export function formatContentDisposition(
   disposition: "inline" | "attachment",
   rawName: string,
 ): string {
   const asciiFallback = rawName.replace(/[^\x20-\x7e]/g, "_").replace(/["\r\n\\]/g, "_");
   const utf8Encoded = encodeURIComponent(rawName)
-    // RFC 5987 reserves * ' ( ) ; , / ? : @ & = + $ -- encodeURIComponent
-    // already escapes most; leave * untouched per RFC 5987 examples.
     .replace(/['()]/g, escape);
   return `${disposition}; filename="${asciiFallback}"; filename*=UTF-8''${utf8Encoded}`;
 }
 
+/**
+ * Validate a KB-relative path + collect metadata. Opens with O_NOFOLLOW,
+ * fstats against the fd to close the symlink-swap window, then closes the
+ * fd and returns metadata only. Callers stream bytes separately via
+ * openBinaryStream(result.filePath, …), which opens another O_NOFOLLOW fd.
+ *
+ * This decouples validation from byte transfer. The trade-off: there is a
+ * small TOCTOU window between this function returning and openBinaryStream
+ * opening — the file could be swapped. isPathInWorkspace and O_NOFOLLOW
+ * still apply to the second open, so symlink replacement is rejected, and
+ * the verdict cache in share-hash-verdict-cache.ts keys on (token,
+ * mtimeMs, size) so a mutation between validate and stream will not be
+ * served from a stale verdict.
+ */
 export async function readBinaryFile(
   kbRoot: string,
   relativePath: string,
 ): Promise<BinaryReadResult> {
-  // Reject null bytes — `path.join`/`open` would throw `ERR_INVALID_ARG_VALUE`
-  // and bubble up as an unhandled 500. Mirrors `readContent`'s guard.
   if (relativePath.includes("\0")) {
     return { ok: false, status: 403, error: "Access denied" };
   }
@@ -66,20 +81,16 @@ export async function readBinaryFile(
   if (!isPathInWorkspace(fullPath, kbRoot)) {
     return { ok: false, status: 403, error: "Access denied" };
   }
-  // Open with O_NOFOLLOW to refuse symlinks at open time, then fstat the fd
-  // and read from the fd. This closes the lstat→readFile TOCTOU window: a
-  // file replaced between lstat and readFile would still be served from the
-  // fd we already hold. A symlink swapped in is rejected by O_NOFOLLOW.
   let handle: fs.promises.FileHandle;
   try {
-    handle = await fs.promises.open(fullPath, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+    handle = await fs.promises.open(
+      fullPath,
+      fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW,
+    );
   } catch (err) {
     const code = (err as NodeJS.ErrnoException).code;
     if (code === "ELOOP" || code === "EMLINK") {
       return { ok: false, status: 403, error: "Access denied" };
-    }
-    if (code === "ENOENT") {
-      return { ok: false, status: 404, error: "File not found" };
     }
     return { ok: false, status: 404, error: "File not found" };
   }
@@ -95,8 +106,15 @@ export async function readBinaryFile(
     const contentType = CONTENT_TYPE_MAP[ext] || "application/octet-stream";
     const disposition = ATTACHMENT_EXTENSIONS.has(ext) ? "attachment" : "inline";
     const rawName = path.basename(relativePath);
-    const buffer = await handle.readFile();
-    return { ok: true, buffer, contentType, disposition, rawName };
+    return {
+      ok: true,
+      filePath: fullPath,
+      size: stat.size,
+      mtimeMs: stat.mtimeMs,
+      contentType,
+      disposition,
+      rawName,
+    };
   } catch {
     return { ok: false, status: 404, error: "File not found" };
   } finally {
@@ -104,27 +122,45 @@ export async function readBinaryFile(
   }
 }
 
-export function buildBinaryResponse(
-  r: {
-    buffer: Buffer;
-    contentType: string;
-    disposition: "inline" | "attachment";
-    rawName: string;
-  },
+/**
+ * Open a fresh O_NOFOLLOW read stream for an already-validated filePath.
+ * The returned Node Readable is backed by the opened FileHandle with
+ * autoClose: true, so fd lifetime is tied to the stream. Pass start/end
+ * for Range requests; omit for full-file reads.
+ *
+ * Returns a Node Readable (not a web ReadableStream) so callers can either:
+ *   - wrap via Readable.toWeb(stream) for Response bodies, or
+ *   - pipe directly into hashStream() from kb-content-hash.ts.
+ */
+export async function openBinaryStream(
+  filePath: string,
+  opts?: { start?: number; end?: number },
+): Promise<Readable> {
+  const handle = await fs.promises.open(
+    filePath,
+    fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW,
+  );
+  return handle.createReadStream({
+    autoClose: true,
+    ...(opts?.start !== undefined ? { start: opts.start } : {}),
+    ...(opts?.end !== undefined ? { end: opts.end } : {}),
+  });
+}
+
+export async function buildBinaryResponse(
+  meta: BinaryFileMetadata,
   request?: Request,
-): Response {
-  const size = r.buffer.length;
+): Promise<Response> {
+  const size = meta.size;
   const commonHeaders: Record<string, string> = {
-    "Content-Type": r.contentType,
-    "Content-Disposition": formatContentDisposition(r.disposition, r.rawName),
+    "Content-Type": meta.contentType,
+    "Content-Disposition": formatContentDisposition(meta.disposition, meta.rawName),
     "X-Content-Type-Options": "nosniff",
     "Cache-Control": "private, max-age=60",
     "Content-Security-Policy": KB_BINARY_RESPONSE_CSP,
     "Accept-Ranges": "bytes",
   };
 
-  // Range request: respond with 206 Partial Content so PDF.js (and other
-  // clients) can stream in chunks and render progressively.
   const rangeHeader = request?.headers.get("range");
   if (rangeHeader) {
     const match = rangeHeader.trim().match(/^bytes=(\d+)-(\d*)$/);
@@ -144,23 +180,31 @@ export function buildBinaryResponse(
           headers: { "Content-Range": `bytes */${size}` },
         });
       }
-      const chunk = r.buffer.subarray(start, end + 1);
-      return new Response(new Uint8Array(chunk), {
-        status: 206,
-        headers: {
-          ...commonHeaders,
-          "Content-Range": `bytes ${start}-${end}/${size}`,
-          "Content-Length": chunk.length.toString(),
+      const chunkLength = end - start + 1;
+      const nodeStream = await openBinaryStream(meta.filePath, { start, end });
+      return new Response(
+        Readable.toWeb(nodeStream) as ReadableStream<Uint8Array>,
+        {
+          status: 206,
+          headers: {
+            ...commonHeaders,
+            "Content-Range": `bytes ${start}-${end}/${size}`,
+            "Content-Length": chunkLength.toString(),
+          },
         },
-      });
+      );
     }
     // Malformed Range header: fall through to full response.
   }
 
-  return new Response(new Uint8Array(r.buffer), {
-    headers: {
-      ...commonHeaders,
-      "Content-Length": size.toString(),
+  const nodeStream = await openBinaryStream(meta.filePath);
+  return new Response(
+    Readable.toWeb(nodeStream) as ReadableStream<Uint8Array>,
+    {
+      headers: {
+        ...commonHeaders,
+        "Content-Length": size.toString(),
+      },
     },
-  });
+  );
 }
