@@ -1,0 +1,26 @@
+[
+  {
+    "number": 2474,
+    "title": "review: KB upload missing retries",
+    "body": "**Source:** PR #2457 review\n\n## Problem\n\nFile: apps/web-platform/app/api/kb/upload/route.ts\n\n## Proposed Fix\n\nAdd retry wrapper.",
+    "labels": [{"name": "deferred-scope-out"}, {"name": "code-review"}]
+  },
+  {
+    "number": 2473,
+    "title": "review: KB upload validation gap",
+    "body": "**Source:** PR #2457 review\n\n## Problem\n\nLocation: apps/web-platform/app/api/kb/upload/route.ts:42\n\n## Proposed Fix\n\nValidate content-type.",
+    "labels": [{"name": "deferred-scope-out"}, {"name": "code-review"}]
+  },
+  {
+    "number": 2472,
+    "title": "review: KB list pagination",
+    "body": "**Source:** PR #2457 review\n\n## Problem\n\nTouches apps/web-platform/app/api/kb/list/route.ts.\n\n## Proposed Fix\n\nPaginate.",
+    "labels": [{"name": "deferred-scope-out"}, {"name": "code-review"}]
+  },
+  {
+    "number": 2400,
+    "title": "review: plugin skill compliance",
+    "body": "**Source:** PR #2380 review\n\n## Problem\n\nFile: plugins/soleur/skills/foo/SKILL.md\n\n## Proposed Fix\n\nAdd references link.",
+    "labels": [{"name": "deferred-scope-out"}, {"name": "code-review"}]
+  }
+]
