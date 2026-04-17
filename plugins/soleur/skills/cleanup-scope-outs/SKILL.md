@@ -136,6 +136,10 @@ Follows the same pattern as `plan`, `review`, and `ship` skills.
 - Sub-grouping by second-level directory is NOT implemented (YAGNI). Current backlogs never exceed 10 issues in a single top-level area. If that changes, track as a follow-up issue before adding the branch; don't build for cases that don't exist.
 - `--milestone` takes the title literally (quote it). A numeric ID fails with `milestone 'N' not found` (rule `cq-gh-issue-create-milestone-takes-title`).
 - Rule `rf-review-finding-default-fix-inline` governs the opposite direction (new findings default to fix-inline); this skill drains existing scope-outs. The two rules are complementary.
+- When writing a data-reshape shell script that fetches JSON and groups it, default to a single pure-jq pipeline before reaching for python/awk. Multi-language serialization round-trips add dependencies, silent-fallback error paths, and ~2x the LOC without reshape capability jq already provides.
+- `jq scan(...)` returns the **captured group** when the regex contains a capture, otherwise the full match. Alternations inside `scan` MUST be non-capturing: `(?:ts|tsx|js)` not `(ts|tsx|js)`. Otherwise `scan("[A-Za-z_./\\-]+\\.(?:ts|js)\\b")` returns full paths, whereas the capturing form would return just the extension.
+- When binding `as` against a **multi-value** jq source (e.g., `.[] | select(...)`), the downstream expression runs once per yielded value, producing multiple top-level JSON outputs. This breaks callers that do `$(jq '.field' <<<"$VAR")` under `[[ -eq 0 ]]`. Collect into an array first: `[ .[] | select(...) ] as $meets | { ... }`.
+- Sub-agent confirmation gates (like the second-reviewer gate in `review/SKILL.md`) need a **mechanical first-line output contract** (`CONCUR` / `DISSENT: <reason>`), not free-form prose interpretation. Treat anything other than `CONCUR` as `DISSENT` to fail-safe toward fix-inline.
 
 ## Test
 

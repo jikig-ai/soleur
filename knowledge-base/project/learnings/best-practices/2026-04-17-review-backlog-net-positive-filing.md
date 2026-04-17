@@ -81,6 +81,20 @@ done
 
 If net filings stay ≥ 0 across a 2-week measurement window after these improvements land, escalate to the deferred rolling-cap proposal (#4).
 
+## Session Errors
+
+Errors encountered during implementation that informed the final shape:
+
+1. **Skill-description word-budget exceeded** — adding the new skill pushed cumulative `description:` word count from 1798 to 1831 (limit: 1800). **Recovery:** trimmed cleanup-scope-outs, ship, and social-distribute descriptions to land at 1791. **Prevention:** already covered by `plugins/soleur/AGENTS.md` Skill Compliance Checklist — run `bun test plugins/soleur/test/components.test.ts` before first commit when adding a skill.
+
+2. **Helper over-engineered with multi-language serialization pipeline** — initial `group-by-area.sh` round-tripped TSV → awk → tr → python3 → JSON when a single pure-jq pipeline did the same job. **Recovery:** rewrote as one jq expression; dropped python3 dependency, ~110 LOC removed. **Prevention:** for data-reshape shell scripts, default to "one jq pipeline" and justify any second language. Added as Sharp Edge in `cleanup-scope-outs/SKILL.md`.
+
+3. **jq `scan` with capturing-group regex returned only the capture** — `scan("[A-Za-z0-9_./\\-]+\\.(ts|tsx|...)\\b")` returned the extension, not the full path. jq's `scan` returns the captured group when one exists, the full match otherwise. **Recovery:** switched to non-capturing `(?:ts|tsx|...)`. **Prevention:** alternation inside `jq scan` regexes must always be non-capturing. Sharp Edge added.
+
+4. **jq `as` binding with streaming source ran downstream once per stream item** — `(.[] | select(...)) as $above | [$above] as $meets | { ... }` emitted multiple top-level JSON values (one per matching cluster), which then broke `$(jq 'length' <<<"$PARTITIONED")` under `[[ -eq 0 ]]` with `[[: 1\n1: syntax error`. **Recovery:** collect first — `[ .[] | select(...) ] as $meets`. **Prevention:** when binding `as` against a multi-value source, wrap in `[ ... ]` to collect into an array before the downstream expression. Sharp Edge added.
+
+5. **Second-reviewer gate lacked a mechanical output contract** — the first wording said "if code-simplicity-reviewer disagrees, flip to fix-inline" without specifying how the caller parses agree vs. disagree. Caught by the code-simplicity-reviewer itself reviewing its own gate. **Recovery:** added a `CONCUR` / `DISSENT: <reason>` first-line contract with fail-safe toward fix-inline on any other content. **Prevention:** confirmation gates that invoke sub-agents require a string-matchable first-line output contract, not free-form prose interpretation. Applied directly to `review/SKILL.md`.
+
 ## References
 
 - **Parent brainstorm:** `knowledge-base/project/brainstorms/2026-04-15-review-workflow-hardening-brainstorm.md`
