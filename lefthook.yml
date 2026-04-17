@@ -57,3 +57,12 @@ pre-commit:
       priority: 10
       glob: "knowledge-base/**/*.md"
       run: bash scripts/generate-kb-index.sh && git add knowledge-base/INDEX.md
+    # priority 11: runs after generate-kb-index (priority 10) so the linter
+    # sees the final staged file. Single-star glob is intentional — content
+    # files are flat; gobwas's ** requires 1+ directory levels and would
+    # silently skip everything. See knowledge-base/project/learnings/
+    # 2026-03-21-lefthook-gobwas-glob-double-star.md.
+    distribution-content-liquid-guard:
+      priority: 11
+      glob: "knowledge-base/marketing/distribution-content/*.md"
+      run: bash scripts/lint-distribution-content.sh {staged_files}
