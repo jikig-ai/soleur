@@ -1,7 +1,9 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import dynamic from "next/dynamic";
+import type { FileKind } from "@/lib/kb-file-kind";
+import { TextPreview } from "@/components/kb/text-preview";
 
 const PdfPreview = dynamic(
   () => import("./pdf-preview").then((mod) => mod.PdfPreview),
@@ -15,11 +17,9 @@ const PdfPreview = dynamic(
   },
 );
 
-const IMAGE_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp"]);
-
 interface FilePreviewProps {
   path: string;
-  extension: string;
+  kind: FileKind;
   /**
    * Hide the internal filename/Download row (dashboard provides its own).
    * See `PdfPreview` for semantics. Default `true`. Does not affect
@@ -28,25 +28,32 @@ interface FilePreviewProps {
   showDownload?: boolean;
 }
 
-export function FilePreview({ path, extension, showDownload = true }: FilePreviewProps) {
+export function FilePreview({ path, kind, showDownload = true }: FilePreviewProps) {
   const contentUrl = `/api/kb/content/${path}`;
-  const ext = extension.toLowerCase();
   const filename = path.split("/").pop() || path;
 
-  if (IMAGE_EXTENSIONS.has(ext)) {
-    return <ImagePreview src={contentUrl} filename={filename} />;
+  switch (kind) {
+    case "image":
+      return <ImagePreview src={contentUrl} filename={filename} />;
+    case "pdf":
+      return <PdfPreview src={contentUrl} filename={filename} showDownload={showDownload} />;
+    case "text":
+      return <TextPreview src={contentUrl} filename={filename} showDownload={showDownload} />;
+    case "download":
+      return <DownloadPreview src={contentUrl} filename={filename} />;
+    case "markdown":
+      // Markdown is rendered by MarkdownRenderer on both viewer pages,
+      // not through FilePreview. Callers must gate on isMarkdownKbPath
+      // before dispatching here — rendering nothing is the safe default.
+      return null;
+    default: {
+      // Exhaustiveness guard — adding a new FileKind without a render
+      // branch fails the build here.
+      const _exhaustive: never = kind;
+      void _exhaustive;
+      return null;
+    }
   }
-
-  if (ext === ".pdf") {
-    return <PdfPreview src={contentUrl} filename={filename} showDownload={showDownload} />;
-  }
-
-  if (ext === ".txt") {
-    return <TextPreview src={contentUrl} filename={filename} showDownload={showDownload} />;
-  }
-
-  // CSV, DOCX, and other types — download link
-  return <DownloadPreview src={contentUrl} filename={filename} />;
 }
 
 function ImagePreview({ src, filename }: { src: string; filename: string }) {
@@ -94,74 +101,6 @@ function ImagePreview({ src, filename }: { src: string; filename: string }) {
           />
         </div>
       )}
-    </div>
-  );
-}
-
-function TextPreview({
-  src,
-  filename,
-  showDownload = true,
-}: {
-  src: string;
-  filename: string;
-  showDownload?: boolean;
-}) {
-  const [text, setText] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(false);
-
-  useEffect(() => {
-    let cancelled = false;
-    async function fetchText() {
-      try {
-        const res = await fetch(src);
-        if (!res.ok) throw new Error("Fetch failed");
-        const content = await res.text();
-        if (!cancelled) {
-          setText(content);
-          setLoading(false);
-        }
-      } catch {
-        if (!cancelled) {
-          setError(true);
-          setLoading(false);
-        }
-      }
-    }
-    fetchText();
-    return () => { cancelled = true; };
-  }, [src]);
-
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center p-8">
-        <div className="h-5 w-5 animate-spin rounded-full border-2 border-neutral-600 border-t-amber-400" />
-      </div>
-    );
-  }
-
-  if (error || text === null) {
-    return <DownloadPreview src={src} filename={filename} />;
-  }
-
-  return (
-    <div className="flex flex-col gap-3 p-4">
-      {showDownload && (
-        <div className="flex items-center justify-between">
-          <span className="text-sm text-neutral-400">{filename}</span>
-          <a
-            href={src}
-            download={filename}
-            className="rounded-md border border-neutral-700 px-3 py-1 text-xs text-neutral-300 hover:bg-neutral-800"
-          >
-            Download
-          </a>
-        </div>
-      )}
-      <pre className="max-h-[70vh] overflow-auto rounded-lg border border-neutral-800 bg-neutral-900/50 p-4 text-sm text-neutral-300">
-        {text}
-      </pre>
     </div>
   );
 }

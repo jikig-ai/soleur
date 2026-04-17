@@ -67,7 +67,7 @@ afterEach(() => {
 
 describe("FilePreview", () => {
   it("renders image preview for .png files", () => {
-    const { container } = render(<FilePreview path="assets/logo.png" extension=".png" />);
+    const { container } = render(<FilePreview path="assets/logo.png" kind="image" />);
     const img = container.querySelector("img");
     expect(img).not.toBeNull();
     expect(img?.getAttribute("src")).toBe("/api/kb/content/assets/logo.png");
@@ -75,13 +75,13 @@ describe("FilePreview", () => {
   });
 
   it("renders image preview for .jpg files", () => {
-    const { container } = render(<FilePreview path="assets/photo.jpg" extension=".jpg" />);
+    const { container } = render(<FilePreview path="assets/photo.jpg" kind="image" />);
     const img = container.querySelector("img");
     expect(img).not.toBeNull();
   });
 
   it("renders PDF preview with react-pdf for .pdf files", async () => {
-    const { container } = render(<FilePreview path="docs/report.pdf" extension=".pdf" />);
+    const { container } = render(<FilePreview path="docs/report.pdf" kind="pdf" />);
     await waitFor(() => {
       const pdfDoc = container.querySelector('[data-testid="pdf-document"]');
       expect(pdfDoc).not.toBeNull();
@@ -92,7 +92,7 @@ describe("FilePreview", () => {
   });
 
   it("renders download button for PDF files", async () => {
-    const { container } = render(<FilePreview path="docs/report.pdf" extension=".pdf" />);
+    const { container } = render(<FilePreview path="docs/report.pdf" kind="pdf" />);
     await waitFor(() => {
       const downloadLink = container.querySelector('a[download]');
       expect(downloadLink).not.toBeNull();
@@ -102,7 +102,7 @@ describe("FilePreview", () => {
   });
 
   it("renders page navigation for multi-page PDFs", async () => {
-    render(<FilePreview path="docs/report.pdf" extension=".pdf" />);
+    render(<FilePreview path="docs/report.pdf" kind="pdf" />);
     await waitFor(() => {
       expect(screen.getByText("Page 1 of 3")).toBeDefined();
     });
@@ -111,7 +111,7 @@ describe("FilePreview", () => {
   });
 
   it("navigates to next page when Next is clicked", async () => {
-    render(<FilePreview path="docs/report.pdf" extension=".pdf" />);
+    render(<FilePreview path="docs/report.pdf" kind="pdf" />);
     await waitFor(() => {
       expect(screen.getByText("Next")).toBeDefined();
     });
@@ -121,7 +121,7 @@ describe("FilePreview", () => {
   });
 
   it("disables Previous button on first page", async () => {
-    render(<FilePreview path="docs/report.pdf" extension=".pdf" />);
+    render(<FilePreview path="docs/report.pdf" kind="pdf" />);
     await waitFor(() => {
       expect(screen.getByText("Previous")).toBeDefined();
     });
@@ -130,7 +130,7 @@ describe("FilePreview", () => {
   });
 
   it("disables Next button on last page", async () => {
-    render(<FilePreview path="docs/report.pdf" extension=".pdf" />);
+    render(<FilePreview path="docs/report.pdf" kind="pdf" />);
     await waitFor(() => {
       expect(screen.getByText("Next")).toBeDefined();
     });
@@ -144,7 +144,7 @@ describe("FilePreview", () => {
 
   it("shows download fallback when PDF fails to load", async () => {
     pdfMockBehavior.shouldError = true;
-    const { container } = render(<FilePreview path="docs/broken.pdf" extension=".pdf" />);
+    const { container } = render(<FilePreview path="docs/broken.pdf" kind="pdf" />);
     await waitFor(() => {
       expect(screen.getByText("Unable to preview this PDF")).toBeDefined();
     });
@@ -154,14 +154,14 @@ describe("FilePreview", () => {
   });
 
   it("renders download link for .docx files", () => {
-    const { container } = render(<FilePreview path="docs/contract.docx" extension=".docx" />);
+    const { container } = render(<FilePreview path="docs/contract.docx" kind="download" />);
     const downloadLink = container.querySelector('a[download]');
     expect(downloadLink).not.toBeNull();
     expect(downloadLink?.getAttribute("href")).toBe("/api/kb/content/docs/contract.docx");
   });
 
   it("renders download link for .csv files", () => {
-    const { container } = render(<FilePreview path="data/report.csv" extension=".csv" />);
+    const { container } = render(<FilePreview path="data/report.csv" kind="download" />);
     const downloadLink = container.querySelector('a[download]');
     expect(downloadLink).not.toBeNull();
   });
@@ -172,7 +172,7 @@ describe("FilePreview", () => {
       text: () => Promise.resolve("Hello world content"),
     });
 
-    render(<FilePreview path="notes/readme.txt" extension=".txt" />);
+    render(<FilePreview path="notes/readme.txt" kind="text" />);
 
     await waitFor(() => {
       expect(screen.getByText("Hello world content")).toBeDefined();
@@ -182,7 +182,7 @@ describe("FilePreview", () => {
   it("shows download fallback when .txt fetch fails", async () => {
     global.fetch = vi.fn().mockRejectedValue(new Error("Network error"));
 
-    const { container } = render(<FilePreview path="notes/broken.txt" extension=".txt" />);
+    const { container } = render(<FilePreview path="notes/broken.txt" kind="text" />);
 
     await waitFor(() => {
       const downloadLink = container.querySelector('a[download]');
@@ -192,7 +192,7 @@ describe("FilePreview", () => {
 
   it("default showDownload renders internal Download row for PDF (preserves shared viewer affordance)", async () => {
     // Regression guard: shared viewer (`/shared/[token]`) relies on this default.
-    const { container } = render(<FilePreview path="docs/report.pdf" extension=".pdf" />);
+    const { container } = render(<FilePreview path="docs/report.pdf" kind="pdf" />);
     await waitFor(() => {
       const downloadLink = container.querySelector('a[download]');
       expect(downloadLink).not.toBeNull();
@@ -204,7 +204,7 @@ describe("FilePreview", () => {
       ok: true,
       text: () => Promise.resolve("content"),
     });
-    const { container } = render(<FilePreview path="notes/readme.txt" extension=".txt" />);
+    const { container } = render(<FilePreview path="notes/readme.txt" kind="text" />);
     await waitFor(() => {
       const downloadLink = container.querySelector("a[download]");
       expect(downloadLink).not.toBeNull();
@@ -213,7 +213,7 @@ describe("FilePreview", () => {
 
   it("hides internal filename/Download row for PDF when showDownload={false}", async () => {
     const { container } = render(
-      <FilePreview path="docs/report.pdf" extension=".pdf" showDownload={false} />,
+      <FilePreview path="docs/report.pdf" kind="pdf" showDownload={false} />,
     );
     await waitFor(() => {
       const pdfDoc = container.querySelector('[data-testid="pdf-document"]');
@@ -226,7 +226,7 @@ describe("FilePreview", () => {
   it("PDF error fallback still renders download link with showDownload={false}", async () => {
     pdfMockBehavior.shouldError = true;
     const { container } = render(
-      <FilePreview path="docs/broken.pdf" extension=".pdf" showDownload={false} />,
+      <FilePreview path="docs/broken.pdf" kind="pdf" showDownload={false} />,
     );
     await waitFor(() => {
       expect(screen.getByText("Unable to preview this PDF")).toBeDefined();
@@ -243,7 +243,7 @@ describe("FilePreview", () => {
     });
 
     const { container } = render(
-      <FilePreview path="notes/readme.txt" extension=".txt" showDownload={false} />,
+      <FilePreview path="notes/readme.txt" kind="text" showDownload={false} />,
     );
 
     await waitFor(() => {
@@ -254,7 +254,7 @@ describe("FilePreview", () => {
   });
 
   it("opens lightbox when image is clicked", async () => {
-    const { container } = render(<FilePreview path="assets/logo.png" extension=".png" />);
+    const { container } = render(<FilePreview path="assets/logo.png" kind="image" />);
 
     const button = container.querySelector("button");
     expect(button).not.toBeNull();
@@ -267,7 +267,7 @@ describe("FilePreview", () => {
   });
 
   it("closes lightbox when close button is clicked", async () => {
-    const { container } = render(<FilePreview path="assets/logo.png" extension=".png" />);
+    const { container } = render(<FilePreview path="assets/logo.png" kind="image" />);
 
     // Open lightbox
     const openBtn = container.querySelector("button");

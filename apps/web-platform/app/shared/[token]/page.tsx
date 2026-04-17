@@ -6,6 +6,7 @@ import dynamic from "next/dynamic";
 import { MarkdownRenderer } from "@/components/ui/markdown-renderer";
 import { CtaBanner } from "@/components/shared/cta-banner";
 import { KbContentSkeleton } from "@/components/kb/kb-content-skeleton";
+import { TextPreview } from "@/components/kb/text-preview";
 import { SHARED_CONTENT_KIND_HEADER } from "@/lib/shared-kind";
 import {
   classifyResponse,
@@ -147,6 +148,14 @@ export default function SharedDocumentPage({
                   className="max-h-[80vh] max-w-full rounded-lg border border-neutral-800"
                 />
               </div>
+            )}
+
+            {data?.kind === "text" && (
+              <TextPreview
+                src={data.src}
+                filename={data.filename}
+                showDownload={true}
+              />
             )}
 
             {data?.kind === "download" && (
