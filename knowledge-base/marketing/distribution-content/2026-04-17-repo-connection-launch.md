@@ -24,7 +24,7 @@ What this changes:
 
 Three onboarding paths: connect an existing repo, create a new one, or skip for later.
 
-Blog post with full details: <{{ site.url }}blog/your-ai-team-works-from-your-actual-codebase/>
+Blog post with full details: <https://soleur.ai/blog/your-ai-team-works-from-your-actual-codebase/?utm_source=discord&utm_medium=community&utm_campaign=your-ai-team-works-from-your-actual-codebase>
 
 ---
 
@@ -55,7 +55,7 @@ You brief it from scratch. Every. Single. Session.
 
 Designed for founders who may not be technical. Plain language throughout.
 
-Full details: <{{ site.url }}blog/your-ai-team-works-from-your-actual-codebase/>
+Full details: <https://soleur.ai/blog/your-ai-team-works-from-your-actual-codebase/?utm_source=x&utm_medium=social&utm_campaign=your-ai-team-works-from-your-actual-codebase>
 
 <!-- markdownlint-disable-next-line MD018 -->
 #solofounder #buildinpublic
@@ -84,7 +84,7 @@ For founders without a repo yet: the onboarding flow creates one for you with a 
 
 This is the feature that makes compound knowledge practical. Without it, institutional memory was per-session. With it, every decision persists, every session builds on the last, and the AI team gets better the longer you use it.
 
-Full writeup on the engineering and the design decisions: <{{ site.url }}blog/your-ai-team-works-from-your-actual-codebase/>
+Full writeup on the engineering and the design decisions: <https://soleur.ai/blog/your-ai-team-works-from-your-actual-codebase/?utm_source=linkedin-personal&utm_medium=social&utm_campaign=your-ai-team-works-from-your-actual-codebase>
 
 <!-- markdownlint-disable-next-line MD018 -->
 #solofounder #buildinpublic
@@ -106,7 +106,7 @@ Key details:
 
 This is the infrastructure that makes Soleur's compound knowledge architecture practical. Every session builds on the last.
 
-Full details: <{{ site.url }}blog/your-ai-team-works-from-your-actual-codebase/>
+Full details: <https://soleur.ai/blog/your-ai-team-works-from-your-actual-codebase/?utm_source=linkedin-company&utm_medium=social&utm_campaign=your-ai-team-works-from-your-actual-codebase>
 
 ---
 
@@ -165,7 +165,7 @@ The pattern: write a shell script to `/tmp/git-cred-<UUID>` that echoes x-access
 
 Security hardening: randomized UUID paths prevent symlink attacks, userId UUID validation prevents path traversal, and the tokens auto-expire regardless.
 
-Full technical writeup: <{{ site.url }}blog/credential-helper-isolation-sandboxed-environments/>
+Full technical writeup: <https://soleur.ai/blog/credential-helper-isolation-sandboxed-environments/?utm_source=hackernews&utm_medium=community&utm_campaign=your-ai-team-works-from-your-actual-codebase>
 
 Context: this is part of Soleur, an open-source AI team platform. The repo connection feature lets agents operate on a founder's actual GitHub codebase with best-effort sync (pull on session start, push on session end).
 
