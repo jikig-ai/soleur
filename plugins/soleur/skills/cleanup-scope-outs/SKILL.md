@@ -1,16 +1,17 @@
 ---
 name: cleanup-scope-outs
-description: "This skill should be used when draining the deferred-scope-out backlog in one cleanup PR. Groups open scope-outs by code area and delegates a cluster to /soleur:one-shot."
+description: "This skill should be used when draining a labeled backlog (deferred-scope-out, code-review) in one cleanup PR. Groups by code area and delegates to /soleur:one-shot."
 ---
 
 # Cleanup Scope-Outs
 
-Drain the `deferred-scope-out` backlog by batching issues that touch the same code area into a single focused refactor PR. Inspired by PR #2486, which closed `#2467 + #2468 + #2469` in one cleanup.
+Drain a labeled-issue backlog by batching issues that touch the same code area into a single focused refactor PR. Defaults to `deferred-scope-out` (the original use case, inspired by PR #2486, which closed `#2467 + #2468 + #2469` in one cleanup). Any other label works via `--label` — e.g., `code-review` drains unresolved review findings instead of deferred ones.
 
 ## When to use
 
 - The Phase-3 (or any active phase) `deferred-scope-out` backlog has grown and needs a scheduled drain.
-- Multiple open scope-outs reference the same top-level directory (e.g., `apps/web-platform`) and are safe to batch.
+- An unresolved `code-review` backlog from a review wave has accumulated and needs a coordinated close-out.
+- Multiple open issues with the target label reference the same top-level directory (e.g., `apps/web-platform`) and are safe to batch.
 - You want one PR to close 3+ issues instead of N separate PRs.
 
 Use `/soleur:review` to file new scope-outs. Use this skill to close existing ones.
@@ -19,7 +20,7 @@ Use `/soleur:review` to file new scope-outs. Use this skill to close existing on
 
 - `gh` authenticated, `jq` and `python3` available.
 - Current directory is a git worktree (not the bare root).
-- At least one cluster of `min-cluster-size` open `deferred-scope-out` issues.
+- At least one cluster of `min-cluster-size` open issues carrying the target label.
 
 ## Arguments
 
@@ -27,6 +28,7 @@ Use `/soleur:review` to file new scope-outs. Use this skill to close existing on
 
 Optional flags (any subset):
 
+- `--label <name>` — which GitHub label drives the backlog query. Default: `deferred-scope-out`. Pass `code-review` to drain unresolved review findings; pass any other label for a custom drain. Validated against `gh label list` before querying (rule `cq-gh-issue-label-verify-name`).
 - `--milestone "<title>"` — which milestone to drain. Default: `Post-MVP / Later` (where 15+ of the open scope-outs live at plan time). Takes the milestone **title**, never a numeric ID (rule `cq-gh-issue-create-milestone-takes-title`).
 - `--top-n N` — how many clusters to consider. Default: `1`.
 - `--min-cluster-size M` — minimum issues in a cluster before the skill will pick it. Default: `3`.
@@ -52,6 +54,7 @@ Delegate to the helper [group-by-area.sh](./scripts/group-by-area.sh):
 
 ```bash
 bash plugins/soleur/skills/cleanup-scope-outs/scripts/group-by-area.sh \
+  --label "${LABEL:-deferred-scope-out}" \
   --milestone "$MILESTONE" \
   --top-n "${N:-1}" \
   --min-cluster-size "${MIN_CLUSTER:-3}"
@@ -59,7 +62,7 @@ bash plugins/soleur/skills/cleanup-scope-outs/scripts/group-by-area.sh \
 
 The helper:
 
-- Validates the milestone title exists via `gh api ...milestones` + `grep -Fxq` before querying.
+- Validates the label exists via `gh label list` (rule `cq-gh-issue-label-verify-name`) and the milestone title exists via `gh api ...milestones` + `grep -Fxq` before querying.
 - Uses two-stage piping (`gh --json ... | jq`), never `gh --jq` with `--arg` (learning `2026-04-15-gh-jq-does-not-forward-arg-to-jq`).
 - Parses each issue body for file paths matching `(ts|tsx|js|jsx|py|rb|go|md|sh|yml|yaml|sql|tf|njk)` extensions via a non-capturing regex.
 - Assigns each issue to an **area** = top two path segments (e.g., `apps/web-platform`, `plugins/soleur`) of its most-referenced file path.
@@ -73,10 +76,10 @@ The helper:
 
 ### 5. Build the one-shot scope argument
 
-For the picked cluster, compose a scope string the `one-shot` skill can consume directly:
+For the picked cluster, compose a scope string the `one-shot` skill can consume directly. Mention the originating label so the downstream plan frames the work correctly (e.g., "deferred-scope-out backlog" vs. "code-review findings"):
 
 ```text
-Drain the deferred-scope-out backlog for code area <area> by closing
+Drain the <label> backlog for code area <area> by closing
 #<A> + #<B> + #<C> in a single focused refactor PR. Each issue names
 specific files and proposed fixes; fold them all into one change.
 
@@ -101,10 +104,10 @@ Use the Skill tool: `skill: soleur:one-shot`, args: `<scope argument built above
 
 ### 7. Report backlog delta
 
-After `one-shot` returns (PR merged), re-query the milestone:
+After `one-shot` returns (PR merged), re-query the milestone using the same label:
 
 ```bash
-gh issue list --label deferred-scope-out --state open \
+gh issue list --label "${LABEL:-deferred-scope-out}" --state open \
   --milestone "$MILESTONE" --json number --jq 'length'
 ```
 
