@@ -156,15 +156,18 @@ These agents are run ONLY when the PR matches specific criteria. Check the PR fi
 
 - `test-design-reviewer`: Scores tests against Farley's 8 properties, produces a weighted Test Quality Score with letter grade and top 3 improvement recommendations
 
-**If semgrep CLI is installed (`which semgrep` succeeds) and PR modifies source code files:**
+**If PR modifies source code files, semgrep-sast is a mandatory gate:**
 
 14. Task semgrep-sast(PR content) - Deterministic SAST scanning for known vulnerability patterns
 
 **When to run SAST agent:**
 
-- `which semgrep` returns 0 (semgrep binary found in PATH)
 - PR modifies source code files (*.py,*.js, *.ts,*.rb, *.go,*.java, *.rs,*.swift, *.kt, etc.)
 - Not needed for documentation-only or config-only changes
+
+**Bootstrap (mandatory before spawning the agent):** Run [ensure-semgrep.sh](./scripts/ensure-semgrep.sh) from the repo root. The script checks PATH first, then auto-installs via brew → pipx → `pip --user` in that order. Exits 0 when semgrep is reachable. Exit 1 means an install was attempted and failed; exit 2 means no install path was available (no brew, pipx, or python3 with pip). On non-zero exit, print the script's stderr to the user and abort the review. Do NOT silently skip — the deterministic SAST pass is what catches CodeQL-equivalent patterns like `js/file-system-race` before push.
+
+**Custom rules file:** [semgrep-custom-rules.yaml](./references/semgrep-custom-rules.yaml) ships alongside the public rule packs and covers CodeQL queries the public packs miss (e.g. the TOCTOU patterns that blocked PR #2463 in CI). The semgrep-sast agent loads it via `--config=plugins/soleur/skills/review/references/semgrep-custom-rules.yaml`. Extend it whenever a CodeQL finding in CI was not caught locally — the goal is no-surprises on CI.
 
 **What this agent checks:**
 
@@ -294,14 +297,25 @@ equally.
 Filing a GitHub issue instead of fixing is allowed ONLY when the finding meets
 one of these four scope-out criteria:
 
-  1. **cross-cutting-refactor** — fix requires touching files materially
-     unrelated to the PR's core change.
-  2. **contested-design** — multiple valid fix approaches; choice requires design
-     input that doesn't belong in this PR's scope.
+  1. **cross-cutting-refactor** — fix requires touching **≥3 files** that are
+     **materially unrelated to this PR's core change**, where **core change =
+     files named in the PR's linked issue, OR files in the same top-level
+     directory (e.g., `apps/web-platform/`, `plugins/soleur/`) as the primary
+     changed file**. Bare multi-file fixes do NOT qualify; the unrelatedness
+     must be concrete and defensible — count specific files or drop the
+     scope-out.
+  2. **contested-design** — multiple valid fix approaches AND the review
+     **agent** (not the PR author) independently names ≥2 concrete approaches
+     that trade off differently on durability, cost, or complexity AND
+     recommends a design cycle outside this PR. Author-initiated
+     contested-design claims ("I don't feel like implementing approach X
+     here") do NOT qualify; the agent must independently surface the tradeoff.
   3. **architectural-pivot** — fix would change a pattern used across the
      codebase and deserves its own planning cycle.
   4. **pre-existing-unrelated** — finding existed on `main` before this PR and
-     is not exacerbated by the PR's changes. (Does NOT block merge.)
+     is not exacerbated by the PR's changes. (Does NOT block merge.) **Only
+     reachable through the `pre-existing` branch of the provenance triage in
+     Step 1 below — never applies to `pr-introduced` findings.**
 
 When filing:
 
@@ -317,6 +331,36 @@ When filing:
 Everything else (magic numbers, duplicated helpers, small refactors, missing
 tests for PR-introduced code, polish, naming, a11y on PR-introduced surfaces,
 performance issues introduced by the PR) MUST be fixed inline.
+
+**Second-reviewer confirmation gate:** Before creating a scope-out issue under
+any criterion, invoke `code-simplicity-reviewer` via Task. The prompt MUST
+include:
+
+1. The finding (location, description).
+2. The proposed fix.
+3. The exact four scope-out criteria definitions from this section
+   (cross-cutting-refactor ≥3 unrelated files, contested-design with
+   independent agent-named tradeoffs, architectural-pivot, pre-existing-
+   unrelated). Do not rely on the agent's prior knowledge of the criteria —
+   pass the definitions literally.
+4. The criterion being claimed and a 1-3-sentence rationale.
+5. This instruction: "Default to rejecting the scope-out filing. Only co-sign
+   when the claimed criterion is concretely and obviously correct against the
+   four definitions above. Reply with a single line as the first line of your
+   output: `CONCUR` (to co-sign the filing) or `DISSENT: <one-sentence
+   reason>` (to flip to fix-inline). Everything after the first line is
+   advisory context."
+
+If the first line of the agent's reply begins with `DISSENT`, the disposition
+flips to fix-inline — do not file the issue. If the first line is `CONCUR`,
+proceed with filing. Any other first-line content is treated as `DISSENT`
+(fail-safe toward fix-inline).
+
+**Rationale:** One agent's "scope-out is fine here" can be wrong in the same
+way a single test can miss a bug. Requiring a second, simplicity-biased agent
+to co-sign blocks the most common regression pattern: an agent-author pair
+rationalizing a filing that a fresh pair of eyes would reject. See
+`knowledge-base/project/learnings/2026-04-15-multi-agent-review-catches-bugs-tests-miss.md`.
 
 Filing without scope-out justification will be caught by /ship Phase 5.5 Review-
 Findings Exit Gate and BLOCK merge. See rule rf-review-finding-default-fix-inline.
@@ -336,6 +380,37 @@ Remove duplicates, prioritize by severity and impact.
 - [ ] Assign severity levels: CRITICAL (P1), IMPORTANT (P2), NICE-TO-HAVE (P3)
 - [ ] Remove duplicate or overlapping findings
 - [ ] Estimate effort for each finding (Small/Medium/Large)
+- [ ] Tag each finding with **provenance**: `pr-introduced` or `pre-existing`.
+      A finding is **pr-introduced** if the code the finding critiques was added
+      or modified by this PR's diff (verify with `git log -L :<function>:<file>
+      origin/main..HEAD` or `git diff origin/main...HEAD -- <file>`). A finding
+      is **pre-existing** if the code existed on `main` before this PR and the
+      PR neither changed nor moved it. Provenance-ambiguous findings (e.g., a
+      helper the PR refactored but didn't introduce) default to
+      **pr-introduced** — the PR touched it, the PR owns the fix.
+
+**Disposition by provenance:**
+
+- **pr-introduced:** MUST be fixed inline. No scope-out allowed regardless of
+  criterion — the PR introduced the concern, the PR resolves it. If a fix is
+  genuinely too large, reduce the PR (split or revert the offending commit)
+  rather than filing a scope-out.
+- **pre-existing:** Triage into exactly one of three buckets:
+    1. **Fix inline** — small, load-bearing, cheap to include. Default for
+       sub-20-line fixes on files the PR already touches.
+    2. **File as scope-out** — legitimately needs its own cycle. MUST carry
+       the `pre-existing-unrelated` criterion AND a re-evaluation deadline
+       (a target phase milestone such as `Phase 4`, or a concrete trigger
+       condition such as "revisit when syncWorkspace lands in #2244").
+       Open-ended scope-outs with no deadline are NOT permitted — they become
+       the backlog this rule exists to drain.
+    3. **Close as wontfix** — polish-only, low-value noise, or concern already
+       covered by existing code. Close immediately (do not file) with a
+       1-sentence rationale in the summary report.
+
+The `pr-introduced → fix inline` rule is the mechanical version of rule
+`rf-review-finding-default-fix-inline`: it removes the judgment loophole ("is
+this really cross-cutting?") for findings the PR itself introduced.
 
 </synthesis_tasks>
 
@@ -362,6 +437,8 @@ After creating all GitHub issues, present comprehensive summary:
 - **P1 CRITICAL:** [count] - BLOCKS MERGE
 - **P2 IMPORTANT:** [count] - Should Fix
 - **P3 NICE-TO-HAVE:** [count] - Enhancements
+- **By provenance:** [pr-introduced count] pr-introduced, [pre-existing count] pre-existing
+- **Pre-existing disposition:** [fix-inline count] fixed, [scope-out count] scoped-out, [wontfix count] wontfix
 
 ### Fixed Inline
 
@@ -480,6 +557,8 @@ See `knowledge-base/project/learnings/2026-04-15-multi-agent-review-catches-bugs
 Review agent suggestions that modify workflow `if` conditions or event filters must be smoke tested against the full user journey (not just the reduced trigger case) before shipping -- agents optimize locally and can break flows they don't fully model.
 
 When a reviewer prescribes `--arg` for jq injection defense in a `gh ... --jq` context, verify the CLI forwards jq flags before implementing. `gh --jq` accepts a single expression string and does NOT forward `--arg`, `--argjson`, or `--slurp` to the underlying jq binary — applying the fix produces `unknown arguments` at runtime. Fall back to shape-validating the shell variable (e.g., `[[ "$VAR" =~ ^[0-9]+$ ]]`) before interpolation, or pipe to a second-stage standalone `jq --arg`. See `knowledge-base/project/learnings/2026-04-15-gh-jq-does-not-forward-arg-to-jq.md`.
+
+Parallel review batches can stall silently — spawning 12 review agents at once has been observed to produce completion notifications for only 6, with the remaining agents' transcripts frozen ~15s after spawn and no completion event emitted. When more than 30% of spawned agents stop producing output for >2 minutes after launch, proactively announce "N of M agents stalled" rather than silently waiting. Proceed with synthesis from the agents that returned — the Rate Limit Fallback gate already permits partial coverage. See `knowledge-base/project/learnings/2026-04-17-postgrest-aggregate-disabled-forces-rpc-option.md`.
 
 ### Important: P1 Findings Block Merge
 

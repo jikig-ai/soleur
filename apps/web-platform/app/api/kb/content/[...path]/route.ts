@@ -8,10 +8,14 @@ import {
   KbAccessDeniedError,
   KbValidationError,
 } from "@/server/kb-reader";
-import { readBinaryFile, buildBinaryResponse } from "@/server/kb-binary-response";
+import {
+  validateBinaryFile,
+  buildBinaryResponse,
+  BinaryOpenError,
+} from "@/server/kb-binary-response";
 
 export async function GET(
-  _request: Request,
+  request: Request,
   { params }: { params: Promise<{ path: string[] }> },
 ) {
   const supabase = await createClient();
@@ -71,11 +75,23 @@ export async function GET(
     }
   }
 
-  // Binary file serving — delegate to shared helper so owner and public
-  // (/api/shared/[token]) routes share one hardened implementation.
-  const result = await readBinaryFile(kbRoot, relativePath);
+  // Binary file serving — owner route streams unconditionally (no hash
+  // gate). The share route adds a content-hash verdict cache on top of
+  // the same helpers.
+  const result = await validateBinaryFile(kbRoot, relativePath);
   if (!result.ok) {
     return NextResponse.json({ error: result.error }, { status: result.status });
   }
-  return buildBinaryResponse(result);
+  try {
+    return await buildBinaryResponse(result, request);
+  } catch (err) {
+    if (err instanceof BinaryOpenError) {
+      logger.warn(
+        { err: err.message, code: err.code, path: relativePath },
+        "kb/content: open failed on serve",
+      );
+      return NextResponse.json({ error: err.message }, { status: err.status });
+    }
+    throw err;
+  }
 }

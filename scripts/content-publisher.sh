@@ -69,6 +69,94 @@ get_frontmatter_field() {
   parse_frontmatter "$file" | grep "^${field}:" | sed "s/^${field}: *//" | sed 's/^"\(.*\)"$/\1/' || true
 }
 
+# --- Liquid Marker Validation ---
+#
+# Distribution content files are raw API payloads (Discord webhook content,
+# X tweet text, LinkedIn share text) — NOT Eleventy templates. Any Liquid/Jinja
+# marker in a body section will be posted verbatim to third parties. This
+# validator rejects files containing such markers before the publish loop
+# dispatches to any channel.
+#
+# Scope: body only (bytes after the second `---`). Frontmatter fields are
+# exempt because they may legitimately contain braces (JSON-encoded values,
+# relative URL paths, etc.) and are never posted to third parties directly.
+#
+# Returns 0 if clean, 1 if any marker is found. Prints offending lines to
+# stderr in `<file>:<file-relative-line>: unrendered Liquid marker: <content>`
+# format (matches scripts/lint-distribution-content.sh for operator grepability).
+
+# Strip C0/C1 control bytes and Unicode line separators (U+2028/U+2029).
+# Content bytes from third-party markdown flow into stderr and issue bodies;
+# escape sequences in those bytes can rewrite terminal titles, inject cursor
+# control in CI logs, or trigger OSC 52 clipboard hijack. echo (no -e) does
+# not interpret them, but many terminals do on raw output.
+_liquid_strip_controls() {
+  printf '%s' "$1" | LC_ALL=C tr -d '\000-\010\013\014\016-\037\177' | sed 's/\xe2\x80\xa8//g; s/\xe2\x80\xa9//g'
+}
+
+validate_no_liquid_markers() {
+  local file="$1"
+  local body offenders offset
+
+  body=$(awk '/^---$/{c++; next} c==2' "$file")
+  if [[ -z "$body" ]]; then
+    return 0
+  fi
+
+  # Offset = line number of the second `---` in the source file. grep -n
+  # against the body gives body-relative numbers; adding offset yields
+  # file-relative numbers that a human can open directly in an editor.
+  offset=$(awk '/^---$/{c++; if (c==2) { print NR; exit } }' "$file")
+  if [[ -z "$offset" ]]; then
+    offset=0
+  fi
+
+  offenders=$(printf '%s\n' "$body" | grep -nF -e '{{' -e '}}' -e '{%' -e '%}' || true)
+  if [[ -z "$offenders" ]]; then
+    return 0
+  fi
+
+  local hit body_lineno content file_lineno safe_content
+  while IFS= read -r hit; do
+    body_lineno="${hit%%:*}"
+    content="${hit#*:}"
+    file_lineno=$((body_lineno + offset))
+    safe_content=$(_liquid_strip_controls "$content")
+    echo "$file:$file_lineno: unrendered Liquid marker: $safe_content" >&2
+  done <<< "$offenders"
+  return 1
+}
+
+# Redact token-like values before embedding offending lines in a public
+# GitHub issue body. Heuristic only — catches the common case of an
+# authoring mistake that embeds a secret via template syntax.
+_liquid_redact_secrets() {
+  sed -E 's/((token|secret|key|password|api[_-]?key)[[:space:]]*[:=][[:space:]]*)[^[:space:]"]+/\1[REDACTED]/gi'
+}
+
+create_liquid_marker_fallback_issue() {
+  local file="$1"
+  local offenders="${2:-}"
+  local base safe_offenders
+  base=$(basename "$file" .md)
+
+  # Sanitize offender content before embedding in a public issue body:
+  # strip control bytes, redact token-like values, escape triple-backticks
+  # that would terminate the fenced code block.
+  safe_offenders=$(_liquid_strip_controls "$offenders" | _liquid_redact_secrets | sed 's/```/`\xe2\x80\x8b``/g')
+
+  local title="[Content Publisher] Unrendered Liquid markers in $base -- post blocked"
+  local offender_section=""
+  if [[ -n "$safe_offenders" ]]; then
+    offender_section=$(printf '\n\n**Offending lines:**\n```\n%s\n```' "${safe_offenders:0:1500}")
+  fi
+  local body
+  body=$(printf '## Unrendered Liquid Markers Detected\n\nThe content publisher refused to post **%s** because its body contains one or more Liquid/Jinja template markers (`{{`, `}}`, `{%%`, `%%}`).%s\n\nDistribution content is piped to third-party APIs verbatim — template markers are never resolved. Fix the source file, re-set `status: scheduled`, and the next cron run will publish.' \
+    "$base" "$offender_section")
+
+  create_dedup_issue "$title" "$body" "action-required,content-publisher"
+}
+
 # --- Channel Mapping ---
 
 # Maps channel name from frontmatter to section heading in content file.
@@ -121,7 +209,7 @@ extract_section() {
 
 extract_tweets() {
   local file="$1"
-  local x_section
+  local x_section mode
 
   x_section=$(extract_section "$file" "X/Twitter Thread")
   if [[ -z "$x_section" ]]; then
@@ -129,19 +217,65 @@ extract_tweets() {
     return 1
   fi
 
-  # Split on **Tweet N pattern, output RS-separated (\x1e) for safe multi-line handling.
-  # Uses \x1e (ASCII Record Separator) because mawk silently drops \0.
-  # Strips the label line (e.g., "**Tweet 1 (Hook) -- 272 chars:**").
-  echo "$x_section" | awk '
-    /^\*\*Tweet [0-9]/ { if (buf != "") { printf "%s\x1e", buf }; buf=""; next }
-    {
-      line = $0
-      gsub(/^[[:space:]]+|[[:space:]]+$/, "", line)
-      if (buf != "") buf = buf "\n" line
-      else buf = line
-    }
-    END { if (buf != "") printf "%s\x1e", buf }
-  '
+  # Two authoring formats are supported:
+  #  (a) Labeled format: each tweet preceded by `**Tweet N (...) -- N chars:**` (label dropped).
+  #  (b) Numbered format: no label; tweets 2+ begin with `N/ ` on a fresh line. The hook
+  #      is the blob before the first `N/` marker. The `N/ ` prefix is preserved so the
+  #      posted tweet keeps its thread-position cue.
+  # Detect mode so `N/ ` lines inside a labeled tweet body (which are legitimate
+  # tweet content in the labeled convention) are not mistakenly treated as tweet
+  # boundaries. Label detection tolerates leading whitespace (`  **Tweet 1 ...`).
+  mode="labeled"
+  if ! echo "$x_section" | grep -qE '^[[:space:]]*\*\*Tweet[[:space:]]+[0-9]'; then
+    mode="numbered"
+  fi
+
+  # Output RS-separated (\x1e) for safe multi-line handling. mawk silently drops \0.
+  if [[ "$mode" == "labeled" ]]; then
+    echo "$x_section" | awk '
+      /^[[:space:]]*\*\*Tweet[[:space:]]+[0-9]/ { if (buf != "") { printf "%s\x1e", buf }; buf=""; next }
+      {
+        line = $0
+        gsub(/^[[:space:]]+|[[:space:]]+$/, "", line)
+        if (buf != "") buf = buf "\n" line
+        else buf = line
+      }
+      END { if (buf != "") printf "%s\x1e", buf }
+    '
+  else
+    # Numbered mode: only split when the line starts with `<expected>/ ` where
+    # `expected` begins at 2 (hook is tweet 1, un-prefixed) and increments after
+    # each match. This prevents prose like `3/5 users` or `1/3 of devs` from
+    # being miscounted as a tweet boundary.
+    echo "$x_section" | awk '
+      BEGIN { expected = 2 }
+      {
+        line = $0
+        gsub(/^[[:space:]]+|[[:space:]]+$/, "", line)
+      }
+      # Boundary detected: line starts with the expected sequence number + "/ ".
+      # Use substr/match to parse rather than regex interpolation.
+      {
+        is_boundary = 0
+        if (match(line, /^[0-9]+\/ /)) {
+          prefix = substr(line, RSTART, RLENGTH)
+          n = substr(prefix, 1, length(prefix) - 2) + 0
+          if (n == expected) { is_boundary = 1 }
+        }
+      }
+      is_boundary {
+        if (buf != "") { printf "%s\x1e", buf }
+        buf = line
+        expected++
+        next
+      }
+      {
+        if (buf != "") buf = buf "\n" line
+        else buf = line
+      }
+      END { if (buf != "") printf "%s\x1e", buf }
+    '
+  fi
 }
 
 # --- Discord Posting ---
@@ -596,6 +730,19 @@ main() {
 
     echo "---"
     echo "Publishing: $CASE_NAME ($(basename "$file"))"
+
+    # Hard gate: reject any file whose body contains unrendered Liquid/Jinja
+    # markers. Distribution content is posted verbatim to third parties — a
+    # stray `{{ site.url }}` becomes a literal `{{ site.url }}` in the
+    # Discord message. Skip all channels for this file and file a fallback
+    # issue so the broken content is tracked, not lost.
+    local liquid_offenders
+    if ! liquid_offenders=$(validate_no_liquid_markers "$file" 2>&1 1>/dev/null); then
+      echo "Error: Unrendered Liquid markers detected. Skipping all channels for this file." >&2
+      create_liquid_marker_fallback_issue "$file" "$liquid_offenders" || true
+      failures=$((failures + 1))
+      continue
+    fi
 
     local file_failures=0
     local file_successes=0

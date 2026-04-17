@@ -1,4 +1,13 @@
-import { describe, test, expect, vi, beforeEach, afterEach } from "vitest";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import {
+  describe,
+  test,
+  expect,
+  vi,
+  beforeEach,
+  afterEach,
+} from "vitest";
 
 // Phase 5.1/5.2: POST /api/analytics/track
 //   - Rejects missing / disallowed Origin with 403
@@ -9,15 +18,31 @@ import { describe, test, expect, vi, beforeEach, afterEach } from "vitest";
 //   - Non-JSON Plausible response is tolerated (no crash, 204)
 //   - GET returns 405
 //   - Missing PLAUSIBLE_* env: graceful 204 skip
+//
+// Hardening bundle (#2383):
+//   T1 — cf-connecting-ip beats rotating x-forwarded-for for rate-limit keying
+//   T2 — throttle pruner reduces .size after window and module installs
+//        setInterval(..., 60_000) calling analyticsTrackThrottle.prune()
+//   T3 — allowlist strips non-path prop keys (email, sessionId, fingerprint, ...)
+//   T4 — truncates prop string values at 200 chars
+//   T5 — sanitizeForLog strips C0 control characters from goal + err
 
-const { mockFetch } = vi.hoisted(() => ({
+const { mockFetch, logWarn, logInfo, logDebug } = vi.hoisted(() => ({
   mockFetch: vi.fn(),
+  logWarn: vi.fn(),
+  logInfo: vi.fn(),
+  logDebug: vi.fn(),
 }));
 vi.stubGlobal("fetch", mockFetch);
 
 vi.mock("@/server/logger", () => ({
-  default: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
-  createChildLogger: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
+  default: { info: logInfo, warn: logWarn, error: vi.fn() },
+  createChildLogger: () => ({
+    info: logInfo,
+    warn: logWarn,
+    debug: logDebug,
+    error: vi.fn(),
+  }),
 }));
 
 async function importRoute() {
@@ -29,12 +54,19 @@ function makeRequest(
   {
     origin,
     forwardedFor,
+    cfConnectingIp,
     body,
-  }: { origin?: string | null; forwardedFor?: string; body?: unknown },
+  }: {
+    origin?: string | null;
+    forwardedFor?: string;
+    cfConnectingIp?: string;
+    body?: unknown;
+  },
 ): Request {
   const headers = new Headers({ "content-type": "application/json" });
   if (origin !== null && origin !== undefined) headers.set("origin", origin);
   if (forwardedFor) headers.set("x-forwarded-for", forwardedFor);
+  if (cfConnectingIp) headers.set("cf-connecting-ip", cfConnectingIp);
   return new Request(url, {
     method: "POST",
     headers,
@@ -46,6 +78,9 @@ describe("POST /api/analytics/track", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockFetch.mockReset();
+    logWarn.mockReset();
+    logInfo.mockReset();
+    logDebug.mockReset();
     vi.resetModules();
     process.env.PLAUSIBLE_SITE_ID = "soleur.test";
     process.env.PLAUSIBLE_EVENTS_URL = "https://plausible.io/api/event";
@@ -196,5 +231,251 @@ describe("POST /api/analytics/track", () => {
       }),
     );
     expect(res.status).toBe(400);
+  });
+
+  // -------------------------------------------------------------------------
+  // #2383 hardening — T1..T5
+  // -------------------------------------------------------------------------
+
+  test("T1: prefers cf-connecting-ip over rotating x-forwarded-for for rate-limit keying", async () => {
+    // Guard against silent coupling: the rate cap is read at module-load in
+    // throttle.ts. If this env var is missing or resetModules gets dropped,
+    // the test silently runs against the 120/min default and only fails at
+    // 121 requests. Assert the contract explicitly.
+    expect(process.env.ANALYTICS_TRACK_RATE_PER_MIN).toBe("3");
+
+    mockFetch.mockResolvedValue(new Response("", { status: 202 }));
+    const { POST } = await importRoute();
+    const cfIp = "7.7.7.7";
+    const xffRotation = ["1.1.1.1", "2.2.2.2", "3.3.3.3", "4.4.4.4"];
+    const statuses: number[] = [];
+    for (const xff of xffRotation) {
+      const res = await POST(
+        makeRequest("https://app.soleur.ai/api/analytics/track", {
+          origin: "https://app.soleur.ai",
+          cfConnectingIp: cfIp,
+          forwardedFor: xff,
+          body: { goal: "kb.chat.opened" },
+        }),
+      );
+      statuses.push(res.status);
+    }
+    // First three requests allowed, fourth blocked. Pre-fix: route keys on
+    // x-forwarded-for first; all four return 204.
+    expect(statuses.slice(0, 3)).toEqual([204, 204, 204]);
+    expect(statuses[3]).toBe(429);
+  });
+
+  test("T2a: analyticsTrackThrottle.prune() reclaims entries expired past the window", async () => {
+    const { analyticsTrackThrottle, __resetAnalyticsTrackThrottleForTest } =
+      await import("@/app/api/analytics/track/throttle");
+    __resetAnalyticsTrackThrottleForTest();
+    expect(analyticsTrackThrottle.size).toBe(0);
+
+    expect(analyticsTrackThrottle.isAllowed("a")).toBe(true);
+    expect(analyticsTrackThrottle.isAllowed("b")).toBe(true);
+    expect(analyticsTrackThrottle.size).toBe(2);
+
+    vi.useFakeTimers({ now: Date.now() });
+    try {
+      vi.advanceTimersByTime(61_000);
+      analyticsTrackThrottle.prune();
+      expect(analyticsTrackThrottle.size).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test("T2b: throttle module delegates prune wiring to shared helper", () => {
+    // Negative-space guard. After the startPruneInterval extraction, the raw
+    // setInterval/unref wiring lives in server/rate-limiter.ts, not throttle.ts.
+    // Per learning 2026-04-15-negative-space-tests-must-follow-extracted-logic,
+    // this test now runs at two layers: (1) delegation on the caller, (2)
+    // invariant on the helper. The helper-side invariant is owned by
+    // test/rate-limiter.test.ts ("helper body installs setInterval + prune +
+    // unref").
+    const throttlePath = join(
+      __dirname,
+      "..",
+      "app",
+      "api",
+      "analytics",
+      "track",
+      "throttle.ts",
+    );
+    const throttleSource = readFileSync(throttlePath, "utf-8");
+    // Layer 1: throttle.ts proves it calls the shared helper with the right
+    // counter. No raw setInterval should remain here — if it does, the
+    // extraction was incomplete.
+    expect(throttleSource).toMatch(
+      /startPruneInterval\(\s*analyticsTrackThrottle\s*\)/,
+    );
+  });
+
+  test("T3: drops non-allowlisted prop keys (email, sessionId, fingerprint, deviceId, ip)", async () => {
+    mockFetch.mockResolvedValue(new Response("", { status: 202 }));
+    const { POST } = await importRoute();
+    const req = makeRequest("https://app.soleur.ai/api/analytics/track", {
+      origin: "https://app.soleur.ai",
+      body: {
+        goal: "kb.chat.opened",
+        props: {
+          path: "x",
+          email: "a@b.example",
+          sessionId: "s",
+          session_id: "s",
+          fingerprint: "f",
+          deviceId: "d",
+          device_id: "d",
+          ip: "1.1.1.1",
+          user_id: "u",
+          userId: "u",
+        },
+      },
+    });
+    await POST(req);
+    const [, init] = mockFetch.mock.calls[0];
+    const payload = JSON.parse(String((init as RequestInit).body));
+    expect(payload.props).toEqual({ path: "x" });
+  });
+
+  test("T4: truncates prop string values at 200 chars", async () => {
+    mockFetch.mockResolvedValue(new Response("", { status: 202 }));
+    const { POST } = await importRoute();
+    const longPath = "a".repeat(500);
+    const req = makeRequest("https://app.soleur.ai/api/analytics/track", {
+      origin: "https://app.soleur.ai",
+      body: { goal: "kb.chat.opened", props: { path: longPath } },
+    });
+    await POST(req);
+    const [, init] = mockFetch.mock.calls[0];
+    const payload = JSON.parse(String((init as RequestInit).body));
+    expect(payload.props.path).toHaveLength(200);
+    expect(payload.props.path).toBe("a".repeat(200));
+  });
+
+  test("T5a: strips control characters from goal before logging (402 branch)", async () => {
+    mockFetch.mockResolvedValue(new Response("{}", { status: 402 }));
+    const { POST } = await importRoute();
+    const req = makeRequest("https://app.soleur.ai/api/analytics/track", {
+      origin: "https://app.soleur.ai",
+      body: { goal: "kb.chat.opened\n[FAKE] fake-event" },
+    });
+    await POST(req);
+    // toMatchObject + .find tolerate future context-field additions (e.g.,
+    // adding `status: 402`) and additional log lines; they still fail if the
+    // goal is not stripped.
+    const warnCall = logWarn.mock.calls.find(([, msg]) =>
+      typeof msg === "string" && msg.includes("402"),
+    );
+    expect(warnCall).toBeDefined();
+    const [ctx] = warnCall!;
+    expect(ctx).toMatchObject({ goal: "kb.chat.opened[FAKE] fake-event" });
+    expect(ctx.goal).not.toMatch(/[\x00-\x1f]/);
+  });
+
+  test("T5b: strips control characters from goal and err before logging (catch branch)", async () => {
+    mockFetch.mockRejectedValue(new Error("network down\nINJECTED"));
+    const { POST } = await importRoute();
+    const req = makeRequest("https://app.soleur.ai/api/analytics/track", {
+      origin: "https://app.soleur.ai",
+      body: { goal: "kb.opened\r\nLINE2" },
+    });
+    await POST(req);
+    const warnCall = logWarn.mock.calls.find(([, msg]) =>
+      typeof msg === "string" && msg.includes("forward failed"),
+    );
+    expect(warnCall).toBeDefined();
+    const [ctx] = warnCall!;
+    expect(typeof ctx.err).toBe("string");
+    expect(ctx.err).not.toMatch(/[\x00-\x1f]/);
+    expect(ctx.goal).toBe("kb.openedLINE2");
+    expect(ctx.err).toContain("network downINJECTED");
+  });
+
+  test("T5c: strips Unicode line separators U+2028/U+2029 and DEL from logged goal", async () => {
+    mockFetch.mockResolvedValue(new Response("{}", { status: 402 }));
+    const { POST } = await importRoute();
+    // U+2028 (line separator), U+2029 (paragraph separator), and DEL (0x7f)
+    // are passed through by JSON loggers but rendered as line breaks by many
+    // downstream log viewers — re-enabling log injection.
+    const req = makeRequest("https://app.soleur.ai/api/analytics/track", {
+      origin: "https://app.soleur.ai",
+      body: { goal: "kb\u2028.open\u2029ed\x7f[INJECTED]" },
+    });
+    await POST(req);
+    const warnCall = logWarn.mock.calls.find(([, msg]) =>
+      typeof msg === "string" && msg.includes("402"),
+    );
+    expect(warnCall).toBeDefined();
+    const [ctx] = warnCall!;
+    expect(ctx.goal).toBe("kb.opened[INJECTED]");
+    expect(ctx.goal).not.toMatch(/[\u2028\u2029\x7f]/);
+  });
+
+  test("T6: non-string prop values for allowlisted keys are forwarded untouched (but counted as 1 key)", async () => {
+    mockFetch.mockResolvedValue(new Response("", { status: 202 }));
+    const { POST } = await importRoute();
+    // The allowlist cap is applied per-key; the value type is not mutated for
+    // non-strings. Document the current behavior so a future regression
+    // accidentally coercing non-strings is caught.
+    const req = makeRequest("https://app.soleur.ai/api/analytics/track", {
+      origin: "https://app.soleur.ai",
+      body: { goal: "kb.chat.opened", props: { path: 42 } },
+    });
+    const res = await POST(req);
+    expect(res.status).toBe(204);
+    const [, init] = mockFetch.mock.calls[0];
+    const payload = JSON.parse(String((init as RequestInit).body));
+    expect(payload.props).toEqual({ path: 42 });
+  });
+
+  test("T8: logs scrub pattern names at debug when path contains PII (never raw value)", async () => {
+    // #2462 — sanitizeProps scrubs PII tokens from the `path` value and the
+    // route mirrors the existing `dropped` log pattern to emit a debug line
+    // with the pattern names only. The raw value must never appear in any
+    // debug context field.
+    mockFetch.mockResolvedValue(new Response("", { status: 202 }));
+    const { POST } = await importRoute();
+    const req = makeRequest("https://app.soleur.ai/api/analytics/track", {
+      origin: "https://app.soleur.ai",
+      body: {
+        goal: "kb.chat.opened",
+        props: { path: "/users/alice@example.com/settings" },
+      },
+    });
+    await POST(req);
+
+    // Forwarded payload is scrubbed.
+    const [, init] = mockFetch.mock.calls[0];
+    const payload = JSON.parse(String((init as RequestInit).body));
+    expect(payload.props.path).toBe("/users/[email]/settings");
+
+    // Debug log fires with pattern NAMES only — never the raw value.
+    // Match on context shape (ctx.scrubbed is an array), not on message
+    // substring — renaming the log message should not break the security
+    // invariant this test pins. See test-design-reviewer P2 on PR #2462.
+    const scrubCall = logDebug.mock.calls.find(
+      ([ctx]) => Array.isArray((ctx as { scrubbed?: unknown })?.scrubbed),
+    );
+    expect(scrubCall).toBeDefined();
+    const [ctx] = scrubCall!;
+    expect(ctx).toMatchObject({ scrubbed: ["email"] });
+    // The raw value (pre-scrub) must never appear in ANY debug ctx field.
+    const allDebugCtx = JSON.stringify(logDebug.mock.calls);
+    expect(allDebugCtx).not.toContain("alice@example.com");
+  });
+
+  test("T7: rejects body with more than MAX_PROP_KEYS (20) props with 400", async () => {
+    const { POST } = await importRoute();
+    const tooManyProps: Record<string, unknown> = {};
+    for (let i = 0; i < 25; i++) tooManyProps[`k${i}`] = "v";
+    const req = makeRequest("https://app.soleur.ai/api/analytics/track", {
+      origin: "https://app.soleur.ai",
+      body: { goal: "kb.chat.opened", props: tooManyProps },
+    });
+    const res = await POST(req);
+    expect(res.status).toBe(400);
+    expect(mockFetch).not.toHaveBeenCalled();
   });
 });

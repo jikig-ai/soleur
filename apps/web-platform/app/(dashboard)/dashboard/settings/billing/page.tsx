@@ -1,6 +1,12 @@
 import { redirect } from "next/navigation";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { BillingSection } from "@/components/settings/billing-section";
+import { ApiUsageSection } from "@/components/settings/api-usage-section";
+
+// Dynamic rendering is already forced by the cookies()/getUser() call in
+// createClient() below, so no explicit `export const dynamic` is required.
+// router.refresh() from <ApiUsageRetryButton> re-runs the full RSC tree,
+// which re-invokes the loader.
 
 export default async function BillingPage() {
   const supabase = await createClient();
@@ -34,13 +40,16 @@ export default async function BillingPage() {
     ]);
 
   return (
-    <BillingSection
-      subscriptionStatus={userData?.subscription_status ?? null}
-      currentPeriodEnd={userData?.current_period_end ?? null}
-      cancelAtPeriodEnd={userData?.cancel_at_period_end ?? false}
-      conversationCount={conversationCount ?? 0}
-      serviceTokenCount={serviceTokenCount ?? 0}
-      createdAt={userData?.created_at ?? new Date().toISOString()}
-    />
+    <>
+      <BillingSection
+        subscriptionStatus={userData?.subscription_status ?? null}
+        currentPeriodEnd={userData?.current_period_end ?? null}
+        cancelAtPeriodEnd={userData?.cancel_at_period_end ?? false}
+        conversationCount={conversationCount ?? 0}
+        serviceTokenCount={serviceTokenCount ?? 0}
+        createdAt={userData?.created_at ?? new Date().toISOString()}
+      />
+      <ApiUsageSection userId={user.id} />
+    </>
   );
 }

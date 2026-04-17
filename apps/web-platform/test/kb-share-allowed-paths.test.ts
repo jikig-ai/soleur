@@ -28,12 +28,24 @@ vi.mock("@/lib/auth/validate-origin", () => ({
 
 vi.mock("@/server/logger", () => ({
   default: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() },
+  createChildLogger: () => ({
+    info: vi.fn(),
+    error: vi.fn(),
+    warn: vi.fn(),
+    debug: vi.fn(),
+  }),
+}));
+
+vi.mock("@/server/observability", () => ({
+  reportSilentFallback: vi.fn(),
+  reportSilentFallbackWarning: vi.fn(),
 }));
 
 // NOTE: isPathInWorkspace is intentionally NOT mocked — we use a real temp
 // workspace so lstat + isFile + isSymbolicLink checks exercise the real FS.
 
 import { POST } from "@/app/api/kb/share/route";
+import { shareSupabaseFromMock } from "./helpers/share-mocks";
 
 let tmpWorkspace: string;
 let kbRoot: string;
@@ -66,42 +78,12 @@ beforeEach(() => {
     data: { user: { id: "user-1" } },
   });
 
-  const makeChain = (terminal: Record<string, unknown>) => {
-    const chain: Record<string, unknown> = { ...terminal };
-    chain.eq = vi.fn().mockReturnValue(chain);
-    return chain;
-  };
-
-  let fromCallCount = 0;
-  mocks.mockServiceFrom.mockImplementation(() => {
-    fromCallCount++;
-    if (fromCallCount === 1) {
-      return {
-        select: vi.fn().mockReturnValue(
-          makeChain({
-            single: vi.fn().mockResolvedValue({
-              data: {
-                workspace_path: tmpWorkspace,
-                workspace_status: "ready",
-              },
-              error: null,
-            }),
-          }),
-        ),
-      };
-    }
-    return {
-      select: vi.fn().mockReturnValue(
-        makeChain({
-          maybeSingle: vi.fn().mockResolvedValue({
-            data: null,
-            error: null,
-          }),
-        }),
-      ),
-      insert: vi.fn().mockResolvedValue({ error: null }),
-    };
-  });
+  mocks.mockServiceFrom.mockImplementation(
+    shareSupabaseFromMock({
+      users: { workspacePath: tmpWorkspace, workspaceStatus: "ready" },
+      kb_share_links: { shareRow: null, shareError: null },
+    }),
+  );
 });
 
 afterEach(() => {

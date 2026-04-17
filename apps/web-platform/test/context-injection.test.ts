@@ -97,6 +97,11 @@ vi.mock("../server/service-tools", () => ({
   plausibleGetStats: vi.fn(),
 }));
 
+vi.mock("../server/observability", () => ({
+  reportSilentFallback: vi.fn(),
+  reportSilentFallbackWarning: vi.fn(),
+}));
+
 import { startAgentSession } from "../server/agent-runner";
 import type { ConversationContext } from "../lib/types";
 import {

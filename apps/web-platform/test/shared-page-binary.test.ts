@@ -3,6 +3,9 @@ import os from "node:os";
 import path from "node:path";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
+import { hashBytes } from "@/server/kb-content-hash";
+import { shareSupabaseFromMock } from "./helpers/share-mocks";
+
 const mocks = vi.hoisted(() => ({
   mockServiceFrom: vi.fn(),
   mockExtractIp: vi.fn(() => "1.2.3.4"),
@@ -39,53 +42,43 @@ function callGET(request: Request, token: string) {
   return GET(request, { params: Promise.resolve({ token }) });
 }
 
+function hashFile(absPath: string): string | null {
+  try {
+    return hashBytes(fs.readFileSync(absPath));
+  } catch {
+    return null;
+  }
+}
+
 function mockShareAndOwner(
   documentPath: string,
-  opts: { revoked?: boolean } = {},
+  opts: { revoked?: boolean; contentHash?: string | null } = {},
 ) {
-  let fromCallCount = 0;
-  mocks.mockServiceFrom.mockImplementation(() => {
-    fromCallCount++;
-    if (fromCallCount === 1) {
-      return {
-        select: vi.fn().mockReturnValue({
-          eq: vi.fn().mockReturnValue({
-            single: vi.fn().mockResolvedValue({
-              data: {
-                document_path: documentPath,
-                user_id: "user-1",
-                revoked: Boolean(opts.revoked),
-              },
-              error: null,
-            }),
-          }),
-        }),
-      };
-    }
-    return {
-      select: vi.fn().mockReturnValue({
-        eq: vi.fn().mockReturnValue({
-          single: vi.fn().mockResolvedValue({
-            data: {
-              workspace_path: tmpWorkspace,
-              workspace_status: "ready",
-            },
-            error: null,
-          }),
-        }),
-      }),
-    };
-  });
+  const resolvedHash =
+    opts.contentHash === undefined
+      ? hashFile(path.join(kbRoot, documentPath)) ?? "0".repeat(64)
+      : opts.contentHash;
+  mocks.mockServiceFrom.mockImplementation(
+    shareSupabaseFromMock({
+      users: { workspacePath: tmpWorkspace, workspaceStatus: "ready" },
+      kb_share_links: {
+        shareRow: {
+          document_path: documentPath,
+          user_id: "user-1",
+          revoked: Boolean(opts.revoked),
+          content_sha256: resolvedHash,
+        },
+      },
+    }),
+  );
 }
 
 function mockShareNotFound() {
-  mocks.mockServiceFrom.mockImplementation(() => ({
-    select: vi.fn().mockReturnValue({
-      eq: vi.fn().mockReturnValue({
-        single: vi.fn().mockResolvedValue({ data: null, error: null }),
-      }),
+  mocks.mockServiceFrom.mockImplementation(
+    shareSupabaseFromMock({
+      kb_share_links: { shareRow: null, shareError: null },
     }),
-  }));
+  );
 }
 
 beforeEach(() => {

@@ -1,0 +1,20 @@
+[
+  {
+    "number": 4001,
+    "title": "review: rate-limiter divergence",
+    "body": "## Problem\n\nLocation: apps/web-platform/server/rate-limiter.ts:152-191 — both extractors diverge.\n\nAlso: server/ws-handler.ts uses the shallower helper.\n\n## Proposed Fix\n\nConsolidate.",
+    "labels": [{"name": "deferred-scope-out"}]
+  },
+  {
+    "number": 4002,
+    "title": "review: api-usage client aggregation",
+    "body": "## Problem\n\napps/web-platform/server/api-usage.ts:40 does client-side sum. See apps/web-platform/server/api-usage.ts:55 too.\n\nRelated: server/api-usage.ts other callers, knowledge-base/project/plans/x.md.\n\n## Proposed Fix\n\nPostgres aggregate.",
+    "labels": [{"name": "deferred-scope-out"}]
+  },
+  {
+    "number": 4003,
+    "title": "review: log sanitize dedupe",
+    "body": "## Problem\n\napps/web-platform/lib/log-sanitize.ts dupes apps/web-platform/lib/auth/validate-origin.ts logic.\n\nShorthand: lib/log-sanitize.ts, lib/auth/validate-origin.ts.\n\n## Proposed Fix\n\nShared helper.",
+    "labels": [{"name": "deferred-scope-out"}]
+  }
+]

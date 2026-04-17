@@ -26,7 +26,7 @@ type SharedData =
   | { kind: "image"; src: string; alt: string }
   | { kind: "download"; src: string; filename: string };
 
-type PageError = "not-found" | "revoked" | "unknown";
+type PageError = "not-found" | "revoked" | "content-changed" | "unknown";
 
 function extractFilename(contentDisposition: string | null): string {
   if (!contentDisposition) return "file";
@@ -56,7 +56,16 @@ export default function SharedDocumentPage({
           return;
         }
         if (res.status === 410) {
-          setError("revoked");
+          // Discriminate via response body `code` so we can show tailored
+          // copy for content-changed without disturbing the existing revoked
+          // path. Fall back to "revoked" copy if the body is missing/unparseable.
+          const body = await res.json().catch(() => null);
+          const code = body && typeof body === "object" ? body.code : null;
+          if (code === "content-changed" || code === "legacy-null-hash") {
+            setError("content-changed");
+          } else {
+            setError("revoked");
+          }
           setLoading(false);
           return;
         }
@@ -127,6 +136,13 @@ export default function SharedDocumentPage({
               <ErrorMessage
                 title="This link has been disabled"
                 message="The owner has revoked access to this document."
+              />
+            )}
+
+            {error === "content-changed" && (
+              <ErrorMessage
+                title="The shared file was modified"
+                message="The file has been edited or replaced since this link was created. Ask the owner to share again."
               />
             )}
 

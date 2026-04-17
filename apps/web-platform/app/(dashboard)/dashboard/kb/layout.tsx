@@ -223,6 +223,43 @@ export default function KbLayout({ children }: { children: ReactNode }) {
     try { sessionStorage.setItem(KB_SIDEBAR_OPEN_KEY, "0"); } catch { /* noop */ }
   }, []);
 
+  // Close the chat panel when the user navigates to a different document.
+  // The chat conversation is bound to a specific contextPath; leaving the
+  // panel open while the viewer loads a new document would display stale
+  // conversation content. Users can re-open the panel for the current
+  // document via the "Continue thread" button in the toolbar.
+  const prevContextPathRef = useRef<string | null>(contextPath);
+  useEffect(() => {
+    if (prevContextPathRef.current === contextPath) return;
+    prevContextPathRef.current = contextPath;
+    closeSidebar();
+  }, [contextPath, closeSidebar]);
+
+  // Prefetch message count for the current document so the toolbar trigger
+  // shows "Continue thread" vs "Ask about this document" accurately even
+  // while the chat panel is closed. Without this, messageCount stays stale
+  // from the previously-mounted ChatSurface.
+  useEffect(() => {
+    if (!kbChatFlag) return;
+    if (!contextPath) {
+      setMessageCount(0);
+      return;
+    }
+    setMessageCount(0);
+    const controller = new AbortController();
+    fetch(`/api/chat/thread-info?contextPath=${encodeURIComponent(contextPath)}`, {
+      signal: controller.signal,
+    })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data: { messageCount?: number } | null) => {
+        if (data && typeof data.messageCount === "number") {
+          setMessageCount(data.messageCount);
+        }
+      })
+      .catch(() => { /* abort or network error — label stays at default */ });
+    return () => controller.abort();
+  }, [contextPath, kbChatFlag]);
+
   const registerQuoteHandler = useCallback(
     (handler: ((text: string) => void) | null) => {
       quoteHandlerRef.current = handler;
@@ -304,20 +341,18 @@ export default function KbLayout({ children }: { children: ReactNode }) {
   const docContent = (
     <>
       {kbCollapsed && (
-        <div className="flex shrink-0 items-center px-2 py-2">
-          <button
-            onClick={toggleKbCollapsed}
-            aria-label="Expand file tree"
-            title="Expand file tree (⌘B)"
-            className="flex h-6 w-6 items-center justify-center rounded text-neutral-400 hover:bg-neutral-800 hover:text-white"
-          >
-            <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="m8.25 4.5 7.5 7.5-7.5 7.5" />
-            </svg>
-          </button>
-        </div>
+        <button
+          onClick={toggleKbCollapsed}
+          aria-label="Expand file tree"
+          title="Expand file tree (⌘B)"
+          className="absolute left-2 top-5 z-10 flex h-6 w-6 items-center justify-center rounded text-neutral-400 hover:bg-neutral-800 hover:text-white"
+        >
+          <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="m8.25 4.5 7.5 7.5-7.5 7.5" />
+          </svg>
+        </button>
       )}
-      <div className="min-h-0 flex-1 overflow-y-auto">
+      <div className={`min-h-0 flex-1 overflow-y-auto ${kbCollapsed ? "pl-10" : ""}`}>
         <KbErrorBoundary>
           {isContentView ? children : <DesktopPlaceholder />}
         </KbErrorBoundary>
@@ -352,7 +387,7 @@ export default function KbLayout({ children }: { children: ReactNode }) {
 
             {/* Document viewer panel — fills remaining space */}
             <Panel minSize="40%">
-              <div className="min-w-0 flex flex-1 flex-col h-full">
+              <div className="relative min-w-0 flex flex-1 flex-col h-full">
                 {docContent}
               </div>
             </Panel>

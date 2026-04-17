@@ -61,4 +61,76 @@ describe("Settings sidebar collapse", () => {
     const mobileBar = document.querySelector(".md\\:hidden");
     expect(mobileBar).toBeInTheDocument();
   });
+
+  // Alignment contract — mirrors KB layout precedent at
+  // apps/web-platform/app/(dashboard)/dashboard/kb/layout.tsx:318-328.
+  // If KB's expand-chevron recipe changes, update these assertions to match.
+  describe("expand button alignment with main nav chevron", () => {
+    it("expand button has KB-style absolute positioning classes when collapsed", async () => {
+      render(<SettingsShell><div>content</div></SettingsShell>);
+      await userEvent.click(screen.getByLabelText("Collapse settings nav"));
+      const expandBtn = screen.getByLabelText("Expand settings nav");
+      expect(expandBtn).toHaveClass("absolute", "left-2", "top-5", "z-10", "h-6", "w-6");
+    });
+
+    it("expand button icon size matches main nav chevron (h-4 w-4)", async () => {
+      render(<SettingsShell><div>content</div></SettingsShell>);
+      await userEvent.click(screen.getByLabelText("Collapse settings nav"));
+      const expandBtn = screen.getByLabelText("Expand settings nav");
+      const svg = expandBtn.querySelector("svg");
+      expect(svg).not.toBeNull();
+      expect(svg).toHaveClass("h-4", "w-4");
+    });
+
+    it("expand button has no border (matches main nav toggle)", async () => {
+      render(<SettingsShell><div>content</div></SettingsShell>);
+      await userEvent.click(screen.getByLabelText("Collapse settings nav"));
+      const expandBtn = screen.getByLabelText("Expand settings nav");
+      expect(expandBtn.className).not.toMatch(/\bborder(-|\s|$)/);
+    });
+
+    it("expand button is hidden on mobile (hidden md:flex)", async () => {
+      render(<SettingsShell><div>content</div></SettingsShell>);
+      await userEvent.click(screen.getByLabelText("Collapse settings nav"));
+      const expandBtn = screen.getByLabelText("Expand settings nav");
+      expect(expandBtn).toHaveClass("hidden", "md:flex");
+    });
+
+    it("content area parent has relative positioning so absolute button anchors correctly", async () => {
+      render(<SettingsShell><div>content</div></SettingsShell>);
+      await userEvent.click(screen.getByLabelText("Collapse settings nav"));
+      const expandBtn = screen.getByLabelText("Expand settings nav");
+      const positionedAncestor = expandBtn.closest(".relative");
+      expect(positionedAncestor).not.toBeNull();
+    });
+
+    it("exactly one expand button exists after collapsing", async () => {
+      render(<SettingsShell><div>content</div></SettingsShell>);
+      await userEvent.click(screen.getByLabelText("Collapse settings nav"));
+      expect(screen.getAllByLabelText("Expand settings nav").length).toBe(1);
+    });
+  });
+
+  // Alignment contract for the expanded-state collapse chevron.
+  // Main nav header at apps/web-platform/app/(dashboard)/layout.tsx uses py-5;
+  // the settings <nav> must match so both <` chevrons land on the same y-row.
+  describe("collapse button alignment with main nav chevron (expanded state)", () => {
+    it("nav wrapper uses py-5 to align chevron y-origin with main nav header", () => {
+      render(<SettingsShell><div>content</div></SettingsShell>);
+      const collapseBtn = screen.getByLabelText("Collapse settings nav");
+      const navEl = collapseBtn.closest("nav");
+      expect(navEl).not.toBeNull();
+      expect(navEl).toHaveClass("py-5");
+      expect(navEl?.className).not.toMatch(/\bpy-10\b/);
+    });
+
+    it("collapse button keeps h-6 w-6 geometry matching main nav toggle", () => {
+      render(<SettingsShell><div>content</div></SettingsShell>);
+      const btn = screen.getByLabelText("Collapse settings nav");
+      expect(btn).toHaveClass("h-6", "w-6", "rounded");
+      expect(btn.className).not.toMatch(/\bborder(-|\s|$)/);
+      const svg = btn.querySelector("svg");
+      expect(svg).toHaveClass("h-4", "w-4");
+    });
+  });
 });

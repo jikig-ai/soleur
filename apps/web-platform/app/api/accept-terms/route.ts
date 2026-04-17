@@ -4,6 +4,7 @@ import { NextResponse } from "next/server";
 import { TC_VERSION } from "@/lib/legal/tc-version";
 import { validateOrigin, rejectCsrf } from "@/lib/auth/validate-origin";
 import logger from "@/server/logger";
+import * as Sentry from "@sentry/nextjs";
 
 async function getRedirectDestination(
   supabase: SupabaseClient,
@@ -58,6 +59,10 @@ export async function POST(request: Request) {
 
   if (error) {
     logger.error({ err: error }, "Failed to record acceptance");
+    Sentry.captureException(error, {
+      tags: { feature: "accept-terms", op: "record" },
+      extra: { userId: user.id },
+    });
     return NextResponse.json(
       { error: "Failed to record acceptance" },
       { status: 500 },
@@ -66,6 +71,14 @@ export async function POST(request: Request) {
 
   if (!data || data.length === 0) {
     logger.error({ userId: user.id }, "User row not found");
+    // Data inconsistency — authenticated user has no row in `users`. No Error
+    // object to capture; use captureMessage so the condition is still
+    // observable in Sentry.
+    Sentry.captureMessage("User row not found", {
+      level: "error",
+      tags: { feature: "accept-terms", op: "record" },
+      extra: { userId: user.id },
+    });
     return NextResponse.json(
       { error: "User profile not found. Please try again shortly." },
       { status: 404 },

@@ -11,7 +11,8 @@ import { AtMentionDropdown } from "@/components/chat/at-mention-dropdown";
 import { useTeamNames } from "@/hooks/use-team-names";
 import { NotificationPrompt } from "@/components/chat/notification-prompt";
 import { getPendingFiles, clearPendingFiles } from "@/lib/pending-attachments";
-import { uploadWithProgress } from "@/lib/upload-with-progress";
+import { uploadPendingFiles } from "@/lib/upload-attachments";
+import * as Sentry from "@sentry/nextjs";
 import { MessageBubble } from "@/components/chat/message-bubble";
 import { ReviewGateCard } from "@/components/chat/review-gate-card";
 import { StatusIndicator } from "@/components/chat/status-indicator";
@@ -204,39 +205,21 @@ export function ChatSurface({
 
     (async () => {
       try {
-        const uploaded: AttachmentRef[] = [];
-
-        for (const file of files) {
-          const presignRes = await fetch("/api/attachments/presign", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              filename: file.name,
-              contentType: file.type,
-              sizeBytes: file.size,
-              conversationId: realConversationId,
-            }),
-          });
-
-          if (!presignRes.ok) continue;
-
-          const { uploadUrl, storagePath } = await presignRes.json();
-          const { promise } = uploadWithProgress(uploadUrl, file, file.type, () => {});
-          await promise;
-
-          uploaded.push({
-            storagePath,
-            filename: file.name,
-            contentType: file.type,
-            sizeBytes: file.size,
-          });
-        }
-
+        const uploaded = await uploadPendingFiles(files, realConversationId);
         if (uploaded.length > 0) {
           sendMessage("", uploaded);
         }
-      } catch {
-        // Graceful degradation
+      } catch (err) {
+        // Defense-in-depth: uploadPendingFiles already catches per-file
+        // failures internally. This outer catch only fires on a batch-level
+        // failure (e.g., sendMessage throws). Re-wrap so Sentry does not
+        // ingest any signed-URL tokens embedded in XHR error messages.
+        const original = err instanceof Error ? err.message : String(err);
+        const sanitized = new Error(
+          `[kb-chat] pending-files batch failed (original message length ${original.length})`,
+        );
+        console.warn("[kb-chat] pending upload failed (batch)", { err: sanitized });
+        Sentry.captureException(sanitized);
       }
     })();
   }, [initialMsgSent, pendingFilesHandled, realConversationId, sendMessage]);

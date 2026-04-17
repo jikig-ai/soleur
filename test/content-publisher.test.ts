@@ -5,6 +5,7 @@ const SCRIPT_PATH = join(import.meta.dirname, "..", "scripts", "content-publishe
 const SAMPLE_CONTENT = join(import.meta.dirname, "helpers", "sample-content.md");
 const SAMPLE_NO_MANUAL = join(import.meta.dirname, "helpers", "sample-content-no-manual.md");
 const SAMPLE_FRONTMATTER = join(import.meta.dirname, "helpers", "sample-frontmatter.md");
+const SAMPLE_NUMBERED_THREAD = join(import.meta.dirname, "helpers", "sample-content-numbered-thread.md");
 
 const BASE_ENV: Record<string, string> = {
   PATH: process.env.PATH ?? "/usr/bin:/bin:/usr/local/bin",
@@ -230,6 +231,224 @@ describe("extract_tweets", () => {
     `);
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toBe("3");
+  });
+
+  test("numbered format (no **Tweet N labels): extracts all 5 tweets", () => {
+    const RS = "\\x1e";
+    const result = runFunction(`
+      count=0
+      while IFS= read -r -d $'${RS}' tweet; do
+        [[ -n "$tweet" ]] && count=$((count + 1))
+      done < <(extract_tweets "${SAMPLE_NUMBERED_THREAD}")
+      echo "$count"
+    `);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toBe("5");
+  });
+
+  test("numbered format: hook is the blob before the first N/ marker", () => {
+    const RS = "\\x1e";
+    const result = runFunction(`
+      while IFS= read -r -d $'${RS}' tweet; do
+        echo "$tweet"
+        break
+      done < <(extract_tweets "${SAMPLE_NUMBERED_THREAD}")
+    `);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("Your AI team now operates on your actual codebase");
+    expect(result.stdout).toContain("Every agent conversation starts with real project context");
+    // Must NOT include content from tweet 2
+    expect(result.stdout).not.toContain("The problem with every AI development workflow");
+  });
+
+  test("numbered format: tweet 2 preserves the 2/ prefix", () => {
+    const RS = "\\x1e";
+    const result = runFunction(`
+      i=0
+      while IFS= read -r -d $'${RS}' tweet; do
+        i=$((i + 1))
+        if [[ $i -eq 2 ]]; then
+          echo "$tweet"
+          break
+        fi
+      done < <(extract_tweets "${SAMPLE_NUMBERED_THREAD}")
+    `);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toMatch(/^2\/ /);
+    expect(result.stdout).toContain("The problem with every AI development workflow");
+    // Must NOT bleed into tweet 3
+    expect(result.stdout).not.toContain("Now: connect your GitHub repo");
+  });
+
+  test("numbered format: last tweet keeps its trailer (URL, hashtags)", () => {
+    const RS = "\\x1e";
+    const result = runFunction(`
+      last=""
+      while IFS= read -r -d $'${RS}' tweet; do
+        [[ -n "$tweet" ]] && last="$tweet"
+      done < <(extract_tweets "${SAMPLE_NUMBERED_THREAD}")
+      echo "$last"
+    `);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toMatch(/^5\/ /);
+    expect(result.stdout).toContain("Three paths during onboarding");
+    expect(result.stdout).toContain("https://example.com/blog/numbered/");
+    expect(result.stdout).toContain("#solofounder");
+  });
+
+  test("labeled format unchanged: SAMPLE_CONTENT still yields 4 tweets", () => {
+    // Regression guard for the original behavior.
+    const RS = "\\x1e";
+    const result = runFunction(`
+      count=0
+      while IFS= read -r -d $'${RS}' tweet; do
+        [[ -n "$tweet" ]] && count=$((count + 1))
+      done < <(extract_tweets "${SAMPLE_CONTENT}")
+      echo "$count"
+    `);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toBe("4");
+  });
+
+  // --- Edge cases for numbered-mode robustness ---
+
+  test("numbered format: single-tweet (hook only, no N/ lines) yields 1 tweet", () => {
+    const RS = "\\x1e";
+    const result = Bun.spawnSync(["bash", "-c", `
+      set -euo pipefail
+      source '${SCRIPT_PATH}'
+      tmpfile=$(mktemp)
+      cat > "$tmpfile" <<'EOF'
+---
+title: "Hook Only"
+---
+
+## X/Twitter Thread
+
+A single-tweet hook with no thread. https://example.com/x
+EOF
+      count=0
+      while IFS= read -r -d $'\\x1e' tweet; do
+        [[ -n "$tweet" ]] && count=$((count + 1))
+      done < <(extract_tweets "$tmpfile")
+      echo "$count"
+      rm -f "$tmpfile"
+    `], { env: BASE_ENV });
+    expect(result.exitCode).toBe(0);
+    expect(decode(result.stdout).trim()).toBe("1");
+  });
+
+  test("numbered format: prose `1/3 of devs` in hook does NOT split (sequence guard)", () => {
+    const RS = "\\x1e";
+    const result = Bun.spawnSync(["bash", "-c", `
+      set -euo pipefail
+      source '${SCRIPT_PATH}'
+      tmpfile=$(mktemp)
+      cat > "$tmpfile" <<'EOF'
+---
+title: "Prose Guard"
+---
+
+## X/Twitter Thread
+
+Hook with a fraction at the start of a line.
+1/3 of devs say this.
+
+2/ Real body tweet. https://example.com/x
+EOF
+      count=0
+      first=""
+      i=0
+      while IFS= read -r -d $'\\x1e' tweet; do
+        [[ -n "$tweet" ]] || continue
+        count=$((count + 1))
+        i=$((i + 1))
+        if [[ $i -eq 1 ]]; then first="$tweet"; fi
+      done < <(extract_tweets "$tmpfile")
+      echo "count=$count"
+      echo "first-contains-fraction=$(echo "$first" | grep -c '1/3 of devs')"
+      rm -f "$tmpfile"
+    `], { env: BASE_ENV });
+    expect(result.exitCode).toBe(0);
+    const out = decode(result.stdout);
+    // The fraction line must stay in the hook; total tweet count is 2.
+    expect(out).toContain("count=2");
+    expect(out).toContain("first-contains-fraction=1");
+  });
+
+  test("numbered format: first content line is `1/ ...` — kept in the hook blob", () => {
+    // Documents the current contract: tweet 1 has no leading `N/ ` by
+    // convention. If an author writes `1/ ...` as the hook, it is treated as
+    // hook content (not a boundary — the sequence starts at expected=2).
+    const RS = "\\x1e";
+    const result = Bun.spawnSync(["bash", "-c", `
+      set -euo pipefail
+      source '${SCRIPT_PATH}'
+      tmpfile=$(mktemp)
+      cat > "$tmpfile" <<'EOF'
+---
+title: "Hook with 1/"
+---
+
+## X/Twitter Thread
+
+1/ Hook written with an explicit 1/ prefix.
+
+2/ Body tweet.
+EOF
+      count=0
+      first=""
+      i=0
+      while IFS= read -r -d $'\\x1e' tweet; do
+        [[ -n "$tweet" ]] || continue
+        count=$((count + 1))
+        i=$((i + 1))
+        if [[ $i -eq 1 ]]; then first="$tweet"; fi
+      done < <(extract_tweets "$tmpfile")
+      echo "count=$count"
+      echo "first-starts=$(echo "$first" | head -1)"
+      rm -f "$tmpfile"
+    `], { env: BASE_ENV });
+    expect(result.exitCode).toBe(0);
+    const out = decode(result.stdout);
+    expect(out).toContain("count=2");
+    expect(out).toContain("first-starts=1/ Hook written with an explicit 1/ prefix.");
+  });
+
+  test("labeled format: `N/ ` inside a tweet body is NOT treated as a boundary", () => {
+    // The labeled convention uses **Tweet N labels as the only boundaries;
+    // body content can include `2/ ` on its own line without being sliced.
+    const RS = "\\x1e";
+    const result = Bun.spawnSync(["bash", "-c", `
+      set -euo pipefail
+      source '${SCRIPT_PATH}'
+      tmpfile=$(mktemp)
+      cat > "$tmpfile" <<'EOF'
+---
+title: "Labeled With Internal Slash"
+---
+
+## X/Twitter Thread
+
+**Tweet 1 (Hook) -- 100 chars:**
+Hook tweet content.
+
+**Tweet 2 (Body) -- 120 chars:**
+2/ Body tweet that starts with a slash prefix.
+3/ A second slash-prefixed line inside the same body (intentional).
+
+**Tweet 3 (Final) -- 80 chars:**
+Final tweet. https://example.com/x
+EOF
+      count=0
+      while IFS= read -r -d $'\\x1e' tweet; do
+        [[ -n "$tweet" ]] && count=$((count + 1))
+      done < <(extract_tweets "$tmpfile")
+      echo "$count"
+      rm -f "$tmpfile"
+    `], { env: BASE_ENV });
+    expect(result.exitCode).toBe(0);
+    expect(decode(result.stdout).trim()).toBe("3");
   });
 });
 
@@ -728,5 +947,318 @@ MOCK
     });
     expect(result.exitCode).toBe(1);
     expect(decode(result.stderr)).toContain("Bluesky posting failed");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// validate_no_liquid_markers
+// ---------------------------------------------------------------------------
+
+describe("validate_no_liquid_markers", () => {
+  test("returns 0 for file with clean body", () => {
+    const result = Bun.spawnSync(["bash", "-c", `
+      set -euo pipefail
+      source '${SCRIPT_PATH}'
+      tmpfile=$(mktemp)
+      cat > "$tmpfile" <<'EOF'
+---
+title: "Clean"
+status: scheduled
+---
+
+## Discord
+
+Blog post: https://soleur.ai/blog/x/?utm_source=discord
+EOF
+      validate_no_liquid_markers "$tmpfile"
+      exit_code=$?
+      rm -f "$tmpfile"
+      exit $exit_code
+    `], { env: BASE_ENV });
+    expect(result.exitCode).toBe(0);
+  });
+
+  test("returns 1 for file with {{ in body", () => {
+    const result = Bun.spawnSync(["bash", "-c", `
+      set -euo pipefail
+      source '${SCRIPT_PATH}'
+      tmpfile=$(mktemp)
+      cat > "$tmpfile" <<'EOF'
+---
+title: "Dirty"
+status: scheduled
+---
+
+## Discord
+
+Blog post: <{{ site.url }}blog/x/>
+EOF
+      set +e
+      validate_no_liquid_markers "$tmpfile"
+      exit_code=$?
+      set -e
+      rm -f "$tmpfile"
+      exit $exit_code
+    `], { env: BASE_ENV });
+    expect(result.exitCode).toBe(1);
+    expect(decode(result.stderr)).toContain("unrendered Liquid marker");
+    expect(decode(result.stderr)).toContain("{{ site.url }}");
+  });
+
+  test("returns 1 for file with {% tag %} in body", () => {
+    const result = Bun.spawnSync(["bash", "-c", `
+      set -euo pipefail
+      source '${SCRIPT_PATH}'
+      tmpfile=$(mktemp)
+      cat > "$tmpfile" <<'EOF'
+---
+title: "Dirty Tag"
+---
+
+## Discord
+
+{% if foo %}bar{% endif %}
+EOF
+      set +e
+      validate_no_liquid_markers "$tmpfile"
+      exit_code=$?
+      set -e
+      rm -f "$tmpfile"
+      exit $exit_code
+    `], { env: BASE_ENV });
+    expect(result.exitCode).toBe(1);
+    expect(decode(result.stderr)).toContain("unrendered Liquid marker");
+  });
+
+  test("returns 0 when Liquid-like braces appear only in frontmatter keys", () => {
+    // Frontmatter may contain URL-like paths or JSON-encoded values with braces.
+    // The validator must scope to body-only to avoid false positives.
+    const result = Bun.spawnSync(["bash", "-c", `
+      set -euo pipefail
+      source '${SCRIPT_PATH}'
+      tmpfile=$(mktemp)
+      cat > "$tmpfile" <<'EOF'
+---
+title: "Frontmatter Braces"
+note: "{{ ignored }}"
+---
+
+## Discord
+
+Clean body content, no markers.
+EOF
+      validate_no_liquid_markers "$tmpfile"
+      exit_code=$?
+      rm -f "$tmpfile"
+      exit $exit_code
+    `], { env: BASE_ENV });
+    expect(result.exitCode).toBe(0);
+  });
+
+  test("reports file path and line number in stderr", () => {
+    const result = Bun.spawnSync(["bash", "-c", `
+      set -euo pipefail
+      source '${SCRIPT_PATH}'
+      tmpfile=$(mktemp)
+      cat > "$tmpfile" <<'EOF'
+---
+title: "Line Test"
+---
+
+## Discord
+
+Line one clean.
+Line two: {{ bad }}
+EOF
+      set +e
+      validate_no_liquid_markers "$tmpfile"
+      set -e
+      rm -f "$tmpfile"
+    `], { env: BASE_ENV });
+    const stderr = decode(result.stderr);
+    expect(stderr).toContain("{{ bad }}");
+  });
+
+  // Use the sample-content-with-markers fixture (path reuse for sanity)
+  test("integration: existing SAMPLE_CONTENT (clean) passes validator", () => {
+    const result = runFunction(
+      `validate_no_liquid_markers "${SAMPLE_CONTENT}"`
+    );
+    expect(result.exitCode).toBe(0);
+  });
+
+  test("returns 0 for empty file (no frontmatter, no body)", () => {
+    const result = Bun.spawnSync(["bash", "-c", `
+      set -euo pipefail
+      source '${SCRIPT_PATH}'
+      tmpfile=$(mktemp)
+      : > "$tmpfile"
+      validate_no_liquid_markers "$tmpfile"
+      exit_code=$?
+      rm -f "$tmpfile"
+      exit $exit_code
+    `], { env: BASE_ENV });
+    expect(result.exitCode).toBe(0);
+  });
+
+  test("returns 0 for file with no frontmatter (no `---` fences)", () => {
+    const result = Bun.spawnSync(["bash", "-c", `
+      set -euo pipefail
+      source '${SCRIPT_PATH}'
+      tmpfile=$(mktemp)
+      cat > "$tmpfile" <<'EOF'
+# Just a heading
+
+Prose with no braces.
+EOF
+      validate_no_liquid_markers "$tmpfile"
+      exit_code=$?
+      rm -f "$tmpfile"
+      exit $exit_code
+    `], { env: BASE_ENV });
+    expect(result.exitCode).toBe(0);
+  });
+
+  test("reports file-relative line numbers, not body-relative", () => {
+    // Marker is on file line 8, body line 2 — validator must emit 8.
+    const result = Bun.spawnSync(["bash", "-c", `
+      set -euo pipefail
+      source '${SCRIPT_PATH}'
+      tmpfile=$(mktemp)
+      cat > "$tmpfile" <<'EOF'
+---
+title: "Line Number Test"
+status: scheduled
+---
+
+## Discord
+
+Blog: <{{ site.url }}blog/x/>
+EOF
+      set +e
+      validate_no_liquid_markers "$tmpfile" 2>&1 >/dev/null | head -1
+      set -e
+      rm -f "$tmpfile"
+    `], { env: BASE_ENV });
+    const stderr = decode(result.stderr) + decode(result.stdout);
+    // File-relative line 8 should appear, body-relative 2 alone should not.
+    expect(stderr).toMatch(/:8:/);
+  });
+
+  test("reports multiple markers on separate lines", () => {
+    const result = Bun.spawnSync(["bash", "-c", `
+      set -euo pipefail
+      source '${SCRIPT_PATH}'
+      tmpfile=$(mktemp)
+      cat > "$tmpfile" <<'EOF'
+---
+title: "Multi"
+---
+
+## Discord
+
+First marker: {{ a }}
+Second marker: {{ b }}
+EOF
+      set +e
+      validate_no_liquid_markers "$tmpfile"
+      set -e
+      rm -f "$tmpfile"
+    `], { env: BASE_ENV });
+    const stderr = decode(result.stderr);
+    expect(stderr).toContain("{{ a }}");
+    expect(stderr).toContain("{{ b }}");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Main loop integration: Liquid-marker gate blocks posting
+// ---------------------------------------------------------------------------
+
+describe("main loop Liquid-marker gate", () => {
+  test("main() skips channel posting and calls create_liquid_marker_fallback_issue when body has markers", () => {
+    const result = Bun.spawnSync(["bash", "-c", `
+      set -euo pipefail
+
+      # Build an isolated content dir with a dirty file scheduled for today
+      tmpdir=$(mktemp -d)
+      today=$(date +%Y-%m-%d)
+      cat > "$tmpdir/dirty.md" <<EOF
+---
+title: "Dirty Fixture"
+type: feature-launch
+publish_date: "$today"
+channels: discord
+status: scheduled
+---
+
+## Discord
+
+Blog: <{{ site.url }}blog/x/>
+EOF
+
+      # Run the publisher with CONTENT_DIR pointed at our temp dir by sourcing
+      # and mocking the helpers that touch the outside world.
+      source '${SCRIPT_PATH}'
+      CONTENT_DIR="$tmpdir"
+
+      # Stubs — must be exported and defined AFTER sourcing so they override.
+      post_discord() { echo "[mock] post_discord called" ; return 0; }
+      create_liquid_marker_fallback_issue() { echo "[mock] fallback_issue: \$1" ; return 0; }
+      create_dedup_issue() { echo "[mock] dedup_issue: \$1" ; return 0; }
+      post_discord_warning() { return 0; }
+      sleep() { :; }
+
+      export DISCORD_BLOG_WEBHOOK_URL="https://example.invalid/webhook"
+
+      main 2>&1 || true
+      rm -rf "$tmpdir"
+    `], { env: BASE_ENV });
+
+    const combined = decode(result.stdout) + decode(result.stderr);
+    // Post MUST be blocked
+    expect(combined).not.toContain("[mock] post_discord called");
+    // Fallback issue MUST be created
+    expect(combined).toContain("[mock] fallback_issue:");
+  });
+
+  test("main() proceeds to post when body is clean", () => {
+    const result = Bun.spawnSync(["bash", "-c", `
+      set -euo pipefail
+
+      tmpdir=$(mktemp -d)
+      today=$(date +%Y-%m-%d)
+      cat > "$tmpdir/clean.md" <<EOF
+---
+title: "Clean Fixture"
+type: feature-launch
+publish_date: "$today"
+channels: discord
+status: scheduled
+---
+
+## Discord
+
+Blog: https://soleur.ai/blog/x/?utm_source=discord
+EOF
+
+      source '${SCRIPT_PATH}'
+      CONTENT_DIR="$tmpdir"
+
+      post_discord() { echo "[mock] post_discord called with: \$1" ; return 0; }
+      create_liquid_marker_fallback_issue() { echo "[mock] fallback_issue: should not be called" ; return 0; }
+      create_dedup_issue() { return 0; }
+      post_discord_warning() { return 0; }
+      sleep() { :; }
+
+      export DISCORD_BLOG_WEBHOOK_URL="https://example.invalid/webhook"
+
+      main 2>&1 || true
+      rm -rf "$tmpdir"
+    `], { env: BASE_ENV });
+
+    const combined = decode(result.stdout) + decode(result.stderr);
+    expect(combined).toContain("[mock] post_discord called");
+    expect(combined).not.toContain("[mock] fallback_issue:");
   });
 });

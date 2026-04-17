@@ -1,12 +1,13 @@
-import fs from "node:fs";
-import path from "node:path";
-import { randomBytes } from "crypto";
+// Thin HTTP wrappers around the share lifecycle in server/kb-share.ts.
+// All validation + DB lifecycle lives in the shared module so the in-process
+// MCP tools (server/kb-share-tools.ts) inherit the same hardening by
+// construction. Closes #2298.
+
 import { NextResponse } from "next/server";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { validateOrigin, rejectCsrf } from "@/lib/auth/validate-origin";
-import { isPathInWorkspace } from "@/server/sandbox";
-import { MAX_BINARY_SIZE } from "@/server/kb-binary-response";
-import logger from "@/server/logger";
+import { resolveUserKbRoot } from "@/server/kb-route-helpers";
+import { createShare, listShares } from "@/server/kb-share";
 
 /** POST — generate a share link for a KB document. */
 export async function POST(request: Request) {
@@ -17,7 +18,6 @@ export async function POST(request: Request) {
   const {
     data: { user },
   } = await supabase.auth.getUser();
-
   if (!user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
@@ -29,88 +29,24 @@ export async function POST(request: Request) {
       { status: 400 },
     );
   }
-  if (body.documentPath.includes("\0")) {
-    return NextResponse.json(
-      { error: "Invalid document path" },
-      { status: 400 },
-    );
-  }
 
   const serviceClient = createServiceClient();
-  const { data: userData } = await serviceClient
-    .from("users")
-    .select("workspace_path, workspace_status")
-    .eq("id", user.id)
-    .single();
+  const workspace = await resolveUserKbRoot(serviceClient, user.id);
+  if (!workspace.ok) return workspace.response;
 
-  if (!userData?.workspace_path || userData.workspace_status !== "ready") {
-    return NextResponse.json({ error: "Workspace not ready" }, { status: 503 });
-  }
-
-  // Validate the document exists in the user's workspace and is a regular
-  // file (not a directory, not a symlink) within the size limit. Symlink +
-  // size checks are point-of-use per the service-role-idor learning: every
-  // operation re-validates, even on owner-supplied paths.
-  const kbRoot = path.join(userData.workspace_path, "knowledge-base");
-  const fullPath = path.join(kbRoot, body.documentPath);
-  if (!isPathInWorkspace(fullPath, kbRoot)) {
-    return NextResponse.json({ error: "Invalid document path" }, { status: 400 });
-  }
-  let lstat: fs.Stats;
-  try {
-    lstat = await fs.promises.lstat(fullPath);
-  } catch {
-    return NextResponse.json({ error: "File not found" }, { status: 404 });
-  }
-  if (lstat.isSymbolicLink() || !lstat.isFile()) {
-    return NextResponse.json({ error: "Invalid document path" }, { status: 400 });
-  }
-  if (lstat.size > MAX_BINARY_SIZE) {
-    return NextResponse.json(
-      { error: "File exceeds maximum size limit" },
-      { status: 413 },
-    );
-  }
-
-  // Check if an active (non-revoked) share already exists for this document.
-  const { data: existing } = await serviceClient
-    .from("kb_share_links")
-    .select("token")
-    .eq("user_id", user.id)
-    .eq("document_path", body.documentPath)
-    .eq("revoked", false)
-    .maybeSingle();
-
-  if (existing) {
-    return NextResponse.json({
-      token: existing.token,
-      url: `/shared/${existing.token}`,
-    });
-  }
-
-  // Generate a new cryptographically random token.
-  const token = randomBytes(32).toString("base64url");
-  const { error: insertError } = await serviceClient
-    .from("kb_share_links")
-    .insert({
-      user_id: user.id,
-      token,
-      document_path: body.documentPath,
-    });
-
-  if (insertError) {
-    logger.error({ err: insertError }, "kb/share: failed to create share link");
-    return NextResponse.json(
-      { error: "Failed to create share link" },
-      { status: 500 },
-    );
-  }
-
-  logger.info(
-    { event: "share_created", userId: user.id, documentPath: body.documentPath },
-    "kb/share: share link created",
+  const result = await createShare(
+    serviceClient,
+    user.id,
+    workspace.kbRoot,
+    body.documentPath,
   );
-  return NextResponse.json({ token, url: `/shared/${token}` }, { status: 201 });
+  if (!result.ok) {
+    return NextResponse.json({ error: result.error }, { status: result.status });
+  }
+  return NextResponse.json(
+    { token: result.token, url: result.url },
+    { status: result.status },
+  );
 }
 
 /** GET — list share links for the authenticated user, optionally filtered by documentPath. */
@@ -119,7 +55,6 @@ export async function GET(request: Request) {
   const {
     data: { user },
   } = await supabase.auth.getUser();
-
   if (!user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
@@ -128,25 +63,22 @@ export async function GET(request: Request) {
   const documentPath = searchParams.get("documentPath");
 
   const serviceClient = createServiceClient();
-  let query = serviceClient
-    .from("kb_share_links")
-    .select("token, document_path, created_at, revoked")
-    .eq("user_id", user.id);
-
-  if (documentPath) {
-    query = query.eq("document_path", documentPath);
+  const result = await listShares(
+    serviceClient,
+    user.id,
+    documentPath ? { documentPath } : undefined,
+  );
+  if (!result.ok) {
+    return NextResponse.json({ error: result.error }, { status: result.status });
   }
-
-  const { data: shares, error } = await query
-    .order("created_at", { ascending: false });
-
-  if (error) {
-    logger.error({ err: error }, "kb/share: failed to list shares");
-    return NextResponse.json(
-      { error: "Failed to list shares" },
-      { status: 500 },
-    );
-  }
-
-  return NextResponse.json({ shares: shares ?? [] });
+  // Preserve the existing HTTP shape — list rows still use snake_case
+  // column names to keep the client contract stable.
+  return NextResponse.json({
+    shares: result.shares.map((s) => ({
+      token: s.token,
+      document_path: s.documentPath,
+      created_at: s.createdAt,
+      revoked: s.revoked,
+    })),
+  });
 }

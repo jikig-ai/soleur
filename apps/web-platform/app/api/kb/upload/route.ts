@@ -5,6 +5,8 @@ import { isPathInWorkspace } from "@/server/sandbox";
 import { githubApiGet, githubApiPost, GitHubApiError } from "@/server/github-api";
 import { generateInstallationToken, randomCredentialPath } from "@/server/github-app";
 import { sanitizeFilename } from "@/server/kb-validation";
+import { resolveUserKbRoot } from "@/server/kb-route-helpers";
+import { prepareUploadPayload } from "@/server/kb-upload-payload";
 import { execFile } from "node:child_process";
 import { writeFileSync, unlinkSync } from "node:fs";
 import { promisify } from "node:util";
@@ -21,6 +23,9 @@ const execFileAsync = promisify(execFile);
 
 const ALLOWED_EXTENSIONS = new Set<string>(KB_UPLOAD_EXTENSIONS);
 const MAX_FILE_SIZE = 20 * 1024 * 1024; // 20 MB
+
+// Linearizing a 20MB PDF + GitHub commit can exceed the Next.js default 10s.
+export const maxDuration = 30;
 
 // ---------------------------------------------------------------------------
 // Route handler
@@ -40,21 +45,19 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  // Fetch workspace data
+  // Fetch workspace data. resolveUserKbRoot centralizes the "user row
+  // → kbRoot + extras" pattern shared with /api/kb/share and
+  // /api/kb/file/*.
   const serviceClient = createServiceClient();
-  const { data: userData } = await serviceClient
-    .from("users")
-    .select("workspace_path, workspace_status, repo_url, github_installation_id")
-    .eq("id", user.id)
-    .single();
-
-  if (!userData?.workspace_path || userData.workspace_status !== "ready") {
-    return NextResponse.json({ error: "Workspace not ready" }, { status: 503 });
-  }
-
-  if (!userData.repo_url || !userData.github_installation_id) {
-    return NextResponse.json({ error: "No repository connected" }, { status: 400 });
-  }
+  const workspace = await resolveUserKbRoot(serviceClient, user.id, {
+    extras: ["repo_url", "github_installation_id"] as const,
+  });
+  if (!workspace.ok) return workspace.response;
+  const userData = {
+    workspace_path: workspace.workspacePath,
+    repo_url: workspace.extras.repo_url,
+    github_installation_id: workspace.extras.github_installation_id,
+  };
 
   // Parse FormData
   let formData: FormData;
@@ -170,17 +173,12 @@ export async function POST(request: Request) {
       }
     }
 
-    // Base64 encode file content — stream bytes to avoid allocating a
-    // separate ArrayBuffer alongside the File blob. This reduces peak
-    // per-request memory by ~20 MB for a max-size upload.
-    const chunks: Uint8Array[] = [];
-    const reader = file.stream().getReader();
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      chunks.push(value);
-    }
-    const base64Content = Buffer.concat(chunks).toString("base64");
+    const payloadBuffer = await prepareUploadPayload(file, sanitizedName, {
+      userId: user.id,
+      path: filePath,
+    });
+
+    const base64Content = payloadBuffer.toString("base64");
 
     // Upload via GitHub Contents API (PUT)
     const result = await githubApiPost<{

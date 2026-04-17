@@ -173,4 +173,23 @@ describe("KbChatSidebar", () => {
     // toLocaleString() with timeStyle produces something like "2:15 PM".
     expect(text).toMatch(/\d{1,2}:\d{2}/);
   });
+
+  it("emits kb.chat.opened EXACTLY ONCE when both onThreadResumed and onRealConversationId fire (#2385)", async () => {
+    // Both resume and real-conversation-id signals arrive in the same mount
+    // — the two ChatSurface effects both fire before React flushes the
+    // state update from the first handler, so the prior `useState` guard
+    // saw stale null and called track twice.
+    wsReturn.resumedFrom = {
+      conversationId: "dup-fire-conv",
+      timestamp: "2026-04-16T14:15:00Z",
+      messageCount: 3,
+    };
+    wsReturn.realConversationId = "dup-fire-conv";
+    await renderSidebar(true);
+
+    const openedCalls = mockTrack.mock.calls.filter(
+      (call) => call[0] === "kb.chat.opened",
+    );
+    expect(openedCalls).toHaveLength(1);
+  });
 });

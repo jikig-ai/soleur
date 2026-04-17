@@ -8,6 +8,10 @@ export interface MockQueryChain {
   neq: Mock;
   in: Mock;
   is: Mock;
+  gt: Mock;
+  gte: Mock;
+  lt: Mock;
+  lte: Mock;
   order: Mock;
   limit: Mock;
   range: Mock;
@@ -48,8 +52,9 @@ export interface MockQueryChain {
 export function mockQueryChain<T>(
   data: T,
   error: { message: string } | null = null,
+  count: number | null = null,
 ): MockQueryChain {
-  const result = { data, error };
+  const result = count === null ? { data, error } : { data, error, count };
 
   const chain = {} as MockQueryChain;
 
@@ -59,6 +64,10 @@ export function mockQueryChain<T>(
     "neq",
     "in",
     "is",
+    "gt",
+    "gte",
+    "lt",
+    "lte",
     "order",
     "limit",
     "range",
@@ -83,4 +92,35 @@ export function mockQueryChain<T>(
   }));
 
   return chain;
+}
+
+/**
+ * Build a thenable for a Supabase `.rpc(name, args)` call.
+ *
+ * PostgREST RPC responses do NOT carry a `count` header; the body itself
+ * is the payload (e.g. `[{ total: "0.042", n: 2 }]` for a `RETURNS TABLE`
+ * function). Use this when mocking `service.rpc(...)` in place of the
+ * chained `service.from(...).select(..., { count: "exact" })` pattern.
+ *
+ * ```ts
+ * const { mockFrom, mockRpc } = vi.hoisted(() => ({
+ *   mockFrom: vi.fn(),
+ *   mockRpc: vi.fn(),
+ * }));
+ * vi.mock("@/lib/supabase/service", () => ({
+ *   createServiceClient: vi.fn(() => ({ from: mockFrom, rpc: mockRpc })),
+ * }));
+ *
+ * mockRpc.mockReturnValueOnce(mockRpcResult([{ total: "0.042", n: 2 }]));
+ * ```
+ */
+export function mockRpcResult<T>(
+  data: T,
+  error: { message: string; code?: string } | null = null,
+): { then: (onfulfilled?: (v: unknown) => unknown) => Promise<unknown> } {
+  const resolved = error ? { data: null, error } : { data, error };
+  return {
+    then: (onfulfilled?: (v: unknown) => unknown) =>
+      Promise.resolve(resolved).then(onfulfilled),
+  };
 }

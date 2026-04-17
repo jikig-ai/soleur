@@ -107,18 +107,19 @@ describe("KB API security", () => {
       const relativePath = filePath.split("/apps/web-platform/")[1];
 
       // Same proven-delegation pattern as the auth check above (#2245).
+      // Accept either helper — authenticateAndResolveKbPath (file routes)
+      // or resolveUserKbRoot (share/upload, added in #2467 cleanup).
       const hasInline = content.includes("workspace_status");
-      const invokesHelper =
-        /const\s+\w+\s*=\s*await\s+authenticateAndResolveKbPath\s*\(/.test(
-          content,
-        );
+      const helperName =
+        /const\s+\w+\s*=\s*await\s+(authenticateAndResolveKbPath|resolveUserKbRoot)\s*\(/;
+      const invokesHelper = helperName.test(content);
       const checksHelperResult =
         /if\s*\(\s*!\s*\w+\.ok\s*\)\s*return\s+\w+\.response/.test(content);
       const delegatesToHelper = invokesHelper && checksHelperResult;
 
       expect(
         hasInline || delegatesToHelper,
-        `${relativePath} missing workspace_status check (inline or proven authenticateAndResolveKbPath delegation)`,
+        `${relativePath} missing workspace_status check (inline or proven authenticateAndResolveKbPath / resolveUserKbRoot delegation)`,
       ).toBe(true);
     }
   });
@@ -139,7 +140,7 @@ describe("KB API security", () => {
     expect(content).toContain('includes("\\0")');
   });
 
-  it("all KB route handlers use structured logging for errors", () => {
+  it("all KB route handlers use structured logging for errors (direct or via a delegated helper)", () => {
     const routeDir = resolve(__dirname, "../app/api/kb");
     const routeFiles = findRouteFiles(routeDir);
 
@@ -147,9 +148,21 @@ describe("KB API security", () => {
       const content = readFileSync(filePath, "utf-8");
       const relativePath = filePath.split("/apps/web-platform/")[1];
 
+      // Accept either:
+      //   (a) inline `logger.error` in the route, OR
+      //   (b) proven delegation to a server/ helper that returns a tagged
+      //       union — invocation AND `!result.ok` early-return. The helper
+      //       owns logger.error/Sentry, preserving the "errors are surfaced"
+      //       invariant without duplicating the logging site.
+      const hasInline = content.includes("logger.error");
+      const delegatesToTaggedUnion =
+        /const\s+\w+\s*=\s*await\s+(createShare|listShares|revokeShare|readContent|authenticateAndResolveKbPath|resolveUserKbRoot)\s*\(/.test(
+          content,
+        ) && /if\s*\(\s*!\s*\w+\.ok\s*\)/.test(content);
+
       expect(
-        content.includes("logger.error"),
-        `${relativePath} missing logger.error for unexpected errors`,
+        hasInline || delegatesToTaggedUnion,
+        `${relativePath} missing logger.error for unexpected errors (and no proven tagged-union helper delegation detected)`,
       ).toBe(true);
     }
   });
