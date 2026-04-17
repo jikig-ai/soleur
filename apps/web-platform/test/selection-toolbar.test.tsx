@@ -139,6 +139,73 @@ describe("SelectionToolbar", () => {
     expect(screen.queryByRole("button", { name: /quote in chat/i })).toBeNull();
   });
 
+  it("Escape with pill visible: dismisses pill only; parent Sheet onClose NOT called (capture phase)", async () => {
+    await importToolbar();
+    const onAdd = vi.fn();
+    const sheetOnClose = vi.fn();
+    // Simulate a parent Sheet handler that matches sheet.tsx:55-66 — it
+    // listens for Escape in bubble phase and defers when another handler has
+    // flagged the event (via stopImmediatePropagation or defaultPrevented).
+    // Capture-phase listeners on the same node fire first; if the pill
+    // handler calls stopImmediatePropagation, this one doesn't run at all.
+    function bubblePhaseSheetHandler(e: KeyboardEvent) {
+      if (e.key !== "Escape") return;
+      if (e.defaultPrevented) return;
+      sheetOnClose();
+    }
+    document.addEventListener("keydown", bubblePhaseSheetHandler, false);
+
+    render(<Harness onAddToChat={onAdd} />);
+    const article = screen.getByTestId("article");
+    act(() => {
+      setSelection(article, "some text");
+    });
+    expect(screen.queryByRole("button", { name: /quote in chat/i })).toBeTruthy();
+
+    const ev = new KeyboardEvent("keydown", {
+      key: "Escape",
+      bubbles: true,
+      cancelable: true,
+    });
+    act(() => {
+      document.dispatchEvent(ev);
+    });
+
+    // Pill dismissed
+    expect(screen.queryByRole("button", { name: /quote in chat/i })).toBeNull();
+    // Parent Sheet NOT closed — pill's capture handler flagged the event
+    expect(sheetOnClose).not.toHaveBeenCalled();
+
+    document.removeEventListener("keydown", bubblePhaseSheetHandler, false);
+  });
+
+  it("Escape with pill absent: parent Sheet onClose IS called", async () => {
+    await importToolbar();
+    const onAdd = vi.fn();
+    const sheetOnClose = vi.fn();
+    function bubblePhaseSheetHandler(e: KeyboardEvent) {
+      if (e.key === "Escape") sheetOnClose();
+    }
+    document.addEventListener("keydown", bubblePhaseSheetHandler, false);
+
+    render(<Harness onAddToChat={onAdd} />);
+    // No selection → no pill. Pill-absent Escape must reach the parent.
+    expect(screen.queryByRole("button", { name: /quote in chat/i })).toBeNull();
+
+    const ev = new KeyboardEvent("keydown", {
+      key: "Escape",
+      bubbles: true,
+      cancelable: true,
+    });
+    act(() => {
+      document.dispatchEvent(ev);
+    });
+
+    expect(sheetOnClose).toHaveBeenCalledTimes(1);
+
+    document.removeEventListener("keydown", bubblePhaseSheetHandler, false);
+  });
+
   it("⌘⇧L / Ctrl+Shift+L inside article triggers onAddToChat with selection", async () => {
     await importToolbar();
     const onAdd = vi.fn();
