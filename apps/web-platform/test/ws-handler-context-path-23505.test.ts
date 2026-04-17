@@ -85,4 +85,38 @@ describe("isContextPathUniqueViolation (#2382 / #2390 10D)", () => {
       isContextPathUniqueViolation({ code: "23505", message: null as unknown as string }),
     ).toBe(false);
   });
+
+  it("returns true on structured `constraint` field even when message is localized", () => {
+    // PostgREST may populate `constraint` directly; message could be in
+    // another language on a non-English Postgres cluster.
+    expect(
+      isContextPathUniqueViolation({
+        code: "23505",
+        constraint: "conversations_context_path_user_uniq",
+        message: "Clé en double viole une contrainte unique",
+      }),
+    ).toBe(true);
+  });
+
+  it("returns true on `details` field when only it carries the index name", () => {
+    expect(
+      isContextPathUniqueViolation({
+        code: "23505",
+        details: "Key (user_id, context_path)=(...) already exists in conversations_context_path_user_uniq",
+        message: "",
+      }),
+    ).toBe(true);
+  });
+
+  it("returns FALSE when a DIFFERENT constraint is present and message does not match", () => {
+    // Crucial safety: a structured `constraint` on conversations_pkey must
+    // NOT fall through even if the message is empty/generic.
+    expect(
+      isContextPathUniqueViolation({
+        code: "23505",
+        constraint: "conversations_pkey",
+        message: "",
+      }),
+    ).toBe(false);
+  });
 });

@@ -23,6 +23,10 @@ export function KbChatContent({ contextPath, onClose, visible }: KbChatContentPr
   // Tracks which contextPaths have already emitted kb.chat.opened in THIS
   // mount session. Ref (not state) so two handlers firing in the same React
   // batch see each other's write synchronously — prevents #2385 double fire.
+  // NOTE: monotonically accumulates for the component's lifetime — bounded
+  // in practice by distinct KB docs visited in a single session. A user who
+  // navigates hundreds of docs in one session would grow the Set; cleared
+  // on unmount (useRef reset).
   const openedPathsRef = useRef<Set<string>>(new Set());
   // Signals that drive the consolidated emit effect. Both handlers set
   // these scalar flags; a single effect keyed on (contextPath, hasReal,

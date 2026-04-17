@@ -210,8 +210,16 @@ export function ChatSurface({
           sendMessage("", uploaded);
         }
       } catch (err) {
-        console.warn("[kb-chat] pending upload failed", { err });
-        Sentry.captureException(err);
+        // Defense-in-depth: uploadPendingFiles already catches per-file
+        // failures internally. This outer catch only fires on a batch-level
+        // failure (e.g., sendMessage throws). Re-wrap so Sentry does not
+        // ingest any signed-URL tokens embedded in XHR error messages.
+        const original = err instanceof Error ? err.message : String(err);
+        const sanitized = new Error(
+          `[kb-chat] pending-files batch failed (original message length ${original.length})`,
+        );
+        console.warn("[kb-chat] pending upload failed (batch)", { err: sanitized });
+        Sentry.captureException(sanitized);
       }
     })();
   }, [initialMsgSent, pendingFilesHandled, realConversationId, sendMessage]);

@@ -267,12 +267,28 @@ export function startSubscriptionRefresh(
  * Exported for regression coverage — asserts that a 23505 on an unrelated
  * index (e.g., `conversations_pkey`) does NOT fall through to the
  * context_path lookup. See issue #2390.
+ *
+ * Prefers the structured `constraint` / `details` fields that PostgREST
+ * populates for 23505 errors, falling back to a `message` substring match
+ * for driver variants that omit them. Message-only matching is fragile
+ * against localized `lc_messages` or future wording changes.
  */
 export function isContextPathUniqueViolation(err: unknown): boolean {
-  const pgErr = err as { code?: string; message?: string } | null;
+  const pgErr = err as
+    | { code?: string; message?: string; details?: string; constraint?: string }
+    | null;
   if (!pgErr || pgErr.code !== "23505") return false;
-  return typeof pgErr.message === "string" &&
-    pgErr.message.includes("conversations_context_path_user_uniq");
+  if (pgErr.constraint === "conversations_context_path_user_uniq") return true;
+  if (
+    typeof pgErr.details === "string" &&
+    pgErr.details.includes("conversations_context_path_user_uniq")
+  ) {
+    return true;
+  }
+  return (
+    typeof pgErr.message === "string" &&
+    pgErr.message.includes("conversations_context_path_user_uniq")
+  );
 }
 
 /**

@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, act } from "@testing-library/react";
 import { useState } from "react";
 import { createUseTeamNamesMock } from "./mocks/use-team-names";
@@ -60,6 +60,18 @@ describe("KbChatSidebar — accessibility (Phase 6.1)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     wsReturn = { ...wsReturn, messages: [], resumedFrom: null };
+  });
+
+  // Belt-and-braces cleanup: a stray leftover `[data-kb-chat]` node injected
+  // by a test would shadow subsequent focus assertions (the legacy bug the
+  // a11y test below characterizes). Runs even when a test throws before
+  // reaching its own try/finally. Leftover nodes are tagged
+  // `data-leftover-cleanup` so we only remove test fixtures, never real
+  // KbChatContent output.
+  afterEach(() => {
+    document
+      .querySelectorAll("[data-leftover-cleanup]")
+      .forEach((node) => node.parentElement?.removeChild(node));
   });
 
   async function harness() {
@@ -140,6 +152,7 @@ describe("KbChatSidebar — accessibility (Phase 6.1)", () => {
     // the sidebar's textarea. The ref-based fix bypasses the DOM query.
     const leftover = document.createElement("div");
     leftover.setAttribute("data-kb-chat", "");
+    leftover.setAttribute("data-leftover-cleanup", "");
     const leftoverTa = document.createElement("textarea");
     leftoverTa.setAttribute("data-testid", "leftover-ta");
     leftover.appendChild(leftoverTa);
