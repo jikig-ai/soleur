@@ -280,24 +280,36 @@ export async function readContentRaw(
     throw new KbAccessDeniedError();
   }
 
-  let stat: fs.Stats;
+  // O_NOFOLLOW refuses symlinks at open time; fstat + read run against the
+  // fd so the bytes we return came from the inode we stat'd. Closes the
+  // stat→readFile TOCTOU window (CodeQL js/file-system-race).
+  let handle: fs.promises.FileHandle;
   try {
-    stat = await fs.promises.stat(fullPath);
-  } catch {
+    handle = await fs.promises.open(
+      fullPath,
+      fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW,
+    );
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === "ELOOP" || code === "EMLINK") {
+      throw new KbAccessDeniedError();
+    }
     throw new KbNotFoundError();
   }
-
-  if (!stat.isFile()) {
-    throw new KbNotFoundError();
+  try {
+    const stat = await handle.stat();
+    if (!stat.isFile()) {
+      throw new KbNotFoundError();
+    }
+    if (stat.size > KB_MAX_FILE_SIZE) {
+      throw new KbValidationError("File exceeds maximum size limit");
+    }
+    const buffer = await handle.readFile();
+    const raw = buffer.toString("utf-8");
+    return { buffer, raw, path: relativePath };
+  } finally {
+    await handle.close().catch(() => {});
   }
-
-  if (stat.size > KB_MAX_FILE_SIZE) {
-    throw new KbValidationError("File exceeds maximum size limit");
-  }
-
-  const buffer = await fs.promises.readFile(fullPath);
-  const raw = buffer.toString("utf-8");
-  return { buffer, raw, path: relativePath };
 }
 
 export async function readContent(
