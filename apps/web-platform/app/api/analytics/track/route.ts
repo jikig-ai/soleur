@@ -70,9 +70,16 @@ export async function POST(req: Request): Promise<Response> {
     return new NextResponse(null, { status: 204 });
   }
 
-  const { clean: safeProps, dropped } = sanitizeProps(parsed.props);
+  const { clean: safeProps, dropped, scrubbed } = sanitizeProps(parsed.props);
   if (dropped.length > 0) {
     log.debug({ dropped }, "analytics.track dropped non-allowlisted props");
+  }
+  if (scrubbed.length > 0) {
+    // Pattern names only — never the raw or scrubbed value. Operator signal
+    // that a caller is sending unnormalized paths (see lib/analytics-client.ts
+    // JSDoc for the caller contract). Not mirrored to Sentry: intentional
+    // transformation, not silent fallback (cq-silent-fallback-must-mirror-to-sentry).
+    log.debug({ scrubbed }, "analytics.track scrubbed PII from path");
   }
 
   const payload = {

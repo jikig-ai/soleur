@@ -425,6 +425,39 @@ describe("POST /api/analytics/track", () => {
     expect(payload.props).toEqual({ path: 42 });
   });
 
+  test("T8: logs scrub pattern names at debug when path contains PII (never raw value)", async () => {
+    // #2462 — sanitizeProps scrubs PII tokens from the `path` value and the
+    // route mirrors the existing `dropped` log pattern to emit a debug line
+    // with the pattern names only. The raw value must never appear in any
+    // debug context field.
+    mockFetch.mockResolvedValue(new Response("", { status: 202 }));
+    const { POST } = await importRoute();
+    const req = makeRequest("https://app.soleur.ai/api/analytics/track", {
+      origin: "https://app.soleur.ai",
+      body: {
+        goal: "kb.chat.opened",
+        props: { path: "/users/alice@example.com/settings" },
+      },
+    });
+    await POST(req);
+
+    // Forwarded payload is scrubbed.
+    const [, init] = mockFetch.mock.calls[0];
+    const payload = JSON.parse(String((init as RequestInit).body));
+    expect(payload.props.path).toBe("/users/[email]/settings");
+
+    // Debug log fires with pattern NAMES only — never the raw value.
+    const scrubCall = logDebug.mock.calls.find(([, msg]) =>
+      typeof msg === "string" && msg.includes("scrubbed"),
+    );
+    expect(scrubCall).toBeDefined();
+    const [ctx] = scrubCall!;
+    expect(ctx).toMatchObject({ scrubbed: ["email"] });
+    // The raw value (pre-scrub) must never appear in ANY debug ctx field.
+    const allDebugCtx = JSON.stringify(logDebug.mock.calls);
+    expect(allDebugCtx).not.toContain("alice@example.com");
+  });
+
   test("T7: rejects body with more than MAX_PROP_KEYS (20) props with 400", async () => {
     const { POST } = await importRoute();
     const tooManyProps: Record<string, unknown> = {};
