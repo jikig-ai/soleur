@@ -1,5 +1,5 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, act } from "@testing-library/react";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { render, screen, act, waitFor } from "@testing-library/react";
 import { useState } from "react";
 import { createUseTeamNamesMock } from "./mocks/use-team-names";
 
@@ -60,6 +60,18 @@ describe("KbChatSidebar — accessibility (Phase 6.1)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     wsReturn = { ...wsReturn, messages: [], resumedFrom: null };
+  });
+
+  // Belt-and-braces cleanup: a stray leftover `[data-kb-chat]` node injected
+  // by a test would shadow subsequent focus assertions (the legacy bug the
+  // a11y test below characterizes). Runs even when a test throws before
+  // reaching its own try/finally. Leftover nodes are tagged
+  // `data-leftover-cleanup` so we only remove test fixtures, never real
+  // KbChatContent output.
+  afterEach(() => {
+    document
+      .querySelectorAll("[data-leftover-cleanup]")
+      .forEach((node) => node.parentElement?.removeChild(node));
   });
 
   async function harness() {
@@ -130,5 +142,36 @@ describe("KbChatSidebar — accessibility (Phase 6.1)", () => {
     await harness();
     act(() => { screen.getByRole("button", { name: /ask about this document/i }).click(); });
     expect(screen.getByLabelText(/close panel/i)).toBeTruthy();
+  });
+
+  it("focuses its own textarea when a pre-existing [data-kb-chat] scope exists (#2384 5B)", async () => {
+    // Inject a leftover [data-kb-chat] container with its own textarea
+    // BEFORE the sidebar mounts. The legacy focus effect called
+    // `document.querySelector("[data-kb-chat] textarea")` which returns
+    // the FIRST matching element in document order — the leftover, not
+    // the sidebar's textarea. The ref-based fix bypasses the DOM query.
+    const leftover = document.createElement("div");
+    leftover.setAttribute("data-kb-chat", "");
+    leftover.setAttribute("data-leftover-cleanup", "");
+    const leftoverTa = document.createElement("textarea");
+    leftoverTa.setAttribute("data-testid", "leftover-ta");
+    leftover.appendChild(leftoverTa);
+    document.body.insertBefore(leftover, document.body.firstChild);
+
+    try {
+      await harness();
+      act(() => { screen.getByRole("button", { name: /ask about this document/i }).click(); });
+
+      const sidebarTa = await screen.findByPlaceholderText(/ask about this document/i) as HTMLTextAreaElement;
+      // Focus is scheduled via requestAnimationFrame inside kb-chat-content.
+      // `waitFor` retries until rAF fires — more robust across CI timing
+      // variance than a fixed `setTimeout(r, 0)` flush.
+      await waitFor(() => {
+        expect(document.activeElement).toBe(sidebarTa);
+      });
+      expect(document.activeElement).not.toBe(leftoverTa);
+    } finally {
+      document.body.removeChild(leftover);
+    }
   });
 });

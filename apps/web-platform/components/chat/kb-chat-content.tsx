@@ -20,7 +20,19 @@ export interface KbChatContentProps {
 export function KbChatContent({ contextPath, onClose, visible }: KbChatContentProps) {
   const { setMessageCount, registerQuoteHandler } = useKbChat();
   const [resumedBanner, setResumedBanner] = useState<{ timestamp: string } | null>(null);
-  const [openedEmitted, setOpenedEmitted] = useState<string | null>(null);
+  // Tracks which contextPaths have already emitted kb.chat.opened in THIS
+  // mount session. Ref (not state) so two handlers firing in the same React
+  // batch see each other's write synchronously — prevents #2385 double fire.
+  // NOTE: monotonically accumulates for the component's lifetime — bounded
+  // in practice by distinct KB docs visited in a single session. A user who
+  // navigates hundreds of docs in one session would grow the Set; cleared
+  // on unmount (useRef reset).
+  const openedPathsRef = useRef<Set<string>>(new Set());
+  // Signals that drive the consolidated emit effect. Both handlers set
+  // these scalar flags; a single effect keyed on (contextPath, hasReal,
+  // hasResumed) performs the guarded `track` call exactly once per path.
+  const [hasRealConversation, setHasRealConversation] = useState(false);
+  const [hasResumed, setHasResumed] = useState(false);
   const historicalCountRef = useRef<number>(0);
   const quoteRef = useRef<ChatInputQuoteHandle | null>(null);
 
@@ -34,13 +46,13 @@ export function KbChatContent({ contextPath, onClose, visible }: KbChatContentPr
   }, [visible, registerQuoteHandler]);
 
   // Focus management: when visible, move focus to the ChatInput textarea.
+  // Use the imperative handle instead of a DOM query so focus is scoped to
+  // this component's own input even when another [data-kb-chat] scope
+  // exists in the document (e.g., a leftover from a prior mount).
   useEffect(() => {
     if (!visible) return;
     const id = requestAnimationFrame(() => {
-      const textarea = document.querySelector<HTMLTextAreaElement>(
-        "[data-kb-chat] textarea",
-      );
-      textarea?.focus();
+      quoteRef.current?.focus();
     });
     return () => cancelAnimationFrame(id);
   }, [visible]);
@@ -63,9 +75,24 @@ export function KbChatContent({ contextPath, onClose, visible }: KbChatContentPr
     if (prevContextPathRef.current === contextPath) return;
     prevContextPathRef.current = contextPath;
     setResumedBanner(null);
-    setOpenedEmitted(null);
+    setHasRealConversation(false);
+    setHasResumed(false);
     historicalCountRef.current = 0;
   }, [contextPath]);
+
+  // Consolidated emit: fires kb.chat.opened at most once per (mount-session,
+  // contextPath) as soon as EITHER signal arrives, and pairs it with
+  // kb.chat.thread_resumed when the opening was a resume. Using a ref Set
+  // means two handlers invoked in the same batch both observe the same
+  // guard — the legacy useState-based guard read stale null on the second
+  // handler and double-fired (#2385).
+  useEffect(() => {
+    if (!hasRealConversation && !hasResumed) return;
+    if (openedPathsRef.current.has(contextPath)) return;
+    openedPathsRef.current.add(contextPath);
+    void track("kb.chat.opened", { path: contextPath });
+    if (hasResumed) void track("kb.chat.thread_resumed", { path: contextPath });
+  }, [contextPath, hasRealConversation, hasResumed]);
 
   const filename = contextPath.split("/").pop() ?? contextPath;
 
@@ -79,24 +106,14 @@ export function KbChatContent({ contextPath, onClose, visible }: KbChatContentPr
       setResumedBanner({ timestamp });
       historicalCountRef.current = messageCount;
       setMessageCount(messageCount);
-      if (openedEmitted !== contextPath) {
-        void track("kb.chat.opened", { path: contextPath });
-        void track("kb.chat.thread_resumed", { path: contextPath });
-        setOpenedEmitted(contextPath);
-      }
+      setHasResumed(true);
     },
-    [contextPath, openedEmitted, setMessageCount],
+    [setMessageCount],
   );
 
-  const handleRealConversationId = useCallback(
-    (_conversationId: string) => {
-      if (openedEmitted !== contextPath && !resumedBanner) {
-        void track("kb.chat.opened", { path: contextPath });
-        setOpenedEmitted(contextPath);
-      }
-    },
-    [contextPath, openedEmitted, resumedBanner],
-  );
+  const handleRealConversationId = useCallback((_conversationId: string) => {
+    setHasRealConversation(true);
+  }, []);
 
   const handleMessageCountChange = useCallback(
     (count: number) => {
