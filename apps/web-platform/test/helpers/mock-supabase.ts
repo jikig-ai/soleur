@@ -8,6 +8,10 @@ export interface MockQueryChain {
   neq: Mock;
   in: Mock;
   is: Mock;
+  gt: Mock;
+  gte: Mock;
+  lt: Mock;
+  lte: Mock;
   order: Mock;
   limit: Mock;
   range: Mock;
@@ -48,8 +52,9 @@ export interface MockQueryChain {
 export function mockQueryChain<T>(
   data: T,
   error: { message: string } | null = null,
+  count: number | null = null,
 ): MockQueryChain {
-  const result = { data, error };
+  const result = count === null ? { data, error } : { data, error, count };
 
   const chain = {} as MockQueryChain;
 
@@ -59,6 +64,10 @@ export function mockQueryChain<T>(
     "neq",
     "in",
     "is",
+    "gt",
+    "gte",
+    "lt",
+    "lte",
     "order",
     "limit",
     "range",

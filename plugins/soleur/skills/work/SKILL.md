@@ -308,6 +308,8 @@ Run these checks before proceeding to Phase 1. A FAIL blocks execution with a re
    - Reuse existing components where possible
    - Follow project coding standards (see CLAUDE.md)
    - When in doubt, grep for similar implementations
+   - **Before writing a new format, date, or util helper in any app, `ls` + grep the app's canonical `lib/` directory (e.g., `apps/web-platform/lib/`) for equivalents.** Canonical helpers are often single-purpose small files named by verb (`relative-time.ts`, `format-currency.ts`); typecheck and tests will not catch duplicated logic. See `knowledge-base/project/learnings/2026-04-17-grep-lib-before-writing-format-helpers.md`.
+   - **Before writing data-layer tests that use new PostgREST operators, read the shared mock helper (e.g., `apps/web-platform/test/helpers/mock-supabase.ts`) to confirm it covers every operator the code under test uses.** If not, extend it at the START of Phase 2, not after the first cryptic test failure.
 
 5. **Test Continuously**
 
