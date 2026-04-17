@@ -9,6 +9,17 @@ import { shareSupabaseFromMock } from "./helpers/share-mocks";
 
 vi.mock("@/server/logger", () => ({
   default: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() },
+  createChildLogger: () => ({
+    info: vi.fn(),
+    error: vi.fn(),
+    warn: vi.fn(),
+    debug: vi.fn(),
+  }),
+}));
+
+vi.mock("@/server/observability", () => ({
+  reportSilentFallback: vi.fn(),
+  reportSilentFallbackWarning: vi.fn(),
 }));
 
 vi.mock("@sentry/nextjs", () => ({ captureException: vi.fn() }));
@@ -148,15 +159,36 @@ describe("createShare — validation failures", () => {
     expect(result.code).toBe("invalid-path");
   });
 
-  it("rejects symlinks with status 400 code symlink-rejected", async () => {
+  it("rejects symlinks pointing outside kbRoot as invalid-path (realpath guard)", async () => {
+    // Symlink inside kbRoot but target is outside. isPathInWorkspace
+    // resolves realpath → outside → "invalid-path" before O_NOFOLLOW.
     const outside = path.join(tmpWorkspace, "real.md");
     fs.writeFileSync(outside, "secret");
-    fs.symlinkSync(outside, path.join(kbRoot, "link.md"));
+    fs.symlinkSync(outside, path.join(kbRoot, "link-out.md"));
     const client = makeServiceClient({
       kb_share_links: { shareRow: null },
     });
 
-    const result = await createShare(client as never, "user-1", kbRoot, "link.md");
+    const result = await createShare(client as never, "user-1", kbRoot, "link-out.md");
+
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("unreachable");
+    expect(result.status).toBe(400);
+    expect(result.code).toBe("invalid-path");
+  });
+
+  it("rejects terminal symlinks to in-kbRoot files as symlink-rejected (O_NOFOLLOW guard)", async () => {
+    // Symlink inside kbRoot pointing to another file inside kbRoot.
+    // isPathInWorkspace realpath resolves inside kbRoot → passes.
+    // O_NOFOLLOW open then raises ELOOP → "symlink-rejected".
+    const innerTarget = path.join(kbRoot, "target.md");
+    fs.writeFileSync(innerTarget, "target contents");
+    fs.symlinkSync(innerTarget, path.join(kbRoot, "link-in.md"));
+    const client = makeServiceClient({
+      kb_share_links: { shareRow: null },
+    });
+
+    const result = await createShare(client as never, "user-1", kbRoot, "link-in.md");
 
     expect(result.ok).toBe(false);
     if (result.ok) throw new Error("unreachable");
@@ -398,7 +430,7 @@ describe("revokeShare", () => {
           eq: () => ({
             single: () =>
               Promise.resolve({
-                data: { id: "share-1", user_id: "user-1" },
+                data: { id: "share-1", user_id: "user-1", document_path: "readme.md" },
                 error: null,
               }),
           }),
@@ -422,7 +454,7 @@ describe("revokeShare", () => {
           eq: () => ({
             single: () =>
               Promise.resolve({
-                data: { id: "share-1", user_id: "user-2" },
+                data: { id: "share-1", user_id: "user-2", document_path: "secret.md" },
                 error: null,
               }),
           }),
@@ -473,7 +505,7 @@ describe("revokeShare", () => {
             return {
               single: () =>
                 Promise.resolve({
-                  data: { id: "share-1", user_id: "user-1" },
+                  data: { id: "share-1", user_id: "user-1", document_path: "readme.md" },
                   error: null,
                 }),
             };

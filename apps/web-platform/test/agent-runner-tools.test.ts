@@ -97,6 +97,10 @@ vi.mock("../server/service-tools", () => ({
   plausibleAddGoal: vi.fn(),
   plausibleGetStats: vi.fn(),
 }));
+vi.mock("../server/observability", () => ({
+  reportSilentFallback: vi.fn(),
+  reportSilentFallbackWarning: vi.fn(),
+}));
 
 import { startAgentSession } from "../server/agent-runner";
 import {

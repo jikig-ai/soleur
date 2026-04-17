@@ -41,39 +41,41 @@ function textResponse(payload: unknown, isError = false): ToolTextResponse {
   return body;
 }
 
-function wrapCreate(result: CreateShareResult, baseUrl: string): ToolTextResponse {
-  if (result.ok) {
-    return textResponse({
-      token: result.token,
-      url: `${baseUrl}${result.url}`,
-      documentPath: result.documentPath,
-      size: result.size,
-    });
-  }
+function wrapError(result: {
+  error: string;
+  code: string;
+  status: number;
+}): ToolTextResponse {
   return textResponse(
     { error: result.error, code: result.code, status: result.status },
     true,
   );
+}
+
+function wrapCreate(result: CreateShareResult, baseUrl: string): ToolTextResponse {
+  if (!result.ok) return wrapError(result);
+  return textResponse({
+    token: result.token,
+    url: `${baseUrl}${result.url}`,
+    documentPath: result.documentPath,
+    size: result.size,
+  });
 }
 
 function wrapList(result: ListSharesResult): ToolTextResponse {
-  if (result.ok) {
-    return textResponse({ shares: result.shares });
-  }
-  return textResponse(
-    { error: result.error, code: result.code, status: result.status },
-    true,
-  );
+  if (!result.ok) return wrapError(result);
+  return textResponse({ shares: result.shares });
 }
 
 function wrapRevoke(result: RevokeShareResult): ToolTextResponse {
-  if (result.ok) {
-    return textResponse({ revoked: true, token: result.token });
-  }
-  return textResponse(
-    { error: result.error, code: result.code, status: result.status },
-    true,
-  );
+  if (!result.ok) return wrapError(result);
+  // Echo documentPath so a batching agent can reconstruct which file
+  // lost access from the tool output alone.
+  return textResponse({
+    revoked: true,
+    token: result.token,
+    documentPath: result.documentPath,
+  });
 }
 
 export function buildKbShareTools(opts: BuildKbShareToolsOpts) {

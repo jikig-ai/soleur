@@ -7,31 +7,43 @@
 //
 // Error shape is a tagged union with string-literal `code` values so
 // telemetry and tests can discriminate failure modes without string
-// matching on messages. `status` mirrors the HTTP status the callers
-// should use (contract preserves the existing HTTP route behavior —
-// null-byte/path-escape/symlink/non-file all 400, missing 404, size 413).
+// matching on messages. Several codes share the canonical "Invalid
+// document path" message by design — tests MUST assert on `code`, not
+// `error`. `status` mirrors the HTTP status the callers should use
+// (contract preserves the existing HTTP route behavior — null-byte /
+// path-escape all 400, missing 404, size 413).
 
 import fs from "node:fs";
 import path from "node:path";
 import { randomBytes } from "node:crypto";
-import * as Sentry from "@sentry/nextjs";
 import { isPathInWorkspace } from "@/server/sandbox";
 import { MAX_BINARY_SIZE } from "@/server/kb-binary-response";
 import { hashStream } from "@/server/kb-content-hash";
-import logger from "@/server/logger";
+import { createChildLogger } from "@/server/logger";
+import { reportSilentFallback } from "@/server/observability";
 
-export type ShareErrorCode =
+const log = createChildLogger("kb-share");
+
+// 256 bits of entropy, ~43 base64url chars. Hoisted so the "why 32"
+// is explicit at the call site — security-relevant constant.
+const SHARE_TOKEN_BYTES = 32;
+
+export type CreateShareErrorCode =
   | "invalid-path"
   | "not-found"
   | "not-a-file"
   | "symlink-rejected"
   | "too-large"
   | "concurrent-retry"
-  | "forbidden"
   | "db-error";
+
+export type RevokeShareErrorCode = "forbidden" | "not-found" | "db-error";
 
 export interface ShareRecord {
   token: string;
+  // camelCase at the MCP-tool boundary. The HTTP route re-snake_cases
+  // this into the existing `{ document_path, created_at }` wire shape
+  // so web clients are unaffected by the extraction.
   documentPath: string;
   createdAt: string;
   revoked: boolean;
@@ -51,8 +63,8 @@ export type CreateShareResult =
     }
   | {
       ok: false;
-      status: 400 | 403 | 404 | 409 | 413 | 500;
-      code: ShareErrorCode;
+      status: 400 | 404 | 409 | 413 | 500;
+      code: CreateShareErrorCode;
       error: string;
     };
 
@@ -61,23 +73,85 @@ export type ListSharesResult =
   | { ok: false; status: 500; code: "db-error"; error: string };
 
 export type RevokeShareResult =
-  | { ok: true; token: string }
+  | { ok: true; token: string; documentPath: string }
   | {
       ok: false;
       status: 403 | 404 | 500;
-      code: ShareErrorCode;
+      code: RevokeShareErrorCode;
       error: string;
     };
 
+// Hoisted chain-shape type. One declaration keeps createShare /
+// listShares / revokeShare aligned on the exact PostgREST builder shape
+// their queries expect. If supabase-js changes, drift here is loud.
+interface KbShareLinksTable {
+  select(cols: string): KbShareSelect;
+  insert(row: Record<string, unknown>): Promise<{ error: { code?: string } | null }>;
+  update(patch: Record<string, unknown>): {
+    eq(
+      col: string,
+      val: unknown,
+    ):
+      | Promise<{ error: { message: string } | null }>
+      | { error: { message: string } | null };
+  };
+}
+
+interface KbShareSelect {
+  eq(col: string, val: unknown): KbShareEq;
+}
+
+interface KbShareEq {
+  eq(col: string, val: unknown): KbShareEq;
+  maybeSingle(): Promise<{
+    data: Record<string, unknown> | null;
+    error: { message: string } | null;
+  }>;
+  single(): Promise<{
+    data: Record<string, unknown> | null;
+    error: { message: string } | null;
+  }>;
+  order(
+    col: string,
+    opts: { ascending: boolean },
+  ): Promise<{
+    data: Record<string, unknown>[] | null;
+    error: { message: string } | null;
+  }>;
+}
+
 // Minimal shape of the PostgREST-like service client we rely on. Typed
-// loosely so the HTTP routes (supabase-js v2 client) and test mocks both
-// satisfy it without coupling to internal supabase-js generics.
+// as `Pick<SupabaseClient, "from">`-compatible so the real supabase-js
+// client and test mocks both satisfy it without coupling to internal
+// supabase-js generics.
 export interface ShareServiceClient {
   from(table: string): unknown;
 }
 
-function invalidPath(error = "Invalid document path"): CreateShareResult {
+function shareLinksTable(client: ShareServiceClient): KbShareLinksTable {
+  return client.from("kb_share_links") as KbShareLinksTable;
+}
+
+function invalidPath(error = "Invalid document path"): Extract<
+  CreateShareResult,
+  { ok: false }
+> {
   return { ok: false, status: 400, code: "invalid-path", error };
+}
+
+async function findActiveShare(
+  table: KbShareLinksTable,
+  userId: string,
+  documentPath: string,
+  cols: string,
+): Promise<Record<string, unknown> | null> {
+  const { data } = await table
+    .select(cols)
+    .eq("user_id", userId)
+    .eq("document_path", documentPath)
+    .eq("revoked", false)
+    .maybeSingle();
+  return data;
 }
 
 export async function createShare(
@@ -90,29 +164,11 @@ export async function createShare(
     return invalidPath();
   }
   const fullPath = path.join(kbRoot, documentPath);
-  // lstat-first so a symlink (even one inside kbRoot) produces the
-  // discriminative "symlink-rejected" code. isPathInWorkspace resolves
-  // realpath and would collapse symlinks-pointing-outside into a generic
-  // "invalid-path" — losing the signal telemetry needs.
-  try {
-    const lstat = await fs.promises.lstat(fullPath);
-    if (lstat.isSymbolicLink()) {
-      return {
-        ok: false,
-        status: 400,
-        code: "symlink-rejected",
-        error: "Invalid document path",
-      };
-    }
-  } catch (err) {
-    const code = (err as NodeJS.ErrnoException).code;
-    if (code !== "ENOENT") {
-      // Non-ENOENT lstat failures (ELOOP, EACCES) — treat as invalid.
-      return invalidPath();
-    }
-    // ENOENT passes through to isPathInWorkspace / open which yield
-    // the canonical "not-found" after workspace validation.
-  }
+  // isPathInWorkspace uses realpath, which collapses intermediate
+  // symlinks — catches path-escape here. The terminal O_NOFOLLOW open
+  // below catches symlinks at the leaf. No pre-open lstat, which would
+  // reintroduce the CodeQL js/file-system-race TOCTOU window the
+  // pre-PR route deliberately avoided.
   if (!isPathInWorkspace(fullPath, kbRoot)) {
     return invalidPath();
   }
@@ -167,30 +223,13 @@ export async function createShare(
     await handle.close().catch(() => {});
   }
 
-  const table = serviceClient.from("kb_share_links") as {
-    select: (cols: string) => unknown;
-    insert: (row: Record<string, unknown>) => Promise<{ error: unknown }>;
-    update: (patch: Record<string, unknown>) => {
-      eq: (col: string, val: unknown) => Promise<{ error: unknown }> | { error: unknown };
-    };
-  };
-
-  const existingChain = (table.select("id, token, content_sha256") as {
-    eq: (col: string, val: unknown) => {
-      eq: (col: string, val: unknown) => {
-        eq: (col: string, val: unknown) => {
-          maybeSingle: () => Promise<{
-            data: { id: string; token: string; content_sha256: string | null } | null;
-            error: unknown;
-          }>;
-        };
-      };
-    };
-  })
-    .eq("user_id", userId)
-    .eq("document_path", documentPath)
-    .eq("revoked", false);
-  const { data: existing } = await existingChain.maybeSingle();
+  const table = shareLinksTable(serviceClient);
+  const existing = (await findActiveShare(
+    table,
+    userId,
+    documentPath,
+    "id, token, content_sha256",
+  )) as { id: string; token: string; content_sha256: string | null } | null;
 
   if (existing) {
     if (existing.content_sha256 === contentHash) {
@@ -204,20 +243,18 @@ export async function createShare(
       };
     }
     // Content drift: revoke stale row and issue a fresh token.
-    await (table.update({ revoked: true }).eq("id", existing.id) as
-      | Promise<{ error: unknown }>
-      | { error: unknown });
-    logger.info(
+    await table.update({ revoked: true }).eq("id", existing.id);
+    log.info(
       {
         event: "share_reissued_on_content_drift",
         userId,
         documentPath,
       },
-      "kb/share: revoked stale share and issuing new token (content changed)",
+      "revoked stale share and issuing new token (content changed)",
     );
   }
 
-  const token = randomBytes(32).toString("base64url");
+  const token = randomBytes(SHARE_TOKEN_BYTES).toString("base64url");
   const { error: insertError } = await table.insert({
     user_id: userId,
     token,
@@ -227,22 +264,12 @@ export async function createShare(
 
   if (insertError) {
     if ((insertError as { code?: string }).code === "23505") {
-      const winnerChain = (table.select("token, content_sha256") as {
-        eq: (col: string, val: unknown) => {
-          eq: (col: string, val: unknown) => {
-            eq: (col: string, val: unknown) => {
-              maybeSingle: () => Promise<{
-                data: { token: string; content_sha256: string | null } | null;
-                error: unknown;
-              }>;
-            };
-          };
-        };
-      })
-        .eq("user_id", userId)
-        .eq("document_path", documentPath)
-        .eq("revoked", false);
-      const { data: winner } = await winnerChain.maybeSingle();
+      const winner = (await findActiveShare(
+        table,
+        userId,
+        documentPath,
+        "token, content_sha256",
+      )) as { token: string; content_sha256: string | null } | null;
       if (winner && winner.content_sha256 === contentHash) {
         return {
           ok: true,
@@ -260,12 +287,9 @@ export async function createShare(
         error: "Concurrent share creation — retry",
       };
     }
-    logger.error(
-      { err: insertError, userId, documentPath },
-      "kb/share: failed to create share link",
-    );
-    Sentry.captureException(insertError, {
-      tags: { feature: "kb-share", op: "create" },
+    reportSilentFallback(insertError, {
+      feature: "kb-share",
+      op: "create",
       extra: { userId, documentPath },
     });
     return {
@@ -276,9 +300,9 @@ export async function createShare(
     };
   }
 
-  logger.info(
+  log.info(
     { event: "share_created", userId, documentPath },
-    "kb/share: share link created",
+    "share link created",
   );
   return {
     ok: true,
@@ -295,23 +319,6 @@ export async function listShares(
   userId: string,
   filter?: { documentPath?: string },
 ): Promise<ListSharesResult> {
-  const table = serviceClient.from("kb_share_links") as {
-    select: (cols: string) => {
-      eq: (col: string, val: unknown) => {
-        eq: (col: string, val: unknown) => {
-          order: (
-            col: string,
-            opts: { ascending: boolean },
-          ) => Promise<{ data: RowShape[] | null; error: { message: string } | null }>;
-        };
-        order: (
-          col: string,
-          opts: { ascending: boolean },
-        ) => Promise<{ data: RowShape[] | null; error: { message: string } | null }>;
-      };
-    };
-  };
-
   interface RowShape {
     token: string;
     document_path: string;
@@ -319,23 +326,22 @@ export async function listShares(
     revoked: boolean;
   }
 
-  const userScoped = table.select("token, document_path, created_at, revoked").eq(
-    "user_id",
-    userId,
-  );
+  const table = shareLinksTable(serviceClient);
+  const userScoped = table
+    .select("token, document_path, created_at, revoked")
+    .eq("user_id", userId);
   const finalQuery = filter?.documentPath
     ? userScoped.eq("document_path", filter.documentPath)
     : userScoped;
 
-  const { data, error } = await finalQuery.order("created_at", { ascending: false });
+  const { data, error } = await finalQuery.order("created_at", {
+    ascending: false,
+  });
 
   if (error) {
-    logger.error(
-      { err: error, userId, documentPath: filter?.documentPath },
-      "kb/share: failed to list shares",
-    );
-    Sentry.captureException(error, {
-      tags: { feature: "kb-share", op: "list" },
+    reportSilentFallback(error as unknown as Error, {
+      feature: "kb-share",
+      op: "list",
       extra: { userId, documentPath: filter?.documentPath },
     });
     return {
@@ -346,7 +352,7 @@ export async function listShares(
     };
   }
 
-  const shares: ShareRecord[] = (data ?? []).map((row) => ({
+  const shares: ShareRecord[] = ((data ?? []) as unknown as RowShape[]).map((row) => ({
     token: row.token,
     documentPath: row.document_path,
     createdAt: row.created_at,
@@ -360,26 +366,15 @@ export async function revokeShare(
   userId: string,
   token: string,
 ): Promise<RevokeShareResult> {
-  const table = serviceClient.from("kb_share_links") as {
-    select: (cols: string) => {
-      eq: (col: string, val: unknown) => {
-        single: () => Promise<{
-          data: { id: string; user_id: string } | null;
-          error: { message: string } | null;
-        }>;
-      };
-    };
-    update: (patch: Record<string, unknown>) => {
-      eq: (col: string, val: unknown) =>
-        | Promise<{ error: { message: string } | null }>
-        | { error: { message: string } | null };
-    };
-  };
+  const table = shareLinksTable(serviceClient);
 
-  const { data: shareLink, error: fetchError } = await table
-    .select("id, user_id")
+  const { data: shareLink, error: fetchError } = (await table
+    .select("id, user_id, document_path")
     .eq("token", token)
-    .single();
+    .single()) as {
+    data: { id: string; user_id: string; document_path: string } | null;
+    error: { message: string } | null;
+  };
 
   if (fetchError || !shareLink) {
     return {
@@ -402,12 +397,9 @@ export async function revokeShare(
   const updateResult = await table.update({ revoked: true }).eq("id", shareLink.id);
 
   if (updateResult.error) {
-    logger.error(
-      { err: updateResult.error, userId, token },
-      "kb/share: failed to revoke share link",
-    );
-    Sentry.captureException(updateResult.error, {
-      tags: { feature: "kb-share", op: "revoke" },
+    reportSilentFallback(updateResult.error as unknown as Error, {
+      feature: "kb-share",
+      op: "revoke",
       extra: { userId, token },
     });
     return {
@@ -418,9 +410,9 @@ export async function revokeShare(
     };
   }
 
-  logger.info(
+  log.info(
     { event: "share_revoked", userId, token },
-    "kb/share: share link revoked",
+    "share link revoked",
   );
-  return { ok: true, token };
+  return { ok: true, token, documentPath: shareLink.document_path };
 }

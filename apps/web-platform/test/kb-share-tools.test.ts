@@ -149,8 +149,12 @@ describe("kb_share_list handler", () => {
 });
 
 describe("kb_share_revoke handler", () => {
-  it("wraps success into content text", async () => {
-    mocks.revokeShare.mockResolvedValue({ ok: true, token: "tok-1" });
+  it("wraps success into content text including documentPath", async () => {
+    mocks.revokeShare.mockResolvedValue({
+      ok: true,
+      token: "tok-1",
+      documentPath: "readme.md",
+    });
     const tools = buildKbShareTools(baseDeps);
     const revokeTool = findTool(tools, "kb_share_revoke");
 
@@ -160,6 +164,7 @@ describe("kb_share_revoke handler", () => {
     const payload = JSON.parse(result.content[0].text);
     expect(payload.revoked).toBe(true);
     expect(payload.token).toBe("tok-1");
+    expect(payload.documentPath).toBe("readme.md");
   });
 
   it("surfaces 403 forbidden as isError with human-readable message", async () => {

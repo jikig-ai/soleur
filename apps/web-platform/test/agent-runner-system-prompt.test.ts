@@ -2,6 +2,7 @@ import { vi, describe, test, expect, beforeEach } from "vitest";
 
 // Env vars needed by serverUrl() guard — set before agent-runner is loaded
 process.env.NEXT_PUBLIC_SUPABASE_URL ??= "https://test.supabase.co";
+process.env.NEXT_PUBLIC_APP_URL ??= "https://app.soleur.ai";
 
 // ---------------------------------------------------------------------------
 // Mock all heavy dependencies (same pattern as agent-runner-tools.test.ts)
@@ -89,6 +90,10 @@ vi.mock("../server/service-tools", () => ({
   plausibleCreateSite: vi.fn(),
   plausibleAddGoal: vi.fn(),
   plausibleGetStats: vi.fn(),
+}));
+vi.mock("../server/observability", () => ({
+  reportSilentFallback: vi.fn(),
+  reportSilentFallbackWarning: vi.fn(),
 }));
 
 import { startAgentSession } from "../server/agent-runner";

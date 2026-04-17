@@ -44,6 +44,7 @@ import { pushBranch } from "./push-branch";
 import { githubApiGet } from "./github-api";
 import { MAX_BINARY_SIZE } from "./kb-binary-response";
 import { buildKbShareTools } from "./kb-share-tools";
+import { reportSilentFallback } from "./observability";
 
 const log = createChildLogger("agent");
 
@@ -552,10 +553,15 @@ Links are revocable via kb_share_revoke. Use kb_share_list to check what is
 currently shared before generating a new link — this surfaces duplicates and
 revoked links.
 
+kb_share_create is idempotent on unchanged content — calling it for a file
+that already has an active link with a matching content hash returns the
+existing token rather than issuing a new URL. Content drift revokes the
+stale link and issues a fresh one.
+
 Share links expose the file contents to anyone who has the URL. Before creating
 a link for a file that looks sensitive (credentials, personal data, unreleased
-strategy), confirm with AskUserQuestion first. Files over ${kbShareSizeMb} MB
-cannot be shared.`;
+strategy, or paths under finances/, legal/, customers/), confirm with
+AskUserQuestion first. Files over ${kbShareSizeMb} MB cannot be shared.`;
 
     // ---------------------------------------------------------------------------
     // In-process MCP server for platform tools (PR creation, etc.)
@@ -833,11 +839,25 @@ cannot be shared.`;
     // above by the ERR_WORKSPACE_NOT_PROVISIONED guard). Mirrors the
     // SharePopover UI in the KB viewer so the agent and the user have
     // identical capability.
+    //
+    // CSRF elision: the in-process MCP tools do NOT call validateOrigin the
+    // way the HTTP routes do — the agent runs in-process, there is no request
+    // origin, and the review-gate confirmation (see tool-tiers.ts tier
+    // mapping: create + revoke are `gated`) is the user-consent substitute.
+    const appUrl = process.env.NEXT_PUBLIC_APP_URL;
+    if (!appUrl) {
+      reportSilentFallback(null, {
+        feature: "kb-share",
+        op: "baseUrl",
+        message: "NEXT_PUBLIC_APP_URL unset; agent share URLs will point at https://app.soleur.ai",
+        extra: { userId },
+      });
+    }
     const kbShareTools = buildKbShareTools({
       serviceClient: supabase(),
       userId,
       kbRoot: path.join(workspacePath, "knowledge-base"),
-      baseUrl: process.env.NEXT_PUBLIC_APP_URL ?? "https://app.soleur.ai",
+      baseUrl: appUrl ?? "https://app.soleur.ai",
     });
     platformTools.push(...kbShareTools);
     platformToolNames.push(
