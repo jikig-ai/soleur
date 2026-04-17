@@ -16,10 +16,28 @@
 -- security gap. The REVOKEs are ordered immediately after the CREATE
 -- so a mid-file retry still lands them.
 
--- If a future migration changes the signature, uncomment the DROP and
--- drop the old (UUID, TIMESTAMPTZ) overload. For the initial apply
--- this is a no-op -- CREATE OR REPLACE handles the in-place update.
--- DROP FUNCTION IF EXISTS public.sum_user_mtd_cost(UUID, TIMESTAMPTZ);
+-- If a future migration changes the signature, the new migration MUST
+-- include `DROP FUNCTION IF EXISTS public.sum_user_mtd_cost(<OLD_ARGS>);`
+-- with the OLD argument list -- CREATE OR REPLACE cannot change the
+-- signature in-place, and leaving the old overload in place would cause
+-- `function is not unique` resolution errors at call sites. For the
+-- initial apply below this line is a no-op.
+-- Example for a future (UUID, TIMESTAMPTZ, TEXT) variant:
+--   DROP FUNCTION IF EXISTS public.sum_user_mtd_cost(UUID, TIMESTAMPTZ);
+
+-- Extend the migration-017 partial index to INCLUDE total_cost_usd so
+-- the aggregate below runs as an Index Only Scan (covers both SUM and
+-- COUNT without heap revisit). Also benefits the list query which now
+-- gets a covering index on (user_id, created_at DESC) + cost payload.
+-- Supabase migrations run in a transaction, so CONCURRENTLY is not
+-- available -- matches the convention established in migration 025.
+-- Brief AccessExclusive lock on the index during rebuild is acceptable
+-- at current single-instance scale.
+DROP INDEX IF EXISTS public.idx_conversations_user_cost;
+CREATE INDEX idx_conversations_user_cost
+  ON public.conversations (user_id, created_at DESC)
+  INCLUDE (total_cost_usd)
+  WHERE total_cost_usd > 0;
 
 CREATE OR REPLACE FUNCTION public.sum_user_mtd_cost(
   uid   UUID,

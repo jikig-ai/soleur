@@ -123,8 +123,11 @@ export async function loadApiUsageForUser(
   }));
 
   // PostgREST returns NUMERIC as a JS string to preserve 12,6 precision.
-  // RPC returns a TABLE: [{ total: "0.042300", n: 2 }]. Zero-match returns
-  // [] (not [{total: null, n: 0}]), so handle `monthRow === undefined`.
+  // RPC returns a TABLE: [{ total: "0.042300", n: 2 }]. The aggregate has
+  // no GROUP BY so zero-match still emits one row -- COALESCE gives
+  // [{ total: "0", n: 0 }]. The `?? 0` guards the defensive-undefined
+  // path anyway (e.g. if the RPC response shape drifts in a future
+  // supabase-js release).
   const monthRow = (monthRes.data as MonthSumRow[] | null)?.[0];
   const mtdTotalUsd = Number(monthRow?.total ?? 0);
   const mtdCount = Number(monthRow?.n ?? 0);

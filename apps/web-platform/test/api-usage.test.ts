@@ -41,13 +41,29 @@ describe("loadApiUsageForUser", () => {
   test("returns empty rows + 0 MTD when user has no conversations", async () => {
     const listChain = mockQueryChain([], null);
     mockFrom.mockImplementationOnce(() => listChain);
-    // Zero-match RPC returns an empty array, NOT [{total: null, n: 0}].
-    mockRpc.mockReturnValueOnce(mockRpcResult([]));
+    // Production RPC shape for zero-match: the aggregate has no GROUP BY,
+    // so Postgres emits one row and COALESCE folds NULL to "0".
+    mockRpc.mockReturnValueOnce(mockRpcResult([{ total: "0", n: 0 }]));
 
     const result = await loadApiUsageForUser(VALID_UUID);
 
     expect(result).not.toBeNull();
     expect(result!.rows).toEqual([]);
+    expect(result!.mtdTotalUsd).toBe(0);
+    expect(result!.mtdCount).toBe(0);
+  });
+
+  test("handles defensive [] RPC response shape (supabase-js drift guard)", async () => {
+    // If a future supabase-js release returns an empty array for a
+    // zero-row RETURNS TABLE RPC, the loader still surfaces 0/0 via
+    // the `?? 0` fallback rather than crashing on undefined.
+    const listChain = mockQueryChain([], null);
+    mockFrom.mockImplementationOnce(() => listChain);
+    mockRpc.mockReturnValueOnce(mockRpcResult([]));
+
+    const result = await loadApiUsageForUser(VALID_UUID);
+
+    expect(result).not.toBeNull();
     expect(result!.mtdTotalUsd).toBe(0);
     expect(result!.mtdCount).toBe(0);
   });
@@ -111,7 +127,7 @@ describe("loadApiUsageForUser", () => {
       null,
     );
     mockFrom.mockImplementationOnce(() => listChain);
-    mockRpc.mockReturnValueOnce(mockRpcResult([]));
+    mockRpc.mockReturnValueOnce(mockRpcResult([{ total: "0", n: 0 }]));
 
     const result = await loadApiUsageForUser(VALID_UUID);
 
@@ -124,7 +140,7 @@ describe("loadApiUsageForUser", () => {
   test("month query uses RPC with UTC boundary", async () => {
     const listChain = mockQueryChain([], null);
     mockFrom.mockImplementationOnce(() => listChain);
-    mockRpc.mockReturnValueOnce(mockRpcResult([]));
+    mockRpc.mockReturnValueOnce(mockRpcResult([{ total: "0", n: 0 }]));
 
     await loadApiUsageForUser(VALID_UUID);
 
@@ -141,7 +157,7 @@ describe("loadApiUsageForUser", () => {
   test("list query enforces order, limit, and cost > 0 filter (AC3 regression guard)", async () => {
     const listChain = mockQueryChain([], null);
     mockFrom.mockImplementationOnce(() => listChain);
-    mockRpc.mockReturnValueOnce(mockRpcResult([]));
+    mockRpc.mockReturnValueOnce(mockRpcResult([{ total: "0", n: 0 }]));
 
     await loadApiUsageForUser(VALID_UUID);
 
