@@ -161,6 +161,35 @@ describe("KbLayout — chat panel closes when switching documents", () => {
     expect(sessionStorage.getItem("kb.chat.sidebarOpen")).toBe("0");
   });
 
+  it("closes chat panel when navigating back to KB root (contextPath → null)", async () => {
+    const KbLayout = await loadLayout();
+    const { rerender } = render(
+      <KbLayout>
+        <div data-testid="content-page">File content</div>
+      </KbLayout>,
+    );
+    await waitFor(() => {
+      expect(screen.getAllByTestId("panel").length).toBe(3);
+    });
+
+    // Simulate navigating back to KB root — contextPath becomes null.
+    await act(async () => {
+      mockPathname = "/dashboard/kb";
+      rerender(
+        <KbLayout>
+          <div data-testid="content-page">File content</div>
+        </KbLayout>,
+      );
+    });
+
+    // At root, chat panel + its separator are both removed (no document selected).
+    // sessionStorage should also be cleared so the next document visit starts clean.
+    await waitFor(() => {
+      expect(screen.getAllByTestId("panel").length).toBe(2);
+    });
+    expect(sessionStorage.getItem("kb.chat.sidebarOpen")).toBe("0");
+  });
+
   it("does not close chat when rerendering with the same document path", async () => {
     const KbLayout = await loadLayout();
     const { rerender } = render(
