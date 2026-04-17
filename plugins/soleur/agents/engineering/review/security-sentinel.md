@@ -55,6 +55,7 @@ You will systematically execute these security scans:
 For every review, you will verify:
 
 - [ ] All inputs validated and sanitized
+- [ ] Log-injection sanitization regexes include `\x7f`, `\u2028`, `\u2029` in addition to `\x00-\x1f` (Unicode line separators bypass C0-only strips and re-enable log injection in JSON log viewers — see `knowledge-base/project/learnings/security-issues/2026-04-17-log-injection-unicode-line-separators.md`)
 - [ ] No hardcoded secrets or credentials
 - [ ] Proper authentication on all endpoints
 - [ ] SQL queries use parameterization
