@@ -104,20 +104,63 @@ export async function readBinaryFile(
   }
 }
 
-export function buildBinaryResponse(r: {
-  buffer: Buffer;
-  contentType: string;
-  disposition: "inline" | "attachment";
-  rawName: string;
-}): Response {
+export function buildBinaryResponse(
+  r: {
+    buffer: Buffer;
+    contentType: string;
+    disposition: "inline" | "attachment";
+    rawName: string;
+  },
+  request?: Request,
+): Response {
+  const size = r.buffer.length;
+  const commonHeaders: Record<string, string> = {
+    "Content-Type": r.contentType,
+    "Content-Disposition": formatContentDisposition(r.disposition, r.rawName),
+    "X-Content-Type-Options": "nosniff",
+    "Cache-Control": "private, max-age=60",
+    "Content-Security-Policy": KB_BINARY_RESPONSE_CSP,
+    "Accept-Ranges": "bytes",
+  };
+
+  // Range request: respond with 206 Partial Content so PDF.js (and other
+  // clients) can stream in chunks and render progressively.
+  const rangeHeader = request?.headers.get("range");
+  if (rangeHeader) {
+    const match = rangeHeader.trim().match(/^bytes=(\d+)-(\d*)$/);
+    if (match) {
+      const start = Number.parseInt(match[1], 10);
+      const end = match[2] ? Number.parseInt(match[2], 10) : size - 1;
+      if (
+        !Number.isFinite(start) ||
+        !Number.isFinite(end) ||
+        start < 0 ||
+        start >= size ||
+        end < start ||
+        end >= size
+      ) {
+        return new Response(null, {
+          status: 416,
+          headers: { "Content-Range": `bytes */${size}` },
+        });
+      }
+      const chunk = r.buffer.subarray(start, end + 1);
+      return new Response(new Uint8Array(chunk), {
+        status: 206,
+        headers: {
+          ...commonHeaders,
+          "Content-Range": `bytes ${start}-${end}/${size}`,
+          "Content-Length": chunk.length.toString(),
+        },
+      });
+    }
+    // Malformed Range header: fall through to full response.
+  }
+
   return new Response(new Uint8Array(r.buffer), {
     headers: {
-      "Content-Type": r.contentType,
-      "Content-Disposition": formatContentDisposition(r.disposition, r.rawName),
-      "Content-Length": r.buffer.length.toString(),
-      "X-Content-Type-Options": "nosniff",
-      "Cache-Control": "private, max-age=60",
-      "Content-Security-Policy": KB_BINARY_RESPONSE_CSP,
+      ...commonHeaders,
+      "Content-Length": size.toString(),
     },
   });
 }

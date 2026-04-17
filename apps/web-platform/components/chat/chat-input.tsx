@@ -106,14 +106,14 @@ export function ChatInput({
   const flashTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const quoteRafRef = useRef<number | null>(null);
 
-  // Auto-resize textarea height based on content (capped at ~5 lines / 100px).
+  // Auto-resize textarea height based on content (default ~2 lines, capped at ~6 lines / 140px).
   // useIsomorphicLayoutEffect prevents flicker on the client while avoiding
   // SSR warnings; keying on `value` covers typing, paste, programmatic changes.
   useIsomorphicLayoutEffect(() => {
     const el = textareaRef.current;
     if (!el) return;
     el.style.height = "auto"; // Reset to measure true scrollHeight
-    el.style.height = `${Math.min(el.scrollHeight, 100)}px`;
+    el.style.height = `${Math.min(el.scrollHeight, 140)}px`;
   }, [value]);
 
   // Clear error after 3 seconds
@@ -540,7 +540,7 @@ export function ChatInput({
             disabled={disabled || isUploading}
             rows={1}
             className={
-              "w-full resize-none rounded-xl border border-neutral-700 bg-neutral-900 px-4 py-2.5 pr-12 text-sm text-white placeholder:text-neutral-500 focus:border-neutral-500 focus:outline-none disabled:opacity-50 min-h-[44px] max-h-[100px] overflow-y-auto transition-shadow" +
+              "w-full resize-none rounded-xl border border-neutral-700 bg-neutral-900 px-4 py-2.5 pr-12 text-sm text-white placeholder:text-neutral-500 focus:border-neutral-500 focus:outline-none disabled:opacity-50 min-h-[72px] max-h-[140px] overflow-y-auto transition-shadow" +
               (flashQuote ? " ring-2 ring-amber-400" : "")
             }
           />

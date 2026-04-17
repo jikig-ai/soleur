@@ -11,7 +11,7 @@ import {
 import { readBinaryFile, buildBinaryResponse } from "@/server/kb-binary-response";
 
 export async function GET(
-  _request: Request,
+  request: Request,
   { params }: { params: Promise<{ path: string[] }> },
 ) {
   const supabase = await createClient();
@@ -77,5 +77,5 @@ export async function GET(
   if (!result.ok) {
     return NextResponse.json({ error: result.error }, { status: result.status });
   }
-  return buildBinaryResponse(result);
+  return buildBinaryResponse(result, request);
 }

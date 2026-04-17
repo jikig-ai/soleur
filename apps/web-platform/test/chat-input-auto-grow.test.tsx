@@ -40,11 +40,11 @@ describe("ChatInput auto-grow", () => {
   it("textarea has min-height and max-height constraints instead of fixed height", () => {
     setup();
     const textarea = screen.getByRole("textbox");
-    // Should NOT have the fixed h-[44px] class (but min-h-[44px] is ok)
-    expect(textarea.className).not.toMatch(/(?<![-\w])h-\[44px\]/);
+    // Should NOT have any fixed h-[*px] class (min-h-/max-h- are ok)
+    expect(textarea.className).not.toMatch(/(?<![-\w])h-\[\d+px\]/);
     // Should have min-h and max-h constraints
-    expect(textarea.className).toMatch(/min-h-\[44px\]/);
-    expect(textarea.className).toMatch(/max-h-\[100px\]/);
+    expect(textarea.className).toMatch(/min-h-\[72px\]/);
+    expect(textarea.className).toMatch(/max-h-\[140px\]/);
   });
 
   it("textarea has overflow-y auto for internal scrolling", () => {
@@ -69,20 +69,20 @@ describe("ChatInput auto-grow", () => {
     expect(textarea.style.height).toBeTruthy();
   });
 
-  it("caps height at 100px even when content is taller", async () => {
+  it("caps height at 140px even when content is taller", async () => {
     setup();
     const textarea = screen.getByRole("textbox") as HTMLTextAreaElement;
 
     // Simulate scrollHeight exceeding max
     Object.defineProperty(textarea, "scrollHeight", {
-      get: () => 200,
+      get: () => 300,
       configurable: true,
     });
 
     await userEvent.type(textarea, "a\nb\nc\nd\ne\nf\ng\nh");
 
-    // Height should be capped at 100px
-    expect(textarea.style.height).toBe("100px");
+    // Height should be capped at 140px
+    expect(textarea.style.height).toBe("140px");
   });
 
   it("resets height on submit (value cleared)", async () => {
