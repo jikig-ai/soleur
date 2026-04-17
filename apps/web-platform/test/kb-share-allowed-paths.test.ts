@@ -28,6 +28,17 @@ vi.mock("@/lib/auth/validate-origin", () => ({
 
 vi.mock("@/server/logger", () => ({
   default: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() },
+  createChildLogger: () => ({
+    info: vi.fn(),
+    error: vi.fn(),
+    warn: vi.fn(),
+    debug: vi.fn(),
+  }),
+}));
+
+vi.mock("@/server/observability", () => ({
+  reportSilentFallback: vi.fn(),
+  reportSilentFallbackWarning: vi.fn(),
 }));
 
 // NOTE: isPathInWorkspace is intentionally NOT mocked — we use a real temp
