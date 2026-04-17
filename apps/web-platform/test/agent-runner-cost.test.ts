@@ -78,6 +78,11 @@ vi.mock("../server/providers", () => ({
   EXCLUDED_FROM_SERVICES_UI: [],
 }));
 
+vi.mock("../server/observability", () => ({
+  reportSilentFallback: vi.fn(),
+  reportSilentFallbackWarning: vi.fn(),
+}));
+
 import { startAgentSession } from "../server/agent-runner";
 import {
   createSupabaseMockImpl,

@@ -2,6 +2,7 @@ import { vi, describe, test, expect, beforeEach } from "vitest";
 
 // Env vars needed by serverUrl() guard — set before agent-runner is loaded
 process.env.NEXT_PUBLIC_SUPABASE_URL ??= "https://test.supabase.co";
+process.env.NEXT_PUBLIC_APP_URL ??= "https://app.soleur.ai";
 
 // ---------------------------------------------------------------------------
 // Mock all heavy dependencies (same pattern as agent-runner-tools.test.ts)
@@ -89,6 +90,10 @@ vi.mock("../server/service-tools", () => ({
   plausibleCreateSite: vi.fn(),
   plausibleAddGoal: vi.fn(),
   plausibleGetStats: vi.fn(),
+}));
+vi.mock("../server/observability", () => ({
+  reportSilentFallback: vi.fn(),
+  reportSilentFallbackWarning: vi.fn(),
 }));
 
 import { startAgentSession } from "../server/agent-runner";
@@ -199,5 +204,36 @@ describe("agent-runner system prompt context injection", () => {
 
     const options = mockQuery.mock.calls[0][0].options;
     expect(options.systemPrompt).toContain("relative to the current working directory");
+  });
+
+  // Closes #2315: agent cannot discover KB share tools without advertisement
+  // in the system prompt. Block must appear whenever share tools are
+  // registered (i.e., whenever the workspace is ready).
+  test("system prompt contains Knowledge-base sharing block", async () => {
+    setupSupabaseMock(BASE_USER_DATA);
+    setupQueryMockImmediate();
+
+    await startAgentSession("user-1", "conv-1", "cpo");
+
+    const options = mockQuery.mock.calls[0][0].options;
+    expect(options.systemPrompt).toContain("Knowledge-base sharing");
+    expect(options.systemPrompt).toContain("kb_share_create");
+    expect(options.systemPrompt).toContain("kb_share_list");
+    expect(options.systemPrompt).toContain("kb_share_revoke");
+  });
+
+  test("system prompt warns about sensitive-path guardrail in KB sharing block", async () => {
+    setupSupabaseMock(BASE_USER_DATA);
+    setupQueryMockImmediate();
+
+    await startAgentSession("user-1", "conv-1", "cpo");
+
+    const options = mockQuery.mock.calls[0][0].options;
+    // The capability block must instruct the agent to confirm before
+    // creating a link on sensitive-looking paths. Tests the section inside
+    // the KB-sharing block, not just the base prompt.
+    const sharingBlock =
+      options.systemPrompt.split("Knowledge-base sharing")[1] ?? "";
+    expect(sharingBlock.toLowerCase()).toMatch(/sensitive|credentials/);
   });
 });
