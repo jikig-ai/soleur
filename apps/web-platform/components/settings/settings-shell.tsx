@@ -101,13 +101,13 @@ export function SettingsShell({ children }: { children: React.ReactNode }) {
       </div>
 
       {/* Content area */}
-      <div className="flex-1 px-4 py-10 pb-20 md:px-10 md:pb-10">
+      <div className="relative flex-1 px-4 py-10 pb-20 md:px-10 md:pb-10">
         {settingsCollapsed && (
           <button
             onClick={toggleSettingsCollapsed}
             aria-label="Expand settings nav"
             title="Expand settings nav (⌘B)"
-            className="hidden md:flex mb-4 h-8 w-8 items-center justify-center rounded-lg border border-neutral-800 text-neutral-400 hover:bg-neutral-800 hover:text-white"
+            className="absolute left-2 top-5 z-10 hidden md:flex h-6 w-6 items-center justify-center rounded text-neutral-400 hover:bg-neutral-800 hover:text-white"
           >
             <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
               <path strokeLinecap="round" strokeLinejoin="round" d="m8.25 4.5 7.5 7.5-7.5 7.5" />
