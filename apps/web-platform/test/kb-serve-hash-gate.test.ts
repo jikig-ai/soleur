@@ -57,7 +57,6 @@ describe("serveSharedBinaryWithHashGate", () => {
     const filePath = path.join(kbRoot, "logo.png");
     fs.writeFileSync(filePath, bytes);
     const meta = await validateBinaryFile(kbRoot, "logo.png");
-    if (!meta.ok) throw new Error("meta not ok");
 
     const res = await serveSharedBinaryWithHashGate({
       expectedHash,
@@ -83,7 +82,6 @@ describe("serveSharedBinaryWithHashGate", () => {
     const filePath = path.join(kbRoot, "cached.png");
     fs.writeFileSync(filePath, bytes);
     const meta = await validateBinaryFile(kbRoot, "cached.png");
-    if (!meta.ok) throw new Error("meta not ok");
 
     // Prime the cache
     await serveSharedBinaryWithHashGate({
@@ -117,7 +115,6 @@ describe("serveSharedBinaryWithHashGate", () => {
     const filePath = path.join(kbRoot, "mismatch.png");
     fs.writeFileSync(filePath, bytes);
     const meta = await validateBinaryFile(kbRoot, "mismatch.png");
-    if (!meta.ok) throw new Error("meta not ok");
 
     const res = await serveSharedBinaryWithHashGate({
       expectedHash: WRONG_HASH,
@@ -144,7 +141,6 @@ describe("serveSharedBinaryWithHashGate", () => {
     const filePath = path.join(kbRoot, "drift.png");
     fs.writeFileSync(filePath, bytes);
     const meta = await validateBinaryFile(kbRoot, "drift.png");
-    if (!meta.ok) throw new Error("meta not ok");
 
     // Simulate inode drift: remove and recreate with different size between
     // validateBinaryFile and the hash pass inside the helper.
@@ -177,7 +173,6 @@ describe("serveSharedBinaryWithHashGate", () => {
     const filePath = path.join(kbRoot, "serve-drift.png");
     fs.writeFileSync(filePath, bytes);
     const meta = await validateBinaryFile(kbRoot, "serve-drift.png");
-    if (!meta.ok) throw new Error("meta not ok");
 
     // Prime the cache so the helper skips the hash pass and goes straight
     // to buildBinaryResponse — where we want the TOCTOU drift to trigger.
@@ -214,29 +209,27 @@ describe("serveSharedBinaryWithHashGate", () => {
     );
   });
 
-  it("BinaryOpenError (non content-changed) during hash: returns helper status", async () => {
+  it("BinaryOpenError (non content-changed) during hash: re-throws for caller to map", async () => {
     const bytes = Buffer.from("hash-fail-bytes");
     const expectedHash = hashBytes(bytes);
     const filePath = path.join(kbRoot, "gone.png");
     fs.writeFileSync(filePath, bytes);
     const meta = await validateBinaryFile(kbRoot, "gone.png");
-    if (!meta.ok) throw new Error("meta not ok");
 
     // Remove the file entirely — openBinaryStream will throw
-    // BinaryOpenError(404) with no code.
+    // BinaryOpenError(404) with no code. The helper re-throws so the
+    // route-level mapSharedError catch owns the HTTP mapping and
+    // shared_page_failed log.
     fs.rmSync(filePath);
 
-    const res = await serveSharedBinaryWithHashGate({
-      expectedHash,
-      meta,
-      request: buildRequest(),
-      logger: logger(),
-      logContext: { token: "tok", documentPath: "gone.png" },
-    });
-    expect(res.status).toBe(404);
-    expect(loggerStub.warn).toHaveBeenCalledWith(
-      expect.objectContaining({ token: "tok", path: "gone.png" }),
-      expect.stringContaining("open failed on hash pass"),
-    );
+    await expect(
+      serveSharedBinaryWithHashGate({
+        expectedHash,
+        meta,
+        request: buildRequest(),
+        logger: logger(),
+        logContext: { token: "tok", documentPath: "gone.png" },
+      }),
+    ).rejects.toMatchObject({ name: "BinaryOpenError", status: 404 });
   });
 });

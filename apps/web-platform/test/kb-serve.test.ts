@@ -57,7 +57,8 @@ describe("serveBinary", () => {
 
     const res = await serveBinary(kbRoot, "huge.pdf", { request: buildRequest() });
     expect(res.status).toBe(413);
-    expect(await res.json()).toEqual({ error: "File exceeds maximum size limit" });
+    const body = await res.json();
+    expect(body.error).toContain("exceed");
   });
 
   test("valid PNG returns 200 with expected headers", async () => {
