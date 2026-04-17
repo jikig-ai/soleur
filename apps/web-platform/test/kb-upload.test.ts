@@ -15,6 +15,7 @@ const {
   mockExecFile,
   mockWriteFileSync,
   mockUnlinkSync,
+  mockLinearize,
   MockGitHubApiError,
 } = vi.hoisted(() => {
   class MockGitHubApiError extends Error {
@@ -36,6 +37,7 @@ const {
     mockExecFile: vi.fn(),
     mockWriteFileSync: vi.fn(),
     mockUnlinkSync: vi.fn(),
+    mockLinearize: vi.fn(),
     MockGitHubApiError,
   };
 });
@@ -92,6 +94,10 @@ vi.mock("node:util", () => ({
 vi.mock("node:fs", () => ({
   writeFileSync: mockWriteFileSync,
   unlinkSync: mockUnlinkSync,
+}));
+
+vi.mock("@/server/pdf-linearize", () => ({
+  linearizePdf: mockLinearize,
 }));
 
 // ---------------------------------------------------------------------------
@@ -171,6 +177,12 @@ function setupFullMocks() {
   });
   // Successful git pull
   mockExecFile.mockResolvedValue({ stdout: "", stderr: "" });
+  // Default: linearize acts as pass-through (returns input buffer).
+  // Individual PDF tests override this with specific success/failure results.
+  mockLinearize.mockImplementation(async (buf: Buffer) => ({
+    ok: true,
+    buffer: buf,
+  }));
 }
 
 function makeTestFile(name = "test.png", size?: number): File {
@@ -498,5 +510,88 @@ describe("POST /api/kb/upload", () => {
     // Verify Sentry received the exception
     const Sentry = await import("@sentry/nextjs");
     expect(Sentry.captureException).toHaveBeenCalledWith(expect.any(Error));
+  });
+
+  // ---------------------------------------------------------------------------
+  // PDF linearization (Phase 3)
+  // ---------------------------------------------------------------------------
+
+  function makePdfFile(name = "doc.pdf", bytes?: Uint8Array): File {
+    const content = bytes ?? new Uint8Array([0x25, 0x50, 0x44, 0x46]); // %PDF
+    return new File([content as BlobPart], name, { type: "application/pdf" });
+  }
+
+  test("PDF upload: commits linearized bytes when qpdf succeeds", async () => {
+    setupFullMocks();
+    const original = new Uint8Array([0x25, 0x50, 0x44, 0x46, 0x01]); // %PDF + 0x01
+    const linearized = Buffer.from([0x25, 0x50, 0x44, 0x46, 0x02]); // %PDF + 0x02
+    mockLinearize.mockResolvedValue({ ok: true, buffer: linearized });
+
+    const formData = createFormData(makePdfFile("doc.pdf", original), "uploads");
+    const res = await POST(createRequest(formData, "https://app.soleur.ai"));
+    expect(res.status).toBe(201);
+
+    expect(mockLinearize).toHaveBeenCalledTimes(1);
+    const linearizedBase64 = linearized.toString("base64");
+    const originalBase64 = Buffer.from(original).toString("base64");
+    expect(mockGithubApiPost).toHaveBeenCalledWith(
+      TEST_INSTALLATION_ID,
+      expect.stringContaining("doc.pdf"),
+      expect.objectContaining({ content: linearizedBase64 }),
+      "PUT",
+    );
+    expect(mockGithubApiPost).not.toHaveBeenCalledWith(
+      TEST_INSTALLATION_ID,
+      expect.any(String),
+      expect.objectContaining({ content: originalBase64 }),
+      "PUT",
+    );
+  });
+
+  test("PDF upload: commits original bytes and logs warning when qpdf fails", async () => {
+    setupFullMocks();
+    const original = new Uint8Array([0x25, 0x50, 0x44, 0x46, 0xab]);
+    mockLinearize.mockResolvedValue({
+      ok: false,
+      reason: "non_zero_exit",
+      detail: "exit=3 stderr=encrypted",
+    });
+
+    const formData = createFormData(
+      makePdfFile("enc.pdf", original),
+      "uploads",
+    );
+    const res = await POST(createRequest(formData, "https://app.soleur.ai"));
+    expect(res.status).toBe(201);
+
+    const originalBase64 = Buffer.from(original).toString("base64");
+    expect(mockGithubApiPost).toHaveBeenCalledWith(
+      TEST_INSTALLATION_ID,
+      expect.stringContaining("enc.pdf"),
+      expect.objectContaining({ content: originalBase64 }),
+      "PUT",
+    );
+
+    const loggerMod = await import("@/server/logger");
+    expect(loggerMod.default.warn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        reason: "non_zero_exit",
+        detail: expect.stringContaining("encrypted"),
+        inputSize: original.length,
+        durationMs: expect.any(Number),
+        userId: TEST_USER_ID,
+        path: expect.stringContaining("enc.pdf"),
+      }),
+      expect.stringMatching(/pdf linearization failed/i),
+    );
+  });
+
+  test("non-PDF upload: does not invoke linearize", async () => {
+    setupFullMocks();
+
+    const formData = createFormData(makeTestFile("note.png"), "uploads");
+    const res = await POST(createRequest(formData, "https://app.soleur.ai"));
+    expect(res.status).toBe(201);
+    expect(mockLinearize).not.toHaveBeenCalled();
   });
 });
