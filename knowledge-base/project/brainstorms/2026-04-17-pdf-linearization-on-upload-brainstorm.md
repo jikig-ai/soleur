@@ -55,7 +55,7 @@ Linearize-on-upload is the cleanest seam: one-time cost, zero RAM, persistent in
 
 ## Domain Assessments
 
-**Assessed:** Engineering, Product
+**Spawned:** Engineering (CTO). **Inferred from user answers:** Product.
 
 ### Engineering
 
