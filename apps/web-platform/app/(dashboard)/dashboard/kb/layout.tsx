@@ -223,6 +223,18 @@ export default function KbLayout({ children }: { children: ReactNode }) {
     try { sessionStorage.setItem(KB_SIDEBAR_OPEN_KEY, "0"); } catch { /* noop */ }
   }, []);
 
+  // Close the chat panel when the user navigates to a different document.
+  // The chat conversation is bound to a specific contextPath; leaving the
+  // panel open while the viewer loads a new document would display stale
+  // conversation content. Users can re-open the panel for the current
+  // document via the "Continue thread" button in the toolbar.
+  const prevContextPathRef = useRef<string | null>(contextPath);
+  useEffect(() => {
+    if (prevContextPathRef.current === contextPath) return;
+    prevContextPathRef.current = contextPath;
+    closeSidebar();
+  }, [contextPath, closeSidebar]);
+
   const registerQuoteHandler = useCallback(
     (handler: ((text: string) => void) | null) => {
       quoteHandlerRef.current = handler;
