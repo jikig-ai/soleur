@@ -107,18 +107,19 @@ describe("KB API security", () => {
       const relativePath = filePath.split("/apps/web-platform/")[1];
 
       // Same proven-delegation pattern as the auth check above (#2245).
+      // Accept either helper — authenticateAndResolveKbPath (file routes)
+      // or resolveUserKbRoot (share/upload, added in #2467 cleanup).
       const hasInline = content.includes("workspace_status");
-      const invokesHelper =
-        /const\s+\w+\s*=\s*await\s+authenticateAndResolveKbPath\s*\(/.test(
-          content,
-        );
+      const helperName =
+        /const\s+\w+\s*=\s*await\s+(authenticateAndResolveKbPath|resolveUserKbRoot)\s*\(/;
+      const invokesHelper = helperName.test(content);
       const checksHelperResult =
         /if\s*\(\s*!\s*\w+\.ok\s*\)\s*return\s+\w+\.response/.test(content);
       const delegatesToHelper = invokesHelper && checksHelperResult;
 
       expect(
         hasInline || delegatesToHelper,
-        `${relativePath} missing workspace_status check (inline or proven authenticateAndResolveKbPath delegation)`,
+        `${relativePath} missing workspace_status check (inline or proven authenticateAndResolveKbPath / resolveUserKbRoot delegation)`,
       ).toBe(true);
     }
   });

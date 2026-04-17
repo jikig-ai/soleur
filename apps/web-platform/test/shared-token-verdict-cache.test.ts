@@ -8,6 +8,7 @@ import {
   shareHashVerdictCache,
   __resetShareHashVerdictCacheForTest,
 } from "@/server/share-hash-verdict-cache";
+import { shareSupabaseFromMock } from "./helpers/share-mocks";
 
 const mocks = vi.hoisted(() => ({
   mockServiceFrom: vi.fn(),
@@ -64,40 +65,19 @@ function mockShareAndOwner(
   documentPath: string,
   opts: { contentHash: string },
 ) {
-  let fromCalls = 0;
-  mocks.mockServiceFrom.mockImplementation(() => {
-    fromCalls++;
-    if (fromCalls % 2 === 1) {
-      return {
-        select: vi.fn().mockReturnValue({
-          eq: vi.fn().mockReturnValue({
-            single: vi.fn().mockResolvedValue({
-              data: {
-                document_path: documentPath,
-                user_id: "user-1",
-                revoked: false,
-                content_sha256: opts.contentHash,
-              },
-              error: null,
-            }),
-          }),
-        }),
-      };
-    }
-    return {
-      select: vi.fn().mockReturnValue({
-        eq: vi.fn().mockReturnValue({
-          single: vi.fn().mockResolvedValue({
-            data: {
-              workspace_path: tmpWorkspace,
-              workspace_status: "ready",
-            },
-            error: null,
-          }),
-        }),
-      }),
-    };
-  });
+  mocks.mockServiceFrom.mockImplementation(
+    shareSupabaseFromMock({
+      users: { workspacePath: tmpWorkspace, workspaceStatus: "ready" },
+      kb_share_links: {
+        shareRow: {
+          document_path: documentPath,
+          user_id: "user-1",
+          revoked: false,
+          content_sha256: opts.contentHash,
+        },
+      },
+    }),
+  );
 }
 
 beforeEach(() => {

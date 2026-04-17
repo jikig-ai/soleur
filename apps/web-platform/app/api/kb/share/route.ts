@@ -7,6 +7,7 @@ import { validateOrigin, rejectCsrf } from "@/lib/auth/validate-origin";
 import { isPathInWorkspace } from "@/server/sandbox";
 import { MAX_BINARY_SIZE } from "@/server/kb-binary-response";
 import { hashStream } from "@/server/kb-content-hash";
+import { resolveUserKbRoot } from "@/server/kb-route-helpers";
 import logger from "@/server/logger";
 import * as Sentry from "@sentry/nextjs";
 
@@ -39,21 +40,14 @@ export async function POST(request: Request) {
   }
 
   const serviceClient = createServiceClient();
-  const { data: userData } = await serviceClient
-    .from("users")
-    .select("workspace_path, workspace_status")
-    .eq("id", user.id)
-    .single();
-
-  if (!userData?.workspace_path || userData.workspace_status !== "ready") {
-    return NextResponse.json({ error: "Workspace not ready" }, { status: 503 });
-  }
+  const workspace = await resolveUserKbRoot(serviceClient, user.id);
+  if (!workspace.ok) return workspace.response;
 
   // Validate the document exists in the user's workspace and is a regular
   // file. Symlink + size + type checks are done via O_NOFOLLOW + fstat on
   // the fd we hash from — no pre-lstat, since the pre-lstat only opens a
   // TOCTOU window the fd path already closes (CodeQL js/file-system-race).
-  const kbRoot = path.join(userData.workspace_path, "knowledge-base");
+  const { kbRoot } = workspace;
   const fullPath = path.join(kbRoot, body.documentPath);
   if (!isPathInWorkspace(fullPath, kbRoot)) {
     return NextResponse.json({ error: "Invalid document path" }, { status: 400 });
