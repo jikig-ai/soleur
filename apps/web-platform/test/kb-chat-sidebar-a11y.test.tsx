@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, act } from "@testing-library/react";
+import { render, screen, act, waitFor } from "@testing-library/react";
 import { useState } from "react";
 import { createUseTeamNamesMock } from "./mocks/use-team-names";
 
@@ -161,10 +161,14 @@ describe("KbChatSidebar — accessibility (Phase 6.1)", () => {
     try {
       await harness();
       act(() => { screen.getByRole("button", { name: /ask about this document/i }).click(); });
-      await new Promise((r) => setTimeout(r, 0));
 
-      const sidebarTa = screen.getByPlaceholderText(/ask about this document/i) as HTMLTextAreaElement;
-      expect(document.activeElement).toBe(sidebarTa);
+      const sidebarTa = await screen.findByPlaceholderText(/ask about this document/i) as HTMLTextAreaElement;
+      // Focus is scheduled via requestAnimationFrame inside kb-chat-content.
+      // `waitFor` retries until rAF fires — more robust across CI timing
+      // variance than a fixed `setTimeout(r, 0)` flush.
+      await waitFor(() => {
+        expect(document.activeElement).toBe(sidebarTa);
+      });
       expect(document.activeElement).not.toBe(leftoverTa);
     } finally {
       document.body.removeChild(leftover);
