@@ -70,6 +70,9 @@ describe("KbChatSidebar — quote wiring", () => {
   async function renderSidebar() {
     const { KbChatSidebar } = await import("@/components/chat/kb-chat-sidebar");
     const { KbChatContext } = await import("@/components/kb/kb-chat-context");
+    const { KbChatQuoteBridgeContext } = await import(
+      "@/components/kb/kb-chat-quote-bridge"
+    );
     const registered: Array<((t: string) => void) | null> = [];
     const ctxValue = {
       open: true,
@@ -77,18 +80,26 @@ describe("KbChatSidebar — quote wiring", () => {
       closeSidebar: vi.fn(),
       contextPath: "knowledge-base/overview/constitution.md",
       enabled: true,
-      submitQuote: vi.fn(),
-      registerQuoteHandler: (h: ((t: string) => void) | null) => { registered.push(h); },
       messageCount: 0,
       setMessageCount: vi.fn(),
     };
+    // Direct-inject a quote-bridge value that captures registrations so the
+    // test can invoke the handler KbChatContent registered.
+    const bridgeValue = {
+      submitQuote: vi.fn(),
+      registerQuoteHandler: (h: ((t: string) => void) | null) => {
+        registered.push(h);
+      },
+    };
     const rendered = render(
       <KbChatContext value={ctxValue}>
-        <KbChatSidebar
-          open={true}
-          onClose={vi.fn()}
-          contextPath="knowledge-base/overview/constitution.md"
-        />
+        <KbChatQuoteBridgeContext value={bridgeValue}>
+          <KbChatSidebar
+            open={true}
+            onClose={vi.fn()}
+            contextPath="knowledge-base/overview/constitution.md"
+          />
+        </KbChatQuoteBridgeContext>
       </KbChatContext>,
     );
     return { rendered, registered };

@@ -19,11 +19,12 @@ import { StatusIndicator } from "@/components/chat/status-indicator";
 
 export type ChatSurfaceVariant = "full" | "sidebar";
 
-export interface ChatSurfaceProps {
-  conversationId: string;
-  variant: ChatSurfaceVariant;
-  onClose?: () => void;
-  initialContext?: ConversationContext;
+/**
+ * Props only used by the sidebar variant. Grouping them behind
+ * `sidebarProps?` keeps the full-variant call site (`<ChatSurface variant="full" />`)
+ * from autocompleting 7 irrelevant options.
+ */
+export interface ChatSurfaceSidebarProps {
   /**
    * When set AND conversationId === "new", the sidebar starts a session
    * that looks up an existing (user_id, context_path) row and resumes it
@@ -33,9 +34,9 @@ export interface ChatSurfaceProps {
   onThreadResumed?: (conversationId: string, timestamp: string, messageCount: number) => void;
   onRealConversationId?: (conversationId: string) => void;
   onMessageCountChange?: (count: number) => void;
-  /** Callback ref that invokes insertQuote for the KB selection-toolbar flow (sidebar only). */
+  /** Callback ref that invokes insertQuote for the KB selection-toolbar flow. */
   quoteRef?: React.MutableRefObject<((text: string) => void) | null>;
-  /** Callback ref that focuses the textarea imperatively (sidebar only). */
+  /** Callback ref that focuses the textarea imperatively. */
   focusRef?: React.MutableRefObject<(() => void) | null>;
   /** Fires before sendMessage so sidebar callers can emit analytics (e.g.
    *  kb.chat.selection_sent when the content starts with a blockquote). */
@@ -46,20 +47,32 @@ export interface ChatSurfaceProps {
   draftKey?: string;
 }
 
+export interface ChatSurfaceProps {
+  conversationId: string;
+  variant: ChatSurfaceVariant;
+  onClose?: () => void;
+  initialContext?: ConversationContext;
+  /** Sidebar-only props. Ignored (shallow) when variant === "full". */
+  sidebarProps?: ChatSurfaceSidebarProps;
+}
+
 export function ChatSurface({
   conversationId,
   variant,
   initialContext,
-  resumeByContextPath,
-  onThreadResumed,
-  onRealConversationId,
-  onMessageCountChange,
-  quoteRef,
-  focusRef,
-  onBeforeSend,
-  placeholder,
-  draftKey,
+  sidebarProps,
 }: ChatSurfaceProps) {
+  const {
+    resumeByContextPath,
+    onThreadResumed,
+    onRealConversationId,
+    onMessageCountChange,
+    quoteRef,
+    focusRef,
+    onBeforeSend,
+    placeholder,
+    draftKey,
+  } = sidebarProps ?? {};
   const searchParams = useSearchParams();
   const router = useRouter();
   const pathname = usePathname();

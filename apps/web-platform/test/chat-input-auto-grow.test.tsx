@@ -110,7 +110,7 @@ describe("ChatInput auto-grow", () => {
 
   it("adjusts height on programmatic value change via quote insertion", async () => {
     const quoteRef = { current: null } as React.MutableRefObject<
-      import("@/components/chat/chat-input").ChatInputQuoteHandle | null
+      ((text: string) => void) | null
     >;
     setup({ quoteRef });
     const textarea = screen.getByRole("textbox") as HTMLTextAreaElement;
@@ -121,9 +121,9 @@ describe("ChatInput auto-grow", () => {
       configurable: true,
     });
 
-    // Insert quote programmatically
+    // Insert quote programmatically (callback-ref shape)
     act(() => {
-      quoteRef.current?.insertQuote("This is a quoted block of text");
+      quoteRef.current?.("This is a quoted block of text");
     });
 
     // useLayoutEffect should fire and set height

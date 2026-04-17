@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ChatSurface } from "@/components/chat/chat-surface";
 import { useKbChat } from "@/components/kb/kb-chat-context";
+import { useKbChatQuoteBridge } from "@/components/kb/kb-chat-quote-bridge";
 import { track } from "@/lib/analytics-client";
 import type { ConversationContext } from "@/lib/types";
 
@@ -14,7 +15,8 @@ export interface KbChatContentProps {
 }
 
 export function KbChatContent({ contextPath, onClose, visible }: KbChatContentProps) {
-  const { setMessageCount, registerQuoteHandler } = useKbChat();
+  const { setMessageCount } = useKbChat();
+  const { registerQuoteHandler } = useKbChatQuoteBridge();
   const [resumedBanner, setResumedBanner] = useState<{ timestamp: string } | null>(null);
   // Tracks which contextPaths have already emitted kb.chat.opened in THIS
   // mount session. Ref (not state) so two handlers firing in the same React
@@ -157,16 +159,18 @@ export function KbChatContent({ contextPath, onClose, visible }: KbChatContentPr
           conversationId="new"
           variant="sidebar"
           initialContext={initialContext}
-          resumeByContextPath={contextPath}
-          onThreadResumed={handleThreadResumed}
-          onRealConversationId={handleRealConversationId}
-          onMessageCountChange={handleMessageCountChange}
           onClose={onClose}
-          quoteRef={quoteRef}
-          focusRef={focusRef}
-          onBeforeSend={handleBeforeSend}
-          placeholder="Ask about this document — ⌘⇧L to quote selection"
-          draftKey={`kb.chat.draft:${contextPath}`}
+          sidebarProps={{
+            resumeByContextPath: contextPath,
+            onThreadResumed: handleThreadResumed,
+            onRealConversationId: handleRealConversationId,
+            onMessageCountChange: handleMessageCountChange,
+            quoteRef,
+            focusRef,
+            onBeforeSend: handleBeforeSend,
+            placeholder: "Ask about this document — ⌘⇧L to quote selection",
+            draftKey: `kb.chat.draft:${contextPath}`,
+          }}
         />
       </div>
     </div>
