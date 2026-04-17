@@ -34,13 +34,13 @@ export function KbChatContent({ contextPath, onClose, visible }: KbChatContentPr
   }, [visible, registerQuoteHandler]);
 
   // Focus management: when visible, move focus to the ChatInput textarea.
+  // Use the imperative handle instead of a DOM query so focus is scoped to
+  // this component's own input even when another [data-kb-chat] scope
+  // exists in the document (e.g., a leftover from a prior mount).
   useEffect(() => {
     if (!visible) return;
     const id = requestAnimationFrame(() => {
-      const textarea = document.querySelector<HTMLTextAreaElement>(
-        "[data-kb-chat] textarea",
-      );
-      textarea?.focus();
+      quoteRef.current?.focus();
     });
     return () => cancelAnimationFrame(id);
   }, [visible]);

@@ -131,4 +131,30 @@ describe("KbChatSidebar — accessibility (Phase 6.1)", () => {
     act(() => { screen.getByRole("button", { name: /ask about this document/i }).click(); });
     expect(screen.getByLabelText(/close panel/i)).toBeTruthy();
   });
+
+  it("focuses its own textarea when a pre-existing [data-kb-chat] scope exists (#2384 5B)", async () => {
+    // Inject a leftover [data-kb-chat] container with its own textarea
+    // BEFORE the sidebar mounts. The legacy focus effect called
+    // `document.querySelector("[data-kb-chat] textarea")` which returns
+    // the FIRST matching element in document order — the leftover, not
+    // the sidebar's textarea. The ref-based fix bypasses the DOM query.
+    const leftover = document.createElement("div");
+    leftover.setAttribute("data-kb-chat", "");
+    const leftoverTa = document.createElement("textarea");
+    leftoverTa.setAttribute("data-testid", "leftover-ta");
+    leftover.appendChild(leftoverTa);
+    document.body.insertBefore(leftover, document.body.firstChild);
+
+    try {
+      await harness();
+      act(() => { screen.getByRole("button", { name: /ask about this document/i }).click(); });
+      await new Promise((r) => setTimeout(r, 0));
+
+      const sidebarTa = screen.getByPlaceholderText(/ask about this document/i) as HTMLTextAreaElement;
+      expect(document.activeElement).toBe(sidebarTa);
+      expect(document.activeElement).not.toBe(leftoverTa);
+    } finally {
+      document.body.removeChild(leftover);
+    }
+  });
 });
