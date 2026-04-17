@@ -209,7 +209,7 @@ extract_section() {
 
 extract_tweets() {
   local file="$1"
-  local x_section
+  local x_section mode
 
   x_section=$(extract_section "$file" "X/Twitter Thread")
   if [[ -z "$x_section" ]]; then
@@ -217,19 +217,48 @@ extract_tweets() {
     return 1
   fi
 
-  # Split on **Tweet N pattern, output RS-separated (\x1e) for safe multi-line handling.
-  # Uses \x1e (ASCII Record Separator) because mawk silently drops \0.
-  # Strips the label line (e.g., "**Tweet 1 (Hook) -- 272 chars:**").
-  echo "$x_section" | awk '
-    /^\*\*Tweet [0-9]/ { if (buf != "") { printf "%s\x1e", buf }; buf=""; next }
-    {
-      line = $0
-      gsub(/^[[:space:]]+|[[:space:]]+$/, "", line)
-      if (buf != "") buf = buf "\n" line
-      else buf = line
-    }
-    END { if (buf != "") printf "%s\x1e", buf }
-  '
+  # Two authoring formats are supported:
+  #  (a) Labeled format: each tweet preceded by `**Tweet N (...) -- N chars:**` (label dropped).
+  #  (b) Numbered format: no label; tweets 2+ begin with `N/ ` on a fresh line. The hook
+  #      is the blob before the first `N/` marker. The `N/ ` prefix is preserved so the
+  #      posted tweet keeps its thread-position cue.
+  # Detect mode so `N/ ` lines inside a labeled tweet body (present in labeled fixtures)
+  # are not mistakenly treated as tweet boundaries.
+  mode="labeled"
+  if ! echo "$x_section" | grep -qE '^\*\*Tweet [0-9]'; then
+    mode="numbered"
+  fi
+
+  # Output RS-separated (\x1e) for safe multi-line handling. mawk silently drops \0.
+  if [[ "$mode" == "labeled" ]]; then
+    echo "$x_section" | awk '
+      /^\*\*Tweet [0-9]/ { if (buf != "") { printf "%s\x1e", buf }; buf=""; next }
+      {
+        line = $0
+        gsub(/^[[:space:]]+|[[:space:]]+$/, "", line)
+        if (buf != "") buf = buf "\n" line
+        else buf = line
+      }
+      END { if (buf != "") printf "%s\x1e", buf }
+    '
+  else
+    echo "$x_section" | awk '
+      /^[0-9]+\/ / {
+        if (buf != "") { printf "%s\x1e", buf }
+        line = $0
+        gsub(/^[[:space:]]+|[[:space:]]+$/, "", line)
+        buf = line
+        next
+      }
+      {
+        line = $0
+        gsub(/^[[:space:]]+|[[:space:]]+$/, "", line)
+        if (buf != "") buf = buf "\n" line
+        else buf = line
+      }
+      END { if (buf != "") printf "%s\x1e", buf }
+    '
+  fi
 }
 
 # --- Discord Posting ---

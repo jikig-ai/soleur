@@ -5,6 +5,7 @@ const SCRIPT_PATH = join(import.meta.dirname, "..", "scripts", "content-publishe
 const SAMPLE_CONTENT = join(import.meta.dirname, "helpers", "sample-content.md");
 const SAMPLE_NO_MANUAL = join(import.meta.dirname, "helpers", "sample-content-no-manual.md");
 const SAMPLE_FRONTMATTER = join(import.meta.dirname, "helpers", "sample-frontmatter.md");
+const SAMPLE_NUMBERED_THREAD = join(import.meta.dirname, "helpers", "sample-content-numbered-thread.md");
 
 const BASE_ENV: Record<string, string> = {
   PATH: process.env.PATH ?? "/usr/bin:/bin:/usr/local/bin",
@@ -230,6 +231,83 @@ describe("extract_tweets", () => {
     `);
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toBe("3");
+  });
+
+  test("numbered format (no **Tweet N labels): extracts all 5 tweets", () => {
+    const RS = "\\x1e";
+    const result = runFunction(`
+      count=0
+      while IFS= read -r -d $'${RS}' tweet; do
+        [[ -n "$tweet" ]] && count=$((count + 1))
+      done < <(extract_tweets "${SAMPLE_NUMBERED_THREAD}")
+      echo "$count"
+    `);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toBe("5");
+  });
+
+  test("numbered format: hook is the blob before the first N/ marker", () => {
+    const RS = "\\x1e";
+    const result = runFunction(`
+      while IFS= read -r -d $'${RS}' tweet; do
+        echo "$tweet"
+        break
+      done < <(extract_tweets "${SAMPLE_NUMBERED_THREAD}")
+    `);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("Your AI team now operates on your actual codebase");
+    expect(result.stdout).toContain("Every agent conversation starts with real project context");
+    // Must NOT include content from tweet 2
+    expect(result.stdout).not.toContain("The problem with every AI development workflow");
+  });
+
+  test("numbered format: tweet 2 preserves the 2/ prefix", () => {
+    const RS = "\\x1e";
+    const result = runFunction(`
+      i=0
+      while IFS= read -r -d $'${RS}' tweet; do
+        i=$((i + 1))
+        if [[ $i -eq 2 ]]; then
+          echo "$tweet"
+          break
+        fi
+      done < <(extract_tweets "${SAMPLE_NUMBERED_THREAD}")
+    `);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toMatch(/^2\/ /);
+    expect(result.stdout).toContain("The problem with every AI development workflow");
+    // Must NOT bleed into tweet 3
+    expect(result.stdout).not.toContain("Now: connect your GitHub repo");
+  });
+
+  test("numbered format: last tweet keeps its trailer (URL, hashtags)", () => {
+    const RS = "\\x1e";
+    const result = runFunction(`
+      last=""
+      while IFS= read -r -d $'${RS}' tweet; do
+        [[ -n "$tweet" ]] && last="$tweet"
+      done < <(extract_tweets "${SAMPLE_NUMBERED_THREAD}")
+      echo "$last"
+    `);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toMatch(/^5\/ /);
+    expect(result.stdout).toContain("Three paths during onboarding");
+    expect(result.stdout).toContain("https://example.com/blog/numbered/");
+    expect(result.stdout).toContain("#solofounder");
+  });
+
+  test("labeled format unchanged: SAMPLE_CONTENT still yields 4 tweets", () => {
+    // Regression guard for the original behavior.
+    const RS = "\\x1e";
+    const result = runFunction(`
+      count=0
+      while IFS= read -r -d $'${RS}' tweet; do
+        [[ -n "$tweet" ]] && count=$((count + 1))
+      done < <(extract_tweets "${SAMPLE_CONTENT}")
+      echo "$count"
+    `);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toBe("4");
   });
 });
 
