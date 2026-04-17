@@ -37,7 +37,7 @@ export function SettingsShell({ children }: { children: React.ReactNode }) {
         inert={settingsCollapsed || undefined}
         className={`hidden shrink-0 border-r border-neutral-800 md:block
         md:transition-[width] md:duration-200 md:ease-out
-        ${settingsCollapsed ? "md:w-0 md:overflow-hidden md:border-r-0" : "w-48 px-4 py-10"}`}>
+        ${settingsCollapsed ? "md:w-0 md:overflow-hidden md:border-r-0" : "w-48 px-4 py-5"}`}>
         <div className="mb-4 flex items-center justify-between">
           <h2 className="text-xs font-medium uppercase tracking-wider text-neutral-500">
             Settings
