@@ -130,10 +130,12 @@ describe("GET /api/shared/[token] — binary vs markdown branching", () => {
     expect(res.headers.get("Content-Disposition")).toContain("inline");
   });
 
-  it("returns 404 when the binary file has been deleted", async () => {
+  it("returns 404 with Document no longer available when the binary file has been deleted", async () => {
     mockShareAndOwner("gone.pdf");
     const res = await callGET(buildRequest("gone"), "gone");
     expect(res.status).toBe(404);
+    const body = await res.json();
+    expect(body.error).toBe("Document no longer available");
   });
 
   it("returns 410 for a revoked binary share", async () => {

@@ -5,6 +5,12 @@ import Link from "next/link";
 import dynamic from "next/dynamic";
 import { MarkdownRenderer } from "@/components/ui/markdown-renderer";
 import { CtaBanner } from "@/components/shared/cta-banner";
+import { KbContentSkeleton } from "@/components/kb/kb-content-skeleton";
+import {
+  classifyResponse,
+  type PageError,
+  type SharedData,
+} from "./classify-response";
 
 // Dynamic import with ssr: false — pdf-preview touches `import.meta.url` and
 // pdfjs worker globals at module load, which fail during server render.
@@ -20,20 +26,6 @@ const PdfPreview = dynamic(
   },
 );
 
-type SharedData =
-  | { kind: "markdown"; content: string; path: string }
-  | { kind: "pdf"; src: string; filename: string }
-  | { kind: "image"; src: string; alt: string }
-  | { kind: "download"; src: string; filename: string };
-
-type PageError = "not-found" | "revoked" | "content-changed" | "unknown";
-
-function extractFilename(contentDisposition: string | null): string {
-  if (!contentDisposition) return "file";
-  const match = /filename="?([^";]+)"?/i.exec(contentDisposition);
-  return match?.[1] ?? "file";
-}
-
 export default function SharedDocumentPage({
   params,
 }: {
@@ -46,62 +38,26 @@ export default function SharedDocumentPage({
 
   useEffect(() => {
     let cancelled = false;
-    async function fetchSharedContent() {
+    (async () => {
       try {
         const res = await fetch(`/api/shared/${token}`);
         if (cancelled) return;
-        if (res.status === 404) {
-          setError("not-found");
-          setLoading(false);
-          return;
-        }
-        if (res.status === 410) {
-          // Discriminate via response body `code` so we can show tailored
-          // copy for content-changed without disturbing the existing revoked
-          // path. Fall back to "revoked" copy if the body is missing/unparseable.
-          const body = await res.json().catch(() => null);
-          const code = body && typeof body === "object" ? body.code : null;
-          if (code === "content-changed" || code === "legacy-null-hash") {
-            setError("content-changed");
-          } else {
-            setError("revoked");
-          }
-          setLoading(false);
-          return;
-        }
-        if (!res.ok) {
-          setError("unknown");
-          setLoading(false);
-          return;
-        }
-        const contentType = res.headers.get("content-type") ?? "";
-        const disposition = res.headers.get("content-disposition");
-        const src = `/api/shared/${token}`;
-
-        if (contentType.startsWith("application/json")) {
-          const json = await res.json();
-          setData({ kind: "markdown", content: json.content, path: json.path });
-        } else if (contentType.startsWith("application/pdf")) {
-          setData({ kind: "pdf", src, filename: extractFilename(disposition) });
-        } else if (contentType.startsWith("image/")) {
-          setData({ kind: "image", src, alt: extractFilename(disposition) });
+        const result = await classifyResponse(res, token);
+        if (cancelled) return;
+        if ("error" in result) {
+          setError(result.error);
         } else {
-          setData({
-            kind: "download",
-            src,
-            filename: extractFilename(disposition),
-          });
+          setData(result.data);
         }
-        setLoading(false);
       } catch {
-        if (!cancelled) {
-          setError("unknown");
-          setLoading(false);
-        }
+        if (!cancelled) setError("unknown");
+      } finally {
+        if (!cancelled) setLoading(false);
       }
-    }
-    fetchSharedContent();
-    return () => { cancelled = true; };
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, [token]);
 
   return (
@@ -123,7 +79,7 @@ export default function SharedDocumentPage({
         {/* Content */}
         <main className="px-4 pb-20 pt-6">
           <div className="mx-auto max-w-3xl">
-            {loading && <LoadingSkeleton />}
+            {loading && <KbContentSkeleton />}
 
             {error === "not-found" && (
               <ErrorMessage
@@ -170,7 +126,8 @@ export default function SharedDocumentPage({
                 <img
                   data-testid="shared-image"
                   src={data.src}
-                  alt={data.alt}
+                  alt="Shared image"
+                  {...(data.filename ? { title: data.filename } : {})}
                   className="max-h-[80vh] max-w-full rounded-lg border border-neutral-800"
                 />
               </div>
@@ -215,23 +172,6 @@ function ErrorMessage({ title, message }: { title: string; message: string }) {
       >
         Learn about Soleur
       </Link>
-    </div>
-  );
-}
-
-function LoadingSkeleton() {
-  return (
-    <div className="space-y-4">
-      <div className="h-8 w-64 animate-pulse rounded bg-neutral-800" />
-      <div className="space-y-2">
-        {["85%", "70%", "90%", "65%", "80%"].map((w, i) => (
-          <div
-            key={i}
-            className="h-4 animate-pulse rounded bg-neutral-800"
-            style={{ width: w }}
-          />
-        ))}
-      </div>
     </div>
   );
 }

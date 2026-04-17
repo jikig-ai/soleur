@@ -63,7 +63,7 @@ export type CreateShareResult =
     }
   | {
       ok: false;
-      status: 400 | 404 | 409 | 413 | 500;
+      status: 400 | 403 | 404 | 409 | 413 | 500;
       code: CreateShareErrorCode;
       error: string;
     };
@@ -182,11 +182,15 @@ export async function createShare(
   } catch (err) {
     const code = (err as NodeJS.ErrnoException).code;
     if (code === "ELOOP" || code === "EMLINK") {
+      // 403 matches the canonical KbAccessDeniedError shape used by the
+      // read-side routes. The `code` tag is preserved for telemetry
+      // continuity; downstream Sentry/log queries should key on `code:
+      // "symlink-rejected"` rather than the error message string.
       return {
         ok: false,
-        status: 400,
+        status: 403,
         code: "symlink-rejected",
-        error: "Invalid document path",
+        error: "Access denied",
       };
     }
     return {

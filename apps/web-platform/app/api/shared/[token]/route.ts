@@ -172,7 +172,13 @@ export async function GET(
         "shared: binary access denied (symlink / outside root)",
       );
     }
-    return NextResponse.json({ error: binary.error }, { status: binary.status });
+    // Align the shared endpoint's 404 copy across markdown and binary
+    // branches. validateBinaryFile returns "File not found" (owner-facing
+    // phrasing); the public shared route presents the opaque
+    // "Document no longer available" phrasing instead.
+    const message =
+      binary.status === 404 ? "Document no longer available" : binary.error;
+    return NextResponse.json({ error: message }, { status: binary.status });
   }
 
   const cachedVerdict = shareHashVerdictCache.get(
