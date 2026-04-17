@@ -78,6 +78,9 @@ describe("KbChatSidebar — accessibility (Phase 6.1)", () => {
     const { KbChatSidebar } = await import("@/components/chat/kb-chat-sidebar");
     const { KbChatTrigger } = await import("@/components/kb/kb-chat-trigger");
     const { KbChatContext } = await import("@/components/kb/kb-chat-context");
+    const { KbChatQuoteBridgeProvider } = await import(
+      "@/components/kb/kb-chat-quote-bridge"
+    );
 
     function Host() {
       const [open, setOpen] = useState(false);
@@ -87,21 +90,21 @@ describe("KbChatSidebar — accessibility (Phase 6.1)", () => {
         closeSidebar: () => setOpen(false),
         contextPath: "knowledge-base/overview/constitution.md",
         enabled: true,
-        submitQuote: () => {},
-        registerQuoteHandler: () => {},
         messageCount: 0,
         setMessageCount: () => {},
       };
       return (
         <KbChatContext value={ctx}>
-          <KbChatTrigger fallbackHref="/dashboard/chat/new" />
-          {open && (
-            <KbChatSidebar
-              open={open}
-              onClose={() => setOpen(false)}
-              contextPath="knowledge-base/overview/constitution.md"
-            />
-          )}
+          <KbChatQuoteBridgeProvider onOpenSidebar={() => setOpen(true)}>
+            <KbChatTrigger fallbackHref="/dashboard/chat/new" />
+            {open && (
+              <KbChatSidebar
+                open={open}
+                onClose={() => setOpen(false)}
+                contextPath="knowledge-base/overview/constitution.md"
+              />
+            )}
+          </KbChatQuoteBridgeProvider>
         </KbChatContext>
       );
     }

@@ -54,6 +54,9 @@ describe("KbChatSidebar — close/reopen teardown (AC15)", () => {
   async function harness() {
     const { KbChatSidebar } = await import("@/components/chat/kb-chat-sidebar");
     const { KbChatContext } = await import("@/components/kb/kb-chat-context");
+    const { KbChatQuoteBridgeProvider } = await import(
+      "@/components/kb/kb-chat-quote-bridge"
+    );
 
     function Host() {
       const [open, setOpen] = useState(true);
@@ -63,19 +66,19 @@ describe("KbChatSidebar — close/reopen teardown (AC15)", () => {
         closeSidebar: () => setOpen(false),
         contextPath: "knowledge-base/x.md",
         enabled: true,
-        submitQuote: () => {},
-        registerQuoteHandler: () => {},
         messageCount: 0,
         setMessageCount: () => {},
       };
       return (
         <KbChatContext value={ctx}>
-          <KbChatSidebar
-            open={open}
-            onClose={() => setOpen(false)}
-            contextPath="knowledge-base/x.md"
-          />
-          <button data-testid="toggle" onClick={() => setOpen((o) => !o)}>toggle</button>
+          <KbChatQuoteBridgeProvider onOpenSidebar={() => setOpen(true)}>
+            <KbChatSidebar
+              open={open}
+              onClose={() => setOpen(false)}
+              contextPath="knowledge-base/x.md"
+            />
+            <button data-testid="toggle" onClick={() => setOpen((o) => !o)}>toggle</button>
+          </KbChatQuoteBridgeProvider>
         </KbChatContext>
       );
     }

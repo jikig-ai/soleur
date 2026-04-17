@@ -64,24 +64,27 @@ describe("KbChatSidebar — resumed banner auto-dismiss (AC2)", () => {
   async function renderSidebar() {
     const { KbChatSidebar } = await import("@/components/chat/kb-chat-sidebar");
     const { KbChatContext } = await import("@/components/kb/kb-chat-context");
+    const { KbChatQuoteBridgeProvider } = await import(
+      "@/components/kb/kb-chat-quote-bridge"
+    );
     const ctx = {
       open: true,
       openSidebar: vi.fn(),
       closeSidebar: vi.fn(),
       contextPath: "knowledge-base/x.md",
       enabled: true,
-      submitQuote: vi.fn(),
-      registerQuoteHandler: vi.fn(),
       messageCount: 0,
       setMessageCount: vi.fn(),
     };
     return render(
       <KbChatContext value={ctx}>
-        <KbChatSidebar
-          open={true}
-          onClose={vi.fn()}
-          contextPath="knowledge-base/x.md"
-        />
+        <KbChatQuoteBridgeProvider onOpenSidebar={vi.fn()}>
+          <KbChatSidebar
+            open={true}
+            onClose={vi.fn()}
+            contextPath="knowledge-base/x.md"
+          />
+        </KbChatQuoteBridgeProvider>
       </KbChatContext>,
     );
   }
@@ -106,25 +109,28 @@ describe("KbChatSidebar — resumed banner auto-dismiss (AC2)", () => {
     ];
     const { KbChatSidebar } = await import("@/components/chat/kb-chat-sidebar");
     const { KbChatContext } = await import("@/components/kb/kb-chat-context");
+    const { KbChatQuoteBridgeProvider } = await import(
+      "@/components/kb/kb-chat-quote-bridge"
+    );
     const ctx = {
       open: true,
       openSidebar: vi.fn(),
       closeSidebar: vi.fn(),
       contextPath: "knowledge-base/x.md",
       enabled: true,
-      submitQuote: vi.fn(),
-      registerQuoteHandler: vi.fn(),
       messageCount: 4,
       setMessageCount: vi.fn(),
     };
     act(() => {
       rerender(
         <KbChatContext value={ctx}>
-          <KbChatSidebar
-            open={true}
-            onClose={vi.fn()}
-            contextPath="knowledge-base/x.md"
-          />
+          <KbChatQuoteBridgeProvider onOpenSidebar={vi.fn()}>
+            <KbChatSidebar
+              open={true}
+              onClose={vi.fn()}
+              contextPath="knowledge-base/x.md"
+            />
+          </KbChatQuoteBridgeProvider>
         </KbChatContext>,
       );
     });
@@ -143,14 +149,15 @@ describe("KbChatSidebar — resumed banner auto-dismiss (AC2)", () => {
     ];
     const { KbChatSidebar } = await import("@/components/chat/kb-chat-sidebar");
     const { KbChatContext } = await import("@/components/kb/kb-chat-context");
+    const { KbChatQuoteBridgeProvider } = await import(
+      "@/components/kb/kb-chat-quote-bridge"
+    );
     const ctx = {
       open: true,
       openSidebar: vi.fn(),
       closeSidebar: vi.fn(),
       contextPath: "knowledge-base/x.md",
       enabled: true,
-      submitQuote: vi.fn(),
-      registerQuoteHandler: vi.fn(),
       messageCount: 3,
       setMessageCount: vi.fn(),
     };
@@ -160,11 +167,13 @@ describe("KbChatSidebar — resumed banner auto-dismiss (AC2)", () => {
     act(() => {
       rerender(
         <KbChatContext value={ctx}>
-          <KbChatSidebar
-            open={true}
-            onClose={vi.fn()}
-            contextPath="knowledge-base/x.md"
-          />
+          <KbChatQuoteBridgeProvider onOpenSidebar={vi.fn()}>
+            <KbChatSidebar
+              open={true}
+              onClose={vi.fn()}
+              contextPath="knowledge-base/x.md"
+            />
+          </KbChatQuoteBridgeProvider>
         </KbChatContext>,
       );
     });
@@ -182,14 +191,15 @@ describe("KbChatSidebar — resumed banner auto-dismiss (AC2)", () => {
     ];
     const { KbChatSidebar } = await import("@/components/chat/kb-chat-sidebar");
     const { KbChatContext } = await import("@/components/kb/kb-chat-context");
+    const { KbChatQuoteBridgeProvider } = await import(
+      "@/components/kb/kb-chat-quote-bridge"
+    );
     const makeCtx = (count: number) => ({
       open: true,
       openSidebar: vi.fn(),
       closeSidebar: vi.fn(),
       contextPath: "knowledge-base/x.md",
       enabled: true,
-      submitQuote: vi.fn(),
-      registerQuoteHandler: vi.fn(),
       messageCount: count,
       setMessageCount: vi.fn(),
     });
@@ -199,7 +209,9 @@ describe("KbChatSidebar — resumed banner auto-dismiss (AC2)", () => {
     act(() => {
       rerender(
         <KbChatContext value={makeCtx(3)}>
-          <KbChatSidebar open={true} onClose={vi.fn()} contextPath="knowledge-base/x.md" />
+          <KbChatQuoteBridgeProvider onOpenSidebar={vi.fn()}>
+            <KbChatSidebar open={true} onClose={vi.fn()} contextPath="knowledge-base/x.md" />
+          </KbChatQuoteBridgeProvider>
         </KbChatContext>,
       );
     });
@@ -213,7 +225,9 @@ describe("KbChatSidebar — resumed banner auto-dismiss (AC2)", () => {
     act(() => {
       rerender(
         <KbChatContext value={makeCtx(4)}>
-          <KbChatSidebar open={true} onClose={vi.fn()} contextPath="knowledge-base/x.md" />
+          <KbChatQuoteBridgeProvider onOpenSidebar={vi.fn()}>
+            <KbChatSidebar open={true} onClose={vi.fn()} contextPath="knowledge-base/x.md" />
+          </KbChatQuoteBridgeProvider>
         </KbChatContext>,
       );
     });

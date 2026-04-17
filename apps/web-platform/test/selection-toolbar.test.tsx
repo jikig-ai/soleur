@@ -2,6 +2,12 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, act, fireEvent } from "@testing-library/react";
 import { useRef } from "react";
 
+// The selection-toolbar coalesces setPill via a single-slot rAF (Phase 3
+// task 9A). Fake timers don't auto-run rAF callbacks, so tests that assert
+// on pill state immediately after a selection change must advance at least
+// one frame.
+const FRAME_MS = 20;
+
 // Tests for Phase 4.1: components/kb/selection-toolbar.tsx
 //   - Pill appears when a selection lives inside the articleRef
 //   - 8KB preflight: > maxBytes renders disabled pill
@@ -26,11 +32,15 @@ function setSelection(node: Node, text: string) {
   Object.defineProperty(sel, "toString", { value: () => text, configurable: true });
   // anchor/focus nodes default to the range's start/end containers.
   document.dispatchEvent(new Event("selectionchange"));
+  // Flush the component's single-slot rAF so pill state updates synchronously
+  // from the test's perspective (matches browser behavior after 1 frame).
+  vi.advanceTimersByTime(FRAME_MS);
 }
 
 function clearSelection() {
   window.getSelection()!.removeAllRanges();
   document.dispatchEvent(new Event("selectionchange"));
+  vi.advanceTimersByTime(FRAME_MS);
 }
 
 import { SelectionToolbar } from "@/components/kb/selection-toolbar";
@@ -137,6 +147,73 @@ describe("SelectionToolbar", () => {
     expect(screen.queryByRole("button", { name: /quote in chat/i })).toBeTruthy();
     act(() => { clearSelection(); });
     expect(screen.queryByRole("button", { name: /quote in chat/i })).toBeNull();
+  });
+
+  it("Escape with pill visible: dismisses pill only; parent Sheet onClose NOT called (capture phase)", async () => {
+    await importToolbar();
+    const onAdd = vi.fn();
+    const sheetOnClose = vi.fn();
+    // Simulate a parent Sheet handler that matches sheet.tsx:55-66 — it
+    // listens for Escape in bubble phase and defers when another handler has
+    // flagged the event (via stopImmediatePropagation or defaultPrevented).
+    // Capture-phase listeners on the same node fire first; if the pill
+    // handler calls stopImmediatePropagation, this one doesn't run at all.
+    function bubblePhaseSheetHandler(e: KeyboardEvent) {
+      if (e.key !== "Escape") return;
+      if (e.defaultPrevented) return;
+      sheetOnClose();
+    }
+    document.addEventListener("keydown", bubblePhaseSheetHandler, false);
+
+    render(<Harness onAddToChat={onAdd} />);
+    const article = screen.getByTestId("article");
+    act(() => {
+      setSelection(article, "some text");
+    });
+    expect(screen.queryByRole("button", { name: /quote in chat/i })).toBeTruthy();
+
+    const ev = new KeyboardEvent("keydown", {
+      key: "Escape",
+      bubbles: true,
+      cancelable: true,
+    });
+    act(() => {
+      document.dispatchEvent(ev);
+    });
+
+    // Pill dismissed
+    expect(screen.queryByRole("button", { name: /quote in chat/i })).toBeNull();
+    // Parent Sheet NOT closed — pill's capture handler flagged the event
+    expect(sheetOnClose).not.toHaveBeenCalled();
+
+    document.removeEventListener("keydown", bubblePhaseSheetHandler, false);
+  });
+
+  it("Escape with pill absent: parent Sheet onClose IS called", async () => {
+    await importToolbar();
+    const onAdd = vi.fn();
+    const sheetOnClose = vi.fn();
+    function bubblePhaseSheetHandler(e: KeyboardEvent) {
+      if (e.key === "Escape") sheetOnClose();
+    }
+    document.addEventListener("keydown", bubblePhaseSheetHandler, false);
+
+    render(<Harness onAddToChat={onAdd} />);
+    // No selection → no pill. Pill-absent Escape must reach the parent.
+    expect(screen.queryByRole("button", { name: /quote in chat/i })).toBeNull();
+
+    const ev = new KeyboardEvent("keydown", {
+      key: "Escape",
+      bubbles: true,
+      cancelable: true,
+    });
+    act(() => {
+      document.dispatchEvent(ev);
+    });
+
+    expect(sheetOnClose).toHaveBeenCalledTimes(1);
+
+    document.removeEventListener("keydown", bubblePhaseSheetHandler, false);
   });
 
   it("⌘⇧L / Ctrl+Shift+L inside article triggers onAddToChat with selection", async () => {

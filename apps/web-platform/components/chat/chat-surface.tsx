@@ -6,7 +6,7 @@ import { useWebSocket } from "@/lib/ws-client";
 import type { ConversationContext, AttachmentRef } from "@/lib/types";
 import { ErrorCard } from "@/components/ui/error-card";
 import type { DomainLeaderId } from "@/server/domain-leaders";
-import { ChatInput, type ChatInputQuoteHandle } from "@/components/chat/chat-input";
+import { ChatInput } from "@/components/chat/chat-input";
 import { AtMentionDropdown } from "@/components/chat/at-mention-dropdown";
 import { useTeamNames } from "@/hooks/use-team-names";
 import { NotificationPrompt } from "@/components/chat/notification-prompt";
@@ -19,11 +19,12 @@ import { StatusIndicator } from "@/components/chat/status-indicator";
 
 export type ChatSurfaceVariant = "full" | "sidebar";
 
-export interface ChatSurfaceProps {
-  conversationId: string;
-  variant: ChatSurfaceVariant;
-  onClose?: () => void;
-  initialContext?: ConversationContext;
+/**
+ * Props only used by the sidebar variant. Grouping them behind
+ * `sidebarProps?` keeps the full-variant call site (`<ChatSurface variant="full" />`)
+ * from autocompleting 7 irrelevant options.
+ */
+export interface ChatSurfaceSidebarProps {
   /**
    * When set AND conversationId === "new", the sidebar starts a session
    * that looks up an existing (user_id, context_path) row and resumes it
@@ -33,8 +34,10 @@ export interface ChatSurfaceProps {
   onThreadResumed?: (conversationId: string, timestamp: string, messageCount: number) => void;
   onRealConversationId?: (conversationId: string) => void;
   onMessageCountChange?: (count: number) => void;
-  /** Imperative handle for KB selection-toolbar quote insertion (sidebar only). */
-  quoteRef?: React.MutableRefObject<ChatInputQuoteHandle | null>;
+  /** Callback ref that invokes insertQuote for the KB selection-toolbar flow. */
+  quoteRef?: React.MutableRefObject<((text: string) => void) | null>;
+  /** Callback ref that focuses the textarea imperatively. */
+  focusRef?: React.MutableRefObject<(() => void) | null>;
   /** Fires before sendMessage so sidebar callers can emit analytics (e.g.
    *  kb.chat.selection_sent when the content starts with a blockquote). */
   onBeforeSend?: (message: string) => void;
@@ -44,25 +47,37 @@ export interface ChatSurfaceProps {
   draftKey?: string;
 }
 
+export interface ChatSurfaceProps {
+  conversationId: string;
+  variant: ChatSurfaceVariant;
+  onClose?: () => void;
+  initialContext?: ConversationContext;
+  /** Sidebar-only props. Ignored (shallow) when variant === "full". */
+  sidebarProps?: ChatSurfaceSidebarProps;
+}
+
 export function ChatSurface({
   conversationId,
   variant,
   initialContext,
-  resumeByContextPath,
-  onThreadResumed,
-  onRealConversationId,
-  onMessageCountChange,
-  quoteRef,
-  onBeforeSend,
-  placeholder,
-  draftKey,
+  sidebarProps,
 }: ChatSurfaceProps) {
+  const {
+    resumeByContextPath,
+    onThreadResumed,
+    onRealConversationId,
+    onMessageCountChange,
+    quoteRef,
+    focusRef,
+    onBeforeSend,
+    placeholder,
+    draftKey,
+  } = sidebarProps ?? {};
   const searchParams = useSearchParams();
   const router = useRouter();
   const pathname = usePathname();
   const leaderId = searchParams.get("leader") as DomainLeaderId | null;
   const msgParam = searchParams.get("msg");
-  const contextParam = searchParams.get("context");
 
   const {
     messages,
@@ -102,37 +117,6 @@ export function ChatSurface({
     [sendReviewGateResponse],
   );
 
-  // Fetch KB content when ?context= param is present (full-route only).
-  // Sidebar callers pass `initialContext` directly and do not use the URL.
-  const [kbContext, setKbContext] = useState<ConversationContext | undefined>(initialContext);
-  const [contextLoading, setContextLoading] = useState(!initialContext && !!contextParam);
-
-  useEffect(() => {
-    if (initialContext) return;
-    if (!contextParam) return;
-    let cancelled = false;
-
-    (async () => {
-      try {
-        const res = await fetch(`/api/kb/content/${contextParam}`);
-        if (res.ok && !cancelled) {
-          const data = await res.json();
-          setKbContext({
-            path: contextParam,
-            type: "kb-viewer",
-            content: data.content,
-          });
-        }
-      } catch (err) {
-        console.error("KB context fetch failed:", err);
-      } finally {
-        if (!cancelled) setContextLoading(false);
-      }
-    })();
-
-    return () => { cancelled = true; };
-  }, [contextParam, initialContext]);
-
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
@@ -141,23 +125,21 @@ export function ChatSurface({
     if (status !== "connected" || sessionStarted) return;
 
     if (conversationId === "new") {
-      if (!contextLoading) {
-        if (resumeByContextPath) {
-          startSession({
-            leaderId: leaderId ?? undefined,
-            context: kbContext,
-            resumeByContextPath,
-          });
-        } else {
-          startSession(leaderId ?? undefined, kbContext);
-        }
-        setSessionStarted(true);
+      if (resumeByContextPath) {
+        startSession({
+          leaderId: leaderId ?? undefined,
+          context: initialContext,
+          resumeByContextPath,
+        });
+      } else {
+        startSession(leaderId ?? undefined, initialContext);
       }
+      setSessionStarted(true);
     } else {
       resumeSession(conversationId);
       setSessionStarted(true);
     }
-  }, [status, conversationId, leaderId, sessionStarted, startSession, resumeSession, contextLoading, kbContext, resumeByContextPath]);
+  }, [status, conversationId, leaderId, sessionStarted, startSession, resumeSession, initialContext, resumeByContextPath]);
 
   useEffect(() => {
     if (resumedFrom && onThreadResumed) {
@@ -456,6 +438,7 @@ export function ChatSurface({
             }
             insertRef={insertRef}
             quoteRef={quoteRef}
+            focusRef={focusRef}
             draftKey={draftKey}
           />
         </div>

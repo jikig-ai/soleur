@@ -1,18 +1,7 @@
 import { NextResponse } from "next/server";
-import { createClient, createServiceClient } from "@/lib/supabase/server";
-import { reportSilentFallback } from "@/server/observability";
-
-const CONTEXT_PATH_MAX_LEN = 512;
-const CONTEXT_PATH_PREFIX = "knowledge-base/";
-
-function validateContextPath(v: string | null): string | null {
-  if (!v || v.length === 0 || v.length > CONTEXT_PATH_MAX_LEN) return null;
-  if (!v.startsWith(CONTEXT_PATH_PREFIX)) return null;
-  if (v.includes("..") || v.includes("\0")) return null;
-  const filename = v.split("/").pop() ?? "";
-  if (filename.lastIndexOf(".") <= 0) return null;
-  return v;
-}
+import { createClient } from "@/lib/supabase/server";
+import { lookupConversationForPath } from "@/server/lookup-conversation-for-path";
+import { validateContextPath } from "@/server/validate-context-path";
 
 export async function GET(req: Request) {
   const supabase = await createClient();
@@ -29,42 +18,13 @@ export async function GET(req: Request) {
     return NextResponse.json({ error: "Invalid contextPath" }, { status: 400 });
   }
 
-  const service = createServiceClient();
-  const { data: existing, error: lookupErr } = await service
-    .from("conversations")
-    .select("id")
-    .eq("user_id", user.id)
-    .eq("context_path", contextPath)
-    .is("archived_at", null)
-    .order("last_active", { ascending: false })
-    .limit(1)
-    .maybeSingle();
-
-  if (lookupErr) {
-    reportSilentFallback(lookupErr, {
-      feature: "kb-chat",
-      op: "thread-info-lookup",
-      extra: { contextPath },
-    });
+  const result = await lookupConversationForPath(user.id, contextPath);
+  if (!result.ok) {
+    // Helper already mirrored to Sentry; thread-info's public contract
+    // degrades to messageCount=0 rather than exposing the error.
     return NextResponse.json({ messageCount: 0 });
   }
-  if (!existing) {
-    return NextResponse.json({ messageCount: 0 });
-  }
-
-  const { count, error: countErr } = await service
-    .from("messages")
-    .select("id", { count: "exact", head: true })
-    .eq("conversation_id", existing.id);
-
-  if (countErr) {
-    reportSilentFallback(countErr, {
-      feature: "kb-chat",
-      op: "thread-info-count",
-      extra: { conversationId: existing.id },
-    });
-    return NextResponse.json({ messageCount: 0 });
-  }
-
-  return NextResponse.json({ messageCount: count ?? 0 });
+  return NextResponse.json({
+    messageCount: result.row?.message_count ?? 0,
+  });
 }
