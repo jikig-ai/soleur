@@ -174,9 +174,7 @@ export async function POST(request: Request) {
       }
     }
 
-    // Base64 encode file content — stream bytes to avoid allocating a
-    // separate ArrayBuffer alongside the File blob. This reduces peak
-    // per-request memory by ~20 MB for a max-size upload.
+    // Stream chunks to avoid holding File blob + ArrayBuffer simultaneously.
     const chunks: Uint8Array[] = [];
     const reader = file.stream().getReader();
     for (;;) {
@@ -187,12 +185,14 @@ export async function POST(request: Request) {
     const buffer: Buffer = Buffer.concat(chunks);
     let payloadBuffer: Buffer = buffer;
 
-    if (sanitizedName.toLowerCase().endsWith(".pdf")) {
+    if (ext === "pdf") {
       const t0 = Date.now();
       const result = await linearizePdf(buffer);
       if (result.ok) {
         payloadBuffer = result.buffer;
-      } else {
+      } else if (result.reason !== "skip_signed") {
+        // skip_signed is an intentional pass-through (signed PDFs would be
+        // invalidated by linearization), not a failure — no warn.
         logger.warn(
           {
             reason: result.reason,
