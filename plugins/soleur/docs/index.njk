@@ -46,8 +46,10 @@ permalink: index.html
         <div class="landing-stat-label">Skills</div>
       </div>
       <div class="landing-stat">
-        <div class="landing-stat-value">&infin;</div>
-        <div class="landing-stat-label">Compounding Knowledge</div>
+        <div class="landing-stat-value">{% if githubStats.stars %}{{ githubStats.stars }}{% else %}&#x2605;{% endif %}</div>
+        <div class="landing-stat-label">
+          <a href="{{ site.github }}" rel="noopener" target="_blank">GitHub Stars</a>
+        </div>
       </div>
     </section>
 
@@ -83,6 +85,22 @@ permalink: index.html
         &ldquo;I would not be surprised if the first single-person billion-dollar company &hellip; happens in the next couple of years.&rdquo;
       </blockquote>
       <cite>&mdash; Dario Amodei, CEO of Anthropic, assigning a <a href="https://www.inc.com/ben-sherry/anthropic-ceo-dario-amodei-predicts-the-first-billion-dollar-solopreneur-by-2026/91193609" rel="noopener noreferrer">70&ndash;80% probability</a></cite>
+    </section>
+
+    <!-- As seen in / Press strip -->
+    <section class="landing-press-strip" aria-labelledby="press-strip-heading">
+      <div class="landing-section-inner">
+        <p class="section-label" id="press-strip-heading">As seen in</p>
+        <ul class="press-outlet-list">
+          <li class="press-outlet">
+            <a href="https://www.inc.com/ben-sherry/anthropic-ceo-dario-amodei-predicts-the-first-billion-dollar-solopreneur-by-2026/91193609"
+               rel="noopener noreferrer" target="_blank">
+              <span class="press-outlet-name">Inc.com</span>
+              <span class="press-outlet-context">&mdash; The thesis behind Soleur, as reported on the billion-dollar solo founder.</span>
+            </a>
+          </li>
+        </ul>
+      </div>
     </section>
 
     <!-- Mid-page CTA -->
