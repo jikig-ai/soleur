@@ -1,6 +1,10 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
 import { resolve } from "path";
 import { existsSync } from "fs";
+import communityStats from "../docs/_data/communityStats.js";
+import githubStats from "../docs/_data/githubStats.js";
+
+const __resetGithubCache = githubStats.__resetCache;
 
 const COMMUNITY_STATS_DATA = resolve(
   import.meta.dir,
@@ -17,16 +21,20 @@ function restoreEnv() {
 }
 
 async function freshImport() {
-  return await import(`${COMMUNITY_STATS_DATA}?t=${Date.now()}-${Math.random()}`);
+  return await import(
+    `${COMMUNITY_STATS_DATA}?t=${Date.now()}-${Math.random()}`
+  );
 }
 
 describe("communityStats.js data file", () => {
   beforeEach(() => {
     delete process.env.CI;
+    __resetGithubCache();
   });
 
   afterEach(() => {
     restoreEnv();
+    __resetGithubCache();
   });
 
   test("file exists", () => {
@@ -35,16 +43,6 @@ describe("communityStats.js data file", () => {
 
   test("returns Discord member/online counts when invite API responds 200", async () => {
     globalThis.fetch = (async (url: string) => {
-      if (url.includes("api.github.com")) {
-        return new Response(
-          JSON.stringify({
-            stargazers_count: 6,
-            forks_count: 1,
-            open_issues_count: 0,
-          }),
-          { status: 200 },
-        );
-      }
       if (url.includes("discord.com/api/")) {
         return new Response(
           JSON.stringify({
@@ -54,61 +52,69 @@ describe("communityStats.js data file", () => {
           { status: 200 },
         );
       }
-      return new Response("[]", { status: 200 });
+      return new Response("not-used", { status: 200 });
     }) as typeof fetch;
 
     const mod = await freshImport();
     const data = await mod.default();
-    expect(data.discord).toEqual({ members: 125, online: 32 });
-    // Must also include GitHub stats pass-through
-    expect(data.stars).toBe(6);
+    expect(data).toEqual({ discord: { members: 125, online: 32 } });
   });
 
   test("falls back to discord:null when Discord API fails (even in CI — soft dep)", async () => {
     process.env.CI = "true";
     globalThis.fetch = (async (url: string) => {
-      if (url.includes("api.github.com")) {
-        return new Response(
-          JSON.stringify({
-            stargazers_count: 6,
-            forks_count: 1,
-            open_issues_count: 0,
-          }),
-          { status: 200 },
-        );
-      }
       if (url.includes("discord.com/api/")) {
         throw new Error("discord down");
       }
-      return new Response("[]", { status: 200 });
+      return new Response("not-used", { status: 200 });
     }) as typeof fetch;
 
     const mod = await freshImport();
     const data = await mod.default();
-    expect(data.discord).toBe(null);
-    expect(data.stars).toBe(6);
+    expect(data).toEqual({ discord: null });
   });
 
   test("falls back to discord:null when Discord returns non-200", async () => {
     globalThis.fetch = (async (url: string) => {
-      if (url.includes("api.github.com")) {
-        return new Response(
-          JSON.stringify({
-            stargazers_count: 6,
-            forks_count: 1,
-            open_issues_count: 0,
-          }),
-          { status: 200 },
-        );
-      }
       if (url.includes("discord.com/api/")) {
         return new Response("rate limited", { status: 429 });
       }
-      return new Response("[]", { status: 200 });
+      return new Response("not-used", { status: 200 });
     }) as typeof fetch;
 
     const mod = await freshImport();
     const data = await mod.default();
     expect(data.discord).toBe(null);
+  });
+
+  test("does not leak GitHub stats into the returned shape", async () => {
+    // After scope narrowing, consumers read githubStats.stars directly; the
+    // community module returns Discord only to avoid duplicate-source drift.
+    globalThis.fetch = (async (url: string) => {
+      if (url.includes("discord.com/api/")) {
+        return new Response(
+          JSON.stringify({
+            approximate_member_count: 42,
+            approximate_presence_count: 10,
+          }),
+          { status: 200 },
+        );
+      }
+      return new Response("not-used", { status: 200 });
+    }) as typeof fetch;
+
+    const mod = await freshImport();
+    const data = await mod.default();
+    expect(Object.keys(data).sort()).toEqual(["discord"]);
+    expect("stars" in data).toBe(false);
+  });
+
+  // Note: not testing communityStats() behavior via static import here —
+  // consumer contract is covered by the freshImport tests above, and the
+  // static direct import is used by sibling tests in this repo.
+  test("communityStats default export is callable via static import", async () => {
+    // Sanity-check the static import wiring so a rename or signature drift
+    // fails this test instead of silently breaking Eleventy at build time.
+    expect(typeof communityStats).toBe("function");
   });
 });

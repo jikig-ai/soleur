@@ -1,6 +1,9 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
 import { resolve } from "path";
 import { existsSync } from "fs";
+import githubStats from "../docs/_data/githubStats.js";
+
+const __resetCache = githubStats.__resetCache;
 
 const GITHUB_STATS_DATA = resolve(
   import.meta.dir,
@@ -22,19 +25,16 @@ function restoreEnv() {
   globalThis.fetch = ORIGINAL_FETCH;
 }
 
-async function freshImport() {
-  // Cache-bust so module-scope `cached` does not leak between tests.
-  return await import(`${GITHUB_STATS_DATA}?t=${Date.now()}-${Math.random()}`);
-}
-
-describe("github-stats.js data file", () => {
+describe("githubStats.js data file", () => {
   beforeEach(() => {
     delete process.env.CI;
     delete process.env.GITHUB_TOKEN;
+    __resetCache();
   });
 
   afterEach(() => {
     restoreEnv();
+    __resetCache();
   });
 
   test("file exists", () => {
@@ -61,8 +61,7 @@ describe("github-stats.js data file", () => {
       );
     }) as typeof fetch;
 
-    const mod = await freshImport();
-    const data = await mod.default();
+    const data = await githubStats();
     expect(data).toEqual({
       stars: 42,
       forks: 3,
@@ -71,13 +70,38 @@ describe("github-stats.js data file", () => {
     });
   });
 
+  test("sends Authorization header when GITHUB_TOKEN is set", async () => {
+    process.env.GITHUB_TOKEN = "secret-token";
+    const seenHeaders: Array<Record<string, string>> = [];
+    globalThis.fetch = (async (url: string, init?: RequestInit) => {
+      seenHeaders.push((init?.headers as Record<string, string>) ?? {});
+      if (url.includes("/contributors")) {
+        return new Response("[{}]", { status: 200 });
+      }
+      return new Response(
+        JSON.stringify({
+          stargazers_count: 1,
+          forks_count: 0,
+          open_issues_count: 0,
+        }),
+        { status: 200 },
+      );
+    }) as typeof fetch;
+
+    await githubStats();
+    // Both fetch calls must carry Authorization with the token.
+    expect(seenHeaders).toHaveLength(2);
+    for (const headers of seenHeaders) {
+      expect(headers.Authorization).toBe("Bearer secret-token");
+    }
+  });
+
   test("dev-mode falls back to nulls when GitHub API errors (CI unset)", async () => {
     globalThis.fetch = (async () => {
       throw new Error("network down");
     }) as typeof fetch;
 
-    const mod = await freshImport();
-    const data = await mod.default();
+    const data = await githubStats();
     expect(data).toEqual({
       stars: null,
       forks: null,
@@ -92,10 +116,22 @@ describe("github-stats.js data file", () => {
       throw new Error("boom");
     }) as typeof fetch;
 
-    const mod = await freshImport();
-    await expect(mod.default()).rejects.toThrow(
+    await expect(githubStats()).rejects.toThrow(
       /GitHub stats unreachable in CI/,
     );
+  });
+
+  test("CI mode fails fast on HTTP 401 (invalid token)", async () => {
+    process.env.CI = "true";
+    process.env.GITHUB_TOKEN = "expired-token";
+    globalThis.fetch = (async () => {
+      return new Response("Bad credentials", {
+        status: 401,
+        statusText: "Unauthorized",
+      });
+    }) as typeof fetch;
+
+    await expect(githubStats()).rejects.toThrow(/401/);
   });
 
   test("contributors falls back to 1 when Link header is absent", async () => {
@@ -113,8 +149,7 @@ describe("github-stats.js data file", () => {
       );
     }) as typeof fetch;
 
-    const mod = await freshImport();
-    const data = await mod.default();
+    const data = await githubStats();
     expect(data.contributors).toBe(1);
   });
 });
