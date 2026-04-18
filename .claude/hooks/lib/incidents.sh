@@ -20,6 +20,18 @@ _incidents_repo_root() {
   (cd "$(dirname "${BASH_SOURCE[0]}")/../../.." 2>/dev/null && pwd)
 }
 
+# Locate the shared rule-metrics constants (SCHEMA_VERSION). Sourced with
+# graceful fallback so an isolated hook still emits a complete line if the
+# constants file is missing from a test fixture.
+# shellcheck source=/dev/null
+_incidents_constants="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." 2>/dev/null && pwd)/scripts/lib/rule-metrics-constants.sh"
+if [[ -f "$_incidents_constants" ]]; then
+  # shellcheck source=/dev/null
+  source "$_incidents_constants"
+fi
+: "${SCHEMA_VERSION:=1}"
+unset _incidents_constants
+
 # --- emit_incident <rule_id> <event_type> <prefix> [command_snippet] -------
 # event_type ∈ {deny, bypass}
 # prefix: first ~50 chars of the rule text (redundant — aggregator uses
@@ -46,13 +58,25 @@ emit_incident() {
     --arg e "$event" \
     --arg p "$prefix" \
     --arg c "$cmd" \
-    '{timestamp:$ts, rule_id:$r, event_type:$e, rule_text_prefix:$p, command_snippet:$c}' \
+    --argjson s "$SCHEMA_VERSION" \
+    '{schema:$s, timestamp:$ts, rule_id:$r, event_type:$e, rule_text_prefix:$p, command_snippet:$c}' \
     2>/dev/null) || return 0
 
+  local write_ok=1
   (
     flock -x 9
     printf '%s\n' "$line" >&9
-  ) 9>>"$file" 2>/dev/null || true
+  ) 9>>"$file" 2>/dev/null || write_ok=0
+
+  if [[ "$write_ok" == "0" ]]; then
+    # One stderr line per hook process. $$ scopes the marker to this shell —
+    # we want one warn per hook fork, not once globally.
+    local marker="/tmp/rule-incidents-warned-$$"
+    if [[ ! -f "$marker" ]]; then
+      echo "[rule-incidents] warning: failed to write $file (permissions? disk?)" >&2
+      : > "$marker" 2>/dev/null || true
+    fi
+  fi
 }
 
 # --- detect_bypass <tool> <command> ---------------------------------------
@@ -84,4 +108,25 @@ detect_bypass() {
     echo "cq-when-lefthook-hangs-in-a-worktree-60s"
     return
   fi
+}
+
+# --- resolve_command_cwd <command> <hook_input_json> ----------------------
+# Echoes the most likely CWD for a Bash tool_input.command, falling through
+# (a) `cd <dir> && ...` prefix, (b) `git -C <dir>` flag, (c) hook's `.cwd`
+# field. Empty output means no CWD could be resolved.
+#
+# Consumers: guardrails:block-commit-on-main, guardrails:block-conflict-markers.
+# The stash-block guard intentionally does NOT call this — AGENTS.md forbids
+# git stash unconditionally, so CWD detection is not needed there.
+resolve_command_cwd() {
+  local cmd="${1:-}" input="${2:-}" dir=""
+  if echo "$cmd" | grep -qE '^\s*cd\s+'; then
+    dir=$(echo "$cmd" | sed -nE 's/^\s*cd\s+"?([^"&;]+)"?.*/\1/p' | xargs)
+  elif echo "$cmd" | grep -qoE 'git\s+-C\s+\S+'; then
+    dir=$(echo "$cmd" | grep -oE 'git\s+-C\s+\S+' | head -1 | sed -nE 's/git\s+-C\s+(\S+)/\1/p')
+  fi
+  if [[ -z "$dir" || ! -d "$dir" ]]; then
+    dir=$(echo "$input" | jq -r '.cwd // ""' 2>/dev/null || echo "")
+  fi
+  echo "$dir"
 }
