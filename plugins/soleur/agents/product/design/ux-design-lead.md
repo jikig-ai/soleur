@@ -94,7 +94,7 @@ For each screenshot, evaluate against these categories (in priority order). Do N
 
 ### Output contract
 
-Return a JSON array. **No prose, no markdown, no code fences around the array.** One object per finding:
+Return a JSON array. **No prose, no markdown, no code fences around the array.** Machine-readable schema: [`finding.schema.json`](../../../skills/ux-audit/references/finding.schema.json) (Draft 2020-12) — the schema is authoritative; the JSON below is a single-element example. One object per finding:
 
 ```json
 [
@@ -114,7 +114,7 @@ Return a JSON array. **No prose, no markdown, no code fences around the array.**
 Field rules:
 
 - `route` must match a `routes[].path` from the invocation.
-- `selector` is a CSS selector targeting the primary flagged element. If the finding is page-level (e.g., a comprehension finding about the entire page), emit `""` (empty string) — the skill will coarsen this to `*` for dedup purposes.
+- `selector` is a CSS selector (CSS only — no XPath, no text-match syntax; must be syntactically valid CSS) targeting the primary flagged element. If the finding is page-level (e.g., a comprehension finding about the entire page), emit `""` (empty string) — the skill will coarsen this to `*` for dedup purposes.
 - `category` must be exactly one of: `real-estate | ia | consistency | responsive | comprehension`.
 - `severity` must be exactly one of: `critical | high | medium | low`. Reserve `critical` for findings that block primary user tasks.
 - `title` ≤ 100 chars, declarative (not a question), no emojis.

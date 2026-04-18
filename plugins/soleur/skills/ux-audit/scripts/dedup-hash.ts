@@ -9,6 +9,14 @@
 
 import { createHash } from "node:crypto";
 
+/**
+ * Canonical category list. Drift-guarded by `category-drift.test.ts`
+ * (see `plugins/soleur/test/ux-audit/category-drift.test.ts`). Any
+ * edit here requires updating SKILL.md §"Constants", ux-design-lead.md
+ * §"5-category rubric" + `category` field rule, and the
+ * `properties.category.enum` in
+ * `plugins/soleur/skills/ux-audit/references/finding.schema.json`.
+ */
 export const FINDING_CATEGORIES = [
   "real-estate",
   "ia",
