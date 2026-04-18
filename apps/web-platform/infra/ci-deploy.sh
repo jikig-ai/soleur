@@ -248,11 +248,17 @@ case "$COMPONENT" in
     # Start canary on port 3001 (old container still serving on 80/3000)
     # Custom AppArmor profile: allows mount/umount/pivot_root for bwrap
     # while maintaining Docker's other security restrictions (#1570).
+    # tmpfs /tmp (closes #2473): caps overlayfs COW write-amp from ~20 MB
+    # pdf-linearize tempfiles and keeps /tmp ephemeral. `noexec` DELIBERATELY
+    # omitted — randomCredentialPath() (github-app.ts, consumed by
+    # workspace.ts/session-sync.ts/push-branch.ts) writes `#!/bin/sh` helpers
+    # to /tmp/git-cred-<uuid> and git invokes them as executables.
     docker run -d \
       --name soleur-web-platform-canary \
       --restart no \
       --security-opt apparmor=soleur-bwrap \
       --security-opt seccomp=/etc/docker/seccomp-profiles/soleur-bwrap.json \
+      --tmpfs /tmp:rw,nosuid,nodev,size=256m \
       --env-file "$ENV_FILE" \
       -v /mnt/data/workspaces:/workspaces \
       -v /mnt/data/plugins/soleur:/app/shared/plugins/soleur:ro \
@@ -293,11 +299,15 @@ case "$COMPONENT" in
       { docker stop --time=12 soleur-web-platform 2>/dev/null || true; }
       { docker rm soleur-web-platform 2>/dev/null || true; }
 
+      # tmpfs /tmp (closes #2473): see canary block above for rationale.
+      # `noexec` omission required by randomCredentialPath() / git credential
+      # helper pattern in workspace.ts / session-sync.ts / push-branch.ts.
       if docker run -d \
         --name soleur-web-platform \
         --restart unless-stopped \
         --security-opt apparmor=soleur-bwrap \
         --security-opt seccomp=/etc/docker/seccomp-profiles/soleur-bwrap.json \
+        --tmpfs /tmp:rw,nosuid,nodev,size=256m \
         --env-file "$ENV_FILE" \
         -v /mnt/data/workspaces:/workspaces \
         -v /mnt/data/plugins/soleur:/app/shared/plugins/soleur:ro \

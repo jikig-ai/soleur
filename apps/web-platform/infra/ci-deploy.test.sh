@@ -851,6 +851,69 @@ assert_apparmor_profile "web-platform: docker run has apparmor=soleur-bwrap" \
   "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0"
 
 echo ""
+echo "--- tmpfs /tmp on docker run (closes #2473) ---"
+
+assert_tmpfs_flag() {
+  # Verify every docker run line contains --tmpfs /tmp:…size=256m AND that
+  # noexec is NOT on the tmpfs argument. The negative check locks the
+  # regression class documented in Research Reconciliation row 5: Docker's
+  # default --tmpfs set applies noexec, which silently breaks git credential
+  # helpers in /tmp/git-cred-<uuid> (randomCredentialPath in github-app.ts,
+  # consumed by workspace.ts / session-sync.ts / push-branch.ts).
+  local description="$1"
+  local cmd="$2"
+
+  TOTAL=$((TOTAL + 1))
+
+  local output actual_exit
+  output=$(
+    export MOCK_DOCKER_MODE="apparmor-trace"
+    run_deploy "$cmd" 2>&1
+  ) && actual_exit=0 || actual_exit=$?
+
+  local run_lines
+  run_lines=$(printf '%s\n' "$output" | grep "^DOCKER_RUN_ARGS:" || true)
+
+  if [[ -z "$run_lines" ]]; then
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: $description (no DOCKER_RUN_ARGS lines found)"
+    echo "        output: $output"
+    return
+  fi
+
+  local all_have_tmpfs=true
+  local any_has_noexec=false
+  while IFS= read -r line; do
+    # Positive: --tmpfs /tmp:<opts with size=256m>
+    if ! printf '%s\n' "$line" | grep -qE -- "--tmpfs /tmp:[^ ]*size=256m"; then
+      all_have_tmpfs=false
+    fi
+    # Negative: no noexec on the /tmp tmpfs argument specifically.
+    if printf '%s\n' "$line" | grep -qE -- "--tmpfs /tmp:[^ ]*noexec"; then
+      any_has_noexec=true
+    fi
+  done <<< "$run_lines"
+
+  if [[ "$all_have_tmpfs" == "true" ]] && [[ "$any_has_noexec" == "false" ]]; then
+    PASS=$((PASS + 1))
+    echo "  PASS: $description"
+  else
+    FAIL=$((FAIL + 1))
+    if [[ "$all_have_tmpfs" != "true" ]]; then
+      echo "  FAIL: $description (missing --tmpfs /tmp:…size=256m on some docker run)"
+    fi
+    if [[ "$any_has_noexec" == "true" ]]; then
+      echo "  FAIL: $description (tmpfs has noexec — breaks git credential helper)"
+    fi
+    echo "        docker run lines:"
+    printf '%s\n' "$run_lines" | head -5 | sed 's/^/    /'
+  fi
+}
+
+assert_tmpfs_flag "web-platform: docker run has --tmpfs /tmp:size=256m without noexec" \
+  "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0"
+
+echo ""
 echo "--- Bwrap canary sandbox check ---"
 
 assert_bwrap_canary_check() {
