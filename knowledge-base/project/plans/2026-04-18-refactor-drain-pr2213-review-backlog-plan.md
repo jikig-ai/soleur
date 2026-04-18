@@ -6,6 +6,27 @@
 **Pattern:** one-PR-many-closures (see PR #2486 — closed #2467 + #2468 + #2469 in a single cleanup PR)
 **Estimated effort:** Medium (1 session). Most hunks are small, independently verifiable, and touch the same 7 source files.
 
+## Enhancement Summary
+
+**Deepened on:** 2026-04-18
+**Sections enhanced:** reconciliation table, phase implementation details, test scenarios, sharp edges
+**Research sources used:** 6 load-bearing learnings from `knowledge-base/project/learnings/` (rule-utility telemetry patterns, guardrails grep bypasses, bash parameter expansion quoting, GIT_CEILING_DIRECTORIES test isolation, hook CLAUDE_PROJECT_DIR resolution, negative-space test extraction).
+
+### Key Improvements from Deepen Pass
+
+1. **Locked in 4 reusable telemetry patterns** from the existing rule-utility-scoring learning (flock-guarded append, side-effect telemetry without contract change, tolerant JSONL parse, orphan bucket) — the plan now cites them verbatim rather than re-inventing them.
+2. **Flagged test-isolation risk for the new guardrails test cases** — new `git init` fixtures in `test_hook_emissions.sh` MUST strip `GIT_DIR`/`GIT_INDEX_FILE`/`GIT_WORK_TREE` and set `GIT_CEILING_DIRECTORIES=$WORK` or the fixture's git commands will escape to the parent worktree.
+3. **Added explicit chained-command guardrail check** — the new commit-on-main test case in Phase 4 must include a chained-command scenario (`git add foo && git commit -m x`) per learning 2026-02-24 (guardrails chained-commit bypass).
+4. **Hardened heredoc strategy for rule-prune.sh body** — plan now uses a **single quote-nested heredoc with variable substitution via `sed` post-expand**, avoiding the `'"'"'` pitfall from learning 2026-04-07. Alternative: build the body with multiple `printf` calls if backtick escaping becomes brittle.
+5. **Explicit "proof of delegation" regression test** — for the `resolve_command_cwd` helper, the test must both (a) prove the guard still fires on a valid CWD, AND (b) prove the guard uses the new helper's fallback chain. Mirrors the negative-space-test learning (substring-presence is not proof).
+6. **Rotation flock re-entrancy clarified** — plan documents that `flock -x 9 … 9>>"$INCIDENTS"` is safe to stack with the hook-writer's `flock -x 9 … 9>>"$file"` because they acquire the same file-backed lock and both respect the `-x` exclusive contract. No TOCTOU.
+
+### New Considerations Discovered
+
+- **Rule-metrics-aggregate workflow already uses a synthetic-check-run bot-PR pattern** (PR #2270). Adding a `schema: 1` field does NOT require workflow changes — the aggregator script writes the file, the workflow auto-PRs it. Shape validation can stay local to the script.
+- **PR #2270 already deleted `backfill-rule-ids.py`.** Four of the ten issues reference it. The reconciliation table in the plan dispatches those items as already-resolved; verify each during implementation by grepping the tree (`rg backfill-rule-ids` should return zero).
+- **Helper extraction target** — putting `resolve_command_cwd` in `lib/incidents.sh` (existing sourced library) avoids adding `lib/cmd-parse.sh` as a new file. Smaller surface, same benefit.
+
 ## Overview
 
 All ten open issues filed against PR #2213 review target the same code area: the rule-utility telemetry stack shipped in `.claude/hooks/*`, `scripts/rule-metrics-*.sh`, `scripts/rule-prune.sh`, `scripts/lint-rule-ids.py`, their tests, and one-line consumers in `plugins/soleur/skills/compound/SKILL.md` and `plugins/soleur/commands/sync.md`. Folding them into a single refactor PR avoids ten re-reviews of the same files and mirrors the net-negative-backlog pattern PR #2486 established.
@@ -136,6 +157,8 @@ Each numbered commit runs `bash scripts/test-all.sh` before push. If any commit 
    eval "$(echo "$INPUT" | jq -r '@sh "COMMAND=\(.tool_input.command // "") TOOL_NAME=\(.tool_name // "")"')"
    ```
    Rationale: single fork, shell-escaped values, exact existing variable names.
+
+   **Research insight (learning 2026-04-15-rule-utility-scoring-telemetry-patterns, Pattern 2):** The PreToolUse hook contract is stable on the output side only; input extraction is internal. Collapsing two `jq` forks into one is safe because both extractions produce the same string values the rest of the script already expects. Verify via existing `t_stash_in_worktree` (no behavior change expected).
 2. Add `resolve_command_cwd` helper to `.claude/hooks/lib/incidents.sh` (bottom of file so `source` ordering is unchanged):
    ```bash
    # resolve_command_cwd "<command>" "<hook_input_json>" → echoes resolved CWD or empty.
@@ -171,13 +194,26 @@ Each numbered commit runs `bash scripts/test-all.sh` before push. If any commit 
 
 ### Phase 4 — Test expansion (30 min)
 
+**Research insight (learning 2026-03-24-git-ceiling-directories-test-isolation):** Any fixture running `git init` inside `$WORK` will escape to the parent worktree unless the test explicitly strips git env-vars AND sets `GIT_CEILING_DIRECTORIES`. The existing `t_stash_in_worktree` case avoids this because it only manipulates paths, never runs `git` inside the fixture. The new cases below DO run `git` (init, branch, commit, worktree list) and MUST include this preamble at the top of each case:
+
+```bash
+unset GIT_DIR GIT_INDEX_FILE GIT_WORK_TREE
+export GIT_CEILING_DIRECTORIES="$WORK"
+```
+
+Add this once at the top of each new case (before `git init`), or hoist into `_check` setup.
+
+**Research insight (learning 2026-02-24-guardrails-chained-commit-bypass):** The existing `guardrails.sh` commit-on-main pattern matches `(^|&&|\|\||;)\s*git\s+commit` after PR #2213's fix. The new test case MUST include a **chained-command variant** (`git add foo && git commit -m x`) to regression-guard against an accidental revert to the `^`-anchored pattern. One invocation with anchor-only, one with chain.
+
 1. `tests/hooks/test_hook_emissions.sh` — add:
-   - `guardrails: block-commit-on-main` — build a fake git repo on branch `main`, set `.cwd`, pipe `git commit -m x` command, assert emitted `guardrails-block-commit-on-main`.
-   - `guardrails: block-conflict-markers` — stage a file with `<<<<<<< HEAD` content in the fake repo, pipe `git commit` command, assert emitted `guardrails-block-conflict-markers`.
+   - `guardrails: block-commit-on-main (direct)` — build a fake git repo on branch `main`, set `.cwd`, pipe `git commit -m x` command, assert emitted `guardrails-block-commit-on-main`.
+   - `guardrails: block-commit-on-main (chained)` — same repo, pipe `git add foo && git commit -m x`, assert same rule_id fires (regression guard for the chained-command bypass).
+   - `guardrails: block-conflict-markers` — stage a file with `<<<<<<< HEAD` content in the fake repo (use `printf '<<<<<<< HEAD\n'` to avoid the test file itself tripping the conflict-markers grep on commit), pipe `git commit` command, assert emitted `guardrails-block-conflict-markers`.
    - `guardrails: block-delete-branch` — set up a fake repo with a second worktree so `git worktree list | wc -l > 1`, pipe `gh pr merge 1 --delete-branch`, assert emitted `guardrails-block-delete-branch`.
    - `pencil-open-guard` — fake repo with an untracked `foo.pen`, pipe `{"tool_input":{"filePath":"<abs>/foo.pen"}}` into `pencil-open-guard.sh`, assert emitted `cq-before-calling-mcp-pencil-open-document`.
    - `worktree-write-guard` — fake repo with `.worktrees/active/` populated, pipe write to `<GIT_ROOT>/file.txt`, assert emitted `guardrails-worktree-write-guard`.
-   All cases use `git init` inside `$WORK` to avoid contaminating the real repo.
+
+   All cases use `git init` inside `$WORK` with the GIT_CEILING_DIRECTORIES preamble above. The `worktree-write-guard` case also needs `git worktree add "$WORK/.worktrees/active" HEAD` (or a stub directory under `.worktrees/` since the guard uses `ls -A` presence, not a real worktree).
 2. `tests/scripts/test_lint_rule_ids.py` — add `test_removed_id_exits_1`: write two AGENTS.md snapshots (HEAD + current) via two committed revisions in a tempdir-backed git repo, run the lint against the second, assert exit code 1 and the error string contains `removed id(s) detected`.
 3. `tests/commands/test-sync-rule-prune.sh` (confirm exists; extend) — add `t_invalid_rule_id_skipped`: craft a `rule-metrics.json` fixture with one id `valid-id` and one id `has space` (manually injected), run `rule-prune.sh --dry-run`, assert stderr contains `Skipping invalid rule_id` and no issue-file line for the bad id.
 
@@ -194,13 +230,17 @@ Each numbered commit runs `bash scripts/test-all.sh` before push. If any commit 
      fi
      ```
      Regex mirrors `lint-rule-ids.py` ID_RE (identical scoping).
-   - Replace 15 `echo` lines with a heredoc:
+   - Replace 15 `echo` lines with a heredoc. **Escaping strategy (per learning 2026-04-07):** use an unquoted heredoc (`<<BODY`) so `$id`, `$prefix`, `$first_seen`, `$generated_at`, `$WEEKS` interpolate. Every backtick inside the body must be escaped `\``; every `$` that must remain literal (none in this body) would need `\$`. Markdown triple-backtick fences (```` ``` ````) are each written as `\`\`\``:
+
      ```bash
      generated_at=$(jq -r '.generated_at' "$METRICS")
      cat > "$body_file" <<BODY
      - **Rule:** \`$id\`
      - **Text (first 50 chars):** $prefix
-     ...
+     - **Section:** $section
+     - **hit_count:** 0 over >=${WEEKS} weeks
+     - **First seen:** $first_seen
+
      ### Verify
 
      \`\`\`
@@ -209,9 +249,22 @@ Each numbered commit runs `bash scripts/test-all.sh` before push. If any commit 
 
      Based on metrics generated at: \`$generated_at\`
 
+     ### Reassessment criteria
+
+     Re-run \`/soleur:sync rule-prune\` in 4 weeks. If \`hit_count\` is still 0 and
+     no bypasses were recorded, propose removal in \`AGENTS.md\` via a normal PR.
+
+     ### This issue does NOT authorize removal
+
+     A human must edit \`AGENTS.md\` and open a PR. Rules protecting rare but
+     catastrophic failures (e.g., \`hr-never-git-stash-in-worktrees\`) may have
+     zero hits and still be load-bearing.
+
      _Filed by \`scripts/rule-prune.sh --weeks=${WEEKS}\`. See plan #2210._
      BODY
      ```
+
+     **Fallback if backtick escaping proves brittle:** split the body into two heredocs (one for fixed sections, one for the Verify block) and `cat` them into `$body_file` sequentially. The issue's original 15 `echo` calls worked fine — the heredoc is a readability improvement, not a correctness fix. If the heredoc introduces a regression, revert to `echo`/`printf` style with constants extracted.
    - Swap `fromdateiso8601` to the try/catch variant (same as aggregator).
 2. `plugins/soleur/commands/sync.md` Rule Prune Analysis section:
    - Step 2: append "Local telemetry source: `.claude/.rule-incidents.jsonl` (gitignored, written by hooks)."
@@ -312,6 +365,18 @@ All 10 overlapping open code-review issues ARE this PR's scope. No secondary ove
 
 Infrastructure/tooling refactor — no user-facing UI, no pricing, no marketing surface, no legal copy, no new external integrations. The changes harden a telemetry system consumed by one skill (`compound`) and one command (`sync`), both already gated by existing CI tests.
 
+## Applied Learnings
+
+These existing learnings directly informed the plan; cite them in the PR body so reviewers don't re-derive.
+
+- `knowledge-base/project/learnings/best-practices/2026-04-15-rule-utility-scoring-telemetry-patterns.md` — Four reusable patterns used wholesale in this refactor: flock-guarded append, tolerant JSONL parse, orphan bucket, side-effect telemetry without contract change.
+- `knowledge-base/project/learnings/2026-04-15-rule-metrics-aggregator-pr-pattern-session-gotchas.md` — Confirms PR #2270 already deleted `backfill-rule-ids.py`; drives the reconciliation table.
+- `knowledge-base/project/learnings/2026-02-24-guardrails-chained-commit-bypass.md` — Drives the chained-command regression test for commit-on-main.
+- `knowledge-base/project/learnings/2026-02-24-guardrails-grep-false-positive-worktree-text.md` — Reminds us that compound greps must enforce proximity, not just substring presence. Current `guardrails.sh` rm-rf pattern already satisfies this; no change needed, but test_hook_emissions.sh delete-branch test must avoid false positives from similar `.worktrees/` mentions in the command body.
+- `knowledge-base/project/learnings/2026-03-24-git-ceiling-directories-test-isolation.md` — Drives the `unset GIT_DIR GIT_INDEX_FILE GIT_WORK_TREE` + `GIT_CEILING_DIRECTORIES` preamble in new test cases.
+- `knowledge-base/project/learnings/2026-04-07-bash-single-quote-in-parameter-expansion.md` — Drives the heredoc escaping strategy in Phase 5 and the fallback plan.
+- `knowledge-base/project/learnings/best-practices/2026-04-15-negative-space-tests-must-follow-extracted-logic.md` — The `resolve_command_cwd` extraction must be paired with a test that proves the helper is invoked AND the fallback chain works, not just that the helper identifier appears in guardrails.sh.
+
 ## Sharp Edges
 
 - `@sh` in jq strips the trailing newline on `@tsv`-adjacent output; keep the one-shot eval form and verify via `echo "$TOOL_NAME"` debug line during dry-run.
@@ -321,6 +386,18 @@ Infrastructure/tooling refactor — no user-facing UI, no pricing, no marketing 
 - `rule-prune.sh` regex must match lint-rule-ids.py's `ID_RE` scope (`^(hr|wg|cq|rf|pdr|cm)-[a-z0-9-]{3,60}$`). A drift between these two regex definitions resurrects the validation gap #2257 describes. The constants file does NOT own the regex (bash vs python syntax differ) — comments in both files cite each other.
 - heredoc body in rule-prune.sh must escape backticks (`\``) inside the jq query block so bash does not try to command-substitute them. Use a `<<'BODY'` quoted heredoc for the whole body and interpolate `$id`, `$prefix`, `$generated_at` via a prior `envsubst` or a fresh unquoted `<<BODY` with explicit `\$` guards elsewhere. Quoted `<<'BODY'` is simpler but then no interpolation — the plan uses unquoted `<<BODY` with backticks as literals and variables interpolated normally.
 - `.claude/.rule-incidents.jsonl` is gitignored. The one-time warn marker uses `/tmp/rule-incidents-warned-$$` — `$$` is the shell PID, so each hook invocation gets its own marker. This is correct: we want one warn PER hook fork, not once globally.
+- When the rotation flock re-uses fd 9 (same as the emitter's flock), the two block structures are compatible: both use `9>>"$file"` and request `-x` (exclusive). The OS-level lock is per-file-inode; both callers line up behind the same queue. Do NOT move the rotation flock to a different fd (e.g., `9>>` vs `10>>`) — that would actually create two separate locks on the same inode and reintroduce the race.
+- The `@sh` jq filter produces `'escaped-value'` — bash's `eval` interprets the surrounding single quotes as literal-string delimiters. If `tool_input.command` contains a literal newline, `@sh` emits `$'\n'` (ANSI-C quoting) which bash does interpret. Verified via:
+  ```bash
+  echo '{"tool_input":{"command":"git\nstatus"},"tool_name":"Bash"}' \
+    | jq -r '@sh "COMMAND=\(.tool_input.command) TOOL_NAME=\(.tool_name)"'
+  # → COMMAND=$'git\nstatus' TOOL_NAME='Bash'
+  ```
+  This is exactly the behavior `jq -r '.tool_input.command'` produces for the existing `echo "$COMMAND" | grep -qE …` pattern — no regression.
+- When the aggregator runs under `AGGREGATOR_ROTATE=1`, the rotate block follows the material-change write. If the write is skipped (idempotent no-op) but `$INCIDENTS` has events from new rule IDs that didn't change the committed JSON shape, those events WILL be rotated out. Acceptable: the jsonl is the truth, the committed JSON is the roll-up. If you want rotation to only happen on material-change, guard the rotate block with `[[ "$write" == "1" ]]`. Plan keeps rotation unconditional on `AGGREGATOR_ROTATE=1` to match the current behavior.
+- `scripts/lib/rule-metrics-constants.sh` is sourced by bash scripts. Do NOT export the variables (`export` is unnecessary and makes them inherited by child processes). Plain assignment + `# shellcheck disable=SC2034` is correct.
+- Hook invocations use `$CLAUDE_PROJECT_DIR` to resolve the hook path in `.claude/settings.json` (per learning 2026-04-12). The helper function `resolve_command_cwd` added to `lib/incidents.sh` lives inside a sourced file, so its own resolution uses `${BASH_SOURCE[0]}` — no dependency on `CLAUDE_PROJECT_DIR` inside the helper. Do NOT add `$CLAUDE_PROJECT_DIR` references inside the helper; that env-var is only guaranteed in hook execution context, not in general bash.
+- The `test_removed_id_exits_1` test must commit AGENTS.md with ids `hr-a` + `hr-b` at HEAD **before** running the lint against the working copy. Use a fresh `git init` temp repo, not the real repo's HEAD. Otherwise, the test depends on the current AGENTS.md snapshot and breaks whenever real rule IDs are added or removed.
 
 ## Rollback
 
