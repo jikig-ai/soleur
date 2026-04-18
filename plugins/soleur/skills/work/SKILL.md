@@ -312,6 +312,7 @@ Run these checks before proceeding to Phase 1. A FAIL blocks execution with a re
    - When in doubt, grep for similar implementations
    - **Before writing a new format, date, or util helper in any app, `ls` + grep the app's canonical `lib/` directory (e.g., `apps/web-platform/lib/`) for equivalents.** Canonical helpers are often single-purpose small files named by verb (`relative-time.ts`, `format-currency.ts`); typecheck and tests will not catch duplicated logic. See `knowledge-base/project/learnings/2026-04-17-grep-lib-before-writing-format-helpers.md`.
    - **Before writing data-layer tests that use new PostgREST operators, read the shared mock helper (e.g., `apps/web-platform/test/helpers/mock-supabase.ts`) to confirm it covers every operator the code under test uses.** If not, extend it at the START of Phase 2, not after the first cryptic test failure.
+   - **When extracting a pure reducer out of a React hook, migrate ALL companion state (refs the reducer reads or writes) to the reducer's state boundary in the same change.** A half-extraction — pure function plus mutable ref inside a `setState` updater — advertises purity the call site doesn't honor and recreates the StrictMode/concurrent-rendering hazard the extraction was meant to eliminate. See `knowledge-base/project/learnings/best-practices/2026-04-14-pure-reducer-extraction-requires-companion-state-migration.md`.
 
 5. **Test Continuously**
 
@@ -397,6 +398,10 @@ while (recommendations exist that haven't been applied):
    # Run linting (per CLAUDE.md)
    # Use linting-agent before pushing to origin
    ```
+
+   - **Run `npx tsc --noEmit` in the app package alongside the test suite.** Vitest type-checks test files lazily, so TS errors in tests pass the suite locally but fail CI. A standalone tsc pass catches them at the work-phase gate instead of deferring to review.
+   - **When extracting enforcement logic (auth, CSRF, validation) from route files into a shared helper, update negative-space tests in the same commit.** Route-level detection must prove helper invocation AND failure early-return — not just import presence. Add direct assertions on the helper file for every invariant that moved into it. See `knowledge-base/project/learnings/best-practices/2026-04-15-negative-space-tests-must-follow-extracted-logic.md`.
+   - **When adding git operations that contact remotes in Next.js API routes, include the credential helper pattern from `session-sync.ts`** (search `credential.helper`). Bare `git pull`/`git push`/`git fetch` fail silently on private repos. See `knowledge-base/project/learnings/integration-issues/kb-upload-missing-credential-helper-20260413.md`.
 
 2. **Consider Reviewer Agents** (Optional)
 
