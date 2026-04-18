@@ -33,18 +33,15 @@ import { createSandboxHook } from "./sandbox-hook";
 import { abortableReviewGate, validateSelection, extractReviewGateInput, buildReviewGateResponse, type AgentSession } from "./review-gate";
 import { createChildLogger } from "./logger";
 import { syncPull, syncPush } from "./session-sync";
-import { validateBranchFormat } from "./branch-validation";
-import { createPullRequest } from "./github-app";
-import { plausibleCreateSite, plausibleAddGoal, plausibleGetStats } from "./service-tools";
 import { tryCreateVision, buildVisionEnhancementPrompt } from "./vision-helpers";
 import { getToolTier, buildGateMessage } from "./tool-tiers";
-import { readCiStatus, readWorkflowLogs } from "./ci-tools";
-import { triggerWorkflow, createRateLimiter } from "./trigger-workflow";
-import { pushBranch } from "./push-branch";
+import { createRateLimiter } from "./trigger-workflow";
 import { githubApiGet } from "./github-api";
 import { MAX_BINARY_SIZE } from "./kb-limits";
 import { buildKbShareTools } from "./kb-share-tools";
 import { buildConversationsTools } from "./conversations-tools";
+import { buildGithubTools } from "./github-tools";
+import { buildPlausibleTools } from "./plausible-tools";
 import { reportSilentFallback } from "./observability";
 
 const log = createChildLogger("agent");
@@ -604,7 +601,7 @@ resuming an existing thread preserves context for the user.`;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any -- SDK uses any for heterogeneous tool arrays
     const platformTools: Array<ReturnType<typeof tool<any>>> = [];
 
-    // GitHub PR tool: requires GitHub App installation with a connected repo.
+    // GitHub tool family: requires GitHub App installation with a connected repo.
     if (installationId && repoUrl) {
       let owner: string;
       let repo: string;
@@ -641,219 +638,29 @@ resuming an existing thread preserves context for the user.`;
           // Fall back to "main" — still protected by the hardcoded list
         }
 
-        const createPr = tool(
-          "create_pull_request",
-          "Create a pull request on the user's connected GitHub repository. " +
-          "The repository is determined server-side from the user's connected repo. " +
-          "The head branch must already exist on the remote (push first via git).",
-          {
-            head: z.string().describe("Branch name containing changes (just the name, not owner:branch)"),
-            base: z.string().default("main").describe("Target branch to merge into"),
-            title: z.string().describe("PR title"),
-            body: z.string().optional().describe("PR description body (markdown)"),
-          },
-          async (args) => {
-            try {
-              // Validate branch name format before hitting GitHub API
-              validateBranchFormat(args.head);
-              validateBranchFormat(args.base);
-              if (args.head === args.base) {
-                return {
-                  content: [{ type: "text" as const, text: "Error creating PR: Head branch and base branch cannot be the same" }],
-                  isError: true,
-                };
-              }
-              const result = await createPullRequest(
-                installationId, owner, repo,
-                args.head, args.base, args.title, args.body,
-              );
-              return {
-                content: [{ type: "text" as const, text: JSON.stringify(result) }],
-              };
-            } catch (err) {
-              return {
-                content: [{ type: "text" as const, text: `Error creating PR: ${(err as Error).message}` }],
-                isError: true,
-              };
-            }
-          },
-        );
-
-        platformTools.push(createPr);
-        platformToolNames.push("mcp__soleur_platform__create_pull_request");
-
-        // Phase 2: Read CI status (#1927) — auto-approve tier
-        platformTools.push(
-          tool(
-            "github_read_ci_status",
-            "Read recent CI workflow run statuses for the connected repository. " +
-            "Returns status (pass/fail/in-progress), commit SHA, branch, run URL, " +
-            "and workflow name/ID. Optionally filter by branch.",
-            {
-              branch: z.string().optional().describe("Filter runs by branch name"),
-              per_page: z.number().default(10).describe("Number of runs to return (max 30)"),
-            },
-            async (args) => {
-              try {
-                const runs = await readCiStatus(
-                  installationId, owner, repo,
-                  { branch: args.branch, per_page: Math.min(args.per_page, 30) },
-                );
-                return {
-                  content: [{ type: "text" as const, text: JSON.stringify(runs, null, 2) }],
-                };
-              } catch (err) {
-                return {
-                  content: [{ type: "text" as const, text: `Error reading CI status: ${(err as Error).message}` }],
-                  isError: true,
-                };
-              }
-            },
-          ),
-          tool(
-            "github_read_workflow_logs",
-            "Read failure details for a specific workflow run. Returns check annotations " +
-            "(structured failure data) when available, otherwise falls back to the last " +
-            "100 lines of the first failed step. Use github_read_ci_status first to find run IDs.",
-            {
-              run_id: z.number().describe("The workflow run ID to inspect"),
-            },
-            async (args) => {
-              try {
-                const result = await readWorkflowLogs(
-                  installationId, owner, repo, args.run_id,
-                );
-                return {
-                  content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
-                };
-              } catch (err) {
-                return {
-                  content: [{ type: "text" as const, text: `Error reading workflow logs: ${(err as Error).message}` }],
-                  isError: true,
-                };
-              }
-            },
-          ),
-        );
-        platformToolNames.push(
-          "mcp__soleur_platform__github_read_ci_status",
-          "mcp__soleur_platform__github_read_workflow_logs",
-        );
-
-        // Phase 3: Trigger workflows (#1928) — gated tier
-        platformTools.push(
-          tool(
-            "github_trigger_workflow",
-            "Trigger a workflow_dispatch event on the connected repository. " +
-            "Requires founder approval via review gate. Rate limited to 10 triggers per session. " +
-            "Use github_read_ci_status first to find workflow IDs.",
-            {
-              workflow_id: z.number().describe("The workflow ID to trigger (from github_read_ci_status)"),
-              ref: z.string().describe("Git ref to run the workflow on (branch name or tag)"),
-              inputs: z.record(z.string(), z.string()).optional().describe("Optional workflow_dispatch inputs"),
-            },
-            async (args) => {
-              try {
-                const result = await triggerWorkflow(
-                  installationId, owner, repo,
-                  args.workflow_id, args.ref, workflowRateLimiter, args.inputs,
-                );
-                return {
-                  content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
-                };
-              } catch (err) {
-                return {
-                  content: [{ type: "text" as const, text: `Error triggering workflow: ${(err as Error).message}` }],
-                  isError: true,
-                };
-              }
-            },
-          ),
-        );
-        platformToolNames.push("mcp__soleur_platform__github_trigger_workflow");
-
-        // Phase 4: Push branches (#1929) — gated tier
-        platformTools.push(
-          tool(
-            "github_push_branch",
-            "Push the current workspace HEAD to a feature branch on the remote. " +
-            "Requires founder approval via review gate. Force-push and push to " +
-            "main/master are blocked unconditionally.",
-            {
-              branch: z.string().describe("Target branch name (must not be main, master, or default branch)"),
-              force: z.boolean().default(false).describe("Force-push (always rejected — included for explicit error messaging)"),
-            },
-            async (args) => {
-              try {
-                const result = await pushBranch({
-                  installationId,
-                  owner,
-                  repo,
-                  workspacePath,
-                  branch: args.branch,
-                  force: args.force,
-                  defaultBranch,
-                });
-                return {
-                  content: [{ type: "text" as const, text: JSON.stringify(result) }],
-                };
-              } catch (err) {
-                return {
-                  content: [{ type: "text" as const, text: `Error pushing branch: ${(err as Error).message}` }],
-                  isError: true,
-                };
-              }
-            },
-          ),
-        );
-        platformToolNames.push("mcp__soleur_platform__github_push_branch");
+        const github = buildGithubTools({
+          installationId,
+          owner,
+          repo,
+          defaultBranch,
+          workspacePath,
+          workflowRateLimiter,
+        });
+        platformTools.push(...github.tools);
+        platformToolNames.push(...github.toolNames);
       }
     }
 
     // Service tools: registered independently of GitHub installation.
     // Users with stored API keys get tools even without a connected repo.
+    // Guard stays at the top level — nesting inside the GitHub block would
+    // hide Plausible tools from users without a connected repo (see learning
+    // `service-tool-registration-scope-guard-20260410.md`).
     const plausibleKey = serviceTokens.PLAUSIBLE_API_KEY;
     if (plausibleKey) {
-      const wrapResult = (result: { success: boolean; data?: unknown; error?: string }) => ({
-        content: [{ type: "text" as const, text: JSON.stringify(result) }],
-        ...(result.success ? {} : { isError: true }),
-      });
-
-      platformTools.push(
-        tool(
-          "plausible_create_site",
-          "Create a new site in Plausible Analytics. Returns the created site metadata.",
-          {
-            domain: z.string().describe("Domain name for the site (e.g., example.com)"),
-            timezone: z.string().default("UTC").describe("Timezone for the site"),
-          },
-          async (args) => wrapResult(await plausibleCreateSite(plausibleKey, args.domain, args.timezone)),
-        ),
-        tool(
-          "plausible_add_goal",
-          "Add a conversion goal to a Plausible Analytics site. Uses PUT with upsert semantics (safely idempotent).",
-          {
-            site_id: z.string().describe("Domain of the site (e.g., example.com)"),
-            goal_type: z.enum(["event", "page"]).describe("Type of goal"),
-            value: z.string().describe("Event name (for event goals) or page path (for page goals)"),
-          },
-          async (args) => wrapResult(await plausibleAddGoal(plausibleKey, args.site_id, args.goal_type, args.value)),
-        ),
-        tool(
-          "plausible_get_stats",
-          "Get aggregate stats for a Plausible Analytics site. Returns visitors, pageviews, bounce rate, and visit duration.",
-          {
-            site_id: z.string().describe("Domain of the site (e.g., example.com)"),
-            period: z.enum(["day", "7d", "30d"]).default("30d").describe("Time period for stats"),
-          },
-          async (args) => wrapResult(await plausibleGetStats(plausibleKey, args.site_id, args.period)),
-        ),
-      );
-      platformToolNames.push(
-        "mcp__soleur_platform__plausible_create_site",
-        "mcp__soleur_platform__plausible_add_goal",
-        "mcp__soleur_platform__plausible_get_stats",
-      );
+      const plausible = buildPlausibleTools({ plausibleKey });
+      platformTools.push(...plausible.tools);
+      platformToolNames.push(...plausible.toolNames);
     }
 
     // KB share tools (#2309): registered independently of GitHub installation
