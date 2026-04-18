@@ -10,15 +10,12 @@ rationale and the label convention.
 
 ## Canonical clause
 
+Two branches: `ux-audit` is the legacy stream tag (load-bearing for current
+tracker state — see
+[agent-authored-exclusion.md](./agent-authored-exclusion.md) "Retroactive
+stream-tag dependency"); `agent:*` is the canonical prefix for future streams.
+
 ```jq
-# Exclude agent-authored issues.
-# - ux-audit: legacy stream-specific tag still in active use. Load-bearing: as of
-#   2026-04-18, 4 of 5 current ux-audit issues (#2378, #2379, #2352, #2351) lack
-#   agent:ux-design-lead because they were filed by follow-up sessions, not the
-#   ux-audit skill itself. Dropping this branch would silently regress.
-# - agent:*: canonical agent-authored prefix adopted by any future agent-native
-#   skill that files issues. Required for new streams; the ux-audit skill itself
-#   already applies agent:ux-design-lead on first-filed issues.
 map(select(
   (.labels | map(.name) | index("ux-audit") | not) and
   (.labels | map(.name) | any(startswith("agent:")) | not)

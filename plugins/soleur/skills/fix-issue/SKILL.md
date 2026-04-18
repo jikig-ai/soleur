@@ -30,8 +30,9 @@ Each `--exclude-label <value>` is matched against the issue's label names:
   Any label whose name starts with the text BEFORE the `*` matches. Example:
   `--exclude-label 'agent:*'` drops any issue labeled `agent:ux-design-lead`,
   `agent:ticket-triage`, etc.
-- **Mid-string wildcards are not supported.** A pattern like `ag*ent:*` is
-  rejected as malformed; document this as a non-feature.
+- Only a **trailing** `*` is recognized as a wildcard. Any other `*` is treated
+  as a literal character (which will almost certainly match nothing, since
+  label names do not contain `*`).
 
 Callers invoking from a shell MUST single-quote the `agent:*` form to prevent
 bash glob expansion: `--exclude-label 'agent:*'`.
@@ -60,10 +61,6 @@ while i < len(tokens):
   else:
     i += 1
 ```
-
-Reject malformed patterns during parsing: if any `EXCLUDE_LABELS` entry
-contains a `*` that is NOT at the end of the string, exit with
-`"Malformed --exclude-label value '<value>': mid-string wildcards are not supported."`
 
 ## Constraints
 

@@ -92,8 +92,9 @@ jobs:
           export OPEN_FIXES
           echo "Issues with open bot-fix PRs: ${OPEN_FIXES:-none}"
 
-          # Agent-authored exclusion clause: see
-          # plugins/soleur/skills/fix-issue/references/exclude-label-jq-snippet.md
+          # Agent-authored exclusion clause (governance contract).
+          # Clause source: plugins/soleur/skills/fix-issue/references/exclude-label-jq-snippet.md
+          # Rationale: plugins/soleur/skills/fix-issue/references/agent-authored-exclusion.md
           # Drops any issue labeled `ux-audit` OR any label starting with `agent:`.
           for PRIORITY in priority/p3-low priority/p2-medium priority/p1-high; do
             ISSUE=$(gh issue list \

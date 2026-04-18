@@ -75,9 +75,9 @@ jobs:
 
             1. List open issues: `gh issue list --state open --limit 200 --json number,title,labels --jq 'map(select((.labels | map(.name) | index("ux-audit") | not) and (.labels | map(.name) | any(startswith("agent:")) | not)))'`
                The `--jq` filter excludes agent-authored issues (stream tag
-               `ux-audit` and any `agent:*` label). See
-               `plugins/soleur/skills/fix-issue/references/agent-authored-exclusion.md`
-               for the governance rationale and the canonical clause.
+               `ux-audit` and any `agent:*` label).
+               Clause source: `plugins/soleur/skills/fix-issue/references/exclude-label-jq-snippet.md`.
+               Governance rationale: `plugins/soleur/skills/fix-issue/references/agent-authored-exclusion.md`.
             2. Filter: skip any issue that already has a label starting with `priority/`.
                These have already been triaged.
             3. For each remaining issue:
