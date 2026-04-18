@@ -275,13 +275,13 @@ Add a one-line note to the `canUseTool` callsite (inside `permission-callback.ts
 
 ### Pre-merge (PR)
 
-- [ ] `#1662` — `github-tools.ts` and `plausible-tools.ts` exist; `agent-runner.ts` no longer contains inline `tool()` calls for GitHub or Plausible families.
-- [ ] `#2333` — `ensureDir` uses `lstatSync` and throws on non-directory entries; `workspace-symlink-hardening.test` asserts `provisionWorkspaceWithRepo` rejects a malicious symlink at `knowledge-base/overview`.
-- [ ] `#2334` — `scaffoldWorkspaceDefaults(workspacePath, options?)` exists and is called from both provisioners; `KNOWLEDGE_BASE_DIRS` renamed to `KNOWLEDGE_BASE_PROJECT_DIRS` everywhere; duplicated scaffolding blocks in `provisionWorkspace` and `provisionWorkspaceWithRepo` are gone (one call site each).
-- [ ] `#2335` — `canusertool-decisions.test.ts` exists, covers all 7 allow branches + deny-by-default; every assertion schema-validates the SDK permission-result shape.
-- [ ] `#2336` — `permission-log.ts` exists; flag `SOLEUR_DEBUG_PERMISSION_LAYER=1` enables a structured debug log per permission decision; every allow/deny site in `sandbox-hook.ts` and `permission-callback.ts` calls `logPermissionDecision`.
-- [ ] All tests pass: `cd apps/web-platform && ./node_modules/.bin/vitest run`.
-- [ ] `tsc --noEmit` passes.
+- [x] `#1662` — `github-tools.ts` and `plausible-tools.ts` exist; `agent-runner.ts` no longer contains inline `tool()` calls for GitHub or Plausible families.
+- [x] `#2333` — `ensureDir` uses `lstatSync` and throws on non-directory entries; `workspace-symlink-hardening.test` asserts `provisionWorkspaceWithRepo` rejects a malicious symlink at `knowledge-base/overview`.
+- [x] `#2334` — `scaffoldWorkspaceDefaults(workspacePath, options?)` exists and is called from both provisioners; `KNOWLEDGE_BASE_DIRS` renamed to `KNOWLEDGE_BASE_PROJECT_DIRS` everywhere; duplicated scaffolding blocks in `provisionWorkspace` and `provisionWorkspaceWithRepo` are gone (one call site each).
+- [x] `#2335` — `canusertool-decisions.test.ts` exists, covers all 7 allow branches + deny-by-default; every assertion schema-validates the SDK permission-result shape.
+- [x] `#2336` — `permission-log.ts` exists; flag `SOLEUR_DEBUG_PERMISSION_LAYER=1` enables a structured debug log per permission decision; every allow/deny site in `sandbox-hook.ts` and `permission-callback.ts` calls `logPermissionDecision`.
+- [x] All tests pass: `cd apps/web-platform && ./node_modules/.bin/vitest run`.
+- [x] `tsc --noEmit` passes.
 - [ ] PR body contains `Closes #1662`, `Closes #2333`, `Closes #2334`, `Closes #2335`, `Closes #2336`.
 
 ### Post-merge (operator)

@@ -21,6 +21,7 @@ import type {
 } from "@anthropic-ai/claude-agent-sdk";
 
 import { createChildLogger } from "./logger";
+import { logPermissionDecision } from "./permission-log";
 import type { AgentSession, ReviewGateInput } from "./review-gate";
 import type { NotificationPayload } from "./notifications";
 import type { WSMessage } from "@/lib/types";
@@ -89,6 +90,12 @@ export function createCanUseTool(ctx: CanUseToolContext): CanUseTool {
     if (ctx.isFileTool(toolName)) {
       const filePath = ctx.extractToolPath(toolInput);
       if (filePath && !ctx.isPathInWorkspace(filePath, ctx.workspacePath)) {
+        logPermissionDecision(
+          "canUseTool-file-tool",
+          toolName,
+          "deny",
+          "outside workspace",
+        );
         return {
           behavior: "deny" as const,
           message: `Access denied: outside workspace${subagentCtx}`,
@@ -104,6 +111,7 @@ export function createCanUseTool(ctx: CanUseToolContext): CanUseTool {
           "Tool invoked without recognized path parameter; SDK may have changed parameter names (see #891)",
         );
       }
+      logPermissionDecision("canUseTool-file-tool", toolName, "allow");
       return allow(toolInput);
     }
 
@@ -163,6 +171,12 @@ export function createCanUseTool(ctx: CanUseToolContext): CanUseTool {
 
       await ctx.updateConversationStatus(ctx.conversationId, "active");
 
+      logPermissionDecision(
+        "canUseTool-review-gate",
+        toolName,
+        "allow",
+        selection,
+      );
       return {
         behavior: "allow" as const,
         updatedInput: ctx.buildReviewGateResponse(toolInput, selection),
@@ -178,11 +192,13 @@ export function createCanUseTool(ctx: CanUseToolContext): CanUseTool {
           "Agent tool invoked by subagent",
         );
       }
+      logPermissionDecision("canUseTool-agent", toolName, "allow");
       return allow(toolInput);
     }
 
     // Safe SDK tools (no filesystem-path inputs). See tool-path-checker.ts.
     if (ctx.isSafeTool(toolName)) {
+      logPermissionDecision("canUseTool-safe", toolName, "allow");
       return allow(toolInput);
     }
 
@@ -202,6 +218,12 @@ export function createCanUseTool(ctx: CanUseToolContext): CanUseTool {
             repo: `${ctx.repoOwner}/${ctx.repoName}`,
           },
           "Platform tool blocked",
+        );
+        logPermissionDecision(
+          "canUseTool-platform-blocked",
+          toolName,
+          "deny",
+          "blocked tier",
         );
         return {
           behavior: "deny" as const,
@@ -259,12 +281,24 @@ export function createCanUseTool(ctx: CanUseToolContext): CanUseTool {
         );
 
         if (selection !== "Approve") {
+          logPermissionDecision(
+            "canUseTool-platform-gated",
+            toolName,
+            "deny",
+            "user rejected",
+          );
           return {
             behavior: "deny" as const,
             message: "User rejected the action",
           };
         }
 
+        logPermissionDecision(
+          "canUseTool-platform-gated",
+          toolName,
+          "allow",
+          "user approved",
+        );
         return allow(toolInput);
       }
 
@@ -279,6 +313,7 @@ export function createCanUseTool(ctx: CanUseToolContext): CanUseTool {
         },
         "Platform tool auto-approved",
       );
+      logPermissionDecision("canUseTool-platform-auto", toolName, "allow");
       return allow(toolInput);
     }
 
@@ -295,10 +330,17 @@ export function createCanUseTool(ctx: CanUseToolContext): CanUseTool {
         { sec: true, toolName, agentId: options.agentID },
         "Plugin MCP tool invoked",
       );
+      logPermissionDecision("canUseTool-plugin-mcp", toolName, "allow");
       return allow(toolInput);
     }
 
     // Deny-by-default: block unrecognized tools
+    logPermissionDecision(
+      "canUseTool-deny-default",
+      toolName,
+      "deny",
+      "unrecognized tool",
+    );
     return {
       behavior: "deny" as const,
       message: "Tool not permitted in this environment",
