@@ -8,7 +8,12 @@ date: 2026-04-18
 
 One-time audit after PR #2503 (issue #2462) replaced raw PII path tokens
 in Plausible events with fixed sentinels. Merged to `main` as commit
-`95d574eb77026da1fb1c50c0f32f5b463fc06dc5` on 2026-04-17T19:16:02Z.
+`95d574eb77026da1fb1c50c0f32f5b463fc06dc5` on 2026-04-17T19:16:01Z.
+
+Regex source of truth for the three sentinels (`[email]`, `[uuid]`,
+`[id]`) lives in the sibling runbook `plausible-pii-erasure.md` at
+§"Regex source of truth". Do not duplicate the regex strings here — a
+fourth sentinel should be added in one place, not three.
 
 The enforcing rule is AGENTS.md `wg-when-deferring-a-capability-create-a`
 (the deferral tracked by issue #2508 becomes this runbook's invocation).
@@ -111,14 +116,15 @@ Replace a raw-PII filter with one of these shapes:
 
 ## Operator announcement template
 
-Post once in #engineering immediately after this PR merges so no operator
-silently hits a stale filter:
+Post once in #engineering when this runbook lands. The scrubber itself
+shipped on 2026-04-17 (PR #2503); this announcement is the retroactive
+operator notification that completes the #2508 close-out:
 
-> Heads-up: `/api/analytics/track` now scrubs emails, UUIDs, and 6+
-> digit runs from the `path` prop before forwarding to Plausible, as of
-> 2026-04-17. Any saved dashboard, BI query, or shared-link filter
-> pinned to a raw-PII path will silently stop matching events from that
-> date forward. See
+> Heads-up (retroactive): `/api/analytics/track` has been scrubbing
+> emails, UUIDs, and 6+ digit runs from the `path` prop before
+> forwarding to Plausible since 2026-04-17. Any saved dashboard, BI
+> query, or shared-link filter pinned to a raw-PII path has silently
+> stopped matching events from that date forward. See
 > `knowledge-base/engineering/ops/runbooks/plausible-dashboard-filter-audit.md`
 > for the audit + remediation procedure. Report a broken dashboard in
 > this thread by 2026-05-17 so we can decide whether to re-open #2508.

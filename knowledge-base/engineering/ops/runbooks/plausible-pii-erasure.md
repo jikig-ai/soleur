@@ -10,7 +10,7 @@ Use this runbook any time a GDPR Art. 17 (Right to Erasure) or CCPA
 §1798.105 request names a user whose Plausible events predate the
 server-side path scrubber that shipped in PR #2503 (issue #2462), merged
 to `main` as commit `95d574eb77026da1fb1c50c0f32f5b463fc06dc5` on
-2026-04-17T19:16:02Z.
+2026-04-17T19:16:01Z.
 
 The enforcing rule is AGENTS.md `wg-when-deferring-a-capability-create-a`
 (the deferral tracked by issue #2507 becomes this runbook's invocation).
@@ -43,12 +43,14 @@ The three sentinels this runbook queries for are the ones defined in
 `apps/web-platform/app/api/analytics/track/sanitize.ts` under the
 `SCRUB_PATTERNS` symbol. As of 2026-04-18 they are:
 
-- Sentinel `[email]` — regex `/[^\s/@]+(?:@\|%40)[^\s/@]+\.[^\s/@]+/gi` — triggers on an email literal or its percent-encoded form.
-- Sentinel `[uuid]` — regex `/[0-9a-f]{8}(?:-\|%2d)[0-9a-f]{4}(?:-\|%2d)[0-9a-f]{4}(?:-\|%2d)[0-9a-f]{4}(?:-\|%2d)[0-9a-f]{12}/gi` — triggers on any 8-4-4-4-12 hex (v1..v5).
-- Sentinel `[id]` — regex `/\d{6,}/g` — triggers on 6+ consecutive decimal digits.
+```text
+[email]  /[^\s/@]+(?:@|%40)[^\s/@]+\.[^\s/@]+/gi                                                            triggers on an email literal or its percent-encoded form
+[uuid]   /[0-9a-f]{8}(?:-|%2d)[0-9a-f]{4}(?:-|%2d)[0-9a-f]{4}(?:-|%2d)[0-9a-f]{4}(?:-|%2d)[0-9a-f]{12}/gi   triggers on any 8-4-4-4-12 hex (v1..v5)
+[id]     /\d{6,}/g                                                                                          triggers on 6+ consecutive decimal digits
+```
 
-The `\|` escapes above are a markdown rendering artefact; the actual regexes in
-`SCRUB_PATTERNS` use a literal `|` alternation.
+Copy the regex strings verbatim — they match `SCRUB_PATTERNS` in
+`sanitize.ts` with no escaping.
 
 **Re-read `SCRUB_PATTERNS` at the symbol anchor before running the audit
 below** (per AGENTS.md `cq-code-comments-symbol-anchors-not-line-numbers`).
@@ -94,9 +96,17 @@ Response shape (expected): JSON with a `results` array; each entry is
 with a null-finding note. A non-zero count is the candidate set for
 deletion.
 
-**Preserve the JSON output.** Redact the values before attaching to an
-internal ticket — the `path` field is the PII you are trying to erase.
-Attach counts only, or use `jq 'del(.results[].path)'` before the paste.
+**The raw response is itself PII.** The breakdown dimension value is the
+`path` string — it appears as the result-row key (and the sibling counts
+are keyed on it), so `jq 'del(...)'` cannot produce a safe redaction. Do
+not paste the JSON to an internal ticket. Attach **counts only**:
+
+```bash
+curl -sS ... | jq '.results | length'   # matches in window (count only)
+```
+
+Before attaching any derivative artefact to a ticket, verify with
+`grep -E '@|[0-9a-f]{8}-|[0-9]{6,}' <file>` that no PII shape remains.
 
 ### Self-hosted Plausible — ClickHouse dry-run
 
@@ -137,36 +147,40 @@ both before asserting a null finding.
 Plausible Cloud exposes no `DELETE` endpoint (confirmed against the
 Stats API v1 as of 2026-04-18). Erasure proceeds via a support ticket.
 
+> **NEVER include the data-subject's email, UUID, or user ID in the
+> email subject or body.** The support thread is not a confidential
+> channel. Identifiers must be attached as an encrypted file or uploaded
+> to an authenticated Plausible support portal. The template below
+> references only regex shapes and site-level metadata.
+
 Template:
 
-> **Subject:** GDPR Art. 17 / CCPA §1798.105 erasure — site
-> `<PLAUSIBLE_SITE_ID>`
+> **Subject:** GDPR Art. 17 / CCPA §1798.105 erasure request
 >
 > **Body:**
 >
 > Hello Plausible team,
 >
-> Acting as the data controller for `<PLAUSIBLE_SITE_ID>`, we request
-> erasure of events matching the path patterns below from the site's
-> historical data (retention window: `<FROM>` to `2026-04-17`). All
+> Acting as the data controller for site ID provided out-of-band, we
+> request erasure of events matching the path regex shapes below from
+> the site's historical data (retention window ending 2026-04-17). All
 > events after 2026-04-17 are scrubbed server-side and do not carry the
 > PII in question.
 >
-> **Patterns to erase (custom prop `path` or column `pathname`):**
+> **Regex shapes to erase (custom prop `path` or column `pathname`):**
 >
 > - Email-shaped: `/[^\s/@]+(?:@|%40)[^\s/@]+\.[^\s/@]+/i`
 > - UUID-shaped (v1..v5): `/[0-9a-f]{8}(?:-|%2d)[0-9a-f]{4}(?:-|%2d)[0-9a-f]{4}(?:-|%2d)[0-9a-f]{4}(?:-|%2d)[0-9a-f]{12}/i`
 > - 6+ consecutive digits: `/\d{6,}/`
 >
-> If narrower targeting is preferred, the specific user identifier(s)
-> at issue are attached out-of-band via `<secure channel>`.
+> The site ID and, if narrower targeting is needed, the specific user
+> identifier(s) are attached out-of-band via encrypted channel.
 >
 > Please confirm (a) the number of rows deleted and (b) the run time in
 > UTC, and we will record both in our internal compliance log.
 >
 > Regards,
-> `<data controller name>`
-> `<data controller email>`
+> Data controller (name attached out-of-band)
 
 Expected turnaround (2026-04 baseline): 5-10 business days. Log the
 ticket ID, the support reply, and the row count in the internal
@@ -223,8 +237,9 @@ contain raw path data until an erasure request is processed. The
 post-merge retention window is unaffected (path data is sanitized at
 ingest). The canonical copy lives in the legal documents under
 `knowledge-base/legal/` — update the data-retention subsection the next
-time a broader privacy-policy revision is due. Do not open a separate PR
-for this edit; it is a batched documentation change.
+time a broader privacy-policy revision is due. If no revision is
+scheduled, file a tracking issue against the `legal` domain so the edit
+is not invisible (per AGENTS.md `wg-when-deferring-a-capability-create-a`).
 
 ## Cross-references
 
