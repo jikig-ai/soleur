@@ -43,7 +43,7 @@ function env(key: string): string {
   return v;
 }
 
-async function sbFetch(
+export async function sbFetch(
   path: string,
   init: RequestInit = {},
 ): Promise<Response> {
@@ -58,6 +58,14 @@ async function sbFetch(
       ...init.headers,
     },
   });
+}
+
+export async function sbDelete(path: string): Promise<void> {
+  const res = await sbFetch(path, { method: "DELETE" });
+  if (!res.ok) {
+    const body = (await res.text()).slice(0, 200);
+    throw new Error(`DELETE ${path} failed: ${res.status} ${body}`);
+  }
 }
 
 async function getBotUserId(): Promise<string> {
@@ -86,36 +94,36 @@ async function updateUserRow(
   }
 }
 
-async function findConversationId(
-  userId: string,
-  sessionId: string,
-): Promise<string | null> {
-  const res = await sbFetch(
-    `/rest/v1/conversations?user_id=eq.${userId}&session_id=eq.${sessionId}&select=id`,
-  );
-  if (!res.ok) throw new Error(`conversations GET ${res.status}`);
-  const rows = (await res.json()) as Array<{ id: string }>;
-  return rows[0]?.id ?? null;
-}
-
-async function insertConversation(
+async function upsertConversation(
   userId: string,
   sessionId: string,
   domainLeader: string,
 ): Promise<string> {
-  const res = await sbFetch(`/rest/v1/conversations`, {
-    method: "POST",
-    headers: { Prefer: "return=representation" },
-    body: JSON.stringify({
-      user_id: userId,
-      session_id: sessionId,
-      domain_leader: domainLeader,
-      status: "completed",
-    }),
-  });
+  // The partial unique index excludes NULL session_id rows (see migration 028);
+  // an empty or missing sessionId would bypass the conflict target and race.
+  if (!sessionId) {
+    throw new Error(
+      `upsertConversation requires a non-empty sessionId (partial unique index excludes NULLs)`,
+    );
+  }
+  const res = await sbFetch(
+    `/rest/v1/conversations?on_conflict=user_id,session_id`,
+    {
+      method: "POST",
+      headers: {
+        Prefer: "return=representation,resolution=merge-duplicates",
+      },
+      body: JSON.stringify({
+        user_id: userId,
+        session_id: sessionId,
+        domain_leader: domainLeader,
+        status: "completed",
+      }),
+    },
+  );
   if (!res.ok) {
-    const body = await res.text();
-    throw new Error(`POST conversations failed: ${res.status} ${body}`);
+    const body = (await res.text()).slice(0, 200);
+    throw new Error(`POST conversations (upsert) failed: ${res.status} ${body}`);
   }
   const rows = (await res.json()) as Array<{ id: string }>;
   if (!rows[0]) {
@@ -161,14 +169,13 @@ async function seed(): Promise<void> {
   console.log("[seed] users row patched (tc + subscription + onboarding)");
 
   for (const c of FIXTURE_CONVERSATIONS) {
-    const existing = await findConversationId(botId, c.session_id);
-    if (existing) {
-      console.log(`[seed] conversation ${c.session_id} exists (${existing}) — skip`);
-      continue;
-    }
-    const cid = await insertConversation(botId, c.session_id, c.domain_leader);
+    const cid = await upsertConversation(botId, c.session_id, c.domain_leader);
+    // DELETE-then-INSERT keeps message count stable across re-seeds. Without
+    // this, upsert's merge-duplicates would re-insert and double the count
+    // (the messages table has no natural unique key we want to index).
+    await sbDelete(`/rest/v1/messages?conversation_id=eq.${cid}`);
     await insertMessages(cid, c.messages);
-    console.log(`[seed] conversation ${c.session_id} created (${cid}) with ${c.messages.length} messages`);
+    console.log(`[seed] conversation ${c.session_id} upserted (${cid}) with ${c.messages.length} messages`);
   }
 
   console.log("[seed] done");
@@ -185,10 +192,10 @@ async function reset(): Promise<void> {
   const conversations = (await convRes.json()) as Array<{ id: string }>;
 
   for (const c of conversations) {
-    await sbFetch(`/rest/v1/messages?conversation_id=eq.${c.id}`, { method: "DELETE" });
+    await sbDelete(`/rest/v1/messages?conversation_id=eq.${c.id}`);
   }
   if (conversations.length > 0) {
-    await sbFetch(`/rest/v1/conversations?user_id=eq.${botId}`, { method: "DELETE" });
+    await sbDelete(`/rest/v1/conversations?user_id=eq.${botId}`);
   }
   console.log(`[reset] deleted ${conversations.length} conversations + messages`);
 
@@ -206,12 +213,14 @@ async function reset(): Promise<void> {
   console.log("[reset] done");
 }
 
-const cmd = process.argv[2];
-if (cmd === "seed") {
-  await seed();
-} else if (cmd === "reset") {
-  await reset();
-} else {
-  console.error(`Usage: bun ${import.meta.path} <seed|reset>`);
-  process.exit(2);
+if (import.meta.main) {
+  const cmd = process.argv[2];
+  if (cmd === "seed") {
+    await seed();
+  } else if (cmd === "reset") {
+    await reset();
+  } else {
+    console.error(`Usage: bun ${import.meta.path} <seed|reset>`);
+    process.exit(2);
+  }
 }

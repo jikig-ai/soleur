@@ -39,6 +39,10 @@ on:
     - cron: '0 9 1 * *'
   workflow_dispatch: {}
 
+# Shared-state convention: any job that invokes bot-fixture.ts seed|reset
+# must also set job-level `concurrency.group: bot-fixture-shared-state` with
+# `cancel-in-progress: false`. This serializes every consumer of the shared
+# ux-audit-bot@jikigai.com DB state so parallel workflows never race on it.
 concurrency:
   group: schedule-ux-audit
   cancel-in-progress: false
@@ -53,6 +57,12 @@ jobs:
   ux-audit:
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    # Stacks with the workflow-level concurrency above. Uses the shared-state
+    # group name so any future workflow that touches bot-fixture.ts is
+    # serialized against this one.
+    concurrency:
+      group: bot-fixture-shared-state
+      cancel-in-progress: false
     steps:
       - name: Checkout repository
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1

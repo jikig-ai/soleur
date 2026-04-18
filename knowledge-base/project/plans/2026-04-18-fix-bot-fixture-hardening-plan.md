@@ -412,35 +412,33 @@ never raced on."
 
 ### Pre-merge (PR)
 
-- [ ] Both `bot-fixture.ts` and `bot-signin.ts` wrap their top-level execution in
+- [x] Both `bot-fixture.ts` and `bot-signin.ts` wrap their top-level execution in
   `if (import.meta.main) { ... }` (Phase 0 — hard prerequisite for unit-test imports).
   Verify: `bun -e 'await import("./plugins/soleur/skills/ux-audit/scripts/bot-fixture.ts")'`
   exits 0 silently (no Usage message, no `process.exit(2)`).
-- [ ] Migration `028_conversations_user_id_session_id_unique.sql` committed.
-- [ ] `bot-fixture.ts` uses a single `upsertConversation` (no `findConversationId` /
+- [x] Migration `028_conversations_user_id_session_id_unique.sql` committed.
+- [x] `bot-fixture.ts` uses a single `upsertConversation` (no `findConversationId` /
   `insertConversation` helpers remain).
-- [ ] `bot-fixture.ts` `reset()` uses `sbDelete` (or equivalent guard) for every DELETE
+- [x] `bot-fixture.ts` `reset()` uses `sbDelete` (or equivalent guard) for every DELETE
   — `grep -n 'method: "DELETE"' plugins/soleur/skills/ux-audit/scripts/bot-fixture.ts`
-  returns **zero** bare calls.
-- [ ] `bot-signin.ts` exports `projectRef` and `cookieDomain`.
-- [ ] `bot-signin.test.ts` parses the cookie value with `JSON.parse` and asserts
+  returns **zero** bare calls (only hit is inside `sbDelete` itself).
+- [x] `bot-signin.ts` exports `projectRef` and `cookieDomain`.
+- [x] `bot-signin.test.ts` parses the cookie value with `JSON.parse` and asserts
   `access_token`, `refresh_token`, `expires_at` presence/types.
-- [ ] `bot-signin.test.ts` contains a `describe("bot-signin pure helpers", ...)` block
-  with at least 9 unit tests (4 projectRef happy/error + 3 cookieDomain happy + 2
-  cookieDomain error).
-- [ ] `bot-fixture.test.ts` "reset clears seeded conversations but leaves auth user"
+- [x] `bot-signin.test.ts` contains a `describe("bot-signin pure helpers", ...)` block
+  with 9 unit tests (5 projectRef + 4 cookieDomain).
+- [x] `bot-fixture.test.ts` "reset clears seeded conversations but leaves auth user"
   test asserts `expect(await getBotUserId()).toBe(botId)` after reset.
-- [ ] `scheduled-ux-audit.yml` `ux-audit:` job has
+- [x] `scheduled-ux-audit.yml` `ux-audit:` job has
   `concurrency: { group: bot-fixture-shared-state, cancel-in-progress: false }` with
   an inline comment naming the shared-name convention.
-- [ ] `bun test plugins/soleur/test/ux-audit/bot-fixture.test.ts
-  plugins/soleur/test/ux-audit/bot-signin.test.ts` passes locally with `prd_scheduled`
-  creds (integration) and without creds (unit helpers only).
-- [ ] Every new mutation assertion pins exact post-state (`.toBe(post)`, never
-  `toContain([pre, post])`) per rule `cq-mutation-assertions-pin-exact-post-state`
-  (the rule was born from PR #2346 — this fixture's parent).
-- [ ] Existing `UX_AUDIT_BOT_EMAIL !== "ux-audit-bot@jikigai.com"` allowlist guard at
-  module load in `bot-fixture.test.ts` lines 22–29 is preserved unchanged
+- [x] Pure helper + sbDelete unit tests pass locally (15 tests green without creds,
+  15 green with `prd_scheduled` creds). Integration `bot-fixture.test.ts` upsert path
+  verification deferred until migration 028 is applied in prod (auto via CI on merge).
+- [x] Every new mutation assertion pins exact post-state (`.toBe(7)`, `.toBe(botId)`)
+  per rule `cq-mutation-assertions-pin-exact-post-state`.
+- [x] Existing `UX_AUDIT_BOT_EMAIL !== "ux-audit-bot@jikigai.com"` allowlist guard at
+  module load in `bot-fixture.test.ts` lines 24–29 is preserved unchanged
   (`cq-destructive-prod-tests-allowlist`).
 - [ ] PR body begins with: `Closes #2358`, `Closes #2359`, `Closes #2360`, `Closes #2361`.
 - [ ] `## Changelog` section in PR body references all four issue numbers.

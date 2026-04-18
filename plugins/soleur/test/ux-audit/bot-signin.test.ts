@@ -3,6 +3,10 @@ import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, rmSync } from "node:fs";
 import { resolve } from "node:path";
 import { tmpdir } from "node:os";
+import {
+  projectRef,
+  cookieDomain,
+} from "../../skills/ux-audit/scripts/bot-signin.ts";
 
 const SCRIPT = resolve(
   import.meta.dir,
@@ -43,7 +47,20 @@ describeIfCreds("bot-signin", () => {
     const authCookie = state.cookies.find((c) => c.name.startsWith("sb-"));
     expect(authCookie).toBeDefined();
     expect(authCookie!.domain).toBeTruthy();
-    expect(authCookie!.value.length).toBeGreaterThan(20);
+
+    // Assert the session contract @supabase/ssr consumes, not just "long string".
+    // A future SDK version that prefixes the value (e.g. `base64-<b64>`) would
+    // silently pass the length check but break downstream reads; JSON.parse
+    // surfaces the drift loudly.
+    const session = JSON.parse(authCookie!.value) as {
+      access_token?: unknown;
+      refresh_token?: unknown;
+      expires_at?: unknown;
+    };
+    expect(typeof session.access_token).toBe("string");
+    expect((session.access_token as string).length).toBeGreaterThan(20);
+    expect(typeof session.refresh_token).toBe("string");
+    expect(typeof session.expires_at).toBe("number");
   });
 
   test("fails fast on invalid password", () => {
@@ -58,5 +75,55 @@ describeIfCreds("bot-signin", () => {
     expect(r.status).not.toBe(0);
     expect(r.stderr).toMatch(/invalid|credentials|password|401/i);
     expect(existsSync(STATE_PATH)).toBe(false);
+  });
+});
+
+// Pure helpers — no creds gate. Exercised unconditionally so a regression in
+// projectRef/cookieDomain surfaces even when Doppler secrets are absent.
+describe("bot-signin pure helpers", () => {
+  describe("projectRef", () => {
+    test("extracts ref from supabase.co URL", () => {
+      expect(projectRef("https://abc123.supabase.co")).toBe("abc123");
+    });
+
+    test("tolerates trailing path segments", () => {
+      expect(projectRef("https://abc123.supabase.co/rest/v1/")).toBe("abc123");
+    });
+
+    test("throws on non-supabase host", () => {
+      expect(() => projectRef("https://example.com")).toThrow(
+        /Cannot derive project ref/,
+      );
+    });
+
+    test("throws on localhost URL", () => {
+      expect(() => projectRef("http://localhost:54321")).toThrow(
+        /Cannot derive project ref/,
+      );
+    });
+
+    test("throws on empty string", () => {
+      expect(() => projectRef("")).toThrow(/Cannot derive project ref/);
+    });
+  });
+
+  describe("cookieDomain", () => {
+    test("returns hostname for apex domain", () => {
+      expect(cookieDomain("https://soleur.ai/dashboard")).toBe("soleur.ai");
+    });
+
+    test("returns hostname for subdomain", () => {
+      expect(cookieDomain("https://preview.soleur.ai")).toBe(
+        "preview.soleur.ai",
+      );
+    });
+
+    test("returns hostname for localhost", () => {
+      expect(cookieDomain("http://localhost:3000")).toBe("localhost");
+    });
+
+    test("throws on non-URL input", () => {
+      expect(() => cookieDomain("not-a-url")).toThrow();
+    });
   });
 });
