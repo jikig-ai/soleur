@@ -30,7 +30,8 @@ export function AtMentionDropdown({
     ROUTABLE_DOMAIN_LEADERS.filter((leader) => {
       if (!query) return true;
       const q = query.toLowerCase();
-      const custom = customNames[leader.id]?.toLowerCase() ?? "";
+      const customName = customNames[leader.id];
+      const custom = customName?.toLowerCase() ?? "";
       return (
         leader.id.includes(q) ||
         leader.name.toLowerCase().includes(q) ||
@@ -94,32 +95,35 @@ export function AtMentionDropdown({
         </div>
       ) : (
         <ul className="max-h-64 overflow-y-auto pb-1">
-          {filtered.map((leader, index) => (
-            <li
-              key={leader.id}
-              role="option"
-              aria-selected={index === activeIndex}
-              onClick={() => onSelect(leader.id)}
-              onMouseEnter={() => setActiveIndex(index)}
-              className={`flex cursor-pointer items-center gap-3 px-3 py-2.5 transition-colors ${
-                index === activeIndex ? "bg-neutral-800" : ""
-              }`}
-            >
-              <LeaderAvatar leaderId={leader.id} size="md" />
-              <div className="min-w-0 flex-1">
-                <div className="flex items-center gap-2">
-                  <span className="text-sm font-semibold text-white">
-                    {customNames[leader.id]
-                      ? `${customNames[leader.id]} (${leader.name})`
-                      : leader.name}
-                  </span>
+          {filtered.map((leader, index) => {
+            const customName = customNames[leader.id];
+            return (
+              <li
+                key={leader.id}
+                role="option"
+                aria-selected={index === activeIndex}
+                onClick={() => onSelect(leader.id)}
+                onMouseEnter={() => setActiveIndex(index)}
+                className={`flex cursor-pointer items-center gap-3 px-3 py-2.5 transition-colors ${
+                  index === activeIndex ? "bg-neutral-800" : ""
+                }`}
+              >
+                <LeaderAvatar leaderId={leader.id} size="md" />
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm font-semibold text-white">
+                      {customName
+                        ? `${customName} (${leader.name})`
+                        : leader.name}
+                    </span>
+                  </div>
+                  <p className="truncate text-xs text-neutral-400">
+                    {leader.title} &mdash; {leader.description.split(",").slice(0, 3).join(",")}
+                  </p>
                 </div>
-                <p className="truncate text-xs text-neutral-400">
-                  {leader.title} &mdash; {leader.description.split(",").slice(0, 3).join(",")}
-                </p>
-              </div>
-            </li>
-          ))}
+              </li>
+            );
+          })}
         </ul>
       )}
       <div className="flex items-center gap-3 border-t border-neutral-800 px-3 py-1.5 text-xs text-neutral-400">

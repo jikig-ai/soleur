@@ -37,16 +37,17 @@ describe("LeaderAvatar", () => {
     ).not.toBeNull();
   });
 
-  it("renders at sm/md/lg sizes with matching rendered svg dimensions", () => {
-    // sizeConfig.icon → svg width attribute (lucide renders width={size})
+  it("applies the sm/md/lg tailwind size classes to the wrapper", () => {
+    // Assert on wrapper class rather than internal svg dimensions — lucide's
+    // width attribute is a library detail, the Tailwind class is the contract.
     const { container: sm } = render(<LeaderAvatar leaderId="cto" size="sm" />);
-    expect(sm.querySelector("svg")?.getAttribute("width")).toBe("12");
+    expect(sm.firstElementChild?.className).toMatch(/\bh-5 w-5\b/);
 
     const { container: md } = render(<LeaderAvatar leaderId="cto" size="md" />);
-    expect(md.querySelector("svg")?.getAttribute("width")).toBe("16");
+    expect(md.firstElementChild?.className).toMatch(/\bh-7 w-7\b/);
 
     const { container: lg } = render(<LeaderAvatar leaderId="cto" size="lg" />);
-    expect(lg.querySelector("svg")?.getAttribute("width")).toBe("18");
+    expect(lg.firstElementChild?.className).toMatch(/\bh-8 w-8\b/);
   });
 
   it("renders a custom icon when customIconPath is provided", () => {

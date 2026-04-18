@@ -15,7 +15,7 @@ import type { ConversationStatus } from "@/lib/types";
 import type { DomainLeaderId } from "@/server/domain-leaders";
 import { ROUTABLE_DOMAIN_LEADERS } from "@/server/domain-leaders";
 import { LeaderAvatar } from "@/components/leader-avatar";
-import { FoundationCards } from "@/components/dashboard/foundation-cards";
+import { FoundationSection } from "@/components/dashboard/foundation-section";
 import type { FoundationCard } from "@/components/dashboard/foundation-cards";
 import { useTeamNames } from "@/hooks/use-team-names";
 
@@ -453,19 +453,12 @@ export default function DashboardPage() {
       <div className={`mx-auto flex min-h-[calc(100dvh-4rem)] max-w-3xl flex-col items-center px-4 py-10 ${visionExists && !allTasksComplete ? "pt-10" : "justify-center"}`}>
         {/* Foundation + operational cards (hidden when all complete) */}
         {visionExists && !allTasksComplete && (
-          <div className="mb-10 w-full">
-            <p className="mb-2 text-xs font-medium tracking-widest text-amber-500">
-              FOUNDATIONS
-            </p>
-            <p className="mb-4 text-sm text-neutral-400">
-              Complete these to brief your department leaders.
-            </p>
-            <FoundationCards
-              cards={allCards}
-              getIconPath={getIconPath}
-              onIncompleteClick={handlePromptClick}
-            />
-          </div>
+          <FoundationSection
+            cards={allCards}
+            getIconPath={getIconPath}
+            onIncompleteClick={handlePromptClick}
+            className="mb-10 w-full"
+          />
         )}
 
         <p className="mb-3 text-xs font-medium tracking-widest text-amber-500">
@@ -508,19 +501,11 @@ export default function DashboardPage() {
 
       {/* Foundation + operational cards (hidden when all complete) */}
       {visionExists && !allTasksComplete && (
-        <div className="mb-6">
-          <p className="mb-2 text-xs font-medium tracking-widest text-amber-500">
-            FOUNDATIONS
-          </p>
-          <p className="mb-4 text-sm text-neutral-400">
-            Complete these to brief your department leaders.
-          </p>
-          <FoundationCards
-            cards={allCards}
-            getIconPath={getIconPath}
-            onIncompleteClick={handlePromptClick}
-          />
-        </div>
+        <FoundationSection
+          cards={allCards}
+          getIconPath={getIconPath}
+          onIncompleteClick={handlePromptClick}
+        />
       )}
 
       {/* Filter bar */}
