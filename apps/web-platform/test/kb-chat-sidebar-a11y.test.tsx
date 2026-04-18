@@ -104,23 +104,17 @@ describe("KbChatSidebar — accessibility (Phase 6.1)", () => {
   it("moves focus to the textarea on open", async () => {
     await harness();
     act(() => { screen.getByRole("button", { name: /ask about this document/i }).click(); });
-    await new Promise((r) => setTimeout(r, 0));
-    const textarea = document.querySelector("textarea") as HTMLTextAreaElement;
-    expect(textarea).not.toBeNull();
-    expect(document.activeElement).toBe(textarea);
+    const textarea = await screen.findByPlaceholderText(/ask about this document/i) as HTMLTextAreaElement;
+    await waitFor(() => expect(document.activeElement).toBe(textarea));
   });
 
   it("returns focus to the trigger button on close", async () => {
     await harness();
     const trigger = screen.getByRole("button", { name: /ask about this document/i });
     act(() => { trigger.click(); });
-    await new Promise((r) => setTimeout(r, 0));
-
-    // Now close via the Close panel button.
-    const closeBtn = screen.getByLabelText(/close panel/i);
+    const closeBtn = await screen.findByLabelText(/close panel/i);
     act(() => { closeBtn.click(); });
-    await new Promise((r) => setTimeout(r, 0));
-    expect(document.activeElement).toBe(trigger);
+    await waitFor(() => expect(document.activeElement).toBe(trigger));
   });
 
   it("renders a Close panel button with an accessible name", async () => {

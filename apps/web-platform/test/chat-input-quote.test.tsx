@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, act } from "@testing-library/react";
 import { useRef } from "react";
 import { ChatInput } from "@/components/chat/chat-input";
+import { setControlledValue } from "./helpers/dom";
 
 // Phase 4.3 (updated for #2387 7C callback-ref shape):
 // ChatInput exposes an imperative `quoteRef.current(text)` callback that
@@ -73,14 +74,7 @@ describe("ChatInput insertQuote (callback ref)", () => {
       ta.dispatchEvent(new Event("input", { bubbles: true }));
     });
     act(() => {
-      const nativeInputValueSetter = Object.getOwnPropertyDescriptor(
-        window.HTMLTextAreaElement.prototype,
-        "value",
-      )!.set!;
-      nativeInputValueSetter.call(ta, "existing text");
-      ta.dispatchEvent(new Event("input", { bubbles: true }));
-      ta.selectionStart = 8;
-      ta.selectionEnd = 8;
+      setControlledValue(ta, "existing text", 8);
     });
 
     act(() => { handle!("QQ"); });

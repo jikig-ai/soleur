@@ -19,6 +19,21 @@ interface PillState {
 
 const DEFAULT_MAX_BYTES = 8 * 1024;
 
+// DI seam for the Selection.toString() read so tests don't have to monkey-patch
+// jsdom's Selection prototype. The default preserves the production path.
+const defaultReadSelection = (): string =>
+  typeof window !== "undefined" ? window.getSelection()?.toString() ?? "" : "";
+let readSelection: () => string = defaultReadSelection;
+
+/** @internal test-only. Reset via `__resetReadSelectionForTest()` in afterEach. */
+export function __setReadSelectionForTest(fn: () => string): void {
+  readSelection = fn;
+}
+/** @internal test-only. */
+export function __resetReadSelectionForTest(): void {
+  readSelection = defaultReadSelection;
+}
+
 function isShortcutKey(e: KeyboardEvent): boolean {
   if (!e.shiftKey) return false;
   if (!(e.ctrlKey || e.metaKey)) return false;
@@ -79,7 +94,7 @@ export function SelectionToolbar({
         scheduleSetPill(null);
         return;
       }
-      const text = sel.toString();
+      const text = readSelection();
       if (!text || !text.trim()) {
         scheduleSetPill(null);
         return;
@@ -137,7 +152,7 @@ export function SelectionToolbar({
       const article = articleRef.current;
       if (!article) return;
       const sel = typeof window !== "undefined" ? window.getSelection() : null;
-      const text = sel?.toString() ?? "";
+      const text = readSelection();
       if (!text.trim()) return;
       if (
         !article.contains(sel?.anchorNode ?? null) ||

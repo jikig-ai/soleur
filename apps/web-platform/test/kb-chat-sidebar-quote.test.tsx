@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, act, fireEvent } from "@testing-library/react";
 import { createUseTeamNamesMock } from "./mocks/use-team-names";
 import { createWebSocketMock } from "./mocks/use-websocket";
+import { setControlledValue } from "./helpers/dom";
 
 // Phase 4 wiring: submitQuote from KbChatContext flows through
 // KbChatSidebar → ChatInput.insertQuote. Sending a message containing a
@@ -108,14 +109,8 @@ describe("KbChatSidebar — quote wiring", () => {
   it("sending a message whose content starts with '>' fires kb.chat.selection_sent", async () => {
     await renderSidebar();
     const textarea = document.querySelector("textarea") as HTMLTextAreaElement;
-    // Simulate a controlled change: set value via the native setter.
-    const nativeSetter = Object.getOwnPropertyDescriptor(
-      window.HTMLTextAreaElement.prototype,
-      "value",
-    )!.set!;
     act(() => {
-      nativeSetter.call(textarea, "> a quoted passage\n\nmy follow-up question");
-      textarea.dispatchEvent(new Event("input", { bubbles: true }));
+      setControlledValue(textarea, "> a quoted passage\n\nmy follow-up question");
     });
     act(() => {
       fireEvent.keyDown(textarea, { key: "Enter" });
@@ -130,13 +125,8 @@ describe("KbChatSidebar — quote wiring", () => {
   it("sending a message without a blockquote does NOT fire kb.chat.selection_sent", async () => {
     await renderSidebar();
     const textarea = document.querySelector("textarea") as HTMLTextAreaElement;
-    const nativeSetter = Object.getOwnPropertyDescriptor(
-      window.HTMLTextAreaElement.prototype,
-      "value",
-    )!.set!;
     act(() => {
-      nativeSetter.call(textarea, "just a question with no quote");
-      textarea.dispatchEvent(new Event("input", { bubbles: true }));
+      setControlledValue(textarea, "just a question with no quote");
     });
     act(() => {
       fireEvent.keyDown(textarea, { key: "Enter" });
