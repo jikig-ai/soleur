@@ -54,7 +54,14 @@ def lint(path: Path) -> int:
         if not re.match(r"^(hr|wg|cq|rf|pdr|cm)-[a-z0-9-]{3,60}$", rid):
             errors.append(f"{path}:{ln}: invalid id format: {rid}")
 
-    # Removed-id diff check (warn only — not a hard fail since sections rename)
+    # Removed-id diff check: hard-fail (exit 1) when an id present at HEAD
+    # is absent from the working copy. Appending to `errors` below triggers
+    # the exit-1 path at the end of this function — there is no "warn only"
+    # path for this check.
+    #
+    # Format drift guard: the rule_id regex above (ID_RE) is mirrored in
+    # scripts/rule-prune.sh as _RULE_ID_RE. Bash ERE and Python `re` differ
+    # in syntax, so the two definitions are kept in sync manually.
     try:
         head = subprocess.run(
             ["git", "show", f"HEAD:{path}"],

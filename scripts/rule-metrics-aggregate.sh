@@ -225,14 +225,17 @@ fi
 if [[ "${AGGREGATOR_ROTATE:-0}" == "1" && -s "$INCIDENTS" ]]; then
   ts=$(date -u +%Y-%m)
   archive="$REPO_ROOT/.claude/.rule-incidents-${ts}.jsonl"
+  # Uniquify BEFORE entering the flock subshell — subshell variable
+  # assignments do not propagate back, so reassigning `archive` inside
+  # would leave the outer gzip pointing at a non-existent basename.
+  # An already-rotated `.gz` or a lingering uncompressed file from a
+  # mid-run crash both count as "already exists" here; we append to a
+  # fresh suffixed name rather than clobbering.
+  if [[ -f "${archive}.gz" || -f "$archive" ]]; then
+    archive="$REPO_ROOT/.claude/.rule-incidents-${ts}-$(date -u +%H%M%S).jsonl"
+  fi
   (
     flock -x 9
-    # Uniquify when a monthly archive already exists (already-rotated gz or
-    # a lingering uncompressed file from a mid-run crash). Append-then-gzip
-    # with the same basename would clobber the prior archive's entries.
-    if [[ -f "${archive}.gz" || -f "$archive" ]]; then
-      archive="$REPO_ROOT/.claude/.rule-incidents-${ts}-$(date -u +%H%M%S).jsonl"
-    fi
     cat "$INCIDENTS" >> "$archive"
     : > "$INCIDENTS"
   ) 9>>"$INCIDENTS"

@@ -152,6 +152,80 @@ t_malformed_tolerance() {
   rm -rf "$root"
 }
 
+# T6: schema field present on output
+t_schema_field() {
+  local root; root=$(_setup)
+  INCIDENTS_REPO_ROOT="$root" bash "$SCRIPT" >/dev/null 2>&1
+  local out="$root/knowledge-base/project/rule-metrics.json"
+  local schema; schema=$(jq -r '.schema' < "$out")
+  [[ "$schema" == "1" ]] && _report "schema field present on output" ok \
+    || _report "schema field present on output" fail "got schema=$schema"
+  rm -rf "$root"
+}
+
+# T7: malformed first_seen → rule counted as unused (try/catch treats bad
+# timestamp as "seen long ago"), aggregator still exits 0.
+t_malformed_first_seen() {
+  local root; root=$(_setup)
+  # One hit-count=1 event for hr-rule-a with a broken timestamp string
+  # inside first_seen (set via bypass of the emitter — write the jsonl
+  # directly). The aggregator drops unparseable timestamps in the reduce
+  # path (fromdateiso8601 would throw) but the try/catch rescue keeps the
+  # row in the report. Bad first_seen is < any finite cutoff, so the rule
+  # is counted as unused only if hit_count is also 0 — so we emit a
+  # BYPASS (not a deny) to keep hit_count at 0.
+  printf '{"timestamp":"not-a-date","rule_id":"hr-rule-a","event_type":"bypass","rule_text_prefix":"","command_snippet":""}\n' \
+    >> "$root/.claude/.rule-incidents.jsonl"
+  local err="$root/err.log"
+  INCIDENTS_REPO_ROOT="$root" bash "$SCRIPT" 2> "$err" >/dev/null \
+    || { _report "malformed first_seen tolerated" fail "non-zero exit; stderr: $(cat "$err")"; rm -rf "$root"; return; }
+  local unused
+  unused=$(jq '.summary.rules_unused_over_8w' < "$root/knowledge-base/project/rule-metrics.json")
+  # 3 total rules; hr-rule-a has the bad first_seen + 0 hits → unused.
+  # hr-rule-b and cm-rule-c have null first_seen + 0 hits → unused.
+  [[ "$unused" == "3" ]] && _report "malformed first_seen → rule in unused bucket" ok \
+    || _report "malformed first_seen → rule in unused bucket" fail "got $unused"
+  rm -rf "$root"
+}
+
+# T8: orphan rule_id in jsonl surfaces in summary.orphan_rule_ids.
+t_orphan_ids_surfaced() {
+  local root; root=$(_setup)
+  jq -nc '{timestamp:"2026-04-10T00:00:00Z", rule_id:"ghost-id-not-in-agents-md", event_type:"deny", rule_text_prefix:"", command_snippet:""}' \
+    >> "$root/.claude/.rule-incidents.jsonl"
+  INCIDENTS_REPO_ROOT="$root" bash "$SCRIPT" >/dev/null 2>&1
+  local orphan
+  orphan=$(jq -r '.summary.orphan_rule_ids | join(",")' < "$root/knowledge-base/project/rule-metrics.json")
+  [[ "$orphan" == "ghost-id-not-in-agents-md" ]] \
+    && _report "orphan rule_ids surfaced in summary" ok \
+    || _report "orphan rule_ids surfaced in summary" fail "got '$orphan'"
+  rm -rf "$root"
+}
+
+# T9: rotate-twice-same-month → second archive uniquified (no clobber).
+t_rotate_twice_same_month() {
+  local root; root=$(_setup)
+  # First run: one event, rotate.
+  jq -nc '{timestamp:"2026-04-10T00:00:00Z", rule_id:"hr-rule-a", event_type:"deny", rule_text_prefix:"", command_snippet:""}' \
+    >> "$root/.claude/.rule-incidents.jsonl"
+  INCIDENTS_REPO_ROOT="$root" AGGREGATOR_ROTATE=1 bash "$SCRIPT" >/dev/null 2>&1
+  # Second run: different event, rotate again within the same month.
+  jq -nc '{timestamp:"2026-04-11T00:00:00Z", rule_id:"hr-rule-b", event_type:"deny", rule_text_prefix:"", command_snippet:""}' \
+    >> "$root/.claude/.rule-incidents.jsonl"
+  INCIDENTS_REPO_ROOT="$root" AGGREGATOR_ROTATE=1 bash "$SCRIPT" >/dev/null 2>&1
+  # Expect at least one archive matching the monthly prefix AND one with
+  # the uniquified suffix (-YYYY-MM-HHMMSS.jsonl.gz).
+  local monthly suffixed
+  monthly=$(find "$root/.claude" -maxdepth 1 -name '.rule-incidents-????-??.jsonl.gz' 2>/dev/null | wc -l | tr -d ' ')
+  suffixed=$(find "$root/.claude" -maxdepth 1 -name '.rule-incidents-????-??-??????.jsonl.gz' 2>/dev/null | wc -l | tr -d ' ')
+  if [[ "$monthly" -ge 1 && "$suffixed" -ge 1 ]]; then
+    _report "rotate-twice-same-month: archives do not clobber" ok
+  else
+    _report "rotate-twice-same-month: archives do not clobber" fail "monthly=$monthly suffixed=$suffixed; files: $(ls "$root/.claude" 2>/dev/null)"
+  fi
+  rm -rf "$root"
+}
+
 if [[ ! -f "$SCRIPT" ]]; then
   echo "ERROR: $SCRIPT does not exist — RED phase expected this." >&2
   exit 1
@@ -162,6 +236,10 @@ t_counts
 t_idempotent
 t_dry_run
 t_malformed_tolerance
+t_schema_field
+t_malformed_first_seen
+t_orphan_ids_surfaced
+t_rotate_twice_same_month
 
 echo "=== $pass passed, $fail failed ==="
 [[ "$fail" -eq 0 ]]

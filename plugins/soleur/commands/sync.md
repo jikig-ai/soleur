@@ -148,13 +148,16 @@ Generate or update project documentation by examining:
 
 Runs only when `<sync_area>` is literally `rule-prune`. Surfaces AGENTS.md rules that have zero recorded hits over the threshold window as GitHub issues milestoned to "Post-MVP / Later". Does NOT edit `AGENTS.md` — a human reviews each issue and decides whether to prune.
 
-1. **Parse `--weeks=<n>`** from `<sync_area>` additional tokens (e.g., `rule-prune --weeks=4`). Default: 8. Also supports `--dry-run`.
-2. **Ensure `knowledge-base/project/rule-metrics.json` exists.** If missing, instruct the user to run the aggregator first: `bash scripts/rule-metrics-aggregate.sh`. Do not create a stub file.
-3. **Invoke** `bash scripts/rule-prune.sh --weeks=<n>` (or with `--dry-run`). The script:
+1. **Parse `--weeks=<n>`** from `<sync_area>` additional tokens (e.g., `rule-prune --weeks=4`). Default: 8. Also supports `--dry-run` (forwarded to `rule-prune.sh`).
+2. **Ensure `knowledge-base/project/rule-metrics.json` exists.** If missing, instruct the user to run the aggregator first: `bash scripts/rule-metrics-aggregate.sh` (or `bash scripts/rule-metrics-aggregate.sh --dry-run` to preview summary without writing). Do not create a stub file.
+
+   **Local telemetry source:** `.claude/.rule-incidents.jsonl` (gitignored, one line per deny/bypass written by the hooks under `.claude/hooks/`). The aggregator reads this file to produce `rule-metrics.json`. Monthly rotation archives it to `.claude/.rule-incidents-<YYYY-MM>.jsonl.gz` when `AGGREGATOR_ROTATE=1` is set (CI only).
+3. **Invoke** `bash scripts/rule-prune.sh --weeks=<n>` (or with `--dry-run` to preview candidates without filing). The script:
    - Reads `knowledge-base/project/rule-metrics.json`.
    - Filters rules with `hit_count == 0` AND `first_seen` older than the cutoff.
+   - Validates every rule_id against `^(hr|wg|cq|rf|pdr|cm)-[a-z0-9-]{3,60}$`; malformed ids are skipped with a stderr warning (never filed as issues).
    - For each candidate, checks via `gh issue list --search "<title> in:title"` whether an open issue already exists (idempotent).
-   - Files a new issue via `gh issue create --milestone "Post-MVP / Later"` for each new candidate. Issue body explicitly states that filing does NOT authorize removal; a human must edit AGENTS.md.
+   - Files a new issue via `gh issue create --milestone "Post-MVP / Later"` for each new candidate. Issue body contains a `### Verify` block with a paste-ready `jq` query against `rule-metrics.json` plus the `generated_at` timestamp, and explicitly states that filing does NOT authorize removal; a human must edit AGENTS.md.
 4. **Report** the candidate count and list of filed issue URLs. No constitution / learnings promotion paths apply.
 
 Skip Phase 2 through Phase 4 when the area is `rule-prune` — the gh issue filing IS the output.
