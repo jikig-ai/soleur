@@ -562,6 +562,8 @@ Parallel review batches can stall silently — spawning 12 review agents at once
 
 Before reporting a broken link or missing file, reviewer agents MUST verify via Glob or Read. Unverified "broken link" claims waste reviewer-response cycles — the file may exist at the exact path. **Why:** PR #2226 pattern-recognition-specialist false-positive on a `runtime-errors/2026-02-13-...` learning file that did exist.
 
+When reviewing a Nunjucks/Eleventy page that pairs a visible HTML answer with a `FAPage`/`FAQPage` JSON-LD `acceptedAnswer.text`, compare the two surfaces character-for-character per Question. Google's FAQ rich-result parity check compares codepoints — flag (a) `{{ ... }}` interpolation in HTML paired with a hardcoded value in JSON-LD, and (b) HTML entities (`&rsquo;`, `&amp;`, etc.) in one surface and ASCII or `\uXXXX` in the other. See `knowledge-base/project/learnings/2026-04-18-faq-html-jsonld-parity.md`.
+
 ### Important: P1 Findings Block Merge
 
 Any **P1 (CRITICAL)** findings must be addressed before merging the PR. Present these prominently and ensure they're resolved before accepting the PR.

@@ -24,11 +24,17 @@
 
 const TC_VERSION = "1.0.0";
 
-// Defense-in-depth allowlist. Matches the test-side guard at
-// plugins/soleur/test/ux-audit/bot-fixture.test.ts lines 24-29 and rule
-// cq-destructive-prod-tests-allowlist. seed()/reset() DELETE+PATCH live
-// prod rows; a misconfigured UX_AUDIT_BOT_EMAIL would otherwise cascade
-// onto a real user. Add new synthetic emails here explicitly.
+// Error-body truncation bound for Supabase REST error surfaces. 200 chars
+// captures the PostgREST `{code, message}` envelope without dumping long
+// `details` enumerations into CI logs. Referenced by symbol at every
+// `res.text()` callsite below.
+const ERROR_BODY_MAX = 200;
+
+// Defense-in-depth allowlist. Matches the test-side guard in
+// `bot-fixture.test.ts` and rule `cq-destructive-prod-tests-allowlist`.
+// seed()/reset() DELETE+PATCH live prod rows; a misconfigured
+// UX_AUDIT_BOT_EMAIL would otherwise cascade onto a real user. Add new
+// synthetic emails here explicitly.
 const ALLOWED_BOT_EMAILS = new Set(["ux-audit-bot@jikigai.com"]);
 
 const FIXTURE_CONVERSATIONS = [
@@ -36,19 +42,19 @@ const FIXTURE_CONVERSATIONS = [
     session_id: "ux-audit-fixture-conv-1",
     domain_leader: "cmo",
     messages: [
-      { role: "user", content: "What's the highest-leverage thing I can do this week to grow?" },
-      { role: "assistant", content: "Given your current stage, I'd focus on outbound to the 12 closest-fit prospects from last month's signups. Want me to draft the sequence?" },
-      { role: "user", content: "Yes, draft it." },
+      { role: "user" as const, content: "What's the highest-leverage thing I can do this week to grow?" },
+      { role: "assistant" as const, content: "Given your current stage, I'd focus on outbound to the 12 closest-fit prospects from last month's signups. Want me to draft the sequence?" },
+      { role: "user" as const, content: "Yes, draft it." },
     ],
   },
   {
     session_id: "ux-audit-fixture-conv-2",
     domain_leader: "cto",
     messages: [
-      { role: "user", content: "Is our CI pipeline a bottleneck?" },
-      { role: "assistant", content: "Looking at the last 50 runs, median is 6m 40s. The Eleventy build step is the longest single job. Want me to profile it?" },
-      { role: "user", content: "Please do, and share the top 3 wins." },
-      { role: "assistant", content: "Top wins: (1) cache node_modules between jobs, (2) parallelize lint + typecheck, (3) skip docs build on non-docs PRs." },
+      { role: "user" as const, content: "Is our CI pipeline a bottleneck?" },
+      { role: "assistant" as const, content: "Looking at the last 50 runs, median is 6m 40s. The Eleventy build step is the longest single job. Want me to profile it?" },
+      { role: "user" as const, content: "Please do, and share the top 3 wins." },
+      { role: "assistant" as const, content: "Top wins: (1) cache node_modules between jobs, (2) parallelize lint + typecheck, (3) skip docs build on non-docs PRs." },
     ],
   },
 ] as const;
@@ -79,7 +85,7 @@ export async function sbFetch(
 export async function sbDelete(path: string): Promise<void> {
   const res = await sbFetch(path, { method: "DELETE" });
   if (!res.ok) {
-    const body = (await res.text()).slice(0, 200);
+    const body = (await res.text()).slice(0, ERROR_BODY_MAX);
     throw new Error(`DELETE ${path} failed: ${res.status} ${body}`);
   }
 }
@@ -95,7 +101,7 @@ async function getBotUserId(): Promise<string> {
   }
   const res = await sbFetch(`/auth/v1/admin/users?per_page=1000`);
   if (!res.ok) {
-    const body = (await res.text()).slice(0, 200);
+    const body = (await res.text()).slice(0, ERROR_BODY_MAX);
     throw new Error(`admin users GET failed: ${res.status} ${body}`);
   }
   const data = (await res.json()) as {
@@ -115,7 +121,7 @@ async function updateUserRow(
     body: JSON.stringify(patch),
   });
   if (!res.ok) {
-    const body = await res.text();
+    const body = (await res.text()).slice(0, ERROR_BODY_MAX);
     throw new Error(`PATCH users failed: ${res.status} ${body}`);
   }
 }
@@ -152,7 +158,7 @@ async function upsertConversation(
     },
   );
   if (!res.ok) {
-    const body = (await res.text()).slice(0, 200);
+    const body = (await res.text()).slice(0, ERROR_BODY_MAX);
     throw new Error(`POST conversations (upsert) failed: ${res.status} ${body}`);
   }
   const rows = (await res.json()) as Array<{ id: string }>;
@@ -164,7 +170,7 @@ async function upsertConversation(
 
 async function insertMessages(
   conversationId: string,
-  messages: ReadonlyArray<{ role: string; content: string }>,
+  messages: ReadonlyArray<{ role: "user" | "assistant"; content: string }>,
 ): Promise<void> {
   const res = await sbFetch(`/rest/v1/messages`, {
     method: "POST",
@@ -177,7 +183,7 @@ async function insertMessages(
     ),
   });
   if (!res.ok) {
-    const body = await res.text();
+    const body = (await res.text()).slice(0, ERROR_BODY_MAX);
     throw new Error(`POST messages failed: ${res.status} ${body}`);
   }
 }
