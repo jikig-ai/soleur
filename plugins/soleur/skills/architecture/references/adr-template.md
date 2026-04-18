@@ -26,7 +26,7 @@ ADRs come in two shapes. Pick at create-time based on the rubric below — do no
 
 Default to terse. Use rich when **any one** of the following is true. Each trigger is a yes/no question whose answer is checkable against a file that already exists in the repo.
 
-1. **Cross-cutting code surface.** Does the decision govern behavior in 2+ existing routes/modules/skills at write time, OR is it written as guidance for "every future X"? Check: grep the decision's named helper / concept across the repo. Example: ADR-021 governs `serveKbFile` consumed by two routes and every future KB-adjacent route → yes. ADR-006 governs one Terraform backend config pattern applied per new `main.tf` → no.
+1. **Cross-cutting code surface.** Does the decision govern behavior in **2+ existing** routes/modules/skills at write time? Check: grep the decision's named helper, module, or concept across the repo and count the existing consumers. Example: ADR-021 governs `serveKbFile` consumed by two routes at write time → yes. ADR-006 governs a Terraform backend config pattern that each new `main.tf` reuses independently, with zero shared consumers at write time → no. Forward-looking "every future X" patterns do NOT hit this trigger on their own — wait until 2+ consumers exist, then supersede with a rich ADR if warranted. This keeps the rubric observable (grep can answer it) rather than subjective.
 2. **Material cost impact.** Does the decision introduce a new paid vendor, change a billing tier, or eliminate a paid service? Check: does the decision appear in or change anything in `knowledge-base/operations/expenses.md`?
 3. **NFR-moving.** Does the decision change the status of one or more NFRs in `knowledge-base/engineering/architecture/nfr-register.md` from one tier to another (e.g., Partial → Implemented)? Check: diff the expected NFR register state before and after implementation.
 4. **Principle deviation.** Does the decision deviate from an AP-NNN principle in `knowledge-base/engineering/architecture/principles-register.md` and require a documented exception? Check: name which AP-NNN and why the exception is justified. If the answer is "none, aligned with all principles," this trigger is not hit.
@@ -35,6 +35,8 @@ Default to terse. Use rich when **any one** of the following is true. Each trigg
 If **zero triggers** are hit, use the terse shape. If **one or more triggers** are hit, use the rich shape.
 
 The rubric is intentionally asymmetric: a single genuine trigger (e.g., an NFR move or a principle deviation) is load-bearing on its own and justifies the rich shape.
+
+**Pipeline-mode default.** When `/soleur:architecture create` runs non-interactively (e.g., inside `/soleur:one-shot`), the rubric cannot be asked interactively and the default falls to **terse**. Rich-shape ADRs in pipeline mode require the caller to pass `shape: rich` explicitly in `$ARGUMENTS`. Interactive callers always see the full rubric prompt.
 
 ### What NOT to use as a trigger
 

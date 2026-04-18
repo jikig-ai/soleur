@@ -29,4 +29,4 @@ Queryable index of architectural principles. Each principle links to its canonic
 
 ## Notes
 
-- **AP-011 — ADR shape rubric.** AP-011's application to new ADRs follows the terse/rich shape rubric in [`plugins/soleur/skills/architecture/references/adr-template.md`](../../../plugins/soleur/skills/architecture/references/adr-template.md) under `## Choosing the shape`. Default to terse (3 sections); use rich (8 sections) when any one of the 5 rubric triggers applies (cross-cutting, material cost, NFR-moving, principle deviation, teeth-bearing alternatives).
+- **AP-011 — ADR shape rubric.** AP-011's application to new ADRs follows the terse/rich shape rubric in [`plugins/soleur/skills/architecture/references/adr-template.md`](../../../plugins/soleur/skills/architecture/references/adr-template.md) under `## Choosing the shape`. Default is terse (3 sections); use rich (8 sections) when any rubric trigger applies.
