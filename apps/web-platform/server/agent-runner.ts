@@ -42,18 +42,10 @@ import { buildKbShareTools } from "./kb-share-tools";
 import { buildConversationsTools } from "./conversations-tools";
 import { buildGithubTools } from "./github-tools";
 import { buildPlausibleTools } from "./plausible-tools";
+import { createCanUseTool } from "./permission-callback";
 import { reportSilentFallback } from "./observability";
 
 const log = createChildLogger("agent");
-
-// canUseTool allow branches must echo toolInput as updatedInput. SDK
-// v0.2.80 surfaced `ZodError: invalid_union` on Write/Edit when the
-// allow return omitted updatedInput. Echoing is behaviorally a no-op
-// and satisfies both the permissive (updatedInput optional) and strict
-// (updatedInput required) variants of the PermissionResult schema.
-function allow(toolInput: Record<string, unknown>) {
-  return { behavior: "allow" as const, updatedInput: toolInput };
-}
 
 let _supabase: ReturnType<typeof createServiceClient>;
 function supabase() { return _supabase ??= createServiceClient(); }
@@ -786,213 +778,36 @@ resuming an existing thread preserves context for the user.`;
             }],
           }],
         },
-        // File tools and Bash are resolved by PreToolUse hooks (step 1)
-        // and SDK sandbox auto-approval (step 3) before reaching this
-        // callback. The canUseTool file-tool check is defense-in-depth
-        // for tools that somehow bypass hooks. See #891.
-        canUseTool: async (
-          toolName: string,
-          toolInput: Record<string, unknown>,
-          options: { signal: AbortSignal; agentID?: string },
-        ) => {
-          const subagentCtx = options.agentID ? ` [subagent=${options.agentID}]` : '';
-          // Defense-in-depth: catch any file tool that bypasses hooks.
-          // PreToolUse hooks are the primary enforcement (layer 1).
-          // This is layer 2 -- see #891 for the audit that added it.
-          if (isFileTool(toolName)) {
-            const filePath = extractToolPath(toolInput);
-            if (filePath && !isPathInWorkspace(filePath, workspacePath)) {
-              return {
-                behavior: "deny" as const,
-                message: `Access denied: outside workspace${subagentCtx}`,
-              };
-            }
-            if (!filePath && (UNVERIFIED_PARAM_TOOLS as readonly string[]).includes(toolName) && Object.keys(toolInput).length > 0) {
-              log.warn(
-                { sec: true, toolName, inputKeys: Object.keys(toolInput) },
-                "Tool invoked without recognized path parameter; SDK may have changed parameter names (see #891)",
-              );
-            }
-            return allow(toolInput);
-          }
-
-          // Review gates: intercept AskUserQuestion
-          if (toolName === "AskUserQuestion") {
-            const gateId = randomUUID();
-            const gate = extractReviewGateInput(toolInput as Record<string, unknown>);
-
-            if (gate.isNewSchema) {
-              const questions = (toolInput as Record<string, unknown>).questions as unknown[];
-              if (questions.length > 1) {
-                log.warn(
-                  { questionCount: questions.length },
-                  "AskUserQuestion received multiple questions; only the first is surfaced",
-                );
-              }
-            }
-
-            // Parse step progress from header (e.g., "Step 2 of 6: Configure DNS")
-            const stepMatch = gate.header?.match(/^Step (\d+) of (\d+): .+$/);
-            const stepProgress = stepMatch
-              ? { current: Number(stepMatch[1]), total: Number(stepMatch[2]) }
-              : undefined;
-
-            const gateDelivered = sendToClient(userId, {
-              type: "review_gate",
-              gateId,
-              question: gate.question,
-              header: gate.header,
-              options: gate.options,
-              descriptions: Object.keys(gate.descriptions).length > 0
-                ? gate.descriptions
-                : undefined,
-              stepProgress,
-            });
-
-            if (!gateDelivered) {
-              // User offline — fire-and-forget push/email notification
-              notifyOfflineUser(userId, {
-                type: "review_gate",
-                conversationId,
-                agentName: leaderId ?? "Agent",
-                question: gate.question,
-              }).catch((err) => log.error({ userId, err }, "Offline notification failed"));
-            }
-
-            await updateConversationStatus(conversationId, "waiting_for_user");
-
-            const selection = await abortableReviewGate(
-              session,
-              gateId,
-              controller.signal,
-              undefined, // timeoutMs (use default)
-              gate.options,
-            );
-
-            await updateConversationStatus(conversationId, "active");
-
-            return {
-              behavior: "allow" as const,
-              updatedInput: buildReviewGateResponse(
-                toolInput as Record<string, unknown>,
-                selection,
-              ),
-            };
-          }
-
-          // Agent tool: spawns subagents that run within the same SDK
-          // sandbox (bubblewrap, filesystem restrictions, network policy).
-          // Both PreToolUse hooks and this canUseTool callback fire for
-          // subagent tool calls (SDK CanUseTool type confirms via
-          // options.agentID). Explicit allow replaces the prior SAFE_TOOLS
-          // auto-allow for auditability. See #910.
-          if (toolName === "Agent") {
-            if (subagentCtx) {
-              log.info({ sec: true, agentId: options.agentID }, "Agent tool invoked by subagent");
-            }
-            return allow(toolInput);
-          }
-
-          // Safe SDK tools: no filesystem path inputs, allowed without checks.
-          // See tool-path-checker.ts for rationale on each tool.
-          // LS removed (#891) -- it accepts path inputs and routes through
-          // isPathInWorkspace. NotebookRead removed -- SDK reads via Read tool.
-          if (isSafeTool(toolName)) {
-            return allow(toolInput);
-          }
-
-          // Tiered gating for in-process MCP server tools (#1926).
-          // Scoped to platformToolNames (not blanket mcp__ prefix) to prevent
-          // future MCP servers from being auto-allowed without explicit review.
-          if (platformToolNames.includes(toolName)) {
-            const tier = getToolTier(toolName);
-
-            if (tier === "blocked") {
-              log.info(
-                { sec: true, tool: toolName, tier, decision: "deny", repo: `${repoOwner}/${repoName}` },
-                "Platform tool blocked",
-              );
-              return {
-                behavior: "deny" as const,
-                message: "This action is not allowed from cloud agents",
-              };
-            }
-
-            if (tier === "gated") {
-              const gateId = randomUUID();
-              const question = buildGateMessage(toolName, toolInput);
-
-              const toolGateDelivered = sendToClient(userId, {
-                type: "review_gate",
-                gateId,
-                question,
-                options: ["Approve", "Reject"],
-              });
-
-              if (!toolGateDelivered) {
-                notifyOfflineUser(userId, {
-                  type: "review_gate",
-                  conversationId,
-                  agentName: leaderId ?? "Agent",
-                  question,
-                }).catch((err) => log.error({ userId, err }, "Offline notification failed (tool gate)"));
-              }
-
-              await updateConversationStatus(conversationId, "waiting_for_user");
-
-              const selection = await abortableReviewGate(
-                session,
-                gateId,
-                options.signal,
-                undefined,
-                ["Approve", "Reject"],
-              );
-
-              await updateConversationStatus(conversationId, "active");
-
-              const decision = selection === "Approve" ? "approved" : "rejected";
-              log.info(
-                { sec: true, tool: toolName, tier, decision, repo: `${repoOwner}/${repoName}` },
-                "Platform tool gated",
-              );
-
-              if (selection !== "Approve") {
-                return {
-                  behavior: "deny" as const,
-                  message: "User rejected the action",
-                };
-              }
-
-              return allow(toolInput);
-            }
-
-            // auto-approve: read-only tools pass through
-            log.info(
-              { sec: true, tool: toolName, tier, decision: "auto-approved", repo: `${repoOwner}/${repoName}` },
-              "Platform tool auto-approved",
-            );
-            return allow(toolInput);
-          }
-
-          // Allow plugin MCP tools from servers registered in plugin.json.
-          // Uses explicit server-name matching (not blanket mcp__ prefix).
-          // See learning: 2026-04-06-mcp-tool-canusertool-scope-allowlist.md
-          if (
-            toolName.startsWith("mcp__plugin_soleur_") &&
-            pluginMcpServerNames.some((server) =>
-              toolName.startsWith(`mcp__plugin_soleur_${server}__`),
-            )
-          ) {
-            log.info({ sec: true, toolName, agentId: options.agentID }, "Plugin MCP tool invoked");
-            return allow(toolInput);
-          }
-
-          // Deny-by-default: block unrecognized tools
-          return {
-            behavior: "deny" as const,
-            message: "Tool not permitted in this environment",
-          };
-        },
+        // Permission callback (SDK chain step 5). File-tool checks are
+        // defense-in-depth — PreToolUse hooks (step 1) are the primary
+        // enforcement. See #891. The callback body lives in
+        // `permission-callback.ts` so the 7 allow branches + deny-by-default
+        // can be unit-tested without booting an SDK session (#2335).
+        canUseTool: createCanUseTool({
+          userId,
+          conversationId,
+          leaderId,
+          workspacePath,
+          platformToolNames,
+          pluginMcpServerNames,
+          repoOwner,
+          repoName,
+          session,
+          controllerSignal: controller.signal,
+          abortableReviewGate,
+          sendToClient,
+          notifyOfflineUser,
+          updateConversationStatus,
+          extractReviewGateInput,
+          buildReviewGateResponse,
+          buildGateMessage,
+          getToolTier,
+          isFileTool,
+          extractToolPath,
+          isPathInWorkspace,
+          isSafeTool,
+          unverifiedParamTools: UNVERIFIED_PARAM_TOOLS,
+        }),
       },
     });
 
