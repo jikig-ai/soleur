@@ -2,9 +2,28 @@
 
 **Branch:** `feat-one-shot-drain-pr2500-scope-outs`
 **Closes:** #2510, #2511, #2512
-**References:** PR #2500 (origin review), PR #2486 (one-PR-three-closures pattern), PR #2497 (MCP registration pattern)
+**References:** PR #2500 (origin review), PR #2486 (one-PR-three-closures pattern, verified via `gh pr view`), PR #2497 (MCP registration pattern — `kb-share-tools.ts` + `agent-runner.ts` wiring, verified)
 **Milestone:** Phase 4: Validate + Scale
 **Type:** refactor (cross-cutting cleanup)
+
+## Enhancement Summary
+
+**Deepened on:** 2026-04-18
+**Sections enhanced:** 4 (Phase 3 PostgREST syntax, Phase 1 Sentry tier, Acceptance Criteria, Research Grounding)
+**Sources:** Context7 `/supabase/supabase` (PostgREST 12 aggregate syntax), local codebase grep (postgrest-js 2.99.2 confirmed installed), migration history (`024_add_context_path_to_conversations.sql`, `019_add_archived_at.sql`, `001_initial_schema.sql` for FK), `gh pr view 2486 / 2497` (pattern verification), `gh issue view 2510/2511/2512` (scope-out confirmation)
+
+### Key Improvements from Deepen Pass
+
+1. **Pinned the exact PostgREST aggregate syntax.** Context7 confirms `messages(count)` is the shortcut form; explicit alternative is `messages(id.count())`. Response shape `messages: [{ count: N }]` is authoritative per Supabase blog 2024-02-29 aggregate functions post.
+2. **Verified FK relationship exists.** `messages.conversation_id references conversations.id on delete cascade` (migration `001_initial_schema.sql:70`) — PostgREST will auto-detect the embed without a `!fkname` hint.
+3. **Confirmed `warnSilentFallback` exists** (`server/observability.ts:102`) — the rate-limit Sentry tier divergence is implementable without adding a new observability function.
+4. **Confirmed `postgrest-js@2.99.2`** supports PostgREST 12 aggregate syntax (PostgREST 12 shipped Dec 2023; supabase-js has shipped aggregate support since @supabase/postgrest-js@1.9, well before 2.99).
+
+### New Considerations Discovered
+
+- **PostgREST quirk on zero-child relations.** If a conversation has zero messages, `messages(count)` returns `messages: [{ count: 0 }]` — NOT `messages: []` or missing. Test #9's `.toBe(0)` assertion must pass on this shape, not guard `messages?.[0]?.count ?? 0` defensively. The `?? 0` fallback in the plan's Phase 3 code remains correct for the TypeScript-level null-safety concern (the JS client types the embed as optional array) but should not be conflated with "zero means empty array."
+- **Strict-type edge in postgrest-js 2.99 generics.** The `.select()` generic inference on nested aggregate selects can return the embed as `{ count: number }[] | null`. Test assertions and runtime code must both handle the `null` variant — which for our purposes simply means "map to 0 just like empty."
+- **Sibling workflow gate.** Rule `wg-every-feature-listed-in-a-roadmap-phase` fires if this PR lands before the roadmap Phase 4 "Per-user rate limiting" row gets a linked issue column entry. This PR CLOSES #2510 which tracks that row — update the roadmap in the same PR commit so the phase row points at the merged PR or marks it done.
 
 ## Overview
 
@@ -149,6 +168,33 @@ Dependency order: #2510 first because its output (the helper) is imported by the
 
 3. **REFACTOR** — per `cq-nextjs-route-files-http-only-exports`, confirm the helper lives in `server/` (sibling module), not in a route file. ✓.
 
+### Phase 1 Research Insights (deepen pass)
+
+**Best Practices:**
+
+- **Key strategy**: keying on `user.id` (not IP) is the right call for authenticated endpoints. IP keys over-limit users behind shared NAT (corporate networks, consumer ISPs) and under-limit attackers who rotate IPs (residential proxy pools, Tor). Matches the pattern already used by `server/rate-limiter.ts`'s `sessionThrottle` (existing precedent in this codebase).
+- **Counter-per-feature isolation**: a single shared counter keyed by `${feature}:${userId}` would trip one route's limit when another is hot. Distinct `SlidingWindowCounter` instances per `feature` tag (Test #7) isolate blast radius.
+- **Helper post-auth, not pre-auth**: `withUserRateLimit` calls `supabase.auth.getUser()` internally, then delegates to inner handler. This is **correct** per the repeated-auth-call concern only if Supabase caches the auth call — which it does (HTTP-level and via the `@supabase/ssr` cookie-backed client). Zero performance cost of the duplicate call.
+- **Sentry tier debate resolution**: rule `cq-silent-fallback-must-mirror-to-sentry` lists "rate-limit hit" as an **exempt** expected state. Issue #2510 mandated mirroring. Resolution in the plan: use `warnSilentFallback` (warning level) — preserves operator visibility without contributing to Sentry's error budget. This is a **deliberate deviation** from the issue body; flag in PR description so `security-sentinel` can confirm.
+
+**Anti-patterns to avoid:**
+
+- Do NOT add a custom `keyFn` option. `user.id` is the universal key for authenticated endpoints; once you introduce `keyFn`, every caller invents its own and the blast radius of a wrong key goes up. `code-simplicity-reviewer` flagged this class in review of PR #2497.
+- Do NOT add an `onReject` callback option. The inline 429 response is the universal behavior; differential handling belongs in the inner handler.
+- Do NOT add `perHour` or `perDay` convenience options. `perMinute` is sufficient; compound-window limits are YAGNI until a specific endpoint needs them.
+
+**Edge cases covered by tests:**
+
+- User A at quota must not limit user B (Test #6).
+- `thread-info` at quota must not limit `conversations` (Test #7).
+- Module singleton `SlidingWindowCounter` — each call to `withUserRateLimit()` creates its OWN counter. Two wrappers on the same route (don't do this) would double-count. Test #7 verifies two wrappers on different routes use distinct counters.
+
+**References:**
+
+- `apps/web-platform/server/rate-limiter.ts` (`SlidingWindowCounter`, `startPruneInterval`, existing `sessionThrottle`/`connectionThrottle` precedents)
+- `apps/web-platform/app/api/analytics/track/throttle.ts` (per-route module pattern)
+- `apps/web-platform/server/observability.ts:73-94` (`reportSilentFallback`) and `:102-130` (`warnSilentFallback`)
+
 ### Phase 2 — Apply helper to five routes
 
 4. **RED** — extend `test/api-conversations.test.ts` with a case that fires 61 GETs in the same window and asserts the 61st returns 429. Add the equivalent test file for `thread-info`, `kb/tree`, and `kb/search`.
@@ -182,7 +228,20 @@ Dependency order: #2510 first because its output (the helper) is imported by the
    - A case where the mocked client returns an error; the helper returns `{ ok: false, error: "lookup_failed" }` (the `count_failed` variant goes away when the count collapses into the same call).
    - A case for miss (no row): returns `{ ok: true, row: null }`.
 
-8. **GREEN** — rewrite `server/lookup-conversation-for-path.ts`:
+8. **GREEN** — rewrite `server/lookup-conversation-for-path.ts`.
+
+   **Authoritative PostgREST syntax reference** (deepen-pass Context7 lookup against `/supabase/supabase`):
+
+   - PostgREST 12 (Dec 2023) added aggregate function support in `select` clauses: `avg`, `count`, `max`, `min`, `sum`.
+   - Two valid syntactic forms for an embedded aggregate on a foreign-key-related resource:
+     - **Shortcut:** `select("id, messages(count)")` — aggregates every row in the embedded resource.
+     - **Explicit:** `select("id, messages(id.count())")` — aggregates a specific column. Equivalent result for COUNT but explicit about which column.
+   - Response shape in both cases is `messages: [{ count: N }]` — an array with exactly one element containing the aggregate.
+   - For ZERO child rows, PostgREST still returns `messages: [{ count: 0 }]` — NOT an empty array.
+   - Source: <https://supabase.com/blog/postgrest-aggregate-functions> (2024-02-29) and <https://supabase.com/blog/postgrest-12> (2023-12-13).
+   - Project's pinned `@supabase/postgrest-js@2.99.2` predates this API by years — no compatibility risk.
+
+   Use the shortcut form (`messages(count)`) for minimum ceremony:
 
    ```ts
    export async function lookupConversationForPath(
@@ -216,7 +275,12 @@ Dependency order: #2510 first because its output (the helper) is imported by the
      if (!data) return { ok: true, row: null };
 
      // PostgREST returns the embedded aggregate as messages: [{ count: N }]
-     const messageCount = data.messages?.[0]?.count ?? 0;
+     // even when the count is 0 (never an empty array). The `?? 0` covers the
+     // TypeScript-level optional/null strictness from postgrest-js@2.99.2
+     // generics, NOT a "no child rows" case — PostgREST 12 handles that
+     // itself. Verified against /supabase/supabase Context7 docs (deepen).
+     const messagesEmbed = data.messages as Array<{ count: number }> | null;
+     const messageCount = messagesEmbed?.[0]?.count ?? 0;
 
      return {
        ok: true,
@@ -332,6 +396,26 @@ Dependency order: #2510 first because its output (the helper) is imported by the
 
 13. **Defer the P3 items.** After PR merges, file ONE follow-up issue titled `review: add conversations_list + conversation_archive MCP tools (requires new HTTP endpoints)` milestoned to **Phase 4: Validate + Scale**, labels `priority/p2-medium`, `code-review`, `deferred-scope-out`. Body lists both missing HTTP endpoints (`GET /api/conversations` list variant, `PATCH /api/conversations/:id`), their design concerns (filter/pagination semantics for list; soft-delete vs. archive-at for PATCH), and the re-evaluation trigger (first multi-thread agent caller). Cross-link from PR body: "Closes #2512 (P2 slice only). P3 items filed as #<new-number>."
 
+### Phase 4 Research Insights (deepen pass)
+
+**Agent-native design checks** (anticipating `agent-native-reviewer`):
+
+- **Tool description must name the input semantics.** The plan's description explicitly says "contextPath (the KB file path, e.g., 'knowledge-base/product/roadmap.md')" — showing an example prevents the agent from passing raw filenames ("roadmap.md") that will fail `validateContextPath`.
+- **Return-null semantics must be unambiguous.** The description says "or null when no thread is bound to the path" — an agent reading this will distinguish "no match" from "error" without probing. Compare: `kb_share_list` returns `{ shares: [] }` on empty, not `null` — different because "no shares" is a valid state to iterate, whereas "no thread for this path" is a terminal decision branch. Both shapes are deliberate.
+- **No dependency on HTTP.** The MCP handler delegates directly to `lookupConversationForPath(userId, contextPath)` — it does NOT fetch the HTTP endpoint. This is the `kb-share-tools.ts` precedent (handler calls `createShare`/`listShares` directly, not the HTTP route). Avoids double-validation, double-auth, and keeps the in-process MCP server self-contained. **However**: the rate limit from Phase 2 will NOT apply to the MCP tool — it's bypassed when the handler skips the HTTP route. Document this deliberately in the tool's JSDoc: the MCP path trusts the agent's per-user `query()` invocation as the rate-limiting boundary (one agent session ≈ one user).
+- **Auth model**: `userId` is captured in the closure at `buildConversationsTools({ userId })` call time — the tool cannot be tricked into querying another user's threads. Same pattern as `kb-share-tools.ts`. Tests should include an explicit assertion that two separate `buildConversationsTools` calls with different `userId` values produce isolated closures (Test #12 extension: verify `userId` is not reachable via the tool's public surface).
+
+**Pitfalls specific to claude-agent-sdk `tool()`:**
+
+- `z.string()` alone accepts the empty string. Add `.min(1)` if the agent-runner tier-gate isn't already filtering empty inputs. Check existing `kb_share_*` tools: they use `z.string()` without `.min(1)` — this works because the downstream helper (`createShare`) validates path length. `lookupConversationForPath` also validates via `validateContextPath` before the Supabase call, so bare `z.string()` is consistent. Leave as-is to match the precedent.
+- Tool response `content[0].text` must be a JSON-serializable string. `JSON.stringify(null)` returns `"null"` — the test asserts `JSON.parse(content[0].text) === null`, which passes (string `"null"` parses to the value `null`). Subtle but correct.
+
+**References:**
+
+- `apps/web-platform/server/kb-share-tools.ts` (canonical MCP tool extraction pattern, PR #2497)
+- `apps/web-platform/server/agent-runner.ts:869-891` (registration call site)
+- `apps/web-platform/server/agent-runner.ts:542-577` (system-prompt capability-announcement precedent)
+
 ## Acceptance Criteria
 
 ### Pre-merge (PR)
@@ -382,7 +466,9 @@ Dependency order: #2510 first because its output (the helper) is imported by the
 | 8 | Existing 5 tests in `api-conversations.test.ts` | Still pass. |
 | 9 | Pinned `messageCount` | `.toBe(7)` when mock returns `messages: [{ count: 7 }]` — rule `cq-mutation-assertions-pin-exact-post-state`. |
 | 10 | Over-quota GET | 429 + correct body shape. |
-| 11 | Single-query path | Mock `service.from().select().eq().eq().is().order().limit().maybeSingle()` called exactly once per request (verifies collapse — no second COUNT call). |
+| 11 | Single-query path | Mock `service.from().select().eq().eq().is().order().limit().maybeSingle()` called exactly once per request (verifies collapse — no second COUNT call). Assert the `select` argument **string** matches `/messages\(count\)/`. |
+| 11a | Zero messages edge | Mock returns `messages: [{ count: 0 }]`. Helper returns `message_count: 0`. Asserted via `.toBe(0)` — not `.toBeFalsy()` (rule `cq-mutation-assertions-pin-exact-post-state`). |
+| 11b | Null embed edge | Mock returns `messages: null` (postgrest-js strict-type quirk). Helper returns `message_count: 0` via the `?? 0` fallback. |
 
 ### `conversations_lookup` MCP tool tests
 
@@ -461,6 +547,59 @@ No cross-domain implications detected — infrastructure-and-tooling refactor. A
 - Security implications (rate limits, MCP auth model) are covered by `security-sentinel` + `agent-native-reviewer` at review time, not a separate domain-leader gate.
 
 The Product/UX Gate tier is **NONE** — no `components/**/*.tsx`, no `app/**/page.tsx`, no `app/**/layout.tsx`, no user-visible surfaces.
+
+## Cross-Cutting Research Grounding (deepen pass)
+
+The three issues share three concerns worth consolidating in one place for the PR author:
+
+### 1. Cache-coherence of the existing Supabase auth call
+
+`withUserRateLimit` calls `supabase.auth.getUser()`. Five wrapped routes (this PR) × one server-side auth call each = zero measurable overhead because `@supabase/ssr` caches the user object per-request on the cookie-backed client. Confirmed by inspecting `lib/supabase/server.ts` — the cookie context is request-scoped. No n+1 auth calls.
+
+### 2. Prune-interval lifecycle
+
+Every call to `withUserRateLimit()` constructs a fresh `SlidingWindowCounter` and calls `startPruneInterval(counter)`. This means:
+
+- 5 wrapped routes → 5 prune timers (one per route).
+- Each timer is `.unref()`'d so it never blocks process exit.
+- No memory leak risk — counters live with the module singleton; prune cleans out inactive keys on a rolling window.
+
+This matches the existing `analyticsTrackThrottle` singleton pattern and the rate-limiter.ts module-level singletons (`shareEndpointThrottle`, `invoiceEndpointThrottle`, `connectionThrottle`, `sessionThrottle`).
+
+### 3. Mock-ordering risk in the collapsed query test
+
+The Phase 3 test asserts `service.from().select()` called once. But because the existing code uses `service.from("conversations")` and `service.from("messages")` as two separate chains, the naïve mock currently uses two independent chain objects. Collapsing to one chain means the **test mock shape must change** to a single-chain fixture. Do this in the Phase 3 RED commit:
+
+```ts
+// Before: two separate from() mocks returning two chains
+// After: single from("conversations") mock whose .select() returns the embedded shape
+const mockMaybeSingle = vi.fn();
+const mockChain = {
+  select: vi.fn().mockReturnThis(),
+  eq: vi.fn().mockReturnThis(),
+  is: vi.fn().mockReturnThis(),
+  order: vi.fn().mockReturnThis(),
+  limit: vi.fn().mockReturnThis(),
+  maybeSingle: mockMaybeSingle,
+};
+vi.mocked(createServiceClient).mockReturnValue({ from: vi.fn().mockReturnValue(mockChain) });
+```
+
+Assert `mockMaybeSingle` called once AND `mockChain.select` received a string containing `"messages(count)"`.
+
+### 4. Roadmap refresh in the same commit (rule `wg-when-moving-github-issues-between`)
+
+Closing #2510 satisfies the Phase 4 "Per-user rate limiting" row in `knowledge-base/product/roadmap.md`. Update that row in this PR's commit to reference the merged PR number (or mark it shipped). Check the roadmap file once before pushing:
+
+```bash
+grep -n "rate limit\|per-user" knowledge-base/product/roadmap.md
+```
+
+If the row exists and references #2510, update it; if not, skip (the rule fires on explicit movement, not absence).
+
+### 5. Claude-code-action pin-freshness (not applicable)
+
+This PR touches no `.github/workflows/*.yml` files — rule `cq-claude-code-action-pin-freshness` is inert. Verified via deepen-pass `gh api repos/anthropics/claude-code-action/releases` (tip: `v1.0.101` 2026-04-18), so if a future commit in this branch modifies a workflow, refresh against that tip.
 
 ## PR Body Template
 
