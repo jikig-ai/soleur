@@ -43,7 +43,7 @@ const SHARED_NOT_FOUND_MESSAGE = "Document no longer available";
 function notFoundResponse() {
   return NextResponse.json(
     { error: SHARED_NOT_FOUND_MESSAGE },
-    { status: 404 },
+    { status: 404, headers: { "Cache-Control": "no-store" } },
   );
 }
 
@@ -57,7 +57,7 @@ function legacyNullHashResponse() {
       error: "This link is from an older share system and is no longer valid.",
       code: "legacy-null-hash",
     },
-    { status: 410 },
+    { status: 410, headers: { "Cache-Control": "no-store" } },
   );
 }
 
@@ -125,7 +125,7 @@ async function prepareSharedRequest(
       kind: "response",
       response: NextResponse.json(
         { error: "Too many requests" },
-        { status: 429 },
+        { status: 429, headers: { "Cache-Control": "no-store" } },
       ),
     };
   }
@@ -142,7 +142,10 @@ async function prepareSharedRequest(
   if (fetchError || !shareLink) {
     return {
       kind: "response",
-      response: NextResponse.json({ error: "Not found" }, { status: 404 }),
+      response: NextResponse.json(
+        { error: "Not found" },
+        { status: 404, headers: { "Cache-Control": "no-store" } },
+      ),
     };
   }
 
@@ -151,7 +154,7 @@ async function prepareSharedRequest(
       kind: "response",
       response: NextResponse.json(
         { error: "This link has been disabled", code: "revoked" },
-        { status: 410 },
+        { status: 410, headers: { "Cache-Control": "no-store" } },
       ),
     };
   }
@@ -172,7 +175,10 @@ async function prepareSharedRequest(
   const strongETag = formatStrongETag(shareLink.content_sha256);
   const ifNoneMatch = request.headers.get("if-none-match");
   if (ifNoneMatch && ifNoneMatchMatches(ifNoneMatch, strongETag)) {
-    return { kind: "response", response: build304Response(strongETag) };
+    return {
+      kind: "response",
+      response: build304Response(strongETag, { scope: "public" }),
+    };
   }
 
   const owner = Array.isArray(shareLink.users)
@@ -376,7 +382,10 @@ export async function HEAD(
       },
       "shared: document head",
     );
-    return buildBinaryHeadResponse(binary, request, { strongETag });
+    return buildBinaryHeadResponse(binary, request, {
+      strongETag,
+      scope: "public",
+    });
   } catch (err) {
     return stripBodyHeadersFromResponse(
       mapSharedError(err, token, documentPath),

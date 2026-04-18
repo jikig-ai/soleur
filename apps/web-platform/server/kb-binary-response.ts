@@ -242,6 +242,29 @@ function matchesIfNoneMatch(ifNoneMatch: string, etag: string): boolean {
   return candidates.has(normalize(etag));
 }
 
+export type CacheScope = "public" | "private";
+
+// Cache-Control header values, keyed by scope.
+//
+// - `public` — shared-route binaries. Browser `max-age=60` preserves the
+//   60s revocation-latency SLA inherited from the previous
+//   `private, max-age=60` default. `s-maxage=300` lets Cloudflare (and
+//   any RFC-7234-compliant shared cache) keep an edge copy for 5 minutes
+//   so repeat viewers of a shared PDF do not re-hit origin.
+//   `stale-while-revalidate=3600` lets the edge serve a slightly-stale
+//   body while refreshing in the background for up to an hour.
+//   `must-revalidate` forces the browser to re-check the ETag once
+//   max-age expires — pairs with the existing strong-ETag 304 path to
+//   make revalidation free (0 body bytes).
+//
+// - `private` — owner-route binaries. 60s browser cache, no shared-cache
+//   storage.
+const CACHE_CONTROL_BY_SCOPE: Record<CacheScope, string> = {
+  public:
+    "public, max-age=60, s-maxage=300, stale-while-revalidate=3600, must-revalidate",
+  private: "private, max-age=60",
+};
+
 /**
  * Builds a 304 Not Modified response with the ETag and Cache-Control
  * headers that a conditional GET or HEAD would return. Shared by
@@ -249,12 +272,15 @@ function matchesIfNoneMatch(ifNoneMatch: string, etag: string): boolean {
  * helpers that short-circuit before any filesystem work when the client's
  * If-None-Match matches the stored content hash.
  */
-export function build304Response(etag: string): Response {
+export function build304Response(
+  etag: string,
+  opts?: { scope?: CacheScope },
+): Response {
   return new Response(null, {
     status: 304,
     headers: {
       ETag: etag,
-      "Cache-Control": "private, max-age=60",
+      "Cache-Control": CACHE_CONTROL_BY_SCOPE[opts?.scope ?? "private"],
     },
   });
 }
@@ -284,13 +310,13 @@ export function ifNoneMatchMatches(
  */
 export function buildBinaryHeaders(
   payload: BinaryFileMetadata,
-  opts?: { strongETag?: string },
+  opts?: { strongETag?: string; scope?: CacheScope },
 ): Record<string, string> {
   return {
     "Content-Type": payload.contentType,
     "Content-Disposition": formatContentDisposition(payload.disposition, payload.rawName),
     "X-Content-Type-Options": "nosniff",
-    "Cache-Control": "private, max-age=60",
+    "Cache-Control": CACHE_CONTROL_BY_SCOPE[opts?.scope ?? "private"],
     "Content-Security-Policy": KB_BINARY_RESPONSE_CSP,
     "Accept-Ranges": "bytes",
     [SHARED_CONTENT_KIND_HEADER]: deriveBinaryKind(payload),
@@ -309,12 +335,12 @@ export function buildBinaryHeaders(
 export function buildBinaryHeadResponse(
   payload: BinaryFileMetadata,
   request?: Request,
-  opts?: { strongETag?: string },
+  opts?: { strongETag?: string; scope?: CacheScope },
 ): Response {
   const etag = buildETag(payload, opts?.strongETag);
   const ifNoneMatch = request?.headers.get("if-none-match");
   if (ifNoneMatch && matchesIfNoneMatch(ifNoneMatch, etag)) {
-    return build304Response(etag);
+    return build304Response(etag, { scope: opts?.scope });
   }
   return new Response(null, {
     status: 200,
@@ -328,7 +354,7 @@ export function buildBinaryHeadResponse(
 export async function buildBinaryResponse(
   meta: BinaryFileMetadata,
   request?: Request,
-  opts?: { strongETag?: string },
+  opts?: { strongETag?: string; scope?: CacheScope },
 ): Promise<Response> {
   const size = meta.size;
   const expected = { ino: meta.ino, size: meta.size };
@@ -341,7 +367,7 @@ export async function buildBinaryResponse(
   // resource ETag even when a Range header is present).
   const ifNoneMatch = request?.headers.get("if-none-match");
   if (ifNoneMatch && matchesIfNoneMatch(ifNoneMatch, etag)) {
-    return build304Response(etag);
+    return build304Response(etag, { scope: opts?.scope });
   }
 
   const commonHeaders = buildBinaryHeaders(meta, opts);

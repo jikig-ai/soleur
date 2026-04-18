@@ -126,3 +126,52 @@ describe("buildBinaryResponse — ETag / If-None-Match", () => {
     expect(res.status).toBe(304);
   });
 });
+
+const PUBLIC_CACHE_CONTROL =
+  "public, max-age=60, s-maxage=300, stale-while-revalidate=3600, must-revalidate";
+const PRIVATE_CACHE_CONTROL = "private, max-age=60";
+
+describe("buildBinaryResponse — Cache-Control scope", () => {
+  it("emits private, max-age=60 by default", async () => {
+    const meta = await validateBinaryFile(tmpDir, "doc.pdf");
+    const res = await buildBinaryResponse(meta, req());
+    expect(res.headers.get("Cache-Control")).toBe(PRIVATE_CACHE_CONTROL);
+  });
+
+  it("emits the public Cache-Control string when scope is 'public'", async () => {
+    const meta = await validateBinaryFile(tmpDir, "doc.pdf");
+    const res = await buildBinaryResponse(meta, req(), { scope: "public" });
+    expect(res.headers.get("Cache-Control")).toBe(PUBLIC_CACHE_CONTROL);
+  });
+
+  it("304 short-circuit inherits scope='public'", async () => {
+    const meta = await validateBinaryFile(tmpDir, "doc.pdf");
+    const sha = "f".repeat(64);
+    const res = await buildBinaryResponse(
+      meta,
+      req({ "if-none-match": `"${sha}"` }),
+      { strongETag: sha, scope: "public" },
+    );
+    expect(res.status).toBe(304);
+    expect(res.headers.get("Cache-Control")).toBe(PUBLIC_CACHE_CONTROL);
+  });
+
+  it("304 short-circuit defaults to scope='private'", async () => {
+    const meta = await validateBinaryFile(tmpDir, "doc.pdf");
+    const weak = `W/"${meta.ino}-${meta.size}-${Math.floor(meta.mtimeMs)}"`;
+    const res = await buildBinaryResponse(meta, req({ "if-none-match": weak }));
+    expect(res.status).toBe(304);
+    expect(res.headers.get("Cache-Control")).toBe(PRIVATE_CACHE_CONTROL);
+  });
+
+  it("206 Range response inherits scope='public'", async () => {
+    const meta = await validateBinaryFile(tmpDir, "doc.pdf");
+    const res = await buildBinaryResponse(
+      meta,
+      req({ range: "bytes=0-4" }),
+      { scope: "public" },
+    );
+    expect(res.status).toBe(206);
+    expect(res.headers.get("Cache-Control")).toBe(PUBLIC_CACHE_CONTROL);
+  });
+});
