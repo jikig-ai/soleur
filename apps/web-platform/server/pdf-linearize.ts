@@ -16,6 +16,40 @@ export type LinearizeResult =
 
 const TIMEOUT_MS = 10_000;
 
+// Concurrency gate (closes #2472). Caps concurrent qpdf subprocesses per
+// replica so peak RAM and tmpfs pressure stay bounded under burst upload load.
+// Default 2 matches PR #2457's accepted-risk baseline (two concurrent 20 MB
+// in/out tempfile pairs). Env-overridable via PDF_LINEARIZE_CONCURRENCY,
+// clamped to [1, 16]. Captured at module load — ops changes require a
+// container restart (webhook redeploy), which is the intended path.
+const POOL_SIZE = (() => {
+  const raw = Number(process.env.PDF_LINEARIZE_CONCURRENCY);
+  if (!Number.isFinite(raw) || raw < 1) return 2;
+  return Math.min(Math.floor(raw), 16);
+})();
+
+let inFlight = 0;
+const waiters: Array<() => void> = [];
+
+function acquire(): Promise<void> {
+  if (inFlight < POOL_SIZE) {
+    inFlight++;
+    return Promise.resolve();
+  }
+  return new Promise<void>((resolve) => {
+    waiters.push(() => {
+      inFlight++;
+      resolve();
+    });
+  });
+}
+
+function release(): void {
+  inFlight--;
+  const next = waiters.shift();
+  if (next) next();
+}
+
 // qpdf --linearize rewrites xref + reorders objects, which invalidates any
 // PKCS#7/PAdES signature byte-range. Skip if the PDF contains signature dicts.
 function isSignedPdf(input: Buffer): boolean {
@@ -41,14 +75,24 @@ export async function linearizePdf(input: Buffer): Promise<LinearizeResult> {
   const outPath = join(dir, "out.pdf");
 
   try {
-    await writeFile(inPath, input);
-    const run = await runQpdf(inPath, outPath);
-    if (!run.ok) return run;
-    const buffer = await readFile(outPath);
-    if (buffer.length === 0) {
-      return { ok: false, reason: "io_error", detail: "empty output" };
+    // Gate only the qpdf-touching triplet (writeFile + runQpdf + readFile).
+    // mkdtemp and isSignedPdf are release-free fast paths kept outside the
+    // gate so signed-PDF skips don't queue. The inner try/finally ensures
+    // release() fires on every exit — success, non_zero_exit, timeout,
+    // spawn_error, empty output, and writeFile throw — preventing leak.
+    await acquire();
+    try {
+      await writeFile(inPath, input);
+      const run = await runQpdf(inPath, outPath);
+      if (!run.ok) return run;
+      const buffer = await readFile(outPath);
+      if (buffer.length === 0) {
+        return { ok: false, reason: "io_error", detail: "empty output" };
+      }
+      return { ok: true, buffer };
+    } finally {
+      release();
     }
-    return { ok: true, buffer };
   } catch (err) {
     return {
       ok: false,
