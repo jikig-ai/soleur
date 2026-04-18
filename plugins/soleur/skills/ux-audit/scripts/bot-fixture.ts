@@ -11,9 +11,25 @@
  *   SUPABASE_URL                    prd
  *   SUPABASE_SERVICE_ROLE_KEY       prd
  *   UX_AUDIT_BOT_EMAIL              prd_scheduled
+ *
+ * CI-caller contract: any GitHub Actions job that invokes `seed` or
+ * `reset` MUST set job-level
+ *   concurrency:
+ *     group: bot-fixture-shared-state
+ *     cancel-in-progress: false
+ * so parallel workflows never race on the shared bot user. The existing
+ * consumer is .github/workflows/scheduled-ux-audit.yml — mirror that
+ * stanza in any new caller.
  */
 
 const TC_VERSION = "1.0.0";
+
+// Defense-in-depth allowlist. Matches the test-side guard at
+// plugins/soleur/test/ux-audit/bot-fixture.test.ts lines 24-29 and rule
+// cq-destructive-prod-tests-allowlist. seed()/reset() DELETE+PATCH live
+// prod rows; a misconfigured UX_AUDIT_BOT_EMAIL would otherwise cascade
+// onto a real user. Add new synthetic emails here explicitly.
+const ALLOWED_BOT_EMAILS = new Set(["ux-audit-bot@jikigai.com"]);
 
 const FIXTURE_CONVERSATIONS = [
   {
@@ -70,8 +86,18 @@ export async function sbDelete(path: string): Promise<void> {
 
 async function getBotUserId(): Promise<string> {
   const email = env("UX_AUDIT_BOT_EMAIL");
+  if (!ALLOWED_BOT_EMAILS.has(email)) {
+    throw new Error(
+      `UX_AUDIT_BOT_EMAIL=${email} is not in the synthetic allowlist. ` +
+        `seed/reset would mutate a real user's data. Refusing to proceed. ` +
+        `See ALLOWED_BOT_EMAILS + rule cq-destructive-prod-tests-allowlist.`,
+    );
+  }
   const res = await sbFetch(`/auth/v1/admin/users?per_page=1000`);
-  if (!res.ok) throw new Error(`admin users GET ${res.status}`);
+  if (!res.ok) {
+    const body = (await res.text()).slice(0, 200);
+    throw new Error(`admin users GET failed: ${res.status} ${body}`);
+  }
   const data = (await res.json()) as {
     users: Array<{ id: string; email: string }>;
   };
@@ -99,6 +125,10 @@ async function upsertConversation(
   sessionId: string,
   domainLeader: string,
 ): Promise<string> {
+  // Body intentionally omits `created_at`: PostgREST's
+  // resolution=merge-duplicates compiles to `ON CONFLICT ... DO UPDATE
+  // SET col = EXCLUDED.col` for every column in the body. Leaving
+  // `created_at` out preserves the original insert timestamp on re-seed.
   // The partial unique index excludes NULL session_id rows (see migration 028);
   // an empty or missing sessionId would bypass the conflict target and race.
   if (!sessionId) {
@@ -173,6 +203,10 @@ async function seed(): Promise<void> {
     // DELETE-then-INSERT keeps message count stable across re-seeds. Without
     // this, upsert's merge-duplicates would re-insert and double the count
     // (the messages table has no natural unique key we want to index).
+    // NOT atomic — two separate PostgREST calls. If the process dies between
+    // the DELETE and the INSERT, the conversation is left with zero messages.
+    // That is self-healing: the next `seed` run restores the full set.
+    // Acceptable for a fixture; do NOT wrap the pair in a misguided retry.
     await sbDelete(`/rest/v1/messages?conversation_id=eq.${cid}`);
     await insertMessages(cid, c.messages);
     console.log(`[seed] conversation ${c.session_id} upserted (${cid}) with ${c.messages.length} messages`);

@@ -1,10 +1,6 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
 import { sbDelete } from "../../skills/ux-audit/scripts/bot-fixture.ts";
 
-// These tests exercise sbDelete's DELETE-response guard without any live
-// Supabase call. The previous raw `await sbFetch(..., { method: "DELETE" })`
-// pattern silently orphaned data on non-2xx; sbDelete throws loudly.
-
 const ORIGINAL_FETCH = globalThis.fetch;
 const ORIGINAL_SUPABASE_URL = process.env.SUPABASE_URL;
 const ORIGINAL_SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;

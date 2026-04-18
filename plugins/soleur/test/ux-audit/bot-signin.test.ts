@@ -122,8 +122,8 @@ describe("bot-signin pure helpers", () => {
       expect(cookieDomain("http://localhost:3000")).toBe("localhost");
     });
 
-    test("throws on non-URL input", () => {
-      expect(() => cookieDomain("not-a-url")).toThrow();
+    test("throws TypeError on non-URL input", () => {
+      expect(() => cookieDomain("not-a-url")).toThrow(TypeError);
     });
   });
 });
