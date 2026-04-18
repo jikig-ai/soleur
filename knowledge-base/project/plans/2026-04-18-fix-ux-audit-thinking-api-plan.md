@@ -30,7 +30,7 @@
 ### New Considerations Discovered
 
 - `test-pretooluse-hooks.yml` is an empirical test pinned specifically to v1.0.75. Bumping it to v1.0.101 may invalidate the test's purpose (verify hooks fire in *this specific SHA*). Added contingency: if post-merge verification of that workflow fails, revert *just that one file* and file a follow-up.
-- The `scheduled-roadmap-review.yml` uses `@v1` float ref — it auto-advances and is already on v1.0.101-compatible code. Confirmed via `git/refs/tags/v1 → 8a953ded...` (different SHA from `v1.0.101` because the `v1` moving tag points at a different commit, but both are post-SDK-0.2.113). No change.
+- The `scheduled-roadmap-review.yml` is pinned to `ff9acae5886d41a99ed4ec14b7dc147d55834722 # v1` — a fixed SHA whose trailing comment indicates it tracked the `v1` moving tag at pin time. The `v1` tag now resolves to `8a953dedac4f533f912f13656070914693ed0575`, so this workflow is on an older `v1`-era SHA than the broader sweep. Leaving it alone preserves the existing "one experimental workflow on its own track" pattern and keeps blast radius contained to the `v1.0.75 → v1.0.101` path.
 - The plugin's `schedule` skill template uses `--model <MODEL>` as a placeholder. The next workflow generated via that skill will inherit whatever model the user picks; if they pick `claude-opus-4-7` and the action pin at generation time is pre-v1.0.100, the bug reappears. This is a known template-drift hazard; captured as the "pin freshness" learning, enforced at audit time not at template-edit time.
 
 ## Overview
@@ -140,7 +140,7 @@ grep -rn "df37d2f0760a4b5683a6e617c9325bc1a36443f6" .github/workflows/    # expe
 grep -rn "ab8b1e6471c519c585ba17e8ecaccc9d83043541 # v1.0.101" .github/workflows/ | wc -l   # expect 14
 ```
 
-**Do NOT touch** `.github/workflows/scheduled-roadmap-review.yml` — it uses the floating `v1` ref (`ff9acae5886d41a99ed4ec14b7dc147d55834722`). That ref auto-advances and already points at v1.0.101-compatible code. Leave it alone to preserve the existing "one experimental workflow tracking `v1`" pattern.
+**Do NOT touch** `.github/workflows/scheduled-roadmap-review.yml` — it is pinned to the fixed SHA `ff9acae5886d41a99ed4ec14b7dc147d55834722` with trailing comment `# v1` (captured when the `v1` moving tag pointed at that commit). The `v1` tag now resolves to `8a953dedac4f533f912f13656070914693ed0575`, but this workflow stays on its own track. Leaving it alone preserves the existing "one experimental workflow on its own track" pattern and keeps blast radius contained.
 
 ### Phase 3 — Refresh the top-of-file comment in scheduled-ux-audit.yml (2 min)
 
@@ -273,7 +273,7 @@ This change is infrastructure-only (workflow pin). No unit tests. TDD gate (`cq-
 
 ### Risks
 
-1. **v1.0.101 introduces an unrelated regression.** Mitigation: v1.0.101 is the current tip and released 2026-04-18; release notes show only metadata changes since v1.0.100. If a regression emerges post-merge, pin to v1.0.100 (`8a953dedac4f533f912f13656070914693ed0575`) which is the minimum viable version.
+1. **v1.0.101 introduces an unrelated regression.** Mitigation: v1.0.101 is the current tip and released 2026-04-18; release notes show only metadata changes since v1.0.100. If a regression emerges post-merge, pin to v1.0.100 (`40cb41bedeed964a97738b04c84859caec8d8813`) which is the minimum viable version.
 
 2. **Default-model flip surfaces a latent cost/quota issue.** The 11 workflows that don't force `--model` now run against opus-4-7 instead of opus-4-6 by default. Opus-4-7 pricing is unchanged per Anthropic's published rates; quota consumption differs only marginally. If the monthly bill spikes, pin explicit models via `--model claude-opus-4-6` on the affected workflows.
 
