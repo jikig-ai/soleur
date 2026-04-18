@@ -153,12 +153,12 @@ This confirms the plan's core assertion: every token of the fabricated command i
 
 ## Acceptance Criteria
 
-- [ ] No file under `plugins/` or `README.md` contains the strings `ollama launch` or `gemma4:31b-cloud` (knowledge-base archival references are exempt).
-- [ ] The "Running with Ollama?" callout on `/getting-started/` is removed (not replaced).
-- [ ] The FAQ answer for "What do I need to run Soleur?" no longer mentions `ollama launch`, and the visible HTML answer matches the JSON-LD `text` verbatim.
-- [ ] Both READMEs (plugin and repo root) no longer carry the "Running with Ollama?" line.
-- [ ] Docs site builds clean; `/getting-started/` renders without missing-callout artifacts.
-- [ ] Markdownlint passes on the two edited `.md` files.
+- [x] No file under `plugins/` or `README.md` contains the strings `ollama launch` or `gemma4:31b-cloud` (knowledge-base archival references are exempt).
+- [x] The "Running with Ollama?" callout on `/getting-started/` is removed (not replaced).
+- [x] The FAQ answer for "What do I need to run Soleur?" no longer mentions `ollama launch`, and the visible HTML answer matches the JSON-LD `text` verbatim.
+- [x] Both READMEs (plugin and repo root) no longer carry the "Running with Ollama?" line.
+- [x] Docs site builds clean; `/getting-started/` renders without missing-callout artifacts.
+- [x] Markdownlint passes on the two edited `.md` files.
 
 ## Test Scenarios
 
