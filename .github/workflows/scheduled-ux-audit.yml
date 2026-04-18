@@ -128,7 +128,10 @@ jobs:
         run: bun plugins/soleur/skills/ux-audit/scripts/bot-signin.ts
 
       - name: Run ux-audit skill
-        uses: anthropics/claude-code-action@df37d2f0760a4b5683a6e617c9325bc1a36443f6 # v1.0.75
+        # Pin must track a release that emits `thinking.type.adaptive`
+        # (Agent SDK >= 0.2.113, claude-code-action >= v1.0.100).
+        # Opus 4.7 rejects the legacy `thinking.type.enabled` shape. See #2540.
+        uses: anthropics/claude-code-action@ab8b1e6471c519c585ba17e8ecaccc9d83043541 # v1.0.101
         env:
           GH_TOKEN: ${{ github.token }}
           UX_AUDIT_DRY_RUN: 'true'
