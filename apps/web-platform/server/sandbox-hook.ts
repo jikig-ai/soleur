@@ -5,6 +5,7 @@ import type {
 import { isPathInWorkspace } from "./sandbox";
 import { containsSensitiveEnvAccess } from "./bash-sandbox";
 import { isFileTool, extractToolPath } from "./tool-path-checker";
+import { logPermissionDecision } from "./permission-log";
 
 export function createSandboxHook(workspacePath: string): HookCallback {
   return async (input, _toolUseID, _options) => {
@@ -21,6 +22,7 @@ export function createSandboxHook(workspacePath: string): HookCallback {
       // Empty path is allowed through -- Glob/Grep default to CWD (workspacePath),
       // and Read/Write/Edit require file_path so the SDK rejects empty values.
       if (filePath && !isPathInWorkspace(filePath, workspacePath)) {
+        logPermissionDecision("sandbox-hook", toolName, "deny", "file path outside workspace");
         return {
           systemMessage:
             "File access outside the workspace is not permitted. " +
@@ -39,6 +41,7 @@ export function createSandboxHook(workspacePath: string): HookCallback {
     if (toolName === "Bash") {
       const command = (toolInput?.command as string) || "";
       if (containsSensitiveEnvAccess(command)) {
+        logPermissionDecision("sandbox-hook", toolName, "deny", "sensitive env access");
         return {
           systemMessage:
             "Accessing sensitive environment variables is not permitted. " +
@@ -56,6 +59,7 @@ export function createSandboxHook(workspacePath: string): HookCallback {
     // Explicit PreToolUse allow. SDK v0.2.80 rejected bare `{}` with
     // ZodError: invalid_union. Hook schema differs from canUseTool —
     // no updatedInput field here.
+    logPermissionDecision("sandbox-hook", toolName, "allow");
     return {
       hookSpecificOutput: {
         hookEventName: "PreToolUse" as const,
