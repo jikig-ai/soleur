@@ -7,8 +7,16 @@
  * Adding a new variant forces every consumer with an exhaustive switch
  * (see `app/shared/[token]/page.tsx`) to add a render branch — a
  * forgotten branch becomes a build error, not silent "download".
+ *
+ * `"text"` serves `.txt` files inline (`text/plain`) via the same
+ * `TextPreview` component the owner viewer uses.
  */
-export type SharedContentKind = "markdown" | "pdf" | "image" | "download";
+export type SharedContentKind =
+  | "markdown"
+  | "pdf"
+  | "image"
+  | "text"
+  | "download";
 
 export const SHARED_CONTENT_KIND_HEADER = "X-Soleur-Kind";
 
@@ -19,6 +27,7 @@ export function isSharedContentKind(
     value === "markdown" ||
     value === "pdf" ||
     value === "image" ||
+    value === "text" ||
     value === "download"
   );
 }

@@ -12,35 +12,24 @@ import {
   SHARED_CONTENT_KIND_HEADER,
   type SharedContentKind,
 } from "@/lib/shared-kind";
+import { MAX_BINARY_SIZE, CONTENT_TYPE_MAP } from "@/server/kb-limits";
+import { classifyByContentType } from "@/lib/kb-file-kind";
 import { getKbExtension } from "@/lib/kb-extensions";
 
 export { SHARED_CONTENT_KIND_HEADER };
 export type { SharedContentKind };
 
-export const MAX_BINARY_SIZE = 50 * 1024 * 1024; // 50 MB
-
-export const CONTENT_TYPE_MAP: Record<string, string> = {
-  ".png": "image/png",
-  ".jpg": "image/jpeg",
-  ".jpeg": "image/jpeg",
-  ".gif": "image/gif",
-  ".webp": "image/webp",
-  ".svg": "image/svg+xml",
-  ".pdf": "application/pdf",
-  ".csv": "text/csv",
-  ".txt": "text/plain",
-  ".docx":
-    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-};
-
-/** Derive the shared-content kind from validated binary metadata. */
+/**
+ * Derive the shared-content kind from validated binary metadata.
+ * Thin re-export over `classifyByContentType` so the `X-Soleur-Kind`
+ * header and the client-side viewer share a single classifier. The
+ * classifier's return type excludes `"markdown"` — markdown is served
+ * via a separate JSON path and never flows through this module.
+ */
 export function deriveBinaryKind(
   meta: Pick<BinaryFileMetadata, "contentType" | "disposition">,
 ): Exclude<SharedContentKind, "markdown"> {
-  if (meta.disposition === "attachment") return "download";
-  if (meta.contentType === "application/pdf") return "pdf";
-  if (meta.contentType.startsWith("image/")) return "image";
-  return "download";
+  return classifyByContentType(meta.contentType, meta.disposition);
 }
 
 /**
@@ -138,6 +127,8 @@ export async function validateBinaryFile(
     }
     const ext = getKbExtension(relativePath);
     const contentType = CONTENT_TYPE_MAP[ext] || "application/octet-stream";
+    // Inline the single attachment-only check. Extend via kb-file-kind.ts
+    // (classifyByExtension) when adding more attachment-only types.
     const disposition = ext === ".docx" ? "attachment" : "inline";
     const rawName = path.basename(relativePath);
     return {

@@ -42,7 +42,7 @@ import { readCiStatus, readWorkflowLogs } from "./ci-tools";
 import { triggerWorkflow, createRateLimiter } from "./trigger-workflow";
 import { pushBranch } from "./push-branch";
 import { githubApiGet } from "./github-api";
-import { MAX_BINARY_SIZE } from "./kb-binary-response";
+import { MAX_BINARY_SIZE } from "./kb-limits";
 import { buildKbShareTools } from "./kb-share-tools";
 import { reportSilentFallback } from "./observability";
 
