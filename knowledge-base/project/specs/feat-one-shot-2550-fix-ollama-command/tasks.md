@@ -21,16 +21,17 @@ Issue: #2550 (P0, `domain/marketing`, `type/bug`)
 
 ## 3. Verification
 
-- 3.1 Regression grep (must return empty):
+- 3.1 Regression grep (must return empty) — from worktree root:
 
   ```bash
   grep -rn --include='*.njk' --include='*.md' --include='*.html' \
+    --exclude-dir=knowledge-base --exclude-dir=node_modules --exclude-dir=_site \
     -e 'ollama launch' -e 'gemma4:31b-cloud' \
-    plugins/ README.md 2>&1 | grep -v '/knowledge-base/'
+    .
   ```
 
 - 3.2 Run `npx markdownlint-cli2 --fix plugins/soleur/README.md README.md` (targeted, per AGENTS.md `cq-markdownlint-fix-target-specific-paths`).
-- 3.3 Build the docs site (`cd plugins/soleur/docs && npm ci && npm run build` — or `bun run build` if package scripts prefer bun).
+- 3.3 Build the docs site from the repo root: `npm ci && npm run docs:build` (Eleventy 3.x). Do NOT run `npm run build` inside `plugins/soleur/docs/` — that script does not exist.
 - 3.4 Serve the build and manually load `/getting-started/`:
   - 3.4.1 Confirm the "Existing project? / Starting fresh?" callout still renders.
   - 3.4.2 Confirm the Ollama callout is gone.

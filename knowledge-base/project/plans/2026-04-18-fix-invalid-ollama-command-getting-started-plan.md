@@ -5,6 +5,25 @@
 **Milestone:** Phase 3: Make it Sticky
 **Branch:** `feat-one-shot-2550-fix-ollama-command`
 
+## Enhancement Summary
+
+**Deepened on:** 2026-04-18
+**Scope:** targeted verification only. Full 40-agent fan-out was deliberately skipped — this is a three-file string deletion with an explicit "do not replace" directive from audit R5. Running architecture/security/performance reviewers on a content deletion would either return "not applicable" or propose speculative additions that contradict the plan's Non-Goals.
+
+### Key Corrections Applied
+
+1. **Docs build command was wrong.** Plan said `cd plugins/soleur/docs && npm ci && npm run build`. Verified against `package.json`: the actual command is `npm run docs:build` from the **repo root** (Eleventy 3.x invoked as `npx @11ty/eleventy`). The `plugins/soleur/docs/package.json` `docs:build` script does `cd ../../../ && npx @11ty/eleventy`, so running it from the docs dir also works, but the plan's `npm run build` is undefined and would fail.
+2. **JSON-LD `text` field constraint made explicit.** Per `knowledge-base/project/learnings/2026-03-26-case-study-three-location-citation-consistency.md`: schema.org `text` fields do **not** support HTML or markdown. The FAQ's visible `<p class="faq-answer">` is already plain HTML (no markdown in the affected sentence), so the two strings can remain identical after the deletion — but the plan now explicitly flags this class of risk with the precedent reference.
+3. **Three-location consistency precedent cited.** The same pattern (body / `<details>` FAQ / JSON-LD `text`) has a documented precedent in the case-study pages. This plan inherits the "update all locations in lockstep" discipline.
+
+### Deliberate Non-Expansions
+
+Three plausible-sounding additions were considered and rejected:
+
+- **Add a "fabricated-command" content-audit linter.** Already in plan Non-Goals. A content P0 is not the right PR to ship a new CI check.
+- **Write the `/docs/local-models/` doc to unlock R5's replacement callout.** Out of scope per audit R5 (explicit defer).
+- **Add a test asserting absence of forbidden strings on rendered docs pages.** The Phase 2 grep sweep is sufficient for a one-shot deletion. A recurring regression test is worthwhile only if this class of bug is recurring — it isn't, and the content-audit cadence already catches it.
+
 ## Overview
 
 The `/getting-started/` install page ships a callout whose command is fabricated:
@@ -61,20 +80,76 @@ Run, from the worktree root:
 
 ```bash
 grep -rn --include='*.njk' --include='*.md' --include='*.html' \
+  --exclude-dir=knowledge-base --exclude-dir=node_modules --exclude-dir=_site \
   -e 'ollama launch' -e 'gemma4:31b-cloud' \
-  plugins/ README.md 2>&1 | grep -v '/knowledge-base/'
+  .
 ```
 
-Expected output: empty (the knowledge-base hits are intentionally excluded — audit, content-plan, and roadmap entries describe the bug as a historical artifact and must not be rewritten).
+Expected output: empty. Rationale for the exclusions:
+
+- `knowledge-base/`: audit, roadmap row 3.27, community digests, prior spec, and prior plan document the bug as a historical artifact and must not be rewritten.
+- `node_modules/`: transitive dependencies may legitimately reference `ollama` in other contexts; never edit.
+- `_site/`: Eleventy build output; regenerated on next build.
+
+Scoping the command with `.` (current dir) + explicit excludes is safer than `plugins/ README.md` — it catches any new surface (e.g., a blog post drafted between plan time and ship time) that also picked up the bad string. `--exclude-dir` is more reliable than piping to `grep -v`, which also filters stderr and can hide real errors.
 
 ### Phase 3 — Build & visual sanity check
 
-1. Build the docs site: `cd plugins/soleur/docs && npm ci && npm run build` (or `bun run build` per package.json scripts, verify at time of run).
-2. Serve the build output and load `/getting-started/`. Confirm:
+1. Build the docs site from the repo root:
+
+   ```bash
+   npm ci                 # installs Eleventy 3.x at repo root (only needed if node_modules missing)
+   npm run docs:build     # resolves to: npx @11ty/eleventy (input=plugins/soleur/docs per .eleventy.js config)
+   ```
+
+   **Do not** run `npm run build` inside `plugins/soleur/docs/` — that script does not exist. The package.json in that directory defines only `docs:build` and `docs:dev`, both of which `cd ../../../` and invoke the root Eleventy.
+
+2. Serve the build for visual inspection:
+
+   ```bash
+   npm run docs:dev       # Eleventy serves with watch mode; open http://localhost:8080/getting-started/
+   ```
+
+   Confirm at `/getting-started/`:
    - The "Existing project? / Starting fresh?" callout is still present.
    - The "Running with Ollama?" callout is gone.
    - The "What do I need to run Soleur?" FAQ answer reads cleanly (no dangling "Alternatively, …" fragment).
-3. Validate the JSON-LD: paste the rendered page source into Google's Rich Results Test (or run `npm run test:schema` if the docs site has a schema test — check `plugins/soleur/docs/package.json` before relying on it). The `FAQPage` entry must parse and its `text` must match the visible answer.
+
+3. Validate the JSON-LD. The docs site ships a `<base href="/soleur/">` for GitHub Pages (see `knowledge-base/project/learnings/2026-02-13-base-href-breaks-local-dev-server.md`), but that does not affect JSON-LD content. Three acceptable validation paths, in preference order:
+   1. **Rendered-source diff:** `curl -s http://localhost:8080/getting-started/ | grep -A3 'faq-answer'` and `grep -A3 'acceptedAnswer'` — eyeball that the plain-text content of the FAQ paragraph and the JSON-LD `text` field is string-identical (whitespace and punctuation included).
+   2. **Google Rich Results Test:** paste the rendered HTML into <https://search.google.com/test/rich-results>. The `FAQPage` entry must parse with zero errors or warnings.
+   3. **Schema test script:** check `plugins/soleur/docs/package.json` for a `test:schema` or similar script. None exists as of 2026-04-18 — do not invent one.
+
+## Research Insights
+
+### Ollama CLI surface (verified 2026-04-18)
+
+- `ollama` has no `launch` subcommand. Documented top-level commands are: `serve`, `create`, `show`, `run`, `stop`, `pull`, `push`, `list`, `ps`, `cp`, `rm`, `help`. Source: `ollama --help` output and <https://github.com/ollama/ollama/blob/main/docs/cli.md>.
+- There is no `claude` model in the Ollama registry. Ollama hosts open-weight models (`llama3.2`, `gemma2`, `mistral`, `qwen2.5`, `phi3`, `codellama`, etc.); Claude models are Anthropic-proprietary and served only via the Anthropic API and resellers.
+- `gemma4:31b-cloud` is not a published tag. Gemma 2 exists (`gemma2:2b`, `gemma2:9b`, `gemma2:27b`); Gemma 3 exists on HF; no Gemma 4 has shipped. The `:cloud` suffix is also fabricated — Ollama tags use `:<param-count><quantization>` (e.g., `:7b-q4_0`).
+- **The real integration path** would be: `ollama serve` (start daemon) → `ollama pull <real-model>` → point a Claude-Code-compatible client (like `llm` or an OpenAI-compatible proxy) at `http://localhost:11434`. Soleur does not yet document this flow — which is precisely why audit R5 defers any replacement callout.
+
+This confirms the plan's core assertion: every token of the fabricated command is wrong. No search-and-replace strategy produces a correct variant; removal is the only safe action.
+
+### JSON-LD FAQPage constraints (from citation-consistency learning)
+
+- Reference: `knowledge-base/project/learnings/2026-03-26-case-study-three-location-citation-consistency.md`.
+- `schema.org` `text` fields accept plain text only — no HTML, no markdown. The current FAQ answer in `getting-started.njk` already contains `<code>` tags in the visible `<p class="faq-answer">` but the JSON-LD mirror strips them to plain backticks (`ollama launch`). After deletion, both strings will remain plain text for the affected sentence — the visible and JSON-LD versions must match on the remaining content.
+- The precedent is three-location consistency: body / `<details>` FAQ / JSON-LD `text`. This plan's deletion only touches the FAQ `<details>` and JSON-LD — the body of `/getting-started/` has no mention of Ollama outside the callout being removed. One fewer location to sync, but the discipline is the same.
+
+### Docs site build & serve (verified against package.json)
+
+- Root `package.json` defines `docs:build` (`npx @11ty/eleventy`) and `docs:dev` (`npx @11ty/eleventy --serve`). Eleventy input path comes from `.eleventy.js` at repo root.
+- `plugins/soleur/docs/package.json` defines `docs:build` that `cd`s to the repo root before running Eleventy. Both entry points are valid; the plan prefers running from the repo root for clarity.
+- There is **no** `build` script, no `test`, no `test:schema` at either location. Any Phase 3 step that references these is speculative and must be verified before use.
+- Eleventy 3.x uses ESM config (root `package.json` has `"type": "module"`). Template errors surface at build time — a deletion that accidentally breaks NJK syntax (unclosed tag, stray `</div>`) will fail `docs:build`.
+
+### Related learnings checked (all skipped — rationale recorded)
+
+- `2026-02-13-base-href-breaks-local-dev-server.md`: applies to local serving, not affected by this change. The Phase 3 `docs:dev` command renders correctly because Eleventy's `--serve` mounts at `/soleur/` base.
+- `2026-03-17-faq-section-nesting-consistency.md`: about FAQ section DOM placement across templates. Not relevant — this plan does not move the FAQ section, only edits one answer's text.
+- `2026-03-24-agent-hallucinated-author-name-from-org-context.md`: about agent hallucination in content generation. Tangentially meta-relevant (the original bad Ollama command was itself a hallucination), but not actionable for this fix.
+- `2026-03-05-eleventy-blog-post-frontmatter-pattern.md`: applies to blog posts only. `getting-started.njk` is a top-level page.
 
 ## Acceptance Criteria
 
