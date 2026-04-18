@@ -3,6 +3,12 @@
 # delegates analysis to ux-design-lead (audit mode), dedupes, and uploads
 # findings as a workflow artifact.
 #
+# Governance: issues filed by this workflow carry both the `ux-audit` stream
+# tag and the `agent:ux-design-lead` label, which excludes them from auto-fix
+# and auto-triage loops. See
+# plugins/soleur/skills/fix-issue/references/agent-authored-exclusion.md
+# before adding or removing either label.
+#
 # Triggers:
 #   cron monthly  — safety net for quiet UI-change months
 #   manual        — founder-triggered (no inputs; always dry-run)

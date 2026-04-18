@@ -75,6 +75,23 @@ Bundling that worked for the governance question:
 
 - **`AskUserQuestion` rejected 6-option multiSelect** — Recovery: consolidated to 4 bundled options. Prevention: add an internal checklist to the brainstorm dialogue phase: "before calling AskUserQuestion, confirm options ≤ 4." Not rule-worthy (tool-level limit, self-correcting on first failure); no skill edit proposed.
 
+## Routed to definition
+
+The governance-loop mitigation surfaced here (exclude agent-authored issues
+from auto-fix and auto-triage) is now enforced as a first-class convention at:
+
+- `plugins/soleur/skills/fix-issue/references/agent-authored-exclusion.md` —
+  label convention, workflows that honor it, checklist for adding new streams.
+- `plugins/soleur/skills/fix-issue/references/exclude-label-jq-snippet.md` —
+  canonical jq clause (copy-paste into new issue-consuming workflows).
+- `plugins/soleur/skills/fix-issue/SKILL.md` — `--exclude-label` flag and
+  Phase 1 short-circuit (defense-in-depth for manual invocations).
+
+Consumer workflows: `.github/workflows/scheduled-bug-fixer.yml`,
+`.github/workflows/scheduled-daily-triage.yml`.
+
+Landed in #2344 (feature) / PR #2533.
+
 ## Tags
 
 category: best-practices

@@ -96,9 +96,14 @@ jobs:
           export OPEN_FIXES
           echo "Issues with open bot-fix PRs: ${OPEN_FIXES:-none}"
 
-          # Filter rationale (run 24599250091, 2026-04-18):
-          # - bot-fix/attempted, ux-audit: prior-attempt / wrong-class skips
-          # - synthetic-test: repo-canonical label for test-only issues
+          # Filter rationale:
+          # - bot-fix/attempted, ux-audit: prior-attempt / wrong-class skips.
+          # - agent:* (governance contract): excludes any agent-authored issue
+          #   stream. Clause source:
+          #   plugins/soleur/skills/fix-issue/references/exclude-label-jq-snippet.md
+          #   Rationale:
+          #   plugins/soleur/skills/fix-issue/references/agent-authored-exclusion.md
+          # - synthetic-test: repo-canonical label for test-only issues.
           # - title regex ^(flaky|flake|test-flake|test)[:(]: skips flaky/test-
           #   investigation reports which the fix-issue skill's single-file
           #   constraint cannot resolve. Intentional over-match on `test:`
@@ -116,6 +121,7 @@ jobs:
                 [.[] | select(
                   (.labels | map(.name) | index("bot-fix/attempted") | not) and
                   (.labels | map(.name) | index("ux-audit") | not) and
+                  (.labels | map(.name) | any(startswith("agent:")) | not) and
                   (.labels | map(.name) | index("synthetic-test") | not) and
                   (.title | test("^(flaky|flake|test-flake|test)[:(]"; "i") | not) and
                   (.number | IN($skip_nums[]) | not)
@@ -146,7 +152,7 @@ jobs:
             --max-turns 55
             --allowedTools Bash,Read,Write,Edit,Glob,Grep
           prompt: |
-            Run /soleur:fix-issue ${{ steps.select.outputs.issue }}
+            Run /soleur:fix-issue ${{ steps.select.outputs.issue }} --exclude-label ux-audit --exclude-label 'agent:*'
 
       # --- Auto-Merge Gate ---
       # Runs OUTSIDE claude-code-action using GITHUB_TOKEN (not the agent's
