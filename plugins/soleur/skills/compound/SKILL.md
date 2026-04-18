@@ -207,7 +207,19 @@ Close the gap between "we learned X" and "X is now enforced." The project has pr
    - If `L > 600`: `"[WARNING] longest rule is L bytes — cap per-rule length at ~600 (see cq-agents-md-why-single-line) by moving context to learning files."`
    - If `C > 300`: `"[WARNING] constitution.md is large (C/300) — consider migrating narrow rules to skill/agent instructions."`
 
-   Additionally, if the repo has a rule-metrics aggregator at `./scripts/rule-metrics-aggregate.sh`, run it in `--dry-run` mode and parse `summary.rules_unused_over_8w` — if > 0, append: `"[INFO] N rules have zero hits over 8 weeks. Run /soleur:sync rule-prune to surface pruning candidates."` Do not fail the phase if the aggregator is missing.
+   Additionally, if the repo has a rule-metrics aggregator at `./scripts/rule-metrics-aggregate.sh`, run it in `--dry-run` mode and parse `summary.rules_unused_over_8w`. Do not fail the phase if the aggregator is missing, but do NOT silently swallow an aggregator crash — a stderr line tells the reader why the hint is absent:
+
+   ```bash
+   if [[ -x ./scripts/rule-metrics-aggregate.sh ]]; then
+     if unused=$(bash ./scripts/rule-metrics-aggregate.sh --dry-run 2>/dev/null | jq -r '.summary.rules_unused_over_8w // "unknown"' 2>/dev/null); then
+       if [[ -n "$unused" && "$unused" != "0" && "$unused" != "unknown" ]]; then
+         echo "[INFO] $unused rules have zero hits over 8 weeks. Run /soleur:sync rule-prune to surface pruning candidates."
+       fi
+     else
+       echo "[WARN] rule-metrics-aggregate.sh --dry-run failed; skipping unused-rules hint." >&2
+     fi
+   fi
+   ```
 
 ### Empty Case
 

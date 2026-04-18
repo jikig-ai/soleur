@@ -52,6 +52,7 @@ run_suite() {
 run_suite "tests/hooks/incidents" bash tests/hooks/test_incidents.sh
 run_suite "tests/hooks/emissions" bash tests/hooks/test_hook_emissions.sh
 run_suite "tests/scripts/lint-rule-ids" python3 -m unittest tests.scripts.test_lint_rule_ids
+run_suite "tests/scripts/rule-id-regex-parity" python3 -m unittest tests.scripts.test_rule_id_regex_parity
 run_suite "tests/scripts/rule-metrics-aggregate" bash tests/scripts/test-rule-metrics-aggregate.sh
 run_suite "tests/commands/sync-rule-prune" bash tests/commands/test-sync-rule-prune.sh
 run_suite "test/content-publisher" bun test test/content-publisher.test.ts
