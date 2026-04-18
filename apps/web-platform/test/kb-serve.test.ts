@@ -3,7 +3,7 @@ import os from "os";
 import path from "path";
 import { describe, test, expect, beforeEach, afterEach, vi } from "vitest";
 import { serveBinary, serveKbFile } from "@/server/kb-serve";
-import { MAX_BINARY_SIZE } from "@/server/kb-binary-response";
+import { MAX_BINARY_SIZE } from "@/server/kb-limits";
 
 let tmpWorkspace: string;
 let kbRoot: string;

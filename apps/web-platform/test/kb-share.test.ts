@@ -5,7 +5,7 @@ import { createHash } from "node:crypto";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 import { createShare, listShares, revokeShare } from "@/server/kb-share";
-import { MAX_BINARY_SIZE } from "@/server/kb-binary-response";
+import { MAX_BINARY_SIZE } from "@/server/kb-limits";
 import { shareSupabaseFromMock } from "./helpers/share-mocks";
 
 vi.mock("@/server/logger", () => ({

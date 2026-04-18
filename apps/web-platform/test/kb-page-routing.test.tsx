@@ -31,17 +31,17 @@ vi.mock("@/components/kb/share-popover", () => ({
 vi.mock("@/components/kb/file-preview", () => ({
   FilePreview: ({
     path,
-    extension,
+    kind,
     showDownload,
   }: {
     path: string;
-    extension: string;
+    kind: string;
     showDownload?: boolean;
   }) => (
     <div
       data-testid="file-preview"
       data-path={path}
-      data-extension={extension}
+      data-kind={kind}
       data-show-download={showDownload === undefined ? "unset" : String(showDownload)}
     />
   ),
@@ -75,7 +75,7 @@ describe("KbContentPage routing", () => {
     await waitFor(() => {
       const preview = getByTestId("file-preview");
       expect(preview.getAttribute("data-path")).toBe("assets/logo.png");
-      expect(preview.getAttribute("data-extension")).toBe(".png");
+      expect(preview.getAttribute("data-kind")).toBe("image");
     });
   });
 
@@ -94,7 +94,7 @@ describe("KbContentPage routing", () => {
 
     await waitFor(() => {
       const preview = getByTestId("file-preview");
-      expect(preview.getAttribute("data-extension")).toBe(".pdf");
+      expect(preview.getAttribute("data-kind")).toBe("pdf");
     });
   });
 

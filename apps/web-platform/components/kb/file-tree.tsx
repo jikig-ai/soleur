@@ -6,6 +6,7 @@ import { usePathname } from "next/navigation";
 import { useKb } from "./kb-context";
 import { UploadProgress } from "./upload-progress";
 import type { TreeNode } from "@/server/kb-reader";
+import { classifyByExtension } from "@/lib/kb-file-kind";
 
 const ALLOWED_ACCEPT = ".png,.jpg,.jpeg,.gif,.webp,.pdf,.csv,.txt,.docx";
 const ALLOWED_EXTENSIONS = new Set([
@@ -532,9 +533,7 @@ function FolderIcon() {
 }
 
 function FileTypeIcon({ extension }: { extension?: string }) {
-  const IMAGE_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp"]);
-
-  if (extension && IMAGE_EXTENSIONS.has(extension)) {
+  if (extension && classifyByExtension(extension) === "image") {
     return (
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className="shrink-0 text-emerald-500/70">
         <rect width="18" height="18" x="3" y="3" rx="2" ry="2" strokeLinecap="round" strokeLinejoin="round" />
