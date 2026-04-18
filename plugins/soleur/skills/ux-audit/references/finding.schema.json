@@ -18,8 +18,8 @@
   "properties": {
     "route": {
       "type": "string",
-      "pattern": "^/",
-      "description": "Route path as passed in the invocation, starting with '/'."
+      "pattern": "^/[A-Za-z0-9_\\-/]*$",
+      "description": "Route path as passed in the invocation. Starts with '/'; restricted to alphanumerics, hyphens, underscores, and slashes to block traversal ('../') and null-byte injection."
     },
     "selector": {
       "type": "string",
@@ -54,8 +54,8 @@
     },
     "screenshot_ref": {
       "type": "string",
-      "pattern": "^/",
-      "description": "Absolute filesystem path passed in targets[i].screenshot_path."
+      "pattern": "^/[A-Za-z0-9_\\-/.]+\\.(png|jpg|jpeg|webp)$",
+      "description": "Absolute filesystem path passed in targets[i].screenshot_path. Restricted to alphanumerics, hyphens, underscores, dots, and slashes with an image extension to block traversal and control-char injection if downstream consumers ever fs.readFile this value."
     }
   }
 }

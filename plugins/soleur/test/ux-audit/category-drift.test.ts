@@ -39,12 +39,27 @@ describe("FINDING_CATEGORIES drift guard (#2356)", () => {
     expect(FINDING_CATEGORIES.length).toBe(5);
   });
 
-  test("every category appears in SKILL.md and ux-design-lead.md", () => {
-    for (const category of FINDING_CATEGORIES) {
-      expect(SKILL_MD).toContain(category);
-      expect(AGENT_MD).toContain(category);
-    }
-  });
+  test.each([...FINDING_CATEGORIES])(
+    "category %s appears quoted in SKILL.md",
+    (category) => {
+      // Require the quoted form `"${category}"` so short tokens like
+      // "ia" don't false-positive on words like "media" (substring
+      // "ia") or "social".
+      expect(SKILL_MD).toContain(`"${category}"`);
+    },
+  );
+
+  test.each([...FINDING_CATEGORIES])(
+    "category %s appears in ux-design-lead.md with a word boundary",
+    (category) => {
+      // Word-boundary match avoids false positives on the same
+      // tokens in prose (e.g. "ia" inside "media").
+      const re = new RegExp(
+        `\\b${category.replace(/[-/\\^$*+?.()|[\]{}]/g, "\\$&")}\\b`,
+      );
+      expect(AGENT_MD).toMatch(re);
+    },
+  );
 
   test("agent field rule lists the canonical 5-category phrase", () => {
     expect(AGENT_MD).toContain(
