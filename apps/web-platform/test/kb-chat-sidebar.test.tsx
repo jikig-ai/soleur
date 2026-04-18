@@ -1,34 +1,12 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, act } from "@testing-library/react";
 import { createUseTeamNamesMock } from "./mocks/use-team-names";
-
-type MockTextMessage = {
-  id: string;
-  role: "user" | "assistant";
-  content: string;
-  type: "text";
-};
+import { createWebSocketMock } from "./mocks/use-websocket";
 
 const mockStartSession = vi.fn();
 const mockTrack = vi.fn();
 
-let wsReturn = {
-  messages: [] as MockTextMessage[],
-  startSession: mockStartSession,
-  resumeSession: vi.fn(),
-  sendMessage: vi.fn(),
-  sendReviewGateResponse: vi.fn(),
-  status: "connected" as const,
-  disconnectReason: undefined as string | undefined,
-  lastError: null as import("@/lib/ws-client").WebSocketError | null,
-  reconnect: vi.fn(),
-  routeSource: null as "auto" | "mention" | null,
-  activeLeaderIds: [] as string[],
-  sessionConfirmed: true,
-  usageData: null as { totalCostUsd: number } | null,
-  realConversationId: null as string | null,
-  resumedFrom: null as { conversationId: string; timestamp: string; messageCount: number } | null,
-};
+let wsReturn = createWebSocketMock({ startSession: mockStartSession });
 
 vi.mock("@/lib/ws-client", () => ({
   useWebSocket: () => wsReturn,
@@ -58,23 +36,7 @@ vi.mock("@/hooks/use-media-query", () => ({
 describe("KbChatSidebar", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    wsReturn = {
-      messages: [],
-      startSession: mockStartSession,
-      resumeSession: vi.fn(),
-      sendMessage: vi.fn(),
-      sendReviewGateResponse: vi.fn(),
-      status: "connected",
-      disconnectReason: undefined,
-      lastError: null,
-      reconnect: vi.fn(),
-      routeSource: null,
-      activeLeaderIds: [],
-      sessionConfirmed: true,
-      usageData: null,
-      realConversationId: null,
-      resumedFrom: null,
-    };
+    wsReturn = createWebSocketMock({ startSession: mockStartSession });
   });
 
   async function renderSidebar(open = true) {

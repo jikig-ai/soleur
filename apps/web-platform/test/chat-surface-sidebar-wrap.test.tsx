@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render } from "@testing-library/react";
 import { createUseTeamNamesMock } from "./mocks/use-team-names";
+import { createWebSocketMock } from "./mocks/use-websocket";
 
 // Narrow-column hardening for Phase 3.1 + AC10:
 // "Long URLs and code blocks wrap (not scroll) inside 380px sidebar."
@@ -9,36 +10,18 @@ import { createUseTeamNamesMock } from "./mocks/use-team-names";
 // so a long fenced code line or URL reflows inside a 380px panel instead of
 // forcing horizontal scroll.
 
-type MockTextMessage = {
-  id: string;
-  role: "user" | "assistant";
-  content: string;
-  type: "text";
-  leaderId?: string;
-  state?: "thinking" | "tool_use" | "streaming" | "done" | "error";
-};
-
 const mockStartSession = vi.fn();
 const mockResumeSession = vi.fn();
 const mockSendMessage = vi.fn();
 const mockSendReviewGateResponse = vi.fn();
 
-let wsReturn = {
-  messages: [] as MockTextMessage[],
+let wsReturn = createWebSocketMock({
   startSession: mockStartSession,
   resumeSession: mockResumeSession,
   sendMessage: mockSendMessage,
   sendReviewGateResponse: mockSendReviewGateResponse,
-  status: "connected" as const,
-  disconnectReason: undefined as string | undefined,
-  lastError: null as import("@/lib/ws-client").WebSocketError | null,
-  reconnect: vi.fn(),
-  routeSource: null as "auto" | "mention" | null,
-  activeLeaderIds: [] as string[],
-  sessionConfirmed: true,
-  usageData: null as { totalCostUsd: number } | null,
   realConversationId: "test-id",
-};
+});
 
 vi.mock("@/lib/ws-client", () => ({
   useWebSocket: () => wsReturn,
@@ -64,22 +47,13 @@ const LONG_CODE = "const absurdlyLongIdentifier_that_should_wrap_instead_of_forc
 
 describe("ChatSurface variant=\"sidebar\" — narrow-column wrap (Phase 3.1 / AC10)", () => {
   beforeEach(() => {
-    wsReturn = {
-      messages: [],
+    wsReturn = createWebSocketMock({
       startSession: mockStartSession,
       resumeSession: mockResumeSession,
       sendMessage: mockSendMessage,
       sendReviewGateResponse: mockSendReviewGateResponse,
-      status: "connected",
-      disconnectReason: undefined,
-      lastError: null,
-      reconnect: vi.fn(),
-      routeSource: null,
-      activeLeaderIds: [],
-      sessionConfirmed: true,
-      usageData: null,
       realConversationId: "test-id",
-    };
+    });
   });
 
   async function renderWithMessage(content: string, variant: "full" | "sidebar") {

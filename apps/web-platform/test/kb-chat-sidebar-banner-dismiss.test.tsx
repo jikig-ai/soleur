@@ -1,37 +1,13 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, act } from "@testing-library/react";
 import { createUseTeamNamesMock } from "./mocks/use-team-names";
+import { createWebSocketMock } from "./mocks/use-websocket";
 
 // AC2: the "Continuing from …" banner that surfaces when a KB thread is
 // resumed MUST auto-dismiss once the user sends a new message — the banner
 // is transient context, not a sticky affordance.
 
-type MockMsg = {
-  id: string;
-  role: "user" | "assistant";
-  content: string;
-  type: "text";
-};
-
-let wsReturn = {
-  messages: [] as MockMsg[],
-  startSession: vi.fn(),
-  resumeSession: vi.fn(),
-  sendMessage: vi.fn(),
-  sendReviewGateResponse: vi.fn(),
-  status: "connected" as const,
-  disconnectReason: undefined as string | undefined,
-  lastError: null as import("@/lib/ws-client").WebSocketError | null,
-  reconnect: vi.fn(),
-  routeSource: null as "auto" | "mention" | null,
-  activeLeaderIds: [] as string[],
-  sessionConfirmed: true,
-  usageData: null as { totalCostUsd: number } | null,
-  realConversationId: "cid-1" as string | null,
-  resumedFrom: null as
-    | { conversationId: string; timestamp: string; messageCount: number }
-    | null,
-};
+let wsReturn = createWebSocketMock({ realConversationId: "cid-1" });
 
 vi.mock("@/lib/ws-client", () => ({ useWebSocket: () => wsReturn }));
 vi.mock("@/lib/analytics-client", () => ({ track: vi.fn() }));
@@ -49,16 +25,14 @@ vi.mock("@/hooks/use-media-query", () => ({ useMediaQuery: () => true }));
 describe("KbChatSidebar — resumed banner auto-dismiss (AC2)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    wsReturn = {
-      ...wsReturn,
-      messages: [],
+    wsReturn = createWebSocketMock({
       resumedFrom: {
         conversationId: "existing",
         timestamp: "2026-04-10T12:00:00Z",
         messageCount: 3,
       },
       realConversationId: "existing",
-    };
+    });
   });
 
   async function renderSidebar() {
