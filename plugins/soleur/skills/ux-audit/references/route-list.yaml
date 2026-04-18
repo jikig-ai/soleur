@@ -18,6 +18,15 @@
 # + CAP_PER_RUN trimming drops findings, anonymous-surface findings should be
 # the ones to drop, not dashboard findings. Ref #2378.
 
+# Declarative allowlist for `fixture_prereqs` values. Every entry used under
+# `routes[*].fixture_prereqs` must appear here. Enforced by
+# `plugins/soleur/test/ux-audit/route-list-prereqs.test.ts`.
+allowed_prereqs:
+  - tcs_accepted
+  - billing_active
+  - chat_conversations
+  - kb_workspace_deferred
+
 routes:
   # --- Authenticated core (primary ICP surface — audit first) ---
   - path: /dashboard
