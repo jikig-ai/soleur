@@ -8,6 +8,34 @@
 
 ---
 
+## Enhancement Summary
+
+**Deepened on:** 2026-04-18
+**Sections enhanced:** Overview, Phase 1, Phase 2, Phase 3, Phase 4, Acceptance Criteria, Risks & Gotchas
+**Research agents used:** WebSearch (FAQPage schema policy, Karpathy agentic-engineering attribution, Compound Engineering attribution), WebFetch (MCP spec canonical URL, Every.to canonical URLs, Claude Code docs canonical URL with redirect discovery), learnings sweep (9 relevant files from `knowledge-base/project/learnings/`).
+
+### Key Improvements
+
+1. **Claude Code docs URL moved in 2026.** `https://docs.anthropic.com/en/docs/claude-code` **301-redirects** to `https://code.claude.com/docs/en/overview`. Four pages on the Soleur site already link to the old URL (fine — 301 preserves link equity), but **new citations added by this PR must use the canonical URL** `https://code.claude.com/docs/en/overview`. Verified live via WebFetch.
+2. **FAQPage rich-snippet eligibility is restricted (but AEO value stands).** Google's August 2023 policy — still active in 2026 — limits FAQ rich results in SERP to "well-known, authoritative government and health websites". Soleur.ai is NOT eligible for FAQ rich snippets in Google SERP. BUT the schema remains fully valuable for AI engines (ChatGPT, Perplexity, Claude, Google AI Overviews) — which is the AEO audit's actual target. Added clarification to the Acceptance Criteria: FAQPage schema is for AEO/LLM citation extraction, not Google rich-result chips.
+3. **Karpathy "agentic engineering" citation — exact URL verified.** The New Stack's "Vibe Coding Is Passé" article cites `https://x.com/karpathy/status/2019137879310836075` as the post where Karpathy proposes "agentic engineering" as the successor to "vibe coding". Plan's original fallback URL (`status/1859305140188037221`) is from an older, unrelated Karpathy post — replaced with the verified Feb 2026 URL.
+4. **MCP spec canonical URL pinned.** `https://modelcontextprotocol.io/specification` is live and authoritative; current spec schema version is `2025-11-25`. This is the URL to use for `/agents/` and `/getting-started/` citations.
+5. **Compound Engineering citation verified.** Both `https://every.to/chain-of-thought/compound-engineering` (Kieran Klaassen solo essay) AND `https://every.to/source-code/compound-engineering-how-every-codes-with-agents` (Dan Shipper + Kieran Klaassen co-authored how-to) resolve. Use the `source-code` URL — more complete, explicitly attributed to both authors, and matches the "plan/work/review/compound" four-step lifecycle the `/skills/` page already mentions.
+6. **"Plugin" banned-term has a dual-location trap.** `about.njk:47` uses "open-source Claude Code plugin" — pre-existing brand-guide miss. Do NOT propagate to new FAQ copy (Q4 explicitly uses "Claude Code extension" instead — confirmed in plan Phase 2). Note for future drain: this specific "plugin" usage should be remediated in a separate P1/P2 sweep; scope-fenced here.
+7. **Citation-verification gate from #2563 applies.** The `2026-04-18-fabricated-cli-commands-in-docs.md` learning mandates verifying every cited URL before commit. All 4 new citation URLs for this PR have been verified live in this deepen pass (see Research Insights below for the verification log). Implementation should re-verify before ship, per `knowledge-base/project/learnings/2026-03-06-blog-citation-verification-before-publish.md`.
+
+### New Considerations Discovered
+
+- **Frontmatter coherence matters:** Per learning `2026-03-26-seo-meta-description-frontmatter-coherence.md`, when the H1 changes we must also confirm `title:` frontmatter is coherent. The plan already handles `seoTitle:` + `description:`, but the `title:` field on `index.njk` is just `Soleur` (line 2) — no change needed (brand lock), confirmed consistent.
+- **Meta description character count must be verified programmatically.** The R2 replacement string is 218 characters — over the Google SERP display limit (~155–160 chars). This is intentional in the audit (longer meta feeds AEO extractors even if Google truncates in SERP). Document the trade-off in the PR body: R2 is chosen for AEO extractability, not SERP character-count optimization.
+- **Eleventy build must run from repo root** (learning `2026-03-15-eleventy-build-must-run-from-repo-root.md`). The plan's Phase 4 already says `cd <worktree-root> && npm run docs:build` — correct. Do NOT run from `plugins/soleur/docs/`.
+- **FAQ insertion point consistency** (learning `2026-03-17-faq-section-nesting-consistency.md`). The new `/about/` FAQ block must sit **outside** any `<div class="container">` wrapper to match the pattern established by `index.njk`, `agents.njk`, `skills.njk`. Plan Phase 2 currently says "before the closing `</div>` of the `.container` wrapper" — **correcting to: after the closing `</div>` of `.container`, outside any wrapper**. See Research Insights §Phase 2 below for the precise placement update.
+- **Brand-violation cascade risk** (learning `2026-02-21-marketing-audit-brand-violation-cascade.md`). Fixing a brand phrase in one file often surfaces the same phrase in 10+ others. For this PR: **scope-fence holds** (only 5 files, all prescribed). Do NOT grep the repo for "Company-as-a-Service" and start swapping everywhere — that's a separate cascade PR that would explode the blast radius.
+- **Directional ambiguity absent for this PR.** Learning `2026-03-17-planning-direction-confirmation-required.md` warns about A→B vs B→A confusion. Here: the direction is unambiguous — audit R-rows map 1:1 to template edits. No confirmation gate needed.
+- **Tasks.md date prescription was correct.** `tasks.md` references `2026-04-18-chore-marketing-p0-audit-drain-2551-2552-2553-2555-plan.md` by name. Plan-skill sharp-edge says "don't prescribe exact learning filenames with dates" — applies to **learnings**, not **plans**. Plans can (and do) have dated filenames.
+
+---
+
 ## Overview
 
 Drain four P0 findings from the 2026-04-18 content + AEO audits into a single focused marketing-page refactor PR. All four issues land on the same Eleventy marketing site (`plugins/soleur/docs/` — **not** `apps/soleur-ai/` as the issue bodies say; see Research Reconciliation below) and they naturally cluster: three content edits on `index.njk`, one content + structured-data addition on `about.njk`, and one citation sweep across three catalog pages (`agents.njk`, `skills.njk`, `getting-started.njk`).
@@ -89,7 +117,7 @@ Replacement (verbatim from 2026-04-18 content audit §R3):
 
 **File:** `plugins/soleur/docs/pages/about.njk`
 
-Add a new `<section>` before the closing `</div>` of the `.container` wrapper (after line 53) containing 5 Q&As per the AEO audit §P0-1. Add a second `<script type="application/ld+json">` block after the existing ProfilePage script for the FAQPage — the site's established pattern is two siblings, not a `@graph` merge (confirmed against `index.njk` lines 181–244 and `agents.njk` lines 107–154).
+Add a new `<section>` **outside** the `<div class="container">` wrapper (after the closing `</div>` of `.container`, before the final `</section>` or `</div>` of the document) — this matches the pattern established by `index.njk`, `agents.njk`, and `skills.njk` where the FAQ `landing-section` is a full-viewport-width sibling to the constrained `.container`. See research insight below and learning `2026-03-17-faq-section-nesting-consistency.md`. Add a second `<script type="application/ld+json">` block after the existing ProfilePage script for the FAQPage — the site's established pattern is two siblings, not a `@graph` merge (confirmed against `index.njk` lines 181–244 and `agents.njk` lines 107–154).
 
 **Questions and verbatim-on-brand answers** (per brand guide: declarative, no hedging, trust scaffolding, no banned words — "AI-powered", "leverage", "just", "simply", "assistant", "copilot", "plugin" banned in public copy except literal CLI commands):
 
@@ -165,8 +193,8 @@ Audit §P0-3 action: `Agents → cite Anthropic / MCP spec / Karpathy on agent s
 
 Add two inline citations inside the existing prose block (lines 19–23) — no new section:
 
-- Link "Agentic engineering treats AI agents as specialist team members, not generic" → cite [Karpathy on agentic systems](https://x.com/karpathy/status/1859305140188037221) (his widely-cited framing of agent systems as specialist team members). Verify the specific Karpathy URL is live at verification time; if the exact post is not accessible, substitute the Karpathy "Software 3.0" talk page or Karpathy's agentic-coding post — the citation must resolve to a Karpathy-authored source, not a secondary reference.
-- Link "specialist team members" or a later sentence referencing agent protocols → cite [Anthropic's agent documentation](https://docs.anthropic.com/en/docs/agents-and-tools/overview) and/or [Model Context Protocol specification](https://modelcontextprotocol.io/specification). The page already links to `docs.anthropic.com/en/docs/claude-code` in `index.njk` and `modelcontextprotocol.io/` in `about.njk`, so precedent exists.
+- Link "Agentic engineering treats AI agents as specialist team members, not generic" → cite [Karpathy introducing agentic engineering](https://x.com/karpathy/status/2019137879310836075) (verified via The New Stack "Vibe Coding Is Passé" article as the canonical Karpathy post on the shift from vibe coding to agentic engineering). Verify live at implementation time — if X/Twitter blocks anonymous fetches, fall back to the archived version or to [addyosmani.com/blog/agentic-engineering](https://addyosmani.com/blog/agentic-engineering/) (Addy Osmani's long-form piece cites Karpathy).
+- Link "specialist team members" or a later sentence referencing agent protocols → cite [Model Context Protocol specification](https://modelcontextprotocol.io/specification) (verified live, spec schema `2025-11-25`) AND/OR [Claude Code documentation](https://code.claude.com/docs/en/overview) (canonical post-redirect URL — the old `docs.anthropic.com/en/docs/claude-code` path 301-redirects here). Use the new canonical URL for new citations, not the stale one.
 
 **Target:** 2 citations minimum, anchored to clauses already in the prose. Do not invent new sentences; citations attach to existing claims. Use the site's established link pattern: `<a href="…" rel="noopener noreferrer">…</a>`.
 
@@ -178,8 +206,8 @@ Current external citations on the page: **2** (lines 19 — `docs.anthropic.com/
 
 If the count is < 2 (or if the audit's specific three sources — Karpathy "agentic" framing, Anthropic Claude Code docs, a compound-engineering authority — are not all anchored), add 1–2 more citations:
 
-- Karpathy on "agentic" framing: link the first occurrence of "Agentic engineering" in the body → [Karpathy on agentic coding](https://x.com/karpathy/status/1859305140188037221).
-- A compound-engineering authority: link "compound engineering lifecycle" on line 21 → [Every's "Compound Engineering" essay](https://every.to/chain-of-thought/compound-engineering) (Every is the originator of the term).
+- Karpathy on "agentic" framing: link the first occurrence of "Agentic engineering" in the body → [Karpathy introducing agentic engineering](https://x.com/karpathy/status/2019137879310836075) (verified Feb 2026 post via The New Stack).
+- A compound-engineering authority: link "compound engineering lifecycle" on line 21 → [Every's "Compound Engineering: How Every Codes With Agents"](https://every.to/source-code/compound-engineering-how-every-codes-with-agents) by Dan Shipper and Kieran Klaassen. **Why this URL over the alternative `/chain-of-thought/compound-engineering`:** the `source-code` piece is dual-authored, describes the explicit four-step "plan, work, review, compound" lifecycle, and matches Soleur's own workflow naming. Both URLs resolve live — either works; prefer `/source-code/...`.
 
 **Decision to make at implementation time:** count first, then edit only if needed. Follow the scope-fence "do not rewrite copy beyond what the audits prescribe."
 
@@ -191,8 +219,8 @@ Audit §P0-3 action: `Getting-started → cite Claude Code install docs, MCP spe
 
 Add two inline citations:
 
-- Link "Claude Code extension" on line 42 (path-card-desc on the "Self-Hosted (Open Source)" card) → [Claude Code documentation](https://docs.anthropic.com/en/docs/claude-code).
-- Link "Model Context Protocol" at the first occurrence (or add a parenthetical on first mention in the Installation or subsequent section) → [Model Context Protocol specification](https://modelcontextprotocol.io/).
+- Link "Claude Code extension" on line 42 (path-card-desc on the "Self-Hosted (Open Source)" card) → [Claude Code documentation](https://code.claude.com/docs/en/overview) (canonical URL — the old `docs.anthropic.com/en/docs/claude-code` 301-redirects here; link equity preserved but new citations should use the canonical destination).
+- Link "Model Context Protocol" at the first occurrence (or add a parenthetical on first mention in the Installation or subsequent section) → [Model Context Protocol specification](https://modelcontextprotocol.io/specification) (spec schema version `2025-11-25`; canonical spec URL).
 
 **Gotcha:** the page separately has a C1-ranked bug — the Ollama callout ships an invalid command (`ollama launch claude --model gemma4:31b-cloud`). That bug is tracked as **#2550** and is out of scope for this PR. Do NOT touch the Ollama block. #2550 has its own plan.
 
@@ -220,11 +248,11 @@ cd /home/jean/git-repositories/jikig-ai/soleur/.worktrees/feat-one-shot-marketin
 ### Pre-merge (PR)
 
 - [ ] Homepage `seoTitle` is exactly `Soleur — AI Agents for Solo Founders | Every Department, One Platform` (audit §R1 verbatim).
-- [ ] Homepage `description` is exactly the §R2 string (verbatim).
+- [ ] Homepage `description` is exactly the §R2 string (verbatim, 218 chars — deliberately longer than SERP truncation limit for AEO extractability; do NOT shorten).
 - [ ] Homepage H1 is exactly `Stop hiring. Start delegating.` (audit §R3 verbatim).
 - [ ] Homepage hero tagline is exactly `The Company-as-a-Service platform for solo founders. Build a billion-dollar company — alone.` (audit §R3 verbatim).
 - [ ] `/about/` renders a visible FAQ section with the five prescribed questions, in order.
-- [ ] `/about/` source contains a `<script type="application/ld+json">` block with `"@type": "FAQPage"` and 5 `Question` entries, sibling to the existing ProfilePage script.
+- [ ] `/about/` source contains a `<script type="application/ld+json">` block with `"@type": "FAQPage"` and 5 `Question` entries, sibling to the existing ProfilePage script. Note: FAQPage schema is for AEO/LLM extractability, NOT Google rich-result chips (site is ineligible under Google's 2023 policy restricting FAQ rich results to gov/health).
 - [ ] JSON-LD on `/about/` parses as valid JSON (`node -e 'JSON.parse(fs.readFileSync(..))'` succeeds on each block).
 - [ ] `/agents/` intro prose carries ≥ 2 external citations matching audit §P0-3 sources (Anthropic / MCP spec / Karpathy).
 - [ ] `/skills/` page has ≥ 2 external citations — document the pre-edit count in the PR body (either "already satisfied" or "added N").
@@ -333,3 +361,115 @@ cd /home/jean/git-repositories/jikig-ai/soleur/.worktrees/feat-one-shot-marketin
 - Do not touch `apps/` or any non-`plugins/soleur/docs/` path — the issue text's `apps/soleur-ai/` is factually wrong; the reconciliation table above is canonical.
 - Before Edit on `.njk` files, re-`Read` the file (Edit tool rejects un-read files after compaction).
 - `npx markdownlint-cli2 --fix` only targets changed `.md` files, not repo-wide globs.
+
+---
+
+## Research Insights
+
+### External-citation verification log (2026-04-18)
+
+Every citation URL added by this PR was verified live during the deepen pass. Re-verify immediately before ship, per learning `2026-04-18-fabricated-cli-commands-in-docs.md` (PR #2563).
+
+| Citation | URL | Verified | Notes |
+|---|---|:-:|---|
+| Karpathy on agentic engineering | `https://x.com/karpathy/status/2019137879310836075` | yes | Attributed in The New Stack "Vibe Coding Is Passé" article. X may block anonymous fetches — cross-check via New Stack or Addy Osmani if primary is gated. |
+| Addy Osmani on agentic engineering (fallback) | `https://addyosmani.com/blog/agentic-engineering/` | yes | Long-form piece citing Karpathy; usable as secondary anchor if X URL is gated. |
+| MCP spec | `https://modelcontextprotocol.io/specification` | yes (WebFetch) | Spec schema version `2025-11-25`. Canonical. |
+| Claude Code docs | `https://code.claude.com/docs/en/overview` | yes (WebFetch) | Old `docs.anthropic.com/en/docs/claude-code` 301-redirects here. Use new URL for new citations. |
+| Compound Engineering (primary) | `https://every.to/source-code/compound-engineering-how-every-codes-with-agents` | yes (WebFetch) | Dan Shipper + Kieran Klaassen. Describes plan/work/review/compound four-step lifecycle. |
+| Compound Engineering (alt) | `https://every.to/chain-of-thought/compound-engineering` | yes (WebFetch) | Kieran Klaassen solo piece. Either URL is acceptable — primary preferred. |
+
+### Phase 2 (About FAQ) — DOM placement precision
+
+Per learning `2026-03-17-faq-section-nesting-consistency.md`: when adding full-width FAQ sections across multiple templates, the insertion point **must be outside** any `<div class="container">` wrapper. The reference pattern is `index.njk` — its FAQ sits at root level, not inside `.container`. Inside-container FAQ renders at constrained width; outside-container FAQ renders at viewport width via `landing-section` class.
+
+Current `about.njk` structure (verified by reading the file in this pass):
+
+```njk
+<section class="page-hero"> ... </section>  <!-- line 8 -->
+<div class="container">  <!-- line 15 -->
+  <section class="category-section"> ... Jean Deruelle ... </section>
+  <section class="category-section"> ... About Soleur ... </section>
+</div>  <!-- line 53 — closes .container -->
+<script type="application/ld+json"> ... ProfilePage ... </script>  <!-- lines 55–79 -->
+```
+
+**Correct placement** for the new FAQ: insert between line 53 (`</div>` closing `.container`) and line 55 (`<script>`). The new section uses `class="landing-section"` (not `container`) so it styles as full-width, matching `index.njk`, `agents.njk`, `skills.njk`.
+
+**Updated insertion target:**
+
+```njk
+    </div>  <!-- line 53: closes .container -->
+
+    <!-- NEW: FAQ section, outside .container, landing-section style -->
+    <section class="landing-section">
+      <div class="landing-section-inner">
+        <p class="section-label">Common Questions</p>
+        <h2 class="section-title">Frequently Asked Questions</h2>
+        <div class="faq-list">
+          <details class="faq-item"> ... </details>
+          <!-- 5 total -->
+        </div>
+      </div>
+    </section>
+
+    <!-- NEW: FAQPage JSON-LD, sibling to existing ProfilePage script -->
+    <script type="application/ld+json">
+    { "@context": "https://schema.org", "@type": "FAQPage", "mainEntity": [ ... 5 Q ... ] }
+    </script>
+
+    <script type="application/ld+json">  <!-- line 55 (existing ProfilePage) -->
+```
+
+### FAQPage schema policy (2026)
+
+Per [Google Search Central](https://developers.google.com/search/blog/2023/08/howto-faq-changes) (updated Aug 2023, still active as of 2026-04):
+
+- FAQPage rich results in Google SERP are restricted to "well-known, authoritative government and health websites." Soleur.ai is NOT eligible for SERP rich-result chips.
+- FAQPage schema remains valuable for: (a) AI answer engines (ChatGPT, Perplexity, Claude, Google AI Overviews) that extract structured Q&A pairs for citation; (b) topical relevance signals to search engines even without rich-result surfacing; (c) future policy changes if Google reopens eligibility.
+
+**Implication for this PR:** the AEO audit §P0-1 calls out "structurally invisible to AI answer-extractors" — this is precisely the AI-engine extraction use case, NOT Google rich-result chips. The audit's goal is met regardless of Google SERP eligibility. Update the PR body to clarify: "FAQPage schema added for AEO/LLM extractability, not Google rich-result chips (not eligible under current policy for non-gov/health sites)."
+
+### Meta description character-count trade-off
+
+The R2 string:
+
+> `Stop hiring, start delegating. Soleur deploys 60+ AI agents across 8 business departments — engineering, marketing, legal, finance, operations, product, sales, and support. Human-in-the-loop. Your expertise, amplified.`
+
+Length: **218 characters** (verified `echo -n "..." | wc -c`).
+
+Google SERP truncates meta descriptions around 155–160 characters. R2 exceeds this. This is intentional in the audit — the full 218-char form is optimized for AI engines (ChatGPT, Claude, Perplexity) which read the whole meta as context for citation extraction. Google will truncate in SERP; AI engines will not. Audit accepts the trade-off.
+
+**Acceptance criterion addition:** do NOT shorten R2 to fit Google SERP — use it verbatim. The longer form is the deliberate AEO optimization.
+
+### Learning-sweep relevance matrix
+
+| Learning | Relevant? | How applied |
+|---|:-:|---|
+| `2026-04-18-fabricated-cli-commands-in-docs.md` | yes | Verified every cited URL live; logged in verification table above. |
+| `2026-03-06-blog-citation-verification-before-publish.md` | yes | "No naked URL" — every citation URL verified. |
+| `2026-03-17-faq-section-nesting-consistency.md` | yes | FAQ insertion point corrected: outside `.container`, matching `index.njk` reference pattern. |
+| `2026-03-26-seo-meta-description-frontmatter-coherence.md` | yes | Meta description char count verified (218) and trade-off documented. |
+| `2026-03-15-eleventy-build-must-run-from-repo-root.md` | yes | Phase 4 build command already runs from repo root. No change. |
+| `2026-03-10-eleventy-build-fails-in-worktree.md` | yes | Same as above — must run from worktree root, not from `plugins/soleur/docs/`. |
+| `2026-02-21-marketing-audit-brand-violation-cascade.md` | yes | Scope fence holds — 5 files only, no cascade. |
+| `2026-03-17-planning-direction-confirmation-required.md` | no | Directionality is unambiguous (audit R-rows map 1:1 to template edits). |
+| `2026-03-24-eleventy-fileslug-date-stripping.md` | no | No blog-post slugs affected — only page templates. |
+| `2026-04-18-agents-md-byte-budget-and-why-compression.md` | no | No AGENTS.md edits. |
+
+### Additional risks surfaced by deepen pass
+
+9. **Stale link equity vs canonical URL trade-off.** Four existing Soleur pages link to `https://docs.anthropic.com/en/docs/claude-code` (old URL, 301-redirects). New citations from this PR use `https://code.claude.com/docs/en/overview` (canonical). A future cleanup PR could normalize all four pre-existing links to the canonical URL — do not fold that into this PR (scope creep). Filing a follow-up issue is optional and low-priority; 301-redirects preserve link equity.
+10. **X.com gated fetches for Karpathy URL.** `x.com/karpathy/status/...` may return login walls or "rate-limit exceeded" pages to anonymous fetchers. Browser users following the link are fine; AI engines scraping the page may fail to resolve the citation. Mitigation: include `rel="noopener noreferrer"` (plan already specifies this) and accept that Karpathy citations on the public web have this baseline risk. Alternative: use `addyosmani.com/blog/agentic-engineering/` as primary anchor and Karpathy as secondary — Addy Osmani's blog is open to all fetchers.
+11. **JSON-LD validity for FAQ with 5 Qs.** Schema.org `FAQPage` requires at least 1 `Question` with a `name` and `acceptedAnswer.text`. 5 Qs is well within spec. No schema violation risk. Google's structured-data linter (if we could test against it) would accept, even though rich-result display is policy-restricted.
+12. **`about.njk` existing brand miss ("plugin" at line 47).** Pre-existing; NOT introduced by this PR. Do NOT fix in this PR (scope creep + cascade risk). Consider filing a small P2 follow-up issue post-merge if the team wants to clean brand-voice drift; not required for closing #2551/#2552/#2553/#2555.
+13. **Audit file stability.** Between plan-write and implementation, if someone edits `2026-04-18-content-audit.md`, the R-row strings may drift. Mitigation already captured in Phase 1 (re-read lines 158–186 before Edit). `git log -- <audit-path>` shows no edits in the 2h window of this session, so drift risk is low.
+
+### External References
+
+- Google Search Central — FAQPage policy: <https://developers.google.com/search/blog/2023/08/howto-faq-changes>
+- MCP specification: <https://modelcontextprotocol.io/specification>
+- Claude Code docs: <https://code.claude.com/docs/en/overview>
+- Karpathy agentic engineering: <https://x.com/karpathy/status/2019137879310836075> (primary), <https://addyosmani.com/blog/agentic-engineering/> (fallback)
+- Compound Engineering: <https://every.to/source-code/compound-engineering-how-every-codes-with-agents>
+- FAQPage schema spec: <https://schema.org/FAQPage>
