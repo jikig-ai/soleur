@@ -29,7 +29,7 @@ export function contentChangedResponse(): Response {
       error: "The shared file has been modified since it was shared.",
       code: "content-changed",
     },
-    { status: 410 },
+    { status: 410, headers: { "Cache-Control": "no-store" } },
   );
 }
 
@@ -162,6 +162,7 @@ export async function serveSharedBinaryWithHashGate(args: {
   try {
     return await buildBinaryResponse(meta, request, {
       strongETag: expectedHash,
+      scope: "public",
     });
   } catch (err) {
     if (err instanceof BinaryOpenError && err.code === "content-changed") {

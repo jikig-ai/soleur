@@ -214,3 +214,61 @@ describe("GET /api/shared/[token] — content hash verification", () => {
     fsReadSpy.mockRestore();
   });
 });
+
+describe("GET /api/shared/[token] — error responses emit Cache-Control: no-store", () => {
+  it("410 revoked emits no-store", async () => {
+    shareRow = {
+      document_path: "doc.pdf",
+      user_id: "owner-1",
+      revoked: true,
+      content_sha256: hex(Buffer.from("x")),
+    };
+
+    const res = await callGET();
+    expect(res.status).toBe(410);
+    expect(res.headers.get("Cache-Control")).toBe("no-store");
+  });
+
+  it("410 content-changed emits no-store", async () => {
+    fs.writeFileSync(path.join(kbRoot, "note.md"), "new body");
+    shareRow = {
+      document_path: "note.md",
+      user_id: "owner-1",
+      revoked: false,
+      content_sha256: hex(Buffer.from("old body")),
+    };
+
+    const res = await callGET();
+    expect(res.status).toBe(410);
+    expect(res.headers.get("Cache-Control")).toBe("no-store");
+  });
+
+  it("410 legacy-null-hash emits no-store", async () => {
+    fs.writeFileSync(path.join(kbRoot, "note.md"), "body");
+    shareRow = {
+      document_path: "note.md",
+      user_id: "owner-1",
+      revoked: false,
+      content_sha256: null,
+    };
+
+    const res = await callGET();
+    expect(res.status).toBe(410);
+    expect(res.headers.get("Cache-Control")).toBe("no-store");
+  });
+
+  it("404 not-found emits no-store", async () => {
+    shareRow = null;
+
+    const res = await callGET();
+    expect(res.status).toBe(404);
+    expect(res.headers.get("Cache-Control")).toBe("no-store");
+  });
+
+  it("429 rate-limit emits no-store", async () => {
+    mocks.mockIsAllowed.mockReturnValue(false);
+    const res = await callGET();
+    expect(res.status).toBe(429);
+    expect(res.headers.get("Cache-Control")).toBe("no-store");
+  });
+});
