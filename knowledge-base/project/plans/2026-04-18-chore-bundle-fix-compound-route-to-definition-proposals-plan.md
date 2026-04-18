@@ -5,6 +5,24 @@
 **Effort:** Medium (12 issues, ~7 distinct target files, mechanical edits)
 **Closes:** #2116, #2228, #2237, #2248, #2266, #2273, #2363, #2364, #2365, #2366, #2471, #2522
 
+## Enhancement Summary
+
+**Deepened on:** 2026-04-18
+**Sections enhanced:** Research Reconciliation, Phase 3 Quality Check, References.
+**Verification passes run in deepen:**
+
+- Source learning files: 9 of 9 confirmed present (the earlier table noted #2522's source as "pending"; it is verified at `knowledge-base/project/learnings/2026-04-17-public-route-error-message-centralization-and-regex-exec-hook-trip.md`).
+- Rule-ID collision check: `grep -E 'id: cq-(mutation-assertions-pin-exact-post-state|destructive-prod-tests-allowlist)' AGENTS.md` → no collisions.
+- `lint-rule-ids.py` actual path: `scripts/lint-rule-ids.py` (NOT `.claude/hooks/lint-rule-ids.py` as the initial draft said) — corrected in Phase 3.3 below.
+- AGENTS.md rule `cq-rule-ids-are-immutable` carries `[hook-enforced: lint-rule-ids.py]`, confirming the script is the canonical validator.
+- Soleur's `.claude/hooks/security_reminder_hook.py` is verified workflow-injection-only — no child-token detector — which confirms #2522's correct target is upstream (`~/.claude/plugins/marketplaces/claude-plugins-official/plugins/security-guidance/hooks/security_reminder_hook.py`, verified to contain the substring detector described in the issue).
+
+### Key Improvements from Deepen Pass
+
+1. Corrected `lint-rule-ids.py` path in Phase 3 step 3. Blindly following the original path would have failed at the quality gate.
+2. Confirmed #2522's source learning exists; updated References section.
+3. Confirmed two new AGENTS.md rule IDs do not collide — safe to apply.
+
 ## Overview
 
 Twelve open GitHub issues prefixed `compound:` propose promoting one-shot session learnings into durable workflow definitions (AGENTS.md rules, skill SKILL.md sharp edges, agent files, hook scripts). Each is a thin route-to-definition edit — most are a single bullet append — and they do not conflict. They can ship as one bundled PR.
@@ -15,7 +33,7 @@ Goal: apply each proposal to its target file (with light quality tightening wher
 
 | Claim (from issue) | Reality (verified 2026-04-18) | Plan response |
 |---|---|---|
-| #2522 targets `plugins/soleur/hooks/security_reminder_hook.py` as a Soleur-repo hook | The triggering hook is the user-installed `claude-plugins-official/security-guidance/hooks/security_reminder_hook.py` under `~/.claude/plugins/marketplaces/`. Soleur's own `.claude/hooks/security_reminder_hook.py` is a different file that handles only GitHub Actions workflow injection and has no child-token detector. | Close #2522 with a comment: the fix belongs upstream in the security-guidance plugin, not in Soleur. If a Soleur-local workaround is desired, add an `ENABLE_SECURITY_REMINDER=0` override in `.claude/settings.local.json` for learning files or markdown writes — but out of scope for this bundled PR. |
+| #2522 targets `plugins/soleur/hooks/security_reminder_hook.py` as a Soleur-repo hook | Verified 2026-04-18: the triggering hook lives under `~/.claude/plugins/marketplaces/claude-plugins-official/plugins/security-guidance/hooks/` (a substring-match detector; see the `security-guidance` plugin source). Soleur's own `.claude/hooks/security_reminder_hook.py` is a different file handling only GitHub Actions workflow injection — no child-token detector. | Close #2522 with a reconciliation comment: the detector lives in the upstream `security-guidance` marketplace plugin, not in Soleur. The three options (upstream PR / env override / disable plugin) are enumerated in Phase 4 step 3. |
 | #2471 target `plugins/soleur/agents/engineering/review/data-integrity-guardian.md` has a "Sharp Edges" section | File is 70 lines with no "Sharp Edges" heading; it ends with a numbered priority list + closing reminder | Add a new `## Sharp Edges` heading before the final "Remember:" line and insert the two bullets there. |
 | #2237 item 3 target "reviewer-agent prompt references" | Natural home is the existing `## Common Pitfalls to Avoid` section in `plugins/soleur/skills/review/SKILL.md` (line 528) | Apply there, not a new section. |
 | #2237 items 1 & 2 target "plan skill's task-template reference" | No canonical task-template reference file exists; `soleur:spec-templates` is a separate skill | Apply both as bullets in plan SKILL.md `## Sharp Edges` (line 606). |
@@ -135,10 +153,10 @@ Insert a new `## Sharp Edges` section before the final paragraph ("Remember: In 
 
 1. Run `npx markdownlint-cli2 --fix` on the specific edited markdown files only (not repo-wide, per `cq-markdownlint-fix-target-specific-paths`). Include the plan file itself.
 2. Run `bash .claude/hooks/security_reminder_hook.test.sh` to confirm Soleur's own workflow-injection hook test still passes (unrelated to #2522 but part of the pre-commit guardrail).
-3. Run the rule-ID linter to verify the two new AGENTS.md IDs parse cleanly and no existing ID was rewritten:
+3. Run the rule-ID linter to verify the two new AGENTS.md IDs parse cleanly and no existing ID was rewritten. The linter lives at `scripts/lint-rule-ids.py` (referenced by `cq-rule-ids-are-immutable` in AGENTS.md):
 
 ```bash
-python3 .claude/hooks/lint-rule-ids.py AGENTS.md
+python3 scripts/lint-rule-ids.py AGENTS.md
 ```
 
 4. Measure `AGENTS.md` size post-edit — confirm under 40000 bytes:
@@ -255,7 +273,7 @@ Single PR, squash-merge, auto-close all 12 issues via `Closes #N`. No feature fl
   - `knowledge-base/project/learnings/2026-04-15-rule-metrics-aggregator-pr-pattern-session-gotchas.md` (#2273)
   - `knowledge-base/project/learnings/2026-04-15-ux-audit-scope-cutting-and-review-hardening.md` (#2363, #2364, #2365, #2366)
   - `knowledge-base/project/learnings/2026-04-17-migration-not-null-without-backfill-and-partial-unique-index-pattern.md` (#2471)
-  - `knowledge-base/project/learnings/2026-04-17-public-route-error-message-centralization-and-regex-exec-hook-trip.md` (#2522 — file presence to be confirmed in Phase 1; if absent, the issue body itself is the source)
+  - `knowledge-base/project/learnings/2026-04-17-public-route-error-message-centralization-and-regex-exec-hook-trip.md` (#2522 — verified present)
 
 ## Resume Prompt
 
