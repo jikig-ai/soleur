@@ -252,9 +252,16 @@ runcmd:
       echo "FATAL: Doppler secrets download failed during initial provisioning" >&2
       exit 1
     fi
+    # tmpfs /tmp (closes #2473): caps overlayfs COW write-amp from
+    # pdf-linearize tempfiles. `noexec` DELIBERATELY omitted —
+    # randomCredentialPath() (github-app.ts) writes executable git
+    # credential helpers to /tmp/git-cred-<uuid> and git invokes them
+    # directly (not via sh). Consumers: workspace.ts / session-sync.ts /
+    # push-branch.ts. See ci-deploy.sh for the same invariant.
     docker run -d \
       --name soleur-web-platform \
       --restart unless-stopped \
+      --tmpfs /tmp:rw,nosuid,nodev,size=256m \
       --env-file "$TMPENV" \
       -v /mnt/data/workspaces:/workspaces \
       -v /mnt/data/plugins/soleur:/app/shared/plugins/soleur:ro \
