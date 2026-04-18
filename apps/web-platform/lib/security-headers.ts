@@ -6,7 +6,11 @@ export function buildSecurityHeaders() {
     { key: "X-Content-Type-Options", value: "nosniff" },
     {
       key: "Strict-Transport-Security",
-      value: "max-age=63072000; includeSubDomains; preload",
+      // Cloudflare's HSTS SSL/TLS setting overrides this header in production
+      // and enforces max-age=31536000 (1 year). The source value is set to
+      // match so /preflight checks see a consistent value. The HSTS Preload
+      // List minimum is 31536000, so compliance is maintained.
+      value: "max-age=31536000; includeSubDomains; preload",
     },
     { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
     {
