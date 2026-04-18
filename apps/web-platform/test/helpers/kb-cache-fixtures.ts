@@ -3,7 +3,7 @@
 // place, and (b) prevents silent drift between test files that were each
 // asserting the string verbatim.
 export const PUBLIC_CACHE_CONTROL =
-  "public, max-age=60, s-maxage=300, stale-while-revalidate=3600, must-revalidate";
+  "public, max-age=60, s-maxage=60, stale-while-revalidate=3600, must-revalidate";
 export const PRIVATE_CACHE_CONTROL = "private, max-age=60";
 export const NO_STORE = "no-store";
 

@@ -237,20 +237,23 @@ export type CacheScope = "public" | "private";
 //
 // - `public` — shared-route binaries. Browser `max-age=60` preserves the
 //   60s revocation-latency SLA inherited from the previous
-//   `private, max-age=60` default. `s-maxage=300` lets Cloudflare (and
-//   any RFC-7234-compliant shared cache) keep an edge copy for 5 minutes
-//   so repeat viewers of a shared PDF do not re-hit origin.
-//   `stale-while-revalidate=3600` lets the edge serve a slightly-stale
-//   body while refreshing in the background for up to an hour.
-//   `must-revalidate` forces the browser to re-check the ETag once
-//   max-age expires — pairs with the existing strong-ETag 304 path to
-//   make revalidation free (0 body bytes).
+//   `private, max-age=60` default. `s-maxage=60` lets Cloudflare (and any
+//   RFC-7234-compliant shared cache) keep an edge copy for 1 minute so
+//   repeat viewers of a shared PDF do not re-hit origin. The 60s ceiling
+//   is a defense-in-depth backstop on the active CF Cache Purge call in
+//   server/kb-share.ts::revokeShare (#2568) — even if the purge API call
+//   fails or is delayed, the worst-case revoked-share leak window stays
+//   bounded to 60 seconds. `stale-while-revalidate=3600` lets the edge
+//   serve a slightly-stale body while refreshing in the background for
+//   up to an hour. `must-revalidate` forces the browser to re-check the
+//   ETag once max-age expires — pairs with the existing strong-ETag 304
+//   path to make revalidation free (0 body bytes).
 //
 // - `private` — owner-route binaries. 60s browser cache, no shared-cache
 //   storage.
 const CACHE_CONTROL_BY_SCOPE: Record<CacheScope, string> = {
   public:
-    "public, max-age=60, s-maxage=300, stale-while-revalidate=3600, must-revalidate",
+    "public, max-age=60, s-maxage=60, stale-while-revalidate=3600, must-revalidate",
   private: "private, max-age=60",
 };
 
