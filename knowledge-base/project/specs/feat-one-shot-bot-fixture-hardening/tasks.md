@@ -6,12 +6,27 @@ Branch: `feat-one-shot-bot-fixture-hardening`
 
 Closes: `#2358`, `#2359`, `#2360`, `#2361`. Ref: `#2362`.
 
+## Phase 0 — Guard top-level execution (prerequisite)
+
+- [ ] **0.1** Wrap `bot-fixture.ts`'s bottom `process.argv[2]` dispatch block in
+  `if (import.meta.main) { ... }`. Without this, importing the file from a unit test
+  triggers `process.exit(2)` at module load. Canonical Bun pattern (verified against
+  `/oven-sh/bun` docs).
+- [ ] **0.2** Wrap `bot-signin.ts`'s trailing `await main();` call in
+  `if (import.meta.main) { ... }`. Without this, importing `projectRef` /
+  `cookieDomain` for unit tests attempts a live Supabase signin at module load.
+- [ ] **0.3** Verify: `bun -e 'await import("./plugins/soleur/skills/ux-audit/scripts/bot-fixture.ts")'`
+  exits 0 silently. Repeat for `bot-signin.ts`. Both must be silent (no stderr, no
+  `process.exit(2)`, no network call) before Phase 2 or 3.2.5 can add `export`s.
+
 ## Phase 1 — Setup
 
 - [ ] **1.1** Create migration `apps/web-platform/supabase/migrations/028_conversations_user_id_session_id_unique.sql`.
   - Partial unique index: `(user_id, session_id) WHERE session_id IS NOT NULL`.
   - Use `create unique index concurrently if not exists`.
   - Name: `uniq_conversations_user_id_session_id`.
+  - PostgREST `on_conflict=user_id,session_id` resolves against a partial unique
+    index with matching column list — verified, no live probe needed.
 
 ## Phase 2 — Core Implementation
 

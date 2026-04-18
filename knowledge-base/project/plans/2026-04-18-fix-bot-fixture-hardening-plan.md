@@ -1,5 +1,33 @@
 # Plan: bot-fixture + bot-signin hardening (drains #2358 + #2359 + #2360 + #2361)
 
+## Enhancement Summary
+
+**Deepened on:** 2026-04-18
+**Sections enhanced:** Overview, Phase 1 (upsert conflict-target), Phase 2 + 3 (import-side-effect guard), Risks, Acceptance Criteria
+**Learnings applied:**
+
+- `knowledge-base/project/learnings/2026-04-17-migration-not-null-without-backfill-and-partial-unique-index-pattern.md` — partial unique index pattern validated
+- `knowledge-base/project/learnings/2026-04-15-ux-audit-scope-cutting-and-review-hardening.md` — direct prior art (PR #2346, this fixture's origin)
+- `knowledge-base/project/learnings/2026-04-17-postgrest-aggregate-disabled-forces-rpc-option.md` — PostgREST hosted-capability probe pattern
+- `knowledge-base/project/learnings/integration-issues/vitest-bun-test-cross-runner-compat-20260402.md` — bun:test is bun-only; test files cannot be type-checked by tsc/vitest
+- `knowledge-base/project/learnings/test-failures/2026-04-03-bun-test-dom-preload-execution-order.md` — bun preload & cross-runner gotchas
+- `knowledge-base/project/learnings/implementation-patterns/2026-03-28-psql-migration-runner-ci-patterns.md` — migration application CI pattern
+- `knowledge-base/project/learnings/2026-04-13-billing-review-findings-batch-fix.md` — validates bundling 4 review scope-outs in one PR (the billing PR #2036 shipped three fixes in one with partial unique index for payment race)
+
+### Key Improvements (deepen pass)
+
+1. **Critical: top-level-execution guard required before Phase 2/3 exports.** `bot-fixture.ts` ends with `if (cmd === "seed") { await seed(); } else if ...` at module scope, and `bot-signin.ts` ends with `await main()`. Exporting helpers from these files for unit-testing **will execute the main path on import**, crashing the test runner (`process.exit(2)` from the `else` branch of `bot-fixture.ts`; a live Supabase signin from `bot-signin.ts`). Wrap both bottoms in `if (import.meta.main) { ... }` (the canonical Bun entrypoint guard — verified via Context7 against `/oven-sh/bun` docs) **as Phase 0 preparatory work**, before any `export` is added. This finding was caught by deepen-pass self-review against the loaded learnings and by reading the actual file tails; the original plan's Phase 2.2.2 (`export projectRef and cookieDomain`) and Phase 3.2.5 (`export sbDelete and sbFetch`) would have been runtime-broken without this guard.
+2. **PostgREST upsert conflict-target explicitly verified.** `on_conflict=<cols>` in PostgREST resolves against any unique constraint or unique index that exactly matches those columns — **including a partial unique index**. Supabase's hosted PostgREST disables `db-aggregates-enabled` (per #2478 learning), but `resolution=merge-duplicates` is core PostgREST functionality and is NOT affected by that flag. No live probe required; Supabase docs confirm.
+3. **Message-idempotency DELETE window risk labeled.** The DELETE-messages-before-INSERT step (Phase 1) creates a ~ms window where a crash between the two operations leaves the conversation without messages. Acceptable for a test fixture (re-seed recovers), but worth naming in Risks.
+4. **`cq-mutation-assertions-pin-exact-post-state` rule directly applies.** The rule was born from PR #2346 (this fixture's origin). Every new assertion added in this plan MUST pin exact post-state (e.g., `expect(...).toBe(post)`, not `toContain`). Added to Acceptance Criteria as an explicit check.
+5. **`cq-destructive-prod-tests-allowlist` rule already satisfied by the existing `UX_AUDIT_BOT_EMAIL` guard at module load.** This PR must not remove or weaken it. Added as a Pre-merge AC.
+6. **bun:test files cannot be tsc-checked.** The existing `bot-fixture.test.ts` / `bot-signin.test.ts` already use `import { ... } from "bun:test"` — tsc `--noEmit` cannot resolve `bun:test`. This is a **pre-existing** constraint, not introduced here, but the new helper unit tests (Phase 2, Phase 3.2.5) continue to use `bun:test` and therefore will not be type-checked by vitest/tsc either. This is fine for `bun test plugins/soleur/` which is the actual runner.
+
+### New Considerations Discovered
+
+- A self-review pass surfaced the `import.meta.main` guard as a hard prerequisite. Without it, the plan would have RED-stage test failures unrelated to the actual test logic, costing a round of diagnosis.
+- #2362 item 6 (`FIXTURE_CONVERSATIONS.role` narrowing to `'user' | 'assistant'` via `as const`) is already present in the current source (line 38: `] as const;`), verified via Read. The narrowing that issue requests is **on the `role` field inside `messages`**, not on the outer array. This PR does not fold that item — scope-holding on #2362 confirmed.
+
 ## Overview
 
 PR #2346 (the ux-audit bot fixture landing) produced four code-review scope-outs in
@@ -90,6 +118,58 @@ reference #2362 as `Ref #2362`.
 
 ## Implementation Phases
 
+### Phase 0 — Guard top-level execution (prerequisite for Phase 2 + Phase 3.2.5 exports)
+
+**Why:** `bot-fixture.ts` currently ends with
+
+```typescript
+const cmd = process.argv[2];
+if (cmd === "seed") { await seed(); }
+else if (cmd === "reset") { await reset(); }
+else { console.error(`Usage: bun ${import.meta.path} <seed|reset>`); process.exit(2); }
+```
+
+and `bot-signin.ts` ends with `await main();`. Importing helpers from either file
+(which Phase 2 and Phase 3.2.5 require) will **execute the bottom block at module
+load**, either crashing the test runner with `process.exit(2)` or attempting a real
+Supabase signin before any test logic runs. The canonical Bun pattern for this is
+`import.meta.main` (verified against the official Bun docs via Context7, source
+`/oven-sh/bun/docs/guides/util/entrypoint.mdx`).
+
+**Code changes:**
+
+In `bot-fixture.ts`, replace the bottom block with:
+
+```typescript
+if (import.meta.main) {
+  const cmd = process.argv[2];
+  if (cmd === "seed") {
+    await seed();
+  } else if (cmd === "reset") {
+    await reset();
+  } else {
+    console.error(`Usage: bun ${import.meta.path} <seed|reset>`);
+    process.exit(2);
+  }
+}
+```
+
+In `bot-signin.ts`, replace `await main();` with:
+
+```typescript
+if (import.meta.main) {
+  await main();
+}
+```
+
+No behavior change when invoked directly via `bun plugins/soleur/skills/ux-audit/scripts/bot-fixture.ts seed`
+(or `bot-signin.ts`) — `import.meta.main` is `true` in that context. Importing the
+files from a test becomes safe.
+
+**Test:** after this edit, `bun -e 'import("./plugins/soleur/skills/ux-audit/scripts/bot-fixture.ts")'`
+should complete without error or `process.exit` — previously it printed the Usage
+message and exited 2.
+
 ### Phase 1 — Upsert conversations (#2358)
 
 **Migration first.** Create `028_conversations_user_id_session_id_unique.sql`:
@@ -107,6 +187,14 @@ Why `concurrently` + `if not exists`: builds the index without blocking writes o
 `conversations` table and is idempotent across re-apply. Why partial: `session_id` is
 `text` nullable in the existing schema (verified in `001_initial_schema.sql` line 51);
 a full unique index would reject every existing row with `session_id IS NULL`.
+
+**PostgREST conflict-target verification.** PostgREST's `on_conflict=<cols>` resolves
+against any unique constraint or unique index whose column list exactly matches the
+parameter — a **partial** unique index on those same columns satisfies the requirement.
+(Supabase's hosted PostgREST disables `db-aggregates-enabled` per learning
+`2026-04-17-postgrest-aggregate-disabled-forces-rpc-option.md`, but
+`resolution=merge-duplicates` is core upsert functionality and is NOT affected by
+that flag.) No live probe needed; Supabase PostgREST docs confirm.
 
 **Code changes in `bot-fixture.ts`:**
 
@@ -324,6 +412,10 @@ never raced on."
 
 ### Pre-merge (PR)
 
+- [ ] Both `bot-fixture.ts` and `bot-signin.ts` wrap their top-level execution in
+  `if (import.meta.main) { ... }` (Phase 0 — hard prerequisite for unit-test imports).
+  Verify: `bun -e 'await import("./plugins/soleur/skills/ux-audit/scripts/bot-fixture.ts")'`
+  exits 0 silently (no Usage message, no `process.exit(2)`).
 - [ ] Migration `028_conversations_user_id_session_id_unique.sql` committed.
 - [ ] `bot-fixture.ts` uses a single `upsertConversation` (no `findConversationId` /
   `insertConversation` helpers remain).
@@ -344,6 +436,12 @@ never raced on."
 - [ ] `bun test plugins/soleur/test/ux-audit/bot-fixture.test.ts
   plugins/soleur/test/ux-audit/bot-signin.test.ts` passes locally with `prd_scheduled`
   creds (integration) and without creds (unit helpers only).
+- [ ] Every new mutation assertion pins exact post-state (`.toBe(post)`, never
+  `toContain([pre, post])`) per rule `cq-mutation-assertions-pin-exact-post-state`
+  (the rule was born from PR #2346 — this fixture's parent).
+- [ ] Existing `UX_AUDIT_BOT_EMAIL !== "ux-audit-bot@jikigai.com"` allowlist guard at
+  module load in `bot-fixture.test.ts` lines 22–29 is preserved unchanged
+  (`cq-destructive-prod-tests-allowlist`).
 - [ ] PR body begins with: `Closes #2358`, `Closes #2359`, `Closes #2360`, `Closes #2361`.
 - [ ] `## Changelog` section in PR body references all four issue numbers.
 
@@ -435,6 +533,17 @@ never raced on."
 - **Destructive-prod-test blast radius (existing guard).** `bot-fixture.test.ts` lines
   22–29 already throw at module load if `UX_AUDIT_BOT_EMAIL !== "ux-audit-bot@jikigai.com"`,
   satisfying `cq-destructive-prod-tests-allowlist`. This PR does not change that guard.
+- **Message-idempotency DELETE window.** Phase 1 issues DELETE-then-INSERT on messages
+  inside `seed()` per conversation. If the process is killed between the two operations
+  (e.g., SIGTERM during CI), the conversation is left with zero messages until the
+  next seed. **Impact:** acceptable for a test fixture — re-running `seed` recovers
+  the state, and the fixture is never read by a user-facing path. **Mitigation:**
+  none; the alternative (a single POST with `resolution=merge-duplicates` on a unique
+  `(conversation_id, role, content)` index) is rejected in the Alternatives table.
+- **Top-level-execution import side effect (caught in deepen-pass).** Without Phase 0's
+  `import.meta.main` guard, Phase 2 / 3.2.5 unit tests would crash at import — either
+  `process.exit(2)` from `bot-fixture.ts` or a live Supabase signin attempt from
+  `bot-signin.ts`. Phase 0 is a hard prerequisite, not a nice-to-have.
 
 ## Non-Goals
 
