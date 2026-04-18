@@ -90,15 +90,15 @@ describe("ChatInput insertQuote (callback ref)", () => {
     expect(onSend).not.toHaveBeenCalled();
   });
 
-  it("applies a flash ring class to the textarea briefly", async () => {
+  it("flags the textarea with data-quote-flashing briefly after insert", async () => {
     let handle: QuoteHandle | null = null;
     render(<Harness onSend={vi.fn()} onReady={(h) => { handle = h; }} />);
     screen.getByTestId("ready").click();
     act(() => { handle!("hi"); });
     const ta = getTextarea();
-    expect(ta.className).toMatch(/ring-(2|amber)/);
+    expect(ta.getAttribute("data-quote-flashing")).toBe("true");
     act(() => { vi.advanceTimersByTime(600); });
-    expect(ta.className).not.toMatch(/\bring-2\b/);
+    expect(ta.getAttribute("data-quote-flashing")).toBeNull();
   });
 
   it("does not leak timers on rapid reinsertion or unmount (#2384 5A)", () => {

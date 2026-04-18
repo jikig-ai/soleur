@@ -111,7 +111,10 @@ export function MarkdownRenderer({ content, nofollow, wrapCode }: MarkdownRender
   );
 
   return (
-    <div className="min-w-0 [overflow-wrap:anywhere]">
+    <div
+      className="min-w-0 [overflow-wrap:anywhere]"
+      data-narrow-wrap={wrapCode ? "true" : undefined}
+    >
       <Markdown
         remarkPlugins={REMARK_PLUGINS}
         rehypePlugins={REHYPE_PLUGINS}
