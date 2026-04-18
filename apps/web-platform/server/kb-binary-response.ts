@@ -33,8 +33,6 @@ export const CONTENT_TYPE_MAP: Record<string, string> = {
     "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
 };
 
-export const ATTACHMENT_EXTENSIONS = new Set([".docx"]);
-
 /** Derive the shared-content kind from validated binary metadata. */
 export function deriveBinaryKind(
   meta: Pick<BinaryFileMetadata, "contentType" | "disposition">,
@@ -140,7 +138,7 @@ export async function validateBinaryFile(
     }
     const ext = getKbExtension(relativePath);
     const contentType = CONTENT_TYPE_MAP[ext] || "application/octet-stream";
-    const disposition = ATTACHMENT_EXTENSIONS.has(ext) ? "attachment" : "inline";
+    const disposition = ext === ".docx" ? "attachment" : "inline";
     const rawName = path.basename(relativePath);
     return {
       filePath: fullPath,
