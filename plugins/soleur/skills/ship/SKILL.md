@@ -643,24 +643,29 @@ Do NOT use `gh pr checks --watch` -- it exits immediately with "no checks report
 
 After auto-merge is queued, poll until the PR is merged. Do NOT ask "merge now or later?" -- auto-merge handles it. Do NOT use foreground `sleep` — Claude Code blocks `sleep` >= 2s in foreground Bash calls.
 
-Use the **Monitor tool** with this shell loop (max 15 iterations = 15 minutes):
+Use the **Monitor tool** with this shell loop (state-change + heartbeat, max 15 iterations = 15 minutes):
 
 ```bash
-i=0
+prev=""; i=0
 while true; do
-  state=$(gh pr view <number> --json state --jq .state)
-  echo "$(date +%H:%M:%S) state=$state (iteration $((i+1))/15)"
-  [ "$state" = "MERGED" ] || [ "$state" = "CLOSED" ] && break
   i=$((i+1))
+  s=$(gh pr view <number> --json state,mergeStateStatus \
+      --jq '"\(.state) \(.mergeStateStatus)"' 2>&1) \
+    || s="fetch-error: $s"
+  if [[ "$s" != "$prev" ]] || (( i % 3 == 1 )); then
+    echo "$(date +%H:%M:%S) [${i}/15] PR <number> ${s}"
+    prev="$s"
+  fi
+  echo "$s" | grep -qE "^(MERGED|CLOSED|fetch-error)" && break
   if [ "$i" -ge 15 ]; then
-    echo "Merge poll timed out after 15 minutes. PR state: $state"
+    echo "Merge poll timed out after 15 minutes. Last state: $s"
     break
   fi
   sleep 60
 done
 ```
 
-Each `echo` line arrives as a Monitor notification. React to the final state. If the loop exits via timeout, report the timeout to the user and investigate why the PR has not merged.
+Each meaningful event (first iteration, every state change, heartbeat every 3rd poll ~3 min) arrives as a Monitor notification — quiet while nothing changes, loud when it matters. React to the final state (the last non-heartbeat event). `fetch-error:` appears if `gh` hits a transient API failure; chronic errors break the loop so the caller can surface the outage instead of polling silently. If the loop exits via timeout, report the timeout and investigate why the PR has not merged.
 
 **If state becomes `CLOSED` (not `MERGED`):** Auto-merge was cancelled due to a CI failure.
 
@@ -706,16 +711,25 @@ Each `echo` line arrives as a Monitor notification. React to the final state. If
    - If total runs > 0 and pending = 0: all runs completed. Proceed to Step 4.
    - If total runs = 0: workflows have not registered yet. Wait 15 seconds and re-query. Retry up to 3 times (45 seconds total). If still 0 after 3 retries, treat as "no workflows triggered" and skip verification (the PR only touched files outside all path filters).
 
-   **Step 3:** For each run that is not yet `completed`, use the **Monitor tool** with a shell loop:
+   **Step 3:** For each run that is not yet `completed`, use the **Monitor tool** with a state-change + heartbeat loop:
 
    ```bash
+   prev=""; i=0
    while true; do
-     result=$(gh run view <id> --json status,conclusion --jq '"\(.status) \(.conclusion)"')
-     echo "$(date +%H:%M:%S) run=<id> $result"
-     echo "$result" | grep -q "^completed" && break
+     i=$((i+1))
+     r=$(gh run view <id> --json status,conclusion --jq '"\(.status) \(.conclusion // "-")"' 2>&1) \
+       || r="fetch-error: $r"
+     if [[ "$r" != "$prev" ]] || (( i % 6 == 1 )); then
+       echo "$(date +%H:%M:%S) [${i}/40] run=<id> ${r}"
+       prev="$r"
+     fi
+     echo "$r" | grep -qE "^(completed|fetch-error)" && break
+     [ "$i" -ge 40 ] && { echo "TIMEOUT after 40 iterations"; break; }
      sleep 30
    done
    ```
+
+   **Why this pattern:** emit on every state change (so `queued → in_progress → completed` produces three events) plus a heartbeat every 6th poll (~3 min) so the monitor never looks stuck. `.conclusion // "-"` guarantees a non-empty second token even while the run is in progress (null conclusion would otherwise render as a trailing space that looks like silence). `2>&1` on the `gh` call turns transient API errors into visible `fetch-error:` events instead of empty lines. The `grep -qE "^(completed|fetch-error)"` exit clause still breaks on terminal success; chronic `fetch-error` breaks so the caller can surface the API failure rather than polling forever against an outage.
 
    Poll until all runs report `completed`. Maximum 40 iterations (20 minutes). If the maximum is reached, report: "Release verification timed out after 20 minutes. N runs still pending: [list workflow names and IDs]." Do NOT silently continue -- investigate the stalled workflows.
 
@@ -745,13 +759,22 @@ Each `echo` line arrives as a Monitor notification. React to the final state. If
 
    If a workflow has a long expected runtime (>10 minutes), note this to the user and continue polling. Do not skip validation because the workflow is slow.
 
-   **Step 3:** Poll each triggered run until completion using the **Monitor tool**:
+   **Step 3:** Poll each triggered run until completion using the **Monitor tool** (state-change + heartbeat pattern — see Step 3 above for rationale):
 
    ```bash
+   prev=""; i=0
    while true; do
-     result=$(gh run list --workflow <workflow-filename> --limit 1 --json databaseId,status,conclusion --jq '.[0] | "\(.status) \(.conclusion)"')
-     echo "$(date +%H:%M:%S) $result"
-     echo "$result" | grep -q "^completed" && break
+     i=$((i+1))
+     r=$(gh run list --workflow <workflow-filename> --limit 1 \
+         --json databaseId,status,conclusion \
+         --jq '.[0] | "\(.status) \(.conclusion // "-")"' 2>&1) \
+       || r="fetch-error: $r"
+     if [[ "$r" != "$prev" ]] || (( i % 6 == 1 )); then
+       echo "$(date +%H:%M:%S) [${i}/40] <workflow-filename> ${r}"
+       prev="$r"
+     fi
+     echo "$r" | grep -qE "^(completed|fetch-error)" && break
+     [ "$i" -ge 40 ] && { echo "TIMEOUT after 40 iterations"; break; }
      sleep 30
    done
    ```

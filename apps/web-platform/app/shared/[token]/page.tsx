@@ -6,6 +6,8 @@ import dynamic from "next/dynamic";
 import { MarkdownRenderer } from "@/components/ui/markdown-renderer";
 import { CtaBanner } from "@/components/shared/cta-banner";
 import { KbContentSkeleton } from "@/components/kb/kb-content-skeleton";
+import { TextPreview } from "@/components/kb/text-preview";
+import { SHARED_CONTENT_KIND_HEADER } from "@/lib/shared-kind";
 import {
   classifyResponse,
   type PageError,
@@ -38,8 +40,31 @@ export default function SharedDocumentPage({
 
   useEffect(() => {
     let cancelled = false;
-    fetch(`/api/shared/${token}`)
-      .then((res) => classifyResponse(res, token))
+    async function run(): Promise<{ data: SharedData } | { error: PageError }> {
+      // HEAD first — discriminate content kind (and short-circuit error
+      // states) without paying a full GET that the browser would repeat
+      // as the embed's `<src>` fetch. On cold PDF views this eliminates
+      // one 50 MB server-side stream (see #2324). For binary kinds the
+      // HEAD response alone carries all the headers classifyResponse
+      // needs; markdown requires a follow-up GET for the JSON body; and
+      // 410 requires a GET to read the JSON `code` field so revoked vs.
+      // content-changed can be discriminated.
+      const headRes = await fetch(`/api/shared/${token}`, { method: "HEAD" });
+      if (headRes.status === 410) {
+        const getRes = await fetch(`/api/shared/${token}`);
+        return classifyResponse(getRes, token);
+      }
+      if (!headRes.ok) {
+        return classifyResponse(headRes, token);
+      }
+      const kind = headRes.headers.get(SHARED_CONTENT_KIND_HEADER);
+      if (kind === "markdown") {
+        const getRes = await fetch(`/api/shared/${token}`);
+        return classifyResponse(getRes, token);
+      }
+      return classifyResponse(headRes, token);
+    }
+    run()
       .catch((): { error: PageError } => ({ error: "unknown" }))
       .then((result) => {
         if (cancelled) return;
@@ -101,48 +126,7 @@ export default function SharedDocumentPage({
               />
             )}
 
-            {data?.kind === "markdown" && (
-              <article className="prose-kb">
-                <MarkdownRenderer content={data.content} nofollow />
-              </article>
-            )}
-
-            {data?.kind === "pdf" && (
-              <div className="h-[70vh]">
-                <PdfPreview src={data.src} filename={data.filename} />
-              </div>
-            )}
-
-            {data?.kind === "image" && (
-              <div className="flex justify-center">
-                <img
-                  data-testid="shared-image"
-                  src={data.src}
-                  alt="Shared image"
-                  title={data.filename ?? undefined}
-                  className="max-h-[80vh] max-w-full rounded-lg border border-neutral-800"
-                />
-              </div>
-            )}
-
-            {data?.kind === "download" && (
-              <div className="flex flex-col items-center justify-center py-20 text-center">
-                <h1 className="mb-2 text-lg font-semibold text-white">
-                  {data.filename}
-                </h1>
-                <p className="mb-6 text-sm text-neutral-400">
-                  Download to view this file.
-                </p>
-                <a
-                  data-testid="shared-download"
-                  href={data.src}
-                  download={data.filename}
-                  className="inline-flex items-center gap-2 rounded-lg border border-amber-500/50 px-4 py-2 text-sm font-medium text-amber-400 transition-colors hover:border-amber-400 hover:text-amber-300"
-                >
-                  Download {data.filename}
-                </a>
-              </div>
-            )}
+            {data && renderSharedContent(data)}
           </div>
         </main>
 
@@ -151,6 +135,60 @@ export default function SharedDocumentPage({
       </div>
     </>
   );
+}
+
+function renderSharedContent(data: SharedData) {
+  switch (data.kind) {
+    case "markdown":
+      return (
+        <article className="prose-kb">
+          <MarkdownRenderer content={data.content} nofollow />
+        </article>
+      );
+    case "pdf":
+      return (
+        <div className="h-[70vh]">
+          <PdfPreview src={data.src} filename={data.filename} />
+        </div>
+      );
+    case "image":
+      return (
+        <div className="flex justify-center">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            data-testid="shared-image"
+            src={data.src}
+            alt="Shared image"
+            title={data.filename ?? undefined}
+            className="max-h-[80vh] max-w-full rounded-lg border border-neutral-800"
+          />
+        </div>
+      );
+    case "text":
+      return <TextPreview src={data.src} filename={data.filename} showDownload={true} />;
+    case "download":
+      return (
+        <div className="flex flex-col items-center justify-center py-20 text-center">
+          <h1 className="mb-2 text-lg font-semibold text-white">{data.filename}</h1>
+          <p className="mb-6 text-sm text-neutral-400">Download to view this file.</p>
+          <a
+            data-testid="shared-download"
+            href={data.src}
+            download={data.filename}
+            className="inline-flex items-center gap-2 rounded-lg border border-amber-500/50 px-4 py-2 text-sm font-medium text-amber-400 transition-colors hover:border-amber-400 hover:text-amber-300"
+          >
+            Download {data.filename}
+          </a>
+        </div>
+      );
+    default: {
+      // Exhaustiveness guard — widening SharedContentKind without a
+      // renderer here fails the build.
+      const _exhaustive: never = data;
+      void _exhaustive;
+      return null;
+    }
+  }
 }
 
 function ErrorMessage({ title, message }: { title: string; message: string }) {

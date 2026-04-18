@@ -97,8 +97,13 @@ jobs:
           CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
           CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
           VERSION: ${{ needs.release.outputs.version }}
-          # Named poll bounds (#2205). Total window = MAX_ATTEMPTS * INTERVAL_S.
-          STATUS_POLL_MAX_ATTEMPTS: 24
+          # Named poll bounds (#2205, #2519). Total window = MAX_ATTEMPTS * INTERVAL_S.
+          # Raised from 24 (120s) to 60 (300s) after run 24583922171 hit a
+          # false-negative timeout during a healthy v0.43.0 deploy. Aligns with
+          # the downstream Verify-deploy-health step's 300s ceiling (HEALTH_POLL_*).
+          # Kept INTERVAL_S=5 to preserve fail-fast on early non-zero exits
+          # (e.g., insufficient_disk_space, unhandled traps).
+          STATUS_POLL_MAX_ATTEMPTS: 60
           STATUS_POLL_INTERVAL_S: 5
         run: |
           # /hooks/deploy-status is GET (read-only, idempotent). adnanh/webhook's
