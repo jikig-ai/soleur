@@ -573,6 +573,86 @@
     padding: var(--space-6) var(--space-5);
   }
 
+  /* Landing page: "As seen in" press strip */
+  .landing-press-strip {
+    padding: var(--space-8) var(--space-5);
+    text-align: center;
+  }
+  .press-outlet-list {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    align-items: center;
+    gap: var(--space-4) var(--space-6);
+  }
+  .press-outlet a {
+    color: var(--color-text-primary);
+    text-decoration: none;
+    display: inline-flex;
+    align-items: baseline;
+    gap: var(--space-2);
+    font-size: var(--text-sm);
+  }
+  .press-outlet a:hover,
+  .press-outlet a:focus-visible {
+    text-decoration: underline;
+  }
+  .press-outlet-name {
+    font-family: var(--font-display);
+    font-size: var(--text-lg);
+    font-weight: 500;
+    letter-spacing: -0.01em;
+  }
+  .press-outlet-context {
+    color: var(--color-text-secondary);
+  }
+
+  /* Community page: Stats strip */
+  .community-stats {
+    padding: var(--space-8) var(--space-5);
+    background: var(--color-bg-secondary);
+    border-top: 1px solid var(--color-border);
+    border-bottom: 1px solid var(--color-border);
+  }
+  .community-stats .container {
+    display: flex;
+    justify-content: space-around;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: var(--space-6);
+  }
+  .community-stat {
+    text-align: center;
+  }
+  .community-stat-value {
+    font-family: var(--font-display);
+    font-size: 2.5rem;
+    font-weight: 500;
+    color: var(--color-accent);
+    letter-spacing: -0.02em;
+    line-height: 1;
+  }
+  .community-stat-label {
+    font-size: var(--text-sm);
+    color: var(--color-text-secondary);
+    margin-top: var(--space-1);
+  }
+
+  /* Community page: Summary paragraph */
+  .community-summary {
+    padding: var(--space-8) 0 var(--space-4);
+    max-width: 75ch;
+    margin-inline: auto;
+  }
+  .community-summary p {
+    font-size: 1.0625rem;
+    color: var(--color-text-secondary);
+    line-height: 1.7;
+  }
+
   /* Landing page: Feature grids (departments + workflow) */
   .feature-grid-departments {
     display: grid;
@@ -1000,6 +1080,8 @@
   @media (max-width: 768px) {
     .landing-hero h1 { font-size: var(--text-3xl); }
     .landing-stats { flex-direction: column; gap: var(--space-6); }
+    .community-stats .container { flex-direction: column; gap: var(--space-5); }
+    .press-outlet-list { flex-direction: column; gap: var(--space-3); }
     .problem-cards { grid-template-columns: 1fr; }
     .feature-grid-departments,
     .feature-grid-workflow { grid-template-columns: repeat(2, 1fr); }
