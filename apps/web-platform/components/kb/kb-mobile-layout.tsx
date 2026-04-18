@@ -3,6 +3,8 @@
 import type { ReactNode } from "react";
 import dynamic from "next/dynamic";
 import type { UseKbLayoutStateResult } from "@/hooks/use-kb-layout-state";
+import { KbSidebarShell } from "@/components/kb/kb-sidebar-shell";
+import { KbDocShell } from "@/components/kb/kb-doc-shell";
 
 const KbChatSidebar = dynamic(
   () =>
@@ -22,8 +24,7 @@ export function KbMobileLayout({ children, state }: KbMobileLayoutProps) {
     contextPath,
     chatCtxValue,
     closeSidebar,
-    sidebarContent,
-    docContent,
+    toggleKbCollapsed,
   } = state;
 
   return (
@@ -33,7 +34,7 @@ export function KbMobileLayout({ children, state }: KbMobileLayoutProps) {
         className={`w-full shrink-0 overflow-y-auto border-r border-neutral-800
           ${isContentView ? "hidden" : "block"}`}
       >
-        {sidebarContent}
+        <KbSidebarShell onCollapse={toggleKbCollapsed} />
       </aside>
 
       <div
@@ -41,7 +42,13 @@ export function KbMobileLayout({ children, state }: KbMobileLayoutProps) {
           isContentView ? "" : "hidden"
         } flex flex-col`}
       >
-        {docContent(children)}
+        <KbDocShell
+          collapsed={kbCollapsed}
+          isContentView={isContentView}
+          onExpand={toggleKbCollapsed}
+        >
+          {children}
+        </KbDocShell>
       </div>
 
       {chatCtxValue.enabled && contextPath && (

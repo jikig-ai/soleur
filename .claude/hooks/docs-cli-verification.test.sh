@@ -50,6 +50,26 @@ run_case "no warn on ollama inside a .ts source literal" \
   $'export const cmd = "ollama run gemma2:27b";\n' \
   false
 
+# (d) README with no extension → warn (new file-pattern coverage)
+run_case "warn on unverified CLI inside a bare README" \
+  "$TMP/README" \
+  $'Quick start:\n\n```bash\npnpm install\npnpm run dev\n```\n' \
+  true
+
+# (e) annotation with a short intro paragraph above fence → no warn
+# The window tolerates a one-line paragraph between the annotation and
+# the fence — the common "verified: … \n\nUsage:\n\n```bash\n...```" layout.
+run_case "no warn when annotation precedes fence by a short intro" \
+  "$TMP/wide-window.md" \
+  $'<!-- verified: 2026-04-18 source: https://ollama.com -->\n\nUsage:\n\n```bash\nollama run gemma2:27b\n```\n' \
+  false
+
+# (f) env-var prefix is stripped before CLI match
+run_case "warn when CLI is preceded by env-var assignment" \
+  "$TMP/envvar.md" \
+  $'```bash\nOLLAMA_HOST=127.0.0.1:11434 ollama run gemma2:27b\n```\n' \
+  true
+
 echo
 echo "Passed: $pass  Failed: $fail"
 [[ "$fail" -eq 0 ]]

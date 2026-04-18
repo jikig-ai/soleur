@@ -1,23 +1,13 @@
 "use client";
 
-import {
-  useState,
-  useEffect,
-  useCallback,
-  useMemo,
-  useRef,
-} from "react";
-import type { ReactNode } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { usePanelRef } from "react-resizable-panels";
 import { useMediaQuery } from "@/hooks/use-media-query";
 import type { KbContextValue } from "@/components/kb/kb-context";
 import type { KbChatContextValue } from "@/components/kb/kb-chat-context";
 import { safeSession } from "@/lib/safe-session";
-import { FileTree } from "@/components/kb/file-tree";
-import { SearchOverlay } from "@/components/kb/search-overlay";
 import { getAncestorPaths } from "@/components/kb/get-ancestor-paths";
-import { DesktopPlaceholder, KbErrorBoundary } from "@/components/kb";
 import type { TreeNode } from "@/server/kb-reader";
 
 const KB_SIDEBAR_OPEN_KEY = "kb.chat.sidebarOpen";
@@ -54,9 +44,6 @@ export interface UseKbLayoutStateResult {
   // depending on the non-exported PanelImperativeHandle name.
   sidebarPanelRef: ReturnType<typeof usePanelRef>;
   chatPanelRef: ReturnType<typeof usePanelRef>;
-  // Shared rendered fragments
-  sidebarContent: ReactNode;
-  docContent: (children: ReactNode) => ReactNode;
 }
 
 export function useKbLayoutState(): UseKbLayoutStateResult {
@@ -261,6 +248,9 @@ export function useKbLayoutState(): UseKbLayoutStateResult {
     )
       .then((r) => (r.ok ? r.json() : null))
       .then((data: { messageCount?: number } | null) => {
+        // Rapid navigation can resolve a stale response after cleanup; guard
+        // against updating state on an aborted request.
+        if (controller.signal.aborted) return;
         if (data && typeof data.messageCount === "number") {
           setMessageCount(data.messageCount);
         }
@@ -296,82 +286,6 @@ export function useKbLayoutState(): UseKbLayoutStateResult {
   // and unmounts the chat Panel; "Continue thread" (`openSidebar`) re-opens it.
   const showChat = kbChatFlag && !!contextPath && sidebarOpen;
 
-  // Sidebar content shared between desktop (Panel) and mobile (flat flex)
-  const sidebarContent: ReactNode = (
-    <div className="flex h-full flex-col">
-      <header className="flex shrink-0 items-center justify-between px-4 pb-3 pt-4">
-        <h1 className="font-serif text-lg font-medium tracking-tight text-white">
-          Knowledge Base
-        </h1>
-        <button
-          onClick={toggleKbCollapsed}
-          aria-label="Collapse file tree"
-          title="Collapse file tree (⌘B)"
-          className="hidden md:flex h-6 w-6 items-center justify-center rounded text-neutral-400 hover:bg-neutral-800 hover:text-white"
-        >
-          <svg
-            className="h-4 w-4"
-            fill="none"
-            viewBox="0 0 24 24"
-            stroke="currentColor"
-            strokeWidth={1.5}
-          >
-            <path
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              d="M15.75 19.5 8.25 12l7.5-7.5"
-            />
-          </svg>
-        </button>
-      </header>
-      <div className="shrink-0 px-3 pb-3">
-        <SearchOverlay />
-      </div>
-      <div className="flex-1 overflow-y-auto px-2 pb-4">
-        <FileTree />
-      </div>
-    </div>
-  );
-
-  // docContent needs children passed through — return a factory so the
-  // consumer can supply its own children slot.
-  const docContent = useCallback(
-    (children: ReactNode): ReactNode => (
-      <>
-        {kbCollapsed && (
-          <button
-            onClick={toggleKbCollapsed}
-            aria-label="Expand file tree"
-            title="Expand file tree (⌘B)"
-            className="absolute left-2 top-5 z-10 flex h-6 w-6 items-center justify-center rounded text-neutral-400 hover:bg-neutral-800 hover:text-white"
-          >
-            <svg
-              className="h-4 w-4"
-              fill="none"
-              viewBox="0 0 24 24"
-              stroke="currentColor"
-              strokeWidth={1.5}
-            >
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                d="m8.25 4.5 7.5 7.5-7.5 7.5"
-              />
-            </svg>
-          </button>
-        )}
-        <div
-          className={`min-h-0 flex-1 overflow-y-auto ${kbCollapsed ? "pl-10" : ""}`}
-        >
-          <KbErrorBoundary>
-            {isContentView ? children : <DesktopPlaceholder />}
-          </KbErrorBoundary>
-        </div>
-      </>
-    ),
-    [kbCollapsed, toggleKbCollapsed, isContentView],
-  );
-
   return {
     ctxValue,
     chatCtxValue,
@@ -390,7 +304,5 @@ export function useKbLayoutState(): UseKbLayoutStateResult {
     closeSidebar,
     sidebarPanelRef,
     chatPanelRef,
-    sidebarContent,
-    docContent,
   };
 }

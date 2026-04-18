@@ -4,6 +4,8 @@ import type { ReactNode } from "react";
 import dynamic from "next/dynamic";
 import { Group, Panel, Separator } from "react-resizable-panels";
 import type { UseKbLayoutStateResult } from "@/hooks/use-kb-layout-state";
+import { KbSidebarShell } from "@/components/kb/kb-sidebar-shell";
+import { KbDocShell } from "@/components/kb/kb-doc-shell";
 
 const KbChatContent = dynamic(
   () =>
@@ -39,8 +41,9 @@ export function KbDesktopLayout({ children, state }: KbDesktopLayoutProps) {
     contextPath,
     closeSidebar,
     setKbCollapsed,
-    sidebarContent,
-    docContent,
+    kbCollapsed,
+    isContentView,
+    toggleKbCollapsed,
   } = state;
 
   return (
@@ -58,7 +61,7 @@ export function KbDesktopLayout({ children, state }: KbDesktopLayoutProps) {
         }}
       >
         <div className="min-w-0 h-full overflow-y-auto border-r border-neutral-800">
-          {sidebarContent}
+          <KbSidebarShell onCollapse={toggleKbCollapsed} />
         </div>
       </Panel>
 
@@ -67,7 +70,13 @@ export function KbDesktopLayout({ children, state }: KbDesktopLayoutProps) {
       {/* Document viewer panel — fills remaining space */}
       <Panel minSize="40%">
         <div className="relative min-w-0 flex flex-1 flex-col h-full">
-          {docContent(children)}
+          <KbDocShell
+            collapsed={kbCollapsed}
+            isContentView={isContentView}
+            onExpand={toggleKbCollapsed}
+          >
+            {children}
+          </KbDocShell>
         </div>
       </Panel>
 

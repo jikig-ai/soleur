@@ -4,13 +4,16 @@ description: >
   the CI Required and CLA Required rulesets on main, and queue auto-merge.
   PRs created with GITHUB_TOKEN don't re-trigger workflows — we post the
   required Checks via the API (integration_id 15368 is the GitHub Actions
-  app). Callers pass the paths to add, the branch prefix, commit message, PR
-  title prefix, and a short change-summary used in the synthetic check outputs.
+  app). Callers pass the paths to add (newline-separated), branch prefix,
+  commit message, PR title prefix, and a short change-summary used in the
+  synthetic check outputs.
 
 inputs:
   add-paths:
     description: >
-      Space-separated paths to `git add`. Paths must not contain spaces.
+      Newline-separated paths to `git add`. Each line is a single path; empty
+      lines are ignored. Paths may contain spaces. A trailing `--` is passed
+      to `git add` so leading-dash paths cannot be interpreted as flags.
     required: true
   branch-prefix:
     description: >
@@ -27,12 +30,15 @@ inputs:
       title `chore(rule-metrics): weekly aggregate 2026-04-18`).
     required: true
   pr-body:
-    description: PR body. Must be single-line — multi-line bodies need a file-based caller.
+    description: >
+      PR body. Must be single-line — multi-line content fails validation so
+      a future caller doesn't silently break `gh pr create --body`.
     required: true
   change-summary:
     description: >
       Short text used as the `output[summary]` of the test, dependency-review,
       and e2e synthetic checks. cla-check uses a fixed allowlist summary.
+      Must fit the GitHub check-run summary 60KB cap.
     required: false
     default: "Bot PR, no code changes"
   gh-token:
@@ -42,7 +48,8 @@ inputs:
 runs:
   using: composite
   steps:
-    - shell: bash
+    - name: Commit, open bot PR, post synthetic checks, queue auto-merge
+      shell: bash
       env:
         GH_TOKEN: ${{ inputs.gh-token }}
         ADD_PATHS: ${{ inputs.add-paths }}
@@ -54,10 +61,31 @@ runs:
         REPO: ${{ github.repository }}
       run: |
         set -eo pipefail
+        # Validate payload-like inputs up-front so failure is loud, not silent.
+        if [[ "$PR_BODY" == *$'\n'* ]]; then
+          echo "::error::pr-body must be single-line"
+          exit 1
+        fi
+        if (( ${#CHANGE_SUMMARY} > 60000 )); then
+          echo "::error::change-summary exceeds GitHub 60KB check-run summary cap"
+          exit 1
+        fi
+        # Parse newline-separated add-paths into an array. Drops blank lines
+        # and preserves spaces in individual paths. The trailing `--` in the
+        # git add call stops option parsing so a path beginning with `-`
+        # cannot be misread as a flag.
+        PATHS=()
+        while IFS= read -r line; do
+          [[ -z "$line" ]] && continue
+          PATHS+=("$line")
+        done <<< "$ADD_PATHS"
+        if (( ${#PATHS[@]} == 0 )); then
+          echo "::error::add-paths is empty"
+          exit 1
+        fi
         git config user.name "github-actions[bot]"
         git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-        # shellcheck disable=SC2086
-        git add $ADD_PATHS
+        git add -- "${PATHS[@]}"
         if git diff --cached --quiet; then
           echo "No changes to commit"
           exit 0
@@ -67,11 +95,16 @@ runs:
         git checkout -b "$BRANCH"
         git commit -m "$COMMIT_MESSAGE"
         git push -u origin "$BRANCH"
+        # Pass PR body via --body-file so multi-line content would round-trip
+        # cleanly if the single-line guard is ever relaxed.
+        BODY_FILE=$(mktemp)
+        printf '%s' "$PR_BODY" > "$BODY_FILE"
         gh pr create \
           --title "${PR_TITLE_PREFIX} ${DATE_SUFFIX}" \
-          --body "$PR_BODY" \
+          --body-file "$BODY_FILE" \
           --base main \
           --head "$BRANCH"
+        rm -f "$BODY_FILE"
         COMMIT_SHA=$(git rev-parse HEAD)
         # Synthetic checks — satisfies CI Required + CLA Required rulesets on
         # main. Use the Checks API (/check-runs), NOT Statuses API; rulesets
