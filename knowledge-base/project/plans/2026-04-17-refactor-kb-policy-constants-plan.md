@@ -288,8 +288,8 @@ Net backlog impact: **−3 closures** (issues #2300, #2325, #2297) with **no new
 - [x] `TextPreview` is shared between `file-preview.tsx` and `app/shared/[token]/page.tsx` (one implementation).
 - [x] `components/kb/file-preview.tsx` uses a `switch(kind)` with exhaustiveness guard.
 - [x] All vitest suites green; `tsc --noEmit` green. (1 pre-existing flake in `test/chat-input-attachments.test.tsx` tracked in #2470 / #2524 — unrelated.)
-- [ ] PR #2531 body contains `Closes #2300`, `Closes #2325`, `Closes #2297`.
-- [ ] Open code-review overlap dispositions recorded: #2329 commented on (ETag portion shipped), #2335/#1662/#2512 acknowledged in PR body.
+- [x] PR #2531 body contains `Closes #2300`, `Closes #2325`, `Closes #2297`.
+- [x] Open code-review overlap dispositions recorded: #2329 commented on (ETag portion shipped, comment #4273093337), #2335/#1662/#2512 acknowledged in PR body.
 
 ## Test Scenarios
 
