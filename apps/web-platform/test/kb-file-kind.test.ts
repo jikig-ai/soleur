@@ -4,6 +4,7 @@ import {
   classifyByContentType,
   type FileKind,
 } from "@/lib/kb-file-kind";
+import { CONTENT_TYPE_MAP } from "@/server/kb-limits";
 
 describe("classifyByExtension", () => {
   it("returns 'markdown' for .md", () => {
@@ -84,4 +85,40 @@ describe("parity — owner viewer and shared viewer must agree", () => {
       classifyByContentType("image/png", "inline"),
     );
   });
+});
+
+describe("parity — CONTENT_TYPE_MAP ↔ classifyByContentType", () => {
+  // Every extension in CONTENT_TYPE_MAP must have an explicit expected kind.
+  // Adding a new entry to CONTENT_TYPE_MAP without updating this table fails
+  // the "covers every entry" assertion below — preventing silent drift where
+  // a new inline Content-Type quietly falls through to "download".
+  const EXPECTED_KIND_BY_EXT: Record<string, Exclude<FileKind, "markdown">> = {
+    ".png": "image",
+    ".jpg": "image",
+    ".jpeg": "image",
+    ".gif": "image",
+    ".webp": "image",
+    ".svg": "image",
+    ".pdf": "pdf",
+    ".csv": "download",
+    ".txt": "text",
+    ".docx": "download",
+  };
+
+  it("every CONTENT_TYPE_MAP entry has an expected kind in the parity table", () => {
+    const mapExts = Object.keys(CONTENT_TYPE_MAP).sort();
+    const tableExts = Object.keys(EXPECTED_KIND_BY_EXT).sort();
+    expect(mapExts).toEqual(tableExts);
+  });
+
+  it.each(Object.entries(EXPECTED_KIND_BY_EXT))(
+    "classifyByContentType for %s maps to the expected kind",
+    (ext, expected) => {
+      const contentType = CONTENT_TYPE_MAP[ext];
+      // Use the disposition the serving layer applies: .docx is
+      // attachment-forced; everything else is inline.
+      const disposition = ext === ".docx" ? "attachment" : "inline";
+      expect(classifyByContentType(contentType, disposition)).toBe(expected);
+    },
+  );
 });

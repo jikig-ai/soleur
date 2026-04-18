@@ -167,10 +167,18 @@ describe("FilePreview", () => {
   });
 
   it("fetches and renders text for .txt files", async () => {
-    global.fetch = vi.fn().mockResolvedValue({
-      ok: true,
-      text: () => Promise.resolve("Hello world content"),
-    });
+    global.fetch = vi.fn((_url: string, init?: { method?: string }) => {
+      if (init?.method === "HEAD") {
+        return Promise.resolve({
+          ok: true,
+          headers: new Headers({ "content-length": "19" }),
+        } as Response);
+      }
+      return Promise.resolve({
+        ok: true,
+        text: () => Promise.resolve("Hello world content"),
+      } as Response);
+    }) as typeof fetch;
 
     render(<FilePreview path="notes/readme.txt" kind="text" />);
 
@@ -190,6 +198,38 @@ describe("FilePreview", () => {
     });
   });
 
+  it("shows download fallback for .txt files larger than the inline threshold", async () => {
+    // HEAD returns content-length above INLINE_TEXT_MAX_BYTES (1 MB) —
+    // TextPreview must skip the body fetch and render DownloadPreview so
+    // the browser is never asked to buffer a multi-MB text into a <pre>.
+    const oversized = 2 * 1024 * 1024;
+    const bodyFetch = vi.fn();
+    global.fetch = vi.fn((_url: string, init?: { method?: string }) => {
+      if (init?.method === "HEAD") {
+        return Promise.resolve({
+          ok: true,
+          headers: new Headers({ "content-length": String(oversized) }),
+        } as Response);
+      }
+      bodyFetch();
+      return Promise.resolve({
+        ok: true,
+        text: () => Promise.resolve("this should never render"),
+      } as Response);
+    }) as typeof fetch;
+
+    const { container } = render(
+      <FilePreview path="notes/huge.txt" kind="text" />,
+    );
+
+    await waitFor(() => {
+      const downloadLink = container.querySelector('a[download]');
+      expect(downloadLink).not.toBeNull();
+    });
+    expect(bodyFetch).not.toHaveBeenCalled();
+    expect(screen.queryByText("this should never render")).toBeNull();
+  });
+
   it("default showDownload renders internal Download row for PDF (preserves shared viewer affordance)", async () => {
     // Regression guard: shared viewer (`/shared/[token]`) relies on this default.
     const { container } = render(<FilePreview path="docs/report.pdf" kind="pdf" />);
@@ -200,10 +240,18 @@ describe("FilePreview", () => {
   });
 
   it("default showDownload renders internal Download row for .txt", async () => {
-    global.fetch = vi.fn().mockResolvedValue({
-      ok: true,
-      text: () => Promise.resolve("content"),
-    });
+    global.fetch = vi.fn((_url: string, init?: { method?: string }) => {
+      if (init?.method === "HEAD") {
+        return Promise.resolve({
+          ok: true,
+          headers: new Headers({ "content-length": "7" }),
+        } as Response);
+      }
+      return Promise.resolve({
+        ok: true,
+        text: () => Promise.resolve("content"),
+      } as Response);
+    }) as typeof fetch;
     const { container } = render(<FilePreview path="notes/readme.txt" kind="text" />);
     await waitFor(() => {
       const downloadLink = container.querySelector("a[download]");
@@ -237,10 +285,18 @@ describe("FilePreview", () => {
   });
 
   it("hides internal filename/Download row for .txt when showDownload={false}", async () => {
-    global.fetch = vi.fn().mockResolvedValue({
-      ok: true,
-      text: () => Promise.resolve("Hello world content"),
-    });
+    global.fetch = vi.fn((_url: string, init?: { method?: string }) => {
+      if (init?.method === "HEAD") {
+        return Promise.resolve({
+          ok: true,
+          headers: new Headers({ "content-length": "19" }),
+        } as Response);
+      }
+      return Promise.resolve({
+        ok: true,
+        text: () => Promise.resolve("Hello world content"),
+      } as Response);
+    }) as typeof fetch;
 
     const { container } = render(
       <FilePreview path="notes/readme.txt" kind="text" showDownload={false} />,

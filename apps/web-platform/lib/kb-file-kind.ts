@@ -47,15 +47,16 @@ export function classifyByExtension(ext: string): FileKind {
  * serving layer forces `disposition: "attachment"`, so it correctly
  * classifies as `"download"` regardless of the content-type map.
  *
- * Never returns `"markdown"` at runtime — markdown is served via the
- * JSON path (`/api/shared/<token>` returns `application/json` for `.md`),
- * not the binary path that yields a raw Content-Type. The `"markdown"`
- * branch is absent from this function's body by design.
+ * Return type excludes `"markdown"` — markdown is served via the JSON
+ * path (`/api/shared/<token>` returns `application/json` for `.md`),
+ * not the binary path that yields a raw Content-Type. The narrower type
+ * lets downstream consumers (e.g. `deriveBinaryKind`) stay honest
+ * without a runtime narrowing branch.
  */
 export function classifyByContentType(
   contentType: string,
   disposition: "inline" | "attachment",
-): FileKind {
+): Exclude<FileKind, "markdown"> {
   if (disposition === "attachment") return "download";
   if (contentType === "application/pdf") return "pdf";
   if (contentType.startsWith("image/")) return "image";

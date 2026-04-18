@@ -21,18 +21,15 @@ export type { SharedContentKind };
 
 /**
  * Derive the shared-content kind from validated binary metadata.
- * Delegates to `classifyByContentType` so the `X-Soleur-Kind` header
- * and the client-side viewer share a single classifier. The narrowing
- * to `Exclude<SharedContentKind, "markdown">` is a type-level safety
- * rail — `classifyByContentType` cannot return `"markdown"` today,
- * but preserving the narrower return type keeps `kb-serve.ts`'s
- * downstream consumers typed against the binary-only variants.
+ * Thin re-export over `classifyByContentType` so the `X-Soleur-Kind`
+ * header and the client-side viewer share a single classifier. The
+ * classifier's return type excludes `"markdown"` — markdown is served
+ * via a separate JSON path and never flows through this module.
  */
 export function deriveBinaryKind(
   meta: Pick<BinaryFileMetadata, "contentType" | "disposition">,
 ): Exclude<SharedContentKind, "markdown"> {
-  const kind = classifyByContentType(meta.contentType, meta.disposition);
-  return kind === "markdown" ? "download" : kind;
+  return classifyByContentType(meta.contentType, meta.disposition);
 }
 
 /**

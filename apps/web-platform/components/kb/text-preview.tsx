@@ -1,17 +1,25 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import { DownloadPreview } from "@/components/kb/download-preview";
 
 /**
- * Inline text preview. Fetches the text body lazily from `src` and
- * renders it in a scrollable `<pre>`. Falls back to a download link
- * on fetch failure so the recipient still has a recovery path.
+ * Inline text preview. HEADs `src` first, and if the body is over
+ * `INLINE_TEXT_MAX_BYTES` falls back to `DownloadPreview` instead of
+ * buffering the whole file into a single `<pre>`. Under the threshold,
+ * fetches the body and renders it.
  *
- * Shared between the owner viewer (`components/kb/file-preview.tsx`)
- * and the shared viewer (`app/shared/[token]/page.tsx`) — a single
- * component closes the inline-text rendering drift between the two
- * surfaces.
+ * Shared between the owner viewer (`components/kb/file-preview.tsx`) and
+ * the shared viewer (`app/shared/[token]/page.tsx`) — one component closes
+ * the inline-text rendering drift between the two surfaces.
+ *
+ * The size guard is the deliberate policy choice: `MAX_BINARY_SIZE` (50 MB)
+ * allows `.txt` uploads far larger than a browser can lay out in a single
+ * `<pre>` without janking the main thread, and we don't ship a virtualized
+ * renderer yet. Failing over to the download card is the safe default.
  */
+const INLINE_TEXT_MAX_BYTES = 1 * 1024 * 1024; // 1 MB
+
 export function TextPreview({
   src,
   filename,
@@ -24,11 +32,23 @@ export function TextPreview({
   const [text, setText] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
+  const [oversized, setOversized] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
     async function fetchText() {
       try {
+        const head = await fetch(src, { method: "HEAD" });
+        if (!head.ok) throw new Error("Fetch failed");
+        const contentLengthHeader = head.headers.get("content-length");
+        const contentLength = contentLengthHeader ? Number(contentLengthHeader) : Number.NaN;
+        if (Number.isFinite(contentLength) && contentLength > INLINE_TEXT_MAX_BYTES) {
+          if (!cancelled) {
+            setOversized(true);
+            setLoading(false);
+          }
+          return;
+        }
         const res = await fetch(src);
         if (!res.ok) throw new Error("Fetch failed");
         const content = await res.text();
@@ -57,8 +77,8 @@ export function TextPreview({
     );
   }
 
-  if (error || text === null) {
-    return <TextDownloadFallback src={src} filename={filename} />;
+  if (error || oversized || text === null) {
+    return <DownloadPreview src={src} filename={filename} />;
   }
 
   return (
@@ -78,38 +98,6 @@ export function TextPreview({
       <pre className="max-h-[70vh] overflow-auto rounded-lg border border-neutral-800 bg-neutral-900/50 p-4 text-sm text-neutral-300">
         {text}
       </pre>
-    </div>
-  );
-}
-
-function TextDownloadFallback({ src, filename }: { src: string; filename: string }) {
-  const ext = filename.split(".").pop()?.toUpperCase() || "FILE";
-  return (
-    <div className="flex h-full items-center justify-center p-8">
-      <div className="flex flex-col items-center gap-4 text-center">
-        <div className="rounded-lg border border-neutral-800 bg-neutral-900/50 p-6">
-          <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className="text-neutral-500">
-            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z" strokeLinecap="round" strokeLinejoin="round" />
-            <path d="M14 2v6h6" strokeLinecap="round" strokeLinejoin="round" />
-          </svg>
-        </div>
-        <div>
-          <p className="mb-1 text-sm font-medium text-neutral-300">{filename}</p>
-          <p className="text-xs text-neutral-500">{ext} file</p>
-        </div>
-        <a
-          href={src}
-          download={filename}
-          className="inline-flex items-center gap-2 rounded-lg border border-amber-500/50 px-4 py-2 text-sm font-medium text-amber-400 transition-colors hover:border-amber-400 hover:text-amber-300"
-        >
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" strokeLinecap="round" strokeLinejoin="round" />
-            <polyline points="7 10 12 15 17 10" strokeLinecap="round" strokeLinejoin="round" />
-            <line x1="12" y1="15" x2="12" y2="3" strokeLinecap="round" strokeLinejoin="round" />
-          </svg>
-          Download
-        </a>
-      </div>
     </div>
   );
 }
