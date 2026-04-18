@@ -72,6 +72,16 @@ rules_tsv=$(awk -v plen="$RULE_PREFIX_LEN" '
 rules_tsv_file="$_tmpdir/rules.tsv"
 printf '%s' "$rules_tsv" > "$rules_tsv_file"
 
+# Guard against an AGENTS.md that parses to zero rules — otherwise the
+# aggregator would silently emit a valid-but-empty report and callers
+# (compound SKILL.md step 8, /soleur:sync rule-prune) would see
+# `total_rules_tagged: 0` with no error signal. This is a malformed-input
+# condition, not a normal state.
+if [[ ! -s "$rules_tsv_file" ]]; then
+  echo "ERROR: $AGENTS_MD parsed to zero rules — check section headers and [id: ...] tags." >&2
+  exit 3
+fi
+
 # --- Counts from jsonl ----------------------------------------------------
 # Per-line parse via `jq -R 'fromjson?'` so a single malformed line from a
 # crash-mid-write or OOM does NOT abort the whole weekly aggregation. Bad
@@ -82,7 +92,14 @@ if [[ -s "$INCIDENTS" ]]; then
   # Tolerant parse: fromjson? yields null on parse failure; select(.) drops nulls.
   valid_stream=$(jq -R 'fromjson? | select(.)' < "$INCIDENTS" 2>/dev/null || echo "")
   valid_lines=0
-  [[ -n "$valid_stream" ]] && valid_lines=$(echo "$valid_stream" | jq -s 'length')
+  if [[ -n "$valid_stream" ]]; then
+    # `|| echo 0` + `${…:-0}` protect the arithmetic below from a failed
+    # second-stage jq (e.g., missing jq binary, corrupt internals). Both
+    # guards are defensive — a successful first-stage `jq -R` makes a
+    # broken second-stage parse exceedingly unlikely.
+    valid_lines=$(echo "$valid_stream" | jq -s 'length' 2>/dev/null || echo 0)
+    valid_lines=${valid_lines:-0}
+  fi
   bad_lines=$(( total_lines - valid_lines ))
   if [[ "$bad_lines" -gt 0 ]]; then
     # GitHub Actions picks up `::warning::` for workflow annotations; harmless locally.
@@ -231,8 +248,12 @@ if [[ "${AGGREGATOR_ROTATE:-0}" == "1" && -s "$INCIDENTS" ]]; then
   # An already-rotated `.gz` or a lingering uncompressed file from a
   # mid-run crash both count as "already exists" here; we append to a
   # fresh suffixed name rather than clobbering.
+  # Suffix uses nanoseconds so two rotations within the same second (rare
+  # in production, common in tests) do not re-collide. Tests may override
+  # the suffix via RULE_METRICS_ROTATE_SUFFIX for deterministic paths.
   if [[ -f "${archive}.gz" || -f "$archive" ]]; then
-    archive="$REPO_ROOT/.claude/.rule-incidents-${ts}-$(date -u +%H%M%S).jsonl"
+    suffix="${RULE_METRICS_ROTATE_SUFFIX:-$(date -u +%H%M%S%N)}"
+    archive="$REPO_ROOT/.claude/.rule-incidents-${ts}-${suffix}.jsonl"
   fi
   (
     flock -x 9

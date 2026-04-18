@@ -13,11 +13,17 @@ pass=0; fail=0
 #   worktree unless GIT_{DIR,INDEX_FILE,WORK_TREE} are unset AND
 #   GIT_CEILING_DIRECTORIES is set to $WORK. See learning
 #   2026-03-24-git-ceiling-directories-test-isolation.md.
+# - HOME / GIT_CONFIG_{GLOBAL,SYSTEM} neutralized so a local user's
+#   ~/.gitconfig (e.g. `[init] defaultBranch = master`) doesn't break
+#   the `git init -b main` fixture.
 unset GIT_DIR GIT_INDEX_FILE GIT_WORK_TREE
 
 # Isolate the jsonl file per run so we don't contaminate dev telemetry.
 WORK=$(mktemp -d)
 export GIT_CEILING_DIRECTORIES="$WORK"
+export HOME="$WORK"
+export GIT_CONFIG_GLOBAL=/dev/null
+export GIT_CONFIG_SYSTEM=/dev/null
 trap 'rm -rf "$WORK"' EXIT
 # Mirror the repo layout so BASH_SOURCE resolution inside the hooks lands
 # in $WORK instead of the real repo.
@@ -46,6 +52,23 @@ _check() {
     cat "$FILE" >&2 || true
   fi
   : > "$FILE"  # reset between cases
+}
+
+# Negative-space check: assert NO emission for rule_id <rid>. Proves the
+# guard fires only on triggering input — without this pair, a buggy
+# "always emit on --delete-branch" guard would pass the positive case.
+_check_silent() {
+  local label="$1" rid="$2"
+  if [[ ! -s "$FILE" ]] || ! jq -e --arg r "$rid" 'select(.rule_id == $r)' < "$FILE" >/dev/null 2>&1; then
+    pass=$((pass + 1))
+    echo "[ok] $label → no $rid emission (silent as expected)"
+  else
+    fail=$((fail + 1))
+    echo "[FAIL] $label (unexpected $rid emission)" >&2
+    echo "  file contents:" >&2
+    cat "$FILE" >&2 || true
+  fi
+  : > "$FILE"
 }
 
 # Build a fake git repo we can point commands at via .cwd. Committed on
@@ -101,6 +124,16 @@ echo '{"tool_name":"Bash","tool_input":{"command":"git add foo && git commit -m 
   | bash "$WORK/.claude/hooks/guardrails.sh" >/dev/null 2>&1 || true
 _check "guardrails: block-commit-on-main (chained)" "guardrails-block-commit-on-main"
 
+# --- guardrails: block-commit-on-main (negative: feature branch) -----------
+# Prove the guard does NOT fire when HEAD is a feature branch. A bug that
+# degenerated to "always emit on git commit" would pass the two positive
+# cases above; this case fails it.
+FEAT_REPO=$(_build_fake_main_repo "$WORK/feat-repo")
+git -C "$FEAT_REPO" checkout -q -b feat/foo
+echo '{"tool_name":"Bash","tool_input":{"command":"git commit -m x"},"cwd":"'"$FEAT_REPO"'"}' \
+  | bash "$WORK/.claude/hooks/guardrails.sh" >/dev/null 2>&1 || true
+_check_silent "guardrails: block-commit-on-main (feature branch)" "guardrails-block-commit-on-main"
+
 # --- guardrails: block-conflict-markers -----------------------------------
 # Stage a file with conflict markers. Use printf instead of a heredoc so
 # the literal markers in the test source don't themselves trip any local
@@ -134,6 +167,24 @@ PATH="$STUB_BIN:$PATH" \
   bash "$WORK/.claude/hooks/guardrails.sh" <<<'{"tool_name":"Bash","tool_input":{"command":"gh pr merge 1 --delete-branch --squash"}}' \
   >/dev/null 2>&1 || true
 _check "guardrails: block-delete-branch" "guardrails-block-delete-branch"
+
+# --- guardrails: block-delete-branch (negative: single worktree) ----------
+# Stub `git worktree list` to one line; guard must NOT fire.
+STUB_BIN_ONE="$WORK/stub-bin-one"
+mkdir -p "$STUB_BIN_ONE"
+cat > "$STUB_BIN_ONE/git" <<'STUBGIT'
+#!/usr/bin/env bash
+if [[ "$1 $2" == "worktree list" ]]; then
+  echo "/tmp/main 0000000 [main]"
+  exit 0
+fi
+exec /usr/bin/env -i PATH=/usr/bin:/bin git "$@"
+STUBGIT
+chmod +x "$STUB_BIN_ONE/git"
+PATH="$STUB_BIN_ONE:$PATH" \
+  bash "$WORK/.claude/hooks/guardrails.sh" <<<'{"tool_name":"Bash","tool_input":{"command":"gh pr merge 1 --delete-branch --squash"}}' \
+  >/dev/null 2>&1 || true
+_check_silent "guardrails: block-delete-branch (single worktree)" "guardrails-block-delete-branch"
 
 # --- pencil-open-guard (untracked .pen) -----------------------------------
 PEN_REPO=$(_build_fake_main_repo "$WORK/pen-repo")

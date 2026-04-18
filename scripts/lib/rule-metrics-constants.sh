@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Shared constants for rule-metrics scripts.
-# Sourced by scripts/rule-metrics-aggregate.sh and scripts/rule-prune.sh.
+# Sourced by scripts/rule-metrics-aggregate.sh, scripts/rule-prune.sh, and
+# .claude/hooks/lib/incidents.sh (hook-emitter side consumes SCHEMA_VERSION).
 # Do NOT add executable logic here — source-only.
 #
 # Drift guard: scripts/rule-prune.sh and scripts/lint-rule-ids.py both

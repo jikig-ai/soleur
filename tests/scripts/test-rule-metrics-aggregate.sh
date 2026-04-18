@@ -210,14 +210,17 @@ t_rotate_twice_same_month() {
     >> "$root/.claude/.rule-incidents.jsonl"
   INCIDENTS_REPO_ROOT="$root" AGGREGATOR_ROTATE=1 bash "$SCRIPT" >/dev/null 2>&1
   # Second run: different event, rotate again within the same month.
+  # RULE_METRICS_ROTATE_SUFFIX pins the uniquify suffix so this test does
+  # not depend on wall-clock granularity (second- or nano-level races).
   jq -nc '{timestamp:"2026-04-11T00:00:00Z", rule_id:"hr-rule-b", event_type:"deny", rule_text_prefix:"", command_snippet:""}' \
     >> "$root/.claude/.rule-incidents.jsonl"
-  INCIDENTS_REPO_ROOT="$root" AGGREGATOR_ROTATE=1 bash "$SCRIPT" >/dev/null 2>&1
-  # Expect at least one archive matching the monthly prefix AND one with
-  # the uniquified suffix (-YYYY-MM-HHMMSS.jsonl.gz).
+  INCIDENTS_REPO_ROOT="$root" AGGREGATOR_ROTATE=1 RULE_METRICS_ROTATE_SUFFIX=testrun \
+    bash "$SCRIPT" >/dev/null 2>&1
+  # Expect the monthly archive (first run) AND the suffixed archive
+  # (second run with RULE_METRICS_ROTATE_SUFFIX=testrun).
   local monthly suffixed
   monthly=$(find "$root/.claude" -maxdepth 1 -name '.rule-incidents-????-??.jsonl.gz' 2>/dev/null | wc -l | tr -d ' ')
-  suffixed=$(find "$root/.claude" -maxdepth 1 -name '.rule-incidents-????-??-??????.jsonl.gz' 2>/dev/null | wc -l | tr -d ' ')
+  suffixed=$(find "$root/.claude" -maxdepth 1 -name '.rule-incidents-????-??-testrun.jsonl.gz' 2>/dev/null | wc -l | tr -d ' ')
   if [[ "$monthly" -ge 1 && "$suffixed" -ge 1 ]]; then
     _report "rotate-twice-same-month: archives do not clobber" ok
   else

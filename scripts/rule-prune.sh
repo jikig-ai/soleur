@@ -33,6 +33,12 @@ METRICS="$ROOT/knowledge-base/project/rule-metrics.json"
 
 [[ -f "$METRICS" ]] || { echo "ERROR: $METRICS not found — run scripts/rule-metrics-aggregate.sh first." >&2; exit 2; }
 
+# Schema contract: make SCHEMA_VERSION load-bearing at the consumer
+# boundary. If the aggregator ever bumps to schema 2 with a different
+# rules shape, this fails loudly instead of producing nonsense issues.
+jq -e --argjson v "$SCHEMA_VERSION" '.schema == $v' "$METRICS" >/dev/null 2>&1 \
+  || { echo "ERROR: $METRICS has unexpected schema (expected $SCHEMA_VERSION). Re-run scripts/rule-metrics-aggregate.sh." >&2; exit 3; }
+
 # Compute cutoff epoch. Use --weeks=0 to force-match all zero-hit rules.
 cutoff_epoch=$(( $(date -u +%s) - WEEKS * 7 * 86400 ))
 
@@ -95,7 +101,10 @@ while IFS=$'\t' read -r id section first_seen prefix; do
   fi
   title="rule-prune: consider retiring $id"
   # Idempotency: does an open issue with this exact title already exist?
-  existing=$(gh issue list --search "$title in:title" 2>/dev/null \
+  # --json title forces JSON output; without it, `gh` emits a TSV table
+  # that jq would silently error on via the `|| echo "0"` tail (working
+  # by accident — we'd re-file every time gh's default format changed).
+  existing=$(gh issue list --search "$title in:title" --json title 2>/dev/null \
     | jq --arg t "$title" '[.[] | select(.title == $t)] | length' 2>/dev/null \
     || echo "0")
   if [[ "${existing:-0}" -gt 0 ]]; then

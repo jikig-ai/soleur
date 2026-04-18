@@ -24,6 +24,10 @@ INPUT=$(cat)
 # two jq forks ran on every Bash tool invocation; collapsing to one halves
 # the hook's hot-path overhead.
 eval "$(echo "$INPUT" | jq -r '@sh "COMMAND=\(.tool_input.command // "") TOOL_NAME=\(.tool_name // "")"' 2>/dev/null || echo 'COMMAND="" TOOL_NAME=""')"
+# Belt-and-braces against set -u: a partial eval (jq succeeded on one
+# field, failed on the other) could leave either variable undefined.
+: "${COMMAND:=}"
+: "${TOOL_NAME:=}"
 
 # Bypass preflight — records (does NOT block) when a known bypass flag is used.
 # v1 scope: --no-verify, LEFTHOOK=0. Extend detect_bypass (lib/incidents.sh)

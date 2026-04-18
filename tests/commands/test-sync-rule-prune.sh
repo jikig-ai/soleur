@@ -35,6 +35,7 @@ case "$1 $2" in
     while [[ $# -gt 0 ]]; do
       case "$1" in
         --search) search="$2"; shift 2 ;;
+        --json)   shift 2 ;;
         *) shift ;;
       esac
     done
@@ -84,6 +85,7 @@ _setup() {
   local cutoff
   cutoff=$(date -u -d "-70 days" +%Y-%m-%dT%H:%M:%SZ)
   jq -n --arg seen "$cutoff" '{
+    schema:1,
     generated_at:"2026-04-14T00:00:00Z",
     rules:[
       {id:"hr-never-used-a", section:"Hard Rules", hit_count:0, bypass_count:0, prevented_errors:0, last_hit:null, first_seen:$seen, rule_text_prefix:"Rule A prefix"},
