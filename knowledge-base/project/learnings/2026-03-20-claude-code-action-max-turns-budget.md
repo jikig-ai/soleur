@@ -34,6 +34,32 @@ Current workflow turn budgets for reference:
 
 Batching shell commands with `;` (not `&&` — failures shouldn't halt the batch) is the most effective way to reduce turn consumption for data-collection-heavy workflows.
 
+## Timeout-to-Turns Ratio (added 2026-04-18)
+
+When raising `--max-turns`, also check that `timeout-minutes / max-turns` stays aligned with peer workflows. Median peer ratio is ~0.75 min/turn; outliers dip to 0.55 (community-monitor) or climb to 1.2 (content-generator with WebSearch). A bumped turn budget with an unchanged timeout is a silent failure mode — the agent runs out of wall clock before using the turns it was given.
+
+Peer reference table (2026-04-18):
+
+| Workflow | timeout | turns | ratio (min/turn) |
+|---|---|---|---|
+| campaign-calendar | 15 | 20 | 0.75 |
+| follow-through | 15 | 30 | 0.50 |
+| community-monitor | 30 | 50 | 0.60 |
+| bug-fixer | 45 | 55 | 0.82 |
+| ship-merge | 30 | 40 | 0.75 |
+| roadmap-review | 30 | 40 | 0.75 |
+| seo-aeo-audit | 30 | 40 | 0.75 |
+| growth-execution | 30 | 40 | 0.75 |
+| competitive-analysis | 45 | 45 | 1.00 |
+| content-generator | 60 | 50 | 1.20 |
+| ux-audit | 45 | 60 | 0.75 |
+| growth-audit | 75 | 70 | 1.07 |
+| daily-triage | 60 | 80 | 0.75 |
+
+**Rule:** when editing `claude_args --max-turns`, also edit `timeout-minutes` to keep the ratio ≥ 0.75 min/turn unless the workflow is data-collection-only (no test execution, no WebSearch). Below 0.75 is only safe for tasks where each turn is a sub-minute API call (follow-through at 0.50 is an outlier because every turn is a `gh pr view`).
+
+**Review catch:** In PR #2536, the initial commit raised max-turns 35 → 55 but left `timeout-minutes: 30` (0.55 ratio, below the median). The git-history-analyzer review agent surfaced this; the follow-up commit bumped timeout to 45 (0.82 ratio).
+
 ## Tags
 
 category: ci-workflows
