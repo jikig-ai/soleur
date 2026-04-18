@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, act } from "@testing-library/react";
-import { fireEvent } from "@testing-library/react";
+import { render, act, fireEvent } from "@testing-library/react";
 import { ChatInput } from "@/components/chat/chat-input";
+import { setControlledValue } from "./helpers/dom";
 
 // AC5: per-path draft persistence. When `draftKey` is set, the textarea
 // value is mirrored to sessionStorage under that key and restored on mount.
@@ -26,19 +26,10 @@ describe("ChatInput — draftKey (AC5)", () => {
     onAtDismiss: vi.fn(),
   };
 
-  function setValue(el: HTMLTextAreaElement, value: string) {
-    const setter = Object.getOwnPropertyDescriptor(
-      window.HTMLTextAreaElement.prototype,
-      "value",
-    )!.set!;
-    setter.call(el, value);
-    fireEvent.input(el);
-  }
-
   it("persists draft to sessionStorage under `draftKey` on input", () => {
     render(<ChatInput {...commonProps} draftKey="kb.chat.draft:knowledge-base/a.md" />);
     const ta = document.querySelector("textarea") as HTMLTextAreaElement;
-    act(() => setValue(ta, "draft for A"));
+    act(() => setControlledValue(ta, "draft for A"));
     act(() => { vi.advanceTimersByTime(260); });
     expect(sessionStorage.getItem("kb.chat.draft:knowledge-base/a.md")).toBe(
       "draft for A",
@@ -75,7 +66,7 @@ describe("ChatInput — draftKey (AC5)", () => {
   it("clears the draft from storage after a successful send", () => {
     render(<ChatInput {...commonProps} draftKey="kb.chat.draft:knowledge-base/a.md" />);
     const ta = document.querySelector("textarea") as HTMLTextAreaElement;
-    act(() => setValue(ta, "some message"));
+    act(() => setControlledValue(ta, "some message"));
     act(() => {
       fireEvent.keyDown(ta, { key: "Enter" });
     });
