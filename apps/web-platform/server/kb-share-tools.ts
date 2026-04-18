@@ -13,9 +13,12 @@ import { z } from "zod/v4";
 import {
   createShare,
   listShares,
+  previewShare,
   revokeShare,
   type CreateShareResult,
   type ListSharesResult,
+  type PreviewShareErrorCode,
+  type PreviewShareResult,
   type RevokeShareResult,
   type ShareServiceClient,
 } from "@/server/kb-share";
@@ -78,6 +81,30 @@ function wrapRevoke(result: RevokeShareResult): ToolTextResponse {
   });
 }
 
+function wrapPreview(result: PreviewShareResult): ToolTextResponse {
+  if (!result.ok) {
+    // Compile-time exhaustiveness on PreviewShareErrorCode — adding a new
+    // code without reviewing this wrapper fails tsc --noEmit (per
+    // 2026-04-10-discriminated-union-exhaustive-switch-miss).
+    const _exhaustive: PreviewShareErrorCode = result.code;
+    void _exhaustive;
+    return wrapError(result);
+  }
+  // firstPagePreview is an optional field on the success variant — JSON
+  // serialization drops undefined keys, so conditional assignment buys
+  // nothing. Spread result directly.
+  return textResponse({
+    status: result.status,
+    token: result.token,
+    documentPath: result.documentPath,
+    kind: result.kind,
+    contentType: result.contentType,
+    size: result.size,
+    filename: result.filename,
+    firstPagePreview: result.firstPagePreview,
+  });
+}
+
 export function buildKbShareTools(opts: BuildKbShareToolsOpts) {
   const { serviceClient, userId, kbRoot, baseUrl } = opts;
   return [
@@ -117,6 +144,18 @@ export function buildKbShareTools(opts: BuildKbShareToolsOpts) {
       { token: z.string() },
       async (args) =>
         wrapRevoke(await revokeShare(serviceClient, userId, args.token)),
+    ),
+    tool(
+      "kb_share_preview",
+      "Preview what a recipient sees at /shared/<token>. Returns " +
+        "{ status, contentType, size, filename, kind, firstPagePreview? }. " +
+        "Use this to verify a share link renders correctly before sending it. " +
+        "Works for all share terminal states — revoked links return " +
+        "{ code: 'revoked' }, content-drift returns { code: 'content-changed' }. " +
+        "Does NOT return the document bytes (use kb_read_content for that).",
+      { token: z.string() },
+      async (args) =>
+        wrapPreview(await previewShare(serviceClient, args.token)),
     ),
   ];
 }
