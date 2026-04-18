@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, act, waitFor } from "@testing-library/react";
 import { useState } from "react";
 import { createUseTeamNamesMock } from "./mocks/use-team-names";
+import { createWebSocketMock } from "./mocks/use-websocket";
 
 // Phase 6.1: Panel accessibility.
 // - <aside-like> role=dialog with aria-label including filename.
@@ -9,32 +10,13 @@ import { createUseTeamNamesMock } from "./mocks/use-team-names";
 // - On close, focus returns to the trigger button that opened the sidebar.
 // - Close button has aria-label="Close panel" (covered elsewhere but
 //   re-asserted here for negative-space protection).
-
-type MockTextMessage = {
-  id: string;
-  role: "user" | "assistant";
-  content: string;
-  type: "text";
-};
+//
+// Uses real timers — focus flush is rAF-driven. Do not add
+// vi.useFakeTimers() here; the `waitFor` focus assertions below rely
+// on real rAF / microtask settle.
 
 const mockTrack = vi.fn();
-let wsReturn = {
-  messages: [] as MockTextMessage[],
-  startSession: vi.fn(),
-  resumeSession: vi.fn(),
-  sendMessage: vi.fn(),
-  sendReviewGateResponse: vi.fn(),
-  status: "connected" as const,
-  disconnectReason: undefined as string | undefined,
-  lastError: null as import("@/lib/ws-client").WebSocketError | null,
-  reconnect: vi.fn(),
-  routeSource: null as "auto" | "mention" | null,
-  activeLeaderIds: [] as string[],
-  sessionConfirmed: true,
-  usageData: null as { totalCostUsd: number } | null,
-  realConversationId: "cid-1" as string | null,
-  resumedFrom: null as { conversationId: string; timestamp: string; messageCount: number } | null,
-};
+let wsReturn = createWebSocketMock({ realConversationId: "cid-1" });
 
 vi.mock("@/lib/ws-client", () => ({
   useWebSocket: () => wsReturn,
@@ -59,7 +41,7 @@ vi.mock("@/hooks/use-media-query", () => ({
 describe("KbChatSidebar — accessibility (Phase 6.1)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    wsReturn = { ...wsReturn, messages: [], resumedFrom: null };
+    wsReturn = createWebSocketMock({ realConversationId: "cid-1" });
   });
 
   // Belt-and-braces cleanup: a stray leftover `[data-kb-chat]` node injected
@@ -122,23 +104,17 @@ describe("KbChatSidebar — accessibility (Phase 6.1)", () => {
   it("moves focus to the textarea on open", async () => {
     await harness();
     act(() => { screen.getByRole("button", { name: /ask about this document/i }).click(); });
-    await new Promise((r) => setTimeout(r, 0));
-    const textarea = document.querySelector("textarea") as HTMLTextAreaElement;
-    expect(textarea).not.toBeNull();
-    expect(document.activeElement).toBe(textarea);
+    const textarea = await screen.findByPlaceholderText(/ask about this document/i) as HTMLTextAreaElement;
+    await waitFor(() => expect(document.activeElement).toBe(textarea));
   });
 
   it("returns focus to the trigger button on close", async () => {
     await harness();
     const trigger = screen.getByRole("button", { name: /ask about this document/i });
     act(() => { trigger.click(); });
-    await new Promise((r) => setTimeout(r, 0));
-
-    // Now close via the Close panel button.
-    const closeBtn = screen.getByLabelText(/close panel/i);
+    const closeBtn = await screen.findByLabelText(/close panel/i);
     act(() => { closeBtn.click(); });
-    await new Promise((r) => setTimeout(r, 0));
-    expect(document.activeElement).toBe(trigger);
+    await waitFor(() => expect(document.activeElement).toBe(trigger));
   });
 
   it("renders a Close panel button with an accessible name", async () => {
