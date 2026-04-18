@@ -59,6 +59,12 @@ variable "cf_api_token" {
   sensitive   = true
 }
 
+variable "cf_api_token_zone_settings" {
+  description = "Cloudflare API token narrowed to Zone Settings:Edit on soleur.ai (HSTS / security_header)"
+  type        = string
+  sensitive   = true
+}
+
 variable "cf_zone_id" {
   description = "Cloudflare zone ID for soleur.ai"
   type        = string
