@@ -38,7 +38,11 @@ permissions:
 jobs:
   fix-bug:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # 45min / 55turns = 0.82 min/turn, aligned with peer workflows
+    # (ux-audit 45/60, ship-merge 30/40, roadmap-review 30/40).
+    # Previous 30min ceiling was tight at 55 turns if any turn runs the
+    # vitest suite (~2min wall per invocation).
+    timeout-minutes: 45
 
     steps:
       - name: Checkout repository
@@ -92,6 +96,15 @@ jobs:
           export OPEN_FIXES
           echo "Issues with open bot-fix PRs: ${OPEN_FIXES:-none}"
 
+          # Filter rationale (run 24599250091, 2026-04-18):
+          # - bot-fix/attempted, ux-audit: prior-attempt / wrong-class skips
+          # - synthetic-test: repo-canonical label for test-only issues
+          # - title regex ^(flaky|flake|test-flake|test)[:(]: skips flaky/test-
+          #   investigation reports which the fix-issue skill's single-file
+          #   constraint cannot resolve. Intentional over-match on `test:`
+          #   covers issues like #2505 ("test: X flake in parallel runs"); a
+          #   legitimate `type/bug` titled `test: add coverage` is rare and
+          #   would be better handled by /soleur:work anyway.
           for PRIORITY in priority/p3-low priority/p2-medium priority/p1-high; do
             ISSUE=$(gh issue list \
               --label "$PRIORITY" \
@@ -104,7 +117,6 @@ jobs:
                   (.labels | map(.name) | index("bot-fix/attempted") | not) and
                   (.labels | map(.name) | index("ux-audit") | not) and
                   (.labels | map(.name) | index("synthetic-test") | not) and
-                  (.labels | map(.name) | index("test-flake") | not) and
                   (.title | test("^(flaky|flake|test-flake|test)[:(]"; "i") | not) and
                   (.number | IN($skip_nums[]) | not)
                 )] | sort_by(.createdAt) | .[0].number // empty')
@@ -125,6 +137,10 @@ jobs:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           plugin_marketplaces: 'https://github.com/jikig-ai/soleur.git'
           plugins: 'soleur@soleur'
+          # 55 calibrated against peer workflows (community-monitor 50,
+          # ux-audit 60). Raised from 35 after run 24599250091 hit
+          # error_max_turns at 36 on a test-heavy fix. See learning
+          # 2026-03-20-claude-code-action-max-turns-budget.md.
           claude_args: >-
             --model claude-sonnet-4-6
             --max-turns 55
