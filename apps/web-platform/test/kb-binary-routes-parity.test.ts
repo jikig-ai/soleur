@@ -6,6 +6,11 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { hashBytes } from "@/server/kb-content-hash";
 import { shareSupabaseFromMock } from "./helpers/share-mocks";
 import { __resetShareHashVerdictCacheForTest } from "@/server/share-hash-verdict-cache";
+import {
+  PUBLIC_CACHE_CONTROL,
+  PRIVATE_CACHE_CONTROL,
+  deriveWeakETag,
+} from "./helpers/kb-cache-fixtures";
 
 // ---------------------------------------------------------------------------
 // Hoisted mocks — same primitives used by both route tests, combined.
@@ -67,10 +72,6 @@ const PARITY_HEADERS = [
   "Content-Security-Policy",
   "Accept-Ranges",
 ] as const;
-
-const PUBLIC_CACHE_CONTROL =
-  "public, max-age=60, s-maxage=300, stale-while-revalidate=3600, must-revalidate";
-const PRIVATE_CACHE_CONTROL = "private, max-age=60";
 
 let tmpWorkspace: string;
 let kbRoot: string;
@@ -277,7 +278,7 @@ describe("Cache-Control is intentionally divergent (issue #2329)", () => {
 
     // Owner weak ETag: derived from fstat tuple.
     const stat = fs.statSync(path.join(kbRoot, "report.pdf"));
-    const ownerWeakETag = `W/"${stat.ino}-${stat.size}-${Math.floor(stat.mtimeMs)}"`;
+    const ownerWeakETag = deriveWeakETag(stat);
     const ownerRes = await callOwnerGET("report.pdf", {
       "if-none-match": ownerWeakETag,
     });

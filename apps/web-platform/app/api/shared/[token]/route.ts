@@ -40,11 +40,19 @@ import { reportSilentFallback } from "@/server/observability";
 // so a future drift in one branch cannot silently break the privacy posture.
 const SHARED_NOT_FOUND_MESSAGE = "Document no longer available";
 
+// Every 4xx/5xx on this route emits Cache-Control: no-store so a shared cache
+// (Cloudflare, corporate proxy) cannot pin an error state past its natural
+// lifetime — particularly the revoked-share 410, which must not survive a
+// re-issue of the same token.
+function jsonNoStore(body: unknown, status: number): Response {
+  return NextResponse.json(body, {
+    status,
+    headers: { "Cache-Control": "no-store" },
+  });
+}
+
 function notFoundResponse() {
-  return NextResponse.json(
-    { error: SHARED_NOT_FOUND_MESSAGE },
-    { status: 404, headers: { "Cache-Control": "no-store" } },
-  );
+  return jsonNoStore({ error: SHARED_NOT_FOUND_MESSAGE }, 404);
 }
 
 // Kept route-private (not in kb-serve.ts) because "legacy-null-hash" is a
@@ -52,12 +60,12 @@ function notFoundResponse() {
 // null content_sha256. contentChangedResponse, by contrast, lives in
 // kb-serve.ts because any hash-gated flow can emit it.
 function legacyNullHashResponse() {
-  return NextResponse.json(
+  return jsonNoStore(
     {
       error: "This link is from an older share system and is no longer valid.",
       code: "legacy-null-hash",
     },
-    { status: 410, headers: { "Cache-Control": "no-store" } },
+    410,
   );
 }
 
@@ -123,10 +131,7 @@ async function prepareSharedRequest(
     logRateLimitRejection("share-endpoint", clientIp);
     return {
       kind: "response",
-      response: NextResponse.json(
-        { error: "Too many requests" },
-        { status: 429, headers: { "Cache-Control": "no-store" } },
-      ),
+      response: jsonNoStore({ error: "Too many requests" }, 429),
     };
   }
 
@@ -142,19 +147,16 @@ async function prepareSharedRequest(
   if (fetchError || !shareLink) {
     return {
       kind: "response",
-      response: NextResponse.json(
-        { error: "Not found" },
-        { status: 404, headers: { "Cache-Control": "no-store" } },
-      ),
+      response: jsonNoStore({ error: "Not found" }, 404),
     };
   }
 
   if (shareLink.revoked) {
     return {
       kind: "response",
-      response: NextResponse.json(
+      response: jsonNoStore(
         { error: "This link has been disabled", code: "revoked" },
-        { status: 410, headers: { "Cache-Control": "no-store" } },
+        410,
       ),
     };
   }
@@ -404,7 +406,7 @@ function mapSharedError(
       "shared: access denied (null byte / symlink / traversal)",
     );
     logSharedFailed(token, documentPath, "access-denied");
-    return NextResponse.json({ error: "Access denied" }, { status: 403 });
+    return jsonNoStore({ error: "Access denied" }, 403);
   }
   if (err instanceof KbNotFoundError) {
     logSharedFailed(token, documentPath, "not-found");
@@ -412,7 +414,7 @@ function mapSharedError(
   }
   if (err instanceof KbFileTooLargeError) {
     logSharedFailed(token, documentPath, "file-too-large");
-    return NextResponse.json({ error: err.message }, { status: 413 });
+    return jsonNoStore({ error: err.message }, 413);
   }
   if (err instanceof BinaryOpenError) {
     if (err.code === "content-changed") {
@@ -433,15 +435,12 @@ function mapSharedError(
       "shared: binary open failed",
     );
     logSharedFailed(token, documentPath, `binary-open:${err.code ?? "unknown"}`);
-    return NextResponse.json({ error: err.message }, { status: err.status });
+    return jsonNoStore({ error: err.message }, err.status);
   }
   reportSilentFallback(err, {
     feature: "shared-token",
     op: "serve",
     extra: { token, documentPath },
   });
-  return NextResponse.json(
-    { error: "An unexpected error occurred" },
-    { status: 500 },
-  );
+  return jsonNoStore({ error: "An unexpected error occurred" }, 500);
 }

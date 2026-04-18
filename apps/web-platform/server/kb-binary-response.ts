@@ -271,6 +271,9 @@ const CACHE_CONTROL_BY_SCOPE: Record<CacheScope, string> = {
  * buildBinaryResponse, buildBinaryHeadResponse, and upstream share-route
  * helpers that short-circuit before any filesystem work when the client's
  * If-None-Match matches the stored content hash.
+ *
+ * @param opts.scope Cache policy — `"public"` for the shared route (edge-
+ *   cacheable), `"private"` (default) for the owner route.
  */
 export function build304Response(
   etag: string,
@@ -312,16 +315,23 @@ export function buildBinaryHeaders(
   payload: BinaryFileMetadata,
   opts?: { strongETag?: string; scope?: CacheScope },
 ): Record<string, string> {
-  return {
+  const scope: CacheScope = opts?.scope ?? "private";
+  const headers: Record<string, string> = {
     "Content-Type": payload.contentType,
     "Content-Disposition": formatContentDisposition(payload.disposition, payload.rawName),
     "X-Content-Type-Options": "nosniff",
-    "Cache-Control": CACHE_CONTROL_BY_SCOPE[opts?.scope ?? "private"],
+    "Cache-Control": CACHE_CONTROL_BY_SCOPE[scope],
     "Content-Security-Policy": KB_BINARY_RESPONSE_CSP,
     "Accept-Ranges": "bytes",
     [SHARED_CONTENT_KIND_HEADER]: deriveBinaryKind(payload),
     ETag: buildETag(payload, opts?.strongETag),
   };
+  // Defensive on public responses: any future middleware that branches on a
+  // request header must either add to Vary here or flip scope back to
+  // "private". Accept-Encoding is implicit in Next.js but making it explicit
+  // pins the contract at the source.
+  if (scope === "public") headers.Vary = "Accept-Encoding";
+  return headers;
 }
 
 /**
@@ -388,7 +398,12 @@ export async function buildBinaryResponse(
       ) {
         return new Response(null, {
           status: 416,
-          headers: { "Content-Range": `bytes */${size}` },
+          headers: {
+            "Content-Range": `bytes */${size}`,
+            // Match the other error branches: a malformed-Range 416 must not
+            // be shared-cached past its natural lifetime.
+            "Cache-Control": "no-store",
+          },
         });
       }
       const chunkLength = end - start + 1;

@@ -13,6 +13,10 @@ import {
   ifNoneMatchMatches,
   type BinaryFileMetadata,
 } from "@/server/kb-binary-response";
+import {
+  PUBLIC_CACHE_CONTROL,
+  PRIVATE_CACHE_CONTROL,
+} from "./helpers/kb-cache-fixtures";
 
 let tmpDir: string;
 let filePath: string;
@@ -130,10 +134,6 @@ describe("buildBinaryHeadResponse — 200 + 304 + Content-Length", () => {
     expect(body.byteLength).toBe(0);
   });
 });
-
-const PUBLIC_CACHE_CONTROL =
-  "public, max-age=60, s-maxage=300, stale-while-revalidate=3600, must-revalidate";
-const PRIVATE_CACHE_CONTROL = "private, max-age=60";
 
 describe("buildBinaryHeadResponse — Cache-Control scope", () => {
   it("defaults to private, max-age=60", async () => {
