@@ -2,7 +2,6 @@
 category: infrastructure
 tags: [multi-user, signup, workspace, provisioning, bubblewrap, verification]
 date: 2026-04-18
-last_verified: 2026-04-18
 ---
 
 # MU1: Signup Workspace Provisioning — Re-verification Runbook
@@ -83,16 +82,22 @@ MU1_INTEGRATION=1 doppler run -p soleur -c dev -- \
 Expected output: 6 passed, 1 skipped (AC-2 deferred).
 
 Cleanup: the test deletes the synthetic user in `finally`. If the test
-crashes before cleanup, sweep manually:
+crashes before cleanup, sweep manually. The snippet below (a) is
+hard-gated to `-c dev`, (b) re-asserts the Supabase URL looks like a
+non-prod project before any delete runs, (c) uses the same v4-UUID
+regex the test uses so it cannot match anything but its own leftovers:
 
 ```bash
 doppler run -p soleur -c dev -- node -e '
+  const url = process.env.SUPABASE_URL || "";
+  if (!/(^|\.)dev\.|-dev\.|dev-/.test(url)) {
+    throw new Error("Refusing to run cleanup against non-dev Supabase URL: " + url);
+  }
   const { createClient } = require("@supabase/supabase-js");
-  const c = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY);
+  const c = createClient(url, process.env.SUPABASE_SERVICE_ROLE_KEY);
+  const SYNTH = /^mu1-integration-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}@soleur-test\.invalid$/i;
   c.auth.admin.listUsers({ perPage: 200 }).then(async ({ data }) => {
-    const synth = (data?.users ?? []).filter(
-      (u) => /^mu1-integration-[0-9a-f-]+@soleur-test\.invalid$/i.test(u.email || "")
-    );
+    const synth = (data?.users ?? []).filter((u) => SYNTH.test(u.email || ""));
     for (const u of synth) {
       console.log("deleting", u.email);
       await c.auth.admin.deleteUser(u.id);
@@ -113,11 +118,10 @@ Expected output (baseline today, single namespace-mapped UID):
 
 ```text
 --- MU1 bubblewrap UID audit --- container=soleur-web-platform
-PASS: CLONE_NEWUSER works — bwrap can create a user namespace
+PASS: CLONE_NEWUSER works — bwrap can create a user namespace (observed UID=0)
+INFO: baseline today = single namespace-mapped UID (pre-container-per-workspace)
 PASS: HostConfig.SecurityOpt includes apparmor=soleur-bwrap
 PASS: HostConfig.SecurityOpt includes seccomp=/etc/docker/seccomp-profiles/soleur-bwrap.json
-INFO: observed UID inside bwrap namespace = 0
-INFO: baseline today = single namespace-mapped UID (pre-container-per-workspace)
 --- MU1 bubblewrap UID audit complete — failures=0 ---
 ```
 
@@ -139,16 +143,24 @@ once per verification cycle:
 
 4. Delete the staging account via the in-app settings flow once verified.
 
-## Verify — Post-run Checklist
+## Verify + Sign-off Checklist
 
-- [ ] Output of step 1 attached to the verification issue or PR comment.
-- [ ] If step 2 was run, deletion count of synthetic users = count of
+Attach this completed checklist to [#1448][i1448] before marking MU1
+green on the roadmap.
+
+- [ ] Pre-check items all green on the day of verification.
+- [ ] Output of step 1 attached to the verification issue or PR comment
+      (5 passed, 2 skipped by default, or 6 passed / 1 skipped if step 2
+      ran).
+- [ ] If step 2 ran, deletion count of synthetic users = count of
       synthetic users created (no leftovers).
-- [ ] Output of step 3 attached, with `failures=0` highlighted.
-- [ ] Step 4 evidence captured (screenshot or `ls` output).
-- [ ] Observed bwrap UID from step 3 matches the baseline recorded in
-      this runbook. If it differs, a container-per-workspace change is
-      likely in flight — update this runbook's baseline in the same PR.
+- [ ] Output of step 3 attached, with `failures=0` highlighted and the
+      observed bwrap UID matching the recorded baseline. If it differs, a
+      container-per-workspace change is likely in flight — update this
+      runbook's baseline in the same PR.
+- [ ] Step 4 evidence captured (screenshot or `ls` output) OR
+      justification for skipping this cycle.
+- [ ] Any failure remediated before sign-off.
 
 ## Failure Remediation
 
@@ -170,13 +182,6 @@ once per verification cycle:
   `HostConfig.SecurityOpt` and the most recent `ci-deploy.sh` run.
 - **Step 4 fails** — manually verify the repo-connect onboarding is
   not broken. File a P1 issue and block MU1 sign-off.
-
-## Rollback
-
-MU1 itself adds no runtime behavior — only verification artifacts — so
-there is no rollback SQL or infra change to reverse. If the verification
-surfaces a real regression, rollback the commit that introduced the
-regression (not this runbook).
 
 ## Known Deferrals
 
@@ -205,21 +210,6 @@ criteria or explicitly accepted.
   [#1557](https://github.com/jikig-ai/soleur/issues/1557).
 - **bwrap UID investigation** — adjacent to MU1; tracked by
   [#1546](https://github.com/jikig-ai/soleur/issues/1546).
-
-## Sign-off Checklist
-
-Attach this completed checklist to [#1448][i1448] before marking MU1
-green on the roadmap.
-
-- [ ] Pre-check items all green on the day of verification.
-- [ ] Step 1 output pasted (5 passed, 2 skipped).
-- [ ] Step 2 output pasted (6 passed, 1 skipped) OR justification for
-      skipping this cycle.
-- [ ] Step 3 output pasted (all three checks PASS, UID recorded).
-- [ ] Step 4 output pasted (staging clone evidence).
-- [ ] Any failure remediated before sign-off.
-- [ ] `last_verified` frontmatter on this runbook updated to today's
-      date and committed.
 
 ## Cross-references
 

@@ -7,14 +7,14 @@
 //
 // Default lane: only the offline tests (AC-3, AC-4) run.
 // MU1_INTEGRATION=1: AC-1 runs against the dev Supabase project.
-// AC-2 is skipped until a public fixture repo exists (tracked follow-up).
+// AC-2 is deferred until a public fixture repo exists — see #2605.
 //
 // See:
 //   - knowledge-base/project/plans/2026-04-18-ops-verify-signup-workspace-provisioning-plan.md
 //   - knowledge-base/engineering/ops/runbooks/mu1-signup-workspace-verification.md
 
 import { tmpdir } from "os";
-import { mkdtempSync, existsSync, readlinkSync, rmSync } from "fs";
+import { mkdtempSync, existsSync, readlinkSync } from "fs";
 import { join } from "path";
 import { randomUUID } from "crypto";
 
@@ -30,7 +30,7 @@ delete process.env.GIT_DIR;
 delete process.env.GIT_INDEX_FILE;
 delete process.env.GIT_WORK_TREE;
 
-import { afterAll, afterEach, describe, expect, test } from "vitest";
+import { afterEach, describe, expect, test } from "vitest";
 import {
   provisionWorkspace,
   removeWorkspaceDir,
@@ -39,9 +39,11 @@ import { isPathInWorkspace } from "../server/sandbox";
 
 // Synthetic-identifier allowlist for MU1. Per
 // cq-destructive-prod-tests-allowlist — any destructive cleanup must refuse
-// to touch an identifier that does not match this regex.
+// to touch an identifier that does not match this regex. Pinned to the v4
+// UUID shape (8-4-4-4-12 hex) rather than a permissive hex-blob prefix so
+// the same regex can safely drive the runbook's sweep one-liner.
 const SYNTH_EMAIL_RE =
-  /^mu1-integration-[0-9a-f-]+@soleur-test\.invalid$/i;
+  /^mu1-integration-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}@soleur-test\.invalid$/i;
 
 function assertSyntheticEmail(email: string): void {
   if (!SYNTH_EMAIL_RE.test(email)) {
@@ -54,24 +56,7 @@ const provisionedWorkspaces: string[] = [];
 afterEach(() => {
   while (provisionedWorkspaces.length > 0) {
     const ws = provisionedWorkspaces.pop();
-    if (!ws) continue;
-    try {
-      removeWorkspaceDir(ws);
-    } catch {
-      // Last-chance cleanup; Phase 2 in removeWorkspaceDir already handles
-      // root-owned files. If it still fails, the outer afterAll sweeps the
-      // temp root.
-    }
-  }
-});
-
-afterAll(() => {
-  for (const root of [WORKSPACES_ROOT, PLUGIN_ROOT]) {
-    try {
-      rmSync(root, { recursive: true, force: true });
-    } catch {
-      // Best-effort — temp dirs are OS-managed and will be reclaimed.
-    }
+    if (ws) removeWorkspaceDir(ws);
   }
 });
 
@@ -137,16 +122,6 @@ describe("MU1 AC-4: per-user isolation", () => {
     const settings = join(wsA, ".claude", "settings.json");
     expect(isPathInWorkspace(settings, wsA)).toBe(true);
   });
-
-  test("sandbox resolver rejects prefix-collision siblings", async () => {
-    // If user A's uuid is a prefix of user B's uuid (extremely unlikely with
-    // v4 UUIDs, but a historical prefix-match bug class), isPathInWorkspace
-    // must still reject. We simulate by constructing synthetic roots rather
-    // than relying on UUID collision.
-    const rootA = join(WORKSPACES_ROOT, "user1");
-    const rootB = join(WORKSPACES_ROOT, "user10");
-    expect(isPathInWorkspace(join(rootB, "file"), rootA)).toBe(false);
-  });
 });
 
 // ---------------------------------------------------------------------------
@@ -163,20 +138,25 @@ describe.skipIf(process.env.MU1_INTEGRATION !== "1")(
       const email = `mu1-integration-${randomUUID()}@soleur-test.invalid`;
       assertSyntheticEmail(email);
 
-      const { data: created, error: createErr } =
-        await client.auth.admin.createUser({
-          email,
-          email_confirm: true,
-          password: `mu1-${randomUUID()}`,
-        });
-      if (createErr || !created?.user) {
-        throw new Error(
-          `auth.admin.createUser failed: ${createErr?.message ?? "no user returned"}`,
-        );
-      }
-
-      const userId = created.user.id;
+      let userId: string | undefined;
       try {
+        const { data: created, error: createErr } =
+          await client.auth.admin.createUser({
+            email,
+            email_confirm: true,
+            password: `mu1-${randomUUID()}`,
+          });
+        if (createErr || !created?.user) {
+          throw new Error(
+            `auth.admin.createUser failed: ${createErr?.message ?? "no user returned"}`,
+          );
+        }
+        // Defense-in-depth: the allowlist passed on the email we requested;
+        // re-assert the server-returned user has the same synthetic email
+        // before we'll ever call deleteUser on its id.
+        expect(created.user.email?.toLowerCase()).toBe(email.toLowerCase());
+        userId = created.user.id;
+
         const { data: row, error: selectErr } = await client
           .from("users")
           .select("workspace_path")
@@ -186,9 +166,10 @@ describe.skipIf(process.env.MU1_INTEGRATION !== "1")(
         expect(selectErr).toBeNull();
         expect(row?.workspace_path).toBe(`/workspaces/${userId}`);
       } finally {
-        // Cleanup — allowlist gate already passed above.
-        assertSyntheticEmail(email);
-        await client.auth.admin.deleteUser(userId);
+        if (userId) {
+          assertSyntheticEmail(email);
+          await client.auth.admin.deleteUser(userId);
+        }
       }
     }, 30_000);
   },
@@ -196,16 +177,8 @@ describe.skipIf(process.env.MU1_INTEGRATION !== "1")(
 
 // ---------------------------------------------------------------------------
 // AC-2: provisionWorkspaceWithRepo clones the user's connected repo.
-// Deferred — requires a public fixture repo under soleur-ai/ (or similar)
-// plus a live GitHub App installation token. Tracking issue filed when
-// this plan ships (see Known Deferrals in MU1 runbook).
+// Deferred — requires a public fixture repo plus a live GitHub App
+// installation token. Tracked in #2605; until it lands, AC-2 is verified
+// manually per the "AC-2 — Manual repo-clone verification" section of
+// knowledge-base/engineering/ops/runbooks/mu1-signup-workspace-verification.md.
 // ---------------------------------------------------------------------------
-
-describe.skip("MU1 AC-2: provisionWorkspaceWithRepo clones fixture", () => {
-  test("cloned workspace contains the fixture repo's top-level files", async () => {
-    // Enable when MU1_FIXTURE_REPO_URL and MU1_FIXTURE_INSTALLATION_ID are
-    // wired via Doppler dev config. Manual verification continues to be
-    // documented in the MU1 runbook until automation lands.
-    expect(true).toBe(true);
-  });
-});

@@ -34,6 +34,14 @@
 set -euo pipefail
 
 CONTAINER="${CONTAINER:-soleur-web-platform}"
+# Reject anything that isn't a plausible docker container/name/id identifier
+# before interpolating it into docker exec/docker inspect. The audit is
+# documented as "safe to run standalone via SSH" — unvalidated env wins make
+# that claim untrue.
+if [[ ! "$CONTAINER" =~ ^[a-zA-Z0-9][a-zA-Z0-9_.-]*$ ]]; then
+  echo "FAIL: CONTAINER env var contains unsupported characters: '$CONTAINER'" >&2
+  exit 2
+fi
 EXPECTED_APPARMOR="apparmor=soleur-bwrap"
 EXPECTED_SECCOMP="seccomp=/etc/docker/seccomp-profiles/soleur-bwrap.json"
 
@@ -45,20 +53,35 @@ emit_fail() { echo "FAIL: $1" >&2; fail_count=$((fail_count + 1)); }
 echo "--- MU1 bubblewrap UID audit --- container=$CONTAINER"
 
 # -----------------------------------------------------------------------------
-# Check 1: CLONE_NEWUSER works inside the container.
-# This is the single syscall the entire sandbox depends on. If Docker's
-# default seccomp profile replaces the custom one, CLONE_NEWUSER returns
-# EPERM and bwrap exits non-zero before the real workload runs.
+# Check 1: CLONE_NEWUSER works inside the container + observe the UID bwrap
+# reports inside the namespace.
+#
+# CLONE_NEWUSER is the single syscall the entire sandbox depends on. If
+# Docker's default seccomp profile replaces the custom one, CLONE_NEWUSER
+# returns EPERM and bwrap exits non-zero before the real workload runs.
+#
+# The observed UID is the baseline today (single namespace-mapped UID,
+# since workspaces share the container's UID pre-container-per-workspace).
+# Post-container-per-workspace (Phase 4 trigger — "triggered at 5+
+# concurrent users"), this should flip to per-user. Recording it means
+# drift is detectable: a future audit reporting a different UID without a
+# matching architectural change is a regression signal.
 # -----------------------------------------------------------------------------
 
-if ! docker exec "$CONTAINER" bwrap \
+BWRAP_UID_OUTPUT=$(
+  docker exec "$CONTAINER" bwrap \
     --new-session --die-with-parent \
     --unshare-user --unshare-pid \
     --dev /dev --bind / / \
-    -- id -u >/dev/null 2>&1; then
-  emit_fail "CLONE_NEWUSER rejected inside $CONTAINER — sandbox non-functional (check seccomp/apparmor, see learning docker-seccomp-blocks-bwrap-sandbox-20260405)"
+    -- id -u 2>&1
+) || BWRAP_UID_EXIT=$?
+BWRAP_UID_EXIT="${BWRAP_UID_EXIT:-0}"
+
+if [[ "$BWRAP_UID_EXIT" -ne 0 ]]; then
+  emit_fail "CLONE_NEWUSER rejected inside $CONTAINER — sandbox non-functional (output: ${BWRAP_UID_OUTPUT}; see learning docker-seccomp-blocks-bwrap-sandbox-20260405)"
 else
-  emit_pass "CLONE_NEWUSER works — bwrap can create a user namespace"
+  emit_pass "CLONE_NEWUSER works — bwrap can create a user namespace (observed UID=${BWRAP_UID_OUTPUT})"
+  echo "INFO: baseline today = single namespace-mapped UID (pre-container-per-workspace)"
 fi
 
 # -----------------------------------------------------------------------------
@@ -83,31 +106,6 @@ if [[ "$SECURITY_OPT_JSON" != *"$EXPECTED_SECCOMP"* ]]; then
   emit_fail "HostConfig.SecurityOpt missing $EXPECTED_SECCOMP (got: $SECURITY_OPT_JSON)"
 else
   emit_pass "HostConfig.SecurityOpt includes $EXPECTED_SECCOMP"
-fi
-
-# -----------------------------------------------------------------------------
-# Check 3: observe the UID bwrap reports inside the namespace.
-# Today this is expected to be a single constant (workspaces share the
-# container's UID via namespace mapping). Post-container-per-workspace
-# (Phase 4 trigger — "triggered at 5+ concurrent users"), this should
-# become per-user. Recording the baseline here means drift is detectable:
-# if a future audit reports a DIFFERENT UID than recorded in the runbook
-# without a matching architectural change, that is a regression signal.
-# -----------------------------------------------------------------------------
-
-OBSERVED_UID=$(
-  docker exec "$CONTAINER" bwrap \
-    --new-session --die-with-parent \
-    --unshare-user --unshare-pid \
-    --dev /dev --bind / / \
-    -- id -u 2>/dev/null || echo "ERROR"
-)
-
-if [[ "$OBSERVED_UID" == "ERROR" ]]; then
-  emit_fail "Could not observe UID inside bwrap namespace"
-else
-  echo "INFO: observed UID inside bwrap namespace = $OBSERVED_UID"
-  echo "INFO: baseline today = single namespace-mapped UID (pre-container-per-workspace)"
 fi
 
 # -----------------------------------------------------------------------------
