@@ -103,6 +103,9 @@ jobs:
                 [.[] | select(
                   (.labels | map(.name) | index("bot-fix/attempted") | not) and
                   (.labels | map(.name) | index("ux-audit") | not) and
+                  (.labels | map(.name) | index("synthetic-test") | not) and
+                  (.labels | map(.name) | index("test-flake") | not) and
+                  (.title | test("^(flaky|flake|test-flake|test)[:(]"; "i") | not) and
                   (.number | IN($skip_nums[]) | not)
                 )] | sort_by(.createdAt) | .[0].number // empty')
 
@@ -124,7 +127,7 @@ jobs:
           plugins: 'soleur@soleur'
           claude_args: >-
             --model claude-sonnet-4-6
-            --max-turns 35
+            --max-turns 55
             --allowedTools Bash,Read,Write,Edit,Glob,Grep
           prompt: |
             Run /soleur:fix-issue ${{ steps.select.outputs.issue }}
