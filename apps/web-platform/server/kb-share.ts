@@ -17,7 +17,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { randomBytes } from "node:crypto";
 import { isPathInWorkspace } from "@/server/sandbox";
-import { MAX_BINARY_SIZE } from "@/server/kb-binary-response";
+import { MAX_BINARY_SIZE } from "@/server/kb-limits";
 import { hashStream } from "@/server/kb-content-hash";
 import { createChildLogger } from "@/server/logger";
 import { reportSilentFallback } from "@/server/observability";

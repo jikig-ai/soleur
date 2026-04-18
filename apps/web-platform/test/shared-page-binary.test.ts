@@ -4,7 +4,7 @@ import path from "node:path";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 import { hashBytes } from "@/server/kb-content-hash";
-import { MAX_BINARY_SIZE } from "@/server/kb-binary-response";
+import { MAX_BINARY_SIZE } from "@/server/kb-limits";
 import { shareSupabaseFromMock } from "./helpers/share-mocks";
 
 const mocks = vi.hoisted(() => ({
@@ -30,7 +30,7 @@ vi.mock("@/server/logger", () => ({
   default: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() },
 }));
 
-import { GET } from "@/app/api/shared/[token]/route";
+import { GET, HEAD } from "@/app/api/shared/[token]/route";
 
 let tmpWorkspace: string;
 let kbRoot: string;
@@ -41,6 +41,10 @@ function buildRequest(token: string): Request {
 
 function callGET(request: Request, token: string) {
   return GET(request, { params: Promise.resolve({ token }) });
+}
+
+function callHEAD(request: Request, token: string) {
+  return HEAD(request, { params: Promise.resolve({ token }) });
 }
 
 function hashFile(absPath: string): string | null {
@@ -224,5 +228,21 @@ describe("GET /api/shared/[token] — binary vs markdown branching", () => {
     const res = await callGET(buildRequest("md-kind"), "md-kind");
     expect(res.status).toBe(200);
     expect(res.headers.get("X-Soleur-Kind")).toBe("markdown");
+  });
+
+  it("emits X-Soleur-Kind: text for a .txt share (parity with owner viewer)", async () => {
+    fs.writeFileSync(path.join(kbRoot, "notes.txt"), "hello world");
+    mockShareAndOwner("notes.txt");
+    const res = await callGET(buildRequest("txt-kind"), "txt-kind");
+    expect(res.status).toBe(200);
+    expect(res.headers.get("X-Soleur-Kind")).toBe("text");
+  });
+
+  it("emits X-Soleur-Kind: text on HEAD for a .txt share", async () => {
+    fs.writeFileSync(path.join(kbRoot, "notes-head.txt"), "hello world");
+    mockShareAndOwner("notes-head.txt");
+    const res = await callHEAD(buildRequest("txt-head"), "txt-head");
+    expect(res.status).toBe(200);
+    expect(res.headers.get("X-Soleur-Kind")).toBe("text");
   });
 });
