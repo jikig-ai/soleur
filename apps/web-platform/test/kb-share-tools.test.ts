@@ -53,12 +53,17 @@ beforeEach(() => {
 });
 
 describe("buildKbShareTools — registration", () => {
-  it("returns three tools named kb_share_create, kb_share_list, kb_share_revoke", () => {
+  it("returns four tools: kb_share_create, kb_share_list, kb_share_revoke, kb_share_preview", () => {
     const tools = buildKbShareTools(baseDeps);
     const names = (
       tools as unknown as Array<{ name: string }>
     ).map((t) => t.name);
-    expect(names).toEqual(["kb_share_create", "kb_share_list", "kb_share_revoke"]);
+    expect(names).toEqual([
+      "kb_share_create",
+      "kb_share_list",
+      "kb_share_revoke",
+      "kb_share_preview",
+    ]);
   });
 });
 
