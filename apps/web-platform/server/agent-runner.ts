@@ -549,9 +549,10 @@ When you need user input for important decisions, use the AskUserQuestion tool.`
 
 You can generate public read-only share links for any file in the knowledge-base
 using kb_share_create. Any file type is allowed (markdown, PDF, image, docx).
-Links are revocable via kb_share_revoke. Use kb_share_list to check what is
-currently shared before generating a new link — this surfaces duplicates and
-revoked links.
+Links are revocable via kb_share_revoke, listable via kb_share_list, and
+previewable via kb_share_preview. Use kb_share_list to check what is currently
+shared before generating a new link — this surfaces duplicates and revoked
+links.
 
 kb_share_create is idempotent on unchanged content — calling it for a file
 that already has an active link with a matching content hash returns the
@@ -569,7 +570,11 @@ would see (contentType, size, filename, kind, and for PDFs/images a
 firstPagePreview with dimensions and page count). Revoked or content-drifted
 links surface the same terminal state the public endpoint would return. This
 is the right tool when the user asks "double-check the link still works" or
-"tell me how many pages that PDF is."`;
+"tell me how many pages that PDF is."
+
+On code "revoked" or "content-changed", offer to run kb_share_create on the
+same documentPath to issue a fresh link. On code "legacy-null-hash" (pre-
+migration share row, rare) recommend re-creating the share as well.`;
 
     // ---------------------------------------------------------------------------
     // In-process MCP server for platform tools (PR creation, etc.)

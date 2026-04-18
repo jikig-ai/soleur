@@ -17,6 +17,7 @@ import {
   revokeShare,
   type CreateShareResult,
   type ListSharesResult,
+  type PreviewShareErrorCode,
   type PreviewShareResult,
   type RevokeShareResult,
   type ShareServiceClient,
@@ -82,29 +83,17 @@ function wrapRevoke(result: RevokeShareResult): ToolTextResponse {
 
 function wrapPreview(result: PreviewShareResult): ToolTextResponse {
   if (!result.ok) {
-    // Exhaustive discriminant guard: adding a new PreviewShareErrorCode
-    // without updating this switch surfaces as a tsc --noEmit error, per
-    // 2026-04-10-discriminated-union-exhaustive-switch-miss. All branches
-    // funnel to wrapError, but the switch exists so the compiler forces
-    // reviewers to triage new codes explicitly.
-    switch (result.code) {
-      case "not-found":
-      case "revoked":
-      case "legacy-null-hash":
-      case "content-changed":
-      case "access-denied":
-      case "too-large":
-      case "invalid-path":
-      case "db-error":
-        break;
-      default: {
-        const _exhaustive: never = result.code;
-        throw new Error(`Unhandled PreviewShareErrorCode: ${String(_exhaustive)}`);
-      }
-    }
+    // Compile-time exhaustiveness on PreviewShareErrorCode — adding a new
+    // code without reviewing this wrapper fails tsc --noEmit (per
+    // 2026-04-10-discriminated-union-exhaustive-switch-miss).
+    const _exhaustive: PreviewShareErrorCode = result.code;
+    void _exhaustive;
     return wrapError(result);
   }
-  const payload: Record<string, unknown> = {
+  // firstPagePreview is an optional field on the success variant — JSON
+  // serialization drops undefined keys, so conditional assignment buys
+  // nothing. Spread result directly.
+  return textResponse({
     status: result.status,
     token: result.token,
     documentPath: result.documentPath,
@@ -112,11 +101,8 @@ function wrapPreview(result: PreviewShareResult): ToolTextResponse {
     contentType: result.contentType,
     size: result.size,
     filename: result.filename,
-  };
-  if (result.firstPagePreview) {
-    payload.firstPagePreview = result.firstPagePreview;
-  }
-  return textResponse(payload);
+    firstPagePreview: result.firstPagePreview,
+  });
 }
 
 export function buildKbShareTools(opts: BuildKbShareToolsOpts) {

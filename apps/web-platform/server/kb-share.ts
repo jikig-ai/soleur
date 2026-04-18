@@ -505,7 +505,7 @@ function mapPreviewError(
       ok: false,
       status: 404,
       code: "not-found",
-      error: "Document not found",
+      error: "Document no longer available",
     };
   }
   if (err instanceof KbFileTooLargeError) {
@@ -538,7 +538,7 @@ function mapPreviewError(
         ok: false,
         status: 404,
         code: "not-found",
-        error: "Document not found",
+        error: "Document no longer available",
       };
     }
     // 500 / 503 — surface as db-error (closest generic we expose)
@@ -660,10 +660,10 @@ export async function previewShare(
           ok: false,
           status: 404,
           code: "not-found",
-          error: "Share not found",
+          error: "Document no longer available",
         };
       }
-      reportSilentFallback(result.error as unknown as Error, {
+      reportSilentFallback(result.error, {
         feature: "kb-share",
         op: "preview",
         extra: { tokenPrefix },
@@ -695,7 +695,7 @@ export async function previewShare(
       ok: false,
       status: 404,
       code: "not-found",
-      error: "Share not found",
+      error: "Document no longer available",
     };
   }
 
@@ -709,6 +709,16 @@ export async function previewShare(
   }
 
   if (!row.content_sha256) {
+    // Migration 026 installs a CHECK constraint that makes a null hash on
+    // a non-revoked row unrepresentable. Hitting this branch means the
+    // DB invariant has been broken — alarm to Sentry so a schema regression
+    // surfaces in the dashboard, not just in a pino line.
+    reportSilentFallback(null, {
+      feature: "kb-share",
+      op: "preview-invariant",
+      message: "null content_sha256 on non-revoked share (schema invariant broken)",
+      extra: { tokenPrefix },
+    });
     return {
       ok: false,
       status: 410,
