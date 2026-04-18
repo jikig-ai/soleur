@@ -207,7 +207,7 @@ Close the gap between "we learned X" and "X is now enforced." The project has pr
    - If `L > 600`: `"[WARNING] longest rule is L bytes — cap per-rule length at ~600 (see cq-agents-md-why-single-line) by moving context to learning files."`
    - If `C > 300`: `"[WARNING] constitution.md is large (C/300) — consider migrating narrow rules to skill/agent instructions."`
 
-   Additionally, if the repo has a rule-metrics aggregator at `scripts/rule-metrics-aggregate.sh`, run it in `--dry-run` mode and parse `summary.rules_unused_over_8w` — if > 0, append: `"[INFO] N rules have zero hits over 8 weeks. Run /soleur:sync rule-prune to surface pruning candidates."` Do not fail the phase if the aggregator is missing.
+   Additionally, if the repo has a rule-metrics aggregator at `./scripts/rule-metrics-aggregate.sh`, run it in `--dry-run` mode and parse `summary.rules_unused_over_8w` — if > 0, append: `"[INFO] N rules have zero hits over 8 weeks. Run /soleur:sync rule-prune to surface pruning candidates."` Do not fail the phase if the aggregator is missing.
 
 ### Empty Case
 
