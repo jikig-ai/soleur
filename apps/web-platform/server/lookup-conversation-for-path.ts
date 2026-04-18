@@ -1,4 +1,8 @@
-import { createServiceClient } from "@/lib/supabase/server";
+// Import from the standalone service module, NOT from @/lib/supabase/server
+// — the latter pulls in `next/headers` at module load, which breaks the
+// non-Next dev-server bundle (esbuild-built server/index.ts → ws-handler
+// → agent-runner → conversations-tools → this module).
+import { createServiceClient } from "@/lib/supabase/service";
 import { reportSilentFallback } from "@/server/observability";
 
 /**

@@ -19,7 +19,7 @@ const { mockFrom, mockReportSilentFallback } = vi.hoisted(() => ({
   mockReportSilentFallback: vi.fn(),
 }));
 
-vi.mock("@/lib/supabase/server", () => ({
+vi.mock("@/lib/supabase/service", () => ({
   createServiceClient: vi.fn(() => ({ from: mockFrom })),
 }));
 
