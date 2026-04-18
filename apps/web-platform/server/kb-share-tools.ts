@@ -13,9 +13,11 @@ import { z } from "zod/v4";
 import {
   createShare,
   listShares,
+  previewShare,
   revokeShare,
   type CreateShareResult,
   type ListSharesResult,
+  type PreviewShareResult,
   type RevokeShareResult,
   type ShareServiceClient,
 } from "@/server/kb-share";
@@ -78,6 +80,45 @@ function wrapRevoke(result: RevokeShareResult): ToolTextResponse {
   });
 }
 
+function wrapPreview(result: PreviewShareResult): ToolTextResponse {
+  if (!result.ok) {
+    // Exhaustive discriminant guard: adding a new PreviewShareErrorCode
+    // without updating this switch surfaces as a tsc --noEmit error, per
+    // 2026-04-10-discriminated-union-exhaustive-switch-miss. All branches
+    // funnel to wrapError, but the switch exists so the compiler forces
+    // reviewers to triage new codes explicitly.
+    switch (result.code) {
+      case "not-found":
+      case "revoked":
+      case "legacy-null-hash":
+      case "content-changed":
+      case "access-denied":
+      case "too-large":
+      case "invalid-path":
+      case "db-error":
+        break;
+      default: {
+        const _exhaustive: never = result.code;
+        throw new Error(`Unhandled PreviewShareErrorCode: ${String(_exhaustive)}`);
+      }
+    }
+    return wrapError(result);
+  }
+  const payload: Record<string, unknown> = {
+    status: result.status,
+    token: result.token,
+    documentPath: result.documentPath,
+    kind: result.kind,
+    contentType: result.contentType,
+    size: result.size,
+    filename: result.filename,
+  };
+  if (result.firstPagePreview) {
+    payload.firstPagePreview = result.firstPagePreview;
+  }
+  return textResponse(payload);
+}
+
 export function buildKbShareTools(opts: BuildKbShareToolsOpts) {
   const { serviceClient, userId, kbRoot, baseUrl } = opts;
   return [
@@ -117,6 +158,18 @@ export function buildKbShareTools(opts: BuildKbShareToolsOpts) {
       { token: z.string() },
       async (args) =>
         wrapRevoke(await revokeShare(serviceClient, userId, args.token)),
+    ),
+    tool(
+      "kb_share_preview",
+      "Preview what a recipient sees at /shared/<token>. Returns " +
+        "{ status, contentType, size, filename, kind, firstPagePreview? }. " +
+        "Use this to verify a share link renders correctly before sending it. " +
+        "Works for all share terminal states — revoked links return " +
+        "{ code: 'revoked' }, content-drift returns { code: 'content-changed' }. " +
+        "Does NOT return the document bytes (use kb_read_content for that).",
+      { token: z.string() },
+      async (args) =>
+        wrapPreview(await previewShare(serviceClient, args.token)),
     ),
   ];
 }

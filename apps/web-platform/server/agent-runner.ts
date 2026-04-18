@@ -561,7 +561,15 @@ stale link and issues a fresh one.
 Share links expose the file contents to anyone who has the URL. Before creating
 a link for a file that looks sensitive (credentials, personal data, unreleased
 strategy, or paths under finances/, legal/, customers/), confirm with
-AskUserQuestion first. Files over ${kbShareSizeMb} MB cannot be shared.`;
+AskUserQuestion first. Files over ${kbShareSizeMb} MB cannot be shared.
+
+Use kb_share_preview({ token }) to verify a link renders correctly before
+sending it to someone. It returns the same metadata a recipient's browser
+would see (contentType, size, filename, kind, and for PDFs/images a
+firstPagePreview with dimensions and page count). Revoked or content-drifted
+links surface the same terminal state the public endpoint would return. This
+is the right tool when the user asks "double-check the link still works" or
+"tell me how many pages that PDF is."`;
 
     // ---------------------------------------------------------------------------
     // In-process MCP server for platform tools (PR creation, etc.)
@@ -864,6 +872,7 @@ AskUserQuestion first. Files over ${kbShareSizeMb} MB cannot be shared.`;
       "mcp__soleur_platform__kb_share_create",
       "mcp__soleur_platform__kb_share_list",
       "mcp__soleur_platform__kb_share_revoke",
+      "mcp__soleur_platform__kb_share_preview",
     );
 
     // Build MCP server if any platform tools are registered
