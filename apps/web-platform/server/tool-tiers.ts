@@ -34,6 +34,10 @@ export const TOOL_TIER_MAP: Record<string, ToolTier> = {
   "mcp__soleur_platform__kb_share_list": "auto-approve",
   "mcp__soleur_platform__kb_share_create": "gated",
   "mcp__soleur_platform__kb_share_revoke": "gated",
+  // Preview (#2322): metadata-only (no bytes, no state change) — same
+  // tier as kb_share_list. Gating it would produce consent fatigue without
+  // a security benefit.
+  "mcp__soleur_platform__kb_share_preview": "auto-approve",
 };
 
 /**

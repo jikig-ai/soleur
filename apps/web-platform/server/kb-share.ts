@@ -18,7 +18,28 @@ import path from "node:path";
 import { randomBytes } from "node:crypto";
 import { isPathInWorkspace } from "@/server/sandbox";
 import { MAX_BINARY_SIZE } from "@/server/kb-limits";
-import { hashStream } from "@/server/kb-content-hash";
+import {
+  validateBinaryFile,
+  openBinaryStream,
+  deriveBinaryKind,
+  BinaryOpenError,
+  type BinaryFileMetadata,
+} from "@/server/kb-binary-response";
+import { hashBytes, hashStream } from "@/server/kb-content-hash";
+import {
+  readContentRaw,
+  KbAccessDeniedError,
+  KbFileTooLargeError,
+  KbNotFoundError,
+} from "@/server/kb-reader";
+import { isMarkdownKbPath } from "@/lib/kb-extensions";
+import { shareHashVerdictCache } from "@/server/share-hash-verdict-cache";
+import {
+  readPdfMetadata,
+  readImageMetadata,
+  type PdfPreview,
+  type ImagePreview,
+} from "@/server/kb-preview-metadata";
 import { createChildLogger } from "@/server/logger";
 import { reportSilentFallback } from "@/server/observability";
 
@@ -416,4 +437,399 @@ export async function revokeShare(
     "share link revoked",
   );
   return { ok: true, token, documentPath: shareLink.document_path };
+}
+
+// -----------------------------------------------------------------------------
+// previewShare (#2322): view-parity projection of /api/shared/[token]
+// -----------------------------------------------------------------------------
+
+export type PreviewShareErrorCode =
+  | "not-found"
+  | "revoked"
+  | "legacy-null-hash"
+  | "content-changed"
+  | "access-denied"
+  | "too-large"
+  | "invalid-path"
+  | "db-error";
+
+export type FirstPagePreview = PdfPreview | ImagePreview;
+
+export type PreviewShareResult =
+  | {
+      ok: true;
+      status: 200;
+      token: string;
+      documentPath: string;
+      kind: "markdown" | "binary";
+      contentType: string;
+      size: number;
+      filename: string;
+      firstPagePreview?: FirstPagePreview;
+    }
+  | {
+      ok: false;
+      status: 404 | 403 | 410 | 413 | 500;
+      code: PreviewShareErrorCode;
+      error: string;
+    };
+
+type PreviewShareRow = {
+  document_path: string;
+  revoked: boolean;
+  content_sha256: string | null;
+  users:
+    | { workspace_path: string | null; workspace_status: string | null }
+    | { workspace_path: string | null; workspace_status: string | null }[]
+    | null;
+};
+
+// Map any error thrown by validateBinaryFile / readContentRaw /
+// openBinaryStream to a PreviewShareResult. Mirrors mapSharedError in the
+// public route so both surfaces agree on terminal states.
+function mapPreviewError(
+  err: unknown,
+  tokenPrefix: string,
+  documentPath: string,
+): Extract<PreviewShareResult, { ok: false }> {
+  if (err instanceof KbAccessDeniedError) {
+    return {
+      ok: false,
+      status: 403,
+      code: "access-denied",
+      error: "Access denied",
+    };
+  }
+  if (err instanceof KbNotFoundError) {
+    return {
+      ok: false,
+      status: 404,
+      code: "not-found",
+      error: "Document no longer available",
+    };
+  }
+  if (err instanceof KbFileTooLargeError) {
+    return {
+      ok: false,
+      status: 413,
+      code: "too-large",
+      error: err.message,
+    };
+  }
+  if (err instanceof BinaryOpenError) {
+    if (err.code === "content-changed") {
+      return {
+        ok: false,
+        status: 410,
+        code: "content-changed",
+        error: "Document has changed since share was created",
+      };
+    }
+    if (err.status === 403) {
+      return {
+        ok: false,
+        status: 403,
+        code: "access-denied",
+        error: "Access denied",
+      };
+    }
+    if (err.status === 404) {
+      return {
+        ok: false,
+        status: 404,
+        code: "not-found",
+        error: "Document no longer available",
+      };
+    }
+    // 500 / 503 — surface as db-error (closest generic we expose)
+    reportSilentFallback(err, {
+      feature: "kb-share",
+      op: "preview",
+      extra: { tokenPrefix, documentPath },
+    });
+    return {
+      ok: false,
+      status: 500,
+      code: "db-error",
+      error: "Failed to read document",
+    };
+  }
+  reportSilentFallback(err, {
+    feature: "kb-share",
+    op: "preview",
+    extra: { tokenPrefix, documentPath },
+  });
+  return {
+    ok: false,
+    status: 500,
+    code: "db-error",
+    error: "Unexpected error reading document",
+  };
+}
+
+async function hashBinaryWithVerdictCache(
+  token: string,
+  meta: BinaryFileMetadata,
+  expectedHash: string,
+): Promise<"match" | "mismatch"> {
+  const cached = shareHashVerdictCache.get(
+    token,
+    meta.ino,
+    meta.mtimeMs,
+    meta.size,
+  );
+  if (cached === true) return "match";
+
+  const stream = await openBinaryStream(meta.filePath, {
+    expected: { ino: meta.ino, size: meta.size },
+  });
+  const currentHash = await hashStream(stream);
+  if (currentHash !== expectedHash) return "mismatch";
+  shareHashVerdictCache.set(token, meta.ino, meta.mtimeMs, meta.size);
+  return "match";
+}
+
+async function maybeFirstPagePreview(
+  meta: BinaryFileMetadata,
+): Promise<FirstPagePreview | undefined> {
+  if (meta.contentType === "application/pdf") {
+    const stream = await openBinaryStream(meta.filePath, {
+      expected: { ino: meta.ino, size: meta.size },
+    });
+    const preview = await readPdfMetadata(stream);
+    return preview ?? undefined;
+  }
+  if (deriveBinaryKind(meta) === "image") {
+    const stream = await openBinaryStream(meta.filePath, {
+      expected: { ino: meta.ino, size: meta.size },
+    });
+    const preview = await readImageMetadata(stream);
+    return preview ?? undefined;
+  }
+  return undefined;
+}
+
+/**
+ * Preview what a recipient sees at /shared/[token]. Runs the same
+ * ownership-agnostic share-row lookup + hash gate as the public HTTP
+ * route. Returns metadata (no bytes) for the agent to verify the link
+ * renders correctly. Called by the kb_share_preview MCP tool.
+ *
+ * Reuses validateBinaryFile + readContentRaw via the stored document
+ * path; does NOT re-implement traversal / null-byte / symlink checks.
+ * TOCTOU-safe: every openBinaryStream call passes `expected: { ino, size }`
+ * so a rename-swap between validate and read closes out as content-changed.
+ */
+export async function previewShare(
+  serviceClient: ShareServiceClient,
+  token: string,
+  kbRootResolver: (workspacePath: string) => string = (w) =>
+    path.join(w, "knowledge-base"),
+): Promise<PreviewShareResult> {
+  const tokenPrefix = token.slice(0, 8);
+
+  // Look up the share row and embedded owner workspace. Same select shape
+  // as prepareSharedRequest() in app/api/shared/[token]/route.ts.
+  let row: PreviewShareRow | null;
+  try {
+    const result = (await (
+      serviceClient.from("kb_share_links") as {
+        select: (cols: string) => {
+          eq: (col: string, val: unknown) => {
+            single: () => Promise<{
+              data: PreviewShareRow | null;
+              error: { code?: string; message: string } | null;
+            }>;
+          };
+        };
+      }
+    )
+      .select(
+        "document_path, revoked, content_sha256, users!inner(workspace_path, workspace_status)",
+      )
+      .eq("token", token)
+      .single()) as {
+      data: PreviewShareRow | null;
+      error: { code?: string; message: string } | null;
+    };
+
+    if (result.error) {
+      // PGRST116 = zero rows on .single() — treat as not-found, not db-error.
+      if (result.error.code === "PGRST116") {
+        return {
+          ok: false,
+          status: 404,
+          code: "not-found",
+          error: "Document no longer available",
+        };
+      }
+      reportSilentFallback(result.error, {
+        feature: "kb-share",
+        op: "preview",
+        extra: { tokenPrefix },
+      });
+      return {
+        ok: false,
+        status: 500,
+        code: "db-error",
+        error: "Failed to look up share",
+      };
+    }
+    row = result.data;
+  } catch (err) {
+    reportSilentFallback(err, {
+      feature: "kb-share",
+      op: "preview",
+      extra: { tokenPrefix },
+    });
+    return {
+      ok: false,
+      status: 500,
+      code: "db-error",
+      error: "Failed to look up share",
+    };
+  }
+
+  if (!row) {
+    return {
+      ok: false,
+      status: 404,
+      code: "not-found",
+      error: "Document no longer available",
+    };
+  }
+
+  if (row.revoked) {
+    return {
+      ok: false,
+      status: 410,
+      code: "revoked",
+      error: "This link has been disabled",
+    };
+  }
+
+  if (!row.content_sha256) {
+    // Migration 026 installs a CHECK constraint that makes a null hash on
+    // a non-revoked row unrepresentable. Hitting this branch means the
+    // DB invariant has been broken — alarm to Sentry so a schema regression
+    // surfaces in the dashboard, not just in a pino line.
+    reportSilentFallback(null, {
+      feature: "kb-share",
+      op: "preview-invariant",
+      message: "null content_sha256 on non-revoked share (schema invariant broken)",
+      extra: { tokenPrefix },
+    });
+    return {
+      ok: false,
+      status: 410,
+      code: "legacy-null-hash",
+      error: "This link is from an older share system and is no longer valid.",
+    };
+  }
+
+  const owner = Array.isArray(row.users) ? row.users[0] : row.users;
+  if (!owner?.workspace_path || owner.workspace_status !== "ready") {
+    return {
+      ok: false,
+      status: 404,
+      code: "not-found",
+      error: "Document no longer available",
+    };
+  }
+
+  const kbRoot = kbRootResolver(owner.workspace_path);
+  const documentPath = row.document_path;
+  const contentSha256 = row.content_sha256;
+
+  if (isMarkdownKbPath(documentPath)) {
+    try {
+      const { buffer } = await readContentRaw(kbRoot, documentPath);
+      if (hashBytes(buffer) !== contentSha256) {
+        return {
+          ok: false,
+          status: 410,
+          code: "content-changed",
+          error: "Document has changed since share was created",
+        };
+      }
+      return {
+        ok: true,
+        status: 200,
+        token,
+        documentPath,
+        kind: "markdown",
+        contentType: "text/markdown",
+        size: buffer.length,
+        filename: path.basename(documentPath),
+      };
+    } catch (err) {
+      return mapPreviewError(err, tokenPrefix, documentPath);
+    }
+  }
+
+  // Binary branch
+  let meta: BinaryFileMetadata;
+  try {
+    meta = await validateBinaryFile(kbRoot, documentPath);
+  } catch (err) {
+    return mapPreviewError(err, tokenPrefix, documentPath);
+  }
+
+  try {
+    const verdict = await hashBinaryWithVerdictCache(
+      token,
+      meta,
+      contentSha256,
+    );
+    if (verdict === "mismatch") {
+      return {
+        ok: false,
+        status: 410,
+        code: "content-changed",
+        error: "Document has changed since share was created",
+      };
+    }
+  } catch (err) {
+    return mapPreviewError(err, tokenPrefix, documentPath);
+  }
+
+  let firstPagePreview: FirstPagePreview | undefined;
+  try {
+    firstPagePreview = await maybeFirstPagePreview(meta);
+  } catch (err) {
+    // Preview is best-effort — upstream readers already silent-fallback,
+    // but a BinaryOpenError("content-changed") on the second open is a
+    // genuine terminal state: the file mutated between hash pass and
+    // preview pass. Surface as content-changed to match the route.
+    if (err instanceof BinaryOpenError && err.code === "content-changed") {
+      return {
+        ok: false,
+        status: 410,
+        code: "content-changed",
+        error: "Document has changed since share was created",
+      };
+    }
+    // Any other error → silent-fallback, still return core metadata.
+    reportSilentFallback(err, {
+      feature: "kb-share",
+      op: "preview",
+      extra: { tokenPrefix, documentPath, stage: "first-page-preview" },
+    });
+    firstPagePreview = undefined;
+  }
+
+  const result: Extract<PreviewShareResult, { ok: true }> = {
+    ok: true,
+    status: 200,
+    token,
+    documentPath,
+    kind: "binary",
+    contentType: meta.contentType,
+    size: meta.size,
+    filename: meta.rawName,
+  };
+  if (firstPagePreview !== undefined) {
+    result.firstPagePreview = firstPagePreview;
+  }
+  return result;
 }
