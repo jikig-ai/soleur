@@ -277,17 +277,17 @@ Net backlog impact: **−3 closures** (issues #2300, #2325, #2297) with **no new
 
 ## Acceptance Criteria
 
-- [ ] `server/kb-limits.ts` exists and exports `MAX_BINARY_SIZE` + `CONTENT_TYPE_MAP`.
-- [ ] `server/kb-file-kind.ts` exists and exports `FileKind`, `classifyByExtension`, `classifyByContentType`.
-- [ ] `SharedContentKind` includes `"text"`.
-- [ ] `kb-binary-response.ts` no longer exports `MAX_BINARY_SIZE`, `CONTENT_TYPE_MAP`, or `ATTACHMENT_EXTENSIONS`. It imports `MAX_BINARY_SIZE` and `CONTENT_TYPE_MAP` from `kb-limits.ts`. `deriveBinaryKind` delegates to `classifyByContentType`.
-- [ ] Every call site that previously imported `MAX_BINARY_SIZE` from `kb-binary-response` now imports from `kb-limits` (`kb-share.ts`, `agent-runner.ts`, `test/kb-share-allowed-paths.test.ts`, `test/kb-serve.test.ts`).
-- [ ] `test/kb-share-allowed-paths.test.ts` uses `Buffer.alloc(MAX_BINARY_SIZE + 1)` (no hardcoded literal).
-- [ ] `FilePreview` takes `kind: FileKind` (not `extension: string`). Owner page computes `kind` at call site.
-- [ ] Shared page renders `.txt` files inline (parity with owner page). HEAD `/api/shared/<token>` returns `X-Soleur-Kind: text` for `.txt`.
-- [ ] `TextPreview` is shared between `file-preview.tsx` and `app/shared/[token]/page.tsx` (one implementation).
-- [ ] `components/kb/file-preview.tsx` uses a `switch(kind)` with exhaustiveness guard.
-- [ ] All vitest suites green; `tsc --noEmit` green.
+- [x] `server/kb-limits.ts` exists and exports `MAX_BINARY_SIZE` + `CONTENT_TYPE_MAP`.
+- [x] `lib/kb-file-kind.ts` exists and exports `FileKind`, `classifyByExtension`, `classifyByContentType`. (Relocated from `server/` to `lib/` per Phase 3 step 2 fallback — pure types/constants, no `node:` imports, consumed from `"use client"` components.)
+- [x] `SharedContentKind` includes `"text"`.
+- [x] `kb-binary-response.ts` no longer exports `MAX_BINARY_SIZE`, `CONTENT_TYPE_MAP`, or `ATTACHMENT_EXTENSIONS`. It imports `MAX_BINARY_SIZE` and `CONTENT_TYPE_MAP` from `kb-limits.ts`. `deriveBinaryKind` delegates to `classifyByContentType`.
+- [x] Every call site that previously imported `MAX_BINARY_SIZE` from `kb-binary-response` now imports from `kb-limits` (`kb-share.ts`, `agent-runner.ts`, `test/kb-share-allowed-paths.test.ts`, `test/kb-serve.test.ts`).
+- [x] `test/kb-share-allowed-paths.test.ts` uses `Buffer.alloc(MAX_BINARY_SIZE + 1)` (no hardcoded literal).
+- [x] `FilePreview` takes `kind: FileKind` (not `extension: string`). Owner page computes `kind` at call site.
+- [x] Shared page renders `.txt` files inline (parity with owner page). GET `/api/shared/<token>` returns `X-Soleur-Kind: text` for `.txt` (covered by `test/shared-page-binary.test.ts` "emits X-Soleur-Kind: text for a .txt share").
+- [x] `TextPreview` is shared between `file-preview.tsx` and `app/shared/[token]/page.tsx` (one implementation).
+- [x] `components/kb/file-preview.tsx` uses a `switch(kind)` with exhaustiveness guard.
+- [x] All vitest suites green; `tsc --noEmit` green. (1 pre-existing flake in `test/chat-input-attachments.test.tsx` tracked in #2470 / #2524 — unrelated.)
 - [ ] PR #2531 body contains `Closes #2300`, `Closes #2325`, `Closes #2297`.
 - [ ] Open code-review overlap dispositions recorded: #2329 commented on (ETag portion shipped), #2335/#1662/#2512 acknowledged in PR body.
 

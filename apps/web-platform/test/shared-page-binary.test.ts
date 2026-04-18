@@ -225,4 +225,12 @@ describe("GET /api/shared/[token] — binary vs markdown branching", () => {
     expect(res.status).toBe(200);
     expect(res.headers.get("X-Soleur-Kind")).toBe("markdown");
   });
+
+  it("emits X-Soleur-Kind: text for a .txt share (parity with owner viewer)", async () => {
+    fs.writeFileSync(path.join(kbRoot, "notes.txt"), "hello world");
+    mockShareAndOwner("notes.txt");
+    const res = await callGET(buildRequest("txt-kind"), "txt-kind");
+    expect(res.status).toBe(200);
+    expect(res.headers.get("X-Soleur-Kind")).toBe("text");
+  });
 });

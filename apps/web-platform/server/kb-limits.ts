@@ -6,11 +6,12 @@
  *   → Content-Type, emits the binary response.
  * - `server/kb-share.ts` — gates share-link creation by size.
  * - `server/agent-runner.ts` — surfaces the MB limit in agent error text.
- * - `server/kb-file-kind.ts` — classifies by Content-Type using this map.
+ * - `lib/kb-file-kind.ts` — classifies by Content-Type using this map.
  *
  * Adding a new attachment-only extension: extend the `classifyByExtension`
- * switch in `kb-file-kind.ts` (single source of truth for kind). Adding a
- * new inline Content-Type: extend `CONTENT_TYPE_MAP` here.
+ * switch in `lib/kb-file-kind.ts` (single source of truth for kind).
+ * Adding a new inline Content-Type: extend `CONTENT_TYPE_MAP` here AND
+ * add a matching `classifyByContentType` branch so the pair stays in sync.
  */
 
 export const MAX_BINARY_SIZE = 50 * 1024 * 1024; // 50 MB
