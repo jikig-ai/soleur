@@ -31,7 +31,6 @@ permissions:
   checks: write
   contents: write
   pull-requests: write
-  statuses: write
 
 jobs:
   snapshot:
@@ -66,57 +65,15 @@ jobs:
           gh workflow run scheduled-content-generator.yml || echo "::warning::Failed to dispatch scheduled-content-generator.yml"
 
       - name: Create PR with snapshot
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add knowledge-base/marketing/analytics/
-          git diff --cached --quiet && echo "No changes to commit" && exit 0
-          BRANCH="ci/weekly-analytics-$(date -u +%Y-%m-%d)"
-          git checkout -b "$BRANCH"
-          git commit -m "ci: weekly analytics snapshot"
-          git push -u origin "$BRANCH"
-          gh pr create \
-            --title "ci: weekly analytics snapshot $(date -u +%Y-%m-%d)" \
-            --body "Automated weekly analytics snapshot from Plausible API." \
-            --base main \
-            --head "$BRANCH"
-
-          # PRs created by GITHUB_TOKEN don't trigger other workflows (GitHub
-          # prevents infinite loops). Post synthetic check runs so CI Required
-          # and CLA Required rulesets pass and auto-merge can proceed.
-          COMMIT_SHA=$(git rev-parse HEAD)
-          gh api "repos/${{ github.repository }}/check-runs" \
-            -f name=test \
-            -f head_sha="$COMMIT_SHA" \
-            -f status=completed \
-            -f conclusion=success \
-            -f "output[title]=Bot PR" \
-            -f "output[summary]=Analytics snapshot only, no code changes"
-          gh api "repos/${{ github.repository }}/check-runs" \
-            -f name=cla-check \
-            -f head_sha="$COMMIT_SHA" \
-            -f status=completed \
-            -f conclusion=success \
-            -f "output[title]=CLA pre-approved" \
-            -f "output[summary]=github-actions[bot] is in CLA allowlist"
-          gh api "repos/${{ github.repository }}/check-runs" \
-            -f name=dependency-review \
-            -f head_sha="$COMMIT_SHA" \
-            -f status=completed \
-            -f conclusion=success \
-            -f "output[title]=Bot PR" \
-            -f "output[summary]=Analytics snapshot only, no dependency changes"
-          gh api "repos/${{ github.repository }}/check-runs" \
-            -f name=e2e \
-            -f head_sha="$COMMIT_SHA" \
-            -f status=completed \
-            -f conclusion=success \
-            -f "output[title]=Bot PR" \
-            -f "output[summary]=Analytics snapshot only, no code changes"
-
-          gh pr merge "$BRANCH" --squash --auto
+        uses: ./.github/actions/bot-pr-with-synthetic-checks
+        with:
+          add-paths: knowledge-base/marketing/analytics/
+          branch-prefix: ci/weekly-analytics-
+          commit-message: "ci: weekly analytics snapshot"
+          pr-title-prefix: "ci: weekly analytics snapshot"
+          pr-body: "Automated weekly analytics snapshot from Plausible API."
+          change-summary: "Analytics snapshot only, no code changes"
+          gh-token: ${{ github.token }}
 
       - name: Email notification (failure)
         if: failure()

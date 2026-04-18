@@ -42,59 +42,15 @@ jobs:
         run: bash scripts/rule-metrics-aggregate.sh
 
       - name: Create PR with rule-metrics snapshot
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add knowledge-base/project/rule-metrics.json
-          git diff --cached --quiet && echo "No changes to commit" && exit 0
-          BRANCH="ci/rule-metrics-$(date -u +%Y-%m-%d)"
-          git checkout -b "$BRANCH"
-          git commit -m "chore(rule-metrics): weekly aggregate"
-          git push -u origin "$BRANCH"
-          gh pr create \
-            --title "chore(rule-metrics): weekly aggregate $(date -u +%Y-%m-%d)" \
-            --body "Automated weekly rule-metrics snapshot from .claude/.rule-incidents.jsonl + AGENTS.md. See scripts/rule-metrics-aggregate.sh." \
-            --base main \
-            --head "$BRANCH"
-
-          # PRs created by GITHUB_TOKEN don't trigger other workflows (GitHub
-          # prevents infinite loops). Post synthetic check runs so CI Required
-          # and CLA Required rulesets pass and auto-merge can proceed. Use the
-          # Checks API (/check-runs), NOT the Status API (/statuses/<sha>) —
-          # rulesets require Check Runs from integration_id 15368.
-          COMMIT_SHA=$(git rev-parse HEAD)
-          gh api "repos/${{ github.repository }}/check-runs" \
-            -f name=test \
-            -f head_sha="$COMMIT_SHA" \
-            -f status=completed \
-            -f conclusion=success \
-            -f "output[title]=Bot PR" \
-            -f "output[summary]=Rule metrics aggregation only, no code changes"
-          gh api "repos/${{ github.repository }}/check-runs" \
-            -f name=cla-check \
-            -f head_sha="$COMMIT_SHA" \
-            -f status=completed \
-            -f conclusion=success \
-            -f "output[title]=CLA pre-approved" \
-            -f "output[summary]=github-actions[bot] is in CLA allowlist"
-          gh api "repos/${{ github.repository }}/check-runs" \
-            -f name=dependency-review \
-            -f head_sha="$COMMIT_SHA" \
-            -f status=completed \
-            -f conclusion=success \
-            -f "output[title]=Bot PR" \
-            -f "output[summary]=Rule metrics aggregation only, no dependency changes"
-          gh api "repos/${{ github.repository }}/check-runs" \
-            -f name=e2e \
-            -f head_sha="$COMMIT_SHA" \
-            -f status=completed \
-            -f conclusion=success \
-            -f "output[title]=Bot PR" \
-            -f "output[summary]=Rule metrics aggregation only, no code changes"
-
-          gh pr merge "$BRANCH" --squash --auto
+        uses: ./.github/actions/bot-pr-with-synthetic-checks
+        with:
+          add-paths: knowledge-base/project/rule-metrics.json
+          branch-prefix: ci/rule-metrics-
+          commit-message: "chore(rule-metrics): weekly aggregate"
+          pr-title-prefix: "chore(rule-metrics): weekly aggregate"
+          pr-body: "Automated weekly rule-metrics snapshot from .claude/.rule-incidents.jsonl + AGENTS.md. See scripts/rule-metrics-aggregate.sh."
+          change-summary: "Rule metrics aggregation only, no code changes"
+          gh-token: ${{ github.token }}
 
       - name: Email notification (failure)
         if: failure()
