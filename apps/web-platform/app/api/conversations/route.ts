@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
+import type { User } from "@supabase/supabase-js";
 import { lookupConversationForPath } from "@/server/lookup-conversation-for-path";
 import { validateContextPath } from "@/server/validate-context-path";
 import { withUserRateLimit } from "@/server/with-user-rate-limit";
@@ -14,23 +14,18 @@ import { withUserRateLimit } from "@/server/with-user-rate-limit";
  * Wire shape is camelCase to match the sibling `/api/chat/thread-info`
  * endpoint; DB columns remain snake_case internally (helper maps).
  *
+ * Auth is performed by `withUserRateLimit`; the wrapper 401s unauthenticated
+ * callers before this handler runs and passes the authenticated `user`.
+ *
  * Responses:
  *   200 + JSON `{ conversationId, contextPath, lastActive, messageCount }` when hit
  *   200 + JSON `null` when no row matches (not an error)
  *   400 when `contextPath` is missing or invalid
- *   401 when unauthenticated
- *   429 when the authenticated user exceeds 60 req/min (rate-limit helper)
- *   500 on lookup / count error (mirrored to Sentry via `reportSilentFallback`)
+ *   401 when unauthenticated (emitted by wrapper)
+ *   429 when the authenticated user exceeds 60 req/min (emitted by wrapper)
+ *   500 on lookup error (mirrored to Sentry via `reportSilentFallback`)
  */
-async function getHandler(req: Request) {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
+async function getHandler(req: Request, user: User) {
   const url = new URL(req.url);
   const contextPath = validateContextPath(url.searchParams.get("contextPath"));
   if (!contextPath) {
@@ -39,8 +34,6 @@ async function getHandler(req: Request) {
 
   const result = await lookupConversationForPath(user.id, contextPath);
   if (!result.ok) {
-    // Helper already mirrored to Sentry; surface 500 so external agents
-    // don't retry indefinitely against a broken backend.
     return NextResponse.json({ error: "Internal error" }, { status: 500 });
   }
 

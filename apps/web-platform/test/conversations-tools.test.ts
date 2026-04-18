@@ -156,14 +156,35 @@ describe("buildConversationsTools", () => {
     );
   });
 
-  test("Zod schema requires contextPath", async () => {
+  test("Zod schema rejects missing contextPath via safeParse", async () => {
+    const zodMod = await import("zod/v4");
     const { buildConversationsTools } = await importBuilder();
     const [t] = buildConversationsTools({ userId: "u1" }) as unknown as Array<{
-      schema: Record<string, { _def?: unknown; parse?: Function }>;
+      schema: Record<string, unknown>;
     }>;
-    // The tool's schema is the shape object passed to `tool(...)`. The value
-    // at key `contextPath` must be a Zod schema (has `_def`).
-    expect(t.schema).toHaveProperty("contextPath");
-    expect(t.schema.contextPath).toBeDefined();
+    // Run the actual Zod parse against a missing-field input. A schema that
+    // accepted `z.any()` by mistake would pass here; `z.string()` does not.
+    const schema = zodMod.z.object(
+      t.schema as Parameters<typeof zodMod.z.object>[0],
+    );
+    const result = schema.safeParse({});
+    expect(result.success).toBe(false);
+  });
+
+  test("invalid contextPath: returns isError with code invalid_context_path", async () => {
+    const { buildConversationsTools } = await importBuilder();
+    const [t] = buildConversationsTools({ userId: "u1" }) as unknown as Array<{
+      handler: (args: { contextPath: string }) => Promise<unknown>;
+    }>;
+    // Path without the "knowledge-base/" prefix is rejected by validateContextPath.
+    const res = (await t.handler({ contextPath: "not-a-kb-path.md" })) as {
+      content: Array<{ text: string }>;
+      isError?: boolean;
+    };
+    expect(res.isError).toBe(true);
+    const payload = JSON.parse(res.content[0].text);
+    expect(payload.code).toBe("invalid_context_path");
+    // Lookup helper was never invoked — early-return before DB round-trip.
+    expect(mockLookup).not.toHaveBeenCalled();
   });
 });

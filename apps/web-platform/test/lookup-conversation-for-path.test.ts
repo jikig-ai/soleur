@@ -182,19 +182,4 @@ describe("lookupConversationForPath — single-query collapse (#2511)", () => {
     });
   });
 
-  test("discriminant: 'count_failed' variant removed from LookupConversationResult", async () => {
-    // Type-level assertion expressed at runtime: any error the helper emits
-    // must discriminate as exactly "lookup_failed". If a future commit
-    // re-introduces "count_failed", this assertion catches it — the type
-    // system alone won't, because the runtime branch can exist without the
-    // discriminant literal.
-    const err = { message: "err" };
-    mockSingleChain({ data: null, error: err });
-
-    const { lookupConversationForPath } = await importHelper();
-    const result = await lookupConversationForPath("u1", "knowledge-base/x.md");
-    if (result.ok) throw new Error("should have errored");
-    // Narrow assertion: error equals the one allowed literal, not an alternation.
-    expect(result.error).toBe("lookup_failed");
-  });
 });

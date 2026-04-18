@@ -1,19 +1,10 @@
-// In-process MCP tool for KB-chat thread discovery. Factored out of
-// agent-runner.ts mirroring the kb-share-tools.ts precedent from PR #2497
-// so the tool's wiring has a single call site and its handler can be unit
-// tested in isolation.
+// In-process MCP tool for KB-chat thread discovery. Mirrors the
+// `kb-share-tools.ts` factoring pattern so the tool's wiring has a single
+// call site and its handler can be unit tested in isolation.
 //
 // Currently exposes one tool (`conversations_lookup`). The P3 siblings
 // (`conversations_list`, `conversation_archive`) are deferred to a follow-
 // up issue because they require new HTTP endpoints out of scope.
-//
-// The handler delegates the full lookup lifecycle to
-// server/lookup-conversation-for-path.ts — this module only translates the
-// discriminated-union result into the platform-tool response shape.
-// The MCP path intentionally does NOT route through the HTTP endpoint, so
-// the `withUserRateLimit` wrapper on `/api/conversations` does not apply
-// here; the agent-runner's per-user `query()` invocation is the rate-
-// limiting boundary (one agent session ≈ one user).
 
 import { tool } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod/v4";
@@ -21,6 +12,7 @@ import {
   lookupConversationForPath,
   type LookupConversationResult,
 } from "@/server/lookup-conversation-for-path";
+import { validateContextPath } from "@/server/validate-context-path";
 
 interface BuildConversationsToolsOpts {
   /** Captured in closure — prevents cross-user lookups. */
@@ -56,9 +48,25 @@ export function buildConversationsTools(opts: BuildConversationsToolsOpts) {
         "perspective — use the UI to read them).",
       { contextPath: z.string() },
       async (args) => {
+        // Mirror the HTTP-route validation — /api/conversations calls
+        // validateContextPath before lookup, so the MCP path does the same.
+        const validated = validateContextPath(args.contextPath);
+        if (!validated) {
+          return textResponse(
+            { error: "Invalid contextPath", code: "invalid_context_path" },
+            true,
+          );
+        }
+
         const result: LookupConversationResult =
-          await lookupConversationForPath(userId, args.contextPath);
+          await lookupConversationForPath(userId, validated);
         if (!result.ok) {
+          // Exhaustiveness check — adding a new error discriminant without
+          // updating this wrapper fails tsc --noEmit. Mirrors the pattern
+          // in `kb-share-tools.ts` per learning
+          // 2026-04-10-discriminated-union-exhaustive-switch-miss.
+          const _exhaustive: "lookup_failed" = result.error;
+          void _exhaustive;
           return textResponse(
             { error: "Lookup failed", code: result.error },
             true,

@@ -1,22 +1,25 @@
 import { describe, test, expect, vi, beforeEach } from "vitest";
 
-// RED phase for #2510 — withUserRateLimit helper.
+// Tests for withUserRateLimit (#2510) — per-user rate limit wrapper.
 //
-// Contract (from plan Phase 1):
+// Contract (post-review):
 //   withUserRateLimit(handler, { perMinute, feature }) returns a wrapped handler.
-//   - Unauthenticated caller: delegates to inner handler (inner emits 401).
-//   - Authenticated + under quota: delegates to inner handler.
-//   - Authenticated + at quota boundary (perMinute): delegates to inner handler.
-//   - Authenticated + over quota: returns 429 + { error: "Too many requests" } +
-//     Retry-After: 60 header; inner handler NOT invoked; one warnSilentFallback
-//     call emitted with { feature, op: "rate-limit", extra: { userId } }.
-//   - Different userIds get independent counters (per-user isolation).
-//   - Different feature strings get independent counters even on the same
-//     wrapper call-site pattern (per-feature isolation).
+//   - Unauthenticated caller: wrapper 401s directly; inner handler NOT invoked.
+//   - Authenticated + under quota: inner handler invoked with (req, user).
+//   - Authenticated + at quota boundary (perMinute): inner invoked.
+//   - Authenticated + over quota: 429 + { error: "Too many requests" } +
+//     Retry-After: 60 header; inner NOT invoked; one logRateLimitRejection
+//     breadcrumb emitted with the feature tag and userId.
+//   - Different userIds: independent counters (per-user isolation).
+//   - Different feature strings: independent counters (per-feature isolation).
+//
+// The rate-limiter module is mocked so `startPruneInterval` is a no-op
+// (prevents setInterval leaks across tests) while `SlidingWindowCounter`
+// stays real (its behavior is the system-under-test's contract dependency).
 
-const { mockGetUser, mockWarnSilentFallback } = vi.hoisted(() => ({
+const { mockGetUser, mockLogRateLimitRejection } = vi.hoisted(() => ({
   mockGetUser: vi.fn(),
-  mockWarnSilentFallback: vi.fn(),
+  mockLogRateLimitRejection: vi.fn(),
 }));
 
 vi.mock("@/lib/supabase/server", () => ({
@@ -25,10 +28,17 @@ vi.mock("@/lib/supabase/server", () => ({
   })),
 }));
 
-vi.mock("@/server/observability", () => ({
-  warnSilentFallback: mockWarnSilentFallback,
-  reportSilentFallback: vi.fn(),
-}));
+vi.mock("@/server/rate-limiter", async () => {
+  const actual =
+    await vi.importActual<typeof import("@/server/rate-limiter")>(
+      "@/server/rate-limiter",
+    );
+  return {
+    ...actual,
+    startPruneInterval: vi.fn(),
+    logRateLimitRejection: mockLogRateLimitRejection,
+  };
+});
 
 async function importHelper() {
   return await import("@/server/with-user-rate-limit");
@@ -50,32 +60,28 @@ describe("withUserRateLimit", () => {
     vi.resetModules();
   });
 
-  test("unauthenticated: delegates to inner handler (inner handles 401)", async () => {
+  test("unauthenticated: wrapper 401s directly; inner NOT invoked", async () => {
     const { withUserRateLimit } = await importHelper();
     setUser(null);
-    const inner = vi.fn().mockResolvedValue(
-      new Response(JSON.stringify({ error: "Unauthorized" }), { status: 401 }),
-    );
-
+    const inner = vi.fn();
     const wrapped = withUserRateLimit(inner, {
       perMinute: 60,
       feature: "test.unauth",
     });
 
-    // Even 100 unauthenticated calls must all hit the inner handler — the
-    // wrapper does NOT fabricate auth, it just defers to the inner.
-    for (let i = 0; i < 100; i++) {
-      const res = await wrapped(makeRequest());
-      expect(res.status).toBe(401);
-    }
-    expect(inner).toHaveBeenCalledTimes(100);
-    expect(mockWarnSilentFallback).not.toHaveBeenCalled();
+    const res = await wrapped(makeRequest());
+    expect(res.status).toBe(401);
+    expect(await res.json()).toEqual({ error: "Unauthorized" });
+    expect(inner).not.toHaveBeenCalled();
+    expect(mockLogRateLimitRejection).not.toHaveBeenCalled();
   });
 
-  test("under quota (request 1 .. perMinute): inner invoked each time", async () => {
+  test("under quota: inner invoked each time with (req, user)", async () => {
     const { withUserRateLimit } = await importHelper();
     setUser("user-a");
-    const inner = vi.fn().mockResolvedValue(new Response("ok", { status: 200 }));
+    const inner = vi
+      .fn()
+      .mockResolvedValue(new Response("ok", { status: 200 }));
     const wrapped = withUserRateLimit(inner, {
       perMinute: 60,
       feature: "test.under",
@@ -86,12 +92,17 @@ describe("withUserRateLimit", () => {
       expect(res.status).toBe(200);
     }
     expect(inner).toHaveBeenCalledTimes(60);
+    // Inner receives the authenticated user as its second argument.
+    const [, userArg] = inner.mock.calls[0];
+    expect(userArg).toMatchObject({ id: "user-a" });
   });
 
   test("over quota: 61st call returns 429 + Retry-After: 60; inner NOT invoked", async () => {
     const { withUserRateLimit } = await importHelper();
     setUser("user-a");
-    const inner = vi.fn().mockResolvedValue(new Response("ok", { status: 200 }));
+    const inner = vi
+      .fn()
+      .mockResolvedValue(new Response("ok", { status: 200 }));
     const wrapped = withUserRateLimit(inner, {
       perMinute: 60,
       feature: "test.over",
@@ -106,11 +117,10 @@ describe("withUserRateLimit", () => {
     expect(res.status).toBe(429);
     expect(res.headers.get("Retry-After")).toBe("60");
     expect(await res.json()).toEqual({ error: "Too many requests" });
-    // Inner NOT invoked for the over-quota request.
     expect(inner).toHaveBeenCalledTimes(60);
   });
 
-  test("over quota: emits exactly one warnSilentFallback with correct tags", async () => {
+  test("over quota: emits one logRateLimitRejection with feature + userId", async () => {
     const { withUserRateLimit } = await importHelper();
     setUser("user-a");
     const inner = vi.fn().mockResolvedValue(new Response("ok"));
@@ -121,22 +131,21 @@ describe("withUserRateLimit", () => {
 
     await wrapped(makeRequest()); // 1
     await wrapped(makeRequest()); // 2
-    mockWarnSilentFallback.mockClear();
+    mockLogRateLimitRejection.mockClear();
     await wrapped(makeRequest()); // 3 (over)
 
-    expect(mockWarnSilentFallback).toHaveBeenCalledTimes(1);
-    const [errArg, optsArg] = mockWarnSilentFallback.mock.calls[0];
-    expect(errArg).toBeNull();
-    expect(optsArg).toMatchObject({
-      feature: "kb-chat.test",
-      op: "rate-limit",
-      extra: { userId: "user-a" },
-    });
+    expect(mockLogRateLimitRejection).toHaveBeenCalledTimes(1);
+    expect(mockLogRateLimitRejection).toHaveBeenCalledWith(
+      "kb-chat.test",
+      "user-a",
+    );
   });
 
   test("per-user isolation: user A at quota does not limit user B", async () => {
     const { withUserRateLimit } = await importHelper();
-    const inner = vi.fn().mockResolvedValue(new Response("ok", { status: 200 }));
+    const inner = vi
+      .fn()
+      .mockResolvedValue(new Response("ok", { status: 200 }));
     const wrapped = withUserRateLimit(inner, {
       perMinute: 3,
       feature: "test.iso-user",
@@ -155,10 +164,14 @@ describe("withUserRateLimit", () => {
     expect(firstB.status).toBe(200);
   });
 
-  test("per-feature isolation: two wrappers with different features use distinct counters", async () => {
+  test("per-feature isolation: different features use distinct counters", async () => {
     const { withUserRateLimit } = await importHelper();
-    const innerA = vi.fn().mockResolvedValue(new Response("ok", { status: 200 }));
-    const innerB = vi.fn().mockResolvedValue(new Response("ok", { status: 200 }));
+    const innerA = vi
+      .fn()
+      .mockResolvedValue(new Response("ok", { status: 200 }));
+    const innerB = vi
+      .fn()
+      .mockResolvedValue(new Response("ok", { status: 200 }));
 
     const wrappedA = withUserRateLimit(innerA, {
       perMinute: 2,
@@ -170,31 +183,26 @@ describe("withUserRateLimit", () => {
     });
 
     setUser("user-a");
-    // Exhaust wrapper A's counter for user-a.
     for (let i = 0; i < 2; i++) {
       expect((await wrappedA(makeRequest())).status).toBe(200);
     }
     expect((await wrappedA(makeRequest())).status).toBe(429);
 
-    // Wrapper B is an independent counter — same user is NOT limited there.
     expect((await wrappedB(makeRequest())).status).toBe(200);
   });
 
-  test("only supports two options (perMinute, feature) — type surface is minimal", async () => {
-    // This is a compile-time assertion expressed at runtime: the helper's
-    // call signature must reject extra keys via TypeScript's excess-property
-    // check if the object literal is passed inline. We can't assert that at
-    // runtime, but we CAN verify no unexpected keys influence behavior by
-    // constructing Options with only the two fields and running the full
-    // cycle.
+  test("auth called once per request (no duplicate getUser round-trip)", async () => {
     const { withUserRateLimit } = await importHelper();
     setUser("user-a");
     const inner = vi.fn().mockResolvedValue(new Response("ok"));
     const wrapped = withUserRateLimit(inner, {
-      perMinute: 1,
-      feature: "test.minimal",
+      perMinute: 10,
+      feature: "test.single-auth",
     });
-    expect((await wrapped(makeRequest())).status).toBe(200);
-    expect((await wrapped(makeRequest())).status).toBe(429);
+
+    await wrapped(makeRequest());
+    // Exactly ONE getUser call per request: the wrapper's call. Inner
+    // handlers receive `user` as a parameter and must not re-auth.
+    expect(mockGetUser).toHaveBeenCalledTimes(1);
   });
 });

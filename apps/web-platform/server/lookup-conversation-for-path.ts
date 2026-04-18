@@ -3,9 +3,9 @@ import { reportSilentFallback } from "@/server/observability";
 
 /**
  * Shared helper for looking up the conversation row bound to a
- * `(user_id, context_path)` pair and counting its messages. Used by both
- * `app/api/chat/thread-info/route.ts` and `app/api/conversations/route.ts`
- * to keep the query vocabulary in a single place (issue #2388 task 8C).
+ * `(user_id, context_path)` pair and counting its messages. Used by
+ * `app/api/chat/thread-info/route.ts`, `app/api/conversations/route.ts`,
+ * and the `conversations_lookup` MCP tool.
  *
  * Single round-trip: a PostgREST embedded-resource aggregate combines the
  * SELECT and the message COUNT into one call. The embed is returned as
