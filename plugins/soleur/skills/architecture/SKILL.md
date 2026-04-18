@@ -70,15 +70,34 @@ Create a new ADR with the next sequential number.
 
 3. **Generate the filename.** Convert the title to kebab-case: `ADR-<NNN>-<kebab-title>.md`
 
-4. **Read the ADR template** from [adr-template.md](./references/adr-template.md).
+4. **Read the ADR template** from [adr-template.md](./references/adr-template.md). The template now documents two labeled body shapes (terse / rich) under the `## Choosing the shape` section. Read that section before proceeding.
 
-5. **Write the ADR file.** Create `knowledge-base/engineering/architecture/decisions/ADR-<NNN>-<kebab-title>.md` using the template. Fill in:
+5. **Ask the shape rubric.** Present the 5 triggers from the template's `## Choosing the shape` section and pick between the terse and rich shapes. Use AskUserQuestion with options:
+
+   - "No — terse (3 sections)"
+   - "Yes — rich (8 sections)"
+   - "Unsure — walk me through each trigger"
+
+   If the contributor picks "Unsure," ask each of the 5 triggers as its own yes/no AskUserQuestion. Compute: any yes → rich, all no → terse.
+
+   **Pipeline mode default.** If running inside `/soleur:one-shot` or any other non-interactive caller (no AskUserQuestion available, only `$ARGUMENTS` context), default to **terse**. Rich-shape ADRs in pipeline mode require the caller to pass `shape: rich` explicitly in `$ARGUMENTS`, or the rubric falls through to terse.
+
+6. **Write the ADR file.** Create `knowledge-base/engineering/architecture/decisions/ADR-<NNN>-<kebab-title>.md` using the chosen shape's body block from the template. Fill in frontmatter:
    - `adr: ADR-<NNN>`
    - `title: <title>`
    - `status: active`
    - `date: <today YYYY-MM-DD>`
 
-6. **Gather context.** Ask the user (or use `$ARGUMENTS` context if running in pipeline):
+7. **Gather context.** Ask the user (or use `$ARGUMENTS` context if running in pipeline). The prompt list branches on the shape chosen in step 5:
+
+   **Terse branch (3 prompts):**
+
+   - **Context:** What motivates this decision?
+   - **Decision:** What is the change being made?
+   - **Consequences:** What becomes easier or harder?
+
+   **Rich branch (8 prompts):**
+
    - **Context:** What motivates this decision?
    - **Considered Options:** What alternatives were evaluated? (list with pros/cons and links to tentative C4 model changes)
    - **Decision:** Which option was chosen and why?
@@ -88,9 +107,9 @@ Create a new ADR with the next sequential number.
    - **Principle Alignment:** Which architectural principles does this decision align with or deviate from? Read `knowledge-base/engineering/architecture/principles-register.md` for the register. Reference AP-NNN IDs. Use "None" if no impact.
    - **Diagram:** (optional) Should a Mermaid C4 diagram be included?
 
-7. **Write the ADR body** with the gathered context. If a diagram was requested, generate using proper C4 syntax from [c4-reference.md](./references/c4-reference.md).
+8. **Write the ADR body** with the gathered context. If a diagram was requested (rich branch only), generate using proper C4 syntax from [c4-reference.md](./references/c4-reference.md).
 
-8. **Announce:** "Created ADR-<NNN>: <title> at `knowledge-base/engineering/architecture/decisions/ADR-<NNN>-<kebab-title>.md`"
+9. **Announce:** "Created ADR-<NNN>: <title> at `knowledge-base/engineering/architecture/decisions/ADR-<NNN>-<kebab-title>.md`"
 
 ---
 
