@@ -28,12 +28,26 @@ if (hasCreds && BOT_EMAIL !== "ux-audit-bot@jikigai.com") {
   );
 }
 
-// Note: these tests silent-skip when creds are absent (local dev w/o Doppler, or
-// the plugin CI test-all.sh which doesn't inject Supabase secrets). The CI
-// loud-fail guardrail is tracked separately in #2361 — it needs a dedicated
-// ux-audit smoke job that explicitly loads Doppler prd_scheduled, rather than
-// throwing at module load in the shared suite.
+// Note: these tests skip when creds are absent (local dev w/o Doppler, or the
+// plugin CI test-all.sh which doesn't inject Supabase secrets). Previously
+// silent; now emits a one-line console.warn listing missing env vars (#2362.7).
+// The CI loud-fail guardrail is tracked separately in #2361 — it needs a
+// dedicated ux-audit smoke job that explicitly loads Doppler prd_scheduled,
+// rather than throwing at module load in the shared suite.
 const describeIfCreds = hasCreds ? describe : describe.skip;
+
+if (!hasCreds) {
+  const missing = [
+    !SUPABASE_URL && "SUPABASE_URL",
+    !SERVICE_KEY && "SUPABASE_SERVICE_ROLE_KEY",
+    !BOT_EMAIL && "UX_AUDIT_BOT_EMAIL",
+    !BOT_PASSWORD && "UX_AUDIT_BOT_PASSWORD",
+    !ANON_KEY && "NEXT_PUBLIC_SUPABASE_ANON_KEY",
+  ].filter(Boolean);
+  console.warn(
+    `[bot-fixture.test] skipping integration suite — missing env: ${missing.join(", ")}`,
+  );
+}
 
 async function restGet(path: string): Promise<unknown> {
   const res = await fetch(`${SUPABASE_URL}${path}`, {
