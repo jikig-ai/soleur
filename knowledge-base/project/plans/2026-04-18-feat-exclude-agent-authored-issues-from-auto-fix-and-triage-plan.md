@@ -201,18 +201,18 @@ All six verifications before merge + the post-merge cron check are per [wg-when-
 
 ## Acceptance Criteria
 
-- [ ] `plugins/soleur/skills/fix-issue/SKILL.md` parses `--exclude-label` (multi-value, supports `*` suffix wildcard for prefix matching like `agent:*`; rejects mid-string wildcards) and exits benignly when the issue carries any excluded label.
-- [ ] Backward compatibility: `claude /soleur:fix-issue <number>` (bare) still works and behaves as before (confirmed by the first manual test in Phase 4).
-- [ ] `scheduled-bug-fixer.yml` selection step excludes `ux-audit` AND any `agent:*` label via the canonical jq clause, preserving the existing `sort_by(.createdAt) | .[0]` FIFO contract.
-- [ ] `scheduled-bug-fixer.yml` invokes the skill with `--exclude-label ux-audit --exclude-label 'agent:*'` (defense-in-depth).
-- [ ] `scheduled-daily-triage.yml` uses the same canonical jq clause, verbatim.
-- [ ] `plugins/soleur/skills/fix-issue/references/agent-authored-exclusion.md` exists and documents: the label convention, which workflows honor it, the `gh --jq` pitfall, the load-bearing role of the `ux-audit` branch, the 5-bullet "add a new agent-authored stream" checklist, and the manual test plan.
-- [ ] `plugins/soleur/skills/fix-issue/references/exclude-label-jq-snippet.md` exists, contains the canonical clause with correctness-property comments, and is referenced from both consumer workflows' comment blocks.
-- [ ] The 2026-04-15 governance learning file carries a "Routed to definition" pointer to the new reference.
-- [ ] Phase 4 step 3 jq unit-test: local `gh issue list | jq '<canonical-clause>'` drops exactly the expected `ux-audit` + `agent:*` issues, no false positives.
-- [ ] Manual `workflow_dispatch` runs of `scheduled-daily-triage.yml` and `scheduled-bug-fixer.yml` (with and without `ux-audit` issues in the queue) produce expected behavior.
-- [ ] Manual regression: a real `priority/p3-low` `type/bug` issue is still fixable end-to-end via `scheduled-bug-fixer.yml`.
-- [ ] Post-merge: next natural `scheduled-daily-triage` and `scheduled-bug-fixer` cron runs on main complete green within 24h of merge.
+- [x] `plugins/soleur/skills/fix-issue/SKILL.md` parses `--exclude-label` (multi-value, supports `*` suffix wildcard for prefix matching like `agent:*`; rejects mid-string wildcards) and exits benignly when the issue carries any excluded label.
+- [x] Backward compatibility: `claude /soleur:fix-issue <number>` (bare) still works and behaves as before (confirmed by the first manual test in Phase 4).
+- [x] `scheduled-bug-fixer.yml` selection step excludes `ux-audit` AND any `agent:*` label via the canonical jq clause, preserving the existing `sort_by(.createdAt) | .[0]` FIFO contract.
+- [x] `scheduled-bug-fixer.yml` invokes the skill with `--exclude-label ux-audit --exclude-label 'agent:*'` (defense-in-depth).
+- [x] `scheduled-daily-triage.yml` uses the same canonical jq clause, verbatim.
+- [x] `plugins/soleur/skills/fix-issue/references/agent-authored-exclusion.md` exists and documents: the label convention, which workflows honor it, the `gh --jq` pitfall, the load-bearing role of the `ux-audit` branch, the 5-bullet "add a new agent-authored stream" checklist, and the manual test plan.
+- [x] `plugins/soleur/skills/fix-issue/references/exclude-label-jq-snippet.md` exists, contains the canonical clause with correctness-property comments, and is referenced from both consumer workflows' comment blocks.
+- [x] The 2026-04-15 governance learning file carries a "Routed to definition" pointer to the new reference.
+- [x] Phase 4 step 3 jq unit-test: local `gh issue list | jq '<canonical-clause>'` drops exactly the expected `ux-audit` + `agent:*` issues, no false positives.
+- [ ] Manual `workflow_dispatch` runs of `scheduled-daily-triage.yml` and `scheduled-bug-fixer.yml` (with and without `ux-audit` issues in the queue) produce expected behavior. _(post-push verification)_
+- [ ] Manual regression: a real `priority/p3-low` `type/bug` issue is still fixable end-to-end via `scheduled-bug-fixer.yml`. _(post-push verification)_
+- [ ] Post-merge: next natural `scheduled-daily-triage` and `scheduled-bug-fixer` cron runs on main complete green within 24h of merge. _(post-merge verification)_
 
 ## Test Scenarios
 

@@ -92,6 +92,9 @@ jobs:
           export OPEN_FIXES
           echo "Issues with open bot-fix PRs: ${OPEN_FIXES:-none}"
 
+          # Agent-authored exclusion clause: see
+          # plugins/soleur/skills/fix-issue/references/exclude-label-jq-snippet.md
+          # Drops any issue labeled `ux-audit` OR any label starting with `agent:`.
           for PRIORITY in priority/p3-low priority/p2-medium priority/p1-high; do
             ISSUE=$(gh issue list \
               --label "$PRIORITY" \
@@ -103,6 +106,7 @@ jobs:
                 [.[] | select(
                   (.labels | map(.name) | index("bot-fix/attempted") | not) and
                   (.labels | map(.name) | index("ux-audit") | not) and
+                  (.labels | map(.name) | any(startswith("agent:")) | not) and
                   (.number | IN($skip_nums[]) | not)
                 )] | sort_by(.createdAt) | .[0].number // empty')
 
@@ -127,7 +131,7 @@ jobs:
             --max-turns 35
             --allowedTools Bash,Read,Write,Edit,Glob,Grep
           prompt: |
-            Run /soleur:fix-issue ${{ steps.select.outputs.issue }}
+            Run /soleur:fix-issue ${{ steps.select.outputs.issue }} --exclude-label ux-audit --exclude-label 'agent:*'
 
       # --- Auto-Merge Gate ---
       # Runs OUTSIDE claude-code-action using GITHUB_TOKEN (not the agent's
