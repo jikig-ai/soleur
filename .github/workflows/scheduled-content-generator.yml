@@ -52,7 +52,7 @@ jobs:
             --color "0E8A16" 2>/dev/null || true
 
       - name: Run content generator
-        uses: anthropics/claude-code-action@df37d2f0760a4b5683a6e617c9325bc1a36443f6 # v1.0.75
+        uses: anthropics/claude-code-action@ab8b1e6471c519c585ba17e8ecaccc9d83043541 # v1.0.101
         env:
           GH_TOKEN: ${{ github.token }}
         with:
