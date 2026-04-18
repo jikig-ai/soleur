@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
+import { createUseTeamNamesMock } from "./mocks/use-team-names";
 
 // next/navigation is imported transitively by the layout module. Mock so module
 // evaluation doesn't blow up even though PaymentWarningBanner doesn't use it.
@@ -28,8 +29,6 @@ vi.mock("@/lib/supabase/client", () => ({
 }));
 
 // TeamNamesProvider is a simple passthrough during tests.
-import { createUseTeamNamesMock } from "./mocks/use-team-names";
-
 vi.mock("@/hooks/use-team-names", () => ({
   TeamNamesProvider: ({ children }: { children: React.ReactNode }) => children,
   useTeamNames: () => createUseTeamNamesMock(),

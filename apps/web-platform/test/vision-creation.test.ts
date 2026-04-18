@@ -72,7 +72,7 @@ describe("tryCreateVision", () => {
     // No error thrown — EEXIST is handled
   });
 
-  it("truncates content exceeding 5000 characters", async () => {
+  it("truncates content exceeding MAX_VISION_CHARS (5000 chars, not bytes)", async () => {
     mockMkdir.mockResolvedValueOnce(undefined);
     mockWriteFile.mockResolvedValueOnce(undefined);
 

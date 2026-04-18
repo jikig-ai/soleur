@@ -2,28 +2,38 @@
 
 import { useState } from "react";
 import type { DomainLeaderId } from "@/server/domain-leaders";
+import { DOMAIN_LEADERS } from "@/server/domain-leaders";
 import { LeaderAvatar } from "@/components/leader-avatar";
 
 interface NamingNudgeProps {
   leaderId: DomainLeaderId;
-  leaderTitle: string;
   onSave: (leaderId: string, name: string) => Promise<void>;
   onDismiss: (leaderId: string) => void;
 }
 
 export function NamingNudge({
   leaderId,
-  leaderTitle,
   onSave,
   onDismiss,
 }: NamingNudgeProps) {
   const [name, setName] = useState("");
-  const roleName = leaderId.toUpperCase();
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const roleName =
+    DOMAIN_LEADERS.find((l) => l.id === leaderId)?.name ?? leaderId.toUpperCase();
 
   async function handleSave() {
     const trimmed = name.trim();
-    if (!trimmed) return;
-    await onSave(leaderId, trimmed);
+    if (!trimmed || saving) return;
+    setSaving(true);
+    setError(null);
+    try {
+      await onSave(leaderId, trimmed);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to save name");
+    } finally {
+      setSaving(false);
+    }
   }
 
   return (
@@ -36,6 +46,11 @@ export function NamingNudge({
         <p className="text-xs text-neutral-400">
           Want to give them a name? It will display as &quot;Name ({roleName})&quot; in conversations.
         </p>
+        {error && (
+          <p role="alert" className="mt-1 text-xs text-amber-300">
+            {error}
+          </p>
+        )}
       </div>
       <input
         type="text"
@@ -43,17 +58,20 @@ export function NamingNudge({
         onChange={(e) => setName(e.target.value)}
         placeholder={`Name your ${roleName}...`}
         maxLength={30}
-        className="w-32 rounded-lg border border-neutral-700 bg-neutral-800/50 px-3 py-1.5 text-sm text-white placeholder-neutral-500 outline-none focus:border-amber-600"
+        disabled={saving}
+        className="w-32 rounded-lg border border-neutral-700 bg-neutral-800/50 px-3 py-1.5 text-sm text-white placeholder-neutral-500 outline-none focus:border-amber-600 disabled:opacity-50"
       />
       <button
         onClick={handleSave}
-        className="rounded-lg bg-amber-500 px-3 py-1.5 text-sm font-semibold text-neutral-900 transition-colors hover:bg-amber-400"
+        disabled={saving}
+        className="rounded-lg bg-amber-500 px-3 py-1.5 text-sm font-semibold text-neutral-900 transition-colors hover:bg-amber-400 disabled:cursor-not-allowed disabled:opacity-60"
       >
-        Save
+        {saving ? "Saving..." : "Save"}
       </button>
       <button
         onClick={() => onDismiss(leaderId)}
-        className="text-sm text-neutral-400 transition-colors hover:text-neutral-200"
+        disabled={saving}
+        className="text-sm text-neutral-400 transition-colors hover:text-neutral-200 disabled:opacity-50"
       >
         Dismiss
       </button>
