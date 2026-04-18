@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { lookupConversationForPath } from "@/server/lookup-conversation-for-path";
 import { validateContextPath } from "@/server/validate-context-path";
+import { withUserRateLimit } from "@/server/with-user-rate-limit";
 
 /**
  * GET /api/conversations?contextPath=<path>
@@ -18,9 +19,10 @@ import { validateContextPath } from "@/server/validate-context-path";
  *   200 + JSON `null` when no row matches (not an error)
  *   400 when `contextPath` is missing or invalid
  *   401 when unauthenticated
+ *   429 when the authenticated user exceeds 60 req/min (rate-limit helper)
  *   500 on lookup / count error (mirrored to Sentry via `reportSilentFallback`)
  */
-export async function GET(req: Request) {
+async function getHandler(req: Request) {
   const supabase = await createClient();
   const {
     data: { user },
@@ -53,3 +55,8 @@ export async function GET(req: Request) {
     messageCount: result.row.message_count,
   });
 }
+
+export const GET = withUserRateLimit(getHandler, {
+  perMinute: 60,
+  feature: "kb-chat.conversations",
+});

@@ -3,8 +3,9 @@ import path from "path";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import logger from "@/server/logger";
 import { searchKb, KbValidationError } from "@/server/kb-reader";
+import { withUserRateLimit } from "@/server/with-user-rate-limit";
 
-export async function GET(request: Request) {
+async function getHandler(request: Request) {
   const supabase = await createClient();
   const {
     data: { user },
@@ -54,3 +55,8 @@ export async function GET(request: Request) {
     );
   }
 }
+
+export const GET = withUserRateLimit(getHandler, {
+  perMinute: 60,
+  feature: "kb.search",
+});

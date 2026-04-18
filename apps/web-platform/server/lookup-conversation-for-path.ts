@@ -7,10 +7,16 @@ import { reportSilentFallback } from "@/server/observability";
  * `app/api/chat/thread-info/route.ts` and `app/api/conversations/route.ts`
  * to keep the query vocabulary in a single place (issue #2388 task 8C).
  *
+ * Single round-trip: a PostgREST embedded-resource aggregate combines the
+ * SELECT and the message COUNT into one call. The embed is returned as
+ * `messages: [{ count: N }]` (always a one-element array, even when N is 0,
+ * per PostgREST 12). postgrest-js 2.99 generics sometimes type the embed as
+ * nullable — the `?? 0` on the extracted count covers that TS-level case.
+ *
  * Returns a discriminated union so routes can distinguish:
  *   - `{ ok: true, row: null }` — no conversation for this path (not an error)
  *   - `{ ok: true, row: ConversationRow }` — hit
- *   - `{ ok: false, error: ... }` — Supabase error. Caller decides 500 vs. fallback.
+ *   - `{ ok: false, error: "lookup_failed" }` — Supabase error. Caller decides.
  *
  * Internally uses the service client (RLS bypassed) because callers have
  * already authenticated the user and validated the path.
@@ -24,16 +30,16 @@ export interface ConversationRow {
 
 export type LookupConversationResult =
   | { ok: true; row: ConversationRow | null }
-  | { ok: false; error: "lookup_failed" | "count_failed" };
+  | { ok: false; error: "lookup_failed" };
 
 export async function lookupConversationForPath(
   userId: string,
   contextPath: string,
 ): Promise<LookupConversationResult> {
   const service = createServiceClient();
-  const { data: existing, error: lookupErr } = await service
+  const { data, error } = await service
     .from("conversations")
-    .select("id, context_path, last_active")
+    .select("id, context_path, last_active, messages(count)")
     .eq("user_id", userId)
     .eq("context_path", contextPath)
     .is("archived_at", null)
@@ -41,39 +47,29 @@ export async function lookupConversationForPath(
     .limit(1)
     .maybeSingle();
 
-  if (lookupErr) {
-    reportSilentFallback(lookupErr, {
+  if (error) {
+    reportSilentFallback(error, {
       feature: "kb-chat",
       op: "conversation-lookup",
       extra: { contextPath },
     });
     return { ok: false, error: "lookup_failed" };
   }
-  if (!existing) {
-    return { ok: true, row: null };
-  }
+  if (!data) return { ok: true, row: null };
 
-  const { count, error: countErr } = await service
-    .from("messages")
-    .select("id", { count: "exact", head: true })
-    .eq("conversation_id", existing.id);
-
-  if (countErr) {
-    reportSilentFallback(countErr, {
-      feature: "kb-chat",
-      op: "conversation-count",
-      extra: { conversationId: existing.id },
-    });
-    return { ok: false, error: "count_failed" };
-  }
+  const messagesEmbed = data.messages as
+    | Array<{ count: number }>
+    | null
+    | undefined;
+  const messageCount = messagesEmbed?.[0]?.count ?? 0;
 
   return {
     ok: true,
     row: {
-      id: existing.id,
-      context_path: existing.context_path,
-      last_active: existing.last_active,
-      message_count: count ?? 0,
+      id: data.id,
+      context_path: data.context_path,
+      last_active: data.last_active,
+      message_count: messageCount,
     },
   };
 }

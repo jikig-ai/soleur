@@ -44,6 +44,7 @@ import { pushBranch } from "./push-branch";
 import { githubApiGet } from "./github-api";
 import { MAX_BINARY_SIZE } from "./kb-limits";
 import { buildKbShareTools } from "./kb-share-tools";
+import { buildConversationsTools } from "./conversations-tools";
 import { reportSilentFallback } from "./observability";
 
 const log = createChildLogger("agent");
@@ -574,7 +575,15 @@ is the right tool when the user asks "double-check the link still works" or
 
 On code "revoked" or "content-changed", offer to run kb_share_create on the
 same documentPath to issue a fresh link. On code "legacy-null-hash" (pre-
-migration share row, rare) recommend re-creating the share as well.`;
+migration share row, rare) recommend re-creating the share as well.
+
+## KB-chat thread discovery
+
+You can look up whether a KB-chat thread already exists for a knowledge-base
+document using conversations_lookup. Input: contextPath (the KB file path).
+Returns thread metadata ({ conversationId, lastActive, messageCount }) if a
+thread exists, or null otherwise. Use this before creating a new thread —
+resuming an existing thread preserves context for the user.`;
 
     // ---------------------------------------------------------------------------
     // In-process MCP server for platform tools (PR creation, etc.)
@@ -879,6 +888,13 @@ migration share row, rare) recommend re-creating the share as well.`;
       "mcp__soleur_platform__kb_share_revoke",
       "mcp__soleur_platform__kb_share_preview",
     );
+
+    // KB-chat thread discovery (closes #2512 P2 slice). P3 siblings
+    // (conversations_list, conversation_archive) deferred to follow-up
+    // issue because they require new HTTP endpoints.
+    const conversationsTools = buildConversationsTools({ userId });
+    platformTools.push(...conversationsTools);
+    platformToolNames.push("mcp__soleur_platform__conversations_lookup");
 
     // Build MCP server if any platform tools are registered
     if (platformTools.length > 0) {

@@ -3,8 +3,9 @@ import path from "path";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import logger from "@/server/logger";
 import { buildTree } from "@/server/kb-reader";
+import { withUserRateLimit } from "@/server/with-user-rate-limit";
 
-export async function GET() {
+async function getHandler() {
   const supabase = await createClient();
   const {
     data: { user },
@@ -41,3 +42,8 @@ export async function GET() {
     );
   }
 }
+
+export const GET = withUserRateLimit(getHandler, {
+  perMinute: 60,
+  feature: "kb.tree",
+});
