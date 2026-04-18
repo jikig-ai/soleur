@@ -68,12 +68,6 @@ describe("ChatInput insertQuote (callback ref)", () => {
 
     const ta = getTextarea();
     act(() => {
-      ta.value = "existing text";
-      ta.selectionStart = 8;
-      ta.selectionEnd = 8;
-      ta.dispatchEvent(new Event("input", { bubbles: true }));
-    });
-    act(() => {
       setControlledValue(ta, "existing text", 8);
     });
 

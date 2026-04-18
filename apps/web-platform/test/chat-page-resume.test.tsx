@@ -1,32 +1,20 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, waitFor } from "@testing-library/react";
 import { createUseTeamNamesMock } from "./mocks/use-team-names";
+import { createWebSocketMock } from "./mocks/use-websocket";
 
-// Mock useWebSocket hook — includes resumeSession
 const mockStartSession = vi.fn();
 const mockResumeSession = vi.fn();
 const mockSendMessage = vi.fn();
 const mockSendReviewGateResponse = vi.fn();
 
-type MockTextMessage = { id: string; role: "user" | "assistant"; content: string; type: "text"; leaderId?: string };
-type MockGateMessage = { id: string; role: "user" | "assistant"; content: string; type: "review_gate"; leaderId?: string; gateId: string; question: string; options: string[]; header?: string; descriptions?: Record<string, string | undefined>; resolved?: boolean; selectedOption?: string; gateError?: string };
-type MockChatMessage = MockTextMessage | MockGateMessage;
-
-let wsReturn = {
-  messages: [] as MockChatMessage[],
+let wsReturn = createWebSocketMock({
   startSession: mockStartSession,
   resumeSession: mockResumeSession,
   sendMessage: mockSendMessage,
   sendReviewGateResponse: mockSendReviewGateResponse,
-  status: "connected" as "connecting" | "connected" | "reconnecting" | "disconnected",
-  disconnectReason: undefined as string | undefined,
-  lastError: null as import("@/lib/ws-client").WebSocketError | null,
-  reconnect: vi.fn(),
-  routeSource: null as "auto" | "mention" | null,
-  activeLeaderIds: [] as string[],
   sessionConfirmed: false,
-  usageData: null as import("@/lib/ws-client").UsageData | null,
-};
+});
 
 vi.mock("@/lib/ws-client", () => ({
   useWebSocket: () => wsReturn,
@@ -55,21 +43,13 @@ describe("ChatPage — existing conversation (resume_session)", () => {
     mockStartSession.mockClear();
     mockResumeSession.mockClear();
     mockSendMessage.mockClear();
-    wsReturn = {
-      messages: [],
+    wsReturn = createWebSocketMock({
       startSession: mockStartSession,
       resumeSession: mockResumeSession,
       sendMessage: mockSendMessage,
       sendReviewGateResponse: mockSendReviewGateResponse,
-      status: "connected",
-      disconnectReason: undefined,
-      lastError: null,
-      reconnect: vi.fn(),
-      routeSource: null,
-      activeLeaderIds: [],
       sessionConfirmed: false,
-      usageData: null,
-    };
+    });
     for (const key of [...mockSearchParams.keys()]) {
       mockSearchParams.delete(key);
     }

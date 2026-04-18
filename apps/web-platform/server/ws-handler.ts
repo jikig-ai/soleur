@@ -387,7 +387,7 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
         // Cross-tab session supersession (#2391): `sessions` is keyed by
         // userId, not by (userId, context_path). Opening tab B with a
         // resumeByContextPath will close tab A's socket via the auth-success
-        // path below (~line 826 — WS_CLOSE code SUPERSEDED). Per-doc
+        // path (search `WS_CLOSE_CODES.SUPERSEDED` in this file). Per-doc
         // context_path resumption does NOT grant two tabs independent live
         // streams; it only resolves the *persisted* conversation row so the
         // new tab shows the right history. A user-visible "another tab took

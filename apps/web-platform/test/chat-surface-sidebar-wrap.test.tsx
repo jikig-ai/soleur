@@ -85,15 +85,16 @@ describe("ChatSurface variant=\"sidebar\" — narrow-column wrap (Phase 3.1 / AC
     expect(wrapper?.textContent ?? "").toContain("example.com");
   });
 
-  it("sidebar variant: <pre> does not force horizontal scroll inside its container", async () => {
-    // Observable wrap behavior: the <pre> should not exceed its container's
-    // visible width. jsdom's layout returns 0 for both values — guard and
-    // treat the 0/0 case as unassertable rather than a false green.
+  it("sidebar variant: <pre> sits inside a narrow-wrap container (structural)", async () => {
+    // jsdom doesn't compute layout, so a `scrollWidth <= clientWidth` check
+    // would silently pass as a no-op (both values are always 0). Assert the
+    // structural invariant instead: the sidebar <pre> must live inside a
+    // `[data-narrow-wrap='true']` ancestor — the same hook the first test
+    // proves the sidebar variant emits. An e2e test (Playwright) is the
+    // right place for true visual wrap verification.
     await renderWithMessage("```ts\n" + LONG_CODE + "\n```", "sidebar");
     const pre = document.querySelector("pre");
     expect(pre).not.toBeNull();
-    if (pre && pre.clientWidth > 0) {
-      expect(pre.scrollWidth).toBeLessThanOrEqual(pre.clientWidth);
-    }
+    expect(pre?.closest("[data-narrow-wrap='true']")).not.toBeNull();
   });
 });
