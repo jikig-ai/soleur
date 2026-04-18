@@ -560,6 +560,8 @@ When a reviewer prescribes `--arg` for jq injection defense in a `gh ... --jq` c
 
 Parallel review batches can stall silently — spawning 12 review agents at once has been observed to produce completion notifications for only 6, with the remaining agents' transcripts frozen ~15s after spawn and no completion event emitted. When more than 30% of spawned agents stop producing output for >2 minutes after launch, proactively announce "N of M agents stalled" rather than silently waiting. Proceed with synthesis from the agents that returned — the Rate Limit Fallback gate already permits partial coverage. See `knowledge-base/project/learnings/2026-04-17-postgrest-aggregate-disabled-forces-rpc-option.md`.
 
+Before reporting a broken link or missing file, reviewer agents MUST verify via Glob or Read. Unverified "broken link" claims waste reviewer-response cycles — the file may exist at the exact path. **Why:** PR #2226 pattern-recognition-specialist false-positive on a `runtime-errors/2026-02-13-...` learning file that did exist.
+
 ### Important: P1 Findings Block Merge
 
 Any **P1 (CRITICAL)** findings must be addressed before merging the PR. Present these prominently and ensure they're resolved before accepting the PR.
