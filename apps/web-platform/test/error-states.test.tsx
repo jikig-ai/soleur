@@ -53,28 +53,6 @@ describe("ErrorCard component", () => {
   });
 });
 
-describe("WebSocketError interface", () => {
-  test("error codes map to structured objects", () => {
-    // Verify the error code mapping exists and has correct shape
-    const errorMap: Record<string, { message: string; action?: { label: string; href?: string } }> = {
-      key_invalid: {
-        message: "Your API key is invalid or expired.",
-        action: { label: "Update key", href: "/dashboard/settings" },
-      },
-      rate_limited: {
-        message: "You've been rate limited. Please wait before trying again.",
-      },
-      connection_failed: {
-        message: "Unable to connect to the server.",
-      },
-    };
-
-    expect(errorMap.key_invalid.action?.href).toBe("/dashboard/settings");
-    expect(errorMap.rate_limited.message).toContain("rate limited");
-    expect(errorMap.connection_failed.message).toContain("connect");
-  });
-});
-
 // --- Hook contract tests for error state clearing (#1377) ---
 
 const mockStartSession = vi.fn();

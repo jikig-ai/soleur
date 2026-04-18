@@ -287,6 +287,27 @@ Complete system context map with component interactions
 
 Run the Task code-simplicity-reviewer() to see if we can simplify the code.
 
+### 4.5. CLI-Verification Check (user-facing docs only)
+
+When reviewing a PR that changes `*.njk`, `*.md`, `README`, or content under
+`apps/**`, scan every fenced code block tagged `bash`, `sh`, `shell`, or
+untagged-but-CLI-shaped. For each `<command> <subcommand>` pair:
+
+1. If the tool is well-known (git, gh, npm, bun, curl, ollama, supabase,
+   doppler, etc.), verify the subcommand exists. Cross-reference the tool's
+   official docs via `WebFetch` or run `<tool> --help`. If unsure, flag as
+   `cli-verification-unverified` and require an explicit annotation or
+   citation before approving.
+2. If the tool is project-local (`./scripts/*`,
+   `plugins/soleur/skills/*/scripts/*`), verify the script exists at the
+   path.
+3. If the snippet names a model or registry tag (`<model>:<tag>`,
+   `@<version>`), fetch the registry or cite the registry URL.
+
+Flag any unverified CLI invocation as **P1 (docs-trust)** — NOT P3 polish. A
+fabricated CLI command on a high-intent landing page breaks first-touch
+trust (#1810/#2550).
+
 ### 5. Findings Synthesis and GitHub Issue Creation
 
 <critical_requirement>

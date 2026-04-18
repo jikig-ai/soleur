@@ -15,7 +15,6 @@ describe("NamingNudge", () => {
     return render(
       <NamingNudge
         leaderId={leaderId}
-        leaderTitle="Chief Technology Officer"
         onSave={mockOnSave}
         onDismiss={mockOnDismiss}
       />,
@@ -66,5 +65,59 @@ describe("NamingNudge", () => {
     renderNudge();
     fireEvent.click(screen.getByText("Save"));
     expect(mockOnSave).not.toHaveBeenCalled();
+  });
+
+  it("renders an error message when onSave rejects", async () => {
+    mockOnSave.mockRejectedValueOnce(new Error("Network error"));
+    renderNudge();
+    fireEvent.change(screen.getByPlaceholderText(/name/i), {
+      target: { value: "Alex" },
+    });
+    fireEvent.click(screen.getByText("Save"));
+
+    await waitFor(() => {
+      expect(screen.getByText(/network error/i)).toBeInTheDocument();
+    });
+  });
+
+  it("disables Save button while onSave is pending and shows Saving...", async () => {
+    let resolveSave!: () => void;
+    mockOnSave.mockImplementationOnce(
+      () =>
+        new Promise<void>((r) => {
+          resolveSave = r;
+        }),
+    );
+    renderNudge();
+    fireEvent.change(screen.getByPlaceholderText(/name/i), {
+      target: { value: "Alex" },
+    });
+    fireEvent.click(screen.getByText("Save"));
+
+    await waitFor(() => {
+      const btn = screen.getByRole("button", { name: /saving/i });
+      expect(btn).toBeDisabled();
+    });
+
+    resolveSave();
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /^save$/i })).not.toBeDisabled();
+    });
+  });
+
+  it("re-enables Save after onSave resolves successfully", async () => {
+    mockOnSave.mockResolvedValueOnce(undefined);
+    renderNudge();
+    fireEvent.change(screen.getByPlaceholderText(/name/i), {
+      target: { value: "Alex" },
+    });
+    fireEvent.click(screen.getByText("Save"));
+
+    await waitFor(() => {
+      expect(mockOnSave).toHaveBeenCalledWith("cto", "Alex");
+    });
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /^save$/i })).not.toBeDisabled();
+    });
   });
 });
