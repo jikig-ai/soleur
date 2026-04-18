@@ -27,13 +27,13 @@ function env(key: string): string {
   return v;
 }
 
-function projectRef(supabaseUrl: string): string {
+export function projectRef(supabaseUrl: string): string {
   const m = supabaseUrl.match(/^https:\/\/([^.]+)\.supabase\.co/);
   if (!m) throw new Error(`Cannot derive project ref from SUPABASE_URL=${supabaseUrl}`);
   return m[1];
 }
 
-function cookieDomain(siteUrl: string): string {
+export function cookieDomain(siteUrl: string): string {
   const u = new URL(siteUrl);
   return u.hostname;
 }
@@ -123,4 +123,6 @@ async function main() {
   console.log(`[signin] wrote storageState to ${outPath} (cookie ${cookieName} for ${domain})`);
 }
 
-await main();
+if (import.meta.main) {
+  await main();
+}

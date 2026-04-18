@@ -76,6 +76,20 @@ async function countConversations(userId: string): Promise<number> {
   return rows.length;
 }
 
+async function countMessages(userId: string): Promise<number> {
+  const conversations = (await restGet(
+    `/rest/v1/conversations?user_id=eq.${userId}&select=id`,
+  )) as Array<{ id: string }>;
+  let total = 0;
+  for (const c of conversations) {
+    const msgs = (await restGet(
+      `/rest/v1/messages?conversation_id=eq.${c.id}&select=id`,
+    )) as Array<{ id: string }>;
+    total += msgs.length;
+  }
+  return total;
+}
+
 async function getUserRow(userId: string) {
   const rows = (await restGet(
     `/rest/v1/users?id=eq.${userId}&select=tc_accepted_version,subscription_status,onboarding_completed_at,stripe_customer_id`,
@@ -130,10 +144,17 @@ describeIfCreds("bot-fixture (DB-only v1)", () => {
   test("seed is idempotent (running twice yields same row counts)", async () => {
     runScript("seed");
     const countAfterFirst = await countConversations(botId);
+    const messagesAfterFirst = await countMessages(botId);
     runScript("seed");
     const countAfterSecond = await countConversations(botId);
+    const messagesAfterSecond = await countMessages(botId);
     expect(countAfterSecond).toBe(countAfterFirst);
     expect(countAfterSecond).toBe(2);
+    // Message count must stay stable (3 + 4 = 7) across re-seeds. Without the
+    // DELETE-before-insert guard inside seed(), upsert merge-duplicates would
+    // double the count to 14 on the second run.
+    expect(messagesAfterSecond).toBe(messagesAfterFirst);
+    expect(messagesAfterSecond).toBe(7);
   });
 
   test("bot can sign in after seed", async () => {
@@ -160,6 +181,10 @@ describeIfCreds("bot-fixture (DB-only v1)", () => {
     const r = runScript("reset");
     expect(r.status).toBe(0);
     expect(await countConversations(botId)).toBe(0);
+    // Auth user must survive reset — only DB state should be cleared.
+    // getBotUserId() throws if the bot email is absent, locking the invariant
+    // against any future regression that cascades to /auth/v1/admin/users.
+    expect(await getBotUserId()).toBe(botId);
     const row = await getUserRow(botId);
     expect(row.subscription_status).toBe("none");
     expect(row.tc_accepted_version).toBeNull();
