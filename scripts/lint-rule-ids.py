@@ -51,7 +51,7 @@ def lint(path: Path) -> int:
 
     # ID format
     for rid, ln in ids_seen:
-        if not re.match(r"^(hr|wg|cq|rf|pdr|cm)-[a-z0-9-]{3,40}$", rid):
+        if not re.match(r"^(hr|wg|cq|rf|pdr|cm)-[a-z0-9-]{3,60}$", rid):
             errors.append(f"{path}:{ln}: invalid id format: {rid}")
 
     # Removed-id diff check (warn only — not a hard fail since sections rename)
