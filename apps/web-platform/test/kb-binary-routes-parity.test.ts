@@ -6,6 +6,11 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { hashBytes } from "@/server/kb-content-hash";
 import { shareSupabaseFromMock } from "./helpers/share-mocks";
 import { __resetShareHashVerdictCacheForTest } from "@/server/share-hash-verdict-cache";
+import {
+  PUBLIC_CACHE_CONTROL,
+  PRIVATE_CACHE_CONTROL,
+  deriveWeakETag,
+} from "./helpers/kb-cache-fixtures";
 
 // ---------------------------------------------------------------------------
 // Hoisted mocks — same primitives used by both route tests, combined.
@@ -57,7 +62,8 @@ const PDF_FIXTURE = Buffer.from(
 
 // Headers that MUST be identical across both routes. Explicitly excludes
 // ETag (strong for share, weak for owner — documented divergence) and
-// Cache-Control (issue #2329 tracks the cleanup).
+// Cache-Control (intentionally divergent: owner private, share public —
+// see the `Cache-Control is intentionally divergent` describe block below).
 const PARITY_HEADERS = [
   "Content-Type",
   "Content-Disposition",
@@ -240,6 +246,52 @@ describe("streaming discipline: bodies must be streamed, not buffered", () => {
 
     await ownerRes.arrayBuffer();
     await sharedRes.arrayBuffer();
+  });
+});
+
+describe("Cache-Control is intentionally divergent (issue #2329)", () => {
+  it("owner GET emits private, shared GET emits public", async () => {
+    fs.writeFileSync(path.join(kbRoot, "report.pdf"), PDF_FIXTURE);
+    primeMocks("report.pdf", PDF_FIXTURE);
+
+    const ownerRes = await callOwnerGET("report.pdf");
+    const sharedRes = await callSharedGET("tok-pdf");
+
+    expect(ownerRes.headers.get("Cache-Control")).toBe(PRIVATE_CACHE_CONTROL);
+    expect(sharedRes.headers.get("Cache-Control")).toBe(PUBLIC_CACHE_CONTROL);
+  });
+
+  it("owner HEAD emits private, shared HEAD emits public", async () => {
+    fs.writeFileSync(path.join(kbRoot, "report.pdf"), PDF_FIXTURE);
+    primeMocks("report.pdf", PDF_FIXTURE);
+
+    const ownerRes = await callOwnerHEAD("report.pdf");
+    const sharedRes = await callSharedHEAD("tok-pdf");
+
+    expect(ownerRes.headers.get("Cache-Control")).toBe(PRIVATE_CACHE_CONTROL);
+    expect(sharedRes.headers.get("Cache-Control")).toBe(PUBLIC_CACHE_CONTROL);
+  });
+
+  it("owner 304 emits private, shared 304 emits public", async () => {
+    fs.writeFileSync(path.join(kbRoot, "report.pdf"), PDF_FIXTURE);
+    primeMocks("report.pdf", PDF_FIXTURE);
+
+    // Owner weak ETag: derived from fstat tuple.
+    const stat = fs.statSync(path.join(kbRoot, "report.pdf"));
+    const ownerWeakETag = deriveWeakETag(stat);
+    const ownerRes = await callOwnerGET("report.pdf", {
+      "if-none-match": ownerWeakETag,
+    });
+    expect(ownerRes.status).toBe(304);
+    expect(ownerRes.headers.get("Cache-Control")).toBe(PRIVATE_CACHE_CONTROL);
+
+    // Shared strong ETag: content_sha256 from the share row.
+    const sharedStrongETag = `"${hashBytes(PDF_FIXTURE)}"`;
+    const sharedRes = await callSharedGET("tok-pdf", {
+      "if-none-match": sharedStrongETag,
+    });
+    expect(sharedRes.status).toBe(304);
+    expect(sharedRes.headers.get("Cache-Control")).toBe(PUBLIC_CACHE_CONTROL);
   });
 });
 
