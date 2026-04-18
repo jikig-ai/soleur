@@ -45,6 +45,7 @@ vi.mock("@/server/observability", () => ({
 // workspace so lstat + isFile + isSymbolicLink checks exercise the real FS.
 
 import { POST } from "@/app/api/kb/share/route";
+import { MAX_BINARY_SIZE } from "@/server/kb-binary-response";
 import { shareSupabaseFromMock } from "./helpers/share-mocks";
 
 let tmpWorkspace: string;
@@ -141,7 +142,7 @@ describe("KB share allowed paths — existence + filetype validation", () => {
   });
 
   it("rejects oversize files with 413", async () => {
-    const big = Buffer.alloc(50 * 1024 * 1024 + 1);
+    const big = Buffer.alloc(MAX_BINARY_SIZE + 1);
     fs.writeFileSync(path.join(kbRoot, "huge.pdf"), big);
     const res = await POST(createShareRequest("huge.pdf"));
     expect(res.status).toBe(413);

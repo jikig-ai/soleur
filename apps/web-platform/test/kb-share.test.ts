@@ -5,6 +5,7 @@ import { createHash } from "node:crypto";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 import { createShare, listShares, revokeShare } from "@/server/kb-share";
+import { MAX_BINARY_SIZE } from "@/server/kb-binary-response";
 import { shareSupabaseFromMock } from "./helpers/share-mocks";
 
 vi.mock("@/server/logger", () => ({
@@ -225,7 +226,7 @@ describe("createShare — validation failures", () => {
   });
 
   it("rejects oversized file with status 413 code too-large", async () => {
-    const big = Buffer.alloc(50 * 1024 * 1024 + 1);
+    const big = Buffer.alloc(MAX_BINARY_SIZE + 1);
     fs.writeFileSync(path.join(kbRoot, "huge.pdf"), big);
     const client = makeServiceClient({
       kb_share_links: { shareRow: null },
