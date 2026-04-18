@@ -42,12 +42,20 @@ import {
 } from "@/server/kb-preview-metadata";
 import { createChildLogger } from "@/server/logger";
 import { reportSilentFallback } from "@/server/observability";
+import { purgeSharedToken } from "@/server/cf-cache-purge";
 
 const log = createChildLogger("kb-share");
 
 // 256 bits of entropy, ~43 base64url chars. Hoisted so the "why 32"
 // is explicit at the call site — security-relevant constant.
 const SHARE_TOKEN_BYTES = 32;
+
+// Single source of truth for the user-facing 502 error string. The
+// "60 seconds" matches the s-maxage value in
+// `kb-binary-response.ts::CACHE_CONTROL_BY_SCOPE.public` — keep them
+// in lockstep when the public TTL changes.
+export const REVOKE_PURGE_FAILED_MESSAGE =
+  "Revoke succeeded but cache purge failed; share may be served from cache for up to 60 seconds";
 
 export type CreateShareErrorCode =
   | "invalid-path"
@@ -58,7 +66,11 @@ export type CreateShareErrorCode =
   | "concurrent-retry"
   | "db-error";
 
-export type RevokeShareErrorCode = "forbidden" | "not-found" | "db-error";
+export type RevokeShareErrorCode =
+  | "forbidden"
+  | "not-found"
+  | "db-error"
+  | "purge-failed";
 
 export interface ShareRecord {
   token: string;
@@ -97,7 +109,7 @@ export type RevokeShareResult =
   | { ok: true; token: string; documentPath: string }
   | {
       ok: false;
-      status: 403 | 404 | 500;
+      status: 403 | 404 | 500 | 502;
       code: RevokeShareErrorCode;
       error: string;
     };
@@ -265,6 +277,13 @@ export async function createShare(
       };
     }
     // Content drift: revoke stale row and issue a fresh token.
+    // Same security invariant as the explicit revoke path (#2568): the
+    // stale token's previously-cached 200 must be evicted from the CF
+    // edge so the new content-drifted document is the only thing
+    // reachable. Purge failure here is best-effort (the new token is
+    // about to be issued and overwhelmingly more valuable than waiting
+    // on CF to ack); Sentry alarms via reportSilentFallback inside the
+    // helper so the operator sees the partial-failure state.
     await table.update({ revoked: true }).eq("id", existing.id);
     log.info(
       {
@@ -274,6 +293,7 @@ export async function createShare(
       },
       "revoked stale share and issuing new token (content changed)",
     );
+    await purgeSharedToken(existing.token);
   }
 
   const token = randomBytes(SHARE_TOKEN_BYTES).toString("base64url");
@@ -432,10 +452,29 @@ export async function revokeShare(
     };
   }
 
+  // Audit-trail decoupling: emit `share_revoked` BEFORE the purge call so
+  // the audit/observability pipeline sees every successful DB revoke,
+  // even when the downstream CF purge fails (502 path below).
   log.info(
     { event: "share_revoked", userId, token },
     "share link revoked",
   );
+
+  // Active CF edge purge so a previously-cached 200 doesn't keep serving
+  // for the s-maxage TTL after the DB row is revoked. The helper alarms
+  // to Sentry on every non-ok branch; do NOT re-emit reportSilentFallback
+  // here. We surface 502 to the caller so the operator sees the
+  // partial-failure state rather than a silent leak (#2568).
+  const purgeResult = await purgeSharedToken(token);
+  if (!purgeResult.ok) {
+    return {
+      ok: false,
+      status: 502,
+      code: "purge-failed",
+      error: REVOKE_PURGE_FAILED_MESSAGE,
+    };
+  }
+
   return { ok: true, token, documentPath: shareLink.document_path };
 }
 
