@@ -21,6 +21,10 @@ const MAX_SCRUB_INPUT_LEN = MAX_PROP_STRING_LEN * 2;
 
 export type ScrubPatternName = "email" | "uuid" | "id";
 
+// Historical backlog and dashboard audit: see
+// knowledge-base/engineering/ops/runbooks/plausible-pii-erasure.md and
+// plausible-dashboard-filter-audit.md.
+//
 // Scrub patterns for the `path` prop (#2462). Ordered: email first (unique
 // `@` anchor), then any UUID shape, then 6+ digit runs. Each entry is
 // applied with a single `.replace()` — no `.test()` gate — because `/g`
