@@ -481,6 +481,7 @@ Before finalizing:
 - [ ] Links are valid and relevant
 - [ ] No contradictions between sections
 - [ ] Explicit string literals (error messages, log strings, Sentry messages, feature flags) match across Helper Contract / Acceptance Criteria / Test Scenarios / Test Implementation Sketch. Verbatim-preserved strings (e.g., for dashboard/alert continuity) are the highest-risk drift class — grep the whole plan for each quoted literal and confirm one canonical value.
+- [ ] Every cited external SHA, tag, release version, or commit reference has been **resolved live** via `gh api` or an equivalent authoritative source in the same deepen pass — never cite SHAs from memory or training data. Show the command + output in a fenced block next to the claim. **Why:** In the #2540 plan, the fallback SHA for `claude-code-action@v1.0.100` was cited as `8a953ded...` (actually the `v1` floating tag), and `scheduled-roadmap-review.yml` was described as using `@v1` floating ref when it's actually a pinned SHA `@ff9acae5... # v1`. Both errors survived into the plan and were caught only in review.
 - [ ] Enhancement summary accurately reflects changes
 
 ## Post-Enhancement Options

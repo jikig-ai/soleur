@@ -65,8 +65,8 @@ After the subagent returns, check for a `## Session Summary` heading in the outp
 **If present (success):**
 
 1. Extract the plan file path from `### Plan File`
-2. Detect the feature branch: run `git branch --show-current`
-3. Write the parsed content to `knowledge-base/project/specs/feat-<name>/session-state.md` (create if needed):
+2. Detect the feature branch: run `git branch --show-current`. Use the **full, exact** branch name (including workflow prefixes like `feat-one-shot-`, `feat-fix-`) — do NOT abbreviate. The plan subagent already wrote `tasks.md` to `knowledge-base/project/specs/<exact-branch-name>/`, so session-state.md must go in the same directory to avoid sibling-dir collisions.
+3. Write the parsed content to `knowledge-base/project/specs/<exact-branch-name>/session-state.md` (create if needed):
 
 ```markdown
 # Session State
