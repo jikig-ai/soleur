@@ -188,4 +188,26 @@ describe("kb_share_revoke handler", () => {
     expect(result.content[0].text).toContain("Forbidden");
     expect(result.content[0].text).toContain("forbidden");
   });
+
+  it("surfaces 502 purge-failed verbatim so the agent caller sees the bounded leak window", async () => {
+    mocks.revokeShare.mockResolvedValue({
+      ok: false,
+      status: 502,
+      code: "purge-failed",
+      error:
+        "Revoke succeeded but cache purge failed; share may be served from cache for up to 60 seconds",
+    });
+    const tools = buildKbShareTools(baseDeps);
+    const revokeTool = findTool(tools, "kb_share_revoke");
+
+    const result = await revokeTool.handler({ token: "tok-1" });
+
+    expect(result.isError).toBe(true);
+    const payload = JSON.parse(result.content[0].text);
+    expect(payload.status).toBe(502);
+    expect(payload.code).toBe("purge-failed");
+    expect(payload.error).toBe(
+      "Revoke succeeded but cache purge failed; share may be served from cache for up to 60 seconds",
+    );
+  });
 });

@@ -42,6 +42,7 @@ import {
 } from "@/server/kb-preview-metadata";
 import { createChildLogger } from "@/server/logger";
 import { reportSilentFallback } from "@/server/observability";
+import { purgeSharedToken } from "@/server/cf-cache-purge";
 
 const log = createChildLogger("kb-share");
 
@@ -58,7 +59,11 @@ export type CreateShareErrorCode =
   | "concurrent-retry"
   | "db-error";
 
-export type RevokeShareErrorCode = "forbidden" | "not-found" | "db-error";
+export type RevokeShareErrorCode =
+  | "forbidden"
+  | "not-found"
+  | "db-error"
+  | "purge-failed";
 
 export interface ShareRecord {
   token: string;
@@ -97,7 +102,7 @@ export type RevokeShareResult =
   | { ok: true; token: string; documentPath: string }
   | {
       ok: false;
-      status: 403 | 404 | 500;
+      status: 403 | 404 | 500 | 502;
       code: RevokeShareErrorCode;
       error: string;
     };
@@ -429,6 +434,21 @@ export async function revokeShare(
       status: 500,
       code: "db-error",
       error: "Failed to revoke share link",
+    };
+  }
+
+  // Active CF edge purge so a previously-cached 200 doesn't keep serving
+  // for the s-maxage TTL after the DB row is revoked. The helper alarms
+  // to Sentry on failure; we surface 502 to the caller so the operator
+  // sees the partial-failure state rather than a silent leak (#2568).
+  const purgeResult = await purgeSharedToken(token);
+  if (!purgeResult.ok) {
+    return {
+      ok: false,
+      status: 502,
+      code: "purge-failed",
+      error:
+        "Revoke succeeded but cache purge failed; share may be served from cache for up to 60 seconds",
     };
   }
 

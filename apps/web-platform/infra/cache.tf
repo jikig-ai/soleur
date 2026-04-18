@@ -6,11 +6,15 @@
 # asset signals. This ruleset opts `/api/shared/*` into edge caching and
 # has Cloudflare respect the origin `Cache-Control` the app emits (see
 # `apps/web-platform/server/kb-binary-response.ts` CACHE_CONTROL_BY_SCOPE
-# for the `public, max-age=60, s-maxage=300, …` policy).
+# for the `public, max-age=60, s-maxage=60, …` policy).
 #
-# Without this rule, the `s-maxage=300` directive is decorative and the
+# Without this rule, the `s-maxage` directive is decorative and the
 # origin serves every shared-PDF byte on every view. With it, a viral
 # shared PDF fans out from the edge and origin bandwidth stays flat.
+# The 60s `s-maxage` ceiling is a defense-in-depth backstop on the active
+# CF Cache Purge call in server/kb-share.ts::revokeShare (#2568) — even
+# if the purge API call fails, the worst-case revoked-share leak window
+# stays bounded to 60 seconds.
 resource "cloudflare_ruleset" "cache_shared_binaries" {
   provider    = cloudflare.rulesets
   zone_id     = var.cf_zone_id
