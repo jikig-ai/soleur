@@ -1,9 +1,8 @@
-import { query, tool, createSdkMcpServer } from "@anthropic-ai/claude-agent-sdk";
+import { query, type tool, createSdkMcpServer } from "@anthropic-ai/claude-agent-sdk";
 import { randomUUID } from "crypto";
 import { readFileSync, writeFileSync, mkdirSync } from "fs";
 import { readFile, writeFile, mkdir } from "fs/promises";
 import path from "path";
-import { z } from "zod/v4";
 
 import { createServiceClient } from "@/lib/supabase/service";
 import { ROUTABLE_DOMAIN_LEADERS, type DomainLeaderId } from "./domain-leaders";
@@ -25,16 +24,14 @@ import {
   ERR_UPLOAD_FAILED,
 } from "./error-messages";
 import { isPathInWorkspace } from "./sandbox";
-import { UNVERIFIED_PARAM_TOOLS, extractToolPath, isFileTool, isSafeTool } from "./tool-path-checker";
 import { buildAgentEnv } from "./agent-env";
 import { PROVIDER_CONFIG, EXCLUDED_FROM_SERVICES_UI } from "./providers";
 import type { Provider } from "@/lib/types";
 import { createSandboxHook } from "./sandbox-hook";
-import { abortableReviewGate, validateSelection, extractReviewGateInput, buildReviewGateResponse, type AgentSession } from "./review-gate";
+import { abortableReviewGate, validateSelection, type AgentSession } from "./review-gate";
 import { createChildLogger } from "./logger";
 import { syncPull, syncPush } from "./session-sync";
 import { tryCreateVision, buildVisionEnhancementPrompt } from "./vision-helpers";
-import { getToolTier, buildGateMessage } from "./tool-tiers";
 import { createRateLimiter } from "./trigger-workflow";
 import { githubApiGet } from "./github-api";
 import { MAX_BINARY_SIZE } from "./kb-limits";
@@ -440,8 +437,18 @@ export async function startAgentSession(
       if (pluginJson.mcpServers && typeof pluginJson.mcpServers === "object") {
         pluginMcpServerNames = Object.keys(pluginJson.mcpServers);
       }
-    } catch {
-      // plugin.json may not exist in all workspaces; proceed without plugin MCP tools
+    } catch (err) {
+      // plugin.json may not exist in all workspaces; proceed without plugin MCP tools.
+      // ENOENT is an expected state (no plugin installed). Parse errors or other
+      // read failures on a committed file are degraded conditions — mirror to
+      // Sentry so we hear about corrupted workspaces.
+      if ((err as NodeJS.ErrnoException)?.code !== "ENOENT") {
+        reportSilentFallback(err, {
+          feature: "agent-runner",
+          op: "plugin-mcp-discovery",
+          extra: { userId },
+        });
+      }
     }
 
     // Migrate existing workspaces: remove pre-approved permissions that
@@ -794,19 +801,12 @@ resuming an existing thread preserves context for the user.`;
           repoName,
           session,
           controllerSignal: controller.signal,
-          abortableReviewGate,
-          sendToClient,
-          notifyOfflineUser,
-          updateConversationStatus,
-          extractReviewGateInput,
-          buildReviewGateResponse,
-          buildGateMessage,
-          getToolTier,
-          isFileTool,
-          extractToolPath,
-          isPathInWorkspace,
-          isSafeTool,
-          unverifiedParamTools: UNVERIFIED_PARAM_TOOLS,
+          deps: {
+            abortableReviewGate,
+            sendToClient,
+            notifyOfflineUser,
+            updateConversationStatus,
+          },
         }),
       },
     });

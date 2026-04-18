@@ -11,6 +11,7 @@ import { describe, test, expect, afterEach } from "vitest";
 import {
   existsSync,
   mkdirSync,
+  readFileSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -20,6 +21,10 @@ import { randomUUID } from "crypto";
 import { scaffoldWorkspaceDefaults } from "../server/workspace";
 
 const TEST_WORKSPACES = "/tmp/soleur-test-workspaces-symlink";
+// All external symlink targets are written under TEST_WORKSPACES/external/ so
+// a single afterEach rm recovers state even when a test throws between
+// `writeFileSync` and the per-test `finally` cleanup.
+const EXTERNAL_ROOT = join(TEST_WORKSPACES, "external");
 
 afterEach(() => {
   try {
@@ -36,25 +41,19 @@ describe("workspace scaffolding — symlink hardening (#2333)", () => {
     // workspace during scaffolding.
     const userId = randomUUID();
     const workspacePath = join(TEST_WORKSPACES, userId);
-    const externalTarget = join(tmpdir(), `outside-${randomUUID()}`);
+    mkdirSync(EXTERNAL_ROOT, { recursive: true });
+    const externalTarget = join(EXTERNAL_ROOT, `outside-${randomUUID()}`);
     writeFileSync(externalTarget, "external-sensitive-data");
 
-    try {
-      mkdirSync(join(workspacePath, "knowledge-base"), { recursive: true });
-      symlinkSync(externalTarget, join(workspacePath, "knowledge-base", "overview"));
+    mkdirSync(join(workspacePath, "knowledge-base"), { recursive: true });
+    symlinkSync(externalTarget, join(workspacePath, "knowledge-base", "overview"));
 
-      expect(() => scaffoldWorkspaceDefaults(workspacePath)).toThrow(
-        /Refusing to scaffold over non-directory/,
-      );
+    expect(() => scaffoldWorkspaceDefaults(workspacePath)).toThrow(
+      /Refusing to scaffold over non-directory/,
+    );
 
-      // The external file must not have been modified by scaffolding.
-      const { readFileSync } = require("fs") as typeof import("fs");
-      expect(readFileSync(externalTarget, "utf8")).toBe("external-sensitive-data");
-    } finally {
-      try {
-        rmSync(externalTarget, { force: true });
-      } catch {}
-    }
+    // The external file must not have been modified by scaffolding.
+    expect(readFileSync(externalTarget, "utf8")).toBe("external-sensitive-data");
   });
 
   test("rejects a symlink at knowledge-base/project/specs pointing to a regular file", () => {
@@ -62,24 +61,19 @@ describe("workspace scaffolding — symlink hardening (#2333)", () => {
     // bogus symlink must throw before mkdirSync follows it.
     const userId = randomUUID();
     const workspacePath = join(TEST_WORKSPACES, userId);
-    const externalTarget = join(tmpdir(), `file-target-${randomUUID()}`);
+    mkdirSync(EXTERNAL_ROOT, { recursive: true });
+    const externalTarget = join(EXTERNAL_ROOT, `file-target-${randomUUID()}`);
     writeFileSync(externalTarget, "victim");
 
-    try {
-      mkdirSync(join(workspacePath, "knowledge-base", "project"), { recursive: true });
-      symlinkSync(
-        externalTarget,
-        join(workspacePath, "knowledge-base", "project", "specs"),
-      );
+    mkdirSync(join(workspacePath, "knowledge-base", "project"), { recursive: true });
+    symlinkSync(
+      externalTarget,
+      join(workspacePath, "knowledge-base", "project", "specs"),
+    );
 
-      expect(() => scaffoldWorkspaceDefaults(workspacePath)).toThrow(
-        /Refusing to scaffold over non-directory/,
-      );
-    } finally {
-      try {
-        rmSync(externalTarget, { force: true });
-      } catch {}
-    }
+    expect(() => scaffoldWorkspaceDefaults(workspacePath)).toThrow(
+      /Refusing to scaffold over non-directory/,
+    );
   });
 
   test("scaffolds cleanly on a fresh workspace (no symlinks, no existing dirs)", () => {

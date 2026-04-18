@@ -13,6 +13,13 @@
 // unconditionally echoes the input as `updatedInput` — behaviorally a
 // no-op, satisfies both permissive and strict variants of the schema.
 // See learning 2026-04-15-sdk-v0.2.80-zoderror-allow-shape.md.
+//
+// DI boundary: pure/deterministic helpers (tool-tier lookup, path
+// checks, review-gate parsing) are imported directly — injecting them
+// would expand the test-context surface without buying any seam the
+// caller actually uses. Only genuinely stateful collaborators
+// (WS client, DB status updater, offline-notification, review gate
+// resolver) are injected via `CanUseToolDeps`.
 
 import { randomUUID } from "crypto";
 import type {
@@ -22,11 +29,23 @@ import type {
 
 import { createChildLogger } from "./logger";
 import { logPermissionDecision } from "./permission-log";
-import type { AgentSession, ReviewGateInput } from "./review-gate";
+import {
+  extractReviewGateInput,
+  buildReviewGateResponse,
+  type AgentSession,
+} from "./review-gate";
+import { getToolTier, buildGateMessage, type ToolTier } from "./tool-tiers";
+import {
+  isFileTool,
+  isSafeTool,
+  extractToolPath,
+  UNVERIFIED_PARAM_TOOLS,
+} from "./tool-path-checker";
+import { isPathInWorkspace } from "./sandbox";
 import type { NotificationPayload } from "./notifications";
 import type { WSMessage } from "@/lib/types";
 
-const log = createChildLogger("agent");
+const log = createChildLogger("permission");
 
 // Exported so the inline-closure deletion assertion (negative-space
 // delegation test) does not give false positives — see
@@ -35,21 +54,13 @@ export function allow(toolInput: Record<string, unknown>): Extract<PermissionRes
   return { behavior: "allow" as const, updatedInput: toolInput };
 }
 
-export interface CanUseToolContext {
-  userId: string;
-  conversationId: string;
-  leaderId: string | undefined;
-  workspacePath: string;
-  /** Registered platform tool names (full `mcp__soleur_platform__*`). Allowlist. */
-  platformToolNames: string[];
-  /** Plugin MCP server names from plugin.json. Allowlist for `mcp__plugin_soleur_<server>__*`. */
-  pluginMcpServerNames: string[];
-  repoOwner: string;
-  repoName: string;
-  session: AgentSession;
-  controllerSignal: AbortSignal;
-  // Async helpers — injected so tests can substitute fakes without
-  // reaching into global module state.
+/**
+ * Stateful collaborators the callback depends on. Pure helpers
+ * (tool-tier, path checks, review-gate parsing) are imported directly
+ * at the top of this module — not injected — because they carry no
+ * session state and their unit tests live in their own modules.
+ */
+export interface CanUseToolDeps {
   abortableReviewGate: (
     session: AgentSession,
     gateId: string,
@@ -66,30 +77,34 @@ export interface CanUseToolContext {
     conversationId: string,
     status: string,
   ) => Promise<void>;
-  extractReviewGateInput: (input: Record<string, unknown>) => ReviewGateInput;
-  buildReviewGateResponse: (
-    input: Record<string, unknown>,
-    selection: string,
-  ) => Record<string, unknown>;
-  buildGateMessage: (toolName: string, input: Record<string, unknown>) => string;
-  getToolTier: (toolName: string) => "auto-approve" | "gated" | "blocked";
-  isFileTool: (name: string) => boolean;
-  extractToolPath: (input: Record<string, unknown>) => string | null;
-  isPathInWorkspace: (path: string, workspacePath: string) => boolean;
-  isSafeTool: (name: string) => boolean;
-  /** Tools whose input parameter names the SDK may have renamed (#891 guard). */
-  unverifiedParamTools: readonly string[];
+}
+
+export interface CanUseToolContext {
+  userId: string;
+  conversationId: string;
+  leaderId: string | undefined;
+  workspacePath: string;
+  /** Registered platform tool names (full `mcp__soleur_platform__*`). Allowlist. */
+  platformToolNames: readonly string[];
+  /** Plugin MCP server names from plugin.json. Allowlist for `mcp__plugin_soleur_<server>__*`. */
+  pluginMcpServerNames: readonly string[];
+  repoOwner: string;
+  repoName: string;
+  session: AgentSession;
+  controllerSignal: AbortSignal;
+  deps: CanUseToolDeps;
 }
 
 export function createCanUseTool(ctx: CanUseToolContext): CanUseTool {
+  const { deps } = ctx;
   return async (toolName, toolInput, options): Promise<PermissionResult> => {
     const subagentCtx = options.agentID ? ` [subagent=${options.agentID}]` : "";
 
     // Defense-in-depth: catch any file tool that bypasses PreToolUse hooks.
     // Hooks are the primary enforcement (layer 1); this is layer 2. See #891.
-    if (ctx.isFileTool(toolName)) {
-      const filePath = ctx.extractToolPath(toolInput);
-      if (filePath && !ctx.isPathInWorkspace(filePath, ctx.workspacePath)) {
+    if (isFileTool(toolName)) {
+      const filePath = extractToolPath(toolInput);
+      if (filePath && !isPathInWorkspace(filePath, ctx.workspacePath)) {
         logPermissionDecision(
           "canUseTool-file-tool",
           toolName,
@@ -103,7 +118,7 @@ export function createCanUseTool(ctx: CanUseToolContext): CanUseTool {
       }
       if (
         !filePath &&
-        ctx.unverifiedParamTools.includes(toolName) &&
+        (UNVERIFIED_PARAM_TOOLS as readonly string[]).includes(toolName) &&
         Object.keys(toolInput).length > 0
       ) {
         log.warn(
@@ -118,7 +133,7 @@ export function createCanUseTool(ctx: CanUseToolContext): CanUseTool {
     // Review gates: intercept AskUserQuestion
     if (toolName === "AskUserQuestion") {
       const gateId = randomUUID();
-      const gate = ctx.extractReviewGateInput(toolInput);
+      const gate = extractReviewGateInput(toolInput);
 
       if (gate.isNewSchema) {
         const questions = toolInput.questions as unknown[];
@@ -136,7 +151,7 @@ export function createCanUseTool(ctx: CanUseToolContext): CanUseTool {
         ? { current: Number(stepMatch[1]), total: Number(stepMatch[2]) }
         : undefined;
 
-      const gateDelivered = ctx.sendToClient(ctx.userId, {
+      const gateDelivered = deps.sendToClient(ctx.userId, {
         type: "review_gate",
         gateId,
         question: gate.question,
@@ -149,7 +164,7 @@ export function createCanUseTool(ctx: CanUseToolContext): CanUseTool {
       });
 
       if (!gateDelivered) {
-        ctx.notifyOfflineUser(ctx.userId, {
+        deps.notifyOfflineUser(ctx.userId, {
           type: "review_gate",
           conversationId: ctx.conversationId,
           agentName: ctx.leaderId ?? "Agent",
@@ -159,9 +174,9 @@ export function createCanUseTool(ctx: CanUseToolContext): CanUseTool {
         );
       }
 
-      await ctx.updateConversationStatus(ctx.conversationId, "waiting_for_user");
+      await deps.updateConversationStatus(ctx.conversationId, "waiting_for_user");
 
-      const selection = await ctx.abortableReviewGate(
+      const selection = await deps.abortableReviewGate(
         ctx.session,
         gateId,
         ctx.controllerSignal,
@@ -169,7 +184,7 @@ export function createCanUseTool(ctx: CanUseToolContext): CanUseTool {
         gate.options,
       );
 
-      await ctx.updateConversationStatus(ctx.conversationId, "active");
+      await deps.updateConversationStatus(ctx.conversationId, "active");
 
       logPermissionDecision(
         "canUseTool-review-gate",
@@ -179,7 +194,7 @@ export function createCanUseTool(ctx: CanUseToolContext): CanUseTool {
       );
       return {
         behavior: "allow" as const,
-        updatedInput: ctx.buildReviewGateResponse(toolInput, selection),
+        updatedInput: buildReviewGateResponse(toolInput, selection),
       };
     }
 
@@ -197,7 +212,7 @@ export function createCanUseTool(ctx: CanUseToolContext): CanUseTool {
     }
 
     // Safe SDK tools (no filesystem-path inputs). See tool-path-checker.ts.
-    if (ctx.isSafeTool(toolName)) {
+    if (isSafeTool(toolName)) {
       logPermissionDecision("canUseTool-safe", toolName, "allow");
       return allow(toolInput);
     }
@@ -206,7 +221,7 @@ export function createCanUseTool(ctx: CanUseToolContext): CanUseTool {
     // `platformToolNames` (not blanket mcp__ prefix) so future MCP servers
     // never auto-allow without explicit review.
     if (ctx.platformToolNames.includes(toolName)) {
-      const tier = ctx.getToolTier(toolName);
+      const tier: ToolTier = getToolTier(toolName);
 
       if (tier === "blocked") {
         log.info(
@@ -233,9 +248,9 @@ export function createCanUseTool(ctx: CanUseToolContext): CanUseTool {
 
       if (tier === "gated") {
         const gateId = randomUUID();
-        const question = ctx.buildGateMessage(toolName, toolInput);
+        const question = buildGateMessage(toolName, toolInput);
 
-        const toolGateDelivered = ctx.sendToClient(ctx.userId, {
+        const toolGateDelivered = deps.sendToClient(ctx.userId, {
           type: "review_gate",
           gateId,
           question,
@@ -243,7 +258,7 @@ export function createCanUseTool(ctx: CanUseToolContext): CanUseTool {
         });
 
         if (!toolGateDelivered) {
-          ctx.notifyOfflineUser(ctx.userId, {
+          deps.notifyOfflineUser(ctx.userId, {
             type: "review_gate",
             conversationId: ctx.conversationId,
             agentName: ctx.leaderId ?? "Agent",
@@ -256,9 +271,9 @@ export function createCanUseTool(ctx: CanUseToolContext): CanUseTool {
           );
         }
 
-        await ctx.updateConversationStatus(ctx.conversationId, "waiting_for_user");
+        await deps.updateConversationStatus(ctx.conversationId, "waiting_for_user");
 
-        const selection = await ctx.abortableReviewGate(
+        const selection = await deps.abortableReviewGate(
           ctx.session,
           gateId,
           options.signal,
@@ -266,7 +281,7 @@ export function createCanUseTool(ctx: CanUseToolContext): CanUseTool {
           ["Approve", "Reject"],
         );
 
-        await ctx.updateConversationStatus(ctx.conversationId, "active");
+        await deps.updateConversationStatus(ctx.conversationId, "active");
 
         const decision = selection === "Approve" ? "approved" : "rejected";
         log.info(
