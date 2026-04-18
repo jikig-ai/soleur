@@ -12,6 +12,7 @@
 # origin serves every shared-PDF byte on every view. With it, a viral
 # shared PDF fans out from the edge and origin bandwidth stays flat.
 resource "cloudflare_ruleset" "cache_shared_binaries" {
+  provider    = cloudflare.rulesets
   zone_id     = var.cf_zone_id
   name        = "Edge-cache /api/shared/* per origin Cache-Control"
   description = "Opt dynamic share-token binaries into edge caching; honor origin Cache-Control directives (s-maxage, stale-while-revalidate, must-revalidate). See issue #2329."
