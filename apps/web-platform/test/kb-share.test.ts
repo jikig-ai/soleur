@@ -4,7 +4,12 @@ import path from "node:path";
 import { createHash } from "node:crypto";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
-import { createShare, listShares, revokeShare } from "@/server/kb-share";
+import {
+  createShare,
+  listShares,
+  revokeShare,
+  REVOKE_PURGE_FAILED_MESSAGE,
+} from "@/server/kb-share";
 import { MAX_BINARY_SIZE } from "@/server/kb-limits";
 import { shareSupabaseFromMock } from "./helpers/share-mocks";
 
@@ -113,6 +118,8 @@ describe("createShare — happy path", () => {
   });
 
   it("re-issues on content drift — revokes stale row, inserts fresh token", async () => {
+    purgeMocks.purgeSharedToken.mockReset();
+    purgeMocks.purgeSharedToken.mockResolvedValue({ ok: true });
     const newBytes = Buffer.from("version 2");
     fs.writeFileSync(path.join(kbRoot, "doc.md"), newBytes);
     const insertSpy = vi.fn().mockResolvedValue({ error: null });
@@ -137,6 +144,11 @@ describe("createShare — happy path", () => {
     expect(updateSpy).toHaveBeenCalled();
     expect(insertSpy).toHaveBeenCalledTimes(1);
     expect(insertSpy.mock.calls[0][0].content_sha256).toBe(hex(newBytes));
+    // Same security invariant as the explicit revoke path (#2568): the
+    // stale token's CF edge cache must be purged when content-drift
+    // forces a re-issue, otherwise the old document keeps serving for up
+    // to s-maxage seconds.
+    expect(purgeMocks.purgeSharedToken).toHaveBeenCalledWith("stale-token");
   });
 });
 
@@ -490,9 +502,7 @@ describe("revokeShare", () => {
     if (result.ok) throw new Error("unreachable");
     expect(result.status).toBe(502);
     expect(result.code).toBe("purge-failed");
-    expect(result.error).toBe(
-      "Revoke succeeded but cache purge failed; share may be served from cache for up to 60 seconds",
-    );
+    expect(result.error).toBe(REVOKE_PURGE_FAILED_MESSAGE);
     // DB update did happen — purge is downstream of the row flip.
     expect(updateEqSpy).toHaveBeenCalledWith("id", "share-1");
   });

@@ -50,6 +50,30 @@ describe("purgeSharedToken", () => {
     expect(observability.reportSilentFallback).not.toHaveBeenCalled();
   });
 
+  it("returns cf-api error on a non-JSON body (HTML 5xx from CF edge)", async () => {
+    const fetchMock = vi.fn(
+      async () =>
+        new Response("<html><body>503 Service Unavailable</body></html>", {
+          status: 503,
+          headers: { "content-type": "text/html" },
+        }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await purgeSharedToken("abc123def4567890");
+
+    expect(result).toEqual({ ok: false, error: "cf-api" });
+    const callArgs = (
+      observability.reportSilentFallback as ReturnType<typeof vi.fn>
+    ).mock.calls[0];
+    const reportedErr = callArgs[0] as Error;
+    expect(reportedErr.message).toContain("status=503");
+    expect(reportedErr.message).toContain("success=undefined");
+    const opts = callArgs[1] as Record<string, unknown>;
+    const extra = opts.extra as Record<string, unknown>;
+    expect(extra.status).toBe(503);
+  });
+
   it("returns cf-api error and reports to Sentry on a 403 auth failure", async () => {
     const fetchMock = vi.fn(async () =>
       jsonResponse(
@@ -107,6 +131,9 @@ describe("purgeSharedToken", () => {
   });
 
   it("returns timeout when fetch is aborted by the 5s AbortController", async () => {
+    // Install fake timers BEFORE invoking the SUT so the helper's internal
+    // setTimeout(controller.abort, 5000) is intercepted by vi.
+    vi.useFakeTimers();
     const fetchMock = vi.fn((_url: string, init?: RequestInit) => {
       return new Promise<Response>((_resolve, reject) => {
         init?.signal?.addEventListener("abort", () => {
@@ -117,7 +144,6 @@ describe("purgeSharedToken", () => {
       });
     });
     vi.stubGlobal("fetch", fetchMock);
-    vi.useFakeTimers();
 
     const promise = purgeSharedToken("abc123def4567890");
     await vi.advanceTimersByTimeAsync(5001);

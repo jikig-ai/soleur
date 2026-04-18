@@ -23,6 +23,14 @@ vi.mock("@/server/kb-share", () => ({
   revokeShare: mocks.revokeShare,
 }));
 
+// Verbatim copy of REVOKE_PURGE_FAILED_MESSAGE from server/kb-share.ts.
+// Cannot import the real constant — this test fully mocks @/server/kb-share
+// so an import would resolve to undefined. Drift between this literal and
+// the real constant is caught by the kb-share.test.ts assertion which DOES
+// import the real symbol.
+const REVOKE_PURGE_FAILED_MESSAGE =
+  "Revoke succeeded but cache purge failed; share may be served from cache for up to 60 seconds";
+
 import { buildKbShareTools } from "@/server/kb-share-tools";
 
 type ToolHandler = (args: Record<string, unknown>) => Promise<{
@@ -195,7 +203,7 @@ describe("kb_share_revoke handler", () => {
       status: 502,
       code: "purge-failed",
       error:
-        "Revoke succeeded but cache purge failed; share may be served from cache for up to 60 seconds",
+        REVOKE_PURGE_FAILED_MESSAGE,
     });
     const tools = buildKbShareTools(baseDeps);
     const revokeTool = findTool(tools, "kb_share_revoke");
@@ -207,7 +215,7 @@ describe("kb_share_revoke handler", () => {
     expect(payload.status).toBe(502);
     expect(payload.code).toBe("purge-failed");
     expect(payload.error).toBe(
-      "Revoke succeeded but cache purge failed; share may be served from cache for up to 60 seconds",
+      REVOKE_PURGE_FAILED_MESSAGE,
     );
   });
 });
