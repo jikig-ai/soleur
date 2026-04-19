@@ -26,7 +26,7 @@ The enforcing roadmap entry is `knowledge-base/product/roadmap.md`
 | # | Criterion | Primary evidence |
 |---|-----------|------------------|
 | AC-1 | Signup triggers automatic workspace-row creation | `MU1 AC-1` describe block in `mu1-integration.test.ts` (requires `MU1_INTEGRATION=1`) |
-| AC-2 | Workspace clones the user's connected GitHub repo | Manual verification in staging (see below) until fixture repo lands — follow-up tracked |
+| AC-2 | Workspace clones the user's connected GitHub repo | `MU1 AC-2` describe block in `mu1-integration.test.ts` (requires `MU1_FIXTURE_REPO_URL` + `MU1_FIXTURE_INSTALLATION_ID` + `MU1_INTEGRATION=1` for the full `doppler run` wrap). Manual staging fallback retained in step 4 below. |
 | AC-3 | Latest Soleur plugin is installed in the workspace | `MU1 AC-3` describe block (always runs) |
 | AC-4 | Workspace is isolated per user | `MU1 AC-4` describe block (always runs) + `audit-bwrap-uid.sh` |
 
@@ -65,7 +65,7 @@ cd apps/web-platform
 ./node_modules/.bin/vitest run test/mu1-integration.test.ts
 ```
 
-Expected output: 5 passed, 2 skipped (AC-1 gated, AC-2 deferred).
+Expected output: 4 passed, 2 skipped (AC-1 gated, AC-2 gated).
 
 ### 2. Gated trigger test (AC-1)
 
@@ -79,7 +79,14 @@ MU1_INTEGRATION=1 doppler run -p soleur -c dev -- \
   ./node_modules/.bin/vitest run test/mu1-integration.test.ts
 ```
 
-Expected output: 6 passed, 1 skipped (AC-2 deferred).
+Expected output:
+
+- 5 passed, 1 skipped when the fixture env vars
+  (`MU1_FIXTURE_REPO_URL`, `MU1_FIXTURE_INSTALLATION_ID`) are not present in
+  Doppler `dev` — AC-2 stays skipped.
+- 6 passed, 0 skipped when the fixture env vars are set in Doppler `dev`.
+  The `doppler run -p soleur -c dev` wrap injects them automatically; no
+  extra flags needed.
 
 Cleanup: the test deletes the synthetic user in `finally`. If the test
 crashes before cleanup, sweep manually. The snippet below (a) is
@@ -125,10 +132,13 @@ PASS: HostConfig.SecurityOpt includes seccomp=/etc/docker/seccomp-profiles/soleu
 --- MU1 bubblewrap UID audit complete — failures=0 ---
 ```
 
-### 4. AC-2 — Manual repo-clone verification (temporary)
+### 4. AC-2 — Manual repo-clone verification (fallback)
 
-Until the fixture repo lands (see Known Deferrals), verify AC-2 manually
-once per verification cycle:
+The `MU1 AC-2` describe block in step 2 is the primary evidence. Skip
+this section when running under `doppler run -p soleur -c dev --` —
+the automated block handles verification. Use this fallback only when
+the fixture Doppler vars are intentionally unset for a local experiment,
+or if `jikig-ai/mu1-fixture` is ever taken offline.
 
 1. In staging, sign up with a synthetic email that matches the MU1
    allowlist regex.
@@ -150,8 +160,9 @@ green on the roadmap.
 
 - [ ] Pre-check items all green on the day of verification.
 - [ ] Output of step 1 attached to the verification issue or PR comment
-      (5 passed, 2 skipped by default, or 6 passed / 1 skipped if step 2
-      ran).
+      (4 passed / 2 skipped by default; 5 passed / 1 skipped or 6 passed /
+      0 skipped if step 2 ran, depending on whether the fixture env vars
+      are present).
 - [ ] If step 2 ran, deletion count of synthetic users = count of
       synthetic users created (no leftovers).
 - [ ] Output of step 3 attached, with `failures=0` highlighted and the
@@ -183,15 +194,28 @@ green on the roadmap.
 - **Step 4 fails** — manually verify the repo-connect onboarding is
   not broken. File a P1 issue and block MU1 sign-off.
 
+## Security Baseline — `soleur-ai` App on `mu1-fixture`
+
+Expected install scope (confirm weekly or after any App settings
+change):
+
+- App: `soleur-ai`, installed on org `jikig-ai`.
+- Repository access: "Only select repositories" → exactly
+  `jikig-ai/mu1-fixture`. If this drifts to "All repositories", the App
+  silently gains access to every new private repo — re-scope via
+  `https://github.com/organizations/jikig-ai/settings/installations`.
+- `GITHUB_APP_PRIVATE_KEY` exists in Doppler `dev` (copied from `prd` to
+  enable the gated AC-2 block). Dev-Doppler readers can mint installation
+  tokens for any `soleur-ai` installation; the App's org-scope (just
+  `jikig-ai`) bounds the blast radius. Re-evaluate if dev-Doppler access
+  widens beyond the founder team.
+
 ## Known Deferrals
 
 Scoped out of MU1 per the plan. Each gap has a tracking issue; none
 blocks the MU1 sign-off, but each must be present in Phase-4 exit
 criteria or explicitly accepted.
 
-- **Fixture repo for AC-2** — no public clonable repo exists under
-  `soleur-ai/` today; AC-2 is verified manually per step 4.
-  Tracking: [#2605](https://github.com/jikig-ai/soleur/issues/2605).
 - **CI wiring of the bwrap audit** — the script is runbook-invokable;
   automating it post-deploy is additive. Tracking:
   [#2606](https://github.com/jikig-ai/soleur/issues/2606).

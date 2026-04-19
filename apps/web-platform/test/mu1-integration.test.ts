@@ -177,8 +177,40 @@ describe.skipIf(process.env.MU1_INTEGRATION !== "1")(
 
 // ---------------------------------------------------------------------------
 // AC-2: provisionWorkspaceWithRepo clones the user's connected repo.
-// Deferred — requires a public fixture repo plus a live GitHub App
-// installation token. Tracked in #2605; until it lands, AC-2 is verified
-// manually per the "AC-2 — Manual repo-clone verification" section of
+// Gated on MU1_FIXTURE_REPO_URL + MU1_FIXTURE_INSTALLATION_ID. Orthogonal to
+// AC-1's MU1_INTEGRATION gate (AC-1 needs dev Supabase; AC-2 needs GitHub App
+// creds + a public fixture repo). See #2605 and
 // knowledge-base/engineering/ops/runbooks/mu1-signup-workspace-verification.md.
 // ---------------------------------------------------------------------------
+
+describe.skipIf(
+  !process.env.MU1_FIXTURE_REPO_URL ||
+    !process.env.MU1_FIXTURE_INSTALLATION_ID,
+)("MU1 AC-2: provisionWorkspaceWithRepo clones fixture", () => {
+  test("clones the fixture repo and overlays plugin symlink", async () => {
+    const { provisionWorkspaceWithRepo } = await import("../server/workspace");
+    const userId = randomUUID();
+    const repoUrl = process.env.MU1_FIXTURE_REPO_URL!;
+    const rawId = process.env.MU1_FIXTURE_INSTALLATION_ID ?? "";
+    const installationId = Number(rawId);
+    // Guard BEFORE calling generateInstallationToken — a malformed env var
+    // would otherwise fail deep in the GitHub API with a cryptic
+    // "Bad credentials". This assertion names the real problem.
+    expect(
+      Number.isFinite(installationId) &&
+        installationId > 0 &&
+        Number.isInteger(installationId),
+    ).toBe(true);
+
+    const ws = await provisionWorkspaceWithRepo(userId, repoUrl, installationId);
+    provisionedWorkspaces.push(ws);
+
+    // Fixture top-level files land in the workspace.
+    expect(existsSync(join(ws, "README.md"))).toBe(true);
+    expect(existsSync(join(ws, ".git"))).toBe(true);
+
+    // Plugin symlink is overlaid post-clone (AC-3 contract).
+    const symlinkPath = join(ws, "plugins", "soleur");
+    expect(readlinkSync(symlinkPath)).toBe(PLUGIN_ROOT);
+  }, 60_000);
+});
