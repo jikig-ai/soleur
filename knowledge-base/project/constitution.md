@@ -281,6 +281,8 @@ When a PR adds external services (terraform resources, account signups, API key 
 - Test files live in a `test/` sibling directory (not co-located with source), named `<module>.test.ts` -- no `.spec.ts` pattern
 - Run dependency-detection scripts (`check_deps.sh`) on a real machine before merging -- don't trust assumed dependency graphs or distribution formats
 - Run SpecFlow analysis on workflow and infrastructure changes to catch logic gaps in conditional paths -- human review misses boundary-value bugs in bash conditionals
+- When a test uses retry-on-flake logic, collect every attempt into an array and assert the invariant across ALL attempts — not just the last. Early-return after retry silently drops first-attempt failures. If the retry exists to force a precondition (tool invocation, network reachability), assert the precondition WAS met on the final attempt; model refusal on retry is a hard failure, not a silent pass. See `knowledge-base/project/learnings/test-failures/2026-04-19-retry-once-early-return-masks-first-attempt-failures.md`.
+- When a bulk-cleanup helper does `rm -rf` on entries under an allowlist root, never call `realpath` or follow symlinks before deciding to remove. Use `lstatSync(entry)` without following and refuse any entry that is itself a symlink — even one resolving inside an allowed root. See same learning file.
 
 ### Never
 
