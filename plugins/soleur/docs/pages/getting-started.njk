@@ -1,6 +1,6 @@
 ---
 title: Getting Started with Soleur
-description: "Get started with Soleur in one command. Deploy AI agents across engineering, marketing, legal, finance, and every business department. Free and open source."
+description: "The AI that already knows your business. Soleur remembers every decision and customer so your team stops re-explaining context. Reserve access."
 layout: base.njk
 permalink: getting-started/
 ---
@@ -9,50 +9,27 @@ permalink: getting-started/
     <section class="page-hero">
       <div class="container">
         <p class="section-label">Getting Started</p>
-        <h1>Getting Started with Soleur</h1>
-        <p>Choose your path to a full AI organization.</p>
-      </div>
-    </section>
-
-    <!-- Two-Path Cards -->
-    <section class="landing-section">
-      <div class="landing-section-inner">
-        <div class="path-cards">
-
-          <div class="path-card path-card--primary">
-            <div class="path-card-header">
-              <h2 class="path-card-title">Soleur Cloud Platform</h2>
-              <span class="path-card-badge path-card-badge--coming-soon">COMING SOON</span>
-            </div>
-            <p class="path-card-desc">Access your AI organization from any device. No CLI required. Dashboard, real-time agents, managed infrastructure, and priority support &mdash; all in the browser.</p>
-            <ul class="path-card-features">
-              <li>Web dashboard &mdash; access from any device</li>
-              <li>Managed infrastructure and agent orchestration</li>
-              <li>Real-time agent activity and knowledge base</li>
-              <li>Priority support and early access to new features</li>
-            </ul>
-            <a href="pricing/" class="btn btn-primary path-card-cta">Join the Waitlist &rarr;</a>
-          </div>
-
-          <div class="path-card path-card--secondary">
-            <div class="path-card-header">
-              <h2 class="path-card-title">Self-Hosted (Open Source)</h2>
-              <span class="path-card-badge path-card-badge--available">AVAILABLE NOW</span>
-            </div>
-            <p class="path-card-desc">Install the <a href="https://code.claude.com/docs/en/overview" rel="noopener noreferrer">Claude Code</a> extension and run your AI organization locally. Full access to all {{ stats.agents }} agents and {{ stats.skills }} skills. Free and open source.</p>
-            <a href="getting-started/#self-hosted" class="btn btn-secondary path-card-cta">Get Started &rarr;</a>
-          </div>
-
+        <h1>The AI that already knows your business.</h1>
+        <p>Soleur remembers every decision, customer, and context &mdash; so your next prompt starts where the last one ended. Ship faster because the AI already caught up.</p>
+        <div class="hero-cta">
+          <a href="pricing/#waitlist" class="cta-button">Reserve access</a>
+          <a href="#self-hosted" class="cta-link">Run the open source version today <span aria-hidden="true">&rarr;</span></a>
         </div>
+        <p class="cta-helper">Takes 30 seconds. We&rsquo;ll email when your spot opens.</p>
+        <p class="hero-meta"><a href="mailto:ops@jikigai.com?subject=Soleur%20founding%20cohort%20intro">Founding cohort &mdash; limited to 10. Book intro <span aria-hidden="true">&rarr;</span></a><span class="hero-meta-fallback">(or email <code>ops@jikigai.com</code>)</span></p>
+        <p class="hero-meta"><a href="changelog/">Shipping weekly <span aria-hidden="true">&rarr;</span></a></p>
       </div>
     </section>
 
-    <!-- Self-Hosted Installation -->
+    <!-- Run it yourself (Open Source) -->
     <section class="landing-section" id="self-hosted">
       <div class="landing-section-inner">
-        <p class="section-label">Self-Hosted</p>
-        <h2 class="section-title">Installation</h2>
+        <p class="section-label">Open source. Install in Claude Code.</p>
+        <h2 class="section-title">Run it yourself</h2>
 
+        <p>Prefer to run it yourself? Soleur is open source and works in Claude Code today. Install it in two commands, keep every byte of memory on your own machine, and upgrade to the hosted version whenever you&rsquo;re ready.</p>
+
+        <!-- verified: 2026-04-19 source: https://code.claude.com/docs/en/plugins -->
         <div class="quickstart-code">
           <pre><code>claude plugin marketplace add jikig-ai/soleur
 claude plugin install soleur</code></pre>
@@ -65,13 +42,6 @@ claude plugin install soleur</code></pre>
 
         <h2 class="section-subtitle" style="margin-top: var(--space-8);">The Workflow</h2>
         <p>Soleur follows a structured 5-step workflow for software development:</p>
-
-        <div class="commands-list">
-          <div class="command-item">
-            <code>/soleur:go</code>
-            <p>The recommended entry point &mdash; describe what you want and Soleur routes to the right workflow</p>
-          </div>
-        </div>
 
         <p>The 5-step workflow (invoked automatically via <code>/soleur:go</code> or directly via Skill tool):</p>
 
@@ -166,15 +136,19 @@ claude plugin install soleur</code></pre>
         <div class="faq-list">
           <details class="faq-item">
             <summary class="faq-question">What do I need to run Soleur?</summary>
-            <p class="faq-answer">For the self-hosted version, you need the <a href="https://code.claude.com/docs/en/overview" rel="noopener noreferrer">Claude Code</a> CLI with an Anthropic API key or a Claude subscription. Soleur runs on Claude Code and the <a href="https://modelcontextprotocol.io/specification" rel="noopener noreferrer">Model Context Protocol (MCP)</a>, so agents reach the same tool ecosystem the broader Claude Code community relies on. First, add the Soleur marketplace with <code>claude plugin marketplace add jikig-ai/soleur</code>, then install with <code>claude plugin install soleur</code> and run <code>/soleur:go</code> to start. No additional dependencies or server setup needed. The cloud platform (coming soon) requires only a browser and a Soleur subscription.</p>
+            <p class="faq-answer">Nothing to install. The hosted version runs in your browser once your access opens &mdash; bring a workspace and your team. Prefer to self-host? The open source version runs inside Claude Code on macOS, Linux, or Windows (WSL) and takes two commands to set up.</p>
+          </details>
+          <details class="faq-item">
+            <summary class="faq-question">Why a waitlist?</summary>
+            <p class="faq-answer">We&rsquo;re onboarding a founding cohort of 10 teams by hand so every workflow lands right. Access opens in waves as the hosted infrastructure matures &mdash; we ship weekly and move people off the list as capacity grows. Want to skip the line? Run the open source version today.</p>
           </details>
           <details class="faq-item">
             <summary class="faq-question">Does Soleur work on Windows, Linux, and macOS?</summary>
-            <p class="faq-answer">The self-hosted version runs anywhere Claude Code runs &mdash; Linux, macOS, and Windows via WSL. The cloud platform will be accessible from any browser on any operating system.</p>
+            <p class="faq-answer">The open source version runs anywhere Claude Code runs &mdash; Linux, macOS, and Windows via WSL. The hosted version will be accessible from any browser on any operating system.</p>
           </details>
           <details class="faq-item">
             <summary class="faq-question">How much does Soleur cost?</summary>
-            <p class="faq-answer">The self-hosted version is free and open source. Your costs depend entirely on your Claude usage through Anthropic. The cloud platform will offer paid tiers starting at $49/month for managed infrastructure, priority support, and team features.</p>
+            <p class="faq-answer">See the <a href="pricing/">pricing page</a> for hosted plans &mdash; founder pricing starts at $49/month. The open source version is free; your costs depend entirely on your Claude usage through Anthropic.</p>
           </details>
           <details class="faq-item">
             <summary class="faq-question">What is the difference between /soleur:go and individual skills?</summary>
@@ -186,7 +160,7 @@ claude plugin install soleur</code></pre>
           </details>
           <details class="faq-item">
             <summary class="faq-question">What is the difference between the cloud platform and self-hosted?</summary>
-            <p class="faq-answer">The self-hosted version gives you the full platform &mdash; every agent, every skill, every department &mdash; running locally through the Claude Code CLI. The cloud platform adds a web dashboard, managed infrastructure, real-time agent orchestration, team collaboration, and priority support. Both versions access the same {{ stats.agents }} agents and {{ stats.skills }} skills.</p>
+            <p class="faq-answer">Both versions ship the same agents and skills. The open source version runs inside Claude Code on your machine &mdash; full access, your data, your compute. The hosted version adds a web dashboard, managed infrastructure, real-time agent orchestration, team collaboration, and priority support. Both access the same {{ stats.agents }} agents and {{ stats.skills }} skills.</p>
           </details>
         </div>
       </div>
@@ -202,7 +176,15 @@ claude plugin install soleur</code></pre>
           "name": "What do I need to run Soleur?",
           "acceptedAnswer": {
             "@type": "Answer",
-            "text": "For the self-hosted version, you need the Claude Code CLI with an Anthropic API key or a Claude subscription. Soleur runs on Claude Code and the Model Context Protocol (MCP), so agents reach the same tool ecosystem the broader Claude Code community relies on. First, add the Soleur marketplace with claude plugin marketplace add jikig-ai/soleur, then install with claude plugin install soleur and run /soleur:go to start. No additional dependencies or server setup needed. The cloud platform (coming soon) requires only a browser and a Soleur subscription."
+            "text": "Nothing to install. The hosted version runs in your browser once your access opens -- bring a workspace and your team. Prefer to self-host? The open source version runs inside Claude Code on macOS, Linux, or Windows (WSL) and takes two commands to set up."
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "Why a waitlist?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "We're onboarding a founding cohort of 10 teams by hand so every workflow lands right. Access opens in waves as the hosted infrastructure matures -- we ship weekly and move people off the list as capacity grows. Want to skip the line? Run the open source version today."
           }
         },
         {
@@ -210,7 +192,7 @@ claude plugin install soleur</code></pre>
           "name": "Does Soleur work on Windows, Linux, and macOS?",
           "acceptedAnswer": {
             "@type": "Answer",
-            "text": "The self-hosted version runs anywhere Claude Code runs -- Linux, macOS, and Windows via WSL. The cloud platform will be accessible from any browser on any operating system."
+            "text": "The open source version runs anywhere Claude Code runs -- Linux, macOS, and Windows via WSL. The hosted version will be accessible from any browser on any operating system."
           }
         },
         {
@@ -218,7 +200,7 @@ claude plugin install soleur</code></pre>
           "name": "How much does Soleur cost?",
           "acceptedAnswer": {
             "@type": "Answer",
-            "text": "The self-hosted version is free and open source. Your costs depend entirely on your Claude usage through Anthropic. The cloud platform will offer paid tiers starting at $49/month for managed infrastructure, priority support, and team features."
+            "text": "See the pricing page for hosted plans -- founder pricing starts at $49/month. The open source version is free; your costs depend entirely on your Claude usage through Anthropic."
           }
         },
         {
@@ -242,7 +224,7 @@ claude plugin install soleur</code></pre>
           "name": "What is the difference between the cloud platform and self-hosted?",
           "acceptedAnswer": {
             "@type": "Answer",
-            "text": "The self-hosted version gives you the full platform -- every agent, every skill, every department -- running locally through the Claude Code CLI. The cloud platform adds a web dashboard, managed infrastructure, real-time agent orchestration, team collaboration, and priority support."
+            "text": "Both versions ship the same agents and skills. The open source version runs inside Claude Code on your machine -- full access, your data, your compute. The hosted version adds a web dashboard, managed infrastructure, real-time agent orchestration, team collaboration, and priority support. Both access the same {{ stats.agents }} agents and {{ stats.skills }} skills."
           }
         }
       ]
