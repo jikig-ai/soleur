@@ -1,6 +1,6 @@
 ---
 name: dhh-rails-style
-description: "This skill should be used when writing Ruby and Rails code in DHH's 37signals style. It embodies REST purity, fat models, thin controllers, Current attributes, and Hotwire patterns. It applies during Ruby/Rails code generation, refactoring, and code review."
+description: "This skill should be used when writing Ruby and Rails code in DHH's 37signals style -- REST purity, fat models, thin controllers, Current attributes, and Hotwire patterns. Applies during Ruby/Rails generation, refactoring, or review."
 ---
 
 <objective>
@@ -8,11 +8,13 @@ Apply 37signals/DHH Rails conventions to Ruby and Rails code. This skill provide
 </objective>
 
 <essential_principles>
+
 ## Core Philosophy
 
 "The best code is the code you don't write. The second best is the code that's obviously correct."
 
 **Vanilla Rails is plenty:**
+
 - Rich domain models over service objects
 - CRUD controllers over custom actions
 - Concerns for horizontal code sharing
@@ -21,6 +23,7 @@ Apply 37signals/DHH Rails conventions to Ruby and Rails code. This skill provide
 - Build solutions before reaching for gems
 
 **What they deliberately avoid:**
+
 - devise (custom ~150-line auth instead)
 - pundit/cancancan (simple role checks in models)
 - sidekiq (Solid Queue uses database)
@@ -32,6 +35,7 @@ Apply 37signals/DHH Rails conventions to Ruby and Rails code. This skill provide
 - Tailwind (native CSS with layers)
 
 **Development Philosophy:**
+
 - Ship, Validate, Refine - prototype-quality code to production to learn
 - Fix root causes, not symptoms
 - Write-time operations over read-time computations
@@ -70,6 +74,7 @@ What are you working on?
 </routing>
 
 <quick_reference>
+
 ## Naming Conventions
 
 **Verbs:** `card.close`, `card.gild`, `board.publish` (not `set_style` methods)
@@ -81,6 +86,7 @@ What are you working on?
 **Controllers:** Nouns matching resources (`Cards::ClosuresController`)
 
 **Scopes:**
+
 - `chronologically`, `reverse_chronologically`, `alphabetically`, `latest`
 - `preloaded` (standard eager loading name)
 - `indexed_by`, `sorted_by` (parameterized)
@@ -126,17 +132,20 @@ end
 ## Key Patterns
 
 **State as Records:**
+
 ```ruby
 Card.joins(:closure)         # closed cards
 Card.where.missing(:closure) # open cards
 ```
 
 **Current Attributes:**
+
 ```ruby
 belongs_to :creator, default: -> { Current.user }
 ```
 
 **Authorization on Models:**
+
 ```ruby
 class User < ApplicationRecord
   def can_administer?(message)
@@ -144,9 +153,11 @@ class User < ApplicationRecord
   end
 end
 ```
+
 </quick_reference>
 
 <reference_index>
+
 ## Domain Knowledge
 
 All detailed patterns in `references/`:
@@ -163,6 +174,7 @@ All detailed patterns in `references/`:
 
 <success_criteria>
 Code follows DHH style when:
+
 - Controllers map to CRUD verbs on resources
 - Models use concerns for horizontal behavior
 - State is tracked via records, not booleans
@@ -179,6 +191,7 @@ Code follows DHH style when:
 Based on [The Unofficial 37signals/DHH Rails Style Guide](https://github.com/marckohlbrugge/unofficial-37signals-coding-style-guide) by [Marc Köhlbrugge](https://x.com/marckohlbrugge), generated through deep analysis of 265 pull requests from the Fizzy codebase.
 
 **Important Disclaimers:**
+
 - LLM-generated guide - may contain inaccuracies
 - Code examples from Fizzy are licensed under the O'Saasy License
 - Not affiliated with or endorsed by 37signals
