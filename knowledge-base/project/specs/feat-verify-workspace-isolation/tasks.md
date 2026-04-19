@@ -9,18 +9,18 @@
 
 Spike output committed (`5c23ea29`). SDK has no direct tool-invocation API; `bypassPermissions` may strip permission-rule-derived bwrap mounts. Path C (hybrid) approved by founder. Phases 2+ revised below.
 
-## Phase 2A — Capture SDK bwrap argv (one-time)
+## Phase 2A — Capture SDK bwrap argv (one-time) — ✅ COMPLETE
 
-- [ ] 2A.1 Write `apps/web-platform/scripts/capture-bwrap-argv.ts` (gitignored) that invokes `query()` with production-equivalent sandbox config under `strace -f -e trace=execve` or a `child_process.spawn` wrapper preloaded via `--require`.
-- [ ] 2A.2 Run capture locally with `doppler run -p soleur -c dev -- node --require ./spawn-capture.js apps/web-platform/scripts/capture-bwrap-argv.ts` (or equivalent).
-- [ ] 2A.3 Record the full captured argv in `sdk-probe-notes.md` under `## Captured bwrap argv (2026-04-19)` with SDK version reference.
-- [ ] 2A.4 `git rm apps/web-platform/scripts/capture-bwrap-argv.ts`; ensure `.gitignore` covers `apps/web-platform/scripts/capture-bwrap-argv.*`.
+- [x] 2A.1 Write `apps/web-platform/scripts/capture-bwrap-argv.ts` (gitignored) that invokes `query()` with production-equivalent sandbox config under `strace -f -e trace=execve` or a `child_process.spawn` wrapper preloaded via `--require`.
+- [x] 2A.2 Run capture locally with `doppler run -p soleur -c dev -- node --require ./spawn-capture.js apps/web-platform/scripts/capture-bwrap-argv.ts` (or equivalent).
+- [x] 2A.3 Record the full captured argv in `sdk-probe-notes.md` under `## Captured bwrap argv (2026-04-19)` with SDK version reference.
+- [x] 2A.4 `git rm apps/web-platform/scripts/capture-bwrap-argv.ts`; ensure `.gitignore` covers `apps/web-platform/scripts/capture-bwrap-argv.*`.
 
 ## Phase 2B — Fixture helpers
 
-- [ ] 2B.1 Create `apps/web-platform/test/helpers/sandbox-isolation-fixtures.ts` exporting: `createWorkspacePair`, `seedMarker`, `linkEscape`, `spawnBwrap`, `spawnSandboxB`, `rescueStaleFixtures` (TMPDIR allowlist), `probeSkip("direct" | "query")`.
-- [ ] 2B.2 Pure Node imports only — no SDK in the helper module.
-- [ ] 2B.3 Verify typecheck: `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit`.
+- [x] 2B.1 Create `apps/web-platform/test/helpers/sandbox-isolation-fixtures.ts` exporting: `createWorkspacePair`, `seedMarker`, `linkEscape`, `spawnBwrap`, `spawnSandboxB`, `rescueStaleFixtures` (TMPDIR allowlist), `probeSkip("direct" | "query")`.
+- [x] 2B.2 Pure Node imports only — no SDK in the helper module.
+- [x] 2B.3 Verify typecheck: `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit`.
 
 ## Phase 3 — Smoke test + TDD inversion
 
