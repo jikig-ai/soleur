@@ -69,8 +69,11 @@ export interface ClientSession {
   subscriptionRefreshTimer?: ReturnType<typeof setInterval>;
 }
 
-/** Active connections keyed by Supabase user ID. */
-export const sessions = new Map<string, ClientSession>();
+/** Active connections keyed by Supabase user ID. Registered in session-registry
+ *  so `/health` and session-metrics can read `.size` without pulling the full
+ *  ws-handler graph. Re-exported here for backwards compatibility. */
+import { sessions } from "./session-registry";
+export { sessions };
 
 /** Deferred abort timers for disconnected sessions (keyed by userId:conversationId). */
 const pendingDisconnects = new Map<string, ReturnType<typeof setTimeout>>();

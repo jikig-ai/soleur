@@ -80,6 +80,51 @@ write_files:
     owner: root:root
     permissions: '0644'
 
+  # Resource (CPU/RAM/sessions) monitoring script -- alerts via email (Resend)
+  # at 80%/95% memory and 85% CPU thresholds (#1052). Mirrors disk-monitor.sh.
+  # Content injected from resource-monitor.sh via Terraform base64encode(file()).
+  - path: /usr/local/bin/resource-monitor.sh
+    encoding: b64
+    content: ${resource_monitor_script_b64}
+    owner: root:root
+    permissions: '0755'
+
+  # Resource monitor environment file (API key, chmod 600 for secrets).
+  - path: /etc/default/resource-monitor
+    content: |
+      RESEND_API_KEY='${resend_api_key}'
+    owner: root:root
+    permissions: '0600'
+
+  # Resource monitor systemd service (oneshot, invoked by timer).
+  - path: /etc/systemd/system/resource-monitor.service
+    content: |
+      [Unit]
+      Description=Host CPU/RAM/session monitor
+      After=network-online.target
+
+      [Service]
+      Type=oneshot
+      ExecStart=/usr/local/bin/resource-monitor.sh
+    owner: root:root
+    permissions: '0644'
+
+  # Resource monitor systemd timer (every 5 minutes, persistent across reboots).
+  - path: /etc/systemd/system/resource-monitor.timer
+    content: |
+      [Unit]
+      Description=Run resource monitor every 5 minutes
+
+      [Timer]
+      OnBootSec=5min
+      OnUnitActiveSec=5min
+      Persistent=true
+
+      [Install]
+      WantedBy=timers.target
+    owner: root:root
+    permissions: '0644'
+
   # CI deploy script invoked by the webhook listener.
   # Content injected from ci-deploy.sh via Terraform base64encode(file()).
   # Keep in sync with terraform_data.deploy_pipeline_fix in server.tf (#2205).
@@ -249,6 +294,9 @@ runcmd:
 
   # Enable disk space monitoring timer (#1409)
   - systemctl enable --now disk-monitor.timer
+
+  # Enable host resource (CPU/RAM/sessions) monitoring timer (#1052)
+  - systemctl enable --now resource-monitor.timer
 
   # Weekly Docker image cleanup -- keeps only images used by running containers.
   # Prevents disk exhaustion from accumulated deploy images (#967).
