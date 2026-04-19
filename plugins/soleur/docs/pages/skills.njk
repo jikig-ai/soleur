@@ -115,7 +115,7 @@ The <a href="https://every.to/source-code/compound-engineering-how-every-codes-w
           "name": "How many skills does Soleur have?",
           "acceptedAnswer": {
             "@type": "Answer",
-            "text": {{ ("Soleur includes " + stats.skills + " workflow skills spanning feature development, code review, deployment, content creation, legal generation, competitive analysis, and more. New skills are added continuously as workflows are identified and automated.") | dump | safe }}
+            "text": {{ ("Soleur includes " + stats.skills + " workflow skills spanning feature development, code review, deployment, content creation, legal generation, competitive analysis, and more. New skills are added continuously as workflows are identified and automated.") | jsonLdSafe | safe }}
           }
         }
       ]

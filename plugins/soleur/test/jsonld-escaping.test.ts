@@ -7,7 +7,8 @@ const REPO_ROOT = resolve(import.meta.dir, "..", "..", "..");
 const FIXTURE_CONFIG = "plugins/soleur/test/fixtures/jsonld-escaping/eleventy.config.js";
 
 const WEAPONIZED_TITLE = 'A "quoted" title with \\ and <tag> and & ampersand';
-const WEAPONIZED_DESC = 'Line one with "quotes" and \\ backslash\nLine two with <tag> and & ampersand';
+const WEAPONIZED_DESC =
+  'Line one with "quotes" and \\ backslash\nLine two with </script><script>alert(1)</script> breakout\nLine three with U+2028 \u2028 and U+2029 \u2029 line separators';
 
 const FORBIDDEN_ENTITIES = ["&quot;", "&amp;", "&lt;", "&gt;", "&#39;"];
 const EXTRACT_JSONLD = /<script type="application\/ld\+json">([\s\S]*?)<\/script>/g;
@@ -83,7 +84,27 @@ describe("JSON-LD escaping (#2609)", () => {
     }
   });
 
-  test("every JSON-LD interpolation in all docs templates uses | dump | safe", () => {
+  test("no </script> breakout inside JSON-LD block body", () => {
+    // jsonLdSafe must escape </ → <\/ so attacker-controlled content cannot
+    // prematurely close the <script type="application/ld+json"> tag.
+    const blocks = [...extractBlocks(homepageHtml), ...extractBlocks(blogPostHtml)];
+    for (const body of blocks) {
+      expect(body).not.toContain("</script>");
+      expect(body).not.toContain("</SCRIPT>");
+    }
+  });
+
+  test("no raw U+2028 / U+2029 line separators inside JSON-LD body", () => {
+    // These codepoints are valid JSON string chars but terminate JS strings
+    // in some legacy runtimes. jsonLdSafe must emit \u2028 / \u2029.
+    const blocks = [...extractBlocks(homepageHtml), ...extractBlocks(blogPostHtml)];
+    for (const body of blocks) {
+      expect(body).not.toContain("\u2028");
+      expect(body).not.toContain("\u2029");
+    }
+  });
+
+  test("every JSON-LD interpolation in all docs templates uses | jsonLdSafe | safe", () => {
     const blockRe = /<script type="application\/ld\+json">([\s\S]*?)<\/script>/g;
     const sources = walkNjkFiles(resolve(REPO_ROOT, "plugins/soleur/docs"));
     let totalBlocks = 0;
@@ -95,7 +116,7 @@ describe("JSON-LD escaping (#2609)", () => {
         const interps = [...body.matchAll(/\{\{[^}]*\}\}/g)].map((m) => m[0]);
         for (const interp of interps) {
           expect(interp, `${path} interpolation ${interp}`).toMatch(
-            /\|\s*dump\s*\|\s*safe/,
+            /\|\s*jsonLdSafe\s*\|\s*safe/,
           );
         }
       }

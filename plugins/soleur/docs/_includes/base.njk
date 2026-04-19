@@ -27,40 +27,40 @@
        unpredictable). The blocked script has no user-facing impact — see #1149. -->
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://plausible.io 'sha256-l56vLAULxECuIebP1+Hhz+75oNwhX8YnMpMJrN6HoPo=' 'sha256-SVJF5zPt5S9fNTROUuCTIHZpLN5Ht8ZoYfJXtx4ngtM='; connect-src 'self' https://buttondown.com https://plausible.io; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; base-uri 'self'; form-action 'self' https://buttondown.com; object-src 'none'; upgrade-insecure-requests;">
   <script type="application/ld+json">
-  {# All string interpolations in this JSON-LD block MUST use | dump | safe — see #2609 #}
+  {# All string interpolations in this JSON-LD block MUST use | jsonLdSafe | safe — see #2609 #}
   {
     "@context": "https://schema.org",
     "@graph": [
       {
         "@type": "WebSite",
-        "name": {{ site.name | dump | safe }},
-        "url": {{ site.url | dump | safe }},
-        "description": {{ site.description | dump | safe }}
+        "name": {{ site.name | jsonLdSafe | safe }},
+        "url": {{ site.url | jsonLdSafe | safe }},
+        "description": {{ site.description | jsonLdSafe | safe }}
       },
       {
         "@type": "WebPage",
-        "name": {{ title | dump | safe }},
-        "description": {{ description | dump | safe }},
-        "url": {{ (site.url + page.url) | dump | safe }},
+        "name": {{ title | jsonLdSafe | safe }},
+        "description": {{ description | jsonLdSafe | safe }},
+        "url": {{ (site.url + page.url) | jsonLdSafe | safe }},
         "inLanguage": "en-US",
         "publisher": {
           "@type": "Organization",
-          "name": {{ site.name | dump | safe }},
-          "url": {{ site.url | dump | safe }}
+          "name": {{ site.name | jsonLdSafe | safe }},
+          "url": {{ site.url | jsonLdSafe | safe }}
         }
       }{% if page.url == "/" or page.url == "/index.html" %},
       {
         "@type": "Organization",
-        "@id": {{ (site.url + "/#organization") | dump | safe }},
-        "name": {{ site.name | dump | safe }},
-        "url": {{ site.url | dump | safe }},
-        "logo": {{ (site.url + "/images/logo-mark-512.png") | dump | safe }},
+        "@id": {{ (site.url + "/#organization") | jsonLdSafe | safe }},
+        "name": {{ site.name | jsonLdSafe | safe }},
+        "url": {{ site.url | jsonLdSafe | safe }},
+        "logo": {{ (site.url + "/images/logo-mark-512.png") | jsonLdSafe | safe }},
         "sameAs": [
-          {{ site.github | dump | safe }},
-          {{ site.x | dump | safe }},
-          {{ site.linkedinCompany | dump | safe }},
-          {{ site.bluesky | dump | safe }},
-          {{ site.discord | dump | safe }}
+          {{ site.github | jsonLdSafe | safe }},
+          {{ site.x | jsonLdSafe | safe }},
+          {{ site.linkedinCompany | jsonLdSafe | safe }},
+          {{ site.bluesky | jsonLdSafe | safe }},
+          {{ site.discord | jsonLdSafe | safe }}
         ],
         "subjectOf": [
           {
@@ -78,14 +78,14 @@
       },
       {
         "@type": "SoftwareApplication",
-        "name": {{ site.name | dump | safe }},
-        "url": {{ site.url | dump | safe }},
-        "image": {{ (site.url + "/images/logo-mark-512.png") | dump | safe }},
+        "name": {{ site.name | jsonLdSafe | safe }},
+        "url": {{ site.url | jsonLdSafe | safe }},
+        "image": {{ (site.url + "/images/logo-mark-512.png") | jsonLdSafe | safe }},
         "applicationCategory": "BusinessApplication",
         "operatingSystem": "macOS, Linux, Windows",
-        "softwareVersion": {{ plugin.version | dump | safe }},
-        "downloadUrl": {{ site.github | dump | safe }},
-        "releaseNotes": {{ (site.url + "/changelog/") | dump | safe }},
+        "softwareVersion": {{ plugin.version | jsonLdSafe | safe }},
+        "downloadUrl": {{ site.github | jsonLdSafe | safe }},
+        "releaseNotes": {{ (site.url + "/changelog/") | jsonLdSafe | safe }},
         "featureList": "AI Agents, Skills, Commands, Knowledge Compounding, Code Review, Planning, Deployment",
         "offers": [
           {
@@ -105,8 +105,8 @@
         ],
         "author": {
           "@type": "Organization",
-          "name": {{ site.name | dump | safe }},
-          "url": {{ site.url | dump | safe }}
+          "name": {{ site.name | jsonLdSafe | safe }},
+          "url": {{ site.url | jsonLdSafe | safe }}
         }
       }{% endif %}
     ]

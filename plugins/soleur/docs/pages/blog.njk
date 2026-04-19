@@ -13,17 +13,17 @@ permalink: blog/index.html
 </section>
 
 <script type="application/ld+json">
-{# All string interpolations in this JSON-LD block MUST use | dump | safe — see #2609 #}
+{# All string interpolations in this JSON-LD block MUST use | jsonLdSafe | safe — see #2609 #}
 {
   "@context": "https://schema.org",
   "@type": "CollectionPage",
-  "name": {{ (title + " - " + site.name) | dump | safe }},
-  "description": {{ description | dump | safe }},
-  "url": {{ (site.url + "/blog/") | dump | safe }},
+  "name": {{ (title + " - " + site.name) | jsonLdSafe | safe }},
+  "description": {{ description | jsonLdSafe | safe }},
+  "url": {{ (site.url + "/blog/") | jsonLdSafe | safe }},
   "publisher": {
     "@type": "Organization",
-    "name": {{ site.name | dump | safe }},
-    "url": {{ site.url | dump | safe }}
+    "name": {{ site.name | jsonLdSafe | safe }},
+    "url": {{ site.url | jsonLdSafe | safe }}
   }
 }
 </script>

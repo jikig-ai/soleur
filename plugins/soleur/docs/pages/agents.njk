@@ -122,7 +122,7 @@ The result: {{ stats.agents }} open source AI agents that function as a unified 
           "name": "How many agents does Soleur have?",
           "acceptedAnswer": {
             "@type": "Answer",
-            "text": {{ ("Soleur deploys " + stats.agents + " agents across " + stats.departments + " business departments, covering engineering, marketing, legal, finance, operations, product, sales, and support. The count updates automatically as new agents are added.") | dump | safe }}
+            "text": {{ ("Soleur deploys " + stats.agents + " agents across " + stats.departments + " business departments, covering engineering, marketing, legal, finance, operations, product, sales, and support. The count updates automatically as new agents are added.") | jsonLdSafe | safe }}
           }
         },
         {
@@ -146,7 +146,7 @@ The result: {{ stats.agents }} open source AI agents that function as a unified 
           "name": "What departments do Soleur agents cover?",
           "acceptedAnswer": {
             "@type": "Answer",
-            "text": {{ ("Soleur provides the most comprehensive set of solo founder AI tools across " + stats.departments + " departments: engineering, marketing, legal, finance, operations, product, sales, and support. Each department has a domain leader that orchestrates specialist agents.") | dump | safe }}
+            "text": {{ ("Soleur provides the most comprehensive set of solo founder AI tools across " + stats.departments + " departments: engineering, marketing, legal, finance, operations, product, sales, and support. Each department has a domain leader that orchestrates specialist agents.") | jsonLdSafe | safe }}
           }
         }
       ]

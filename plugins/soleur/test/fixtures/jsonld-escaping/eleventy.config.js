@@ -4,6 +4,13 @@ export default function (eleventyConfig) {
     new Date(date).toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" })
   );
   eleventyConfig.addFilter("dateToShort", (date) => new Date(date).toISOString().split("T")[0]);
+  // Mirror of production jsonLdSafe filter — must stay byte-identical.
+  eleventyConfig.addFilter("jsonLdSafe", (value) =>
+    JSON.stringify(value)
+      .replace(/<\//g, "<\\/")
+      .replace(/\u2028/g, "\\u2028")
+      .replace(/\u2029/g, "\\u2029"),
+  );
 }
 
 export const config = {
