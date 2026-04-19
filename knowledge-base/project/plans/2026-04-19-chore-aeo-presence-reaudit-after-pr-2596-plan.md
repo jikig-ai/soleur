@@ -257,17 +257,27 @@ if ! [[ "$PRESENCE_SCORE" =~ ^[0-9]+$ ]] || [[ "$PRESENCE_SCORE" -gt 100 ]]; the
 fi
 echo "Presence score: $PRESENCE_SCORE"
 
-# Extract the Presence grade (column after Score, defensively)
+# Extract the Presence grade (column after Score, defensively).
+# Regex keeps A-Z plus +/- modifiers; current rubric uses bare letters (F, D, C, B, A)
+# but the regex tolerates D+/D- etc. should the rubric add modifiers in future audits.
 PRESENCE_GRADE=$(echo "$PRESENCE_LINE" | awk -F'|' -v c=$((SCORE_COL+1)) '{
   gsub(/^[ \t]+|[ \t]+$/, "", $c); gsub(/[^A-Z+\-]/, "", $c); print $c
 }')
 echo "Presence grade: $PRESENCE_GRADE"
 
-# Extract the overall score from the | **Overall** | row
+# Extract the overall score from the | **Overall** | row (parallel guard with PRESENCE_LINE)
 OVERALL_LINE=$(grep -E "^\| \*\*Overall\*\*" "$LATEST" | head -n 1)
+if [[ -z "$OVERALL_LINE" ]]; then
+  echo "ERROR: no row matches '| **Overall** ...'" >&2
+  exit 7
+fi
 OVERALL_SCORE=$(echo "$OVERALL_LINE" | awk -F'|' -v c="$SCORE_COL" '{
   gsub(/^[ \t]+|[ \t]+$/, "", $c); gsub(/[^0-9]/, "", $c); print $c
 }')
+if ! [[ "$OVERALL_SCORE" =~ ^[0-9]+$ ]] || [[ "$OVERALL_SCORE" -gt 100 ]]; then
+  echo "ERROR: extracted Overall score is not a valid integer 0-100: '$OVERALL_SCORE'" >&2
+  exit 8
+fi
 echo "Overall AEO score: $OVERALL_SCORE"
 ```
 
@@ -318,7 +328,11 @@ sys.exit(0 if ok else 12)
 - **No `Presence & Third-Party Mentions` row** (rubric category renamed) → exit
   5; CMO must triage whether the rubric category was renamed (e.g., to "External
   Validation") and update the anchor in this plan.
-- **Extracted value is non-numeric or >100** (parsing drift) → exit 6; abort.
+- **Extracted Presence value is non-numeric or >100** (parsing drift) → exit 6; abort.
+- **Overall row missing** (rubric structure changed) → exit 7; abort.
+- **Extracted Overall value is non-numeric or >100** (parsing drift) → exit 8; abort.
+- **`gh issue create` output not parseable as an issue number** (gh CLI URL
+  format changed) → exit 9; abort.
 - **Pre-audit surface check fails** (exit 10/11/12) → re-trigger the docs
   build (`gh workflow run deploy-docs.yml`), wait for it to complete, and re-run
   the surface check before triggering the audit. Do NOT score the audit against
@@ -334,6 +348,34 @@ Three branches, gated on `PRESENCE_SCORE`:
 | **PARTIAL PASS** | `55 <= score < 60` | Close #2615 (issue says ≥55) but flag the F-band caveat in the comment so reviewers know the rubric is still calling Presence F-grade |
 | **FAIL** | `< 55` | File P1 tracker, label #2615 `needs-attention`, do NOT close |
 
+The audit-pair re-run rule (see Risks) MUST fire **before** branch selection
+when `PRESENCE_SCORE` lands within `THRESHOLD ± 3`, i.e. 52–58. After the
+re-run, take the higher of the two scores as canonical and re-enter branch
+selection with the canonical value.
+
+#### Phase 3 prelude (run before either branch)
+
+Both branches reference `$AUDIT_REL` and `$OFFSITE_OPEN`. Compute them once
+here so the FAIL branch is reachable standalone.
+
+```bash
+# Locate the actual audit file path for the link (used by both branches)
+AUDIT_REL="knowledge-base/marketing/audits/soleur-ai/$(basename "$LATEST")"
+
+# Enumerate which deferred off-site follow-ups are still open (credit attribution).
+# A truly missing issue (404) prints a warning but does not silently disappear.
+OFFSITE_OPEN=""
+for n in 2599 2600 2601 2602 2603 2604; do
+  state=$(gh issue view "$n" --json state --jq .state 2>/dev/null || echo "MISSING")
+  if [[ "$state" == "MISSING" ]]; then
+    echo "WARN: #$n could not be queried (deleted? renamed? gh auth?); excluding from credit list" >&2
+    continue
+  fi
+  [[ "$state" == "OPEN" ]] && OFFSITE_OPEN="$OFFSITE_OPEN #$n"
+done
+OFFSITE_OPEN=$(echo "$OFFSITE_OPEN" | sed 's/^ //')
+```
+
 #### Branch A — PASS or PARTIAL PASS (`PRESENCE_SCORE >= 55`)
 
 Build the closing comment dynamically so it enumerates which off-site
@@ -345,22 +387,11 @@ is attributable exclusively to PR #2596's on-site surface.
 # Compute the weighted delta (Presence is 5% of overall in current rubric)
 WEIGHTED_DELTA=$(awk "BEGIN { printf \"%.1f\", ($PRESENCE_SCORE - 40) * 0.05 }")
 
-# Enumerate which deferred off-site follow-ups are still open (credit attribution)
-OFFSITE_OPEN=""
-for n in 2599 2600 2601 2602 2603 2604; do
-  state=$(gh issue view "$n" --json state --jq .state 2>/dev/null || echo "MISSING")
-  [[ "$state" == "OPEN" ]] && OFFSITE_OPEN="$OFFSITE_OPEN #$n"
-done
-OFFSITE_OPEN=$(echo "$OFFSITE_OPEN" | sed 's/^ //')
-
 # Determine the F-band caveat (PARTIAL PASS only)
 CAVEAT=""
 if [[ "$PRESENCE_SCORE" -lt 60 ]]; then
   CAVEAT=$'\n\nNote: rubric grade scale defines D as 60-69, so '"$PRESENCE_SCORE"' is technically still F-band. The issue '"'"'s ≥55 threshold is satisfied, but CMO may want to revisit if the next audit drops back below 55.'
 fi
-
-# Locate the actual audit file path for the link
-AUDIT_REL="knowledge-base/marketing/audits/soleur-ai/$(basename "$LATEST")"
 
 # Write the comment to a file (avoid heredoc-in-CLI quoting headaches)
 {
@@ -376,7 +407,11 @@ AUDIT_REL="knowledge-base/marketing/audits/soleur-ai/$(basename "$LATEST")"
   echo "Closes #2615."
 } > /tmp/aeo-pass-comment.md
 
-gh issue close 2615 --comment "$(cat /tmp/aeo-pass-comment.md)"
+# Post comment via --body-file (safe from shell expansion of file contents),
+# then close. `gh issue close` itself only supports --comment <string>, so we
+# split the operations to avoid `--comment "$(cat ...)"` re-interpolation.
+gh issue comment 2615 --body-file /tmp/aeo-pass-comment.md
+gh issue close 2615 --reason completed
 ```
 
 #### Branch B — FAIL (`PRESENCE_SCORE < 55`)
@@ -401,7 +436,7 @@ gh issue close 2615 --comment "$(cat /tmp/aeo-pass-comment.md)"
   echo
   echo "1. Rubric weights visible-copy press higher than JSON-LD press (subjectOf is structured data; press strip is visible). The shipped strip cites only Inc.com — possibly insufficient visible variety."
   echo "2. The Presence rubric requires off-site signals (G2, AlternativeTo, Product Hunt) to move at all — in which case the lift will only register after #2599/#2600/#2601/#2602 land. If true, this issue should block on those."
-  echo "3. The rubric's ceiling on 'pure on-site Presence' is below 55 by design. Verify against \`plugins/soleur/agents/marketing/growth-strategist.md\` Presence section (lines 65-68)."
+  echo "3. The rubric's ceiling on 'pure on-site Presence' is below 55 by design. Verify against the \`**Presence**\` heading in \`plugins/soleur/agents/marketing/growth-strategist.md\`."
   echo "4. The audit run was non-deterministic and produced a low-end result; re-run once before triaging."
   echo
   echo "## Action items"
@@ -419,18 +454,26 @@ gh issue close 2615 --comment "$(cat /tmp/aeo-pass-comment.md)"
   echo "Tracking: #2615 (this issue stays open until either audit shows the lift or rubric is re-anchored)."
 } > /tmp/aeo-followup.md
 
-# 2. File the P1 tracker
-NEW=$(gh issue create \
+# 2. File the P1 tracker. `gh issue create` prints a URL like
+# https://github.com/owner/repo/issues/2648 — extract the last path component
+# via awk -F/ rather than a regex that could match adjacent digits.
+NEW_URL=$(gh issue create \
   --title "chore(aeo): Presence score lift insufficient after PR #2596 — investigate" \
   --label "priority/p1-high,type/chore,domain/marketing" \
   --milestone "Phase 4: Validate + Scale" \
-  --body-file /tmp/aeo-followup.md \
-  | grep -oE '[0-9]+$')
+  --body-file /tmp/aeo-followup.md)
+NEW=$(echo "$NEW_URL" | awk -F/ '{print $NF}')
+if ! [[ "$NEW" =~ ^[0-9]+$ ]]; then
+  echo "ERROR: could not parse issue number from gh output: '$NEW_URL'" >&2
+  exit 9
+fi
 echo "Filed #$NEW"
 
-# 3. Mark #2615 needs-attention and link the tracker (do NOT close)
+# 3. Mark #2615 needs-attention and link the tracker (do NOT close).
+# Strip the "-aeo-audit.md" suffix from the audit filename to get the date stamp.
+AUDIT_DATE=$(basename "$LATEST" "-aeo-audit.md")
 gh issue edit 2615 --add-label "needs-attention"
-gh issue comment 2615 --body "AEO Presence audit at $(basename "$LATEST" -aeo-audit.md) reported ${PRESENCE_SCORE} (below the issue's ≥55 threshold). Filed #${NEW} for triage. This issue stays open until the next audit shows the lift or #${NEW} is resolved."
+gh issue comment 2615 --body "AEO Presence audit at ${AUDIT_DATE} reported ${PRESENCE_SCORE} (below the issue's ≥55 threshold). Filed #${NEW} for triage. This issue stays open until the next audit shows the lift or #${NEW} is resolved."
 ```
 
 ## Test Scenarios (manual, operator-driven)
@@ -453,11 +496,15 @@ gh issue comment 2615 --body "AEO Presence audit at $(basename "$LATEST" -aeo-au
   reports per-technique impact ranges of `+15-30%` to `+30-40%` for individual
   citation/quotation/statistic injections — implying score variance of ±5–10
   points on identical content across runs is normal. **Mitigation: audit-pair
-  re-run rule.** If `PRESENCE_SCORE` lands within ±3 of the threshold (52–58),
+  re-run rule.** If `PRESENCE_SCORE` lands within ±3 of the issue's ≥55
+  threshold (i.e. 52–58 inclusive — straddles all three Phase 3 branches),
   re-trigger the cron once via `gh workflow run scheduled-growth-audit.yml`,
   wait for the PR to auto-merge, and take the higher of the two scores as
-  canonical. Record both audit dates and scores in the closing comment so
-  future readers can audit the decision.
+  canonical before re-entering branch selection. The re-run rule fires BEFORE
+  the PASS/PARTIAL/FAIL branching so a borderline 53 isn't escalated as FAIL
+  when a re-run would clear the ≥55 bar (and vice versa for a 58 that drops
+  on re-run). Record both audit dates and scores in the closing comment or
+  tracker body so future readers can audit the decision.
 - **GitHub stars API failure on the live site.** `_data/githubStats.js` is CI-fail-fast
   but soft-fail in dev. If the build at audit time degraded the homepage stars tile to
   the dev fallback, the auditor may score Presence lower than the deployed best case.
@@ -540,14 +587,25 @@ No CTO involvement: no architectural change.
 
 Every CLI invocation prescribed in this plan is a stable, well-documented form:
 
-- `gh issue close <N> --comment <text>` — `gh issue close --help`, standard.
-- `gh issue create --title --label --milestone --body-file` — used pervasively in
-  this repo (see `.github/workflows/scheduled-growth-audit.yml` Step 5.5).
+- `gh issue close <N> --reason completed` paired with a preceding
+  `gh issue comment <N> --body-file <path>` — `gh issue close` does NOT
+  support `--body-file`, only `--comment <string>`. Splitting the operations
+  avoids `gh issue close --comment "$(cat ...)"`, which would re-expand
+  shell metacharacters from the file content.
+- `gh issue create --title --label --milestone --body-file` — used pervasively
+  in this repo (see `.github/workflows/scheduled-growth-audit.yml` Step 5.5).
+  `gh issue create` prints a URL on success; parse the issue number with
+  `awk -F/ '{print $NF}'` (NOT a `--json` flag — `gh issue create` has no
+  `--json` support, verified via `gh issue create --help`).
 - `gh issue edit <N> --add-label` — standard.
 - `gh issue comment <N> --body` — standard.
 - `gh workflow run <file>.yml` — standard, used in AGENTS.md `wg-after-merging-a-pr-that-adds-or-modifies`.
 - `gh run watch` / `gh run list --workflow= --limit` — standard.
 - `awk -F'|'`, `grep -E`, `sort | tail -n 1` — POSIX shell.
+- `python3` — used inline for the optional pre-audit JSON-LD parse. The growth-
+  audit cron itself does not depend on python3; this snippet is operator-side
+  only. If `python3` is absent locally, swap to `jq` against an extracted
+  JSON-LD blob or skip the surface check.
 - No fabricated subcommands or flags; no `npm` or `bun` invocations; no Doppler
   reads.
 
@@ -556,8 +614,12 @@ uses comma-separated label names. Verified label names match the repo convention
 documented in `cq-gh-issue-label-verify-name`:
 
 ```bash
-gh label list --limit 100 | grep -E "priority/p1-high|type/chore|domain/marketing"
+gh label list --limit 100 | grep -E "priority/p1-high|type/chore|domain/marketing|needs-attention"
 ```
+
+The `needs-attention` label (used in Branch B `gh issue edit 2615
+--add-label "needs-attention"`) is verified to exist with description "SLA
+exceeded, requires human action" (color `#D93F0B`).
 
 The milestone string `"Phase 4: Validate + Scale"` is the exact title from
 `gh issue view 2615 --json milestone` (matches `cq-gh-issue-create-milestone-takes-title`).
