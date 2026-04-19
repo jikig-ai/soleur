@@ -9,6 +9,11 @@ date: 2026-04-19
 **Issue:** #2654
 **Servers:** web-platform CX33 (`soleur-web-platform`, `135.181.45.178`)
 **Channel of last resort:** Hetzner Cloud Console (noVNC in-browser)
+**See also:** `admin-ip-drift.md` -- firewall-layer lockout class where the
+operator's egress IP has rotated out of `ADMIN_IPS`. If `journalctl -u ssh`
+shows NO entry for the operator IP during the incident window, the packet
+never reached sshd and this runbook does not apply -- check admin-IP drift
+first.
 
 ## Symptom
 

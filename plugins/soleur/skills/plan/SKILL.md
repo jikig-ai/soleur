@@ -118,6 +118,14 @@ Run these agents **in parallel** to gather local context:
 
 These findings inform the next step.
 
+### 1.4. Network-Outage Hypothesis Check (Conditional)
+
+If the feature description matches any of the patterns `SSH`, `connection reset`, `kex`, `firewall`, `unreachable`, `timeout`, `502`, `503`, `504`, `handshake`, `EHOSTUNREACH`, `ECONNRESET` (case-insensitive substring match on the feature description), read [plan-network-outage-checklist.md](./references/plan-network-outage-checklist.md) and require its output in the `## Hypotheses` section of the final plan.
+
+The checklist enforces an L3->L7 diagnostic order: firewall allow-list and DNS/routing MUST be verified before sshd/fail2ban/service-layer hypotheses. Per AGENTS.md `hr-ssh-diagnosis-verify-firewall`, this is a hard rule -- plans that propose sshd or fail2ban fixes without first verifying firewall + egress IP are workflow violations.
+
+This step is a single file read, not a subagent spawn. If the feature description does not match any trigger pattern, skip this step silently.
+
 ### 1.5. Community Discovery Check (Conditional)
 
 **Read `plugins/soleur/skills/plan/references/plan-community-discovery.md` now** for the full community discovery procedure (stack detection, coverage gap check, agent-finder). Skip if no uncovered stacks detected.

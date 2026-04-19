@@ -240,9 +240,9 @@ for f in plugins/soleur/skills/plan/SKILL.md \
 done
 ```
 
-**Matches:** To be verified at GREEN time. If the grep returns rows, add
-disposition here before shipping (fold-in vs. acknowledge vs. defer per
-`plan-functional-overlap.md`).
+**Matches (verified 2026-04-19 at GREEN time):**
+
+- `#2594: test: chat-surface / kb-chat-sidebar tests flake under vitest parallel execution` -- **Acknowledge.** The match is a false positive: #2594 references `AGENTS.md` only as a string mention of a workflow-gate rule id, not as a file this PR co-touches. No actual overlap with the files this PR modifies.
 
 ## Proposed Solution
 
@@ -750,29 +750,31 @@ Per the new network-outage checklist (dogfooding the rule this PR ships):
 
 ### Pre-merge (PR)
 
-- [ ] `plugins/soleur/skills/admin-ip-refresh/SKILL.md` exists with valid YAML
+- [x] `plugins/soleur/skills/admin-ip-refresh/SKILL.md` exists with valid YAML
       frontmatter (`name:`, `description:` third-person, no example blocks).
-- [ ] `plugins/soleur/skills/admin-ip-refresh/references/admin-ip-refresh-procedure.md`
+- [x] `plugins/soleur/skills/admin-ip-refresh/references/admin-ip-refresh-procedure.md`
       exists and is linked from SKILL.md via `[procedure](./references/admin-ip-refresh-procedure.md)`
       (per `plugins/soleur/AGENTS.md` reference-links checklist).
-- [ ] `plugins/soleur/skills/plan/references/plan-network-outage-checklist.md`
+- [x] `plugins/soleur/skills/plan/references/plan-network-outage-checklist.md`
       exists and is linked from `plan/SKILL.md`.
-- [ ] `plugins/soleur/skills/plan/SKILL.md` references the checklist in a new
+- [x] `plugins/soleur/skills/plan/SKILL.md` references the checklist in a new
       Phase 1.4 step.
-- [ ] `plugins/soleur/skills/deepen-plan/SKILL.md` references the checklist.
-- [ ] `plugins/soleur/AGENTS.md` has the new `hr-ssh-diagnosis-verify-
-      firewall` rule. Rule is under 600 bytes. `**Why:**` is one sentence.
-      Rule count and AGENTS.md total bytes under the compound step 8 budget
-      caps (< 100 rules, < 40000 file bytes).
-- [ ] `knowledge-base/engineering/ops/runbooks/admin-ip-drift.md` exists with
+- [x] `plugins/soleur/skills/deepen-plan/SKILL.md` references the checklist.
+- [x] `plugins/soleur/AGENTS.md` has the new `hr-ssh-diagnosis-verify-firewall`
+      rule. Rule is 545 bytes (under 600-byte cap). `**Why:**` is one sentence
+      pointing to #2681. Total AGENTS.md: 36638 bytes (under 40000 cap).
+      Rule count: 106 (exceeds the 100 warn threshold -- pre-existing state
+      on main was 105; this PR adds 1; warning only, not a hard block).
+- [x] `knowledge-base/engineering/ops/runbooks/admin-ip-drift.md` exists with
       frontmatter matching the sibling runbook template.
-- [ ] `knowledge-base/project/learnings/bug-fixes/2026-04-19-admin-ip-drift-misdiagnosed-as-fail2ban.md`
+- [x] `knowledge-base/project/learnings/bug-fixes/2026-04-19-admin-ip-drift-misdiagnosed-as-fail2ban.md`
       exists.
-- [ ] `bun test plugins/soleur/test/components.test.ts` passes (skill
-      description token budget preserved -- new skill adds a small amount to
-      cumulative count).
-- [ ] `npx markdownlint-cli2 --fix` on changed `.md` files only (per `cq-
-      markdownlint-fix-target-specific-paths`).
+- [x] `bun test plugins/soleur/test/components.test.ts` passes (1006/0 after
+      trimming over-target descriptions in `fix-issue`, `feature-video`,
+      `dhh-rails-style` to make room within the 1800-word cap).
+- [x] `npx markdownlint-cli2 --fix` on changed `.md` files only (per `cq-
+      markdownlint-fix-target-specific-paths`). Pre-existing MD055 errors in
+      `dhh-rails-style/SKILL.md` tracked in #2685 (out of scope).
 - [ ] Multi-agent review (DHH simplicity, Kieran correctness, Code simplicity)
       agrees the skill has no hidden prod-write authorization path.
 - [ ] `## Changelog` section in PR body with `semver:minor` label (new skill
