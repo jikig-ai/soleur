@@ -68,3 +68,95 @@ jobs:
           done
 
           echo "Done. Created: ${CREATED}, Skipped (existing): ${SKIPPED}"
+
+  close-orphans:
+    # Auto-close open type/security issues whose referenced CodeQL alerts have
+    # all been dismissed. See knowledge-base/project/learnings/best-practices/
+    # 2026-04-19-codeql-orphan-issue-post-dismissal-sweep.md for context.
+    needs: check-alerts
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Close orphan CodeQL-derived security issues
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -u
+          # Pull every open type/security issue (cap 200; the workflow is
+          # idempotent so any overflow gets caught on the next daily run).
+          gh issue list --state open --label "type/security" \
+            --json number,title,body,labels --limit 200 > /tmp/sec-issues.json
+
+          if ! jq -e . /tmp/sec-issues.json >/dev/null 2>&1; then
+            echo "Issue list returned non-JSON body — skipping orphan sweep."
+            exit 0
+          fi
+
+          TOTAL=$(jq 'length' /tmp/sec-issues.json)
+          echo "Scanning ${TOTAL} open type/security issues for orphan CodeQL references..."
+
+          CLOSED=0
+          KEPT=0
+          SKIPPED=0
+
+          # shellcheck disable=SC2016
+          jq -c '.[]' /tmp/sec-issues.json | while IFS= read -r issue; do
+            ISSUE_NUMBER=$(echo "$issue" | jq -r '.number')
+            HAS_KEEP_OPEN=$(echo "$issue" | jq -r '[.labels[].name] | index("keep-open") // "null"')
+            if [ "$HAS_KEEP_OPEN" != "null" ]; then
+              echo "Issue #${ISSUE_NUMBER}: keep-open label present — skipping"
+              KEPT=$((KEPT + 1))
+              continue
+            fi
+
+            # Extract alert numbers cited in title or body. The CodeQL-issue
+            # convention is "CodeQL alert #NNN" (this workflow's title format)
+            # or human-filed bodies that say "alert #NNN". Match the literal
+            # word "alert" then capture trailing numerics. Issue title and body
+            # flow through JSON encoding, jq, then grep — never evaluated as
+            # shell, so injection is not possible via this path.
+            ALERTS=$(echo "$issue" | jq -r '.title + "\n" + (.body // "")' \
+              | grep -oiE 'alert[[:space:]]*#?[0-9]+' \
+              | grep -oE '[0-9]+' | sort -un)
+
+            if [ -z "$ALERTS" ]; then
+              SKIPPED=$((SKIPPED + 1))
+              continue
+            fi
+
+            ALL_DISMISSED=1
+            REASONS=""
+            for AN in $ALERTS; do
+              # Per AGENTS.md cq-ci-steps-polling-json-endpoints-under: query
+              # state with --jq server-side; any non-200 produces no output.
+              STATE=$(gh api "/repos/${GH_REPO}/code-scanning/alerts/${AN}" \
+                --jq '.state' 2>/dev/null || true)
+              if [ -z "$STATE" ]; then
+                # Alert lookup failed — could be deleted, rate-limited, or
+                # the number was a false match. Skip without closing.
+                ALL_DISMISSED=0
+                break
+              fi
+              if [ "$STATE" != "dismissed" ]; then
+                ALL_DISMISSED=0
+                break
+              fi
+              REASONS="${REASONS}- alert #${AN}: dismissed"$'\n'
+            done
+
+            if [ "$ALL_DISMISSED" -eq 1 ]; then
+              { printf 'All referenced CodeQL alerts are now dismissed.\n\n'; \
+                printf '%s\n' "$REASONS"; \
+                printf 'Closing as resolved by dismissal. Reopen with the `keep-open` label if this issue tracks something other than the alert state.\n'; \
+              } > "${RUNNER_TEMP}/close-comment-${ISSUE_NUMBER}.md"
+              gh issue comment "$ISSUE_NUMBER" --body-file "${RUNNER_TEMP}/close-comment-${ISSUE_NUMBER}.md"
+              gh issue close "$ISSUE_NUMBER" --reason completed
+              echo "Closed orphan issue #${ISSUE_NUMBER} (alerts: ${ALERTS//$'\n'/, })"
+              CLOSED=$((CLOSED + 1))
+            else
+              SKIPPED=$((SKIPPED + 1))
+            fi
+          done
+
+          echo "Done. Closed: ${CLOSED}, Kept (keep-open): ${KEPT}, Skipped: ${SKIPPED}"
