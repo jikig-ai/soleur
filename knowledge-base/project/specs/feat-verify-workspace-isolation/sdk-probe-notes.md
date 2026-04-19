@@ -109,4 +109,92 @@ The plan's original assumption — that `bypassPermissions` gives us a clean tie
 
 ---
 
-**Status:** Phase 1 spike complete. STOPPING at phase boundary per founder instruction. Waiting on path decision before Phase 2 code lands.
+## Captured bwrap argv structure (2026-04-19, from SDK source reverse-engineering)
+
+**Method:** Grepped `apps/web-platform/node_modules/@anthropic-ai/claude-agent-sdk/cli.js` (minified bundle, 12.9MB) for bwrap-related flags and extracted the argv-construction function (`ou_`) via Python brace-matching. Source-only — no live `query()` run yet.
+
+### Base argv (always present when sandbox.enabled=true)
+
+```text
+bwrap --new-session --die-with-parent
+      --dev /dev
+      --unshare-pid
+      [--proc /proc]                       # SKIPPED when enableWeakerNestedSandbox=true (our prod config)
+      [--unshare-net]                      # when network sandboxed
+      [--bind <http-bridge> <same>]        # when network sandboxed + bridges exist
+      [--bind <socks-bridge> <same>]
+      [--setenv HTTP_PROXY ... SOCKS_PROXY ...]
+      -- <shell> -c "<command>"
+```
+
+Note: **no `--unshare-user`.** The SDK does NOT create a new user namespace. Files are accessed as the invoking user (same UID inside/outside the sandbox). This has implications for root-owned file cleanup (noted in plan risks).
+
+### Filesystem bind construction (`ou_` function)
+
+The filesystem portion of argv is assembled by an async helper `ou_(q, K, ...)` where:
+
+- **`K`** = sandbox.filesystem config (our `allowWrite` → `K.allowOnly`).
+- **`q`** = permission-rule-derived filesystem rules (our `sandbox.filesystem.denyRead` merges here as `q.denyOnly`; permission rules from Read/Edit allow/deny also merge here).
+
+Argv assembly order when `K` is present:
+
+1. `--ro-bind / /` — mount entire host read-only
+2. For each `allowOnly` path (our `allowWrite: [workspacePath]`):
+   - `fs.realpathSync`, symlink-outside check, non-existent skip
+   - Push `--bind <path> <path>` (writable)
+   - Track in internal `j` (allowed set)
+3. For each `denyWithinAllow` / auto-derived deny:
+   - If path is a symlink pointing outside allowed set: `--ro-bind /dev/null <symlink-path>` (symlink-replacement-attack guard — a comment in the bundle explicitly names this)
+   - If path doesn't exist but ancestor is allowed: mount empty tempdir or `/dev/null` to block creation
+   - Else `--ro-bind <path> <path>` (read-only overlay in writable region)
+
+Then processing `q.denyOnly` (OUR `denyRead` lands here):
+
+4. For each denyOnly path `H`:
+   - If `H` is a directory: `--tmpfs <H>` (replace with empty tmpfs)
+   - Then for each `allowWithinDeny` (OUR `allowRead`) `X` starting with `H+"/"`: `--ro-bind <X> <X>` (re-allow within denied region)
+   - If `H` is a file: `--ro-bind /dev/null <H>` (hide file)
+   - If `H` is re-allowed: skip
+
+### The ordering mystery
+
+With our production config (`allowWrite: [workspacePath]`, `denyRead: ["/workspaces", "/proc"]`, no `allowRead`), the argv order is:
+
+```text
+--ro-bind / /
+--bind /workspaces/<uuid> /workspaces/<uuid>     (from allowWrite)
+--tmpfs /workspaces                              (from denyRead, since /workspaces is a directory)
+--tmpfs /proc                                    (from denyRead — but /proc already absent due to enableWeakerNestedSandbox)
+--dev /dev
+--unshare-pid
+-- bash -c ...
+```
+
+The `--tmpfs /workspaces` comes AFTER `--bind /workspaces/<uuid>`. In bwrap, a later `--tmpfs` on a parent directory typically **shadows** earlier bind mounts of children — meaning the workspace-owner's writable bind would be hidden by the tmpfs.
+
+**Yet production works.** The agent CAN write to its own workspace. So either:
+
+- bwrap's order-of-operations is different from my reading (later parent mounts don't shadow earlier child binds),
+- the SDK reorders argv before spawning (some subsequent post-processing in `cli.js` I haven't found),
+- our production config includes a matching `allowRead: [workspacePath]` (or permission-rule-derived equivalent) I haven't traced, OR
+- `denyRead: ["/workspaces"]` is NOT actually passing through to `q.denyOnly` as I traced — it may be filtered out when it overlaps with an allowWrite.
+
+**This is the mystery that Phase 2A empirical capture must resolve.** Constructing direct-spawn argv from the traced structure without confirming order would produce tests that behave differently from production bwrap.
+
+### Recommendation (revised for Phase 2A)
+
+Before constructing `spawnBwrap()` argv for Phase 3+, do a one-time live capture via one of:
+
+- **Preferred:** `strace -f -e trace=execve -s 8192 -o /tmp/strace.out node --require spawn-capture.js capture-bwrap-argv.js` — captures execve in the SDK's child process.
+- **Alternative:** monkey-patch `child_process.spawn` in the CLI subprocess via `NODE_OPTIONS=--require ./spawn-capture.js`.
+- **Cheapest:** run `query()` under `strace -p $(pgrep -f 'node.*claude-agent-sdk') -e trace=execve -f` attached externally after first few messages.
+
+Output: the **actual argv bwrap received in production config**. Compare to the traced structure above. If they match, plan Phase 3+ `spawnBwrap()` can template on it. If they diverge, document the divergence and either (a) update traced structure, (b) fall back to Path B (full-stack `query()` for all cases).
+
+### Open follow-up action
+
+Phase 2A (as documented in plan and tasks.md) is unchanged in spirit but now has a specific goal: **verify the traced argv order against real execve, document the resolution of the tmpfs/bind ordering mystery, then template spawnBwrap() on the confirmed argv.**
+
+---
+
+**Status:** Phase 1 extended. SDK source reverse-engineered; argv structure captured; one ordering question remains. Next concrete step: Phase 2A empirical capture. Handing back for founder review — specifically whether to invest in the empirical capture now, or pivot to Path B (full-stack query() for all cases, sidestepping the argv-ordering question entirely).
