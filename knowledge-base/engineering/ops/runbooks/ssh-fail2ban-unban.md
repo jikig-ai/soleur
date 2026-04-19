@@ -1,3 +1,9 @@
+---
+category: infrastructure
+tags: [ssh, fail2ban, security, recovery, hetzner]
+date: 2026-04-19
+---
+
 # SSH Locked Out by fail2ban -- Recovery Runbook
 
 **Issue:** #2654
@@ -90,6 +96,13 @@ fail2ban-client unban --all
 If the operator's IP has rotated via NAT and the new prefix is unknown,
 use the fallback.
 
+**Caveat:** `unban --all` also releases any attacker IPs banned in the
+same moment. Prefer `unbanip <ip>` when the operator IP is known. If a
+brute-force attack is in progress, the attacker will be re-banned within
+one `findtime` window (10 min) on the next `maxretry` rejected tries --
+acceptable exposure given `PasswordAuthentication no` + `AllowUsers root`
+means no attempt can succeed without a stolen key.
+
 ### Step 5: Verify sshd health
 
 ```bash
@@ -169,8 +182,8 @@ kex, the root cause is not fail2ban. Diagnose in this order:
 
 Per AGENTS.md `cq-docs-cli-verification`:
 
-- `fail2ban-client status sshd` -- <!-- verified: 2026-04-19 source: https://www.fail2ban.org/wiki/index.php/MANUAL_0_8#Fail2ban-client -->
-- `fail2ban-client set sshd unbanip <ip>` -- <!-- verified: 2026-04-19 source: https://www.fail2ban.org/wiki/index.php/MANUAL_0_8#Fail2ban-client -->
-- `fail2ban-client unban --all` -- <!-- verified: 2026-04-19 source: https://github.com/fail2ban/fail2ban/blob/master/client/fail2banclient.py -->
-- `fail2ban-client get sshd <key>` (bantime, maxretry, findtime, journalmatch) -- <!-- verified: 2026-04-19 source: https://www.fail2ban.org/wiki/index.php/MANUAL_0_8#Fail2ban-client -->
+- `fail2ban-client status sshd` -- <!-- verified: 2026-04-19 source: https://github.com/fail2ban/fail2ban/blob/1.0.2/man/fail2ban-client.1 -->
+- `fail2ban-client set sshd unbanip <ip>` -- <!-- verified: 2026-04-19 source: https://github.com/fail2ban/fail2ban/blob/1.0.2/man/fail2ban-client.1 -->
+- `fail2ban-client unban --all` -- <!-- verified: 2026-04-19 source: https://github.com/fail2ban/fail2ban/blob/1.0.2/client/fail2banclient.py -->
+- `fail2ban-client get sshd <key>` (bantime, maxretry, findtime, journalmatch) -- <!-- verified: 2026-04-19 source: https://github.com/fail2ban/fail2ban/blob/1.0.2/man/fail2ban-client.1 -->
 - `fail2ban-client --version` -- <!-- verified: 2026-04-19 source: fail2ban-client --help -->

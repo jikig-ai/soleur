@@ -119,12 +119,16 @@ resource "terraform_data" "fail2ban_tuning" {
       # to restart if the installed fail2ban version does not support reload of
       # bantime.* keys (some 0.10.x builds required restart; 1.0.2 on 24.04 is fine).
       "systemctl reload fail2ban || systemctl restart fail2ban",
-      # Verify the drop-in took effect. Any failure here (syntax error, file
-      # missing, daemon not running) surfaces as a provisioner error.
-      "fail2ban-client -d | grep -A5 '\\[sshd\\]' | head -20",
-      "fail2ban-client get sshd bantime",
-      "fail2ban-client get sshd maxretry",
-      "fail2ban-client get sshd findtime",
+      # Diagnostic dump (informational; printed to CI drift logs).
+      "fail2ban-client -d | grep -A5 '\\[sshd\\]' | head -20 || true",
+      # Positive assertions: if the drop-in did NOT take effect, these values
+      # would still report the defaults-debian.conf values. Asserting the
+      # literal expected values fails the provisioner when the override is
+      # silently ignored (jail.d load-order regression, syntax error swallowed
+      # by reload, etc.). 600s = 10m; 3600s = 1h.
+      "test \"$(fail2ban-client get sshd bantime)\" = '600'",
+      "test \"$(fail2ban-client get sshd maxretry)\" = '5'",
+      "test \"$(fail2ban-client get sshd findtime)\" = '600'",
     ]
   }
 }
