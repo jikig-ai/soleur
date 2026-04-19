@@ -96,7 +96,7 @@ itself (manual verification path is already documented and passing).
 | "Install a GitHub App on it so `provisionWorkspaceWithRepo` can clone."              | `generateInstallationToken` (`apps/web-platform/server/github-app.ts:425`) needs `GITHUB_APP_ID` + `GITHUB_APP_PRIVATE_KEY` at runtime. These are present in `prd`/`ci`; they are **absent** in `dev`. | Plumb `GITHUB_APP_ID` + `GITHUB_APP_PRIVATE_KEY` into Doppler `dev` in the same Doppler step as the fixture vars. Without them, `generateInstallationToken` throws and AC-2 cannot run under dev creds at all. |
 | "Plumb `MU1_FIXTURE_REPO_URL` + `MU1_FIXTURE_INSTALLATION_ID` into Doppler `dev`."   | Doppler `dev` today has neither. Verified with `doppler secrets --only-names -p soleur -c dev`.                                                                                                    | Write both secrets. `MU1_FIXTURE_INSTALLATION_ID` is the single installation id after the fixture install (re-uses the existing `soleur-ai` App, but the installation id is repo-scoped only if the App is single-repo-selected at install time — see "Install options" below). |
 | "Convert `describe.skip` → `describe.skipIf(...)`."                                  | The current file has a C-style block comment placeholder (lines 178-184). There is **no `describe.skip` block** in the file today — the describe was replaced with a comment during a prior edit. | The plan REPLACES the placeholder comment with a real `describe.skipIf(!process.env.MU1_FIXTURE_REPO_URL \|\| !process.env.MU1_FIXTURE_INSTALLATION_ID)(...)` block. The issue body's "convert" phrasing slightly undersells: this is a create-not-edit change. |
-| "The `test.skip` block is marked so the runbook still passes manually."             | The runbook does NOT import the skip marker; it references the describe block by name ("`MU1 AC-2: provisionWorkspaceWithRepo clones fixture`").                                                  | Use that exact describe title so the runbook's expected-output lines (5 passed / 2 skipped → 6 passed / 2 skipped → 7 passed / 0 skipped depending on env vars) stay grep-stable. Update the runbook counts at the same time. |
+| "The `test.skip` block is marked so the runbook still passes manually."             | The runbook does NOT import the skip marker; it references the describe block by name ("`MU1 AC-2: provisionWorkspaceWithRepo clones fixture`").                                                  | Use that exact describe title so the runbook's expected-output lines (4 passed / 2 skipped → 5 passed / 1 skipped → 6 passed / 0 skipped depending on env vars) stay grep-stable. Update the runbook counts at the same time. |
 
 **Why reconciliation section:** issue #2605 inherits the parent plan's
 (#1448) "soleur-ai" phrasing, which conflates the App name with an org
@@ -151,12 +151,12 @@ reconciliation makes the correct target org explicit.
       `MU1_FIXTURE_REPO_URL`, `MU1_FIXTURE_INSTALLATION_ID`,
       `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY`, or `MU1_INTEGRATION=1`,
       `./node_modules/.bin/vitest run test/mu1-integration.test.ts`
-      outputs `5 passed, 2 skipped` (AC-1 and AC-2 both skipped) —
+      outputs `4 passed, 2 skipped` (AC-1 and AC-2 both skipped) —
       matching the runbook's existing "Expected output" line.
 - [ ] **AC-F (runbook updated):** `mu1-signup-workspace-verification.md`
       section "Apply — Run the Verification" updates step 1's expected
-      output line, the step-2 expected output line (now `6 passed, 1
-      skipped` or `7 passed, 0 skipped`), and the "AC-2 — Manual
+      output line, the step-2 expected output line (now `5 passed, 1
+      skipped` or `6 passed, 0 skipped`), and the "AC-2 — Manual
       repo-clone verification (temporary)" section is demoted to a
       fallback note ("Use this only when dev Doppler does not have the
       MU1 fixture vars set"). The "Known Deferrals" entry for #2605 is
@@ -166,7 +166,7 @@ reconciliation makes the correct target org explicit.
 ### Post-merge (operator)
 
 - [ ] Run the updated MU1 runbook from the merged state; attach
-      output to #2605 before closing. Expected: `7 passed, 0 skipped`
+      output to #2605 before closing. Expected: `6 passed, 0 skipped`
       under `MU1_INTEGRATION=1`.
 - [ ] Confirm the `soleur-ai` App's installation on
       `jikig-ai/mu1-fixture` is still scoped to "Only select
@@ -453,8 +453,8 @@ in the runbook's new "Security baseline" subsection.
    ```
 
 2. Update the runbook's "Apply" section: step 1 expected output
-   remains `5 passed, 2 skipped` (default lane — neither gate flips),
-   step 2 becomes `7 passed, 0 skipped` when both `MU1_INTEGRATION=1`
+   remains `4 passed, 2 skipped` (default lane — neither gate flips),
+   step 2 becomes `6 passed, 0 skipped` when both `MU1_INTEGRATION=1`
    AND the fixture env vars are present (via the `doppler run -p
    soleur -c dev` wrap, which now includes the fixture vars).
 3. Update the runbook "AC-2 — Manual repo-clone verification" section
@@ -528,7 +528,7 @@ trivially scoped (fixture URL, installation id) and one of which
   a short-lived `/tmp/git-cred-<uuid>` file, passes it via `git -c
   credential.helper=!<path> clone`, then unlinks. No persistent token
   on disk.
-- **Default-lane test count today:** `5 passed, 2 skipped` (AC-1 +
+- **Default-lane test count today:** `4 passed, 2 skipped` (AC-1 +
   AC-2 both skipped). Runbook line 68 cites this; Phase 4 keeps it
   unchanged in the default lane.
 - **Per `cq-destructive-prod-tests-allowlist`:** AC-2 does not touch
@@ -622,12 +622,12 @@ All CLI invocations prescribed in this plan are verified:
   caches tokens with a 5-minute safety margin; the clone completes in
   seconds. Not a realistic failure mode.
 - **R5 — Runbook expected-output drift.** Adding one more test
-  changes the `5 passed / 2 skipped` line to conditionally
-  `7 passed / 0 skipped`. If a future AC lands without updating the
+  changes the `4 passed / 2 skipped` line to conditionally
+  `6 passed / 0 skipped`. If a future AC lands without updating the
   runbook, the operator will see mismatched counts. **Mitigation:** the
   runbook's new test-count line uses both values with a comment
-  explaining the gate ("default: 5 passed / 2 skipped; with fixture env
-  - `MU1_INTEGRATION=1`: 7 passed / 0 skipped"). Operator sees both.
+  explaining the gate ("default: 4 passed / 2 skipped; with fixture env
+  - `MU1_INTEGRATION=1`: 6 passed / 0 skipped"). Operator sees both.
 - **R6 — Git-clone helper leaks token on crash.** The credential
   helper at `/tmp/git-cred-<uuid>` is unlinked in `finally`. If the
   process is SIGKILL'd between write and clone, the token survives on
