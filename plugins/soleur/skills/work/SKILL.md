@@ -327,6 +327,7 @@ Run these checks before proceeding to Phase 1. A FAIL blocks execution with a re
    - **GREEN**: Write the minimum code to make the test pass
    - **REFACTOR**: Improve code while keeping tests green
    - Run the full test suite after each RED/GREEN/REFACTOR cycle. When running test suites via Bash, always capture both failure details AND summary in a single run — use `grep -E "(FAIL|ERROR|Test Files|Tests )"` or `| tail -30`, never `| tail -10` which discards failure names and forces a wasteful second run. **Why:** In PR #2430, `| tail -10` discarded failing test names, requiring a full re-run just to identify which 2 of 1580 tests failed.
+   - When running test/lint/budget commands from inside a worktree pipeline, chain `cd <worktree-abs-path> && <cmd>` in a single Bash call. The Bash tool does NOT persist CWD across calls; a prior `cd /tmp/... && git clone ...` leaves subsequent commands running against the bare repo root (where tracked files exist as stale synced copies), producing wrong pass/fail counts that look like real regressions. **Why:** PR #2683 `bun test` reported 1005/1 (baseline-state result) from bare root after a drifted CWD; worktree re-run was 1006/0. See `knowledge-base/project/learnings/bug-fixes/2026-04-19-admin-ip-drift-misdiagnosed-as-fail2ban.md` session errors.
    - Fix failures immediately -- never move to the next task with failing tests
    - When a class becomes hard to test (too many dependencies), extract an interface and inject dependencies. See the `/atdd-developer` skill for detailed TDD guidance.
 

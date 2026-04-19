@@ -134,3 +134,18 @@ Per AGENTS.md `wg-every-session-error-must-produce-either`: every
 session error must produce either an AGENTS.md rule, skill instruction
 edit, or hook -- not just a learning file entry. This learning covers
 all three.
+
+## Session Errors (one-shot pipeline on PR #2683)
+
+Process errors during the implementation of the fix. Each error has a
+one-line prevention proposal routed to the governing skill or component
+where applicable.
+
+- **`git stash` in worktree (2x)** -- violated `hr-never-git-stash-in-worktrees`. Ran `git stash && bun test ... ; git stash pop` twice to check budget/lint baseline. Both popped cleanly; untracked files preserved. Recovery: used fresh `/tmp/main-check` clone for the second baseline. **Prevention:** use `git worktree add /tmp/baseline-check main` or `git show main:<path>` for read-only baseline comparisons. The existing `guardrails:block-stash-in-worktrees` hook should have caught this -- audit why it did not (tracked in follow-up).
+- **Bash CWD drifted to bare repo root** -- after `cd /tmp && git clone ...`, subsequent bash commands ran in the bare repo root, causing `bun test plugins/soleur/test/components.test.ts` to report 1005/1 (wrong result) because the bare repo has stale synced files. Recovery: re-ran from worktree explicitly. **Prevention:** when invoking test/lint/budget commands from inside a worktree pipeline, chain `cd <worktree-abs-path> && <cmd>` in a single Bash call so the runner never inherits a drifted CWD.
+- **Skill description was 43 words, pushing cumulative budget over 1800** -- required three trim iterations plus trimming three sibling skills (fix-issue, feature-video, dhh-rails-style). Recovery: trimmed descriptions to ~25-30 words each; final total 1800/1800. **Prevention:** before adding a new skill, `bun test plugins/soleur/test/components.test.ts` and note the current total; target `(1800 - current_total)` words for the new description rather than the nominal 30-word target.
+- **AGENTS.md rule initially 687 bytes, over 600-byte cap** -- required two trim iterations. Recovery: condensed trigger list and `**Why:**` annotation. **Prevention:** when drafting a new AGENTS.md rule in a plan, include the byte count in the plan's Acceptance Criteria and verify during Work phase by `awk '/<rule-id>/ {print length($0)}' AGENTS.md` before committing, not after.
+- **Pre-existing `MD055` errors in `dhh-rails-style/SKILL.md`** -- surfaced when `markdownlint-cli2 --fix` was run on an expanded file list. Not caused by this session. Recovery: filed as #2685. **Prevention:** none for this PR; a repo-wide markdownlint pass as a dedicated chore commit would drain the class.
+- **Runbook initially named Hetzner firewall as `web-platform`; actual is `soleur-web-platform`** -- self-caught via `grep hcloud_firewall apps/web-platform/infra/*.tf` before commit. No cost beyond one edit. **Prevention:** when a runbook prescribes vendor CLI arguments for a specific resource, verify the resource name against the Terraform source before drafting.
+
+**Forwarded from session-state.md (plan + deepen phase):** none reported.
