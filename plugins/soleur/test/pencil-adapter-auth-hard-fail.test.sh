@@ -59,14 +59,16 @@ echo "Stderr:"
 echo "$stderr_content" | sed 's/^/  /'
 echo ""
 
-# Exit code 124 = timeout fired. Exit 0 = clean success = BUG (silent).
-# Any non-zero that isn't 124 = adapter refused to start = PASS.
+# Exit code 124 = timeout fired (adapter stayed alive — BUG). Exit 0 =
+# clean success (silent BUG). The only acceptable outcome is fast failure:
+# a non-zero exit that is NOT 124. A generic "nonzero" assertion would
+# accept the timeout-hang regression.
 if [[ "$rc" == "0" ]]; then
-  assert_eq "nonzero" "0 (silent success)" "adapter exits non-zero without PENCIL_CLI_KEY"
+  assert_eq "nonzero-fast" "0 (silent success)" "adapter exits non-zero without PENCIL_CLI_KEY"
 elif [[ "$rc" == "124" ]]; then
-  assert_eq "nonzero-fast" "124 (timeout — adapter stayed alive)" "adapter exits non-zero without PENCIL_CLI_KEY"
+  assert_eq "nonzero-fast" "124 (timeout — adapter stayed alive)" "adapter exits non-zero fast (not timeout) without PENCIL_CLI_KEY"
 else
-  assert_eq "nonzero" "nonzero" "adapter exits non-zero without PENCIL_CLI_KEY (rc=$rc)"
+  assert_eq "nonzero-fast" "nonzero-fast" "adapter exits non-zero fast without PENCIL_CLI_KEY (rc=$rc)"
 fi
 
 assert_contains "$stderr_content" "ERROR" "stderr contains ERROR (not just WARNING)"

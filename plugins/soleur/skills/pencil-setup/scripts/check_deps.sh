@@ -26,9 +26,10 @@ done
 # Rule: cq-pencil-mcp-silent-drop-diagnosis-checklist.
 
 if [[ "$CHECK_ADAPTER_DRIFT" == "true" ]]; then
+  script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
   install_dir="${PENCIL_ADAPTER_INSTALL_DIR:-$HOME/.local/share/pencil-adapter}"
   installed_adapter="$install_dir/pencil-mcp-adapter.mjs"
-  repo_adapter="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/pencil-mcp-adapter.mjs"
+  repo_adapter="$script_dir/pencil-mcp-adapter.mjs"
 
   if [[ ! -d "$install_dir" ]] || [[ ! -f "$installed_adapter" ]]; then
     echo "NOT_INSTALLED: $install_dir"
@@ -40,8 +41,12 @@ if [[ "$CHECK_ADAPTER_DRIFT" == "true" ]]; then
     exit 2
   fi
 
-  installed_sha=$(sha256sum "$installed_adapter" | awk '{print $1}')
-  repo_sha=$(sha256sum "$repo_adapter" | awk '{print $1}')
+  # `--` terminators prevent user-supplied paths beginning with `-` (e.g.,
+  # PENCIL_ADAPTER_INSTALL_DIR=--help) from being interpreted as flags by
+  # sha256sum / cp. Defense-in-depth; the path quoting already blocks shell
+  # injection.
+  installed_sha=$(sha256sum -- "$installed_adapter" | awk '{print $1}')
+  repo_sha=$(sha256sum -- "$repo_adapter" | awk '{print $1}')
 
   if [[ "$installed_sha" == "$repo_sha" ]]; then
     echo "OK: installed adapter matches repo (sha ${repo_sha:0:12})"
@@ -49,10 +54,19 @@ if [[ "$CHECK_ADAPTER_DRIFT" == "true" ]]; then
   fi
 
   if [[ "$AUTO_INSTALL" == "true" ]]; then
-    cp "$repo_adapter" "$installed_adapter"
-    new_sha=$(sha256sum "$installed_adapter" | awk '{print $1}')
-    echo "OK: re-copied adapter (was ${installed_sha:0:12} → now ${new_sha:0:12})"
-    exit 0
+    # Delegate the full sync to copy_adapter.sh — it copies the adapter
+    # AND its sibling pure modules (pencil-response-classify.mjs,
+    # pencil-save-gate.mjs, etc.) AND runs npm ci when the install dir
+    # has a package.json but no node_modules. A bare `cp` here would
+    # leave the adapter ahead of its dependencies.
+    if PENCIL_ADAPTER_INSTALL_DIR="$install_dir" bash "$script_dir/copy_adapter.sh"; then
+      new_sha=$(sha256sum -- "$installed_adapter" | awk '{print $1}')
+      echo "OK: re-copied adapter (was ${installed_sha:0:12} → now ${new_sha:0:12})"
+      exit 0
+    else
+      echo "ERROR: copy_adapter.sh failed during drift auto-repair" >&2
+      exit 2
+    fi
   fi
 
   echo "DRIFT: installed ${installed_sha:0:12} != repo ${repo_sha:0:12}"

@@ -55,18 +55,39 @@ if (!process.env.PENCIL_CLI_KEY) {
 }
 
 // --- Dynamic imports (deferred so the gates above run first) ---
+//
+// Wrapped in try/catch so a missing `node_modules/@modelcontextprotocol/sdk`
+// (e.g., after a drifted install that copied the adapter but not its deps)
+// surfaces as an adapter-authored error rather than an unhandledRejection
+// trace. Matches the hard-fail UX of the PENCIL_CLI_KEY gate above.
 
-const { McpServer } = await import("@modelcontextprotocol/sdk/server/mcp.js");
-const { StdioServerTransport } = await import("@modelcontextprotocol/sdk/server/stdio.js");
-const { z } = await import("zod");
-const { spawn: nodeSpawn } = await import("node:child_process");
-const { existsSync, mkdirSync, renameSync, writeFileSync } = await import("node:fs");
-const { dirname, join } = await import("node:path");
-const { homedir, tmpdir } = await import("node:os");
-const { enrichErrorMessage } = await import("./pencil-error-enrichment.mjs");
-const { sanitizeFilename } = await import("./sanitize-filename.mjs");
-const { classifyResponse } = await import("./pencil-response-classify.mjs");
-const { shouldSkipSave } = await import("./pencil-save-gate.mjs");
+let McpServer, StdioServerTransport, z, nodeSpawn;
+let existsSync, mkdirSync, renameSync, writeFileSync;
+let dirname, join, homedir, tmpdir;
+let enrichErrorMessage, sanitizeFilename, classifyResponse, shouldSkipSave, stripAnsi;
+
+try {
+  ({ McpServer } = await import("@modelcontextprotocol/sdk/server/mcp.js"));
+  ({ StdioServerTransport } = await import("@modelcontextprotocol/sdk/server/stdio.js"));
+  ({ z } = await import("zod"));
+  ({ spawn: nodeSpawn } = await import("node:child_process"));
+  ({ existsSync, mkdirSync, renameSync, writeFileSync } = await import("node:fs"));
+  ({ dirname, join } = await import("node:path"));
+  ({ homedir, tmpdir } = await import("node:os"));
+  ({ enrichErrorMessage } = await import("./pencil-error-enrichment.mjs"));
+  ({ sanitizeFilename } = await import("./sanitize-filename.mjs"));
+  ({ classifyResponse, stripAnsi } = await import("./pencil-response-classify.mjs"));
+  ({ shouldSkipSave } = await import("./pencil-save-gate.mjs"));
+} catch (err) {
+  process.stderr.write(
+    `[pencil-adapter] ERROR: dependency import failed: ${err?.message ?? err}\n` +
+    "[pencil-adapter] The installed adapter at ~/.local/share/pencil-adapter may be\n" +
+    "[pencil-adapter] missing node_modules or out of sync with repo. Re-run:\n" +
+    "[pencil-adapter]   bash plugins/soleur/skills/pencil-setup/scripts/copy_adapter.sh\n" +
+    "[pencil-adapter] or re-run /soleur:pencil-setup to refresh the install.\n"
+  );
+  process.exit(1);
+}
 
 // --- Env allowlist ---
 
@@ -100,24 +121,13 @@ function buildPencilEnv() {
   return env;
 }
 
-// --- ANSI stripping ---
-
-function stripAnsi(str) {
-  return str.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, "");
-}
-
-// --- Response parsing ---
-//
-// Delegates to the pure `classifyResponse` module so the classifier can be
-// unit-tested without importing this adapter (which pulls in the MCP SDK and
-// cannot load under `bun test`). Auth-failure patterns (`pencil login`,
-// `Invalid API key`, `Unauthorized`, `HTTP 401`) classify as errors so the
-// post-mutation save gate (see `shouldSkipSave`) can skip auto-save and
-// avoid overwriting .pen files with 0-byte output (#2630).
-
-function parseResponse(raw) {
-  return classifyResponse(raw);
-}
+// `stripAnsi` and `classifyResponse` are imported from
+// `pencil-response-classify.mjs` (see the dynamic-import block above).
+// The classifier lives in a sibling pure module so it can be unit-tested
+// without loading the MCP SDK. Auth-failure patterns (`pencil login`,
+// `Invalid API key`, `Unauthorized`, `HTTP 401`) classify as errors so
+// the post-mutation save gate (see `shouldSkipSave`) skips auto-save
+// and avoids overwriting .pen files with 0-byte output (#2630).
 
 // --- Node ID extraction ---
 
@@ -395,7 +405,7 @@ function registerReadOnlyTool(name, schema, handler) {
     await ensureProcess();
     const cmd = formatReplCommand(name, params);
     const raw = await commandQueue.enqueue(cmd);
-    const { text, isError } = parseResponse(raw);
+    const { text, isError } = classifyResponse(raw);
     if (handler) {
       return handler(text, isError);
     }
@@ -410,7 +420,7 @@ function registerMutatingTool(name, schema, postHandler) {
     await ensureProcess();
     const cmd = formatReplCommand(name, params);
     const raw = await commandQueue.enqueue(cmd);
-    const classification = parseResponse(raw);
+    const classification = classifyResponse(raw);
     lastMutationClassification = classification;
     const { text, isError } = classification;
     if (isError) {
@@ -464,7 +474,7 @@ server.tool("get_screenshot", { nodeId: z.string() }, async ({ nodeId }) => {
   await ensureProcess();
   const cmd = formatReplCommand("get_screenshot", { nodeId });
   const raw = await commandQueue.enqueue(cmd);
-  const { text, isError } = parseResponse(raw);
+  const { text, isError } = classifyResponse(raw);
   if (isError) {
     return { content: [{ type: "text", text }], isError: true };
   }
@@ -549,7 +559,7 @@ server.tool(
     try {
       const batchCmd = formatReplCommand("batch_get", { nodeIds });
       const batchRaw = await commandQueue.enqueue(batchCmd);
-      const { text: batchText } = parseResponse(batchRaw);
+      const { text: batchText } = classifyResponse(batchRaw);
       const parsed = JSON.parse(batchText);
       if (parsed.nodes && Array.isArray(parsed.nodes)) {
         for (const node of parsed.nodes) {
@@ -565,7 +575,7 @@ server.tool(
     // Step 2: Run the original export_nodes command
     const cmd = formatReplCommand("export_nodes", { nodeIds, outputDir, format, scale, quality });
     const raw = await commandQueue.enqueue(cmd);
-    const { text, isError } = parseResponse(raw);
+    const { text, isError } = classifyResponse(raw);
     if (isError) {
       return { content: [{ type: "text", text }], isError: true };
     }
@@ -642,7 +652,7 @@ server.tool(
     if (replace !== undefined) params.replace = replace;
     const cmd = formatReplCommand("set_variables", params);
     const raw = await commandQueue.enqueue(cmd);
-    const classification = parseResponse(raw);
+    const classification = classifyResponse(raw);
     lastMutationClassification = classification;
     const { text, isError } = classification;
     if (isError) {
@@ -697,8 +707,19 @@ server.tool(
 
 server.tool("save", {}, async () => {
   await ensureProcess();
+  // Explicit save requests are NOT gated — the caller has asked for save
+  // and the adapter must surface its actual result. But when a prior
+  // mutation classified as an error, log a stderr note so the sequence
+  // (failed mutation → explicit save) is visible in the MCP log. Matches
+  // the observability posture for gated auto-saves in registerMutatingTool.
+  if (shouldSkipSave(lastMutationClassification)) {
+    process.stderr.write(
+      "[pencil-adapter] NOTE: explicit save() after preceding errored mutation " +
+      "— running at caller's request, but the saved file may not reflect intended state.\n"
+    );
+  }
   const raw = await commandQueue.enqueue("save()");
-  const { text, isError } = parseResponse(raw);
+  const { text, isError } = classifyResponse(raw);
   return { content: [{ type: "text", text }], isError };
 });
 

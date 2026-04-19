@@ -46,18 +46,27 @@ for file in "${ADAPTER_FILES[@]}"; do
     echo "WARN: missing repo file $src — skipping" >&2
     continue
   fi
-  if [[ -f "$dst" ]] && cmp -s "$src" "$dst"; then
+  if [[ -f "$dst" ]] && ! [[ -L "$dst" ]] && cmp -s -- "$src" "$dst"; then
     continue
   fi
-  cp "$src" "$dst"
+  # Refuse to follow pre-planted symlinks at $dst — a local attacker with
+  # write on $INSTALL_DIR could otherwise redirect the copy to e.g.
+  # ~/.ssh/authorized_keys. `rm -f` unlinks the symlink itself; the
+  # subsequent `cp` creates a fresh regular file.
+  if [[ -L "$dst" ]]; then
+    rm -f -- "$dst"
+  fi
+  cp -- "$src" "$dst"
   copied=$((copied + 1))
 done
 
 # The adapter also needs its own node_modules for the MCP SDK and zod.
-# If the install dir has a package.json but no node_modules, run npm ci.
+# If the install dir has a package.json but no node_modules, run npm ci
+# with --ignore-scripts so a hostile package.json in a user-supplied
+# PENCIL_ADAPTER_INSTALL_DIR cannot execute pre/postinstall scripts.
 if [[ -f "$INSTALL_DIR/package.json" ]] && [[ ! -d "$INSTALL_DIR/node_modules" ]]; then
   echo "Installing adapter dependencies in $INSTALL_DIR..."
-  (cd "$INSTALL_DIR" && npm ci --silent 2>&1 | tail -5) || {
+  (cd "$INSTALL_DIR" && npm ci --ignore-scripts --silent 2>&1 | tail -5) || {
     echo "WARN: npm ci failed — run manually in $INSTALL_DIR" >&2
   }
 fi
