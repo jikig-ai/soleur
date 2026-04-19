@@ -136,6 +136,9 @@
       {%- for item in site.nav %}
       <li><a href="{{ item.url }}"{% if page.url == ('/' + item.url) or (item.url == 'blog/' and page.url.startsWith('/blog')) %} aria-current="page"{% endif %}>{{ item.label }}</a></li>
       {%- endfor %}
+      {%- if site.primaryCta %}
+      <li class="nav-cta-slot"><a href="{{ site.primaryCta.url }}" aria-label="{{ site.primaryCta.ariaLabel }}" class="btn btn-primary btn--sm nav-cta">{{ site.primaryCta.label }}</a></li>
+      {%- endif %}
     </ul>
   </header>
 
@@ -168,7 +171,7 @@
           <h3 class="footer-heading">{{ col.heading }}</h3>
           <ul class="footer-links">
             {%- for link in col.links %}
-            <li><a href="{{ link.url }}"{% if link.external %} target="_blank" rel="noopener"{% endif %}>{{ link.label }}</a></li>
+            <li><a href="{{ link.url }}"{% if link.external %} target="_blank" rel="noopener"{% endif %}{% if link.title %} title="{{ link.title }}"{% endif %}>{{ link.label }}</a></li>
             {%- endfor %}
           </ul>
         </div>
