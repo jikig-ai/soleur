@@ -6,13 +6,14 @@ const mockFs = {
   readdirSync: vi.fn<(path: string) => string[]>(),
   statSync: vi.fn<(path: string) => { isDirectory: () => boolean }>(),
 };
+const mockReportSilentFallback = vi.fn();
 
 vi.mock("../../server/session-registry", () => ({
   sessions: mockSessions,
 }));
 
 vi.mock("../../server/observability", () => ({
-  reportSilentFallback: vi.fn(),
+  reportSilentFallback: (...args: unknown[]) => mockReportSilentFallback(...args),
 }));
 
 vi.mock("fs", () => ({
@@ -53,6 +54,7 @@ describe("getActiveWorkspaceCount", () => {
     mockFs.readdirSync.mockReset();
     mockFs.statSync.mockReset();
     mockFs.statSync.mockReturnValue({ isDirectory: () => true });
+    mockReportSilentFallback.mockReset();
   });
 
   it("counts non-orphaned workspace directories", async () => {
@@ -80,15 +82,39 @@ describe("getActiveWorkspaceCount", () => {
     expect(getActiveWorkspaceCount()).toBe(1);
   });
 
-  it("returns 0 when readdir throws (ENOENT, permission denied, etc.)", async () => {
+  it("returns 0 and DOES NOT alarm on ENOENT (expected in dev/CI)", async () => {
+    const err = Object.assign(new Error("ENOENT: /workspaces does not exist"), {
+      code: "ENOENT",
+    });
     mockFs.readdirSync.mockImplementation(() => {
-      throw new Error("ENOENT: /workspaces does not exist");
+      throw err;
     });
 
     const { getActiveWorkspaceCount } = await import(
       "../../server/session-metrics"
     );
     expect(getActiveWorkspaceCount()).toBe(0);
+    expect(mockReportSilentFallback).not.toHaveBeenCalled();
+  });
+
+  it("returns 0 AND reports to Sentry on non-ENOENT errors (permissions, I/O)", async () => {
+    const err = Object.assign(new Error("EACCES: permission denied"), {
+      code: "EACCES",
+    });
+    mockFs.readdirSync.mockImplementation(() => {
+      throw err;
+    });
+
+    const { getActiveWorkspaceCount } = await import(
+      "../../server/session-metrics"
+    );
+    expect(getActiveWorkspaceCount()).toBe(0);
+    expect(mockReportSilentFallback).toHaveBeenCalledTimes(1);
+    expect(mockReportSilentFallback).toHaveBeenCalledWith(err, {
+      feature: "resource-monitoring",
+      op: "getActiveWorkspaceCount",
+      extra: { workspacesRoot: expect.any(String) },
+    });
   });
 
   it("returns 0 when /workspaces is empty", async () => {

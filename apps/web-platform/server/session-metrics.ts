@@ -24,14 +24,17 @@ export function getActiveWorkspaceCount(): number {
         }
       }).length;
   } catch (err) {
-    // Swallowed so /health never 500s on a missing /workspaces directory
-    // (e.g., fresh provisioning window). Mirror to Sentry per
-    // cq-silent-fallback-must-mirror-to-sentry.
-    reportSilentFallback(err, {
-      feature: "resource-monitoring",
-      op: "getActiveWorkspaceCount",
-      extra: { workspacesRoot: WORKSPACES_ROOT },
-    });
+    // ENOENT on the configured root is "this env has no mounted volume yet"
+    // (local dev, CI, fresh provisioning) — expected degraded state, don't
+    // page on it. Any other error (permissions, I/O) IS a real silent
+    // fallback and goes to Sentry per cq-silent-fallback-must-mirror-to-sentry.
+    if ((err as NodeJS.ErrnoException)?.code !== "ENOENT") {
+      reportSilentFallback(err, {
+        feature: "resource-monitoring",
+        op: "getActiveWorkspaceCount",
+        extra: { workspacesRoot: WORKSPACES_ROOT },
+      });
+    }
     return 0;
   }
 }
