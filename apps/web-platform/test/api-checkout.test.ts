@@ -1,5 +1,9 @@
 import { describe, test, expect, vi, beforeEach } from "vitest";
 
+// Legacy STRIPE_PRICE_ID path is still exercised by these tests. Set the env
+// var before the route imports so priceIdForTier() fallback resolves cleanly.
+process.env.STRIPE_PRICE_ID = "price_legacy";
+
 // ---------------------------------------------------------------------------
 // Mocks — vi.hoisted ensures these are available when vi.mock factories run
 // ---------------------------------------------------------------------------
