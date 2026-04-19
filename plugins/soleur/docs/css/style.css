@@ -760,6 +760,8 @@
   .nav-links .nav-cta-slot { margin-left: auto; }
   .nav-links .nav-cta-slot .nav-cta { color: var(--color-text-inverse); }
   .nav-links .nav-cta-slot .nav-cta:hover { color: var(--color-text-inverse); border-bottom-color: transparent; }
+  /* Light outline for focus-visible contrast: accent outline on accent-filled button would be invisible. */
+  .nav-links .nav-cta-slot .nav-cta:focus-visible { outline: 2px solid var(--color-text-inverse); outline-offset: 3px; }
   @media (max-width: 768px) {
     .nav-links .nav-cta-slot { margin-left: 0; margin-top: var(--space-2); }
     .nav-links .nav-cta-slot .nav-cta { display: inline-block; text-align: center; }
@@ -1548,95 +1550,6 @@
     }
   }
 
-  /* Getting Started: Two-Path Cards */
-  .path-cards {
-    display: grid;
-    grid-template-columns: repeat(2, 1fr);
-    gap: var(--space-6);
-    max-width: 900px;
-    margin-inline: auto;
-  }
-  .path-card {
-    background: var(--color-bg-secondary);
-    border: 1px solid var(--color-border);
-    border-radius: 12px;
-    padding: var(--space-8);
-    display: flex;
-    flex-direction: column;
-  }
-  .path-card--primary {
-    border-color: var(--color-accent);
-    box-shadow: 0 0 20px rgba(201, 169, 98, 0.08);
-  }
-  .path-card--secondary {
-    border-color: var(--color-border-strong);
-  }
-  .path-card-header {
-    display: flex;
-    align-items: center;
-    gap: var(--space-3);
-    margin-bottom: var(--space-4);
-    flex-wrap: wrap;
-  }
-  .path-card-title {
-    font-family: var(--font-display);
-    font-size: var(--text-xl);
-    color: var(--color-text);
-    margin: 0;
-  }
-  .path-card-badge {
-    font-family: var(--font-mono);
-    font-size: var(--text-xs);
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.08em;
-    padding: var(--space-1) var(--space-3);
-    border-radius: 4px;
-  }
-  .path-card-badge--coming-soon {
-    background: rgba(201, 169, 98, 0.12);
-    color: var(--color-accent);
-    border: 1px solid rgba(201, 169, 98, 0.3);
-  }
-  .path-card-badge--available {
-    background: rgba(80, 200, 120, 0.12);
-    color: #50C878;
-    border: 1px solid rgba(80, 200, 120, 0.3);
-  }
-  .path-card-desc {
-    color: var(--color-text-secondary);
-    font-size: var(--text-sm);
-    line-height: 1.7;
-    margin-bottom: var(--space-5);
-  }
-  .path-card-features {
-    list-style: none;
-    padding: 0;
-    margin-bottom: var(--space-6);
-    flex-grow: 1;
-  }
-  .path-card-features li {
-    position: relative;
-    padding-left: var(--space-5);
-    color: var(--color-text-secondary);
-    font-size: var(--text-sm);
-    line-height: 1.8;
-  }
-  .path-card-features li::before {
-    content: "\2713";
-    position: absolute;
-    left: 0;
-    color: var(--color-accent);
-    font-weight: 600;
-  }
-  .path-card-cta {
-    text-align: center;
-    margin-top: auto;
-  }
-  @media (max-width: 768px) {
-    .path-cards { grid-template-columns: 1fr; }
-    .path-card { padding: var(--space-6); }
-  }
 }
 
 @layer utilities {
