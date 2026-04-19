@@ -19,7 +19,7 @@ This skill is for:
 - Reviewing performance analysis
 - Handling any other categorized findings that need tracking
 
-### CodeQL alert-state precheck (security findings)
+## CodeQL alert-state precheck (security findings)
 
 Before commissioning work on any CodeQL-derived finding (issue title starts with
 `sec: CodeQL alert #N` or body cites `alert #N`), verify the alert is still open:

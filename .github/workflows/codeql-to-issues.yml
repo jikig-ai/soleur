@@ -26,6 +26,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: |
+          set -uo pipefail
           echo "Fetching open code scanning alerts..."
           ALERTS=$(gh api repos/${GH_REPO}/code-scanning/alerts?state=open --jq '.[] | select(.rule.security_severity_level == "critical" or .rule.security_severity_level == "high") | {number, rule_id: .rule.id, rule_desc: .rule.description, severity: .rule.security_severity_level, tool: .tool.name, file: .most_recent_instance.location.path, line: .most_recent_instance.location.start_line, message: .most_recent_instance.message.text, html_url: .html_url, ref: .most_recent_instance.ref}' 2>&1) || true
 
@@ -37,7 +38,10 @@ jobs:
           CREATED=0
           SKIPPED=0
 
-          echo "$ALERTS" | jq -c '.' | while IFS= read -r alert; do
+          # Process-substitution keeps the loop in the parent shell so CREATED/
+          # SKIPPED counter increments survive past `done`. A piped `| while`
+          # subshells the loop and the final telemetry would always print 0/0.
+          while IFS= read -r alert; do
             ALERT_NUMBER=$(echo "$alert" | jq -r '.number')
             ALERT_RULE_ID=$(echo "$alert" | jq -r '.rule_id')
             ALERT_RULE_DESC=$(echo "$alert" | jq -r '.rule_desc')
@@ -65,7 +69,7 @@ jobs:
             gh issue create --title "$TITLE" --body-file "${RUNNER_TEMP}/issue-body-${ALERT_NUMBER}.md" --label "type/security"
             echo "Created issue for CodeQL alert #${ALERT_NUMBER} (severity: ${ALERT_SEVERITY})"
             CREATED=$((CREATED + 1))
-          done
+          done < <(echo "$ALERTS" | jq -c '.')
 
           echo "Done. Created: ${CREATED}, Skipped (existing): ${SKIPPED}"
 
@@ -82,14 +86,20 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: |
-          set -u
+          set -uo pipefail
           # Pull every open type/security issue (cap 200; the workflow is
           # idempotent so any overflow gets caught on the next daily run).
-          gh issue list --state open --label "type/security" \
-            --json number,title,body,labels --limit 200 > /tmp/sec-issues.json
+          # Explicit `gh` exit check + GitHub annotation so a CLI/network
+          # failure surfaces as a workflow warning instead of silent skip.
+          if ! gh issue list --state open --label "type/security" \
+            --json number,title,body,labels --limit 200 \
+            > /tmp/sec-issues.json 2>/tmp/sec-issues.err; then
+            echo "::warning title=close-orphans::gh issue list failed: $(cat /tmp/sec-issues.err)"
+            exit 0
+          fi
 
           if ! jq -e . /tmp/sec-issues.json >/dev/null 2>&1; then
-            echo "Issue list returned non-JSON body — skipping orphan sweep."
+            echo "::warning title=close-orphans::Issue list returned non-JSON body — skipping orphan sweep."
             exit 0
           fi
 
@@ -100,11 +110,14 @@ jobs:
           KEPT=0
           SKIPPED=0
 
-          # shellcheck disable=SC2016
-          jq -c '.[]' /tmp/sec-issues.json | while IFS= read -r issue; do
+          # Process-substitution feed (`done < <(...)`) keeps the loop in the
+          # parent shell so the counters above survive past `done`. A piped
+          # `jq | while` subshells the loop and the final tally would always
+          # print 0/0/0.
+          while IFS= read -r issue; do
             ISSUE_NUMBER=$(echo "$issue" | jq -r '.number')
-            HAS_KEEP_OPEN=$(echo "$issue" | jq -r '[.labels[].name] | index("keep-open") // "null"')
-            if [ "$HAS_KEEP_OPEN" != "null" ]; then
+            HAS_KEEP_OPEN=$(echo "$issue" | jq -r '[.labels[].name] | any(. == "keep-open")')
+            if [ "$HAS_KEEP_OPEN" = "true" ]; then
               echo "Issue #${ISSUE_NUMBER}: keep-open label present — skipping"
               KEPT=$((KEPT + 1))
               continue
@@ -116,9 +129,15 @@ jobs:
             # word "alert" then capture trailing numerics. Issue title and body
             # flow through JSON encoding, jq, then grep — never evaluated as
             # shell, so injection is not possible via this path.
+            #
+            # `head -n 50` caps per-issue alert lookups: a body-stuffed
+            # adversarial issue claiming thousands of alert numbers cannot
+            # exhaust the authenticated rate limit (5000/hr); the cap bounds
+            # the per-issue API cost to 50 calls × 200 issues = 10k worst
+            # case, well inside one rate-limit window across daily runs.
             ALERTS=$(echo "$issue" | jq -r '.title + "\n" + (.body // "")' \
               | grep -oiE 'alert[[:space:]]*#?[0-9]+' \
-              | grep -oE '[0-9]+' | sort -un)
+              | grep -oE '[0-9]+' | sort -un | head -n 50)
 
             if [ -z "$ALERTS" ]; then
               SKIPPED=$((SKIPPED + 1))
@@ -157,6 +176,6 @@ jobs:
             else
               SKIPPED=$((SKIPPED + 1))
             fi
-          done
+          done < <(jq -c '.[]' /tmp/sec-issues.json)
 
           echo "Done. Closed: ${CLOSED}, Kept (keep-open): ${KEPT}, Skipped: ${SKIPPED}"

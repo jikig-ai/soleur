@@ -4,7 +4,9 @@
 **Branch:** `feat-one-shot-codeql-2368`
 **Issue:** [#2368](https://github.com/jikig-ai/soleur/issues/2368)
 **Plan:** `knowledge-base/project/plans/2026-04-19-fix-verify-and-close-codeql-issue-2368-plan.md`
-**Snapshot:** `alerts-snapshot.json` (raw API), `web-platform-alerts.json` (filtered)
+**Snapshot:** `web-platform-alerts.json` (filtered to `apps/web-platform/*`).
+The raw paginated API dump (~685KB) is recreatable on demand via the snapshot
+command in `tasks.md` 2.1 and is intentionally not committed.
 
 ## Result
 
@@ -16,12 +18,17 @@ exist in `apps/web-platform/*` on `main`. No production code change is required.
 ## Phase 1 — Hard Assertion (Snapshot 2026-04-19)
 
 ```text
+# 1. Snapshot (recreatable; not committed):
+gh api '/repos/jikig-ai/soleur/code-scanning/alerts?per_page=100' --paginate \
+  > /tmp/alerts-snapshot.json
+
+# 2. Hard assertion (executed against the snapshot):
 open_high_critical=$(jq '[.[]
   | select(.most_recent_instance.location.path | startswith("apps/web-platform/"))
   | select(.state == "open")
   | select(.rule.security_severity_level == "high"
            or .rule.security_severity_level == "critical")] | length' \
-  alerts-snapshot.json)
+  /tmp/alerts-snapshot.json)
 # Result: 0  → ASSERTION PASSED
 ```
 
