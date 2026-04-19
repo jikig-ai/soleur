@@ -3,7 +3,7 @@ import { WebSocketServer, WebSocket } from "ws";
 import { parse } from "url";
 import { randomUUID } from "crypto";
 
-import { KeyInvalidError, WS_CLOSE_CODES, type WSMessage, type Conversation } from "@/lib/types";
+import { KeyInvalidError, WS_CLOSE_CODES, type PlanTier, type WSMessage, type Conversation } from "@/lib/types";
 import type { ConversationContext } from "@/lib/types";
 import { validateConversationContext } from "./context-validation";
 import { createServiceClient } from "@/lib/supabase/service";
@@ -68,6 +68,14 @@ export interface ClientSession {
   subscriptionStatus?: string;
   /** Periodic refresh timer for `subscriptionStatus` — cleared on every teardown path. */
   subscriptionRefreshTimer?: ReturnType<typeof setInterval>;
+  /** Cached plan tier — set at auth, refreshed in the same query as
+   *  subscriptionStatus (Phase 3). Drives effectiveCap on the slot-acquire
+   *  path (Phase 5). */
+  planTier?: PlanTier;
+  /** Per-user concurrency raise-only override from users.concurrency_override.
+   *  null means "use tier default"; a number larger than the default raises
+   *  the cap (see effectiveCap in lib/plan-limits.ts). */
+  concurrencyOverride?: number | null;
 }
 
 /** Active connections keyed by Supabase user ID. Registered in session-registry
@@ -194,7 +202,7 @@ export async function refreshSubscriptionStatus(
   try {
     const { data, error } = await supabase
       .from("users")
-      .select("subscription_status")
+      .select("subscription_status, plan_tier, concurrency_override")
       .eq("id", userId)
       .single();
 
@@ -203,8 +211,15 @@ export async function refreshSubscriptionStatus(
     if (session.ws.readyState !== WebSocket.OPEN) return;
 
     if (error || !data) return; // fail open — keep prior cached value
-    session.subscriptionStatus = data.subscription_status ?? undefined;
-    if (data.subscription_status === "unpaid") {
+    const row = data as {
+      subscription_status: string | null;
+      plan_tier?: PlanTier | null;
+      concurrency_override?: number | null;
+    };
+    session.subscriptionStatus = row.subscription_status ?? undefined;
+    session.planTier = row.plan_tier ?? "free";
+    session.concurrencyOverride = row.concurrency_override ?? null;
+    if (row.subscription_status === "unpaid") {
       checkSubscriptionSuspended(userId, session);
     }
   } catch (err) {
@@ -848,7 +863,7 @@ export function setupWebSocket(server: HTTPServer) {
         // Enforce T&C acceptance (version-aware) and cache subscription status
         const { data: userRow, error: tcError } = await supabase
           .from("users")
-          .select("tc_accepted_version, subscription_status")
+          .select("tc_accepted_version, subscription_status, plan_tier, concurrency_override")
           .eq("id", user.id)
           .single();
 
@@ -878,10 +893,18 @@ export function setupWebSocket(server: HTTPServer) {
         }
 
         // Register session — cancel any pending disconnect grace period
+        const userRowTyped = userRow as {
+          tc_accepted_version?: string;
+          subscription_status?: string | null;
+          plan_tier?: PlanTier | null;
+          concurrency_override?: number | null;
+        };
         const newSession: ClientSession = {
           ws,
           lastActivity: Date.now(),
-          subscriptionStatus: userRow?.subscription_status ?? undefined,
+          subscriptionStatus: userRowTyped.subscription_status ?? undefined,
+          planTier: userRowTyped.plan_tier ?? "free",
+          concurrencyOverride: userRowTyped.concurrency_override ?? null,
         };
         sessions.set(userId, newSession);
         startSubscriptionRefresh(userId, newSession);
