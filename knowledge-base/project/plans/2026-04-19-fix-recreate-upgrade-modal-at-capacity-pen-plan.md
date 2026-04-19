@@ -1,6 +1,6 @@
 # Recreate `upgrade-modal-at-capacity.pen` under canonical `product/design/billing/`
 
-**Issue:** #2636 (currently CLOSED — auto-closed prematurely by PR #2630)
+**Issue:** #2636 (was CLOSED — auto-closed prematurely by PR #2630; reopened in Phase 1 of this plan)
 **Branch:** `feat-one-shot-recreate-upgrade-modal-pen`
 **Parent ref:** #1162 (plan-based agent concurrency enforcement)
 **PR #2630 merge commit:** `2dac1c05ce4f8dac05002e1fdada052e67bf01ce` (merged 2026-04-19T10:56:11Z, resolved via `gh api repos/:owner/:repo/pulls/2630`)
@@ -30,8 +30,8 @@ Issue #2636 was created to track recreation of the `upgrade-modal-at-capacity.pe
 Current state (verified 2026-04-19):
 
 - Deprecated path `knowledge-base/design/upgrade-modal-at-capacity.pen` — GONE (the entire `knowledge-base/design/` top-level directory was removed in #566).
-- Canonical path `knowledge-base/product/design/{domain}/upgrade-modal-at-capacity.pen` — DOES NOT EXIST anywhere under `knowledge-base/product/design/`.
-- Issue #2636 — state `CLOSED`.
+- Canonical path `knowledge-base/product/design/billing/upgrade-modal-at-capacity.pen` — exists as a 0-byte placeholder scaffolded in `b4590aa5` (per `cq-before-calling-mcp-pencil-open-document`); Phase 2 must overwrite it with the real wireframe, not create from scratch.
+- Issue #2636 — was `CLOSED` at plan-write time; reopened in Phase 1 step 4 before Phase 2 runs.
 
 This plan reopens #2636, recreates the `.pen` file at the canonical path using `ux-design-lead`, verifies the post-save size gate enforced in `plugins/soleur/agents/product/design/ux-design-lead.md:55`, and closes the issue properly.
 
@@ -81,7 +81,7 @@ Fail-fast checks. Do NOT skip to Phase 2 even if these look trivial — the Phas
 2. **Refresh installed adapter** — `bash plugins/soleur/skills/pencil-setup/scripts/check_deps.sh --check-adapter-drift --auto`. Re-run without `--auto` and assert output starts with `OK`. Non-OK exit is a hard stop. The `--auto` path invokes `copy_adapter.sh` which syncs **5 files** per its `ADAPTER_FILES=(…)` array — verified by reading the script. Do NOT substitute a one-file sha check.
 3. **Verify Pencil MCP connection** — `claude mcp list | grep -E '^pencil:.*Connected'` must return one line. If missing, run `skill: soleur:pencil-setup`. Use plain `claude mcp list`; the `-s user` variant no longer works (verified in `plugins/soleur/skills/pencil-setup/SKILL.md` with a `<!-- verified: 2026-04-19 -->` annotation).
 4. **Reopen #2636** — `gh issue reopen 2636 --comment "Reopening: PR #2630 auto-closed this via its body but the canonical .pen was never created. See knowledge-base/project/plans/2026-04-19-fix-recreate-upgrade-modal-at-capacity-pen-plan.md."`
-5. **Confirm canonical target path does not exist** — `test ! -e knowledge-base/product/design/billing/upgrade-modal-at-capacity.pen` must succeed. If the file already exists with size > 0, the plan's premise is wrong — stop and reassess.
+5. **Confirm canonical target is empty or missing** — `[ ! -e knowledge-base/product/design/billing/upgrade-modal-at-capacity.pen ] || [ "$(stat -c %s knowledge-base/product/design/billing/upgrade-modal-at-capacity.pen)" -eq 0 ]`. The path may already hold a 0-byte placeholder from `b4590aa5` (scaffolded for `cq-before-calling-mcp-pencil-open-document`) — that is expected. If the file exists with size > 0, the plan's premise is wrong — stop and reassess.
 
 Exit criterion: all 5 checks pass. Commit nothing yet — Phase 1 is read-only state verification.
 
@@ -116,10 +116,15 @@ After save, the post-save HARD GATE in your own instructions
 until that check passes. If size is 0, surface the verbatim adapter error —
 do NOT fabricate a "headless stub" narrative.
 
-Also export high-res screenshots to
-knowledge-base/product/design/billing/screenshots/upgrade-modal-at-capacity/
-using export_nodes with scale: 3, format: "png", then rename node-ID files
-to kebab-case (e.g., 01-at-capacity-state.png).
+Also export high-res screenshots as direct children of
+knowledge-base/product/design/billing/screenshots/ (NOT a nested subfolder —
+.gitignore rule 57 only unignores `screenshots/*.png` direct children, not
+nested paths). Use export_nodes with scale: 3, format: "png", then rename
+node-ID files to feature-prefixed kebab-case continuing the existing 01-04
+numbering (e.g., 05-upgrade-modal-at-capacity-solo.png,
+06-upgrade-modal-at-capacity-isolated.png,
+07-upgrade-modal-at-capacity-startup.png) — matches sibling design folders'
+flat convention.
 ```
 
 Expected outputs on success:
