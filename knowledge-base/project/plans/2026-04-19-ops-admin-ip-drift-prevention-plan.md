@@ -8,6 +8,85 @@ issue: 2681
 
 # ops: prevent admin-IP drift from causing prod SSH lockouts
 
+## Enhancement Summary
+
+**Deepened on:** 2026-04-19
+**Sections enhanced:** 5 (Overview, Proposed Solution Phase 2, Risks & Mitigations,
+Hypotheses, Alternative Approaches Considered).
+**Research sources:** Cloudflare One docs (SSH via cloudflared, Access for
+Infrastructure), ipify official API docs + SANS ISC analysis of bot-used IP
+APIs, Doppler CLI docs (`setting-secrets`, `--silent` flag for log safety),
+Hetzner Cloud firewall Terraform provider registry, HashiCorp drift-detection
+docs + Build5Nines "Stop Hard-Coding Local IP" pattern, institutional learning
+`2026-03-19-ci-ssh-deploy-firewall-hidden-dependency.md` (same root class:
+firewall drift != auth failure).
+
+### Key Improvements
+
+1. **Confirmed `terraform apply -target=...` is an anti-pattern at scale but
+   acceptable as a narrow operator-initiated recovery path** when the goal is
+   "restore access fast." Adjusted the skill's emitted command to fall back
+   to a full `terraform apply` with an explicit warning that `-target` skips
+   dependency graph resolution. Cited HashiCorp's position that `-target`
+   should be "rare and explicit, not habitual." The skill will emit the full
+   apply by default and surface `-target=hcloud_firewall.web` only if the
+   operator passes `--fast` (scoped-recovery flag).
+2. **Locked down the public-IP detection step with a three-service fallback**
+   (`ifconfig.me` → `api.ipify.org` → `icanhazip.com`) per SANS ISC best
+   practice and a strict IPv4 regex validator. ipify's basic endpoint has no
+   documented rate limit but the service can return stale or wrong IPs during
+   upstream routing anomalies (documented in the ipify-api issue tracker);
+   cross-validation across two sources is the defensive posture.
+3. **Added `--silent` to every Doppler write** per Doppler's own
+   "setting-secrets" guide to prevent the ADMIN_IPS value (a list of operator
+   IPs -- PII-adjacent) from being captured by log-aggregation services in
+   the skill's execution environment.
+4. **Expanded the Cloudflare Access for SSH deferral with concrete migration
+   scaffolding** (cloudflared client on operator machine, server-side
+   `tunnel.tf` already present per issue context, new `access_application` +
+   `access_policy` resources scoped to SSH, operator identity provider
+   binding). This becomes the skeleton of the deferral issue body instead of
+   a one-liner; re-evaluation criteria tightened to include a cost ceiling
+   ($0 for operator-count under 50 per Cloudflare Zero Trust free tier).
+5. **Added a Drift-Detection Follow-Up tier** between "short-term
+   refresh skill" and "long-term Cloudflare Access": a scheduled GitHub
+   Actions workflow that runs `doppler secrets get ADMIN_IPS` +
+   `hcloud firewall describe` daily, diffs them, and opens an issue on
+   mismatch. Cheap, additive, and catches the class where operator edits
+   Doppler but forgets `terraform apply` (or vice versa).
+
+### New Considerations Discovered
+
+- **Institutional precedent**: learning
+  `2026-03-19-ci-ssh-deploy-firewall-hidden-dependency.md` documents the
+  *exact same root class* -- a CI-runner version of this incident. That
+  learning's "Key Insight" paragraph reads like a lede for this plan:
+  *"Always verify network connectivity independently from authentication --
+  they are separate failure modes that produce different errors at different
+  stages of the SSH handshake."* This is doubly evidence the workflow gate
+  (plan/deepen-plan network-outage checklist) is load-bearing: the class has
+  recurred at least twice now.
+- **VPN/WARP caveat**: if the operator is on Cloudflare WARP or a corporate
+  VPN, `ifconfig.me` returns the VPN/WARP egress IP, not the home ISP IP.
+  For the firewall allowlist, the VPN egress IS what the firewall sees --
+  which is the desired value. Document this; do NOT try to detect the
+  "real" home IP. Added to the runbook's Sharp Edges.
+- **Doppler-write audit trail**: Doppler logs every secret mutation with the
+  CLI token's identity. The skill should emit the Doppler dashboard URL for
+  the `prd_terraform` config's audit log after a successful write, so the
+  operator (and any future incident responder) can trace "who added this
+  CIDR and when" without relying on memory. Trivial addition, high value.
+- **Fail-closed on detection failure**: if all three IP-detection services
+  fail, the skill MUST exit non-zero without writing. Current plan says
+  "abort with message" -- tightened to explicit exit code 3 so a cron
+  invocation (future scheduled drift check) doesn't silently no-op.
+- **Terraform state pre-check**: before the skill prints the `terraform
+  apply` command, it should also emit a `terraform plan -target=...` command
+  so the operator can see the expected diff first. Belt-and-suspenders: the
+  operator never runs `apply` without seeing `plan`. Trivial, aligns with
+  AGENTS.md `cq-terraform-failed-apply-orphaned-state` (failed applies can
+  orphan state).
+
 ## Overview
 
 On 2026-04-19 operator SSH to `soleur-web-platform` failed silently because the
@@ -246,6 +325,47 @@ recommended steady state.
 
 Ship first so diagnosis-during-outage has a page to land on.
 
+### Research Insights (Phase 1)
+
+**Institutional-learning cross-reference:**
+
+`knowledge-base/project/learnings/2026-03-19-ci-ssh-deploy-firewall-hidden-dependency.md`
+documents the same root class from a CI-runner angle -- the GitHub Actions
+deploy failed because Hetzner firewall restricted port 22 to `admin_ips`
+and runners have 5000+ dynamic IPs. That learning's Key Insight reads:
+
+> Always verify network connectivity independently from authentication --
+> they are separate failure modes that produce different errors at different
+> stages of the SSH handshake.
+
+The runbook's Diagnostic Decision Tree (firewall BEFORE sshd/fail2ban)
+operationalizes exactly this insight. **The new runbook should link to that
+learning so a future session following the same-root-class paper trail can
+find both artifacts from either direction.**
+
+**Runbook-design best practice (runbook interlinking):**
+
+The existing `ssh-fail2ban-unban.md` has no cross-reference to the
+admin-IP-drift failure mode today. Add a "See also" line at the top of
+`ssh-fail2ban-unban.md` pointing to `admin-ip-drift.md` as part of this PR.
+Bidirectional pointer so an incident responder lands on the right runbook
+by symptom, not by memory.
+
+**Drift-detection pattern (for the deferred scheduled check):**
+
+The Build5Nines "Stop Hard-Coding Local IP" guidance plus HashiCorp's
+[drift detection tutorial](https://developer.hashicorp.com/terraform/tutorials/cloud/drift-detection)
+together recommend treating "dynamic IP" as *execution context, not
+configuration*. The scheduled drift check (deferred, see `## Deferral
+Tracking`) is the institutional memory that enforces this: "if the source
+of truth (Doppler) drifts from the realized state (firewall), we see it
+within 24 hours, not when an operator gets locked out."
+
+**References:**
+
+- [Institutional learning: CI SSH deploy firewall hidden dependency](../learnings/2026-03-19-ci-ssh-deploy-firewall-hidden-dependency.md)
+- [HashiCorp -- Drift and policy](https://developer.hashicorp.com/terraform/tutorials/cloud/drift-and-policy)
+
 ### Phase 2: Operator skill `admin-ip-refresh`
 
 **Location:** `plugins/soleur/skills/admin-ip-refresh/SKILL.md`
@@ -331,10 +451,117 @@ verification gate):**
 - `doppler secrets get ADMIN_IPS -p soleur -c prd_terraform --plain` --
   verified via `doppler secrets get --help` (session verification: `--plain`,
   `-p`, `-c` all present).
-- `doppler secrets set ADMIN_IPS -p soleur -c prd_terraform` -- verified via
-  `doppler secrets set --help` (stdin form documented in-help).
+- `doppler secrets set ADMIN_IPS -p soleur -c prd_terraform --silent` --
+  verified via `doppler secrets set --help` (stdin form documented in-help);
+  `--silent` per Doppler's "setting-secrets" guide (prevents value echo into
+  captured stdout).
 - `hcloud firewall describe soleur-web-platform` -- verified via `hcloud
   firewall describe --help`.
+
+### Research Insights (Phase 2)
+
+**Best Practices for public-IP detection in shell scripts (2026):**
+
+- **Multiple-service strategy is the 2026 standard.** No single service is
+  authoritative; ipify, ifconfig.me, and icanhazip.com all have occasional
+  upstream routing anomalies or return non-IPv4 content during outages. Query
+  the primary, validate the response shape, fall back to the secondary on
+  parse-failure or HTTP non-200. SANS ISC has documented bot ecosystems that
+  rotate between these exact three endpoints for robustness reasons --
+  adopting the same pattern here is defense in depth.
+- **Strict timeouts** (`curl --connect-timeout 5 --max-time 10`) prevent the
+  skill from hanging on a degraded service. Retry-up-to-3 with 2-second
+  backoff, per cited 2026 guidance.
+- **IPv4 validation regex** after the response body: reject anything that
+  doesn't match `^([0-9]{1,3}\.){3}[0-9]{1,3}$` and then octet-range-check
+  each group `<= 255`. The validation itself defends against the ipify
+  `Issue #19` class (service returns HTML error page that happens to contain
+  digit substrings).
+- **ipify rate limit (basic endpoint): none documented.** The skill is
+  operator-initiated (expected ~1 invocation/week), well below any implicit
+  infrastructure cap.
+
+**Implementation sketch (Phase 2 detect step):**
+
+```bash
+detect_egress_ip() {
+  local services=(
+    "https://ifconfig.me/ip"
+    "https://api.ipify.org"
+    "https://icanhazip.com"
+  )
+  for svc in "${services[@]}"; do
+    local ip
+    ip="$(curl -fsS --connect-timeout 5 --max-time 10 "$svc" 2>/dev/null \
+         | tr -d '[:space:]')" || continue
+    if [[ "$ip" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; then
+      # Octet-range check
+      IFS=. read -r a b c d <<<"$ip"
+      if (( a<=255 && b<=255 && c<=255 && d<=255 )); then
+        echo "$ip"; return 0
+      fi
+    fi
+  done
+  return 1
+}
+```
+
+**Best Practices for Doppler CLI secret mutation (2026):**
+
+- **Use `--silent`** on every `doppler secrets set` invocation inside an
+  automated script. Per Doppler's "setting-secrets" guide: this prevents the
+  value from being emitted to stdout, which is the standard hardening against
+  accidental log-aggregator capture. `ADMIN_IPS` is a list of operator IPs
+  -- PII-adjacent per most interpretations.
+- **Prefer stdin over CLI-arg** for the list value. `doppler secrets set
+  ADMIN_IPS --silent < /tmp/admin-ips.json` keeps the value out of process
+  lists (`ps auxf`) and shell history. The skill should write the new list
+  to a temp file, chmod 600, pipe it via `<`, then `shred -u` the temp
+  file on exit.
+- **Verify post-write.** Re-read via `doppler secrets get ADMIN_IPS --plain`
+  and compare byte-for-byte. Doppler's write-after-write consistency is
+  strong (single-writer semantics per secret), but the skill should verify
+  anyway -- the only cost is one API call.
+- **Capture the audit-trail URL.** Doppler's dashboard logs every secret
+  mutation. After a successful write, the skill prints
+  `https://dashboard.doppler.com/workplace/projects/soleur/configs/prd_terraform/activity`
+  so the operator (and future responders) have a direct link.
+
+**Best Practices for Terraform narrow-target applies (2026):**
+
+- HashiCorp's position: `-target` is for *recovery and rare cases*, not
+  habitual use. The full dependency graph is skipped; cascading effects (if
+  any) are deferred to the next full apply. See HashiCorp's "Maturing your
+  Terraform workflow" guide -- the Build5Nines "Stop Hard-Coding Local IP"
+  article is the closest-matched pattern for exactly this use case and
+  endorses `-target` as acceptable for admin-IP rotation.
+- **Always emit the full apply alongside.** The skill prints BOTH:
+
+  ```bash
+  # Preferred (full plan, full apply):
+  cd apps/web-platform/infra && doppler run ... -- terraform plan
+  cd apps/web-platform/infra && doppler run ... -- terraform apply
+
+  # Fast recovery (only the firewall resource, skips graph):
+  cd apps/web-platform/infra && doppler run ... -- terraform plan -target=hcloud_firewall.web
+  cd apps/web-platform/infra && doppler run ... -- terraform apply -target=hcloud_firewall.web
+  ```
+
+- **`plan` before `apply`.** The skill emits the plan command first and
+  refuses to mark itself "done" until the operator confirms they've reviewed
+  the plan output. AGENTS.md `cq-terraform-failed-apply-orphaned-state`
+  reinforces this -- failed applies orphan tfstate, so seeing the diff before
+  committing is a strong norm.
+
+**References:**
+
+- [Doppler CLI -- Setting Secrets](https://docs.doppler.com/docs/setting-secrets)
+- [Doppler CLI -- Accessing Secrets](https://docs.doppler.com/docs/accessing-secrets)
+- [ipify -- Public IP Address API](https://www.ipify.org/)
+- [SANS ISC -- APIs Used by Bots to Detect Public IP](https://isc.sans.edu/diary/29516)
+- [Hetzner Cloud Provider -- hcloud_firewall](https://registry.terraform.io/providers/hetznercloud/hcloud/latest/docs/resources/firewall)
+- [Build5Nines -- Stop Hard-Coding Local IP in Terraform](https://build5nines.com/stop-hard-coding-local-ip-in-terraform-lock-down-firewalls-dynamically/)
+- [HashiCorp -- Terraform drift detection](https://developer.hashicorp.com/terraform/tutorials/cloud/drift-detection)
 
 ### Phase 3: Plan/deepen-plan workflow gate
 
@@ -417,6 +644,61 @@ Rule stays under 600 bytes (AGENTS.md budget cap per
 `cq-agents-md-why-single-line`). The `**Why:**` is one sentence pointing to
 the issue number.
 
+### Research Insights (Phase 3 -- Workflow Gate)
+
+**Why a checklist, not an agent:**
+
+A full research agent spawn for every SSH-symptom plan would cost ~10-30
+seconds per plan and introduce variance (agent might or might not catch the
+firewall question). A referenced checklist in the plan skill's context is
+deterministic, costs one file read, and makes the firewall question the
+FIRST question by position in the prompt. Choosing the checklist form over
+an agent is a deliberate reliability-over-cleverness trade.
+
+**Layer ordering (L3 → L7) as the organizing principle:**
+
+The checklist enforces the OSI-ordered diagnostic sequence (L3 firewall /
+routing → L4 TCP state → L7 application). This mirrors the actual packet
+journey -- a layer that drops a packet is invisible to layers above, so
+starting with the higher layer (as issue #2654's plan did) produces
+phantom hypotheses. The 2026-03-19 learning documents the same inversion
+in a CI context. Codifying the L3→L7 discipline in the plan skill makes
+this hard to get wrong.
+
+**Regex trigger vs. always-run:**
+
+The regex-matched trigger (SSH|connection reset|kex|firewall|unreachable|
+timeout|502|503|504|handshake|EHOSTUNREACH|ECONNRESET) is the right
+granularity: applies to any network-outage-like symptom without forcing
+every feature-plan to include an L3 section. If the regex produces false
+positives, the checklist is additive (plan still ships with a small N/A
+section); false negatives degrade gracefully (plan-review agents catch
+missed cases downstream). Both failure modes are cheap.
+
+**AGENTS.md rule size budget:**
+
+Rule draft under 600 bytes (AGENTS.md `cq-agents-md-why-single-line` cap):
+
+```text
+When a plan addresses an SSH/network connectivity symptom (reset, timeout,
+unreachable, handshake failure), it MUST verify the L3 firewall allowlist
+against current client egress IP BEFORE proposing sshd/fail2ban/service-
+layer fixes [id: hr-ssh-diagnosis-verify-firewall]. `hcloud firewall
+describe` + `curl -s https://ifconfig.me` is the load-bearing diagnostic.
+Runbook: `knowledge-base/engineering/ops/runbooks/admin-ip-drift.md`.
+**Why:** #2681 -- issue #2654 plan listed three sshd-layer hypotheses
+without verifying firewall; real cause was admin-IP drift.
+```
+
+Byte count (wc -c on just the rule): ~540 bytes. Under the 600-byte cap.
+Compound step 8 budget check (< 100 rules total, < 40000 file bytes) will
+re-verify at ship time.
+
+**References:**
+
+- [HashiCorp -- Opinionated Terraform best practices](https://www.hashicorp.com/en/resources/opinionated-terraform-best-practices-and-anti-patterns)
+- [Institutional learning: CI SSH firewall hidden dependency](../learnings/2026-03-19-ci-ssh-deploy-firewall-hidden-dependency.md)
+
 ### Phase 4: Learning entry
 
 **`knowledge-base/project/learnings/bug-fixes/2026-04-19-admin-ip-drift-misdiagnosed-as-fail2ban.md`:**
@@ -457,6 +739,12 @@ Per the new network-outage checklist (dogfooding the rule this PR ships):
 | Planning gate regex false negatives (feature description uses a synonym the regex doesn't match, e.g., "unable to SSH"). | Regex includes `SSH` (case-insensitive). Longer-term: the gate is a soft prompt; plan-review agents will catch missed cases. Iterate. |
 | Cloudflare Access migration deferral invisible. | Filed as a separate tracking issue (see `## Deferral Tracking`) with re-evaluation criteria (e.g., "when `ADMIN_IPS` grows past 10 entries OR when second drift-caused incident occurs"). |
 | Runbook prescribes commands that don't exist / wrong flags. | All four CLI forms verified at plan time (`curl`, `doppler secrets get`, `doppler secrets set`, `hcloud firewall describe`) via `--help`. See `## Acceptance Criteria` for pre-merge verification. |
+| Single-IP-detection service outage (ipify temporary 5xx, ifconfig.me DNS hiccup). | Three-service fallback (`ifconfig.me` → `api.ipify.org` → `icanhazip.com`) with strict timeouts (`--connect-timeout 5 --max-time 10`). Skill aborts only if ALL three fail; exits non-zero so a future scheduled invocation doesn't silently no-op. |
+| IP-detection service returns HTML error page with embedded digits that passes a naive grep. | Strict IPv4 regex validation (`^([0-9]{1,3}\.){3}[0-9]{1,3}$`) PLUS octet-range check (each group ≤ 255) after every curl. See ipify GitHub issue #19 -- "api.ipify.org shows wrong IP" -- for the class this defends against. |
+| Doppler secret value echoed to captured stdout (log aggregator captures `ADMIN_IPS` value). | `doppler secrets set ... --silent` flag per Doppler's official setting-secrets guide. Stdin-piped value (not CLI arg) keeps the list out of `ps auxf` and shell history. Temp file used for piping is `chmod 600` then `shred -u` on exit. |
+| `terraform apply -target=...` skips dependency graph, could leave state inconsistent. | Skill emits BOTH the narrow-target AND full-apply forms. Default message recommends the full apply; `-target` surfaced only under `--fast` flag for recovery. Cites HashiCorp position that `-target` is for rare/recovery cases, not habitual. Also emits `terraform plan` first -- operator confirms diff before apply. |
+| Doppler write succeeds but operator forgets the `terraform apply` step (silent drift). | The deferred scheduled drift-check workflow (see `## Deferral Tracking` item 2) catches this within 24 hours. Until that ships, the skill explicitly prompts at exit: "Did you run terraform apply? [yes / no / skip]" -- a "no" answer writes a reminder to the operator's terminal and records the gap. |
+| Audit trail invisibility -- "who added CIDR X.X.X.X, and when?" | Skill prints the Doppler dashboard activity URL on successful write: `https://dashboard.doppler.com/workplace/projects/soleur/configs/prd_terraform/activity`. Doppler logs every mutation by token identity. |
 
 ## Acceptance Criteria
 
@@ -523,20 +811,44 @@ Items explicitly out of scope of this PR, to be filed as separate GitHub
 issues per AGENTS.md `wg-when-deferring-a-capability-create-a`:
 
 1. **Cloudflare Access for SSH (zero-trust tunnel, identity-bound).** Replaces
-   IP allow-listing. Milestone: "Post-MVP / Later" (promote when list length
-   > 10, or second drift-caused incident). Re-evaluation criteria: operator
-   cost of maintaining `ADMIN_IPS` exceeds 1 hour/month OR second incident.
-   File as `ops: migrate prod SSH from IP allow-list to Cloudflare Access`.
-2. **Auto-prune `ADMIN_IPS` entries older than 90 days.** Requires timestamp
+   IP allow-listing entirely. Milestone: "Post-MVP / Later". Re-evaluation
+   criteria: operator cost of maintaining `ADMIN_IPS` exceeds 1 hour/month OR
+   second drift-caused incident OR `ADMIN_IPS` list length > 10.
+
+   **Migration scaffolding (for the deferred-issue body):**
+   - Operator-side: install cloudflared on each operator machine, configure
+     `cloudflared access ssh --hostname ssh.soleur.ai` per [Cloudflare One
+     docs](https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/use-cases/ssh/ssh-cloudflared-authentication/).
+   - Server-side: `tunnel.tf` already provisions the Cloudflare Tunnel for
+     the deploy webhook; add a new `ingress` rule for `ssh://localhost:22`
+     scoped to a new hostname (e.g., `ssh.soleur.ai`). The existing tunnel
+     is reusable -- no new tunnel resource needed.
+   - Access policy: new `cloudflare_access_application` +
+     `cloudflare_access_policy` resources, identity-provider-backed (Google
+     Workspace or GitHub SSO, same IdP as the deploy-webhook flow).
+   - Firewall: after migration validates, `hcloud_firewall.web` port-22 rule
+     narrows to the Cloudflare Tunnel origin (server's loopback) -- the
+     public port 22 closes entirely to the internet.
+   - Cost: Cloudflare Zero Trust free tier covers up to 50 users. Operator
+     count is 1; headroom is enormous.
+   - Risk: new operator dependency on cloudflared client; runbook needed for
+     "cloudflared daemon not running -> can't SSH" failure mode.
+   - File as `ops: migrate prod SSH from IP allow-list to Cloudflare Access
+     for Infrastructure`.
+2. **Scheduled ADMIN_IPS-vs-firewall drift check (GitHub Actions cron).** Run
+   daily via `.github/workflows/scheduled-admin-ip-drift-check.yml`: fetch
+   `doppler secrets get ADMIN_IPS` and `hcloud firewall describe` via their
+   respective CLIs, diff, open an issue on mismatch. Cheap, additive, catches
+   the class where operator edits one source but forgets the other. This is
+   the "institutional memory" layer beyond the on-demand refresh skill.
+   Re-evaluation criteria: implement immediately after this PR lands (it's
+   next-bite-sized scope, but out of this PR to keep blast radius small).
+   File as `ops: scheduled ADMIN_IPS-vs-firewall drift detection workflow`.
+3. **Auto-prune `ADMIN_IPS` entries older than 90 days.** Requires timestamp
    metadata on each entry, which Doppler's flat-secret model doesn't support
    natively. Could store as JSON array of `{cidr, added_at}` objects and
    sub-parse -- deferred. Re-evaluation criteria: list length > 10 twice in 6
    months. File as `ops: auto-expire stale entries in ADMIN_IPS`.
-3. **`/soleur:admin-ip-refresh --verify` as a scheduled health check.** Run on
-   a cron (GitHub Actions) and emit an issue if `hcloud firewall describe`
-   drifts from Doppler `ADMIN_IPS`. Out of scope here (the skill is operator-
-   initiated, not scheduled). File as `ops: scheduled ADMIN_IPS-vs-firewall
-   drift check`.
 
 Each deferral creates a GitHub issue at implementation time (not at plan
 time) -- plan review may adjust this list before ship.
