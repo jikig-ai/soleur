@@ -87,6 +87,15 @@ hygiene gate, not a code-bug remediation.
 5. **AGENTS.md `wg-when-fixing-a-workflow-gates-detection`** — retroactively apply the
    gate to the case that exposed it. This PR closes #2368 itself via `Closes #2368` in
    the PR body.
+6. **Subshell counter loss when extending a workflow.** The new `close-orphans` job
+   faithfully copied the `| while` subshell pattern from `check-alerts`, propagating a
+   pre-existing telemetry bug — the `CREATED`/`SKIPPED`/`CLOSED`/`KEPT` counters always
+   print `0` because the loop body runs in a subshell. Multi-agent review caught it;
+   fix is `done < <(jq ... | ...)` process substitution. Both jobs were retroactively
+   fixed in the same PR. **Generalization:** when extending a workflow file by
+   duplicating an existing job's pattern, scan the source for known-buggy idioms before
+   duplicating. See `2026-04-19-markdownlint-fix-mangles-issue-ref-at-line-start.md`
+   for sibling session-error notes from this PR.
 
 ## Prevention
 
