@@ -145,6 +145,21 @@ resource "terraform_data" "fail2ban_tuning" {
     agent = true
   }
 
+  # Ensure fail2ban is installed before dropping the jail.d override. The
+  # existing server is an import-era artifact -- cloud-init's `packages:`
+  # step never re-ran after import (ignore_changes = [user_data]), and the
+  # initial run appears to have failed silently (#2680). `dpkg -s` makes this
+  # idempotent: on servers where fail2ban is already installed (fresh
+  # cloud-init provisioning) the install branch is skipped.
+  provisioner "remote-exec" {
+    inline = [
+      "dpkg -s fail2ban >/dev/null 2>&1 || { export DEBIAN_FRONTEND=noninteractive; apt-get update -qq && apt-get install -y -qq fail2ban; }",
+    ]
+  }
+
+  # The `remote-exec` above ensures the package is installed first. On the
+  # existing server (which was imported with ignore_changes = [user_data])
+  # cloud-init's packages: step never re-ran, so fail2ban may be missing (#2680).
   provisioner "file" {
     source      = "${path.module}/fail2ban-sshd.local"
     destination = "/etc/fail2ban/jail.d/soleur-sshd.local"

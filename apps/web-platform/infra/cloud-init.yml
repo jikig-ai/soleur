@@ -207,6 +207,32 @@ write_files:
     permissions: '0644'
 
 runcmd:
+  # Audit that cloud-init's packages: stage actually installed every declared
+  # package. Cloud-init can silently drop package installs on transient
+  # failures (apt lock contention, network error, "No space left on device"
+  # during first boot) without failing the run. If any declared package is
+  # missing after packages:, fail loudly so the operator sees the root cause
+  # in /var/log/cloud-init-output.log (#2680). Hardcoded list MUST match the
+  # `packages:` block at the top of this file.
+  - |
+    set -e
+    missing=""
+    for pkg in curl fail2ban jq; do
+      dpkg -s "$pkg" >/dev/null 2>&1 || missing="$missing $pkg"
+    done
+    if [ -n "$missing" ]; then
+      echo "FATAL: cloud-init packages: stage did not install:$missing" >&2
+      # One-shot self-heal for transient apt failures. If this also fails we
+      # exit non-zero so cloud-init marks the boot failed and the operator
+      # investigates via the Hetzner console.
+      export DEBIAN_FRONTEND=noninteractive
+      apt-get update -qq
+      apt-get install -y -qq $missing
+      for pkg in $missing; do
+        dpkg -s "$pkg" >/dev/null 2>&1 || { echo "FATAL: $pkg still missing after recovery install" >&2; exit 1; }
+      done
+    fi
+
   # Apply SSH hardening immediately (drop-in written by write_files above)
   - systemctl restart sshd
 
