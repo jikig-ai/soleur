@@ -109,7 +109,7 @@ Specifically watch for:
 - [ ] When adding retry-on-flake logic, push attempts into an array rather than reassigning a variable
 - [ ] Assert the invariant across every attempt, not just the last one
 - [ ] If the retry exists to force a precondition (tool invocation, network reachability), assert that the precondition WAS met after the retry — refusal is a test failure, not a silent pass
-- [ ] If the test is capability-gated (`describe.runIf(probe)`), ensure CI fails rather than silently skips when the capability is missing (see `probeSkip` fail-loud under CI in the same PR)
+- [ ] If the test is capability-gated (`describe.runIf(probe)`), gate the fail-loud throw on a host-opt-in env var (e.g., `SOLEUR_ISOLATION_TEST_HOST=1`), NOT on generic `CI=true`. Generic CI runners that lack the capability are expected to skip cleanly — the silent-green risk only exists on hosts that claim to support the test class. **Why:** the first ship cycle of PR #2610 universally threw under `CI=true`, and GitHub Actions runners (which have no bwrap) immediately failed the test job. The fix decouples "silent-skip is bad on a capable host" from "running on a generic CI host that cannot support the test."
 
 ## Session Errors
 

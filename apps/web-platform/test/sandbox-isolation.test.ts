@@ -36,10 +36,11 @@ import {
 
 const directProbe = probeSkip("direct");
 const queryProbe = probeSkip("query");
-const fr9OptIn =
-  process.env.CI === "true" ||
-  process.env.CI === "1" ||
-  process.env.ANTHROPIC_ISOLATION_TEST_OK === "1";
+// FR9 reads ~/.claude/projects/*.jsonl excerpts and sends them to the Anthropic
+// API. On a dev workstation, historical transcripts could leak if isolation
+// regresses. Require explicit opt-in rather than inferring from CI=true —
+// generic CI doesn't imply "safe to exfiltrate session files".
+const fr9OptIn = process.env.ANTHROPIC_ISOLATION_TEST_OK === "1";
 
 describe.runIf(!directProbe.skip)("sandbox-isolation: direct bwrap (tier 4)", () => {
   const pairs: WorkspacePair[] = [];
