@@ -100,7 +100,7 @@ permalink: about/index.html
           "name": "When was Soleur founded?",
           "acceptedAnswer": {
             "@type": "Answer",
-            "text": "Soleur was founded in early 2026. The platform launched as an open-source Claude Code extension and has grown to {{ stats.agents }} AI agents across {{ stats.departments }} business departments."
+            "text": {{ ("Soleur was founded in early 2026. The platform launched as an open-source Claude Code extension and has grown to " + stats.agents + " AI agents across " + stats.departments + " business departments.") | dump | safe }}
           }
         },
         {
@@ -108,7 +108,7 @@ permalink: about/index.html
           "name": "What does Soleur do?",
           "acceptedAnswer": {
             "@type": "Answer",
-            "text": "Soleur deploys AI agents across {{ stats.departments }} business departments — engineering, marketing, legal, finance, operations, product, sales, and support — giving a single founder the operational capacity of a full organization. Every agent shares a compounding knowledge base, so your marketing agent knows what your legal agent decided. Your expertise stays in the loop: agents provide drafts, you make the final call."
+            "text": {{ ("Soleur deploys AI agents across " + stats.departments + " business departments — engineering, marketing, legal, finance, operations, product, sales, and support — giving a single founder the operational capacity of a full organization. Every agent shares a compounding knowledge base, so your marketing agent knows what your legal agent decided. Your expertise stays in the loop: agents provide drafts, you make the final call.") | dump | safe }}
           }
         },
         {
@@ -132,26 +132,27 @@ permalink: about/index.html
     </script>
 
     <script type="application/ld+json">
+    {# All string interpolations in this JSON-LD block MUST use | dump | safe — see #2609 #}
     {
       "@context": "https://schema.org",
       "@type": "ProfilePage",
-      "name": "{{ title }}",
-      "url": "{{ site.url }}/about/",
+      "name": {{ title | dump | safe }},
+      "url": {{ (site.url + "/about/") | dump | safe }},
       "mainEntity": {
         "@type": "Person",
         "name": "Jean Deruelle",
-        "url": "{{ site.url }}/about/",
+        "url": {{ (site.url + "/about/") | dump | safe }},
         "jobTitle": "Founder",
         "worksFor": {
           "@type": "Organization",
-          "name": "{{ site.name }}",
-          "url": "{{ site.url }}"
+          "name": {{ site.name | dump | safe }},
+          "url": {{ site.url | dump | safe }}
         },
         "sameAs": [
-          "{{ site.x }}",
-          "{{ site.linkedin }}",
-          "{{ site.github }}",
-          "{{ site.bluesky }}"
+          {{ site.x | dump | safe }},
+          {{ site.linkedin | dump | safe }},
+          {{ site.github | dump | safe }},
+          {{ site.bluesky | dump | safe }}
         ]
       }
     }

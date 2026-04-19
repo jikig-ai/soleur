@@ -209,7 +209,7 @@ permalink: vision/
           "name": "What is the Soleur thesis?",
           "acceptedAnswer": {
             "@type": "Answer",
-            "text": "The first billion-dollar company run by one person is an engineering problem, not a fantasy. Soleur solves it by deploying a full AI organization — {{ stats.agents }} agents across {{ stats.departments }} departments — that gives a single founder the operational capacity of a large company."
+            "text": {{ ("The first billion-dollar company run by one person is an engineering problem, not a fantasy. Soleur solves it by deploying a full AI organization — " + stats.agents + " agents across " + stats.departments + " departments — that gives a single founder the operational capacity of a large company.") | dump | safe }}
           }
         },
         {

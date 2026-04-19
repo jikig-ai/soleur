@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeAll, afterAll } from "bun:test";
-import { mkdtempSync, rmSync, readFileSync } from "fs";
+import { mkdtempSync, rmSync, readFileSync, readdirSync, statSync } from "fs";
 import { tmpdir } from "os";
 import { join, resolve } from "path";
 
@@ -83,21 +83,36 @@ describe("JSON-LD escaping (#2609)", () => {
     }
   });
 
-  test("every JSON-LD interpolation in source templates uses | dump | safe", () => {
+  test("every JSON-LD interpolation in all docs templates uses | dump | safe", () => {
     const blockRe = /<script type="application\/ld\+json">([\s\S]*?)<\/script>/g;
-    const sources = [
-      resolve(REPO_ROOT, "plugins/soleur/docs/_includes/base.njk"),
-      resolve(REPO_ROOT, "plugins/soleur/docs/_includes/blog-post.njk"),
-    ];
+    const sources = walkNjkFiles(resolve(REPO_ROOT, "plugins/soleur/docs"));
+    let totalBlocks = 0;
     for (const path of sources) {
       const src = readFileSync(path, "utf8");
       for (const blockMatch of src.matchAll(blockRe)) {
+        totalBlocks++;
         const body = blockMatch[1];
         const interps = [...body.matchAll(/\{\{[^}]*\}\}/g)].map((m) => m[0]);
         for (const interp of interps) {
-          expect(interp).toMatch(/\|\s*dump\s*\|\s*safe/);
+          expect(interp, `${path} interpolation ${interp}`).toMatch(
+            /\|\s*dump\s*\|\s*safe/,
+          );
         }
       }
     }
+    // Sanity: glob must find at least the two known templates, else the
+    // guard silently passes by scanning zero files.
+    expect(totalBlocks).toBeGreaterThanOrEqual(2);
   });
 });
+
+function walkNjkFiles(dir: string): string[] {
+  const out: string[] = [];
+  for (const entry of readdirSync(dir)) {
+    const p = join(dir, entry);
+    const s = statSync(p);
+    if (s.isDirectory()) out.push(...walkNjkFiles(p));
+    else if (entry.endsWith(".njk")) out.push(p);
+  }
+  return out;
+}
