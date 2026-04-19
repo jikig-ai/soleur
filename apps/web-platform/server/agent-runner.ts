@@ -749,8 +749,9 @@ resuming an existing thread preserves context for the user.`;
           enabled: true,
           // Refuse to start if sandbox deps (bubblewrap, socat) are missing.
           // Without this flag, the SDK silently runs unsandboxed on dependency
-          // drift (per @anthropic-ai/claude-agent-sdk sdk.d.ts:3586) — Tier 4
-          // defense-in-depth disappears with no Sentry signal. See #2634.
+          // drift (per `Options.sandbox.failIfUnavailable` in
+          // @anthropic-ai/claude-agent-sdk) — Tier 4 defense-in-depth
+          // disappears with no Sentry signal. See #2634.
           failIfUnavailable: true,
           autoAllowBashIfSandboxed: true,
           allowUnsandboxedCommands: false,
@@ -975,7 +976,22 @@ resuming an existing thread preserves context for the user.`;
       sendToClient(userId, { type: "stream_end", leaderId: leaderId ?? "cpo" });
       throw err;
     } else {
-      Sentry.captureException(err);
+      // Sandbox-required-but-unavailable surfaces as a SDK subprocess
+      // process.exit(1) after writing this substring to stderr (see
+      // `Options.sandbox.failIfUnavailable` in @anthropic-ai/claude-agent-sdk
+      // and #2634). The bare captureException below would land an untagged
+      // generic "command failed" event in Sentry — useless for triage. Tag
+      // it so on-call can filter by `feature: "agent-sandbox"`.
+      const errMsg = err instanceof Error ? err.message : String(err);
+      if (errMsg.includes("sandbox required but unavailable")) {
+        reportSilentFallback(err, {
+          feature: "agent-sandbox",
+          op: "sdk-startup",
+          extra: { userId, conversationId, leaderId },
+        });
+      } else {
+        Sentry.captureException(err);
+      }
       log.error({ err, userId, conversationId }, "Session error");
       const message = sanitizeErrorForClient(err);
       sendToClient(userId, {
