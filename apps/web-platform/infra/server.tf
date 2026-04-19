@@ -31,6 +31,7 @@ resource "hcloud_server" "web" {
     ci_deploy_script_b64        = base64encode(file("${path.module}/ci-deploy.sh"))
     cat_deploy_state_script_b64 = base64encode(file("${path.module}/cat-deploy-state.sh"))
     disk_monitor_script_b64     = base64encode(file("${path.module}/disk-monitor.sh"))
+    resource_monitor_script_b64 = base64encode(file("${path.module}/resource-monitor.sh"))
     hooks_json_b64              = base64encode(local.hooks_json)
     tunnel_token                = cloudflare_zero_trust_tunnel_cloudflared.web.tunnel_token
     webhook_deploy_secret       = var.webhook_deploy_secret
@@ -83,6 +84,44 @@ resource "terraform_data" "disk_monitor_install" {
       "systemctl daemon-reload",
       "systemctl enable --now disk-monitor.timer",
       "systemctl list-timers disk-monitor.timer --no-pager",
+    ]
+  }
+}
+
+# Deploy resource-monitor.sh and systemd timer to the existing server.
+# Cloud-init handles new servers; this provisioner handles the existing one
+# (ignore_changes on user_data means cloud-init changes do not apply to it).
+# Shows as "will be created" in CI drift reports -- expected behavior (#1052).
+# Mirror of disk_monitor_install: same connection, trigger hash shape, and
+# file/remote-exec invocation order. Keep both in sync.
+resource "terraform_data" "resource_monitor_install" {
+  triggers_replace = sha256(join(",", [
+    var.resend_api_key,
+    file("${path.module}/resource-monitor.sh"),
+  ]))
+
+  connection {
+    type  = "ssh"
+    host  = hcloud_server.web.ipv4_address
+    user  = "root"
+    agent = true
+  }
+
+  provisioner "file" {
+    source      = "${path.module}/resource-monitor.sh"
+    destination = "/usr/local/bin/resource-monitor.sh"
+  }
+
+  provisioner "remote-exec" {
+    inline = [
+      "chmod +x /usr/local/bin/resource-monitor.sh",
+      "printf 'RESEND_API_KEY=%s\\n' '${var.resend_api_key}' > /etc/default/resource-monitor",
+      "chmod 600 /etc/default/resource-monitor",
+      "cat > /etc/systemd/system/resource-monitor.service << 'UNITEOF'\n[Unit]\nDescription=Host CPU/RAM/session monitor\nAfter=network-online.target\n\n[Service]\nType=oneshot\nExecStart=/usr/local/bin/resource-monitor.sh\nUNITEOF",
+      "cat > /etc/systemd/system/resource-monitor.timer << 'TIMEREOF'\n[Unit]\nDescription=Run resource monitor every 5 minutes\n\n[Timer]\nOnBootSec=5min\nOnUnitActiveSec=5min\nPersistent=true\n\n[Install]\nWantedBy=timers.target\nTIMEREOF",
+      "systemctl daemon-reload",
+      "systemctl enable --now resource-monitor.timer",
+      "systemctl list-timers resource-monitor.timer --no-pager",
     ]
   }
 }
