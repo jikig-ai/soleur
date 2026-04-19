@@ -448,6 +448,18 @@
     align-items: center;
     gap: var(--space-4);
   }
+  .cta-helper {
+    font-size: var(--text-sm);
+    color: var(--color-text-secondary);
+    margin-top: var(--space-3);
+  }
+  .hero-meta {
+    font-size: var(--text-sm);
+    color: var(--color-text-secondary);
+    margin-top: var(--space-3);
+  }
+  .hero-meta a { color: var(--color-text); }
+  .hero-meta-fallback { color: var(--color-text-secondary); margin-left: var(--space-2); }
 
   /* Landing page: Stats strip */
   .landing-stats {
@@ -741,6 +753,17 @@
     padding: var(--space-4) var(--space-6);
   }
   .btn-secondary:hover { border-color: var(--color-accent); color: var(--color-text); }
+  /* Compact size modifier -- scope to .btn so it only applies within the button system. */
+  .btn.btn--sm { padding: var(--space-2) var(--space-4); font-size: 0.875rem; }
+
+  /* Nav CTA slot: right-align and separate from nav links on desktop. */
+  .nav-links .nav-cta-slot { margin-left: auto; }
+  .nav-links .nav-cta-slot .nav-cta { color: var(--color-text-inverse); }
+  .nav-links .nav-cta-slot .nav-cta:hover { color: var(--color-text-inverse); border-bottom-color: transparent; }
+  @media (max-width: 768px) {
+    .nav-links .nav-cta-slot { margin-left: 0; margin-top: var(--space-2); }
+    .nav-links .nav-cta-slot .nav-cta { display: inline-block; text-align: center; }
+  }
 
   /* Badge */
   .badge {
