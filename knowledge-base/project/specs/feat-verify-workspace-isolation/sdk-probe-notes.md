@@ -197,4 +197,44 @@ Phase 2A (as documented in plan and tasks.md) is unchanged in spirit but now has
 
 ---
 
-**Status:** Phase 1 extended. SDK source reverse-engineered; argv structure captured; one ordering question remains. Next concrete step: Phase 2A empirical capture. Handing back for founder review — specifically whether to invest in the empirical capture now, or pivot to Path B (full-stack query() for all cases, sidestepping the argv-ordering question entirely).
+## Empirical capture attempt (2026-04-19) — critical finding
+
+**Setup:** Ran a minimal `query()` under `strace -f -e trace=execve` on the local dev host with bubblewrap 0.11.0 installed at `/usr/bin/bwrap` and `ANTHROPIC_API_KEY` from Doppler `prd` config. Prompt: "Use the Bash tool to execute exactly this command: echo CAPTURE_MARKER_12345." Config included `sandbox.enabled: true`, `permissionMode: "bypassPermissions"`, `allowDangerouslySkipPermissions: true`, and our production-equivalent `sandbox.filesystem.allowWrite/denyRead`.
+
+**Observed result:** The model correctly invoked the Bash tool (`[CAPTURE] tool_use: Bash input={"command":"echo CAPTURE_MARKER_12345",...}`). But the command executed as a plain `/bin/bash -c "... eval 'echo CAPTURE_MARKER_12345' ..."` — **with NO `/usr/bin/bwrap` execve anywhere in the process tree.** The SDK silently executed the tool call without sandboxing.
+
+**Root cause** (surfaced by adding `sandbox.failIfUnavailable: true` to the config — which IS exposed in `sdk.d.ts:3586`):
+
+```text
+Error: sandbox required but unavailable: sandbox.enabled is set but dependencies
+are missing: socat not installed · install missing tools (e.g. apt install
+bubblewrap socat) or run /sandbox for details
+sandbox.failIfUnavailable is set — refusing to start without a working sandbox.
+```
+
+**The SDK requires BOTH `bubblewrap` AND `socat` to invoke bwrap.** Without socat (which is used for network bridge sockets even when network isolation is disabled), the SDK silently falls back to **unsandboxed execution** unless `failIfUnavailable: true` is set. This is the default behavior — our production config does NOT set `failIfUnavailable`, so a production host missing socat would also silently run unsandboxed.
+
+### Critical implications for the MU3 test harness (and production)
+
+1. **`probeSkip("direct")` must check `socat` too**, not just `bwrap`. Without it the tests would falsely pass on hosts that actually don't sandbox.
+2. **Test config MUST set `sandbox.failIfUnavailable: true`.** Without it, the test's assertion (`marker absent from stdout`) would pass on a silently-unsandboxed host — a false negative for the isolation invariant. This is a show-stopper class of test bug.
+3. **Production config should probably also set `failIfUnavailable: true`.** Our `apps/web-platform/server/agent-runner.ts:748-764` does not. If a production server's socat is ever missing (container image drift, dependency removal), the SDK falls back to unsandboxed agent execution silently. **File a follow-up issue: `sec: set sandbox.failIfUnavailable in production agent-runner`.**
+4. **The local dev host cannot empirically capture bwrap argv without `sudo apt install socat`.** Founder action: either install socat locally, or capture from inside the production Docker image via `docker run -it <image> strace -f -e trace=execve node capture.mjs`.
+
+### Amended plan posture (for Phase 2A)
+
+Phase 2A empirical capture is now blocked on ONE of:
+
+- **A.** Founder installs socat on this host: `sudo apt install socat`, then re-run the capture script already in place at `apps/web-platform/scripts/capture-bwrap.mjs` (gitignored) under the same strace command.
+- **B.** Run the capture inside the production canary Docker image, which has both deps. Requires `docker` and a built image; ties Phase 2A to a deploy cycle.
+- **C.** Accept the reverse-engineered argv structure (documented above) without empirical confirmation, and add a Phase 3 assertion that the spawned bwrap command produces the expected denial behavior — which would indirectly validate the argv. This defers the tmpfs/bind ordering mystery to empirical test-time rather than pre-implementation-time.
+
+**Regardless of path:** the test harness MUST set `failIfUnavailable: true` AND gate on probed `socat` AND `bwrap`. Add this as a hard requirement to Phase 2B fixture helpers.
+
+### Follow-up issue to file
+
+- **`sec: set sandbox.failIfUnavailable=true in production agent-runner.ts`** — P1, domain/engineering, type/security. Body: silent unsandboxed fallback if socat ever goes missing. Link this note.
+
+---
+
+**Status:** Phase 1 extended again. Empirical capture attempted and blocked on socat. Critical finding: production and tests both need `failIfUnavailable: true`. Three forward paths documented (install socat, capture-in-Docker, accept traced argv). Handing back for founder decision.
