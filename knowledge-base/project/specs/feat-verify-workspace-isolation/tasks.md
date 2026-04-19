@@ -38,7 +38,7 @@ Spike output committed (`5c23ea29`). SDK has no direct tool-invocation API; `byp
 
 ## Phase 5 — Concurrent sandbox (direct spawn)
 
-- [ ] 5.1 FR7 `/proc/<pid>/environ` via `spawnSandboxB` (long-running bwrap child) + `spawnBwrap` cross-read attempt.
+- [x] 5.1 FR7 `/proc/<pid>/environ` via `spawnSandboxB` (long-running bwrap child) + `spawnBwrap` cross-read attempt. (Precondition asserts host /proc/HOSTPID/environ contains sentinel; --unshare-pid isolates sandboxA's view.)
 - [ ] 5.2 FR12 Task subagent — deferred follow-up issue (already planned).
 
 ## Phase 6 — Shared-surface audit (full-stack query())

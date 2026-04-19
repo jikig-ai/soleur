@@ -8,6 +8,7 @@
  * FR12 Task subagent (deferred follow-up). Coverage matrix pinned at EOF.
  */
 
+import { randomBytes } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeAll, describe, expect, test } from "vitest";
@@ -19,6 +20,8 @@ import {
   rescueStaleFixtures,
   seedMarker,
   spawnBwrap,
+  spawnSandboxB,
+  type SandboxBHandle,
   type WorkspacePair,
 } from "./helpers/sandbox-isolation-fixtures";
 
@@ -26,12 +29,19 @@ const directProbe = probeSkip("direct");
 
 describe.runIf(!directProbe.skip)("sandbox-isolation: direct bwrap (tier 4)", () => {
   const pairs: WorkspacePair[] = [];
+  const sandboxes: SandboxBHandle[] = [];
 
   beforeAll(() => {
     rescueStaleFixtures();
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    while (sandboxes.length) {
+      const handle = sandboxes.pop();
+      if (!handle) continue;
+      handle.kill();
+      await handle.waitExit().catch(() => undefined);
+    }
     while (pairs.length) {
       pairs.pop()?.cleanup();
     }
@@ -97,6 +107,46 @@ describe.runIf(!directProbe.skip)("sandbox-isolation: direct bwrap (tier 4)", ()
     expect(result.status).not.toBe(0);
     expect(result.stdout).not.toContain(token);
     expect(result.stderr).toMatch(/No such file|cannot open|Permission denied/);
+  });
+
+  test("FR7: rootA sandbox cannot read /proc/<rootB-pid>/environ (pid namespace isolation)", async () => {
+    const pair = createWorkspacePair();
+    pairs.push(pair);
+    const sentinel = `FR7_SECRET_${randomBytes(8).toString("hex")}`;
+
+    const handle = spawnSandboxB(pair.rootB, {
+      pair,
+      readyTimeoutMs: 5_000,
+      env: { ...process.env, FR7_SECRET: sentinel },
+    });
+    sandboxes.push(handle);
+    await handle.ready;
+    const hostPid = handle.pid;
+
+    // Precondition: on the HOST (outside any sandbox), /proc/<hostPid>/environ
+    // MUST contain the sentinel. If not, the test lacks discriminative power —
+    // sandboxA would appear isolated even though the target data was never there.
+    const hostEnviron = fs.readFileSync(`/proc/${hostPid}/environ`, "utf8");
+    expect(
+      hostEnviron,
+      `precondition: host /proc/${hostPid}/environ must contain sentinel`,
+    ).toContain(sentinel);
+
+    // Cross-read attempt from sandboxA. With --unshare-pid, sandboxA's /proc
+    // reflects sandboxA's own pid namespace — host pid does not exist there.
+    const result = spawnBwrap(
+      pair.rootA,
+      `cat /proc/${hostPid}/environ 2>&1; echo "__EXIT__$?"`,
+      { pair, timeoutMs: 5_000 },
+    );
+    expect(result.setupFailed, `bwrap setup failed: ${result.stderr}`).toBe(false);
+    expect(result.stdout).not.toContain(sentinel);
+    // Must surface a no-such-file or permission-denied signal, otherwise we
+    // somehow read a legitimate /proc/<pid>/environ and got lucky that the
+    // sentinel wasn't there.
+    expect(result.stdout + result.stderr).toMatch(
+      /No such file|cannot open|Permission denied/,
+    );
   });
 
   test("FR5: symlink escape from rootA to rootB/secret.md is blocked by tmpfs overlay", () => {
