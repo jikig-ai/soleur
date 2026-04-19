@@ -19,17 +19,38 @@ vi.mock("@/lib/stripe", () => ({
   getStripe: () => ({
     webhooks: { constructEvent: mockConstructEvent },
   }),
+  invalidateTierMemo: vi.fn(),
+}));
+
+vi.mock("@/lib/stripe-price-tier-map", () => ({
+  getPriceTier: () => "startup",
+  priceIdForTier: () => "price_startup",
 }));
 
 vi.mock("@/lib/supabase/server", () => ({
   createServiceClient: () => ({
     from: () => ({
       update: mockUpdate,
+      select: () => ({
+        eq: () => ({
+          maybeSingle: vi.fn().mockResolvedValue({
+            data: { id: "user-uuid-123", plan_tier: "free", concurrency_override: null, subscription_status: "none" },
+            error: null,
+          }),
+        }),
+      }),
     }),
   }),
 }));
 
-vi.mock("@/server/logger", () => ({ default: mockLogger }));
+vi.mock("@/server/logger", () => ({
+  default: mockLogger,
+  createChildLogger: () => mockLogger,
+}));
+
+vi.mock("@/server/ws-handler", () => ({
+  forceDisconnectForTierChange: vi.fn(() => false),
+}));
 
 // ---------------------------------------------------------------------------
 // Import route handler AFTER mocks

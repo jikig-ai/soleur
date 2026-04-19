@@ -95,6 +95,23 @@ export interface ClientSession {
 import { sessions } from "./session-registry";
 export { sessions };
 
+/**
+ * Force-disconnect a user's WS session with a 4011 TIER_CHANGED preamble.
+ * Called from the Stripe webhook handler when a downgrade reduces the
+ * effective cap below the user's currently-held slot count. No-op if the
+ * user has no active session. The client will reconnect after a 500 ms
+ * delay (see ws-client.ts TIER_CHANGED_RECONNECT_DELAY_MS).
+ */
+export function forceDisconnectForTierChange(
+  userId: string,
+  preamble: { type: "tier_changed"; previousTier?: PlanTier; newTier?: PlanTier },
+): boolean {
+  const session = sessions.get(userId);
+  if (!session || session.ws.readyState !== WebSocket.OPEN) return false;
+  closeWithPreamble(session.ws, WS_CLOSE_CODES.TIER_CHANGED, preamble);
+  return true;
+}
+
 /** Deferred abort timers for disconnected sessions (keyed by userId:conversationId). */
 const pendingDisconnects = new Map<string, ReturnType<typeof setTimeout>>();
 

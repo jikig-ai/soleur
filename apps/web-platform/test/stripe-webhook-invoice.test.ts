@@ -19,17 +19,39 @@ vi.mock("@/lib/stripe", () => ({
   getStripe: () => ({
     webhooks: { constructEvent: mockConstructEvent },
   }),
+  invalidateTierMemo: vi.fn(),
 }));
 
 vi.mock("@/lib/supabase/server", () => ({
   createServiceClient: () => ({
     from: () => ({
       update: mockUpdate,
+      select: () => ({
+        eq: () => ({
+          maybeSingle: vi.fn().mockResolvedValue({
+            data: { id: "user-123", plan_tier: "free", concurrency_override: null, subscription_status: "active" },
+            error: null,
+          }),
+        }),
+      }),
     }),
   }),
 }));
 
-vi.mock("@/server/logger", () => ({ default: mockLogger }));
+vi.mock("@/lib/stripe-price-tier-map", () => ({
+  getPriceTier: () => "free",
+  priceIdForTier: () => null,
+}));
+
+vi.mock("@/server/logger", () => ({
+  default: mockLogger,
+  createChildLogger: () => mockLogger,
+}));
+
+// Avoid pulling in ws-handler's full transitive closure (agent-runner etc.).
+vi.mock("@/server/ws-handler", () => ({
+  forceDisconnectForTierChange: vi.fn(() => false),
+}));
 
 // ---------------------------------------------------------------------------
 // Import route handler AFTER mocks
