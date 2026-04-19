@@ -22,6 +22,11 @@
     { "label": "Vision", "url": "vision/" },
     { "label": "Changelog", "url": "changelog/" }
   ],
+  "primaryCta": {
+    "label": "Reserve access",
+    "url": "pricing/#waitlist",
+    "ariaLabel": "Reserve access to the hosted Soleur platform"
+  },
   "author": {
     "name": "Jean Deruelle",
     "url": "https://soleur.ai/about/",
@@ -33,6 +38,7 @@
       "heading": "Product",
       "links": [
         { "label": "Get Started", "url": "getting-started/" },
+        { "label": "Hosted version (coming soon)", "url": "pricing/#waitlist", "title": "Reserve access — opening in waves to a founding cohort" },
         { "label": "Pricing", "url": "pricing/" },
         { "label": "Agents", "url": "agents/" },
         { "label": "Skills", "url": "skills/" },
