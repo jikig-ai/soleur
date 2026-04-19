@@ -192,9 +192,29 @@ write_files:
     owner: root:root
     permissions: '0644'
 
+  # fail2ban sshd tuning drop-in (issue #2654).
+  # Loads after /etc/fail2ban/jail.d/defaults-debian.conf (alphabetic order).
+  # Caps recidivist bantime at 1h so an operator typo does not snowball into a
+  # multi-hour lockout via bantime.increment escalation. Content injected from
+  # fail2ban-sshd.local via Terraform base64encode(file()).
+  # Runbook for recovery when locked out:
+  #   knowledge-base/engineering/ops/runbooks/ssh-fail2ban-unban.md
+  # Keep in sync with terraform_data.fail2ban_tuning in server.tf.
+  - path: /etc/fail2ban/jail.d/soleur-sshd.local
+    encoding: b64
+    content: ${fail2ban_sshd_local_b64}
+    owner: root:root
+    permissions: '0644'
+
 runcmd:
   # Apply SSH hardening immediately (drop-in written by write_files above)
   - systemctl restart sshd
+
+  # Reload fail2ban so the jail.d/soleur-sshd.local drop-in applies (#2654).
+  # fail2ban is installed via `packages:` above; the service auto-starts on
+  # install with the defaults-debian.conf [sshd] jail enabled. The reload
+  # picks up the bantime.maxtime cap before any login activity is recorded.
+  - systemctl reload fail2ban || systemctl restart fail2ban
 
   # Install Doppler CLI v3.75.3 (for secrets injection) with checksum verification
   - |

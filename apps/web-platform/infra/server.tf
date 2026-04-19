@@ -32,6 +32,7 @@ resource "hcloud_server" "web" {
     cat_deploy_state_script_b64 = base64encode(file("${path.module}/cat-deploy-state.sh"))
     disk_monitor_script_b64     = base64encode(file("${path.module}/disk-monitor.sh"))
     resource_monitor_script_b64 = base64encode(file("${path.module}/resource-monitor.sh"))
+    fail2ban_sshd_local_b64     = base64encode(file("${path.module}/fail2ban-sshd.local"))
     hooks_json_b64              = base64encode(local.hooks_json)
     tunnel_token                = cloudflare_zero_trust_tunnel_cloudflared.web.tunnel_token
     webhook_deploy_secret       = var.webhook_deploy_secret
@@ -122,6 +123,51 @@ resource "terraform_data" "resource_monitor_install" {
       "systemctl daemon-reload",
       "systemctl enable --now resource-monitor.timer",
       "systemctl list-timers resource-monitor.timer --no-pager",
+    ]
+  }
+}
+
+# Deploy fail2ban sshd tuning drop-in to the existing server (issue #2654).
+# Caps bantime.increment recidivism at 1h so an operator typo against
+# AllowUsers does not snowball into a multi-hour (or multi-day) SSH lockout.
+# Cloud-init handles fresh servers; this provisioner handles the existing one
+# (ignore_changes on user_data means cloud-init changes do not apply to it).
+# Source of truth for jail content: fail2ban-sshd.local (sibling file).
+# Shows as "will be created" in CI drift reports -- expected behavior.
+# Runbook for acute lockout recovery: knowledge-base/engineering/ops/runbooks/ssh-fail2ban-unban.md
+resource "terraform_data" "fail2ban_tuning" {
+  triggers_replace = sha256(file("${path.module}/fail2ban-sshd.local"))
+
+  connection {
+    type  = "ssh"
+    host  = hcloud_server.web.ipv4_address
+    user  = "root"
+    agent = true
+  }
+
+  provisioner "file" {
+    source      = "${path.module}/fail2ban-sshd.local"
+    destination = "/etc/fail2ban/jail.d/soleur-sshd.local"
+  }
+
+  provisioner "remote-exec" {
+    inline = [
+      "chown root:root /etc/fail2ban/jail.d/soleur-sshd.local",
+      "chmod 0644 /etc/fail2ban/jail.d/soleur-sshd.local",
+      # Reload picks up jail.d drop-ins without dropping active bans; fall back
+      # to restart if the installed fail2ban version does not support reload of
+      # bantime.* keys (some 0.10.x builds required restart; 1.0.2 on 24.04 is fine).
+      "systemctl reload fail2ban || systemctl restart fail2ban",
+      # Diagnostic dump (informational; printed to CI drift logs).
+      "fail2ban-client -d | grep -A5 '\\[sshd\\]' | head -20 || true",
+      # Positive assertions: if the drop-in did NOT take effect, these values
+      # would still report the defaults-debian.conf values. Asserting the
+      # literal expected values fails the provisioner when the override is
+      # silently ignored (jail.d load-order regression, syntax error swallowed
+      # by reload, etc.). 600s = 10m; 3600s = 1h.
+      "test \"$(fail2ban-client get sshd bantime)\" = '600'",
+      "test \"$(fail2ban-client get sshd maxretry)\" = '5'",
+      "test \"$(fail2ban-client get sshd findtime)\" = '600'",
     ]
   }
 }

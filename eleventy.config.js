@@ -22,6 +22,18 @@ export default function (eleventyConfig) {
     },
   });
 
+  // JSON-LD-safe stringify: JSON.stringify + escape </ and U+2028/U+2029
+  // so that untrusted string values cannot break out of <script type="application/ld+json">
+  // (</ → <\/) or break JSON.parse in older JS runtimes (U+2028/U+2029 are line
+  // terminators in JS source but valid inside JSON strings — escape for parity).
+  // See #2609 and PR-level discussion of dump-filter gap.
+  eleventyConfig.addFilter("jsonLdSafe", (value) =>
+    JSON.stringify(value)
+      .replace(/<\//g, "<\\/")
+      .replace(/\u2028/g, "\\u2028")
+      .replace(/\u2029/g, "\\u2029"),
+  );
+
   // Short date for sitemap lastmod (YYYY-MM-DD)
   eleventyConfig.addFilter("dateToShort", (date) => {
     return new Date(date).toISOString().split("T")[0];

@@ -224,7 +224,7 @@ claude plugin install soleur</code></pre>
           "name": "What is the difference between the cloud platform and self-hosted?",
           "acceptedAnswer": {
             "@type": "Answer",
-            "text": "Both versions ship the same agents and skills. The open source version runs inside Claude Code on your machine -- full access, your data, your compute. The hosted version adds a web dashboard, managed infrastructure, real-time agent orchestration, team collaboration, and priority support. Both access the same {{ stats.agents }} agents and {{ stats.skills }} skills."
+            "text": {{ ("Both versions ship the same agents and skills. The open source version runs inside Claude Code on your machine -- full access, your data, your compute. The hosted version adds a web dashboard, managed infrastructure, real-time agent orchestration, team collaboration, and priority support. Both access the same " + stats.agents + " agents and " + stats.skills + " skills.") | jsonLdSafe | safe }}
           }
         }
       ]
