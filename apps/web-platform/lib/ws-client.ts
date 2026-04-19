@@ -2,7 +2,14 @@
 
 import { useState, useEffect, useReducer, useMemo, useRef, useCallback } from "react";
 import { createClient } from "@/lib/supabase/client";
-import { WS_CLOSE_CODES, type WSMessage, type ConversationContext, type AttachmentRef } from "@/lib/types";
+import {
+  WS_CLOSE_CODES,
+  type WSMessage,
+  type ConversationContext,
+  type AttachmentRef,
+  type ConcurrencyCapHitPreamble,
+  type TierChangedPreamble,
+} from "@/lib/types";
 import type { DomainLeaderId } from "@/server/domain-leaders";
 import { applyStreamEvent, applyTimeout, type ChatMessage, type StreamEventResult } from "@/lib/chat-state-machine";
 
@@ -71,6 +78,7 @@ export const NON_TRANSIENT_CLOSE_CODES: Record<number, { target?: string; reason
   [WS_CLOSE_CODES.INTERNAL_ERROR]: { reason: "Server error" },
   [WS_CLOSE_CODES.RATE_LIMITED]: { reason: "Too many requests. Please try again later." },
   [WS_CLOSE_CODES.IDLE_TIMEOUT]: { reason: "Session expired due to inactivity" },
+  [WS_CLOSE_CODES.CONCURRENCY_CAP]: { reason: "Concurrent-conversation limit reached" },
 };
 
 /** Combined chat state: messages and activeStreams update atomically via useReducer
@@ -140,6 +148,14 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
   }
 }
 
+/** Reconnect delay (ms) after a 4011 TIER_CHANGED close. Uses manual
+ *  AbortController + setTimeout so vitest fake timers intercept reliably —
+ *  see `cq-abort-signal-timeout-vs-fake-timers`. */
+export const TIER_CHANGED_RECONNECT_DELAY_MS = 500;
+
+/** Global event dispatched on a 4010 close; layout listens and mounts the modal. */
+export const OPEN_UPGRADE_MODAL_EVENT = "soleur:openUpgradeModal";
+
 export function useWebSocket(conversationId: string): UseWebSocketReturn {
   const [chatState, dispatch] = useReducer(chatReducer, null, (): ChatState => ({
     messages: [],
@@ -168,6 +184,10 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
   const backoffRef = useRef(INITIAL_BACKOFF);
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const mountedRef = useRef(true);
+  /** Most-recent close preamble carried on `ws.message` before `ws.close` fires.
+   *  Populated by onmessage for `concurrency_cap_hit` / `tier_changed` types;
+   *  consumed + cleared in onclose. */
+  const pendingPreambleRef = useRef<ConcurrencyCapHitPreamble | TierChangedPreamble | null>(null);
 
   /** Map of per-leader timeout timers for stuck THINKING/TOOL_USE states (STUCK_TIMEOUT_MS) */
   const timeoutTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
@@ -286,13 +306,26 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
     ws.onmessage = (event) => {
       if (!mountedRef.current) return;
 
-      let msg: WSMessage;
+      let parsed: unknown;
       try {
-        msg = JSON.parse(event.data);
+        parsed = JSON.parse(event.data);
       } catch {
         return;
       }
 
+      // Close preambles are sent immediately before ws.close(4010/4011). Cache
+      // the payload so onclose can dispatch the modal with tier/count context.
+      if (parsed && typeof parsed === "object" && "type" in parsed) {
+        const t = (parsed as { type: string }).type;
+        if (t === "concurrency_cap_hit" || t === "tier_changed") {
+          pendingPreambleRef.current = parsed as
+            | ConcurrencyCapHitPreamble
+            | TierChangedPreamble;
+          return;
+        }
+      }
+
+      const msg = parsed as WSMessage;
       switch (msg.type) {
         case "auth_ok": {
           setStatus("connected");
@@ -409,6 +442,32 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
 
     ws.onclose = (event: CloseEvent) => {
       if (!mountedRef.current) return;
+
+      // 4010 CONCURRENCY_CAP — dispatch modal with cached preamble payload, then
+      // fall through to the standard non-transient teardown (no reconnect).
+      if (event.code === WS_CLOSE_CODES.CONCURRENCY_CAP) {
+        const preamble = pendingPreambleRef.current;
+        pendingPreambleRef.current = null;
+        if (typeof window !== "undefined") {
+          window.dispatchEvent(
+            new CustomEvent(OPEN_UPGRADE_MODAL_EVENT, { detail: preamble ?? null }),
+          );
+        }
+      }
+
+      // 4011 TIER_CHANGED — schedule a single reconnect after a fixed delay so
+      // the new plan_tier is re-read from the DB. Use a manual setTimeout (not
+      // AbortSignal.timeout) so vitest fake timers intercept reliably.
+      if (event.code === WS_CLOSE_CODES.TIER_CHANGED) {
+        pendingPreambleRef.current = null;
+        setStatus("reconnecting");
+        backoffRef.current = INITIAL_BACKOFF;
+        if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
+        reconnectTimerRef.current = setTimeout(() => {
+          if (mountedRef.current) connect();
+        }, TIER_CHANGED_RECONNECT_DELAY_MS);
+        return;
+      }
 
       const entry = NON_TRANSIENT_CLOSE_CODES[event.code];
       if (entry) {
