@@ -6,6 +6,34 @@
 **Worktree:** `.worktrees/feat-one-shot-codeql-2368/`
 **Type:** verify-and-close (no production code changes expected)
 
+## Enhancement Summary
+
+**Deepened on:** 2026-04-19
+**Sections enhanced:** 5 (Overview, Workflow Learning, Research Insights, Risks, Files to Edit)
+**Live verifications performed:**
+
+- `gh pr view 2416 --json mergedAt,mergeCommit` → merged 2026-04-16T11:14:55Z, mergeCommit `dd36190573e0ae84c62b1dcb100c19eab29868a3`.
+- `gh pr view 2421 --json mergedAt` → merged 2026-04-16T11:42:50Z (threat-model switch follow-up).
+- `gh issue view 2368 --json createdAt` → 2026-04-15T17:22:29Z.
+- `gh pr view 2346 --json mergedAt` → 2026-04-15T17:25:09Z.
+- `gh api '/repos/jikig-ai/soleur/code-scanning/alerts?state=open&severity=critical'` → length 0; same for `high`.
+- `find knowledge-base/project/learnings -name "*codeql*"` → 4 prior CodeQL learnings (2026-04-10, 2026-04-13 ×3) plus the brainstorm dated 2026-04-16.
+- `cat .github/workflows/codeql-to-issues.yml` → workflow already filters `state=open` (line 30) before issuing; the bug is NOT in this filter.
+
+### Key Improvements (vs. initial draft)
+
+1. **Root cause corrected.** Initial plan said "issue filed before checking alerts API." Live timeline check proves #2368 was filed 2 minutes BEFORE PR #2346 merged and 18 hours BEFORE the bulk dismissal PR #2416. The issue was legitimate at filing time. The actual gap is **post-bulk-dismissal orphan audit**: when a PR dismisses N alerts, recently-filed CodeQL-derived issues become orphans and must be auto-closed.
+2. **Phase 4 retargeted.** The `codeql-to-issues.yml` workflow already filters `state=open` (verified at line 30). The skill edit therefore lands NOT in a pre-filing gate but in a **post-dismissal sweep** added to that same workflow (or a sibling), which after every bulk-dismiss event scans recent `type/security` issues whose body contains a now-dismissed alert URL/number and auto-closes them with a pointer to the dismissing PR.
+3. **Drift mapping precision.** Plan now matches alerts by `(rule_id, file)` AND distance-of-line tolerance ≤ 50 lines, not exact line. Live data shows several alert lines drifted (kb-reader.ts:366→405; ws-handler.ts:148→180, :227→259) due to refactors between PR-scan time and dismissal time.
+4. **Dismissed-reason audit.** Confirmed every one of the 9 alerts uses an AGENTS.md `hr-github-api-endpoints-with-enum`-compliant value (`"false positive"` or `"used in tests"`). Recorded the `dismissed_comment` excerpts so verification.md doesn't need to re-fetch them at GREEN time.
+5. **Learning category corrected.** Filed under `best-practices/` (workflow gap), not `bug-fixes/` (no bug shipped).
+
+### New Considerations Discovered
+
+- **CI ordering matters.** The CodeQL check on PR #2346 surfaced 9 "new" alerts that were really pre-existing on main; this is GitHub's PR-scoped re-scan behavior, not a bug. The right gate is on the human (don't file a triage issue from a PR-scoped CodeQL summary without cross-checking `state=open&ref=refs/heads/main`), but the more reliable gate is automated post-dismissal sweep.
+- **`codeql-to-issues.yml` does the right thing already.** It uses `gh search issues` for dedup AND filters `state=open`. The orphan window in #2368's case is the human-triage path, not the auto-issue path.
+- **No production-code changes survive review.** The 2026-04-16 brainstorm + CTO assessment are authoritative; re-litigating would be a workflow violation per `rf-when-a-reviewer-or-user-says-to-keep-a` (CTO endorsed API-only dismissal).
+
 ## Overview
 
 Issue #2368 asks to triage and remediate 9 pre-existing CodeQL alerts in `apps/web-platform/*` (4 critical, 5 high/medium). **All 9 alerts are already in the `dismissed` state**, remediated by PR #2416 (issue #2417, closed 2026-04-16) which dismissed 21 false-positive CodeQL alerts and added CodeQL as a required CI check. PR #2421 followed up by switching CodeQL threat model from `remote_and_local` to `remote` to reduce false-positive volume.
@@ -135,30 +163,84 @@ This is **MINIMAL** detail level. The implementation is one verification script 
 
 3. PR labels: `type/security`, `domain/engineering`, `app:web-platform`. No semver label needed (no app code change).
 
-### Phase 4 — Workflow Learning (≤ 10 min)
+### Phase 4 — Workflow Learning + Skill Edit (≤ 15 min)
 
-This issue cost a planning cycle because nobody re-checked the alerts API before filing. Capture the gate.
+**Corrected root cause** (verified via timeline):
 
-1. Write `knowledge-base/project/learnings/2026-04-19-codeql-issue-pre-filing-state-check.md` with:
-    - **Symptom**: Issue #2368 filed 2026-04-16 (after PR #2346 CI surfaced "9 new alerts"), but those alerts had been dismissed in PR #2416 the same day. Filing happened before reading the alerts API → the issue commissioned redundant work.
-    - **Root cause**: The "CodeQL surfaced N alerts on the PR" signal in CI does not check whether those alerts are `state=open` at issue-filing time. PR-scoped checks can show pre-existing alerts that are already dismissed on `main`.
-    - **Prevention** (chosen): Add a one-line check to `plugins/soleur/skills/triage/SKILL.md` (or wherever security issues are filed): before filing a CodeQL-derived issue, run `gh api '/repos/:owner/:repo/code-scanning/alerts?state=open&per_page=100' --paginate --jq '.[].number'` and only file if the alert numbers from the CI failure intersect the live open set.
-    - **Why a learning vs. an AGENTS.md rule**: Triage frequency is low (~weekly); the gate belongs in the triage skill where it fires every time, not in the per-turn AGENTS.md context. (Per `wg-when-a-workflow-gap-causes-a-mistake-fix`: edit the skill, not just the learning — the skill edit is the fix; the learning is the audit trail.)
+- 2026-04-15 13:25 UTC — PR #2346 created.
+- 2026-04-15 17:22 UTC — Issue #2368 filed (CodeQL on PR #2346 reported 9 new alerts).
+- 2026-04-15 17:25 UTC — PR #2346 merged (3 minutes after #2368 filed; expected race).
+- 2026-04-16 11:14 UTC — PR #2416 merged: bulk-dismissed all 9 alerts as false positives + tests-only.
+- 2026-04-16 11:42 UTC — PR #2421 merged: switched CodeQL threat model to `remote` only.
 
-2. Edit `plugins/soleur/skills/triage/SKILL.md` (or the closest applicable triage skill) to add the pre-filing alerts-API check as a numbered step. **Decision deferred to Phase 4 GREEN**: locate the right skill at implementation time (could be `triage`, `fix-issue`, or the CodeQL-to-issues workflow under `.github/workflows/`).
+Issue #2368 was a **legitimate filing at filing time**. It became an orphan when PR #2416 dismissed the alerts the next day. The gap is therefore **not** a pre-filing check; it is a **post-dismissal orphan sweep**: when a PR dismisses CodeQL alerts in bulk, any open `type/security` issue whose body references those alert numbers (or files+rules) becomes redundant work and should be auto-closed with a pointer to the dismissing PR.
 
-3. If the gap turns out to be in the `.github/workflows/codeql-*.yml` automation (not a skill), file a separate issue with the precise workflow file and a reproduction. Do NOT inline the workflow fix in this PR — keep the PR scope to verification + learning + skill edit.
+1. **Locate the right home.** The candidates and ranking:
+    - **Best fit:** `.github/workflows/codeql-to-issues.yml` already runs daily (`cron: "0 6 * * *"`) and has `gh search issues` dedup logic. Add a second job (`close-orphans`) that, for every open issue with the `sec: CodeQL alert #N — ...` title pattern, fetches alert N's current `state` and `dismissed_at`, and if `state == "dismissed"` posts a close-out comment + `gh issue close`. This catches both auto-created issues (from this same workflow) AND human-filed issues like #2368, since both follow the `sec: CodeQL alert #N` title convention OR cite the alert number in the body.
+    - **Secondary fit:** `plugins/soleur/skills/triage/SKILL.md` — add a triage-time check that any `type/security` issue's referenced alert number is `state=open` before commissioning work. Lower priority because triage is the human path; the workflow handles the bot path AND retroactively catches stale human-filed issues.
+    - **Out of scope here:** `plugins/soleur/skills/fix-issue/`, `plugins/soleur/skills/one-shot/` — these consume issues, they don't audit them.
+
+2. **Decision (GREEN-time):** Make the workflow edit the **primary** fix and the triage skill note the **secondary** fix. If the workflow edit becomes large enough to need its own PR (more than ~30 lines added to `codeql-to-issues.yml`, or a new sibling workflow file), file a separate issue and link from this PR's verification.md. Otherwise inline both.
+
+3. **Workflow edit sketch** (do not implement until GREEN — sketch only for plan review):
+
+    ```yaml
+    # .github/workflows/codeql-to-issues.yml — new job
+    close-orphans:
+      runs-on: ubuntu-latest
+      timeout-minutes: 5
+      steps:
+        - name: Close orphan CodeQL issues
+          env:
+            GH_TOKEN: ${{ github.token }}
+            GH_REPO: ${{ github.repository }}
+          run: |
+            # Find every open issue mentioning a CodeQL alert number
+            gh issue list --state open --label "type/security" \
+              --json number,title,body --limit 200 > /tmp/sec-issues.json
+            jq -c '.[]' /tmp/sec-issues.json | while IFS= read -r issue; do
+              ISSUE=$(echo "$issue" | jq -r '.number')
+              # Extract alert numbers from title or body (#NNN pattern after "alert")
+              ALERTS=$(echo "$issue" | jq -r '.title + "\n" + .body' \
+                | grep -oE 'alert #?[0-9]+' | grep -oE '[0-9]+' | sort -u)
+              [ -z "$ALERTS" ] && continue
+              ALL_DISMISSED=1
+              REASONS=""
+              for AN in $ALERTS; do
+                STATE=$(gh api "/repos/${GH_REPO}/code-scanning/alerts/${AN}" \
+                  --jq '.state' 2>/dev/null) || { ALL_DISMISSED=0; break; }
+                [ "$STATE" != "dismissed" ] && { ALL_DISMISSED=0; break; }
+                REASONS="${REASONS}- alert #${AN}: dismissed\n"
+              done
+              if [ "$ALL_DISMISSED" -eq 1 ]; then
+                printf "All referenced CodeQL alerts are now dismissed.\n\n%b\nClosing as resolved by dismissal." "$REASONS" \
+                  | gh issue comment "$ISSUE" --body-file -
+                gh issue close "$ISSUE" --reason completed
+              fi
+            done
+    ```
+
+    Per AGENTS.md `hr-in-github-actions-run-blocks-never-use`: heredoc-free shell block, single-quote outer YAML, all multi-line content via `printf` to a pipe. Per `cq-ci-steps-polling-json-endpoints-under`: every `jq -r` against an HTTP body is wrapped (we use `--jq` server-side here so the body is never inlined).
+
+4. **Triage-skill edit (secondary, smaller):** add one bullet to `plugins/soleur/skills/triage/SKILL.md` near the existing security-triage prose: "Before commissioning work on a CodeQL-derived issue, run `gh api '/repos/:owner/:repo/code-scanning/alerts/<N>' --jq .state`. If `dismissed`, close the issue with a link to the dismissing PR." Re-read the full SKILL.md before editing per `hr-always-read-a-file-before-editing-it`.
+
+5. **Learning file:** `knowledge-base/project/learnings/best-practices/2026-04-19-codeql-orphan-issue-post-dismissal-sweep.md`. Frontmatter: `category: best-practices`, `tags: [codeql, github-actions, triage, automation]`, `symptom: "Issue filed against pre-existing CodeQL alerts that were dismissed shortly after"`, `root_cause: "No automated audit ties open type/security issues back to alert state changes"`. Body: timeline (above), the workflow sketch, why this is best-practices not bug-fixes (no shipped bug; lost ~30 min of planning time).
+
+6. **Per AGENTS.md `wg-when-fixing-a-workflow-gates-detection`:** retroactively apply the gate to the case that exposed it — close issue #2368 itself via the `Closes #2368` PR body in this PR. The workflow + skill edits prevent recurrence; the close on this PR is the retroactive remediation.
+
+7. **Per AGENTS.md `wg-after-merging-a-pr-that-adds-or-modifies`:** after PR merges, manually trigger the new `close-orphans` job (`gh workflow run codeql-to-issues.yml`), poll until complete, investigate failures. Add this to post-merge acceptance.
 
 ## Files to Edit
 
-- `plugins/soleur/skills/triage/SKILL.md` — add pre-filing alerts-API state check (Phase 4 step 2; exact path TBD at GREEN time, may be `fix-issue` or a workflow file instead).
+- `.github/workflows/codeql-to-issues.yml` — add `close-orphans` job (Phase 4 primary).
+- `plugins/soleur/skills/triage/SKILL.md` — add CodeQL-derived-issue alert-state precheck bullet (Phase 4 secondary). Re-read full file before editing per `hr-always-read-a-file-before-editing-it`.
 
 ## Files to Create
 
 - `knowledge-base/project/specs/feat-one-shot-codeql-2368/alerts-snapshot.json` — raw API snapshot (Phase 1).
 - `knowledge-base/project/specs/feat-one-shot-codeql-2368/web-platform-alerts.json` — filtered to web-platform paths (Phase 1).
 - `knowledge-base/project/specs/feat-one-shot-codeql-2368/verification.md` — human-readable evidence (Phase 3).
-- `knowledge-base/project/learnings/2026-04-19-codeql-issue-pre-filing-state-check.md` — workflow learning (Phase 4).
+- `knowledge-base/project/learnings/best-practices/2026-04-19-codeql-orphan-issue-post-dismissal-sweep.md` — workflow learning (Phase 4 step 5; final dated filename chosen at write-time per the plan-deepen sharp edge "Do not prescribe exact learning filenames with dates in tasks.md" — date is approved here in the plan because the plan itself is dated 2026-04-19 and lands in the same commit).
 - `knowledge-base/project/plans/2026-04-19-fix-verify-and-close-codeql-issue-2368-plan.md` — this file.
 - `knowledge-base/project/specs/feat-one-shot-codeql-2368/tasks.md` — derived task breakdown.
 
@@ -181,17 +263,22 @@ Files checked:
 ### Pre-merge (PR)
 
 - [ ] Phase 1 hard assertion exits 0 (zero open high/critical alerts in `apps/web-platform/*`).
-- [ ] All 9 alerts named in #2368 are present in `web-platform-alerts.json` with `state == "dismissed"` and a non-null `dismissed_reason` from the AGENTS.md `hr-github-api-endpoints-with-enum` allowlist (`"false positive"` or `"used in tests"`).
-- [ ] `verification.md` includes the alert-state table, the drift summary, and links to PR #2416 and the 2026-04-16 brainstorm.
-- [ ] Workflow learning written and the gate applied to the relevant skill (or follow-up issue filed if the gap is in CI workflows, not a skill).
-- [ ] PR body contains `Closes #2368`.
-- [ ] Markdownlint passes on changed `.md` files (`npx markdownlint-cli2 --fix <changed-md-files>`).
+- [ ] All 9 alerts named in #2368 are present in `web-platform-alerts.json` with `state == "dismissed"` and a `dismissed_reason` from the AGENTS.md `hr-github-api-endpoints-with-enum` allowlist (`"false positive"` or `"used in tests"`).
+- [ ] `verification.md` includes the alert-state table, the drift summary, and links to PR #2416 (mergeCommit `dd36190573e0ae84c62b1dcb100c19eab29868a3`) and the 2026-04-16 brainstorm (`knowledge-base/project/brainstorms/2026-04-16-security-scanning-alerts-brainstorm.md`).
+- [ ] `.github/workflows/codeql-to-issues.yml` has `close-orphans` job; YAML validates locally via `yq eval '.' .github/workflows/codeql-to-issues.yml > /dev/null` (or equivalent).
+- [ ] `plugins/soleur/skills/triage/SKILL.md` has the CodeQL-alert-state precheck bullet.
+- [ ] Learning file present at `knowledge-base/project/learnings/best-practices/2026-04-19-codeql-orphan-issue-post-dismissal-sweep.md`.
+- [ ] PR body contains `Closes #2368` (per `wg-use-closes-n-in-pr-body-not-title-to`).
+- [ ] Markdownlint passes on changed `.md` files (`npx markdownlint-cli2 --fix <changed-md-files-only>` per `cq-markdownlint-fix-target-specific-paths`).
+- [ ] Labels applied: `type/security`, `domain/engineering`, `app:web-platform`. Verify with `gh label list --limit 100 | grep -i security` first per `cq-gh-issue-label-verify-name`.
 
 ### Post-merge (operator)
 
 - [ ] Issue #2368 auto-closes on merge.
 - [ ] `gh issue view 2368 --json state` returns `CLOSED`.
-- [ ] CodeQL workflow on the next PR continues to gate on critical/high (sanity check via `gh run list --workflow=codeql.yml --limit 1`).
+- [ ] Trigger the new workflow job: `gh workflow run codeql-to-issues.yml`. Poll via `gh run list --workflow=codeql-to-issues.yml --limit 1 --json status,conclusion` per `wg-after-merging-a-pr-that-adds-or-modifies` and `hr-never-use-sleep-2-seconds-in-foreground` (use Monitor tool or `run_in_background`).
+- [ ] CodeQL gate on the next PR continues to block on critical/high (sanity check via `gh run list --workflow=codeql.yml --limit 1`).
+- [ ] No regression: `gh api '/repos/:owner/:repo/code-scanning/alerts?state=open&severity=critical' --jq length` returns 0.
 
 ## Test Scenarios
 
@@ -213,11 +300,17 @@ Files checked:
 ## Risks
 
 - **Risk:** A NEW critical alert lands between Phase 1 snapshot and PR merge.
-    - **Mitigation:** CI re-runs CodeQL on the verification PR; the required CodeQL check (added in #2416) blocks merge if a new critical surfaces.
+  - **Mitigation:** CI re-runs CodeQL on the verification PR; the required CodeQL check (added in #2416) blocks merge if a new critical surfaces.
 - **Risk:** The 9 alert numbers in the plan inventory are stale by the time `/soleur:work` runs (e.g., GitHub renumbered or de-duplicated).
-    - **Mitigation:** Phase 1 reproduces the snapshot live. The inventory is documentation; the assertion is the source of truth.
-- **Risk:** The chosen "right skill" for the workflow learning (Phase 4 step 2) does not exist or is the wrong one.
-    - **Mitigation:** GREEN-time decision; if no skill is the right home, file a separate workflow-improvement issue and link from the learning. **Do not** force-fit the gate into an unrelated skill.
+  - **Mitigation:** Phase 1 reproduces the snapshot live. The inventory is documentation; the assertion is the source of truth.
+- **Risk:** The new `close-orphans` workflow job auto-closes legitimate open issues that mention an alert number incidentally (e.g., a forensic post-mortem that says "alert #92 was the canary for X").
+  - **Mitigation:** The job's title-or-body extractor matches `alert #?[0-9]+` only after the literal word `alert`; a forensic doc that says "alert #92" would still be auto-closed. Add a label-based opt-out: skip issues with the `keep-open` label (project convention). Document this in the workflow comment block. If false-close happens once, add the label and reopen — the action is reversible.
+- **Risk:** The new workflow job hits GitHub API rate limits when the open security-issue list grows (per-issue alert lookup is `O(issues × alerts)`).
+  - **Mitigation:** The query is bounded by `--label "type/security" --limit 200`. Per-alert lookup is one `gh api` call each; ~200 calls/day is well below the 5000/hr authenticated rate limit. If this changes, batch via the list-alerts endpoint and join client-side.
+- **Risk:** Adding a job to `codeql-to-issues.yml` interacts badly with the existing `check-alerts` job (e.g., race on the same issue).
+  - **Mitigation:** Sequence them via `needs:` so `close-orphans` runs after `check-alerts` completes. They operate on different sets (create vs. close), so there is no real conflict, but ordering is cheap insurance.
+- **Risk:** Workflow YAML edit triggers `hr-in-github-actions-run-blocks-never-use` (heredoc-in-run-block).
+  - **Mitigation:** Use `printf "...\n%b" "$VAR" | gh issue comment ... --body-file -` per the rule's prescribed pattern. The Phase 4 sketch already follows this. Lint locally with `actionlint .github/workflows/codeql-to-issues.yml` before committing.
 
 ## Non-Goals
 

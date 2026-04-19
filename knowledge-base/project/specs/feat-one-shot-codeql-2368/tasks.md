@@ -26,15 +26,16 @@ Derived from `knowledge-base/project/plans/2026-04-19-fix-verify-and-close-codeq
 - [ ] 4.2 `npx markdownlint-cli2 --fix` on changed `.md` files (specific paths, per AGENTS.md `cq-markdownlint-fix-target-specific-paths`).
 - [ ] 4.3 Stage + commit: plan, tasks, snapshot JSONs, verification.md, learning. Use `/soleur:ship` for PR creation with `Closes #2368`.
 
-## 5. Phase 4 — Workflow Learning + Skill Edit
+## 5. Phase 4 — Workflow + Skill Edits + Learning
 
-- [ ] 5.1 Locate the right home for the pre-filing alerts-API gate (likely `plugins/soleur/skills/triage/SKILL.md`; alternatives: `fix-issue`, `.github/workflows/codeql-*.yml`).
-- [ ] 5.2 Edit the skill (or file a separate workflow-improvement issue if the gap is in CI YAML, not a skill).
-- [ ] 5.3 Write `knowledge-base/project/learnings/<bug-fixes-or-best-practices>/<topic>.md` recording the symptom, root cause, and chosen prevention. Author picks date at write-time.
-- [ ] 5.4 Re-run markdownlint on the learning + skill files.
+- [ ] 5.1 **Primary fix:** edit `.github/workflows/codeql-to-issues.yml`, add the `close-orphans` job per the plan sketch (`needs: check-alerts`). Lint with `actionlint .github/workflows/codeql-to-issues.yml` before commit.
+- [ ] 5.2 **Secondary fix:** read `plugins/soleur/skills/triage/SKILL.md` end-to-end first (per `hr-always-read-a-file-before-editing-it`), then add a CodeQL alert-state precheck bullet near the existing security-triage prose.
+- [ ] 5.3 Write `knowledge-base/project/learnings/best-practices/2026-04-19-codeql-orphan-issue-post-dismissal-sweep.md` with frontmatter `category: best-practices`, `tags: [codeql, github-actions, triage, automation]`, the timeline, the workflow sketch, and the rationale for `best-practices/` over `bug-fixes/`.
+- [ ] 5.4 Run `npx markdownlint-cli2 --fix` on the specific changed `.md` files only (per `cq-markdownlint-fix-target-specific-paths`).
 
 ## 6. Acceptance + Ship
 
 - [ ] 6.1 Run all pre-merge acceptance criteria from plan.
-- [ ] 6.2 `/soleur:ship` to push branch, open PR with `Closes #2368`, request labels `type/security`, `domain/engineering`, `app:web-platform`.
-- [ ] 6.3 Post-merge: verify `gh issue view 2368 --json state` returns `CLOSED`. Confirm CodeQL workflow ran on the verification PR.
+- [ ] 6.2 `/soleur:ship` to push branch, open PR with `Closes #2368` in body, request labels `type/security`, `domain/engineering`, `app:web-platform` (verify each label with `gh label list --limit 100 | grep -i <keyword>` first).
+- [ ] 6.3 Post-merge: verify `gh issue view 2368 --json state` returns `CLOSED`.
+- [ ] 6.4 Post-merge: trigger `gh workflow run codeql-to-issues.yml`, poll via `gh run list --workflow=codeql-to-issues.yml --limit 1 --json status,conclusion` (use Monitor tool or `run_in_background` per `hr-never-use-sleep-2-seconds-in-foreground`). Investigate any failure before ending session per `wg-after-merging-a-pr-that-adds-or-modifies`.
