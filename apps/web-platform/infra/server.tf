@@ -154,6 +154,12 @@ resource "terraform_data" "fail2ban_tuning" {
   provisioner "remote-exec" {
     inline = [
       "dpkg -s fail2ban >/dev/null 2>&1 || { export DEBIAN_FRONTEND=noninteractive; apt-get update -qq && apt-get install -y -qq fail2ban; }",
+      # Positive post-install re-verification mirrors the cloud-init audit
+      # (see runcmd in cloud-init.yml). Catches the rare case where apt
+      # reports success but dpkg leaves the package in a half-configured
+      # state; also gives a clear error message if a future edit breaks the
+      # install branch above (e.g., a typo'd package name).
+      "dpkg -s fail2ban >/dev/null 2>&1 || { echo 'FATAL: fail2ban still not installed after install attempt' >&2; exit 1; }",
     ]
   }
 
