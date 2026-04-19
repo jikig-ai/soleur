@@ -71,12 +71,17 @@ export function createNamedWorkspacePair(
   opts: { underWorkspaces?: boolean } = {},
 ): WorkspacePair {
   const wantProduction = opts.underWorkspaces === true;
-  const parent = wantProduction && workspacesRootWritable()
+  const parent = wantProduction && workspacesIsFixtureRoot()
     ? fs.mkdtempSync(path.join("/workspaces", FIXTURE_PREFIX))
     : fs.mkdtempSync(path.join(os.tmpdir(), FIXTURE_PREFIX));
   const [nameA, nameB] = names;
-  if (nameA.includes("/") || nameB.includes("/") || nameA === ".." || nameB === "..") {
-    throw new Error(`createNamedWorkspacePair: names must be simple basenames, got ${names.join(", ")}`);
+  // Basename hardening: reject anything that can alter argv or path semantics
+  // (slashes, dot-dot, leading dash that later tools would parse as a flag,
+  // NUL, backslash, or empty string). Review #2610 Sec I2.
+  for (const n of [nameA, nameB]) {
+    if (!/^[A-Za-z0-9_.][A-Za-z0-9_.-]*$/.test(n) || n === "..") {
+      throw new Error(`createNamedWorkspacePair: invalid basename ${JSON.stringify(n)}`);
+    }
   }
   const rootA = path.join(parent, nameA);
   const rootB = path.join(parent, nameB);
@@ -197,7 +202,7 @@ export function spawnSandboxB(
     // no-op
   }
   // Shell script inside the sandbox: touch readiness marker, then block.
-  const script = `touch ${shellEscape(path.join(rootB, markerRel))} && exec sleep infinity`;
+  const script = `touch ${shellQuote(path.join(rootB, markerRel))} && exec sleep infinity`;
   const args = buildBwrapArgs(rootB, script, opts);
   const child = spawn("bwrap", args, {
     stdio: ["ignore", "pipe", "pipe"],
@@ -240,13 +245,16 @@ export function spawnSandboxB(
 
 /**
  * Remove stale fixtures left behind by crashed tests. Only removes directories
- * under os.tmpdir() OR /workspaces whose basename starts with FIXTURE_PREFIX and
- * whose mtime is older than FIXTURE_TTL_MS. TMPDIR allowlist prevents accidental
- * rm -rf outside the intended roots.
+ * under os.tmpdir() (or /workspaces when the soleur sentinel is present) whose
+ * basename starts with FIXTURE_PREFIX and whose mtime is older than
+ * FIXTURE_TTL_MS. Symlinks are never followed — if the entry itself is a
+ * symlink, it is skipped. Review #2610 H1 closed this bypass: a symlink at
+ * /tmp/sandbox-iso-evil → /tmp/VICTIM-xxx used to pass the realpath + dirname
+ * check and get rm -rf'd.
  */
 export function rescueStaleFixtures(): { removed: string[] } {
   const allowedRoots = [os.tmpdir()];
-  if (workspacesRootWritable()) allowedRoots.push("/workspaces");
+  if (workspacesIsFixtureRoot()) allowedRoots.push("/workspaces");
   const removed: string[] = [];
   const cutoff = Date.now() - FIXTURE_TTL_MS;
 
@@ -260,21 +268,22 @@ export function rescueStaleFixtures(): { removed: string[] } {
     for (const name of entries) {
       if (!name.startsWith(FIXTURE_PREFIX)) continue;
       const full = path.join(root, name);
-      // HARD gate: final path MUST be a direct child of an allowed root, no symlink traversal.
-      const real = fs.realpathSync.native(full);
-      const realRoot = fs.realpathSync.native(root);
-      if (path.dirname(real) !== realRoot) continue;
-      let stat: fs.Stats;
+      // HARD gate: lstat the entry WITHOUT following symlinks. Any symlink —
+      // even one resolving inside an allowed root — is refused. Combined with
+      // the FIXTURE_PREFIX basename check and the mtime TTL, this restricts
+      // rm -rf to real directories we created via fs.mkdtempSync.
+      let lstat: fs.Stats;
       try {
-        stat = fs.lstatSync(real);
+        lstat = fs.lstatSync(full);
       } catch {
         continue;
       }
-      if (!stat.isDirectory()) continue;
-      if (stat.mtimeMs > cutoff) continue;
+      if (lstat.isSymbolicLink()) continue;
+      if (!lstat.isDirectory()) continue;
+      if (lstat.mtimeMs > cutoff) continue;
       try {
-        fs.rmSync(real, { recursive: true, force: true });
-        removed.push(real);
+        fs.rmSync(full, { recursive: true, force: true });
+        removed.push(full);
       } catch {
         // best-effort; next run will retry
       }
@@ -296,16 +305,28 @@ export function rescueStaleFixtures(): { removed: string[] } {
  * probe still refuses to run unsandboxed.
  */
 export function probeSkip(tier: ProbeTier): ProbeDecision {
-  if (!hasBinary("bwrap")) {
-    return { skip: true, reason: "bwrap not installed on host" };
+  const missing = findMissingCapability(tier);
+  if (!missing) return { skip: false };
+
+  // Under CI, silently skipping a capability-gated suite is indistinguishable
+  // from silently passing. Throw so the CI log flags "which capability is
+  // missing" instead of reporting the entire suite green-with-zero-assertions.
+  // Review #2610 Arch Rec #1.
+  if (process.env.CI === "true" || process.env.CI === "1") {
+    throw new Error(
+      `sandbox-isolation: refusing to skip under CI=true. Missing capability: ${missing}`,
+    );
   }
-  if (!hasBinary("socat")) {
-    return { skip: true, reason: "socat not installed on host (SDK sandbox unavailable)" };
-  }
+  return { skip: true, reason: missing };
+}
+
+function findMissingCapability(tier: ProbeTier): string | null {
+  if (!hasBinary("bwrap")) return "bwrap not installed on host";
+  if (!hasBinary("socat")) return "socat not installed on host (SDK sandbox unavailable)";
   if (tier === "query" && !process.env.ANTHROPIC_API_KEY) {
-    return { skip: true, reason: "ANTHROPIC_API_KEY not set (query-tier requires live SDK)" };
+    return "ANTHROPIC_API_KEY not set (query-tier requires live SDK)";
   }
-  return { skip: false };
+  return null;
 }
 
 // ---------- internals ----------
@@ -321,7 +342,10 @@ function buildBwrapArgs(root: string, command: string, opts: SpawnBwrapOpts): st
   if (parent) {
     // Production mount-ordering: tmpfs over the parent hides siblings (rootB when
     // root === rootA), then re-assert the child bind so the tmpfs doesn't shadow
-    // the intended workspace. See sdk-probe-notes.md §Ordering-mystery.
+    // the intended workspace. See sdk-probe-notes.md §Ordering-mystery. The
+    // pre-tmpfs --bind above is shadowed by this tmpfs and preserved here only
+    // for argv parity with the captured SDK invocation — do not collapse without
+    // re-running FR2/FR5 (see `SpawnBwrapOpts.pair` docs).
     args.push("--tmpfs", parent);
     args.push("--bind", root, root);
   }
@@ -364,9 +388,36 @@ function workspacesRootWritable(): boolean {
   }
 }
 
-function shellEscape(s: string): string {
+/**
+ * Identity (not writability) check for /workspaces as a fixture root. A world-
+ * writable /workspaces on a dev box would otherwise let rescueStaleFixtures
+ * sweep sandbox-iso-* entries belonging to other users/containers. Gate on a
+ * sentinel file (`.soleur-fixture-root`) that CI and supported dev hosts can
+ * opt into. Review #2610 H2.
+ */
+function workspacesIsFixtureRoot(): boolean {
+  if (!workspacesRootWritable()) return false;
+  try {
+    return fs.statSync("/workspaces/.soleur-fixture-root").isFile();
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * POSIX-safe single-quote escape for interpolating paths into `bash -c`
+ * strings. Exported so the direct-tier and query-tier test suites share one
+ * implementation (review #2610 H1 code-quality dedupe).
+ */
+export function shellQuote(s: string): string {
   return `'${s.replace(/'/g, `'\\''`)}'`;
 }
+
+/**
+ * Regex matching the kernel-surfaced denial strings the isolation suite pins
+ * on. Shared between FR2/FR4/FR5 to prevent copy-drift across assertions.
+ */
+export const FS_DENY_RE = /No such file|cannot open|Permission denied/;
 
 async function waitForFile(abs: string, timeoutMs: number): Promise<void> {
   const started = Date.now();
