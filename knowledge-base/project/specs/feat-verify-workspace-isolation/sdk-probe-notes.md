@@ -238,3 +238,111 @@ Phase 2A empirical capture is now blocked on ONE of:
 ---
 
 **Status:** Phase 1 extended again. Empirical capture attempted and blocked on socat. Critical finding: production and tests both need `failIfUnavailable: true`. Three forward paths documented (install socat, capture-in-Docker, accept traced argv). Handing back for founder decision.
+
+---
+
+## Captured bwrap argv (2026-04-19, post-socat install)
+
+Socat installed via `sudo apt install -y socat` per founder direction. Re-ran capture; full argv recovered. Source: `/tmp/bwrap-trace3.out` (discarded after analysis). SDK version `@anthropic-ai/claude-agent-sdk@0.2.85`.
+
+### Full argv (abbreviated; full list in commit message of `c2fed251`'s successor)
+
+```text
+bwrap
+  --new-session --die-with-parent
+  --unshare-net
+  --bind <http-bridge-sock> <same>
+  --bind <socks-bridge-sock> <same>
+  --setenv SANDBOX_RUNTIME 1
+  --setenv TMPDIR /tmp/claude
+  --setenv NO_PROXY / no_proxy localhost,127.0.0.1,::1,*.local,...
+  --setenv HTTP_PROXY / HTTPS_PROXY / http_proxy / https_proxy http://localhost:3128
+  --setenv ALL_PROXY / all_proxy socks5h://localhost:1080
+  --setenv GIT_SSH_COMMAND "ssh -o ProxyCommand='socat - PROXY:localhost:%h:%p,proxyport=3128'"
+  --setenv FTP_PROXY / ftp_proxy / RSYNC_PROXY / DOCKER_HTTP_PROXY / DOCKER_HTTPS_PROXY / CLOUDSDK_PROXY_* / GRPC_PROXY / grpc_proxy ...
+  --setenv CLAUDE_CODE_HOST_HTTP_PROXY_PORT 33235
+  --setenv CLAUDE_CODE_HOST_SOCKS_PROXY_PORT 42623
+  --ro-bind / /
+  --bind /home/jean/.npm/_logs /home/jean/.npm/_logs
+  --bind /home/jean/.claude/debug /home/jean/.claude/debug
+  --bind <workspacePath> <workspacePath>
+  --bind /tmp/claude-1001/ /tmp/claude-1001/
+  --bind <workspacePath> <workspacePath>          # duplicate
+  --ro-bind /tmp/claude-empty-<rand> <workspacePath>/.claude    # SDK config-shield
+  --ro-bind /tmp/claude-empty-<rand> <workspacePath>/.claude    # dup
+  --ro-bind /tmp/claude-empty-<rand> <workspacePath>/.claude    # dup
+  --ro-bind /dev/null <workspacePath>/.gitconfig                # SDK config-shield
+  --ro-bind /dev/null <workspacePath>/.gitmodules
+  --ro-bind /dev/null <workspacePath>/.bashrc
+  --ro-bind /dev/null <workspacePath>/.bash_profile
+  --ro-bind /dev/null <workspacePath>/.zshrc
+  --ro-bind /dev/null <workspacePath>/.zprofile
+  --ro-bind /dev/null <workspacePath>/.profile
+  --ro-bind /dev/null <workspacePath>/.ripgreprc
+  --ro-bind /dev/null <workspacePath>/.mcp.json
+  --ro-bind /dev/null <workspacePath>/.vscode
+  --ro-bind /dev/null <workspacePath>/.idea
+  --ro-bind /tmp/claude-empty-<rand> <workspacePath>/.claude    # dup
+  --ro-bind /tmp/claude-empty-<rand> <workspacePath>/.claude    # dup
+  --tmpfs /proc
+  --tmpfs /etc/ssh/ssh_config.d
+  --dev /dev
+  --unshare-pid
+  -- /bin/bash -c <shell-string>
+```
+
+The shell string includes **socat listeners** for the HTTP/SOCKS bridges followed by the actual agent command:
+
+```text
+/bin/bash -c "
+  socat TCP-LISTEN:3128,fork,reuseaddr UNIX-CONNECT:<http-sock> >/dev/null 2>&1 &
+  socat TCP-LISTEN:1080,fork,reuseaddr UNIX-CONNECT:<socks-sock> >/dev/null 2>&1 &
+  trap 'kill %1 %2 2>/dev/null; exit' EXIT
+  eval 'source <shell-snapshot> && shopt -u extglob && eval <user-cmd> < /dev/null && pwd -P >| /tmp/...'
+"
+```
+
+### Ordering-mystery resolution
+
+**Why `/workspaces` (from our `denyRead`) did NOT appear in the captured argv:** the SDK's `ou_` function (source-inspected) contains `if (!fs.existsSync(denyPath)) { skip; continue; }`. On the dev host, `/workspaces` does not exist, so the SDK skipped it. Only `/proc` (which exists) became `--tmpfs /proc`.
+
+**On production Docker** (where `/workspaces` exists as a directory containing per-user subdirs), the argv WILL include `--tmpfs /workspaces` after the `--bind /workspaces/<uuidA> /workspaces/<uuidA>`. The ordering is `--bind <child>` BEFORE `--tmpfs <parent>`.
+
+Whether bwrap's mount application preserves the earlier child bind when a later `--tmpfs` is applied at the parent path is the remaining open question. **But** — the captured argv contains EXACTLY this pattern for the workspace itself:
+
+- `--bind <workspacePath> <workspacePath>` at position ~89
+- `--ro-bind /tmp/claude-empty-<rand> <workspacePath>/.claude` at positions ~97 onward (ro-bind CHILDREN of the workspace directory)
+
+If bwrap's "later mount shadows earlier parent" were literally true, these ro-bind overlays inside the workspace would be shadowed by the earlier workspace bind, and the config-shields would be useless. Production works → bwrap's mount-ordering evidently ALLOWS later child-mounts on top of earlier parent-binds. By symmetry, later parent-tmpfs mounts SHOULD shadow earlier child-binds — but the fact that the SDK uses this pattern and production works strongly suggests bwrap handles this differently than the naive "last-mount-wins at path" model.
+
+**Empirical resolution:** the direct-spawn test harness in Phase 3 will replicate the captured argv structure with a `/workspaces/<uuidA>` + `/workspaces/<uuidB>` fixture. If the `--bind <uuidA>` is shadowed by `--tmpfs /workspaces`, FR2 will fail with "cannot write to rootA" instead of the expected "can write to rootA, cannot read rootB." That failure mode is cheaply distinguishable and resolves the question at test-authoring time.
+
+### Elements for `spawnBwrap()` in Phase 3+
+
+Minimum viable argv for cross-workspace isolation testing (dropping the proxy/bridge scaffolding since we don't need network isolation for FS-isolation tests):
+
+```text
+bwrap
+  --new-session --die-with-parent
+  --ro-bind / /
+  --bind <rootA> <rootA>
+  [--tmpfs /workspaces if /workspaces exists]      # conditional on fixture placement
+  --dev /dev
+  --unshare-pid
+  -- /bin/bash -c "<command>"
+```
+
+Omit for direct-spawn tests: `--unshare-net` (no network attack vector), the proxy `--setenv` block (no network scaffolding), the config-file shields (not testing peer config leakage), the `/tmp/claude-*` binds (test has its own temp layout).
+
+### Critical production risks surfaced
+
+1. **`sandbox.failIfUnavailable` NOT set in `agent-runner.ts:748-764`.** Silent unsandboxed fallback if socat missing. **File issue: `sec(p1): set sandbox.failIfUnavailable=true in production agent-runner`.**
+2. **socat as hard dependency not documented in Dockerfile comments.** If a future Dockerfile cleanup removes it ("why do we need socat?"), the sandbox silently disappears. Follow-up: annotate the `apt install` line.
+
+---
+
+**Phase 1 fully complete.** Empirical capture done. Forward paths:
+
+- **Phase 2B:** fixture helpers land with `probeSkip("direct")` checking both `bwrap` AND `socat`, and `failIfUnavailable: true` in any test config that uses SDK `query()`.
+- **Phase 3:** direct-spawn harness templates on the minimum argv above; the `/workspaces` + tmpfs fixture will empirically resolve the ordering question at test-authoring time.
+- **Production follow-up:** file the `failIfUnavailable` issue before merging this PR.
