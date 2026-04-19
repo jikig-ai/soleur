@@ -41,7 +41,14 @@ describe.runIf(!directProbe.skip)("sandbox-isolation: direct bwrap (tier 4)", ()
     const result = spawnBwrap(
       pair.rootA,
       `cat ${shellQuote(pair.rootB + "/secret.md")}`,
-      { pair, timeoutMs: 5_000 },
+      {
+        pair,
+        timeoutMs: 5_000,
+        // PHASE-3.3 TDD INVERSION — relax isolation to prove the test discriminates.
+        // Binding rootB into the sandbox should make cat succeed and stdout contain
+        // the marker. Remove before committing the restored state.
+        extraArgs: ["--bind", pair.rootB, pair.rootB],
+      },
     );
 
     // Setup-failure guard: if bwrap itself failed (missing socat at runtime,
