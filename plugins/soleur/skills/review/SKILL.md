@@ -585,6 +585,8 @@ Before reporting a broken link or missing file, reviewer agents MUST verify via 
 
 When reviewing a Nunjucks/Eleventy page that pairs a visible HTML answer with a `FAPage`/`FAQPage` JSON-LD `acceptedAnswer.text`, compare the two surfaces character-for-character per Question. Google's FAQ rich-result parity check compares codepoints — flag (a) `{{ ... }}` interpolation in HTML paired with a hardcoded value in JSON-LD, and (b) HTML entities (`&rsquo;`, `&amp;`, etc.) in one surface and ASCII or `\uXXXX` in the other. See `knowledge-base/project/learnings/2026-04-18-faq-html-jsonld-parity.md`.
 
+When flagging a skill description word-budget overrun, the tokenizer MUST match the CI gate. `plugins/soleur/test/components.test.ts` uses `desc.split(/\s+/).filter(Boolean).length` against the YAML value only (1800-word skill budget); the `grep -h 'description:' | wc -w` pattern in AGENTS.md belongs to the agent 2500-word budget and includes YAML framing, inflating counts by ~5 words per skill. Run `bun test plugins/soleur/test/components.test.ts` before reporting — if it passes, the budget is satisfied. See `knowledge-base/project/learnings/2026-04-19-skill-description-word-budget-tokenizer.md`.
+
 ### Important: P1 Findings Block Merge
 
 Any **P1 (CRITICAL)** findings must be addressed before merging the PR. Present these prominently and ensure they're resolved before accepting the PR.
