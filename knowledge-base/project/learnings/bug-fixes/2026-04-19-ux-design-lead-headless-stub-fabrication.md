@@ -119,3 +119,65 @@ actually happened on disk.
 - `2026-04-10-pencil-mcp-open-document-clears-untracked-files.md` —
   why `.pen` files are pre-committed (the guard that let this empty
   placeholder slip through).
+
+## Session Errors
+
+Errors encountered while implementing the fix, captured so the next session
+avoids repeating them.
+
+**1. Grep-based structural guard matched the literal forbidden string inside
+negation prose.**
+The regression test `ux-design-lead-output-path-guard.test.sh` asserts that
+the ux-design-lead prompt does NOT contain `knowledge-base/design/`
+(the pre-#566 path). The first draft of the post-save hardening contained
+the sentence "NOT `knowledge-base/design/`, which was removed in #566" —
+the grep-based test has no concept of negation, so it saw the literal
+substring and failed. Recovery: rephrase as "the `product/` segment is
+mandatory — the pre-#566 top-level design directory was removed in the
+domain restructure." **Prevention:** when writing negative-guidance prose
+that a grep-based structural test will scan, do not include the literal
+forbidden string even inside "NOT X" constructions. Use paraphrase
+(e.g., "the pre-#566 top-level design directory") or structural anchors
+instead.
+
+**2. Static ESM imports resolve before the PENCIL_CLI_KEY gate can run.**
+The initial hard-fail implementation placed the key check at the bottom
+of the adapter file, AFTER the top-level `import { McpServer } from
+"@modelcontextprotocol/sdk/..."` statements. When the adapter ran without
+the SDK's `node_modules` (as in the test harness, which targets the repo
+path), Node threw `ERR_MODULE_NOT_FOUND` during the static-import
+resolution phase — BEFORE the key check could execute, and before any
+adapter-authored `[pencil-adapter] ERROR:` line reached stderr. The test
+asserted `stderr contains "ERROR"` and `stderr mentions "PENCIL_CLI_KEY"`,
+both of which failed because the module never got to run its own code.
+Recovery: convert all 12 top-level static imports to `await import()`
+inside a try/catch, placed AFTER the Node-version gate, argv defense,
+and PENCIL_CLI_KEY check. Top-level code now runs before any SDK
+resolution. **Prevention:** when a feature requires running arbitrary
+checks before a module's imports resolve (env gates, argv parsing,
+license checks), static ESM imports are structurally incompatible —
+the ES-module spec mandates import resolution during parsing, before
+any statement executes. Either (a) convert all static imports to
+`await import()` inside a try/catch, or (b) split the entry point into
+a tiny bootstrap file (no static imports) that `await import`s the
+main file. Option (a) is simpler for single-entry MCP adapters; option
+(b) preserves static imports and IDE friendliness for larger codebases.
+
+**3. Attempted `Edit` on `check_deps.sh` before running `Read`.**
+First attempt to add the `--check-adapter-drift` block was blocked by
+the Edit tool with "File has not been read yet." Recovery: `Read` the
+file first, then `Edit`. **Prevention:** already codified in
+`hr-always-read-a-file-before-editing-it`. This was a habitual slip,
+not a workflow gap.
+
+### Workflow feedback
+
+Error 2 is the only one with a plausible workflow-fix opportunity. A new
+AGENTS.md rule "when gating module load on env/config, use dynamic
+imports or a bootstrap file" would be too niche to justify the
+per-turn load cost (rule count is already at 102/100). Instead, this
+learning is the reference and the rule
+`cq-pencil-mcp-silent-drop-diagnosis-checklist` points future debuggers
+at it. No rule proposal.
+
+Errors 1 and 3 are one-off habitual mistakes without workflow gaps.
