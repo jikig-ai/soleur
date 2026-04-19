@@ -12,7 +12,23 @@ import { WS_CLOSE_CODES } from "@/lib/types";
 import { abortAllSessions, cleanupOrphanedConversations, startInactivityTimer } from "./agent-runner";
 import { handleConversationMessages } from "./api-messages";
 import { createChildLogger } from "./logger";
-import { buildHealthResponse } from "./health";
+import {
+  buildHealthResponse,
+  buildInternalMetricsResponse,
+} from "./health";
+
+// Accept loopback hostnames only. resource-monitor.sh runs on the same host
+// and curls http://127.0.0.1:3000/internal/metrics; external callers (via CF
+// tunnel) arrive with the public Host header. This is defense-in-depth: a
+// sophisticated attacker could try to spoof the Host via the tunnel, but CF
+// normalizes Host for origin routing so a spoofed 127.0.0.1 header doesn't
+// reach here. Port suffix is optional so e2e tests that hit a non-3000 port
+// still match.
+function isLoopbackHost(hostHeader: string | undefined): boolean {
+  if (!hostHeader) return false;
+  const host = hostHeader.split(":")[0];
+  return host === "127.0.0.1" || host === "localhost" || host === "::1";
+}
 
 const log = createChildLogger("startup");
 
@@ -33,6 +49,22 @@ app.prepare().then(() => {
       const health = await buildHealthResponse();
       res.writeHead(200, { "Content-Type": "application/json" });
       res.end(JSON.stringify(health));
+      return;
+    }
+
+    // Internal metrics — host CPU/RAM + concurrent-session counts (#1052).
+    // Gated to loopback Host to avoid exposing capacity signals to the public
+    // (DoS-tuning feedback loop) or per-user counts (competitive scraping).
+    // resource-monitor.sh curls http://127.0.0.1:3000/internal/metrics.
+    if (parsedUrl.pathname === "/internal/metrics") {
+      if (!isLoopbackHost(req.headers.host)) {
+        res.writeHead(403, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "forbidden" }));
+        return;
+      }
+      const metrics = await buildInternalMetricsResponse();
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify(metrics));
       return;
     }
 

@@ -14,7 +14,7 @@ readonly WARN_MEM_PCT="${WARN_MEM_PCT:-80}"
 readonly CRIT_MEM_PCT="${CRIT_MEM_PCT:-95}"
 readonly WARN_CPU_PCT="${WARN_CPU_PCT:-85}"
 readonly PROC_ROOT="${PROC_ROOT:-/proc}"
-readonly HEALTH_URL="${HEALTH_URL:-http://127.0.0.1:3000/health}"
+readonly METRICS_URL="${METRICS_URL:-http://127.0.0.1:3000/internal/metrics}"
 
 # --- Load Configuration ---
 ENV_FILE="${ENV_FILE:-/etc/default/resource-monitor}"
@@ -59,11 +59,13 @@ sample_cpu_pct() {
 }
 
 # Active session count: reach into the container via the host-published port
-# (ci-deploy.sh publishes 0.0.0.0:3000:3000). If the server is down, curl
-# fails fast and we fall back to 0 — the alert still fires on CPU/RAM.
+# (ci-deploy.sh publishes 0.0.0.0:3000:3000). The /internal/metrics endpoint
+# is gated to loopback Host headers and exposes capacity + session counts that
+# /health intentionally does NOT (defense-in-depth). If the server is down,
+# curl fails fast and we fall back to 0 — the alert still fires on CPU/RAM.
 sample_active_sessions() {
   local body
-  body=$(curl -s --max-time 2 "$HEALTH_URL" 2>/dev/null || echo "{}")
+  body=$(curl -s --max-time 2 "$METRICS_URL" 2>/dev/null || echo "{}")
   echo "$body" | jq -r '.active_sessions // 0' 2>/dev/null || echo 0
 }
 

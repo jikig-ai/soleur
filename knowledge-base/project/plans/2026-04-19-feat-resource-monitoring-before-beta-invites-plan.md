@@ -11,6 +11,30 @@ semver: patch
 
 Closes #1052. Refs #673 (Phase 4 umbrella: Container isolation, rate limiting, monitoring).
 
+## Review-Phase Addendum (2026-04-19)
+
+Security-sentinel review flagged the originally planned shape — adding
+`active_sessions`, `active_workspaces`, `cpu_pct_1m`, `mem_pct`, `load_avg_1m`
+to the **public** `/health` endpoint — as a DoS-tuning feedback loop and a
+competitive user-count leak. code-simplicity-reviewer dissented on scoping
+that as a follow-up (fix-inline instead). Addressed inline pre-merge:
+
+- `/health` contract is preserved exactly (no new fields) — Cloudflare probes
+  and `ci-deploy.sh` canary remain unaffected.
+- New endpoint `/internal/metrics` carries all five new fields plus the base
+  health shape. Gated to loopback `Host:` header (`127.0.0.1`, `localhost`,
+  `::1`); external requests get `403 forbidden`. `resource-monitor.sh` curls
+  the new endpoint.
+- Field originally named `cpu_pct_1m` renamed to `cpu_load_pct` — it's a
+  `loadavg / nproc * 100` proxy, not a 1-minute CPU utilization window. The
+  authoritative `/proc/stat` delta sampler lives in `resource-monitor.sh`.
+- `sessions` Map extracted from `ws-handler.ts` to `session-registry.ts` so
+  `session-metrics` no longer pulls the full ws-handler graph (Supabase
+  client, Sentry, agent-runner) at module load.
+- `health.test.ts` mocks `/proc/meminfo`, `/proc/loadavg`, `os.cpus()` to pin
+  exact values (50%, 75%, 2.0) rather than asserting wide ranges that a
+  degenerate "always 0" implementation would silently pass.
+
 ## Enhancement Summary
 
 **Deepened on:** 2026-04-19

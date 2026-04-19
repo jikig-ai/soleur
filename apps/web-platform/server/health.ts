@@ -1,9 +1,14 @@
 import { readFileSync } from "fs";
+import { cpus } from "os";
 import { serverUrl } from "@/lib/supabase/service";
 import {
   getActiveSessionCount,
   getActiveWorkspaceCount,
 } from "./session-metrics";
+
+// Cached at module load — cpu count never changes without a reboot, and this
+// avoids parsing /proc/cpuinfo on every /internal/metrics request.
+const CORE_COUNT = Math.max(1, cpus().length);
 
 async function checkSupabase(): Promise<boolean> {
   try {
@@ -24,6 +29,9 @@ async function checkSupabase(): Promise<boolean> {
   }
 }
 
+// Public /health response. INTENTIONALLY excludes capacity (CPU/RAM) and
+// per-user count fields: those are competitive/attacker-useful and live on
+// /internal/metrics behind a loopback Host-header gate (see server/index.ts).
 export interface HealthResponse {
   status: string;
   version: string;
@@ -31,7 +39,17 @@ export interface HealthResponse {
   sentry: string;
   uptime: number;
   memory: number;
-  cpu_pct_1m: number;
+}
+
+// Internal metrics response. Served only on /internal/metrics to loopback
+// callers (resource-monitor.sh sysd timer, curl 127.0.0.1:3000). Host-header
+// gated in the route handler — capacity/session counts would otherwise let
+// external attackers tune L7 load against WARN/CRIT thresholds and scrape
+// concurrent user counts.
+export interface InternalMetricsResponse extends HealthResponse {
+  // loadavg-derived proxy for CPU; authoritative utilization is sampled in
+  // resource-monitor.sh's /proc/stat delta on its 5-min systemd timer.
+  cpu_load_pct: number;
   mem_pct: number;
   load_avg_1m: number;
   active_sessions: number;
@@ -48,20 +66,9 @@ function readLoadAvg1m(): number {
   }
 }
 
-// `/health` runs on the request hot path (Cloudflare probes + ci-deploy canary).
-// A 1-second /proc/stat delta sampler (used by resource-monitor.sh on its 5-min
-// systemd timer) would add 1s latency to every probe. Instead, approximate CPU
-// utilization here as loadavg / nproc. This is a proxy — the authoritative
-// time-windowed signal lives in resource-monitor.sh.
-function readCpuPct1m(): number {
-  try {
-    const load = readLoadAvg1m();
-    const cpuinfo = readFileSync("/proc/cpuinfo", "utf8");
-    const cores = (cpuinfo.match(/^processor/gm) ?? []).length || 1;
-    return Math.min(100, Math.max(0, Math.floor((load / cores) * 100)));
-  } catch {
-    return 0;
-  }
+function readCpuLoadPct(): number {
+  const load = readLoadAvg1m();
+  return Math.min(100, Math.max(0, Math.floor((load / CORE_COUNT) * 100)));
 }
 
 // Use MemAvailable (reclaimable buffers/cache included) rather than
@@ -90,7 +97,14 @@ export async function buildHealthResponse(): Promise<HealthResponse> {
     sentry: process.env.SENTRY_DSN ? "configured" : "not-configured",
     uptime: Math.floor(process.uptime()),
     memory: Math.floor(process.memoryUsage().rss / 1024 / 1024),
-    cpu_pct_1m: readCpuPct1m(),
+  };
+}
+
+export async function buildInternalMetricsResponse(): Promise<InternalMetricsResponse> {
+  const base = await buildHealthResponse();
+  return {
+    ...base,
+    cpu_load_pct: readCpuLoadPct(),
     mem_pct: readMemPct(),
     load_avg_1m: readLoadAvg1m(),
     active_sessions: getActiveSessionCount(),

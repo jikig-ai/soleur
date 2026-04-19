@@ -7,8 +7,12 @@ const mockFs = {
   statSync: vi.fn<(path: string) => { isDirectory: () => boolean }>(),
 };
 
-vi.mock("../../server/ws-handler", () => ({
+vi.mock("../../server/session-registry", () => ({
   sessions: mockSessions,
+}));
+
+vi.mock("../../server/observability", () => ({
+  reportSilentFallback: vi.fn(),
 }));
 
 vi.mock("fs", () => ({

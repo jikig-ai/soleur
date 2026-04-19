@@ -18,7 +18,7 @@ TOTAL=0
 # Environment toggles (set before calling):
 #   MOCK_MEM_PCT=<int>       - memory utilization % reported by the meminfo mock (default: 50)
 #   MOCK_CPU_PCT=<int>       - CPU utilization % reported by the /proc/stat mock (default: 10)
-#   MOCK_SESSIONS=<int>      - active_sessions returned by the /health curl mock (default: 0)
+#   MOCK_SESSIONS=<int>      - active_sessions returned by the /internal/metrics curl mock (default: 0)
 #   MOCK_CURL_FAIL=1         - curl exits non-zero
 #   MOCK_DATE_EPOCH=<int>    - epoch returned by date +%s (default: 1700000000)
 #   MOCK_NO_WEBHOOK=1        - leave RESEND_API_KEY unset
@@ -90,7 +90,7 @@ exit 0
 MOCK
   chmod +x "$mock_dir/sleep"
 
-  # Mock curl -- captures args; for /health URL returns a JSON body with
+  # Mock curl -- captures args; for /internal/metrics URL returns a JSON body with
   # MOCK_SESSIONS; for Resend URL returns HTTP 200 via -w "%{http_code}".
   cat > "$mock_dir/curl" << MOCK
 #!/bin/bash
@@ -100,7 +100,7 @@ if [[ "\${MOCK_CURL_FAIL:-}" == "1" ]]; then
 fi
 echo "\$*" >> "$mock_dir/curl_args"
 for arg in "\$@"; do
-  if [[ "\$arg" == *"/health"* ]]; then
+  if [[ "\$arg" == *"/internal/metrics"* ]]; then
     echo "{\"active_sessions\": \${MOCK_SESSIONS:-0}}"
     exit 0
   fi
@@ -305,6 +305,96 @@ test_missing_resend_key() {
 }
 
 test_missing_resend_key
+
+echo ""
+echo "--- Dual alert (mem=96% fires both CRIT and WARN) ---"
+
+test_dual_alert_no_cooldown() {
+  TOTAL=$((TOTAL + 1))
+  local description="mem=96% with no cooldowns fires both CRIT and WARN"
+  local mock_dir
+  mock_dir=$(mktemp -d)
+  local output actual_exit
+  output=$(
+    export MOCK_MEM_PCT=96 MOCK_CPU_PCT=10
+    setup_mocks_and_run "$mock_dir" 2>&1
+  ) && actual_exit=0 || actual_exit=$?
+
+  local alert_count=0
+  [[ -f "$mock_dir/curl_args" ]] && alert_count=$(grep -c 'api.resend.com' "$mock_dir/curl_args")
+
+  if [[ "$actual_exit" -eq 0 ]] && [[ "$alert_count" -eq 2 ]] \
+     && grep -qF "CRIT" "$mock_dir/curl_args" \
+     && grep -qF "WARN" "$mock_dir/curl_args"; then
+    PASS=$((PASS + 1))
+    echo "  PASS: $description"
+  else
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: $description (exit=$actual_exit, alerts=$alert_count)"
+    echo "        output: $output"
+    [[ -f "$mock_dir/curl_args" ]] && echo "        curl_args: $(cat "$mock_dir/curl_args")"
+  fi
+  rm -rf "$mock_dir"
+}
+
+test_dual_alert_no_cooldown
+
+echo ""
+echo "--- Curl failure ---"
+
+test_curl_failure() {
+  TOTAL=$((TOTAL + 1))
+  local description="curl failure on Resend POST exits 0 and logs warning"
+  local mock_dir
+  mock_dir=$(mktemp -d)
+  local output actual_exit
+  output=$(
+    export MOCK_MEM_PCT=82 MOCK_CPU_PCT=10 MOCK_CURL_FAIL=1
+    setup_mocks_and_run "$mock_dir" 2>&1
+  ) && actual_exit=0 || actual_exit=$?
+  if [[ "$actual_exit" -eq 0 ]] && printf '%s\n' "$output" | grep -qF "Resend API POST failed"; then
+    PASS=$((PASS + 1))
+    echo "  PASS: $description"
+  else
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: $description (exit=$actual_exit)"
+    echo "        output: $output"
+  fi
+  rm -rf "$mock_dir"
+}
+
+test_curl_failure
+
+echo ""
+echo "--- /proc snapshot counter sanity ---"
+
+# Catches drift in the resource-monitor.sh /proc/stat reader: if the delta
+# sampler stops reading two snapshots (e.g., refactor drops the second head),
+# stat-counter stays at 1 and CPU defaults to 0 — tests would silently pass.
+test_proc_stat_counter() {
+  TOTAL=$((TOTAL + 1))
+  local description="/proc/stat delta reads exactly 2 snapshots per run"
+  local mock_dir
+  mock_dir=$(mktemp -d)
+  local output actual_exit
+  output=$(
+    export MOCK_MEM_PCT=50 MOCK_CPU_PCT=30
+    setup_mocks_and_run "$mock_dir" 2>&1
+  ) && actual_exit=0 || actual_exit=$?
+  local counter=0
+  [[ -f "$mock_dir/stat-counter" ]] && counter=$(cat "$mock_dir/stat-counter")
+  if [[ "$actual_exit" -eq 0 ]] && [[ "$counter" -eq 2 ]]; then
+    PASS=$((PASS + 1))
+    echo "  PASS: $description"
+  else
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: $description (exit=$actual_exit, counter=$counter)"
+    echo "        output: $output"
+  fi
+  rm -rf "$mock_dir"
+}
+
+test_proc_stat_counter
 
 echo ""
 echo "--- CPU warn threshold ---"
