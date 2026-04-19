@@ -194,16 +194,20 @@ green on the roadmap.
 - **Step 4 fails** — manually verify the repo-connect onboarding is
   not broken. File a P1 issue and block MU1 sign-off.
 
-## Security Baseline — `soleur-ai` App on `mu1-fixture`
+## Security Baseline — `soleur-ai` App on `jikig-ai`
 
-Expected install scope (confirm weekly or after any App settings
-change):
+Expected install state (confirm during every verification cycle or
+after any App settings change):
 
-- App: `soleur-ai`, installed on org `jikig-ai`.
-- Repository access: "Only select repositories" → exactly
-  `jikig-ai/mu1-fixture`. If this drifts to "All repositories", the App
-  silently gains access to every new private repo — re-scope via
-  `https://github.com/organizations/jikig-ai/settings/installations`.
+- App: `soleur-ai`, installation id `122213433` on org `jikig-ai`.
+- Repository access: "All repositories" (operational baseline — the App
+  is also used by the production `provisionWorkspaceWithRepo` path for
+  other `jikig-ai`-owned repos, so narrowing to "Only select
+  repositories" would regress unrelated workflows). Confirm the
+  installation id has not changed via
+  `gh api /orgs/jikig-ai/installations --jq '.installations[] |
+  select(.app_slug == "soleur-ai") | {id, repository_selection}'`.
+  Expected: `{"id": 122213433, "repository_selection": "all"}`.
 - `GITHUB_APP_PRIVATE_KEY` exists in Doppler `dev` (copied from `prd` to
   enable the gated AC-2 block). Dev-Doppler readers can mint installation
   tokens for any `soleur-ai` installation; the App's org-scope (just
