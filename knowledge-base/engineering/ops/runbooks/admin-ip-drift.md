@@ -43,7 +43,7 @@ The originating incident (2026-04-19) had `ADMIN_IPS=["82.67.29.121/32"]`
 (a single-entry list) and the operator's current egress was
 `66.234.146.82`. No margin, silent drop.
 
-## Diagnostic Decision Tree
+## Diagnosis
 
 Run these in order BEFORE blaming sshd or fail2ban. L3 (firewall) must
 be cleared before any L7 (sshd, fail2ban) hypothesis is considered. This
@@ -118,29 +118,35 @@ If `/soleur:admin-ip-refresh` is unavailable:
 ### Step R1 -- Add the current egress CIDR to Doppler `ADMIN_IPS`
 
 Never widen the firewall to `0.0.0.0/0` as a "quick fix". Instead,
-append the new CIDR to the existing list.
+append the new CIDR to the existing list using `jq` so the JSON shape
+is validated and no placeholder can survive a copy-paste:
 
 ```bash
-# Capture current list
+# Capture current list (JSON) and current egress IP:
 CURRENT=$(doppler secrets get ADMIN_IPS -p soleur -c prd_terraform --plain)
+EGRESS=$(curl -s --connect-timeout 5 --max-time 10 https://ifconfig.me/ip)
 
-# Capture current egress
-EGRESS=$(curl -s https://ifconfig.me/ip)
+# Sanity-check the egress matches an IPv4 before trusting it:
+[[ "$EGRESS" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] \
+  || { echo "bad egress: $EGRESS"; exit 1; }
 
-# Build the new list (manually review the JSON below before piping).
-# Write to a 0600 temp file; do NOT pass the value on the command line
-# (would leak via `ps auxf` and shell history).
+# Compose the new list (current + new /32) via jq. Reject if CURRENT
+# isn't valid JSON or jq produces nothing:
+NEW=$(printf '%s' "$CURRENT" | jq -c --arg ip "$EGRESS/32" '. + [$ip]') \
+  || { echo "jq compose failed"; exit 1; }
+
+# Write to a unique 0600 temp file; trap ensures scrub on exit.
+# Do NOT pass values on the command line (would leak via `ps auxf`).
 umask 077
-cat > /tmp/admin-ips.json <<EOF
-["$EGRESS/32", "<retain existing CIDRs here>"]
-EOF
+TMP=$(mktemp -t admin-ips.XXXXXX)
+trap 'shred -u "$TMP" 2>/dev/null || rm -f "$TMP"' EXIT
+printf '%s\n' "$NEW" > "$TMP"
 
-# Review /tmp/admin-ips.json, then write (--silent prevents echo):
-doppler secrets set ADMIN_IPS -p soleur -c prd_terraform --silent \
-  < /tmp/admin-ips.json
+# Review the composed list (optional):
+cat "$TMP"
 
-# Scrub the temp file:
-shred -u /tmp/admin-ips.json
+# Write (--silent prevents value echo into captured stdout):
+doppler secrets set ADMIN_IPS -p soleur -c prd_terraform --silent < "$TMP"
 ```
 
 ### Step R2 -- Apply the Terraform change

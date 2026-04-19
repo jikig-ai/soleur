@@ -19,6 +19,25 @@ When a CI deploy fails with an SSH error, the root cause may involve multiple la
 
 The Hetzner firewall `admin_ips` restriction was defense-in-depth that silently broke CI. Plans should check firewall rules when SSH deploys from dynamic-IP environments (CI runners, serverless) are in scope.
 
+## Update 2026-04-19 (see #2681)
+
+This learning was promoted into an enforced workflow gate after the same
+class recurred in a different form: on 2026-04-19 an operator SSH session
+(not CI) locked out because `ADMIN_IPS` held a single CIDR and the
+operator's ISP egress had rotated. See:
+
+- Rule: `AGENTS.md` `hr-ssh-diagnosis-verify-firewall`
+- Runbook: `knowledge-base/engineering/ops/runbooks/admin-ip-drift.md`
+- Skill: `plugins/soleur/skills/admin-ip-refresh/SKILL.md`
+- Plan checklist: `plugins/soleur/skills/plan/references/plan-network-outage-checklist.md`
+- Follow-up learning:
+  `knowledge-base/project/learnings/bug-fixes/2026-04-19-admin-ip-drift-misdiagnosed-as-fail2ban.md`
+
+Per AGENTS.md `wg-when-a-workflow-gap-causes-a-mistake-fix`, the learning
+alone was not sufficient -- the fix was to edit the plan/deepen-plan
+skills and add an AGENTS.md rule so the L3->L7 discipline fires on every
+future SSH/network-outage plan.
+
 ## Session Errors
 
 - First deploy attempt failed despite correct key — firewall blocked runners (not anticipated by plan)

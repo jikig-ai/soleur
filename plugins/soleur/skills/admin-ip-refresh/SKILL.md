@@ -39,10 +39,19 @@ Read [admin-ip-refresh-procedure.md](./references/admin-ip-refresh-procedure.md)
 2. **Read current `ADMIN_IPS`** via `doppler secrets get ADMIN_IPS -p soleur -c prd_terraform --plain`. Parse as JSON list. Abort if the secret is missing.
 3. **Diff.** If `<current-egress>/32` is in the list, print "No drift." and exit 0. If absent, show the pre-image list and the proposed post-image list (current list with `<egress>/32` appended).
 4. **Warn on list-length invariants.** Post-image length == 1 triggers a P1 warning (no rotation margin). Post-image length > 10 triggers a P2 warning (stale residue, review-and-prune recommended).
-5. **Operator ack.** Print the exact `doppler secrets set` invocation the skill will run. Wait for explicit per-command go-ahead -- no `--yes`, no `-auto-approve`, per AGENTS.md `hr-menu-option-ack-not-prod-write-auth`.
+5. **Operator ack.** Print the exact `doppler secrets set` invocation the skill will run. Wait for literal `yes` per-command ack -- no `--yes`, no `-auto-approve`, per AGENTS.md `hr-menu-option-ack-not-prod-write-auth`. Under the length-1 warning in Step 4, also require a literal `understood` ack before reaching this step.
 6. **Write Doppler.** Stdin-piped from a 0600 temp file (no CLI-arg value, no `ps auxf` leak), `--silent` to prevent value echo per Doppler's setting-secrets guide. Re-read the secret and compare byte-for-byte. Print the Doppler dashboard activity URL.
 7. **Emit `terraform` invocations.** Print the exact `terraform plan` and `terraform apply` commands (and, under `--fast`, the `-target=hcloud_firewall.web` variants) for the operator to run. Do NOT execute them.
 8. **Verify prompt.** Ask whether the operator ran `terraform apply`. On "no", record the gap in the session output and suggest a follow-up `--verify` invocation.
+
+## Exit codes
+
+The skill exits non-zero on failure so cron/one-shot invocations do not silently no-op. Full contract in [admin-ip-refresh-procedure.md](./references/admin-ip-refresh-procedure.md) §"Exit codes".
+
+- `0` -- success (no drift OR drift corrected + operator acked + invocation emitted).
+- `3` -- all three IP-detection services failed.
+- `4` -- Doppler read or write failed.
+- `5` -- operator refused the mutation (rejected the `yes` prompt OR the `understood` single-entry prompt).
 
 ## Sharp Edges
 

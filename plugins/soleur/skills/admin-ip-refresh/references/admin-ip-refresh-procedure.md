@@ -27,16 +27,29 @@ detect_egress_ip() {
     "https://api.ipify.org"
     "https://icanhazip.com"
   )
+  # Strict IPv4 octet: 0-9, 10-99, 100-199, 200-249, 250-255 (no leading zeros).
+  local octet='(0|[1-9][0-9]{0,1}|1[0-9]{2}|2[0-4][0-9]|25[0-5])'
+  local ipv4="^${octet}\.${octet}\.${octet}\.${octet}$"
   for svc in "${services[@]}"; do
     local ip
-    ip="$(curl -fsS --connect-timeout 5 --max-time 10 "$svc" 2>/dev/null \
+    # --max-filesize caps the body at 64 bytes to protect the regex from
+    # a hostile/degraded provider returning multi-MB HTML.
+    ip="$(curl -fsS --connect-timeout 5 --max-time 10 --max-filesize 64 "$svc" 2>/dev/null \
+         | head -c 64 \
          | tr -d '[:space:]')" || continue
-    if [[ "$ip" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; then
-      IFS=. read -r a b c d <<<"$ip"
-      if (( a<=255 && b<=255 && c<=255 && d<=255 )); then
-        echo "$ip"
-        return 0
-      fi
+    if [[ "$ip" =~ $ipv4 ]]; then
+      # Reject reserved / private / link-local ranges that should never be
+      # the operator's public egress IP (indicates a broken provider or
+      # misconfigured VPN returning a local address):
+      IFS=. read -r a b c _ <<<"$ip"
+      if (( a == 0 )) ; then continue; fi                  # 0.0.0.0/8
+      if (( a == 10 )) ; then continue; fi                 # 10.0.0.0/8
+      if (( a == 127 )) ; then continue; fi                # 127.0.0.0/8 loopback
+      if (( a == 169 && b == 254 )) ; then continue; fi    # 169.254.0.0/16 link-local
+      if (( a == 172 && b >= 16 && b <= 31 )) ; then continue; fi  # 172.16.0.0/12
+      if (( a == 192 && b == 168 )) ; then continue; fi    # 192.168.0.0/16
+      echo "$ip"
+      return 0
     fi
   done
   return 1

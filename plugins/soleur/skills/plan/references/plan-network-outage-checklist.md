@@ -2,8 +2,10 @@
 
 Trigger: feature description or existing plan Overview matches any of
 `SSH`, `connection reset`, `kex`, `firewall`, `unreachable`, `timeout`,
-`502`, `503`, `504`, `handshake`, `EHOSTUNREACH`, `ECONNRESET` (case
-insensitive).
+`502`, `503`, `504`, `handshake`, `EHOSTUNREACH`, `ECONNRESET`
+(case-insensitive). AGENTS.md `hr-ssh-diagnosis-verify-firewall` summarises
+the same set as `(reset, timeout, kex, handshake, 5xx)`; this checklist
+is authoritative on the full regex -- keep them in sync when extending.
 
 When triggered, the plan's `## Hypotheses` section MUST include a
 verification entry for each of the four layers below BEFORE any
