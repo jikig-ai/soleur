@@ -14,7 +14,7 @@
 //   - knowledge-base/engineering/ops/runbooks/mu1-signup-workspace-verification.md
 
 import { tmpdir } from "os";
-import { mkdtempSync, existsSync, readlinkSync } from "fs";
+import { mkdtempSync, existsSync, readlinkSync, readdirSync } from "fs";
 import { join } from "path";
 import { randomUUID } from "crypto";
 
@@ -177,8 +177,76 @@ describe.skipIf(process.env.MU1_INTEGRATION !== "1")(
 
 // ---------------------------------------------------------------------------
 // AC-2: provisionWorkspaceWithRepo clones the user's connected repo.
-// Deferred — requires a public fixture repo plus a live GitHub App
-// installation token. Tracked in #2605; until it lands, AC-2 is verified
-// manually per the "AC-2 — Manual repo-clone verification" section of
+// Gated on MU1_FIXTURE_REPO_URL + MU1_FIXTURE_INSTALLATION_ID. Orthogonal to
+// AC-1's MU1_INTEGRATION gate (AC-1 needs dev Supabase; AC-2 needs GitHub App
+// creds + a public fixture repo). See #2605 and
 // knowledge-base/engineering/ops/runbooks/mu1-signup-workspace-verification.md.
 // ---------------------------------------------------------------------------
+
+// Partial-provisioning canary. If exactly one of the two fixture env vars is
+// set, `describe.skipIf` would silently skip and mask a Doppler misconfig.
+// Fail loudly at collection time so the operator notices immediately.
+const AC2_HAS_REPO_URL = !!process.env.MU1_FIXTURE_REPO_URL;
+const AC2_HAS_INSTALL_ID = !!process.env.MU1_FIXTURE_INSTALLATION_ID;
+if (AC2_HAS_REPO_URL !== AC2_HAS_INSTALL_ID) {
+  throw new Error(
+    "MU1 AC-2 fixture env vars partially set — MU1_FIXTURE_REPO_URL and " +
+      "MU1_FIXTURE_INSTALLATION_ID must both be set or both unset. " +
+      `Got repo_url_set=${AC2_HAS_REPO_URL} install_id_set=${AC2_HAS_INSTALL_ID}.`,
+  );
+}
+
+// GitHub installation ids fit in i32; cap at 10 digits (~10B) for headroom.
+const INSTALLATION_ID_RE = /^[1-9][0-9]{0,9}$/;
+
+describe.skipIf(!AC2_HAS_REPO_URL || !AC2_HAS_INSTALL_ID)(
+  "MU1 AC-2: provisionWorkspaceWithRepo clones fixture",
+  () => {
+    test("clones the fixture repo and overlays plugin symlink", async () => {
+      const { provisionWorkspaceWithRepo } = await import("../server/workspace");
+      const userId = randomUUID();
+      const repoUrl = process.env.MU1_FIXTURE_REPO_URL!;
+      const rawId = process.env.MU1_FIXTURE_INSTALLATION_ID!;
+
+      // Defend against argument-injection by ensuring repoUrl is a GitHub
+      // HTTPS URL — git accepts flags like `--upload-pack=<cmd>` as
+      // positional args when the URL begins with `-`.
+      expect(repoUrl.startsWith("https://github.com/")).toBe(true);
+
+      // Regex gate BEFORE Number(): `Number("1e20")` and `Number("42.0")`
+      // pass `isInteger` on the coerced value — neither is a valid
+      // installation id. Two assertions so failures self-identify.
+      expect(INSTALLATION_ID_RE.test(rawId.trim())).toBe(true);
+      const installationId = Number(rawId);
+      expect(installationId).toBeGreaterThan(0);
+
+      const ws = await provisionWorkspaceWithRepo(
+        userId,
+        repoUrl,
+        installationId,
+      );
+      provisionedWorkspaces.push(ws);
+
+      // Fixture shape assertions. knowledge-base/README.md is the fixture's
+      // stub (`scaffoldWorkspaceDefaults` only creates subdirs inside
+      // knowledge-base/ but never writes a README there) — its presence
+      // proves the clone wrote fixture content, not just scaffolded.
+      expect(existsSync(join(ws, "README.md"))).toBe(true);
+      expect(existsSync(join(ws, ".git"))).toBe(true);
+      expect(existsSync(join(ws, "knowledge-base", "README.md"))).toBe(true);
+
+      // Fixture drift canary — fail if the fixture repo grows unexpected
+      // top-level entries (e.g. `.github/workflows/`, `package.json`,
+      // `Dockerfile`). Filters out overlays added by scaffoldWorkspaceDefaults.
+      const OVERLAY_ENTRIES = new Set([".claude", "plugins"]);
+      const fixtureEntries = readdirSync(ws)
+        .filter((e) => !OVERLAY_ENTRIES.has(e))
+        .sort();
+      expect(fixtureEntries).toEqual([".git", "README.md", "knowledge-base"]);
+
+      // Plugin symlink is overlaid post-clone (AC-3 contract).
+      const symlinkPath = join(ws, "plugins", "soleur");
+      expect(readlinkSync(symlinkPath)).toBe(PLUGIN_ROOT);
+    }, 60_000);
+  },
+);

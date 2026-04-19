@@ -17,6 +17,33 @@ ogImageAlt: "Soleur Pricing — Every department. One price."
       </div>
     </section>
 
+    <!-- Waitlist CTA -->
+    <section class="landing-cta" id="waitlist">
+      <h2>Your AI organization is ready.</h2>
+      <p>Join the waitlist for early access and founder pricing. Or start building today with the open source version.</p>
+      <form class="newsletter-form waitlist-form" id="newsletter-pricing-waitlist"
+        action="https://buttondown.com/api/emails/embed-subscribe/{{ site.newsletter.username }}"
+        method="post">
+        <label for="newsletter-email-pricing-waitlist" class="sr-only">Email address</label>
+        <input type="email" name="email" id="newsletter-email-pricing-waitlist"
+          placeholder="you@example.com" required autocomplete="email" inputmode="email"
+          aria-describedby="newsletter-privacy-pricing-waitlist" />
+        <input type="hidden" name="embed" value="1" />
+        <input type="hidden" name="tag" value="pricing-waitlist" />
+        <input type="hidden" name="metadata__tier_interest" value="hosted-pro" />
+        <div class="honeypot-trap" aria-hidden="true">
+          <input type="text" name="url" tabindex="-1" autocomplete="off" />
+        </div>
+        <button type="submit" class="btn btn-primary">Join the Waitlist</button>
+        <p id="newsletter-privacy-pricing-waitlist" class="newsletter-privacy">
+          No spam. We email you once when early access opens.
+          <a href="/legal/privacy-policy/">Privacy Policy</a>
+        </p>
+        <div class="newsletter-status" aria-live="polite" role="status"></div>
+      </form>
+      <p class="waitlist-secondary"><a href="getting-started/">Or start with the free open source version &rarr;</a></p>
+    </section>
+
     <!-- Hiring Comparison Table -->
     <section class="landing-section">
       <div class="landing-section-inner">
@@ -326,29 +353,3 @@ ogImageAlt: "Soleur Pricing — Every department. One price."
       </div>
     </section>
 
-    <!-- Waitlist CTA -->
-    <section class="landing-cta" id="waitlist">
-      <h2>Your AI organization is ready.</h2>
-      <p>Join the waitlist for early access and founder pricing. Or start building today with the self-hosted version.</p>
-      <form class="newsletter-form waitlist-form" id="newsletter-pricing-waitlist"
-        action="https://buttondown.com/api/emails/embed-subscribe/{{ site.newsletter.username }}"
-        method="post">
-        <label for="newsletter-email-pricing-waitlist" class="sr-only">Email address</label>
-        <input type="email" name="email" id="newsletter-email-pricing-waitlist"
-          placeholder="you@example.com" required autocomplete="email" inputmode="email"
-          aria-describedby="newsletter-privacy-pricing-waitlist" />
-        <input type="hidden" name="embed" value="1" />
-        <input type="hidden" name="tag" value="pricing-waitlist" />
-        <input type="hidden" name="metadata__tier_interest" value="hosted-pro" />
-        <div class="honeypot-trap" aria-hidden="true">
-          <input type="text" name="url" tabindex="-1" autocomplete="off" />
-        </div>
-        <button type="submit" class="btn btn-primary">Join the Waitlist</button>
-        <p id="newsletter-privacy-pricing-waitlist" class="newsletter-privacy">
-          No spam. We email you once when early access opens.
-          <a href="/legal/privacy-policy/">Privacy Policy</a>
-        </p>
-        <div class="newsletter-status" aria-live="polite" role="status"></div>
-      </form>
-      <p class="waitlist-secondary"><a href="getting-started/">Or start with the free self-hosted version &rarr;</a></p>
-    </section>
