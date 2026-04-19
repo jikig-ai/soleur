@@ -135,9 +135,16 @@ jobs:
             # exhaust the authenticated rate limit (5000/hr); the cap bounds
             # the per-issue API cost to 50 calls × 200 issues = 10k worst
             # case, well inside one rate-limit window across daily runs.
+            # `|| true` swallows the inner `grep` exit-1 on no-match. Without
+            # it, the `pipefail` set above propagates the failure out of
+            # `$(...)` and `bash -e` (GitHub Actions default) kills the whole
+            # job on the first issue whose title/body has no `alert #N` token.
+            # Both grep calls in the pipe need guarding (the second `grep -oE`
+            # also exits 1 if the first emits nothing).
             ALERTS=$(echo "$issue" | jq -r '.title + "\n" + (.body // "")' \
-              | grep -oiE 'alert[[:space:]]*#?[0-9]+' \
-              | grep -oE '[0-9]+' | sort -un | head -n 50)
+              | { grep -oiE 'alert[[:space:]]*#?[0-9]+' || true; } \
+              | { grep -oE '[0-9]+' || true; } \
+              | sort -un | head -n 50)
 
             if [ -z "$ALERTS" ]; then
               SKIPPED=$((SKIPPED + 1))
