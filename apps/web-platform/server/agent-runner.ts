@@ -747,6 +747,11 @@ resuming an existing thread preserves context for the user.`;
           : {}),
         sandbox: {
           enabled: true,
+          // Refuse to start if sandbox deps (bubblewrap, socat) are missing.
+          // Without this flag, the SDK silently runs unsandboxed on dependency
+          // drift (per @anthropic-ai/claude-agent-sdk sdk.d.ts:3586) — Tier 4
+          // defense-in-depth disappears with no Sentry signal. See #2634.
+          failIfUnavailable: true,
           autoAllowBashIfSandboxed: true,
           allowUnsandboxedCommands: false,
           // Docker containers cannot mount proc inside user namespaces (kernel
