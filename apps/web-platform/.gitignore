@@ -24,3 +24,6 @@ next-env.d.ts
 dist/
 test-results/
 e2e/.auth/
+
+# sandbox argv capture (one-time probe, per sdk-probe-notes.md)
+scripts/capture-bwrap-argv.*
