@@ -23,13 +23,13 @@ Closes #1450 (test exists). MU3 gate closes in this PR if all shared-surface cas
 - **Workspace derivation:** `apps/web-platform/server/workspace.ts:49` — `provisionWorkspace(userId)` writes to `join(process.env.WORKSPACES_ROOT || "/workspaces", userId)`. UUID-validated at `workspace.ts:13`.
 - **Test runner:** `apps/web-platform/vitest.config.ts:18` already includes `test/**/*.test.ts` in `node` environment — no config change. Run via `./node_modules/.bin/vitest run` (AGENTS `cq-in-worktrees-run-vitest-via-node-node`).
 - **Prior art:** `test/sandbox.test.ts` (path-logic unit), `test/sandbox-hook.test.ts` (hook callback unit), `infra/ci-deploy.test.sh:919-962` (existential bwrap canary). None are cross-workspace isolation tests.
-- **SDK permission semantics (Context7-confirmed):** `permissionMode: "bypassPermissions"` skips `canUseTool` but **hooks still fire**. Tier-4 isolation therefore requires `permissionMode: "bypassPermissions"` AND no PreToolUse hooks registered in the test's `query()` options.
+- **SDK permission semantics (Phase 1 spike, 2026-04-19 — see `sdk-probe-notes.md`):** No direct SDK tool-invocation API exists. Per `sdk.d.ts:1180-1186`, `sandbox.filesystem.allowWrite`/`denyRead` are **additive** to permission rules from Read/Edit tool allow/deny lists — `permissionMode: "bypassPermissions"` may strip the permission-rule-derived bwrap mounts, resulting in *looser* restrictions than production, not tier-4-isolated. **The plan's original tier-isolation design via `bypassPermissions` is contradicted by the SDK contract.** Phase 1 spike committed (`5c23ea29`); founder-approved **Path C** (hybrid): direct `child_process.spawn("bwrap", capturedArgv, ...)` for tier-4-local cases + `query()` with production config for SDK-specific cases (FR8/FR9) + one SDK smoke case.
 
 For prior security-learning context (CWE-22 prefix collision, CWE-59 symlink escape, `/proc` denyRead, canUseTool defense-in-depth, Docker seccomp), see the brainstorm's Research section.
 
 ## Research Reconciliation — Spec vs. Codebase
 
-Spec TR4 says `permissions.allow: []` — this is agent-runner's wrapper shape, not an SDK option. Plan uses the SDK's `allowedTools: [...]` instead. Spec FR13 assumes an exported `FILE_TOOLS` constant — none exists in the SDK, so the plan hard-codes the list as a `coverageMap`. Spec FR12 uses "Agent" — SDK calls it `Task`. All three are wording-level, not architecture changes.
+Spec TR4 says `permissions.allow: []` — this is agent-runner's wrapper shape, not an SDK option. Plan uses the SDK's `allowedTools: [...]` instead. Spec FR13 assumes an exported `FILE_TOOLS` constant — none exists in the SDK, so the plan hard-codes the list as a `coverageMap`. Spec FR12 uses "Agent" — SDK calls it `Task`. **Spec TR4 + FR14 assert `permissionMode: "bypassPermissions"` as the tier-4 isolation primitive — Phase 1 spike proved this assumption wrong; Path C (hybrid) replaces it with direct-bwrap-spawn for tier-4-local cases.** First three are wording-level; the tier-isolation correction is architectural but absorbed into the Phase 2-8 revisions below rather than a spec rewrite.
 
 ## Plan Review Applied
 
@@ -58,56 +58,63 @@ None. Queried 28 open `code-review`-labeled issues against every planned file pa
 
 ### Phase 1 — Invocation-path decision spike (~1.5h)
 
-Resolve C1 + C2 before writing any test. Output: one commit updating the plan + `knowledge-base/project/specs/feat-verify-workspace-isolation/sdk-probe-notes.md`. No scaffolding under `apps/web-platform/infra/` — probe code lives in `apps/web-platform/scripts/sdk-probe.ts` (gitignored) and is deleted after notes are written.
+**STATUS: COMPLETE.** Spike output committed as `5c23ea29 docs(spec): SDK probe notes — tier-isolation assumption contradicts SDK docs`. Notes at `knowledge-base/project/specs/feat-verify-workspace-isolation/sdk-probe-notes.md`. Founder approved **Path C (Hybrid)** — most cases direct `spawn("bwrap", capturedArgv, ...)`, FR8/FR9 via real `query()` with production config, one `query()` smoke case proving SDK still invokes bwrap.
 
-- [ ] 1.1 Confirm C1 empirically: pick the minimum invocation that deterministically runs a chosen shell command inside the SDK-configured bwrap. Candidates in order of preference: (a) SDK direct-tool entry for Bash (if exported), (b) `child_process.spawn("bwrap", argv)` with argv captured once from an instrumented SDK run, (c) `query()` with prompt + `allowedTools: ["Bash"]` accepting the model-compliance risk.
-- [ ] 1.2 Confirm C2: for `LS` and `NotebookRead` tool calls under `permissionMode: "bypassPermissions"` + no hooks, does the tool's own input validator reject cross-workspace paths before bwrap? If yes, those tool-level tests are tier-2 assertions, not tier-4, and the plan's FR10/FR11 semantics change.
-- [ ] 1.3 Write `sdk-probe-notes.md` with: chosen invocation path (candidate letter), exact code shape, whether structured-path tools reach tier 4, SDK version pinned at probe time.
-- [ ] 1.4 Amend this plan's Phase 3–6 scaffolding notes if the spike chose (b) or (c) — one inline edit, not a rewrite.
-- [ ] 1.5 `git rm apps/web-platform/scripts/sdk-probe.ts` if it landed in git; confirm `.gitignore` covers `apps/web-platform/scripts/sdk-probe.*`.
+Phases 2+ below revised to match Path C.
 
-### Phase 2 — Fixture helpers (~1.5h)
+### Phase 2 — Capture SDK bwrap argv + fixture helpers (~2h)
 
-Land a zero-dep helper module. Helpers are exercised by the isolation tests themselves — no separate meta-test.
+**2A — Capture bwrap argv (one-time)**. Run a real `query()` with production-equivalent sandbox config in a controlled environment with `strace -f -e trace=execve -s 8192` attached (or a Node `child_process.spawn` wrapper preloaded via `--require`). Capture the exact argv the SDK hands to bwrap. Commit the argv + capture methodology as a table in `sdk-probe-notes.md` ("Captured argv — <date>"). This argv becomes the reference used by Phase 3+ direct-spawn cases. Document re-capture trigger: any `@anthropic-ai/claude-agent-sdk` minor version bump.
 
-- [ ] 2.1 Create `apps/web-platform/test/helpers/sandbox-isolation-fixtures.ts` exporting:
-  - `createWorkspacePair()` — returns `{ rootA, rootB, cleanup }`; dirs are `/tmp/soleur-isolation-<pid>-<ts>/<uuidA|B>`.
-  - `seedMarker(rootB, name, content)` — writes marker file, returns absolute path.
+- [ ] 2A.1 Write `apps/web-platform/scripts/capture-bwrap-argv.ts` (gitignored) — runs `query()` with production `sandbox` config under strace capture. Minimal prompt that forces bwrap invocation (e.g., "Run: `true`").
+- [ ] 2A.2 Execute the capture locally (requires `ANTHROPIC_API_KEY` from `doppler secrets get ANTHROPIC_API_KEY -p soleur -c dev --plain` — if dev config lacks the key, use prd config in read-only mode).
+- [ ] 2A.3 Record the full argv in `sdk-probe-notes.md` under a `## Captured bwrap argv (2026-04-19)` heading. Include the SDK version inspected (`0.2.85` unless changed).
+- [ ] 2A.4 `git rm apps/web-platform/scripts/capture-bwrap-argv.ts`; ensure `.gitignore` covers `apps/web-platform/scripts/capture-bwrap-argv.*`.
+
+**2B — Fixture helpers**. Zero-dep; helpers exercised by the tests themselves (no meta-test).
+
+- [ ] 2B.1 Create `apps/web-platform/test/helpers/sandbox-isolation-fixtures.ts` exporting:
+  - `createWorkspacePair()` — `{ rootA, rootB, cleanup }`; dirs `/tmp/soleur-isolation-<pid>-<ts>/<uuidA|B>`.
+  - `seedMarker(root, name, content)` — writes marker file, returns abs path.
   - `linkEscape(rootA, linkName, target)` — creates symlink (target may be dangling or cross-workspace).
-  - `spawnSandboxB(rootB, env, longRunningCommand)` — spawns a child Node process, returns `{ pid, ready: Promise<void>, kill: () => Promise<void> }`; stdout `READY\n` handshake; `kill()` sends SIGTERM, awaits exit.
-  - `rescueStaleFixtures()` — at test boot: asserts TMPDIR prefix starts with `/tmp/` AND contains `soleur-isolation-` (blast-radius guard per AGENTS `cq-destructive-prod-tests-allowlist`) before `rm -rf`; then `pgrep -f sandbox-isolation | xargs -r kill -TERM`.
-  - `probeSkip()` — returns `boolean` (skip if true); logs the reason to stderr. Probes in order: `command -v bwrap`, `process.env.ANTHROPIC_API_KEY`, `spawnSync('bwrap', ['--unshare-user', 'true'])` exit code.
-- [ ] 2.2 Make helpers pure Node (`fs`, `os`, `path`, `child_process`). No SDK import.
+  - `spawnBwrap(workspacePath, argv, command)` — constructs full bwrap argv by templating the captured-argv reference with the workspace-specific bind mount, then `spawn("bwrap", argv, { stdio: ['ignore', 'pipe', 'pipe'] })`. Returns `{ stdout: string, stderr: string, exitCode: number }` after the child exits.
+  - `spawnSandboxB(rootB, env, longRunningCommand)` — for FR7; spawns a bwrap child as a long-running process, returns `{ pid, ready: Promise<void>, kill: () => Promise<void> }`; stdout `READY\n` handshake; SIGTERM → 2s → SIGKILL.
+  - `rescueStaleFixtures()` — asserts TMPDIR starts with `/tmp/` AND contains `soleur-isolation-` (blast-radius guard per `cq-destructive-prod-tests-allowlist`) before `rm -rf`; `pgrep -f soleur-isolation | xargs -r kill -TERM`.
+  - `probeSkip(kind: "direct" | "query")` — `{ skip: boolean, reason: string }`. For `"direct"`: probes `command -v bwrap` + ephemeral `bwrap --unshare-user true` exit code. For `"query"`: additionally probes `process.env.ANTHROPIC_API_KEY`.
+- [ ] 2B.2 Pure Node imports only (`fs`, `os`, `path`, `child_process`). No SDK import in the helper module.
 
 ### Phase 3 — Smoke (FR2) + TDD inversion (~2h)
 
-Prove the harness can exercise OS-level denial AND that its assertion can actually fail.
+Prove the direct-spawn harness can exercise OS-level denial AND that its assertion can actually fail.
 
-- [ ] 3.1 Create `apps/web-platform/test/sandbox-isolation.test.ts` with a tight top-of-file comment (3 lines): each test uses `permissionMode: "bypassPermissions"` + `hooks: {}`, so bwrap (tier 4) is the sole active defender; a passing assertion means OS-level denial, not higher-tier path validation.
-- [ ] 3.2 Implement `runInSandbox(workspacePath, opts)` — one parameterized helper, not two — using whichever invocation path Phase 1 chose. `opts`: `{ prompt?, toolName?, toolInput?, allowedTools }`. Shared sandbox config: `filesystem.allowWrite: [workspacePath]`, `filesystem.denyRead: ["/workspaces", "/proc"]`, `settingSources: []`, `hooks: {}`, `permissionMode: "bypassPermissions"`, `disallowedTools: []` (tier 2 not exercised).
-- [ ] 3.3 Write FR2: seed `rootB/secret.md`, `runInSandbox(rootA, { prompt: bash-cat-command, allowedTools: ["Bash"] })`, assert `stdout` does not contain marker AND exit != 0. Wrap in try/catch that rethrows pre-assertion errors as `new Error("setup failure, not leak: ...")`.
-- [ ] 3.4 **TDD inversion (C4):** before declaring green, temporarily change `allowWrite: [rootA]` to `allowWrite: [rootA, rootB]` (or equivalent relaxation per Phase 1's chosen path), confirm the assertion fails with the marker appearing in stdout. Restore config. Commit both steps separately so reviewers see the failing-state evidence.
-- [ ] 3.5 Run the inverted test → confirm RED; run the proper test → confirm GREEN. Commit when both are clean.
+- [ ] 3.1 Create `apps/web-platform/test/sandbox-isolation.test.ts` with a top-of-file comment (5 lines): explains Path C — most cases use `spawnBwrap()` with argv captured from the SDK (tier-4-only, deterministic, no LLM); FR8/FR9 use real `query()` with production config (full-stack SDK-integration); one `query()` smoke case proves SDK still invokes bwrap. Cite `sdk-probe-notes.md` for the captured argv reference.
+- [ ] 3.2 FR2 smoke via `spawnBwrap(rootA, argv, "cat <rootB>/secret.md")`. Seed marker in `rootB/secret.md`. Assert `stdout` does not contain marker AND `exitCode !== 0`. Wrap in try/catch rethrowing pre-assertion errors as `new Error("setup failure, not leak: ...")`.
+- [ ] 3.3 **TDD inversion (C4):** before declaring green, temporarily relax the bwrap argv to include `--bind <rootB> <rootB>` (making rootB writable+readable from the sandbox). Confirm the assertion fails with the marker appearing in stdout. Revert argv. Commit both steps separately so reviewers see the failing-state evidence.
+- [ ] 3.4 Run the inverted test → confirm RED; run the proper test → confirm GREEN. Commit when both clean.
+- [ ] 3.5 SDK-integration smoke: single `query()` call with production sandbox config asking the model to `cat <rootB>/secret.md`. Accept one retry on ambiguous (non-Bash) output. Assert marker absent. If this test flakes persistently (>30% on local retry), file issue and mark `test.fails({ todo: '#<N>' })` with explanation.
 
-### Phase 4 — Tier-4-isolatable adversary cases (~2h)
+### Phase 4 — Tier-4 adversary cases (~1.5h; direct spawn)
 
-- [ ] 4.1 FR3 direct write denial: `runInSandbox(rootA, { prompt: "echo pwned > <B>/pwned", allowedTools: ["Bash"] })`; assert exit != 0 AND no `pwned` file in `rootB` after.
-- [ ] 4.2 FR4 prefix collision: workspace at `<prefix>/tenant`, sibling at `<prefix>/tenant-evil/secret.md`; assert denial.
-- [ ] 4.3 FR5 symlink escape: `linkEscape(rootA, "link", rootB + "/secret.md")`; `cat rootA/link` via Bash; assert denial. Also covers dangling-symlink case (realpath canonicalization).
-- [ ] 4.4 FR10 LS tool: `runInSandbox(rootA, { toolName: "LS", toolInput: { path: rootB }, allowedTools: ["LS"] })`; assert denial. **If Phase 1's C2 investigation found LS has an internal path validator that fires before bwrap, mark this case as tier-2 in the test comment and retain it for coverage — or move it to a separate "tier-2 regression" describe block.**
-- [ ] 4.5 FR11 NotebookRead: seed `rootB/foo.ipynb` (minimal valid notebook JSON); run NotebookRead against it from `rootA`; same tier-2-vs-tier-4 caveat as FR10.
+All cases use `spawnBwrap(rootA, argv, command)`. Deterministic; no LLM involvement.
 
-### Phase 5 — Concurrent-sandbox case (~2h)
+- [ ] 4.1 FR3 direct write: `echo pwned > <rootB>/pwned && ls <rootB>/pwned`; assert exit != 0 AND no `pwned` file in `rootB` after.
+- [ ] 4.2 FR4 prefix collision: workspace `<prefix>/tenant`, sibling `<prefix>/tenant-evil/secret.md`; attempt read.
+- [ ] 4.3 FR5 symlink escape: `linkEscape(rootA, "link", rootB + "/secret.md")`; `cat rootA/link` — must fail. Also covers dangling-symlink case via realpath canonicalization.
+- [ ] 4.4 FR10 / FR11: **SKIPPED at tier-4 layer**. LS and NotebookRead are SDK tools — they don't have a direct-bwrap analog. Two options, decide during implementation: (a) skip entirely — LS/NotebookRead isolation is tier-3 concern, already covered by `sandbox-hook.test.ts` and `sandbox.test.ts`, so #1450's scope becomes "tier-4 + full-stack," not "every tool"; (b) add full-stack `query()` cases for LS/NotebookRead in Phase 5 alongside FR7/FR8/FR9. **Recommendation: (a).** Document the scope change in the top-of-file comment and in Phase 9 PR body. Update coverage map (Phase 7) accordingly.
 
-- [ ] 5.1 FR7 `/proc/<pid>/environ`: use `spawnSandboxB` to launch a long-running child with marker env `LEAK_MARKER=<uuid>` + `sleep 60`. Await child's READY. From sandbox A, attempt `cat /proc/${B.pid}/environ`. Assert `LEAK_MARKER` absent and exit != 0. `afterEach`: `B.kill()`, assert exit within 3s.
-- [ ] 5.2 FR12 Task subagent: deferred to follow-up issue. Plan captures reasoning: same parent process tree, same bwrap mount namespace — assertion is tautological without a separate invocation path. File `feat: Task-subagent cross-workspace test (MU3 followup)` as P2 if a clean verification approach surfaces later.
+### Phase 5 — Concurrent sandbox (~2h; direct spawn)
+
+- [ ] 5.1 FR7 `/proc/<pid>/environ`: use `spawnSandboxB(rootB, { LEAK_MARKER: "<uuid>" }, "sleep 60")` — spawns bwrap with long-running child; awaits READY handshake. From a direct `spawnBwrap(rootA, argv, "cat /proc/${B.pid}/environ")`, assert `LEAK_MARKER` absent and exit != 0. `afterEach`: `B.kill()`, assert child exited within 3s.
+- [ ] 5.2 FR12 Task subagent: deferred to follow-up issue. Reasoning: same parent process tree, same bwrap mount namespace — assertion is tautological. File `feat: Task-subagent cross-workspace test (MU3 followup)` as P2 if a deterministic verification approach surfaces.
 
 ### Phase 6 — Shared-surface audit (~3h; sequencing fixed per Kieran C3)
 
 Write assertions as *isolation proofs* first. Observe results. If leaks surface, invert the assertions and file follow-up issues — not before.
 
-- [ ] 6.1 FR8 shared `/tmp`: sandbox A writes `/tmp/soleur-isolation-leak-test` with marker; spawn sandbox B (separate child process via `spawnSandboxB`) and from B attempt `cat /tmp/soleur-isolation-leak-test`. Assertion: `expect(stdoutB).not.toContain(marker)`. Wrap in setup-failure try/catch.
-- [ ] 6.2 FR9 SDK session files: after a full `query()` under sandbox A with `persistSession: true`, under sandbox B attempt to read `~/.claude/projects/<dir>/`. Assertion: `expect(readResult).not.toContain(markerFromA)`.
+**Path C note:** FR8 and FR9 require real SDK behavior (shared tmpfs + session file handling) so both use `query()` with **production-equivalent config** — `permissionMode: "default"`, hooks enabled, canUseTool callback active. These cases test the full stack, not tier-4 alone. Skip via `probeSkip("query")` if API key absent.
+
+- [ ] 6.1 FR8 shared `/tmp`: run `query()` under rootA with a prompt that writes `/tmp/soleur-isolation-leak-test` containing marker. Separately run `query()` under rootB with a prompt that reads `/tmp/soleur-isolation-leak-test`. Assertion: `expect(stdoutB).not.toContain(marker)`. Wrap in setup-failure try/catch. **If LLM refuses to execute either prompt, mark skip with reason "model declined; retry N/N"** — do not count as green.
+- [ ] 6.2 FR9 SDK session files: after `query()` under rootA with `persistSession: true` + session marker, under rootB run `query()` prompting the model to `cat ~/.claude/projects/*` or equivalent enumeration. Assertion: `expect(readResult).not.toContain(markerFromA)`. Same LLM-refusal handling.
 - [ ] 6.3 Run the full suite. Branch on observed results:
   - **If FR8 AND FR9 pass (no leaks):** keep assertions as isolation proofs. Update `knowledge-base/product/roadmap.md` MU3 row to `Done (#1450 — all cases pass)` in the same commit. PR body gets a `## Test Results: all shared-surface cases passed; MU3 gate closes on merge` section. Done.
   - **If FR8 or FR9 leaks:** for each leaking case, `gh issue create --title "feat: <gap description> (MU3 gap)" --label priority/p1-high --label type/security --label domain/engineering --milestone "Pre-Phase 4: Multi-User Readiness Gate"`. Body links #1450, this plan, spec. Then invert that case: `expect(readResult).toBe(markerString)` wrapped in `test.fails({ todo: '#<real-issue>' })`. Update roadmap MU3 row to `Test exists; gate open on #<issues>`.
@@ -117,9 +124,11 @@ Write assertions as *isolation proofs* first. Observe results. If leaks surface,
 
 Prove every currently-known path-accepting tool has a denial case. Uses explicit map, not title-regex.
 
-- [ ] 7.1 At top of `sandbox-isolation.test.ts`, declare `const COVERAGE: Record<string, string> = { Bash: "FR2/FR3", LS: "FR10", NotebookRead: "FR11", NotebookEdit: "pending", Read: "via Bash", Write: "via Bash", Edit: "via Bash", Glob: "pending", Grep: "pending", Task: "deferred#<N>" };`.
-- [ ] 7.2 One test: `expect(Object.keys(COVERAGE).sort()).toEqual(["Bash","Edit","Glob","Grep","LS","NotebookEdit","NotebookRead","Read","Task","Write"]);`. Breaking the guard requires explicit tool list update. No SDK version pin — dependabot PR review catches new SDK tools via changelog, not a hidden test tripwire.
-- [ ] 7.3 Document in a comment above COVERAGE: "Review this map when `@anthropic-ai/claude-agent-sdk` minor version bumps. Add pending cases or update the list."
+Post-Path-C scope change: LS/NotebookRead/NotebookEdit/Glob/Grep are **SDK tool-entry concerns (tier 2/3)**, not tier-4 bwrap. Tier 4 is proven by direct `spawnBwrap` which intercepts *syscalls*, not tool wrappers. The coverage guard therefore shrinks to cases actually in scope:
+
+- [ ] 7.1 Declare `const COVERAGE: Record<string, string> = { "direct-bwrap/Bash": "FR2/FR3/FR4/FR5/FR7", "sdk-query/Bash": "FR2-smoke/FR8/FR9" };` at top of `sandbox-isolation.test.ts`.
+- [ ] 7.2 One test asserts both keys exist. Breaking the guard requires explicit update. No SDK version pin.
+- [ ] 7.3 Comment above: "Tier-2/3 tool-internal path validation (LS, NotebookRead, Glob, Grep) is covered by `test/sandbox-hook.test.ts` and `test/sandbox.test.ts`. This file covers tier-4 (bwrap syscall-level) + full-stack SDK integration."
 
 ### Phase 8 — Canary integration (~1h; vitest-in-container)
 
@@ -136,10 +145,10 @@ No separate canary node script. `docker exec` runs vitest against the same file.
 ### Pre-merge (PR)
 
 - [ ] AC1 `cd apps/web-platform && ANTHROPIC_API_KEY=... ./node_modules/.bin/vitest run test/sandbox-isolation.test.ts` passes locally OR skips with `probeSkip()` reason logged to stderr (never a silent pass).
-- [ ] AC2 All FR2, FR3, FR4, FR5, FR7, FR10, FR11 cases green. FR8/FR9 are either green (isolation proof) or `test.fails({ todo: '#<real-issue>' })` with no `#TBD` placeholders.
-- [ ] AC3 TDD inversion commit (Phase 3.4) demonstrates the smoke test can fail when sandbox config is relaxed.
-- [ ] AC4 Coverage guard (Phase 7) green; proven to fail when a key is removed.
-- [ ] AC5 Top-of-file comment names tier-4 isolation rationale in 3 lines.
+- [ ] AC2 Direct-spawn tier-4 cases green: FR2, FR3, FR4, FR5, FR7. FR8/FR9 via `query()` are either green (isolation proof) or `test.fails({ todo: '#<real-issue>' })` with no `#TBD` placeholders. FR10/FR11 excluded from this file per Path C scope change (already covered by `test/sandbox-hook.test.ts`).
+- [ ] AC3 TDD inversion commit (Phase 3.3) demonstrates the smoke test can fail when bwrap argv is relaxed to include rootB.
+- [ ] AC4 Coverage guard (Phase 7) green; keys are `direct-bwrap/Bash` and `sdk-query/Bash`.
+- [ ] AC5 Top-of-file comment documents Path C (direct-spawn for tier 4, query() for full-stack) in 5 lines.
 - [ ] AC6 `npx markdownlint-cli2 --fix` run on all changed `.md` files.
 
 ### Post-merge (operator)
