@@ -30,6 +30,14 @@ import {
   logRateLimitRejection,
 } from "./rate-limiter";
 import { validateContextPath } from "./validate-context-path";
+import { effectiveCap, nextTier } from "@/lib/plan-limits";
+import { closeWithPreamble } from "@/lib/ws-close-helper";
+import { retrieveSubscriptionTier } from "@/lib/stripe";
+import {
+  acquireSlot,
+  releaseSlot,
+  emitConcurrencyCapHit,
+} from "./concurrency";
 
 const log = createChildLogger("ws");
 
@@ -76,6 +84,9 @@ export interface ClientSession {
    *  null means "use tier default"; a number larger than the default raises
    *  the cap (see effectiveCap in lib/plan-limits.ts). */
   concurrencyOverride?: number | null;
+  /** Cached Stripe subscription ID — used by the cap-hit Stripe fallback
+   *  (Phase 5) to cover webhook-lag between an upgrade and the DB write. */
+  stripeSubscriptionId?: string | null;
 }
 
 /** Active connections keyed by Supabase user ID. Registered in session-registry
@@ -95,13 +106,22 @@ const pendingDisconnects = new Map<string, ReturnType<typeof setTimeout>>();
  *  completed (fire-and-forget), and clear session.conversationId. No-ops if no
  *  conversation is active. */
 export function abortActiveSession(userId: string, session: ClientSession): void {
-  if (!session.conversationId) return;
+  if (!session.conversationId && !session.pending) return;
 
-  const oldConvId = session.conversationId;
+  const oldConvId = session.conversationId ?? session.pending?.id;
   log.info({ userId, conversationId: oldConvId }, "Aborting active session (superseded)");
 
   if (session.idleTimer) clearTimeout(session.idleTimer);
-  abortSession(userId, oldConvId, "superseded");
+  if (session.conversationId) {
+    abortSession(userId, session.conversationId, "superseded");
+  }
+
+  // Release slot for both materialized + pending conversations. The RPC
+  // is idempotent (plain DELETE) so a no-op on an already-released row is
+  // harmless.
+  if (oldConvId) {
+    void releaseSlot(userId, oldConvId);
+  }
 
   // Fire-and-forget — orphan cleanup catches failures on restart.
   // Supabase query builders return PromiseLike (not Promise), so use
@@ -476,6 +496,50 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
         // Defer conversation creation: generate UUID but don't insert into DB.
         // The row is created on the first real chat message.
         const pendingId = randomUUID();
+
+        // Plan-based concurrency gate. Acquire a slot keyed on (userId,
+        // pendingId). A cap_hit result denies before we mutate any session
+        // state so the client can present the upgrade modal without the
+        // confusion of a session_started that never got a response.
+        const cap = effectiveCap(session.planTier, session.concurrencyOverride);
+        let acquire = await acquireSlot(userId, pendingId, cap);
+
+        if (acquire.status === "cap_hit" && session.stripeSubscriptionId) {
+          // Webhook-lag fallback: ask Stripe directly. If the live tier
+          // grants a higher cap than the cached plan_tier, retry acquire
+          // once with the upgraded cap. Failure here is silent — we fall
+          // through to the cap_hit branch below.
+          try {
+            const live = await retrieveSubscriptionTier(userId, session.stripeSubscriptionId);
+            const liveCap = effectiveCap(live.tier, session.concurrencyOverride);
+            if (liveCap > cap) {
+              session.planTier = live.tier;
+              acquire = await acquireSlot(userId, pendingId, liveCap);
+            }
+          } catch (liveErr) {
+            Sentry.captureException(liveErr);
+          }
+        }
+
+        if (acquire.status === "cap_hit" || acquire.status === "error") {
+          // Emit telemetry at the deny site (plan Phase 9).
+          emitConcurrencyCapHit({
+            tier: session.planTier ?? "free",
+            active_conversation_count: acquire.activeCount,
+            effective_cap: acquire.effectiveCap,
+            path: "start_session",
+            action: "abandoned",
+          });
+          closeWithPreamble(session.ws, WS_CLOSE_CODES.CONCURRENCY_CAP, {
+            type: "concurrency_cap_hit",
+            currentTier: session.planTier,
+            nextTier: nextTier(session.planTier ?? "free"),
+            activeCount: acquire.activeCount,
+            effectiveCap: acquire.effectiveCap,
+          });
+          return;
+        }
+
         session.pending = {
           id: pendingId,
           leaderId: msg.leaderId,
@@ -558,7 +622,9 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
     case "close_conversation": {
       // Handle pending state (conversation never created in DB)
       if (!session.conversationId && session.pending) {
+        const pendingId = session.pending.id;
         session.pending = undefined;
+        void releaseSlot(userId, pendingId);
         sendToClient(userId, { type: "session_ended", reason: "closed" });
         break;
       }
@@ -579,6 +645,7 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
           .update({ status: "completed", last_active: new Date().toISOString() })
           .eq("id", convId);
         session.conversationId = undefined;
+        void releaseSlot(userId, convId);
         sendToClient(userId, { type: "session_ended", reason: "closed" });
       } catch (err) {
         Sentry.captureException(err);
@@ -737,6 +804,8 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
     case "session_resumed":
     case "session_ended":
     case "usage_update":
+    case "fanout_truncated":
+    case "upgrade_pending":
     case "error": {
       sendToClient(userId, {
         type: "error",
@@ -863,7 +932,7 @@ export function setupWebSocket(server: HTTPServer) {
         // Enforce T&C acceptance (version-aware) and cache subscription status
         const { data: userRow, error: tcError } = await supabase
           .from("users")
-          .select("tc_accepted_version, subscription_status, plan_tier, concurrency_override")
+          .select("tc_accepted_version, subscription_status, plan_tier, concurrency_override, stripe_subscription_id")
           .eq("id", user.id)
           .single();
 
@@ -898,6 +967,7 @@ export function setupWebSocket(server: HTTPServer) {
           subscription_status?: string | null;
           plan_tier?: PlanTier | null;
           concurrency_override?: number | null;
+          stripe_subscription_id?: string | null;
         };
         const newSession: ClientSession = {
           ws,
@@ -905,6 +975,7 @@ export function setupWebSocket(server: HTTPServer) {
           subscriptionStatus: userRowTyped.subscription_status ?? undefined,
           planTier: userRowTyped.plan_tier ?? "free",
           concurrencyOverride: userRowTyped.concurrency_override ?? null,
+          stripeSubscriptionId: userRowTyped.stripe_subscription_id ?? null,
         };
         sessions.set(userId, newSession);
         startSubscriptionRefresh(userId, newSession);
@@ -920,10 +991,19 @@ export function setupWebSocket(server: HTTPServer) {
         // Start idle timer after auth
         resetIdleTimer(userId, newSession);
 
-        // Start heartbeat after auth
+        // Start heartbeat after auth. In addition to the WebSocket ping, touch
+        // user_concurrency_slots.last_heartbeat_at for the active/pending
+        // conversation so the pg_cron sweep (120s threshold) does not reclaim
+        // a still-live session. Piggy-backed on acquireSlot's upsert semantics
+        // (ON CONFLICT DO UPDATE) so we don't need a separate touch RPC.
         pingInterval = setInterval(() => {
-          if (ws.readyState === WebSocket.OPEN) {
-            ws.ping();
+          if (ws.readyState !== WebSocket.OPEN) return;
+          ws.ping();
+          const current = sessions.get(userId!);
+          const convId = current?.conversationId ?? current?.pending?.id;
+          if (current && convId) {
+            const cap = effectiveCap(current.planTier, current.concurrencyOverride);
+            void acquireSlot(userId!, convId, cap);
           }
         }, 30_000);
 

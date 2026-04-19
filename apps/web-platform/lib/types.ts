@@ -109,6 +109,8 @@ export type WSMessage =
   | { type: "session_resumed"; conversationId: string; resumedFromTimestamp: string; messageCount: number }
   | { type: "session_ended"; reason: string }
   | { type: "usage_update"; conversationId: string; totalCostUsd: number; inputTokens: number; outputTokens: number }
+  | { type: "fanout_truncated"; dispatched: number; dropped: number }
+  | { type: "upgrade_pending" }
   | { type: "error"; message: string; errorCode?: WSErrorCode; gateId?: string };
 
 // Database types (matches Supabase schema)
