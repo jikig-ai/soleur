@@ -116,9 +116,11 @@ export function linkEscape(
 
 export interface SpawnBwrapOpts {
   /**
-   * Pair metadata enables `--tmpfs /workspaces` gating. Pass the WorkspacePair
-   * when the fixture is placed under /workspaces so the test exercises the
-   * production mount-ordering (bind child, then tmpfs parent).
+   * Pair metadata enables the production mount-ordering pattern:
+   * `--tmpfs <pair.parent>` + re-bind of `root`. This overlays an empty tmpfs
+   * at the parent so siblings (rootB when root === rootA) become unreadable,
+   * then re-binds `root` so the tmpfs doesn't shadow the intended workspace.
+   * Matches the captured SDK argv at /workspaces; works at any parent path.
    */
   pair?: Pick<WorkspacePair, "parent">;
   /** Extra bwrap args appended after the synthesized mount set, before `--`. */
@@ -300,11 +302,11 @@ function buildBwrapArgs(root: string, command: string, opts: SpawnBwrapOpts): st
     "--bind", root, root,
   ];
   const parent = opts.pair?.parent;
-  if (parent && path.dirname(parent) === "/workspaces" && fs.existsSync("/workspaces")) {
-    // Exercise production mount-ordering: bind-child already added above, tmpfs-parent next.
-    args.push("--tmpfs", "/workspaces");
-    // Re-assert the child bind so bwrap's mount ordering is unambiguous. (Per
-    // sdk-probe-notes.md §Ordering-mystery the production argv repeats the workspace bind.)
+  if (parent) {
+    // Production mount-ordering: tmpfs over the parent hides siblings (rootB when
+    // root === rootA), then re-assert the child bind so the tmpfs doesn't shadow
+    // the intended workspace. See sdk-probe-notes.md §Ordering-mystery.
+    args.push("--tmpfs", parent);
     args.push("--bind", root, root);
   }
   args.push("--dev", "/dev", "--unshare-pid");

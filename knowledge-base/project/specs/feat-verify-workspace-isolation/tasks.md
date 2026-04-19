@@ -24,8 +24,8 @@ Spike output committed (`5c23ea29`). SDK has no direct tool-invocation API; `byp
 
 ## Phase 3 — Smoke test + TDD inversion
 
-- [ ] 3.1 Create `apps/web-platform/test/sandbox-isolation.test.ts` with top-of-file comment explaining Path C (5 lines, references sdk-probe-notes.md).
-- [ ] 3.2 FR2 via `spawnBwrap(rootA, argv, "cat <rootB>/secret.md")`; assert marker absent + exit != 0; setup-failure guard.
+- [x] 3.1 Create `apps/web-platform/test/sandbox-isolation.test.ts` with top-of-file comment explaining Path C (5 lines, references sdk-probe-notes.md).
+- [x] 3.2 FR2 via `spawnBwrap(rootA, argv, "cat <rootB>/secret.md")`; assert marker absent + exit != 0; setup-failure guard.
 - [ ] 3.3 TDD inversion: relax argv to `--bind <rootB> <rootB>`, confirm RED, restore, confirm GREEN. Commit both separately.
 - [ ] 3.4 FR2-smoke via real `query()` with production sandbox config: model reads `<rootB>/secret.md` — assert marker absent. One retry on non-Bash output. Flake budget: >30% skip with filed issue.
 
