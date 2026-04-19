@@ -31,9 +31,12 @@ Analyze the user input and classify intent using semantic assessment:
 | Intent | Trigger Signals | Routes To |
 |--------|----------------|-----------|
 | fix | The user describes broken behavior, errors, regressions, or something that needs fixing | `soleur:one-shot` |
+| drain | "fix all issues labeled X", "drain the Y backlog", "close all label:Z", "clean up the X backlog" | `soleur:drain-labeled-backlog` |
 | review | "review PR", "check this code", PR number reference | `soleur:review` |
 | default | Everything else — features, exploration, questions, generation, vague scope | `soleur:brainstorm` |
 
 If intent is clear, invoke the skill directly via the **Skill tool** with the original user input as `args`. No confirmation step.
 
-If intent is truly ambiguous, use the **AskUserQuestion tool** with 3 options: Brainstorm (Recommended), Fix (one-shot), Review.
+When routing to `soleur:drain-labeled-backlog`, extract the label value from the user's message. If the user used a bare name (e.g., "security"), resolve it to the namespaced form by running `gh label list --limit 100 | grep -i <name>` before invoking (rule `cq-gh-issue-label-verify-name`). Pass the resolved label via `--label <resolved>` in the skill arguments.
+
+If intent is truly ambiguous, use the **AskUserQuestion tool** with 4 options: Brainstorm (Recommended), Fix (one-shot), Drain (labeled backlog), Review.
