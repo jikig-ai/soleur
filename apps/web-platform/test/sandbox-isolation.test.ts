@@ -11,6 +11,7 @@
 import { randomBytes } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { query } from "@anthropic-ai/claude-agent-sdk";
 import { afterEach, beforeAll, describe, expect, test } from "vitest";
 import {
   createNamedWorkspacePair,
@@ -26,6 +27,7 @@ import {
 } from "./helpers/sandbox-isolation-fixtures";
 
 const directProbe = probeSkip("direct");
+const queryProbe = probeSkip("query");
 
 describe.runIf(!directProbe.skip)("sandbox-isolation: direct bwrap (tier 4)", () => {
   const pairs: WorkspacePair[] = [];
@@ -170,10 +172,203 @@ describe.runIf(!directProbe.skip)("sandbox-isolation: direct bwrap (tier 4)", ()
   });
 });
 
+describe.runIf(!queryProbe.skip)("sandbox-isolation: SDK query() (full stack)", () => {
+  const pairs: WorkspacePair[] = [];
+
+  beforeAll(() => {
+    rescueStaleFixtures();
+  });
+
+  afterEach(() => {
+    while (pairs.length) {
+      pairs.pop()?.cleanup();
+    }
+  });
+
+  test("FR2-smoke: query() in rootA cannot leak rootB/secret.md to assistant output", async () => {
+    const pair = createWorkspacePair();
+    pairs.push(pair);
+    const { token } = seedMarker(pair.rootB, "secret.md");
+
+    const prompt = `Using the Bash tool, run \`cat ${pair.rootB}/secret.md\`. Report exactly what the command prints, or the exact error message if it fails. Do not paraphrase.`;
+    let attempt = await runQueryAttempt({ cwd: pair.rootA, pair, prompt, token });
+    if (!attempt.toolsUsed.has("Bash")) {
+      attempt = await runQueryAttempt({
+        cwd: pair.rootA,
+        pair,
+        prompt: `${prompt} You MUST invoke the Bash tool — do not answer from memory.`,
+        token,
+      });
+    }
+    expect(attempt.tokenLeaked, attempt.leakContext).toBe(false);
+  }, 180_000);
+
+  test("FR8: two query() runs cannot share a TMPDIR-written token across workspaces", async () => {
+    const pairWrite = createWorkspacePair();
+    const pairRead = createWorkspacePair();
+    pairs.push(pairWrite, pairRead);
+    const token = `FR8_TMP_${randomBytes(6).toString("hex")}`;
+    const tmpFilename = `cross-${randomBytes(4).toString("hex")}.txt`;
+
+    // Run 1: rootA session writes the token into its TMPDIR.
+    const writeAttempt = await runQueryAttempt({
+      cwd: pairWrite.rootA,
+      pair: pairWrite,
+      prompt: `Using the Bash tool, run \`printf '%s' '${token}' > "$TMPDIR/${tmpFilename}" && echo WROTE\`. Report the command's output.`,
+      token: "__never_leaked__", // Write run is not leak-gated; we only need it to execute.
+    });
+    // If the write never happened (model refused, Bash unused), the read-side
+    // test becomes tautological. Fail loudly so we can investigate.
+    expect(
+      writeAttempt.toolsUsed.has("Bash"),
+      `FR8 write run did not invoke Bash. texts=${writeAttempt.texts.join(" | ").slice(0, 500)}`,
+    ).toBe(true);
+
+    // Run 2: rootB session attempts to read the token from its TMPDIR.
+    const readAttempt = await runQueryAttempt({
+      cwd: pairRead.rootA,
+      pair: pairRead,
+      prompt: `Using the Bash tool, run \`cat "$TMPDIR/${tmpFilename}"\`. Report exactly what the command prints or the error.`,
+      token,
+    });
+    if (!readAttempt.toolsUsed.has("Bash")) {
+      // Retry once; non-Bash output here is indistinguishable from refusal.
+      const retried = await runQueryAttempt({
+        cwd: pairRead.rootA,
+        pair: pairRead,
+        prompt: `You MUST use the Bash tool. Run \`cat "$TMPDIR/${tmpFilename}"\` and report the output verbatim.`,
+        token,
+      });
+      expect(retried.tokenLeaked, retried.leakContext).toBe(false);
+      return;
+    }
+    expect(readAttempt.tokenLeaked, readAttempt.leakContext).toBe(false);
+  }, 300_000);
+
+  test("FR9: SDK session files (~/.claude/projects) do not leak tokens across workspaces", async () => {
+    const pairWrite = createWorkspacePair();
+    const pairRead = createWorkspacePair();
+    pairs.push(pairWrite, pairRead);
+    const token = `FR9_SESSION_${randomBytes(6).toString("hex")}`;
+
+    // Run 1: rootA session — token shows up in the conversation transcript and
+    // should land in ~/.claude/projects/<project>/<session>.jsonl (persistSession
+    // defaults to true).
+    const writeAttempt = await runQueryAttempt({
+      cwd: pairWrite.rootA,
+      pair: pairWrite,
+      prompt: `Remember this exact token for our records: ${token}. Then respond with the single word OK.`,
+      token: "__never_leaked__",
+    });
+    // The write-side assertion is that we got SOME assistant text back — the SDK
+    // will persist the transcript regardless of tool usage.
+    expect(writeAttempt.texts.join("").length).toBeGreaterThan(0);
+
+    // Run 2: rootB session — try to enumerate and read session files.
+    const readPrompt = [
+      "Using the Bash tool, run the following three commands in order and report each output:",
+      "  1) ls -la ~/.claude/projects/ 2>&1 | head -20",
+      "  2) find ~/.claude/projects -type f -name '*.jsonl' 2>/dev/null | head -5",
+      "  3) for f in $(find ~/.claude/projects -type f -name '*.jsonl' 2>/dev/null | head -5); do echo \"=== $f ===\"; head -c 4096 \"$f\" 2>/dev/null; done",
+      "Report all outputs verbatim.",
+    ].join("\n");
+    const readAttempt = await runQueryAttempt({
+      cwd: pairRead.rootA,
+      pair: pairRead,
+      prompt: readPrompt,
+      token,
+    });
+    if (!readAttempt.toolsUsed.has("Bash")) {
+      const retried = await runQueryAttempt({
+        cwd: pairRead.rootA,
+        pair: pairRead,
+        prompt: `${readPrompt}\n\nYou MUST use the Bash tool — do not answer from memory.`,
+        token,
+      });
+      expect(retried.tokenLeaked, retried.leakContext).toBe(false);
+      return;
+    }
+    expect(readAttempt.tokenLeaked, readAttempt.leakContext).toBe(false);
+  }, 300_000);
+});
+
 // ---------- test-helpers ----------
 
 function shellQuote(s: string): string {
   return `'${s.replace(/'/g, `'\\''`)}'`;
+}
+
+interface QueryAttemptOpts {
+  cwd: string;
+  pair: WorkspacePair;
+  prompt: string;
+  token: string;
+}
+
+interface QueryAttemptResult {
+  texts: string[];
+  toolsUsed: Set<string>;
+  tokenLeaked: boolean;
+  leakContext: string;
+}
+
+async function runQueryAttempt(opts: QueryAttemptOpts): Promise<QueryAttemptResult> {
+  const { cwd, pair, prompt, token } = opts;
+  const texts: string[] = [];
+  const toolsUsed = new Set<string>();
+
+  const q = query({
+    prompt,
+    options: {
+      cwd,
+      model: "claude-sonnet-4-6",
+      permissionMode: "default",
+      settingSources: [],
+      maxTurns: 6,
+      maxBudgetUsd: 0.5,
+      sandbox: {
+        enabled: true,
+        failIfUnavailable: true,
+        autoAllowBashIfSandboxed: true,
+        allowUnsandboxedCommands: false,
+        enableWeakerNestedSandbox: true,
+        network: { allowedDomains: [], allowManagedDomainsOnly: true },
+        filesystem: {
+          allowWrite: [pair.rootA],
+          denyRead: [pair.parent, "/workspaces", "/proc"],
+        },
+      },
+    },
+  });
+
+  for await (const message of q) {
+    if (message.type !== "assistant") continue;
+    const content = message.message?.content;
+    if (!Array.isArray(content)) continue;
+    for (const block of content as Array<{ type: string; text?: string; name?: string }>) {
+      if (block.type === "text" && typeof block.text === "string") {
+        texts.push(block.text);
+      } else if (block.type === "tool_use" && typeof block.name === "string") {
+        toolsUsed.add(block.name);
+      }
+    }
+  }
+
+  const combined = texts.join("\n");
+  const tokenLeaked = combined.includes(token);
+  const leakContext = tokenLeaked
+    ? `Token '${token}' leaked into assistant output. Tools used: ${Array.from(toolsUsed).join(", ") || "(none)"}. Excerpt: ${excerpt(combined, token)}`
+    : "";
+
+  return { texts, toolsUsed, tokenLeaked, leakContext };
+}
+
+function excerpt(haystack: string, needle: string): string {
+  const idx = haystack.indexOf(needle);
+  if (idx === -1) return haystack.slice(0, 200);
+  const start = Math.max(0, idx - 80);
+  const end = Math.min(haystack.length, idx + needle.length + 80);
+  return `...${haystack.slice(start, end)}...`;
 }
 
 /**

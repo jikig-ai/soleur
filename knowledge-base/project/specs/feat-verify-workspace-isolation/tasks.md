@@ -27,7 +27,7 @@ Spike output committed (`5c23ea29`). SDK has no direct tool-invocation API; `byp
 - [x] 3.1 Create `apps/web-platform/test/sandbox-isolation.test.ts` with top-of-file comment explaining Path C (5 lines, references sdk-probe-notes.md).
 - [x] 3.2 FR2 via `spawnBwrap(rootA, argv, "cat <rootB>/secret.md")`; assert marker absent + exit != 0; setup-failure guard.
 - [x] 3.3 TDD inversion: relax argv to `--bind <rootB> <rootB>`, confirm RED, restore, confirm GREEN. Commit both separately. (RED commit c4773729; restored in successor.)
-- [ ] 3.4 FR2-smoke via real `query()` with production sandbox config: model reads `<rootB>/secret.md` — assert marker absent. One retry on non-Bash output. Flake budget: >30% skip with filed issue.
+- [x] 3.4 FR2-smoke via real `query()` with production sandbox config: model reads `<rootB>/secret.md` — assert marker absent. One retry on non-Bash output. Flake budget: >30% skip with filed issue. (Skips when ANTHROPIC_API_KEY absent; PR body includes operator task per plan 9.1.)
 
 ## Phase 4 — Tier-4 adversary cases (direct spawn)
 
@@ -43,11 +43,11 @@ Spike output committed (`5c23ea29`). SDK has no direct tool-invocation API; `byp
 
 ## Phase 6 — Shared-surface audit (full-stack query())
 
-Uses production-equivalent `query()` config — `permissionMode: "default"`, hooks enabled, canUseTool active. Tests the full stack, not tier 4 alone.
+Uses production-equivalent `query()` config — `permissionMode: "default"`, `sandbox.failIfUnavailable: true` (per #2634 learning), `settingSources: []` for defense-in-depth. Tests the full stack, not tier 4 alone.
 
-- [ ] 6.1 FR8 shared `/tmp`: two `query()` runs (rootA write, rootB read). Assertion: marker absent in rootB stdout. LLM refusal → skip with reason.
-- [ ] 6.2 FR9 SDK session files: rootA `query()` with `persistSession: true`, rootB `query()` enumerates `~/.claude/projects/`. Marker absent assertion.
-- [ ] 6.3 Run suite; branch on observed results:
+- [x] 6.1 FR8 shared `/tmp`: two `query()` runs (rootA write, rootB read via `$TMPDIR`). Assertion: marker absent in rootB stdout. Retry-once on non-Bash output. Write-side asserts Bash *was* invoked so the read-side isn't tautologically green.
+- [x] 6.2 FR9 SDK session files: rootA `query()` persists a sentinel in its conversation transcript (persistSession defaults true), rootB `query()` uses Bash to enumerate/read `~/.claude/projects/`. Marker absent assertion.
+- [ ] 6.3 Run suite; branch on observed results: deferred to PR body operator task (Phase 9.1). Running the three query-tier tests requires prd ANTHROPIC_API_KEY which dev creds do not expose.
   - All green → roadmap MU3 row → Done, PR body notes MU3 closes.
   - Any leak → file issues (`priority/p1-high`, `type/security`, `domain/engineering`, milestone Pre-Phase 4 Gate), invert assertion, wrap in `test.fails({ todo: '#<issue>' })`.
 - [ ] 6.4 Top-of-file lint guard: any `test.fails({ todo: '#TBD…' })` throws at test-load.
