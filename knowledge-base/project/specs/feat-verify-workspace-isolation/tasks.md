@@ -50,19 +50,21 @@ Uses production-equivalent `query()` config — `permissionMode: "default"`, `sa
 - [ ] 6.3 Run suite; branch on observed results: deferred to PR body operator task (Phase 9.1). Running the three query-tier tests requires prd ANTHROPIC_API_KEY which dev creds do not expose.
   - All green → roadmap MU3 row → Done, PR body notes MU3 closes.
   - Any leak → file issues (`priority/p1-high`, `type/security`, `domain/engineering`, milestone Pre-Phase 4 Gate), invert assertion, wrap in `test.fails({ todo: '#<issue>' })`.
-- [ ] 6.4 Top-of-file lint guard: any `test.fails({ todo: '#TBD…' })` throws at test-load.
+- [x] 6.4 Top-of-file lint guard: any `test.fails({ todo: '#TBD…' })` throws at test-load. (Implemented as `sandbox-isolation: coverage + test-hygiene guards > no test.fails uses a placeholder todo`; reads own source via `import.meta.url`.)
 
-## Phase 7 — Coverage guard
+## Phase 7 — Coverage guard — ✅ COMPLETE
 
-- [ ] 7.1 `const COVERAGE = { "direct-bwrap/Bash": "FR2/FR3/FR4/FR5/FR7", "sdk-query/Bash": "FR2-smoke/FR8/FR9" };` at top of file.
-- [ ] 7.2 One test asserts both keys exist.
-- [ ] 7.3 Comment pointing at `test/sandbox-hook.test.ts` + `test/sandbox.test.ts` for tier-2/3 tool-path coverage.
+- [x] 7.1 `const COVERAGE = { "direct-bwrap/Bash": "FR2/FR3/FR4/FR5/FR7", "sdk-query/Bash": "FR2-smoke/FR8/FR9" };` (at EOF, not top, so imports stay clean).
+- [x] 7.2 One test asserts both keys exist and each value is non-empty.
+- [x] 7.3 Tier-2/3 pointer present in both the top-of-file doc comment AND the COVERAGE doc block.
 
-## Phase 8 — Canary integration
+## Phase 8 — Canary integration — scope-adjusted
 
-- [ ] 8.1 Append `assert_cross_workspace_isolation` to `apps/web-platform/infra/ci-deploy.test.sh`: docker inspect precondition + `timeout 300 docker exec … vitest run test/sandbox-isolation.test.ts`; exit-code disambiguation.
-- [ ] 8.2 Verify `/app/node_modules/.bin/vitest` exists in canary image; amend Dockerfile if missing.
-- [ ] 8.3 File follow-up `feat: promote cross-workspace isolation check to deploy gate` (P2).
+Dockerfile line 53 uses `npm ci --omit=dev` so vitest is absent from the production runner image. Amending the Dockerfile adds ~150MB extracted (roughly 50MB compressed) for a probe that is not yet deploy-gating — image-bloat vs defense-in-depth is a separate discussion. Deferring the wiring to the filed P2 follow-up (#2640) keeps MU3 scoped to the test suite; canary wiring lands when the image strategy is decided.
+
+- [ ] 8.1 Append `assert_cross_workspace_isolation` to `ci-deploy.test.sh`. **Deferred to #2640** — no trace order to assert until `ci-deploy.sh` invokes vitest.
+- [ ] 8.2 Verify `/app/node_modules/.bin/vitest` exists in canary image. **Currently absent**; amendment deferred to #2640 with image-size analysis.
+- [x] 8.3 File follow-up `feat: promote cross-workspace isolation check to deploy gate` (P2). **Filed as #2640** with precise wiring scope, Dockerfile options, and acceptance criteria.
 
 ## Phase 9 — Pre-merge sweep
 
@@ -93,5 +95,5 @@ Uses production-equivalent `query()` config — `permissionMode: "default"`, `sa
 
 - LS/NotebookRead tier-4 tests (Path C scope change — already tier-2/3 tested).
 - FR12 Task subagent (deferred follow-up).
-- Canary deploy-blocking wiring (deferred follow-up).
+- Canary deploy-blocking wiring (deferred follow-up #2640).
 - FR8/FR9 gap fixes (filed per Phase 6.3 if leaks observed).

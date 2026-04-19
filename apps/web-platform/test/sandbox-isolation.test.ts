@@ -372,7 +372,7 @@ function excerpt(haystack: string, needle: string): string {
 }
 
 /**
- * Coverage matrix — do not remove. Phase 7 adds a load-time lint test.
+ * Coverage matrix — do not remove. A load-time lint below guards it.
  *
  * | Surface                | Tier | FRs covered                    |
  * | direct-bwrap / Bash    |   4  | FR2, FR3, FR4, FR5, FR7        |
@@ -384,3 +384,31 @@ export const COVERAGE = {
   "direct-bwrap/Bash": "FR2/FR3/FR4/FR5/FR7",
   "sdk-query/Bash": "FR2-smoke/FR8/FR9",
 } as const;
+
+describe("sandbox-isolation: coverage + test-hygiene guards", () => {
+  test("COVERAGE exports both direct-bwrap and sdk-query surfaces", () => {
+    const keys = Object.keys(COVERAGE).sort();
+    expect(keys).toEqual(["direct-bwrap/Bash", "sdk-query/Bash"]);
+    for (const [surface, frs] of Object.entries(COVERAGE)) {
+      expect(
+        frs.length,
+        `COVERAGE[${surface}] must not be empty — add FRs or remove the surface`,
+      ).toBeGreaterThan(0);
+    }
+  });
+
+  test("no test.fails uses a placeholder todo (#TBD, #todo, etc.)", () => {
+    const selfPath = new URL(import.meta.url).pathname;
+    const src = fs.readFileSync(selfPath, "utf8");
+    // Match any test.fails({ todo: '...' }) whose issue reference is a
+    // placeholder. The intent of Phase 6.3 is that every inverted-assertion
+    // test points at a filed GitHub issue; unfiled placeholders rot silently.
+    const matches = src.match(
+      /test\.fails\s*\(\s*[^)]*todo\s*:\s*['"][^'"]*(?:#TBD|#todo|TBD|\?\?\?)/gi,
+    );
+    expect(
+      matches,
+      `test.fails placeholder detected — file an issue and replace #TBD with #NNNN. Matches: ${matches?.join(" | ")}`,
+    ).toBeNull();
+  });
+});
