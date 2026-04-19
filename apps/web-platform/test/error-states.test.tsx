@@ -1,8 +1,8 @@
 import { describe, test, expect, vi, beforeEach } from "vitest";
 import { render, screen } from "@testing-library/react";
 import { ErrorCard } from "../components/ui/error-card";
-import type { WebSocketError } from "@/lib/ws-client";
 import { createUseTeamNamesMock } from "./mocks/use-team-names";
+import { createWebSocketMock } from "./mocks/use-websocket";
 
 describe("ErrorCard component", () => {
   test("renders error message", () => {
@@ -53,28 +53,6 @@ describe("ErrorCard component", () => {
   });
 });
 
-describe("WebSocketError interface", () => {
-  test("error codes map to structured objects", () => {
-    // Verify the error code mapping exists and has correct shape
-    const errorMap: Record<string, { message: string; action?: { label: string; href?: string } }> = {
-      key_invalid: {
-        message: "Your API key is invalid or expired.",
-        action: { label: "Update key", href: "/dashboard/settings" },
-      },
-      rate_limited: {
-        message: "You've been rate limited. Please wait before trying again.",
-      },
-      connection_failed: {
-        message: "Unable to connect to the server.",
-      },
-    };
-
-    expect(errorMap.key_invalid.action?.href).toBe("/dashboard/settings");
-    expect(errorMap.rate_limited.message).toContain("rate limited");
-    expect(errorMap.connection_failed.message).toContain("connect");
-  });
-});
-
 // --- Hook contract tests for error state clearing (#1377) ---
 
 const mockStartSession = vi.fn();
@@ -83,21 +61,14 @@ const mockSendMessage = vi.fn();
 const mockSendReviewGateResponse = vi.fn();
 const mockReconnect = vi.fn();
 
-let wsReturn: {
-  messages: Array<{ id: string; role: "user" | "assistant"; content: string; type: "text"; leaderId?: string }>;
-  startSession: typeof mockStartSession;
-  resumeSession: typeof mockResumeSession;
-  sendMessage: typeof mockSendMessage;
-  sendReviewGateResponse: typeof mockSendReviewGateResponse;
-  status: "connecting" | "connected" | "reconnecting" | "disconnected";
-  disconnectReason: string | undefined;
-  lastError: WebSocketError | null;
-  reconnect: typeof mockReconnect;
-  routeSource: "auto" | "mention" | null;
-  activeLeaderIds: string[];
-  sessionConfirmed: boolean;
-  usageData: null;
-};
+let wsReturn = createWebSocketMock({
+  startSession: mockStartSession,
+  resumeSession: mockResumeSession,
+  sendMessage: mockSendMessage,
+  sendReviewGateResponse: mockSendReviewGateResponse,
+  reconnect: mockReconnect,
+  sessionConfirmed: false,
+});
 
 vi.mock("@/lib/ws-client", () => ({
   useWebSocket: () => wsReturn,
@@ -118,21 +89,14 @@ vi.mock("@/hooks/use-team-names", () => ({
 describe("Error state clearing on remount (#1377)", () => {
   beforeEach(() => {
     mockReconnect.mockClear();
-    wsReturn = {
-      messages: [],
+    wsReturn = createWebSocketMock({
       startSession: mockStartSession,
       resumeSession: mockResumeSession,
       sendMessage: mockSendMessage,
       sendReviewGateResponse: mockSendReviewGateResponse,
-      status: "connected",
-      disconnectReason: undefined,
-      lastError: null,
       reconnect: mockReconnect,
-      routeSource: null,
-      activeLeaderIds: [],
       sessionConfirmed: false,
-      usageData: null,
-    };
+    });
   });
 
   async function renderChatPage() {

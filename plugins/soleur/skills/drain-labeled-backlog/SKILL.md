@@ -1,20 +1,19 @@
 ---
-name: cleanup-scope-outs
-description: "This skill should be used when draining a labeled backlog (deferred-scope-out, code-review) in one cleanup PR. Groups by code area and delegates to /soleur:one-shot."
+name: drain-labeled-backlog
+description: "This skill should be used when draining a labeled issue backlog (deferred-scope-out, code-review, type/security) in one cleanup PR. Groups by code area and delegates to /soleur:one-shot."
 ---
 
-# Cleanup Scope-Outs
+# Drain Labeled Backlog
 
-Drain a labeled-issue backlog by batching issues that touch the same code area into a single focused refactor PR. Defaults to `deferred-scope-out` (the original use case, inspired by PR #2486, which closed `#2467 + #2468 + #2469` in one cleanup). Any other label works via `--label` — e.g., `code-review` drains unresolved review findings instead of deferred ones.
+Drain a labeled-issue backlog by batching issues that touch the same code area into a single focused refactor PR. Defaults to `deferred-scope-out` (the original use case, inspired by PR #2486, which closed `#2467 + #2468 + #2469` in one cleanup). Any other label works via `--label` — e.g., `code-review` drains unresolved review findings, `type/security` drains the security backlog.
 
 ## When to use
 
-- The Phase-3 (or any active phase) `deferred-scope-out` backlog has grown and needs a scheduled drain.
-- An unresolved `code-review` backlog from a review wave has accumulated and needs a coordinated close-out.
-- Multiple open issues with the target label reference the same top-level directory (e.g., `apps/web-platform`) and are safe to batch.
+- A labeled backlog has grown and needs a scheduled drain — `deferred-scope-out` (the original use case), `code-review` (unresolved review findings), `type/security` (open security issues), or any label validated by `gh label list`.
+- Multiple open issues carrying the target label reference the same top-level directory (e.g., `apps/web-platform`) and are safe to batch.
 - You want one PR to close 3+ issues instead of N separate PRs.
 
-Use `/soleur:review` to file new scope-outs. Use this skill to close existing ones.
+Use `/soleur:review` to file new scope-outs. Use this skill to close existing labeled issues.
 
 ## Prerequisites
 
@@ -53,7 +52,7 @@ Default is `Post-MVP / Later`: plan-time verification showed 15+ of the 22 open 
 Delegate to the helper [group-by-area.sh](./scripts/group-by-area.sh):
 
 ```bash
-bash plugins/soleur/skills/cleanup-scope-outs/scripts/group-by-area.sh \
+bash plugins/soleur/skills/drain-labeled-backlog/scripts/group-by-area.sh \
   --label "${LABEL:-deferred-scope-out}" \
   --milestone "$MILESTONE" \
   --top-n "${N:-1}" \
@@ -118,8 +117,8 @@ Report: `Before: X, After: Y, Closed: Z` and the per-area drain.
 The `/soleur:schedule` skill accepts any soleur skill as `--skill <name>` and generates a standalone `.github/workflows/scheduled-<name>.yml`. After merging the PR that ships this skill, schedule a weekly cleanup:
 
 ```text
-/soleur:schedule create --name weekly-scope-out-cleanup \
-  --skill cleanup-scope-outs --cron "0 14 * * 1" --model claude-sonnet-4-6
+/soleur:schedule create --name weekly-deferred-scope-out-drain \
+  --skill drain-labeled-backlog --cron "0 14 * * 1" --model claude-sonnet-4-6
 ```
 
 This turns the skill from a manual cadence tool into a programmatic backlog opener. Tracked as a follow-up issue rather than bundled into this skill, so the skill lands clean.
@@ -148,10 +147,10 @@ Follows the same pattern as `plan`, `review`, and `ship` skills.
 
 ## Test
 
-Unit tests live at [cleanup-scope-outs.test.sh](../../test/cleanup-scope-outs.test.sh). Run them with:
+Unit tests live at [drain-labeled-backlog.test.sh](../../test/drain-labeled-backlog.test.sh). Run them with:
 
 ```bash
-bash plugins/soleur/test/cleanup-scope-outs.test.sh
+bash plugins/soleur/test/drain-labeled-backlog.test.sh
 ```
 
 Covers: clustered fixtures, dispersed fixtures (no cluster), empty fixtures, JSON output shape, and sort order.

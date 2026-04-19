@@ -79,16 +79,21 @@ For each route:
 
 ### 4. Delegate to ux-design-lead (audit mode)
 
+The skill emits no intermediate `::warning::` / `::error::` annotations for parser consumption; the final JSON summary in §7.5 is the machine-readable signal. Human-readable `::warning::` lines for individual route skips remain for CI log UX.
+
 Invoke `ux-design-lead` via the Task tool with a prompt containing:
 
 ```text
 mode: audit
 viewport: {w: 1440, h: 900}
-routes: [{path: "/dashboard", ...}, ...]
-screenshots: ["/absolute/path/to/dashboard.png", ...]
+targets:
+  - {path: "/dashboard", auth: "bot", fixture_prereqs: [tcs_accepted, billing_active], screenshot_path: "/absolute/path/to/dashboard.png"}
+  - ...
 ```
 
-Parse the agent's output as JSON. If parsing fails: log `::error::malformed agent output for route <path>` and skip that route's findings. Do NOT retry — the parse-guard isolates a bad run instead of looping.
+If Step 3 skipped a route (capture failure), that route is **absent** from `targets` — never passed as a null or placeholder. The zipped form makes screenshot↔route skew structurally impossible.
+
+Parse the agent's output as JSON. If parsing fails: log `::error::malformed agent output for target index <i> (route <path>)` and skip that target's findings. Do NOT retry — the parse-guard isolates a bad run instead of looping.
 
 ### 5. Dedup (single-layer hash search)
 
@@ -143,6 +148,27 @@ gh issue create \
 ```
 
 Attach the screenshot to the issue via `gh api /repos/:owner/:repo/issues/:number -f body=...` after creation (GitHub's issue-attachment upload requires a multipart POST against the issue ID, not available on `gh issue create`).
+
+### 7.5 Stdout summary
+
+Before Step 8 cleanup, emit a single-line JSON object to stdout so parent agents can `tail -n 1 | jq .` the run outcome:
+
+```text
+{"filed":N,"suppressed":M,"skipped":K,"hashes":["<hex>", ...]}
+```
+
+Fields (all four required, in this order):
+
+- `filed` — number of `gh issue create` calls that succeeded this run (0 in dry-run mode; the dry-run findings array length does NOT count as `filed` — dry-run surfaces the full array in `findings.json` instead)
+- `suppressed` — number of findings dropped by the dedup hash search (Step 5)
+- `skipped` — number of findings dropped by `CAP_PER_ROUTE` or `CAP_PER_RUN` (Step 6)
+- `hashes` — sorted `string[]` of hex hashes that were either filed (file mode) or would have been filed (dry-run). Stable ordering so parent agents diffing runs see byte-stable output.
+
+Also write the same JSON to `${GITHUB_WORKSPACE}/tmp/ux-audit/summary.json` so the workflow can upload it as an artifact sibling to `findings.json`.
+
+**Early-exit shape (CAP_OPEN_ISSUES reached at Step 2):** emit `{"filed":0,"suppressed":0,"skipped":0,"hashes":[]}` so parent agents always see a parseable line.
+
+**Do not** include absolute paths, timestamps, or widen the shape without a `schema` version field — byte-stability across runs matters for downstream diffs.
 
 ### 8. Cleanup
 

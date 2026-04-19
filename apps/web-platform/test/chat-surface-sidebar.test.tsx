@@ -1,37 +1,20 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen } from "@testing-library/react";
 import { createUseTeamNamesMock } from "./mocks/use-team-names";
-
-type MockTextMessage = {
-  id: string;
-  role: "user" | "assistant";
-  content: string;
-  type: "text";
-  leaderId?: string;
-  state?: "thinking" | "tool_use" | "streaming" | "done" | "error";
-};
+import { createWebSocketMock } from "./mocks/use-websocket";
 
 const mockStartSession = vi.fn();
 const mockResumeSession = vi.fn();
 const mockSendMessage = vi.fn();
 const mockSendReviewGateResponse = vi.fn();
 
-let wsReturn = {
-  messages: [] as MockTextMessage[],
+let wsReturn = createWebSocketMock({
   startSession: mockStartSession,
   resumeSession: mockResumeSession,
   sendMessage: mockSendMessage,
   sendReviewGateResponse: mockSendReviewGateResponse,
-  status: "connected" as const,
-  disconnectReason: undefined as string | undefined,
-  lastError: null as import("@/lib/ws-client").WebSocketError | null,
-  reconnect: vi.fn(),
-  routeSource: null as "auto" | "mention" | null,
-  activeLeaderIds: [] as string[],
-  sessionConfirmed: true,
-  usageData: null as { totalCostUsd: number } | null,
   realConversationId: "test-id",
-};
+});
 
 vi.mock("@/lib/ws-client", () => ({
   useWebSocket: () => wsReturn,
@@ -51,22 +34,13 @@ vi.mock("next/navigation", () => ({
 
 describe("ChatSurface variant=\"sidebar\"", () => {
   beforeEach(() => {
-    wsReturn = {
-      messages: [],
+    wsReturn = createWebSocketMock({
       startSession: mockStartSession,
       resumeSession: mockResumeSession,
       sendMessage: mockSendMessage,
       sendReviewGateResponse: mockSendReviewGateResponse,
-      status: "connected",
-      disconnectReason: undefined,
-      lastError: null,
-      reconnect: vi.fn(),
-      routeSource: null,
-      activeLeaderIds: [],
-      sessionConfirmed: true,
-      usageData: null,
       realConversationId: "test-id",
-    };
+    });
   });
 
   async function renderSidebar() {
@@ -114,7 +88,7 @@ describe("ChatSurface variant=\"sidebar\"", () => {
   });
 
   it("renders cost estimate when usageData.totalCostUsd > 0", async () => {
-    wsReturn.usageData = { totalCostUsd: 0.0123 };
+    wsReturn.usageData = { totalCostUsd: 0.0123, inputTokens: 0, outputTokens: 0 };
     await renderSidebar();
     expect(screen.getByText(/~\$0\.0123/)).toBeInTheDocument();
   });

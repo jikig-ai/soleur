@@ -1,9 +1,8 @@
-import { query, tool, createSdkMcpServer } from "@anthropic-ai/claude-agent-sdk";
+import { query, type tool, createSdkMcpServer } from "@anthropic-ai/claude-agent-sdk";
 import { randomUUID } from "crypto";
 import { readFileSync, writeFileSync, mkdirSync } from "fs";
 import { readFile, writeFile, mkdir } from "fs/promises";
 import path from "path";
-import { z } from "zod/v4";
 
 import { createServiceClient } from "@/lib/supabase/service";
 import { ROUTABLE_DOMAIN_LEADERS, type DomainLeaderId } from "./domain-leaders";
@@ -25,37 +24,25 @@ import {
   ERR_UPLOAD_FAILED,
 } from "./error-messages";
 import { isPathInWorkspace } from "./sandbox";
-import { UNVERIFIED_PARAM_TOOLS, extractToolPath, isFileTool, isSafeTool } from "./tool-path-checker";
 import { buildAgentEnv } from "./agent-env";
 import { PROVIDER_CONFIG, EXCLUDED_FROM_SERVICES_UI } from "./providers";
 import type { Provider } from "@/lib/types";
 import { createSandboxHook } from "./sandbox-hook";
-import { abortableReviewGate, validateSelection, extractReviewGateInput, buildReviewGateResponse, type AgentSession } from "./review-gate";
+import { abortableReviewGate, validateSelection, type AgentSession } from "./review-gate";
 import { createChildLogger } from "./logger";
 import { syncPull, syncPush } from "./session-sync";
-import { validateBranchFormat } from "./branch-validation";
-import { createPullRequest } from "./github-app";
-import { plausibleCreateSite, plausibleAddGoal, plausibleGetStats } from "./service-tools";
 import { tryCreateVision, buildVisionEnhancementPrompt } from "./vision-helpers";
-import { getToolTier, buildGateMessage } from "./tool-tiers";
-import { readCiStatus, readWorkflowLogs } from "./ci-tools";
-import { triggerWorkflow, createRateLimiter } from "./trigger-workflow";
-import { pushBranch } from "./push-branch";
+import { createRateLimiter } from "./trigger-workflow";
 import { githubApiGet } from "./github-api";
-import { MAX_BINARY_SIZE } from "./kb-binary-response";
+import { MAX_BINARY_SIZE } from "./kb-limits";
 import { buildKbShareTools } from "./kb-share-tools";
+import { buildConversationsTools } from "./conversations-tools";
+import { buildGithubTools } from "./github-tools";
+import { buildPlausibleTools } from "./plausible-tools";
+import { createCanUseTool } from "./permission-callback";
 import { reportSilentFallback } from "./observability";
 
 const log = createChildLogger("agent");
-
-// canUseTool allow branches must echo toolInput as updatedInput. SDK
-// v0.2.80 surfaced `ZodError: invalid_union` on Write/Edit when the
-// allow return omitted updatedInput. Echoing is behaviorally a no-op
-// and satisfies both the permissive (updatedInput optional) and strict
-// (updatedInput required) variants of the PermissionResult schema.
-function allow(toolInput: Record<string, unknown>) {
-  return { behavior: "allow" as const, updatedInput: toolInput };
-}
 
 let _supabase: ReturnType<typeof createServiceClient>;
 function supabase() { return _supabase ??= createServiceClient(); }
@@ -450,8 +437,18 @@ export async function startAgentSession(
       if (pluginJson.mcpServers && typeof pluginJson.mcpServers === "object") {
         pluginMcpServerNames = Object.keys(pluginJson.mcpServers);
       }
-    } catch {
-      // plugin.json may not exist in all workspaces; proceed without plugin MCP tools
+    } catch (err) {
+      // plugin.json may not exist in all workspaces; proceed without plugin MCP tools.
+      // ENOENT is an expected state (no plugin installed). Parse errors or other
+      // read failures on a committed file are degraded conditions — mirror to
+      // Sentry so we hear about corrupted workspaces.
+      if ((err as NodeJS.ErrnoException)?.code !== "ENOENT") {
+        reportSilentFallback(err, {
+          feature: "agent-runner",
+          op: "plugin-mcp-discovery",
+          extra: { userId },
+        });
+      }
     }
 
     // Migrate existing workspaces: remove pre-approved permissions that
@@ -549,9 +546,10 @@ When you need user input for important decisions, use the AskUserQuestion tool.`
 
 You can generate public read-only share links for any file in the knowledge-base
 using kb_share_create. Any file type is allowed (markdown, PDF, image, docx).
-Links are revocable via kb_share_revoke. Use kb_share_list to check what is
-currently shared before generating a new link — this surfaces duplicates and
-revoked links.
+Links are revocable via kb_share_revoke, listable via kb_share_list, and
+previewable via kb_share_preview. Use kb_share_list to check what is currently
+shared before generating a new link — this surfaces duplicates and revoked
+links.
 
 kb_share_create is idempotent on unchanged content — calling it for a file
 that already has an active link with a matching content hash returns the
@@ -561,7 +559,27 @@ stale link and issues a fresh one.
 Share links expose the file contents to anyone who has the URL. Before creating
 a link for a file that looks sensitive (credentials, personal data, unreleased
 strategy, or paths under finances/, legal/, customers/), confirm with
-AskUserQuestion first. Files over ${kbShareSizeMb} MB cannot be shared.`;
+AskUserQuestion first. Files over ${kbShareSizeMb} MB cannot be shared.
+
+Use kb_share_preview({ token }) to verify a link renders correctly before
+sending it to someone. It returns the same metadata a recipient's browser
+would see (contentType, size, filename, kind, and for PDFs/images a
+firstPagePreview with dimensions and page count). Revoked or content-drifted
+links surface the same terminal state the public endpoint would return. This
+is the right tool when the user asks "double-check the link still works" or
+"tell me how many pages that PDF is."
+
+On code "revoked" or "content-changed", offer to run kb_share_create on the
+same documentPath to issue a fresh link. On code "legacy-null-hash" (pre-
+migration share row, rare) recommend re-creating the share as well.
+
+## KB-chat thread discovery
+
+You can look up whether a KB-chat thread already exists for a knowledge-base
+document using conversations_lookup. Input: contextPath (the KB file path).
+Returns thread metadata ({ conversationId, lastActive, messageCount }) if a
+thread exists, or null otherwise. Use this before creating a new thread —
+resuming an existing thread preserves context for the user.`;
 
     // ---------------------------------------------------------------------------
     // In-process MCP server for platform tools (PR creation, etc.)
@@ -582,7 +600,7 @@ AskUserQuestion first. Files over ${kbShareSizeMb} MB cannot be shared.`;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any -- SDK uses any for heterogeneous tool arrays
     const platformTools: Array<ReturnType<typeof tool<any>>> = [];
 
-    // GitHub PR tool: requires GitHub App installation with a connected repo.
+    // GitHub tool family: requires GitHub App installation with a connected repo.
     if (installationId && repoUrl) {
       let owner: string;
       let repo: string;
@@ -619,219 +637,29 @@ AskUserQuestion first. Files over ${kbShareSizeMb} MB cannot be shared.`;
           // Fall back to "main" — still protected by the hardcoded list
         }
 
-        const createPr = tool(
-          "create_pull_request",
-          "Create a pull request on the user's connected GitHub repository. " +
-          "The repository is determined server-side from the user's connected repo. " +
-          "The head branch must already exist on the remote (push first via git).",
-          {
-            head: z.string().describe("Branch name containing changes (just the name, not owner:branch)"),
-            base: z.string().default("main").describe("Target branch to merge into"),
-            title: z.string().describe("PR title"),
-            body: z.string().optional().describe("PR description body (markdown)"),
-          },
-          async (args) => {
-            try {
-              // Validate branch name format before hitting GitHub API
-              validateBranchFormat(args.head);
-              validateBranchFormat(args.base);
-              if (args.head === args.base) {
-                return {
-                  content: [{ type: "text" as const, text: "Error creating PR: Head branch and base branch cannot be the same" }],
-                  isError: true,
-                };
-              }
-              const result = await createPullRequest(
-                installationId, owner, repo,
-                args.head, args.base, args.title, args.body,
-              );
-              return {
-                content: [{ type: "text" as const, text: JSON.stringify(result) }],
-              };
-            } catch (err) {
-              return {
-                content: [{ type: "text" as const, text: `Error creating PR: ${(err as Error).message}` }],
-                isError: true,
-              };
-            }
-          },
-        );
-
-        platformTools.push(createPr);
-        platformToolNames.push("mcp__soleur_platform__create_pull_request");
-
-        // Phase 2: Read CI status (#1927) — auto-approve tier
-        platformTools.push(
-          tool(
-            "github_read_ci_status",
-            "Read recent CI workflow run statuses for the connected repository. " +
-            "Returns status (pass/fail/in-progress), commit SHA, branch, run URL, " +
-            "and workflow name/ID. Optionally filter by branch.",
-            {
-              branch: z.string().optional().describe("Filter runs by branch name"),
-              per_page: z.number().default(10).describe("Number of runs to return (max 30)"),
-            },
-            async (args) => {
-              try {
-                const runs = await readCiStatus(
-                  installationId, owner, repo,
-                  { branch: args.branch, per_page: Math.min(args.per_page, 30) },
-                );
-                return {
-                  content: [{ type: "text" as const, text: JSON.stringify(runs, null, 2) }],
-                };
-              } catch (err) {
-                return {
-                  content: [{ type: "text" as const, text: `Error reading CI status: ${(err as Error).message}` }],
-                  isError: true,
-                };
-              }
-            },
-          ),
-          tool(
-            "github_read_workflow_logs",
-            "Read failure details for a specific workflow run. Returns check annotations " +
-            "(structured failure data) when available, otherwise falls back to the last " +
-            "100 lines of the first failed step. Use github_read_ci_status first to find run IDs.",
-            {
-              run_id: z.number().describe("The workflow run ID to inspect"),
-            },
-            async (args) => {
-              try {
-                const result = await readWorkflowLogs(
-                  installationId, owner, repo, args.run_id,
-                );
-                return {
-                  content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
-                };
-              } catch (err) {
-                return {
-                  content: [{ type: "text" as const, text: `Error reading workflow logs: ${(err as Error).message}` }],
-                  isError: true,
-                };
-              }
-            },
-          ),
-        );
-        platformToolNames.push(
-          "mcp__soleur_platform__github_read_ci_status",
-          "mcp__soleur_platform__github_read_workflow_logs",
-        );
-
-        // Phase 3: Trigger workflows (#1928) — gated tier
-        platformTools.push(
-          tool(
-            "github_trigger_workflow",
-            "Trigger a workflow_dispatch event on the connected repository. " +
-            "Requires founder approval via review gate. Rate limited to 10 triggers per session. " +
-            "Use github_read_ci_status first to find workflow IDs.",
-            {
-              workflow_id: z.number().describe("The workflow ID to trigger (from github_read_ci_status)"),
-              ref: z.string().describe("Git ref to run the workflow on (branch name or tag)"),
-              inputs: z.record(z.string(), z.string()).optional().describe("Optional workflow_dispatch inputs"),
-            },
-            async (args) => {
-              try {
-                const result = await triggerWorkflow(
-                  installationId, owner, repo,
-                  args.workflow_id, args.ref, workflowRateLimiter, args.inputs,
-                );
-                return {
-                  content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
-                };
-              } catch (err) {
-                return {
-                  content: [{ type: "text" as const, text: `Error triggering workflow: ${(err as Error).message}` }],
-                  isError: true,
-                };
-              }
-            },
-          ),
-        );
-        platformToolNames.push("mcp__soleur_platform__github_trigger_workflow");
-
-        // Phase 4: Push branches (#1929) — gated tier
-        platformTools.push(
-          tool(
-            "github_push_branch",
-            "Push the current workspace HEAD to a feature branch on the remote. " +
-            "Requires founder approval via review gate. Force-push and push to " +
-            "main/master are blocked unconditionally.",
-            {
-              branch: z.string().describe("Target branch name (must not be main, master, or default branch)"),
-              force: z.boolean().default(false).describe("Force-push (always rejected — included for explicit error messaging)"),
-            },
-            async (args) => {
-              try {
-                const result = await pushBranch({
-                  installationId,
-                  owner,
-                  repo,
-                  workspacePath,
-                  branch: args.branch,
-                  force: args.force,
-                  defaultBranch,
-                });
-                return {
-                  content: [{ type: "text" as const, text: JSON.stringify(result) }],
-                };
-              } catch (err) {
-                return {
-                  content: [{ type: "text" as const, text: `Error pushing branch: ${(err as Error).message}` }],
-                  isError: true,
-                };
-              }
-            },
-          ),
-        );
-        platformToolNames.push("mcp__soleur_platform__github_push_branch");
+        const github = buildGithubTools({
+          installationId,
+          owner,
+          repo,
+          defaultBranch,
+          workspacePath,
+          workflowRateLimiter,
+        });
+        platformTools.push(...github.tools);
+        platformToolNames.push(...github.toolNames);
       }
     }
 
     // Service tools: registered independently of GitHub installation.
     // Users with stored API keys get tools even without a connected repo.
+    // Guard stays at the top level — nesting inside the GitHub block would
+    // hide Plausible tools from users without a connected repo (see learning
+    // `service-tool-registration-scope-guard-20260410.md`).
     const plausibleKey = serviceTokens.PLAUSIBLE_API_KEY;
     if (plausibleKey) {
-      const wrapResult = (result: { success: boolean; data?: unknown; error?: string }) => ({
-        content: [{ type: "text" as const, text: JSON.stringify(result) }],
-        ...(result.success ? {} : { isError: true }),
-      });
-
-      platformTools.push(
-        tool(
-          "plausible_create_site",
-          "Create a new site in Plausible Analytics. Returns the created site metadata.",
-          {
-            domain: z.string().describe("Domain name for the site (e.g., example.com)"),
-            timezone: z.string().default("UTC").describe("Timezone for the site"),
-          },
-          async (args) => wrapResult(await plausibleCreateSite(plausibleKey, args.domain, args.timezone)),
-        ),
-        tool(
-          "plausible_add_goal",
-          "Add a conversion goal to a Plausible Analytics site. Uses PUT with upsert semantics (safely idempotent).",
-          {
-            site_id: z.string().describe("Domain of the site (e.g., example.com)"),
-            goal_type: z.enum(["event", "page"]).describe("Type of goal"),
-            value: z.string().describe("Event name (for event goals) or page path (for page goals)"),
-          },
-          async (args) => wrapResult(await plausibleAddGoal(plausibleKey, args.site_id, args.goal_type, args.value)),
-        ),
-        tool(
-          "plausible_get_stats",
-          "Get aggregate stats for a Plausible Analytics site. Returns visitors, pageviews, bounce rate, and visit duration.",
-          {
-            site_id: z.string().describe("Domain of the site (e.g., example.com)"),
-            period: z.enum(["day", "7d", "30d"]).default("30d").describe("Time period for stats"),
-          },
-          async (args) => wrapResult(await plausibleGetStats(plausibleKey, args.site_id, args.period)),
-        ),
-      );
-      platformToolNames.push(
-        "mcp__soleur_platform__plausible_create_site",
-        "mcp__soleur_platform__plausible_add_goal",
-        "mcp__soleur_platform__plausible_get_stats",
-      );
+      const plausible = buildPlausibleTools({ plausibleKey });
+      platformTools.push(...plausible.tools);
+      platformToolNames.push(...plausible.toolNames);
     }
 
     // KB share tools (#2309): registered independently of GitHub installation
@@ -864,7 +692,15 @@ AskUserQuestion first. Files over ${kbShareSizeMb} MB cannot be shared.`;
       "mcp__soleur_platform__kb_share_create",
       "mcp__soleur_platform__kb_share_list",
       "mcp__soleur_platform__kb_share_revoke",
+      "mcp__soleur_platform__kb_share_preview",
     );
+
+    // KB-chat thread discovery (closes #2512 P2 slice). P3 siblings
+    // (conversations_list, conversation_archive) deferred to follow-up
+    // issue because they require new HTTP endpoints.
+    const conversationsTools = buildConversationsTools({ userId });
+    platformTools.push(...conversationsTools);
+    platformToolNames.push("mcp__soleur_platform__conversations_lookup");
 
     // Build MCP server if any platform tools are registered
     if (platformTools.length > 0) {
@@ -949,213 +785,29 @@ AskUserQuestion first. Files over ${kbShareSizeMb} MB cannot be shared.`;
             }],
           }],
         },
-        // File tools and Bash are resolved by PreToolUse hooks (step 1)
-        // and SDK sandbox auto-approval (step 3) before reaching this
-        // callback. The canUseTool file-tool check is defense-in-depth
-        // for tools that somehow bypass hooks. See #891.
-        canUseTool: async (
-          toolName: string,
-          toolInput: Record<string, unknown>,
-          options: { signal: AbortSignal; agentID?: string },
-        ) => {
-          const subagentCtx = options.agentID ? ` [subagent=${options.agentID}]` : '';
-          // Defense-in-depth: catch any file tool that bypasses hooks.
-          // PreToolUse hooks are the primary enforcement (layer 1).
-          // This is layer 2 -- see #891 for the audit that added it.
-          if (isFileTool(toolName)) {
-            const filePath = extractToolPath(toolInput);
-            if (filePath && !isPathInWorkspace(filePath, workspacePath)) {
-              return {
-                behavior: "deny" as const,
-                message: `Access denied: outside workspace${subagentCtx}`,
-              };
-            }
-            if (!filePath && (UNVERIFIED_PARAM_TOOLS as readonly string[]).includes(toolName) && Object.keys(toolInput).length > 0) {
-              log.warn(
-                { sec: true, toolName, inputKeys: Object.keys(toolInput) },
-                "Tool invoked without recognized path parameter; SDK may have changed parameter names (see #891)",
-              );
-            }
-            return allow(toolInput);
-          }
-
-          // Review gates: intercept AskUserQuestion
-          if (toolName === "AskUserQuestion") {
-            const gateId = randomUUID();
-            const gate = extractReviewGateInput(toolInput as Record<string, unknown>);
-
-            if (gate.isNewSchema) {
-              const questions = (toolInput as Record<string, unknown>).questions as unknown[];
-              if (questions.length > 1) {
-                log.warn(
-                  { questionCount: questions.length },
-                  "AskUserQuestion received multiple questions; only the first is surfaced",
-                );
-              }
-            }
-
-            // Parse step progress from header (e.g., "Step 2 of 6: Configure DNS")
-            const stepMatch = gate.header?.match(/^Step (\d+) of (\d+): .+$/);
-            const stepProgress = stepMatch
-              ? { current: Number(stepMatch[1]), total: Number(stepMatch[2]) }
-              : undefined;
-
-            const gateDelivered = sendToClient(userId, {
-              type: "review_gate",
-              gateId,
-              question: gate.question,
-              header: gate.header,
-              options: gate.options,
-              descriptions: Object.keys(gate.descriptions).length > 0
-                ? gate.descriptions
-                : undefined,
-              stepProgress,
-            });
-
-            if (!gateDelivered) {
-              // User offline — fire-and-forget push/email notification
-              notifyOfflineUser(userId, {
-                type: "review_gate",
-                conversationId,
-                agentName: leaderId ?? "Agent",
-                question: gate.question,
-              }).catch((err) => log.error({ userId, err }, "Offline notification failed"));
-            }
-
-            await updateConversationStatus(conversationId, "waiting_for_user");
-
-            const selection = await abortableReviewGate(
-              session,
-              gateId,
-              controller.signal,
-              undefined, // timeoutMs (use default)
-              gate.options,
-            );
-
-            await updateConversationStatus(conversationId, "active");
-
-            return {
-              behavior: "allow" as const,
-              updatedInput: buildReviewGateResponse(
-                toolInput as Record<string, unknown>,
-                selection,
-              ),
-            };
-          }
-
-          // Agent tool: spawns subagents that run within the same SDK
-          // sandbox (bubblewrap, filesystem restrictions, network policy).
-          // Both PreToolUse hooks and this canUseTool callback fire for
-          // subagent tool calls (SDK CanUseTool type confirms via
-          // options.agentID). Explicit allow replaces the prior SAFE_TOOLS
-          // auto-allow for auditability. See #910.
-          if (toolName === "Agent") {
-            if (subagentCtx) {
-              log.info({ sec: true, agentId: options.agentID }, "Agent tool invoked by subagent");
-            }
-            return allow(toolInput);
-          }
-
-          // Safe SDK tools: no filesystem path inputs, allowed without checks.
-          // See tool-path-checker.ts for rationale on each tool.
-          // LS removed (#891) -- it accepts path inputs and routes through
-          // isPathInWorkspace. NotebookRead removed -- SDK reads via Read tool.
-          if (isSafeTool(toolName)) {
-            return allow(toolInput);
-          }
-
-          // Tiered gating for in-process MCP server tools (#1926).
-          // Scoped to platformToolNames (not blanket mcp__ prefix) to prevent
-          // future MCP servers from being auto-allowed without explicit review.
-          if (platformToolNames.includes(toolName)) {
-            const tier = getToolTier(toolName);
-
-            if (tier === "blocked") {
-              log.info(
-                { sec: true, tool: toolName, tier, decision: "deny", repo: `${repoOwner}/${repoName}` },
-                "Platform tool blocked",
-              );
-              return {
-                behavior: "deny" as const,
-                message: "This action is not allowed from cloud agents",
-              };
-            }
-
-            if (tier === "gated") {
-              const gateId = randomUUID();
-              const question = buildGateMessage(toolName, toolInput);
-
-              const toolGateDelivered = sendToClient(userId, {
-                type: "review_gate",
-                gateId,
-                question,
-                options: ["Approve", "Reject"],
-              });
-
-              if (!toolGateDelivered) {
-                notifyOfflineUser(userId, {
-                  type: "review_gate",
-                  conversationId,
-                  agentName: leaderId ?? "Agent",
-                  question,
-                }).catch((err) => log.error({ userId, err }, "Offline notification failed (tool gate)"));
-              }
-
-              await updateConversationStatus(conversationId, "waiting_for_user");
-
-              const selection = await abortableReviewGate(
-                session,
-                gateId,
-                options.signal,
-                undefined,
-                ["Approve", "Reject"],
-              );
-
-              await updateConversationStatus(conversationId, "active");
-
-              const decision = selection === "Approve" ? "approved" : "rejected";
-              log.info(
-                { sec: true, tool: toolName, tier, decision, repo: `${repoOwner}/${repoName}` },
-                "Platform tool gated",
-              );
-
-              if (selection !== "Approve") {
-                return {
-                  behavior: "deny" as const,
-                  message: "User rejected the action",
-                };
-              }
-
-              return allow(toolInput);
-            }
-
-            // auto-approve: read-only tools pass through
-            log.info(
-              { sec: true, tool: toolName, tier, decision: "auto-approved", repo: `${repoOwner}/${repoName}` },
-              "Platform tool auto-approved",
-            );
-            return allow(toolInput);
-          }
-
-          // Allow plugin MCP tools from servers registered in plugin.json.
-          // Uses explicit server-name matching (not blanket mcp__ prefix).
-          // See learning: 2026-04-06-mcp-tool-canusertool-scope-allowlist.md
-          if (
-            toolName.startsWith("mcp__plugin_soleur_") &&
-            pluginMcpServerNames.some((server) =>
-              toolName.startsWith(`mcp__plugin_soleur_${server}__`),
-            )
-          ) {
-            log.info({ sec: true, toolName, agentId: options.agentID }, "Plugin MCP tool invoked");
-            return allow(toolInput);
-          }
-
-          // Deny-by-default: block unrecognized tools
-          return {
-            behavior: "deny" as const,
-            message: "Tool not permitted in this environment",
-          };
-        },
+        // Permission callback (SDK chain step 5). File-tool checks are
+        // defense-in-depth — PreToolUse hooks (step 1) are the primary
+        // enforcement. See #891. The callback body lives in
+        // `permission-callback.ts` so the 7 allow branches + deny-by-default
+        // can be unit-tested without booting an SDK session (#2335).
+        canUseTool: createCanUseTool({
+          userId,
+          conversationId,
+          leaderId,
+          workspacePath,
+          platformToolNames,
+          pluginMcpServerNames,
+          repoOwner,
+          repoName,
+          session,
+          controllerSignal: controller.signal,
+          deps: {
+            abortableReviewGate,
+            sendToClient,
+            notifyOfflineUser,
+            updateConversationStatus,
+          },
+        }),
       },
     });
 

@@ -1,15 +1,15 @@
 ---
 title: Soleur
-seoTitle: "Soleur — Company-as-a-Service Platform for Solo Founders"
-description: "Soleur is the open-source company-as-a-service platform for solo founders and solopreneurs — AI agents across engineering, marketing, legal, finance, and every business department."
+seoTitle: "Soleur — AI Agents for Solo Founders | Every Department, One Platform"
+description: "Stop hiring, start delegating. Soleur deploys 60+ AI agents across 8 business departments — engineering, marketing, legal, finance, operations, product, sales, and support. Human-in-the-loop. Your expertise, amplified."
 layout: base.njk
 permalink: index.html
 ---
 
     <!-- Hero -->
     <section class="landing-hero">
-      <h1>The Company-as-a-Service Platform for Solo Founders</h1>
-      <p class="hero-tagline">Build a Billion-Dollar Company. Alone.</p>
+      <h1>Stop hiring. Start delegating.</h1>
+      <p class="hero-tagline">The Company-as-a-Service platform for solo founders. Build a billion-dollar company — alone.</p>
       <p class="hero-sub">Soleur is an open-source company-as-a-service platform that deploys {{ stats.agents }} AI agents across {{ stats.departments }} business departments &mdash; engineering, marketing, legal, finance, operations, product, sales, and support &mdash; giving a single founder the operational capacity of a full organization. Every agent shares a compounding knowledge base that grows with your business.</p>
       <p class="hero-trust">Human-in-the-loop. Your expertise, amplified.</p>
       <form class="newsletter-form hero-waitlist-form" id="homepage-waitlist-form"
@@ -46,8 +46,10 @@ permalink: index.html
         <div class="landing-stat-label">Skills</div>
       </div>
       <div class="landing-stat">
-        <div class="landing-stat-value">&infin;</div>
-        <div class="landing-stat-label">Compounding Knowledge</div>
+        <div class="landing-stat-value">{% if githubStats.stars %}{{ githubStats.stars }}{% else %}&#x2605;{% endif %}</div>
+        <div class="landing-stat-label">
+          <a href="{{ site.github }}" rel="noopener noreferrer" target="_blank">GitHub Stars</a>
+        </div>
       </div>
     </section>
 
@@ -83,6 +85,23 @@ permalink: index.html
         &ldquo;I would not be surprised if the first single-person billion-dollar company &hellip; happens in the next couple of years.&rdquo;
       </blockquote>
       <cite>&mdash; Dario Amodei, CEO of Anthropic, assigning a <a href="https://www.inc.com/ben-sherry/anthropic-ceo-dario-amodei-predicts-the-first-billion-dollar-solopreneur-by-2026/91193609" rel="noopener noreferrer">70&ndash;80% probability</a></cite>
+    </section>
+
+    <!-- As seen in / Press strip -->
+    <section class="landing-press-strip" aria-labelledby="press-strip-heading">
+      <div class="landing-section-inner">
+        <p class="section-label" id="press-strip-heading">As seen in</p>
+        <ul class="press-outlet-list">
+          <li class="press-outlet">
+            <a href="https://www.inc.com/ben-sherry/anthropic-ceo-dario-amodei-predicts-the-first-billion-dollar-solopreneur-by-2026/91193609"
+               rel="noopener noreferrer" target="_blank"
+               aria-label="Read the Inc.com article on the billion-dollar solo founder thesis">
+              <span class="press-outlet-name">Inc.com</span>
+              <span class="press-outlet-context" aria-hidden="true">&mdash; The thesis behind Soleur, as reported on the billion-dollar solo founder.</span>
+            </a>
+          </li>
+        </ul>
+      </div>
     </section>
 
     <!-- Mid-page CTA -->

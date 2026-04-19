@@ -287,6 +287,27 @@ Complete system context map with component interactions
 
 Run the Task code-simplicity-reviewer() to see if we can simplify the code.
 
+### 4.5. CLI-Verification Check (user-facing docs only)
+
+When reviewing a PR that changes `*.njk`, `*.md`, `README`, or content under
+`apps/**`, scan every fenced code block tagged `bash`, `sh`, `shell`, or
+untagged-but-CLI-shaped. For each `<command> <subcommand>` pair:
+
+1. If the tool is well-known (git, gh, npm, bun, curl, ollama, supabase,
+   doppler, etc.), verify the subcommand exists. Cross-reference the tool's
+   official docs via `WebFetch` or run `<tool> --help`. If unsure, flag as
+   `cli-verification-unverified` and require an explicit annotation or
+   citation before approving.
+2. If the tool is project-local (`./scripts/*`,
+   `plugins/soleur/skills/*/scripts/*`), verify the script exists at the
+   path.
+3. If the snippet names a model or registry tag (`<model>:<tag>`,
+   `@<version>`), fetch the registry or cite the registry URL.
+
+Flag any unverified CLI invocation as **P1 (docs-trust)** — NOT P3 polish. A
+fabricated CLI command on a high-intent landing page breaks first-touch
+trust (#1810/#2550).
+
 ### 5. Findings Synthesis and GitHub Issue Creation
 
 <critical_requirement>
@@ -559,6 +580,12 @@ Review agent suggestions that modify workflow `if` conditions or event filters m
 When a reviewer prescribes `--arg` for jq injection defense in a `gh ... --jq` context, verify the CLI forwards jq flags before implementing. `gh --jq` accepts a single expression string and does NOT forward `--arg`, `--argjson`, or `--slurp` to the underlying jq binary — applying the fix produces `unknown arguments` at runtime. Fall back to shape-validating the shell variable (e.g., `[[ "$VAR" =~ ^[0-9]+$ ]]`) before interpolation, or pipe to a second-stage standalone `jq --arg`. See `knowledge-base/project/learnings/2026-04-15-gh-jq-does-not-forward-arg-to-jq.md`.
 
 Parallel review batches can stall silently — spawning 12 review agents at once has been observed to produce completion notifications for only 6, with the remaining agents' transcripts frozen ~15s after spawn and no completion event emitted. When more than 30% of spawned agents stop producing output for >2 minutes after launch, proactively announce "N of M agents stalled" rather than silently waiting. Proceed with synthesis from the agents that returned — the Rate Limit Fallback gate already permits partial coverage. See `knowledge-base/project/learnings/2026-04-17-postgrest-aggregate-disabled-forces-rpc-option.md`.
+
+Before reporting a broken link or missing file, reviewer agents MUST verify via Glob or Read. Unverified "broken link" claims waste reviewer-response cycles — the file may exist at the exact path. **Why:** PR #2226 pattern-recognition-specialist false-positive on a `runtime-errors/2026-02-13-...` learning file that did exist.
+
+When reviewing a Nunjucks/Eleventy page that pairs a visible HTML answer with a `FAPage`/`FAQPage` JSON-LD `acceptedAnswer.text`, compare the two surfaces character-for-character per Question. Google's FAQ rich-result parity check compares codepoints — flag (a) `{{ ... }}` interpolation in HTML paired with a hardcoded value in JSON-LD, and (b) HTML entities (`&rsquo;`, `&amp;`, etc.) in one surface and ASCII or `\uXXXX` in the other. See `knowledge-base/project/learnings/2026-04-18-faq-html-jsonld-parity.md`.
+
+When flagging a skill description word-budget overrun, the tokenizer MUST match the CI gate. `plugins/soleur/test/components.test.ts` uses `desc.split(/\s+/).filter(Boolean).length` against the YAML value only (1800-word skill budget); the `grep -h 'description:' | wc -w` pattern in AGENTS.md belongs to the agent 2500-word budget and includes YAML framing, inflating counts by ~5 words per skill. Run `bun test plugins/soleur/test/components.test.ts` before reporting — if it passes, the budget is satisfied. See `knowledge-base/project/learnings/2026-04-19-skill-description-word-budget-tokenizer.md`.
 
 ### Important: P1 Findings Block Merge
 

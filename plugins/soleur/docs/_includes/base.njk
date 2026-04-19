@@ -49,6 +49,33 @@
         }
       }{% if page.url == "/" or page.url == "/index.html" %},
       {
+        "@type": "Organization",
+        "@id": "{{ site.url }}/#organization",
+        "name": "{{ site.name }}",
+        "url": "{{ site.url }}",
+        "logo": "{{ site.url }}/images/logo-mark-512.png",
+        "sameAs": [
+          "{{ site.github }}",
+          "{{ site.x }}",
+          "{{ site.linkedinCompany }}",
+          "{{ site.bluesky }}",
+          "{{ site.discord }}"
+        ],
+        "subjectOf": [
+          {
+            "@type": "NewsArticle",
+            "url": "https://www.inc.com/ben-sherry/anthropic-ceo-dario-amodei-predicts-the-first-billion-dollar-solopreneur-by-2026/91193609",
+            "headline": "Anthropic CEO Dario Amodei Predicts The First Billion-Dollar Solopreneur",
+            "datePublished": "2025-03-25",
+            "publisher": {
+              "@type": "Organization",
+              "name": "Inc.",
+              "url": "https://www.inc.com/"
+            }
+          }
+        ]
+      },
+      {
         "@type": "SoftwareApplication",
         "name": "{{ site.name }}",
         "url": "{{ site.url }}",

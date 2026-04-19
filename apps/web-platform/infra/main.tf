@@ -37,3 +37,20 @@ provider "hcloud" {
 provider "cloudflare" {
   api_token = var.cf_api_token
 }
+
+# Separate provider for zone-settings APIs (HSTS / security_header).
+# The default cf_api_token lacks Zone Settings:Edit; rather than expanding
+# its scope, this alias uses a narrow token that only grants Zone Settings
+# on soleur.ai. See cloudflare-settings.tf and #2527.
+provider "cloudflare" {
+  alias     = "zone_settings"
+  api_token = var.cf_api_token_zone_settings
+}
+
+# Separate provider for Cloudflare Rulesets APIs (cache rules, etc.).
+# The default cf_api_token lacks Cache Rules:Edit; this alias uses a narrow
+# token scoped to Cache Rules:Edit on soleur.ai. See cache.tf and #2542.
+provider "cloudflare" {
+  alias     = "rulesets"
+  api_token = var.cf_api_token_rulesets
+}

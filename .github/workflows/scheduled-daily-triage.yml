@@ -61,7 +61,7 @@ jobs:
           gh label create "domain/support"     --description "Community, Discord, issue triage (CCO)"    --color "D876E3" 2>/dev/null || true
 
       - name: Triage open issues
-        uses: anthropics/claude-code-action@df37d2f0760a4b5683a6e617c9325bc1a36443f6 # v1.0.75
+        uses: anthropics/claude-code-action@ab8b1e6471c519c585ba17e8ecaccc9d83043541 # v1.0.101
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           plugin_marketplaces: 'https://github.com/jikig-ai/soleur.git'
@@ -73,10 +73,11 @@ jobs:
 
             ## Instructions
 
-            1. List open issues: `gh issue list --state open --limit 200 --json number,title,labels --jq 'map(select(.labels | map(.name) | index("ux-audit") | not))'`
-               The `--jq` filter excludes `ux-audit`-labeled issues (filed by the
-               soleur:ux-audit agent loop — they carry their own `domain/product`
-               label and do not need auto-triage).
+            1. List open issues: `gh issue list --state open --limit 200 --json number,title,labels --jq 'map(select((.labels | map(.name) | index("ux-audit") | not) and (.labels | map(.name) | any(startswith("agent:")) | not)))'`
+               The `--jq` filter excludes agent-authored issues (stream tag
+               `ux-audit` and any `agent:*` label).
+               Clause source: `plugins/soleur/skills/fix-issue/references/exclude-label-jq-snippet.md`.
+               Governance rationale: `plugins/soleur/skills/fix-issue/references/agent-authored-exclusion.md`.
             2. Filter: skip any issue that already has a label starting with `priority/`.
                These have already been triaged.
             3. For each remaining issue:

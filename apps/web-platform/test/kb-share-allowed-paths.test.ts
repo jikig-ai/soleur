@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { MAX_BINARY_SIZE } from "@/server/kb-limits";
 
 const mocks = vi.hoisted(() => ({
   mockGetUser: vi.fn(),
@@ -45,7 +46,6 @@ vi.mock("@/server/observability", () => ({
 // workspace so lstat + isFile + isSymbolicLink checks exercise the real FS.
 
 import { POST } from "@/app/api/kb/share/route";
-import { MAX_BINARY_SIZE } from "@/server/kb-binary-response";
 import { shareSupabaseFromMock } from "./helpers/share-mocks";
 
 let tmpWorkspace: string;

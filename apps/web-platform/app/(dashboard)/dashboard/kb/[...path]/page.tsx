@@ -12,6 +12,7 @@ import { KbChatContext } from "@/components/kb/kb-chat-context";
 import { KbChatQuoteBridgeContext } from "@/components/kb/kb-chat-quote-bridge";
 import { SelectionToolbar } from "@/components/kb/selection-toolbar";
 import { getKbExtension, isMarkdownKbPath } from "@/lib/kb-extensions";
+import { classifyByExtension } from "@/lib/kb-file-kind";
 import type { ContentResult } from "@/server/kb-reader";
 
 export default function KbContentPage({
@@ -129,7 +130,11 @@ export default function KbContentPage({
           download={{ href: contentUrl, filename }}
         />
         <div className="min-h-0 flex-1">
-          <FilePreview path={joinedPath} extension={extension} showDownload={false} />
+          <FilePreview
+            path={joinedPath}
+            kind={classifyByExtension(extension)}
+            showDownload={false}
+          />
         </div>
       </div>
     );

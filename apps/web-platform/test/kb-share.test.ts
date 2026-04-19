@@ -4,8 +4,13 @@ import path from "node:path";
 import { createHash } from "node:crypto";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
-import { createShare, listShares, revokeShare } from "@/server/kb-share";
-import { MAX_BINARY_SIZE } from "@/server/kb-binary-response";
+import {
+  createShare,
+  listShares,
+  revokeShare,
+  REVOKE_PURGE_FAILED_MESSAGE,
+} from "@/server/kb-share";
+import { MAX_BINARY_SIZE } from "@/server/kb-limits";
 import { shareSupabaseFromMock } from "./helpers/share-mocks";
 
 vi.mock("@/server/logger", () => ({
@@ -21,6 +26,14 @@ vi.mock("@/server/logger", () => ({
 vi.mock("@/server/observability", () => ({
   reportSilentFallback: vi.fn(),
   reportSilentFallbackWarning: vi.fn(),
+}));
+
+const purgeMocks = vi.hoisted(() => ({
+  purgeSharedToken: vi.fn(),
+}));
+
+vi.mock("@/server/cf-cache-purge", () => ({
+  purgeSharedToken: purgeMocks.purgeSharedToken,
 }));
 
 vi.mock("@sentry/nextjs", () => ({ captureException: vi.fn() }));
@@ -105,6 +118,8 @@ describe("createShare — happy path", () => {
   });
 
   it("re-issues on content drift — revokes stale row, inserts fresh token", async () => {
+    purgeMocks.purgeSharedToken.mockReset();
+    purgeMocks.purgeSharedToken.mockResolvedValue({ ok: true });
     const newBytes = Buffer.from("version 2");
     fs.writeFileSync(path.join(kbRoot, "doc.md"), newBytes);
     const insertSpy = vi.fn().mockResolvedValue({ error: null });
@@ -129,6 +144,11 @@ describe("createShare — happy path", () => {
     expect(updateSpy).toHaveBeenCalled();
     expect(insertSpy).toHaveBeenCalledTimes(1);
     expect(insertSpy.mock.calls[0][0].content_sha256).toBe(hex(newBytes));
+    // Same security invariant as the explicit revoke path (#2568): the
+    // stale token's CF edge cache must be purged when content-drift
+    // forces a re-issue, otherwise the old document keeps serving for up
+    // to s-maxage seconds.
+    expect(purgeMocks.purgeSharedToken).toHaveBeenCalledWith("stale-token");
   });
 });
 
@@ -424,6 +444,11 @@ describe("listShares", () => {
 });
 
 describe("revokeShare", () => {
+  beforeEach(() => {
+    purgeMocks.purgeSharedToken.mockReset();
+    purgeMocks.purgeSharedToken.mockResolvedValue({ ok: true });
+  });
+
   it("revokes a link owned by the caller", async () => {
     const updateEqSpy = vi.fn().mockResolvedValue({ error: null });
     const client = {
@@ -447,6 +472,66 @@ describe("revokeShare", () => {
     if (!result.ok) throw new Error("unreachable");
     expect(result.token).toBe("tok-1");
     expect(updateEqSpy).toHaveBeenCalledWith("id", "share-1");
+    expect(purgeMocks.purgeSharedToken).toHaveBeenCalledWith("tok-1");
+  });
+
+  it("returns 502 purge-failed when purge fails after a successful DB update", async () => {
+    purgeMocks.purgeSharedToken.mockResolvedValue({
+      ok: false,
+      error: "cf-api",
+    });
+    const updateEqSpy = vi.fn().mockResolvedValue({ error: null });
+    const client = {
+      from: () => ({
+        select: () => ({
+          eq: () => ({
+            single: () =>
+              Promise.resolve({
+                data: { id: "share-1", user_id: "user-1", document_path: "readme.md" },
+                error: null,
+              }),
+          }),
+        }),
+        update: () => ({ eq: updateEqSpy }),
+      }),
+    };
+
+    const result = await revokeShare(client as never, "user-1", "tok-1");
+
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("unreachable");
+    expect(result.status).toBe(502);
+    expect(result.code).toBe("purge-failed");
+    expect(result.error).toBe(REVOKE_PURGE_FAILED_MESSAGE);
+    // DB update did happen — purge is downstream of the row flip.
+    expect(updateEqSpy).toHaveBeenCalledWith("id", "share-1");
+  });
+
+  it("does not call purge when the DB update itself fails", async () => {
+    const updateEqSpy = vi
+      .fn()
+      .mockResolvedValue({ error: { message: "db down" } });
+    const client = {
+      from: () => ({
+        select: () => ({
+          eq: () => ({
+            single: () =>
+              Promise.resolve({
+                data: { id: "share-1", user_id: "user-1", document_path: "readme.md" },
+                error: null,
+              }),
+          }),
+        }),
+        update: () => ({ eq: updateEqSpy }),
+      }),
+    };
+
+    const result = await revokeShare(client as never, "user-1", "tok-1");
+
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("unreachable");
+    expect(result.code).toBe("db-error");
+    expect(purgeMocks.purgeSharedToken).not.toHaveBeenCalled();
   });
 
   it("returns status 403 code forbidden when revoking another user's token", async () => {
@@ -471,6 +556,7 @@ describe("revokeShare", () => {
     if (result.ok) throw new Error("unreachable");
     expect(result.status).toBe(403);
     expect(result.code).toBe("forbidden");
+    expect(purgeMocks.purgeSharedToken).not.toHaveBeenCalled();
   });
 
   it("returns status 404 code not-found for unknown token", async () => {

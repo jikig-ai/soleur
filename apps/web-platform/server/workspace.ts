@@ -1,5 +1,6 @@
 import {
   existsSync,
+  lstatSync,
   mkdirSync,
   symlinkSync,
   unlinkSync,
@@ -22,7 +23,7 @@ function getPluginPath(): string {
   return process.env.SOLEUR_PLUGIN_PATH || "/app/shared/plugins/soleur";
 }
 
-const KNOWLEDGE_BASE_DIRS = [
+const KNOWLEDGE_BASE_PROJECT_DIRS = [
   "brainstorms",
   "specs",
   "plans",
@@ -55,38 +56,12 @@ export async function provisionWorkspace(userId: string): Promise<string> {
   // 1. Create workspace root (skip if exists)
   ensureDir(workspacePath);
 
-  // 2. Create knowledge-base subdirectories
-  const kbRoot = join(workspacePath, "knowledge-base");
-  ensureDir(kbRoot);
-  ensureDir(join(kbRoot, "overview"));
-  const projectDir = join(kbRoot, "project");
-  ensureDir(projectDir);
-  for (const sub of KNOWLEDGE_BASE_DIRS) {
-    ensureDir(join(projectDir, sub));
-  }
-
-  // 3. Create .claude directory and settings
-  const claudeDir = join(workspacePath, ".claude");
-  ensureDir(claudeDir);
-  writeFileSync(
-    join(claudeDir, "settings.json"),
-    JSON.stringify(DEFAULT_SETTINGS, null, 2) + "\n",
-  );
-
-  // 3b. Suppress welcome hook — guided onboarding handles first run
-  writeFileSync(join(claudeDir, "soleur-welcomed.local"), "");
-
-  // 4. Symlink plugins/soleur -> shared plugin path
-  const pluginsDir = join(workspacePath, "plugins");
-  ensureDir(pluginsDir);
-  const symlinkTarget = join(pluginsDir, "soleur");
-  if (!existsSync(symlinkTarget)) {
-    try {
-      symlinkSync(getPluginPath(), symlinkTarget);
-    } catch (err) {
-      log.warn({ err, userId }, "Failed to symlink plugin");
-    }
-  }
+  // 2-4. Scaffold KB dirs, .claude/, plugin symlink (single entry point
+  // — the `provisionWorkspaceWithRepo` path reuses the same helper).
+  // `provisionWorkspace` is the default ("Start Fresh") path and always
+  // writes the welcome sentinel; the repo-cloning path only writes it
+  // when explicitly opted in.
+  scaffoldWorkspaceDefaults(workspacePath, { suppressWelcomeHook: true });
 
   // 5. Initialize git repo (execFileSync avoids shell injection)
   try {
@@ -208,40 +183,14 @@ export async function provisionWorkspaceWithRepo(
     }
   }
 
-  // 7. Overlay Soleur plugin symlink
-  const pluginsDir = join(workspacePath, "plugins");
-  ensureDir(pluginsDir);
-  const symlinkTarget = join(pluginsDir, "soleur");
-  if (!existsSync(symlinkTarget)) {
-    try {
-      symlinkSync(getPluginPath(), symlinkTarget);
-    } catch (err) {
-      log.warn({ err, userId }, "Failed to symlink plugin");
-    }
-  }
-
-  // 8. Create .claude directory and settings
-  const claudeDir = join(workspacePath, ".claude");
-  ensureDir(claudeDir);
-  writeFileSync(
-    join(claudeDir, "settings.json"),
-    JSON.stringify(DEFAULT_SETTINGS, null, 2) + "\n",
-  );
-
-  // 8b. Suppress welcome hook for Start Fresh workspaces
-  if (options?.suppressWelcomeHook) {
-    writeFileSync(join(claudeDir, "soleur-welcomed.local"), "");
-  }
-
-  // 9. Scaffold knowledge-base/ subdirectories if they don't exist in the clone
-  const kbRoot = join(workspacePath, "knowledge-base");
-  ensureDir(kbRoot);
-  ensureDir(join(kbRoot, "overview"));
-  const projectDir = join(kbRoot, "project");
-  ensureDir(projectDir);
-  for (const sub of KNOWLEDGE_BASE_DIRS) {
-    ensureDir(join(projectDir, sub));
-  }
+  // 7-9. Overlay plugin symlink, .claude/settings.json, and KB scaffolding
+  // via the shared helper. Missing entries are created; existing directories
+  // are preserved (e.g., when the clone already provides knowledge-base/).
+  // Non-directory entries (files, symlinks) at expected-directory paths
+  // throw — see `ensureDir` for the symlink-traversal rationale (#2333).
+  scaffoldWorkspaceDefaults(workspacePath, {
+    suppressWelcomeHook: options?.suppressWelcomeHook,
+  });
 
   return workspacePath;
 }
@@ -336,8 +285,80 @@ export function removeWorkspaceDir(workspacePath: string): void {
   }
 }
 
+/**
+ * Create `dirPath` if missing; throw if an existing entry at the path is not
+ * a directory (file, symlink, FIFO, etc.).
+ *
+ * TOCTOU-safe: uses a single `lstatSync` call to authoritatively classify the
+ * entry without following symlinks, so we never "check then open" with two
+ * syscalls (CWE-367). Rejects symlinks unconditionally — knowledge-base
+ * scaffolding paths must never be symlinks in the first place (#2333).
+ */
 function ensureDir(dirPath: string): void {
-  if (!existsSync(dirPath)) {
-    mkdirSync(dirPath, { recursive: true });
+  try {
+    const st = lstatSync(dirPath);
+    if (!st.isDirectory()) {
+      throw new Error(`Refusing to scaffold over non-directory: ${dirPath}`);
+    }
+    return;
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+  }
+  mkdirSync(dirPath, { recursive: true });
+}
+
+/**
+ * Idempotent scaffolding for a workspace directory: creates the
+ * knowledge-base/ layout, writes `.claude/settings.json`, overlays the
+ * Soleur plugin symlink, and (optionally) suppresses the welcome hook.
+ *
+ * Called from both `provisionWorkspace` ("Start Fresh") and
+ * `provisionWorkspaceWithRepo` (git clone) so the two paths produce
+ * identical workspaces. Any non-directory entry at an expected-directory
+ * path (symlink, file) causes `ensureDir` to throw — see #2333.
+ *
+ * @param workspacePath   Absolute path to an already-existing workspace root.
+ * @param options.suppressWelcomeHook  When true, writes
+ *   `.claude/soleur-welcomed.local` so the guided onboarding flow does not
+ *   re-trigger. `provisionWorkspace` passes true; the repo-cloning path
+ *   passes the user's explicit choice.
+ */
+export function scaffoldWorkspaceDefaults(
+  workspacePath: string,
+  options: { suppressWelcomeHook?: boolean } = {},
+): void {
+  // Knowledge-base layout
+  const kbRoot = join(workspacePath, "knowledge-base");
+  ensureDir(kbRoot);
+  ensureDir(join(kbRoot, "overview"));
+  const projectDir = join(kbRoot, "project");
+  ensureDir(projectDir);
+  for (const sub of KNOWLEDGE_BASE_PROJECT_DIRS) {
+    ensureDir(join(projectDir, sub));
+  }
+
+  // .claude/settings.json — canUseTool-routed permissions (see #725).
+  const claudeDir = join(workspacePath, ".claude");
+  ensureDir(claudeDir);
+  writeFileSync(
+    join(claudeDir, "settings.json"),
+    JSON.stringify(DEFAULT_SETTINGS, null, 2) + "\n",
+  );
+
+  if (options.suppressWelcomeHook) {
+    writeFileSync(join(claudeDir, "soleur-welcomed.local"), "");
+  }
+
+  // Soleur plugin symlink — best effort (warn-only on failure so a broken
+  // symlink doesn't block workspace creation).
+  const pluginsDir = join(workspacePath, "plugins");
+  ensureDir(pluginsDir);
+  const symlinkTarget = join(pluginsDir, "soleur");
+  if (!existsSync(symlinkTarget)) {
+    try {
+      symlinkSync(getPluginPath(), symlinkTarget);
+    } catch (err) {
+      log.warn({ err, workspacePath }, "Failed to symlink plugin");
+    }
   }
 }

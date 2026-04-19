@@ -1,6 +1,11 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, act, fireEvent } from "@testing-library/react";
 import { useRef } from "react";
+import {
+  SelectionToolbar,
+  __setReadSelectionForTest,
+  __resetReadSelectionForTest,
+} from "@/components/kb/selection-toolbar";
 
 // The selection-toolbar coalesces setPill via a single-slot rAF (Phase 3
 // task 9A). Fake timers don't auto-run rAF callbacks, so tests that assert
@@ -20,17 +25,16 @@ async function importToolbar() {
   return mod.SelectionToolbar;
 }
 
-// Helpers to simulate a jsdom Selection.
+// Helpers to simulate a jsdom Selection. The component reads selection text
+// via the `readSelection` DI seam (so we don't monkey-patch jsdom's Selection
+// prototype); the range/anchor/focus-node checks still come from real jsdom.
 function setSelection(node: Node, text: string) {
   const range = document.createRange();
   range.selectNodeContents(node);
-  // jsdom's Selection supports addRange but not real collapsed toString().
   const sel = window.getSelection()!;
   sel.removeAllRanges();
   sel.addRange(range);
-  // Stub toString so tests can control the selection text directly.
-  Object.defineProperty(sel, "toString", { value: () => text, configurable: true });
-  // anchor/focus nodes default to the range's start/end containers.
+  __setReadSelectionForTest(() => text);
   document.dispatchEvent(new Event("selectionchange"));
   // Flush the component's single-slot rAF so pill state updates synchronously
   // from the test's perspective (matches browser behavior after 1 frame).
@@ -39,11 +43,10 @@ function setSelection(node: Node, text: string) {
 
 function clearSelection() {
   window.getSelection()!.removeAllRanges();
+  __setReadSelectionForTest(() => "");
   document.dispatchEvent(new Event("selectionchange"));
   vi.advanceTimersByTime(FRAME_MS);
 }
-
-import { SelectionToolbar } from "@/components/kb/selection-toolbar";
 
 function Harness({ onAddToChat, maxBytes }: {
   onAddToChat: (t: string) => void;
@@ -64,9 +67,11 @@ function Harness({ onAddToChat, maxBytes }: {
 describe("SelectionToolbar", () => {
   beforeEach(() => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
+    __resetReadSelectionForTest();
   });
   afterEach(() => {
     clearSelection();
+    __resetReadSelectionForTest();
     vi.useRealTimers();
   });
 

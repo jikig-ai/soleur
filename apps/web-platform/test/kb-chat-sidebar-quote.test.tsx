@@ -1,40 +1,23 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, act, fireEvent } from "@testing-library/react";
 import { createUseTeamNamesMock } from "./mocks/use-team-names";
+import { createWebSocketMock } from "./mocks/use-websocket";
+import { setControlledValue } from "./helpers/dom";
 
 // Phase 4 wiring: submitQuote from KbChatContext flows through
 // KbChatSidebar → ChatInput.insertQuote. Sending a message containing a
 // blockquote emits track("kb.chat.selection_sent", { path }) from the
 // sidebar (not from ChatInput — domain leakage).
 
-type MockTextMessage = {
-  id: string;
-  role: "user" | "assistant";
-  content: string;
-  type: "text";
-};
-
 const mockSendMessage = vi.fn();
 const mockStartSession = vi.fn();
 const mockTrack = vi.fn();
 
-let wsReturn = {
-  messages: [] as MockTextMessage[],
+let wsReturn = createWebSocketMock({
   startSession: mockStartSession,
-  resumeSession: vi.fn(),
   sendMessage: mockSendMessage,
-  sendReviewGateResponse: vi.fn(),
-  status: "connected" as const,
-  disconnectReason: undefined as string | undefined,
-  lastError: null as import("@/lib/ws-client").WebSocketError | null,
-  reconnect: vi.fn(),
-  routeSource: null as "auto" | "mention" | null,
-  activeLeaderIds: [] as string[],
-  sessionConfirmed: true,
-  usageData: null as { totalCostUsd: number } | null,
   realConversationId: "cid-1",
-  resumedFrom: null as { conversationId: string; timestamp: string; messageCount: number } | null,
-};
+});
 
 vi.mock("@/lib/ws-client", () => ({
   useWebSocket: () => wsReturn,
@@ -59,12 +42,11 @@ vi.mock("@/hooks/use-media-query", () => ({
 describe("KbChatSidebar — quote wiring", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    wsReturn = {
-      ...wsReturn,
-      messages: [],
-      resumedFrom: null,
+    wsReturn = createWebSocketMock({
+      startSession: mockStartSession,
+      sendMessage: mockSendMessage,
       realConversationId: "cid-1",
-    };
+    });
   });
 
   async function renderSidebar() {
@@ -127,14 +109,8 @@ describe("KbChatSidebar — quote wiring", () => {
   it("sending a message whose content starts with '>' fires kb.chat.selection_sent", async () => {
     await renderSidebar();
     const textarea = document.querySelector("textarea") as HTMLTextAreaElement;
-    // Simulate a controlled change: set value via the native setter.
-    const nativeSetter = Object.getOwnPropertyDescriptor(
-      window.HTMLTextAreaElement.prototype,
-      "value",
-    )!.set!;
     act(() => {
-      nativeSetter.call(textarea, "> a quoted passage\n\nmy follow-up question");
-      textarea.dispatchEvent(new Event("input", { bubbles: true }));
+      setControlledValue(textarea, "> a quoted passage\n\nmy follow-up question");
     });
     act(() => {
       fireEvent.keyDown(textarea, { key: "Enter" });
@@ -149,13 +125,8 @@ describe("KbChatSidebar — quote wiring", () => {
   it("sending a message without a blockquote does NOT fire kb.chat.selection_sent", async () => {
     await renderSidebar();
     const textarea = document.querySelector("textarea") as HTMLTextAreaElement;
-    const nativeSetter = Object.getOwnPropertyDescriptor(
-      window.HTMLTextAreaElement.prototype,
-      "value",
-    )!.set!;
     act(() => {
-      nativeSetter.call(textarea, "just a question with no quote");
-      textarea.dispatchEvent(new Event("input", { bubbles: true }));
+      setControlledValue(textarea, "just a question with no quote");
     });
     act(() => {
       fireEvent.keyDown(textarea, { key: "Enter" });

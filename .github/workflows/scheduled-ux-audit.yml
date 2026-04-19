@@ -3,6 +3,12 @@
 # delegates analysis to ux-design-lead (audit mode), dedupes, and uploads
 # findings as a workflow artifact.
 #
+# Governance: issues filed by this workflow carry both the `ux-audit` stream
+# tag and the `agent:ux-design-lead` label, which excludes them from auto-fix
+# and auto-triage loops. See
+# plugins/soleur/skills/fix-issue/references/agent-authored-exclusion.md
+# before adding or removing either label.
+#
 # Triggers:
 #   cron monthly  — safety net for quiet UI-change months
 #   manual        — founder-triggered (no inputs; always dry-run)
@@ -33,6 +39,10 @@ on:
     - cron: '0 9 1 * *'
   workflow_dispatch: {}
 
+# Shared-state convention: any job that invokes bot-fixture.ts seed|reset
+# must also set job-level `concurrency.group: bot-fixture-shared-state` with
+# `cancel-in-progress: false`. This serializes every consumer of the shared
+# ux-audit-bot@jikigai.com DB state so parallel workflows never race on it.
 concurrency:
   group: schedule-ux-audit
   cancel-in-progress: false
@@ -47,6 +57,12 @@ jobs:
   ux-audit:
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    # Stacks with the workflow-level concurrency above. Uses the shared-state
+    # group name so any future workflow that touches bot-fixture.ts is
+    # serialized against this one.
+    concurrency:
+      group: bot-fixture-shared-state
+      cancel-in-progress: false
     steps:
       - name: Checkout repository
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
@@ -122,7 +138,10 @@ jobs:
         run: bun plugins/soleur/skills/ux-audit/scripts/bot-signin.ts
 
       - name: Run ux-audit skill
-        uses: anthropics/claude-code-action@df37d2f0760a4b5683a6e617c9325bc1a36443f6 # v1.0.75
+        # Pin must track a release that emits `thinking.type.adaptive`
+        # (Agent SDK >= 0.2.113, claude-code-action >= v1.0.100).
+        # Opus 4.7 rejects the legacy `thinking.type.enabled` shape. See #2540.
+        uses: anthropics/claude-code-action@ab8b1e6471c519c585ba17e8ecaccc9d83043541 # v1.0.101
         env:
           GH_TOKEN: ${{ github.token }}
           UX_AUDIT_DRY_RUN: 'true'

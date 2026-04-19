@@ -90,6 +90,8 @@ vi.mock("../server/sandbox-hook", () => ({
 vi.mock("../server/review-gate", () => ({
   abortableReviewGate: mockAbortableReviewGate,
   validateSelection: vi.fn(),
+  extractReviewGateInput: vi.fn(),
+  buildReviewGateResponse: vi.fn(),
   MAX_SELECTION_LENGTH: 200,
   REVIEW_GATE_TIMEOUT_MS: 300_000,
 }));

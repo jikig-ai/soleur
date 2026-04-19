@@ -35,6 +35,7 @@ case "$1 $2" in
     while [[ $# -gt 0 ]]; do
       case "$1" in
         --search) search="$2"; shift 2 ;;
+        --json)   shift 2 ;;
         *) shift ;;
       esac
     done
@@ -84,6 +85,7 @@ _setup() {
   local cutoff
   cutoff=$(date -u -d "-70 days" +%Y-%m-%dT%H:%M:%SZ)
   jq -n --arg seen "$cutoff" '{
+    schema:1,
     generated_at:"2026-04-14T00:00:00Z",
     rules:[
       {id:"hr-never-used-a", section:"Hard Rules", hit_count:0, bypass_count:0, prevented_errors:0, last_hit:null, first_seen:$seen, rule_text_prefix:"Rule A prefix"},
@@ -146,6 +148,51 @@ t_weeks_zero() {
   rm -rf "$root"
 }
 
+# T5: invalid rule_id rejected with stderr warning, no issue filed
+t_invalid_rule_id_skipped() {
+  local root; root=$(_setup)
+  # Inject a malformed id alongside the two valid ones. Mirrors a
+  # corruption scenario where rule-metrics.json carries junk from a
+  # malformed jsonl or an orphaned id that slipped past parsing.
+  local cutoff
+  cutoff=$(date -u -d "-70 days" +%Y-%m-%dT%H:%M:%SZ)
+  jq --arg seen "$cutoff" '.rules += [
+    {id:"has space in id", section:"Hard Rules", hit_count:0, bypass_count:0, prevented_errors:0, last_hit:null, first_seen:$seen, rule_text_prefix:"bad id"}
+  ]' "$root/knowledge-base/project/rule-metrics.json" > "$root/tmp.json"
+  mv "$root/tmp.json" "$root/knowledge-base/project/rule-metrics.json"
+
+  local err="$root/err.log"
+  PATH="$root/bin:$PATH" FAKE_GH_STATE="$root" RULE_METRICS_ROOT="$root" \
+    bash "$SCRIPT" --weeks=8 2> "$err" >/dev/null
+  local n; n=$(ls "$root/issues" 2>/dev/null | wc -l)
+  # Expect the two valid rules filed, the invalid one skipped.
+  if [[ "$n" == "2" ]] && grep -q 'Skipping invalid rule_id: has space in id' "$err"; then
+    _report "rule-prune: invalid rule_id skipped with warning" ok
+  else
+    _report "rule-prune: invalid rule_id skipped with warning" fail "n=$n; err=$(cat "$err")"
+  fi
+  rm -rf "$root"
+}
+
+# T6: issue body includes Verify block with jq query + generated_at
+t_body_has_verify_block() {
+  local root; root=$(_setup)
+  PATH="$root/bin:$PATH" FAKE_GH_STATE="$root" RULE_METRICS_ROOT="$root" \
+    bash "$SCRIPT" --weeks=8 >/dev/null 2>&1
+  local first; first=$(ls "$root/issues"/*.json 2>/dev/null | head -1)
+  [[ -n "$first" ]] || { _report "body: at least one issue filed" fail ""; rm -rf "$root"; return; }
+  local body; body=$(jq -r .body "$first")
+  if echo "$body" | grep -qF '### Verify' \
+     && echo "$body" | grep -qF 'jq ' \
+     && echo "$body" | grep -qF 'generated at:' \
+     && echo "$body" | grep -qF '2026-04-14T00:00:00Z'; then
+    _report "rule-prune: body has Verify block + generated_at" ok
+  else
+    _report "rule-prune: body has Verify block + generated_at" fail "body was: $body"
+  fi
+  rm -rf "$root"
+}
+
 if [[ ! -f "$SCRIPT" ]]; then
   echo "ERROR: $SCRIPT does not exist — RED phase expected this." >&2
   exit 1
@@ -155,6 +202,8 @@ t_files_issues
 t_idempotent
 t_dry_run
 t_weeks_zero
+t_invalid_rule_id_skipped
+t_body_has_verify_block
 
 echo "=== $pass passed, $fail failed ==="
 [[ "$fail" -eq 0 ]]

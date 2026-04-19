@@ -12,7 +12,40 @@ permalink: community/
       </div>
     </section>
 
+    <section class="community-stats" aria-label="Community statistics">
+      <div class="container">
+        {% if githubStats.stars %}
+        <div class="community-stat">
+          <div class="community-stat-value">{{ githubStats.stars }}</div>
+          <div class="community-stat-label">GitHub Stars</div>
+        </div>
+        {% endif %}
+        {% if githubStats.forks %}
+        <div class="community-stat">
+          <div class="community-stat-value">{{ githubStats.forks }}</div>
+          <div class="community-stat-label">Forks</div>
+        </div>
+        {% endif %}
+        {% if githubStats.contributors %}
+        <div class="community-stat">
+          <div class="community-stat-value">{{ githubStats.contributors }}</div>
+          <div class="community-stat-label">Contributors</div>
+        </div>
+        {% endif %}
+        {% if communityStats.discord and communityStats.discord.members %}
+        <div class="community-stat">
+          <div class="community-stat-value">{{ communityStats.discord.members }}</div>
+          <div class="community-stat-label">Discord Members</div>
+        </div>
+        {% endif %}
+      </div>
+    </section>
+
     <div class="container">
+      <section class="community-summary">
+        <p>Soleur is an open-source Claude Code plugin with an active community across Discord, GitHub, and X. The project is Apache 2.0, accepts contributions through the standard GitHub pull-request flow, and publishes development discussions in the public Discord. Every agent, skill, and release ships through the same compound-engineering workflow the product itself uses.</p>
+      </section>
+
       <section class="category-section">
         <div class="category-header">
           <h2 class="category-title">Connect</h2>

@@ -23,6 +23,14 @@ vi.mock("@/server/kb-share", () => ({
   revokeShare: mocks.revokeShare,
 }));
 
+// Verbatim copy of REVOKE_PURGE_FAILED_MESSAGE from server/kb-share.ts.
+// Cannot import the real constant — this test fully mocks @/server/kb-share
+// so an import would resolve to undefined. Drift between this literal and
+// the real constant is caught by the kb-share.test.ts assertion which DOES
+// import the real symbol.
+const REVOKE_PURGE_FAILED_MESSAGE =
+  "Revoke succeeded but cache purge failed; share may be served from cache for up to 60 seconds";
+
 import { buildKbShareTools } from "@/server/kb-share-tools";
 
 type ToolHandler = (args: Record<string, unknown>) => Promise<{
@@ -53,12 +61,17 @@ beforeEach(() => {
 });
 
 describe("buildKbShareTools — registration", () => {
-  it("returns three tools named kb_share_create, kb_share_list, kb_share_revoke", () => {
+  it("returns four tools: kb_share_create, kb_share_list, kb_share_revoke, kb_share_preview", () => {
     const tools = buildKbShareTools(baseDeps);
     const names = (
       tools as unknown as Array<{ name: string }>
     ).map((t) => t.name);
-    expect(names).toEqual(["kb_share_create", "kb_share_list", "kb_share_revoke"]);
+    expect(names).toEqual([
+      "kb_share_create",
+      "kb_share_list",
+      "kb_share_revoke",
+      "kb_share_preview",
+    ]);
   });
 });
 
@@ -182,5 +195,27 @@ describe("kb_share_revoke handler", () => {
     expect(result.isError).toBe(true);
     expect(result.content[0].text).toContain("Forbidden");
     expect(result.content[0].text).toContain("forbidden");
+  });
+
+  it("surfaces 502 purge-failed verbatim so the agent caller sees the bounded leak window", async () => {
+    mocks.revokeShare.mockResolvedValue({
+      ok: false,
+      status: 502,
+      code: "purge-failed",
+      error:
+        REVOKE_PURGE_FAILED_MESSAGE,
+    });
+    const tools = buildKbShareTools(baseDeps);
+    const revokeTool = findTool(tools, "kb_share_revoke");
+
+    const result = await revokeTool.handler({ token: "tok-1" });
+
+    expect(result.isError).toBe(true);
+    const payload = JSON.parse(result.content[0].text);
+    expect(payload.status).toBe(502);
+    expect(payload.code).toBe("purge-failed");
+    expect(payload.error).toBe(
+      REVOKE_PURGE_FAILED_MESSAGE,
+    );
   });
 });

@@ -13,6 +13,10 @@ import {
   ifNoneMatchMatches,
   type BinaryFileMetadata,
 } from "@/server/kb-binary-response";
+import {
+  PUBLIC_CACHE_CONTROL,
+  PRIVATE_CACHE_CONTROL,
+} from "./helpers/kb-cache-fixtures";
 
 let tmpDir: string;
 let filePath: string;
@@ -131,12 +135,59 @@ describe("buildBinaryHeadResponse — 200 + 304 + Content-Length", () => {
   });
 });
 
+describe("buildBinaryHeadResponse — Cache-Control scope", () => {
+  it("defaults to private, max-age=60", async () => {
+    const payload = await getPayload();
+    const res = buildBinaryHeadResponse(payload);
+    expect(res.headers.get("Cache-Control")).toBe(PRIVATE_CACHE_CONTROL);
+  });
+
+  it("emits public Cache-Control on a 200 when scope is 'public'", async () => {
+    const payload = await getPayload();
+    const res = buildBinaryHeadResponse(payload, req(), { scope: "public" });
+    expect(res.status).toBe(200);
+    expect(res.headers.get("Cache-Control")).toBe(PUBLIC_CACHE_CONTROL);
+  });
+
+  it("emits public Cache-Control on a 304 when scope is 'public' and If-None-Match matches", async () => {
+    const payload = await getPayload();
+    const sha = "a".repeat(64);
+    const res = buildBinaryHeadResponse(
+      payload,
+      req({ "if-none-match": `"${sha}"` }),
+      { strongETag: sha, scope: "public" },
+    );
+    expect(res.status).toBe(304);
+    expect(res.headers.get("Cache-Control")).toBe(PUBLIC_CACHE_CONTROL);
+  });
+});
+
+describe("buildBinaryHeaders — Cache-Control scope", () => {
+  it("defaults to private", async () => {
+    const payload = await getPayload();
+    const headers = buildBinaryHeaders(payload);
+    expect(headers["Cache-Control"]).toBe(PRIVATE_CACHE_CONTROL);
+  });
+
+  it("emits public Cache-Control when scope is 'public'", async () => {
+    const payload = await getPayload();
+    const headers = buildBinaryHeaders(payload, { scope: "public" });
+    expect(headers["Cache-Control"]).toBe(PUBLIC_CACHE_CONTROL);
+  });
+});
+
 describe("build304Response + formatStrongETag + ifNoneMatchMatches", () => {
   it("build304Response emits ETag + Cache-Control with status 304", () => {
     const res = build304Response('"deadbeef"');
     expect(res.status).toBe(304);
     expect(res.headers.get("ETag")).toBe('"deadbeef"');
-    expect(res.headers.get("Cache-Control")).toBe("private, max-age=60");
+    expect(res.headers.get("Cache-Control")).toBe(PRIVATE_CACHE_CONTROL);
+  });
+
+  it("build304Response emits public Cache-Control when scope is 'public'", () => {
+    const res = build304Response('"deadbeef"', { scope: "public" });
+    expect(res.status).toBe(304);
+    expect(res.headers.get("Cache-Control")).toBe(PUBLIC_CACHE_CONTROL);
   });
 
   it("formatStrongETag wraps a hash in double quotes", () => {

@@ -106,6 +106,21 @@ describe("classifyResponse", () => {
     });
   });
 
+  it("200 text kind with filename → data text", async () => {
+    const res = binaryResponse("text", 'inline; filename="notes.txt"');
+    expect(await classifyResponse(res, "tok-txt")).toEqual({
+      data: { kind: "text", src: "/api/shared/tok-txt", filename: "notes.txt" },
+    });
+  });
+
+  it("200 text kind without Content-Disposition → falls back to basenameFromToken", async () => {
+    const res = binaryResponse("text", null);
+    const result = await classifyResponse(res, "notxttok");
+    if (!("data" in result)) throw new Error("expected data");
+    if (result.data.kind !== "text") throw new Error("unreachable");
+    expect(result.data.filename).toBe("shared-notxttok");
+  });
+
   it("200 download kind → data download", async () => {
     const res = binaryResponse(
       "download",

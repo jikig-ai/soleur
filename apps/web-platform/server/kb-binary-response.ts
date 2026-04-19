@@ -12,35 +12,24 @@ import {
   SHARED_CONTENT_KIND_HEADER,
   type SharedContentKind,
 } from "@/lib/shared-kind";
+import { MAX_BINARY_SIZE, CONTENT_TYPE_MAP } from "@/server/kb-limits";
+import { classifyByContentType } from "@/lib/kb-file-kind";
 import { getKbExtension } from "@/lib/kb-extensions";
 
 export { SHARED_CONTENT_KIND_HEADER };
 export type { SharedContentKind };
 
-export const MAX_BINARY_SIZE = 50 * 1024 * 1024; // 50 MB
-
-export const CONTENT_TYPE_MAP: Record<string, string> = {
-  ".png": "image/png",
-  ".jpg": "image/jpeg",
-  ".jpeg": "image/jpeg",
-  ".gif": "image/gif",
-  ".webp": "image/webp",
-  ".svg": "image/svg+xml",
-  ".pdf": "application/pdf",
-  ".csv": "text/csv",
-  ".txt": "text/plain",
-  ".docx":
-    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-};
-
-/** Derive the shared-content kind from validated binary metadata. */
+/**
+ * Derive the shared-content kind from validated binary metadata.
+ * Thin re-export over `classifyByContentType` so the `X-Soleur-Kind`
+ * header and the client-side viewer share a single classifier. The
+ * classifier's return type excludes `"markdown"` — markdown is served
+ * via a separate JSON path and never flows through this module.
+ */
 export function deriveBinaryKind(
   meta: Pick<BinaryFileMetadata, "contentType" | "disposition">,
 ): Exclude<SharedContentKind, "markdown"> {
-  if (meta.disposition === "attachment") return "download";
-  if (meta.contentType === "application/pdf") return "pdf";
-  if (meta.contentType.startsWith("image/")) return "image";
-  return "download";
+  return classifyByContentType(meta.contentType, meta.disposition);
 }
 
 /**
@@ -138,6 +127,8 @@ export async function validateBinaryFile(
     }
     const ext = getKbExtension(relativePath);
     const contentType = CONTENT_TYPE_MAP[ext] || "application/octet-stream";
+    // Inline the single attachment-only check. Extend via kb-file-kind.ts
+    // (classifyByExtension) when adding more attachment-only types.
     const disposition = ext === ".docx" ? "attachment" : "inline";
     const rawName = path.basename(relativePath);
     return {
@@ -240,19 +231,51 @@ function matchesIfNoneMatch(ifNoneMatch: string, etag: string): boolean {
   return candidates.has(normalize(etag));
 }
 
+export type CacheScope = "public" | "private";
+
+// Cache-Control header values, keyed by scope.
+//
+// - `public` — shared-route binaries. Browser `max-age=60` preserves the
+//   60s revocation-latency SLA inherited from the previous
+//   `private, max-age=60` default. `s-maxage=60` lets Cloudflare (and any
+//   RFC-7234-compliant shared cache) keep an edge copy for 1 minute so
+//   repeat viewers of a shared PDF do not re-hit origin. The 60s ceiling
+//   is a defense-in-depth backstop on the active CF Cache Purge call in
+//   server/kb-share.ts::revokeShare (#2568) — even if the purge API call
+//   fails or is delayed, the worst-case revoked-share leak window stays
+//   bounded to 60 seconds. `stale-while-revalidate=3600` lets the edge
+//   serve a slightly-stale body while refreshing in the background for
+//   up to an hour. `must-revalidate` forces the browser to re-check the
+//   ETag once max-age expires — pairs with the existing strong-ETag 304
+//   path to make revalidation free (0 body bytes).
+//
+// - `private` — owner-route binaries. 60s browser cache, no shared-cache
+//   storage.
+const CACHE_CONTROL_BY_SCOPE: Record<CacheScope, string> = {
+  public:
+    "public, max-age=60, s-maxage=60, stale-while-revalidate=3600, must-revalidate",
+  private: "private, max-age=60",
+};
+
 /**
  * Builds a 304 Not Modified response with the ETag and Cache-Control
  * headers that a conditional GET or HEAD would return. Shared by
  * buildBinaryResponse, buildBinaryHeadResponse, and upstream share-route
  * helpers that short-circuit before any filesystem work when the client's
  * If-None-Match matches the stored content hash.
+ *
+ * @param opts.scope Cache policy — `"public"` for the shared route (edge-
+ *   cacheable), `"private"` (default) for the owner route.
  */
-export function build304Response(etag: string): Response {
+export function build304Response(
+  etag: string,
+  opts?: { scope?: CacheScope },
+): Response {
   return new Response(null, {
     status: 304,
     headers: {
       ETag: etag,
-      "Cache-Control": "private, max-age=60",
+      "Cache-Control": CACHE_CONTROL_BY_SCOPE[opts?.scope ?? "private"],
     },
   });
 }
@@ -282,18 +305,25 @@ export function ifNoneMatchMatches(
  */
 export function buildBinaryHeaders(
   payload: BinaryFileMetadata,
-  opts?: { strongETag?: string },
+  opts?: { strongETag?: string; scope?: CacheScope },
 ): Record<string, string> {
-  return {
+  const scope: CacheScope = opts?.scope ?? "private";
+  const headers: Record<string, string> = {
     "Content-Type": payload.contentType,
     "Content-Disposition": formatContentDisposition(payload.disposition, payload.rawName),
     "X-Content-Type-Options": "nosniff",
-    "Cache-Control": "private, max-age=60",
+    "Cache-Control": CACHE_CONTROL_BY_SCOPE[scope],
     "Content-Security-Policy": KB_BINARY_RESPONSE_CSP,
     "Accept-Ranges": "bytes",
     [SHARED_CONTENT_KIND_HEADER]: deriveBinaryKind(payload),
     ETag: buildETag(payload, opts?.strongETag),
   };
+  // Defensive on public responses: any future middleware that branches on a
+  // request header must either add to Vary here or flip scope back to
+  // "private". Accept-Encoding is implicit in Next.js but making it explicit
+  // pins the contract at the source.
+  if (scope === "public") headers.Vary = "Accept-Encoding";
+  return headers;
 }
 
 /**
@@ -307,12 +337,12 @@ export function buildBinaryHeaders(
 export function buildBinaryHeadResponse(
   payload: BinaryFileMetadata,
   request?: Request,
-  opts?: { strongETag?: string },
+  opts?: { strongETag?: string; scope?: CacheScope },
 ): Response {
   const etag = buildETag(payload, opts?.strongETag);
   const ifNoneMatch = request?.headers.get("if-none-match");
   if (ifNoneMatch && matchesIfNoneMatch(ifNoneMatch, etag)) {
-    return build304Response(etag);
+    return build304Response(etag, { scope: opts?.scope });
   }
   return new Response(null, {
     status: 200,
@@ -326,7 +356,7 @@ export function buildBinaryHeadResponse(
 export async function buildBinaryResponse(
   meta: BinaryFileMetadata,
   request?: Request,
-  opts?: { strongETag?: string },
+  opts?: { strongETag?: string; scope?: CacheScope },
 ): Promise<Response> {
   const size = meta.size;
   const expected = { ino: meta.ino, size: meta.size };
@@ -339,7 +369,7 @@ export async function buildBinaryResponse(
   // resource ETag even when a Range header is present).
   const ifNoneMatch = request?.headers.get("if-none-match");
   if (ifNoneMatch && matchesIfNoneMatch(ifNoneMatch, etag)) {
-    return build304Response(etag);
+    return build304Response(etag, { scope: opts?.scope });
   }
 
   const commonHeaders = buildBinaryHeaders(meta, opts);
@@ -360,7 +390,12 @@ export async function buildBinaryResponse(
       ) {
         return new Response(null, {
           status: 416,
-          headers: { "Content-Range": `bytes */${size}` },
+          headers: {
+            "Content-Range": `bytes */${size}`,
+            // Match the other error branches: a malformed-Range 416 must not
+            // be shared-cached past its natural lifetime.
+            "Cache-Control": "no-store",
+          },
         });
       }
       const chunkLength = end - start + 1;
