@@ -2,16 +2,13 @@
 
 // pencil-mcp-adapter.mjs — MCP server bridging Claude Code to pencil interactive REPL
 // Architecture: Claude Code ←(MCP stdio)→ this adapter ←(stdin/stdout REPL)→ pencil interactive
-
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { z } from "zod";
-import { spawn as nodeSpawn } from "node:child_process";
-import { existsSync, mkdirSync, renameSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { homedir, tmpdir } from "node:os";
-import { enrichErrorMessage } from "./pencil-error-enrichment.mjs";
-import { sanitizeFilename } from "./sanitize-filename.mjs";
+//
+// The Node-version gate, argv defense, and PENCIL_CLI_KEY hard-fail run BEFORE
+// any module imports so a broken registration exits with a clear adapter-authored
+// error instead of ERR_MODULE_NOT_FOUND from the MCP SDK. All imports are dynamic
+// (`await import`) for the same reason — static imports resolve during module
+// parsing, before any top-level statement runs. Rule:
+// cq-pencil-mcp-silent-drop-diagnosis-checklist.
 
 // --- Node version gate ---
 
@@ -40,6 +37,36 @@ for (let i = 2; i < process.argv.length; i++) {
     i++; // skip the value arg
   }
 }
+
+// --- PENCIL_CLI_KEY hard-fail ---
+// Runs BEFORE MCP SDK import so the exit message is adapter-authored, not a
+// raw ERR_MODULE_NOT_FOUND. Previously this was a stderr WARNING that let the
+// adapter boot and every REPL mutation return an auth error the auto-save ran
+// over — producing 0-byte .pen files the caller mistook for successful stubs
+// (#2630).
+
+if (!process.env.PENCIL_CLI_KEY) {
+  process.stderr.write(
+    "[pencil-adapter] ERROR: PENCIL_CLI_KEY not set. Refusing to start.\n" +
+    "[pencil-adapter] If you used `claude mcp add`, ensure -e appears BEFORE --\n" +
+    "[pencil-adapter] Run `/soleur:pencil-setup` to re-register with a valid key.\n"
+  );
+  process.exit(1);
+}
+
+// --- Dynamic imports (deferred so the gates above run first) ---
+
+const { McpServer } = await import("@modelcontextprotocol/sdk/server/mcp.js");
+const { StdioServerTransport } = await import("@modelcontextprotocol/sdk/server/stdio.js");
+const { z } = await import("zod");
+const { spawn: nodeSpawn } = await import("node:child_process");
+const { existsSync, mkdirSync, renameSync, writeFileSync } = await import("node:fs");
+const { dirname, join } = await import("node:path");
+const { homedir, tmpdir } = await import("node:os");
+const { enrichErrorMessage } = await import("./pencil-error-enrichment.mjs");
+const { sanitizeFilename } = await import("./sanitize-filename.mjs");
+const { classifyResponse } = await import("./pencil-response-classify.mjs");
+const { shouldSkipSave } = await import("./pencil-save-gate.mjs");
 
 // --- Env allowlist ---
 
@@ -80,12 +107,16 @@ function stripAnsi(str) {
 }
 
 // --- Response parsing ---
+//
+// Delegates to the pure `classifyResponse` module so the classifier can be
+// unit-tested without importing this adapter (which pulls in the MCP SDK and
+// cannot load under `bun test`). Auth-failure patterns (`pencil login`,
+// `Invalid API key`, `Unauthorized`, `HTTP 401`) classify as errors so the
+// post-mutation save gate (see `shouldSkipSave`) can skip auto-save and
+// avoid overwriting .pen files with 0-byte output (#2630).
 
 function parseResponse(raw) {
-  const text = stripAnsi(raw).trim();
-  const isError =
-    /^Error:/m.test(text) || /^\[ERROR\]/m.test(text) || /^Invalid properties:/m.test(text);
-  return { text, isError };
+  return classifyResponse(raw);
 }
 
 // --- Node ID extraction ---
@@ -327,6 +358,11 @@ function formatReplCommand(toolName, params) {
 const pencilProcess = new PencilProcess();
 const commandQueue = new CommandQueue(pencilProcess);
 
+// Tracks the classification of the most recent REPL mutation so open_document's
+// pre-restart save() can skip when the prior mutation errored. See
+// `shouldSkipSave` and the #2630 regression.
+let lastMutationClassification = null;
+
 async function ensureProcess() {
   if (!pencilProcess.ready && !pencilProcess.child) {
     if (pencilProcess.outputFile) {
@@ -374,15 +410,26 @@ function registerMutatingTool(name, schema, postHandler) {
     await ensureProcess();
     const cmd = formatReplCommand(name, params);
     const raw = await commandQueue.enqueue(cmd);
-    const { text, isError } = parseResponse(raw);
+    const classification = parseResponse(raw);
+    lastMutationClassification = classification;
+    const { text, isError } = classification;
     if (isError) {
+      // Surface the error AND skip the auto-save that used to clobber
+      // .pen files with 0-byte output. See `shouldSkipSave`.
+      process.stderr.write(
+        `[pencil-adapter] SKIPPED save (${name} errored): ${text.slice(0, 200)}\n`
+      );
       return { content: [{ type: "text", text: enrichErrorMessage(text) }], isError: true };
     }
     if (postHandler) {
       postHandler(text);
     }
-    // Auto-save after mutating operations
-    await commandQueue.enqueue("save()");
+    // Auto-save after mutating operations — gated by `shouldSkipSave` so a
+    // failed mutation does not trigger a save that overwrites valid .pen
+    // content with empty or stale state.
+    if (!shouldSkipSave(classification)) {
+      await commandQueue.enqueue("save()");
+    }
     return { content: [{ type: "text", text }] };
   });
 }
@@ -595,7 +642,9 @@ server.tool(
     if (replace !== undefined) params.replace = replace;
     const cmd = formatReplCommand("set_variables", params);
     const raw = await commandQueue.enqueue(cmd);
-    const { text, isError } = parseResponse(raw);
+    const classification = parseResponse(raw);
+    lastMutationClassification = classification;
+    const { text, isError } = classification;
     if (isError) {
       let enriched = text;
       if (/does not have a valid definition/i.test(text)) {
@@ -603,9 +652,14 @@ server.tool(
       } else if (/invalid type property/i.test(text)) {
         enriched += "\nValid types: color, string, number";
       }
+      process.stderr.write(
+        `[pencil-adapter] SKIPPED save (set_variables errored): ${text.slice(0, 200)}\n`
+      );
       return { content: [{ type: "text", text: enriched }], isError: true };
     }
-    await commandQueue.enqueue("save()");
+    if (!shouldSkipSave(classification)) {
+      await commandQueue.enqueue("save()");
+    }
     return { content: [{ type: "text", text }] };
   }
 );
@@ -619,15 +673,22 @@ server.tool(
     inputPath: z.string().optional(),
   },
   async ({ filePath, inputPath }) => {
-    // Save current document first if process is running
-    if (pencilProcess.ready) {
+    // Save current document first if process is running — but skip when the
+    // preceding mutation errored (would overwrite good content with 0 bytes).
+    if (pencilProcess.ready && !shouldSkipSave(lastMutationClassification)) {
       try {
         await commandQueue.enqueue("save()");
       } catch {
         // Process may have died — proceed with restart
       }
+    } else if (pencilProcess.ready && shouldSkipSave(lastMutationClassification)) {
+      process.stderr.write(
+        "[pencil-adapter] SKIPPED pre-restart save (prior mutation errored)\n"
+      );
     }
     await pencilProcess.restart(filePath, inputPath);
+    // Reset classification — new document means prior error is no longer relevant.
+    lastMutationClassification = null;
     return {
       content: [{ type: "text", text: `Opened ${filePath}` }],
     };
@@ -642,13 +703,10 @@ server.tool("save", {}, async () => {
 });
 
 // --- Start server ---
+// The PENCIL_CLI_KEY hard-fail and Node-version gate both run at the top of
+// this module, before the dynamic imports. See the comment block above the
+// imports for rationale.
 
 const transport = new StdioServerTransport();
 await server.connect(transport);
 process.stderr.write("[pencil-adapter] MCP server started on stdio\n");
-if (!process.env.PENCIL_CLI_KEY) {
-  process.stderr.write(
-    "[pencil-adapter] WARNING: PENCIL_CLI_KEY not set. Auth will fail.\n" +
-    "[pencil-adapter] If you used `claude mcp add`, ensure -e appears BEFORE --\n"
-  );
-}

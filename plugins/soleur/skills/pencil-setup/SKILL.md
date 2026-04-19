@@ -43,11 +43,13 @@ Proceed to Step 1.
 
 ## Step 1: Check if Already Registered
 
+<!-- verified: 2026-04-19 source: claude mcp list --help (the `-s` flag was dropped from `list`; plain `claude mcp list` now includes user-scoped entries) -->
+
 ```bash
-claude mcp list -s user 2>&1 | grep -q "pencil" && echo "REGISTERED" || echo "NOT_REGISTERED"
+claude mcp list 2>&1 | grep -q "pencil" && echo "REGISTERED" || echo "NOT_REGISTERED"
 ```
 
-If REGISTERED, check the registered binary path still exists on disk. Extract the path from `claude mcp list -s user` output, then `test -f <path>`. If the file exists (or `PREFERRED_MODE=cli`), tell the user:
+If REGISTERED, check the registered binary path still exists on disk. Extract the path from `claude mcp list` output, then `test -f <path>`. If the file exists (or `PREFERRED_MODE=cli`), tell the user:
 
 - **Headless CLI mode:** "Pencil MCP is already configured via headless CLI adapter. Restart Claude Code for tools to become available."
 - **CLI/Desktop mode:** "Pencil MCP is already configured. Make sure Pencil Desktop is running, then restart Claude Code."
@@ -69,6 +71,12 @@ claude mcp remove pencil -s user 2>/dev/null
 
 ### Headless CLI mode (`PREFERRED_MODE=headless_cli`)
 
+**First**, sync the repo adapter into the user's install location so stale installed copies don't mask repo-level fixes (see #2630):
+
+```bash
+bash plugins/soleur/skills/pencil-setup/scripts/copy_adapter.sh
+```
+
 The adapter requires `PENCIL_CLI_KEY` in the MCP environment. Retrieve the key, then register with `-e` **before** the `--` separator:
 
 ```bash
@@ -83,6 +91,13 @@ claude mcp add pencil -s user -e PENCIL_CLI_KEY="$PENCIL_KEY" -- <PREFERRED_NODE
 Replace `<PREFERRED_NODE>` with the Node 22+ binary path and `<PREFERRED_BINARY>` with the adapter path from Phase 0.
 
 **Critical:** The `-e` flag must appear before `--`. Placing it after `--` passes it as a CLI arg to the adapter instead of setting an environment variable, causing silent auth failures.
+
+**Drift check.** If the adapter ever appears to "silently drop" operations, verify the installed copy is in sync with the repo:
+
+```bash
+bash plugins/soleur/skills/pencil-setup/scripts/check_deps.sh --check-adapter-drift
+# On DRIFT, re-sync: add --auto, or re-run copy_adapter.sh
+```
 
 ### CLI mode (`PREFERRED_MODE=cli`)
 
@@ -111,7 +126,7 @@ Replace `<PREFERRED_BINARY>` with the extension binary path and `<PREFERRED_APP>
 ## Step 3: Verify
 
 ```bash
-claude mcp list -s user 2>&1 | grep pencil
+claude mcp list 2>&1 | grep pencil
 ```
 
 If the `pencil` entry appears, tell the user:

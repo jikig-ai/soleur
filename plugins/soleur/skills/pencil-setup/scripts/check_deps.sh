@@ -5,7 +5,61 @@
 # must not abort the script. Each check uses explicit if/then.
 
 AUTO_INSTALL=false
-[[ "${1:-}" == "--auto" ]] && AUTO_INSTALL=true
+CHECK_ADAPTER_DRIFT=false
+for arg in "$@"; do
+  case "$arg" in
+    --auto) AUTO_INSTALL=true ;;
+    --check-adapter-drift) CHECK_ADAPTER_DRIFT=true ;;
+  esac
+done
+
+# -- Adapter drift check (early short-circuit) --
+#
+# Compares the installed adapter at PENCIL_ADAPTER_INSTALL_DIR (default
+# ~/.local/share/pencil-adapter) against the repo source. Returns:
+#   exit 0 + OK            — hashes match
+#   exit 3 + DRIFT         — hashes differ (unless --auto, which re-copies then exits 0)
+#   exit 0 + NOT_INSTALLED — install dir absent
+#
+# Exists because the installed adapter had drifted 24 days behind repo source,
+# masking error-classification fixes and producing the #2630 silent-drop.
+# Rule: cq-pencil-mcp-silent-drop-diagnosis-checklist.
+
+if [[ "$CHECK_ADAPTER_DRIFT" == "true" ]]; then
+  install_dir="${PENCIL_ADAPTER_INSTALL_DIR:-$HOME/.local/share/pencil-adapter}"
+  installed_adapter="$install_dir/pencil-mcp-adapter.mjs"
+  repo_adapter="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/pencil-mcp-adapter.mjs"
+
+  if [[ ! -d "$install_dir" ]] || [[ ! -f "$installed_adapter" ]]; then
+    echo "NOT_INSTALLED: $install_dir"
+    exit 0
+  fi
+
+  if [[ ! -f "$repo_adapter" ]]; then
+    echo "ERROR: repo adapter not found at $repo_adapter" >&2
+    exit 2
+  fi
+
+  installed_sha=$(sha256sum "$installed_adapter" | awk '{print $1}')
+  repo_sha=$(sha256sum "$repo_adapter" | awk '{print $1}')
+
+  if [[ "$installed_sha" == "$repo_sha" ]]; then
+    echo "OK: installed adapter matches repo (sha ${repo_sha:0:12})"
+    exit 0
+  fi
+
+  if [[ "$AUTO_INSTALL" == "true" ]]; then
+    cp "$repo_adapter" "$installed_adapter"
+    new_sha=$(sha256sum "$installed_adapter" | awk '{print $1}')
+    echo "OK: re-copied adapter (was ${installed_sha:0:12} → now ${new_sha:0:12})"
+    exit 0
+  fi
+
+  echo "DRIFT: installed ${installed_sha:0:12} != repo ${repo_sha:0:12}"
+  echo "       Run: bash $(basename "${BASH_SOURCE[0]}") --check-adapter-drift --auto"
+  echo "       Or re-run /soleur:pencil-setup to refresh the installed adapter."
+  exit 3
+fi
 
 # Detect OS and architecture for platform-specific checks
 _UNAME=$(uname -s)
