@@ -267,7 +267,7 @@ Before recruiting founders, the platform must handle multiple users signing up a
 
 | # | Item | Status |
 |---|------|--------|
-| MU1 | Signup provisions a workspace (git clone + plugin install per user) | [#1448](https://github.com/jikig-ai/soleur/issues/1448) Depends on P1 item 1.10 — verify |
+| MU1 | Signup provisions a workspace (git clone + plugin install per user) | [#1448](https://github.com/jikig-ai/soleur/issues/1448) Runbook: `knowledge-base/engineering/ops/runbooks/mu1-signup-workspace-verification.md` |
 | MU2 | BYOK encryption works per-tenant (each user's API key isolated) | [#1449](https://github.com/jikig-ai/soleur/issues/1449) Existing — verify |
 | MU3 | Workspace isolation at process level (container isolation is P4 hardening, but basic isolation must work) | [#1450](https://github.com/jikig-ai/soleur/issues/1450) Existing bubblewrap sandbox — verify with cross-workspace integration test |
 

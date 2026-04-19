@@ -19,6 +19,22 @@ This skill is for:
 - Reviewing performance analysis
 - Handling any other categorized findings that need tracking
 
+## CodeQL alert-state precheck (security findings)
+
+Before commissioning work on any CodeQL-derived finding (issue title starts with
+`sec: CodeQL alert #N` or body cites `alert #N`), verify the alert is still open:
+
+```bash
+gh api "/repos/:owner/:repo/code-scanning/alerts/<N>" --jq '.state'
+```
+
+If the response is `dismissed` or `fixed`, the finding is an orphan — close it
+with a pointer to the dismissing PR (search via `gh pr list --search "alert #<N>"`)
+instead of approving for work. The `.github/workflows/codeql-to-issues.yml`
+`close-orphans` job sweeps these automatically once a day, but a triage-time
+check prevents wasted planning when the daily run is hours away. See
+`knowledge-base/project/learnings/best-practices/2026-04-19-codeql-orphan-issue-post-dismissal-sweep.md`.
+
 ## Workflow
 
 ### Step 1: Present Each Finding

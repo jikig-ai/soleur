@@ -8,7 +8,7 @@ import * as Sentry from "@sentry/nextjs";
 // Map Stripe subscription statuses to the CHECK constraint values.
 // Stripe sends: active, canceled, incomplete, incomplete_expired, past_due, trialing, unpaid, paused.
 // DB allows: none, active, cancelled, past_due, unpaid (migration 022).
-function mapStripeStatus(stripeStatus: string): string {
+function mapStripeStatus(stripeStatus: Stripe.Subscription.Status): string {
   switch (stripeStatus) {
     case "active":
     case "trialing":
@@ -18,11 +18,16 @@ function mapStripeStatus(stripeStatus: string): string {
     case "unpaid":
       return "unpaid";
     case "canceled":
+    case "incomplete":
     case "incomplete_expired":
     case "paused":
       return "cancelled";
-    default:
-      return "active";
+    default: {
+      const _exhaustive: never = stripeStatus;
+      logger.warn({ stripeStatus: _exhaustive }, "Unknown Stripe subscription status — defaulting to 'cancelled' for safety");
+      Sentry.captureMessage(`Unknown Stripe status: ${String(_exhaustive)}`, "warning");
+      return "cancelled";
+    }
   }
 }
 

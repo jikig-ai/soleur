@@ -309,7 +309,7 @@ These guardrails apply in both automatic mode (fetch-mentions) and manual mode (
 | Gold accent line | 1px horizontal, 600px wide centered, 40% opacity, at y=325 |
 | Mobile safe zone | Center 900px (60%) contains all text -- verified |
 | Avatar overlap | Bottom-left clear of critical content |
-| Source file | `knowledge-base/design/brand/brand-x-banner.pen` |
+| Source file | `knowledge-base/product/design/brand/brand-x-banner.pen` |
 | Generated with | Pencil MCP (design) + Pillow (PNG export) |
 
 ### LinkedIn Company Page

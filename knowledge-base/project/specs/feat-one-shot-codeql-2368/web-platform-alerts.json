@@ -1,0 +1,692 @@
+[
+  {
+    "number": 33,
+    "rule": "js/code-injection",
+    "severity": "critical",
+    "file": "apps/web-platform/server/kb-reader.ts",
+    "line": 109,
+    "state": "dismissed",
+    "dismissed_reason": "false positive",
+    "dismissed_comment": "gray-matter ^4.0.3 with engines: {} disables all custom YAML engines, preventing code injection. Inline comment added to kb-reader.ts documenting this mitigation."
+  },
+  {
+    "number": 34,
+    "rule": "js/request-forgery",
+    "severity": "critical",
+    "file": "apps/web-platform/app/api/auth/github-resolve/callback/route.ts",
+    "line": 122,
+    "state": "dismissed",
+    "dismissed_reason": "false positive",
+    "dismissed_comment": "Server-controlled env vars (Supabase URL from serverUrl()) and GitHub API response with format validation. Not user-controllable SSRF."
+  },
+  {
+    "number": 35,
+    "rule": "js/request-forgery",
+    "severity": "critical",
+    "file": "apps/web-platform/server/health.ts",
+    "line": 6,
+    "state": "dismissed",
+    "dismissed_reason": "false positive",
+    "dismissed_comment": "Server-controlled env vars (Supabase URL from serverUrl()) and GitHub API response with format validation. Not user-controllable SSRF."
+  },
+  {
+    "number": 36,
+    "rule": "js/path-injection",
+    "severity": "high",
+    "file": "apps/web-platform/server/project-scanner.ts",
+    "line": 109,
+    "state": "dismissed",
+    "dismissed_reason": "false positive",
+    "dismissed_comment": "project-scanner.ts: internal server-side file scanner. Paths derived from server-controlled config, not user input."
+  },
+  {
+    "number": 37,
+    "rule": "js/path-injection",
+    "severity": "high",
+    "file": "apps/web-platform/server/project-scanner.ts",
+    "line": 136,
+    "state": "dismissed",
+    "dismissed_reason": "false positive",
+    "dismissed_comment": "project-scanner.ts: internal server-side file scanner. Paths derived from server-controlled config, not user input."
+  },
+  {
+    "number": 38,
+    "rule": "js/path-injection",
+    "severity": "high",
+    "file": "apps/web-platform/server/workspace.ts",
+    "line": 72,
+    "state": "dismissed",
+    "dismissed_reason": "false positive",
+    "dismissed_comment": "workspace.ts: userId validated by UUID regex, paths built from server-controlled env vars (WORKSPACES_ROOT). remote_and_local threat model flags process.env as tainted but this is server config, not user input."
+  },
+  {
+    "number": 39,
+    "rule": "js/path-injection",
+    "severity": "high",
+    "file": "apps/web-platform/server/workspace.ts",
+    "line": 77,
+    "state": "dismissed",
+    "dismissed_reason": "false positive",
+    "dismissed_comment": "workspace.ts: userId validated by UUID regex, paths built from server-controlled env vars (WORKSPACES_ROOT). remote_and_local threat model flags process.env as tainted but this is server config, not user input."
+  },
+  {
+    "number": 40,
+    "rule": "js/path-injection",
+    "severity": "high",
+    "file": "apps/web-platform/server/workspace.ts",
+    "line": 83,
+    "state": "dismissed",
+    "dismissed_reason": "false positive",
+    "dismissed_comment": "workspace.ts: userId validated by UUID regex, paths built from server-controlled env vars (WORKSPACES_ROOT). remote_and_local threat model flags process.env as tainted but this is server config, not user input."
+  },
+  {
+    "number": 41,
+    "rule": "js/path-injection",
+    "severity": "high",
+    "file": "apps/web-platform/server/workspace.ts",
+    "line": 85,
+    "state": "dismissed",
+    "dismissed_reason": "false positive",
+    "dismissed_comment": "workspace.ts: userId validated by UUID regex, paths built from server-controlled env vars (WORKSPACES_ROOT). remote_and_local threat model flags process.env as tainted but this is server config, not user input."
+  },
+  {
+    "number": 42,
+    "rule": "js/path-injection",
+    "severity": "high",
+    "file": "apps/web-platform/server/workspace.ts",
+    "line": 85,
+    "state": "dismissed",
+    "dismissed_reason": "false positive",
+    "dismissed_comment": "workspace.ts: userId validated by UUID regex, paths built from server-controlled env vars (WORKSPACES_ROOT). remote_and_local threat model flags process.env as tainted but this is server config, not user input."
+  },
+  {
+    "number": 43,
+    "rule": "js/path-injection",
+    "severity": "high",
+    "file": "apps/web-platform/server/workspace.ts",
+    "line": 93,
+    "state": "dismissed",
+    "dismissed_reason": "false positive",
+    "dismissed_comment": "workspace.ts: userId validated by UUID regex, paths built from server-controlled env vars (WORKSPACES_ROOT). remote_and_local threat model flags process.env as tainted but this is server config, not user input."
+  },
+  {
+    "number": 44,
+    "rule": "js/path-injection",
+    "severity": "high",
+    "file": "apps/web-platform/server/workspace.ts",
+    "line": 94,
+    "state": "dismissed",
+    "dismissed_reason": "false positive",
+    "dismissed_comment": "workspace.ts: userId validated by UUID regex, paths built from server-controlled env vars (WORKSPACES_ROOT). remote_and_local threat model flags process.env as tainted but this is server config, not user input."
+  },
+  {
+    "number": 45,
+    "rule": "js/path-injection",
+    "severity": "high",
+    "file": "apps/web-platform/server/workspace.ts",
+    "line": 96,
+    "state": "dismissed",
+    "dismissed_reason": "false positive",
+    "dismissed_comment": "workspace.ts: userId validated by UUID regex, paths built from server-controlled env vars (WORKSPACES_ROOT). remote_and_local threat model flags process.env as tainted but this is server config, not user input."
+  },
+  {
+    "number": 46,
+    "rule": "js/path-injection",
+    "severity": "high",
+    "file": "apps/web-platform/server/workspace.ts",
+    "line": 193,
+    "state": "dismissed",
+    "dismissed_reason": "false positive",
+    "dismissed_comment": "workspace.ts: userId validated by UUID regex, paths built from server-controlled env vars (WORKSPACES_ROOT). remote_and_local threat model flags process.env as tainted but this is server config, not user input."
+  },
+  {
+    "number": 47,
+    "rule": "js/path-injection",
+    "severity": "high",
+    "file": "apps/web-platform/server/workspace.ts",
+    "line": 203,
+    "state": "dismissed",
+    "dismissed_reason": "false positive",
+    "dismissed_comment": "workspace.ts: userId validated by UUID regex, paths built from server-controlled env vars (WORKSPACES_ROOT). remote_and_local threat model flags process.env as tainted but this is server config, not user input."
+  },
+  {
+    "number": 48,
+    "rule": "js/path-injection",
+    "severity": "high",
+    "file": "apps/web-platform/server/workspace.ts",
+    "line": 215,
+    "state": "dismissed",
+    "dismissed_reason": "false positive",
+    "dismissed_comment": "workspace.ts: userId validated by UUID regex, paths built from server-controlled env vars (WORKSPACES_ROOT). remote_and_local threat model flags process.env as tainted but this is server config, not user input."
+  },
+  {
+    "number": 49,
+    "rule": "js/path-injection",
+    "severity": "high",
+    "file": "apps/web-platform/server/workspace.ts",
+    "line": 217,
+    "state": "dismissed",
+    "dismissed_reason": "false positive",
+    "dismissed_comment": "workspace.ts: userId validated by UUID regex, paths built from server-controlled env vars (WORKSPACES_ROOT). remote_and_local threat model flags process.env as tainted but this is server config, not user input."
+  },
+  {
+    "number": 50,
+    "rule": "js/path-injection",
+    "severity": "high",
+    "file": "apps/web-platform/server/workspace.ts",
+    "line": 217,
+    "state": "dismissed",
+    "dismissed_reason": "false positive",
+    "dismissed_comment": "workspace.ts: userId validated by UUID regex, paths built from server-controlled env vars (WORKSPACES_ROOT). remote_and_local threat model flags process.env as tainted but this is server config, not user input."
+  },
+  {
+    "number": 51,
+    "rule": "js/path-injection",
+    "severity": "high",
+    "file": "apps/web-platform/server/workspace.ts",
+    "line": 227,
+    "state": "dismissed",
+    "dismissed_reason": "false positive",
+    "dismissed_comment": "workspace.ts: userId validated by UUID regex, paths built from server-controlled env vars (WORKSPACES_ROOT). remote_and_local threat model flags process.env as tainted but this is server config, not user input."
+  },
+  {
+    "number": 52,
+    "rule": "js/path-injection",
+    "severity": "high",
+    "file": "apps/web-platform/server/workspace.ts",
+    "line": 233,
+    "state": "dismissed",
+    "dismissed_reason": "false positive",
+    "dismissed_comment": "workspace.ts: userId validated by UUID regex, paths built from server-controlled env vars (WORKSPACES_ROOT). remote_and_local threat model flags process.env as tainted but this is server config, not user input."
+  },
+  {
+    "number": 53,
+    "rule": "js/path-injection",
+    "severity": "high",
+    "file": "apps/web-platform/server/workspace.ts",
+    "line": 261,
+    "state": "dismissed",
+    "dismissed_reason": "false positive",
+    "dismissed_comment": "workspace.ts: userId validated by UUID regex, paths built from server-controlled env vars (WORKSPACES_ROOT). remote_and_local threat model flags process.env as tainted but this is server config, not user input."
+  },
+  {
+    "number": 54,
+    "rule": "js/path-injection",
+    "severity": "high",
+    "file": "apps/web-platform/server/workspace.ts",
+    "line": 340,
+    "state": "dismissed",
+    "dismissed_reason": "false positive",
+    "dismissed_comment": "workspace.ts: userId validated by UUID regex, paths built from server-controlled env vars (WORKSPACES_ROOT). remote_and_local threat model flags process.env as tainted but this is server config, not user input."
+  },
+  {
+    "number": 55,
+    "rule": "js/path-injection",
+    "severity": "high",
+    "file": "apps/web-platform/server/workspace.ts",
+    "line": 341,
+    "state": "dismissed",
+    "dismissed_reason": "false positive",
+    "dismissed_comment": "workspace.ts: userId validated by UUID regex, paths built from server-controlled env vars (WORKSPACES_ROOT). remote_and_local threat model flags process.env as tainted but this is server config, not user input."
+  },
+  {
+    "number": 56,
+    "rule": "js/path-injection",
+    "severity": "high",
+    "file": "apps/web-platform/test/workspace.test.ts",
+    "line": 32,
+    "state": "dismissed",
+    "dismissed_reason": "used in tests",
+    "dismissed_comment": "Test file: not exploitable. Test uses hardcoded paths in controlled test environment."
+  },
+  {
+    "number": 57,
+    "rule": "js/path-injection",
+    "severity": "high",
+    "file": "apps/web-platform/test/workspace.test.ts",
+    "line": 33,
+    "state": "dismissed",
+    "dismissed_reason": "used in tests",
+    "dismissed_comment": "Test file: not exploitable. Test uses hardcoded paths in controlled test environment."
+  },
+  {
+    "number": 58,
+    "rule": "js/path-injection",
+    "severity": "high",
+    "file": "apps/web-platform/test/workspace.test.ts",
+    "line": 34,
+    "state": "dismissed",
+    "dismissed_reason": "used in tests",
+    "dismissed_comment": "Test file: not exploitable. Test uses hardcoded paths in controlled test environment."
+  },
+  {
+    "number": 59,
+    "rule": "js/path-injection",
+    "severity": "high",
+    "file": "apps/web-platform/test/workspace.test.ts",
+    "line": 35,
+    "state": "dismissed",
+    "dismissed_reason": "used in tests",
+    "dismissed_comment": "Test file: not exploitable. Test uses hardcoded paths in controlled test environment."
+  },
+  {
+    "number": 60,
+    "rule": "js/path-injection",
+    "severity": "high",
+    "file": "apps/web-platform/test/workspace.test.ts",
+    "line": 36,
+    "state": "dismissed",
+    "dismissed_reason": "used in tests",
+    "dismissed_comment": "Test file: not exploitable. Test uses hardcoded paths in controlled test environment."
+  },
+  {
+    "number": 61,
+    "rule": "js/path-injection",
+    "severity": "high",
+    "file": "apps/web-platform/test/workspace.test.ts",
+    "line": 37,
+    "state": "dismissed",
+    "dismissed_reason": "used in tests",
+    "dismissed_comment": "Test file: not exploitable. Test uses hardcoded paths in controlled test environment."
+  },
+  {
+    "number": 62,
+    "rule": "js/path-injection",
+    "severity": "high",
+    "file": "apps/web-platform/test/workspace.test.ts",
+    "line": 38,
+    "state": "dismissed",
+    "dismissed_reason": "used in tests",
+    "dismissed_comment": "Test file: not exploitable. Test uses hardcoded paths in controlled test environment."
+  },
+  {
+    "number": 63,
+    "rule": "js/path-injection",
+    "severity": "high",
+    "file": "apps/web-platform/test/workspace.test.ts",
+    "line": 49,
+    "state": "dismissed",
+    "dismissed_reason": "used in tests",
+    "dismissed_comment": "Test file: not exploitable. Test uses hardcoded paths in controlled test environment."
+  },
+  {
+    "number": 64,
+    "rule": "js/path-injection",
+    "severity": "high",
+    "file": "apps/web-platform/test/workspace.test.ts",
+    "line": 51,
+    "state": "dismissed",
+    "dismissed_reason": "used in tests",
+    "dismissed_comment": "Test file: not exploitable. Test uses hardcoded paths in controlled test environment."
+  },
+  {
+    "number": 65,
+    "rule": "js/path-injection",
+    "severity": "high",
+    "file": "apps/web-platform/test/workspace.test.ts",
+    "line": 60,
+    "state": "dismissed",
+    "dismissed_reason": "used in tests",
+    "dismissed_comment": "Test file: not exploitable. Test uses hardcoded paths in controlled test environment."
+  },
+  {
+    "number": 66,
+    "rule": "js/path-injection",
+    "severity": "high",
+    "file": "apps/web-platform/test/workspace-error-handling.test.ts",
+    "line": 113,
+    "state": "dismissed",
+    "dismissed_reason": "used in tests",
+    "dismissed_comment": "Test file: not exploitable. Test uses hardcoded paths in controlled test environment."
+  },
+  {
+    "number": 67,
+    "rule": "js/path-injection",
+    "severity": "high",
+    "file": "apps/web-platform/test/workspace.test.ts",
+    "line": 74,
+    "state": "dismissed",
+    "dismissed_reason": "used in tests",
+    "dismissed_comment": "Test file: not exploitable. Test uses hardcoded paths in controlled test environment."
+  },
+  {
+    "number": 68,
+    "rule": "js/path-injection",
+    "severity": "high",
+    "file": "apps/web-platform/test/workspace-error-handling.test.ts",
+    "line": 151,
+    "state": "dismissed",
+    "dismissed_reason": "used in tests",
+    "dismissed_comment": "Test file: not exploitable. Test uses hardcoded paths in controlled test environment."
+  },
+  {
+    "number": 69,
+    "rule": "js/path-injection",
+    "severity": "high",
+    "file": "apps/web-platform/test/workspace-error-handling.test.ts",
+    "line": 186,
+    "state": "dismissed",
+    "dismissed_reason": "false positive",
+    "dismissed_comment": "workspace.ts: userId validated by UUID regex, paths built from server-controlled env vars (WORKSPACES_ROOT). remote_and_local threat model flags process.env as tainted but this is server config, not user input."
+  },
+  {
+    "number": 70,
+    "rule": "js/resource-exhaustion",
+    "severity": "high",
+    "file": "apps/web-platform/server/ws-handler.ts",
+    "line": 133,
+    "state": "dismissed",
+    "dismissed_reason": "false positive",
+    "dismissed_comment": "parseInt on server-controlled env var (WS_IDLE_TIMEOUT_MS). Not user input."
+  },
+  {
+    "number": 71,
+    "rule": "js/insecure-temporary-file",
+    "severity": "high",
+    "file": "apps/web-platform/test/canusertool-caching.test.ts",
+    "line": 34,
+    "state": "dismissed",
+    "dismissed_reason": "used in tests",
+    "dismissed_comment": "Test file using standard mkdtempSync(join(tmpdir(), prefix)). Secure enough for test isolation."
+  },
+  {
+    "number": 72,
+    "rule": "js/insecure-temporary-file",
+    "severity": "high",
+    "file": "apps/web-platform/test/canusertool-caching.test.ts",
+    "line": 35,
+    "state": "dismissed",
+    "dismissed_reason": "used in tests",
+    "dismissed_comment": "Test file using standard mkdtempSync(join(tmpdir(), prefix)). Secure enough for test isolation."
+  },
+  {
+    "number": 73,
+    "rule": "js/insecure-temporary-file",
+    "severity": "high",
+    "file": "apps/web-platform/test/canusertool-caching.test.ts",
+    "line": 36,
+    "state": "dismissed",
+    "dismissed_reason": "used in tests",
+    "dismissed_comment": "Test file using standard mkdtempSync(join(tmpdir(), prefix)). Secure enough for test isolation."
+  },
+  {
+    "number": 74,
+    "rule": "js/insecure-temporary-file",
+    "severity": "high",
+    "file": "apps/web-platform/test/workspace-cleanup.test.ts",
+    "line": 51,
+    "state": "dismissed",
+    "dismissed_reason": "used in tests",
+    "dismissed_comment": "Test file using standard mkdtempSync(join(tmpdir(), prefix)). Secure enough for test isolation."
+  },
+  {
+    "number": 75,
+    "rule": "js/insecure-temporary-file",
+    "severity": "high",
+    "file": "apps/web-platform/test/workspace-cleanup.test.ts",
+    "line": 53,
+    "state": "dismissed",
+    "dismissed_reason": "used in tests",
+    "dismissed_comment": "Test file using standard mkdtempSync(join(tmpdir(), prefix)). Secure enough for test isolation."
+  },
+  {
+    "number": 76,
+    "rule": "js/insecure-temporary-file",
+    "severity": "high",
+    "file": "apps/web-platform/test/workspace-cleanup.test.ts",
+    "line": 73,
+    "state": "dismissed",
+    "dismissed_reason": "used in tests",
+    "dismissed_comment": "Test file using standard mkdtempSync(join(tmpdir(), prefix)). Secure enough for test isolation."
+  },
+  {
+    "number": 80,
+    "rule": "js/http-to-file-access",
+    "severity": "medium",
+    "file": "apps/web-platform/server/session-sync.ts",
+    "line": 78,
+    "state": "dismissed",
+    "dismissed_reason": "false positive",
+    "dismissed_comment": "Designed behavior: credential helper written with restrictive permissions (0o700), used by git, then deleted. Cleanup logic already exists."
+  },
+  {
+    "number": 81,
+    "rule": "js/http-to-file-access",
+    "severity": "medium",
+    "file": "apps/web-platform/server/workspace.ts",
+    "line": 123,
+    "state": "dismissed",
+    "dismissed_reason": "false positive",
+    "dismissed_comment": "Designed behavior: credential helper written with restrictive permissions (0o700), used by git, then deleted. Cleanup logic already exists."
+  },
+  {
+    "number": 82,
+    "rule": "js/file-system-race",
+    "severity": "high",
+    "file": "apps/web-platform/server/kb-reader.ts",
+    "line": 287,
+    "state": "dismissed",
+    "dismissed_reason": "false positive",
+    "dismissed_comment": "TOCTOU in build-time/server-side file reads of local files. Not security-sensitive — no privilege escalation path."
+  },
+  {
+    "number": 83,
+    "rule": "js/file-system-race",
+    "severity": "high",
+    "file": "apps/web-platform/server/kb-reader.ts",
+    "line": 275,
+    "state": "dismissed",
+    "dismissed_reason": "false positive",
+    "dismissed_comment": "TOCTOU in build-time/server-side file reads of local files. Not security-sensitive — no privilege escalation path."
+  },
+  {
+    "number": 85,
+    "rule": "js/http-to-file-access",
+    "severity": "medium",
+    "file": "apps/web-platform/server/push-branch.ts",
+    "line": 117,
+    "state": "fixed",
+    "dismissed_reason": null,
+    "dismissed_comment": null
+  },
+  {
+    "number": 86,
+    "rule": "js/http-to-file-access",
+    "severity": "medium",
+    "file": "apps/web-platform/server/push-branch.ts",
+    "line": 121,
+    "state": "dismissed",
+    "dismissed_reason": "won't fix",
+    "dismissed_comment": "Well-mitigated: temp file in /tmp with random UUID, mode 0o700, cleaned in finally block, short-lived GitHub App token (~1h), server-side only, founder-gated."
+  },
+  {
+    "number": 87,
+    "rule": "js/file-system-race",
+    "severity": "high",
+    "file": "apps/web-platform/app/api/kb/content/[...path]/route.ts",
+    "line": 123,
+    "state": "dismissed",
+    "dismissed_reason": "false positive",
+    "dismissed_comment": "File was refactored to 68 lines — alert references line 121 which no longer exists."
+  },
+  {
+    "number": 88,
+    "rule": "js/resource-exhaustion",
+    "severity": "high",
+    "file": "apps/web-platform/server/ws-handler.ts",
+    "line": 180,
+    "state": "dismissed",
+    "dismissed_reason": "false positive",
+    "dismissed_comment": "3-layer rate limiting: IP-based connection throttle + concurrent unauthenticated cap + per-user session throttle. Memory bounded with periodic pruning."
+  },
+  {
+    "number": 89,
+    "rule": "js/http-to-file-access",
+    "severity": "medium",
+    "file": "apps/web-platform/app/api/kb/upload/route.ts",
+    "line": 205,
+    "state": "dismissed",
+    "dismissed_reason": "false positive",
+    "dismissed_comment": "Expected behavior: file upload handler. Filename through sanitizeFilename(), path validated with isPathInWorkspace(), extension allowlist enforced, 20MB size cap."
+  },
+  {
+    "number": 90,
+    "rule": "js/request-forgery",
+    "severity": "critical",
+    "file": "apps/web-platform/test/fixtures/qa-auth.ts",
+    "line": 42,
+    "state": "dismissed",
+    "dismissed_reason": "used in tests",
+    "dismissed_comment": "Test fixture; hardcoded Supabase URL from env var"
+  },
+  {
+    "number": 91,
+    "rule": "js/http-to-file-access",
+    "severity": "medium",
+    "file": "apps/web-platform/app/api/kb/file/[...path]/route.ts",
+    "line": 150,
+    "state": "fixed",
+    "dismissed_reason": null,
+    "dismissed_comment": null
+  },
+  {
+    "number": 92,
+    "rule": "js/request-forgery",
+    "severity": "critical",
+    "file": "apps/web-platform/server/github-api.ts",
+    "line": 64,
+    "state": "dismissed",
+    "dismissed_reason": "false positive",
+    "dismissed_comment": "GitHub API base URL is hardcoded constant. Paths are from server-side callers only, not user input. DELETE method rejected for cloud agents."
+  },
+  {
+    "number": 93,
+    "rule": "js/path-injection",
+    "severity": "high",
+    "file": "apps/web-platform/server/sandbox.ts",
+    "line": 66,
+    "state": "dismissed",
+    "dismissed_reason": "false positive",
+    "dismissed_comment": "3-layer path containment: realpathSync + symlink resolution + ELOOP/EACCES denial + trailing slash prefix guard. TOCTOU mitigated by bubblewrap sandbox."
+  },
+  {
+    "number": 94,
+    "rule": "js/http-to-file-access",
+    "severity": "medium",
+    "file": "apps/web-platform/app/api/kb/file/[...path]/route.ts",
+    "line": 473,
+    "state": "fixed",
+    "dismissed_reason": null,
+    "dismissed_comment": null
+  },
+  {
+    "number": 95,
+    "rule": "js/resource-exhaustion",
+    "severity": "high",
+    "file": "apps/web-platform/server/ws-handler.ts",
+    "line": 259,
+    "state": "dismissed",
+    "dismissed_reason": "false positive",
+    "dismissed_comment": "Bounded timer with .unref(); cleared on connection teardown; 30min idle timeout. Subscription status refresh interval, not unbounded."
+  },
+  {
+    "number": 96,
+    "rule": "js/http-to-file-access",
+    "severity": "medium",
+    "file": "apps/web-platform/server/kb-route-helpers.ts",
+    "line": 258,
+    "state": "dismissed",
+    "dismissed_reason": "false positive",
+    "dismissed_comment": "randomCredentialPath() generates random temp file; mode 0o700; token passed via heredoc; cleaned in finally block. Short-lived git credential helper."
+  },
+  {
+    "number": 100,
+    "rule": "js/file-system-race",
+    "severity": "high",
+    "file": "apps/web-platform/server/kb-reader.ts",
+    "line": 405,
+    "state": "dismissed",
+    "dismissed_reason": "false positive",
+    "dismissed_comment": "Symlink guards at isDirectory/isFile checks. TOCTOU race mitigated by bubblewrap sandbox + single-invocation atomicity. Server-controlled filesystem."
+  },
+  {
+    "number": 102,
+    "rule": "js/path-injection",
+    "severity": "high",
+    "file": "apps/web-platform/test/workspace.test.ts",
+    "line": 41,
+    "state": "dismissed",
+    "dismissed_reason": "used in tests",
+    "dismissed_comment": "Test file; paths are controlled test fixtures, not user input"
+  },
+  {
+    "number": 103,
+    "rule": "js/path-injection",
+    "severity": "high",
+    "file": "apps/web-platform/test/workspace.test.ts",
+    "line": 38,
+    "state": "dismissed",
+    "dismissed_reason": "used in tests",
+    "dismissed_comment": "Test file; paths are controlled test fixtures, not user input"
+  },
+  {
+    "number": 116,
+    "rule": "js/request-forgery",
+    "severity": "critical",
+    "file": "apps/web-platform/app/api/analytics/track/route.ts",
+    "line": 92,
+    "state": "dismissed",
+    "dismissed_reason": "false positive",
+    "dismissed_comment": "URL is PLAUSIBLE_EVENTS_URL env var; hardcoded, no user input reaches URL construction. Plausible analytics proxy."
+  },
+  {
+    "number": 117,
+    "rule": "js/remote-property-injection",
+    "severity": "high",
+    "file": "apps/web-platform/app/api/analytics/track/route.ts",
+    "line": 44,
+    "state": "dismissed",
+    "dismissed_reason": "false positive",
+    "dismissed_comment": "Props stripped of user_id/userId before forwarding; origin validated via validateOrigin(). Event properties allowlisted at source."
+  },
+  {
+    "number": 124,
+    "rule": "js/insecure-temporary-file",
+    "severity": "high",
+    "file": "apps/web-platform/server/workspace.ts",
+    "line": 344,
+    "state": "dismissed",
+    "dismissed_reason": "false positive",
+    "dismissed_comment": "writeFileSync to .claude/ under user workspace. Prod workspacePath=/workspaces/<uuid>/ (dedicated volume, not shared tmp). Pre-refactor had identical writes; extraction into helper triggered taint on WORKSPACES_ROOT env. UUID_RE upstream prevents traversal."
+  },
+  {
+    "number": 125,
+    "rule": "js/insecure-temporary-file",
+    "severity": "high",
+    "file": "apps/web-platform/server/workspace.ts",
+    "line": 349,
+    "state": "dismissed",
+    "dismissed_reason": "false positive",
+    "dismissed_comment": "writeFileSync to .claude/ under user workspace. Prod workspacePath=/workspaces/<uuid>/ (dedicated volume, not shared tmp). Pre-refactor had identical writes; extraction into helper triggered taint on WORKSPACES_ROOT env. UUID_RE upstream prevents traversal."
+  },
+  {
+    "number": 128,
+    "rule": "js/insecure-temporary-file",
+    "severity": "high",
+    "file": "apps/web-platform/test/workspace-symlink-hardening.test.ts",
+    "line": 46,
+    "state": "dismissed",
+    "dismissed_reason": "used in tests",
+    "dismissed_comment": "Test fixture writes to /tmp/soleur-test-workspaces-symlink/external/ — deliberate: the test verifies scaffoldWorkspaceDefaults REJECTS symlinks pointing outside the workspace, so the target file must be created outside the workspace-under-test."
+  },
+  {
+    "number": 129,
+    "rule": "js/insecure-temporary-file",
+    "severity": "high",
+    "file": "apps/web-platform/test/workspace-symlink-hardening.test.ts",
+    "line": 66,
+    "state": "dismissed",
+    "dismissed_reason": "used in tests",
+    "dismissed_comment": "Test fixture writes to /tmp/soleur-test-workspaces-symlink/external/ — deliberate: the test verifies scaffoldWorkspaceDefaults REJECTS symlinks pointing outside the workspace, so the target file must be created outside the workspace-under-test."
+  }
+]

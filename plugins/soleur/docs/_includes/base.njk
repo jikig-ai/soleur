@@ -49,6 +49,33 @@
         }
       }{% if page.url == "/" or page.url == "/index.html" %},
       {
+        "@type": "Organization",
+        "@id": "{{ site.url }}/#organization",
+        "name": "{{ site.name }}",
+        "url": "{{ site.url }}",
+        "logo": "{{ site.url }}/images/logo-mark-512.png",
+        "sameAs": [
+          "{{ site.github }}",
+          "{{ site.x }}",
+          "{{ site.linkedinCompany }}",
+          "{{ site.bluesky }}",
+          "{{ site.discord }}"
+        ],
+        "subjectOf": [
+          {
+            "@type": "NewsArticle",
+            "url": "https://www.inc.com/ben-sherry/anthropic-ceo-dario-amodei-predicts-the-first-billion-dollar-solopreneur-by-2026/91193609",
+            "headline": "Anthropic CEO Dario Amodei Predicts The First Billion-Dollar Solopreneur",
+            "datePublished": "2025-03-25",
+            "publisher": {
+              "@type": "Organization",
+              "name": "Inc.",
+              "url": "https://www.inc.com/"
+            }
+          }
+        ]
+      },
+      {
         "@type": "SoftwareApplication",
         "name": "{{ site.name }}",
         "url": "{{ site.url }}",
@@ -109,6 +136,9 @@
       {%- for item in site.nav %}
       <li><a href="{{ item.url }}"{% if page.url == ('/' + item.url) or (item.url == 'blog/' and page.url.startsWith('/blog')) %} aria-current="page"{% endif %}>{{ item.label }}</a></li>
       {%- endfor %}
+      {%- if site.primaryCta %}
+      <li class="nav-cta-slot"><a href="{{ site.primaryCta.url }}" aria-label="{{ site.primaryCta.ariaLabel }}" class="btn btn-primary btn--sm nav-cta">{{ site.primaryCta.label }}</a></li>
+      {%- endif %}
     </ul>
   </header>
 
@@ -141,7 +171,7 @@
           <h3 class="footer-heading">{{ col.heading }}</h3>
           <ul class="footer-links">
             {%- for link in col.links %}
-            <li><a href="{{ link.url }}"{% if link.external %} target="_blank" rel="noopener"{% endif %}>{{ link.label }}</a></li>
+            <li><a href="{{ link.url }}"{% if link.external %} target="_blank" rel="noopener"{% endif %}{% if link.title %} title="{{ link.title }}"{% endif %}>{{ link.label }}</a></li>
             {%- endfor %}
           </ul>
         </div>
