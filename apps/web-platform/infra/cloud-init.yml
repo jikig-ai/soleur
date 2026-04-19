@@ -207,8 +207,44 @@ write_files:
     permissions: '0644'
 
 runcmd:
-  # Apply SSH hardening immediately (drop-in written by write_files above)
+  # Apply SSH hardening immediately (drop-in written by write_files above).
+  # Runs BEFORE the package audit so the operator always has hardened SSH
+  # access even if the audit exits non-zero and halts the rest of cloud-init.
   - systemctl restart sshd
+
+  # Audit that cloud-init's packages: stage actually installed every declared
+  # package. Cloud-init can silently drop package installs on transient
+  # failures (apt lock contention, network error, "No space left on device"
+  # during first boot) without failing the run. If any declared package is
+  # missing after packages:, fail loudly so the operator sees the root cause
+  # in /var/log/cloud-init-output.log (#2680).
+  #
+  # The required-package list is parsed at runtime from the rendered cloud
+  # config at /var/lib/cloud/instance/cloud-config.txt -- no hardcoded list
+  # to drift away from the packages: block at the top of this file.
+  - |
+    set -e
+    required_packages=$(awk '/^packages:$/{flag=1; next} /^[^ ]/{flag=0} flag && /^  - /{sub(/^  - /, ""); print}' /var/lib/cloud/instance/cloud-config.txt)
+    if [ -z "$required_packages" ]; then
+      echo "FATAL: package audit could not parse packages: list from cloud-config.txt" >&2
+      exit 1
+    fi
+    missing=""
+    for pkg in $required_packages; do
+      dpkg -s "$pkg" >/dev/null 2>&1 || missing="$missing $pkg"
+    done
+    if [ -n "$missing" ]; then
+      echo "FATAL: cloud-init packages: stage did not install:$missing" >&2
+      # One-shot self-heal for transient apt failures. If this also fails we
+      # exit non-zero so cloud-init marks the boot failed and the operator
+      # investigates via the Hetzner console.
+      export DEBIAN_FRONTEND=noninteractive
+      apt-get update -qq
+      apt-get install -y -qq $missing
+      for pkg in $missing; do
+        dpkg -s "$pkg" >/dev/null 2>&1 || { echo "FATAL: $pkg still missing after recovery install" >&2; exit 1; }
+      done
+    fi
 
   # Reload fail2ban so the jail.d/soleur-sshd.local drop-in applies (#2654).
   # fail2ban is installed via `packages:` above; the service auto-starts on
