@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
-# Tests for cleanup-scope-outs helper script (group-by-area.sh).
-# Run: bash plugins/soleur/test/cleanup-scope-outs.test.sh
+# Tests for drain-labeled-backlog helper script (group-by-area.sh).
+# Run: bash plugins/soleur/test/drain-labeled-backlog.test.sh
 
 set -euo pipefail
 
@@ -9,10 +9,10 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/test-helpers.sh"
 
 REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
-HELPER="$REPO_ROOT/plugins/soleur/skills/cleanup-scope-outs/scripts/group-by-area.sh"
+HELPER="$REPO_ROOT/plugins/soleur/skills/drain-labeled-backlog/scripts/group-by-area.sh"
 FIXTURE_DIR="$SCRIPT_DIR/fixtures/cleanup-scope-outs"
 
-echo "=== cleanup-scope-outs group-by-area ==="
+echo "=== drain-labeled-backlog group-by-area ==="
 echo ""
 
 assert_file_exists "$HELPER" "helper script exists"
