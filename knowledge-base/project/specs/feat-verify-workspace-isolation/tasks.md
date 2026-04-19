@@ -31,10 +31,10 @@ Spike output committed (`5c23ea29`). SDK has no direct tool-invocation API; `byp
 
 ## Phase 4 — Tier-4 adversary cases (direct spawn)
 
-- [ ] 4.1 FR3 direct write denial via `spawnBwrap`.
-- [ ] 4.2 FR4 prefix collision via `spawnBwrap`.
-- [ ] 4.3 FR5 symlink escape via `linkEscape` + `spawnBwrap`.
-- [ ] 4.4 FR10/FR11 (LS, NotebookRead): **scope change per Path C.** Out of scope for this file; coverage remains in `test/sandbox-hook.test.ts` + `test/sandbox.test.ts`. Document in top-of-file comment.
+- [x] 4.1 FR3 direct write denial via `spawnBwrap`. (host-side pin; inversion probe confirmed --bind rootB without --tmpfs leaks leaked.md to host.)
+- [x] 4.2 FR4 prefix collision via `spawnBwrap`. (user1 vs user10 naming; same isolation pattern as FR2.)
+- [x] 4.3 FR5 symlink escape via `linkEscape` + `spawnBwrap`. (rootA/peek → rootB/secret.md; tmpfs overlay blocks resolution.)
+- [x] 4.4 FR10/FR11 (LS, NotebookRead): **scope change per Path C.** Out of scope for this file; coverage remains in `test/sandbox-hook.test.ts` + `test/sandbox.test.ts`. Documented in top-of-file comment.
 
 ## Phase 5 — Concurrent sandbox (direct spawn)
 

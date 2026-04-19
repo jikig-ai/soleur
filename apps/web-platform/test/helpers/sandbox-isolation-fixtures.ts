@@ -58,12 +58,28 @@ export interface ProbeDecision {
  * instead so production mount-ordering can be exercised (see sdk-probe-notes.md).
  */
 export function createWorkspacePair(opts: { underWorkspaces?: boolean } = {}): WorkspacePair {
+  return createNamedWorkspacePair(["rootA", "rootB"], opts);
+}
+
+/**
+ * Like createWorkspacePair but lets the caller pick directory names under the
+ * shared parent. Use for FR4 prefix-collision fixtures ("user1"/"user10") where
+ * the production path shape matters for the isolation property under test.
+ */
+export function createNamedWorkspacePair(
+  names: [string, string],
+  opts: { underWorkspaces?: boolean } = {},
+): WorkspacePair {
   const wantProduction = opts.underWorkspaces === true;
   const parent = wantProduction && workspacesRootWritable()
     ? fs.mkdtempSync(path.join("/workspaces", FIXTURE_PREFIX))
     : fs.mkdtempSync(path.join(os.tmpdir(), FIXTURE_PREFIX));
-  const rootA = path.join(parent, "rootA");
-  const rootB = path.join(parent, "rootB");
+  const [nameA, nameB] = names;
+  if (nameA.includes("/") || nameB.includes("/") || nameA === ".." || nameB === "..") {
+    throw new Error(`createNamedWorkspacePair: names must be simple basenames, got ${names.join(", ")}`);
+  }
+  const rootA = path.join(parent, nameA);
+  const rootB = path.join(parent, nameB);
   fs.mkdirSync(rootA, { recursive: true });
   fs.mkdirSync(rootB, { recursive: true });
 
@@ -317,11 +333,14 @@ function buildBwrapArgs(root: string, command: string, opts: SpawnBwrapOpts): st
 
 function toBwrapResult(res: SpawnSyncReturns<string>): BwrapResult {
   const stderr = res.stderr ?? "";
+  // Setup-failure signatures are limited to bwrap itself (mount/namespace
+  // errors) or exec of the inner program. Shell-level errors from the user
+  // command are NOT setup failures — in isolation tests they are the signal
+  // (e.g., "No such file or directory" when the deny boundary hides rootB).
   const setupFailed =
     res.error !== undefined ||
     /^bwrap: /m.test(stderr) ||
-    /execvp:/m.test(stderr) ||
-    /^\/bin\/bash:/m.test(stderr);
+    /execvp:/m.test(stderr);
   return {
     stdout: res.stdout ?? "",
     stderr,

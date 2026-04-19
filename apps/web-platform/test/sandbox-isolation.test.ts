@@ -8,9 +8,13 @@
  * FR12 Task subagent (deferred follow-up). Coverage matrix pinned at EOF.
  */
 
+import fs from "node:fs";
+import path from "node:path";
 import { afterEach, beforeAll, describe, expect, test } from "vitest";
 import {
+  createNamedWorkspacePair,
   createWorkspacePair,
+  linkEscape,
   probeSkip,
   rescueStaleFixtures,
   seedMarker,
@@ -49,6 +53,67 @@ describe.runIf(!directProbe.skip)("sandbox-isolation: direct bwrap (tier 4)", ()
     expect(result.setupFailed, `bwrap setup failed: ${result.stderr}`).toBe(false);
     // Isolation assertions: cat must have failed AND the marker must be absent
     // from combined stdio. Post-state is pinned (cq-mutation-assertions-pin-exact-post-state).
+    expect(result.status).not.toBe(0);
+    expect(result.stdout).not.toContain(token);
+    expect(result.stderr).toMatch(/No such file|cannot open|Permission denied/);
+  });
+
+  test("FR3: rootA sandbox write to rootB/leaked.md does not mutate host rootB", () => {
+    const pair = createWorkspacePair();
+    pairs.push(pair);
+    const preMarker = seedMarker(pair.rootB, "existing.md");
+    const preEntries = fs.readdirSync(pair.rootB).sort();
+    const leakPath = path.join(pair.rootB, "leaked.md");
+
+    const result = spawnBwrap(
+      pair.rootA,
+      `echo "leaked-${Date.now()}" > ${shellQuote(leakPath)} 2>/dev/null; echo DONE`,
+      { pair, timeoutMs: 5_000 },
+    );
+
+    expect(result.setupFailed, `bwrap setup failed: ${result.stderr}`).toBe(false);
+    // Host-side assertions: rootB must be identical to pre-state. Inside the
+    // sandbox the write may "succeed" against the tmpfs overlay (ephemeral),
+    // but the host directory is the blast-radius boundary we care about.
+    const postEntries = fs.readdirSync(pair.rootB).sort();
+    expect(postEntries).toEqual(preEntries);
+    expect(fs.existsSync(leakPath)).toBe(false);
+    // Existing marker must be intact.
+    expect(fs.readFileSync(preMarker.path, "utf8")).toBe(preMarker.token);
+  });
+
+  test("FR4: prefix collision (user1 vs user10) does not grant user1 sandbox access to user10", () => {
+    const pair = createNamedWorkspacePair(["user1", "user10"]);
+    pairs.push(pair);
+    const { token } = seedMarker(pair.rootB, "secret.md");
+
+    const result = spawnBwrap(
+      pair.rootA,
+      `cat ${shellQuote(pair.rootB + "/secret.md")}`,
+      { pair, timeoutMs: 5_000 },
+    );
+
+    expect(result.setupFailed, `bwrap setup failed: ${result.stderr}`).toBe(false);
+    expect(result.status).not.toBe(0);
+    expect(result.stdout).not.toContain(token);
+    expect(result.stderr).toMatch(/No such file|cannot open|Permission denied/);
+  });
+
+  test("FR5: symlink escape from rootA to rootB/secret.md is blocked by tmpfs overlay", () => {
+    const pair = createWorkspacePair();
+    pairs.push(pair);
+    const { token } = seedMarker(pair.rootB, "secret.md");
+    linkEscape(pair.rootA, "peek", path.join(pair.rootB, "secret.md"));
+
+    const result = spawnBwrap(
+      pair.rootA,
+      `cat ${shellQuote(pair.rootA + "/peek")}`,
+      { pair, timeoutMs: 5_000 },
+    );
+
+    expect(result.setupFailed, `bwrap setup failed: ${result.stderr}`).toBe(false);
+    // Following the symlink inside the sandbox must fail — rootB is tmpfs'd out,
+    // so the link target does not resolve. Token MUST NOT appear in stdout.
     expect(result.status).not.toBe(0);
     expect(result.stdout).not.toContain(token);
     expect(result.stderr).toMatch(/No such file|cannot open|Permission denied/);
