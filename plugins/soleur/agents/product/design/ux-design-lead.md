@@ -51,11 +51,12 @@ Use the **AskUserQuestion tool** to clarify the design scope:
 
 ### Step 3: Deliver
 
-1. Save the .pen file to `knowledge-base/product/design/{domain}/{descriptive-name}.pen` (e.g., `design/brand/landing-page.pen`, `design/onboarding/signup-flow.pen`).
-2. **Export high-resolution screenshots.** Use `export_nodes` with `scale: 3` and `format: "png"` to export all top-level frames to a `screenshots/` subdirectory next to the .pen file. Do NOT use `get_screenshot` for final deliverables — it produces low-resolution 512px images. `export_nodes` with `scale: 3` produces ~4K images suitable for review.
-3. **Rename screenshots to human-readable names.** `export_nodes` saves files as `{nodeId}.png`. After export, rename each file to match its frame name in kebab-case with zero-padded sequential numbering (e.g., `bBxvQ.png` → `01-dashboard-empty-state.png`). Remove the old node-ID-named files.
-4. **Open the screenshots folder** for founder review: `xdg-open <screenshots-directory>`. This step is not optional — the founder must visually review wireframes before proceeding.
-5. Announce the file location and list all renamed screenshot files.
+1. Save the .pen file to `knowledge-base/product/design/{domain}/{descriptive-name}.pen` (e.g., `design/brand/landing-page.pen`, `design/onboarding/signup-flow.pen`). **The `product/` segment is mandatory — the pre-#566 top-level design directory was removed in the domain restructure and writing there produces a placeholder that no automated audit catches.**
+2. **Post-save size verification (HARD GATE).** Before announcing completion, `stat -c %s <saved-file>` and assert the result is > 0 bytes. If the file is 0 bytes, the preceding Pencil MCP calls silently dropped (typically an auth or schema error the adapter returned as `isError: true`). **Read the actual adapter error text and surface it verbatim — do NOT fabricate a "headless stub" or "dropped ops" narrative.** The adapter has no stub code path; a 0-byte file always corresponds to a real `isError` response the caller can inspect. See `AGENTS.md:cq-pencil-mcp-silent-drop-diagnosis-checklist`.
+3. **Export high-resolution screenshots.** Use `export_nodes` with `scale: 3` and `format: "png"` to export all top-level frames to a `screenshots/` subdirectory next to the .pen file. Do NOT use `get_screenshot` for final deliverables — it produces low-resolution 512px images. `export_nodes` with `scale: 3` produces ~4K images suitable for review.
+4. **Rename screenshots to human-readable names.** `export_nodes` saves files as `{nodeId}.png`. After export, rename each file to match its frame name in kebab-case with zero-padded sequential numbering (e.g., `bBxvQ.png` → `01-dashboard-empty-state.png`). Remove the old node-ID-named files.
+5. **Open the screenshots folder** for founder review: `xdg-open <screenshots-directory>`. This step is not optional — the founder must visually review wireframes before proceeding.
+6. Announce the file location and list all renamed screenshot files.
 
 ## UX Audit (Existing HTML Pages)
 
