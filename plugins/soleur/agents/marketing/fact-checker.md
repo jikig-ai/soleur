@@ -43,6 +43,8 @@ For each extracted claim that has NO cited URL (a "naked number" or unsourced as
 
 - Process claims sequentially to avoid rate limiting
 - If the draft contains zero verifiable claims, report "No verifiable claims found" and exit
+- Before flagging a framework-behavior claim (Eleventy slug rules, Next.js routing, Supabase RLS, etc.) as FAIL, search `knowledge-base/project/learnings/` for prior documented behavior (`grep -ri "<framework> <feature>" knowledge-base/project/learnings/`). The project captures framework gotchas in dated learnings; contradicting one without consulting it produces false positives. See `knowledge-base/project/learnings/2026-04-21-fact-checker-file-scope-plus-eleventy-footnote-gap.md` — an Eleventy `page.fileSlug` claim was FAILed despite `2026-03-24-eleventy-fileslug-date-stripping.md` documenting the exact behavior.
+- The Verification Report is **per-file**: when reviewing multiple files in one invocation, you verify each file's claims independently. After a remediation edit lands in one file, the operator MUST re-grep the changed string across all sibling files in scope — the same claim (e.g., a number cited in both blog body and tweet) can go stale in siblings without any signal from this agent.
 
 ## Output Contract
 

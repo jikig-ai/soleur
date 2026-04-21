@@ -13,7 +13,7 @@ Before generating images, verify both environment and quota:
 
 1. **Environment:** Confirm `GEMINI_API_KEY` is set (the scripts check this)
 2. **Python dependencies:** Install in a venv (`python3 -m venv .venv && source .venv/bin/activate && pip install -r requirements.txt`) -- bare `pip install` is blocked by PEP 668 on modern Linux; versions are pinned to exact releases for supply chain security
-3. **Image generation quota:** Free-tier API keys authenticate successfully but may have zero quota for image generation. Run a minimal test request before building the full pipeline:
+3. **Image generation quota:** Free-tier API keys authenticate successfully but may have zero quota for image generation. The pre-flight MUST exercise the SAME model Phase 1 will use (`gemini-3-pro-image-preview`) — testing a different model produces stale signals. On free-tier keys as of 2026-04-21, BOTH `gemini-3-pro-image` and `gemini-2.5-flash-image` return `429 RESOURCE_EXHAUSTED` with `limit: 0`; Imagen models return `404 NOT_FOUND`. Run a minimal test request before building the full pipeline:
 
 ```bash
 python3 -c "
@@ -23,17 +23,22 @@ from google.genai import types
 client = genai.Client(api_key=os.environ['GEMINI_API_KEY'])
 try:
     r = client.models.generate_content(
-        model='gemini-2.5-flash-image',
+        model='gemini-3-pro-image-preview',
         contents=['Generate a 1x1 pixel red square'],
-        config=types.GenerateContentConfig(response_modalities=['TEXT', 'IMAGE']),
+        config=types.GenerateContentConfig(
+            response_modalities=['TEXT', 'IMAGE'],
+            image_config=types.ImageConfig(aspect_ratio='1:1', image_size='1K'),
+        ),
     )
-    print('[ok] Image generation quota available')
+    # Verify we actually got image bytes, not just a successful call
+    has_image = any(p.inline_data for p in r.parts)
+    print('[ok] Image generation quota available' if has_image else '[FAIL] No image bytes in response')
 except Exception as e:
-    print(f'[FAIL] Image generation quota: {e}')
+    print(f'[FAIL] Image generation quota: {type(e).__name__}: {str(e)[:200]}')
 "
 ```
 
-If quota is unavailable, fall back to Pillow-only generation (solid/gradient backgrounds with text overlay).
+If quota is unavailable (`429 RESOURCE_EXHAUSTED`, `limit: 0`), fall back to Pillow-only generation (solid/gradient backgrounds with text overlay, or geometric compositions without text). Print a loud banner so the operator knows the session is running on fallback, not real Gemini output — silent fallback on OG/hero work can ship before a regeneration is scheduled. See `knowledge-base/project/learnings/2026-04-21-fact-checker-file-scope-plus-eleventy-footnote-gap.md` §5.
 
 ## Default Model
 
