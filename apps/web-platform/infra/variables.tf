@@ -71,6 +71,12 @@ variable "cf_api_token_rulesets" {
   sensitive   = true
 }
 
+variable "cf_api_token_bot_management" {
+  description = "Cloudflare API token narrowed to Bot Management:Edit on soleur.ai (cloudflare_bot_management resource; see bot-management.tf)"
+  type        = string
+  sensitive   = true
+}
+
 variable "cf_zone_id" {
   description = "Cloudflare zone ID for soleur.ai"
   type        = string
