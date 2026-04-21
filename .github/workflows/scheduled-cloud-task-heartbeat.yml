@@ -89,6 +89,13 @@ jobs:
             label="${rest%%:*}"
             max_gap_days="${rest##*:}"
 
+            # Guard malformed rows (missing colons, non-numeric threshold) —
+            # skip rather than crash the whole step on a bad edit.
+            if [[ -z "$label" || "$label" == "$task" || ! "$max_gap_days" =~ ^[0-9]+$ ]]; then
+              echo "::warning::malformed TASKS row: $task_row — skipping"
+              continue
+            fi
+
             gh issue list --repo "$GH_REPO" --label "$label" --state all \
               --limit 5 --json createdAt > "$TMPFILE" 2>/dev/null || echo "[]" > "$TMPFILE"
 
