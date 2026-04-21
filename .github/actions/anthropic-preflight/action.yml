@@ -1,0 +1,55 @@
+name: 'Anthropic Preflight'
+description: 'Probe the Anthropic Messages API with a 1-token request before an expensive claude-code-action step. Sets ok=false if the monthly spend cap is exhausted; exits non-zero on unexpected failures.'
+
+inputs:
+  anthropic-api-key:
+    description: 'Anthropic API key (from secrets.ANTHROPIC_API_KEY)'
+    required: true
+
+outputs:
+  ok:
+    description: 'true if the API is usable; false if the monthly cap is exhausted. Step fails (exit 1) for unexpected errors.'
+    value: ${{ steps.check.outputs.ok }}
+
+runs:
+  using: 'composite'
+  steps:
+    - id: check
+      shell: bash
+      env:
+        ANTHROPIC_API_KEY: ${{ inputs.anthropic-api-key }}
+      run: |
+        set -uo pipefail
+        BODY_FILE="${RUNNER_TEMP}/anthropic-preflight-body.txt"
+        # CI-only mock path: exercises the cap-exhausted grep deterministically.
+        # Never set in production workflows. Consumed only by
+        # .github/workflows/test-anthropic-preflight.yml.
+        if [[ -n "${ANTHROPIC_PREFLIGHT_MOCK_RESPONSE:-}" ]]; then
+          printf '%s' "$ANTHROPIC_PREFLIGHT_MOCK_RESPONSE" > "$BODY_FILE"
+          HTTP_CODE="${ANTHROPIC_PREFLIGHT_MOCK_HTTP_CODE:-400}"
+        else
+          if [[ -z "${ANTHROPIC_API_KEY:-}" ]]; then
+            echo "::error::ANTHROPIC_API_KEY not set"
+            exit 1
+          fi
+          PAYLOAD=$(jq -nc '{model:"claude-haiku-4-5-20251001",max_tokens:1,messages:[{role:"user",content:"."}]}')
+          HTTP_CODE=$(curl -sS -o "$BODY_FILE" -w "%{http_code}" \
+            https://api.anthropic.com/v1/messages \
+            -H "x-api-key: $ANTHROPIC_API_KEY" \
+            -H "anthropic-version: 2023-06-01" \
+            -H "content-type: application/json" \
+            -d "$PAYLOAD" || echo "000")
+        fi
+        BODY=$(head -c 500 "$BODY_FILE" 2>/dev/null || echo "")
+        # Verbatim error body from Anthropic API on cap-exhausted —
+        # source: issue #2715 (2026-04-21), string "specified API usage limits"
+        if [[ "$HTTP_CODE" == "200" ]]; then
+          echo "ok=true" >> "$GITHUB_OUTPUT"
+          echo "Anthropic preflight: OK"
+        elif [[ "$HTTP_CODE" == "400" ]] && grep -q "specified API usage limits" "$BODY_FILE"; then
+          echo "ok=false" >> "$GITHUB_OUTPUT"
+          echo "::warning::Anthropic spend cap exhausted — skipping Claude steps. Body: $BODY"
+        else
+          echo "::error::Unexpected Anthropic preflight response (HTTP $HTTP_CODE). Body: $BODY"
+          exit 1
+        fi
