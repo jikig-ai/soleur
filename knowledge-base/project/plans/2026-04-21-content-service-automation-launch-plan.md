@@ -13,19 +13,20 @@ detail_level: MORE
 
 # Plan: Service-Automation Launch Content
 
-Blog post + 7-channel fan-out + day-2 Hacker News Show submission for the service-automation feature (PR #1921, feature #1050). Reframes the `/ship` CMO content-opportunity gate brief (#1944) per the 2026-04-21 brainstorm: agent-native / founder-outcome hero, architecture-decision cut demoted to HN Show, fact-check gate required.
+Blog post + 5-channel auto-publish + day-2 Hacker News Show submission for the service-automation feature (PR #1921, issue #1050). Reframes the `/ship` CMO content-opportunity gate brief (#1944) per the 2026-04-21 brainstorm: agent-native / founder-outcome hero, architecture-decision cut demoted to HN Show.
 
 ## Overview
 
-Target publish: **Thursday 2026-04-23** for blog + automated fan-out. **Friday 2026-04-24** for HN Show.
+Target publish: **Thursday 2026-04-23** for blog + 5-channel auto-fan-out. **Friday 2026-04-24** for HN Show.
 
-**Deliverables (5):**
+**Deliverables (4):**
 
 1. One Eleventy blog post markdown.
 2. One 1200×630 PNG hero / OG image.
-3. One distribution-content markdown with 5 automatable channel sections (Discord, X/Twitter Thread, Bluesky, LinkedIn Personal, LinkedIn Company Page) + 3 manual-post sections (IndieHackers, Reddit, Hacker News Show preview cross-link).
-4. One fact-checker Verification Report captured to `knowledge-base/marketing/audits/`.
-5. One HN Show submission text file.
+3. One distribution-content markdown (Discord, X/Twitter Thread, Bluesky, LinkedIn Personal, LinkedIn Company Page — the 5 channels `content-publisher.sh` actually auto-posts).
+4. One Hacker News Show submission markdown, scheduled day-2.
+
+Plus: an inbound internal link edit to one existing pillar post; an inline 10-line patch to the spec correcting pre-verification assumptions.
 
 **Primary CTA:** *"Connect your repo at app.soleur.ai and let an agent provision your first service."*
 
@@ -33,38 +34,39 @@ Target publish: **Thursday 2026-04-23** for blog + automated fan-out. **Friday 2
 
 ## Research Reconciliation — Spec vs. Codebase
 
-The spec at `knowledge-base/project/specs/feat-content-service-automation/spec.md` was drafted from the brainstorm without verifying file paths against the Eleventy config. The plan resolves four mismatches. The spec file is NOT rewritten here — the plan supersedes it for the paths listed below; implementation follows the plan.
+The spec was drafted from the brainstorm without verifying file paths against the Eleventy config and publisher script. The plan patches the spec inline (Phase 5 below) for the paths listed here; the table is retained as a record of what changed and why.
 
 | Spec claim | Codebase reality | Plan response |
 |---|---|---|
-| Blog markdown at `apps/web-platform/content/blog/<slug>.md` | Eleventy `INPUT` is `plugins/soleur/docs`; blog dir is `plugins/soleur/docs/blog/`. `blog.json` injects `layout`, `tags`, `permalink`, `ogType`. | Blog file at `plugins/soleur/docs/blog/2026-04-23-agents-that-use-apis-not-browsers.md`. Frontmatter keys: `title`, `seoTitle`, `date`, `description`, `ogImage`, `tags` (as list). Do NOT declare `layout`/`permalink`/`ogType` — inherited from `blog.json`. |
-| Hero image at `apps/web-platform/content/blog/images/...{png,webp}` | Existing convention: `plugins/soleur/docs/images/blog/og-<slug>.png`, 1200×630 PNG, checked into repo, passthrough-copied. | One PNG at `plugins/soleur/docs/images/blog/og-agents-that-use-apis-not-browsers.png`. Reference in blog frontmatter as `ogImage: "blog/og-agents-that-use-apis-not-browsers.png"`. Drop the `.webp` variant — not used by existing posts. |
-| Eleventy build via `doppler run -p soleur -c dev -- npm run build` from `apps/web-platform/` | Docs site has its own script: `npm run docs:build` (→ `npx @11ty/eleventy`) from repo root. No Doppler secrets consumed. Output: `_site/`. | Verify build via `npm run docs:build` from the worktree root. |
-| Fact-checker writes report to `knowledge-base/marketing/audits/2026-04-23-service-automation-factcheck.md` | `fact-checker` agent returns an inline `## Verification Report` markdown block — does NOT write a file. | Capture agent output manually. Write the returned report to `knowledge-base/marketing/audits/2026-04-23-service-automation-factcheck.md` as a plan task. |
-| 7 channels fan-out via `scripts/content-publisher.sh` | Publisher supports 5 channels (discord, x, linkedin-personal, linkedin-company, bluesky). `indiehackers`, `reddit`, `hackernews` are documentation-only — the publisher logs warnings and opens `action-required,content-publisher` GitHub issues for manual posting. | Distribution-content file declares all 7 in `channels:` frontmatter. Publisher auto-posts the 5 supported; it auto-files manual-posting issues for the 3 unsupported. Plan writes the copy for all 7; operator posts IndieHackers + Reddit manually, HN Show covered by day-2 task. |
-| `content-publisher.sh --dry-run` | No `--dry-run` flag. Publisher flips `status: scheduled → published` when `publish_date == today`. | Keep `status: draft` during review. Flip to `status: scheduled` only after all Acceptance Criteria pass. |
-| `knowledge-base/marketing/campaign-calendar.md` — hand-edited | Auto-generated by `soleur:campaign-calendar` skill from `distribution-content/*.md` frontmatter. | Do NOT hand-edit. Run `Skill: soleur:campaign-calendar` after scheduling the distribution file. |
+| Blog markdown at `apps/web-platform/content/blog/<slug>.md` | Eleventy `INPUT` is `plugins/soleur/docs`; blog dir is `plugins/soleur/docs/blog/`. `blog.json` injects `layout`, `tags`, `permalink`, `ogType`. | File at `plugins/soleur/docs/blog/2026-04-23-agents-that-use-apis-not-browsers.md`. Frontmatter: `title`, `seoTitle`, `date`, `description`, `ogImage`, `tags`. Do NOT declare `layout`/`permalink`/`ogType`. |
+| Hero image at `apps/web-platform/content/blog/images/...{png,webp}` | Convention: `plugins/soleur/docs/images/blog/og-<slug>.png`, 1200×630 PNG, checked into repo. | One PNG at `plugins/soleur/docs/images/blog/og-agents-that-use-apis-not-browsers.png`. Reference as `ogImage: "blog/og-agents-that-use-apis-not-browsers.png"`. Drop the `.webp`. |
+| Build via `doppler run -p soleur -c dev -- npm run build` from `apps/web-platform/` | Docs site script: `npm run docs:build` from repo root. No Doppler needed. Output `_site/`. | Verify build via `npm run docs:build`. |
+| Fact-checker writes report to `knowledge-base/marketing/audits/2026-04-23-service-automation-factcheck.md` | `fact-checker` agent returns an inline `## Verification Report` markdown block — does NOT write a file. | Capture the returned report verdict in the PR body; do not persist a receipt file. |
+| Publisher auto-posts 7 channels incl. IndieHackers / Reddit / Hacker News | `scripts/content-publisher.sh` supports exactly 5 channels (`discord`, `x`, `linkedin-personal`, `linkedin-company`, `bluesky`). Unknown channels are silently skipped with `Warning: Unknown channel 'X' ... Skipping` — they do NOT auto-file manual-posting issues. | Launch file declares only the 5 supported channels. HN Show lives in a separate day-2 file; IndieHackers + Reddit are deferred (tracked in a follow-up issue). |
+| `content-publisher.sh --dry-run` | No `--dry-run` flag. Publisher flips `status: scheduled → published` on `publish_date == today`. | Keep `status: draft` during review. Flip to `scheduled` only when all ACs pass. |
+| ADR-002 not yet on main | **Present on `origin/main`** (`knowledge-base/engineering/architecture/decisions/ADR-002-three-tier-service-automation.md`). | Linking the ADR from the HN Show post is allowed and recommended — it substantiates the architecture-decision angle. Blog post may optionally link the ADR as a "how this was built" pull-quote. |
+| `knowledge-base/marketing/campaign-calendar.md` hand-edited | Auto-generated by `soleur:campaign-calendar` from `distribution-content/*.md`. | Run `Skill: soleur:campaign-calendar` post-scheduling. Do not hand-edit. |
 
 ## Research Insights
 
 **Pipeline interfaces verified (2026-04-21):**
 
-- **Blog frontmatter (required):** `title`, `date`, `description`, `ogImage`. Optional: `seoTitle`, `tags`. Banned (inherited from `blog.json`): `layout`, `permalink`, `ogType`.
-- **Distribution-content frontmatter (required):** `title`, `type` (use `milestone-announcement`), `publish_date` (quoted), `channels` (comma-separated), `status`, `pr_reference: 1921`, `issue_reference: 1944`. Optional: `roadmap_item`, `blog_url`.
-- **Channel heading strings (exact match):** `## Discord`, `## X/Twitter Thread`, `## Bluesky`, `## LinkedIn Personal`, `## LinkedIn Company Page`. Case and punctuation are load-bearing (`extract_section` returns empty on mismatch).
+- **Blog frontmatter (required):** `title`, `date`, `description`, `ogImage`. Optional: `seoTitle`, `tags`. Banned: `layout`, `permalink`, `ogType`.
+- **Distribution-content frontmatter precedent** (`2026-04-17-repo-connection-launch.md`): `title`, `type`, `publish_date` (quoted), `channels` (comma-separated string), `status`, `pr_reference: "#NNNN"` (quoted with `#`), `issue_reference: "#NNNN"` (quoted with `#`), `blog_url: /blog/<slug>/` (relative path).
+- **Channel heading strings (exact match — load-bearing for `extract_section`):** `## Discord`, `## X/Twitter Thread`, `## Bluesky`, `## LinkedIn Personal`, `## LinkedIn Company Page`. Trailing whitespace tolerated; leading whitespace or casing is not.
 - **X thread parser:** splits on `**Tweet N` markers. Each tweet ≤ 280 chars.
 - **UTM pattern:** `https://soleur.ai/blog/<slug>/?utm_source=<channel>&utm_medium=<medium>&utm_campaign=<slug>`.
-- **OG image format:** 1200×630, PNG (force via `img.save(..., format="PNG")` per `gemini-imagegen` SKILL warning — default output is JPEG).
-- **Fact-checker agent invocation:** Task tool, `subagent_type: fact-checker`, receives draft markdown, returns inline `## Verification Report`.
-- **Build verify:** `npm run docs:build` from worktree root. Check `_site/blog/agents-that-use-apis-not-browsers/index.html` exists and the OG image renders.
+- **OG image:** 1200×630, PNG (force via `img.save(..., format="PNG")` — `gemini-imagegen` defaults to JPEG).
+- **Fact-checker:** Task subagent; returns inline `## Verification Report`; no file output.
+- **Build verify:** `npm run docs:build` from worktree root. Check `_site/blog/agents-that-use-apis-not-browsers/index.html` exists with valid OG meta tag.
+- **Publisher script line map:** channel-to-section at `scripts/content-publisher.sh:164-174`; unknown-channel skip at `:756-760`; API-failure action-required issue creation at `:157, 361, 384, 400, 502, 593`.
 
 **Institutional learnings applied:**
 
-- `2026-03-06-blog-citation-verification-before-publish.md` — first blog had 6 confabulations. Fact-check gate is mandatory.
-- `2026-02-21-marketing-audit-brand-violation-cascade.md` + `2026-03-23-content-audit.md` — grep banned terms `plugin`, `ai-powered`, `synthetic labor`, `soloentrepreneur`, `\bjust\b`, `\bsimply\b` before publish.
-- `2026-03-05-eleventy-blog-post-frontmatter-pattern.md` — NEVER add `layout` or `ogType` to post frontmatter.
-- `2026-03-19-content-pipeline-channel-extension-pattern.md` — follow existing section heading schema; do not invent new headings.
-- `2026-04-21-concurrent-cleanup-merged-wipes-active-worktree.md` (this session) — branch is already pushed (PR #2747 open); further commits are safe.
+- `2026-03-06-blog-citation-verification-before-publish.md` — first blog had 6 confabulations → fact-check gate is mandatory.
+- `2026-02-21-marketing-audit-brand-violation-cascade.md` + `2026-03-23-content-audit.md` → grep banned terms `plugin`, `ai-powered`, `synthetic labor`, `soloentrepreneur`, `\bjust\b`, `\bsimply\b` (exception: bare `plugin` is allowed inside fenced code blocks citing a real file path).
+- `2026-03-05-eleventy-blog-post-frontmatter-pattern.md` — never declare `layout`/`ogType`/`permalink` in post frontmatter.
+- `2026-04-21-concurrent-cleanup-merged-wipes-active-worktree.md` (this session) — branch is already pushed (PR #2747); further commits are safe.
 
 ## Domain Review
 
@@ -72,101 +74,97 @@ The spec at `knowledge-base/project/specs/feat-content-service-automation/spec.m
 
 ### Marketing (CMO)
 
-**Status:** reviewed (carry-forward from brainstorm)
-**Assessment:** Angle reframed to agent-native / founder-outcome (*"Your agents just stopped pretending to be humans"*). 7-channel fan-out justified by low baseline traffic (10-28 weekly visitors). 5 specific claims softened: tier-split percentages, SSRF scope, 2-4× cost framing, "server never touches tokens" (false), ADR-002 not-yet-on-main. Primary CTA drives to `app.soleur.ai`. Day-2 HN Show carries the demoted architecture-decision cut.
+**Status:** reviewed (brainstorm carry-forward)
+**Assessment:** Angle reframed to agent-native / founder-outcome. 5-channel auto-fan-out + day-2 HN Show. 5 claims softened: tier-split ("target allocation"), SSRF ("removes server-side browser attack surface"), 2-4× cost ("CFO flagged risk"), server-token framing ("encrypted at rest, used by your agents"), ADR reference gated on presence on main (now confirmed — linking allowed).
 
 ### Product/UX Gate
 
-**Tier:** NONE — new content in an existing surface (blog). No new components/, app/page.tsx, or app/layout.tsx files. Content authoring falls under Marketing's Phase 0.5 review, already complete.
+**Tier:** NONE. No new components/, app/page.tsx, or app/layout.tsx files. Content authoring in an existing surface; Marketing's Phase 0.5 review covers the reader journey.
 
-### Brainstorm-recommended specialists
-
-- `soleur:copywriter` — covered by Phase 1 and Phase 2 of this plan.
-- `soleur:marketing:fact-checker` — covered by Phase 5.
-- `soleur:gemini-imagegen` — covered by Phase 3.
-- `soleur:social-distribute` — publishing automation handled by `scripts/content-publisher.sh` invocation post-merge (Phase 9).
-- `scripts/content-publisher.sh` — covered by Phase 9.
-
-**Agents invoked (at plan time):** `repo-research-analyst` (Eleventy + publisher interface verification), `learnings-researcher` (prior blog pitfalls), `cmo` (angle assessment — brainstorm carry-forward).
-**Skipped specialists:** `spec-flow-analyzer` — content authoring has no branching flow logic to analyze; CMO's audience/channel/CTA review already covered reader journey.
+**Agents invoked (at plan time):** `repo-research-analyst` (pipeline interface verification), `learnings-researcher` (prior blog pitfalls), `cmo` (brainstorm carry-forward). Plan-review: `dhh-rails-reviewer`, `kieran-rails-reviewer`, `code-simplicity-reviewer`.
+**Skipped specialists:** `spec-flow-analyzer` — content authoring has no branching flow logic; CMO covered reader journey.
 
 ## Files to Create
 
-1. `plugins/soleur/docs/blog/2026-04-23-agents-that-use-apis-not-browsers.md`
-2. `plugins/soleur/docs/images/blog/og-agents-that-use-apis-not-browsers.png` (1200×630 PNG)
-3. `knowledge-base/marketing/distribution-content/2026-04-23-agents-that-use-apis-not-browsers.md`
-4. `knowledge-base/marketing/audits/2026-04-23-service-automation-factcheck.md` (captured fact-checker report)
-5. `knowledge-base/marketing/distribution-content/2026-04-24-service-automation-hn-show.md` (HN Show submission text, scheduled day-2)
+1. `plugins/soleur/docs/blog/2026-04-23-agents-that-use-apis-not-browsers.md` — blog post.
+2. `plugins/soleur/docs/images/blog/og-agents-that-use-apis-not-browsers.png` — 1200×630 PNG.
+3. `knowledge-base/marketing/distribution-content/2026-04-23-agents-that-use-apis-not-browsers.md` — launch distribution (5 channels).
+4. `knowledge-base/marketing/distribution-content/2026-04-24-service-automation-hn-show.md` — HN Show submission text, scheduled day-2.
 
 ## Files to Edit
 
-None. `campaign-calendar.md` is auto-generated; `README.md` component counts unchanged; no code changes.
+1. One existing pillar post (`plugins/soleur/docs/blog/06-why-most-agentic-tools-plateau.md` OR `2026-04-17-repo-connection-launch.md`) — add one inbound link to the new post. Copywriter picks the better fit during Phase 1.
+2. `knowledge-base/project/specs/feat-content-service-automation/spec.md` — inline patch correcting the five pre-verification path assumptions (see Phase 5).
 
 ## Open Code-Review Overlap
 
-None. `gh issue list --label code-review --state open` returned 27 issues; grepping each body for `plugins/soleur/docs/blog`, `docs/blog`, `distribution-content`, `content-publisher`, `blog.json`, `campaign-calendar`, `gemini-imagegen`, `fact-checker` returned zero matches. Scope is clean.
+None. `gh issue list --label code-review --state open` returned 27 issues; grepping each body for `plugins/soleur/docs/blog`, `distribution-content`, `content-publisher`, `blog.json`, `campaign-calendar`, `gemini-imagegen`, `fact-checker` returned zero matches.
+
+## Deferred (tracking issue required)
+
+- **IndieHackers manual post** — publisher silently skips; operator would need a manual-post cadence the project doesn't yet have. File a follow-up issue milestoned `Post-MVP / Later` with re-evaluation criterion: "revisit when the project adds a manual-post queue or expands `content-publisher.sh` to file action-required issues for unknown channels."
+- **Reddit manual post** — same situation; same follow-up issue (or adjacent).
 
 ## Implementation Phases
 
-### Phase 1 — Blog post draft (copywriter)
+### Phase 1 — Draft + fact-check loop
 
-Invoke `soleur:copywriter` with:
+Invoke `soleur:copywriter` once with both targets in scope: the blog post AND the distribution-content launch file. Produces draft of both, then:
 
-- Hero framing: *"Your agents just stopped pretending to be humans."*
-- Title: *"Agents That Use APIs, Not Browsers (2026)"* — year per SEO learning.
-- Required frontmatter: `title`, `seoTitle`, `date: 2026-04-23`, `description` (≤ 155 chars, include "service automation" and "open source"), `ogImage: "blog/og-agents-that-use-apis-not-browsers.png"`, `tags: [announcement, service-automation, agent-native, company-as-a-service]`.
-- Word count: ~1,500-2,500 (scale to match CMO-referenced pillar post `06-why-most-agentic-tools-plateau.md`).
-- Primary keyword "service automation" 8-12 occurrences; one-sentence AI-extractable definition near first use.
-- "Open source" in H1 or first paragraph.
-- Lateral link to at least one of: `06-why-most-agentic-tools-plateau.md`, `2026-04-17-repo-connection-launch.md`, `2026-03-24-vibe-coding-vs-agentic-engineering.md`.
-- CTA: `<a href="https://app.soleur.ai/?utm_source=blog&utm_medium=cta&utm_campaign=agents-that-use-apis-not-browsers">Connect your repo</a>` — one bold CTA block mid-post + one at the end.
-- Soften: tier-split ("target allocation, not measured"); SSRF ("removes server-side browser attack surface" — not "eliminates SSRF"); 2-4× cost ("our CFO flagged 2-4× infra-cost risk"); server-token framing ("your tokens, encrypted at rest, used by your agents"). Do NOT link ADR-002 (not on main).
-- Hard-data allowed: 3 live automations (Cloudflare MCP, Stripe MCP, Plausible API), 2 guided playbooks (Hetzner, Resend), 14 BYOK providers, AES-256-GCM + per-user HKDF-SHA256, PR #1921 (1,685 LOC / 15 files / 30 new tests / 674 total tests).
+1. Run the grep + markdownlint + build gate (Phase 2 below) on the drafts.
+2. Invoke Task `fact-checker` (`subagent_type: fact-checker`) with both drafts as context. Capture the `## Verification Report` block; attach it to the PR body (not a separate file).
+3. If any `FAIL` or `UNSOURCED` verdicts: re-invoke `copywriter` with the report; soften or cite; re-run gate + fact-checker. Loop until `PASS`.
 
-Write output to `plugins/soleur/docs/blog/2026-04-23-agents-that-use-apis-not-browsers.md`.
+**Blog post requirements:**
 
-### Phase 2 — Distribution-content draft (copywriter)
+- Frontmatter keys: `title`, `seoTitle`, `date: 2026-04-23`, `description` (≤ 155 chars, must include "service automation" and "open source"), `ogImage: "blog/og-agents-that-use-apis-not-browsers.png"`, `tags: [announcement, service-automation, agent-native, company-as-a-service]`. Do NOT declare `layout`, `permalink`, `ogType`.
+- Word count ~1,500-2,500. Primary keyword "service automation" 8-12 occurrences. One-sentence AI-extractable definition of *service automation* near first mention. "Open source" in H1 or first paragraph.
+- Outbound lateral link to `06-why-most-agentic-tools-plateau.md` (or `2026-04-17-repo-connection-launch.md` if the narrative fits better).
+- Optional "How this was built" aside linking `knowledge-base/engineering/architecture/decisions/ADR-002-three-tier-service-automation.md`.
+- Primary CTA: a single bold CTA block mid-post and one at the end — `<a href="https://app.soleur.ai/?utm_source=blog&utm_medium=cta&utm_campaign=agents-that-use-apis-not-browsers">Connect your repo</a>`.
+- Softened claims: tier-split is "target allocation, not measured"; "removes the server-side browser attack surface" (not "eliminates SSRF"); "our CFO flagged 2-4× infra-cost risk" (not "costs 2-4× more"); "your tokens, encrypted at rest, used by your agents" (not "server never touches tokens").
+- Hard-data allowed: 3 live automations (Cloudflare MCP, Stripe MCP, Plausible API); 2 guided playbooks (Hetzner, Resend); 14 BYOK providers; AES-256-GCM + per-user HKDF-SHA256; PR #1921 (1,685 LOC / 15 files / 30 new tests / 674 total tests).
+- Include a Plausible footnote: "`/api/v1/sites` requires the Sites API tier — check your plan."
+- Add one inbound link from the chosen pillar post back to the new post (same commit).
 
-Invoke `soleur:copywriter` with the blog draft as context. Produce file at `knowledge-base/marketing/distribution-content/2026-04-23-agents-that-use-apis-not-browsers.md` with:
+**Distribution-content launch file requirements:**
 
-Frontmatter (exact keys):
+Path: `knowledge-base/marketing/distribution-content/2026-04-23-agents-that-use-apis-not-browsers.md`.
+
+Frontmatter (format matched to `2026-04-17-repo-connection-launch.md` precedent):
 
 ```yaml
 ---
 title: "Agents That Use APIs, Not Browsers"
 type: milestone-announcement
 publish_date: "2026-04-23"
-channels: discord, x, bluesky, linkedin-personal, linkedin-company, indiehackers, reddit, hackernews
+channels: discord, x, bluesky, linkedin-personal, linkedin-company
 status: draft
-pr_reference: 1921
-issue_reference: 1944
+pr_reference: "#1921"
+issue_reference: "#1944"
 roadmap_item: "Phase 3: Make it Sticky"
-blog_url: "https://soleur.ai/blog/agents-that-use-apis-not-browsers/"
+blog_url: /blog/agents-that-use-apis-not-browsers/
 ---
 ```
 
 Sections (exact headings):
 
-- `## Discord` — 3-4 line post with blog link + CTA. UTM: `utm_source=discord&utm_medium=community&utm_campaign=agents-that-use-apis-not-browsers`.
-- `## X/Twitter Thread` — 5-7 tweets, each prefixed `**Tweet 1**`, `**Tweet 2**`, etc. Final tweet has blog link with `utm_source=x&utm_medium=social&utm_campaign=...`. ≤ 280 chars per tweet (verify with `wc -m` per line).
-- `## Bluesky` — ≤ 300 chars, blog link with `utm_source=bluesky&utm_medium=social&utm_campaign=...`.
-- `## LinkedIn Personal` — 150-250 word first-person builder narrative, blog link with `utm_source=linkedin&utm_medium=personal&utm_campaign=...`.
-- `## LinkedIn Company Page` — 100-180 word third-person company voice, blog link with `utm_source=linkedin&utm_medium=company&utm_campaign=...`.
-- `## IndieHackers` — 200-400 word manual post; title + body; blog link with `utm_source=indiehackers&utm_medium=community&utm_campaign=...`. (Publisher will open an `action-required` issue for manual post.)
-- `## Reddit` — 150-300 word post body, title suggestion (one line above body); blog link with `utm_source=reddit&utm_medium=community&utm_campaign=...`.
-- `## Hacker News` — 1-line cross-reference: "Show HN submission scheduled for 2026-04-24 — see `2026-04-24-service-automation-hn-show.md`." (Placeholder so the publisher's manual-posting issue points to the day-2 file.)
+- `## Discord` — 3-4 line post; UTM `utm_source=discord&utm_medium=community&utm_campaign=agents-that-use-apis-not-browsers`.
+- `## X/Twitter Thread` — 5-7 tweets, each prefixed `**Tweet 1**`, `**Tweet 2**`, …; final tweet carries the blog link with `utm_source=x&utm_medium=social&...`; every tweet ≤ 280 chars.
+- `## Bluesky` — ≤ 300 chars, UTM `utm_source=bluesky&utm_medium=social&...`.
+- `## LinkedIn Personal` — 150-250 words, first-person builder narrative, UTM `utm_source=linkedin&utm_medium=personal&...`.
+- `## LinkedIn Company Page` — 100-180 words, company voice, UTM `utm_source=linkedin&utm_medium=company&...`.
 
-### Phase 3 — Hero / OG image
+### Phase 2 — Hero / OG image
 
-Invoke `soleur:gemini-imagegen` with:
+Invoke `soleur:gemini-imagegen`:
 
-- Aspect ratio: `16:9` → crop/resize to 1200×630 via Python `PIL.Image.resize((1200, 630))` or generate at 1792×1008 and crop centered.
-- Format: PNG (pass `img.save(..., format="PNG")` — default is JPEG).
-- Prompt (draft): "A stylized digital illustration. Left: a geometric AI agent glyph (not a cartoon character) connected by glowing lines to right-side API endpoint icons (database, cloud, key). No browser window, no cursor, no person. Dark navy background, accent color `#6366f1` (Soleur indigo). Minimal, editorial, evokes system-level action rather than user-interface automation. No text."
+- Prompt: "Stylized digital illustration. Left: a geometric AI agent glyph (no face, no cartoon character) connected by glowing lines to right-side API endpoint icons (database, cloud, key). No browser window, no cursor, no person. Dark navy background, accent color `#6366f1` (Soleur indigo). Minimal, editorial. No text."
+- Aspect ratio `16:9` → resize/crop to 1200×630 with PIL: `img.thumbnail((1200, 630)); img.save("...", format="PNG")`.
 - Output: `plugins/soleur/docs/images/blog/og-agents-that-use-apis-not-browsers.png`.
-- Verify: `file og-agents-that-use-apis-not-browsers.png` reports `PNG image data, 1200 x 630`.
+- Verify: `file <path>` reports `PNG image data, 1200 x 630`.
 
-### Phase 4 — Lint + build verification
+### Phase 3 — Lint + build verification
 
 From the worktree root:
 
@@ -180,133 +178,80 @@ npx markdownlint-cli2 --fix \
 npm run docs:build
 ```
 
-Expected: banned-terms grep returns zero lines; markdownlint reports `0 error(s)`; Eleventy build succeeds; `_site/blog/agents-that-use-apis-not-browsers/index.html` exists; OG image present at `_site/images/blog/og-agents-that-use-apis-not-browsers.png`.
+Exception: bare `plugin` is acceptable inside fenced code blocks citing a verified file path (e.g., `` `plugins/soleur/agents/operations/service-automator.md` ``). Phase 3 reviewer checks each match manually.
 
-*Exception:* the word "plugin" is acceptable only inside fenced code blocks citing an exact plugin filename (e.g., `plugins/soleur/agents/operations/service-automator.md`). All prose mentions must say "platform" or "Soleur". Justify each in-code-block occurrence before proceeding.
-
-### Phase 5 — Fact-checker gate
-
-Invoke Task `fact-checker` with both draft markdown files as context. Capture the returned `## Verification Report` block to `knowledge-base/marketing/audits/2026-04-23-service-automation-factcheck.md` with a wrapping frontmatter:
-
-```yaml
----
-audit: service-automation-launch-factcheck
-date: 2026-04-21
-drafts:
-  - plugins/soleur/docs/blog/2026-04-23-agents-that-use-apis-not-browsers.md
-  - knowledge-base/marketing/distribution-content/2026-04-23-agents-that-use-apis-not-browsers.md
-verdict: PASS | FAIL
----
-```
-
-Block on any `FAIL` verdict. `UNSOURCED` claims → ask copywriter to either cite or soften before re-running fact-checker.
-
-### Phase 6 — HN Show submission text
+### Phase 4 — HN Show submission text
 
 Create `knowledge-base/marketing/distribution-content/2026-04-24-service-automation-hn-show.md`:
 
 ```yaml
 ---
-title: "Show HN: Soleur — an open-source agent orchestrator for solo founders (service automation)"
+title: "Show HN: Soleur — open-source agent orchestrator for solo founders (service automation)"
 type: hn-show
 publish_date: "2026-04-24"
-channels: hackernews
+channels:
 status: draft
-pr_reference: 1921
-issue_reference: 1944
-blog_url: "https://soleur.ai/blog/agents-that-use-apis-not-browsers/?utm_source=hn&utm_medium=community&utm_campaign=agents-that-use-apis-not-browsers"
+pr_reference: "#1921"
+issue_reference: "#1944"
+blog_url: /blog/agents-that-use-apis-not-browsers/
 ---
 ```
 
-Body: 2-paragraph intro leaning on the architecture-decision angle (the cut demoted from the blog hero). Angle: "We rejected server-side browser automation for a 3-tier API/local-Playwright/guided architecture. Here's what broke and what we chose." Title ≤ 80 chars. Include a "What this is NOT" paragraph to pre-empt HN pedantry about the 80/15/5 split (call it aspirational / design allocation).
+`channels:` is empty — the publisher correctly skips this file on 2026-04-24 (no supported channels). The file exists as the operator's manual-post source.
 
-Submitter will paste the body into HN manually on 2026-04-24. The publisher will generate a manual-post issue for this file on that date.
+Body: 2-paragraph intro leaning on the architecture-decision angle. Link ADR-002. Title ≤ 80 chars. Include a "What this is NOT" paragraph pre-empting HN pedantry on the 80/15/5 split (explicitly label it aspirational / design allocation). Include the blog link with `utm_source=hn&utm_medium=community&utm_campaign=agents-that-use-apis-not-browsers`.
 
-### Phase 7 — Apply fact-checker feedback
+### Phase 5 — Spec patch + ship
 
-If the fact-checker report has `FAIL` or `UNSOURCED` entries, invoke `soleur:copywriter` again with the report as context. Re-lint (Phase 4), re-run fact-checker (Phase 5). Loop until PASS.
+1. Apply a 10-line inline patch to `knowledge-base/project/specs/feat-content-service-automation/spec.md` correcting: blog directory, OG path format, Eleventy build command, fact-checker output path, channel count (5 auto, 1 day-2 HN). One commit: `docs(spec): correct paths after research reconciliation`.
+2. Commit deliverables as separate commits:
+   - `docs(blog): add service-automation launch post + inbound link from pillar`
+   - `docs(marketing): add service-automation distribution-content + HN Show cut`
+3. Push; mark PR #2747 ready-for-review. PR body: `Closes #1944`, references `#1050 #1921`, contains the fact-checker `## Verification Report` verbatim. Semver label: `patch`.
 
-### Phase 8 — Commit + ready PR
+### Phase 6 — Schedule publish (post-merge, operator)
 
-Commit each deliverable as a separate commit (use `/soleur:ship` for label selection):
+After PR #2747 merges:
 
-1. `docs(blog): add service-automation launch post`
-2. `docs(marketing): add service-automation distribution-content + HN Show cut`
-3. `docs(audits): capture 2026-04-23 service-automation fact-check report`
-
-Push; mark PR #2747 ready-for-review. PR body must include `Closes #1944` and reference `#1050 #1921`. Semver label: `patch` (docs-only, no code change).
-
-### Phase 9 — Schedule publish (post-merge, operator)
-
-After PR #2747 merges to main:
-
-1. In a fresh worktree on main, flip distribution-content frontmatter `status: draft` → `status: scheduled` on both files; commit; push directly to main (docs-only, low-risk — or via a tiny follow-up PR).
-2. Trigger or wait for the `content-publisher.sh` cron (runs daily). On 2026-04-23 it publishes the launch file to Discord / X / Bluesky / LinkedIn Personal / LinkedIn Company and opens `action-required` issues for IndieHackers + Reddit + Hacker News.
-3. Operator posts IndieHackers + Reddit manually from the issues' bodies on 2026-04-23.
-4. On 2026-04-24 operator posts the HN Show submission manually.
-5. Run `Skill: soleur:campaign-calendar` to refresh the calendar view.
-6. Monitor Plausible (`https://plausible.io/soleur.ai`) and Discord reactions for 72h; capture measurable outcomes via `/soleur:compound` to `knowledge-base/marketing/analytics/`.
+1. **Follow-up PR** (not direct-to-main — branch protection is on) flipping `status: draft → scheduled` on both distribution-content files. Merge on 2026-04-22 EOD.
+2. **Record baseline:** before the 2026-04-23 publisher cron fires, snapshot Plausible's 7-day traffic to `knowledge-base/marketing/analytics/2026-04-23-pre-launch-baseline.md` so the retro has a delta.
+3. On 2026-04-23 the publisher cron auto-posts Discord / X / Bluesky / LinkedIn Personal / LinkedIn Company. The HN Show file's empty `channels:` causes it to be correctly skipped that day.
+4. **OG/Twitter card validation:** before posts go out (or immediately after), hit `https://www.opengraph.xyz/url/https://soleur.ai/blog/agents-that-use-apis-not-browsers/` to confirm the OG image renders. If it fails, delete/reupload the PNG and force a Cloudflare cache purge.
+5. On 2026-04-24 operator manually submits the HN Show from the day-2 file.
+6. Run `Skill: soleur:campaign-calendar` to refresh calendar.
+7. Monitor Plausible + Discord + X for 72h; capture measured deltas via `/soleur:compound` to `knowledge-base/marketing/analytics/`.
+8. File the IndieHackers / Reddit deferral issue (one issue covering both, milestoned `Post-MVP / Later`).
 
 ## Acceptance Criteria
 
 ### Pre-merge (PR #2747)
 
-- [ ] `plugins/soleur/docs/blog/2026-04-23-agents-that-use-apis-not-browsers.md` exists with verified frontmatter (title, seoTitle, date, description, ogImage, tags); no `layout`/`permalink`/`ogType` keys.
-- [ ] `plugins/soleur/docs/images/blog/og-agents-that-use-apis-not-browsers.png` exists, `file` reports `PNG image data, 1200 x 630`.
-- [ ] `knowledge-base/marketing/distribution-content/2026-04-23-agents-that-use-apis-not-browsers.md` exists, `status: draft`, has all 8 channel headings matching the exact strings.
-- [ ] `knowledge-base/marketing/distribution-content/2026-04-24-service-automation-hn-show.md` exists, title ≤ 80 chars.
-- [ ] `knowledge-base/marketing/audits/2026-04-23-service-automation-factcheck.md` frontmatter has `verdict: PASS`.
-- [ ] `grep -niE 'plugin|ai-powered|synthetic labor|soloentrepreneur|\bjust\b|\bsimply\b'` returns zero hits on both draft markdowns (outside fenced code blocks citing real plugin filenames).
-- [ ] `npx markdownlint-cli2 --fix` on each new markdown returns `0 error(s)`.
-- [ ] `npm run docs:build` succeeds; `_site/blog/agents-that-use-apis-not-browsers/index.html` is generated; OG image rendered in `<meta property="og:image">`.
-- [ ] Every X thread tweet ≤ 280 chars (`awk -F '**Tweet' 'NR>1 { for (i=1;i<=NF;i++) if (length(\$i) > 280) print "FAIL", i }'` returns nothing).
-- [ ] PR body includes `Closes #1944` and references `#1050 #1921`; semver label set.
-- [ ] No claim in either draft references ADR-002 by path (not on main yet).
+- [ ] All four deliverable files exist at the specified paths; spec patch applied.
+- [ ] Blog frontmatter has required keys only; `file <og-path>` reports `PNG image data, 1200 x 630`.
+- [ ] Distribution file frontmatter matches `2026-04-17-repo-connection-launch.md` format (`#`-quoted references, relative `blog_url`); channel heading count matches the 5 channels declared in `channels:`.
+- [ ] `grep -niE 'plugin|ai-powered|synthetic labor|soloentrepreneur|\bjust\b|\bsimply\b'` returns zero hits on both drafts, outside allowed code-block exceptions.
+- [ ] `npx markdownlint-cli2 --fix` returns `0 error(s)`; `npm run docs:build` succeeds; `_site/blog/agents-that-use-apis-not-browsers/index.html` exists.
+- [ ] Every X-thread tweet ≤ 280 chars (`awk '/^\*\*Tweet/{getline; if (length > 280) print NR, length}'` returns nothing).
+- [ ] PR body includes `Closes #1944`, references `#1050 #1921`, and pastes the fact-checker `## Verification Report` with `PASS` verdict. Semver label `patch` set.
 
 ### Post-merge (operator)
 
-- [ ] Flip `status: draft → scheduled` on both distribution-content files and push to main.
-- [ ] `content-publisher.sh` daily cron posts the 5 supported channels on 2026-04-23; verify via Discord, X, Bluesky, LinkedIn Personal, LinkedIn Company Page posts.
-- [ ] 3 `action-required,content-publisher` GitHub issues auto-open for IndieHackers + Reddit + Hacker News on 2026-04-23.
-- [ ] Operator posts IndieHackers + Reddit manually from the issues on 2026-04-23; closes issues.
-- [ ] On 2026-04-24 operator posts HN Show manually; closes the HN `action-required` issue.
-- [ ] Plausible shows the blog URL receiving traffic from 5+ UTM sources within 48h.
+- [ ] Follow-up PR flips `status: draft → scheduled` on both distribution-content files before 2026-04-23 cron.
+- [ ] Plausible 7-day baseline snapshot committed.
+- [ ] Publisher posts all 5 auto-channels on 2026-04-23; verify each post visually.
+- [ ] OG debugger confirms the image renders on the live blog URL.
+- [ ] Operator posts HN Show manually on 2026-04-24.
 - [ ] `Skill: soleur:campaign-calendar` refresh shows the launch under `## Published`.
-- [ ] 72h retrospective captured via `/soleur:compound` with measured outcomes.
-
-## Test Scenarios
-
-- **Smoke — Eleventy build:** `npm run docs:build` produces the blog HTML with correct OG meta tag; no broken links to the hero image. Confirm by opening `_site/blog/agents-that-use-apis-not-browsers/index.html` and inspecting `<head>`.
-- **Channel heading parse:** `awk '/^## (Discord|X\/Twitter Thread|Bluesky|LinkedIn Personal|LinkedIn Company Page|IndieHackers|Reddit|Hacker News)$/' <distribution-file>` returns 8 lines. A 7 or lower count is a heading typo that breaks `extract_section`.
-- **UTM coverage:** `rg 'utm_source=' <distribution-file>` returns at least 7 distinct `utm_source` values.
-- **Manual dry-run:** On the author's local machine, export `DRY_RUN=1` in the env and run `bash scripts/content-publisher.sh` — observe which files it picks up. (Publisher has no formal `--dry-run` — an env gate could be added as a follow-up; out of scope here.)
+- [ ] IndieHackers + Reddit deferral issue filed (milestone `Post-MVP / Later`).
+- [ ] 72h retrospective via `/soleur:compound` captures measured deltas vs baseline.
 
 ## Risks & Mitigations
 
-- **Risk:** Publisher channel-heading parser returns empty for a channel due to a typo. *Mitigation:* Acceptance Criteria includes the awk heading-count check; the 8-heading guarantee is load-bearing.
-- **Risk:** X tweet exceeds 280 chars → publisher truncates silently. *Mitigation:* `wc -m` gate in Phase 4; Acceptance Criteria enforces.
-- **Risk:** Fact-checker flags a claim we can't source. *Mitigation:* Phase 7 loop — soften or drop; re-run fact-checker. FAIL/UNSOURCED is a merge blocker.
-- **Risk:** `gemini-imagegen` default output is JPEG; posting JPEG as PNG breaks `ogImage` rendering. *Mitigation:* Phase 3 verification step runs `file` on the output to confirm PNG.
-- **Risk:** Flipping `status: draft → scheduled` on main after merge is a direct push. *Mitigation:* Small follow-up PR acceptable if main protection requires it; either path is low-risk (docs only, no code).
-- **Risk:** Day-2 HN Show submitted late or skipped. *Mitigation:* Day-2 task assigned to operator on PR close; file is in place so the manual-post issue points to the body.
-- **Risk:** "Plugin" banned-term grep fires inside code blocks citing real plugin filenames. *Mitigation:* Phase 4 exception rule — in-code-block matches are acceptable only when the match is a verified file path. Reviewer check.
-- **Risk:** Plausible tier-gating caveat (402 for non-Enterprise `Sites API`) confuses readers who copy the blog's Plausible example. *Mitigation:* Blog body includes an inline footnote/aside: "Plausible's `/api/v1/sites` endpoint requires the Sites API tier — check your plan."
-- **Risk:** Channel copy over-claims and draws corrections from technically literate readers. *Mitigation:* Every one of the 5 specific softened claims (tier split, SSRF, 2-4× cost, server-tokens, ADR-002 not-on-main) is in the fact-checker brief; copywriter drafts against the softened wording from the start.
+- **Risk:** Channel heading typo → `extract_section` returns empty for that channel; post silently missing. *Mitigation:* pre-merge AC checks heading count against declared `channels:`.
+- **Risk:** X tweet exceeds 280 chars → publisher truncates silently. *Mitigation:* pre-merge `awk` length check per tweet.
+- **Risk:** `gemini-imagegen` writes JPEG with `.png` extension → OG render fails in some clients. *Mitigation:* Phase 2 `file` check on output.
+- **Risk:** Fact-checker reveals a claim we cannot source post-soften. *Mitigation:* Phase 1 loop — soften or drop; `FAIL`/`UNSOURCED` blocks merge.
 
 ## Rollback
 
-- **If blog or distribution copy is wrong after publish:**
-  - Edit the blog markdown in a follow-up PR; Eleventy rebuilds on next deploy.
-  - Distribution posts: delete the offending Discord message via admin tools, delete the tweet, delete Bluesky, edit LinkedIn. These are human actions — no scripted rollback.
-- **If the OG image is wrong:** ship a new PNG at the same path (caches invalidate on next deploy).
-- **If fact-check misses a confabulation found post-publish:** document via `/soleur:compound` to `knowledge-base/project/learnings/` (like the 2026-03-06 incident); patch the blog, publish a correction note on Discord.
-- **If channel webhook fails for one channel:** publisher's existing retry/fallback opens an `action-required` issue; operator handles manually.
-
-## Open Questions
-
-- Should the blog post include a "How this was built" pull-quote pointing to ADR-002 once the ADR lands on main? *Deferred.* Not in this launch scope; revisit if ADR-002 merges before 2026-04-23, otherwise add a quiet follow-up PR that links the published ADR.
-- LinkedIn company post voice — is Jean (founder) comfortable with company-voice copy or does he want to review before the publisher posts? *Assume yes for now — copywriter drafts in brand voice from `brand-guide.md`; operator has 24h review window between `draft → scheduled` flip and publisher cron.*
-
-## Plan-level corrections to spec
-
-The spec file at `knowledge-base/project/specs/feat-content-service-automation/spec.md` has five inaccurate prescriptions (tabulated in Research Reconciliation). Rather than rewrite the spec mid-PR, the plan supersedes those paths — the spec remains as a historical artifact of brainstorm-time assumptions. A one-line note will be appended to the spec at ship time: *"Paths corrected — see plan file for verified targets."*
+Content rollback is a follow-up PR for the blog / spec; social posts are deleted manually from each platform's admin UI.

@@ -3,20 +3,24 @@ feature: content-service-automation
 issue: "#1944"
 status: spec-complete
 date: 2026-04-21
+last_updated: 2026-04-21
 branch: feat-content-service-automation
 brainstorm: knowledge-base/project/brainstorms/2026-04-21-content-service-automation-brainstorm.md
+plan: knowledge-base/project/plans/2026-04-21-content-service-automation-launch-plan.md
 ---
+
+> **Reconciliation note (2026-04-21):** Pre-verification path assumptions corrected after `repo-research-analyst` audit. See the plan's "Research Reconciliation" table for the authoritative list. The corrections are embedded below in the Functional/Technical Requirements.
 
 # Spec: Service Automation Launch Content
 
 ## Problem Statement
 
-The service-automation feature shipped in PR #1921 (closes #1050) — 3 live automations, 2 guided playbooks, AES-256-GCM token storage — but has no public announcement. Phase 3 milestone passed its due date (2026-04-19) and the CMO content-opportunity gate filed issue #1944 with a prescribed brief (blog + X thread, architecture-decision angle). Brainstorm re-scoped to a founder-outcome hero angle, full 7-channel fan-out, fact-checked, with a day-2 HN Show submission.
+The service-automation feature shipped in PR #1921 (closes #1050) — 3 live automations, 2 guided playbooks, AES-256-GCM token storage — but has no public announcement. Phase 3 milestone passed its due date (2026-04-19) and the CMO content-opportunity gate filed issue #1944 with a prescribed brief (blog + X thread, architecture-decision angle). Brainstorm re-scoped to a founder-outcome hero angle, 5-channel auto fan-out (the channels `content-publisher.sh` supports), fact-checked, with a day-2 HN Show submission.
 
 ## Goals
 
 - Publish a single canonical blog post on `soleur.ai/blog/` by end-of-week (target Thu 2026-04-23).
-- Fan out short-form content to 7 channels via `scripts/content-publisher.sh` on the same day.
+- Fan out short-form content to the 5 channels `scripts/content-publisher.sh` auto-posts (Discord, X/Twitter Thread, Bluesky, LinkedIn Personal, LinkedIn Company Page) on the same day.
 - Submit architecture-angle Hacker News Show post on day-2 (Fri 2026-04-24).
 - Drive a measurable CTA to `app.soleur.ai` (connect-repo surface).
 - Verify every stat, quote, and URL through `soleur:marketing:fact-checker` before publish.
@@ -33,8 +37,8 @@ The service-automation feature shipped in PR #1921 (closes #1050) — 3 live aut
 
 ## Functional Requirements
 
-- **FR1** — Produce one blog markdown at `apps/web-platform/content/blog/2026-04-23-agents-that-use-apis-not-browsers.md` (exact filename to be confirmed against Eleventy slug convention during implementation).
-  - Frontmatter: `title`, `description`, `date`, `tags` only (no `layout`, no `ogType` — inherited from `blog.json`).
+- **FR1** — Produce one blog markdown at `plugins/soleur/docs/blog/2026-04-23-agents-that-use-apis-not-browsers.md` (Eleventy `INPUT` is `plugins/soleur/docs`; `blog.json` sits in `blog/`).
+  - Frontmatter: `title`, `seoTitle`, `date`, `description`, `ogImage`, `tags`. Do NOT declare `layout`, `permalink`, `ogType` — inherited from `blog.json`.
   - Primary keyword "service automation" appears 8-12 times across ~3,000 words.
   - Includes a one-sentence, AI-extractable definition of *service automation* near first mention.
   - "Open source" appears in H1 or first paragraph.
@@ -42,14 +46,14 @@ The service-automation feature shipped in PR #1921 (closes #1050) — 3 live aut
   - Lateral link to at least one of `06-why-most-agentic-tools-plateau.md`, `2026-04-17-repo-connection-launch.md`, or `2026-03-24-vibe-coding-vs-agentic-engineering.md`.
   - Primary CTA: *"Connect your repo at app.soleur.ai and let an agent provision your first service."*
 
-- **FR2** — Produce one distribution-content file at `knowledge-base/marketing/distribution-content/2026-04-23-service-automation-launch.md`.
-  - Frontmatter matches the schema used in `2026-03-29-pwa-installability-milestone.md` (`title`, `type: milestone-announcement`, `publish_date`, `channels`, `status`, `pr_reference: 1921`, `issue_reference: 1944`, `roadmap_item`).
-  - Channel sections present: `## X/Twitter Thread`, `## Discord`, `## Bluesky`, `## LinkedIn Personal`, `## LinkedIn Company Page`, `## IndieHackers`.
-  - UTM params on the blog link per channel (`utm_source=<channel>&utm_medium=social&utm_campaign=service-automation-2026-04`).
+- **FR2** — Produce one distribution-content file at `knowledge-base/marketing/distribution-content/2026-04-23-agents-that-use-apis-not-browsers.md`.
+  - Frontmatter matches the precedent at `2026-04-17-repo-connection-launch.md`: `title`, `type: milestone-announcement`, `publish_date` (quoted), `channels` (comma-separated string), `status`, `pr_reference: "#1921"` (quoted with `#`), `issue_reference: "#1944"` (quoted with `#`), `roadmap_item`, `blog_url: /blog/agents-that-use-apis-not-browsers/` (relative path).
+  - Channel sections present: `## Discord`, `## X/Twitter Thread`, `## Bluesky`, `## LinkedIn Personal`, `## LinkedIn Company Page`. Exact heading strings — `extract_section` is whitespace-sensitive.
+  - UTM params on the blog link per channel (`utm_source=<channel>&utm_medium=<medium>&utm_campaign=agents-that-use-apis-not-browsers`).
 
-- **FR3** — Generate one hero image via `soleur:gemini-imagegen` and one OG-card variant. Save to `apps/web-platform/content/blog/images/2026-04-23-service-automation-hero.{png,webp}` and reference in the blog's `description` meta or frontmatter per Eleventy conventions.
+- **FR3** — Generate one 1200×630 PNG hero / OG image via `soleur:gemini-imagegen`. Save to `plugins/soleur/docs/images/blog/og-agents-that-use-apis-not-browsers.png` (convention matches all existing blog OG images). Reference as `ogImage: "blog/og-agents-that-use-apis-not-browsers.png"` in the blog frontmatter. Force PNG output (`img.save(..., format="PNG")`) — the imagegen default is JPEG.
 
-- **FR4** — Run `soleur:marketing:fact-checker` against both the blog markdown and the distribution-content markdown before publish. Every numeric claim, quoted source, and external URL must resolve. Blocker gate — do not publish if any claim fails.
+- **FR4** — Invoke Task `fact-checker` (`subagent_type: fact-checker`) against both the blog markdown and the distribution-content markdown before publish. The agent returns an inline `## Verification Report` — no file output. Paste the report verbatim into the PR body as the merge gate. Blocker gate on any `FAIL` verdict.
 
 - **FR5** — Prepare a Hacker News Show submission (title + 2-paragraph intro) leaning on the architecture-decision angle. Save the submission text at `knowledge-base/marketing/distribution-content/2026-04-24-service-automation-hn-show.md` with frontmatter marking it day-2.
 
@@ -59,18 +63,18 @@ The service-automation feature shipped in PR #1921 (closes #1050) — 3 live aut
 
 - **TR2** — Blog markdown passes `npx markdownlint-cli2 --fix` on the specific file path only (per rule `cq-markdownlint-fix-target-specific-paths`). Re-read after `replace_all` on any table.
 
-- **TR3** — Soften the five claim-hazards identified in the brainstorm (tier split, SSRF, 2-4× cost, "server never touches tokens", ADR-002 on main). Fact-checker confirms the softened wording.
+- **TR3** — Soften the four claim-hazards identified in the brainstorm (tier split → "target allocation"; SSRF → "removes server-side browser attack surface"; 2-4× cost → "CFO flagged risk"; server-token framing → "encrypted at rest, used by your agents"). Fact-checker confirms the softened wording. ADR-002 is on `origin/main` — linking it is allowed and preferred in the HN Show cut.
 
 - **TR4** — All lines reference `app.soleur.ai` (not local install URL) for the primary CTA; community CTAs (Discord, GitHub star) are secondary.
 
-- **TR5** — Eleventy build succeeds locally (`doppler run -p soleur -c dev -- npm run build` from `apps/web-platform/`) before PR marked ready-for-review.
+- **TR5** — Eleventy build succeeds locally via `npm run docs:build` from the worktree root before PR marked ready-for-review. Output `_site/blog/agents-that-use-apis-not-browsers/index.html` must render with a valid `<meta property="og:image">` tag.
 
 ## Acceptance Criteria
 
 - Blog markdown committed at the FR1 path, passes Eleventy build with correct BlogPosting JSON-LD (no duplicate layout/ogType).
-- Distribution-content markdown committed at the FR2 path, parseable by `scripts/content-publisher.sh --dry-run`.
+- Distribution-content markdown committed at the FR2 path (publisher has no `--dry-run`; validation via the plan's `grep` + heading-count checks instead).
 - Hero image present and referenced; OG preview renders correctly (`curl` check on deployed URL after publish).
-- Fact-checker report saved to `knowledge-base/marketing/audits/2026-04-23-service-automation-factcheck.md` with PASS verdict.
+- Fact-checker `## Verification Report` pasted into PR body with `PASS` verdict (no separate audit file — the agent returns inline output).
 - HN Show submission text committed at the FR5 path, title ≤80 chars, 2-paragraph intro.
 - PR body includes `Closes #1944` and references #1050 / #1921.
 - Banned-terms grep returns empty on all three new files.
