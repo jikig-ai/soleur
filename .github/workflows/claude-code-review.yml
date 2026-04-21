@@ -14,6 +14,8 @@ jobs:
   preflight:
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    permissions:
+      contents: read
     outputs:
       ok: ${{ steps.check.outputs.ok }}
     steps:

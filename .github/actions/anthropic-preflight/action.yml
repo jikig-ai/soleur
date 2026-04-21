@@ -19,28 +19,25 @@ runs:
       env:
         ANTHROPIC_API_KEY: ${{ inputs.anthropic-api-key }}
       run: |
+        # `-e` intentionally omitted so `grep -q` (exit 1 on no-match) and
+        # `curl || echo "000"` don't abort the step — we branch on HTTP_CODE.
         set -uo pipefail
         BODY_FILE="${RUNNER_TEMP}/anthropic-preflight-body.txt"
-        # CI-only mock path: exercises the cap-exhausted grep deterministically.
-        # Never set in production workflows. Consumed only by
-        # .github/workflows/test-anthropic-preflight.yml.
-        if [[ -n "${ANTHROPIC_PREFLIGHT_MOCK_RESPONSE:-}" ]]; then
-          printf '%s' "$ANTHROPIC_PREFLIGHT_MOCK_RESPONSE" > "$BODY_FILE"
-          HTTP_CODE="${ANTHROPIC_PREFLIGHT_MOCK_HTTP_CODE:-400}"
-        else
-          if [[ -z "${ANTHROPIC_API_KEY:-}" ]]; then
-            echo "::error::ANTHROPIC_API_KEY not set"
-            exit 1
-          fi
-          PAYLOAD=$(jq -nc '{model:"claude-haiku-4-5-20251001",max_tokens:1,messages:[{role:"user",content:"."}]}')
-          HTTP_CODE=$(curl -sS -o "$BODY_FILE" -w "%{http_code}" \
-            https://api.anthropic.com/v1/messages \
-            -H "x-api-key: $ANTHROPIC_API_KEY" \
-            -H "anthropic-version: 2023-06-01" \
-            -H "content-type: application/json" \
-            -d "$PAYLOAD" || echo "000")
+        if [[ -z "${ANTHROPIC_API_KEY:-}" ]]; then
+          echo "::error::ANTHROPIC_API_KEY not set"
+          exit 1
         fi
-        BODY=$(head -c 500 "$BODY_FILE" 2>/dev/null || echo "")
+        PAYLOAD=$(jq -nc '{model:"claude-haiku-4-5-20251001",max_tokens:1,messages:[{role:"user",content:"."}]}')
+        HTTP_CODE=$(curl -sS -o "$BODY_FILE" -w "%{http_code}" \
+          https://api.anthropic.com/v1/messages \
+          -H "x-api-key: $ANTHROPIC_API_KEY" \
+          -H "anthropic-version: 2023-06-01" \
+          -H "content-type: application/json" \
+          -d "$PAYLOAD" || echo "000")
+        # Truncate and redact any sk-* pattern as belt-and-suspenders on top
+        # of GitHub's native secret masking before echoing to the run log.
+        BODY=$(head -c 500 "$BODY_FILE" 2>/dev/null | tr -d '\r' \
+          | sed -E 's/sk-[A-Za-z0-9_-]{20,}/[REDACTED]/g' || echo "")
         # Verbatim error body from Anthropic API on cap-exhausted —
         # source: issue #2715 (2026-04-21), string "specified API usage limits"
         if [[ "$HTTP_CODE" == "200" ]]; then
@@ -49,6 +46,12 @@ runs:
         elif [[ "$HTTP_CODE" == "400" ]] && grep -q "specified API usage limits" "$BODY_FILE"; then
           echo "ok=false" >> "$GITHUB_OUTPUT"
           echo "::warning::Anthropic spend cap exhausted — skipping Claude steps. Body: $BODY"
+        elif [[ "$HTTP_CODE" =~ ^(5[0-9]{2}|000)$ ]]; then
+          # Transient: Anthropic incident, network blip, or gateway error.
+          # Soft-skip so the workflow concludes success instead of going red
+          # on routine upstream issues — re-runs next schedule tick.
+          echo "ok=false" >> "$GITHUB_OUTPUT"
+          echo "::warning::Anthropic transient error (HTTP $HTTP_CODE) — deferring Claude steps. Body: $BODY"
         else
           echo "::error::Unexpected Anthropic preflight response (HTTP $HTTP_CODE). Body: $BODY"
           exit 1
