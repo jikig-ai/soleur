@@ -10,8 +10,10 @@
 name: "Scheduled: Content Generator"
 
 on:
-  # MIGRATED TO CLOUD SCHEDULED TASK — 2026-03-25
-  # Uncomment schedule to revert to GHA execution
+  # MIGRATED TO CLOUD SCHEDULED TASK — 2026-03-25 (PR #1095).
+  # Silence detection: .github/workflows/scheduled-cloud-task-heartbeat.yml (#2714).
+  # Diagnosis/restore runbook: knowledge-base/engineering/ops/runbooks/cloud-scheduled-tasks.md
+  # Uncomment schedule to revert to GHA execution.
   # schedule:
   #   - cron: '0 10 * * 2,4'  # Tuesday + Thursday 10:00 UTC
   workflow_dispatch:
@@ -28,7 +30,23 @@ permissions:
   id-token: write
 
 jobs:
+  preflight:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      ok: ${{ steps.check.outputs.ok }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - id: check
+        uses: ./.github/actions/anthropic-preflight
+        with:
+          anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+
   content-generator:
+    needs: preflight
+    if: needs.preflight.outputs.ok == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
