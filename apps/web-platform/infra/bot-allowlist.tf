@@ -23,7 +23,6 @@
 #   - uablock         Any future User-Agent Blocking rules
 #   - hot             Hotlink Protection (defense-in-depth)
 #   - http_ratelimit                 phase: don't rate-limit AI crawlers
-#   - http_request_firewall_managed  phase: future-proof if waf=on later
 #
 # NOT in this list (intentional):
 #
@@ -37,11 +36,19 @@
 #      zone is Free) AND the phase literal is NOT in the v4.52.7 provider's
 #      `RulesetPhaseValues()` enum — adding it would fail `terraform
 #      validate`. Revisit on provider-v5 upgrade.
+#
+#   3. `http_request_firewall_managed` phase. `waf=off` today, so the
+#      Managed Ruleset is a no-op; pre-authorizing its skip would exempt
+#      UA-asserting-AI traffic from any future CF emergency rule (e.g., a
+#      Log4Shell-style zone-wide patch) the moment WAF is enabled. If a
+#      specific Managed rule empirically blocks a legit AI crawler after
+#      waf=on, re-add via `action_parameters.skip_rules = [<rule_id>]`
+#      scoped to that rule — not the whole phase.
 resource "cloudflare_ruleset" "allowlist_ai_crawlers" {
   provider    = cloudflare.rulesets
   zone_id     = var.cf_zone_id
   name        = "Allowlist documented AI crawler user-agents"
-  description = "Skip legacy security products + bot/ratelimit/managed-WAF phases for documented AI crawler UAs (GPTBot, ClaudeBot, PerplexityBot, etc.). See issue #2662 and the 2026-04-19 AEO audit."
+  description = "Skip legacy security products (bic, securityLevel, uablock, hot) and the http_ratelimit phase for documented AI crawler UAs (GPTBot, ClaudeBot, PerplexityBot, etc.). See issue #2662 and the 2026-04-19 AEO audit."
   kind        = "zone"
   phase       = "http_request_firewall_custom"
 
@@ -64,7 +71,11 @@ resource "cloudflare_ruleset" "allowlist_ai_crawlers" {
       "(lower(http.user_agent) contains \"claude-web\")",
       "(lower(http.user_agent) contains \"perplexitybot\")",
       "(lower(http.user_agent) contains \"perplexity-user\")",
-      "(lower(http.user_agent) contains \"ccbot\")",
+      # `ccbot` is short enough that a plain substring would collide with
+      # unrelated UAs (e.g., `MyCCBot`, `RogueCCBot`). Anchor on a
+      # non-alpha boundary so the canonical `CCBot/2.0` token matches
+      # while `payccbot` / `xccbot` do not.
+      "(lower(http.user_agent) matches \"(^|[^a-z])ccbot([^a-z]|$)\")",
       "(lower(http.user_agent) contains \"google-extended\")",
       "(lower(http.user_agent) contains \"googleother\")",
       "(lower(http.user_agent) contains \"applebot-extended\")",
@@ -81,7 +92,6 @@ resource "cloudflare_ruleset" "allowlist_ai_crawlers" {
     action_parameters {
       phases = [
         "http_ratelimit",
-        "http_request_firewall_managed",
       ]
 
       products = [
