@@ -1,0 +1,167 @@
+# Watchdog: detect silence in Claude Code Cloud scheduled tasks (and sibling
+# GHA-scheduled tasks) by monitoring the audit-issue labels each task produces.
+# When a task's most-recent labeled issue exceeds its threshold, opens a
+# `cloud-task-silence` issue. Auto-closes on recovery.
+#
+# Security: GH_TOKEN is the default repo token (issues: write, contents: read).
+# No untrusted user input flows into run: strings; all inputs are github.*
+# context and the hardcoded TASKS array below.
+#
+# Runbook: knowledge-base/engineering/ops/runbooks/cloud-scheduled-tasks.md
+# Tracking: #2714
+
+name: "Scheduled: Cloud Task Heartbeat"
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '30 9 * * *'  # Daily 09:30 UTC
+
+concurrency:
+  group: scheduled-cloud-task-heartbeat
+  cancel-in-progress: false
+
+permissions:
+  issues: write
+  contents: read
+
+jobs:
+  heartbeat:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Ensure labels exist
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          gh label create "cloud-task-silence" --repo "$GH_REPO" \
+            --description "Scheduled Cloud/GHA task has not fired within its threshold" \
+            --color "B60205" 2>/dev/null || true
+          gh label create "action-required" --repo "$GH_REPO" \
+            --description "Manual action needed from the CEO" \
+            --color "D93F0B" 2>/dev/null || true
+
+      - name: Check cloud-task heartbeats
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          TMPFILE=$(mktemp)
+          trap 'rm -f "$TMPFILE"' EXIT
+
+          # task_name:audit_issue_label:max_gap_days
+          # Threshold derivation: see knowledge-base/engineering/ops/runbooks/cloud-scheduled-tasks.md#threshold-derivation
+          TASKS=(
+            "content-generator:scheduled-content-generator:4"
+            "community-monitor:scheduled-community-monitor:2"
+            "growth-audit:scheduled-growth-audit:10"
+            "campaign-calendar:scheduled-campaign-calendar:10"
+            "competitive-analysis:scheduled-competitive-analysis:35"
+            "roadmap-review:scheduled-roadmap-review:35"
+            "growth-execution:scheduled-growth-execution:18"
+            "seo-aeo-audit:scheduled-seo-aeo-audit:10"
+            "daily-triage:scheduled-daily-triage:2"
+          )
+
+          for task_row in "${TASKS[@]}"; do
+            task="${task_row%%:*}"
+            rest="${task_row#*:}"
+            label="${rest%%:*}"
+            max_gap_days="${rest##*:}"
+
+            gh issue list --repo "$GH_REPO" --label "$label" --state all \
+              --limit 5 --json createdAt > "$TMPFILE" 2>/dev/null || echo "[]" > "$TMPFILE"
+
+            # Validate body is JSON before any jq -r call.
+            # See AGENTS.md cq-ci-steps-polling-json-endpoints-under (PR #2214).
+            if ! jq -e . "$TMPFILE" >/dev/null 2>&1; then
+              echo "::warning::non-JSON response for label $label"
+              continue
+            fi
+
+            last=$(jq -r '.[0].createdAt // empty' "$TMPFILE")
+
+            if [[ -z "$last" ]]; then
+              echo "::warning::no audit issues ever seen for $label — skipping"
+              continue
+            fi
+
+            days_since=$(( ( $(date +%s) - $(date -d "$last" +%s) ) / 86400 ))
+            echo "Task $task: $days_since days since last audit issue (threshold: $max_gap_days)"
+
+            if [[ "$days_since" -gt "$max_gap_days" ]]; then
+              existing=$(gh issue list --repo "$GH_REPO" --state open \
+                --label cloud-task-silence \
+                --search "$task in:title" \
+                --json number --jq '.[0].number // empty')
+
+              if [[ -n "$existing" ]]; then
+                echo "Silence issue already exists: #$existing — adding comment."
+                gh issue comment "$existing" --repo "$GH_REPO" \
+                  --body "Heartbeat ran $(date -u '+%Y-%m-%d %H:%M UTC') — still silent ($days_since days since last issue $last)."
+              else
+                echo "Opening silence issue for $task ($days_since days, threshold $max_gap_days)."
+                BODY_FILE=$(mktemp)
+                {
+                  echo "## Cloud scheduled task silence detected"
+                  echo
+                  echo "Task \`$task\` has not produced an audit issue (label: \`$label\`) in **$days_since days**. Expected cadence gap: ≤ $max_gap_days days."
+                  echo
+                  echo "Last audit issue: $last"
+                  echo
+                  echo "### Diagnosis checklist"
+                  echo "See [cloud-scheduled-tasks runbook](https://github.com/${GH_REPO}/blob/main/knowledge-base/engineering/ops/runbooks/cloud-scheduled-tasks.md)."
+                  echo
+                  echo "### Reference"
+                  echo "- Workflow: \`.github/workflows/scheduled-cloud-task-heartbeat.yml\`"
+                  echo "- Tracking: #2714"
+                } > "$BODY_FILE"
+                gh issue create --repo "$GH_REPO" \
+                  --title "ops: $task Cloud scheduled task has not fired in $days_since days (watchdog)" \
+                  --label "cloud-task-silence,action-required,priority/p2-medium,domain/engineering,type/bug" \
+                  --milestone "Post-MVP / Later" \
+                  --body-file "$BODY_FILE"
+                rm -f "$BODY_FILE"
+              fi
+            else
+              stale=$(gh issue list --repo "$GH_REPO" --state open \
+                --label cloud-task-silence \
+                --search "$task in:title" \
+                --json number --jq '.[0].number // empty')
+
+              if [[ -n "$stale" ]]; then
+                echo "Closing stale silence issue #$stale (task recovered)."
+                gh issue close "$stale" --repo "$GH_REPO" \
+                  --comment "Heartbeat ran $(date -u '+%Y-%m-%d %H:%M UTC') — task recovered ($days_since days since last issue $last, under $max_gap_days-day threshold). Auto-closing."
+              fi
+            fi
+          done
+
+      - name: Build failure email body
+        if: failure()
+        id: failmail
+        env:
+          GH_SERVER: ${{ github.server_url }}
+          GH_REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          {
+            echo "body<<HTMLBODY"
+            echo "<p><strong>Scheduled: Cloud Task Heartbeat</strong> workflow failed.</p>"
+            echo "<p>Heartbeat could not complete its audit-issue scan; investigate before relying on next run for silence detection.</p>"
+            echo "<p><a href=\"${GH_SERVER}/${GH_REPO}/actions/runs/${RUN_ID}\">View run</a></p>"
+            echo "HTMLBODY"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Email notification (failure)
+        if: failure()
+        uses: ./.github/actions/notify-ops-email
+        with:
+          subject: '[FAIL] Cloud Task Heartbeat workflow failed'
+          body: ${{ steps.failmail.outputs.body }}
+          resend-api-key: ${{ secrets.RESEND_API_KEY }}
