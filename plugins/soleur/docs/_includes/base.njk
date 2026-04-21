@@ -19,6 +19,8 @@
   <meta name="twitter:title" content="{{ title }}{% if title != site.name %} - {{ site.name }}{% endif %}">
   <meta name="twitter:description" content="{{ description }}">
   <meta name="twitter:image" content="{{ site.url }}/images/{{ ogImage | default('og-image.png') }}">
+  <meta name="twitter:image:width" content="1200">
+  <meta name="twitter:image:height" content="630">
   <meta name="twitter:image:alt" content="{{ ogImageAlt | default(site.name + ' - ' + site.tagline) }}">
   <meta name="twitter:site" content="@soleur_ai">
   <meta name="twitter:creator" content="@soleur_ai">
@@ -97,7 +99,7 @@
           },
           {
             "@type": "Offer",
-            "name": "Spark (Cloud Platform)",
+            "name": "Solo (Cloud Platform)",
             "price": "49",
             "priceCurrency": "USD",
             "description": "Managed infrastructure, web dashboard, and priority support."
