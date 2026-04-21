@@ -23,7 +23,7 @@ The Automations layer — [launched March 5, 2026](https://techcrunch.com/2026/0
 
 Cursor's annualized revenue [reportedly exceeded $2 billion in February 2026](https://techcrunch.com/2026/03/02/cursor-has-reportedly-surpassed-2b-in-annualized-revenue/), doubling in three months.
 
-**Soleur** is a [Company-as-a-Service]({{ site.url }}blog/what-is-company-as-a-service/) platform. It deploys {{ stats.agents }} agents across {{ stats.departments }} business departments — engineering, marketing, legal, finance, operations, product, sales, and support — with a compounding knowledge base that accumulates institutional memory across every session and every domain. It runs inside Claude Code, accessed from the terminal.
+**Soleur** is a [Company-as-a-Service]({{ site.url }}/company-as-a-service/) platform. It deploys {{ stats.agents }} agents across {{ stats.departments }} business departments — engineering, marketing, legal, finance, operations, product, sales, and support — with a compounding knowledge base that accumulates institutional memory across every session and every domain. It runs inside Claude Code, accessed from the terminal.
 
 ## Where They Differ
 

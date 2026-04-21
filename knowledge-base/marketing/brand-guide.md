@@ -246,7 +246,7 @@ The visual identity follows the **Solar Forge** direction: raw power being shape
 - Never use "excited to announce" or "we're thrilled." State what shipped and why it matters.
 - Example hook: "The other 70% of running a company is still manual. AI solved coding. Nothing solved the rest."
 - Example thread body: "2/ Company-as-a-Service runs every department with AI agents that share a compounding knowledge base. Marketing knows what engineering decided. Legal references the privacy policy. Context flows everywhere."
-- Example final tweet: "Full breakdown of what CaaS means and why it matters for solo founders:\n\nhttps://soleur.ai/blog/what-is-company-as-a-service/\n\n#solofounder"
+- Example final tweet: "Full breakdown of what CaaS means and why it matters for solo founders:\n\nhttps://soleur.ai/company-as-a-service/\n\n#solofounder"
 
 #### Engagement Guardrails
 
