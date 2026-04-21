@@ -122,10 +122,12 @@ of report body. Wrap every #NNNN GitHub reference in backticks so CommonMark
 does not parse it as a heading.
 
 # Output destination
-Write the report under a new entry in the "Skill Library Tier: Portable Skill
-Collections" section of knowledge-base/product/competitive-intelligence.md,
-or update the existing entry if one already exists for this repo. Do not
-create parallel files in research/.
+Write the report as a new or updated Overlap Matrix entry in the appropriate
+existing tier of knowledge-base/product/competitive-intelligence.md — usually
+Tier 3 (CaaS / Agent-Plugin Competitors) for plugin-layer or skill-library
+peers. If the audited repo does not fit any current tier, flag this in the
+report and request taxonomy guidance from the CI team — do not invent a new
+tier in this sub-mode. Do not create parallel files under research/.
 ```
 
 ### Output-size guard
@@ -196,9 +198,10 @@ When porting concrete SKILL.md text, the Soleur target file MUST include:
 
 ## Output routing
 
-- Write the report **as a new entry** in the `## Skill Library Tier: Portable Skill Collections` section of `knowledge-base/product/competitive-intelligence.md` (append before any trailing `### Tier Analysis` subsection, so the tier analysis always summarizes the full entry set).
-- If an entry for the same repo already exists, **update it in place** — do not duplicate.
-- Update the file's frontmatter: `last_updated: <today>`, `last_reviewed: <today>`. If `tiers_scanned` is a frontmatter list, append `"skill-library"` if not present.
+- Write the report **as a new or updated Overlap Matrix entry** in the appropriate existing tier of `knowledge-base/product/competitive-intelligence.md`. Usually **Tier 3** (CaaS / Agent-Plugin Competitors) for plugin-layer or skill-library peers. Use Tier 0 only for platform-native peers (model/IDE-level).
+- If an entry for the same repo already exists in any tier, **update it in place** — do not duplicate.
+- If the audited repo does not fit any existing tier, **flag this in the report** and request taxonomy guidance from the CI team. Do not invent new tiers in this sub-mode — tier taxonomy is a CI-team decision, not a per-audit one.
+- Update the file's frontmatter: `last_updated: <today>`, `last_reviewed: <today>`.
 - Do NOT write a parallel file under `knowledge-base/product/research/peer-plugin-audits/`. Single destination prevents stale copies.
 
 ## Non-audit outcome
