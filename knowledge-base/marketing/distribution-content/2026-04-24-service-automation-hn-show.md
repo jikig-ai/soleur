@@ -6,7 +6,7 @@ channels:
 status: draft
 pr_reference: "#1921"
 issue_reference: "#1944"
-blog_url: /blog/agents-that-use-apis-not-browsers/
+blog_url: "/blog/agents-that-use-apis-not-browsers/"
 ---
 
 ## Hacker News Show

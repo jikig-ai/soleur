@@ -31,7 +31,7 @@ The popular answer in the agent industry is browser automation: run Playwright o
 
 We rejected it. Four reasons, in the order they hurt:
 
-1. **Attack surface.** Running a headless browser on your server that logs into external dashboards on behalf of your users removes nothing from the threat model — it adds to it. A server-side browser that follows redirects, loads arbitrary pages, and accepts scripted input is the canonical shape of a server-side-request-forgery primitive. Going API-first removes the server-side browser attack surface entirely.
+1. **Attack surface.** Running a headless browser on your server that logs into external dashboards on behalf of your users removes nothing from the threat model — it adds to it. A server-side browser that follows redirects, loads arbitrary pages, and accepts scripted input is the canonical shape of a server-side-request-forgery primitive. Going API-first removes the server-side browser attack surface.
 2. **Cost.** Our CFO flagged 2–4× infra-cost risk if we relied on browser automation. Headless browsers are RAM-hungry, they need long-lived sessions, and they fail in ways that require retries. A single REST call costs fractions of a cent. A browser session costs meaningful money.
 3. **Drift.** Vendor dashboards change layout every few months. Vendor APIs change on deprecation schedules. If your automation tier is built on CSS selectors, every marketing redesign breaks your agent. If it is built on documented endpoints, you get years of stability.
 4. **Trust.** When a founder hands an agent a credential, they want to know where it lives and what it does. "Our server never opens a browser to your dashboard" is a promise we can keep. "Our scraper won't do anything weird" is not.
@@ -52,7 +52,7 @@ The launch cut is honest about where we are. Three live API automations, two gui
 
 - **Cloudflare MCP** — DNS records, zone settings, page rules. Agents can configure a domain end-to-end.
 - **Stripe MCP** — customers, subscriptions, refunds, webhook endpoints. Your finance agent moves money with your token, not a stolen session.
-- **Plausible API** — create sites, read traffic, pull goal conversions. [^1]
+- **Plausible API** — create sites, read traffic, pull goal conversions. *(Note: `/api/v1/sites` requires an Enterprise plan with a Sites API key — check your plan before wiring it up.)*
 
 **Guided playbooks (Tier 3):**
 
@@ -127,5 +127,3 @@ If there is a vendor you want your AI team to handle, file it as an issue on the
 <a href="https://app.soleur.ai/?utm_source=blog&utm_medium=cta&utm_campaign=agents-that-use-apis-not-browsers">Connect your repo</a> at app.soleur.ai and let an agent provision your first service.
 
 </div>
-
-[^1]: Plausible's `/api/v1/sites` endpoint requires an Enterprise plan with a Sites API key — check your plan before wiring it up.

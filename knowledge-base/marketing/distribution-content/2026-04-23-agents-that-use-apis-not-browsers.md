@@ -7,7 +7,7 @@ status: draft
 pr_reference: "#1921"
 issue_reference: "#1944"
 roadmap_item: "Phase 3: Make it Sticky"
-blog_url: /blog/agents-that-use-apis-not-browsers/
+blog_url: "/blog/agents-that-use-apis-not-browsers/"
 ---
 
 ## Discord
@@ -75,13 +75,14 @@ One sentence to your ops agent:
 DNS record, Plausible site, goal config, verification checklist — all auditable, all committed to your repo.
 
 **Tweet 7**
-PR #1921: 1,685 LOC. 15 files. 30 new tests. 674 passing.
+PR #1921: 1,685 LOC. 15 files. 20+ new tests. Green suite.
 
 Open source. Your credentials. Your repo.
 
 <https://soleur.ai/blog/agents-that-use-apis-not-browsers/?utm_source=x&utm_medium=social&utm_campaign=agents-that-use-apis-not-browsers>
 
-# solofounder
+<!-- markdownlint-disable-next-line MD018 -->
+#solofounder
 
 ---
 
@@ -107,7 +108,8 @@ The founder's experience is a single sentence to an agent: "Spin up launch.soleu
 
 Full writeup on the architecture decision: <https://soleur.ai/blog/agents-that-use-apis-not-browsers/?utm_source=linkedin-personal&utm_medium=social&utm_campaign=agents-that-use-apis-not-browsers>
 
-# solofounder #buildinpublic
+<!-- markdownlint-disable-next-line MD018 -->
+#solofounder #buildinpublic
 
 ---
 
@@ -125,6 +127,6 @@ Live today:
 
 Target allocation across tiers — roughly 80% direct API, 15% local browser on the founder's own machine, 5% guided — is a design allocation that will be measured and reported as coverage grows.
 
-This is the third major capability in Phase 3 of the Soleur roadmap. Open source, on main, today.
+Part of the Phase 3 "Make it Sticky" roadmap milestone. Open source, on main, today.
 
 Full details: <https://soleur.ai/blog/agents-that-use-apis-not-browsers/?utm_source=linkedin-company&utm_medium=social&utm_campaign=agents-that-use-apis-not-browsers>
