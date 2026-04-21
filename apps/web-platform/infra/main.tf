@@ -57,3 +57,15 @@ provider "cloudflare" {
   alias     = "rulesets"
   api_token = var.cf_api_token_rulesets
 }
+
+# Separate provider for Bot Management APIs. Cloudflare's "Block AI bots"
+# feature (which blocks GPTBot/ClaudeBot/CCBot/etc. at the zone edge)
+# operates outside the standard WAF phase pipeline — a
+# `cloudflare_ruleset` `skip` action in http_request_firewall_custom or
+# http_request_firewall_managed does NOT bypass it. The feature is
+# controlled by the `ai_bots_protection` field on the bot_management
+# endpoint. See cloudflare_bot_management.soleur_ai and #2662.
+provider "cloudflare" {
+  alias     = "bot_management"
+  api_token = var.cf_api_token_bot_management
+}
