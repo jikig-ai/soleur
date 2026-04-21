@@ -10,12 +10,8 @@
 name: "Scheduled: Content Generator"
 
 on:
-  # MIGRATED TO CLOUD SCHEDULED TASK — 2026-03-25 (PR #1095).
-  # Silence detection: .github/workflows/scheduled-cloud-task-heartbeat.yml (#2714).
-  # Diagnosis/restore runbook: knowledge-base/engineering/ops/runbooks/cloud-scheduled-tasks.md
-  # Uncomment schedule to revert to GHA execution.
-  # schedule:
-  #   - cron: '0 10 * * 2,4'  # Tuesday + Thursday 10:00 UTC
+  schedule:
+    - cron: '0 10 * * 2,4'  # Tuesday + Thursday 10:00 UTC
   workflow_dispatch:
 
 concurrency:
