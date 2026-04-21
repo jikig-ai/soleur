@@ -1,5 +1,5 @@
 agent-design
-agent-designag
+agent-designhcloud
 agent-loop-calibration
 agent-workflow, mcp-integration
 architecture

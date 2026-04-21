@@ -79,6 +79,14 @@ rg -n '<id>' .claude/hooks/ tests/ scripts/ knowledge-base/project/rule-metrics.
 
 All hits remain valid because the `[id: ...]` tag is still present in AGENTS.md as part of the pointer. Hook incident emitters in `.claude/hooks/lib/incidents.sh` that use these IDs as telemetry strings continue to work unchanged.
 
+## Session Errors
+
+1. **`LEFTHOOK=0` bypass on initial commit** — Recovery: subsequent commits ran lefthook normally; all gates green. Prevention: rule `cq-never-skip-hooks` is clear — the reflexive `LEFTHOOK=0` should be dropped unless lefthook has demonstrably hung (>60s per `cq-when-lefthook-hangs-in-a-worktree-60s`) on this specific task in this session. Direct `lefthook run pre-commit` completed in 12.6s, so the skip was unwarranted.
+
+2. **Threshold rule exceeded 600-byte cap on first edit pass (ironic failure mode)** — Recovery: shortened the `**Why:**` annotation twice (once after initial write, again during review-fix after adding the sentinel anchor). Prevention: after editing any AGENTS.md rule, immediately run `grep '^- ' AGENTS.md | awk '{print length}' | sort -n | tail -1` — don't defer the length check to post-migration verification. Consider a lefthook step or pre-commit check that fails if any rule line exceeds 600 bytes (currently only warned at compound time).
+
+3. **Plan's aggregate byte-savings target contradicted its own per-rule math** — Recovery: relaxed spec FR4 mid-implementation with strikethrough + replacement; documented the mismatch in this learning's §"800 bytes saved estimate was wrong". Prevention: plan review (code-simplicity-reviewer + architecture-strategist) did not surface this inconsistency because both reviewers focused on architectural soundness, not numeric self-consistency. Add an explicit `/soleur:plan-review` step: "If the plan prescribes aggregate numeric targets (byte savings, count reductions, perf deltas), verify the per-item contributions sum to the aggregate before approving." This is a candidate skill-instruction edit to `plugins/soleur/skills/plan-review/SKILL.md`.
+
 ## See also
 
 - `cq-rule-ids-are-immutable` (AGENTS.md) — the immutability contract
