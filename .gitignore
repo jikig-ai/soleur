@@ -59,3 +59,6 @@ tmp/
 !knowledge-base/settings/team-icons/*.svg
 !knowledge-base/settings/team-icons/*.webp
 apps/web-platform/supabase/.temp/
+
+# Ephemeral capture scripts (sdk-probe)
+apps/web-platform/scripts/capture-*

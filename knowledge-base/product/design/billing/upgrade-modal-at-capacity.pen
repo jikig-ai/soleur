@@ -1,0 +1,1383 @@
+{
+  "version": "2.9",
+  "children": [
+    {
+      "type": "frame",
+      "id": "2SEwv",
+      "x": 0,
+      "y": 0,
+      "name": "01 At-Capacity Modal (Solo Plan)",
+      "clip": true,
+      "width": 1440,
+      "height": 900,
+      "fill": "#0A0A0A",
+      "layout": "none",
+      "children": [
+        {
+          "type": "frame",
+          "id": "bBps2",
+          "x": 0,
+          "y": 0,
+          "name": "Topbar backdrop",
+          "opacity": 0.4,
+          "width": 1440,
+          "height": 64,
+          "fill": "#141414",
+          "padding": [
+            0,
+            32
+          ],
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "text",
+              "id": "555Cj",
+              "fill": "#C9A962",
+              "content": "S O L E U R",
+              "fontFamily": "Inter",
+              "fontSize": 16,
+              "fontWeight": "500",
+              "letterSpacing": 4
+            },
+            {
+              "type": "frame",
+              "id": "8p0R8",
+              "name": "spacer1",
+              "opacity": 0,
+              "width": "fill_container",
+              "height": 1,
+              "fill": "#0A0A0A"
+            },
+            {
+              "type": "text",
+              "id": "ccorr",
+              "fill": "#848484",
+              "content": "Solo Plan",
+              "fontFamily": "Inter",
+              "fontSize": 12,
+              "fontWeight": "600",
+              "letterSpacing": 3
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "WFHPL",
+          "x": 0,
+          "y": 64,
+          "name": "Sidebar backdrop",
+          "opacity": 0.4,
+          "width": 240,
+          "height": 836,
+          "fill": "#141414",
+          "layout": "vertical",
+          "gap": 16,
+          "padding": 24,
+          "children": [
+            {
+              "type": "text",
+              "id": "b1jz2",
+              "fill": "#C9A962",
+              "content": "AGENTS",
+              "fontFamily": "Inter",
+              "fontSize": 12,
+              "fontWeight": "600",
+              "letterSpacing": 3
+            },
+            {
+              "type": "text",
+              "id": "dJPyp",
+              "fill": "#FFFFFF",
+              "content": "Dashboard",
+              "fontFamily": "Inter",
+              "fontSize": 14,
+              "fontWeight": "normal"
+            },
+            {
+              "type": "text",
+              "id": "kT2DS",
+              "fill": "#848484",
+              "content": "Runs",
+              "fontFamily": "Inter",
+              "fontSize": 14,
+              "fontWeight": "normal"
+            },
+            {
+              "type": "text",
+              "id": "fS5Br",
+              "fill": "#848484",
+              "content": "Billing",
+              "fontFamily": "Inter",
+              "fontSize": 14,
+              "fontWeight": "normal"
+            },
+            {
+              "type": "text",
+              "id": "r3DFW",
+              "fill": "#848484",
+              "content": "Settings",
+              "fontFamily": "Inter",
+              "fontSize": 14,
+              "fontWeight": "normal"
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "CdOrx",
+          "x": 240,
+          "y": 64,
+          "name": "Main content backdrop",
+          "opacity": 0.4,
+          "width": 1200,
+          "height": 836,
+          "fill": "#0A0A0A",
+          "layout": "vertical",
+          "gap": 24,
+          "padding": [
+            48,
+            64
+          ],
+          "children": [
+            {
+              "type": "text",
+              "id": "cacM8",
+              "fill": "#FFFFFF",
+              "content": "Dashboard",
+              "fontFamily": "Cormorant Garamond",
+              "fontSize": 32,
+              "fontWeight": "500"
+            },
+            {
+              "type": "text",
+              "id": "5jkog",
+              "fill": "#848484",
+              "content": "2 of 2 agents running",
+              "fontFamily": "Inter",
+              "fontSize": 13,
+              "fontWeight": "normal"
+            },
+            {
+              "type": "frame",
+              "id": "KS2xb",
+              "name": "Agent cards (dimmed)",
+              "width": 1072,
+              "height": 180,
+              "fill": "#0A0A0A",
+              "gap": 16,
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "ju5oN",
+                  "name": "card1",
+                  "width": 344,
+                  "height": 180,
+                  "fill": "#141414",
+                  "stroke": {
+                    "thickness": 1,
+                    "fill": "#2A2A2A"
+                  },
+                  "layout": "vertical",
+                  "gap": 12,
+                  "padding": 24,
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "6ra1N",
+                      "fill": "#FFFFFF",
+                      "content": "Agent 01",
+                      "fontFamily": "Inter",
+                      "fontSize": 14,
+                      "fontWeight": "600"
+                    },
+                    {
+                      "type": "text",
+                      "id": "7rHrU",
+                      "fill": "#848484",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "Running · refactor auth flow",
+                      "fontFamily": "Inter",
+                      "fontSize": 12,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "aAQtv",
+                  "name": "card2",
+                  "width": 344,
+                  "height": 180,
+                  "fill": "#141414",
+                  "stroke": {
+                    "thickness": 1,
+                    "fill": "#2A2A2A"
+                  },
+                  "layout": "vertical",
+                  "gap": 12,
+                  "padding": 24,
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "z6YjZ",
+                      "fill": "#FFFFFF",
+                      "content": "Agent 02",
+                      "fontFamily": "Inter",
+                      "fontSize": 14,
+                      "fontWeight": "600"
+                    },
+                    {
+                      "type": "text",
+                      "id": "KaLF5",
+                      "fill": "#848484",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "Running · write changelog",
+                      "fontFamily": "Inter",
+                      "fontSize": 12,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "iiTRN",
+                  "name": "card3",
+                  "width": 344,
+                  "height": 180,
+                  "fill": "#141414",
+                  "stroke": {
+                    "thickness": 1,
+                    "fill": "#2A2A2A"
+                  },
+                  "layout": "vertical",
+                  "gap": 12,
+                  "padding": 24,
+                  "justifyContent": "center",
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "zKcDF",
+                      "fill": "#C9A962",
+                      "content": "+  New Agent",
+                      "fontFamily": "Inter",
+                      "fontSize": 13,
+                      "fontWeight": "600",
+                      "letterSpacing": 2
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "7NTbb",
+          "x": 0,
+          "y": 0,
+          "name": "Scrim",
+          "width": 1440,
+          "height": 900,
+          "fill": "#00000099",
+          "layout": "none"
+        },
+        {
+          "type": "frame",
+          "id": "UukVg",
+          "x": 480,
+          "y": 180,
+          "name": "Upgrade Modal",
+          "width": 480,
+          "height": 540,
+          "fill": "#141414",
+          "stroke": {
+            "thickness": 1,
+            "fill": "#2A2A2A"
+          },
+          "effect": {
+            "type": "shadow",
+            "shadowType": "outer",
+            "color": "#00000066",
+            "offset": {
+              "x": 0,
+              "y": 24
+            },
+            "blur": 64
+          },
+          "layout": "vertical",
+          "padding": [
+            40,
+            40,
+            32,
+            40
+          ],
+          "children": [
+            {
+              "type": "frame",
+              "id": "jTS44",
+              "name": "Modal header row",
+              "width": "fill_container",
+              "height": 24,
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "jFvm4",
+                  "fill": "#C9A962",
+                  "content": "CAPACITY REACHED",
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "600",
+                  "letterSpacing": 3
+                },
+                {
+                  "type": "frame",
+                  "id": "JuEpg",
+                  "name": "headerSpacer",
+                  "opacity": 0,
+                  "width": "fill_container",
+                  "height": 1
+                },
+                {
+                  "type": "frame",
+                  "id": "oW6EY",
+                  "name": "Close",
+                  "width": 24,
+                  "height": 24,
+                  "justifyContent": "center",
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "icon_font",
+                      "id": "STWYX",
+                      "width": 18,
+                      "height": 18,
+                      "iconFontName": "x",
+                      "iconFontFamily": "lucide",
+                      "fill": "#848484"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "MtufE",
+              "name": "Title block",
+              "width": "fill_container",
+              "layout": "vertical",
+              "gap": 12,
+              "padding": [
+                28,
+                0,
+                0,
+                0
+              ],
+              "children": [
+                {
+                  "type": "text",
+                  "id": "qZZwh",
+                  "fill": "#FFFFFF",
+                  "textGrowth": "fixed-width",
+                  "width": "fill_container",
+                  "content": "You're using all 2 of your Solo plan's agent slots",
+                  "lineHeight": 1.25,
+                  "fontFamily": "Cormorant Garamond",
+                  "fontSize": 26,
+                  "fontWeight": "500"
+                },
+                {
+                  "type": "text",
+                  "id": "aZQRi",
+                  "fill": "#848484",
+                  "textGrowth": "fixed-width",
+                  "width": "fill_container",
+                  "content": "Free up a slot by stopping a running agent, or upgrade to run more at the same time.",
+                  "lineHeight": 1.5,
+                  "fontFamily": "Inter",
+                  "fontSize": 14,
+                  "fontWeight": "normal"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "P5ZTC",
+              "name": "Usage card",
+              "width": "fill_container",
+              "fill": "#0A0A0A",
+              "stroke": {
+                "thickness": 1,
+                "fill": "#2A2A2A"
+              },
+              "layout": "vertical",
+              "gap": 12,
+              "padding": 20,
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "qcgvy",
+                  "name": "usageRow",
+                  "width": "fill_container",
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "Qltci",
+                      "fill": "#848484",
+                      "content": "Agent slots in use",
+                      "fontFamily": "Inter",
+                      "fontSize": 13,
+                      "fontWeight": "normal"
+                    },
+                    {
+                      "type": "frame",
+                      "id": "uzMlA",
+                      "name": "usageSpacer",
+                      "opacity": 0,
+                      "width": "fill_container",
+                      "height": 1
+                    },
+                    {
+                      "type": "text",
+                      "id": "iyLV0",
+                      "fill": "#FFFFFF",
+                      "content": "2 / 2",
+                      "fontFamily": "JetBrains Mono",
+                      "fontSize": 14,
+                      "fontWeight": "600"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "gbdnq",
+                  "name": "Progress track",
+                  "width": "fill_container",
+                  "height": 4,
+                  "fill": "#2A2A2A",
+                  "children": [
+                    {
+                      "type": "rectangle",
+                      "id": "hKp4V",
+                      "fill": "#C9A962",
+                      "width": "fill_container",
+                      "height": 4
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "WLEIK",
+              "name": "Upgrade CTA block",
+              "width": "fill_container",
+              "layout": "vertical",
+              "gap": 8,
+              "padding": [
+                24,
+                0,
+                0,
+                0
+              ],
+              "children": [
+                {
+                  "type": "text",
+                  "id": "q9xZh",
+                  "fill": "#FFFFFF",
+                  "textGrowth": "fixed-width",
+                  "width": "fill_container",
+                  "content": "Upgrade to Startup — 5 concurrent agents · $49 / mo",
+                  "fontFamily": "Inter",
+                  "fontSize": 13,
+                  "fontWeight": "normal"
+                },
+                {
+                  "type": "frame",
+                  "id": "PB28H",
+                  "name": "Primary CTA",
+                  "width": "fill_container",
+                  "height": 48,
+                  "fill": {
+                    "type": "gradient",
+                    "gradientType": "linear",
+                    "enabled": true,
+                    "rotation": 90,
+                    "size": {
+                      "height": 1
+                    },
+                    "colors": [
+                      {
+                        "color": "#D4B36A",
+                        "position": 0
+                      },
+                      {
+                        "color": "#B8923E",
+                        "position": 1
+                      }
+                    ]
+                  },
+                  "gap": 8,
+                  "justifyContent": "center",
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "oGZ7Z",
+                      "fill": "#0A0A0A",
+                      "content": "UPGRADE TO STARTUP",
+                      "fontFamily": "Inter",
+                      "fontSize": 13,
+                      "fontWeight": "600",
+                      "letterSpacing": 3
+                    },
+                    {
+                      "type": "icon_font",
+                      "id": "TBTk7",
+                      "width": 16,
+                      "height": 16,
+                      "iconFontName": "arrow-right",
+                      "iconFontFamily": "lucide",
+                      "fill": "#0A0A0A"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "lN4dm",
+              "name": "Secondary row",
+              "width": "fill_container",
+              "gap": 8,
+              "padding": [
+                16,
+                0,
+                0,
+                0
+              ],
+              "justifyContent": "center",
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "1xp94",
+                  "fill": "#C9A962",
+                  "content": "Manage running agents",
+                  "fontFamily": "Inter",
+                  "fontSize": 13,
+                  "fontWeight": "600"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "FFYVS",
+      "x": 1540,
+      "y": 0,
+      "name": "02 Isolated Modal Component",
+      "clip": true,
+      "width": 640,
+      "height": 900,
+      "fill": "#0A0A0A",
+      "layout": "none",
+      "children": [
+        {
+          "type": "frame",
+          "id": "VZWwm",
+          "x": 80,
+          "y": 180,
+          "name": "isoModal",
+          "width": 480,
+          "height": 540,
+          "fill": "#141414",
+          "stroke": {
+            "thickness": 1,
+            "fill": "#2A2A2A"
+          },
+          "effect": {
+            "type": "shadow",
+            "shadowType": "outer",
+            "color": "#00000066",
+            "offset": {
+              "x": 0,
+              "y": 24
+            },
+            "blur": 64
+          },
+          "layout": "vertical",
+          "padding": [
+            40,
+            40,
+            32,
+            40
+          ],
+          "children": [
+            {
+              "type": "frame",
+              "id": "613Nc",
+              "name": "Modal header row",
+              "width": "fill_container",
+              "height": 24,
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "cvxBB",
+                  "fill": "#C9A962",
+                  "content": "CAPACITY REACHED",
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "600",
+                  "letterSpacing": 3
+                },
+                {
+                  "type": "frame",
+                  "id": "yEraQ",
+                  "name": "headerSpacer",
+                  "opacity": 0,
+                  "width": "fill_container",
+                  "height": 1
+                },
+                {
+                  "type": "frame",
+                  "id": "OPra3",
+                  "name": "Close",
+                  "width": 24,
+                  "height": 24,
+                  "justifyContent": "center",
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "icon_font",
+                      "id": "NxLft",
+                      "width": 18,
+                      "height": 18,
+                      "iconFontName": "x",
+                      "iconFontFamily": "lucide",
+                      "fill": "#848484"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "6HgVk",
+              "name": "Title block",
+              "width": "fill_container",
+              "layout": "vertical",
+              "gap": 12,
+              "padding": [
+                28,
+                0,
+                0,
+                0
+              ],
+              "children": [
+                {
+                  "type": "text",
+                  "id": "U7UzD",
+                  "fill": "#FFFFFF",
+                  "textGrowth": "fixed-width",
+                  "width": "fill_container",
+                  "content": "You're using all 2 of your Solo plan's agent slots",
+                  "lineHeight": 1.25,
+                  "fontFamily": "Cormorant Garamond",
+                  "fontSize": 26,
+                  "fontWeight": "500"
+                },
+                {
+                  "type": "text",
+                  "id": "eYzsa",
+                  "fill": "#848484",
+                  "textGrowth": "fixed-width",
+                  "width": "fill_container",
+                  "content": "Free up a slot by stopping a running agent, or upgrade to run more at the same time.",
+                  "lineHeight": 1.5,
+                  "fontFamily": "Inter",
+                  "fontSize": 14,
+                  "fontWeight": "normal"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "5NXy5",
+              "name": "Usage card",
+              "width": "fill_container",
+              "fill": "#0A0A0A",
+              "stroke": {
+                "thickness": 1,
+                "fill": "#2A2A2A"
+              },
+              "layout": "vertical",
+              "gap": 12,
+              "padding": 20,
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "FcgbS",
+                  "name": "usageRow",
+                  "width": "fill_container",
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "A5TtS",
+                      "fill": "#848484",
+                      "content": "Agent slots in use",
+                      "fontFamily": "Inter",
+                      "fontSize": 13,
+                      "fontWeight": "normal"
+                    },
+                    {
+                      "type": "frame",
+                      "id": "nYxWw",
+                      "name": "usageSpacer",
+                      "opacity": 0,
+                      "width": "fill_container",
+                      "height": 1
+                    },
+                    {
+                      "type": "text",
+                      "id": "6oPeu",
+                      "fill": "#FFFFFF",
+                      "content": "2 / 2",
+                      "fontFamily": "JetBrains Mono",
+                      "fontSize": 14,
+                      "fontWeight": "600"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "qfpYM",
+                  "name": "Progress track",
+                  "width": "fill_container",
+                  "height": 4,
+                  "fill": "#2A2A2A",
+                  "children": [
+                    {
+                      "type": "rectangle",
+                      "id": "KNA16",
+                      "fill": "#C9A962",
+                      "width": "fill_container",
+                      "height": 4
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "ndGTn",
+              "name": "Upgrade CTA block",
+              "width": "fill_container",
+              "layout": "vertical",
+              "gap": 8,
+              "padding": [
+                24,
+                0,
+                0,
+                0
+              ],
+              "children": [
+                {
+                  "type": "text",
+                  "id": "nXxDY",
+                  "fill": "#FFFFFF",
+                  "textGrowth": "fixed-width",
+                  "width": "fill_container",
+                  "content": "Upgrade to Startup — 5 concurrent agents · $49 / mo",
+                  "fontFamily": "Inter",
+                  "fontSize": 13,
+                  "fontWeight": "normal"
+                },
+                {
+                  "type": "frame",
+                  "id": "W5YlH",
+                  "name": "Primary CTA",
+                  "width": "fill_container",
+                  "height": 48,
+                  "fill": {
+                    "type": "gradient",
+                    "gradientType": "linear",
+                    "enabled": true,
+                    "rotation": 90,
+                    "size": {
+                      "height": 1
+                    },
+                    "colors": [
+                      {
+                        "color": "#D4B36A",
+                        "position": 0
+                      },
+                      {
+                        "color": "#B8923E",
+                        "position": 1
+                      }
+                    ]
+                  },
+                  "gap": 8,
+                  "justifyContent": "center",
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "hsRjq",
+                      "fill": "#0A0A0A",
+                      "content": "UPGRADE TO STARTUP",
+                      "fontFamily": "Inter",
+                      "fontSize": 13,
+                      "fontWeight": "600",
+                      "letterSpacing": 3
+                    },
+                    {
+                      "type": "icon_font",
+                      "id": "Rmxvh",
+                      "width": 16,
+                      "height": 16,
+                      "iconFontName": "arrow-right",
+                      "iconFontFamily": "lucide",
+                      "fill": "#0A0A0A"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "ndAaF",
+              "name": "Secondary row",
+              "width": "fill_container",
+              "gap": 8,
+              "padding": [
+                16,
+                0,
+                0,
+                0
+              ],
+              "justifyContent": "center",
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "hehqy",
+                  "fill": "#C9A962",
+                  "content": "Manage running agents",
+                  "fontFamily": "Inter",
+                  "fontSize": 13,
+                  "fontWeight": "600"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "JnNg1",
+          "x": 80,
+          "y": 60,
+          "name": "isoLabel",
+          "width": 480,
+          "height": 60,
+          "fill": "#0A0A0A",
+          "layout": "vertical",
+          "gap": 6,
+          "children": [
+            {
+              "type": "text",
+              "id": "6ApTN",
+              "fill": "#C9A962",
+              "content": "UPGRADE MODAL — ISOLATED COMPONENT",
+              "fontFamily": "Inter",
+              "fontSize": 11,
+              "fontWeight": "600",
+              "letterSpacing": 3
+            },
+            {
+              "type": "text",
+              "id": "88Vio",
+              "fill": "#848484",
+              "content": "480 × 540 · centered, modal scrim #000000 60%",
+              "fontFamily": "Inter",
+              "fontSize": 12,
+              "fontWeight": "normal"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "anmJk",
+      "x": 2280,
+      "y": 0,
+      "name": "03 At-Capacity Modal (Startup Plan)",
+      "clip": true,
+      "width": 1440,
+      "height": 900,
+      "fill": "#0A0A0A",
+      "layout": "none",
+      "children": [
+        {
+          "type": "frame",
+          "id": "ii8Fw",
+          "x": 0,
+          "y": 0,
+          "name": "topbar3",
+          "opacity": 0.4,
+          "width": 1440,
+          "height": 64,
+          "fill": "#141414",
+          "padding": [
+            0,
+            32
+          ],
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "text",
+              "id": "WGDJD",
+              "fill": "#C9A962",
+              "content": "S O L E U R",
+              "fontFamily": "Inter",
+              "fontSize": 16,
+              "fontWeight": "500",
+              "letterSpacing": 4
+            },
+            {
+              "type": "frame",
+              "id": "Rdozj",
+              "name": "sp3a",
+              "opacity": 0,
+              "width": "fill_container",
+              "height": 1
+            },
+            {
+              "type": "text",
+              "id": "1u4uu",
+              "fill": "#848484",
+              "content": "Startup Plan",
+              "fontFamily": "Inter",
+              "fontSize": 12,
+              "fontWeight": "600",
+              "letterSpacing": 3
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "4GlPp",
+          "x": 0,
+          "y": 64,
+          "name": "sidebar3",
+          "opacity": 0.4,
+          "width": 240,
+          "height": 836,
+          "fill": "#141414",
+          "layout": "vertical",
+          "gap": 16,
+          "padding": 24,
+          "children": [
+            {
+              "type": "text",
+              "id": "yekPP",
+              "fill": "#C9A962",
+              "content": "AGENTS",
+              "fontFamily": "Inter",
+              "fontSize": 12,
+              "fontWeight": "600",
+              "letterSpacing": 3
+            },
+            {
+              "type": "text",
+              "id": "zRcFS",
+              "fill": "#FFFFFF",
+              "content": "Dashboard",
+              "fontFamily": "Inter",
+              "fontSize": 14,
+              "fontWeight": "normal"
+            },
+            {
+              "type": "text",
+              "id": "tYxuq",
+              "fill": "#848484",
+              "content": "Runs",
+              "fontFamily": "Inter",
+              "fontSize": 14,
+              "fontWeight": "normal"
+            },
+            {
+              "type": "text",
+              "id": "TYFSV",
+              "fill": "#848484",
+              "content": "Billing",
+              "fontFamily": "Inter",
+              "fontSize": 14,
+              "fontWeight": "normal"
+            },
+            {
+              "type": "text",
+              "id": "mM807",
+              "fill": "#848484",
+              "content": "Settings",
+              "fontFamily": "Inter",
+              "fontSize": 14,
+              "fontWeight": "normal"
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "pDUUG",
+          "x": 240,
+          "y": 64,
+          "name": "main3",
+          "opacity": 0.4,
+          "width": 1200,
+          "height": 836,
+          "fill": "#0A0A0A",
+          "layout": "vertical",
+          "gap": 24,
+          "padding": [
+            48,
+            64
+          ],
+          "children": [
+            {
+              "type": "text",
+              "id": "jodSw",
+              "fill": "#FFFFFF",
+              "content": "Dashboard",
+              "fontFamily": "Cormorant Garamond",
+              "fontSize": 32,
+              "fontWeight": "500"
+            },
+            {
+              "type": "text",
+              "id": "S4VtN",
+              "fill": "#848484",
+              "content": "5 of 5 agents running",
+              "fontFamily": "Inter",
+              "fontSize": 13,
+              "fontWeight": "normal"
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "8YUH3",
+          "x": 0,
+          "y": 0,
+          "name": "scrim3",
+          "width": 1440,
+          "height": 900,
+          "fill": "#00000099",
+          "layout": "none"
+        },
+        {
+          "type": "frame",
+          "id": "tiFBO",
+          "x": 480,
+          "y": 180,
+          "name": "Upgrade Modal (Startup)",
+          "width": 480,
+          "height": 540,
+          "fill": "#141414",
+          "stroke": {
+            "thickness": 1,
+            "fill": "#2A2A2A"
+          },
+          "effect": {
+            "type": "shadow",
+            "shadowType": "outer",
+            "color": "#00000066",
+            "offset": {
+              "x": 0,
+              "y": 24
+            },
+            "blur": 64
+          },
+          "layout": "vertical",
+          "padding": [
+            40,
+            40,
+            32,
+            40
+          ],
+          "children": [
+            {
+              "type": "frame",
+              "id": "2Cua9",
+              "name": "mh3",
+              "width": "fill_container",
+              "height": 24,
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "Newlp",
+                  "fill": "#C9A962",
+                  "content": "CAPACITY REACHED",
+                  "fontFamily": "Inter",
+                  "fontSize": 12,
+                  "fontWeight": "600",
+                  "letterSpacing": 3
+                },
+                {
+                  "type": "frame",
+                  "id": "320Ba",
+                  "name": "mhs3",
+                  "opacity": 0,
+                  "width": "fill_container",
+                  "height": 1
+                },
+                {
+                  "type": "frame",
+                  "id": "BppxZ",
+                  "name": "cb3",
+                  "width": 24,
+                  "height": 24,
+                  "justifyContent": "center",
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "icon_font",
+                      "id": "lyx8m",
+                      "width": 18,
+                      "height": 18,
+                      "iconFontName": "x",
+                      "iconFontFamily": "lucide",
+                      "fill": "#848484"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "zT7nO",
+              "name": "tb3",
+              "width": "fill_container",
+              "layout": "vertical",
+              "gap": 12,
+              "padding": [
+                28,
+                0,
+                0,
+                0
+              ],
+              "children": [
+                {
+                  "type": "text",
+                  "id": "87hWS",
+                  "fill": "#FFFFFF",
+                  "textGrowth": "fixed-width",
+                  "width": "fill_container",
+                  "content": "You're using all 5 of your Startup plan's agent slots",
+                  "lineHeight": 1.25,
+                  "fontFamily": "Cormorant Garamond",
+                  "fontSize": 26,
+                  "fontWeight": "500"
+                },
+                {
+                  "type": "text",
+                  "id": "hlPR6",
+                  "fill": "#848484",
+                  "textGrowth": "fixed-width",
+                  "width": "fill_container",
+                  "content": "Free up a slot by stopping a running agent, or upgrade to Scale for unlimited concurrent agents.",
+                  "lineHeight": 1.5,
+                  "fontFamily": "Inter",
+                  "fontSize": 14,
+                  "fontWeight": "normal"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "lUAbp",
+              "name": "uc3",
+              "width": "fill_container",
+              "fill": "#0A0A0A",
+              "stroke": {
+                "thickness": 1,
+                "fill": "#2A2A2A"
+              },
+              "layout": "vertical",
+              "gap": 12,
+              "padding": 20,
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "BwK1N",
+                  "name": "ur3",
+                  "width": "fill_container",
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "SziRy",
+                      "fill": "#848484",
+                      "content": "Agent slots in use",
+                      "fontFamily": "Inter",
+                      "fontSize": 13,
+                      "fontWeight": "normal"
+                    },
+                    {
+                      "type": "frame",
+                      "id": "iKaZM",
+                      "name": "urs3",
+                      "opacity": 0,
+                      "width": "fill_container",
+                      "height": 1
+                    },
+                    {
+                      "type": "text",
+                      "id": "ywUDI",
+                      "fill": "#FFFFFF",
+                      "content": "5 / 5",
+                      "fontFamily": "JetBrains Mono",
+                      "fontSize": 14,
+                      "fontWeight": "600"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "9mg0B",
+                  "name": "pt3",
+                  "width": "fill_container",
+                  "height": 4,
+                  "fill": "#2A2A2A",
+                  "children": [
+                    {
+                      "type": "rectangle",
+                      "id": "gxftM",
+                      "fill": "#C9A962",
+                      "width": "fill_container",
+                      "height": 4
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "L5dD6",
+              "name": "ub3",
+              "width": "fill_container",
+              "layout": "vertical",
+              "gap": 8,
+              "padding": [
+                24,
+                0,
+                0,
+                0
+              ],
+              "children": [
+                {
+                  "type": "text",
+                  "id": "X7BDZ",
+                  "fill": "#FFFFFF",
+                  "textGrowth": "fixed-width",
+                  "width": "fill_container",
+                  "content": "Upgrade to Scale — unlimited concurrent agents · $199 / mo",
+                  "fontFamily": "Inter",
+                  "fontSize": 13,
+                  "fontWeight": "normal"
+                },
+                {
+                  "type": "frame",
+                  "id": "wBGTU",
+                  "name": "cta3",
+                  "width": "fill_container",
+                  "height": 48,
+                  "fill": {
+                    "type": "gradient",
+                    "gradientType": "linear",
+                    "enabled": true,
+                    "rotation": 90,
+                    "size": {
+                      "height": 1
+                    },
+                    "colors": [
+                      {
+                        "color": "#D4B36A",
+                        "position": 0
+                      },
+                      {
+                        "color": "#B8923E",
+                        "position": 1
+                      }
+                    ]
+                  },
+                  "gap": 8,
+                  "justifyContent": "center",
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "ehGsC",
+                      "fill": "#0A0A0A",
+                      "content": "UPGRADE TO SCALE",
+                      "fontFamily": "Inter",
+                      "fontSize": 13,
+                      "fontWeight": "600",
+                      "letterSpacing": 3
+                    },
+                    {
+                      "type": "icon_font",
+                      "id": "8KJdL",
+                      "width": 16,
+                      "height": 16,
+                      "iconFontName": "arrow-right",
+                      "iconFontFamily": "lucide",
+                      "fill": "#0A0A0A"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "ppXcF",
+              "name": "sec3",
+              "width": "fill_container",
+              "gap": 8,
+              "padding": [
+                16,
+                0,
+                0,
+                0
+              ],
+              "justifyContent": "center",
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "BY2Wd",
+                  "fill": "#C9A962",
+                  "content": "Manage running agents",
+                  "fontFamily": "Inter",
+                  "fontSize": 13,
+                  "fontWeight": "600"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

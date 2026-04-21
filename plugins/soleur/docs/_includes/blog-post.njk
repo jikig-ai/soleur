@@ -7,33 +7,34 @@ layout: base.njk
 <meta property="article:tag" content="{{ tag }}" />
 {% endif %}{% endfor %}
 <script type="application/ld+json">
+{# All string interpolations in this JSON-LD block MUST use | jsonLdSafe | safe — see #2609 #}
 {
   "@context": "https://schema.org",
   "@type": "BlogPosting",
-  "headline": "{{ title }}",
-  "description": "{{ description }}",
-  "datePublished": "{{ date | dateToRfc3339 }}",
-  "dateModified": "{{ updated | dateToRfc3339 if updated else date | dateToRfc3339 }}",
-  "url": "{{ site.url }}{{ page.url }}",
+  "headline": {{ title | jsonLdSafe | safe }},
+  "description": {{ description | jsonLdSafe | safe }},
+  "datePublished": {{ (date | dateToRfc3339) | jsonLdSafe | safe }},
+  "dateModified": {{ (updated | dateToRfc3339 if updated else date | dateToRfc3339) | jsonLdSafe | safe }},
+  "url": {{ (site.url + page.url) | jsonLdSafe | safe }},
   "mainEntityOfPage": {
     "@type": "WebPage",
-    "@id": "{{ site.url }}{{ page.url }}"
+    "@id": {{ (site.url + page.url) | jsonLdSafe | safe }}
   },
   "inLanguage": "en-US",
-  "image": "{{ site.url }}/images/og-image.png",
+  "image": {{ (site.url + "/images/og-image.png") | jsonLdSafe | safe }},
   "author": {
     "@type": "Person",
-    "name": "{{ site.author.name }}",
-    "url": "{{ site.author.url }}",
-    "jobTitle": "{{ site.author.role }} of {{ site.name }}"
+    "name": {{ site.author.name | jsonLdSafe | safe }},
+    "url": {{ site.author.url | jsonLdSafe | safe }},
+    "jobTitle": {{ (site.author.role + " of " + site.name) | jsonLdSafe | safe }}
   },
   "publisher": {
     "@type": "Organization",
-    "name": "{{ site.name }}",
-    "url": "{{ site.url }}",
+    "name": {{ site.name | jsonLdSafe | safe }},
+    "url": {{ site.url | jsonLdSafe | safe }},
     "logo": {
       "@type": "ImageObject",
-      "url": "{{ site.url }}/images/logo-mark-512.png",
+      "url": {{ (site.url + "/images/logo-mark-512.png") | jsonLdSafe | safe }},
       "width": 512,
       "height": 512
     }
