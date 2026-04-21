@@ -53,8 +53,24 @@ jobs:
           TMPFILE=$(mktemp)
           trap 'rm -f "$TMPFILE"' EXIT
 
-          # task_name:audit_issue_label:max_gap_days
-          # Threshold derivation: see knowledge-base/engineering/ops/runbooks/cloud-scheduled-tasks.md#threshold-derivation
+          # Exact-prefix match on the watchdog title template to prevent
+          # prefix collisions (e.g., "content-generator" matching a future
+          # "content-generator-v2"). Title template is the dedup contract
+          # documented in the runbook's §Dedup Contract.
+          find_silence_issue() {
+            local task_name="$1"
+            gh issue list --repo "$GH_REPO" --state open \
+              --label cloud-task-silence \
+              --search "$task_name in:title" \
+              --json number,title \
+              --jq ".[] | select(.title | startswith(\"ops: $task_name \")) | .number" \
+              | head -1
+          }
+
+          # DRIFT RISK: task_name:audit_issue_label:max_gap_days
+          # When editing, also update knowledge-base/engineering/ops/runbooks/
+          #   cloud-scheduled-tasks.md (Task Inventory + Threshold Derivation).
+          # Threshold rationale: runbook §Threshold Derivation.
           TASKS=(
             "content-generator:scheduled-content-generator:4"
             "community-monitor:scheduled-community-monitor:2"
@@ -94,10 +110,7 @@ jobs:
             echo "Task $task: $days_since days since last audit issue (threshold: $max_gap_days)"
 
             if [[ "$days_since" -gt "$max_gap_days" ]]; then
-              existing=$(gh issue list --repo "$GH_REPO" --state open \
-                --label cloud-task-silence \
-                --search "$task in:title" \
-                --json number --jq '.[0].number // empty')
+              existing=$(find_silence_issue "$task")
 
               if [[ -n "$existing" ]]; then
                 echo "Silence issue already exists: #$existing — adding comment."
@@ -128,10 +141,7 @@ jobs:
                 rm -f "$BODY_FILE"
               fi
             else
-              stale=$(gh issue list --repo "$GH_REPO" --state open \
-                --label cloud-task-silence \
-                --search "$task in:title" \
-                --json number --jq '.[0].number // empty')
+              stale=$(find_silence_issue "$task")
 
               if [[ -n "$stale" ]]; then
                 echo "Closing stale silence issue #$stale (task recovered)."

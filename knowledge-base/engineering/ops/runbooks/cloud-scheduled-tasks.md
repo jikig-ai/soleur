@@ -199,15 +199,45 @@ When a new scheduled task is added:
 When a task is removed: delete the row from both the TASKS array and this
 runbook's tables in the same PR.
 
+## Dedup Contract
+
+The watchdog's open-silence-issue lookup and auto-close lookup both depend on
+**exact-prefix match against the title template**. Breaking either half of
+this contract will cause duplicate issues or missed auto-closes.
+
+- **Title template (load-bearing):**
+
+  ```text
+  ops: <task> Cloud scheduled task has not fired in <N> days (watchdog)
+  ```
+
+  where `<task>` is the first colon-delimited field of the `TASKS` row in
+  `.github/workflows/scheduled-cloud-task-heartbeat.yml` (the task slug,
+  e.g., `content-generator`). `<N>` is the computed day count.
+
+- **Dedup token:** `<task>` (the task slug). The watchdog's
+  `find_silence_issue()` helper narrows via GitHub search `"<task> in:title"`
+  then filters to titles satisfying `startswith("ops: <task> ")`. The
+  trailing space is significant — it is what prevents a prefix collision
+  between, e.g., `content-generator` and a future `content-generator-v2`.
+
+- **Label contract:** Every watchdog-opened issue carries the
+  `cloud-task-silence` label. The helper filters on this label before
+  applying the title prefix — removing the label detaches an issue from
+  dedup.
+
 ## Warnings
 
-- **Do NOT edit the title of an open `cloud-task-silence` issue.** The
-  watchdog dedup query uses `--search "<task> in:title"` substring matching.
-  Stripping the `ops: <task>` prefix or changing the `<task>` token will
-  cause the next run to open a duplicate. Add a comment instead.
-- **Task-name prefix collisions.** The substring search will false-match a
-  task name that is a prefix of another (e.g., `content-generator` would
-  match `content-generator-v2`). New tasks must avoid prefix collisions.
+- **Do NOT edit the title of an open `cloud-task-silence` issue.** Stripping
+  the `ops: <task>` prefix (including the trailing space) or changing the
+  `<task>` slug will break dedup and cause the next run to open a duplicate.
+  Add a comment instead.
+- **Do NOT remove the `cloud-task-silence` label.** The helper filters on
+  this label; an issue without it is invisible to `find_silence_issue()`.
+- **Task-name prefix collisions are guarded in code, not convention.** The
+  helper uses `startswith("ops: <task> ")` so `content-generator` does NOT
+  false-match `content-generator-v2`. New tasks can share prefixes, but
+  avoid it anyway for human clarity.
 - **Label-based query includes manual dispatches.** A `workflow_dispatch` run
   produces a labeled audit issue and counts as signal. If the schedule is
   broken but operators keep running manually, the watchdog will NOT fire.
