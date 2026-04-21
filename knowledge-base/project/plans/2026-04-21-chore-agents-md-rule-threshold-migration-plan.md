@@ -245,7 +245,7 @@ See brainstorm `2026-04-21-agents-md-rule-threshold-brainstorm.md` for the Optio
 ### Pre-merge (PR)
 
 - [x] `grep -c '^- ' AGENTS.md` unchanged from baseline (pointer preserves count) — 106.
-- [ ] ~~`wc -c < AGENTS.md` ≤ baseline − 800~~ — **infeasible under pointer-preservation**; plan's aggregate estimate contradicted its own per-rule byte-impact table. Actual: +90 bytes. Spec FR4 updated with honest replacement; full analysis in the deprecation learning.
+- [ ] ~~`wc -c < AGENTS.md` ≤ baseline − 800~~ — **infeasible under pointer-preservation**; plan's aggregate estimate contradicted its own per-rule byte-impact table. Actual after review-pass tightening: +21 bytes. Spec FR4 updated with honest replacement; full analysis in the deprecation learning.
 - [x] `grep '^- ' AGENTS.md | awk '{print length}' | sort -n | tail -1` ≤ 600 — 582.
 - [x] `AGENTS.md` and `plugins/soleur/skills/compound/SKILL.md` both mention `115` in the threshold context; no stale `(A/100)` or `>100 rules` remain.
 - [x] Every migrated rule's `[id: ...]` tag still appears in `AGENTS.md` (pointer-preservation invariant).

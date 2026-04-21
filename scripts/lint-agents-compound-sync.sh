@@ -4,11 +4,17 @@
 # they encode the same contract. Editing one without the other silently
 # de-syncs the warn. This script fails the commit if they disagree.
 #
+# Extraction uses the grep-stable sentinel comment `<!-- rule-threshold: N -->`
+# present in both files, NOT the prose surrounding the threshold literal. Any
+# prose reword (e.g., "more than N rules" → "when rule count exceeds N") leaves
+# the sentinel intact; editing the threshold itself requires updating both
+# sentinels. Symbol-stable per `cq-code-comments-symbol-anchors-not-line-numbers`.
+#
 # Source rule: AGENTS.md `cq-agents-md-why-single-line` (PR #2754, issue #2686).
 set -euo pipefail
 
-AGENTS_THRESHOLD=$(grep -oE '>[0-9]+ rules' AGENTS.md | head -1 | grep -oE '[0-9]+')
-COMPOUND_THRESHOLD=$(grep -oE 'A > [0-9]+' plugins/soleur/skills/compound/SKILL.md | head -1 | grep -oE '[0-9]+')
+AGENTS_THRESHOLD=$(grep -oE 'rule-threshold: [0-9]+' AGENTS.md | head -1 | grep -oE '[0-9]+')
+COMPOUND_THRESHOLD=$(grep -oE 'rule-threshold: [0-9]+' plugins/soleur/skills/compound/SKILL.md | head -1 | grep -oE '[0-9]+')
 
 if [[ -z "$AGENTS_THRESHOLD" || -z "$COMPOUND_THRESHOLD" ]]; then
   echo "lint-agents-compound-sync: could not extract threshold from one or both files" >&2

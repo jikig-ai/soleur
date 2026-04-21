@@ -64,7 +64,7 @@ The plan's Technical Considerations section estimated 800–1,200 bytes saved fr
 
 True aggregate prediction: ~260 bytes saved, before the +120-byte `**Why:**` annotation on the threshold rule itself. Net: ~140 bytes added, not ~1,000 bytes removed.
 
-Measured outcome on PR #2754 branch: +128 bytes (36,566 → 36,694), rule count flat at 106, longest rule 582 bytes (under the 600 cap). The spec was updated to relax FR4 to "count flat AND neutral-to-slightly-higher bytes" rather than the aspirational `wc -c ≤ baseline − 800`.
+Measured outcome on PR #2754 branch after review-pass tightening: +21 bytes (36,566 → 36,587), rule count flat at 106, longest rule 582 bytes (under the 600 cap). The spec was updated to relax FR4 to "count flat AND neutral-to-slightly-higher bytes" rather than the aspirational `wc -c ≤ baseline − 800`. A sentinel-comment anchor (`<!-- rule-threshold: N -->`) was added in both AGENTS.md and `plugins/soleur/skills/compound/SKILL.md` so `scripts/lint-agents-compound-sync.sh` greps a stable token instead of the surrounding prose — prevents silent extractor breakage on future prose edits.
 
 **Lesson for future AGENTS.md migration plans:** when a rule's *current* body is shorter than ~200 bytes, pointer-preservation will NOT save bytes on that rule — it may cost bytes. Byte-savings estimates should be per-rule and sum honestly, not aggregated via an optimistic average. The real win of pointer-preservation on small rules is **architectural** (rule bodies live with the enforcement, hook header becomes self-documenting) and **warn-silencing** (count stays under threshold), not byte reduction.
 

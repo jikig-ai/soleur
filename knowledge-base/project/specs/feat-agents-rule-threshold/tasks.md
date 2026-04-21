@@ -30,7 +30,7 @@ status: todo
 
 ## 4. Verification, Sync Guard, Follow-up
 
-- [x] 4.1 Post-migration: rules=106 (flat), bytes=36656 (+90 vs baseline — plan's 800-byte target was aspirational; see learning), longest=582 (≤600). Spec FR4 relaxed accordingly.
+- [x] 4.1 Post-migration (after review-pass): rules=106 (flat), bytes=36587 (+21 vs baseline — plan's 800-byte target was aspirational; see learning), longest=582 (≤600). Spec FR4 relaxed accordingly.
 - [x] 4.2 Markdown lint passed on all 6 changed files (0 errors).
 - [x] 4.3 `python3 scripts/lint-rule-ids.py AGENTS.md` exits 0 (pointer-preservation honored).
 - [x] 4.4 `lefthook run pre-commit` passes (rule-id-lint, markdown-lint, agents-compound-sync, plugin-component-test 1135 pass, generate-kb-index — 12.6s).

@@ -519,6 +519,7 @@ idor
 if-ladder
 if-none-match
 image-generation
+implementath
 implementation-patterns
 in-filter
 inadequate-documentation
@@ -705,6 +706,7 @@ over-specified-prompts
 overengineering
 overflow-wrap
 overview
+p
 paginate
 parallel
 parallel-agents
@@ -845,7 +847,6 @@ r2-backend
 race-condition
 ralph-loop
 rate-limit
-rate-limiting
 react
 react-context
 react-hooks
@@ -1249,6 +1250,7 @@ workflow-gate
 workflow-gates
 workflow-issues
 workflow-patterns
+workflow-patternscat
 workflow-productization
 workflow-safety
 workflow-security

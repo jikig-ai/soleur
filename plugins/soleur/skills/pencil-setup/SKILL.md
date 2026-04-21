@@ -139,11 +139,13 @@ If it does not appear, tell the user the registration failed and suggest running
 
 ## Untracked .pen safety
 
-Rule source: AGENTS.md — migrated 2026-04-21 (PR #2754).
+Rule `cq-before-calling-mcp-pencil-open-document` is canonical in `.claude/hooks/pencil-open-guard.sh` header (see that file for the full body and rationale). The hook is a PreToolUse deny on untracked `.pen` files; pre-flight to avoid the deny:
 
-Before calling `mcp__pencil__open_document`, ensure the target `.pen` file is committed in git [id: cq-before-calling-mcp-pencil-open-document] [hook-enforced: pencil-open-guard.sh]. Untracked `.pen` files have no recovery path — `open_document` can silently overwrite them with an empty document.
+```bash
+git -C <repo> ls-files --error-unmatch <path>   # exit 0 = tracked, exit 1 = untracked
+```
 
-The `.claude/hooks/pencil-open-guard.sh` PreToolUse hook denies the call for untracked targets and emits an incident, but the check is fastest when the calling agent verifies first: `git -C <repo> ls-files --error-unmatch <path>` — exit 0 means tracked, exit 1 means untracked. For freshly-created `.pen` files, commit an empty or scaffold placeholder before the first `open_document`.
+For freshly-created `.pen` files, commit an empty or scaffold placeholder before the first `open_document` call.
 
 ## Sharp Edges
 

@@ -1,5 +1,5 @@
 agent-design
-agent-designxperience
+agent-designag
 agent-loop-calibration
 agent-workflow, mcp-integration
 architecture
