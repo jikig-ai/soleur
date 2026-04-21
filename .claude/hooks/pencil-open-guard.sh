@@ -1,8 +1,19 @@
 #!/usr/bin/env bash
 # PreToolUse hook: block opening untracked .pen files with Pencil MCP.
-# Source rule: AGENTS.md "Before calling mcp__pencil__open_document, ensure the target .pen file is committed in git."
-# Why: open_document silently overwrites untracked .pen files with an empty document.
-#      Untracked files have no git recovery path, causing irreversible data loss.
+#
+# Rule source: AGENTS.md — migrated 2026-04-21 (PR #2754)
+# Rule: Before calling `mcp__pencil__open_document`, ensure the target
+#   .pen file is committed in git
+#   [id: cq-before-calling-mcp-pencil-open-document]
+#   [hook-enforced: pencil-open-guard.sh].
+# Untracked .pen files have no recovery path — `open_document` can
+# silently overwrite them with an empty document, and the Pencil MCP
+# provides no undo. This hook denies the tool call at the PreToolUse
+# stage; agents should still check `git ls-files` before invoking
+# `open_document` because the deny reason has to be interpreted and
+# retried, which is slower than the pre-flight check. See also
+# `plugins/soleur/skills/pencil-setup/SKILL.md` §"Untracked .pen safety"
+# and the AGENTS.md pointer entry.
 set -euo pipefail
 
 # shellcheck source=lib/incidents.sh

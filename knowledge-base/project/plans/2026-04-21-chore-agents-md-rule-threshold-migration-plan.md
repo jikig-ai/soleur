@@ -244,20 +244,20 @@ See brainstorm `2026-04-21-agents-md-rule-threshold-brainstorm.md` for the Optio
 
 ### Pre-merge (PR)
 
-- [ ] `grep -c '^- ' AGENTS.md` unchanged from baseline (pointer preserves count).
-- [ ] `wc -c < AGENTS.md` ≤ baseline − 800 (at least 800 bytes saved).
-- [ ] `grep '^- ' AGENTS.md | awk '{print length}' | sort -n | tail -1` ≤ 600.
-- [ ] `AGENTS.md` and `plugins/soleur/skills/compound/SKILL.md` both mention `115` in the threshold context; no stale `(A/100)` or `>100 rules` remain.
-- [ ] Every migrated rule's `[id: ...]` tag still appears in `AGENTS.md` (pointer-preservation invariant).
-- [ ] Every migrated rule's full body exists in its destination file with `# Rule source: AGENTS.md — migrated 2026-04-21 (PR #2754)` marker.
-- [ ] `python3 scripts/lint-rule-ids.py AGENTS.md` exits 0.
-- [ ] `lefthook run pre-commit --files <changed files>` exits 0.
-- [ ] `npx markdownlint-cli2 --fix` on the specific changed Markdown files produces zero errors.
-- [ ] `scripts/lint-agents-compound-sync.sh` exists, is executable, wired in `lefthook.yml`, and exits 0 on the post-Phase-2 state. Sanity-check: editing only one file causes it to exit 1.
-- [ ] Learning file `knowledge-base/project/learnings/2026-04-21-agents-md-rule-retirement-deprecation-pattern.md` exists and documents the 3 migrated IDs, the pointer-preservation pattern, the rejected merged-tag alternative with rationale, and a pointer to Issue A.
-- [ ] Follow-up Issue A (retired-ids allowlist) is filed and milestoned "Post-MVP / Later".
-- [ ] Spec FR4 is updated with strikethrough + replacement (not a sidecar `[Updated]` note); FR5 marked satisfied.
-- [ ] PR body includes a table of the 3 migrated rule IDs with their new locations, the baseline/after byte counts, and `Closes #2686`.
+- [x] `grep -c '^- ' AGENTS.md` unchanged from baseline (pointer preserves count) — 106.
+- [ ] ~~`wc -c < AGENTS.md` ≤ baseline − 800~~ — **infeasible under pointer-preservation**; plan's aggregate estimate contradicted its own per-rule byte-impact table. Actual: +90 bytes. Spec FR4 updated with honest replacement; full analysis in the deprecation learning.
+- [x] `grep '^- ' AGENTS.md | awk '{print length}' | sort -n | tail -1` ≤ 600 — 582.
+- [x] `AGENTS.md` and `plugins/soleur/skills/compound/SKILL.md` both mention `115` in the threshold context; no stale `(A/100)` or `>100 rules` remain.
+- [x] Every migrated rule's `[id: ...]` tag still appears in `AGENTS.md` (pointer-preservation invariant).
+- [x] Every migrated rule's full body exists in its destination file with `Rule source: AGENTS.md — migrated 2026-04-21 (PR #2754)` marker.
+- [x] `python3 scripts/lint-rule-ids.py AGENTS.md` exits 0.
+- [x] `lefthook run pre-commit` exits 0 (12.6s; plugin-component-test 1135/0).
+- [x] `npx markdownlint-cli2 --fix` on the specific changed Markdown files — 0 errors.
+- [x] `scripts/lint-agents-compound-sync.sh` exists, executable, wired in `lefthook.yml`, exits 0 on post-Phase-2 state; fail-state simulated and reverted.
+- [x] Learning file `knowledge-base/project/learnings/2026-04-21-agents-md-rule-retirement-deprecation-pattern.md` exists.
+- [x] Follow-up Issue #2762 (retired-ids allowlist) filed with milestone "Post-MVP / Later", label `type/chore`.
+- [x] Spec FR4 updated with strikethrough + replacement; FR5 marked satisfied.
+- [x] PR body includes the 3 migrated-rule table, baseline/after counts, `Closes #2686`, link to Issue #2762.
 
 ### Post-merge (operator)
 

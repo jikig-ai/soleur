@@ -33,8 +33,9 @@ created: 2026-04-21
 - **FR1:** `cq-agents-md-why-single-line` threshold text updated from "rule count (A/100)" to "rule count (A/115)" in both AGENTS.md rule prose AND compound step 8 `SKILL.md`. Both must be in sync — they encode the same contract.
 - **FR2:** Rule's `**Why:**` annotation cites #2683 + #2686 and references the empirical rule-count trajectory (one sentence, per `cq-agents-md-why-single-line` itself).
 - **FR3:** 3–5 `cq` rules tagged `[skill-enforced: ...]` or `[hook-enforced: ...]` are migrated. For each migrated rule: (a) the full rule body moves to the owning skill's SKILL.md or the hook's script comment, (b) AGENTS.md retains a one-line pointer with the original ID preserved (per `cq-rule-ids-are-immutable`), or the rule is fully removed with a deprecation entry appended to a learning file listing the retired IDs.
-- **FR4:** Post-migration, `grep -c '^- ' AGENTS.md` returns ≤ 103 (down from 106) AND ≤ 115 (under the new threshold).
-- **FR5:** `gh run list --workflow rule-metrics-aggregate.yml --limit 5` is invoked during implementation. If zero successful runs against main exist, file a follow-up issue "fix: rule-metrics-aggregate workflow not firing on main" milestoned to the current phase.
+- **FR4 (original, ~~strikethrough~~):** ~~Post-migration, `grep -c '^- ' AGENTS.md` returns ≤ 103 (down from 106) AND ≤ 115 (under the new threshold).~~
+- **FR4 (replacement, 2026-04-21):** Post-migration, `grep -c '^- ' AGENTS.md` is **flat** (pointer-preservation is required by `lint-rule-ids.py` — no ID may be silently removed). File bytes are **neutral-to-slightly-higher** vs baseline (the longest original rule among the 3 migration candidates was only 141 bytes; pointer text referencing a destination path unavoidably exceeds that). The real win is architectural: rule bodies live with the hook/skill that enforces them, plus the threshold warn is silenced (106 ≤ 115). Full-body removal is blocked until `lint-rule-ids.py` gains a retired-ids allowlist (filed as Issue A, see plan §4.6).
+- **FR5 (satisfied by research):** `gh run list --workflow rule-metrics-aggregate.yml --limit 5 --branch main` confirmed the aggregator is firing (last scheduled run 2026-04-19 01:16 UTC succeeded; run 24617976419). No follow-up issue filed.
 
 ## Technical Requirements
 
@@ -47,7 +48,7 @@ created: 2026-04-21
 
 ## Acceptance Criteria
 
-- [ ] `grep -c '^- ' AGENTS.md` ≤ 103 and < 115
+- [ ] `grep -c '^- ' AGENTS.md` is flat vs baseline (pointer-preservation per updated FR4) and < 115
 - [ ] `wc -c < AGENTS.md` < 40,000
 - [ ] `grep '^- ' AGENTS.md | awk '{print length}' | sort -n | tail -1` < 600
 - [ ] `cq-agents-md-why-single-line` rule text mentions 115 (not 100)

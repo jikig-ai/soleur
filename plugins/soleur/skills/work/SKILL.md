@@ -359,6 +359,8 @@ Run these checks before proceeding to Phase 1. A FAIL blocks execution with a re
 
 ### Phase 2.5: Research Validation Loop (knowledge-base deliverables only)
 
+Rule source: AGENTS.md — migrated 2026-04-21 (PR #2754). When a research sprint produces recommendations, run the cascade-validate loop [id: wg-when-a-research-sprint-produces] [skill-enforced: work Phase 2.5]. **"Findings written" is NOT done — "findings applied, validated, and all documents reflect the final state" is done.** The full body of that rule lives here; AGENTS.md retains a one-line pointer preserving the `[id: ...]` tag.
+
 **Trigger:** This phase runs when the plan's deliverables are knowledge-base research artifacts (findings, analysis, audits, research briefs) that produce recommendations targeting other existing documents. Skip for code-only plans.
 
 **Detection:** After Phase 2 completes, scan the outputs for recommendation patterns — "should rewrite," "needs updating," "add to," "change X in Y.md," or any finding that names a specific target file. If found, enter the loop.

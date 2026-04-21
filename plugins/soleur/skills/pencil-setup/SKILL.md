@@ -137,6 +137,14 @@ If the `pencil` entry appears, tell the user:
 
 If it does not appear, tell the user the registration failed and suggest running the commands manually.
 
+## Untracked .pen safety
+
+Rule source: AGENTS.md — migrated 2026-04-21 (PR #2754).
+
+Before calling `mcp__pencil__open_document`, ensure the target `.pen` file is committed in git [id: cq-before-calling-mcp-pencil-open-document] [hook-enforced: pencil-open-guard.sh]. Untracked `.pen` files have no recovery path — `open_document` can silently overwrite them with an empty document.
+
+The `.claude/hooks/pencil-open-guard.sh` PreToolUse hook denies the call for untracked targets and emits an incident, but the check is fastest when the calling agent verifies first: `git -C <repo> ls-files --error-unmatch <path>` — exit 0 means tracked, exit 1 means untracked. For freshly-created `.pen` files, commit an empty or scaffold placeholder before the first `open_document`.
+
 ## Sharp Edges
 
 - **IDE mode -- WebSocket requires visible editor**: In IDE mode (`PREFERRED_MODE=ide`), the MCP server connects via WebSocket to the IDE's editor webview. `batch_design`/`batch_get`/`open_document` calls fail with `WebSocket not connected to app` unless the .pen file tab is open and visible in the IDE. Opening via `cursor <path>` CLI is not sufficient -- the user must click the tab to activate the webview.
