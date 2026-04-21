@@ -130,7 +130,7 @@ Everything described above operates within engineering. But the principle extend
 
 If compound knowledge transforms how engineering teams build software, what happens when the same architecture runs across every department — legal, marketing, sales, finance, operations, product, and support?
 
-A brand guide created by a marketing agent informs the content strategy. A competitive analysis shapes pricing decisions. A legal audit references the privacy policy. Knowledge flows across domains because every agent reads from and writes to the same compounding knowledge base.
+A brand guide created by a marketing agent informs the content strategy. A competitive analysis shapes pricing decisions. A legal audit references the privacy policy. Knowledge flows across domains because every agent reads from and writes to the same compounding knowledge base. The same principle extends to how those agents actually *execute* outside the codebase — [by calling vendor APIs directly rather than driving server-side browsers]({{ site.url }}/blog/agents-that-use-apis-not-browsers/), so the operational layer compounds the same way the engineering layer does.
 
 This is the thesis behind [Company-as-a-Service]({{ site.url }}/company-as-a-service/) — a model where a single AI organization runs every department of a business. Not a copilot for code. Not an assistant for tasks. A full AI organization that plans, builds, reviews, remembers, and self-improves.
 
