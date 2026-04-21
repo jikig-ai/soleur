@@ -137,6 +137,16 @@ If the `pencil` entry appears, tell the user:
 
 If it does not appear, tell the user the registration failed and suggest running the commands manually.
 
+## Untracked .pen safety
+
+Rule `cq-before-calling-mcp-pencil-open-document` is canonical in `.claude/hooks/pencil-open-guard.sh` header (see that file for the full body and rationale). The hook is a PreToolUse deny on untracked `.pen` files; pre-flight to avoid the deny:
+
+```bash
+git -C <repo> ls-files --error-unmatch <path>   # exit 0 = tracked, exit 1 = untracked
+```
+
+For freshly-created `.pen` files, commit an empty or scaffold placeholder before the first `open_document` call.
+
 ## Sharp Edges
 
 - **IDE mode -- WebSocket requires visible editor**: In IDE mode (`PREFERRED_MODE=ide`), the MCP server connects via WebSocket to the IDE's editor webview. `batch_design`/`batch_get`/`open_document` calls fail with `WebSocket not connected to app` unless the .pen file tab is open and visible in the IDE. Opening via `cursor <path>` CLI is not sufficient -- the user must click the tab to activate the webview.

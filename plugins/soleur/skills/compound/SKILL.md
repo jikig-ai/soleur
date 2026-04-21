@@ -202,7 +202,7 @@ Close the gap between "we learned X" and "X is now enforced." The project has pr
    Output: `"Rule budget: A rules / B bytes in AGENTS.md (longest rule: L bytes), C rules in constitution.md"`.
 
    Append warnings:
-   - If `A > 100`: `"[WARNING] rule count (A/100) exceeded — move skill-specific rules to the skills that enforce them."`
+   - If `A > 115`: `"[WARNING] rule count (A/115) exceeded — move skill-specific rules to the skills that enforce them."` <!-- rule-threshold: 115 -->
    - If `B > 40000`: `"[WARNING] AGENTS.md byte budget (B/40000) exceeded — AGENTS.md is loaded every turn; compress **Why:** narratives to one-line learning-file pointers."`
    - If `L > 600`: `"[WARNING] longest rule is L bytes — cap per-rule length at ~600 (see cq-agents-md-why-single-line) by moving context to learning files."`
    - If `C > 300`: `"[WARNING] constitution.md is large (C/300) — consider migrating narrow rules to skill/agent instructions."`

@@ -4,6 +4,16 @@
 # Kills orphaned Playwright Chrome processes on session exit.
 # Defense-in-depth: agents should call browser_close proactively,
 # but this hook catches any that slip through.
+#
+# Rule source: AGENTS.md — migrated 2026-04-21 (PR #2754)
+# Rule: After completing a Playwright task, call `browser_close`
+#   [id: cq-after-completing-a-playwright-task-call]
+#   [hook-enforced: browser-cleanup-hook.sh].
+# This hook is the defense-in-depth backstop. Agents MUST still call
+# `browser_close` proactively at the end of each Playwright session —
+# relying on the stop-hook alone leaves open browsers across tool calls,
+# exhausts the Playwright `--isolated` singleton, and requires Chrome-kill
+# recovery. See AGENTS.md pointer entry for the canonical one-liner.
 
 set -euo pipefail
 
