@@ -83,8 +83,12 @@ describe("marketing-content-drift", () => {
     // time of writing (audits, learnings, plans, specs, distribution-content,
     // copy drafts). To extend targets, add the root path here; to exempt a
     // new archival tree, extend PROSE_NUMERAL_ALLOWLIST.
+    //
+    // Root README.md is NOT swept here — scripts/sync-readme-counts.sh
+    // auto-maintains its counts with exact integers and has a CI drift check.
+    // Two guards with conflicting rules (soft-floor vs exact-int) on the same
+    // file is wrong; the sync script owns that file.
     const targets = [
-      join(REPO_ROOT, "README.md"),
       ...walkMarkdown(join(KB_ROOT, "marketing")),
       ...walkMarkdown(join(KB_ROOT, "project", "components")),
       join(KB_ROOT, "project", "README.md"),
