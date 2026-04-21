@@ -14,7 +14,7 @@ This agent requires the Pencil MCP server registered with Claude Code. If Pencil
 
 **Mode routing.** Inspect the invocation prompt before entering the Pencil workflow:
 
-- If the prompt supplies `screenshots: [...]` **and** `mode: audit`, **skip Steps 1–3 below and jump to `## UX Audit (Screenshots)`**. The invoker is the `soleur:ux-audit` skill asking for finding extraction, not a new design.
+- If the prompt supplies `targets: [...]` **and** `mode: audit`, **skip Steps 1–3 below and jump to `## UX Audit (Screenshots)`**. The invoker is the `soleur:ux-audit` skill asking for finding extraction, not a new design.
 - If the prompt supplies `.pen` file paths without `mode: audit`, jump to `## Wireframe-to-Implementation Handoff`.
 - Otherwise, proceed through the normal Pencil design flow (Steps 1–3).
 
@@ -51,11 +51,12 @@ Use the **AskUserQuestion tool** to clarify the design scope:
 
 ### Step 3: Deliver
 
-1. Save the .pen file to `knowledge-base/product/design/{domain}/{descriptive-name}.pen` (e.g., `design/brand/landing-page.pen`, `design/onboarding/signup-flow.pen`).
-2. **Export high-resolution screenshots.** Use `export_nodes` with `scale: 3` and `format: "png"` to export all top-level frames to a `screenshots/` subdirectory next to the .pen file. Do NOT use `get_screenshot` for final deliverables — it produces low-resolution 512px images. `export_nodes` with `scale: 3` produces ~4K images suitable for review.
-3. **Rename screenshots to human-readable names.** `export_nodes` saves files as `{nodeId}.png`. After export, rename each file to match its frame name in kebab-case with zero-padded sequential numbering (e.g., `bBxvQ.png` → `01-dashboard-empty-state.png`). Remove the old node-ID-named files.
-4. **Open the screenshots folder** for founder review: `xdg-open <screenshots-directory>`. This step is not optional — the founder must visually review wireframes before proceeding.
-5. Announce the file location and list all renamed screenshot files.
+1. Save the .pen file to `knowledge-base/product/design/{domain}/{descriptive-name}.pen` (e.g., `design/brand/landing-page.pen`, `design/onboarding/signup-flow.pen`). **The `product/` segment is mandatory — the pre-#566 top-level design directory was removed in the domain restructure and writing there produces a placeholder that no automated audit catches.**
+2. **Post-save size verification (HARD GATE).** Before announcing completion, `stat -c %s <saved-file>` and assert the result is > 0 bytes. If the file is 0 bytes, the preceding Pencil MCP calls silently dropped (typically an auth or schema error the adapter returned as `isError: true`). **Read the actual adapter error text and surface it verbatim — do NOT fabricate a "headless stub" or "dropped ops" narrative.** The adapter has no stub code path; a 0-byte file always corresponds to a real `isError` response the caller can inspect. See `AGENTS.md:cq-pencil-mcp-silent-drop-diagnosis-checklist`.
+3. **Export high-resolution screenshots.** Use `export_nodes` with `scale: 3` and `format: "png"` to export all top-level frames as **direct children** of the `screenshots/` subdirectory next to the .pen file (e.g., `knowledge-base/product/design/billing/screenshots/`). **Do NOT create a nested per-feature subfolder** — `.gitignore` rule `!knowledge-base/product/design/**/screenshots/*.png` only unignores PNGs that are direct children of `screenshots/`; nested paths like `screenshots/<feature>/05-foo.png` stay gitignored and silently fail to commit. Verify with `git check-ignore -v <png>` before announcing completion. Do NOT use `get_screenshot` for final deliverables — it produces low-resolution 512px images. `export_nodes` with `scale: 3` produces ~4K images suitable for review.
+4. **Rename screenshots to human-readable names.** `export_nodes` saves files as `{nodeId}.png`. After export, rename each file to a feature-prefixed kebab-case name continuing the existing `NN-` numbering already in the `screenshots/` folder (e.g., if `01-04` exist, the new feature starts at `05-`; rename `bBxvQ.png` → `05-upgrade-modal-at-capacity-solo.png`). Then remove the raw `{nodeId}.png` exports left behind by `export_nodes` so they don't appear as untracked siblings.
+5. **Open the screenshots folder** for founder review: `xdg-open <screenshots-directory>`. This step is not optional — the founder must visually review wireframes before proceeding.
+6. Announce the file location and list all renamed screenshot files.
 
 ## UX Audit (Existing HTML Pages)
 
@@ -76,8 +77,7 @@ This mode is invoked by the `soleur:ux-audit` skill on a recurring schedule. Inp
 The invoker passes:
 
 - `mode: audit` (required — this is how mode routing detects audit mode)
-- `screenshots`: array of absolute paths to PNG files (one per route)
-- `routes`: array of `{path, auth, fixture_prereqs}` — the route metadata the screenshots correspond to (same index order as `screenshots`)
+- `targets`: array of `{path, auth, fixture_prereqs, screenshot_path}` objects. Each entry zips a single route's metadata with its absolute screenshot PNG path, so screenshot↔route skew is structurally impossible. If a route's capture failed upstream, it is **absent** from `targets` — never passed as a null or placeholder.
 - `viewport`: the capture viewport, e.g. `{w: 1440, h: 900}`
 
 ### 5-category rubric
@@ -94,7 +94,7 @@ For each screenshot, evaluate against these categories (in priority order). Do N
 
 ### Output contract
 
-Return a JSON array. **No prose, no markdown, no code fences around the array.** One object per finding:
+Return a JSON array. **No prose, no markdown, no code fences around the array.** Machine-readable schema: [`finding.schema.json`](../../../skills/ux-audit/references/finding.schema.json) (Draft 2020-12) — the schema is authoritative; the JSON below is a single-element example. One object per finding:
 
 ```json
 [
@@ -113,14 +113,14 @@ Return a JSON array. **No prose, no markdown, no code fences around the array.**
 
 Field rules:
 
-- `route` must match a `routes[].path` from the invocation.
-- `selector` is a CSS selector targeting the primary flagged element. If the finding is page-level (e.g., a comprehension finding about the entire page), emit `""` (empty string) — the skill will coarsen this to `*` for dedup purposes.
+- `route` must match a `targets[].path` from the invocation.
+- `selector` is a CSS selector (CSS only — no XPath, no text-match syntax; must be syntactically valid CSS) targeting the primary flagged element. If the finding is page-level (e.g., a comprehension finding about the entire page), emit `""` (empty string) — the skill will coarsen this to `*` for dedup purposes.
 - `category` must be exactly one of: `real-estate | ia | consistency | responsive | comprehension`.
 - `severity` must be exactly one of: `critical | high | medium | low`. Reserve `critical` for findings that block primary user tasks.
 - `title` ≤ 100 chars, declarative (not a question), no emojis.
 - `description` names the visible evidence — a reviewer should be able to verify from the screenshot alone.
 - `fix_hint` proposes a concrete direction; the implementing agent will detail the solution.
-- `screenshot_ref` is the absolute path passed in `screenshots[]`, not a new filename.
+- `screenshot_ref` is the `targets[i].screenshot_path` value that was passed in; do not emit a new path.
 
 Return an empty array `[]` if no findings rise above the `low` threshold. Never emit prose explaining why the array is empty — the skill parses JSON directly.
 

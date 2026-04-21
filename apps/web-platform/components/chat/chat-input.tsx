@@ -566,6 +566,7 @@ export function ChatInput({
             placeholder={placeholder}
             disabled={disabled || isUploading}
             rows={1}
+            data-quote-flashing={flashQuote ? "true" : undefined}
             className={
               "w-full resize-none rounded-xl border border-neutral-700 bg-neutral-900 px-4 py-2.5 pr-12 text-sm text-white placeholder:text-neutral-500 focus:border-neutral-500 focus:outline-none disabled:opacity-50 min-h-[72px] max-h-[140px] overflow-y-auto transition-shadow" +
               (flashQuote ? " ring-2 ring-amber-400" : "")

@@ -10,8 +10,6 @@ Install the plugin:
 claude plugin install soleur
 ```
 
-**Running with Ollama?** Use `ollama launch claude --model gemma4:31b-cloud` to start Soleur with your preferred local model.
-
 ## The Soleur Workflow
 
 The recommended way to use Soleur is through the unified entry point:
@@ -43,7 +41,7 @@ brainstorm  -->  plan  -->  work  -->  review  -->  compound
 |-----------|-------|
 | Agents | 65 |
 | Commands | 3 |
-| Skills | 66 |
+| Skills | 67 |
 | MCP Servers | 3 |
 
 ## Agents
@@ -257,6 +255,7 @@ All commands use the `soleur:` prefix to avoid collisions with built-in commands
 
 | Skill | Description |
 |-------|-------------|
+| `admin-ip-refresh` | Refresh the prod SSH allowlist (Doppler ADMIN_IPS) after operator IP rotation |
 | `agent-browser` | CLI-based browser automation using Vercel's agent-browser |
 | `archive-kb` | Archive knowledge-base artifacts with timestamped prefixes |
 | `deploy` | Deploy containerized applications via Docker build, GHCR push, and SSH |

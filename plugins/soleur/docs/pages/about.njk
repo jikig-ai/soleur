@@ -52,27 +52,107 @@ permalink: about/index.html
       </section>
     </div>
 
+    <!-- FAQ Section -->
+    <section class="landing-section">
+      <div class="landing-section-inner">
+        <p class="section-label">Common Questions</p>
+        <h2 class="section-title">Frequently Asked Questions</h2>
+        <div class="faq-list">
+          <details class="faq-item">
+            <summary class="faq-question">Who founded Soleur?</summary>
+            <p class="faq-answer">Jean Deruelle founded Soleur. He is a software engineer with 15+ years of experience building distributed systems and developer tools across Java, Ruby, Go, and TypeScript ecosystems. He founded Soleur in early 2026 to solve the problem he faced as a solo founder: running eight departments with the time and budget for none of them.</p>
+          </details>
+          <details class="faq-item">
+            <summary class="faq-question">When was Soleur founded?</summary>
+            <p class="faq-answer">Soleur was founded in early 2026. The platform launched as an open-source Claude Code extension and has grown to {{ stats.agents }} AI agents across {{ stats.departments }} business departments.</p>
+          </details>
+          <details class="faq-item">
+            <summary class="faq-question">What does Soleur do?</summary>
+            <p class="faq-answer">Soleur deploys AI agents across {{ stats.departments }} business departments &mdash; engineering, marketing, legal, finance, operations, product, sales, and support &mdash; giving a single founder the operational capacity of a full organization. Every agent shares a compounding knowledge base, so your marketing agent knows what your legal agent decided. Your expertise stays in the loop: agents provide drafts, you make the final call.</p>
+          </details>
+          <details class="faq-item">
+            <summary class="faq-question">Is Soleur open source?</summary>
+            <p class="faq-answer">Yes. The self-hosted version of Soleur is open source under Apache 2.0, with every agent and workflow publicly inspectable on <a href="{{ site.github }}" rel="noopener noreferrer">GitHub</a>. The cloud platform (in development) layers managed infrastructure and a web dashboard on the same open core.</p>
+          </details>
+          <details class="faq-item">
+            <summary class="faq-question">What is MCP?</summary>
+            <p class="faq-answer">MCP stands for Model Context Protocol &mdash; Anthropic's open standard for connecting AI models to external tools, data sources, and services. Soleur is built on <a href="https://code.claude.com/docs/en/overview" rel="noopener noreferrer">Claude Code</a> and <a href="https://modelcontextprotocol.io/specification" rel="noopener noreferrer">MCP</a>, so every agent can reach the same tool ecosystem the broader Claude Code community relies on.</p>
+          </details>
+        </div>
+      </div>
+    </section>
+
     <script type="application/ld+json">
     {
       "@context": "https://schema.org",
+      "@type": "FAQPage",
+      "mainEntity": [
+        {
+          "@type": "Question",
+          "name": "Who founded Soleur?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "Jean Deruelle founded Soleur. He is a software engineer with 15+ years of experience building distributed systems and developer tools across Java, Ruby, Go, and TypeScript ecosystems. He founded Soleur in early 2026 to solve the problem he faced as a solo founder: running eight departments with the time and budget for none of them."
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "When was Soleur founded?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": {{ ("Soleur was founded in early 2026. The platform launched as an open-source Claude Code extension and has grown to " + stats.agents + " AI agents across " + stats.departments + " business departments.") | jsonLdSafe | safe }}
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "What does Soleur do?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": {{ ("Soleur deploys AI agents across " + stats.departments + " business departments — engineering, marketing, legal, finance, operations, product, sales, and support — giving a single founder the operational capacity of a full organization. Every agent shares a compounding knowledge base, so your marketing agent knows what your legal agent decided. Your expertise stays in the loop: agents provide drafts, you make the final call.") | jsonLdSafe | safe }}
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "Is Soleur open source?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "Yes. The self-hosted version of Soleur is open source under Apache 2.0, with every agent and workflow publicly inspectable on GitHub. The cloud platform (in development) layers managed infrastructure and a web dashboard on the same open core."
+          }
+        },
+        {
+          "@type": "Question",
+          "name": "What is MCP?",
+          "acceptedAnswer": {
+            "@type": "Answer",
+            "text": "MCP stands for Model Context Protocol — Anthropic's open standard for connecting AI models to external tools, data sources, and services. Soleur is built on Claude Code and MCP, so every agent can reach the same tool ecosystem the broader Claude Code community relies on."
+          }
+        }
+      ]
+    }
+    </script>
+
+    <script type="application/ld+json">
+    {# All string interpolations in this JSON-LD block MUST use | jsonLdSafe | safe — see #2609 #}
+    {
+      "@context": "https://schema.org",
       "@type": "ProfilePage",
-      "name": "{{ title }}",
-      "url": "{{ site.url }}/about/",
+      "name": {{ title | jsonLdSafe | safe }},
+      "url": {{ (site.url + "/about/") | jsonLdSafe | safe }},
       "mainEntity": {
         "@type": "Person",
         "name": "Jean Deruelle",
-        "url": "{{ site.url }}/about/",
+        "url": {{ (site.url + "/about/") | jsonLdSafe | safe }},
         "jobTitle": "Founder",
         "worksFor": {
           "@type": "Organization",
-          "name": "{{ site.name }}",
-          "url": "{{ site.url }}"
+          "name": {{ site.name | jsonLdSafe | safe }},
+          "url": {{ site.url | jsonLdSafe | safe }}
         },
         "sameAs": [
-          "{{ site.x }}",
-          "{{ site.linkedin }}",
-          "{{ site.github }}",
-          "{{ site.bluesky }}"
+          {{ site.x | jsonLdSafe | safe }},
+          {{ site.linkedin | jsonLdSafe | safe }},
+          {{ site.github | jsonLdSafe | safe }},
+          {{ site.bluesky | jsonLdSafe | safe }}
         ]
       }
     }

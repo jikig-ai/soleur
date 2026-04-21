@@ -31,6 +31,8 @@ resource "hcloud_server" "web" {
     ci_deploy_script_b64        = base64encode(file("${path.module}/ci-deploy.sh"))
     cat_deploy_state_script_b64 = base64encode(file("${path.module}/cat-deploy-state.sh"))
     disk_monitor_script_b64     = base64encode(file("${path.module}/disk-monitor.sh"))
+    resource_monitor_script_b64 = base64encode(file("${path.module}/resource-monitor.sh"))
+    fail2ban_sshd_local_b64     = base64encode(file("${path.module}/fail2ban-sshd.local"))
     hooks_json_b64              = base64encode(local.hooks_json)
     tunnel_token                = cloudflare_zero_trust_tunnel_cloudflared.web.tunnel_token
     webhook_deploy_secret       = var.webhook_deploy_secret
@@ -83,6 +85,110 @@ resource "terraform_data" "disk_monitor_install" {
       "systemctl daemon-reload",
       "systemctl enable --now disk-monitor.timer",
       "systemctl list-timers disk-monitor.timer --no-pager",
+    ]
+  }
+}
+
+# Deploy resource-monitor.sh and systemd timer to the existing server.
+# Cloud-init handles new servers; this provisioner handles the existing one
+# (ignore_changes on user_data means cloud-init changes do not apply to it).
+# Shows as "will be created" in CI drift reports -- expected behavior (#1052).
+# Mirror of disk_monitor_install: same connection, trigger hash shape, and
+# file/remote-exec invocation order. Keep both in sync.
+resource "terraform_data" "resource_monitor_install" {
+  triggers_replace = sha256(join(",", [
+    var.resend_api_key,
+    file("${path.module}/resource-monitor.sh"),
+  ]))
+
+  connection {
+    type  = "ssh"
+    host  = hcloud_server.web.ipv4_address
+    user  = "root"
+    agent = true
+  }
+
+  provisioner "file" {
+    source      = "${path.module}/resource-monitor.sh"
+    destination = "/usr/local/bin/resource-monitor.sh"
+  }
+
+  provisioner "remote-exec" {
+    inline = [
+      "chmod +x /usr/local/bin/resource-monitor.sh",
+      "printf 'RESEND_API_KEY=%s\\n' '${var.resend_api_key}' > /etc/default/resource-monitor",
+      "chmod 600 /etc/default/resource-monitor",
+      "cat > /etc/systemd/system/resource-monitor.service << 'UNITEOF'\n[Unit]\nDescription=Host CPU/RAM/session monitor\nAfter=network-online.target\n\n[Service]\nType=oneshot\nExecStart=/usr/local/bin/resource-monitor.sh\nUNITEOF",
+      "cat > /etc/systemd/system/resource-monitor.timer << 'TIMEREOF'\n[Unit]\nDescription=Run resource monitor every 5 minutes\n\n[Timer]\nOnBootSec=5min\nOnUnitActiveSec=5min\nPersistent=true\n\n[Install]\nWantedBy=timers.target\nTIMEREOF",
+      "systemctl daemon-reload",
+      "systemctl enable --now resource-monitor.timer",
+      "systemctl list-timers resource-monitor.timer --no-pager",
+    ]
+  }
+}
+
+# Deploy fail2ban sshd tuning drop-in to the existing server (issue #2654).
+# Caps bantime.increment recidivism at 1h so an operator typo against
+# AllowUsers does not snowball into a multi-hour (or multi-day) SSH lockout.
+# Cloud-init handles fresh servers; this provisioner handles the existing one
+# (ignore_changes on user_data means cloud-init changes do not apply to it).
+# Source of truth for jail content: fail2ban-sshd.local (sibling file).
+# Shows as "will be created" in CI drift reports -- expected behavior.
+# Runbook for acute lockout recovery: knowledge-base/engineering/ops/runbooks/ssh-fail2ban-unban.md
+resource "terraform_data" "fail2ban_tuning" {
+  triggers_replace = sha256(file("${path.module}/fail2ban-sshd.local"))
+
+  connection {
+    type  = "ssh"
+    host  = hcloud_server.web.ipv4_address
+    user  = "root"
+    agent = true
+  }
+
+  # Ensure fail2ban is installed before dropping the jail.d override. The
+  # existing server is an import-era artifact -- cloud-init's `packages:`
+  # step never re-ran after import (ignore_changes = [user_data]), and the
+  # initial run appears to have failed silently (#2680). `dpkg -s` makes this
+  # idempotent: on servers where fail2ban is already installed (fresh
+  # cloud-init provisioning) the install branch is skipped.
+  provisioner "remote-exec" {
+    inline = [
+      "dpkg -s fail2ban >/dev/null 2>&1 || { export DEBIAN_FRONTEND=noninteractive; apt-get update -qq && apt-get install -y -qq fail2ban; }",
+      # Positive post-install re-verification mirrors the cloud-init audit
+      # (see runcmd in cloud-init.yml). Catches the rare case where apt
+      # reports success but dpkg leaves the package in a half-configured
+      # state; also gives a clear error message if a future edit breaks the
+      # install branch above (e.g., a typo'd package name).
+      "dpkg -s fail2ban >/dev/null 2>&1 || { echo 'FATAL: fail2ban still not installed after install attempt' >&2; exit 1; }",
+    ]
+  }
+
+  # The `remote-exec` above ensures the package is installed first. On the
+  # existing server (which was imported with ignore_changes = [user_data])
+  # cloud-init's packages: step never re-ran, so fail2ban may be missing (#2680).
+  provisioner "file" {
+    source      = "${path.module}/fail2ban-sshd.local"
+    destination = "/etc/fail2ban/jail.d/soleur-sshd.local"
+  }
+
+  provisioner "remote-exec" {
+    inline = [
+      "chown root:root /etc/fail2ban/jail.d/soleur-sshd.local",
+      "chmod 0644 /etc/fail2ban/jail.d/soleur-sshd.local",
+      # Reload picks up jail.d drop-ins without dropping active bans; fall back
+      # to restart if the installed fail2ban version does not support reload of
+      # bantime.* keys (some 0.10.x builds required restart; 1.0.2 on 24.04 is fine).
+      "systemctl reload fail2ban || systemctl restart fail2ban",
+      # Diagnostic dump (informational; printed to CI drift logs).
+      "fail2ban-client -d | grep -A5 '\\[sshd\\]' | head -20 || true",
+      # Positive assertions: if the drop-in did NOT take effect, these values
+      # would still report the defaults-debian.conf values. Asserting the
+      # literal expected values fails the provisioner when the override is
+      # silently ignored (jail.d load-order regression, syntax error swallowed
+      # by reload, etc.). 600s = 10m; 3600s = 1h.
+      "test \"$(fail2ban-client get sshd bantime)\" = '600'",
+      "test \"$(fail2ban-client get sshd maxretry)\" = '5'",
+      "test \"$(fail2ban-client get sshd findtime)\" = '600'",
     ]
   }
 }

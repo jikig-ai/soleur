@@ -28,7 +28,14 @@ export async function DELETE(
   const serviceClient = createServiceClient();
   const result = await revokeShare(serviceClient, user.id, token);
   if (!result.ok) {
-    return NextResponse.json({ error: result.error }, { status: result.status });
+    // Surface `code` so the SharePopover UI can branch on partial-success
+    // states. 502 + "purge-failed" means the DB row IS revoked but the CF
+    // cache may serve the old 200 for up to s-maxage seconds — the UI can
+    // show a degraded-success toast instead of a hard error.
+    return NextResponse.json(
+      { error: result.error, code: result.code },
+      { status: result.status },
+    );
   }
   return NextResponse.json({ revoked: true });
 }

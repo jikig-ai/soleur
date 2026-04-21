@@ -1,6 +1,6 @@
 ---
 name: feature-video
-description: "This skill should be used when recording video walkthroughs of features for PR descriptions. It captures browser interactions using agent-browser CLI, optionally creates GIF/MP4 demos (requires ffmpeg), and optionally uploads via rclone. Gracefully degrades when optional tools are missing."
+description: "This skill should be used to record video walkthroughs of features for PR descriptions. Captures browser interactions via agent-browser CLI; optional GIF/MP4 via ffmpeg and upload via rclone."
 ---
 
 # Feature Video Walkthrough
@@ -12,6 +12,7 @@ description: "This skill should be used when recording video walkthroughs of fea
 <role>Developer Relations Engineer creating feature demo videos</role>
 
 This skill creates professional video walkthroughs of features for PR documentation:
+
 - Records browser interactions using agent-browser CLI
 - Demonstrates the complete user flow
 - Converts screenshots to video/GIF (when ffmpeg is available)
@@ -45,6 +46,7 @@ bash ./plugins/soleur/skills/feature-video/scripts/check_deps.sh --auto
 If the script exits non-zero, agent-browser is missing and recording cannot proceed. Stop and inform the user.
 
 If ffmpeg or rclone show `[skip]`, note which tools are unavailable. The skill continues with degraded capability:
+
 - **No ffmpeg**: Capture screenshots only. Skip video/GIF creation in steps 4-5.
 - **No rclone**: Create video locally. Skip upload in step 6.
 
@@ -69,6 +71,7 @@ fi
 **Arguments:** $ARGUMENTS
 
 Parse the input:
+
 - First argument: PR number or "current" (defaults to current branch's PR)
 - Second argument: Base URL (defaults to `http://localhost:3000`)
 
@@ -84,11 +87,13 @@ gh pr view --json number -q '.number'
 <gather_context>
 
 **Get PR details:**
+
 ```bash
 gh pr view [number] --json title,body,files,headRefName -q '.'
 ```
 
 **Get changed files:**
+
 ```bash
 gh pr view [number] --json files -q '.files[].path'
 ```
@@ -146,6 +151,7 @@ Does this look right?
 <setup_recording>
 
 **Create directories:**
+
 ```bash
 mkdir -p tmp/screenshots tmp/videos
 ```
@@ -165,6 +171,7 @@ agent-browser captures screenshots at key moments. If ffmpeg is available, scree
 Execute the planned flow, capturing each step:
 
 **Step 1: Navigate to starting point**
+
 ```bash
 agent-browser open "[base-url]/[start-route]"
 agent-browser wait 2000
@@ -172,6 +179,7 @@ agent-browser screenshot tmp/screenshots/01-start.png
 ```
 
 **Step 2: Perform navigation/interactions**
+
 ```bash
 agent-browser snapshot -i  # Get refs
 agent-browser click @e1    # Click navigation element
@@ -180,6 +188,7 @@ agent-browser screenshot tmp/screenshots/02-navigate.png
 ```
 
 **Step 3: Demonstrate feature**
+
 ```bash
 agent-browser snapshot -i  # Get refs for feature elements
 agent-browser click @e2    # Click feature element
@@ -188,6 +197,7 @@ agent-browser screenshot tmp/screenshots/03-feature.png
 ```
 
 **Step 4: Capture result**
+
 ```bash
 agent-browser wait 2000
 agent-browser screenshot tmp/screenshots/04-result.png
@@ -214,6 +224,7 @@ ffmpeg -y -framerate 0.5 -pattern_type glob -i 'tmp/screenshots/*.png' \
 ```
 
 **Note:**
+
 - The `-2` in MP4 scale ensures height is divisible by 2 (required for H.264)
 - Preview GIF uses 640px width and 128 colors to keep file size small (~100-200KB)
 
@@ -238,6 +249,7 @@ rclone ls r2:kieran-claude/pr-videos/pr-[number]/
 ```
 
 Public URLs (R2 with public access):
+
 ```
 Video: https://pub-4047722ebb1b4b09853f24d3b61467f1.r2.dev/pr-videos/pr-[number]/feature-demo.mp4
 Preview: https://pub-4047722ebb1b4b09853f24d3b61467f1.r2.dev/pr-videos/pr-[number]/feature-demo-preview.gif
@@ -250,6 +262,7 @@ Preview: https://pub-4047722ebb1b4b09853f24d3b61467f1.r2.dev/pr-videos/pr-[numbe
 <update_pr>
 
 **Get current PR body:**
+
 ```bash
 gh pr view [number] --json body -q '.body'
 ```
@@ -298,6 +311,7 @@ Screenshots captured (video conversion requires ffmpeg). See PR comments for ima
 ```
 
 **Update the PR:**
+
 ```bash
 gh pr edit [number] --body "[updated body with demo section]"
 ```

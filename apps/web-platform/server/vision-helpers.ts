@@ -2,7 +2,11 @@ import fs from "fs";
 import path from "path";
 import { FOUNDATION_MIN_CONTENT_BYTES } from "@/lib/kb-constants";
 
-const MAX_VISION_CONTENT = 5000;
+// reject bare @-mentions and /slash-commands that fall below this threshold
+const MIN_VISION_SEED_LENGTH = 10;
+
+// code-unit cap (JS string length), not UTF-8 byte count
+const MAX_VISION_CHARS = 5000;
 
 /**
  * Create a minimal vision.md from the founder's first message.
@@ -16,7 +20,7 @@ export async function tryCreateVision(
 ): Promise<void> {
   // Content validation: reject non-user content
   const trimmed = content.trim();
-  if (trimmed.length < 10) return;
+  if (trimmed.length < MIN_VISION_SEED_LENGTH) return;
   if (trimmed.startsWith("/")) return;
   if (trimmed.startsWith("@") && !trimmed.includes(" ")) return;
   if (/^###?\s/.test(trimmed) && /\/soleur:/.test(trimmed)) return;
@@ -28,9 +32,10 @@ export async function tryCreateVision(
     "vision.md",
   );
 
-  // Truncate oversized content to prevent disk abuse
-  const safe = content.length > MAX_VISION_CONTENT
-    ? content.slice(0, MAX_VISION_CONTENT)
+  // Truncate runaway content (rogue paste, LLM loop). Note: char count, not byte
+  // count — UTF-8 multibyte chars may exceed the byte cap.
+  const safe = content.length > MAX_VISION_CHARS
+    ? content.slice(0, MAX_VISION_CHARS)
     : content;
 
   await fs.promises.mkdir(path.dirname(visionPath), { recursive: true });

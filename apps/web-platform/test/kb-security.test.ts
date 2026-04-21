@@ -77,11 +77,12 @@ describe("KB API security", () => {
       const content = readFileSync(filePath, "utf-8");
       const relativePath = filePath.split("/apps/web-platform/")[1];
 
-      // Auth enforcement is satisfied either by an inline getUser call OR by
-      // a proven delegation to the shared helper (#2180). "Proven" means the
-      // helper must be INVOKED (not just imported) AND its {ok: false} result
-      // must trigger an early return — substring presence alone is too weak
-      // and would accept dead imports or ignored results (see #2245).
+      // Auth enforcement is satisfied by (a) an inline getUser call, (b) a
+      // proven delegation to the shared helper (#2180 — INVOKED AND its
+      // {ok: false} result must trigger an early return, per #2245), or
+      // (c) wrapping the handler with `withUserRateLimit` (#2510 — the
+      // wrapper performs `supabase.auth.getUser()` and 401s unauthenticated
+      // callers before the inner handler runs).
       const hasInlineAuth = content.includes("supabase.auth.getUser");
       const invokesHelper =
         /const\s+\w+\s*=\s*await\s+authenticateAndResolveKbPath\s*\(/.test(
@@ -90,10 +91,16 @@ describe("KB API security", () => {
       const checksHelperResult =
         /if\s*\(\s*!\s*\w+\.ok\s*\)\s*return\s+\w+\.response/.test(content);
       const delegatesToHelper = invokesHelper && checksHelperResult;
+      // Wrapped export signals the wrapper is doing the auth — must be the
+      // exact exported handler, not a bare import or a dead reference.
+      const wrapsWithRateLimit =
+        /export\s+const\s+(GET|POST|PUT|PATCH|DELETE)\s*=\s*withUserRateLimit\s*\(/.test(
+          content,
+        );
 
       expect(
-        hasInlineAuth || delegatesToHelper,
-        `${relativePath} missing auth check (inline getUser or proven authenticateAndResolveKbPath delegation)`,
+        hasInlineAuth || delegatesToHelper || wrapsWithRateLimit,
+        `${relativePath} missing auth check (inline getUser, authenticateAndResolveKbPath, or withUserRateLimit wrap)`,
       ).toBe(true);
     }
   });

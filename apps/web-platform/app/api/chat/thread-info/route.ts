@@ -1,17 +1,10 @@
 import { NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
+import type { User } from "@supabase/supabase-js";
 import { lookupConversationForPath } from "@/server/lookup-conversation-for-path";
 import { validateContextPath } from "@/server/validate-context-path";
+import { withUserRateLimit } from "@/server/with-user-rate-limit";
 
-export async function GET(req: Request) {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
+async function getHandler(req: Request, user: User) {
   const url = new URL(req.url);
   const contextPath = validateContextPath(url.searchParams.get("contextPath"));
   if (!contextPath) {
@@ -28,3 +21,8 @@ export async function GET(req: Request) {
     messageCount: result.row?.message_count ?? 0,
   });
 }
+
+export const GET = withUserRateLimit(getHandler, {
+  perMinute: 60,
+  feature: "kb-chat.thread-info",
+});

@@ -207,4 +207,170 @@ describe("linearizePdf", () => {
     if (!result.ok) expect(result.reason).toBe("timeout");
     expect(child.kill).toHaveBeenCalledWith("SIGKILL");
   });
+
+  // Concurrency gate: closes #2472. Default POOL_SIZE=2 (env-overridable via
+  // PDF_LINEARIZE_CONCURRENCY, tested in the separate describe block below).
+  it("caps concurrent qpdf subprocesses to POOL_SIZE (2) and queues the rest", async () => {
+    vi.useFakeTimers();
+    const children: Array<ReturnType<typeof fakeChild>> = [];
+    mockSpawn.mockImplementation(() => {
+      const c = fakeChild({ holdOpen: true });
+      children.push(c);
+      return c;
+    });
+    mockReadFile.mockResolvedValue(Buffer.from("%PDF-out"));
+
+    const p1 = linearizePdf(Buffer.from("%PDF-1"));
+    const p2 = linearizePdf(Buffer.from("%PDF-2"));
+    const p3 = linearizePdf(Buffer.from("%PDF-3"));
+
+    await vi.advanceTimersByTimeAsync(0);
+    expect(mockSpawn).toHaveBeenCalledTimes(2); // p3 queued behind the gate
+
+    // Release slot 0 → p3 should enter the gate.
+    children[0].emit("close", 0, null);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(mockSpawn).toHaveBeenCalledTimes(3);
+
+    children[1].emit("close", 0, null);
+    children[2].emit("close", 0, null);
+    const results = await Promise.all([p1, p2, p3]);
+    vi.useRealTimers();
+    expect(results.every((r) => r.ok)).toBe(true);
+  });
+
+  // Release-discipline tests (Tests 2-4). Each proves a specific error branch
+  // inside the gated block still calls release(), so a queued call can proceed.
+  it("releases slot on timeout so a queued call can proceed", async () => {
+    vi.useFakeTimers();
+    mockSpawn.mockImplementation(() => fakeChild({ holdOpen: true }));
+
+    const p1 = linearizePdf(Buffer.from("%PDF-1"));
+    const p2 = linearizePdf(Buffer.from("%PDF-2"));
+    const p3 = linearizePdf(Buffer.from("%PDF-3"));
+
+    await vi.advanceTimersByTimeAsync(0);
+    expect(mockSpawn).toHaveBeenCalledTimes(2);
+
+    // Fire the 10s qpdf timeout for both in-flight subprocesses. Their slots
+    // must release via finally, letting p3 enter the gate.
+    await vi.advanceTimersByTimeAsync(10_001);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(mockSpawn).toHaveBeenCalledTimes(3);
+
+    // Drain the pending promises.
+    await vi.advanceTimersByTimeAsync(10_001);
+    await Promise.all([p1, p2, p3]);
+    vi.useRealTimers();
+  });
+
+  it("releases slot on spawn_error so a queued call can proceed", async () => {
+    vi.useFakeTimers();
+    const children: Array<ReturnType<typeof fakeChild>> = [];
+    mockSpawn.mockImplementation(() => {
+      const c = fakeChild({ holdOpen: true });
+      children.push(c);
+      return c;
+    });
+    mockReadFile.mockResolvedValue(Buffer.from("%PDF-out"));
+
+    const p1 = linearizePdf(Buffer.from("%PDF-1"));
+    const p2 = linearizePdf(Buffer.from("%PDF-2"));
+    const p3 = linearizePdf(Buffer.from("%PDF-3"));
+
+    await vi.advanceTimersByTimeAsync(0);
+    expect(mockSpawn).toHaveBeenCalledTimes(2); // p3 queued
+
+    // Synthesize an ENOENT-style spawn error on slot 0. Release must fire via
+    // finally so p3 enters the gate.
+    (children[0] as EventEmitter).emit("error", new Error("ENOENT"));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(mockSpawn).toHaveBeenCalledTimes(3);
+
+    const r1 = await p1;
+    expect(r1.ok).toBe(false);
+    if (!r1.ok) expect(r1.reason).toBe("spawn_error");
+
+    children[1].emit("close", 0, null);
+    children[2].emit("close", 0, null);
+    await Promise.all([p2, p3]);
+    vi.useRealTimers();
+  });
+
+  it("releases slot on non_zero_exit so a queued call can proceed", async () => {
+    vi.useFakeTimers();
+    const children: Array<ReturnType<typeof fakeChild>> = [];
+    mockSpawn.mockImplementation(() => {
+      const c = fakeChild({ holdOpen: true });
+      children.push(c);
+      return c;
+    });
+    mockReadFile.mockResolvedValue(Buffer.from("%PDF-out"));
+
+    const p1 = linearizePdf(Buffer.from("%PDF-1"));
+    const p2 = linearizePdf(Buffer.from("%PDF-2"));
+    const p3 = linearizePdf(Buffer.from("%PDF-3"));
+
+    await vi.advanceTimersByTimeAsync(0);
+    expect(mockSpawn).toHaveBeenCalledTimes(2); // p3 queued
+
+    // Slot 0 exits non-zero. Release must fire via finally so p3 enters.
+    children[0].emit("close", 3, null);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(mockSpawn).toHaveBeenCalledTimes(3);
+
+    const r1 = await p1;
+    expect(r1.ok).toBe(false);
+    if (!r1.ok) expect(r1.reason).toBe("non_zero_exit");
+
+    children[1].emit("close", 0, null);
+    children[2].emit("close", 0, null);
+    await Promise.all([p2, p3]);
+    vi.useRealTimers();
+  });
+});
+
+// Separate describe block so vi.resetModules() + dynamic import can capture
+// a fresh POOL_SIZE from PDF_LINEARIZE_CONCURRENCY. The default-pool tests
+// above use the top-level static import, which binds to the original load's
+// POOL_SIZE=2; this block is the only path that exercises the env override.
+describe("linearizePdf POOL_SIZE env override", () => {
+  it("serializes concurrent calls when PDF_LINEARIZE_CONCURRENCY=1", async () => {
+    const prev = process.env.PDF_LINEARIZE_CONCURRENCY;
+    process.env.PDF_LINEARIZE_CONCURRENCY = "1";
+    vi.useFakeTimers();
+    vi.resetModules();
+    mockSpawn.mockReset();
+    mockWriteFile.mockReset().mockResolvedValue(undefined);
+    mockReadFile.mockReset().mockResolvedValue(Buffer.from("%PDF-out"));
+    mockMkdtemp.mockReset().mockResolvedValue(MKDTEMP_DIR);
+    mockRm.mockReset().mockResolvedValue(undefined);
+
+    try {
+      const mod = await import("../server/pdf-linearize");
+      const children: Array<ReturnType<typeof fakeChild>> = [];
+      mockSpawn.mockImplementation(() => {
+        const c = fakeChild({ holdOpen: true });
+        children.push(c);
+        return c;
+      });
+
+      const p1 = mod.linearizePdf(Buffer.from("%PDF-1"));
+      const p2 = mod.linearizePdf(Buffer.from("%PDF-2"));
+
+      await vi.advanceTimersByTimeAsync(0);
+      expect(mockSpawn).toHaveBeenCalledTimes(1); // serialized
+
+      children[0].emit("close", 0, null);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(mockSpawn).toHaveBeenCalledTimes(2);
+
+      children[1].emit("close", 0, null);
+      await Promise.all([p1, p2]);
+    } finally {
+      if (prev === undefined) delete process.env.PDF_LINEARIZE_CONCURRENCY;
+      else process.env.PDF_LINEARIZE_CONCURRENCY = prev;
+      vi.useRealTimers();
+    }
+  });
 });

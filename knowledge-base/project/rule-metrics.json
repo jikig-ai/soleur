@@ -1,5 +1,6 @@
 {
-  "generated_at": "2026-04-15T09:35:31Z",
+  "schema": 1,
+  "generated_at": "2026-04-18T15:33:58Z",
   "rules": [
     {
       "id": "cm-challenge-reasoning-instead-of",
@@ -32,6 +33,16 @@
       "rule_text_prefix": "When proposing to clear context or resume from a f"
     },
     {
+      "id": "cq-abort-signal-timeout-vs-fake-timers",
+      "section": "Code Quality",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "prevented_errors": 0,
+      "last_hit": null,
+      "first_seen": null,
+      "rule_text_prefix": "For test-friendly timeout-bounded async helpers, u"
+    },
+    {
       "id": "cq-after-completing-a-playwright-task-call",
       "section": "Code Quality",
       "hit_count": 0,
@@ -40,6 +51,16 @@
       "last_hit": null,
       "first_seen": null,
       "rule_text_prefix": "After completing a Playwright task, call `browser_"
+    },
+    {
+      "id": "cq-agents-md-why-single-line",
+      "section": "Code Quality",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "prevented_errors": 0,
+      "last_hit": null,
+      "first_seen": null,
+      "rule_text_prefix": "AGENTS.md rules cap at ~600 bytes each; `**Why:**`"
     },
     {
       "id": "cq-always-run-npx-markdownlint-cli2-fix-on",
@@ -82,6 +103,46 @@
       "rule_text_prefix": "CI steps polling JSON endpoints under `bash -e` mu"
     },
     {
+      "id": "cq-claude-code-action-pin-freshness",
+      "section": "Code Quality",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "prevented_errors": 0,
+      "last_hit": null,
+      "first_seen": null,
+      "rule_text_prefix": "When a PR changes `--model <name>` in `.github/wor"
+    },
+    {
+      "id": "cq-cloudflare-dynamic-path-cache-rule-required",
+      "section": "Code Quality",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "prevented_errors": 0,
+      "last_hit": null,
+      "first_seen": null,
+      "rule_text_prefix": "For Cache-Control on dynamic paths (opaque tokens,"
+    },
+    {
+      "id": "cq-cloudflare-provider-alias-for-narrow-scope",
+      "section": "Code Quality",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "prevented_errors": 0,
+      "last_hit": null,
+      "first_seen": null,
+      "rule_text_prefix": "When a single Cloudflare terraform resource needs "
+    },
+    {
+      "id": "cq-code-comments-symbol-anchors-not-line-numbers",
+      "section": "Code Quality",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "prevented_errors": 0,
+      "last_hit": null,
+      "first_seen": null,
+      "rule_text_prefix": "Code comments referencing other code MUST use grep"
+    },
+    {
       "id": "cq-deploy-webhook-observability-debug",
       "section": "Code Quality",
       "hit_count": 0,
@@ -89,7 +150,27 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": "For deploy webhook observability debugging, fetch "
+      "rule_text_prefix": "For deploy webhook debugging, fetch `WEBHOOK_DEPLO"
+    },
+    {
+      "id": "cq-destructive-prod-tests-allowlist",
+      "section": "Code Quality",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "prevented_errors": 0,
+      "last_hit": null,
+      "first_seen": null,
+      "rule_text_prefix": "Tests that DELETE from shared production must gate"
+    },
+    {
+      "id": "cq-docs-cli-verification",
+      "section": "Code Quality",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "prevented_errors": 0,
+      "last_hit": null,
+      "first_seen": null,
+      "rule_text_prefix": "When prescribing a CLI invocation that lands in us"
     },
     {
       "id": "cq-doppler-service-tokens-are-per-config",
@@ -112,6 +193,16 @@
       "rule_text_prefix": "Ensure dependencies are installed at the correct p"
     },
     {
+      "id": "cq-for-local-verification-of-apps-doppler",
+      "section": "Code Quality",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "prevented_errors": 0,
+      "last_hit": null,
+      "first_seen": null,
+      "rule_text_prefix": "For local verification of env-var-reading apps, us"
+    },
+    {
       "id": "cq-for-production-debugging-use",
       "section": "Code Quality",
       "hit_count": 0,
@@ -120,6 +211,26 @@
       "last_hit": null,
       "first_seen": null,
       "rule_text_prefix": "For production debugging, use observability tools "
+    },
+    {
+      "id": "cq-gh-issue-create-milestone-takes-title",
+      "section": "Code Quality",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "prevented_errors": 0,
+      "last_hit": null,
+      "first_seen": null,
+      "rule_text_prefix": "`gh issue create --milestone` takes the milestone "
+    },
+    {
+      "id": "cq-gh-issue-label-verify-name",
+      "section": "Code Quality",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "prevented_errors": 0,
+      "last_hit": null,
+      "first_seen": null,
+      "rule_text_prefix": "Before `gh issue create --label <name>`, run `gh l"
     },
     {
       "id": "cq-in-worktrees-run-vitest-via-node-node",
@@ -132,6 +243,36 @@
       "rule_text_prefix": "In worktrees, run vitest via `node node_modules/vi"
     },
     {
+      "id": "cq-jsdom-no-layout-gated-assertions",
+      "section": "Code Quality",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "prevented_errors": 0,
+      "last_hit": null,
+      "first_seen": null,
+      "rule_text_prefix": "Never gate a jsdom test assertion on layout-engine"
+    },
+    {
+      "id": "cq-markdownlint-fix-target-specific-paths",
+      "section": "Code Quality",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "prevented_errors": 0,
+      "last_hit": null,
+      "first_seen": null,
+      "rule_text_prefix": "When running `npx markdownlint-cli2 --fix`, pass s"
+    },
+    {
+      "id": "cq-mutation-assertions-pin-exact-post-state",
+      "section": "Code Quality",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "prevented_errors": 0,
+      "last_hit": null,
+      "first_seen": null,
+      "rule_text_prefix": "Assertions verifying a mutation (seed, update, del"
+    },
+    {
       "id": "cq-never-skip-hooks",
       "section": "Code Quality",
       "hit_count": 0,
@@ -139,7 +280,17 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": "Never skip pre-commit or pre-push hooks with `--no"
+      "rule_text_prefix": "Never skip pre-commit/pre-push hooks with `--no-ve"
+    },
+    {
+      "id": "cq-nextjs-route-files-http-only-exports",
+      "section": "Code Quality",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "prevented_errors": 0,
+      "last_hit": null,
+      "first_seen": null,
+      "rule_text_prefix": "App Router route files (`apps/*/app/**/route.{ts,t"
     },
     {
       "id": "cq-playwright-mcp-uses-isolated-mode-mcp",
@@ -152,6 +303,46 @@
       "rule_text_prefix": "Playwright MCP uses `--isolated` mode (`.mcp.json`"
     },
     {
+      "id": "cq-preflight-fetch-sweep-test-mocks",
+      "section": "Code Quality",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "prevented_errors": 0,
+      "last_hit": null,
+      "first_seen": null,
+      "rule_text_prefix": "When a component gains a pre-flight fetch (HEAD, O"
+    },
+    {
+      "id": "cq-progressive-rendering-for-large-assets",
+      "section": "Code Quality",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "prevented_errors": 0,
+      "last_hit": null,
+      "first_seen": null,
+      "rule_text_prefix": "When a feature loads large assets (PDFs, videos, i"
+    },
+    {
+      "id": "cq-raf-batching-sweep-test-helpers",
+      "section": "Code Quality",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "prevented_errors": 0,
+      "last_hit": null,
+      "first_seen": null,
+      "rule_text_prefix": "When introducing `requestAnimationFrame`/`queueMic"
+    },
+    {
+      "id": "cq-ref-removal-sweep-cleanup-closures",
+      "section": "Code Quality",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "prevented_errors": 0,
+      "last_hit": null,
+      "first_seen": null,
+      "rule_text_prefix": "Before removing a `useRef` declaration, grep the r"
+    },
+    {
       "id": "cq-rule-ids-are-immutable",
       "section": "Code Quality",
       "hit_count": 0,
@@ -159,7 +350,57 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": "Rule IDs (``) on AGENTS.md rules are immutable onc"
+      "rule_text_prefix": "Rule IDs on AGENTS.md rules are immutable once ass"
+    },
+    {
+      "id": "cq-silent-fallback-must-mirror-to-sentry",
+      "section": "Code Quality",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "prevented_errors": 0,
+      "last_hit": null,
+      "first_seen": null,
+      "rule_text_prefix": "When a code path catches an error (or detects a de"
+    },
+    {
+      "id": "cq-terraform-failed-apply-orphaned-state",
+      "section": "Code Quality",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "prevented_errors": 0,
+      "last_hit": null,
+      "first_seen": null,
+      "rule_text_prefix": "After a failed `terraform apply`, run `terraform s"
+    },
+    {
+      "id": "cq-test-mocked-module-constant-import",
+      "section": "Code Quality",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "prevented_errors": 0,
+      "last_hit": null,
+      "first_seen": null,
+      "rule_text_prefix": "Before extracting a constant for drift-resistance,"
+    },
+    {
+      "id": "cq-union-widening-grep-three-patterns",
+      "section": "Code Quality",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "prevented_errors": 0,
+      "last_hit": null,
+      "first_seen": null,
+      "rule_text_prefix": "When widening a discriminated union, grep **three*"
+    },
+    {
+      "id": "cq-vite-test-files-esm-only",
+      "section": "Code Quality",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "prevented_errors": 0,
+      "last_hit": null,
+      "first_seen": null,
+      "rule_text_prefix": "Never use `require()` in Vite-transformed test or "
     },
     {
       "id": "cq-when-lefthook-hangs-in-a-worktree-60s",
@@ -179,7 +420,7 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": "When running terraform commands locally with Doppl"
+      "rule_text_prefix": "Run terraform locally with `doppler run --name-tra"
     },
     {
       "id": "cq-write-failing-tests-before",
@@ -199,7 +440,7 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": "All infrastructure provisioning (servers, volumes,"
+      "rule_text_prefix": "All infra provisioning (servers, volumes, firewall"
     },
     {
       "id": "hr-always-read-a-file-before-editing-it",
@@ -229,7 +470,7 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": "Before running git commands on a directory (e.g., "
+      "rule_text_prefix": "Before running `git -C <path>`, validate the path "
     },
     {
       "id": "hr-before-shipping-ship-phase-5-5-runs",
@@ -279,7 +520,7 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": "GitHub API endpoints with enum parameters (e.g., `"
+      "rule_text_prefix": "GitHub API endpoints with enum parameters require "
     },
     {
       "id": "hr-in-github-actions-run-blocks-never-use",
@@ -422,6 +663,16 @@
       "rule_text_prefix": "When in a worktree, never read from bare repo path"
     },
     {
+      "id": "hr-when-playwright-mcp-hits-an-auth-wall",
+      "section": "Hard Rules",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "prevented_errors": 0,
+      "last_hit": null,
+      "first_seen": null,
+      "rule_text_prefix": "When Playwright MCP hits an auth wall, keep the ta"
+    },
+    {
       "id": "hr-when-triaging-a-batch-of-issues-never",
       "section": "Hard Rules",
       "hit_count": 0,
@@ -429,7 +680,7 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": "When triaging a batch of issues, never defer an is"
+      "rule_text_prefix": "When triaging issues, never defer as \"not automata"
     },
     {
       "id": "pdr-do-not-route-on-trivial-messages-yes",
@@ -449,7 +700,7 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": "When a user message contains a clear, actionable d"
+      "rule_text_prefix": "When a user message contains a clear domain signal"
     },
     {
       "id": "rf-after-merging-read-files-from-the-merged",
@@ -490,6 +741,16 @@
       "last_hit": null,
       "first_seen": null,
       "rule_text_prefix": "Never skip QA/review before merging. Full pipeline"
+    },
+    {
+      "id": "rf-review-finding-default-fix-inline",
+      "section": "Review & Feedback",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "prevented_errors": 0,
+      "last_hit": null,
+      "first_seen": null,
+      "rule_text_prefix": "Review findings default to fix-inline on the PR br"
     },
     {
       "id": "rf-when-a-reviewer-or-user-says-to-keep-a",
@@ -539,7 +800,7 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": "At session start (after `cleanup-merged` has fetch"
+      "rule_text_prefix": "At session start (after `cleanup-merged` fetches m"
     },
     {
       "id": "wg-at-session-start-run-bash-plugins-soleur",
@@ -569,7 +830,7 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": "Every feature listed in a roadmap phase table MUST"
+      "rule_text_prefix": "Every feature in a roadmap phase table MUST have a"
     },
     {
       "id": "wg-every-session-error-must-produce-either",
@@ -729,7 +990,7 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": "When moving GitHub issues between milestones, defe"
+      "rule_text_prefix": "When moving issues between milestones, deferring f"
     },
     {
       "id": "wg-when-tests-fail-and-are-confirmed-pre",
@@ -753,8 +1014,8 @@
     }
   ],
   "summary": {
-    "total_rules_tagged": 75,
-    "rules_unused_over_8w": 75,
+    "total_rules_tagged": 101,
+    "rules_unused_over_8w": 101,
     "rules_bypassed_over_baseline": 0,
     "orphan_rule_ids": []
   }

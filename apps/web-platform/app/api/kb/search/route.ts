@@ -1,19 +1,12 @@
 import { NextResponse } from "next/server";
 import path from "path";
-import { createClient, createServiceClient } from "@/lib/supabase/server";
+import type { User } from "@supabase/supabase-js";
+import { createServiceClient } from "@/lib/supabase/server";
 import logger from "@/server/logger";
 import { searchKb, KbValidationError } from "@/server/kb-reader";
+import { withUserRateLimit } from "@/server/with-user-rate-limit";
 
-export async function GET(request: Request) {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-
-  if (!user) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
+async function getHandler(request: Request, user: User) {
   const serviceClient = createServiceClient();
   const { data: userData, error: fetchError } = await serviceClient
     .from("users")
@@ -54,3 +47,8 @@ export async function GET(request: Request) {
     );
   }
 }
+
+export const GET = withUserRateLimit(getHandler, {
+  perMinute: 60,
+  feature: "kb.search",
+});

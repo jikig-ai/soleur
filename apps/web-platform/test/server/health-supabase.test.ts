@@ -4,6 +4,14 @@ vi.mock("@/lib/supabase/service", () => ({
   serverUrl: () => "https://test.supabase.co",
 }));
 
+// session-metrics pulls in ws-handler which calls createServiceClient() at
+// module load. Stub both so the supabase-checker test file only exercises
+// checkSupabase without booting unrelated server subsystems.
+vi.mock("../../server/session-metrics", () => ({
+  getActiveSessionCount: () => 0,
+  getActiveWorkspaceCount: () => 0,
+}));
+
 describe("checkSupabase URL", () => {
   beforeEach(() => {
     vi.restoreAllMocks();

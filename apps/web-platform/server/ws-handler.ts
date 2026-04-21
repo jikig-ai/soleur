@@ -69,8 +69,11 @@ export interface ClientSession {
   subscriptionRefreshTimer?: ReturnType<typeof setInterval>;
 }
 
-/** Active connections keyed by Supabase user ID. */
-export const sessions = new Map<string, ClientSession>();
+/** Active connections keyed by Supabase user ID. Registered in session-registry
+ *  so `/health` and session-metrics can read `.size` without pulling the full
+ *  ws-handler graph. Re-exported here for backwards compatibility. */
+import { sessions } from "./session-registry";
+export { sessions };
 
 /** Deferred abort timers for disconnected sessions (keyed by userId:conversationId). */
 const pendingDisconnects = new Map<string, ReturnType<typeof setTimeout>>();
@@ -384,6 +387,16 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
           }
         }
 
+        // Cross-tab session supersession (#2391): `sessions` is keyed by
+        // userId, not by (userId, context_path). Opening tab B with a
+        // resumeByContextPath will close tab A's socket via the auth-success
+        // path (search `WS_CLOSE_CODES.SUPERSEDED` in this file). Per-doc
+        // context_path resumption does NOT grant two tabs independent live
+        // streams; it only resolves the *persisted* conversation row so the
+        // new tab shows the right history. A user-visible "another tab took
+        // over" banner is tracked as a separate feature follow-up, not a
+        // review-backlog drain.
+        //
         // If client asked to resume by context_path (KB sidebar), look up
         // existing thread before deferring creation. UNIQUE partial index
         // on (user_id, context_path) guarantees at most one match.

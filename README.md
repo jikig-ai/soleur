@@ -11,7 +11,7 @@ The Company-as-a-Service platform. Collapse the friction between a startup idea 
 
 ## What is Soleur?
 
-Soleur gives a single founder the leverage of a full organization. **65 agents**, **3 commands**, and **66 skills** that compound your company knowledge over time -- every problem you solve makes the next one easier.
+Soleur gives a single founder the leverage of a full organization. **65 agents**, **3 commands**, and **67 skills** that compound your company knowledge over time -- every problem you solve makes the next one easier.
 
 ## Installation
 
@@ -27,8 +27,6 @@ claude plugin install soleur
 ```bash
 claude plugin install --url https://github.com/jikig-ai/soleur/tree/main/plugins/soleur
 ```
-
-**Running with Ollama?** Use `ollama launch claude --model gemma4:31b-cloud` to start Soleur with your preferred local model.
 
 **For existing codebases:** Run `/soleur:sync` first to populate your knowledge-base with conventions and patterns.
 

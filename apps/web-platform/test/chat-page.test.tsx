@@ -2,29 +2,18 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { createUseTeamNamesMock } from "./mocks/use-team-names";
+import { createWebSocketMock } from "./mocks/use-websocket";
 
-// Mock useWebSocket hook
 const mockStartSession = vi.fn();
 const mockSendMessage = vi.fn();
 const mockSendReviewGateResponse = vi.fn();
 
-type MockTextMessage = { id: string; role: "user" | "assistant"; content: string; type: "text"; leaderId?: string; state?: "thinking" | "tool_use" | "streaming" | "done" | "error" };
-type MockGateMessage = { id: string; role: "user" | "assistant"; content: string; type: "review_gate"; leaderId?: string; gateId: string; question: string; options: string[]; header?: string; descriptions?: Record<string, string | undefined>; stepProgress?: { current: number; total: number }; resolved?: boolean; selectedOption?: string; gateError?: string };
-type MockChatMessage = MockTextMessage | MockGateMessage;
-
-let wsReturn = {
-  messages: [] as MockChatMessage[],
+let wsReturn = createWebSocketMock({
   startSession: mockStartSession,
   sendMessage: mockSendMessage,
   sendReviewGateResponse: mockSendReviewGateResponse,
-  status: "connected" as const,
-  disconnectReason: undefined as string | undefined,
-  lastError: null as import("@/lib/ws-client").WebSocketError | null,
-  reconnect: vi.fn(),
-  routeSource: null as "auto" | "mention" | null,
-  activeLeaderIds: [] as string[],
   sessionConfirmed: false,
-};
+});
 
 vi.mock("@/lib/ws-client", () => ({
   useWebSocket: () => wsReturn,
@@ -50,19 +39,12 @@ describe("ChatPage", () => {
   beforeEach(() => {
     mockStartSession.mockClear();
     mockSendMessage.mockClear();
-    wsReturn = {
-      messages: [],
+    wsReturn = createWebSocketMock({
       startSession: mockStartSession,
       sendMessage: mockSendMessage,
       sendReviewGateResponse: mockSendReviewGateResponse,
-      status: "connected",
-      disconnectReason: undefined,
-      lastError: null,
-      reconnect: vi.fn(),
-      routeSource: null,
-      activeLeaderIds: [],
       sessionConfirmed: false,
-    };
+    });
     // Reset search params
     for (const key of [...mockSearchParams.keys()]) {
       mockSearchParams.delete(key);

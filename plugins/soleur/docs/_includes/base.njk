@@ -27,37 +27,65 @@
        unpredictable). The blocked script has no user-facing impact — see #1149. -->
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://plausible.io 'sha256-l56vLAULxECuIebP1+Hhz+75oNwhX8YnMpMJrN6HoPo=' 'sha256-SVJF5zPt5S9fNTROUuCTIHZpLN5Ht8ZoYfJXtx4ngtM='; connect-src 'self' https://buttondown.com https://plausible.io; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; base-uri 'self'; form-action 'self' https://buttondown.com; object-src 'none'; upgrade-insecure-requests;">
   <script type="application/ld+json">
+  {# All string interpolations in this JSON-LD block MUST use | jsonLdSafe | safe — see #2609 #}
   {
     "@context": "https://schema.org",
     "@graph": [
       {
         "@type": "WebSite",
-        "name": "{{ site.name }}",
-        "url": "{{ site.url }}",
-        "description": "{{ site.description }}"
+        "name": {{ site.name | jsonLdSafe | safe }},
+        "url": {{ site.url | jsonLdSafe | safe }},
+        "description": {{ site.description | jsonLdSafe | safe }}
       },
       {
         "@type": "WebPage",
-        "name": "{{ title }}",
-        "description": "{{ description }}",
-        "url": "{{ site.url }}{{ page.url }}",
+        "name": {{ title | jsonLdSafe | safe }},
+        "description": {{ description | jsonLdSafe | safe }},
+        "url": {{ (site.url + page.url) | jsonLdSafe | safe }},
         "inLanguage": "en-US",
         "publisher": {
           "@type": "Organization",
-          "name": "{{ site.name }}",
-          "url": "{{ site.url }}"
+          "name": {{ site.name | jsonLdSafe | safe }},
+          "url": {{ site.url | jsonLdSafe | safe }}
         }
       }{% if page.url == "/" or page.url == "/index.html" %},
       {
+        "@type": "Organization",
+        "@id": {{ (site.url + "/#organization") | jsonLdSafe | safe }},
+        "name": {{ site.name | jsonLdSafe | safe }},
+        "url": {{ site.url | jsonLdSafe | safe }},
+        "logo": {{ (site.url + "/images/logo-mark-512.png") | jsonLdSafe | safe }},
+        "sameAs": [
+          {{ site.github | jsonLdSafe | safe }},
+          {{ site.x | jsonLdSafe | safe }},
+          {{ site.linkedinCompany | jsonLdSafe | safe }},
+          {{ site.bluesky | jsonLdSafe | safe }},
+          {{ site.discord | jsonLdSafe | safe }}
+        ],
+        "subjectOf": [
+          {
+            "@type": "NewsArticle",
+            "url": "https://www.inc.com/ben-sherry/anthropic-ceo-dario-amodei-predicts-the-first-billion-dollar-solopreneur-by-2026/91193609",
+            "headline": "Anthropic CEO Dario Amodei Predicts The First Billion-Dollar Solopreneur",
+            "datePublished": "2025-03-25",
+            "publisher": {
+              "@type": "Organization",
+              "name": "Inc.",
+              "url": "https://www.inc.com/"
+            }
+          }
+        ]
+      },
+      {
         "@type": "SoftwareApplication",
-        "name": "{{ site.name }}",
-        "url": "{{ site.url }}",
-        "image": "{{ site.url }}/images/logo-mark-512.png",
+        "name": {{ site.name | jsonLdSafe | safe }},
+        "url": {{ site.url | jsonLdSafe | safe }},
+        "image": {{ (site.url + "/images/logo-mark-512.png") | jsonLdSafe | safe }},
         "applicationCategory": "BusinessApplication",
         "operatingSystem": "macOS, Linux, Windows",
-        "softwareVersion": "{{ plugin.version }}",
-        "downloadUrl": "{{ site.github }}",
-        "releaseNotes": "{{ site.url }}/changelog/",
+        "softwareVersion": {{ plugin.version | jsonLdSafe | safe }},
+        "downloadUrl": {{ site.github | jsonLdSafe | safe }},
+        "releaseNotes": {{ (site.url + "/changelog/") | jsonLdSafe | safe }},
         "featureList": "AI Agents, Skills, Commands, Knowledge Compounding, Code Review, Planning, Deployment",
         "offers": [
           {
@@ -77,8 +105,8 @@
         ],
         "author": {
           "@type": "Organization",
-          "name": "{{ site.name }}",
-          "url": "{{ site.url }}"
+          "name": {{ site.name | jsonLdSafe | safe }},
+          "url": {{ site.url | jsonLdSafe | safe }}
         }
       }{% endif %}
     ]
@@ -109,6 +137,9 @@
       {%- for item in site.nav %}
       <li><a href="{{ item.url }}"{% if page.url == ('/' + item.url) or (item.url == 'blog/' and page.url.startsWith('/blog')) %} aria-current="page"{% endif %}>{{ item.label }}</a></li>
       {%- endfor %}
+      {%- if site.primaryCta %}
+      <li class="nav-cta-slot"><a href="{{ site.primaryCta.url }}" aria-label="{{ site.primaryCta.ariaLabel }}" class="btn btn-primary btn--sm nav-cta">{{ site.primaryCta.label }}</a></li>
+      {%- endif %}
     </ul>
   </header>
 
@@ -141,7 +172,7 @@
           <h3 class="footer-heading">{{ col.heading }}</h3>
           <ul class="footer-links">
             {%- for link in col.links %}
-            <li><a href="{{ link.url }}"{% if link.external %} target="_blank" rel="noopener"{% endif %}>{{ link.label }}</a></li>
+            <li><a href="{{ link.url }}"{% if link.external %} target="_blank" rel="noopener"{% endif %}{% if link.title %} title="{{ link.title }}"{% endif %}>{{ link.label }}</a></li>
             {%- endfor %}
           </ul>
         </div>

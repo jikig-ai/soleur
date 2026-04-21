@@ -1,0 +1,8 @@
+[sshd]
+enabled = true
+bantime = 10m
+findtime = 10m
+maxretry = 5
+bantime.increment = true
+bantime.factor = 2
+bantime.maxtime = 1h

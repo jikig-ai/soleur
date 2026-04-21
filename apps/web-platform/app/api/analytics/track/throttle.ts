@@ -11,6 +11,11 @@ const RATE_PER_MIN = parseInt(
   10,
 );
 
+// Single-instance in-memory counter (#2391): inherits the Redis-switch caveat
+// documented in server/rate-limiter.ts near `invoiceEndpointThrottle`. When
+// infra scales to >1 Node instance, all SlidingWindowCounter consumers
+// (invoice, session, analytics-track) must switch to Redis together or the
+// per-instance counts drift out of the shared quota.
 export const analyticsTrackThrottle = new SlidingWindowCounter({
   windowMs: 60_000,
   maxRequests: RATE_PER_MIN,

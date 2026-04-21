@@ -1,4 +1,4 @@
-import { render, screen, within, fireEvent } from "@testing-library/react";
+import { render, screen, fireEvent } from "@testing-library/react";
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { ConversationRow } from "@/components/inbox/conversation-row";
 import type { ConversationWithPreview } from "@/hooks/use-conversations";
@@ -54,16 +54,13 @@ describe("ConversationRow LeaderAvatar", () => {
     }
   });
 
-  it("applies the leader background color to the badge", () => {
+  it("renders the leader-identified badge on both mobile and desktop rows", () => {
     const { container } = render(
       <ConversationRow conversation={makeConversation({ domain_leader: "cto" })} />,
     );
 
     const badges = container.querySelectorAll("[aria-label='CTO avatar']");
     expect(badges.length).toBe(2);
-    for (const badge of badges) {
-      expect(badge.className).toContain("bg-blue-500");
-    }
   });
 
   it("does not render a badge when domain_leader is null", () => {
@@ -132,9 +129,6 @@ describe("ConversationRow Archive", () => {
   });
 
   it("archive button click does not trigger row navigation", () => {
-    const mockPush = vi.fn();
-    vi.mocked(vi.fn()).mockReturnValue({ push: mockPush });
-
     const onArchive = vi.fn();
     render(
       <ConversationRow

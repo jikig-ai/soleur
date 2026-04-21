@@ -36,6 +36,14 @@ RUN npm install -g @anthropic-ai/claude-code@2.1.79
 
 # Install git (workspace provisioning) + bubblewrap/socat (Agent SDK sandbox)
 # ca-certificates: required for git HTTPS clone — node:22-slim omits it (#1645)
+#
+# IMPORTANT: `socat` is load-bearing for the Agent SDK sandbox — not just for
+# networking. The SDK's bwrap argv unconditionally includes socat-backed
+# HTTP/SOCKS bridge listeners in the sandbox shell script (captured 2026-04-19
+# via strace), so without socat ANY sandboxed run fails. With
+# `sandbox.failIfUnavailable: true` set in agent-runner.ts (see #2634), the
+# agent process refuses to start instead of silently falling back to
+# unsandboxed Bash execution. Do NOT remove socat in future cleanups.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates git bubblewrap socat qpdf \
     && rm -rf /var/lib/apt/lists/*

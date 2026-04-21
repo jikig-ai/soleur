@@ -1,6 +1,6 @@
 ---
 name: fix-issue
-description: "This skill should be used when attempting an automated single-file fix for a GitHub issue. It reads the issue, creates a branch, makes a fix, runs tests, opens a PR, and labels it for auto-merge eligibility or human review."
+description: "This skill should be used to attempt an automated single-file fix for a GitHub issue. Creates a branch, fixes, tests, opens a PR, and labels for auto-merge or human review."
 ---
 
 # Fix Issue
