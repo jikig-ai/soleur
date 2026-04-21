@@ -186,6 +186,8 @@ fi
    - `.worktrees/feat-<name>/` (worktree)
    - `knowledge-base/project/specs/feat-<name>/` (spec directory in worktree)
 
+   **Race-window warning:** Run step 4 (`draft-pr`, which pushes the branch) BEFORE any file writes. An unpushed feature branch can be wiped by a concurrent session's `cleanup-merged` sweep, orphaning any writes to the worktree directory. See `knowledge-base/project/learnings/2026-04-21-concurrent-cleanup-merged-wipes-active-worktree.md`.
+
 3. **Set worktree path for subsequent file operations:**
 
    ```text
