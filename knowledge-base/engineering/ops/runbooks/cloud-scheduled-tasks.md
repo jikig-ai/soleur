@@ -64,6 +64,30 @@ is the top-priority risk the watchdog protects against.
 
 Work hypotheses in order; each has a cheap verification step.
 
+### H6 — Sub-agent auth inheritance (check FIRST if prompt invokes `/soleur:*` skills)
+
+Cloud Routine sub-agent sessions (spawned by `/soleur:content-writer --headless`, `/soleur:social-distribute --headless`, or any other `/soleur:*` skill invocation inside the routine prompt) do NOT inherit GitHub MCP / Doppler auth from the top-level routine session. Any `gh pr create` / `gh issue create` / `gh pr merge` call made after a sub-agent returns operates in an unauthenticated context and silently fails. The Cloud Routines UI still reports "Success" because the MCP loop terminated cleanly.
+
+**Signature (load-bearing):** run history shows SUCCESS rows in the silence window, BUT `gh pr list` and `gh issue list` scoped to the same date range both return `[]`. Content files may have been generated locally and branches may have been pushed via the git proxy — but no GitHub API side effects occurred.
+
+**Verify (do this BEFORE H1):**
+
+1. Cross-check the routine's run history against `gh pr list --state all --search "created:<silence-start>..<silence-end>"` and `gh issue list --state all --search 'created:<silence-start>..<silence-end> "<label>"'`. If the routine shows runs but GitHub shows zero artifacts → H6 confirmed.
+2. Open a single SUCCESS-marked session in Claude Code UI and scroll to the end. Look for model-output strings: `"Doppler returned Forbidden"`, `"GitHub MCP tools unavailable"`, `"gh CLI unauthenticated"`, `"git proxy handles only git operations"`.
+3. Compare against a peer routine (e.g., Daily Issue Triage) that invokes `gh` directly from top-level prompt — if peer succeeds and target fails, the sub-agent boundary is the differentiator.
+
+**Restore (H6):**
+
+Revert to GitHub Actions scheduling (the only reliable fix — Cloud Routines do not expose a way to pass auth into sub-agent sessions). Mirror the pattern from Growth Audit rollback PR #2050 / Content Generator rollback PR #2744:
+
+1. In `.github/workflows/<task>.yml`, uncomment the `schedule: - cron: ...` block that was disabled during the #1095 Cloud migration.
+2. Via `claude.ai/code/routines/<id>`: toggle Active → off, rename to `<Task Name> (DISABLED — migrated back to GHA)` for historical reference.
+3. After PR merge, trigger a manual `gh workflow run <task>.yml` to verify the restored GHA path end-to-end.
+
+**Affected tasks (as of 2026-04-21):** content-generator (this PR), growth-audit (#2050 — already reverted), community-monitor (currently Paused, H6 remediation pending if/when re-enabled).
+
+**Why this is H6 not H1:** H1 assumes the routine is paused/deleted/orphaned — visible in Cloud UI as Inactive or missing. H6 presents as Active + running on schedule + UI-reported Success. The runbook's original H1-H5 set was authored from the pre-rebrand "Scheduled Tasks" model; H6 emerged from the #2742 diagnosis after the UI's rename to "Routines". See `knowledge-base/project/learnings/2026-04-21-cloud-routine-subagent-auth-inheritance-H6.md` for full diagnosis.
+
 ### H1 — Cloud task paused, deleted, or orphaned (most likely)
 
 The Cloud task at `claude.ai/code` may have been paused during a failed run,
