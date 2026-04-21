@@ -1,17 +1,35 @@
 ---
 name: competitive-analysis
-description: "This skill should be used when running competitive intelligence scans and market research reports against tracked competitors. It produces a structured knowledge-base report."
+description: "This skill should be used when running competitive intelligence scans against tracked competitors, or auditing a peer skill-library repo via peer-plugin-audit. Produces structured knowledge-base reports."
 ---
 
 # Competitive Analysis
 
-Run a competitive intelligence scan producing a structured report at knowledge-base/product/competitive-intelligence.md.
+Run a competitive intelligence scan (monthly tiered report) or a targeted peer-plugin audit. Both modes produce structured output in `knowledge-base/product/competitive-intelligence.md`.
+
+## Sub-Modes
+
+| Mode | Invocation | Purpose |
+|---|---|---|
+| Tier scan (default) | `skill: soleur:competitive-analysis [--tiers 0,3]` | Monthly competitive intel report across tracked tiers |
+| Peer-plugin audit | `skill: soleur:competitive-analysis peer-plugin-audit <repo-url>` | Audit a peer skill library/plugin, seed the Skill Library tier with a structured 4-section report |
 
 ## Steps
 
 ### 1. Detect Invocation Mode
 
+**peer-plugin-audit sub-mode (checked first):**
+
+If arguments start with `peer-plugin-audit`:
+
+- Extract the repo URL (second arg).
+- Read [peer-plugin-audit.md](./references/peer-plugin-audit.md) and follow that procedure.
+- Stop (do not fall through to tier selection).
+
+**competitive intelligence mode (existing):**
+
 If arguments are present (non-empty):
+
 - If arguments contain `--tiers`, extract the comma-separated tier list.
 - Otherwise, use default tiers (0,3).
 - Skip to Step 3.
@@ -21,6 +39,7 @@ If no arguments, proceed to Step 2.
 ### 2. Interactive Tier Selection (skipped if args provided)
 
 Use AskUserQuestion to select tiers:
+
 - Tier 0 + 3: Platform threats and CaaS competitors (default)
 - All tiers (0-5): Full landscape scan
 
@@ -33,6 +52,7 @@ Task competitive-intelligence: "Run a competitive intelligence scan for tiers <T
 ### 4. Report Results
 
 After the agent completes:
+
 - Confirm the report was written (or output as code block in CI)
 - Display the executive summary
 

@@ -1,11 +1,11 @@
 ---
-last_updated: 2026-04-01
-last_reviewed: 2026-04-01
+last_updated: 2026-04-21
+last_reviewed: 2026-04-21
 review_cadence: monthly
 owner: CPO
 depends_on:
   - knowledge-base/product/business-validation.md
-tiers_scanned: [0, 3]
+tiers_scanned: [0, 3, "skill-library"]
 ---
 
 # Competitive Intelligence Report
@@ -117,6 +117,36 @@ Tier 3 competitors either offer AI-powered coding services or position as full-s
 - Local-first, open-source core (vs. cloud-locked competitors; Paperclip is also open-source but infrastructure-only)
 - Legal, finance, and product strategy domains that no Tier 3 competitor covers
 - Cross-domain coherence: the brand guide informs marketing content, the legal audit references the privacy policy, the competitive analysis informs product validation
+
+---
+
+## Skill Library Tier: Portable Skill Collections
+
+A complementary category alongside workflow plugins. Skill libraries package reusable SKILL.md instructions (often with CLI tooling) that convert across multiple AI coding tools. They compete on inventory breadth and portability, not on workflow orchestration or compounding knowledge. Convergence risk to Soleur is typically low because the product shapes differ — but the category is worth tracking because a skill library with strong curation signals demand for the skill primitives Soleur orchestrates.
+
+### Overlap Matrix
+
+| Competitor | Our Equivalent | Overlap | Differentiation | Convergence Risk |
+|---|---|---|---|---|
+| **[alirezarezvani/claude-skills](https://github.com/alirezarezvani/claude-skills)** | Soleur plugin (workflow orchestration vs. portable skill library — different product shape) | Low — structurally different (library vs. workflow lifecycle) | 235+ skills across 9 domains; 305 stdlib-Python CLI tools; converts to 12 AI coding tools (Claude Code, Cursor, Aider, Windsurf, etc.); MIT licensed; v2.0.0 (Mar 2026); 12.2k stars; 1.6k forks. No workflow orchestration, no compounding KB, no /one-shot pipeline, no domain leaders. | **Low** — complementary product shape. Watch for: new workflow or orchestration additions; any move toward stateful KB; cross-tool converter gaining traction that erodes Claude Code exclusivity. |
+
+### Tier Analysis
+
+**Material changes since last review (initial entry, 2026-04-21):**
+
+First entry to this tier. Category added to the CI report following the 2026-04-21 comparative audit (see PR `#2734`, parent audit `#2718`). The `peer-plugin-audit` sub-mode of `competitive-analysis` (`#2722`) is the ongoing intake mechanism for new entries to this tier.
+
+**Soleur's advantages in this tier:**
+
+- Workflow lifecycle (brainstorm → plan → implement → review → compound → ship).
+- Compounding knowledge base across 8 business domains.
+- Domain leaders with cross-delegation.
+- Opinionated curation vs. inventory breadth.
+
+**Watch items:**
+
+- New portable skill libraries >10k stars (indicates category demand).
+- Existing libraries adding orchestration, KB, or workflow primitives.
 
 ---
 
