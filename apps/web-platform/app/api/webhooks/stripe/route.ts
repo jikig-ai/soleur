@@ -101,17 +101,24 @@ export async function POST(request: Request) {
     case "customer.subscription.updated": {
       const subscription = event.data.object as Stripe.Subscription;
       const customerId = extractCustomerId(subscription);
+      const newStatus = mapStripeStatus(subscription.status);
 
-      const { error } = await supabase
+      const baseQuery = supabase
         .from("users")
         .update({
-          subscription_status: mapStripeStatus(subscription.status),
+          subscription_status: newStatus,
           cancel_at_period_end: subscription.cancel_at_period_end,
           current_period_end: new Date(
             subscription.current_period_end * 1_000,
           ).toISOString(),
         })
         .eq("stripe_customer_id", customerId);
+
+      // Don't resurrect a cancelled subscription: a stale active event delivered
+      // out-of-order after customer.subscription.deleted must be a no-op.
+      const { error } = await (newStatus === "active"
+        ? baseQuery.in("subscription_status", ["none", "active", "past_due", "unpaid"])
+        : baseQuery);
 
       if (error) {
         logger.error({ error, customerId }, "Webhook: failed to update user on customer.subscription.updated");
@@ -128,6 +135,8 @@ export async function POST(request: Request) {
       const subscription = event.data.object as Stripe.Subscription;
       const customerId = extractCustomerId(subscription);
 
+      // Only cancel if currently active/past_due/unpaid; a stale deleted event
+      // delivered after an already-cancelled row must be a no-op.
       const { error } = await supabase
         .from("users")
         .update({
@@ -135,7 +144,8 @@ export async function POST(request: Request) {
           cancel_at_period_end: false,
           current_period_end: null,
         })
-        .eq("stripe_customer_id", customerId);
+        .eq("stripe_customer_id", customerId)
+        .in("subscription_status", ["active", "past_due", "unpaid"]);
 
       if (error) {
         logger.error({ error, customerId }, "Webhook: failed to update user on customer.subscription.deleted");
