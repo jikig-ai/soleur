@@ -3,7 +3,7 @@ title: "Soleur vs. Devin: AI Software Engineer vs. AI Organization"
 type: pillar
 publish_date: 2026-04-21
 channels: discord, x, bluesky, linkedin-company
-status: scheduled
+status: published
 ---
 
 ## Discord
