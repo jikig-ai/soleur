@@ -80,6 +80,51 @@ write_files:
     owner: root:root
     permissions: '0644'
 
+  # Resource (CPU/RAM/sessions) monitoring script -- alerts via email (Resend)
+  # at 80%/95% memory and 85% CPU thresholds (#1052). Mirrors disk-monitor.sh.
+  # Content injected from resource-monitor.sh via Terraform base64encode(file()).
+  - path: /usr/local/bin/resource-monitor.sh
+    encoding: b64
+    content: ${resource_monitor_script_b64}
+    owner: root:root
+    permissions: '0755'
+
+  # Resource monitor environment file (API key, chmod 600 for secrets).
+  - path: /etc/default/resource-monitor
+    content: |
+      RESEND_API_KEY='${resend_api_key}'
+    owner: root:root
+    permissions: '0600'
+
+  # Resource monitor systemd service (oneshot, invoked by timer).
+  - path: /etc/systemd/system/resource-monitor.service
+    content: |
+      [Unit]
+      Description=Host CPU/RAM/session monitor
+      After=network-online.target
+
+      [Service]
+      Type=oneshot
+      ExecStart=/usr/local/bin/resource-monitor.sh
+    owner: root:root
+    permissions: '0644'
+
+  # Resource monitor systemd timer (every 5 minutes, persistent across reboots).
+  - path: /etc/systemd/system/resource-monitor.timer
+    content: |
+      [Unit]
+      Description=Run resource monitor every 5 minutes
+
+      [Timer]
+      OnBootSec=5min
+      OnUnitActiveSec=5min
+      Persistent=true
+
+      [Install]
+      WantedBy=timers.target
+    owner: root:root
+    permissions: '0644'
+
   # CI deploy script invoked by the webhook listener.
   # Content injected from ci-deploy.sh via Terraform base64encode(file()).
   # Keep in sync with terraform_data.deploy_pipeline_fix in server.tf (#2205).
@@ -147,9 +192,65 @@ write_files:
     owner: root:root
     permissions: '0644'
 
+  # fail2ban sshd tuning drop-in (issue #2654).
+  # Loads after /etc/fail2ban/jail.d/defaults-debian.conf (alphabetic order).
+  # Caps recidivist bantime at 1h so an operator typo does not snowball into a
+  # multi-hour lockout via bantime.increment escalation. Content injected from
+  # fail2ban-sshd.local via Terraform base64encode(file()).
+  # Runbook for recovery when locked out:
+  #   knowledge-base/engineering/ops/runbooks/ssh-fail2ban-unban.md
+  # Keep in sync with terraform_data.fail2ban_tuning in server.tf.
+  - path: /etc/fail2ban/jail.d/soleur-sshd.local
+    encoding: b64
+    content: ${fail2ban_sshd_local_b64}
+    owner: root:root
+    permissions: '0644'
+
 runcmd:
-  # Apply SSH hardening immediately (drop-in written by write_files above)
+  # Apply SSH hardening immediately (drop-in written by write_files above).
+  # Runs BEFORE the package audit so the operator always has hardened SSH
+  # access even if the audit exits non-zero and halts the rest of cloud-init.
   - systemctl restart sshd
+
+  # Audit that cloud-init's packages: stage actually installed every declared
+  # package. Cloud-init can silently drop package installs on transient
+  # failures (apt lock contention, network error, "No space left on device"
+  # during first boot) without failing the run. If any declared package is
+  # missing after packages:, fail loudly so the operator sees the root cause
+  # in /var/log/cloud-init-output.log (#2680).
+  #
+  # The required-package list is parsed at runtime from the rendered cloud
+  # config at /var/lib/cloud/instance/cloud-config.txt -- no hardcoded list
+  # to drift away from the packages: block at the top of this file.
+  - |
+    set -e
+    required_packages=$(awk '/^packages:$/{flag=1; next} /^[^ ]/{flag=0} flag && /^  - /{sub(/^  - /, ""); print}' /var/lib/cloud/instance/cloud-config.txt)
+    if [ -z "$required_packages" ]; then
+      echo "FATAL: package audit could not parse packages: list from cloud-config.txt" >&2
+      exit 1
+    fi
+    missing=""
+    for pkg in $required_packages; do
+      dpkg -s "$pkg" >/dev/null 2>&1 || missing="$missing $pkg"
+    done
+    if [ -n "$missing" ]; then
+      echo "FATAL: cloud-init packages: stage did not install:$missing" >&2
+      # One-shot self-heal for transient apt failures. If this also fails we
+      # exit non-zero so cloud-init marks the boot failed and the operator
+      # investigates via the Hetzner console.
+      export DEBIAN_FRONTEND=noninteractive
+      apt-get update -qq
+      apt-get install -y -qq $missing
+      for pkg in $missing; do
+        dpkg -s "$pkg" >/dev/null 2>&1 || { echo "FATAL: $pkg still missing after recovery install" >&2; exit 1; }
+      done
+    fi
+
+  # Reload fail2ban so the jail.d/soleur-sshd.local drop-in applies (#2654).
+  # fail2ban is installed via `packages:` above; the service auto-starts on
+  # install with the defaults-debian.conf [sshd] jail enabled. The reload
+  # picks up the bantime.maxtime cap before any login activity is recorded.
+  - systemctl reload fail2ban || systemctl restart fail2ban
 
   # Install Doppler CLI v3.75.3 (for secrets injection) with checksum verification
   - |
@@ -229,6 +330,9 @@ runcmd:
 
   # Enable disk space monitoring timer (#1409)
   - systemctl enable --now disk-monitor.timer
+
+  # Enable host resource (CPU/RAM/sessions) monitoring timer (#1052)
+  - systemctl enable --now resource-monitor.timer
 
   # Weekly Docker image cleanup -- keeps only images used by running containers.
   # Prevents disk exhaustion from accumulated deploy images (#967).

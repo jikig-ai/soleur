@@ -296,6 +296,18 @@ mcp__plugin_soleur_context7__query-docs: Query documentation for specific patter
 
 Search for recent (2024-2026) articles, blog posts, and documentation on topics in the plan.
 
+### 4.5. Network-Outage Deep-Dive (Conditional)
+
+If the plan's Overview, Problem Statement, or Hypotheses contain any of the trigger patterns `SSH`, `connection reset`, `kex`, `firewall`, `unreachable`, `timeout`, `502`, `503`, `504`, `handshake`, `EHOSTUNREACH`, `ECONNRESET` (case-insensitive), read `plugins/soleur/skills/plan/references/plan-network-outage-checklist.md` and spawn a dedicated "Network-Outage Deep-Dive" research agent in parallel with the other deepen agents.
+
+The deep-dive agent's task:
+
+1. Read the checklist in full.
+2. For each of the four layers (L3 firewall allow-list, L3 DNS/routing, L7 TLS/proxy if HTTPS, L7 application), verify the plan's Hypotheses section cites a concrete verification artifact (CLI output, log excerpt, or explicit "not verified" note).
+3. Emit a "Network-Outage Deep-Dive" subsection in the plan with the layer-by-layer verification status and any gaps that need closing before implementation.
+
+Per AGENTS.md `hr-ssh-diagnosis-verify-firewall`, plans addressing SSH/network-connectivity symptoms MUST verify the L3 firewall allow-list against current client egress IP BEFORE proposing service-layer fixes. The deep-dive is the deepen-plan enforcement layer.
+
 ### 5. Discover and Run ALL Review Agents
 
 <thinking>

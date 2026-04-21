@@ -1,0 +1,22 @@
+{
+  "name": "Fixture \"Weaponized\" & <site> \\name",
+  "url": "https://example.test",
+  "tagline": "test tagline",
+  "description": "Fixture description with \"quotes\" and <tag> and & ampersand",
+  "github": "https://github.com/fixture/repo",
+  "discord": "https://discord.gg/fixture",
+  "x": "https://x.com/fixture",
+  "linkedinCompany": "https://linkedin.com/company/fixture",
+  "bluesky": "https://bsky.app/profile/fixture",
+  "newsletter": { "username": "fixture" },
+  "nav": [],
+  "primaryCta": null,
+  "author": {
+    "name": "Fixture Author",
+    "url": "https://example.test/about/",
+    "role": "Fixture Role",
+    "company": "Fixture Co"
+  },
+  "footerColumns": [],
+  "footerLegal": []
+}
