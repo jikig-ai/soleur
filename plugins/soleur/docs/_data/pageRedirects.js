@@ -22,5 +22,6 @@ export default function () {
     { from: "pages/legal/individual-cla.html", to: "/legal/individual-cla/" },
     { from: "pages/legal/corporate-cla.html", to: "/legal/corporate-cla/" },
     { from: "pages/legal/disclaimer.html", to: "/legal/disclaimer/" },
+    { from: "blog/what-is-company-as-a-service/index.html", to: "/company-as-a-service/" },
   ];
 };

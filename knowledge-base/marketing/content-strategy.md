@@ -41,7 +41,7 @@ Twelve content gaps block Soleur's organic discovery and category authority. Ran
 
 ### Gap 2: CaaS Category Definition (Critical) [COMPLETED 2026-03-10]
 
-**Status:** Published as "What Is Company-as-a-Service?" (`/blog/what-is-company-as-a-service/`). SAP score 5.0/5.0 (best on site). FAQ JSON-LD present. 10+ external citations (BLS, TechCrunch, CNBC, VentureBeat, Inc.com, Fortune). Internal linking from homepage badge active.
+**Status:** Published as "What Is Company-as-a-Service?" (promoted 2026-04-21 from `/blog/what-is-company-as-a-service/` to `/company-as-a-service/`; 301 via pageRedirects). SAP score 5.0/5.0 (best on site). FAQ JSON-LD present. 10+ external citations (BLS, TechCrunch, CNBC, VentureBeat, Inc.com, Fortune). Internal linking from homepage badge active.
 
 **Original gap:** Soleur coined "Company-as-a-Service" and used it as a tagline but had no page defining the term. Zero competition for this exact term made category creation the highest-leverage content play.
 
@@ -331,7 +331,7 @@ All content must pass these checks before publication:
 - [ ] No prohibited terms: "AI-powered", "leverage AI", "just/simply", "assistant/copilot", startup jargon ("disrupt", "synergy")
 - [ ] Declarative voice, no hedging ("might", "could", "potentially")
 - [ ] Founder framed as decision-maker, system as executor
-- [ ] Concrete numbers when available (63 agents, 62 skills, 420+ PRs)
+- [ ] Concrete numbers when available (60+ agents, 60+ skills, 420+ PRs)
 - [ ] Short, punchy sentences in marketing copy
 - [ ] Never called a "plugin" or "tool" (exception: literal CLI commands and technical docs) **[2026-03-22: This rule gains even more force under the delivery pivot. The product is a platform, not a plugin. "Plugin" should only appear in historical context or when referring to the Claude Code plugin specifically as one access surface.]**
 

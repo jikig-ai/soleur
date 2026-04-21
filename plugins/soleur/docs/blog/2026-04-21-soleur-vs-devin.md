@@ -27,7 +27,7 @@ That constraint is deliberate. Cognition built Devin to do one job exceptionally
 
 ## What Soleur Actually Is
 
-Soleur is the [Company-as-a-Service]({{ site.url }}blog/what-is-company-as-a-service/) platform. {{ stats.agents }} agents, {{ stats.skills }} skills, and a compounding knowledge base organized across {{ stats.departments }} business departments -- engineering, marketing, legal, finance, operations, product, sales, support, and community.
+Soleur is the [Company-as-a-Service]({{ site.url }}/company-as-a-service/) platform. {{ stats.agents }} agents, {{ stats.skills }} skills, and a compounding knowledge base organized across {{ stats.departments }} business departments -- engineering, marketing, legal, finance, operations, product, sales, support, and community.
 
 The engineering department contains what Devin provides in isolation: architecture design, code review, infrastructure provisioning, deployment, and security analysis. Soleur's engineering agents run inside the same Claude Code environment as the founder. They plan, implement, review, and ship alongside a legal agent that generates contracts, a marketing agent that writes copy and runs competitive analysis, a finance agent that models revenue, and a product agent that validates specs before engineering starts building them.
 

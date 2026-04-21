@@ -36,7 +36,23 @@ permissions:
   id-token: write
 
 jobs:
+  preflight:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      ok: ${{ steps.check.outputs.ok }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - id: check
+        uses: ./.github/actions/anthropic-preflight
+        with:
+          anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+
   fix-bug:
+    needs: preflight
+    if: needs.preflight.outputs.ok == 'true'
     runs-on: ubuntu-latest
     # 45min / 55turns = 0.82 min/turn, aligned with peer workflows
     # (ux-audit 45/60, ship-merge 30/40, roadmap-review 30/40).
