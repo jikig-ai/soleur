@@ -65,7 +65,7 @@ graph LR
 4. Claude's capabilities enhanced for the domain
 5. Higher quality output in that domain
 
-## Categories (62 skills)
+## Categories (60+ skills)
 
 ### Core Workflow (6)
 

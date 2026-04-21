@@ -20,7 +20,7 @@ The question is what Notion Custom Agents actually automate, and whether that ov
 
 Within the beta, early testers had built over [21,000 agents; Notion itself runs 2,800 agents internally](https://www.notion.com/releases/2026-02-24).
 
-**Soleur** is an open-source [Company-as-a-Service]({{ site.url }}blog/what-is-company-as-a-service/) platform. It deploys {{ stats.agents }} agents across {{ stats.departments }} business departments — engineering, marketing, legal, finance, operations, product, sales, and support — with a compounding knowledge base that accumulates institutional memory across every session and every domain. Soleur is designed for the terminal, running inside Claude Code, with a workflow lifecycle that runs from brainstorm through planning, implementation, review, and knowledge capture.
+**Soleur** is an open-source [Company-as-a-Service]({{ site.url }}/company-as-a-service/) platform. It deploys {{ stats.agents }} agents across {{ stats.departments }} business departments — engineering, marketing, legal, finance, operations, product, sales, and support — with a compounding knowledge base that accumulates institutional memory across every session and every domain. Soleur is designed for the terminal, running inside Claude Code, with a workflow lifecycle that runs from brainstorm through planning, implementation, review, and knowledge capture.
 
 ## Where They Differ
 
@@ -131,7 +131,7 @@ Soleur runs {{ stats.agents }} agents across {{ stats.departments }} departments
 claude plugin install soleur
 ```
 
-Explore the [{{ stats.agents }} agents]({{ site.url }}/agents/), read [what company-as-a-service means]({{ site.url }}blog/what-is-company-as-a-service/) for solo founders, or [get started in five minutes]({{ site.url }}/getting-started/).
+Explore the [{{ stats.agents }} agents]({{ site.url }}/agents/), read [what company-as-a-service means]({{ site.url }}/company-as-a-service/) for solo founders, or [get started in five minutes]({{ site.url }}/getting-started/).
 
 ---
 

@@ -52,7 +52,7 @@ This is closer. But compound engineering, as implemented by most tools, captures
 
 Compound knowledge is not a feature. It is an architectural property. A system either compounds or it does not, and the difference becomes visible over time.
 
-[Soleur]({{ site.url }}) is built on this principle. Every task it executes generates knowledge that feeds back into the system's rules, agents, and workflows — not just its documentation. Here is what that looks like in practice, drawn from real incidents in the project's [compounding knowledge base]({{ site.url }}/blog/what-is-company-as-a-service/).
+[Soleur]({{ site.url }}) is built on this principle. Every task it executes generates knowledge that feeds back into the system's rules, agents, and workflows — not just its documentation. Here is what that looks like in practice, drawn from real incidents in the project's [compounding knowledge base]({{ site.url }}/company-as-a-service/).
 
 ### Failure, Documentation, Rule, Enforcement
 
@@ -132,7 +132,7 @@ If compound knowledge transforms how engineering teams build software, what happ
 
 A brand guide created by a marketing agent informs the content strategy. A competitive analysis shapes pricing decisions. A legal audit references the privacy policy. Knowledge flows across domains because every agent reads from and writes to the same compounding knowledge base.
 
-This is the thesis behind [Company-as-a-Service]({{ site.url }}/blog/what-is-company-as-a-service/) — a model where a single AI organization runs every department of a business. Not a copilot for code. Not an assistant for tasks. A full AI organization that plans, builds, reviews, remembers, and self-improves.
+This is the thesis behind [Company-as-a-Service]({{ site.url }}/company-as-a-service/) — a model where a single AI organization runs every department of a business. Not a copilot for code. Not an assistant for tasks. A full AI organization that plans, builds, reviews, remembers, and self-improves.
 
 The engineering depth described in this article is the foundation. The full vision is bigger.
 
