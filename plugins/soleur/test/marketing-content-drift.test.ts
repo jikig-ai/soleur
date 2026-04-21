@@ -2,10 +2,12 @@
 // Closes #2666, #2665, #2664, #2663, #2659, #2658, #2657 (Ref #2656).
 //
 // Test 1 prose sweep allowlist (DO NOT scan these directories):
-//   - knowledge-base/marketing/audits/**   — frozen historical audit snapshots
-//   - knowledge-base/project/learnings/**  — frozen historical narratives
-//   - knowledge-base/project/plans/**      — plan documents may quote stale numbers as evidence
-//   - knowledge-base/project/specs/**      — spec/tasks documents likewise
+//   - knowledge-base/marketing/audits/**              — frozen historical audit snapshots
+//   - knowledge-base/marketing/distribution-content/**— dated social posts and drafts (numbers correct at post time)
+//   - knowledge-base/marketing/copy/**                — page copy drafts with baked-in product stats
+//   - knowledge-base/project/learnings/**             — frozen historical narratives
+//   - knowledge-base/project/plans/**                 — plan documents may quote stale numbers as evidence
+//   - knowledge-base/project/specs/**                 — spec/tasks documents likewise
 // To extend: add the path prefix to PROSE_NUMERAL_ALLOWLIST below.
 
 import { describe, test, expect, beforeAll } from "bun:test";
@@ -20,6 +22,8 @@ const SITE_ROOT = join(REPO_ROOT, "_site");
 
 const PROSE_NUMERAL_ALLOWLIST = [
   join(KB_ROOT, "marketing", "audits"),
+  join(KB_ROOT, "marketing", "distribution-content"),
+  join(KB_ROOT, "marketing", "copy"),
   join(KB_ROOT, "project", "learnings"),
   join(KB_ROOT, "project", "plans"),
   join(KB_ROOT, "project", "specs"),

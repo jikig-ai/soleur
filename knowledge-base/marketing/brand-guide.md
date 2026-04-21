@@ -30,7 +30,7 @@ Solo founders who think in billions. Technical builders who refuse to accept tha
 
 ### Positioning
 
-Soleur is not a copilot. Not an assistant. It is a full AI organization -- 63 agents, 62 skills, and compounding knowledge -- that operates as every department from strategy to shipping. The brand energy mirrors Tesla and SpaceX: audacious, mission-driven, future-focused. We lead with the ambitious platform vision, never the plugin description.
+Soleur is not a copilot. Not an assistant. It is a full AI organization -- 60+ agents, 60+ skills, and compounding knowledge -- that operates as every department from strategy to shipping. The brand energy mirrors Tesla and SpaceX: audacious, mission-driven, future-focused. We lead with the ambitious platform vision, never the plugin description.
 
 **Tagline:** The Company-as-a-Service Platform
 
@@ -61,7 +61,7 @@ Ambitious-inspiring. Bold, forward-looking, energizing. The voice of Soleur is t
 | Context | Tone | Example |
 |---------|------|---------|
 | Marketing / Hero | Maximum ambition, declarative | "Build a Billion-Dollar Company. Alone." |
-| Product announcements | Confident, concrete | "63 agents. Every department. From idea to shipped." |
+| Product announcements | Confident, concrete | "60+ agents. Every department. From idea to shipped." |
 | Technical docs | Clear, precise, no fluff | "The compound skill chains two agents sequentially." |
 | Community / Discord | Direct, collaborative, still bold | "Shipped. Try it and tell us what breaks." |
 | Error messages | Honest, actionable | "Agent failed. Here's the log. Here's the fix." |
@@ -74,11 +74,14 @@ Ambitious-inspiring. Bold, forward-looking, energizing. The voice of Soleur is t
 - Lead with what becomes possible, not what the tool does
 - Use declarative statements ("Build at scale" not "Try building at scale")
 - Frame the founder as the decision-maker, the system as the executor
-- Use concrete numbers when available (63 agents, 62 skills)
+- Use concrete numbers when available (60+ agents, 60+ skills)
+
+> **Numbers: soft floors in prose.** Use "60+ agents" and "60+ skills" in static documentation and marketing prose. The live site renders exact counts from the filesystem via `{{ stats.agents }}` / `{{ stats.skills }}` -- never duplicate the exact count in prose, where it will drift as new agents and skills ship. Soft floors stay accurate across releases.
+
 - Write like the future is already here
 - Use "we" when speaking as Soleur, "you" when addressing the founder
 - Keep sentences short and punchy in marketing copy
-- When writing for non-technical founders: define technical terms on first use, lead with business outcomes, use "your AI team" instead of "63 agents," and explain concepts in business terms (e.g., "knowledge base" = "your company's institutional memory")
+- When writing for non-technical founders: define technical terms on first use, lead with business outcomes, use "your AI team" instead of "60+ agents," and explain concepts in business terms (e.g., "knowledge base" = "your company's institutional memory")
 
 **Don't:**
 
@@ -99,7 +102,7 @@ Two registers share the same brand identity (bold, mission-driven, precise). The
 **Technical register** (default for HN, GitHub, Discord, technical blog posts):
 
 - Use engineering metaphors and developer-native terms freely
-- Proof points: "420+ merged PRs," "63 agents, 62 skills," "brainstorm-plan-implement-review-compound lifecycle"
+- Proof points: "420+ merged PRs," "60+ agents, 60+ skills," "brainstorm-plan-implement-review-compound lifecycle"
 - Assume the reader understands agents, CLI, workflows, and software development concepts
 - "Trust the reader's intelligence" applies -- don't over-explain
 
@@ -107,7 +110,7 @@ Two registers share the same brand identity (bold, mission-driven, precise). The
 
 - Plain language -- no jargon without immediate definition in the same sentence
 - Proof points: "saves 15+ hours/week on marketing, legal, and ops," "handles 7 of the 8 jobs you're doing alone," "remembers everything about your business"
-- Use business analogies: "your AI team" not "63 agents," "your company's memory" not "compounding knowledge base," "AI specialists" not "domain leader agents"
+- Use business analogies: "your AI team" not "60+ agents," "your company's memory" not "compounding knowledge base," "AI specialists" not "domain leader agents"
 - Key term glossary for inline definitions:
   - **Agents** = "AI specialists that handle specific business functions"
   - **Skills** = "workflows the AI team follows to get things done"
@@ -334,7 +337,7 @@ These guardrails apply in both automatic mode (fetch-mentions) and manual mode (
 - No hashtags. Bluesky does not support hashtags as a native discovery feature. Do not use them.
 - No emojis in standalone posts. Thread body posts may use one structural emoji (arrow, checkmark) if it aids scanning.
 - Engagement guardrails: Bluesky's community is small and tightly knit with strong anti-bot sentiment. Start with organic, high-quality engagement. Avoid aggressive automated posting patterns that could trigger community backlash.
-- Example post: "Company-as-a-Service: 63 agents running every department from strategy to shipping. One founder makes decisions. The system executes."
+- Example post: "Company-as-a-Service: 60+ agents running every department from strategy to shipping. One founder makes decisions. The system executes."
 - Example reply: "AT Protocol makes this possible -- open, composable, no API gatekeeping. Exactly the kind of infrastructure solo founders need."
 - Example thread start: "The first billion-dollar solo company isn't science fiction. It's an engineering problem. Here's how we're solving it."
 
@@ -370,4 +373,4 @@ Same guardrails as X/Twitter apply (see above), with these Bluesky-specific addi
 - The footer tagline is always: "Designed, built, and shipped by Soleur -- using Soleur."
 - Final CTA: "Ready to build at scale?" / "Your AI organization is ready. Are you?" / Start Building.
 
-> **[2026-03-22 Business Validation Review]** When the web platform launches, the website CTA must shift from plugin installation to platform signup/login. The hero pattern, visual identity, and brand energy transfer directly -- the Solar Forge aesthetic is delivery-agnostic. The stats line ("63 agents, 8 departments, 1 founder") remains valid. CTA copy candidates: "Start Building" (current, still works), "Open Your Dashboard", "Meet Your Organization." Do not reference CLI installation as the primary CTA in any new landing page content.
+> **[2026-03-22 Business Validation Review]** When the web platform launches, the website CTA must shift from plugin installation to platform signup/login. The hero pattern, visual identity, and brand energy transfer directly -- the Solar Forge aesthetic is delivery-agnostic. The stats line ("60+ agents, 8 departments, 1 founder") remains valid. CTA copy candidates: "Start Building" (current, still works), "Open Your Dashboard", "Meet Your Organization." Do not reference CLI installation as the primary CTA in any new landing page content.

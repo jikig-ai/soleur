@@ -15,7 +15,7 @@ depends_on:
 
 ## Executive Summary
 
-Soleur is the Company-as-a-Service platform -- 63 agents, 62 skills, 3 commands -- built for solo founders who refuse to accept that scale requires headcount. The product is mature (420+ merged PRs, daily dogfooding across 8 domains). The marketing is not.
+Soleur is the Company-as-a-Service platform -- 60+ agents, 60+ skills, 3 commands -- built for solo founders who refuse to accept that scale requires headcount. The product is mature (420+ merged PRs, daily dogfooding across 8 domains). The marketing is not.
 
 **Current state:** Strong brand identity, growing content foundation. Content score 6/10 (8 blog posts, 3 comparison articles, 5 case studies). AEO 6.8/10 (68/100, Grade C+) -- blog content scores 80%, catalog pages 40%. Blog infrastructure live (Eleventy collection, templates, JSON-LD, sitemap). 89% direct traffic -- organic search discovery still near-zero. Zero third-party listicle appearances.
 
@@ -67,7 +67,7 @@ Soleur is the Company-as-a-Service platform -- 63 agents, 62 skills, 3 commands 
 
 ### Positioning Statement
 
-For **solo founders building real companies** who are frustrated that AI helps with code but not with the other 70% of running a business, **Soleur** is the **Company-as-a-Service platform** that provides a full AI organization -- 63 agents across engineering, marketing, legal, operations, product, finance, sales, and support -- with compounding institutional memory. Unlike **Anthropic Cowork Plugins** (stateless, siloed per domain), **Cursor** (engineering-only), or **Notion Custom Agents** (workspace-scoped, no engineering), Soleur orchestrates workflows across every business domain while every decision the founder makes teaches the system, making the 100th session dramatically more productive than the first.
+For **solo founders building real companies** who are frustrated that AI helps with code but not with the other 70% of running a business, **Soleur** is the **Company-as-a-Service platform** that provides a full AI organization -- 60+ agents across engineering, marketing, legal, operations, product, finance, sales, and support -- with compounding institutional memory. Unlike **Anthropic Cowork Plugins** (stateless, siloed per domain), **Cursor** (engineering-only), or **Notion Custom Agents** (workspace-scoped, no engineering), Soleur orchestrates workflows across every business domain while every decision the founder makes teaches the system, making the 100th session dramatically more productive than the first.
 
 > **[2026-03-22 Business Validation Review]** This positioning statement holds at the message level but requires one delivery-related adjustment. The statement currently implies no delivery mechanism, which is correct -- it focuses on value, not form factor. However, when expanded for specific channels, the positioning must explicitly state web/mobile accessibility. The differentiator against Cowork and Notion should shift from "terminal-first" to "founder-controlled with compounding memory" since the delivery surface is no longer a distinguishing axis once Soleur also ships as a web product.
 
@@ -77,7 +77,7 @@ These are the structural advantages that competitors cannot replicate by shippin
 
 1. **Compounding knowledge base.** Cross-domain institutional memory that persists across sessions. The brand guide informs marketing content. The competitive analysis shapes product positioning. The legal audit references the privacy policy. No competitor -- not Cowork, not Notion, not Tanka -- has this across business domains within a terminal-first workflow. **[2026-03-22]** The moat itself is validated by user research -- founders described cross-domain pain unprompted. The "terminal-first workflow" qualifier should be removed in the next rewrite; the compounding knowledge base moat is delivery-agnostic.
 
-2. **Cross-domain coherence.** 63 agents share context across 8 domains. A decision in product strategy propagates to engineering planning, marketing copy, and legal review. Competitors are either deep in one domain (Cursor, Devin) or broad but stateless across many (Cowork).
+2. **Cross-domain coherence.** 60+ agents share context across 8 domains. A decision in product strategy propagates to engineering planning, marketing copy, and legal review. Competitors are either deep in one domain (Cursor, Devin) or broad but stateless across many (Cowork).
 
 3. **Workflow orchestration depth.** The brainstorm-plan-implement-review-compound lifecycle is not a feature -- it is the architecture. Each stage feeds the next with full domain context. Cowork plugins execute individual tasks. Soleur orchestrates business operations.
 
@@ -86,7 +86,7 @@ These are the structural advantages that competitors cannot replicate by shippin
 | Level | Message | Supporting Proof |
 |-------|---------|-----------------|
 | H1 (Hero) | "Build a Billion-Dollar Company. Alone." | Amodei's 2026 prediction. Soleur's thesis: this is an engineering problem, not science fiction. |
-| H2 (Value Prop) | "The Company-as-a-Service Platform" | 63 agents. 62 skills. 8 domains. Every department from strategy to shipping. |
+| H2 (Value Prop) | "The Company-as-a-Service Platform" | 60+ agents. 60+ skills. 8 domains. Every department from strategy to shipping. |
 | H3 (Differentiator) | "Not a copilot. Not an assistant. A full AI organization that reviews, plans, builds, remembers, and self-improves." | Cross-domain coherence. Compounding knowledge base. Workflow orchestration. |
 | H3 (Proof Point) | "Every decision teaches the system. Every project starts faster than the last." | Knowledge compounding across sessions. The 100th session is dramatically more productive than the 1st. |
 | H3 (Social Proof) | "Designed, built, and shipped by Soleur -- using Soleur." | 420+ merged PRs. Daily dogfooding across all 8 domains. The platform runs itself. |
