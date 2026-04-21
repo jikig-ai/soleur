@@ -20,7 +20,7 @@ This article examines both platforms on the dimensions that matter: knowledge ar
 
 In March 2026, Anthropic's Cowork technology expanded into Microsoft 365. [Microsoft launched Copilot Cowork on March 9, 2026](https://the-decoder.com/microsoft-brings-anthropics-claude-cowork-into-copilot-to-run-tasks-across-outlook-teams-and-excel/), in close collaboration with Anthropic, bringing Claude's Cowork capabilities into Outlook, Teams, and Excel. It is currently in Research Preview, with broader availability planned for late March through the Microsoft Frontier program.
 
-**Soleur** is an open-source [Company-as-a-Service]({{ site.url }}blog/what-is-company-as-a-service/) platform. It deploys {{ stats.agents }} agents across {{ stats.departments }} business departments — engineering, marketing, legal, finance, operations, product, sales, and support — with a compounding knowledge base that accumulates institutional memory across every session and every domain.
+**Soleur** is an open-source [Company-as-a-Service]({{ site.url }}/company-as-a-service/) platform. It deploys {{ stats.agents }} agents across {{ stats.departments }} business departments — engineering, marketing, legal, finance, operations, product, sales, and support — with a compounding knowledge base that accumulates institutional memory across every session and every domain.
 
 ## Where They Differ
 
@@ -134,7 +134,7 @@ Soleur runs {{ stats.agents }} agents across {{ stats.departments }} departments
 claude plugin install soleur
 ```
 
-Explore the [{{ stats.agents }} agents]({{ site.url }}/agents/), read [what company-as-a-service means]({{ site.url }}blog/what-is-company-as-a-service/) for solo founders, or [get started in five minutes]({{ site.url }}/getting-started/).
+Explore the [{{ stats.agents }} agents]({{ site.url }}/agents/), read [what company-as-a-service means]({{ site.url }}/company-as-a-service/) for solo founders, or [get started in five minutes]({{ site.url }}/getting-started/).
 
 ---
 

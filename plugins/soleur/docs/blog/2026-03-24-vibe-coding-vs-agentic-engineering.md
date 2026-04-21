@@ -82,7 +82,7 @@ Vibe coding solves the coding problem. Agentic engineering solves the engineerin
 
 Legal documents need review. Marketing campaigns need execution. Competitive intelligence needs monitoring. Financial models need updating. These functions do not get better by coding faster. They get better when knowledge compounds across all of them — when the legal review informs the product positioning, when the competitive analysis shapes the pricing decision, when the engineering architecture reflects the compliance requirements.
 
-This is the premise behind [Company-as-a-Service]({{ site.url }}/blog/what-is-company-as-a-service/) — a model where a single AI organization runs every department of a business, with a compounding knowledge base that every department reads from and writes to. Agentic engineering is not just a better way to code. It is the architectural pattern for every function in the company.
+This is the premise behind [Company-as-a-Service]({{ site.url }}/company-as-a-service/) — a model where a single AI organization runs every department of a business, with a compounding knowledge base that every department reads from and writes to. Agentic engineering is not just a better way to code. It is the architectural pattern for every function in the company.
 
 ## Start Building
 
