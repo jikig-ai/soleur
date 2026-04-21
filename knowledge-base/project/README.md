@@ -112,7 +112,7 @@ Rules enforced by PreToolUse hooks are annotated with `[hook-enforced: <script>]
 soleur/
   apps/                     # Standalone applications
   plugins/soleur/           # The Claude Code plugin
-    agents/                 # AI agents by domain (63 agents)
+    agents/                 # AI agents by domain (60+ agents)
       engineering/          # review/, design/, discovery/, infra/, research/, workflow/
       finance/              # CFO, budget, revenue, reporting
       legal/                # CLO, compliance auditor, document generator
@@ -123,7 +123,7 @@ soleur/
       support/              # CCO, community manager, ticket triage
     commands/               # Slash commands
       soleur/               # Core workflow commands (go, sync, help)
-    skills/                 # Specialized capabilities (62 skills)
+    skills/                 # Specialized capabilities (60+ skills)
     .claude-plugin/         # Plugin manifest
   docs/                     # Documentation and legal content
     legal/                  # Legal documents (ToS, privacy, GDPR, CLA)

@@ -57,6 +57,12 @@
         "name": {{ site.name | jsonLdSafe | safe }},
         "url": {{ site.url | jsonLdSafe | safe }},
         "logo": {{ (site.url + "/images/logo-mark-512.png") | jsonLdSafe | safe }},
+        "founder": {
+          "@type": "Person",
+          "name": "Jean Deruelle",
+          "url": "https://github.com/deruelle"
+        },
+        "foundingDate": "2026",
         "sameAs": [
           {{ site.github | jsonLdSafe | safe }},
           {{ site.x | jsonLdSafe | safe }},

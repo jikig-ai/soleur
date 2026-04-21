@@ -25,7 +25,7 @@ permalink: legal/gdpr-policy/
 
 ## 1. Introduction
 
-This GDPR Policy explains how Jikigai ("we", "us", "our"), operator of Soleur, approaches data protection and privacy in compliance with the General Data Protection Regulation (EU) 2016/679 ("GDPR") and related European data protection legislation. Soleur is a Company-as-a-Service platform delivered as a Claude Code plugin, providing a full-stack AI organization with 63 agents, 62 skills, and a compounding knowledge base for solo founders and technical builders.
+This GDPR Policy explains how Jikigai ("we", "us", "our"), operator of Soleur, approaches data protection and privacy in compliance with the General Data Protection Regulation (EU) 2016/679 ("GDPR") and related European data protection legislation. Soleur is a Company-as-a-Service platform delivered as a Claude Code plugin, providing a full-stack AI organization with 60+ agents, 60+ skills, and a compounding knowledge base for solo founders and technical builders.
 
 This policy applies to all individuals located in the European Economic Area ("EEA") who use or interact with Soleur, including the plugin software, Web Platform (app.soleur.ai), documentation site, and GitHub repository.
 
