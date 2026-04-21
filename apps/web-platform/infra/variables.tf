@@ -66,7 +66,7 @@ variable "cf_api_token_zone_settings" {
 }
 
 variable "cf_api_token_rulesets" {
-  description = "Cloudflare API token narrowed to Cache Rules:Edit on soleur.ai (cloudflare_ruleset resources)"
+  description = "Cloudflare API token narrowed to Cache Rules:Edit + Zone WAF:Edit on soleur.ai (cloudflare_ruleset resources across http_request_cache_settings and http_request_firewall_custom phases; see cache.tf and bot-allowlist.tf)"
   type        = string
   sensitive   = true
 }
