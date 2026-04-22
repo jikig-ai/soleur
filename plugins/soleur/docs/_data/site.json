@@ -31,7 +31,18 @@
     "name": "Jean Deruelle",
     "url": "https://soleur.ai/about/",
     "role": "Founder",
-    "company": "Soleur"
+    "company": "Soleur",
+    "image": "/images/jean-deruelle.svg",
+    "bio": "Founder of Soleur. 15+ years building distributed systems and developer tools. Creator of the Company-as-a-Service platform.",
+    "credentials": [
+      "Founder, Soleur",
+      "15+ years in distributed systems"
+    ],
+    "sameAs": [
+      "https://github.com/deruelle",
+      "https://x.com/jeandev_",
+      "https://www.linkedin.com/company/jikigai/"
+    ]
   },
   "footerColumns": [
     {

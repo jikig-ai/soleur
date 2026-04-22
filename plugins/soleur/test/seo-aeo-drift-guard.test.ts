@@ -160,10 +160,19 @@ describe("#2708 homepage <title> matches docs/index.njk seoTitle exactly", () =>
 
 describe("#2711 blog posts render author card + extended Person JSON-LD", () => {
   const blogDir = resolve(SITE, "blog");
+  // Filter out redirect stubs built from `blog/redirects.njk` — those are
+  // meta-refresh pages (no layout, no content), not real posts. Detected by
+  // a short (<800 bytes) HTML body containing `<meta http-equiv="refresh"`.
   const entries = existsSync(blogDir)
     ? readdirSync(blogDir).filter((e) => {
         const p = join(blogDir, e);
-        return statSync(p).isDirectory() && existsSync(join(p, "index.html"));
+        const idx = join(p, "index.html");
+        if (!statSync(p).isDirectory() || !existsSync(idx)) return false;
+        const body = readFileSync(idx, "utf8");
+        if (body.length < 2000 && /<meta\s+http-equiv="refresh"/i.test(body)) {
+          return false;
+        }
+        return true;
       })
     : [];
 
