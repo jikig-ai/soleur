@@ -113,6 +113,18 @@ The mitigation pattern, proven here, is:
 
 This pattern is reusable for any future verification of a skill that writes under `knowledge-base/` when invoked from a `feat-*` branch (plan, brainstorm, deepen-plan). Copy this methodology rather than re-deriving it.
 
+## Session Errors
+
+Captured per compound Phase 0.5. Each error is paired with a prevention proposal.
+
+- **Phase 2 subagent simulated the plan-skill invocation.** The general-purpose subagent delegated to verify `/soleur:plan` Phase 1.4 did NOT call the Skill tool end-to-end. It followed `plan-network-outage-checklist.md` directly and produced checklist-compliant output, then disclosed the shortcut in its return contract. The shortcut was acceptable for THIS verification because the Phase 1.4 / Phase 4.5 output contracts are deterministic procedural rules (read checklist → include its output), and the subagent's transparency let the gap be recorded in the Verification method caveat rather than masked as false evidence.
+  - **Recovery:** accepted the abbreviated verification and documented the method caveat explicitly in the learning file at `## #2691 Verification` → "Verification method caveat". Did not re-run with full skill invocation because the deterministic-contract argument is defensible for gate-firing verification.
+  - **Prevention:** when delegating a skill-invocation verification to a subagent, the subagent prompt must explicitly require `Skill` tool invocation of the target skill AND forbid "follow the procedure directly" shortcuts. Example prompt fragment: *"Invoke the target skill via the Skill tool. Do NOT simulate the skill by following its prescribed procedure from references. The point of this verification is that the skill, when invoked, emits the expected output — not that the reference procedure is internally consistent."* No AGENTS.md rule proposed: rule budget is at 97% (38767 / 40000 bytes) and this is a narrow skill-verification pattern covered inline by the Methodology section.
+
+- **Session-state.md / tasks.md drift caught at review.** Initial session-state conflated THIS plan's own deepen pass (which triggered Phase 1.4 on its own text) with Phase 2's downstream verification on the contrived input. Tasks.md had 35 checkboxes in `[ ]` state despite plan.md checkboxes being marked `[x]`. Both were pr-introduced and fixed inline (commit fd9d695e) per `rf-review-finding-default-fix-inline`.
+  - **Recovery:** pattern-recognition-specialist flagged both as P2 + P3; edited session-state decisions/components to distinguish self-deepening from downstream verification, and checked off tasks.md items that were actually executed (27 of 35, leaving failure-path + post-merge items unchecked).
+  - **Prevention:** the session-state template in `one-shot/SKILL.md` forwards the plan subagent's "Decisions" verbatim. When a plan has its own Phase 1.4 self-trigger AND runs Phase 1.4 verification as a Phase 2 downstream activity, the two concepts must be kept separate in the Decisions list. This is a niche shape — no workflow edit proposed. The review skill's pattern-recognition-specialist caught it; the gate already works.
+
 ## References
 
 - Source PR: #2683 (merged 2026-04-19).
