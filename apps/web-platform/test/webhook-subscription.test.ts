@@ -5,14 +5,15 @@ import type Stripe from "stripe";
 // Mocks — vi.hoisted ensures these are available when vi.mock factories run
 // ---------------------------------------------------------------------------
 
-const { mockConstructEvent, mockUpdate, mockEq, mockLogger } = vi.hoisted(
-  () => ({
+const { mockConstructEvent, mockUpdate, mockEq, mockIn, mockSelect, mockLogger } =
+  vi.hoisted(() => ({
     mockConstructEvent: vi.fn(),
     mockUpdate: vi.fn(),
     mockEq: vi.fn(),
+    mockIn: vi.fn(),
+    mockSelect: vi.fn(),
     mockLogger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
-  }),
-);
+  }));
 
 vi.mock("@/lib/stripe", () => ({
   getStripe: () => ({
@@ -69,8 +70,31 @@ function makeEvent(
 describe("Stripe webhook — subscription lifecycle", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    // Default: update chain resolves successfully
-    mockEq.mockResolvedValue({ error: null });
+    // Default: every guarded chain (.eq().in().select()) returns one matched
+    // row. Tests asserting the guard fired (zero rows) override mockSelect.
+    mockSelect.mockResolvedValue({ data: [{ id: "user-123" }], error: null });
+    // mockIn is awaitable AND exposes .select() so the new
+    // .updated/.deleted handlers (which now read matched count for
+    // observability) chain correctly.
+    mockIn.mockImplementation(() => {
+      const result: { data: { id: string }[]; error: null } = {
+        data: [{ id: "user-123" }],
+        error: null,
+      };
+      return {
+        select: mockSelect,
+        then: (resolve: (value: typeof result) => unknown) => resolve(result),
+      };
+    });
+    // mockEq returns a thenable (for legacy .update().eq() chains used by
+    // checkout.session.completed) AND exposes .in() for the guarded handlers.
+    mockEq.mockImplementation(() => {
+      const result: { error: null } = { error: null };
+      return {
+        in: mockIn,
+        then: (resolve: (value: typeof result) => unknown) => resolve(result),
+      };
+    });
     mockUpdate.mockReturnValue({ eq: mockEq });
   });
 
@@ -257,11 +281,125 @@ describe("Stripe webhook — subscription lifecycle", () => {
         current_period_end: 1_700_000_000,
       });
       mockConstructEvent.mockReturnValue(event);
-      mockEq.mockResolvedValue({ error: { message: "connection lost" } });
+      // New chain: error surfaces from .select(), not .eq()
+      mockSelect.mockResolvedValue({ data: null, error: { message: "connection lost" } });
 
       const res = await POST(makeRequest());
 
       expect(res.status).toBe(500);
+    });
+  });
+
+  describe("out-of-order event guards (#2190)", () => {
+    test(".updated guard filters by SUBSCRIPTION_UPDATABLE_STATUSES regardless of newStatus", async () => {
+      // P1 fix: the guard must fire for every newStatus, not only "active".
+      // A stale .updated(past_due) replayed after .deleted must also no-op.
+      const event = makeEvent("customer.subscription.updated", {
+        customer: CUSTOMER_ID,
+        status: "past_due",
+        cancel_at_period_end: false,
+        current_period_end: 1_700_000_000,
+      });
+      mockConstructEvent.mockReturnValue(event);
+
+      const res = await POST(makeRequest());
+
+      expect(res.status).toBe(200);
+      expect(mockIn).toHaveBeenCalledWith("subscription_status", [
+        "none",
+        "active",
+        "past_due",
+        "unpaid",
+      ]);
+    });
+
+    test(".updated guard filter applies on active transitions too", async () => {
+      const event = makeEvent("customer.subscription.updated", {
+        customer: CUSTOMER_ID,
+        status: "active",
+        cancel_at_period_end: false,
+        current_period_end: 1_700_000_000,
+      });
+      mockConstructEvent.mockReturnValue(event);
+
+      await POST(makeRequest());
+
+      expect(mockIn).toHaveBeenCalledWith("subscription_status", [
+        "none",
+        "active",
+        "past_due",
+        "unpaid",
+      ]);
+    });
+
+    test(".deleted guard filter excludes 'none' and 'cancelled'", async () => {
+      const event = makeEvent("customer.subscription.deleted", {
+        customer: CUSTOMER_ID,
+      });
+      mockConstructEvent.mockReturnValue(event);
+
+      await POST(makeRequest());
+
+      expect(mockIn).toHaveBeenCalledWith("subscription_status", [
+        "active",
+        "past_due",
+        "unpaid",
+      ]);
+    });
+
+    test(".updated against cancelled row is a no-op (zero matched) — AC #3", async () => {
+      // Simulate a cancelled row: the .in() filter returns an empty rowset.
+      mockSelect.mockResolvedValueOnce({ data: [], error: null });
+      const event = makeEvent("customer.subscription.updated", {
+        customer: CUSTOMER_ID,
+        status: "active",
+        cancel_at_period_end: false,
+        current_period_end: 1_700_000_000,
+      });
+      mockConstructEvent.mockReturnValue(event);
+
+      const res = await POST(makeRequest());
+
+      expect(res.status).toBe(200);
+      expect(mockLogger.warn).toHaveBeenCalledWith(
+        expect.objectContaining({ customerId: CUSTOMER_ID, newStatus: "active" }),
+        expect.stringContaining("guard no-op"),
+      );
+      expect(mockLogger.info).not.toHaveBeenCalled();
+    });
+
+    test(".deleted against already-cancelled row is a no-op (zero matched) — AC #4", async () => {
+      mockSelect.mockResolvedValueOnce({ data: [], error: null });
+      const event = makeEvent("customer.subscription.deleted", {
+        customer: CUSTOMER_ID,
+      });
+      mockConstructEvent.mockReturnValue(event);
+
+      const res = await POST(makeRequest());
+
+      expect(res.status).toBe(200);
+      expect(mockLogger.warn).toHaveBeenCalledWith(
+        expect.objectContaining({ customerId: CUSTOMER_ID }),
+        expect.stringContaining("guard no-op"),
+      );
+      expect(mockLogger.info).not.toHaveBeenCalled();
+    });
+
+    test("matched .updated logs info with matched count", async () => {
+      const event = makeEvent("customer.subscription.updated", {
+        customer: CUSTOMER_ID,
+        status: "active",
+        cancel_at_period_end: false,
+        current_period_end: 1_700_000_000,
+      });
+      mockConstructEvent.mockReturnValue(event);
+
+      await POST(makeRequest());
+
+      expect(mockLogger.info).toHaveBeenCalledWith(
+        expect.objectContaining({ customerId: CUSTOMER_ID, matched: 1 }),
+        expect.stringContaining("applied"),
+      );
     });
   });
 
