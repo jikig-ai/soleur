@@ -3,6 +3,8 @@ layout: base.njk
 ---
 {% block extraHead %}
 <meta property="article:published_time" content="{{ date | dateToRfc3339 }}" />
+{% if updated %}<meta property="article:modified_time" content="{{ updated | dateToRfc3339 }}" />
+{% endif %}<meta property="article:author" content="{{ site.author.url }}" />
 {% for tag in tags %}{% if tag != "blog" %}
 <meta property="article:tag" content="{{ tag }}" />
 {% endif %}{% endfor %}

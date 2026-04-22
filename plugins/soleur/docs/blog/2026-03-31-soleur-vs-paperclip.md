@@ -39,7 +39,7 @@ What Paperclip does not provide: agents. Domain knowledge. Opinions about what a
 
 ## What Soleur Actually Is
 
-Soleur is the [Company-as-a-Service]({{ site.url }}blog/what-is-company-as-a-service/) platform. {{ stats.agents }} agents, {{ stats.skills }} skills, and a compounding knowledge base organized across {{ stats.departments }} business domains. Each domain has a director-level leader and specialist agents: the CMO orchestrates brand architects, SEO specialists, and growth researchers; the CLO manages legal document generation and compliance auditing; the CTO oversees engineering research, code review, architecture design, and deployment.
+Soleur is the [Company-as-a-Service]({{ site.url }}/company-as-a-service/) platform. {{ stats.agents }} agents, {{ stats.skills }} skills, and a compounding knowledge base organized across {{ stats.departments }} business domains. Each domain has a director-level leader and specialist agents: the CMO orchestrates brand architects, SEO specialists, and growth researchers; the CLO manages legal document generation and compliance auditing; the CTO oversees engineering research, code review, architecture design, and deployment.
 
 These agents do not operate in silos. They share a git-tracked knowledge base -- a directory of structured Markdown files -- that accumulates institutional memory with every session. The brand guide the brand-architect writes informs what the content writer generates. The competitive intelligence scan the CPO runs updates the sales battlecards the deal-architect uses. The legal compliance audit references the privacy policy the CLO previously documented. Knowledge flows across domains because every agent reads from and writes to the same base.
 

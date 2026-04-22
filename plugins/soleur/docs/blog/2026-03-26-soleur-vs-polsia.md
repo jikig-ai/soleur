@@ -24,7 +24,7 @@ Polsia is built on the Claude Agent SDK (Claude Opus 4.6) and is cloud-hosted an
 
 Polsia covers five business domains: engineering, marketing, cold outreach, social media, and Meta ads.
 
-**Soleur** is a [Company-as-a-Service]({{ site.url }}blog/what-is-company-as-a-service/) platform. It deploys {{ stats.agents }} agents across {{ stats.departments }} business departments -- engineering, marketing, legal, finance, operations, product, sales, and support -- with a compounding knowledge base that accumulates institutional memory across every session and every domain. Soleur runs inside Claude Code.
+**Soleur** is a [Company-as-a-Service]({{ site.url }}/company-as-a-service/) platform. It deploys {{ stats.agents }} agents across {{ stats.departments }} business departments -- engineering, marketing, legal, finance, operations, product, sales, and support -- with a compounding knowledge base that accumulates institutional memory across every session and every domain. Soleur runs inside Claude Code.
 
 Soleur is open-source (Apache 2.0). The platform is free.
 
