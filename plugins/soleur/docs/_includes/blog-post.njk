@@ -83,28 +83,28 @@ layout: base.njk
 <section class="author-card-section" aria-label="About the author">
   <div class="container">
     <div class="author-card">
-      <img class="author-card__photo"
+      <img class="author-card-photo"
            src="{{ site.author.image }}"
            width="96"
            height="96"
            alt="{{ site.author.name }} — {{ site.author.role }} of {{ site.name }}"
            loading="lazy"
            decoding="async">
-      <div class="author-card__body">
-        <p class="author-card__name">{{ site.author.name }}</p>
-        <p class="author-card__role">{{ site.author.role }} of {{ site.name }}</p>
-        <p class="author-card__bio">{{ site.author.bio }}</p>
+      <div class="author-card-body">
+        <p class="author-card-name">{{ site.author.name }}</p>
+        <p class="author-card-role">{{ site.author.role }} of {{ site.name }}</p>
+        <p class="author-card-bio">{{ site.author.bio }}</p>
         {% if site.author.credentials %}
-        <ul class="author-card__credentials">
+        <ul class="author-card-credentials">
           {% for credential in site.author.credentials %}
           <li>{{ credential }}</li>
           {% endfor %}
         </ul>
         {% endif %}
         {% if site.author.sameAs %}
-        <ul class="author-card__links">
+        <ul class="author-card-links">
           {% for link in site.author.sameAs %}
-          <li><a href="{{ link }}" rel="noopener me" target="_blank">{{ link | replace("https://", "") | replace("www.", "") }}</a></li>
+          <li><a href="{{ link }}" rel="noopener noreferrer me" target="_blank">{{ link | replace("https://", "") | replace("www.", "") }}</a></li>
           {% endfor %}
         </ul>
         {% endif %}

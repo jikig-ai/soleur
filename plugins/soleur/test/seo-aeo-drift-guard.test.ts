@@ -68,6 +68,9 @@ afterAll(() => {
 
 // -- helpers ---------------------------------------------------------------
 
+const JSONLD_BLOCK_RE =
+  /<script type="application\/ld\+json">([\s\S]*?)<\/script>/g;
+
 function readSite(relPath: string): string {
   const abs = resolve(SITE, relPath);
   if (!existsSync(abs)) {
@@ -78,13 +81,13 @@ function readSite(relPath: string): string {
   return readFileSync(abs, "utf8");
 }
 
+function jsonLdBlockBodies(html: string): string[] {
+  // Reset regex lastIndex because the global flag shares state across calls.
+  return [...html.matchAll(JSONLD_BLOCK_RE)].map((m) => m[1]);
+}
+
 function jsonLdBlocks(html: string): unknown[] {
-  const re = /<script type="application\/ld\+json">([\s\S]*?)<\/script>/g;
-  const out: unknown[] = [];
-  for (const m of html.matchAll(re)) {
-    out.push(JSON.parse(m[1]));
-  }
-  return out;
+  return jsonLdBlockBodies(html).map((body) => JSON.parse(body));
 }
 
 function extractTitle(html: string): string {
@@ -287,32 +290,17 @@ describe("all <script type=\"application/ld+json\"> blocks parse as valid JSON",
     const failures: { file: string; err: string; snippet: string }[] = [];
     for (const f of files) {
       const html = readFileSync(f, "utf8");
-      try {
-        // jsonLdBlocks throws on the first invalid block — wrap per-file so
-        // we accumulate failures across files instead of aborting on the first.
-        jsonLdBlocks(html);
-      } catch (e) {
-        // Re-scan this file block-by-block to report which snippet failed.
-        const re =
-          /<script type="application\/ld\+json">([\s\S]*?)<\/script>/g;
-        for (const m of html.matchAll(re)) {
-          try {
-            JSON.parse(m[1]);
-          } catch (inner) {
-            failures.push({
-              file: f,
-              err: (inner as Error).message,
-              snippet: m[1].slice(0, 200),
-            });
-          }
-        }
-        // Defensive: if the top-level catch fired but no block failed inner
-        // JSON.parse (shouldn't happen), surface the original error.
-        if (failures.length === 0) {
+      // Reuse the shared extractor (jsonLdBlockBodies) + try/catch per-block
+      // so failures accumulate across the whole site rather than aborting on
+      // the first bad block.
+      for (const body of jsonLdBlockBodies(html)) {
+        try {
+          JSON.parse(body);
+        } catch (e) {
           failures.push({
             file: f,
             err: (e as Error).message,
-            snippet: "<no-extractable-block>",
+            snippet: body.slice(0, 200),
           });
         }
       }
