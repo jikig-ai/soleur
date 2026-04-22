@@ -4,7 +4,7 @@
 # ux-design-lead (audit mode) for 5-category rubric analysis.
 #
 # Fields:
-#   path             URL path, relative to NEXT_PUBLIC_SITE_URL
+#   path             URL path, relative to NEXT_PUBLIC_APP_URL
 #   auth             "anonymous" (no session) | "bot" (authenticated as ux-audit-bot@jikigai.com)
 #   fixture_prereqs  required state before navigating — if unmet, route is skipped with a logged reason
 #                    (bot-fixture.ts seed idempotently satisfies: tcs_accepted, billing_active, chat_conversations)

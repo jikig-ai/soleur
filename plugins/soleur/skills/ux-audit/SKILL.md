@@ -38,7 +38,7 @@ Dry-run toggle: export `UX_AUDIT_DRY_RUN=true` before launching Claude Code. The
 
 Env vars required (loaded from Doppler `prd_scheduled`, falling back to `prd`):
 
-- `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, `NEXT_PUBLIC_SITE_URL` — from `prd`
+- `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, `NEXT_PUBLIC_APP_URL` — from `prd`
 - `UX_AUDIT_BOT_EMAIL`, `UX_AUDIT_BOT_PASSWORD` — from `prd_scheduled`
 - `UX_AUDIT_DRY_RUN` — `true` writes findings JSON to stdout + workflow artifact; `false` files issues
 - `GH_TOKEN` — for `gh issue create` / `gh issue list`

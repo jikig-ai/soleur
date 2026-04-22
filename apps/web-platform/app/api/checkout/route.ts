@@ -4,6 +4,7 @@ import { getStripe } from "@/lib/stripe";
 import { priceIdForTier } from "@/lib/stripe-price-tier-map";
 import type { PlanTier } from "@/lib/types";
 import { validateOrigin, rejectCsrf } from "@/lib/auth/validate-origin";
+import { APP_URL_FALLBACK, reportSilentFallback } from "@/server/observability";
 import logger from "@/server/logger";
 
 const VALID_TARGET_TIERS: PlanTier[] = ["solo", "startup", "scale", "enterprise"];
@@ -58,7 +59,16 @@ export async function POST(request: Request) {
     );
   }
 
-  const appOrigin = process.env.NEXT_PUBLIC_APP_URL ?? "https://app.soleur.ai";
+  const appUrl = process.env.NEXT_PUBLIC_APP_URL;
+  if (!appUrl) {
+    reportSilentFallback(null, {
+      feature: "checkout",
+      op: "create-session",
+      message: `NEXT_PUBLIC_APP_URL unset; checkout origin fallback to ${APP_URL_FALLBACK}`,
+      extra: { userId: user.id },
+    });
+  }
+  const appOrigin = appUrl ?? APP_URL_FALLBACK;
 
   const resolvedPriceId = targetTier
     ? priceIdForTier(targetTier)

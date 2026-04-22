@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
+import { APP_URL_FALLBACK, reportSilentFallback } from "@/server/observability";
 import logger from "@/server/logger";
 
 const REDIRECT_BASE = "/connect-repo";
@@ -160,8 +161,16 @@ export async function GET(request: Request) {
 
 /** Build a redirect response that also deletes the state cookie. */
 function redirectWithDeletedCookie(path: string, _request: Request): NextResponse {
-  const siteUrl = process.env.NEXT_PUBLIC_SITE_URL ?? "https://app.soleur.ai";
-  const response = NextResponse.redirect(new URL(path, siteUrl), 302);
+  const appUrlEnv = process.env.NEXT_PUBLIC_APP_URL;
+  if (!appUrlEnv) {
+    reportSilentFallback(null, {
+      feature: "github-resolve",
+      op: "callback-redirect",
+      message: `NEXT_PUBLIC_APP_URL unset; github-resolve callback redirect fallback to ${APP_URL_FALLBACK}`,
+    });
+  }
+  const appUrl = appUrlEnv ?? APP_URL_FALLBACK;
+  const response = NextResponse.redirect(new URL(path, appUrl), 302);
   response.cookies.set("soleur_github_resolve", "", {
     httpOnly: true,
     secure: true,

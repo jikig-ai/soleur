@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { getStripe } from "@/lib/stripe";
 import { validateOrigin, rejectCsrf } from "@/lib/auth/validate-origin";
+import { APP_URL_FALLBACK, reportSilentFallback } from "@/server/observability";
 
 export async function POST(request: Request) {
   const { valid, origin } = validateOrigin(request);
@@ -26,7 +27,16 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "No subscription" }, { status: 400 });
   }
 
-  const appOrigin = process.env.NEXT_PUBLIC_APP_URL ?? "https://app.soleur.ai";
+  const appUrl = process.env.NEXT_PUBLIC_APP_URL;
+  if (!appUrl) {
+    reportSilentFallback(null, {
+      feature: "billing",
+      op: "portal-session",
+      message: `NEXT_PUBLIC_APP_URL unset; billing portal return_url fallback to ${APP_URL_FALLBACK}`,
+      extra: { userId: user.id },
+    });
+  }
+  const appOrigin = appUrl ?? APP_URL_FALLBACK;
 
   const portalSession = await getStripe().billingPortal.sessions.create({
     customer: userData.stripe_customer_id,
