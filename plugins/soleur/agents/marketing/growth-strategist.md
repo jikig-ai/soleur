@@ -50,6 +50,8 @@ Prioritize findings by GEO impact: source citations > statistics/numbers > quota
 
 Every AEO audit must produce BOTH scorecards below. The SAP scorecard is the headline (used for cross-audit trend comparison and exit-criteria thresholds such as #2615's `Presence >= 55/D`). The 8-component AEO diagnostic surfaces per-signal detail. Do not omit either table, do not reorder the dimensions, and do not rename the labels — downstream scripts anchor on the exact row names.
 
+<!-- sync: keep in sync with .github/workflows/scheduled-growth-audit.yml Step 2 prompt and knowledge-base/project/plans/2026-04-19-chore-aeo-presence-reaudit-after-pr-2596-plan.md Phase 2 parser. Weights, row labels, and grading scale are duplicated across these three surfaces. -->
+
 **Table 1 — SAP Scorecard (headline):**
 
 ```markdown

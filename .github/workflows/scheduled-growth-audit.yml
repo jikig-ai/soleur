@@ -71,6 +71,11 @@ jobs:
           plugin_marketplaces: 'https://github.com/jikig-ai/soleur.git'
           plugins: 'soleur@soleur'
           claude_args: '--model claude-opus-4-7 --max-turns 70 --allowedTools Bash,Read,Write,Edit,Glob,Grep,WebSearch,WebFetch,Task'
+          # Template-sync sentinel: weights, row labels, and grading scale inside Step 2
+          # below are duplicated across plugins/soleur/agents/marketing/growth-strategist.md
+          # (GEO/AEO Content Audit section) and the runbook parser at
+          # knowledge-base/project/plans/2026-04-19-chore-aeo-presence-reaudit-after-pr-2596-plan.md
+          # Phase 2. Change one, change all three.
           prompt: |
             IMPORTANT: This is an automated CI workflow. The AGENTS.md rule
             Do NOT push directly to main.

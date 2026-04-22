@@ -277,7 +277,8 @@ fi
 SCORE_CELL=$(echo "$PRESENCE_LINE" | awk -F'|' -v c="$SCORE_COL" '{
   gsub(/^[ \t]+|[ \t]+$/, "", $c); print $c
 }')
-SCORE_CELL_TRIMMED="${SCORE_CELL// /}"  # strip inline spaces ("20 / 25" -> "20/25")
+SCORE_CELL_TRIMMED="${SCORE_CELL// /}"    # strip inline spaces ("20 / 25" -> "20/25")
+SCORE_CELL_TRIMMED="${SCORE_CELL_TRIMMED//\*/}"  # strip bold markdown markers ("**72**" -> "72")
 if [[ "$SCORE_CELL_TRIMMED" =~ ^([0-9]+)/([0-9]+)$ ]]; then
   NUM="${BASH_REMATCH[1]}"; DEN="${BASH_REMATCH[2]}"
   if [[ "$DEN" -eq 0 ]]; then
@@ -297,19 +298,26 @@ if [[ "$PRESENCE_SCORE" -gt 100 ]]; then
 fi
 echo "Presence score (percentage-of-category, 0-100): $PRESENCE_SCORE"
 
-# Derive a letter grade from PRESENCE_SCORE using the pinned SAP grading scale
-# (A >=90, B 80-89, B+ 75-79, C 60-74, D 55-59, F <55). The old rubric included
-# a separate Grade column per row; the new SAP rubric only grades the Total row.
-# Deriving keeps PRESENCE_GRADE populated across both eras so downstream
-# comment formatting ("${PRESENCE_SCORE}/${PRESENCE_GRADE}") stays clean.
+# Alias to PRESENCE_PCT for downstream code that prefers the semantic name
+# (the plan contract uses "percentage-of-category"). Both names reference
+# the same value.
+PRESENCE_PCT="$PRESENCE_SCORE"
+
+# Derive a letter grade from PRESENCE_SCORE using the pinned SAP grading
+# scale exactly as defined in growth-strategist.md and scheduled-growth-
+# audit.yml Step 2 (A >= 90, B 80-89, B+ 75-79, C 60-74, D < 60). The old
+# rubric included a separate Grade column per row; the new SAP rubric only
+# grades the Total row. Deriving keeps PRESENCE_GRADE populated across
+# both eras so downstream comment formatting stays clean. Do NOT introduce
+# letters not in the pinned scale — agents produce audits against the
+# pinned five-tier scale, and a runbook-internal sixth tier would desync.
 if   [[ "$PRESENCE_SCORE" -ge 90 ]]; then PRESENCE_GRADE="A"
 elif [[ "$PRESENCE_SCORE" -ge 80 ]]; then PRESENCE_GRADE="B"
 elif [[ "$PRESENCE_SCORE" -ge 75 ]]; then PRESENCE_GRADE="B+"
 elif [[ "$PRESENCE_SCORE" -ge 60 ]]; then PRESENCE_GRADE="C"
-elif [[ "$PRESENCE_SCORE" -ge 55 ]]; then PRESENCE_GRADE="D"
-else                                      PRESENCE_GRADE="F"
+else                                      PRESENCE_GRADE="D"
 fi
-echo "Presence grade (derived): $PRESENCE_GRADE"
+echo "Presence grade (derived from pinned scale): $PRESENCE_GRADE"
 
 # Extract the overall score. The old rubric used "**Overall**"; the new SAP
 # rubric uses "**Total**". Match either.
@@ -320,21 +328,41 @@ if [[ -z "$OVERALL_LINE" ]]; then
   echo "ERROR: no row matches '| **Overall** ...' or '| **Total** ...'" >&2
   exit 7
 fi
+
+# Look up the Weighted column index by name (parallel with SCORE_COL lookup).
+# The new SAP Total row leaves the Score cell empty and puts the overall total
+# in the Weighted column; old rubrics put the overall in Score directly. A
+# first-integer-in-line fallback is unsafe because "Weight" (e.g. 100) precedes
+# "Weighted" in new SAP column order and would be grabbed first.
+WEIGHTED_COL=$(echo "$HEADER" | awk -F'|' '{
+  for (i=2; i<=NF; i++) {
+    gsub(/^[ \t]+|[ \t]+$/, "", $i)
+    if ($i == "Weighted") { print i; exit }
+  }
+}')
+
 OVERALL_CELL=$(echo "$OVERALL_LINE" | awk -F'|' -v c="$SCORE_COL" '{
   gsub(/^[ \t]+|[ \t]+$/, "", $c); print $c
 }')
 OVERALL_CELL_TRIMMED="${OVERALL_CELL// /}"
-# The new SAP Total row leaves the Score cell empty and puts the total in the
-# Weighted column; fall back to extracting the first 0-100 integer from the
-# whole line if the Score cell is blank.
+OVERALL_CELL_TRIMMED="${OVERALL_CELL_TRIMMED//\*/}"  # strip bold markers (old audits bold the Overall Score cell)
 if [[ "$OVERALL_CELL_TRIMMED" =~ ^[0-9]+$ ]]; then
   OVERALL_SCORE="$OVERALL_CELL_TRIMMED"
 elif [[ "$OVERALL_CELL_TRIMMED" =~ ^([0-9]+)/([0-9]+)$ ]]; then
   NUM="${BASH_REMATCH[1]}"; DEN="${BASH_REMATCH[2]}"
-  [[ "$DEN" -eq 0 ]] && { echo "ERROR: Overall denominator zero (line: $OVERALL_LINE)" >&2; exit 8; }
+  if [[ "$DEN" -eq 0 ]]; then
+    echo "ERROR: Overall denominator zero in '$OVERALL_CELL' (line: $OVERALL_LINE)" >&2
+    exit 8
+  fi
   OVERALL_SCORE=$(awk "BEGIN { printf \"%.0f\", ($NUM / $DEN) * 100 }")
+elif [[ -n "$WEIGHTED_COL" ]]; then
+  # New SAP Total row fallback: read the Weighted column explicitly.
+  OVERALL_SCORE=$(echo "$OVERALL_LINE" | awk -F'|' -v c="$WEIGHTED_COL" '{
+    gsub(/^[ \t]+|[ \t]+$/, "", $c); gsub(/[^0-9]/, "", $c); print $c
+  }')
 else
-  OVERALL_SCORE=$(echo "$OVERALL_LINE" | grep -oE '\b[0-9]{1,3}\b' | head -n 1)
+  echo "ERROR: cannot extract Overall score (Score cell empty, no Weighted column in header) (line: $OVERALL_LINE)" >&2
+  exit 8
 fi
 if ! [[ "$OVERALL_SCORE" =~ ^[0-9]+$ ]] || [[ "$OVERALL_SCORE" -gt 100 ]]; then
   echo "ERROR: extracted Overall score is not a valid integer 0-100: '$OVERALL_SCORE' (line: $OVERALL_LINE)" >&2
@@ -549,8 +577,9 @@ gh issue comment 2615 --body "AEO Presence audit at ${AUDIT_DATE} reported ${PRE
 | Audit step 3 returned the stub fallback ("SEO audit failed — see CI logs.") | Skip the score extraction; do not infer a Presence number from a missing AEO report | File P1 tracker referencing the failed cron run; #2615 needs-attention |
 | Table format changed (e.g., column reorder) | Re-read the latest audit, locate column by header name, abort if anchor missing | No silent default; operator notified to update Phase 2 anchors |
 | New SAP rubric with fraction score (e.g., `20/25`) | Phase 2 parser normalizes fraction → percentage-of-category | `PRESENCE_SCORE=80`, `PRESENCE_GRADE=B`, PASS branch (threshold ≥55) |
-| Old rubric with bare integer score (e.g., `40`) | Phase 2 parser treats bare integer as already-normalized | `PRESENCE_SCORE=40`, `PRESENCE_GRADE=F`, FAIL branch (below ≥55) |
+| Old rubric with bare integer score (e.g., `40`) | Phase 2 parser treats bare integer as already-normalized | `PRESENCE_SCORE=40`, `PRESENCE_GRADE=D` (below 60 per pinned scale), FAIL branch (below ≥55) |
 | Score cell reflowed with whitespace (e.g., `20 / 25`) | Parser strips inline whitespace before matching | Parsed identically to `20/25` |
+| New SAP Total row with empty Score cell (e.g., `\| **Total** \| 100 \| \| 78 \| B+ \|`) | Parser reads Weighted column via header lookup | `OVERALL_SCORE=78` (not 100, the Weight) |
 
 ## Risks
 
