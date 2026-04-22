@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeAll, afterAll, beforeEach } from "bun:test";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync, chmodSync, existsSync, unlinkSync } from "fs";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync, chmodSync, existsSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 
@@ -20,12 +20,21 @@ const {
   GIT_WORK_TREE: _w,
   ...cleanEnv
 } = process.env;
-const GIT_ENV = {
+// `Record<string, string | undefined>` matches `process.env`'s actual shape
+// and lets `beforeAll` mutate `GIT_ENV.PATH` without an `as` cast. See the
+// Signal-3 gh-stub setup below.
+const GIT_ENV: Record<string, string | undefined> = {
   ...cleanEnv,
   GIT_CONFIG_NOSYSTEM: "1",
   GIT_CONFIG_GLOBAL: "/dev/null",
   GIT_CEILING_DIRECTORIES: tmpdir(),
 };
+
+// Inline timeout for the two Signal-3 review-issue tests that previously
+// flaked at the 5000ms bun-test default when the hook hit the live GitHub
+// API (#2801). The stub eliminates the API variance; 15s is defense-in-depth
+// against Bun.spawn cold-start + git subprocess work in beforeEach.
+const SIGNAL_3_TEST_TIMEOUT_MS = 15000;
 
 function makeInput(command: string, cwd?: string): string {
   return JSON.stringify({
@@ -142,8 +151,26 @@ describe("pre-merge-rebase hook (with git repo)", () => {
   // bun-test default (#2801).
   let binDir: string;
   let ghCalledSentinel: string;
+  // Original PATH captured in beforeAll so afterAll can restore it. Prevents
+  // the describe-scoped PATH prefix from leaking to any future describe block
+  // that runs after this one in the same file.
+  let originalPath: string;
+
+  // `assertStubConsulted` proves the hook's Signal 3 path reached the PATH-prefix
+  // gh stub. The sentinel is ONLY created on recognized argv shapes (see the stub's
+  // case dispatch); if a future hook change adds a new `gh` invocation shape, this
+  // assertion fails loudly rather than silently accepting the catch-all's exit 0.
+  function assertStubConsulted() {
+    expect(
+      existsSync(ghCalledSentinel),
+      "gh stub was not consulted during Signal 3 review-issue lookup"
+    ).toBe(true);
+  }
 
   beforeAll(() => {
+    // PATH mutation must happen before any Bun.spawn in this suite so that even
+    // the git setup runs with a stable PATH ordering. Do not reorder below the
+    // git init/clone sequence.
     remoteDir = mkdtempSync(join(tmpdir(), "hook-test-remote-"));
     repoDir = mkdtempSync(join(tmpdir(), "hook-test-local-"));
     binDir = mkdtempSync(join(tmpdir(), "hook-test-bin-"));
@@ -151,25 +178,26 @@ describe("pre-merge-rebase hook (with git repo)", () => {
 
     // Write a deterministic `gh` stub. The hook's Signal 3 path only invokes
     // `gh issue list --label code-review ...` when `gh pr merge <N>` includes a
-    // literal PR number (PR_NUMBER is extracted from argv at pre-merge-rebase.sh
-    // PR_NUMBER extraction step, so the `gh pr list` fallback is unreachable
-    // from these tests). The stub echoes an empty jq result -> hook treats it
-    // as "no review issue found" -> deny, matching the pre-stub behavior when
-    // the live API returned no match.
+    // literal PR number (every test invokes `gh pr merge 123 ...`, so PR_NUMBER
+    // is extracted from argv and the `gh pr list` fallback is unreachable).
+    // The stub touches the sentinel ONLY on the recognized `issue list` branch;
+    // unexpected argv shapes fall through to the catch-all, leave the sentinel
+    // absent, and fail the per-test `assertStubConsulted` assertion loudly —
+    // preventing silent drift if the hook gains a new gh invocation shape.
     const ghStub = `#!/usr/bin/env bash
 # Test stub for \`gh\` — pre-merge-rebase.test.ts Signal 3 isolation (#2801).
 # Reachable invocations:
 #   gh issue list --label code-review --state all --search "PR #N" --limit 1 --json number --jq '.[0].number // empty'
 # Return empty stdout so the hook's \`// empty\` jq default fires and REVIEW_ISSUES stays empty.
-# The sentinel file proves the stub was consulted (see sentinel expects in the two Signal-3 tests).
-touch "$(dirname "$0")/.gh-called"
 case "$1 $2" in
-  "issue list"|"pr list")
+  "issue list")
+    touch "$(dirname "$0")/.gh-called"
     exit 0
     ;;
   *)
-    # Unexpected invocation: warn visibly but don't fail the hook (fail-open
-    # semantics match the hook's real \`2>/dev/null || true\` pattern).
+    # Unexpected invocation: fail-open to preserve the hook's real
+    # \`2>/dev/null || true\` semantics, but deliberately SKIP the sentinel touch
+    # so the test's assertStubConsulted fails and surfaces the drift.
     echo "[test stub] unexpected gh invocation: $*" >&2
     exit 0
     ;;
@@ -180,11 +208,15 @@ esac
     chmodSync(ghPath, 0o755);
 
     // Extend GIT_ENV.PATH so the stub wins PATH resolution for any Bun.spawn
-    // inside this describe block. The const binding is fine — we're mutating
-    // the object's property, not rebinding the variable.
-    (GIT_ENV as Record<string, string>).PATH = `${binDir}:${cleanEnv.PATH ?? ""}`;
+    // inside this describe block. Object mutation (not rebinding) — GIT_ENV is
+    // `const` but its properties are mutable.
+    originalPath = GIT_ENV.PATH ?? "";
+    GIT_ENV.PATH = `${binDir}:${originalPath}`;
 
-    // PATH sanity: fail fast if the stub doesn't win resolution.
+    // PATH sanity: fail the entire suite fast if the stub doesn't win resolution.
+    // Distinct from the per-test assertStubConsulted (which verifies the hook
+    // actually invoked gh during its asserted code path) — this one verifies
+    // PATH ordering at suite start.
     const whichGh = new TextDecoder()
       .decode(Bun.spawnSync(["which", "gh"], { env: GIT_ENV }).stdout)
       .trim();
@@ -212,11 +244,17 @@ esac
     rmSync(repoDir, { recursive: true, force: true });
     rmSync(remoteDir, { recursive: true, force: true });
     rmSync(binDir, { recursive: true, force: true });
+    // Restore PATH so a future describe block below this one cannot inherit
+    // the (now-deleted) stub directory on GIT_ENV.PATH.
+    GIT_ENV.PATH = originalPath;
   });
 
   beforeEach(() => {
-    // Reset per-test sentinel so each test asserts a fresh stub invocation.
-    if (existsSync(ghCalledSentinel)) unlinkSync(ghCalledSentinel);
+    // Reset per-test sentinel so each Signal-3 test asserts a fresh stub
+    // invocation (otherwise a sentinel created by test N could satisfy
+    // test N+1's assertStubConsulted). `force: true` is idempotent when
+    // the sentinel is absent (e.g., first beforeEach before any test runs).
+    rmSync(ghCalledSentinel, { force: true });
     spawnChecked(["git", "checkout", "main"], { cwd: repoDir });
     // Reset remote main to initial commit so tests that pushed to origin/main
     // don't affect subsequent tests (latent ordering dependency).
@@ -264,11 +302,8 @@ esac
     expect(output.hookSpecificOutput.permissionDecisionReason).toContain(
       "No review evidence"
     );
-    // Proves the hook's Signal 3 path reached the PATH-prefix gh stub instead of
-    // the live GitHub CLI. If CI's /usr/local/bin/gh ever wins PATH resolution,
-    // this fails loudly rather than reintroducing wall-clock flake (#2801).
-    expect(existsSync(ghCalledSentinel), "gh stub was not consulted during Signal 3 review-issue lookup").toBe(true);
-  }, 15000);
+    assertStubConsulted();
+  }, SIGNAL_3_TEST_TIMEOUT_MS);
 
   test("review commit message satisfies review evidence gate", async () => {
     spawnChecked(["git", "checkout", "-b", "test-review-commit"], { cwd: repoDir });
@@ -480,9 +515,8 @@ esac
     expect(result.exitCode).toBe(0);
     const output = JSON.parse(result.stdout);
     expect(output.hookSpecificOutput.permissionDecision).toBe("deny");
-    // See sentinel comment on the sibling "no review evidence" test above.
-    expect(existsSync(ghCalledSentinel), "gh stub was not consulted during Signal 3 review-issue lookup").toBe(true);
-  }, 15000);
+    assertStubConsulted();
+  }, SIGNAL_3_TEST_TIMEOUT_MS);
 
   test("main branch skips sync silently", async () => {
     const result = await runHook(
