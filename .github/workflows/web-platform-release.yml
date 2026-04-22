@@ -55,12 +55,33 @@ jobs:
         run: |
           doppler run -c prd -- bash apps/web-platform/scripts/run-migrations.sh
 
+  verify-doppler-secrets:
+    # Pre-deploy guard: asserts the hand-maintained list of required NEXT_PUBLIC_*
+    # secrets is present in Doppler prd. Closes #2769 (silent Doppler drift that
+    # shipped NEXT_PUBLIC_APP_URL=undefined via PR #2767).
+    runs-on: ubuntu-latest
+    concurrency:
+      group: verify-secrets-web-platform
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - name: Install Doppler CLI
+        uses: dopplerhq/cli-action@014df23b1329b615816a38eb5f473bb9000700b1 # v3
+      - name: Assert required NEXT_PUBLIC_* secrets present in Doppler prd
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN_PRD }}
+        run: |
+          doppler run -c prd -- bash apps/web-platform/scripts/verify-required-secrets.sh
+
   deploy:
-    needs: [release, migrate]
+    needs: [release, migrate, verify-doppler-secrets]
+    # verify-doppler-secrets must succeed — skipped/failed blocks deploy (unlike
+    # migrate which tolerates 'skipped' when no migrations changed).
     if: >-
       always() &&
       needs.release.outputs.docker_pushed == 'true' &&
       (needs.migrate.result == 'success' || needs.migrate.result == 'skipped') &&
+      needs.verify-doppler-secrets.result == 'success' &&
       (github.event_name != 'workflow_dispatch' || !inputs.skip_deploy)
     runs-on: ubuntu-latest
     concurrency:
