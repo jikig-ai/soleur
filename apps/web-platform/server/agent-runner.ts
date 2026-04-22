@@ -1036,6 +1036,21 @@ async function dispatchToLeaders(
   resumeSessionId?: string,
   routeSource?: "auto" | "mention",
 ): Promise<void> {
+  // Fan-out cap: a single conversation cannot dispatch to more specialists
+  // than the number of routable domain leaders. Beyond that is over-fan-out
+  // that cannot reflect a real leader set. Surface a client notice so the UI
+  // can explain why some @mentions were dropped.
+  const ceiling = ROUTABLE_DOMAIN_LEADERS.length;
+  if (leaders.length > ceiling) {
+    const dropped = leaders.length - ceiling;
+    sendToClient(userId, {
+      type: "fanout_truncated",
+      dispatched: ceiling,
+      dropped,
+    });
+    leaders = leaders.slice(0, ceiling);
+  }
+
   if (leaders.length === 1) {
     // Single leader — use standard session flow
     await startAgentSession(userId, conversationId, leaders[0], resumeSessionId, message, context, routeSource);

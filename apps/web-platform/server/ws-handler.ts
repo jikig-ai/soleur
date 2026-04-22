@@ -3,7 +3,7 @@ import { WebSocketServer, WebSocket } from "ws";
 import { parse } from "url";
 import { randomUUID } from "crypto";
 
-import { KeyInvalidError, WS_CLOSE_CODES, type WSMessage, type Conversation } from "@/lib/types";
+import { KeyInvalidError, WS_CLOSE_CODES, type PlanTier, type WSMessage, type Conversation } from "@/lib/types";
 import type { ConversationContext } from "@/lib/types";
 import { validateConversationContext } from "./context-validation";
 import { createServiceClient } from "@/lib/supabase/service";
@@ -30,13 +30,36 @@ import {
   logRateLimitRejection,
 } from "./rate-limiter";
 import { validateContextPath } from "./validate-context-path";
+import { effectiveCap, nextTier } from "@/lib/plan-limits";
+import { closeWithPreamble } from "@/lib/ws-close-helper";
+import { retrieveSubscriptionTier } from "@/lib/stripe";
+import {
+  acquireSlot,
+  releaseSlot,
+  touchSlot,
+  emitConcurrencyCapHit,
+} from "./concurrency";
 
 const log = createChildLogger("ws");
 
 // ---------------------------------------------------------------------------
 // Supabase admin client (service role -- server-side only)
+//
+// Lazy-init: defers createServiceClient() to first property access so this
+// module can be imported by app/api/webhooks/stripe/route.ts (for
+// forceDisconnectForTierChange) without evaluating serverUrl() at
+// `next build` "Collecting page data" time. Mirrors the pattern used by
+// server/agent-runner.ts supabase() and server/session-sync.ts getSupabase().
 // ---------------------------------------------------------------------------
-const supabase = createServiceClient();
+type ServiceClient = ReturnType<typeof createServiceClient>;
+let _supabase: ServiceClient | null = null;
+const supabase = new Proxy({} as ServiceClient, {
+  get(_target, prop) {
+    _supabase ??= createServiceClient();
+    const value = Reflect.get(_supabase, prop);
+    return typeof value === "function" ? value.bind(_supabase) : value;
+  },
+});
 
 // ---------------------------------------------------------------------------
 // Session tracking
@@ -68,6 +91,17 @@ export interface ClientSession {
   subscriptionStatus?: string;
   /** Periodic refresh timer for `subscriptionStatus` — cleared on every teardown path. */
   subscriptionRefreshTimer?: ReturnType<typeof setInterval>;
+  /** Cached plan tier — set at auth, refreshed in the same query as
+   *  subscriptionStatus (Phase 3). Drives effectiveCap on the slot-acquire
+   *  path (Phase 5). */
+  planTier?: PlanTier;
+  /** Per-user concurrency raise-only override from users.concurrency_override.
+   *  null means "use tier default"; a number larger than the default raises
+   *  the cap (see effectiveCap in lib/plan-limits.ts). */
+  concurrencyOverride?: number | null;
+  /** Cached Stripe subscription ID — used by the cap-hit Stripe fallback
+   *  (Phase 5) to cover webhook-lag between an upgrade and the DB write. */
+  stripeSubscriptionId?: string | null;
 }
 
 /** Active connections keyed by Supabase user ID. Registered in session-registry
@@ -75,6 +109,23 @@ export interface ClientSession {
  *  ws-handler graph. Re-exported here for backwards compatibility. */
 import { sessions } from "./session-registry";
 export { sessions };
+
+/**
+ * Force-disconnect a user's WS session with a 4011 TIER_CHANGED preamble.
+ * Called from the Stripe webhook handler when a downgrade reduces the
+ * effective cap below the user's currently-held slot count. No-op if the
+ * user has no active session. The client will reconnect after a 500 ms
+ * delay (see ws-client.ts TIER_CHANGED_RECONNECT_DELAY_MS).
+ */
+export function forceDisconnectForTierChange(
+  userId: string,
+  preamble: { type: "tier_changed"; previousTier?: PlanTier; newTier?: PlanTier },
+): boolean {
+  const session = sessions.get(userId);
+  if (!session || session.ws.readyState !== WebSocket.OPEN) return false;
+  closeWithPreamble(session.ws, WS_CLOSE_CODES.TIER_CHANGED, preamble);
+  return true;
+}
 
 /** Deferred abort timers for disconnected sessions (keyed by userId:conversationId). */
 const pendingDisconnects = new Map<string, ReturnType<typeof setTimeout>>();
@@ -87,13 +138,22 @@ const pendingDisconnects = new Map<string, ReturnType<typeof setTimeout>>();
  *  completed (fire-and-forget), and clear session.conversationId. No-ops if no
  *  conversation is active. */
 export function abortActiveSession(userId: string, session: ClientSession): void {
-  if (!session.conversationId) return;
+  if (!session.conversationId && !session.pending) return;
 
-  const oldConvId = session.conversationId;
+  const oldConvId = session.conversationId ?? session.pending?.id;
   log.info({ userId, conversationId: oldConvId }, "Aborting active session (superseded)");
 
   if (session.idleTimer) clearTimeout(session.idleTimer);
-  abortSession(userId, oldConvId, "superseded");
+  if (session.conversationId) {
+    abortSession(userId, session.conversationId, "superseded");
+  }
+
+  // Release slot for both materialized + pending conversations. The RPC
+  // is idempotent (plain DELETE) so a no-op on an already-released row is
+  // harmless.
+  if (oldConvId) {
+    void releaseSlot(userId, oldConvId);
+  }
 
   // Fire-and-forget — orphan cleanup catches failures on restart.
   // Supabase query builders return PromiseLike (not Promise), so use
@@ -194,7 +254,7 @@ export async function refreshSubscriptionStatus(
   try {
     const { data, error } = await supabase
       .from("users")
-      .select("subscription_status")
+      .select("subscription_status, plan_tier, concurrency_override")
       .eq("id", userId)
       .single();
 
@@ -203,9 +263,46 @@ export async function refreshSubscriptionStatus(
     if (session.ws.readyState !== WebSocket.OPEN) return;
 
     if (error || !data) return; // fail open — keep prior cached value
-    session.subscriptionStatus = data.subscription_status ?? undefined;
-    if (data.subscription_status === "unpaid") {
+    const row = data as {
+      subscription_status: string | null;
+      plan_tier?: PlanTier | null;
+      concurrency_override?: number | null;
+    };
+    const prevTier = session.planTier;
+    session.subscriptionStatus = row.subscription_status ?? undefined;
+    session.planTier = row.plan_tier ?? "free";
+    session.concurrencyOverride = row.concurrency_override ?? null;
+    if (row.subscription_status === "unpaid") {
       checkSubscriptionSuspended(userId, session);
+      return;
+    }
+
+    // Passive cap-drift self-evict. The Stripe webhook's
+    // forceDisconnectForTierChange reaches only the in-process `sessions`
+    // Map — a future horizontal scale-out (replicas > 1) silently breaks
+    // downgrade enforcement for sessions on other processes. This passive
+    // check runs on every subscription refresh (default 60s): if the
+    // current slot count exceeds the freshly-computed effective cap,
+    // evict this session so the user lands at the new cap on reconnect.
+    // Non-deterministic which over-cap session gets closed — all of them
+    // will on their next refresh tick, converging within one interval.
+    const newCap = effectiveCap(session.planTier, session.concurrencyOverride);
+    const { count, error: countErr } = await supabase
+      .from("user_concurrency_slots")
+      .select("*", { count: "exact", head: true })
+      .eq("user_id", userId);
+    if (!countErr && typeof count === "number" && count > newCap) {
+      const convId = session.conversationId ?? session.pending?.id;
+      log.info(
+        { userId, convId, count, newCap, prevTier, newTier: session.planTier },
+        "Cap-drift detected on refresh — evicting session",
+      );
+      closeWithPreamble(session.ws, WS_CLOSE_CODES.TIER_CHANGED, {
+        type: "tier_changed",
+        previousTier: prevTier,
+        newTier: session.planTier,
+      });
+      if (convId) void releaseSlot(userId, convId);
     }
   } catch (err) {
     log.warn(
@@ -461,6 +558,63 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
         // Defer conversation creation: generate UUID but don't insert into DB.
         // The row is created on the first real chat message.
         const pendingId = randomUUID();
+
+        // Plan-based concurrency gate. Acquire a slot keyed on (userId,
+        // pendingId). A cap_hit result denies before we mutate any session
+        // state so the client can present the upgrade modal without the
+        // confusion of a session_started that never got a response.
+        const cap = effectiveCap(session.planTier, session.concurrencyOverride);
+        let acquire = await acquireSlot(userId, pendingId, cap);
+
+        if (acquire.status === "cap_hit" && session.stripeSubscriptionId) {
+          // Webhook-lag fallback: ask Stripe directly. If the live tier
+          // grants a higher cap than the cached plan_tier, re-sync BOTH
+          // planTier and concurrencyOverride from the DB (the override may
+          // have been adjusted out-of-band) and retry acquire once with the
+          // fresh cap. Previously only planTier was mutated; a stale
+          // concurrencyOverride could over- or under-grant capacity relative
+          // to the live tier. Failure here is silent — we fall through to
+          // the cap_hit branch below.
+          try {
+            const live = await retrieveSubscriptionTier(userId, session.stripeSubscriptionId);
+            // Re-read override from DB so session state matches what the
+            // cap calculation assumes.
+            const { data: userRow } = await supabase
+              .from("users")
+              .select("concurrency_override")
+              .eq("id", userId)
+              .maybeSingle();
+            const freshOverride = (userRow as { concurrency_override?: number | null } | null)?.concurrency_override ?? null;
+            const liveCap = effectiveCap(live.tier, freshOverride);
+            if (liveCap > cap) {
+              session.planTier = live.tier;
+              session.concurrencyOverride = freshOverride;
+              acquire = await acquireSlot(userId, pendingId, liveCap);
+            }
+          } catch (liveErr) {
+            Sentry.captureException(liveErr);
+          }
+        }
+
+        if (acquire.status === "cap_hit" || acquire.status === "error") {
+          // Emit telemetry at the deny site (plan Phase 9).
+          emitConcurrencyCapHit({
+            tier: session.planTier ?? "free",
+            active_conversation_count: acquire.activeCount,
+            effective_cap: acquire.effectiveCap,
+            path: "start_session",
+            action: "abandoned",
+          });
+          closeWithPreamble(session.ws, WS_CLOSE_CODES.CONCURRENCY_CAP, {
+            type: "concurrency_cap_hit",
+            currentTier: session.planTier,
+            nextTier: nextTier(session.planTier ?? "free"),
+            activeCount: acquire.activeCount,
+            effectiveCap: acquire.effectiveCap,
+          });
+          return;
+        }
+
         session.pending = {
           id: pendingId,
           leaderId: msg.leaderId,
@@ -543,7 +697,9 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
     case "close_conversation": {
       // Handle pending state (conversation never created in DB)
       if (!session.conversationId && session.pending) {
+        const pendingId = session.pending.id;
         session.pending = undefined;
+        void releaseSlot(userId, pendingId);
         sendToClient(userId, { type: "session_ended", reason: "closed" });
         break;
       }
@@ -564,6 +720,7 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
           .update({ status: "completed", last_active: new Date().toISOString() })
           .eq("id", convId);
         session.conversationId = undefined;
+        void releaseSlot(userId, convId);
         sendToClient(userId, { type: "session_ended", reason: "closed" });
       } catch (err) {
         Sentry.captureException(err);
@@ -722,6 +879,8 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
     case "session_resumed":
     case "session_ended":
     case "usage_update":
+    case "fanout_truncated":
+    case "upgrade_pending":
     case "error": {
       sendToClient(userId, {
         type: "error",
@@ -848,7 +1007,7 @@ export function setupWebSocket(server: HTTPServer) {
         // Enforce T&C acceptance (version-aware) and cache subscription status
         const { data: userRow, error: tcError } = await supabase
           .from("users")
-          .select("tc_accepted_version, subscription_status")
+          .select("tc_accepted_version, subscription_status, plan_tier, concurrency_override, stripe_subscription_id")
           .eq("id", user.id)
           .single();
 
@@ -878,10 +1037,20 @@ export function setupWebSocket(server: HTTPServer) {
         }
 
         // Register session — cancel any pending disconnect grace period
+        const userRowTyped = userRow as {
+          tc_accepted_version?: string;
+          subscription_status?: string | null;
+          plan_tier?: PlanTier | null;
+          concurrency_override?: number | null;
+          stripe_subscription_id?: string | null;
+        };
         const newSession: ClientSession = {
           ws,
           lastActivity: Date.now(),
-          subscriptionStatus: userRow?.subscription_status ?? undefined,
+          subscriptionStatus: userRowTyped.subscription_status ?? undefined,
+          planTier: userRowTyped.plan_tier ?? "free",
+          concurrencyOverride: userRowTyped.concurrency_override ?? null,
+          stripeSubscriptionId: userRowTyped.stripe_subscription_id ?? null,
         };
         sessions.set(userId, newSession);
         startSubscriptionRefresh(userId, newSession);
@@ -897,10 +1066,23 @@ export function setupWebSocket(server: HTTPServer) {
         // Start idle timer after auth
         resetIdleTimer(userId, newSession);
 
-        // Start heartbeat after auth
+        // Start heartbeat after auth. In addition to the WebSocket ping, touch
+        // user_concurrency_slots.last_heartbeat_at for the active/pending
+        // conversation so the pg_cron sweep (120s threshold) does not reclaim
+        // a still-live session. Uses the dedicated `touch_conversation_slot`
+        // RPC — a single UPDATE, no cap check, no sweep, no lock — so
+        // steady-state heartbeat load is O(N) cheap UPDATEs per 30s rather
+        // than re-running the full acquire path. Matters at scale: at 1k
+        // live sessions, the full-acquire heartbeat cost ~33 writes/s +
+        // 33 per-user advisory locks/s; touchSlot cuts that to 33 cheap
+        // UPDATEs with no lock contention.
         pingInterval = setInterval(() => {
-          if (ws.readyState === WebSocket.OPEN) {
-            ws.ping();
+          if (ws.readyState !== WebSocket.OPEN) return;
+          ws.ping();
+          const current = sessions.get(userId!);
+          const convId = current?.conversationId ?? current?.pending?.id;
+          if (current && convId) {
+            void touchSlot(userId!, convId);
           }
         }, 30_000);
 

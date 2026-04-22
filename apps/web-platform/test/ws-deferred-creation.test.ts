@@ -13,6 +13,13 @@ const mockSelectSingle = vi.fn().mockResolvedValue({
 // disconnected user (repo_url=null) to exercise the abort path.
 let mockUserRepoUrl: string | null = "https://github.com/acme/repo";
 
+const { mockRpc } = vi.hoisted(() => ({
+  mockRpc: vi.fn().mockResolvedValue({
+    data: [{ status: "ok", active_count: 1, effective_cap: 2 }],
+    error: null,
+  }),
+}));
+
 vi.mock("@/lib/supabase/service", () => ({
   createServiceClient: () => ({
     from: (table: string) => {
@@ -49,6 +56,7 @@ vi.mock("@/lib/supabase/service", () => ({
         error: null,
       }),
     },
+    rpc: mockRpc,
   }),
 }));
 

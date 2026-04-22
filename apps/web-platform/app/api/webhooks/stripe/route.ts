@@ -1,5 +1,9 @@
 import { NextResponse } from "next/server";
 import { getStripe } from "@/lib/stripe";
+import { getPriceTier } from "@/lib/stripe-price-tier-map";
+import { effectiveCap } from "@/lib/plan-limits";
+import type { PlanTier } from "@/lib/types";
+import { onTierTransitionApplied } from "@/lib/stripe-subscription-transition";
 import { createServiceClient } from "@/lib/supabase/server";
 import type Stripe from "stripe";
 import logger from "@/server/logger";
@@ -46,10 +50,29 @@ function mapStripeStatus(stripeStatus: Stripe.Subscription.Status): string {
   }
 }
 
-function extractCustomerId(subscription: Stripe.Subscription): string {
-  return typeof subscription.customer === "string"
-    ? subscription.customer
-    : subscription.customer.id;
+/**
+ * Returns the customer id, or null for Stripe.DeletedCustomer objects.
+ * A deleted customer cannot own a live subscription mutation — callers
+ * should early-return and log rather than match rows by a stale id.
+ */
+function extractCustomerId(subscription: Stripe.Subscription): string | null {
+  const c = subscription.customer;
+  if (typeof c === "string") return c;
+  if ("deleted" in c && c.deleted === true) return null;
+  return c.id;
+}
+
+function deriveTierFromSubscription(
+  subscription: Stripe.Subscription,
+): PlanTier | null {
+  // Tests and partial-fixture replays may omit items.data entirely. In that
+  // case we cannot compute a tier and the handler should leave plan_tier
+  // untouched rather than fall through to "free" (which would silently
+  // downgrade a real user on a malformed replay).
+  const firstItem = subscription.items?.data?.[0];
+  const priceId = firstItem?.price?.id;
+  if (!priceId) return null;
+  return getPriceTier(priceId);
 }
 
 export async function POST(request: Request) {
@@ -116,21 +139,88 @@ export async function POST(request: Request) {
     case "customer.subscription.updated": {
       const subscription = event.data.object as Stripe.Subscription;
       const customerId = extractCustomerId(subscription);
+      if (!customerId) {
+        logger.warn(
+          { subId: subscription.id, eventId: event.id },
+          "Webhook: subscription.updated on deleted customer — skipping",
+        );
+        break;
+      }
       const newStatus = mapStripeStatus(subscription.status);
+
+      // Stripe `incomplete` status: the subscription is pending SCA or
+      // initial payment confirmation. Do NOT grant plan_tier here —
+      // checkout.session.completed (or a later customer.subscription.updated
+      // with status=active) is the grant trigger. V1 ships without a
+      // dedicated UpgradePendingBanner; client shows a generic error.
+      if (subscription.status === "incomplete") {
+        logger.info(
+          { customerId, subId: subscription.id },
+          "Stripe subscription incomplete — skipping plan_tier grant",
+        );
+        break;
+      }
+
+      // Look up the current row so we can compute whether this is an
+      // upgrade, downgrade, or idempotent replay.
+      const { data: currentRow, error: selErr } = await supabase
+        .from("users")
+        .select("id, plan_tier, concurrency_override, subscription_downgraded_at, subscription_status")
+        .eq("stripe_customer_id", customerId)
+        .maybeSingle();
+
+      if (selErr) {
+        Sentry.captureException(selErr, {
+          tags: { feature: "stripe-webhook", op: "customer.subscription.updated" },
+          extra: { customerId },
+        });
+        return NextResponse.json({ error: "DB lookup failed" }, { status: 500 });
+      }
+      if (!currentRow) {
+        logger.warn({ customerId }, "No user row for Stripe customer — skipping");
+        break;
+      }
+
+      const currentTier = (currentRow as { plan_tier?: PlanTier | null }).plan_tier ?? "free";
+      const currentOverride = (currentRow as { concurrency_override?: number | null }).concurrency_override ?? null;
+      const userId = (currentRow as { id: string }).id;
+      const derivedTier = deriveTierFromSubscription(subscription);
+      // If the event had no items to derive a price from, keep the current
+      // tier so a malformed replay does not silently downgrade.
+      const newTier = derivedTier ?? currentTier;
+
+      const currentCap = effectiveCap(currentTier, currentOverride);
+      const newCap = effectiveCap(newTier, currentOverride);
+      const isDowngrade = newCap < currentCap;
+      const isUpgrade = newCap > currentCap;
+
+      const updatePatch: Record<string, unknown> = {
+        subscription_status: newStatus,
+        cancel_at_period_end: subscription.cancel_at_period_end,
+        current_period_end: new Date(
+          subscription.current_period_end * 1_000,
+        ).toISOString(),
+      };
+      if (derivedTier !== null) {
+        updatePatch.plan_tier = derivedTier;
+      }
+      if (isDowngrade) {
+        updatePatch.subscription_downgraded_at = new Date(
+          event.created * 1_000,
+        ).toISOString();
+      } else if (isUpgrade) {
+        updatePatch.subscription_downgraded_at = null;
+      }
 
       // Never resurrect a cancelled row: a stale .updated delivered out-of-order
       // after .deleted must be a no-op regardless of newStatus. Resurrection to
       // "past_due" or "unpaid" is just as wrong as resurrection to "active"
       // (re-enables billing-side features the user no longer pays for).
+      // SUBSCRIPTION_UPDATABLE_STATUSES explicitly excludes "cancelled" —
+      // cancelled is terminal; see #2701.
       const { data, error } = await supabase
         .from("users")
-        .update({
-          subscription_status: newStatus,
-          cancel_at_period_end: subscription.cancel_at_period_end,
-          current_period_end: new Date(
-            subscription.current_period_end * 1_000,
-          ).toISOString(),
-        })
+        .update(updatePatch)
         .eq("stripe_customer_id", customerId)
         .in("subscription_status", SUBSCRIPTION_UPDATABLE_STATUSES)
         .select("id");
@@ -158,6 +248,12 @@ export async function POST(request: Request) {
           { customerId, eventId: event.id, matched, newStatus },
           "Webhook: customer.subscription.updated applied",
         );
+        onTierTransitionApplied({
+          userId,
+          previousTier: currentTier,
+          newTier,
+          concurrencyOverride: currentOverride,
+        });
       }
       break;
     }
@@ -165,17 +261,46 @@ export async function POST(request: Request) {
     case "customer.subscription.deleted": {
       const subscription = event.data.object as Stripe.Subscription;
       const customerId = extractCustomerId(subscription);
+      if (!customerId) {
+        logger.warn(
+          { subId: subscription.id, eventId: event.id },
+          "Webhook: subscription.deleted on deleted customer — skipping",
+        );
+        break;
+      }
+
+      const { data: currentRow, error: selErr } = await supabase
+        .from("users")
+        .select("id, plan_tier, concurrency_override")
+        .eq("stripe_customer_id", customerId)
+        .maybeSingle();
+
+      if (selErr) {
+        Sentry.captureException(selErr, {
+          tags: { feature: "stripe-webhook", op: "customer.subscription.deleted" },
+          extra: { customerId },
+        });
+        return NextResponse.json({ error: "DB lookup failed" }, { status: 500 });
+      }
+
+      const userId = (currentRow as { id: string } | null)?.id;
+      const previousTier =
+        (currentRow as { plan_tier?: PlanTier | null } | null)?.plan_tier ?? "free";
+      const currentOverride =
+        (currentRow as { concurrency_override?: number | null } | null)?.concurrency_override ?? null;
 
       // Only cancel if currently active/past_due/unpaid; a stale deleted event
       // delivered after an already-cancelled row must be a no-op. "none"
       // (never subscribed) is excluded — a real .deleted cannot fire against
-      // a never-subscribed customer.
+      // a never-subscribed customer. Folds #2190.
       const { data, error } = await supabase
         .from("users")
         .update({
+          plan_tier: "free",
           subscription_status: "cancelled",
           cancel_at_period_end: false,
           current_period_end: null,
+          subscription_downgraded_at: new Date((event.created ?? Math.floor(Date.now() / 1_000)) * 1_000).toISOString(),
         })
         .eq("stripe_customer_id", customerId)
         .in("subscription_status", SUBSCRIPTION_LIVE_STATUSES)
@@ -201,6 +326,14 @@ export async function POST(request: Request) {
           { customerId, eventId: event.id, matched },
           "Webhook: customer.subscription.deleted applied",
         );
+        if (userId) {
+          onTierTransitionApplied({
+            userId,
+            previousTier,
+            newTier: "free",
+            concurrencyOverride: currentOverride,
+          });
+        }
       }
       break;
     }

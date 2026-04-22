@@ -1,5 +1,6 @@
 import { describe, test, expect, vi, beforeEach } from "vitest";
 import type Stripe from "stripe";
+import { configureSupabaseUpdateChain } from "./helpers/supabase-update-chain";
 
 // ---------------------------------------------------------------------------
 // Mocks — vi.hoisted ensures these are available when vi.mock factories run
@@ -19,17 +20,39 @@ vi.mock("@/lib/stripe", () => ({
   getStripe: () => ({
     webhooks: { constructEvent: mockConstructEvent },
   }),
+  invalidateTierMemo: vi.fn(),
 }));
 
 vi.mock("@/lib/supabase/server", () => ({
   createServiceClient: () => ({
     from: () => ({
       update: mockUpdate,
+      select: () => ({
+        eq: () => ({
+          maybeSingle: vi.fn().mockResolvedValue({
+            data: { id: "user-123", plan_tier: "free", concurrency_override: null, subscription_status: "active" },
+            error: null,
+          }),
+        }),
+      }),
     }),
   }),
 }));
 
-vi.mock("@/server/logger", () => ({ default: mockLogger }));
+vi.mock("@/lib/stripe-price-tier-map", () => ({
+  getPriceTier: () => "free",
+  priceIdForTier: () => null,
+}));
+
+vi.mock("@/server/logger", () => ({
+  default: mockLogger,
+  createChildLogger: () => mockLogger,
+}));
+
+// Avoid pulling in ws-handler's full transitive closure (agent-runner etc.).
+vi.mock("@/server/ws-handler", () => ({
+  forceDisconnectForTierChange: vi.fn(() => false),
+}));
 
 // ---------------------------------------------------------------------------
 // Import route handler AFTER mocks
@@ -68,31 +91,7 @@ function makeEvent(
 describe("Stripe webhook — invoice payment recovery", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockSelect.mockResolvedValue({ data: [{ id: "user-123" }], error: null });
-    // mockIn is awaitable (legacy shape) AND exposes .select() for the
-    // invoice.paid guard which now reads matched rows for observability.
-    mockIn.mockImplementation(() => {
-      const result: { data: { id: string }[]; error: null } = {
-        data: [{ id: "user-123" }],
-        error: null,
-      };
-      return {
-        select: mockSelect,
-        then: (resolve: (value: typeof result) => unknown) => resolve(result),
-      };
-    });
-    // mockEq returns a thenable that is awaitable (for .update().eq() chains,
-    // used by customer.subscription.* handlers) AND exposes .in() (for the
-    // invoice.paid guard which filters by current subscription_status).
-    mockEq.mockImplementation(() => {
-      const result: { error: null } = { error: null };
-      const chain = {
-        in: mockIn,
-        then: (resolve: (value: typeof result) => unknown) => resolve(result),
-      };
-      return chain;
-    });
-    mockUpdate.mockReturnValue({ eq: mockEq });
+    configureSupabaseUpdateChain({ mockUpdate, mockEq, mockIn, mockSelect });
   });
 
   describe("customer.subscription.updated — unpaid status", () => {

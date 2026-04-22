@@ -12,9 +12,16 @@ let messageCountResult: { count: number; error: unknown } = { count: 0, error: n
 
 const mockMaybeSingle = vi.fn(() => Promise.resolve(conversationLookupResult));
 const mockCountQuery = vi.fn(() => Promise.resolve(messageCountResult));
+const { mockRpc } = vi.hoisted(() => ({
+  mockRpc: vi.fn().mockResolvedValue({
+    data: [{ status: "ok", active_count: 1, effective_cap: 2 }],
+    error: null,
+  }),
+}));
 
 vi.mock("@/lib/supabase/service", () => ({
   createServiceClient: () => ({
+    rpc: mockRpc,
     from: (table: string) => {
       if (table === "messages") {
         return {

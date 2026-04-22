@@ -23,8 +23,37 @@ export const WS_CLOSE_CODES = {
   SUBSCRIPTION_SUSPENDED: 4006,
   RATE_LIMITED: 4008,
   IDLE_TIMEOUT: 4009,
+  CONCURRENCY_CAP: 4010,
+  TIER_CHANGED: 4011,
   SERVER_GOING_AWAY: 1001,
 } as const;
+
+/** Plan tier taxonomy. Ladder: free → solo → startup → scale → enterprise. */
+export type PlanTier = "free" | "solo" | "startup" | "scale" | "enterprise";
+
+/**
+ * Preamble payload written by the server immediately before `ws.close(4010)`.
+ * Client parses this in `onmessage` to drive the at-capacity upgrade modal.
+ */
+export interface ConcurrencyCapHitPreamble {
+  type: "concurrency_cap_hit";
+  currentTier?: PlanTier;
+  nextTier?: PlanTier | null;
+  activeCount: number;
+  effectiveCap: number;
+}
+
+/**
+ * Preamble payload written before `ws.close(4011)` on a tier-change
+ * force-disconnect (Stripe webhook downgrade with new cap < prior cap).
+ */
+export interface TierChangedPreamble {
+  type: "tier_changed";
+  previousTier?: PlanTier;
+  newTier?: PlanTier;
+}
+
+export type ClosePreamble = ConcurrencyCapHitPreamble | TierChangedPreamble;
 
 export class KeyInvalidError extends Error {
   constructor() {
@@ -80,6 +109,8 @@ export type WSMessage =
   | { type: "session_resumed"; conversationId: string; resumedFromTimestamp: string; messageCount: number }
   | { type: "session_ended"; reason: string }
   | { type: "usage_update"; conversationId: string; totalCostUsd: number; inputTokens: number; outputTokens: number }
+  | { type: "fanout_truncated"; dispatched: number; dropped: number }
+  | { type: "upgrade_pending" }
   | { type: "error"; message: string; errorCode?: WSErrorCode; gateId?: string };
 
 // Database types (matches Supabase schema)
