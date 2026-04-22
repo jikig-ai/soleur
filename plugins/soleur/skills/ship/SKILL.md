@@ -830,6 +830,8 @@ Each meaningful event (first iteration, every state change, heartbeat every 3rd 
 
    **CI-verified migration skip.** Before creating the issue, grep the item description for a migration filename (`NNN_*.sql`). If one is matched AND a sibling verify file exists at `apps/web-platform/supabase/verify/<filename>`, skip creating the follow-through — the `verify-migrations` job in `web-platform-release.yml` will run the sentinels and auto-close any existing issue referencing that filename. Log: "Skip: [item] — CI verify covers <filename>". This prevents the #2826/#2827 pattern (one apply issue + one sentinel issue per data-backfill migration) from regenerating on future PRs.
 
+   **Migration filename anchor.** If the item description mentions any migration filename OR a bare migration number (e.g. "migration 031") AND no sibling verify file exists yet (so we're still creating the issue), prepend a `**Migration file:** \`NNN_full_stem.sql\`` line to the body below the `<ITEM_DESCRIPTION>` paragraph. The `verify-migrations` auto-close job matches on both the full filename AND the stem (`NNN_full_stem`) — having either in the body ensures auto-close works once a verify file is later added. Bare `NNN` alone is not enough to match.
+
    For each item, write the issue body to a temp file (do NOT use heredocs in this step — write with `{ echo "..."; } > /tmp/follow-through-body.md`), then create the issue:
 
    ```bash
@@ -844,6 +846,10 @@ Each meaningful event (first iteration, every state change, heartbeat every 3rd 
    ## Follow-Through Item
 
    <ITEM_DESCRIPTION>
+
+   <!-- When this item is about a migration, include either of:
+   **Migration file:** `NNN_full_stem.sql`
+   See "Migration filename anchor" rule above. -->
 
    **Source PR:** #<PR_NUMBER>
    **Created by:** /ship Phase 7 Step 3.5

@@ -104,9 +104,20 @@ jobs:
             exit 0
           fi
 
+          # Build a list of (full_filename, stem) pairs. Match on either:
+          # - full filename (e.g. "031_normalize_repo_url.sql") — precise
+          # - stem (e.g. "031_normalize_repo_url") — catches issue bodies that
+          #   omit the extension. Stem is long and distinctive (NNN_ prefix +
+          #   snake_case name), so false-positive risk across unrelated issues
+          #   is effectively zero.
+          # Bare "NNN" / "031" is NOT matched — too ambiguous (collides with
+          # issue numbers, dates, etc.).
           verified_names=()
+          verified_stems=()
           for f in "${verify_files[@]}"; do
-            verified_names+=("$(basename "$f")")
+            full="$(basename "$f")"
+            verified_names+=("$full")
+            verified_stems+=("${full%.sql}")
           done
           echo "Verified migrations: ${verified_names[*]}"
 
@@ -125,8 +136,11 @@ jobs:
             [[ -z "$body" ]] && continue
 
             matched=""
-            for name in "${verified_names[@]}"; do
-              if printf '%s' "$body" | grep -qF -- "$name"; then
+            for i in "${!verified_names[@]}"; do
+              name="${verified_names[$i]}"
+              stem="${verified_stems[$i]}"
+              if printf '%s' "$body" | grep -qF -- "$name" \
+                 || printf '%s' "$body" | grep -qF -- "$stem"; then
                 matched="$name"
                 break
               fi
