@@ -1,20 +1,33 @@
 import { describe, test, expect, vi, beforeEach } from "vitest";
 import type Stripe from "stripe";
-import { configureSupabaseUpdateChain } from "./helpers/supabase-update-chain";
+import {
+  configureSupabaseUpdateChain,
+  configureSupabaseInsertChain,
+} from "./helpers/supabase-update-chain";
 
 // ---------------------------------------------------------------------------
 // Mocks — vi.hoisted ensures these are available when vi.mock factories run
 // ---------------------------------------------------------------------------
 
-const { mockConstructEvent, mockUpdate, mockEq, mockIn, mockSelect, mockLogger } =
-  vi.hoisted(() => ({
-    mockConstructEvent: vi.fn(),
-    mockUpdate: vi.fn(),
-    mockEq: vi.fn(),
-    mockIn: vi.fn(),
-    mockSelect: vi.fn(),
-    mockLogger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
-  }));
+const {
+  mockConstructEvent,
+  mockUpdate,
+  mockEq,
+  mockIn,
+  mockSelect,
+  mockInsert,
+  mockDeleteEq,
+  mockLogger,
+} = vi.hoisted(() => ({
+  mockConstructEvent: vi.fn(),
+  mockUpdate: vi.fn(),
+  mockEq: vi.fn(),
+  mockIn: vi.fn(),
+  mockSelect: vi.fn(),
+  mockInsert: vi.fn(),
+  mockDeleteEq: vi.fn(),
+  mockLogger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+}));
 
 vi.mock("@/lib/stripe", () => ({
   getStripe: () => ({
@@ -25,17 +38,25 @@ vi.mock("@/lib/stripe", () => ({
 
 vi.mock("@/lib/supabase/server", () => ({
   createServiceClient: () => ({
-    from: () => ({
-      update: mockUpdate,
-      select: () => ({
-        eq: () => ({
-          maybeSingle: vi.fn().mockResolvedValue({
-            data: { id: "user-123", plan_tier: "free", concurrency_override: null, subscription_status: "active" },
-            error: null,
+    from: (table: string) => {
+      if (table === "processed_stripe_events") {
+        return {
+          insert: mockInsert,
+          delete: () => ({ eq: mockDeleteEq }),
+        };
+      }
+      return {
+        update: mockUpdate,
+        select: () => ({
+          eq: () => ({
+            maybeSingle: vi.fn().mockResolvedValue({
+              data: { id: "user-123", plan_tier: "free", concurrency_override: null, subscription_status: "active" },
+              error: null,
+            }),
           }),
         }),
-      }),
-    }),
+      };
+    },
   }),
 }));
 
@@ -92,6 +113,7 @@ describe("Stripe webhook — invoice payment recovery", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     configureSupabaseUpdateChain({ mockUpdate, mockEq, mockIn, mockSelect });
+    configureSupabaseInsertChain({ mockInsert, mockDeleteEq });
   });
 
   describe("customer.subscription.updated — unpaid status", () => {

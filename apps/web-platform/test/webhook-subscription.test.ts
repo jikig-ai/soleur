@@ -1,20 +1,33 @@
 import { describe, test, expect, vi, beforeEach } from "vitest";
 import type Stripe from "stripe";
-import { configureSupabaseUpdateChain } from "./helpers/supabase-update-chain";
+import {
+  configureSupabaseUpdateChain,
+  configureSupabaseInsertChain,
+} from "./helpers/supabase-update-chain";
 
 // ---------------------------------------------------------------------------
 // Mocks — vi.hoisted ensures these are available when vi.mock factories run
 // ---------------------------------------------------------------------------
 
-const { mockConstructEvent, mockUpdate, mockEq, mockIn, mockSelect, mockLogger } =
-  vi.hoisted(() => ({
-    mockConstructEvent: vi.fn(),
-    mockUpdate: vi.fn(),
-    mockEq: vi.fn(),
-    mockIn: vi.fn(),
-    mockSelect: vi.fn(),
-    mockLogger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
-  }));
+const {
+  mockConstructEvent,
+  mockUpdate,
+  mockEq,
+  mockIn,
+  mockSelect,
+  mockInsert,
+  mockDeleteEq,
+  mockLogger,
+} = vi.hoisted(() => ({
+  mockConstructEvent: vi.fn(),
+  mockUpdate: vi.fn(),
+  mockEq: vi.fn(),
+  mockIn: vi.fn(),
+  mockSelect: vi.fn(),
+  mockInsert: vi.fn(),
+  mockDeleteEq: vi.fn(),
+  mockLogger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+}));
 
 vi.mock("@/lib/stripe", () => ({
   getStripe: () => ({
@@ -30,17 +43,25 @@ vi.mock("@/lib/stripe-price-tier-map", () => ({
 
 vi.mock("@/lib/supabase/server", () => ({
   createServiceClient: () => ({
-    from: () => ({
-      update: mockUpdate,
-      select: () => ({
-        eq: () => ({
-          maybeSingle: vi.fn().mockResolvedValue({
-            data: { id: "user-uuid-123", plan_tier: "free", concurrency_override: null, subscription_status: "none" },
-            error: null,
+    from: (table: string) => {
+      if (table === "processed_stripe_events") {
+        return {
+          insert: mockInsert,
+          delete: () => ({ eq: mockDeleteEq }),
+        };
+      }
+      return {
+        update: mockUpdate,
+        select: () => ({
+          eq: () => ({
+            maybeSingle: vi.fn().mockResolvedValue({
+              data: { id: "user-uuid-123", plan_tier: "free", concurrency_override: null, subscription_status: "none" },
+              error: null,
+            }),
           }),
         }),
-      }),
-    }),
+      };
+    },
   }),
 }));
 
@@ -78,8 +99,10 @@ function makeRequest(body = "raw-body"): Request {
 function makeEvent(
   type: string,
   object: Record<string, unknown>,
+  id = "evt_test_abc",
 ): Stripe.Event {
   return {
+    id,
     type,
     data: { object },
   } as unknown as Stripe.Event;
@@ -95,6 +118,7 @@ describe("Stripe webhook — subscription lifecycle", () => {
     // Default chain: 1 matched row, no error at any level. Tests override
     // individual mock return values to assert zero-match or error paths.
     configureSupabaseUpdateChain({ mockUpdate, mockEq, mockIn, mockSelect });
+    configureSupabaseInsertChain({ mockInsert, mockDeleteEq });
   });
 
   describe("checkout.session.completed", () => {
@@ -264,7 +288,13 @@ describe("Stripe webhook — subscription lifecycle", () => {
         metadata: { supabase_user_id: USER_ID },
       });
       mockConstructEvent.mockReturnValue(event);
-      mockEq.mockResolvedValue({ error: { message: "constraint violation" } });
+      // Post-#2771: checkout now chains .eq().in().select(), so the error
+      // surfaces at the terminal .select(), matching the subscription.updated
+      // error test below.
+      mockSelect.mockResolvedValue({
+        data: null,
+        error: { message: "constraint violation" },
+      });
 
       const res = await POST(makeRequest());
 
@@ -411,6 +441,148 @@ describe("Stripe webhook — subscription lifecycle", () => {
 
       expect(res.status).toBe(200);
       expect(mockUpdate).not.toHaveBeenCalled();
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Idempotency dedup gate (#2772) + checkout out-of-order guard (#2771)
+  // -------------------------------------------------------------------------
+
+  describe("processed_stripe_events dedup gate (#2772)", () => {
+    test("inserts event.id + event.type for every processed event", async () => {
+      const event = makeEvent(
+        "customer.subscription.updated",
+        {
+          customer: CUSTOMER_ID,
+          status: "active",
+          cancel_at_period_end: false,
+          current_period_end: 1_700_000_000,
+        },
+        "evt_test_happy",
+      );
+      mockConstructEvent.mockReturnValue(event);
+
+      await POST(makeRequest());
+
+      expect(mockInsert).toHaveBeenCalledWith({
+        event_id: "evt_test_happy",
+        event_type: "customer.subscription.updated",
+      });
+    });
+
+    test("23505 replay short-circuits with 200 and does NOT invoke users.update", async () => {
+      mockInsert.mockResolvedValueOnce({ error: { code: "23505" } });
+      const event = makeEvent(
+        "customer.subscription.updated",
+        {
+          customer: CUSTOMER_ID,
+          status: "active",
+          cancel_at_period_end: false,
+          current_period_end: 1_700_000_000,
+        },
+        "evt_test_replay",
+      );
+      mockConstructEvent.mockReturnValue(event);
+
+      const res = await POST(makeRequest());
+
+      expect(res.status).toBe(200);
+      expect(mockUpdate).not.toHaveBeenCalled();
+      expect(mockLogger.info).toHaveBeenCalledWith(
+        expect.objectContaining({ eventId: "evt_test_replay" }),
+        expect.stringContaining("replay"),
+      );
+    });
+
+    test("non-23505 dedup-insert error returns 500 and does NOT invoke users.update", async () => {
+      mockInsert.mockResolvedValueOnce({
+        error: { code: "40001", message: "serialization_failure" },
+      });
+      const event = makeEvent("customer.subscription.updated", {
+        customer: CUSTOMER_ID,
+        status: "active",
+        cancel_at_period_end: false,
+        current_period_end: 1_700_000_000,
+      });
+      mockConstructEvent.mockReturnValue(event);
+
+      const res = await POST(makeRequest());
+
+      expect(res.status).toBe(500);
+      expect(mockUpdate).not.toHaveBeenCalled();
+      expect(mockLogger.error).toHaveBeenCalled();
+    });
+
+    test("handler error path DELETEs the dedup row before returning 500", async () => {
+      // users.update chain errors → handler must release dedup row first.
+      // New chain: error surfaces from .select(), not .eq().
+      mockSelect.mockResolvedValue({
+        data: null,
+        error: { message: "connection lost" },
+      });
+      const event = makeEvent(
+        "customer.subscription.updated",
+        {
+          customer: CUSTOMER_ID,
+          status: "active",
+          cancel_at_period_end: false,
+          current_period_end: 1_700_000_000,
+        },
+        "evt_test_errpath",
+      );
+      mockConstructEvent.mockReturnValue(event);
+
+      const res = await POST(makeRequest());
+
+      expect(res.status).toBe(500);
+      expect(mockDeleteEq).toHaveBeenCalledWith("event_id", "evt_test_errpath");
+    });
+  });
+
+  describe("checkout.session.completed out-of-order guard (#2771)", () => {
+    test("uses SUBSCRIPTION_UPDATABLE_STATUSES in .in() filter", async () => {
+      const event = makeEvent("checkout.session.completed", {
+        customer: CUSTOMER_ID,
+        subscription: SUBSCRIPTION_ID,
+        metadata: { supabase_user_id: USER_ID },
+      });
+      mockConstructEvent.mockReturnValue(event);
+
+      await POST(makeRequest());
+
+      // NOTE: verbatim copy of SUBSCRIPTION_UPDATABLE_STATUSES from
+      // apps/web-platform/app/api/webhooks/stripe/route.ts. Per AGENTS.md
+      // cq-test-mocked-module-constant-import, we cannot import the constant
+      // from a fully vi.mock()'d route module. Keep this list in sync.
+      expect(mockIn).toHaveBeenCalledWith("subscription_status", [
+        "none",
+        "active",
+        "past_due",
+        "unpaid",
+      ]);
+    });
+
+    test("no-ops against cancelled row with guard-fired warn log", async () => {
+      // Zero matched rows — row is cancelled.
+      mockSelect.mockResolvedValueOnce({ data: [], error: null });
+      const event = makeEvent(
+        "checkout.session.completed",
+        {
+          customer: CUSTOMER_ID,
+          subscription: SUBSCRIPTION_ID,
+          metadata: { supabase_user_id: USER_ID },
+        },
+        "evt_test_checkout_replay",
+      );
+      mockConstructEvent.mockReturnValue(event);
+
+      const res = await POST(makeRequest());
+
+      expect(res.status).toBe(200);
+      expect(mockLogger.warn).toHaveBeenCalledWith(
+        expect.objectContaining({ userId: USER_ID }),
+        expect.stringContaining("guard no-op"),
+      );
     });
   });
 });

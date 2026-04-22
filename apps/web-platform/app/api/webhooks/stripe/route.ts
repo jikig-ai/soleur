@@ -109,20 +109,76 @@ export async function POST(request: Request) {
 
   const supabase = createServiceClient();
 
+  // Webhook-event-id dedup gate (#2772). Stripe delivers at-least-once;
+  // a replay of an already-processed event short-circuits here with 200.
+  // Critical: on handler error below we DELETE this row via
+  // releaseDedupRow() before returning 5xx so Stripe's retry re-enters.
+  // Service-role bypasses RLS; the table has no policies.
+  const { error: dedupErr } = await supabase
+    .from("processed_stripe_events")
+    .insert({ event_id: event.id, event_type: event.type });
+
+  if (dedupErr) {
+    const dedupErrCode = (dedupErr as { code?: string }).code;
+    if (dedupErrCode === "23505") {
+      logger.info(
+        { eventId: event.id, eventType: event.type },
+        "Stripe webhook replay — event already processed, skipping",
+      );
+      return NextResponse.json({ received: true });
+    }
+    logger.error(
+      { err: dedupErr, eventId: event.id },
+      "Stripe webhook dedup insert failed — returning 500",
+    );
+    Sentry.captureException(dedupErr, {
+      tags: { feature: "stripe-webhook", op: "dedup-insert" },
+      extra: { eventId: event.id, eventType: event.type },
+    });
+    return NextResponse.json({ error: "DB error" }, { status: 500 });
+  }
+
+  // On any 5xx error path below, call this before returning so Stripe's
+  // retry re-enters cleanly. Silently tolerates a DELETE failure — the
+  // Stripe retry is the correction mechanism, and per-handler .in() guards
+  // block double-apply if DELETE fails and retry short-circuits.
+  async function releaseDedupRow(): Promise<void> {
+    const { error } = await supabase
+      .from("processed_stripe_events")
+      .delete()
+      .eq("event_id", event.id);
+    if (error) {
+      logger.error(
+        { err: error, eventId: event.id },
+        "Stripe webhook: failed to release dedup row on handler error — retry will be short-circuited",
+      );
+      Sentry.captureException(error, {
+        tags: { feature: "stripe-webhook", op: "dedup-release" },
+        extra: { eventId: event.id },
+      });
+    }
+  }
+
   switch (event.type) {
     case "checkout.session.completed": {
       const session = event.data.object as Stripe.Checkout.Session;
       const userId = session.metadata?.supabase_user_id;
 
       if (userId) {
-        const { error } = await supabase
+        // Guard: never resurrect a cancelled row via a replayed checkout
+        // event (#2771). The dedup table above closes this today, but the
+        // guard is kept as belt-and-suspenders for the release-on-error
+        // window and for environments before migration 030 is applied.
+        const { data, error } = await supabase
           .from("users")
           .update({
             stripe_customer_id: session.customer as string,
             subscription_status: "active",
             stripe_subscription_id: session.subscription as string,
           })
-          .eq("id", userId);
+          .eq("id", userId)
+          .in("subscription_status", SUBSCRIPTION_UPDATABLE_STATUSES)
+          .select("id");
 
         if (error) {
           logger.error({ error, userId }, "Webhook: failed to update user on checkout.session.completed");
@@ -130,7 +186,16 @@ export async function POST(request: Request) {
             tags: { feature: "stripe-webhook", op: "checkout.session.completed" },
             extra: { userId },
           });
+          await releaseDedupRow();
           return NextResponse.json({ error: "DB update failed" }, { status: 500 });
+        }
+
+        const matched = data?.length ?? 0;
+        if (matched === 0) {
+          logger.warn(
+            { userId, eventId: event.id },
+            "Webhook: checkout.session.completed guard no-op — row not in updatable status (likely cancelled or replay after dedup-row released)",
+          );
         }
       }
       break;
@@ -174,6 +239,7 @@ export async function POST(request: Request) {
           tags: { feature: "stripe-webhook", op: "customer.subscription.updated" },
           extra: { customerId },
         });
+        await releaseDedupRow();
         return NextResponse.json({ error: "DB lookup failed" }, { status: 500 });
       }
       if (!currentRow) {
@@ -231,6 +297,7 @@ export async function POST(request: Request) {
           tags: { feature: "stripe-webhook", op: "customer.subscription.updated" },
           extra: { customerId },
         });
+        await releaseDedupRow();
         return NextResponse.json({ error: "DB update failed" }, { status: 500 });
       }
 
@@ -280,6 +347,7 @@ export async function POST(request: Request) {
           tags: { feature: "stripe-webhook", op: "customer.subscription.deleted" },
           extra: { customerId },
         });
+        await releaseDedupRow();
         return NextResponse.json({ error: "DB lookup failed" }, { status: 500 });
       }
 
@@ -312,6 +380,7 @@ export async function POST(request: Request) {
           tags: { feature: "stripe-webhook", op: "customer.subscription.deleted" },
           extra: { customerId },
         });
+        await releaseDedupRow();
         return NextResponse.json({ error: "DB update failed" }, { status: 500 });
       }
 
@@ -375,6 +444,11 @@ export async function POST(request: Request) {
             { error, customerId },
             "Webhook: failed to update user on invoice.paid",
           );
+          Sentry.captureException(error, {
+            tags: { feature: "stripe-webhook", op: "invoice.paid" },
+            extra: { customerId },
+          });
+          await releaseDedupRow();
           return NextResponse.json(
             { error: "DB update failed" },
             { status: 500 },

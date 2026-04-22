@@ -1,18 +1,33 @@
 import { describe, test, expect, vi, beforeEach } from "vitest";
 import type Stripe from "stripe";
-import { configureSupabaseUpdateChain } from "./helpers/supabase-update-chain";
+import {
+  configureSupabaseUpdateChain,
+  configureSupabaseInsertChain,
+} from "./helpers/supabase-update-chain";
 
-const { mockConstructEvent, mockUpdate, mockEq, mockIn, mockSelect, mockMaybeSingle, mockForceDisconnect, mockInvalidateTierMemo } =
-  vi.hoisted(() => ({
-    mockConstructEvent: vi.fn(),
-    mockUpdate: vi.fn(),
-    mockEq: vi.fn(),
-    mockIn: vi.fn(),
-    mockSelect: vi.fn(),
-    mockMaybeSingle: vi.fn(),
-    mockForceDisconnect: vi.fn(() => true),
-    mockInvalidateTierMemo: vi.fn(),
-  }));
+const {
+  mockConstructEvent,
+  mockUpdate,
+  mockEq,
+  mockIn,
+  mockSelect,
+  mockMaybeSingle,
+  mockInsert,
+  mockDeleteEq,
+  mockForceDisconnect,
+  mockInvalidateTierMemo,
+} = vi.hoisted(() => ({
+  mockConstructEvent: vi.fn(),
+  mockUpdate: vi.fn(),
+  mockEq: vi.fn(),
+  mockIn: vi.fn(),
+  mockSelect: vi.fn(),
+  mockMaybeSingle: vi.fn(),
+  mockInsert: vi.fn(),
+  mockDeleteEq: vi.fn(),
+  mockForceDisconnect: vi.fn(() => true),
+  mockInvalidateTierMemo: vi.fn(),
+}));
 
 const { priceTier } = vi.hoisted(() => ({ priceTier: { value: "startup" as string } }));
 
@@ -28,12 +43,20 @@ vi.mock("@/lib/stripe-price-tier-map", () => ({
 
 vi.mock("@/lib/supabase/server", () => ({
   createServiceClient: () => ({
-    from: () => ({
-      update: mockUpdate,
-      select: () => ({
-        eq: () => ({ maybeSingle: mockMaybeSingle }),
-      }),
-    }),
+    from: (table: string) => {
+      if (table === "processed_stripe_events") {
+        return {
+          insert: mockInsert,
+          delete: () => ({ eq: mockDeleteEq }),
+        };
+      }
+      return {
+        update: mockUpdate,
+        select: () => ({
+          eq: () => ({ maybeSingle: mockMaybeSingle }),
+        }),
+      };
+    },
   }),
 }));
 
@@ -83,6 +106,7 @@ describe("Stripe webhook — plan_tier writes", () => {
     vi.clearAllMocks();
     priceTier.value = "startup";
     configureSupabaseUpdateChain({ mockUpdate, mockEq, mockIn, mockSelect });
+    configureSupabaseInsertChain({ mockInsert, mockDeleteEq });
     mockMaybeSingle.mockResolvedValue({
       data: {
         id: "user-123",
