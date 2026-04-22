@@ -1595,3 +1595,125 @@
   .site-header, .category-nav, .site-footer, .nav-toggle-label { display: none !important; }
   .page-hero, .landing-hero { margin-top: 0; }
 }
+
+/* --- Blog author card (inline, below post prose) ------------------------ */
+/* Rendered by _includes/blog-post.njk after the prose <section>. Mirrors
+   the structure referenced in the extended BlogPosting Person JSON-LD. */
+.author-card-section {
+  padding: var(--space-8, 3rem) 0;
+  border-top: 1px solid var(--color-border);
+  background: var(--color-bg-secondary);
+}
+.author-card {
+  display: grid;
+  grid-template-columns: 96px 1fr;
+  gap: var(--space-6);
+  align-items: start;
+  max-width: 720px;
+  margin: 0 auto;
+}
+.author-card-photo {
+  width: 96px;
+  height: 96px;
+  border-radius: 50%;
+  object-fit: cover;
+  border: 1px solid var(--color-border);
+  background: var(--color-bg-tertiary);
+}
+.author-card-body {
+  min-width: 0;
+}
+.author-card-name {
+  font-size: 1.125rem;
+  font-weight: 600;
+  color: var(--color-text);
+  margin: 0 0 var(--space-1) 0;
+}
+.author-card-role {
+  font-size: 0.875rem;
+  color: var(--color-text-secondary);
+  margin: 0 0 var(--space-3) 0;
+}
+.author-card-bio {
+  font-size: 0.9375rem;
+  color: var(--color-text-secondary);
+  line-height: 1.6;
+  margin: 0 0 var(--space-3) 0;
+}
+.author-card-credentials {
+  list-style: none;
+  padding: 0;
+  margin: 0 0 var(--space-3) 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+.author-card-credentials li {
+  font-size: 0.8125rem;
+  color: var(--color-text-tertiary);
+  padding: var(--space-1) var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+  background: var(--color-bg-tertiary);
+}
+.author-card-links {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-4);
+}
+.author-card-links a {
+  font-size: 0.8125rem;
+  color: var(--color-text-secondary);
+  text-decoration: none;
+  border-bottom: 1px solid var(--color-border);
+  padding-bottom: 2px;
+  transition: color 0.15s, border-color 0.15s;
+}
+.author-card-links a:hover,
+.author-card-links a:focus {
+  color: var(--color-accent);
+  border-bottom-color: var(--color-accent);
+}
+@media (max-width: 480px) {
+  .author-card {
+    grid-template-columns: 1fr;
+    text-align: left;
+  }
+  .author-card-photo {
+    width: 72px;
+    height: 72px;
+  }
+}
+
+/* --- Blog listing author banner (blog/ index only) ---------------------- */
+.blog-listing-author {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  padding: var(--space-4) 0 var(--space-6);
+  font-size: 0.9375rem;
+  color: var(--color-text-secondary);
+  border-bottom: 1px solid var(--color-border);
+  margin-bottom: var(--space-6);
+}
+.blog-listing-author-label {
+  color: var(--color-text-tertiary);
+}
+.blog-listing-author-name {
+  color: var(--color-text);
+  font-weight: 500;
+  text-decoration: none;
+  border-bottom: 1px solid transparent;
+}
+.blog-listing-author-name:hover,
+.blog-listing-author-name:focus {
+  color: var(--color-accent);
+  border-bottom-color: var(--color-accent);
+}
+.blog-listing-author-role {
+  color: var(--color-text-tertiary);
+}

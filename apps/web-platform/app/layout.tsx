@@ -4,9 +4,16 @@ import { SwRegister } from "./sw-register";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Soleur — One Command Center, 8 Departments",
+  // Scoped to the dashboard surface so the Next.js app (served under
+  // /dashboard/*) and the Eleventy marketing site (served at /) never present
+  // conflicting brand claims to crawlers or preview tools. The marketing brand
+  // line lives in plugins/soleur/docs/index.njk seoTitle. See #2708.
+  title: {
+    template: "%s — Soleur Dashboard",
+    default: "Soleur Dashboard — Your Command Center",
+  },
   description:
-    "One command center for your entire business. AI agents across 8 departments plan, execute, and compound knowledge — so you can focus on the decisions only you can make.",
+    "Your Soleur command center — manage subscriptions, review agent output, and configure your AI organization.",
   icons: {
     apple: "/icons/apple-touch-icon.png",
   },
