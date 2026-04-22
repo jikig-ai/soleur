@@ -33,6 +33,12 @@ const LAYOUT_TSX = resolve(
   REPO_ROOT,
   "apps/web-platform/app/layout.tsx",
 );
+const BLOG_POSTS_DIR = resolve(REPO_ROOT, "plugins/soleur/docs/blog");
+
+// Google SERP snippet guidance: truncation begins ~155 chars on desktop,
+// ~120 on mobile. Window matches the drift-guard envelope used by #2808.
+const SERP_META_MIN = 120;
+const SERP_META_MAX = 160;
 
 let SITE: string;
 let tmpSite: string | null = null;
@@ -314,7 +320,47 @@ describe("all <script type=\"application/ld+json\"> blocks parse as valid JSON",
   });
 });
 
-// -- Test 6: Next.js layout title is dashboard-scoped (prevent #2708) -----
+// -- Test 6: #2807 blog listing cards render per-entry byline -------------
+
+describe("#2807 blog listing cards render per-entry byline", () => {
+  test("every <a class=\"component-card\"> on /blog/ renders one <p class=\"card-byline\">by …</p>", () => {
+    const html = readSite("blog/index.html");
+    const cards = [...html.matchAll(/<a\s+[^>]*class="component-card"/g)].length;
+    const bylines = [...html.matchAll(/<p\s+class="card-byline">by\s/g)].length;
+    // Derive expected minimum from the source of truth on disk: the number
+    // of blog `.md` files. Posts tagged in multiple categories render once
+    // per matching section, so cards >= postCount is the tight floor.
+    const postCount = readdirSync(BLOG_POSTS_DIR).filter((f) =>
+      f.endsWith(".md"),
+    ).length;
+    expect(postCount).toBeGreaterThan(0);
+    expect(cards).toBeGreaterThanOrEqual(postCount);
+    expect(bylines).toBe(cards);
+  });
+});
+
+// -- Test 7: #2808 homepage meta description SERP-safe + keyword-dense -----
+
+describe("#2808 homepage meta description is SERP-safe + keyword-dense", () => {
+  test("<meta name=\"description\"> length within SERP window and contains primary keywords", () => {
+    const html = readSite("index.html");
+    const m = html.match(
+      /<meta\s+name="description"\s+content="([^"]+)"/i,
+    );
+    expect(m, "homepage has <meta name=\"description\">").not.toBeNull();
+    const content = m![1];
+    expect(content.length).toBeLessThanOrEqual(SERP_META_MAX);
+    expect(content.length).toBeGreaterThanOrEqual(SERP_META_MIN);
+    const lower = content.toLowerCase();
+    expect(lower).toContain("solo founder");
+    // Use word-boundary match so "agentic"/"reagent" etc. do not pass this
+    // keyword-density assertion in place of "agent"/"agents".
+    expect(/\bagents?\b/.test(lower)).toBe(true);
+    expect(lower).toContain("department");
+  });
+});
+
+// -- Test 8: Next.js layout title is dashboard-scoped (prevent #2708) -----
 
 describe("#2708 — Next.js layout title is dashboard-scoped", () => {
   test("apps/web-platform/app/layout.tsx uses dashboard template + default, not marketing brand", () => {
