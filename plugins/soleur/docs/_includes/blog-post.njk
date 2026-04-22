@@ -74,6 +74,8 @@ layout: base.njk
 
 <section class="content">
   <div class="container">
+    {# pillar-series guards internally on pillars[pillar] — no outer {% if pillar %} needed. #}
+    {% include "pillar-series.njk" %}
     <div class="prose">
       {{ content | safe }}
     </div>
