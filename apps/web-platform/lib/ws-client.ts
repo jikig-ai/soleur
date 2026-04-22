@@ -74,27 +74,31 @@ export const NON_TRANSIENT_CLOSE_CODES: Record<number, { target?: string; reason
 };
 
 /** Combined chat state: messages and activeStreams update atomically via useReducer
- *  so StrictMode double-invocation cannot observe a partially-updated ref. */
-interface ChatState {
+ *  so StrictMode double-invocation cannot observe a partially-updated ref.
+ *
+ *  `pendingTimerAction` carries the timer-side-effect intent declared by the
+ *  last stream event out of the pure reducer. It is consumed by a useEffect
+ *  and then cleared via `ack_timer_action` so stale intent cannot leak into
+ *  subsequent unrelated dispatches. */
+export interface ChatState {
   messages: ChatMessage[];
   activeStreams: Map<string, number>;
-  /** Timer side-effect declared by the last stream event; applied by a useEffect. */
   pendingTimerAction?: StreamEventResult["timerAction"];
 }
 
-type StreamEventMsg = Parameters<typeof applyStreamEvent>[2];
+export type StreamEventMsg = Parameters<typeof applyStreamEvent>[2];
 
-type ChatAction =
+export type ChatAction =
   | { type: "stream_event"; msg: StreamEventMsg }
   | { type: "timeout"; leaderId: string }
   | { type: "clear_streams" }
+  | { type: "ack_timer_action" }
   | { type: "add_message"; message: ChatMessage }
-  | { type: "prepend_messages"; messages: ChatMessage[] }
   | { type: "filter_prepend"; messages: ChatMessage[] }
   | { type: "gate_error"; gateId: string; message: string }
   | { type: "resolve_gate"; gateId: string; selection: string };
 
-function chatReducer(state: ChatState, action: ChatAction): ChatState {
+export function chatReducer(state: ChatState, action: ChatAction): ChatState {
   switch (action.type) {
     case "stream_event": {
       const result = applyStreamEvent(state.messages, state.activeStreams, action.msg);
@@ -102,14 +106,14 @@ function chatReducer(state: ChatState, action: ChatAction): ChatState {
     }
     case "timeout": {
       const result = applyTimeout(state.messages, state.activeStreams, action.leaderId);
-      return { messages: result.messages, activeStreams: result.activeStreams };
+      return { ...state, messages: result.messages, activeStreams: result.activeStreams, pendingTimerAction: undefined };
     }
     case "clear_streams":
-      return { ...state, activeStreams: new Map() };
+      return { ...state, activeStreams: new Map(), pendingTimerAction: undefined };
+    case "ack_timer_action":
+      return state.pendingTimerAction === undefined ? state : { ...state, pendingTimerAction: undefined };
     case "add_message":
       return { ...state, messages: [...state.messages, action.message] };
-    case "prepend_messages":
-      return { ...state, messages: [...action.messages, ...state.messages] };
     case "filter_prepend": {
       const existingIds = new Set(state.messages.map(m => m.id));
       const unique = action.messages.filter(m => !existingIds.has(m.id));
@@ -137,18 +141,16 @@ function chatReducer(state: ChatState, action: ChatAction): ChatState {
 }
 
 export function useWebSocket(conversationId: string): UseWebSocketReturn {
-  const [chatState, dispatch] = useReducer(chatReducer, null, () => ({
-    messages: [] as ChatMessage[],
+  const [chatState, dispatch] = useReducer(chatReducer, null, (): ChatState => ({
+    messages: [],
     activeStreams: new Map<string, number>(),
   }));
 
-  // Mirror latest chatState into a ref for use in stale async closures
-  // (history fetch callbacks, setTimeout callbacks).
-  const chatStateRef = useRef(chatState);
-  chatStateRef.current = chatState;
-
-  // Derive activeLeaderIds from reducer state — recalculates only when
-  // the activeStreams Map reference changes (i.e., when leaders are added/removed).
+  // Derive activeLeaderIds from reducer state. `applyStreamEvent` preserves the
+  // activeStreams Map reference for mid-stream `stream` and `tool_use` events
+  // (the hot per-token path), so this memo recomputes only on leader-set
+  // boundary events (stream_start, stream_end, review_gate) — matching the
+  // cadence of the pre-refactor gated setActiveLeaderIds call.
   const activeLeaderIds = useMemo(
     () => Array.from(chatState.activeStreams.keys()) as DomainLeaderId[],
     [chatState.activeStreams],
@@ -202,14 +204,18 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
     timeoutTimersRef.current.set(leaderId, timer);
   }, [clearLeaderTimeout]);
 
-  // Apply timer side-effects declared by the reducer after each stream event.
-  // useEffect runs after paint; the latency is negligible for 45-second timeouts.
+  // Apply timer side-effects declared by the reducer after each stream event,
+  // then clear the pending intent so unrelated subsequent dispatches (add_message,
+  // filter_prepend, gate_error, resolve_gate) cannot carry stale timer state
+  // forward via `...state` spread. useEffect runs after paint; the latency is
+  // negligible for 45-second timeouts.
   useEffect(() => {
     const ta = chatState.pendingTimerAction;
     if (!ta) return;
     if (ta.type === "reset") resetLeaderTimeout(ta.leaderId);
     else if (ta.type === "clear") clearLeaderTimeout(ta.leaderId);
     else if (ta.type === "clear_all") clearAllTimeouts();
+    dispatch({ type: "ack_timer_action" });
   }, [chatState.pendingTimerAction, resetLeaderTimeout, clearLeaderTimeout, clearAllTimeouts]);
 
   /** Permanently tear down the WebSocket — prevents reconnect loop.
@@ -506,10 +512,10 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
         const result = await fetchConversationHistory(conversationId, controller.signal);
         if (!result || !mountedRef.current) return;
 
-        // chatStateRef.current gives the latest activeStreams even in this stale closure
-        if (chatStateRef.current.activeStreams.size === 0) {
-          dispatch({ type: "prepend_messages", messages: result.messages });
-        }
+        // filter_prepend deduplicates by id against whatever stream events
+        // landed while the fetch was in flight — strictly safer than an
+        // activeStreams.size === 0 guard and matches the resume path.
+        dispatch({ type: "filter_prepend", messages: result.messages });
         seedCostData(result.costData);
       } catch (err) {
         if (err instanceof DOMException && err.name === "AbortError") return;
