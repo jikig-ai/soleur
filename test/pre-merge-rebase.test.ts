@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeAll, afterAll, beforeEach } from "bun:test";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync, chmodSync } from "fs";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync, chmodSync, existsSync, unlinkSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 
@@ -136,10 +136,59 @@ describe("pre-merge-rebase hook (with git repo)", () => {
   let repoDir: string;
   let remoteDir: string;
   let initialMainSha: string;
+  // Per-suite directory holding the `gh` stub that replaces the live GitHub
+  // CLI during Signal 3 review-evidence lookups. Isolates the hook from
+  // GitHub API wall-clock variance that previously pushed CI past the 5s
+  // bun-test default (#2801).
+  let binDir: string;
+  let ghCalledSentinel: string;
 
   beforeAll(() => {
     remoteDir = mkdtempSync(join(tmpdir(), "hook-test-remote-"));
     repoDir = mkdtempSync(join(tmpdir(), "hook-test-local-"));
+    binDir = mkdtempSync(join(tmpdir(), "hook-test-bin-"));
+    ghCalledSentinel = join(binDir, ".gh-called");
+
+    // Write a deterministic `gh` stub. The hook's Signal 3 path only invokes
+    // `gh issue list --label code-review ...` when `gh pr merge <N>` includes a
+    // literal PR number (PR_NUMBER is extracted from argv at pre-merge-rebase.sh
+    // PR_NUMBER extraction step, so the `gh pr list` fallback is unreachable
+    // from these tests). The stub echoes an empty jq result -> hook treats it
+    // as "no review issue found" -> deny, matching the pre-stub behavior when
+    // the live API returned no match.
+    const ghStub = `#!/usr/bin/env bash
+# Test stub for \`gh\` — pre-merge-rebase.test.ts Signal 3 isolation (#2801).
+# Reachable invocations:
+#   gh issue list --label code-review --state all --search "PR #N" --limit 1 --json number --jq '.[0].number // empty'
+# Return empty stdout so the hook's \`// empty\` jq default fires and REVIEW_ISSUES stays empty.
+# The sentinel file proves the stub was consulted (see sentinel expects in the two Signal-3 tests).
+touch "$(dirname "$0")/.gh-called"
+case "$1 $2" in
+  "issue list"|"pr list")
+    exit 0
+    ;;
+  *)
+    # Unexpected invocation: warn visibly but don't fail the hook (fail-open
+    # semantics match the hook's real \`2>/dev/null || true\` pattern).
+    echo "[test stub] unexpected gh invocation: $*" >&2
+    exit 0
+    ;;
+esac
+`;
+    const ghPath = join(binDir, "gh");
+    writeFileSync(ghPath, ghStub);
+    chmodSync(ghPath, 0o755);
+
+    // Extend GIT_ENV.PATH so the stub wins PATH resolution for any Bun.spawn
+    // inside this describe block. The const binding is fine — we're mutating
+    // the object's property, not rebinding the variable.
+    (GIT_ENV as Record<string, string>).PATH = `${binDir}:${cleanEnv.PATH ?? ""}`;
+
+    // PATH sanity: fail fast if the stub doesn't win resolution.
+    const whichGh = new TextDecoder()
+      .decode(Bun.spawnSync(["which", "gh"], { env: GIT_ENV }).stdout)
+      .trim();
+    expect(whichGh).toBe(ghPath);
 
     spawnChecked(["git", "init", "--bare", "--initial-branch=main"], { cwd: remoteDir });
 
@@ -162,9 +211,12 @@ describe("pre-merge-rebase hook (with git repo)", () => {
   afterAll(() => {
     rmSync(repoDir, { recursive: true, force: true });
     rmSync(remoteDir, { recursive: true, force: true });
+    rmSync(binDir, { recursive: true, force: true });
   });
 
   beforeEach(() => {
+    // Reset per-test sentinel so each test asserts a fresh stub invocation.
+    if (existsSync(ghCalledSentinel)) unlinkSync(ghCalledSentinel);
     spawnChecked(["git", "checkout", "main"], { cwd: repoDir });
     // Reset remote main to initial commit so tests that pushed to origin/main
     // don't affect subsequent tests (latent ordering dependency).
@@ -212,7 +264,11 @@ describe("pre-merge-rebase hook (with git repo)", () => {
     expect(output.hookSpecificOutput.permissionDecisionReason).toContain(
       "No review evidence"
     );
-  });
+    // Proves the hook's Signal 3 path reached the PATH-prefix gh stub instead of
+    // the live GitHub CLI. If CI's /usr/local/bin/gh ever wins PATH resolution,
+    // this fails loudly rather than reintroducing wall-clock flake (#2801).
+    expect(existsSync(ghCalledSentinel), "gh stub was not consulted during Signal 3 review-issue lookup").toBe(true);
+  }, 15000);
 
   test("review commit message satisfies review evidence gate", async () => {
     spawnChecked(["git", "checkout", "-b", "test-review-commit"], { cwd: repoDir });
@@ -424,7 +480,9 @@ describe("pre-merge-rebase hook (with git repo)", () => {
     expect(result.exitCode).toBe(0);
     const output = JSON.parse(result.stdout);
     expect(output.hookSpecificOutput.permissionDecision).toBe("deny");
-  });
+    // See sentinel comment on the sibling "no review evidence" test above.
+    expect(existsSync(ghCalledSentinel), "gh stub was not consulted during Signal 3 review-issue lookup").toBe(true);
+  }, 15000);
 
   test("main branch skips sync silently", async () => {
     const result = await runHook(
