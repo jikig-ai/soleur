@@ -7,6 +7,23 @@
 **Branch:** feat-one-shot-2802-verify-growth-audit-rubric-tables
 **Detail level:** MINIMAL (verification task, no code changes expected)
 
+## Enhancement Summary
+
+**Deepened on:** 2026-04-22
+**Sections enhanced:** 2 (Acceptance Criteria, Risks)
+**Deepen-mode:** Targeted — this is a mechanical verification, not a design task, so the deepen pass focused on (a) validating the validator's regex patterns match the audit file's exact whitespace, (b) cross-referencing the two directly-relevant learnings from the source PR's compound pass, and (c) sanity-checking that no skills apply. No spec-flow / UX / framework-research agents were relevant.
+
+### Key Improvements
+
+1. **Whitespace-match confirmation.** The validator's three SAP-row grep patterns (one-or-more spaces for Structure/Authority, two-or-more spaces for Presence) were run against the actual audit file — all three matched on the expected line numbers (31, 32, 33). The double-space after `**Presence**` is load-bearing; it accounts for the 8-char vs. 9-char left-column padding. Documented in Risks so a future audit that renders aligned columns with single spaces doesn't silently break the validator.
+2. **Learnings cross-reference.** Two learnings committed with PR #2795 (`2026-04-22-agent-scorecard-determinism-requires-pinned-template.md` and `2026-04-22-markdown-table-parser-papercuts-and-review-diff-direction.md`) directly describe the failure modes this verification guards against. Both cited in Research Insights; second is quoted for the bold-stripping pattern the validator also needs if score cells start appearing in bold.
+3. **Anti-bloat decision.** Deepen did not add speculative phases (e.g., "verify the weekly cron fires on schedule", "audit all past scheduled-growth-audit outputs for drift"). Scope remains issue-faithful: this verification is for run 24795319398 alone.
+
+### New Considerations Discovered
+
+- **Validator regex is padding-sensitive.** The three `\| \*\*<Name>\*\* +\|` patterns depend on the agent emitting column-aligned tables with spaces padding the `**Name**` cell to a consistent width. A future agent model that drops the alignment (e.g., `| **Structure** | 40 |` with single spaces, or tabs) would FAIL the validator despite producing a structurally correct rubric. If that happens, the response is to relax the grep patterns to `\| \*\*Structure\*\* *\| *40 *\|`, not to refile the prompt drift.
+- **The audit already merged to main.** Via PR #2810 (`docs: weekly growth audit 2026-04-22`) before this verification ran. This is fine — the grep is deterministic against committed content — but documented in Risks to pre-empt reviewer confusion.
+
 ## Overview
 
 PR #2795 pinned a dual-rubric AEO audit template (SAP Scorecard + 8-component AEO diagnostic) in two surfaces:
@@ -197,11 +214,59 @@ All CLI invocations in this plan are standard `gh`, `grep`, `ls`, `wc`, and `dif
 - Not validating the content of the audit (scoring accuracy, recommendations quality). Only validating the *structural presence* of the two rubric tables as pinned.
 - Not verifying the weekly cron actually fires on its schedule. Out of scope for this follow-through; tracked by the cron infrastructure itself.
 
+## Research Insights
+
+### Relevant learnings (from PR #2795's compound pass)
+
+**1. `2026-04-22-agent-scorecard-determinism-requires-pinned-template.md`**
+
+> With qualitative guidance and no pinned template, the agent freelanced a new table shape each run based on which signals felt most diagnostic at the moment.
+
+Directly describes the #2802 failure mode this verification guards against. Three consecutive runs (04-18, 04-19, 04-21) produced three different scorecard shapes before the pin. Run 24795319398 (04-22) is the first post-pin run; the validator's purpose is to confirm the pin held.
+
+**2. `2026-04-22-markdown-table-parser-papercuts-and-review-diff-direction.md`**
+
+> When parsing markdown table cells with regex, strip inline formatting markers (`**`, `*`, backticks) in addition to whitespace before matching numeric values.
+
+Not directly applicable to this plan's grep patterns (which look for literal `| 40 |` etc., not score cells), but a forward-looking consideration: if a future agent version starts bolding SAP weight cells (`| **Structure** | **40** |`), the validator's `\| 40 \|` pattern would FAIL. Documented in Risks.
+
+### Validator regex verification (live)
+
+Ran each grep pattern against the actual audit file with line-number output:
+
+```text
+$ grep -nE "^\| \*\*Structure\*\* +\| 40 +\|" 2026-04-22-aeo-audit.md
+31:| **Structure**   | 40     | 34/40   | 34       | ...
+
+$ grep -nE "^\| \*\*Authority\*\* +\| 35 +\|" 2026-04-22-aeo-audit.md
+32:| **Authority**   | 35     | 26/35   | 26       | ...
+
+$ grep -nE "^\| \*\*Presence\*\*  +\| 25 +\|" 2026-04-22-aeo-audit.md
+33:| **Presence**    | 25     | 20/25   | 20       | ...
+
+$ grep -cE "^\| (FAQ structure|Answer density|Statistics|Source citations|Conversational|Entity clarity|Authority / E-E-A-T|Citation-friendly)" 2026-04-22-aeo-audit.md
+8
+```
+
+All four validator assertions PASS deterministically against the committed audit file. The `Presence` pattern's **two-space** requirement (`**Presence**  +`) is intentional — the column-aligned rendering pads `Presence` (8 chars) with two spaces to match `Structure`/`Authority` (9 chars) + one space. Single-space would match Structure/Authority but not Presence.
+
+### Audit content sanity (non-blocking for this verification)
+
+The audit itself flags a potential regression inside Structure: "FAQPage JSON-LD not detected on home in this pass (regression risk vs. 2026-04-21)." This is audit *content*, not audit *structure*, and is out of scope for #2802 — PR #2810 already merged this audit, and any follow-up on the FAQPage regression would be tracked in a separate marketing issue. Not filing here.
+
+### Skills considered, not applied
+
+- **soleur:growth** — the skill that would normally produce such an audit. Not applicable: this is a pure-verification task against an already-produced audit. Running the skill would produce a *new* audit, not verify the existing one.
+- **soleur:seo-aeo** — same reasoning. Would re-audit, not verify.
+- **soleur:compound** — deferred to `/ship` Phase 6 per AGENTS.md `wg-before-every-commit-run-compound-skill`. Expected to skip gracefully since the plan execution itself has no surprising findings.
+
+No other skills match (no UI, no code, no migration, no infra change).
+
 ## References
 
 - Issue: #2802
 - Source PR: #2795 (merged c597cc6b)
-- Workflow run: https://github.com/jikig-ai/soleur/actions/runs/24795319398
+- Workflow run: <https://github.com/jikig-ai/soleur/actions/runs/24795319398>
 - Audit file: `knowledge-base/marketing/audits/soleur-ai/2026-04-22-aeo-audit.md`
 - Merged via: PR #2810 (commit 8428f358)
 - Pinned prompt surfaces:
