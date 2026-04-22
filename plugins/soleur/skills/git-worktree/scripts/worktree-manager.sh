@@ -170,6 +170,35 @@ verify_worktree_created() {
   fi
 }
 
+# Ensure the worktree uses the operator's global git identity, not the bare repo's
+# local identity. The bare repo frequently has a CI-bot identity set at the repo
+# level (e.g., `user.email=41898282+github-actions[bot]@users.noreply.github.com`)
+# which worktrees inherit and which silently produces commits that fail CLA checks
+# or misattribute authorship. This function copies the operator's --global identity
+# onto the worktree's local config so every commit made from inside the worktree
+# is authored as the real human. Idempotent: skips silently if no global identity
+# exists, or if the worktree already has a matching local identity.
+ensure_worktree_identity() {
+  local worktree_path="$1"
+  local global_email global_name
+  global_email=$(git config --global --get user.email 2>/dev/null || true)
+  global_name=$(git config --global --get user.name 2>/dev/null || true)
+
+  # No global identity configured — nothing to do; the user is responsible for
+  # their own git config.
+  [[ -z "$global_email" || -z "$global_name" ]] && return 0
+
+  local local_email local_name
+  local_email=$(git -C "$worktree_path" config --local --get user.email 2>/dev/null || true)
+  local_name=$(git -C "$worktree_path" config --local --get user.name 2>/dev/null || true)
+
+  if [[ "$local_email" != "$global_email" || "$local_name" != "$global_name" ]]; then
+    git -C "$worktree_path" config --local user.email "$global_email"
+    git -C "$worktree_path" config --local user.name "$global_name"
+    echo -e "${GREEN}Set worktree git identity: $global_name <$global_email>${NC}"
+  fi
+}
+
 # Ensure .worktrees is in .gitignore
 ensure_gitignore() {
   if ! grep -q "^\.worktrees$" "$GIT_ROOT/.gitignore" 2>/dev/null; then
@@ -375,6 +404,10 @@ create_worktree() {
   # git worktree add on bare repos writes core.bare=false to shared config — fix it
   ensure_bare_config
 
+  # Force the worktree to use the operator's global git identity (not a CI-bot
+  # identity that may be set at the bare repo level).
+  ensure_worktree_identity "$worktree_path"
+
   # Copy environment files
   copy_env_files "$worktree_path"
 
@@ -403,7 +436,7 @@ create_for_feature() {
 
   local branch_name="feat-$name"
   local worktree_path="$WORKTREE_DIR/$branch_name"
-  local spec_dir="$GIT_ROOT/knowledge-base/project/specs/$branch_name"
+  local spec_dir="$worktree_path/knowledge-base/project/specs/$branch_name"
 
   # Check if worktree already exists
   if [[ -d "$worktree_path" ]]; then
@@ -435,8 +468,12 @@ create_for_feature() {
   # git worktree add on bare repos writes core.bare=false to shared config — fix it
   ensure_bare_config
 
-  # Create spec directory in main repo (shared across worktrees)
-  if [[ -d "$GIT_ROOT/knowledge-base" ]]; then
+  # Force the worktree to use the operator's global git identity (not a CI-bot
+  # identity that may be set at the bare repo level).
+  ensure_worktree_identity "$worktree_path"
+
+  # Create spec directory inside the worktree so it's tracked on the feature branch
+  if [[ -d "$worktree_path/knowledge-base" ]]; then
     mkdir -p "$spec_dir"
     echo -e "${GREEN}Created spec directory: $spec_dir${NC}"
   fi
@@ -763,7 +800,10 @@ cleanup_merged_worktrees() {
       fi
     fi
 
-    # Archive spec directory
+    # Archive spec directory. Backward-compat for legacy pre-#2815 worktrees that
+    # created specs at the bare root. New layout commits the spec inside the
+    # worktree (git history is the canonical archive); the [[ -d ]] guard silently
+    # skips when the bare-root dir does not exist.
     local spec_dir="$GIT_ROOT/knowledge-base/project/specs/$safe_branch"
     if [[ -d "$spec_dir" ]]; then
       local archive_dir archive_name archive_path
