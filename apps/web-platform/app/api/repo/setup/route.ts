@@ -146,12 +146,15 @@ export async function POST(request: Request) {
 
       // Auto-trigger headless sync — fire-and-forget with .catch()
       // BYOK check is handled internally by startAgentSession (rejects if no key)
+      // `repoUrl` is the freshly-set value from the request body — stamp it
+      // on the sync conversation so the Command Center scopes correctly.
       const conversationId = crypto.randomUUID();
       const { error: convError } = await serviceClient
         .from("conversations")
         .insert({
           id: conversationId,
           user_id: user.id,
+          repo_url: repoUrl,
           domain_leader: "system",
           status: "active",
           session_id: crypto.randomUUID(),

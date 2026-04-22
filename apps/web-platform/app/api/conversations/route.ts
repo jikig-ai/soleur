@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import type { User } from "@supabase/supabase-js";
+import { getCurrentRepoUrl } from "@/server/current-repo-url";
 import { lookupConversationForPath } from "@/server/lookup-conversation-for-path";
 import { validateContextPath } from "@/server/validate-context-path";
 import { withUserRateLimit } from "@/server/with-user-rate-limit";
@@ -32,7 +33,8 @@ async function getHandler(req: Request, user: User) {
     return NextResponse.json({ error: "Invalid contextPath" }, { status: 400 });
   }
 
-  const result = await lookupConversationForPath(user.id, contextPath);
+  const repoUrl = await getCurrentRepoUrl(user.id);
+  const result = await lookupConversationForPath(user.id, contextPath, repoUrl);
   if (!result.ok) {
     return NextResponse.json({ error: "Internal error" }, { status: 500 });
   }

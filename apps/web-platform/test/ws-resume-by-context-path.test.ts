@@ -26,20 +26,32 @@ vi.mock("@/lib/supabase/service", () => ({
       return {
         insert: mockInsert,
         update: mockUpdate,
-        select: () => ({
-          eq: () => ({
-            eq: () => ({
-              is: () => ({
-                order: () => ({
-                  limit: () => ({
-                    maybeSingle: mockMaybeSingle,
-                  }),
+        select: () => {
+          // Recursive eq() chain so any length of predicates terminates at
+          // is().order().limit().maybeSingle(). The ws-handler lookup now
+          // uses 3 .eq() calls (user_id, repo_url, context_path).
+          const tail = {
+            is: () => ({
+              order: () => ({
+                limit: () => ({
+                  maybeSingle: mockMaybeSingle,
                 }),
               }),
             }),
-            single: vi.fn().mockResolvedValue({ data: { id: "conv-1", status: "active" }, error: null }),
-          }),
-        }),
+          };
+          const eqChain: Record<string, unknown> = {
+            eq: (...args: unknown[]) => {
+              void args;
+              return eqChain;
+            },
+            single: vi.fn().mockResolvedValue({
+              data: { id: "conv-1", status: "active", repo_url: mockUserRepoUrl },
+              error: null,
+            }),
+            ...tail,
+          };
+          return eqChain;
+        },
       };
     },
     auth: {
@@ -72,6 +84,14 @@ vi.mock("./rate-limiter", () => ({
 }));
 vi.mock("./context-validation", () => ({
   validateConversationContext: (ctx: unknown) => ctx,
+}));
+
+// getCurrentRepoUrl is read before the context_path lookup so the query
+// can scope by (user_id, repo_url, context_path). Tests default to a
+// connected repo; null simulates the disconnected state.
+let mockUserRepoUrl: string | null = "https://github.com/acme/repo";
+vi.mock("@/server/current-repo-url", () => ({
+  getCurrentRepoUrl: () => Promise.resolve(mockUserRepoUrl),
 }));
 
 import { handleMessage, sessions, type ClientSession } from "@/server/ws-handler";

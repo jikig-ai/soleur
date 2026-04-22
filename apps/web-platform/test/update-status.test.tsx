@@ -10,16 +10,22 @@ const mockChannel = vi.fn().mockReturnValue({ on: mockOn });
 // Track update calls
 const mockUpdate = vi.fn();
 
-function createQueryBuilder(data: unknown[], error: { message: string } | null = null) {
+function createQueryBuilder(
+  data: unknown[],
+  error: { message: string } | null = null,
+  singleRow: unknown = null,
+) {
   const result = { data, error };
   const builder = {
     select: vi.fn().mockReturnThis(),
     eq: vi.fn().mockReturnThis(),
     in: vi.fn().mockReturnThis(),
     is: vi.fn().mockReturnThis(),
+    not: vi.fn().mockReturnThis(),
     order: vi.fn().mockReturnThis(),
     limit: vi.fn().mockReturnThis(),
-    single: vi.fn().mockReturnThis(),
+    single: vi.fn().mockResolvedValue({ data: singleRow, error: null }),
+    maybeSingle: vi.fn().mockResolvedValue({ data: singleRow, error: null }),
     update: vi.fn((...args: unknown[]) => {
       mockUpdate(...args);
       return builder;
@@ -77,6 +83,10 @@ vi.mock("@/lib/supabase/client", () => ({
         return builder;
       }
       if (table === "messages") return messageBuilder;
+      if (table === "users")
+        return createQueryBuilder([], null, {
+          repo_url: "https://github.com/acme/repo",
+        });
       return createQueryBuilder([]);
     },
     channel: mockChannel,
