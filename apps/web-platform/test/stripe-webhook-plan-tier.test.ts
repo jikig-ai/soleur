@@ -79,7 +79,12 @@ describe("Stripe webhook — plan_tier writes", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     priceTier.value = "startup";
-    mockIn.mockResolvedValue({ error: null });
+    // .update().eq().in().select("id") — post-#2701 the reconciled webhook
+    // reads matched count for guard-no-op observability; .in() must expose
+    // .select() that resolves to {data:[{id}], error:null}.
+    mockIn.mockImplementation(() => ({
+      select: vi.fn().mockResolvedValue({ data: [{ id: "user-123" }], error: null }),
+    }));
     mockEq.mockReturnValue(
       Object.assign(Promise.resolve({ error: null }), { in: mockIn }),
     );
@@ -146,11 +151,14 @@ describe("Stripe webhook — plan_tier writes", () => {
   });
 
   test("atomic update uses .in(subscription_status, pre-states) for idempotency", async () => {
+    // Post-#2701: cancelled is terminal and explicitly excluded from the
+    // pre-state guard — a stale .updated arriving after .deleted must never
+    // resurrect a cancelled row.
     mockConstructEvent.mockReturnValue(makeSubUpdatedEvent({ priceId: "price_startup" }));
     await POST(makeRequest());
     expect(mockIn).toHaveBeenCalledWith(
       "subscription_status",
-      expect.arrayContaining(["none", "active", "past_due", "unpaid", "cancelled"]),
+      ["none", "active", "past_due", "unpaid"],
     );
   });
 });

@@ -42,7 +42,19 @@ export interface AcquireSlotResult {
   effectiveCap: number;
 }
 
-const supabase = createServiceClient();
+// Lazy-init: ws-handler.ts re-exports this module's helpers, and ws-handler
+// is transitively imported by app/api/webhooks/stripe/route.ts for
+// forceDisconnectForTierChange. Evaluating createServiceClient() at
+// module-eval time throws during `next build` when SUPABASE_URL is unset.
+type ServiceClient = ReturnType<typeof createServiceClient>;
+let _supabase: ServiceClient | null = null;
+const supabase = new Proxy({} as ServiceClient, {
+  get(_target, prop) {
+    _supabase ??= createServiceClient();
+    const value = Reflect.get(_supabase, prop);
+    return typeof value === "function" ? value.bind(_supabase) : value;
+  },
+});
 
 /** Transient Postgres error SQLSTATEs that warrant a single retry:
  *  40P01 deadlock_detected, 55P03 lock_not_available. */

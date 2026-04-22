@@ -43,8 +43,22 @@ const log = createChildLogger("ws");
 
 // ---------------------------------------------------------------------------
 // Supabase admin client (service role -- server-side only)
+//
+// Lazy-init: defers createServiceClient() to first property access so this
+// module can be imported by app/api/webhooks/stripe/route.ts (for
+// forceDisconnectForTierChange) without evaluating serverUrl() at
+// `next build` "Collecting page data" time. Mirrors the pattern used by
+// server/agent-runner.ts supabase() and server/session-sync.ts getSupabase().
 // ---------------------------------------------------------------------------
-const supabase = createServiceClient();
+type ServiceClient = ReturnType<typeof createServiceClient>;
+let _supabase: ServiceClient | null = null;
+const supabase = new Proxy({} as ServiceClient, {
+  get(_target, prop) {
+    _supabase ??= createServiceClient();
+    const value = Reflect.get(_supabase, prop);
+    return typeof value === "function" ? value.bind(_supabase) : value;
+  },
+});
 
 // ---------------------------------------------------------------------------
 // Session tracking

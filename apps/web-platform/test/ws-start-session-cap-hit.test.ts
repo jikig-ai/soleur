@@ -55,6 +55,12 @@ vi.mock("./rate-limiter", () => ({
 vi.mock("./context-validation", () => ({
   validateConversationContext: (ctx: unknown) => ctx,
 }));
+// Added by main #2766 — scopes Command Center + KB resume by repo_url.
+// start_session reads the connected repo before the concurrency gate; return
+// null here because these tests don't exercise repo-scoped resume paths.
+vi.mock("@/server/current-repo-url", () => ({
+  getCurrentRepoUrl: vi.fn().mockResolvedValue(null),
+}));
 
 import { handleMessage, sessions, type ClientSession } from "@/server/ws-handler";
 
