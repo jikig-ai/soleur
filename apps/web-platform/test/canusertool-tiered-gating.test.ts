@@ -155,10 +155,17 @@ function setupSupabaseMock(userData: Record<string, unknown>) {
       return createApiKeysMock();
     }
     if (table === "users") {
+      // Supports both call shapes agent-runner now uses:
+      //   - .select(...).eq(...).single()        (inline workspace/repo_status read)
+      //   - .select("repo_url").eq(...).maybeSingle()  (getCurrentRepoUrl)
       return {
         select: () => ({
           eq: () => ({
             single: () => ({
+              data: userData,
+              error: null,
+            }),
+            maybeSingle: () => ({
               data: userData,
               error: null,
             }),

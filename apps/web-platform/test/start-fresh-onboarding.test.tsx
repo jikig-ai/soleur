@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, type Mock } from "vitest";
 import { render, screen, waitFor, fireEvent } from "@testing-library/react";
 import { createUseTeamNamesMock } from "./mocks/use-team-names";
+import { buildSupabaseQueryBuilder } from "./mocks/supabase-query-builder";
 
 // Mock next/navigation — stable reference prevents useEffect re-fires
 const mockPush = vi.fn();
@@ -14,33 +15,13 @@ vi.mock("@/hooks/use-team-names", () => ({
   useTeamNames: () => createUseTeamNamesMock(),
 }));
 
-// Supabase query builder mock (thenable, matches existing pattern)
-function createQueryBuilder(data: unknown[], singleRow: unknown = null) {
-  const result = { data, error: null, count: data.length };
-  const builder = {
-    select: vi.fn().mockReturnThis(),
-    eq: vi.fn().mockReturnThis(),
-    in: vi.fn().mockReturnThis(),
-    is: vi.fn().mockReturnThis(),
-    not: vi.fn().mockReturnThis(),
-    order: vi.fn().mockReturnThis(),
-    limit: vi.fn().mockReturnThis(),
-    single: vi.fn().mockResolvedValue({ data: singleRow, error: null }),
-    maybeSingle: vi.fn().mockResolvedValue({ data: singleRow, error: null }),
-    update: vi.fn().mockReturnThis(),
-    then: (onfulfilled: (value: unknown) => unknown) =>
-      Promise.resolve(result).then(onfulfilled),
-  };
-  return builder;
-}
-
 const mockSubscribe = vi.fn().mockReturnValue({ unsubscribe: vi.fn() });
 const mockOn = vi.fn().mockReturnValue({ subscribe: mockSubscribe });
 const mockChannel = vi.fn().mockReturnValue({ on: mockOn });
 
-let conversationBuilder: ReturnType<typeof createQueryBuilder>;
-let messageBuilder: ReturnType<typeof createQueryBuilder>;
-let userBuilder: ReturnType<typeof createQueryBuilder>;
+let conversationBuilder: ReturnType<typeof buildSupabaseQueryBuilder>;
+let messageBuilder: ReturnType<typeof buildSupabaseQueryBuilder>;
+let userBuilder: ReturnType<typeof buildSupabaseQueryBuilder>;
 
 vi.mock("@/lib/supabase/client", () => ({
   createClient: () => ({
@@ -54,7 +35,7 @@ vi.mock("@/lib/supabase/client", () => ({
       if (table === "conversations") return conversationBuilder;
       if (table === "messages") return messageBuilder;
       if (table === "users") return userBuilder;
-      return createQueryBuilder([]);
+      return buildSupabaseQueryBuilder({ data: [] });
     },
     channel: mockChannel,
     removeChannel: vi.fn(),
@@ -112,12 +93,12 @@ beforeEach(() => {
   vi.resetModules();
   mockPush.mockClear();
   mockChannel.mockClear();
-  conversationBuilder = createQueryBuilder([]);
-  messageBuilder = createQueryBuilder([]);
-  userBuilder = createQueryBuilder(
-    [{ onboarding_completed_at: null, pwa_banner_dismissed_at: null }],
-    { repo_url: "https://github.com/acme/repo" },
-  );
+  conversationBuilder = buildSupabaseQueryBuilder({ data: [] });
+  messageBuilder = buildSupabaseQueryBuilder({ data: [] });
+  userBuilder = buildSupabaseQueryBuilder({
+    data: [{ onboarding_completed_at: null, pwa_banner_dismissed_at: null }],
+    singleRow: { repo_url: "https://github.com/acme/repo" },
+  });
   fetchMock = vi.fn();
   globalThis.fetch = fetchMock;
 });
@@ -287,7 +268,7 @@ describe("Start Fresh Onboarding - KB State Derivation", () => {
     });
 
     // Conversations exist
-    conversationBuilder = createQueryBuilder([
+    conversationBuilder = buildSupabaseQueryBuilder({ data: [
       {
         id: "conv-1",
         user_id: "user-1",
@@ -302,7 +283,7 @@ describe("Start Fresh Onboarding - KB State Derivation", () => {
         title: "Brand strategy discussion",
         archived_at: null,
       },
-    ]);
+    ] });
 
     const { default: DashboardPage } = await import(
       "@/app/(dashboard)/dashboard/page"

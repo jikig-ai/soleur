@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { renderHook, act, waitFor } from "@testing-library/react";
 import type { ConversationStatus } from "@/lib/types";
+import { buildSupabaseQueryBuilder } from "./mocks/supabase-query-builder";
 
 // Mock Supabase channel
 const mockSubscribe = vi.fn().mockReturnValue({ unsubscribe: vi.fn() });
@@ -10,31 +11,26 @@ const mockChannel = vi.fn().mockReturnValue({ on: mockOn });
 // Track update calls
 const mockUpdate = vi.fn();
 
-function createQueryBuilder(
+// Wrapper over the shared helper that also records update() args — this
+// site needs observation of the UPDATE payload, not just the return value.
+const createUpdateObservingBuilder = (
   data: unknown[],
   error: { message: string } | null = null,
   singleRow: unknown = null,
-) {
-  const result = { data, error };
-  const builder = {
-    select: vi.fn().mockReturnThis(),
-    eq: vi.fn().mockReturnThis(),
-    in: vi.fn().mockReturnThis(),
-    is: vi.fn().mockReturnThis(),
-    not: vi.fn().mockReturnThis(),
-    order: vi.fn().mockReturnThis(),
-    limit: vi.fn().mockReturnThis(),
-    single: vi.fn().mockResolvedValue({ data: singleRow, error: null }),
-    maybeSingle: vi.fn().mockResolvedValue({ data: singleRow, error: null }),
-    update: vi.fn((...args: unknown[]) => {
-      mockUpdate(...args);
-      return builder;
-    }),
-    then: (onfulfilled: (value: unknown) => unknown) =>
-      Promise.resolve(result).then(onfulfilled),
-  };
+) => {
+  const builder = buildSupabaseQueryBuilder({
+    data,
+    error,
+    singleRow,
+  });
+  // Overwrite update() so this test can assert the UPDATE payload via
+  // the module-scoped `mockUpdate` spy.
+  builder.update = vi.fn((...args: unknown[]) => {
+    mockUpdate(...args);
+    return builder;
+  });
   return builder;
-}
+};
 
 const mockConversation = {
   id: "conv-1",
@@ -59,9 +55,9 @@ const mockMessages = [
   },
 ];
 
-let conversationBuilder: ReturnType<typeof createQueryBuilder>;
-let messageBuilder: ReturnType<typeof createQueryBuilder>;
-let updateBuilder: ReturnType<typeof createQueryBuilder>;
+let conversationBuilder: ReturnType<typeof createUpdateObservingBuilder>;
+let messageBuilder: ReturnType<typeof createUpdateObservingBuilder>;
+let updateBuilder: ReturnType<typeof createUpdateObservingBuilder>;
 
 vi.mock("@/lib/supabase/client", () => ({
   createClient: () => ({
@@ -84,10 +80,10 @@ vi.mock("@/lib/supabase/client", () => ({
       }
       if (table === "messages") return messageBuilder;
       if (table === "users")
-        return createQueryBuilder([], null, {
+        return createUpdateObservingBuilder([], null, {
           repo_url: "https://github.com/acme/repo",
         });
-      return createQueryBuilder([]);
+      return createUpdateObservingBuilder([]);
     },
     channel: mockChannel,
     removeChannel: vi.fn(),
@@ -97,9 +93,9 @@ vi.mock("@/lib/supabase/client", () => ({
 describe("useConversations.updateStatus", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    conversationBuilder = createQueryBuilder([mockConversation]);
-    messageBuilder = createQueryBuilder(mockMessages);
-    updateBuilder = createQueryBuilder([], null);
+    conversationBuilder = createUpdateObservingBuilder([mockConversation]);
+    messageBuilder = createUpdateObservingBuilder(mockMessages);
+    updateBuilder = createUpdateObservingBuilder([], null);
   });
 
   it("optimistically updates conversation status in local state", async () => {
@@ -138,7 +134,7 @@ describe("useConversations.updateStatus", () => {
 
   it("reverts optimistic update on Supabase error", async () => {
     // Set up update to fail
-    updateBuilder = createQueryBuilder([], { message: "RLS policy violation" });
+    updateBuilder = createUpdateObservingBuilder([], { message: "RLS policy violation" });
 
     const { useConversations } = await import("@/hooks/use-conversations");
     const { result } = renderHook(() => useConversations());

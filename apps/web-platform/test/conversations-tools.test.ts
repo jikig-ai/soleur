@@ -49,32 +49,49 @@ async function importBuilder() {
   return await import("@/server/conversations-tools");
 }
 
+type ToolStub = {
+  name: string;
+  description: string;
+  schema: Record<string, unknown>;
+  handler: (args: Record<string, unknown>) => Promise<unknown>;
+};
+
+async function getTool(name: string, userId = "u1"): Promise<ToolStub> {
+  const { buildConversationsTools } = await importBuilder();
+  const tools = buildConversationsTools({ userId }) as unknown as ToolStub[];
+  const t = tools.find((x) => x.name === name);
+  if (!t) throw new Error(`tool ${name} not found`);
+  return t;
+}
+
 describe("buildConversationsTools", () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
 
-  test("returns exactly one tool", async () => {
+  test("returns five tools (lookup + list + archive + unarchive + update_status)", async () => {
     const { buildConversationsTools } = await importBuilder();
     const tools = buildConversationsTools({ userId: "u1" });
-    expect(tools).toHaveLength(1);
+    expect(tools).toHaveLength(5);
   });
 
-  test("the single tool is named conversations_lookup", async () => {
-    const { buildConversationsTools } = await importBuilder();
-    const [t] = buildConversationsTools({ userId: "u1" }) as unknown as Array<{
-      name: string;
-    }>;
-    expect(t.name).toBe("conversations_lookup");
-  });
-
-  test("does NOT expose P3 tool names (list, archive)", async () => {
+  test("exposes conversations_lookup", async () => {
     const { buildConversationsTools } = await importBuilder();
     const names = (
       buildConversationsTools({ userId: "u1" }) as unknown as Array<{ name: string }>
     ).map((t) => t.name);
-    expect(names).not.toContain("conversations_list");
-    expect(names).not.toContain("conversation_archive");
+    expect(names).toContain("conversations_lookup");
+  });
+
+  test("exposes conversations_list, conversation_archive, conversation_unarchive, conversation_update_status (#2776)", async () => {
+    const { buildConversationsTools } = await importBuilder();
+    const names = (
+      buildConversationsTools({ userId: "u1" }) as unknown as Array<{ name: string }>
+    ).map((t) => t.name);
+    expect(names).toContain("conversations_list");
+    expect(names).toContain("conversation_archive");
+    expect(names).toContain("conversation_unarchive");
+    expect(names).toContain("conversation_update_status");
   });
 
   test("hit path: returns camelCase JSON payload (not isError)", async () => {
@@ -87,10 +104,7 @@ describe("buildConversationsTools", () => {
         message_count: 7,
       },
     });
-    const { buildConversationsTools } = await importBuilder();
-    const [t] = buildConversationsTools({ userId: "u1" }) as unknown as Array<{
-      handler: (args: { contextPath: string }) => Promise<unknown>;
-    }>;
+    const t = await getTool("conversations_lookup");
     const res = (await t.handler({
       contextPath: "knowledge-base/x.md",
     })) as {
@@ -108,10 +122,7 @@ describe("buildConversationsTools", () => {
 
   test("miss path: returns JSON `null` (not isError)", async () => {
     mockLookup.mockResolvedValue({ ok: true, row: null });
-    const { buildConversationsTools } = await importBuilder();
-    const [t] = buildConversationsTools({ userId: "u1" }) as unknown as Array<{
-      handler: (args: { contextPath: string }) => Promise<unknown>;
-    }>;
+    const t = await getTool("conversations_lookup");
     const res = (await t.handler({
       contextPath: "knowledge-base/x.md",
     })) as {
@@ -124,10 +135,7 @@ describe("buildConversationsTools", () => {
 
   test("error path: sets isError: true with code `lookup_failed`", async () => {
     mockLookup.mockResolvedValue({ ok: false, error: "lookup_failed" });
-    const { buildConversationsTools } = await importBuilder();
-    const [t] = buildConversationsTools({ userId: "u1" }) as unknown as Array<{
-      handler: (args: { contextPath: string }) => Promise<unknown>;
-    }>;
+    const t = await getTool("conversations_lookup");
     const res = (await t.handler({
       contextPath: "knowledge-base/x.md",
     })) as {
@@ -141,13 +149,8 @@ describe("buildConversationsTools", () => {
 
   test("closure captures userId — distinct builders isolate per-user queries", async () => {
     mockLookup.mockResolvedValue({ ok: true, row: null });
-    const { buildConversationsTools } = await importBuilder();
-    const [toolA] = buildConversationsTools({ userId: "user-a" }) as unknown as Array<{
-      handler: (args: { contextPath: string }) => Promise<unknown>;
-    }>;
-    const [toolB] = buildConversationsTools({ userId: "user-b" }) as unknown as Array<{
-      handler: (args: { contextPath: string }) => Promise<unknown>;
-    }>;
+    const toolA = await getTool("conversations_lookup", "user-a");
+    const toolB = await getTool("conversations_lookup", "user-b");
 
     await toolA.handler({ contextPath: "knowledge-base/x.md" });
     await toolB.handler({ contextPath: "knowledge-base/x.md" });
@@ -168,10 +171,7 @@ describe("buildConversationsTools", () => {
 
   test("Zod schema rejects missing contextPath via safeParse", async () => {
     const zodMod = await import("zod/v4");
-    const { buildConversationsTools } = await importBuilder();
-    const [t] = buildConversationsTools({ userId: "u1" }) as unknown as Array<{
-      schema: Record<string, unknown>;
-    }>;
+    const t = await getTool("conversations_lookup");
     // Run the actual Zod parse against a missing-field input. A schema that
     // accepted `z.any()` by mistake would pass here; `z.string()` does not.
     const schema = zodMod.z.object(
@@ -182,10 +182,7 @@ describe("buildConversationsTools", () => {
   });
 
   test("invalid contextPath: returns isError with code invalid_context_path", async () => {
-    const { buildConversationsTools } = await importBuilder();
-    const [t] = buildConversationsTools({ userId: "u1" }) as unknown as Array<{
-      handler: (args: { contextPath: string }) => Promise<unknown>;
-    }>;
+    const t = await getTool("conversations_lookup");
     // Path without the "knowledge-base/" prefix is rejected by validateContextPath.
     const res = (await t.handler({ contextPath: "not-a-kb-path.md" })) as {
       content: Array<{ text: string }>;
