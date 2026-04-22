@@ -4,6 +4,7 @@ import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { validateOrigin, rejectCsrf } from "@/lib/auth/validate-origin";
 import { provisionWorkspaceWithRepo } from "@/server/workspace";
 import { scanProjectHealth } from "@/server/project-scanner";
+import { normalizeRepoUrl } from "@/lib/repo-url";
 import logger from "@/server/logger";
 
 /**
@@ -35,8 +36,11 @@ export async function POST(request: Request) {
     );
   }
 
-  // Validate URL format (must be HTTPS GitHub URL with valid owner/repo)
-  const repoUrl = body.repoUrl.trim().replace(/\/+$/, "");
+  // Validate URL format (must be HTTPS GitHub URL with valid owner/repo).
+  // `normalizeRepoUrl` runs BEFORE the format regex so the validator sees
+  // the canonical form — any subsequent DB write scopes match the same
+  // form every read-site normalization produces.
+  const repoUrl = normalizeRepoUrl(body.repoUrl);
   if (!/^https:\/\/github\.com\/[a-zA-Z0-9._-]+\/[a-zA-Z0-9._-]+$/.test(repoUrl)) {
     return NextResponse.json(
       { error: "Invalid GitHub repository URL" },

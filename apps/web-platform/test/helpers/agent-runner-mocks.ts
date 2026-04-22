@@ -58,10 +58,14 @@ export function createSupabaseMockImpl(
       return createApiKeysMock(opts.apiKeyRows ?? [DEFAULT_API_KEY_ROW]);
     }
     if (table === "users") {
+      // Supports both call shapes agent-runner now uses:
+      //   - .select("workspace_path, ...").eq("id", userId).single()  (inline read)
+      //   - .select("repo_url").eq("id", userId).maybeSingle()        (getCurrentRepoUrl)
       return {
         select: () => ({
           eq: () => ({
             single: () => ({ data: userData, error: null }),
+            maybeSingle: () => ({ data: userData, error: null }),
           }),
         }),
       };

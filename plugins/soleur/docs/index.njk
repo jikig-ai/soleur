@@ -38,20 +38,14 @@ permalink: index.html
         <div class="landing-stat-value">{{ stats.departments }}</div>
         <div class="landing-stat-label">Departments</div>
       </div>
-      <div class="landing-stat">
-        <div class="landing-stat-value">{{ stats.agents }}</div>
+      <a class="landing-stat" href="/agents/">
+        <div class="landing-stat-value" data-last-verified="{{ site.statsLastVerified }}">{{ stats.agents }}</div>
         <div class="landing-stat-label">AI Agents</div>
-      </div>
-      <div class="landing-stat">
-        <div class="landing-stat-value">{{ stats.skills }}</div>
+      </a>
+      <a class="landing-stat" href="/skills/">
+        <div class="landing-stat-value" data-last-verified="{{ site.statsLastVerified }}">{{ stats.skills }}</div>
         <div class="landing-stat-label">Skills</div>
-      </div>
-      <div class="landing-stat">
-        <div class="landing-stat-value">{% if githubStats.stars %}{{ githubStats.stars }}{% else %}&#x2605;{% endif %}</div>
-        <div class="landing-stat-label">
-          <a href="{{ site.github }}" rel="noopener noreferrer" target="_blank">GitHub Stars</a>
-        </div>
-      </div>
+      </a>
     </section>
 
     <!-- Problem Section -->
