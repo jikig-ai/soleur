@@ -1,4 +1,5 @@
 import { createServiceClient } from "@/lib/supabase/service";
+import { normalizeRepoUrl } from "@/lib/repo-url";
 import { reportSilentFallback } from "@/server/observability";
 
 /**
@@ -36,6 +37,12 @@ export async function getCurrentRepoUrl(userId: string): Promise<string | null> 
     return null;
   }
 
-  const repoUrl = (data?.repo_url as string | null | undefined) ?? null;
-  return repoUrl && repoUrl.length > 0 ? repoUrl : null;
+  // Normalize on return — the choke point for every server consumer
+  // (MCP tools, WS handler, agent-runner, lookup helper). Post-backfill
+  // this is a no-op on at-rest data; pre-backfill it's the safety net
+  // for any row the migration couldn't normalize (or a future direct-DB
+  // insert that bypasses `/api/repo/setup`).
+  const raw = (data?.repo_url as string | null | undefined) ?? null;
+  const normalized = normalizeRepoUrl(raw);
+  return normalized.length > 0 ? normalized : null;
 }

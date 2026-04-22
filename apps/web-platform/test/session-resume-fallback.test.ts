@@ -150,18 +150,20 @@ function setupSupabaseMock() {
       return createApiKeysMock();
     }
     if (table === "users") {
+      // Supports both call shapes agent-runner now uses:
+      //   - .select(...).eq(...).single()        (inline workspace/repo_status read)
+      //   - .select("repo_url").eq(...).maybeSingle()  (getCurrentRepoUrl)
+      const data = {
+        workspace_path: "/tmp/test-workspace",
+        repo_status: "ready",
+        github_installation_id: null,
+        repo_url: null,
+      };
       return {
         select: () => ({
           eq: () => ({
-            single: () => ({
-              data: {
-                workspace_path: "/tmp/test-workspace",
-                repo_status: "ready",
-                github_installation_id: null,
-                repo_url: null,
-              },
-              error: null,
-            }),
+            single: () => ({ data, error: null }),
+            maybeSingle: () => ({ data, error: null }),
           }),
         }),
       };

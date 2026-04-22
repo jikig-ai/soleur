@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback, useRef } from "react";
 import { createClient } from "@/lib/supabase/client";
+import { normalizeRepoUrl } from "@/lib/repo-url";
 import type { Conversation, Message, ConversationStatus } from "@/lib/types";
 import { DOMAIN_LEADERS, type DomainLeaderId } from "@/server/domain-leaders";
 
@@ -120,8 +121,13 @@ export function useConversations(
         .select("repo_url")
         .eq("id", currentUserId)
         .maybeSingle();
-      const currentRepoUrl =
+      // Normalize on read — defense-in-depth for pre-backfill rows and
+      // any future direct-DB insert that bypasses `/api/repo/setup`.
+      // Post-backfill this is a no-op on at-rest data.
+      const rawRepoUrl =
         (userRow?.repo_url as string | null | undefined) ?? null;
+      const normalized = normalizeRepoUrl(rawRepoUrl);
+      const currentRepoUrl = normalized.length > 0 ? normalized : null;
       setRepoUrl(currentRepoUrl);
 
       if (!currentRepoUrl) {
@@ -130,7 +136,9 @@ export function useConversations(
         return;
       }
 
-      // Query 1: Fetch conversations (explicit user_id + repo_url filter)
+      // Query 1: Fetch conversations (explicit user_id + repo_url filter).
+      // `currentRepoUrl` is already normalized via `normalizeRepoUrl` above —
+      // do NOT double-normalize here (would be a no-op but noisy).
       let query = supabase
         .from("conversations")
         .select("*")
@@ -289,7 +297,12 @@ export function useConversations(
         },
         (payload) => {
           const updated = payload.new as { repo_url?: string | null };
-          const nextRepoUrl = updated?.repo_url ?? null;
+          // Normalize the Realtime payload before comparison — migration
+          // backfill will eventually make this a no-op on at-rest data,
+          // but an in-flight write from a pre-migration path could still
+          // arrive denormalized and cause a false-positive refetch.
+          const normalized = normalizeRepoUrl(updated?.repo_url ?? null);
+          const nextRepoUrl = normalized.length > 0 ? normalized : null;
           if (nextRepoUrl !== repoUrlRef.current) {
             fetchConversations();
           }
