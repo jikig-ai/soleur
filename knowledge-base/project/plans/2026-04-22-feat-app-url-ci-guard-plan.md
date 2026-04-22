@@ -115,13 +115,13 @@ Add one job (between `migrate` and `deploy`), extend `deploy.needs` + `deploy.if
 
 ### Pre-merge (PR)
 
-- [ ] `apps/web-platform/scripts/verify-required-secrets.sh` exists, is executable (`chmod +x`), and shellcheck-clean when run locally (no CI enforcement — just clean before shipping).
-- [ ] Happy-path smoke: `cd apps/web-platform && doppler run -c dev -- bash scripts/verify-required-secrets.sh` exits 0 with six `ok <KEY>` lines (dev config has all 6; confirmed by codebase audit).
-- [ ] Negative smoke: `env -i PATH="$PATH" bash apps/web-platform/scripts/verify-required-secrets.sh` exits 1 and emits exactly 6 `::error::Required secret missing from Doppler prd: NEXT_PUBLIC_*` lines plus the `::error::6 required...` summary line.
-- [ ] `.github/workflows/web-platform-release.yml` diff adds exactly one new job (`verify-doppler-secrets`) and updates `deploy.needs` + `deploy.if` only. No edits to `reusable-release.yml`.
-- [ ] Regression assertion: `rg 'NEXT_PUBLIC_SITE_URL' apps/web-platform/{app,server,lib,components,hooks,middleware.ts,sentry.*.config.ts,next.config.*}` returns zero (PR-A retired this var; guard intentionally omits it).
-- [ ] Exhaustiveness re-check (same grep used in Research Reconciliation) returns exactly `{AGENT_COUNT, APP_URL, GITHUB_APP_SLUG, SENTRY_DSN, SUPABASE_ANON_KEY, SUPABASE_URL, VAPID_PUBLIC_KEY}`. If any new key appears, update `REQUIRED` array (or document exclusion rationale) before merge.
-- [ ] PR body includes `Closes #2769`.
+- [x] `apps/web-platform/scripts/verify-required-secrets.sh` exists, is executable (`chmod +x`), and shellcheck-clean when run locally (no CI enforcement — just clean before shipping).
+- [x] Happy-path smoke: `cd apps/web-platform && doppler run -p soleur -c prd -- bash scripts/verify-required-secrets.sh` exits 0 with six `ok <KEY>` lines. Read-only invocation — the guard only reads env values. (Verified during work-phase: `dev` config lacks `NEXT_PUBLIC_SENTRY_DSN`, `NEXT_PUBLIC_VAPID_PUBLIC_KEY`, `NEXT_PUBLIC_GITHUB_APP_SLUG`, so `prd` is the only config that round-trips the full list. Unrelated to this PR; tracking via the guard itself once it starts firing.)
+- [x] Negative smoke: `env -i PATH="$PATH" bash apps/web-platform/scripts/verify-required-secrets.sh` exits 1 and emits exactly 6 `::error::Required secret missing from Doppler prd: NEXT_PUBLIC_*` lines plus the `::error::6 required...` summary line.
+- [x] `.github/workflows/web-platform-release.yml` diff adds exactly one new job (`verify-doppler-secrets`) and updates `deploy.needs` + `deploy.if` only. No edits to `reusable-release.yml`.
+- [x] Regression assertion: `rg 'NEXT_PUBLIC_SITE_URL' apps/web-platform/{app,server,lib,components,hooks,middleware.ts,sentry.*.config.ts,next.config.*}` returns zero (PR-A retired this var; guard intentionally omits it).
+- [x] Exhaustiveness re-check (same grep used in Research Reconciliation) returns exactly `{AGENT_COUNT, APP_URL, GITHUB_APP_SLUG, SENTRY_DSN, SUPABASE_ANON_KEY, SUPABASE_URL, VAPID_PUBLIC_KEY}`. If any new key appears, update `REQUIRED` array (or document exclusion rationale) before merge.
+- [ ] PR body includes `Closes #2769` (applied at `/ship` time).
 
 ### Post-merge (automatic)
 
