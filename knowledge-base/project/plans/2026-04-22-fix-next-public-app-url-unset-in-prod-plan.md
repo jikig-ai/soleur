@@ -123,7 +123,7 @@ No overlap.
 
 ## Files to Edit
 
-1. **`apps/web-platform/server/agent-runner.ts`** — no code change required. The existing `reportSilentFallback` + fallback to literal is correct behavior for the "secret accidentally unset" case. **However**, consider tightening: after this fix, if `NEXT_PUBLIC_APP_URL` ever fires the fallback again, it means a real config regression. Add a short comment anchoring the symbol (per `cq-code-comments-symbol-anchors-not-line-numbers`): "If this warn fires in prod, check Doppler `soleur/prd` for `NEXT_PUBLIC_APP_URL`." This is optional cosmetic — main fix is config, not code.
+1. **`apps/web-platform/server/agent-runner.ts`** — add a symbol-anchored comment above the existing `reportSilentFallback` guard (per `cq-code-comments-symbol-anchors-not-line-numbers`) pointing future operators at Doppler `soleur/prd` as the expected source, citing `resolve_env_file` and the consumer list (`buildKbShareTools`, `checkout/route.ts`, `billing/portal/route.ts`, `validate-origin.ts`, `notifications.ts`). Main fix is config (Doppler secret); the comment pulls its weight on next regression by eliminating a grep round-trip.
 
 ## Files to Create
 
@@ -171,9 +171,9 @@ Prefer option 2 if the Sentry error rate is flooding the dashboard; option 1 if 
 
 ### Pre-merge (plan/worktree)
 
-- [ ] Code confirms the error message originates at `apps/web-platform/server/agent-runner.ts:675-683` (grep-verified).
-- [ ] Doppler verification commands run in work phase show the secret is present in `dev` and `prd` with expected values after the mutation.
-- [ ] Optional code comment added with symbol-stable anchor per `cq-code-comments-symbol-anchors-not-line-numbers`.
+- [x] Code confirms the error message originates at `apps/web-platform/server/agent-runner.ts:675-683` (grep-verified).
+- [x] Doppler verification commands run in work phase show the secret is present in `dev` and `prd` with expected values after the mutation.
+- [x] Optional code comment added with symbol-stable anchor per `cq-code-comments-symbol-anchors-not-line-numbers`.
 
 ### Post-merge (operator)
 
@@ -279,7 +279,7 @@ Skip domain leader sweep.
 
 **Phase 5 — File follow-up issues (wg-when-deferring-a-capability-create-a):**
 
-13. Create three GitHub issues per Deferred Items above.
+14. Create three GitHub issues per Deferred Items above.
 
 ## Rollback
 
