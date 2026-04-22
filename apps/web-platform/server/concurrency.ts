@@ -108,7 +108,46 @@ export async function acquireSlot(
       return { status: "error", activeCount: 0, effectiveCap };
     }
   }
+  // All 3 retries exhausted with either transient errors or the unreachable
+  // !error && !data branch. Mirror to Sentry so an RPC returning
+  // {data: null, error: null} (possible on PostgREST RPC timeouts) doesn't
+  // silently fail-close without operator visibility.
+  reportSilentFallback(
+    new Error("acquireSlot exhausted 3 retries without data or error"),
+    {
+      feature: "concurrency",
+      op: "acquireSlot",
+      extra: { userId, conversationId, effectiveCap },
+    },
+  );
   return { status: "error", activeCount: 0, effectiveCap };
+}
+
+/**
+ * Refresh last_heartbeat_at for an existing slot via touch_conversation_slot
+ * RPC. Single cheap UPDATE — no cap check, no sweep, no lock. Returns
+ * whether the slot still exists (false = swept by cron or released; caller
+ * should re-acquire on next start_session).
+ */
+export async function touchSlot(
+  userId: string,
+  conversationId: string,
+): Promise<boolean> {
+  const { data, error } = await supabase.rpc("touch_conversation_slot", {
+    p_user_id: userId,
+    p_conversation_id: conversationId,
+  });
+  if (error) {
+    reportSilentFallback(error, {
+      feature: "concurrency",
+      op: "touchSlot",
+      extra: { userId, conversationId },
+    });
+    return false;
+  }
+  // RPC returns integer row count (0 or 1).
+  const updated = typeof data === "number" ? data : Number(data ?? 0);
+  return updated > 0;
 }
 
 /**

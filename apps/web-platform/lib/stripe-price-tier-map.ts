@@ -30,7 +30,12 @@ let unknownWarned = false;
 function loadMap(): PriceTierMap {
   for (const key of REQUIRED_ENV_KEYS) {
     if (!process.env[key]) {
-      throw new Error(`STRIPE_PRICE_ID_* missing: ${key}`);
+      throw new Error(
+        `Missing required Stripe env var: ${key}. Set via ` +
+        `\`doppler secrets set ${key}=price_... -p soleur -c <dev|prd>\` ` +
+        `then re-run under \`doppler run -p soleur -c <env> -- ...\`. See ` +
+        `apps/web-platform/.env.example and scripts/verify-stripe-prices.ts.`
+      );
     }
   }
   const soloId = process.env.STRIPE_PRICE_ID_SOLO!;

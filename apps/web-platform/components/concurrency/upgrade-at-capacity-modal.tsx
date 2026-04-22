@@ -1,9 +1,11 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
+import * as Sentry from "@sentry/nextjs";
 import type { PlanTier, ConcurrencyCapHitPreamble } from "@/lib/types";
 import { OPEN_UPGRADE_MODAL_EVENT } from "@/lib/ws-client";
+import { PLAN_LIMITS } from "@/lib/plan-limits";
 import {
   LOADING_COPY,
   ERROR_COPY,
@@ -44,6 +46,9 @@ interface ModalContext {
 export function UpgradeAtCapacityModal() {
   const [state, setState] = useState<ModalState>("idle");
   const [ctx, setCtx] = useState<ModalContext | null>(null);
+  /** Abort in-flight /api/checkout on unmount or modal close so an orphaned
+   *  fetch doesn't setState on a stale component. */
+  const abortRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
     function onOpen(e: Event) {
@@ -51,41 +56,60 @@ export function UpgradeAtCapacityModal() {
       if (!detail) return;
       const tier: PlanTier = detail.currentTier ?? "free";
       const next: PlanTier | null = detail.nextTier ?? null;
-      // Enterprise-cap: platform hard cap hit regardless of next-tier value.
-      if (tier === "enterprise") {
-        setCtx({
-          currentTier: tier,
-          nextTier: next,
-          activeCount: detail.activeCount,
-          effectiveCap: detail.effectiveCap,
-        });
-        setState("enterprise-cap");
-        return;
-      }
-      setCtx({
+      // Admin-override detection: if the effectiveCap was raised above the
+      // tier default (via concurrency_override), route to the override-aware
+      // copy instead of the tier-default upgrade ladder. The preamble does
+      // not carry the override bit; compare effectiveCap vs tier-default.
+      const tierDefault = PLAN_LIMITS[tier];
+      const isAdminOverride =
+        detail.effectiveCap > tierDefault && tier !== "enterprise";
+      const baseCtx: ModalContext = {
         currentTier: tier,
         nextTier: next,
         activeCount: detail.activeCount,
         effectiveCap: detail.effectiveCap,
-      });
-      setState("default");
+        adminOverride: isAdminOverride,
+      };
+      setCtx(baseCtx);
+      if (tier === "enterprise") {
+        // Enterprise-cap: platform hard cap hit regardless of next-tier value.
+        setState("enterprise-cap");
+      } else if (isAdminOverride) {
+        setState("admin-override");
+      } else {
+        setState("default");
+      }
     }
     window.addEventListener(OPEN_UPGRADE_MODAL_EVENT, onOpen);
-    return () => window.removeEventListener(OPEN_UPGRADE_MODAL_EVENT, onOpen);
+    return () => {
+      window.removeEventListener(OPEN_UPGRADE_MODAL_EVENT, onOpen);
+      abortRef.current?.abort();
+    };
   }, []);
 
-  const close = useCallback(() => setState("idle"), []);
+  const close = useCallback(() => {
+    abortRef.current?.abort();
+    setState("idle");
+  }, []);
 
   const startCheckout = useCallback(async (targetTier: PlanTier | null) => {
     if (!targetTier) return;
+    abortRef.current?.abort();
+    const ctrl = new AbortController();
+    abortRef.current = ctrl;
     setState("loading");
     try {
       const res = await fetch("/api/checkout", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ targetTier }),
+        signal: ctrl.signal,
       });
       if (!res.ok) {
+        Sentry.captureMessage(
+          `/api/checkout returned ${res.status} ${res.statusText}`,
+          { level: "warning", tags: { feature: "concurrency", op: "upgrade-checkout" } },
+        );
         setState("error");
         return;
       }
@@ -96,10 +120,25 @@ export function UpgradeAtCapacityModal() {
       // Embedded-mode wiring (clientSecret → EmbeddedCheckoutProvider) is a
       // follow-up; the server sets ui_mode='embedded' so when the React
       // provider is installed this branch mounts it inline.
-    } catch {
-      setState("error");
+    } catch (err) {
+      // Swallowing here used to be silent; mirror to Sentry so transient
+      // network failures on the upgrade path are observable. Aborts from
+      // unmount / close are expected and intentional — skip those.
+      if ((err as { name?: string } | null)?.name !== "AbortError") {
+        Sentry.captureException(err, {
+          tags: { feature: "concurrency", op: "upgrade-checkout" },
+        });
+        setState("error");
+      }
     }
   }, []);
+
+  /** Memoize the target tier we route the error-retry button to so it does
+   *  not recompute on every render of the error branch. */
+  const errorRetryTarget = useMemo<PlanTier | null>(
+    () => (ctx ? defaultStateCopyFor(ctx.currentTier, ctx.effectiveCap).targetTier : null),
+    [ctx],
+  );
 
   if (state === "idle" || !ctx) return null;
 
@@ -173,7 +212,7 @@ export function UpgradeAtCapacityModal() {
             <div className="mt-6 flex items-center justify-between">
               <button
                 type="button"
-                onClick={() => ctx && startCheckout(defaultStateCopyFor(ctx.currentTier, ctx.effectiveCap).targetTier)}
+                onClick={() => startCheckout(errorRetryTarget)}
                 className="rounded-lg bg-amber-500 px-4 py-2 text-sm font-medium text-black hover:bg-amber-400"
               >
                 {ERROR_COPY.primaryCtaLabel}

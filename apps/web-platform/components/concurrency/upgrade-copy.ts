@@ -55,6 +55,13 @@ export function defaultStateCopyFor(tier: PlanTier, cap: number): DefaultStateCo
         targetTier: null,
         secondaryLink: { label: "Dismiss", href: "#dismiss" },
       };
+    default: {
+      // Exhaustive check: if PlanTier widens with a new variant, the
+      // assignment to `never` fails at build time and forces this switch to
+      // cover it explicitly — preventing silent `undefined` returns.
+      const _exhaustive: never = tier;
+      return _exhaustive;
+    }
   }
 }
 

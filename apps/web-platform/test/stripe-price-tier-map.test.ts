@@ -50,8 +50,10 @@ describe("stripe-price-tier-map", () => {
     process.env.STRIPE_PRICE_ID_ENTERPRISE = "price_enterprise";
     // STRIPE_PRICE_ID_STARTUP intentionally missing
     const { getPriceTier } = await importFresh();
+    // Error message names the missing key and points to the Doppler fix —
+    // see `loadMap` in stripe-price-tier-map.ts.
     expect(() => getPriceTier("price_solo")).toThrow(
-      /STRIPE_PRICE_ID_\* missing: STRIPE_PRICE_ID_STARTUP/,
+      /Missing required Stripe env var: STRIPE_PRICE_ID_STARTUP.*doppler secrets set STRIPE_PRICE_ID_STARTUP/s,
     );
   });
 

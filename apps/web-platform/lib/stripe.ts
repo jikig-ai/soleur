@@ -24,6 +24,14 @@ interface TierMemoEntry {
 }
 
 const TIER_MEMO_TTL_MS = 60_000;
+/** Soft cap on tierMemo entries. Each entry is ~100 bytes; 5000 = ~500 KiB.
+ *  When the Map exceeds this size on insert, the oldest entry (by insertion
+ *  order — Map preserves this) is evicted. Prevents unbounded growth for
+ *  long-running processes where `invalidateTierMemo` only fires for users
+ *  with active subscription webhooks; users who hit the cap, never upgrade,
+ *  and never get a .subscription.* event would otherwise accumulate
+ *  indefinitely. */
+const TIER_MEMO_MAX_ENTRIES = 5000;
 const tierMemo = new Map<string, TierMemoEntry>();
 
 /**
@@ -51,6 +59,13 @@ export async function retrieveSubscriptionTier(
     status: sub.status,
     at: Date.now(),
   };
+  // LRU-ish eviction: on insert, if we've hit the soft cap, drop the oldest
+  // entry (Map iterates in insertion order). Delete first so a re-insert
+  // for an existing userId doesn't incorrectly evict another user.
+  if (!tierMemo.has(userId) && tierMemo.size >= TIER_MEMO_MAX_ENTRIES) {
+    const oldest = tierMemo.keys().next().value;
+    if (oldest !== undefined) tierMemo.delete(oldest);
+  }
   tierMemo.set(userId, entry);
   return { tier: entry.tier, status: entry.status };
 }

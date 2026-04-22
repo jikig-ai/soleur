@@ -36,6 +36,7 @@ import { retrieveSubscriptionTier } from "@/lib/stripe";
 import {
   acquireSlot,
   releaseSlot,
+  touchSlot,
   emitConcurrencyCapHit,
 } from "./concurrency";
 
@@ -537,14 +538,27 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
 
         if (acquire.status === "cap_hit" && session.stripeSubscriptionId) {
           // Webhook-lag fallback: ask Stripe directly. If the live tier
-          // grants a higher cap than the cached plan_tier, retry acquire
-          // once with the upgraded cap. Failure here is silent — we fall
-          // through to the cap_hit branch below.
+          // grants a higher cap than the cached plan_tier, re-sync BOTH
+          // planTier and concurrencyOverride from the DB (the override may
+          // have been adjusted out-of-band) and retry acquire once with the
+          // fresh cap. Previously only planTier was mutated; a stale
+          // concurrencyOverride could over- or under-grant capacity relative
+          // to the live tier. Failure here is silent — we fall through to
+          // the cap_hit branch below.
           try {
             const live = await retrieveSubscriptionTier(userId, session.stripeSubscriptionId);
-            const liveCap = effectiveCap(live.tier, session.concurrencyOverride);
+            // Re-read override from DB so session state matches what the
+            // cap calculation assumes.
+            const { data: userRow } = await supabase
+              .from("users")
+              .select("concurrency_override")
+              .eq("id", userId)
+              .maybeSingle();
+            const freshOverride = (userRow as { concurrency_override?: number | null } | null)?.concurrency_override ?? null;
+            const liveCap = effectiveCap(live.tier, freshOverride);
             if (liveCap > cap) {
               session.planTier = live.tier;
+              session.concurrencyOverride = freshOverride;
               acquire = await acquireSlot(userId, pendingId, liveCap);
             }
           } catch (liveErr) {
@@ -1025,16 +1039,20 @@ export function setupWebSocket(server: HTTPServer) {
         // Start heartbeat after auth. In addition to the WebSocket ping, touch
         // user_concurrency_slots.last_heartbeat_at for the active/pending
         // conversation so the pg_cron sweep (120s threshold) does not reclaim
-        // a still-live session. Piggy-backed on acquireSlot's upsert semantics
-        // (ON CONFLICT DO UPDATE) so we don't need a separate touch RPC.
+        // a still-live session. Uses the dedicated `touch_conversation_slot`
+        // RPC — a single UPDATE, no cap check, no sweep, no lock — so
+        // steady-state heartbeat load is O(N) cheap UPDATEs per 30s rather
+        // than re-running the full acquire path. Matters at scale: at 1k
+        // live sessions, the full-acquire heartbeat cost ~33 writes/s +
+        // 33 per-user advisory locks/s; touchSlot cuts that to 33 cheap
+        // UPDATEs with no lock contention.
         pingInterval = setInterval(() => {
           if (ws.readyState !== WebSocket.OPEN) return;
           ws.ping();
           const current = sessions.get(userId!);
           const convId = current?.conversationId ?? current?.pending?.id;
           if (current && convId) {
-            const cap = effectiveCap(current.planTier, current.concurrencyOverride);
-            void acquireSlot(userId!, convId, cap);
+            void touchSlot(userId!, convId);
           }
         }, 30_000);
 
