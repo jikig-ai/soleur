@@ -240,6 +240,7 @@ Think like a product manager - what would make this issue clear and actionable? 
 - [ ] Gather supporting materials (error logs, screenshots, design mockups)
 - [ ] Prepare code examples or reproduction steps if applicable, name the mock filenames in the lists
 - [ ] When planning a directory rename, enumerate ALL files in the target directory as potential self-reference holders -- directory trees and conceptual prose derived from the directory name don't match path-pattern greps
+- [ ] When the plan prescribes scoping a helper function by a new column/predicate, `rg` the codebase for every other inline query on the same table that BYPASSES the helper (id-based lookups, pre-helper historical queries, WS-handler inline SELECTs) and list each as a `Files to Edit` entry -- sibling queries are the most common silent backdoor after a tenant-scope change. See learning `2026-04-22-scope-by-new-column-audit-every-query-not-just-the-helper.md`.
 
 ### 2.5. Domain Review Gate
 
