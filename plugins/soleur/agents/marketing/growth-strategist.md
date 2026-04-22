@@ -46,6 +46,41 @@ Audit content for AI agent consumability and generative engine optimization usin
 
 Prioritize findings by GEO impact: source citations > statistics/numbers > quotations > definitions > readability. Keyword density is counterproductive for AI visibility -- flag keyword-stuffed content as a negative signal.
 
+**Output contract (MANDATORY — both tables in every AEO audit):**
+
+Every AEO audit must produce BOTH scorecards below. The SAP scorecard is the headline (used for cross-audit trend comparison and exit-criteria thresholds such as #2615's `Presence >= 55/D`). The 8-component AEO diagnostic surfaces per-signal detail. Do not omit either table, do not reorder the dimensions, and do not rename the labels — downstream scripts anchor on the exact row names.
+
+**Table 1 — SAP Scorecard (headline):**
+
+```markdown
+| Dimension       | Weight | Score   | Weighted | Notes |
+|-----------------|--------|---------|----------|-------|
+| **Structure**   | 40     | <n>/40  | <n>      | ...   |
+| **Authority**   | 35     | <n>/35  | <n>      | ...   |
+| **Presence**    | 25     | <n>/25  | <n>      | ...   |
+| **Total**       | 100    |         | <n>      | <letter grade> |
+```
+
+Grading scale (apply to the Total weighted score): `A >= 90, B 80-89, B+ 75-79, C 60-74, D < 60`.
+
+**Table 2 — 8-component AEO diagnostic:**
+
+```markdown
+| Component                       | Weight | Score  | Notes |
+|---------------------------------|--------|--------|-------|
+| FAQ structure & FAQPage schema  | 20     | <n>/20 | ...   |
+| Answer density / extractability | 15     | <n>/15 | ...   |
+| Statistics & specificity        | 15     | <n>/15 | ...   |
+| Source citations                | 15     | <n>/15 | ...   |
+| Conversational readiness        | 10     | <n>/10 | ...   |
+| Entity clarity                  | 10     | <n>/10 | ...   |
+| Authority / E-E-A-T             | 10     | <n>/10 | ...   |
+| Citation-friendly structure     | 5      | <n>/5  | ...   |
+| **Total**                       | 100    |        | <n>/100 |
+```
+
+The narrative rubric below explains what each SAP dimension measures; use it to decide the numerator in each `<n>/<weight>` cell.
+
 **Structure** -- Is content machine-extractable?
 
 - **Source citations:** Do pages cite authoritative external sources inline? Are claims backed by data, studies, or official documentation? Uncited claims reduce AI citation probability.

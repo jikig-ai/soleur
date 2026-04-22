@@ -102,8 +102,31 @@ jobs:
             Task growth-strategist: "Audit the content at https://soleur.ai for GEO/AEO
             optimization: source citations, statistics, conversational readiness, FAQ
             structure, citation quality. If knowledge-base/overview/brand-guide.md exists,
-            read it. Produce a structured scoring table and detailed analysis. Use WebFetch
-            to retrieve pages."
+            read it. Use WebFetch to retrieve pages.
+
+            Produce BOTH scorecards below. Both tables are mandatory; do not omit either,
+            do not reorder dimensions, and do not rename row labels (downstream scripts
+            anchor on exact row names).
+
+            Table 1 - SAP Scorecard (headline, required):
+            Column headers: | Dimension | Weight | Score | Weighted | Notes |
+            Rows (in order): **Structure** (weight 40), **Authority** (weight 35),
+            **Presence** (weight 25), **Total** (weight 100).
+            Score cells use the form <n>/<weight> (e.g. 20/25). Weighted is the
+            absolute contribution to the overall total out of 100. Final row reports
+            the letter grade using the scale: A >= 90, B 80-89, B+ 75-79, C 60-74,
+            D < 60. Include the grading scale inline so readers can audit the grade.
+
+            Table 2 - 8-component AEO diagnostic (required):
+            Column headers: | Component | Weight | Score | Notes |
+            Rows (in order): FAQ structure & FAQPage schema (20), Answer density /
+            extractability (15), Statistics & specificity (15), Source citations (15),
+            Conversational readiness (10), Entity clarity (10), Authority / E-E-A-T (10),
+            Citation-friendly structure (5), **Total** (100).
+            Score cells use the form <n>/<weight>. Final row reports the total out of 100.
+
+            Follow the GEO/AEO Content Audit rubric in the growth-strategist agent
+            definition for what each dimension measures."
 
             Save the report to:
             knowledge-base/marketing/audits/soleur-ai/$(date +%Y-%m-%d)-aeo-audit.md

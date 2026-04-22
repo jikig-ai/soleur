@@ -66,9 +66,9 @@ done
 
 ### Pre-merge (PR)
 
-- [ ] `growth-strategist.md` GEO/AEO Content Audit section contains BOTH template skeletons (SAP with weights 40/35/25 + grading scale; 8-component AEO diagnostic with weights summing to 100). Narrative sub-signal guidance under each SAP dimension is preserved below the table skeleton.
-- [ ] `scheduled-growth-audit.yml` Step 2 prompt inlines the identical templates, indented inside the `prompt: |` block (no column-0 lines, no heredocs — `hr-in-github-actions-run-blocks-never-use`).
-- [ ] Re-audit runbook Phase 2 bash parser: (a) grep matches both `"Presence & Third-Party Mentions"` and `"**Presence**"` labels and requires `NF >= 5` to exclude legend rows; (b) score parser trims whitespace and accepts both `40` (bare integer) and `20/25` (fraction); (c) error messages include `$PRESENCE_LINE` when parsing fails. A worked-example comment block documents the threshold translation for both rubric eras.
+- [x] `growth-strategist.md` GEO/AEO Content Audit section contains BOTH template skeletons (SAP with weights 40/35/25 + grading scale; 8-component AEO diagnostic with weights summing to 100). Narrative sub-signal guidance under each SAP dimension is preserved below the table skeleton.
+- [x] `scheduled-growth-audit.yml` Step 2 prompt inlines the identical templates, indented inside the `prompt: |` block (no column-0 lines, no heredocs — `hr-in-github-actions-run-blocks-never-use`).
+- [x] Re-audit runbook Phase 2 bash parser: (a) grep matches both `"Presence & Third-Party Mentions"` and `"**Presence**"` labels and requires `NF >= 5` to exclude legend rows; (b) score parser trims whitespace and accepts both `40` (bare integer) and `20/25` (fraction); (c) error messages include `$PRESENCE_LINE` when parsing fails. A worked-example comment block documents the threshold translation for both rubric eras.
 - [ ] PR body includes `Closes #2679` and `Closes #2615` on their own lines (`wg-use-closes-n-in-pr-body-not-title-to`), with a short verification paragraph for #2615 that backtick-wraps all `#NNNN` references to avoid `cq-prose-issue-ref-line-start`.
 
 ### Post-merge (operator)
