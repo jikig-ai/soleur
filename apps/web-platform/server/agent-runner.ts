@@ -37,6 +37,7 @@ import { githubApiGet } from "./github-api";
 import { MAX_BINARY_SIZE } from "./kb-limits";
 import { buildKbShareTools } from "./kb-share-tools";
 import { buildConversationsTools } from "./conversations-tools";
+import { getCurrentRepoUrl } from "./current-repo-url";
 import { buildGithubTools } from "./github-tools";
 import { buildPlausibleTools } from "./plausible-tools";
 import { createCanUseTool } from "./permission-callback";
@@ -413,10 +414,15 @@ export async function startAgentSession(
     const leader = ROUTABLE_DOMAIN_LEADERS.find((l) => l.id === effectiveLeaderId);
     if (!leader) throw new Error(`Unknown leader: ${effectiveLeaderId}`);
 
-    // Get user workspace path, repo status, and GitHub App connection
+    // Get user workspace path, repo status, and GitHub App connection.
+    // `repo_url` is intentionally NOT selected here — the canonical read
+    // is `getCurrentRepoUrl(userId)` below, which normalizes the value
+    // via `normalizeRepoUrl` and mirrors DB errors to Sentry. Sibling
+    // inline SELECTs were a class of scoping-backdoor bug (see plan
+    // 2026-04-22-refactor-drain-web-platform-code-review-2775-2776-2777-plan.md).
     const { data: user } = await supabase()
       .from("users")
-      .select("workspace_path, repo_status, github_installation_id, repo_url")
+      .select("workspace_path, repo_status, github_installation_id")
       .eq("id", userId)
       .single();
 
@@ -586,7 +592,10 @@ resuming an existing thread preserves context for the user.`;
     // Only available when user has a GitHub App installation with a connected repo.
     // ---------------------------------------------------------------------------
     const installationId = user.github_installation_id as number | null;
-    const repoUrl = user.repo_url as string | null;
+    // Canonical read — normalizes via `normalizeRepoUrl`, mirrors DB errors
+    // to Sentry via `reportSilentFallback`. Replaces the prior inline
+    // `user.repo_url` cast per "audit every query" learning.
+    const repoUrl = await getCurrentRepoUrl(userId);
 
     let mcpServersOption: Record<string, ReturnType<typeof createSdkMcpServer>> | undefined;
     let platformToolNames: string[] = [];
