@@ -23,6 +23,12 @@ CREATE TABLE IF NOT EXISTS public.processed_stripe_events (
   processed_at timestamptz  NOT NULL DEFAULT now()
 );
 
+-- Defense in depth: enable RLS with zero policies. Service-role bypasses RLS
+-- via the Authorization header; anon and authenticated clients are denied by
+-- default. This protects against a future misconfig that exposes the table
+-- through PostgREST without us noticing.
+ALTER TABLE public.processed_stripe_events ENABLE ROW LEVEL SECURITY;
+
 COMMENT ON TABLE public.processed_stripe_events IS
   'Dedup gate for at-least-once Stripe webhook delivery. Insert-first: '
   'a unique-violation on event_id short-circuits the handler with 200. '

@@ -4,6 +4,7 @@ import {
   configureSupabaseUpdateChain,
   configureSupabaseInsertChain,
 } from "./helpers/supabase-update-chain";
+import { SUBSCRIPTION_UPDATABLE_STATUSES } from "@/lib/stripe-subscription-statuses";
 
 // ---------------------------------------------------------------------------
 // Mocks — vi.hoisted ensures these are available when vi.mock factories run
@@ -15,6 +16,7 @@ const {
   mockEq,
   mockIn,
   mockSelect,
+  mockMaybeSingle,
   mockInsert,
   mockDeleteEq,
   mockLogger,
@@ -24,6 +26,7 @@ const {
   mockEq: vi.fn(),
   mockIn: vi.fn(),
   mockSelect: vi.fn(),
+  mockMaybeSingle: vi.fn(),
   mockInsert: vi.fn(),
   mockDeleteEq: vi.fn(),
   mockLogger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
@@ -53,12 +56,7 @@ vi.mock("@/lib/supabase/server", () => ({
       return {
         update: mockUpdate,
         select: () => ({
-          eq: () => ({
-            maybeSingle: vi.fn().mockResolvedValue({
-              data: { id: "user-uuid-123", plan_tier: "free", concurrency_override: null, subscription_status: "none" },
-              error: null,
-            }),
-          }),
+          eq: () => ({ maybeSingle: mockMaybeSingle }),
         }),
       };
     },
@@ -119,6 +117,15 @@ describe("Stripe webhook — subscription lifecycle", () => {
     // individual mock return values to assert zero-match or error paths.
     configureSupabaseUpdateChain({ mockUpdate, mockEq, mockIn, mockSelect });
     configureSupabaseInsertChain({ mockInsert, mockDeleteEq });
+    mockMaybeSingle.mockResolvedValue({
+      data: {
+        id: "user-uuid-123",
+        plan_tier: "free",
+        concurrency_override: null,
+        subscription_status: "none",
+      },
+      error: null,
+    });
   });
 
   describe("checkout.session.completed", () => {
@@ -537,6 +544,101 @@ describe("Stripe webhook — subscription lifecycle", () => {
       expect(res.status).toBe(500);
       expect(mockDeleteEq).toHaveBeenCalledWith("event_id", "evt_test_errpath");
     });
+
+    // Parameterized coverage: every 5xx path in the handler switch must call
+    // releaseDedupRow() before returning. A dropped await here would cause
+    // Stripe's retry to 23505-short-circuit, silently losing the event.
+    // One test per path — a regression on any branch fails exactly one test.
+    describe("every 5xx exit releases the dedup row", () => {
+      test("customer.subscription.updated — lookup (maybeSingle) error", async () => {
+        mockMaybeSingle.mockResolvedValueOnce({
+          data: null,
+          error: { message: "lookup failed" },
+        });
+        const event = makeEvent(
+          "customer.subscription.updated",
+          {
+            customer: CUSTOMER_ID,
+            status: "active",
+            cancel_at_period_end: false,
+            current_period_end: 1_700_000_000,
+          },
+          "evt_test_updated_lookup_err",
+        );
+        mockConstructEvent.mockReturnValue(event);
+
+        const res = await POST(makeRequest());
+
+        expect(res.status).toBe(500);
+        expect(mockDeleteEq).toHaveBeenCalledWith(
+          "event_id",
+          "evt_test_updated_lookup_err",
+        );
+      });
+
+      test("customer.subscription.deleted — lookup (maybeSingle) error", async () => {
+        mockMaybeSingle.mockResolvedValueOnce({
+          data: null,
+          error: { message: "lookup failed" },
+        });
+        const event = makeEvent(
+          "customer.subscription.deleted",
+          { customer: CUSTOMER_ID },
+          "evt_test_deleted_lookup_err",
+        );
+        mockConstructEvent.mockReturnValue(event);
+
+        const res = await POST(makeRequest());
+
+        expect(res.status).toBe(500);
+        expect(mockDeleteEq).toHaveBeenCalledWith(
+          "event_id",
+          "evt_test_deleted_lookup_err",
+        );
+      });
+
+      test("customer.subscription.deleted — update error", async () => {
+        mockSelect.mockResolvedValue({
+          data: null,
+          error: { message: "update failed" },
+        });
+        const event = makeEvent(
+          "customer.subscription.deleted",
+          { customer: CUSTOMER_ID },
+          "evt_test_deleted_update_err",
+        );
+        mockConstructEvent.mockReturnValue(event);
+
+        const res = await POST(makeRequest());
+
+        expect(res.status).toBe(500);
+        expect(mockDeleteEq).toHaveBeenCalledWith(
+          "event_id",
+          "evt_test_deleted_update_err",
+        );
+      });
+
+      test("invoice.paid — update error", async () => {
+        mockSelect.mockResolvedValue({
+          data: null,
+          error: { message: "update failed" },
+        });
+        const event = makeEvent(
+          "invoice.paid",
+          { id: "inv_err", customer: CUSTOMER_ID, subscription: SUBSCRIPTION_ID },
+          "evt_test_invoice_paid_err",
+        );
+        mockConstructEvent.mockReturnValue(event);
+
+        const res = await POST(makeRequest());
+
+        expect(res.status).toBe(500);
+        expect(mockDeleteEq).toHaveBeenCalledWith(
+          "event_id",
+          "evt_test_invoice_paid_err",
+        );
+      });
+    });
   });
 
   describe("checkout.session.completed out-of-order guard (#2771)", () => {
@@ -550,16 +652,12 @@ describe("Stripe webhook — subscription lifecycle", () => {
 
       await POST(makeRequest());
 
-      // NOTE: verbatim copy of SUBSCRIPTION_UPDATABLE_STATUSES from
-      // apps/web-platform/app/api/webhooks/stripe/route.ts. Per AGENTS.md
-      // cq-test-mocked-module-constant-import, we cannot import the constant
-      // from a fully vi.mock()'d route module. Keep this list in sync.
-      expect(mockIn).toHaveBeenCalledWith("subscription_status", [
-        "none",
-        "active",
-        "past_due",
-        "unpaid",
-      ]);
+      // Imported from @/lib/stripe-subscription-statuses — that module is NOT
+      // vi.mock()'d, so this stays in sync with the route automatically.
+      expect(mockIn).toHaveBeenCalledWith(
+        "subscription_status",
+        SUBSCRIPTION_UPDATABLE_STATUSES,
+      );
     });
 
     test("no-ops against cancelled row with guard-fired warn log", async () => {

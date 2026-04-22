@@ -5,24 +5,14 @@ import { effectiveCap } from "@/lib/plan-limits";
 import type { PlanTier } from "@/lib/types";
 import { onTierTransitionApplied } from "@/lib/stripe-subscription-transition";
 import { createServiceClient } from "@/lib/supabase/server";
+import {
+  SUBSCRIPTION_LIVE_STATUSES,
+  SUBSCRIPTION_UPDATABLE_STATUSES,
+} from "@/lib/stripe-subscription-statuses";
+import { PG_UNIQUE_VIOLATION } from "@/lib/postgres-errors";
 import type Stripe from "stripe";
 import logger from "@/server/logger";
 import * as Sentry from "@sentry/nextjs";
-
-// DB statuses that represent a billable / live subscription — eligible to be
-// cancelled by .deleted. Excludes "none" (never subscribed) and "cancelled"
-// (terminal — see SUBSCRIPTION_UPDATABLE_STATUSES).
-const SUBSCRIPTION_LIVE_STATUSES = ["active", "past_due", "unpaid"] as const;
-
-// DB statuses on which .updated may overwrite the row. Includes "none" so a
-// first-time subscription activation (none → active) succeeds. Excludes
-// "cancelled" — cancelled is terminal; no .updated event should ever move a
-// row off it (a stale .updated arriving after .deleted must be a no-op
-// regardless of newStatus). NOTE: This guards status-resurrection only.
-// Payload columns (current_period_end, cancel_at_period_end) can still be
-// overwritten by stale events on still-live rows — see the idempotency
-// follow-up issue.
-const SUBSCRIPTION_UPDATABLE_STATUSES = ["none", ...SUBSCRIPTION_LIVE_STATUSES] as const;
 
 // Map Stripe subscription statuses to the CHECK constraint values.
 // Stripe sends: active, canceled, incomplete, incomplete_expired, past_due, trialing, unpaid, paused.
@@ -109,18 +99,24 @@ export async function POST(request: Request) {
 
   const supabase = createServiceClient();
 
-  // Webhook-event-id dedup gate (#2772). Stripe delivers at-least-once;
-  // a replay of an already-processed event short-circuits here with 200.
+  // Webhook-event-id dedup gate (#2772). Stripe delivers at-least-once; a
+  // replay of an already-processed event short-circuits here with 200.
   // Critical: on handler error below we DELETE this row via
   // releaseDedupRow() before returning 5xx so Stripe's retry re-enters.
   // Service-role bypasses RLS; the table has no policies.
+  //
+  // Accepted tradeoff: if the Node process crashes between this INSERT
+  // commit and a handler 5xx (rare at Vercel function scale — timeouts
+  // fire at 10-60s, handler p99 is sub-second), the row is orphaned and
+  // Stripe's retry 23505-short-circuits. The event is operator-replayable
+  // from the Stripe dashboard; a deeper fix (TTL-reclaim or SECURITY
+  // DEFINER RPC transaction) is tracked as a follow-up.
   const { error: dedupErr } = await supabase
     .from("processed_stripe_events")
     .insert({ event_id: event.id, event_type: event.type });
 
   if (dedupErr) {
-    const dedupErrCode = (dedupErr as { code?: string }).code;
-    if (dedupErrCode === "23505") {
+    if (dedupErr.code === PG_UNIQUE_VIOLATION) {
       logger.info(
         { eventId: event.id, eventType: event.type },
         "Stripe webhook replay — event already processed, skipping",
