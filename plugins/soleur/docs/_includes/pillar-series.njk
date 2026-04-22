@@ -1,4 +1,5 @@
 {% set currentPillar = pillars[pillar] %}
+{% if pillar and not currentPillar %}<!-- pillar-series: unknown key "{{ pillar }}" in _data/pillars.js -->{% endif %}
 {% if currentPillar %}
 <aside class="pillar-series" aria-label="Part of the {{ currentPillar.title }} series">
   <p class="pillar-series__label">Part of the <strong>{{ currentPillar.title }}</strong> series:</p>
