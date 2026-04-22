@@ -487,6 +487,15 @@
     color: var(--color-text-secondary);
     margin-top: var(--space-1);
   }
+  .landing-stat-value a,
+  .landing-stat-label a {
+    color: inherit;
+    text-decoration: none;
+  }
+  .landing-stat-value a:hover,
+  .landing-stat-label a:hover {
+    text-decoration: underline;
+  }
 
   /* Landing page: Problem section */
   .landing-section {
