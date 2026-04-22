@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-04-19
-last_reviewed: 2026-04-19
+last_updated: 2026-04-21
+last_reviewed: 2026-04-21
 review_cadence: weekly
 owner: CPO
 depends_on:
@@ -67,14 +67,14 @@ This roadmap was reviewed by CTO, CLO, CFO, and CMO before finalization.
 
 ---
 
-## Current State (2026-04-19)
+## Current State (2026-04-21)
 
 | Dimension | Status |
 |-----------|--------|
 | Phase 1 (Close the Loop) | Complete. Milestone closed. 0 open, 15 closed. |
 | Phase 2 (Secure for Beta) | Complete. Milestone closed. 0 open, 20 closed. |
 | Phase 3 (Make it Sticky) | In progress. 11 open, 23 closed (milestone). Core KB, inbox, token storage, onboarding, CI/CD, service automation, analytics, sharing, usage indicator, pricing page, start fresh onboarding, post-connect sync, chat attachments, review gate notifications, guided instructions fallback, subscription management, KB file upload, invoice history, migration 021 follow-through all done. Agent work visualization (#2004) moved to Phase 4. KB chat sidebar (#2345) promoted from Post-MVP to Phase 3 P3 on 2026-04-15 (shipped in PR #2347). Remaining: service automation announcement (#1944), QA gate (#2108), KB rename files (#2152), KB PDF preview (#2153), KB delete button layout (#2154), team settings improvements (#2155), custom @mention handles (#2170), KB chat sidebar (#2345), `soleur:ux-audit` recurring UX-review loop (#2341), collapsible sidebars (#2342, blocked by #2341), exclude agent issues from auto-fix/triage (#2344). |
-| Phase 4 (Validate + Scale) | Not started. 24 open, 11 closed. Blocked by Phase 3 completion + marketing/multi-user gates. Growth audit 2026-04-13 added 7 issues (6 marketing gate P0s + 1 outreach campaign). Agent work visualization (#2004) moved here from Phase 3. |
+| Phase 4 (Validate + Scale) | Not started. Blocked by Phase 3 completion + marketing/multi-user gates. Growth audit 2026-04-13 added 7 issues (6 marketing gate P0s + 1 outreach campaign). Growth audit 2026-04-19 added 7 marketing gate issues (M26-M32: #2657, #2658, #2659, #2663, #2664, #2665, #2666). Growth audit 2026-04-21 added 5 marketing gate issues (M33-M37: #2707 FAQ on pricing, #2708 title conflict, #2709 bare titles, #2711 author card, #2712 billion-dollar pillar). Agent work visualization (#2004) moved here from Phase 3. |
 | Phase 5 (Desktop Native App) | Defined. 5 open, 0 closed. Trigger-gated on user demand. |
 | Post-MVP / Later | 92 open, 343 closed. |
 | Beta users | 0 |
@@ -264,8 +264,13 @@ Before recruiting founders, all public surfaces must reflect the cloud platform 
 | M30 | Rewrite homepage FAQ "Is Soleur free?" — remove Spark-tier reference (stale pricing framing) | 30 min | Not started — [#2664](https://github.com/jikig-ai/soleur/issues/2664) |
 | M31 | Cite $95K/mo replacement-cost table on /pricing/ (add linked source footnote for trust/citability) | 30 min | Not started — [#2665](https://github.com/jikig-ai/soleur/issues/2665) |
 | M32 | Add Organization JSON-LD to homepage (AI-extractable entity markup) | 30 min | Not started — [#2666](https://github.com/jikig-ai/soleur/issues/2666) |
+| M33 | Add FAQ + FAQPage JSON-LD to /pricing/ (AEO #1 gap on #2 search-intent page) | 1 hour | Not started — [#2707](https://github.com/jikig-ai/soleur/issues/2707) |
+| M34 | Resolve homepage `<title>` conflict (Eleventy vs Next.js split signals) | 1 hour | Not started — [#2708](https://github.com/jikig-ai/soleur/issues/2708) |
+| M35 | Fix bare single-word `<title>` on /pricing/, /community/, /blog/ (add brand anchor for SERP CTR) | 30 min | Not started — [#2709](https://github.com/jikig-ai/soleur/issues/2709) |
+| M36 | Add inline author card to blog posts (E-E-A-T — photo, bio, credentials, Person JSON-LD) | 2 hours | Not started — [#2711](https://github.com/jikig-ai/soleur/issues/2711) |
+| M37 | Ship Billion-Dollar Solo Founder Stack pillar (P1.7 — category-owner slot, matches brand positioning) | 8 hours | Not started — [#2712](https://github.com/jikig-ai/soleur/issues/2712) |
 
-**Gate:** No recruitment outreach until M1-M4, M12-M17, and M18-M32 complete.
+**Gate:** No recruitment outreach until M1-M4, M12-M17, and M18-M37 complete.
 
 ---
 
@@ -377,6 +382,7 @@ Low-priority improvements deferred until after validation. Revisit when the plat
 | L17 | Reframe /community/ copy — "early builder community, small by design" | P2 | [#2673](https://github.com/jikig-ai/soleur/issues/2673) | Not started |
 | L18 | Expand homepage og:title beyond bare "Soleur" | P2 | [#2674](https://github.com/jikig-ai/soleur/issues/2674) | Not started |
 | L19 | Primary-source the Amodei billion-dollar quote (replace Inc.com single-source) | P2 | [#2675](https://github.com/jikig-ai/soleur/issues/2675) | Not started |
+| L20 | Remove redundant CSS preload in base.njk (preload + stylesheet duplication is no-op) | P2 | [#2710](https://github.com/jikig-ai/soleur/issues/2710) | Not started |
 
 ---
 
@@ -427,4 +433,4 @@ Next review: 2026-04-17.
 
 ---
 
-_Generated: 2026-03-23. Domain review: CTO, CLO, CFO, CMO (2026-03-23). Milestone audit: 2026-04-03. CPO weekly review: 2026-04-06. Status sync from GitHub milestones: 2026-04-10. CPO weekly review + status sync: 2026-04-13. Growth audit intake: 2026-04-18 (12 issues: 1 to Phase 3, 8 to Marketing Gate, 3 to Post-MVP). Growth audit intake: 2026-04-19 (17 issues: 1 P0 to Phase 3 infra, 1 P0 + 6 P1 to Marketing Gate M26-M32, 9 P2 to Post-MVP L11-L19). Sources: business-validation.md (2026-03-12), competitive-intelligence.md (2026-03-12), pricing-strategy.md (2026-03-12), brand-guide.md (2026-02-21). Workshop conducted via /soleur:product-roadmap skill._
+_Generated: 2026-03-23. Domain review: CTO, CLO, CFO, CMO (2026-03-23). Milestone audit: 2026-04-03. CPO weekly review: 2026-04-06. Status sync from GitHub milestones: 2026-04-10. CPO weekly review + status sync: 2026-04-13. Growth audit intake: 2026-04-18 (12 issues: 1 to Phase 3, 8 to Marketing Gate, 3 to Post-MVP). Growth audit intake: 2026-04-19 (17 issues: 1 P0 to Phase 3 infra, 1 P0 + 6 P1 to Marketing Gate M26-M32, 9 P2 to Post-MVP L11-L19). Growth audit intake: 2026-04-21 (6 issues: 5 to Marketing Gate M33-M37, 1 to Post-MVP L20). Sources: business-validation.md (2026-03-12), competitive-intelligence.md (2026-03-12), pricing-strategy.md (2026-03-12), brand-guide.md (2026-02-21). Workshop conducted via /soleur:product-roadmap skill._
