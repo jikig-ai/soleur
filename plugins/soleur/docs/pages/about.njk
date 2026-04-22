@@ -13,7 +13,7 @@ permalink: about/index.html
     </section>
 
     <div class="container">
-      <section class="category-section">
+      <section id="jean-deruelle" class="category-section">
         <div class="category-header">
           <h2 class="category-title">Jean Deruelle</h2>
           <span class="category-count">Founder</span>
@@ -140,6 +140,7 @@ permalink: about/index.html
       "url": {{ (site.url + "/about/") | jsonLdSafe | safe }},
       "mainEntity": {
         "@type": "Person",
+        "@id": {{ (site.url + "/about/#jean-deruelle") | jsonLdSafe | safe }},
         "name": "Jean Deruelle",
         "url": {{ (site.url + "/about/") | jsonLdSafe | safe }},
         "jobTitle": "Founder",

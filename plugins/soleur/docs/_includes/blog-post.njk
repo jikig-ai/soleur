@@ -30,8 +30,10 @@ layout: base.njk
     "name": {{ site.author.name | jsonLdSafe | safe }},
     "url": {{ site.author.url | jsonLdSafe | safe }},
     "jobTitle": {{ (site.author.role + " of " + site.name) | jsonLdSafe | safe }},
+    "description": {{ site.author.bio | jsonLdSafe | safe }},
     "image": {{ (site.url + site.author.image) | jsonLdSafe | safe }},
-    "sameAs": {{ site.author.sameAs | jsonLdSafe | safe }}
+    "sameAs": {{ site.author.sameAs | jsonLdSafe | safe }},
+    "knowsAbout": {{ site.author.credentials | jsonLdSafe | safe }}
   },
   "publisher": {
     "@type": "Organization",
