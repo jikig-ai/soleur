@@ -672,6 +672,12 @@ resuming an existing thread preserves context for the user.`;
     // way the HTTP routes do — the agent runs in-process, there is no request
     // origin, and the review-gate confirmation (see tool-tiers.ts tier
     // mapping: create + revoke are `gated`) is the user-consent substitute.
+    // If this fires in prod, `NEXT_PUBLIC_APP_URL` is missing from Doppler
+    // `soleur/prd` (runtime --env-file injection via `resolve_env_file` in
+    // `infra/ci-deploy.sh`). The literal fallback below matches prod by
+    // coincidence; treat any Sentry hit on this tag as a config regression.
+    // Consumers: `buildKbShareTools` (below), `checkout/route.ts`,
+    // `billing/portal/route.ts`, `validate-origin.ts`, `notifications.ts`.
     const appUrl = process.env.NEXT_PUBLIC_APP_URL;
     if (!appUrl) {
       reportSilentFallback(null, {
