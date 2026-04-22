@@ -204,10 +204,26 @@ Monday or if the Monday cron failed (check via
 ### Phase 2 — Extract the Presence score
 
 Once `<date>-aeo-audit.md` exists, use a **column-name lookup** rather than
-fixed positional `awk` because the audit table column count has already
-drifted once (5 cols on 2026-04-13 → 6 cols on 2026-04-18 with added "Delta"
-column). The script below locates the `Score` column by reading the header
-row, then reads the same column in the `Presence` row.
+fixed positional `awk` because the audit table has drifted multiple times
+(5 cols on 2026-04-13, 6 cols on 2026-04-18, new SAP shape on 2026-04-21
+after the rubric was pinned per PR reconciling #2679). The script locates
+the `Score` column by reading the header row, then reads the same column
+in the `Presence` row.
+
+**Threshold translation (worked example — cross-rubric):**
+
+The issue's `≥55` threshold normalizes to percentage-of-Presence-category
+across both rubric eras:
+
+- **Old format** (`| Presence & Third-Party Mentions | 40 | F | 5% | 2.0 |`):
+  Score column is a bare 0–100 integer. `PRESENCE_SCORE=40` → `40 < 55` → FAIL.
+- **New SAP format** (`| **Presence** | 25 | 20/25 | 20 | ... |`): Score column
+  is `<n>/<weight>`. Normalize: `PRESENCE_SCORE = round(n/weight * 100) = 80`.
+  `80 ≥ 55` → PASS. The 2026-04-21 audit proved #2615 under this format.
+
+Both interpretations measure the same thing — what fraction of the rubric's
+Presence-category maximum the audit awarded — so the downstream branching
+(PASS/PARTIAL/FAIL) and the re-run band (52–58) apply uniformly.
 
 ```bash
 set -euo pipefail
@@ -223,10 +239,11 @@ if grep -qiE "(SEO|AEO) audit failed.*see CI logs" "$LATEST"; then
   exit 2
 fi
 
-# Locate the Scoring Table header row, find the column index of "Score"
-HEADER=$(awk '/^\| Category \|/{print; exit}' "$LATEST")
+# Locate the Scoring Table header row. Accept either the old "| Category |"
+# (pre-2026-04-21) or the new SAP "| Dimension |" header.
+HEADER=$(awk '/^\| (Category|Dimension) \|/{print; exit}' "$LATEST")
 if [[ -z "$HEADER" ]]; then
-  echo "ERROR: no Scoring Table header (expected '| Category |...| Score |...')" >&2
+  echo "ERROR: no Scoring Table header (expected '| Category |...' or '| Dimension |...')" >&2
   exit 3
 fi
 # Split the header on '|', strip whitespace, find index of "Score"
@@ -242,40 +259,113 @@ if [[ -z "$SCORE_COL" ]]; then
 fi
 echo "Score is in column $SCORE_COL"
 
-# Extract the Presence row (anchor on the stable label, not column position)
-PRESENCE_LINE=$(grep -E "^\| Presence & Third-Party Mentions" "$LATEST" | head -n 1)
+# Extract the Presence row. Match both the old "Presence & Third-Party Mentions"
+# label and the new "**Presence**" bold label. Require NF >= 5 so a legend/footer
+# row that happens to mention "Presence" does not match.
+PRESENCE_LINE=$(awk -F'|' '
+  NF >= 5 && $2 ~ /^ *(\*\*)?Presence(\*\*)?( & Third-Party Mentions)? *$/ { print; exit }
+' "$LATEST")
 if [[ -z "$PRESENCE_LINE" ]]; then
-  echo "ERROR: no row matches '| Presence & Third-Party Mentions ...'" >&2
+  echo "ERROR: no table row matches a Presence label (old or new)" >&2
   exit 5
 fi
-PRESENCE_SCORE=$(echo "$PRESENCE_LINE" | awk -F'|' -v c="$SCORE_COL" '{
-  gsub(/^[ \t]+|[ \t]+$/, "", $c); gsub(/[^0-9]/, "", $c); print $c
+
+# Extract the Score cell. Accept both formats:
+#   - bare integer (old rubric, e.g. "40")
+#   - <n>/<weight> fraction (new SAP rubric, e.g. "20/25", tolerant of
+#     "20 / 25" that markdownlint reflow can introduce).
+SCORE_CELL=$(echo "$PRESENCE_LINE" | awk -F'|' -v c="$SCORE_COL" '{
+  gsub(/^[ \t]+|[ \t]+$/, "", $c); print $c
 }')
-if ! [[ "$PRESENCE_SCORE" =~ ^[0-9]+$ ]] || [[ "$PRESENCE_SCORE" -gt 100 ]]; then
-  echo "ERROR: extracted Presence score is not a valid integer 0-100: '$PRESENCE_SCORE'" >&2
+SCORE_CELL_TRIMMED="${SCORE_CELL// /}"    # strip inline spaces ("20 / 25" -> "20/25")
+SCORE_CELL_TRIMMED="${SCORE_CELL_TRIMMED//\*/}"  # strip bold markdown markers ("**72**" -> "72")
+if [[ "$SCORE_CELL_TRIMMED" =~ ^([0-9]+)/([0-9]+)$ ]]; then
+  NUM="${BASH_REMATCH[1]}"; DEN="${BASH_REMATCH[2]}"
+  if [[ "$DEN" -eq 0 ]]; then
+    echo "ERROR: Presence score denominator is zero in '$SCORE_CELL' (line: $PRESENCE_LINE)" >&2
+    exit 6
+  fi
+  PRESENCE_SCORE=$(awk "BEGIN { printf \"%.0f\", ($NUM / $DEN) * 100 }")
+elif [[ "$SCORE_CELL_TRIMMED" =~ ^[0-9]+$ ]]; then
+  PRESENCE_SCORE="$SCORE_CELL_TRIMMED"  # old rubric: already 0-100 on category
+else
+  echo "ERROR: unrecognized Presence score format: '$SCORE_CELL' in line: $PRESENCE_LINE" >&2
   exit 6
 fi
-echo "Presence score: $PRESENCE_SCORE"
+if [[ "$PRESENCE_SCORE" -gt 100 ]]; then
+  echo "ERROR: normalized Presence score > 100 ('$PRESENCE_SCORE' from '$SCORE_CELL')" >&2
+  exit 6
+fi
+echo "Presence score (percentage-of-category, 0-100): $PRESENCE_SCORE"
 
-# Extract the Presence grade (column after Score, defensively).
-# Regex keeps A-Z plus +/- modifiers; current rubric uses bare letters (F, D, C, B, A)
-# but the regex tolerates D+/D- etc. should the rubric add modifiers in future audits.
-PRESENCE_GRADE=$(echo "$PRESENCE_LINE" | awk -F'|' -v c=$((SCORE_COL+1)) '{
-  gsub(/^[ \t]+|[ \t]+$/, "", $c); gsub(/[^A-Z+\-]/, "", $c); print $c
-}')
-echo "Presence grade: $PRESENCE_GRADE"
+# Alias to PRESENCE_PCT for downstream code that prefers the semantic name
+# (the plan contract uses "percentage-of-category"). Both names reference
+# the same value.
+PRESENCE_PCT="$PRESENCE_SCORE"
 
-# Extract the overall score from the | **Overall** | row (parallel guard with PRESENCE_LINE)
-OVERALL_LINE=$(grep -E "^\| \*\*Overall\*\*" "$LATEST" | head -n 1)
+# Derive a letter grade from PRESENCE_SCORE using the pinned SAP grading
+# scale exactly as defined in growth-strategist.md and scheduled-growth-
+# audit.yml Step 2 (A >= 90, B 80-89, B+ 75-79, C 60-74, D < 60). The old
+# rubric included a separate Grade column per row; the new SAP rubric only
+# grades the Total row. Deriving keeps PRESENCE_GRADE populated across
+# both eras so downstream comment formatting stays clean. Do NOT introduce
+# letters not in the pinned scale — agents produce audits against the
+# pinned five-tier scale, and a runbook-internal sixth tier would desync.
+if   [[ "$PRESENCE_SCORE" -ge 90 ]]; then PRESENCE_GRADE="A"
+elif [[ "$PRESENCE_SCORE" -ge 80 ]]; then PRESENCE_GRADE="B"
+elif [[ "$PRESENCE_SCORE" -ge 75 ]]; then PRESENCE_GRADE="B+"
+elif [[ "$PRESENCE_SCORE" -ge 60 ]]; then PRESENCE_GRADE="C"
+else                                      PRESENCE_GRADE="D"
+fi
+echo "Presence grade (derived from pinned scale): $PRESENCE_GRADE"
+
+# Extract the overall score. The old rubric used "**Overall**"; the new SAP
+# rubric uses "**Total**". Match either.
+OVERALL_LINE=$(awk -F'|' '
+  NF >= 5 && $2 ~ /^ *\*\*(Overall|Total)\*\* *$/ { print; exit }
+' "$LATEST")
 if [[ -z "$OVERALL_LINE" ]]; then
-  echo "ERROR: no row matches '| **Overall** ...'" >&2
+  echo "ERROR: no row matches '| **Overall** ...' or '| **Total** ...'" >&2
   exit 7
 fi
-OVERALL_SCORE=$(echo "$OVERALL_LINE" | awk -F'|' -v c="$SCORE_COL" '{
-  gsub(/^[ \t]+|[ \t]+$/, "", $c); gsub(/[^0-9]/, "", $c); print $c
+
+# Look up the Weighted column index by name (parallel with SCORE_COL lookup).
+# The new SAP Total row leaves the Score cell empty and puts the overall total
+# in the Weighted column; old rubrics put the overall in Score directly. A
+# first-integer-in-line fallback is unsafe because "Weight" (e.g. 100) precedes
+# "Weighted" in new SAP column order and would be grabbed first.
+WEIGHTED_COL=$(echo "$HEADER" | awk -F'|' '{
+  for (i=2; i<=NF; i++) {
+    gsub(/^[ \t]+|[ \t]+$/, "", $i)
+    if ($i == "Weighted") { print i; exit }
+  }
 }')
+
+OVERALL_CELL=$(echo "$OVERALL_LINE" | awk -F'|' -v c="$SCORE_COL" '{
+  gsub(/^[ \t]+|[ \t]+$/, "", $c); print $c
+}')
+OVERALL_CELL_TRIMMED="${OVERALL_CELL// /}"
+OVERALL_CELL_TRIMMED="${OVERALL_CELL_TRIMMED//\*/}"  # strip bold markers (old audits bold the Overall Score cell)
+if [[ "$OVERALL_CELL_TRIMMED" =~ ^[0-9]+$ ]]; then
+  OVERALL_SCORE="$OVERALL_CELL_TRIMMED"
+elif [[ "$OVERALL_CELL_TRIMMED" =~ ^([0-9]+)/([0-9]+)$ ]]; then
+  NUM="${BASH_REMATCH[1]}"; DEN="${BASH_REMATCH[2]}"
+  if [[ "$DEN" -eq 0 ]]; then
+    echo "ERROR: Overall denominator zero in '$OVERALL_CELL' (line: $OVERALL_LINE)" >&2
+    exit 8
+  fi
+  OVERALL_SCORE=$(awk "BEGIN { printf \"%.0f\", ($NUM / $DEN) * 100 }")
+elif [[ -n "$WEIGHTED_COL" ]]; then
+  # New SAP Total row fallback: read the Weighted column explicitly.
+  OVERALL_SCORE=$(echo "$OVERALL_LINE" | awk -F'|' -v c="$WEIGHTED_COL" '{
+    gsub(/^[ \t]+|[ \t]+$/, "", $c); gsub(/[^0-9]/, "", $c); print $c
+  }')
+else
+  echo "ERROR: cannot extract Overall score (Score cell empty, no Weighted column in header) (line: $OVERALL_LINE)" >&2
+  exit 8
+fi
 if ! [[ "$OVERALL_SCORE" =~ ^[0-9]+$ ]] || [[ "$OVERALL_SCORE" -gt 100 ]]; then
-  echo "ERROR: extracted Overall score is not a valid integer 0-100: '$OVERALL_SCORE'" >&2
+  echo "ERROR: extracted Overall score is not a valid integer 0-100: '$OVERALL_SCORE' (line: $OVERALL_LINE)" >&2
   exit 8
 fi
 echo "Overall AEO score: $OVERALL_SCORE"
@@ -486,6 +576,10 @@ gh issue comment 2615 --body "AEO Presence audit at ${AUDIT_DATE} reported ${PRE
 | Audit file missing on Monday >12:00 UTC | Operator runs `gh workflow run scheduled-growth-audit.yml`; waits for PR auto-merge | New `<date>-aeo-audit.md` exists; Phase 2 proceeds |
 | Audit step 3 returned the stub fallback ("SEO audit failed — see CI logs.") | Skip the score extraction; do not infer a Presence number from a missing AEO report | File P1 tracker referencing the failed cron run; #2615 needs-attention |
 | Table format changed (e.g., column reorder) | Re-read the latest audit, locate column by header name, abort if anchor missing | No silent default; operator notified to update Phase 2 anchors |
+| New SAP rubric with fraction score (e.g., `20/25`) | Phase 2 parser normalizes fraction → percentage-of-category | `PRESENCE_SCORE=80`, `PRESENCE_GRADE=B`, PASS branch (threshold ≥55) |
+| Old rubric with bare integer score (e.g., `40`) | Phase 2 parser treats bare integer as already-normalized | `PRESENCE_SCORE=40`, `PRESENCE_GRADE=D` (below 60 per pinned scale), FAIL branch (below ≥55) |
+| Score cell reflowed with whitespace (e.g., `20 / 25`) | Parser strips inline whitespace before matching | Parsed identically to `20/25` |
+| New SAP Total row with empty Score cell (e.g., `\| **Total** \| 100 \| \| 78 \| B+ \|`) | Parser reads Weighted column via header lookup | `OVERALL_SCORE=78` (not 100, the Weight) |
 
 ## Risks
 

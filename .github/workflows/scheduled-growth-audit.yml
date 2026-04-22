@@ -71,6 +71,11 @@ jobs:
           plugin_marketplaces: 'https://github.com/jikig-ai/soleur.git'
           plugins: 'soleur@soleur'
           claude_args: '--model claude-opus-4-7 --max-turns 70 --allowedTools Bash,Read,Write,Edit,Glob,Grep,WebSearch,WebFetch,Task'
+          # Template-sync sentinel: weights, row labels, and grading scale inside Step 2
+          # below are duplicated across plugins/soleur/agents/marketing/growth-strategist.md
+          # (GEO/AEO Content Audit section) and the runbook parser at
+          # knowledge-base/project/plans/2026-04-19-chore-aeo-presence-reaudit-after-pr-2596-plan.md
+          # Phase 2. Change one, change all three.
           prompt: |
             IMPORTANT: This is an automated CI workflow. The AGENTS.md rule
             Do NOT push directly to main.
@@ -102,8 +107,31 @@ jobs:
             Task growth-strategist: "Audit the content at https://soleur.ai for GEO/AEO
             optimization: source citations, statistics, conversational readiness, FAQ
             structure, citation quality. If knowledge-base/overview/brand-guide.md exists,
-            read it. Produce a structured scoring table and detailed analysis. Use WebFetch
-            to retrieve pages."
+            read it. Use WebFetch to retrieve pages.
+
+            Produce BOTH scorecards below. Both tables are mandatory; do not omit either,
+            do not reorder dimensions, and do not rename row labels (downstream scripts
+            anchor on exact row names).
+
+            Table 1 - SAP Scorecard (headline, required):
+            Column headers: | Dimension | Weight | Score | Weighted | Notes |
+            Rows (in order): **Structure** (weight 40), **Authority** (weight 35),
+            **Presence** (weight 25), **Total** (weight 100).
+            Score cells use the form <n>/<weight> (e.g. 20/25). Weighted is the
+            absolute contribution to the overall total out of 100. Final row reports
+            the letter grade using the scale: A >= 90, B 80-89, B+ 75-79, C 60-74,
+            D < 60. Include the grading scale inline so readers can audit the grade.
+
+            Table 2 - 8-component AEO diagnostic (required):
+            Column headers: | Component | Weight | Score | Notes |
+            Rows (in order): FAQ structure & FAQPage schema (20), Answer density /
+            extractability (15), Statistics & specificity (15), Source citations (15),
+            Conversational readiness (10), Entity clarity (10), Authority / E-E-A-T (10),
+            Citation-friendly structure (5), **Total** (100).
+            Score cells use the form <n>/<weight>. Final row reports the total out of 100.
+
+            Follow the GEO/AEO Content Audit rubric in the growth-strategist agent
+            definition for what each dimension measures."
 
             Save the report to:
             knowledge-base/marketing/audits/soleur-ai/$(date +%Y-%m-%d)-aeo-audit.md
