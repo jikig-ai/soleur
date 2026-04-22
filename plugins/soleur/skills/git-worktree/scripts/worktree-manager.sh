@@ -403,7 +403,7 @@ create_for_feature() {
 
   local branch_name="feat-$name"
   local worktree_path="$WORKTREE_DIR/$branch_name"
-  local spec_dir="$GIT_ROOT/knowledge-base/project/specs/$branch_name"
+  local spec_dir="$worktree_path/knowledge-base/project/specs/$branch_name"
 
   # Check if worktree already exists
   if [[ -d "$worktree_path" ]]; then
@@ -435,8 +435,8 @@ create_for_feature() {
   # git worktree add on bare repos writes core.bare=false to shared config — fix it
   ensure_bare_config
 
-  # Create spec directory in main repo (shared across worktrees)
-  if [[ -d "$GIT_ROOT/knowledge-base" ]]; then
+  # Create spec directory inside the worktree so it's tracked on the feature branch
+  if [[ -d "$worktree_path/knowledge-base" ]]; then
     mkdir -p "$spec_dir"
     echo -e "${GREEN}Created spec directory: $spec_dir${NC}"
   fi
@@ -763,7 +763,12 @@ cleanup_merged_worktrees() {
       fi
     fi
 
-    # Archive spec directory
+    # Archive spec directory.
+    # NOTE: Post-#2815, new worktrees create the spec inside the worktree itself
+    # (committed and merged to main via the feature branch — git history is the
+    # canonical archive). This bare-root path persists as a backward-compat
+    # hatch for legacy pre-fix worktrees; the [[ -d ]] guard silently skips
+    # when the directory does not exist (the new layout).
     local spec_dir="$GIT_ROOT/knowledge-base/project/specs/$safe_branch"
     if [[ -d "$spec_dir" ]]; then
       local archive_dir archive_name archive_path

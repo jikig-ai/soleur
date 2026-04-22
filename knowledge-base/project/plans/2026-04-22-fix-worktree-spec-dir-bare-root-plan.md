@@ -71,12 +71,12 @@ The 2026-02-22 archiving slug extraction learning documents that the *fix* for a
 
 ### Pre-merge (PR)
 
-- [ ] `create_for_feature` creates the spec directory at `<worktree_path>/knowledge-base/project/specs/feat-<name>/`, **not** at `<bare-root>/knowledge-base/project/specs/feat-<name>/`.
-- [ ] After running `worktree-manager.sh feature <name>`, a caller inside the worktree (`cd .worktrees/feat-<name> && ls knowledge-base/project/specs/feat-<name>`) sees the directory (no `mkdir -p` recovery needed).
-- [ ] New test `plugins/soleur/test/worktree-manager-feature-spec-dir.test.sh` passes (goes from RED to GREEN with the line 406 change).
-- [ ] Existing tests in `plugins/soleur/test/` still pass (`resolve-git-root.test.sh` and siblings — no regressions in `create_for_feature`'s siblings).
-- [ ] Script works from both bare root (`bash ./plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh feature <name>`) and from inside an existing worktree.
-- [ ] `cleanup_merged_worktrees` continues to succeed when archiving legacy bare-root spec dirs left over from pre-fix worktrees (backward compatibility).
+- [x] `create_for_feature` creates the spec directory at `<worktree_path>/knowledge-base/project/specs/feat-<name>/`, **not** at `<bare-root>/knowledge-base/project/specs/feat-<name>/`.
+- [x] After running `worktree-manager.sh feature <name>`, a caller inside the worktree (`cd .worktrees/feat-<name> && ls knowledge-base/project/specs/feat-<name>`) sees the directory (no `mkdir -p` recovery needed).
+- [x] New test `plugins/soleur/test/worktree-manager-feature-spec-dir.test.sh` passes (goes from RED to GREEN with the line 406 change).
+- [x] Existing tests in `plugins/soleur/test/` still pass (`resolve-git-root.test.sh` and siblings — no regressions in `create_for_feature`'s siblings).
+- [x] Script works from both bare root (`bash ./plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh feature <name>`) and from inside an existing worktree.
+- [x] `cleanup_merged_worktrees` continues to succeed when archiving legacy bare-root spec dirs left over from pre-fix worktrees (backward compatibility — guard at line 768 silently skips when dir absent).
 
 ### Post-merge (operator)
 
