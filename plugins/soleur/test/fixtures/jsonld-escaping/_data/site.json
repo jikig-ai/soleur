@@ -15,7 +15,11 @@
     "name": "Fixture Author",
     "url": "https://example.test/about/",
     "role": "Fixture Role",
-    "company": "Fixture Co"
+    "company": "Fixture Co",
+    "image": "/images/fixture-author.svg",
+    "bio": "Fixture bio with \"quotes\" and </script><script>alert(1)</script> breakout.",
+    "credentials": ["Credential with \"quotes\"", "Credential with & ampersand"],
+    "sameAs": ["https://github.com/fixture", "https://x.com/fixture"]
   },
   "footerColumns": [],
   "footerLegal": []

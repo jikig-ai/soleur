@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Placeholder author monogram for Jean Deruelle.
+  512×512, neutral monochrome. Used by the blog-post author card and
+  the extended Person JSON-LD (site.author.image). Replace with a real
+  editorial headshot when one is available — drop the JPG/PNG at the
+  same basename and update site.author.image accordingly.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512" role="img" aria-label="Jean Deruelle — Founder of Soleur">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#1a1a1a"/>
+      <stop offset="1" stop-color="#0a0a0a"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="256" ry="256" fill="url(#bg)"/>
+  <circle cx="256" cy="256" r="252" fill="none" stroke="#2a2a2a" stroke-width="2"/>
+  <g font-family="Georgia, 'Times New Roman', serif" font-weight="400" fill="#f5f5f5" text-anchor="middle">
+    <text x="256" y="300" font-size="200" letter-spacing="-8">JD</text>
+  </g>
+  <g font-family="system-ui, -apple-system, sans-serif" font-size="20" fill="#888" text-anchor="middle" letter-spacing="4">
+    <text x="256" y="420">JEAN DERUELLE</text>
+  </g>
+</svg>
