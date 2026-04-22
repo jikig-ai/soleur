@@ -58,7 +58,7 @@ beforeAll(() => {
       `Eleventy build failed in test setup (exit ${proc.exitCode}). Run 'npx @11ty/eleventy' from repo root to reproduce.`,
     );
   }
-});
+}, 60_000);
 
 afterAll(() => {
   if (tmpSite) {
