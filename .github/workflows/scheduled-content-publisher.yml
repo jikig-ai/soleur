@@ -64,6 +64,7 @@ jobs:
           BSKY_APP_PASSWORD: ${{ secrets.BSKY_APP_PASSWORD }}
           BSKY_ALLOW_POST: "true"
           GH_TOKEN: ${{ github.token }}
+          STALE_EVENTS_FILE: ${{ runner.temp }}/stale-events.txt
         run: |
           exit_code=0
           bash scripts/content-publisher.sh || exit_code=$?
@@ -73,6 +74,42 @@ jobs:
             exit 0
           fi
           exit "$exit_code"
+
+      - name: Build stale-alert email body
+        id: stale_email
+        if: always()
+        env:
+          STALE_EVENTS_FILE: ${{ runner.temp }}/stale-events.txt
+          SERVER_URL: ${{ github.server_url }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          if [[ ! -s "$STALE_EVENTS_FILE" ]]; then
+            echo "No stale events; skipping email body."
+            exit 0
+          fi
+          { echo "<p><strong>Stale scheduled content detected</strong></p>"
+            echo "<p>The following files had <code>status: scheduled</code> but a past <code>publish_date</code>. Status was transitioned to <code>stale</code> to prevent re-alerting. Update <code>publish_date</code> or set <code>status: draft</code>.</p>"
+            echo "<ul>"
+            while IFS=$'\t' read -r filename publish_date; do
+              printf '<li><code>%s</code> (publish_date: <code>%s</code>)</li>\n' "$filename" "$publish_date"
+            done < "$STALE_EVENTS_FILE"
+            echo "</ul>"
+            printf '<p>Run: <a href="%s/%s/actions/runs/%s">#%s</a></p>\n' "$SERVER_URL" "$REPO" "$RUN_ID" "$RUN_ID"
+          } > /tmp/stale-email-body.html
+
+          { echo "body<<EOFBODY"
+            cat /tmp/stale-email-body.html
+            echo "EOFBODY"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Email notification (stale content)
+        if: steps.stale_email.outputs.body != ''
+        uses: ./.github/actions/notify-ops-email
+        with:
+          subject: '[ALERT] Scheduled content went stale (content-publisher)'
+          body: ${{ steps.stale_email.outputs.body }}
+          resend-api-key: ${{ secrets.RESEND_API_KEY }}
 
       - name: Commit status updates via PR
         if: success()

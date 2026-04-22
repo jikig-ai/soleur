@@ -318,28 +318,24 @@ post_discord() {
   fi
 }
 
-post_discord_warning() {
-  local message="$1"
-
-  # Use general webhook for warnings, not blog channel
-  local webhook_url="${DISCORD_WEBHOOK_URL:-}"
-
-  if [[ -z "$webhook_url" ]]; then
-    echo "Warning: No Discord webhook URL set. Cannot send stale content warning." >&2
+# --- Ops alert emit (workflow consumes and emails ops) ---
+# Appends one TSV line per stale file to $STALE_EVENTS_FILE. The workflow
+# reads the file in a subsequent step and invokes notify-ops-email. Ops
+# alerts go to email, not Discord, per AGENTS.md rule
+# hr-github-actions-workflow-notifications.
+#
+# Append-only semantics: within a single workflow run the file accumulates
+# across all stale files; the workflow provides a fresh path via
+# ${{ runner.temp }}, so cross-run state does not leak. If STALE_EVENTS_FILE
+# is unset (local script run), no-op so the script remains locally testable.
+emit_stale_event() {
+  local file="$1"
+  local publish_date="$2"
+  if [[ -z "${STALE_EVENTS_FILE:-}" ]]; then
+    echo "Info: STALE_EVENTS_FILE unset; stale event not persisted." >&2
     return 0
   fi
-
-  local payload
-  payload=$(jq -n \
-    --arg content "$message" \
-    --arg username "Sol" \
-    --arg avatar_url "$AVATAR_URL" \
-    '{content: $content, username: $username, avatar_url: $avatar_url, allowed_mentions: {parse: []}}')
-
-  curl -s -o /dev/null -w "" \
-    -H "Content-Type: application/json" \
-    -d "$payload" \
-    "$webhook_url" || true
+  printf '%s\t%s\n' "$(basename "$file")" "$publish_date" >> "$STALE_EVENTS_FILE"
 }
 
 # --- X/Twitter Posting ---
@@ -711,7 +707,7 @@ main() {
     # Mark as stale to prevent duplicate warnings on subsequent runs.
     if [[ "$publish_date" < "$today" ]]; then
       echo "WARNING: Stale scheduled content: $(basename "$file") (publish_date: $publish_date)" >&2
-      post_discord_warning "**Stale scheduled content detected**\n\nFile: $(basename "$file")\nPublish date: $publish_date\nStatus: scheduled\n\nThis content was scheduled for a past date and was not published. Update the publish_date or set status to draft."
+      emit_stale_event "$file" "$publish_date"
       sed -i 's/^status: scheduled/status: stale/' "$file"
       continue
     fi
