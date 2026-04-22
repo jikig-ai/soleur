@@ -1,5 +1,6 @@
 ---
 title: Blog
+seoTitle: "Blog — Soleur"
 description: "Insights on agentic engineering, company-as-a-service, and building at scale with AI teams."
 layout: base.njk
 permalink: blog/index.html
@@ -17,7 +18,7 @@ permalink: blog/index.html
 {
   "@context": "https://schema.org",
   "@type": "CollectionPage",
-  "name": {{ (title + " - " + site.name) | jsonLdSafe | safe }},
+  "name": {{ (seoTitle or (title + " — " + site.name)) | jsonLdSafe | safe }},
   "description": {{ description | jsonLdSafe | safe }},
   "url": {{ (site.url + "/blog/") | jsonLdSafe | safe }},
   "publisher": {
