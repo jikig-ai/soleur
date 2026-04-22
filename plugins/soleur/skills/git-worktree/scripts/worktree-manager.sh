@@ -763,12 +763,10 @@ cleanup_merged_worktrees() {
       fi
     fi
 
-    # Archive spec directory.
-    # NOTE: Post-#2815, new worktrees create the spec inside the worktree itself
-    # (committed and merged to main via the feature branch — git history is the
-    # canonical archive). This bare-root path persists as a backward-compat
-    # hatch for legacy pre-fix worktrees; the [[ -d ]] guard silently skips
-    # when the directory does not exist (the new layout).
+    # Archive spec directory. Backward-compat for legacy pre-#2815 worktrees that
+    # created specs at the bare root. New layout commits the spec inside the
+    # worktree (git history is the canonical archive); the [[ -d ]] guard silently
+    # skips when the bare-root dir does not exist.
     local spec_dir="$GIT_ROOT/knowledge-base/project/specs/$safe_branch"
     if [[ -d "$spec_dir" ]]; then
       local archive_dir archive_name archive_path

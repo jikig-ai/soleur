@@ -38,14 +38,25 @@ git clone -q --bare "$TEST_DIR/seed" "$TEST_DIR/bare.git"
 # silently skips spec creation in the synthetic test bare repo, masking the bug.
 mkdir -p "$TEST_DIR/bare.git/knowledge-base/project/specs"
 
+# Branch name derives from the `feat-` prefix in worktree-manager.sh `create_for_feature()`.
 WORKTREE="$TEST_DIR/bare.git/.worktrees/feat-acme-widget"
 WORKTREE_SPEC="$WORKTREE/knowledge-base/project/specs/feat-acme-widget"
 BARE_SPEC="$TEST_DIR/bare.git/knowledge-base/project/specs/feat-acme-widget"
 
+# Surface non-zero exits from the SUT instead of swallowing them — a crash unrelated
+# to spec placement would otherwise present as "dir missing" and mislead diagnosis.
+run_feature() {
+  local log="$TEST_DIR/run-$1.log"
+  if ! bash "$SCRIPT" --yes feature acme-widget >"$log" 2>&1; then
+    echo "  WARN: worktree-manager.sh exited non-zero on invocation $1:"
+    sed 's/^/    /' "$log"
+  fi
+}
+
 # Test 1: feature <name> creates spec dir inside the worktree
 echo "Test 1: spec dir created inside worktree"
 cd "$TEST_DIR/bare.git"
-bash "$SCRIPT" --yes feature acme-widget >/dev/null 2>&1 || true
+run_feature 1
 
 assert_eq "true" "$([[ -d "$WORKTREE_SPEC" ]] && echo true || echo false)" \
   "spec dir exists inside worktree"
@@ -59,7 +70,7 @@ echo ""
 
 # Test 3: idempotency — second invocation is a no-op
 echo "Test 3: idempotency (second invocation)"
-bash "$SCRIPT" --yes feature acme-widget >/dev/null 2>&1 || true
+run_feature 2
 assert_eq "true" "$([[ -d "$WORKTREE_SPEC" ]] && echo true || echo false)" \
   "spec dir still exists after second invocation"
 assert_eq "false" "$([[ -d "$BARE_SPEC" ]] && echo true || echo false)" \
