@@ -1,4 +1,4 @@
-import { describe, test, expect, vi, beforeEach } from "vitest";
+import { describe, test, expect, vi, beforeEach, afterEach } from "vitest";
 
 // ---------------------------------------------------------------------------
 // Mocks — vi.hoisted ensures these are available when vi.mock factories run
@@ -98,7 +98,11 @@ describe("POST /api/billing/portal", () => {
       origin: "https://app.soleur.ai",
     });
     mockCreatePortalSession.mockResolvedValue({ url: PORTAL_URL });
-    process.env.NEXT_PUBLIC_APP_URL = "https://test.example";
+    vi.stubEnv("NEXT_PUBLIC_APP_URL", "https://test.example");
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
   });
 
   test("returns portal URL for authenticated user with stripe_customer_id", async () => {
@@ -147,7 +151,7 @@ describe("POST /api/billing/portal", () => {
   });
 
   test("degraded: NEXT_PUBLIC_APP_URL unset fires Sentry and uses literal fallback", async () => {
-    delete process.env.NEXT_PUBLIC_APP_URL;
+    vi.stubEnv("NEXT_PUBLIC_APP_URL", undefined);
     setupAuthenticatedUser();
     setupUserQuery({ stripe_customer_id: CUSTOMER_ID });
 
@@ -155,7 +159,7 @@ describe("POST /api/billing/portal", () => {
     expect(res.status).toBe(200);
 
     expect(mockCaptureMessage).toHaveBeenCalledWith(
-      expect.any(String),
+      expect.stringContaining("NEXT_PUBLIC_APP_URL unset"),
       expect.objectContaining({
         level: "error",
         tags: expect.objectContaining({ feature: "billing", op: "portal-session" }),
@@ -169,7 +173,7 @@ describe("POST /api/billing/portal", () => {
   });
 
   test("happy: NEXT_PUBLIC_APP_URL set routes URL to Stripe and Sentry stays silent", async () => {
-    process.env.NEXT_PUBLIC_APP_URL = "https://test.example";
+    vi.stubEnv("NEXT_PUBLIC_APP_URL", "https://test.example");
     setupAuthenticatedUser();
     setupUserQuery({ stripe_customer_id: CUSTOMER_ID });
 

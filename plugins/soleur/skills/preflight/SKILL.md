@@ -107,7 +107,7 @@ If no relevant files changed, return **SKIP**.
 **Step 2.2: Get production URL from Doppler.**
 
 ```bash
-doppler secrets get NEXT_PUBLIC_SITE_URL -p soleur -c prd --plain
+doppler secrets get NEXT_PUBLIC_APP_URL -p soleur -c prd --plain
 ```
 
 If no URL is available, return **SKIP** with note: "Production URL not available."

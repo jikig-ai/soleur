@@ -28,7 +28,8 @@ Closes `#2770`, `#2768`. Out-of-band closes `#2773`, `#2774` post-merge. `#2769`
 - [x] 2.4 `app/api/auth/github-resolve/route.ts` — `NEXT_PUBLIC_SITE_URL` → `NEXT_PUBLIC_APP_URL`, rename local `siteUrl` → `appUrl`
 - [x] 2.5 `app/api/auth/github-resolve/callback/route.ts` — same migration in `redirectWithDeletedCookie`
 - [x] 2.6 **Scope expansion surfaced by Phase 3.5 sweep:** add `reportSilentFallback` to both `github-resolve/route.ts` (feature: `"github-resolve"`, op: `"initiate"`) and `github-resolve/callback/route.ts` (op: `"callback-redirect"`) — the migration preserved an existing silent-fallback pattern; per `cq-silent-fallback-must-mirror-to-sentry` every `NEXT_PUBLIC_APP_URL` fallback site must mirror. Closes the class fully.
-- [x] 2.7 Re-run 1.5 vitest command — confirm GREEN
+- [x] 2.7 **Review-driven inline fixes (post-commit e009241f):** rename `notifications` op `"appUrl"` → `"app-url"` (kebab-case parity); add `extra: { userId }` to github-resolve initiate; tighten Sentry message assertions to `stringContaining("NEXT_PUBLIC_APP_URL unset")`; switch tests to `vi.stubEnv`/`vi.unstubAllEnvs` for env-restore; extract `APP_URL_FALLBACK` constant in `server/observability.ts` (simplicity-reviewer minimum — full helper extract deferred); migrate ux-audit tooling (`bot-signin.ts`, `route-list.yaml`, `ux-audit/SKILL.md`, `preflight/SKILL.md`) from `NEXT_PUBLIC_SITE_URL` → `NEXT_PUBLIC_APP_URL` so post-merge Doppler delete doesn't break tooling.
+- [x] 2.8 Re-run 1.5 vitest command — confirm GREEN
 
 ## Phase 3: Typecheck, build, completeness sweeps
 

@@ -1,4 +1,4 @@
-import { describe, test, expect, vi, beforeEach } from "vitest";
+import { describe, test, expect, vi, beforeEach, afterEach } from "vitest";
 
 const {
   mockSendNotification,
@@ -67,11 +67,15 @@ describe("notifications", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     // Reset env vars
-    process.env.VAPID_PUBLIC_KEY = "test-public-key";
-    process.env.VAPID_PRIVATE_KEY = "test-private-key";
-    process.env.RESEND_API_KEY = "re_test_key";
-    // Default for existing tests — degraded-path test deletes below
-    process.env.NEXT_PUBLIC_APP_URL = "https://test.example";
+    vi.stubEnv("VAPID_PUBLIC_KEY", "test-public-key");
+    vi.stubEnv("VAPID_PRIVATE_KEY", "test-private-key");
+    vi.stubEnv("RESEND_API_KEY", "re_test_key");
+    // Default for existing tests — degraded-path test unsets below
+    vi.stubEnv("NEXT_PUBLIC_APP_URL", "https://test.example");
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
   });
 
   describe("notifyOfflineUser", () => {
@@ -265,7 +269,7 @@ describe("notifications", () => {
     });
 
     test("happy: NEXT_PUBLIC_APP_URL set appears in deep link and Sentry stays silent", async () => {
-      process.env.NEXT_PUBLIC_APP_URL = "https://test.example";
+      vi.stubEnv("NEXT_PUBLIC_APP_URL", "https://test.example");
       mockResendSend.mockResolvedValue({ data: { id: "msg-1" }, error: null });
 
       await sendEmailNotification("test@example.com", {
@@ -282,7 +286,7 @@ describe("notifications", () => {
     });
 
     test("degraded: NEXT_PUBLIC_APP_URL unset fires Sentry and uses literal fallback", async () => {
-      delete process.env.NEXT_PUBLIC_APP_URL;
+      vi.stubEnv("NEXT_PUBLIC_APP_URL", undefined);
       mockResendSend.mockResolvedValue({ data: { id: "msg-1" }, error: null });
 
       await sendEmailNotification("test@example.com", {
@@ -295,10 +299,10 @@ describe("notifications", () => {
       const call = mockResendSend.mock.calls[0][0];
       expect(call.html).toContain("https://app.soleur.ai/dashboard/chat/conv-degraded");
       expect(mockCaptureMessage).toHaveBeenCalledWith(
-        expect.any(String),
+        expect.stringContaining("NEXT_PUBLIC_APP_URL unset"),
         expect.objectContaining({
           level: "error",
-          tags: expect.objectContaining({ feature: "notifications", op: "appUrl" }),
+          tags: expect.objectContaining({ feature: "notifications", op: "app-url" }),
         }),
       );
     });

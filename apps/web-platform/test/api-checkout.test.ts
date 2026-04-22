@@ -1,4 +1,4 @@
-import { describe, test, expect, vi, beforeEach } from "vitest";
+import { describe, test, expect, vi, beforeEach, afterEach } from "vitest";
 
 // Legacy STRIPE_PRICE_ID path is still exercised by these tests. Set the env
 // var before the route imports so priceIdForTier() fallback resolves cleanly.
@@ -84,8 +84,12 @@ describe("POST /api/checkout", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockCreateSession.mockResolvedValue({ url: "https://checkout.stripe.com/session" });
-    // Default for existing tests — degraded-path test deletes below
-    process.env.NEXT_PUBLIC_APP_URL = "https://test.example";
+    // Default for existing tests — degraded-path test unsets below via vi.stubEnv(..., "")
+    vi.stubEnv("NEXT_PUBLIC_APP_URL", "https://test.example");
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
   });
 
   test("reuses existing stripe_customer_id when available", async () => {
@@ -148,7 +152,7 @@ describe("POST /api/checkout", () => {
   });
 
   test("degraded: NEXT_PUBLIC_APP_URL unset fires Sentry and uses literal fallback", async () => {
-    delete process.env.NEXT_PUBLIC_APP_URL;
+    vi.stubEnv("NEXT_PUBLIC_APP_URL", undefined);
     setupAuthenticatedUser();
     setupUserQuery({ stripe_customer_id: CUSTOMER_ID, subscription_status: null });
 
@@ -156,7 +160,7 @@ describe("POST /api/checkout", () => {
     expect(res.status).toBe(200);
 
     expect(mockCaptureMessage).toHaveBeenCalledWith(
-      expect.any(String),
+      expect.stringContaining("NEXT_PUBLIC_APP_URL unset"),
       expect.objectContaining({
         level: "error",
         tags: expect.objectContaining({ feature: "checkout", op: "create-session" }),
@@ -170,7 +174,7 @@ describe("POST /api/checkout", () => {
   });
 
   test("happy: NEXT_PUBLIC_APP_URL set routes URL to Stripe and Sentry stays silent", async () => {
-    process.env.NEXT_PUBLIC_APP_URL = "https://test.example";
+    vi.stubEnv("NEXT_PUBLIC_APP_URL", "https://test.example");
     setupAuthenticatedUser();
     setupUserQuery({ stripe_customer_id: CUSTOMER_ID, subscription_status: null });
 

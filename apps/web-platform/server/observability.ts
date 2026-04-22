@@ -2,6 +2,15 @@ import * as Sentry from "@sentry/nextjs";
 import logger from "@/server/logger";
 
 /**
+ * Single source of truth for the literal app-origin used when
+ * `NEXT_PUBLIC_APP_URL` is unset. Matches prod; used by every
+ * `reportSilentFallback`-guarded fallback site so a future domain rename
+ * is a one-line change here (plus a Doppler update) rather than a repo-wide
+ * grep + 6-file edit.
+ */
+export const APP_URL_FALLBACK = "https://app.soleur.ai";
+
+/**
  * Options for a silent-fallback capture.
  *
  * - `feature`: required tag — used for Sentry search/filtering. Use the route

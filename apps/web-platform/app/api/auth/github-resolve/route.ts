@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
-import { reportSilentFallback } from "@/server/observability";
+import { APP_URL_FALLBACK, reportSilentFallback } from "@/server/observability";
 import logger from "@/server/logger";
 
 /**
@@ -13,19 +13,21 @@ import logger from "@/server/logger";
  * Sets a state nonce cookie for CSRF protection and redirects to GitHub.
  */
 export async function GET(_request: Request) {
+  // Defense-in-depth: verify session even though middleware enforces auth
+  const supabase = await createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+
   const appUrlEnv = process.env.NEXT_PUBLIC_APP_URL;
   if (!appUrlEnv) {
     reportSilentFallback(null, {
       feature: "github-resolve",
       op: "initiate",
-      message: "NEXT_PUBLIC_APP_URL unset; github-resolve OAuth redirect_uri fallback to https://app.soleur.ai",
+      message: `NEXT_PUBLIC_APP_URL unset; github-resolve OAuth redirect_uri fallback to ${APP_URL_FALLBACK}`,
+      extra: user ? { userId: user.id } : undefined,
     });
   }
-  const appUrl = appUrlEnv ?? "https://app.soleur.ai";
+  const appUrl = appUrlEnv ?? APP_URL_FALLBACK;
 
-  // Defense-in-depth: verify session even though middleware enforces auth
-  const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
   if (!user) {
     return NextResponse.redirect(new URL("/login", appUrl));
   }

@@ -1,7 +1,10 @@
 import { describe, test, expect, vi, beforeEach, afterEach } from "vitest";
 
 // ---------------------------------------------------------------------------
-// Set env BEFORE any imports that read at load time
+// Set env BEFORE any imports that read at load time.
+// These are module-load defaults; per-test env is scoped via vi.stubEnv +
+// vi.unstubAllEnvs in the beforeEach/afterEach hooks below to prevent
+// cross-test pollution.
 // ---------------------------------------------------------------------------
 process.env.GITHUB_CLIENT_ID = "test-client-id";
 process.env.GITHUB_CLIENT_SECRET = "test-client-secret";
@@ -122,8 +125,12 @@ describe("GET /api/auth/github-resolve (initiate)", () => {
     mockGetUser.mockResolvedValue({ data: { user: { id: "user-123" } } });
     // Guard against shell-leaked legacy env var; post-migration the route
     // reads NEXT_PUBLIC_APP_URL only.
-    delete process.env.NEXT_PUBLIC_SITE_URL;
-    delete process.env.NEXT_PUBLIC_APP_URL;
+    vi.stubEnv("NEXT_PUBLIC_SITE_URL", undefined);
+    vi.stubEnv("NEXT_PUBLIC_APP_URL", undefined);
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
   });
 
   test("returns 302 redirect to GitHub OAuth authorize URL", async () => {
@@ -171,8 +178,8 @@ describe("GET /api/auth/github-resolve (initiate)", () => {
   });
 
   test("reads NEXT_PUBLIC_APP_URL (not NEXT_PUBLIC_SITE_URL) for callback redirect_uri", async () => {
-    process.env.NEXT_PUBLIC_APP_URL = "https://test.example";
-    process.env.NEXT_PUBLIC_SITE_URL = "https://should-not-be-used.example";
+    vi.stubEnv("NEXT_PUBLIC_APP_URL", "https://test.example");
+    vi.stubEnv("NEXT_PUBLIC_SITE_URL", "https://should-not-be-used.example");
 
     const response = await initiateHandler(makeInitiateRequest());
     const location = response.headers.get("Location")!;
@@ -195,8 +202,8 @@ describe("GET /api/auth/github-resolve/callback", () => {
 
     // Guard against shell-leaked legacy env var; post-migration the route
     // reads NEXT_PUBLIC_APP_URL only.
-    delete process.env.NEXT_PUBLIC_SITE_URL;
-    delete process.env.NEXT_PUBLIC_APP_URL;
+    vi.stubEnv("NEXT_PUBLIC_SITE_URL", undefined);
+    vi.stubEnv("NEXT_PUBLIC_APP_URL", undefined);
 
     // Default: authenticated user
     mockGetUser.mockResolvedValue({
@@ -217,6 +224,7 @@ describe("GET /api/auth/github-resolve/callback", () => {
   afterEach(() => {
     clearFetchRoutes();
     globalThis.fetch = originalFetch;
+    vi.unstubAllEnvs();
   });
 
   test("stores github_username and redirects on valid code+state", async () => {
