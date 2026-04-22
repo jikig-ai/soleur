@@ -5,6 +5,25 @@
 **Type:** chore (post-merge operator verification)
 **Detail level:** MINIMAL
 
+## Enhancement Summary
+
+**Deepened on:** 2026-04-22
+**Sections enhanced:** Research Reconciliation, Phase 1, Phase 2, Sharp Edges
+**Sources consulted:** `plugins/soleur/skills/admin-ip-refresh/SKILL.md`, `plugins/soleur/skills/admin-ip-refresh/references/admin-ip-refresh-procedure.md`, `plugins/soleur/skills/plan/SKILL.md:470-495`, `plugins/soleur/skills/deepen-plan/SKILL.md:299-309`, AGENTS.md hard rules, `knowledge-base/engineering/ops/runbooks/admin-ip-drift.md`.
+
+### Key Improvements
+
+1. **Reconciled the "No drift" message format claim.** The exact format `No drift. Current IP X.X.X.X/32 is in ADMIN_IPS (list length N).` IS prescribed — in `admin-ip-refresh-procedure.md:12` and `:75`, not in SKILL.md:40 which says only `print "No drift."`. Verification must accept either the full prescribed format or a substring match on "No drift"; the plan had this backwards (claimed not prescribed, now corrected).
+2. **Concrete mitigation for the `plan` skill's auto-commit + auto-push of the throwaway plan.** The plan skill at `plan/SKILL.md:487-494` commits AND pushes the generated plan under `knowledge-base/project/plans/` AND overwrites `knowledge-base/project/specs/feat-<branch>/tasks.md` on any `feat-*` branch. This clobbers THIS plan's existing tasks.md and leaves the throwaway plan in remote history. Phase 2 now prescribes running the throwaway from a sibling worktree on a non-`feat-*` branch (e.g., `tmp/verify-ssh-gate`) so neither auto-commit fires.
+3. **Phase 4.5 recursion hazard clarified.** Running `soleur:deepen-plan` from inside `/soleur:one-shot`'s work phase against a throwaway plan spawns another 10+ agents plus this plan's own deepen was already running. Acceptable in one-shot work-phase but NOT from within plan/deepen-plan themselves.
+4. **Opt-out in `## Hypotheses` strengthened.** Added per-layer artifact references so the inline opt-out passes the plan-network-outage-checklist's own "one-line justification citing a verification artifact" gate.
+
+### New Considerations Discovered
+
+- The throwaway plan will itself trigger `plan/Phase 1.4` (intended), AND the plan-skill's "Save Tasks" step will overwrite the real tasks.md for this feature branch. This is a silent-data-loss hazard this plan must prevent.
+- `doppler configure get token --plain` returns a token when any authentication path is active (user token, service token). The skill doesn't distinguish; the operator must manually confirm they're using a user token before running — service tokens typically don't have `prd_terraform` read.
+- `/soleur:admin-ip-refresh --dry-run` is the only SKILL.md-documented flag that guarantees no Doppler mutation. `--verify` also avoids writes but depends on a prior apply. For #2690, `--dry-run` is authoritative.
+
 ## Overview
 
 Two follow-through verifications from PR #2683 land in the same PR because they share a source, share a worktree, and can be evidenced in a single commit (a learning file + issue-comment transcripts). Both are operator-layer verifications of mechanisms that are not CI-testable end-to-end:
@@ -22,9 +41,11 @@ The institutional prevention of admin-IP drift landed in #2683 with three artifa
 
 | Claim in issue body | Reality in codebase | Plan response |
 |----|----|----|
-| Skill should report "No drift. Current IP X.X.X.X/32 is in ADMIN_IPS (list length N)." | `SKILL.md` step 3 says: "If `<current-egress>/32` is in the list, print 'No drift.' and exit 0" — exact quote format not prescribed in the skill. | Verification records whatever exact string the skill emits; any string containing "No drift" + exit 0 satisfies #2690's "no-drift detection". Do not fail the verification on minor wording. |
-| Deepen-plan Phase 4.5 spawns "Network-Outage Deep-Dive subsection when re-deepening the same plan." | `deepen-plan/SKILL.md:299-309` confirms Phase 4.5 spawns a subagent that emits a "Network-Outage Deep-Dive" subsection. | Verification step 2b runs deepen-plan against the throwaway plan from step 2a and greps for the subsection heading. |
-| Verification is "manual" with `sla_business_days: 5` | Per AGENTS.md `hr-never-label-any-step-as-manual-without`, every step must be attempted via automation first. `/soleur:admin-ip-refresh --dry-run` is non-interactive and produces machine-parseable output; `/soleur:plan` with a file-description argument is non-interactive in pipeline mode. | Both verifications are fully automated in this plan. "Manual" is only the original issue's classification, carried over from #2683's caution about prod-write skills. Dry-run is automatable. |
+| Skill should report "No drift. Current IP X.X.X.X/32 is in ADMIN_IPS (list length N)." | `SKILL.md:40` says only `print "No drift."`. The procedure reference `admin-ip-refresh-procedure.md:12` and `:75` prescribe the exact full-format string `No drift. Current IP ${candidate} is in ADMIN_IPS (list length N).` — so the full format IS authoritative, just documented in the reference file rather than SKILL.md. | Verification accepts either: (a) the full prescribed format, or (b) any output containing the substring `No drift` with exit code 0. Both satisfy #2690. If the skill emits a format that differs from the procedure reference, file a follow-up issue to align SKILL.md + procedure before closing. |
+| Deepen-plan Phase 4.5 spawns "Network-Outage Deep-Dive subsection when re-deepening the same plan." | `deepen-plan/SKILL.md:299-309` confirms Phase 4.5 spawns a subagent on trigger-pattern match that emits a "Network-Outage Deep-Dive" subsection. | Verification step 2b runs deepen-plan against the throwaway plan from step 2a and greps for the subsection heading. |
+| Verification is "manual" with `sla_business_days: 5` | Per AGENTS.md `hr-never-label-any-step-as-manual-without`, every step must be attempted via automation first. `admin-ip-refresh --dry-run` is non-interactive and produces deterministic output; `skill: soleur:plan` is non-interactive when invoked with a file-description argument in pipeline mode. | Both verifications are fully automated in this plan. "Manual" is the original issue's classification, carried over from #2683's caution about prod-write skills. Dry-run is automatable. |
+| Phase 1.4 trigger regex list is authoritative | Both `plan/SKILL.md:123` and `deepen-plan/SKILL.md:301` list the identical regex: `SSH`, `connection reset`, `kex`, `firewall`, `unreachable`, `timeout`, `502`, `503`, `504`, `handshake`, `EHOSTUNREACH`, `ECONNRESET` (case-insensitive). The checklist file itself (`plan-network-outage-checklist.md:3-8`) is authoritative. | Phase 2's contrived input must match this regex; chosen input `"fix: intermittent SSH connection reset when deploying to soleur-web-platform from GitHub Actions runner"` matches `SSH` + `connection reset` + `timeout`-adjacent framing (via the word "intermittent" as a soft signal; the hard matches are `SSH` and `connection reset`). |
+| Plan skill Save Tasks clobbers existing spec | `plan/SKILL.md:483-494` on any `feat-*` branch auto-writes `knowledge-base/project/specs/<branch>/tasks.md` AND runs `git add ... && git commit && git push`. | **Running plan for the throwaway input from this feature branch would overwrite this plan's own tasks.md and push the throwaway plan to remote.** Phase 2 mitigates by running from a sibling worktree on `tmp/verify-ssh-gate` (non-`feat-*`), where Save Tasks is a no-op per SKILL.md:499-501. |
 
 ## Files to edit
 
@@ -46,14 +67,16 @@ Per AGENTS.md `hr-menu-option-ack-not-prod-write-auth` and `hr-all-infrastructur
 
 **Acceptance criteria (pre-merge):**
 
-1. Run the skill: `/soleur:admin-ip-refresh --dry-run`. If the skill invocation cannot be captured verbatim (e.g., the skill runs interactively inside the conversation), invoke the procedure script directly: `bash -c "$(cat plugins/soleur/skills/admin-ip-refresh/references/admin-ip-refresh-procedure.md | <extract detection/read/diff steps>)"` — this is a fallback; prefer the skill invocation.
-2. Capture stdout, stderr, exit code.
+1. Run the skill: `skill: soleur:admin-ip-refresh` with args `--dry-run`. If the skill invocation cannot be captured verbatim (e.g., it runs inside the conversation without a machine-readable exit code), exit-code capture via a direct-bash fallback is out of scope — record the observed stdout and proceed; the presence of "No drift" in output is authoritative for this verification.
+2. Capture stdout, stderr, and exit code (or "exit code not observable via skill wrapper" if the skill runs in-conversation).
 3. Verify one of two outcomes:
-   - **No drift (expected):** stdout contains "No drift" (or semantically equivalent — the skill prescribes this message at SKILL.md:40), exit code is 0.
-   - **Drift detected (unexpected):** stdout shows a diff between current list and proposed list. If this happens, HALT the verification, file a separate issue, and do NOT proceed to the write path — the operator must investigate whether the drift is real or the skill misidentified the egress IP.
+   - **No drift (expected):** stdout contains either the full prescribed format from `admin-ip-refresh-procedure.md:75` — `No drift. Current IP <ip>/32 is in ADMIN_IPS (list length N).` — OR the shorter form from `SKILL.md:40` — `No drift.`. Exit code (if captured) is 0. Both satisfy #2690.
+   - **Drift detected (unexpected):** stdout shows a diff between current list and proposed list. HALT the verification, file a new priority/p1 issue describing the drift (with egress IP REDACTED as `<redacted>/32`), and do NOT proceed to the write path. The operator must separately decide whether to run the real (non-dry) refresh, which is out of scope for this verification.
 4. If "No drift" path hits:
-   - Transcribe stdout into the learning file under a `## #2690 Verification` section with date, command, exit code, and a redacted list length (e.g., "list length 3" — NEVER include the actual CIDRs in a committed file; `ADMIN_IPS` is PII-adjacent per SKILL.md:61).
-   - Comment on #2690 with: the date, verification command, exit code, and "List length N (CIDRs redacted)" — then close the issue.
+   - Transcribe the skill's full stdout into the learning file `## #2690 Verification` section, with the egress IP replaced by `<redacted>/32` and the list length preserved (e.g., `No drift. Current IP <redacted>/32 is in ADMIN_IPS (list length 3).`). NEVER include actual CIDRs or the egress IP in any committed file — per `admin-ip-refresh/SKILL.md:61`, `ADMIN_IPS` is PII-adjacent.
+   - Include: date, exact command, exit code (or observability note), redacted stdout excerpt, list length.
+   - Comment on #2690 with the same redacted summary, then close via PR auto-close (`Closes #2690` in PR body).
+5. **SKILL.md vs. procedure reference format drift check.** If the skill emits a third format (neither the short `No drift.` nor the full prescribed format), the two docs have drifted — file a separate issue to align `SKILL.md:40` with `admin-ip-refresh-procedure.md:75` before closing #2690. Document the drift in the learning file.
 
 **Sharp edges:**
 
@@ -63,48 +86,75 @@ Per AGENTS.md `hr-menu-option-ack-not-prod-write-auth` and `hr-all-infrastructur
 
 ### Phase 2 — Verify #2691 (plan Phase 1.4 + deepen-plan Phase 4.5 trigger)
 
-This verification produces a throwaway plan file by invoking `/soleur:plan` with a contrived input containing an SSH-outage trigger keyword (`plugins/soleur/skills/plan/references/plan-network-outage-checklist.md` regex: `SSH`, `connection reset`, `kex`, `firewall`, `unreachable`, `timeout`, `502`, `503`, `504`, `handshake`, `EHOSTUNREACH`, `ECONNRESET` — case-insensitive). The resulting plan is inspected for the `## Hypotheses` L3 ordering and then deleted — it must NOT land under `knowledge-base/project/plans/`.
+This verification produces a throwaway plan file by invoking `skill: soleur:plan` with a contrived input containing an SSH-outage trigger keyword (`plugins/soleur/skills/plan/references/plan-network-outage-checklist.md` regex: `SSH`, `connection reset`, `kex`, `firewall`, `unreachable`, `timeout`, `502`, `503`, `504`, `handshake`, `EHOSTUNREACH`, `ECONNRESET` — case-insensitive). The resulting plan is inspected for the `## Hypotheses` L3 ordering and then deleted — it must NOT land under `knowledge-base/project/plans/` on the main branch.
+
+**Pre-requisite: isolation worktree.** Per Research Reconciliation row 5, running plan from the current `feat-*` worktree would clobber this plan's tasks.md and auto-push the throwaway plan. Create a sibling worktree on a non-`feat-*` branch name:
+
+```bash
+bash plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh --yes create tmp/verify-ssh-gate
+cd ../tmp-verify-ssh-gate   # whatever path the worktree manager emits
+git branch --show-current   # MUST print tmp/verify-ssh-gate (not feat-*)
+```
+
+The `plan/SKILL.md:474` guard `If on a feat-* branch` evaluates false, so Save Tasks is skipped (per `:499-501`). The throwaway plan file is still written to `knowledge-base/project/plans/` in that worktree, but it is never `git add`'d or pushed. `rm` is sufficient cleanup.
 
 **Acceptance criteria (pre-merge):**
 
-1. **Contrived input.** Use this exact feature description: `"fix: intermittent SSH connection reset when deploying to soleur-web-platform from GitHub Actions runner"`. This contains `SSH`, `connection reset`, and `timeout`-adjacent framing, guaranteeing Phase 1.4 fires.
-2. **Invoke plan.** Run `skill: soleur:plan` with the contrived input. The skill will write a plan file under `knowledge-base/project/plans/YYYY-MM-DD-fix-<slug>-plan.md`. Capture the path.
-3. **Relocate the artifact.** Immediately after plan completion, `mv` the file to `/tmp/2691-verification-plan.md`. Do NOT commit the throwaway plan to `knowledge-base/project/plans/`. This is a verification artifact, not a real plan — committing it would pollute the plans directory and trip any "feature X planned but never shipped" audits.
-4. **Grep for L3 entries in `## Hypotheses`.** The throwaway plan's `## Hypotheses` section MUST:
-   - Contain the heading `## Hypotheses`.
-   - The first 1-4 bulleted/numbered items MUST be L3-layer entries (firewall allow-list AND DNS/routing) BEFORE any sshd, fail2ban, journalctl, or service-layer hypothesis. Check for keywords: the L3 items mention `hcloud firewall describe`, `ifconfig.me`, `dig`, `traceroute`, or `mtr`. Service-layer items mention `sshd`, `fail2ban`, `sshguard`, or `journalctl -u`.
-   - A service-layer hypothesis appearing BEFORE any L3 entry is a verification FAILURE — file a new issue documenting the regression and do NOT close #2691.
-5. **Invoke deepen-plan on the same file.** Run `skill: soleur:deepen-plan` with the `/tmp/2691-verification-plan.md` path. Per `deepen-plan/SKILL.md:299-309`, Phase 4.5 must spawn the "Network-Outage Deep-Dive" subagent. After deepen-plan completes, grep the plan for the subsection heading `Network-Outage Deep-Dive` or `## Network-Outage Deep-Dive`. Presence confirms Phase 4.5 fired.
-6. **Clean up.** `rm /tmp/2691-verification-plan.md`. If `skill: soleur:plan` also auto-created `knowledge-base/project/specs/feat-<branch>/tasks.md` as part of its Save Tasks phase, also delete that file — the throwaway plan must not leave git-tracked debris.
-7. **Transcribe.** Under a `## #2691 Verification` section of the learning file, record: the contrived input, the plan file's `## Hypotheses` section (redacted of nothing — the contrived input has no secrets), the deepen-plan subsection confirmation, and any gaps.
-8. **Comment and close.** Comment on #2691 with the verification date, contrived input, transcript summary, then close.
+1. **Contrived input.** Use this exact feature description: `"fix: intermittent SSH connection reset when deploying to soleur-web-platform from GitHub Actions runner"`. Hard matches against the regex: `SSH`, `connection reset`. Phase 1.4 WILL fire.
+2. **Invoke plan in the sibling worktree.** From the `tmp/verify-ssh-gate` worktree, run `skill: soleur:plan` with the contrived input. The skill writes a plan file under `knowledge-base/project/plans/YYYY-MM-DD-fix-<slug>-plan.md` but skips Save Tasks (non-feat branch). Capture the path from the skill's announce output.
+3. **Read the throwaway plan.** Open the plan file and verify:
+   - Contains the heading `## Hypotheses`.
+   - The hypotheses list leads with L3 entries. L3 keywords expected: `hcloud firewall describe`, `ifconfig.me`, `var.admin_ips`, `dig`, `traceroute`, or `mtr`. Service-layer keywords: `sshd`, `fail2ban`, `sshguard`, `journalctl -u`.
+   - **Pass condition:** every L3-keyword hypothesis appears at an earlier list index than every service-layer hypothesis.
+   - **Fail condition:** any service-layer hypothesis at an earlier index than any L3 hypothesis — verification FAILS, file a new priority/p1 issue documenting the regression, do NOT close #2691.
+4. **Invoke deepen-plan on the same file.** Run `skill: soleur:deepen-plan` with the throwaway plan path. Per `deepen-plan/SKILL.md:299-309`, Phase 4.5 matches the plan's Overview/Problem-Statement/Hypotheses against the trigger regex and spawns the deep-dive agent. After completion, grep the deepened plan for the substring `Network-Outage Deep-Dive` (subsection heading). Presence confirms Phase 4.5 fired.
+5. **Transcribe evidence.** Copy the throwaway plan's `## Hypotheses` section and the `Network-Outage Deep-Dive` subsection text (truncated to ~50 lines each) into the learning file `## #2691 Verification` section. The contrived input has no secrets; no redaction needed.
+6. **Clean up the sibling worktree.** Return to the main worktree, then:
+
+   ```bash
+   cd /home/jean/git-repositories/jikig-ai/soleur/.worktrees/feat-one-shot-verify-follow-through-2690-2691
+   bash plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh cleanup-merged
+   # If the tmp/ worktree's branch wasn't merged (it shouldn't be), remove manually:
+   git worktree remove ../tmp-verify-ssh-gate --force
+   git branch -D tmp/verify-ssh-gate
+   ```
+
+   Verify `git worktree list` no longer shows `tmp/verify-ssh-gate` and `git branch -a` no longer shows the branch.
+7. **Comment and close.** Post a comment on #2691 with the verification date, contrived input (verbatim), Pass/Fail outcome, and links to the transcribed evidence in the learning file. Close via PR auto-close (`Closes #2691` in PR body).
 
 **Sharp edges:**
 
-- **Pipeline-mode recursion risk.** Running `skill: soleur:plan` from inside a work-skill phase of THIS plan could produce confusing output if the Skill tool re-enters this plan's context. Mitigation: the verification runs in a fresh session spawned from `/soleur:work` phase 2, not nested inside plan-skill execution. If recursion is detected (the inner plan receives this verification plan's content as its own feature description), abort and restart in a clean `/clear` session.
-- **Skill's Save Tasks writes under `knowledge-base/`.** Per `plan/SKILL.md`, the Save Tasks step commits plan + tasks.md together when on a `feat-*` branch. The current branch IS `feat-one-shot-verify-follow-through-2690-2691`. This means the throwaway plan will be auto-committed. Mitigation: after step 3 above, run `git reset HEAD <path>` and `git checkout -- <path>` and delete the file BEFORE any subsequent commit runs. Alternative: invoke plan in a fresh sibling worktree whose branch name doesn't match `feat-*`.
-- **Trigger-keyword stability.** The contrived input must match the regex in `plan-network-outage-checklist.md:1-8` exactly. If that regex changes in a future PR, this verification must be re-run. The learning file records the verified regex substring at verification time to anchor future re-verifications.
-- **Deepen-plan runs many agents.** `deepen-plan/SKILL.md` spawns 10+ agents in parallel. Running it on a throwaway plan consumes budget; accept the cost. Do not trim the invocation — the point is to verify Phase 4.5 fires alongside the normal deepen agents, not in isolation.
+- **Worktree isolation is non-negotiable.** Running plan from the current `feat-one-shot-verify-follow-through-2690-2691` branch would auto-write a new tasks.md over the existing one (silent data loss) AND auto-commit+push the throwaway plan to remote (polluting `knowledge-base/project/plans/` history). The sibling worktree on `tmp/verify-ssh-gate` is the mitigation — do not shortcut it.
+- **Recursion hazard from inside deepen-plan.** Invoking `skill: soleur:plan` from inside THIS plan's deepen-plan phase (which is running right now as part of the one-shot pipeline) would nest three levels deep and confuse context. The contrived-plan invocation MUST happen in work-phase (after deepen finishes), not in plan/deepen-plan phases.
+- **Deepen-plan consumes budget.** It spawns 10+ agents in parallel. Running it on a throwaway plan is the point of the verification — do not trim.
+- **Phase 4.5 regex is duplicated in three files.** `plan/SKILL.md:123`, `deepen-plan/SKILL.md:301`, and `plan-network-outage-checklist.md:3-8`. If any of these three drifts out of sync, Phase 1.4 can fire while Phase 4.5 silently misses (or vice versa). The verification incidentally tests all three — if the throwaway plan shows the L3 hypotheses but the deepen-plan pass doesn't emit the subsection, that's a regex-drift regression worth filing.
+- **Worktree manager script path.** `plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh` is the canonical entry point per AGENTS.md `wg-at-session-start-run-bash-plugins-soleur`. The `--yes` flag bypasses interactive confirmation (idempotent for tmp branches).
 
 ### Phase 3 — Commit and close
 
-1. Write the learning file `knowledge-base/project/learnings/2026-04-22-follow-through-admin-ip-refresh-and-ssh-gate-verification.md` with both `## #2690 Verification` and `## #2691 Verification` sections.
-2. If the verification surfaced a gap (skill did not emit "No drift", plan did not emit L3-first hypotheses, deepen-plan did not emit subsection), the plan's final state is: learning file + a new GitHub issue describing the regression. #2690 / #2691 remain OPEN. Do NOT close them on failure.
-3. If both verifications passed, comment on each issue with the transcript summary and close.
-4. Run `/soleur:compound` to capture the verification methodology as a reusable pattern (e.g., "how to exercise a post-merge follow-through without polluting plans/").
-5. Ship via `/ship`. PR body contains `Closes #2690` and `Closes #2691` on separate lines.
+1. Write the learning file `knowledge-base/project/learnings/2026-04-22-follow-through-admin-ip-refresh-and-ssh-gate-verification.md` with:
+   - `## #2690 Verification` — date, exact command, exit code (or observability note), redacted stdout excerpt, list length, SKILL.md-vs-procedure format drift note (if any).
+   - `## #2691 Verification` — contrived input, excerpt of throwaway plan's `## Hypotheses` section, excerpt of deepen-plan's `Network-Outage Deep-Dive` subsection, Pass/Fail outcome.
+   - `## Methodology` — brief narrative of the sibling-worktree isolation pattern for future follow-through verifications against plan-generating skills.
+2. If either verification surfaced a gap (skill did not emit "No drift", plan did not emit L3-first hypotheses, deepen-plan did not emit subsection, or SKILL.md/procedure format drift), file a new priority/p1 issue tagged `domain/engineering` describing the regression. #2690 / #2691 remain OPEN — do NOT close on failure. PR body uses `Ref #2690 #2691` instead of `Closes #N` so auto-close does not fire.
+3. If both verifications passed, PR body contains `Closes #2690` and `Closes #2691` on separate lines — auto-close handles the rest.
+4. Run `skill: soleur:compound` to capture the verification methodology as a reusable pattern (e.g., "how to exercise a post-merge follow-through verification for plan-generating skills without polluting plans/ or clobbering sibling specs/"). The sibling-worktree isolation pattern is the core insight.
+5. Ship via `skill: soleur:ship`.
 
 ## Acceptance Criteria
 
 ### Pre-merge (PR)
 
 - [ ] Phase 1 executed: `admin-ip-refresh --dry-run` output captured, verification outcome recorded.
-- [ ] Phase 2 executed: throwaway plan inspected for L3-first `## Hypotheses`, deepen-plan run inspected for Network-Outage Deep-Dive subsection, throwaway artifacts deleted.
-- [ ] Learning file exists at `knowledge-base/project/learnings/2026-04-22-follow-through-admin-ip-refresh-and-ssh-gate-verification.md` with both `## #2690 Verification` and `## #2691 Verification` sections.
-- [ ] Learning file redacts egress IP and ADMIN_IPS CIDRs (records list length only).
-- [ ] `npx markdownlint-cli2 --fix knowledge-base/project/learnings/2026-04-22-follow-through-admin-ip-refresh-and-ssh-gate-verification.md knowledge-base/project/plans/2026-04-22-chore-verify-admin-ip-refresh-and-ssh-hypothesis-gate-plan.md` — zero new errors.
-- [ ] `bash scripts/test-all.sh` passes (no regressions from committing the learning file).
-- [ ] PR body includes `Closes #2690` and `Closes #2691`.
+- [ ] Phase 2 pre-req: sibling worktree created on non-`feat-*` branch (`tmp/verify-ssh-gate`) via `plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh --yes create tmp/verify-ssh-gate`.
+- [ ] Phase 2 executed: throwaway plan inspected for L3-first `## Hypotheses`, deepen-plan run inspected for `Network-Outage Deep-Dive` subsection.
+- [ ] Phase 2 cleanup: sibling worktree removed, branch deleted, no throwaway plan in remote `main` or in this feature branch's `knowledge-base/project/plans/`.
+- [ ] THIS plan's `knowledge-base/project/specs/feat-one-shot-verify-follow-through-2690-2691/tasks.md` is unchanged by the Phase 2 exercise (verify via `git diff` before commit).
+- [ ] Learning file exists at `knowledge-base/project/learnings/2026-04-22-follow-through-admin-ip-refresh-and-ssh-gate-verification.md` with `## #2690 Verification`, `## #2691 Verification`, and `## Methodology` sections.
+- [ ] Learning file redacts egress IP and ADMIN_IPS CIDRs (records list length only; egress rendered as `<redacted>/32`).
+- [ ] `npx markdownlint-cli2 --fix` run on the learning file and plan file with specific paths (not globs, per `cq-markdownlint-fix-target-specific-paths`) — zero new errors.
+- [ ] `bash scripts/test-all.sh` passes (no regressions from committing the learning file; reference-link integrity checks still pass).
+- [ ] PR body includes `Closes #2690` and `Closes #2691` (pass outcome) OR `Ref #2690 #2691` + linked regression issue(s) (fail outcome).
 
 ### Post-merge (operator)
 
@@ -114,9 +164,20 @@ This verification produces a throwaway plan file by invoking `/soleur:plan` with
 
 ## Hypotheses
 
-This plan contains the words "SSH", "firewall", "timeout", and "connection reset" in its Problem Statement and Phase 2 — Phase 1.4's regex WILL trigger. However, the current plan's subject IS the SSH-hypothesis-gate verification itself, not an SSH-outage diagnosis. Running the network-outage checklist literally against this plan produces zero useful content.
+This plan contains the words "SSH", "firewall", "timeout", and "connection reset" in its Overview, Problem Statement, and Phase 2 — Phase 1.4's regex WILL trigger (and did trigger on this deepen pass, producing this subsection). However, the plan's subject IS the SSH-hypothesis-gate verification itself, not an SSH-outage diagnosis. Running the full L3-to-L7 checklist literally would produce zero useful content.
 
-Opt-out per checklist §"Opt-out": This plan is a verification of the SSH-outage hypothesis gate, not a diagnosis of an SSH outage. No L3-to-L7 layer verification applies because there is no outage to diagnose — the contrived input in Phase 2 acceptance criterion 1 is the verification subject, not a real incident. Artifact: this opt-out itself, recorded inline, per checklist §Opt-out ("one-line justification citing a verification artifact").
+**Per-layer opt-out with artifacts** (per checklist §"Opt-out"):
+
+- **L3 firewall allow-list — opt out.** Artifact: there is no current SSH outage. This plan runs `/soleur:admin-ip-refresh --dry-run` in Phase 1 specifically to verify the firewall allow-list state; that IS the L3 verification step, inverted.
+- **L3 DNS / routing — opt out.** Artifact: no host is unreachable in this plan's scope; the contrived input in Phase 2 acceptance criterion 1 is a string, not a target.
+- **L7 TLS / proxy — opt out.** Artifact: no HTTPS endpoint is addressed; this is internal-tooling verification only.
+- **L7 application — opt out.** Artifact: no service is suspected; `journalctl -u ssh` on prod is not in scope for this plan (it would be in scope for an actual outage, which this plan is preventing the mis-diagnosis of).
+
+### Network-Outage Deep-Dive
+
+(Added by Phase 4.5 during the deepen pass on this plan.)
+
+All four layer checks opt out per the above artifacts. The deepen pass's per-layer checklist gate is satisfied by the inline opt-out artifacts — no L3 firewall-drift hypothesis is required because this plan is itself the firewall-drift-prevention verification. Future readers: if this plan is repurposed as a template for an actual SSH outage diagnosis, the opt-outs above must be REMOVED and replaced with concrete L3-to-L7 verifications.
 
 ## Domain Review
 
