@@ -5,6 +5,8 @@
  * accidentally destroy a real account. See cq-destructive-prod-tests-allowlist.
  */
 
+import { randomUUID } from "node:crypto";
+
 export const SYNTHETIC_EMAIL_RE =
   /^concurrency-test\+[0-9a-f-]+@soleur\.dev$/;
 
@@ -23,13 +25,9 @@ export function assertSyntheticEmail(email: string): void {
 }
 
 /**
- * Generate a synthetic email for a test fixture. Uses crypto.randomUUID so
- * each run is isolated even if a prior run leaked rows.
+ * Generate a synthetic email for a test fixture. Uses node:crypto.randomUUID
+ * so each run is isolated even if a prior run leaked rows.
  */
 export function syntheticEmail(): string {
-  const uuid =
-    typeof crypto !== "undefined" && "randomUUID" in crypto
-      ? (crypto as { randomUUID: () => string }).randomUUID()
-      : Math.random().toString(36).slice(2);
-  return `concurrency-test+${uuid}@soleur.dev`;
+  return `concurrency-test+${randomUUID()}@soleur.dev`;
 }
