@@ -6,7 +6,7 @@
 
 ## Phase 1 — Run Validator
 
-- [x] 1.1 Resolve the latest AEO audit file: `AUDIT=$(ls -1 knowledge-base/marketing/audits/soleur-ai/*-aeo-audit.md | sort | tail -n 1)` and confirm it is `2026-04-22-aeo-audit.md` ✓ (15018 bytes)
+- [x] 1.1 Resolve the latest AEO audit file: `AUDIT=$(ls -1 knowledge-base/marketing/audits/soleur-ai/*-aeo-audit.md | sort | tail -n 1)` and confirm it is `2026-04-22-aeo-audit.md` ✓ (produced by run 24795319398)
 - [x] 1.2 Run the SAP Scorecard grep assertions (Structure/40, Authority/35, Presence/25) — all three must print PASS ✓ `PASS: Structure/40, Authority/35, Presence/25`
 - [x] 1.3 Run the 8-component AEO diagnostic count grep — must equal `8/8` ✓ `PASS: 8-component count 8/8`
 - [x] 1.4 Capture validator stdout verbatim to a temp file for use in the closing comment ✓
@@ -28,5 +28,5 @@
 
 ## Phase 3 — Cleanup
 
-- [ ] 3.1 Decide PR path: default is no PR (leave worktree for next cleanup-merged sweep). If `/ship` insists, open a docs-only PR titled `chore: verify #2802 pinned-template follow-through (docs only)` with `Closes #2802` in body.
-- [ ] 3.2 Run `/soleur:compound` to capture any learnings (expected to skip gracefully — happy-path verification)
+- [x] 3.1 PR path chosen: opened docs-only PR #2823 with `Closes #2802` in body (intent-preserving with one-shot's standard flow).
+- [x] 3.2 Run `/soleur:compound` to capture any learnings (expected to skip gracefully — happy-path verification).

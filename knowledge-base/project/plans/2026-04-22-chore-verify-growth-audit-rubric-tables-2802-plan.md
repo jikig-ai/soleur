@@ -33,7 +33,7 @@ PR #2795 pinned a dual-rubric AEO audit template (SAP Scorecard + 8-component AE
 
 The concern tracked by #2802 is that an LLM-mediated agent can silently drop parts of a pinned prompt. To verify the pin held, the growth-audit workflow was triggered post-merge (run 24795319398), and the produced audit must be checked against a deterministic grep-based validator.
 
-**Status at planning time:** Workflow run 24795319398 completed `success` at 2026-04-22T18:35:44Z. The audit file `knowledge-base/marketing/audits/soleur-ai/2026-04-22-aeo-audit.md` exists (15,018 bytes) and has already been merged to main via PR #2810 (commit 8428f358 `docs: weekly growth audit 2026-04-22`). Pre-planning validator run shows all four assertions PASS.
+**Status at planning time:** Workflow run 24795319398 completed `success` at 2026-04-22T18:35:44Z. The audit file `knowledge-base/marketing/audits/soleur-ai/2026-04-22-aeo-audit.md` has already been merged to main via PR #2810 (commit 8428f358 `docs: weekly growth audit 2026-04-22`). Pre-planning validator run shows all four assertions PASS.
 
 This plan formalizes the verification, records evidence, and closes #2802.
 
@@ -170,14 +170,7 @@ gh issue view 2802 --json state --jq .state  # expect: CLOSED
 
 ### Phase 3 — Worktree cleanup
 
-The worktree is initialization-only; no commits beyond `e172abf0 chore: initialize feat-one-shot-2802-verify-growth-audit-rubric-tables` are required.
-
-Options:
-
-1. **Preferred:** Leave the branch to be cleaned up by the next session-start `worktree-manager.sh cleanup-merged` sweep once the follow-through-branch retention policy picks it up.
-2. **If `/ship` insists on a PR:** Commit the plan + spec/tasks artifacts and open a no-op PR titled `chore: verify #2802 pinned-template follow-through (docs only)` with body linking the validator output and `Closes #2802`. Merge via `gh pr merge --squash --auto`.
-
-**Default path:** option 1. The issue is closable without a PR because no code changed.
+**Chosen path:** docs-only PR #2823 with `Closes #2802` in body (intent-preserving with one-shot's standard flow; no exception needed). The plan + spec/tasks artifacts land on main as the searchable evidence trail; `cleanup-merged` handles worktree removal post-merge. The alternative (close PR without merging, issue-close directly) was considered and rejected per session's `--headless` continuity preference.
 
 ### Test Scenarios
 
