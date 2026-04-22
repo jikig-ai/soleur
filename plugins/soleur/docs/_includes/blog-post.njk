@@ -74,6 +74,7 @@ layout: base.njk
 
 <section class="content">
   <div class="container">
+    {% if pillar %}{% include "pillar-series.njk" %}{% endif %}
     <div class="prose">
       {{ content | safe }}
     </div>
