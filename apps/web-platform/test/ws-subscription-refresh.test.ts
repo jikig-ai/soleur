@@ -13,12 +13,23 @@ const WS_OPEN = 1;
 const WS_CLOSED = 3;
 
 // Hoisted supabase mock — shared by every test, reconfigured per case.
-const { mockSingle, mockEq, mockSelect, mockFrom } = vi.hoisted(() => {
+// `refreshSubscriptionStatus` now makes two DB calls per tick when status
+// is not 'unpaid': (a) SELECT on `users` terminated by `.single()`, and
+// (b) SELECT count on `user_concurrency_slots` terminated by `.eq()`
+// (head: true, count: 'exact' — thenable returns `{ count, error }`).
+const { mockSingle, mockEq, mockSelect, mockFrom, mockCount } = vi.hoisted(() => {
   const mockSingle = vi.fn();
-  const mockEq = vi.fn(() => ({ single: mockSingle }));
+  const mockCount = vi.fn();
+  const mockEq = vi.fn((_col: string, _val: unknown) => {
+    // Route the thenable case to mockCount. `.eq()` on the `users` path is
+    // immediately followed by `.single()` so `single` is still reachable.
+    const result = { single: mockSingle } as { single: typeof mockSingle; then?: unknown };
+    result.then = (resolve: (v: unknown) => unknown) => resolve(mockCount());
+    return result;
+  });
   const mockSelect = vi.fn(() => ({ eq: mockEq }));
   const mockFrom = vi.fn(() => ({ select: mockSelect }));
-  return { mockSingle, mockEq, mockSelect, mockFrom };
+  return { mockSingle, mockEq, mockSelect, mockFrom, mockCount };
 });
 
 vi.mock("@/lib/supabase/service", () => ({
@@ -49,6 +60,10 @@ beforeAll(async () => {
 beforeEach(() => {
   vi.useFakeTimers();
   mockSingle.mockReset();
+  mockCount.mockReset();
+  // Default: no cap drift (count <= any cap). Tests exercising drift override
+  // this with a specific count value.
+  mockCount.mockReturnValue({ count: 0, error: null });
   mockEq.mockClear();
   mockSelect.mockClear();
   mockFrom.mockClear();
@@ -121,10 +136,10 @@ describe("ws-handler subscription refresh timer", () => {
 
     wsHandler.startSubscriptionRefresh("user-4", session);
 
-    // First tick queries once.
+    // First tick queries twice (users + user_concurrency_slots count).
     await vi.advanceTimersByTimeAsync(60_000);
     const callsAfterFirstTick = mockFrom.mock.calls.length;
-    expect(callsAfterFirstTick).toBe(1);
+    expect(callsAfterFirstTick).toBe(2);
 
     // Simulate teardown path (e.g., ws close handler) clearing the timer.
     if (session.subscriptionRefreshTimer) clearInterval(session.subscriptionRefreshTimer);
@@ -133,6 +148,58 @@ describe("ws-handler subscription refresh timer", () => {
     // Advance two more intervals — no additional queries.
     await vi.advanceTimersByTimeAsync(120_000);
     expect(mockFrom.mock.calls.length).toBe(callsAfterFirstTick);
+  });
+
+  test("cap-drift self-evict: count > newCap closes session with 4011", async () => {
+    // User was Scale (cap 50), downgraded to Solo (cap 2) via webhook that
+    // landed on another process (simulated: our session never received the
+    // 4011 push). The refresh tick re-reads plan_tier='solo' and sees
+    // count=3 > newCap=2; passive check evicts THIS session so the user
+    // reconverges at the new cap on reconnect.
+    mockSingle.mockResolvedValue({
+      data: { subscription_status: "active", plan_tier: "solo", concurrency_override: null },
+      error: null,
+    });
+    mockCount.mockReturnValue({ count: 3, error: null });
+
+    const session = makeSession({ subscriptionStatus: "active", planTier: "scale" });
+    wsHandler.startSubscriptionRefresh("user-drift", session);
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    // Fresh tier is committed to the session before the eviction.
+    expect(session.planTier).toBe("solo");
+    // closeWithPreamble sends the preamble then calls ws.close; both run.
+    const sendCalls = (session.ws.send as ReturnType<typeof vi.fn>).mock.calls;
+    expect(sendCalls.some((call: unknown[]) => {
+      const raw = call[0];
+      if (typeof raw !== "string") return false;
+      const parsed = JSON.parse(raw);
+      return parsed.type === "tier_changed" && parsed.previousTier === "scale" && parsed.newTier === "solo";
+    })).toBe(true);
+    expect((session.ws.close as ReturnType<typeof vi.fn>)).toHaveBeenCalled();
+
+    if (session.subscriptionRefreshTimer) clearInterval(session.subscriptionRefreshTimer);
+  });
+
+  test("cap-drift self-evict: count <= newCap does NOT close", async () => {
+    // RED inversion of the test above. Same plan_tier change but count is
+    // within new cap; no eviction should fire. Without this test, the
+    // cap-drift branch could silently always-evict and the above test would
+    // still pass.
+    mockSingle.mockResolvedValue({
+      data: { subscription_status: "active", plan_tier: "solo", concurrency_override: null },
+      error: null,
+    });
+    mockCount.mockReturnValue({ count: 1, error: null });
+
+    const session = makeSession({ subscriptionStatus: "active", planTier: "scale" });
+    wsHandler.startSubscriptionRefresh("user-no-drift", session);
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    expect(session.planTier).toBe("solo");
+    expect((session.ws.close as ReturnType<typeof vi.fn>)).not.toHaveBeenCalled();
+
+    if (session.subscriptionRefreshTimer) clearInterval(session.subscriptionRefreshTimer);
   });
 
   test("post-await readyState guard: no mutation when socket already closed", async () => {

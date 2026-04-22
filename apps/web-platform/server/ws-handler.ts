@@ -268,11 +268,41 @@ export async function refreshSubscriptionStatus(
       plan_tier?: PlanTier | null;
       concurrency_override?: number | null;
     };
+    const prevTier = session.planTier;
     session.subscriptionStatus = row.subscription_status ?? undefined;
     session.planTier = row.plan_tier ?? "free";
     session.concurrencyOverride = row.concurrency_override ?? null;
     if (row.subscription_status === "unpaid") {
       checkSubscriptionSuspended(userId, session);
+      return;
+    }
+
+    // Passive cap-drift self-evict. The Stripe webhook's
+    // forceDisconnectForTierChange reaches only the in-process `sessions`
+    // Map — a future horizontal scale-out (replicas > 1) silently breaks
+    // downgrade enforcement for sessions on other processes. This passive
+    // check runs on every subscription refresh (default 60s): if the
+    // current slot count exceeds the freshly-computed effective cap,
+    // evict this session so the user lands at the new cap on reconnect.
+    // Non-deterministic which over-cap session gets closed — all of them
+    // will on their next refresh tick, converging within one interval.
+    const newCap = effectiveCap(session.planTier, session.concurrencyOverride);
+    const { count, error: countErr } = await supabase
+      .from("user_concurrency_slots")
+      .select("*", { count: "exact", head: true })
+      .eq("user_id", userId);
+    if (!countErr && typeof count === "number" && count > newCap) {
+      const convId = session.conversationId ?? session.pending?.id;
+      log.info(
+        { userId, convId, count, newCap, prevTier, newTier: session.planTier },
+        "Cap-drift detected on refresh — evicting session",
+      );
+      closeWithPreamble(session.ws, WS_CLOSE_CODES.TIER_CHANGED, {
+        type: "tier_changed",
+        previousTier: prevTier,
+        newTier: session.planTier,
+      });
+      if (convId) void releaseSlot(userId, convId);
     }
   } catch (err) {
     log.warn(

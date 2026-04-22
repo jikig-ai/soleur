@@ -1,21 +1,24 @@
 import { describe, test, expect, vi, beforeEach } from "vitest";
 import type Stripe from "stripe";
+import { configureSupabaseUpdateChain } from "./helpers/supabase-update-chain";
 
-const { mockConstructEvent, mockUpdate, mockEq, mockIn, mockMaybeSingle, mockForceDisconnect } =
+const { mockConstructEvent, mockUpdate, mockEq, mockIn, mockSelect, mockMaybeSingle, mockForceDisconnect, mockInvalidateTierMemo } =
   vi.hoisted(() => ({
     mockConstructEvent: vi.fn(),
     mockUpdate: vi.fn(),
     mockEq: vi.fn(),
     mockIn: vi.fn(),
+    mockSelect: vi.fn(),
     mockMaybeSingle: vi.fn(),
     mockForceDisconnect: vi.fn(() => true),
+    mockInvalidateTierMemo: vi.fn(),
   }));
 
 const { priceTier } = vi.hoisted(() => ({ priceTier: { value: "startup" as string } }));
 
 vi.mock("@/lib/stripe", () => ({
   getStripe: () => ({ webhooks: { constructEvent: mockConstructEvent } }),
-  invalidateTierMemo: vi.fn(),
+  invalidateTierMemo: mockInvalidateTierMemo,
 }));
 
 vi.mock("@/lib/stripe-price-tier-map", () => ({
@@ -79,16 +82,7 @@ describe("Stripe webhook — plan_tier writes", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     priceTier.value = "startup";
-    // .update().eq().in().select("id") — post-#2701 the reconciled webhook
-    // reads matched count for guard-no-op observability; .in() must expose
-    // .select() that resolves to {data:[{id}], error:null}.
-    mockIn.mockImplementation(() => ({
-      select: vi.fn().mockResolvedValue({ data: [{ id: "user-123" }], error: null }),
-    }));
-    mockEq.mockReturnValue(
-      Object.assign(Promise.resolve({ error: null }), { in: mockIn }),
-    );
-    mockUpdate.mockReturnValue({ eq: mockEq });
+    configureSupabaseUpdateChain({ mockUpdate, mockEq, mockIn, mockSelect });
     mockMaybeSingle.mockResolvedValue({
       data: {
         id: "user-123",
@@ -139,6 +133,12 @@ describe("Stripe webhook — plan_tier writes", () => {
       previousTier: "scale",
       newTier: "solo",
     });
+    // Memo invalidation is load-bearing: without it, the cap-hit Stripe
+    // fallback memo (60s TTL) serves a stale tier and a just-downgraded user
+    // continues to bypass the new cap until the TTL expires. Without this
+    // assertion, a regression that drops the invalidateTierMemo call would
+    // ship green.
+    expect(mockInvalidateTierMemo).toHaveBeenCalledWith("user-123");
   });
 
   test("incomplete status skips plan_tier write entirely", async () => {

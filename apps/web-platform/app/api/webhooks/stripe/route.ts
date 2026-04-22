@@ -1,9 +1,9 @@
 import { NextResponse } from "next/server";
-import { getStripe, invalidateTierMemo } from "@/lib/stripe";
+import { getStripe } from "@/lib/stripe";
 import { getPriceTier } from "@/lib/stripe-price-tier-map";
 import { effectiveCap } from "@/lib/plan-limits";
 import type { PlanTier } from "@/lib/types";
-import { forceDisconnectForTierChange } from "@/server/ws-handler";
+import { onTierTransitionApplied } from "@/lib/stripe-subscription-transition";
 import { createServiceClient } from "@/lib/supabase/server";
 import type Stripe from "stripe";
 import logger from "@/server/logger";
@@ -50,10 +50,16 @@ function mapStripeStatus(stripeStatus: Stripe.Subscription.Status): string {
   }
 }
 
-function extractCustomerId(subscription: Stripe.Subscription): string {
-  return typeof subscription.customer === "string"
-    ? subscription.customer
-    : subscription.customer.id;
+/**
+ * Returns the customer id, or null for Stripe.DeletedCustomer objects.
+ * A deleted customer cannot own a live subscription mutation — callers
+ * should early-return and log rather than match rows by a stale id.
+ */
+function extractCustomerId(subscription: Stripe.Subscription): string | null {
+  const c = subscription.customer;
+  if (typeof c === "string") return c;
+  if ("deleted" in c && c.deleted === true) return null;
+  return c.id;
 }
 
 function deriveTierFromSubscription(
@@ -133,6 +139,13 @@ export async function POST(request: Request) {
     case "customer.subscription.updated": {
       const subscription = event.data.object as Stripe.Subscription;
       const customerId = extractCustomerId(subscription);
+      if (!customerId) {
+        logger.warn(
+          { subId: subscription.id, eventId: event.id },
+          "Webhook: subscription.updated on deleted customer — skipping",
+        );
+        break;
+      }
       const newStatus = mapStripeStatus(subscription.status);
 
       // Stripe `incomplete` status: the subscription is pending SCA or
@@ -235,21 +248,12 @@ export async function POST(request: Request) {
           { customerId, eventId: event.id, matched, newStatus },
           "Webhook: customer.subscription.updated applied",
         );
-
-        // Invalidate the per-user tier memo so retrieveSubscriptionTier does
-        // not serve a stale cached value to the next cap-hit fallback.
-        invalidateTierMemo(userId);
-
-        // On a cap-reducing downgrade, force-disconnect any live WS session.
-        // Client reconnects after a 500 ms delay and re-reads the new
-        // plan_tier from the DB.
-        if (isDowngrade) {
-          forceDisconnectForTierChange(userId, {
-            type: "tier_changed",
-            previousTier: currentTier,
-            newTier,
-          });
-        }
+        onTierTransitionApplied({
+          userId,
+          previousTier: currentTier,
+          newTier,
+          concurrencyOverride: currentOverride,
+        });
       }
       break;
     }
@@ -257,6 +261,13 @@ export async function POST(request: Request) {
     case "customer.subscription.deleted": {
       const subscription = event.data.object as Stripe.Subscription;
       const customerId = extractCustomerId(subscription);
+      if (!customerId) {
+        logger.warn(
+          { subId: subscription.id, eventId: event.id },
+          "Webhook: subscription.deleted on deleted customer — skipping",
+        );
+        break;
+      }
 
       const { data: currentRow, error: selErr } = await supabase
         .from("users")
@@ -315,17 +326,13 @@ export async function POST(request: Request) {
           { customerId, eventId: event.id, matched },
           "Webhook: customer.subscription.deleted applied",
         );
-
         if (userId) {
-          invalidateTierMemo(userId);
-          const previousCap = effectiveCap(previousTier, currentOverride);
-          if (previousCap > effectiveCap("free", currentOverride)) {
-            forceDisconnectForTierChange(userId, {
-              type: "tier_changed",
-              previousTier,
-              newTier: "free",
-            });
-          }
+          onTierTransitionApplied({
+            userId,
+            previousTier,
+            newTier: "free",
+            concurrencyOverride: currentOverride,
+          });
         }
       }
       break;

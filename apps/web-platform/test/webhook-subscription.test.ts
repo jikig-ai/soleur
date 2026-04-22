@@ -1,5 +1,6 @@
 import { describe, test, expect, vi, beforeEach } from "vitest";
 import type Stripe from "stripe";
+import { configureSupabaseUpdateChain } from "./helpers/supabase-update-chain";
 
 // ---------------------------------------------------------------------------
 // Mocks — vi.hoisted ensures these are available when vi.mock factories run
@@ -91,32 +92,9 @@ function makeEvent(
 describe("Stripe webhook — subscription lifecycle", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    // Default: every guarded chain (.eq().in().select()) returns one matched
-    // row. Tests asserting the guard fired (zero rows) override mockSelect.
-    mockSelect.mockResolvedValue({ data: [{ id: "user-123" }], error: null });
-    // mockIn is awaitable AND exposes .select() so the new
-    // .updated/.deleted handlers (which now read matched count for
-    // observability) chain correctly.
-    mockIn.mockImplementation(() => {
-      const result: { data: { id: string }[]; error: null } = {
-        data: [{ id: "user-123" }],
-        error: null,
-      };
-      return {
-        select: mockSelect,
-        then: (resolve: (value: typeof result) => unknown) => resolve(result),
-      };
-    });
-    // mockEq returns a thenable (for legacy .update().eq() chains used by
-    // checkout.session.completed) AND exposes .in() for the guarded handlers.
-    mockEq.mockImplementation(() => {
-      const result: { error: null } = { error: null };
-      return {
-        in: mockIn,
-        then: (resolve: (value: typeof result) => unknown) => resolve(result),
-      };
-    });
-    mockUpdate.mockReturnValue({ eq: mockEq });
+    // Default chain: 1 matched row, no error at any level. Tests override
+    // individual mock return values to assert zero-match or error paths.
+    configureSupabaseUpdateChain({ mockUpdate, mockEq, mockIn, mockSelect });
   });
 
   describe("checkout.session.completed", () => {
