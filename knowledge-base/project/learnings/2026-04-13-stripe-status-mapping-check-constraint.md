@@ -51,6 +51,13 @@ delivered and the failure is unrecoverable without manual intervention.
 4. **git add from wrong directory** — Recovery: cd to worktree root.
    Prevention: use absolute paths or verify CWD before git commands.
 
+## See Also
+
+- `knowledge-base/project/learnings/integration-issues/2026-04-22-stripe-webhook-idempotency-dedup-insert-first-pattern.md` —
+  Followup layer: `processed_stripe_events` dedup table + checkout out-of-order
+  guard. Extends this learning's mapping + error-check discipline with a
+  replay-blocking gate.
+
 ## Tags
 
 category: integration-issues

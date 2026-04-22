@@ -66,3 +66,31 @@ export function configureSupabaseUpdateChain(opts: ConfigureOptions): void {
 
   mockUpdate.mockReturnValue({ eq: mockEq });
 }
+
+/**
+ * Insert + delete chain for the `processed_stripe_events` dedup table
+ * introduced by migration 030 (issue #2772).
+ *
+ * Shape reproduced:
+ *
+ *   supabase.from("processed_stripe_events").insert({...})      // returns {error}
+ *   supabase.from("processed_stripe_events").delete().eq(col, val) // returns {error}
+ *
+ * Route the `vi.mock("@/lib/supabase/server")` factory by table name so
+ * the insert/delete chain is isolated from the users-table update chain.
+ * Default behavior: both succeed. Individual tests override `mockInsert`
+ * to return `{error: {code: "23505"}}` for the replay path, or
+ * `{error: {code: "40001", ...}}` for a transient failure.
+ */
+export interface SupabaseInsertChainMocks {
+  mockInsert: Mock;
+  mockDeleteEq: Mock;
+}
+
+export function configureSupabaseInsertChain(
+  opts: SupabaseInsertChainMocks,
+): void {
+  const { mockInsert, mockDeleteEq } = opts;
+  mockInsert.mockResolvedValue({ error: null });
+  mockDeleteEq.mockResolvedValue({ error: null });
+}
