@@ -28,6 +28,14 @@ vi.mock("@/lib/supabase/service", () => ({
         // repo_url so conversation inserts can be scoped to the current repo.
         // Return shape is evaluated at call time so individual tests can
         // simulate the disconnected state via `mockUserRepoUrl = null`.
+        //
+        // NOT migrated to `test/mocks/supabase-query-builder.ts`: this
+        // inline `chain` is a predicate-aware recursive mock that
+        // `start_session` tests rely on for `.eq()` predicate inspection.
+        // The shared `buildSupabaseQueryBuilder` serves non-predicate-aware
+        // cases. See plan
+        // `2026-04-22-refactor-drain-web-platform-code-review-2775-2776-2777-plan.md`
+        // §Non-Goals / R5 for the deliberate carve-out.
         const chain = {
           select: vi.fn(() => chain),
           eq: vi.fn(() => chain),

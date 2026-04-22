@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { createUseTeamNamesMock } from "./mocks/use-team-names";
+import { buildSupabaseQueryBuilder } from "./mocks/supabase-query-builder";
 
 // Mock next/navigation — stable reference prevents useEffect re-fires
 const mockPush = vi.fn();
@@ -93,28 +94,8 @@ const mockSubscribe = vi.fn().mockReturnValue({ unsubscribe: vi.fn() });
 const mockOn = vi.fn().mockReturnValue({ subscribe: mockSubscribe });
 const mockChannel = vi.fn().mockReturnValue({ on: mockOn });
 
-// Supabase query builder mock — must be thenable like the real client
-function createQueryBuilder(data: unknown[], singleRow: unknown = null) {
-  const result = { data, error: null, count: data.length };
-  const builder = {
-    select: vi.fn().mockReturnThis(),
-    eq: vi.fn().mockReturnThis(),
-    in: vi.fn().mockReturnThis(),
-    is: vi.fn().mockReturnThis(),
-    not: vi.fn().mockReturnThis(),
-    order: vi.fn().mockReturnThis(),
-    limit: vi.fn().mockReturnThis(),
-    single: vi.fn().mockResolvedValue({ data: singleRow, error: null }),
-    maybeSingle: vi.fn().mockResolvedValue({ data: singleRow, error: null }),
-    update: vi.fn().mockReturnThis(),
-    then: (onfulfilled: (value: unknown) => unknown) =>
-      Promise.resolve(result).then(onfulfilled),
-  };
-  return builder;
-}
-
-let conversationBuilder: ReturnType<typeof createQueryBuilder>;
-let messageBuilder: ReturnType<typeof createQueryBuilder>;
+let conversationBuilder: ReturnType<typeof buildSupabaseQueryBuilder>;
+let messageBuilder: ReturnType<typeof buildSupabaseQueryBuilder>;
 // Default: simulate a connected repo so the new repo_url scoping + the
 // dashboard disconnected-hint effect both short-circuit sensibly.
 const DEFAULT_USERS_ROW = { repo_url: "https://github.com/acme/repo" };
@@ -130,8 +111,8 @@ vi.mock("@/lib/supabase/client", () => ({
     from: (table: string) => {
       if (table === "conversations") return conversationBuilder;
       if (table === "messages") return messageBuilder;
-      if (table === "users") return createQueryBuilder([], DEFAULT_USERS_ROW);
-      return createQueryBuilder([]);
+      if (table === "users") return buildSupabaseQueryBuilder({ data: [], singleRow: DEFAULT_USERS_ROW });
+      return buildSupabaseQueryBuilder({ data: [] });
     },
     channel: mockChannel,
     removeChannel: vi.fn(),
@@ -142,8 +123,8 @@ describe("Command Center", () => {
   beforeEach(() => {
     mockPush.mockClear();
     mockChannel.mockClear();
-    conversationBuilder = createQueryBuilder(mockConversations);
-    messageBuilder = createQueryBuilder(mockMessages);
+    conversationBuilder = buildSupabaseQueryBuilder({ data: mockConversations });
+    messageBuilder = buildSupabaseQueryBuilder({ data: mockMessages });
 
     // Mock fetch for KB tree — return all foundation files so page shows Command Center
     globalThis.fetch = vi.fn().mockResolvedValue({
@@ -166,8 +147,8 @@ describe("Command Center", () => {
   });
 
   it("shows operational tasks alongside foundation chips when all foundations are complete", async () => {
-    conversationBuilder = createQueryBuilder([]);
-    messageBuilder = createQueryBuilder([]);
+    conversationBuilder = buildSupabaseQueryBuilder({ data: [] });
+    messageBuilder = buildSupabaseQueryBuilder({ data: [] });
 
     const { default: DashboardPage } = await import(
       "@/app/(dashboard)/dashboard/page"
@@ -186,8 +167,8 @@ describe("Command Center", () => {
   });
 
   it("shows 'organization is ready' when all cards are complete", async () => {
-    conversationBuilder = createQueryBuilder([]);
-    messageBuilder = createQueryBuilder([]);
+    conversationBuilder = buildSupabaseQueryBuilder({ data: [] });
+    messageBuilder = buildSupabaseQueryBuilder({ data: [] });
 
     // Mock KB tree with ALL files (4 foundation + 6 operational)
     globalThis.fetch = vi.fn().mockResolvedValue({
@@ -259,9 +240,9 @@ describe("Command Center", () => {
 
     // Create a new builder that returns only waiting_for_user conversations
     const filtered = mockConversations.filter((c) => c.status === "waiting_for_user");
-    conversationBuilder = createQueryBuilder(filtered);
+    conversationBuilder = buildSupabaseQueryBuilder({ data: filtered });
     const filteredMessages = mockMessages.filter((m) => m.conversation_id === "conv-1");
-    messageBuilder = createQueryBuilder(filteredMessages);
+    messageBuilder = buildSupabaseQueryBuilder({ data: filteredMessages });
 
     fireEvent.change(statusFilter, { target: { value: "waiting_for_user" } });
 
@@ -312,7 +293,7 @@ describe("Command Center", () => {
         archived_at: new Date().toISOString(),
       },
     ];
-    conversationBuilder = createQueryBuilder(withArchived);
+    conversationBuilder = buildSupabaseQueryBuilder({ data: withArchived });
 
     const { default: DashboardPage } = await import(
       "@/app/(dashboard)/dashboard/page"
@@ -350,7 +331,7 @@ describe("Command Center", () => {
     });
 
     // Reset the mock to track the new query
-    conversationBuilder = createQueryBuilder([]);
+    conversationBuilder = buildSupabaseQueryBuilder({ data: [] });
 
     fireEvent.click(screen.getByRole("button", { name: "Archived" }));
 
@@ -361,8 +342,8 @@ describe("Command Center", () => {
   });
 
   it("shows foundation cards with Vision incomplete when vision.md is a stub", async () => {
-    conversationBuilder = createQueryBuilder([]);
-    messageBuilder = createQueryBuilder([]);
+    conversationBuilder = buildSupabaseQueryBuilder({ data: [] });
+    messageBuilder = buildSupabaseQueryBuilder({ data: [] });
 
     globalThis.fetch = vi.fn().mockResolvedValue({
       ok: true,
@@ -423,8 +404,8 @@ describe("Command Center", () => {
   describe("first-run form", () => {
     beforeEach(() => {
       // No conversations + no vision.md triggers the first-run state
-      conversationBuilder = createQueryBuilder([]);
-      messageBuilder = createQueryBuilder([]);
+      conversationBuilder = buildSupabaseQueryBuilder({ data: [] });
+      messageBuilder = buildSupabaseQueryBuilder({ data: [] });
 
       // KB tree without vision.md
       globalThis.fetch = vi.fn().mockResolvedValue({
