@@ -62,3 +62,4 @@ apps/web-platform/supabase/.temp/
 
 # Ephemeral capture scripts (sdk-probe)
 apps/web-platform/scripts/capture-*
+artifacts/
