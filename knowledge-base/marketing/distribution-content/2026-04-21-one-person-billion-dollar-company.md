@@ -3,7 +3,7 @@ title: "The One-Person Billion-Dollar Company: Why It's an Engineering Problem"
 type: pillar
 publish_date: 2026-04-21
 channels: discord, x, bluesky, linkedin-company
-status: scheduled
+status: stale
 ---
 
 ## Discord
