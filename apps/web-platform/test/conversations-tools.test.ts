@@ -18,12 +18,29 @@ import { describe, test, expect, vi, beforeEach } from "vitest";
 //   userId captured in closure: two builders with different userIds must
 //   invoke the helper with their respective userIds (no cross-contamination).
 
-const { mockLookup } = vi.hoisted(() => ({
+const { mockLookup, mockUserRepoUrl } = vi.hoisted(() => ({
   mockLookup: vi.fn(),
+  mockUserRepoUrl: vi.fn(() => "https://github.com/acme/repo" as string | null),
 }));
 
 vi.mock("@/server/lookup-conversation-for-path", () => ({
   lookupConversationForPath: (...args: unknown[]) => mockLookup(...args),
+}));
+
+vi.mock("@/lib/supabase/service", () => ({
+  createServiceClient: () => ({
+    from: (_table: string) => {
+      const chain = {
+        select: vi.fn(() => chain),
+        eq: vi.fn(() => chain),
+        maybeSingle: vi.fn(async () => ({
+          data: { repo_url: mockUserRepoUrl() },
+          error: null,
+        })),
+      };
+      return chain;
+    },
+  }),
 }));
 
 vi.mock("@anthropic-ai/claude-agent-sdk", () => ({
@@ -148,11 +165,13 @@ describe("buildConversationsTools", () => {
       1,
       "user-a",
       "knowledge-base/x.md",
+      "https://github.com/acme/repo",
     );
     expect(mockLookup).toHaveBeenNthCalledWith(
       2,
       "user-b",
       "knowledge-base/x.md",
+      "https://github.com/acme/repo",
     );
   });
 

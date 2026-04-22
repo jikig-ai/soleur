@@ -94,8 +94,8 @@ const mockOn = vi.fn().mockReturnValue({ subscribe: mockSubscribe });
 const mockChannel = vi.fn().mockReturnValue({ on: mockOn });
 
 // Supabase query builder mock — must be thenable like the real client
-function createQueryBuilder(data: unknown[]) {
-  const result = { data, error: null };
+function createQueryBuilder(data: unknown[], singleRow: unknown = null) {
+  const result = { data, error: null, count: data.length };
   const builder = {
     select: vi.fn().mockReturnThis(),
     eq: vi.fn().mockReturnThis(),
@@ -104,7 +104,8 @@ function createQueryBuilder(data: unknown[]) {
     not: vi.fn().mockReturnThis(),
     order: vi.fn().mockReturnThis(),
     limit: vi.fn().mockReturnThis(),
-    single: vi.fn().mockReturnThis(),
+    single: vi.fn().mockResolvedValue({ data: singleRow, error: null }),
+    maybeSingle: vi.fn().mockResolvedValue({ data: singleRow, error: null }),
     update: vi.fn().mockReturnThis(),
     then: (onfulfilled: (value: unknown) => unknown) =>
       Promise.resolve(result).then(onfulfilled),
@@ -114,6 +115,9 @@ function createQueryBuilder(data: unknown[]) {
 
 let conversationBuilder: ReturnType<typeof createQueryBuilder>;
 let messageBuilder: ReturnType<typeof createQueryBuilder>;
+// Default: simulate a connected repo so the new repo_url scoping + the
+// dashboard disconnected-hint effect both short-circuit sensibly.
+const DEFAULT_USERS_ROW = { repo_url: "https://github.com/acme/repo" };
 
 vi.mock("@/lib/supabase/client", () => ({
   createClient: () => ({
@@ -126,6 +130,7 @@ vi.mock("@/lib/supabase/client", () => ({
     from: (table: string) => {
       if (table === "conversations") return conversationBuilder;
       if (table === "messages") return messageBuilder;
+      if (table === "users") return createQueryBuilder([], DEFAULT_USERS_ROW);
       return createQueryBuilder([]);
     },
     channel: mockChannel,

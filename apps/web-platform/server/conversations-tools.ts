@@ -8,6 +8,7 @@
 
 import { tool } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod/v4";
+import { createServiceClient } from "@/lib/supabase/service";
 import {
   lookupConversationForPath,
   type LookupConversationResult,
@@ -17,6 +18,21 @@ import { validateContextPath } from "@/server/validate-context-path";
 interface BuildConversationsToolsOpts {
   /** Captured in closure — prevents cross-user lookups. */
   userId: string;
+}
+
+/**
+ * Read the user's CURRENT repo_url so the lookup is scoped to the repository
+ * they have connected right now — see plan
+ * 2026-04-22-fix-command-center-stale-conversations-after-repo-swap-plan.md.
+ */
+async function currentRepoUrl(userId: string): Promise<string | null> {
+  const service = createServiceClient();
+  const { data } = await service
+    .from("users")
+    .select("repo_url")
+    .eq("id", userId)
+    .maybeSingle();
+  return (data?.repo_url as string | null | undefined) ?? null;
 }
 
 type ToolTextResponse = {
@@ -58,8 +74,9 @@ export function buildConversationsTools(opts: BuildConversationsToolsOpts) {
           );
         }
 
+        const repoUrl = await currentRepoUrl(userId);
         const result: LookupConversationResult =
-          await lookupConversationForPath(userId, validated);
+          await lookupConversationForPath(userId, validated, repoUrl);
         if (!result.ok) {
           // Exhaustiveness check — adding a new error discriminant without
           // updating this wrapper fails tsc --noEmit. Mirrors the pattern

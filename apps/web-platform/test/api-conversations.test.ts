@@ -16,16 +16,35 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 // --- Mock infrastructure --------------------------------------------------
 
-const { mockGetUser, mockLookup } = vi.hoisted(() => ({
+const { mockGetUser, mockLookup, mockUserRepoUrl } = vi.hoisted(() => ({
   mockGetUser: vi.fn(),
   mockLookup: vi.fn(),
+  mockUserRepoUrl: vi.fn(),
 }));
+
+const buildServiceClient = () => ({
+  from: (_table: string) => {
+    const chain = {
+      select: vi.fn(() => chain),
+      eq: vi.fn(() => chain),
+      maybeSingle: vi.fn(async () => ({
+        data: { repo_url: mockUserRepoUrl() },
+        error: null,
+      })),
+    };
+    return chain;
+  },
+});
 
 vi.mock("@/lib/supabase/server", () => ({
   createClient: vi.fn(async () => ({
     auth: { getUser: mockGetUser },
   })),
-  createServiceClient: vi.fn(() => ({})),
+  createServiceClient: vi.fn(buildServiceClient),
+}));
+
+vi.mock("@/lib/supabase/service", () => ({
+  createServiceClient: vi.fn(buildServiceClient),
 }));
 
 vi.mock("@/server/lookup-conversation-for-path", () => ({
@@ -43,6 +62,7 @@ function makeRequest(url: string): Request {
 describe("GET /api/conversations", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockUserRepoUrl.mockReturnValue("https://github.com/acme/repo");
   });
 
   it("returns 401 when unauthenticated", async () => {
@@ -103,6 +123,7 @@ describe("GET /api/conversations", () => {
     expect(mockLookup).toHaveBeenCalledWith(
       "u1",
       "knowledge-base/product/roadmap.md",
+      "https://github.com/acme/repo",
     );
   });
 

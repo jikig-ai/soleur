@@ -2,6 +2,7 @@
 
 import { useState, useCallback, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
+import { createClient } from "@/lib/supabase/client";
 import { useConversations } from "@/hooks/use-conversations";
 import type { ArchiveFilter } from "@/hooks/use-conversations";
 import { useOnboarding } from "@/hooks/use-onboarding";
@@ -155,6 +156,42 @@ export default function DashboardPage() {
       cancelled = true;
     };
   }, [router]);
+
+  // Disconnected-with-orphans hint: when a user has disconnected their repo
+  // but has pre-existing conversations tied to another repo_url, surface a
+  // one-line hint so the empty Command Center doesn't read as data loss.
+  // See plan 2026-04-22-fix-command-center-stale-conversations-after-repo-swap-plan.md
+  // Product/UX Gate findings.
+  const [orphanedCount, setOrphanedCount] = useState<number>(0);
+  const [repoDisconnected, setRepoDisconnected] = useState<boolean>(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    const supabase = createClient();
+    (async () => {
+      const { data: auth } = await supabase.auth.getUser();
+      if (!auth.user) return;
+      const { data: userRow } = await supabase
+        .from("users")
+        .select("repo_url")
+        .eq("id", auth.user.id)
+        .maybeSingle();
+      const repoUrl = (userRow?.repo_url as string | null | undefined) ?? null;
+      if (repoUrl) return; // Connected — no hint needed.
+      // `count=exact head=true` — row-less query, just the total.
+      const { count } = await supabase
+        .from("conversations")
+        .select("id", { count: "exact", head: true })
+        .eq("user_id", auth.user.id)
+        .not("repo_url", "is", null);
+      if (cancelled) return;
+      setRepoDisconnected(true);
+      setOrphanedCount(count ?? 0);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const visionExists = kbFiles.has("overview/vision.md");
   const foundationCards: FoundationCard[] = FOUNDATION_PATHS.map((f) => ({
@@ -336,6 +373,16 @@ export default function DashboardPage() {
         <p className="mb-10 max-w-md text-center text-sm text-neutral-400">
           Describe your startup idea and your AI organization will get to work.
         </p>
+        {repoDisconnected && orphanedCount > 0 && (
+          <p
+            data-testid="disconnected-orphans-hint"
+            className="mb-6 max-w-md text-center text-xs text-neutral-500"
+          >
+            {orphanedCount === 1
+              ? "Your previous conversation is tied to your disconnected repository. Reconnect that repository to view it."
+              : `Your previous ${orphanedCount} conversations are tied to your disconnected repository. Reconnect that repository to view them.`}
+          </p>
+        )}
 
         <form
           onSubmit={handleFirstRunSend}

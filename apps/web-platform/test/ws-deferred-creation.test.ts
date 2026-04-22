@@ -12,17 +12,32 @@ const mockSelectSingle = vi.fn().mockResolvedValue({
 
 vi.mock("@/lib/supabase/service", () => ({
   createServiceClient: () => ({
-    from: () => ({
-      insert: mockInsert,
-      update: mockUpdate,
-      select: vi.fn().mockReturnValue({
-        eq: vi.fn().mockReturnValue({
+    from: (table: string) => {
+      if (table === "users") {
+        // `users` reads go through .select().eq().maybeSingle() to fetch
+        // repo_url so conversation inserts can be scoped to the current repo.
+        const chain = {
+          select: vi.fn(() => chain),
+          eq: vi.fn(() => chain),
+          maybeSingle: vi.fn().mockResolvedValue({
+            data: { repo_url: "https://github.com/acme/repo" },
+            error: null,
+          }),
+        };
+        return chain;
+      }
+      return {
+        insert: mockInsert,
+        update: mockUpdate,
+        select: vi.fn().mockReturnValue({
           eq: vi.fn().mockReturnValue({
-            single: mockSelectSingle,
+            eq: vi.fn().mockReturnValue({
+              single: mockSelectSingle,
+            }),
           }),
         }),
-      }),
-    }),
+      };
+    },
     auth: {
       getUser: vi.fn().mockResolvedValue({
         data: { user: { id: "user-1" } },

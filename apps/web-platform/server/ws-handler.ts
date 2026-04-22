@@ -280,9 +280,30 @@ async function createConversation(
 ): Promise<string> {
   if (!id) id = randomUUID();
 
+  // Stamp the conversation with the user's CURRENT repo_url so Command
+  // Center + context_path resume can scope by it. Users who disconnected
+  // mid-session have repo_url=null; we abort rather than orphan the row
+  // (plan risk R-D). See
+  // 2026-04-22-fix-command-center-stale-conversations-after-repo-swap-plan.md.
+  const { data: userRow, error: userErr } = await supabase
+    .from("users")
+    .select("repo_url")
+    .eq("id", userId)
+    .maybeSingle();
+  if (userErr) {
+    throw new Error(`Failed to read user repo_url: ${userErr.message}`);
+  }
+  const repoUrl = (userRow?.repo_url as string | null | undefined) ?? null;
+  if (!repoUrl) {
+    throw new Error(
+      "No connected repository — conversation insert aborted (disconnect race).",
+    );
+  }
+
   const { error } = await supabase.from("conversations").insert({
     id,
     user_id: userId,
+    repo_url: repoUrl,
     domain_leader: leaderId ?? null,
     status: "active" as Conversation["status"],
     last_active: new Date().toISOString(),
@@ -291,15 +312,17 @@ async function createConversation(
 
   if (error) {
     // 23505 = unique_violation (postgres). When contextPath is set, this means
-    // another tab created the same (user_id, context_path) row — use it instead.
-    // We disambiguate on the index name (conversations_context_path_user_uniq)
-    // so an unrelated unique constraint (e.g., conversations_pkey id collision)
-    // does NOT fall through into the context_path lookup. See review #2390.
+    // another tab created the same (user_id, repo_url, context_path) row — use
+    // it instead. We disambiguate on the index name
+    // (conversations_context_path_user_uniq) so an unrelated unique constraint
+    // (e.g., conversations_pkey id collision) does NOT fall through into the
+    // context_path lookup. See review #2390.
     if (contextPath && isContextPathUniqueViolation(error)) {
       const { data: existing, error: lookupErr } = await supabase
         .from("conversations")
         .select("id")
         .eq("user_id", userId)
+        .eq("repo_url", repoUrl)
         .eq("context_path", contextPath)
         .is("archived_at", null)
         .order("last_active", { ascending: false })

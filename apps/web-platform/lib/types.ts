@@ -125,6 +125,7 @@ export interface Conversation {
   created_at: string;
   archived_at: string | null;
   context_path?: string | null;
+  repo_url?: string | null;
 }
 
 export type ConversationStatus = Conversation["status"];
