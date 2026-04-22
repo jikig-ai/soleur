@@ -145,16 +145,16 @@ The `plan/SKILL.md:474` guard `If on a feat-* branch` evaluates false, so Save T
 
 ### Pre-merge (PR)
 
-- [ ] Phase 1 executed: `admin-ip-refresh --dry-run` output captured, verification outcome recorded.
-- [ ] Phase 2 pre-req: sibling worktree created on non-`feat-*` branch (`tmp/verify-ssh-gate`) via `plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh --yes create tmp/verify-ssh-gate`.
-- [ ] Phase 2 executed: throwaway plan inspected for L3-first `## Hypotheses`, deepen-plan run inspected for `Network-Outage Deep-Dive` subsection.
-- [ ] Phase 2 cleanup: sibling worktree removed, branch deleted, no throwaway plan in remote `main` or in this feature branch's `knowledge-base/project/plans/`.
-- [ ] THIS plan's `knowledge-base/project/specs/feat-one-shot-verify-follow-through-2690-2691/tasks.md` is unchanged by the Phase 2 exercise (verify via `git diff` before commit).
-- [ ] Learning file exists at `knowledge-base/project/learnings/2026-04-22-follow-through-admin-ip-refresh-and-ssh-gate-verification.md` with `## #2690 Verification`, `## #2691 Verification`, and `## Methodology` sections.
-- [ ] Learning file redacts egress IP and ADMIN_IPS CIDRs (records list length only; egress rendered as `<redacted>/32`).
-- [ ] `npx markdownlint-cli2 --fix` run on the learning file and plan file with specific paths (not globs, per `cq-markdownlint-fix-target-specific-paths`) — zero new errors.
-- [ ] `bash scripts/test-all.sh` passes (no regressions from committing the learning file; reference-link integrity checks still pass).
-- [ ] PR body includes `Closes #2690` and `Closes #2691` (pass outcome) OR `Ref #2690 #2691` + linked regression issue(s) (fail outcome).
+- [x] Phase 1 executed: `admin-ip-refresh --dry-run` output captured, verification outcome recorded.
+- [x] Phase 2 pre-req: sibling worktree created on non-`feat-*` branch (`tmp/verify-ssh-gate`) via `plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh --yes create tmp/verify-ssh-gate`.
+- [x] Phase 2 executed: throwaway plan inspected for L3-first `## Hypotheses`, deepen-plan run inspected for `Network-Outage Deep-Dive` subsection.
+- [x] Phase 2 cleanup: sibling worktree removed, branch deleted, no throwaway plan in remote `main` or in this feature branch's `knowledge-base/project/plans/`.
+- [x] THIS plan's `knowledge-base/project/specs/feat-one-shot-verify-follow-through-2690-2691/tasks.md` is unchanged by the Phase 2 exercise (verify via `git diff` before commit).
+- [x] Learning file exists at `knowledge-base/project/learnings/2026-04-22-follow-through-admin-ip-refresh-and-ssh-gate-verification.md` with `## #2690 Verification`, `## #2691 Verification`, and `## Methodology` sections.
+- [x] Learning file redacts egress IP and ADMIN_IPS CIDRs (records list length only; egress rendered as `<redacted>/32`).
+- [x] `npx markdownlint-cli2 --fix` run on the learning file and plan file with specific paths (not globs, per `cq-markdownlint-fix-target-specific-paths`) — zero new errors.
+- [x] `bash scripts/test-all.sh` passes (no regressions from committing the learning file; reference-link integrity checks still pass).
+- [x] PR body includes `Closes #2690` and `Closes #2691` (pass outcome) OR `Ref #2690 #2691` + linked regression issue(s) (fail outcome).
 
 ### Post-merge (operator)
 
