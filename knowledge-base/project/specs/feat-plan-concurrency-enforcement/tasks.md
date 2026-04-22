@@ -201,7 +201,7 @@ Each phase is a top-level task; sub-tasks are RED → GREEN → Gate. Destructiv
 ## Phase 8 — Pricing page rewrite + wireframe re-render
 
 - [ ] 8.1 Apply exact copy-artifact §2 strings to `plugins/soleur/docs/pages/pricing.njk` at lines 184, 199, 214–217, 228–233, FAQ 253–256, JSON-LD 287–291.
-- [ ] 8.2 Ship-prep task: confirm Scale-tier "Up to 25 seats" with CMO/CPO; otherwise revert to "Custom seat count".
+- [x] 8.2 Ship-prep task: dropped seat bullets entirely — pivot is conversation-slot-based, "seats" is legacy framing. Startup lost "Team collaboration (up to 3 seats)" and Scale lost "Up to 25 seats". CMO recommended a specific number; CPO flagged that seats are unenforced copy; user called it: drop both.
 - [ ] 8.3 Grep checks — all must return zero in `pricing.njk`:
 
   ```bash
@@ -267,7 +267,7 @@ Each phase is a top-level task; sub-tasks are RED → GREEN → Gate. Destructiv
 
 ### Follow-up issues filed
 
-- [ ] 10.16 File: Scale-tier seat-number confirmation (if unresolved).
+- [x] 10.16 File: Scale-tier seat-number confirmation — resolved inline (seats removed per pivot; see 8.2). Filing CPO follow-up for Scale→Enterprise differentiator beyond concurrency (no enforceable seat ceiling means Enterprise needs SSO/SLA/higher-concurrency lever).
 - [ ] 10.17 File: legacy `STRIPE_PRICE_ID` deprecation.
 - [ ] 10.18 File: banner sunset at ship + 14 days.
 - [ ] 10.19 File: `UpgradePendingBanner` for Stripe `incomplete` (reassess on first SCA complaint).
