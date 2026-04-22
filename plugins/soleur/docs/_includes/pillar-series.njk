@@ -4,15 +4,18 @@
 <aside class="pillar-series" aria-label="Part of the {{ currentPillar.title }} series">
   <p class="pillar-series__label">Part of the <strong>{{ currentPillar.title }}</strong> series:</p>
   <ul class="pillar-series__list">
-    {% for member in currentPillar.members %}
+    {%- for member in currentPillar.members %}
     <li>
-      {% if member.url == page.url %}
-      <span class="pillar-series__current">{{ member.title }} (you are here)</span>
-      {% else %}
-      <a href="{{ member.url }}">{{ member.title }}</a>{% if member.relation == "pillar" %} — pillar{% endif %}
-      {% endif %}
+      {%- if member.url == page.url %}
+      <span class="pillar-series__current">
+        {%- for p in collections.blog -%}{%- if p.url == member.url -%}{{ p.data.title }}{%- endif -%}{%- endfor %} (you are here)</span>
+      {%- else %}
+      <a href="{{ member.url }}">
+        {%- for p in collections.blog -%}{%- if p.url == member.url -%}{{ p.data.title }}{%- endif -%}{%- endfor -%}
+      </a>{% if member.relation == "pillar" %} — pillar{% endif %}
+      {%- endif %}
     </li>
-    {% endfor %}
+    {%- endfor %}
   </ul>
 </aside>
 {% endif %}
