@@ -26,6 +26,11 @@ vi.mock("@/server/logger", () => ({
   default: { warn: vi.fn(), error: vi.fn(), info: vi.fn() },
 }));
 
+vi.mock("@sentry/nextjs", () => ({
+  captureException: vi.fn(),
+  captureMessage: vi.fn(),
+}));
+
 // ---------------------------------------------------------------------------
 // URL-routing mock for global fetch (GitHub API calls)
 // ---------------------------------------------------------------------------
@@ -115,6 +120,10 @@ describe("GET /api/auth/github-resolve (initiate)", () => {
   beforeEach(() => {
     // Initiate route now checks auth (defense-in-depth)
     mockGetUser.mockResolvedValue({ data: { user: { id: "user-123" } } });
+    // Guard against shell-leaked legacy env var; post-migration the route
+    // reads NEXT_PUBLIC_APP_URL only.
+    delete process.env.NEXT_PUBLIC_SITE_URL;
+    delete process.env.NEXT_PUBLIC_APP_URL;
   });
 
   test("returns 302 redirect to GitHub OAuth authorize URL", async () => {
@@ -160,6 +169,18 @@ describe("GET /api/auth/github-resolve (initiate)", () => {
     const location = response.headers.get("Location")!;
     expect(location).not.toContain("scope=");
   });
+
+  test("reads NEXT_PUBLIC_APP_URL (not NEXT_PUBLIC_SITE_URL) for callback redirect_uri", async () => {
+    process.env.NEXT_PUBLIC_APP_URL = "https://test.example";
+    process.env.NEXT_PUBLIC_SITE_URL = "https://should-not-be-used.example";
+
+    const response = await initiateHandler(makeInitiateRequest());
+    const location = response.headers.get("Location")!;
+    const redirectUri = new URL(location).searchParams.get("redirect_uri")!;
+
+    expect(redirectUri).toBe("https://test.example/api/auth/github-resolve/callback");
+    expect(redirectUri).not.toContain("should-not-be-used");
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -171,6 +192,11 @@ describe("GET /api/auth/github-resolve/callback", () => {
     vi.clearAllMocks();
     clearFetchRoutes();
     globalThis.fetch = routingFetch;
+
+    // Guard against shell-leaked legacy env var; post-migration the route
+    // reads NEXT_PUBLIC_APP_URL only.
+    delete process.env.NEXT_PUBLIC_SITE_URL;
+    delete process.env.NEXT_PUBLIC_APP_URL;
 
     // Default: authenticated user
     mockGetUser.mockResolvedValue({

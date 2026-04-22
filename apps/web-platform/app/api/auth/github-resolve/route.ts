@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
+import { reportSilentFallback } from "@/server/observability";
 import logger from "@/server/logger";
 
 /**
@@ -12,22 +13,30 @@ import logger from "@/server/logger";
  * Sets a state nonce cookie for CSRF protection and redirects to GitHub.
  */
 export async function GET(_request: Request) {
-  const siteUrl = process.env.NEXT_PUBLIC_SITE_URL ?? "https://app.soleur.ai";
+  const appUrlEnv = process.env.NEXT_PUBLIC_APP_URL;
+  if (!appUrlEnv) {
+    reportSilentFallback(null, {
+      feature: "github-resolve",
+      op: "initiate",
+      message: "NEXT_PUBLIC_APP_URL unset; github-resolve OAuth redirect_uri fallback to https://app.soleur.ai",
+    });
+  }
+  const appUrl = appUrlEnv ?? "https://app.soleur.ai";
 
   // Defense-in-depth: verify session even though middleware enforces auth
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) {
-    return NextResponse.redirect(new URL("/login", siteUrl));
+    return NextResponse.redirect(new URL("/login", appUrl));
   }
   const clientId = process.env.GITHUB_CLIENT_ID;
   if (!clientId) {
     logger.error("GITHUB_CLIENT_ID not configured");
-    return NextResponse.redirect(new URL("/connect-repo?resolve_error=1", siteUrl));
+    return NextResponse.redirect(new URL("/connect-repo?resolve_error=1", appUrl));
   }
 
   const state = crypto.randomUUID();
-  const callbackUrl = `${siteUrl}/api/auth/github-resolve/callback`;
+  const callbackUrl = `${appUrl}/api/auth/github-resolve/callback`;
 
   const authorizeUrl = new URL("https://github.com/login/oauth/authorize");
   authorizeUrl.searchParams.set("client_id", clientId);

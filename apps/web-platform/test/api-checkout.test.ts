@@ -8,11 +8,14 @@ process.env.STRIPE_PRICE_ID = "price_legacy";
 // Mocks — vi.hoisted ensures these are available when vi.mock factories run
 // ---------------------------------------------------------------------------
 
-const { mockGetUser, mockFrom, mockCreateSession } = vi.hoisted(() => ({
-  mockGetUser: vi.fn(),
-  mockFrom: vi.fn(),
-  mockCreateSession: vi.fn(),
-}));
+const { mockGetUser, mockFrom, mockCreateSession, mockCaptureException, mockCaptureMessage } =
+  vi.hoisted(() => ({
+    mockGetUser: vi.fn(),
+    mockFrom: vi.fn(),
+    mockCreateSession: vi.fn(),
+    mockCaptureException: vi.fn(),
+    mockCaptureMessage: vi.fn(),
+  }));
 
 vi.mock("@/lib/supabase/server", () => ({
   createClient: vi.fn(async () => ({
@@ -25,6 +28,11 @@ vi.mock("@/lib/stripe", () => ({
   getStripe: () => ({
     checkout: { sessions: { create: mockCreateSession } },
   }),
+}));
+
+vi.mock("@sentry/nextjs", () => ({
+  captureException: mockCaptureException,
+  captureMessage: mockCaptureMessage,
 }));
 
 vi.mock("@/lib/auth/validate-origin", () => ({
@@ -76,6 +84,8 @@ describe("POST /api/checkout", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockCreateSession.mockResolvedValue({ url: "https://checkout.stripe.com/session" });
+    // Default for existing tests — degraded-path test deletes below
+    process.env.NEXT_PUBLIC_APP_URL = "https://test.example";
   });
 
   test("reuses existing stripe_customer_id when available", async () => {
@@ -135,5 +145,44 @@ describe("POST /api/checkout", () => {
 
     expect(res.status).toBe(401);
     expect(mockCreateSession).not.toHaveBeenCalled();
+  });
+
+  test("degraded: NEXT_PUBLIC_APP_URL unset fires Sentry and uses literal fallback", async () => {
+    delete process.env.NEXT_PUBLIC_APP_URL;
+    setupAuthenticatedUser();
+    setupUserQuery({ stripe_customer_id: CUSTOMER_ID, subscription_status: null });
+
+    const res = await POST(makeRequest());
+    expect(res.status).toBe(200);
+
+    expect(mockCaptureMessage).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({
+        level: "error",
+        tags: expect.objectContaining({ feature: "checkout", op: "create-session" }),
+      }),
+    );
+    expect(mockCreateSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        return_url: expect.stringMatching(/^https:\/\/app\.soleur\.ai\//),
+      }),
+    );
+  });
+
+  test("happy: NEXT_PUBLIC_APP_URL set routes URL to Stripe and Sentry stays silent", async () => {
+    process.env.NEXT_PUBLIC_APP_URL = "https://test.example";
+    setupAuthenticatedUser();
+    setupUserQuery({ stripe_customer_id: CUSTOMER_ID, subscription_status: null });
+
+    const res = await POST(makeRequest());
+    expect(res.status).toBe(200);
+
+    expect(mockCaptureException).not.toHaveBeenCalled();
+    expect(mockCaptureMessage).not.toHaveBeenCalled();
+    expect(mockCreateSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        return_url: expect.stringMatching(/^https:\/\/test\.example\//),
+      }),
+    );
   });
 });

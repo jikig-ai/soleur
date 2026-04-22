@@ -4,16 +4,24 @@ import { describe, test, expect, vi, beforeEach } from "vitest";
 // Mocks — vi.hoisted ensures these are available when vi.mock factories run
 // ---------------------------------------------------------------------------
 
-const { mockGetUser, mockFrom, mockCreatePortalSession, mockValidateOrigin } =
-  vi.hoisted(() => ({
-    mockGetUser: vi.fn(),
-    mockFrom: vi.fn(),
-    mockCreatePortalSession: vi.fn(),
-    mockValidateOrigin: vi.fn(() => ({
-      valid: true,
-      origin: "https://app.soleur.ai",
-    })),
-  }));
+const {
+  mockGetUser,
+  mockFrom,
+  mockCreatePortalSession,
+  mockValidateOrigin,
+  mockCaptureException,
+  mockCaptureMessage,
+} = vi.hoisted(() => ({
+  mockGetUser: vi.fn(),
+  mockFrom: vi.fn(),
+  mockCreatePortalSession: vi.fn(),
+  mockValidateOrigin: vi.fn(() => ({
+    valid: true,
+    origin: "https://app.soleur.ai",
+  })),
+  mockCaptureException: vi.fn(),
+  mockCaptureMessage: vi.fn(),
+}));
 
 vi.mock("@/lib/supabase/server", () => ({
   createClient: vi.fn(async () => ({
@@ -37,6 +45,11 @@ vi.mock("@/lib/auth/validate-origin", () => ({
 
 vi.mock("@/server/logger", () => ({
   default: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+}));
+
+vi.mock("@sentry/nextjs", () => ({
+  captureException: mockCaptureException,
+  captureMessage: mockCaptureMessage,
 }));
 
 // ---------------------------------------------------------------------------
@@ -85,6 +98,7 @@ describe("POST /api/billing/portal", () => {
       origin: "https://app.soleur.ai",
     });
     mockCreatePortalSession.mockResolvedValue({ url: PORTAL_URL });
+    process.env.NEXT_PUBLIC_APP_URL = "https://test.example";
   });
 
   test("returns portal URL for authenticated user with stripe_customer_id", async () => {
@@ -130,5 +144,44 @@ describe("POST /api/billing/portal", () => {
 
     expect(res.status).toBe(403);
     expect(mockGetUser).not.toHaveBeenCalled();
+  });
+
+  test("degraded: NEXT_PUBLIC_APP_URL unset fires Sentry and uses literal fallback", async () => {
+    delete process.env.NEXT_PUBLIC_APP_URL;
+    setupAuthenticatedUser();
+    setupUserQuery({ stripe_customer_id: CUSTOMER_ID });
+
+    const res = await POST(makeRequest());
+    expect(res.status).toBe(200);
+
+    expect(mockCaptureMessage).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({
+        level: "error",
+        tags: expect.objectContaining({ feature: "billing", op: "portal-session" }),
+      }),
+    );
+    expect(mockCreatePortalSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        return_url: "https://app.soleur.ai/dashboard/settings",
+      }),
+    );
+  });
+
+  test("happy: NEXT_PUBLIC_APP_URL set routes URL to Stripe and Sentry stays silent", async () => {
+    process.env.NEXT_PUBLIC_APP_URL = "https://test.example";
+    setupAuthenticatedUser();
+    setupUserQuery({ stripe_customer_id: CUSTOMER_ID });
+
+    const res = await POST(makeRequest());
+    expect(res.status).toBe(200);
+
+    expect(mockCaptureException).not.toHaveBeenCalled();
+    expect(mockCaptureMessage).not.toHaveBeenCalled();
+    expect(mockCreatePortalSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        return_url: "https://test.example/dashboard/settings",
+      }),
+    );
   });
 });
