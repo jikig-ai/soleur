@@ -48,12 +48,13 @@ export function normalizeRepoUrl(raw: string | null | undefined): string {
   // Strip trailing `/` (one or more) — must run BEFORE `.git` strip so
   // `...bar.git/` normalizes via `.../bar.git` → `.../bar`.
   working = working.replace(/\/+$/, "");
-  // Strip trailing `.git` (case-insensitive, suffix-anchored).
-  working = working.replace(/\.git$/i, "");
-  // Strip any trailing `/` the `.git` strip may have exposed (edge case:
-  // `...bar.git//` → after slash-strip: `...bar.git` → after git-strip:
-  // `...bar` — no further work needed, but a `.git/.git` layered input
-  // could technically leave a dangling char; re-running is free).
+  // Strip trailing `.git` (case-insensitive, suffix-anchored). Match one or
+  // more repetitions of `.git` so `bar.git.git` collapses to `bar` in a
+  // single pass — otherwise the normalizer would be non-idempotent at
+  // read boundaries (DB stores `bar.git`, next read returns `bar`, scoping
+  // drifts). Still suffix-anchored: `bar.git.bak` is untouched.
+  working = working.replace(/(\.git)+$/i, "");
+  // Strip any trailing `/` the `.git` strip may have exposed.
   working = working.replace(/\/+$/, "");
 
   return working;

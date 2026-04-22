@@ -170,13 +170,12 @@ export function buildConversationsTools(opts: BuildConversationsToolsOpts) {
           query = query.eq("domain_leader", args.domainLeader);
         }
 
-        const effectiveLimit = Math.min(
-          args.limit ?? LIST_LIMIT_DEFAULT,
-          LIST_LIMIT_MAX,
-        );
+        // Zod already clamps `limit` to `[1, LIST_LIMIT_MAX]` with the
+        // LIST_LIMIT_DEFAULT default in production. The `?? DEFAULT` guards
+        // direct-handler invocations (e.g. unit tests that skip Zod parse).
         const { data, error } = await query
           .order("last_active", { ascending: false })
-          .limit(effectiveLimit);
+          .limit(args.limit ?? LIST_LIMIT_DEFAULT);
 
         if (error) {
           return textResponse(
@@ -251,6 +250,48 @@ export function buildConversationsTools(opts: BuildConversationsToolsOpts) {
         if (error) {
           return textResponse(
             { error: "Unarchive failed", code: "unarchive_failed" },
+            true,
+          );
+        }
+        if (!data || data.length === 0) {
+          return textResponse(
+            { error: "Not found", code: "not_found" },
+            true,
+          );
+        }
+        return textResponse(data[0]);
+      },
+    ),
+    tool(
+      "conversation_update_status",
+      "Update a conversation's status by id, mirroring the Command Center " +
+        "status-update action. Status must be one of the canonical " +
+        "ConversationStatus values (waiting_for_user, active, completed, " +
+        "failed). Same three-column WHERE backstop as conversation_archive " +
+        "— cross-repo or cross-user cached ids fail closed as 'not found'. " +
+        "Returns { id, status } on success; isError with code 'not_found' " +
+        "when 0 rows match; typed disconnected error when the user has no " +
+        "connected repository.",
+      {
+        conversationId: z.string().uuid(),
+        status: z.enum(STATUS_VALUES as [string, ...string[]]),
+      },
+      async (args) => {
+        const repoUrl = await getCurrentRepoUrl(userId);
+        if (!repoUrl) return disconnectedResponse();
+
+        const supabase = createServiceClient();
+        const { data, error } = await supabase
+          .from("conversations")
+          .update({ status: args.status })
+          .eq("id", args.conversationId)
+          .eq("user_id", userId)
+          .eq("repo_url", repoUrl)
+          .select("id, status");
+
+        if (error) {
+          return textResponse(
+            { error: "Status update failed", code: "update_failed" },
             true,
           );
         }

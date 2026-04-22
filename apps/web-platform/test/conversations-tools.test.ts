@@ -69,10 +69,10 @@ describe("buildConversationsTools", () => {
     vi.clearAllMocks();
   });
 
-  test("returns four tools (lookup + list + archive + unarchive)", async () => {
+  test("returns five tools (lookup + list + archive + unarchive + update_status)", async () => {
     const { buildConversationsTools } = await importBuilder();
     const tools = buildConversationsTools({ userId: "u1" });
-    expect(tools).toHaveLength(4);
+    expect(tools).toHaveLength(5);
   });
 
   test("exposes conversations_lookup", async () => {
@@ -83,7 +83,7 @@ describe("buildConversationsTools", () => {
     expect(names).toContain("conversations_lookup");
   });
 
-  test("exposes conversations_list, conversation_archive, conversation_unarchive (#2776)", async () => {
+  test("exposes conversations_list, conversation_archive, conversation_unarchive, conversation_update_status (#2776)", async () => {
     const { buildConversationsTools } = await importBuilder();
     const names = (
       buildConversationsTools({ userId: "u1" }) as unknown as Array<{ name: string }>
@@ -91,6 +91,7 @@ describe("buildConversationsTools", () => {
     expect(names).toContain("conversations_list");
     expect(names).toContain("conversation_archive");
     expect(names).toContain("conversation_unarchive");
+    expect(names).toContain("conversation_update_status");
   });
 
   test("hit path: returns camelCase JSON payload (not isError)", async () => {

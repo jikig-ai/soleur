@@ -339,3 +339,79 @@ describe("conversation_unarchive MCP tool", () => {
     expect(byCol["repo_url"]).toBe("https://github.com/acme/repo");
   });
 });
+
+describe("conversation_update_status MCP tool", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockUserRepoUrl.mockReturnValue("https://github.com/acme/repo");
+  });
+
+  test("update round-trip: sets status to exact value (pinned post-state)", async () => {
+    const updatePayload: { current: Record<string, unknown> | null } = {
+      current: null,
+    };
+    mockServiceClient.mockReturnValue(
+      setupSupabaseMock({
+        archivedRow: { id: "conv-1", status: "completed" },
+        updatePayload,
+      }),
+    );
+    const t = await getTool("conversation_update_status");
+    const res = await t.handler({
+      conversationId: "conv-1",
+      status: "completed",
+    });
+    expect(res.isError).toBeFalsy();
+    const payload = JSON.parse(res.content[0].text);
+    expect(payload.status).toBe("completed");
+    expect(payload.id).toBe("conv-1");
+    // UPDATE payload sets status to the exact value (pin post-state per
+    // cq-mutation-assertions-pin-exact-post-state).
+    expect(updatePayload.current?.status).toBe("completed");
+  });
+
+  test("three-column WHERE backstop (cross-repo fail closed)", async () => {
+    const predicates: Predicate[] = [];
+    mockServiceClient.mockReturnValue(
+      setupSupabaseMock({
+        archivedRow: { id: "conv-1", status: "active" },
+        predicates,
+      }),
+    );
+    const t = await getTool("conversation_update_status");
+    await t.handler({ conversationId: "conv-1", status: "active" });
+    const byCol = Object.fromEntries(predicates.map((p) => [p.col, p.val]));
+    expect(byCol["id"]).toBe("conv-1");
+    expect(byCol["user_id"]).toBe("u1");
+    expect(byCol["repo_url"]).toBe("https://github.com/acme/repo");
+  });
+
+  test("0 rows returns not_found (cross-repo cached id)", async () => {
+    mockServiceClient.mockReturnValue(
+      setupSupabaseMock({ archivedRow: null }),
+    );
+    const t = await getTool("conversation_update_status");
+    const res = await t.handler({
+      conversationId: "conv-wrong-repo",
+      status: "completed",
+    });
+    expect(res.isError).toBe(true);
+    const payload = JSON.parse(res.content[0].text);
+    expect(payload.code).toBe("not_found");
+  });
+
+  test("disconnected user short-circuits with typed error", async () => {
+    mockUserRepoUrl.mockReturnValue(null);
+    mockServiceClient.mockReturnValue(
+      setupSupabaseMock({ archivedRow: null }),
+    );
+    const t = await getTool("conversation_update_status");
+    const res = await t.handler({
+      conversationId: "conv-1",
+      status: "completed",
+    });
+    expect(res.isError).toBe(true);
+    const payload = JSON.parse(res.content[0].text);
+    expect(payload.code).toBe("no_repo_connected");
+  });
+});

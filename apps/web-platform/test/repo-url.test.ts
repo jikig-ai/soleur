@@ -67,6 +67,18 @@ describe("normalizeRepoUrl", () => {
     );
   });
 
+  test("strips repeated trailing .git (.git.git) in one pass — idempotence guard", () => {
+    expect(normalizeRepoUrl("https://github.com/foo/bar.git.git")).toBe(
+      "https://github.com/foo/bar",
+    );
+  });
+
+  test("strips .git.git with trailing slash", () => {
+    expect(normalizeRepoUrl("https://github.com/foo/bar.git.git/")).toBe(
+      "https://github.com/foo/bar",
+    );
+  });
+
   test("lowercases scheme", () => {
     expect(normalizeRepoUrl("HTTPS://github.com/foo/bar")).toBe(
       "https://github.com/foo/bar",
@@ -108,6 +120,7 @@ describe("normalizeRepoUrl", () => {
       "https://github.com/Owner/Repo.git/",
       "HTTPS://GitHub.com/Foo/Bar",
       "https://github.com/foo/bar.git.bak",
+      "https://github.com/foo/bar.git.git",
       "https://github.com/foo/bar.GIT",
       "https://github.com/foo/bar///",
       "  https://github.com/foo/bar  ",

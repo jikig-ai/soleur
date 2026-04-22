@@ -8,8 +8,12 @@
 -- Canonical form (must match lib/repo-url.ts byte-for-byte):
 --   1. trim() leading/trailing whitespace
 --   2. Lowercase scheme + host only (preserve owner/repo path case)
---   3. Strip trailing .git (case-insensitive, anchored)
---   4. Strip trailing / (one or more)
+--   3. Strip trailing / (one or more) -- MUST run before .git strip so
+--      `.../Repo.git/` normalizes via `.../Repo.git` -> `.../Repo`.
+--   4. Strip trailing (.git)+ (case-insensitive, anchored) -- matches one
+--      or more repetitions so `bar.git.git` collapses in one pass
+--      (idempotence guarantee).
+--   5. Strip any trailing / the .git strip may have exposed (defensive).
 --
 -- Idempotent: the WHERE predicate `repo_url <> <normalized-expr>` ensures
 -- already-canonical rows are untouched. Second run is `UPDATE 0`.
@@ -31,31 +35,39 @@
 UPDATE public.users u
    SET repo_url = regexp_replace(
      regexp_replace(
-       LOWER(substring(trim(u.repo_url) from '^([^/]*//[^/]+)'))
-       || COALESCE(substring(trim(u.repo_url) from '^[^/]*//[^/]+(/.*)$'), ''),
-       '\.git$', '', 'i'),
+       regexp_replace(
+         LOWER(substring(trim(u.repo_url) from '^([^/]*//[^/]+)'))
+         || COALESCE(substring(trim(u.repo_url) from '^[^/]*//[^/]+(/.*)$'), ''),
+         '/+$', '', 'g'),
+       '(\.git)+$', '', 'i'),
      '/+$', '', 'g')
  WHERE u.repo_url IS NOT NULL
    AND substring(trim(u.repo_url) from '^([^/]*//[^/]+)') IS NOT NULL
    AND u.repo_url <> regexp_replace(
      regexp_replace(
-       LOWER(substring(trim(u.repo_url) from '^([^/]*//[^/]+)'))
-       || COALESCE(substring(trim(u.repo_url) from '^[^/]*//[^/]+(/.*)$'), ''),
-       '\.git$', '', 'i'),
+       regexp_replace(
+         LOWER(substring(trim(u.repo_url) from '^([^/]*//[^/]+)'))
+         || COALESCE(substring(trim(u.repo_url) from '^[^/]*//[^/]+(/.*)$'), ''),
+         '/+$', '', 'g'),
+       '(\.git)+$', '', 'i'),
      '/+$', '', 'g');
 
 UPDATE public.conversations c
    SET repo_url = regexp_replace(
      regexp_replace(
-       LOWER(substring(trim(c.repo_url) from '^([^/]*//[^/]+)'))
-       || COALESCE(substring(trim(c.repo_url) from '^[^/]*//[^/]+(/.*)$'), ''),
-       '\.git$', '', 'i'),
+       regexp_replace(
+         LOWER(substring(trim(c.repo_url) from '^([^/]*//[^/]+)'))
+         || COALESCE(substring(trim(c.repo_url) from '^[^/]*//[^/]+(/.*)$'), ''),
+         '/+$', '', 'g'),
+       '(\.git)+$', '', 'i'),
      '/+$', '', 'g')
  WHERE c.repo_url IS NOT NULL
    AND substring(trim(c.repo_url) from '^([^/]*//[^/]+)') IS NOT NULL
    AND c.repo_url <> regexp_replace(
      regexp_replace(
-       LOWER(substring(trim(c.repo_url) from '^([^/]*//[^/]+)'))
-       || COALESCE(substring(trim(c.repo_url) from '^[^/]*//[^/]+(/.*)$'), ''),
-       '\.git$', '', 'i'),
+       regexp_replace(
+         LOWER(substring(trim(c.repo_url) from '^([^/]*//[^/]+)'))
+         || COALESCE(substring(trim(c.repo_url) from '^[^/]*//[^/]+(/.*)$'), ''),
+         '/+$', '', 'g'),
+       '(\.git)+$', '', 'i'),
      '/+$', '', 'g');
