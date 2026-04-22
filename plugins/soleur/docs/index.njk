@@ -38,14 +38,14 @@ permalink: index.html
         <div class="landing-stat-value">{{ stats.departments }}</div>
         <div class="landing-stat-label">Departments</div>
       </div>
-      <div class="landing-stat">
-        <div class="landing-stat-value"><a href="/agents/" data-last-verified="2026-04-22">{{ stats.agents }}</a></div>
-        <div class="landing-stat-label"><a href="/agents/">AI Agents</a></div>
-      </div>
-      <div class="landing-stat">
-        <div class="landing-stat-value"><a href="/skills/" data-last-verified="2026-04-22">{{ stats.skills }}</a></div>
-        <div class="landing-stat-label"><a href="/skills/">Skills</a></div>
-      </div>
+      <a class="landing-stat" href="/agents/">
+        <div class="landing-stat-value" data-last-verified="{{ site.statsLastVerified }}">{{ stats.agents }}</div>
+        <div class="landing-stat-label">AI Agents</div>
+      </a>
+      <a class="landing-stat" href="/skills/">
+        <div class="landing-stat-value" data-last-verified="{{ site.statsLastVerified }}">{{ stats.skills }}</div>
+        <div class="landing-stat-label">Skills</div>
+      </a>
     </section>
 
     <!-- Problem Section -->
