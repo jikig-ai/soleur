@@ -248,12 +248,13 @@ Ensure the brainstorms directory exists before writing.
 
 1. **Check for existing issue reference in feature_description:**
 
-   Parse the feature description for `#N` patterns (e.g., `#42`). Extract the first issue number found.
+   Parse the feature description for `#N` patterns (e.g., `#42`). Extract **all** issue numbers found (not just the first — bundle brainstorms commonly reference 3-5 related issues).
 
-   **If issue reference found**, validate its state by running `gh issue view <number> --json state` and pipe to `jq .state`:
+   **If one or more issue references found**, validate each via `gh issue view <number> --json state` + `jq .state`:
 
-   - **If OPEN:** Use existing issue -- skip creation, proceed to step 3
-   - **If CLOSED:** Warn the user, then create a new issue with "Replaces closed #N" in the body (proceed to step 2)
+   - **Single OPEN issue:** Use it as the tracking issue -- skip creation, proceed to step 3 (link artifacts back to this issue).
+   - **Multiple OPEN issues (bundle):** Do not create a new umbrella issue. In step 3, append a "Bundled scoping" note linking brainstorm + spec + branch + draft PR to **each** of the referenced issues. The brainstorm/spec themselves serve as the bundle's single source of truth.
+   - **If CLOSED:** Warn the user, then create a new issue with "Replaces closed #N" in the body (proceed to step 2).
    - **If not found or error:** Use AskUserQuestion: "Issue #N not found. Create new issue anyway?" If yes, proceed to step 2. If no, abort.
 
 2. **Create GitHub issue** (only if no valid existing issue):
@@ -274,7 +275,7 @@ Ensure the brainstorms directory exists before writing.
 
 3. **Update existing issue with artifact links** (if using existing issue):
 
-   Fetch the existing issue body with `gh issue view <number> --json body` piped to `jq .body`. Append an Artifacts section with links to the brainstorm document, spec file, and branch name. Then update with `gh issue edit <number> --body "<updated body>"`.
+   Fetch the existing issue body with `gh issue view <number> --json body` piped to `jq .body`. Append an Artifacts (or "Bundled scoping") section with links to the brainstorm document, spec file, branch name, and draft PR. Then update with `gh issue edit <number> --body-file -` reading stdin. For bundles, loop over every referenced issue and append the same note to each.
 
 4. **Generate spec.md** using `spec-templates` skill template:
    - Fill in Problem Statement from brainstorm

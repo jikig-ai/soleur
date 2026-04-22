@@ -8,7 +8,7 @@
  * Env:
  *   SUPABASE_URL                    prd
  *   NEXT_PUBLIC_SUPABASE_ANON_KEY   prd
- *   NEXT_PUBLIC_SITE_URL            prd                (domain for the cookie)
+ *   NEXT_PUBLIC_APP_URL             prd                (domain for the cookie)
  *   UX_AUDIT_BOT_EMAIL              prd_scheduled
  *   UX_AUDIT_BOT_PASSWORD           prd_scheduled
  *   UX_AUDIT_STORAGE_STATE          (optional)         output path override
@@ -97,7 +97,7 @@ async function main() {
   const session = await signIn();
 
   const ref = projectRef(env("SUPABASE_URL"));
-  const domain = cookieDomain(env("NEXT_PUBLIC_SITE_URL"));
+  const domain = cookieDomain(env("NEXT_PUBLIC_APP_URL"));
   const cookieName = `sb-${ref}-auth-token`;
 
   const storageState = {

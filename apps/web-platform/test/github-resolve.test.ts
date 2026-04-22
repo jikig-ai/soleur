@@ -1,7 +1,10 @@
 import { describe, test, expect, vi, beforeEach, afterEach } from "vitest";
 
 // ---------------------------------------------------------------------------
-// Set env BEFORE any imports that read at load time
+// Set env BEFORE any imports that read at load time.
+// These are module-load defaults; per-test env is scoped via vi.stubEnv +
+// vi.unstubAllEnvs in the beforeEach/afterEach hooks below to prevent
+// cross-test pollution.
 // ---------------------------------------------------------------------------
 process.env.GITHUB_CLIENT_ID = "test-client-id";
 process.env.GITHUB_CLIENT_SECRET = "test-client-secret";
@@ -24,6 +27,11 @@ vi.mock("@/lib/supabase/server", () => ({
 
 vi.mock("@/server/logger", () => ({
   default: { warn: vi.fn(), error: vi.fn(), info: vi.fn() },
+}));
+
+vi.mock("@sentry/nextjs", () => ({
+  captureException: vi.fn(),
+  captureMessage: vi.fn(),
 }));
 
 // ---------------------------------------------------------------------------
@@ -115,6 +123,14 @@ describe("GET /api/auth/github-resolve (initiate)", () => {
   beforeEach(() => {
     // Initiate route now checks auth (defense-in-depth)
     mockGetUser.mockResolvedValue({ data: { user: { id: "user-123" } } });
+    // Guard against shell-leaked legacy env var; post-migration the route
+    // reads NEXT_PUBLIC_APP_URL only.
+    vi.stubEnv("NEXT_PUBLIC_SITE_URL", undefined);
+    vi.stubEnv("NEXT_PUBLIC_APP_URL", undefined);
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
   });
 
   test("returns 302 redirect to GitHub OAuth authorize URL", async () => {
@@ -160,6 +176,18 @@ describe("GET /api/auth/github-resolve (initiate)", () => {
     const location = response.headers.get("Location")!;
     expect(location).not.toContain("scope=");
   });
+
+  test("reads NEXT_PUBLIC_APP_URL (not NEXT_PUBLIC_SITE_URL) for callback redirect_uri", async () => {
+    vi.stubEnv("NEXT_PUBLIC_APP_URL", "https://test.example");
+    vi.stubEnv("NEXT_PUBLIC_SITE_URL", "https://should-not-be-used.example");
+
+    const response = await initiateHandler(makeInitiateRequest());
+    const location = response.headers.get("Location")!;
+    const redirectUri = new URL(location).searchParams.get("redirect_uri")!;
+
+    expect(redirectUri).toBe("https://test.example/api/auth/github-resolve/callback");
+    expect(redirectUri).not.toContain("should-not-be-used");
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -171,6 +199,11 @@ describe("GET /api/auth/github-resolve/callback", () => {
     vi.clearAllMocks();
     clearFetchRoutes();
     globalThis.fetch = routingFetch;
+
+    // Guard against shell-leaked legacy env var; post-migration the route
+    // reads NEXT_PUBLIC_APP_URL only.
+    vi.stubEnv("NEXT_PUBLIC_SITE_URL", undefined);
+    vi.stubEnv("NEXT_PUBLIC_APP_URL", undefined);
 
     // Default: authenticated user
     mockGetUser.mockResolvedValue({
@@ -191,6 +224,7 @@ describe("GET /api/auth/github-resolve/callback", () => {
   afterEach(() => {
     clearFetchRoutes();
     globalThis.fetch = originalFetch;
+    vi.unstubAllEnvs();
   });
 
   test("stores github_username and redirects on valid code+state", async () => {

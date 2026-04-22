@@ -9,6 +9,7 @@ import webpush from "web-push";
 import { Resend } from "resend";
 import { createServiceClient } from "@/lib/supabase/service";
 import { createChildLogger } from "@/server/logger";
+import { APP_URL_FALLBACK, reportSilentFallback } from "@/server/observability";
 
 const log = createChildLogger("notifications");
 
@@ -60,7 +61,15 @@ function getResend(): Resend {
 // App URL for deep links
 // ---------------------------------------------------------------------------
 function appUrl(): string {
-  return process.env.NEXT_PUBLIC_APP_URL || "https://app.soleur.ai";
+  const url = process.env.NEXT_PUBLIC_APP_URL;
+  if (!url) {
+    reportSilentFallback(null, {
+      feature: "notifications",
+      op: "app-url",
+      message: `NEXT_PUBLIC_APP_URL unset; notification deep links fallback to ${APP_URL_FALLBACK}`,
+    });
+  }
+  return url ?? APP_URL_FALLBACK;
 }
 
 // ---------------------------------------------------------------------------
