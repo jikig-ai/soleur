@@ -39,12 +39,19 @@ export type LookupConversationResult =
 export async function lookupConversationForPath(
   userId: string,
   contextPath: string,
+  repoUrl: string | null,
 ): Promise<LookupConversationResult> {
+  // Disconnected user (no connected repo) -> no resumable thread.
+  // Short-circuit before hitting the DB so orphaned rows from a prior
+  // repo cannot leak back into a freshly-connected project.
+  if (!repoUrl) return { ok: true, row: null };
+
   const service = createServiceClient();
   const { data, error } = await service
     .from("conversations")
     .select("id, context_path, last_active, messages(count)")
     .eq("user_id", userId)
+    .eq("repo_url", repoUrl)
     .eq("context_path", contextPath)
     .is("archived_at", null)
     .order("last_active", { ascending: false })

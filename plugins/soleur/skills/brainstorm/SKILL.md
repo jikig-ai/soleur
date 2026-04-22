@@ -102,7 +102,7 @@ Assess whether the feature description has implications for specific business do
 
 #### 1.0 External Platform Verification (if applicable)
 
-If the feature description references an external platform, marketplace, or service, **WebFetch the URL first** before launching any research agents. Classify by: (1) self-service or waitlist? (2) discovery surface or procurement layer? (3) does it accept the product category? (4) what are the per-plan quantitative limits? (number of tasks, storage, API calls, concurrent sessions) (5) does the limit cover the migration/feature scope? This 30-second gate prevents spawning agents that analyze a false premise. **Why:** In #1094, a 9-workflow migration plan was built before discovering the Max plan allows only 3 Cloud scheduled tasks — a limit only discoverable by attempting to create the 4th task or checking via the `RemoteTrigger` API.
+If the feature description references an external platform, marketplace, or service, **WebFetch the URL first** before launching any research agents. Classify by: (1) self-service or waitlist? (2) discovery surface or procurement layer? (3) does it accept the product category? (4) what are the per-plan quantitative limits? (number of tasks, storage, API calls, concurrent sessions) (5) does the limit cover the migration/feature scope? (6) if the brainstorm is evaluating the candidate as a **replacement** for an existing headless/MCP/CLI integration, does the candidate expose a programmatic surface (MCP server, CLI, or HTTP API) that agents can call without a browser? If no, it is a complement for human-led work, not a replacement — do not spawn agents to design a migration. This 30-second gate prevents spawning agents that analyze a false premise. **Why:** In #1094, a 9-workflow migration plan was built before discovering the Max plan allows only 3 Cloud scheduled tasks — a limit only discoverable by attempting to create the 4th task or checking via the `RemoteTrigger` API. **Why (6):** #2699 — Claude Design (GUI-only) would have broken `ux-design-lead`, `/soleur:frontend-design`, `/soleur:ux-audit`, and the Product/UX Gate if treated as a Pencil replacement.
 
 #### 1.1 Research (Context Gathering)
 
@@ -185,6 +185,8 @@ fi
    This creates:
    - `.worktrees/feat-<name>/` (worktree)
    - `knowledge-base/project/specs/feat-<name>/` (spec directory in worktree)
+
+   **Race-window warning:** Run step 4 (`draft-pr`, which pushes the branch) BEFORE any file writes. An unpushed feature branch can be wiped by a concurrent session's `cleanup-merged` sweep, orphaning any writes to the worktree directory. See `knowledge-base/project/learnings/2026-04-21-concurrent-cleanup-merged-wipes-active-worktree.md`.
 
 3. **Set worktree path for subsequent file operations:**
 

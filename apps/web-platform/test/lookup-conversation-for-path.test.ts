@@ -70,7 +70,7 @@ describe("lookupConversationForPath — single-query collapse (#2511)", () => {
     });
 
     const { lookupConversationForPath } = await importHelper();
-    const result = await lookupConversationForPath("u1", "knowledge-base/x.md");
+    const result = await lookupConversationForPath("u1", "knowledge-base/x.md", "https://github.com/acme/repo");
 
     expect(result.ok).toBe(true);
     if (!result.ok) throw new Error("unreachable");
@@ -93,7 +93,7 @@ describe("lookupConversationForPath — single-query collapse (#2511)", () => {
     });
 
     const { lookupConversationForPath } = await importHelper();
-    await lookupConversationForPath("u1", "knowledge-base/x.md");
+    await lookupConversationForPath("u1", "knowledge-base/x.md", "https://github.com/acme/repo");
 
     // `from("conversations")` must be called exactly once — the removed
     // second `from("messages")` call MUST NOT exist.
@@ -113,7 +113,7 @@ describe("lookupConversationForPath — single-query collapse (#2511)", () => {
     });
 
     const { lookupConversationForPath } = await importHelper();
-    await lookupConversationForPath("u1", "knowledge-base/x.md");
+    await lookupConversationForPath("u1", "knowledge-base/x.md", "https://github.com/acme/repo");
 
     // The embed syntax is the load-bearing claim of #2511. Regex-assert it.
     expect(calls.select).toHaveLength(1);
@@ -132,7 +132,7 @@ describe("lookupConversationForPath — single-query collapse (#2511)", () => {
     });
 
     const { lookupConversationForPath } = await importHelper();
-    const result = await lookupConversationForPath("u1", "knowledge-base/x.md");
+    const result = await lookupConversationForPath("u1", "knowledge-base/x.md", "https://github.com/acme/repo");
     expect(result.ok).toBe(true);
     if (!result.ok) throw new Error("unreachable");
     // .toBe(0) — not .toBeFalsy(), not .toContain. Rule pin.
@@ -151,7 +151,7 @@ describe("lookupConversationForPath — single-query collapse (#2511)", () => {
     });
 
     const { lookupConversationForPath } = await importHelper();
-    const result = await lookupConversationForPath("u1", "knowledge-base/x.md");
+    const result = await lookupConversationForPath("u1", "knowledge-base/x.md", "https://github.com/acme/repo");
     expect(result.ok).toBe(true);
     if (!result.ok) throw new Error("unreachable");
     expect(result.row?.message_count).toBe(0);
@@ -161,7 +161,7 @@ describe("lookupConversationForPath — single-query collapse (#2511)", () => {
     mockSingleChain({ data: null, error: null });
 
     const { lookupConversationForPath } = await importHelper();
-    const result = await lookupConversationForPath("u1", "knowledge-base/x.md");
+    const result = await lookupConversationForPath("u1", "knowledge-base/x.md", "https://github.com/acme/repo");
     expect(result).toEqual({ ok: true, row: null });
     expect(mockFrom).toHaveBeenCalledTimes(1);
   });
@@ -171,7 +171,7 @@ describe("lookupConversationForPath — single-query collapse (#2511)", () => {
     mockSingleChain({ data: null, error: err });
 
     const { lookupConversationForPath } = await importHelper();
-    const result = await lookupConversationForPath("u1", "knowledge-base/x.md");
+    const result = await lookupConversationForPath("u1", "knowledge-base/x.md", "https://github.com/acme/repo");
     expect(result).toEqual({ ok: false, error: "lookup_failed" });
     expect(mockReportSilentFallback).toHaveBeenCalledTimes(1);
     const [errArg, optsArg] = mockReportSilentFallback.mock.calls[0];

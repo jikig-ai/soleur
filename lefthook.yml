@@ -24,6 +24,12 @@ pre-commit:
       priority: 4
       glob: "AGENTS.md"
       run: python3 scripts/lint-rule-ids.py {staged_files}
+    agents-compound-sync:
+      priority: 4
+      glob:
+        - "AGENTS.md"
+        - "plugins/soleur/skills/compound/SKILL.md"
+      run: bash scripts/lint-agents-compound-sync.sh
     web-platform-typecheck:
       priority: 5
       glob:

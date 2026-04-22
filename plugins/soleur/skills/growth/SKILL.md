@@ -1,6 +1,6 @@
 ---
 name: growth
-description: "This skill should be used when performing content strategy analysis, keyword research, content auditing for search intent alignment, content gap analysis, content planning, or AI agent consumability auditing. It provides sub-commands for auditing, planning, and applying fixes."
+description: "This skill should be used when performing content strategy analysis, keyword research, content auditing, content gap analysis, or AI agent consumability auditing. Sub-commands: auditing, planning, applying fixes."
 ---
 
 # Growth Strategy

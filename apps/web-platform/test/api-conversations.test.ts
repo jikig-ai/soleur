@@ -16,9 +16,10 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 // --- Mock infrastructure --------------------------------------------------
 
-const { mockGetUser, mockLookup } = vi.hoisted(() => ({
+const { mockGetUser, mockLookup, mockUserRepoUrl } = vi.hoisted(() => ({
   mockGetUser: vi.fn(),
   mockLookup: vi.fn(),
+  mockUserRepoUrl: vi.fn(),
 }));
 
 vi.mock("@/lib/supabase/server", () => ({
@@ -26,6 +27,15 @@ vi.mock("@/lib/supabase/server", () => ({
     auth: { getUser: mockGetUser },
   })),
   createServiceClient: vi.fn(() => ({})),
+}));
+
+// getCurrentRepoUrl is extracted; mock it directly so the route's scoping
+// test doesn't depend on the internal users-table query shape.
+vi.mock("@/server/current-repo-url", () => ({
+  getCurrentRepoUrl: (...args: unknown[]) => {
+    void args;
+    return Promise.resolve(mockUserRepoUrl());
+  },
 }));
 
 vi.mock("@/server/lookup-conversation-for-path", () => ({
@@ -43,6 +53,7 @@ function makeRequest(url: string): Request {
 describe("GET /api/conversations", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockUserRepoUrl.mockReturnValue("https://github.com/acme/repo");
   });
 
   it("returns 401 when unauthenticated", async () => {
@@ -103,6 +114,7 @@ describe("GET /api/conversations", () => {
     expect(mockLookup).toHaveBeenCalledWith(
       "u1",
       "knowledge-base/product/roadmap.md",
+      "https://github.com/acme/repo",
     );
   });
 

@@ -15,16 +15,18 @@ vi.mock("@/hooks/use-team-names", () => ({
 }));
 
 // Supabase query builder mock (thenable, matches existing pattern)
-function createQueryBuilder(data: unknown[]) {
-  const result = { data, error: null };
+function createQueryBuilder(data: unknown[], singleRow: unknown = null) {
+  const result = { data, error: null, count: data.length };
   const builder = {
     select: vi.fn().mockReturnThis(),
     eq: vi.fn().mockReturnThis(),
     in: vi.fn().mockReturnThis(),
     is: vi.fn().mockReturnThis(),
+    not: vi.fn().mockReturnThis(),
     order: vi.fn().mockReturnThis(),
     limit: vi.fn().mockReturnThis(),
-    single: vi.fn().mockReturnThis(),
+    single: vi.fn().mockResolvedValue({ data: singleRow, error: null }),
+    maybeSingle: vi.fn().mockResolvedValue({ data: singleRow, error: null }),
     update: vi.fn().mockReturnThis(),
     then: (onfulfilled: (value: unknown) => unknown) =>
       Promise.resolve(result).then(onfulfilled),
@@ -112,9 +114,10 @@ beforeEach(() => {
   mockChannel.mockClear();
   conversationBuilder = createQueryBuilder([]);
   messageBuilder = createQueryBuilder([]);
-  userBuilder = createQueryBuilder([
-    { onboarding_completed_at: null, pwa_banner_dismissed_at: null },
-  ]);
+  userBuilder = createQueryBuilder(
+    [{ onboarding_completed_at: null, pwa_banner_dismissed_at: null }],
+    { repo_url: "https://github.com/acme/repo" },
+  );
   fetchMock = vi.fn();
   globalThis.fetch = fetchMock;
 });

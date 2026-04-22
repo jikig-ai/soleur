@@ -8,6 +8,7 @@
 
 import { tool } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod/v4";
+import { getCurrentRepoUrl } from "@/server/current-repo-url";
 import {
   lookupConversationForPath,
   type LookupConversationResult,
@@ -44,6 +45,10 @@ export function buildConversationsTools(opts: BuildConversationsToolsOpts) {
         "'knowledge-base/product/roadmap.md'). " +
         "Returns { conversationId, contextPath, lastActive, messageCount } " +
         "when a thread exists, or null when no thread is bound to the path. " +
+        "Scoped to the user's currently connected repository: a null " +
+        "response on a disconnected workspace does NOT mean no prior thread " +
+        "exists for this path — orphaned threads from a previously " +
+        "connected repo reappear only after reconnecting that exact URL. " +
         "Does NOT return message bodies (threads are opaque from the agent's " +
         "perspective — use the UI to read them).",
       { contextPath: z.string() },
@@ -58,8 +63,9 @@ export function buildConversationsTools(opts: BuildConversationsToolsOpts) {
           );
         }
 
+        const repoUrl = await getCurrentRepoUrl(userId);
         const result: LookupConversationResult =
-          await lookupConversationForPath(userId, validated);
+          await lookupConversationForPath(userId, validated, repoUrl);
         if (!result.ok) {
           // Exhaustiveness check — adding a new error discriminant without
           // updating this wrapper fails tsc --noEmit. Mirrors the pattern

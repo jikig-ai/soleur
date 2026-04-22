@@ -5,6 +5,21 @@ import type Stripe from "stripe";
 import logger from "@/server/logger";
 import * as Sentry from "@sentry/nextjs";
 
+// DB statuses that represent a billable / live subscription — eligible to be
+// cancelled by .deleted. Excludes "none" (never subscribed) and "cancelled"
+// (terminal — see SUBSCRIPTION_UPDATABLE_STATUSES).
+const SUBSCRIPTION_LIVE_STATUSES = ["active", "past_due", "unpaid"] as const;
+
+// DB statuses on which .updated may overwrite the row. Includes "none" so a
+// first-time subscription activation (none → active) succeeds. Excludes
+// "cancelled" — cancelled is terminal; no .updated event should ever move a
+// row off it (a stale .updated arriving after .deleted must be a no-op
+// regardless of newStatus). NOTE: This guards status-resurrection only.
+// Payload columns (current_period_end, cancel_at_period_end) can still be
+// overwritten by stale events on still-live rows — see the idempotency
+// follow-up issue.
+const SUBSCRIPTION_UPDATABLE_STATUSES = ["none", ...SUBSCRIPTION_LIVE_STATUSES] as const;
+
 // Map Stripe subscription statuses to the CHECK constraint values.
 // Stripe sends: active, canceled, incomplete, incomplete_expired, past_due, trialing, unpaid, paused.
 // DB allows: none, active, cancelled, past_due, unpaid (migration 022).
@@ -101,17 +116,24 @@ export async function POST(request: Request) {
     case "customer.subscription.updated": {
       const subscription = event.data.object as Stripe.Subscription;
       const customerId = extractCustomerId(subscription);
+      const newStatus = mapStripeStatus(subscription.status);
 
-      const { error } = await supabase
+      // Never resurrect a cancelled row: a stale .updated delivered out-of-order
+      // after .deleted must be a no-op regardless of newStatus. Resurrection to
+      // "past_due" or "unpaid" is just as wrong as resurrection to "active"
+      // (re-enables billing-side features the user no longer pays for).
+      const { data, error } = await supabase
         .from("users")
         .update({
-          subscription_status: mapStripeStatus(subscription.status),
+          subscription_status: newStatus,
           cancel_at_period_end: subscription.cancel_at_period_end,
           current_period_end: new Date(
             subscription.current_period_end * 1_000,
           ).toISOString(),
         })
-        .eq("stripe_customer_id", customerId);
+        .eq("stripe_customer_id", customerId)
+        .in("subscription_status", SUBSCRIPTION_UPDATABLE_STATUSES)
+        .select("id");
 
       if (error) {
         logger.error({ error, customerId }, "Webhook: failed to update user on customer.subscription.updated");
@@ -121,6 +143,22 @@ export async function POST(request: Request) {
         });
         return NextResponse.json({ error: "DB update failed" }, { status: 500 });
       }
+
+      const matched = data?.length ?? 0;
+      if (matched === 0) {
+        // Guard fired (row is cancelled, or no row exists for this customer).
+        // Promoted to warn so ops can detect stale-event noise vs. real
+        // missing-row issues.
+        logger.warn(
+          { customerId, eventId: event.id, newStatus },
+          "Webhook: customer.subscription.updated guard no-op — row not in updatable status",
+        );
+      } else {
+        logger.info(
+          { customerId, eventId: event.id, matched, newStatus },
+          "Webhook: customer.subscription.updated applied",
+        );
+      }
       break;
     }
 
@@ -128,14 +166,20 @@ export async function POST(request: Request) {
       const subscription = event.data.object as Stripe.Subscription;
       const customerId = extractCustomerId(subscription);
 
-      const { error } = await supabase
+      // Only cancel if currently active/past_due/unpaid; a stale deleted event
+      // delivered after an already-cancelled row must be a no-op. "none"
+      // (never subscribed) is excluded — a real .deleted cannot fire against
+      // a never-subscribed customer.
+      const { data, error } = await supabase
         .from("users")
         .update({
           subscription_status: "cancelled",
           cancel_at_period_end: false,
           current_period_end: null,
         })
-        .eq("stripe_customer_id", customerId);
+        .eq("stripe_customer_id", customerId)
+        .in("subscription_status", SUBSCRIPTION_LIVE_STATUSES)
+        .select("id");
 
       if (error) {
         logger.error({ error, customerId }, "Webhook: failed to update user on customer.subscription.deleted");
@@ -144,6 +188,19 @@ export async function POST(request: Request) {
           extra: { customerId },
         });
         return NextResponse.json({ error: "DB update failed" }, { status: 500 });
+      }
+
+      const matched = data?.length ?? 0;
+      if (matched === 0) {
+        logger.warn(
+          { customerId, eventId: event.id },
+          "Webhook: customer.subscription.deleted guard no-op — row already cancelled or not found",
+        );
+      } else {
+        logger.info(
+          { customerId, eventId: event.id, matched },
+          "Webhook: customer.subscription.deleted applied",
+        );
       }
       break;
     }

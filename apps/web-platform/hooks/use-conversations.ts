@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { createClient } from "@/lib/supabase/client";
 import type { Conversation, Message, ConversationStatus } from "@/lib/types";
 import { DOMAIN_LEADERS, type DomainLeaderId } from "@/server/domain-leaders";
@@ -84,6 +84,14 @@ export function useConversations(
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [userId, setUserId] = useState<string | null>(null);
+  const [repoUrl, setRepoUrl] = useState<string | null>(null);
+  // Ref mirror of repoUrl so Realtime callbacks read the latest value
+  // without forcing the subscription effect to re-subscribe on every
+  // repo change (see review F1). Both channels read from this ref.
+  const repoUrlRef = useRef<string | null>(null);
+  useEffect(() => {
+    repoUrlRef.current = repoUrl;
+  }, [repoUrl]);
 
   const fetchConversations = useCallback(async () => {
     setLoading(true);
@@ -102,11 +110,32 @@ export function useConversations(
       const currentUserId = authData.user.id;
       setUserId(currentUserId);
 
-      // Query 1: Fetch conversations (explicit user_id filter for defence-in-depth)
+      // Scope the list to the user's CURRENT repo_url. Disconnected users
+      // (repo_url IS NULL) see an empty list — the old repo's conversations
+      // stay attached to their repo_url and are hidden until the user
+      // reconnects that exact URL. See plan
+      // 2026-04-22-fix-command-center-stale-conversations-after-repo-swap-plan.md.
+      const { data: userRow } = await supabase
+        .from("users")
+        .select("repo_url")
+        .eq("id", currentUserId)
+        .maybeSingle();
+      const currentRepoUrl =
+        (userRow?.repo_url as string | null | undefined) ?? null;
+      setRepoUrl(currentRepoUrl);
+
+      if (!currentRepoUrl) {
+        setConversations([]);
+        setLoading(false);
+        return;
+      }
+
+      // Query 1: Fetch conversations (explicit user_id + repo_url filter)
       let query = supabase
         .from("conversations")
         .select("*")
         .eq("user_id", currentUserId)
+        .eq("repo_url", currentRepoUrl)
         .order("last_active", { ascending: false })
         .order("created_at", { ascending: false });
 
@@ -181,8 +210,11 @@ export function useConversations(
     fetchConversations();
   }, [fetchConversations]);
 
-  // Supabase Realtime subscription for status updates
-  // Uses userId state (not ref) so effect re-runs when auth completes
+  // Supabase Realtime subscription for status updates.
+  // Uses userId state (not ref) so effect re-runs when auth completes.
+  // Realtime `filter` accepts only ONE equality predicate per realtime-js#97 —
+  // the `user_id` filter stays server-side; cross-repo payloads are dropped
+  // client-side in the callback below (same pattern as `archived_at`).
   useEffect(() => {
     if (!userId) return;
 
@@ -201,6 +233,16 @@ export function useConversations(
           const updated = payload.new as Conversation;
           // Client-side user_id check: Free tier ignores server-side filter
           if (updated.user_id !== userId) return;
+          // Client-side repo_url check: Realtime can't express the second
+          // equality, so drop payloads whose repo_url doesn't match the
+          // current scope. Strict equality catches the disconnected case
+          // (repoUrlRef=null, payload.repo_url=<something>) too — when
+          // disconnected, conversations list is empty so the update
+          // would find no matching row anyway, but this guards against
+          // rendering the first cross-repo row if a future refactor
+          // decouples list-empty from disconnect.
+          const currentRepoUrl = repoUrlRef.current;
+          if ((updated.repo_url ?? null) !== currentRepoUrl) return;
 
           setConversations((prev) => {
             // Check if the conversation's archive state matches the current filter
@@ -227,6 +269,40 @@ export function useConversations(
       supabase.removeChannel(channel);
     };
   }, [userId, archiveFilter]);
+
+  // Cross-tab disconnect/reconnect awareness (race R-C): another tab may
+  // swap the user's repo_url while this hook is mounted. Subscribe to
+  // users UPDATE events and refetch when repo_url changes — without this
+  // the Command Center keeps showing the pre-swap scope until a hard reload.
+  useEffect(() => {
+    if (!userId) return;
+    const supabase = createClient();
+    const channel = supabase
+      .channel("command-center-user")
+      .on(
+        "postgres_changes",
+        {
+          event: "UPDATE",
+          schema: "public",
+          table: "users",
+          filter: `id=eq.${userId}`,
+        },
+        (payload) => {
+          const updated = payload.new as { repo_url?: string | null };
+          const nextRepoUrl = updated?.repo_url ?? null;
+          if (nextRepoUrl !== repoUrlRef.current) {
+            fetchConversations();
+          }
+        },
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+    // repoUrl intentionally not in deps (see F1) — the comparison reads
+    // repoUrlRef.current, which stays fresh without forcing resubscribe.
+  }, [userId, fetchConversations]);
 
   const archiveConversation = useCallback(async (id: string) => {
     const supabase = createClient();
