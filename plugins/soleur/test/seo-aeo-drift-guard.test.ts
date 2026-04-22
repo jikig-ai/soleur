@@ -5,31 +5,64 @@
 // #2711 (inline author card + extended Person JSON-LD on every blog post).
 //
 // Test harness: bun:test (matches sibling tests in plugins/soleur/test/*.ts).
-// Build gating: if _site/ is absent, runs `npx @11ty/eleventy` from the repo
-// root (see eleventy.config.js INPUT constant — build MUST run from repo root
-// per learning 2026-03-15-eleventy-build-must-run-from-repo-root.md).
+// Build: runs `npx @11ty/eleventy` into a tmp output dir so each test invocation
+// produces a fresh build (mirrors plugins/soleur/test/jsonld-escaping.test.ts).
+// Set SEO_AEO_SKIP_BUILD=1 to reuse an existing _site/ at repo root (rare —
+// only useful for iterative local debugging of the drift-guard itself).
 
-import { describe, test, expect, beforeAll } from "bun:test";
+import { describe, test, expect, beforeAll, afterAll } from "bun:test";
 import { resolve, join } from "path";
-import { existsSync, readFileSync, readdirSync, statSync } from "fs";
-import { spawnSync } from "child_process";
+import {
+  existsSync,
+  readFileSync,
+  readdirSync,
+  statSync,
+  mkdtempSync,
+  rmSync,
+} from "fs";
+import { tmpdir } from "os";
 
 // plugins/soleur/test/ → ../../.. is the worktree (repo) root
 const REPO_ROOT = resolve(import.meta.dir, "../../..");
-const SITE = resolve(REPO_ROOT, "_site");
+const SITE_JSON = resolve(
+  REPO_ROOT,
+  "plugins/soleur/docs/_data/site.json",
+);
 const INDEX_NJK = resolve(REPO_ROOT, "plugins/soleur/docs/index.njk");
+const LAYOUT_TSX = resolve(
+  REPO_ROOT,
+  "apps/web-platform/app/layout.tsx",
+);
+
+let SITE: string;
+let tmpSite: string | null = null;
 
 beforeAll(() => {
-  if (!existsSync(SITE)) {
-    const res = spawnSync("npx", ["@11ty/eleventy"], {
-      cwd: REPO_ROOT,
-      stdio: "inherit",
-    });
-    if (res.status !== 0) {
+  if (process.env.SEO_AEO_SKIP_BUILD === "1") {
+    SITE = resolve(REPO_ROOT, "_site");
+    if (!existsSync(SITE)) {
       throw new Error(
-        `Eleventy build failed in test setup (exit ${res.status}). Run 'npx @11ty/eleventy' from repo root to reproduce.`,
+        "SEO_AEO_SKIP_BUILD=1 set but _site/ not found. Run `npx @11ty/eleventy` first.",
       );
     }
+    return;
+  }
+  tmpSite = mkdtempSync(join(tmpdir(), "seo-aeo-drift-"));
+  SITE = tmpSite;
+  const proc = Bun.spawnSync(
+    ["npx", "@11ty/eleventy", `--output=${tmpSite}`],
+    { cwd: REPO_ROOT, stdout: "inherit", stderr: "inherit" },
+  );
+  if (proc.exitCode !== 0) {
+    throw new Error(
+      `Eleventy build failed in test setup (exit ${proc.exitCode}). Run 'npx @11ty/eleventy' from repo root to reproduce.`,
+    );
+  }
+});
+
+afterAll(() => {
+  if (tmpSite) {
+    rmSync(tmpSite, { recursive: true, force: true });
   }
 });
 
@@ -159,33 +192,67 @@ describe("#2708 homepage <title> matches docs/index.njk seoTitle exactly", () =>
 // -- Test 4: inline author card + extended Person JSON-LD on blog posts ---
 
 describe("#2711 blog posts render author card + extended Person JSON-LD", () => {
-  const blogDir = resolve(SITE, "blog");
-  // Filter out redirect stubs built from `blog/redirects.njk` — those are
-  // meta-refresh pages (no layout, no content), not real posts. Detected by
-  // a short (<800 bytes) HTML body containing `<meta http-equiv="refresh"`.
-  const entries = existsSync(blogDir)
-    ? readdirSync(blogDir).filter((e) => {
-        const p = join(blogDir, e);
-        const idx = join(p, "index.html");
-        if (!statSync(p).isDirectory() || !existsSync(idx)) return false;
-        const body = readFileSync(idx, "utf8");
-        if (body.length < 2000 && /<meta\s+http-equiv="refresh"/i.test(body)) {
-          return false;
-        }
-        return true;
-      })
-    : [];
+  // Load the canonical sameAs array from site.json so the drift-guard
+  // pins the exact post-state (cq-mutation-assertions-pin-exact-post-state).
+  // Evaluated lazily inside each test to avoid running before beforeAll.
+  const site = () =>
+    JSON.parse(readFileSync(SITE_JSON, "utf8")) as {
+      author: { sameAs: string[] };
+    };
 
   test("at least one blog post rendered", () => {
+    const blogDir = resolve(SITE, "blog");
+    const entries = existsSync(blogDir)
+      ? readdirSync(blogDir).filter((e) => {
+          const p = join(blogDir, e);
+          const idx = join(p, "index.html");
+          if (!statSync(p).isDirectory() || !existsSync(idx)) return false;
+          const body = readFileSync(idx, "utf8");
+          if (body.length < 2000 && /<meta\s+http-equiv="refresh"/i.test(body)) {
+            return false;
+          }
+          return true;
+        })
+      : [];
     expect(entries.length).toBeGreaterThan(0);
   });
 
-  for (const slug of entries) {
-    test(`${slug}: author-card DOM + Person JSON-LD with image+sameAs`, () => {
+  test("every blog post: author-card DOM + Person JSON-LD image exists on disk + sameAs pins site.json exactly", () => {
+    const blogDir = resolve(SITE, "blog");
+    const entries = existsSync(blogDir)
+      ? readdirSync(blogDir).filter((e) => {
+          const p = join(blogDir, e);
+          const idx = join(p, "index.html");
+          if (!statSync(p).isDirectory() || !existsSync(idx)) return false;
+          const body = readFileSync(idx, "utf8");
+          if (body.length < 2000 && /<meta\s+http-equiv="refresh"/i.test(body)) {
+            return false;
+          }
+          return true;
+        })
+      : [];
+    const expectedSameAs = site().author.sameAs;
+
+    for (const slug of entries) {
       const html = readSite(`blog/${slug}/index.html`);
-      // Author card DOM
-      expect(html).toContain('class="author-card"');
-      expect(html).toMatch(/<img[^>]+src="\/images\/jean-deruelle\.(jpg|png|svg)"/);
+
+      // Author card DOM (flat-hyphen convention — see commit 3)
+      expect(html, `${slug}: author-card class`).toContain(
+        'class="author-card"',
+      );
+      const imgMatch = html.match(
+        /<img[^>]+src="(\/images\/jean-deruelle\.(?:jpg|png|svg))"/,
+      );
+      expect(imgMatch, `${slug}: author-card img src`).not.toBeNull();
+      // Pinned existence of the referenced asset on disk — catches the
+      // case where site.json references an image whose file was deleted.
+      const imgPath = imgMatch![1].replace(/^\//, "");
+      const absImg = resolve(SITE, imgPath);
+      expect(
+        existsSync(absImg),
+        `${slug}: author-card asset ${imgMatch![1]} missing from _site/`,
+      ).toBe(true);
+
       // BlogPosting JSON-LD with Person author extended with image + sameAs
       const blocks = jsonLdBlocks(html);
       const post = blocks.find(
@@ -201,14 +268,14 @@ describe("#2711 blog posts render author card + extended Person JSON-LD", () => 
           b !== null &&
           (b as { "@type"?: string })["@type"] === "BlogPosting",
       );
-      expect(post).toBeDefined();
+      expect(post, `${slug}: BlogPosting JSON-LD block`).toBeDefined();
       expect(post!.author["@type"]).toBe("Person");
       expect(typeof post!.author.image).toBe("string");
       expect(post!.author.image!.length).toBeGreaterThan(0);
-      expect(Array.isArray(post!.author.sameAs)).toBe(true);
-      expect(post!.author.sameAs!.length).toBeGreaterThanOrEqual(2);
-    });
-  }
+      // Deep equality in order — prevents silent shrinkage or reordering.
+      expect(post!.author.sameAs).toEqual(expectedSameAs);
+    }
+  });
 });
 
 // -- Test 5: every JSON-LD block parses as valid JSON --------------------
@@ -220,16 +287,32 @@ describe("all <script type=\"application/ld+json\"> blocks parse as valid JSON",
     const failures: { file: string; err: string; snippet: string }[] = [];
     for (const f of files) {
       const html = readFileSync(f, "utf8");
-      const re =
-        /<script type="application\/ld\+json">([\s\S]*?)<\/script>/g;
-      for (const m of html.matchAll(re)) {
-        try {
-          JSON.parse(m[1]);
-        } catch (e) {
+      try {
+        // jsonLdBlocks throws on the first invalid block — wrap per-file so
+        // we accumulate failures across files instead of aborting on the first.
+        jsonLdBlocks(html);
+      } catch (e) {
+        // Re-scan this file block-by-block to report which snippet failed.
+        const re =
+          /<script type="application\/ld\+json">([\s\S]*?)<\/script>/g;
+        for (const m of html.matchAll(re)) {
+          try {
+            JSON.parse(m[1]);
+          } catch (inner) {
+            failures.push({
+              file: f,
+              err: (inner as Error).message,
+              snippet: m[1].slice(0, 200),
+            });
+          }
+        }
+        // Defensive: if the top-level catch fired but no block failed inner
+        // JSON.parse (shouldn't happen), surface the original error.
+        if (failures.length === 0) {
           failures.push({
             file: f,
             err: (e as Error).message,
-            snippet: m[1].slice(0, 200),
+            snippet: "<no-extractable-block>",
           });
         }
       }
@@ -240,5 +323,19 @@ describe("all <script type=\"application/ld+json\"> blocks parse as valid JSON",
         .join("\n");
       throw new Error(`Invalid JSON-LD in ${failures.length} block(s):\n${msg}`);
     }
+  });
+});
+
+// -- Test 6: Next.js layout title is dashboard-scoped (prevent #2708) -----
+
+describe("#2708 — Next.js layout title is dashboard-scoped", () => {
+  test("apps/web-platform/app/layout.tsx uses dashboard template + default, not marketing brand", () => {
+    const src = readFileSync(LAYOUT_TSX, "utf8");
+    // Must NOT contain the old brand string that leaked onto marketing routes.
+    expect(src).not.toContain("One Command Center, 8 Departments");
+    // Must use the dashboard-scoped template.
+    expect(src).toContain("%s — Soleur Dashboard");
+    // Must use the dashboard default title.
+    expect(src).toContain("Soleur Dashboard — Your Command Center");
   });
 });
