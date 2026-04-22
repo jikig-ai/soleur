@@ -1,10 +1,10 @@
 "use client";
 
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useReducer, useMemo, useRef, useCallback } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { WS_CLOSE_CODES, type WSMessage, type ConversationContext, type AttachmentRef } from "@/lib/types";
 import type { DomainLeaderId } from "@/server/domain-leaders";
-import { applyStreamEvent, applyTimeout, type ChatMessage } from "@/lib/chat-state-machine";
+import { applyStreamEvent, applyTimeout, type ChatMessage, type StreamEventResult } from "@/lib/chat-state-machine";
 
 type ConnectionStatus = "connecting" | "connected" | "reconnecting" | "disconnected";
 
@@ -73,13 +73,91 @@ export const NON_TRANSIENT_CLOSE_CODES: Record<number, { target?: string; reason
   [WS_CLOSE_CODES.IDLE_TIMEOUT]: { reason: "Session expired due to inactivity" },
 };
 
+/** Combined chat state: messages and activeStreams update atomically via useReducer
+ *  so StrictMode double-invocation cannot observe a partially-updated ref. */
+interface ChatState {
+  messages: ChatMessage[];
+  activeStreams: Map<string, number>;
+  /** Timer side-effect declared by the last stream event; applied by a useEffect. */
+  pendingTimerAction?: StreamEventResult["timerAction"];
+}
+
+type StreamEventMsg = Parameters<typeof applyStreamEvent>[2];
+
+type ChatAction =
+  | { type: "stream_event"; msg: StreamEventMsg }
+  | { type: "timeout"; leaderId: string }
+  | { type: "clear_streams" }
+  | { type: "add_message"; message: ChatMessage }
+  | { type: "prepend_messages"; messages: ChatMessage[] }
+  | { type: "filter_prepend"; messages: ChatMessage[] }
+  | { type: "gate_error"; gateId: string; message: string }
+  | { type: "resolve_gate"; gateId: string; selection: string };
+
+function chatReducer(state: ChatState, action: ChatAction): ChatState {
+  switch (action.type) {
+    case "stream_event": {
+      const result = applyStreamEvent(state.messages, state.activeStreams, action.msg);
+      return { messages: result.messages, activeStreams: result.activeStreams, pendingTimerAction: result.timerAction };
+    }
+    case "timeout": {
+      const result = applyTimeout(state.messages, state.activeStreams, action.leaderId);
+      return { messages: result.messages, activeStreams: result.activeStreams };
+    }
+    case "clear_streams":
+      return { ...state, activeStreams: new Map() };
+    case "add_message":
+      return { ...state, messages: [...state.messages, action.message] };
+    case "prepend_messages":
+      return { ...state, messages: [...action.messages, ...state.messages] };
+    case "filter_prepend": {
+      const existingIds = new Set(state.messages.map(m => m.id));
+      const unique = action.messages.filter(m => !existingIds.has(m.id));
+      return { ...state, messages: [...unique, ...state.messages] };
+    }
+    case "gate_error":
+      return {
+        ...state,
+        messages: state.messages.map(m =>
+          m.type === "review_gate" && m.gateId === action.gateId
+            ? { ...m, gateError: action.message, resolved: false, selectedOption: undefined }
+            : m,
+        ),
+      };
+    case "resolve_gate":
+      return {
+        ...state,
+        messages: state.messages.map(m =>
+          m.type === "review_gate" && m.gateId === action.gateId
+            ? { ...m, resolved: true, selectedOption: action.selection, gateError: undefined }
+            : m,
+        ),
+      };
+  }
+}
+
 export function useWebSocket(conversationId: string): UseWebSocketReturn {
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [chatState, dispatch] = useReducer(chatReducer, null, () => ({
+    messages: [] as ChatMessage[],
+    activeStreams: new Map<string, number>(),
+  }));
+
+  // Mirror latest chatState into a ref for use in stale async closures
+  // (history fetch callbacks, setTimeout callbacks).
+  const chatStateRef = useRef(chatState);
+  chatStateRef.current = chatState;
+
+  // Derive activeLeaderIds from reducer state — recalculates only when
+  // the activeStreams Map reference changes (i.e., when leaders are added/removed).
+  const activeLeaderIds = useMemo(
+    () => Array.from(chatState.activeStreams.keys()) as DomainLeaderId[],
+    [chatState.activeStreams],
+  );
+
   const [status, setStatus] = useState<ConnectionStatus>("connecting");
   const [disconnectReason, setDisconnectReason] = useState<string>();
   const [lastError, setLastError] = useState<WebSocketError | null>(null);
   const [routeSource, setRouteSource] = useState<"auto" | "mention" | null>(null);
-  const [activeLeaderIds, setActiveLeaderIds] = useState<DomainLeaderId[]>([]);
   const [sessionConfirmed, setSessionConfirmed] = useState(false);
   const [realConversationId, setRealConversationId] = useState<string | null>(null);
   const [resumedFrom, setResumedFrom] = useState<ResumedFrom | null>(null);
@@ -88,9 +166,6 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
   const backoffRef = useRef(INITIAL_BACKOFF);
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const mountedRef = useRef(true);
-
-  /** Map of active leader streams: leaderId → message index in the messages array */
-  const activeStreamsRef = useRef<Map<string, number>>(new Map());
 
   /** Map of per-leader timeout timers for stuck THINKING/TOOL_USE states (STUCK_TIMEOUT_MS) */
   const timeoutTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
@@ -121,22 +196,28 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
     clearLeaderTimeout(leaderId);
     const timer = setTimeout(() => {
       if (!mountedRef.current) return;
-      setMessages((prev) => {
-        const result = applyTimeout(prev, activeStreamsRef.current, leaderId);
-        activeStreamsRef.current = result.activeStreams;
-        return result.messages;
-      });
+      dispatch({ type: "timeout", leaderId });
       timeoutTimersRef.current.delete(leaderId);
     }, STUCK_TIMEOUT_MS);
     timeoutTimersRef.current.set(leaderId, timer);
   }, [clearLeaderTimeout]);
+
+  // Apply timer side-effects declared by the reducer after each stream event.
+  // useEffect runs after paint; the latency is negligible for 45-second timeouts.
+  useEffect(() => {
+    const ta = chatState.pendingTimerAction;
+    if (!ta) return;
+    if (ta.type === "reset") resetLeaderTimeout(ta.leaderId);
+    else if (ta.type === "clear") clearLeaderTimeout(ta.leaderId);
+    else if (ta.type === "clear_all") clearAllTimeouts();
+  }, [chatState.pendingTimerAction, resetLeaderTimeout, clearLeaderTimeout, clearAllTimeouts]);
 
   /** Permanently tear down the WebSocket — prevents reconnect loop.
    *  Mirrors the key_invalid teardown pattern. */
   const teardown = useCallback(() => {
     mountedRef.current = false;
     clearTimeout(reconnectTimerRef.current);
-    activeStreamsRef.current.clear();
+    dispatch({ type: "clear_streams" });
     clearAllTimeouts();
     setSessionConfirmed(false);
     setRealConversationId(null);
@@ -166,9 +247,8 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
     // Clear stale state from any prior connection — incoming events on the
     // new socket must not mutate wrong message indices or resume timers
     // that were tied to the previous socket. See #2135.
-    activeStreamsRef.current.clear();
+    dispatch({ type: "clear_streams" });
     clearAllTimeouts();
-    setActiveLeaderIds([]);
     setSessionConfirmed(false);
     setUsageData(null);
 
@@ -223,33 +303,15 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
           if (msg.type === "stream_start" && msg.source) {
             setRouteSource(msg.source);
           }
-          // Delegate state transitions to the pure state machine so tests
-          // exercise the same code path as production (see #2124).
-          //
-          // Capture timerAction from the result so the hook honours the
-          // reducer's declared intent — single source of truth for timer
-          // lifecycle. setMessages may be invoked twice under StrictMode;
-          // since the reducer is pure, both invocations produce the same
-          // timerAction, so capturing the latest is safe.
-          let action: ReturnType<typeof applyStreamEvent>["timerAction"];
-          setMessages((prev) => {
-            const result = applyStreamEvent(prev, activeStreamsRef.current, msg);
-            activeStreamsRef.current = result.activeStreams;
-            action = result.timerAction;
-            return result.messages;
-          });
-          if (action?.type === "reset") resetLeaderTimeout(action.leaderId);
-          else if (action?.type === "clear") clearLeaderTimeout(action.leaderId);
-          else if (action?.type === "clear_all") clearAllTimeouts();
-          // Keep activeLeaderIds in sync for UI consumers that track who's talking.
-          if (msg.type === "stream_start" || msg.type === "stream_end" || msg.type === "review_gate") {
-            setActiveLeaderIds(Array.from(activeStreamsRef.current.keys()) as DomainLeaderId[]);
-          }
+          // Dispatch to the pure reducer — no ref mutations inside the updater.
+          // activeStreams and messages update atomically; pendingTimerAction carries
+          // the timer intent out of the pure reducer for the useEffect above. See #2217.
+          dispatch({ type: "stream_event", msg });
           break;
         }
 
         case "error": {
-          activeStreamsRef.current.clear();
+          dispatch({ type: "clear_streams" });
           clearAllTimeouts();
 
           // Key invalidation: set structured error instead of redirect
@@ -272,40 +334,36 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
 
           // Route gateId-targeted errors to the review gate message
           if (msg.gateId) {
-            setMessages((prev) => prev.map((m) =>
-              m.type === "review_gate" && m.gateId === msg.gateId
-                ? { ...m, gateError: msg.message, resolved: false, selectedOption: undefined }
-                : m,
-            ));
+            dispatch({ type: "gate_error", gateId: msg.gateId, message: msg.message });
             break;
           }
 
-          setMessages((prev) => [
-            ...prev,
-            {
+          dispatch({
+            type: "add_message",
+            message: {
               id: `err-${Date.now()}`,
               role: "assistant",
               content: `Error: ${msg.message}`,
               type: "text",
             },
-          ]);
+          });
           break;
         }
 
         case "session_ended": {
-          activeStreamsRef.current.clear();
+          dispatch({ type: "clear_streams" });
           clearAllTimeouts();
           // Don't display "turn_complete" as a visible message — it's a lifecycle signal
           if (msg.reason !== "turn_complete") {
-            setMessages((prev) => [
-              ...prev,
-              {
+            dispatch({
+              type: "add_message",
+              message: {
                 id: `end-${Date.now()}`,
                 role: "assistant",
                 content: `Session ended: ${msg.reason}`,
                 type: "text",
               },
-            ]);
+            });
           }
           break;
         }
@@ -381,7 +439,7 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
     ws.onerror = () => {
       // onclose will fire after onerror — reconnect logic lives there
     };
-  }, [getWsUrlAndToken, teardown]);
+  }, [getWsUrlAndToken, teardown, clearAllTimeouts]);
 
   /** Fetch and map conversation history from the messages API. Shared by
    *  the mount-time effect (non-"new" IDs) and the resume effect ("new" → UUID). */
@@ -448,8 +506,9 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
         const result = await fetchConversationHistory(conversationId, controller.signal);
         if (!result || !mountedRef.current) return;
 
-        if (activeStreamsRef.current.size === 0) {
-          setMessages(prev => [...result.messages, ...prev]);
+        // chatStateRef.current gives the latest activeStreams even in this stale closure
+        if (chatStateRef.current.activeStreams.size === 0) {
+          dispatch({ type: "prepend_messages", messages: result.messages });
         }
         seedCostData(result.costData);
       } catch (err) {
@@ -479,13 +538,9 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
 
         // Deduplicate: filter out any messages already present from stream events
         // that arrived while the fetch was in-flight. More robust than the
-        // activeStreamsRef.size === 0 guard: handles the window where a stream
+        // activeStreams.size === 0 guard: handles the window where a stream
         // event arrives and completes before the fetch resolves.
-        setMessages(prev => {
-          const existingIds = new Set(prev.map(m => m.id));
-          const unique = result.messages.filter(m => !existingIds.has(m.id));
-          return [...unique, ...prev];
-        });
+        dispatch({ type: "filter_prepend", messages: result.messages });
         seedCostData(result.costData);
       } catch (err) {
         if (err instanceof DOMException && err.name === "AbortError") return;
@@ -543,16 +598,16 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
   const sendMessage = useCallback(
     (content: string, attachments?: AttachmentRef[]) => {
       // Add the user message to local state immediately
-      setMessages((prev) => [
-        ...prev,
-        {
+      dispatch({
+        type: "add_message",
+        message: {
           id: `user-${crypto.randomUUID()}`,
           role: "user",
           content,
           type: "text",
           attachments,
         },
-      ]);
+      });
       send({ type: "chat", content, attachments });
     },
     [send],
@@ -562,11 +617,7 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
     (gateId: string, selection: string) => {
       send({ type: "review_gate_response", gateId, selection });
       // Optimistically mark as resolved
-      setMessages((prev) => prev.map((m) =>
-        m.type === "review_gate" && m.gateId === gateId
-          ? { ...m, resolved: true, selectedOption: selection, gateError: undefined }
-          : m,
-      ));
+      dispatch({ type: "resolve_gate", gateId, selection });
     },
     [send],
   );
@@ -579,5 +630,5 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
     connect();
   }, [connect]);
 
-  return { messages, startSession, resumeSession, sendMessage, sendReviewGateResponse, status, sessionConfirmed, disconnectReason, lastError, reconnect, routeSource, activeLeaderIds, usageData, realConversationId, resumedFrom };
+  return { messages: chatState.messages, startSession, resumeSession, sendMessage, sendReviewGateResponse, status, sessionConfirmed, disconnectReason, lastError, reconnect, routeSource, activeLeaderIds, usageData, realConversationId, resumedFrom };
 }
