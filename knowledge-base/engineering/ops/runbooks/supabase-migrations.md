@@ -65,28 +65,32 @@ SELECT indexname, indexdef
 
 ### CI path (default)
 
-Migrations are applied by the deploy workflow via the Supabase Management
-API. The migration file's presence on `main` triggers application during
-the next release run; no manual step is required.
+Migrations are applied by the `migrate` job in
+`.github/workflows/web-platform-release.yml`, which invokes
+`apps/web-platform/scripts/run-migrations.sh` under
+`doppler run -c prd`. The runner tracks applied migrations in the
+`public._schema_migrations` table and applies any new file whose
+filename is not already recorded. The migration file's presence on
+`main` triggers application during the next release run; no manual
+step is required.
 
 ### Manual path (when CI is unavailable)
 
-```bash
-# Fetch the access token from Doppler prd config.
-export SUPABASE_ACCESS_TOKEN=$(doppler secrets get SUPABASE_ACCESS_TOKEN \
-  -p soleur -c prd --plain)
-export SUPABASE_PROJECT_REF=$(doppler secrets get SUPABASE_PROJECT_REF \
-  -p soleur -c prd --plain)
+The runner is portable — run it locally against prod with the same
+Doppler injection CI uses:
 
+```bash
 cd apps/web-platform
-npx supabase db push \
-  --project-ref "$SUPABASE_PROJECT_REF" \
-  --include-all
+doppler run -p soleur -c prd -- bash scripts/run-migrations.sh
 ```
 
-`--include-all` sends every un-applied migration since the last pushed
-version; `db push` is idempotent as long as the migration file itself
-uses `IF NOT EXISTS` guards.
+The runner requires `DATABASE_URL_POOLER` or `DATABASE_URL` in the
+environment — both live in Doppler `prd`. The `-c prd` injection
+supplies them.
+
+Do not reach for `npx supabase db push` — the repo does not use the
+Supabase migration CLI. The psql runner above is the single source of
+truth for production application.
 
 ## Verify
 
@@ -125,11 +129,14 @@ This is the exact failure pattern captured in
 ### 2. Management API (detailed)
 
 Use when the probe passes but you need to confirm constraints or index
-predicates.
+predicates. Doppler `prd` stores `SUPABASE_URL`
+(`https://<ref>.supabase.co`) but not the bare project ref — derive it
+from the URL.
 
 ```bash
 export SUPABASE_ACCESS_TOKEN=$(doppler secrets get SUPABASE_ACCESS_TOKEN -p soleur -c prd --plain)
-export SUPABASE_PROJECT_REF=$(doppler secrets get SUPABASE_PROJECT_REF -p soleur -c prd --plain)
+SUPABASE_URL=$(doppler secrets get SUPABASE_URL -p soleur -c prd --plain)
+SUPABASE_PROJECT_REF=$(echo "$SUPABASE_URL" | sed -E 's|https://([^.]+)\.supabase\.co.*|\1|')
 
 # Confirm column definition (nullability, data type, default).
 curl -sS "https://api.supabase.com/v1/projects/$SUPABASE_PROJECT_REF/database/query" \
@@ -144,17 +151,50 @@ curl -sS "https://api.supabase.com/v1/projects/$SUPABASE_PROJECT_REF/database/qu
   -d '{"query": "SELECT indexname, indexdef FROM pg_indexes WHERE schemaname = '\''public'\'' AND tablename = '\''<table>'\'';"}'
 ```
 
+### 3. Data backfill verification (automated in CI)
+
+Schema-only migrations (`ADD COLUMN`, `CREATE TABLE`) are fully
+verified by the REST probe above. Data migrations — backfills, value
+normalizations, constraint-preparation rewrites — need a deeper check:
+that the target data now satisfies the invariant the migration
+promises.
+
+Declare those checks in a sibling file under
+`apps/web-platform/supabase/verify/`, using the same basename as the
+migration:
+
+```text
+apps/web-platform/supabase/
+├── migrations/
+│   └── 031_normalize_repo_url.sql   # the backfill
+└── verify/
+    └── 031_normalize_repo_url.sql   # the check
+```
+
+The verify file must emit exactly two columns per row:
+
+- `check_name TEXT` — a human-readable label
+- `bad INT`          — count of rows violating the invariant (expected 0)
+
+Any row where `bad > 0` fails the run. `UNION ALL` multiple SELECTs
+into one file to bundle sentinels with idempotence probes (see 031 for
+the pattern).
+
+CI executes every verify file via the `verify-migrations` job in
+`web-platform-release.yml` after `migrate` succeeds. A verify failure
+blocks `deploy` the same way a failed migrate does.
+
 ## Rollback
 
 Rollbacks are destructive. Before running any `DROP COLUMN` or `DROP
-INDEX`, capture the affected rows for recovery:
+INDEX`, capture the affected rows for recovery. Derive `PROJECT_REF`
+from `SUPABASE_URL` as in the Management API section above, then use
+`pg_dump` against `DATABASE_URL_POOLER`:
 
 ```bash
-npx supabase db dump \
-  --project-ref "$SUPABASE_PROJECT_REF" \
-  --data-only \
-  --schema public \
-  --table <table> \
+DATABASE_URL=$(doppler secrets get DATABASE_URL_POOLER -p soleur -c prd --plain)
+pg_dump "$DATABASE_URL" \
+  --data-only --schema=public --table=public.<table> \
   > backup-pre-rollback-$(date +%Y%m%d-%H%M%S).sql
 ```
 
@@ -183,14 +223,21 @@ the rollback succeeded.
 ## Post-merge Verification
 
 Per `wg-when-a-pr-includes-database-migrations`, a PR is not done until
-the migration is confirmed applied to production:
+the migration is confirmed applied to production. The
+`web-platform-release.yml` workflow automates this:
 
-1. Watch the deploy workflow for completion on `main`.
-2. Run the REST API probe (above) against production.
-3. If 200, close the issue referencing the migration with a short note
-   pointing at this runbook and the SHA that applied.
-4. If 400, the migration did not apply — open an incident issue and
-   follow the manual apply path.
+1. `migrate` applies unapplied migrations via `run-migrations.sh`.
+2. `verify-migrations` runs every `supabase/verify/*.sql`, failing on
+   any `bad > 0`.
+3. `verify-migrations` scans open GitHub issues with the
+   `follow-through` label for migration filenames in their body and
+   closes any whose verify passed, commenting with the run URL.
+
+If both jobs succeed, no human action is required. If either fails,
+`deploy` is blocked and the workflow run reports the failing check.
+
+For migrations without a sibling verify file (schema-only), fall back
+to the REST API probe in §1 above.
 
 ## Cross-references
 

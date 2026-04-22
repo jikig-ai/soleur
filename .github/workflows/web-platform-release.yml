@@ -55,6 +55,117 @@ jobs:
         run: |
           doppler run -c prd -- bash apps/web-platform/scripts/run-migrations.sh
 
+  verify-migrations:
+    # Runs supabase/verify/*.sql sentinels post-apply, then closes any open
+    # `follow-through` issue whose body references a verified migration. Keeps
+    # migration verification out of the human follow-through loop. See runbook
+    # knowledge-base/engineering/ops/runbooks/supabase-migrations.md §3.
+    needs: migrate
+    if: needs.migrate.result == 'success'
+    runs-on: ubuntu-latest
+    concurrency:
+      group: verify-migrations-web-platform
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - name: Install Doppler CLI
+        uses: dopplerhq/cli-action@014df23b1329b615816a38eb5f473bb9000700b1 # v3
+      - name: Install psql
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends postgresql-client
+      - name: Run verify files
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN_PRD }}
+        run: |
+          doppler run -c prd -- bash apps/web-platform/scripts/run-verify.sh
+
+      - name: Close follow-through issues for verified migrations
+        # Scans open issues labeled `follow-through` for migration filenames
+        # that (a) appear in the body AND (b) have a sibling
+        # supabase/verify/<filename> committed. Body content is fetched via
+        # `gh issue view` into a bash variable and only used as a grep -qF
+        # argument (fixed-string, no regex, never eval'd) — safe per
+        # workflow-injection guidance.
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          COMMIT_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          verify_files=(apps/web-platform/supabase/verify/*.sql)
+          shopt -u nullglob
+          if [[ "${#verify_files[@]}" -eq 0 ]]; then
+            echo "No verify files — nothing to auto-close."
+            exit 0
+          fi
+
+          # Build a list of (full_filename, stem) pairs. Match on either:
+          # - full filename (e.g. "031_normalize_repo_url.sql") — precise
+          # - stem (e.g. "031_normalize_repo_url") — catches issue bodies that
+          #   omit the extension. Stem is long and distinctive (NNN_ prefix +
+          #   snake_case name), so false-positive risk across unrelated issues
+          #   is effectively zero.
+          # Bare "NNN" / "031" is NOT matched — too ambiguous (collides with
+          # issue numbers, dates, etc.).
+          verified_names=()
+          verified_stems=()
+          for f in "${verify_files[@]}"; do
+            full="$(basename "$f")"
+            verified_names+=("$full")
+            verified_stems+=("${full%.sql}")
+          done
+          echo "Verified migrations: ${verified_names[*]}"
+
+          issue_numbers=$(gh issue list \
+            --label follow-through --state open \
+            --limit 200 --json number --jq '.[].number')
+          if [[ -z "$issue_numbers" ]]; then
+            echo "No open follow-through issues."
+            exit 0
+          fi
+
+          closed=0
+          while IFS= read -r issue_number; do
+            [[ -z "$issue_number" ]] && continue
+            body=$(gh issue view "$issue_number" --json body --jq .body 2>/dev/null || echo "")
+            [[ -z "$body" ]] && continue
+
+            matched=""
+            for i in "${!verified_names[@]}"; do
+              name="${verified_names[$i]}"
+              stem="${verified_stems[$i]}"
+              if printf '%s' "$body" | grep -qF -- "$name" \
+                 || printf '%s' "$body" | grep -qF -- "$stem"; then
+                matched="$name"
+                break
+              fi
+            done
+            [[ -z "$matched" ]] && continue
+
+            echo "Issue #$issue_number references verified migration $matched — closing."
+            short_sha="${COMMIT_SHA:0:12}"
+            {
+              echo "## Verified by CI"
+              echo
+              echo "Migration \`$matched\` passed the sentinel + idempotence probes defined in \`apps/web-platform/supabase/verify/$matched\`."
+              echo
+              echo "- **Run:** $RUN_URL"
+              echo "- **Commit:** $short_sha"
+              echo
+              echo "Closed automatically by the \`verify-migrations\` job."
+            } > /tmp/auto-close-body.md
+            gh issue comment "$issue_number" --body-file /tmp/auto-close-body.md
+            gh issue close "$issue_number"
+            closed=$((closed + 1))
+          done <<< "$issue_numbers"
+
+          echo "Auto-closed $closed follow-through issue(s)."
+
   verify-doppler-secrets:
     # Pre-deploy guard: asserts the hand-maintained list of required NEXT_PUBLIC_*
     # secrets is present in Doppler prd. Closes #2769 (silent Doppler drift that
@@ -74,13 +185,17 @@ jobs:
           doppler run -c prd -- bash apps/web-platform/scripts/verify-required-secrets.sh
 
   deploy:
-    needs: [release, migrate, verify-doppler-secrets]
+    needs: [release, migrate, verify-migrations, verify-doppler-secrets]
     # verify-doppler-secrets must succeed — skipped/failed blocks deploy (unlike
     # migrate which tolerates 'skipped' when no migrations changed).
+    # verify-migrations tolerates 'skipped' because it only runs on
+    # migrate.result==success; when migrate is itself skipped, verify is
+    # skipped too, and deploy should still proceed.
     if: >-
       always() &&
       needs.release.outputs.docker_pushed == 'true' &&
       (needs.migrate.result == 'success' || needs.migrate.result == 'skipped') &&
+      (needs.verify-migrations.result == 'success' || needs.verify-migrations.result == 'skipped') &&
       needs.verify-doppler-secrets.result == 'success' &&
       (github.event_name != 'workflow_dispatch' || !inputs.skip_deploy)
     runs-on: ubuntu-latest
