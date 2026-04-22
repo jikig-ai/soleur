@@ -1,14 +1,13 @@
-// In-process MCP tool for KB-chat thread discovery. Mirrors the
-// `kb-share-tools.ts` factoring pattern so the tool's wiring has a single
-// call site and its handler can be unit tested in isolation.
-//
-// Currently exposes one tool (`conversations_lookup`). The P3 siblings
-// (`conversations_list`, `conversation_archive`) are deferred to a follow-
-// up issue because they require new HTTP endpoints out of scope.
+// In-process MCP tools for conversation thread discovery + list + archive.
+// Mirrors the `kb-share-tools.ts` factoring pattern so each tool's wiring
+// has a single call site and its handler can be unit tested in isolation.
 
 import { tool } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod/v4";
+import { createServiceClient } from "@/lib/supabase/service";
 import { getCurrentRepoUrl } from "@/server/current-repo-url";
+import { DOMAIN_LEADERS } from "@/server/domain-leaders";
+import { STATUS_LABELS } from "@/lib/types";
 import {
   lookupConversationForPath,
   type LookupConversationResult,
@@ -32,6 +31,29 @@ function textResponse(payload: unknown, isError = false): ToolTextResponse {
   if (isError) body.isError = true;
   return body;
 }
+
+// Shared "disconnected" response — short-circuits every tool when the
+// authenticated user has no currently-connected repo (users.repo_url IS NULL).
+// Agents parse `code` to decide whether to prompt reconnect.
+function disconnectedResponse(): ToolTextResponse {
+  return textResponse(
+    { error: "disconnected", code: "no_repo_connected" },
+    true,
+  );
+}
+
+// Enum inputs are rebuilt from the canonical types so tool validation
+// cannot drift from UI validation. Bumping `STATUS_LABELS` or
+// `DOMAIN_LEADERS` automatically widens the schemas here.
+const STATUS_VALUES = Object.keys(STATUS_LABELS) as Array<
+  keyof typeof STATUS_LABELS
+>;
+const DOMAIN_LEADER_IDS = DOMAIN_LEADERS.map((l) => l.id);
+
+// Default + cap for `conversations_list` matches `useConversations` in
+// `hooks/use-conversations.ts` — agents and UI see the same page size.
+const LIST_LIMIT_DEFAULT = 50;
+const LIST_LIMIT_MAX = 50;
 
 export function buildConversationsTools(opts: BuildConversationsToolsOpts) {
   const { userId } = opts;
@@ -85,6 +107,160 @@ export function buildConversationsTools(opts: BuildConversationsToolsOpts) {
           lastActive: result.row.last_active,
           messageCount: result.row.message_count,
         });
+      },
+    ),
+    tool(
+      "conversations_list",
+      "List the authenticated user's conversations for the currently " +
+        "connected repository, mirroring the Command Center surface. " +
+        "Optional filters: statusFilter (one of waiting_for_user, active, " +
+        "completed, failed), domainLeader (one of the domain leader ids, " +
+        "or 'general' to filter domain_leader IS NULL), archived " +
+        "(boolean — defaults to false). Default page size is 50, capped " +
+        "at 50. Returns an array of { id, status, domain_leader, " +
+        "last_active, created_at, archived_at }. " +
+        "When the user has no connected repository, returns the typed " +
+        "disconnected error (see conversations_lookup description).",
+      {
+        statusFilter: z
+          .enum(STATUS_VALUES as [string, ...string[]])
+          .optional(),
+        domainLeader: z
+          .union([
+            z.enum(DOMAIN_LEADER_IDS as [string, ...string[]]),
+            z.literal("general"),
+          ])
+          .nullable()
+          .optional(),
+        archived: z.boolean().optional().default(false),
+        limit: z
+          .number()
+          .int()
+          .min(1)
+          .max(LIST_LIMIT_MAX)
+          .optional()
+          .default(LIST_LIMIT_DEFAULT),
+      },
+      async (args) => {
+        const repoUrl = await getCurrentRepoUrl(userId);
+        if (!repoUrl) return disconnectedResponse();
+
+        const supabase = createServiceClient();
+        let query = supabase
+          .from("conversations")
+          .select(
+            "id, status, domain_leader, last_active, created_at, archived_at",
+          )
+          .eq("user_id", userId)
+          .eq("repo_url", repoUrl);
+
+        if (args.archived) {
+          query = query.not("archived_at", "is", null);
+        } else {
+          query = query.is("archived_at", null);
+        }
+
+        if (args.statusFilter) {
+          query = query.eq("status", args.statusFilter);
+        }
+
+        if (args.domainLeader === "general") {
+          query = query.is("domain_leader", null);
+        } else if (args.domainLeader) {
+          query = query.eq("domain_leader", args.domainLeader);
+        }
+
+        const effectiveLimit = Math.min(
+          args.limit ?? LIST_LIMIT_DEFAULT,
+          LIST_LIMIT_MAX,
+        );
+        const { data, error } = await query
+          .order("last_active", { ascending: false })
+          .limit(effectiveLimit);
+
+        if (error) {
+          return textResponse(
+            { error: "List failed", code: "list_failed" },
+            true,
+          );
+        }
+
+        return textResponse(data ?? []);
+      },
+    ),
+    tool(
+      "conversation_archive",
+      "Archive a conversation by id, scoped to the authenticated user and " +
+        "the currently connected repository. The UPDATE WHERE clause " +
+        "pins id, user_id, AND repo_url — a cached id from a different " +
+        "repo or user fails closed as 'not found' rather than leaking " +
+        "existence. Returns { id, archived_at } on success; isError " +
+        "with code 'not_found' when 0 rows match; typed disconnected " +
+        "error when the user has no connected repository.",
+      { conversationId: z.string().uuid() },
+      async (args) => {
+        const repoUrl = await getCurrentRepoUrl(userId);
+        if (!repoUrl) return disconnectedResponse();
+
+        const supabase = createServiceClient();
+        const nowIso = new Date().toISOString();
+        const { data, error } = await supabase
+          .from("conversations")
+          .update({ archived_at: nowIso })
+          .eq("id", args.conversationId)
+          .eq("user_id", userId)
+          .eq("repo_url", repoUrl)
+          .select("id, archived_at");
+
+        if (error) {
+          return textResponse(
+            { error: "Archive failed", code: "archive_failed" },
+            true,
+          );
+        }
+        if (!data || data.length === 0) {
+          return textResponse(
+            { error: "Not found", code: "not_found" },
+            true,
+          );
+        }
+        return textResponse(data[0]);
+      },
+    ),
+    tool(
+      "conversation_unarchive",
+      "Unarchive a conversation by id, scoped to the authenticated user " +
+        "and the currently connected repository. Same three-column WHERE " +
+        "backstop as conversation_archive — cross-repo or cross-user " +
+        "cached ids fail closed as 'not found'. Returns { id, archived_at } " +
+        "(archived_at will be null on success).",
+      { conversationId: z.string().uuid() },
+      async (args) => {
+        const repoUrl = await getCurrentRepoUrl(userId);
+        if (!repoUrl) return disconnectedResponse();
+
+        const supabase = createServiceClient();
+        const { data, error } = await supabase
+          .from("conversations")
+          .update({ archived_at: null })
+          .eq("id", args.conversationId)
+          .eq("user_id", userId)
+          .eq("repo_url", repoUrl)
+          .select("id, archived_at");
+
+        if (error) {
+          return textResponse(
+            { error: "Unarchive failed", code: "unarchive_failed" },
+            true,
+          );
+        }
+        if (!data || data.length === 0) {
+          return textResponse(
+            { error: "Not found", code: "not_found" },
+            true,
+          );
+        }
+        return textResponse(data[0]);
       },
     ),
   ];
