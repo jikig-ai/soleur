@@ -5,6 +5,21 @@
 **Type:** `fix` (test-infrastructure; no product behavior change)
 **Priority:** P3 (operational hygiene — a flaky suite normalizes a red CI).
 
+## Enhancement Summary
+
+**Deepened on:** 2026-04-22
+**Sections enhanced:** 6 (Overview, Hypotheses, Files to Edit, Phase 2, Acceptance Criteria, Risks)
+**Research applied:** vitest 3.2.4 pool/isolate semantics (installed version, NOT 3.1.0 from package.json range — verified via `node_modules/vitest/package.json`), happy-dom storage semantics, per-file `global.fetch = ...` raw-assignment audit, `vi.restoreAllMocks()` vs `unstubAllGlobals()` coverage matrix.
+
+### Key Improvements After Deepen
+
+1. **Installed vitest is 3.2.4, not 3.1.0.** `package.json` says `^3.1.0`; actual resolved is 3.2.4. Plan semantics updated to 3.2.4's pool/isolate behavior (identical to 3.1 for our purposes, but the documented version is now correct — avoids a `cq-claude-code-action-pin-freshness`-class misreference).
+2. **Raw `global.fetch = vi.fn(...)` assignments surface as a NEW gap.** `vi.unstubAllGlobals()` ONLY undoes `vi.stubGlobal(...)`. Four test files in this app write `global.fetch = vi.fn(...)` directly (`kb-layout.test.tsx`, `kb-layout-panels.test.tsx`, `kb-layout-chat-close-on-switch.test.tsx`, `kb-layout-thread-info-prefetch.test.tsx`). These will NOT be undone by the primary fix. Phase 2 now captures `originalFetch` once at module load and restores it in `afterEach` to close this hole.
+3. **`chat-page.test.tsx:288` already uses `vi.spyOn(globalThis, "fetch")`** inside a file-scoped `beforeEach`. The new `vi.restoreAllMocks()` in global `afterEach` harmonizes with the file's existing `afterEach` — no conflict, just redundant safety. Explicitly documented as "safe overlap".
+4. **No `beforeAll(...spyOn...)` pattern in the repo.** Pre-audit complete; `vi.restoreAllMocks()` in global `afterEach` is safe — no across-test spy wiring to undo.
+5. **Explicit hook-ordering contract.** Vitest runs `setupFiles` hooks in FIFO order within a phase, nested BEFORE per-file hooks. The plan now documents that: global `beforeEach` → file `beforeEach` → test → file `afterEach` → global `afterEach`. Storage is cleared BEFORE the file's own `beforeEach` sets up mocks, so per-file setup still wins.
+6. **Drift-guard test strengthened.** Now also asserts that no new test file reintroduces `global.fetch = vi.fn(` without a matching `global.fetch = originalFetch` restore (catches the pattern class, not just the specific tokens in setup-dom).
+
 ## Overview
 
 `./node_modules/.bin/vitest run` in `apps/web-platform` intermittently fails 1–8 tests across seven chat-sidebar component test files. `--no-file-parallelism` makes the suite green (2108 pass, 0 fail). The hallmark is **shared mutable module/global state leaking between test files that execute on the same vitest worker thread**.
@@ -30,7 +45,15 @@ The fix is **two-layered** and lands in one PR:
 
 H1 (PRIMARY, high confidence): **sessionStorage/localStorage state leaks between files on the same worker.** `use-kb-layout-state` persists `kb.chat.sidebarOpen=1` on any test that interacts with the sidebar-open path. The next file's `render(<KbChatSidebar />)` or `<ChatPage />` then mounts with a stale sidebar-open hint, changing initial DOM structure and breaking queries for "send a message to get started" or "aria-label that includes the filename". `notification-prompt.tsx` does the same via `localStorage`.
 
-H2 (HIGH confidence): **`vi.stubGlobal`/`global.fetch` assignments leak across files.** At least one chat-related test suite (spot-checked in `chat-page.test.tsx` and the sidebar files) uses fetch mocks. Without `vi.unstubAllGlobals()` in `afterEach`, File A's `fetch` mock can answer File B's `thread-info` request (see `use-kb-layout-state.tsx:243` — `/api/chat/thread-info` fetch fired on mount).
+H2 (HIGH confidence): **`vi.stubGlobal`/raw `global.fetch =` assignments leak across files.** Audit of `apps/web-platform/test/*.test.tsx` shows two distinct leak patterns for `fetch`:
+
+- **Stub-based** (restored by `vi.unstubAllGlobals()`): `test/team-names-hook.test.tsx`, `test/display-format.test.tsx`, `test/connect-repo-page.test.tsx`, `test/team-settings.test.tsx`, `test/file-tree-upload.test.tsx`.
+- **Raw assignment** (NOT restored by `vi.unstubAllGlobals()`): `test/kb-layout.test.tsx:44`, `test/kb-layout-panels.test.tsx:95`, `test/kb-layout-chat-close-on-switch.test.tsx:100`, `test/kb-layout-thread-info-prefetch.test.tsx:68`.
+- **spyOn-based** (restored by `vi.restoreAllMocks()`): `test/chat-page.test.tsx:288`, `test/file-tree-rename.test.tsx` (multiple), `test/file-tree-delete.test.tsx` (multiple).
+
+The raw-assignment pattern is the most dangerous — it mutates `globalThis.fetch` with no vitest bookkeeping. When `kb-layout-chat-close-on-switch.test.tsx` (which *is* one of the close-neighbor files to the flaky sidebar set) finishes and does NOT restore `global.fetch`, the next file's `use-kb-layout-state.tsx:243` `/api/chat/thread-info` fetch gets answered by the stale mock. This is why `kb-chat-sidebar*.test.tsx` files flake — they depend on the real fetch (or on their own internal mock) seeing a clean `globalThis.fetch`.
+
+The plan's `originalFetch` capture + force-restore in `afterEach` closes this gap completely.
 
 H3 (MEDIUM confidence): **Accumulated spy call-history causes assertions to observe events from prior files.** Without `vi.restoreAllMocks()` / `vi.clearAllMocks()` in `afterEach`, `mockStartSession.mock.calls` or `mockTrack.mock.calls` can hold invocations from a prior test file, changing `toHaveBeenCalledTimes(1)` outcomes.
 
@@ -89,6 +112,20 @@ Edit `test/setup-dom.ts`:
 import "@testing-library/jest-dom/vitest";
 import { afterEach, beforeEach, vi } from "vitest";
 
+// Capture the pristine `fetch` reference at setup-file load, BEFORE any test
+// file runs. Several test files in this app assign `global.fetch = vi.fn(...)`
+// directly instead of calling `vi.stubGlobal("fetch", ...)`. `vi.unstubAllGlobals()`
+// does NOT undo raw property assignments — only stubs registered via stubGlobal.
+// We pin the original reference so we can force-restore it in afterEach.
+//
+// Known raw-assignment offenders (as of 2026-04-22):
+//   test/kb-layout.test.tsx, test/kb-layout-panels.test.tsx,
+//   test/kb-layout-chat-close-on-switch.test.tsx,
+//   test/kb-layout-thread-info-prefetch.test.tsx
+// Do NOT rely on those files eventually being refactored — this restore is the guard.
+const originalFetch: typeof fetch | undefined =
+  typeof globalThis !== "undefined" ? globalThis.fetch : undefined;
+
 // Run in both hooks: beforeEach guarantees a clean slate even if a prior
 // test threw out of afterEach; afterEach guarantees nothing leaks forward.
 function resetBrowserLikeGlobals() {
@@ -130,11 +167,17 @@ afterEach(async () => {
   // 3. Undo any `vi.stubEnv(...)` for the same reason.
   vi.unstubAllEnvs();
 
-  // 4. Ensure timers are real — a prior test that forgot to `vi.useRealTimers()`
+  // 4. Force-restore `fetch` for files that did `global.fetch = vi.fn(...)`
+  //    without a matching teardown. See `originalFetch` comment above.
+  if (originalFetch && typeof globalThis !== "undefined") {
+    globalThis.fetch = originalFetch;
+  }
+
+  // 5. Ensure timers are real — a prior test that forgot to `vi.useRealTimers()`
   //    in its own afterEach would otherwise leak fake timers into the next file.
   vi.useRealTimers();
 
-  // 5. Clear storage again in case the test wrote between beforeEach and now.
+  // 6. Clear storage again in case the test wrote between beforeEach and now.
   resetBrowserLikeGlobals();
 });
 ```
@@ -144,8 +187,10 @@ afterEach(async () => {
 - `vi.restoreAllMocks()` is a superset of `vi.clearAllMocks()` + `vi.resetAllMocks()`. Use the strongest form — we want spies unwound.
 - `vi.restoreAllMocks()` does **not** undo `vi.mock("@/lib/ws-client", ...)` hoisted-module mocks. Those are module-graph-wide and survive this hook. That is intentional — the tests RELY on those hoisted mocks being stable across their own tests. Cross-file isolation of module mocks is Phase 4's job (isolate).
 - `vi.unstubAllGlobals()` is idempotent; safe to call even if no stubs were set.
+- `vi.unstubAllGlobals()` does **not** undo raw `globalThis.fetch = vi.fn(...)` assignments. That's why `originalFetch` is captured at module load and restored in step 4. Four test files in this app use the raw-assignment pattern — force-restore covers all of them without modifying their files.
 - `try/catch` around `sessionStorage.clear()` handles the defensive case where happy-dom's storage has been stubbed to throw (some tests do this to simulate Safari private mode).
 - The `beforeEach` is DEFENSIVE — if a prior `afterEach` threw (e.g., `cleanup()` raised), the next test still starts clean.
+- **Ordering note:** `restoreAllMocks()` runs BEFORE `unstubAllGlobals()` → `fetch` force-restore → `useRealTimers()`. If `useRealTimers()` fired first and a fake-timer spy were still registered, the restore could observe inconsistent clock state. Tested order: DOM cleanup → restore mocks → unstub globals/envs → force-restore fetch → useRealTimers → final storage clear.
 
 **Do NOT add:** `vi.resetModules()`. It nukes the module graph, which would defeat hoisted `vi.mock()` calls in all test files and break everything. If we decide module isolation IS needed, that is Phase 4 (`isolate: true`), not a manual `resetModules()`.
 
@@ -190,15 +235,15 @@ Create `apps/web-platform/test/setup-dom-leak-guard.test.ts`:
 
 ```ts
 import { describe, it, expect } from "vitest";
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { readFileSync, readdirSync } from "node:fs";
+import { resolve, join } from "node:path";
 
-// Drift guard: if a future PR removes one of the four cleanup surfaces from
+// Drift guard: if a future PR removes one of the five cleanup surfaces from
 // setup-dom.ts, this test fails with a clear message — cheaper than
 // re-debugging another 3-week flake cycle.
 //
 // See knowledge-base/project/plans/2026-04-22-fix-chat-sidebar-test-flakes-parallel-vitest-plan.md
-// for the original 4-surface cleanup rationale.
+// for the original 5-surface cleanup rationale.
 describe("setup-dom.ts cleanup surfaces", () => {
   const source = readFileSync(
     resolve(__dirname, "setup-dom.ts"),
@@ -211,13 +256,57 @@ describe("setup-dom.ts cleanup surfaces", () => {
     ["restoreAllMocks", "vi.restoreAllMocks()"],
     ["unstubAllGlobals", "vi.unstubAllGlobals()"],
     ["useRealTimers", "vi.useRealTimers()"],
+    ["originalFetch capture", "originalFetch"],
   ])("retains %s", (_label, token) => {
     expect(source).toContain(token);
   });
 });
+
+// Pattern-class guard: any test file that mutates `global.fetch = ...` or
+// `globalThis.fetch = ...` directly MUST also restore it. The setup-dom
+// harness does a best-effort restore to `originalFetch`, but restoring
+// inside the file is still the hygienic pattern. This test documents that
+// expectation: any NEW raw-assignment must either (a) restore in teardown
+// or (b) add the test file to the exempt-list below.
+//
+// Rationale: `vi.unstubAllGlobals()` does NOT undo raw property writes —
+// only `vi.stubGlobal(...)`-registered stubs. Teams that reach for raw
+// assignment to "quickly mock fetch" create silent cross-file leakage.
+describe("test-file raw global.fetch assignments", () => {
+  // Files we know do raw assignment today. The setup-dom `originalFetch`
+  // restore covers them, but this allowlist documents them. A new file
+  // not on this list MUST use vi.stubGlobal or vi.spyOn instead.
+  const KNOWN_RAW_ASSIGNERS = new Set([
+    "kb-layout.test.tsx",
+    "kb-layout-panels.test.tsx",
+    "kb-layout-chat-close-on-switch.test.tsx",
+    "kb-layout-thread-info-prefetch.test.tsx",
+    "file-preview.test.tsx", // captures/restores inside the file — hygienic
+  ]);
+
+  const testDir = resolve(__dirname);
+  const files = readdirSync(testDir).filter((f) => f.endsWith(".test.tsx"));
+
+  for (const file of files) {
+    it(`${file} does not introduce new raw global.fetch = assignments`, () => {
+      const body = readFileSync(join(testDir, file), "utf8");
+      const hasRawAssign = /(?:global|globalThis)\.fetch\s*=\s*vi\.fn/.test(body);
+      if (hasRawAssign && !KNOWN_RAW_ASSIGNERS.has(file)) {
+        throw new Error(
+          `${file} uses raw \`global.fetch = vi.fn(...)\`. Switch to ` +
+            `\`vi.stubGlobal("fetch", vi.fn(...))\` so \`vi.unstubAllGlobals()\` ` +
+            `in setup-dom.ts cleans it up, or add an in-file restore. See ` +
+            `knowledge-base/project/plans/2026-04-22-fix-chat-sidebar-test-flakes-parallel-vitest-plan.md`,
+        );
+      }
+    });
+  }
+});
 ```
 
 This test lives in the **`unit` project** (`.test.ts`, not `.test.tsx`) so it runs fast and with a node environment, and it reads the source text so it is grep-stable across refactors. Deliberate: the assertion is on presence of the literal token, not on behavior, so a reviewer can see exactly what it guards.
+
+The second `describe` block is the pattern-class guard: it walks `test/*.test.tsx` and fails the build if a NEW test file introduces the `global.fetch = vi.fn(` pattern without being on the allowlist. This is the "source-template drift-guard" pattern from `cq-*-drift-guard`-class rules — grep a directory, not a hardcoded file list.
 
 **Do NOT** use line numbers — use symbol/token anchors per `cq-code-comments-symbol-anchors-not-line-numbers`.
 
@@ -233,7 +322,7 @@ This test lives in the **`unit` project** (`.test.ts`, not `.test.tsx`) so it ru
 - [ ] `./node_modules/.bin/vitest run` (from `apps/web-platform/`) produces `2109 pass, 0 fail` on **three consecutive invocations**. Log tails (not summaries) pasted in PR body.
 - [ ] `./node_modules/.bin/vitest run --no-file-parallelism` still produces `2109 pass, 0 fail` (regression check — did not break serial path).
 - [ ] `npx tsc --noEmit` (from `apps/web-platform/`) clean.
-- [ ] Drift-guard test (`test/setup-dom-leak-guard.test.ts`) exists in the `unit` project and passes.
+- [ ] Drift-guard test (`test/setup-dom-leak-guard.test.ts`) exists in the `unit` project and passes both describe blocks: (a) all six cleanup-surface tokens present in setup-dom.ts; (b) every `test/*.test.tsx` not on `KNOWN_RAW_ASSIGNERS` is clean of raw `global.fetch = vi.fn(` pattern.
 - [ ] No edits to the 7 flaky component test files (symmetry: same test code, less flake).
 - [ ] No edits to `use-kb-layout-state.tsx`, `notification-prompt.tsx`, `chat-input.tsx`, or other product-behavior source files.
 - [ ] If `vitest.config.ts` was edited (Phase 4), the `isolate: true` change is scoped to the `component` project only — the `unit` project is untouched.
@@ -288,14 +377,28 @@ This test lives in the **`unit` project** (`.test.ts`, not `.test.tsx`) so it ru
 
 ## Research Insights
 
-- **Vitest 3.1 `pool: 'threads'` default behavior:** when `isolate: false` (the default for threads), each worker re-uses its module graph across test files. SessionStorage/localStorage on happy-dom live on the shared worker global. This is documented in vitest's config reference (`isolate` section). **Verified via** `grep -R "isolate" node_modules/vitest/dist/config.d.ts` — field exists on both workspace-level and project-level config.
-- **`vi.restoreAllMocks()` vs `vi.resetAllMocks()` vs `vi.clearAllMocks()`:** restore is the superset — it unwinds `vi.spyOn` targets AND clears call history. Per vitest docs: <https://vitest.dev/api/vi.html#vi-restoreallmocks> — source: vitest API reference, still current as of vitest@3.1 (consulted 2026-04-22).
-- **`vi.unstubAllGlobals()` is required for `vi.stubGlobal("fetch", …)` cleanup.** `vi.restoreAllMocks()` does NOT undo `stubGlobal` — verified via the vitest source `packages/vitest/src/integrations/vi.ts` (stubs live on a separate map). This is why both are needed in the same `afterEach`.
+- **Installed vitest version is 3.2.4** (verified via `cat apps/web-platform/node_modules/vitest/package.json | jq -r .version`). `package.json` specifies `^3.1.0`; the resolved install is 3.2.4. For 3.x, the pool/isolate semantics below are identical across 3.0 → 3.2, so the plan is version-agnostic within the major. The version correction matters because future plans citing this one must not propagate "vitest 3.1" as a claim.
+- **Vitest 3.x `pool: 'threads'` and `isolate` semantics:** `isolate` defaults to `true` top-level, but even under isolation, happy-dom's storage objects (`sessionStorage`, `localStorage`) and the `globalThis` fetch property live on the **worker**-level global, not the file-level module scope. So `isolate: true` re-instantiates the module graph per file but does NOT reset happy-dom storage. Explicit storage cleanup is always required regardless of `isolate`. This is why the primary fix (`setup-dom.ts` cleanup) is the correct layer independent of Phase 4.
+- **`vi.restoreAllMocks()` vs `vi.resetAllMocks()` vs `vi.clearAllMocks()`:** restore is the superset — it unwinds `vi.spyOn` targets AND clears call history. Per vitest docs: <https://vitest.dev/api/vi.html#vi-restoreallmocks> — source: vitest API reference, still current as of vitest@3.2 (consulted 2026-04-22).
+- **Three distinct `fetch`-leak patterns in this repo**, each with a different teardown story:
+  - `vi.stubGlobal("fetch", ...)` → undone by `vi.unstubAllGlobals()`. 5 files.
+  - `vi.spyOn(globalThis, "fetch")` → undone by `vi.restoreAllMocks()`. 3 files.
+  - `global.fetch = vi.fn(...)` (raw assignment) → **NOT** undone by either. 4 files. Closed by `originalFetch` capture + force-restore.
+- **`vi.unstubAllGlobals()` does NOT undo `globalThis.fetch = vi.fn(...)` raw assignment.** Confirmed by inspecting vitest source `packages/vitest/src/integrations/vi.ts`: stubs live on an internal Map keyed by the stubbing call; raw property writes are invisible to the stub tracker.
 - **setup-dom.ts is loaded via `setupFiles`, not inline.** `setupFiles` run inside each test file's isolated scope (when `isolate: true`) OR once per worker (when `isolate: false`). Either way, `beforeEach`/`afterEach` hooks declared in a setup file register PER TEST, not per file — so the cleanup fires for every individual test. Verified against vitest setup-files docs.
+- **Hook execution order** (vitest 3.x contract): per-test hooks run outermost-first for `beforeEach`, innermost-first for `afterEach`. Setup-file hooks are outermost; file-level hooks are innermost. Per-test flow:
+  1. Global (setup-dom) `beforeEach` — storage cleared.
+  2. File-level `beforeEach` — `wsReturn` reset, mock call-counts cleared, per-file setup.
+  3. Test body runs.
+  4. File-level `afterEach` (if any) — file-scoped teardown.
+  5. Global (setup-dom) `afterEach` — DOM cleanup → restoreAllMocks → unstub → fetch restore → useRealTimers → storage clear.
+
+  The global `beforeEach` clearing storage BEFORE the file's `beforeEach` is deliberate: per-file setup still wins on state that it owns.
+- **Audit of `beforeAll`-scoped spy patterns:** `rg "beforeAll.*spyOn" apps/web-platform/test/` returns zero hits as of 2026-04-22. No file establishes a spy in `beforeAll` whose restoration would break cross-test wiring in the same file. Therefore `vi.restoreAllMocks()` in the global `afterEach` is safe.
 
 ## Dependencies
 
-- No new dependencies. `vitest@3.1.0` is already present (`devDependencies` in `apps/web-platform/package.json`).
+- No new dependencies. `vitest@3.2.4` (resolved from `^3.1.0` in `apps/web-platform/package.json`) is already present.
 - No terraform, no Doppler, no GitHub Actions — a pure test-infrastructure fix.
 
 ## Domain Review
