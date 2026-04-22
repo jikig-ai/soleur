@@ -22,29 +22,20 @@ const { mockGetUser, mockLookup, mockUserRepoUrl } = vi.hoisted(() => ({
   mockUserRepoUrl: vi.fn(),
 }));
 
-const buildServiceClient = () => ({
-  from: (_table: string) => {
-    const chain = {
-      select: vi.fn(() => chain),
-      eq: vi.fn(() => chain),
-      maybeSingle: vi.fn(async () => ({
-        data: { repo_url: mockUserRepoUrl() },
-        error: null,
-      })),
-    };
-    return chain;
-  },
-});
-
 vi.mock("@/lib/supabase/server", () => ({
   createClient: vi.fn(async () => ({
     auth: { getUser: mockGetUser },
   })),
-  createServiceClient: vi.fn(buildServiceClient),
+  createServiceClient: vi.fn(() => ({})),
 }));
 
-vi.mock("@/lib/supabase/service", () => ({
-  createServiceClient: vi.fn(buildServiceClient),
+// getCurrentRepoUrl is extracted; mock it directly so the route's scoping
+// test doesn't depend on the internal users-table query shape.
+vi.mock("@/server/current-repo-url", () => ({
+  getCurrentRepoUrl: (...args: unknown[]) => {
+    void args;
+    return Promise.resolve(mockUserRepoUrl());
+  },
 }));
 
 vi.mock("@/server/lookup-conversation-for-path", () => ({

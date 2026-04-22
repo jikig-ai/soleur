@@ -72,18 +72,47 @@ describe("lookupConversationForPath — repo_url scoping", () => {
     expect(repoEq?.[1]).toBe("https://github.com/acme/new");
   });
 
-  test("returns the current-repo row when two rows share (user_id, context_path)", async () => {
-    // The mocked chain only returns what Supabase would return AFTER
-    // filtering by all .eq() predicates — here it's the new-repo row.
-    mockSingleChain({
-      data: {
+  test("returns ONLY the current-repo row when two rows share (user_id, context_path)", async () => {
+    // Predicate-aware mock: simulate two rows keyed by repo_url. Only
+    // the row whose stored repo_url matches the .eq("repo_url", ...)
+    // predicate may be returned — if the helper omits the predicate,
+    // the mock returns the OLD row and the assertion fails.
+    const storedByRepo: Record<string, Record<string, unknown>> = {
+      "https://github.com/acme/old": {
+        id: "conv-old-repo",
+        context_path: "overview/vision.md",
+        last_active: "2026-04-17T00:00:00Z",
+        messages: [{ count: 5 }],
+      },
+      "https://github.com/acme/new": {
         id: "conv-new-repo",
         context_path: "overview/vision.md",
         last_active: "2026-04-22T00:00:00Z",
         messages: [{ count: 1 }],
       },
-      error: null,
+    };
+    const predicates: Array<[string, unknown]> = [];
+    const chain: Record<string, unknown> = {};
+    Object.assign(chain, {
+      select: vi.fn(() => chain),
+      eq: vi.fn((col: string, val: unknown) => {
+        predicates.push([col, val]);
+        return chain;
+      }),
+      is: vi.fn(() => chain),
+      order: vi.fn(() => chain),
+      limit: vi.fn(() => chain),
+      maybeSingle: vi.fn(async () => {
+        const repoPred = predicates.find(([c]) => c === "repo_url");
+        if (!repoPred) {
+          // Helper omitted the repo_url predicate — return the OLD row
+          // so the test catches the regression.
+          return { data: storedByRepo["https://github.com/acme/old"], error: null };
+        }
+        return { data: storedByRepo[String(repoPred[1])] ?? null, error: null };
+      }),
     });
+    mockFrom.mockImplementation(() => chain);
 
     const { lookupConversationForPath } = await importHelper();
     const result = await lookupConversationForPath(

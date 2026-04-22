@@ -8,7 +8,7 @@
 
 import { tool } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod/v4";
-import { createServiceClient } from "@/lib/supabase/service";
+import { getCurrentRepoUrl } from "@/server/current-repo-url";
 import {
   lookupConversationForPath,
   type LookupConversationResult,
@@ -18,21 +18,6 @@ import { validateContextPath } from "@/server/validate-context-path";
 interface BuildConversationsToolsOpts {
   /** Captured in closure — prevents cross-user lookups. */
   userId: string;
-}
-
-/**
- * Read the user's CURRENT repo_url so the lookup is scoped to the repository
- * they have connected right now — see plan
- * 2026-04-22-fix-command-center-stale-conversations-after-repo-swap-plan.md.
- */
-async function currentRepoUrl(userId: string): Promise<string | null> {
-  const service = createServiceClient();
-  const { data } = await service
-    .from("users")
-    .select("repo_url")
-    .eq("id", userId)
-    .maybeSingle();
-  return (data?.repo_url as string | null | undefined) ?? null;
 }
 
 type ToolTextResponse = {
@@ -60,6 +45,10 @@ export function buildConversationsTools(opts: BuildConversationsToolsOpts) {
         "'knowledge-base/product/roadmap.md'). " +
         "Returns { conversationId, contextPath, lastActive, messageCount } " +
         "when a thread exists, or null when no thread is bound to the path. " +
+        "Scoped to the user's currently connected repository: a null " +
+        "response on a disconnected workspace does NOT mean no prior thread " +
+        "exists for this path — orphaned threads from a previously " +
+        "connected repo reappear only after reconnecting that exact URL. " +
         "Does NOT return message bodies (threads are opaque from the agent's " +
         "perspective — use the UI to read them).",
       { contextPath: z.string() },
@@ -74,7 +63,7 @@ export function buildConversationsTools(opts: BuildConversationsToolsOpts) {
           );
         }
 
-        const repoUrl = await currentRepoUrl(userId);
+        const repoUrl = await getCurrentRepoUrl(userId);
         const result: LookupConversationResult =
           await lookupConversationForPath(userId, validated, repoUrl);
         if (!result.ok) {

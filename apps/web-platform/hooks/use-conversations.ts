@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { createClient } from "@/lib/supabase/client";
 import type { Conversation, Message, ConversationStatus } from "@/lib/types";
 import { DOMAIN_LEADERS, type DomainLeaderId } from "@/server/domain-leaders";
@@ -85,6 +85,13 @@ export function useConversations(
   const [error, setError] = useState<string | null>(null);
   const [userId, setUserId] = useState<string | null>(null);
   const [repoUrl, setRepoUrl] = useState<string | null>(null);
+  // Ref mirror of repoUrl so Realtime callbacks read the latest value
+  // without forcing the subscription effect to re-subscribe on every
+  // repo change (see review F1). Both channels read from this ref.
+  const repoUrlRef = useRef<string | null>(null);
+  useEffect(() => {
+    repoUrlRef.current = repoUrl;
+  }, [repoUrl]);
 
   const fetchConversations = useCallback(async () => {
     setLoading(true);
@@ -228,8 +235,14 @@ export function useConversations(
           if (updated.user_id !== userId) return;
           // Client-side repo_url check: Realtime can't express the second
           // equality, so drop payloads whose repo_url doesn't match the
-          // current scope.
-          if (repoUrl && updated.repo_url !== repoUrl) return;
+          // current scope. Strict equality catches the disconnected case
+          // (repoUrlRef=null, payload.repo_url=<something>) too — when
+          // disconnected, conversations list is empty so the update
+          // would find no matching row anyway, but this guards against
+          // rendering the first cross-repo row if a future refactor
+          // decouples list-empty from disconnect.
+          const currentRepoUrl = repoUrlRef.current;
+          if ((updated.repo_url ?? null) !== currentRepoUrl) return;
 
           setConversations((prev) => {
             // Check if the conversation's archive state matches the current filter
@@ -255,7 +268,7 @@ export function useConversations(
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [userId, archiveFilter, repoUrl]);
+  }, [userId, archiveFilter]);
 
   // Cross-tab disconnect/reconnect awareness (race R-C): another tab may
   // swap the user's repo_url while this hook is mounted. Subscribe to
@@ -277,7 +290,7 @@ export function useConversations(
         (payload) => {
           const updated = payload.new as { repo_url?: string | null };
           const nextRepoUrl = updated?.repo_url ?? null;
-          if (nextRepoUrl !== repoUrl) {
+          if (nextRepoUrl !== repoUrlRef.current) {
             fetchConversations();
           }
         },
@@ -287,7 +300,9 @@ export function useConversations(
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [userId, repoUrl, fetchConversations]);
+    // repoUrl intentionally not in deps (see F1) — the comparison reads
+    // repoUrlRef.current, which stays fresh without forcing resubscribe.
+  }, [userId, fetchConversations]);
 
   const archiveConversation = useCallback(async (id: string) => {
     const supabase = createClient();

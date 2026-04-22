@@ -18,12 +18,39 @@
 ALTER TABLE public.conversations
   ADD COLUMN IF NOT EXISTS repo_url text;
 
+COMMENT ON COLUMN public.conversations.repo_url IS
+  'Snapshot of users.repo_url at conversation create time (free-text, '
+  'not a FK). Readers scope by (user_id, repo_url) to hide conversations '
+  'whose owning repo is no longer connected. Coupling invariant: any '
+  'future normalization of users.repo_url MUST also rewrite this column '
+  'in the same migration, or previously-connected conversations go dark.';
+
 -- Backfill pre-migration rows with the user's current repo_url.
--- For disconnected users (repo_url IS NULL), conversations.repo_url stays NULL.
+-- Caveats:
+--   1. Users currently disconnected (users.repo_url IS NULL) leave their
+--      conversations at repo_url = NULL — hidden from the Command Center
+--      until they reconnect. Marked archived below so they remain
+--      discoverable via the Archived filter.
+--   2. Users who already swapped repos before this migration cannot have
+--      historical rows recovered — we have no audit of past repo_url
+--      values. Those rows get stamped with the user's CURRENT repo_url
+--      (the known limitation documented in the plan). A future improvement
+--      could ship a per-user "tag all pre-migration rows as archived"
+--      batch if this becomes a complaint.
 UPDATE public.conversations c
    SET repo_url = u.repo_url
   FROM public.users u
  WHERE c.user_id = u.id
+   AND c.repo_url IS NULL;
+
+-- Caveat 1 (see above): archive pre-migration rows whose user is
+-- currently disconnected so the Archived filter can still surface them.
+-- Uses COALESCE so rows already archived keep their original timestamp.
+UPDATE public.conversations c
+   SET archived_at = COALESCE(c.archived_at, NOW())
+  FROM public.users u
+ WHERE c.user_id = u.id
+   AND u.repo_url IS NULL
    AND c.repo_url IS NULL;
 
 -- Partial index -- only populated rows are indexed (disconnected-user

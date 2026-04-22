@@ -7,6 +7,7 @@ import { KeyInvalidError, WS_CLOSE_CODES, type WSMessage, type Conversation } fr
 import type { ConversationContext } from "@/lib/types";
 import { validateConversationContext } from "./context-validation";
 import { createServiceClient } from "@/lib/supabase/service";
+import { getCurrentRepoUrl } from "@/server/current-repo-url";
 import type { DomainLeaderId } from "@/server/domain-leaders";
 import { TC_VERSION } from "@/lib/legal/tc-version";
 import { MAX_SELECTION_LENGTH } from "./review-gate";
@@ -285,15 +286,7 @@ async function createConversation(
   // mid-session have repo_url=null; we abort rather than orphan the row
   // (plan risk R-D). See
   // 2026-04-22-fix-command-center-stale-conversations-after-repo-swap-plan.md.
-  const { data: userRow, error: userErr } = await supabase
-    .from("users")
-    .select("repo_url")
-    .eq("id", userId)
-    .maybeSingle();
-  if (userErr) {
-    throw new Error(`Failed to read user repo_url: ${userErr.message}`);
-  }
-  const repoUrl = (userRow?.repo_url as string | null | undefined) ?? null;
+  const repoUrl = await getCurrentRepoUrl(userId);
   if (!repoUrl) {
     throw new Error(
       "No connected repository — conversation insert aborted (disconnect race).",
@@ -421,13 +414,21 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
         // review-backlog drain.
         //
         // If client asked to resume by context_path (KB sidebar), look up
-        // existing thread before deferring creation. UNIQUE partial index
-        // on (user_id, context_path) guarantees at most one match.
-        if (validResumePath) {
+        // existing thread before deferring creation. The UNIQUE partial
+        // index on (user_id, repo_url, context_path) now scopes by the
+        // connected repo — we must filter the lookup by repo_url too, or
+        // the same path in a previously-connected repo resumes a stale
+        // thread. If the user is disconnected, skip resume entirely and
+        // fall through to deferred creation (which aborts on null
+        // repo_url — see createConversation). See plan
+        // 2026-04-22-fix-command-center-stale-conversations-after-repo-swap-plan.md.
+        const currentRepoUrl = await getCurrentRepoUrl(userId);
+        if (validResumePath && currentRepoUrl) {
           const { data: existing, error: lookupErr } = await supabase
             .from("conversations")
             .select("id, last_active, context_path")
             .eq("user_id", userId)
+            .eq("repo_url", currentRepoUrl)
             .eq("context_path", validResumePath)
             .is("archived_at", null)
             .order("last_active", { ascending: false })
@@ -495,15 +496,29 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
         // Clear any pending deferred state — resuming an existing conversation
         session.pending = undefined;
 
-        // Verify conversation ownership
-        const { data: conv, error: convErr } = await supabase
+        // Verify conversation ownership AND repo scope. A cached id from a
+        // previously-connected repo must NOT resume across a repo swap —
+        // the Command Center hides it, the MCP lookup tool refuses to
+        // surface it, and this path is the last remaining backdoor. See
+        // plan 2026-04-22-fix-command-center-stale-conversations-after-repo-swap-plan.md.
+        const currentRepoUrl = await getCurrentRepoUrl(userId);
+        const convQuery = supabase
           .from("conversations")
-          .select("id, status")
+          .select("id, status, repo_url")
           .eq("id", msg.conversationId)
-          .eq("user_id", userId)
-          .single();
+          .eq("user_id", userId);
+        const { data: conv, error: convErr } = await convQuery.single();
 
         if (convErr || !conv) {
+          sendToClient(userId, { type: "error", message: "Conversation not found" });
+          return;
+        }
+
+        const convRepoUrl = (conv as { repo_url?: string | null }).repo_url ?? null;
+        if (convRepoUrl !== currentRepoUrl) {
+          // Could be cross-repo resume attempt OR a disconnected user. Keep
+          // the response indistinguishable from "not found" so callers
+          // can't probe for existence of cross-repo threads.
           sendToClient(userId, { type: "error", message: "Conversation not found" });
           return;
         }

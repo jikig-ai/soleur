@@ -27,20 +27,11 @@ vi.mock("@/server/lookup-conversation-for-path", () => ({
   lookupConversationForPath: (...args: unknown[]) => mockLookup(...args),
 }));
 
-vi.mock("@/lib/supabase/service", () => ({
-  createServiceClient: () => ({
-    from: (_table: string) => {
-      const chain = {
-        select: vi.fn(() => chain),
-        eq: vi.fn(() => chain),
-        maybeSingle: vi.fn(async () => ({
-          data: { repo_url: mockUserRepoUrl() },
-          error: null,
-        })),
-      };
-      return chain;
-    },
-  }),
+vi.mock("@/server/current-repo-url", () => ({
+  getCurrentRepoUrl: (...args: unknown[]) => {
+    void args;
+    return Promise.resolve(mockUserRepoUrl());
+  },
 }));
 
 vi.mock("@anthropic-ai/claude-agent-sdk", () => ({
