@@ -828,6 +828,8 @@ Each meaningful event (first iteration, every state change, heartbeat every 3rd 
 
    If an issue with a matching title prefix already exists, skip creation and note "Dedup: skipped [title] -- existing issue found."
 
+   **CI-verified migration skip.** Before creating the issue, grep the item description for a migration filename (`NNN_*.sql`). If one is matched AND a sibling verify file exists at `apps/web-platform/supabase/verify/<filename>`, skip creating the follow-through — the `verify-migrations` job in `web-platform-release.yml` will run the sentinels and auto-close any existing issue referencing that filename. Log: "Skip: [item] — CI verify covers <filename>". This prevents the #2826/#2827 pattern (one apply issue + one sentinel issue per data-backfill migration) from regenerating on future PRs.
+
    For each item, write the issue body to a temp file (do NOT use heredocs in this step — write with `{ echo "..."; } > /tmp/follow-through-body.md`), then create the issue:
 
    ```bash
@@ -879,9 +881,12 @@ Each meaningful event (first iteration, every state change, heartbeat every 3rd 
 
    If no migration files found, skip to Step 4.
 
-   **Step 2:** For each new migration file, extract the column additions or table changes. Read the SQL file and identify `ADD COLUMN`, `CREATE TABLE`, or other schema changes.
+   **Step 2:** Classify each new migration.
 
-   **Step 3:** Verify each schema change is live in production by querying the Supabase REST API:
+- **Schema-addition** (`ADD COLUMN`, `CREATE TABLE`, `CREATE INDEX`): verify via the REST probe in Step 3 below.
+- **Data migration** (backfill, value normalization, constraint-preparation rewrite): require a sibling verify file at `apps/web-platform/supabase/verify/<same-filename>.sql`. If absent, block the session and prompt the author to add one — see `knowledge-base/engineering/ops/runbooks/supabase-migrations.md` §3 ("Data backfill verification"). Once present, CI's `verify-migrations` job runs the sentinels on every deploy and auto-closes any matching `follow-through` issues; no additional manual step here.
+
+   **Step 3:** Verify each schema-addition migration is live in production by querying the Supabase REST API:
 
    ```bash
    SUPABASE_URL=$(doppler secrets get NEXT_PUBLIC_SUPABASE_URL -p soleur -c prd --plain)
