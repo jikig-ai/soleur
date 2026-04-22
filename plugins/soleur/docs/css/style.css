@@ -304,6 +304,12 @@
     line-height: 1.6;
     flex: 1;
   }
+  .card-byline {
+    font-size: var(--text-xs);
+    color: var(--color-text-secondary);
+    margin-top: var(--space-2);
+    font-style: italic;
+  }
   .card-footer {
     margin-top: auto;
     padding-top: var(--space-3);
