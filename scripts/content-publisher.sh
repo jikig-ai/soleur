@@ -21,6 +21,8 @@
 #   BSKY_APP_PASSWORD      - Bluesky app password
 #   BSKY_ALLOW_POST        - Set to "true" to enable posting
 #   GH_TOKEN               - GitHub token for issue creation
+#   STALE_EVENTS_FILE      - Path for stale-content TSV emit (set by workflow;
+#                            no-ops with stderr warning when unset locally).
 #
 # Exit codes:
 #   0 - All platforms posted (or gracefully skipped)
@@ -332,7 +334,7 @@ emit_stale_event() {
   local file="$1"
   local publish_date="$2"
   if [[ -z "${STALE_EVENTS_FILE:-}" ]]; then
-    echo "Info: STALE_EVENTS_FILE unset; stale event not persisted." >&2
+    echo "Warning: STALE_EVENTS_FILE unset; stale event not persisted." >&2
     return 0
   fi
   printf '%s\t%s\n' "$(basename "$file")" "$publish_date" >> "$STALE_EVENTS_FILE"

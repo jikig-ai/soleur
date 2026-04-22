@@ -50,6 +50,7 @@ jobs:
         id: publish
         env:
           DISCORD_BLOG_WEBHOOK_URL: ${{ secrets.DISCORD_BLOG_WEBHOOK_URL }}
+          # Consumed by post_discord blog-channel fallback (community content, not ops).
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
           X_API_KEY: ${{ secrets.X_API_KEY }}
           X_API_SECRET: ${{ secrets.X_API_SECRET }}
@@ -84,6 +85,7 @@ jobs:
           REPO: ${{ github.repository }}
           RUN_ID: ${{ github.run_id }}
         run: |
+          set -uo pipefail
           if [[ ! -s "$STALE_EVENTS_FILE" ]]; then
             echo "No stale events; skipping email body."
             exit 0
@@ -91,7 +93,8 @@ jobs:
           { echo "<p><strong>Stale scheduled content detected</strong></p>"
             echo "<p>The following files had <code>status: scheduled</code> but a past <code>publish_date</code>. Status was transitioned to <code>stale</code> to prevent re-alerting. Update <code>publish_date</code> or set <code>status: draft</code>.</p>"
             echo "<ul>"
-            while IFS=$'\t' read -r filename publish_date; do
+            # `_rest` sink keeps the while-read forward-compatible if the TSV grows columns.
+            while IFS=$'\t' read -r filename publish_date _rest; do
               printf '<li><code>%s</code> (publish_date: <code>%s</code>)</li>\n' "$filename" "$publish_date"
             done < "$STALE_EVENTS_FILE"
             echo "</ul>"

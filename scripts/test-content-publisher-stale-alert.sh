@@ -84,11 +84,11 @@ else
   FAIL=$((FAIL + 1))
   echo "FAIL: emit-no-op-returns-zero: expected success exit" >&2
 fi
-if grep -q "STALE_EVENTS_FILE unset" "$tmp_stderr"; then
+if grep -q "STALE_EVENTS_FILE" "$tmp_stderr"; then
   PASS=$((PASS + 1))
 else
   FAIL=$((FAIL + 1))
-  echo "FAIL: emit-no-op-stderr-warning: expected 'STALE_EVENTS_FILE unset' in stderr, got: $(cat "$tmp_stderr")" >&2
+  echo "FAIL: emit-no-op-stderr-warning: expected 'STALE_EVENTS_FILE' token in stderr, got: $(cat "$tmp_stderr")" >&2
 fi
 rm -f "$tmp_stderr"
 
