@@ -1,4 +1,4 @@
-# Feature: AGENTS.md budget revisit — shrink to ≤ 32,000 bytes
+# Feature: AGENTS.md budget revisit — shrink to ≤ 37,000 bytes
 
 ## Problem Statement
 
@@ -14,7 +14,7 @@ Secondary issue: the rule-metrics telemetry pipeline runs on cron but all rules 
 
 ## Goals
 
-- Reduce `AGENTS.md` to ≤ 32,000 bytes (80% of 40k warn; ~8k headroom).
+- Reduce `AGENTS.md` to ≤ 37,000 bytes (silences 40k warn with ~3k headroom; target adjusted from 32,000 per TR5 advisory — pre-sample projected ~36,800 achievable, 32,000 would require judgment-heavy consolidation).
 - Land the retired-ids allowlist (#2762) so rule deletion is no longer mechanically blocked.
 - Amend `wg-every-session-error-must-produce-either` with a discoverability-litmus exit criterion so future inflow drops.
 - Preserve institutional memory: every deleted rule's learning must remain accessible (either via the originating learning file, or via a breadcrumb from `scripts/retired-rule-ids.txt`).
@@ -70,19 +70,19 @@ The per-rule decision is captured in the PR description for reviewer challenge.
 
 `cq-agents-md-why-single-line` is updated:
 
-- **Target: ≤ 32,000 bytes** (80% of Claude Code's 40k warn).
-- **Hard fail: > 40,000 bytes** (matches tool warn).
+- **Target: ≤ 37,000 bytes** (adjusted from original 32,000 per TR5 advisory; pre-sample litmus yielded <25 failures projecting ~36,800 bytes; 32,000 remains aspirational only).
+- **Hard fail: > 40,000 bytes** (matches Claude Code harness warn).
 - Rule count becomes advisory, not normative.
-- The `<!-- rule-threshold: 115 -->` sentinel is changed to `<!-- rule-byte-threshold: 32000 -->` and synced between `AGENTS.md` and `plugins/soleur/skills/compound/SKILL.md` step 8 via `scripts/lint-agents-compound-sync.sh`.
+- The `<!-- rule-threshold: 115 -->` sentinel is preserved (still synced between `AGENTS.md` and `plugins/soleur/skills/compound/SKILL.md` step 8 via `scripts/lint-agents-compound-sync.sh`). Byte threshold (37,000) is hardcoded in both files — no second sentinel added (reviewer: solving the re-derivation problem twice).
 
 ### FR5: Pre-merge verification
 
 Before the PR ships:
 
-- `wc -c AGENTS.md` < 32,000.
-- `bash scripts/lint-rule-ids.py` exits 0.
+- `wc -c AGENTS.md` < 37,000.
+- `python3 scripts/lint-rule-ids.py --retired-file scripts/retired-rule-ids.txt AGENTS.md` exits 0.
 - `bash scripts/lint-agents-compound-sync.sh` exits 0.
-- Each retired rule's breadcrumb is navigable (file exists OR replacement rule ID exists in `AGENTS.md`).
+- Each retired rule's breadcrumb is either navigable (file exists OR replacement rule ID exists in `AGENTS.md`) OR a self-contained one-line rationale.
 
 ## Technical Requirements
 
@@ -114,7 +114,7 @@ The PR description includes a table with one row per retired rule: `| rule-id | 
 
 ## Success Criteria
 
-- `AGENTS.md` byte size ≤ 32,000.
+- `AGENTS.md` byte size ≤ 37,000 (per TR5-advisory adjustment from original 32,000).
 - `scripts/lint-rule-ids.py` green against the new state.
 - `scripts/retired-rule-ids.txt` created, populated, and linter-validated.
 - `wg-every-session-error-must-produce-either` text includes the discoverability litmus.
