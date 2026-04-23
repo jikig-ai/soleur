@@ -47,6 +47,16 @@ Trade-offs accepted (chosen over Approach B / Approach C in Phase 2):
 6. **Cost ceiling.** First-token latency 5-30s and per-turn skill execution cost. Define an SLO (e.g., "P95 first token < 10s, P95 conversation cost < $1") and a fallback if exceeded.
 7. **Migration strategy.** Big-bang cutover or feature-flag rollout? Existing in-flight conversations on the old router need a story.
 
+### Q#3 Resolution — UX direction (ux-design-lead, 2026-04-23)
+
+**Choice: Option A — parent assessment bubble with nested children + a synthesis follow-up.** When brainstorm Phase 0.5 spawns CPO + CTO (or N leaders), the chat emits one parent "Domain assessment" bubble owned by the workflow itself. Each leader appears as a nested child card inside that parent (default expanded for ≤2 children, default collapsed for ≥3), each with its own leader-color left border, name, runtime, and findings. A synthesis bubble follows the parent once all children resolve, gold-bordered, attributed to the workflow rather than any one leader.
+
+Rationale across three dimensions: (1) **Reading rhythm** — the existing chat-surface relies on a single vertical spine. Today's side-by-side parallel-bubble pattern (Option B) breaks that spine the moment ≥3 leaders spawn, pushing the input box below the fold and forcing horizontal scanning that competes with the chat's primary vertical scroll. The parent-with-children layout keeps every workflow event at one column width regardless of fan-out. (2) **WebSocket protocol shape** — Option A maps cleanly to `subagent.spawn { parent_id, leader_id }` and `subagent.complete` frames; the client just renders children inside their declared parent. Option B requires either a new "row" frame type or implicit grouping rules the server has to maintain. (3) **Scale** — drain-labeled-backlog and review skills can spawn 5+ subagents; Option A degrades gracefully (collapse-by-default + per-child expand) while Option B becomes a horizontal-scroll panel.
+
+Alternative considered and rejected: **inline indented sub-bubbles** (option C in the original brief). It scales horizontally to N leaders but loses the visual signal that "these all came from one workflow event"; the operator has to read attribution prefixes to reconstruct the parent. Option A makes the parent itself a load-bearing UI element.
+
+Design artifacts: `knowledge-base/product/design/command-center/cc-embedded-skill-surfaces.pen` frame `03 — Subagent spawn (A vs B)`, screenshot `08-subagent-spawn-A-vs-B.png`. Six surfaces total designed (chip selector, lifecycle states, subagent A/B, plan preview, file diff, bash variants).
+
 ## Domain Assessments
 
 **Assessed:** Marketing, Engineering, Operations, Product, Legal, Sales, Finance, Support
