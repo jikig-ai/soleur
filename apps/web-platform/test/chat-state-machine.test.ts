@@ -61,8 +61,11 @@ describe("chat-state-machine timeout behavior", () => {
     expect(result.timerAction).toEqual({ type: "reset", leaderId: "cpo" });
   });
 
-  test("applyTimeout transitions thinking bubble to error", () => {
-    const prev: ChatMessage[] = [thinkingMessage("cpo")];
+  test("applyTimeout: second consecutive timeout on thinking bubble transitions to error", () => {
+    // FR5: first timeout flags retrying, second consecutive timeout transitions
+    // to error. Simulate the "second" timeout by seeding retrying: true.
+    const msg: ChatMessage = { ...thinkingMessage("cpo"), retrying: true };
+    const prev: ChatMessage[] = [msg];
     const streams = new Map([["cpo", 0]]);
 
     const result = applyTimeout(prev, streams, "cpo");
@@ -71,8 +74,8 @@ describe("chat-state-machine timeout behavior", () => {
     expect(result.activeStreams.has("cpo")).toBe(false);
   });
 
-  test("applyTimeout transitions tool_use bubble to error", () => {
-    const msg: ChatMessage = { ...thinkingMessage("cpo"), state: "tool_use" };
+  test("applyTimeout: second consecutive timeout on tool_use bubble transitions to error", () => {
+    const msg: ChatMessage = { ...thinkingMessage("cpo"), state: "tool_use", retrying: true };
     const prev: ChatMessage[] = [msg];
     const streams = new Map([["cpo", 0]]);
 
@@ -218,6 +221,116 @@ describe("chat-state-machine review_gate terminal transitions (#2843)", () => {
     expect(result.messages[1].state).toBe("tool_use");
     expect(result.activeStreams.has("cpo")).toBe(false);
     expect(result.activeStreams.has("cto")).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// FR4: tool_progress event (#2861)
+// ---------------------------------------------------------------------------
+
+describe("chat-state-machine tool_progress event (FR4 #2861)", () => {
+  const toolProgressEvent = (leaderId: DomainLeaderId): {
+    type: "tool_progress";
+    leaderId: DomainLeaderId;
+    toolUseId: string;
+    toolName: string;
+    elapsedSeconds: number;
+  } => ({
+    type: "tool_progress",
+    leaderId,
+    toolUseId: "tool-use-1",
+    toolName: "Bash",
+    elapsedSeconds: 30,
+  });
+
+  test("tool_progress on tool_use bubble resets watchdog without mutating messages", () => {
+    const toolBubble: ChatMessage = { ...thinkingMessage("cpo"), state: "tool_use", toolLabel: "Searching code" };
+    const prev: ChatMessage[] = [toolBubble];
+    const streams = new Map([["cpo", 0]]);
+
+    const result = applyStreamEvent(prev, streams, toolProgressEvent("cpo" as any) as any);
+
+    // Messages array reference is preserved (no mutation in the hot path).
+    expect(result.messages).toBe(prev);
+    expect(result.timerAction).toEqual({ type: "reset", leaderId: "cpo" });
+  });
+
+  test("tool_progress for unknown leader is an inert no-op", () => {
+    const prev: ChatMessage[] = [thinkingMessage("cpo")];
+    const streams = new Map([["cpo", 0]]);
+
+    const result = applyStreamEvent(prev, streams, toolProgressEvent("cto" as any) as any);
+
+    expect(result.messages).toBe(prev);
+    expect(result.activeStreams).toBe(streams);
+    expect(result.timerAction).toBeUndefined();
+  });
+
+  test("tool_progress on a retrying bubble transitions back to tool_use and clears retrying", () => {
+    const retryingBubble: ChatMessage = {
+      ...thinkingMessage("cpo"),
+      state: "tool_use",
+      toolLabel: "Searching code",
+      retrying: true,
+    };
+    const prev: ChatMessage[] = [retryingBubble];
+    const streams = new Map([["cpo", 0]]);
+
+    const result = applyStreamEvent(prev, streams, toolProgressEvent("cpo" as any) as any);
+
+    expect(result.messages[0].state).toBe("tool_use");
+    expect(result.messages[0].retrying).toBeUndefined();
+    expect(result.timerAction).toEqual({ type: "reset", leaderId: "cpo" });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// FR5: retry lifecycle (#2861)
+// ---------------------------------------------------------------------------
+
+describe("chat-state-machine applyTimeout retry lifecycle (FR5 #2861)", () => {
+  test("first applyTimeout on tool_use bubble flags retrying (no state transition)", () => {
+    const msg: ChatMessage = { ...thinkingMessage("cpo"), state: "tool_use", toolLabel: "Searching code" };
+    const prev: ChatMessage[] = [msg];
+    const streams = new Map([["cpo", 0]]);
+
+    const result = applyTimeout(prev, streams, "cpo");
+
+    expect(result.messages[0].state).toBe("tool_use");
+    expect(result.messages[0].retrying).toBe(true);
+    expect(result.messages[0].toolLabel).toBe("Searching code");
+    // Leader stays in the active-streams map so the watchdog reset is valid.
+    expect(result.activeStreams.has("cpo")).toBe(true);
+    expect(result.timerAction).toEqual({ type: "reset", leaderId: "cpo" });
+  });
+
+  test("second applyTimeout transitions retrying bubble to error with label preserved", () => {
+    const msg: ChatMessage = {
+      ...thinkingMessage("cpo"),
+      state: "tool_use",
+      toolLabel: "Searching code",
+      retrying: true,
+    };
+    const prev: ChatMessage[] = [msg];
+    const streams = new Map([["cpo", 0]]);
+
+    const result = applyTimeout(prev, streams, "cpo");
+
+    expect(result.messages[0].state).toBe("error");
+    expect(result.messages[0].retrying).toBeUndefined();
+    expect(result.messages[0].toolLabel).toBe("Searching code");
+    expect(result.activeStreams.has("cpo")).toBe(false);
+    expect(result.timerAction).toEqual({ type: "clear", leaderId: "cpo" });
+  });
+
+  test("first applyTimeout on thinking bubble (no toolLabel) also flags retrying", () => {
+    const prev: ChatMessage[] = [thinkingMessage("cpo")];
+    const streams = new Map([["cpo", 0]]);
+
+    const result = applyTimeout(prev, streams, "cpo");
+
+    expect(result.messages[0].state).toBe("thinking");
+    expect(result.messages[0].retrying).toBe(true);
   });
 });
 

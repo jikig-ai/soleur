@@ -881,6 +881,14 @@ issues/PRs, 4 KB comments); follow the html_url for the full text.`;
     let hasStreamedPartials = false;
     const streamLeaderId = effectiveLeaderId;
 
+    // FR4 (#2861): per-tool_use_id debounce for SDKToolProgressMessage
+    // heartbeats. SDK emits these every few seconds for long-running tools;
+    // the client only needs one every 5s to reset the watchdog. Keyed by
+    // tool_use_id so separate tools don't share a window. Map is scoped to
+    // this session, so cross-leader dispatch cannot cross-leak.
+    const TOOL_PROGRESS_DEBOUNCE_MS = 5_000;
+    const toolProgressLastSentAt = new Map<string, number>();
+
     // Notify client that this leader is about to stream
     sendToClient(userId, { type: "stream_start", leaderId: streamLeaderId, source: routeSource });
     streamStartSent = true;
@@ -899,6 +907,35 @@ issues/PRs, 4 KB comments); follow the html_url for the full text.`;
         if (updateErr) {
           log.error({ err: updateErr, conversationId }, "Failed to store session_id");
         }
+      }
+
+      // FR4 (#2861): forward SDK tool_progress heartbeats. The SDK emits
+      // `SDKToolProgressMessage` as a top-level message variant with
+      // `tool_use_id`, `tool_name`, and `elapsed_time_seconds`. Forward at
+      // most 1 per 5s per tool_use_id so the client watchdog gets reset
+      // during long-running tool execution without spamming the socket.
+      if (message.type === "tool_progress") {
+        const progress = message as {
+          tool_use_id: string;
+          tool_name: string;
+          elapsed_time_seconds: number;
+        };
+        const toolUseId = progress.tool_use_id;
+        const now = Date.now();
+        const last = toolProgressLastSentAt.get(toolUseId);
+        // First heartbeat for this tool_use_id always forwards; subsequent
+        // heartbeats wait for the debounce window to elapse.
+        if (last === undefined || now - last >= TOOL_PROGRESS_DEBOUNCE_MS) {
+          toolProgressLastSentAt.set(toolUseId, now);
+          sendToClient(userId, {
+            type: "tool_progress",
+            leaderId: streamLeaderId,
+            toolUseId,
+            toolName: progress.tool_name,
+            elapsedSeconds: progress.elapsed_time_seconds,
+          });
+        }
+        continue;
       }
 
       if (message.type === "assistant") {

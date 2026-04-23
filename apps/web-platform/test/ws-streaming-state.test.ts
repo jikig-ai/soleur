@@ -253,7 +253,7 @@ describe("timeout guard (#2136)", () => {
     expect(timedOut.messages[0].state).toBe("done");
   });
 
-  test("timeout transitions a stuck 'thinking' bubble to 'error'", () => {
+  test("first timeout on stuck 'thinking' bubble flags retrying; second transitions to 'error' (FR5 #2861)", () => {
     const s1 = applyStreamEvent(
       [],
       new Map(),
@@ -261,13 +261,22 @@ describe("timeout guard (#2136)", () => {
     );
     expect(s1.messages[0].state).toBe("thinking");
 
-    const timedOut = applyTimeout(s1.messages, s1.activeStreams, "cmo");
-    expect(timedOut.messages[0].state).toBe("error");
-    // leader should no longer be in active streams — bubble is terminal now
-    expect(timedOut.activeStreams.has("cmo")).toBe(false);
+    const firstTimeout = applyTimeout(s1.messages, s1.activeStreams, "cmo");
+    expect(firstTimeout.messages[0].state).toBe("thinking");
+    expect(firstTimeout.messages[0].retrying).toBe(true);
+    expect(firstTimeout.activeStreams.has("cmo")).toBe(true);
+
+    const secondTimeout = applyTimeout(
+      firstTimeout.messages,
+      firstTimeout.activeStreams,
+      "cmo",
+    );
+    expect(secondTimeout.messages[0].state).toBe("error");
+    expect(secondTimeout.messages[0].retrying).toBeUndefined();
+    expect(secondTimeout.activeStreams.has("cmo")).toBe(false);
   });
 
-  test("timeout transitions a stuck 'tool_use' bubble to 'error'", () => {
+  test("first timeout on stuck 'tool_use' bubble flags retrying; second transitions to 'error' (FR5 #2861)", () => {
     let messages: ChatMessage[] = [];
     let activeStreams = new Map<string, number>();
     const s1 = applyStreamEvent(messages, activeStreams, {
@@ -284,8 +293,17 @@ describe("timeout guard (#2136)", () => {
     messages = s2.messages;
     activeStreams = s2.activeStreams;
 
-    const timedOut = applyTimeout(messages, activeStreams, "cmo");
-    expect(timedOut.messages[0].state).toBe("error");
+    const firstTimeout = applyTimeout(messages, activeStreams, "cmo");
+    expect(firstTimeout.messages[0].state).toBe("tool_use");
+    expect(firstTimeout.messages[0].retrying).toBe(true);
+
+    const secondTimeout = applyTimeout(
+      firstTimeout.messages,
+      firstTimeout.activeStreams,
+      "cmo",
+    );
+    expect(secondTimeout.messages[0].state).toBe("error");
+    expect(secondTimeout.messages[0].toolLabel).toBe("Reading file...");
   });
 });
 
