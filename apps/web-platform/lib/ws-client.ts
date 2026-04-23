@@ -540,9 +540,12 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
       content: m.content,
       type: "text" as const,
       leaderId: m.leader_id ?? undefined,
-      // Assistant messages loaded from DB are persisted from stream_end —
-      // they are complete by definition. See #2139.
-      state: m.role === "assistant" ? ("done" as const) : undefined,
+      // History messages intentionally leave state undefined so the
+      // completion checkmark only appears on messages that completed via a
+      // WS stream event in the current session. renderBubbleContent handles
+      // undefined state via its default branch (MarkdownRenderer), which is
+      // functionally identical to case "done" for messages without toolsUsed.
+      // See #2218 (checkmark on historical bubbles) and #2139 (original fix).
     }));
 
     const costData: UsageData | null =
