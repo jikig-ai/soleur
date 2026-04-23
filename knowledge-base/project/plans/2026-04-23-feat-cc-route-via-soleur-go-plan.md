@@ -92,9 +92,9 @@ The plan rests on three load-bearing assumptions verified during research; if an
 
 **Tasks:**
 
-- [ ] 0.1 — Read existing `apps/web-platform/server/agent-runner.ts:670-900` to confirm the live `query()` invocation pattern.
-- [ ] 0.2 — Read existing `spike/agent-sdk-test.ts` (predecessor spike).
-- [ ] 0.3 — Write spike script that invokes `query({ prompt: "/soleur:go test brainstorm idea", plugins: [{type:"local", path: pluginPath}], settingSources: ["project"], canUseTool: ... })` against a known-empty workspace.
+- [x] 0.1 — Read existing `apps/web-platform/server/agent-runner.ts:670-900` to confirm the live `query()` invocation pattern.
+- [x] 0.2 — Read existing `spike/agent-sdk-test.ts` (predecessor spike).
+- [x] 0.3 — Write spike script that invokes `query({ prompt: "/soleur:go test brainstorm idea", plugins: [{type:"local", path: pluginPath}], settingSources: ["project"], canUseTool: ... })` against a known-empty workspace.
 - [ ] 0.4 — Iterate prompt form if `/soleur:go <msg>` doesn't trigger the skill — fall back to a system-prompt directive (`systemPrompt: "Always invoke /soleur:go with the user's message"`) within max 2 iterations.
 - [ ] 0.5 — Capture metrics:
   - **First-token latency: N≥100 runs**, mix cold-cache (fresh process per 10 runs) and warm-cache (reuse process). Report median + P50/P95/P99.
