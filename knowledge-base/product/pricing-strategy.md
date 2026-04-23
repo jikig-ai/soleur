@@ -14,7 +14,7 @@ depends_on:
 
 ## Status
 
-**Pricing is undecided.** This document provides the analysis framework and recommendation for when the founder is ready to commit. Per the business validation verdict (PIVOT), pricing should follow validated adoption, not precede it. Commit to a model after 50+ active users, informed by observed behavior.
+**Pricing structure is canonical.** The 4-tier model (Solo $49 / Startup $149 / Scale $499 / Enterprise custom) is encoded in `apps/web-platform/lib/stripe-price-tier-map.ts` and shipped on the live `/pricing` page. Live-mode activation (tracked by issue PR #1444) still depends on the pricing-gate criteria below — the structure is fixed but the flip from test-mode to live-mode Stripe prices gates on those signals. This document is the strategic rationale; the code and `/pricing` are the source of truth for prices and concurrency numbers.
 
 ### Business Validation Update (2026-03-22)
 
@@ -22,7 +22,7 @@ depends_on:
 
 1. **The open-core model inverts.** The current model assumes the free plugin is the distribution mechanism and the paid platform is the monetization layer. User research reveals that most target customers do not use the free plugin's host (Claude Code). The platform is the distribution mechanism AND the monetization layer. The plugin becomes an optional power-user interface, not the funnel. The "Open Source" free tier in the tier structure below may need redefinition -- it currently assumes terminal-first usage as the free experience.
 
-2. **Cost structure escalates.** A platform-first product requires cloud infrastructure, API costs per user, frontend engineering, mobile development, and user authentication as table stakes. These costs were previously categorized as "Pro tier infrastructure" -- optional, built after validation. Under the delivery pivot, they are pre-revenue requirements. The infrastructure cost gate (Gate 4) becomes more urgent: per-user costs must be modeled before beta, not after.
+2. **Cost structure escalates.** A platform-first product requires cloud infrastructure, API costs per user, frontend engineering, mobile development, and user authentication as table stakes. These costs were previously categorized as "hosted-platform infrastructure" -- optional, built after validation. Under the delivery pivot, they are pre-revenue requirements. The infrastructure cost gate (Gate 4) becomes more urgent: per-user costs must be modeled before beta, not after.
 
 3. **Competitive framing shifts.** The replacement-stack comparison (Soleur at $49/mo vs. $765-3,190/mo in separate tools) remains valid, but the comparison set now includes web-native competitors: Polsia ($29-59/mo, web dashboard), Notion AI ($10/mo + credits, web/mobile), and Tanka ($0 for small teams, mobile apps). Founders will compare Soleur's platform against these surfaces, not against terminal tools. The "you keep 100% of revenue" argument against Polsia's revenue share and the cross-domain knowledge compounding argument remain the strongest differentiators.
 
@@ -121,8 +121,11 @@ Even at 10% of replacement value, the justified price is $75-320/month.
 | Tier | Price | Target | Includes |
 |------|-------|--------|----------|
 | **Open Source** | Free (Apache-2.0) | All users | Full plugin: 63 agents, 62 skills, 3 commands. Local knowledge base. Terminal-first workflow. Self-hosted. **[2026-03-22 note: User research shows most target customers do not use the CLI host. This tier's value as a distribution mechanism is weaker than assumed. Consider whether a free web tier (limited conversations/domains) is needed as the new top-of-funnel.]** |
-| **Pro** | $49/month | Solo founders with active products | Cloud-synced knowledge base (access from any machine). Hosted agent execution (background tasks). Priority model access. Analytics dashboard. Email support. |
-| **Team** | $99/month (up to 3 seats) | Small founding teams | Everything in Pro + shared knowledge base across team members. Role-based agent permissions. Collaboration features. |
+| **Solo** | $49/month | Solo founders building alone | 2 concurrent conversations. All 8 departments and full agent roster. Compounding knowledge base. Email support. |
+| **Startup** | $149/month | Founding teams moving fast | 5 concurrent conversations. Priority execution queue. Shared knowledge base. |
+| **Scale** | $499/month | Companies that never wait | Up to 50 concurrent conversations. Dedicated infrastructure. Custom agent configuration. |
+
+_Enterprise is custom-priced with negotiated concurrency, sliding revenue share (10% → 5% as you grow), dedicated account management, and custom integrations/SLA. Contact sales (<hello@soleur.ai>) -- no self-serve checkout._
 
 ### Why $49/month
 
@@ -131,6 +134,10 @@ Even at 10% of replacement value, the justified price is $75-320/month.
 3. **Matches Lindy.ai's entry price** ($49/month) -- the closest pricing analog in the AI agent platform category
 4. **Justified by replacement-stack math** -- $49 vs. $765-3,190 in separate tools and services
 5. **Sustainable for one founder** -- even 100 Pro subscribers at $49/month = $4,900 MRR, enough to cover infrastructure and sustain development
+
+### Why $149 / $499 (Startup / Scale)
+
+Startup and Scale are not new market anchors -- they are concurrency/team-size cohorts layered on top of the $49 Solo anchor. The hypothesis is that once a founding team has 5+ agents running in parallel (code review, CFO forecast, CMO draft, legal redline simultaneously), the per-user value flips from "another AI tool" to "shared team infrastructure," and per-user pricing can scale without repricing the anchor. Startup ($149 / 5 concurrent) targets the 2-4 person founding team cohort where serialized execution becomes the bottleneck. Scale ($499 / 50 concurrent) targets companies running cross-domain workflows continuously, where concurrency is the product. Enterprise custom pricing replaces subscription with negotiated revenue share at the size where flat-fee economics no longer align vendor and customer incentives.
 
 ### Value Metric: Knowledge Base Growth
 
@@ -185,7 +192,7 @@ When pricing launches, the page must frame the value correctly. Draft messaging:
 |------|-----------|--------|------------|
 | Founders anchor against $15-25/month coding tools | High | Medium | Frame as team replacement, not tool replacement. Lead with non-engineering value. |
 | Cowork plugins commoditize domain breadth for free | High | High | Differentiate on compounding knowledge and workflow orchestration. Price the persistence, not the breadth. |
-| Open-source version provides 80%+ of value | Medium | High | Ensure Pro tier has clear infrastructure value (cloud sync, hosted execution) that cannot be self-hosted easily. |
+| Open-source version provides 80%+ of value | Medium | High | Ensure Solo tier has clear infrastructure value (cloud sync, hosted execution) that cannot be self-hosted easily. |
 | Price compression forces below $49/month | Medium | Medium | $29/month floor still works at scale. The value metric (knowledge compounding) creates retention regardless of price point. |
 | Polsia's $29-59 tiered pricing undercuts Soleur's $49/month | High | Medium | Polsia shifted from flat $50 to tiered $29-59/month. At $29, Polsia is 40% cheaper than Soleur's hypothesized $49. Revenue share may still apply at higher tiers. Position Soleur's flat $49 as "premium, you keep 100%" and emphasize domains Polsia lacks (legal, finance, product strategy) plus cross-domain knowledge compounding. The revenue share remains Polsia's vulnerability at scale. |
 | Cursor's $20/month agent platform makes engineering-only pricing look cheap | Medium | Medium | Cursor at $20/month now includes automations, marketplace, cloud agents, and built-in memory. Solo founders may feel $49 for Soleur is expensive when Cursor handles engineering + some automation for less. Soleur must justify the $29 delta with non-engineering domain value. |
@@ -212,7 +219,7 @@ When pricing launches, the page must frame the value correctly. Draft messaging:
 1. **Complete PIVOT validation** (10 founders, problem interviews, guided onboarding)
 2. **Track which domains users engage with** -- confirms or refutes the multi-domain value hypothesis
 3. **Ask willingness-to-pay question** in post-onboarding interviews: "Would you pay $49/month for this? What would it need to deliver?" Use the synthetic research brief (`knowledge-base/product/research/synthetic-research-brief.md`) to inform question framing -- establish alternative costs before asking WTP, and test the outcome-based trial concept ("pay only for completed outcomes in month 1, then switch to $49/month flat").
-4. **Assess infrastructure requirements** for Pro tier (cloud sync complexity, hosting costs, security)
+4. **Assess infrastructure requirements** for Solo tier (cloud sync complexity, hosting costs, security)
 5. **Revisit this document** when 4 of 5 pricing gates pass
 
 ---
