@@ -12,6 +12,12 @@ import { tool } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod/v4";
 import { createPullRequest } from "./github-app";
 import { readCiStatus, readWorkflowLogs } from "./ci-tools";
+import {
+  readIssue,
+  readIssueComments,
+  readPullRequest,
+  listPullRequestComments,
+} from "./github-read-tools";
 import { triggerWorkflow, type createRateLimiter } from "./trigger-workflow";
 import { pushBranch } from "./push-branch";
 import { validateBranchFormat } from "./branch-validation";
@@ -38,6 +44,32 @@ export interface BuildGithubToolsResult {
   toolNames: string[];
 }
 
+/**
+ * Shared tool-handler scaffold: runs `fn`, JSON-stringifies the result, and
+ * on exception returns an isError response with `prefix: <message>`. Extracts
+ * the try/JSON/catch boilerplate duplicated across every `tool()` handler in
+ * this file so a future change to the error contract (e.g., adding errorCode)
+ * touches one site instead of nine. `pretty` controls `JSON.stringify` indent —
+ * match the per-tool precedent (read tools use 2-space indent for agent
+ * readability; write tools use compact JSON).
+ */
+async function wrapToolHandler<T>(
+  errorPrefix: string,
+  fn: () => Promise<T>,
+  pretty = true,
+): Promise<ToolTextResponse> {
+  try {
+    const result = await fn();
+    const indent = pretty ? 2 : undefined;
+    return { content: [{ type: "text", text: JSON.stringify(result, null, indent) }] };
+  } catch (err) {
+    return {
+      content: [{ type: "text", text: `${errorPrefix}: ${(err as Error).message}` }],
+      isError: true,
+    };
+  }
+}
+
 export function buildGithubTools(opts: BuildGithubToolsOpts): BuildGithubToolsResult {
   const { installationId, owner, repo, defaultBranch, workspacePath, workflowRateLimiter } = opts;
 
@@ -52,28 +84,17 @@ export function buildGithubTools(opts: BuildGithubToolsOpts): BuildGithubToolsRe
       title: z.string().describe("PR title"),
       body: z.string().optional().describe("PR description body (markdown)"),
     },
-    async (args): Promise<ToolTextResponse> => {
-      try {
-        validateBranchFormat(args.head);
-        validateBranchFormat(args.base);
-        if (args.head === args.base) {
-          return {
-            content: [{ type: "text", text: "Error creating PR: Head branch and base branch cannot be the same" }],
-            isError: true,
-          };
-        }
-        const result = await createPullRequest(
-          installationId, owner, repo,
-          args.head, args.base, args.title, args.body,
-        );
-        return { content: [{ type: "text", text: JSON.stringify(result) }] };
-      } catch (err) {
-        return {
-          content: [{ type: "text", text: `Error creating PR: ${(err as Error).message}` }],
-          isError: true,
-        };
+    async (args): Promise<ToolTextResponse> => wrapToolHandler("Error creating PR", async () => {
+      validateBranchFormat(args.head);
+      validateBranchFormat(args.base);
+      if (args.head === args.base) {
+        throw new Error("Head branch and base branch cannot be the same");
       }
-    },
+      return await createPullRequest(
+        installationId, owner, repo,
+        args.head, args.base, args.title, args.body,
+      );
+    }, /* pretty */ false),
   );
 
   const readCi = tool(
@@ -85,20 +106,12 @@ export function buildGithubTools(opts: BuildGithubToolsOpts): BuildGithubToolsRe
       branch: z.string().optional().describe("Filter runs by branch name"),
       per_page: z.number().default(10).describe("Number of runs to return (max 30)"),
     },
-    async (args): Promise<ToolTextResponse> => {
-      try {
-        const runs = await readCiStatus(
-          installationId, owner, repo,
-          { branch: args.branch, per_page: Math.min(args.per_page, 30) },
-        );
-        return { content: [{ type: "text", text: JSON.stringify(runs, null, 2) }] };
-      } catch (err) {
-        return {
-          content: [{ type: "text", text: `Error reading CI status: ${(err as Error).message}` }],
-          isError: true,
-        };
-      }
-    },
+    async (args): Promise<ToolTextResponse> => wrapToolHandler("Error reading CI status", () =>
+      readCiStatus(
+        installationId, owner, repo,
+        { branch: args.branch, per_page: Math.min(args.per_page, 30) },
+      ),
+    ),
   );
 
   const readLogs = tool(
@@ -109,19 +122,9 @@ export function buildGithubTools(opts: BuildGithubToolsOpts): BuildGithubToolsRe
     {
       run_id: z.number().describe("The workflow run ID to inspect"),
     },
-    async (args): Promise<ToolTextResponse> => {
-      try {
-        const result = await readWorkflowLogs(
-          installationId, owner, repo, args.run_id,
-        );
-        return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
-      } catch (err) {
-        return {
-          content: [{ type: "text", text: `Error reading workflow logs: ${(err as Error).message}` }],
-          isError: true,
-        };
-      }
-    },
+    async (args): Promise<ToolTextResponse> => wrapToolHandler("Error reading workflow logs", () =>
+      readWorkflowLogs(installationId, owner, repo, args.run_id),
+    ),
   );
 
   const triggerWf = tool(
@@ -134,20 +137,12 @@ export function buildGithubTools(opts: BuildGithubToolsOpts): BuildGithubToolsRe
       ref: z.string().describe("Git ref to run the workflow on (branch name or tag)"),
       inputs: z.record(z.string(), z.string()).optional().describe("Optional workflow_dispatch inputs"),
     },
-    async (args): Promise<ToolTextResponse> => {
-      try {
-        const result = await triggerWorkflow(
-          installationId, owner, repo,
-          args.workflow_id, args.ref, workflowRateLimiter, args.inputs,
-        );
-        return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
-      } catch (err) {
-        return {
-          content: [{ type: "text", text: `Error triggering workflow: ${(err as Error).message}` }],
-          isError: true,
-        };
-      }
-    },
+    async (args): Promise<ToolTextResponse> => wrapToolHandler("Error triggering workflow", () =>
+      triggerWorkflow(
+        installationId, owner, repo,
+        args.workflow_id, args.ref, workflowRateLimiter, args.inputs,
+      ),
+    ),
   );
 
   const pushBr = tool(
@@ -159,35 +154,101 @@ export function buildGithubTools(opts: BuildGithubToolsOpts): BuildGithubToolsRe
       branch: z.string().describe("Target branch name (must not be main, master, or default branch)"),
       force: z.boolean().default(false).describe("Force-push (always rejected — included for explicit error messaging)"),
     },
-    async (args): Promise<ToolTextResponse> => {
-      try {
-        const result = await pushBranch({
-          installationId,
-          owner,
-          repo,
-          workspacePath,
-          branch: args.branch,
-          force: args.force,
-          defaultBranch,
-        });
-        return { content: [{ type: "text", text: JSON.stringify(result) }] };
-      } catch (err) {
-        return {
-          content: [{ type: "text", text: `Error pushing branch: ${(err as Error).message}` }],
-          isError: true,
-        };
-      }
+    async (args): Promise<ToolTextResponse> => wrapToolHandler("Error pushing branch", () =>
+      pushBranch({
+        installationId,
+        owner,
+        repo,
+        workspacePath,
+        branch: args.branch,
+        force: args.force,
+        defaultBranch,
+      }),
+      /* pretty */ false,
+    ),
+  );
+
+  // ---------------------------------------------------------------------------
+  // Read-only issue/PR tools (#2843). Matching pattern: readCi/readLogs —
+  // auto-approve, JSON-stringified narrowed output, isError on exception.
+  // Response narrowing + body truncation lives in github-read-tools.ts.
+  // ---------------------------------------------------------------------------
+
+  const readIssueTool = tool(
+    "github_read_issue",
+    "Read a single issue from the connected repository by number. " +
+      "Returns number, title, state, body (truncated at 10 KB), labels, " +
+      "assignees, milestone title, timestamps, author login, and html_url.",
+    {
+      issue_number: z.number().int().positive().describe("The issue number to read"),
     },
+    async (args): Promise<ToolTextResponse> => wrapToolHandler("Error reading issue", () =>
+      readIssue(installationId, owner, repo, args.issue_number),
+    ),
+  );
+
+  const readIssueCommentsTool = tool(
+    "github_read_issue_comments",
+    "Read conversation comments on an issue. Returns id, author login, " +
+      "body (truncated at 4 KB), created_at, and html_url. Results are " +
+      "tagged kind=\"conversation\" for symmetry with github_list_pr_comments.",
+    {
+      issue_number: z.number().int().positive().describe("The issue number to read comments from"),
+      per_page: z.number().int().min(1).max(50).default(10).describe("Number of comments to return (max 50)"),
+    },
+    async (args): Promise<ToolTextResponse> => wrapToolHandler("Error reading issue comments", () =>
+      readIssueComments(
+        installationId, owner, repo, args.issue_number, { per_page: args.per_page },
+      ),
+    ),
+  );
+
+  const readPrTool = tool(
+    "github_read_pr",
+    "Read a pull request from the connected repository by number. Returns " +
+      "the issue fields plus PR-specific review state: draft, merged, " +
+      "mergeable, mergeable_state, head_ref, base_ref, merged_at. Use this " +
+      "to decide whether a PR needs another push or is already merged.",
+    {
+      pull_number: z.number().int().positive().describe("The pull request number to read"),
+    },
+    async (args): Promise<ToolTextResponse> => wrapToolHandler("Error reading PR", () =>
+      readPullRequest(installationId, owner, repo, args.pull_number),
+    ),
+  );
+
+  const listPrCommentsTool = tool(
+    "github_list_pr_comments",
+    "List both review comments (line-specific) and conversation comments on " +
+      "a pull request. Each entry is tagged kind=\"review\" or " +
+      "kind=\"conversation\" so you can filter. Review comments come from " +
+      "/pulls/:n/comments; conversation comments from /issues/:n/comments.",
+    {
+      pull_number: z.number().int().positive().describe("The pull request number to list comments for"),
+      per_page: z.number().int().min(1).max(50).default(10).describe("Number of comments per kind to return (max 50)"),
+    },
+    async (args): Promise<ToolTextResponse> => wrapToolHandler("Error listing PR comments", () =>
+      listPullRequestComments(
+        installationId, owner, repo, args.pull_number, { per_page: args.per_page },
+      ),
+    ),
   );
 
   return {
-    tools: [createPr, readCi, readLogs, triggerWf, pushBr],
+    tools: [
+      createPr, readCi, readLogs, triggerWf, pushBr,
+      readIssueTool, readIssueCommentsTool, readPrTool, listPrCommentsTool,
+    ],
     toolNames: [
       "mcp__soleur_platform__create_pull_request",
       "mcp__soleur_platform__github_read_ci_status",
       "mcp__soleur_platform__github_read_workflow_logs",
       "mcp__soleur_platform__github_trigger_workflow",
       "mcp__soleur_platform__github_push_branch",
+      "mcp__soleur_platform__github_read_issue",
+      "mcp__soleur_platform__github_read_issue_comments",
+      "mcp__soleur_platform__github_read_pr",
+      "mcp__soleur_platform__github_list_pr_comments",
     ],
   };
 }

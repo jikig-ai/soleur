@@ -22,6 +22,12 @@ export const TOOL_TIER_MAP: Record<string, ToolTier> = {
   "mcp__soleur_platform__github_read_ci_status": "auto-approve",
   "mcp__soleur_platform__github_read_workflow_logs": "auto-approve",
 
+  // Issue/PR reads (#2843): all auto-approve — read-only, narrowed responses.
+  "mcp__soleur_platform__github_read_issue": "auto-approve",
+  "mcp__soleur_platform__github_read_issue_comments": "auto-approve",
+  "mcp__soleur_platform__github_read_pr": "auto-approve",
+  "mcp__soleur_platform__github_list_pr_comments": "auto-approve",
+
   // Phase 3: Trigger workflows (gated — write action)
   "mcp__soleur_platform__github_trigger_workflow": "gated",
 
