@@ -89,36 +89,41 @@ Expected output:
   extra flags needed.
 
 Cleanup: the test deletes the synthetic user in `finally`. If the test
-crashes before cleanup, sweep manually. The snippet below (a) is
-hard-gated to `-c dev`, (b) re-asserts the Supabase URL looks like a
-non-prod project before any delete runs, (c) uses the same v4-UUID
-regex the test uses so it cannot match anything but its own leftovers:
+crashes before cleanup, sweep manually. The guard below hard-asserts
+(a) `DOPPLER_CONFIG === "dev"`, (b) the project ref in
+`NEXT_PUBLIC_SUPABASE_URL` matches the dev project ref — either trip
+aborts before any delete runs. The sweep uses the same v4-UUID regex
+the test uses so it cannot match anything but its own leftovers:
 
 ```bash
 doppler run -p soleur -c dev -- node -e '
-  const url = process.env.SUPABASE_URL || "";
-  if (!/(^|\.)dev\.|-dev\.|dev-/.test(url)) {
-    throw new Error("Refusing to run cleanup against non-dev Supabase URL: " + url);
-  }
-  const { createClient } = require("@supabase/supabase-js");
-  const c = createClient(url, process.env.SUPABASE_SERVICE_ROLE_KEY);
-  const SYNTH = /^mu1-integration-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}@soleur-test\.invalid$/i;
-  c.auth.admin.listUsers({ perPage: 200 }).then(async ({ data }) => {
-    const synth = (data?.users ?? []).filter((u) => SYNTH.test(u.email || ""));
-    for (const u of synth) {
-      console.log("deleting", u.email);
-      await c.auth.admin.deleteUser(u.id);
-    }
+  import("./apps/web-platform/infra/mu1-cleanup-guard.mjs").then(async ({ assertDevCleanupEnv, sweep }) => {
+    assertDevCleanupEnv();
+    await sweep();
   });
 '
 ```
 
+The guard is vendored at `apps/web-platform/infra/mu1-cleanup-guard.mjs`
+so it can be regression-tested; see
+`apps/web-platform/infra/mu1-runbook-cleanup.test.sh`.
+
 ### 3. Bubblewrap UID audit (AC-4, OS layer)
 
-Run against the live production container:
+Run against the live production container. The script is streamed via
+stdin — there is no repo checkout on the prod host by design.
+[#2606][i2606] tracks automating this invocation in CI.
 
 ```bash
-ssh <prod-host> "cd soleur && bash apps/web-platform/infra/audit-bwrap-uid.sh"
+# From any Soleur worktree (or the bare repo root).
+ssh <prod-host> "bash -s" < apps/web-platform/infra/audit-bwrap-uid.sh
+```
+
+Override the container name for canaries:
+
+```bash
+ssh <prod-host> "CONTAINER=soleur-web-platform-canary bash -s" \
+    < apps/web-platform/infra/audit-bwrap-uid.sh
 ```
 
 Expected output (baseline today, single namespace-mapped UID):
@@ -128,9 +133,11 @@ Expected output (baseline today, single namespace-mapped UID):
 PASS: CLONE_NEWUSER works — bwrap can create a user namespace (observed UID=0)
 INFO: baseline today = single namespace-mapped UID (pre-container-per-workspace)
 PASS: HostConfig.SecurityOpt includes apparmor=soleur-bwrap
-PASS: HostConfig.SecurityOpt includes seccomp=/etc/docker/seccomp-profiles/soleur-bwrap.json
+PASS: HostConfig.SecurityOpt seccomp matches on-host profile (sha256=<12-hex-chars>)
 --- MU1 bubblewrap UID audit complete — failures=0 ---
 ```
+
+[i2606]: https://github.com/jikig-ai/soleur/issues/2606
 
 ### 4. AC-2 — Manual repo-clone verification (fallback)
 
