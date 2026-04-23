@@ -57,9 +57,48 @@ Two tight rules:
 
 ## Session Errors
 
+### Brainstorm + plan phase (initial capture)
+
 - **Claim-without-measurement propagated through two rounds of user-facing framing** — Recovery: research agent (`repo-research-analyst`) spotted both claims and reported measured values. — Prevention: add a pre-dialogue check in brainstorm Phase 1.1 when topic involves context-budget: verify always-loaded set + cite measured deltas, not estimated.
 - **Session-start `cleanup-merged` skipped** per `wg-at-session-start-run-bash-plugins-soleur` — Recovery: worktree-manager script later fetched main during worktree creation, benign outcome. — Prevention: SessionStart hook that runs cleanup-merged automatically (follow-up issue; not implementing in this PR).
 - **Repeated rule-audit.sh's "4 broken hook refs" finding without verification** — Recovery: research agent verified all 4 hooks exist at different paths. — Prevention: rule-audit.sh's existence check should scan the full repo, not just `.claude/hooks/`. Follow-up issue will track the heuristic fix.
+
+### Implementation + review phase (added 2026-04-23)
+
+- **Litmus calibration failed on 4 rules (3 caught at plan-review, 1 caught at post-impl review)** — Plan-review (Kieran) flipped `hr-the-bash-tool-runs-in-a-non-interactive`, `hr-always-read-a-file-before-editing-it`, `hr-mcp-tools-playwright-etc-resolve-paths` from DELETE to KEEP. Post-impl review (security-sentinel) flipped `cq-for-production-debugging-use` back to KEEP (already retired; restored in review-fix commit). — Prevention: see "Litmus Calibration Pitfalls" section below.
+- **`lefthook.yml` not updated when Phase 1.2 GREEN added `--retired-file` CLI flag** — Recovery: pattern-recognition agent caught it during review (P1); fixed in review-fix commit. Pre-commit would have failed on next rule-retirement PR. — Prevention: when adding a new CLI flag to a script invoked by `lefthook.yml`, `.github/workflows/*`, or `scripts/*`, `grep -rn "<script-name>"` in the same commit and update every invocation. GREEN tests invoke the script directly with the flag — they can't catch the silent hook invocation gap.
+- **`markdownlint-cli2 --fix` mangled `scripts/retired-rule-ids.txt`** — The linter treated `#` header lines as markdown ATX headings and inserted blank lines between all comment lines, breaking the compact plain-text format. File parses correctly (pipe-delimited syntax is markdown-opaque) but cosmetic damage was visible. — Prevention: `.txt` files outside of markdown conventions should not be passed to `markdownlint-cli2`. Exclude `scripts/retired-rule-ids.txt` from any blanket `markdownlint` invocations (lefthook config or manual passes).
+- **Byte-budget oversight on initial `wg-every-session-error-must-produce-either` amendment** — First draft ran 676 bytes (76 over 600-byte per-rule cap). Caught during Phase 1.4 verification (`grep '^- ' AGENTS.md | awk '{print length}' | sort -rn`). — Prevention: measure rule byte length immediately after drafting any rule amendment. Compound step 8 warns but only at `wc -c > 40000`; per-rule cap violations surface only via explicit measurement.
+
+## Litmus Calibration Pitfalls
+
+The discoverability litmus — "Can an agent discover this constraint via a clear error, visible diff, or command failure on first attempt?" — is easy to state but hard to apply correctly. This PR's pre-sample misjudged 4 of 113 rules. The calibration pattern:
+
+### Common misjudgments
+
+| Misjudged rule | Wrong reasoning | Correct litmus outcome | Why |
+|---|---|---|---|
+| `hr-the-bash-tool-runs-in-a-non-interactive` | "`sudo: command not found` is clear" | KEEP | Agent retries `sudo`/`su`/`doas` across multiple sessions; rule prevents cross-session retry waste. Cross-session waste is blast-radius. |
+| `hr-always-read-a-file-before-editing-it` | "Edit tool errors when file unread" | KEEP | Rule also covers the post-compaction invariant (re-read after any compaction event), which is NOT discoverable from one error — context compaction erases the prior-read state silently. |
+| `hr-mcp-tools-playwright-etc-resolve-paths` | "Path-not-found errors clear" | KEEP | Playwright errors surface as "element not found" or silent 404 screenshots, NOT "wrong cwd" — the path-resolution bug is indistinguishable from legitimate test failures. |
+| `cq-for-production-debugging-use` | "Doppler + Sentry tool availability makes SSH redundant" | KEEP | "Tool availability" is not "error-driven discovery". SSH to prod *succeeds*; no error fires. This is a policy/blast-radius rule, not a tool-error rule. |
+
+### The calibration heuristic
+
+**If the constraint's failure mode is "agent does a slower/wronger thing without feedback," the rule is NOT discoverable.** Specifically:
+
+1. **Silent success** — tool completes, wrong thing happens. (SSH to prod works, agent ships wrong data.)
+2. **Cross-session retry waste** — error appears once per session; agent retries in the next session without memory. (sudo fails, agent tries `su` next turn.)
+3. **Context-erasure invariants** — state is wiped between agent turns (compaction, subagent boundary, cleared context). (Post-compaction "must re-read" is forgotten.)
+4. **Ambiguous error attribution** — error could be caused by multiple classes; agent misattributes. (Playwright "element not found" → agent blames selector, not cwd.)
+
+If ANY of the four patterns applies, the rule PASSES the litmus (keep it). The discoverability test requires that the agent, starting fresh and making one attempt, sees a clear, attributable error pointing at the specific constraint.
+
+### Process recommendation
+
+- Apply the litmus twice: once at plan-time (pre-sample), once at implementation-time (per-rule audit).
+- Route both passes through a review agent (Kieran-style strict pattern worked at plan, security-sentinel caught the policy-class miss at review).
+- Default to KEEP when ambiguous. The spec's TR5 (< 25 litmus failures → 32k target advisory) is the safety net for conservative bias.
 
 ## Related
 
