@@ -9,6 +9,11 @@ Derived from `knowledge-base/project/plans/2026-04-23-fix-command-center-tool-pr
   - For each of `apps/web-platform/server/agent-runner.ts`, `apps/web-platform/lib/chat-state-machine.ts`, `apps/web-platform/server/github-tools.ts`, `apps/web-platform/server/tool-tiers.ts`, `apps/web-platform/server/ci-tools.ts`: run `jq -r --arg path "<file>" '.[] | select(.body // "" | contains($path)) | "#\(.number): \(.title)"' /tmp/open-review-issues.json`.
   - For each match: fold-in OR acknowledge OR defer. Record in the plan's Open Code-Review Overlap section.
 - [ ] 0.2. Reproduce the stuck-bubble bug locally. Start `cd apps/web-platform && doppler run -p soleur -c dev -- ./scripts/dev.sh`. Open `/command-center`. Ask "resume work on issue 2831". Screenshot the stuck "Working" chips. Save to `knowledge-base/project/specs/feat-one-shot-command-center-fixes/before.png`.
+- [ ] 0.3. Pre-Phase-0 gates (from deepen pass):
+  - `gh issue view 2217 --json state,title` — record state (OPEN/CLOSED) in PR description; decides Option A vs Option B for Phase 2.
+  - `rg "const _exhaustive: never" apps/web-platform/` — enumerate every exhaustive WSMessage switch. None should break in Phase 2.
+  - `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` — record baseline green. Any pre-existing TS errors get an issue before Phase 1 starts.
+  - `find knowledge-base/project/learnings -name "*.md" -newer knowledge-base/project/plans/2026-04-23-fix-command-center-tool-progress-and-github-mcp-plan.md` — read any learning added after plan-time that mentions `chat-state-machine`, `agent-runner`, or `ws-client`.
 
 ## 1. RED — failing tests for Bug 1
 
