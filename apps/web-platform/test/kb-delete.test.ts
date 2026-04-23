@@ -9,12 +9,8 @@ const {
   mockFrom,
   mockGithubApiGet,
   mockGithubApiDelete,
-  mockGenerateInstallationToken,
-  mockRandomCredentialPath,
+  mockGitWithAuth,
   mockIsPathInWorkspace,
-  mockExecFile,
-  mockWriteFileSync,
-  mockUnlinkSync,
   mockLstat,
   MockGitHubApiError,
 } = vi.hoisted(() => {
@@ -31,12 +27,8 @@ const {
     mockFrom: vi.fn(),
     mockGithubApiGet: vi.fn(),
     mockGithubApiDelete: vi.fn(),
-    mockGenerateInstallationToken: vi.fn(),
-    mockRandomCredentialPath: vi.fn(),
+    mockGitWithAuth: vi.fn(),
     mockIsPathInWorkspace: vi.fn(),
-    mockExecFile: vi.fn(),
-    mockWriteFileSync: vi.fn(),
-    mockUnlinkSync: vi.fn(),
     mockLstat: vi.fn(),
     MockGitHubApiError,
   };
@@ -65,10 +57,8 @@ vi.mock("@/server/github-api", () => ({
   GitHubApiError: MockGitHubApiError,
 }));
 
-vi.mock("@/server/github-app", () => ({
-  generateInstallationToken: mockGenerateInstallationToken,
-  randomCredentialPath: mockRandomCredentialPath,
-  GitHubApiError: MockGitHubApiError,
+vi.mock("@/server/git-auth", () => ({
+  gitWithInstallationAuth: mockGitWithAuth,
 }));
 
 vi.mock("@/server/sandbox", () => ({
@@ -83,17 +73,7 @@ vi.mock("@sentry/nextjs", () => ({
   captureException: vi.fn(),
 }));
 
-vi.mock("node:child_process", () => ({
-  execFile: mockExecFile,
-}));
-
-vi.mock("node:util", () => ({
-  promisify: vi.fn((fn: unknown) => fn),
-}));
-
 vi.mock("node:fs", () => ({
-  writeFileSync: mockWriteFileSync,
-  unlinkSync: mockUnlinkSync,
   promises: { lstat: mockLstat },
 }));
 
@@ -156,8 +136,6 @@ function setupFullMocks() {
   setupAuthenticatedUser();
   setupUserData();
   mockIsPathInWorkspace.mockReturnValue(true);
-  mockGenerateInstallationToken.mockResolvedValue("test-token");
-  mockRandomCredentialPath.mockReturnValue("/tmp/git-cred-test-uuid");
   // File is not a symlink
   mockLstat.mockResolvedValue({
     isSymbolicLink: () => false,
@@ -175,8 +153,8 @@ function setupFullMocks() {
   mockGithubApiDelete.mockResolvedValue({
     commit: { sha: "commitsha456" },
   });
-  // Successful git pull
-  mockExecFile.mockResolvedValue({ stdout: "", stderr: "" });
+  // Successful git pull via authenticated helper
+  mockGitWithAuth.mockResolvedValue(Buffer.from(""));
 }
 
 // ---------------------------------------------------------------------------
@@ -311,7 +289,7 @@ describe("DELETE /api/kb/file/[...path]", () => {
   // 10. Workspace sync failure
   test("returns 500 with SYNC_FAILED when git pull fails", async () => {
     setupFullMocks();
-    mockExecFile.mockRejectedValue(new Error("git pull failed: merge conflict"));
+    mockGitWithAuth.mockRejectedValue(new Error("git pull failed: merge conflict"));
 
     const req = createRequest(["overview", "test.png"], "https://app.soleur.ai");
     const res = await DELETE(req, { params: createParams(["overview", "test.png"]) });
@@ -369,31 +347,18 @@ describe("DELETE /api/kb/file/[...path]", () => {
     expect(mockGithubApiDelete).toHaveBeenCalled();
   });
 
-  // 14. Credential helper cleanup after success
-  test("credential helper is cleaned up after successful deletion", async () => {
+  // 14. Git auth delegation (content + mode covered in test/git-auth.test.ts).
+  test("delegates workspace pull to gitWithInstallationAuth", async () => {
     setupFullMocks();
 
     const req = createRequest(["overview", "test.png"], "https://app.soleur.ai");
     const res = await DELETE(req, { params: createParams(["overview", "test.png"]) });
     expect(res.status).toBe(200);
 
-    expect(mockWriteFileSync).toHaveBeenCalledWith(
-      "/tmp/git-cred-test-uuid",
-      expect.stringContaining("x-access-token"),
-      expect.objectContaining({ mode: 0o700 }),
+    expect(mockGitWithAuth).toHaveBeenCalledWith(
+      ["pull", "--ff-only"],
+      TEST_INSTALLATION_ID,
+      expect.objectContaining({ cwd: TEST_WORKSPACE_PATH, timeout: 30_000 }),
     );
-    expect(mockUnlinkSync).toHaveBeenCalledWith("/tmp/git-cred-test-uuid");
-  });
-
-  // 15. Credential helper cleanup after sync failure
-  test("credential helper is cleaned up after sync failure", async () => {
-    setupFullMocks();
-    mockExecFile.mockRejectedValue(new Error("git pull failed"));
-
-    const req = createRequest(["overview", "test.png"], "https://app.soleur.ai");
-    const res = await DELETE(req, { params: createParams(["overview", "test.png"]) });
-    expect(res.status).toBe(500);
-
-    expect(mockUnlinkSync).toHaveBeenCalledWith("/tmp/git-cred-test-uuid");
   });
 });

@@ -12,10 +12,9 @@
  */
 
 import { execFileSync } from "child_process";
-import { writeFileSync, unlinkSync } from "fs";
 
 import { validateBranchFormat } from "./branch-validation";
-import { generateInstallationToken, randomCredentialPath } from "./github-app";
+import { gitWithInstallationAuth } from "./git-auth";
 import { createChildLogger } from "./logger";
 
 const log = createChildLogger("push-branch");
@@ -111,32 +110,13 @@ export async function pushBranch(options: PushBranchOptions): Promise<PushResult
     log.warn({ err }, "Failed to set git author — push may use existing config");
   }
 
-  // 5. Generate token and create credential helper
-  const token = await generateInstallationToken(installationId);
-  const helperPath = randomCredentialPath();
-
+  // 5. Push to remote via authenticated git invocation
   try {
-    writeFileSync(
-      helperPath,
-      `#!/bin/sh\necho 'username=x-access-token'\necho 'password=${token}'`,
-      { mode: 0o700 },
-    );
-
-    // 6. Push to remote
     const repoUrl = `https://github.com/${owner}/${repo}.git`;
-    execFileSync(
-      "git",
-      [
-        "-c", `credential.helper=!${helperPath}`,
-        "push",
-        repoUrl,
-        `HEAD:refs/heads/${branch}`,
-      ],
-      {
-        cwd: workspacePath,
-        stdio: "pipe",
-        timeout: 120_000,
-      },
+    await gitWithInstallationAuth(
+      ["push", repoUrl, `HEAD:refs/heads/${branch}`],
+      installationId,
+      { cwd: workspacePath, timeout: 120_000 },
     );
 
     log.info({ branch, owner, repo }, "Branch pushed successfully");
@@ -147,12 +127,5 @@ export async function pushBranch(options: PushBranchOptions): Promise<PushResult
     // Strip internal paths to avoid leaking server filesystem layout
     const stderr = rawStderr.replace(/\/[^\s:]+/g, "<path>");
     throw new Error(`Git push failed: ${stderr || (err as Error).message}`);
-  } finally {
-    // 7. Clean up credential helper immediately
-    try {
-      unlinkSync(helperPath);
-    } catch {
-      // Best-effort cleanup
-    }
   }
 }

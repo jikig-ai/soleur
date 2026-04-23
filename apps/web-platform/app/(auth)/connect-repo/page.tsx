@@ -67,6 +67,7 @@ export default function ConnectRepoPage() {
   const [connectedRepoName, setConnectedRepoName] = useState("");
   const [setupSteps, setSetupSteps] = useState<SetupStep[]>(SETUP_STEPS_TEMPLATE);
   const [setupError, setSetupError] = useState<string | null>(null);
+  const [setupErrorCode, setSetupErrorCode] = useState<string | null>(null);
   const [healthSnapshot, setHealthSnapshot] = useState<ProjectHealthSnapshot | null>(null);
   const [syncConversationId, setSyncConversationId] = useState<string | null>(null);
   const [pendingCreate, setPendingCreate] = useState<{
@@ -378,6 +379,7 @@ export default function ConnectRepoPage() {
             if (pollRef.current) clearInterval(pollRef.current);
             if (stepTimerRef.current) clearInterval(stepTimerRef.current);
             setSetupError(data.errorMessage ?? null);
+            setSetupErrorCode(data.errorCode ?? null);
             setState("failed");
           }
         } catch {
@@ -570,6 +572,7 @@ export default function ConnectRepoPage() {
 
   function handleRetry() {
     setSetupError(null);
+    setSetupErrorCode(null);
     setState("choose");
   }
 
@@ -665,7 +668,13 @@ export default function ConnectRepoPage() {
             syncConversationId={syncConversationId}
           />
         )}
-        {state === "failed" && <FailedState onRetry={handleRetry} errorMessage={setupError} />}
+        {state === "failed" && (
+          <FailedState
+            onRetry={handleRetry}
+            errorMessage={setupError}
+            errorCode={setupErrorCode}
+          />
+        )}
         {state === "interrupted" && (
           <InterruptedState
             onResume={handleResume}

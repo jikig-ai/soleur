@@ -357,11 +357,12 @@ runcmd:
       exit 1
     fi
     # tmpfs /tmp (closes #2473): caps overlayfs COW write-amp from
-    # pdf-linearize tempfiles. `noexec` DELIBERATELY omitted —
-    # randomCredentialPath() (github-app.ts) writes executable git
-    # credential helpers to /tmp/git-cred-<uuid> and git invokes them
-    # directly (not via sh). Consumers: workspace.ts / session-sync.ts /
-    # push-branch.ts. See ci-deploy.sh for the same invariant.
+    # pdf-linearize tempfiles. Post-GIT_ASKPASS migration, git credential
+    # scripts live in $HOME (see `server/git-auth.ts#writeAskpassScript`),
+    # so /tmp no longer needs to be exec-able for git auth. `noexec` is
+    # still omitted to avoid regressing unrelated tools that may exec
+    # from /tmp — if future hardening flips it on, grep for other
+    # exec-from-/tmp call sites first.
     docker run -d \
       --name soleur-web-platform \
       --restart unless-stopped \
