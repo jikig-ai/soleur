@@ -49,10 +49,9 @@ window.
   before proceeding.
 
 - Stripe CLI installed for Phase G price-object creation:
-  `stripe --version` returns `1.x`. Install:
-  <!-- TODO verify install URL before shipping -->
-  `https://docs.stripe.com/stripe-cli` (placeholder -- confirm with
-  WebFetch before committing).
+  `stripe --version` returns `1.x`.
+  Install: <https://docs.stripe.com/stripe-cli>
+  <!-- verified: 2026-04-23 source: https://docs.stripe.com/stripe-cli -->
 
 ## Phase A -- KYC (founder, wall-clock days-to-weeks)
 
@@ -99,7 +98,7 @@ it on the founder's behalf.
    - **Additional information requested:** Stripe lists the specific
      docs needed; upload via the dashboard banner.
 
-<!-- TODO verify source: fetch https://docs.stripe.com/get-started/account/activate before ship -->
+<!-- verified: 2026-04-23 source: https://docs.stripe.com/get-started/account/activate -->
 
 Record the KYC start date as a comment on Issue #1444. If review
 stretches beyond 5 business days, check the dashboard banner and the
@@ -134,7 +133,7 @@ existing price objects requires creating replacement prices.
      Stripe surfaces nexus alerts once transaction volume approaches
      a threshold.
 
-   <!-- TODO verify source: https://docs.stripe.com/tax/registering before ship -->
+   <!-- verified: 2026-04-23 source: https://docs.stripe.com/tax/registering -->
 
 3. **Fee:** Stripe Tax costs 0.5% per transaction where tax is
    calculated. Budget this into the pricing model; it is on top of
@@ -209,7 +208,7 @@ Capture each `price_...` ID from the CLI output. These go into
 Doppler in Phase E. Record them in the founder's encrypted notes in
 case of rollback/re-activation (Phase H).
 
-<!-- TODO verify source: https://docs.stripe.com/cli/prices/create before ship -->
+<!-- verified: 2026-04-23 source: https://docs.stripe.com/api/prices/create (CLI mirrors API params; `stripe --help` confirms) -->
 
 ## Phase D -- Register the live webhook endpoint
 
@@ -233,7 +232,7 @@ endpoint**.
   Doppler as `STRIPE_WEBHOOK_SECRET` in Phase E. It is NOT the same
   as the test-mode webhook secret.
 
-<!-- TODO verify source: https://docs.stripe.com/webhooks before ship -->
+<!-- verified: 2026-04-23 source: https://docs.stripe.com/webhooks -->
 
 ## Phase E -- Populate Doppler `prd` secrets
 
