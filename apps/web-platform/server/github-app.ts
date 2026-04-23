@@ -464,11 +464,83 @@ export async function generateInstallationToken(
 }
 
 /**
- * Generate a unique, unpredictable credential helper filename.
- * Prevents symlink attacks and token theft from predictable paths.
+ * @deprecated No prod call sites after the GIT_ASKPASS migration — the
+ * replacement is `gitWithInstallationAuth` in `./git-auth`. Kept as an
+ * export only because several vitest files still construct helper paths
+ * in their mocks of this module; those mocks are harmless no-ops under
+ * the new code. Safe to remove once all test files are migrated.
  */
 export function randomCredentialPath(): string {
   return `/tmp/git-cred-${randomUUID()}`;
+}
+
+// ---------------------------------------------------------------------------
+// Repo-access preflight
+// ---------------------------------------------------------------------------
+
+/**
+ * Classification returned by `checkRepoAccess`. Maps GitHub REST status
+ * codes into a small closed set the calling workspace code can branch on.
+ */
+export type RepoAccessStatus =
+  | "ok"
+  | "not_found"
+  | "access_revoked"
+  | "degraded";
+
+/**
+ * Probe repository access before attempting a clone. Distinguishes
+ * "repo is gone / app has no access" (user-correctable — reinstall CTA)
+ * from "api.github.com hiccup" (likely still OK to clone).
+ *
+ * 200            → `ok`              — proceed to clone
+ * 404            → `not_found`       — surface REPO_NOT_FOUND to user
+ * 403            → `access_revoked`  — surface reinstall CTA
+ * 5xx / network  → `degraded`        — proceed to clone; let git surface
+ *                                     the real failure if any
+ */
+export async function checkRepoAccess(
+  installationId: number,
+  owner: string,
+  repo: string,
+): Promise<RepoAccessStatus> {
+  let token: string;
+  try {
+    token = await generateInstallationToken(installationId);
+  } catch (err) {
+    // Token-gen failure is its own error class and is wrapped upstream;
+    // report as degraded so the clone path still runs — the underlying
+    // clone will fail loudly if auth is actually broken.
+    log.warn(
+      { installationId, err: (err as Error).message },
+      "checkRepoAccess: token generation failed — treating as degraded",
+    );
+    return "degraded";
+  }
+
+  let response: Response;
+  try {
+    response = await githubFetch(`${GITHUB_API}/repos/${owner}/${repo}`, {
+      headers: { Authorization: `token ${token}` },
+    });
+  } catch (err) {
+    log.warn(
+      { installationId, owner, repo, err: (err as Error).message },
+      "checkRepoAccess: network error — treating as degraded",
+    );
+    return "degraded";
+  }
+
+  if (response.status === 200) return "ok";
+  if (response.status === 404) return "not_found";
+  if (response.status === 403) return "access_revoked";
+  if (response.status >= 500) return "degraded";
+  // 401 would mean the token itself is broken — treat as access-revoked so
+  // the user sees a reinstall CTA rather than a generic clone-failure.
+  if (response.status === 401) return "access_revoked";
+  // Other 4xx: unknown classification; default to degraded to let git
+  // attempt the clone and surface the real error.
+  return "degraded";
 }
 
 /**

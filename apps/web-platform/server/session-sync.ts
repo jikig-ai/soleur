@@ -7,11 +7,11 @@
 // ---------------------------------------------------------------------------
 
 import { execFileSync } from "child_process";
-import { readdirSync, unlinkSync, writeFileSync } from "fs";
+import { readdirSync } from "fs";
 import { join } from "path";
 import { createServiceClient } from "@/lib/supabase/service";
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { generateInstallationToken, randomCredentialPath } from "./github-app";
+import { gitWithInstallationAuth } from "./git-auth";
 import { createChildLogger } from "./logger";
 
 const log = createChildLogger("session-sync");
@@ -68,24 +68,6 @@ function hasLocalCommits(workspacePath: string): boolean {
     } catch {
       return false;
     }
-  }
-}
-
-function writeCredentialHelper(token: string): string {
-  const helperPath = randomCredentialPath();
-  writeFileSync(
-    helperPath,
-    `#!/bin/sh\necho "username=x-access-token"\necho "password=${token}"`,
-    { mode: 0o700 },
-  );
-  return helperPath;
-}
-
-function cleanupCredentialHelper(helperPath: string): void {
-  try {
-    unlinkSync(helperPath);
-  } catch {
-    // Best-effort cleanup
   }
 }
 
@@ -202,17 +184,12 @@ export async function syncPull(
     return; // Empty workspace, no remote
   }
 
-  let helperPath: string | null = null;
-
   try {
     const installationId = await getInstallationId(userId);
     if (!installationId) {
       log.warn({ userId }, "No installation ID found for sync pull");
       return;
     }
-
-    const token = await generateInstallationToken(installationId);
-    helperPath = writeCredentialHelper(token);
 
     // Auto-commit any uncommitted changes before pulling to avoid conflicts
     try {
@@ -236,23 +213,16 @@ export async function syncPull(
     }
 
     // Use merge (not rebase) — shallow clones lack sufficient history for rebase
-    execFileSync(
-      "git",
-      [
-        "-c", `credential.helper=!${helperPath}`,
-        "pull",
-        "--no-rebase",
-        "--autostash",
-      ],
-      { cwd: workspacePath, stdio: "pipe", timeout: 60_000 },
+    await gitWithInstallationAuth(
+      ["pull", "--no-rebase", "--autostash"],
+      installationId,
+      { cwd: workspacePath, timeout: 60_000 },
     );
 
     await updateLastSynced(userId);
     log.info({ userId }, "Sync pull completed");
   } catch (err) {
     log.warn({ err, userId }, "Sync pull failed — continuing with local state");
-  } finally {
-    if (helperPath) cleanupCredentialHelper(helperPath);
   }
 }
 
@@ -267,8 +237,6 @@ export async function syncPush(
   if (!hasRemote(workspacePath)) {
     return; // Empty workspace, no remote
   }
-
-  let helperPath: string | null = null;
 
   try {
     // Auto-commit any uncommitted changes before pushing
@@ -303,16 +271,10 @@ export async function syncPush(
       return;
     }
 
-    const token = await generateInstallationToken(installationId);
-    helperPath = writeCredentialHelper(token);
-
-    execFileSync(
-      "git",
-      [
-        "-c", `credential.helper=!${helperPath}`,
-        "push",
-      ],
-      { cwd: workspacePath, stdio: "pipe", timeout: 60_000 },
+    await gitWithInstallationAuth(
+      ["push"],
+      installationId,
+      { cwd: workspacePath, timeout: 60_000 },
     );
 
     // Best-effort: record KB file count for analytics sparklines
@@ -326,7 +288,5 @@ export async function syncPush(
     log.info({ userId }, "Sync push completed");
   } catch (err) {
     log.warn({ err, userId }, "Sync push failed — next session will retry");
-  } finally {
-    if (helperPath) cleanupCredentialHelper(helperPath);
   }
 }

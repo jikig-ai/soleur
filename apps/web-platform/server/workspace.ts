@@ -3,13 +3,29 @@ import {
   lstatSync,
   mkdirSync,
   symlinkSync,
-  unlinkSync,
   writeFileSync,
 } from "fs";
 import { join, resolve } from "path";
 import { execFileSync } from "child_process";
 import { createChildLogger } from "./logger";
-import { generateInstallationToken, randomCredentialPath } from "./github-app";
+import {
+  gitWithInstallationAuth,
+  classifyGitError,
+  sanitizeGitStderr,
+  GitOperationError,
+} from "./git-auth";
+import { generateInstallationToken, checkRepoAccess } from "./github-app";
+
+const GITHUB_URL_RE =
+  /^https:\/\/github\.com\/([a-zA-Z0-9._-]+)\/([a-zA-Z0-9._-]+?)(?:\.git)?\/?$/;
+
+function parseGithubRepoUrl(
+  repoUrl: string,
+): { owner: string; repo: string } | null {
+  const match = repoUrl.match(GITHUB_URL_RE);
+  if (!match) return null;
+  return { owner: match[1], repo: match[2] };
+}
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -107,58 +123,62 @@ export async function provisionWorkspaceWithRepo(
 
   const workspacePath = join(getWorkspacesRoot(), userId);
 
-  // 1. Generate installation token for clone authentication
-  let token: string;
+  // 1. Pre-fetch the installation token so token-generation failures surface
+  //    with a distinct "Token generation failed: …" message. The result is
+  //    cached in memory by `generateInstallationToken` (5-min safety margin),
+  //    so the redundant call inside `gitWithInstallationAuth` is free.
   try {
-    token = await generateInstallationToken(installationId);
+    await generateInstallationToken(installationId);
   } catch (err) {
     throw new Error(`Token generation failed: ${(err as Error).message}`);
   }
 
-  // 2. Write temporary credential helper (unpredictable path, outside sandbox)
-  const helperPath = randomCredentialPath();
-  try {
-    writeFileSync(
-      helperPath,
-      `#!/bin/sh\necho "username=x-access-token"\necho "password=${token}"`,
-      { mode: 0o700 },
-    );
-  } catch (err) {
-    throw new Error(`Credential helper write failed: ${(err as Error).message}`);
+  // 2. Preflight repo-access check. Distinguishes "repo is gone / app
+  //    has no access" from "git.github.com hiccup" before we touch the
+  //    disk. A degraded GitHub API does NOT block clone — let git surface
+  //    the real failure if any.
+  const parsed = parseGithubRepoUrl(repoUrl);
+  if (parsed) {
+    const access = await checkRepoAccess(installationId, parsed.owner, parsed.repo);
+    if (access === "not_found") {
+      throw new GitOperationError(
+        "REPO_NOT_FOUND",
+        "",
+        "Repository not found or no longer accessible. Reinstall the Soleur GitHub App or choose a different repository.",
+      );
+    }
+    if (access === "access_revoked") {
+      throw new GitOperationError(
+        "REPO_ACCESS_REVOKED",
+        "",
+        "The Soleur GitHub App no longer has access to this repository. Reinstall the app, then try again.",
+      );
+    }
   }
 
+  // 3. Remove existing workspace if present (fresh clone)
+  removeWorkspaceDir(workspacePath);
+
+  // 4. Clone the repository (shallow for speed). `gitWithInstallationAuth`
+  //    uses GIT_ASKPASS + GIT_TERMINAL_PROMPT=0 so the token never appears
+  //    in argv and any auth failure produces deterministic stderr instead
+  //    of the silent "could not read Username" fall-through.
   try {
-    // 3. Remove existing workspace if present (fresh clone)
-    removeWorkspaceDir(workspacePath);
-
-    // 4. Clone the repository (shallow for speed)
-    try {
-      execFileSync(
-        "git",
-        [
-          "-c", `credential.helper=!${helperPath}`,
-          "clone",
-          "--depth", "1",
-          repoUrl,
-          workspacePath,
-        ],
-        { stdio: "pipe", timeout: 120_000 },
-      );
-    } catch (err) {
-      const rawStderr = (err as { stderr?: Buffer })?.stderr?.toString() ?? "";
-      // Strip internal paths to avoid leaking server filesystem layout
-      const stderr = rawStderr.replace(/\/[^\s:]+/g, "<path>");
-      throw new Error(`Git clone failed: ${stderr || (err as Error).message}`);
-    }
-
+    await gitWithInstallationAuth(
+      ["clone", "--depth", "1", repoUrl, workspacePath],
+      installationId,
+      { timeout: 120_000 },
+    );
     log.info({ userId, repoUrl }, "Repository cloned successfully");
-  } finally {
-    // 5. Clean up credential helper immediately
-    try {
-      unlinkSync(helperPath);
-    } catch {
-      // Best-effort cleanup
-    }
+  } catch (err) {
+    const rawStderr = (err as { stderr?: Buffer })?.stderr?.toString() ?? "";
+    const stderr = sanitizeGitStderr(rawStderr);
+    const errorCode = classifyGitError(rawStderr);
+    throw new GitOperationError(
+      errorCode,
+      stderr,
+      `Git clone failed: ${stderr || (err as Error).message}`,
+    );
   }
 
   // 6. Set git identity per workspace

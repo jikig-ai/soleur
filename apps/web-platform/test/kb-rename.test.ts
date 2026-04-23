@@ -9,12 +9,8 @@ const {
   mockFrom,
   mockGithubApiGet,
   mockGithubApiPost,
-  mockGenerateInstallationToken,
-  mockRandomCredentialPath,
+  mockGitWithAuth,
   mockIsPathInWorkspace,
-  mockExecFile,
-  mockWriteFileSync,
-  mockUnlinkSync,
   mockLstat,
   MockGitHubApiError,
 } = vi.hoisted(() => {
@@ -31,12 +27,8 @@ const {
     mockFrom: vi.fn(),
     mockGithubApiGet: vi.fn(),
     mockGithubApiPost: vi.fn(),
-    mockGenerateInstallationToken: vi.fn(),
-    mockRandomCredentialPath: vi.fn(),
+    mockGitWithAuth: vi.fn(),
     mockIsPathInWorkspace: vi.fn(),
-    mockExecFile: vi.fn(),
-    mockWriteFileSync: vi.fn(),
-    mockUnlinkSync: vi.fn(),
     mockLstat: vi.fn(),
     MockGitHubApiError,
   };
@@ -65,10 +57,8 @@ vi.mock("@/server/github-api", () => ({
   GitHubApiError: MockGitHubApiError,
 }));
 
-vi.mock("@/server/github-app", () => ({
-  generateInstallationToken: mockGenerateInstallationToken,
-  randomCredentialPath: mockRandomCredentialPath,
-  GitHubApiError: MockGitHubApiError,
+vi.mock("@/server/git-auth", () => ({
+  gitWithInstallationAuth: mockGitWithAuth,
 }));
 
 vi.mock("@/server/sandbox", () => ({
@@ -83,17 +73,7 @@ vi.mock("@sentry/nextjs", () => ({
   captureException: vi.fn(),
 }));
 
-vi.mock("node:child_process", () => ({
-  execFile: mockExecFile,
-}));
-
-vi.mock("node:util", () => ({
-  promisify: vi.fn((fn: unknown) => fn),
-}));
-
 vi.mock("node:fs", () => ({
-  writeFileSync: mockWriteFileSync,
-  unlinkSync: mockUnlinkSync,
   promises: { lstat: mockLstat },
 }));
 
@@ -161,8 +141,6 @@ function setupFullMocks() {
   setupAuthenticatedUser();
   setupUserData();
   mockIsPathInWorkspace.mockReturnValue(true);
-  mockGenerateInstallationToken.mockResolvedValue("test-token");
-  mockRandomCredentialPath.mockReturnValue("/tmp/git-cred-test-uuid");
   // File is not a symlink
   mockLstat.mockResolvedValue({
     isSymbolicLink: () => false,
@@ -218,8 +196,8 @@ function setupFullMocks() {
     }
     return Promise.reject(new Error(`Unexpected POST: ${path}`));
   });
-  // Successful git pull
-  mockExecFile.mockResolvedValue({ stdout: "", stderr: "" });
+  // Successful git pull via authenticated helper
+  mockGitWithAuth.mockResolvedValue(Buffer.from(""));
 }
 
 // ---------------------------------------------------------------------------
@@ -489,7 +467,7 @@ describe("PATCH /api/kb/file/[...path] (rename)", () => {
         sha: "commitsha000",
         tree: { sha: "treesha000" },
       });
-    mockExecFile.mockRejectedValue(new Error("git pull failed: merge conflict"));
+    mockGitWithAuth.mockRejectedValue(new Error("git pull failed: merge conflict"));
 
     const req = createRequest(["overview", "test.png"], { newName: "renamed.png" });
     const res = await PATCH(req, { params: createParams(["overview", "test.png"]) });
@@ -614,11 +592,12 @@ describe("PATCH /api/kb/file/[...path] (rename)", () => {
     const res = await PATCH(req, { params: createParams(["overview", "test.png"]) });
     expect(res.status).toBe(200);
 
-    expect(mockWriteFileSync).toHaveBeenCalledWith(
-      "/tmp/git-cred-test-uuid",
-      expect.stringContaining("x-access-token"),
-      expect.objectContaining({ mode: 0o700 }),
+    // Credential lifecycle covered in test/git-auth.test.ts; here we just
+    // verify the rename route delegates its pull to the authenticated helper.
+    expect(mockGitWithAuth).toHaveBeenCalledWith(
+      ["pull", "--ff-only"],
+      expect.any(Number),
+      expect.objectContaining({ timeout: 30_000 }),
     );
-    expect(mockUnlinkSync).toHaveBeenCalledWith("/tmp/git-cred-test-uuid");
   });
 });

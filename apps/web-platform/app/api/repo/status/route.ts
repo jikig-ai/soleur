@@ -66,6 +66,15 @@ export async function GET() {
     syncConversationId = syncConv?.id ?? null;
   }
 
+  // `repo_error` is TEXT. New writes are a JSON string of
+  // `{ code, message, timestamp }` (see /api/repo/setup). Legacy rows
+  // (pre-errorCode migration) contain plain stderr — parseErrorPayload
+  // returns a `{errorMessage, errorCode: undefined}` shape so the UI
+  // falls back to its legacy generic copy for those rows.
+  const { errorMessage, errorCode } = parseErrorPayload(
+    status === "error" ? userData.repo_error : null,
+  );
+
   return NextResponse.json({
     status,
     repoUrl,
@@ -74,6 +83,27 @@ export async function GET() {
     hasKnowledgeBase,
     healthSnapshot: userData.health_snapshot ?? null,
     syncConversationId,
-    errorMessage: status === "error" ? (userData.repo_error ?? null) : null,
+    errorMessage,
+    errorCode,
   });
+}
+
+function parseErrorPayload(raw: string | null | undefined): {
+  errorMessage: string | null;
+  errorCode: string | undefined;
+} {
+  if (!raw) return { errorMessage: null, errorCode: undefined };
+  try {
+    const parsed = JSON.parse(raw) as {
+      code?: unknown;
+      message?: unknown;
+    };
+    const code = typeof parsed.code === "string" ? parsed.code : undefined;
+    const message =
+      typeof parsed.message === "string" ? parsed.message : raw;
+    return { errorMessage: message, errorCode: code };
+  } catch {
+    // Legacy row: plain stderr string.
+    return { errorMessage: raw, errorCode: undefined };
+  }
 }

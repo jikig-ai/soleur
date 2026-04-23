@@ -36,6 +36,7 @@ describe("provisionWorkspaceWithRepo error wrapping", () => {
         .fn()
         .mockRejectedValue(new Error("GitHub installation token request failed: 401")),
       randomCredentialPath: vi.fn().mockReturnValue(`/tmp/git-cred-${randomUUID()}`),
+      checkRepoAccess: vi.fn().mockResolvedValue("ok"),
     }));
 
     const { provisionWorkspaceWithRepo } = await import("../server/workspace");
@@ -50,6 +51,7 @@ describe("provisionWorkspaceWithRepo error wrapping", () => {
     vi.doMock("../server/github-app", () => ({
       generateInstallationToken: vi.fn().mockResolvedValue("ghs_faketoken123"),
       randomCredentialPath: vi.fn().mockReturnValue(`/tmp/git-cred-${randomUUID()}`),
+      checkRepoAccess: vi.fn().mockResolvedValue("ok"),
     }));
 
     // Stub execFileSync so git clone throws synchronously with a realistic stderr
@@ -90,6 +92,7 @@ describe("provisionWorkspaceWithRepo error wrapping", () => {
     vi.doMock("../server/github-app", () => ({
       generateInstallationToken: vi.fn().mockResolvedValue("ghs_faketoken123"),
       randomCredentialPath: vi.fn().mockReturnValue(credPath),
+      checkRepoAccess: vi.fn().mockResolvedValue("ok"),
     }));
 
     const { provisionWorkspaceWithRepo } = await import("../server/workspace");
@@ -119,6 +122,7 @@ describe("provisionWorkspaceWithRepo sentinel file", () => {
     vi.doMock("../server/github-app", () => ({
       generateInstallationToken: vi.fn().mockResolvedValue("ghs_faketoken123"),
       randomCredentialPath: vi.fn().mockReturnValue(`/tmp/git-cred-${randomUUID()}`),
+      checkRepoAccess: vi.fn().mockResolvedValue("ok"),
     }));
 
     // Mock execFileSync to simulate successful clone (create workspace dir with .git)
@@ -155,6 +159,7 @@ describe("provisionWorkspaceWithRepo sentinel file", () => {
     vi.doMock("../server/github-app", () => ({
       generateInstallationToken: vi.fn().mockResolvedValue("ghs_faketoken123"),
       randomCredentialPath: vi.fn().mockReturnValue(`/tmp/git-cred-${randomUUID()}`),
+      checkRepoAccess: vi.fn().mockResolvedValue("ok"),
     }));
 
     const origExecFileSync = (await import("child_process")).execFileSync;

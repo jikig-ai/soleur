@@ -9,12 +9,8 @@ const {
   mockFrom,
   mockGithubApiGet,
   mockGithubApiPost,
-  mockGenerateInstallationToken,
-  mockRandomCredentialPath,
+  mockGitWithAuth,
   mockIsPathInWorkspace,
-  mockExecFile,
-  mockWriteFileSync,
-  mockUnlinkSync,
   mockLinearize,
   MockGitHubApiError,
 } = vi.hoisted(() => {
@@ -31,12 +27,8 @@ const {
     mockFrom: vi.fn(),
     mockGithubApiGet: vi.fn(),
     mockGithubApiPost: vi.fn(),
-    mockGenerateInstallationToken: vi.fn(),
-    mockRandomCredentialPath: vi.fn(),
+    mockGitWithAuth: vi.fn(),
     mockIsPathInWorkspace: vi.fn(),
-    mockExecFile: vi.fn(),
-    mockWriteFileSync: vi.fn(),
-    mockUnlinkSync: vi.fn(),
     mockLinearize: vi.fn(),
     MockGitHubApiError,
   };
@@ -65,10 +57,8 @@ vi.mock("@/server/github-api", () => ({
   GitHubApiError: MockGitHubApiError,
 }));
 
-vi.mock("@/server/github-app", () => ({
-  generateInstallationToken: mockGenerateInstallationToken,
-  randomCredentialPath: mockRandomCredentialPath,
-  GitHubApiError: MockGitHubApiError,
+vi.mock("@/server/git-auth", () => ({
+  gitWithInstallationAuth: mockGitWithAuth,
 }));
 
 vi.mock("@/server/sandbox", () => ({
@@ -82,19 +72,6 @@ vi.mock("@/server/logger", () => ({
 vi.mock("@sentry/nextjs", () => ({
   captureException: vi.fn(),
   captureMessage: vi.fn(),
-}));
-
-vi.mock("node:child_process", () => ({
-  execFile: mockExecFile,
-}));
-
-vi.mock("node:util", () => ({
-  promisify: vi.fn((fn: unknown) => fn),
-}));
-
-vi.mock("node:fs", () => ({
-  writeFileSync: mockWriteFileSync,
-  unlinkSync: mockUnlinkSync,
 }));
 
 vi.mock("@/server/pdf-linearize", () => ({
@@ -167,8 +144,6 @@ function setupFullMocks() {
   setupAuthenticatedUser();
   setupUserData();
   mockIsPathInWorkspace.mockReturnValue(true);
-  mockGenerateInstallationToken.mockResolvedValue("test-token");
-  mockRandomCredentialPath.mockReturnValue("/tmp/git-cred-test-uuid");
   // File does not exist (404 from GitHub)
   mockGithubApiGet.mockRejectedValue(new MockGitHubApiError("GitHub API request failed: 404 /repos/test-owner/test-repo/contents/knowledge-base/uploads/test.png", 404));
   // Successful PUT
@@ -176,8 +151,8 @@ function setupFullMocks() {
     content: { sha: "newsha123", path: "knowledge-base/uploads/test.png" },
     commit: { sha: "commitsha456" },
   });
-  // Successful git pull
-  mockExecFile.mockResolvedValue({ stdout: "", stderr: "" });
+  // Successful git pull via authenticated helper
+  mockGitWithAuth.mockResolvedValue(Buffer.from(""));
   // Default: linearize acts as pass-through (returns input buffer).
   // Individual PDF tests override this with specific success/failure results.
   mockLinearize.mockImplementation(async (buf: Buffer) => ({
@@ -350,11 +325,11 @@ describe("POST /api/kb/upload", () => {
     expect(body.sha).toBe("newsha123");
     expect(body.commitSha).toBe("commitsha456");
 
-    // Verify git pull used credential helper
-    expect(mockExecFile).toHaveBeenCalledWith(
-      "git",
-      expect.arrayContaining(["-c", expect.stringContaining("credential.helper=!")]),
-      expect.objectContaining({ cwd: TEST_WORKSPACE_PATH }),
+    // Verify git pull goes through the authenticated helper
+    expect(mockGitWithAuth).toHaveBeenCalledWith(
+      ["pull", "--ff-only"],
+      TEST_INSTALLATION_ID,
+      expect.objectContaining({ cwd: TEST_WORKSPACE_PATH, timeout: 30_000 }),
     );
   });
 
@@ -379,7 +354,7 @@ describe("POST /api/kb/upload", () => {
   test("returns 500 with SYNC_FAILED when git pull fails", async () => {
     setupFullMocks();
     // Override: git pull fails
-    mockExecFile.mockRejectedValue(new Error("git pull failed: merge conflict"));
+    mockGitWithAuth.mockRejectedValue(new Error("git pull failed: merge conflict"));
 
     const formData = createFormData(makeTestFile(), "uploads");
     const res = await POST(createRequest(formData, "https://app.soleur.ai"));
@@ -404,49 +379,22 @@ describe("POST /api/kb/upload", () => {
     expect(body.code).toBe("GITHUB_API_ERROR");
   });
 
-  // 15. Credential helper: written with correct content and permissions
-  test("credential helper is written with correct content and permissions", async () => {
+  // 15. Git auth delegation (content + mode covered in test/git-auth.test.ts).
+  test("delegates workspace pull to gitWithInstallationAuth", async () => {
     setupFullMocks();
 
     const formData = createFormData(makeTestFile(), "uploads");
     const res = await POST(createRequest(formData, "https://app.soleur.ai"));
     expect(res.status).toBe(201);
 
-    expect(mockWriteFileSync).toHaveBeenCalledWith(
-      "/tmp/git-cred-test-uuid",
-      expect.stringContaining("x-access-token"),
-      expect.objectContaining({ mode: 0o700 }),
-    );
+    expect(mockGitWithAuth).toHaveBeenCalledTimes(1);
   });
 
-  // 16. Credential helper: cleanup after successful pull
-  test("credential helper file is cleaned up after successful pull", async () => {
+  // 16. SYNC_FAILED when the auth helper rejects (covers token-gen failure,
+  // network failure, or any error surfaced from inside gitWithInstallationAuth)
+  test("returns SYNC_FAILED when the auth helper rejects", async () => {
     setupFullMocks();
-
-    const formData = createFormData(makeTestFile(), "uploads");
-    const res = await POST(createRequest(formData, "https://app.soleur.ai"));
-    expect(res.status).toBe(201);
-
-    expect(mockUnlinkSync).toHaveBeenCalledWith("/tmp/git-cred-test-uuid");
-  });
-
-  // 17. Credential helper: cleanup after failed pull
-  test("credential helper file is cleaned up after failed pull", async () => {
-    setupFullMocks();
-    mockExecFile.mockRejectedValue(new Error("git pull failed"));
-
-    const formData = createFormData(makeTestFile(), "uploads");
-    const res = await POST(createRequest(formData, "https://app.soleur.ai"));
-    expect(res.status).toBe(500);
-
-    // Helper must still be cleaned up even on failure
-    expect(mockUnlinkSync).toHaveBeenCalledWith("/tmp/git-cred-test-uuid");
-  });
-
-  // 18. Credential helper: SYNC_FAILED when token generation fails
-  test("returns SYNC_FAILED when installation token generation fails", async () => {
-    setupFullMocks();
-    mockGenerateInstallationToken.mockRejectedValue(
+    mockGitWithAuth.mockRejectedValue(
       new Error("GitHub installation token request failed: 401"),
     );
 
@@ -456,23 +404,6 @@ describe("POST /api/kb/upload", () => {
 
     const body = await res.json();
     expect(body.code).toBe("SYNC_FAILED");
-    // git pull should NOT have been called
-    expect(mockExecFile).not.toHaveBeenCalled();
-  });
-
-  // 19. Credential helper: cleanup failure does not break upload
-  test("returns 201 when credential helper cleanup fails", async () => {
-    setupFullMocks();
-    mockUnlinkSync.mockImplementation(() => {
-      throw new Error("ENOENT: no such file or directory");
-    });
-
-    const formData = createFormData(makeTestFile(), "uploads");
-    const res = await POST(createRequest(formData, "https://app.soleur.ai"));
-    expect(res.status).toBe(201);
-
-    const body = await res.json();
-    expect(body.sha).toBe("newsha123");
   });
 
   // 20. formData error logging: logs error details and sends to Sentry

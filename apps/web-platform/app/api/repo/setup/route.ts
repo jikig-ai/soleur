@@ -5,6 +5,7 @@ import { validateOrigin, rejectCsrf } from "@/lib/auth/validate-origin";
 import { provisionWorkspaceWithRepo } from "@/server/workspace";
 import { scanProjectHealth } from "@/server/project-scanner";
 import { normalizeRepoUrl } from "@/lib/repo-url";
+import { GitOperationError } from "@/server/git-auth";
 import logger from "@/server/logger";
 
 /**
@@ -196,10 +197,19 @@ export async function POST(request: Request) {
       Sentry.captureException(err);
 
       const rawMessage = err instanceof Error ? err.message : String(err);
-      const errorMessage = rawMessage.slice(0, 2000);
+      const code =
+        err instanceof GitOperationError ? err.errorCode : "CLONE_UNKNOWN";
+      // Persist a structured payload so the UI can render code-mapped copy
+      // while preserving the sanitized raw stderr for support use. The
+      // column is TEXT (historical reads fall through to plain-string).
+      const payload = JSON.stringify({
+        code,
+        message: rawMessage.slice(0, 2000),
+        timestamp: new Date().toISOString(),
+      });
       await serviceClient
         .from("users")
-        .update({ repo_status: "error", repo_error: errorMessage })
+        .update({ repo_status: "error", repo_error: payload })
         .eq("id", user.id)
         .then(({ error }) => {
           if (error) {
