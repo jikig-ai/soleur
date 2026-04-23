@@ -1,0 +1,15 @@
+# Retired AGENTS.md rule IDs.
+#
+# Format: <rule-id> | <YYYY-MM-DD> | <PR #NNNN or -> | <breadcrumb>
+# - rule-id: matches (hr|wg|cq|rf|pdr|cm)-<slug>
+# - date: ISO date when the rule was retired
+# - PR: the PR that retired the rule (or "-" if retired outside a PR)
+# - breadcrumb: learning-file path, replacement rule id, or a self-contained
+#               one-line rationale (when neither exists)
+#
+# Retired ids preserve immutability per cq-rule-ids-are-immutable:
+# scripts/lint-rule-ids.py rejects any attempt to reintroduce a retired id
+# as an active rule. Removing an id from this file without restoring it in
+# AGENTS.md will re-trigger the removed-id diff error.
+#
+# Entries are appended during the PR that deletes the rule from AGENTS.md.
