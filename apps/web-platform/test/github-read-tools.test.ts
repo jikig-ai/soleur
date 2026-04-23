@@ -1,4 +1,4 @@
-import { describe, test, expect, vi, beforeEach } from "vitest";
+import { describe, test, expect, vi, beforeAll, afterEach } from "vitest";
 
 // Mock `generateInstallationToken` so github-api.ts doesn't try to read
 // GitHub App credentials. We spy on the underlying fetch, and assert that
@@ -14,6 +14,13 @@ vi.mock("../server/github-app", () => ({
   },
 }));
 
+// Stub Sentry-backed silent-fallback reporter so partial-failure tests don't
+// require Sentry init. We only care that the path doesn't throw — the assertion
+// that fallback telemetry fires lives in the observability module's own tests.
+vi.mock("../server/observability", () => ({
+  reportSilentFallback: vi.fn(),
+}));
+
 import {
   readIssue,
   readIssueComments,
@@ -21,7 +28,20 @@ import {
   listPullRequestComments,
 } from "../server/github-read-tools";
 
-const ORIGINAL_FETCH = globalThis.fetch;
+// Capture the real fetch in beforeAll (after any sibling test file's module-scope
+// stubs have settled); restore in afterEach so a throwing assertion can't leak
+// a stub into the next file. See learning
+// `2026-04-22-vitest-cross-file-leaks-and-module-scope-stubs.md`.
+let ORIGINAL_FETCH: typeof fetch;
+
+beforeAll(() => {
+  ORIGINAL_FETCH = globalThis.fetch;
+});
+
+afterEach(() => {
+  globalThis.fetch = ORIGINAL_FETCH;
+  vi.resetAllMocks();
+});
 
 function mockFetchOnce(response: unknown, status = 200): void {
   globalThis.fetch = vi.fn(async () =>
@@ -42,11 +62,6 @@ function mockFetchSequence(responses: Array<{ body: unknown; status?: number }>)
     });
   }) as typeof fetch;
 }
-
-beforeEach(() => {
-  vi.resetAllMocks();
-  globalThis.fetch = ORIGINAL_FETCH;
-});
 
 describe("readIssue narrowing", () => {
   test("returns only the agent-relevant fields", async () => {
@@ -182,9 +197,59 @@ describe("readIssueComments narrowing", () => {
     expect(calls[0]).toContain("per_page=50");
     expect(calls[0]).not.toContain("per_page=500");
   });
+
+  test("falls back to default per_page on zero/negative/NaN", async () => {
+    const calls: string[] = [];
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      calls.push(typeof input === "string" ? input : input.toString());
+      return new Response("[]", { status: 200, headers: { "content-type": "application/json" } });
+    }) as typeof fetch;
+
+    await readIssueComments(12345, "o", "r", 1, { per_page: 0 });
+    await readIssueComments(12345, "o", "r", 1, { per_page: -5 });
+    await readIssueComments(12345, "o", "r", 1, { per_page: Number.NaN });
+
+    expect(calls.every((url) => url.includes("per_page=10"))).toBe(true);
+  });
+
+  test("returns empty array on empty REST response", async () => {
+    mockFetchOnce([]);
+
+    const result = await readIssueComments(12345, "o", "r", 1);
+
+    expect(result).toEqual([]);
+  });
 });
 
 describe("readPullRequest narrowing", () => {
+  test("passes through mergeable=null (GitHub still computing)", async () => {
+    mockFetchOnce({
+      number: 101,
+      title: "Computing",
+      state: "open",
+      body: "",
+      labels: [],
+      assignees: [],
+      milestone: null,
+      created_at: "2026-01-01T00:00:00Z",
+      updated_at: "2026-01-01T00:00:00Z",
+      html_url: "https://github.com/o/r/pull/101",
+      user: { login: "u" },
+      draft: false,
+      merged: false,
+      mergeable: null,
+      mergeable_state: "unknown",
+      merged_at: null,
+      head: { ref: "feat-y" },
+      base: { ref: "main" },
+    });
+
+    const result = await readPullRequest(12345, "o", "r", 101);
+
+    expect(result.mergeable).toBeNull();
+    expect(result.mergeable_state).toBe("unknown");
+  });
+
   test("includes PR-specific review state on top of issue fields", async () => {
     mockFetchOnce({
       number: 100,
@@ -281,5 +346,17 @@ describe("listPullRequestComments", () => {
     expect(result).toHaveLength(1);
     expect(result[0].kind).toBe("conversation");
     expect(result[0].body).toBe("Convo still works");
+  });
+
+  test("throws when BOTH endpoints fail (no silent empty-array)", async () => {
+    // Both endpoints 503 — caller needs to know the agent cannot answer about
+    // PR comments, rather than getting an empty list it might interpret as
+    // "PR has no comments."
+    mockFetchSequence([
+      { body: { message: "Service Unavailable" }, status: 503 },
+      { body: { message: "Service Unavailable" }, status: 503 },
+    ]);
+
+    await expect(listPullRequestComments(12345, "o", "r", 100)).rejects.toThrow();
   });
 });

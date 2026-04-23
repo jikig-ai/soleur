@@ -654,8 +654,17 @@ resuming an existing thread preserves context for the user.`;
             `/repos/${owner}/${repo}`,
           );
           defaultBranch = repoData.default_branch;
-        } catch {
-          // Fall back to "main" — still protected by the hardcoded list
+        } catch (err) {
+          // Fall back to "main" — still protected by the hardcoded list.
+          // Mirror to Sentry: a token revocation or repo rename surfacing here
+          // means protected-branch validation is running against a stale default.
+          // Expected in ephemeral cases (token warm-up race); unexpected on any
+          // sustained rate > normal token-refresh cadence.
+          reportSilentFallback(err, {
+            feature: "agent-runner",
+            op: "default-branch-lookup",
+            extra: { userId, owner, repo },
+          });
         }
 
         const github = buildGithubTools({
@@ -670,25 +679,27 @@ resuming an existing thread preserves context for the user.`;
         platformToolNames.push(...github.toolNames);
 
         // Announce GitHub read-access tools so the agent can discover them
-        // from natural language requests like "read issue 2831" or
-        // "summarize the review on PR 100." Without this block, agents
-        // fall back to shelling out to `gh` (not installed in the sandbox).
-        // See #2843. Budget: ≤80 tokens (KB-share precedent is ~120).
+        // from natural language requests ("read issue 2831", "summarize PR 100").
+        // Without this block, agents fall back to `gh` (not installed in the
+        // sandbox). See #2843. Keep it short — this ships on every turn.
+        //
+        // The `(${owner}/${repo})` interpolation is safe because owner/repo
+        // are validated against `GITHUB_NAME_RE` above — no whitespace,
+        // backticks, `$`, `{`, newlines, or markdown fences can slip through.
+        // If that regex ever relaxes, this becomes a prompt-injection sink.
         systemPrompt += `
 
 ## GitHub read access
 
-You can read issues and pull requests on the user's connected repository
-(${owner}/${repo}) using these tools:
+The connected repository is ${owner}/${repo}. Use these tools when the user
+mentions an issue/PR by number or asks to resume work on one:
 
-- github_read_issue({ issue_number }) — title, state, body, labels, assignees
-- github_read_issue_comments({ issue_number, per_page? }) — conversation thread
-- github_read_pr({ pull_number }) — issue fields plus draft/merged/mergeable/refs
-- github_list_pr_comments({ pull_number, per_page? }) — review + conversation comments, each tagged with kind
+- github_read_issue / github_read_issue_comments (for issues)
+- github_read_pr / github_list_pr_comments (for pull requests)
 
-Use these when the user mentions an issue or PR by number, or asks to
-"resume work on" or "summarize" one. Bodies are truncated at 10 KB (issues/PRs)
-and 4 KB (comments); follow the html_url for the full text.`;
+If a number could refer to either, call github_read_pr first — it 404s for
+non-PRs, then fall back to github_read_issue. Bodies are truncated (10 KB
+issues/PRs, 4 KB comments); follow the html_url for the full text.`;
       }
     }
 
@@ -932,7 +943,10 @@ and 4 KB (comments); follow the html_url for the full text.`;
         const inputDelta = message.usage?.input_tokens ?? 0;
         const outputDelta = message.usage?.output_tokens ?? 0;
 
-        // Fire-and-forget: cost tracking is non-blocking telemetry
+        // Fire-and-forget: cost tracking is non-blocking telemetry.
+        // A failure here drops per-turn cost data silently — mirror to Sentry
+        // per `cq-silent-fallback-must-mirror-to-sentry` so on-call sees
+        // cost-tracking drift instead of discovering it at monthly reconciliation.
         supabase().rpc(
           "increment_conversation_cost",
           {
@@ -944,6 +958,11 @@ and 4 KB (comments); follow the html_url for the full text.`;
         ).then(({ error: costError }) => {
           if (costError) {
             log.error({ err: costError, conversationId }, "Failed to save cost data");
+            reportSilentFallback(costError, {
+              feature: "agent-cost-tracking",
+              op: "increment",
+              extra: { conversationId, costDelta, inputDelta, outputDelta },
+            });
           }
         });
 
@@ -960,10 +979,11 @@ and 4 KB (comments); follow the html_url for the full text.`;
           await syncPush(userId, workspacePath);
         }
 
-        // Notify client that this leader finished streaming (guarded — the
-        // finally-block fallback emits if this path is skipped by an
-        // exception or abort; guard prevents double-emit. See #2843.)
-        if (!streamEndSent) {
+        // Notify client that this leader finished streaming. The finally block
+        // below emits the same event as a fallback for exception paths; guard
+        // with `streamStartSent && !streamEndSent` so the two sites are
+        // idempotent (grep-stable across all three emission sites — see #2843).
+        if (streamStartSent && !streamEndSent) {
           sendToClient(userId, { type: "stream_end", leaderId: streamLeaderId });
           streamEndSent = true;
         }
@@ -1070,15 +1090,27 @@ and 4 KB (comments); follow the html_url for the full text.`;
     }
   } finally {
     // Fallback stream_end emission. Covers: SDK iterator throws mid-stream,
-    // updateConversationStatus throws before the existing line-930 emit,
-    // controller aborts with tool_use as the last event, or any other path
-    // that exits the try block without the success-branch emission firing.
-    // The guards at the success-branch and resume-error sites are idempotent
-    // with this one (first emission flips streamEndSent; subsequent are
-    // no-ops). See #2843 stuck-bubble fix.
+    // updateConversationStatus throws before the success-branch emission
+    // fires, controller aborts with tool_use as the last event, or any other
+    // path that exits the try block without the success-branch emission
+    // firing. Guards at the success-branch and resume-error sites are
+    // idempotent with this one (first emission flips streamEndSent;
+    // subsequent are no-ops). See #2843 stuck-bubble fix.
+    //
+    // `sendToClient` is wrapped so a WebSocket-write failure here cannot skip
+    // `activeSessions.delete(key)` below. The mirror of the bug this PR is
+    // fixing in the client reducer: emit-before-delete must not throw away
+    // the delete.
     if (streamStartSent && !streamEndSent) {
-      sendToClient(userId, { type: "stream_end", leaderId: outerStreamLeaderId });
-      streamEndSent = true;
+      try {
+        sendToClient(userId, { type: "stream_end", leaderId: outerStreamLeaderId });
+        streamEndSent = true;
+      } catch (emitErr) {
+        log.error(
+          { err: emitErr, userId, conversationId },
+          "Fallback stream_end emission failed — proceeding with session cleanup",
+        );
+      }
     }
     activeSessions.delete(key);
   }
