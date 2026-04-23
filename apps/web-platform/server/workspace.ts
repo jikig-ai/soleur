@@ -133,33 +133,35 @@ export async function provisionWorkspaceWithRepo(
     throw new Error(`Token generation failed: ${(err as Error).message}`);
   }
 
-  // 2. Preflight repo-access check. Distinguishes "repo is gone / app
-  //    has no access" from "git.github.com hiccup" before we touch the
-  //    disk. A degraded GitHub API does NOT block clone — let git surface
-  //    the real failure if any.
+  // 2. Run preflight repo-access check in parallel with workspace cleanup.
+  //    Preflight distinguishes "repo is gone / app has no access" from
+  //    "git.github.com hiccup" — a degraded GitHub API does NOT block the
+  //    clone. Parallelizing with `removeWorkspaceDir` (disk I/O) removes
+  //    the ~150-400ms preflight from the happy-path critical path.
   const parsed = parseGithubRepoUrl(repoUrl);
-  if (parsed) {
-    const access = await checkRepoAccess(installationId, parsed.owner, parsed.repo);
-    if (access === "not_found") {
-      throw new GitOperationError(
-        "REPO_NOT_FOUND",
-        "",
-        "Repository not found or no longer accessible. Reinstall the Soleur GitHub App or choose a different repository.",
-      );
-    }
-    if (access === "access_revoked") {
-      throw new GitOperationError(
-        "REPO_ACCESS_REVOKED",
-        "",
-        "The Soleur GitHub App no longer has access to this repository. Reinstall the app, then try again.",
-      );
-    }
+  const [access] = await Promise.all([
+    parsed
+      ? checkRepoAccess(installationId, parsed.owner, parsed.repo)
+      : Promise.resolve("degraded" as const),
+    Promise.resolve().then(() => removeWorkspaceDir(workspacePath)),
+  ]);
+
+  if (access === "not_found") {
+    throw new GitOperationError(
+      "REPO_NOT_FOUND",
+      "",
+      "Repository not found or no longer accessible. Reinstall the Soleur GitHub App or choose a different repository.",
+    );
+  }
+  if (access === "access_revoked") {
+    throw new GitOperationError(
+      "REPO_ACCESS_REVOKED",
+      "",
+      "The Soleur GitHub App no longer has access to this repository. Reinstall the app, then try again.",
+    );
   }
 
-  // 3. Remove existing workspace if present (fresh clone)
-  removeWorkspaceDir(workspacePath);
-
-  // 4. Clone the repository (shallow for speed). `gitWithInstallationAuth`
+  // 3. Clone the repository (shallow for speed). `gitWithInstallationAuth`
   //    uses GIT_ASKPASS + GIT_TERMINAL_PROMPT=0 so the token never appears
   //    in argv and any auth failure produces deterministic stderr instead
   //    of the silent "could not read Username" fall-through.

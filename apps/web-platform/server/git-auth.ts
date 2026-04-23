@@ -22,9 +22,12 @@
 import { accessSync, constants, unlinkSync, writeFileSync } from "fs";
 import { randomUUID } from "crypto";
 import { join } from "path";
-import { execFileSync } from "child_process";
+import { execFile } from "child_process";
+import { promisify } from "util";
 import { createChildLogger } from "./logger";
 import { generateInstallationToken } from "./github-app";
+
+const execFileAsync = promisify(execFile);
 
 const log = createChildLogger("git-auth");
 
@@ -44,12 +47,9 @@ const TOKEN_FORMAT_RE = /^ghs_[A-Za-z0-9_-]{30,128}$/;
 // configurations (system, global, or per-repo) can never win over
 // `GIT_ASKPASS`. Per `man gitcredentials`, credential helpers are tried
 // BEFORE GIT_ASKPASS — clearing the list here makes the askpass
-// authoritative. The empty-quote form covers git versions that require
-// a value after `=`.
-const HELPER_RESET: readonly string[] = [
-  "-c", "credential.helper=",
-  "-c", 'credential.helper=""',
-];
+// authoritative. Git ≥ 2.9 treats `credential.helper=` (empty) as the
+// clear sentinel; the node:22-slim runtime ships git ≥ 2.39.
+const HELPER_RESET: readonly string[] = ["-c", "credential.helper="];
 
 function isWriteable(dir: string): boolean {
   try {
@@ -110,10 +110,31 @@ export type GitErrorCode =
   | "AUTH_FAILED"
   | "REPO_NOT_FOUND"
   | "REPO_ACCESS_REVOKED"
-  | "INSTALLATION_SUSPENDED"
   | "CLONE_NETWORK_ERROR"
   | "CLONE_TIMEOUT"
   | "CLONE_UNKNOWN";
+
+/**
+ * Runtime allowlist of known error codes. Used by the read path
+ * (`/api/repo/status/route.ts#parseErrorPayload`) to coerce unknown
+ * codes to `undefined` so the UI falls back to generic copy rather
+ * than a blank headline.
+ */
+export const GIT_ERROR_CODES: readonly GitErrorCode[] = [
+  "AUTH_FAILED",
+  "REPO_NOT_FOUND",
+  "REPO_ACCESS_REVOKED",
+  "CLONE_NETWORK_ERROR",
+  "CLONE_TIMEOUT",
+  "CLONE_UNKNOWN",
+] as const;
+
+export function isGitErrorCode(value: unknown): value is GitErrorCode {
+  return (
+    typeof value === "string" &&
+    (GIT_ERROR_CODES as readonly string[]).includes(value)
+  );
+}
 
 /**
  * Thrown by authenticated git operations on failure. Carries both a
@@ -214,13 +235,24 @@ export async function gitWithInstallationAuth(
       GIT_TERMINAL_PROMPT: "0",
       GIT_TERMINAL_PROGRESS: "0",
       GIT_CONFIG_NOSYSTEM: "1",
+      // Defense-in-depth: ignore any attacker-controlled user gitconfig
+      // that could slip a `credential.helper` past HELPER_RESET if an
+      // unexpected `$HOME` sibling ever becomes writeable.
+      GIT_CONFIG_GLOBAL: "/dev/null",
     };
 
-    return execFileSync("git", fullArgs, {
-      stdio: "pipe",
+    // Async exec (non-blocking) — critical for Next.js route handlers
+    // that invoke this helper on the request path (kb/upload pull,
+    // session-sync pull, workspace clone all share this entry point).
+    // A sync exec here would stall the Node event loop for the full
+    // git RTT, queueing all other requests on the instance.
+    const { stdout } = await execFileAsync("git", fullArgs, {
       ...opts,
       env,
+      // Cap stdout to prevent memory spikes on verbose git output.
+      maxBuffer: 10 * 1024 * 1024,
     });
+    return Buffer.isBuffer(stdout) ? stdout : Buffer.from(stdout);
   } finally {
     cleanupAskpassScript(scriptPath);
   }

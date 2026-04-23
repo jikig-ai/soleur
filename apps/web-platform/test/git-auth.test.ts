@@ -6,8 +6,58 @@
 process.env.HOME = process.env.HOME || "/tmp";
 
 import { describe, test, expect, afterEach, beforeEach, vi } from "vitest";
-import { existsSync, statSync, readFileSync, unlinkSync } from "fs";
+import { existsSync, statSync, readFileSync } from "fs";
 import { randomUUID } from "crypto";
+
+type ExecFileCallback = (
+  err: Error | null,
+  result: { stdout: Buffer; stderr: Buffer },
+) => void;
+
+type ExecFileMockArgs = {
+  cmd: string;
+  args: string[];
+  opts: { env?: NodeJS.ProcessEnv; cwd?: string; timeout?: number } | undefined;
+  cb: ExecFileCallback;
+};
+
+/**
+ * Install an execFile mock on node's child_process module. Each call is
+ * recorded in `capturedCalls`; `behavior` is invoked after recording so
+ * individual tests can customize success/failure.
+ */
+function mockExecFile(
+  capturedCalls: ExecFileMockArgs[],
+  behavior: "success" | ((args: ExecFileMockArgs) => void) = "success",
+) {
+  vi.doMock("child_process", async () => {
+    const actual =
+      await vi.importActual<typeof import("child_process")>("child_process");
+    return {
+      ...actual,
+      execFile: vi
+        .fn()
+        .mockImplementation(
+          (
+            cmd: string,
+            args: string[],
+            opts:
+              | { env?: NodeJS.ProcessEnv; cwd?: string; timeout?: number }
+              | undefined,
+            cb: ExecFileCallback,
+          ) => {
+            const call = { cmd, args, opts, cb };
+            capturedCalls.push(call);
+            if (behavior === "success") {
+              cb(null, { stdout: Buffer.from(""), stderr: Buffer.from("") });
+            } else {
+              behavior(call);
+            }
+          },
+        ),
+    };
+  });
+}
 
 beforeEach(() => {
   vi.resetModules();
@@ -16,6 +66,7 @@ beforeEach(() => {
 afterEach(() => {
   vi.restoreAllMocks();
   vi.doUnmock("child_process");
+  vi.doUnmock("../server/github-app");
 });
 
 describe("writeAskpassScript", () => {
@@ -101,38 +152,29 @@ describe("cleanupAskpassScript", () => {
 });
 
 describe("gitWithInstallationAuth", () => {
-  test("sets GIT_ASKPASS, GIT_TERMINAL_PROMPT=0, and GIT_CONFIG_NOSYSTEM=1 in env", async () => {
+  test("sets GIT_ASKPASS, GIT_TERMINAL_PROMPT=0, GIT_CONFIG_NOSYSTEM=1, GIT_CONFIG_GLOBAL=/dev/null in env", async () => {
     const fakeToken = "ghs_faketokenabcdefghijklmnopqrstuvwxyz";
     vi.doMock("../server/github-app", () => ({
       generateInstallationToken: vi.fn().mockResolvedValue(fakeToken),
     }));
 
-    const capturedCalls: Array<{ args: string[]; env?: NodeJS.ProcessEnv }> = [];
-    vi.doMock("child_process", async () => {
-      const actual = await vi.importActual<typeof import("child_process")>(
-        "child_process",
-      );
-      return {
-        ...actual,
-        execFileSync: vi.fn().mockImplementation(
-          (cmd: string, args: string[], opts?: { env?: NodeJS.ProcessEnv }) => {
-            capturedCalls.push({ args, env: opts?.env });
-            return Buffer.from("");
-          },
-        ),
-      };
-    });
+    const capturedCalls: ExecFileMockArgs[] = [];
+    mockExecFile(capturedCalls);
 
     const { gitWithInstallationAuth } = await import("../server/git-auth");
-    await gitWithInstallationAuth(["clone", "https://github.com/foo/bar", "/tmp/x"], 12345);
+    await gitWithInstallationAuth(
+      ["clone", "https://github.com/foo/bar", "/tmp/x"],
+      12345,
+    );
 
     expect(capturedCalls.length).toBe(1);
-    const env = capturedCalls[0].env!;
+    const env = capturedCalls[0].opts?.env!;
     expect(env.GIT_ASKPASS).toBeTruthy();
     expect(env.GIT_ASKPASS).toMatch(/askpass-.*\.sh$/);
     expect(env.GIT_TERMINAL_PROMPT).toBe("0");
     expect(env.GIT_TERMINAL_PROGRESS).toBe("0");
     expect(env.GIT_CONFIG_NOSYSTEM).toBe("1");
+    expect(env.GIT_CONFIG_GLOBAL).toBe("/dev/null");
     expect(env.GIT_INSTALLATION_TOKEN).toBe(fakeToken);
     expect(env.GIT_USERNAME).toBe("x-access-token");
   });
@@ -143,61 +185,38 @@ describe("gitWithInstallationAuth", () => {
       generateInstallationToken: vi.fn().mockResolvedValue(fakeToken),
     }));
 
-    const capturedArgs: string[][] = [];
-    vi.doMock("child_process", async () => {
-      const actual = await vi.importActual<typeof import("child_process")>(
-        "child_process",
-      );
-      return {
-        ...actual,
-        execFileSync: vi.fn().mockImplementation((cmd: string, args: string[]) => {
-          capturedArgs.push(args);
-          return Buffer.from("");
-        }),
-      };
-    });
+    const capturedCalls: ExecFileMockArgs[] = [];
+    mockExecFile(capturedCalls);
 
     const { gitWithInstallationAuth } = await import("../server/git-auth");
     await gitWithInstallationAuth(["push", "origin", "main"], 12345);
 
-    expect(capturedArgs.length).toBe(1);
-    const args = capturedArgs[0];
+    expect(capturedCalls.length).toBe(1);
+    const args = capturedCalls[0].args;
     // The FIRST flags must reset credential.helper BEFORE the user's args
-    expect(args.slice(0, 4)).toEqual([
-      "-c", "credential.helper=",
-      "-c", 'credential.helper=""',
-    ]);
-    // The user's git subcommand follows
+    expect(args.slice(0, 2)).toEqual(["-c", "credential.helper="]);
     expect(args).toContain("push");
     expect(args).toContain("origin");
     expect(args).toContain("main");
   });
 
-  test("token NEVER appears in execFileSync args array", async () => {
+  test("token NEVER appears in execFile args array", async () => {
     const fakeToken = "ghs_faketokenabcdefghijklmnopqrstuvwxyz";
     vi.doMock("../server/github-app", () => ({
       generateInstallationToken: vi.fn().mockResolvedValue(fakeToken),
     }));
 
-    const capturedArgs: string[][] = [];
-    vi.doMock("child_process", async () => {
-      const actual = await vi.importActual<typeof import("child_process")>(
-        "child_process",
-      );
-      return {
-        ...actual,
-        execFileSync: vi.fn().mockImplementation((cmd: string, args: string[]) => {
-          capturedArgs.push(args);
-          return Buffer.from("");
-        }),
-      };
-    });
+    const capturedCalls: ExecFileMockArgs[] = [];
+    mockExecFile(capturedCalls);
 
     const { gitWithInstallationAuth } = await import("../server/git-auth");
-    await gitWithInstallationAuth(["clone", "https://github.com/foo/bar", "/tmp/x"], 12345);
+    await gitWithInstallationAuth(
+      ["clone", "https://github.com/foo/bar", "/tmp/x"],
+      12345,
+    );
 
-    for (const args of capturedArgs) {
-      expect(args.join(" ")).not.toContain(fakeToken);
+    for (const call of capturedCalls) {
+      expect(call.args.join(" ")).not.toContain(fakeToken);
     }
   });
 
@@ -208,21 +227,11 @@ describe("gitWithInstallationAuth", () => {
     }));
 
     let capturedAskpassPath: string | undefined;
-    vi.doMock("child_process", async () => {
-      const actual = await vi.importActual<typeof import("child_process")>(
-        "child_process",
-      );
-      return {
-        ...actual,
-        execFileSync: vi.fn().mockImplementation(
-          (_cmd: string, _args: string[], opts?: { env?: NodeJS.ProcessEnv }) => {
-            capturedAskpassPath = opts?.env?.GIT_ASKPASS;
-            const err: Error & { stderr?: Buffer } = new Error("git exited 128");
-            err.stderr = Buffer.from("fatal: boom");
-            throw err;
-          },
-        ),
-      };
+    mockExecFile([], (call) => {
+      capturedAskpassPath = call.opts?.env?.GIT_ASKPASS;
+      const err: Error & { stderr?: Buffer } = new Error("git exited 128");
+      err.stderr = Buffer.from("fatal: boom");
+      call.cb(err, { stdout: Buffer.from(""), stderr: err.stderr });
     });
 
     const { gitWithInstallationAuth } = await import("../server/git-auth");
@@ -234,56 +243,28 @@ describe("gitWithInstallationAuth", () => {
     expect(existsSync(capturedAskpassPath!)).toBe(false);
   });
 
-  test("permissive token validator accepts ghs_ tokens in the 30-128 char range", async () => {
-    // Short token (30 chars post-prefix is the lower bound). The helper must
-    // not throw on short-but-plausible tokens — GitHub has not documented
-    // the exact format, so a strict check is a latent outage class.
-    const validTokens = [
-      "ghs_" + "a".repeat(30),
-      "ghs_" + "a".repeat(40),
-      "ghs_" + "a".repeat(128),
-      "ghs_" + "ABCDEF_0123456789-abcdefghij", // 30 chars, charset mix
-    ];
+  test.each([
+    "ghs_" + "a".repeat(30),
+    "ghs_" + "a".repeat(40),
+    "ghs_" + "a".repeat(128),
+    "ghs_" + "ABCDEF_0123456789-abcdefghij",
+  ])("permissive token validator accepts %s", async (tok) => {
+    vi.doMock("../server/github-app", () => ({
+      generateInstallationToken: vi.fn().mockResolvedValue(tok),
+    }));
+    mockExecFile([]);
 
-    for (const tok of validTokens) {
-      vi.doMock("../server/github-app", () => ({
-        generateInstallationToken: vi.fn().mockResolvedValue(tok),
-      }));
-      vi.doMock("child_process", async () => {
-        const actual = await vi.importActual<typeof import("child_process")>(
-          "child_process",
-        );
-        return {
-          ...actual,
-          execFileSync: vi.fn().mockReturnValue(Buffer.from("")),
-        };
-      });
-      const { gitWithInstallationAuth } = await import("../server/git-auth");
-      await expect(
-        gitWithInstallationAuth(["status"], 12345),
-      ).resolves.toBeDefined();
-      vi.resetModules();
-      vi.doUnmock("../server/github-app");
-      vi.doUnmock("child_process");
-    }
+    const { gitWithInstallationAuth } = await import("../server/git-auth");
+    await expect(
+      gitWithInstallationAuth(["status"], 12345),
+    ).resolves.toBeDefined();
   });
 
   test("token-format mismatch logs a warning but does NOT throw", async () => {
-    // A malformed token must not convert a GitHub format change into an
-    // outage. The helper logs a warning and proceeds — git will fail fast
-    // downstream if the token is actually bad.
     vi.doMock("../server/github-app", () => ({
       generateInstallationToken: vi.fn().mockResolvedValue("not-a-ghs-token"),
     }));
-    vi.doMock("child_process", async () => {
-      const actual = await vi.importActual<typeof import("child_process")>(
-        "child_process",
-      );
-      return {
-        ...actual,
-        execFileSync: vi.fn().mockReturnValue(Buffer.from("")),
-      };
-    });
+    mockExecFile([]);
 
     const { gitWithInstallationAuth } = await import("../server/git-auth");
     await expect(
@@ -298,27 +279,8 @@ describe("gitWithInstallationAuth", () => {
         .mockResolvedValue("ghs_" + "a".repeat(40)),
     }));
 
-    const capturedOpts: Array<Record<string, unknown>> = [];
-    vi.doMock("child_process", async () => {
-      const actual = await vi.importActual<typeof import("child_process")>(
-        "child_process",
-      );
-      return {
-        ...actual,
-        execFileSync: vi
-          .fn()
-          .mockImplementation(
-            (
-              _cmd: string,
-              _args: string[],
-              opts?: Record<string, unknown>,
-            ) => {
-              capturedOpts.push(opts ?? {});
-              return Buffer.from("");
-            },
-          ),
-      };
-    });
+    const capturedCalls: ExecFileMockArgs[] = [];
+    mockExecFile(capturedCalls);
 
     const { gitWithInstallationAuth } = await import("../server/git-auth");
     await gitWithInstallationAuth(["status"], 12345, {
@@ -326,7 +288,7 @@ describe("gitWithInstallationAuth", () => {
       timeout: 42_000,
     });
 
-    expect(capturedOpts[0]).toMatchObject({
+    expect(capturedCalls[0].opts).toMatchObject({
       cwd: "/tmp/x",
       timeout: 42_000,
     });

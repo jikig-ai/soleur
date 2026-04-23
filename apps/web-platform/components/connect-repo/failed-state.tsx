@@ -5,11 +5,12 @@ import { GoldButton } from "@/components/ui/gold-button";
 import { OutlinedButton } from "@/components/ui/outlined-button";
 import { Card } from "@/components/ui/card";
 import { serif } from "./fonts";
+import type { GitErrorCode } from "@/server/git-auth";
 
 interface FailedStateProps {
   onRetry: () => void;
   errorMessage?: string | null;
-  errorCode?: string | null;
+  errorCode?: GitErrorCode | string | null;
 }
 
 type ErrorCopy = {
@@ -19,23 +20,15 @@ type ErrorCopy = {
   primaryCta: { label: string; action: "retry" | "reinstall" | "choose" };
 };
 
-const ERROR_COPY: Record<string, ErrorCopy> = {
+// Partial because CLONE_UNKNOWN intentionally falls through to the
+// generic copy (same shape as legacy plain-stderr rows).
+const ERROR_COPY: Partial<Record<GitErrorCode, ErrorCopy>> = {
   REPO_ACCESS_REVOKED: {
     headline: "Soleur no longer has access",
     body: "The Soleur GitHub App no longer has access to this repository. Reinstall the app and try again.",
     steps: [
       "Reinstall the Soleur GitHub App on the repository's owner.",
       "Make sure the app has access to this repository.",
-      "Return here and click Try Again.",
-    ],
-    primaryCta: { label: "Reinstall GitHub App", action: "reinstall" },
-  },
-  INSTALLATION_SUSPENDED: {
-    headline: "Soleur no longer has access",
-    body: "Your Soleur GitHub App installation is suspended. Reinstall the app to continue.",
-    steps: [
-      "Reinstall the Soleur GitHub App on the repository's owner.",
-      "Confirm the installation is active.",
       "Return here and click Try Again.",
     ],
     primaryCta: { label: "Reinstall GitHub App", action: "reinstall" },
@@ -79,7 +72,10 @@ const ERROR_COPY: Record<string, ErrorCopy> = {
 };
 
 export function FailedState({ onRetry, errorMessage, errorCode }: FailedStateProps) {
-  const copy = errorCode ? ERROR_COPY[errorCode] : undefined;
+  const copy =
+    errorCode && errorCode in ERROR_COPY
+      ? ERROR_COPY[errorCode as GitErrorCode]
+      : undefined;
 
   const handlePrimary = () => {
     if (!copy || copy.primaryCta.action === "retry") {

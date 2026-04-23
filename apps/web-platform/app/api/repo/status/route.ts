@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { existsSync } from "fs";
 import { join } from "path";
+import { isGitErrorCode } from "@/server/git-auth";
 
 /**
  * GET /api/repo/status
@@ -98,7 +99,10 @@ function parseErrorPayload(raw: string | null | undefined): {
       code?: unknown;
       message?: unknown;
     };
-    const code = typeof parsed.code === "string" ? parsed.code : undefined;
+    // Allowlist-validate the code so an unknown/typo'd value coerces to
+    // undefined and the UI falls back to the generic copy rather than
+    // rendering a blank headline from a missing ERROR_COPY key.
+    const code = isGitErrorCode(parsed.code) ? parsed.code : undefined;
     const message =
       typeof parsed.message === "string" ? parsed.message : raw;
     return { errorMessage: message, errorCode: code };

@@ -5,7 +5,7 @@ import { validateOrigin, rejectCsrf } from "@/lib/auth/validate-origin";
 import { provisionWorkspaceWithRepo } from "@/server/workspace";
 import { scanProjectHealth } from "@/server/project-scanner";
 import { normalizeRepoUrl } from "@/lib/repo-url";
-import { GitOperationError } from "@/server/git-auth";
+import { GitOperationError, sanitizeGitStderr } from "@/server/git-auth";
 import logger from "@/server/logger";
 
 /**
@@ -199,12 +199,13 @@ export async function POST(request: Request) {
       const rawMessage = err instanceof Error ? err.message : String(err);
       const code =
         err instanceof GitOperationError ? err.errorCode : "CLONE_UNKNOWN";
-      // Persist a structured payload so the UI can render code-mapped copy
-      // while preserving the sanitized raw stderr for support use. The
-      // column is TEXT (historical reads fall through to plain-string).
+      // Sanitize unconditionally — GitOperationError messages are already
+      // sanitized, but other error paths (token-generation failure,
+      // UUID-validation, preflight) write raw `err.message` which can
+      // contain absolute paths from the Node error stack.
       const payload = JSON.stringify({
         code,
-        message: rawMessage.slice(0, 2000),
+        message: sanitizeGitStderr(rawMessage).slice(0, 2000),
         timestamp: new Date().toISOString(),
       });
       await serviceClient
