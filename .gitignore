@@ -63,3 +63,7 @@ apps/web-platform/supabase/.temp/
 # Ephemeral capture scripts (sdk-probe)
 apps/web-platform/scripts/capture-*
 artifacts/
+
+# Stage 0 spike throwaway workspace + raw-run artifacts
+.spike-workspace/
+knowledge-base/project/plans/spike-raw-runs.json

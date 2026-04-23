@@ -22,7 +22,7 @@
 
 import { query, type SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import { performance, monitorEventLoopDelay } from "node:perf_hooks";
-import { writeFileSync } from "node:fs";
+import { writeFileSync, mkdirSync } from "node:fs";
 import path from "node:path";
 
 type Mode = "smoke" | "full" | "concurrency" | "injection";
@@ -48,6 +48,12 @@ interface RunResult {
 
 const REPO_ROOT = path.resolve(__dirname, "../../..");
 const PLUGIN_PATH = path.join(REPO_ROOT, "plugins/soleur");
+/**
+ * Empty throwaway workspace — avoids `/soleur:go` Step 1 short-circuit when
+ * cwd contains `.worktrees/` (the command asks whether to continue the current
+ * feature). Created on first run.
+ */
+const SPIKE_WORKSPACE = path.join(REPO_ROOT, ".spike-workspace");
 
 /**
  * Hypothesis 1 detection: did the model actually execute /soleur:go?
@@ -107,10 +113,13 @@ async function runOnce(opts: {
     const q = query({
       prompt: promptField,
       options: {
-        cwd: REPO_ROOT,
+        cwd: SPIKE_WORKSPACE,
         model: "claude-sonnet-4-6",
         permissionMode: "default",
-        settingSources: ["project"],
+        // Mirror production agent-runner.ts:787 — `settingSources: []` keeps
+        // .claude/settings.json permissions.allow from bypassing canUseTool at
+        // chain step 4. Any Bash/Edit/Write we see WILL route through canUseTool.
+        settingSources: [],
         includePartialMessages: true,
         maxTurns: 8,
         maxBudgetUsd: 0.5,
@@ -323,6 +332,7 @@ const PROMPT_POOL = [
 ];
 
 async function main() {
+  mkdirSync(SPIKE_WORKSPACE, { recursive: true });
   const mode = (process.argv.find((a) => a.startsWith("--mode="))?.split("=")[1] ?? "smoke") as Mode;
   console.log(`Spike /soleur:go invocation — mode=${mode}`);
   console.log(`Plugin path: ${PLUGIN_PATH}`);

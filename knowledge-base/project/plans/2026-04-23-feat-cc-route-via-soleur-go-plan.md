@@ -78,7 +78,7 @@ The largest deltas are:
 
 The plan rests on three load-bearing assumptions verified during research; if any prove false in implementation, the corresponding stage gates re-planning:
 
-1. **`prompt: "/soleur:go <message>"` invokes the soleur plugin's `/soleur:go` skill via the SDK with `settingSources: ["project"]`.** Per Anthropic docs, skills load from filesystem only and are NOT invokable by direct API; prompt-mention is the documented path. **Verification:** Stage 0 spike (N≥100 runs, cold/warm mix).
+1. **`prompt: "/soleur:go <message>"` invokes the soleur plugin's `/soleur:go` command via the SDK with `settingSources: []`.** Correction 2026-04-23 after Stage 0 smoke: `/soleur:go` is a **command** (`plugins/soleur/commands/go.md`), not a skill. Production `agent-runner.ts:787` uses `settingSources: []` to prevent `.claude/settings.json` `permissions.allow` entries from bypassing `canUseTool` at chain step 4. Stage 0 smoke confirmed the SDK dispatches slash-commands from the plugin when loaded via `plugins: [{type:"local", path}]`. **Verification:** Stage 0 full spike (N≥100 runs, cold/warm mix, `settingSources: []`, empty cwd).
 2. **Subagents spawned by `/soleur:go` (e.g., brainstorm Phase 0.5 spawning CPO + CTO) emit identifiable events with `parent_tool_use_id`.** Per docs, subagents run in-process and emit `parent_tool_use_id`. **Verification:** Stage 0 spike extends to invoke `/soleur:brainstorm "test feature"`.
 3. **`canUseTool` callback intercepts skill-invoked tools when those tools are NOT pre-approved by `allowedTools`.** Per learning `2026-03-16-agent-sdk-spike-validation.md`. **Verification:** existing `permission-callback.ts` tests cover this path; extend with a test that `AskUserQuestion` triggers `canUseTool` rather than auto-execute.
 
@@ -557,4 +557,40 @@ Any (a-e) failure → STOP; append findings with "Stage 0 BLOCKED" header; prese
 
 ## Stage 0 Findings
 
-_To be appended after the spike runs._
+### Smoke run 2026-04-23 (iteration 1, slash form)
+
+- **Sample:** N=2 live SDK calls, `ci` `ANTHROPIC_API_KEY`, `claude-sonnet-4-6`, `settingSources: ["project"]`, cwd=worktree root
+- **Total cost:** $0.347
+- **Result types:** 2/2 `success`
+
+| Run | Prompt | First-token | Total | Tools observed | Routed? |
+|---|---|---|---|---|---|
+| 0 | "help me fix a bug in my app" | 10.7s | 11.6s | `Bash` | Partial — `pwd` executed (Step 1 of `/soleur:go`), then paused asking whether to continue the current worktree feature. No `Skill` dispatch yet because user response gates Step 2. |
+| 1 | "help me plan a new feature" | 10.3s | 30.9s | `Bash`, `Skill`, `ToolSearch`, `AskUserQuestion` | YES — Skill tool invoked (routes to `soleur:brainstorm` per `commands/go.md` classification table). |
+
+### Hypothesis status after iteration 1
+
+- **H1 (prompt invokes plugin command): CONFIRMED** — both runs executed `commands/go.md` logic (Bash `pwd` for worktree detection is Step 1 of the command). Iteration 2 (system-directive form) was NOT needed.
+- **H2 (`parent_tool_use_id` on subagent events): NOT YET TESTED** — N=2 smoke did not spawn subagents. Requires `/soleur:brainstorm` → Phase 0.5 spawn which starts after Skill dispatch finishes. Full-sample run will cover.
+- **H3 (`canUseTool` intercepts unlisted tools): PARTIAL** — fired once for `AskUserQuestion` (not in project settings `permissions.allow`). **Did NOT fire for `Bash`**, because `settingSources: ["project"]` loaded `.claude/settings.json` whose `permissions.allow` pre-approves Bash at chain step 4. **Production runner uses `settingSources: []`** (`agent-runner.ts:787`) precisely to avoid this bypass — the plan's `settingSources: ["project"]` prescription is wrong. Stage 2 spec updated to match production.
+
+### Exit-criteria partial readout
+
+| Criterion | Threshold | Smoke result | Status |
+|---|---|---|---|
+| (a) H1 confirmed ≤ 2 iterations | iterations used | 1 | PASS |
+| (b) end-to-end first-token P95 ≤ 15s | 10.7s (N=2) | preliminary | PASS (needs N≥100 for statistical meaning) |
+| (b) routing-ack P95 ≤ 6s | not measured | — | DEFERRED (requires server-side WS emission, not applicable to raw SDK spike) |
+| (c) `parent_tool_use_id` present | — | not tested | DEFERRED to full run |
+| (d) concurrency event-loop lag P99 < 100ms | not tested | — | DEFERRED to concurrency run |
+| (e) `canUseTool` intercepts `Bash` under injection | must fire | did not fire (pre-approved by project settings) | **SPIKE BUG** — fix `settingSources: []` before re-running |
+
+### Spike corrections before full N=100
+
+1. Switch spike to `settingSources: []` to mirror production runner (`agent-runner.ts:787`). This is also what lets H3 actually be testable for Bash.
+2. Pass `cwd` = empty throwaway dir (per plan's "known-empty workspace") so `/soleur:go` Step 1 worktree-detection does not short-circuit routing measurement. Routing rate should then approach 100%.
+3. Plan text at Hypothesis 1 needs amendment: "with `settingSources: []`" (not `["project"]`).
+
+### Cost forecast
+
+- Smoke: $0.17/run average. N=100 projected: ~$17. Concurrency (5 parallel): ~$1. Injection (4 probes): ~$0.70. **Total estimated full-suite cost: $19-25** charged to `ci` Anthropic key.
