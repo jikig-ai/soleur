@@ -1,0 +1,4 @@
+{
+  "defaultAction": "SCMP_ACT_ALLOW",
+  "syscalls": []
+}

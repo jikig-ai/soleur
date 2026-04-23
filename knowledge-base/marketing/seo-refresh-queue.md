@@ -124,7 +124,7 @@ Pages that do not exist but should, based on keyword research and competitive po
 | **Vibe Coding vs Agentic Engineering** | vibe coding vs agentic engineering, agentic coding | Informational | P1 | Month 1. Audit P2-1, score 18/20. generated_date: 2026-03-24 |
 | **AI Agents for Solo Founders: The Definitive Guide** | AI agents for solo founders, solopreneur AI tools 2026 | Commercial | P1 | Month 1-2. Audit P2-2, score 18/20. generated_date: 2026-03-24 |
 | **One-Person Billion-Dollar Company** | one person billion dollar company, solo founder AI | Informational | P2 | Month 2. generated_date: 2026-04-21 |
-| **Knowledge Compounding in AI Development** | knowledge compounding AI, compound engineering | Informational | P2 | Month 2-3. |
+| **Knowledge Compounding in AI Development** | knowledge compounding AI, compound engineering | Informational | P2 | Month 2-3. generated_date: 2026-04-23 |
 
 ### 2.3 Infrastructure Pages
 
