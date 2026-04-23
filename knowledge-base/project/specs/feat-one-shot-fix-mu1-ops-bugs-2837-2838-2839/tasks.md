@@ -12,23 +12,36 @@ Derived from `knowledge-base/project/plans/2026-04-23-fix-mu1-ops-bugs-audit-run
 
 ## Phase 1 — TDD: Write failing tests first
 
+- [ ] 1.0 Create fixture directory + files:
+  - [ ] 1.0.1 `mkdir -p apps/web-platform/infra/test-fixtures/audit-bwrap`.
+  - [ ] 1.0.2 `valid-seccomp.json` — minimal ~3-line JSON (e.g., `{"defaultAction":"SCMP_ACT_ALLOW","syscalls":[]}`).
+  - [ ] 1.0.3 `inspect-pass.txt` — 2 lines: `apparmor=soleur-bwrap` + `seccomp=<valid JSON inlined>`, where the inlined JSON is byte-equal after `jq -cS .` to `valid-seccomp.json`.
+  - [ ] 1.0.4 `inspect-drift.txt` — 2 lines: `apparmor=...` + `seccomp=<JSON with added key or changed value>`.
+  - [ ] 1.0.5 `inspect-no-seccomp.txt` — 1 line: `apparmor=soleur-bwrap`.
+  - [ ] 1.0.6 `inspect-literal-path.txt` — 2 lines: `apparmor=soleur-bwrap` + `seccomp=/etc/docker/seccomp-profiles/soleur-bwrap.json`.
+  - [ ] 1.0.7 `inspect-no-apparmor.txt` — 1 line: `seccomp=<valid JSON inlined>`.
 - [ ] 1.1 Create `apps/web-platform/infra/audit-bwrap-uid.test.sh`:
-  - [ ] 1.1.1 Harness: mock `docker` via PATH-prepended stub; per-case fixture env vars `DOCKER_INSPECT_FIXTURE`, `DOCKER_EXEC_FIXTURE`, `DOCKER_EXEC_EXIT`.
-  - [ ] 1.1.2 Harness: support overriding `EXPECTED_SECCOMP_PATH` via env for test isolation.
-  - [ ] 1.1.3 Case: PASS — inlined seccomp JSON matches on-disk fixture after jq-normalization.
-  - [ ] 1.1.4 Case: FAIL — inlined JSON differs (whitespace-only variant proves jq-normalization).
-  - [ ] 1.1.5 Case: FAIL — `HostConfig.SecurityOpt` has no `seccomp=` entry.
-  - [ ] 1.1.6 Case: FAIL — inlined entry is a literal path, not JSON.
-  - [ ] 1.1.7 Case: FAIL — on-host seccomp file missing.
-  - [ ] 1.1.8 Case: FAIL — apparmor missing (regression guard on unchanged path).
-  - [ ] 1.1.9 Run `bash apps/web-platform/infra/audit-bwrap-uid.test.sh` — expect failures (RED).
+  - [ ] 1.1.1 Skeleton matches `orphan-reaper.test.sh` (PASS/FAIL/TOTAL counters, `TEST_PATH_BASE` excluding `~/.local/bin`, per-case `mktemp -d` MOCK_DIR).
+  - [ ] 1.1.2 `create_docker_mock` factory following `ci-deploy.test.sh:107` pattern — `MOCK_DOCKER_MODE` + `DOCKER_INSPECT_FIXTURE` + `DOCKER_EXEC_EXIT`.
+  - [ ] 1.1.3 Each test exports env inside its subshell: `PATH`, `CONTAINER`, `EXPECTED_SECCOMP_PATH` (= path to `valid-seccomp.json`), `DOCKER_INSPECT_FIXTURE` (= path to the per-case `.txt` fixture), `DOCKER_EXEC_EXIT`.
+  - [ ] 1.1.4 Case: PASS — `inspect-pass.txt` + `DOCKER_EXEC_EXIT=0` → audit exit 0, stderr empty, stdout contains `sha256=`.
+  - [ ] 1.1.5 Case: FAIL — `inspect-drift.txt` → audit exit 1, stderr contains `seccomp drift`.
+  - [ ] 1.1.6 Case: FAIL — `inspect-no-seccomp.txt` → audit exit 1, stderr contains `no seccomp= entry`.
+  - [ ] 1.1.7 Case: FAIL — `inspect-literal-path.txt` → audit exit 1, stderr contains `literal path, not inlined JSON`.
+  - [ ] 1.1.8 Case: FAIL — `inspect-pass.txt` + `EXPECTED_SECCOMP_PATH=/nonexistent` → audit exit 1, stderr contains `deploy state incoherent`.
+  - [ ] 1.1.9 Case: FAIL — `inspect-no-apparmor.txt` → audit exit 1, stderr contains `missing apparmor=soleur-bwrap`.
+  - [ ] 1.1.10 Case: FAIL — `DOCKER_EXEC_EXIT=1` (bwrap rejects) → audit exit 1, stderr contains `CLONE_NEWUSER rejected`.
+  - [ ] 1.1.11 Final `echo "=== Results: $PASS passed, $FAIL failed, $TOTAL total ==="` + `[[ "$FAIL" -eq 0 ]]` exit gate.
+  - [ ] 1.1.12 Run `bash apps/web-platform/infra/audit-bwrap-uid.test.sh` — expect failures (RED on uncreated script behavior).
 - [ ] 1.2 Create `apps/web-platform/infra/mu1-runbook-cleanup.test.sh`:
-  - [ ] 1.2.1 Test invokes `mu1-cleanup-guard.mjs` via `node -e 'import("…").then(…)'` with per-case env.
-  - [ ] 1.2.2 Case: `DOPPLER_CONFIG=dev` + correct URL → no throw.
-  - [ ] 1.2.3 Case: `DOPPLER_CONFIG=prd` + correct URL → throw with `DOPPLER_CONFIG`.
-  - [ ] 1.2.4 Case: `DOPPLER_CONFIG=dev` + wrong URL → throw with `project ref`.
-  - [ ] 1.2.5 Case: `DOPPLER_CONFIG=dev` + empty URL → throw with `project ref ''`.
-  - [ ] 1.2.6 Run `bash apps/web-platform/infra/mu1-runbook-cleanup.test.sh` — expect failures (RED, file doesn't exist yet).
+  - [ ] 1.2.1 Skeleton: same PASS/FAIL/TOTAL convention.
+  - [ ] 1.2.2 Each case uses `node --input-type=module -e "import { assertDevCleanupEnv } from '$SCRIPT_DIR/mu1-cleanup-guard.mjs'; try { assertDevCleanupEnv({ DOPPLER_CONFIG: '…', NEXT_PUBLIC_SUPABASE_URL: '…' }); console.log('no-throw'); } catch (e) { console.log('threw: ' + e.message); }"`.
+  - [ ] 1.2.3 Case: `{ DOPPLER_CONFIG: 'dev', NEXT_PUBLIC_SUPABASE_URL: 'https://ifsccnjhymdmidffkzhl.supabase.co' }` → stdout `no-throw`.
+  - [ ] 1.2.4 Case: `{ DOPPLER_CONFIG: 'prd', NEXT_PUBLIC_SUPABASE_URL: '…' }` → stdout matches `DOPPLER_CONFIG is not 'dev'`.
+  - [ ] 1.2.5 Case: `{ DOPPLER_CONFIG: 'dev', NEXT_PUBLIC_SUPABASE_URL: 'https://otherref.supabase.co' }` → stdout matches `project ref 'otherref'`.
+  - [ ] 1.2.6 Case: `{ DOPPLER_CONFIG: 'dev', NEXT_PUBLIC_SUPABASE_URL: '' }` → stdout matches `project ref ''`.
+  - [ ] 1.2.7 Case: `{ DOPPLER_CONFIG: undefined, NEXT_PUBLIC_SUPABASE_URL: 'https://ifsccnjhymdmidffkzhl.supabase.co' }` → stdout matches `<unset>`.
+  - [ ] 1.2.8 Run `bash apps/web-platform/infra/mu1-runbook-cleanup.test.sh` — expect failures (RED, guard file doesn't exist yet).
 
 ## Phase 2 — Implement #2837: audit script check 2 rewrite
 
