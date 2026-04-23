@@ -12,6 +12,8 @@ import {
 } from "@/lib/types";
 import type { DomainLeaderId } from "@/server/domain-leaders";
 import { applyStreamEvent, applyTimeout, type ChatMessage, type StreamEventResult } from "@/lib/chat-state-machine";
+import { isKnownWSMessageType } from "@/lib/ws-known-types";
+import { reportSilentFallback } from "@/lib/client-observability";
 
 type ConnectionStatus = "connecting" | "connected" | "reconnecting" | "disconnected";
 
@@ -114,7 +116,16 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
     }
     case "timeout": {
       const result = applyTimeout(state.messages, state.activeStreams, action.leaderId);
-      return { ...state, messages: result.messages, activeStreams: result.activeStreams, pendingTimerAction: undefined };
+      return {
+        ...state,
+        messages: result.messages,
+        activeStreams: result.activeStreams,
+        // FR5 (#2861): first timeout returns `{type:"reset"}` so the watchdog
+        // restarts against the same leader; second consecutive timeout returns
+        // `{type:"clear"}`. Propagate either (may be undefined for stale
+        // bubbles) so the useEffect can re-arm or clear the timer.
+        pendingTimerAction: result.timerAction,
+      };
     }
     case "clear_streams":
       return { ...state, activeStreams: new Map(), pendingTimerAction: undefined };
@@ -326,6 +337,20 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
       }
 
       const msg = parsed as WSMessage;
+
+      // FR4 (#2861): boundary guard. Drop any event whose type isn't in the
+      // known allowlist, and breadcrumb it so server/client skew is visible.
+      // The reducer's exhaustiveness covers build-time; this covers runtime.
+      const rawType = (parsed as { type?: unknown } | null)?.type;
+      if (!isKnownWSMessageType(rawType)) {
+        reportSilentFallback(null, {
+          feature: "command-center",
+          op: "ws-unknown-event",
+          extra: { rawType: typeof rawType === "string" ? rawType : String(rawType) },
+        });
+        return;
+      }
+
       switch (msg.type) {
         case "auth_ok": {
           setStatus("connected");
@@ -335,6 +360,7 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
 
         case "stream_start":
         case "tool_use":
+        case "tool_progress":
         case "stream":
         case "stream_end":
         case "review_gate": {

@@ -360,6 +360,7 @@ export function ChatSurface({
                       messageState={msg.state}
                       toolLabel={msg.toolLabel}
                       toolsUsed={msg.toolsUsed}
+                      retrying={msg.retrying}
                       getDisplayName={getDisplayName}
                       getIconPath={getIconPath}
                       attachments={msg.attachments}
