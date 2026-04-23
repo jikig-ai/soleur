@@ -10,9 +10,11 @@ import { KNOWN_WS_MESSAGE_TYPES, isKnownWSMessageType } from "../lib/ws-known-ty
 // ---------------------------------------------------------------------------
 
 describe("KNOWN_WS_MESSAGE_TYPES (FR4 #2861)", () => {
-  test("includes every current WSMessage type", () => {
-    // These types MUST stay in sync with types.ts WSMessage. If a new one is
-    // added without updating KNOWN_WS_MESSAGE_TYPES, this test catches it.
+  test("exact set of expected WSMessage + ClosePreamble types", () => {
+    // These types MUST stay in sync with types.ts WSMessage + ClosePreamble.
+    // Exact-match (not superset) assertion so a silently-added/removed entry
+    // fails the test. The compile-time `_Exhaustive` in ws-known-types.ts is
+    // the primary defense; this test is the runtime backstop.
     const expected = [
       "auth",
       "auth_ok",
@@ -36,10 +38,11 @@ describe("KNOWN_WS_MESSAGE_TYPES (FR4 #2861)", () => {
       "error",
       "concurrency_cap_hit",
       "tier_changed",
-    ];
-    for (const t of expected) {
-      expect(KNOWN_WS_MESSAGE_TYPES.has(t)).toBe(true);
-    }
+    ].sort();
+    const actual = Array.from(
+      KNOWN_WS_MESSAGE_TYPES as ReadonlySet<string>,
+    ).sort();
+    expect(actual).toEqual(expected);
   });
 
   test("isKnownWSMessageType returns true for known types", () => {

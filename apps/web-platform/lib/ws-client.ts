@@ -13,7 +13,7 @@ import {
 import type { DomainLeaderId } from "@/server/domain-leaders";
 import { applyStreamEvent, applyTimeout, type ChatMessage, type StreamEventResult } from "@/lib/chat-state-machine";
 import { isKnownWSMessageType } from "@/lib/ws-known-types";
-import { reportSilentFallback } from "@/server/observability";
+import { reportSilentFallback } from "@/lib/client-observability";
 
 type ConnectionStatus = "connecting" | "connected" | "reconnecting" | "disconnected";
 

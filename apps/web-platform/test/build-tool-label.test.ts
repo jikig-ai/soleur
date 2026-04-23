@@ -242,11 +242,13 @@ describe("sandbox path stripping (FR2 #2861)", () => {
     expect(twiceLabel).toBe(onceLabel);
   });
 
-  test("unmatched /workspaces/ shape fires reportSilentFallback", () => {
-    // Host-like prefix that does NOT match workspacePath or canonical patterns.
+  test("sub-3-char workspace id bypasses canonical pattern and fires reportSilentFallback", () => {
+    // The canonical pattern requires {3,} chars in the workspaceId slot.
+    // A 2-char id slips past — the fallthrough is the instrumentation that
+    // lets us tighten the table from prod data. Security review (#2861).
     buildToolLabel(
       "Bash",
-      { command: "cat /workspaces/not-a-uuid-shape/file.md" },
+      { command: "cat /workspaces/ab/file.md" },
       workspacePath,
     );
     expect(reportSilentFallbackMock).toHaveBeenCalled();
@@ -257,10 +259,13 @@ describe("sandbox path stripping (FR2 #2861)", () => {
     });
   });
 
-  test("unmatched /tmp/claude- shape fires reportSilentFallback", () => {
+  test("/tmp/claude- with non-numeric uid bypasses canonical pattern and fires reportSilentFallback", () => {
+    // Canonical requires `/tmp/claude-\d+/-workspaces-...`. A non-numeric
+    // uid (`/tmp/claude-abc/...`) or a `-workspaces-` segment missing falls
+    // through.
     buildToolLabel(
       "Bash",
-      { command: "cat /tmp/claude-weird-shape/file.md" },
+      { command: "cat /tmp/claude-abc/file.md" },
       workspacePath,
     );
     expect(reportSilentFallbackMock).toHaveBeenCalled();

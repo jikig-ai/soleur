@@ -11,11 +11,19 @@
  * zod schema at the `onmessage` site. The caller wraps the guard with
  * `reportSilentFallback` so we get a Sentry breadcrumb on skew.
  *
- * Keep in sync with `WSMessage` in `lib/types.ts` plus the close-preamble
- * types (`concurrency_cap_hit`, `tier_changed`) that are sent in-band.
- * See FR4 (#2861).
+ * The `_Exhaustive` type below fails `tsc --noEmit` if `WSMessage` or
+ * `ClosePreamble` gains a new `type` that's missing from the set (or vice
+ * versa), forcing the allowlist to evolve with the union — closes the manual
+ * "keep in sync" drift risk flagged in the #2861 architecture review.
  */
-export const KNOWN_WS_MESSAGE_TYPES: ReadonlySet<string> = new Set([
+
+import type { WSMessage, ClosePreamble } from "@/lib/types";
+
+type WSMessageType = WSMessage["type"];
+type ClosePreambleType = ClosePreamble["type"];
+type AllowedWSMessageType = WSMessageType | ClosePreambleType;
+
+export const KNOWN_WS_MESSAGE_TYPES = new Set<AllowedWSMessageType>([
   // Auth + session lifecycle
   "auth",
   "auth_ok",
@@ -42,8 +50,29 @@ export const KNOWN_WS_MESSAGE_TYPES: ReadonlySet<string> = new Set([
   // Close-preamble payloads (sent before ws.close(4010/4011))
   "concurrency_cap_hit",
   "tier_changed",
-]);
+]) satisfies ReadonlySet<AllowedWSMessageType>;
+
+/**
+ * Compile-time exhaustiveness marker. If a new variant is added to
+ * `WSMessage["type"]` or `ClosePreamble["type"]` without also appearing in
+ * the `KNOWN_WS_MESSAGE_TYPES` set literal above, the literal widens past
+ * the declared `Set<AllowedWSMessageType>` type and the `satisfies` clause
+ * flags it. This `_Exhaustive` const additionally catches the opposite
+ * direction (member removed from the union but still in the set).
+ */
+type SetToUnion<T> = T extends Set<infer U> ? U : never;
+// Both members must reduce to `never`. If a variant is added to the union
+// without being added to the set (or vice-versa), one of these fields becomes
+// a non-never string-literal type and the `_ExhaustivenessProof` assignment
+// below fails with a TS2322 pointing at this file.
+type _Exhaustive = {
+  _forward: Exclude<AllowedWSMessageType, SetToUnion<typeof KNOWN_WS_MESSAGE_TYPES>>;
+  _backward: Exclude<SetToUnion<typeof KNOWN_WS_MESSAGE_TYPES>, AllowedWSMessageType>;
+};
+const _ExhaustivenessProof: { _forward: never; _backward: never } =
+  null as unknown as _Exhaustive;
+void _ExhaustivenessProof;
 
 export function isKnownWSMessageType(t: unknown): boolean {
-  return typeof t === "string" && KNOWN_WS_MESSAGE_TYPES.has(t);
+  return typeof t === "string" && (KNOWN_WS_MESSAGE_TYPES as ReadonlySet<string>).has(t);
 }

@@ -9,7 +9,7 @@ import { LeaderAvatar } from "@/components/leader-avatar";
 import { AttachmentDisplay } from "@/components/chat/attachment-display";
 import type { AttachmentRef, MessageState } from "@/lib/types";
 import { formatAssistantText } from "@/lib/format-assistant-text";
-import { reportSilentFallback } from "@/server/observability";
+import { reportSilentFallback } from "@/lib/client-observability";
 
 export function ThinkingDots() {
   return (

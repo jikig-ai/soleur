@@ -1,12 +1,12 @@
 import { describe, test, expect, vi } from "vitest";
 import { render } from "@testing-library/react";
 
-// Mock observability so formatAssistantText's fallthrough path (invoked on
-// every render) does not pull pino/Sentry into the component bundle under test.
-vi.mock("@/server/observability", () => ({
+// Mock client observability so formatAssistantText's fallthrough path (invoked
+// on every render) does not attempt to initialize Sentry in the component
+// bundle under test.
+vi.mock("@/lib/client-observability", () => ({
   reportSilentFallback: vi.fn(),
   warnSilentFallback: vi.fn(),
-  APP_URL_FALLBACK: "https://app.soleur.ai",
 }));
 
 import { MessageBubble } from "../components/chat/message-bubble";

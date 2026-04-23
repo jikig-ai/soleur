@@ -132,13 +132,43 @@ describe("agent-runner: tool_progress forwarding (FR4 #2861)", () => {
       ([, msg]) => msg?.type === "tool_progress",
     );
     expect(calls.length).toBe(1);
+    // Raw SDK tool_name is routed through buildToolLabel so internal tool
+    // names don't leak — `Bash` → `Running command...` (FALLBACK_LABELS.Bash).
+    // Security review (#2861) mandated parity with the `tool_use` channel.
     expect(calls[0][1]).toMatchObject({
       type: "tool_progress",
       leaderId: "cpo",
       toolUseId: "tu-1",
-      toolName: "Bash",
+      toolName: "Running command...",
       elapsedSeconds: 5,
     });
+  });
+
+  test("missing tool_use_id is dropped (defense against SDK shape drift)", async () => {
+    mockQuery.mockReturnValue({
+      async *[Symbol.asyncIterator]() {
+        yield {
+          type: "tool_progress",
+          // tool_use_id intentionally omitted
+          tool_name: "Bash",
+          parent_tool_use_id: null,
+          elapsed_time_seconds: 5,
+          uuid: "x",
+          session_id: "sess-1",
+        };
+        yield { type: "result", session_id: "sess-1" };
+      },
+      next: vi.fn(),
+      return: vi.fn(),
+      throw: vi.fn(),
+    } as any);
+
+    await startAgentSession("user-1", "conv-drift", "cpo");
+
+    const calls = mockSendToClient.mock.calls.filter(
+      ([, msg]) => msg?.type === "tool_progress",
+    );
+    expect(calls.length).toBe(0);
   });
 
   test("debounces ≤1 emission per 5s per tool_use_id", async () => {

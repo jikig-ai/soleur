@@ -15,10 +15,13 @@
  */
 
 export const SANDBOX_PATH_PATTERNS: RegExp[] = [
-  // Sandbox-remapped form: /tmp/claude-<uid>/-workspaces-<uuid>[-<suffix>]/...
-  /\/tmp\/claude-\d+\/-workspaces-[0-9a-fA-F]{6,}(?:-[0-9a-fA-F]+)*\//g,
-  // Host form without explicit workspacePath context: /workspaces/<uuid>/
-  /\/workspaces\/[0-9a-fA-F]{6,}(?:-[0-9a-fA-F]+)*\//g,
+  // Sandbox-remapped form: /tmp/claude-<uid>/-workspaces-<workspaceId>/...
+  // workspaceId broadened to `[A-Za-z0-9_-]{3,}` (from `[0-9a-fA-F]{6,}`) so a
+  // provisioning change to a non-hex alphabet or a shorter ID doesn't silently
+  // re-enable leaks. Security review (#2861).
+  /\/tmp\/claude-\d+\/-workspaces-[A-Za-z0-9_-]{3,}\//g,
+  // Host form without explicit workspacePath context: /workspaces/<workspaceId>/
+  /\/workspaces\/[A-Za-z0-9_-]{3,}\//g,
 ];
 
 /** Detects any path-shape that LOOKS like a sandbox or host workspace path

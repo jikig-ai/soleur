@@ -332,6 +332,24 @@ describe("chat-state-machine applyTimeout retry lifecycle (FR5 #2861)", () => {
     expect(result.messages[0].state).toBe("thinking");
     expect(result.messages[0].retrying).toBe(true);
   });
+
+  test("narrowness invariant: timeout-gate does NOT fire on already-error bubbles", () => {
+    // If a server-emitted `error` event has already transitioned the bubble
+    // to `"error"` (handled by the ws-client `error` case that clears
+    // activeStreams), a late-arriving applyTimeout for that leader must be a
+    // stale-timer no-op — never revive a terminal bubble into retrying.
+    const errorBubble: ChatMessage = {
+      ...thinkingMessage("cpo"),
+      state: "error",
+    };
+    // activeStreams already cleared by the `error` branch in ws-client.
+    const streams = new Map<string, number>();
+
+    const result = applyTimeout([errorBubble], streams, "cpo");
+
+    expect(result.messages[0].state).toBe("error");
+    expect(result.messages[0].retrying).toBeUndefined();
+  });
 });
 
 describe("chat-state-machine STUCK_TIMEOUT_MS constant", () => {

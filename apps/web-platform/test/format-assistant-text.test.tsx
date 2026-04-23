@@ -134,4 +134,45 @@ describe("formatAssistantText (FR3 #2861)", () => {
     const raw = "Nothing path-shaped here, just prose. Also #2861.";
     expect(formatAssistantText(raw)).toBe(raw);
   });
+
+  // Security-review regressions (#2861 review findings).
+
+  test("prose containing literal 'PRESERVED_N' token is NOT rewritten (sentinel collision guard)", () => {
+    // Before the per-call random sentinel fix, the placeholder was ` PRESERVED_N `.
+    // If assistant prose happened to contain ` PRESERVED_0 `, the restore regex
+    // would splice in preserved content or delete the literal. The fix uses a
+    // per-call random nonce — literal PRESERVED_N in prose must round-trip.
+    const raw = "See PRESERVED_0 in the earlier example. Also PRESERVED_42 below.";
+    const out = formatAssistantText(raw);
+    expect(out).toContain("PRESERVED_0");
+    expect(out).toContain("PRESERVED_42");
+    // Sentinel prefix must NOT leak into output
+    expect(out).not.toContain("SOLEUR_PRES_");
+  });
+
+  test("prose with both literal PRESERVED token AND real sandbox path scrubs the path and preserves the literal", () => {
+    const raw = `Read ${WORKSPACE_PREFIX}/vision.md, it explains PRESERVED_99 (legacy).`;
+    const out = formatAssistantText(raw);
+    expect(out).not.toContain(WORKSPACE_PREFIX);
+    expect(out).toContain("PRESERVED_99");
+    expect(out).toContain("vision.md");
+  });
+
+  test("idempotent on mixed fenced + prose with paths in both", () => {
+    const raw = [
+      `Open ${WORKSPACE_PREFIX}/vision.md first.`,
+      "```",
+      `cat ${SANDBOX_PREFIX}/vision.md`,
+      "```",
+      `Then ${SANDBOX_PREFIX}/other.md.`,
+    ].join("\n");
+    const once = formatAssistantText(raw);
+    const twice = formatAssistantText(once);
+    expect(twice).toBe(once);
+    // Fence content survived
+    expect(once).toContain(`cat ${SANDBOX_PREFIX}/vision.md`);
+    // Prose paths stripped
+    expect(once.split("```")[0]).not.toContain(WORKSPACE_PREFIX);
+    expect(once.split("```")[2]).not.toContain(SANDBOX_PREFIX);
+  });
 });

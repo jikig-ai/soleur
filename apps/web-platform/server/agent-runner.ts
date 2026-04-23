@@ -914,13 +914,40 @@ issues/PRs, 4 KB comments); follow the html_url for the full text.`;
       // `tool_use_id`, `tool_name`, and `elapsed_time_seconds`. Forward at
       // most 1 per 5s per tool_use_id so the client watchdog gets reset
       // during long-running tool execution without spamming the socket.
+      //
+      // Runtime-guard the SDK payload shape (defense against a future SDK
+      // reshape) before forwarding: a missing `tool_use_id` would poison the
+      // debounce map with `undefined` as the key, collapsing every subsequent
+      // heartbeat into the same slot and starving real tools' watchdog resets.
+      // Raw `tool_name` is routed through the same safe-default mapping as
+      // `tool_use` events — see #2861 security review.
       if (message.type === "tool_progress") {
-        const progress = message as {
+        const progress = message as Partial<{
           tool_use_id: string;
           tool_name: string;
           elapsed_time_seconds: number;
-        };
+        }>;
         const toolUseId = progress.tool_use_id;
+        const toolName = progress.tool_name;
+        const elapsedSeconds = progress.elapsed_time_seconds;
+        if (
+          typeof toolUseId !== "string" ||
+          !toolUseId ||
+          typeof toolName !== "string" ||
+          typeof elapsedSeconds !== "number"
+        ) {
+          reportSilentFallback(null, {
+            feature: "command-center",
+            op: "tool-progress-shape",
+            message: "SDKToolProgressMessage missing required fields",
+            extra: {
+              hasToolUseId: typeof toolUseId === "string" && !!toolUseId,
+              hasToolName: typeof toolName === "string",
+              hasElapsed: typeof elapsedSeconds === "number",
+            },
+          });
+          continue;
+        }
         const now = Date.now();
         const last = toolProgressLastSentAt.get(toolUseId);
         // First heartbeat for this tool_use_id always forwards; subsequent
@@ -931,8 +958,13 @@ issues/PRs, 4 KB comments); follow the html_url for the full text.`;
             type: "tool_progress",
             leaderId: streamLeaderId,
             toolUseId,
-            toolName: progress.tool_name,
-            elapsedSeconds: progress.elapsed_time_seconds,
+            // Route through the same label mapping as `tool_use` events so
+            // raw SDK tool names (internal implementation detail) never leak
+            // to the client over this channel either. `tool_input` is not
+            // part of SDKToolProgressMessage, so `buildToolLabel` falls to
+            // the FALLBACK_LABELS map — fine for a heartbeat label.
+            toolName: buildToolLabel(toolName, undefined, workspacePath),
+            elapsedSeconds,
           });
         }
         continue;
