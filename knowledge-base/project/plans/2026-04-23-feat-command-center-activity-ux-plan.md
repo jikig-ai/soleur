@@ -186,16 +186,16 @@ Out of scope (from brainstorm Non-Goals): agent-emitted progress notes (approach
 
 ### Pre-merge (PR)
 
-- [ ] No raw sandbox or host workspace path appears in any Command Center activity bubble label under the tested tool matrix (Read/Edit/Write/Bash/Grep/Glob + 11 Bash verb cases + 5 edge cases).
-- [ ] No raw sandbox or host workspace path appears in rendered assistant-text output (8 representative shapes including fenced code, indented code, nested fences, CRLF, URLs, `#NNNN`). `conversation_messages` row content = verbatim model output.
+- [x] No raw sandbox or host workspace path appears in any Command Center activity bubble label under the tested tool matrix (Read/Edit/Write/Bash/Grep/Glob + 11 Bash verb cases + 5 edge cases).
+- [x] No raw sandbox or host workspace path appears in rendered assistant-text output (8 representative shapes including fenced code, indented code, nested fences, CRLF, URLs, `#NNNN`). `conversation_messages` row content = verbatim model output.
 - [ ] Long-running Grep or Bash call exceeding 45s does NOT flip the bubble to `error` state while heartbeats flow (manual verify + screenshot).
-- [ ] First stuck-timeout transitions to `retrying` (visible "Retrying…" + `aria-live="polite"` + 45s watchdog restart). A matching `tool_progress` during `retrying` reverts to `"tool_use"`. A second consecutive stuck-timeout transitions to `error` with last activity label + File-issue link.
-- [ ] Server-emitted `error` events (not stuck-timeout) transition to `"error"` directly WITHOUT passing through `retrying` (narrowness invariant).
-- [ ] Unknown WS event types are dropped via `KNOWN_TYPES.has()` guard with `reportSilentFallback({ feature: "command-center", op: "ws-unknown-event" })`. No exception, no state mutation.
-- [ ] `reportSilentFallback` fires on each fallback path: unknown Bash verb (`op: "tool-label-fallback"`), unmatched sandbox prefix (`op: "tool-label-scrub"`), unscrubbed assistant-text leak (`op: "asstext-scrub-fallthrough"`), unknown WS event (`op: "ws-unknown-event"`). All tagged `feature: "command-center"`.
-- [ ] `SDKToolProgressMessage` forwarding is debounced to ≤ 1 emission / 5s per `tool_use_id` (verified in T2.3 test).
-- [ ] All existing tests continue to pass (baseline ~2322 passing + ~11 skipped).
-- [ ] `tsc --noEmit` clean.
+- [x] First stuck-timeout transitions to `retrying` (visible "Retrying…" + `aria-live="polite"` + 45s watchdog restart). A matching `tool_progress` during `retrying` reverts to `"tool_use"`. A second consecutive stuck-timeout transitions to `error` with last activity label + File-issue link.
+- [x] Server-emitted `error` events (not stuck-timeout) transition to `"error"` directly WITHOUT passing through `retrying` (narrowness invariant).
+- [x] Unknown WS event types are dropped via `KNOWN_TYPES.has()` guard with `reportSilentFallback({ feature: "command-center", op: "ws-unknown-event" })`. No exception, no state mutation.
+- [x] `reportSilentFallback` fires on each fallback path: unknown Bash verb (`op: "tool-label-fallback"`), unmatched sandbox prefix (`op: "tool-label-scrub"`), unscrubbed assistant-text leak (`op: "asstext-scrub-fallthrough"`), unknown WS event (`op: "ws-unknown-event"`). All tagged `feature: "command-center"`.
+- [x] `SDKToolProgressMessage` forwarding is debounced to ≤ 1 emission / 5s per `tool_use_id` (verified in T2.3 test).
+- [x] All existing tests continue to pass (baseline ~2322 passing + ~11 skipped). Post-plan: 2404 passing + 11 skipped.
+- [x] `tsc --noEmit` clean.
 - [ ] `/soleur:review` multi-agent review passes.
 
 ### Post-merge (operator)

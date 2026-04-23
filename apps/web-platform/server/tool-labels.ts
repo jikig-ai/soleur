@@ -9,6 +9,10 @@
  */
 
 import { reportSilentFallback } from "./observability";
+import {
+  SANDBOX_PATH_PATTERNS as SHARED_SANDBOX_PATH_PATTERNS,
+  SUSPECTED_LEAK_SHAPE as SHARED_SUSPECTED_LEAK_SHAPE,
+} from "@/lib/sandbox-path-patterns";
 
 /** Fallback labels when input is unavailable or unrecognized */
 const FALLBACK_LABELS: Record<string, string> = {
@@ -24,30 +28,15 @@ const FALLBACK_LABELS: Record<string, string> = {
 const MAX_BASH_CMD_LENGTH = 60;
 
 /**
- * Canonical sandbox-path patterns the SDK can emit inside tool inputs when
- * bubblewrap remaps `/workspaces/<uuid>` into a sandbox-local path. These live
- * next to `stripWorkspacePath` so both server label derivation AND the client
- * render-time scrub (see `lib/format-assistant-text.ts`) share the same
+ * Canonical sandbox-path patterns are defined in `@/lib/sandbox-path-patterns`
+ * so the client render scrub (`lib/format-assistant-text.ts`) shares the same
  * regex table — FR2 success depends on the two ends of the pipeline scrubbing
- * the same shapes.
- *
- * Patterns derived from observed sandbox output; the `reportSilentFallback`
- * on unmatched `/workspaces/` or `/tmp/claude-` shapes is the instrumentation
- * that lets us tighten the table from prod data.
+ * the same shapes. Re-exported here for call sites that already import from
+ * `server/tool-labels`.
  */
-export const SANDBOX_PATH_PATTERNS: RegExp[] = [
-  // Sandbox-remapped form: /tmp/claude-<uid>/-workspaces-<uuid>[-<suffix>]/...
-  // Matches the literal "/tmp/claude-" + numeric uid, then the dash-prefixed
-  // workspace segment (bwrap rewrites `/` to `-` in the mount name).
-  /\/tmp\/claude-\d+\/-workspaces-[0-9a-fA-F]{6,}(?:-[0-9a-fA-F]+)*\//g,
-  // Host form without explicit workspacePath context: /workspaces/<uuid>/
-  /\/workspaces\/[0-9a-fA-F]{6,}(?:-[0-9a-fA-F]+)*\//g,
-];
+export const SANDBOX_PATH_PATTERNS: RegExp[] = SHARED_SANDBOX_PATH_PATTERNS;
 
-/** Detects any path-shape that LOOKS like a sandbox or host workspace path
- *  but did not match a canonical pattern. This is the FR2 success metric —
- *  every `reportSilentFallback` hit tightens the table. */
-const SUSPECTED_LEAK_SHAPE = /(\/workspaces\/|\/tmp\/claude-)[A-Za-z0-9._/-]+/;
+const SUSPECTED_LEAK_SHAPE = SHARED_SUSPECTED_LEAK_SHAPE;
 
 /**
  * Strip the workspace path prefix from a string, returning a relative path.

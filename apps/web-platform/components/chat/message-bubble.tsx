@@ -8,6 +8,8 @@ import { LEADER_COLORS } from "@/components/chat/leader-colors";
 import { LeaderAvatar } from "@/components/leader-avatar";
 import { AttachmentDisplay } from "@/components/chat/attachment-display";
 import type { AttachmentRef, MessageState } from "@/lib/types";
+import { formatAssistantText } from "@/lib/format-assistant-text";
+import { reportSilentFallback } from "@/server/observability";
 
 export function ThinkingDots() {
   return (
@@ -28,6 +30,31 @@ export function ToolStatusChip({ label }: { label: string }) {
   );
 }
 
+/**
+ * FR5 (#2861): rendered on a `tool_use` bubble that has `retrying: true`.
+ * `aria-live="polite"` announces the transition to screen-reader users.
+ * The last-known activity label is shown below so the user sees *what* is
+ * being retried, not just a generic spinner.
+ */
+export function RetryingChip({ label }: { label: string | undefined }) {
+  return (
+    <div
+      className="flex flex-col gap-1 py-0.5"
+      role="status"
+      aria-live="polite"
+      data-testid="retrying-chip"
+    >
+      <div className="flex items-center gap-2">
+        <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-amber-400" />
+        <span className="text-sm font-medium text-amber-400">Retrying…</span>
+      </div>
+      {label ? (
+        <span className="text-xs text-neutral-500">{label}</span>
+      ) : null}
+    </div>
+  );
+}
+
 // Wrapped in React.memo so token streaming (10-50 Hz) doesn't re-render every
 // bubble in a long thread. `getDisplayName`/`getIconPath` are already
 // `useCallback`-stable in `use-team-names.tsx`; other props are primitives or
@@ -40,6 +67,7 @@ export const MessageBubble = memo(function MessageBubble({
   messageState,
   toolLabel,
   toolsUsed,
+  retrying = false,
   getDisplayName,
   getIconPath,
   attachments,
@@ -52,6 +80,8 @@ export const MessageBubble = memo(function MessageBubble({
   messageState?: MessageState;
   toolLabel?: string;
   toolsUsed?: string[];
+  /** FR5 (#2861): when true, show the "Retrying…" chip on tool_use bubbles. */
+  retrying?: boolean;
   getDisplayName?: (id: DomainLeaderId) => string;
   getIconPath?: (id: DomainLeaderId) => string | null;
   attachments?: AttachmentRef[];
@@ -117,7 +147,7 @@ export const MessageBubble = memo(function MessageBubble({
             </div>
           )}
 
-          {renderBubbleContent({ isUser, messageState, content, toolLabel, toolsUsed, isDone, variant })}
+          {renderBubbleContent({ isUser, messageState, content, toolLabel, toolsUsed, retrying, isDone, variant })}
 
           {attachments && attachments.length > 0 && (
             <AttachmentDisplay attachments={attachments} />
@@ -139,6 +169,7 @@ function renderBubbleContent({
   content,
   toolLabel,
   toolsUsed,
+  retrying,
   isDone,
   variant,
 }: {
@@ -147,6 +178,7 @@ function renderBubbleContent({
   content: string;
   toolLabel: string | undefined;
   toolsUsed: string[] | undefined;
+  retrying: boolean;
   isDone: boolean;
   variant: "full" | "sidebar";
 }): React.ReactNode {
@@ -158,26 +190,55 @@ function renderBubbleContent({
       </div>
     );
   }
+
+  // FR3 (#2861): render-time scrub for assistant-role bubbles only. Stored
+  // content stays verbatim. `reportFallthrough` mirrors to Sentry when a
+  // `/workspaces/` or `/tmp/claude-` shape survives the canonical pattern
+  // table — this is the success metric for FR2+FR3.
+  const scrubbedContent = formatAssistantText(content, {
+    reportFallthrough: (shape) =>
+      reportSilentFallback(null, {
+        feature: "command-center",
+        op: "asstext-scrub-fallthrough",
+        extra: { shape },
+      }),
+  });
+
   switch (messageState) {
     case "thinking":
       return <ThinkingDots />;
     case "tool_use":
+      if (retrying) return <RetryingChip label={toolLabel} />;
       return toolLabel ? <ToolStatusChip label={toolLabel} /> : <ThinkingDots />;
     case "streaming":
       return (
         <p className="min-w-0 whitespace-pre-wrap [overflow-wrap:anywhere]">
-          {content}
+          {scrubbedContent}
           <span className="animate-pulse text-amber-500">&#x258C;</span>
         </p>
       );
     case "error":
+      // FR5 (#2861): show the last known activity label + File-issue link.
       return (
-        <div className="flex items-center gap-2 text-red-400">
-          <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
-            <circle cx="7" cy="7" r="6" stroke="currentColor" strokeWidth="1.2" />
-            <path d="M7 4v3.5M7 9.5v.01" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
-          </svg>
-          <span className="text-sm">Agent stopped responding</span>
+        <div className="flex flex-col gap-2 text-red-400">
+          <div className="flex items-center gap-2">
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
+              <circle cx="7" cy="7" r="6" stroke="currentColor" strokeWidth="1.2" />
+              <path d="M7 4v3.5M7 9.5v.01" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+            </svg>
+            <span className="text-sm">
+              Agent stopped responding after: {toolLabel ?? "Working"}
+            </span>
+          </div>
+          <a
+            href="https://github.com/jikigai/soleur/issues/new?labels=type%2Fbug&template=bug_report.md"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-xs text-neutral-500 underline hover:text-neutral-300"
+            data-testid="file-issue-link"
+          >
+            File an issue
+          </a>
         </div>
       );
     case "done":
@@ -193,9 +254,9 @@ function renderBubbleContent({
           </div>
         );
       }
-      return <MarkdownRenderer content={content} wrapCode={wrapCode} />;
+      return <MarkdownRenderer content={scrubbedContent} wrapCode={wrapCode} />;
     default:
       void isDone;
-      return <MarkdownRenderer content={content} wrapCode={wrapCode} />;
+      return <MarkdownRenderer content={scrubbedContent} wrapCode={wrapCode} />;
   }
 }
