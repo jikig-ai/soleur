@@ -57,6 +57,60 @@ def _run(content: str) -> subprocess.CompletedProcess:
         )
 
 
+def _run_with_retired(agents_content: str, retired_content: str | None) -> subprocess.CompletedProcess:
+    """Invoke the linter with an optional --retired-file flag.
+
+    When retired_content is None, the flag is omitted (backward-compat path).
+    When provided, the allowlist is written to a sibling file inside the same
+    tempdir and passed via --retired-file.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        agents = Path(tmp) / "AGENTS.md"
+        agents.write_text(agents_content)
+        argv = [sys.executable, str(SCRIPT)]
+        if retired_content is not None:
+            retired = Path(tmp) / "retired-rule-ids.txt"
+            retired.write_text(retired_content)
+            argv.extend(["--retired-file", str(retired)])
+        argv.append(str(agents))
+        return subprocess.run(argv, capture_output=True, text=True)
+
+
+def _run_git_seeded(agents_head: str, agents_working: str, retired_content: str | None) -> subprocess.CompletedProcess:
+    """Seed a git repo with agents_head committed, then overwrite with agents_working.
+
+    Optionally writes retired-rule-ids.txt and passes --retired-file. Invokes
+    linter with the RELATIVE path "AGENTS.md" (cwd=repo) so `git show HEAD:<path>`
+    resolves the committed blob.
+    """
+    tmp = tempfile.mkdtemp()
+    try:
+        repo = Path(tmp) / "repo"
+        repo.mkdir()
+        env = {
+            **os.environ,
+            "GIT_AUTHOR_NAME": "t",
+            "GIT_AUTHOR_EMAIL": "t@test",
+            "GIT_COMMITTER_NAME": "t",
+            "GIT_COMMITTER_EMAIL": "t@test",
+        }
+        subprocess.run(["git", "init", "-q", "-b", "main", str(repo)], check=True, env=env)
+        agents = repo / "AGENTS.md"
+        agents.write_text(agents_head)
+        subprocess.run(["git", "-C", str(repo), "add", "AGENTS.md"], check=True, env=env)
+        subprocess.run(["git", "-C", str(repo), "commit", "-q", "-m", "seed"], check=True, env=env)
+        agents.write_text(agents_working)
+        argv = [sys.executable, str(SCRIPT)]
+        if retired_content is not None:
+            retired = repo / "retired-rule-ids.txt"
+            retired.write_text(retired_content)
+            argv.extend(["--retired-file", str(retired)])
+        argv.append("AGENTS.md")
+        return subprocess.run(argv, capture_output=True, text=True, cwd=str(repo))
+    finally:
+        subprocess.run(["rm", "-rf", tmp], check=False)
+
+
 class LintTests(unittest.TestCase):
     def test_valid_passes(self):
         r = _run(FIXTURE_VALID)
@@ -117,6 +171,51 @@ class LintTests(unittest.TestCase):
             self.assertEqual(r.returncode, 1, f"stdout={r.stdout!r} stderr={r.stderr!r}")
             self.assertIn("removed id(s) detected", r.stderr)
             self.assertIn("hr-rule-two", r.stderr)
+
+
+    def test_retired_id_passes_when_in_allowlist(self):
+        """Rule present at HEAD, absent from working copy, listed in allowlist → linter passes."""
+        agents_head = (
+            "# Agent Instructions\n\n## Hard Rules\n\n"
+            "- Rule one [id: hr-rule-one].\n"
+            "- Rule two [id: hr-rule-two].\n"
+        )
+        agents_working = (
+            "# Agent Instructions\n\n## Hard Rules\n\n"
+            "- Rule one [id: hr-rule-one].\n"
+        )
+        retired = "hr-rule-two | 2026-04-23 | #2865 | -\n"
+        r = _run_git_seeded(agents_head, agents_working, retired)
+        self.assertEqual(r.returncode, 0, f"stdout={r.stdout!r} stderr={r.stderr!r}")
+
+    def test_missing_retired_file_backward_compat(self):
+        """No --retired-file passed → linter behaves identically to pre-change.
+
+        Valid AGENTS.md (no HEAD diff to worry about) should pass.
+        Duplicate IDs should still fail.
+        """
+        r_valid = _run_with_retired(FIXTURE_VALID, None)
+        self.assertEqual(r_valid.returncode, 0, r_valid.stderr)
+
+        r_dup = _run_with_retired(FIXTURE_DUPLICATE, None)
+        self.assertEqual(r_dup.returncode, 1)
+        self.assertIn("duplicate", r_dup.stderr)
+
+    def test_reintroduced_retired_id_fails(self):
+        """ID listed as retired AND present as active rule → linter rejects."""
+        agents_head = (
+            "# Agent Instructions\n\n## Hard Rules\n\n"
+            "- Rule one [id: hr-rule-one].\n"
+            "- Rule two [id: hr-rule-two].\n"
+        )
+        agents_working = agents_head  # hr-rule-two still active
+        retired = "hr-rule-two | 2026-04-23 | #2865 | -\n"
+        r = _run_git_seeded(agents_head, agents_working, retired)
+        self.assertEqual(r.returncode, 1, f"stdout={r.stdout!r} stderr={r.stderr!r}")
+        self.assertTrue(
+            "reintroduced" in r.stderr or "retired" in r.stderr,
+            f"Expected 'reintroduced' or 'retired' in stderr; got: {r.stderr!r}",
+        )
 
 
 if __name__ == "__main__":
