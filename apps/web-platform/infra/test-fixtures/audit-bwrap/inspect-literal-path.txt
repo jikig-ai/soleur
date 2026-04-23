@@ -1,0 +1,2 @@
+apparmor=soleur-bwrap
+seccomp=/etc/docker/seccomp-profiles/soleur-bwrap.json

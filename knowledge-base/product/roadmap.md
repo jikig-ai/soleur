@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-04-22
-last_reviewed: 2026-04-22
+last_updated: 2026-04-23
+last_reviewed: 2026-04-23
 review_cadence: weekly
 owner: CPO
 depends_on:
@@ -60,17 +60,18 @@ This roadmap was reviewed by CTO, CLO, CFO, and CMO before finalization.
 | **CTO** | Pin Agent SDK to exact version (`0.2.80`, not `^0.2.80`). Add basic WS rate limiting to P2. | Added to P1 and P2 respectively. |
 | **CLO** | Conversation history is a new PII category not in privacy docs. AUP and Cookie Policy not updated for Web Platform. | Added legal updates to P2. |
 | **CLO** | Browser automation creates undisclosed agency liability. Needs dedicated legal framework before shipping. | Playwright deferred pending brainstorm + legal architecture. |
-| **CFO** | Break-even at 1-2 paying users. EUR 35-44/month burn. BYOK eliminates per-user LLM cost. | No structural change. Confirmed pricing gate sequencing is correct. |
-| **CFO** | No finance artifacts exist. Need cost model. Plausible trial expires 2026-03-24. | Flagged for immediate action. |
+| **CFO** | ~$81/mo product COGS (break-even 2 users at $49/mo), ~$491/mo all-in (break-even ~11 users). BYOK eliminates per-user LLM cost. Dev-tooling (Claude Code Max seats, GitHub Copilot) classed R&D, not COGS — see [finance/cost-model.md](../finance/cost-model.md). Reconciled 2026-04-23 (#2835); prior EUR 35-44 figure was stale. | No structural change. Confirmed pricing gate sequencing is correct. |
+| **CFO** | Finance cost model shipped 2026-04-23 in #2835. Pricing Gate #4 partially addressed (affordability only). | Buildability dimension remains with CPO/CTO. |
 | **CMO** | Every public surface says "plugin." Roadmap says "cloud platform." Live contradiction. | Added marketing positioning gate before P4 recruitment. |
 | **CMO** | At least 3/10 recruited founders must NOT be Claude Code users. | Added recruitment mix constraint to P4. |
 
 ---
 
-## Current State (2026-04-22)
+## Current State (2026-04-23)
 
 | Dimension | Status |
 |-----------|--------|
+| Financial posture | Product COGS ~$81/mo, break-even 2 users at $49/mo. All-in burn ~$491/mo (includes ~$410/mo R&D: Claude Code Max seats + GitHub Copilot), break-even ~11 users. Gross margin at 50 users: ~97% vs COGS, ~80% all-in. BYOK eliminates per-user LLM cost (load-bearing architectural commitment). See [finance/cost-model.md](../finance/cost-model.md). |
 | Phase 1 (Close the Loop) | Complete. Milestone closed. 0 open, 15 closed. |
 | Phase 2 (Secure for Beta) | Complete. Milestone closed. 0 open, 20 closed. |
 | Phase 3 (Make it Sticky) | In progress. 11 open, 23 closed (milestone). Core KB, inbox, token storage, onboarding, CI/CD, service automation, analytics, sharing, usage indicator, pricing page, start fresh onboarding, post-connect sync, chat attachments, review gate notifications, guided instructions fallback, subscription management, KB file upload, invoice history, migration 021 follow-through all done. Agent work visualization (#2004) moved to Phase 4. KB chat sidebar (#2345) promoted from Post-MVP to Phase 3 P3 on 2026-04-15 (shipped in PR #2347). Remaining: service automation announcement (#1944), QA gate (#2108), KB rename files (#2152), KB PDF preview (#2153), KB delete button layout (#2154), team settings improvements (#2155), custom @mention handles (#2170), KB chat sidebar (#2345), `soleur:ux-audit` recurring UX-review loop (#2341), collapsible sidebars (#2342, blocked by #2341), exclude agent issues from auto-fix/triage (#2344). |
@@ -401,7 +402,7 @@ Low-priority improvements deferred until after validation. Revisit when the plat
 | Demand validation | 10+ solo founders used the platform for 2+ weeks | Not started |
 | Multi-domain validation | 5+ users engaged with 2+ non-engineering domains | Not started |
 | Willingness-to-pay signal | 3+ founders say they would pay $49/month | Not started |
-| Infrastructure cost model | Hosting costs per-user understood, margin positive | CFO assessed: EUR 35-44/month burn, break-even at 1-2 users |
+| Infrastructure cost model | Hosting costs per-user understood, margin positive | Partial. Affordability documented in [finance/cost-model.md](../finance/cost-model.md) (~$81/mo COGS, break-even 2 users; ~80% gross margin at 50 users all-in). Buildability pending CPO/CTO assessment. |
 | Cowork differentiation clear | Users articulate why Soleur is worth paying for vs. free Cowork plugins | Not started |
 
 Full analysis: `knowledge-base/product/pricing-strategy.md`.
@@ -413,7 +414,7 @@ Full analysis: `knowledge-base/product/pricing-strategy.md`.
 | Action | Owner | Deadline | Notes |
 |--------|-------|----------|-------|
 | Decide Plausible Analytics (keep at EUR 9/month or switch to Cloudflare Web Analytics) | COO | 2026-03-24 | Trial expires tomorrow |
-| Create `knowledge-base/finance/cost-model.md` | CFO/budget-analyst | Before P4 | No finance artifacts exist. Pricing Gate #4 partially addressed by CFO review. |
+| Create `knowledge-base/finance/cost-model.md` | CFO/budget-analyst | Shipped 2026-04-23 (#2835) | Partial — Gate #4 affordability dimension closed; buildability remains open. |
 
 ---
 
@@ -439,4 +440,4 @@ Next review: 2026-04-17.
 
 ---
 
-_Generated: 2026-03-23. Domain review: CTO, CLO, CFO, CMO (2026-03-23). Milestone audit: 2026-04-03. CPO weekly review: 2026-04-06. Status sync from GitHub milestones: 2026-04-10. CPO weekly review + status sync: 2026-04-13. Growth audit intake: 2026-04-18 (12 issues: 1 to Phase 3, 8 to Marketing Gate, 3 to Post-MVP). Growth audit intake: 2026-04-19 (17 issues: 1 P0 to Phase 3 infra, 1 P0 + 6 P1 to Marketing Gate M26-M32, 9 P2 to Post-MVP L11-L19). Growth audit intake: 2026-04-21 (6 issues: 5 to Marketing Gate M33-M37, 1 to Post-MVP L20). Growth audit intake: 2026-04-22 (6 issues: 3 to Marketing Gate M38-M40 for P1 inline fixes, 3 to Post-MVP L21-L23 for P2/P3 hygiene; 3 pillar issues #2559/#2561/#2712 already in Phase 4; 4 Post-MVP items #2556/#2558/#2669/#2670 already in L7-L14). Sources: business-validation.md (2026-03-12), competitive-intelligence.md (2026-03-12), pricing-strategy.md (2026-03-12), brand-guide.md (2026-02-21). Workshop conducted via /soleur:product-roadmap skill._
+_Generated: 2026-03-23. Domain review: CTO, CLO, CFO, CMO (2026-03-23). Milestone audit: 2026-04-03. CPO weekly review: 2026-04-06. Status sync from GitHub milestones: 2026-04-10. CPO weekly review + status sync: 2026-04-13. Growth audit intake: 2026-04-18 (12 issues: 1 to Phase 3, 8 to Marketing Gate, 3 to Post-MVP). Growth audit intake: 2026-04-19 (17 issues: 1 P0 to Phase 3 infra, 1 P0 + 6 P1 to Marketing Gate M26-M32, 9 P2 to Post-MVP L11-L19). Growth audit intake: 2026-04-21 (6 issues: 5 to Marketing Gate M33-M37, 1 to Post-MVP L20). Growth audit intake: 2026-04-22 (6 issues: 3 to Marketing Gate M38-M40 for P1 inline fixes, 3 to Post-MVP L21-L23 for P2/P3 hygiene; 3 pillar issues #2559/#2561/#2712 already in Phase 4; 4 Post-MVP items #2556/#2558/#2669/#2670 already in L7-L14). Sources: business-validation.md (2026-03-12), competitive-intelligence.md (2026-03-12), pricing-strategy.md (2026-03-12), brand-guide.md (2026-02-21). Workshop conducted via /soleur:product-roadmap skill. Finance cost model reconciled 2026-04-23 (#2835) — CFO burn figure corrected from stale EUR 35-44 (~10× underestimate) to R&D/COGS split (~$81/mo product COGS, ~$491/mo all-in)._

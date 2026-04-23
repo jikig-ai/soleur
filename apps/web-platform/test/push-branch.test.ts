@@ -5,30 +5,26 @@
  * - Branch name validation (rejects main/master/default)
  * - Force-push blocking
  * - Branch format validation (git ref format rules)
- * - Credential helper lifecycle (create → push → cleanup)
+ * - Delegates authenticated push to `gitWithInstallationAuth` (git-auth.ts)
  * - Git author configuration
  */
 import { describe, test, expect, vi, beforeEach } from "vitest";
 
-// Mock child_process and fs before importing push-branch
-const { mockExecFileSync, mockWriteFileSync, mockUnlinkSync } = vi.hoisted(() => ({
+// Mock child_process so the `git config user.name/user.email` calls inside
+// push-branch don't try to run real git. `gitWithInstallationAuth` is
+// mocked separately at the module boundary — it owns all credential
+// lifecycle testing (see test/git-auth.test.ts).
+const { mockExecFileSync, mockGitWithAuth } = vi.hoisted(() => ({
   mockExecFileSync: vi.fn(),
-  mockWriteFileSync: vi.fn(),
-  mockUnlinkSync: vi.fn(),
+  mockGitWithAuth: vi.fn(),
 }));
 
 vi.mock("child_process", () => ({
   execFileSync: mockExecFileSync,
 }));
 
-vi.mock("fs", () => ({
-  writeFileSync: mockWriteFileSync,
-  unlinkSync: mockUnlinkSync,
-}));
-
-vi.mock("../server/github-app", () => ({
-  generateInstallationToken: vi.fn(async () => "ghs_test_token_123"),
-  randomCredentialPath: vi.fn(() => "/tmp/git-cred-test-uuid"),
+vi.mock("../server/git-auth", () => ({
+  gitWithInstallationAuth: mockGitWithAuth,
 }));
 
 vi.mock("../server/logger", () => ({
@@ -75,8 +71,8 @@ describe("rejectProtectedBranch", () => {
 describe("pushBranch", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    // Default: all execFileSync calls succeed
     mockExecFileSync.mockReturnValue(Buffer.from(""));
+    mockGitWithAuth.mockResolvedValue(Buffer.from(""));
   });
 
   test("rejects force-push unconditionally", async () => {
@@ -132,7 +128,7 @@ describe("pushBranch", () => {
     ).rejects.toThrow(/\.\./);
   });
 
-  test("successful push calls git with correct args", async () => {
+  test("successful push delegates to gitWithInstallationAuth with correct args", async () => {
     const result = await pushBranch({
       installationId: 12345,
       owner: "alice",
@@ -144,19 +140,20 @@ describe("pushBranch", () => {
 
     expect(result).toEqual({ branch: "feat-new-feature", pushed: true });
 
-    // Verify the push command (URL assertion pattern from CI/CD learning)
-    const pushCall = mockExecFileSync.mock.calls.find(
-      (call: unknown[]) => Array.isArray(call[1]) && (call[1] as string[]).includes("push"),
-    );
-    expect(pushCall).toBeDefined();
-    expect(pushCall![0]).toBe("git");
-    expect(pushCall![1]).toEqual(
-      expect.arrayContaining([
-        "push",
-        "https://github.com/alice/my-repo.git",
-        "HEAD:refs/heads/feat-new-feature",
-      ]),
-    );
+    // The authenticated push goes through gitWithInstallationAuth — not
+    // via a hand-rolled credential.helper=! pattern.
+    expect(mockGitWithAuth).toHaveBeenCalledTimes(1);
+    const [args, installationId, opts] = mockGitWithAuth.mock.calls[0];
+    expect(args).toEqual([
+      "push",
+      "https://github.com/alice/my-repo.git",
+      "HEAD:refs/heads/feat-new-feature",
+    ]);
+    expect(installationId).toBe(12345);
+    expect(opts).toMatchObject({
+      cwd: "/tmp/workspace",
+      timeout: 120_000,
+    });
   });
 
   test("sets git author to Soleur Agent identity", async () => {
@@ -169,9 +166,11 @@ describe("pushBranch", () => {
       force: false,
     });
 
-    // First two execFileSync calls are git config for author
+    // `git config user.name/user.email` still run via execFileSync
+    // (identity setup is independent of the push's credential plumbing).
     const configCalls = mockExecFileSync.mock.calls.filter(
-      (call: unknown[]) => Array.isArray(call[1]) && (call[1] as string[]).includes("config"),
+      (call: unknown[]) =>
+        Array.isArray(call[1]) && (call[1] as string[]).includes("config"),
     );
     expect(configCalls.length).toBeGreaterThanOrEqual(2);
 
@@ -186,35 +185,10 @@ describe("pushBranch", () => {
     expect(emailCall![1]).toContain("agent@soleur.ai");
   });
 
-  test("credential helper is created and cleaned up on success", async () => {
-    await pushBranch({
-      installationId: 12345,
-      owner: "alice",
-      repo: "my-repo",
-      workspacePath: "/tmp/workspace",
-      branch: "feat-x",
-      force: false,
-    });
-
-    // writeFileSync creates the credential helper
-    expect(mockWriteFileSync).toHaveBeenCalledTimes(1);
-    expect(mockWriteFileSync.mock.calls[0][0]).toBe("/tmp/git-cred-test-uuid");
-    expect(mockWriteFileSync.mock.calls[0][2]).toEqual({ mode: 0o700 });
-
-    // unlinkSync cleans it up
-    expect(mockUnlinkSync).toHaveBeenCalledTimes(1);
-    expect(mockUnlinkSync.mock.calls[0][0]).toBe("/tmp/git-cred-test-uuid");
-  });
-
-  test("credential helper is cleaned up even on push failure", async () => {
-    mockExecFileSync.mockImplementation((_cmd: string, args: string[]) => {
-      if (Array.isArray(args) && args.includes("push")) {
-        const err = new Error("push failed") as Error & { stderr: Buffer };
-        err.stderr = Buffer.from("remote: error");
-        throw err;
-      }
-      return Buffer.from("");
-    });
+  test("wraps push failure stderr in user-safe error", async () => {
+    const err = new Error("push failed") as Error & { stderr?: Buffer };
+    err.stderr = Buffer.from("remote: error: permission denied /home/soleur/askpass-abc.sh");
+    mockGitWithAuth.mockRejectedValueOnce(err);
 
     await expect(
       pushBranch({
@@ -225,9 +199,6 @@ describe("pushBranch", () => {
         branch: "feat-x",
         force: false,
       }),
-    ).rejects.toThrow(/push failed|Git push failed/);
-
-    // Finally block still runs
-    expect(mockUnlinkSync).toHaveBeenCalledTimes(1);
+    ).rejects.toThrow(/Git push failed/);
   });
 });

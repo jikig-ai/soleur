@@ -36,6 +36,7 @@ describe("provisionWorkspaceWithRepo error wrapping", () => {
         .fn()
         .mockRejectedValue(new Error("GitHub installation token request failed: 401")),
       randomCredentialPath: vi.fn().mockReturnValue(`/tmp/git-cred-${randomUUID()}`),
+      checkRepoAccess: vi.fn().mockResolvedValue("ok"),
     }));
 
     const { provisionWorkspaceWithRepo } = await import("../server/workspace");
@@ -50,28 +51,40 @@ describe("provisionWorkspaceWithRepo error wrapping", () => {
     vi.doMock("../server/github-app", () => ({
       generateInstallationToken: vi.fn().mockResolvedValue("ghs_faketoken123"),
       randomCredentialPath: vi.fn().mockReturnValue(`/tmp/git-cred-${randomUUID()}`),
+      checkRepoAccess: vi.fn().mockResolvedValue("ok"),
     }));
 
-    // Stub execFileSync so git clone throws synchronously with a realistic stderr
-    // buffer. This makes the test deterministic and network-independent — the
-    // production error-wrapping code at workspace.ts:172 reads .stderr?.toString()
-    // and produces the "Git clone failed: ..." message we assert below.
+    // Stub execFile (used by git-auth.ts via promisify) to invoke the
+    // callback with a realistic stderr buffer. Test becomes deterministic
+    // + network-independent: git stderr flows through the production
+    // error-wrapping path in workspace.ts.
     vi.doMock("child_process", async () => {
       const actual = await vi.importActual<typeof import("child_process")>("child_process");
       return {
         ...actual,
-        execFileSync: vi.fn().mockImplementation((cmd: string, args: string[]) => {
-          if (cmd === "git" && Array.isArray(args) && args.includes("clone")) {
-            const err: Error & { stderr?: Buffer } = new Error("git exited 128");
-            err.stderr = Buffer.from(
-              "fatal: repository 'https://github.com/nonexistent/fake-repo-xxx/' not found\n",
-            );
-            throw err;
-          }
-          // Other git invocations (config user.name/user.email) shouldn't be reached
-          // because the clone failure rejects first; return empty buffer defensively.
-          return Buffer.from("");
-        }),
+        execFile: vi
+          .fn()
+          .mockImplementation(
+            (
+              cmd: string,
+              args: string[],
+              _opts: Record<string, unknown>,
+              cb: (
+                err: Error | null,
+                result: { stdout: Buffer; stderr: Buffer },
+              ) => void,
+            ) => {
+              if (cmd === "git" && args.includes("clone")) {
+                const err: Error & { stderr?: Buffer } = new Error("git exited 128");
+                err.stderr = Buffer.from(
+                  "fatal: repository 'https://github.com/nonexistent/fake-repo-xxx/' not found\n",
+                );
+                cb(err, { stdout: Buffer.from(""), stderr: err.stderr });
+                return;
+              }
+              cb(null, { stdout: Buffer.from(""), stderr: Buffer.from("") });
+            },
+          ),
       };
     });
 
@@ -90,6 +103,7 @@ describe("provisionWorkspaceWithRepo error wrapping", () => {
     vi.doMock("../server/github-app", () => ({
       generateInstallationToken: vi.fn().mockResolvedValue("ghs_faketoken123"),
       randomCredentialPath: vi.fn().mockReturnValue(credPath),
+      checkRepoAccess: vi.fn().mockResolvedValue("ok"),
     }));
 
     const { provisionWorkspaceWithRepo } = await import("../server/workspace");
@@ -119,6 +133,7 @@ describe("provisionWorkspaceWithRepo sentinel file", () => {
     vi.doMock("../server/github-app", () => ({
       generateInstallationToken: vi.fn().mockResolvedValue("ghs_faketoken123"),
       randomCredentialPath: vi.fn().mockReturnValue(`/tmp/git-cred-${randomUUID()}`),
+      checkRepoAccess: vi.fn().mockResolvedValue("ok"),
     }));
 
     // Mock execFileSync to simulate successful clone (create workspace dir with .git)
@@ -127,18 +142,44 @@ describe("provisionWorkspaceWithRepo sentinel file", () => {
       const actual = await vi.importActual<typeof import("child_process")>("child_process");
       return {
         ...actual,
-        execFileSync: vi.fn().mockImplementation((cmd: string, args: string[], opts?: Record<string, unknown>) => {
-          if (cmd === "git" && args[0] === "-c") {
-            // Simulate clone: create the directory with a .git marker
-            const targetDir = args[args.length - 1];
-            const { mkdirSync, writeFileSync } = require("fs");
-            mkdirSync(targetDir, { recursive: true });
-            mkdirSync(join(targetDir, ".git"), { recursive: true });
-            writeFileSync(join(targetDir, ".git", "HEAD"), "ref: refs/heads/main\n");
-            return Buffer.from("");
-          }
-          return origExecFileSync(cmd, args, opts);
-        }),
+        // post-GIT_ASKPASS migration, git-auth.ts uses execFile + promisify
+        // for async non-blocking exec — simulate a successful clone by
+        // creating the target dir before invoking the callback.
+        execFile: vi
+          .fn()
+          .mockImplementation(
+            (
+              cmd: string,
+              args: string[],
+              _opts: Record<string, unknown>,
+              cb: (
+                err: Error | null,
+                result: { stdout: Buffer; stderr: Buffer },
+              ) => void,
+            ) => {
+              if (cmd === "git" && args.includes("clone")) {
+                const targetDir = args[args.length - 1];
+                const { mkdirSync, writeFileSync } = require("fs");
+                mkdirSync(targetDir, { recursive: true });
+                mkdirSync(join(targetDir, ".git"), { recursive: true });
+                writeFileSync(
+                  join(targetDir, ".git", "HEAD"),
+                  "ref: refs/heads/main\n",
+                );
+              }
+              cb(null, {
+                stdout: Buffer.from(""),
+                stderr: Buffer.from(""),
+              });
+            },
+          ),
+        // Workspace's git config user.name/email still run sync — preserve.
+        execFileSync: vi
+          .fn()
+          .mockImplementation(
+            (cmd: string, args: string[], opts?: Record<string, unknown>) =>
+              origExecFileSync(cmd, args, opts),
+          ),
       };
     });
 
@@ -155,6 +196,7 @@ describe("provisionWorkspaceWithRepo sentinel file", () => {
     vi.doMock("../server/github-app", () => ({
       generateInstallationToken: vi.fn().mockResolvedValue("ghs_faketoken123"),
       randomCredentialPath: vi.fn().mockReturnValue(`/tmp/git-cred-${randomUUID()}`),
+      checkRepoAccess: vi.fn().mockResolvedValue("ok"),
     }));
 
     const origExecFileSync = (await import("child_process")).execFileSync;
@@ -162,17 +204,40 @@ describe("provisionWorkspaceWithRepo sentinel file", () => {
       const actual = await vi.importActual<typeof import("child_process")>("child_process");
       return {
         ...actual,
-        execFileSync: vi.fn().mockImplementation((cmd: string, args: string[], opts?: Record<string, unknown>) => {
-          if (cmd === "git" && args[0] === "-c") {
-            const targetDir = args[args.length - 1];
-            const { mkdirSync, writeFileSync } = require("fs");
-            mkdirSync(targetDir, { recursive: true });
-            mkdirSync(join(targetDir, ".git"), { recursive: true });
-            writeFileSync(join(targetDir, ".git", "HEAD"), "ref: refs/heads/main\n");
-            return Buffer.from("");
-          }
-          return origExecFileSync(cmd, args, opts);
-        }),
+        execFile: vi
+          .fn()
+          .mockImplementation(
+            (
+              cmd: string,
+              args: string[],
+              _opts: Record<string, unknown>,
+              cb: (
+                err: Error | null,
+                result: { stdout: Buffer; stderr: Buffer },
+              ) => void,
+            ) => {
+              if (cmd === "git" && args.includes("clone")) {
+                const targetDir = args[args.length - 1];
+                const { mkdirSync, writeFileSync } = require("fs");
+                mkdirSync(targetDir, { recursive: true });
+                mkdirSync(join(targetDir, ".git"), { recursive: true });
+                writeFileSync(
+                  join(targetDir, ".git", "HEAD"),
+                  "ref: refs/heads/main\n",
+                );
+              }
+              cb(null, {
+                stdout: Buffer.from(""),
+                stderr: Buffer.from(""),
+              });
+            },
+          ),
+        execFileSync: vi
+          .fn()
+          .mockImplementation(
+            (cmd: string, args: string[], opts?: Record<string, unknown>) =>
+              origExecFileSync(cmd, args, opts),
+          ),
       };
     });
 

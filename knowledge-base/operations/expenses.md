@@ -33,3 +33,7 @@ last_updated: 2026-04-19
 | Service | Provider | Category | Amount | Status | Date | Notes |
 |---------|----------|----------|--------|--------|------|-------|
 | soleur.ai registration | Cloudflare | domain | 140.00 | active | 2026-02-16 | 2-year initial registration |
+
+## Downstream Consumers
+
+- **Finance:** [finance/cost-model.md](../finance/cost-model.md) — derived monthly burn and break-even model (R&D / product-COGS split). Refresh on every category subtotal shift >10 % per cost-model.md `review_cadence`.

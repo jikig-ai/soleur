@@ -1,19 +1,15 @@
 import { NextResponse } from "next/server";
 import path from "path";
-import { promises as fs, writeFileSync, unlinkSync } from "node:fs";
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
+import { promises as fs } from "node:fs";
 import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { validateOrigin, rejectCsrf } from "@/lib/auth/validate-origin";
 import { isPathInWorkspace } from "@/server/sandbox";
 import type { Logger } from "pino";
 
-// github-app imports are lazily loaded inside syncWorkspace so that routes
-// which only need authenticateAndResolveKbPath / resolveUserKbRoot don't
-// drag github-app + its logger child into their test-mock surface. The
+// git-auth is lazily loaded inside syncWorkspace so that routes which only
+// need authenticateAndResolveKbPath / resolveUserKbRoot don't drag
+// github-app + its logger child into their test-mock surface. The
 // file-route already mocks github-app; share/upload do not need to.
-
-const execFileAsync = promisify(execFile);
 
 export type KbRouteContext = {
   user: { id: string };
@@ -246,21 +242,11 @@ export async function syncWorkspace(
   log: Logger,
   context: { userId: string; op: "delete" | "rename" | "upload" },
 ): Promise<{ ok: true } | { ok: false; error: unknown }> {
-  const { generateInstallationToken, randomCredentialPath } = await import(
-    "@/server/github-app"
-  );
-  let helperPath: string | null = null;
+  const { gitWithInstallationAuth } = await import("@/server/git-auth");
   try {
-    const token = await generateInstallationToken(installationId);
-    helperPath = randomCredentialPath();
-    writeFileSync(
-      helperPath,
-      `#!/bin/sh\necho "username=x-access-token"\necho "password=${token}"`,
-      { mode: 0o700 },
-    );
-    await execFileAsync(
-      "git",
-      ["-c", `credential.helper=!${helperPath}`, "pull", "--ff-only"],
+    await gitWithInstallationAuth(
+      ["pull", "--ff-only"],
+      installationId,
       { cwd: workspacePath, timeout: 30_000 },
     );
     return { ok: true };
@@ -270,13 +256,5 @@ export async function syncWorkspace(
       `kb/${context.op}: workspace sync failed`,
     );
     return { ok: false, error: syncError };
-  } finally {
-    if (helperPath) {
-      try {
-        unlinkSync(helperPath);
-      } catch {
-        /* best-effort cleanup */
-      }
-    }
   }
 }

@@ -6,14 +6,15 @@
 #
 # Invoke from the MU1 runbook (see
 # knowledge-base/engineering/ops/runbooks/mu1-signup-workspace-verification.md)
-# or wire into CI post-deploy. Safe to run standalone via SSH into the
-# production host:
+# or wire into CI post-deploy. Safe to run standalone by piping from any
+# Soleur worktree (the prod host has no repo checkout by design — see #2606):
 #
-#     ssh <prod-host> "cd soleur && bash apps/web-platform/infra/audit-bwrap-uid.sh"
+#     ssh <prod-host> "bash -s" < apps/web-platform/infra/audit-bwrap-uid.sh
 #
 # Override the container name for canaries:
 #
-#     CONTAINER=soleur-web-platform-canary bash .../audit-bwrap-uid.sh
+#     ssh <prod-host> "CONTAINER=soleur-web-platform-canary bash -s" \
+#         < apps/web-platform/infra/audit-bwrap-uid.sh
 #
 # Exit codes:
 #   0 — all three checks passed.
@@ -43,7 +44,10 @@ if [[ ! "$CONTAINER" =~ ^[a-zA-Z0-9][a-zA-Z0-9_.-]*$ ]]; then
   exit 2
 fi
 EXPECTED_APPARMOR="apparmor=soleur-bwrap"
-EXPECTED_SECCOMP="seccomp=/etc/docker/seccomp-profiles/soleur-bwrap.json"
+# Path to the on-host seccomp profile used as the hash-compare source of
+# truth. Overridable for tests; defaults to the prod deploy path bind-mounted
+# by `ci-deploy.sh`.
+EXPECTED_SECCOMP_PATH="${EXPECTED_SECCOMP_PATH:-/etc/docker/seccomp-profiles/soleur-bwrap.json}"
 
 fail_count=0
 
@@ -90,22 +94,55 @@ fi
 # check 1 might still pass (Docker's default seccomp doesn't ALWAYS block
 # CLONE_NEWUSER — depends on kernel unprivileged_userns_clone sysctl) but
 # the formal guarantee is gone.
+#
+# Seccomp: Docker resolves `--security-opt seccomp=<path>` to the inlined
+# JSON at container-create time, so the literal path does NOT survive into
+# HostConfig.SecurityOpt. We hash-compare the inlined JSON against the
+# on-host file; jq -cS canonicalizes whitespace + key order so byte-equal
+# content hashes identically.
 # -----------------------------------------------------------------------------
 
-SECURITY_OPT_JSON=$(
-  docker inspect "$CONTAINER" --format '{{json .HostConfig.SecurityOpt}}' 2>/dev/null || echo 'null'
+# Iterate each SecurityOpt element on its own line. `|| true` so strict-mode
+# does not abort the whole script when docker errors — we want a clear FAIL.
+SECURITY_OPT_ENTRIES=$(
+  docker inspect "$CONTAINER" \
+    --format '{{range .HostConfig.SecurityOpt}}{{println .}}{{end}}' 2>/dev/null \
+    || true
 )
 
-if [[ "$SECURITY_OPT_JSON" != *"$EXPECTED_APPARMOR"* ]]; then
-  emit_fail "HostConfig.SecurityOpt missing $EXPECTED_APPARMOR (got: $SECURITY_OPT_JSON)"
-else
+if printf '%s\n' "$SECURITY_OPT_ENTRIES" | grep -qF "$EXPECTED_APPARMOR"; then
   emit_pass "HostConfig.SecurityOpt includes $EXPECTED_APPARMOR"
+else
+  emit_fail "HostConfig.SecurityOpt missing $EXPECTED_APPARMOR (got: $SECURITY_OPT_ENTRIES)"
 fi
 
-if [[ "$SECURITY_OPT_JSON" != *"$EXPECTED_SECCOMP"* ]]; then
-  emit_fail "HostConfig.SecurityOpt missing $EXPECTED_SECCOMP (got: $SECURITY_OPT_JSON)"
+SECCOMP_ENTRY=$(printf '%s\n' "$SECURITY_OPT_ENTRIES" | sed -n 's/^seccomp=//p' | head -n1)
+
+if [[ -z "$SECCOMP_ENTRY" ]]; then
+  emit_fail "HostConfig.SecurityOpt has no seccomp= entry — custom profile not attached (got: $SECURITY_OPT_ENTRIES)"
+elif [[ "$SECCOMP_ENTRY" == /* ]]; then
+  # A literal path surviving into HostConfig means Docker did not resolve
+  # the --security-opt seccomp=<path> flag at create time (missing file or
+  # old docker version). Drift either way.
+  emit_fail "seccomp entry is a literal path, not inlined JSON — Docker did not resolve --security-opt (got: $SECCOMP_ENTRY)"
+elif [[ ! -r "$EXPECTED_SECCOMP_PATH" ]]; then
+  emit_fail "On-host seccomp profile missing at $EXPECTED_SECCOMP_PATH — deploy state incoherent"
 else
-  emit_pass "HostConfig.SecurityOpt includes $EXPECTED_SECCOMP"
+  # jq -cS = --compact-output --sort-keys. Canonical form → byte-stable hash.
+  # `|| true` on both pipes: under `set -euo pipefail`, a jq failure would
+  # abort the script before the "not valid JSON" branch can emit. We want
+  # malformed JSON to land in an explicit FAIL, not a silent strict-mode exit.
+  FILE_HASH=$(jq -cS . "$EXPECTED_SECCOMP_PATH" 2>/dev/null | sha256sum | cut -d' ' -f1 || true)
+  INLINED_HASH=$(printf '%s' "$SECCOMP_ENTRY" | jq -cS . 2>/dev/null | sha256sum | cut -d' ' -f1 || true)
+  EMPTY_HASH=$(printf '' | sha256sum | cut -d' ' -f1)
+
+  if [[ -z "$FILE_HASH" || "$FILE_HASH" == "$EMPTY_HASH" ]]; then
+    emit_fail "On-host seccomp profile at $EXPECTED_SECCOMP_PATH is not valid JSON"
+  elif [[ "$INLINED_HASH" != "$FILE_HASH" ]]; then
+    emit_fail "seccomp drift: inlined profile sha256=${INLINED_HASH:0:12} != on-host sha256=${FILE_HASH:0:12}"
+  else
+    emit_pass "HostConfig.SecurityOpt seccomp matches on-host profile (sha256=${FILE_HASH:0:12})"
+  fi
 fi
 
 # -----------------------------------------------------------------------------
