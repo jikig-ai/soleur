@@ -1,0 +1,2 @@
+apparmor=soleur-bwrap
+seccomp={"defaultAction":"SCMP_ACT_ERRNO","syscalls":[]}
