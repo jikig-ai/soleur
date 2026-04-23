@@ -53,7 +53,7 @@ depends_on:
 ---
 ```
 
-### FR2: Nine body sections
+### FR2: Eight body sections
 
 1. `## Monthly Burn` — two tables (R&D/tooling, product COGS) with an explanatory paragraph on the split rationale; both totals.
 2. `## Per-User Infrastructure Cost` — CX33 capacity model (10-12 concurrent agent sessions without Playwright), volume amortization, BYOK zero-inference claim, explicit BYOK architectural-commitment note.
@@ -119,7 +119,7 @@ Moot with FR6 deferred. No AGENTS.md edit in this PR.
 
 ## Acceptance Criteria
 
-1. `knowledge-base/finance/cost-model.md` exists with the FR1 frontmatter and all nine FR2 sections.
+1. `knowledge-base/finance/cost-model.md` exists with the FR1 frontmatter and all eight FR2 sections.
 2. All numeric figures carry an `[expenses.md@YYYY-MM-DD]` anchor.
 3. `product/roadmap.md` CFO narrative lines + Pricing Gate #4 status row + cost-model action item + `## Current State` section updated per FR4 (plan corrects the spec's L397 → actual L404; see plan's Research Reconciliation).
 4. `operations/expenses.md` and `product/pricing-strategy.md` have back-links to cost-model.md per FR5.

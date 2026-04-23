@@ -11,7 +11,7 @@
 - [ ] 1.1 Re-read `knowledge-base/operations/expenses.md` frontmatter and tables. If `last_updated` has advanced past 2026-04-19, use the newer date for inline anchors; else use `2026-04-19`.
 - [ ] 1.2 Spawn `budget-analyst` (Task) with the scoped authoring prompt. Prompt must pin:
   - Frontmatter per spec FR1.
-  - 9 sections per spec FR2 (Monthly Burn, Per-User Infrastructure Cost, Break-Even Analysis, Scaling Triggers, Gross Margin at Scale, Pricing Gate #4 Status, Open Questions, References — plus frontmatter counts as the 9th).
+  - 8 sections per spec FR2 (Monthly Burn, Per-User Infrastructure Cost, Break-Even Analysis, Scaling Triggers, Gross Margin at Scale, Pricing Gate #4 Status, Open Questions, References).
   - R&D vs product-COGS split (~$491/mo all-in, ~$91/mo COGS; break-even ~11 / ~2-3 users at $49/mo).
   - Inline anchor convention per FR3 (`[expenses.md@YYYY-MM-DD]`).
   - BYOK architectural-commitment note verbatim.

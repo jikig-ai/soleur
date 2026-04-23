@@ -52,7 +52,7 @@ The spec was drafted from brainstorm-era findings. A plan-time grep over the cur
 ### Finance (CFO)
 
 **Status:** reviewed (carried forward from brainstorm 2026-04-23)
-**Assessment:** CFO recommended the Approach A derived-summary structure (single file, 9 sections, inline anchors), flagged the Feb-2026 burn figure as ~10× off the current ledger and prescribed the R&D/COGS split, declined sibling finance docs as premature, positioned cost-model.md as partial addressal of Pricing Gate #4 (affordability only — buildability stays with CPO/CTO), and delegated sole authorship to **budget-analyst**.
+**Assessment:** CFO recommended the Approach A derived-summary structure (single file, 8 sections, inline anchors), flagged the Feb-2026 burn figure as ~10× off the current ledger and prescribed the R&D/COGS split, declined sibling finance docs as premature, positioned cost-model.md as partial addressal of Pricing Gate #4 (affordability only — buildability stays with CPO/CTO), and delegated sole authorship to **budget-analyst**.
 
 **Brainstorm-recommended specialists:** `budget-analyst` — deferred to `/soleur:work` via user decision at plan time. `revenue-analyst` and `financial-reporter` explicitly NOT delegated (pre-revenue).
 
@@ -64,7 +64,7 @@ The spec was drafted from brainstorm-era findings. A plan-time grep over the cur
 
 ### Pre-merge (PR)
 
-1. `knowledge-base/finance/cost-model.md` exists with FR1 frontmatter (`last_updated: 2026-04-23`, `last_reviewed: 2026-04-23`, `review_cadence: monthly`, `owner: cfo`, `depends_on: [knowledge-base/operations/expenses.md, knowledge-base/product/pricing-strategy.md]`) and all nine FR2 sections.
+1. `knowledge-base/finance/cost-model.md` exists with FR1 frontmatter (`last_updated: 2026-04-23`, `last_reviewed: 2026-04-23`, `review_cadence: monthly`, `owner: cfo`, `depends_on: [knowledge-base/operations/expenses.md, knowledge-base/product/pricing-strategy.md]`) and all eight FR2 sections.
 2. Every numeric figure in cost-model.md carries an inline `[expenses.md@2026-04-19]` anchor. Verified by `grep -oP '\$[0-9]+|\b[0-9]+(?:\.[0-9]+)?%|EUR [0-9]+' cost-model.md` — every hit has a following anchor within 40 chars.
 3. `product/roadmap.md` L63 + L64 CFO lines rewritten to the R&D/COGS split formulation; L404 Gate #4 status row updated to partial-addressal; L416 action-item disposition updated; `## Current State` section updated with the new numbers; `last_updated` frontmatter advanced to 2026-04-23.
 4. `product/pricing-strategy.md:152` Gate #4 status column updated from "Not assessed" to "Partially addressed — affordability documented in `finance/cost-model.md`; buildability pending CPO/CTO assessment"; L25 adds a `finance/cost-model.md` reference.

@@ -22,7 +22,7 @@ depends_on:
 
 1. **The open-core model inverts.** The current model assumes the free plugin is the distribution mechanism and the paid platform is the monetization layer. User research reveals that most target customers do not use the free plugin's host (Claude Code). The platform is the distribution mechanism AND the monetization layer. The plugin becomes an optional power-user interface, not the funnel. The "Open Source" free tier in the tier structure below may need redefinition -- it currently assumes terminal-first usage as the free experience.
 
-2. **Cost structure escalates.** A platform-first product requires cloud infrastructure, API costs per user, frontend engineering, mobile development, and user authentication as table stakes. These costs were previously categorized as "Pro tier infrastructure" -- optional, built after validation. Under the delivery pivot, they are pre-revenue requirements. The infrastructure cost gate (Gate 4) becomes more urgent: per-user costs must be modeled before beta, not after.
+2. **Cost structure escalates.** A platform-first product requires cloud infrastructure, API costs per user, frontend engineering, mobile development, and user authentication as table stakes. These costs were previously categorized as "Pro tier infrastructure" -- optional, built after validation. Under the delivery pivot, they are pre-revenue requirements. The infrastructure cost gate (Gate 4) becomes more urgent: per-user costs must be modeled before beta, not after. (Cost model now lives in [finance/cost-model.md](../finance/cost-model.md).)
 
 3. **Competitive framing shifts.** The replacement-stack comparison (Soleur at $49/mo vs. $765-3,190/mo in separate tools) remains valid, but the comparison set now includes web-native competitors: Polsia ($29-59/mo, web dashboard), Notion AI ($10/mo + credits, web/mobile), and Tanka ($0 for small teams, mobile apps). Founders will compare Soleur's platform against these surfaces, not against terminal tools. The "you keep 100% of revenue" argument against Polsia's revenue share and the cross-domain knowledge compounding argument remain the strongest differentiators.
 
@@ -149,7 +149,7 @@ These gates prevent premature monetization:
 | Demand validation | 10+ solo founders have used Soleur on real projects for 2+ weeks | Not started |
 | Multi-domain validation | 5+ users engage with agents from 2+ non-engineering domains | Not started |
 | Willingness-to-pay signal | 3+ founders express they would pay $49/month or identify what would justify it | Not started |
-| Infrastructure ready | Cloud sync, hosted execution, and analytics dashboard are buildable (not necessarily built) | Not assessed |
+| Infrastructure ready | Cloud sync, hosted execution, and analytics dashboard are buildable (not necessarily built) | Partial — affordability documented in [finance/cost-model.md](../finance/cost-model.md) (~$81/mo COGS, break-even 2 users, ~80% gross margin all-in at 50 users). Buildability pending CPO/CTO assessment. |
 | Cowork differentiation clear | Users can articulate why Soleur is worth paying for when Cowork plugins are free | Not started |
 
 **Do not launch pricing until at least 4 of 5 gates pass.**
