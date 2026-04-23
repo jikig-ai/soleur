@@ -4,49 +4,45 @@ Derived from `knowledge-base/project/plans/2026-04-23-fix-command-center-tool-pr
 
 ## 0. Pre-flight
 
-- [ ] 0.1. Run Open Code-Review Overlap check:
-  - `gh issue list --label code-review --state open --json number,title,body --limit 200 > /tmp/open-review-issues.json`
-  - For each of `apps/web-platform/server/agent-runner.ts`, `apps/web-platform/lib/chat-state-machine.ts`, `apps/web-platform/server/github-tools.ts`, `apps/web-platform/server/tool-tiers.ts`, `apps/web-platform/server/ci-tools.ts`: run `jq -r --arg path "<file>" '.[] | select(.body // "" | contains($path)) | "#\(.number): \(.title)"' /tmp/open-review-issues.json`.
-  - For each match: fold-in OR acknowledge OR defer. Record in the plan's Open Code-Review Overlap section.
-- [ ] 0.2. Reproduce the stuck-bubble bug locally. Start `cd apps/web-platform && doppler run -p soleur -c dev -- ./scripts/dev.sh`. Open `/command-center`. Ask "resume work on issue 2831". Screenshot the stuck "Working" chips. Save to `knowledge-base/project/specs/feat-one-shot-command-center-fixes/before.png`.
-- [ ] 0.3. Pre-Phase-0 gates (from deepen pass):
-  - `gh issue view 2217 --json state,title` — record state (OPEN/CLOSED) in PR description; decides Option A vs Option B for Phase 2.
-  - `rg "const _exhaustive: never" apps/web-platform/` — enumerate every exhaustive WSMessage switch. None should break in Phase 2.
-  - `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` — record baseline green. Any pre-existing TS errors get an issue before Phase 1 starts.
-  - `find knowledge-base/project/learnings -name "*.md" -newer knowledge-base/project/plans/2026-04-23-fix-command-center-tool-progress-and-github-mcp-plan.md` — read any learning added after plan-time that mentions `chat-state-machine`, `agent-runner`, or `ws-client`.
+- [x] 0.1. Open Code-Review Overlap check: #2225, #2224, #2220 near chat-state-machine but none touch review_gate branch or stream_end emission. No fold-in.
+- [ ] 0.2. Reproduce the stuck-bubble bug locally — skipped (pipeline mode; scenario already captured in original screenshots driving this PR).
+- [x] 0.3. Pre-Phase-0 gates:
+  - `gh issue view 2217` → CLOSED. Ship Option A (minimal patch).
+  - `rg "const _exhaustive: never"` → 6 hits; none on WSMessage union. We don't widen WSMessage, no risk.
+  - `tsc --noEmit` → clean baseline.
 
 ## 1. RED — failing tests for Bug 1
 
-- [ ] 1.1. Add test "parallel-leader stream_end isolation" to `apps/web-platform/test/chat-state-machine.test.ts`. Expected: may already pass (sentinel).
-- [ ] 1.2. Add test "review_gate preserves peer bubbles" to same file. Expected: RED.
-- [ ] 1.3. Add test "tool-final turn regression sentinel" to same file. Expected: pass.
-- [ ] 1.4. (Optional) Add `apps/web-platform/test/agent-runner-stream-end.test.ts` with exception-path scenario. Expected: RED after Phase 2 unless mocked out.
-- [ ] 1.5. Run `cd apps/web-platform && ./node_modules/.bin/vitest run test/chat-state-machine.test.ts test/agent-runner-stream-end.test.ts`. Capture RED output.
+- [x] 1.1. Added "stream_end on one leader preserves peer leaders" regression sentinel — passes.
+- [x] 1.2. Added "review_gate transitions a thinking peer bubble to done" + "review_gate transitions a tool_use peer bubble to done" — RED as expected.
+- [x] 1.3. Added "review_gate leaves already-done bubbles untouched" + "stream_end on single leader transitions to done" — pass.
+- [x] 1.4. agent-runner-stream-end.test.ts deferred — integration test would require heavy SDK mocking; chat-state-machine.test.ts covers the state transition. The finally-block guard is small, commented, and defended by the success-path `!streamEndSent` guard in tandem.
+- [x] 1.5. RED output captured: 2 failed, 10 passed pre-fix.
 
 ## 2. GREEN — fix terminal transitions (Bug 1)
 
-- [ ] 2.1. Edit `apps/web-platform/lib/chat-state-machine.ts:review_gate` branch. Iterate `activeStreams`; for each leaderId, set its bubble `state: "done"`. Then clear the map. Keep `timerAction: "clear_all"`.
-- [ ] 2.2. Edit `apps/web-platform/server/agent-runner.ts`. Track `streamStartSent` and `streamEndSent` booleans. Move `stream_end` emission into a post-loop block that fires whenever `streamStartSent && !streamEndSent`, including on exception paths.
-- [ ] 2.3. Re-run the vitest commands from 1.5. Confirm all previously RED tests pass. No prior green tests regress.
-- [ ] 2.4. Manually re-run the repro from 0.2. Screenshot the `done` checkmark on all bubbles. Save to `knowledge-base/project/specs/feat-one-shot-command-center-fixes/after.png`.
+- [x] 2.1. `chat-state-machine.ts:review_gate` transitions every in-flight bubble to `done` before clearing activeStreams.
+- [x] 2.2. `agent-runner.ts` declares `streamStartSent`/`streamEndSent` locals before the try; `stream_end` emission at existing success and resume-error sites guarded with `!streamEndSent`; finally block emits fallback when `streamStartSent && !streamEndSent`.
+- [x] 2.3. Re-ran vitest — 12/12 pass, 2316 total across full suite.
+- [ ] 2.4. Post-merge prod smoke.
 
 ## 3. GitHub read tools (Bug 2)
 
-- [ ] 3.1. Create `apps/web-platform/server/github-read-tools.ts` with `readIssue`, `readIssueComments`, `readPullRequest`, `listPullRequestComments`. Reuse `githubApiGet` from `github-api.ts`. Narrow response shapes. Truncate issue/PR `body` at 10k chars with `…(truncated, use html_url for full)`.
-- [ ] 3.2. Extend `apps/web-platform/server/github-tools.ts` with four `tool(...)` definitions. Update `tools` and `toolNames` arrays. Names: `github_read_issue`, `github_read_issue_comments`, `github_read_pr`, `github_list_pr_comments`.
-- [ ] 3.3. Extend `apps/web-platform/server/tool-tiers.ts:TOOL_TIER_MAP` with four `"auto-approve"` entries under the new names.
-- [ ] 3.4. Extend `apps/web-platform/test/github-tools.test.ts` (create if absent) with unit tests for the four tools. Mock `githubApiGet`. Assert narrowed shape + isError on REST failure.
-- [ ] 3.5. Run `cd apps/web-platform && ./node_modules/.bin/vitest run test/github-tools.test.ts`. All green.
+- [x] 3.1. `github-read-tools.ts` with `readIssue`, `readIssueComments`, `readPullRequest`, `listPullRequestComments`. Reuses `githubApiGet`. Narrowed shapes. 10 KB issue/PR body truncation, 4 KB comment truncation, per_page clamped at 50.
+- [x] 3.2. `github-tools.ts` extended with four `tool(...)` definitions; `tools[]` and `toolNames[]` arrays updated.
+- [x] 3.3. `tool-tiers.ts:TOOL_TIER_MAP` has four new `"auto-approve"` entries.
+- [x] 3.4. `test/github-read-tools.test.ts` covers narrowing, truncation, null-body, per_page clamp, PR-specific fields, parallel fetch merge, partial-failure fallback.
+- [x] 3.5. `vitest run test/github-read-tools.test.ts` → 9/9 pass.
 
 ## 4. Agent discoverability
 
-- [ ] 4.1. In `apps/web-platform/server/agent-runner.ts` inside the `installationId && repoUrl` guard, append a `## GitHub read access` section to `systemPrompt`. Describe: tools available (the four new ones), when to use (resume from issue, summarize PR review, follow up on CI failures), scoping (connected repo only).
-- [ ] 4.2. Manual smoke: start a Command Center session. Ask "read issue 2831 and summarize". Verify agent invokes `github_read_issue` (not `gh`). Attach transcript to PR.
+- [x] 4.1. `## GitHub read access` block added to `systemPrompt` inside the `owner && repo` guard in agent-runner.ts. Enumerates the four tools, when to use, body-truncation note.
+- [ ] 4.2. Post-merge prod smoke.
 
 ## 5. Final verification
 
-- [ ] 5.1. `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit`. Clean.
-- [ ] 5.2. `cd apps/web-platform && ./node_modules/.bin/vitest run`. All green.
+- [x] 5.1. `tsc --noEmit` → clean.
+- [x] 5.2. `vitest run` → 2316 passed, 11 skipped (pre-existing, unrelated).
 - [ ] 5.3. Skill: soleur:compound. Capture any session learnings.
 - [ ] 5.4. Skill: soleur:review (multi-agent review) on the PR branch.
 - [ ] 5.5. Skill: soleur:ship with labels `type/bug`, `priority/p1-high`, `domain/engineering`, and `semver:minor` (or `patch` if the github-read tools are deferred).

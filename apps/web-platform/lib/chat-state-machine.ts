@@ -181,6 +181,19 @@ export function applyStreamEvent(
     }
 
     case "review_gate": {
+      // Transition any bubble still mid-turn to "done" BEFORE clearing
+      // activeStreams. Leaking "thinking" / "tool_use" / "streaming" into an
+      // unclearable state is the root cause of the stuck orange "Working"
+      // badge when a review_gate fires while peer leaders are still streaming
+      // (see #2843). The gate message itself is appended after the transition.
+      const updated = prev.slice();
+      for (const idx of activeStreams.values()) {
+        if (idx >= updated.length) continue;
+        const m = updated[idx];
+        if (m.state === "thinking" || m.state === "tool_use" || m.state === "streaming") {
+          updated[idx] = { ...m, state: "done" };
+        }
+      }
       const gateMsg: ChatMessage = {
         id: `gate-${event.gateId}`,
         role: "assistant",
@@ -194,7 +207,7 @@ export function applyStreamEvent(
         stepProgress: event.stepProgress,
       };
       return {
-        messages: [...prev, gateMsg],
+        messages: [...updated, gateMsg],
         activeStreams: new Map(),
         timerAction: { type: "clear_all" },
       };

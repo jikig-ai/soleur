@@ -402,6 +402,18 @@ export async function startAgentSession(
   };
   activeSessions.set(key, session);
 
+  // Guards for stream_end idempotency across success, exception, and abort
+  // paths. Before #2843, stream_end only fired inside the `result` branch —
+  // if the SDK iterator threw mid-stream (or `updateConversationStatus` after
+  // the final block failed, or the controller aborted while a tool_use was
+  // the last event), the client bubble stayed stuck showing "Working". See
+  // the finally-block fallback below. These locals are scoped per
+  // startAgentSession invocation, so multi-leader dispatch (each leader runs
+  // its own closure) cannot cross-leak.
+  let streamStartSent = false;
+  let streamEndSent = false;
+  const outerStreamLeaderId: DomainLeaderId = leaderId ?? "cpo";
+
   try {
     // Get user's decrypted API key and service tokens
     const [apiKey, serviceTokens] = await Promise.all([
@@ -656,6 +668,27 @@ resuming an existing thread preserves context for the user.`;
         });
         platformTools.push(...github.tools);
         platformToolNames.push(...github.toolNames);
+
+        // Announce GitHub read-access tools so the agent can discover them
+        // from natural language requests like "read issue 2831" or
+        // "summarize the review on PR 100." Without this block, agents
+        // fall back to shelling out to `gh` (not installed in the sandbox).
+        // See #2843. Budget: ≤80 tokens (KB-share precedent is ~120).
+        systemPrompt += `
+
+## GitHub read access
+
+You can read issues and pull requests on the user's connected repository
+(${owner}/${repo}) using these tools:
+
+- github_read_issue({ issue_number }) — title, state, body, labels, assignees
+- github_read_issue_comments({ issue_number, per_page? }) — conversation thread
+- github_read_pr({ pull_number }) — issue fields plus draft/merged/mergeable/refs
+- github_list_pr_comments({ pull_number, per_page? }) — review + conversation comments, each tagged with kind
+
+Use these when the user mentions an issue or PR by number, or asks to
+"resume work on" or "summarize" one. Bodies are truncated at 10 KB (issues/PRs)
+and 4 KB (comments); follow the html_url for the full text.`;
       }
     }
 
@@ -839,6 +872,7 @@ resuming an existing thread preserves context for the user.`;
 
     // Notify client that this leader is about to stream
     sendToClient(userId, { type: "stream_start", leaderId: streamLeaderId, source: routeSource });
+    streamStartSent = true;
 
     for await (const message of q) {
       if (controller.signal.aborted) break;
@@ -926,8 +960,13 @@ resuming an existing thread preserves context for the user.`;
           await syncPush(userId, workspacePath);
         }
 
-        // Notify client that this leader finished streaming
-        sendToClient(userId, { type: "stream_end", leaderId: streamLeaderId });
+        // Notify client that this leader finished streaming (guarded — the
+        // finally-block fallback emits if this path is skipped by an
+        // exception or abort; guard prevents double-emit. See #2843.)
+        if (!streamEndSent) {
+          sendToClient(userId, { type: "stream_end", leaderId: streamLeaderId });
+          streamEndSent = true;
+        }
 
         // Mark as waiting_for_user instead of completed -- conversation
         // continues until explicit close or inactivity timeout.
@@ -988,7 +1027,13 @@ resuming an existing thread preserves context for the user.`;
       // so the caller's .catch() fallback can fire (clear stale session_id,
       // load history, replay). Do NOT capture to Sentry (expected operational
       // behavior) or mark conversation as failed (it will be retried).
-      sendToClient(userId, { type: "stream_end", leaderId: leaderId ?? "cpo" });
+      // The finally block below also emits stream_end as a fallback; guard
+      // here to keep the existing resume-error ordering (emit before throw)
+      // while ensuring idempotency.
+      if (streamStartSent && !streamEndSent) {
+        sendToClient(userId, { type: "stream_end", leaderId: outerStreamLeaderId });
+        streamEndSent = true;
+      }
       throw err;
     } else {
       // Sandbox-required-but-unavailable surfaces as a SDK subprocess
@@ -1024,6 +1069,17 @@ resuming an existing thread preserves context for the user.`;
       );
     }
   } finally {
+    // Fallback stream_end emission. Covers: SDK iterator throws mid-stream,
+    // updateConversationStatus throws before the existing line-930 emit,
+    // controller aborts with tool_use as the last event, or any other path
+    // that exits the try block without the success-branch emission firing.
+    // The guards at the success-branch and resume-error sites are idempotent
+    // with this one (first emission flips streamEndSent; subsequent are
+    // no-ops). See #2843 stuck-bubble fix.
+    if (streamStartSent && !streamEndSent) {
+      sendToClient(userId, { type: "stream_end", leaderId: outerStreamLeaderId });
+      streamEndSent = true;
+    }
     activeSessions.delete(key);
   }
 }

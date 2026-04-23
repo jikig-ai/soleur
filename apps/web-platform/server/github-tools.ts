@@ -12,6 +12,12 @@ import { tool } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod/v4";
 import { createPullRequest } from "./github-app";
 import { readCiStatus, readWorkflowLogs } from "./ci-tools";
+import {
+  readIssue,
+  readIssueComments,
+  readPullRequest,
+  listPullRequestComments,
+} from "./github-read-tools";
 import { triggerWorkflow, type createRateLimiter } from "./trigger-workflow";
 import { pushBranch } from "./push-branch";
 import { validateBranchFormat } from "./branch-validation";
@@ -180,14 +186,119 @@ export function buildGithubTools(opts: BuildGithubToolsOpts): BuildGithubToolsRe
     },
   );
 
+  // ---------------------------------------------------------------------------
+  // Read-only issue/PR tools (#2843). Matching pattern: readCi/readLogs —
+  // auto-approve, JSON-stringified narrowed output, isError on exception.
+  // Response narrowing + body truncation lives in github-read-tools.ts.
+  // ---------------------------------------------------------------------------
+
+  const readIssueTool = tool(
+    "github_read_issue",
+    "Read a single issue from the connected repository by number. " +
+      "Returns number, title, state, body (truncated at 10 KB), labels, " +
+      "assignees, milestone title, timestamps, author login, and html_url.",
+    {
+      issue_number: z.number().describe("The issue number to read"),
+    },
+    async (args): Promise<ToolTextResponse> => {
+      try {
+        const result = await readIssue(installationId, owner, repo, args.issue_number);
+        return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+      } catch (err) {
+        return {
+          content: [{ type: "text", text: `Error reading issue: ${(err as Error).message}` }],
+          isError: true,
+        };
+      }
+    },
+  );
+
+  const readIssueCommentsTool = tool(
+    "github_read_issue_comments",
+    "Read conversation comments on an issue. Returns id, author login, " +
+      "body (truncated at 4 KB), created_at, and html_url. Results are " +
+      "tagged kind=\"conversation\" for symmetry with github_list_pr_comments.",
+    {
+      issue_number: z.number().describe("The issue number to read comments from"),
+      per_page: z.number().default(10).describe("Number of comments to return (max 50)"),
+    },
+    async (args): Promise<ToolTextResponse> => {
+      try {
+        const result = await readIssueComments(
+          installationId, owner, repo, args.issue_number, { per_page: args.per_page },
+        );
+        return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+      } catch (err) {
+        return {
+          content: [{ type: "text", text: `Error reading issue comments: ${(err as Error).message}` }],
+          isError: true,
+        };
+      }
+    },
+  );
+
+  const readPrTool = tool(
+    "github_read_pr",
+    "Read a pull request from the connected repository by number. Returns " +
+      "the issue fields plus PR-specific review state: draft, merged, " +
+      "mergeable, mergeable_state, head_ref, base_ref, merged_at. Use this " +
+      "to decide whether a PR needs another push or is already merged.",
+    {
+      pull_number: z.number().describe("The pull request number to read"),
+    },
+    async (args): Promise<ToolTextResponse> => {
+      try {
+        const result = await readPullRequest(installationId, owner, repo, args.pull_number);
+        return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+      } catch (err) {
+        return {
+          content: [{ type: "text", text: `Error reading PR: ${(err as Error).message}` }],
+          isError: true,
+        };
+      }
+    },
+  );
+
+  const listPrCommentsTool = tool(
+    "github_list_pr_comments",
+    "List both review comments (line-specific) and conversation comments on " +
+      "a pull request. Each entry is tagged kind=\"review\" or " +
+      "kind=\"conversation\" so you can filter. Review comments come from " +
+      "/pulls/:n/comments; conversation comments from /issues/:n/comments.",
+    {
+      pull_number: z.number().describe("The pull request number to list comments for"),
+      per_page: z.number().default(10).describe("Number of comments per kind to return (max 50)"),
+    },
+    async (args): Promise<ToolTextResponse> => {
+      try {
+        const result = await listPullRequestComments(
+          installationId, owner, repo, args.pull_number, { per_page: args.per_page },
+        );
+        return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+      } catch (err) {
+        return {
+          content: [{ type: "text", text: `Error listing PR comments: ${(err as Error).message}` }],
+          isError: true,
+        };
+      }
+    },
+  );
+
   return {
-    tools: [createPr, readCi, readLogs, triggerWf, pushBr],
+    tools: [
+      createPr, readCi, readLogs, triggerWf, pushBr,
+      readIssueTool, readIssueCommentsTool, readPrTool, listPrCommentsTool,
+    ],
     toolNames: [
       "mcp__soleur_platform__create_pull_request",
       "mcp__soleur_platform__github_read_ci_status",
       "mcp__soleur_platform__github_read_workflow_logs",
       "mcp__soleur_platform__github_trigger_workflow",
       "mcp__soleur_platform__github_push_branch",
+      "mcp__soleur_platform__github_read_issue",
+      "mcp__soleur_platform__github_read_issue_comments",
+      "mcp__soleur_platform__github_read_pr",
+      "mcp__soleur_platform__github_list_pr_comments",
     ],
   };
 }
