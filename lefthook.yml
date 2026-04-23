@@ -23,7 +23,7 @@ pre-commit:
     rule-id-lint:
       priority: 4
       glob: "AGENTS.md"
-      run: python3 scripts/lint-rule-ids.py {staged_files}
+      run: python3 scripts/lint-rule-ids.py --retired-file scripts/retired-rule-ids.txt {staged_files}
     agents-compound-sync:
       priority: 4
       glob:
