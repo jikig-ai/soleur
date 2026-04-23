@@ -129,10 +129,14 @@ elif [[ ! -r "$EXPECTED_SECCOMP_PATH" ]]; then
   emit_fail "On-host seccomp profile missing at $EXPECTED_SECCOMP_PATH — deploy state incoherent"
 else
   # jq -cS = --compact-output --sort-keys. Canonical form → byte-stable hash.
-  FILE_HASH=$(jq -cS . "$EXPECTED_SECCOMP_PATH" 2>/dev/null | sha256sum | cut -d' ' -f1)
+  # `|| true` on both pipes: under `set -euo pipefail`, a jq failure would
+  # abort the script before the "not valid JSON" branch can emit. We want
+  # malformed JSON to land in an explicit FAIL, not a silent strict-mode exit.
+  FILE_HASH=$(jq -cS . "$EXPECTED_SECCOMP_PATH" 2>/dev/null | sha256sum | cut -d' ' -f1 || true)
   INLINED_HASH=$(printf '%s' "$SECCOMP_ENTRY" | jq -cS . 2>/dev/null | sha256sum | cut -d' ' -f1 || true)
+  EMPTY_HASH=$(printf '' | sha256sum | cut -d' ' -f1)
 
-  if [[ -z "$FILE_HASH" || "$FILE_HASH" == "$(printf '' | sha256sum | cut -d' ' -f1)" ]]; then
+  if [[ -z "$FILE_HASH" || "$FILE_HASH" == "$EMPTY_HASH" ]]; then
     emit_fail "On-host seccomp profile at $EXPECTED_SECCOMP_PATH is not valid JSON"
   elif [[ "$INLINED_HASH" != "$FILE_HASH" ]]; then
     emit_fail "seccomp drift: inlined profile sha256=${INLINED_HASH:0:12} != on-host sha256=${FILE_HASH:0:12}"

@@ -73,7 +73,7 @@ run_case() {
     export DOCKER_INSPECT_FIXTURE="$FIXTURE_DIR/$fixture"
     export DOCKER_EXEC_EXIT=0
     for kv in "$@"; do
-      eval "export $kv"
+      export "${kv?}"
     done
     bash "$AUDIT_SCRIPT" 2>&1
   ) && actual_exit=0 || actual_exit=$?
@@ -114,6 +114,16 @@ run_case "literal path — Docker did not resolve seccomp flag" \
 run_case "on-host seccomp file missing — deploy state incoherent" \
   "inspect-pass.txt" 1 "On-host seccomp profile missing" \
   "EXPECTED_SECCOMP_PATH=/nonexistent/path/soleur-bwrap.json"
+
+# FAIL: on-host file exists but isn't valid JSON (regression guard — without
+# `|| true` on the FILE_HASH pipeline, strict-mode would abort the script
+# before this branch could emit).
+_BAD_JSON_FIXTURE=$(mktemp --suffix=.json)
+printf 'not valid json\n' > "$_BAD_JSON_FIXTURE"
+run_case "on-host seccomp file malformed — explicit FAIL (not strict-mode abort)" \
+  "inspect-pass.txt" 1 "is not valid JSON" \
+  "EXPECTED_SECCOMP_PATH=$_BAD_JSON_FIXTURE"
+rm -f "$_BAD_JSON_FIXTURE"
 
 echo ""
 echo "--- check 2 regression guard: apparmor path unchanged ---"

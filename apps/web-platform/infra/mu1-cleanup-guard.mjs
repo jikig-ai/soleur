@@ -4,6 +4,7 @@
 // update DEV_PROJECT_REF here AND the SYNTH allowlist regex in
 // test/mu1-integration.test.ts in the same commit — they are coupled.
 const DEV_PROJECT_REF = "ifsccnjhymdmidffkzhl";
+const DEV_HOSTNAME = `${DEV_PROJECT_REF}.supabase.co`;
 
 export function assertDevCleanupEnv(env = process.env) {
   if (env.DOPPLER_CONFIG !== "dev") {
@@ -14,19 +15,23 @@ export function assertDevCleanupEnv(env = process.env) {
     );
   }
   const url = env.NEXT_PUBLIC_SUPABASE_URL || "";
-  let actualRef = "";
+  let actualHostname = "";
   try {
-    actualRef = new URL(url).hostname.split(".")[0];
+    actualHostname = new URL(url).hostname;
   } catch {
-    // Malformed / empty URL → fall through to the project-ref branch with
-    // actualRef="" so the thrown message stays actionable.
+    // Malformed / empty URL → fall through to the hostname branch with
+    // actualHostname="" so the thrown message stays actionable.
   }
-  if (actualRef !== DEV_PROJECT_REF) {
+  // Exact-hostname equality, not prefix-split. A prefix split would accept
+  // `<ref>.supabase.co.attacker.example` because split(".")[0] returns the
+  // label regardless of trailing domain — which is a credential-exfiltration
+  // vector if NEXT_PUBLIC_SUPABASE_URL is ever operator-attacker-influenced.
+  if (actualHostname !== DEV_HOSTNAME) {
     throw new Error(
-      "Refusing to run cleanup: Supabase project ref '" +
-        actualRef +
-        "' != expected dev ref '" +
-        DEV_PROJECT_REF +
+      "Refusing to run cleanup: Supabase hostname '" +
+        actualHostname +
+        "' != expected dev hostname '" +
+        DEV_HOSTNAME +
         "' (url=" +
         url +
         ")",

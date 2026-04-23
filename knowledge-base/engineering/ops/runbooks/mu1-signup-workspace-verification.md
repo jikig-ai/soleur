@@ -90,10 +90,11 @@ Expected output:
 
 Cleanup: the test deletes the synthetic user in `finally`. If the test
 crashes before cleanup, sweep manually. The guard below hard-asserts
-(a) `DOPPLER_CONFIG === "dev"`, (b) the project ref in
-`NEXT_PUBLIC_SUPABASE_URL` matches the dev project ref — either trip
-aborts before any delete runs. The sweep uses the same v4-UUID regex
-the test uses so it cannot match anything but its own leftovers:
+(a) `DOPPLER_CONFIG === "dev"`, (b) `NEXT_PUBLIC_SUPABASE_URL`'s
+hostname exactly equals the dev Supabase hostname (no subdomain
+suffix tricks) — either trip aborts before any delete runs. The sweep
+uses the same v4-UUID regex the test uses so it cannot match anything
+but its own leftovers:
 
 ```bash
 doppler run -p soleur -c dev -- node -e '

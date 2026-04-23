@@ -72,15 +72,27 @@ run_case "DOPPLER_CONFIG unset → throws with <unset>" \
   "__undefined__" "$DEV_URL" "<unset>"
 
 echo ""
-echo "--- project-ref guard ---"
-run_case "wrong project ref → throws with project ref 'otherref'" \
-  "dev" "https://otherref.supabase.co" "project ref 'otherref'"
+echo "--- hostname guard ---"
+run_case "wrong project ref → throws with hostname 'otherref.supabase.co'" \
+  "dev" "https://otherref.supabase.co" "hostname 'otherref.supabase.co'"
 
-run_case "empty URL → throws with project ref ''" \
-  "dev" "" "project ref ''"
+run_case "empty URL → throws with hostname ''" \
+  "dev" "" "hostname ''"
 
-run_case "malformed URL → throws with project ref ''" \
-  "dev" "not-a-url" "project ref ''"
+run_case "malformed URL → throws with hostname ''" \
+  "dev" "not-a-url" "hostname ''"
+
+# Security regression: split(".")[0] would accept this. Exact-hostname
+# equality rejects it (credential-exfiltration vector otherwise).
+run_case "subdomain bypass attempt (<ref>.supabase.co.evil.com) → rejected" \
+  "dev" "https://ifsccnjhymdmidffkzhl.supabase.co.evil.com" \
+  "hostname 'ifsccnjhymdmidffkzhl.supabase.co.evil.com'"
+
+# Strip-the-suffix variant: host that starts with DEV_PROJECT_REF but is
+# not the exact hostname.
+run_case "prefix-match bypass (<ref>supabase.co without dot) → rejected" \
+  "dev" "https://ifsccnjhymdmidffkzhlfoo.supabase.co" \
+  "hostname 'ifsccnjhymdmidffkzhlfoo.supabase.co'"
 
 # --- Results ----------------------------------------------------------------
 
