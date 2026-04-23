@@ -29,7 +29,8 @@ Without a living cost model:
 
 - No new sibling finance docs (revenue-model.md, burn-rate.md, break-even.md, pricing-model.md). Pre-revenue; stubs violate YAGNI.
 - No absorption of the 2026-04-19 CFO conversation-slot-economics memo into cost-model.md. The memo is a dated decision record and retains its own framing.
-- No new dedicated freshness-lint hook (`.claude/hooks/finance-freshness.sh`). Rely on existing `/ship` Phase 5.5 COO gate and AGENTS.md workflow rule.
+- No new dedicated freshness-lint hook (`.claude/hooks/finance-freshness.sh`). Rely on existing `/ship` Phase 5.5 COO gate and frontmatter-based strategy-review-cadence cron.
+- **No AGENTS.md workflow gate rule** (original FR6 — deferred during plan review 2026-04-23). Rationale: (a) AGENTS.md is already 84 bytes over the 40 KB warn threshold; (b) frontmatter (`review_cadence: monthly`, `depends_on`) + strategy-review-cadence cron covers this file class's freshness; (c) the rule can be added later if observation (post-merge AC #2 in plan) shows silent rot. See `knowledge-base/project/plans/2026-04-23-docs-finance-cost-model-and-roadmap-sync-plan.md` §Alternative Approaches.
 - No new CFO-cron scheduled agent.
 - No claim that cost-model.md closes Pricing Gate #4 — it only addresses the affordability dimension.
 - No external-facing cost disclosure (cost-model.md is internal-first; external-facing derivatives are a separate future concern).
@@ -71,8 +72,13 @@ Every numeric figure in cost-model.md that originates in `expenses.md` MUST be f
 
 In the same PR, update `product/roadmap.md`:
 
-- L63 CFO assessment line — reframe from "Break-even at 1-2 paying users. EUR 35-44/month burn." to the split formulation ("~$91/month product COGS (break-even 2-3 users), ~$491/month all-in (break-even ~11 users). BYOK eliminates per-user LLM cost.").
-- L397 Pricing section — update Gate #4 status to "Partially addressed — affordability documented in `finance/cost-model.md`; buildability pending CPO/CTO assessment."
+- CFO burn line (L63 at plan time) — reframe from "Break-even at 1-2 paying users. EUR 35-44/month burn." to the split formulation ("~$91/month product COGS (break-even 2-3 users), ~$491/month all-in (break-even ~11 users). BYOK eliminates per-user LLM cost. Dev-tooling classed R&D.").
+- CFO artifact line (L64 at plan time) — update from "No finance artifacts exist. Need cost model." to reflect that cost-model.md has shipped and partially addresses Pricing Gate #4.
+- Pricing Gate #4 status row (L404 at plan time, **not L397** as originally specced — see plan's Research Reconciliation) — update status to "Partial. Affordability documented in `finance/cost-model.md`; buildability pending CPO/CTO assessment."
+- Cost-model.md action item (L416 at plan time) — mark disposition as shipped with partial Gate #4 closure.
+- `## Current State` section — add a "Financial posture" sub-bullet naming both burn scopes and cross-linking to `finance/cost-model.md` so operators reading the roadmap summary see the reconciled numbers, not just the tables.
+- Advance `last_updated` frontmatter to the PR's merge date (or author date for pre-merge review).
+- Work-time note: re-grep for "CFO" and "Infrastructure cost model" anchors before editing — line numbers may have drifted since plan time.
 
 ### FR5: Back-links from dependent docs
 
@@ -81,18 +87,15 @@ Add back-links (one line each) to cost-model.md from:
 - `operations/expenses.md` — "Finance consumer: [finance/cost-model.md]".
 - `product/pricing-strategy.md` — Gate #4 section references `finance/cost-model.md`.
 
-### FR6: AGENTS.md Workflow Gate rule
+### FR6: [DEFERRED — originally "AGENTS.md Workflow Gate rule"]
 
-Add one rule under `## Workflow Gates` in `AGENTS.md`:
-> When editing `knowledge-base/operations/expenses.md`, re-read `knowledge-base/finance/cost-model.md` and refresh burn totals + `last_updated` in the same PR if any category subtotal shifted >10 %.
-
-Rule ID: assigned at implementation time per `cq-rule-ids-are-immutable`.
+Deferred during plan review (2026-04-23) — see Non-Goals for rationale. If post-merge observation (plan AC #2) shows silent rot, a follow-up PR may add the rule.
 
 ## Technical Requirements
 
 ### TR1: Markdownlint clean
 
-The new doc, the roadmap edits, and the AGENTS.md edit MUST pass `npx markdownlint-cli2 --fix` on the changed files only (per `cq-markdownlint-fix-target-specific-paths` — no repo-wide glob).
+The new doc and the roadmap/back-link edits MUST pass `npx markdownlint-cli2 --fix` on the changed files only (per `cq-markdownlint-fix-target-specific-paths` — no repo-wide glob).
 
 ### TR2: Cross-reference validity
 
@@ -106,9 +109,9 @@ Every number in cost-model.md MUST be derivable from `expenses.md` at the dated 
 
 cost-model.md MUST NOT reproduce the expenses.md recurring table verbatim. Categories and derived totals are allowed; row-by-row copy is not (would drift and violate the derived-view decision).
 
-### TR5: AGENTS.md budget adherence
+### TR5: [DEFERRED — was "AGENTS.md budget adherence"]
 
-The new AGENTS.md rule MUST fit under the ~600-byte-per-rule cap and not push the file past the 115-rule threshold per `cq-agents-md-why-single-line`. Current rule count must be checked before adding.
+Moot with FR6 deferred. No AGENTS.md edit in this PR.
 
 ### TR6: Back-link commits atomic with cost-model.md
 
@@ -118,10 +121,9 @@ The new AGENTS.md rule MUST fit under the ~600-byte-per-rule cap and not push th
 
 1. `knowledge-base/finance/cost-model.md` exists with the FR1 frontmatter and all nine FR2 sections.
 2. All numeric figures carry an `[expenses.md@YYYY-MM-DD]` anchor.
-3. `product/roadmap.md` L63 and L397 updated per FR4.
+3. `product/roadmap.md` CFO narrative lines + Pricing Gate #4 status row + cost-model action item + `## Current State` section updated per FR4 (plan corrects the spec's L397 → actual L404; see plan's Research Reconciliation).
 4. `operations/expenses.md` and `product/pricing-strategy.md` have back-links to cost-model.md per FR5.
-5. AGENTS.md workflow gate rule added per FR6.
-6. Markdownlint clean on all changed files.
-7. PR body includes "Partially addresses #1053" (not "Closes" — the issue asks for "partial Pricing Gate #4" which is satisfied, but further Gate #4 work remains with CPO/CTO; close behavior at merge time discussed in the PR review). If the product team agrees the issue's full Task list is satisfied by this PR, switch to `Closes #1053`.
-8. No new sibling finance docs created.
-9. No new hooks, cron, or scheduled agents introduced.
+5. Markdownlint clean on all changed files.
+6. PR body includes "Partially addresses #1053" (not "Closes" — Gate #4 buildability remains with CPO/CTO). If the product team agrees the issue's full Task list is satisfied by this PR, operator may close manually post-merge.
+7. No new sibling finance docs created.
+8. No new hooks, cron, scheduled agents, or AGENTS.md rules introduced (FR6 deferred).
