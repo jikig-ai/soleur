@@ -1,0 +1,114 @@
+/**
+ * FR3 (#2861): render-time scrub for assistant-rendered text.
+ *
+ * Strips host (`/workspaces/<uuid>/`) and sandbox
+ * (`/tmp/claude-<uid>/-workspaces-<uuid>/`) prefixes from prose segments
+ * only. Fenced code blocks (``` and indented 4-space), inline backticked
+ * identifiers, URLs, and `#NNNN` references are preserved byte-for-byte.
+ *
+ * The stored `conversation_messages.content` remains the verbatim model
+ * output; only the render output is scrubbed. Cost tracking, SDK replay,
+ * and Sentry breadcrumbs continue to observe the original text.
+ *
+ * Pure function. `reportFallthrough` is the sole optional side-effect, fired
+ * only on suspected-leak shapes that survived the canonical pattern table.
+ */
+
+import {
+  SANDBOX_PATH_PATTERNS,
+  SUSPECTED_LEAK_SHAPE,
+} from "@/lib/sandbox-path-patterns";
+
+export interface FormatAssistantTextOptions {
+  /**
+   * Called when a `/workspaces/` or `/tmp/claude-` shape survives scrubbing.
+   * The caller wires this to `reportSilentFallback` on the server; on the
+   * client, wire to the Sentry browser SDK. Receives the offending shape
+   * (bounded to a short slice so we don't capture assistant bodies).
+   */
+  reportFallthrough?: (shape: string) => void;
+}
+
+// Matches a fenced code block (```…```) optionally preceded by a language tag.
+// [\s\S] instead of `.` so newlines are captured. Non-greedy body.
+const FENCED_CODE_BLOCK = /```[\s\S]*?```/g;
+
+// Matches inline backticked code: `x` (single-line).
+const INLINE_CODE = /`[^`\n]+`/g;
+
+// Matches 4-space-indented lines (CommonMark indented code). Runs at the
+// start of a line so prose that happens to contain 4-space prefixes inside
+// already-scrubbed output is not matched.
+const INDENTED_CODE_LINE = /^( {4,}|\t)[^\n]*$/gm;
+
+// Matches URLs so we never scrub paths inside them.
+const URL_LIKE = /https?:\/\/[^\s)]+/g;
+
+/**
+ * Apply scrub only to "prose" segments — replace every code/URL/backtick-wrapped
+ * token with an opaque placeholder, scrub the remainder, then restore. This is
+ * cheaper than writing a markdown parser, and strictly preserves fence/URL
+ * contents byte-for-byte.
+ *
+ * Placeholder uses a per-call random sentinel so prose containing a literal
+ * `PRESERVED_N` token cannot be rewritten (security review #2861). Out-of-range
+ * indices throw rather than silently dropping content so a forged sentinel
+ * fails loudly in dev/tests instead of mangling the render in prod.
+ */
+function scrubProse(raw: string, onFallthrough?: (shape: string) => void): string {
+  const preserved: string[] = [];
+  // 8 random hex chars per call — enough entropy to make collision with
+  // assistant output astronomically unlikely without incurring crypto cost.
+  const nonce = Math.floor(Math.random() * 0xffffffff)
+    .toString(16)
+    .padStart(8, "0");
+  const placeholder = (i: number) => ` SOLEUR_PRES_${nonce}_${i} `;
+  const restorePattern = new RegExp(` SOLEUR_PRES_${nonce}_(\\d+) `, "g");
+
+  function stash(s: string): string {
+    const i = preserved.length;
+    preserved.push(s);
+    return placeholder(i);
+  }
+
+  // Order matters: fenced code first (greediest), then URLs, then inline code,
+  // then indented code lines.
+  let work = raw.replace(FENCED_CODE_BLOCK, (m) => stash(m));
+  work = work.replace(URL_LIKE, (m) => stash(m));
+  work = work.replace(INLINE_CODE, (m) => stash(m));
+  work = work.replace(INDENTED_CODE_LINE, (m) => stash(m));
+
+  // Now `work` contains only prose + placeholders. Scrub canonical patterns.
+  for (const pattern of SANDBOX_PATH_PATTERNS) {
+    work = work.replace(pattern, "");
+  }
+
+  // Any suspected-leak shape still in prose is a pattern-table gap.
+  if (onFallthrough && SUSPECTED_LEAK_SHAPE.test(work)) {
+    const match = work.match(SUSPECTED_LEAK_SHAPE);
+    if (match) onFallthrough(match[0].slice(0, 200));
+  }
+
+  // Restore stashed segments. Out-of-range index = forged sentinel, never
+  // expected — throw so regressions surface loudly.
+  work = work.replace(restorePattern, (_, idx) => {
+    const n = Number(idx);
+    const value = preserved[n];
+    if (value === undefined) {
+      throw new Error(
+        `formatAssistantText: restore index ${n} out of range (preserved.length=${preserved.length})`,
+      );
+    }
+    return value;
+  });
+
+  return work;
+}
+
+export function formatAssistantText(
+  raw: string,
+  opts: FormatAssistantTextOptions = {},
+): string {
+  if (!raw) return raw;
+  return scrubProse(raw, opts.reportFallthrough);
+}
