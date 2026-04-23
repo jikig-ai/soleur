@@ -594,3 +594,77 @@ Any (a-e) failure → STOP; append findings with "Stage 0 BLOCKED" header; prese
 ### Cost forecast
 
 - Smoke: $0.17/run average. N=100 projected: ~$17. Concurrency (5 parallel): ~$1. Injection (4 probes): ~$0.70. **Total estimated full-suite cost: $19-25** charged to `ci` Anthropic key.
+
+---
+
+## Stage 0 BLOCKED — 2026-04-23
+
+### Full-sample run (`--mode=full`, `settingSources: []`, system-directive form)
+
+- **Attempted:** N=100
+- **Successful:** N=64 (the remaining 36 failed with `Credit balance is too low` after the `ci` Anthropic balance exhausted at run 64)
+- **Cost to exhaustion:** $15.06
+- **Session total (smoke + corrected smoke + full):** $15.85
+
+### Actual metrics (N=64)
+
+| Measurement | Value | Exit ceiling | Status |
+|---|---|---|---|
+| Routing rate to `Skill` tool | 64/64 = 100% | — | PASS |
+| First-token P50 | 30.8s | — | — |
+| **First-token P95** | **65.7s** | ≤ 15s | **FAIL (4.4×)** |
+| First-token P99 | 69.2s | — | — |
+| Total (end-to-end) P95 | 109.8s | — | — |
+| First-token cold mean (N=20) | 34.2s | — | — |
+| First-token warm mean (N=44) | 31.5s | — | — |
+| `any_parent_tool_use_id` on captured events | 0/64 | — | INCONCLUSIVE — spike probe may have checked the wrong location |
+| `canUseTool` fires for non-pre-approved tools | YES (`Glob`, `Read`, `Bash`, `AskUserQuestion`) | — | PASS |
+| Cost per successful run (mean) | $0.24 | — | — |
+| Cost per successful run (P95) | $0.52 | — | — |
+
+### Root cause of (b) failure
+
+Cold vs warm means are within 3s of each other (34.2s vs 31.5s). The latency is **not** a prefix-cache warmup cost; it is structural. Under the system-directive invocation form (`systemPrompt: "Always invoke /soleur:go..."`), the SDK spends ~30s on every call loading plugin context, reading the `/soleur:go` command body, classifying, and dispatching via `Skill` before emitting a first token. Prefix caching cannot eliminate this because the model's CoT trace from intent → dispatch is the bottleneck, not upstream I/O.
+
+The original slash-form iteration (with `settingSources: ["project"]`, cwd=worktree) produced 10.7s first-token — but that configuration is incompatible with the production untrusted-input threat model (`.claude/settings.json` pre-approves Bash, bypassing `canUseTool` at chain step 4). No configuration surfaced in Stage 0 gives both (b) latency compliance AND H3 `canUseTool` interception for `Bash`.
+
+### Hypothesis status after full sample
+
+| # | Hypothesis | Status |
+|---|---|---|
+| H1 | `prompt: "/soleur:go <msg>"` with plugin-loaded SDK invokes the command | **CONFIRMED** (iteration 2 form, 100% routing across 64 runs) |
+| H2 | Subagents emit `parent_tool_use_id` | **INCONCLUSIVE** — 9/64 used `Agent` tool but the spike's detection locations saw no `parent_tool_use_id`. The field may live on `tool_result` blocks or a different options key the probe missed. Re-probe requires deeper SDK instrumentation. |
+| H3 | `canUseTool` intercepts non-pre-approved tools | **CONFIRMED** (AskUserQuestion, Bash, Read, Glob all fired callbacks) |
+
+### Exit criteria
+
+| Criterion | Result |
+|---|---|
+| (a) H1 confirmed ≤ 2 iterations | PASS (iteration 2) |
+| (b) first-token P95 ≤ 15s (end-to-end); ≤ 6s routing-ack | **FAIL** (P95 = 65.7s, 4.4× over) |
+| (c) `parent_tool_use_id` present on ≥1 subagent event | INCONCLUSIVE (see H2) |
+| (d) concurrency event-loop lag P99 < 100ms; no heap leak | NOT RUN (credit exhausted) |
+| (e) `canUseTool` intercepts `Bash` under injection | NOT RUN (credit exhausted); H3 strongly suggests PASS |
+
+Per plan's Exit-criteria rule: "Any (a-e) failure → STOP; append findings with 'Stage 0 BLOCKED' header; present Approach B re-plan to user before any Stage 1 work." **Stage 0 is BLOCKED on (b).**
+
+### Implications for Stages 1-8
+
+- Do not start Stage 1. Migration 032, ADR-021, AGENTS.md rule update, and the 13 V2 tracking issues are all predicated on the `/soleur:go` via-prompt dispatch pattern being viable for per-message routing. It is not viable at these latencies for a conversational product.
+- Legacy `domain-router.ts` + Haiku classifier (the code this plan was deleting) delivers ~500ms classification. Replacing a 500ms flow with a 30s flow is a UX regression regardless of architectural cleanliness.
+
+### Approach B options for the user
+
+The plan's Risks section mentions "revert to Approach B" without specifying the pivot. Three candidates surfaced by the Stage 0 result:
+
+1. **B1 — Keep legacy routing, replace bespoke Haiku with SDK-dispatched classifier.** Use `query()` with an allowed-tools-only system prompt (no plugin load) to return a workflow name as structured output. Once classified, invoke the chosen workflow's SDK session with the plugin loaded. Splits the "fast classify" from "slow plugin workflow" phases. Keeps V1 UX. Drops most of Stages 2-4 (ADT, pending-prompt registry, new WS events) as this-PR scope; most V2 issues still apply to the workflow-session layer. **Est. first-token latency:** classify ~500-1500ms, workflow ~current agent-runner numbers.
+2. **B2 — Ship `/soleur:go` dispatch, relax latency target, hide behind "Classifying..." indicator.** Add progress UX that makes 30s feel acceptable (phase bar with "Analyzing intent...", "Loading workflow...", "Dispatching..." micro-updates). Keep the entire planned architecture. Accept a higher steady-state cost per message (~$0.25). Risk: spec TR4 P95 ≤ 15s is a customer-facing SLO; relaxing it in V1 to ~60s is a major product decision.
+3. **B3 — Scrap this feature.** The legacy multi-leader router works; the refactor that replaces it with `/soleur:go` is architecturally nicer but measurably slower, more expensive, and more complex. The brainstorm's motivating concerns may be addressable with incremental legacy fixes (#2225 alone) rather than wholesale replacement.
+
+My recommendation: **B1**. It preserves the routing cleanup goals (kill `dispatchToLeaders`, replace bespoke classifier), deletes the pieces that are hardest to justify (multi-leader fan-out), keeps the interactive-tool bridge work (which is independently valuable for any SDK-dispatched workflow), and the numbers say the dispatch-via-plugin pattern doesn't fit the product's latency budget.
+
+### Artifacts committed for audit trail
+
+- `apps/web-platform/scripts/spike-soleur-go-invocation.ts` — spike runner (delete before any future merge)
+- `knowledge-base/project/plans/spike-raw-smoke.json` + `spike-raw-full.json` — raw run data (gitignored)
+- Commits: `df34c876`, `866e7230`

@@ -246,10 +246,7 @@ async function modeSmoke(): Promise<void> {
     summarize(r2, "smoke/iteration-2-system-directive");
   }
 
-  writeFileSync(
-    path.join(__dirname, "../../../knowledge-base/project/plans/spike-raw-runs.json"),
-    JSON.stringify(runs, null, 2),
-  );
+  writeSpikeArtifact("smoke", runs);
 }
 
 async function modeFull(): Promise<void> {
@@ -258,21 +255,21 @@ async function modeFull(): Promise<void> {
   const N_WARM = 80;
   const runs: RunResult[] = [];
 
+  // Smoke iteration 2 (system-directive) confirmed H1; use it for N=100.
   for (let i = 0; i < N_COLD + N_WARM; i += 1) {
     const cold = i < N_COLD;
     const prompt = PROMPT_POOL[i % PROMPT_POOL.length];
-    const r = await runOnce({ prompt, runIndex: i, cold, promptForm: "slash" });
+    const r = await runOnce({ prompt, runIndex: i, cold, promptForm: "system-directive" });
     runs.push(r);
-    if (i % 10 === 9) {
-      console.log(`... completed ${i + 1}/${N_COLD + N_WARM}`);
+    if (i % 5 === 4) {
+      const costs = runs.filter((x) => x.totalCostUsd != null).map((x) => x.totalCostUsd as number);
+      const spent = costs.reduce((a, b) => a + b, 0);
+      console.log(`... completed ${i + 1}/${N_COLD + N_WARM}  cost-so-far=$${spent.toFixed(2)}`);
     }
   }
 
   summarize(runs, "full/N=100");
-  writeFileSync(
-    path.join(__dirname, "../../../knowledge-base/project/plans/spike-raw-runs.json"),
-    JSON.stringify(runs, null, 2),
-  );
+  writeSpikeArtifact("full", runs);
 }
 
 async function modeConcurrency(): Promise<void> {
@@ -282,11 +279,11 @@ async function modeConcurrency(): Promise<void> {
 
   const start = performance.now();
   const results = await Promise.all([
-    runOnce({ prompt: "plan a new feature around payments", runIndex: 0, cold: false, promptForm: "slash" }),
-    runOnce({ prompt: "brainstorm a way to reduce churn", runIndex: 1, cold: false, promptForm: "slash" }),
-    runOnce({ prompt: "explore approaches to admin auth", runIndex: 2, cold: false, promptForm: "slash" }),
-    runOnce({ prompt: "design a migration for user tenancy", runIndex: 3, cold: false, promptForm: "slash" }),
-    runOnce({ prompt: "figure out analytics for onboarding", runIndex: 4, cold: false, promptForm: "slash" }),
+    runOnce({ prompt: "plan a new feature around payments", runIndex: 0, cold: false, promptForm: "system-directive" }),
+    runOnce({ prompt: "brainstorm a way to reduce churn", runIndex: 1, cold: false, promptForm: "system-directive" }),
+    runOnce({ prompt: "explore approaches to admin auth", runIndex: 2, cold: false, promptForm: "system-directive" }),
+    runOnce({ prompt: "design a migration for user tenancy", runIndex: 3, cold: false, promptForm: "system-directive" }),
+    runOnce({ prompt: "figure out analytics for onboarding", runIndex: 4, cold: false, promptForm: "system-directive" }),
   ]);
   const wall = performance.now() - start;
   histogram.disable();
@@ -298,6 +295,7 @@ async function modeConcurrency(): Promise<void> {
     loop_delay_max_ms: histogram.max / 1e6,
     heap_used_mb: process.memoryUsage().heapUsed / 1024 / 1024,
   }, null, 2));
+  writeSpikeArtifact("concurrency", results);
 }
 
 async function modeInjection(): Promise<void> {
@@ -310,12 +308,19 @@ async function modeInjection(): Promise<void> {
   ];
   const runs: RunResult[] = [];
   for (const [i, p] of probes.entries()) {
-    runs.push(await runOnce({ prompt: p, runIndex: i, cold: i === 0, promptForm: "slash" }));
+    runs.push(await runOnce({ prompt: p, runIndex: i, cold: i === 0, promptForm: "system-directive" }));
   }
 
   const bashWithDestructive = runs.some((r) => r.canUseToolCalls.includes("Bash"));
   console.log(`\nDestructive Bash intercepted by canUseTool? ${bashWithDestructive ? "YES" : "NO"}`);
   summarize(runs, "injection/probes");
+  writeSpikeArtifact("injection", runs);
+}
+
+function writeSpikeArtifact(label: string, runs: RunResult[]): void {
+  const outPath = path.join(__dirname, `../../../knowledge-base/project/plans/spike-raw-${label}.json`);
+  writeFileSync(outPath, JSON.stringify(runs, null, 2));
+  console.log(`Wrote raw runs to ${outPath}`);
 }
 
 const PROMPT_POOL = [
