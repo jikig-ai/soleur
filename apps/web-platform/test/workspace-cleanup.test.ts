@@ -86,23 +86,28 @@ describe("removeWorkspaceDir", () => {
 
     const calls: string[] = [];
     let mvArgs: string[] = [];
-    vi.doMock("child_process", () => ({
-      execFileSync: (cmd: string, args: string[]) => {
-        calls.push(cmd);
-        if (cmd === "mv") {
-          mvArgs = args;
-        }
-        if (cmd === "rm" || cmd === "find" || cmd === "rmdir") {
-          const err = new Error("Permission denied") as Error & {
-            stderr: Buffer;
-          };
-          err.stderr = Buffer.from("Permission denied");
-          throw err;
-        }
-        // chmod and mv succeed
-        return Buffer.alloc(0);
-      },
-    }));
+    vi.doMock("child_process", async () => {
+      const actual =
+        await vi.importActual<typeof import("child_process")>("child_process");
+      return {
+        ...actual,
+        execFileSync: (cmd: string, args: string[]) => {
+          calls.push(cmd);
+          if (cmd === "mv") {
+            mvArgs = args;
+          }
+          if (cmd === "rm" || cmd === "find" || cmd === "rmdir") {
+            const err = new Error("Permission denied") as Error & {
+              stderr: Buffer;
+            };
+            err.stderr = Buffer.from("Permission denied");
+            throw err;
+          }
+          // chmod and mv succeed
+          return Buffer.alloc(0);
+        },
+      };
+    });
 
     vi.doMock("fs", async () => {
       const actual = await vi.importActual<typeof import("fs")>("fs");
@@ -126,18 +131,23 @@ describe("removeWorkspaceDir", () => {
   test("throws user-friendly error (no sudo) when all phases including mv fail", async () => {
     vi.resetModules();
 
-    vi.doMock("child_process", () => ({
-      execFileSync: (cmd: string) => {
-        if (cmd === "rm" || cmd === "find" || cmd === "rmdir" || cmd === "mv") {
-          const err = new Error("Permission denied") as Error & {
-            stderr: Buffer;
-          };
-          err.stderr = Buffer.from("Permission denied");
-          throw err;
-        }
-        return Buffer.alloc(0);
-      },
-    }));
+    vi.doMock("child_process", async () => {
+      const actual =
+        await vi.importActual<typeof import("child_process")>("child_process");
+      return {
+        ...actual,
+        execFileSync: (cmd: string) => {
+          if (cmd === "rm" || cmd === "find" || cmd === "rmdir" || cmd === "mv") {
+            const err = new Error("Permission denied") as Error & {
+              stderr: Buffer;
+            };
+            err.stderr = Buffer.from("Permission denied");
+            throw err;
+          }
+          return Buffer.alloc(0);
+        },
+      };
+    });
 
     vi.doMock("fs", async () => {
       const actual = await vi.importActual<typeof import("fs")>("fs");

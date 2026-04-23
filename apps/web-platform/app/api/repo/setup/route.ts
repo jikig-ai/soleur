@@ -5,6 +5,7 @@ import { validateOrigin, rejectCsrf } from "@/lib/auth/validate-origin";
 import { provisionWorkspaceWithRepo } from "@/server/workspace";
 import { scanProjectHealth } from "@/server/project-scanner";
 import { normalizeRepoUrl } from "@/lib/repo-url";
+import { GitOperationError, sanitizeGitStderr } from "@/server/git-auth";
 import logger from "@/server/logger";
 
 /**
@@ -196,10 +197,20 @@ export async function POST(request: Request) {
       Sentry.captureException(err);
 
       const rawMessage = err instanceof Error ? err.message : String(err);
-      const errorMessage = rawMessage.slice(0, 2000);
+      const code =
+        err instanceof GitOperationError ? err.errorCode : "CLONE_UNKNOWN";
+      // Sanitize unconditionally — GitOperationError messages are already
+      // sanitized, but other error paths (token-generation failure,
+      // UUID-validation, preflight) write raw `err.message` which can
+      // contain absolute paths from the Node error stack.
+      const payload = JSON.stringify({
+        code,
+        message: sanitizeGitStderr(rawMessage).slice(0, 2000),
+        timestamp: new Date().toISOString(),
+      });
       await serviceClient
         .from("users")
-        .update({ repo_status: "error", repo_error: errorMessage })
+        .update({ repo_status: "error", repo_error: payload })
         .eq("id", user.id)
         .then(({ error }) => {
           if (error) {

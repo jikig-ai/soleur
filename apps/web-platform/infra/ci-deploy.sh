@@ -249,10 +249,9 @@ case "$COMPONENT" in
     # Custom AppArmor profile: allows mount/umount/pivot_root for bwrap
     # while maintaining Docker's other security restrictions (#1570).
     # tmpfs /tmp (closes #2473): caps overlayfs COW write-amp from ~20 MB
-    # pdf-linearize tempfiles and keeps /tmp ephemeral. `noexec` DELIBERATELY
-    # omitted — randomCredentialPath() (github-app.ts, consumed by
-    # workspace.ts/session-sync.ts/push-branch.ts) writes `#!/bin/sh` helpers
-    # to /tmp/git-cred-<uuid> and git invokes them as executables.
+    # pdf-linearize tempfiles and keeps /tmp ephemeral. Post-GIT_ASKPASS
+    # migration (git-auth.ts), git no longer writes credential helpers
+    # under /tmp — the askpass script lives in $HOME instead.
     docker run -d \
       --name soleur-web-platform-canary \
       --restart no \
@@ -300,8 +299,8 @@ case "$COMPONENT" in
       { docker rm soleur-web-platform 2>/dev/null || true; }
 
       # tmpfs /tmp (closes #2473): see canary block above for rationale.
-      # `noexec` omission required by randomCredentialPath() / git credential
-      # helper pattern in workspace.ts / session-sync.ts / push-branch.ts.
+      # Post-GIT_ASKPASS migration, git auth is in $HOME (git-auth.ts) so
+      # /tmp no longer needs to be exec-able for git credential helpers.
       if docker run -d \
         --name soleur-web-platform \
         --restart unless-stopped \

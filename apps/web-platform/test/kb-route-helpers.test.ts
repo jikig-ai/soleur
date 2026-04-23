@@ -7,24 +7,16 @@ import { describe, test, expect, vi, beforeEach } from "vitest";
 const {
   mockGetUser,
   mockFrom,
-  mockGenerateInstallationToken,
-  mockRandomCredentialPath,
+  mockGitWithAuth,
   mockIsPathInWorkspace,
-  mockExecFile,
-  mockWriteFileSync,
-  mockUnlinkSync,
   mockLstat,
   mockValidateOrigin,
   mockRejectCsrf,
 } = vi.hoisted(() => ({
   mockGetUser: vi.fn(),
   mockFrom: vi.fn(),
-  mockGenerateInstallationToken: vi.fn(),
-  mockRandomCredentialPath: vi.fn(),
+  mockGitWithAuth: vi.fn(),
   mockIsPathInWorkspace: vi.fn(),
-  mockExecFile: vi.fn(),
-  mockWriteFileSync: vi.fn(),
-  mockUnlinkSync: vi.fn(),
   mockLstat: vi.fn(),
   mockValidateOrigin: vi.fn(),
   mockRejectCsrf: vi.fn(),
@@ -44,26 +36,15 @@ vi.mock("@/lib/auth/validate-origin", () => ({
   rejectCsrf: mockRejectCsrf,
 }));
 
-vi.mock("@/server/github-app", () => ({
-  generateInstallationToken: mockGenerateInstallationToken,
-  randomCredentialPath: mockRandomCredentialPath,
+vi.mock("@/server/git-auth", () => ({
+  gitWithInstallationAuth: mockGitWithAuth,
 }));
 
 vi.mock("@/server/sandbox", () => ({
   isPathInWorkspace: mockIsPathInWorkspace,
 }));
 
-vi.mock("node:child_process", () => ({
-  execFile: mockExecFile,
-}));
-
-vi.mock("node:util", () => ({
-  promisify: vi.fn((fn: unknown) => fn),
-}));
-
 vi.mock("node:fs", () => ({
-  writeFileSync: mockWriteFileSync,
-  unlinkSync: mockUnlinkSync,
   promises: { lstat: mockLstat },
 }));
 
@@ -350,12 +331,10 @@ describe("authenticateAndResolveKbPath", () => {
 describe("syncWorkspace", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockGenerateInstallationToken.mockResolvedValue("test-token");
-    mockRandomCredentialPath.mockReturnValue("/tmp/git-cred-test-uuid");
-    mockExecFile.mockResolvedValue({ stdout: "", stderr: "" });
+    mockGitWithAuth.mockResolvedValue(Buffer.from(""));
   });
 
-  test("returns ok:true when git pull succeeds; writes and deletes helper", async () => {
+  test("returns ok:true when git pull succeeds; delegates auth to gitWithInstallationAuth", async () => {
     const result = await syncWorkspace(
       TEST_INSTALLATION_ID,
       TEST_WORKSPACE_PATH,
@@ -364,27 +343,19 @@ describe("syncWorkspace", () => {
     );
     expect(result.ok).toBe(true);
 
-    expect(mockWriteFileSync).toHaveBeenCalledWith(
-      "/tmp/git-cred-test-uuid",
-      expect.stringContaining("x-access-token"),
-      expect.objectContaining({ mode: 0o700 }),
-    );
-    expect(mockExecFile).toHaveBeenCalledWith(
-      "git",
-      [
-        "-c",
-        "credential.helper=!/tmp/git-cred-test-uuid",
-        "pull",
-        "--ff-only",
-      ],
-      expect.objectContaining({ cwd: TEST_WORKSPACE_PATH, timeout: 30_000 }),
-    );
-    expect(mockUnlinkSync).toHaveBeenCalledWith("/tmp/git-cred-test-uuid");
+    expect(mockGitWithAuth).toHaveBeenCalledTimes(1);
+    const [args, installationId, opts] = mockGitWithAuth.mock.calls[0];
+    expect(args).toEqual(["pull", "--ff-only"]);
+    expect(installationId).toBe(TEST_INSTALLATION_ID);
+    expect(opts).toMatchObject({
+      cwd: TEST_WORKSPACE_PATH,
+      timeout: 30_000,
+    });
   });
 
-  test("returns ok:false when git pull fails; still deletes helper in finally", async () => {
+  test("returns ok:false when git pull fails", async () => {
     const pullErr = new Error("merge conflict");
-    mockExecFile.mockRejectedValue(pullErr);
+    mockGitWithAuth.mockRejectedValue(pullErr);
 
     const result = await syncWorkspace(
       TEST_INSTALLATION_ID,
@@ -394,12 +365,10 @@ describe("syncWorkspace", () => {
     );
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error).toBe(pullErr);
-
-    expect(mockUnlinkSync).toHaveBeenCalledWith("/tmp/git-cred-test-uuid");
   });
 
   test("logger.error is called with op tag on failure", async () => {
-    mockExecFile.mockRejectedValue(new Error("boom"));
+    mockGitWithAuth.mockRejectedValue(new Error("boom"));
     const errSpy = vi.fn();
     const logger = {
       info: vi.fn(),
