@@ -175,19 +175,45 @@ either inline or as a linked sub-page, so there is a single canonical ToS URL.
 
 This section is a **confirmation task**, not a drafting task. The vendor DPA
 for Stripe was closed under issue `#670`, so the privacy policy should already
-disclose Stripe as a sub-processor. CLO to verify:
+disclose Stripe as a sub-processor. CLO to verify via the concrete steps
+below; an unverified confirmation is equivalent to a gap.
 
-1. `/legal/privacy-policy/` lists Stripe in the sub-processor table (or
-   equivalent disclosure) with purpose = "payment processing" and data
-   categories = billing contact + payment metadata.
-2. The data-flow description covers **payment card data handling**: Stripe is
-   PCI-DSS compliant; Soleur never stores PAN (primary account number) or CVV.
-   The customer's card is entered into a Stripe-hosted element; Soleur
-   receives only a tokenized reference and the last-4 / brand for display.
+### Step 4.1 — Sub-processor disclosure
 
-If both (1) and (2) are already present, no new disclosure is needed from
-this flip. If the CLO finds a gap during review, flag it in the sign-off line
-in section 6 and treat it as a blocker for live-mode activation.
+1. Open `https://soleur.ai/legal/privacy-policy/` in a browser (or read the
+   source at `plugins/soleur/docs/pages/legal/privacy-policy.njk`).
+2. Locate the "Sub-processors" section (search for `Sub-processors` or
+   `service providers`).
+3. Confirm there is a row or paragraph with **all three** of the following:
+   - Vendor name: `Stripe`
+   - Purpose: `payment processing` (equivalent wording acceptable,
+     e.g. "billing and subscription management")
+   - Data categories: at minimum `billing contact information` and
+     `payment metadata` (token reference, last-4, brand).
+4. **Acceptance criterion:** if all three are present, paste the exact
+   quoted text into section 6's sign-off block as evidence.
+5. **Gap handling:** if the row is absent or missing a field, DO NOT sign
+   section 6. Draft a one-line addition using the template in
+   `knowledge-base/marketing/brand-guide.md` (or a peer privacy policy)
+   and file it as a blocker comment on Issue #1444 before proceeding.
+
+### Step 4.2 — PCI scope disclosure
+
+1. Still on `/legal/privacy-policy/`, locate the "Payment card data"
+   section (search for `PCI`, `card data`, or `payment information`).
+2. Confirm the text explicitly states **at least** the following:
+   - Stripe is PCI-DSS compliant (Level 1 or better, or "certified").
+   - Soleur never stores the primary account number (PAN) or CVV.
+   - Soleur receives only a tokenized reference plus the card brand and
+     last 4 digits for display purposes.
+3. **Acceptance criterion:** quote the exact sentences that satisfy each
+   of the three bullets into section 6. Partial matches fail.
+4. **Gap handling:** if any bullet is missing or weakened (e.g., "Stripe
+   handles payments securely" without the PCI-DSS claim), draft the
+   missing text and file as a blocker on Issue #1444 as above.
+
+If both 4.1 and 4.2 pass fully, no new disclosure is needed from this flip
+and the CLO signs section 6 citing the quoted evidence.
 
 ---
 

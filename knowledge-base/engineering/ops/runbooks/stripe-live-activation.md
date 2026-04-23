@@ -82,8 +82,9 @@ it on the founder's behalf.
      founders; customers pay a monthly subscription for concurrency
      and team-size entitlements."
    - **Statement descriptor:** the short string that appears on
-     customers' bank/card statements. Use `SOLEUR` (or `SOLEUR.AI` if
-     within the 22-char limit). Once set, changes require re-review.
+     customers' bank/card statements. Use `SOLEUR` or `SOLEUR.AI`
+     (both within Stripe's 22-character limit). Once set, changes
+     require re-review.
    - **Bank account:** enter payout details from Prerequisites.
    - **Representative identity:** upload passport/government ID for
      the beneficial owner. Stripe Identity runs OCR + liveness; if
@@ -168,7 +169,7 @@ are in USD cents (`4900` = $49.00):
 
 ```bash
 # Solo -- $49/month
-SOLO_PROD=$(stripe products create --name "Soleur Solo" --description "Solo-founder plan" --query 'id' --output json | jq -r .)
+SOLO_PROD=$(stripe products create --name "Soleur Solo" --description "Solo-founder plan" | jq -r '.id')
 stripe prices create \
   --product "$SOLO_PROD" \
   --currency usd \
@@ -177,7 +178,7 @@ stripe prices create \
   --nickname "Solo monthly"
 
 # Startup -- $149/month
-STARTUP_PROD=$(stripe products create --name "Soleur Startup" --description "Startup plan" --query 'id' --output json | jq -r .)
+STARTUP_PROD=$(stripe products create --name "Soleur Startup" --description "Startup plan" | jq -r '.id')
 stripe prices create \
   --product "$STARTUP_PROD" \
   --currency usd \
@@ -186,7 +187,7 @@ stripe prices create \
   --nickname "Startup monthly"
 
 # Scale -- $499/month
-SCALE_PROD=$(stripe products create --name "Soleur Scale" --description "Scale plan" --query 'id' --output json | jq -r .)
+SCALE_PROD=$(stripe products create --name "Soleur Scale" --description "Scale plan" | jq -r '.id')
 stripe prices create \
   --product "$SCALE_PROD" \
   --currency usd \
@@ -195,7 +196,7 @@ stripe prices create \
   --nickname "Scale monthly"
 
 # Enterprise -- placeholder $0 (contact-sales mailto flow; see note above)
-ENT_PROD=$(stripe products create --name "Soleur Enterprise" --description "Enterprise placeholder -- contact sales" --query 'id' --output json | jq -r .)
+ENT_PROD=$(stripe products create --name "Soleur Enterprise" --description "Enterprise placeholder -- contact sales" | jq -r '.id')
 stripe prices create \
   --product "$ENT_PROD" \
   --currency usd \
@@ -247,24 +248,49 @@ runner and will silently ignore app-facing keys.
 to Stripe's hosted-checkout URL, so only the server-side secret is
 required. Do not add `STRIPE_PUBLISHABLE_KEY` to Doppler.
 
-Write the six secrets. Use `--silent` so values do not echo into
-captured terminal history:
+### E.0 -- Snapshot test-mode secrets BEFORE overwriting (rollback backup)
+
+Phase H's rollback is only possible if the pre-flip test-mode values were captured. Run this step first, store the output somewhere encrypted, and record the path in the founder's encrypted notes.
+
+```bash
+# Download every secret currently in prd config (test-mode values) to a local file.
+doppler secrets download -p soleur -c prd --format env --no-file \
+  > ~/soleur-pre-activation-backup.env
+
+# Encrypt with a passphrase the founder can recover from password manager.
+gpg --symmetric --cipher-algo AES256 ~/soleur-pre-activation-backup.env
+# Produces ~/soleur-pre-activation-backup.env.gpg.
+
+# Securely delete the plaintext.
+shred -u ~/soleur-pre-activation-backup.env
+
+# Verify the encrypted file exists and is non-empty.
+ls -l ~/soleur-pre-activation-backup.env.gpg
+```
+
+Phase H.2 reads the test-mode `STRIPE_*` values from this file. Do not skip this step; without it, rollback requires re-creating test-mode Stripe prices and webhook secret from scratch.
+
+### E.1 -- Write the six live secrets
+
+`doppler secrets set` has no `--silent` flag. Use shell `read -rs` (silent read) to capture each value without terminal echo, then write via a CLI arg and immediately `unset` the variable.
 
 ```bash
 # 1. Live secret key (sk_live_...) from Dashboard -> Developers -> API keys (live mode)
-doppler secrets set STRIPE_SECRET_KEY -p soleur -c prd --silent
+echo -n "Paste STRIPE_SECRET_KEY (sk_live_...): "; read -rs SK && echo
+doppler secrets set STRIPE_SECRET_KEY="$SK" -p soleur -c prd && unset SK
 
 # 2. Live webhook signing secret (whsec_...) from Phase D
-doppler secrets set STRIPE_WEBHOOK_SECRET -p soleur -c prd --silent
+echo -n "Paste STRIPE_WEBHOOK_SECRET (whsec_...): "; read -rs WS && echo
+doppler secrets set STRIPE_WEBHOOK_SECRET="$WS" -p soleur -c prd && unset WS
 
-# 3-6. The four price IDs captured in Phase C
-doppler secrets set STRIPE_PRICE_ID_SOLO        -p soleur -c prd --silent
-doppler secrets set STRIPE_PRICE_ID_STARTUP     -p soleur -c prd --silent
-doppler secrets set STRIPE_PRICE_ID_SCALE       -p soleur -c prd --silent
-doppler secrets set STRIPE_PRICE_ID_ENTERPRISE  -p soleur -c prd --silent
+# 3-6. The four price IDs captured in Phase C (price_...)
+for KEY in STRIPE_PRICE_ID_SOLO STRIPE_PRICE_ID_STARTUP STRIPE_PRICE_ID_SCALE STRIPE_PRICE_ID_ENTERPRISE; do
+  echo -n "Paste $KEY (price_...): "; read -rs PID && echo
+  doppler secrets set "$KEY=$PID" -p soleur -c prd && unset PID
+done
 ```
 
-Each command prompts for the value on stdin; paste and press Ctrl-D.
+`read -rs` does not echo typed characters; the trailing `echo` adds a newline after submit. Values never land in shell history because they are not on the command line literally.
 
 Verify the write landed on all six keys:
 
@@ -301,6 +327,8 @@ the script only touches the REST API, not the webhook path. Phase G
 step 5 covers that gap with a real webhook-delivery probe.
 
 ## Phase G -- Deploy and smoke test
+
+**Sequencing note:** Phase F must pass BEFORE the activation PR is merged. The activation PR (this repository branch) only changes docs; it does NOT change `/pricing` CTA, Doppler secrets, or Stripe Dashboard state. All of those are operator actions against prod that happened in Phases A-E. G.7's `/pricing` CTA swap is a **separate follow-up PR** that ships after G.3-G.6 are green; if the smoke test fails, the live site continues to display the waitlist form (safe default) rather than a broken checkout.
 
 Merge the activation PR (if not already merged) and wait for the
 release workflow to deploy the updated Doppler secrets to the live
@@ -434,42 +462,50 @@ Trigger when: (a) G.3-G.4 failed and the fix is non-obvious, (b)
 Sentry shows a spike of `stripe-webhook` errors post-deploy, (c)
 real customers cannot check out and the fix-forward path is unclear.
 
-### H.1 -- Revert `STRIPE_SECRET_KEY` AND `STRIPE_WEBHOOK_SECRET` together
+### H.1 -- Disable (don't delete) the live webhook endpoint FIRST
 
-Critical: revert **both** in a single logical operation (paste both
-writes back-to-back within the same terminal session). A stale
-pairing -- live secret key with test webhook secret, or vice versa
--- returns HTTP 400 on every incoming webhook delivery, so Stripe
-retries exponentially and the subscription state falls out of sync.
+Stopping new deliveries BEFORE reverting secrets prevents a storm of 400-responses-plus-Stripe-retries while the key pairing is mid-swap.
 
-```bash
-# Paste the test-mode values (sk_test_..., whsec_test_... from
-# pre-activation Doppler backup) into both prompts without pausing.
-doppler secrets set STRIPE_SECRET_KEY     -p soleur -c prd --silent
-doppler secrets set STRIPE_WEBHOOK_SECRET -p soleur -c prd --silent
-```
+Dashboard -> **Developers -> Webhooks -> [live endpoint] -> Disable**. Disabling stops delivery but keeps the endpoint definition and event history for audit. Do NOT click Delete -- deletion loses the delivery log, which is the only record of which events fired during the partial activation window.
 
-### H.2 -- Revert all four `STRIPE_PRICE_ID_*` env vars
+### H.2 -- Revert `STRIPE_SECRET_KEY` AND `STRIPE_WEBHOOK_SECRET` together
+
+Revert **both** in a single logical operation. A stale pairing -- live secret key with test webhook secret, or vice versa -- returns HTTP 400 on every incoming webhook delivery (already mitigated by H.1's endpoint disable, but reverting in lockstep is still the safer default).
+
+First, decrypt the pre-activation backup from Phase E.0:
 
 ```bash
-doppler secrets set STRIPE_PRICE_ID_SOLO        -p soleur -c prd --silent
-doppler secrets set STRIPE_PRICE_ID_STARTUP     -p soleur -c prd --silent
-doppler secrets set STRIPE_PRICE_ID_SCALE       -p soleur -c prd --silent
-doppler secrets set STRIPE_PRICE_ID_ENTERPRISE  -p soleur -c prd --silent
+gpg --decrypt ~/soleur-pre-activation-backup.env.gpg \
+  > ~/soleur-pre-activation-backup.env
+# Read the test-mode values from the file, then shred it when done.
 ```
 
-Paste the test-mode price IDs from the pre-activation backup.
-**Preserve the live `price_...` IDs from Phase C in an encrypted
-note** -- re-activation re-uses them rather than creating a second
-set of live products.
+Then revert both secrets without echoing values to the terminal:
 
-### H.3 -- Disable (don't delete) the live webhook endpoint
+```bash
+SK_TEST=$(grep '^STRIPE_SECRET_KEY=' ~/soleur-pre-activation-backup.env | cut -d= -f2-)
+WS_TEST=$(grep '^STRIPE_WEBHOOK_SECRET=' ~/soleur-pre-activation-backup.env | cut -d= -f2-)
 
-Dashboard -> **Developers -> Webhooks -> [live endpoint] ->
-Disable**. Disabling stops delivery but keeps the endpoint
-definition and event history for audit. Do NOT click Delete --
-deletion loses the delivery log, which is the only record of
-which events fired during the partial activation window.
+doppler secrets set STRIPE_SECRET_KEY="$SK_TEST"     -p soleur -c prd
+doppler secrets set STRIPE_WEBHOOK_SECRET="$WS_TEST" -p soleur -c prd
+
+unset SK_TEST WS_TEST
+```
+
+### H.3 -- Revert all four `STRIPE_PRICE_ID_*` env vars
+
+```bash
+for KEY in STRIPE_PRICE_ID_SOLO STRIPE_PRICE_ID_STARTUP STRIPE_PRICE_ID_SCALE STRIPE_PRICE_ID_ENTERPRISE; do
+  VAL=$(grep "^$KEY=" ~/soleur-pre-activation-backup.env | cut -d= -f2-)
+  doppler secrets set "$KEY=$VAL" -p soleur -c prd
+  unset VAL
+done
+
+# Securely delete the decrypted backup now that all reverts have landed.
+shred -u ~/soleur-pre-activation-backup.env
+```
+
+**Preserve the live `price_...` IDs from Phase C in an encrypted note** -- re-activation re-uses them rather than creating a second set of live products.
 
 ### H.4 -- Revert the `/pricing` CTA
 
@@ -496,7 +532,8 @@ preserved for re-activation.
 - AGENTS.md rules: `cq-doppler-service-tokens-are-per-config`,
   `hr-menu-option-ack-not-prod-write-auth` (applies to every
   `doppler secrets set -c prd` call in this runbook --
-  never pass `--yes`), `cq-docs-cli-verification` (run the
-  TODO-verify tags through WebFetch before the runbook ships).
+  never pass `--yes`), `cq-docs-cli-verification` (all external
+  URLs in this runbook are `<!-- verified: 2026-04-23 source: ... -->`
+  annotated; re-verify at next edit).
 - Activation plan: `knowledge-base/project/plans/2026-04-23-feat-stripe-live-activation-plan.md`
 - Enforcing issue: Issue #1444.
