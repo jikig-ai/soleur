@@ -127,6 +127,8 @@ Run these agents **in parallel** to gather context before dialogue:
 
 **Verifying "is X mounted/wired/enabled?" claims.** When a research agent (or your own reasoning) asserts that a component is not present, not mounted, or not wired up, verify by grepping for the **specific consuming symbol** (a variable, hook, state field, or imported component name) rather than relying on absence of a generic phrase. Absence of the feature name in search results is not evidence of absence in code. **Why:** In the 2026-04-17 session, the Explore agent reported the chat cost badge was "not confirmed to be rendered" because it grepped "cost badge" (no code match); the badge was in fact mounted via `usageData.totalCostUsd` in `chat-surface.tsx`, which a targeted grep for the state identifier would have caught.
 
+**Verifying "this is a regression of #N" claims.** When the feature description (or your framing) attributes a post-deploy symptom to a recently-merged PR, do NOT accept the attribution until the symptom's trigger path is traced end-to-end: grep the literal rendered string → locate the render condition → identify the state/event that triggers it → cross-check that trigger path against the PR's file diff. If the PR did not modify any file on that path, the symptom is NOT a regression of that PR — it is a distinct latent bug or an adjacent uncovered code path. See `knowledge-base/project/learnings/2026-04-23-verify-trigger-path-before-attributing-regression.md`.
+
 If either agent fails or returns empty, proceed with whatever results are available. Weave findings naturally into your first question rather than presenting a formal summary.
 
 #### 1.2 Collaborative Dialogue
