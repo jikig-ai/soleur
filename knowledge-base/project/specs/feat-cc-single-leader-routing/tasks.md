@@ -25,8 +25,8 @@
 
 - [x] 1.1 RED: `apps/web-platform/test/supabase-migrations/032-workflow-state.test.ts` (column existence + nullability + CHECK constraint rejection) — file-parse test; verified RED (ENOENT) before GREEN
 - [x] 1.2 GREEN: `apps/web-platform/supabase/migrations/032_conversation_workflow_state.sql` (`active_workflow text NULL` + `workflow_ended_at timestamptz NULL` + CHECK constraint enumerating valid workflows + sentinel) — 5/5 tests pass
-- [ ] 1.3 REFACTOR: regenerate types (`supabase gen types`) — blocked by 1.4
-- [ ] 1.4 Apply migration to dev Supabase + verify via REST API — awaiting operator ack per hr-menu-option-ack (shared-db write)
+- [x] 1.3 REFACTOR: regenerate types — project uses hand-written `Conversation` in `apps/web-platform/lib/types.ts` (no `supabase gen types` flow). Added optional `active_workflow` + `workflow_ended_at` fields; richer ADT comes in Stage 2's `conversation-routing.ts`.
+- [x] 1.4 Applied to dev Supabase (project `ifsccnjhymdmidffkzhl`). Four-way verification: (a) columns present + nullable, (b) `conversations_active_workflow_chk` CHECK installed with the 7-enum whitelist, (c) `_schema_migrations` recorded, (d) REST API 200. Live CHECK test: bogus value rejected with SQLSTATE 23514; `__unrouted__` sentinel accepted. Doppler dev now has `DATABASE_URL` + `DATABASE_URL_POOLER` (rotated password). Applied via Supabase Management API SQL endpoint since `psql` isn't installed locally.
 - [x] 1.5 Update `AGENTS.md` `pdr-when-a-user-message-contains-a-clear` rule (preserve ID; ≤ 600 bytes) — 572 bytes
 - [x] 1.6 Run `bash plugins/soleur/scripts/lint-rule-ids.py` — actually `python3 scripts/lint-rule-ids.py` at repo root; exit=0
 - [x] 1.7 Write `knowledge-base/engineering/architecture/decisions/ADR-022-sdk-as-router.md` (pivot rationale + AP-004 deviation acknowledgment + V2-11 convergence path) — note: ADR-022 (not -021, which is kb-binary-serving-pattern, already merged)

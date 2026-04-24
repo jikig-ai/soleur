@@ -157,6 +157,13 @@ export interface Conversation {
   archived_at: string | null;
   context_path?: string | null;
   repo_url?: string | null;
+  // Added in migration 032 for the /soleur:go runner (plan 2026-04-23,
+  // Stage 1). `active_workflow`'s allowed values are enforced by the
+  // `conversations_active_workflow_chk` DB CHECK constraint; the richer
+  // discriminated union parse/serialize lives in
+  // server/conversation-routing.ts (Stage 2). NULL = legacy router.
+  active_workflow?: string | null;
+  workflow_ended_at?: string | null;
 }
 
 export type ConversationStatus = Conversation["status"];
