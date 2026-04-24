@@ -23,13 +23,13 @@
 
 ## Stage 1 — Schema, Sticky-Workflow State, AGENTS.md Rule, ADR
 
-- [ ] 1.1 RED: `apps/web-platform/test/supabase-migrations/032-workflow-state.test.ts` (column existence + nullability + CHECK constraint rejection)
-- [ ] 1.2 GREEN: `apps/web-platform/supabase/migrations/032_conversation_workflow_state.sql` (`active_workflow text NULL` + `workflow_ended_at timestamptz NULL` + CHECK constraint enumerating valid workflows + sentinel)
-- [ ] 1.3 REFACTOR: regenerate types (`supabase gen types`)
-- [ ] 1.4 Apply migration to dev Supabase + verify via REST API
-- [ ] 1.5 Update `AGENTS.md` `pdr-when-a-user-message-contains-a-clear` rule (preserve ID; ≤ 600 bytes)
-- [ ] 1.6 Run `bash plugins/soleur/scripts/lint-rule-ids.py`
-- [ ] 1.7 Write `knowledge-base/engineering/architecture/decisions/ADR-021-sdk-as-router.md` (pivot rationale + AP-004 deviation acknowledgment + V2-11 convergence path)
+- [x] 1.1 RED: `apps/web-platform/test/supabase-migrations/032-workflow-state.test.ts` (column existence + nullability + CHECK constraint rejection) — file-parse test; verified RED (ENOENT) before GREEN
+- [x] 1.2 GREEN: `apps/web-platform/supabase/migrations/032_conversation_workflow_state.sql` (`active_workflow text NULL` + `workflow_ended_at timestamptz NULL` + CHECK constraint enumerating valid workflows + sentinel) — 5/5 tests pass
+- [ ] 1.3 REFACTOR: regenerate types (`supabase gen types`) — blocked by 1.4
+- [ ] 1.4 Apply migration to dev Supabase + verify via REST API — awaiting operator ack per hr-menu-option-ack (shared-db write)
+- [x] 1.5 Update `AGENTS.md` `pdr-when-a-user-message-contains-a-clear` rule (preserve ID; ≤ 600 bytes) — 572 bytes
+- [x] 1.6 Run `bash plugins/soleur/scripts/lint-rule-ids.py` — actually `python3 scripts/lint-rule-ids.py` at repo root; exit=0
+- [x] 1.7 Write `knowledge-base/engineering/architecture/decisions/ADR-022-sdk-as-router.md` (pivot rationale + AP-004 deviation acknowledgment + V2-11 convergence path) — note: ADR-022 (not -021, which is kb-binary-serving-pattern, already merged)
 
 ## Stage 2 — Soleur-Go Runner (server core, security-hardened)
 
