@@ -50,7 +50,7 @@
 - [~] 2.15 GREEN: `apps/web-platform/server/start-session-rate-limit.ts` — `createStartSessionRateLimiter` module shipped (10/hour/user, 30/hour/IP; process-local sliding window). ws-handler `start_session` wiring deferred to 2.13 commit.
 - [x] 2.16 GREEN: implement prompt-injection wrap + 8KB cap + control-char strip in `soleur-go-runner.ts` (extracted to `server/prompt-injection-wrap.ts`; commit 47c5ce73)
 - [ ] 2.17 GREEN: pass restricted `mcpServers` whitelist to `query()` (start empty; expand only via V2-13 issue)
-- [ ] 2.18 GREEN: add env vars to feature-flag module + `.env.example` + Doppler `dev`/`prd`: `FLAG_CC_SOLEUR_GO`, `CC_MAX_COST_USD_BRAINSTORM=2.50`, `CC_MAX_COST_USD_WORK=0.50`, `CC_USER_DAILY_USD_CAP=10.00`, `CC_GLOBAL_DAILY_USD_CAP=200.00`
+- [~] 2.18 GREEN: `FLAG_CC_SOLEUR_GO` added to `lib/feature-flags/server.ts` as `command-center-soleur-go`; `server/cc-cost-caps.ts` reads `CC_MAX_COST_USD_BRAINSTORM=5.00` / `CC_MAX_COST_USD_WORK=2.00` / `CC_MAX_COST_USD_DEFAULT=2.00` / `CC_USER_DAILY_USD_CAP=25.00` / `CC_GLOBAL_DAILY_USD_CAP=500.00` with fail-closed fallbacks (recalibrated 2026-04-24 per RERUN; CFO gate Stage 6.5.1). `.env.example` updated. **Doppler writes deferred** — `hr-menu-option-ack-not-prod-write-auth` requires per-command operator approval for prod-scoped Doppler mutations. 18 tests (9 flag + 9 cost caps).
 - [ ] 2.19 Verify per `cq-silent-fallback-must-mirror-to-sentry`: every catch in `soleur-go-runner.ts` calls `reportSilentFallback`
 - [ ] 2.20 Verify `logPermissionDecision` is invoked from the new runner path (audit log preserved)
 - [x] 2.21 RED: `test/soleur-go-runner-lifecycle.test.ts` — per-conversation Query reuse, idle-reap, close on terminal workflow_ended — 6 tests, verified RED pre-GREEN
