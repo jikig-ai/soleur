@@ -315,7 +315,7 @@ plan.
    WEBHOOK_SECRET=$(doppler secrets get WEBHOOK_DEPLOY_SECRET -p soleur -c prd_terraform --plain)
    CF_ID=$(doppler secrets get CF_ACCESS_CLIENT_ID -p soleur -c prd_terraform --plain)
    CF_SECRET=$(doppler secrets get CF_ACCESS_CLIENT_SECRET -p soleur -c prd_terraform --plain)
-   SIG=$(printf '' | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" -hex | sed 's/^.* //')
+   SIG=$(printf '' | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" -hex | awk '{print $NF}')
    curl -sS -o /dev/null -w '%{http_code}\n' \
      -H "CF-Access-Client-Id: $CF_ID" \
      -H "CF-Access-Client-Secret: $CF_SECRET" \
@@ -375,7 +375,7 @@ and update the AGENTS.md / `/ship` skill mention if warranted.
 - [ ] Learning file committed to
       `knowledge-base/project/learnings/bug-fixes/2026-04-24-recurring-deploy-pipeline-fix-drift-as-feature.md`.
 - [ ] Deferral issue created (Phase 3 step 3) and linked from PR body.
-- [ ] PR body includes `Closes #2873` and `Closes #2874`.
+- [ ] PR body includes `Ref #2873` and `Ref #2874` (NOT `Closes` — issues close post-apply in Phase 3 step 2, per `wg-use-closes-n-in-pr-body-not-title-to`).
 - [ ] No source code edits in `apps/` (this is ops-only).
 
 ### Post-merge (operator)
@@ -492,7 +492,7 @@ with no user-facing surface, no copy, no pricing, no legal exposure.
   > `hooks.json.tmpl`. Apply: 1 added, 1 destroyed in ~11s. Endpoint live.
 - **Trigger files (`server.tf:216-221`):** sha256 over
   `ci-deploy.sh` + `webhook.service` + `cat-deploy-state.sh` + `local.hooks_json`.
-- **`local.hooks_json` (`server.tf:5-8`):** `templatefile("hooks.json.tmpl",
+- **`local.hooks_json` (`server.tf:5-7`):** `templatefile("hooks.json.tmpl",
   { webhook_deploy_secret = var.webhook_deploy_secret })`. Sensitive variable
   → derived hash is sensitive → plan output redacts the value (`(sensitive value)`).
 - **Why no cloud-init re-run:** `hcloud_server.web` has
@@ -583,7 +583,7 @@ with no user-facing surface, no copy, no pricing, no legal exposure.
 
 - Issues: #2873, #2874 (open); #2618, #2234, #1899, #1505, #1412, #994, #988 (closed, same class)
 - Files: `apps/web-platform/infra/server.tf:209-269` (resource definition),
-  `apps/web-platform/infra/server.tf:5-8` (local.hooks_json),
+  `apps/web-platform/infra/server.tf:5-7` (local.hooks_json),
   `apps/web-platform/infra/server.tf:43-49` (ignore_changes on user_data),
   `apps/web-platform/infra/cloud-init.yml:130,139` (sync comments),
   `apps/web-platform/infra/hooks.json.tmpl` (template inputs)

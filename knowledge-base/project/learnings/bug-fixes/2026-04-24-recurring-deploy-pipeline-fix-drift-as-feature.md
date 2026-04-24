@@ -15,9 +15,11 @@ related_files:
 
 # Recurring `terraform_data.deploy_pipeline_fix` drift is a feature, not a bug
 
-## The pattern (8 occurrences in ~6 weeks)
+## The pattern (7 remediation cycles across 9 filed issues in ~6 weeks)
 
-`#988` (2026-03-21) → `#994` → `#1412` → `#1505` → `#1899` → `#2234` (2026-04-15) → `#2618` (2026-04-19) → `#2873`/`#2874` (2026-04-23/24).
+`#988` (2026-03-21) → `#994` → `#1412` → `#1505` → `#1899` → `#2234` (2026-04-15) → `#2618` (2026-04-19) → `#2873`+`#2874` (2026-04-23/24, same drift detected across two 12h cron ticks before the apply ran).
+
+The drift workflow (`.github/workflows/scheduled-terraform-drift.yml`, cron `0 6,18 * * *`) auto-files a new issue on each tick until the apply lands, so the issue count slightly overstates the incident count — the remediation cycle count (one per operator apply) is the load-bearing number.
 
 Every instance has the same shape: the scheduled drift workflow (`scheduled-terraform-drift.yml`, cron `0 6,18 * * *`) detects
 
@@ -65,15 +67,12 @@ The apply takes ~10–15s: destroys, recreates, uploads 4 files via `file` provi
 
 ## What NOT to try
 
-All rejected in the `#2873`/`#2874` plan:
+The 2026-04-24 plan (`knowledge-base/project/plans/2026-04-24-fix-infra-drift-deploy-pipeline-fix-2873-2874-plan.md`, "Alternative Approaches Considered" section) derives each rejection against `server.tf` line-by-line. Two are worth surfacing here because they are the most tempting future-agent mistakes:
 
-| Tempting "fix" | Why it's wrong |
-| --- | --- |
-| Remove `terraform_data.deploy_pipeline_fix` | Strands all future trigger-file edits on disk-only — the webhook would serve stale `ci-deploy.sh` forever. |
-| Replace `triggers_replace` hash with `null`/no-op | Same problem — suppresses drift detection, breaks the bridge. |
-| Drop `lifecycle.ignore_changes = [user_data]` | Force-replaces the production server on every cloud-init edit. Catastrophic blast radius vs. 15s apply. |
-| CI auto-apply with `-auto-approve` on merge | (a) Violates `hr-menu-option-ack-not-prod-write-auth`. (b) CI SSH keys are dummies per `2026-04-03-terraform-data-remote-exec-drift-encrypted-ssh-key.md` — the provisioner would fail in CI. |
-| Add an AGENTS.md rule about it | The drift workflow IS the discovery mechanism — it files the issue with the exact plan output. Rule would be net-negative against the 37k AGENTS.md byte budget per `cq-agents-md-why-single-line` (`wg-every-session-error-must-produce-either` discoverability exit). |
+- **CI auto-apply with `-auto-approve` on merge** — (a) Violates `hr-menu-option-ack-not-prod-write-auth`. (b) CI SSH keys are dummies per `2026-04-03-terraform-data-remote-exec-drift-encrypted-ssh-key.md` — the `remote-exec` provisioner would fail in CI regardless.
+- **Replace `triggers_replace` hash with `null` / no-op** — `terraform_data` requires a non-null `triggers_replace` for the replacement-forcing semantics; setting `null` silently no-ops and the `file` provisioners never run. Drift detection is suppressed but the script updates never reach the server.
+
+Structural rejections (remove the resource entirely, drop `lifecycle.ignore_changes = [user_data]`, add an AGENTS.md rule) are covered in the plan's alternatives table with full server.tf references.
 
 ## The structural fix (deferred)
 
