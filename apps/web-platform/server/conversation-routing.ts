@@ -64,6 +64,17 @@ export function parseConversationRouting(row: {
   );
 }
 
+// Flag-to-routing adapter for `start_session`. This is the ONLY function
+// in the codebase that takes FLAG_CC_SOLEUR_GO as input — the result is
+// serialized into `conversations.active_workflow` and then read back on
+// every subsequent turn via `parseConversationRouting` (which takes NO
+// flag argument). That asymmetry is load-bearing for the "flag flip
+// mid-conversation does not re-route" invariant; see plan Stage 2.3 /
+// router-flag-stickiness.test.ts.
+export function resolveInitialRouting(flagEnabled: boolean): ConversationRouting {
+  return flagEnabled ? { kind: "soleur_go_pending" } : { kind: "legacy" };
+}
+
 export function serializeConversationRouting(
   routing: ConversationRouting,
 ): string | null {

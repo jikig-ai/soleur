@@ -35,9 +35,9 @@
 
 - [x] 2.1 RED: `apps/web-platform/test/conversation-routing.test.ts` — ADT round-trip; `'__unrouted__'` never appears in `parseConversationRouting` output (28 tests, verified RED pre-GREEN)
 - [x] 2.2 RED: `apps/web-platform/test/soleur-go-runner.test.ts` — dispatch + sticky + sentinel consumption + per-workflow cost cap + secondary wall-clock trigger (mocked SDK; synthetic SDKResultMessage) — 8 tests, verified RED pre-GREEN
-- [ ] 2.3 RED: `apps/web-platform/test/router-flag-stickiness.test.ts` — flag flip mid-conversation does NOT change `active_workflow`
+- [x] 2.3 RED: `apps/web-platform/test/router-flag-stickiness.test.ts` — flag flip mid-conversation does NOT change `active_workflow`. Adds `resolveInitialRouting(flag)` — the only function in the codebase that takes FLAG_CC_SOLEUR_GO as input; `parseConversationRouting` takes no flag arg by type. 6 tests.
 - [x] 2.4 RED: `apps/web-platform/test/pending-prompt-registry.test.ts` — Map keying by `${userId}:${conversationId}:${promptId}`; cross-user lookup rejected; idempotency on duplicate response; 5-min reaper deletes; per-conversation cap of 50 (15 tests, verified RED pre-GREEN)
-- [ ] 2.5 RED: `apps/web-platform/test/start-session-rate-limit.test.ts` — 11th conversation/hour/user rejected; 31st/hour/IP rejected
+- [x] 2.5 RED: `apps/web-platform/test/start-session-rate-limit.test.ts` — 11th/hour/user rejected; 31st/hour/IP rejected; sliding-window eviction after 1h; independent user/IP keys; atomic consume-on-allow (no TOCTOU). 8 tests.
 - [x] 2.6 RED: `apps/web-platform/test/permission-callback-sdk-tools.test.ts` — `Bash` always hits review-gate; `BLOCKED_BASH_PATTERNS` rejects; `Edit`/`Write` reject paths outside `realpathSync(workspacePath)`; symlink-target file rejected via `isPathInWorkspace` (realpath chain) — 28 tests, verified RED pre-GREEN
 - [x] 2.7 RED: `apps/web-platform/test/prompt-injection-wrap.test.ts` — `<user-input>` wrap; 8KB cap; control chars stripped (15 tests, verified RED pre-GREEN)
 - [x] 2.8 GREEN: `apps/web-platform/server/conversation-routing.ts` — TS ADT + `parseConversationRouting` / `serializeConversationRouting`; sentinel private to module (commit af6bf92b)
@@ -47,7 +47,7 @@
 - [ ] 2.12 GREEN: wire `apps/web-platform/server/ws-handler.ts:1185-1352` `sendUserMessage` branching via `parseConversationRouting`
 - [ ] 2.13 GREEN: wire `apps/web-platform/server/ws-handler.ts:455-640` `start_session` to `serializeConversationRouting({ kind: "soleur_go_pending" })` when flag is on
 - [ ] 2.14 GREEN: implement `interactive_prompt_response` handler with ownership check + idempotency + Zod validation per `kind`
-- [ ] 2.15 GREEN: implement `start_session` rate limiting (10/hour/user, 30/hour/IP)
+- [~] 2.15 GREEN: `apps/web-platform/server/start-session-rate-limit.ts` — `createStartSessionRateLimiter` module shipped (10/hour/user, 30/hour/IP; process-local sliding window). ws-handler `start_session` wiring deferred to 2.13 commit.
 - [x] 2.16 GREEN: implement prompt-injection wrap + 8KB cap + control-char strip in `soleur-go-runner.ts` (extracted to `server/prompt-injection-wrap.ts`; commit 47c5ce73)
 - [ ] 2.17 GREEN: pass restricted `mcpServers` whitelist to `query()` (start empty; expand only via V2-13 issue)
 - [ ] 2.18 GREEN: add env vars to feature-flag module + `.env.example` + Doppler `dev`/`prd`: `FLAG_CC_SOLEUR_GO`, `CC_MAX_COST_USD_BRAINSTORM=2.50`, `CC_MAX_COST_USD_WORK=0.50`, `CC_USER_DAILY_USD_CAP=10.00`, `CC_GLOBAL_DAILY_USD_CAP=200.00`
