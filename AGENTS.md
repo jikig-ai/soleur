@@ -110,7 +110,7 @@ This repository contains the Soleur Claude Code plugin. Detailed conventions liv
 
 ## Passive Domain Routing
 
-- When a user message contains a clear domain signal unrelated to the current task (expenses, legal, marketing, sales, etc.), read `plugins/soleur/skills/brainstorm/references/brainstorm-domain-config.md` and spawn the domain leader via `run_in_background: true` using the Assessment Question + Task Prompt [id: pdr-when-a-user-message-contains-a-clear]. Continue the primary task without waiting.
+- When a user message contains a clear domain signal unrelated to the current task, route based on signal orthogonality: spawn multiple leaders ONLY when the message contains distinct asks across different domains (e.g., "review expense AND audit privacy policy"); spawn a single leader for single-domain signals. Spawn via `run_in_background: true` per `plugins/soleur/skills/brainstorm/references/brainstorm-domain-config.md`. Note: governs CLI agent routing; Command Center web app routes via `/soleur:go` [id: pdr-when-a-user-message-contains-a-clear]. **Why:** #2853.
 - Do not route on trivial messages ("yes", "continue", "looks good") or when the domain signal IS the current task's topic (e.g., do not route to CTO during an engineering brainstorm about architecture) [id: pdr-do-not-route-on-trivial-messages-yes].
 
 ## Communication

@@ -39,6 +39,20 @@ import {
   touchSlot,
   emitConcurrencyCapHit,
 } from "./concurrency";
+import {
+  parseConversationRouting,
+  resolveInitialRouting,
+  serializeConversationRouting,
+  type ConversationRouting,
+  type WorkflowName,
+} from "./conversation-routing";
+import {
+  dispatchSoleurGo,
+  getCcStartSessionRateLimiter,
+  handleInteractivePromptResponseCase,
+} from "./cc-dispatcher";
+import { getFlag } from "@/lib/feature-flags/server";
+import type { InteractivePromptResponse } from "./cc-interactive-prompt-types";
 
 const log = createChildLogger("ws");
 
@@ -74,6 +88,10 @@ export interface PendingConversation {
   context?: ConversationContext;
   /** KB document path that will become conversations.context_path at materialization. */
   contextPath?: string;
+  /** Stage 2 (#2853): soleur-go routing decided at start_session time
+   *  (flag is read once per conversation — never again) and persisted
+   *  alongside the conversations row on first materialization. */
+  routing?: ConversationRouting;
 }
 
 export interface ClientSession {
@@ -102,6 +120,15 @@ export interface ClientSession {
   /** Cached Stripe subscription ID — used by the cap-hit Stripe fallback
    *  (Phase 5) to cover webhook-lag between an upgrade and the DB write. */
   stripeSubscriptionId?: string | null;
+  /** Remote-IP captured at connection time — needed by the soleur-go
+   *  start-session rate limiter's per-IP cap. Stage 2.13. */
+  ip?: string;
+  /** Cached soleur-go routing for the active conversation. Populated at
+   *  materialization + refreshed by `persistActiveWorkflow` so the
+   *  chat-case `parseConversationRouting` lookup can skip the per-turn
+   *  DB fetch (performance P1-A). Undefined means "not yet
+   *  materialized OR cache cold" — read DB on cache miss. */
+  routing?: ConversationRouting;
 }
 
 /** Active connections keyed by Supabase user ID. Registered in session-registry
@@ -154,6 +181,10 @@ export function abortActiveSession(userId: string, session: ClientSession): void
   if (oldConvId) {
     void releaseSlot(userId, oldConvId);
   }
+
+  // Invalidate the per-session routing cache so the next conversation
+  // on this socket re-reads active_workflow from DB.
+  session.routing = undefined;
 
   // Fire-and-forget — orphan cleanup catches failures on restart.
   // Supabase query builders return PromiseLike (not Promise), so use
@@ -375,6 +406,7 @@ async function createConversation(
   leaderId?: DomainLeaderId,
   id?: string,
   contextPath?: string,
+  activeWorkflow?: string | null,
 ): Promise<string> {
   if (!id) id = randomUUID();
 
@@ -398,6 +430,7 @@ async function createConversation(
     status: "active" as Conversation["status"],
     last_active: new Date().toISOString(),
     context_path: contextPath ?? null,
+    ...(activeWorkflow !== undefined ? { active_workflow: activeWorkflow } : {}),
   });
 
   if (error) {
@@ -410,7 +443,7 @@ async function createConversation(
     if (contextPath && isContextPathUniqueViolation(error)) {
       const { data: existing, error: lookupErr } = await supabase
         .from("conversations")
-        .select("id")
+        .select("id, active_workflow")
         .eq("user_id", userId)
         .eq("repo_url", repoUrl)
         .eq("context_path", contextPath)
@@ -422,12 +455,108 @@ async function createConversation(
       if (lookupErr || !existing) {
         throw new Error(`Failed to resolve existing context_path conversation: ${lookupErr?.message ?? "not found"}`);
       }
-      return (existing as { id: string }).id;
+      // data-integrity P1-B: on a two-tab race, the first writer wins
+      // stickiness — if the second tab's intended `activeWorkflow`
+      // disagrees with what the first tab persisted, the second tab's
+      // choice is silently discarded. Mirror to Sentry per
+      // `cq-silent-fallback-must-mirror-to-sentry` so the drop is
+      // visible and observable. The authoritative row's routing still
+      // gets returned (first-writer-wins is the correct UX — both tabs
+      // converge on the same conversation history).
+      const existingRow = existing as { id: string; active_workflow?: string | null };
+      const existingWorkflow = existingRow.active_workflow ?? null;
+      const intendedWorkflow = activeWorkflow ?? null;
+      if (activeWorkflow !== undefined && existingWorkflow !== intendedWorkflow) {
+        Sentry.captureMessage(
+          "createConversation 23505 fallback: activeWorkflow diverged — first-writer-wins",
+          {
+            level: "warning",
+            extra: {
+              conversationId: existingRow.id,
+              existingWorkflow,
+              intendedWorkflow,
+              userId,
+            },
+          },
+        );
+        log.warn(
+          { conversationId: existingRow.id, existingWorkflow, intendedWorkflow },
+          "23505 fallback: active_workflow diverged; second-tab choice discarded (first-writer-wins)",
+        );
+      }
+      return existingRow.id;
     }
     throw new Error(`Failed to create conversation: ${error.message}`);
   }
 
   return id;
+}
+
+/**
+ * Stage 2.12: thin ws-handler adapter around `dispatchSoleurGo`. Wires
+ * the `persistActiveWorkflow` callback to a `conversations.active_workflow`
+ * UPDATE so the sticky-workflow detection in the runner writes through
+ * to the DB.
+ */
+async function dispatchSoleurGoForConversation(
+  userId: string,
+  conversationId: string,
+  userMessage: string,
+  routing: ConversationRouting,
+): Promise<void> {
+  const persistActiveWorkflow = async (workflow: WorkflowName | null) => {
+    // data-integrity P1-A: never regress a soleur-go conversation back
+    // to `legacy` via a `null` call — that silently breaks the
+    // stickiness invariant (`conversation-routing.ts` docs) since the
+    // next-turn `parseConversationRouting` would read `active_workflow
+    // IS NULL` as legacy routing. The runner's sticky-detect path
+    // never actually emits `null`, but defensive handling guards
+    // against a future refactor widening the contract. Map `null`
+    // back to the unrouted sentinel instead.
+    const serialized = serializeConversationRouting(
+      workflow === null
+        ? { kind: "soleur_go_pending" }
+        : { kind: "soleur_go_active", workflow },
+    );
+    const { error } = await supabase
+      .from("conversations")
+      .update({
+        active_workflow: serialized,
+        last_active: new Date().toISOString(),
+      })
+      .eq("id", conversationId)
+      // data-integrity P2-A: defense-in-depth — conversationId is
+      // already server-derived, but scoping the UPDATE by user_id
+      // ensures a future refactor that accepts conversationId from a
+      // less-trusted source cannot cross-write another user's row.
+      .eq("user_id", userId);
+    if (error) {
+      log.error(
+        { conversationId, workflow, err: error.message },
+        "Failed to persist active_workflow",
+      );
+      throw new Error(`active_workflow update failed: ${error.message}`);
+    }
+    // Update the in-memory cache on the session so the next-turn
+    // chat-case route lookup observes the new workflow without a DB
+    // round-trip (performance P1-A).
+    const liveSession = sessions.get(userId);
+    if (liveSession) {
+      liveSession.routing =
+        workflow === null
+          ? { kind: "soleur_go_pending" }
+          : { kind: "soleur_go_active", workflow };
+    }
+  };
+
+  await dispatchSoleurGo({
+    userId,
+    conversationId,
+    userMessage,
+    currentRouting: routing,
+    sendToClient,
+    persistActiveWorkflow,
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -469,6 +598,39 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
         });
         return;
       }
+
+      // Stage 2.13 — soleur-go path gets an additional per-user + per-IP
+      // sliding-window limiter (10/user/hour, 30/IP/hour) on top of the
+      // legacy `sessionThrottle` above. Fail-closed at either cap.
+      // Flag is read ONCE here — the routing decision is sticky.
+      const ccFlagEnabled = getFlag("command-center-soleur-go");
+      if (ccFlagEnabled) {
+        // security P2: use userId as the per-IP fallback when no IP
+        // was captured. Falling back to a literal string like
+        // `"unknown"` collides every IP-missing user into one 30/hr
+        // bucket — a trivial DoS pivot if a proxy misconfiguration
+        // ever strips headers. Using userId preserves per-user
+        // isolation; the per-user cap still applies above it.
+        const rateLimitIp = session.ip && session.ip.length > 0 ? session.ip : userId;
+        const rate = getCcStartSessionRateLimiter().check({
+          userId,
+          ip: rateLimitIp,
+        });
+        if (!rate.allowed) {
+          logRateLimitRejection(`cc-${rate.reason}`, userId, {
+            ip: session.ip,
+            ipFallback: session.ip === rateLimitIp ? undefined : "userId",
+            retryAfterMs: rate.retryAfterMs,
+          });
+          sendToClient(userId, {
+            type: "error",
+            message: "Rate limited: too many conversations this hour.",
+            errorCode: "rate_limited",
+          });
+          return;
+        }
+      }
+      const initialRouting: ConversationRouting = resolveInitialRouting(ccFlagEnabled);
 
       try {
         // Validate context payload before any side effects
@@ -620,11 +782,18 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
           leaderId: msg.leaderId,
           context: validatedContext,
           contextPath: validResumePath ?? undefined,
+          routing: initialRouting,
         };
         session.conversationId = undefined;
 
         log.info(
-          { userId, leaderId: msg.leaderId ?? "auto-route", pendingId, contextPath: validResumePath },
+          {
+            userId,
+            leaderId: msg.leaderId ?? "auto-route",
+            pendingId,
+            contextPath: validResumePath,
+            routingKind: initialRouting.kind,
+          },
           "start_session (deferred creation)",
         );
 
@@ -678,6 +847,9 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
         }
 
         session.conversationId = msg.conversationId;
+        // Resuming a different conversation — invalidate the routing
+        // cache so the first chat-turn re-reads `active_workflow`.
+        session.routing = undefined;
         resetIdleTimer(userId, session);
         sendToClient(userId, {
           type: "session_started",
@@ -720,6 +892,7 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
           .update({ status: "completed", last_active: new Date().toISOString() })
           .eq("id", convId);
         session.conversationId = undefined;
+        session.routing = undefined;
         void releaseSlot(userId, convId);
         sendToClient(userId, { type: "session_ended", reason: "closed" });
       } catch (err) {
@@ -769,16 +942,58 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
         }
 
         try {
-          const { id: pendingId, leaderId: pendingLeader, context: pendingContext, contextPath: pendingContextPath } = session.pending;
+          const {
+            id: pendingId,
+            leaderId: pendingLeader,
+            context: pendingContext,
+            contextPath: pendingContextPath,
+            routing: pendingRouting,
+          } = session.pending;
+          // Stage 2.12 — persist active_workflow at creation time when the
+          // soleur-go flag was on at start_session. The sentinel is
+          // consumed on first dispatch via persistActiveWorkflow.
+          const initialActiveWorkflow: string | null | undefined = pendingRouting
+            ? serializeConversationRouting(pendingRouting)
+            : undefined;
           // createConversation handles unique-violation on (user_id, context_path)
           // by resolving to the existing row (two-tab race).
-          const resolvedId = await createConversation(userId, pendingLeader, pendingId, pendingContextPath);
+          const resolvedId = await createConversation(
+            userId,
+            pendingLeader,
+            pendingId,
+            pendingContextPath,
+            initialActiveWorkflow,
+          );
           session.conversationId = resolvedId;
           session.pending = undefined;
+          // Seed the routing cache so chat-case on subsequent turns
+          // can skip the DB lookup (performance P1-A).
+          session.routing = pendingRouting;
 
-          log.info({ conversationId: session.conversationId, leaderId: pendingLeader ?? "auto-route" }, "Conversation materialized on first message");
+          log.info(
+            {
+              conversationId: session.conversationId,
+              leaderId: pendingLeader ?? "auto-route",
+              routingKind: pendingRouting?.kind,
+            },
+            "Conversation materialized on first message",
+          );
 
-          // Boot agent for directed sessions now that conversation exists
+          // Stage 2.12 branch: soleur-go routing bypasses the legacy agent
+          // path entirely. The soleur-go runner owns its own Query
+          // lifecycle + canUseTool + sandbox.
+          if (pendingRouting && pendingRouting.kind !== "legacy") {
+            await dispatchSoleurGoForConversation(
+              userId,
+              session.conversationId,
+              msg.content,
+              pendingRouting,
+            );
+            break;
+          }
+
+          // Legacy path unchanged: boot agent for directed sessions now
+          // that conversation exists.
           if (pendingLeader) {
             startAgentSession(userId, session.conversationId, pendingLeader, undefined, undefined, pendingContext).catch(
               (err) => {
@@ -804,6 +1019,51 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
       }
 
       try {
+        // Stage 2.12 — route each turn via `parseConversationRouting`.
+        // Legacy rows (NULL) flow through the existing agent-runner;
+        // sentinel + workflow values dispatch to the soleur-go runner.
+        //
+        // performance P1-A: routing is cached on `session.routing`
+        // after materialization and refreshed by `persistActiveWorkflow`.
+        // Only read from DB on cache miss (reconnect, resume_session,
+        // etc.). The single-source-of-truth invariant holds because
+        // nothing outside this process mutates `active_workflow` in V1
+        // (the runner singleton is process-local).
+        const convId = session.conversationId!;
+        let routing: ConversationRouting;
+        if (session.routing) {
+          routing = session.routing;
+        } else {
+          const { data: row, error: routeErr } = await supabase
+            .from("conversations")
+            .select("active_workflow, session_id")
+            .eq("id", convId)
+            .single();
+          if (routeErr) {
+            // Route lookup failure is NOT a silent drop — mirror +
+            // legacy fallback keeps chat flowing rather than blocking
+            // on a transient DB blip.
+            Sentry.captureException(routeErr);
+            log.error(
+              { userId, conversationId: convId, err: routeErr },
+              "chat routing lookup failed (falling through to legacy)",
+            );
+          }
+          routing = row
+            ? parseConversationRouting({
+                active_workflow:
+                  (row as { active_workflow?: string | null }).active_workflow ?? null,
+              })
+            : { kind: "legacy" };
+          // Seed cache for subsequent turns.
+          session.routing = routing;
+        }
+
+        if (routing.kind !== "legacy") {
+          await dispatchSoleurGoForConversation(userId, convId, msg.content, routing);
+          break;
+        }
+
         await sendUserMessage(
           userId,
           session.conversationId!,
@@ -816,6 +1076,21 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
         log.error({ userId, err }, "chat error");
         sendToClient(userId, { type: "error", message: sanitizeErrorForClient(err) });
       }
+      break;
+    }
+
+    // ------------------------------------------------------------------
+    // interactive_prompt_response: Stage 2.14 — client reply to a
+    // soleur-go interactive tool prompt (ask_user / plan_preview /
+    // diff / bash_approval / todo_write / notebook_edit). Extended to
+    // WSMessage as a feature-local variant (see lib/types.ts §Stage 2).
+    // ------------------------------------------------------------------
+    case "interactive_prompt_response": {
+      handleInteractivePromptResponseCase({
+        userId,
+        payload: msg as unknown as InteractivePromptResponse,
+        sendToClient,
+      });
       break;
     }
 
@@ -882,6 +1157,7 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
     case "usage_update":
     case "fanout_truncated":
     case "upgrade_pending":
+    case "interactive_prompt":
     case "error": {
       sendToClient(userId, {
         type: "error",
@@ -1052,6 +1328,7 @@ export function setupWebSocket(server: HTTPServer) {
           planTier: userRowTyped.plan_tier ?? "free",
           concurrencyOverride: userRowTyped.concurrency_override ?? null,
           stripeSubscriptionId: userRowTyped.stripe_subscription_id ?? null,
+          ip: clientIp,
         };
         sessions.set(userId, newSession);
         startSubscriptionRefresh(userId, newSession);

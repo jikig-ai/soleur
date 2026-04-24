@@ -90,6 +90,24 @@ export const DOMAIN_LEADERS = [
     defaultIcon: "",
     internal: true,
   },
+  {
+    // Command Center `/soleur:go` router voice — pre-dispatch narration
+    // and tool-use chips during the routing phase, before a specific
+    // domain leader is selected. Distinct from `system` (health-check
+    // output, not user-visible as a conversational bubble) so the UI
+    // can render router turns without conflating them with background
+    // processes. See plan 2026-04-23-feat-cc-route-via-soleur-go-plan.md
+    // Stage 2 §"leaderId attribution" and ADR-022.
+    id: "cc_router",
+    name: "Router",
+    domain: "System",
+    title: "Command Center Router",
+    description:
+      "Pre-dispatch router narration and tool-use chips for the /soleur:go workflow dispatcher.",
+    agentPath: "",
+    defaultIcon: "",
+    internal: true,
+  },
 ] as const;
 
 export type DomainLeaderId = (typeof DOMAIN_LEADERS)[number]["id"];

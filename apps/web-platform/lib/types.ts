@@ -10,7 +10,8 @@ export type WSErrorCode =
   | "upload_failed"
   | "file_too_large"
   | "unsupported_file_type"
-  | "too_many_files";
+  | "too_many_files"
+  | "interactive_prompt_rejected";
 
 // Shared WebSocket close codes — single source of truth for server, client, and tests.
 // See: https://developer.mozilla.org/en-US/docs/Web/API/CloseEvent/code (4000-4999 = application-reserved)
@@ -123,6 +124,26 @@ export type WSMessage =
   | { type: "usage_update"; conversationId: string; totalCostUsd: number; inputTokens: number; outputTokens: number }
   | { type: "fanout_truncated"; dispatched: number; dropped: number }
   | { type: "upgrade_pending" }
+  // Stage 2 (#2853) — feature-local shape for the Command Center
+  // soleur-go router. Stage 3 replaces these with branded IDs
+  // (PromptId, ConversationId) + Zod parsing at the WS boundary. Until
+  // then, payload is intentionally unstructured on the client side so
+  // the router can ship the interactive-prompt bridge without a
+  // breaking-change waterfall through chat-state-machine + ws-client.
+  | {
+      type: "interactive_prompt";
+      promptId: string;
+      conversationId: string;
+      kind: "ask_user" | "plan_preview" | "diff" | "bash_approval" | "todo_write" | "notebook_edit";
+      payload: unknown;
+    }
+  | {
+      type: "interactive_prompt_response";
+      promptId: string;
+      conversationId: string;
+      kind: "ask_user" | "plan_preview" | "diff" | "bash_approval" | "todo_write" | "notebook_edit";
+      response: unknown;
+    }
   | { type: "error"; message: string; errorCode?: WSErrorCode; gateId?: string };
 
 // Database types (matches Supabase schema)
@@ -169,6 +190,13 @@ export interface Conversation {
   archived_at: string | null;
   context_path?: string | null;
   repo_url?: string | null;
+  // Added in migration 032 for the /soleur:go runner (plan 2026-04-23,
+  // Stage 1). `active_workflow`'s allowed values are enforced by the
+  // `conversations_active_workflow_chk` DB CHECK constraint; the richer
+  // discriminated union parse/serialize lives in
+  // server/conversation-routing.ts (Stage 2). NULL = legacy router.
+  active_workflow?: string | null;
+  workflow_ended_at?: string | null;
 }
 
 export type ConversationStatus = Conversation["status"];
