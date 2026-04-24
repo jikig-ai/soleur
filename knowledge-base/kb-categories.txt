@@ -1,5 +1,4 @@
 agent-design
-agent-designhcloud
 agent-loop-calibration
 agent-workflow, mcp-integration
 architecture
@@ -20,6 +19,7 @@ discovery
 docs-site
 documentation
 engineering
+implementation-patteg
 implementation-patterns
 infrastructure
 integration-issues
@@ -51,6 +51,7 @@ test-failures
 testing
 ui-bugs
 ui-css
+verification
 workflow
 workflow-issues
 workflow-patterns
