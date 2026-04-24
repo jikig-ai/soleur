@@ -150,17 +150,22 @@ class LintTests(unittest.TestCase):
 
 
     def test_retired_id_passes_when_in_allowlist(self):
-        """Rule present at HEAD, absent from working copy, listed in allowlist → linter passes."""
+        """Rule present at HEAD, absent from working copy, listed in allowlist → linter passes.
+
+        Uses cq-* fixture (not hr-*) so the hr-retirement guard
+        (TestHrRetirementGuard) does not short-circuit this assertion.
+        """
         agents_head = (
             "# Agent Instructions\n\n## Hard Rules\n\n"
-            "- Rule one [id: hr-rule-one].\n"
-            "- Rule two [id: hr-rule-two].\n"
+            "- Rule one [id: hr-rule-one].\n\n"
+            "## Code Quality\n\n"
+            "- Rule two [id: cq-rule-two].\n"
         )
         agents_working = (
             "# Agent Instructions\n\n## Hard Rules\n\n"
             "- Rule one [id: hr-rule-one].\n"
         )
-        retired = "hr-rule-two | 2026-04-23 | #2865 | -\n"
+        retired = "cq-rule-two | 2026-04-23 | #2865 | -\n"
         r = _run_git_seeded(agents_head, agents_working, retired)
         self.assertEqual(r.returncode, 0, f"stdout={r.stdout!r} stderr={r.stderr!r}")
 
@@ -176,17 +181,91 @@ class LintTests(unittest.TestCase):
         self.assertIn("duplicate", r.stderr)
 
     def test_reintroduced_retired_id_fails(self):
-        """ID listed as retired AND present as active rule → linter rejects."""
+        """ID listed as retired AND present as active rule → linter rejects.
+
+        Uses cq-* fixture (not hr-*) so the hr-retirement guard
+        (TestHrRetirementGuard) does not short-circuit this assertion.
+        """
         agents_head = (
             "# Agent Instructions\n\n## Hard Rules\n\n"
-            "- Rule one [id: hr-rule-one].\n"
-            "- Rule two [id: hr-rule-two].\n"
+            "- Rule one [id: hr-rule-one].\n\n"
+            "## Code Quality\n\n"
+            "- Rule two [id: cq-rule-two].\n"
         )
-        agents_working = agents_head  # hr-rule-two still active
-        retired = "hr-rule-two | 2026-04-23 | #2865 | -\n"
+        agents_working = agents_head  # cq-rule-two still active
+        retired = "cq-rule-two | 2026-04-23 | #2865 | -\n"
         r = _run_git_seeded(agents_head, agents_working, retired)
         self.assertEqual(r.returncode, 1, f"stdout={r.stdout!r} stderr={r.stderr!r}")
         self.assertIn("reintroduced as active rules", r.stderr)
+
+
+class TestHrRetirementGuard(unittest.TestCase):
+    """hr-* hard-block: retiring a hard-rule via the allowlist must fail.
+
+    Hard-rules are security/blast-radius critical. Retiring one requires
+    editing scripts/lint-rule-ids.py in the same PR (visible in diff),
+    not a quiet append to the allowlist.
+    """
+
+    _AGENTS_OK = (
+        "# Agent Instructions\n\n## Hard Rules\n\n"
+        "- Rule one [id: hr-keep-me].\n"
+    )
+
+    def test_rejects_single_hr_retired_id(self):
+        retired = "hr-test-fake | 2026-04-24 | - | test\n"
+        r = _run_with_retired(self._AGENTS_OK, retired)
+        self.assertEqual(r.returncode, 1, f"stdout={r.stdout!r} stderr={r.stderr!r}")
+        self.assertIn("hr-test-fake", r.stderr)
+        self.assertIn("hard-rule", r.stderr)
+        self.assertIn("lint-rule-ids.py", r.stderr)
+
+    def test_rejects_multiple_hr_retired_ids(self):
+        retired = (
+            "hr-test-fake-a | 2026-04-24 | - | test\n"
+            "hr-test-fake-b | 2026-04-24 | - | test\n"
+        )
+        r = _run_with_retired(self._AGENTS_OK, retired)
+        self.assertEqual(r.returncode, 1, f"stdout={r.stdout!r} stderr={r.stderr!r}")
+        self.assertIn("hr-test-fake-a", r.stderr)
+        self.assertIn("hr-test-fake-b", r.stderr)
+
+    def test_rejects_bom_prefixed_hr_retired_id(self):
+        """BOM (U+FEFF) on line 1 must not bypass the prefix check."""
+        retired = "﻿hr-bom-bypass | 2026-04-24 | - | test\n"
+        r = _run_with_retired(self._AGENTS_OK, retired)
+        self.assertEqual(r.returncode, 1, f"stdout={r.stdout!r} stderr={r.stderr!r}")
+        self.assertIn("hr-bom-bypass", r.stderr)
+
+    def test_mixed_hr_and_cq_only_names_hr(self):
+        retired = (
+            "cq-benign-retired | 2026-04-24 | - | ok\n"
+            "hr-sneaky | 2026-04-24 | - | test\n"
+        )
+        r = _run_with_retired(self._AGENTS_OK, retired)
+        self.assertEqual(r.returncode, 1, f"stdout={r.stdout!r} stderr={r.stderr!r}")
+        self.assertIn("hr-sneaky", r.stderr)
+        self.assertNotIn("cq-benign-retired", r.stderr)
+
+    def test_grandfathered_hr_retirements_allowed(self):
+        """Pre-#2871 hr-* retirements (HR_RETIREMENT_ALLOWLIST) remain valid.
+
+        Retiring a NEW hr-* still fails — the allowlist is explicit, and
+        the guard names only the non-grandfathered id.
+        """
+        retired = (
+            "hr-before-running-git-commands-on-a | 2026-04-23 | #2865 | ok\n"
+            "hr-never-use-sleep-2-seconds-in-foreground | 2026-04-23 | #2865 | ok\n"
+        )
+        r = _run_with_retired(self._AGENTS_OK, retired)
+        self.assertEqual(r.returncode, 0, f"stdout={r.stdout!r} stderr={r.stderr!r}")
+
+        # Adding a new hr-* alongside grandfathered entries must still fail.
+        retired_plus_new = retired + "hr-new-sneaky | 2026-04-24 | - | test\n"
+        r2 = _run_with_retired(self._AGENTS_OK, retired_plus_new)
+        self.assertEqual(r2.returncode, 1)
+        self.assertIn("hr-new-sneaky", r2.stderr)
+        self.assertNotIn("hr-before-running-git-commands-on-a", r2.stderr)
 
 
 if __name__ == "__main__":

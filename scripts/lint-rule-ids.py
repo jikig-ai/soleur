@@ -27,6 +27,21 @@ SECTIONS = {"Hard Rules", "Workflow Gates", "Code Quality",
             "Review & Feedback", "Passive Domain Routing", "Communication"}
 ID_RE = re.compile(r"\[id: ([a-z0-9-]+)\]")
 
+# hr-* retirement guard (issue #2871): hard-rules are security/blast-radius
+# critical. Any new hr-* retirement must either (a) add the id to this set
+# with a review-visible diff, or (b) remove this guard wholesale. Either
+# path forces the retiring PR to edit this script, so the one-way door is
+# explicit in review instead of buried in a retired-rule-ids.txt append.
+#
+# The two entries below were retired in PR #2865 via the discoverability
+# litmus pass — both fail the litmus (tools surface the constraint via a
+# clear error), so retirement is safe. They are grandfathered so the guard
+# does not retro-flag them.
+HR_RETIREMENT_ALLOWLIST = frozenset({
+    "hr-before-running-git-commands-on-a",
+    "hr-never-use-sleep-2-seconds-in-foreground",
+})
+
 
 def load_retired_ids(retired_file: Path) -> set[str]:
     """Parse retired-rule-ids.txt. Lines: `<id> | <date> | <pr> | <breadcrumb>`.
@@ -37,7 +52,9 @@ def load_retired_ids(retired_file: Path) -> set[str]:
     """
     retired: set[str] = set()
     for line in retired_file.read_text().splitlines():
-        stripped = line.strip()
+        # BOM strip: U+FEFF on line 1 must not mask the prefix check on the
+        # first retired id (otherwise `﻿hr-foo` bypasses startswith("hr-")).
+        stripped = line.lstrip("﻿").strip()
         if not stripped or stripped.startswith("#"):
             continue
         # First field, split on first `|`
@@ -147,6 +164,25 @@ def main() -> int:
             )
             return 2
         retired_ids = load_retired_ids(args.retired_file)
+
+        # hr-* retirement guard: retiring a hard-rule requires editing this
+        # script (HR_RETIREMENT_ALLOWLIST above), not a quiet allowlist
+        # append. See issue #2871.
+        hr_retired = sorted(
+            r for r in retired_ids
+            if r.startswith("hr-") and r not in HR_RETIREMENT_ALLOWLIST
+        )
+        if hr_retired:
+            print(
+                f"ERROR: hard-rule(s) cannot be retired via {args.retired_file}: "
+                f"{hr_retired}\n"
+                "Hard-rules (hr-*) are security-critical and are linter-blocked "
+                "from retirement.\n"
+                "To retire one, add the id to HR_RETIREMENT_ALLOWLIST in "
+                "scripts/lint-rule-ids.py in the same PR.",
+                file=sys.stderr,
+            )
+            return 1
 
     paths = args.paths or [Path("AGENTS.md")]
     rc = 0

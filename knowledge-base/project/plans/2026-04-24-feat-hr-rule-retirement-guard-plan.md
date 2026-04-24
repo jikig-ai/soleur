@@ -29,7 +29,8 @@ Approach **D** from issue #2871 (hard-block, no escape valve). Rejected A (CODEO
 | (Implicit) Existing tests compatible with the new block | Two existing tests (`test_retired_id_passes_when_in_allowlist`, `test_reintroduced_retired_id_fails`) use `hr-rule-two` as retired-id fixture. Will break under new hard-block. | Swap fixtures to `cq-rule-two`; move from `## Hard Rules` to `## Code Quality` section for prefix-consistency. |
 | (Implicit) CI re-runs `lint-rule-ids.py` against real data | CI runs the `unittest` suite but NOT the linter against real `retired-rule-ids.txt` + `AGENTS.md`. `git commit -n` bypass escapes both lefthook and CI. | **Add one line to `scripts/test-all.sh`** invoking the linter against real files. Closes the CI bypass — load-bearing, not scope creep. |
 | (Implicit) `startswith("hr-")` case-sensitivity is a concern | Active-rule regex `^(hr\|wg\|cq\|rf\|pdr\|cm)-` is case-sensitive lowercase. Uppercase `HR-` would already fail the active-rule validator. | Use `startswith("hr-")`; no `.lower()` needed. |
-| (New — Kieran review) BOM handling | `﻿hr-foo` on line 1 bypasses `startswith("hr-")`. Real silent-drop. | `load_retired_ids` strips `﻿` defensively; test scenario locks it. |
+| (New — Kieran review) BOM handling | `\uFEFF` + `hr-foo` on line 1 bypasses `startswith("hr-")`. Real silent-drop. | `load_retired_ids` strips `\uFEFF` defensively; test scenario locks it. |
+| (New — discovered at GREEN) "No `hr-*` currently retired" was wrong | `scripts/retired-rule-ids.txt` already contains two `hr-*` from PR #2865 (`hr-before-running-git-commands-on-a`, `hr-never-use-sleep-2-seconds-in-foreground`) — retired via the discoverability litmus (tools surface the constraint via clear errors). | Introduced `HR_RETIREMENT_ALLOWLIST` frozenset in `lint-rule-ids.py` grandfathering the two pre-existing entries. Any future hr-* retirement must add to this set — the script edit IS the review gate, same protection as "edit the guard wholesale." |
 
 ## Files to Edit
 
@@ -45,10 +46,10 @@ None.
 
 ## Implementation Steps (TDD, sequenced)
 
-1. **RED** — in `tests/scripts/test_lint_rule_ids.py`, add one `TestHrRetirementGuard` class with four tests: (a) single `hr-*` retired id → exit 1, stderr names the id; (b) two `hr-*` retired ids → exit 1, stderr names both; (c) BOM-prefixed `﻿hr-foo` retired id → exit 1 (defensive); (d) mixed `hr-*` + `cq-*` → block fires on hr-only. Use the existing `_run_with_retired` helper. Run; all four must fail (block not implemented).
+1. **RED** — in `tests/scripts/test_lint_rule_ids.py`, add one `TestHrRetirementGuard` class with four tests: (a) single `hr-*` retired id → exit 1, stderr names the id; (b) two `hr-*` retired ids → exit 1, stderr names both; (c) BOM-prefixed `\uFEFF` + `hr-foo` retired id → exit 1 (defensive); (d) mixed `hr-*` + `cq-*` → block fires on hr-only. Use the existing `_run_with_retired` helper. Run; all four must fail (block not implemented).
 2. **RED (swap)** — in `test_retired_id_passes_when_in_allowlist` and `test_reintroduced_retired_id_fails`: change the fixture rule id from `hr-rule-two` to `cq-rule-two` and move it to a `## Code Quality` section in the fixture string (not `## Hard Rules`). Run the two tests; they must still pass (swap is mechanical).
 3. **GREEN** — implement in `scripts/lint-rule-ids.py`:
-   - In `load_retired_ids`, strip `﻿` defensively: replace `stripped = line.strip()` with `stripped = line.lstrip("﻿").strip()`.
+   - In `load_retired_ids`, strip `\uFEFF` defensively: replace `stripped = line.strip()` with `stripped = line.lstrip("\uFEFF").strip()`.
    - In `main()`, immediately after `retired_ids = load_retired_ids(args.retired_file)` on line 149: add `hr_retired = sorted(r for r in retired_ids if r.startswith("hr-"))`. If non-empty, print the error message (below) to stderr and `return 1`. Place before `paths = args.paths or ...` so FR3 holds (block fires before any `lint()` call).
 4. **GREEN** — run `python3 -m unittest tests.scripts.test_lint_rule_ids -v`. All tests pass (new + swapped + existing).
 5. **Lefthook edit** — in `lefthook.yml` under `rule-id-lint`:
@@ -56,11 +57,14 @@ None.
    - `run: ... {staged_files}` → `run: python3 scripts/lint-rule-ids.py --retired-file scripts/retired-rule-ids.txt AGENTS.md`.
    - Verify: stage only `scripts/retired-rule-ids.txt` (touch a comment) and run `lefthook run pre-commit` — `rule-id-lint` must execute. Unstage before committing the plan deliverables.
 6. **CI bypass closure** — in `scripts/test-all.sh`, after the existing unittest line (line 54), add:
+
    ```bash
    run_suite "scripts/lint-rule-ids-live" python3 scripts/lint-rule-ids.py --retired-file scripts/retired-rule-ids.txt AGENTS.md
    ```
+
    (Match the `run_suite` helper pattern used elsewhere in the file. Verify by running `bash scripts/test-all.sh` locally.)
 7. **Learning file edit** — append to `knowledge-base/project/learnings/2026-04-21-agents-md-rule-retirement-deprecation-pattern.md`:
+
    ```markdown
    ## hr-* caveat (added 2026-04-24, PR #<this-PR>)
 
@@ -80,6 +84,7 @@ None.
 
    See #2871 / PR #<this-PR>.
    ```
+
 8. **Final gate** — `bash scripts/test-all.sh` exits 0. `lefthook run pre-commit` against the staged manifest (all edited files) exits 0. Draft PR body contains `Closes #2871`.
 
 ## Error Message (exact text)
@@ -97,8 +102,8 @@ To retire one, edit scripts/lint-rule-ids.py in the same PR to remove this guard
 | Happy path — no hr-* | `cq-old-rule \| ...` | exit 0 |
 | Block fires — single hr-* | `hr-test-fake \| ...` | exit 1; stderr contains `hr-test-fake`, "hard-rule", "lint-rule-ids.py" |
 | Block fires — multiple hr-* | Two `hr-*` lines | exit 1; stderr lists both ids (sorted) |
-| BOM-prefixed hr-* caught | `﻿hr-foo \| ...` | exit 1 (defensive BOM strip) |
-| Mixed hr-* + cq-* | One of each | exit 1; stderr names only the hr-* |
+| BOM-prefixed hr-* caught | `\uFEFF` + `hr-foo \| ...` | exit 1 (defensive BOM strip) |
+| Mixed hr-*+ cq-* | One of each | exit 1; stderr names only the hr-* |
 | Existing: `test_retired_id_passes_when_in_allowlist` | Swapped to `cq-rule-two` under `## Code Quality` | exit 0 (unchanged) |
 | Existing: `test_reintroduced_retired_id_fails` | Swapped to `cq-rule-two` under `## Code Quality` | exit 1 (unchanged) |
 
@@ -106,19 +111,19 @@ To retire one, edit scripts/lint-rule-ids.py in the same PR to remove this guard
 
 ### Pre-merge (PR)
 
-- [ ] `scripts/lint-rule-ids.py` hard-blocks any `hr-*` entry in `retired-rule-ids.txt` with exit 1 and the specified 3-line error message. BOM strip added to `load_retired_ids`.
-- [ ] New `TestHrRetirementGuard` class with 4 tests (single, multiple, BOM, mixed).
-- [ ] Two existing tests swapped to `cq-rule-two` under `## Code Quality` and still pass.
-- [ ] `python3 -m unittest tests.scripts.test_lint_rule_ids -v` exits 0; `bash scripts/test-all.sh` exits 0 (including the new `scripts/lint-rule-ids-live` suite).
-- [ ] `lefthook.yml` `rule-id-lint` glob extended to `["AGENTS.md", "scripts/retired-rule-ids.txt"]`; command pinned to `AGENTS.md`. Verified: staging only `retired-rule-ids.txt` still triggers the hook.
-- [ ] `scripts/test-all.sh` invokes `lint-rule-ids.py` against real files via `run_suite`.
-- [ ] Learning file `2026-04-21-agents-md-rule-retirement-deprecation-pattern.md` gets the `## hr-* caveat` section.
-- [ ] PR body contains `Closes #2871`.
-- [ ] `lefthook run pre-commit` passes against the staged manifest.
+- [x] `scripts/lint-rule-ids.py` hard-blocks any `hr-*` entry in `retired-rule-ids.txt` with exit 1 and the specified 3-line error message. BOM strip added to `load_retired_ids`.
+- [x] New `TestHrRetirementGuard` class with 4 tests (single, multiple, BOM, mixed).
+- [x] Two existing tests swapped to `cq-rule-two` under `## Code Quality` and still pass.
+- [x] `python3 -m unittest tests.scripts.test_lint_rule_ids -v` exits 0; `bash scripts/test-all.sh` exits 0 (including the new `scripts/lint-rule-ids-live` suite).
+- [x] `lefthook.yml` `rule-id-lint` glob extended to `["AGENTS.md", "scripts/retired-rule-ids.txt"]`; command pinned to `AGENTS.md`. Verified: staging only `retired-rule-ids.txt` still triggers the hook.
+- [x] `scripts/test-all.sh` invokes `lint-rule-ids.py` against real files via `run_suite`.
+- [x] Learning file `2026-04-21-agents-md-rule-retirement-deprecation-pattern.md` gets the `## hr-* caveat` section.
+- [x] PR body contains `Closes #2871`.
+- [x] `lefthook run pre-commit` passes against the staged manifest.
 
 ### Post-merge (operator)
 
-- [ ] None. Self-contained linter + test + docs change.
+- [x] None. Self-contained linter + test + docs change.
 
 ## Domain Review
 
