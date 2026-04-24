@@ -54,6 +54,35 @@ export function allow(toolInput: Record<string, unknown>): Extract<PermissionRes
   return { behavior: "allow" as const, updatedInput: toolInput };
 }
 
+// Bash pre-gate blocklist. Applied BEFORE the review-gate under the
+// untrusted-user threat model introduced by the cc-soleur-go runner
+// (Stage 2.11 of plan 2026-04-23-feat-cc-route-via-soleur-go-plan.md).
+// The plugin surface brings `Bash` into scope; this regex catches the
+// high-severity foot-guns callers have used to pivot into network or
+// privilege escalation — curl/wget/nc pipelines, shell-interpreter
+// re-entry, eval-style evaluation, base64-decoded payloads, Linux
+// /dev/tcp back-channels, and sudo. A match denies outright; no user
+// gate is offered, because legitimate workflow prompts never need these.
+//
+// Word-boundary anchors (`\b`) keep false positives down (e.g., a file
+// named `evalent.ts` or a command mentioning "sudoku" should not match).
+// Case-insensitive because shell commands are.
+export const BLOCKED_BASH_PATTERNS =
+  /\b(?:curl|wget|ncat|nc|eval|sudo)\b|(?:sh|bash)\s+-c|base64\s+-d|\/dev\/tcp/i;
+
+export function isBashCommandBlocked(command: string): boolean {
+  if (typeof command !== "string" || command.length === 0) return false;
+  return BLOCKED_BASH_PATTERNS.test(command);
+}
+
+// Safe UX-flow tools surfaced by the soleur plugin that carry no path
+// args and no command execution. Kept separate from `SAFE_TOOLS` in
+// `tool-path-checker.ts` so the existing `canusertool-decisions`
+// negative-space tests remain stable.
+const SOLEUR_GO_SAFE_UX_TOOLS = new Set<string>([
+  "ExitPlanMode",
+]);
+
 /**
  * Stateful collaborators the callback depends on. Pure helpers
  * (tool-tier, path checks, review-gate parsing) are imported directly
@@ -196,6 +225,126 @@ export function createCanUseTool(ctx: CanUseToolContext): CanUseTool {
         behavior: "allow" as const,
         updatedInput: buildReviewGateResponse(toolInput, selection),
       };
+    }
+
+    // ExitPlanMode: plan-preview-acknowledgment tool surfaced by the
+    // soleur plugin. No filesystem path, no command execution — purely
+    // a UX signal that the planning phase is complete. Stage 2.11.
+    if (toolName === "ExitPlanMode" || SOLEUR_GO_SAFE_UX_TOOLS.has(toolName)) {
+      logPermissionDecision("canUseTool-soleur-go-ux", toolName, "allow");
+      return allow(toolInput);
+    }
+
+    // Bash: NEVER auto-approve. Stage 2.11 of plan
+    // 2026-04-23-feat-cc-route-via-soleur-go-plan.md. The soleur plugin
+    // brings Bash into scope under an untrusted-user threat model. Two
+    // layers apply in order:
+    //   (1) BLOCKED_BASH_PATTERNS regex — reject high-severity patterns
+    //       (curl|wget|nc|sh -c|eval|base64 -d|/dev/tcp|sudo) outright.
+    //   (2) Review-gate with a command preview — user must explicitly
+    //       Approve before the command runs.
+    if (toolName === "Bash") {
+      const command = toolInput.command;
+      if (typeof command !== "string" || command.length === 0) {
+        logPermissionDecision(
+          "canUseTool-bash",
+          toolName,
+          "deny",
+          "missing or empty command",
+        );
+        return {
+          behavior: "deny" as const,
+          message: "Bash invocation missing a command argument",
+        };
+      }
+      if (isBashCommandBlocked(command)) {
+        log.info(
+          {
+            sec: true,
+            tool: toolName,
+            decision: "deny-blocked-pattern",
+            repo: `${ctx.repoOwner}/${ctx.repoName}`,
+          },
+          "Bash command matched BLOCKED_BASH_PATTERNS — denied",
+        );
+        logPermissionDecision(
+          "canUseTool-bash",
+          toolName,
+          "deny",
+          "BLOCKED_BASH_PATTERNS match",
+        );
+        return {
+          behavior: "deny" as const,
+          message:
+            "This Bash command matches a blocked pattern (curl/wget/nc/sh -c/eval/base64 -d/sudo or similar) and is not permitted.",
+        };
+      }
+
+      const gateId = randomUUID();
+      const preview = command.length > 200 ? `${command.slice(0, 200)}…` : command;
+      const question = `Run Bash command?\n\n\`${preview}\``;
+
+      const gateDelivered = deps.sendToClient(ctx.userId, {
+        type: "review_gate",
+        gateId,
+        question,
+        options: ["Approve", "Reject"],
+      });
+      if (!gateDelivered) {
+        deps.notifyOfflineUser(ctx.userId, {
+          type: "review_gate",
+          conversationId: ctx.conversationId,
+          agentName: ctx.leaderId ?? "Agent",
+          question,
+        }).catch((err) =>
+          log.error(
+            { userId: ctx.userId, err },
+            "Offline notification failed (bash gate)",
+          ),
+        );
+      }
+
+      await deps.updateConversationStatus(ctx.conversationId, "waiting_for_user");
+
+      const selection = await deps.abortableReviewGate(
+        ctx.session,
+        gateId,
+        options.signal,
+        undefined,
+        ["Approve", "Reject"],
+      );
+
+      await deps.updateConversationStatus(ctx.conversationId, "active");
+
+      if (selection !== "Approve") {
+        logPermissionDecision(
+          "canUseTool-bash",
+          toolName,
+          "deny",
+          "user rejected",
+        );
+        return {
+          behavior: "deny" as const,
+          message: "User rejected the Bash command",
+        };
+      }
+
+      log.info(
+        {
+          sec: true,
+          tool: toolName,
+          decision: "user-approved",
+          repo: `${ctx.repoOwner}/${ctx.repoName}`,
+        },
+        "Bash command approved via review-gate",
+      );
+      logPermissionDecision(
+        "canUseTool-bash",
+        toolName,
+        "allow",
+        "user approved",
+      );
+      return allow(toolInput);
     }
 
     // Agent tool: spawns subagents under the same SDK sandbox. Explicit
