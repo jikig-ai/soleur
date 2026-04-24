@@ -20,6 +20,14 @@ interface ChatMessageBase {
   state?: MessageState;
   toolLabel?: string;
   toolsUsed?: string[];
+  /**
+   * FR5 (#2861): set by `applyTimeout` on the first stuck-timeout and cleared
+   * on a follow-up `tool_progress` or the second consecutive timeout. When
+   * true, `message-bubble.tsx` shows the "Retrying…" chip with aria-live
+   * polite. The bubble's `state` stays in its transitional form
+   * (`thinking` / `tool_use`) — `retrying` is the orthogonal render flag.
+   */
+  retrying?: boolean;
 }
 
 interface ChatTextMessage extends ChatMessageBase {
@@ -69,6 +77,7 @@ type StreamEvent = Extract<
   | { type: "stream" }
   | { type: "stream_end" }
   | { type: "tool_use" }
+  | { type: "tool_progress" }
   | { type: "review_gate" }
 >;
 
@@ -120,6 +129,38 @@ export function applyStreamEvent(
         // (Read on large files, Bash commands, web searches) can exceed the
         // 45s timeout. Each new tool_use proves the agent is still active.
         // See #2430.
+        timerAction: { type: "reset", leaderId: event.leaderId },
+      };
+    }
+
+    case "tool_progress": {
+      // FR4 (#2861): SDK heartbeat for long-running tool execution. Do NOT
+      // mutate messages on the hot path — a 1/5s heartbeat for every active
+      // tool would churn the bubble re-render. The only effects are:
+      //   (1) reset the watchdog so 45s timeouts don't fire mid-tool
+      //   (2) if the bubble is showing `retrying`, clear the flag — a fresh
+      //       heartbeat means the tool is alive and the first-timeout retry
+      //       should transition back to tool_use.
+      const idx = activeStreams.get(event.leaderId);
+      if (idx === undefined || idx >= prev.length) {
+        // Unknown leader (e.g., heartbeat races stream_end) — inert no-op.
+        return { messages: prev, activeStreams };
+      }
+      const current = prev[idx];
+      if (current.retrying) {
+        const updated = [...prev];
+        const { retrying: _retrying, ...rest } = updated[idx];
+        void _retrying;
+        updated[idx] = { ...rest };
+        return {
+          messages: updated,
+          activeStreams,
+          timerAction: { type: "reset", leaderId: event.leaderId },
+        };
+      }
+      return {
+        messages: prev,
+        activeStreams,
         timerAction: { type: "reset", leaderId: event.leaderId },
       };
     }
@@ -216,28 +257,55 @@ export function applyStreamEvent(
 }
 
 /**
- * Apply the stuck-state timeout for a leader. Only transitions a bubble
- * to "error" if it is still in a transitional state (thinking/tool_use).
- * Bubbles that have already progressed to streaming/done/error are left
- * alone — the timeout is stale and should no-op.
+ * Apply the stuck-state timeout for a leader. Two-stage lifecycle (FR5 #2861):
+ *   1. First timeout on a transitional bubble → set `retrying: true`, keep
+ *      the bubble active, reset the watchdog. Visible as "Retrying…" chip.
+ *   2. Second consecutive timeout (bubble already has `retrying: true`) →
+ *      transition to `error`, preserve `toolLabel` for the error chip, clear
+ *      the watchdog.
+ * Bubbles that have already progressed to streaming/done/error are left alone.
  */
 export function applyTimeout(
   prev: ChatMessage[],
   activeStreams: Map<string, number>,
   leaderId: string,
-): { messages: ChatMessage[]; activeStreams: Map<string, number> } {
+): {
+  messages: ChatMessage[];
+  activeStreams: Map<string, number>;
+  timerAction?:
+    | { type: "reset"; leaderId: string }
+    | { type: "clear"; leaderId: string };
+} {
   const idx = activeStreams.get(leaderId);
   if (idx === undefined || idx >= prev.length) {
     return { messages: prev, activeStreams };
   }
   const current = prev[idx];
-  // Guard: only apply "error" if bubble is still in a transitional state.
   if (current.state !== "thinking" && current.state !== "tool_use") {
     return { messages: prev, activeStreams };
   }
+
+  // Second consecutive timeout — already in retrying, give up.
+  if (current.retrying) {
+    const updated = [...prev];
+    const { retrying: _retrying, ...rest } = updated[idx];
+    void _retrying;
+    updated[idx] = { ...rest, state: "error" };
+    const nextStreams = new Map(activeStreams);
+    nextStreams.delete(leaderId);
+    return {
+      messages: updated,
+      activeStreams: nextStreams,
+      timerAction: { type: "clear", leaderId },
+    };
+  }
+
+  // First timeout — flag as retrying, keep bubble active, restart watchdog.
   const updated = [...prev];
-  updated[idx] = { ...updated[idx], state: "error" };
-  const nextStreams = new Map(activeStreams);
-  nextStreams.delete(leaderId);
-  return { messages: updated, activeStreams: nextStreams };
+  updated[idx] = { ...updated[idx], retrying: true };
+  return {
+    messages: updated,
+    activeStreams,
+    timerAction: { type: "reset", leaderId },
+  };
 }

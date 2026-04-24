@@ -194,6 +194,15 @@ Close the gap between "we learned X" and "X is now enforced." The project has pr
 7. **Feed into Constitution Promotion.** Present each deviation to the user via the existing Accept/Skip/Edit gate in the Constitution Promotion section below. Accepted hook proposals should be manually copied to `.claude/hooks/` after testing — never auto-install.
 
 8. **Rule budget count.** After deviation analysis, measure both rule count and byte size of always-loaded `AGENTS.md`:
+
+   Emit rule-application telemetry (records that the byte-cap / why-single-line policy ran — see AGENTS.md `cq-agents-md-why-single-line`):
+
+   ```bash
+   source "$(git rev-parse --show-toplevel)/.claude/hooks/lib/incidents.sh" && \
+     emit_incident cq-agents-md-why-single-line applied \
+     'AGENTS.md rules cap at ~600 bytes; `**Why:**` is o'
+   ```
+
    - Count rules: `grep -c '^- ' AGENTS.md` → A
    - Byte size: `wc -c < AGENTS.md` → B
    - Constitution.md count: `grep -c '^- ' knowledge-base/project/constitution.md 2>/dev/null` → C (on-demand, tracked separately)
@@ -202,9 +211,10 @@ Close the gap between "we learned X" and "X is now enforced." The project has pr
    Output: `"Rule budget: A rules / B bytes in AGENTS.md (longest rule: L bytes), C rules in constitution.md"`.
 
    Append warnings:
-   - If `A > 115`: `"[WARNING] rule count (A/115) exceeded — move skill-specific rules to the skills that enforce them."` <!-- rule-threshold: 115 -->
-   - If `B > 40000`: `"[WARNING] AGENTS.md byte budget (B/40000) exceeded — AGENTS.md is loaded every turn; compress **Why:** narratives to one-line learning-file pointers."`
+   - If `B > 37000`: `"[WARNING] AGENTS.md byte budget (B/37000) exceeded — apply discoverability litmus (wg-every-session-error-must-produce-either) before adding any new rule; consider retiring an existing rule via scripts/retired-rule-ids.txt."`
+   - If `B > 40000`: `"[CRITICAL] AGENTS.md exceeds Claude Code harness warn (40k chars) — harness-level performance degradation; shrink required before next rule."`
    - If `L > 600`: `"[WARNING] longest rule is L bytes — cap per-rule length at ~600 (see cq-agents-md-why-single-line) by moving context to learning files."`
+   - If `A > 115`: `"[ADVISORY] rule count (A/115) — bytes-first policy per cq-agents-md-why-single-line; count is informational."` <!-- rule-threshold: 115 -->
    - If `C > 300`: `"[WARNING] constitution.md is large (C/300) — consider migrating narrow rules to skill/agent instructions."`
 
    Additionally, if the repo has a rule-metrics aggregator at `./scripts/rule-metrics-aggregate.sh`, run it in `--dry-run` mode and parse `summary.rules_unused_over_8w`. Do not fail the phase if the aggregator is missing, but do NOT silently swallow an aggregator crash — a stderr line tells the reader why the hint is absent:

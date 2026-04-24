@@ -105,6 +105,18 @@ export type WSMessage =
   | { type: "stream_start"; leaderId: DomainLeaderId; source?: "auto" | "mention" }
   | { type: "stream_end"; leaderId: DomainLeaderId }
   | { type: "tool_use"; leaderId: DomainLeaderId; label: string }
+  | {
+      /**
+       * FR4 (#2861): server forwards the SDK `SDKToolProgressMessage`
+       * heartbeat (debounced to ≤1/5s per `toolUseId`) so the client watchdog
+       * doesn't fire during long-running tool execution.
+       */
+      type: "tool_progress";
+      leaderId: DomainLeaderId;
+      toolUseId: string;
+      toolName: string;
+      elapsedSeconds: number;
+    }
   | { type: "review_gate"; gateId: string; question: string; header?: string; options: string[]; descriptions?: Record<string, string | undefined>; stepProgress?: { current: number; total: number } }
   | { type: "session_started"; conversationId: string }
   | { type: "session_resumed"; conversationId: string; resumedFromTimestamp: string; messageCount: number }

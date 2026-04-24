@@ -3,7 +3,7 @@ title: "Knowledge Compounding in AI Development: How Compound Engineering Beats 
 type: pillar
 publish_date: 2026-04-23
 channels: discord, x, bluesky, linkedin-company
-status: scheduled
+status: published
 ---
 
 ## Discord

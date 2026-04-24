@@ -48,7 +48,7 @@ cutoff_epoch=$(( $(date -u +%s) - WEEKS * 7 * 86400 ))
 candidates=$(jq -r \
   --argjson cutoff "$cutoff_epoch" \
   '.rules
-   | map(select(.hit_count == 0
+   | map(select(.fire_count == 0
         and (.first_seen == null
              or (try (.first_seen | fromdateiso8601) catch 0) < $cutoff)))
    | .[]
@@ -60,7 +60,7 @@ candidates=$(jq -r \
 generated_at=$(jq -r '.generated_at // "unknown"' "$METRICS")
 
 if [[ -z "$candidates" ]]; then
-  echo "No prune candidates (hit_count=0 for >=${WEEKS}w)."
+  echo "No prune candidates (fire_count=0 for >=${WEEKS}w)."
   exit 0
 fi
 
@@ -122,7 +122,7 @@ while IFS=$'\t' read -r id section first_seen prefix; do
 - **Rule:** \`$id\`
 - **Text (first 50 chars):** $prefix
 - **Section:** $section
-- **hit_count:** 0 over >=${WEEKS} weeks
+- **fire_count:** 0 over >=${WEEKS} weeks (no deny, bypass, applied, or warn events)
 - **First seen:** $first_seen
 
 ### Verify

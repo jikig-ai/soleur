@@ -1,0 +1,39 @@
+# Retired AGENTS.md rule IDs.
+#
+# Format: <rule-id> | <YYYY-MM-DD> | <PR #NNNN or -> | <breadcrumb>
+# - rule-id: matches (hr|wg|cq|rf|pdr|cm)-<slug>
+# - date: ISO date when the rule was retired
+# - PR: the PR that retired the rule (or "-" if retired outside a PR)
+# - breadcrumb: learning-file path, replacement rule id, or a self-contained
+#               one-line rationale (when neither exists)
+#
+# Retired ids preserve immutability per cq-rule-ids-are-immutable:
+# scripts/lint-rule-ids.py rejects any attempt to reintroduce a retired id
+# as an active rule. Removing an id from this file without restoring it in
+# AGENTS.md will re-trigger the removed-id diff error.
+#
+# Entries are appended during the PR that deletes the rule from AGENTS.md.
+#
+# Resurrection: if a retired rule's constraint turns out to be load-bearing
+# after all, create a NEW rule with a NEW slug — the retired id cannot be
+# reused. Add a `superseded-by: <new-id>` note to the retired entry's
+# breadcrumb so the replacement is grep-discoverable.
+
+# --- Retired 2026-04-23 in #2865 (discoverability litmus pass) ---
+# Litmus fails (agent discovers constraint via clear error/diff/failure):
+hr-before-running-git-commands-on-a | 2026-04-23 | #2865 | git errors clearly on non-repo paths (`fatal: not a git repository`)
+hr-never-use-sleep-2-seconds-in-foreground | 2026-04-23 | #2865 | Claude Code tool blocks with clear message; use Monitor or run_in_background
+cq-always-run-npx-markdownlint-cli2-fix-on | 2026-04-23 | #2865 | markdownlint-cli2 prints violations and fix is visible in diff
+cq-ensure-dependencies-are-installed-at-the | 2026-04-23 | #2865 | npm/test errors surface missing deps; install error is explicit
+cq-gh-issue-create-milestone-takes-title | 2026-04-23 | #2865 | gh rejects numeric milestone/no-subcommand with clear error
+cq-gh-issue-label-verify-name | 2026-04-23 | #2865 | gh rejects invalid --label with clear error before issue creation
+cq-vite-test-files-esm-only | 2026-04-23 | #2865 | Vite throws 'Failed to resolve import' on require() in ESM
+cq-markdownlint-fix-target-specific-paths | 2026-04-23 | #2865 | blast radius visible in `git status` before commit
+cq-when-running-terraform-commands-locally | 2026-04-23 | #2865 | env-var errors surface in terraform output; Doppler missing is explicit
+wg-use-ship-to-automate-the-full-commit | 2026-04-23 | #2865 | /ship skill is documented in skill list; enforcement surfaces on invocation
+
+# Pointer deletes (hook/skill always-invoked in relevant context; full rule preserved in enforcement file):
+cq-after-completing-a-playwright-task-call | 2026-04-23 | #2865 | plugins/soleur/hooks/browser-cleanup-hook.sh
+cq-before-calling-mcp-pencil-open-document | 2026-04-23 | #2865 | .claude/hooks/pencil-open-guard.sh
+wg-when-a-research-sprint-produces | 2026-04-23 | #2865 | plugins/soleur/skills/work/SKILL.md#phase-25
+cq-never-skip-hooks | 2026-04-23 | #2865 | .claude/hooks/lib/incidents.sh detect_bypass() — blocks --no-verify on git commands

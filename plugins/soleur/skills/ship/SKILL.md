@@ -269,6 +269,14 @@ Invoke the preflight skill via the **Skill tool**:
 
 ## Phase 5.5: Pre-Ship Review Gates
 
+Emit rule-application telemetry (records that the conditional-domain-gates phase was entered — see AGENTS.md `hr-before-shipping-ship-phase-5-5-runs`):
+
+```bash
+source "$(git rev-parse --show-toplevel)/.claude/hooks/lib/incidents.sh" && \
+  emit_incident hr-before-shipping-ship-phase-5-5-runs applied \
+  'Before shipping, `/ship` Phase 5.5 runs conditional'
+```
+
 ### Code Review Completion Gate (mandatory)
 
 Defense-in-depth check that review ran before shipping. Phase 1.5 catches this earlier, but if context compaction erased Phase 1.5's check or the skill was invoked mid-flow, this gate is the second net.
@@ -290,6 +298,15 @@ remain unresolved — neither fixed inline nor formally scoped out with a
 `deferred-scope-out` label.
 
 **Trigger:** Always runs after the Code Review Completion Gate passes.
+
+Emit rule-application telemetry (records that the fix-inline-default gate ran — see AGENTS.md `rf-review-finding-default-fix-inline`):
+
+```bash
+source "$(git rev-parse --show-toplevel)/.claude/hooks/lib/incidents.sh" && \
+  emit_incident rf-review-finding-default-fix-inline applied \
+  "Review findings default to fix-inline on the PR bra"
+```
+
 
 **Detection:** Resolve the current PR number, then query for open, unresolved
 review-origin issues that cross-reference this PR via body regex
@@ -415,6 +432,14 @@ Domain leaders are consulted at brainstorm time but not at ship time. The actual
 **Detection:** Check if the PR modifies any of: Phase 5.5 gate trigger/detection sections in this file, assessment questions in `brainstorm-domain-config.md`, or domain routing rules in AGENTS.md. If yes, check the linked issue or brainstorm document for the original missed case (e.g., a PR number, feature name, or issue that exposed the gap).
 
 **If triggered:**
+
+Emit rule-application telemetry (records that the retroactive-gate-application branch ran — see AGENTS.md `wg-when-fixing-a-workflow-gates-detection`):
+
+```bash
+source "$(git rev-parse --show-toplevel)/.claude/hooks/lib/incidents.sh" && \
+  emit_incident wg-when-fixing-a-workflow-gates-detection applied \
+  "When fixing a workflow gate's detection logic, retr"
+```
 
 1. Identify the original missed case from the issue/brainstorm (e.g., "PR #1256 PWA was not assessed for content").
 2. Run the fixed gate retroactively against the missed case: spawn the relevant domain leader with the original PR/feature context and the same assessment prompt the gate would have used.
@@ -687,6 +712,14 @@ Each meaningful event (first iteration, every state change, heartbeat every 3rd 
    If the workflow did not fire (e.g., no semver label was set), run `/release-announce` manually as a fallback.
 
 2. **Verify all release/deploy workflows triggered by the merge.** The push to main triggers release workflows based on path filters (e.g., `web-platform-release.yml` when `apps/web-platform/**` changed). These can fail for reasons unrelated to PR CI (Docker build failures, lockfile drift, deploy health mismatches). A failing release workflow means the old version keeps running in production — this is a silent outage.
+
+   Emit rule-application telemetry (records that the post-merge release/deploy verification ran — see AGENTS.md `wg-after-a-pr-merges-to-main-verify-all`):
+
+   ```bash
+   source "$(git rev-parse --show-toplevel)/.claude/hooks/lib/incidents.sh" && \
+     emit_incident wg-after-a-pr-merges-to-main-verify-all applied \
+     "After a PR merges to main, verify all release/depl"
+   ```
 
    **Step 1:** Get the merge commit SHA. Use the PR number from Phase 6:
 
