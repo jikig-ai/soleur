@@ -37,7 +37,7 @@
 
 ### V2 tracking issues to file (13)
 
-Listed in Stage 5; cover: MCP tool parity (5 tools), routing/dispatcher.ts strategy extraction, pending-prompts.ts module split, persisted pendingPrompts, per-user-percentage rollout, drain-mode rollback, prompt-native lifecycle transcript lines, ADR-021 SDK-as-router pivot, AP-004 CLI-CC convergence, mobile-narrow design pass.
+Listed in Stage 5; cover: MCP tool parity (5 tools), routing/dispatcher.ts strategy extraction, pending-prompts.ts module split, persisted pendingPrompts, per-user-percentage rollout, drain-mode rollback, prompt-native lifecycle transcript lines, ADR-022 SDK-as-router pivot, AP-004 CLI-CC convergence, mobile-narrow design pass.
 
 ## Overview
 
@@ -119,7 +119,7 @@ Any (a-e) failure → STOP; append findings with "Stage 0 BLOCKED" header; prese
 
 ### Stage 1 — Schema, Sticky-Workflow State, AGENTS.md Rule, ADR
 
-**Goal:** Persist sticky-workflow state on `conversations`; update the AGENTS.md routing rule; create ADR-021 for the SDK-as-router pivot.
+**Goal:** Persist sticky-workflow state on `conversations`; update the AGENTS.md routing rule; create ADR-022 for the SDK-as-router pivot.
 
 **Files to create:**
 
@@ -137,7 +137,7 @@ Any (a-e) failure → STOP; append findings with "Stage 0 BLOCKED" header; prese
 
   Per `cq-supabase-migration-concurrently-forbidden`: read 2-3 most recent migrations first; plain `ALTER TABLE ADD COLUMN` is transactional-safe.
 
-- `knowledge-base/engineering/architecture/decisions/ADR-021-sdk-as-router.md` — documents the pivot from server-owned classifier to skill-mediated dispatch (cross-references ADR-010 brainstorm-default-routing + ADR-018 passive-domain-routing). Notes the AP-004 deviation (CLI vs CC routing models diverge intentionally for V1).
+- `knowledge-base/engineering/architecture/decisions/ADR-022-sdk-as-router.md` — documents the pivot from server-owned classifier to skill-mediated dispatch (cross-references ADR-010 brainstorm-default-routing + ADR-018 passive-domain-routing). Notes the AP-004 deviation (CLI vs CC routing models diverge intentionally for V1).
 
 **Files to edit:**
 
@@ -158,7 +158,7 @@ Any (a-e) failure → STOP; append findings with "Stage 0 BLOCKED" header; prese
 - [ ] 1.4 — Apply migration to dev Supabase and assert via REST API per `wg-when-a-pr-includes-database-migrations`.
 - [ ] 1.5 — Apply AGENTS.md rule edit. Verify byte length ≤ 600.
 - [ ] 1.6 — Run `bash plugins/soleur/scripts/lint-rule-ids.py`.
-- [ ] 1.7 — Write ADR-021 documenting SDK-as-router pivot, AP-004 deviation rationale, and forward path to convergence (V2 issue).
+- [ ] 1.7 — Write ADR-022 documenting SDK-as-router pivot, AP-004 deviation rationale, and forward path to convergence (V2 issue).
 
 ### Stage 2 — Soleur-Go Runner (server core, security-hardened)
 
@@ -447,7 +447,7 @@ Any (a-e) failure → STOP; append findings with "Stage 0 BLOCKED" header; prese
 | `apps/web-platform/test/subagent-group.test.tsx` | 4 | Nested layout + threshold + partial failure. |
 | `apps/web-platform/test/interactive-prompt-card.test.tsx` | 4 | Per-variant interactions. |
 | `apps/web-platform/test/workflow-lifecycle-bar.test.tsx` | 4 | All 3 states + CTAs. |
-| `knowledge-base/engineering/architecture/decisions/ADR-021-sdk-as-router.md` | 1 | SDK-as-router pivot rationale + AP-004 deviation. |
+| `knowledge-base/engineering/architecture/decisions/ADR-022-sdk-as-router.md` | 1 | SDK-as-router pivot rationale + AP-004 deviation. |
 | `knowledge-base/engineering/ops/runbooks/cc-soleur-go-rollout.md` | 5 | Enable + rollback playbook + threat model section. |
 
 ## Files to Delete (Stage 8 — separate PR)
@@ -479,7 +479,7 @@ Any (a-e) failure → STOP; append findings with "Stage 0 BLOCKED" header; prese
 - [ ] AC14: Per `cq-silent-fallback-must-mirror-to-sentry`: every catch in `soleur-go-runner.ts` calls `reportSilentFallback`.
 - [ ] AC15: Stage 6 smoke + security tests passed; screenshots attached to PR description.
 - [ ] AC16: All 13 V2 tracking issues filed with proper milestones + labels.
-- [ ] AC17: ADR-021 written and committed.
+- [ ] AC17: ADR-022 written and committed.
 - [ ] AC18: **Security verification matrix passes:**
   - [ ] Bash always hits review-gate (never auto-approve)
   - [ ] `BLOCKED_BASH_PATTERNS` rejects `curl|wget|nc|ncat|sh -c|bash -c|eval|base64 -d|/dev/tcp|sudo` test cases
@@ -527,7 +527,7 @@ Any (a-e) failure → STOP; append findings with "Stage 0 BLOCKED" header; prese
 8. **Pending-prompt registry drops on container restart.** Accepted V1 UX (session-reset notice). V2-7 tracks persistence.
 9. **Cost ceiling fires false positives** despite per-workflow split. Operator can tune via Doppler env without code change.
 10. **Plugin MCP allow-list expansion temptation.** V2-13 forces formal tier classification before any MCP server is added to the CC runner whitelist.
-11. **AP-004 parity break (CLI vs CC).** ADR-021 documents intentional V1 deviation; V2-11 tracks convergence.
+11. **AP-004 parity break (CLI vs CC).** ADR-022 documents intentional V1 deviation; V2-11 tracks convergence.
 
 ## Domain Review
 
@@ -650,7 +650,7 @@ Per plan's Exit-criteria rule: "Any (a-e) failure → STOP; append findings with
 
 ### Implications for Stages 1-8
 
-- Do not start Stage 1. Migration 032, ADR-021, AGENTS.md rule update, and the 13 V2 tracking issues are all predicated on the `/soleur:go` via-prompt dispatch pattern being viable for per-message routing. It is not viable at these latencies for a conversational product.
+- Do not start Stage 1. Migration 032, ADR-022, AGENTS.md rule update, and the 13 V2 tracking issues are all predicated on the `/soleur:go` via-prompt dispatch pattern being viable for per-message routing. It is not viable at these latencies for a conversational product.
 - Legacy `domain-router.ts` + Haiku classifier (the code this plan was deleting) delivers ~500ms classification. Replacing a 500ms flow with a 30s flow is a UX regression regardless of architectural cleanliness.
 
 ### Approach B options for the user
