@@ -108,6 +108,21 @@ function isKnownWorkflow(value: unknown): value is WorkflowName {
 // not in this table is non-interactive from the user's POV (Skill / Read /
 // Glob / Grep / Agent / …) and flows through the normal streaming path
 // without a pending-prompt record.
+//
+// Kind-exhaustiveness: each `return` narrows to a distinct
+// `InteractivePromptPayload["kind"]`. The compile-time assertion below
+// fails if a new kind lands in `InteractivePromptKind` without a
+// corresponding branch here (or the existing branches stop covering the
+// registry union).
+type ClassifiedKinds = NonNullable<ReturnType<typeof classifyInteractiveTool>>["kind"];
+type _AssertClassifiedExhaustive =
+  ClassifiedKinds extends InteractivePromptKind
+    ? InteractivePromptKind extends ClassifiedKinds
+      ? true
+      : never
+    : never;
+const _classifiedExhaustive: _AssertClassifiedExhaustive = true;
+void _classifiedExhaustive;
 function classifyInteractiveTool(
   toolName: string,
   toolInput: Record<string, unknown>,

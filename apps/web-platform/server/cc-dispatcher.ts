@@ -10,8 +10,9 @@
 // production deploys never invoke it. Tracking follow-up: #2853
 // Stage 2.12 completion (bind SDK `query()` with per-user apiKey,
 // serviceTokens, plugin.json-derived MCP allowlist, `canUseTool` from
-// `permission-callback.ts`, and sandbox block copied from
-// `agent-runner.ts:807-829`).
+// `permission-callback.ts`, and the sandbox block used at the
+// `agent-runner.ts` `query(...)` call site — search `sandbox: {` in
+// that file).
 
 import type { WSMessage } from "@/lib/types";
 import {
@@ -30,6 +31,7 @@ import {
 } from "./start-session-rate-limit";
 import {
   handleInteractivePromptResponse,
+  pruneTombstonesFor,
   type HandleInteractivePromptResponseResult,
 } from "./cc-interactive-prompt-response";
 import type {
@@ -47,8 +49,34 @@ import { reportSilentFallback } from "./observability";
 // ---------------------------------------------------------------------------
 
 let _registry: PendingPromptRegistry | null = null;
+let _reaperInterval: ReturnType<typeof setInterval> | null = null;
+const REAPER_INTERVAL_MS = 5 * 60 * 1000;
+
 export function getPendingPromptRegistry(): PendingPromptRegistry {
-  if (!_registry) _registry = new PendingPromptRegistry();
+  if (_registry) return _registry;
+  _registry = new PendingPromptRegistry();
+  // Schedule TTL reaper. Without this the registry's `reap()` would
+  // never run in production (performance-oracle P1-B). Keyed by registry
+  // instance so a test-time `__resetDispatcherForTests` clears the
+  // interval too. `.unref()` keeps the timer from blocking graceful
+  // shutdown.
+  _reaperInterval = setInterval(() => {
+    try {
+      if (_registry) {
+        _registry.reap();
+        // After record TTL-expire, wholesale-clear the tombstone set.
+        // Any consume-response arriving for a reaped key surfaces as
+        // `not_found` (acceptable — the prompt genuinely aged out).
+        pruneTombstonesFor(_registry);
+      }
+    } catch (err) {
+      reportSilentFallback(err, {
+        feature: "cc-dispatcher",
+        op: "registryReaperInterval",
+      });
+    }
+  }, REAPER_INTERVAL_MS);
+  _reaperInterval.unref();
   return _registry;
 }
 
@@ -61,11 +89,25 @@ export function getCcStartSessionRateLimiter(): StartSessionRateLimiter {
 // Production `queryFactory` stub. See module header for the follow-up
 // scope. Intentionally throws at first use so the runner's
 // `reportSilentFallback` fires (observability preserved) instead of
-// silently producing a dead session.
+// silently producing a dead session. Under FLAG_CC_SOLEUR_GO=0 (default)
+// the stub is unreachable; if the flag flips on before the real factory
+// lands, `_stubMirroredOnce` gates the Sentry mirror so a high-QPS
+// misconfigured prod does not exhaust the Sentry event quota
+// (performance-oracle P2-A).
+let _stubMirroredOnce = false;
 const realSdkQueryFactoryStub: QueryFactory = (_args: QueryFactoryArgs) => {
-  throw new Error(
+  const err = new Error(
     "cc-dispatcher: real-SDK queryFactory not yet wired (FLAG_CC_SOLEUR_GO path) — see #2853 Stage 2.12 completion",
   );
+  if (!_stubMirroredOnce) {
+    _stubMirroredOnce = true;
+    reportSilentFallback(err, {
+      feature: "cc-dispatcher",
+      op: "realSdkQueryFactoryStub",
+      extra: { oncePerProcess: true },
+    });
+  }
+  throw err;
 };
 
 let _runner: SoleurGoRunner | null = null;
@@ -150,13 +192,13 @@ export async function dispatchSoleurGo(
         type: "stream",
         content: text,
         partial: true,
-        leaderId: "system",
+        leaderId: "cc_router",
       });
     },
     onToolUse: (block) => {
       sendToClient(userId, {
         type: "tool_use",
-        leaderId: "system",
+        leaderId: "cc_router",
         label: block.name,
       });
     },
@@ -166,10 +208,34 @@ export async function dispatchSoleurGo(
       // single source of truth.
     },
     onWorkflowEnded: (end: WorkflowEnd) => {
-      sendToClient(userId, {
-        type: "session_ended",
-        reason: end.status,
-      });
+      // Architecture-F4: `session_ended` is terminal in `ws-client.ts`
+      // (clears streams, disables input). Emitting it for RECOVERABLE
+      // runner states (cost_ceiling, runner_runaway) would break
+      // "user retries on next turn" UX. Stage 3 adds a dedicated
+      // `workflow_ended` event; until then, route terminal statuses
+      // to `session_ended` and recoverable statuses to a structured
+      // error the client can surface without tearing down the
+      // conversation.
+      const TERMINAL: ReadonlySet<WorkflowEnd["status"]> = new Set<
+        WorkflowEnd["status"]
+      >([
+        "completed",
+        "user_aborted",
+        "idle_timeout",
+        "plugin_load_failure",
+        "internal_error",
+      ]);
+      if (TERMINAL.has(end.status)) {
+        sendToClient(userId, {
+          type: "session_ended",
+          reason: end.status,
+        });
+      } else {
+        sendToClient(userId, {
+          type: "error",
+          message: `Workflow ended (${end.status}) — retry to continue.`,
+        });
+      }
     },
     onResult: (_result) => {
       // Usage totals bubble via `usage_update`; wire in Stage 3 when
@@ -224,30 +290,44 @@ export function handleInteractivePromptResponseCase(args: {
 
   if (!result.ok) {
     // Per `cq-silent-fallback-must-mirror-to-sentry`: do NOT silently
-    // drop. Emit structured WS error + mirror.
-    reportSilentFallback(
-      new Error(`interactive_prompt_response rejected: ${result.error}`),
-      {
-        feature: "cc-dispatcher",
-        op: "interactive_prompt_response",
-        extra: { userId, error: result.error },
-      },
-    );
+    // drop. Emit structured WS error + mirror. Mirror only on server
+    // bugs, not expected client states — `already_consumed` is a
+    // benign retry after success (client already saw ok); mirroring
+    // would amplify Sentry noise. `not_found` could be session
+    // reset / container restart (also benign from server POV).
+    const MIRROR: ReadonlySet<typeof result.error> = new Set<
+      typeof result.error
+    >(["invalid_payload", "invalid_response", "kind_mismatch"]);
+    if (MIRROR.has(result.error)) {
+      reportSilentFallback(
+        new Error(`interactive_prompt_response rejected: ${result.error}`),
+        {
+          feature: "cc-dispatcher",
+          op: "interactive_prompt_response",
+          extra: { userId, error: result.error },
+        },
+      );
+    }
     sendToClient(userId, {
       type: "error",
       message: `Interactive prompt response rejected: ${result.error}`,
+      errorCode: "interactive_prompt_rejected",
     });
   }
 
   return result;
 }
 
-// Exported for test cleanup / horizontal-scale-out shim (V2).
+// Exported for test cleanup only. Double-underscore + explicit suffix
+// signals the contract: do not call from production code paths.
 export function __resetDispatcherForTests(): void {
+  if (_reaperInterval) {
+    clearInterval(_reaperInterval);
+    _reaperInterval = null;
+  }
   _registry = null;
   _rateLimiter = null;
   _runner = null;
   _runnerSendToClient = null;
+  _stubMirroredOnce = false;
 }
-
-export type { InteractivePromptEvent };

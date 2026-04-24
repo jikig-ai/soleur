@@ -5,7 +5,11 @@ import {
   makePendingPromptKey,
   type PendingPromptRecord,
 } from "@/server/pending-prompt-registry";
-import { handleInteractivePromptResponse } from "@/server/cc-interactive-prompt-response";
+import {
+  handleInteractivePromptResponse,
+  pruneTombstonesFor,
+} from "@/server/cc-interactive-prompt-response";
+import type { InteractivePromptResponse } from "@/server/cc-interactive-prompt-types";
 
 // RED test for Stage 2.14 of plan 2026-04-23-feat-cc-route-via-soleur-go-plan.md.
 //
@@ -23,7 +27,7 @@ import { handleInteractivePromptResponse } from "@/server/cc-interactive-prompt-
 // error code or 2xx-equivalent silence. The function itself does NOT
 // emit WS frames (that's ws-handler's concern).
 
-type ResponsePayload = Parameters<typeof handleInteractivePromptResponse>[0]["payload"];
+type ResponsePayload = InteractivePromptResponse;
 
 function seedPrompt(
   registry: PendingPromptRegistry,
@@ -276,6 +280,78 @@ describe("handleInteractivePromptResponse (Stage 2.14)", () => {
         content: "ack",
       });
     }
+  });
+
+  it("ask_user response is length-capped to prevent cost-amplifier (security)", () => {
+    seedPrompt(registry, { kind: "ask_user" });
+    const huge = "a".repeat(20_000);
+    const result = handleInteractivePromptResponse({
+      registry,
+      userId: "user-1",
+      payload: {
+        type: "interactive_prompt_response",
+        promptId: "p-1",
+        conversationId: "conv-1",
+        kind: "ask_user",
+        response: huge,
+      },
+      deliverToolResult,
+    });
+    expect(result.ok).toBe(true);
+    expect(deliverToolResult).toHaveBeenCalledTimes(1);
+    const call = deliverToolResult.mock.calls[0]!;
+    // Expect 8KB cap (matches MAX_ASK_USER_RESPONSE_BYTES).
+    expect(call[0].content.length).toBeLessThanOrEqual(8192);
+    expect(call[0].content.length).toBeGreaterThanOrEqual(4096);
+  });
+
+  it("pruneTombstonesFor clears tombstones after reaper pass (memory bound)", () => {
+    // Seed + consume — tombstone is created by consume path.
+    seedPrompt(registry, { promptId: "p-a" });
+    handleInteractivePromptResponse({
+      registry,
+      userId: "user-1",
+      payload: {
+        type: "interactive_prompt_response",
+        promptId: "p-a",
+        conversationId: "conv-1",
+        kind: "ask_user",
+        response: "ack",
+      },
+      deliverToolResult,
+    });
+    // Replay surfaces as already_consumed (proves tombstone exists).
+    const replay = handleInteractivePromptResponse({
+      registry,
+      userId: "user-1",
+      payload: {
+        type: "interactive_prompt_response",
+        promptId: "p-a",
+        conversationId: "conv-1",
+        kind: "ask_user",
+        response: "ack",
+      },
+      deliverToolResult,
+    });
+    expect(replay).toEqual({ ok: false, error: "already_consumed" });
+
+    // Scheduled reaper calls pruneTombstonesFor — after prune the same
+    // replay surfaces as not_found.
+    const pruned = pruneTombstonesFor(registry);
+    expect(pruned).toBeGreaterThan(0);
+    const afterPrune = handleInteractivePromptResponse({
+      registry,
+      userId: "user-1",
+      payload: {
+        type: "interactive_prompt_response",
+        promptId: "p-a",
+        conversationId: "conv-1",
+        kind: "ask_user",
+        response: "ack",
+      },
+      deliverToolResult,
+    });
+    expect(afterPrune).toEqual({ ok: false, error: "not_found" });
   });
 
   it("returns invalid_payload when the payload shape is malformed (missing promptId)", () => {

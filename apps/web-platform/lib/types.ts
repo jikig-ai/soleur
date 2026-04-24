@@ -10,7 +10,8 @@ export type WSErrorCode =
   | "upload_failed"
   | "file_too_large"
   | "unsupported_file_type"
-  | "too_many_files";
+  | "too_many_files"
+  | "interactive_prompt_rejected";
 
 // Shared WebSocket close codes — single source of truth for server, client, and tests.
 // See: https://developer.mozilla.org/en-US/docs/Web/API/CloseEvent/code (4000-4999 = application-reserved)

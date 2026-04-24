@@ -97,4 +97,71 @@ describe("cc-dispatcher singletons + orchestration", () => {
     );
     expect(errorCalls).toHaveLength(0);
   });
+
+  it.each([
+    ["already_consumed", "plan_preview", "accept"],
+    ["kind_mismatch", "bash_approval", "approve"],
+    ["invalid_response", "plan_preview", "something-not-accept"],
+    ["invalid_payload", "plan_preview", "accept"],
+  ] as const)(
+    "handleInteractivePromptResponseCase emits errorCode on %s",
+    (expectedError, payloadKind, response) => {
+      const sendToClient = vi.fn().mockReturnValue(true);
+      const registry = getPendingPromptRegistry();
+      // Seed record for the cases that need a live prompt.
+      if (expectedError !== "invalid_payload") {
+        registry.register({
+          promptId: "p-1",
+          conversationId: "conv-1",
+          userId: "u1",
+          kind: "plan_preview", // record kind pinned
+          toolUseId: "toolu_1",
+          createdAt: Date.now(),
+          payload: {},
+        });
+      }
+      // For already_consumed, consume first.
+      if (expectedError === "already_consumed") {
+        handleInteractivePromptResponseCase({
+          userId: "u1",
+          payload: {
+            type: "interactive_prompt_response",
+            promptId: "p-1",
+            conversationId: "conv-1",
+            kind: "plan_preview",
+            response: "accept",
+          },
+          sendToClient: vi.fn().mockReturnValue(true),
+        });
+      }
+
+      const payload =
+        expectedError === "invalid_payload"
+          ? ({ type: "interactive_prompt_response" } as unknown as import("@/server/cc-interactive-prompt-types").InteractivePromptResponse)
+          : ({
+              type: "interactive_prompt_response",
+              promptId: "p-1",
+              conversationId: "conv-1",
+              kind: payloadKind,
+              response,
+            } as unknown as import("@/server/cc-interactive-prompt-types").InteractivePromptResponse);
+
+      const result = handleInteractivePromptResponseCase({
+        userId: "u1",
+        payload,
+        sendToClient,
+      });
+
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.error).toBe(expectedError);
+
+      const errorCalls = sendToClient.mock.calls.filter(
+        ([, m]) => m && typeof m === "object" && (m as { type?: string }).type === "error",
+      );
+      expect(errorCalls.length).toBeGreaterThan(0);
+      expect((errorCalls[0]![1] as { errorCode?: string }).errorCode).toBe(
+        "interactive_prompt_rejected",
+      );
+    },
+  );
 });

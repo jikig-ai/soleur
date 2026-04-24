@@ -285,8 +285,12 @@ describe("soleur-go-runner interactive-prompt bridge (Stage 2.10)", () => {
     expect(event.kind).toBe("diff");
     if (event.kind === "diff") {
       expect(event.payload.path).toBe("/w/src/foo.ts");
-      expect(event.payload.additions).toBeGreaterThanOrEqual(1);
-      expect(event.payload.deletions).toBeGreaterThanOrEqual(0);
+      // Input: old_string="a\nb\nc" (3 lines), new_string="a\nb\nc\nd" (4 lines).
+      // classifier computes max(0, new-old)=1 / max(0, old-new)=0 — pin exactly
+      // so a classifier drift (e.g., swapping add/del) surfaces as a diff, not
+      // as a tautology per `cq-mutation-assertions-pin-exact-post-state`.
+      expect(event.payload.additions).toBe(1);
+      expect(event.payload.deletions).toBe(0);
     }
   });
 

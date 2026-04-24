@@ -57,14 +57,15 @@ export interface HandleInteractivePromptResponseArgs {
 
 // Consumed-prompt tombstones — bounded per-user to distinguish "never
 // existed" (not_found) from "already responded" (already_consumed). A
-// plain Set would grow unbounded; we key by composite key and rely on
-// the registry's own TTL reaper as an upper bound since a tombstone
-// whose source key has been reaped can't collide with any live prompt.
+// plain Set would grow unbounded; we key by composite key.
 //
-// The tombstone lifetime is implicitly bounded by the registry's own
-// ttlMs + a grace window. To keep this module stateless for tests, we
-// piggy-back on a WeakMap keyed by the registry instance — each registry
-// gets its own tombstone set, GC'd when the registry is.
+// Reaping: `cc-dispatcher.ts` schedules a periodic interval that calls
+// `registry.reap()` and `pruneTombstonesFor(registry)` at the same
+// cadence. A tombstone whose source key has been reaped can't collide
+// with any live prompt, so wholesale clearing on each reap pass is
+// safe. The WeakMap key is the registry instance — each registry gets
+// its own tombstone set, GC'd when the registry is (test isolation via
+// `__resetDispatcherForTests`).
 const tombstoneStore = new WeakMap<PendingPromptRegistry, Set<string>>();
 
 function tombstonesFor(registry: PendingPromptRegistry): Set<string> {
@@ -76,14 +77,36 @@ function tombstonesFor(registry: PendingPromptRegistry): Set<string> {
   return set;
 }
 
-const KIND_SET: ReadonlySet<InteractivePromptKind> = new Set<InteractivePromptKind>([
-  "ask_user",
-  "plan_preview",
-  "diff",
-  "bash_approval",
-  "todo_write",
-  "notebook_edit",
-]);
+/**
+ * Clear the tombstone set for a registry. Called from the scheduled
+ * reaper in `cc-dispatcher.ts` immediately after `registry.reap()` so
+ * tombstone memory does not outlive the records they shadow. Also
+ * exported for test cleanup.
+ */
+export function pruneTombstonesFor(registry: PendingPromptRegistry): number {
+  const set = tombstoneStore.get(registry);
+  if (!set) return 0;
+  const removed = set.size;
+  set.clear();
+  return removed;
+}
+
+// Derive the runtime kind guard from the canonical registry union so
+// adding a 7th kind to `InteractivePromptKind` automatically widens the
+// guard (pattern-recognition HIGH: 4-way drift). `satisfies` verifies
+// every kind has a `true` entry; the `as` cast narrows the
+// `keyof typeof KIND_MAP` intersection back to `InteractivePromptKind`.
+const KIND_MAP = {
+  ask_user: true,
+  plan_preview: true,
+  diff: true,
+  bash_approval: true,
+  todo_write: true,
+  notebook_edit: true,
+} as const satisfies Record<InteractivePromptKind, true>;
+const KIND_SET: ReadonlySet<InteractivePromptKind> = new Set(
+  Object.keys(KIND_MAP) as InteractivePromptKind[],
+);
 
 function isValidPayload(payload: unknown): payload is InteractivePromptResponse {
   if (!payload || typeof payload !== "object") return false;
@@ -96,6 +119,12 @@ function isValidPayload(payload: unknown): payload is InteractivePromptResponse 
   return true;
 }
 
+// Matches `prompt-injection-wrap.ts` MAX_USER_INPUT_BYTES — any free-form
+// user-supplied `ask_user` response loops back into the SDK as tool_result
+// content and must be bounded so a legitimate response cannot be weaponized
+// as a token-cost amplifier against the same-user cost cap.
+const MAX_ASK_USER_RESPONSE_BYTES = 8192;
+
 function normalizeResponse(
   kind: InteractivePromptKind,
   response: unknown,
@@ -103,13 +132,16 @@ function normalizeResponse(
   switch (kind) {
     case "ask_user": {
       if (typeof response === "string") {
-        return { ok: true, content: response };
+        return { ok: true, content: response.slice(0, MAX_ASK_USER_RESPONSE_BYTES) };
       }
       if (
         Array.isArray(response) &&
         response.every((r) => typeof r === "string")
       ) {
-        return { ok: true, content: (response as string[]).join(", ") };
+        return {
+          ok: true,
+          content: (response as string[]).join(", ").slice(0, MAX_ASK_USER_RESPONSE_BYTES),
+        };
       }
       return { ok: false };
     }
