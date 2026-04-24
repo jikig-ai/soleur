@@ -74,7 +74,10 @@ def emit_incident(rule_id: str, event_type: str, prefix: str, cmd: str = "") -> 
             "command_snippet": (cmd or "")[:1024],
         }
         line = (json.dumps(record, separators=(",", ":"), ensure_ascii=False) + "\n").encode("utf-8")
-        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o644)
+        # Mode 0o600 (owner rw only): command_snippet can carry PR body text
+        # or gh invocation arguments — operator-only readable avoids leaking
+        # those into shared-host scenarios. CodeQL py/overly-permissive-file.
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
         try:
             if fcntl is not None:
                 fcntl.flock(fd, fcntl.LOCK_EX)
