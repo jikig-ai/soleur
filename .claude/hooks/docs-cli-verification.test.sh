@@ -70,6 +70,59 @@ run_case "warn when CLI is preceded by env-var assignment" \
   $'```bash\nOLLAMA_HOST=127.0.0.1:11434 ollama run gemma2:27b\n```\n' \
   true
 
+# --- Emission assertions (plan T2.3) ------------------------------------
+# Per-fence warn events must land in .claude/.rule-incidents.jsonl under
+# rule_id=cq-docs-cli-verification. Each case runs with INCIDENTS_REPO_ROOT
+# pointing at a fresh per-case directory for isolation.
+
+run_emit_case() {
+  local name=$1 fixture_path=$2 fixture_content=$3 expected_lines=$4
+  printf '%s' "$fixture_content" > "$fixture_path"
+  local incidents; incidents=$(mktemp -d)
+  local payload
+  payload=$(jq -nc --arg p "$fixture_path" '{tool_input: {file_path: $p}}')
+  echo "$payload" | INCIDENTS_REPO_ROOT="$incidents" "$HOOK" >/dev/null 2>&1 || true
+  local jsonl="$incidents/.claude/.rule-incidents.jsonl"
+
+  local actual=0
+  local rule_ok=true event_ok=true
+  if [[ -f "$jsonl" ]]; then
+    actual=$(wc -l < "$jsonl" | tr -d ' ')
+    if [[ "$expected_lines" -gt 0 ]]; then
+      local bad_rules bad_events
+      bad_rules=$(jq -r 'select(.rule_id != "cq-docs-cli-verification") | .rule_id' < "$jsonl" | wc -l | tr -d ' ')
+      bad_events=$(jq -r 'select(.event_type != "warn") | .event_type' < "$jsonl" | wc -l | tr -d ' ')
+      [[ "$bad_rules" -eq 0 ]] || rule_ok=false
+      [[ "$bad_events" -eq 0 ]] || event_ok=false
+    fi
+  fi
+
+  if [[ "$actual" == "$expected_lines" ]] && $rule_ok && $event_ok; then
+    echo "ok  - $name"
+    pass=$((pass + 1))
+  else
+    echo "FAIL - $name (expected $expected_lines JSONL line(s), got $actual; rule_ok=$rule_ok event_ok=$event_ok)"
+    [[ -f "$jsonl" ]] && { echo "  contents:"; sed 's/^/    /' "$jsonl"; }
+    fail=$((fail + 1))
+  fi
+  rm -rf "$incidents"
+}
+
+run_emit_case "emit one warn per unverified CLI fence" \
+  "$TMP/emit-one.md" \
+  $'# Title\n\n```bash\nollama run gemma2:27b\n```\n' \
+  1
+
+run_emit_case "no emit when snippet is annotated verified" \
+  "$TMP/emit-none.md" \
+  $'# Title\n\n<!-- verified: 2026-04-18 source: https://ollama.com/library/gemma2 -->\n```bash\nollama run gemma2:27b\n```\n' \
+  0
+
+run_emit_case "emit two warns for two unverified fences" \
+  "$TMP/emit-two.md" \
+  $'# Title\n\n```bash\nollama run gemma2:27b\n```\n\nMore:\n\n```bash\nsupabase login\n```\n' \
+  2
+
 echo
 echo "Passed: $pass  Failed: $fail"
 [[ "$fail" -eq 0 ]]

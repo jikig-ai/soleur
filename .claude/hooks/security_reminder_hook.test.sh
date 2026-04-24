@@ -170,6 +170,73 @@ else
 fi
 TOTAL=$((TOTAL+1))
 
+# ---------- Case 12: deny emits rule-incident line ----------
+# Uses INCIDENTS_REPO_ROOT to redirect the emit_incident write off the
+# operator's real .claude/.rule-incidents.jsonl.
+INC_ROOT_12=$(mktemp -d)
+PAYLOAD_12=$(jq -c -n '{
+  tool_name: "Edit",
+  tool_input: {
+    file_path: ".github/workflows/ci.yml",
+    new_string: "      - run: echo \"${{ github.event.issue.title }}\"\n"
+  }
+}')
+out_12=$(printf '%s' "$PAYLOAD_12" | INCIDENTS_REPO_ROOT="$INC_ROOT_12" "$HOOK" 2>/dev/null) || exit_12=$?
+exit_12=${exit_12:-0}
+decision_12=$(printf '%s' "$out_12" | jq -r '.hookSpecificOutput.permissionDecision // ""' 2>/dev/null || echo "")
+jsonl_12="$INC_ROOT_12/.claude/.rule-incidents.jsonl"
+count_12=0
+rule_12=""
+event_12=""
+if [[ -f "$jsonl_12" ]]; then
+  count_12=$(wc -l < "$jsonl_12" | tr -d ' ')
+  rule_12=$(jq -r '.rule_id' < "$jsonl_12" | head -1)
+  event_12=$(jq -r '.event_type' < "$jsonl_12" | head -1)
+fi
+if [[ "$exit_12" -eq 0 && "$decision_12" == "deny" && "$count_12" == "1" \
+      && "$rule_12" == "hr-in-github-actions-run-blocks-never-use" && "$event_12" == "deny" ]]; then
+  echo "PASS: case-12 workflow-injection deny emits incident"; PASS=$((PASS+1))
+else
+  echo "FAIL: case-12 (exit=$exit_12 decision=$decision_12 count=$count_12 rule=$rule_12 event=$event_12)"
+  FAIL=$((FAIL+1))
+fi
+TOTAL=$((TOTAL+1))
+rm -rf "$INC_ROOT_12"
+
+# ---------- Case 13: concurrent writers produce two lines ----------
+# Two subshell invocations write to the same incidents file concurrently.
+# The bash emitter uses flock; the Python emitter must acquire the same
+# lock. Expect exactly two lines — no truncation, no interleaving.
+INC_ROOT_13=$(mktemp -d)
+(
+  printf '%s' "$PAYLOAD_12" | INCIDENTS_REPO_ROOT="$INC_ROOT_13" "$HOOK" >/dev/null 2>&1
+) &
+(
+  printf '%s' "$PAYLOAD_12" | INCIDENTS_REPO_ROOT="$INC_ROOT_13" "$HOOK" >/dev/null 2>&1
+) &
+wait
+jsonl_13="$INC_ROOT_13/.claude/.rule-incidents.jsonl"
+count_13=0
+bad_json=0
+if [[ -f "$jsonl_13" ]]; then
+  count_13=$(wc -l < "$jsonl_13" | tr -d ' ')
+  # Each line must be valid JSON — torn writes would produce parse errors.
+  while IFS= read -r line; do
+    if ! printf '%s' "$line" | jq -e . >/dev/null 2>&1; then
+      bad_json=1
+    fi
+  done < "$jsonl_13"
+fi
+if [[ "$count_13" == "2" && "$bad_json" == "0" ]]; then
+  echo "PASS: case-13 concurrent emit_incident produces two well-formed lines"; PASS=$((PASS+1))
+else
+  echo "FAIL: case-13 (count=$count_13 bad_json=$bad_json)"
+  [[ -f "$jsonl_13" ]] && { echo "  contents:"; sed 's/^/    /' "$jsonl_13"; }
+  FAIL=$((FAIL+1))
+fi
+TOTAL=$((TOTAL+1))
+rm -rf "$INC_ROOT_13"
+
 echo
 echo "PASS=$PASS FAIL=$FAIL TOTAL=$TOTAL"
 [[ $FAIL -eq 0 ]] || exit 1

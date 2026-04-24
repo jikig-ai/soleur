@@ -308,6 +308,14 @@ The deep-dive agent's task:
 
 Per AGENTS.md `hr-ssh-diagnosis-verify-firewall`, plans addressing SSH/network-connectivity symptoms MUST verify the L3 firewall allow-list against current client egress IP BEFORE proposing service-layer fixes. The deep-dive is the deepen-plan enforcement layer.
 
+When a trigger pattern matches, emit rule-application telemetry so the weekly aggregator records the deepen-plan enforcement layer fired (see AGENTS.md `hr-ssh-diagnosis-verify-firewall`):
+
+```bash
+source "$(git rev-parse --show-toplevel)/.claude/hooks/lib/incidents.sh" && \
+  emit_incident hr-ssh-diagnosis-verify-firewall applied \
+  "When a plan addresses an SSH/network-connectivity s"
+```
+
 ### 5. Discover and Run ALL Review Agents
 
 <thinking>

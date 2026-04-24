@@ -85,6 +85,14 @@ Assess whether the feature description has implications for specific business do
 
 #### Processing Instructions
 
+Emit rule-application telemetry (records that the CPO/CMO inclusion gate for new skills/agents was reached — see AGENTS.md `hr-new-skills-agents-or-user-facing`):
+
+```bash
+source "$(git rev-parse --show-toplevel)/.claude/hooks/lib/incidents.sh" && \
+  emit_incident hr-new-skills-agents-or-user-facing applied \
+  "New skills, agents, or user-facing capabilities must"
+```
+
 1. Read the feature description and assess relevance against each domain in the table above using the Assessment Question column.
 2. For each relevant domain, spawn a Task using the Task Prompt from the table, substituting `{desc}` with the feature description. If multiple domains are relevant, spawn them in parallel. Weave each leader's assessment into the brainstorm dialogue alongside repo research findings.
 3. If the user explicitly requests a brand workshop or validation workshop (e.g., "start brand workshop", "run validation workshop"), follow the named workshop section below instead of spawning an assessment.

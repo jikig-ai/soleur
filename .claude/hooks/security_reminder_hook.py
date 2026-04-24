@@ -18,9 +18,70 @@
 # missing at runtime the hook exits 127 which Claude Code treats as a no-op.
 
 import json
+import os
 import re
 import sys
+from datetime import datetime, timezone
 from fnmatch import fnmatch
+
+try:
+    import fcntl  # POSIX-only; absent on Windows. Guard for platform portability.
+except ImportError:  # pragma: no cover - platform fallback
+    fcntl = None  # type: ignore[assignment]
+
+# schema mirror: .claude/hooks/lib/incidents.sh (keep in sync)
+SCHEMA_VERSION = 1
+
+_HOOK_DIR = os.path.dirname(os.path.abspath(__file__))
+
+
+def _incidents_repo_root() -> str:
+    """Mirror of incidents.sh _incidents_repo_root — honors the same env var."""
+    override = os.environ.get("INCIDENTS_REPO_ROOT", "")
+    if override:
+        return override
+    # From .claude/hooks/, the repo root is two dirs up.
+    return os.path.abspath(os.path.join(_HOOK_DIR, "..", ".."))
+
+
+def emit_incident(rule_id: str, event_type: str, prefix: str, cmd: str = "") -> None:
+    """Append one JSONL rule-incident line; fire-and-forget.
+
+    Interlocks with the bash emitter via advisory fcntl.flock on the same
+    inode — both writers use LOCK_EX against .claude/.rule-incidents.jsonl,
+    so concurrent writes queue rather than interleave. JSONL lines are
+    ~200 bytes, well under PIPE_BUF (4096) so the O_APPEND write is atomic
+    on Linux even without the lock — the lock is belt-and-suspenders.
+    """
+    if not rule_id or not event_type:
+        return
+    try:
+        repo_root = _incidents_repo_root()
+        path = os.path.join(repo_root, ".claude", ".rule-incidents.jsonl")
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        record = {
+            "schema": SCHEMA_VERSION,
+            "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "rule_id": rule_id,
+            "event_type": event_type,
+            "rule_text_prefix": prefix,
+            "command_snippet": cmd,
+        }
+        line = (json.dumps(record, separators=(",", ":"), ensure_ascii=False) + "\n").encode("utf-8")
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o644)
+        try:
+            if fcntl is not None:
+                fcntl.flock(fd, fcntl.LOCK_EX)
+            try:
+                os.write(fd, line)
+            finally:
+                if fcntl is not None:
+                    fcntl.flock(fd, fcntl.LOCK_UN)
+        finally:
+            os.close(fd)
+    except Exception:
+        # Fire-and-forget: never let a telemetry failure block the hook.
+        pass
 
 # Literal sink strings that must trigger the advisory when present alongside a
 # `run:` directive in the same new_string.
@@ -119,6 +180,13 @@ def main() -> int:
         if not RUN_DIRECTIVE.search(new_string):
             # Sink present but no run: block in new_string — safe pattern (env var, etc.).
             return 0
+
+        emit_incident(
+            "hr-in-github-actions-run-blocks-never-use",
+            "deny",
+            "In GitHub Actions `run:` blocks, never use heredocs",
+            sink,
+        )
 
         response = {
             "hookSpecificOutput": {

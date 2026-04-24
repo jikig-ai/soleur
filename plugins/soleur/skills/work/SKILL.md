@@ -228,6 +228,14 @@ Run these checks before proceeding to Phase 1. A FAIL blocks execution with a re
 
    **TDD Gate (HARD GATE):** Before writing ANY implementation code for a task, determine if the task has testable behavior:
 
+   Emit rule-application telemetry (records that the TDD gate was reached — see AGENTS.md `cq-write-failing-tests-before`):
+
+   ```bash
+   source "$(git rev-parse --show-toplevel)/.claude/hooks/lib/incidents.sh" && \
+     emit_incident cq-write-failing-tests-before applied \
+     "Write failing tests BEFORE implementation code whe"
+   ```
+
    1. **Check:** Does the plan have a "Test Scenarios" or "Acceptance Criteria" section that covers this task? If yes, this task requires test-first.
    2. **Exempt:** Infrastructure-only tasks (config files, CI workflows, scaffolding directories, dependency installs) are exempt. If the task only creates/modifies config, it skips to Infrastructure Validation below.
    3. **Enforce:** For non-exempt tasks, write the failing test file FIRST. The test must:

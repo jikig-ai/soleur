@@ -194,6 +194,15 @@ Close the gap between "we learned X" and "X is now enforced." The project has pr
 7. **Feed into Constitution Promotion.** Present each deviation to the user via the existing Accept/Skip/Edit gate in the Constitution Promotion section below. Accepted hook proposals should be manually copied to `.claude/hooks/` after testing — never auto-install.
 
 8. **Rule budget count.** After deviation analysis, measure both rule count and byte size of always-loaded `AGENTS.md`:
+
+   Emit rule-application telemetry (records that the byte-cap / why-single-line policy ran — see AGENTS.md `cq-agents-md-why-single-line`):
+
+   ```bash
+   source "$(git rev-parse --show-toplevel)/.claude/hooks/lib/incidents.sh" && \
+     emit_incident cq-agents-md-why-single-line applied \
+     "AGENTS.md rules cap at ~600 bytes; **Why:** is one"
+   ```
+
    - Count rules: `grep -c '^- ' AGENTS.md` → A
    - Byte size: `wc -c < AGENTS.md` → B
    - Constitution.md count: `grep -c '^- ' knowledge-base/project/constitution.md 2>/dev/null` → C (on-demand, tracked separately)

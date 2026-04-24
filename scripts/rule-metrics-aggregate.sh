@@ -106,11 +106,19 @@ if [[ -s "$INCIDENTS" ]]; then
     echo "::warning::Dropped $bad_lines malformed line(s) from $INCIDENTS (kept $valid_lines)" >&2
   fi
   if [[ "$valid_lines" -gt 0 ]]; then
+    # fire_count increments on any recognized event_type (deny, bypass,
+    # applied, warn). Unknown event_types do not increment fire_count —
+    # they are silently skipped so a typo'd emit call does not inflate the
+    # "rule fired" signal used by rule-prune.
     jq_counts=$(echo "$valid_stream" | jq -s '
       reduce .[] as $e ({};
-        (.[$e.rule_id] //= {hit_count:0, bypass_count:0, last_hit:null, first_seen:null}) |
-        (if $e.event_type == "deny"  then .[$e.rule_id].hit_count    += 1 else . end) |
-        (if $e.event_type == "bypass" then .[$e.rule_id].bypass_count += 1 else . end) |
+        (.[$e.rule_id] //= {hit_count:0, bypass_count:0, applied_count:0, warn_count:0, fire_count:0, last_hit:null, first_seen:null}) |
+        (if $e.event_type == "deny"    then .[$e.rule_id].hit_count     += 1 else . end) |
+        (if $e.event_type == "bypass"  then .[$e.rule_id].bypass_count  += 1 else . end) |
+        (if $e.event_type == "applied" then .[$e.rule_id].applied_count += 1 else . end) |
+        (if $e.event_type == "warn"    then .[$e.rule_id].warn_count    += 1 else . end) |
+        (if ($e.event_type == "deny" or $e.event_type == "bypass" or $e.event_type == "applied" or $e.event_type == "warn")
+           then .[$e.rule_id].fire_count += 1 else . end) |
         (if .[$e.rule_id].first_seen == null or ($e.timestamp < .[$e.rule_id].first_seen)
            then .[$e.rule_id].first_seen = $e.timestamp else . end) |
         (if .[$e.rule_id].last_hit   == null or ($e.timestamp > .[$e.rule_id].last_hit)
@@ -144,19 +152,22 @@ stage_enriched=$(jq -n \
     $rules
     | map(
         . as $r
-        | ($counts[$r.id] // {hit_count:0, bypass_count:0, last_hit:null, first_seen:null}) as $c
+        | ($counts[$r.id] // {hit_count:0, bypass_count:0, applied_count:0, warn_count:0, fire_count:0, last_hit:null, first_seen:null}) as $c
         | {
             id: $r.id,
             section: $r.section,
             hit_count: $c.hit_count,
             bypass_count: $c.bypass_count,
+            applied_count: $c.applied_count,
+            warn_count: $c.warn_count,
+            fire_count: $c.fire_count,
             prevented_errors: ([$c.hit_count - $c.bypass_count, 0] | max),
             last_hit: $c.last_hit,
             first_seen: $c.first_seen,
             rule_text_prefix: $r.rule_text_prefix
           }
       )
-    | sort_by(.hit_count, .id)
+    | sort_by(.fire_count, .id)
   ')
 echo "$stage_enriched" | jq empty >/dev/null 2>&1 || { echo "ERROR: stage B (enrich) malformed" >&2; exit 4; }
 
@@ -182,7 +193,7 @@ report=$(jq -n \
           # treats parse failure as epoch 0 — pushes the rule into "unused"
           # which matches intent: we can'"'"'t prove recent activity.
           rules_unused_over_8w: ($enriched
-            | map(select(.hit_count == 0
+            | map(select(.fire_count == 0
                 and (.first_seen == null
                      or (try (.first_seen | fromdateiso8601) catch 0) < $cutoff)))
             | length),
@@ -199,6 +210,17 @@ echo "$report" | jq empty >/dev/null 2>&1 || { echo "ERROR: stage C (summarize) 
 # field is present without defensive `// null` in every reader.
 echo "$report" | jq -e '.schema == 1' >/dev/null 2>&1 \
   || { echo "ERROR: rule-metrics output missing or wrong schema version" >&2; exit 4; }
+
+# Orphan invariant: any rule_id emitted by a hook / skill that is not tagged
+# in AGENTS.md indicates drift (renamed rule, typo in snippet, dead rule-id).
+# Weekly cron surfaces this as a failing workflow step — the next run is a
+# silent normalization otherwise.
+orphan_count=$(echo "$report" | jq -r '.summary.orphan_rule_ids | length')
+if [[ "${orphan_count:-0}" -gt 0 ]]; then
+  orphan_list=$(echo "$report" | jq -r '.summary.orphan_rule_ids | join(", ")')
+  echo "ERROR: orphan rule_id(s) in incidents jsonl not tagged in AGENTS.md: $orphan_list" >&2
+  exit 5
+fi
 
 if [[ "$DRY_RUN" == "1" ]]; then
   echo "$report" | jq '{schema, generated_at, summary}'
