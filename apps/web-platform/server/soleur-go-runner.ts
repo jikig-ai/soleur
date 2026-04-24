@@ -41,6 +41,7 @@ import type {
   SDKResultMessage,
 } from "@anthropic-ai/claude-agent-sdk";
 
+import { randomUUID } from "crypto";
 import {
   parseConversationRouting,
   serializeConversationRouting,
@@ -49,6 +50,16 @@ import {
 } from "./conversation-routing";
 import { wrapUserInput } from "./prompt-injection-wrap";
 import { reportSilentFallback } from "./observability";
+import {
+  PendingPromptRegistry,
+  PendingPromptCapExceededError,
+  type InteractivePromptKind,
+} from "./pending-prompt-registry";
+import type {
+  InteractivePromptEvent,
+  InteractivePromptPayload,
+  TodoItem,
+} from "./cc-interactive-prompt-types";
 
 // Ensure these are "used" (re-export surface rather than dead-code) so the
 // consumer contract stays visible.  They are imported elsewhere in the
@@ -90,6 +101,105 @@ const KNOWN_WORKFLOWS: ReadonlySet<WorkflowName> = new Set<WorkflowName>([
 
 function isKnownWorkflow(value: unknown): value is WorkflowName {
   return typeof value === "string" && (KNOWN_WORKFLOWS as ReadonlySet<string>).has(value);
+}
+
+// SDK tool names that produce an `interactive_prompt` surface. Mapped to
+// the discriminated `kind` on `cc-interactive-prompt-types.ts`. Anything
+// not in this table is non-interactive from the user's POV (Skill / Read /
+// Glob / Grep / Agent / …) and flows through the normal streaming path
+// without a pending-prompt record.
+function classifyInteractiveTool(
+  toolName: string,
+  toolInput: Record<string, unknown>,
+  fallbackCwd: string,
+): InteractivePromptPayload | null {
+  switch (toolName) {
+    case "ExitPlanMode": {
+      const markdown = typeof toolInput.plan === "string" ? toolInput.plan : "";
+      return { kind: "plan_preview", payload: { markdown } };
+    }
+    case "TodoWrite": {
+      const raw = Array.isArray(toolInput.todos) ? toolInput.todos : [];
+      const items: TodoItem[] = [];
+      for (let i = 0; i < raw.length; i++) {
+        const t = raw[i];
+        if (!t || typeof t !== "object") continue;
+        const row = t as { id?: unknown; content?: unknown; status?: unknown };
+        const status = row.status;
+        const normalizedStatus: TodoItem["status"] =
+          status === "in_progress" || status === "completed" ? status : "pending";
+        items.push({
+          id: typeof row.id === "string" ? row.id : String(i),
+          content: typeof row.content === "string" ? row.content : "",
+          status: normalizedStatus,
+        });
+      }
+      return { kind: "todo_write", payload: { items } };
+    }
+    case "NotebookEdit": {
+      const notebookPath =
+        typeof toolInput.notebook_path === "string" ? toolInput.notebook_path : "";
+      const cellId = typeof toolInput.cell_id === "string" ? toolInput.cell_id : null;
+      return {
+        kind: "notebook_edit",
+        payload: { notebookPath, cellIds: cellId ? [cellId] : [] },
+      };
+    }
+    case "Edit":
+    case "Write": {
+      const path =
+        typeof toolInput.file_path === "string" ? toolInput.file_path : "";
+      const oldStr = typeof toolInput.old_string === "string" ? toolInput.old_string : "";
+      const newStr =
+        typeof toolInput.new_string === "string"
+          ? toolInput.new_string
+          : typeof toolInput.content === "string"
+            ? (toolInput.content as string)
+            : "";
+      const oldLines = oldStr ? oldStr.split("\n").length : 0;
+      const newLines = newStr ? newStr.split("\n").length : 0;
+      const additions = Math.max(0, newLines - oldLines);
+      const deletions = Math.max(0, oldLines - newLines);
+      return { kind: "diff", payload: { path, additions, deletions } };
+    }
+    case "Bash": {
+      const command = typeof toolInput.command === "string" ? toolInput.command : "";
+      const cwd =
+        typeof toolInput.cwd === "string" && toolInput.cwd.length > 0
+          ? toolInput.cwd
+          : fallbackCwd;
+      return { kind: "bash_approval", payload: { command, cwd, gated: true } };
+    }
+    case "AskUserQuestion": {
+      const questions = Array.isArray(toolInput.questions) ? toolInput.questions : [];
+      const first =
+        questions.length > 0 && questions[0] && typeof questions[0] === "object"
+          ? (questions[0] as {
+              question?: unknown;
+              multiSelect?: unknown;
+              options?: unknown;
+            })
+          : null;
+      const question =
+        first && typeof first.question === "string" ? first.question : "";
+      const multiSelect =
+        first && typeof first.multiSelect === "boolean" ? first.multiSelect : false;
+      const opts: string[] = [];
+      if (first && Array.isArray(first.options)) {
+        for (const o of first.options) {
+          if (o && typeof o === "object" && "label" in o) {
+            const label = (o as { label?: unknown }).label;
+            if (typeof label === "string") opts.push(label);
+          } else if (typeof o === "string") {
+            opts.push(o);
+          }
+        }
+      }
+      return { kind: "ask_user", payload: { question, options: opts, multiSelect } };
+    }
+    default:
+      return null;
+  }
 }
 
 export type CostCaps = {
@@ -151,6 +261,21 @@ export interface SoleurGoRunnerDeps {
   defaultCostCaps?: CostCaps;
   pluginPath?: string;
   cwd?: string;
+  /**
+   * Interactive-prompt bridge (Stage 2.10). When both `pendingPrompts` and
+   * `emitInteractivePrompt` are provided, SDK `tool_use` blocks matching one
+   * of the 6 interactive kinds (ask_user / plan_preview / diff /
+   * bash_approval / todo_write / notebook_edit) are classified, registered
+   * in `pendingPrompts`, and emitted via `emitInteractivePrompt(userId,
+   * event)`. When either dep is absent, the runner no-ops on interactive
+   * classification — tests and non-CC callers can keep using the runner
+   * without the bridge.
+   */
+  pendingPrompts?: PendingPromptRegistry;
+  emitInteractivePrompt?: (
+    userId: string,
+    event: InteractivePromptEvent,
+  ) => void;
 }
 
 export interface SoleurGoRunner {
@@ -259,6 +384,60 @@ export function createSoleurGoRunner(deps: SoleurGoRunnerDeps): SoleurGoRunner {
   const defaultCostCaps = deps.defaultCostCaps ?? DEFAULT_COST_CAPS;
   const pluginPath = deps.pluginPath ?? "";
   const cwd = deps.cwd ?? "";
+  const pendingPrompts = deps.pendingPrompts;
+  const emitInteractivePrompt = deps.emitInteractivePrompt;
+
+  function bridgeInteractivePromptIfApplicable(
+    state: ActiveQuery,
+    toolName: string,
+    toolInput: Record<string, unknown>,
+    toolUseId: string,
+  ): void {
+    if (!pendingPrompts || !emitInteractivePrompt) return;
+    const classified = classifyInteractiveTool(toolName, toolInput, cwd);
+    if (!classified) return;
+    const promptId = randomUUID();
+    const kind = classified.kind satisfies InteractivePromptKind;
+    try {
+      pendingPrompts.register({
+        promptId,
+        conversationId: state.conversationId,
+        userId: state.userId,
+        kind,
+        toolUseId,
+        createdAt: now(),
+        payload: classified.payload,
+      });
+    } catch (err) {
+      // A cap-exceeded here is a real warning (the workflow spawned >50
+      // prompts), not a silent-drop — mirror to Sentry but drop the
+      // emission (no point showing a UI prompt the registry can't track).
+      if (err instanceof PendingPromptCapExceededError) {
+        reportSilentFallback(err, {
+          feature: "soleur-go-runner",
+          op: "pendingPrompts.register",
+          extra: { conversationId: state.conversationId, kind },
+        });
+        return;
+      }
+      throw err;
+    }
+    const event: InteractivePromptEvent = {
+      type: "interactive_prompt",
+      promptId,
+      conversationId: state.conversationId,
+      ...classified,
+    };
+    try {
+      emitInteractivePrompt(state.userId, event);
+    } catch (err) {
+      reportSilentFallback(err, {
+        feature: "soleur-go-runner",
+        op: "emitInteractivePrompt",
+        extra: { conversationId: state.conversationId, kind },
+      });
+    }
+  }
 
   function capFor(caps: CostCaps, workflow: WorkflowName | null): number {
     if (workflow && caps.perWorkflow[workflow] != null) {
@@ -370,6 +549,12 @@ export function createSoleurGoRunner(deps: SoleurGoRunnerDeps): SoleurGoRunner {
             extra: { conversationId: state.conversationId, tool: toolName },
           });
         }
+
+        // Stage 2.10 bridge — translate interactive tool_uses into
+        // `interactive_prompt` WS events + `PendingPromptRegistry`
+        // records. No-op when the bridge deps are absent (keeps tests +
+        // non-CC callers working). See `classifyInteractiveTool` above.
+        bridgeInteractivePromptIfApplicable(state, toolName, toolInput, toolUseId);
 
         // Sticky-workflow detection: first Skill(skill=<name>) call with a
         // recognized workflow name locks `active_workflow`.
