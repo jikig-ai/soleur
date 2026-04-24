@@ -34,14 +34,14 @@
 ## Stage 2 — Soleur-Go Runner (server core, security-hardened)
 
 - [x] 2.1 RED: `apps/web-platform/test/conversation-routing.test.ts` — ADT round-trip; `'__unrouted__'` never appears in `parseConversationRouting` output (28 tests, verified RED pre-GREEN)
-- [ ] 2.2 RED: `apps/web-platform/test/soleur-go-runner.test.ts` — dispatch + sticky + sentinel consumption + per-workflow cost cap + secondary wall-clock trigger (mocked SDK; synthetic SDKResultMessage)
+- [x] 2.2 RED: `apps/web-platform/test/soleur-go-runner.test.ts` — dispatch + sticky + sentinel consumption + per-workflow cost cap + secondary wall-clock trigger (mocked SDK; synthetic SDKResultMessage) — 8 tests, verified RED pre-GREEN
 - [ ] 2.3 RED: `apps/web-platform/test/router-flag-stickiness.test.ts` — flag flip mid-conversation does NOT change `active_workflow`
 - [x] 2.4 RED: `apps/web-platform/test/pending-prompt-registry.test.ts` — Map keying by `${userId}:${conversationId}:${promptId}`; cross-user lookup rejected; idempotency on duplicate response; 5-min reaper deletes; per-conversation cap of 50 (15 tests, verified RED pre-GREEN)
 - [ ] 2.5 RED: `apps/web-platform/test/start-session-rate-limit.test.ts` — 11th conversation/hour/user rejected; 31st/hour/IP rejected
 - [ ] 2.6 RED: `apps/web-platform/test/permission-callback-sdk-tools.test.ts` — `Bash` always hits review-gate; `BLOCKED_BASH_PATTERNS` rejects; `Edit`/`Write` reject paths outside `realpathSync(workspacePath)`; symlink-target file rejected via `lstatSync`
 - [x] 2.7 RED: `apps/web-platform/test/prompt-injection-wrap.test.ts` — `<user-input>` wrap; 8KB cap; control chars stripped (15 tests, verified RED pre-GREEN)
 - [x] 2.8 GREEN: `apps/web-platform/server/conversation-routing.ts` — TS ADT + `parseConversationRouting` / `serializeConversationRouting`; sentinel private to module (commit af6bf92b)
-- [ ] 2.9 GREEN: `apps/web-platform/server/soleur-go-runner.ts` — dispatch + sentinel consumption + per-workflow terminal detection + cost breaker (primary + secondary wall-clock 30s trigger)
+- [x] 2.9 GREEN: `apps/web-platform/server/soleur-go-runner.ts` — dispatch + sentinel consumption + per-workflow terminal detection + cost breaker (primary + secondary wall-clock 30s trigger)
 - [~] 2.10 GREEN: inline interactive-tool bridge (per-kind discriminated `interactive_prompt` events) + scoped `pendingPrompts` Map + reaper; document container-restart UX in header — **registry** landed as `server/pending-prompt-registry.ts` (commit 9d3ba901); bridge wiring + header doc block deferred to soleur-go-runner.ts in 2.9
 - [ ] 2.11 GREEN: extend `apps/web-platform/server/permission-callback.ts` SDK-native tool branches (NOT `tool-tiers.ts`); add `Bash` review-gate + `BLOCKED_BASH_PATTERNS` regex (`curl|wget|nc|ncat|sh -c|bash -c|eval|base64 -d|/dev/tcp|sudo`); `Edit`/`Write` workspace containment; `lstatSync` symlink reject
 - [ ] 2.12 GREEN: wire `apps/web-platform/server/ws-handler.ts:1185-1352` `sendUserMessage` branching via `parseConversationRouting`
@@ -53,10 +53,10 @@
 - [ ] 2.18 GREEN: add env vars to feature-flag module + `.env.example` + Doppler `dev`/`prd`: `FLAG_CC_SOLEUR_GO`, `CC_MAX_COST_USD_BRAINSTORM=2.50`, `CC_MAX_COST_USD_WORK=0.50`, `CC_USER_DAILY_USD_CAP=10.00`, `CC_GLOBAL_DAILY_USD_CAP=200.00`
 - [ ] 2.19 Verify per `cq-silent-fallback-must-mirror-to-sentry`: every catch in `soleur-go-runner.ts` calls `reportSilentFallback`
 - [ ] 2.20 Verify `logPermissionDecision` is invoked from the new runner path (audit log preserved)
-- [ ] 2.21 RED: `test/soleur-go-runner-lifecycle.test.ts` — per-conversation Query reuse, idle-reap, close on terminal workflow_ended
-- [ ] 2.22 GREEN: streaming-input plumbing (push-queue shim, `Map<conversationId, Query>`, 10-min idle reaper)
-- [ ] 2.23 RED: `test/soleur-go-runner-narration.test.ts` — systemPrompt includes narration directive; first content_block is text not tool_use
-- [ ] 2.24 GREEN: systemPrompt pre-dispatch narration directive
+- [x] 2.21 RED: `test/soleur-go-runner-lifecycle.test.ts` — per-conversation Query reuse, idle-reap, close on terminal workflow_ended — 6 tests, verified RED pre-GREEN
+- [x] 2.22 GREEN: streaming-input plumbing (push-queue shim, `Map<conversationId, Query>`, 10-min idle reaper)
+- [x] 2.23 RED: `test/soleur-go-runner-narration.test.ts` — `PRE_DISPATCH_NARRATION_DIRECTIVE` literal + systemPrompt embed + dispatch-time injection — 5 tests, verified RED pre-GREEN
+- [x] 2.24 GREEN: systemPrompt pre-dispatch narration directive (embedded via `buildSoleurGoSystemPrompt()`)
 
 ## Stage 3 — WebSocket Protocol Extension (type-safe)
 
