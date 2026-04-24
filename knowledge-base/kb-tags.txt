@@ -1,18 +1,21 @@
 .claude/hooks/guardrails.sh
 .pen file not modified in git after batch-design
 2026-03-02-skill-handoff-blocks-pipeline-when-announcing.md
+23505
+2609-class
 404
 abort-controller
 abort-signal
+acceptance-criteria
 account-consolidation
 account-deletion
 account-migration
 adapter
 admin-ip
+admin-ip-refresh
 aeo
 aeo-score
 aftereach
-ag
 agent
 agent-accuracy
 agent-autonomy
@@ -22,6 +25,7 @@ agent-design
 agent-improvisation
 agent-loop
 agent-native
+agent-native-parity
 agent-not-found
 agent-prompt-design
 agent-runner
@@ -35,6 +39,7 @@ agents/operations
 agents/operations/ops-provisioner
 agents/product
 aggregator
+ai-crawlers
 alignment
 allowlist
 allowlist-audit
@@ -67,8 +72,10 @@ artifacts
 askuserquestion
 async-events
 async-io
+at-least-once
 atdd
 attachments
+attribution
 audit
 audit-surface-coverage
 auth
@@ -80,6 +87,7 @@ auto-revert
 automation
 awk
 backdrop-filter
+backfill-migration
 backlog
 backtick
 badge
@@ -88,6 +96,7 @@ bare-repo
 bare-repository
 base-href
 bash
+bash-parsing
 bash-pipefail
 bash-tests
 batch-design
@@ -101,12 +110,15 @@ binary
 binary-serving
 binary-verification
 blocked: --delete-branch with active worktrees will orphan them
+blog-authoring
 blog-post
 body-size
 bot-configuration
 bot-fix-pipeline
+bot-management
 bot-pr
 brainstorm
+brainstorm-hygiene
 brainstorm-routing
 branch lost
 branch-protection
@@ -164,9 +176,12 @@ ci
 ci-cd
 ci-checks
 ci-deploy
+ci-flake
 ci-gap
+ci-guards
 ci-planning
 ci-workflows
+citations
 cla
 claude mcp add fails on duplicate
 claude-agent-sdk
@@ -179,8 +194,10 @@ claude-code-settings
 claude-hooks
 clean-urls
 cleanup
+cleanup-merged
 cli
 cli-integration
+client-bundle
 clone-newuser
 close-codes
 cloud-init
@@ -196,6 +213,7 @@ code-review
 code-scanning
 codeql
 column-level-security
+command-center
 command-creation
 command-optimization
 command-routing
@@ -222,6 +240,7 @@ compound-capture
 compound_skill
 concurrency
 conditional-logic
+config-drift
 config-parity
 configuration-drift
 configuration-fixes
@@ -238,6 +257,7 @@ content-audit
 content-disposition
 content-integrity
 content-move
+content-pillar
 content-pipeline
 content-publisher
 content-publishing
@@ -256,6 +276,7 @@ convention-mismatch
 convention-violation
 cookie-free
 cookies
+copywriter
 cost-estimate
 count-mismatch
 counts
@@ -312,10 +333,12 @@ desktop-support
 destructive-ops
 destructive-tests
 detection
+determinism
 dev-server
 devdependencies
 developer-experience
 di-seam
+diagnostic
 directory-structure
 directory-traversal
 disambiguation
@@ -325,6 +348,7 @@ discord-automation
 discord-bot
 discovery
 discriminated-union
+discriminated-union-widening
 disk-monitoring
 disk-space
 dkim
@@ -336,6 +360,7 @@ docker-prune
 docs
 docs-build
 docs-site
+docs-trust
 documentation
 documentation-gap
 dogfooding
@@ -350,6 +375,7 @@ domain-verification
 doppler
 downshift
 dpa
+drain-pr
 drift
 drift-guard
 drift-prevention
@@ -391,7 +417,9 @@ exit-trap
 export
 extensions.worktreeconfig
 external-agents
+external-services
 extraction-pattern
+fact-checker
 fact-checking
 factory-pattern
 fail2ban
@@ -424,6 +452,7 @@ fk-cascade
 flex
 flexbox
 flock
+follow-through
 fonts
 footer
 formatting
@@ -462,6 +491,7 @@ git-worktree
 git-worktrees
 github
 github-actions
+github-actions-yaml
 github-api
 github-app
 github-issues
@@ -488,9 +518,12 @@ growth-strategist
 growth-targets
 guard-testing
 guardrails
+guards
+hallucination
 handoff
 happy-dom
 hash-based-csp
+hcloud
 header-injection
 headless
 headless-mode
@@ -511,6 +544,7 @@ hsts
 html
 http-caching
 http-server
+idempotence
 idempotency
 idempotent-scripts
 identities
@@ -518,9 +552,8 @@ idle-detection
 idor
 if-ladder
 if-none-match
-image-generation
+imagrns
 implementation-patterns
-implementcat
 in-filter
 inadequate-documentation
 index-only-scan
@@ -551,6 +584,7 @@ jsdoc
 jsdom
 json-ld
 jsonl
+jsonld
 jsx
 kb
 kb-chat
@@ -567,6 +601,7 @@ layer-ordering
 layout
 layout-children
 lazy-quantifier
+lcp
 leader
 leader-avatar
 leaked secret
@@ -581,6 +616,7 @@ legal-document-generator
 legal-documents
 libuv-threadpool
 license-migration
+lighthouse
 linkedin
 lint-pitfalls
 lint-rule-ids
@@ -607,6 +643,7 @@ mcp-adapter
 mcp-integration
 mcp-registration
 mcp-tools
+measurement
 mechanical-changes
 medium
 merge-conflicts
@@ -641,10 +678,12 @@ multi-agent
 multi-agent-cascade
 multi-agent-coordination
 multi-agent-review
+multi-file-consistency
 multi-leader
 multi-platform
 multi-runtime
 multi-signal
+multi-tenant-scoping
 multi-turn
 multi_agent_review
 name-transformer
@@ -672,6 +711,7 @@ node-slim
 node-version
 node_modules
 nonce
+normalizer
 nosniff
 not-null
 notification-migration
@@ -711,6 +751,7 @@ parallel
 parallel-agents
 parallel-execution
 parallel-io
+parallel-tests
 parameter-expansion
 parser-underread
 partial-unique-index
@@ -719,6 +760,7 @@ passthrough-copy
 path
 path-hardcoding
 path-references
+path-stubbing
 path-traversal
 pathignorepatterns
 pattern
@@ -741,11 +783,15 @@ pii-scrubbing
 pillow
 pino
 pip
+pipefail
 pipeline
 pipeline-gotchas
 pkce
+plan-ac
 plan-acceptance-criteria
 plan-accuracy
+plan-gap
+plan-gates
 plan-review
 plan-skill
 plan_review
@@ -778,6 +824,7 @@ portability
 porting
 position-fixed
 posix
+post-deploy
 post-merge
 postcss
 postgres
@@ -819,6 +866,7 @@ promise-all
 promise-catch
 promise-leak
 prompt-design
+prompt-engineering
 prompt-injection
 prompt-structure
 prop-vs-state
@@ -857,6 +905,7 @@ ready-state
 reconnection
 recurring $() permission prompts across multiple skills
 red-green-refactor
+red-verification
 redaction
 redirect
 redirect-handling
@@ -874,6 +923,7 @@ regex
 regex-concurrency
 regex-parity
 registry-integration
+regression-analysis
 rehype-highlight
 release-announce
 release-announcements
@@ -881,9 +931,11 @@ release-notes
 releases
 remote-exec
 rename
+render-scrub
 repetition-detection
 replace
 replace-all
+repo-scoping
 repositoryformatversion
 requestanimationframe
 research
@@ -923,8 +975,10 @@ rsa
 rule-audit
 rule-budget
 rule-governance
+rule-metrics
 rule-utility
 rule_retirement
+ruleset
 rulesets
 runbook
 runtime-errors
@@ -936,6 +990,7 @@ sanitization
 scalability
 scanner
 schedule
+scheduled-audits
 scheduled-bug-fixer
 scheduled-ci
 scheduled-tasks
@@ -953,6 +1008,7 @@ scope-outs
 scope_reduction
 screenshot
 screenshots
+script-breakout
 scripts
 sdk
 sdk-drift
@@ -991,6 +1047,7 @@ service-role-key
 service-token
 service-tokens
 service-worker
+session-error
 session-key
 session-management
 session-persistence
@@ -1004,6 +1061,7 @@ settings
 settings-json
 settings-shell
 settings.local.json committed
+setup-files
 sha-pinning
 sha256
 share
@@ -1020,6 +1078,7 @@ shipping
 showdownload
 sidebar-persistence
 sigfpe
+signal-drift
 sigterm
 silent-failure
 silent-fallback
@@ -1058,10 +1117,12 @@ specflow
 specialist-gates
 spf
 split
+sql-ts-parity
 squash-merge
 srp
 ssg
 ssh
+ssh-hypothesis-gate
 ssl
 stack-detection
 stacking-context
@@ -1084,6 +1145,7 @@ static-site
 stderr
 stop-hook
 strategy-review
+stream-lifecycle
 streaming
 strict-dynamic
 strict-mode
@@ -1130,10 +1192,12 @@ terraform_data
 test-coverage
 test-coverage-gaps
 test-design
+test-fidelity
 test-fix-loop
 test-infrastructure
 test-isolation
 test-mock
+test-mock-drift
 test-mocks
 test-patterns
 test-runner
@@ -1159,6 +1223,7 @@ toggle
 token-budget
 token-cache-isolation
 tokenization
+tokenize-restore
 tool-integration
 tool-path-validation
 tooling
@@ -1169,6 +1234,7 @@ trigger-logic
 truncation
 try-catch-scoping
 tsx
+typcat
 type-filter
 type-safety
 typecheck
@@ -1187,6 +1253,7 @@ unused-agents
 update-ref
 upload
 url-concatenation
+url-validation
 useeffect
 user friction for experimental features
 user-confirmation
@@ -1208,6 +1275,7 @@ vault
 vendor-lock-in
 verdict-cache
 verification
+verification-decay
 version already taken
 version-bump
 version-range
@@ -1234,6 +1302,7 @@ webhooks
 websocket
 websocket not connected
 websocket-disconnect
+websocket-handler
 welcome-hook
 woff2
 word-budget

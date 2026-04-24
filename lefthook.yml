@@ -22,8 +22,14 @@ pre-commit:
       stage_fixed: true
     rule-id-lint:
       priority: 4
-      glob: "AGENTS.md"
-      run: python3 scripts/lint-rule-ids.py --retired-file scripts/retired-rule-ids.txt {staged_files}
+      # Run target is pinned to AGENTS.md (not `{staged_files}`) because the
+      # linter needs BOTH AGENTS.md and retired-rule-ids.txt. When only
+      # retired-rule-ids.txt is staged, `{staged_files}` would pass it as the
+      # AGENTS.md positional and the section parser would fail.
+      glob:
+        - "AGENTS.md"
+        - "scripts/retired-rule-ids.txt"
+      run: python3 scripts/lint-rule-ids.py --retired-file scripts/retired-rule-ids.txt AGENTS.md
     agents-compound-sync:
       priority: 4
       glob:

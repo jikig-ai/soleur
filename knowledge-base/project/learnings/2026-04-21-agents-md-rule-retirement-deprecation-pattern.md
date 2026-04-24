@@ -87,6 +87,41 @@ All hits remain valid because the `[id: ...]` tag is still present in AGENTS.md 
 
 3. **Plan's aggregate byte-savings target contradicted its own per-rule math** — Recovery: relaxed spec FR4 mid-implementation with strikethrough + replacement; documented the mismatch in this learning's §"800 bytes saved estimate was wrong". Prevention: plan review (code-simplicity-reviewer + architecture-strategist) did not surface this inconsistency because both reviewers focused on architectural soundness, not numeric self-consistency. Add an explicit `/soleur:plan-review` step: "If the plan prescribes aggregate numeric targets (byte savings, count reductions, perf deltas), verify the per-item contributions sum to the aggregate before approving." This is a candidate skill-instruction edit to `plugins/soleur/skills/plan-review/SKILL.md`.
 
+## hr-* caveat (added 2026-04-24, PR #2877 / issue #2871)
+
+Hard-rules (prefix `hr-*`) are linter-blocked from retirement via
+`scripts/retired-rule-ids.txt`. `scripts/lint-rule-ids.py` rejects any
+`hr-*` id in the allowlist unless the id is in the script's
+`HR_RETIREMENT_ALLOWLIST` frozenset.
+
+To retire a hard-rule:
+
+1. Add the id to `HR_RETIREMENT_ALLOWLIST` in `scripts/lint-rule-ids.py`
+   in the same PR that appends to `retired-rule-ids.txt`. The linter-script
+   edit is the review gate — it makes the one-way door explicit in diff.
+2. Document the retirement rationale in the breadcrumb field of the
+   `retired-rule-ids.txt` entry.
+
+Two entries were grandfathered into `HR_RETIREMENT_ALLOWLIST` at PR #2877:
+`hr-before-running-git-commands-on-a` and
+`hr-never-use-sleep-2-seconds-in-foreground`, both retired via the
+discoverability-litmus pass in PR #2865 (both fail the litmus — tools
+surface the constraint via a clear error).
+
+**Why not update AGENTS.md's `cq-rule-ids-are-immutable`?** Per
+`wg-every-session-error-must-produce-either` discoverability exit: when
+an agent discovers the constraint via a clear error, a learning file
+alone suffices. The new linter message IS that clear error. Adding a
+clause to AGENTS.md would cost per-turn bytes for a constraint that
+already surfaces at the moment of attempted violation.
+
+**Rationale for the guard itself:** hard-rules are security/blast-radius
+critical; a plausible-looking breadcrumb slipping past review under an
+innocuous PR title ("cleanup: drop obsolete rule") is not recoverable
+under the original id per `cq-rule-ids-are-immutable`. The linter
+closes that gap by forcing any hr-* retirement to touch
+`scripts/lint-rule-ids.py` — a visible, reviewable code change.
+
 ## See also
 
 - `cq-rule-ids-are-immutable` (AGENTS.md) — the immutability contract
