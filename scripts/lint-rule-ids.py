@@ -8,7 +8,8 @@ against HEAD (git must be reachable).
 Retired-ids allowlist: pass `--retired-file <path>` to supply a list of ids
 that have been retired from AGENTS.md. Retired ids are excluded from the
 "removed id" check, and re-introducing a retired id as an active rule fails
-the linter. See scripts/retired-rule-ids.txt for format.
+the linter. `hr-*` retirements additionally require the id to be listed in
+`HR_RETIREMENT_ALLOWLIST` below. See scripts/retired-rule-ids.txt for format.
 
 Usage:
     python scripts/lint-rule-ids.py [--retired-file <path>] [AGENTS.md ...]
@@ -26,17 +27,11 @@ from pathlib import Path
 SECTIONS = {"Hard Rules", "Workflow Gates", "Code Quality",
             "Review & Feedback", "Passive Domain Routing", "Communication"}
 ID_RE = re.compile(r"\[id: ([a-z0-9-]+)\]")
+RID_RE = re.compile(r"^(hr|wg|cq|rf|pdr|cm)-[a-z0-9-]{3,60}$")
 
-# hr-* retirement guard (issue #2871): hard-rules are security/blast-radius
-# critical. Any new hr-* retirement must either (a) add the id to this set
-# with a review-visible diff, or (b) remove this guard wholesale. Either
-# path forces the retiring PR to edit this script, so the one-way door is
-# explicit in review instead of buried in a retired-rule-ids.txt append.
-#
-# The two entries below were retired in PR #2865 via the discoverability
-# litmus pass — both fail the litmus (tools surface the constraint via a
-# clear error), so retirement is safe. They are grandfathered so the guard
-# does not retro-flag them.
+# hr-* retirement guard (#2871). Adding an id here is the review signal.
+# Entries were grandfathered from PR #2865 (discoverability-litmus pass).
+# See knowledge-base/project/learnings/2026-04-21-agents-md-rule-retirement-deprecation-pattern.md
 HR_RETIREMENT_ALLOWLIST = frozenset({
     "hr-before-running-git-commands-on-a",
     "hr-never-use-sleep-2-seconds-in-foreground",
@@ -51,16 +46,21 @@ def load_retired_ids(retired_file: Path) -> set[str]:
     not enforced here (append-only file, reviewed in PRs).
     """
     retired: set[str] = set()
-    for line in retired_file.read_text().splitlines():
-        # BOM strip: U+FEFF on line 1 must not mask the prefix check on the
-        # first retired id (otherwise `﻿hr-foo` bypasses startswith("hr-")).
-        stripped = line.lstrip("﻿").strip()
+    # utf-8-sig strips file-level BOM at decode. Per-line BOM/invisibles are
+    # caught by RID_RE below (they won't match `[a-z0-9-]`).
+    for line in retired_file.read_text(encoding="utf-8-sig").splitlines():
+        stripped = line.strip()
         if not stripped or stripped.startswith("#"):
             continue
-        # First field, split on first `|`
         rid = stripped.split("|", 1)[0].strip()
-        if rid:
-            retired.add(rid)
+        if not rid:
+            continue
+        if not RID_RE.match(rid):
+            raise ValueError(
+                f"malformed retired id in {retired_file}: {rid!r} "
+                f"(must match {RID_RE.pattern})"
+            )
+        retired.add(rid)
     return retired
 
 
@@ -163,7 +163,11 @@ def main() -> int:
                 file=sys.stderr,
             )
             return 2
-        retired_ids = load_retired_ids(args.retired_file)
+        try:
+            retired_ids = load_retired_ids(args.retired_file)
+        except ValueError as e:
+            print(f"ERROR: {e}", file=sys.stderr)
+            return 2
 
         # hr-* retirement guard: retiring a hard-rule requires editing this
         # script (HR_RETIREMENT_ALLOWLIST above), not a quiet allowlist

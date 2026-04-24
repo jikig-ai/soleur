@@ -230,12 +230,24 @@ class TestHrRetirementGuard(unittest.TestCase):
         self.assertIn("hr-test-fake-a", r.stderr)
         self.assertIn("hr-test-fake-b", r.stderr)
 
-    def test_rejects_bom_prefixed_hr_retired_id(self):
-        """BOM (U+FEFF) on line 1 must not bypass the prefix check."""
-        retired = "﻿hr-bom-bypass | 2026-04-24 | - | test\n"
+    def test_bom_file_prefix_transparently_stripped(self):
+        """utf-8-sig decoding strips a file-level BOM; the id loads cleanly
+        and the guard fires normally."""
+        retired = "﻿hr-bom-prefixed | 2026-04-24 | - | test\n"
         r = _run_with_retired(self._AGENTS_OK, retired)
         self.assertEqual(r.returncode, 1, f"stdout={r.stdout!r} stderr={r.stderr!r}")
-        self.assertIn("hr-bom-bypass", r.stderr)
+        self.assertIn("hr-bom-prefixed", r.stderr)
+
+    def test_rejects_malformed_retired_id(self):
+        """Ids with embedded invisibles, uppercase, or wrong prefix fail
+        at load time (ValueError → exit 2). Defense against ZWSP/ZWNJ
+        bypass attempts and typo/malformed-data noise."""
+        for bad_rid in ("​hr-zwsp", "hr-UPPER", "xx-bad-prefix", "hr-"):
+            with self.subTest(rid=bad_rid):
+                retired = f"{bad_rid} | 2026-04-24 | - | test\n"
+                r = _run_with_retired(self._AGENTS_OK, retired)
+                self.assertEqual(r.returncode, 2, f"rid={bad_rid!r} stderr={r.stderr!r}")
+                self.assertIn("malformed retired id", r.stderr)
 
     def test_mixed_hr_and_cq_only_names_hr(self):
         retired = (
@@ -247,12 +259,8 @@ class TestHrRetirementGuard(unittest.TestCase):
         self.assertIn("hr-sneaky", r.stderr)
         self.assertNotIn("cq-benign-retired", r.stderr)
 
-    def test_grandfathered_hr_retirements_allowed(self):
-        """Pre-#2871 hr-* retirements (HR_RETIREMENT_ALLOWLIST) remain valid.
-
-        Retiring a NEW hr-* still fails — the allowlist is explicit, and
-        the guard names only the non-grandfathered id.
-        """
+    def test_grandfathered_hr_retirements_pass(self):
+        """Pre-#2871 hr-* retirements (HR_RETIREMENT_ALLOWLIST) load cleanly."""
         retired = (
             "hr-before-running-git-commands-on-a | 2026-04-23 | #2865 | ok\n"
             "hr-never-use-sleep-2-seconds-in-foreground | 2026-04-23 | #2865 | ok\n"
@@ -260,12 +268,42 @@ class TestHrRetirementGuard(unittest.TestCase):
         r = _run_with_retired(self._AGENTS_OK, retired)
         self.assertEqual(r.returncode, 0, f"stdout={r.stdout!r} stderr={r.stderr!r}")
 
-        # Adding a new hr-* alongside grandfathered entries must still fail.
-        retired_plus_new = retired + "hr-new-sneaky | 2026-04-24 | - | test\n"
-        r2 = _run_with_retired(self._AGENTS_OK, retired_plus_new)
-        self.assertEqual(r2.returncode, 1)
-        self.assertIn("hr-new-sneaky", r2.stderr)
-        self.assertNotIn("hr-before-running-git-commands-on-a", r2.stderr)
+    def test_new_hr_alongside_grandfathered_still_fails(self):
+        """Grandfather set is explicit — any non-grandfathered hr-* fails,
+        and the error message names only the new id."""
+        retired = (
+            "hr-before-running-git-commands-on-a | 2026-04-23 | #2865 | ok\n"
+            "hr-new-sneaky | 2026-04-24 | - | test\n"
+        )
+        r = _run_with_retired(self._AGENTS_OK, retired)
+        self.assertEqual(r.returncode, 1, f"stdout={r.stdout!r} stderr={r.stderr!r}")
+        self.assertIn("hr-new-sneaky", r.stderr)
+        self.assertNotIn("hr-before-running-git-commands-on-a", r.stderr)
+
+
+class TestAllowlistSync(unittest.TestCase):
+    """Dead-code guard: every id in HR_RETIREMENT_ALLOWLIST must appear in
+    the real scripts/retired-rule-ids.txt. If an id is removed from the
+    retired file but kept in the allowlist, the allowlist entry is silent
+    dead code and should be removed in the same commit.
+    """
+
+    def test_allowlist_ids_present_in_retired_file(self):
+        retired_path = REPO_ROOT / "scripts" / "retired-rule-ids.txt"
+        retired_text = retired_path.read_text(encoding="utf-8-sig")
+        # Import the allowlist from the source of truth.
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("lint_rule_ids", SCRIPT)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        for rid in module.HR_RETIREMENT_ALLOWLIST:
+            with self.subTest(rid=rid):
+                self.assertIn(
+                    rid, retired_text,
+                    f"HR_RETIREMENT_ALLOWLIST has '{rid}' but it's not in "
+                    f"{retired_path} — either restore the retirement or "
+                    f"prune the allowlist entry."
+                )
 
 
 if __name__ == "__main__":
