@@ -32,16 +32,20 @@ except ImportError:  # pragma: no cover - platform fallback
 # schema mirror: .claude/hooks/lib/incidents.sh (keep in sync)
 SCHEMA_VERSION = 1
 
-_HOOK_DIR = os.path.dirname(os.path.abspath(__file__))
+# os.path.realpath canonicalizes through symlinks so the python emitter
+# and the bash emitter (incidents.sh uses `cd -P && pwd -P`) resolve to
+# the SAME inode when `.claude/` is symlinked into the project. `flock`
+# is per-inode — divergent paths produce disjoint locks and torn writes.
+_HOOK_DIR = os.path.dirname(os.path.realpath(__file__))
 
 
 def _incidents_repo_root() -> str:
     """Mirror of incidents.sh _incidents_repo_root — honors the same env var."""
     override = os.environ.get("INCIDENTS_REPO_ROOT", "")
     if override:
-        return override
+        return os.path.realpath(override)
     # From .claude/hooks/, the repo root is two dirs up.
-    return os.path.abspath(os.path.join(_HOOK_DIR, "..", ".."))
+    return os.path.realpath(os.path.join(_HOOK_DIR, "..", ".."))
 
 
 def emit_incident(rule_id: str, event_type: str, prefix: str, cmd: str = "") -> None:
@@ -49,9 +53,11 @@ def emit_incident(rule_id: str, event_type: str, prefix: str, cmd: str = "") -> 
 
     Interlocks with the bash emitter via advisory fcntl.flock on the same
     inode — both writers use LOCK_EX against .claude/.rule-incidents.jsonl,
-    so concurrent writes queue rather than interleave. JSONL lines are
-    ~200 bytes, well under PIPE_BUF (4096) so the O_APPEND write is atomic
-    on Linux even without the lock — the lock is belt-and-suspenders.
+    so concurrent writes queue rather than interleave. The flock is
+    load-bearing: regular-file O_APPEND atomicity holds only up to the
+    filesystem block size for a single write(2) syscall, not PIPE_BUF
+    (which only applies to pipes). `cmd` is truncated to 1024 bytes to
+    keep any single line comfortably within that boundary.
     """
     if not rule_id or not event_type:
         return
@@ -65,7 +71,7 @@ def emit_incident(rule_id: str, event_type: str, prefix: str, cmd: str = "") -> 
             "rule_id": rule_id,
             "event_type": event_type,
             "rule_text_prefix": prefix,
-            "command_snippet": cmd,
+            "command_snippet": (cmd or "")[:1024],
         }
         line = (json.dumps(record, separators=(",", ":"), ensure_ascii=False) + "\n").encode("utf-8")
         fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o644)
@@ -73,7 +79,13 @@ def emit_incident(rule_id: str, event_type: str, prefix: str, cmd: str = "") -> 
             if fcntl is not None:
                 fcntl.flock(fd, fcntl.LOCK_EX)
             try:
-                os.write(fd, line)
+                # Short-write defense: loop until the whole payload lands.
+                view = memoryview(line)
+                while view:
+                    n = os.write(fd, bytes(view))
+                    if n <= 0:
+                        break
+                    view = view[n:]
             finally:
                 if fcntl is not None:
                     fcntl.flock(fd, fcntl.LOCK_UN)

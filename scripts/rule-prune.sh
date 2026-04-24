@@ -60,7 +60,7 @@ candidates=$(jq -r \
 generated_at=$(jq -r '.generated_at // "unknown"' "$METRICS")
 
 if [[ -z "$candidates" ]]; then
-  echo "No prune candidates (hit_count=0 for >=${WEEKS}w)."
+  echo "No prune candidates (fire_count=0 for >=${WEEKS}w)."
   exit 0
 fi
 

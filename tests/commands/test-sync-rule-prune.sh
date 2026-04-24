@@ -88,11 +88,11 @@ _setup() {
     schema:1,
     generated_at:"2026-04-14T00:00:00Z",
     rules:[
-      {id:"hr-never-used-a", section:"Hard Rules", hit_count:0, bypass_count:0, prevented_errors:0, last_hit:null, first_seen:$seen, rule_text_prefix:"Rule A prefix"},
-      {id:"hr-never-used-b", section:"Hard Rules", hit_count:0, bypass_count:0, prevented_errors:0, last_hit:null, first_seen:$seen, rule_text_prefix:"Rule B prefix"},
-      {id:"cq-used",         section:"Code Quality", hit_count:5, bypass_count:0, prevented_errors:5, last_hit:"2026-04-10T00:00:00Z", first_seen:$seen, rule_text_prefix:"Rule C prefix"}
+      {id:"hr-never-used-a", section:"Hard Rules", hit_count:0, bypass_count:0, applied_count:0, warn_count:0, fire_count:0, prevented_errors:0, last_hit:null, first_seen:$seen, rule_text_prefix:"Rule A prefix"},
+      {id:"hr-never-used-b", section:"Hard Rules", hit_count:0, bypass_count:0, applied_count:0, warn_count:0, fire_count:0, prevented_errors:0, last_hit:null, first_seen:$seen, rule_text_prefix:"Rule B prefix"},
+      {id:"cq-used",         section:"Code Quality", hit_count:5, bypass_count:0, applied_count:0, warn_count:0, fire_count:5, prevented_errors:5, last_hit:"2026-04-10T00:00:00Z", first_seen:$seen, rule_text_prefix:"Rule C prefix"}
     ],
-    summary:{total_rules_tagged:3, rules_unused_over_8w:2, rules_bypassed_over_baseline:0}
+    summary:{total_rules_tagged:3, rules_unused_over_8w:2, rules_bypassed_over_baseline:0, orphan_rule_ids:[]}
   }' > "$tmp/knowledge-base/project/rule-metrics.json"
   _build_fake_gh "$tmp"
   echo "$tmp"
@@ -157,7 +157,7 @@ t_invalid_rule_id_skipped() {
   local cutoff
   cutoff=$(date -u -d "-70 days" +%Y-%m-%dT%H:%M:%SZ)
   jq --arg seen "$cutoff" '.rules += [
-    {id:"has space in id", section:"Hard Rules", hit_count:0, bypass_count:0, prevented_errors:0, last_hit:null, first_seen:$seen, rule_text_prefix:"bad id"}
+    {id:"has space in id", section:"Hard Rules", hit_count:0, bypass_count:0, applied_count:0, warn_count:0, fire_count:0, prevented_errors:0, last_hit:null, first_seen:$seen, rule_text_prefix:"bad id"}
   ]' "$root/knowledge-base/project/rule-metrics.json" > "$root/tmp.json"
   mv "$root/tmp.json" "$root/knowledge-base/project/rule-metrics.json"
 

@@ -200,7 +200,7 @@ Close the gap between "we learned X" and "X is now enforced." The project has pr
    ```bash
    source "$(git rev-parse --show-toplevel)/.claude/hooks/lib/incidents.sh" && \
      emit_incident cq-agents-md-why-single-line applied \
-     "AGENTS.md rules cap at ~600 bytes; **Why:** is one"
+     'AGENTS.md rules cap at ~600 bytes; `**Why:**` is o'
    ```
 
    - Count rules: `grep -c '^- ' AGENTS.md` → A

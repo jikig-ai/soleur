@@ -18,12 +18,19 @@
 # From .claude/hooks/lib/incidents.sh, the repo root is three dirs up.
 # Tests set INCIDENTS_REPO_ROOT to redirect writes off the operator's real
 # .claude/.rule-incidents.jsonl; the aggregator uses the same env var.
+#
+# `cd -P` + `pwd -P` canonicalizes through symlinks (physical path). The
+# Python emitter in security_reminder_hook.py uses os.path.realpath — both
+# sides must land on the same inode for `flock -x` to interlock. A
+# symlinked `.claude/` in the operator's project would otherwise produce
+# two disjoint locks on two different inodes and reintroduce the torn
+# writes this module exists to prevent.
 _incidents_repo_root() {
   if [[ -n "${INCIDENTS_REPO_ROOT:-}" ]]; then
     echo "$INCIDENTS_REPO_ROOT"
     return
   fi
-  (cd "$(dirname "${BASH_SOURCE[0]}")/../../.." 2>/dev/null && pwd)
+  (cd -P "$(dirname "${BASH_SOURCE[0]}")/../../.." 2>/dev/null && pwd -P)
 }
 
 # Locate the shared rule-metrics constants (SCHEMA_VERSION). Sourced with
@@ -60,6 +67,11 @@ unset _incidents_constants
 emit_incident() {
   local rule_id="${1:-}" event="${2:-}" prefix="${3:-}" cmd="${4:-}"
   [[ -z "$rule_id" || -z "$event" ]] && return 0
+
+  # Cap cmd length so a single JSONL line stays well under a 4KB kernel
+  # write boundary even under O_APPEND. Long PR bodies or multi-line
+  # heredoc commands can push a raw command_snippet past 10KB.
+  cmd="${cmd:0:1024}"
 
   local repo_root file ts
   repo_root="$(_incidents_repo_root)" || return 0

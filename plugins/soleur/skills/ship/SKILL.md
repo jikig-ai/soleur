@@ -274,7 +274,7 @@ Emit rule-application telemetry (records that the conditional-domain-gates phase
 ```bash
 source "$(git rev-parse --show-toplevel)/.claude/hooks/lib/incidents.sh" && \
   emit_incident hr-before-shipping-ship-phase-5-5-runs applied \
-  "Before shipping, /ship Phase 5.5 runs conditional"
+  'Before shipping, `/ship` Phase 5.5 runs conditional'
 ```
 
 ### Code Review Completion Gate (mandatory)
