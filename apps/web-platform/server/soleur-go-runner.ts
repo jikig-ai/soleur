@@ -249,6 +249,10 @@ export interface QueryFactoryArgs {
   resumeSessionId?: string;
   pluginPath: string;
   cwd: string;
+  /** Per-conversation context — real-SDK factories need these to wire the
+   *  per-user `canUseTool` closure + audit logs. Tests can ignore. */
+  userId: string;
+  conversationId: string;
 }
 
 export type QueryFactory = (args: QueryFactoryArgs) => Query;
@@ -284,6 +288,20 @@ export interface SoleurGoRunner {
   activeQueriesSize(): number;
   reapIdle(): number;
   closeConversation(conversationId: string): void;
+  /**
+   * Push a `tool_result` content-block back into the SDK for an in-flight
+   * interactive tool_use. Used by the `interactive_prompt_response`
+   * handler (Stage 2.14) to close the cycle: the client picks an option,
+   * ws-handler consumes the pending-prompt record, and invokes this to
+   * tell the SDK "the user replied X for tool_use_id=Y". No-op when no
+   * Query exists for the conversation (container restart between prompt
+   * emit and response).
+   */
+  respondToToolUse(args: {
+    conversationId: string;
+    toolUseId: string;
+    content: string;
+  }): boolean;
 }
 
 // Public helper so tests (and downstream audits) can assert the exact
@@ -687,6 +705,8 @@ export function createSoleurGoRunner(deps: SoleurGoRunnerDeps): SoleurGoRunner {
           resumeSessionId,
           pluginPath,
           cwd,
+          userId,
+          conversationId,
         });
       } catch (err) {
         reportSilentFallback(err, {
@@ -760,11 +780,49 @@ export function createSoleurGoRunner(deps: SoleurGoRunnerDeps): SoleurGoRunner {
     closeQuery(state);
   }
 
+  function respondToToolUse(args: {
+    conversationId: string;
+    toolUseId: string;
+    content: string;
+  }): boolean {
+    const state = activeQueries.get(args.conversationId);
+    if (!state || state.closed) return false;
+    state.lastActivityAt = now();
+    const sdkMsg: SDKUserMessage = {
+      type: "user",
+      message: {
+        role: "user",
+        content: [
+          {
+            type: "tool_result",
+            tool_use_id: args.toolUseId,
+            content: args.content,
+          },
+        ],
+        // biome-ignore lint/suspicious/noExplicitAny: SDK MessageParam accepts the tool_result shape
+      } as any,
+      parent_tool_use_id: null,
+      session_id: state.sessionId ?? "",
+    };
+    try {
+      state.inputQueue.push(sdkMsg);
+      return true;
+    } catch (err) {
+      reportSilentFallback(err, {
+        feature: "soleur-go-runner",
+        op: "respondToToolUse",
+        extra: { conversationId: args.conversationId, toolUseId: args.toolUseId },
+      });
+      return false;
+    }
+  }
+
   return {
     dispatch,
     hasActiveQuery,
     activeQueriesSize,
     reapIdle,
     closeConversation,
+    respondToToolUse,
   };
 }

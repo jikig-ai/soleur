@@ -39,6 +39,20 @@ import {
   touchSlot,
   emitConcurrencyCapHit,
 } from "./concurrency";
+import {
+  parseConversationRouting,
+  resolveInitialRouting,
+  serializeConversationRouting,
+  type ConversationRouting,
+  type WorkflowName,
+} from "./conversation-routing";
+import {
+  dispatchSoleurGo,
+  getCcStartSessionRateLimiter,
+  handleInteractivePromptResponseCase,
+} from "./cc-dispatcher";
+import { getFlag } from "@/lib/feature-flags/server";
+import type { InteractivePromptResponse } from "./cc-interactive-prompt-types";
 
 const log = createChildLogger("ws");
 
@@ -74,6 +88,10 @@ export interface PendingConversation {
   context?: ConversationContext;
   /** KB document path that will become conversations.context_path at materialization. */
   contextPath?: string;
+  /** Stage 2 (#2853): soleur-go routing decided at start_session time
+   *  (flag is read once per conversation — never again) and persisted
+   *  alongside the conversations row on first materialization. */
+  routing?: ConversationRouting;
 }
 
 export interface ClientSession {
@@ -102,6 +120,9 @@ export interface ClientSession {
   /** Cached Stripe subscription ID — used by the cap-hit Stripe fallback
    *  (Phase 5) to cover webhook-lag between an upgrade and the DB write. */
   stripeSubscriptionId?: string | null;
+  /** Remote-IP captured at connection time — needed by the soleur-go
+   *  start-session rate limiter's per-IP cap. Stage 2.13. */
+  ip?: string;
 }
 
 /** Active connections keyed by Supabase user ID. Registered in session-registry
@@ -375,6 +396,7 @@ async function createConversation(
   leaderId?: DomainLeaderId,
   id?: string,
   contextPath?: string,
+  activeWorkflow?: string | null,
 ): Promise<string> {
   if (!id) id = randomUUID();
 
@@ -398,6 +420,7 @@ async function createConversation(
     status: "active" as Conversation["status"],
     last_active: new Date().toISOString(),
     context_path: contextPath ?? null,
+    ...(activeWorkflow !== undefined ? { active_workflow: activeWorkflow } : {}),
   });
 
   if (error) {
@@ -428,6 +451,48 @@ async function createConversation(
   }
 
   return id;
+}
+
+/**
+ * Stage 2.12: thin ws-handler adapter around `dispatchSoleurGo`. Wires
+ * the `persistActiveWorkflow` callback to a `conversations.active_workflow`
+ * UPDATE so the sticky-workflow detection in the runner writes through
+ * to the DB.
+ */
+async function dispatchSoleurGoForConversation(
+  userId: string,
+  conversationId: string,
+  userMessage: string,
+  routing: ConversationRouting,
+): Promise<void> {
+  const persistActiveWorkflow = async (workflow: WorkflowName | null) => {
+    const serialized = serializeConversationRouting(
+      workflow === null ? { kind: "legacy" } : { kind: "soleur_go_active", workflow },
+    );
+    const { error } = await supabase
+      .from("conversations")
+      .update({
+        active_workflow: serialized,
+        last_active: new Date().toISOString(),
+      })
+      .eq("id", conversationId);
+    if (error) {
+      log.error(
+        { conversationId, workflow, err: error.message },
+        "Failed to persist active_workflow",
+      );
+      throw new Error(`active_workflow update failed: ${error.message}`);
+    }
+  };
+
+  await dispatchSoleurGo({
+    userId,
+    conversationId,
+    userMessage,
+    currentRouting: routing,
+    sendToClient,
+    persistActiveWorkflow,
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -469,6 +534,31 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
         });
         return;
       }
+
+      // Stage 2.13 — soleur-go path gets an additional per-user + per-IP
+      // sliding-window limiter (10/user/hour, 30/IP/hour) on top of the
+      // legacy `sessionThrottle` above. Fail-closed at either cap.
+      // Flag is read ONCE here — the routing decision is sticky.
+      const ccFlagEnabled = getFlag("command-center-soleur-go");
+      if (ccFlagEnabled) {
+        const rate = getCcStartSessionRateLimiter().check({
+          userId,
+          ip: session.ip ?? "unknown",
+        });
+        if (!rate.allowed) {
+          logRateLimitRejection(`cc-${rate.reason}`, userId, {
+            ip: session.ip,
+            retryAfterMs: rate.retryAfterMs,
+          });
+          sendToClient(userId, {
+            type: "error",
+            message: "Rate limited: too many conversations this hour.",
+            errorCode: "rate_limited",
+          });
+          return;
+        }
+      }
+      const initialRouting: ConversationRouting = resolveInitialRouting(ccFlagEnabled);
 
       try {
         // Validate context payload before any side effects
@@ -620,11 +710,18 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
           leaderId: msg.leaderId,
           context: validatedContext,
           contextPath: validResumePath ?? undefined,
+          routing: initialRouting,
         };
         session.conversationId = undefined;
 
         log.info(
-          { userId, leaderId: msg.leaderId ?? "auto-route", pendingId, contextPath: validResumePath },
+          {
+            userId,
+            leaderId: msg.leaderId ?? "auto-route",
+            pendingId,
+            contextPath: validResumePath,
+            routingKind: initialRouting.kind,
+          },
           "start_session (deferred creation)",
         );
 
@@ -769,16 +866,55 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
         }
 
         try {
-          const { id: pendingId, leaderId: pendingLeader, context: pendingContext, contextPath: pendingContextPath } = session.pending;
+          const {
+            id: pendingId,
+            leaderId: pendingLeader,
+            context: pendingContext,
+            contextPath: pendingContextPath,
+            routing: pendingRouting,
+          } = session.pending;
+          // Stage 2.12 — persist active_workflow at creation time when the
+          // soleur-go flag was on at start_session. The sentinel is
+          // consumed on first dispatch via persistActiveWorkflow.
+          const initialActiveWorkflow: string | null | undefined = pendingRouting
+            ? serializeConversationRouting(pendingRouting)
+            : undefined;
           // createConversation handles unique-violation on (user_id, context_path)
           // by resolving to the existing row (two-tab race).
-          const resolvedId = await createConversation(userId, pendingLeader, pendingId, pendingContextPath);
+          const resolvedId = await createConversation(
+            userId,
+            pendingLeader,
+            pendingId,
+            pendingContextPath,
+            initialActiveWorkflow,
+          );
           session.conversationId = resolvedId;
           session.pending = undefined;
 
-          log.info({ conversationId: session.conversationId, leaderId: pendingLeader ?? "auto-route" }, "Conversation materialized on first message");
+          log.info(
+            {
+              conversationId: session.conversationId,
+              leaderId: pendingLeader ?? "auto-route",
+              routingKind: pendingRouting?.kind,
+            },
+            "Conversation materialized on first message",
+          );
 
-          // Boot agent for directed sessions now that conversation exists
+          // Stage 2.12 branch: soleur-go routing bypasses the legacy agent
+          // path entirely. The soleur-go runner owns its own Query
+          // lifecycle + canUseTool + sandbox.
+          if (pendingRouting && pendingRouting.kind !== "legacy") {
+            await dispatchSoleurGoForConversation(
+              userId,
+              session.conversationId,
+              msg.content,
+              pendingRouting,
+            );
+            break;
+          }
+
+          // Legacy path unchanged: boot agent for directed sessions now
+          // that conversation exists.
           if (pendingLeader) {
             startAgentSession(userId, session.conversationId, pendingLeader, undefined, undefined, pendingContext).catch(
               (err) => {
@@ -804,6 +940,39 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
       }
 
       try {
+        // Stage 2.12 — on every turn past materialization, load the
+        // conversation's active_workflow column and branch via
+        // parseConversationRouting. Legacy rows (NULL) flow through the
+        // existing agent-runner; sentinel + workflow values dispatch to
+        // the soleur-go runner.
+        const convId = session.conversationId!;
+        const { data: row, error: routeErr } = await supabase
+          .from("conversations")
+          .select("active_workflow, session_id")
+          .eq("id", convId)
+          .single();
+        if (routeErr) {
+          // Route lookup failure is NOT a silent drop — mirror + legacy
+          // fallback keeps chat flowing rather than blocking on a
+          // transient DB blip.
+          Sentry.captureException(routeErr);
+          log.error(
+            { userId, conversationId: convId, err: routeErr },
+            "chat routing lookup failed (falling through to legacy)",
+          );
+        }
+        const routing: ConversationRouting = row
+          ? parseConversationRouting({
+              active_workflow:
+                (row as { active_workflow?: string | null }).active_workflow ?? null,
+            })
+          : { kind: "legacy" };
+
+        if (routing.kind !== "legacy") {
+          await dispatchSoleurGoForConversation(userId, convId, msg.content, routing);
+          break;
+        }
+
         await sendUserMessage(
           userId,
           session.conversationId!,
@@ -816,6 +985,21 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
         log.error({ userId, err }, "chat error");
         sendToClient(userId, { type: "error", message: sanitizeErrorForClient(err) });
       }
+      break;
+    }
+
+    // ------------------------------------------------------------------
+    // interactive_prompt_response: Stage 2.14 — client reply to a
+    // soleur-go interactive tool prompt (ask_user / plan_preview /
+    // diff / bash_approval / todo_write / notebook_edit). Extended to
+    // WSMessage as a feature-local variant (see lib/types.ts §Stage 2).
+    // ------------------------------------------------------------------
+    case "interactive_prompt_response": {
+      handleInteractivePromptResponseCase({
+        userId,
+        payload: msg as unknown as InteractivePromptResponse,
+        sendToClient,
+      });
       break;
     }
 
@@ -881,6 +1065,7 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
     case "usage_update":
     case "fanout_truncated":
     case "upgrade_pending":
+    case "interactive_prompt":
     case "error": {
       sendToClient(userId, {
         type: "error",
@@ -1051,6 +1236,7 @@ export function setupWebSocket(server: HTTPServer) {
           planTier: userRowTyped.plan_tier ?? "free",
           concurrencyOverride: userRowTyped.concurrency_override ?? null,
           stripeSubscriptionId: userRowTyped.stripe_subscription_id ?? null,
+          ip: clientIp,
         };
         sessions.set(userId, newSession);
         startSubscriptionRefresh(userId, newSession);

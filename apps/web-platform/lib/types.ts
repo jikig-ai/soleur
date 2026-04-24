@@ -111,6 +111,26 @@ export type WSMessage =
   | { type: "usage_update"; conversationId: string; totalCostUsd: number; inputTokens: number; outputTokens: number }
   | { type: "fanout_truncated"; dispatched: number; dropped: number }
   | { type: "upgrade_pending" }
+  // Stage 2 (#2853) — feature-local shape for the Command Center
+  // soleur-go router. Stage 3 replaces these with branded IDs
+  // (PromptId, ConversationId) + Zod parsing at the WS boundary. Until
+  // then, payload is intentionally unstructured on the client side so
+  // the router can ship the interactive-prompt bridge without a
+  // breaking-change waterfall through chat-state-machine + ws-client.
+  | {
+      type: "interactive_prompt";
+      promptId: string;
+      conversationId: string;
+      kind: "ask_user" | "plan_preview" | "diff" | "bash_approval" | "todo_write" | "notebook_edit";
+      payload: unknown;
+    }
+  | {
+      type: "interactive_prompt_response";
+      promptId: string;
+      conversationId: string;
+      kind: "ask_user" | "plan_preview" | "diff" | "bash_approval" | "todo_write" | "notebook_edit";
+      response: unknown;
+    }
   | { type: "error"; message: string; errorCode?: WSErrorCode; gateId?: string };
 
 // Database types (matches Supabase schema)
