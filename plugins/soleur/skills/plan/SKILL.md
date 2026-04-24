@@ -124,6 +124,14 @@ If the feature description matches any of the patterns `SSH`, `connection reset`
 
 The checklist enforces an L3->L7 diagnostic order: firewall allow-list and DNS/routing MUST be verified before sshd/fail2ban/service-layer hypotheses. Per AGENTS.md `hr-ssh-diagnosis-verify-firewall`, this is a hard rule -- plans that propose sshd or fail2ban fixes without first verifying firewall + egress IP are workflow violations.
 
+When a trigger pattern matches, emit rule-application telemetry so the weekly aggregator records this gate fired (see AGENTS.md `hr-ssh-diagnosis-verify-firewall`):
+
+```bash
+source "$(git rev-parse --show-toplevel)/.claude/hooks/lib/incidents.sh" && \
+  emit_incident hr-ssh-diagnosis-verify-firewall applied \
+  "When a plan addresses an SSH/network-connectivity s"
+```
+
 This step is a single file read, not a subagent spawn. If the feature description does not match any trigger pattern, skip this step silently.
 
 ### 1.5. Community Discovery Check (Conditional)

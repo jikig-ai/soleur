@@ -41,6 +41,10 @@ jobs:
           jq empty "$METRICS_FILE"
           jq -e 'has("generated_at") and has("rules") and has("summary")' "$METRICS_FILE" >/dev/null
           jq -e '.summary | has("total_rules_tagged") and has("rules_unused_over_8w") and has("rules_bypassed_over_baseline") and has("orphan_rule_ids")' "$METRICS_FILE" >/dev/null
+          # Per-rule fields (applied_count/warn_count/fire_count) added for
+          # #2866 are validated by scripts/rule-metrics-aggregate.test.sh —
+          # not enforced here because the committed artifact lags the
+          # aggregator until the first post-merge Sunday run.
 
   lockfile-sync:
     runs-on: ubuntu-latest

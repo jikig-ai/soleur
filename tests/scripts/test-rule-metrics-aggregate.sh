@@ -163,17 +163,16 @@ t_schema_field() {
   rm -rf "$root"
 }
 
-# T7: malformed first_seen → rule counted as unused (try/catch treats bad
-# timestamp as "seen long ago"), aggregator still exits 0.
+# T7: malformed first_seen → aggregator still exits 0, rows intact.
 t_malformed_first_seen() {
   local root; root=$(_setup)
-  # One hit-count=1 event for hr-rule-a with a broken timestamp string
-  # inside first_seen (set via bypass of the emitter — write the jsonl
-  # directly). The aggregator drops unparseable timestamps in the reduce
-  # path (fromdateiso8601 would throw) but the try/catch rescue keeps the
-  # row in the report. Bad first_seen is < any finite cutoff, so the rule
-  # is counted as unused only if hit_count is also 0 — so we emit a
-  # BYPASS (not a deny) to keep hit_count at 0.
+  # Emit an event for hr-rule-a with a broken timestamp string. The
+  # aggregator's try/catch on fromdateiso8601 rescues the row. Per
+  # rule-metrics emit_incident coverage (#2866), rules_unused_over_8w
+  # switched from hit_count==0 to fire_count==0 — any event (deny,
+  # bypass, applied, warn) excludes the rule from the unused bucket. So
+  # hr-rule-a is NOT unused (one bypass → fire_count=1); hr-rule-b and
+  # cm-rule-c remain unused (null first_seen + fire_count=0).
   printf '{"timestamp":"not-a-date","rule_id":"hr-rule-a","event_type":"bypass","rule_text_prefix":"","command_snippet":""}\n' \
     >> "$root/.claude/.rule-incidents.jsonl"
   local err="$root/err.log"
@@ -181,24 +180,28 @@ t_malformed_first_seen() {
     || { _report "malformed first_seen tolerated" fail "non-zero exit; stderr: $(cat "$err")"; rm -rf "$root"; return; }
   local unused
   unused=$(jq '.summary.rules_unused_over_8w' < "$root/knowledge-base/project/rule-metrics.json")
-  # 3 total rules; hr-rule-a has the bad first_seen + 0 hits → unused.
-  # hr-rule-b and cm-rule-c have null first_seen + 0 hits → unused.
-  [[ "$unused" == "3" ]] && _report "malformed first_seen → rule in unused bucket" ok \
+  [[ "$unused" == "2" ]] && _report "malformed first_seen → rule in unused bucket" ok \
     || _report "malformed first_seen → rule in unused bucket" fail "got $unused"
   rm -rf "$root"
 }
 
-# T8: orphan rule_id in jsonl surfaces in summary.orphan_rule_ids.
+# T8: orphan rule_id in jsonl surfaces in summary.orphan_rule_ids AND
+# causes the aggregator to exit 5 (post-#2866 invariant: drift must be a
+# loud CI failure, not silent normalization). The output file is still
+# written before exit so operators have forensic context.
 t_orphan_ids_surfaced() {
   local root; root=$(_setup)
   jq -nc '{timestamp:"2026-04-10T00:00:00Z", rule_id:"ghost-id-not-in-agents-md", event_type:"deny", rule_text_prefix:"", command_snippet:""}' \
     >> "$root/.claude/.rule-incidents.jsonl"
-  INCIDENTS_REPO_ROOT="$root" bash "$SCRIPT" >/dev/null 2>&1
+  local exit_code=0
+  INCIDENTS_REPO_ROOT="$root" bash "$SCRIPT" >/dev/null 2>&1 || exit_code=$?
   local orphan
   orphan=$(jq -r '.summary.orphan_rule_ids | join(",")' < "$root/knowledge-base/project/rule-metrics.json")
-  [[ "$orphan" == "ghost-id-not-in-agents-md" ]] \
-    && _report "orphan rule_ids surfaced in summary" ok \
-    || _report "orphan rule_ids surfaced in summary" fail "got '$orphan'"
+  if [[ "$orphan" == "ghost-id-not-in-agents-md" && "$exit_code" == "5" ]]; then
+    _report "orphan rule_ids surfaced in summary + exit 5" ok
+  else
+    _report "orphan rule_ids surfaced in summary + exit 5" fail "orphan='$orphan' exit=$exit_code"
+  fi
   rm -rf "$root"
 }
 

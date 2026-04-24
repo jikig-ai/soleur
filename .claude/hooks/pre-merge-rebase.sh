@@ -21,6 +21,9 @@
 set -eo pipefail
 # -u (nounset) omitted: hook failure paths must return JSON, not crash silently.
 
+# shellcheck source=lib/incidents.sh
+source "$(dirname "${BASH_SOURCE[0]}")/lib/incidents.sh"
+
 INPUT=$(cat)
 CMD=$(echo "$INPUT" | jq -r '.tool_input.command // ""')
 
@@ -90,6 +93,8 @@ if [[ -z "$REVIEW_TODOS" ]] && [[ -z "$REVIEW_COMMIT" ]]; then
 fi
 
 if [[ -z "$REVIEW_TODOS" ]] && [[ -z "$REVIEW_COMMIT" ]] && [[ -z "$REVIEW_ISSUES" ]]; then
+  emit_incident "rf-never-skip-qa-review-before-merging" deny \
+    "Never skip QA/review before merging. Full pipeline:" "$CMD"
   jq -n '{
     hookSpecificOutput: {
       hookEventName: "PreToolUse",
@@ -114,6 +119,8 @@ fi
 if [[ "$(git -C "$WORK_DIR" rev-parse --is-inside-work-tree 2>/dev/null)" == "true" ]]; then
   if ! git -C "$WORK_DIR" diff --quiet HEAD 2>/dev/null || \
      ! git -C "$WORK_DIR" diff --cached --quiet 2>/dev/null; then
+    emit_incident "hr-when-a-command-exits-non-zero-or-prints" deny \
+      "When a command exits non-zero or prints a warning" "$CMD"
     jq -n '{
       hookSpecificOutput: {
         hookEventName: "PreToolUse",
@@ -153,6 +160,8 @@ if ! git -C "$WORK_DIR" merge origin/main >/dev/null 2>&1; then
   CONFLICT_FILES=$(git -C "$WORK_DIR" diff --name-only --diff-filter=U 2>/dev/null \
     | head -5 | tr '\n' ', ' | sed 's/,$//')
   git -C "$WORK_DIR" merge --abort 2>/dev/null || true
+  emit_incident "hr-when-a-command-exits-non-zero-or-prints" deny \
+    "When a command exits non-zero or prints a warning" "$CMD"
   jq -n --arg files "${CONFLICT_FILES:-unknown}" '{
     hookSpecificOutput: {
       hookEventName: "PreToolUse",
@@ -166,6 +175,8 @@ fi
 # Merge succeeded -- push to update the remote branch.
 # Regular push (not force-push) since merge does not rewrite history.
 if ! PUSH_OUTPUT=$(git -C "$WORK_DIR" push origin HEAD 2>&1); then
+  emit_incident "hr-when-a-command-exits-non-zero-or-prints" deny \
+    "When a command exits non-zero or prints a warning" "$CMD"
   jq -n --arg output "$PUSH_OUTPUT" '{
     hookSpecificOutput: {
       hookEventName: "PreToolUse",

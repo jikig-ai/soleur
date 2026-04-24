@@ -16,8 +16,21 @@
 # --- Repo-root resolution --------------------------------------------------
 # BASH_SOURCE[0] is the path to THIS file regardless of how it was sourced.
 # From .claude/hooks/lib/incidents.sh, the repo root is three dirs up.
+# Tests set INCIDENTS_REPO_ROOT to redirect writes off the operator's real
+# .claude/.rule-incidents.jsonl; the aggregator uses the same env var.
+#
+# `cd -P` + `pwd -P` canonicalizes through symlinks (physical path). The
+# Python emitter in security_reminder_hook.py uses os.path.realpath — both
+# sides must land on the same inode for `flock -x` to interlock. A
+# symlinked `.claude/` in the operator's project would otherwise produce
+# two disjoint locks on two different inodes and reintroduce the torn
+# writes this module exists to prevent.
 _incidents_repo_root() {
-  (cd "$(dirname "${BASH_SOURCE[0]}")/../../.." 2>/dev/null && pwd)
+  if [[ -n "${INCIDENTS_REPO_ROOT:-}" ]]; then
+    echo "$INCIDENTS_REPO_ROOT"
+    return
+  fi
+  (cd -P "$(dirname "${BASH_SOURCE[0]}")/../../.." 2>/dev/null && pwd -P)
 }
 
 # Locate the shared rule-metrics constants (SCHEMA_VERSION). Sourced with
@@ -33,13 +46,32 @@ fi
 unset _incidents_constants
 
 # --- emit_incident <rule_id> <event_type> <prefix> [command_snippet] -------
-# event_type ∈ {deny, bypass}
+# event_type ∈ {deny, bypass, applied, warn}
+#   deny    — PreToolUse hook blocked an operation (prevents a violation).
+#   bypass  — user bypassed the rule with a known escape hatch (LEFTHOOK=0, etc.).
+#   applied — a skill/agent explicitly invoked the rule's enforcement path
+#             (e.g., ship Phase 5.5 reached its conditional gates).
+#   warn    — advisory hook surfaced a concern without blocking (docs-cli-verify).
+# Aggregator counting semantics (scripts/rule-metrics-aggregate.sh):
+#   hit_count    = deny
+#   bypass_count = bypass
+#   applied_count = applied
+#   warn_count    = warn
+#   fire_count    = deny + bypass + applied + warn (any recognized event)
+#   prevented_errors = max(hit_count - bypass_count, 0) — unchanged by new types.
+# Python emitter sibling: .claude/hooks/security_reminder_hook.py defines its
+# own emit_incident() mirroring this contract; keep SCHEMA_VERSION in sync.
 # prefix: first ~50 chars of the rule text (redundant — aggregator uses
 #         rule_id as the primary join key — but keeps forensic context if
 #         AGENTS.md is ever rebased with new ids).
 emit_incident() {
   local rule_id="${1:-}" event="${2:-}" prefix="${3:-}" cmd="${4:-}"
   [[ -z "$rule_id" || -z "$event" ]] && return 0
+
+  # Cap cmd length so a single JSONL line stays well under a 4KB kernel
+  # write boundary even under O_APPEND. Long PR bodies or multi-line
+  # heredoc commands can push a raw command_snippet past 10KB.
+  cmd="${cmd:0:1024}"
 
   local repo_root file ts
   repo_root="$(_incidents_repo_root)" || return 0

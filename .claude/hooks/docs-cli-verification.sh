@@ -16,6 +16,9 @@
 # emits one stderr warning per matched block and continues.
 set -euo pipefail
 
+# shellcheck source=lib/incidents.sh
+source "$(dirname "${BASH_SOURCE[0]}")/lib/incidents.sh"
+
 INPUT=$(cat)
 FILE_PATH=$(echo "$INPUT" | jq -r '.tool_input.file_path // .tool_input.filePath // ""')
 
@@ -33,7 +36,11 @@ case "$FILE_PATH" in
 esac
 
 # Scan for fenced code blocks containing a CLI-shaped token on any line.
-awk '
+# awk emits one sentinel-prefixed line per unverified fence to stdout; the
+# bash while-loop below emits a rule-incident warn per line and re-prints
+# the cleaned warning to stderr so the operator-facing UX is preserved.
+_EMIT_SENTINEL='[docs-cli-verify-emit] '
+awk -v SENTINEL="$_EMIT_SENTINEL" '
   BEGIN {
     in_block = 0
     verified_window = 0
@@ -55,7 +62,7 @@ awk '
     } else {
       in_block = 0
       if (first_cli != "" && !block_verified) {
-        printf("[docs-cli-verify] %s:%d unverified CLI invocation: %s — consider running --help and annotating <!-- verified: YYYY-MM-DD source: <url> -->\n", FILENAME, block_start, first_cli) > "/dev/stderr"
+        printf("%s[docs-cli-verify] %s:%d unverified CLI invocation: %s — consider running --help and annotating <!-- verified: YYYY-MM-DD source: <url> -->\n", SENTINEL, FILENAME, block_start, first_cli)
       }
     }
     next
@@ -78,6 +85,12 @@ awk '
   !in_block && !/<!-- verified:/ && !/^```/ {
     if (verified_window > 0) verified_window--
   }
-' "$FILE_PATH"
+' "$FILE_PATH" | while IFS= read -r line; do
+  # Strip sentinel, emit warn telemetry, re-print to stderr (UX preserved).
+  cleaned="${line#"$_EMIT_SENTINEL"}"
+  emit_incident "cq-docs-cli-verification" warn \
+    "When prescribing a CLI invocation that lands in user" "$cleaned"
+  echo "$cleaned" >&2
+done
 
 exit 0
