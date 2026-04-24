@@ -74,7 +74,19 @@ exit 0
 
 ## Key Insight
 
-Destructive ops against production are the scope where the agent must be *most* deferential, not least. The global "auto mode is not a license to destroy" guidance and the per-command authorization principle converge here: menu-option authorizations can select paths but cannot pre-authorize the destructive commands on those paths. The `-auto-approve` flag is the tell — it means "bypass the tool's own safety net," which is exactly what we must never do silently.
+Destructive ops against production are the scope where the agent must be *most* deferential, not least. Menu-option authorizations can select paths but cannot pre-authorize the destructive commands on those paths. What matters is that the user reads the exact command before approving — that's the load-bearing safety net, not the tool's interactive prompt.
+
+## Amendment — 2026-04-24 (PR #2880 follow-on)
+
+The original formulation of this rule banned `-auto-approve`/`--yes`/`--force` on prod-scoped invocations, reasoning that the tool's native confirmation prompt was a second safety net. In practice this was operationally broken for solo-founder automation:
+
+- **Agent shells have no TTY.** Claude Code's Bash tool runs non-interactively. `terraform apply` without `-auto-approve` does not surface a prompt — it hangs until it times out (or hits a 2-minute Bash tool cap). The "safety net" never fires because there is nothing to confirm it against.
+- **The second net was double-counting the first.** The per-command go-ahead ("show exact command, wait for explicit approval") already forces the user to read the command. Terraform's `yes` prompt re-shows the same plan the user just approved.
+- **Cost for solo founders.** Every prod write becomes a "please open your terminal and type yes" handoff. This defeats the automation promise — Soleur's value is that an agent completes the whole loop.
+
+**Amended policy (current):** After the explicit per-command go-ahead, agents run with `-auto-approve` so the write completes non-interactively. The per-command confirmation (show exact command + wait for approval) is the sole safety net. Menu acks and prior approvals stretched to cover new commands remain banned — that boundary was the original #2618 incident and has not moved.
+
+**What did NOT change:** The agent must still SHOW the exact command before running it. Implicit authorization (menu clicks, "yes proceed" on a batch, prior approvals for one command reused for another) is still a violation of the same class as #2618.
 
 ## Tags
 
