@@ -214,16 +214,17 @@ echo "$report" | jq -e '.schema == 1' >/dev/null 2>&1 \
 # Orphan invariant: any rule_id emitted by a hook / skill that is not tagged
 # in AGENTS.md indicates drift (renamed rule, typo in snippet, dead rule-id).
 # Weekly cron surfaces this as a failing workflow step — the next run is a
-# silent normalization otherwise.
+# silent normalization otherwise. The file IS still written first so
+# operators have forensic context for the orphan list on failed runs.
 orphan_count=$(echo "$report" | jq -r '.summary.orphan_rule_ids | length')
-if [[ "${orphan_count:-0}" -gt 0 ]]; then
-  orphan_list=$(echo "$report" | jq -r '.summary.orphan_rule_ids | join(", ")')
-  echo "ERROR: orphan rule_id(s) in incidents jsonl not tagged in AGENTS.md: $orphan_list" >&2
-  exit 5
-fi
 
 if [[ "$DRY_RUN" == "1" ]]; then
   echo "$report" | jq '{schema, generated_at, summary}'
+  if [[ "${orphan_count:-0}" -gt 0 ]]; then
+    orphan_list=$(echo "$report" | jq -r '.summary.orphan_rule_ids | join(", ")')
+    echo "ERROR: orphan rule_id(s) in incidents jsonl not tagged in AGENTS.md: $orphan_list" >&2
+    exit 5
+  fi
   exit 0
 fi
 
@@ -248,6 +249,16 @@ if [[ "$write" == "1" ]]; then
   echo "Wrote $OUT"
 else
   echo "No material change to $OUT"
+fi
+
+# Orphan gate (post-write): fail loudly if the jsonl emitted rule_ids not
+# present in AGENTS.md. File is already written so operators have forensic
+# context; rotation below is skipped because the exit short-circuits. The
+# weekly workflow's notify-ops-email catches this via `if: failure()`.
+if [[ "${orphan_count:-0}" -gt 0 ]]; then
+  orphan_list=$(echo "$report" | jq -r '.summary.orphan_rule_ids | join(", ")')
+  echo "ERROR: orphan rule_id(s) in incidents jsonl not tagged in AGENTS.md: $orphan_list" >&2
+  exit 5
 fi
 
 # --- Rotate jsonl after a successful aggregation --------------------------
