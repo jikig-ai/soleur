@@ -10,8 +10,8 @@
 # Environment variables (required):
 #   LINKEDIN_ACCESS_TOKEN      - OAuth 2.0 Bearer token for personal posts (60-day TTL)
 #   LINKEDIN_ORG_ACCESS_TOKEN  - OAuth 2.0 Bearer token for organization/company page posts
-#                                (requires w_organization_social scope; falls back to
-#                                LINKEDIN_ACCESS_TOKEN if unset)
+#                                (requires w_organization_social scope; required when
+#                                --author is urn:li:organization:*)
 #   LINKEDIN_PERSON_URN    - Person URN for posting (urn:li:person:{id}), optional if --author provided
 #   LINKEDIN_ALLOW_POST    - Set to "true" to enable posting (safety guard, default: disabled)
 #
@@ -270,9 +270,13 @@ cmd_post_content() {
     exit 1
   fi
 
-  # Organization posts require w_organization_social scope -- use LINKEDIN_ORG_ACCESS_TOKEN
-  # if set, otherwise fall back to LINKEDIN_ACCESS_TOKEN (which will likely 400).
-  if [[ "$author" == urn:li:organization:* ]] && [[ -n "${LINKEDIN_ORG_ACCESS_TOKEN:-}" ]]; then
+  # Organization posts require w_organization_social scope -- use LINKEDIN_ORG_ACCESS_TOKEN.
+  if [[ "$author" == urn:li:organization:* ]]; then
+    if [[ -z "${LINKEDIN_ORG_ACCESS_TOKEN:-}" ]]; then
+      echo "Error: LINKEDIN_ORG_ACCESS_TOKEN is required for organization posts (w_organization_social scope)." >&2
+      echo "Set LINKEDIN_ORG_ACCESS_TOKEN to a token with w_organization_social scope." >&2
+      exit 1
+    fi
     LINKEDIN_ACCESS_TOKEN="$LINKEDIN_ORG_ACCESS_TOKEN"
   fi
 
