@@ -71,8 +71,16 @@ export function allow(toolInput: Record<string, unknown>): Extract<PermissionRes
 // Word-boundary anchors (`\b`) keep false positives down (e.g., a file
 // named `evalent.ts` or a command mentioning "sudoku" should not match).
 // Case-insensitive because shell commands are.
+//
+// Interpreter-flag arms (`node|python|python3|ruby|perl|deno|bun -e/-c`,
+// `deno eval`) catch the same payload-execution surface as `sh -c` but
+// via language interpreters that the soleur plugin sometimes legitimately
+// invokes (`node script.ts`, `python -m pytest`). Plain interpreter
+// invocations remain allowed; only the inline-eval flags `-e`/`-c` (and
+// `deno eval`) are blocked outright. A previously-granted `node` or
+// `python` batch grant cannot launder these.
 export const BLOCKED_BASH_PATTERNS =
-  /\b(?:curl|wget|ncat|nc|eval|sudo)\b|(?:sh|bash)\s+-c|base64\s+-d|\/dev\/tcp/i;
+  /\b(?:curl|wget|ncat|nc|eval|sudo)\b|(?:sh|bash|node|python|python3|ruby|perl|deno|bun)\s+-(?:e|c)\b|deno\s+eval\b|base64\s+-d|\/dev\/tcp/i;
 
 export function isBashCommandBlocked(command: string): boolean {
   if (typeof command !== "string" || command.length === 0) return false;

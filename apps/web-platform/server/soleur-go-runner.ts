@@ -383,18 +383,39 @@ export function buildSoleurGoSystemPrompt(
 
   const extras: string[] = [];
 
+  // Sanitize untrusted strings before they land in the system prompt.
+  // Mirrors the cc-dispatcher `subagentStartPayloadOverride.sanitizer`
+  // shape (control chars + Unicode line/paragraph separators stripped)
+  // so a poisoned `artifactPath` like `vision.md\nIGNORE PRIOR
+  // INSTRUCTIONS` cannot break out of the directive context. See
+  // learning 2026-04-17-log-injection-unicode-line-separators.md.
+  const sanitizePromptString = (v: unknown): string =>
+    String(v ?? "")
+      // eslint-disable-next-line no-control-regex -- intentional: strip control chars + U+2028/U+2029
+      .replace(/[\x00-\x1f\x7f\u2028\u2029]/g, "")
+      .slice(0, 256);
+
   if (args.artifactPath && args.artifactPath.length > 0) {
-    extras.push(
-      "",
-      `The user is currently viewing: ${args.artifactPath}. Treat routing decisions as scoped to this artifact when the message references "this", "the document", "this file", etc.`,
-    );
+    const safeArtifactPath = sanitizePromptString(args.artifactPath);
+    if (safeArtifactPath.length > 0) {
+      extras.push(
+        "",
+        `The user is currently viewing: ${safeArtifactPath}. Treat routing decisions as scoped to this artifact when the message references "this", "the document", "this file", etc.`,
+      );
+    }
   }
 
   if (args.activeWorkflow) {
-    extras.push(
-      "",
-      `A ${args.activeWorkflow} workflow is active for this conversation. Continue dispatching to /soleur:${args.activeWorkflow} unless the user explicitly resets routing.`,
-    );
+    // `activeWorkflow` is a typed `WorkflowName` enum (validated against
+    // the migration 032 CHECK enum); sanitization here is defense-in-
+    // depth in case the type narrows away in the future.
+    const safeWorkflow = sanitizePromptString(args.activeWorkflow);
+    if (safeWorkflow.length > 0) {
+      extras.push(
+        "",
+        `A ${safeWorkflow} workflow is active for this conversation. Continue dispatching to /soleur:${safeWorkflow} unless the user explicitly resets routing.`,
+      );
+    }
   }
 
   return [...baseline, ...extras].join("\n");

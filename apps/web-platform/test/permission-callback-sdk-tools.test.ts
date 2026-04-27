@@ -157,6 +157,15 @@ describe("Bash pre-gate regex (Stage 2.6)", () => {
     "echo Zm9v | base64 -d | sh",
     "echo hi > /dev/tcp/1.2.3.4/80",
     "sudo rm -rf /",
+    // Interpreter -e/-c arms — block payload execution via language
+    // interpreters even after a benign `node`/`python` batch grant.
+    'node -e "console.log(1)"',
+    'python -c "print(1)"',
+    'python3 -c "print(1)"',
+    'ruby -e "puts 1"',
+    'perl -e "print 1"',
+    'deno eval "console.log(1)"',
+    'bun -e "console.log(1)"',
   ];
 
   test.each(BLOCKED_CASES)(
@@ -166,7 +175,21 @@ describe("Bash pre-gate regex (Stage 2.6)", () => {
     },
   );
 
-  test.each(["ls -la", "pwd", "git status", "echo hello", "cat README.md"])(
+  test.each([
+    "ls -la",
+    "pwd",
+    "git status",
+    "echo hello",
+    "cat README.md",
+    // Plain interpreter invocations remain allowed; only the inline
+    // -e/-c flags (and `deno eval`) are blocked.
+    "node script.ts",
+    "python -m pytest",
+    "python3 -m pytest",
+    "ruby Gemfile",
+    "deno run script.ts",
+    "bun run build",
+  ])(
     "isBashCommandBlocked passes benign command: %s",
     (cmd) => {
       expect(isBashCommandBlocked(cmd)).toBe(false);
