@@ -86,8 +86,8 @@ None. Queried `gh issue list --label code-review --state open` (21 open issues);
 
 Single-line edit to `.github/workflows/cla.yml` line 34.
 
-- [ ] Read `.github/workflows/cla.yml` (already read at plan time; re-read pre-edit per `hr-always-read-a-file-before-editing-it`).
-- [ ] Apply this exact edit:
+- [x] Read `.github/workflows/cla.yml` (already read at plan time; re-read pre-edit per `hr-always-read-a-file-before-editing-it`).
+- [x] Apply this exact edit:
 
     ```diff
     -          allowlist: "dependabot[bot],github-actions[bot],renovate[bot],deruelle,app/claude,claude"
@@ -96,8 +96,8 @@ Single-line edit to `.github/workflows/cla.yml` line 34.
 
     Net change: replace `app/claude,claude` with `claude[bot]`. Both removed tokens are unreachable on the action's GraphQL surface (see Research Reconciliation source-trace block); the new token matches `committer.user.login` for the real Claude GitHub App (DB ID `209825114`).
 
-- [ ] Verify YAML is still parseable: `python3 -c "import yaml; yaml.safe_load(open('.github/workflows/cla.yml'))"` — must exit 0.
-- [ ] Confirm `app/claude` matchers in OTHER workflow files (`scheduled-bug-fixer.yml:213`, `scripts/lint-bot-synthetic-completeness.sh:12`, `bot-pr-with-synthetic-checks/action.yml`) are NOT touched — they operate on the REST API's PR-author surface and are correct as-is. Quick sanity grep after edit: `grep -rn 'app/claude' .github/ scripts/` should still return ≥3 hits in those non-cla.yml files and ZERO hits in `cla.yml`.
+- [x] Verify YAML is still parseable: `python3 -c "import yaml; yaml.safe_load(open('.github/workflows/cla.yml'))"` — must exit 0.
+- [x] Confirm `app/claude` matchers in OTHER workflow files (`scheduled-bug-fixer.yml:213`, `scripts/lint-bot-synthetic-completeness.sh:12`, `bot-pr-with-synthetic-checks/action.yml`) are NOT touched — they operate on the REST API's PR-author surface and are correct as-is. Quick sanity grep after edit: `grep -rn 'app/claude' .github/ scripts/` should still return ≥3 hits in those non-cla.yml files and ZERO hits in `cla.yml`.
 
 ### Phase 2: Verify on a real bot-authored PR (post-merge)
 

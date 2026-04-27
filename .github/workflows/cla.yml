@@ -31,7 +31,7 @@ jobs:
           path-to-signatures: "signatures/cla.json"
           path-to-document: "https://soleur.ai/pages/legal/individual-cla.html"
           branch: "cla-signatures"
-          allowlist: "dependabot[bot],github-actions[bot],renovate[bot],deruelle,app/claude,claude"
+          allowlist: "dependabot[bot],github-actions[bot],renovate[bot],deruelle,claude[bot]"
           custom-notsigned-prcomment: |
             Thank you for your contribution! Before we can accept it, you need to sign our [Contributor License Agreement](https://soleur.ai/pages/legal/individual-cla.html).
 
