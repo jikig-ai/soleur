@@ -27,6 +27,17 @@ import {
 import path from "path";
 import { randomUUID } from "crypto";
 
+import { createChildLogger } from "./logger";
+
+const log = createChildLogger("workspace-permission-lock");
+
+// Defense-in-depth: warn if the in-flight lock map ever grows beyond
+// reasonable scale. Each entry is keyed on a canonicalized workspace
+// path; a normal busy server has ~O(active sessions). A 10k+ map size
+// suggests a leak (lock never released) or a misuse pattern that
+// invalidates the GC clause below.
+const LOCK_SIZE_WARN_THRESHOLD = 10_000;
+
 // Map keyed on canonicalized workspace path. Value is the tail of the
 // chain; new callers chain off it. Garbage-collected when the tail
 // resolves AND no later caller has appended.
@@ -43,6 +54,12 @@ export async function withWorkspacePermissionLock<T>(
   workspacePath: string,
   fn: () => Promise<T> | T,
 ): Promise<T> {
+  if (_locks.size > LOCK_SIZE_WARN_THRESHOLD) {
+    log.warn(
+      { size: _locks.size, op: "workspace-permission-lock" },
+      "_locks map size unexpectedly large — investigate possible release leak",
+    );
+  }
   const key = path.resolve(workspacePath);
   const previous = _locks.get(key) ?? Promise.resolve();
 

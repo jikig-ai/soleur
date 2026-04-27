@@ -69,6 +69,10 @@ describe("withWorkspacePermissionLock", () => {
     // Give the event loop a chance — second must NOT have run yet.
     await new Promise((r) => setTimeout(r, 10));
     expect(secondRan).toBe(false);
+    // Pin the EXACT intermediate state — distinguishes "lock works" from
+    // "second is in microtask wait but flagged via secondRan". The lock
+    // must hold first inside the critical section; nothing else has run.
+    expect(order).toEqual(["first-start"]);
 
     // Release first; then second runs.
     releaseFirst();
@@ -146,11 +150,13 @@ describe("atomicWriteJson", () => {
     const parsed = JSON.parse(readFileSync(target, "utf8"));
     expect(parsed).toEqual({ permissions: { allow: ["Read"] } });
 
-    // No tmp leaks at canonical suffix
+    // No tmp leaks at canonical suffix. Filter-and-equal so a failure
+    // surfaces the leaked filename in the diff.
     const dirEntries = require("fs").readdirSync(tmpRoot) as string[];
-    expect(
-      dirEntries.some((e) => e.startsWith("settings.json.") && e.endsWith(".tmp")),
-    ).toBe(false);
+    const tmps = dirEntries.filter(
+      (e) => e.startsWith("settings.json.") && e.endsWith(".tmp"),
+    );
+    expect(tmps).toEqual([]);
   });
 
   it("T3b: leaves no partial file when JSON encoding throws", () => {
@@ -168,10 +174,12 @@ describe("atomicWriteJson", () => {
     const content = readFileSync(target, "utf8");
     expect(content).toBe('{"original":true}\n');
 
-    // No leftover *.tmp siblings.
+    // No leftover *.tmp siblings. Filter-and-equal so a failure surfaces
+    // the leaked filename in the diff.
     const dirEntries = require("fs").readdirSync(tmpRoot) as string[];
-    expect(
-      dirEntries.some((e) => e.startsWith("settings-bad.json.") && e.endsWith(".tmp")),
-    ).toBe(false);
+    const tmps = dirEntries.filter(
+      (e) => e.startsWith("settings-bad.json.") && e.endsWith(".tmp"),
+    );
+    expect(tmps).toEqual([]);
   });
 });

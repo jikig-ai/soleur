@@ -52,7 +52,10 @@ import {
   patchWorkspacePermissions,
 } from "./agent-runner";
 import { buildAgentQueryOptions } from "./agent-runner-query-options";
-import { getBashApprovalCache } from "./permission-callback-bash-batch";
+import {
+  getBashApprovalCache,
+  _resetBashApprovalCacheForTests,
+} from "./permission-callback-bash-batch";
 import {
   createCanUseTool,
   type CanUseToolDeps,
@@ -776,4 +779,10 @@ export function __resetDispatcherForTests(): void {
   _runnerSendToClient = null;
   _ccBashGates.clear();
   _mirrorLastReportedAt.clear();
+  // The bash batched-approval cache lives in a sibling module
+  // (`permission-callback-bash-batch.ts`) and is keyed by
+  // `${userId}:${conversationId}`. Without draining it here, a granted
+  // prefix in test A can survive into test B (cross-file leak via the
+  // module-level Map). Mirrors the centralization Fix 6 of PR #2954.
+  _resetBashApprovalCacheForTests();
 }
