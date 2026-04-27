@@ -511,42 +511,42 @@ helper extraction and the cc-only behavioral fixes.
 
 ### Pre-merge (PR)
 
-- [ ] **#2918:** `withWorkspacePermissionLock` serializes concurrent
+- [x] **#2918:** `withWorkspacePermissionLock` serializes concurrent
       `patchWorkspacePermissions` calls on the same workspace path. Atomic
       `<path>.tmp` → rename. Tests at
       `apps/web-platform/test/workspace-permission-lock.test.ts` pass.
-- [ ] **#2918:** both call sites (`agent-runner.ts startAgentSession` and
+- [x] **#2918:** both call sites (`agent-runner.ts startAgentSession` and
       `cc-dispatcher.ts realSdkQueryFactory`) inherit the lock automatically
       because the lock lives INSIDE `patchWorkspacePermissions`. Verified
       by absence of new lock plumbing at the call sites.
-- [ ] **#2919:** the v1→v2 migration UPDATE is now an RPC call to
+- [x] **#2919:** the v1→v2 migration UPDATE is now an RPC call to
       `migrate_api_key_to_v2`. Concurrent callers serialize via PG row
       locks; second-writer's UPDATE matches `WHERE key_version = 1` with
       zero rows; helper handles `rows_affected = 0` as success.
       `getUserApiKey` AND `getUserServiceTokens` both use the RPC.
-- [ ] **#2920:** cc-dispatcher's `ccDeps.updateConversationStatus` issues
+- [x] **#2920:** cc-dispatcher's `ccDeps.updateConversationStatus` issues
       a real `supabase.update().eq("id",...).eq("user_id",...)` (R8
       composite-key). Errors flow to `reportSilentFallback` per
       `cq-silent-fallback-must-mirror-to-sentry`.
-- [ ] **#2921:** `getBashApprovalCache` per-conversation in-memory
+- [x] **#2921:** `getBashApprovalCache` per-conversation in-memory
       allowlist with 60-min TTL + revoke. `permission-callback.ts`
       consults the cache before issuing the Bash gate, augments the
       options array with `Approve all <prefix>`, calls `grant` on
       selection. Cross-user + cross-conversation isolation verified.
-- [ ] **#2921:** `cleanupCcBashGatesForConversation` also revokes the
+- [x] **#2921:** `cleanupCcBashGatesForConversation` also revokes the
       bash approval cache (no leak across conversation lifecycles).
-- [ ] **#2922:** `buildAgentQueryOptions(args)` is the single source of
+- [x] **#2922:** `buildAgentQueryOptions(args)` is the single source of
       truth for both call sites. Drift-guard test at
       `agent-runner-helpers.test.ts` asserts shared fields are deep-equal
       between legacy and cc paths.
-- [ ] **#2923:** `buildSoleurGoSystemPrompt(args?)` injects artifact-path
+- [x] **#2923:** `buildSoleurGoSystemPrompt(args?)` injects artifact-path
       and active-workflow sentences when args are provided. Default-args
       call preserves the pre-existing 5-line baseline (contract
       preservation).
-- [ ] All targeted tests green (`./node_modules/.bin/vitest run` for the
+- [x] All targeted tests green (`./node_modules/.bin/vitest run` for the
       8 test files listed in Phase 7).
-- [ ] Full app-level vitest run (`apps/web-platform`) passes.
-- [ ] PR body contains `Closes #2918`, `Closes #2919`, `Closes #2920`,
+- [x] Full app-level vitest run (`apps/web-platform`) passes.
+- [x] PR body contains `Closes #2918`, `Closes #2919`, `Closes #2920`,
       `Closes #2921`, `Closes #2922`, `Closes #2923` (one per line).
 - [ ] No version-file edits (`plugin.json`, `marketplace.json`).
 
