@@ -1,0 +1,138 @@
+name: PR quality guards (#2905)
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, edited]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  settings-json-integrity:
+    name: Block destructive .claude/settings.json edits
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check for opt-out label
+        id: opt_out
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -uo pipefail
+          HAS_LABEL=$(gh pr view "$PR_NUMBER" --repo "$GH_REPO" \
+            --json labels --jq '[.labels[].name] | index("confirm:claude-config-change") // empty')
+          if [[ -n "$HAS_LABEL" ]]; then
+            echo "::warning::settings-json-integrity skipped — confirm:claude-config-change label present"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        if: steps.opt_out.outputs.skip != 'true'
+        with:
+          fetch-depth: 0
+      - name: Run integrity check
+        if: steps.opt_out.outputs.skip != 'true'
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.sha }}
+          HEAD_REF: ${{ github.event.pull_request.head.sha }}
+        run: bash .github/scripts/check-settings-integrity.sh
+
+  pr-body-vs-diff:
+    name: Block PR body citing files not in diff
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check for opt-out label
+        id: opt_out
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -uo pipefail
+          HAS_LABEL=$(gh pr view "$PR_NUMBER" --repo "$GH_REPO" \
+            --json labels --jq '[.labels[].name] | index("confirm:claude-config-change") // empty')
+          if [[ -n "$HAS_LABEL" ]]; then
+            echo "::warning::pr-body-vs-diff skipped — confirm:claude-config-change label present"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        if: steps.opt_out.outputs.skip != 'true'
+      - name: Run body-vs-diff check
+        if: steps.opt_out.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: bash .github/scripts/check-pr-body-vs-diff.sh
+
+  stray-worktree-marker-block:
+    name: Block .claude/worktrees/ entries in diff
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check for opt-out label
+        id: opt_out
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -uo pipefail
+          HAS_LABEL=$(gh pr view "$PR_NUMBER" --repo "$GH_REPO" \
+            --json labels --jq '[.labels[].name] | index("confirm:claude-config-change") // empty')
+          if [[ -n "$HAS_LABEL" ]]; then
+            echo "::warning::stray-worktree-marker-block skipped — confirm:claude-config-change label present"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Check diff for .claude/worktrees/ entries
+        if: steps.opt_out.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -uo pipefail
+          STRAY=$(gh pr diff "$PR_NUMBER" --repo "$GH_REPO" --name-only \
+            | grep -E '^\.claude/worktrees/' || true)
+          if [[ -n "$STRAY" ]]; then
+            echo "::error::Diff contains .claude/worktrees/ entries — these are agent-runtime markers, never commit them. See #2905."
+            echo "Offending paths:"
+            echo "$STRAY" | sed 's/^/  - /'
+            exit 1
+          fi
+
+  auto-commit-message-density:
+    name: Block PRs dominated by auto-commit headlines
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check for opt-out label
+        id: opt_out
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -uo pipefail
+          HAS_LABEL=$(gh pr view "$PR_NUMBER" --repo "$GH_REPO" \
+            --json labels --jq '[.labels[].name] | index("confirm:claude-config-change") // empty')
+          if [[ -n "$HAS_LABEL" ]]; then
+            echo "::warning::auto-commit-message-density skipped — confirm:claude-config-change label present"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        if: steps.opt_out.outputs.skip != 'true'
+      - name: Run density check
+        if: steps.opt_out.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: bash .github/scripts/check-auto-commit-density.sh
