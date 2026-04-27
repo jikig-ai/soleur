@@ -50,6 +50,7 @@ import {
   dispatchSoleurGo,
   getCcStartSessionRateLimiter,
   handleInteractivePromptResponseCase,
+  resolveCcBashGate,
 } from "./cc-dispatcher";
 import { getFlag } from "@/lib/feature-flags/server";
 import type { InteractivePromptResponse } from "./cc-interactive-prompt-types";
@@ -1112,12 +1113,35 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
           throw new Error("Invalid review gate selection");
         }
 
-        await resolveReviewGate(
-          userId,
-          session.conversationId,
-          msg.gateId,
-          msg.selection,
-        );
+        // Stage 2.12: route by conversation routing kind. The
+        // cc-soleur-go path's Bash review-gate uses a synthetic
+        // AgentSession registered in `_ccBashGates` (cc-dispatcher.ts);
+        // legacy domain-leader sessions live in `agent-runner.ts`
+        // `activeSessions`. `resolveCcBashGate` returns false if the
+        // gate is not in the cc registry — fall through to the legacy
+        // resolver in that case so transitional conversations (cc
+        // started, then SDK iterator emitted a gate before routing
+        // moved) still resolve.
+        const ccRouted =
+          session.routing?.kind === "soleur_go_pending" ||
+          session.routing?.kind === "soleur_go_active";
+        let resolved = false;
+        if (ccRouted) {
+          resolved = resolveCcBashGate({
+            userId,
+            conversationId: session.conversationId,
+            gateId: msg.gateId,
+            selection: msg.selection,
+          });
+        }
+        if (!resolved) {
+          await resolveReviewGate(
+            userId,
+            session.conversationId,
+            msg.gateId,
+            msg.selection,
+          );
+        }
       } catch (err) {
         Sentry.captureException(err);
         log.error({ userId, err }, "review_gate_response error");

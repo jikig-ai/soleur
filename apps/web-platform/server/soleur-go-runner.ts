@@ -270,7 +270,7 @@ export interface QueryFactoryArgs {
   conversationId: string;
 }
 
-export type QueryFactory = (args: QueryFactoryArgs) => Query;
+export type QueryFactory = (args: QueryFactoryArgs) => Promise<Query> | Query;
 
 export interface SoleurGoRunnerDeps {
   queryFactory: QueryFactory;
@@ -295,6 +295,14 @@ export interface SoleurGoRunnerDeps {
     userId: string,
     event: InteractivePromptEvent,
   ) => void;
+  /**
+   * Optional close-side hook fired BEFORE `activeQueries.delete(...)` from
+   * EVERY internal close path (`emitWorkflowEnded` → `closeQuery`,
+   * `reapIdle` → `closeQuery`, `closeConversation` → `closeQuery`).
+   * The cc-dispatcher uses this to drain its `_ccBashGates` Map on idle
+   * reap (a path that does NOT fire `onWorkflowEnded`).
+   */
+  onCloseQuery?: (args: { conversationId: string; userId: string }) => void;
 }
 
 export interface SoleurGoRunner {
@@ -528,6 +536,23 @@ export function createSoleurGoRunner(deps: SoleurGoRunnerDeps): SoleurGoRunner {
     } catch {
       // close() on a push queue is best-effort; no remediation possible.
     }
+    // Fire the close hook BEFORE deletion so callers see a consistent
+    // (conversationId, userId) snapshot. Wrapped: a buggy hook must not
+    // leak the activeQueries entry.
+    if (deps.onCloseQuery) {
+      try {
+        deps.onCloseQuery({
+          conversationId: state.conversationId,
+          userId: state.userId,
+        });
+      } catch (err) {
+        reportSilentFallback(err, {
+          feature: "soleur-go-runner",
+          op: "onCloseQuery",
+          extra: { conversationId: state.conversationId },
+        });
+      }
+    }
     activeQueries.delete(state.conversationId);
   }
 
@@ -714,7 +739,14 @@ export function createSoleurGoRunner(deps: SoleurGoRunnerDeps): SoleurGoRunner {
       const resumeSessionId = args.sessionId ?? undefined;
       let query: Query;
       try {
-        query = deps.queryFactory({
+        // Factory may be sync OR async (real-SDK factory does async
+        // BYOK/workspace fetches). Await uniformly so KeyInvalidError +
+        // sandbox-init failures land in THIS catch (tagged
+        // `op: "queryFactory"`) rather than surfacing later via
+        // `consumeStream` (`op: "consumeStream"`). Required for AC14
+        // attribution and for `dispatchSoleurGo` to map KeyInvalidError
+        // → `errorCode: "key_invalid"` on the wire.
+        query = await deps.queryFactory({
           prompt: inputQueue.stream,
           systemPrompt: buildSoleurGoSystemPrompt(),
           resumeSessionId,
