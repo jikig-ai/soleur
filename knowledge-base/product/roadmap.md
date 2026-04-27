@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-04-23
-last_reviewed: 2026-04-23
+last_updated: 2026-04-27
+last_reviewed: 2026-04-27
 review_cadence: weekly
 owner: CPO
 depends_on:
@@ -75,7 +75,7 @@ This roadmap was reviewed by CTO, CLO, CFO, and CMO before finalization.
 | Phase 1 (Close the Loop) | Complete. Milestone closed. 0 open, 15 closed. |
 | Phase 2 (Secure for Beta) | Complete. Milestone closed. 0 open, 20 closed. |
 | Phase 3 (Make it Sticky) | In progress. 11 open, 23 closed (milestone). Core KB, inbox, token storage, onboarding, CI/CD, service automation, analytics, sharing, usage indicator, pricing page, start fresh onboarding, post-connect sync, chat attachments, review gate notifications, guided instructions fallback, subscription management, KB file upload, invoice history, migration 021 follow-through all done. Agent work visualization (#2004) moved to Phase 4. KB chat sidebar (#2345) promoted from Post-MVP to Phase 3 P3 on 2026-04-15 (shipped in PR #2347). Remaining: service automation announcement (#1944), QA gate (#2108), KB rename files (#2152), KB PDF preview (#2153), KB delete button layout (#2154), team settings improvements (#2155), custom @mention handles (#2170), KB chat sidebar (#2345), `soleur:ux-audit` recurring UX-review loop (#2341), collapsible sidebars (#2342, blocked by #2341), exclude agent issues from auto-fix/triage (#2344). |
-| Phase 4 (Validate + Scale) | Not started. Blocked by Phase 3 completion + marketing/multi-user gates. Growth audit 2026-04-13 added 7 issues (6 marketing gate P0s + 1 outreach campaign). Growth audit 2026-04-19 added 7 marketing gate issues (M26-M32: #2657, #2658, #2659, #2663, #2664, #2665, #2666). Growth audit 2026-04-21 added 5 marketing gate issues (M33-M37: #2707 FAQ on pricing, #2708 title conflict, #2709 bare titles, #2711 author card, #2712 billion-dollar pillar). Growth audit 2026-04-22 added 3 marketing gate issues (M38-M40: #2806 /agents/ title+H1, #2804 vision superlative, #2805 vanity stat) plus 3 Post-MVP items (L21-L23: #2807 byline, #2808 meta description, #2809 render-blocking css). Agent work visualization (#2004) moved here from Phase 3. |
+| Phase 4 (Validate + Scale) | Not started. Blocked by Phase 3 completion + marketing/multi-user gates. Growth audit 2026-04-13 added 7 issues (6 marketing gate P0s + 1 outreach campaign). Growth audit 2026-04-19 added 7 marketing gate issues (M26-M32: #2657, #2658, #2659, #2663, #2664, #2665, #2666). Growth audit 2026-04-21 added 5 marketing gate issues (M33-M37: #2707 FAQ on pricing, #2708 title conflict, #2709 bare titles, #2711 author card, #2712 billion-dollar pillar). Growth audit 2026-04-22 added 3 marketing gate issues (M38-M40: #2806 /agents/ title+H1, #2804 vision superlative, #2805 vanity stat) plus 3 Post-MVP items (L21-L23: #2807 byline, #2808 meta description, #2809 render-blocking css). Growth audit 2026-04-27 added 6 marketing gate issues (M41-M46: #2942 site-wide meta descriptions, #2943 homepage single H1, #2944 brand-suffix duplication in titles, #2946 Person entity cross-link, #2948 FAQPage JSON-LD on 6 pages, #2949 About/Founder page) plus 2 Post-MVP items (L24-L25: #2945 base href hygiene, #2947 dateModified on JSON-LD). Agent work visualization (#2004) moved here from Phase 3. |
 | Phase 5 (Desktop Native App) | Defined. 5 open, 0 closed. Trigger-gated on user demand. |
 | Post-MVP / Later | 92 open, 343 closed. |
 | Beta users | 0 |
@@ -273,8 +273,14 @@ Before recruiting founders, all public surfaces must reflect the cloud platform 
 | M38 | Rewrite /agents/ title + H1 with keyword-dense modifiers (acquisition page carries weak SERP/H1 signals) | 30 min | Not started — [#2806](https://github.com/jikig-ai/soleur/issues/2806) |
 | M39 | Remove "world's first" superlative from /vision/ (unprovable claim erodes AEO/E-E-A-T trust) | 15 min | Not started — [#2804](https://github.com/jikig-ai/soleur/issues/2804) |
 | M40 | Remove "6 GitHub Stars" vanity stat from homepage hero (low number undermines credibility) | 15 min | Not started — [#2805](https://github.com/jikig-ai/soleur/issues/2805) |
+| M41 | Meta descriptions missing site-wide (10 audited pages render zero `<meta name="description">` — SERP CTR suppression for high-intent queries) | 2 hours | Not started — [#2942](https://github.com/jikig-ai/soleur/issues/2942) |
+| M42 | Consolidate homepage to single H1 (currently 6 H1s dilute topical signal — demote 5 to H2) | 30 min | Not started — [#2943](https://github.com/jikig-ai/soleur/issues/2943) |
+| M43 | Remove `- Soleur` brand-suffix duplication from titles already containing "Soleur" (8 pages waste SERP character budget) | 30 min | Not started — [#2944](https://github.com/jikig-ai/soleur/issues/2944) |
+| M44 | Cross-link Person entity in JSON-LD across home, /about/, blog posts (canonical founder entity for E-E-A-T retrieval; depends on M46) | 1 hour | Not started — [#2946](https://github.com/jikig-ai/soleur/issues/2946) |
+| M45 | Inject FAQPage JSON-LD on 6 FAQ-bearing pages (home, agents, vision, getting-started, pricing, skills — highest-impact AEO fix using existing copy) | 2 hours | Not started — [#2948](https://github.com/jikig-ai/soleur/issues/2948) |
+| M46 | Publish About/Founder page with Person schema (Jean Deruelle bio, Jikigai disclosure, contact, stable `@id` — required precursor for M44 and E-E-A-T scoring) | 4 hours | Not started — [#2949](https://github.com/jikig-ai/soleur/issues/2949) |
 
-**Gate:** No recruitment outreach until M1-M4, M12-M17, and M18-M40 complete.
+**Gate:** No recruitment outreach until M1-M4, M12-M17, and M18-M46 complete.
 
 ---
 
@@ -390,6 +396,8 @@ Low-priority improvements deferred until after validation. Revisit when the plat
 | L21 | Propagate Jean Deruelle byline across remaining blog entries (E-E-A-T consistency) | P2 | [#2807](https://github.com/jikig-ai/soleur/issues/2807) | Not started |
 | L22 | Add homepage meta description (CaaS + AI agents + solo founders — SERP CTR) | P2 | [#2808](https://github.com/jikig-ai/soleur/issues/2808) | Not started |
 | L23 | Investigate render-blocking css/style.css on homepage (LCP check first) | P3 | [#2809](https://github.com/jikig-ai/soleur/issues/2809) | Not started |
+| L24 | Replace `<base href="/">` + relative nav with absolute root-relative paths (fragile pattern; some SEO/AI-crawler tooling handles `<base>` inconsistently) | P2 | [#2945](https://github.com/jikig-ai/soleur/issues/2945) | Not started |
+| L25 | Expose `dateModified` on `WebPage` JSON-LD for static pages (sitemap `lastmod` already present; in-page freshness signal helps AI engines) | P2 | [#2947](https://github.com/jikig-ai/soleur/issues/2947) | Not started |
 
 ---
 
@@ -440,4 +448,4 @@ Next review: 2026-04-17.
 
 ---
 
-_Generated: 2026-03-23. Domain review: CTO, CLO, CFO, CMO (2026-03-23). Milestone audit: 2026-04-03. CPO weekly review: 2026-04-06. Status sync from GitHub milestones: 2026-04-10. CPO weekly review + status sync: 2026-04-13. Growth audit intake: 2026-04-18 (12 issues: 1 to Phase 3, 8 to Marketing Gate, 3 to Post-MVP). Growth audit intake: 2026-04-19 (17 issues: 1 P0 to Phase 3 infra, 1 P0 + 6 P1 to Marketing Gate M26-M32, 9 P2 to Post-MVP L11-L19). Growth audit intake: 2026-04-21 (6 issues: 5 to Marketing Gate M33-M37, 1 to Post-MVP L20). Growth audit intake: 2026-04-22 (6 issues: 3 to Marketing Gate M38-M40 for P1 inline fixes, 3 to Post-MVP L21-L23 for P2/P3 hygiene; 3 pillar issues #2559/#2561/#2712 already in Phase 4; 4 Post-MVP items #2556/#2558/#2669/#2670 already in L7-L14). Sources: business-validation.md (2026-03-12), competitive-intelligence.md (2026-03-12), pricing-strategy.md (2026-03-12), brand-guide.md (2026-02-21). Workshop conducted via /soleur:product-roadmap skill. Finance cost model reconciled 2026-04-23 (#2835) — CFO burn figure corrected from stale EUR 35-44 (~10× underestimate) to R&D/COGS split (~$81/mo product COGS, ~$491/mo all-in)._
+_Generated: 2026-03-23. Domain review: CTO, CLO, CFO, CMO (2026-03-23). Milestone audit: 2026-04-03. CPO weekly review: 2026-04-06. Status sync from GitHub milestones: 2026-04-10. CPO weekly review + status sync: 2026-04-13. Growth audit intake: 2026-04-18 (12 issues: 1 to Phase 3, 8 to Marketing Gate, 3 to Post-MVP). Growth audit intake: 2026-04-19 (17 issues: 1 P0 to Phase 3 infra, 1 P0 + 6 P1 to Marketing Gate M26-M32, 9 P2 to Post-MVP L11-L19). Growth audit intake: 2026-04-21 (6 issues: 5 to Marketing Gate M33-M37, 1 to Post-MVP L20). Growth audit intake: 2026-04-22 (6 issues: 3 to Marketing Gate M38-M40 for P1 inline fixes, 3 to Post-MVP L21-L23 for P2/P3 hygiene; 3 pillar issues #2559/#2561/#2712 already in Phase 4; 4 Post-MVP items #2556/#2558/#2669/#2670 already in L7-L14). Growth audit intake: 2026-04-27 (8 issues: 6 to Marketing Gate M41-M46 — #2942/#2943/#2944 P1 SERP-signal fixes, #2946 P2 Person entity cross-link, #2948 P1 FAQPage JSON-LD, #2949 P1 About/Founder page; 2 to Post-MVP L24-L25 — #2945 base-href hygiene, #2947 dateModified on JSON-LD). Sources: business-validation.md (2026-03-12), competitive-intelligence.md (2026-03-12), pricing-strategy.md (2026-03-12), brand-guide.md (2026-02-21). Workshop conducted via /soleur:product-roadmap skill. Finance cost model reconciled 2026-04-23 (#2835) — CFO burn figure corrected from stale EUR 35-44 (~10× underestimate) to R&D/COGS split (~$81/mo product COGS, ~$491/mo all-in)._
