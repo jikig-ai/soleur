@@ -614,6 +614,14 @@ post_bluesky() {
     return 0
   fi
 
+  local char_count
+  char_count=$(printf '%s' "$content" | wc -m)
+  if (( char_count > 300 )); then
+    content=$(printf '%s' "$content" | cut -c1-297)
+    content="${content}..."
+    echo "Warning: Bluesky content truncated from ${char_count} to 300 characters." >&2
+  fi
+
   local stderr_file
   stderr_file=$(make_tmp)
   if ! bash "$BSKY_SCRIPT" post "$content" 2>"$stderr_file"; then
