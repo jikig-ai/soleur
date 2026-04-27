@@ -9,6 +9,20 @@
 **Designs:** `knowledge-base/product/design/command-center/screenshots/06-11` (six PNGs)
 **Milestone:** Post-MVP / Later
 
+> **Deepen-plan applied (2026-04-27):** Multi-lens review (architecture-strategist, code-simplicity, type-design-analyzer, performance-oracle, agent-native-reviewer, test-design-reviewer, security-sentinel, pattern-recognition-specialist) surfaced 11 findings; all folded inline. Key changes:
+>
+> 1. **`tool-use-chip.tsx` redesigned** — original plan duplicated existing `MessageBubble` "Working" pill. Chip now scoped to **routing/system events** OUTSIDE leader bubbles (pre-bubble Skill dispatch, system-role spans). Per-leader tool_use stays on `MessageBubble.toolLabel`.
+> 2. **`subagent_complete` correlation** — added `Map<spawnId, { messageIdx, childIdx }>` reducer index; `subagent_complete` carries `spawnId` only (no `parentId`), so reverse-lookup is mandatory.
+> 3. **`interactive_prompt` ownership** — local optimistic resolution must scope by `(promptId, conversationId)` tuple, not `promptId` alone (cross-conversation collision possible if reducer reused across tabs).
+> 4. **`activeStreams` re-keying deferred** — master plan §291 calls for re-keying to `Map<string, number>` keyed by `${parent_id}:${leader_id}`. Stage 4 keeps `Map<DomainLeaderId, number>` and tracks subagent groups via a separate index. Re-keying is a Stage 8 cleanup concern, NOT a Stage 4 prerequisite.
+> 5. **Markdown rendering for `plan_preview`** — V1 falls back to `format-assistant-text.ts` (existing client util) which handles code fences and line breaks; full markdown is V2.
+> 6. **`workflow_ended` is BOTH ambient + in-list** — clarified the ambient lifecycle bar's "ended" state is a separate visual from the in-list summary card. Both render simultaneously and are removed when user starts a new conversation.
+> 7. **Pre-existing `isClassifying` ad-hoc derivation** — replaced with `WorkflowLifecycleState` slice; the legacy `classify_response` event maps to `routing` lifecycle for back-compat.
+> 8. **Memo dep audit on `MessageBubble`** — adding `parentId` to props REQUIRES reading the existing `memo`-comparator (memo's default shallow compare handles primitives; verify no custom `arePropsEqual` arg).
+> 9. **Test isolation** — vitest cross-file leaks (per `cq-vitest-setup-file-hook-scope`) — new test files must NOT use `afterEach(vi.unstubAllGlobals)`.
+> 10. **Bash command preview escaping** — `bash_approval` variant must escape `payload.command` against XSS/HTML; the runner sets `gated: true` for review-required commands but the UI must not render command as innerHTML.
+> 11. **Dependency on `tool_progress` for chip lifetime is wrong** — `tool_progress` is a 1/5s heartbeat for watchdog reset, not a "tool started" event. Chip lifecycle keys off `tool_use` (start) → `stream` first content (text arrives) OR `stream_end`.
+
 ## Overview
 
 Stage 4 of the cc-soleur-go pivot delivers the **client-side rendering surfaces** that Stage 3 (#2885) reserved typed shapes for. With `WSMessage` already widened (`subagent_spawn`, `subagent_complete`, `interactive_prompt`, `interactive_prompt_response`, `workflow_started`, `workflow_ended`) and the chat-state-machine routing those events as inert pass-throughs (chat-state-machine.ts §74–89), Stage 4 turns each typed payload into a rendered bubble or chip.
@@ -103,11 +117,13 @@ Stage 4 inherits Stage 0–3 hypotheses already proven; the only new structural 
 
 - `apps/web-platform/lib/chat-state-machine.ts` — `applyStreamEvent` cases for the new event types now produce real messages (replacing the inert pass-throughs at §85–89):
   - `subagent_spawn` with no `parentId` match → start a new `subagent_group` message; with `parentId` → append to existing group's `children`.
-  - `subagent_complete` → mutate matching child's `status`.
-  - `interactive_prompt` → push `ChatInteractivePromptMessage`.
+  - `subagent_complete` → mutate matching child's `status`. **`subagent_complete` carries `spawnId` only (no `parentId`)** — the reducer MUST maintain a `Map<spawnId, { messageIdx, childIdx }>` index built up on each `subagent_spawn` to reverse-lookup which subagent_group.children entry to mutate. Without this index the reducer would have to O(N²) scan all messages to find the matching spawn. Add the index to `ChatStateSnapshot`. (Architecture-strategist finding.)
+  - `interactive_prompt` → push `ChatInteractivePromptMessage` keyed by `(promptId, conversationId)` tuple — `promptId` alone is insufficient if a future feature shares the reducer across tabs/conversations.
   - `workflow_started` → set ambient `workflowState`, NO message.
-  - `workflow_ended` → set ambient `workflowState`, push `ChatWorkflowEndedMessage` for the in-list summary card.
-  - `tool_progress` (existing) → emit ephemeral `tool_use_chip` while in-flight; remove on `stream` text arrival or `tool_complete`. **Decision:** chip lifecycle is reducer-managed (created on `tool_progress`, removed when same `toolUseId` produces a `text` delta). Document the chip lifetime in the runner header per `cq-code-comments-symbol-anchors-not-line-numbers`.
+  - `workflow_ended` → set ambient `workflowState` (lifecycle bar) AND push `ChatWorkflowEndedMessage` (in-list summary). **Both render simultaneously** — the bar is sticky context; the in-list card is the conversational marker. Test: assert both appear after `workflow_ended` event.
+  - `tool_use` (existing event for SDK-native tool starts; verified at chat-state-machine.ts:121 — already mutates the leader's `MessageBubble.state` to `"tool_use"` and sets `toolLabel`) → existing path handles per-leader bubbles. **NEW for Stage 4:** if `event.leaderId === "cc_router"` OR `event.leaderId === "system"` (i.e., no real leader bubble exists yet, e.g., during the routing pre-dispatch narration), instead emit a `ChatToolUseChipMessage` chip rendered above the message list. Chip is removed when (a) the corresponding `stream` text event arrives OR (b) `stream_end` for the same `cc_router`/`system` leader OR (c) `workflow_started` fires (replaces with active lifecycle bar).
+  - `tool_progress` (existing 1/5s heartbeat for watchdog reset — NOT a tool-start signal): NO new chip created. Existing logic at chat-state-machine.ts:144 stays unchanged. (Pattern-recognition-specialist correction — original plan misread `tool_progress` as a chip-start signal.)
+  - `classify_response` (legacy router event, still in WSMessage union): for **legacy conversations** (where `conversation.active_workflow IS NULL`), the existing `isClassifying`-driven chip at `chat-surface.tsx:382` stays unchanged — Stage 4 does not refactor the legacy path. For **soleur_go conversations**, this event does not fire (the legacy classifier isn't invoked). The new `WorkflowLifecycleBar` ONLY renders when `active_workflow !== null`. AC19 enforces no-regression on the legacy path.
 
 - `apps/web-platform/components/chat/chat-surface.tsx` — extend the `messages.map(...)` switch (§335–375) with branches for `subagent_group`, `interactive_prompt`, `workflow_ended`, `tool_use_chip`. Add an exhaustiveness rail using a helper:
   ```ts
@@ -117,10 +133,10 @@ Stage 4 inherits Stage 0–3 hypotheses already proven; the only new structural 
 
 **Tasks (per `cq-write-failing-tests-before` — RED before GREEN):**
 
-- [ ] 1.1 — RED: extend `apps/web-platform/test/chat-state-machine.test.ts` with cases for each new event → ChatMessage mapping (subagent_spawn → subagent_group; interactive_prompt → interactive_prompt; workflow_ended → workflow_ended message; tool_progress → tool_use_chip with completed=false; matching content_block_stop → completed=true).
+- [ ] 1.1 — RED: extend `apps/web-platform/test/chat-state-machine.test.ts` with cases for each new event → ChatMessage mapping: (a) first `subagent_spawn` (no matching parentId) → start `subagent_group` message + register `spawnIndex.set(spawnId, {messageIdx, childIdx:0})`; (b) second `subagent_spawn` with matching `parentId` → append to existing group + register; (c) `subagent_complete` → reverse-lookup via spawnIndex and mutate `children[childIdx].status`; (d) `interactive_prompt` (each kind) → push `ChatInteractivePromptMessage` keyed by `(promptId, conversationId)`; (e) `workflow_started` → ambient slice only, NO message; (f) `workflow_ended` → ambient + in-list summary card BOTH; (g) `tool_use` with `leaderId: "cc_router"` → push `ChatToolUseChipMessage`; (h) subsequent `stream` for `cc_router` leader → chip removed; (i) `tool_progress` does NOT create a chip (regression test for the pattern-recognition correction).
 - [ ] 1.2 — RED: add a TS-only test file `apps/web-platform/test/chat-message-exhaustiveness.test-d.ts` (or inline assertion) that fails `tsc --noEmit` if any new variant is missing the `: never` rail in `chat-surface.tsx`. Per `cq-union-widening-grep-three-patterns`, also `rg "msg\.type === \""` and `rg "msg\?\.type === \""` to confirm no other consumer needs updating.
 - [ ] 1.3 — GREEN: extend `ChatMessage` union with the four new variants.
-- [ ] 1.4 — GREEN: wire reducer cases for `subagent_spawn`, `subagent_complete`, `interactive_prompt`, `workflow_started`, `workflow_ended`, `tool_progress` chip lifecycle.
+- [ ] 1.4 — GREEN: wire reducer cases. Add `spawnIndex: Map<string, { messageIdx: number; childIdx: number }>` to `ChatStateSnapshot` so `subagent_complete` (which carries `spawnId` only — verified at lib/types.ts:238) can mutate the right child without O(N²) scan. `workflow_state: WorkflowLifecycleState` slice. The `tool_use` reducer case is the start-event for chip lifecycle (NOT `tool_progress` which is heartbeat-only — verified at chat-state-machine.ts:144). Map legacy `classify_response` events to `workflow_state.state = "routing"` for back-compat.
 - [ ] 1.5 — GREEN: extend `chat-surface.tsx` render loop with `null`-returning branches + `: never` rail.
 - [ ] 1.6 — Run `bun --cwd apps/web-platform test chat-state-machine` (or `node node_modules/vitest/vitest.mjs run` per `cq-in-worktrees-run-vitest-via-node-node`) — RED tests should now go GREEN.
 
@@ -242,7 +258,7 @@ Stage 4 inherits Stage 0–3 hypotheses already proven; the only new structural 
   - `tool_progress(toolName: "Skill")` → `workflow.state = "routing"`, extract `skillName` from event input if present.
   - `workflow_started` → `workflow.state = "active"; workflow = event.workflow`.
   - `workflow_ended` → `workflow.state = "ended"`.
-- `apps/web-platform/components/chat/chat-surface.tsx` — replace existing `isClassifying` chip (§382 `isClassifying && (...)`) with `<WorkflowLifecycleBar lifecycle={workflow} onSwitchWorkflow={...} onStartNewConversation={...} />` rendered ABOVE the `messages.map(...)` block, sticky positioning. The new bar absorbs `isClassifying`'s "Routing to right experts" responsibility. **Decision:** Keep the legacy `isClassifying`-driven amber chip for the legacy router code path (when `active_workflow` is NULL); show the new bar only when `routing | active | ended`. Two render paths gated by `useFeatureFlag("command-center-soleur-go")` OR by checking `conversation.active_workflow !== null`. Pick the latter (no flag re-read at render — avoids stale flag risk).
+- `apps/web-platform/components/chat/chat-surface.tsx` — render the new `<WorkflowLifecycleBar>` above the `messages.map(...)` block, gated on `conversation.active_workflow !== null` (NOT on the feature flag — avoids stale-flag-at-render risk). Legacy router code path (`active_workflow === null`) keeps the existing `isClassifying` chip at §382 unchanged. Two render paths coexist; AC19 enforces no regression on the legacy one. The lifecycle bar is sticky-positioned per design screenshot 07.
 - `apps/web-platform/components/chat/chat-input.tsx` — disable input + show "This conversation has ended" placeholder when `conversation.workflow_ended_at !== null`. ~15 lines. Re-read existing chat-input.tsx (608 lines) first.
 
 **Tasks:**
@@ -256,9 +272,9 @@ Stage 4 inherits Stage 0–3 hypotheses already proven; the only new structural 
 - [ ] 4.7 — GREEN: extend `chat-input.tsx` ended-state disable. Re-read first per `hr-always-read-a-file-before-editing-it`.
 - [ ] 4.8 — Visual QA: take screenshot of all 3 lifecycle states for PR description.
 
-### Phase 5 — `tool-use-chip.tsx` (inline progress chip per tool_use)
+### Phase 5 — `tool-use-chip.tsx` (router/system progress chip — pre-bubble surface)
 
-**Goal:** Continuous perceived progress instead of 5-30s silence gaps during tool calls. Renders on `tool_progress` (or content_block_start equivalent) and removes when text deltas arrive for the same `toolUseId`.
+**Goal:** Visual continuity for tool_use events that have NO leader bubble yet (the routing/system span — pre-`workflow_started`). Per-leader tool_use already shows on `MessageBubble.toolLabel` (existing pattern at message-bubble.tsx:67-79); the new chip is for the brief window between user message and first leader bubble (the `cc_router` / `system` events). **DO NOT duplicate the per-leader pill.**
 
 **Files to create:**
 
@@ -267,24 +283,26 @@ Stage 4 inherits Stage 0–3 hypotheses already proven; the only new structural 
   interface ToolUseChipProps {
     toolName: string;
     toolLabel: string; // pre-built by server (server/tool-labels.ts)
-    completed?: boolean;
+    leaderId: "cc_router" | "system"; // restricted union — chip is ONLY for these
   }
   ```
-  - Render: small pill with tool icon (or first char), label, pulse-dot while in-flight, fade-out on `completed=true`.
-  - Multiple in-flight chips coexist (parent renders a `<div className="flex flex-wrap gap-2">` of all active chips).
-  - **Labels arrive pre-built** via the `toolLabel` field on the `tool_progress` WS event (set server-side by `server/tool-labels.ts:buildToolLabel`). The chip does NOT import the server module. (See Research Reconciliation row 2.)
+  - Render: small pill — pulse-dot + `toolLabel` + neutral border (`leader-colors.ts` `cc_router` or `system` border).
+  - Multiple chips coexist if multiple `cc_router`/`system` tool_uses fire simultaneously (rare but possible). Use `data-tool-use-id` for test hooks (note: existing `tool_use` event has NO `toolUseId` field — chip identity is `(leaderId, label, sequence)` for now; revisit if Stage 3 adds toolUseId to `tool_use`).
+  - **Labels arrive pre-built** as `event.label` on the `tool_use` WS event (verified at lib/types.ts:206 `type: "tool_use"; leaderId; label: string`). Chip reads `msg.toolLabel` directly. NO `@/server/tool-labels` import.
+  - **Bash command rendering safety:** all text content rendered through standard JSX (default escapes HTML). Forbidden render APIs are listed in the `Risks` section escape audit; sentinel grep enforces zero hits.
 
 **Files to edit:**
 
-- `apps/web-platform/components/chat/chat-surface.tsx` — replace the `tool_use_chip` branch's `null` placeholder with `<ToolUseChip toolName={msg.toolName} toolLabel={msg.toolLabel} completed={msg.completed} />`.
+- `apps/web-platform/components/chat/chat-surface.tsx` — replace the `tool_use_chip` branch's `null` placeholder with `<ToolUseChip toolName={msg.toolName} toolLabel={msg.toolLabel} leaderId={msg.leaderId} />`. Render chips ABOVE the messages list (alongside / replacing the lifecycle bar's "routing" amber pulse).
 
 **Tasks:**
 
-- [ ] 5.1 — RED: create `apps/web-platform/test/tool-use-chip.test.tsx`: (a) chip renders with provided `toolLabel`; (b) `completed=false` shows pulse; (c) `completed=true` removes pulse; (d) multiple chips coexist when reducer state has multiple `tool_use_chip` messages.
-- [ ] 5.2 — RED: extend `apps/web-platform/test/chat-state-machine.test.ts`: `tool_progress` event creates `tool_use_chip` ChatMessage; subsequent `text` delta with matching `toolUseId` (or matching `tool_complete` if such an event exists in Stage 3 — verify) marks the chip `completed: true`.
+- [ ] 5.1 — RED: create `apps/web-platform/test/tool-use-chip.test.tsx`: (a) chip renders with provided `toolLabel`; (b) `leaderId: cc_router` shows yellow border per `leader-colors.ts`; (c) `leaderId: system` shows neutral border; (d) multiple chips coexist when reducer state has multiple `tool_use_chip` messages; (e) escape audit per `Risks` (use grep, not runtime assertion).
+- [ ] 5.2 — RED: extend `apps/web-platform/test/chat-state-machine.test.ts`: `tool_use` event with `leaderId: "cc_router"` creates `tool_use_chip` ChatMessage; subsequent `stream` event for same `cc_router` leader removes the chip; `workflow_started` event removes all chips. **Negative test:** `tool_progress` event does NOT create a chip (regression for the heartbeat-vs-start-event distinction).
 - [ ] 5.3 — GREEN: implement `tool-use-chip.tsx`.
-- [ ] 5.4 — GREEN: wire `chat-surface.tsx` render dispatch.
-- [ ] 5.5 — Verify `bun --cwd apps/web-platform test tool-use-chip chat-state-machine` passes.
+- [ ] 5.4 — GREEN: wire `chat-surface.tsx` render dispatch above messages list.
+- [ ] 5.5 — Verify `node node_modules/vitest/vitest.mjs run apps/web-platform/test/tool-use-chip apps/web-platform/test/chat-state-machine` passes.
+- [ ] 5.6 — Sentinel grep: `rg "from \"@/server/tool-labels\"" apps/web-platform/components/` returns zero. Per the escape audit in `Risks`, `rg "danger" apps/web-platform/components/chat/tool-use-chip.tsx` returns zero (catches innerHTML-style escape hatches by prefix).
 
 ### Phase 6 — Integration smoke + visual QA
 
@@ -344,6 +362,10 @@ Stage 4 inherits Stage 0–3 hypotheses already proven; the only new structural 
 - [ ] **AC13** — `Closes #2886` in PR body per `wg-use-closes-n-in-pr-body-not-title-to`.
 - [ ] **AC14** — `compound` skill run before each commit per `wg-before-every-commit-run-compound-skill`.
 - [ ] **AC15** — No incidental file drift. `git diff main --name-only` lists only the planned files. Per `hr-never-git-add-a-in-user-repo-agents`, allowlist commits to chat components + tests.
+- [ ] **AC16** — `subagent_complete` correlation works via `spawnIndex: Map<spawnId, {messageIdx, childIdx}>` in `ChatStateSnapshot`. Test: spawn 3 subagents under one parent, complete the second one, assert only `children[1].status` mutated; the other two children unchanged.
+- [ ] **AC17** — Escape audit clean: `rg "danger|innerHTML|__html" apps/web-platform/components/chat/{interactive-prompt-card,tool-use-chip,subagent-group,workflow-lifecycle-bar}.tsx` returns zero. Render-as-text test: an `interactive_prompt(bash_approval)` payload with `command: "<script>alert(1)</script>"` renders as visible text (`container.querySelector("script")` is null).
+- [ ] **AC18** — Vitest cross-file isolation: `rg "afterEach.*unstubAllGlobals|afterEach.*restoreAllMocks" apps/web-platform/test/{subagent-group,interactive-prompt-card,workflow-lifecycle-bar*,tool-use-chip,cc-soleur-go-end-to-end-render}.test.tsx` returns zero per `cq-vitest-setup-file-hook-scope`.
+- [ ] **AC19** — Backwards-compat: legacy `classify_response` event maps to `workflow_state.state = "routing"`; legacy router conversations (where `active_workflow IS NULL`) still render the existing classic chip path (no regression in existing chat-surface-sidebar tests).
 
 ### Post-merge (none required)
 
@@ -365,7 +387,15 @@ This is a pure-component PR; no migrations, no infra, no Doppler changes, no ext
 4. **`message-bubble.tsx` memo regression** — adding `parentId` to props changes the memo input contract. If dep array isn't updated, stale renders. **Mitigation:** Phase 2.3 explicitly re-reads the file first (`hr-always-read-a-file-before-editing-it`) and updates the memo. RED test `message-bubble-memo.test.tsx` already exists; extend it for `parentId` re-render trigger.
 5. **`workflow-lifecycle-bar` skill-name extraction failure** — if the `tool_use(Skill)` event input doesn't expose `skill_name` (Stage 3 may have stripped it), the routing state falls back to generic "Routing your message…". **Mitigation:** verify at Phase 4 task 4.2 by reading `apps/web-platform/lib/types.ts` for the `tool_progress` event payload. If `skill_name` not exposed, file a V2 issue to plumb it through; ship V1 with generic copy.
 6. **Server `tool-labels.ts` import temptation** — a careless GREEN pass might `import { buildToolLabel } from "@/server/tool-labels"` from the chip component, pulling `observability` and Sentry into the client bundle. **Mitigation:** the chip props specify `toolLabel: string` (pre-built); reviewers must reject any client → server import. Add a sentinel grep in Phase 6: `rg "from \"@/server/tool-labels\"" apps/web-platform/components/` returns zero.
-7. **Markdown rendering for `plan_preview`** — if the codebase doesn't already have a markdown renderer, this PR pulls in a new dep, conflicting with master plan's "no new deps" stance. **Mitigation:** Phase 3 task 3.4 first greps `rg "react-markdown\|marked\|markdown-to-jsx" apps/web-platform/`. If absent, fall back to plain-text rendering with line breaks (V1 minimal); file V2 issue for full markdown rendering. Per `cq-write-failing-tests-before` the test pins behavior so the V2 swap is safe.
+7. **Markdown rendering for `plan_preview`** — if the codebase doesn't already have a markdown renderer, this PR pulls in a new dep, conflicting with master plan's "no new deps" stance. **Mitigation:** Phase 3 task 3.4 first greps `rg "react-markdown\|marked\|markdown-to-jsx" apps/web-platform/`. If absent, route through existing `apps/web-platform/lib/format-assistant-text.ts` (handles code fences and line breaks; verified present in `lib/` listing). File V2 issue for full markdown rendering. Per `cq-write-failing-tests-before` the test pins behavior so the V2 swap is safe.
+
+8. **HTML-escape audit on user-visible string fields** — three `interactive_prompt` payloads carry attacker-influenced strings: `bash_approval.command`, `diff.path`, `notebook_edit.notebookPath`. The `bash_approval` is the most sensitive (a malicious sub-skill could craft a command containing `<script>` to render). React's default text-node escaping handles this **iff** the string is rendered as a child node, not via an escape-hatch render API. **Mitigation:** Phase 6 sentinel grep `rg "danger|innerHTML|__html" apps/web-platform/components/chat/{interactive-prompt-card,tool-use-chip,subagent-group,workflow-lifecycle-bar}.tsx` returns zero. Test asserts that a payload containing `<script>alert(1)</script>` renders as visible text, not an executed tag, by checking `container.querySelector("script")` is null. (Security-sentinel finding.)
+
+9. **`MessageBubble` memo regression risk on `parentId` add** — the existing `memo(MessageBubble, ...)` at message-bubble.tsx:60 uses default shallow compare (no custom comparator argument; verified visually in the snippet). Adding a primitive `parentId` prop is shallow-compare-safe by default. **Mitigation:** Phase 2.3 explicitly re-reads message-bubble.tsx first per `hr-always-read-a-file-before-editing-it`. Negative grep: `rg "memo\([A-Z][a-zA-Z]+,\s*\(" apps/web-platform/components/chat/message-bubble.tsx` returns zero (confirms no custom comparator hidden behind a refactor that changed the default). If a comparator IS added, `parentId` MUST be added to it.
+
+10. **Vitest cross-file leak on `vi.unstubAllGlobals` in new test files** — per `cq-vitest-setup-file-hook-scope`, the `setup-file` hooks run **per-test, not per-file**. Adding `afterEach(vi.unstubAllGlobals)` in any of the new test files would clobber module-scope `vi.stubGlobal(...)` in sibling test files loaded earlier. **Mitigation:** new test files MUST NOT install `afterEach(vi.unstubAllGlobals)` or `afterEach(vi.restoreAllMocks)`; if global cleanup is needed, use `afterAll` or `vi.unstubAllGlobals()` in the specific test that stubbed. Phase 6 sentinel grep: `rg "afterEach.*unstubAllGlobals|afterEach.*restoreAllMocks" apps/web-platform/test/{subagent-group,interactive-prompt-card,workflow-lifecycle-bar*,tool-use-chip,cc-soleur-go-end-to-end-render}.test.tsx` returns zero. (Test-design-reviewer finding.)
+
+11. **`AbortSignal.timeout` traps in interactive-prompt cards** — if any variant adds a client-side timeout (e.g., "auto-dismiss prompt after 5min"), `AbortSignal.timeout(ms)` is NOT reliably intercepted by `vi.useFakeTimers` per `cq-abort-signal-timeout-vs-fake-timers`. **Mitigation:** Phase 3 task 3.2 already records V1 decision: NO client-side auto-dismiss. If V2 adds one, use manual `AbortController + setTimeout(controller.abort, ms)`.
 
 ## Domain Review
 
@@ -384,6 +414,48 @@ This is a pure-component PR; no migrations, no infra, no Doppler changes, no ext
 The master plan's design pass (#2858) already produced wireframes-as-screenshots and a `cc-embedded-skill-surfaces.pen` source. Stage 4 implements those artifacts. The advisory-tier auto-accept is correct: this PR modifies existing UI surfaces (chat-surface, message-bubble) and adds new components whose visual contract is already specified. No new flows are introduced beyond what the master plan's BLOCKING-tier review already approved.
 
 If implementation deviates visually from the screenshots, capture the deviation in PR description for reviewer call-out. Do not unilaterally repaint.
+
+## Agent-Native Reviewer Findings (deepen pass)
+
+Stage 4 is a pure-component PR — no MCP tool surface added, no agent-driven actions exposed. Agent-native parity for the cc-soleur-go feature is tracked by master plan §369–386 V2 issues V2-1 through V2-5 (cc_send_user_message, cc_respond_to_interactive_prompt, cc_set_active_workflow + cc_abort_workflow, conversation_get extension, system-role transcript lines for `workflow_started`/`workflow_ended`).
+
+**Stage 4 implications for those V2 issues:**
+
+- The new `ChatInteractivePromptMessage` shape carries everything an MCP `cc_respond_to_interactive_prompt` tool would need (`promptId`, `conversationId`, `kind`, `payload`). When V2-2 lands, the tool reads from the same `(promptId, conversationId)`-keyed pending-prompts registry the runner manages; the UI's optimistic resolution path is the reference implementation.
+- `WorkflowLifecycleState` slice values (`idle | routing | active | ended`) align with future MCP `cc_get_workflow_status` response enum. Naming is forward-compatible.
+- `ChatToolUseChipMessage` is UI-only; no MCP equivalent required (agents introspect raw `tool_use` blocks directly via `parent_tool_use_id`).
+
+No new V2 issues need filing from Stage 4 deepen — the master plan's V2 list already covers the agent-native gap. Stage 4 should ensure its data shapes are stable (don't rename `promptKind` to `kind` once V2 ships against the original name).
+
+## Framework / Library Notes (context7 deepen pass)
+
+**React 19 (`apps/web-platform/package.json` shows `^19.1.0`):**
+
+- `useTransition` and `useDeferredValue` are available — DO NOT use them in the lifecycle bar's state slice. The bar's "routing" state is load-bearing for perceived latency (must render in the same paint as the user message); deferring it would make perceived latency WORSE. Same logic applies to `tool-use-chip`. Stick with synchronous `useState`/reducer dispatch.
+- `useOptimistic` exists for optimistic UI updates — could be used in `interactive-prompt-card` for the "click → mark resolved" path, but it adds complexity for V1. Defer to V2 polish; V1 manages optimistic state via reducer dispatch (the existing pattern in `chat-state-machine.ts`).
+- `<form action={...}>` Server Actions are NOT applicable — the chat surface is fully client-rendered (`"use client"` at chat-surface.tsx:1).
+
+**vitest (verified worktree-running pattern at `cq-in-worktrees-run-vitest-via-node-node`):**
+
+- Run via `node node_modules/vitest/vitest.mjs run <path>` — never `npx vitest`.
+- For React Testing Library tests, ensure `apps/web-platform/test/setup.ts` (or equivalent) is loaded automatically per the existing vitest.config.
+
+**Tailwind / Tailwind animations:**
+
+- The pulse animation (`animate-pulse`) is built into Tailwind core; no plugin needed. Verified existing usage at chat-surface.tsx:382 (`animate-pulse rounded-full bg-amber-500`) and the existing classic chip pattern.
+- `data-*` attributes pass through to DOM by default; safe for all the test hooks this plan prescribes.
+
+## Test-Design Reviewer Findings (deepen pass)
+
+1. **`.toBe()` not `.toEqual()` for primitive response payloads** — already enforced in plan (AC4 cites `cq-mutation-assertions-pin-exact-post-state`). For object-shaped payloads (e.g., `interactive_prompt_response.response: string[]`), use `.toEqual([...])` since `.toBe()` is reference equality.
+
+2. **Mock fetch shape (`cq-preflight-fetch-sweep-test-mocks`)** — none of the new components fetch directly; they consume reducer-derived state. No mock-fetch concern for Stage 4. Sentinel: `rg "global\.fetch|globalThis\.fetch" apps/web-platform/test/{subagent-group,interactive-prompt-card,workflow-lifecycle-bar*,tool-use-chip}.test.tsx` returns zero.
+
+3. **`vi.useFakeTimers` only when needed** — the lifecycle bar's "8s of message send" test (Phase 4.2) needs `vi.setSystemTime`. The other component tests do NOT. Avoid blanket `useFakeTimers` in test setup; per `cq-vitest-setup-file-hook-scope`, scoped per-test usage prevents cross-file leaks.
+
+4. **`data-*` attributes for assertion hooks** — every new component MUST expose at least one `data-*` attribute that test assertions can target (`data-prompt-kind`, `data-lifecycle-state`, `data-child-status`, `data-tool-chip-id`). Per `cq-jsdom-no-layout-gated-assertions`, this is the only stable JSDOM-safe signal.
+
+5. **Snapshot tests are forbidden** — Stage 4 is a UI scope where snapshot tests would appear "easy" but produce noisy diffs and false-green mutation regressions. Use targeted assertions on data-* attributes and visible text.
 
 ## Resume Prompt
 
