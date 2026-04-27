@@ -1,5 +1,14 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
+const { mockReportSilentFallback } = vi.hoisted(() => ({
+  mockReportSilentFallback: vi.fn(),
+}));
+
+vi.mock("@/server/observability", () => ({
+  reportSilentFallback: mockReportSilentFallback,
+  warnSilentFallback: vi.fn(),
+}));
+
 import {
   getPendingPromptRegistry,
   getCcStartSessionRateLimiter,
@@ -21,6 +30,7 @@ import { KeyInvalidError } from "@/lib/types";
 describe("cc-dispatcher singletons + orchestration", () => {
   beforeEach(() => {
     __resetDispatcherForTests();
+    mockReportSilentFallback.mockClear();
   });
 
   it("getPendingPromptRegistry returns a stable singleton", () => {
@@ -230,6 +240,109 @@ describe("cc-dispatcher singletons + orchestration", () => {
     // Message must not leak raw stack / class internals.
     expect(errMsg.message).not.toContain("KeyInvalidError");
     expect(errMsg.message).not.toContain("at ");
+  });
+
+  // ---------------------------------------------------------------------------
+  // Sentry mirror debounce — second call within 5-min window does NOT
+  // re-mirror the same (userId, errorClass) combo. Prevents the
+  // misconfigured-prod scenario where 1 QPS = 86k Sentry events/day.
+  // ---------------------------------------------------------------------------
+  it("Sentry mirror is debounced per (userId, errorClass) within 5-minute window", async () => {
+    const sendToClient = vi.fn().mockReturnValue(true);
+    const persistActiveWorkflow = vi.fn().mockResolvedValue(undefined);
+
+    const { __setCcRunnerForTests } = await import("@/server/cc-dispatcher");
+    const stubRunner = {
+      // biome-ignore lint/suspicious/noExplicitAny: minimal stub
+      dispatch: vi.fn(async () => {
+        throw new KeyInvalidError();
+      }),
+      hasActiveQuery: () => false,
+      activeQueriesSize: () => 0,
+      reapIdle: () => 0,
+      closeConversation: () => {},
+      respondToToolUse: () => false,
+      // biome-ignore lint/suspicious/noExplicitAny: minimal stub
+    } as any;
+    __setCcRunnerForTests(stubRunner);
+
+    const baseArgs = {
+      userId: "u-debounce",
+      conversationId: "conv-1",
+      userMessage: "hi",
+      currentRouting: { kind: "soleur_go_pending" } as const,
+      sendToClient,
+      persistActiveWorkflow,
+    };
+
+    await dispatchSoleurGo(baseArgs);
+    await dispatchSoleurGo(baseArgs);
+    await dispatchSoleurGo(baseArgs);
+
+    // Mirror fires once for (u-debounce, KeyInvalidError); subsequent
+    // calls within the 5-min window are dropped.
+    const dispatchMirrors = mockReportSilentFallback.mock.calls.filter(
+      ([, ctx]) =>
+        ctx?.feature === "cc-dispatcher" && ctx?.op === "dispatch",
+    );
+    expect(dispatchMirrors).toHaveLength(1);
+
+    // The client still sees an error EVERY time — only the Sentry write
+    // is debounced.
+    const errorCalls = sendToClient.mock.calls.filter(
+      ([, msg]) =>
+        msg && typeof msg === "object" && (msg as { type?: string }).type === "error",
+    );
+    expect(errorCalls).toHaveLength(3);
+    for (const call of errorCalls) {
+      expect((call[1] as { errorCode?: string }).errorCode).toBe("key_invalid");
+    }
+  });
+
+  it("Sentry mirror debounces independently for distinct (userId, errorClass) keys", async () => {
+    const sendToClient = vi.fn().mockReturnValue(true);
+    const persistActiveWorkflow = vi.fn().mockResolvedValue(undefined);
+
+    const { __setCcRunnerForTests } = await import("@/server/cc-dispatcher");
+
+    // First user fails with KeyInvalidError.
+    __setCcRunnerForTests({
+      // biome-ignore lint/suspicious/noExplicitAny: minimal stub
+      dispatch: vi.fn(async () => {
+        throw new KeyInvalidError();
+      }),
+      hasActiveQuery: () => false,
+      activeQueriesSize: () => 0,
+      reapIdle: () => 0,
+      closeConversation: () => {},
+      respondToToolUse: () => false,
+      // biome-ignore lint/suspicious/noExplicitAny: minimal stub
+    } as any);
+
+    await dispatchSoleurGo({
+      userId: "u-A",
+      conversationId: "conv-1",
+      userMessage: "hi",
+      currentRouting: { kind: "soleur_go_pending" },
+      sendToClient,
+      persistActiveWorkflow,
+    });
+
+    await dispatchSoleurGo({
+      userId: "u-B",
+      conversationId: "conv-1",
+      userMessage: "hi",
+      currentRouting: { kind: "soleur_go_pending" },
+      sendToClient,
+      persistActiveWorkflow,
+    });
+
+    // Both users got mirrored — debounce key is per-user.
+    const dispatchMirrors = mockReportSilentFallback.mock.calls.filter(
+      ([, ctx]) =>
+        ctx?.feature === "cc-dispatcher" && ctx?.op === "dispatch",
+    );
+    expect(dispatchMirrors).toHaveLength(2);
   });
 
   it("T19b: dispatchSoleurGo surfaces generic message (no errorCode) for unrelated errors", async () => {
