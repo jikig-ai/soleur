@@ -38,7 +38,7 @@ issue #2887.
 Adopt the **two-project isolation model** for the Soleur Supabase
 deployment:
 
-| Doppler config | Supabase project          | Purpose                          |
+| Doppler config | Supabase project ref       | Purpose                          |
 |----------------|----------------------------|-----------------------------------|
 | `soleur/dev`   | `soleur-dev` (new)         | Local dev, integration tests, migration rehearsal |
 | `soleur/prd`   | `ifsccnjhymdmidffkzhl`     | User-facing production            |
@@ -65,24 +65,22 @@ The two projects:
   behaviors.
 
 **Staging deferred.** A third project (`soleur-staging`) for
-Pro-plan-style multi-stage rollout is filed as a follow-up issue and
-deferred to a later phase. The dev/prd split is the load-bearing fix.
+Pro-plan-style multi-stage rollout is tracked in #2910 (milestone:
+Post-MVP / Later) and deferred. The dev/prd split is the load-bearing
+fix.
 
-## Enforcement
-
-The isolation model is enforced at four layers:
+The isolation model is enforced at four layers, in order of precedence:
 
 1. **AGENTS.md hard rule** — `hr-dev-prd-distinct-supabase-projects`
    declares the invariant and is loaded on every agent turn.
-2. **Preflight Check 5 (`Environment Isolation`)** — runs on every
+2. **Preflight Check 4 (`Environment Isolation`)** — runs on every
    `/ship`, dereferences custom-domain CNAMEs, and FAILs if dev and
-   prd resolve to the same Supabase project ref. Defends against
+   prd resolve to the same project ref. Defends against
    subdomain-bypass via canonical-hostname regex
    (`^[a-z0-9]{20}\.supabase\.co$`).
 3. **Strengthened `wg-when-a-pr-includes-database-migrations`** —
-   migrations must be applied to dev FIRST, then prd. Cross-references
-   the hard rule so the runbook and the AGENTS rule reinforce each
-   other.
+   migrations must be applied to dev FIRST, then prd, cross-referencing
+   the hard rule so runbook and AGENTS rule reinforce each other.
 4. **`mu1-cleanup-guard.mjs` `DEV_PROJECT_REF` constant** — refuses
    destructive synthetic-user cleanup unless the active
    `NEXT_PUBLIC_SUPABASE_URL` matches the dev project's exact
@@ -111,37 +109,26 @@ The isolation model is enforced at four layers:
   managers must track both.
 - Bootstrap-trap during the one-time provisioning: the migration
   runner assumes migrations 001–010 are pre-existing on a non-empty
-  `_schema_migrations` table. On a fresh dev project with empty state
-  the runner inserts sentinel rows for 001–010 without applying them.
-  Documented in the `run-migrations.sh` follow-up issue.
+  `_schema_migrations` table. Documented in #2911 (run-migrations.sh
+  `--bootstrap=skip` flag).
 
-**Operational sequence (post-merge):**
+**Operational sequence (post-merge):** see plan §Acceptance Criteria
+in `knowledge-base/project/plans/2026-04-27-fix-supabase-env-isolation-plan.md`
+for the full operator checklist (provision project, apply migrations,
+rotate 6 Doppler keys, audit `ci` config, update
+`mu1-cleanup-guard.mjs` `DEV_PROJECT_REF` in a follow-up PR, close
+#2887).
 
-1. Operator provisions `soleur-dev` Supabase project (Free tier, same
-   org as prd, same region).
-2. Apply 39 migrations via `run-migrations.sh` (with the bootstrap
-   workaround documented in the issue body).
-3. Rotate Doppler `soleur/dev` keys: `SUPABASE_URL`,
-   `NEXT_PUBLIC_SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`,
-   `NEXT_PUBLIC_SUPABASE_ANON_KEY`, `DATABASE_URL`,
-   `DATABASE_URL_POOLER`. `SUPABASE_ACCESS_TOKEN` is account-scoped
-   and stays.
-4. Audit Doppler `ci` config (Phase 6 of the plan): confirm it does
-   not point at the prd project.
-5. Update `mu1-cleanup-guard.mjs` `DEV_PROJECT_REF` constant in a
-   follow-up PR (we cannot commit the new ref pre-merge because
-   provisioning is operator-driven).
-6. Close issue #2887 only after all the above is verified in
-   production.
-
-## References
+## Cross-references
 
 - Issue: #2887 (P0 single-DB blast radius)
 - Discovery: PR #2858 ship Phase 7 migrate-job failure
 - Plan: `knowledge-base/project/plans/2026-04-27-fix-supabase-env-isolation-plan.md`
+- Follow-up issues: #2910 (staging Supabase project), #2911
+  (`run-migrations.sh --bootstrap=skip` flag)
 - Adjacent learnings:
   - `2026-04-23-hostname-prefix-guard-and-strict-mode-pipefail.md`
-    (subdomain-bypass guard pattern reused in preflight Check 5)
+    (subdomain-bypass guard pattern reused in preflight Check 4)
   - `2026-03-29-doppler-service-token-config-scope-mismatch.md`
     (token-scope rule that scoped tokens but not data)
   - `2026-03-28-unapplied-migration-command-center-chat-failure.md`

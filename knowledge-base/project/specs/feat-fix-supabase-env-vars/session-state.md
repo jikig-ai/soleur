@@ -1,5 +1,12 @@
 # Session State
 
+> **Spec dir divergence (intentional):** This directory is named
+> `feat-fix-supabase-env-vars/` while the branch is
+> `feat-one-shot-2887-supabase-env-isolation/`. The plan subagent named
+> the artifact directory; we kept it to avoid a rename mid-pipeline.
+> The branch and PR are the canonical anchor — search by branch
+> (`feat-one-shot-2887-...`) or by issue number (#2887) when archiving.
+
 ## Plan Phase
 - Plan file: /home/jean/git-repositories/jikig-ai/soleur/.worktrees/feat-one-shot-2887-supabase-env-isolation/knowledge-base/project/plans/2026-04-27-fix-supabase-env-isolation-plan.md
 - Status: complete

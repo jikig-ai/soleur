@@ -26,7 +26,7 @@ Run `git rev-parse --abbrev-ref HEAD` to get the current branch name.
 
 ## Phase 1: Run All Checks in Parallel
 
-Run these five validations as parallel Bash tool calls. Each returns PASS, FAIL, or SKIP.
+Run these four checks (plus the Not-Bare-Repo assertion) as parallel Bash tool calls. Each returns PASS, FAIL, or SKIP.
 
 ### Assertion: Not-Bare-Repo
 
@@ -191,11 +191,11 @@ If multiple files fail, report each one. Any single failure means the overall ch
 - **FAIL** -- One or more dual-lockfile directories have a modified lockfile without its sibling updated (message names each directory and missing file)
 - **SKIP** -- No lockfile changes in this branch
 
-### Check 5: Environment Isolation
+### Check 4: Environment Isolation
 
 **Always runs (no path-pattern gate).** Enforces `hr-dev-prd-distinct-supabase-projects`: dev and prd Doppler configs must resolve to different Supabase project refs.
 
-**Step 5.1: Fetch dev and prd Supabase URLs.**
+**Step 4.1: Fetch dev and prd Supabase URLs.**
 
 Run as separate Bash calls (no command substitution per skill convention):
 
@@ -209,18 +209,28 @@ doppler secrets get NEXT_PUBLIC_SUPABASE_URL -p soleur -c prd --plain
 
 If either call fails or returns empty, return **SKIP** with note: "Doppler unavailable or NEXT_PUBLIC_SUPABASE_URL unset."
 
-**Step 5.2: Resolve project ref for each URL.**
+**Step 4.2: Resolve project ref for each URL.**
 
-For each URL, extract the canonical Supabase hostname:
+The single chokepoint is the canonical-hostname regex `^[a-z0-9]{20}\.supabase\.co$`. Both branches below MUST converge on a hostname matching that regex before Step 4.3 runs.
 
 1. Strip the `https://` prefix and any trailing path; keep the bare host.
-2. If the host already matches the canonical project-ref regex `^[a-z0-9]{20}\.supabase\.co$`, the project ref is the first label (the 20-char prefix).
-3. Otherwise, treat the host as a custom domain. Run `dig +short CNAME <host> || true` (the `|| true` keeps Step 5.2 strict-mode resilient under `set -euo pipefail` per learning `2026-04-23-hostname-prefix-guard-and-strict-mode-pipefail`). Strip the trailing dot from the dig output. If empty, return **SKIP** with note: "CNAME chain did not resolve for `<host>`."
-4. Verify the resolved hostname matches `^[a-z0-9]{20}\.supabase\.co$`. If it does not, **FAIL** with: "Resolved hostname `<host>` is not a canonical Supabase project endpoint. Refusing to compare on a non-canonical name (subdomain-bypass guard)."
+2. If the bare host already matches the canonical regex, use it directly.
+3. Otherwise (custom domain), resolve via `dig`:
 
-**Defense vs. subdomain bypass:** A naive `host.split(".")[0]` would accept `<ref>.supabase.co.evil.com` because the first label matches. Mandate exact-hostname equality against `^[a-z0-9]{20}\.supabase\.co$` after CNAME resolution.
+   ```bash
+   dig +short CNAME <host>
+   ```
 
-**Step 5.3: Compare project refs.**
+   Capture the exit code separately. Strict-mode resilience: do not pipe through `|| true` — that masks SERVFAIL/network errors as "no record" and silently disables the gate. Branch on the captured rc:
+
+   - `rc == 0` and output non-empty: candidate hostname is the CNAME target (strip trailing dot).
+   - `rc == 0` and output empty: no CNAME exists. Fall back to `dig +short A <host>`. If the A-record resolves to a Supabase IP range, **FAIL** with: "Custom domain `<host>` uses A-record-only Supabase routing. Check 4 cannot prove project ref. Configure CNAME-based custom domain or temporarily set Doppler `<config>.NEXT_PUBLIC_SUPABASE_URL` to the bare `<ref>.supabase.co` form for the isolation check." A-records are rare for Supabase custom domains; failing is correct because SKIPping fails-open the security gate.
+   - `rc != 0`: SERVFAIL, NXDOMAIN, network error, etc. Return **SKIP** with diagnostic: "dig exit `<rc>` for `<host>` — DNS resolution unavailable; isolation check inconclusive." (SKIP only when the diagnostic is genuinely undetermined; A-record-only is determined and FAILs.)
+4. Verify the resulting hostname matches `^[a-z0-9]{20}\.supabase\.co$`. If it does not, **FAIL** with: "Resolved hostname `<host>` is not a canonical Supabase project endpoint. Refusing to compare on a non-canonical name (subdomain-bypass guard)." This catches inputs like `<ref>.supabase.co.evil.com` that pass step 1 but fail the anchored regex.
+
+The 20-char first label of a canonical hostname IS the project ref — extract via the literal first label or by stripping `.supabase.co`.
+
+**Step 4.3: Compare project refs.**
 
 If `dev_ref == prd_ref`, **FAIL** with: "Environment isolation violation: dev and prd resolve to the same Supabase project ref `<ref>`. See issue #2887."
 
@@ -229,8 +239,8 @@ Otherwise **PASS**.
 **Result:**
 
 - **PASS** -- dev and prd resolve to distinct project refs
-- **FAIL** -- refs match (single-DB blast radius), or hostname is not a canonical Supabase endpoint
-- **SKIP** -- Doppler unavailable, NEXT_PUBLIC_SUPABASE_URL unset in either config, or CNAME chain unresolved
+- **FAIL** -- refs match (single-DB blast radius), hostname is not a canonical Supabase endpoint, or custom domain uses A-record-only routing
+- **SKIP** -- Doppler unavailable, NEXT_PUBLIC_SUPABASE_URL unset in either config, or DNS resolution failed (`dig` rc != 0)
 
 ## Phase 2: Aggregate Go/No-Go Report
 

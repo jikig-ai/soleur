@@ -39,7 +39,7 @@ every push to main. The dev step above is the rehearsal gate; the prd
 step is the production rollout.
 
 If `dev` and `prd` resolve to the same Supabase project ref, preflight
-Check 5 (`Environment Isolation`) blocks `/ship`. Do not bypass it —
+Check 4 (`Environment Isolation`) blocks `/ship`. Do not bypass it —
 the rule exists to prevent silent single-DB exposure (#2887).
 
 ## Pre-deploy Checklist
