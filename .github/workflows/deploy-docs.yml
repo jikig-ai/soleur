@@ -66,6 +66,35 @@ jobs:
           test -f _site/llms.txt || { echo "Missing llms.txt"; exit 1; }
           echo "All required files present"
 
+      - name: Install Playwright (Chromium only) for screenshot gate
+        run: |
+          npm install --no-save playwright@1 http-server@14
+          npx playwright install --with-deps chromium
+
+      - name: Screenshot gate (critical-CSS FOUC detection)
+        run: |
+          npx http-server _site -p 8888 -c-1 -s &
+          SERVER_PID=$!
+          for i in $(seq 1 30); do
+            if curl -sf -o /dev/null http://127.0.0.1:8888/; then break; fi
+            sleep 0.5
+          done
+          set +e
+          node plugins/soleur/docs/scripts/screenshot-gate.mjs
+          GATE_EXIT=$?
+          set -e
+          kill $SERVER_PID 2>/dev/null || true
+          exit $GATE_EXIT
+
+      - name: Upload screenshot-gate failure artifacts
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: screenshot-gate-failures
+          path: screenshot-gate-failures/
+          if-no-files-found: ignore
+          retention-days: 14
+
       - name: Setup Pages
         uses: actions/configure-pages@1f0c5cde4bc74cd7e1254d0cb4de8d49e9068c7d # v4.0.0
 

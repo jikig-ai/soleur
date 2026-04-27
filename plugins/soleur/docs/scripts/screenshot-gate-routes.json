@@ -1,0 +1,17 @@
+{
+  "viewport": { "width": 1440, "height": 900 },
+  "routes": [
+    { "path": "/",                         "uses": "landing-hero" },
+    { "path": "/pricing/",                 "uses": "page-hero" },
+    { "path": "/blog/",                    "uses": "page-hero" },
+    { "path": "/agents/",                  "uses": "page-hero" },
+    { "path": "/skills/",                  "uses": "page-hero" },
+    { "path": "/about/",                   "uses": "page-hero" },
+    { "path": "/getting-started/",         "uses": "page-hero" },
+    { "path": "/community/",               "uses": "page-hero" },
+    { "path": "/changelog/",               "uses": "page-hero" },
+    { "path": "/vision/",                  "uses": "page-hero" },
+    { "path": "/legal/",                   "uses": "page-hero" }
+  ],
+  "comment": "Routes audited via `rg -l 'page-hero|landing-cta' plugins/soleur/docs/pages plugins/soleur/docs/_includes`. The 9 /legal/<sub>/ markdown pages are deferred to a follow-up — same template family, lower conversion impact. /company-as-a-service/ uses .content-page-header (different visual) so it's gated separately if/when that template breaks."
+}
