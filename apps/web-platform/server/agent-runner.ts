@@ -42,6 +42,7 @@ import { buildGithubTools } from "./github-tools";
 import { buildPlausibleTools } from "./plausible-tools";
 import { createCanUseTool } from "./permission-callback";
 import { reportSilentFallback } from "./observability";
+import { buildAgentSandboxConfig } from "./agent-runner-sandbox-config";
 
 const log = createChildLogger("agent");
 
@@ -62,7 +63,17 @@ import { buildToolLabel } from "./tool-labels";
 // ---------------------------------------------------------------------------
 const FILE_TOOLS_TO_REMOVE = new Set(["Read", "Glob", "Grep"]);
 
-function patchWorkspacePermissions(workspacePath: string): void {
+/**
+ * INTERNAL: legacy domain-leader runner + cc-soleur-go factory.
+ *
+ * Exported (per plan AC8 / R12) so the cc-soleur-go `realSdkQueryFactory`
+ * in `cc-dispatcher.ts` can run the same defense-in-depth migration as
+ * `startAgentSession` — strip pre-approved file-tool entries from
+ * `<workspace>/.claude/settings.json` so they cannot bypass `canUseTool`
+ * (permission chain step 4 before step 5). Idempotent — safe on every
+ * cold-Query construction. Do NOT call from new modules.
+ */
+export function patchWorkspacePermissions(workspacePath: string): void {
   const settingsPath = path.join(workspacePath, ".claude", "settings.json");
   try {
     const raw = readFileSync(settingsPath, "utf8");
@@ -138,7 +149,22 @@ export function abortAllSessions(): void {
 // ---------------------------------------------------------------------------
 // BYOK key retrieval
 // ---------------------------------------------------------------------------
-async function getUserApiKey(userId: string): Promise<string> {
+/**
+ * INTERNAL: cc-dispatcher real-SDK factory only.
+ *
+ * Exported (R12 / plan §"Files to Edit") so the cc-soleur-go path's
+ * `realSdkQueryFactory` in `cc-dispatcher.ts` can fetch BYOK credentials
+ * inside its closure without re-implementing the decryption + lazy-v2
+ * migration logic. Do NOT call from new modules — long-term plan is to
+ * factor user-credential fetching into a dedicated `user-credentials.ts`
+ * module (out of scope here; see plan R12).
+ *
+ * Throws `KeyInvalidError` from `@/lib/types` when the user has no valid
+ * Anthropic key on file. The cc-dispatcher catch path detects this class
+ * and surfaces `errorCode: "key_invalid"` so the client can prompt for a
+ * fresh BYOK key (mirrors `agent-runner.ts` `KeyInvalidError` handling).
+ */
+export async function getUserApiKey(userId: string): Promise<string> {
   const { data, error } = await supabase()
     .from("api_keys")
     .select("id, encrypted_key, iv, auth_tag, key_version")
@@ -179,7 +205,17 @@ async function getUserApiKey(userId: string): Promise<string> {
 // ---------------------------------------------------------------------------
 // Third-party service token retrieval
 // ---------------------------------------------------------------------------
-async function getUserServiceTokens(
+/**
+ * INTERNAL: cc-dispatcher real-SDK factory only.
+ *
+ * Exported (R12 / plan §"Files to Edit") so the cc-soleur-go path's
+ * `realSdkQueryFactory` can pass per-user service tokens into
+ * `buildAgentEnv(apiKey, serviceTokens)`. Returns `{}` when the user has
+ * no third-party connections — the resulting env contains only the
+ * BYOK `ANTHROPIC_API_KEY` plus the allowlisted system vars.
+ * Do NOT call from new modules — see plan R12.
+ */
+export async function getUserServiceTokens(
   userId: string,
 ): Promise<Record<string, string>> {
   const { data, error } = await supabase()
@@ -804,29 +840,10 @@ issues/PRs, 4 KB comments); follow the html_url for the full text.`;
               ],
             }
           : {}),
-        sandbox: {
-          enabled: true,
-          // Refuse to start if sandbox deps (bubblewrap, socat) are missing.
-          // Without this flag, the SDK silently runs unsandboxed on dependency
-          // drift (per `Options.sandbox.failIfUnavailable` in
-          // @anthropic-ai/claude-agent-sdk) — Tier 4 defense-in-depth
-          // disappears with no Sentry signal. See #2634.
-          failIfUnavailable: true,
-          autoAllowBashIfSandboxed: true,
-          allowUnsandboxedCommands: false,
-          // Docker containers cannot mount proc inside user namespaces (kernel
-          // restriction). enableWeakerNestedSandbox skips --proc /proc in bwrap,
-          // which is acceptable because /proc is already in denyRead (#1557).
-          enableWeakerNestedSandbox: true,
-          network: {
-            allowedDomains: [],
-            allowManagedDomainsOnly: true,
-          },
-          filesystem: {
-            allowWrite: [workspacePath],
-            denyRead: ["/workspaces", "/proc"],
-          },
-        },
+        // Sandbox literal extracted to `buildAgentSandboxConfig` so the
+        // cc-soleur-go path's `realSdkQueryFactory` consumes the same
+        // shape verbatim (drift-guarded by `agent-runner-helpers.test.ts`).
+        sandbox: buildAgentSandboxConfig(workspacePath),
         plugins: [{ type: "local" as const, path: pluginPath }],
         hooks: {
           PreToolUse: [{
