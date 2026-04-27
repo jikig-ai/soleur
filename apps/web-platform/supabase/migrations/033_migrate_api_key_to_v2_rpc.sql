@@ -10,6 +10,12 @@
 -- via the service-role client (apps/web-platform/server/agent-runner.ts).
 -- REVOKE from authenticated and anon defends against accidental
 -- client-side calls slipping in.
+-- search_path is pinned to `public, pg_temp` (in that order). Listing
+-- `public` first defends against definer-hijacking attacks where an
+-- attacker plants a same-named relation under `pg_temp` (their session-
+-- private schema) — the SECURITY DEFINER body would otherwise resolve
+-- the unqualified relation against the attacker's planted object. The
+-- explicit `public.api_keys` qualifier below is belt-and-suspenders.
 
 CREATE OR REPLACE FUNCTION public.migrate_api_key_to_v2(
   p_id        uuid,
@@ -21,7 +27,7 @@ CREATE OR REPLACE FUNCTION public.migrate_api_key_to_v2(
 ) RETURNS TABLE (rows_affected integer)
 LANGUAGE sql
 SECURITY DEFINER
-SET search_path = public
+SET search_path = public, pg_temp
 AS $$
   WITH updated AS (
     UPDATE public.api_keys
@@ -34,6 +40,7 @@ AS $$
        AND user_id       = p_user_id
        AND provider      = p_provider
        AND key_version   = 1
+       AND is_valid      = true
      RETURNING 1
   )
   SELECT COUNT(*)::INTEGER FROM updated;
