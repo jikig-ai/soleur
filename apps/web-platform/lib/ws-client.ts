@@ -11,7 +11,14 @@ import {
   type TierChangedPreamble,
 } from "@/lib/types";
 import type { DomainLeaderId } from "@/server/domain-leaders";
-import { applyStreamEvent, applyTimeout, type ChatMessage, type StreamEventResult } from "@/lib/chat-state-machine";
+import {
+  applyStreamEvent,
+  applyTimeout,
+  type ChatMessage,
+  type StreamEventResult,
+  type WorkflowLifecycleState,
+  type SpawnIndex,
+} from "@/lib/chat-state-machine";
 import { isKnownWSMessageType } from "@/lib/ws-known-types";
 import { parseWSMessage } from "@/lib/ws-zod-schemas";
 import { reportSilentFallback } from "@/lib/client-observability";
@@ -54,6 +61,16 @@ interface UseWebSocketReturn {
   resumeSession: (conversationId: string) => void;
   sendMessage: (content: string, attachments?: AttachmentRef[]) => void;
   sendReviewGateResponse: (gateId: string, selection: string) => void;
+  /** Stage 4 (#2886): client→server send for `interactive_prompt_response`.
+   *  Used by `<InteractivePromptCard>` to post the user's choice. */
+  sendInteractivePromptResponse: (msg: Extract<WSMessage, { type: "interactive_prompt_response" }>) => void;
+  /** Stage 4 (#2886): optimistically mark a prompt card as resolved
+   *  (locally; the runner's reaper handles staleness). */
+  resolveInteractivePrompt: (
+    promptId: string,
+    conversationId: string,
+    response: unknown,
+  ) => void;
   status: ConnectionStatus;
   sessionConfirmed: boolean;
   disconnectReason: string | undefined;
@@ -66,6 +83,8 @@ interface UseWebSocketReturn {
   realConversationId: string | null;
   /** Populated when the server resolved an existing thread via resumeByContextPath. */
   resumedFrom: ResumedFrom | null;
+  /** Stage 4 (#2886): ambient lifecycle-bar slice (idle/routing/active/ended). */
+  workflow: WorkflowLifecycleState;
 }
 
 const MAX_BACKOFF = 30_000;
@@ -94,6 +113,10 @@ export const NON_TRANSIENT_CLOSE_CODES: Record<number, { target?: string; reason
 export interface ChatState {
   messages: ChatMessage[];
   activeStreams: Map<DomainLeaderId, number>;
+  /** Stage 4 (#2886): ambient lifecycle-bar slice. */
+  workflow: WorkflowLifecycleState;
+  /** Stage 4 (#2886): reverse-lookup index for `subagent_complete`. */
+  spawnIndex: SpawnIndex;
   pendingTimerAction?: StreamEventResult["timerAction"];
 }
 
@@ -107,13 +130,31 @@ export type ChatAction =
   | { type: "add_message"; message: ChatMessage }
   | { type: "filter_prepend"; messages: ChatMessage[] }
   | { type: "gate_error"; gateId: string; message: string }
-  | { type: "resolve_gate"; gateId: string; selection: string };
+  | { type: "resolve_gate"; gateId: string; selection: string }
+  | {
+      type: "resolve_interactive_prompt";
+      promptId: string;
+      conversationId: string;
+      response: unknown;
+    };
 
 export function chatReducer(state: ChatState, action: ChatAction): ChatState {
   switch (action.type) {
     case "stream_event": {
-      const result = applyStreamEvent(state.messages, state.activeStreams, action.msg);
-      return { messages: result.messages, activeStreams: result.activeStreams, pendingTimerAction: result.timerAction };
+      const result = applyStreamEvent(
+        state.messages,
+        state.activeStreams,
+        action.msg,
+        state.spawnIndex,
+        state.workflow,
+      );
+      return {
+        messages: result.messages,
+        activeStreams: result.activeStreams,
+        workflow: result.workflow,
+        spawnIndex: result.spawnIndex,
+        pendingTimerAction: result.timerAction,
+      };
     }
     case "timeout": {
       const result = applyTimeout(state.messages, state.activeStreams, action.leaderId);
@@ -129,7 +170,11 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
       };
     }
     case "clear_streams":
-      return { ...state, activeStreams: new Map(), pendingTimerAction: undefined };
+      return {
+        ...state,
+        activeStreams: new Map(),
+        pendingTimerAction: undefined,
+      };
     case "ack_timer_action":
       return state.pendingTimerAction === undefined ? state : { ...state, pendingTimerAction: undefined };
     case "add_message":
@@ -157,6 +202,25 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
             : m,
         ),
       };
+    case "resolve_interactive_prompt":
+      return {
+        ...state,
+        messages: state.messages.map((m) =>
+          m.type === "interactive_prompt" &&
+          m.promptId === action.promptId &&
+          m.conversationId === action.conversationId
+            ? {
+                ...m,
+                resolved: true,
+                selectedResponse: action.response as ChatMessage extends infer T
+                  ? T extends { type: "interactive_prompt"; selectedResponse?: infer R }
+                    ? R
+                    : never
+                  : never,
+              }
+            : m,
+        ),
+      };
   }
 }
 
@@ -172,6 +236,8 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
   const [chatState, dispatch] = useReducer(chatReducer, null, (): ChatState => ({
     messages: [],
     activeStreams: new Map<DomainLeaderId, number>(),
+    workflow: { state: "idle" },
+    spawnIndex: new Map(),
   }));
 
   // Derive activeLeaderIds from reducer state. `applyStreamEvent` preserves the
@@ -748,6 +814,25 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
     [send],
   );
 
+  const sendInteractivePromptResponse = useCallback(
+    (msg: Extract<WSMessage, { type: "interactive_prompt_response" }>) => {
+      send(msg);
+    },
+    [send],
+  );
+
+  const resolveInteractivePrompt = useCallback(
+    (promptId: string, conversationId: string, response: unknown) => {
+      dispatch({
+        type: "resolve_interactive_prompt",
+        promptId,
+        conversationId,
+        response,
+      });
+    },
+    [],
+  );
+
   const reconnect = useCallback(() => {
     setLastError(null);
     setDisconnectReason(undefined);
@@ -756,5 +841,24 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
     connect();
   }, [connect]);
 
-  return { messages: chatState.messages, startSession, resumeSession, sendMessage, sendReviewGateResponse, status, sessionConfirmed, disconnectReason, lastError, reconnect, routeSource, activeLeaderIds, usageData, realConversationId, resumedFrom };
+  return {
+    messages: chatState.messages,
+    startSession,
+    resumeSession,
+    sendMessage,
+    sendReviewGateResponse,
+    sendInteractivePromptResponse,
+    resolveInteractivePrompt,
+    status,
+    sessionConfirmed,
+    disconnectReason,
+    lastError,
+    reconnect,
+    routeSource,
+    activeLeaderIds,
+    usageData,
+    realConversationId,
+    resumedFrom,
+    workflow: chatState.workflow,
+  };
 }

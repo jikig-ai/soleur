@@ -3,7 +3,12 @@ import { chatReducer, type ChatState, type ChatAction } from "../lib/ws-client";
 import type { ChatMessage } from "../lib/chat-state-machine";
 
 function emptyState(): ChatState {
-  return { messages: [], activeStreams: new Map() };
+  return {
+    messages: [],
+    activeStreams: new Map(),
+    workflow: { state: "idle" },
+    spawnIndex: new Map(),
+  };
 }
 
 function textMessage(id: string, content = ""): ChatMessage {
@@ -46,6 +51,8 @@ describe("chatReducer", () => {
     const state: ChatState = {
       messages: [],
       activeStreams: new Map([["cpo", 0]]),
+      workflow: { state: "idle" },
+      spawnIndex: new Map(),
       pendingTimerAction: { type: "reset", leaderId: "cpo" },
     };
 
@@ -79,6 +86,8 @@ describe("chatReducer", () => {
     const state: ChatState = {
       messages: [],
       activeStreams: new Map([["cpo", 0]]),
+      workflow: { state: "idle" },
+      spawnIndex: new Map(),
       pendingTimerAction: { type: "reset", leaderId: "cpo" },
     };
 
@@ -156,7 +165,8 @@ describe("chatReducer", () => {
       "filter_prepend",
       "gate_error",
       "resolve_gate",
+      "resolve_interactive_prompt",
     ];
-    expect(actions).toHaveLength(8);
+    expect(actions).toHaveLength(9);
   });
 });
