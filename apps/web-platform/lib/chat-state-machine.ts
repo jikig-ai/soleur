@@ -103,12 +103,17 @@ export interface ChatWorkflowEndedMessage extends ChatMessageBase {
 
 /** Stage 4 (#2886): inline tool-use chip for `cc_router`/`system` leaders
  *  before any real leader bubble exists. Removed when a stream event for the
- *  same leader arrives or `workflow_started` fires. */
-export interface ChatToolUseChipMessage extends ChatMessageBase {
+ *  same leader arrives or `workflow_started` fires.
+ *
+ *  Review F13: `leaderId` narrowed to the chip-emitting leaders. The reducer
+ *  only creates chips for cc_router/system; tightening here makes the
+ *  invariant compile-checked and removes the runtime cast at the chat-surface
+ *  call site. */
+export interface ChatToolUseChipMessage extends Omit<ChatMessageBase, "leaderId"> {
   type: "tool_use_chip";
   toolName: string;
   toolLabel: string;
-  leaderId: DomainLeaderId;
+  leaderId: "cc_router" | "system";
 }
 
 export type ChatMessage =
@@ -120,10 +125,15 @@ export type ChatMessage =
   | ChatToolUseChipMessage;
 
 /** Stage 4 (#2886): ambient lifecycle-bar slice. The bar is sticky context;
- *  `workflow_ended` sets state to "ended" AND pushes an in-list summary card. */
+ *  `workflow_ended` sets state to "ended" AND pushes an in-list summary card.
+ *
+ *  Review F9: the prior `routing` variant was dead — the reducer never
+ *  produced it and there's no clean WS signal for skill-name extraction
+ *  pre-`workflow_started`. Dropped from the union to avoid implying
+ *  capability that doesn't ship. The legacy "Routing to the right experts"
+ *  chip in chat-surface covers the routing UX during this gap. */
 export type WorkflowLifecycleState =
   | { state: "idle" }
-  | { state: "routing"; skillName?: string }
   | {
       state: "active";
       workflow: WorkflowName;
@@ -137,13 +147,21 @@ export type WorkflowLifecycleState =
       summary?: string;
     };
 
-/** Reverse-lookup index for `subagent_complete`: `spawnId` → which
- *  ChatSubagentGroupMessage and which child index to mutate. The reducer
- *  returns this so callers can chain dispatches without an O(N²) scan. */
+/** Reverse-lookup index for `subagent_complete` is no longer needed —
+ *  the reducer scans `prev` for the matching subagent_group + child by
+ *  `spawnId`. Kept as an exported type alias for backward compat with any
+ *  external snapshot consumers; the reducer treats it as a sentinel only.
+ *  See review F2: absolute message indices were invalidated by
+ *  `filter_prepend`. The id-based lookup is O(N) per `subagent_complete`,
+ *  which is fine since spawn count per session is bounded. */
 export type SpawnIndex = Map<
   string,
   { messageIdx: number; childIdx: number }
 >;
+
+/** Maximum number of `tool_use_chip` messages to retain per leader before
+ *  the oldest is evicted. Plan §3 risk: "chip cap of 5 latest". */
+export const TOOL_USE_CHIP_CAP_PER_LEADER = 5;
 
 /** Snapshot of all reducer-tracked state. The hook layer holds
  *  `messages`, `activeStreams`, `workflow`, and `spawnIndex` together so
@@ -208,6 +226,46 @@ function cloneSpawnIndex(prev: SpawnIndex): SpawnIndex {
   return new Map(prev);
 }
 
+/** Stage 4 review F6: build a `ChatInteractivePromptMessage` from a wire
+ *  `interactive_prompt` event with per-kind narrowing — replaces the prior
+ *  `as InteractivePromptPayload["kind"]` / `as InteractivePromptPayload
+ *  ["payload"]` casts. The event arrives as a discriminated union; the
+ *  switch lets TS track the congruent `{kind, payload}` couple per branch.
+ */
+type InteractivePromptEvent = Extract<StreamEvent, { type: "interactive_prompt" }>;
+
+function buildInteractivePromptCard(
+  event: InteractivePromptEvent,
+): ChatInteractivePromptMessage {
+  const base = {
+    id: `prompt-${event.promptId}-${event.conversationId}`,
+    role: "assistant" as const,
+    content: "",
+    type: "interactive_prompt" as const,
+    promptId: event.promptId,
+    conversationId: event.conversationId,
+  };
+  switch (event.kind) {
+    case "ask_user":
+      return { ...base, promptKind: "ask_user", promptPayload: event.payload };
+    case "plan_preview":
+      return { ...base, promptKind: "plan_preview", promptPayload: event.payload };
+    case "diff":
+      return { ...base, promptKind: "diff", promptPayload: event.payload };
+    case "bash_approval":
+      return { ...base, promptKind: "bash_approval", promptPayload: event.payload };
+    case "todo_write":
+      return { ...base, promptKind: "todo_write", promptPayload: event.payload };
+    case "notebook_edit":
+      return { ...base, promptKind: "notebook_edit", promptPayload: event.payload };
+    default: {
+      const _exhaustive: never = event;
+      void _exhaustive;
+      throw new Error("unreachable: interactive_prompt kind exhaustiveness");
+    }
+  }
+}
+
 /**
  * Apply a single WS event to the chat state. Pure function — does not
  * mutate the passed `prev` or `activeStreams`, returns new instances.
@@ -249,7 +307,16 @@ export function applyStreamEvent(
       // Stage 4 (#2886): cc_router / system leaders have NO leader bubble —
       // emit a ChatToolUseChipMessage chip rendered above the message list.
       // Per-real-leader tool_use stays on MessageBubble.toolLabel.
-      if (event.leaderId === "cc_router" || event.leaderId === "system") {
+      //
+      // Review F8: once a stream bubble exists for cc_router/system (e.g.
+      // first content has reached the user), don't append more chips —
+      // chips live "between user message and first leader bubble" only.
+      // Fall through to the normal per-leader path so the bubble's
+      // toolLabel updates instead.
+      if (
+        (event.leaderId === "cc_router" || event.leaderId === "system") &&
+        !activeStreams.has(event.leaderId)
+      ) {
         const chip: ChatMessage = {
           id: `chip-${event.leaderId}-${crypto.randomUUID()}`,
           role: "assistant",
@@ -259,8 +326,24 @@ export function applyStreamEvent(
           toolLabel: event.label,
           leaderId: event.leaderId,
         };
+        // Review F4: cap at TOOL_USE_CHIP_CAP_PER_LEADER chips per leader.
+        // Drop oldest chips for the same leader before appending the new one.
+        const sameLeaderChips: number[] = [];
+        for (let i = 0; i < prev.length; i++) {
+          const m = prev[i];
+          if (m.type === "tool_use_chip" && m.leaderId === event.leaderId) {
+            sameLeaderChips.push(i);
+          }
+        }
+        let working = prev;
+        if (sameLeaderChips.length >= TOOL_USE_CHIP_CAP_PER_LEADER) {
+          // Compute set of indices to drop (oldest first).
+          const dropCount = sameLeaderChips.length - TOOL_USE_CHIP_CAP_PER_LEADER + 1;
+          const dropSet = new Set(sameLeaderChips.slice(0, dropCount));
+          working = prev.filter((_, i) => !dropSet.has(i));
+        }
         return {
-          messages: [...prev, chip],
+          messages: [...working, chip],
           activeStreams,
           workflow: priorWorkflow,
           spawnIndex: priorSpawnIndex,
@@ -399,19 +482,29 @@ export function applyStreamEvent(
     }
 
     case "stream_end": {
+      // Review F11: stream_end is also a chip-removal trigger for cc_router /
+      // system leaders (plan §124). The `tool_use → stream_end` path with
+      // no streamed content otherwise leaks a permanent chip.
+      let working = prev;
+      if (event.leaderId === "cc_router" || event.leaderId === "system") {
+        const filtered = prev.filter(
+          (m) => !(m.type === "tool_use_chip" && m.leaderId === event.leaderId),
+        );
+        if (filtered.length !== prev.length) working = filtered;
+      }
       const idx = activeStreams.get(event.leaderId);
       const nextStreams = new Map(activeStreams);
       nextStreams.delete(event.leaderId);
-      if (idx === undefined || idx >= prev.length) {
+      if (idx === undefined || idx >= working.length) {
         return {
-          messages: prev,
+          messages: working,
           activeStreams: nextStreams,
           workflow: priorWorkflow,
           spawnIndex: priorSpawnIndex,
           timerAction: { type: "clear", leaderId: event.leaderId },
         };
       }
-      const updated = [...prev];
+      const updated = [...working];
       updated[idx] = { ...updated[idx], state: "done" };
       return {
         messages: updated,
@@ -535,9 +628,24 @@ export function applyStreamEvent(
     }
 
     case "subagent_complete": {
-      // Reverse-lookup via spawnIndex.
-      const lookup = priorSpawnIndex.get(event.spawnId);
-      if (!lookup) {
+      // Review F2: id-based lookup instead of absolute-index spawnIndex.
+      // `filter_prepend` (history backfill) shifted all indices, leaving the
+      // pre-stored `messageIdx` pointing at the wrong row. Scan `prev` for
+      // the matching subagent_group + child by spawnId — O(N), bounded by
+      // spawn count per session.
+      let foundMessageIdx = -1;
+      let foundChildIdx = -1;
+      for (let i = prev.length - 1; i >= 0; i--) {
+        const m = prev[i];
+        if (m.type !== "subagent_group") continue;
+        const childIdx = m.children.findIndex((c) => c.spawnId === event.spawnId);
+        if (childIdx >= 0) {
+          foundMessageIdx = i;
+          foundChildIdx = childIdx;
+          break;
+        }
+      }
+      if (foundMessageIdx === -1) {
         // Unknown spawnId — likely an out-of-order event. Leave state intact.
         return {
           messages: prev,
@@ -546,17 +654,8 @@ export function applyStreamEvent(
           spawnIndex: priorSpawnIndex,
         };
       }
-      const { messageIdx, childIdx } = lookup;
-      if (messageIdx >= prev.length) {
-        return {
-          messages: prev,
-          activeStreams,
-          workflow: priorWorkflow,
-          spawnIndex: priorSpawnIndex,
-        };
-      }
-      const target = prev[messageIdx];
-      if (target.type !== "subagent_group" || childIdx >= target.children.length) {
+      const target = prev[foundMessageIdx];
+      if (target.type !== "subagent_group") {
         return {
           messages: prev,
           activeStreams,
@@ -566,8 +665,8 @@ export function applyStreamEvent(
       }
       const updated = [...prev];
       const newChildren = [...target.children];
-      newChildren[childIdx] = { ...newChildren[childIdx], status: event.status };
-      updated[messageIdx] = { ...target, children: newChildren };
+      newChildren[foundChildIdx] = { ...newChildren[foundChildIdx], status: event.status };
+      updated[foundMessageIdx] = { ...target, children: newChildren };
       return {
         messages: updated,
         activeStreams,
@@ -612,20 +711,29 @@ export function applyStreamEvent(
     }
 
     case "interactive_prompt": {
-      const card: ChatInteractivePromptMessage = {
-        id: `prompt-${event.promptId}-${event.conversationId}`,
-        role: "assistant",
-        content: "",
-        type: "interactive_prompt",
-        promptId: event.promptId,
-        conversationId: event.conversationId,
-        // The wire payload is `{ kind, payload }` flattened onto the event.
-        // After the InteractivePromptPayload union narrowing, `kind` and
-        // `payload` are guaranteed to be congruent — but TS can't track that
-        // through the Extract<>, so we cast through `unknown`.
-        promptKind: event.kind as InteractivePromptPayload["kind"],
-        promptPayload: event.payload as InteractivePromptPayload["payload"],
-      };
+      // Review F7: idempotency. On server re-emit / network duplicate /
+      // supabase realtime retry, dispatching this twice would push two
+      // cards with the same React key — duplicate-key warning + split-brain
+      // (first card optimistically resolved, second still unresolved).
+      // De-dupe on (promptId, conversationId).
+      const alreadyExists = prev.some(
+        (m) =>
+          m.type === "interactive_prompt" &&
+          m.promptId === event.promptId &&
+          m.conversationId === event.conversationId,
+      );
+      if (alreadyExists) {
+        return {
+          messages: prev,
+          activeStreams,
+          workflow: priorWorkflow,
+          spawnIndex: priorSpawnIndex,
+        };
+      }
+      // Review F6: replace `as InteractivePromptPayload[...]` casts with a
+      // per-kind switch that constructs the discriminated `{kind, payload}`
+      // narrowed locally — TS now tracks the congruence end-to-end.
+      const card = buildInteractivePromptCard(event);
       return {
         messages: [...prev, card],
         activeStreams,

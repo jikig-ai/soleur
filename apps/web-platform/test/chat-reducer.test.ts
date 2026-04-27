@@ -62,6 +62,30 @@ describe("chatReducer", () => {
     expect(next.pendingTimerAction).toBeUndefined();
   });
 
+  test("clear_streams also resets workflow slice and spawnIndex (review F1 #2886)", () => {
+    // Pre-condition: a prior workflow_started + subagent_spawn populated the
+    // ambient slice + spawnIndex. clear_streams (fired on key_invalid /
+    // session_ended / socket remount) MUST reset both — otherwise the
+    // lifecycle bar still renders the old workflow's `state: "active"` and
+    // stale subagent indices linger.
+    const state: ChatState = {
+      messages: [],
+      activeStreams: new Map([["cpo", 0]]),
+      workflow: { state: "active", workflow: "brainstorm" },
+      spawnIndex: new Map([
+        ["s-1", { messageIdx: 0, childIdx: 0 }],
+      ]),
+      pendingTimerAction: { type: "reset", leaderId: "cpo" },
+    };
+
+    const next = chatReducer(state, { type: "clear_streams" });
+
+    expect(next.activeStreams.size).toBe(0);
+    expect(next.workflow).toEqual({ state: "idle" });
+    expect(next.spawnIndex.size).toBe(0);
+    expect(next.pendingTimerAction).toBeUndefined();
+  });
+
   test("ack_timer_action clears pendingTimerAction", () => {
     const state: ChatState = {
       ...emptyState(),
