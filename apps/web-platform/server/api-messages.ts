@@ -35,9 +35,13 @@ export async function handleConversationMessages(
   }
 
   // Verify conversation ownership
+  // Stage 4 review F3 (#2886): also fetch `workflow_ended_at` so the chat
+  // surface can hydrate its `workflowEnded` flag on reload of an already-
+  // ended conversation. Without this, the in-memory lifecycle slice
+  // initializes to `idle` and the input renders enabled.
   const { data: conv, error: convErr } = await supabase
     .from("conversations")
-    .select("id, total_cost_usd, input_tokens, output_tokens")
+    .select("id, total_cost_usd, input_tokens, output_tokens, workflow_ended_at")
     .eq("id", conversationId)
     .eq("user_id", user.id)
     .single();
@@ -67,5 +71,6 @@ export async function handleConversationMessages(
     totalCostUsd: Number(conv.total_cost_usd ?? 0),
     inputTokens: conv.input_tokens ?? 0,
     outputTokens: conv.output_tokens ?? 0,
+    workflowEndedAt: conv.workflow_ended_at ?? null,
   }));
 }

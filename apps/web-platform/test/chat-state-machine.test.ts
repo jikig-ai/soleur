@@ -362,108 +362,370 @@ describe("chat-state-machine applyTimeout retry lifecycle (FR5 #2861)", () => {
 });
 
 describe("chat-state-machine STUCK_TIMEOUT_MS constant", () => {
+  // Review F19 (#2886): the constant was extracted to `lib/ws-constants.ts`
+  // (a leaf module without React imports), so the test now imports it
+  // directly instead of grepping the source file with `fs`.
   test("timeout constant is 45000ms", async () => {
-    // The constant lives in ws-client.ts — import it to verify the value
-    // We use a targeted grep-style assertion since ws-client has React hooks
-    // that can't be imported in a node test environment.
-    const fs = await import("fs");
-    const path = await import("path");
-    const wsClientPath = path.join(__dirname, "..", "lib", "ws-client.ts");
-    const content = fs.readFileSync(wsClientPath, "utf-8");
-
-    expect(content).toContain("STUCK_TIMEOUT_MS = 45_000");
-    expect(content).not.toContain("STUCK_TIMEOUT_MS = 30_000");
+    const { STUCK_TIMEOUT_MS } = await import("../lib/ws-constants");
+    expect(STUCK_TIMEOUT_MS).toBe(45_000);
   });
 });
 
 // ---------------------------------------------------------------------------
-// Stage 3 (#2885): inert pass-through cases for the new event types.
-//
-// Stage 3 lands the type rail + reducer cases without rendering surfaces. The
-// reducer must (a) accept the new event variants without throwing, (b) leave
-// `messages` and `activeStreams` unchanged, (c) emit no timer action. Stage 4
-// will replace these inert returns with actual rendering logic.
+// Stage 4 (#2886): the new event types now produce real ChatMessage variants.
+// Stage 3 had them as inert pass-throughs; Stage 4 materializes them.
 // ---------------------------------------------------------------------------
 
-describe("Stage 3 inert pass-through cases", () => {
+describe("Stage 4 — new ChatMessage variants from /soleur:go events", () => {
   function makeContext() {
     const prev: ChatMessage[] = [thinkingMessage("cmo")];
     const streams = new Map<DomainLeaderId, number>([["cmo" as DomainLeaderId, 0]]);
     return { prev, streams };
   }
 
-  test("subagent_spawn is inert: messages and activeStreams unchanged, no timer", () => {
+  test("subagent_spawn (no matching parentId) starts a new subagent_group message", () => {
     const { prev, streams } = makeContext();
     const result = applyStreamEvent(prev, streams, {
       type: "subagent_spawn",
-      parentId: "p-1" as any,
-      leaderId: "cmo" as any,
-      spawnId: "s-1" as any,
+      parentId: "p-1",
+      leaderId: "cto" as any,
+      spawnId: "s-1",
+      task: "Audit performance",
     } as any);
-    expect(result.messages).toBe(prev);
-    expect(result.activeStreams).toBe(streams);
-    expect(result.timerAction).toBeUndefined();
+    // Original message preserved; new subagent_group appended.
+    expect(result.messages.length).toBe(prev.length + 1);
+    const group = result.messages[result.messages.length - 1];
+    expect(group.type).toBe("subagent_group");
+    if (group.type === "subagent_group") {
+      expect(group.parentSpawnId).toBe("p-1");
+      expect(group.parentLeaderId).toBe("cto");
+      expect(group.children.length).toBe(1);
+      expect(group.children[0].spawnId).toBe("s-1");
+      expect(group.children[0].leaderId).toBe("cto");
+      expect(group.children[0].task).toBe("Audit performance");
+      expect(group.children[0].status).toBeUndefined();
+    }
+    // spawnIndex should now know about s-1.
+    expect(result.spawnIndex.get("s-1")).toEqual({
+      messageIdx: prev.length,
+      childIdx: 0,
+    });
   });
 
-  test("subagent_complete is inert", () => {
+  test("second subagent_spawn with matching parentId appends to existing group", () => {
+    const { prev, streams } = makeContext();
+    const r1 = applyStreamEvent(prev, streams, {
+      type: "subagent_spawn",
+      parentId: "p-1",
+      leaderId: "cto" as any,
+      spawnId: "s-1",
+      task: "Audit performance",
+    } as any);
+    const r2 = applyStreamEvent(r1.messages, r1.activeStreams, {
+      type: "subagent_spawn",
+      parentId: "p-1",
+      leaderId: "cmo" as any,
+      spawnId: "s-2",
+      task: "Audit copy",
+    } as any, r1.spawnIndex);
+    const group = r2.messages[r2.messages.length - 1];
+    expect(group.type).toBe("subagent_group");
+    if (group.type === "subagent_group") {
+      expect(group.children.length).toBe(2);
+      expect(group.children[1].spawnId).toBe("s-2");
+      expect(group.children[1].leaderId).toBe("cmo");
+    }
+    expect(r2.spawnIndex.get("s-2")).toEqual({
+      messageIdx: prev.length,
+      childIdx: 1,
+    });
+  });
+
+  test("subagent_complete reverse-looks up via spawnIndex and mutates only the matching child", () => {
+    const { prev, streams } = makeContext();
+    const r1 = applyStreamEvent(prev, streams, {
+      type: "subagent_spawn",
+      parentId: "p-1",
+      leaderId: "cto" as any,
+      spawnId: "s-1",
+    } as any);
+    const r2 = applyStreamEvent(r1.messages, r1.activeStreams, {
+      type: "subagent_spawn",
+      parentId: "p-1",
+      leaderId: "cmo" as any,
+      spawnId: "s-2",
+    } as any, r1.spawnIndex);
+    const r3 = applyStreamEvent(r2.messages, r2.activeStreams, {
+      type: "subagent_spawn",
+      parentId: "p-1",
+      leaderId: "cfo" as any,
+      spawnId: "s-3",
+    } as any, r2.spawnIndex);
+
+    // Complete the second spawn only.
+    const r4 = applyStreamEvent(r3.messages, r3.activeStreams, {
+      type: "subagent_complete",
+      spawnId: "s-2",
+      status: "success",
+    } as any, r3.spawnIndex);
+    const group = r4.messages[r4.messages.length - 1];
+    expect(group.type).toBe("subagent_group");
+    if (group.type === "subagent_group") {
+      expect(group.children[0].status).toBeUndefined();
+      expect(group.children[1].status).toBe("success");
+      expect(group.children[2].status).toBeUndefined();
+    }
+  });
+
+  test("interactive_prompt pushes a ChatInteractivePromptMessage keyed by (promptId, conversationId)", () => {
     const { prev, streams } = makeContext();
     const result = applyStreamEvent(prev, streams, {
-      type: "subagent_complete",
-      spawnId: "s-1" as any,
-      status: "success",
+      type: "interactive_prompt",
+      promptId: "pr-1",
+      conversationId: "c-1",
+      kind: "ask_user",
+      payload: { question: "Q?", options: ["a", "b"], multiSelect: false },
     } as any);
-    expect(result.messages).toBe(prev);
-    expect(result.activeStreams).toBe(streams);
-    expect(result.timerAction).toBeUndefined();
+    expect(result.messages.length).toBe(prev.length + 1);
+    const card = result.messages[result.messages.length - 1];
+    expect(card.type).toBe("interactive_prompt");
+    if (card.type === "interactive_prompt") {
+      expect(card.promptId).toBe("pr-1");
+      expect(card.conversationId).toBe("c-1");
+      expect(card.promptKind).toBe("ask_user");
+      expect(card.resolved).toBeUndefined();
+    }
   });
 
-  test("workflow_started is inert", () => {
+  test("workflow_started sets ambient workflow slice but creates NO message", () => {
     const { prev, streams } = makeContext();
     const result = applyStreamEvent(prev, streams, {
       type: "workflow_started",
       workflow: "brainstorm",
-      conversationId: "c-1" as any,
+      conversationId: "c-1",
     } as any);
-    expect(result.messages).toBe(prev);
-    expect(result.activeStreams).toBe(streams);
-  });
-
-  test("workflow_ended is inert across all status values", () => {
-    const { prev, streams } = makeContext();
-    const statuses = [
-      "completed",
-      "user_aborted",
-      "cost_ceiling",
-      "idle_timeout",
-      "plugin_load_failure",
-      "sandbox_denial",
-      "runner_crash",
-      "runner_runaway",
-      "internal_error",
-    ] as const;
-    for (const status of statuses) {
-      const result = applyStreamEvent(prev, streams, {
-        type: "workflow_ended",
-        workflow: "plan",
-        status,
-      } as any);
-      expect(result.messages).toBe(prev);
-      expect(result.activeStreams).toBe(streams);
+    // No new message.
+    expect(result.messages.length).toBe(prev.length);
+    expect(result.workflow.state).toBe("active");
+    if (result.workflow.state === "active") {
+      expect(result.workflow.workflow).toBe("brainstorm");
     }
   });
 
-  test("interactive_prompt is inert", () => {
+  test("workflow_ended sets ambient slice AND pushes a ChatWorkflowEndedMessage", () => {
     const { prev, streams } = makeContext();
     const result = applyStreamEvent(prev, streams, {
+      type: "workflow_ended",
+      workflow: "plan",
+      status: "completed",
+      summary: "Plan finalized",
+    } as any);
+    expect(result.workflow.state).toBe("ended");
+    expect(result.messages.length).toBe(prev.length + 1);
+    const ended = result.messages[result.messages.length - 1];
+    expect(ended.type).toBe("workflow_ended");
+    if (ended.type === "workflow_ended") {
+      expect(ended.workflow).toBe("plan");
+      expect(ended.status).toBe("completed");
+      expect(ended.summary).toBe("Plan finalized");
+    }
+  });
+
+  test("tool_use with leaderId cc_router emits a ChatToolUseChipMessage chip", () => {
+    const result = applyStreamEvent([], new Map(), {
+      type: "tool_use",
+      leaderId: "cc_router" as any,
+      label: "Routing via /soleur:go",
+    } as any);
+    expect(result.messages.length).toBe(1);
+    const chip = result.messages[0];
+    expect(chip.type).toBe("tool_use_chip");
+    if (chip.type === "tool_use_chip") {
+      expect(chip.toolLabel).toBe("Routing via /soleur:go");
+      expect(chip.leaderId).toBe("cc_router");
+    }
+  });
+
+  test("tool_use with leaderId system emits a ChatToolUseChipMessage chip", () => {
+    const result = applyStreamEvent([], new Map(), {
+      type: "tool_use",
+      leaderId: "system" as any,
+      label: "System dispatch",
+    } as any);
+    const chip = result.messages[0];
+    expect(chip.type).toBe("tool_use_chip");
+  });
+
+  test("tool_progress does NOT create a chip (regression test for heartbeat-vs-start distinction)", () => {
+    const result = applyStreamEvent([], new Map(), {
+      type: "tool_progress",
+      leaderId: "cc_router" as any,
+      toolUseId: "tu-1",
+      toolName: "Skill",
+      elapsedSeconds: 5,
+    } as any);
+    expect(result.messages.length).toBe(0);
+  });
+
+  test("stream event for cc_router leader removes existing chips for that leader", () => {
+    // First emit a chip via tool_use.
+    const r1 = applyStreamEvent([], new Map(), {
+      type: "tool_use",
+      leaderId: "cc_router" as any,
+      label: "Routing",
+    } as any);
+    expect(r1.messages.length).toBe(1);
+    // Now stream first content for cc_router — chip should be gone.
+    const r2 = applyStreamEvent(r1.messages, r1.activeStreams, {
+      type: "stream",
+      leaderId: "cc_router" as any,
+      content: "Hello",
+    } as any);
+    // No chip in the result (it was removed); a stream bubble may be added.
+    const chips = r2.messages.filter((m) => m.type === "tool_use_chip");
+    expect(chips.length).toBe(0);
+  });
+
+  test("workflow_started removes all chips", () => {
+    // Emit two chips.
+    const r1 = applyStreamEvent([], new Map(), {
+      type: "tool_use",
+      leaderId: "cc_router" as any,
+      label: "Routing 1",
+    } as any);
+    const r2 = applyStreamEvent(r1.messages, r1.activeStreams, {
+      type: "tool_use",
+      leaderId: "system" as any,
+      label: "System span",
+    } as any);
+    expect(r2.messages.filter((m) => m.type === "tool_use_chip").length).toBe(2);
+    const r3 = applyStreamEvent(r2.messages, r2.activeStreams, {
+      type: "workflow_started",
+      workflow: "brainstorm",
+      conversationId: "c-1",
+    } as any);
+    expect(r3.messages.filter((m) => m.type === "tool_use_chip").length).toBe(0);
+  });
+
+  // ------------------------------------------------------------------------
+  // Review fix tests (PR #2925 review)
+  // ------------------------------------------------------------------------
+
+  test("F2: subagent_complete resolves correctly even after filter_prepend shifts indices", () => {
+    // Reproduces the scenario where history backfill (filter_prepend) inserts
+    // older messages BEFORE the existing subagent_group, invalidating any
+    // absolute index stored in the original spawnIndex. The id-based lookup
+    // must still find the right child.
+    const r1 = applyStreamEvent([], new Map(), {
+      type: "subagent_spawn",
+      parentId: "p-1",
+      leaderId: "cto" as any,
+      spawnId: "s-1",
+    } as any);
+    expect(r1.messages.length).toBe(1);
+    // Simulate filter_prepend by manually prepending two unrelated messages.
+    const shiftedMessages: ChatMessage[] = [
+      { id: "history-1", role: "user", content: "hi", type: "text" },
+      { id: "history-2", role: "assistant", content: "hello", type: "text" },
+      ...r1.messages,
+    ];
+    // Pass a *stale* spawnIndex (still pointing at messageIdx 0) — the
+    // post-fix reducer ignores it and scans by spawnId.
+    const r2 = applyStreamEvent(shiftedMessages, r1.activeStreams, {
+      type: "subagent_complete",
+      spawnId: "s-1",
+      status: "success",
+    } as any, r1.spawnIndex);
+    const group = r2.messages.find((m) => m.type === "subagent_group");
+    expect(group?.type).toBe("subagent_group");
+    if (group?.type === "subagent_group") {
+      expect(group.children[0].status).toBe("success");
+    }
+  });
+
+  test("F4: cc_router/system tool_use chips are capped at 5 latest per leader", () => {
+    let messages: ChatMessage[] = [];
+    for (let i = 0; i < 7; i++) {
+      const r = applyStreamEvent(messages, new Map(), {
+        type: "tool_use",
+        leaderId: "cc_router" as any,
+        label: `Routing ${i}`,
+      } as any);
+      messages = r.messages;
+    }
+    const chips = messages.filter((m) => m.type === "tool_use_chip");
+    expect(chips.length).toBe(5);
+    // Oldest chips ("Routing 0", "Routing 1") were evicted; newest survive.
+    if (chips[0].type === "tool_use_chip") {
+      expect(chips[0].toolLabel).toBe("Routing 2");
+    }
+    if (chips[chips.length - 1].type === "tool_use_chip") {
+      expect(chips[chips.length - 1].toolLabel).toBe("Routing 6");
+    }
+  });
+
+  test("F7: duplicate interactive_prompt event is idempotent (no second card)", () => {
+    const event = {
       type: "interactive_prompt",
-      promptId: "pr-1" as any,
-      conversationId: "c-1" as any,
+      promptId: "pr-dup",
+      conversationId: "c-1",
       kind: "ask_user",
       payload: { question: "Q?", options: ["a"], multiSelect: false },
+    } as any;
+    const r1 = applyStreamEvent([], new Map(), event);
+    const r2 = applyStreamEvent(r1.messages, r1.activeStreams, event);
+    const cards = r2.messages.filter((m) => m.type === "interactive_prompt");
+    expect(cards.length).toBe(1);
+    // Same reference → reducer returned the prior `messages` slice unchanged.
+    expect(r2.messages).toBe(r1.messages);
+  });
+
+  test("F8: tool_use(cc_router) → stream → tool_use(cc_router) does NOT re-emit a chip", () => {
+    // After `stream` creates a text bubble for cc_router, a subsequent
+    // tool_use must update the bubble's toolLabel (regular per-leader path)
+    // instead of appending a fresh chip.
+    const r1 = applyStreamEvent([], new Map(), {
+      type: "tool_use",
+      leaderId: "cc_router" as any,
+      label: "Routing 1",
     } as any);
-    expect(result.messages).toBe(prev);
-    expect(result.activeStreams).toBe(streams);
-    expect(result.timerAction).toBeUndefined();
+    const r2 = applyStreamEvent(r1.messages, r1.activeStreams, {
+      type: "stream",
+      leaderId: "cc_router" as any,
+      content: "Hello",
+    } as any);
+    // After stream, no chips remain; one text bubble exists.
+    expect(r2.messages.filter((m) => m.type === "tool_use_chip").length).toBe(0);
+    expect(r2.activeStreams.has("cc_router" as any)).toBe(true);
+    // Now another tool_use for cc_router — must NOT append a chip.
+    const r3 = applyStreamEvent(r2.messages, r2.activeStreams, {
+      type: "tool_use",
+      leaderId: "cc_router" as any,
+      label: "Routing 2",
+    } as any);
+    expect(r3.messages.filter((m) => m.type === "tool_use_chip").length).toBe(0);
+    // The text bubble's toolLabel was updated.
+    const bubble = r3.messages.find((m) => m.type === "text" && m.leaderId === "cc_router");
+    expect(bubble?.type).toBe("text");
+    if (bubble?.type === "text") {
+      expect(bubble.toolLabel).toBe("Routing 2");
+    }
+  });
+
+  test("F11: stream_end on cc_router/system removes any lingering chips for that leader", () => {
+    // tool_use creates a chip but no stream content arrives; stream_end
+    // must still clean up the chip — otherwise it leaks permanently.
+    const r1 = applyStreamEvent([], new Map(), {
+      type: "tool_use",
+      leaderId: "cc_router" as any,
+      label: "Routing",
+    } as any);
+    expect(r1.messages.filter((m) => m.type === "tool_use_chip").length).toBe(1);
+    const r2 = applyStreamEvent(r1.messages, r1.activeStreams, {
+      type: "stream_end",
+      leaderId: "cc_router" as any,
+    } as any);
+    expect(r2.messages.filter((m) => m.type === "tool_use_chip").length).toBe(0);
   });
 
   test("activeStreams is keyed by DomainLeaderId (Map<DomainLeaderId, number>)", () => {
