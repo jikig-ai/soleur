@@ -9,7 +9,8 @@ import {
   handleInteractivePromptResponse,
   pruneTombstonesFor,
 } from "@/server/cc-interactive-prompt-response";
-import type { InteractivePromptResponse } from "@/server/cc-interactive-prompt-types";
+import type { WSMessage } from "@/lib/types";
+type InteractivePromptResponse = Extract<WSMessage, { type: "interactive_prompt_response" }>;
 
 // RED test for Stage 2.14 of plan 2026-04-23-feat-cc-route-via-soleur-go-plan.md.
 //

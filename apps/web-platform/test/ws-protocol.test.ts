@@ -477,3 +477,118 @@ describe("idle timeout", () => {
     expect(entry.target).toBeUndefined();
   });
 });
+
+describe("Stage 3 protocol — new variant round-trip via parseWSMessage (#2885)", () => {
+  test("subagent_spawn round-trips through JSON.stringify → parseWSMessage", async () => {
+    const { parseWSMessage } = await import("../lib/ws-zod-schemas");
+    const wire = JSON.stringify({
+      type: "subagent_spawn",
+      parentId: "p-1",
+      leaderId: "cmo",
+      spawnId: "s-1",
+    });
+    const r = parseWSMessage(JSON.parse(wire));
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.msg.type).toBe("subagent_spawn");
+  });
+
+  test("subagent_complete round-trip", async () => {
+    const { parseWSMessage } = await import("../lib/ws-zod-schemas");
+    const r = parseWSMessage(
+      JSON.parse(JSON.stringify({ type: "subagent_complete", spawnId: "s-1", status: "success" })),
+    );
+    expect(r.ok).toBe(true);
+  });
+
+  test("workflow_started round-trip", async () => {
+    const { parseWSMessage } = await import("../lib/ws-zod-schemas");
+    const r = parseWSMessage(
+      JSON.parse(JSON.stringify({ type: "workflow_started", workflow: "brainstorm", conversationId: "c-1" })),
+    );
+    expect(r.ok).toBe(true);
+  });
+
+  test("workflow_ended round-trip with all 9 statuses", async () => {
+    const { parseWSMessage } = await import("../lib/ws-zod-schemas");
+    const statuses = [
+      "completed",
+      "user_aborted",
+      "cost_ceiling",
+      "idle_timeout",
+      "plugin_load_failure",
+      "sandbox_denial",
+      "runner_crash",
+      "runner_runaway",
+      "internal_error",
+    ];
+    for (const status of statuses) {
+      const r = parseWSMessage(
+        JSON.parse(JSON.stringify({ type: "workflow_ended", workflow: "plan", status })),
+      );
+      expect(r.ok).toBe(true);
+    }
+  });
+
+  test("interactive_prompt round-trip for every kind", async () => {
+    const { parseWSMessage } = await import("../lib/ws-zod-schemas");
+    const cases = [
+      { kind: "ask_user", payload: { question: "Q?", options: ["a"], multiSelect: false } },
+      { kind: "plan_preview", payload: { markdown: "# Plan" } },
+      { kind: "diff", payload: { path: "/a", additions: 1, deletions: 0 } },
+      { kind: "bash_approval", payload: { command: "ls", cwd: "/", gated: true } },
+      { kind: "todo_write", payload: { items: [{ id: "1", content: "x", status: "pending" }] } },
+      { kind: "notebook_edit", payload: { notebookPath: "/n.ipynb", cellIds: ["c1"] } },
+    ];
+    for (const c of cases) {
+      const wire = JSON.stringify({
+        type: "interactive_prompt",
+        promptId: "pr-1",
+        conversationId: "c-1",
+        ...c,
+      });
+      const r = parseWSMessage(JSON.parse(wire));
+      expect(r.ok).toBe(true);
+    }
+  });
+
+  test("interactive_prompt_response round-trip across response shapes", async () => {
+    const { parseWSMessage } = await import("../lib/ws-zod-schemas");
+    const cases = [
+      { kind: "ask_user", response: "single" },
+      { kind: "ask_user", response: ["a", "b"] },
+      { kind: "plan_preview", response: "accept" },
+      { kind: "plan_preview", response: "iterate" },
+      { kind: "bash_approval", response: "approve" },
+      { kind: "bash_approval", response: "deny" },
+      { kind: "diff", response: "ack" },
+      { kind: "todo_write", response: "ack" },
+      { kind: "notebook_edit", response: "ack" },
+    ];
+    for (const c of cases) {
+      const wire = JSON.stringify({
+        type: "interactive_prompt_response",
+        promptId: "pr-1",
+        conversationId: "c-1",
+        ...c,
+      });
+      const r = parseWSMessage(JSON.parse(wire));
+      expect(r.ok).toBe(true);
+    }
+  });
+
+  test("malformed frame is rejected and surfaces a structured ZodError", async () => {
+    const { parseWSMessage } = await import("../lib/ws-zod-schemas");
+    const r = parseWSMessage({
+      type: "interactive_prompt",
+      promptId: "pr-1",
+      conversationId: "c-1",
+      kind: "diff",
+      payload: { path: "/a", additions: "wrong", deletions: 0 },
+    });
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(r.error).toBeDefined();
+      expect(Array.isArray(r.error.issues)).toBe(true);
+    }
+  });
+});

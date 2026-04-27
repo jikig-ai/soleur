@@ -1,4 +1,4 @@
-// `interactive_prompt_response` handler (Stage 2.14).
+// `interactive_prompt_response` handler (Stage 3 — #2885).
 //
 // Pure decision function behind the ws-handler case. Responsibilities:
 //   (a) Validate payload shape + per-kind response literal (no Zod
@@ -30,7 +30,8 @@ import {
   type InteractivePromptKind,
   type PendingPromptRecord,
 } from "./pending-prompt-registry";
-import type { InteractivePromptResponse } from "./cc-interactive-prompt-types";
+import type { WSMessage } from "@/lib/types";
+type InteractivePromptResponse = Extract<WSMessage, { type: "interactive_prompt_response" }>;
 
 export type HandleInteractivePromptResponseResult =
   | { ok: true }

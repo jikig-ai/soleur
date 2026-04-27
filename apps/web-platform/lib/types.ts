@@ -1,4 +1,67 @@
 import type { DomainLeaderId } from "@/server/domain-leaders";
+import type { WorkflowName } from "@/server/conversation-routing";
+import type { InteractivePromptKind } from "@/server/pending-prompt-registry";
+import type { SpawnId, PromptId, ConversationId } from "@/lib/branded-ids";
+
+// Re-export so client code can import workflow-name and branded IDs from the
+// canonical wire-protocol module without reaching into server/* directly.
+export type { WorkflowName } from "@/server/conversation-routing";
+export type { SpawnId, PromptId, ConversationId } from "@/lib/branded-ids";
+
+/** Terminal states a `/soleur:go` workflow run can end in (#2885 Stage 3). */
+export type WorkflowEndStatus =
+  | "completed"
+  | "user_aborted"
+  | "cost_ceiling"
+  | "idle_timeout"
+  | "plugin_load_failure"
+  | "sandbox_denial"
+  | "runner_crash"
+  | "runner_runaway"
+  | "internal_error";
+
+/**
+ * Single todo item carried by `interactive_prompt.kind === "todo_write"`.
+ * Inlined here in Stage 3 — was previously in
+ * the Stage 2 feature-local shim (deleted in Stage 3 / #2885).
+ */
+export interface TodoItem {
+  id: string;
+  content: string;
+  status: "pending" | "in_progress" | "completed";
+}
+
+/** Discriminated payload for `interactive_prompt`, keyed by `kind`. Shapes
+ *  mirror the runner-side contract used by `pending-prompt-registry`. */
+export type InteractivePromptPayload =
+  | { kind: "ask_user"; payload: { question: string; options: string[]; multiSelect: boolean } }
+  | { kind: "plan_preview"; payload: { markdown: string } }
+  | { kind: "diff"; payload: { path: string; additions: number; deletions: number } }
+  | { kind: "bash_approval"; payload: { command: string; cwd: string; gated: boolean } }
+  | { kind: "todo_write"; payload: { items: TodoItem[] } }
+  | { kind: "notebook_edit"; payload: { notebookPath: string; cellIds: string[] } };
+
+/** Discriminated user response for `interactive_prompt_response`. */
+export type InteractivePromptResponsePayload =
+  | { kind: "ask_user"; response: string | string[] }
+  | { kind: "plan_preview"; response: "accept" | "iterate" }
+  | { kind: "bash_approval"; response: "approve" | "deny" }
+  | { kind: "diff" | "todo_write" | "notebook_edit"; response: "ack" };
+
+/**
+ * Bidirectional exhaustiveness assertion: the `kind` set on
+ * `InteractivePromptPayload` must match the registry's `InteractivePromptKind`
+ * exactly (ported from the Stage 2 shim's `_AssertKindsMatch`).
+ * A new kind on either side fails compilation here.
+ */
+type _AssertKindsMatch =
+  InteractivePromptKind extends InteractivePromptPayload["kind"]
+    ? InteractivePromptPayload["kind"] extends InteractivePromptKind
+      ? true
+      : never
+    : never;
+const _exhaustiveKindCheck: _AssertKindsMatch = true;
+void _exhaustiveKindCheck;
 
 // Typed error codes for structured error handling over WebSocket
 export type WSErrorCode =
@@ -124,26 +187,23 @@ export type WSMessage =
   | { type: "usage_update"; conversationId: string; totalCostUsd: number; inputTokens: number; outputTokens: number }
   | { type: "fanout_truncated"; dispatched: number; dropped: number }
   | { type: "upgrade_pending" }
-  // Stage 2 (#2853) — feature-local shape for the Command Center
-  // soleur-go router. Stage 3 replaces these with branded IDs
-  // (PromptId, ConversationId) + Zod parsing at the WS boundary. Until
-  // then, payload is intentionally unstructured on the client side so
-  // the router can ship the interactive-prompt bridge without a
-  // breaking-change waterfall through chat-state-machine + ws-client.
-  | {
-      type: "interactive_prompt";
-      promptId: string;
-      conversationId: string;
-      kind: "ask_user" | "plan_preview" | "diff" | "bash_approval" | "todo_write" | "notebook_edit";
-      payload: unknown;
-    }
-  | {
-      type: "interactive_prompt_response";
-      promptId: string;
-      conversationId: string;
-      kind: "ask_user" | "plan_preview" | "diff" | "bash_approval" | "todo_write" | "notebook_edit";
-      response: unknown;
-    }
+  // Stage 3 (#2885) — Command Center soleur-go router protocol with
+  // discriminated payloads + Zod-parsed boundary. The `interactive_prompt` /
+  // `interactive_prompt_response` sub-unions were previously a feature-local
+  // shim (Stage 2 of #2853); inlined here so
+  // `WSMessage` is the single source of truth.
+  //
+  // ID fields are typed as plain `string` because WSMessage describes the
+  // wire shape — JSON has no brand concept. The branded types `SpawnId` /
+  // `PromptId` / `ConversationId` (re-exported above) provide compile-time
+  // cross-confusion protection at internal API boundaries (registry
+  // signatures, mint helpers); see `lib/branded-ids.ts`.
+  | { type: "subagent_spawn"; parentId: string; leaderId: DomainLeaderId; spawnId: string }
+  | { type: "subagent_complete"; spawnId: string; status: "success" | "error" | "timeout" }
+  | { type: "workflow_started"; workflow: WorkflowName; conversationId: string }
+  | { type: "workflow_ended"; workflow: WorkflowName; status: WorkflowEndStatus; summary?: string }
+  | ({ type: "interactive_prompt"; promptId: string; conversationId: string } & InteractivePromptPayload)
+  | ({ type: "interactive_prompt_response"; promptId: string; conversationId: string } & InteractivePromptResponsePayload)
   | { type: "error"; message: string; errorCode?: WSErrorCode; gateId?: string };
 
 // Database types (matches Supabase schema)

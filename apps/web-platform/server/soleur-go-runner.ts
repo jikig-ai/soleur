@@ -56,10 +56,11 @@ import {
   type InteractivePromptKind,
 } from "./pending-prompt-registry";
 import type {
-  InteractivePromptEvent,
+  WSMessage,
   InteractivePromptPayload,
   TodoItem,
-} from "./cc-interactive-prompt-types";
+} from "@/lib/types";
+type InteractivePromptEvent = Extract<WSMessage, { type: "interactive_prompt" }>;
 
 // Ensure these are "used" (re-export surface rather than dead-code) so the
 // consumer contract stays visible.  They are imported elsewhere in the
@@ -104,7 +105,7 @@ function isKnownWorkflow(value: unknown): value is WorkflowName {
 }
 
 // SDK tool names that produce an `interactive_prompt` surface. Mapped to
-// the discriminated `kind` on `cc-interactive-prompt-types.ts`. Anything
+// the discriminated `kind` on `InteractivePromptPayload` (lib/types.ts). Anything
 // not in this table is non-interactive from the user's POV (Skill / Read /
 // Glob / Grep / Agent / …) and flows through the normal streaming path
 // without a pending-prompt record.

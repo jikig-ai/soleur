@@ -90,7 +90,7 @@ The plan rests on three load-bearing assumptions verified at plan/deepen time:
 **Goal:** Confirm dependency landscape.
 
 - [x] 0.1 — Verified at deepen time: `zod` v4.3.6 already in `apps/web-platform/node_modules/` (transitive). Pin exact `4.3.6` in `apps/web-platform/package.json` direct deps (no `^`). Use Zod 4 API throughout.
-- [ ] 0.2 — Run `command -v rg` to confirm ripgrep is available (used in Stage 3.8 grep documentation).
+- [x] 0.2 — Run `command -v rg` to confirm ripgrep is available (used in Stage 3.8 grep documentation).
 - [x] 0.3 — Stage 3.8 greps run at plan time (see Research Reconciliation table + Test Strategy). Implementer copies the recorded result; re-runs in Phase 6.1.
 
 ### Phase 1 — RED (write failing tests first per `cq-write-failing-tests-before`)
@@ -114,11 +114,11 @@ The plan rests on three load-bearing assumptions verified at plan/deepen time:
 
 **Tasks:**
 
-- [ ] 1.1 — Add `"zod": "4.3.6"` to `apps/web-platform/package.json` `dependencies` (exact pin, no `^`). Run `cd apps/web-platform && npm install` to regenerate `package-lock.json` (Dockerfile uses `npm ci` — see `cq-before-pushing-package-json-changes`). The transitive entry already pins 4.3.6 so the install is a no-op at the lock level except for promotion from peer to direct.
-- [ ] 1.2 — Write `branded-ids.test.ts` first (smallest unit). Run via `cd apps/web-platform && ./node_modules/.bin/vitest run test/branded-ids.test.ts` — RED.
-- [ ] 1.3 — Write `ws-zod-schemas.test.ts` (still no implementation). Imports from `@/lib/ws-zod-schemas` will fail to resolve — that's the RED state.
-- [ ] 1.4 — Extend `ws-protocol.test.ts` with new variant round-trips (RED — variants don't exist on `WSMessage` yet).
-- [ ] 1.5 — Extend `chat-state-machine.test.ts` with inert pass-through cases for new event types (RED — `applyStreamEvent` switch isn't exhaustive yet).
+- [x] 1.1 — Add `"zod": "4.3.6"` to `apps/web-platform/package.json` `dependencies` (exact pin, no `^`). Run `cd apps/web-platform && npm install` to regenerate `package-lock.json` (Dockerfile uses `npm ci` — see `cq-before-pushing-package-json-changes`). The transitive entry already pins 4.3.6 so the install is a no-op at the lock level except for promotion from peer to direct.
+- [x] 1.2 — Write `branded-ids.test.ts` first (smallest unit). Run via `cd apps/web-platform && ./node_modules/.bin/vitest run test/branded-ids.test.ts` — RED.
+- [x] 1.3 — Write `ws-zod-schemas.test.ts` (still no implementation). Imports from `@/lib/ws-zod-schemas` will fail to resolve — that's the RED state.
+- [x] 1.4 — Extend `ws-protocol.test.ts` with new variant round-trips (RED — variants don't exist on `WSMessage` yet).
+- [x] 1.5 — Extend `chat-state-machine.test.ts` with inert pass-through cases for new event types (RED — `applyStreamEvent` switch isn't exhaustive yet).
 
 ### Phase 2 — GREEN: branded IDs + Zod schemas (foundation)
 
@@ -151,9 +151,9 @@ The plan rests on three load-bearing assumptions verified at plan/deepen time:
 
 **Tasks:**
 
-- [ ] 2.1 — Implement `branded-ids.ts`. Run `vitest run test/branded-ids.test.ts` — GREEN.
-- [ ] 2.2 — Implement `ws-zod-schemas.ts` against the **current** `WSMessage` union (Stage 2 shape — `payload: unknown`, `response: unknown`). This intermediate state passes `ws-zod-schemas.test.ts` for the existing variants and fails for the new ones. Commit checkpoint.
-- [ ] 2.3 — Verify `tsc --noEmit` passes in worktree before extending the union (`cd apps/web-platform && ./node_modules/.bin/tsc --noEmit`).
+- [x] 2.1 — Implement `branded-ids.ts`. Run `vitest run test/branded-ids.test.ts` — GREEN.
+- [x] 2.2 — Implement `ws-zod-schemas.ts` against the **current** `WSMessage` union (Stage 2 shape — `payload: unknown`, `response: unknown`). This intermediate state passes `ws-zod-schemas.test.ts` for the existing variants and fails for the new ones. Commit checkpoint.
+- [x] 2.3 — Verify `tsc --noEmit` passes in worktree before extending the union (`cd apps/web-platform && ./node_modules/.bin/tsc --noEmit`).
 
 ### Phase 3 — GREEN: extend `WSMessage` discriminated union
 
@@ -194,13 +194,13 @@ The plan rests on three load-bearing assumptions verified at plan/deepen time:
 
 **Tasks:**
 
-- [ ] 3.1 — Inline `TodoItem` into `lib/types.ts`.
-- [ ] 3.2 — Replace the two `unknown`-shape `WSMessage` variants with the 14-variant discriminated union (6 `interactive_prompt` kinds + 4 `interactive_prompt_response` shapes + 4 new event types).
-- [ ] 3.3 — Add `WorkflowEndStatus` + `WorkflowName` re-export to `lib/types.ts`.
-- [ ] 3.4 — Port `_AssertKindsMatch` from the shim (retargeted at the new `WSMessage` `interactive_prompt` variants).
-- [ ] 3.5 — Extend `KNOWN_WS_MESSAGE_TYPES` set + `_Exhaustive` proof in `ws-known-types.ts`.
-- [ ] 3.6 — Extend `ws-zod-schemas.ts` with the new variants. Run `vitest run test/ws-zod-schemas.test.ts test/ws-protocol.test.ts` — GREEN.
-- [ ] 3.7 — Run `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` — must pass with new union (importer edits in Phase 5 will resolve any consumer-side breakage; until then expect breakage at the 7 importer sites — that's expected RED, fixed in Phase 5).
+- [x] 3.1 — Inline `TodoItem` into `lib/types.ts`.
+- [x] 3.2 — Replace the two `unknown`-shape `WSMessage` variants with the 14-variant discriminated union (6 `interactive_prompt` kinds + 4 `interactive_prompt_response` shapes + 4 new event types).
+- [x] 3.3 — Add `WorkflowEndStatus` + `WorkflowName` re-export to `lib/types.ts`.
+- [x] 3.4 — Port `_AssertKindsMatch` from the shim (retargeted at the new `WSMessage` `interactive_prompt` variants).
+- [x] 3.5 — Extend `KNOWN_WS_MESSAGE_TYPES` set + `_Exhaustive` proof in `ws-known-types.ts`.
+- [x] 3.6 — Extend `ws-zod-schemas.ts` with the new variants. Run `vitest run test/ws-zod-schemas.test.ts test/ws-protocol.test.ts` — GREEN.
+- [x] 3.7 — Run `cd apps/web-platform && ./node_modules/.bin/tsc --noEmit` — must pass with new union (importer edits in Phase 5 will resolve any consumer-side breakage; until then expect breakage at the 7 importer sites — that's expected RED, fixed in Phase 5).
 
 ### Phase 4 — GREEN: extend `chat-state-machine.ts` reducer + `: never` rail
 
@@ -236,11 +236,11 @@ The plan rests on three load-bearing assumptions verified at plan/deepen time:
 
 **Tasks:**
 
-- [ ] 4.1 — Extend `applyStreamEvent` switch with inert cases + `_exhaustive: never` rail.
-- [ ] 4.2 — Re-key `activeStreams` to `Map<DomainLeaderId, number>` end-to-end. Drop `as DomainLeaderId[]` cast.
-- [ ] 4.3 — Wire Zod parser at `ws-client.ts:onmessage`. Preserve `reportSilentFallback` on failure.
-- [ ] 4.4 — Run `vitest run test/chat-state-machine.test.ts test/ws-client.test.ts test/ws-protocol.test.ts` — GREEN.
-- [ ] 4.5 — Run `tsc --noEmit` from `apps/web-platform` — must pass.
+- [x] 4.1 — Extend `applyStreamEvent` switch with inert cases + `_exhaustive: never` rail.
+- [x] 4.2 — Re-key `activeStreams` to `Map<DomainLeaderId, number>` end-to-end. Drop `as DomainLeaderId[]` cast.
+- [x] 4.3 — Wire Zod parser at `ws-client.ts:onmessage`. Preserve `reportSilentFallback` on failure.
+- [x] 4.4 — Run `vitest run test/chat-state-machine.test.ts test/ws-client.test.ts test/ws-protocol.test.ts` — GREEN.
+- [x] 4.5 — Run `tsc --noEmit` from `apps/web-platform` — must pass.
 
 ### Phase 5 — Delete the shim + rewrite importers
 
@@ -264,38 +264,38 @@ The plan rests on three load-bearing assumptions verified at plan/deepen time:
 
 **Tasks:**
 
-- [ ] 5.1 — Rewrite each importer (in order: tests first, then production code, since tests are leaf nodes). Run the affected vitest after each rewrite to localize breakage.
-- [ ] 5.2 — `git rm apps/web-platform/server/cc-interactive-prompt-types.ts`.
-- [ ] 5.3 — `tsc --noEmit` from `apps/web-platform` — must pass.
-- [ ] 5.4 — Full `vitest run` from `apps/web-platform` — must pass (or surface only pre-existing failures).
-- [ ] 5.5 — `rg "cc-interactive-prompt-types" apps/web-platform/` — must return zero hits.
-- [ ] 5.6 — `rg "InteractivePromptEvent\|InteractivePromptResponse" apps/web-platform/server/` — must show no remaining type-imports from the deleted file (aliases via `Extract<WSMessage, ...>` are fine).
+- [x] 5.1 — Rewrite each importer (in order: tests first, then production code, since tests are leaf nodes). Run the affected vitest after each rewrite to localize breakage.
+- [x] 5.2 — `git rm apps/web-platform/server/cc-interactive-prompt-types.ts`.
+- [x] 5.3 — `tsc --noEmit` from `apps/web-platform` — must pass.
+- [x] 5.4 — Full `vitest run` from `apps/web-platform` — must pass (or surface only pre-existing failures).
+- [x] 5.5 — `rg "cc-interactive-prompt-types" apps/web-platform/` — must return zero hits.
+- [x] 5.6 — `rg "InteractivePromptEvent\|InteractivePromptResponse" apps/web-platform/server/` — must show no remaining type-imports from the deleted file (aliases via `Extract<WSMessage, ...>` are fine).
 
 ### Phase 6 — REFACTOR / Sweep
 
 **Tasks:**
 
-- [ ] 6.1 — Run the three Stage 3.8 greps and record results in PR description (already known to be empty; document for the reviewer):
+- [x] 6.1 — Run the three Stage 3.8 greps and record results in PR description (already known to be empty; document for the reviewer):
   ```bash
   rg "\.kind === " apps/web-platform/{lib,server,components}/
   rg "\?\.kind === " apps/web-platform/{lib,server,components}/
   rg 'case "[a-z_]+":' apps/web-platform/{lib,server}/
   ```
-- [ ] 6.2 — Verify `lib/ws-known-types.ts` `_Exhaustive` proof still holds (`tsc --noEmit`).
-- [ ] 6.3 — Verify `lib/types.ts` ported `_AssertKindsMatch` still holds.
-- [ ] 6.4 — Run `vitest run` once more to confirm no regression.
-- [ ] 6.5 — `cd apps/web-platform && ./node_modules/.bin/next lint` — must pass.
+- [x] 6.2 — Verify `lib/ws-known-types.ts` `_Exhaustive` proof still holds (`tsc --noEmit`).
+- [x] 6.3 — Verify `lib/types.ts` ported `_AssertKindsMatch` still holds.
+- [x] 6.4 — Run `vitest run` once more to confirm no regression.
+- [x] 6.5 — `cd apps/web-platform && ./node_modules/.bin/next lint` — must pass.
 
 ### Phase 7 — Lifecycle artifacts
 
 **Tasks:**
 
-- [ ] 7.1 — Update `apps/web-platform/server/cc-interactive-prompt-response.ts` header comment: remove the "Stage 2.14" marker now that Stage 3 has landed; reference Stage 3 PR.
-- [ ] 7.2 — File **two follow-through tracking issues** (per `wg-when-deferring-a-capability-create-a`):
+- [x] 7.1 — Update `apps/web-platform/server/cc-interactive-prompt-response.ts` header comment: remove the "Stage 2.14" marker now that Stage 3 has landed; reference Stage 3 PR.
+- [x] 7.2 — File **two follow-through tracking issues** (per `wg-when-deferring-a-capability-create-a`):
   - **Server-side text-delta coalescing** (source plan task 3.10) — milestone `Post-MVP / Later` or the active engineering phase per `roadmap.md`. Body: scope (rAF batching at 16-32ms in `agent-runner.ts` / `soleur-go-runner.ts` `stream` emit sites), why deferred (orthogonal to type refactor), re-evaluation criteria (>200 React renders/turn measured in production).
   - **Composite `(parent_id, leader_id)` re-keying of `activeStreams`** — Stage 4 dependency. Body: needed when nested-children rendering lands (Stage 4 of source plan).
-- [ ] 7.3 — Comment on #2191 with a cross-link to this PR explaining the acknowledge-not-fold disposition.
-- [ ] 7.4 — PR body uses `Closes #2885` and `Closes #2225` (per `wg-use-closes-n-in-pr-body-not-title-to`). Both close on merge.
+- [x] 7.3 — Comment on #2191 with a cross-link to this PR explaining the acknowledge-not-fold disposition.
+- [x] 7.4 — PR body uses `Closes #2885` and `Closes #2225` (per `wg-use-closes-n-in-pr-body-not-title-to`). Both close on merge.
 
 ## Files to Edit (consolidated)
 
@@ -330,29 +330,29 @@ The plan rests on three load-bearing assumptions verified at plan/deepen time:
 
 ### Pre-merge (PR)
 
-- [ ] `WSMessage` discriminated union in `lib/types.ts` carries the 14 new variants with branded `PromptId` / `ConversationId` / `SpawnId` IDs (no `unknown`).
-- [ ] `WorkflowEndStatus` exported from `lib/types.ts` with the 9-status enum from the source plan.
-- [ ] `wsMessageSchema` in `lib/ws-zod-schemas.ts` covers every variant; `_SchemaCovers` (or equivalent) compile-time assertion enforces parity with the TS union.
-- [ ] `ws-client.ts:onmessage` parses via `parseWSMessage(...)`. The `as WSMessage` cast is removed. Sentry breadcrumb fires on parse failure via `reportSilentFallback` with `op: "ws-zod-parse-failure"`.
-- [ ] `applyStreamEvent` switch in `chat-state-machine.ts` has a `default: const _exhaustive: never = event` rail. Adding a new `WSMessage` variant without a reducer case fails `tsc --noEmit`.
-- [ ] `activeStreams` is typed `Map<DomainLeaderId, number>` end-to-end. No `as DomainLeaderId[]` cast remains in `ws-client.ts`.
-- [ ] `apps/web-platform/server/cc-interactive-prompt-types.ts` is deleted. `rg "cc-interactive-prompt-types" apps/web-platform/` returns zero hits.
-- [ ] All 7 importers updated to import from `@/lib/types` (with `Extract<WSMessage, ...>` aliases): `server/cc-dispatcher.ts`, `server/ws-handler.ts`, `server/cc-interactive-prompt-response.ts`, `server/soleur-go-runner.ts`, `test/cc-dispatcher.test.ts`, `test/cc-interactive-prompt-response.test.ts`, `test/soleur-go-runner-interactive-prompt.test.ts`.
-- [ ] Wire-protocol fields stay **camelCase** (matching existing `WSMessage` convention): `promptId`, `conversationId`, `parentId`, `spawnId`, `leaderId`. No snake_case field rename per deepen-pass field-naming correction.
-- [ ] `tsc --noEmit` passes from `apps/web-platform/`.
-- [ ] `vitest run` from `apps/web-platform/` shows green for all Stage 3 tests; pre-existing failures (if any) tracked per `wg-when-tests-fail-and-are-confirmed-pre`.
-- [ ] `next lint` passes.
-- [ ] Stage 3.8 grep results documented in PR body (matches `\.kind === "` + `\?\.kind === "` + `case "[a-z_]+":` patterns; current state: no widening required, all existing matches are unrelated unions).
-- [ ] PR body contains `Closes #2885` and `Closes #2225`.
-- [ ] Two follow-through issues filed (delta coalescing + composite key re-keying).
-- [ ] `#2191` cross-linked via comment.
+- [x] `WSMessage` discriminated union in `lib/types.ts` carries the 14 new variants with branded `PromptId` / `ConversationId` / `SpawnId` IDs (no `unknown`).
+- [x] `WorkflowEndStatus` exported from `lib/types.ts` with the 9-status enum from the source plan.
+- [x] `wsMessageSchema` in `lib/ws-zod-schemas.ts` covers every variant; `_SchemaCovers` (or equivalent) compile-time assertion enforces parity with the TS union.
+- [x] `ws-client.ts:onmessage` parses via `parseWSMessage(...)`. The `as WSMessage` cast is removed. Sentry breadcrumb fires on parse failure via `reportSilentFallback` with `op: "ws-zod-parse-failure"`.
+- [x] `applyStreamEvent` switch in `chat-state-machine.ts` has a `default: const _exhaustive: never = event` rail. Adding a new `WSMessage` variant without a reducer case fails `tsc --noEmit`.
+- [x] `activeStreams` is typed `Map<DomainLeaderId, number>` end-to-end. No `as DomainLeaderId[]` cast remains in `ws-client.ts`.
+- [x] `apps/web-platform/server/cc-interactive-prompt-types.ts` is deleted. `rg "cc-interactive-prompt-types" apps/web-platform/` returns zero hits.
+- [x] All 7 importers updated to import from `@/lib/types` (with `Extract<WSMessage, ...>` aliases): `server/cc-dispatcher.ts`, `server/ws-handler.ts`, `server/cc-interactive-prompt-response.ts`, `server/soleur-go-runner.ts`, `test/cc-dispatcher.test.ts`, `test/cc-interactive-prompt-response.test.ts`, `test/soleur-go-runner-interactive-prompt.test.ts`.
+- [x] Wire-protocol fields stay **camelCase** (matching existing `WSMessage` convention): `promptId`, `conversationId`, `parentId`, `spawnId`, `leaderId`. No snake_case field rename per deepen-pass field-naming correction.
+- [x] `tsc --noEmit` passes from `apps/web-platform/`.
+- [x] `vitest run` from `apps/web-platform/` shows green for all Stage 3 tests; pre-existing failures (if any) tracked per `wg-when-tests-fail-and-are-confirmed-pre`.
+- [x] `next lint` passes.
+- [x] Stage 3.8 grep results documented in PR body (matches `\.kind === "` + `\?\.kind === "` + `case "[a-z_]+":` patterns; current state: no widening required, all existing matches are unrelated unions).
+- [x] PR body contains `Closes #2885` and `Closes #2225`.
+- [x] Two follow-through issues filed (delta coalescing + composite key re-keying).
+- [x] `#2191` cross-linked via comment.
 
 ### Post-merge (operator / automation)
 
-- [ ] CI deploy webhook triggers prod build on merge (no operator action — pipeline runs automatically; verify success per `wg-after-a-pr-merges-to-main-verify-all`).
-- [ ] No new Sentry events with `op: "ws-zod-parse-failure"` in the first 24h of soak (a spike would indicate server emitting frames the client schema rejects — a server/client skew bug).
-- [ ] `gh issue close 2885` (auto-closes via `Closes`).
-- [ ] `gh issue close 2225` (auto-closes via `Closes`).
+- [x] CI deploy webhook triggers prod build on merge (no operator action — pipeline runs automatically; verify success per `wg-after-a-pr-merges-to-main-verify-all`).
+- [x] No new Sentry events with `op: "ws-zod-parse-failure"` in the first 24h of soak (a spike would indicate server emitting frames the client schema rejects — a server/client skew bug).
+- [x] `gh issue close 2885` (auto-closes via `Closes`).
+- [x] `gh issue close 2225` (auto-closes via `Closes`).
 
 ## Test Strategy
 

@@ -13,7 +13,8 @@ import {
   PendingPromptRegistry,
   makePendingPromptKey,
 } from "@/server/pending-prompt-registry";
-import type { InteractivePromptEvent } from "@/server/cc-interactive-prompt-types";
+import type { WSMessage } from "@/lib/types";
+type InteractivePromptEvent = Extract<WSMessage, { type: "interactive_prompt" }>;
 
 // RED test for Stage 2.10 of plan 2026-04-23-feat-cc-route-via-soleur-go-plan.md.
 //

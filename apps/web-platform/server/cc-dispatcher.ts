@@ -34,10 +34,8 @@ import {
   pruneTombstonesFor,
   type HandleInteractivePromptResponseResult,
 } from "./cc-interactive-prompt-response";
-import type {
-  InteractivePromptEvent,
-  InteractivePromptResponse,
-} from "./cc-interactive-prompt-types";
+type InteractivePromptEvent = Extract<WSMessage, { type: "interactive_prompt" }>;
+type InteractivePromptResponse = Extract<WSMessage, { type: "interactive_prompt_response" }>;
 import {
   type ConversationRouting,
   type WorkflowName,

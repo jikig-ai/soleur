@@ -6,7 +6,8 @@ import {
   handleInteractivePromptResponseCase,
   __resetDispatcherForTests,
 } from "@/server/cc-dispatcher";
-import type { InteractivePromptResponse } from "@/server/cc-interactive-prompt-types";
+import type { WSMessage } from "@/lib/types";
+type InteractivePromptResponse = Extract<WSMessage, { type: "interactive_prompt_response" }>;
 
 // Unit tests for the per-process singleton + orchestration module. The
 // real-SDK queryFactory path is stubbed (throws — runner's own
@@ -137,14 +138,14 @@ describe("cc-dispatcher singletons + orchestration", () => {
 
       const payload =
         expectedError === "invalid_payload"
-          ? ({ type: "interactive_prompt_response" } as unknown as import("@/server/cc-interactive-prompt-types").InteractivePromptResponse)
+          ? ({ type: "interactive_prompt_response" } as unknown as InteractivePromptResponse)
           : ({
               type: "interactive_prompt_response",
               promptId: "p-1",
               conversationId: "conv-1",
               kind: payloadKind,
               response,
-            } as unknown as import("@/server/cc-interactive-prompt-types").InteractivePromptResponse);
+            } as unknown as InteractivePromptResponse);
 
       const result = handleInteractivePromptResponseCase({
         userId: "u1",
