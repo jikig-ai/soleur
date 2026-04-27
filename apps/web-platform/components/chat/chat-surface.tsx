@@ -16,6 +16,11 @@ import * as Sentry from "@sentry/nextjs";
 import { MessageBubble } from "@/components/chat/message-bubble";
 import { ReviewGateCard } from "@/components/chat/review-gate-card";
 import { StatusIndicator } from "@/components/chat/status-indicator";
+import { SubagentGroup } from "@/components/chat/subagent-group";
+import { InteractivePromptCard } from "@/components/chat/interactive-prompt-card";
+import { WorkflowLifecycleBar } from "@/components/chat/workflow-lifecycle-bar";
+import { ToolUseChip } from "@/components/chat/tool-use-chip";
+import type { InteractivePromptResponsePayload } from "@/lib/types";
 
 export type ChatSurfaceVariant = "full" | "sidebar";
 
@@ -85,6 +90,8 @@ export function ChatSurface({
     resumeSession,
     sendMessage,
     sendReviewGateResponse,
+    sendInteractivePromptResponse,
+    resolveInteractivePrompt,
     status,
     sessionConfirmed,
     disconnectReason,
@@ -95,6 +102,7 @@ export function ChatSurface({
     usageData,
     realConversationId,
     resumedFrom,
+    workflow,
   } = useWebSocket(conversationId);
 
   const { names: customNames, getDisplayName, getIconPath, loading: teamNamesLoading } = useTeamNames();
@@ -115,6 +123,25 @@ export function ChatSurface({
       setShowNotificationPrompt(true);
     },
     [sendReviewGateResponse],
+  );
+
+  const handleInteractivePromptResponse = useCallback(
+    (
+      promptId: string,
+      conversationIdArg: string,
+      response: InteractivePromptResponsePayload,
+    ) => {
+      // Send the wire frame.
+      sendInteractivePromptResponse({
+        type: "interactive_prompt_response",
+        promptId,
+        conversationId: conversationIdArg,
+        ...response,
+      });
+      // Optimistically mark the local card as resolved.
+      resolveInteractivePrompt(promptId, conversationIdArg, response.response);
+    },
+    [sendInteractivePromptResponse, resolveInteractivePrompt],
   );
 
   useEffect(() => {
@@ -329,6 +356,11 @@ export function ChatSurface({
           </div>
         )}
 
+        <WorkflowLifecycleBar
+          lifecycle={workflow}
+          onStartNewConversation={() => router.push("/dashboard")}
+        />
+
         <div className={`min-w-0 space-y-4 ${widthWrapper}`}>
           {(() => {
             const seenSoFar = new Set<string>();
@@ -336,22 +368,13 @@ export function ChatSurface({
               const isFirst = msg.leaderId && !seenSoFar.has(msg.leaderId);
               if (msg.leaderId) seenSoFar.add(msg.leaderId);
 
-              return (
-                <div key={msg.id} className="min-w-0">
-                  {msg.type === "review_gate" ? (
-                    <ReviewGateCard
-                      gateId={msg.gateId}
-                      question={msg.question}
-                      options={msg.options}
-                      header={msg.header}
-                      descriptions={msg.descriptions}
-                      stepProgress={msg.stepProgress}
-                      resolved={msg.resolved}
-                      selectedOption={msg.selectedOption}
-                      gateError={msg.gateError}
-                      onSelect={handleReviewGateResponse}
-                    />
-                  ) : (
+              // Render dispatch with `: never` exhaustiveness rail per
+              // `cq-union-widening-grep-three-patterns`. A new ChatMessage
+              // variant without a case here fails `tsc --noEmit`.
+              let body: React.ReactNode;
+              switch (msg.type) {
+                case "text":
+                  body = (
                     <MessageBubble
                       role={msg.role}
                       content={msg.content}
@@ -366,7 +389,105 @@ export function ChatSurface({
                       attachments={msg.attachments}
                       variant={variant}
                     />
-                  )}
+                  );
+                  break;
+                case "review_gate":
+                  body = (
+                    <ReviewGateCard
+                      gateId={msg.gateId}
+                      question={msg.question}
+                      options={msg.options}
+                      header={msg.header}
+                      descriptions={msg.descriptions}
+                      stepProgress={msg.stepProgress}
+                      resolved={msg.resolved}
+                      selectedOption={msg.selectedOption}
+                      gateError={msg.gateError}
+                      onSelect={handleReviewGateResponse}
+                    />
+                  );
+                  break;
+                case "subagent_group":
+                  body = (
+                    <SubagentGroup
+                      parentSpawnId={msg.parentSpawnId}
+                      parentLeaderId={msg.parentLeaderId}
+                      parentTask={msg.parentTask}
+                      children={msg.children}
+                      getDisplayName={getDisplayName}
+                      getIconPath={getIconPath}
+                      variant={variant}
+                    />
+                  );
+                  break;
+                case "interactive_prompt": {
+                  const k = msg.promptKind;
+                  body = (
+                    <InteractivePromptCard
+                      promptId={msg.promptId}
+                      conversationId={msg.conversationId}
+                      kind={k}
+                      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                      payload={msg.promptPayload as any}
+                      resolved={msg.resolved}
+                      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                      selectedResponse={msg.selectedResponse as any}
+                      onRespond={(response) =>
+                        handleInteractivePromptResponse(
+                          msg.promptId,
+                          msg.conversationId,
+                          response,
+                        )
+                      }
+                    />
+                  );
+                  break;
+                }
+                case "workflow_ended":
+                  body = (
+                    <div
+                      data-message-type="workflow_ended"
+                      className="rounded-xl border border-neutral-800 bg-neutral-900/40 px-4 py-3"
+                    >
+                      <p className="text-sm text-neutral-200">
+                        Workflow{" "}
+                        <span className="font-semibold">{msg.workflow}</span>{" "}
+                        ended:{" "}
+                        <span
+                          className={
+                            msg.status === "completed"
+                              ? "text-emerald-400"
+                              : "text-red-400"
+                          }
+                        >
+                          {msg.status}
+                        </span>
+                      </p>
+                      {msg.summary ? (
+                        <p className="mt-1 text-xs text-neutral-400">{msg.summary}</p>
+                      ) : null}
+                    </div>
+                  );
+                  break;
+                case "tool_use_chip":
+                  body = (
+                    <ToolUseChip
+                      toolName={msg.toolName}
+                      toolLabel={msg.toolLabel}
+                      leaderId={msg.leaderId as "cc_router" | "system"}
+                    />
+                  );
+                  break;
+                default: {
+                  const _exhaustive: never = msg;
+                  void _exhaustive;
+                  body = null;
+                }
+              }
+
+              return (
+                <div key={msg.id} className="min-w-0">
+                  {body}
                 </div>
               );
             });
@@ -431,6 +552,7 @@ export function ChatSurface({
             onAtDismiss={() => setAtVisible(false)}
             atMentionVisible={atVisible}
             disabled={status !== "connected"}
+            workflowEnded={workflow.state === "ended"}
             placeholder={
               status === "connected"
                 ? (placeholder ??
