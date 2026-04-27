@@ -203,6 +203,7 @@ export function buildConversationsTools(opts: BuildConversationsToolsOpts) {
 
         const supabase = createServiceClient();
         const nowIso = new Date().toISOString();
+        // allow-direct-conversation-update: stronger 3-column composite key (id, user_id, repo_url) + select for not_found semantics — beyond updateConversationFor's R8 contract
         const { data, error } = await supabase
           .from("conversations")
           .update({ archived_at: nowIso })
@@ -239,6 +240,7 @@ export function buildConversationsTools(opts: BuildConversationsToolsOpts) {
         if (!repoUrl) return disconnectedResponse();
 
         const supabase = createServiceClient();
+        // allow-direct-conversation-update: stronger 3-column composite key (id, user_id, repo_url) + select for not_found semantics — beyond updateConversationFor's R8 contract
         const { data, error } = await supabase
           .from("conversations")
           .update({ archived_at: null })
@@ -281,6 +283,7 @@ export function buildConversationsTools(opts: BuildConversationsToolsOpts) {
         if (!repoUrl) return disconnectedResponse();
 
         const supabase = createServiceClient();
+        // allow-direct-conversation-update: stronger 3-column composite key (id, user_id, repo_url) + select for not_found semantics — beyond updateConversationFor's R8 contract
         const { data, error } = await supabase
           .from("conversations")
           .update({ status: args.status })

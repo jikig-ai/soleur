@@ -71,10 +71,19 @@ export function createSupabaseMockImpl(
       };
     }
     if (table === "conversations") {
+      // Chainable .eq so updateConversationFor's
+      //   .update(...).eq("id", ...).eq("user_id", ...)
+      // composite-key pattern resolves; the terminal value still has
+      // `{ error: null }` for awaiters of the chain.
+      const conversationsUpdateChain: Record<string, unknown> = {
+        error: null,
+        eq: vi.fn(),
+      };
+      (conversationsUpdateChain.eq as ReturnType<typeof vi.fn>).mockReturnValue(
+        conversationsUpdateChain,
+      );
       return {
-        update: vi.fn(() => ({
-          eq: vi.fn(() => ({ error: null })),
-        })),
+        update: vi.fn(() => conversationsUpdateChain),
       };
     }
     if (table === "messages") {

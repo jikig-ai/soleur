@@ -19,6 +19,7 @@ import {
   resolveReviewGate,
   abortSession,
 } from "./agent-runner";
+import { updateConversationFor } from "./conversation-writer";
 import * as Sentry from "@sentry/nextjs";
 import { sanitizeErrorForClient } from "./error-sanitizer";
 import { createChildLogger } from "./logger";
@@ -188,22 +189,16 @@ export function abortActiveSession(userId: string, session: ClientSession): void
   session.routing = undefined;
 
   // Fire-and-forget — orphan cleanup catches failures on restart.
-  // Supabase query builders return PromiseLike (not Promise), so use
-  // .then(onFulfilled, onRejected) instead of .then().catch().
-  supabase
-    .from("conversations")
-    .update({ status: "completed", last_active: new Date().toISOString() })
-    .eq("id", oldConvId)
-    .then(
-      ({ error }) => {
-        if (error) {
-          log.error({ conversationId: oldConvId, err: error.message }, "Failed to mark conversation as completed");
-        }
-      },
-      (err) => {
-        log.error({ conversationId: oldConvId, err }, "Failed to update conversation");
-      },
+  // The wrapper enforces the R8 composite-key invariant; errors mirror to
+  // Sentry via reportSilentFallback so we don't need a local catch.
+  if (oldConvId) {
+    void updateConversationFor(
+      userId,
+      oldConvId,
+      { status: "completed", last_active: new Date().toISOString() },
+      { feature: "ws-handler", op: "supersede-on-reconnect" },
     );
+  }
 
   session.conversationId = undefined;
 }
@@ -519,24 +514,21 @@ async function dispatchSoleurGoForConversation(
         ? { kind: "soleur_go_pending" }
         : { kind: "soleur_go_active", workflow },
     );
-    const { error } = await supabase
-      .from("conversations")
-      .update({
+    // data-integrity P2-A: defense-in-depth — conversationId is already
+    // server-derived, but the wrapper's `.eq("user_id", userId)` invariant
+    // ensures a future refactor that accepts conversationId from a
+    // less-trusted source cannot cross-write another user's row.
+    const { ok, error } = await updateConversationFor(
+      userId,
+      conversationId,
+      {
         active_workflow: serialized,
         last_active: new Date().toISOString(),
-      })
-      .eq("id", conversationId)
-      // data-integrity P2-A: defense-in-depth — conversationId is
-      // already server-derived, but scoping the UPDATE by user_id
-      // ensures a future refactor that accepts conversationId from a
-      // less-trusted source cannot cross-write another user's row.
-      .eq("user_id", userId);
-    if (error) {
-      log.error(
-        { conversationId, workflow, err: error.message },
-        "Failed to persist active_workflow",
-      );
-      throw new Error(`active_workflow update failed: ${error.message}`);
+      },
+      { feature: "ws-handler", op: "persist-active-workflow", extra: { workflow } },
+    );
+    if (!ok) {
+      throw new Error(`active_workflow update failed: ${error?.message ?? "unknown"}`);
     }
     // Update the in-memory cache on the session so the next-turn
     // chat-case route lookup observes the new workflow without a DB
@@ -888,10 +880,12 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
       try {
         const convId = session.conversationId;
         abortSession(userId, convId, "superseded");
-        await supabase
-          .from("conversations")
-          .update({ status: "completed", last_active: new Date().toISOString() })
-          .eq("id", convId);
+        await updateConversationFor(
+          userId,
+          convId,
+          { status: "completed", last_active: new Date().toISOString() },
+          { feature: "ws-handler", op: "close-conversation" },
+        );
         session.conversationId = undefined;
         session.routing = undefined;
         void releaseSlot(userId, convId);

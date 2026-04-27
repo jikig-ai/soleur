@@ -7,7 +7,7 @@ import path from "path";
 import { createServiceClient } from "@/lib/supabase/service";
 import { ROUTABLE_DOMAIN_LEADERS, type DomainLeaderId } from "./domain-leaders";
 import { routeMessage } from "./domain-router";
-import { KeyInvalidError, type AttachmentRef } from "@/lib/types";
+import { KeyInvalidError, type AttachmentRef, type Conversation } from "@/lib/types";
 import { ALLOWED_ATTACHMENT_TYPES } from "@/lib/attachment-constants";
 import { decryptKey, decryptKeyLegacy, encryptKey } from "./byok";
 import { sendToClient } from "./ws-handler";
@@ -40,6 +40,7 @@ import { buildGithubTools } from "./github-tools";
 import { buildPlausibleTools } from "./plausible-tools";
 import { createCanUseTool } from "./permission-callback";
 import { reportSilentFallback } from "./observability";
+import { updateConversationFor } from "./conversation-writer";
 import { buildAgentQueryOptions } from "./agent-runner-query-options";
 import {
   withWorkspacePermissionLock,
@@ -343,17 +344,20 @@ async function saveMessage(
 }
 
 async function updateConversationStatus(
+  userId: string,
   conversationId: string,
-  status: string,
+  status: Conversation["status"],
 ) {
-  const { error } = await supabase()
-    .from("conversations")
-    .update({ status, last_active: new Date().toISOString() })
-    .eq("id", conversationId);
+  const result = await updateConversationFor(
+    userId,
+    conversationId,
+    { status, last_active: new Date().toISOString() },
+    { feature: "agent-runner", op: "updateConversationStatus" },
+  );
 
-  if (error) {
+  if (!result.ok) {
     throw new Error(
-      `Failed to update conversation status: ${error.message}`,
+      `Failed to update conversation status: ${result.error?.message ?? "unknown"}`,
     );
   }
 }
@@ -413,6 +417,7 @@ function buildReplayPrompt(
 // ---------------------------------------------------------------------------
 export async function cleanupOrphanedConversations(): Promise<void> {
   const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1_000).toISOString();
+  // allow-direct-conversation-update: bulk status sweep — no per-user composite key
   const { error } = await supabase()
     .from("conversations")
     .update({ status: "failed" })
@@ -433,6 +438,7 @@ const INACTIVITY_CHECK_INTERVAL_MS = 60 * 60 * 1_000; // Check every hour
 export function startInactivityTimer(): void {
   const timer = setInterval(async () => {
     const cutoff = new Date(Date.now() - INACTIVITY_TIMEOUT_MS).toISOString();
+    // allow-direct-conversation-update: bulk timeout sweep — no per-user composite key
     const { data, error } = await supabase()
       .from("conversations")
       .update({ status: "completed" })
@@ -907,7 +913,11 @@ issues/PRs, 4 KB comments); follow the html_url for the full text.`;
             abortableReviewGate,
             sendToClient,
             notifyOfflineUser,
-            updateConversationStatus,
+            // Closure captures `userId` from the enclosing runAgentSession
+            // scope so the deps interface stays at (conversationId, status)
+            // — see plan §"Transitive Coverage via deps.updateConversationStatus".
+            updateConversationStatus: (convId, status) =>
+              updateConversationStatus(userId, convId, status as Conversation["status"]),
           },
         }),
       }),
@@ -937,12 +947,14 @@ issues/PRs, 4 KB comments); follow the html_url for the full text.`;
       if (!session.sessionId && "session_id" in message && message.session_id) {
         session.sessionId = message.session_id;
         // Persist to DB for cross-turn resume
-        const { error: updateErr } = await supabase()
-          .from("conversations")
-          .update({ session_id: message.session_id })
-          .eq("id", conversationId);
-        if (updateErr) {
-          log.error({ err: updateErr, conversationId }, "Failed to store session_id");
+        const { ok } = await updateConversationFor(
+          userId,
+          conversationId,
+          { session_id: message.session_id },
+          { feature: "agent-runner", op: "persist-session-id" },
+        );
+        if (!ok) {
+          log.error({ conversationId }, "Failed to store session_id");
         }
       }
 
@@ -1096,7 +1108,7 @@ issues/PRs, 4 KB comments); follow the html_url for the full text.`;
 
         // Mark as waiting_for_user instead of completed -- conversation
         // continues until explicit close or inactivity timeout.
-        await updateConversationStatus(conversationId, "waiting_for_user");
+        await updateConversationStatus(userId, conversationId, "waiting_for_user");
 
         // In multi-leader mode, dispatchToLeaders sends a single session_ended
         // after all leaders finish — individual leaders must not send it or the
@@ -1135,7 +1147,7 @@ issues/PRs, 4 KB comments); follow the html_url for the full text.`;
       if (!isSuperseded) {
         // Disconnect or abort -- mark conversation as failed so it does not
         // stay stuck in "waiting_for_user" or "active" status forever.
-        await updateConversationStatus(conversationId, "failed").catch(
+        await updateConversationStatus(userId, conversationId, "failed").catch(
           (statusErr) => {
             log.error(
               { err: statusErr, conversationId },
@@ -1185,7 +1197,7 @@ issues/PRs, 4 KB comments); follow the html_url for the full text.`;
         message,
         errorCode: err instanceof KeyInvalidError ? "key_invalid" : undefined,
       });
-      await updateConversationStatus(conversationId, "failed").catch(
+      await updateConversationStatus(userId, conversationId, "failed").catch(
         (statusErr) => {
           log.error(
             { err: statusErr, conversationId },
@@ -1417,7 +1429,7 @@ export async function sendUserMessage(
       message,
       errorCode: err instanceof KeyInvalidError ? "key_invalid" : undefined,
     });
-    updateConversationStatus(conversationId, "failed").catch((statusErr) => {
+    updateConversationStatus(userId, conversationId, "failed").catch((statusErr) => {
       log.error(
         { err: statusErr, conversationId },
         "Failed to mark conversation as failed",
@@ -1470,12 +1482,14 @@ export async function sendUserMessage(
     ).catch(async (err) => {
       log.warn({ err }, "SDK resume failed, falling back to message replay");
       // Clear stale session_id
-      const { error: clearErr } = await supabase()
-        .from("conversations")
-        .update({ session_id: null })
-        .eq("id", conversationId);
-      if (clearErr) {
-        log.error({ err: clearErr, conversationId }, "Failed to clear session_id");
+      const { ok: clearOk } = await updateConversationFor(
+        userId,
+        conversationId,
+        { session_id: null },
+        { feature: "agent-runner", op: "clear-stale-session-id" },
+      );
+      if (!clearOk) {
+        log.error({ conversationId }, "Failed to clear session_id");
       }
 
       // Load history and build replay prompt

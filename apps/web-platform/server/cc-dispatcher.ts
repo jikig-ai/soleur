@@ -17,7 +17,7 @@ import path from "path";
 import type { Query } from "@anthropic-ai/claude-agent-sdk";
 import { query as sdkQuery } from "@anthropic-ai/claude-agent-sdk";
 
-import type { WSMessage } from "@/lib/types";
+import type { WSMessage, Conversation } from "@/lib/types";
 import { KeyInvalidError } from "@/lib/types";
 import { createServiceClient } from "@/lib/supabase/service";
 import {
@@ -46,6 +46,7 @@ import {
   type WorkflowName,
 } from "./conversation-routing";
 import { reportSilentFallback } from "./observability";
+import { updateConversationFor } from "./conversation-writer";
 import {
   getUserApiKey,
   getUserServiceTokens,
@@ -409,28 +410,28 @@ export const realSdkQueryFactory: QueryFactory = async (
     // doesn't leak grants.
     bashApprovalCache: getBashApprovalCache(args.userId, args.conversationId),
     // Real conversation-status write — replaces the prior no-op (#2920).
-    // Mirrors legacy `agent-runner.ts:303` shape (status + last_active)
-    // so the idle-reaper sees fresh activity. R8 composite-key invariant
-    // (`.eq("user_id", args.userId)`) defends against cross-user blast
-    // radius. Errors mirror to Sentry via `reportSilentFallback` per
+    // Delegates to the typed wrapper which enforces the R8 composite-key
+    // invariant (`.eq("id", convId).eq("user_id", args.userId)`) and
+    // mirrors errors to Sentry via `reportSilentFallback` per
     // `cq-silent-fallback-must-mirror-to-sentry`.
+    //
+    // The closure shape `(convId, status) => Promise<void>` is preserved
+    // so `permission-callback.ts`'s 6 deps-injected call sites get
+    // transitive R8 coverage with zero churn at the deps interface.
     updateConversationStatus: async (convId: string, status: string) => {
-      const { error } = await supabase()
-        .from("conversations")
-        .update({ status, last_active: new Date().toISOString() })
-        .eq("id", convId)
-        .eq("user_id", args.userId);
-      if (error) {
-        reportSilentFallback(error, {
+      await updateConversationFor(
+        args.userId,
+        convId,
+        {
+          status: status as Conversation["status"],
+          last_active: new Date().toISOString(),
+        },
+        {
           feature: "cc-dispatcher",
           op: "updateConversationStatus",
-          extra: {
-            userId: args.userId,
-            conversationId: convId,
-            status,
-          },
-        });
-      }
+          extra: { status },
+        },
+      );
     },
   };
 
