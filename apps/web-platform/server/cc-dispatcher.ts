@@ -52,6 +52,7 @@ import {
   patchWorkspacePermissions,
 } from "./agent-runner";
 import { buildAgentQueryOptions } from "./agent-runner-query-options";
+import { getBashApprovalCache } from "./permission-callback-bash-batch";
 import {
   createCanUseTool,
   type CanUseToolDeps,
@@ -293,6 +294,13 @@ export function cleanupCcBashGatesForConversation(
       _ccBashGates.delete(key);
     }
   }
+  // Drain the per-(userId, conversationId) Bash batched-approval cache
+  // (#2921). Without this, granted prefixes survive conversation
+  // close/reap and could auto-approve on the NEXT conversation if the
+  // ws layer reuses the same conversationId (it doesn't today, but
+  // defense-in-depth: the cache lifetime should never exceed the
+  // conversation lifetime).
+  getBashApprovalCache(userId, conversationId).revoke();
 }
 
 // ---------------------------------------------------------------------------
@@ -391,6 +399,12 @@ export const realSdkQueryFactory: QueryFactory = async (
     },
     sendToClient: defaultSendToClient,
     notifyOfflineUser,
+    // Per-(userId, conversationId) Bash command-prefix batched-approval
+    // cache (#2921). Wired only on the cc path; the legacy runner stays
+    // at the 2-option Bash gate. Revoked from
+    // `cleanupCcBashGatesForConversation` so a closed/reaped conversation
+    // doesn't leak grants.
+    bashApprovalCache: getBashApprovalCache(args.userId, args.conversationId),
     // Real conversation-status write — replaces the prior no-op (#2920).
     // Mirrors legacy `agent-runner.ts:303` shape (status + last_active)
     // so the idle-reaper sees fresh activity. R8 composite-key invariant
