@@ -199,19 +199,23 @@ export async function getUserApiKey(userId: string): Promise<string> {
   const authTag = Buffer.from(data.auth_tag, "base64");
 
   if (data.key_version === 1) {
-    // Lazy migration: decrypt with raw key, re-encrypt with HKDF-derived key
+    // Lazy migration: decrypt with raw key, re-encrypt with HKDF-derived key.
+    // Routed through the predicate-locked `migrate_api_key_to_v2` RPC
+    // (migration 033) so two concurrent callers serialize via PG row
+    // locks — the second writer's UPDATE matches `WHERE key_version = 1`
+    // with zero rows. Re-encryption is deterministic on (plaintext,
+    // userId) under HKDF, so the helper still returns its own decrypted
+    // plaintext even when rows_affected = 0. See #2919.
     const plaintext = decryptKeyLegacy(encrypted, iv, authTag);
     const reEncrypted = encryptKey(plaintext, userId);
-    await supabase()
-      .from("api_keys")
-      .update({
-        encrypted_key: reEncrypted.encrypted.toString("base64"),
-        iv: reEncrypted.iv.toString("base64"),
-        auth_tag: reEncrypted.tag.toString("base64"),
-        key_version: 2,
-        updated_at: new Date().toISOString(),
-      })
-      .eq("id", data.id);
+    await supabase().rpc("migrate_api_key_to_v2", {
+      p_id: data.id,
+      p_user_id: userId,
+      p_provider: "anthropic",
+      p_encrypted: reEncrypted.encrypted.toString("base64"),
+      p_iv: reEncrypted.iv.toString("base64"),
+      p_tag: reEncrypted.tag.toString("base64"),
+    });
     return plaintext;
   }
 
@@ -236,7 +240,7 @@ export async function getUserServiceTokens(
 ): Promise<Record<string, string>> {
   const { data, error } = await supabase()
     .from("api_keys")
-    .select("provider, encrypted_key, iv, auth_tag, key_version")
+    .select("id, provider, encrypted_key, iv, auth_tag, key_version")
     .eq("user_id", userId)
     .eq("is_valid", true);
 
@@ -260,19 +264,19 @@ export async function getUserServiceTokens(
       let plaintext: string;
       if (row.key_version === 1) {
         plaintext = decryptKeyLegacy(encrypted, iv, authTag);
-        // Lazy migration to v2
+        // Lazy migration to v2 — same predicate-locked RPC as
+        // `getUserApiKey`. The (id, user_id, provider, key_version=1)
+        // predicate serializes concurrent callers via PG row locks. See
+        // `migrate_api_key_to_v2` in migration 033 + #2919.
         const reEncrypted = encryptKey(plaintext, userId);
-        await supabase()
-          .from("api_keys")
-          .update({
-            encrypted_key: reEncrypted.encrypted.toString("base64"),
-            iv: reEncrypted.iv.toString("base64"),
-            auth_tag: reEncrypted.tag.toString("base64"),
-            key_version: 2,
-            updated_at: new Date().toISOString(),
-          })
-          .eq("user_id", userId)
-          .eq("provider", row.provider);
+        await supabase().rpc("migrate_api_key_to_v2", {
+          p_id: row.id,
+          p_user_id: userId,
+          p_provider: row.provider,
+          p_encrypted: reEncrypted.encrypted.toString("base64"),
+          p_iv: reEncrypted.iv.toString("base64"),
+          p_tag: reEncrypted.tag.toString("base64"),
+        });
       } else {
         plaintext = decryptKey(encrypted, iv, authTag, userId);
       }
