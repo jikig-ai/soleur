@@ -1,17 +1,26 @@
 {
+  "_comment": "Routes audited by `node plugins/soleur/docs/scripts/screenshot-gate.mjs` to detect critical-CSS FOUC. Source: every template that renders `.page-hero` or `.landing-hero` above the fold (enumerate via `rg -l 'page-hero|landing-hero' plugins/soleur/docs/pages plugins/soleur/docs/_includes`). Per AGENTS.md `cq-eleventy-critical-css-screenshot-gate`, any new above-fold template must be added here.",
   "viewport": { "width": 1440, "height": 900 },
   "routes": [
-    { "path": "/",                         "uses": "landing-hero" },
-    { "path": "/pricing/",                 "uses": "page-hero" },
-    { "path": "/blog/",                    "uses": "page-hero" },
-    { "path": "/agents/",                  "uses": "page-hero" },
-    { "path": "/skills/",                  "uses": "page-hero" },
-    { "path": "/about/",                   "uses": "page-hero" },
-    { "path": "/getting-started/",         "uses": "page-hero" },
-    { "path": "/community/",               "uses": "page-hero" },
-    { "path": "/changelog/",               "uses": "page-hero" },
-    { "path": "/vision/",                  "uses": "page-hero" },
-    { "path": "/legal/",                   "uses": "page-hero" }
-  ],
-  "comment": "Routes audited via `rg -l 'page-hero|landing-cta' plugins/soleur/docs/pages plugins/soleur/docs/_includes`. The 9 /legal/<sub>/ markdown pages are deferred to a follow-up — same template family, lower conversion impact. /company-as-a-service/ uses .content-page-header (different visual) so it's gated separately if/when that template breaks."
+    { "path": "/" },
+    { "path": "/pricing/" },
+    { "path": "/blog/" },
+    { "path": "/agents/" },
+    { "path": "/skills/" },
+    { "path": "/about/" },
+    { "path": "/getting-started/" },
+    { "path": "/community/" },
+    { "path": "/changelog/" },
+    { "path": "/vision/" },
+    { "path": "/legal/" },
+    { "path": "/legal/acceptable-use-policy/" },
+    { "path": "/legal/cookie-policy/" },
+    { "path": "/legal/corporate-cla/" },
+    { "path": "/legal/data-protection-disclosure/" },
+    { "path": "/legal/disclaimer/" },
+    { "path": "/legal/gdpr-policy/" },
+    { "path": "/legal/individual-cla/" },
+    { "path": "/legal/privacy-policy/" },
+    { "path": "/legal/terms-and-conditions/" }
+  ]
 }

@@ -66,6 +66,13 @@ jobs:
           test -f _site/llms.txt || { echo "Missing llms.txt"; exit 1; }
           echo "All required files present"
 
+      - name: Static critical-CSS coverage check
+        # Cheap pre-check: enumerate above-fold class selectors in templates and
+        # confirm each has a rule in the inline <style> block. Fails fast with
+        # an actionable list of missing selectors before the Playwright gate
+        # spins up Chromium. See plugins/soleur/docs/scripts/check-critical-css-coverage.mjs.
+        run: node plugins/soleur/docs/scripts/check-critical-css-coverage.mjs
+
       - name: Install Playwright (Chromium only) for screenshot gate
         run: |
           npm install --no-save playwright@1 http-server@14
@@ -73,12 +80,21 @@ jobs:
 
       - name: Screenshot gate (critical-CSS FOUC detection)
         run: |
-          npx http-server _site -p 8888 -c-1 -s &
+          npx http-server _site -p 8888 -a 127.0.0.1 -c-1 -s &
           SERVER_PID=$!
+          # Poll for the static server to be ready (15s budget). Fail explicitly
+          # if it never comes up so the gate doesn't silently run against a dead
+          # server and report 11x "navigation failed" instead of a real cause.
+          UP=0
           for i in $(seq 1 30); do
-            if curl -sf -o /dev/null http://127.0.0.1:8888/; then break; fi
+            if curl -sf -o /dev/null http://127.0.0.1:8888/; then UP=1; break; fi
             sleep 0.5
           done
+          if [ "$UP" -ne 1 ]; then
+            echo "screenshot-gate: http-server failed to come up within 15s" >&2
+            kill $SERVER_PID 2>/dev/null || true
+            exit 2
+          fi
           set +e
           node plugins/soleur/docs/scripts/screenshot-gate.mjs
           GATE_EXIT=$?

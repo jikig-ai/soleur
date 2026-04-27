@@ -194,21 +194,21 @@
       .hero h1{font-size:var(--text-4xl);margin-bottom:var(--space-4);letter-spacing:-0.02em}
       .hero p,.hero .hero-subtitle,.hero .subtitle{font-size:var(--text-lg);color:var(--color-text-secondary);max-width:600px;margin-inline:auto}
       .blog-post-meta{display:flex;align-items:center;gap:var(--space-3);margin-top:var(--space-2);color:var(--color-text-secondary);font-size:var(--text-sm)}
-      /* Page-hero above-fold (used on /pricing/, /blog/, /agents/, /skills/, /about/, /getting-started/, /community/, /changelog/, /vision/, /legal/) — verbatim from style.css:111-122 */
+      /* .page-hero — used on /pricing/, /blog/, /agents/, /skills/, /about/, /getting-started/, /community/, /changelog/, /vision/, /legal/. Mirror of `.page-hero` rule in css/style.css */
       .page-hero{background:var(--color-bg);color:var(--color-text);padding:var(--space-10) 0 var(--space-8);margin-top:var(--header-h);position:relative;text-align:center;border-bottom:1px solid var(--color-border)}
       .page-hero .container{position:relative;z-index:1}
       .page-hero h1{font-size:var(--text-4xl);margin-bottom:var(--space-4);letter-spacing:-0.02em}
       .page-hero p{font-size:var(--text-lg);color:var(--color-text-secondary);max-width:600px;margin-inline:auto}
-      /* Landing CTA — used on /pricing/ #waitlist (above the fold). Verbatim from style.css:731-746 */
+      /* .landing-cta — used on /pricing/ #waitlist (above the fold). Mirror of `.landing-cta` rule in css/style.css */
       .landing-cta{background:linear-gradient(180deg,var(--color-bg) 0%,var(--color-bg-tertiary) 100%);padding:var(--space-12) var(--space-5);text-align:center}
       .landing-cta h2{font-family:var(--font-display);font-size:var(--text-4xl);font-weight:500;margin-bottom:var(--space-4)}
       .landing-cta p{font-size:1.0625rem;color:var(--color-text-secondary);margin-bottom:var(--space-8)}
-      /* Landing section + section-title/desc — first content section after every page-hero. Verbatim from style.css:506-540 (section-label already inlined above) */
+      /* .landing-section + .section-title + .section-desc — first content section after every page-hero. Mirror of `.landing-section` / `.section-title` / `.section-desc` in css/style.css (`.section-label` already inlined above) */
       .landing-section{padding:var(--space-10) var(--space-5)}
       .landing-section-inner{max-width:1200px;margin-inline:auto}
       .section-title{font-family:var(--font-display);font-size:2.625rem;font-weight:500;text-align:center;max-width:800px;margin-inline:auto;margin-bottom:var(--space-4);line-height:1.15}
       .section-desc{font-size:1.0625rem;color:var(--color-text-secondary);text-align:center;max-width:640px;margin-inline:auto;line-height:1.7;margin-bottom:var(--space-8)}
-      /* Honeypot — site-wide via _includes/newsletter-form.njk; visible during FOUC if not inlined. Verbatim from style.css:1593-1598 */
+      /* .honeypot-trap — site-wide via _includes/newsletter-form.njk; visible during FOUC if not inlined. Mirror of `.honeypot-trap` rule in css/style.css */
       .honeypot-trap{position:absolute;left:-9999px;height:0;overflow:hidden}
     }
   </style>
