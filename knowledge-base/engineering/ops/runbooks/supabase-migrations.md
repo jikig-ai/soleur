@@ -57,16 +57,41 @@ cd apps/web-platform
 doppler run -p soleur -c dev -- bash scripts/run-migrations.sh --bootstrap=skip
 ```
 
-The flag disables the sentinel INSERT so all 39 migrations apply in
-filename order against the empty schema. Trigger condition: any new
-Supabase project ref that has never had its DDL applied.
+Trigger condition: any new Supabase project ref that has never had
+its DDL applied. The CI `migrate` job in `web-platform-release.yml`
+runs without the flag (default `auto` mode) — prd's bootstrap is
+still required because 001–010 were applied pre-runner.
 
-The CI `migrate` job in `web-platform-release.yml` runs without the
-flag (default `auto` mode) — prd's bootstrap is still required because
-001–010 were applied pre-runner.
+For full flag/env-var semantics and precedence, see
+`bash scripts/run-migrations.sh --help` — the script's `--help` text
+is the single source of truth.
 
-`BOOTSTRAP_MIGRATIONS=0` is an equivalent env-var form for callers
-that cannot easily change argv (cron, container ENTRYPOINT).
+**Idempotency note.** After the first successful skip-run populates
+`_schema_migrations`, the flag becomes a no-op on that project —
+subsequent runs are safe with or without `--bootstrap=skip` because
+the apply loop's `already_applied` check kicks in independently of
+bootstrap mode.
+
+**Post-skip-run schema verification.** The bootstrap bug this flag
+fixes is precisely "tracking-table populated, schema empty" — so
+verify both the row count AND that representative tables actually
+exist:
+
+```sql
+-- 1. Row count: every committed migration filename should be tracked.
+SELECT count(*) AS applied FROM public._schema_migrations;
+
+-- 2. Sentinel checks: tables created by 001-010 must exist.
+SELECT to_regclass('public.users') IS NOT NULL AS users_exists;
+SELECT to_regclass('public.conversations') IS NOT NULL AS conversations_exists;
+
+-- 3. Recent migration sentinel: substitute the most recent migration's
+-- table/column for ongoing drift detection.
+```
+
+A `users_exists = true` confirms the `--bootstrap=skip` path actually
+ran 001's DDL, distinguishing it from a `--bootstrap=auto` against a
+fresh DB (which would mark 001 applied without creating the table).
 
 ## Pre-deploy Checklist
 

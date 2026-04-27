@@ -13,6 +13,10 @@ set -euo pipefail
 # Argument parsing.
 # Placed before any side-effects (psql/DATABASE_URL checks) so --help works
 # on a fresh checkout without env or psql installed.
+# Long-options only, with the `=` form (e.g. `--bootstrap=skip`).
+# `--bootstrap skip` (separate token) is not supported and falls through to
+# the unknown-arg branch below — keep this constraint in mind when adding
+# future flags.
 bootstrap_mode="auto"  # auto = legacy bootstrap fires when table empty
 for arg in "$@"; do
   case "$arg" in
@@ -31,19 +35,21 @@ Options:
                      Required for the prd CI migrate job.
   --bootstrap=skip   Disable the bootstrap seed. Use this on first-time
                      provisioning of a fresh Supabase project where 001-010
-                     have NOT been applied. All 39 migrations run in order.
+                     have NOT been applied. All migrations apply in order.
                      Equivalent: BOOTSTRAP_MIGRATIONS=0 bash run-migrations.sh.
   --help, -h         Print this message and exit.
 
 Environment:
   DATABASE_URL_POOLER     Preferred (IPv4 pooler) for CI.
   DATABASE_URL            Fallback (direct connection, IPv6).
-  BOOTSTRAP_MIGRATIONS=0  Same effect as --bootstrap=skip.
+  BOOTSTRAP_MIGRATIONS=0  Same effect as --bootstrap=skip. When set, this
+                          OVERRIDES the flag — `BOOTSTRAP_MIGRATIONS=0` plus
+                          `--bootstrap=auto` still results in skip mode.
 USAGE
       exit 0 ;;
     *)
-      echo "::error::Unknown argument: $arg" >&2
-      echo "Run with --help for usage." >&2
+      echo "::error::Unknown argument: $arg"
+      echo "Run with --help for usage."
       exit 2 ;;
   esac
 done
