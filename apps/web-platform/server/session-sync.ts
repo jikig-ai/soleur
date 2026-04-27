@@ -16,6 +16,41 @@ import { createChildLogger } from "./logger";
 
 const log = createChildLogger("session-sync");
 
+// Path-allowlist for the auto-commit sweep. Only paths under
+// `knowledge-base/` are eligible for automatic staging during syncPull/syncPush.
+// Everything else (`.claude/`, `.github/`, `apps/`, root config files, ...)
+// is left dirty in the working tree so it never lands in PRs the loop did
+// not explicitly author. See #2905 for the failure modes this prevents.
+const ALLOWED_AUTOCOMMIT_PATHS = [/^knowledge-base\//];
+
+/**
+ * Parse `git status --porcelain=v1` output and return the subset of paths
+ * matching ALLOWED_AUTOCOMMIT_PATHS. Handles rename entries ("R  old -> new")
+ * by tracking the destination path only.
+ */
+export function getAllowlistedChanges(workspacePath: string): string[] {
+  let output: string;
+  try {
+    output = execFileSync("git", ["status", "--porcelain=v1"], {
+      cwd: workspacePath,
+      stdio: "pipe",
+    }).toString();
+  } catch {
+    return [];
+  }
+
+  const paths: string[] = [];
+  for (const line of output.split("\n")) {
+    if (line.length < 4) continue; // status (2 chars) + space + path
+    const after = line.slice(3);
+    const path = after.includes(" -> ") ? after.split(" -> ")[1] : after;
+    if (ALLOWED_AUTOCOMMIT_PATHS.some((re) => re.test(path))) {
+      paths.push(path);
+    }
+  }
+  return paths;
+}
+
 let _supabase: SupabaseClient | null = null;
 
 function getSupabase(): SupabaseClient | null {
@@ -191,14 +226,17 @@ export async function syncPull(
       return;
     }
 
-    // Auto-commit any uncommitted changes before pulling to avoid conflicts
+    // Auto-commit any uncommitted changes before pulling to avoid conflicts.
+    // Path-scoped to ALLOWED_AUTOCOMMIT_PATHS — see #2905.
     try {
-      const status = execFileSync("git", ["status", "--porcelain"], {
-        cwd: workspacePath,
-        stdio: "pipe",
-      });
-      if (status.toString().trim().length > 0) {
-        execFileSync("git", ["add", "-A"], {
+      const allowed = getAllowlistedChanges(workspacePath);
+      if (allowed.length === 0) {
+        log.info(
+          { userId },
+          "No allowlisted changes to commit — skipping auto-commit",
+        );
+      } else {
+        execFileSync("git", ["add", "--", ...allowed], {
           cwd: workspacePath,
           stdio: "pipe",
         });
@@ -239,14 +277,17 @@ export async function syncPush(
   }
 
   try {
-    // Auto-commit any uncommitted changes before pushing
+    // Auto-commit any uncommitted changes before pushing.
+    // Path-scoped to ALLOWED_AUTOCOMMIT_PATHS — see #2905.
     try {
-      const status = execFileSync("git", ["status", "--porcelain"], {
-        cwd: workspacePath,
-        stdio: "pipe",
-      });
-      if (status.toString().trim().length > 0) {
-        execFileSync("git", ["add", "-A"], {
+      const allowed = getAllowlistedChanges(workspacePath);
+      if (allowed.length === 0) {
+        log.info(
+          { userId },
+          "No allowlisted changes to commit — skipping auto-commit",
+        );
+      } else {
+        execFileSync("git", ["add", "--", ...allowed], {
           cwd: workspacePath,
           stdio: "pipe",
         });
