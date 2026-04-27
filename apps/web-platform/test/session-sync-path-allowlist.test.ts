@@ -207,6 +207,35 @@ describe("session-sync path allowlist (#2905)", () => {
     expect(adds[0].args).toContain('knowledge-base/has\t"quote".md');
   });
 
+  test("forbidden flags (--force/--amend/--hard) never reach git", async () => {
+    // The wrapper rejects --force/--amend/--hard/--no-verify on any
+    // allowed subcommand. None of session-sync's call sites use these
+    // flags today; this test pins that invariant against future drift.
+    porcelainOutput = " M knowledge-base/foo.md\0";
+    await syncPush("user-1", "/tmp/workspace");
+    for (const c of calls) {
+      if (c.cmd !== "git") continue;
+      expect(c.args).not.toContain("--force");
+      expect(c.args).not.toContain("--amend");
+      expect(c.args).not.toContain("--hard");
+      expect(c.args).not.toContain("--no-verify");
+    }
+  });
+
+  test("destructive subcommands (rm/reset/clean/checkout) are not invoked", async () => {
+    // Belt-and-suspenders: even with allowlisted paths, the wrapper's
+    // subcommand allowlist must keep `git rm`/`git reset`/`git clean`/
+    // `git checkout` off the connected-repo write path.
+    porcelainOutput = " M knowledge-base/foo.md\0";
+    await syncPush("user-1", "/tmp/workspace");
+    const gitArgs0 = calls.filter((c) => c.cmd === "git").map((c) => c.args[0]);
+    expect(gitArgs0).not.toContain("rm");
+    expect(gitArgs0).not.toContain("reset");
+    expect(gitArgs0).not.toContain("clean");
+    expect(gitArgs0).not.toContain("checkout");
+    expect(gitArgs0).not.toContain("branch");
+  });
+
   test("auto-commit never invokes 'git add -A' or 'git add .'", async () => {
     porcelainOutput =
       " M .claude/settings.json\0 M knowledge-base/foo.md\0 M .github/workflows/x.yml\0";

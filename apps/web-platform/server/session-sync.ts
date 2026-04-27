@@ -29,6 +29,63 @@ const ALLOWED_AUTOCOMMIT_PATHS = [/^knowledge-base\//];
 export const AUTO_COMMIT_MSG_PULL = "Auto-commit before sync pull";
 export const AUTO_COMMIT_MSG_PUSH = "Auto-commit after session";
 
+// Allowlist of git subcommands the connected-repo writer may invoke.
+// Anything destructive (rm, reset, clean, branch -D, checkout -- ...) is
+// rejected at the wrapper. See #2905 for the failure-class this prevents.
+const ALLOWED_GIT_SUBCOMMANDS = new Set([
+  "status",
+  "add",
+  "commit",
+  "remote",
+  "rev-list",
+]);
+
+// Forbidden flags — applied across ANY allowed subcommand. Reject in argv,
+// not just at the start, so `commit --amend` or `push --force` (if either
+// ever reaches this wrapper) gets blocked regardless of position.
+const FORBIDDEN_GIT_FLAGS = new Set([
+  "--force",
+  "-f",
+  "--hard",
+  "--amend",
+  "--no-verify",
+]);
+
+/**
+ * Connected-repo git wrapper. Wraps `execFileSync("git", argv, opts)` with
+ * an argv-shape guard that rejects:
+ *   - subcommands outside the allowlist (`rm`, `reset`, `clean`, `checkout`,
+ *     `branch`, `tag`, `cherry-pick`, ...) — categorically destructive or
+ *     branch-switching surfaces the auto-commit sweep has no business in.
+ *   - forbidden flags (`--force`, `--hard`, `--amend`, `--no-verify`) on
+ *     any allowed subcommand.
+ *
+ * Throws a descriptive Error on rejection so the caller's try/catch logs
+ * a meaningful warning rather than silently swallowing the violation.
+ */
+function runConnectedRepoGit(
+  argv: string[],
+  opts: Parameters<typeof execFileSync>[2],
+): Buffer {
+  if (argv.length === 0) {
+    throw new Error("connected-repo git: argv must include a subcommand");
+  }
+  const subcmd = argv[0];
+  if (!ALLOWED_GIT_SUBCOMMANDS.has(subcmd)) {
+    throw new Error(
+      `connected-repo git: subcommand '${subcmd}' is not allowed (allowed: ${[...ALLOWED_GIT_SUBCOMMANDS].join(", ")})`,
+    );
+  }
+  for (const arg of argv) {
+    if (FORBIDDEN_GIT_FLAGS.has(arg)) {
+      throw new Error(
+        `connected-repo git: flag '${arg}' is forbidden (subcommand: ${subcmd})`,
+      );
+    }
+  }
+  return execFileSync("git", argv, opts) as Buffer;
+}
+
 /**
  * Parse `git status --porcelain=v1 -z` output and return the subset of
  * paths matching ALLOWED_AUTOCOMMIT_PATHS.
@@ -42,10 +99,10 @@ export const AUTO_COMMIT_MSG_PUSH = "Auto-commit after session";
 export function getAllowlistedChanges(workspacePath: string): string[] {
   let output: string;
   try {
-    output = execFileSync("git", ["status", "--porcelain=v1", "-z"], {
-      cwd: workspacePath,
-      stdio: "pipe",
-    }).toString();
+    output = runConnectedRepoGit(
+      ["status", "--porcelain=v1", "-z"],
+      { cwd: workspacePath, stdio: "pipe" },
+    ).toString();
   } catch {
     return [];
   }
@@ -88,7 +145,7 @@ function getSupabase(): SupabaseClient | null {
 
 function hasRemote(workspacePath: string): boolean {
   try {
-    const result = execFileSync("git", ["remote", "-v"], {
+    const result = runConnectedRepoGit(["remote", "-v"], {
       cwd: workspacePath,
       stdio: "pipe",
     });
@@ -101,8 +158,7 @@ function hasRemote(workspacePath: string): boolean {
 function hasLocalCommits(workspacePath: string): boolean {
   try {
     // Check if there are commits ahead of the remote tracking branch
-    const result = execFileSync(
-      "git",
+    const result = runConnectedRepoGit(
       ["rev-list", "--count", "@{u}..HEAD"],
       { cwd: workspacePath, stdio: "pipe" },
     );
@@ -112,8 +168,7 @@ function hasLocalCommits(workspacePath: string): boolean {
     // This handles the case where auto-commit created local commits but no
     // upstream tracking branch is set (first push after clone).
     try {
-      const result = execFileSync(
-        "git",
+      const result = runConnectedRepoGit(
         ["rev-list", "--count", "HEAD"],
         { cwd: workspacePath, stdio: "pipe" },
       );
@@ -254,15 +309,14 @@ export async function syncPull(
           "No allowlisted changes to commit — skipping auto-commit",
         );
       } else {
-        execFileSync("git", ["add", "--", ...allowed], {
+        runConnectedRepoGit(["add", "--", ...allowed], {
           cwd: workspacePath,
           stdio: "pipe",
         });
-        execFileSync(
-          "git",
-          ["commit", "-m", AUTO_COMMIT_MSG_PULL],
-          { cwd: workspacePath, stdio: "pipe" },
-        );
+        runConnectedRepoGit(["commit", "-m", AUTO_COMMIT_MSG_PULL], {
+          cwd: workspacePath,
+          stdio: "pipe",
+        });
       }
     } catch (err) {
       log.warn({ err, userId }, "Auto-commit before pull failed");
@@ -305,15 +359,14 @@ export async function syncPush(
           "No allowlisted changes to commit — skipping auto-commit",
         );
       } else {
-        execFileSync("git", ["add", "--", ...allowed], {
+        runConnectedRepoGit(["add", "--", ...allowed], {
           cwd: workspacePath,
           stdio: "pipe",
         });
-        execFileSync(
-          "git",
-          ["commit", "-m", AUTO_COMMIT_MSG_PUSH],
-          { cwd: workspacePath, stdio: "pipe" },
-        );
+        runConnectedRepoGit(["commit", "-m", AUTO_COMMIT_MSG_PUSH], {
+          cwd: workspacePath,
+          stdio: "pipe",
+        });
       }
     } catch (err) {
       log.warn({ err, userId }, "Auto-commit before push failed");
