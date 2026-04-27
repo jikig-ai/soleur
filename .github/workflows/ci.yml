@@ -220,7 +220,7 @@ jobs:
           npm install --no-save playwright@1 http-server@14
           npx playwright install-deps chromium
 
-      - name: Screenshot gate (critical-CSS FOUC detection)
+      - name: Screenshot + stylesheet-swap gates
         run: |
           npx http-server _site -p 8888 -a 127.0.0.1 -c-1 -s &
           SERVER_PID=$!
@@ -230,13 +230,17 @@ jobs:
             sleep 0.5
           done
           if [ "$UP" -ne 1 ]; then
-            echo "screenshot-gate: http-server failed to come up within 15s" >&2
+            echo "gates: http-server failed to come up within 15s" >&2
             kill $SERVER_PID 2>/dev/null || true
             exit 2
           fi
           set +e
           node plugins/soleur/docs/scripts/screenshot-gate.mjs
           GATE_EXIT=$?
+          if [ "$GATE_EXIT" -eq 0 ]; then
+            node plugins/soleur/docs/scripts/check-stylesheet-swap.mjs
+            GATE_EXIT=$?
+          fi
           set -e
           kill $SERVER_PID 2>/dev/null || true
           exit $GATE_EXIT

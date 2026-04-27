@@ -78,26 +78,27 @@ jobs:
           npm install --no-save playwright@1 http-server@14
           npx playwright install --with-deps chromium
 
-      - name: Screenshot gate (critical-CSS FOUC detection)
+      - name: Screenshot gate (FOUC) + stylesheet-swap regression gate
         run: |
           npx http-server _site -p 8888 -a 127.0.0.1 -c-1 -s &
           SERVER_PID=$!
-          # Poll for the static server to be ready (15s budget). Fail explicitly
-          # if it never comes up so the gate doesn't silently run against a dead
-          # server and report 11x "navigation failed" instead of a real cause.
           UP=0
           for i in $(seq 1 30); do
             if curl -sf -o /dev/null http://127.0.0.1:8888/; then UP=1; break; fi
             sleep 0.5
           done
           if [ "$UP" -ne 1 ]; then
-            echo "screenshot-gate: http-server failed to come up within 15s" >&2
+            echo "gates: http-server failed to come up within 15s" >&2
             kill $SERVER_PID 2>/dev/null || true
             exit 2
           fi
           set +e
           node plugins/soleur/docs/scripts/screenshot-gate.mjs
           GATE_EXIT=$?
+          if [ "$GATE_EXIT" -eq 0 ]; then
+            node plugins/soleur/docs/scripts/check-stylesheet-swap.mjs
+            GATE_EXIT=$?
+          fi
           set -e
           kill $SERVER_PID 2>/dev/null || true
           exit $GATE_EXIT
