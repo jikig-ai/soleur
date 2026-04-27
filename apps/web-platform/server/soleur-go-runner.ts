@@ -42,6 +42,7 @@ import type {
 } from "@anthropic-ai/claude-agent-sdk";
 
 import { randomUUID } from "crypto";
+import { mintPromptId, mintConversationId } from "@/lib/branded-ids";
 import {
   parseConversationRouting,
   serializeConversationRouting,
@@ -56,10 +57,11 @@ import {
   type InteractivePromptKind,
 } from "./pending-prompt-registry";
 import type {
-  InteractivePromptEvent,
+  WSMessage,
   InteractivePromptPayload,
   TodoItem,
-} from "./cc-interactive-prompt-types";
+} from "@/lib/types";
+type InteractivePromptEvent = Extract<WSMessage, { type: "interactive_prompt" }>;
 
 // Ensure these are "used" (re-export surface rather than dead-code) so the
 // consumer contract stays visible.  They are imported elsewhere in the
@@ -104,7 +106,7 @@ function isKnownWorkflow(value: unknown): value is WorkflowName {
 }
 
 // SDK tool names that produce an `interactive_prompt` surface. Mapped to
-// the discriminated `kind` on `cc-interactive-prompt-types.ts`. Anything
+// the discriminated `kind` on `InteractivePromptPayload` (lib/types.ts). Anything
 // not in this table is non-interactive from the user's POV (Skill / Read /
 // Glob / Grep / Agent / …) and flows through the normal streaming path
 // without a pending-prompt record.
@@ -437,12 +439,13 @@ export function createSoleurGoRunner(deps: SoleurGoRunnerDeps): SoleurGoRunner {
     if (!pendingPrompts || !emitInteractivePrompt) return;
     const classified = classifyInteractiveTool(toolName, toolInput, cwd);
     if (!classified) return;
-    const promptId = randomUUID();
+    const promptId = mintPromptId(randomUUID());
+    const conversationId = mintConversationId(state.conversationId);
     const kind = classified.kind satisfies InteractivePromptKind;
     try {
       pendingPrompts.register({
         promptId,
-        conversationId: state.conversationId,
+        conversationId,
         userId: state.userId,
         kind,
         toolUseId,
@@ -466,7 +469,7 @@ export function createSoleurGoRunner(deps: SoleurGoRunnerDeps): SoleurGoRunner {
     const event: InteractivePromptEvent = {
       type: "interactive_prompt",
       promptId,
-      conversationId: state.conversationId,
+      conversationId,
       ...classified,
     };
     try {

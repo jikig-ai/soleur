@@ -13,6 +13,7 @@ import {
 import type { DomainLeaderId } from "@/server/domain-leaders";
 import { applyStreamEvent, applyTimeout, type ChatMessage, type StreamEventResult } from "@/lib/chat-state-machine";
 import { isKnownWSMessageType } from "@/lib/ws-known-types";
+import { parseWSMessage } from "@/lib/ws-zod-schemas";
 import { reportSilentFallback } from "@/lib/client-observability";
 
 type ConnectionStatus = "connecting" | "connected" | "reconnecting" | "disconnected";
@@ -92,7 +93,7 @@ export const NON_TRANSIENT_CLOSE_CODES: Record<number, { target?: string; reason
  *  subsequent unrelated dispatches. */
 export interface ChatState {
   messages: ChatMessage[];
-  activeStreams: Map<string, number>;
+  activeStreams: Map<DomainLeaderId, number>;
   pendingTimerAction?: StreamEventResult["timerAction"];
 }
 
@@ -170,7 +171,7 @@ export const OPEN_UPGRADE_MODAL_EVENT = "soleur:openUpgradeModal";
 export function useWebSocket(conversationId: string): UseWebSocketReturn {
   const [chatState, dispatch] = useReducer(chatReducer, null, (): ChatState => ({
     messages: [],
-    activeStreams: new Map<string, number>(),
+    activeStreams: new Map<DomainLeaderId, number>(),
   }));
 
   // Derive activeLeaderIds from reducer state. `applyStreamEvent` preserves the
@@ -179,7 +180,7 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
   // boundary events (stream_start, stream_end, review_gate) — matching the
   // cadence of the pre-refactor gated setActiveLeaderIds call.
   const activeLeaderIds = useMemo(
-    () => Array.from(chatState.activeStreams.keys()) as DomainLeaderId[],
+    () => Array.from(chatState.activeStreams.keys()),
     [chatState.activeStreams],
   );
 
@@ -336,11 +337,11 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
         }
       }
 
-      const msg = parsed as WSMessage;
-
       // FR4 (#2861): boundary guard. Drop any event whose type isn't in the
       // known allowlist, and breadcrumb it so server/client skew is visible.
-      // The reducer's exhaustiveness covers build-time; this covers runtime.
+      // Stage 3 (#2885) added a Zod schema as the strict gate; the
+      // `isKnownWSMessageType` allowlist stays as a cheap fast-path so a
+      // single bad-`type` frame doesn't pay for full schema validation.
       const rawType = (parsed as { type?: unknown } | null)?.type;
       if (!isKnownWSMessageType(rawType)) {
         reportSilentFallback(null, {
@@ -350,6 +351,30 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
         });
         return;
       }
+
+      const parseResult = parseWSMessage(parsed);
+      if (!parseResult.ok) {
+        // Strip per-issue `input` values from the Zod error before
+        // breadcrumbing — Zod 4 includes the offending payload value in
+        // each issue's `input` field, which would exfiltrate frame data
+        // through Sentry on a malformed-frame storm (CWE-201). Keep only
+        // the issue path + message + code.
+        const sanitizedIssues = parseResult.error.issues.map((issue) => ({
+          path: issue.path,
+          code: issue.code,
+          message: issue.message,
+        }));
+        reportSilentFallback(null, {
+          feature: "command-center",
+          op: "ws-zod-parse-failure",
+          extra: {
+            rawType: typeof rawType === "string" ? rawType : String(rawType),
+            issues: sanitizedIssues,
+          },
+        });
+        return;
+      }
+      const msg = parseResult.msg;
 
       switch (msg.type) {
         case "auth_ok": {
@@ -363,7 +388,12 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
         case "tool_progress":
         case "stream":
         case "stream_end":
-        case "review_gate": {
+        case "review_gate":
+        case "subagent_spawn":
+        case "subagent_complete":
+        case "workflow_started":
+        case "workflow_ended":
+        case "interactive_prompt": {
           // Store routing source from the first stream_start
           if (msg.type === "stream_start" && msg.source) {
             setRouteSource(msg.source);
@@ -371,6 +401,8 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
           // Dispatch to the pure reducer — no ref mutations inside the updater.
           // activeStreams and messages update atomically; pendingTimerAction carries
           // the timer intent out of the pure reducer for the useEffect above. See #2217.
+          // Stage 3 (#2885) — `subagent_*`, `workflow_*`, `interactive_prompt`
+          // are inert pass-throughs in the reducer; Stage 4 wires rendering.
           dispatch({ type: "stream_event", msg });
           break;
         }

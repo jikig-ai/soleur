@@ -44,9 +44,11 @@ export type InteractivePromptKind =
   | "todo_write"
   | "notebook_edit";
 
+import type { PromptId, ConversationId } from "@/lib/branded-ids";
+
 export interface PendingPromptRecord {
-  promptId: string;
-  conversationId: string;
+  promptId: PromptId;
+  conversationId: ConversationId;
   userId: string;
   kind: InteractivePromptKind;
   toolUseId: string;
@@ -61,7 +63,7 @@ export interface PendingPromptRegistryOptions {
 }
 
 export class PendingPromptCapExceededError extends Error {
-  constructor(public readonly conversationId: string, public readonly cap: number) {
+  constructor(public readonly conversationId: ConversationId, public readonly cap: number) {
     super(
       `Pending-prompt cap exceeded for conversation ${conversationId} (cap=${cap})`,
     );
@@ -69,10 +71,16 @@ export class PendingPromptCapExceededError extends Error {
   }
 }
 
+/**
+ * Build the composite registry key. Branded IDs prevent the most common
+ * cross-confusion mistake at this positional callsite — passing
+ * `(userId, promptId, conversationId)` instead of `(userId, conversationId,
+ * promptId)`. The brand makes the swap a compile error.
+ */
 export function makePendingPromptKey(
   userId: string,
-  conversationId: string,
-  promptId: string,
+  conversationId: ConversationId,
+  promptId: PromptId,
 ): string {
   return `${userId}:${conversationId}:${promptId}`;
 }

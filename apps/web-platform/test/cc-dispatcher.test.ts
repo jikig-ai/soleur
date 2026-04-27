@@ -16,8 +16,10 @@ import {
   dispatchSoleurGo,
   __resetDispatcherForTests,
 } from "@/server/cc-dispatcher";
-import type { InteractivePromptResponse } from "@/server/cc-interactive-prompt-types";
+import type { WSMessage } from "@/lib/types";
 import { KeyInvalidError } from "@/lib/types";
+import { mintPromptId, mintConversationId } from "@/lib/branded-ids";
+type InteractivePromptResponse = Extract<WSMessage, { type: "interactive_prompt_response" }>;
 
 // Unit tests for the per-process singleton + orchestration module. The
 // real-SDK queryFactory path is stubbed (throws — runner's own
@@ -79,8 +81,8 @@ describe("cc-dispatcher singletons + orchestration", () => {
     const sendToClient = vi.fn().mockReturnValue(true);
     const registry = getPendingPromptRegistry();
     registry.register({
-      promptId: "p-1",
-      conversationId: "conv-1",
+      promptId: mintPromptId("p-1"),
+      conversationId: mintConversationId("conv-1"),
       userId: "u1",
       kind: "plan_preview",
       toolUseId: "toolu_1",
@@ -123,8 +125,8 @@ describe("cc-dispatcher singletons + orchestration", () => {
       // Seed record for the cases that need a live prompt.
       if (expectedError !== "invalid_payload") {
         registry.register({
-          promptId: "p-1",
-          conversationId: "conv-1",
+          promptId: mintPromptId("p-1"),
+          conversationId: mintConversationId("conv-1"),
           userId: "u1",
           kind: "plan_preview", // record kind pinned
           toolUseId: "toolu_1",
@@ -149,14 +151,14 @@ describe("cc-dispatcher singletons + orchestration", () => {
 
       const payload =
         expectedError === "invalid_payload"
-          ? ({ type: "interactive_prompt_response" } as unknown as import("@/server/cc-interactive-prompt-types").InteractivePromptResponse)
+          ? ({ type: "interactive_prompt_response" } as unknown as InteractivePromptResponse)
           : ({
               type: "interactive_prompt_response",
               promptId: "p-1",
               conversationId: "conv-1",
               kind: payloadKind,
               response,
-            } as unknown as import("@/server/cc-interactive-prompt-types").InteractivePromptResponse);
+            } as unknown as InteractivePromptResponse);
 
       const result = handleInteractivePromptResponseCase({
         userId: "u1",

@@ -53,7 +53,7 @@ import {
   resolveCcBashGate,
 } from "./cc-dispatcher";
 import { getFlag } from "@/lib/feature-flags/server";
-import type { InteractivePromptResponse } from "./cc-interactive-prompt-types";
+type InteractivePromptResponse = Extract<WSMessage, { type: "interactive_prompt_response" }>;
 
 const log = createChildLogger("ws");
 
@@ -1182,6 +1182,10 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
     case "fanout_truncated":
     case "upgrade_pending":
     case "interactive_prompt":
+    case "subagent_spawn":
+    case "subagent_complete":
+    case "workflow_started":
+    case "workflow_ended":
     case "error": {
       sendToClient(userId, {
         type: "error",

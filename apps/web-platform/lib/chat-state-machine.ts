@@ -51,7 +51,7 @@ export type ChatMessage = ChatTextMessage | ChatGateMessage;
 
 export interface StreamEventResult {
   messages: ChatMessage[];
-  activeStreams: Map<string, number>;
+  activeStreams: Map<DomainLeaderId, number>;
   /**
    * Optional timer action the caller should apply. The state machine is
    * pure, so it doesn't call setTimeout — it only declares intent.
@@ -67,9 +67,12 @@ export interface StreamEventResult {
 
 /**
  * Events that the state machine reacts to. Covers the subset of WSMessage
- * types that mutate the chat state machine (stream lifecycle + review gates).
- * Other event types (auth_ok, session_started, usage_update, etc.) are
- * handled directly in the hook and don't pass through here.
+ * types that mutate the chat state machine (stream lifecycle + review gates),
+ * plus the Stage 3 (#2885) `/soleur:go` event variants which are routed here
+ * as inert pass-throughs until Stage 4 wires actual rendering.
+ *
+ * `interactive_prompt_response` is intentionally excluded — it's a
+ * client→server event and never reaches the reducer.
  */
 type StreamEvent = Extract<
   WSMessage,
@@ -79,6 +82,11 @@ type StreamEvent = Extract<
   | { type: "tool_use" }
   | { type: "tool_progress" }
   | { type: "review_gate" }
+  | { type: "subagent_spawn" }
+  | { type: "subagent_complete" }
+  | { type: "workflow_started" }
+  | { type: "workflow_ended" }
+  | { type: "interactive_prompt" }
 >;
 
 /**
@@ -87,7 +95,7 @@ type StreamEvent = Extract<
  */
 export function applyStreamEvent(
   prev: ChatMessage[],
-  activeStreams: Map<string, number>,
+  activeStreams: Map<DomainLeaderId, number>,
   event: StreamEvent,
 ): StreamEventResult {
   switch (event.type) {
@@ -253,6 +261,30 @@ export function applyStreamEvent(
         timerAction: { type: "clear_all" },
       };
     }
+
+    // ---------------------------------------------------------------------
+    // Stage 3 (#2885) — `/soleur:go` event variants. These cases are inert
+    // pass-throughs in Stage 3: they preserve the prior state instances so
+    // dispatching one of these events does not churn the reducer's
+    // referential identity. Stage 4 replaces these with actual rendering
+    // (subagent bubbles, workflow lifecycle indicators, interactive-prompt
+    // chips); see follow-through tracking issues filed with this PR.
+    // ---------------------------------------------------------------------
+    case "subagent_spawn":
+    case "subagent_complete":
+    case "workflow_started":
+    case "workflow_ended":
+    case "interactive_prompt":
+      return { messages: prev, activeStreams };
+
+    default: {
+      // Compile-time exhaustiveness rail: a future variant added to
+      // `WSMessage` (and pulled into `StreamEvent`) without a corresponding
+      // case here fails `tsc --noEmit`.
+      const _exhaustive: never = event;
+      void _exhaustive;
+      return { messages: prev, activeStreams };
+    }
   }
 }
 
@@ -267,16 +299,16 @@ export function applyStreamEvent(
  */
 export function applyTimeout(
   prev: ChatMessage[],
-  activeStreams: Map<string, number>,
+  activeStreams: Map<DomainLeaderId, number>,
   leaderId: string,
 ): {
   messages: ChatMessage[];
-  activeStreams: Map<string, number>;
+  activeStreams: Map<DomainLeaderId, number>;
   timerAction?:
     | { type: "reset"; leaderId: string }
     | { type: "clear"; leaderId: string };
 } {
-  const idx = activeStreams.get(leaderId);
+  const idx = activeStreams.get(leaderId as DomainLeaderId);
   if (idx === undefined || idx >= prev.length) {
     return { messages: prev, activeStreams };
   }
@@ -292,7 +324,7 @@ export function applyTimeout(
     void _retrying;
     updated[idx] = { ...rest, state: "error" };
     const nextStreams = new Map(activeStreams);
-    nextStreams.delete(leaderId);
+    nextStreams.delete(leaderId as DomainLeaderId);
     return {
       messages: updated,
       activeStreams: nextStreams,
