@@ -42,6 +42,32 @@ If `dev` and `prd` resolve to the same Supabase project ref, preflight
 Check 4 (`Environment Isolation`) blocks `/ship`. Do not bypass it —
 the rule exists to prevent silent single-DB exposure (#2887).
 
+### First-time provisioning: skip bootstrap
+
+`run-migrations.sh` has a legacy bootstrap that inserts sentinel rows
+for migrations 001–010 the first time it sees an empty
+`_schema_migrations` table. This was correct for the original prd,
+where 001–010 had been applied via psql before the runner existed.
+
+**On a fresh Supabase project (e.g., a new dev/staging project), pass
+`--bootstrap=skip`:**
+
+```bash
+cd apps/web-platform
+doppler run -p soleur -c dev -- bash scripts/run-migrations.sh --bootstrap=skip
+```
+
+The flag disables the sentinel INSERT so all 39 migrations apply in
+filename order against the empty schema. Trigger condition: any new
+Supabase project ref that has never had its DDL applied.
+
+The CI `migrate` job in `web-platform-release.yml` runs without the
+flag (default `auto` mode) — prd's bootstrap is still required because
+001–010 were applied pre-runner.
+
+`BOOTSTRAP_MIGRATIONS=0` is an equivalent env-var form for callers
+that cannot easily change argv (cron, container ENTRYPOINT).
+
 ## Pre-deploy Checklist
 
 - [ ] Migration filename is the next integer in sequence (`024_…`, `025_…`).
