@@ -354,10 +354,23 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
 
       const parseResult = parseWSMessage(parsed);
       if (!parseResult.ok) {
-        reportSilentFallback(parseResult.error, {
+        // Strip per-issue `input` values from the Zod error before
+        // breadcrumbing — Zod 4 includes the offending payload value in
+        // each issue's `input` field, which would exfiltrate frame data
+        // through Sentry on a malformed-frame storm (CWE-201). Keep only
+        // the issue path + message + code.
+        const sanitizedIssues = parseResult.error.issues.map((issue) => ({
+          path: issue.path,
+          code: issue.code,
+          message: issue.message,
+        }));
+        reportSilentFallback(null, {
           feature: "command-center",
           op: "ws-zod-parse-failure",
-          extra: { rawType: typeof rawType === "string" ? rawType : String(rawType) },
+          extra: {
+            rawType: typeof rawType === "string" ? rawType : String(rawType),
+            issues: sanitizedIssues,
+          },
         });
         return;
       }

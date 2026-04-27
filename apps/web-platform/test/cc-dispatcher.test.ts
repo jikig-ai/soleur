@@ -7,6 +7,7 @@ import {
   __resetDispatcherForTests,
 } from "@/server/cc-dispatcher";
 import type { WSMessage } from "@/lib/types";
+import { mintPromptId, mintConversationId } from "@/lib/branded-ids";
 type InteractivePromptResponse = Extract<WSMessage, { type: "interactive_prompt_response" }>;
 
 // Unit tests for the per-process singleton + orchestration module. The
@@ -68,8 +69,8 @@ describe("cc-dispatcher singletons + orchestration", () => {
     const sendToClient = vi.fn().mockReturnValue(true);
     const registry = getPendingPromptRegistry();
     registry.register({
-      promptId: "p-1",
-      conversationId: "conv-1",
+      promptId: mintPromptId("p-1"),
+      conversationId: mintConversationId("conv-1"),
       userId: "u1",
       kind: "plan_preview",
       toolUseId: "toolu_1",
@@ -112,8 +113,8 @@ describe("cc-dispatcher singletons + orchestration", () => {
       // Seed record for the cases that need a live prompt.
       if (expectedError !== "invalid_payload") {
         registry.register({
-          promptId: "p-1",
-          conversationId: "conv-1",
+          promptId: mintPromptId("p-1"),
+          conversationId: mintConversationId("conv-1"),
           userId: "u1",
           kind: "plan_preview", // record kind pinned
           toolUseId: "toolu_1",

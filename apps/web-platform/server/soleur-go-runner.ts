@@ -42,6 +42,7 @@ import type {
 } from "@anthropic-ai/claude-agent-sdk";
 
 import { randomUUID } from "crypto";
+import { mintPromptId, mintConversationId } from "@/lib/branded-ids";
 import {
   parseConversationRouting,
   serializeConversationRouting,
@@ -430,12 +431,13 @@ export function createSoleurGoRunner(deps: SoleurGoRunnerDeps): SoleurGoRunner {
     if (!pendingPrompts || !emitInteractivePrompt) return;
     const classified = classifyInteractiveTool(toolName, toolInput, cwd);
     if (!classified) return;
-    const promptId = randomUUID();
+    const promptId = mintPromptId(randomUUID());
+    const conversationId = mintConversationId(state.conversationId);
     const kind = classified.kind satisfies InteractivePromptKind;
     try {
       pendingPrompts.register({
         promptId,
-        conversationId: state.conversationId,
+        conversationId,
         userId: state.userId,
         kind,
         toolUseId,
@@ -459,7 +461,7 @@ export function createSoleurGoRunner(deps: SoleurGoRunnerDeps): SoleurGoRunner {
     const event: InteractivePromptEvent = {
       type: "interactive_prompt",
       promptId,
-      conversationId: state.conversationId,
+      conversationId,
       ...classified,
     };
     try {

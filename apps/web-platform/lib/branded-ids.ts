@@ -5,9 +5,18 @@
 // (a `PromptId` cannot be passed to a slot expecting a `SpawnId`) and rejects
 // raw-string assignment without the corresponding mint helper.
 //
-// When a branded value flows through a Zod schema, prefer the schema's own
-// `.brand<"PromptId">()` chain (see `lib/ws-zod-schemas.ts`). The mint helpers
-// here are for code-side construction (server emit sites, test fixtures).
+// **Stage 3 (this PR) ships the brand types + mint helpers but does NOT yet
+// thread them through internal API boundaries** (`PendingPromptRegistry`,
+// `cc-dispatcher`, `soleur-go-runner` producer sites). That threading is
+// architectural-pivot scope and is tracked as a follow-up issue. Until
+// Stage 4 wires the consumers, this module's value is documenting the
+// design heuristic from
+// `knowledge-base/project/learnings/best-practices/2026-04-27-branded-ids-belong-at-internal-boundaries-not-wire-types.md`
+// and exercising the type-system contract via `test/branded-ids.test.ts`.
+//
+// `WSMessage` deliberately uses plain `string` for IDs because the wire
+// format has no brand concept (JSON.stringify drops brands). Brands belong
+// at function-signature boundaries, not at the wire-protocol union.
 
 declare const SpawnIdBrand: unique symbol;
 declare const PromptIdBrand: unique symbol;

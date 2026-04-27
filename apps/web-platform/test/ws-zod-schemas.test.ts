@@ -286,3 +286,115 @@ describe("wsMessageSchema: schema export shape", () => {
     expect(typeof wsMessageSchema.safeParse).toBe("function");
   });
 });
+
+describe("wsMessageSchema: strict-mode rejects unknown fields (CWE-201 defense)", () => {
+  test("session_started rejects an extra unknown field", () => {
+    const r = parseWSMessage({
+      type: "session_started",
+      conversationId: "c-1",
+      sneakyExtraField: "this should not pass",
+    });
+    expect(r.ok).toBe(false);
+  });
+
+  test("subagent_spawn rejects an extra field", () => {
+    const r = parseWSMessage({
+      type: "subagent_spawn",
+      parentId: "p-1",
+      leaderId: "cmo",
+      spawnId: "s-1",
+      extra: 1,
+    });
+    expect(r.ok).toBe(false);
+  });
+
+  test("interactive_prompt rejects an extra field", () => {
+    const r = parseWSMessage({
+      type: "interactive_prompt",
+      promptId: "pr-1",
+      conversationId: "c-1",
+      kind: "ask_user",
+      payload: { question: "Q?", options: ["a"], multiSelect: false },
+      extra: "leak",
+    });
+    expect(r.ok).toBe(false);
+  });
+
+  test("interactive_prompt_response rejects an extra field", () => {
+    const r = parseWSMessage({
+      type: "interactive_prompt_response",
+      promptId: "pr-1",
+      conversationId: "c-1",
+      kind: "ask_user",
+      response: "x",
+      extra: "leak",
+    });
+    expect(r.ok).toBe(false);
+  });
+});
+
+describe("wsMessageSchema: ID validation (length 1+)", () => {
+  test("empty promptId rejects", () => {
+    const r = parseWSMessage({
+      type: "interactive_prompt",
+      promptId: "",
+      conversationId: "c-1",
+      kind: "ask_user",
+      payload: { question: "Q?", options: ["a"], multiSelect: false },
+    });
+    expect(r.ok).toBe(false);
+  });
+
+  test("empty conversationId rejects", () => {
+    const r = parseWSMessage({
+      type: "workflow_started",
+      workflow: "brainstorm",
+      conversationId: "",
+    });
+    expect(r.ok).toBe(false);
+  });
+
+  test("empty spawnId rejects", () => {
+    const r = parseWSMessage({
+      type: "subagent_complete",
+      spawnId: "",
+      status: "success",
+    });
+    expect(r.ok).toBe(false);
+  });
+});
+
+describe("wsMessageSchema: bash_approval payload size caps (CWE-400)", () => {
+  test("rejects command longer than 16384 chars", () => {
+    const r = parseWSMessage({
+      type: "interactive_prompt",
+      promptId: "pr-1",
+      conversationId: "c-1",
+      kind: "bash_approval",
+      payload: { command: "x".repeat(16_385), cwd: "/", gated: false },
+    });
+    expect(r.ok).toBe(false);
+  });
+
+  test("rejects cwd longer than 4096 chars", () => {
+    const r = parseWSMessage({
+      type: "interactive_prompt",
+      promptId: "pr-1",
+      conversationId: "c-1",
+      kind: "bash_approval",
+      payload: { command: "ls", cwd: "/" + "a".repeat(4_096), gated: false },
+    });
+    expect(r.ok).toBe(false);
+  });
+
+  test("accepts command at the 16384 boundary", () => {
+    const r = parseWSMessage({
+      type: "interactive_prompt",
+      promptId: "pr-1",
+      conversationId: "c-1",
+      kind: "bash_approval",
+      payload: { command: "x".repeat(16_384), cwd: "/", gated: false },
+    });
+    expect(r.ok).toBe(true);
+  });
+});

@@ -10,6 +10,7 @@ import {
   pruneTombstonesFor,
 } from "@/server/cc-interactive-prompt-response";
 import type { WSMessage } from "@/lib/types";
+import { mintPromptId, mintConversationId } from "@/lib/branded-ids";
 type InteractivePromptResponse = Extract<WSMessage, { type: "interactive_prompt_response" }>;
 
 // RED test for Stage 2.14 of plan 2026-04-23-feat-cc-route-via-soleur-go-plan.md.
@@ -35,8 +36,8 @@ function seedPrompt(
   overrides: Partial<PendingPromptRecord> = {},
 ): PendingPromptRecord {
   const record: PendingPromptRecord = {
-    promptId: "p-1",
-    conversationId: "conv-1",
+    promptId: mintPromptId("p-1"),
+    conversationId: mintConversationId("conv-1"),
     userId: "user-1",
     kind: "ask_user",
     toolUseId: "toolu_1",
@@ -108,7 +109,7 @@ describe("handleInteractivePromptResponse (Stage 2.14)", () => {
     // cannot probe for the existence of someone else's promptId across
     // conversations. The record owned by its real conversation stays
     // untouched.
-    seedPrompt(registry, { conversationId: "conv-1" });
+    seedPrompt(registry, { conversationId: mintConversationId("conv-1") });
     const result = handleInteractivePromptResponse({
       registry,
       userId: "user-1",
@@ -215,7 +216,7 @@ describe("handleInteractivePromptResponse (Stage 2.14)", () => {
     expect(good.ok).toBe(true);
     expect(deliverToolResult.mock.calls[0]![0].content).toBe("accept");
 
-    seedPrompt(registry, { promptId: "p-2", kind: "plan_preview" });
+    seedPrompt(registry, { promptId: mintPromptId("p-2"), kind: "plan_preview" });
     const bad = handleInteractivePromptResponse({
       registry,
       userId: "user-1",
@@ -254,8 +255,8 @@ describe("handleInteractivePromptResponse (Stage 2.14)", () => {
       const reg = new PendingPromptRegistry({ nowFn: () => 0 });
       const cb = vi.fn();
       reg.register({
-        promptId: "p-x",
-        conversationId: "conv-1",
+        promptId: mintPromptId("p-x"),
+        conversationId: mintConversationId("conv-1"),
         userId: "user-1",
         kind,
         toolUseId: `tu-${kind}`,
@@ -308,7 +309,7 @@ describe("handleInteractivePromptResponse (Stage 2.14)", () => {
 
   it("pruneTombstonesFor clears tombstones after reaper pass (memory bound)", () => {
     // Seed + consume — tombstone is created by consume path.
-    seedPrompt(registry, { promptId: "p-a" });
+    seedPrompt(registry, { promptId: mintPromptId("p-a") });
     handleInteractivePromptResponse({
       registry,
       userId: "user-1",

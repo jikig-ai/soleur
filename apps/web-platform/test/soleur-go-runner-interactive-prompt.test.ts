@@ -14,6 +14,7 @@ import {
   makePendingPromptKey,
 } from "@/server/pending-prompt-registry";
 import type { WSMessage } from "@/lib/types";
+import { mintPromptId, mintConversationId } from "@/lib/branded-ids";
 type InteractivePromptEvent = Extract<WSMessage, { type: "interactive_prompt" }>;
 
 // RED test for Stage 2.10 of plan 2026-04-23-feat-cc-route-via-soleur-go-plan.md.
@@ -228,7 +229,7 @@ describe("soleur-go-runner interactive-prompt bridge (Stage 2.10)", () => {
     }
 
     // Registry contains the matching record.
-    const key = makePendingPromptKey("user-1", "conv-1", event.promptId);
+    const key = makePendingPromptKey("user-1", mintConversationId("conv-1"), mintPromptId(event.promptId));
     const record = registry.get(key, "user-1");
     expect(record).toBeDefined();
     expect(record!.kind).toBe("plan_preview");

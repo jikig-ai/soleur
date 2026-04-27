@@ -8,17 +8,44 @@ import type { SpawnId, PromptId, ConversationId } from "@/lib/branded-ids";
 export type { WorkflowName } from "@/server/conversation-routing";
 export type { SpawnId, PromptId, ConversationId } from "@/lib/branded-ids";
 
-/** Terminal states a `/soleur:go` workflow run can end in (#2885 Stage 3). */
-export type WorkflowEndStatus =
-  | "completed"
-  | "user_aborted"
-  | "cost_ceiling"
-  | "idle_timeout"
-  | "plugin_load_failure"
-  | "sandbox_denial"
-  | "runner_crash"
-  | "runner_runaway"
-  | "internal_error";
+/**
+ * Terminal states a `/soleur:go` workflow run can end in (#2885 Stage 3).
+ * The tuple is the single source of truth — both the TS union below and the
+ * Zod schema in `lib/ws-zod-schemas.ts` derive from it.
+ */
+export const WORKFLOW_END_STATUSES = [
+  "completed",
+  "user_aborted",
+  "cost_ceiling",
+  "idle_timeout",
+  "plugin_load_failure",
+  "sandbox_denial",
+  "runner_crash",
+  "runner_runaway",
+  "internal_error",
+] as const;
+export type WorkflowEndStatus = typeof WORKFLOW_END_STATUSES[number];
+
+/**
+ * `subagent_complete.status` allowed values. Tuple-as-source so the Zod
+ * schema and TS union cannot drift.
+ */
+export const SUBAGENT_COMPLETE_STATUSES = ["success", "error", "timeout"] as const;
+export type SubagentCompleteStatus = typeof SUBAGENT_COMPLETE_STATUSES[number];
+
+/**
+ * `interactive_prompt.kind` allowed values. Tuple is shared with
+ * `server/pending-prompt-registry.ts:InteractivePromptKind` via a compile-
+ * time `_AssertKindsMatch` check below.
+ */
+export const INTERACTIVE_PROMPT_KINDS = [
+  "ask_user",
+  "plan_preview",
+  "diff",
+  "bash_approval",
+  "todo_write",
+  "notebook_edit",
+] as const;
 
 /**
  * Single todo item carried by `interactive_prompt.kind === "todo_write"`.
@@ -49,10 +76,10 @@ export type InteractivePromptResponsePayload =
   | { kind: "diff" | "todo_write" | "notebook_edit"; response: "ack" };
 
 /**
- * Bidirectional exhaustiveness assertion: the `kind` set on
- * `InteractivePromptPayload` must match the registry's `InteractivePromptKind`
- * exactly (ported from the Stage 2 shim's `_AssertKindsMatch`).
- * A new kind on either side fails compilation here.
+ * Bidirectional exhaustiveness assertions: the `kind` set on
+ * `InteractivePromptPayload` AND `InteractivePromptResponsePayload` must
+ * match the registry's `InteractivePromptKind` exactly. A new kind on any
+ * side fails compilation here.
  */
 type _AssertKindsMatch =
   InteractivePromptKind extends InteractivePromptPayload["kind"]
@@ -62,6 +89,15 @@ type _AssertKindsMatch =
     : never;
 const _exhaustiveKindCheck: _AssertKindsMatch = true;
 void _exhaustiveKindCheck;
+
+type _AssertResponseKindsMatch =
+  InteractivePromptKind extends InteractivePromptResponsePayload["kind"]
+    ? InteractivePromptResponsePayload["kind"] extends InteractivePromptKind
+      ? true
+      : never
+    : never;
+const _exhaustiveResponseKindCheck: _AssertResponseKindsMatch = true;
+void _exhaustiveResponseKindCheck;
 
 // Typed error codes for structured error handling over WebSocket
 export type WSErrorCode =
@@ -181,7 +217,7 @@ export type WSMessage =
       elapsedSeconds: number;
     }
   | { type: "review_gate"; gateId: string; question: string; header?: string; options: string[]; descriptions?: Record<string, string | undefined>; stepProgress?: { current: number; total: number } }
-  | { type: "session_started"; conversationId: string }
+  | { type: "session_started"; conversationId: string; capabilities?: { promptKinds: readonly string[] } }
   | { type: "session_resumed"; conversationId: string; resumedFromTimestamp: string; messageCount: number }
   | { type: "session_ended"; reason: string }
   | { type: "usage_update"; conversationId: string; totalCostUsd: number; inputTokens: number; outputTokens: number }
@@ -198,13 +234,37 @@ export type WSMessage =
   // `PromptId` / `ConversationId` (re-exported above) provide compile-time
   // cross-confusion protection at internal API boundaries (registry
   // signatures, mint helpers); see `lib/branded-ids.ts`.
-  | { type: "subagent_spawn"; parentId: string; leaderId: DomainLeaderId; spawnId: string }
+  | { type: "subagent_spawn"; parentId: string; leaderId: DomainLeaderId; spawnId: string; task?: string }
   | { type: "subagent_complete"; spawnId: string; status: "success" | "error" | "timeout" }
   | { type: "workflow_started"; workflow: WorkflowName; conversationId: string }
   | { type: "workflow_ended"; workflow: WorkflowName; status: WorkflowEndStatus; summary?: string }
   | ({ type: "interactive_prompt"; promptId: string; conversationId: string } & InteractivePromptPayload)
   | ({ type: "interactive_prompt_response"; promptId: string; conversationId: string } & InteractivePromptResponsePayload)
   | { type: "error"; message: string; errorCode?: WSErrorCode; gateId?: string };
+
+/**
+ * Wire-protocol naming convention (Stage 3, #2885):
+ *   - `type` discriminator values are snake_case ("subagent_spawn",
+ *     "session_started", "interactive_prompt_response").
+ *   - `kind` sub-discriminator values are also snake_case ("ask_user",
+ *     "plan_preview", "bash_approval").
+ *   - All other fields are camelCase ("promptId", "conversationId",
+ *     "leaderId", "totalCostUsd").
+ * New variants must follow this convention. The `_SchemaCovers` proof in
+ * `lib/ws-zod-schemas.ts` is the runtime drift gate; this comment is the
+ * style gate.
+ */
+
+/** Centralized aliases for the `interactive_prompt*` and `subagent_*`
+ *  variant subsets. Use these in importers (`server/cc-dispatcher.ts`,
+ *  `server/ws-handler.ts`, etc.) instead of redeclaring `Extract<...>`
+ *  locally. */
+export type InteractivePromptEvent = Extract<WSMessage, { type: "interactive_prompt" }>;
+export type InteractivePromptResponse = Extract<WSMessage, { type: "interactive_prompt_response" }>;
+export type SubagentSpawnEvent = Extract<WSMessage, { type: "subagent_spawn" }>;
+export type SubagentCompleteEvent = Extract<WSMessage, { type: "subagent_complete" }>;
+export type WorkflowStartedEvent = Extract<WSMessage, { type: "workflow_started" }>;
+export type WorkflowEndedEvent = Extract<WSMessage, { type: "workflow_ended" }>;
 
 // Database types (matches Supabase schema)
 export interface User {

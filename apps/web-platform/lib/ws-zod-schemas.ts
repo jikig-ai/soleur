@@ -4,44 +4,54 @@
 // handler uses to validate incoming frames before dispatching them to the
 // reducer. The schema covers every variant of `WSMessage` from `lib/types.ts`;
 // drift between the schema and the union is caught at compile time by the
-// `_SchemaCovers` bidirectional assertion at the bottom of this file.
+// `_SchemaCovers` bidirectional structural assertion at the bottom of this
+// file.
 //
-// Branded IDs (PromptId / ConversationId / SpawnId) are produced via a
-// `.transform()` chain so `parseWSMessage`'s output is structurally typed
-// with the branded slots that consumers expect — there's no second cast
-// required at the call site.
+// Every variant is a `z.strictObject` (rejects unknown top-level fields) so
+// a server emitting an undocumented field fails loudly rather than silently
+// dropping it. Together with `z.discriminatedUnion("type", ...)` this gives
+// O(1) discriminator dispatch on the hot per-frame path — see
+// `lib/ws-client.ts:onmessage`.
 //
-// Zod 4 caveat: `z.discriminatedUnion("type", [...])` discriminator parameter
-// is non-generic in Zod 4 (https://github.com/colinhacks/zod/issues/5024) so
-// per-variant inference at the schema-tuple level is weaker than Zod 3. The
-// bidirectional `_SchemaCovers` assertion below is the load-bearing drift
-// guard.
+// IDs are plain `z.string().min(1)` because the wire format has no brand
+// concept; branded utility types from `lib/branded-ids.ts` are used at
+// internal API boundaries (registry signatures, mint helpers).
 
 import { z, type ZodError } from "zod";
-import type { WSMessage } from "@/lib/types";
+import {
+  type WSMessage,
+  WORKFLOW_END_STATUSES,
+  SUBAGENT_COMPLETE_STATUSES,
+  INTERACTIVE_PROMPT_KINDS,
+} from "@/lib/types";
 
 // ---------------------------------------------------------------------------
-// ID schemas
-//
-// WSMessage carries IDs as plain `string` because the wire format has no
-// brand concept. Internal APIs (registry, mint helpers) use the branded
-// `PromptId` / `ConversationId` / `SpawnId` from `lib/branded-ids.ts` for
-// cross-confusion protection at function-signature boundaries.
+// ID schemas (min length 1 — empty IDs are server bugs, not legitimate frames)
 // ---------------------------------------------------------------------------
 
-const conversationIdSchema = z.string();
-const promptIdSchema = z.string();
-const spawnIdSchema = z.string();
+const conversationIdSchema = z.string().min(1);
+const promptIdSchema = z.string().min(1);
+const spawnIdSchema = z.string().min(1);
 
-// DomainLeaderId — kept as a permissive string. The canonical 10-id allowlist
-// lives in `server/domain-leaders.ts`; if the server emits an unknown leaderId
-// it's a server bug, not a client validation concern. The reducer is robust
-// to unknown leaderIds (inert no-op).
-const domainLeaderIdSchema = z.string();
+// DomainLeaderId — pinned to the 10-id allowlist from
+// `server/domain-leaders.ts`. The list is short and stable; pinning here
+// makes the bidirectional `_SchemaCovers` proof structurally complete (Zod
+// cannot otherwise prove `z.string()` satisfies the narrow `DomainLeaderId`
+// union). Add a new leader → add a new entry here AND in
+// `server/domain-leaders.ts` AND in tests; tsc will guide you.
+const domainLeaderIdSchema = z.enum([
+  "cmo",
+  "cto",
+  "cfo",
+  "cpo",
+  "cro",
+  "coo",
+  "clo",
+  "cco",
+  "system",
+  "cc_router",
+]);
 
-// WorkflowName — pinned to the 6-name allowlist from
-// `server/conversation-routing.ts`. Keep in sync with the COUPLING INVARIANT
-// in that file.
 const workflowNameSchema = z.enum([
   "one-shot",
   "brainstorm",
@@ -52,72 +62,78 @@ const workflowNameSchema = z.enum([
 ]);
 
 // ---------------------------------------------------------------------------
-// Shared schemas
+// Shared object schemas
 // ---------------------------------------------------------------------------
 
-const attachmentRefSchema = z.object({
+const attachmentRefSchema = z.strictObject({
   storagePath: z.string(),
   filename: z.string(),
   contentType: z.string(),
   sizeBytes: z.number(),
 });
 
-const conversationContextSchema = z.object({
+const conversationContextSchema = z.strictObject({
   path: z.string(),
   type: z.string(),
   content: z.string().optional(),
 });
 
-const todoItemSchema = z.object({
+const todoItemSchema = z.strictObject({
   id: z.string(),
   content: z.string(),
   status: z.enum(["pending", "in_progress", "completed"]),
 });
 
 // ---------------------------------------------------------------------------
-// interactive_prompt — discriminated on `kind`
+// `interactive_prompt.kind` payload schemas — exported standalone for tests
+// and for downstream consumers that want to validate a payload independent
+// of the surrounding `interactive_prompt` envelope.
 // ---------------------------------------------------------------------------
 
-const askUserPayloadSchema = z.object({
+const askUserPayloadSchema = z.strictObject({
   kind: z.literal("ask_user"),
-  payload: z.object({
+  payload: z.strictObject({
     question: z.string(),
     options: z.array(z.string()),
     multiSelect: z.boolean(),
   }),
 });
 
-const planPreviewPayloadSchema = z.object({
+const planPreviewPayloadSchema = z.strictObject({
   kind: z.literal("plan_preview"),
-  payload: z.object({ markdown: z.string() }),
+  payload: z.strictObject({ markdown: z.string() }),
 });
 
-const diffPayloadSchema = z.object({
+const diffPayloadSchema = z.strictObject({
   kind: z.literal("diff"),
-  payload: z.object({
+  payload: z.strictObject({
     path: z.string(),
     additions: z.number(),
     deletions: z.number(),
   }),
 });
 
-const bashApprovalPayloadSchema = z.object({
+// `bash_approval`: the server has already classified the SDK request and is
+// asking the user to approve. `command` and `cwd` flow through to a UI
+// modal; the bound caps are defense-in-depth against an unbounded
+// server-side payload exhausting client memory (CWE-400).
+const bashApprovalPayloadSchema = z.strictObject({
   kind: z.literal("bash_approval"),
-  payload: z.object({
-    command: z.string(),
-    cwd: z.string(),
+  payload: z.strictObject({
+    command: z.string().max(16_384),
+    cwd: z.string().max(4_096),
     gated: z.boolean(),
   }),
 });
 
-const todoWritePayloadSchema = z.object({
+const todoWritePayloadSchema = z.strictObject({
   kind: z.literal("todo_write"),
-  payload: z.object({ items: z.array(todoItemSchema) }),
+  payload: z.strictObject({ items: z.array(todoItemSchema) }),
 });
 
-const notebookEditPayloadSchema = z.object({
+const notebookEditPayloadSchema = z.strictObject({
   kind: z.literal("notebook_edit"),
-  payload: z.object({
+  payload: z.strictObject({
     notebookPath: z.string(),
     cellIds: z.array(z.string()),
   }),
@@ -133,31 +149,32 @@ export const interactivePromptPayloadSchema = z.discriminatedUnion("kind", [
 ]);
 
 // ---------------------------------------------------------------------------
-// interactive_prompt_response — discriminated on `kind`
+// `interactive_prompt_response.kind` schemas — same pattern but with
+// per-kind `response` shapes.
 // ---------------------------------------------------------------------------
 
-const askUserResponseSchema = z.object({
+const askUserResponseSchema = z.strictObject({
   promptId: promptIdSchema,
   conversationId: conversationIdSchema,
   kind: z.literal("ask_user"),
   response: z.union([z.string(), z.array(z.string())]),
 });
 
-const planPreviewResponseSchema = z.object({
+const planPreviewResponseSchema = z.strictObject({
   promptId: promptIdSchema,
   conversationId: conversationIdSchema,
   kind: z.literal("plan_preview"),
   response: z.enum(["accept", "iterate"]),
 });
 
-const bashApprovalResponseSchema = z.object({
+const bashApprovalResponseSchema = z.strictObject({
   promptId: promptIdSchema,
   conversationId: conversationIdSchema,
   kind: z.literal("bash_approval"),
   response: z.enum(["approve", "deny"]),
 });
 
-const ackResponseSchema = z.object({
+const ackResponseSchema = z.strictObject({
   promptId: promptIdSchema,
   conversationId: conversationIdSchema,
   kind: z.enum(["diff", "todo_write", "notebook_edit"]),
@@ -172,60 +189,62 @@ export const interactivePromptResponseSchema = z.discriminatedUnion("kind", [
 ]);
 
 // ---------------------------------------------------------------------------
-// Per-`type` schemas
+// Per-`type` `WSMessage` schemas — flat `z.strictObject` for every variant,
+// no `.and()` composition, so the top-level union is a clean
+// `z.discriminatedUnion("type", ...)` with O(1) dispatch.
 // ---------------------------------------------------------------------------
 
-const authSchema = z.object({ type: z.literal("auth"), token: z.string() });
-const authOkSchema = z.object({ type: z.literal("auth_ok") });
-const chatSchema = z.object({
+const authSchema = z.strictObject({ type: z.literal("auth"), token: z.string() });
+const authOkSchema = z.strictObject({ type: z.literal("auth_ok") });
+const chatSchema = z.strictObject({
   type: z.literal("chat"),
   content: z.string(),
   attachments: z.array(attachmentRefSchema).optional(),
 });
-const startSessionSchema = z.object({
+const startSessionSchema = z.strictObject({
   type: z.literal("start_session"),
   leaderId: domainLeaderIdSchema.optional(),
   context: conversationContextSchema.optional(),
   resumeByContextPath: z.string().optional(),
 });
-const resumeSessionSchema = z.object({
+const resumeSessionSchema = z.strictObject({
   type: z.literal("resume_session"),
   conversationId: z.string(),
 });
-const closeConversationSchema = z.object({ type: z.literal("close_conversation") });
-const reviewGateResponseSchema = z.object({
+const closeConversationSchema = z.strictObject({ type: z.literal("close_conversation") });
+const reviewGateResponseSchema = z.strictObject({
   type: z.literal("review_gate_response"),
   gateId: z.string(),
   selection: z.string(),
 });
-const streamSchema = z.object({
+const streamSchema = z.strictObject({
   type: z.literal("stream"),
   content: z.string(),
   partial: z.boolean(),
   leaderId: domainLeaderIdSchema,
 });
-const streamStartSchema = z.object({
+const streamStartSchema = z.strictObject({
   type: z.literal("stream_start"),
   leaderId: domainLeaderIdSchema,
   source: z.enum(["auto", "mention"]).optional(),
 });
-const streamEndSchema = z.object({
+const streamEndSchema = z.strictObject({
   type: z.literal("stream_end"),
   leaderId: domainLeaderIdSchema,
 });
-const toolUseSchema = z.object({
+const toolUseSchema = z.strictObject({
   type: z.literal("tool_use"),
   leaderId: domainLeaderIdSchema,
   label: z.string(),
 });
-const toolProgressSchema = z.object({
+const toolProgressSchema = z.strictObject({
   type: z.literal("tool_progress"),
   leaderId: domainLeaderIdSchema,
   toolUseId: z.string(),
   toolName: z.string(),
   elapsedSeconds: z.number(),
 });
-const reviewGateSchema = z.object({
+const reviewGateSchema = z.strictObject({
   type: z.literal("review_gate"),
   gateId: z.string(),
   question: z.string(),
@@ -233,37 +252,44 @@ const reviewGateSchema = z.object({
   options: z.array(z.string()),
   descriptions: z.record(z.string(), z.string().optional()).optional(),
   stepProgress: z
-    .object({ current: z.number(), total: z.number() })
+    .strictObject({ current: z.number(), total: z.number() })
     .optional(),
 });
-const sessionStartedSchema = z.object({
+const sessionStartedSchema = z.strictObject({
   type: z.literal("session_started"),
   conversationId: z.string(),
+  // Stage 3 (#2885) — optional capability manifest. When present, lists the
+  // `interactive_prompt.kind` values this server build can emit. Absent =
+  // legacy server, treat as the default 6-kind set. Lets external agents
+  // skip a feature-detection round-trip.
+  capabilities: z
+    .strictObject({ promptKinds: z.array(z.string()).readonly() })
+    .optional(),
 });
-const sessionResumedSchema = z.object({
+const sessionResumedSchema = z.strictObject({
   type: z.literal("session_resumed"),
   conversationId: z.string(),
   resumedFromTimestamp: z.string(),
   messageCount: z.number(),
 });
-const sessionEndedSchema = z.object({
+const sessionEndedSchema = z.strictObject({
   type: z.literal("session_ended"),
   reason: z.string(),
 });
-const usageUpdateSchema = z.object({
+const usageUpdateSchema = z.strictObject({
   type: z.literal("usage_update"),
   conversationId: z.string(),
   totalCostUsd: z.number(),
   inputTokens: z.number(),
   outputTokens: z.number(),
 });
-const fanoutTruncatedSchema = z.object({
+const fanoutTruncatedSchema = z.strictObject({
   type: z.literal("fanout_truncated"),
   dispatched: z.number(),
   dropped: z.number(),
 });
-const upgradePendingSchema = z.object({ type: z.literal("upgrade_pending") });
-const errorSchema = z.object({
+const upgradePendingSchema = z.strictObject({ type: z.literal("upgrade_pending") });
+const errorSchema = z.strictObject({
   type: z.literal("error"),
   message: z.string(),
   errorCode: z
@@ -284,79 +310,106 @@ const errorSchema = z.object({
 });
 
 // Stage 3 (#2885) — new event variants
-const subagentSpawnSchema = z.object({
+const subagentSpawnSchema = z.strictObject({
   type: z.literal("subagent_spawn"),
   parentId: spawnIdSchema,
   leaderId: domainLeaderIdSchema,
   spawnId: spawnIdSchema,
+  // Stage 3 (#2885) — optional one-line description of what this subagent
+  // is doing. Mirrors the SDK's `description` parameter; lets external
+  // observers (CI scripts, Sentry breadcrumbs) understand sub-agent intent
+  // without parsing the full WS stream.
+  task: z.string().max(2_048).optional(),
 });
 
-const subagentCompleteSchema = z.object({
+const subagentCompleteSchema = z.strictObject({
   type: z.literal("subagent_complete"),
   spawnId: spawnIdSchema,
-  status: z.enum(["success", "error", "timeout"]),
+  status: z.enum(SUBAGENT_COMPLETE_STATUSES),
 });
 
-const workflowStartedSchema = z.object({
+const workflowStartedSchema = z.strictObject({
   type: z.literal("workflow_started"),
   workflow: workflowNameSchema,
   conversationId: conversationIdSchema,
 });
 
-const workflowEndedSchema = z.object({
+const workflowEndedSchema = z.strictObject({
   type: z.literal("workflow_ended"),
   workflow: workflowNameSchema,
-  status: z.enum([
-    "completed",
-    "user_aborted",
-    "cost_ceiling",
-    "idle_timeout",
-    "plugin_load_failure",
-    "sandbox_denial",
-    "runner_crash",
-    "runner_runaway",
-    "internal_error",
-  ]),
+  status: z.enum(WORKFLOW_END_STATUSES),
   summary: z.string().optional(),
 });
 
-// `interactive_prompt` flattens (type, promptId, conversationId) over the
-// `kind`-discriminated payload sub-union. We can't directly z.discriminatedUnion
-// on `kind` here AND on `type` at the top level; instead, build six explicit
-// per-(type, kind) schemas and let the top-level union discriminate on `type`.
-function makeInteractivePromptVariant<K extends z.ZodTypeAny>(kindPayload: K) {
-  return z
-    .object({
-      type: z.literal("interactive_prompt"),
-      promptId: promptIdSchema,
-      conversationId: conversationIdSchema,
-    })
-    .and(kindPayload);
+// `interactive_prompt` and `interactive_prompt_response` flatten to
+// (type, promptId, conversationId, kind, payload/response). Each (type,
+// kind) pair is its own `z.strictObject` so the top-level union remains a
+// clean discriminated union on `type`.
+function makeInteractivePromptSchema<K extends typeof INTERACTIVE_PROMPT_KINDS[number], P extends z.ZodTypeAny>(kind: K, payload: P) {
+  return z.strictObject({
+    type: z.literal("interactive_prompt"),
+    promptId: promptIdSchema,
+    conversationId: conversationIdSchema,
+    kind: z.literal(kind),
+    payload,
+  });
 }
-const interactivePromptAskUser = makeInteractivePromptVariant(askUserPayloadSchema);
-const interactivePromptPlanPreview = makeInteractivePromptVariant(planPreviewPayloadSchema);
-const interactivePromptDiff = makeInteractivePromptVariant(diffPayloadSchema);
-const interactivePromptBashApproval = makeInteractivePromptVariant(bashApprovalPayloadSchema);
-const interactivePromptTodoWrite = makeInteractivePromptVariant(todoWritePayloadSchema);
-const interactivePromptNotebookEdit = makeInteractivePromptVariant(notebookEditPayloadSchema);
 
-// `interactive_prompt_response` — flatten `type` + `(promptId, conversationId, kind, response)`.
-function makeInteractivePromptResponseVariant<R extends z.ZodTypeAny>(responseShape: R) {
-  return z.object({ type: z.literal("interactive_prompt_response") }).and(responseShape);
-}
-const interactivePromptResponseAskUser = makeInteractivePromptResponseVariant(askUserResponseSchema);
-const interactivePromptResponsePlanPreview = makeInteractivePromptResponseVariant(planPreviewResponseSchema);
-const interactivePromptResponseBashApproval = makeInteractivePromptResponseVariant(bashApprovalResponseSchema);
-const interactivePromptResponseAck = makeInteractivePromptResponseVariant(ackResponseSchema);
+const ipAskUserSchema = makeInteractivePromptSchema("ask_user", askUserPayloadSchema.shape.payload);
+const ipPlanPreviewSchema = makeInteractivePromptSchema("plan_preview", planPreviewPayloadSchema.shape.payload);
+const ipDiffSchema = makeInteractivePromptSchema("diff", diffPayloadSchema.shape.payload);
+const ipBashApprovalSchema = makeInteractivePromptSchema("bash_approval", bashApprovalPayloadSchema.shape.payload);
+const ipTodoWriteSchema = makeInteractivePromptSchema("todo_write", todoWritePayloadSchema.shape.payload);
+const ipNotebookEditSchema = makeInteractivePromptSchema("notebook_edit", notebookEditPayloadSchema.shape.payload);
+
+const interactivePromptSchema = z.discriminatedUnion("kind", [
+  ipAskUserSchema,
+  ipPlanPreviewSchema,
+  ipDiffSchema,
+  ipBashApprovalSchema,
+  ipTodoWriteSchema,
+  ipNotebookEditSchema,
+]);
+
+const interactivePromptResponseTopSchema = z.discriminatedUnion("kind", [
+  z.strictObject({
+    type: z.literal("interactive_prompt_response"),
+    promptId: promptIdSchema,
+    conversationId: conversationIdSchema,
+    kind: z.literal("ask_user"),
+    response: z.union([z.string(), z.array(z.string())]),
+  }),
+  z.strictObject({
+    type: z.literal("interactive_prompt_response"),
+    promptId: promptIdSchema,
+    conversationId: conversationIdSchema,
+    kind: z.literal("plan_preview"),
+    response: z.enum(["accept", "iterate"]),
+  }),
+  z.strictObject({
+    type: z.literal("interactive_prompt_response"),
+    promptId: promptIdSchema,
+    conversationId: conversationIdSchema,
+    kind: z.literal("bash_approval"),
+    response: z.enum(["approve", "deny"]),
+  }),
+  z.strictObject({
+    type: z.literal("interactive_prompt_response"),
+    promptId: promptIdSchema,
+    conversationId: conversationIdSchema,
+    kind: z.enum(["diff", "todo_write", "notebook_edit"]),
+    response: z.literal("ack"),
+  }),
+]);
 
 // ---------------------------------------------------------------------------
-// Top-level wsMessageSchema — z.union (not z.discriminatedUnion) because the
-// `interactive_prompt*` variants use `.and()` composition which the
-// discriminated-union runtime rejects (it requires plain ZodObjects). Zod 4
-// `union` still attempts each branch and reports the most-specific error.
+// Top-level `wsMessageSchema` — the top union dispatches on `type` first via
+// a small table, then falls through to the inner `interactive_prompt*`
+// discriminated unions. This avoids a 30+ branch `z.union` walk on every
+// hot-path frame.
 // ---------------------------------------------------------------------------
 
-export const wsMessageSchema = z.union([
+const flatTypeSchema = z.discriminatedUnion("type", [
   authSchema,
   authOkSchema,
   chatSchema,
@@ -381,20 +434,19 @@ export const wsMessageSchema = z.union([
   subagentCompleteSchema,
   workflowStartedSchema,
   workflowEndedSchema,
-  interactivePromptAskUser,
-  interactivePromptPlanPreview,
-  interactivePromptDiff,
-  interactivePromptBashApproval,
-  interactivePromptTodoWrite,
-  interactivePromptNotebookEdit,
-  interactivePromptResponseAskUser,
-  interactivePromptResponsePlanPreview,
-  interactivePromptResponseBashApproval,
-  interactivePromptResponseAck,
+]);
+
+export const wsMessageSchema = z.union([
+  flatTypeSchema,
+  interactivePromptSchema,
+  interactivePromptResponseTopSchema,
 ]);
 
 // ---------------------------------------------------------------------------
 // parseWSMessage — fail-closed wrapper consumed by `ws-client.ts:onmessage`.
+// Note: the inferred return type of `wsMessageSchema.safeParse` is
+// structurally identical to `WSMessage`; the `_SchemaCovers` assertion
+// below pins the equivalence so no narrowing cast is needed.
 // ---------------------------------------------------------------------------
 
 export type ParseWSMessageResult =
@@ -404,28 +456,23 @@ export type ParseWSMessageResult =
 export function parseWSMessage(raw: unknown): ParseWSMessageResult {
   const result = wsMessageSchema.safeParse(raw);
   if (result.success) {
-    // Cast through `unknown` because Zod's inferred type carries `.and()`
-    // intersection shapes that are structurally identical but nominally
-    // distinct from the `WSMessage` union; the bidirectional `_SchemaCovers`
-    // assertion below pins the equivalence at compile time.
-    return { ok: true, msg: result.data as unknown as WSMessage };
+    return { ok: true, msg: result.data };
   }
   return { ok: false, error: result.error };
 }
 
 // ---------------------------------------------------------------------------
-// Bidirectional drift guard — every `WSMessage["type"]` must have a schema,
-// and every schema's `type` must appear in `WSMessage["type"]`. A new variant
-// added on either side fails compilation here.
+// Bidirectional drift guard — every `WSMessage` variant must be covered by
+// the schema, and every schema-inferred variant must appear in `WSMessage`.
+// The two `_check` consts assert structural equivalence in both directions:
+// either side gaining/losing a field on any variant fails compilation here.
 // ---------------------------------------------------------------------------
 
-type WSMessageType = WSMessage["type"];
-type SchemaInferredType = z.infer<typeof wsMessageSchema>["type"];
+type SchemaInferred = z.infer<typeof wsMessageSchema>;
 
-type _SchemaCovers = {
-  _forward: Exclude<WSMessageType, SchemaInferredType>;
-  _backward: Exclude<SchemaInferredType, WSMessageType>;
-};
-const _SchemaCoversProof: { _forward: never; _backward: never } =
-  null as unknown as _SchemaCovers;
-void _SchemaCoversProof;
+// Forward: every WSMessage value must be assignable to the inferred type.
+const _SchemaCoversForward = (msg: WSMessage): SchemaInferred => msg;
+// Backward: every inferred value must be assignable to WSMessage.
+const _SchemaCoversBackward = (msg: SchemaInferred): WSMessage => msg;
+void _SchemaCoversForward;
+void _SchemaCoversBackward;

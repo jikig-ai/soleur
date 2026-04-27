@@ -31,6 +31,7 @@ import {
   type PendingPromptRecord,
 } from "./pending-prompt-registry";
 import type { WSMessage } from "@/lib/types";
+import { mintPromptId, mintConversationId } from "@/lib/branded-ids";
 type InteractivePromptResponse = Extract<WSMessage, { type: "interactive_prompt_response" }>;
 
 export type HandleInteractivePromptResponseResult =
@@ -175,7 +176,11 @@ export function handleInteractivePromptResponse(
     return { ok: false, error: "invalid_payload" };
   }
 
-  const key = makePendingPromptKey(userId, payload.conversationId, payload.promptId);
+  const key = makePendingPromptKey(
+    userId,
+    mintConversationId(payload.conversationId),
+    mintPromptId(payload.promptId),
+  );
 
   // Peek first (no consume) so cross-conversation / kind-mismatch do NOT
   // destroy the record — a correct retry must still work.
