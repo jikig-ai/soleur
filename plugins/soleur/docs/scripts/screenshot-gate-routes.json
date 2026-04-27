@@ -1,0 +1,26 @@
+{
+  "_comment": "Routes audited by `node plugins/soleur/docs/scripts/screenshot-gate.mjs` to detect critical-CSS FOUC. Source: every template that renders `.page-hero` or `.landing-hero` above the fold (enumerate via `rg -l 'page-hero|landing-hero' plugins/soleur/docs/pages plugins/soleur/docs/_includes`). Per AGENTS.md `cq-eleventy-critical-css-screenshot-gate`, any new above-fold template must be added here.",
+  "viewport": { "width": 1440, "height": 900 },
+  "routes": [
+    { "path": "/" },
+    { "path": "/pricing/" },
+    { "path": "/blog/" },
+    { "path": "/agents/" },
+    { "path": "/skills/" },
+    { "path": "/about/" },
+    { "path": "/getting-started/" },
+    { "path": "/community/" },
+    { "path": "/changelog/" },
+    { "path": "/vision/" },
+    { "path": "/legal/" },
+    { "path": "/legal/acceptable-use-policy/" },
+    { "path": "/legal/cookie-policy/" },
+    { "path": "/legal/corporate-cla/" },
+    { "path": "/legal/data-protection-disclosure/" },
+    { "path": "/legal/disclaimer/" },
+    { "path": "/legal/gdpr-policy/" },
+    { "path": "/legal/individual-cla/" },
+    { "path": "/legal/privacy-policy/" },
+    { "path": "/legal/terms-and-conditions/" }
+  ]
+}
