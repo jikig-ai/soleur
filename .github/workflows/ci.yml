@@ -198,6 +198,12 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
         run: npx @11ty/eleventy
 
+      - name: Validate CSP (hashes + inline event-handler attributes)
+        run: bash plugins/soleur/skills/seo-aeo/scripts/validate-csp.sh _site
+
+      - name: Validate SEO
+        run: bash plugins/soleur/skills/seo-aeo/scripts/validate-seo.sh _site
+
       - name: Static critical-CSS coverage check
         run: node plugins/soleur/docs/scripts/check-critical-css-coverage.mjs
 
