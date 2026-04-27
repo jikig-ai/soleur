@@ -1,6 +1,6 @@
 import { query, type tool, createSdkMcpServer } from "@anthropic-ai/claude-agent-sdk";
 import { randomUUID } from "crypto";
-import { readFileSync, writeFileSync, mkdirSync } from "fs";
+import { readFileSync, mkdirSync } from "fs";
 import { readFile, writeFile, mkdir } from "fs/promises";
 import path from "path";
 
@@ -43,6 +43,10 @@ import { buildPlausibleTools } from "./plausible-tools";
 import { createCanUseTool } from "./permission-callback";
 import { reportSilentFallback } from "./observability";
 import { buildAgentSandboxConfig } from "./agent-runner-sandbox-config";
+import {
+  withWorkspacePermissionLock,
+  atomicWriteJson,
+} from "./workspace-permission-lock";
 
 const log = createChildLogger("agent");
 
@@ -73,20 +77,34 @@ const FILE_TOOLS_TO_REMOVE = new Set(["Read", "Glob", "Grep"]);
  * (permission chain step 4 before step 5). Idempotent — safe on every
  * cold-Query construction. Do NOT call from new modules.
  */
-export function patchWorkspacePermissions(workspacePath: string): void {
-  const settingsPath = path.join(workspacePath, ".claude", "settings.json");
-  try {
-    const raw = readFileSync(settingsPath, "utf8");
-    const settings = JSON.parse(raw);
-    const allow: string[] = settings?.permissions?.allow;
-    if (!Array.isArray(allow) || allow.length === 0) return;
-    const filtered = allow.filter((t: string) => !FILE_TOOLS_TO_REMOVE.has(t));
-    if (filtered.length === allow.length) return;
-    settings.permissions.allow = filtered;
-    writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + "\n");
-  } catch {
-    // Settings file missing or malformed — workspace.ts will recreate on next provision
-  }
+export async function patchWorkspacePermissions(
+  workspacePath: string,
+): Promise<void> {
+  // `withWorkspacePermissionLock` keys on the canonicalized workspace
+  // path (`path.resolve`). Two concurrent cold-Query constructions on
+  // the same workspace serialize their read-modify-write so we don't
+  // lose the second caller's filtered allowlist (#2918).
+  await withWorkspacePermissionLock(workspacePath, () => {
+    const settingsPath = path.join(workspacePath, ".claude", "settings.json");
+    try {
+      const raw = readFileSync(settingsPath, "utf8");
+      const settings = JSON.parse(raw);
+      // Preserve the existing Array.isArray guard — the settings file
+      // schema is permissive and `permissions.allow` may be missing.
+      if (!Array.isArray(settings?.permissions?.allow)) return;
+      const allow: string[] = settings.permissions.allow;
+      if (allow.length === 0) return;
+      const filtered = allow.filter((t: string) => !FILE_TOOLS_TO_REMOVE.has(t));
+      if (filtered.length === allow.length) return;
+      settings.permissions.allow = filtered;
+      // `atomicWriteJson` writes tmp → fdatasync → close → rename. A
+      // mid-write crash leaves either the prior content or the new
+      // content — never a zero-byte file.
+      atomicWriteJson(settingsPath, settings);
+    } catch {
+      // Settings file missing or malformed — workspace.ts will recreate on next provision
+    }
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -507,8 +525,10 @@ export async function startAgentSession(
 
     // Migrate existing workspaces: remove pre-approved permissions that
     // bypass canUseTool (see #725). Safe to run on every session start —
-    // no-op for already-migrated workspaces.
-    patchWorkspacePermissions(workspacePath);
+    // no-op for already-migrated workspaces. Async per #2918 (the lock
+    // serializes concurrent same-workspace callers and the write goes
+    // through `atomicWriteJson`).
+    await patchWorkspacePermissions(workspacePath);
 
     // Sync: pull latest from remote before session (connected repos only)
     if (user.repo_status === "ready") {

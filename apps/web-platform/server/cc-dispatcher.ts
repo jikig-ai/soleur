@@ -362,7 +362,9 @@ export const realSdkQueryFactory: QueryFactory = async (
   // Defense-in-depth: strip stale pre-approved file-tool entries from
   // the workspace's `.claude/settings.json` so they cannot bypass
   // `canUseTool` (permission chain step 4 before step 5). Idempotent.
-  patchWorkspacePermissions(workspacePath);
+  // Async per #2918 — the lock keyed on workspacePath prevents the
+  // legacy + cc paths from racing on the same workspace.
+  await patchWorkspacePermissions(workspacePath);
 
   const pluginPath = path.join(workspacePath, "plugins", "soleur");
 
