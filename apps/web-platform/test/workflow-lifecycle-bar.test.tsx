@@ -17,23 +17,8 @@ describe("WorkflowLifecycleBar", () => {
     expect(container.querySelector("[data-lifecycle-state]")).toBeNull();
   });
 
-  test("routing state renders amber pulse + 'Routing your message…'", () => {
-    const { container } = render(
-      <WorkflowLifecycleBar lifecycle={{ state: "routing" }} />,
-    );
-    const bar = container.querySelector('[data-lifecycle-state="routing"]');
-    expect(bar).not.toBeNull();
-    expect(bar?.textContent).toMatch(/routing/i);
-  });
-
-  test("routing state with skillName renders 'Routing to {skillName}…'", () => {
-    const { container } = render(
-      <WorkflowLifecycleBar
-        lifecycle={{ state: "routing", skillName: "brainstorm" }}
-      />,
-    );
-    expect(container.textContent).toContain("brainstorm");
-  });
+  // Routing-state tests removed per review F9 (routing variant dropped from
+  // the WorkflowLifecycleState union).
 
   test("active state renders workflow + Switch workflow button", () => {
     const onSwitch = vi.fn();

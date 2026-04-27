@@ -26,11 +26,25 @@ import { formatAssistantText } from "@/lib/format-assistant-text";
  *     render APIs are used; the sentinel grep `rg "danger|innerHTML|__html"`
  *     in Phase 6 enforces this.
  *
- * V1 omissions (V2 follow-ups tracked in master plan):
- *   - No live bash output streaming (`bash_approval`).
- *   - No inline diff renderer (`diff`).
- *   - No client-side auto-dismiss (server reaper handles staleness).
+ * V1 → V2 follow-ups tracked as separate GitHub issues (review F23 #2886):
+ *   each deferred capability has a `deferred-scope-out` issue milestoned
+ *   to "Post-MVP / Later". See PR #2925 review summary for the issue list.
  */
+
+/**
+ * Review F14 (#2886): per-kind past-tense verb maps so the rendered
+ * "selected" footers don't string-interpolate into ungrammatical results
+ * like "Plan iterateed" (double-e from "iterate" + "ed") or "Bash ackd".
+ * Discriminated maps are exhaustive at compile time.
+ */
+const PLAN_PREVIEW_VERB: Record<"accept" | "iterate", string> = {
+  accept: "accepted",
+  iterate: "iterated",
+};
+const BASH_APPROVAL_VERB: Record<"approve" | "deny", string> = {
+  approve: "approved",
+  deny: "denied",
+};
 
 interface InteractivePromptCardPropsBase {
   promptId: string;
@@ -119,7 +133,13 @@ function AskUserCard({
   onRespond,
   selectedResponse,
 }: VariantProps<"ask_user", { question: string; options: string[]; multiSelect: boolean }>) {
-  const [picked, setPicked] = useState<string[]>([]);
+  // Review F17 (#2886): hydrate `picked` from `selectedResponse` so a
+  // resolved multi-select prompt renders with the previously-selected
+  // checkboxes ticked. Otherwise checkboxes appear unchecked while the
+  // "Selected: …" footer shows the real values — split-brain UI.
+  const [picked, setPicked] = useState<string[]>(() =>
+    Array.isArray(selectedResponse) ? selectedResponse : [],
+  );
 
   if (payload.multiSelect) {
     const toggle = (opt: string) =>
@@ -230,7 +250,12 @@ function PlanPreviewCard({
           </button>
         </div>
         {disabled && selectedResponse !== undefined ? (
-          <p className="mt-2 text-xs text-neutral-500">Plan {String(selectedResponse)}ed</p>
+          <p className="mt-2 text-xs text-neutral-500">
+            {(() => {
+              const sel = selectedResponse as "accept" | "iterate";
+              return `Plan ${PLAN_PREVIEW_VERB[sel] ?? String(sel)}`;
+            })()}
+          </p>
         ) : null}
       </div>
     </CardShell>
@@ -315,7 +340,12 @@ function BashApprovalCard({
           </div>
         ) : null}
         {disabled && selectedResponse !== undefined ? (
-          <p className="mt-2 text-xs text-neutral-500">{String(selectedResponse)}d</p>
+          <p className="mt-2 text-xs text-neutral-500">
+            {(() => {
+              const sel = selectedResponse as "approve" | "deny";
+              return BASH_APPROVAL_VERB[sel] ?? String(sel);
+            })()}
+          </p>
         ) : null}
       </div>
     </CardShell>

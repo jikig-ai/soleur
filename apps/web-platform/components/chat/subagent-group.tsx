@@ -12,7 +12,8 @@ import { LEADER_COLORS } from "@/components/chat/leader-colors";
  *
  * Renders a parent leader's assessment + nested per-child sub-bubbles, one
  * per spawned subagent (Option A from brainstorm Q#3). Default expanded if
- * `children.length <= 2`; collapsed if `>= 3` (with a toggle).
+ * `subagents.length <= SUBAGENT_GROUP_AUTO_EXPAND_MAX`; collapsed otherwise
+ * (with a toggle).
  *
  * Per-child status badges:
  *   - success → checkmark
@@ -28,6 +29,12 @@ import { LEADER_COLORS } from "@/components/chat/leader-colors";
  *   - `data-testid="subagent-group-toggle"` on the expand button (when present)
  */
 
+/** Review F18 (#2886): module-scope constants extracted from inline literals
+ *  so the indentation and auto-expand thresholds are referenced by name and
+ *  visible to greps. */
+export const SUBAGENT_CHILD_INDENT_CLASS = "ml-6";
+export const SUBAGENT_GROUP_AUTO_EXPAND_MAX = 2;
+
 export interface SubagentChild {
   spawnId: string;
   leaderId: DomainLeaderId;
@@ -39,7 +46,11 @@ interface SubagentGroupProps {
   parentSpawnId: string;
   parentLeaderId: DomainLeaderId;
   parentTask?: string;
-  children: SubagentChild[];
+  /** Review F20 (#2886): renamed from `children` so it doesn't shadow
+   *  React's reserved prop semantics. The wire-side reducer field is also
+   *  named `children` on `ChatSubagentGroupMessage`; the rename is local to
+   *  the component prop only. */
+  subagents: SubagentChild[];
   getDisplayName?: (id: DomainLeaderId) => string;
   getIconPath?: (id: DomainLeaderId) => string | null;
   variant?: "full" | "sidebar";
@@ -100,11 +111,11 @@ export function SubagentGroup({
   parentSpawnId,
   parentLeaderId,
   parentTask,
-  children,
+  subagents,
   getDisplayName,
   getIconPath,
 }: SubagentGroupProps) {
-  const initialExpanded = children.length <= 2;
+  const initialExpanded = subagents.length <= SUBAGENT_GROUP_AUTO_EXPAND_MAX;
   const [expanded, setExpanded] = useState<boolean>(initialExpanded);
 
   const parentLeader = DOMAIN_LEADERS.find((l) => l.id === parentLeaderId);
@@ -124,28 +135,28 @@ export function SubagentGroup({
           <div className="flex items-center gap-2">
             <span className="text-xs font-semibold text-neutral-200">{parentName}</span>
             <span className="rounded-full bg-neutral-800 px-2 py-0.5 text-[10px] text-neutral-300">
-              {children.length} subagents spawned
+              {subagents.length} subagents spawned
             </span>
           </div>
           {parentTask ? (
             <span className="mt-0.5 text-xs text-neutral-500">{parentTask}</span>
           ) : null}
         </div>
-        {children.length >= 3 ? (
+        {subagents.length > SUBAGENT_GROUP_AUTO_EXPAND_MAX ? (
           <button
             type="button"
             data-testid="subagent-group-toggle"
             onClick={() => setExpanded((v) => !v)}
             className="rounded-md border border-neutral-700 px-2 py-0.5 text-xs text-neutral-300 hover:border-neutral-500"
           >
-            {expanded ? "Collapse" : `Show ${children.length}`}
+            {expanded ? "Collapse" : `Show ${subagents.length}`}
           </button>
         ) : null}
       </div>
 
       {expanded ? (
         <div className="mt-3 space-y-2">
-          {children.map((c) => {
+          {subagents.map((c) => {
             const childLeader = DOMAIN_LEADERS.find((l) => l.id === c.leaderId);
             const childName =
               getDisplayName?.(c.leaderId) ?? childLeader?.name ?? c.leaderId;
@@ -155,8 +166,10 @@ export function SubagentGroup({
                 key={c.spawnId}
                 data-child-spawn-id={c.spawnId}
                 data-child-status={statusKey(c.status)}
-                className="ml-6 flex items-center gap-2 rounded-lg border border-neutral-800/60 bg-neutral-900/40 px-3 py-2"
-                data-parent-id={parentSpawnId}
+                className={`${SUBAGENT_CHILD_INDENT_CLASS} flex items-center gap-2 rounded-lg border border-neutral-800/60 bg-neutral-900/40 px-3 py-2`}
+                /* Review F21 (#2886): the redundant `data-parent-id` attribute
+                   was removed — the wrapping group already exposes
+                   `data-parent-spawn-id`, which is the canonical hook. */
               >
                 <LeaderAvatar leaderId={c.leaderId} size="sm" customIconPath={childIcon} />
                 <div className="flex min-w-0 flex-1 flex-col">

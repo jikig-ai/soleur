@@ -40,10 +40,15 @@ function emptyState(): ReducerState {
   };
 }
 
+// Review F22 (#2886): use the inferred event type from `applyStreamEvent`'s
+// 3rd parameter once at the helper signature, so individual events declared
+// in the test bodies don't need an `as Parameters<typeof ...>[2]` per-event.
+type StreamEventArg = Parameters<typeof applyStreamEvent>[2];
+
 // Replay a list of WS events through `applyStreamEvent` and return the
 // final reducer state. Deliberately threads `workflow` and `spawnIndex`
 // since the Stage 4 reducer needs them.
-function replay(events: Array<Parameters<typeof applyStreamEvent>[2]>): ReducerState {
+function replay(events: StreamEventArg[]): ReducerState {
   let state = emptyState();
   for (const ev of events) {
     const r = applyStreamEvent(
@@ -71,13 +76,13 @@ describe("cc-soleur-go end-to-end reducer + render", () => {
         type: "tool_use",
         leaderId: "cc_router" as DomainLeaderId,
         label: "Routing via /soleur:go",
-      } as Parameters<typeof applyStreamEvent>[2],
+      } as StreamEventArg,
       // 2. Workflow starts — chip MUST be removed by reducer.
       {
         type: "workflow_started",
         workflow: "brainstorm",
         conversationId: "c-1",
-      } as Parameters<typeof applyStreamEvent>[2],
+      } as StreamEventArg,
       // 3. Two subagents spawn under the same parent.
       {
         type: "subagent_spawn",
@@ -85,20 +90,20 @@ describe("cc-soleur-go end-to-end reducer + render", () => {
         leaderId: "cmo" as DomainLeaderId,
         spawnId: "s-1",
         task: "Audit copy",
-      } as Parameters<typeof applyStreamEvent>[2],
+      } as StreamEventArg,
       {
         type: "subagent_spawn",
         parentId: "p-1",
         leaderId: "cfo" as DomainLeaderId,
         spawnId: "s-2",
         task: "Audit budget",
-      } as Parameters<typeof applyStreamEvent>[2],
+      } as StreamEventArg,
       // 4. One of them completes successfully.
       {
         type: "subagent_complete",
         spawnId: "s-1",
         status: "success",
-      } as Parameters<typeof applyStreamEvent>[2],
+      } as StreamEventArg,
       // 5. An interactive prompt is raised.
       {
         type: "interactive_prompt",
@@ -106,14 +111,14 @@ describe("cc-soleur-go end-to-end reducer + render", () => {
         conversationId: "c-1",
         kind: "ask_user",
         payload: { question: "Continue?", options: ["yes", "no"], multiSelect: false },
-      } as Parameters<typeof applyStreamEvent>[2],
+      } as StreamEventArg,
       // 6. Workflow ends.
       {
         type: "workflow_ended",
         workflow: "brainstorm",
         status: "completed",
         summary: "Done",
-      } as Parameters<typeof applyStreamEvent>[2],
+      } as StreamEventArg,
     ]);
 
     // Reducer-level assertions.
@@ -145,7 +150,7 @@ describe("cc-soleur-go end-to-end reducer + render", () => {
           parentSpawnId={group.parentSpawnId}
           parentLeaderId={group.parentLeaderId}
           parentTask={group.parentTask}
-          children={group.children}
+          subagents={group.children}
         />,
       );
       expect(container.querySelector(`[data-parent-spawn-id="${group.parentSpawnId}"]`)).not.toBeNull();
@@ -176,7 +181,7 @@ describe("cc-soleur-go end-to-end reducer + render", () => {
         toolUseId: "tu-1",
         toolName: "Skill",
         elapsedSeconds: 3,
-      } as Parameters<typeof applyStreamEvent>[2],
+      } as StreamEventArg,
     ]);
     expect(state.messages.length).toBe(0);
   });
@@ -187,7 +192,7 @@ describe("cc-soleur-go end-to-end reducer + render", () => {
         type: "tool_use",
         leaderId: "cc_router" as DomainLeaderId,
         label: "Routing",
-      } as Parameters<typeof applyStreamEvent>[2],
+      } as StreamEventArg,
     ]);
     const chip = state.messages[0];
     expect(chip.type).toBe("tool_use_chip");
@@ -196,7 +201,7 @@ describe("cc-soleur-go end-to-end reducer + render", () => {
         <ToolUseChip
           toolName={chip.toolName}
           toolLabel={chip.toolLabel}
-          leaderId={chip.leaderId as "cc_router" | "system"}
+          leaderId={chip.leaderId}
         />,
       );
       expect(container.querySelector("[data-tool-chip-id]")).not.toBeNull();

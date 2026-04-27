@@ -19,7 +19,7 @@ describe("SubagentGroup", () => {
       <SubagentGroup
         parentSpawnId="p-1"
         parentLeaderId={"cto" as DomainLeaderId}
-        children={[child("s-1", "cmo" as DomainLeaderId), child("s-2", "cfo" as DomainLeaderId)]}
+        subagents={[child("s-1", "cmo" as DomainLeaderId), child("s-2", "cfo" as DomainLeaderId)]}
       />,
     );
     const group = container.querySelector('[data-parent-spawn-id="p-1"]');
@@ -36,7 +36,7 @@ describe("SubagentGroup", () => {
       <SubagentGroup
         parentSpawnId="p-2"
         parentLeaderId={"cto" as DomainLeaderId}
-        children={[
+        subagents={[
           child("s-1", "cmo" as DomainLeaderId),
           child("s-2", "cfo" as DomainLeaderId),
           child("s-3", "cpo" as DomainLeaderId),
@@ -53,7 +53,7 @@ describe("SubagentGroup", () => {
       <SubagentGroup
         parentSpawnId="p-3"
         parentLeaderId={"cto" as DomainLeaderId}
-        children={[
+        subagents={[
           child("s-1", "cmo" as DomainLeaderId, "success"),
           child("s-2", "cfo" as DomainLeaderId, "error"),
           child("s-3", "cpo" as DomainLeaderId, "timeout"),
@@ -76,7 +76,7 @@ describe("SubagentGroup", () => {
       <SubagentGroup
         parentSpawnId="p-4"
         parentLeaderId={"cto" as DomainLeaderId}
-        children={[child("s-1", "cmo" as DomainLeaderId), child("s-2", "cfo" as DomainLeaderId)]}
+        subagents={[child("s-1", "cmo" as DomainLeaderId), child("s-2", "cfo" as DomainLeaderId)]}
       />,
     );
     expect(screen.getByText(/2 subagents spawned/i)).toBeTruthy();
@@ -87,7 +87,7 @@ describe("SubagentGroup", () => {
       <SubagentGroup
         parentSpawnId="p-5"
         parentLeaderId={"cto" as DomainLeaderId}
-        children={[
+        subagents={[
           child("s-1", "cmo" as DomainLeaderId, "success"),
           child("s-2", "cfo" as DomainLeaderId, "timeout"),
           child("s-3", "cpo" as DomainLeaderId, "success"),

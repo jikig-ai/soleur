@@ -77,6 +77,29 @@ describe("InteractivePromptCard ask_user", () => {
   });
 });
 
+describe("InteractivePromptCard ask_user multi-select rehydration (review F17 #2886)", () => {
+  test("resolved=true with multiSelect=true checkboxes are pre-checked from selectedResponse", () => {
+    const onRespond = vi.fn();
+    const { container } = render(
+      <InteractivePromptCard
+        promptId="pr-rehydrate"
+        conversationId="c-1"
+        kind="ask_user"
+        payload={{ question: "Pick", options: ["a", "b", "c"], multiSelect: true }}
+        onRespond={onRespond}
+        resolved={true}
+        selectedResponse={["a", "c"]}
+      />,
+    );
+    const a = container.querySelector('input[type="checkbox"][aria-label="a"]');
+    const b = container.querySelector('input[type="checkbox"][aria-label="b"]');
+    const c = container.querySelector('input[type="checkbox"][aria-label="c"]');
+    expect((a as HTMLInputElement | null)?.checked).toBe(true);
+    expect((b as HTMLInputElement | null)?.checked).toBe(false);
+    expect((c as HTMLInputElement | null)?.checked).toBe(true);
+  });
+});
+
 describe("InteractivePromptCard plan_preview", () => {
   test("Accept button calls onRespond with response='accept'", () => {
     const onRespond = vi.fn();
@@ -113,6 +136,52 @@ describe("InteractivePromptCard plan_preview", () => {
     if (arg.kind === "plan_preview") {
       expect(arg.response).toBe("iterate");
     }
+  });
+});
+
+describe("InteractivePromptCard plan_preview resolved-state grammar (review F14 #2886)", () => {
+  test.each([
+    ["accept", /Plan accepted/],
+    ["iterate", /Plan iterated/],
+  ])("resolved=true with selectedResponse='%s' renders correctly", (sel, re) => {
+    const { container } = render(
+      <InteractivePromptCard
+        promptId={`pr-grammar-${sel}`}
+        conversationId="c-1"
+        kind="plan_preview"
+        payload={{ markdown: "Plan body" }}
+        onRespond={() => {}}
+        resolved={true}
+        selectedResponse={sel as "accept" | "iterate"}
+      />,
+    );
+    expect(container.textContent).toMatch(re);
+    // Regression: must NOT produce double-e or trailing-d artifacts.
+    expect(container.textContent).not.toMatch(/iterateed/);
+    expect(container.textContent).not.toMatch(/acceptd/);
+  });
+});
+
+describe("InteractivePromptCard bash_approval resolved-state grammar (review F14 #2886)", () => {
+  test.each([
+    ["approve", /approved/],
+    ["deny", /denied/],
+  ])("resolved=true with selectedResponse='%s' renders correctly", (sel, re) => {
+    const { container } = render(
+      <InteractivePromptCard
+        promptId={`pr-bash-grammar-${sel}`}
+        conversationId="c-1"
+        kind="bash_approval"
+        payload={{ command: "ls", cwd: "/", gated: true }}
+        onRespond={() => {}}
+        resolved={true}
+        selectedResponse={sel as "approve" | "deny"}
+      />,
+    );
+    expect(container.textContent).toMatch(re);
+    // Regression: never "approved" + extra "d" / "denied" + extra "d".
+    expect(container.textContent).not.toMatch(/approveded/);
+    expect(container.textContent).not.toMatch(/deniedd/);
   });
 });
 

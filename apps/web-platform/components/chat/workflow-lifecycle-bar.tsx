@@ -6,11 +6,16 @@ import type { WorkflowLifecycleState } from "@/lib/chat-state-machine";
 /**
  * Stage 4 (#2886) — WorkflowLifecycleBar component.
  *
- * Sticky context bar above the message list. Four states:
+ * Sticky context bar above the message list. Three states:
  *   - idle    → render nothing (return null)
- *   - routing → amber pulse + "Routing your message…" or "Routing to {skill}…"
  *   - active  → workflow name + phase + cumulative cost + Switch workflow CTA
  *   - ended   → completion summary + outcome badge + Start new conversation CTA
+ *
+ * Review F9: the `routing` state was dropped because the reducer never
+ * produced it and there's no reliable signal source for `skillName`
+ * pre-`workflow_started`. The legacy "Routing to the right experts" chip
+ * in `chat-surface.tsx` continues to cover the routing UX during the gap
+ * before `workflow_started` fires.
  *
  * Test hook: `data-lifecycle-state` (idle returns null and emits no element).
  */
@@ -29,23 +34,6 @@ export function WorkflowLifecycleBar({
   switch (lifecycle.state) {
     case "idle":
       return null;
-    case "routing":
-      return (
-        <div
-          data-lifecycle-state="routing"
-          className="flex items-center gap-2 border-b border-neutral-800 bg-neutral-900/40 px-4 py-2"
-        >
-          <span
-            className="h-2 w-2 animate-pulse rounded-full bg-amber-500"
-            aria-hidden="true"
-          />
-          <span className="text-xs text-neutral-300">
-            {lifecycle.skillName
-              ? `Routing to ${lifecycle.skillName}…`
-              : "Routing your message…"}
-          </span>
-        </div>
-      );
     case "active":
       return (
         <div
@@ -63,15 +51,17 @@ export function WorkflowLifecycleBar({
               ~${lifecycle.cumulativeCostUsd.toFixed(4)}
             </span>
           ) : null}
-          <div className="ml-auto">
-            <button
-              type="button"
-              onClick={onSwitchWorkflow}
-              className="rounded-md border border-neutral-700 px-2 py-1 text-xs text-neutral-300 hover:border-neutral-500"
-            >
-              Switch workflow
-            </button>
-          </div>
+          {onSwitchWorkflow !== undefined ? (
+            <div className="ml-auto">
+              <button
+                type="button"
+                onClick={onSwitchWorkflow}
+                className="rounded-md border border-neutral-700 px-2 py-1 text-xs text-neutral-300 hover:border-neutral-500"
+              >
+                Switch workflow
+              </button>
+            </div>
+          ) : null}
         </div>
       );
     case "ended":

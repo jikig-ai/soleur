@@ -72,7 +72,6 @@ export const MessageBubble = memo(function MessageBubble({
   getIconPath,
   attachments,
   variant = "full",
-  parentId,
 }: {
   role: "user" | "assistant";
   content: string;
@@ -87,11 +86,10 @@ export const MessageBubble = memo(function MessageBubble({
   getIconPath?: (id: DomainLeaderId) => string | null;
   attachments?: AttachmentRef[];
   variant?: "full" | "sidebar";
-  /** Stage 4 (#2886): when set, indents the bubble (nested subagent child).
-   *  `data-parent-id` is exposed as a stable test hook. Primitive prop is
-   *  shallow-compare safe under `React.memo`'s default comparator (the
-   *  existing `memo` call site has no custom `arePropsEqual` arg). */
-  parentId?: string;
+  // Review F5 (#2886): the `parentId` prop, the `ml-6` indentClass, and the
+  // `data-parent-id` attribute were removed — they had no production caller.
+  // SubagentGroup renders its child rows directly with their own indentation
+  // and `data-child-spawn-id` test hooks.
 }) {
   const isUser = role === "user";
   const leader = leaderId ? DOMAIN_LEADERS.find((l) => l.id === leaderId) : null;
@@ -111,12 +109,9 @@ export const MessageBubble = memo(function MessageBubble({
         ? "border border-neutral-800/60"
         : "border border-neutral-800";
 
-  const indentClass = parentId ? "ml-6" : "";
-
   return (
     <div
-      className={`flex min-w-0 ${indentClass} ${isUser ? "justify-end" : "justify-start"}`}
-      data-parent-id={parentId}
+      className={`flex min-w-0 ${isUser ? "justify-end" : "justify-start"}`}
     >
       <div className={`flex min-w-0 max-w-[90%] gap-3 md:max-w-[80%] ${isUser ? "flex-row-reverse" : ""}`}>
         {leader && (
