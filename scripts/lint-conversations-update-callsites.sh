@@ -44,11 +44,13 @@ if [[ ! -f "$WRAPPER" ]]; then
   exit 2
 fi
 
-# Find candidate files with any `from("conversations")` token. ripgrep
-# with -l emits filenames only.
-candidates=$(rg -l 'from\("conversations"\)' "$SERVER_DIR" \
-  --glob '!conversation-writer.ts' \
-  --glob '!*.test.ts' || true)
+# Find candidate files with any `from("conversations")` token. POSIX
+# `grep -lr` (no ripgrep dependency) keeps this script portable across
+# CI runners and developer machines that may not have rg installed.
+candidates=$(grep -lr --include='*.ts' \
+  --exclude='*.test.ts' \
+  --exclude='conversation-writer.ts' \
+  'from("conversations")' "$SERVER_DIR" 2>/dev/null || true)
 
 if [[ -z "$candidates" ]]; then
   echo "OK: no direct conversation updates outside the wrapper."
