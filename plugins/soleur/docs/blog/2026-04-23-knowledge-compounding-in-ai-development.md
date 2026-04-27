@@ -2,7 +2,7 @@
 title: "Knowledge Compounding in AI Development: How Compound Engineering Beats Point Solutions"
 seoTitle: "Knowledge Compounding AI: Why Compound Engineering Outperforms Point Solutions"
 date: 2026-04-23
-description: "Knowledge compounding in AI development is the mechanism that separates compound engineering organizations from stateless tools. Here's how it works and why it matters."
+description: "Knowledge compounding separates compound engineering organizations from stateless AI tools. Here's how it works and why it outperforms point solutions."
 ogImage: "blog/og-knowledge-compounding-ai-development.png"
 tags:
   - agentic-engineering
