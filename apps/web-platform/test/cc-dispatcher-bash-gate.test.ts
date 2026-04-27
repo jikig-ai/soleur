@@ -41,10 +41,15 @@ import {
   __resetDispatcherForTests,
 } from "@/server/cc-dispatcher";
 import { createSoleurGoRunner } from "@/server/soleur-go-runner";
+import {
+  getBashApprovalCache,
+  _resetBashApprovalCacheForTests,
+} from "@/server/permission-callback-bash-batch";
 
 describe("cc-dispatcher Bash review-gate (Option A — synthetic AgentSession)", () => {
   beforeEach(() => {
     __resetDispatcherForTests();
+    _resetBashApprovalCacheForTests();
   });
 
   // -------------------------------------------------------------------------
@@ -296,5 +301,51 @@ describe("cc-dispatcher Bash review-gate (Option A — synthetic AgentSession)",
         selection: "Approve",
       }),
     ).toBe(false);
+  });
+
+  // -------------------------------------------------------------------------
+  // T-AC-2921: multi-Bash batching contract
+  //   - 5 sequential `git status` after batch grant → 0 additional gates
+  //   - `git status` grant ≠ `git push` allow (prefix-strict)
+  //   - cross-conversation isolation
+  // -------------------------------------------------------------------------
+  describe("T-AC-2921: bash batching across conversation lifecycle", () => {
+    it("5 sequential `git status` after batch grant → cache hits all 5", () => {
+      const cache = getBashApprovalCache("u-batch", "conv-batch");
+      // Simulating "user picked Approve all `git status`" after first gate.
+      cache.grant("git status");
+      let hits = 0;
+      for (let i = 0; i < 5; i++) {
+        if (cache.allow("git status")) hits++;
+      }
+      expect(hits).toBe(5);
+    });
+
+    it("`git status` grant does NOT auto-allow `git push`", () => {
+      const cache = getBashApprovalCache("u-strict", "conv-strict");
+      cache.grant("git status");
+      expect(cache.allow("git push origin main")).toBe(false);
+    });
+
+    it("cross-conversation isolation — grant in conv-A does not leak to conv-B", () => {
+      const ca = getBashApprovalCache("u-iso", "conv-A");
+      const cb = getBashApprovalCache("u-iso", "conv-B");
+      ca.grant("git status");
+      expect(ca.allow("git status")).toBe(true);
+      expect(cb.allow("git status")).toBe(false);
+    });
+
+    it("cleanupCcBashGatesForConversation drains the batched-approval cache too", () => {
+      const cache = getBashApprovalCache("u-clean", "conv-clean");
+      cache.grant("git status");
+      expect(cache.allow("git status")).toBe(true);
+
+      cleanupCcBashGatesForConversation("u-clean", "conv-clean");
+
+      // After cleanup, the cache is drained.
+      expect(getBashApprovalCache("u-clean", "conv-clean").allow("git status")).toBe(
+        false,
+      );
+    });
   });
 });
