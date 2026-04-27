@@ -23,15 +23,26 @@ const log = createChildLogger("session-sync");
 // not explicitly author. See #2905 for the failure modes this prevents.
 const ALLOWED_AUTOCOMMIT_PATHS = [/^knowledge-base\//];
 
+// Auto-commit headlines used by syncPull / syncPush. Exported as named
+// constants so .github/scripts/check-auto-commit-density.sh can stay in
+// sync (the regex there must reference these exact strings).
+export const AUTO_COMMIT_MSG_PULL = "Auto-commit before sync pull";
+export const AUTO_COMMIT_MSG_PUSH = "Auto-commit after session";
+
 /**
- * Parse `git status --porcelain=v1` output and return the subset of paths
- * matching ALLOWED_AUTOCOMMIT_PATHS. Handles rename entries ("R  old -> new")
- * by tracking the destination path only.
+ * Parse `git status --porcelain=v1 -z` output and return the subset of
+ * paths matching ALLOWED_AUTOCOMMIT_PATHS.
+ *
+ * The `-z` flag emits NUL-separated entries with no C-quoting, so paths
+ * containing tabs, newlines, quotes, or non-ASCII characters round-trip
+ * cleanly to `git add --`. For renames (R) and copies (C), git emits the
+ * destination path first, then the source path as a separate NUL entry —
+ * this parser skips the source.
  */
 export function getAllowlistedChanges(workspacePath: string): string[] {
   let output: string;
   try {
-    output = execFileSync("git", ["status", "--porcelain=v1"], {
+    output = execFileSync("git", ["status", "--porcelain=v1", "-z"], {
       cwd: workspacePath,
       stdio: "pipe",
     }).toString();
@@ -40,12 +51,19 @@ export function getAllowlistedChanges(workspacePath: string): string[] {
   }
 
   const paths: string[] = [];
-  for (const line of output.split("\n")) {
-    if (line.length < 4) continue; // status (2 chars) + space + path
-    const after = line.slice(3);
-    const path = after.includes(" -> ") ? after.split(" -> ")[1] : after;
+  const tokens = output.split("\0");
+  for (let i = 0; i < tokens.length; i++) {
+    const entry = tokens[i];
+    if (entry.length < 4) continue; // status (2 chars) + space + path
+    const status = entry.slice(0, 2);
+    const path = entry.slice(3);
     if (ALLOWED_AUTOCOMMIT_PATHS.some((re) => re.test(path))) {
       paths.push(path);
+    }
+    // R (rename) and C (copy) are followed by an extra NUL-separated
+    // entry containing the SOURCE path — skip it.
+    if (status[0] === "R" || status[0] === "C") {
+      i++;
     }
   }
   return paths;
@@ -242,7 +260,7 @@ export async function syncPull(
         });
         execFileSync(
           "git",
-          ["commit", "-m", "Auto-commit before sync pull"],
+          ["commit", "-m", AUTO_COMMIT_MSG_PULL],
           { cwd: workspacePath, stdio: "pipe" },
         );
       }
@@ -293,7 +311,7 @@ export async function syncPush(
         });
         execFileSync(
           "git",
-          ["commit", "-m", "Auto-commit after session"],
+          ["commit", "-m", AUTO_COMMIT_MSG_PUSH],
           { cwd: workspacePath, stdio: "pipe" },
         );
       }

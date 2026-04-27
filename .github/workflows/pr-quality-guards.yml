@@ -9,25 +9,43 @@ permissions:
   pull-requests: read
 
 jobs:
+  guard-script-fixture-tests:
+    name: Bash fixture tests for guard scripts
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - name: Run guard fixture tests
+        run: bash .github/scripts/test/run-all.sh
+
   settings-json-integrity:
     name: Block destructive .claude/settings.json edits
     runs-on: ubuntu-latest
     steps:
-      - name: Check for opt-out label
+      - name: Check for opt-out label (must be applied by non-author)
         id: opt_out
         env:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
           GH_REPO: ${{ github.repository }}
+          JOB_NAME: settings-json-integrity
         run: |
           set -uo pipefail
-          HAS_LABEL=$(gh pr view "$PR_NUMBER" --repo "$GH_REPO" \
-            --json labels --jq '[.labels[].name] | index("confirm:claude-config-change") // empty')
-          if [[ -n "$HAS_LABEL" ]]; then
-            echo "::warning::settings-json-integrity skipped — confirm:claude-config-change label present"
-            echo "skip=true" >> "$GITHUB_OUTPUT"
-          else
+          # Honor the opt-out label only when applied by a user OTHER than
+          # the PR author. Blocks the autonomous-loop bypass: a bot account
+          # that opens a PR and applies its own opt-out label is treated as
+          # unlabelled — the gate still runs. See #2905.
+          LABELER=$(gh api --paginate "/repos/$GH_REPO/issues/$PR_NUMBER/events" \
+            --jq '[.[] | select(.event=="labeled" and .label.name=="confirm:claude-config-change")] | last | .actor.login // empty' \
+            2>/dev/null || true)
+          if [[ -z "$LABELER" ]]; then
             echo "skip=false" >> "$GITHUB_OUTPUT"
+          elif [[ "$LABELER" == "$PR_AUTHOR" ]]; then
+            echo "::warning::confirm:claude-config-change applied by PR author ($LABELER) — opt-out ignored. A non-author must apply the label."
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::$JOB_NAME skipped — label applied by $LABELER (non-author)"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
           fi
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         if: steps.opt_out.outputs.skip != 'true'
@@ -44,21 +62,27 @@ jobs:
     name: Block PR body citing files not in diff
     runs-on: ubuntu-latest
     steps:
-      - name: Check for opt-out label
+      - name: Check for opt-out label (must be applied by non-author)
         id: opt_out
         env:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
           GH_REPO: ${{ github.repository }}
+          JOB_NAME: pr-body-vs-diff
         run: |
           set -uo pipefail
-          HAS_LABEL=$(gh pr view "$PR_NUMBER" --repo "$GH_REPO" \
-            --json labels --jq '[.labels[].name] | index("confirm:claude-config-change") // empty')
-          if [[ -n "$HAS_LABEL" ]]; then
-            echo "::warning::pr-body-vs-diff skipped — confirm:claude-config-change label present"
-            echo "skip=true" >> "$GITHUB_OUTPUT"
-          else
+          LABELER=$(gh api --paginate "/repos/$GH_REPO/issues/$PR_NUMBER/events" \
+            --jq '[.[] | select(.event=="labeled" and .label.name=="confirm:claude-config-change")] | last | .actor.login // empty' \
+            2>/dev/null || true)
+          if [[ -z "$LABELER" ]]; then
             echo "skip=false" >> "$GITHUB_OUTPUT"
+          elif [[ "$LABELER" == "$PR_AUTHOR" ]]; then
+            echo "::warning::confirm:claude-config-change applied by PR author ($LABELER) — opt-out ignored."
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::$JOB_NAME skipped — label applied by $LABELER (non-author)"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
           fi
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         if: steps.opt_out.outputs.skip != 'true'
@@ -74,21 +98,27 @@ jobs:
     name: Block .claude/worktrees/ entries in diff
     runs-on: ubuntu-latest
     steps:
-      - name: Check for opt-out label
+      - name: Check for opt-out label (must be applied by non-author)
         id: opt_out
         env:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
           GH_REPO: ${{ github.repository }}
+          JOB_NAME: stray-worktree-marker-block
         run: |
           set -uo pipefail
-          HAS_LABEL=$(gh pr view "$PR_NUMBER" --repo "$GH_REPO" \
-            --json labels --jq '[.labels[].name] | index("confirm:claude-config-change") // empty')
-          if [[ -n "$HAS_LABEL" ]]; then
-            echo "::warning::stray-worktree-marker-block skipped — confirm:claude-config-change label present"
-            echo "skip=true" >> "$GITHUB_OUTPUT"
-          else
+          LABELER=$(gh api --paginate "/repos/$GH_REPO/issues/$PR_NUMBER/events" \
+            --jq '[.[] | select(.event=="labeled" and .label.name=="confirm:claude-config-change")] | last | .actor.login // empty' \
+            2>/dev/null || true)
+          if [[ -z "$LABELER" ]]; then
             echo "skip=false" >> "$GITHUB_OUTPUT"
+          elif [[ "$LABELER" == "$PR_AUTHOR" ]]; then
+            echo "::warning::confirm:claude-config-change applied by PR author ($LABELER) — opt-out ignored."
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::$JOB_NAME skipped — label applied by $LABELER (non-author)"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
           fi
       - name: Check diff for .claude/worktrees/ entries
         if: steps.opt_out.outputs.skip != 'true'
@@ -111,21 +141,27 @@ jobs:
     name: Block PRs dominated by auto-commit headlines
     runs-on: ubuntu-latest
     steps:
-      - name: Check for opt-out label
+      - name: Check for opt-out label (must be applied by non-author)
         id: opt_out
         env:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
           GH_REPO: ${{ github.repository }}
+          JOB_NAME: auto-commit-message-density
         run: |
           set -uo pipefail
-          HAS_LABEL=$(gh pr view "$PR_NUMBER" --repo "$GH_REPO" \
-            --json labels --jq '[.labels[].name] | index("confirm:claude-config-change") // empty')
-          if [[ -n "$HAS_LABEL" ]]; then
-            echo "::warning::auto-commit-message-density skipped — confirm:claude-config-change label present"
-            echo "skip=true" >> "$GITHUB_OUTPUT"
-          else
+          LABELER=$(gh api --paginate "/repos/$GH_REPO/issues/$PR_NUMBER/events" \
+            --jq '[.[] | select(.event=="labeled" and .label.name=="confirm:claude-config-change")] | last | .actor.login // empty' \
+            2>/dev/null || true)
+          if [[ -z "$LABELER" ]]; then
             echo "skip=false" >> "$GITHUB_OUTPUT"
+          elif [[ "$LABELER" == "$PR_AUTHOR" ]]; then
+            echo "::warning::confirm:claude-config-change applied by PR author ($LABELER) — opt-out ignored."
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::$JOB_NAME skipped — label applied by $LABELER (non-author)"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
           fi
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         if: steps.opt_out.outputs.skip != 'true'

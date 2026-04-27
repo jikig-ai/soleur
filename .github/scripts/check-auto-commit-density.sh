@@ -24,6 +24,9 @@ total=0
 matched=0
 # Anchored regex: only the EXACT strings from session-sync.ts plus the
 # git-pull merge headline. Anchored with ^ to avoid prose mentions.
+# SYNC: AUTO_COMMIT_MSG_PULL / AUTO_COMMIT_MSG_PUSH in
+# apps/web-platform/server/session-sync.ts. If either constant changes,
+# update the regex below in the same PR.
 auto_re='^(Auto-commit (before sync pull|after session)|Merge branches '\''main'\'' and '\''main'\'' of )'
 
 while IFS= read -r line; do
