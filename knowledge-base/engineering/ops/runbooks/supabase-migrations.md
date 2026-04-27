@@ -13,6 +13,35 @@ the new schema throws at runtime, not at build or deploy time.
 
 The enforcing rule is AGENTS.md `wg-when-a-pr-includes-database-migrations`.
 
+## §0 Apply Order: dev FIRST, then prd
+
+Per `hr-dev-prd-distinct-supabase-projects` and the strengthened
+`wg-when-a-pr-includes-database-migrations`, every migration must be
+rehearsed against `dev` before reaching `prd`. Pre-#2887 the two
+configs targeted the same Supabase project, which made the dev step a
+silent no-op; that is no longer true.
+
+**Rehearse in dev (manual, pre-merge):**
+
+```bash
+cd apps/web-platform
+doppler run -p soleur -c dev -- bash scripts/run-migrations.sh
+```
+
+Verify with the REST probe in §1 below against
+`doppler secrets get NEXT_PUBLIC_SUPABASE_URL -p soleur -c dev --plain`
+— a 200 confirms the migration applied to the dev project.
+
+**Apply to prd (CI, post-merge):**
+
+The `migrate` job in `web-platform-release.yml` runs against `prd` on
+every push to main. The dev step above is the rehearsal gate; the prd
+step is the production rollout.
+
+If `dev` and `prd` resolve to the same Supabase project ref, preflight
+Check 4 (`Environment Isolation`) blocks `/ship`. Do not bypass it —
+the rule exists to prevent silent single-DB exposure (#2887).
+
 ## Pre-deploy Checklist
 
 - [ ] Migration filename is the next integer in sequence (`024_…`, `025_…`).
