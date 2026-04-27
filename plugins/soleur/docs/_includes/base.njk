@@ -125,7 +125,11 @@
   <title>{% if seoTitle %}{{ seoTitle }}{% elif title == site.name %}{{ site.name }} - {{ site.tagline }}{% else %}{{ title }} - {{ site.name }}{% endif %}</title>
   <!-- Critical CSS: above-the-fold styles for / and /blog/* inlined to unblock first paint.
        The full stylesheet loads asynchronously via the onload-swap pattern below.
-       Regenerate this block if style.css tokens, header, or hero sections change. -->
+       Regenerate from css/style.css when these change: @layer tokens (--color-*, --font-*,
+       --space-*, --header-h, --text-*); rules .site-header, .header-mark, .header-name,
+       .nav-links*, .nav-toggle*, .nav-cta-slot, .nav-cta, .skip-link, .landing-hero*,
+       .section-label, .landing-stats, .landing-stat*, .btn, .btn-primary, .btn--sm,
+       .newsletter-form*, .hero-waitlist-form*, .hero (blog), .blog-post-meta. -->
   <style>
     @layer reset,tokens,base,layout,components,utilities;
     @font-face{font-family:'Cormorant Garamond';src:url('fonts/cormorant-garamond-500.woff2') format('woff2');font-weight:500;font-style:normal;font-display:swap}
@@ -143,9 +147,13 @@
       .nav-links{display:flex;align-items:center;gap:var(--space-4);list-style:none}
       .nav-links a{font-size:var(--text-sm);color:var(--color-text-secondary);text-decoration:none;padding:var(--space-1) 0;border-bottom:2px solid transparent;transition:color 0.15s,border-color 0.15s}
       .nav-links a:hover,.nav-links a[aria-current="page"]{color:var(--color-text);border-bottom-color:var(--color-accent);text-decoration:none}
+      .nav-links .nav-cta-slot{margin-left:auto}
+      .nav-links .nav-cta-slot .nav-cta{color:var(--color-text-inverse)}
+      .nav-links .nav-cta-slot .nav-cta:hover{color:var(--color-text-inverse);border-bottom-color:transparent}
+      .nav-links .nav-cta-slot .nav-cta:focus-visible{outline:2px solid var(--color-text-inverse);outline-offset:3px}
       .nav-toggle{display:none}
       .nav-toggle-label{display:none;cursor:pointer;padding:var(--space-2);font-size:var(--text-lg);color:var(--color-text-secondary)}
-      @media(max-width:768px){.nav-toggle-label{display:block}.nav-links{position:fixed;top:var(--header-h);right:0;width:260px;height:calc(100vh - var(--header-h));flex-direction:column;align-items:stretch;gap:0;background:var(--color-bg);border-left:1px solid var(--color-border);padding:var(--space-4);transform:translateX(100%);transition:transform 0.2s ease;z-index:2}.nav-links a{padding:var(--space-3) var(--space-4);border-bottom:none}.nav-toggle:checked ~ .nav-links{transform:translateX(0)}.nav-toggle:checked ~ .nav-toggle-label::before{content:'';position:fixed;top:var(--header-h);left:0;width:100vw;height:calc(100vh - var(--header-h));background:rgba(0,0,0,0.5);z-index:1}}
+      @media(max-width:768px){.nav-toggle-label{display:block}.nav-links{position:fixed;top:var(--header-h);right:0;width:260px;height:calc(100vh - var(--header-h));flex-direction:column;align-items:stretch;gap:0;background:var(--color-bg);border-left:1px solid var(--color-border);padding:var(--space-4);transform:translateX(100%);transition:transform 0.2s ease;z-index:2}.nav-links a{padding:var(--space-3) var(--space-4);border-bottom:none}.nav-links .nav-cta-slot{margin-left:0;margin-top:var(--space-2)}.nav-links .nav-cta-slot .nav-cta{display:inline-block;text-align:center}.nav-toggle:checked ~ .nav-links{transform:translateX(0)}.nav-toggle:checked ~ .nav-toggle-label::before{content:'';position:fixed;top:var(--header-h);left:0;width:100vw;height:calc(100vh - var(--header-h));background:rgba(0,0,0,0.5);z-index:1}}
       .skip-link{position:absolute;top:-100%;left:var(--space-4);background:var(--color-accent);color:var(--color-text-inverse);padding:var(--space-2) var(--space-4);border-radius:0 0 4px 4px;z-index:200;font-weight:600}
       .skip-link:focus{top:0}
       /* Homepage above-fold */
@@ -163,6 +171,7 @@
       .landing-stat-label{font-size:var(--text-sm);color:var(--color-text-secondary);margin-top:var(--space-1)}
       .btn{display:inline-block;padding:var(--space-3) var(--space-5);border-radius:4px;font-weight:600;text-decoration:none;transition:opacity 0.15s}
       .btn:hover{text-decoration:none}
+      .btn.btn--sm{padding:var(--space-2) var(--space-4);font-size:0.875rem}
       .btn-primary{background:linear-gradient(180deg,#D4B36A 0%,#B8923E 100%);color:var(--color-text-inverse);padding:var(--space-4) var(--space-6)}
       .btn-primary:hover{opacity:0.9;color:var(--color-text-inverse)}
       .newsletter-form{display:flex;flex-wrap:wrap;gap:var(--space-3);justify-content:center;align-items:flex-start;max-width:480px;margin:0 auto}
