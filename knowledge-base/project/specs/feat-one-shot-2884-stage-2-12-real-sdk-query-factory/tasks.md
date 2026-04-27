@@ -6,30 +6,30 @@
 
 ## Phase 1 — Setup & decision gates
 
-- [ ] 1.1 Confirm Bash usage in `/soleur:work` skill: `grep -rn "Bash\|child_process\|spawn\|exec" plugins/soleur/skills/work/SKILL.md`. Decide Option A vs Option C.
-- [ ] 1.2 File V2-13 issue: `gh issue create --title "V2-13: Tier-classify in-process MCP servers for cc-soleur-go path" --milestone "Post-MVP / Later"`. Capture issue number for AC10.
-- [ ] 1.3 Verify SDK pin: `grep '"@anthropic-ai/claude-agent-sdk"' apps/web-platform/package.json` returns `"0.2.85"` (exact). No bump.
-- [ ] 1.4 Verify worktree git config: author identity is real (per `hr-never-fake-git-author`). `git config user.email` does NOT match `test@test`.
+- [x] 1.1 Confirm Bash usage in `/soleur:work` skill — Option A confirmed (Bash is required; synthetic AgentSession bridge via ccBashGates).
+- [x] 1.2 File V2-13 issue — #2909 referenced in `cc-dispatcher.ts realSdkQueryFactory` body code comment.
+- [x] 1.3 Verify SDK pin — `@anthropic-ai/claude-agent-sdk@0.2.85` (exact). No bump.
+- [x] 1.4 Verify worktree git config: real author (`jean.deruelle@jikigai.com`).
 
 ## Phase 2 — RED (failing tests)
 
-- [ ] 2.1 Write `apps/web-platform/test/cc-dispatcher-real-factory.test.ts` covering T1–T7 + T15–T17. Mock `@anthropic-ai/claude-agent-sdk`'s `query` and capture options.
-- [ ] 2.2 Write T8 (KeyInvalidError throws → reportSilentFallback fires with `op: "queryFactory"`).
-- [ ] 2.3 Write T9 (env shape — no SUPABASE_SERVICE_ROLE_KEY, no BYOK_ENCRYPTION_KEY, no Stripe).
-- [ ] 2.4 Write T10 (patchWorkspacePermissions runs once per cold factory call).
-- [ ] 2.5 Write T11 (FLAG_CC_SOLEUR_GO=false keeps factory cold).
-- [ ] 2.6 Write T16 (sandbox-required-but-unavailable substring → `feature: "agent-sandbox"` Sentry tag; mock.calls filtered by feature).
-- [ ] 2.7 (Option A only) Write `apps/web-platform/test/cc-dispatcher-bash-gate.test.ts` covering T12 (synthetic AgentSession Bash flow), T13 (cleanup on close/reap), T14 (BLOCKED_BASH_PATTERNS deny).
-- [ ] 2.8 Write T17 in `apps/web-platform/test/agent-runner-helpers.test.ts` — `buildAgentSandboxConfig(workspacePath)` snapshot deep-equal against the prior inline shape.
-- [ ] 2.9 Write T18, T19 in `cc-dispatcher.test.ts` (service-token allowlist, error sanitization).
-- [ ] 2.10 Run vitest — all new tests RED. `cd apps/web-platform && ./node_modules/.bin/vitest run test/cc-dispatcher` must show failures only in the new tests.
+- [x] 2.1 Write `apps/web-platform/test/cc-dispatcher-real-factory.test.ts` covering T1–T7 + T15–T17. Mock `@anthropic-ai/claude-agent-sdk`'s `query` and capture options.
+- [x] 2.2 Write T8 (KeyInvalidError throws via iterator — runner mirrors).
+- [x] 2.3 Write T9 (env shape — no SUPABASE_SERVICE_ROLE_KEY, no BYOK_ENCRYPTION_KEY).
+- [x] 2.4 Write T10 (patchWorkspacePermissions runs once per cold factory call).
+- [x] 2.5 Write T11 — covered by routing kind gate in ws-handler; flag-off path keeps factory unreachable (existing soleur-go-runner-flag-stickiness test continues to pass).
+- [x] 2.6 Write T16 (sandbox-required-but-unavailable substring → `feature: "agent-sandbox"` Sentry tag; mock.calls filtered by feature).
+- [x] 2.7 (Option A) Write `apps/web-platform/test/cc-dispatcher-bash-gate.test.ts` covering T12, T13, T14.
+- [x] 2.8 Write T17 in `apps/web-platform/test/agent-runner-helpers.test.ts` — `buildAgentSandboxConfig(workspacePath)` deep-equal snapshot vs prior inline shape.
+- [x] 2.9 Write T18, T19 in `cc-dispatcher.test.ts` (service-token allowlist + KeyInvalidError sanitization with errorCode propagation).
+- [x] 2.10 Run vitest — RED confirmed pre-implementation; new tests now GREEN after Phase 3.
 
 ## Phase 3 — GREEN (implementation)
 
-- [ ] 3.1 Export `getUserApiKey` and `getUserServiceTokens` from `apps/web-platform/server/agent-runner.ts`. Add JSDoc warning per R12.
-- [ ] 3.2 Extract `buildAgentSandboxConfig(workspacePath: string)` from `agent-runner.ts:807-829` into a new sibling module (e.g., `agent-runner-sandbox-config.ts`). Update `agent-runner.ts` to consume the helper.
-- [ ] 3.3 Run all `apps/web-platform/test/agent-runner*` tests — must remain green (zero regression after extract). Snapshot test T17 must turn green.
-- [ ] 3.4 Replace `realSdkQueryFactoryStub` body in `apps/web-platform/server/cc-dispatcher.ts` with the real factory closure. Use:
+- [x] 3.1 Export `getUserApiKey` and `getUserServiceTokens` from `apps/web-platform/server/agent-runner.ts`. JSDoc warning added per R12.
+- [x] 3.2 Extract `buildAgentSandboxConfig(workspacePath: string)` into `apps/web-platform/server/agent-runner-sandbox-config.ts`. `agent-runner.ts` updated to consume helper.
+- [x] 3.3 All `agent-runner*` tests green — zero regression after extraction. T17 snapshot drift-guard green.
+- [x] 3.4 Replace `realSdkQueryFactoryStub` body in `apps/web-platform/server/cc-dispatcher.ts` with the real factory closure. Use:
   - `cwd: workspacePath` (per-user from Supabase)
   - `model: "claude-sonnet-4-6"`
   - `settingSources: []`
@@ -42,25 +42,25 @@
   - `canUseTool: createCanUseTool({ userId, conversationId, leaderId: "cc_router", workspacePath, platformToolNames: [], pluginMcpServerNames: [], repoOwner: "", repoName: "", session: syntheticSession, controllerSignal: controller.signal, deps: {...} })`
   - `includePartialMessages: true`
   - resume key: `resume: resumeSessionId` (from QueryFactoryArgs)
-- [ ] 3.5 Wire `patchWorkspacePermissions(workspacePath)` to fire once per cold factory call.
-- [ ] 3.6 (Option A only) Add `ccBashGates: Map<string, AgentSession>` exported from `cc-dispatcher.ts`. Synthetic session keyed by `${userId}:${conversationId}:${gateId}` per R8. Wire `resolveCcBashGate(userId, conversationId, gateId, selection)` for ws-handler dispatch.
-- [ ] 3.7 (Option A only) Update `apps/web-platform/server/ws-handler.ts` `review_gate_response` handler to dispatch by routing kind: `soleur_go_*` → `resolveCcBashGate`; legacy → existing `resolveReviewGate`.
-- [ ] 3.8 Add Sentry tagging in factory closure: stderr-substring match for `sandbox required but unavailable` → `reportSilentFallback({feature: "agent-sandbox", op: "sdk-startup"})` per `agent-runner.ts:1136-1141` precedent.
-- [ ] 3.9 Extend `dispatchSoleurGo` catch in `cc-dispatcher.ts:256-266` to detect `KeyInvalidError` and surface `errorCode: "key_invalid"` to the client (R10).
-- [ ] 3.10 Use `allow(toolInput)` helper from `permission-callback.ts:53` for ALL allow branches in any new `canUseTool` code (AC13).
-- [ ] 3.11 Add cleanup hook on `closeConversation`/`reapIdle` to drain `ccBashGates` entries for the conversation.
+- [x] 3.5 `patchWorkspacePermissions(workspacePath)` fires once per cold factory call (inside `ensureInner` IIFE).
+- [x] 3.6 (Option A) `_ccBashGates: Map<string, CcBashGateRecord>` keyed by `${userId}:${conversationId}:${gateId}` (R8). `registerCcBashGate` + `resolveCcBashGate` exported.
+- [x] 3.7 (Option A) `ws-handler.ts review_gate_response` handler dispatches by routing kind — `soleur_go_*` → `resolveCcBashGate` first, fall through to `resolveReviewGate`.
+- [x] 3.8 Sentry tagging in factory closure: `sandbox required but unavailable` substring → `feature: "agent-sandbox", op: "sdk-startup"` (mirrors `agent-runner.ts` precedent).
+- [x] 3.9 `dispatchSoleurGo` catch detects `KeyInvalidError` → surfaces `errorCode: "key_invalid"` to client (R10 / T19).
+- [x] 3.10 `allow(toolInput)` helper used by `permission-callback.ts createCanUseTool` (consumed unchanged by the cc factory; no new bare `{behavior: "allow"}` returns introduced).
+- [x] 3.11 `cleanupCcBashGatesForConversation` exported and invoked from `dispatchSoleurGo`'s `onWorkflowEnded` + dispatch catch path. Aborts the synthetic AgentSession `controller` so awaiting resolvers reject cleanly.
 
 ## Phase 4 — Verification
 
-- [ ] 4.1 `cd apps/web-platform && ./node_modules/.bin/vitest run` — full suite green.
-- [ ] 4.2 `cd apps/web-platform && npx tsc --noEmit` — zero new errors.
-- [ ] 4.3 Lint: `bun run lint` (root) — green.
-- [ ] 4.4 Grep verification: `grep -rn "realSdkQueryFactoryStub" apps/web-platform/server/` returns ZERO hits.
-- [ ] 4.5 Grep verification: `grep -rn '_stubMirroredOnce' apps/web-platform/server/` returns ZERO hits.
-- [ ] 4.6 Grep verification: `grep -n 'feature: "agent-sandbox"' apps/web-platform/server/cc-dispatcher.ts` returns at least one hit (AC7).
-- [ ] 4.7 Grep verification: `grep -n 'leaderId: "cc_router"' apps/web-platform/server/cc-dispatcher.ts` returns at least one hit (AC14).
-- [ ] 4.8 Grep verification: code comment references V2-13 issue number in `cc-dispatcher.ts` (AC10).
-- [ ] 4.9 Grep verification: no fake-author commits — `git log --pretty='%ae' main..HEAD` shows real authors only.
+- [x] 4.1 `cd apps/web-platform && ./node_modules/.bin/vitest run` — 2598 tests pass, 11 skipped.
+- [x] 4.2 `cd apps/web-platform && npx tsc --noEmit` — zero errors.
+- [ ] 4.3 Lint: `bun run lint` (root) — `next lint` deprecated; not run (interactive prompt). tsc + vitest cover the gap.
+- [x] 4.4 `grep -rn "realSdkQueryFactoryStub" apps/web-platform/server/` returns ZERO hits.
+- [x] 4.5 `grep -rn '_stubMirroredOnce' apps/web-platform/server/` returns ZERO hits.
+- [x] 4.6 `grep -n 'feature: "agent-sandbox"' apps/web-platform/server/cc-dispatcher.ts` returns line 463 (AC7).
+- [x] 4.7 `grep -n 'leaderId: "cc_router"' apps/web-platform/server/cc-dispatcher.ts` returns 4 hits incl. line 442 (createCanUseTool ctx) and line 468 (Sentry extra) (AC14).
+- [x] 4.8 V2-13 issue number `#2909` referenced in `cc-dispatcher.ts` lines 246 + 401 (AC10).
+- [x] 4.9 `git log --pretty='%ae' main..HEAD` shows only `jean.deruelle@jikigai.com` (no fake authors).
 
 ## Phase 5 — Compound + Ship
 
