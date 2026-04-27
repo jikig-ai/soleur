@@ -151,7 +151,7 @@ The 3 bash guard scripts had no local tests — high-leverage gap (test-design-r
 
 ## Prevention
 
-The new AGENTS.md rule (`hr-never-git-add-A-in-user-repo-agents`, 506 bytes, under the 600-byte cap) codifies the path-allowlist invariant for any future user-repo writer in `apps/web-platform/server/`. The 4 CI guards catch regressions of the broader failure class (settings wipe, body-vs-diff drift, stray markers, auto-commit message density) at PR time, even if Layer 1 is locally bypassed.
+The new AGENTS.md rule (`hr-never-git-add-a-in-user-repo-agents`, 506 bytes, under the 600-byte cap) codifies the path-allowlist invariant for any future user-repo writer in `apps/web-platform/server/`. The 4 CI guards catch regressions of the broader failure class (settings wipe, body-vs-diff drift, stray markers, auto-commit message density) at PR time, even if Layer 1 is locally bypassed.
 
 The `runConnectedRepoGit` wrapper covers the destructive-verb class (`rm`/`reset`/`amend`/`--force`) so future maintainers cannot regress the agent process to bare `execFileSync("git", ...)` calls without an explicit error.
 
@@ -164,6 +164,6 @@ For the second-reviewer concur gate: the failure mode where a single agent ratio
 - `.github/scripts/check-{settings-integrity,pr-body-vs-diff,auto-commit-density}.sh` — guard scripts
 - `.github/scripts/test/` — bash fixture tests (settings 6, density 6, body-vs-diff 7)
 - `.github/workflows/pr-quality-guards.yml` — 4-job CI workflow
-- AGENTS.md `hr-never-git-add-A-in-user-repo-agents` — the codified rule
+- AGENTS.md `hr-never-git-add-a-in-user-repo-agents` — the codified rule
 - `knowledge-base/project/learnings/2026-04-15-multi-agent-review-catches-bugs-tests-miss.md` — multi-reviewer gate justification
 - `knowledge-base/project/learnings/2026-04-24-fake-git-author-bare-repo-bot-override.md` — sibling failure mode in the bare-repo identity surface

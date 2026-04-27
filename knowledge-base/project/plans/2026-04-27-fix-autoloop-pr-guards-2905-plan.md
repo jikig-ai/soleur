@@ -318,10 +318,10 @@ Anchor with `^` to avoid matching prose mentions ("the Auto-commit pattern is ba
 - `AGENTS.md` — add ONE rule under Hard Rules. Final wording (byte-counted at ~497 bytes, within the 600-byte cap):
 
   ```
-  - In connected-repo agent code paths (`apps/web-platform/server/session-sync.ts` and any future user-repo writer), never `git add -A` / `git add .` — use a path allowlist scoped to `knowledge-base/**` [id: hr-never-git-add-A-in-user-repo-agents]. The auto-commit sweep otherwise lands `.claude/settings.json` wipes, stray `.claude/worktrees/` markers, and unrelated drift into PRs the loop never authored. Bootstrap paths (e.g., `provisionWorkspace`'s seed commit) are exempt. **Why:** #2857/#2859/#2905.
+  - In connected-repo agent code paths (`apps/web-platform/server/session-sync.ts` and any future user-repo writer), never `git add -A` / `git add .` — use a path allowlist scoped to `knowledge-base/**` [id: hr-never-git-add-a-in-user-repo-agents]. The auto-commit sweep otherwise lands `.claude/settings.json` wipes, stray `.claude/worktrees/` markers, and unrelated drift into PRs the loop never authored. Bootstrap paths (e.g., `provisionWorkspace`'s seed commit) are exempt. **Why:** #2857/#2859/#2905.
   ```
 
-  Verify byte length pre-commit: `awk '/hr-never-git-add-A-in-user-repo-agents/ {print length($0); exit}' AGENTS.md` must return ≤600.
+  Verify byte length pre-commit: `awk '/hr-never-git-add-a-in-user-repo-agents/ {print length($0); exit}' AGENTS.md` must return ≤600.
 
 ## Acceptance Criteria
 
@@ -339,8 +339,8 @@ Anchor with `^` to avoid matching prose mentions ("the Auto-commit pattern is ba
   - [ ] `gh workflow view pr-quality-guards.yml` returns the workflow.
   - [ ] All 4 jobs run on this PR (the workflow's first run validates itself).
   - [ ] All 4 jobs pass on this PR.
-- [ ] One AGENTS.md rule added under Hard Rules (≤600 bytes), capturing the `git add -A` ban for user-facing repo agents. Rule ID: `hr-never-git-add-A-in-user-repo-agents`.
-  - [ ] `awk '/hr-never-git-add-A-in-user-repo-agents/ {print length($0)}' AGENTS.md` ≤600.
+- [ ] One AGENTS.md rule added under Hard Rules (≤600 bytes), capturing the `git add -A` ban for user-facing repo agents. Rule ID: `hr-never-git-add-a-in-user-repo-agents`.
+  - [ ] `awk '/hr-never-git-add-a-in-user-repo-agents/ {print length($0)}' AGENTS.md` ≤600.
   - [ ] `bun test plugins/soleur/test/components.test.ts` passes (token budget intact).
 - [ ] All four CI guard jobs successfully detect a synthetic violation. Verified by:
   - [ ] Test branch `tmp/test-2905-guards` (deleted before merge) demonstrates each guard firing on a synthetic violation. Append the run URL of each detection to the PR body's "Verification" section.
@@ -349,7 +349,7 @@ Anchor with `^` to avoid matching prose mentions ("the Auto-commit pattern is ba
 
 - [ ] After merge, run `gh workflow run pr-quality-guards.yml` (workflow_dispatch is intentionally not added; this gate is `pull_request`-only). Skip — no manual run needed.
 - [ ] Verify next autonomous-loop session does **not** sweep `.claude/settings.json` into a PR. Spot-check the next bot-fix PR opened by `app/soleur-ai`: `gh pr view <N> --json files | jq '.files[].path'` should show only `knowledge-base/**` paths plus the actual fix.
-- [ ] Verify the rule-metrics aggregator records the new rule. `gh workflow run rule-metrics-aggregate.yml` then check that `hr-never-git-add-A-in-user-repo-agents` appears in `knowledge-base/project/rule-metrics.json` after the next Sunday run. (Stretch — not blocking for issue closure.)
+- [ ] Verify the rule-metrics aggregator records the new rule. `gh workflow run rule-metrics-aggregate.yml` then check that `hr-never-git-add-a-in-user-repo-agents` appears in `knowledge-base/project/rule-metrics.json` after the next Sunday run. (Stretch — not blocking for issue closure.)
 - [ ] Close #2905 with `gh issue close 2905 --reason completed --comment "Fixed in PR #<N>: …"`.
 
 ## Test Scenarios
@@ -540,7 +540,7 @@ This plan applies six previously-documented learnings that prevent repeating kno
 
 1. Add Hard Rule:
    ```
-   - In `apps/web-platform/server/session-sync.ts` and similar user-repo agent paths, never use `git add -A` — use a path allowlist (`knowledge-base/**`) [id: hr-never-git-add-A-in-user-repo-agents]. The auto-commit sweep otherwise lands `.claude/settings.json` wipes, stray `.claude/worktrees/` markers, and unrelated drift into PRs the loop never intended to author. **Why:** #2857/#2859 settings wipe + gitlink leak; #2905.
+   - In `apps/web-platform/server/session-sync.ts` and similar user-repo agent paths, never use `git add -A` — use a path allowlist (`knowledge-base/**`) [id: hr-never-git-add-a-in-user-repo-agents]. The auto-commit sweep otherwise lands `.claude/settings.json` wipes, stray `.claude/worktrees/` markers, and unrelated drift into PRs the loop never intended to author. **Why:** #2857/#2859 settings wipe + gitlink leak; #2905.
    ```
 2. Verify byte length ≤600 with `awk '/hr-never-git-add-A/ {print length($0)}' AGENTS.md`.
 3. Run `bun test plugins/soleur/test/components.test.ts` — confirm token budget intact.
