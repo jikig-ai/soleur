@@ -40,6 +40,7 @@ import {
   cleanupCcBashGatesForConversation,
   __resetDispatcherForTests,
 } from "@/server/cc-dispatcher";
+import { createSoleurGoRunner } from "@/server/soleur-go-runner";
 
 describe("cc-dispatcher Bash review-gate (Option A — synthetic AgentSession)", () => {
   beforeEach(() => {
@@ -198,6 +199,100 @@ describe("cc-dispatcher Bash review-gate (Option A — synthetic AgentSession)",
         userId: "u1",
         conversationId: "conv-1",
         gateId: "never-registered",
+        selection: "Approve",
+      }),
+    ).toBe(false);
+  });
+
+  // -------------------------------------------------------------------------
+  // T13b: runner.reapIdle() drains _ccBashGates via the `onCloseQuery`
+  // hook. Pre-fix, reapIdle closed the Query without firing
+  // `onWorkflowEnded`, so the dispatch-side cleanup never ran and the
+  // gate registry leaked. This test pins the centralized cleanup wiring.
+  // -------------------------------------------------------------------------
+  it("T13b: reapIdle invokes onCloseQuery → drains ccBashGates for the conversation", async () => {
+    // Build a runner with a fake factory whose Query never finishes —
+    // we only care about the close hook firing on idle reap.
+    // biome-ignore lint/suspicious/noExplicitAny: minimal Query stub
+    const fakeQuery: any = {
+      // Iterator that pends forever (until close()).
+      async *[Symbol.asyncIterator]() {
+        await new Promise<void>(() => {
+          /* never resolves */
+        });
+      },
+      close: vi.fn(),
+      interrupt: vi.fn(),
+    };
+
+    const closeHookCalls: Array<{ conversationId: string; userId: string }> =
+      [];
+    let nowMs = 0;
+    const runner = createSoleurGoRunner({
+      queryFactory: () => fakeQuery,
+      now: () => nowMs,
+      idleReapMs: 1000,
+      onCloseQuery: (args) => {
+        closeHookCalls.push(args);
+        // Mirror the production wiring: cleanupCcBashGatesForConversation.
+        cleanupCcBashGatesForConversation(args.userId, args.conversationId);
+      },
+    });
+
+    // Seed a Bash gate against the (userId, conversationId) the runner
+    // will own. Use a session whose reviewGateResolvers map has an
+    // entry for the gateId so `resolveCcBashGate` would otherwise
+    // return true.
+    const session = {
+      abort: new AbortController(),
+      reviewGateResolvers: new Map<
+        string,
+        { resolve: (s: string) => void; options: string[] }
+      >([["g1", { resolve: () => {}, options: [] }]]),
+      sessionId: null,
+    };
+    registerCcBashGate({
+      userId: "u-reap",
+      conversationId: "conv-reap",
+      gateId: "g1",
+      session,
+    });
+
+    // Sanity: gate is live.
+    // (Don't actually call resolveCcBashGate — that would consume it.)
+    // Instead, advance time past idleReapMs and run reapIdle().
+    await runner.dispatch({
+      conversationId: "conv-reap",
+      userId: "u-reap",
+      userMessage: "trigger query construction",
+      currentRouting: { kind: "soleur_go_pending" },
+      events: {
+        onText: () => {},
+        onToolUse: () => {},
+        onWorkflowDetected: () => {},
+        onWorkflowEnded: () => {},
+        onResult: () => {},
+      },
+      persistActiveWorkflow: async () => {},
+    });
+
+    expect(runner.hasActiveQuery("conv-reap")).toBe(true);
+
+    nowMs += 5000; // > idleReapMs
+    const reaped = runner.reapIdle();
+    expect(reaped).toBe(1);
+
+    // The onCloseQuery hook fired with the correct identity.
+    expect(closeHookCalls).toEqual([
+      { conversationId: "conv-reap", userId: "u-reap" },
+    ]);
+
+    // The Bash gate is gone — subsequent resolve returns false.
+    expect(
+      resolveCcBashGate({
+        userId: "u-reap",
+        conversationId: "conv-reap",
+        gateId: "g1",
         selection: "Approve",
       }),
     ).toBe(false);

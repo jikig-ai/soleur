@@ -14,7 +14,7 @@
 
 import path from "path";
 
-import type { PermissionMode, Query } from "@anthropic-ai/claude-agent-sdk";
+import type { Query } from "@anthropic-ai/claude-agent-sdk";
 import { query as sdkQuery } from "@anthropic-ai/claude-agent-sdk";
 
 import type { WSMessage } from "@/lib/types";
@@ -66,6 +66,68 @@ import { notifyOfflineUser } from "./notifications";
 import { createChildLogger } from "./logger";
 
 const log = createChildLogger("cc-dispatcher");
+
+// Non-routable internal leader id reserved for cc-soleur-go path
+// audit-log attribution. Used by `createCanUseTool` (R-AC14), the WS
+// `stream`/`tool_use` events emitted from `dispatchSoleurGo`, and the
+// `reportSilentFallback` extra in the sandbox-startup mirror branch.
+export const CC_ROUTER_LEADER_ID = "cc_router" as const;
+
+// ---------------------------------------------------------------------------
+// Sentry mirror debounce — per (userId, errorClass) 5-minute TTL.
+// Prevents a misconfigured prod (1 QPS = 86k events/day per failure
+// mode) from flooding Sentry when `realSdkQueryFactory` or
+// `dispatchSoleurGo` catch repeatedly mirrors the same class for one
+// user. First report mirrors; subsequent reports within the window are
+// dropped. The error still propagates to the client unchanged — only
+// the Sentry write is debounced.
+// ---------------------------------------------------------------------------
+
+const MIRROR_DEBOUNCE_MS = 5 * 60 * 1000;
+const _mirrorLastReportedAt = new Map<string, number>();
+
+// Hoisted module-level sets (avoid per-call construction in
+// `dispatchSoleurGo` / `handleInteractivePromptResponseCase`).
+type WorkflowEndStatus = WorkflowEnd["status"];
+const TERMINAL_WORKFLOW_END_STATUSES: ReadonlySet<WorkflowEndStatus> = new Set<
+  WorkflowEndStatus
+>([
+  "completed",
+  "user_aborted",
+  "idle_timeout",
+  "plugin_load_failure",
+  "internal_error",
+]);
+
+type InteractivePromptResponseError =
+  | "invalid_payload"
+  | "invalid_response"
+  | "kind_mismatch"
+  | "already_consumed"
+  | "not_found";
+const MIRROR_INTERACTIVE_RESPONSE_ERRORS: ReadonlySet<
+  InteractivePromptResponseError
+> = new Set<InteractivePromptResponseError>([
+  "invalid_payload",
+  "invalid_response",
+  "kind_mismatch",
+]);
+
+function mirrorWithDebounce(
+  err: unknown,
+  ctx: Parameters<typeof reportSilentFallback>[1],
+  userId: string,
+  errorClass: string,
+): void {
+  const key = `${userId}:${errorClass}`;
+  const now = Date.now();
+  const last = _mirrorLastReportedAt.get(key);
+  if (last !== undefined && now - last < MIRROR_DEBOUNCE_MS) {
+    return;
+  }
+  _mirrorLastReportedAt.set(key, now);
+  reportSilentFallback(err, ctx);
+}
 
 // ---------------------------------------------------------------------------
 // Singletons
@@ -249,7 +311,7 @@ export function cleanupCcBashGatesForConversation(
 //     plausible) for the cc-soleur-go path before widening.
 //   - `disallowedTools: ["WebSearch", "WebFetch"]` — parity with
 //     legacy runner (R7).
-//   - `leaderId: "cc_router"` — non-routable internal leader for
+//   - `leaderId: CC_ROUTER_LEADER_ID` — non-routable internal leader for
 //     audit-log attribution.
 //   - Synthetic `AgentSession` per Option A (Open Design Question in
 //     plan §"Bash Review-Gate Bridge"); registered in `_ccBashGates`
@@ -280,287 +342,167 @@ async function fetchUserWorkspacePath(userId: string): Promise<string> {
   return data.workspace_path as string;
 }
 
-export const realSdkQueryFactory: QueryFactory = (args: QueryFactoryArgs): Query => {
-  // Async work happens inside an IIFE that builds the Query; the SDK's
-  // `query()` is itself synchronous (it returns an async iterator that
-  // lazily starts the subprocess). We therefore wrap the per-user
-  // fetches in a thenable that forwards to `sdkQuery` after credentials
-  // resolve. The runner's `queryFactory` contract returns `Query`
-  // synchronously, so we materialize the async work via Promise.all
-  // inside the factory's call site (which is itself awaited by
-  // `soleur-go-runner.ts dispatch`'s try/catch around `queryFactory`).
-  //
-  // QueryFactory is typed as `(args) => Query`. The runner calls it
-  // synchronously and then iterates the returned Query asynchronously.
-  // To bridge BYOK + workspace fetches that ARE async, we throw an
-  // error path is naturally caught by the runner's queryFactory catch
-  // block (which mirrors to Sentry per `cq-silent-fallback-must-mirror-to-sentry`).
-  //
-  // Implementation: this thunk wraps `sdkQuery` in a deferred-start
-  // shape — the inner `query()` is invoked once user data resolves.
-  // We yield a Query proxy that defers iteration until the inner
-  // query is built.
-  return buildDeferredQuery(args);
-};
+/**
+ * Build a real SDK `Query` for one cold cc-soleur-go conversation. Async
+ * because workspace path + BYOK key + service tokens are DB-resident.
+ * Errors flow up to `soleur-go-runner.ts dispatch`'s `await
+ * deps.queryFactory(...)` try/catch — KeyInvalidError there is mapped
+ * to `errorCode: "key_invalid"` by `dispatchSoleurGo` (R10);
+ * sandbox-startup substring is mirrored here under
+ * `feature: "agent-sandbox"` for Sentry tag-filtering parity with the
+ * legacy runner. All three DB fetches run in parallel.
+ */
+export const realSdkQueryFactory: QueryFactory = async (
+  args: QueryFactoryArgs,
+): Promise<Query> => {
+  const [workspacePath, apiKey, serviceTokens] = await Promise.all([
+    fetchUserWorkspacePath(args.userId),
+    getUserApiKey(args.userId),
+    getUserServiceTokens(args.userId),
+  ]);
 
-function buildDeferredQuery(args: QueryFactoryArgs): Query {
-  // The real SDK `Query` is an AsyncIterable + .close() + .interrupt() etc.
-  // We expose a minimal proxy that lazily resolves the inner Query
-  // before delegating each method.
-  let innerPromise: Promise<Query> | null = null;
+  // Defense-in-depth: strip stale pre-approved file-tool entries from
+  // the workspace's `.claude/settings.json` so they cannot bypass
+  // `canUseTool` (permission chain step 4 before step 5). Idempotent.
+  patchWorkspacePermissions(workspacePath);
 
-  const ensureInner = (): Promise<Query> => {
-    if (innerPromise) return innerPromise;
-    innerPromise = (async (): Promise<Query> => {
-      const workspacePath = await fetchUserWorkspacePath(args.userId);
-      const [apiKey, serviceTokens] = await Promise.all([
-        getUserApiKey(args.userId),
-        getUserServiceTokens(args.userId),
-      ]);
+  const pluginPath = path.join(workspacePath, "plugins", "soleur");
 
-      // Defense-in-depth: strip stale pre-approved file-tool entries
-      // from the workspace's `.claude/settings.json` so they cannot
-      // bypass `canUseTool` (permission chain step 4 before step 5).
-      // Idempotent.
-      patchWorkspacePermissions(workspacePath);
-
-      const pluginPath = path.join(workspacePath, "plugins", "soleur");
-
-      // Synthetic AgentSession — the only place in the cc path where
-      // an AgentSession exists. Registered into `_ccBashGates` per
-      // Bash review-gate (Option A). The controller is bound to the
-      // Query lifetime; closeConversation/reapIdle abort it.
-      const controller = new AbortController();
-      const session: AgentSession = {
-        abort: controller,
-        reviewGateResolvers: new Map(),
-        sessionId: null,
-      };
-
-      // Bridge `permission-callback.ts createCanUseTool` Bash branch
-      // into the cc-soleur-go review-gate transport. The callback
-      // emits `review_gate` via deps.sendToClient and awaits a
-      // `resolveCcBashGate(...)` resolution; we register the synthetic
-      // session under the gateId so ws-handler can find it.
-      //
-      // The deps below mirror the legacy runner's `CanUseToolDeps` shape;
-      // `abortableReviewGate` is the same module-level helper. The
-      // cc-side wiring augments it with a registration callback so the
-      // synthetic session is discoverable via `_ccBashGates` for the
-      // duration of the gate.
-      const ccDeps: CanUseToolDeps = {
-        abortableReviewGate: (
-          ccSession,
-          gateId,
-          signal,
-          timeoutMs,
-          options,
-        ) => {
-          // Register BEFORE creating the awaitable promise so a
-          // synchronous `resolveCcBashGate` cannot race. The promise
-          // body inside `abortableReviewGate` synchronously sets the
-          // `reviewGateResolvers` entry too — registration is purely
-          // about routing the WS response back to this synthetic
-          // session.
-          registerCcBashGate({
-            userId: args.userId,
-            conversationId: args.conversationId,
-            gateId,
-            session: ccSession,
-          });
-          return abortableReviewGate(ccSession, gateId, signal, timeoutMs, options);
-        },
-        sendToClient: defaultSendToClient,
-        notifyOfflineUser,
-        updateConversationStatus: async (_convId: string, _status: string) => {
-          // V1: cc-soleur-go path does not write conversation status
-          // for review-gate transitions. The runner already handles
-          // workflow lifecycle via `onWorkflowEnded`. Future V2 may
-          // add a "waiting_for_user"/"active" toggle here.
-        },
-      };
-
-      try {
-        return sdkQuery({
-          prompt: args.prompt,
-          options: {
-            cwd: workspacePath,
-            model: "claude-sonnet-4-6",
-            permissionMode: "default",
-            // settingSources: [] — defense-in-depth alongside
-            // `patchWorkspacePermissions`. Prevents the SDK from
-            // loading project `.claude/settings.json` whose
-            // `permissions.allow` would bypass `canUseTool`.
-            settingSources: [],
-            includePartialMessages: true,
-            ...(args.resumeSessionId ? { resume: args.resumeSessionId } : {}),
-            systemPrompt: args.systemPrompt,
-            env: buildAgentEnv(apiKey, serviceTokens),
-            // R7 — mirror legacy runner. WebSearch/WebFetch denied so
-            // the router cannot fetch arbitrary URLs.
-            disallowedTools: ["WebSearch", "WebFetch"],
-            // V1 — empty MCP allowlist. V2-13 (#2909) tracks
-            // tier-classification of `kb_share_*`, `conversations_*`,
-            // `github_*`, `plausible_*` for this path before widening.
-            mcpServers: {},
-            sandbox: buildAgentSandboxConfig(workspacePath),
-            plugins: [{ type: "local" as const, path: pluginPath }],
-            hooks: {
-              PreToolUse: [
-                {
-                  matcher: "Read|Write|Edit|Glob|Grep|LS|NotebookRead|NotebookEdit|Bash",
-                  hooks: [createSandboxHook(workspacePath)],
-                },
-              ],
-              SubagentStart: [
-                {
-                  hooks: [
-                    async (input) => {
-                      const subInput = input as Record<string, unknown>;
-                      const sanitize = (v: unknown) =>
-                        String(v ?? "").replace(/[\r\n]/g, " ").slice(0, 200);
-                      log.info(
-                        {
-                          sec: true,
-                          agentId: sanitize(subInput.agent_id),
-                          agentType: sanitize(subInput.agent_type),
-                          ccPath: true,
-                        },
-                        "Subagent started (cc-soleur-go)",
-                      );
-                      return {};
-                    },
-                  ],
-                },
-              ],
-            },
-            canUseTool: createCanUseTool({
-              userId: args.userId,
-              conversationId: args.conversationId,
-              // R-AC14: non-undefined leaderId so `logPermissionDecision`
-              // attributes the cc path. `cc_router` is a non-routable
-              // leader id reserved for this purpose.
-              leaderId: "cc_router",
-              workspacePath,
-              platformToolNames: [],
-              pluginMcpServerNames: [],
-              repoOwner: "",
-              repoName: "",
-              session,
-              controllerSignal: controller.signal,
-              deps: ccDeps,
-            }),
-          },
-        });
-      } catch (err) {
-        // Mirror the `agent-runner.ts:1136-1141` precedent — tag the
-        // sandbox-required-but-unavailable substring under
-        // `feature: "agent-sandbox"`. Other inner throws bubble up to
-        // the runner's own queryFactory catch (which mirrors under
-        // `feature: "soleur-go-runner"`).
-        const errMsg = err instanceof Error ? err.message : String(err);
-        if (errMsg.includes("sandbox required but unavailable")) {
-          reportSilentFallback(err, {
-            feature: "agent-sandbox",
-            op: "sdk-startup",
-            extra: {
-              userId: args.userId,
-              conversationId: args.conversationId,
-              leaderId: "cc_router",
-            },
-          });
-        }
-        throw err;
-      }
-    })();
-    return innerPromise;
+  // Synthetic AgentSession — the only place in the cc path where an
+  // AgentSession exists. Registered into `_ccBashGates` per Bash
+  // review-gate (Option A). The controller is bound to the Query
+  // lifetime; closeConversation/reapIdle abort it.
+  const controller = new AbortController();
+  const session: AgentSession = {
+    abort: controller,
+    reviewGateResolvers: new Map(),
+    sessionId: null,
   };
 
-  // Build the Query proxy. The runner only consumes `[Symbol.asyncIterator]`
-  // and `.close()`; we forward both via the inner promise.
-  const proxy: Query = {
-    [Symbol.asyncIterator](): AsyncIterator<unknown> {
-      let inner: AsyncIterator<unknown> | null = null;
-      return {
-        async next(): Promise<IteratorResult<unknown>> {
-          if (!inner) {
-            const q = await ensureInner();
-            inner = (q as AsyncIterable<unknown>)[Symbol.asyncIterator]();
-          }
-          return inner.next();
-        },
-        async return(value?: unknown): Promise<IteratorResult<unknown>> {
-          if (inner?.return) return inner.return(value);
-          return { value: undefined, done: true };
-        },
-        async throw(e?: unknown): Promise<IteratorResult<unknown>> {
-          if (inner?.throw) return inner.throw(e);
-          throw e;
-        },
-      };
+  const ccDeps: CanUseToolDeps = {
+    abortableReviewGate: (ccSession, gateId, signal, timeoutMs, options) => {
+      // Register BEFORE awaiting the resolver so a synchronous
+      // `resolveCcBashGate` from a concurrent ws frame cannot race.
+      registerCcBashGate({
+        userId: args.userId,
+        conversationId: args.conversationId,
+        gateId,
+        session: ccSession,
+      });
+      return abortableReviewGate(ccSession, gateId, signal, timeoutMs, options);
     },
-    close: async () => {
-      if (innerPromise) {
-        try {
-          const inner = await innerPromise;
-          await inner.close();
-        } catch (err) {
-          // Best-effort close; surface unexpected errors.
-          reportSilentFallback(err, {
-            feature: "cc-dispatcher",
-            op: "realSdkQueryFactory.close",
-            extra: { userId: args.userId, conversationId: args.conversationId },
-          });
-        }
-      }
+    sendToClient: defaultSendToClient,
+    notifyOfflineUser,
+    updateConversationStatus: async (_convId: string, _status: string) => {
+      // V1: cc-soleur-go path does not write conversation status. See
+      // scope-out C — gated by FLAG_CC_SOLEUR_GO=true acceptance.
     },
-    interrupt: async () => {
-      if (innerPromise) {
-        const inner = await innerPromise;
-        if (inner.interrupt) await inner.interrupt();
-      }
-    },
-    setPermissionMode: async (mode: PermissionMode) => {
-      if (innerPromise) {
-        const inner = await innerPromise;
-        if (inner.setPermissionMode) await inner.setPermissionMode(mode);
-      }
-    },
-    setModel: async (model?: string) => {
-      if (innerPromise) {
-        const inner = await innerPromise;
-        if (inner.setModel) await inner.setModel(model);
-      }
-    },
-    supportedCommands: async () => {
-      const inner = await ensureInner();
-      return inner.supportedCommands();
-    },
-    supportedModels: async () => {
-      const inner = await ensureInner();
-      return inner.supportedModels();
-    },
-    mcpServerStatus: async () => {
-      const inner = await ensureInner();
-      return inner.mcpServerStatus();
-    },
-    // biome-ignore lint/suspicious/noExplicitAny: Query union surface differs by SDK minor
-  } as any;
+  };
 
-  // Trigger eager build so factory-time errors (BYOK fetch, sandbox
-  // probe) propagate through the runner's own queryFactory catch
-  // (which mirrors under `feature: "soleur-go-runner"`). Without this,
-  // the inner failure would only fire on first `.next()` — too late
-  // for the runner's per-conversation observability tag.
-  void ensureInner().catch(() => {
-    // Swallow here; the iterator's `.next()` will re-surface the same
-    // error (the promise is cached). The runner's queryFactory catch
-    // only wraps the SYNCHRONOUS factory call — async failures must
-    // surface via the iterator path.
-  });
-
-  return proxy;
-}
+  try {
+    return sdkQuery({
+      prompt: args.prompt,
+      options: {
+        cwd: workspacePath,
+        model: "claude-sonnet-4-6",
+        permissionMode: "default",
+        // settingSources: [] — defense-in-depth alongside
+        // `patchWorkspacePermissions`. Prevents the SDK from loading
+        // project `.claude/settings.json` whose `permissions.allow`
+        // would bypass `canUseTool`.
+        settingSources: [],
+        includePartialMessages: true,
+        ...(args.resumeSessionId ? { resume: args.resumeSessionId } : {}),
+        systemPrompt: args.systemPrompt,
+        env: buildAgentEnv(apiKey, serviceTokens),
+        // R7 — mirror legacy runner. WebSearch/WebFetch denied so the
+        // router cannot fetch arbitrary URLs.
+        disallowedTools: ["WebSearch", "WebFetch"],
+        // V1 — empty MCP allowlist. V2-13 (#2909) tracks
+        // tier-classification of `kb_share_*`, `conversations_*`,
+        // `github_*`, `plausible_*` for this path before widening.
+        mcpServers: {},
+        sandbox: buildAgentSandboxConfig(workspacePath),
+        plugins: [{ type: "local" as const, path: pluginPath }],
+        hooks: {
+          PreToolUse: [
+            {
+              matcher: "Read|Write|Edit|Glob|Grep|LS|NotebookRead|NotebookEdit|Bash",
+              hooks: [createSandboxHook(workspacePath)],
+            },
+          ],
+          SubagentStart: [
+            {
+              hooks: [
+                async (input) => {
+                  const subInput = input as Record<string, unknown>;
+                  // Strip control chars, DEL, Unicode line/paragraph
+                  // separators per learning
+                  // 2026-04-17-log-injection-unicode-line-separators.md
+                  // (covers \r\n already).
+                  const sanitize = (v: unknown) =>
+                    String(v ?? "")
+                      .replace(/[\x00-\x1f\x7f\u2028\u2029]/g, " ")
+                      .slice(0, 200);
+                  log.info(
+                    {
+                      sec: true,
+                      agentId: sanitize(subInput.agent_id),
+                      agentType: sanitize(subInput.agent_type),
+                      ccPath: true,
+                    },
+                    "Subagent started (cc-soleur-go)",
+                  );
+                  return {};
+                },
+              ],
+            },
+          ],
+        },
+        canUseTool: createCanUseTool({
+          userId: args.userId,
+          conversationId: args.conversationId,
+          // R-AC14: non-undefined leaderId so `logPermissionDecision`
+          // attributes the cc path. `CC_ROUTER_LEADER_ID` is a
+          // non-routable leader id reserved for this purpose.
+          leaderId: CC_ROUTER_LEADER_ID,
+          workspacePath,
+          platformToolNames: [],
+          pluginMcpServerNames: [],
+          repoOwner: "",
+          repoName: "",
+          session,
+          controllerSignal: controller.signal,
+          deps: ccDeps,
+        }),
+      },
+    });
+  } catch (err) {
+    // Mirror the "sandbox required but unavailable" branch in
+    // agent-runner.ts startAgentSession's catch (feature:
+    // "agent-sandbox", op: "sdk-startup"). Other inner throws bubble up
+    // to the runner's own queryFactory catch (which mirrors under
+    // `feature: "soleur-go-runner"`).
+    const errMsg = err instanceof Error ? err.message : String(err);
+    if (errMsg.includes("sandbox required but unavailable")) {
+      mirrorWithDebounce(
+        err,
+        {
+          feature: "agent-sandbox",
+          op: "sdk-startup",
+          extra: {
+            userId: args.userId,
+            conversationId: args.conversationId,
+            leaderId: CC_ROUTER_LEADER_ID,
+          },
+        },
+        args.userId,
+        "agent-sandbox:sdk-startup",
+      );
+    }
+    throw err;
+  }
+};
 
 let _runner: SoleurGoRunner | null = null;
 let _runnerSendToClient:
@@ -597,6 +539,13 @@ export function getSoleurGoRunner(
       // wire boundary.
       sendToClient(userId, event as unknown as WSMessage);
     },
+    // Drain `_ccBashGates` from EVERY internal close path. Without this
+    // hook, `runner.reapIdle()` and `runner.closeConversation()` close
+    // the Query without firing `onWorkflowEnded`, so the dispatch-side
+    // cleanup in `onWorkflowEnded` is never reached and the gate
+    // registry leaks. The runner fires this BEFORE `activeQueries.delete`.
+    onCloseQuery: ({ conversationId, userId }) =>
+      cleanupCcBashGatesForConversation(userId, conversationId),
     defaultCostCaps: readCcCostCaps(),
   });
   return _runner;
@@ -644,13 +593,13 @@ export async function dispatchSoleurGo(
         type: "stream",
         content: text,
         partial: true,
-        leaderId: "cc_router",
+        leaderId: CC_ROUTER_LEADER_ID,
       });
     },
     onToolUse: (block) => {
       sendToClient(userId, {
         type: "tool_use",
-        leaderId: "cc_router",
+        leaderId: CC_ROUTER_LEADER_ID,
         label: block.name,
       });
     },
@@ -668,16 +617,7 @@ export async function dispatchSoleurGo(
       // to `session_ended` and recoverable statuses to a structured
       // error the client can surface without tearing down the
       // conversation.
-      const TERMINAL: ReadonlySet<WorkflowEnd["status"]> = new Set<
-        WorkflowEnd["status"]
-      >([
-        "completed",
-        "user_aborted",
-        "idle_timeout",
-        "plugin_load_failure",
-        "internal_error",
-      ]);
-      if (TERMINAL.has(end.status)) {
+      if (TERMINAL_WORKFLOW_END_STATUSES.has(end.status)) {
         sendToClient(userId, {
           type: "session_ended",
           reason: end.status,
@@ -688,9 +628,10 @@ export async function dispatchSoleurGo(
           message: `Workflow ended (${end.status}) — retry to continue.`,
         });
       }
-      // Drain any cc Bash gates for the conversation — the synthetic
-      // session is no longer reachable.
-      cleanupCcBashGatesForConversation(userId, conversationId);
+      // Note: `_ccBashGates` cleanup is now handled centrally by the
+      // runner's `onCloseQuery` hook (wired in `getSoleurGoRunner`),
+      // which fires from `emitWorkflowEnded`/`reapIdle`/
+      // `closeConversation`. No direct call needed here.
     },
     onResult: (_result) => {
       // Usage totals bubble via `usage_update`; wire in Stage 3 when
@@ -709,15 +650,27 @@ export async function dispatchSoleurGo(
       sessionId: sessionId ?? undefined,
     });
   } catch (err) {
-    reportSilentFallback(err, {
-      feature: "cc-dispatcher",
-      op: "dispatch",
-      extra: { conversationId, userId },
-    });
+    const errorClass =
+      err instanceof KeyInvalidError
+        ? "KeyInvalidError"
+        : err instanceof Error
+          ? err.constructor.name
+          : "unknown";
+    mirrorWithDebounce(
+      err,
+      {
+        feature: "cc-dispatcher",
+        op: "dispatch",
+        extra: { conversationId, userId },
+      },
+      userId,
+      `dispatch:${errorClass}`,
+    );
     // R10 — KeyInvalidError surfaces with errorCode so the client can
-    // prompt for a fresh BYOK key (mirrors `agent-runner.ts:1149`).
-    // All other failures fall back to the generic router-unavailable
-    // message without an errorCode.
+    // prompt for a fresh BYOK key. Mirrors the KeyInvalidError →
+    // errorCode: "key_invalid" branch in agent-runner.ts
+    // handleSessionError. All other failures fall back to the generic
+    // router-unavailable message without an errorCode.
     if (err instanceof KeyInvalidError) {
       sendToClient(userId, {
         type: "error",
@@ -730,8 +683,10 @@ export async function dispatchSoleurGo(
         message: "Command Center router is unavailable — try again shortly.",
       });
     }
-    // Drain cc Bash gates so a stranded synthetic session does not
-    // hold a resolver open until TTL.
+    // Belt-and-suspenders: drain ccBashGates here too. The runner's
+    // onCloseQuery hook covers normal close paths, but a dispatch-time
+    // throw before the runner takes ownership of the Query may leave
+    // stranded entries (e.g. concurrent register from a prior turn).
     cleanupCcBashGatesForConversation(userId, conversationId);
   }
 }
@@ -765,10 +720,11 @@ export function handleInteractivePromptResponseCase(args: {
     // benign retry after success (client already saw ok); mirroring
     // would amplify Sentry noise. `not_found` could be session
     // reset / container restart (also benign from server POV).
-    const MIRROR: ReadonlySet<typeof result.error> = new Set<
-      typeof result.error
-    >(["invalid_payload", "invalid_response", "kind_mismatch"]);
-    if (MIRROR.has(result.error)) {
+    if (
+      MIRROR_INTERACTIVE_RESPONSE_ERRORS.has(
+        result.error as InteractivePromptResponseError,
+      )
+    ) {
       reportSilentFallback(
         new Error(`interactive_prompt_response rejected: ${result.error}`),
         {
@@ -816,4 +772,5 @@ export function __resetDispatcherForTests(): void {
   _runner = null;
   _runnerSendToClient = null;
   _ccBashGates.clear();
+  _mirrorLastReportedAt.clear();
 }

@@ -119,22 +119,9 @@ function makeFakeQuery() {
 }
 
 /**
- * Drive the deferred-build factory: invoke + flush the inner build.
- * The proxy starts async work in `void ensureInner()`; we await a
- * macrotask + a few microtasks so all chained `.then()` resolve before
- * we assert against `mockQuery`. Using `setImmediate` (Node) covers
- * the worst case where the inner promise chain spans multiple awaits.
+ * The factory is now a real `async (args) => Promise<Query>`. Tests
+ * await it directly — no proxy/deferred-build flush needed.
  */
-async function flushFactoryBuild(): Promise<void> {
-  // Three queueMicrotask cycles cover: workspace fetch → Promise.all
-  // (apiKey + tokens) → patchWorkspacePermissions → sdkQuery.
-  for (let i = 0; i < 5; i++) {
-    await Promise.resolve();
-  }
-  // Guarantee one event-loop tick so any setImmediate-deferred chain
-  // also drains.
-  await new Promise<void>((resolve) => setImmediate(resolve));
-}
 
 const WORKSPACE_PATH = "/tmp/cc-test-workspace";
 
@@ -208,8 +195,7 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
   // T1: factory called with valid user → returns Query
   // -------------------------------------------------------------------------
   it("T1: invokes SDK query() once with cwd=workspacePath and the canonical model", async () => {
-    realSdkQueryFactory(makeArgs());
-    await flushFactoryBuild();
+    await realSdkQueryFactory(makeArgs());
 
     expect(mockQuery).toHaveBeenCalledOnce();
     const callArg = mockQuery.mock.calls[0][0];
@@ -221,8 +207,7 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
   // T2: factory options omit / empty mcpServers (V1; V2-13 widens)
   // -------------------------------------------------------------------------
   it("T2: mcpServers is empty for V1 (V2-13 will widen)", async () => {
-    realSdkQueryFactory(makeArgs());
-    await flushFactoryBuild();
+    await realSdkQueryFactory(makeArgs());
     const opts = mockQuery.mock.calls[0][0].options;
     // Either undefined or {} is acceptable. Assert no servers registered.
     expect(opts.mcpServers === undefined || Object.keys(opts.mcpServers).length === 0).toBe(true);
@@ -232,8 +217,7 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
   // T3: plugins: [{ type: "local", path: <workspace>/plugins/soleur }]
   // -------------------------------------------------------------------------
   it("T3: plugins points at the per-user workspace plugin copy", async () => {
-    realSdkQueryFactory(makeArgs());
-    await flushFactoryBuild();
+    await realSdkQueryFactory(makeArgs());
     const opts = mockQuery.mock.calls[0][0].options;
     expect(opts.plugins).toEqual([
       { type: "local", path: `${WORKSPACE_PATH}/plugins/soleur` },
@@ -244,8 +228,7 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
   // T4: sandbox includes failIfUnavailable=true and allowUnsandboxedCommands=false
   // -------------------------------------------------------------------------
   it("T4: sandbox is the canonical buildAgentSandboxConfig output", async () => {
-    realSdkQueryFactory(makeArgs());
-    await flushFactoryBuild();
+    await realSdkQueryFactory(makeArgs());
     const opts = mockQuery.mock.calls[0][0].options;
     expect(opts.sandbox.failIfUnavailable).toBe(true);
     expect(opts.sandbox.allowUnsandboxedCommands).toBe(false);
@@ -257,8 +240,7 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
   // T5: hooks include PreToolUse + SubagentStart
   // -------------------------------------------------------------------------
   it("T5: hooks include PreToolUse matcher AND SubagentStart audit hook", async () => {
-    realSdkQueryFactory(makeArgs());
-    await flushFactoryBuild();
+    await realSdkQueryFactory(makeArgs());
     const opts = mockQuery.mock.calls[0][0].options;
     expect(opts.hooks?.PreToolUse).toBeDefined();
     expect(Array.isArray(opts.hooks.PreToolUse)).toBe(true);
@@ -271,8 +253,7 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
   // T6: disallowedTools mirrors WebSearch + WebFetch from agent-runner
   // -------------------------------------------------------------------------
   it("T6: disallowedTools includes WebSearch and WebFetch (parity with agent-runner)", async () => {
-    realSdkQueryFactory(makeArgs());
-    await flushFactoryBuild();
+    await realSdkQueryFactory(makeArgs());
     const opts = mockQuery.mock.calls[0][0].options;
     expect(opts.disallowedTools).toEqual(
       expect.arrayContaining(["WebSearch", "WebFetch"]),
@@ -283,8 +264,7 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
   // T7: settingSources: [] (defense-in-depth)
   // -------------------------------------------------------------------------
   it("T7: settingSources is the empty array (no project settings.json pre-approvals)", async () => {
-    realSdkQueryFactory(makeArgs());
-    await flushFactoryBuild();
+    await realSdkQueryFactory(makeArgs());
     const opts = mockQuery.mock.calls[0][0].options;
     expect(opts.settingSources).toEqual([]);
   });
@@ -293,8 +273,7 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
   // T15: leaderId: "cc_router" passed to createCanUseTool
   // -------------------------------------------------------------------------
   it('T15: createCanUseTool receives leaderId: "cc_router" (audit-log attribution)', async () => {
-    realSdkQueryFactory(makeArgs());
-    await flushFactoryBuild();
+    await realSdkQueryFactory(makeArgs());
     expect(createCanUseTool).toHaveBeenCalledOnce();
     const ctx = (createCanUseTool as unknown as { mock: { calls: unknown[][] } }).mock.calls[0][0] as {
       leaderId: string;
@@ -307,21 +286,20 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
   });
 
   // -------------------------------------------------------------------------
-  // T8: KeyInvalidError from getUserApiKey throws → reportSilentFallback fires
-  // (asserted via the runner's catch in soleur-go-runner.ts; for the factory
-  // alone, we assert that the throw propagates with the SAME class.)
+  // T8: KeyInvalidError from getUserApiKey rejects the factory promise.
+  // The factory is now a real async function — KeyInvalidError surfaces
+  // synchronously to the runner's `await deps.queryFactory(...)` catch
+  // (tagged `op: "queryFactory"`), then `dispatchSoleurGo` maps it to
+  // `errorCode: "key_invalid"`. T19 in cc-dispatcher.test.ts covers the
+  // dispatcher-level mapping; here we pin the factory-level throw shape.
   // -------------------------------------------------------------------------
-  it("T8: KeyInvalidError from getUserApiKey propagates verbatim through the iterator (runner mirrors)", async () => {
+  it("T8: KeyInvalidError from getUserApiKey rejects the awaited factory call (runner catch tags op=queryFactory)", async () => {
     const { KeyInvalidError } = await import("@/lib/types");
     mockGetUserApiKey.mockRejectedValueOnce(new KeyInvalidError());
 
-    // Factory returns a Query proxy synchronously; the inner build is
-    // async and surfaces the KeyInvalidError on the iterator's first
-    // .next() call (per the deferred-build contract — see
-    // realSdkQueryFactory body).
-    const q = realSdkQueryFactory(makeArgs());
-    const iter = q[Symbol.asyncIterator]();
-    await expect(iter.next()).rejects.toBeInstanceOf(KeyInvalidError);
+    await expect(realSdkQueryFactory(makeArgs())).rejects.toBeInstanceOf(
+      KeyInvalidError,
+    );
     // Inner sdkQuery never called because BYOK fetch threw upstream.
     expect(mockQuery).not.toHaveBeenCalled();
   });
@@ -339,8 +317,7 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
       PLAUSIBLE_API_KEY: "plk-1",
     });
 
-    realSdkQueryFactory(makeArgs());
-    await flushFactoryBuild();
+    await realSdkQueryFactory(makeArgs());
 
     expect(mockBuildAgentEnv).toHaveBeenCalledWith("sk-test", {
       PLAUSIBLE_API_KEY: "plk-1",
@@ -356,8 +333,7 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
   // T10: patchWorkspacePermissions runs once per cold factory call
   // -------------------------------------------------------------------------
   it("T10: patchWorkspacePermissions fires once per factory invocation", async () => {
-    realSdkQueryFactory(makeArgs());
-    await flushFactoryBuild();
+    await realSdkQueryFactory(makeArgs());
     expect(mockPatchWorkspacePermissions).toHaveBeenCalledOnce();
     expect(mockPatchWorkspacePermissions).toHaveBeenCalledWith(WORKSPACE_PATH);
   });
@@ -375,9 +351,7 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
       throw sandboxErr;
     });
 
-    const q = realSdkQueryFactory(makeArgs());
-    const iter = q[Symbol.asyncIterator]();
-    await expect(iter.next()).rejects.toBe(sandboxErr);
+    await expect(realSdkQueryFactory(makeArgs())).rejects.toBe(sandboxErr);
 
     // Filter by feature tag per learning
     // 2026-04-19-claude-agent-sdk-subprocess-exit-tag-via-stderr-substring.md
@@ -398,8 +372,7 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
   // T17 (negative): factory uses buildAgentSandboxConfig (no inline literal)
   // -------------------------------------------------------------------------
   it("T17: factory delegates sandbox shape to buildAgentSandboxConfig (no inline drift)", async () => {
-    realSdkQueryFactory(makeArgs());
-    await flushFactoryBuild();
+    await realSdkQueryFactory(makeArgs());
     expect(mockBuildAgentSandboxConfig).toHaveBeenCalledOnce();
     expect(mockBuildAgentSandboxConfig).toHaveBeenCalledWith(WORKSPACE_PATH);
   });
@@ -408,15 +381,13 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
   // Resume key: when resumeSessionId provided, options.resume is set.
   // -------------------------------------------------------------------------
   it("threads resumeSessionId into options.resume when present", async () => {
-    realSdkQueryFactory(makeArgs({ resumeSessionId: "sess-abc" }));
-    await flushFactoryBuild();
+    await realSdkQueryFactory(makeArgs({ resumeSessionId: "sess-abc" }));
     const opts = mockQuery.mock.calls[0][0].options;
     expect(opts.resume).toBe("sess-abc");
   });
 
   it("omits options.resume when no resumeSessionId provided", async () => {
-    realSdkQueryFactory(makeArgs());
-    await flushFactoryBuild();
+    await realSdkQueryFactory(makeArgs());
     const opts = mockQuery.mock.calls[0][0].options;
     expect(opts.resume).toBeUndefined();
   });
