@@ -433,6 +433,8 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
                   entry.eqs.push([col, val]);
                   return chain;
                 },
+                select: () =>
+                  Promise.resolve({ data: [{ id: "conv-1" }], error: null }),
                 then: (resolve: (v: unknown) => void) =>
                   resolve({ error: null }),
               };
@@ -534,6 +536,11 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
               const chain: Record<string, unknown> = {
                 error: new Error("db unavailable"),
                 eq: () => chain,
+                select: () =>
+                  Promise.resolve({
+                    data: null,
+                    error: new Error("db unavailable"),
+                  }),
                 then: (resolve: (v: unknown) => void) =>
                   resolve({ error: new Error("db unavailable") }),
               };
