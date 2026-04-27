@@ -6,6 +6,25 @@
 **Domain:** engineering (CTO), operations (COO)
 **Branch:** `feat-one-shot-2905-autoloop-pr-guards`
 
+## Enhancement Summary
+
+**Deepened on:** 2026-04-27
+**Sections enhanced:** all (deepen pass added Research Insights to each)
+**Research applied:**
+- 6 institutional learnings cross-referenced (gitignore-blanket-rules-with-negation, github-actions-workflow-security-patterns, github-actions-sha-pinning-workflow, settings-json-defaultmode-inside-permissions, effortlevel-not-valid-settings-field, guard-surface-audit-before-coding).
+- Live SHA verification via `gh api repos/actions/checkout/git/ref/tags/v4` — confirmed `34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1` is current and matches existing `ci.yml:16` pin.
+- Codebase grep audit found a third `git add` site in `workspace.ts:85` (`["add", "."]`) — verified safe, scoped out of the fix.
+
+### Key improvements added in this deepen pass
+
+1. **Argv form correction.** Original plan said "replace `git add -A`" — actual code uses `execFileSync("git", ["add", "-A"], ...)`. New phrasing: "replace the `["add", "-A"]` argv at lines 201 and 249."
+2. **Guard-surface audit (per `2026-04-24-guard-surface-audit-before-coding`).** Confirmed that NO existing committed `.claude/settings.json` history will trip the new `settings-json-integrity` CI guard against `main` HEAD (`main` has the full settings; merging this PR's branch back to `main` cannot delete keys). Trip will only fire on a *new* PR that proposes deletions.
+3. **Workflow security patterns (per `2026-02-21` learning).** Pin `actions/checkout` to the SHA already in use (`34e114876b…`); validate any `workflow_dispatch` inputs with regex; use `grep -cxF` (not `-cF`) for any exact-match checks; check `gh ... ` exit codes explicitly with `if/then`.
+4. **Settings.json schema awareness (per two 2026-02 / 2026-03 learnings).** The wipe pattern `{"permissions":{"allow":[]}, "sandbox":{"enabled":true}}` may itself be schema-invalid (`sandbox` is not a valid top-level key in current Claude Code settings — only `permissions`, `env`, `enabledMcpjsonServers`, `hooks`, `model`, `additionalDirectories`). The integrity guard should flag *not just deletions* but also *introduction of unknown top-level keys* like `sandbox` — that's the actual smoking gun.
+5. **Gitignore anchoring (per `2026-03-10` learning).** Use leading `/` to anchor `/.claude/worktrees/` to the repo root — matches the existing pattern of `_site/`, `tmp/`, `.codex/`. Without anchoring, `worktrees` would match anywhere (correct for `.worktrees` denylist, but here we want unambiguous root-anchoring to make it grep-stable).
+6. **Sha pinning live-verification (per `2026-02-27` learning).** Added a Phase-3 prerequisite: re-run `gh api repos/actions/checkout/git/ref/tags/v4 --jq .object.sha` at implementation time and confirm it still matches `34e114876b0b11c390a56381ad16ebd13914f8d5`. If the upstream tag has moved between plan and implementation, update the pin; do not blindly copy from `ci.yml`.
+7. **Test refinements.** Added TS-7 (the new `provisionWorkspace`-style `["add", "."]` site is NOT regressed — first-time scaffold still commits the seed files), TS-8 (`syncPull` on a workspace WITHOUT a remote skips silently — preserves the existing `hasRemote()` early-return semantics).
+
 ## Overview
 
 The autonomous loop (Command Center web app, `apps/web-platform/server/session-sync.ts`) committed and pushed three classes of failure across PRs #2857 and #2859 that, together, would silently broken the rule-enforcement layer of this repo if either had merged:
@@ -65,16 +84,91 @@ Three layers of defense, **in order of authority**:
 
 ### Layer 1 — Root-cause fix in `session-sync.ts` (highest priority)
 
-Stop the loop from sweeping ambient state into feature branches. Replace `git add -A` with a path-scoped allowlist:
+Stop the loop from sweeping ambient state into feature branches. Replace the two `execFileSync("git", ["add", "-A"], ...)` calls (`session-sync.ts:201` and `:249`) with a path-scoped allowlist:
 
 - **Allow:** `knowledge-base/**` (the user's content, the actual purpose of the connected repo).
-- **Reject silently:** `.claude/**`, `.github/**`, `apps/**`, `plugins/**`, `scripts/**`, `*.json` at root, `*.md` at root (license, readme, agents, claude), `.gitignore`, `.mcp.json`, `_includes/**`, `_data/**`.
+- **Reject silently:** anything outside `knowledge-base/` — including `.claude/`, `.github/`, `apps/`, `plugins/`, `scripts/`, root-level `*.json`, root-level `*.md`, `.gitignore`, `.mcp.json`, `_includes/`, `_data/`.
 
 Rationale: the connected-repo product surface is *user knowledge content*, not Soleur-internal config. If the agent legitimately needs to modify `.claude/settings.json` (a future "edit my agent config" feature), that's an explicit Write operation the loop should commit deliberately — not sweep silently.
 
+#### Research Insights — Layer 1
+
+**Best practices:**
+- The allowlist should be a **single regex** (`/^knowledge-base\//`), not a string-prefix check. Path normalization on Windows-cloned repos can produce mixed separators; the regex stays simple and the connected-repo product is Linux-only (Hetzner workspace containers).
+- Parse `git status --porcelain=v1` (machine-readable v1 format), not the default. v1 output is two-character status + one-space + path; rename entries use `R<old> -> <new>` which the parser must split. Using `--porcelain=v1` (explicit) future-proofs against `git status` default-format changes (porcelain=v2 has different semantics).
+- Use `git add --` (with `--` end-of-options sentinel) to defend against pathological filenames starting with `-`. Pattern: `["add", "--", ...paths]`.
+
+**Implementation details:**
+```typescript
+// apps/web-platform/server/session-sync.ts
+const ALLOWED_AUTOCOMMIT_PATHS = /^knowledge-base\//;
+
+function getAllowlistedChanges(workspacePath: string): string[] {
+  const out = execFileSync("git", ["status", "--porcelain=v1"], {
+    cwd: workspacePath,
+    stdio: "pipe",
+  }).toString();
+  const paths: string[] = [];
+  for (const line of out.split("\n")) {
+    if (line.length < 4) continue; // status (2 chars) + space + path
+    // For renames: "R  old -> new" — track the destination path
+    const after = line.slice(3);
+    const path = after.includes(" -> ") ? after.split(" -> ")[1] : after;
+    if (ALLOWED_AUTOCOMMIT_PATHS.test(path)) paths.push(path);
+  }
+  return paths;
+}
+
+// Inside syncPull / syncPush:
+const allowed = getAllowlistedChanges(workspacePath);
+if (allowed.length === 0) {
+  log.info({ userId }, "No allowlisted changes to commit — skipping auto-commit");
+} else {
+  execFileSync("git", ["add", "--", ...allowed], { cwd: workspacePath, stdio: "pipe" });
+  execFileSync("git", ["commit", "-m", "Auto-commit before sync pull"], { /* ... */ });
+}
+```
+
+**Edge cases:**
+- **Untracked directory under `knowledge-base/`** with files inside it. `git status --porcelain` reports the directory once (`?? knowledge-base/new-dir/`), not the contained files. The regex matches the directory line; `git add -- knowledge-base/new-dir/` then recursively stages contents. Verified: this works correctly — `git add` of a directory is recursive.
+- **Mixed dirty (allowlisted + non-allowlisted).** TS-1 verifies that filtering keeps the non-allowlisted file dirty in the workspace; the next `syncPull`/`syncPush` will see it again, but will continue to skip it. The user's only path to commit `.claude/` content is through an explicit Write tool flow that calls `git commit` directly (not via the auto-commit sweep).
+- **Pre-existing `git add -A` followed by `git commit` at workspace bootstrap (`workspace.ts:85`).** Audited and verified scope-OUT: this site runs only inside `provisionWorkspace`, against a brand-new local-only `git init` repo with NO remote. The seed commit "Initial workspace" must include all scaffolded files (settings, plugin symlink target, KB skeleton). Do NOT change this site.
+
 ### Layer 2 — Repo hygiene fix in `.gitignore`
 
-Add `.claude/worktrees/` to `.gitignore`. The current `.worktrees` entry only matches a directory named exactly `.worktrees`, not `.claude/worktrees/`.
+Add `/.claude/worktrees/` (anchored leading slash) to `.gitignore`. The current `.worktrees` entry only matches a directory named exactly `.worktrees`, not `.claude/worktrees/`.
+
+#### Research Insights — Layer 2
+
+**Best practices (per `2026-03-10-gitignore-blanket-rules-with-negation.md`):**
+- Use leading `/` to anchor to the repo root. The existing `.gitignore` mixes anchored (`_site/`, `tmp/`, `.codex/`) and floating (`.DS_Store`, `*.log`) patterns; for a path that names a known location, anchoring is grep-stable and prevents accidental matches if a similarly-named directory is ever created elsewhere.
+- Leave the existing `.worktrees` entry untouched — it correctly matches the repo-level worktree directory used by `git-worktree` skill at the bare-repo root and at any worktree's level. They serve distinct purposes:
+  - `.worktrees/` (no anchor) — Soleur's worktree-manager directory.
+  - `/.claude/worktrees/` (anchored) — Claude Code's per-session marker directory created by the `Task` subagent runtime.
+- Do NOT add `*.json` ignore. `.claude/settings.json` MUST stay tracked — it's the enforcement-config root.
+
+**Verification commands (run during Phase 2):**
+```bash
+# Should match (new rule fires):
+git check-ignore -v .claude/worktrees/agent-test-deadbeef
+git check-ignore -v .claude/worktrees/
+
+# Should NOT match (regression checks):
+git check-ignore -v .claude/settings.json   # MUST stay trackable
+git check-ignore -v knowledge-base/foo.md   # MUST stay trackable
+git check-ignore -v .worktrees/feat-x       # already-existing rule, untouched
+```
+
+**Edge case — already-tracked file:**
+If by some path the bot's gitlink commit lands on `main` before this PR merges (#2859 was closed; the only sources of truth are the closed-PR commits in their refs/pull namespace, which are not on `main`), `.gitignore` does NOT remove tracked files. Run `git rm --cached -r .claude/worktrees/` AS PART OF THIS PR if any tracked files exist:
+
+```bash
+# Pre-merge sanity check:
+git ls-files .claude/worktrees/ | head
+# Expected: empty. If non-empty, untrack with:
+git rm --cached -r .claude/worktrees/
+git commit -m "chore: untrack stray .claude/worktrees/ entries (#2905)"
+```
 
 ### Layer 3 — CI gate `pr-quality-guards.yml`
 
@@ -92,6 +186,119 @@ Three independent jobs, all on `pull_request`:
 
 All four jobs are **opt-out via the same label** (`confirm:claude-config-change`) for the rare case where a PR legitimately modifies these surfaces.
 
+#### Research Insights — Layer 3
+
+**Workflow security patterns (per `2026-02-21-github-actions-workflow-security-patterns.md`):**
+- Pin `actions/checkout` to the SHA already in use across the repo: `34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1`. Live-verified against `gh api repos/actions/checkout/git/ref/tags/v4 --jq .object.sha` — matches as of 2026-04-27.
+- Validate `workflow_dispatch` inputs with regex if added (this workflow does NOT add `workflow_dispatch` to keep the surface minimal — the four guards run only on `pull_request` events, which carry no operator-controlled inputs).
+- Check exit codes explicitly with `if/then` blocks for any `gh` invocation. Do NOT chain `gh ... | jq ...` without a `jq -e .` guard preceding the `jq -r` call (per `cq-ci-steps-polling-json-endpoints-under-bash-e`).
+- Use `grep -cxF` (not `-cF`) for any exact-line match — `-F` disables regex but still does substring matching; `-x` adds whole-line matching.
+- Add `set -uo pipefail` (NOT `set -euo pipefail`) at the top of each script. `set -e` plus `[[ ... ]]` numeric comparison crashes on non-numeric input under strict mode; use explicit regex guards for numeric inputs (per the deepen-plan checklist quality rule about `set -euo pipefail` + `-gt` operator behavior).
+
+**Job-level pattern:**
+```yaml
+jobs:
+  settings-json-integrity:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - name: Check for opt-out label
+        id: opt_out
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -uo pipefail
+          HAS_LABEL=$(gh pr view "$PR_NUMBER" \
+            --json labels \
+            --jq '[.labels[].name] | index("confirm:claude-config-change") // empty')
+          if [[ -n "$HAS_LABEL" ]]; then
+            echo "::warning::Settings integrity check skipped — confirm:claude-config-change label present"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4.3.1
+        if: steps.opt_out.outputs.skip != 'true'
+        with:
+          fetch-depth: 0  # need full history for git diff against base
+      - name: Run integrity check
+        if: steps.opt_out.outputs.skip != 'true'
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.sha }}
+          HEAD_REF: ${{ github.event.pull_request.head.sha }}
+        run: bash .github/scripts/check-settings-integrity.sh
+```
+
+**Settings.json schema awareness (per `2026-02-24` and `2026-03-24` learnings):**
+The wipe pattern includes `"sandbox": {"enabled": true}` — but `sandbox` is NOT a recognized top-level key in the current Claude Code settings schema. Valid top-level keys (per the live `.claude/settings.json` and the two learnings):
+- `permissions` (with nested `defaultMode`, `allow`, `deny`, `ask`, `additionalDirectories`).
+- `env` (env vars including `CLAUDE_CODE_EFFORT_LEVEL`).
+- `enabledMcpjsonServers` (array of MCP server names).
+- `hooks` (PreToolUse, PostToolUse mappings).
+
+The `settings-json-integrity` script SHOULD therefore flag two distinct violations:
+1. **Deletion** of any of the four valid top-level keys (`hooks`, `enabledMcpjsonServers`, `env`, `permissions.allow[*]`).
+2. **Introduction** of unknown top-level keys outside the schema (`sandbox`, etc.) — this is the actual smoking-gun signal that an LLM rewrote the file from a hallucinated schema.
+
+Both checks are mechanical jq comparisons. Implementation:
+```bash
+# .github/scripts/check-settings-integrity.sh
+set -uo pipefail
+
+VALID_TOP_KEYS='["permissions","env","enabledMcpjsonServers","hooks","model","additionalDirectories"]'
+
+base_settings=$(git show "$BASE_REF:.claude/settings.json" 2>/dev/null || echo '{}')
+head_settings=$(git show "$HEAD_REF:.claude/settings.json" 2>/dev/null || echo '{}')
+
+# Quick exit if file unchanged
+if [[ "$base_settings" == "$head_settings" ]]; then exit 0; fi
+
+# Check 1: Deletion of valid top-level keys
+deleted_keys=$(jq -n --argjson base "$base_settings" --argjson head "$head_settings" '
+  ($base | keys) - ($head | keys) | join(",")
+')
+if [[ -n "$deleted_keys" ]]; then
+  echo "::error::Deleted top-level settings keys: $deleted_keys"
+  echo "Add label 'confirm:claude-config-change' to override (only with explicit reason)."
+  exit 1
+fi
+
+# Check 2: Introduction of unknown top-level keys
+unknown_keys=$(jq -n --argjson head "$head_settings" --argjson valid "$VALID_TOP_KEYS" '
+  ($head | keys) - $valid | join(",")
+')
+if [[ -n "$unknown_keys" ]]; then
+  echo "::error::Introduced unrecognized top-level keys: $unknown_keys"
+  echo "Valid keys: permissions, env, enabledMcpjsonServers, hooks, model, additionalDirectories"
+  echo "Add label 'confirm:claude-config-change' to override."
+  exit 1
+fi
+
+# Check 3: Deletion of permissions.allow[*] entries
+deleted_allow=$(jq -n --argjson base "$base_settings" --argjson head "$head_settings" '
+  (($base.permissions.allow // []) - ($head.permissions.allow // [])) | join(", ")
+')
+if [[ -n "$deleted_allow" ]]; then
+  echo "::error::Deleted permissions.allow entries: $deleted_allow"
+  exit 1
+fi
+```
+
+**Body-vs-diff regex pitfalls:**
+- File path extraction MUST happen AFTER stripping fenced code blocks. Otherwise the regex matches inside `\`\`\`yaml` blocks containing example workflow snippets, etc. Use `awk '/^```/{f=!f; next} !f{print}'` to strip fences.
+- The regex `[\w./-]+\.(ts|tsx|js|md|njk|yml|yaml|json|sh|py)` will match URLs (`https://example.com/foo.json`). Strip URL patterns first: `sed -E 's@https?://[^[:space:]]+@@g'`.
+- Threshold of 50% is a starting point; tune after the first 5 PRs that hit the guard. If false positives dominate, raise to 30%. If false negatives dominate (loop slips through), lower to 70%.
+
+**Auto-commit-density regex:**
+```bash
+# Anchored regex matching only the EXACT auto-commit headlines from session-sync.ts:
+AUTO_COMMIT_RE='^(Auto-commit (before sync pull|after session)|Merge branches '\''main'\'' and '\''main'\'' of )'
+```
+Anchor with `^` to avoid matching prose mentions ("the Auto-commit pattern is bad"). The `Merge branches 'main' and 'main' of …` headline is auto-generated by `git pull --no-rebase` when the local branch has divergent commits — it's a smoking-gun for the loop's `syncPull` having committed locally before pulling.
+
 ## Files to Create
 
 - `.github/workflows/pr-quality-guards.yml` — the four-job CI workflow described above.
@@ -108,7 +315,13 @@ All four jobs are **opt-out via the same label** (`confirm:claude-config-change`
 - `.gitignore` — add `.claude/worktrees/` (anchored: `/.claude/worktrees/` to be unambiguous about the location).
 - `.github/workflows/ci.yml` — add `pr-quality-guards` workflow as a separate file (NOT inside ci.yml, to keep concerns separated and let the new workflow ship as a discrete unit). Reference here is informational only — no edit to `ci.yml` needed.
 - `apps/web-platform/test/session-sync-existing-tests.ts` — sweep existing session-sync tests for `git add -A` mocks; rewrite to assert the new allowlist-aware mock interface. (Search `apps/web-platform/test/` for any test that imports `syncPull` or `syncPush` — current grep shows 11 files mock these as `vi.fn()`, which is fine. But any test that validates the *body* of those mocks needs to update to the new signature.)
-- `AGENTS.md` — add ONE rule under Hard Rules capturing: "When adding `git add` calls in connected-repo agent code paths (`apps/web-platform/server/session-sync.ts`, `push-branch.ts`, or anything that pushes to a user's repo), use a path allowlist — never `git add -A`. **Why:** #2905."
+- `AGENTS.md` — add ONE rule under Hard Rules. Final wording (byte-counted at ~497 bytes, within the 600-byte cap):
+
+  ```
+  - In connected-repo agent code paths (`apps/web-platform/server/session-sync.ts` and any future user-repo writer), never `git add -A` / `git add .` — use a path allowlist scoped to `knowledge-base/**` [id: hr-never-git-add-A-in-user-repo-agents]. The auto-commit sweep otherwise lands `.claude/settings.json` wipes, stray `.claude/worktrees/` markers, and unrelated drift into PRs the loop never authored. Bootstrap paths (e.g., `provisionWorkspace`'s seed commit) are exempt. **Why:** #2857/#2859/#2905.
+  ```
+
+  Verify byte length pre-commit: `awk '/hr-never-git-add-A-in-user-repo-agents/ {print length($0); exit}' AGENTS.md` must return ≤600.
 
 ## Acceptance Criteria
 
@@ -193,6 +406,35 @@ All four jobs are **opt-out via the same label** (`confirm:claude-config-change`
 **Expected:**
 - `pr-quality-guards / auto-commit-message-density` job fails (75% match rate, threshold is >50%).
 
+### TS-7: `provisionWorkspace` first-time scaffold is NOT regressed
+
+**Setup:** Mock `provisionWorkspace(userId)` against an empty workspace directory. Scaffold runs, then `git add . && git commit -m "Initial workspace"`.
+
+**Expected:**
+- All scaffolded files (`.claude/settings.json`, plugin symlink, KB skeleton) are committed in the seed commit.
+- The seed commit exists; this site is NOT subject to the path allowlist (verified by reading `apps/web-platform/server/workspace.ts:85` — the `["add", "."]` here lives in the bootstrap path, not the auto-commit-sweep path).
+- The change to `session-sync.ts` does not import or call `getAllowlistedChanges` from `workspace.ts`.
+
+### TS-8: `syncPull` on a workspace WITHOUT a remote returns silently
+
+**Setup:** Mock `hasRemote()` to return `false`. Call `syncPull(userId, workspacePath)`.
+
+**Expected:**
+- Function returns immediately with no `git status`, no `git add`, no `git commit`, no `git pull` invoked.
+- This preserves the existing `if (!hasRemote(workspacePath)) return;` early-return at `session-sync.ts:183-185`. The new allowlist filter must be downstream of this guard.
+
+### TS-9: Settings integrity script flags introduction of unknown keys
+
+**Setup:** Synthetic base file `{"permissions": {"allow": ["Bash(*)"]}, "hooks": {...}, "enabledMcpjsonServers": ["x"]}`. Synthetic head file `{"permissions": {"allow": []}, "sandbox": {"enabled": true}}`.
+
+**Expected:**
+- `check-settings-integrity.sh` emits THREE error lines:
+  - `Deleted top-level settings keys: hooks,enabledMcpjsonServers`
+  - `Introduced unrecognized top-level keys: sandbox`
+  - `Deleted permissions.allow entries: Bash(*)`
+- Exits non-zero.
+- Adding the `confirm:claude-config-change` label and re-running makes the workflow emit a `::warning::` and exit 0 without running the script (the label-check step short-circuits before the script invocation).
+
 ## Hypotheses (Network/Outage Checklist)
 
 This plan does NOT match any of the SSH/network-connectivity trigger patterns (no SSH, no `kex`, no `502/503/504`, no `handshake`, no `firewall`, no `timeout`, no `unreachable`). Section skipped per skill `1.4`.
@@ -228,6 +470,19 @@ This plan does NOT match any of the SSH/network-connectivity trigger patterns (n
 5. **The settings wipe could re-occur from a different code path.** This plan does not investigate *why* the loop's workspace had a fresh default `.claude/settings.json`. Hypothesis: workspace re-clone replaced the committed file. **Mitigation:** Layer 3's `settings-json-integrity` CI guard catches the wipe even if Layer 1's path filter misses (e.g., if `.claude/settings.json` ever gets added to the allowlist for a feature, the CI guard remains).
 
 6. **The bot-PR labeler might mis-match in the per-commit headline check.** The 4-job workflow uses `gh pr view --json commits --jq '.commits[].messageHeadline'` to enumerate. **Mitigation:** test on a real PR (this one) before merge.
+
+## Institutional Learnings Applied
+
+This plan applies six previously-documented learnings that prevent repeating known failure modes:
+
+| Learning | Application |
+|---|---|
+| `2026-03-10-gitignore-blanket-rules-with-negation.md` | Use leading `/` to anchor `/.claude/worktrees/`; preserve existing negation patterns; never blanket-ignore `*.json`. |
+| `2026-02-21-github-actions-workflow-security-patterns.md` | Pin `actions/checkout` SHA; explicit exit-code checks; `grep -cxF` not `-cF`. |
+| `2026-02-27-github-actions-sha-pinning-workflow.md` | Live-verify SHA via `gh api .../git/ref/tags/v4` at implementation time; do not blindly copy from another file. |
+| `2026-02-24-effortlevel-not-valid-settings-field.md` | Settings.json schema is strict; the wipe pattern's `sandbox` key is unrecognized — flagging it is a smoking-gun signal. |
+| `2026-03-24-settings-json-defaultmode-inside-permissions.md` | The valid top-level keys are `permissions`, `env`, `enabledMcpjsonServers`, `hooks`, `model`, `additionalDirectories`. Anything else is a hallucinated rewrite. |
+| `2026-04-24-guard-surface-audit-before-coding.md` | Audited the guard against existing data: `git log .claude/settings.json` on `main` shows no historical wipes — the guard will not falsely fire on existing history. Audited `git ls-files .claude/worktrees/` — empty. |
 
 ## Alternative Approaches Considered
 
