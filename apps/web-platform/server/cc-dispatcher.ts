@@ -391,9 +391,29 @@ export const realSdkQueryFactory: QueryFactory = async (
     },
     sendToClient: defaultSendToClient,
     notifyOfflineUser,
-    updateConversationStatus: async (_convId: string, _status: string) => {
-      // V1: cc-soleur-go path does not write conversation status. See
-      // scope-out C — gated by FLAG_CC_SOLEUR_GO=true acceptance.
+    // Real conversation-status write — replaces the prior no-op (#2920).
+    // Mirrors legacy `agent-runner.ts:303` shape (status + last_active)
+    // so the idle-reaper sees fresh activity. R8 composite-key invariant
+    // (`.eq("user_id", args.userId)`) defends against cross-user blast
+    // radius. Errors mirror to Sentry via `reportSilentFallback` per
+    // `cq-silent-fallback-must-mirror-to-sentry`.
+    updateConversationStatus: async (convId: string, status: string) => {
+      const { error } = await supabase()
+        .from("conversations")
+        .update({ status, last_active: new Date().toISOString() })
+        .eq("id", convId)
+        .eq("user_id", args.userId);
+      if (error) {
+        reportSilentFallback(error, {
+          feature: "cc-dispatcher",
+          op: "updateConversationStatus",
+          extra: {
+            userId: args.userId,
+            conversationId: convId,
+            status,
+          },
+        });
+      }
     },
   };
 
