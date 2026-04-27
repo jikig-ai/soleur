@@ -1,10 +1,12 @@
 // MU1 post-crash cleanup guard + sweep (#2839).
 //
 // The dev Supabase project ref is stable infra state. If it ever changes,
-// also update the DEV_URL literal and prefix-attack fixtures in
-// infra/mu1-runbook-cleanup.test.sh in the same commit. The SYNTH allowlist
-// regex in test/mu1-integration.test.ts is email-shaped (not project-ref
-// shaped) and does NOT need to track this constant.
+// also update `DEV_URL` and the `subdomain bypass` / `prefix-match bypass`
+// `run_case` fixtures in `infra/mu1-runbook-cleanup.test.sh` in the same
+// commit (grep `mu1-runbook-cleanup.test.sh` for the run_case names).
+// The `SYNTH_EMAIL_RE` regex in `test/mu1-integration.test.ts` is
+// email-shaped (not project-ref shaped) and does NOT need to track this
+// constant.
 const DEV_PROJECT_REF = "mlwiodleouzwniehynfz";
 const DEV_HOSTNAME = `${DEV_PROJECT_REF}.supabase.co`;
 
