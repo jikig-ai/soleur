@@ -40,7 +40,7 @@ allowlist: "dependabot[bot],github-actions[bot],renovate[bot],deruelle,app/claud
 
 PRs authored by the Anthropic Claude GitHub App (DB ID `209825114`, login `claude[bot]`) — produced by `claude-code-action` and `soleur:fix-issue` — carry commits whose GraphQL-resolved committer login is `claude[bot]`. Neither `app/claude` nor the bare token `claude` matches that login on the surface the CLA action actually reads (see §Research Reconciliation for the source-code trace), so the CLA check fails on every such PR until the operator amends commit authorship to `deruelle` (which is allowlisted) — exactly the workaround applied to PR #2893.
 
-The fix replaces the dead tokens `app/claude,claude` with the canonical `claude[bot]`. Both `app/claude` (a REST-API-only form the CLA action's GraphQL query never sees) and the bare `claude` (matches no surface) are removed in the same edit to keep the allowlist minimal and audit-clean. **Note:** `app/claude` is still load-bearing in `scheduled-bug-fixer.yml:213` and `bot-pr-with-synthetic-checks` because those workflows match against the REST API's PR-author surface (`gh pr view --json author`, which DOES return `app/claude`). Those usages are correct and unchanged — the `app/claude` removal here is scoped to `cla.yml` only.
+The fix replaces the dead tokens `app/claude,claude` with the canonical `claude[bot]`. Both `app/claude` (a REST-API-only form the CLA action's GraphQL query never sees) and the bare `claude` (matches no surface) are removed in the same edit to keep the allowlist minimal and audit-clean. **Note:** `app/claude` is still load-bearing in `scheduled-bug-fixer.yml:206,213` (real allowlist match against the REST API's PR-author surface, `gh pr view --json author --jq '.author.login'`, which DOES return `app/claude`) and is referenced by a doc-only comment in `scripts/lint-bot-synthetic-completeness.sh:12`. Those are correct and unchanged — the `app/claude` removal here is scoped to `cla.yml` only.
 
 ## Research Reconciliation — Spec vs. Codebase
 
@@ -77,7 +77,7 @@ None. Queried `gh issue list --label code-review --state open` (21 open issues);
 | Hypothesis | Verification | Status |
 |---|---|---|
 | Allowlist token `claude[bot]` will match the committer login the action checks | Direct source read of `src/graphql.ts` + `src/checkAllowList.ts` (master). Live GraphQL on commits 5eac2aae and 0a455f8c returns `author.user.login = "claude[bot]"` and `databaseId = 209825114`. The action does exact string match on `login \|\| name` against allowlist tokens. | **Confirmed** |
-| Removing `app/claude` from `cla.yml` breaks another path | The CLA action's GraphQL surface never returns the `app/<slug>` form (that's REST API only). The three other repo locations that DO match `app/claude` (`scheduled-bug-fixer.yml:213`, `scripts/lint-bot-synthetic-completeness.sh:12`, `bot-pr-with-synthetic-checks/action.yml`) all run against the REST API (`gh pr view --json author`). They are unaffected by edits to `cla.yml`'s allowlist string. | **Safe to remove** |
+| Removing `app/claude` from `cla.yml` breaks another path | The CLA action's GraphQL surface never returns the `app/<slug>` form (that's REST API only). The two other repo locations that mention `app/claude` (`scheduled-bug-fixer.yml:206,213` — real allowlist match against `gh pr view --json author --jq '.author.login'`; `scripts/lint-bot-synthetic-completeness.sh:12` — doc comment, no logic) are unaffected by edits to `cla.yml`'s allowlist string. | **Safe to remove** |
 | The `41898282` auto-filter is reliable enough to leave undocumented | The filter is hardcoded in `src/graphql.ts` — not a config knob. If the action upgrades majors and changes/removes the filter, every existing `actions/checkout`-default committer would start tripping CLA. Out of scope for this PR but recorded as a future risk. | **Note** |
 
 ## Implementation Phases
@@ -97,7 +97,7 @@ Single-line edit to `.github/workflows/cla.yml` line 34.
     Net change: replace `app/claude,claude` with `claude[bot]`. Both removed tokens are unreachable on the action's GraphQL surface (see Research Reconciliation source-trace block); the new token matches `committer.user.login` for the real Claude GitHub App (DB ID `209825114`).
 
 - [x] Verify YAML is still parseable: `python3 -c "import yaml; yaml.safe_load(open('.github/workflows/cla.yml'))"` — must exit 0.
-- [x] Confirm `app/claude` matchers in OTHER workflow files (`scheduled-bug-fixer.yml:213`, `scripts/lint-bot-synthetic-completeness.sh:12`, `bot-pr-with-synthetic-checks/action.yml`) are NOT touched — they operate on the REST API's PR-author surface and are correct as-is. Quick sanity grep after edit: `grep -rn 'app/claude' .github/ scripts/` should still return ≥3 hits in those non-cla.yml files and ZERO hits in `cla.yml`.
+- [x] Confirm `app/claude` matchers in OTHER files (`scheduled-bug-fixer.yml:206,213`, `scripts/lint-bot-synthetic-completeness.sh:12`) are NOT touched — `scheduled-bug-fixer.yml` operates on the REST API's PR-author surface and is correct as-is; the lint-script line is a doc comment. Quick sanity grep after edit: `grep -rn 'app/claude' .github/ scripts/` should still return ≥2 hits in those non-cla.yml files and ZERO hits in `cla.yml`.
 
 ### Phase 2: Verify on a real bot-authored PR (post-merge)
 
@@ -118,7 +118,7 @@ The cheap pre-merge proxy is YAML-parse + diff inspection (Phase 1). The load-be
 ### Pre-merge (PR)
 
 - [ ] `.github/workflows/cla.yml` line 34 contains `claude[bot]` and no longer contains `app/claude` or the bare token `claude`.
-- [ ] `grep -n 'app/claude' .github/workflows/cla.yml` returns zero hits; `grep -rn 'app/claude' .github/ scripts/` returns ≥3 hits in other files (`scheduled-bug-fixer.yml`, `bot-pr-with-synthetic-checks/action.yml`, `lint-bot-synthetic-completeness.sh`) — those are correct usages on the REST API surface and must remain.
+- [ ] `grep -n 'app/claude' .github/workflows/cla.yml` returns zero hits; `grep -rn 'app/claude' .github/ scripts/` returns ≥2 hits in other files (`scheduled-bug-fixer.yml:206,213` — real REST-surface allowlist; `lint-bot-synthetic-completeness.sh:12` — doc comment) and those must remain.
 - [ ] YAML parses cleanly (`python3 -c "import yaml; yaml.safe_load(open('.github/workflows/cla.yml'))"` exits 0).
 - [ ] PR body contains `Closes #2907`.
 - [ ] No other files modified (only `.github/workflows/cla.yml` shows in `git status --short`).
@@ -150,7 +150,7 @@ This is consistent with the project convention for `.github/workflows/*.yml` sin
 - Switching to a wildcard pattern (`*[bot]`) — too permissive; weakens the audit trail.
 - Adding `claude` (bare display-name) — not a GitHub login; matches no surface.
 - Restructuring how the contributor-assistant action is invoked (action version, params other than allowlist) — not in scope.
-- Updating the `app/claude` matchers in `scheduled-bug-fixer.yml` / `bot-pr-with-synthetic-checks/action.yml` — those operate on the GitHub PR-author REST surface (`gh pr view --json author`) which still returns `app/claude`. They are correct as-is.
+- Updating the `app/claude` matchers in `scheduled-bug-fixer.yml` — that workflow operates on the GitHub PR-author REST surface (`gh pr view --json author`) which still returns `app/claude`. It is correct as-is.
 
 ## Domain Review
 
@@ -181,9 +181,10 @@ allowlist. GraphQL never returns the `app/<slug>` form (REST-API-only) and no
 real GitHub user has the bare login `claude` — both tokens are unreachable on
 the action's surface.
 
-The `app/claude` matchers in `scheduled-bug-fixer.yml`, `bot-pr-with-synthetic-
-checks`, and `lint-bot-synthetic-completeness.sh` are unaffected — they operate
-on the REST API's PR-author surface where `app/claude` IS the correct match.
+The `app/claude` references in `scheduled-bug-fixer.yml` (real allowlist) and
+`lint-bot-synthetic-completeness.sh` (doc comment) are unaffected — the
+former operates on the REST API's PR-author surface where `app/claude` IS the
+correct match.
 
 Pre-merge validation: YAML parse + grep audit. Post-merge validation: next
 real `claude[bot]`-authored PR (scheduled bug-fixer, daily) clears `cla-check`
