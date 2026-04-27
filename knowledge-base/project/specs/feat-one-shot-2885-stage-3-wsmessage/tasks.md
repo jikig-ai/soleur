@@ -15,7 +15,7 @@ plan: knowledge-base/project/plans/2026-04-27-feat-stage-3-wsmessage-protocol-ex
 
 ## Phase 1 — RED (failing tests first)
 
-- [ ] 1.1 — Add `zod` to `apps/web-platform/package.json`. Regenerate `package-lock.json` (`npm install` from `apps/web-platform/`).
+- [ ] 1.1 — Add `"zod": "4.3.6"` (exact pin, no `^`) to `apps/web-platform/package.json` `dependencies`. Run `cd apps/web-platform && npm install` to regenerate `package-lock.json`. Verified at deepen time: zod 4.3.6 already in `node_modules` transitively, so install is a promotion-only no-op at the lock level.
 - [ ] 1.2 — Write `apps/web-platform/test/branded-ids.test.ts`. Run via `./node_modules/.bin/vitest run test/branded-ids.test.ts` from `apps/web-platform/`. Confirm RED.
 - [ ] 1.3 — Write `apps/web-platform/test/ws-zod-schemas.test.ts`. Confirm RED (imports unresolved).
 - [ ] 1.4 — Extend `apps/web-platform/test/ws-protocol.test.ts` with new variant round-trips + Zod rejection cases. Confirm RED.
@@ -48,18 +48,18 @@ plan: knowledge-base/project/plans/2026-04-27-feat-stage-3-wsmessage-protocol-ex
 
 ## Phase 5 — Delete shim + rewrite importers
 
-- [ ] 5.1 — Rewrite test importers (leaf nodes first):
-  - `test/cc-dispatcher.test.ts` — `import type { WSMessage } from "@/lib/types"` + alias `type InteractivePromptResponse = Extract<WSMessage, { type: "interactive_prompt_response" }>`. Sweep all camelCase wire fields → snake_case.
-  - `test/cc-interactive-prompt-response.test.ts` — same.
-  - `test/soleur-go-runner-interactive-prompt.test.ts` — same with `InteractivePromptEvent` aliased to `Extract<WSMessage, { type: "interactive_prompt" }>`.
-- [ ] 5.2 — Rewrite production importers:
-  - `server/cc-dispatcher.ts`, `server/ws-handler.ts`, `server/cc-interactive-prompt-response.ts`, `server/soleur-go-runner.ts` — same alias pattern; sweep camelCase → snake_case wire fields.
+- [ ] 5.1 — Rewrite test importers (leaf nodes first). Wire fields stay **camelCase** per deepen-pass field-naming correction — only the import source path changes:
+  - `test/cc-dispatcher.test.ts` — `import type { WSMessage } from "@/lib/types"` + alias `type InteractivePromptResponse = Extract<WSMessage, { type: "interactive_prompt_response" }>`. The 12 existing `promptId`/`conversationId` references stay as-is.
+  - `test/cc-interactive-prompt-response.test.ts` — same. The 44 references stay as-is.
+  - `test/soleur-go-runner-interactive-prompt.test.ts` — same with `InteractivePromptEvent` aliased to `Extract<WSMessage, { type: "interactive_prompt" }>`. The 7 references stay as-is.
+- [ ] 5.2 — Rewrite production importers (import source path + alias only; camelCase fields preserved):
+  - `server/cc-dispatcher.ts`, `server/ws-handler.ts`, `server/cc-interactive-prompt-response.ts`, `server/soleur-go-runner.ts` — same alias pattern.
 - [ ] 5.3 — `git rm apps/web-platform/server/cc-interactive-prompt-types.ts`.
 - [ ] 5.4 — `tsc --noEmit` passes.
 - [ ] 5.5 — Full `vitest run` passes from `apps/web-platform/`.
 - [ ] 5.6 — `rg "cc-interactive-prompt-types" apps/web-platform/` returns zero hits.
 - [ ] 5.7 — `rg "InteractivePromptEvent\|InteractivePromptResponse" apps/web-platform/server/` shows no straggler imports from the deleted file.
-- [ ] 5.8 — `rg "\.promptId|\.conversationId" apps/web-platform/` reviewed manually to ensure unrelated `Conversation.id` / `session_started.conversationId` references are NOT renamed.
+- [ ] 5.8 — Skipped per deepen-pass field-naming correction (no field renames; existing camelCase preserved end-to-end).
 
 ## Phase 6 — REFACTOR / Sweep
 

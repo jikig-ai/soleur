@@ -7,9 +7,32 @@ parent_plan: knowledge-base/project/plans/2026-04-23-feat-cc-route-via-soleur-go
 branch: feat-one-shot-2885-stage-3-wsmessage
 type: feature
 classification: refactor + protocol-extension
+deepened: 2026-04-27
 ---
 
 # Stage 3 — WSMessage protocol extension (branded IDs + Zod parsing)
+
+## Deepen-Plan Enhancement Summary
+
+**Deepened on:** 2026-04-27 (same session as initial draft)
+**Sections enhanced:** Research Reconciliation, Hypotheses, Phase 1, Phase 3, Phase 5, Test Strategy, Risks
+**Verification methods used:** direct codebase grep, `node_modules` inspection, WebSearch (Zod 4 API)
+
+### Critical findings folded back into the plan
+
+1. **`zod` is already at v4.3.6 in `apps/web-platform/node_modules/`**, pulled transitively via a peer dep. NOT in `apps/web-platform/package.json` direct deps. Plan corrected: promote to direct dep (still a `package.json` change to make the dependency explicit and protect against transitive removal on lockfile regen). Plan now targets **Zod 4 API**, not Zod 3. Zod 4 changes that matter:
+   - `.brand<"PromptId">()` works, with optional `<"PromptId", "in" | "out" | "inout">` modes (Zod 4.2+).
+   - `z.discriminatedUnion("type", [...])` discriminator parameter is **no longer generic** in Zod 4 — TypeScript cannot pull the discriminator value to determine variant options the way Zod 3 did. Implication: bidirectional exhaustiveness check (`_SchemaCovers`) becomes load-bearing for catching schema/union drift; we cannot rely on TS inference alone the way the Zod 3 version of this plan would.
+   - Source: <https://github.com/colinhacks/zod/issues/5024>, Zod 4 docs at <https://zod.dev/api>.
+2. **Wire-field convention is camelCase, not snake_case.** The original draft prescribed renaming `promptId` → `prompt_id` etc. to match a snake_case pattern. Direct grep of `lib/types.ts` shows the existing `WSMessage` convention is **camelCase for fields, snake_case for the `type` discriminator**: `resume_session.conversationId`, `session_started.conversationId`, `session_resumed.resumedFromTimestamp`, `usage_update.totalCostUsd`. Corrected: new variants keep camelCase (`promptId`, `conversationId`, `parentId`, `spawnId`, `leaderId`). **This is a major delta from the source plan** (`2026-04-23-...-plan.md` Stage 3 used `parent_id` / `spawn_id` / `prompt_id` / `conversation_id` snake_case). The source plan is wrong; this plan corrects.
+3. **`activeLeaderIds` is already a `useMemo`** (verified `ws-client.ts:181`) — only fix needed is dropping the `as DomainLeaderId[]` cast on line 182. Source plan task 3.9 ("REFACTOR: derive `activeLeaderIds` via `useMemo`") is already done; only the cast removal remains. Plan narrowed accordingly.
+4. **Test rename surface is large but localized.** `test/cc-interactive-prompt-response.test.ts` has 44 references to `promptId`/`conversationId`; `test/cc-dispatcher.test.ts` has 12; `test/soleur-go-runner-interactive-prompt.test.ts` has 7. Since wire fields stay camelCase (per #2), these references DO NOT need to be renamed — the snake_case rename burden disappears. Phase 5 simplified.
+5. **Reconciliation table line-count drift.** The original draft cited specific line ranges (`lib/types.ts:84-115`, `ws-client.ts:329-440`, `chat-state-machine.ts:42-216`) which are stale vs. worktree HEAD. Per `cq-code-comments-symbol-anchors-not-line-numbers`, all references converted to symbol anchors.
+
+### New considerations discovered
+
+- **Zod 4 `discriminatedUnion` cannot infer per-variant types from a tuple of schemas the way Zod 3 did.** Mitigation: write the schema as `z.discriminatedUnion("type", [interactivePromptAskUserSchema, interactivePromptPlanPreviewSchema, ...])` with each branch as a named `z.object({...})` exported individually. This survives the Zod 4 inference change and stays grep-able.
+- **Test mocks of `Map<string, number>`.** Sweep for `new Map<string,` and `Map<string, number>` in `test/chat-state-machine.test.ts` and `test/ws-client.test.ts` before the Phase 4.2 type tightening — single-edit pass per `cq-raf-batching-sweep-test-helpers`.
 
 ## Overview
 
@@ -37,7 +60,7 @@ This is a typed-protocol refactor: the wire format already exists (Stage 2 ships
 
 | Source-plan / spec claim | Codebase reality (worktree HEAD) | Plan response |
 |---|---|---|
-| Stage 3.4: "implement `branded-ids.ts` + `ws-zod-schemas.ts` (new files)". | Neither file exists. `zod` is **not** in `apps/web-platform/package.json` dependencies (verified). | New dep: add `zod` (latest 3.x stable). Both new files created under `apps/web-platform/lib/`. |
+| Stage 3.4: "implement `branded-ids.ts` + `ws-zod-schemas.ts` (new files)". | Neither file exists. `zod` is **transitively installed at v4.3.6** in `apps/web-platform/node_modules/` (peer dep of another package), but **NOT in `apps/web-platform/package.json` direct deps**. No source file imports zod yet. | Promote `zod` to a direct dep in `apps/web-platform/package.json` (pinned to `4.3.6` exact, no `^`). Both new files created under `apps/web-platform/lib/` using the **Zod 4 API** (`.brand()` modes, schema-side `_SchemaCovers` exhaustiveness because v4 discriminator is non-generic — see "Zod 4 caveats" in Risks). |
 | Stage 3.5: "extend `WSMessage` and `ChatMessage` unions with discriminated sub-unions" — references `lib/types.ts:84-115`. | `WSMessage` lives at `lib/types.ts:85-147`; the Stage 2 shim variants (`interactive_prompt` / `interactive_prompt_response` with `payload: unknown` / `response: unknown`) are already inlined at L133-146. | Replace the two `unknown`-shape lines with the discriminated sub-union. Add four new variants. Per `cq-code-comments-symbol-anchors-not-line-numbers`, every plan reference uses symbol anchors (`WSMessage`, `applyStreamEvent`, `chatReducer`), not line numbers. |
 | Stage 3.6: "add reducer cases + activeStreams re-key (folds in #2225)". | `chat-state-machine.ts:ChatMessage` is a 2-variant union (`text` \| `review_gate`); `activeStreams: Map<string, number>` keyed by `DomainLeaderId` (string). The hook in `ws-client.ts` currently derives `activeLeaderIds` via `useMemo(() => Array.from(chatState.activeStreams.keys()) as DomainLeaderId[], ...)` — already a `useMemo` BUT with an unsafe cast. | (a) Tighten key type to `DomainLeaderId` (the simple win #2225 calls for). (b) Stage 3 does NOT yet need a composite `${parent_id}:${leader_id}` key — that becomes load-bearing only when Stage 4 renders nested children. Defer the composite re-key until Stage 4 actually needs it (carry the simpler `DomainLeaderId` keying through Stage 3). (c) Drop the `as DomainLeaderId[]` cast. **This narrows the source plan's "Stage 3.6 + #2225" — composite keying moves to Stage 4.** |
 | Stage 3.7: "replace WS `onmessage` cast with Zod parse" — references `ws-client.ts:329-440`. | `onmessage` lives at `ws-client.ts:317-467`; existing runtime guard is `isKnownWSMessageType` (allowlist over `type` only — payload not validated). Sentry breadcrumb already wired via `reportSilentFallback`. | Replace the per-`type` allowlist with a full `wsMessageSchema.safeParse(parsed)`. On failure: same `reportSilentFallback` Sentry breadcrumb (compatible signal). Keep the `isKnownWSMessageType` allowlist as a redundant fast-path check to preserve the existing observability shape during rollout. |
@@ -54,9 +77,11 @@ This is a typed-protocol refactor: the wire format already exists (Stage 2 ships
 
 ## Hypotheses
 
-The plan rests on one load-bearing assumption verified at plan time:
+The plan rests on three load-bearing assumptions verified at plan/deepen time:
 
-1. **`zod` v3 stable parses discriminated unions with branded-string fields without runtime overhead beyond the parse call itself.** Verified via Zod docs — `z.discriminatedUnion("type", [...])` is the documented happy path; `.brand<"PromptId">()` produces the same `string & { __brand: ... }` shape used in this plan. **Verification at implementation time:** Stage 3 RED test (3.2) round-trips a malformed frame through the parser and asserts rejection.
+1. **`zod` v4.3.6 (already in `node_modules` transitively) parses discriminated unions with branded-string fields.** Verified via Zod 4 docs (<https://zod.dev/api>) — `z.discriminatedUnion("type", [z.object({...}), ...])` is supported; `z.string().brand<"PromptId">()` produces the branded `string & {[Symbol]: "PromptId"}` shape this plan needs. **Caveat:** Zod 4 discriminator parameter is non-generic (<https://github.com/colinhacks/zod/issues/5024>), so per-variant inference at the schema-tuple level is weaker than Zod 3 — the bidirectional `_SchemaCovers` compile-time assertion is load-bearing here, not optional. **Verification at implementation time:** Stage 3 RED test (Phase 1.3) round-trips a malformed frame through the parser and asserts rejection; Phase 3.6 schema implementation passes the assertion.
+2. **The existing wire-protocol convention is camelCase for field names, snake_case for `type` discriminator.** Verified by direct grep of `lib/types.ts` against worktree HEAD: `resume_session.conversationId`, `session_started.conversationId`, `session_resumed.resumedFromTimestamp`, `usage_update.totalCostUsd`. New variants conform: `promptId`, `conversationId`, `parentId`, `spawnId`, `leaderId`. **The source plan (Stage 3 of `2026-04-23-...-plan.md`) prescribed snake_case; this plan deliberately overrides** to maintain protocol consistency. The Stage 2 shim already uses camelCase, so this also minimizes the rename surface in Phase 5.
+3. **No `interactive_prompt`-related `.kind === "..."` if-ladders exist in client/server consumer code.** Verified at plan time via the three Stage 3.8 greps (output recorded in §Test Strategy). The only `.kind === ` matches are on `KBSearchResult.kind` (kb-reader.ts) and `ConversationRouting.kind` (soleur-go-runner.ts) — both unrelated unions. **Verification at implementation time:** re-run the greps in Phase 6.1.
 
 ## Implementation Phases
 
@@ -64,9 +89,9 @@ The plan rests on one load-bearing assumption verified at plan time:
 
 **Goal:** Confirm dependency landscape.
 
-- [ ] 0.1 — Run `cd apps/web-platform && npm view zod@latest version` to capture the current stable. Pin the exact version in `package.json` (no `^` for a brand-new dep on a security-sensitive boundary).
+- [x] 0.1 — Verified at deepen time: `zod` v4.3.6 already in `apps/web-platform/node_modules/` (transitive). Pin exact `4.3.6` in `apps/web-platform/package.json` direct deps (no `^`). Use Zod 4 API throughout.
 - [ ] 0.2 — Run `command -v rg` to confirm ripgrep is available (used in Stage 3.8 grep documentation).
-- [ ] 0.3 — Run the Stage 3.8 greps **at plan time, not at work time** (already done — see Research Reconciliation). Implementer copies the recorded result.
+- [x] 0.3 — Stage 3.8 greps run at plan time (see Research Reconciliation table + Test Strategy). Implementer copies the recorded result; re-runs in Phase 6.1.
 
 ### Phase 1 — RED (write failing tests first per `cq-write-failing-tests-before`)
 
@@ -89,7 +114,7 @@ The plan rests on one load-bearing assumption verified at plan time:
 
 **Tasks:**
 
-- [ ] 1.1 — Add `zod` to `apps/web-platform/package.json` (exact pin from Phase 0.1). Regenerate `package-lock.json` (Dockerfile uses `npm ci` — see `cq-before-pushing-package-json-changes`).
+- [ ] 1.1 — Add `"zod": "4.3.6"` to `apps/web-platform/package.json` `dependencies` (exact pin, no `^`). Run `cd apps/web-platform && npm install` to regenerate `package-lock.json` (Dockerfile uses `npm ci` — see `cq-before-pushing-package-json-changes`). The transitive entry already pins 4.3.6 so the install is a no-op at the lock level except for promotion from peer to direct.
 - [ ] 1.2 — Write `branded-ids.test.ts` first (smallest unit). Run via `cd apps/web-platform && ./node_modules/.bin/vitest run test/branded-ids.test.ts` — RED.
 - [ ] 1.3 — Write `ws-zod-schemas.test.ts` (still no implementation). Imports from `@/lib/ws-zod-schemas` will fail to resolve — that's the RED state.
 - [ ] 1.4 — Extend `ws-protocol.test.ts` with new variant round-trips (RED — variants don't exist on `WSMessage` yet).
@@ -136,26 +161,26 @@ The plan rests on one load-bearing assumption verified at plan time:
 
 - `apps/web-platform/lib/types.ts` — replace `WSMessage` `interactive_prompt` / `interactive_prompt_response` with the discriminated sub-union; add four new variants.
 
-  Per source plan Stage 3 (verbatim with branded ID upgrades):
+  Per source plan Stage 3 (with **field-name correction to camelCase** — see deepen-pass note below):
   ```typescript
   // illustrative — final shape lives in lib/types.ts
-  | { type: "subagent_spawn"; parent_id: SpawnId; leader_id: DomainLeaderId; spawn_id: SpawnId }
-  | { type: "subagent_complete"; spawn_id: SpawnId; status: "success" | "error" | "timeout" }
-  | { type: "workflow_started"; workflow: WorkflowName; conversation_id: ConversationId }
+  | { type: "subagent_spawn"; parentId: SpawnId; leaderId: DomainLeaderId; spawnId: SpawnId }
+  | { type: "subagent_complete"; spawnId: SpawnId; status: "success" | "error" | "timeout" }
+  | { type: "workflow_started"; workflow: WorkflowName; conversationId: ConversationId }
   | { type: "workflow_ended"; workflow: WorkflowName; status: WorkflowEndStatus; summary?: string }
-  | { type: "interactive_prompt"; prompt_id: PromptId; conversation_id: ConversationId; kind: "ask_user"; payload: { question: string; options: string[]; multiSelect: boolean } }
-  | { type: "interactive_prompt"; prompt_id: PromptId; conversation_id: ConversationId; kind: "plan_preview"; payload: { markdown: string } }
-  | { type: "interactive_prompt"; prompt_id: PromptId; conversation_id: ConversationId; kind: "diff"; payload: { path: string; additions: number; deletions: number } }
-  | { type: "interactive_prompt"; prompt_id: PromptId; conversation_id: ConversationId; kind: "bash_approval"; payload: { command: string; cwd: string; gated: boolean } }
-  | { type: "interactive_prompt"; prompt_id: PromptId; conversation_id: ConversationId; kind: "todo_write"; payload: { items: TodoItem[] } }
-  | { type: "interactive_prompt"; prompt_id: PromptId; conversation_id: ConversationId; kind: "notebook_edit"; payload: { notebookPath: string; cellIds: string[] } }
-  | { type: "interactive_prompt_response"; prompt_id: PromptId; conversation_id: ConversationId; kind: "ask_user"; response: string | string[] }
-  | { type: "interactive_prompt_response"; prompt_id: PromptId; conversation_id: ConversationId; kind: "plan_preview"; response: "accept" | "iterate" }
-  | { type: "interactive_prompt_response"; prompt_id: PromptId; conversation_id: ConversationId; kind: "bash_approval"; response: "approve" | "deny" }
-  | { type: "interactive_prompt_response"; prompt_id: PromptId; conversation_id: ConversationId; kind: "diff" | "todo_write" | "notebook_edit"; response: "ack" }
+  | { type: "interactive_prompt"; promptId: PromptId; conversationId: ConversationId; kind: "ask_user"; payload: { question: string; options: string[]; multiSelect: boolean } }
+  | { type: "interactive_prompt"; promptId: PromptId; conversationId: ConversationId; kind: "plan_preview"; payload: { markdown: string } }
+  | { type: "interactive_prompt"; promptId: PromptId; conversationId: ConversationId; kind: "diff"; payload: { path: string; additions: number; deletions: number } }
+  | { type: "interactive_prompt"; promptId: PromptId; conversationId: ConversationId; kind: "bash_approval"; payload: { command: string; cwd: string; gated: boolean } }
+  | { type: "interactive_prompt"; promptId: PromptId; conversationId: ConversationId; kind: "todo_write"; payload: { items: TodoItem[] } }
+  | { type: "interactive_prompt"; promptId: PromptId; conversationId: ConversationId; kind: "notebook_edit"; payload: { notebookPath: string; cellIds: string[] } }
+  | { type: "interactive_prompt_response"; promptId: PromptId; conversationId: ConversationId; kind: "ask_user"; response: string | string[] }
+  | { type: "interactive_prompt_response"; promptId: PromptId; conversationId: ConversationId; kind: "plan_preview"; response: "accept" | "iterate" }
+  | { type: "interactive_prompt_response"; promptId: PromptId; conversationId: ConversationId; kind: "bash_approval"; response: "approve" | "deny" }
+  | { type: "interactive_prompt_response"; promptId: PromptId; conversationId: ConversationId; kind: "diff" | "todo_write" | "notebook_edit"; response: "ack" }
   ```
 
-  **Field-naming note:** the source plan uses `parent_id`/`spawn_id`/`prompt_id`/`conversation_id` (snake_case, matching the wire protocol convention from #2858). The shim used `promptId`/`conversationId` (camelCase). The new variants on `WSMessage` adopt **snake_case for wire fields** — matches existing `WSMessage` convention (`stream_start`, `tool_use`, `session_started`); the TS-internal type stays mixed but the wire contract is consistent. Importers updated accordingly.
+  **Field-naming correction (deepen-pass):** the source plan in `2026-04-23-feat-cc-route-via-soleur-go-plan.md` Stage 3 uses snake_case (`parent_id`, `spawn_id`, `prompt_id`, `conversation_id`). Direct grep of `lib/types.ts` against worktree HEAD shows the existing `WSMessage` convention is **camelCase for fields, snake_case only for the `type` discriminator** (e.g., `resume_session.conversationId`, `session_started.conversationId`, `session_resumed.resumedFromTimestamp`, `usage_update.totalCostUsd`). The Stage 2 shim already uses camelCase. **This plan corrects the source plan** — all new variants use camelCase to stay consistent with the existing 14 `WSMessage` variants. Phase 5 importer rewrite carries fewer diffs as a result (no field rename in the 7 importers).
 
 - `apps/web-platform/lib/types.ts` — also add:
   - `export type WorkflowEndStatus = "completed" | "user_aborted" | "cost_ceiling" | "idle_timeout" | "plugin_load_failure" | "sandbox_denial" | "runner_crash" | "runner_runaway" | "internal_error";` (no bare `"error"`).
@@ -235,7 +260,7 @@ The plan rests on one load-bearing assumption verified at plan time:
 | `test/cc-interactive-prompt-response.test.ts` | same | same |
 | `test/soleur-go-runner-interactive-prompt.test.ts` | `import type { InteractivePromptEvent } from "@/server/cc-interactive-prompt-types"` | `import type { WSMessage } from "@/lib/types"` + same alias |
 
-**Field rename: camelCase → snake_case at the wire boundary.** The shim used `promptId` / `conversationId`; the new `WSMessage` variants use `prompt_id` / `conversation_id` to match the existing `WSMessage` convention (`stream_start`, `tool_use`, `session_started`). Every importer site that constructs or destructures these fields must be updated. Per `cq-union-widening-grep-three-patterns`, run the three greps **before** editing to enumerate every consumer (already done at plan time — 7 files, all listed above). The shim's `InteractivePromptResponse` payload tests at `test/cc-interactive-prompt-response.test.ts` are the highest-risk site — they construct dozens of inline payloads; sweep all of them in one edit.
+**No field renames** (deepen-pass correction): the new `WSMessage` variants keep camelCase (`promptId`, `conversationId`, etc.) to match the existing `WSMessage` convention. The 44 references in `test/cc-interactive-prompt-response.test.ts`, 12 in `test/cc-dispatcher.test.ts`, and 7 in `test/soleur-go-runner-interactive-prompt.test.ts` (counts verified at deepen time via direct grep) DO NOT need to be renamed. Importer changes are limited to: (a) replacing the `import` source path (`./cc-interactive-prompt-types` → `@/lib/types` + `Extract<...>` aliases), (b) ensuring the existing camelCase usage flows through the new types unchanged. Per `cq-union-widening-grep-three-patterns`, the three greps were run at plan time (recorded in §Test Strategy); no consumer-side widening is required.
 
 **Tasks:**
 
@@ -284,9 +309,9 @@ The plan rests on one load-bearing assumption verified at plan time:
 - `apps/web-platform/server/ws-handler.ts` — same rewrite.
 - `apps/web-platform/server/cc-interactive-prompt-response.ts` — same rewrite + Stage 2.14 → Stage 3 marker.
 - `apps/web-platform/server/soleur-go-runner.ts` — same rewrite.
-- `apps/web-platform/test/cc-dispatcher.test.ts` — rewrite imports + camelCase → snake_case payload fields (sweep).
-- `apps/web-platform/test/cc-interactive-prompt-response.test.ts` — same.
-- `apps/web-platform/test/soleur-go-runner-interactive-prompt.test.ts` — same.
+- `apps/web-platform/test/cc-dispatcher.test.ts` — rewrite imports only; existing camelCase usage is preserved (deepen-pass field-naming correction).
+- `apps/web-platform/test/cc-interactive-prompt-response.test.ts` — same; the 44 `promptId`/`conversationId` references stay as-is.
+- `apps/web-platform/test/soleur-go-runner-interactive-prompt.test.ts` — same; the 7 references stay as-is.
 - `apps/web-platform/test/ws-protocol.test.ts` — extend with new variant round-trips + Zod rejection cases.
 - `apps/web-platform/test/chat-state-machine.test.ts` — extend with inert pass-through cases + `_exhaustive: never` assertion test.
 
@@ -312,8 +337,8 @@ The plan rests on one load-bearing assumption verified at plan time:
 - [ ] `applyStreamEvent` switch in `chat-state-machine.ts` has a `default: const _exhaustive: never = event` rail. Adding a new `WSMessage` variant without a reducer case fails `tsc --noEmit`.
 - [ ] `activeStreams` is typed `Map<DomainLeaderId, number>` end-to-end. No `as DomainLeaderId[]` cast remains in `ws-client.ts`.
 - [ ] `apps/web-platform/server/cc-interactive-prompt-types.ts` is deleted. `rg "cc-interactive-prompt-types" apps/web-platform/` returns zero hits.
-- [ ] All 7 importers updated: `server/cc-dispatcher.ts`, `server/ws-handler.ts`, `server/cc-interactive-prompt-response.ts`, `server/soleur-go-runner.ts`, `test/cc-dispatcher.test.ts`, `test/cc-interactive-prompt-response.test.ts`, `test/soleur-go-runner-interactive-prompt.test.ts`.
-- [ ] Wire-protocol fields renamed to snake_case: `prompt_id`, `conversation_id`, `parent_id`, `spawn_id`, `leader_id`. No camelCase wire field for the Stage 3 variants in any of the 7 importers.
+- [ ] All 7 importers updated to import from `@/lib/types` (with `Extract<WSMessage, ...>` aliases): `server/cc-dispatcher.ts`, `server/ws-handler.ts`, `server/cc-interactive-prompt-response.ts`, `server/soleur-go-runner.ts`, `test/cc-dispatcher.test.ts`, `test/cc-interactive-prompt-response.test.ts`, `test/soleur-go-runner-interactive-prompt.test.ts`.
+- [ ] Wire-protocol fields stay **camelCase** (matching existing `WSMessage` convention): `promptId`, `conversationId`, `parentId`, `spawnId`, `leaderId`. No snake_case field rename per deepen-pass field-naming correction.
 - [ ] `tsc --noEmit` passes from `apps/web-platform/`.
 - [ ] `vitest run` from `apps/web-platform/` shows green for all Stage 3 tests; pre-existing failures (if any) tracked per `wg-when-tests-fail-and-are-confirmed-pre`.
 - [ ] `next lint` passes.
@@ -364,9 +389,9 @@ $ rg 'case "[a-z_]+":' apps/web-platform/{lib,server}/  # filtered to relevant f
 
 ## Risks
 
-- **`zod` dep regression risk.** New runtime dep on a security-sensitive boundary (WS deserialization). Mitigation: pin exact version (no `^`); minimal-reproducer test in `test/ws-zod-schemas.test.ts` covers the two patterns we use (discriminated union + branded types).
-- **Wire-format snake_case rename in 7 files.** A missed call site at a `.promptId`/`.conversationId` reference would compile against `unknown` (Stage 2 shape) or `Extract<WSMessage, ...>` typing. Mitigation: full `tsc --noEmit` after Phase 5 + grep `rg "\.promptId|\.conversationId" apps/web-platform/` to catch any straggler accessor on what should now be snake_case fields. **Important:** unrelated `conversationId` references (e.g., for the `Conversation` DB type, `session_started.conversationId` field) must NOT be renamed — only the `interactive_prompt` / `interactive_prompt_response` payload fields.
-- **`activeStreams` typing may break peer consumers.** `chat-state-machine.test.ts` and `ws-client.test.ts` mock `Map<string, number>` directly. Mitigation: sweep all test mocks in Phase 4.2 in the same edit per `cq-raf-batching-sweep-test-helpers` (the analogous "sweep helpers" pattern for type tightenings).
+- **`zod` is a runtime dep on a security-sensitive boundary (WS deserialization).** Already at v4.3.6 in `node_modules` transitively; promotion to direct dep makes it explicit. Mitigation: pin exact version (no `^`); minimal-reproducer test in `test/ws-zod-schemas.test.ts` covers the patterns we use (discriminated union + branded types + per-`kind` payload validation).
+- **Zod 4 caveats.** Two Zod 4 differences from Zod 3 affect this design: (a) `.brand()` works (with optional `<"PromptId", "in" | "out" | "inout">` modes) — the default is "out" branding, sufficient for our use case; (b) `z.discriminatedUnion("type", [...])` discriminator parameter is **non-generic** in Zod 4 (<https://github.com/colinhacks/zod/issues/5024>), so per-variant inference at the schema-tuple level is weaker than Zod 3 — TS may type the parsed result as a wider union than expected. Mitigation: write each branch as a named exported `z.object({...})` constant (so the schema is grep-able); enforce TS-side parity via the bidirectional `_SchemaCovers` compile-time assertion (modeled after `lib/ws-known-types.ts:_Exhaustive`). The schema/union drift gate is the assertion, not Zod inference.
+- **`activeStreams` typing may break peer consumers.** `chat-state-machine.test.ts` and `ws-client.test.ts` mock `Map<string, number>` directly. Mitigation: at Phase 4.2 entry, run `rg "Map<string,\s*number>|new Map<string," apps/web-platform/` to enumerate every mock and sweep all in the same edit per `cq-raf-batching-sweep-test-helpers` (the analogous "sweep helpers" pattern for type tightenings).
 - **Bidirectional schema/union drift.** A new variant on the TS union without a Zod branch (or vice versa) is the silent-skew failure mode. Mitigation: `_SchemaCovers` compile-time assertion in `ws-zod-schemas.ts` matches the existing `_Exhaustive` proof in `ws-known-types.ts`.
 - **Inert Stage 3 reducer cases create dead code briefly.** Until Stage 4 wires actual rendering, `case "subagent_spawn"` etc. return the unchanged state. This is intentional (lands the type rail without UI surface) but a reviewer could flag as YAGNI. Mitigation: comment block at each inert case explicitly references the Stage 4 follow-up + the corresponding tracking issue.
 - **`reportSilentFallback` on Zod failure** could spam Sentry on a server/client version skew during phased rollout. Mitigation: rate-limit at the Sentry side (existing infra) + the existing `isKnownWSMessageType` fast-path stays in place to filter known-unknown types before Zod parse fires.
