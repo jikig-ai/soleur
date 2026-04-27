@@ -20,12 +20,14 @@ const {
   mockDecryptKeyLegacy,
   mockDecryptKey,
   mockEncryptKey,
+  mockReportSilentFallback,
 } = vi.hoisted(() => ({
   mockSupabaseFrom: vi.fn(),
   mockSupabaseRpc: vi.fn(),
   mockDecryptKeyLegacy: vi.fn(),
   mockDecryptKey: vi.fn(),
   mockEncryptKey: vi.fn(),
+  mockReportSilentFallback: vi.fn(),
 }));
 
 vi.mock("@/lib/supabase/service", () => ({
@@ -39,6 +41,11 @@ vi.mock("@/server/byok", () => ({
   decryptKey: mockDecryptKey,
   decryptKeyLegacy: mockDecryptKeyLegacy,
   encryptKey: mockEncryptKey,
+}));
+
+vi.mock("@/server/observability", () => ({
+  reportSilentFallback: mockReportSilentFallback,
+  warnSilentFallback: vi.fn(),
 }));
 
 vi.mock("@/server/logger", () => ({
@@ -160,6 +167,44 @@ describe("getUserApiKey — v1 → v2 RPC migration (#2919)", () => {
 
     expect(plaintext).toBe("plaintext-key");
     expect(mockSupabaseRpc).toHaveBeenCalledTimes(1);
+  });
+
+  it("T2-mirror: RPC error mirrors to Sentry under feature=byok-migration (review fix-inline #2954)", async () => {
+    mockSupabaseFrom.mockImplementation((table: string) => {
+      if (table === "api_keys") {
+        return setupSelectChain([
+          {
+            id: "key-1",
+            encrypted_key: ENCRYPTED_B64,
+            iv: IV_B64,
+            auth_tag: TAG_B64,
+            key_version: 1,
+          },
+        ]);
+      }
+      return setupSelectChain([]);
+    });
+    mockSupabaseRpc.mockResolvedValue({
+      data: null,
+      error: { message: "permission denied for function migrate_api_key_to_v2" },
+    });
+
+    // Caller still gets plaintext (the migration is fire-and-forget).
+    const plaintext = await getUserApiKey("user-1");
+    expect(plaintext).toBe("plaintext-key");
+
+    // Filter by feature tag per SDK exit-tag pattern; module init can
+    // fire other features.
+    const calls = mockReportSilentFallback.mock.calls.filter(
+      ([, opts]) => opts?.feature === "byok-migration",
+    );
+    expect(calls).toHaveLength(1);
+    expect(calls[0][1].op).toBe("migrate_api_key_to_v2");
+    expect(calls[0][1].extra).toMatchObject({
+      userId: "user-1",
+      provider: "anthropic",
+      keyId: "key-1",
+    });
   });
 
   it("T3: v2 row does NOT call the RPC", async () => {

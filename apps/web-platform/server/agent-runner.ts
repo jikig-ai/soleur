@@ -203,12 +203,16 @@ export async function getUserApiKey(userId: string): Promise<string> {
     // Routed through the predicate-locked `migrate_api_key_to_v2` RPC
     // (migration 033) so two concurrent callers serialize via PG row
     // locks — the second writer's UPDATE matches `WHERE key_version = 1`
-    // with zero rows. Re-encryption is deterministic on (plaintext,
-    // userId) under HKDF, so the helper still returns its own decrypted
-    // plaintext even when rows_affected = 0. See #2919.
+    // with zero rows. Re-encryption uses a fresh AES-GCM IV per call, so
+    // each caller's locally-encrypted ciphertext differs. The predicate-
+    // locked UPDATE ensures only the winning writer's ciphertext persists;
+    // both callers correctly return their own decrypted plaintext (the
+    // HKDF key derivation is deterministic on userId, so the persisted
+    // ciphertext from the winner decrypts to the same plaintext on later
+    // reads). See #2919.
     const plaintext = decryptKeyLegacy(encrypted, iv, authTag);
     const reEncrypted = encryptKey(plaintext, userId);
-    await supabase().rpc("migrate_api_key_to_v2", {
+    const { error: rpcErr } = await supabase().rpc("migrate_api_key_to_v2", {
       p_id: data.id,
       p_user_id: userId,
       p_provider: "anthropic",
@@ -216,6 +220,19 @@ export async function getUserApiKey(userId: string): Promise<string> {
       p_iv: reEncrypted.iv.toString("base64"),
       p_tag: reEncrypted.tag.toString("base64"),
     });
+    if (rpcErr) {
+      // Per `cq-silent-fallback-must-mirror-to-sentry`: the lazy v1→v2
+      // migration is fire-and-forget from the caller's POV (we still
+      // return plaintext on RPC failure so the user's request succeeds),
+      // but a sustained RPC error means the v1 row never migrates and
+      // every subsequent caller pays the lazy-migration cost. Mirror so
+      // on-call sees the drift before it becomes a cost-tracking puzzle.
+      reportSilentFallback(rpcErr, {
+        feature: "byok-migration",
+        op: "migrate_api_key_to_v2",
+        extra: { userId, provider: "anthropic", keyId: data.id },
+      });
+    }
     return plaintext;
   }
 
@@ -267,9 +284,11 @@ export async function getUserServiceTokens(
         // Lazy migration to v2 — same predicate-locked RPC as
         // `getUserApiKey`. The (id, user_id, provider, key_version=1)
         // predicate serializes concurrent callers via PG row locks. See
-        // `migrate_api_key_to_v2` in migration 033 + #2919.
+        // `migrate_api_key_to_v2` in migration 033 + #2919. AES-GCM IV
+        // is fresh per call; the predicate UPDATE keeps only the winning
+        // writer's ciphertext.
         const reEncrypted = encryptKey(plaintext, userId);
-        await supabase().rpc("migrate_api_key_to_v2", {
+        const { error: rpcErr } = await supabase().rpc("migrate_api_key_to_v2", {
           p_id: row.id,
           p_user_id: userId,
           p_provider: row.provider,
@@ -277,6 +296,15 @@ export async function getUserServiceTokens(
           p_iv: reEncrypted.iv.toString("base64"),
           p_tag: reEncrypted.tag.toString("base64"),
         });
+        if (rpcErr) {
+          // Mirror sustained migration failures — see sibling block in
+          // `getUserApiKey` for rationale.
+          reportSilentFallback(rpcErr, {
+            feature: "byok-migration",
+            op: "migrate_api_key_to_v2",
+            extra: { userId, provider: row.provider, keyId: row.id },
+          });
+        }
       } else {
         plaintext = decryptKey(encrypted, iv, authTag, userId);
       }
