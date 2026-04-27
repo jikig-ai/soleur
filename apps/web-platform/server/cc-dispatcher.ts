@@ -51,9 +51,7 @@ import {
   getUserServiceTokens,
   patchWorkspacePermissions,
 } from "./agent-runner";
-import { buildAgentSandboxConfig } from "./agent-runner-sandbox-config";
-import { buildAgentEnv } from "./agent-env";
-import { createSandboxHook } from "./sandbox-hook";
+import { buildAgentQueryOptions } from "./agent-runner-query-options";
 import {
   createCanUseTool,
   type CanUseToolDeps,
@@ -400,64 +398,35 @@ export const realSdkQueryFactory: QueryFactory = async (
   };
 
   try {
+    // Build SDK options through the shared `buildAgentQueryOptions`
+    // helper (#2922). Drift between this cc path and the legacy
+    // `agent-runner.ts startAgentSession` is guarded by
+    // `agent-runner-query-options.test.ts`.
+    //
+    // V1 — empty MCP allowlist. V2-13 (#2909) tracks
+    // tier-classification of `kb_share_*`, `conversations_*`,
+    // `github_*`, `plausible_*` for this path before widening.
     return sdkQuery({
       prompt: args.prompt,
-      options: {
-        cwd: workspacePath,
-        model: "claude-sonnet-4-6",
-        permissionMode: "default",
-        // settingSources: [] — defense-in-depth alongside
-        // `patchWorkspacePermissions`. Prevents the SDK from loading
-        // project `.claude/settings.json` whose `permissions.allow`
-        // would bypass `canUseTool`.
-        settingSources: [],
-        includePartialMessages: true,
-        ...(args.resumeSessionId ? { resume: args.resumeSessionId } : {}),
+      options: buildAgentQueryOptions({
+        workspacePath,
+        pluginPath,
+        apiKey,
+        serviceTokens,
         systemPrompt: args.systemPrompt,
-        env: buildAgentEnv(apiKey, serviceTokens),
-        // R7 — mirror legacy runner. WebSearch/WebFetch denied so the
-        // router cannot fetch arbitrary URLs.
-        disallowedTools: ["WebSearch", "WebFetch"],
-        // V1 — empty MCP allowlist. V2-13 (#2909) tracks
-        // tier-classification of `kb_share_*`, `conversations_*`,
-        // `github_*`, `plausible_*` for this path before widening.
+        resumeSessionId: args.resumeSessionId,
         mcpServers: {},
-        sandbox: buildAgentSandboxConfig(workspacePath),
-        plugins: [{ type: "local" as const, path: pluginPath }],
-        hooks: {
-          PreToolUse: [
-            {
-              matcher: "Read|Write|Edit|Glob|Grep|LS|NotebookRead|NotebookEdit|Bash",
-              hooks: [createSandboxHook(workspacePath)],
-            },
-          ],
-          SubagentStart: [
-            {
-              hooks: [
-                async (input) => {
-                  const subInput = input as Record<string, unknown>;
-                  // Strip control chars, DEL, Unicode line/paragraph
-                  // separators per learning
-                  // 2026-04-17-log-injection-unicode-line-separators.md
-                  // (covers \r\n already).
-                  const sanitize = (v: unknown) =>
-                    String(v ?? "")
-                      .replace(/[\x00-\x1f\x7f\u2028\u2029]/g, " ")
-                      .slice(0, 200);
-                  log.info(
-                    {
-                      sec: true,
-                      agentId: sanitize(subInput.agent_id),
-                      agentType: sanitize(subInput.agent_type),
-                      ccPath: true,
-                    },
-                    "Subagent started (cc-soleur-go)",
-                  );
-                  return {};
-                },
-              ],
-            },
-          ],
+        // SubagentStart sanitizer override: cc strips control chars +
+        // U+2028/U+2029 (per learning
+        // 2026-04-17-log-injection-unicode-line-separators.md) and
+        // tags `ccPath: true` for audit-log filtering.
+        subagentStartPayloadOverride: {
+          sanitizer: (v: unknown) =>
+            String(v ?? "")
+              .replace(/[\x00-\x1f\x7f\u2028\u2029]/g, " ")
+              .slice(0, 200),
+          extraLogFields: { ccPath: true },
+          logMessage: "Subagent started (cc-soleur-go)",
         },
         canUseTool: createCanUseTool({
           userId: args.userId,
@@ -475,7 +444,7 @@ export const realSdkQueryFactory: QueryFactory = async (
           controllerSignal: controller.signal,
           deps: ccDeps,
         }),
-      },
+      }),
     });
   } catch (err) {
     // Mirror the "sandbox required but unavailable" branch in

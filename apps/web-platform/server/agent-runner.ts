@@ -24,10 +24,8 @@ import {
   ERR_UPLOAD_FAILED,
 } from "./error-messages";
 import { isPathInWorkspace } from "./sandbox";
-import { buildAgentEnv } from "./agent-env";
 import { PROVIDER_CONFIG, EXCLUDED_FROM_SERVICES_UI } from "./providers";
 import type { Provider } from "@/lib/types";
-import { createSandboxHook } from "./sandbox-hook";
 import { abortableReviewGate, validateSelection, type AgentSession } from "./review-gate";
 import { createChildLogger } from "./logger";
 import { syncPull, syncPush } from "./session-sync";
@@ -42,7 +40,7 @@ import { buildGithubTools } from "./github-tools";
 import { buildPlausibleTools } from "./plausible-tools";
 import { createCanUseTool } from "./permission-callback";
 import { reportSilentFallback } from "./observability";
-import { buildAgentSandboxConfig } from "./agent-runner-sandbox-config";
+import { buildAgentQueryOptions } from "./agent-runner-query-options";
 import {
   withWorkspacePermissionLock,
   atomicWriteJson,
@@ -831,62 +829,32 @@ issues/PRs, 4 KB comments); follow the html_url for the full text.`;
     const prompt = userMessage
       ?? `[Session started with ${leader.name}] How can I help you today?`;
 
+    // Build the SDK Options through `buildAgentQueryOptions` so the
+    // cc-soleur-go `realSdkQueryFactory` and this legacy path stay in
+    // sync on shared fields (sandbox, settingSources, hooks.PreToolUse,
+    // disallowedTools). Per-call divergent fields (maxTurns, mcpServers,
+    // allowedTools) flow through args. Drift-guarded by
+    // `agent-runner-query-options.test.ts`. See #2922.
+    const allowedToolsList =
+      platformToolNames.length > 0 || pluginMcpServerNames.length > 0
+        ? [
+            ...platformToolNames,
+            ...pluginMcpServerNames.map((s) => `mcp__plugin_soleur_${s}__*`),
+          ]
+        : undefined;
     const q = query({
       prompt,
-      options: {
-        cwd: workspacePath,
-        model: "claude-sonnet-4-6",
-        permissionMode: "default",
-        // Prevent SDK from loading .claude/settings.json -- permissions.allow
-        // entries bypass canUseTool entirely (permission chain step 4 before
-        // step 5). Default is [] since SDK v0.1.0; explicit for defense-in-depth.
-        settingSources: [],
-        includePartialMessages: true,
-        // persistSession defaults to true -- session files stored at
-        // ~/.claude/projects/ enable resume within the same container lifecycle.
-        // Cross-restart continuity handled by message replay fallback.
-        ...(resumeSessionId ? { resume: resumeSessionId } : {}),
+      options: buildAgentQueryOptions({
+        workspacePath,
+        pluginPath,
+        apiKey,
+        serviceTokens,
+        systemPrompt,
+        resumeSessionId,
         maxTurns: 50,
         maxBudgetUsd: 5.0,
-        systemPrompt,
-        env: buildAgentEnv(apiKey, serviceTokens),
-        disallowedTools: ["WebSearch", "WebFetch"],
         ...(mcpServersOption ? { mcpServers: mcpServersOption } : {}),
-        ...(platformToolNames.length > 0 || pluginMcpServerNames.length > 0
-          ? {
-              allowedTools: [
-                ...platformToolNames,
-                ...pluginMcpServerNames.map((s) => `mcp__plugin_soleur_${s}__*`),
-              ],
-            }
-          : {}),
-        // Sandbox literal extracted to `buildAgentSandboxConfig` so the
-        // cc-soleur-go path's `realSdkQueryFactory` consumes the same
-        // shape verbatim (drift-guarded by `agent-runner-helpers.test.ts`).
-        sandbox: buildAgentSandboxConfig(workspacePath),
-        plugins: [{ type: "local" as const, path: pluginPath }],
-        hooks: {
-          PreToolUse: [{
-            // LS and NotebookEdit added for #891 path validation.
-            // NotebookRead included defensively (SDK may route via Read).
-            matcher: "Read|Write|Edit|Glob|Grep|LS|NotebookRead|NotebookEdit|Bash",
-            hooks: [createSandboxHook(workspacePath)],
-          }],
-          // Defense-in-depth: log subagent spawns for audit visibility.
-          // If a future SDK version stops routing subagent tool calls
-          // through canUseTool, these logs provide evidence. See #910.
-          SubagentStart: [{
-            hooks: [async (input) => {
-              const subInput = input as Record<string, unknown>;
-              const sanitize = (v: unknown) => String(v ?? '').replace(/[\r\n]/g, ' ').slice(0, 200);
-              log.info(
-                { sec: true, agentId: sanitize(subInput.agent_id), agentType: sanitize(subInput.agent_type) },
-                "Subagent started",
-              );
-              return {};
-            }],
-          }],
-        },
+        ...(allowedToolsList ? { allowedTools: allowedToolsList } : {}),
         // Permission callback (SDK chain step 5). File-tool checks are
         // defense-in-depth — PreToolUse hooks (step 1) are the primary
         // enforcement. See #891. The callback body lives in
@@ -910,7 +878,7 @@ issues/PRs, 4 KB comments); follow the html_url for the full text.`;
             updateConversationStatus,
           },
         }),
-      },
+      }),
     });
 
     // Stream messages to client with leader attribution
