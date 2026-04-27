@@ -2,7 +2,7 @@
 title: "The One-Person Billion-Dollar Company: Why It's an Engineering Problem"
 seoTitle: "One-Person Billion-Dollar Company: How Solo Founders Build at Scale with AI"
 date: 2026-04-21
-description: "The one-person billion-dollar company isn't science fiction. Here's why compounding AI organizations make it an engineering problem — and how to build one."
+description: "The one-person billion-dollar company isn't science fiction. Compounding AI organizations make it an engineering problem — here's how to build one."
 ogImage: "blog/og-one-person-billion-dollar-company.png"
 pillar: billion-dollar-solo-founder
 tags:
