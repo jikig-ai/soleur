@@ -7,7 +7,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 GUARD_MODULE="$SCRIPT_DIR/mu1-cleanup-guard.mjs"
-DEV_URL="https://ifsccnjhymdmidffkzhl.supabase.co"
+DEV_URL="https://mlwiodleouzwniehynfz.supabase.co"
 
 PASS=0
 FAIL=0
@@ -85,14 +85,14 @@ run_case "malformed URL → throws with hostname ''" \
 # Security regression: split(".")[0] would accept this. Exact-hostname
 # equality rejects it (credential-exfiltration vector otherwise).
 run_case "subdomain bypass attempt (<ref>.supabase.co.evil.com) → rejected" \
-  "dev" "https://ifsccnjhymdmidffkzhl.supabase.co.evil.com" \
-  "hostname 'ifsccnjhymdmidffkzhl.supabase.co.evil.com'"
+  "dev" "https://mlwiodleouzwniehynfz.supabase.co.evil.com" \
+  "hostname 'mlwiodleouzwniehynfz.supabase.co.evil.com'"
 
 # Strip-the-suffix variant: host that starts with DEV_PROJECT_REF but is
 # not the exact hostname.
 run_case "prefix-match bypass (<ref>supabase.co without dot) → rejected" \
-  "dev" "https://ifsccnjhymdmidffkzhlfoo.supabase.co" \
-  "hostname 'ifsccnjhymdmidffkzhlfoo.supabase.co'"
+  "dev" "https://mlwiodleouzwniehynfzfoo.supabase.co" \
+  "hostname 'mlwiodleouzwniehynfzfoo.supabase.co'"
 
 # --- Results ----------------------------------------------------------------
 
