@@ -31,7 +31,11 @@ jobs:
           path-to-signatures: "signatures/cla.json"
           path-to-document: "https://soleur.ai/pages/legal/individual-cla.html"
           branch: "cla-signatures"
-          allowlist: "dependabot[bot],github-actions[bot],renovate[bot],deruelle,app/claude,claude"
+          # contributor-assistant resolves PR authors via GraphQL `commit.author.user.login`
+          # (returns `claude[bot]` for the Anthropic GitHub App, DB ID 209825114).
+          # REST-based gates (e.g. .github/workflows/scheduled-bug-fixer.yml) match `app/claude` —
+          # do NOT harmonize the two; the surfaces are different. See #2907.
+          allowlist: "dependabot[bot],github-actions[bot],renovate[bot],deruelle,claude[bot]"
           custom-notsigned-prcomment: |
             Thank you for your contribution! Before we can accept it, you need to sign our [Contributor License Agreement](https://soleur.ai/pages/legal/individual-cla.html).
 
