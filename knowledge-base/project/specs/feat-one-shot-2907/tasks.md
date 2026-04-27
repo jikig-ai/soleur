@@ -8,9 +8,10 @@
 ## Phase 1 — Edit allowlist (pre-merge)
 
 - [ ] 1.1 Re-read `.github/workflows/cla.yml` (Edit tool requires a fresh read after any compaction).
-- [ ] 1.2 Apply the one-line edit on line 34: replace bare `claude` with `claude[bot]`. Keep `app/claude` (defense-in-depth).
+- [ ] 1.2 Apply the one-line edit on line 34: replace `app/claude,claude` with `claude[bot]`. Both removed tokens are unreachable on the CLA action's GraphQL surface (deepen-pass source-trace evidence in plan §Research Reconciliation).
 - [ ] 1.3 Verify YAML still parses: `python3 -c "import yaml; yaml.safe_load(open('.github/workflows/cla.yml'))"` exits 0.
-- [ ] 1.4 Confirm no other files changed: `git status --short` shows only `M .github/workflows/cla.yml`.
+- [ ] 1.4 Audit grep: `grep -n 'app/claude' .github/workflows/cla.yml` returns ZERO; `grep -rn 'app/claude' .github/ scripts/` returns ≥3 hits in OTHER files (those are correct REST-API-surface matchers, must remain).
+- [ ] 1.5 Confirm no other files changed: `git status --short` shows only `M .github/workflows/cla.yml`.
 
 ## Phase 2 — Ship (PR)
 
