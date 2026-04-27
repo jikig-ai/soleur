@@ -352,7 +352,13 @@ async function updateConversationStatus(
     userId,
     conversationId,
     { status, last_active: new Date().toISOString() },
-    { feature: "agent-runner", op: "updateConversationStatus" },
+    {
+      feature: "agent-runner",
+      op: "updateConversationStatus",
+      // Status transitions drive UI badges and gate evaluations downstream;
+      // a 0-rows write would silently desync UI state from DB.
+      expectMatch: true,
+    },
   );
 
   if (!result.ok) {

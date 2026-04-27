@@ -196,7 +196,7 @@ export function abortActiveSession(userId: string, session: ClientSession): void
       userId,
       oldConvId,
       { status: "completed", last_active: new Date().toISOString() },
-      { feature: "ws-handler", op: "supersede-on-reconnect" },
+      { feature: "ws-handler", op: "supersede-on-reconnect", expectMatch: true },
     );
   }
 
@@ -525,7 +525,12 @@ async function dispatchSoleurGoForConversation(
         active_workflow: serialized,
         last_active: new Date().toISOString(),
       },
-      { feature: "ws-handler", op: "persist-active-workflow", extra: { workflow } },
+      {
+        feature: "ws-handler",
+        op: "persist-active-workflow",
+        extra: { workflow },
+        expectMatch: true,
+      },
     );
     if (!ok) {
       throw new Error(`active_workflow update failed: ${error?.message ?? "unknown"}`);
@@ -884,7 +889,7 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
           userId,
           convId,
           { status: "completed", last_active: new Date().toISOString() },
-          { feature: "ws-handler", op: "close-conversation" },
+          { feature: "ws-handler", op: "close-conversation", expectMatch: true },
         );
         session.conversationId = undefined;
         session.routing = undefined;

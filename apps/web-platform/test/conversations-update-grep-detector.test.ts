@@ -111,6 +111,43 @@ async function f() {
     expect(stdout).toContain("OK");
   });
 
+  // Read-only callsites (.select after .from) must NOT be flagged. The
+  // forward-scan short-circuits on .select|.insert|.delete|.upsert; this
+  // canary pins that guard.
+  it("PASSES on .from(\"conversations\").select(...) (read, not write)", () => {
+    const fixture = `
+import { supabase } from "./somewhere";
+async function f() {
+  const { data } = await supabase
+    .from("conversations")
+    .select("id, status")
+    .eq("id", "x");
+}
+`;
+    const { status, stdout } = runDetectorAgainst(fixture);
+    expect(status).toBe(0);
+    expect(stdout).toContain("OK");
+  });
+
+  // Allowlist marker out-of-range (4+ lines above) must still fail. Pins
+  // the LOOKBACK_LINES boundary so a future widening doesn't silently
+  // accept stale markers.
+  it("FAILS when the allowlist marker is more than LOOKBACK_LINES above", () => {
+    const fixture = `
+import { supabase } from "./somewhere";
+// allow-direct-conversation-update: too far back
+//
+//
+//
+async function f() {
+  await supabase.from("conversations").update({ status: "completed" }).eq("id", "x");
+}
+`;
+    const { status, stdout } = runDetectorAgainst(fixture);
+    expect(status).toBe(1);
+    expect(stdout).toContain("FAIL");
+  });
+
   // Mixing allowlisted + non-allowlisted in the same file fails on the
   // non-allowlisted one only.
   it("FAILS when one block is allowlisted but a sibling block is not", () => {

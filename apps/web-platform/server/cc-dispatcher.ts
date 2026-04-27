@@ -18,7 +18,15 @@ import type { Query } from "@anthropic-ai/claude-agent-sdk";
 import { query as sdkQuery } from "@anthropic-ai/claude-agent-sdk";
 
 import type { WSMessage, Conversation } from "@/lib/types";
-import { KeyInvalidError } from "@/lib/types";
+import { KeyInvalidError, STATUS_LABELS } from "@/lib/types";
+
+/**
+ * Runtime allowlist for `Conversation["status"]`. Mirrors the type union
+ * `"active" | "waiting_for_user" | "completed" | "failed"` and is derived
+ * from `STATUS_LABELS` so a future status added to the type and labels
+ * map flows through automatically.
+ */
+const CONVERSATION_STATUS_VALUES = new Set(Object.keys(STATUS_LABELS));
 import { createServiceClient } from "@/lib/supabase/service";
 import {
   createSoleurGoRunner,
@@ -419,6 +427,19 @@ export const realSdkQueryFactory: QueryFactory = async (
     // so `permission-callback.ts`'s 6 deps-injected call sites get
     // transitive R8 coverage with zero churn at the deps interface.
     updateConversationStatus: async (convId: string, status: string) => {
+      // Runtime guard: protect against deps-injected callers passing a
+      // status literal not in Conversation["status"]. The wrapper would
+      // otherwise hand an invalid enum to Postgres which rejects the write
+      // — and the closure's `Promise<void>` shape would swallow the error.
+      if (!CONVERSATION_STATUS_VALUES.has(status)) {
+        reportSilentFallback(null, {
+          feature: "cc-dispatcher",
+          op: "updateConversationStatus",
+          message: `invalid conversation status: ${status}`,
+          extra: { userId: args.userId, conversationId: convId, status },
+        });
+        return;
+      }
       await updateConversationFor(
         args.userId,
         convId,
@@ -430,6 +451,10 @@ export const realSdkQueryFactory: QueryFactory = async (
           feature: "cc-dispatcher",
           op: "updateConversationStatus",
           extra: { status },
+          // Status transitions drive permission-callback waiting_for_user
+          // events; a 0-rows write would emit a prompt for a deleted/
+          // archived row that the UI no longer shows.
+          expectMatch: true,
         },
       );
     },

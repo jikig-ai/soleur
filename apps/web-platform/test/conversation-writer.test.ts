@@ -26,14 +26,23 @@ vi.mock("@/server/logger", () => ({
   }),
 }));
 
-import { updateConversationFor } from "@/server/conversation-writer";
+import {
+  updateConversationFor,
+  __resetSentryDedupForTests,
+} from "@/server/conversation-writer";
 
 type UpdateCall = {
   payload: Record<string, unknown>;
   eqs: Array<[string, unknown]>;
 };
 
-function captureUpdateChain(errorOnUpdate: Error | null = null): UpdateCall[] {
+function captureUpdateChain(
+  opts: {
+    errorOnUpdate?: Error | null;
+    selectData?: { id: string }[] | null;
+  } = {},
+): UpdateCall[] {
+  const errorOnUpdate = opts.errorOnUpdate ?? null;
   const updateCalls: UpdateCall[] = [];
 
   mockSupabaseFrom.mockImplementation((table: string) => {
@@ -50,6 +59,14 @@ function captureUpdateChain(errorOnUpdate: Error | null = null): UpdateCall[] {
             entry.eqs.push([col, val]);
             return chain;
           },
+          select: () => ({
+            // expectMatch path resolves the chain via .select("id").
+            then: (resolve: (v: unknown) => void) =>
+              resolve({
+                data: opts.selectData ?? [{ id: "conv-1" }],
+                error: errorOnUpdate,
+              }),
+          }),
           then: (resolve: (v: unknown) => void) =>
             resolve({ error: errorOnUpdate }),
         };
@@ -65,6 +82,7 @@ describe("updateConversationFor", () => {
   beforeEach(() => {
     mockReportSilentFallback.mockClear();
     mockSupabaseFrom.mockReset();
+    __resetSentryDedupForTests();
   });
 
   // T1 — happy path
@@ -97,7 +115,7 @@ describe("updateConversationFor", () => {
 
   // T2 — error path mirrors to Sentry via reportSilentFallback
   it("mirrors errors to reportSilentFallback and returns ok: false", async () => {
-    captureUpdateChain(new Error("db unavailable"));
+    captureUpdateChain({ errorOnUpdate: new Error("db unavailable") });
 
     const result = await updateConversationFor("user-1", "conv-1", {
       status: "failed",
@@ -123,7 +141,7 @@ describe("updateConversationFor", () => {
 
   // T3 — feature/op overrides flow into the Sentry tag
   it("propagates caller-provided feature, op, and extra into the Sentry tag", async () => {
-    captureUpdateChain(new Error("boom"));
+    captureUpdateChain({ errorOnUpdate: new Error("boom") });
 
     await updateConversationFor(
       "user-1",
@@ -162,5 +180,103 @@ describe("updateConversationFor", () => {
     const userIdEq = updateCalls[0].eqs.find(([c]) => c === "user_id");
     expect(userIdEq?.[1]).toBe("wrong-user");
     expect(mockReportSilentFallback).not.toHaveBeenCalled();
+  });
+
+  // T5 — expectMatch: 0-rows-affected surfaces as failure
+  it("returns ok: false and mirrors to Sentry when expectMatch is set and 0 rows match", async () => {
+    captureUpdateChain({ selectData: [] });
+
+    const result = await updateConversationFor(
+      "user-1",
+      "conv-1",
+      { status: "completed" },
+      { feature: "ws-handler", op: "close-conversation", expectMatch: true },
+    );
+
+    expect(result.ok).toBe(false);
+    expect(result.error?.message).toBe("conversation update affected 0 rows");
+
+    expect(mockReportSilentFallback).toHaveBeenCalledTimes(1);
+    const [errArg, opts] = mockReportSilentFallback.mock.calls[0];
+    expect(errArg).toBeNull();
+    expect(opts).toMatchObject({
+      feature: "ws-handler",
+      op: "close-conversation",
+      message: "conversation update affected 0 rows (expectMatch)",
+    });
+  });
+
+  // T6 — expectMatch: success path returns ok: true and does not page Sentry
+  it("returns ok: true when expectMatch is set and >=1 row matches", async () => {
+    captureUpdateChain({ selectData: [{ id: "conv-1" }] });
+
+    const result = await updateConversationFor(
+      "user-1",
+      "conv-1",
+      { status: "completed" },
+      { feature: "ws-handler", op: "close-conversation", expectMatch: true },
+    );
+
+    expect(result.ok).toBe(true);
+    expect(mockReportSilentFallback).not.toHaveBeenCalled();
+  });
+
+  // T7 — error preserves cause chain (caller can introspect Postgres error)
+  it("preserves the underlying Supabase error as Error.cause", async () => {
+    const dbErr = Object.assign(new Error("db unavailable"), {
+      code: "PGRST301",
+    });
+    captureUpdateChain({ errorOnUpdate: dbErr });
+
+    const result = await updateConversationFor("user-1", "conv-1", {
+      status: "completed",
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.error?.cause).toBe(dbErr);
+  });
+
+  // T8 — Sentry dedup caps blast radius during error storms (one mirror
+  // per feature/op/kind per dedup window). Required so a Supabase outage
+  // doesn't blow through the Sentry quota with hundreds of duplicate
+  // events per second.
+  it("dedups Sentry mirrors to one per (feature, op, kind) per window", async () => {
+    captureUpdateChain({ errorOnUpdate: new Error("db unavailable") });
+
+    for (let i = 0; i < 5; i++) {
+      await updateConversationFor("user-1", `conv-${i}`, {
+        status: "failed",
+      });
+    }
+
+    // 5 calls, all errored, but only one Sentry mirror within the dedup
+    // window for the same (feature, op, "error") tuple.
+    expect(mockReportSilentFallback).toHaveBeenCalledTimes(1);
+  });
+
+  // T9 — different (feature, op) pairs do NOT share a dedup slot
+  it("does not share a dedup slot across feature/op pairs", async () => {
+    captureUpdateChain({ errorOnUpdate: new Error("boom") });
+
+    await updateConversationFor(
+      "user-1",
+      "conv-1",
+      { status: "failed" },
+      { feature: "ws-handler", op: "close-conversation" },
+    );
+    await updateConversationFor(
+      "user-1",
+      "conv-2",
+      { status: "failed" },
+      { feature: "ws-handler", op: "supersede-on-reconnect" },
+    );
+    await updateConversationFor(
+      "user-1",
+      "conv-3",
+      { status: "failed" },
+      { feature: "agent-runner", op: "updateConversationStatus" },
+    );
+
+    expect(mockReportSilentFallback).toHaveBeenCalledTimes(3);
   });
 });
