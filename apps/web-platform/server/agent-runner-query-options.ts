@@ -39,6 +39,14 @@ function defaultSubagentSanitize(v: unknown): string {
     .slice(0, 200);
 }
 
+/**
+ * Pinned `disallowedTools` for both legacy + cc paths. Was previously
+ * exposed as an `args.disallowedTools` override that no consumer wired;
+ * removed per review-finding YAGNI. If a future caller needs a different
+ * list, reintroduce the arg with a real test.
+ */
+const CANONICAL_DISALLOWED_TOOLS: readonly string[] = ["WebSearch", "WebFetch"];
+
 export interface SubagentStartPayloadOverride {
   /** Replaces the default `[\r\n]` strip when the cc path needs Unicode-line + control-char hardening. */
   sanitizer?: (v: unknown) => string;
@@ -67,8 +75,14 @@ export interface AgentQueryOptionsArgs {
   mcpServers?: Record<string, unknown>;
   /** Per-call allowedTools list (legacy: platform tool names + plugin MCP wildcards; cc: omitted at V1). */
   allowedTools?: string[];
-  /** Defaults to ["WebSearch", "WebFetch"] — both paths share this. */
-  disallowedTools?: string[];
+  /**
+   * NOTE: `disallowedTools` is intentionally NOT exposed as an arg.
+   * Both legacy + cc paths share `["WebSearch", "WebFetch"]` and no
+   * consumer overrides it today. Pinned as a constant inside the helper
+   * (CANONICAL_DISALLOWED_TOOLS below). If a future caller needs a
+   * different list, re-introduce the arg with a real test — see review
+   * fix-inline #2954.
+   */
   /** Legacy: 50; cc: omitted (cost-cap is enforced at the runner level). */
   maxTurns?: number;
   /** Legacy: 5.0; cc: omitted. */
@@ -104,7 +118,7 @@ export function buildAgentQueryOptions(
     // `permissions.allow` would bypass `canUseTool` (chain step 4 before step 5).
     settingSources: [],
     includePartialMessages: true,
-    disallowedTools: args.disallowedTools ?? ["WebSearch", "WebFetch"],
+    disallowedTools: [...CANONICAL_DISALLOWED_TOOLS],
     systemPrompt: args.systemPrompt,
     env: buildAgentEnv(args.apiKey, args.serviceTokens),
     // Sandbox literal lives in `buildAgentSandboxConfig` so legacy + cc
