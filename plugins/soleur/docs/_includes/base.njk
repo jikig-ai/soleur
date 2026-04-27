@@ -27,7 +27,7 @@
   <!-- CSP: Cloudflare Bot Fight Mode injects an inline script with per-request
        tokens. This script is intentionally blocked by script-src (its hash is
        unpredictable). The blocked script has no user-facing impact — see #1149. -->
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://plausible.io 'sha256-l56vLAULxECuIebP1+Hhz+75oNwhX8YnMpMJrN6HoPo=' 'sha256-SVJF5zPt5S9fNTROUuCTIHZpLN5Ht8ZoYfJXtx4ngtM='; connect-src 'self' https://buttondown.com https://plausible.io; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; base-uri 'self'; form-action 'self' https://buttondown.com; object-src 'none'; upgrade-insecure-requests;">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://plausible.io 'sha256-l56vLAULxECuIebP1+Hhz+75oNwhX8YnMpMJrN6HoPo=' 'sha256-SVJF5zPt5S9fNTROUuCTIHZpLN5Ht8ZoYfJXtx4ngtM=' 'sha256-9o2LMPU0pCC0i/83pWDPlO90JiCMiJbUjQWPhLF+W0Y='; connect-src 'self' https://buttondown.com https://plausible.io; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; base-uri 'self'; form-action 'self' https://buttondown.com; object-src 'none'; upgrade-insecure-requests;">
   <script type="application/ld+json">
   {# All string interpolations in this JSON-LD block MUST use | jsonLdSafe | safe — see #2609 #}
   {
@@ -212,8 +212,13 @@
       .honeypot-trap{position:absolute;left:-9999px;height:0;overflow:hidden}
     }
   </style>
-  <link rel="preload" href="css/style.css" as="style" onload="this.onload=null;this.rel='stylesheet'">
+  <link id="soleur-css-preload" rel="preload" href="css/style.css" as="style">
   <noscript><link rel="stylesheet" href="css/style.css"></noscript>
+  <!-- CSP-compliant async stylesheet swap. Replaces an inline onload= attribute (blocked
+       by script-src without unsafe-inline / unsafe-hashes) with a hashed inline script.
+       Editing the swap below requires updating the sha256 hash in the CSP meta tag above.
+       Run validate-csp.sh to verify. -->
+  <script>(function(){var l=document.getElementById('soleur-css-preload');if(!l)return;function sw(){l.rel='stylesheet';}if(l.sheet){sw();}else{l.addEventListener('load',sw);}})();</script>
   <!-- Privacy-friendly analytics by Plausible -->
   <script async src="https://plausible.io/js/pa-unmpBTT7YXW_UsDCGRfHH.js"></script>
   <!-- CSP: editing this script requires updating the sha256 hash in the CSP meta tag above. Run validate-csp.sh to check. -->
