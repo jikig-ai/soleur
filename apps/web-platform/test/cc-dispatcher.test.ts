@@ -4,9 +4,11 @@ import {
   getPendingPromptRegistry,
   getCcStartSessionRateLimiter,
   handleInteractivePromptResponseCase,
+  dispatchSoleurGo,
   __resetDispatcherForTests,
 } from "@/server/cc-dispatcher";
 import type { InteractivePromptResponse } from "@/server/cc-interactive-prompt-types";
+import { KeyInvalidError } from "@/lib/types";
 
 // Unit tests for the per-process singleton + orchestration module. The
 // real-SDK queryFactory path is stubbed (throws — runner's own
@@ -164,4 +166,107 @@ describe("cc-dispatcher singletons + orchestration", () => {
       );
     },
   );
+
+  // ---------------------------------------------------------------------------
+  // T19: KeyInvalidError sanitization to client + errorCode propagation.
+  // The dispatch catch path detects `KeyInvalidError` (BYOK fetch) and
+  // surfaces `errorCode: "key_invalid"` so the client can prompt for a
+  // fresh key. Generic errors fall back to the existing "router unavailable"
+  // wording without an errorCode.
+  // ---------------------------------------------------------------------------
+  it("T19: dispatchSoleurGo surfaces errorCode=key_invalid when runner throws KeyInvalidError", async () => {
+    const sendToClient = vi.fn().mockReturnValue(true);
+    const persistActiveWorkflow = vi.fn().mockResolvedValue(undefined);
+
+    // The first dispatch will create a runner; we want the runner to throw
+    // KeyInvalidError synchronously when calling queryFactory. The runner
+    // captured the real factory at construction; we override by injecting
+    // a known-throwing factory via __resetDispatcherForTests + a follow-up
+    // stub. Since the real factory hits Supabase, the simplest seam is:
+    // call dispatch with a malformed routing that triggers the catch.
+    //
+    // Practically, we simulate the failure by passing a routing that the
+    // runner will eventually run through queryFactory — and rely on the
+    // dispatch catch to detect KeyInvalidError. To do that, we mock the
+    // factory thrown shape via the underlying runner singleton.
+    //
+    // Since cc-dispatcher.ts wires its own factory (real or stub), the
+    // cleanest E2E here is: feed a KeyInvalidError into the catch path
+    // by having the runner.dispatch reject. We achieve this by replacing
+    // the runner with a stub that rejects.
+    //
+    // Use the test-only seam to swap in a stub runner.
+    const { __setCcRunnerForTests } = await import("@/server/cc-dispatcher");
+    const stubRunner = {
+      // biome-ignore lint/suspicious/noExplicitAny: minimal stub
+      dispatch: vi.fn(async () => {
+        throw new KeyInvalidError();
+      }),
+      hasActiveQuery: () => false,
+      activeQueriesSize: () => 0,
+      reapIdle: () => 0,
+      closeConversation: () => {},
+      respondToToolUse: () => false,
+      // biome-ignore lint/suspicious/noExplicitAny: minimal stub
+    } as any;
+    __setCcRunnerForTests(stubRunner);
+
+    await dispatchSoleurGo({
+      userId: "u1",
+      conversationId: "conv-1",
+      userMessage: "hi",
+      currentRouting: { kind: "soleur_go_pending" },
+      sendToClient,
+      persistActiveWorkflow,
+    });
+
+    const errorCalls = sendToClient.mock.calls.filter(
+      ([, msg]) =>
+        msg && typeof msg === "object" && (msg as { type?: string }).type === "error",
+    );
+    expect(errorCalls.length).toBeGreaterThan(0);
+    const errMsg = errorCalls[0][1] as { errorCode?: string; message?: string };
+    expect(errMsg.errorCode).toBe("key_invalid");
+    // Message must not leak raw stack / class internals.
+    expect(errMsg.message).not.toContain("KeyInvalidError");
+    expect(errMsg.message).not.toContain("at ");
+  });
+
+  it("T19b: dispatchSoleurGo surfaces generic message (no errorCode) for unrelated errors", async () => {
+    const sendToClient = vi.fn().mockReturnValue(true);
+    const persistActiveWorkflow = vi.fn().mockResolvedValue(undefined);
+
+    const { __setCcRunnerForTests } = await import("@/server/cc-dispatcher");
+    const stubRunner = {
+      // biome-ignore lint/suspicious/noExplicitAny: minimal stub
+      dispatch: vi.fn(async () => {
+        throw new Error("some generic upstream failure");
+      }),
+      hasActiveQuery: () => false,
+      activeQueriesSize: () => 0,
+      reapIdle: () => 0,
+      closeConversation: () => {},
+      respondToToolUse: () => false,
+      // biome-ignore lint/suspicious/noExplicitAny: minimal stub
+    } as any;
+    __setCcRunnerForTests(stubRunner);
+
+    await dispatchSoleurGo({
+      userId: "u1",
+      conversationId: "conv-1",
+      userMessage: "hi",
+      currentRouting: { kind: "soleur_go_pending" },
+      sendToClient,
+      persistActiveWorkflow,
+    });
+
+    const errorCalls = sendToClient.mock.calls.filter(
+      ([, msg]) =>
+        msg && typeof msg === "object" && (msg as { type?: string }).type === "error",
+    );
+    expect(errorCalls.length).toBeGreaterThan(0);
+    const errMsg = errorCalls[0][1] as { errorCode?: string; message?: string };
+    expect(errMsg.errorCode).toBeUndefined();
+    expect(errMsg.message).toContain("Command Center router is unavailable");
+  });
 });
