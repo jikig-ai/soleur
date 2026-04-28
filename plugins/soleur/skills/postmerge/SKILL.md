@@ -182,3 +182,8 @@ Browser verification: <PASSED/SKIPPED>
 - Always use `git show main:<path>` to read merged files -- never read from the bare repo filesystem directly.
 - MCP tools resolve paths from the repo root. Use absolute paths when in a worktree.
 - This skill is designed to run after `/soleur:merge-pr` completes. It can also be invoked standalone with a PR number.
+
+## Production Debugging
+
+- For production debugging use Sentry API (`SENTRY_API_TOKEN` in Doppler `prd`), Better Stack, or `/health` — never SSH for logs. SSH is for infra provisioning only. (ex-`cq-for-production-debugging-use`)
+- For deploy webhook debugging, fetch `WEBHOOK_DEPLOY_SECRET`/`CF_ACCESS_CLIENT_ID`/`CF_ACCESS_CLIENT_SECRET` from Doppler `prd_terraform` (not `prd`). GET `https://deploy.soleur.ai/hooks/deploy-status` with CF Access headers + HMAC-sha256 over empty body. Full runbook: [deploy-status-debugging.md](./references/deploy-status-debugging.md). (ex-`cq-deploy-webhook-observability-debug`)

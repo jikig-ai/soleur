@@ -211,7 +211,7 @@ Close the gap between "we learned X" and "X is now enforced." The project has pr
    Output: `"Rule budget: A rules / B bytes in AGENTS.md (longest rule: L bytes), C rules in constitution.md"`.
 
    Append warnings:
-   - If `B > 37000`: `"[WARNING] AGENTS.md byte budget (B/37000) exceeded — apply discoverability litmus (wg-every-session-error-must-produce-either) before adding any new rule; consider retiring an existing rule via scripts/retired-rule-ids.txt."`
+   - If `B > 37000`: `"[WARNING] AGENTS.md byte budget (B/37000) exceeded — apply the placement gate (see Route Learning to Definition) and discoverability litmus (wg-every-session-error-must-produce-either) before adding any new rule; already-enforced and domain-scoped insights MUST route to a skill/agent, NOT AGENTS.md; consider retiring an existing rule via scripts/retired-rule-ids.txt."`
    - If `B > 40000`: `"[CRITICAL] AGENTS.md exceeds Claude Code harness warn (40k chars) — harness-level performance degradation; shrink required before next rule."`
    - If `L > 600`: `"[WARNING] longest rule is L bytes — cap per-rule length at ~600 (see cq-agents-md-why-single-line) by moving context to learning files."`
    - If `A > 115`: `"[ADVISORY] rule count (A/115) — bytes-first policy per cq-agents-md-why-single-line; count is informational."` <!-- rule-threshold: 115 -->
@@ -294,10 +294,18 @@ HARD RULE: This phase MUST run even in automated pipelines. See constitution pro
 
 After constitution promotion, compound routes the captured learning to the skill, agent, or command definition that was active in the session. This feeds insights back into the instructions that directly govern behavior, preventing repeated mistakes.
 
+**AGENTS.md placement gate (mandatory).** Before proposing any edit that targets AGENTS.md, classify each insight. These placement classes are distinct from `rule-audit.sh`'s enforcement tiers (hooks/AGENTS.md/constitution/agents/skills) — they govern *where a new rule lives*, not the enforcement layer count.
+
+- **Already-enforced:** A hook or skill step already prevents the violation. Action: ensure the target skill/hook carries the Why; do NOT add to AGENTS.md. If an equivalent AGENTS.md rule already exists, collapse it to a one-line pointer (`[<id>] [skill-enforced: <skill> <step>]. Full rule: <path>`) and append the full body to the skill.
+- **Domain-scoped:** The violation only happens inside a specific skill, tool, or file pattern (tests, Terraform, CF, Playwright, Pencil, CI workflows, Next.js route files, content/docs). Action: edit the owning skill/agent/reference file. AGENTS.md is OUT OF SCOPE regardless of impact.
+- **Cross-cutting session invariant:** The violation can happen on any turn without a specific trigger (e.g., blast-radius safety, silent-failure traps that span every code path, environment constraints loaded by every session). Only these qualify for AGENTS.md.
+
+Routing mechanics:
+
 1. Detect which skills, agents, or commands were invoked in this conversation. Also check session-state.md `### Components Invoked` for components from preceding pipeline phases.
 2. Route **two categories** of insights:
-   - **Solution insight:** The main learning (what was solved and how). Propose a one-line bullet edit to the most relevant section of the target definition file.
-   - **Error prevention:** For each session error that could have been prevented by a skill instruction, propose a one-line bullet to the skill that was active when the error occurred. Example: if a plan skill prescribed wrong paths, add a bullet to the plan skill's Sharp Edges saying "Verify relative paths by tracing each `../` step before prescribing them."
+   - **Solution insight:** The main learning (what was solved and how). Classify with the placement gate above, then propose a one-line bullet edit to the target file.
+   - **Error prevention:** For each session error that could have been prevented by a skill instruction, classify with the placement gate, then propose a one-line bullet to the target. Example: if a plan skill prescribed wrong paths, add a bullet to the plan skill's Sharp Edges saying "Verify relative paths by tracing each `../` step before prescribing them."
 3. **Default action (interactive and headless):** Apply the edit directly to the
    target skill/agent/AGENTS.md file. **Always use worktree-absolute paths**
    (`<worktree-root>/plugins/soleur/skills/<skill>/SKILL.md`) for Edit/Write
@@ -319,7 +327,9 @@ After constitution promotion, compound routes the captured learning to the skill
 
 4. **File-issue exception:** File a GitHub issue when the edit meets one of:
    cross-skill (touches 2+ skill/agent files), contested-design (competing
-   valid approaches), agents-md-semantic-change (modifies existing rule text).
+   valid approaches), agents-md-semantic-change (modifies existing rule text),
+   tier-ambiguous (insight straddles Tier 2 and Tier 3 and a reviewer's
+   judgment is load-bearing).
    Title: `compound: route-to-definition proposal for <target-basename>`.
    Body: proposed edit text + target path + source learning path + `## Scope-Out
    Justification` naming the criterion. Flags: `--label deferred-scope-out

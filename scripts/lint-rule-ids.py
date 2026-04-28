@@ -35,6 +35,11 @@ RID_RE = re.compile(r"^(hr|wg|cq|rf|pdr|cm)-[a-z0-9-]{3,60}$")
 HR_RETIREMENT_ALLOWLIST = frozenset({
     "hr-before-running-git-commands-on-a",
     "hr-never-use-sleep-2-seconds-in-foreground",
+    # Tier 2 migration (2026-04-24): body moved to skill/agent/reference file.
+    "hr-when-playwright-mcp-hits-an-auth-wall",
+    "hr-never-fake-git-author",
+    "hr-in-github-actions-run-blocks-never-use",
+    "hr-github-actions-workflow-notifications",
 })
 
 

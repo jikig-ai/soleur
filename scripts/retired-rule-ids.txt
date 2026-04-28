@@ -37,3 +37,61 @@ cq-after-completing-a-playwright-task-call | 2026-04-23 | #2865 | plugins/soleur
 cq-before-calling-mcp-pencil-open-document | 2026-04-23 | #2865 | .claude/hooks/pencil-open-guard.sh
 wg-when-a-research-sprint-produces | 2026-04-23 | #2865 | plugins/soleur/skills/work/SKILL.md#phase-25
 cq-never-skip-hooks | 2026-04-23 | #2865 | .claude/hooks/lib/incidents.sh detect_bypass() — blocks --no-verify on git commands
+
+# --- Retired 2026-04-24 in PR (Tier 1/2 migration to skills and constitution) ---
+# Tier 2 — testing rules → knowledge-base/project/constitution.md §Testing:
+cq-in-worktrees-run-vitest-via-node-node | 2026-04-24 | - | knowledge-base/project/constitution.md §Testing Always
+cq-raf-batching-sweep-test-helpers | 2026-04-24 | - | knowledge-base/project/constitution.md §Testing Always
+cq-mutation-assertions-pin-exact-post-state | 2026-04-24 | - | knowledge-base/project/constitution.md §Testing Always
+cq-destructive-prod-tests-allowlist | 2026-04-24 | - | knowledge-base/project/constitution.md §Testing Never
+cq-preflight-fetch-sweep-test-mocks | 2026-04-24 | - | knowledge-base/project/constitution.md §Testing Always
+cq-vitest-setup-file-hook-scope | 2026-04-24 | - | knowledge-base/project/constitution.md §Testing Never
+cq-abort-signal-timeout-vs-fake-timers | 2026-04-24 | - | knowledge-base/project/constitution.md §Testing Always
+cq-test-mocked-module-constant-import | 2026-04-24 | - | knowledge-base/project/constitution.md §Testing Always
+cq-jsdom-no-layout-gated-assertions | 2026-04-24 | - | knowledge-base/project/constitution.md §Testing Never
+
+# Tier 2 — CF/Terraform rules → plugins/soleur/agents/engineering/infra/terraform-architect.md §Sharp Edges:
+cq-cloudflare-dynamic-path-cache-rule-required | 2026-04-24 | - | plugins/soleur/agents/engineering/infra/terraform-architect.md §Sharp Edges
+cq-terraform-failed-apply-orphaned-state | 2026-04-24 | - | plugins/soleur/agents/engineering/infra/terraform-architect.md §Sharp Edges
+cq-cloudflare-provider-alias-for-narrow-scope | 2026-04-24 | - | plugins/soleur/agents/engineering/infra/terraform-architect.md §Sharp Edges
+cq-cloudflare-ruleset-requires-applied-verification | 2026-04-24 | - | plugins/soleur/agents/engineering/infra/terraform-architect.md §Sharp Edges
+cq-cloudflare-ruleset-skip-action-requires-logging-block | 2026-04-24 | - | plugins/soleur/agents/engineering/infra/terraform-architect.md §Sharp Edges
+cq-cloudflare-block-ai-bots-not-skippable | 2026-04-24 | - | plugins/soleur/agents/engineering/infra/terraform-architect.md §Sharp Edges
+cq-provider-binary-grep-before-dashboard-reflex | 2026-04-24 | - | plugins/soleur/agents/engineering/infra/terraform-architect.md §Sharp Edges
+
+# Tier 2 — postmerge debugging → plugins/soleur/skills/postmerge/SKILL.md §Production Debugging:
+cq-deploy-webhook-observability-debug | 2026-04-24 | - | plugins/soleur/skills/postmerge/SKILL.md §Production Debugging
+cq-for-production-debugging-use | 2026-04-24 | - | plugins/soleur/skills/postmerge/SKILL.md §Production Debugging
+
+# Tier 2 — git/worktree rules → plugins/soleur/skills/git-worktree/SKILL.md §Sharp Edges:
+hr-never-fake-git-author | 2026-04-24 | - | plugins/soleur/skills/git-worktree/SKILL.md §Sharp Edges
+cq-when-lefthook-hangs-in-a-worktree-60s | 2026-04-24 | - | plugins/soleur/skills/git-worktree/SKILL.md §Sharp Edges
+
+# Tier 2 — MCP/Playwright/Pencil rules:
+hr-when-playwright-mcp-hits-an-auth-wall | 2026-04-24 | - | knowledge-base/project/constitution.md §Architecture (Playwright MCP)
+cq-playwright-mcp-uses-isolated-mode-mcp | 2026-04-24 | - | knowledge-base/project/constitution.md §Architecture (Playwright MCP)
+cq-pencil-mcp-silent-drop-diagnosis-checklist | 2026-04-24 | - | plugins/soleur/skills/pencil-setup/SKILL.md §Sharp Edges
+
+# Tier 2 — CI workflow rules → plugins/soleur/skills/ship/references/ci-workflow-authoring.md:
+hr-in-github-actions-run-blocks-never-use | 2026-04-24 | - | plugins/soleur/skills/ship/references/ci-workflow-authoring.md
+hr-github-actions-workflow-notifications | 2026-04-24 | - | plugins/soleur/skills/ship/references/ci-workflow-authoring.md
+cq-doppler-service-tokens-are-per-config | 2026-04-24 | - | plugins/soleur/skills/ship/references/ci-workflow-authoring.md
+cq-ci-steps-polling-json-endpoints-under | 2026-04-24 | - | plugins/soleur/skills/ship/references/ci-workflow-authoring.md
+cq-claude-code-action-pin-freshness | 2026-04-24 | - | plugins/soleur/skills/ship/references/ci-workflow-authoring.md
+cq-workflow-pattern-duplication-bug-propagation | 2026-04-24 | - | plugins/soleur/skills/ship/references/ci-workflow-authoring.md
+
+# Tier 2 — code-style/doppler rules:
+cq-for-local-verification-of-apps-doppler | 2026-04-24 | - | plugins/soleur/skills/work/SKILL.md §Common Pitfalls to Avoid
+cq-progressive-rendering-for-large-assets | 2026-04-24 | - | knowledge-base/project/constitution.md §Code Style Always
+cq-code-comments-symbol-anchors-not-line-numbers | 2026-04-24 | - | knowledge-base/project/constitution.md §Code Style Always
+cq-git-askpass-over-shell-helper | 2026-04-24 | - | knowledge-base/project/constitution.md §Code Style Always
+
+# Tier 2 — content/docs rules → knowledge-base/project/constitution.md §Content:
+cq-docs-cli-verification | 2026-04-24 | - | knowledge-base/project/constitution.md §Content Always
+cq-prose-issue-ref-line-start | 2026-04-24 | - | knowledge-base/project/constitution.md §Content Never
+
+# Tier 2 — feature-gate rules → knowledge-base/project/constitution.md §Architecture:
+wg-when-a-pr-includes-database-migrations | 2026-04-24 | - | knowledge-base/project/constitution.md §Architecture
+wg-when-a-feature-creates-external | 2026-04-24 | - | knowledge-base/project/constitution.md §Architecture
+wg-for-user-facing-pages-with-a-product-ux | 2026-04-24 | - | knowledge-base/project/constitution.md §Architecture
+wg-when-a-feature-stores-user-generated | 2026-04-24 | - | knowledge-base/project/constitution.md §Architecture (already present; retired as duplicate AGENTS.md entry)
