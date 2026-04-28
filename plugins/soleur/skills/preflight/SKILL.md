@@ -474,6 +474,54 @@ If the values differ (suffix bumped), **PASS**.
 - **FAIL** — client-bundle regression fix on branch with unchanged `CACHE_NAME`. Bump the suffix to force-purge the stale-cache class.
 - **SKIP** — no `fix(...)` commit, OR no client-bundle surface in the diff.
 
+### Check 9: Node-Only Encodings Banned in Client-Bundle Paths
+
+**Always runs (no path-pattern gate).** Enforces the rule that any module imported into the Next.js client bundle must use browser-safe APIs at module load. Node's `Buffer.from(s, "base64url")` (added in Node 16) is the canonical example: it works in vitest's default Node env AND in SSR, but the `buffer@5.x` polyfill webpack ships throws `TypeError: Unknown encoding: base64url` in browsers. A test that runs the validator only in Node passes; production hydration crashes on the first authenticated visit.
+
+**Rationale:** PR #3007's `assertProdSupabaseAnonKey` introduced `Buffer.from(middle, "base64url")` inside `validate-anon-key.ts`, which `lib/supabase/client.ts` imports at module load. PR #3014's added tests also ran in Node env and missed it. The deployed bundle threw on every page load — dashboard AND login. Layer 1 canary missed it (HTML-only). Layer 3 missed it (bash `base64 -d` is unrelated to webpack's Buffer polyfill). The only true source-level gate is to ban the encoding token.
+
+**Step 9.1: Build the candidate file list.**
+
+```bash
+git ls-files \
+  'apps/web-platform/lib/**/*.ts' \
+  'apps/web-platform/lib/**/*.tsx' \
+  'apps/web-platform/components/**/*.ts' \
+  'apps/web-platform/components/**/*.tsx' \
+  'apps/web-platform/app/**/*.ts' \
+  'apps/web-platform/app/**/*.tsx' \
+  'apps/web-platform/hooks/**/*.ts' \
+  'apps/web-platform/hooks/**/*.tsx' \
+  | grep -v -E '/(server|api)/' \
+  | grep -v -E '\.test\.(ts|tsx)$' \
+  | grep -v -E '\.spec\.(ts|tsx)$'
+```
+
+**Step 9.2: Grep candidates for banned tokens (excluding comment lines).**
+
+```bash
+grep -nE 'Buffer\.from\([^)]*"base64url"' <files> \
+  | grep -vE ':[[:space:]]*(//|\*)' \
+  | grep -vE '`[^`]*Buffer\.from\([^`]*"base64url"[^`]*`'
+```
+
+The first filter drops single-line `// ...` comments and JSDoc `* ...` lines. The second drops backtick-quoted references inside markdown-style code spans (which can occur in TSDoc/JSDoc bodies that don't start with `* `). The remaining matches are real call sites.
+
+If output is non-empty, **FAIL** with a per-file listing: "Node-only encoding `base64url` in client-bundle path `<file>:<line>`. Replace with browser-safe `atob` + `base64.padEnd(...)` per `apps/web-platform/lib/supabase/validate-anon-key.ts` post-fix pattern, OR move the file behind a `lib/server/` boundary if it does not need the client bundle."
+
+**Step 9.3: Ban-list extension policy.**
+
+The current ban-list (extend as new classes are discovered):
+
+- `Buffer.from(_, "base64url")` — covered above
+- Future additions go here with a **Why:** pointer to the learning file
+
+**Result:**
+
+- **PASS** — no banned token found in any client-bundle path.
+- **FAIL** — at least one banned token found (file + line listed).
+- **SKIP** — never; this check has no path gate (it always scans the canonical candidate list).
+
 ### Check 7: Canary Probe Set Covers Authenticated Surface
 
 **Path-gated:** only runs when `git diff --name-only origin/main...HEAD` contains `apps/web-platform/infra/ci-deploy.sh`. Otherwise return **SKIP** with note: "ci-deploy.sh untouched."
@@ -528,6 +576,7 @@ After all checks complete, aggregate results into a structured report:
 | Brand-Survival Self-Review | PASS/FAIL/SKIP | <details> |
 | Canary Probe Set Covers Auth Surface | PASS/FAIL/SKIP | <details> |
 | SW Cache Bump on Client-Bundle Fix | PASS/FAIL/SKIP | <details> |
+| Node-Only Encodings Banned in Client-Bundle | PASS/FAIL | <details> |
 
 **Overall: PASS / FAIL**
 ```

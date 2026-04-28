@@ -60,10 +60,17 @@ function decodeJwtPayload(raw: string): JwtPayload {
       "NEXT_PUBLIC_SUPABASE_ANON_KEY payload segment is not valid base64url",
     );
   }
-  // `Buffer.from(s, "base64url")` does not throw on malformed input — it returns
-  // a partial/empty buffer. Validity is enforced by the base64url-charset regex
-  // above, so no try/catch is needed here.
-  const json = Buffer.from(middle, "base64url").toString("utf8");
+  // Decode base64url manually — `Buffer.from(s, "base64url")` is Node 16+ only
+  // and throws `Unknown encoding: base64url` in browser Buffer polyfills. This
+  // module is imported by `lib/supabase/client.ts` which runs at module load in
+  // the client bundle, so the decode MUST be browser-safe. Validity is enforced
+  // by the base64url-charset regex above, so this conversion is total.
+  const base64 = middle.replace(/-/g, "+").replace(/_/g, "/");
+  const padded = base64.padEnd(base64.length + ((4 - (base64.length % 4)) % 4), "=");
+  const json =
+    typeof atob === "function"
+      ? atob(padded)
+      : Buffer.from(padded, "base64").toString("utf8");
   let parsed: unknown;
   try {
     parsed = JSON.parse(json);
