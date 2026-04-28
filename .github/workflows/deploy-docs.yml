@@ -58,7 +58,7 @@ jobs:
         run: |
           test -f _site/index.html || { echo "Missing index.html"; exit 1; }
           for page in agents skills changelog getting-started; do
-            test -f "_site/pages/${page}.html" || { echo "Missing ${page}.html"; exit 1; }
+            test -f "_site/${page}/index.html" || { echo "Missing ${page}/index.html"; exit 1; }
           done
           test -f _site/404.html || { echo "Missing 404.html"; exit 1; }
           test -f _site/css/style.css || { echo "Missing css/style.css"; exit 1; }
