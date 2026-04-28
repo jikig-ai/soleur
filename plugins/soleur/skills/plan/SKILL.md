@@ -249,6 +249,7 @@ Think like a product manager - what would make this issue clear and actionable? 
 - [ ] Prepare code examples or reproduction steps if applicable, name the mock filenames in the lists
 - [ ] When planning a directory rename, enumerate ALL files in the target directory as potential self-reference holders -- directory trees and conceptual prose derived from the directory name don't match path-pattern greps
 - [ ] When the plan prescribes scoping a helper function by a new column/predicate, `rg` the codebase for every other inline query on the same table that BYPASSES the helper (id-based lookups, pre-helper historical queries, WS-handler inline SELECTs) and list each as a `Files to Edit` entry -- sibling queries are the most common silent backdoor after a tenant-scope change. See learning `2026-04-22-scope-by-new-column-audit-every-query-not-just-the-helper.md`.
+- [ ] When the plan prescribes any path glob (e.g., `apps/foo/**`, `**/doppler*.{yml,yaml,sh}`, `.github/workflows/*foo*.yml`), verify each glob matches ≥1 real file via `git ls-files | grep -E '<translated-glob>'` AND for negative-coverage gates (security gates, denylist filters, sensitive-path detectors) enumerate sibling files at the same architectural depth — globs constructed from a plan miss files the plan never inventoried. See AGENTS.md `hr-when-a-plan-specifies-relative-paths-e-g` and learning `2026-04-28-plan-globs-must-be-verified-against-repo-structure.md`.
 
 ### 2.5. Domain Review Gate
 
