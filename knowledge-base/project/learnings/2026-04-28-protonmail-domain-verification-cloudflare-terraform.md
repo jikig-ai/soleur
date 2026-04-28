@@ -74,34 +74,14 @@ recommended value uses softfail for compatibility with mailing-list rewriting
 and other forward scenarios. Tighten back to `-all` once deliverability is
 observed clean across major receivers (Gmail, Outlook, iCloud, Yahoo).
 
-## Session Errors
+## Operational Tip
 
-**Stale bare-repo read before worktree edit** -- read
-`apps/web-platform/infra/dns.tf` from the bare-repo working path before
-creating the worktree, then tried to Edit the worktree copy. The Edit tool
-rejected it (read-before-edit guard); the bare-repo content was also stale
-(55 lines vs the worktree's ~184 lines, missing `spf_root`, `github_pages`,
-`supabase_acme_challenge`, etc.).
-
-- **Recovery:** Re-read the file at the worktree absolute path, then Edit succeeded.
-- **Prevention:** Already covered by `hr-when-in-a-worktree-never-read-from-bare`
-  and `hr-always-read-a-file-before-editing-it`; the Edit tool enforces
-  read-before-edit mechanically. Discoverability exit applies -- no new rule
-  warranted.
-
-**Cloudflare anycast NS edge propagation lag misread as apply failure** --
-immediately after `terraform apply` succeeded for 5 new records + 1 update,
-`dig @<authoritative-ns>` returned empty/stale answers for MX, SPF, and 2 of
-3 DKIM CNAMEs. Looked like a partial apply.
-
-- **Recovery:** Queried the Cloudflare REST API directly
-  (`/client/v4/zones/<id>/dns_records`) to confirm all 7 records existed in
-  CF's source-of-truth. NS edge caught up within ~30 seconds.
-- **Prevention:** When `dig @<ns>` disagrees with `terraform apply` success,
-  the API is the source-of-truth. CF's anycast edge can lag the API by tens
-  of seconds for newly-mutated records; do not interpret an empty `dig`
-  response as a failed apply without first checking the API. Discoverability
-  exit applies (clear empty `dig` output) -- no new rule warranted.
+**CF anycast edge can lag the API by tens of seconds.** Immediately after
+`terraform apply`, querying the authoritative NS with `dig @<ns>` may return
+empty/stale answers for newly-mutated records. The Cloudflare REST API
+(`/client/v4/zones/<id>/dns_records`) is the source-of-truth -- prefer it
+over `dig` when verifying a fresh apply. NS edge typically reconciles within
+~30 seconds.
 
 ## Tags
 

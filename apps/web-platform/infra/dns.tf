@@ -154,6 +154,8 @@ resource "cloudflare_record" "protonmail_mx_secondary" {
 # ProtonMail DKIM signing -- three CNAMEs per Proton's per-domain key rotation
 # scheme. Targets are issued once per domain in Proton's admin panel; do not
 # regenerate without coordinating with Proton support.
+# Not proxied -- DKIM signature lookups must hit Proton's authoritative NS
+# directly so receivers can resolve the published public key.
 resource "cloudflare_record" "protonmail_dkim_1" {
   zone_id = var.cf_zone_id
   name    = "protonmail._domainkey"
