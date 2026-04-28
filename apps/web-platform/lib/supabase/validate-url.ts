@@ -9,6 +9,13 @@
 //   - `.github/workflows/reusable-release.yml` step "Validate NEXT_PUBLIC_SUPABASE_URL build-arg"
 //   - `apps/web-platform/scripts/verify-required-secrets.sh` (`SUPABASE_URL_RE`)
 // All three sites enforce the same canonical-shape contract. Edit together.
+//
+// Also paired with the JWT-claims gates for `NEXT_PUBLIC_SUPABASE_ANON_KEY`:
+//   - `./validate-anon-key.ts` (sibling validator, cross-checks JWT ref against URL canonical first label)
+//   - `.github/workflows/reusable-release.yml` step "Validate NEXT_PUBLIC_SUPABASE_ANON_KEY build-arg"
+//   - `plugins/soleur/skills/preflight/SKILL.md` Check 5 (Steps 5.3 + 5.4)
+// `validate-anon-key.ts` consumes this module's URL canonical shape — any
+// regex change here breaks the JWT ref derivation there. Update both.
 
 const CANONICAL_HOSTNAME = /^[a-z0-9]{20}\.supabase\.co$/;
 

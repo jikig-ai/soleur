@@ -286,6 +286,7 @@ jobs:
       # Mirrored regex sites (edit together):
       #   - apps/web-platform/lib/supabase/validate-url.ts (CANONICAL_HOSTNAME + PROD_ALLOWED_HOSTS)
       #   - apps/web-platform/scripts/verify-required-secrets.sh (SUPABASE_URL_RE)
+      #   - plugins/soleur/skills/preflight/SKILL.md Check 5 (deployed-bundle gate)
       - name: Validate NEXT_PUBLIC_SUPABASE_URL build-arg
         if: steps.version.outputs.next != '' && inputs.docker_image != ''
         env:
@@ -302,6 +303,92 @@ jobs:
             exit 1
           fi
           echo "::notice::NEXT_PUBLIC_SUPABASE_URL passes canonical-shape validation"
+
+      # Mirrored JWT-claims sites (edit together):
+      #   - apps/web-platform/lib/supabase/validate-anon-key.ts (claims assertion)
+      #   - apps/web-platform/scripts/verify-required-secrets.sh (Doppler-side gate)
+      #   - plugins/soleur/skills/preflight/SKILL.md Check 5 Step 5.4 (deployed-bundle gate)
+      # IMPORTANT: depends on the URL Validate step above for `expected_ref`
+      # derivation; must run AFTER it and BEFORE docker/build-push-action.
+      - name: Validate NEXT_PUBLIC_SUPABASE_ANON_KEY build-arg
+        if: steps.version.outputs.next != '' && inputs.docker_image != ''
+        env:
+          SUPABASE_ANON_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
+          SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${SUPABASE_ANON_KEY:-}" ]]; then
+            echo "::error::NEXT_PUBLIC_SUPABASE_ANON_KEY secret is empty"
+            exit 1
+          fi
+          KEY="${SUPABASE_ANON_KEY//$'\r'/}"
+          KEY="${KEY//$'\n'/}"
+          if [[ "$(printf '%s' "$KEY" | tr -cd '.' | wc -c)" -ne 2 ]]; then
+            echo "::error::NEXT_PUBLIC_SUPABASE_ANON_KEY is not a 3-segment JWT"
+            exit 1
+          fi
+          payload=$(printf '%s' "$KEY" | cut -d. -f2)
+          if [[ -z "$payload" ]]; then
+            echo "::error::NEXT_PUBLIC_SUPABASE_ANON_KEY payload segment is empty"
+            exit 1
+          fi
+          pad=$(( (4 - ${#payload} % 4) % 4 ))
+          if [[ $pad -gt 0 ]]; then
+            padded="$payload$(printf '=%.0s' $(seq 1 $pad))"
+          else
+            padded="$payload"
+          fi
+          json=$(printf '%s' "$padded" | tr '_-' '/+' | base64 -d 2>/dev/null) || {
+            echo "::error::NEXT_PUBLIC_SUPABASE_ANON_KEY payload is not valid base64url"
+            exit 1
+          }
+          iss=$(printf '%s' "$json" | jq -r '.iss // ""')
+          role=$(printf '%s' "$json" | jq -r '.role // ""')
+          ref=$(printf '%s' "$json" | jq -r '.ref // ""')
+          # Strip CR/LF/control chars before echo to defend against log
+          # injection via crafted JWT claim values (e.g., a `\n::error::JWT iss="supabase"`
+          # injection that would forge a success-looking annotation).
+          iss_safe="${iss//[$'\n\r']/}"
+          role_safe="${role//[$'\n\r']/}"
+          ref_safe="${ref//[$'\n\r']/}"
+          if [[ "$iss" != "supabase" ]]; then
+            echo "::error::JWT iss=\"$iss_safe\", expected \"supabase\""
+            exit 1
+          fi
+          if [[ "$role" != "anon" ]]; then
+            echo "::error::JWT role=\"$role_safe\", expected \"anon\" (a non-anon role in the browser bundle is a critical security issue: role=service_role grants admin RLS bypass to every visitor)"
+            exit 1
+          fi
+          if [[ ! "$ref" =~ ^[a-z0-9]{20}$ ]]; then
+            echo "::error::JWT ref=\"$ref_safe\" does not match canonical 20-char shape (^[a-z0-9]{20}$)"
+            exit 1
+          fi
+          case "$ref" in
+            test*|placeholder*|example*|service*|local*|dev*|stub*)
+              echo "::error::JWT ref=\"$ref_safe\" is a placeholder/test-fixture value"
+              exit 1
+              ;;
+          esac
+          host=$(printf '%s' "$SUPABASE_URL" | sed -E 's#^https://##; s#/.*$##')
+          if [[ "$host" =~ ^[a-z0-9]{20}\.supabase\.co$ ]]; then
+            expected_ref="${host%%.*}"
+          else
+            # Bound DNS wall-clock on resolver flake: 3s timeout, 2 tries (max ~6s).
+            cname=$(dig +short +time=3 +tries=2 CNAME "$host" | sed 's/\.$//' | head -1)
+            if [[ "$cname" =~ ^([a-z0-9]{20})\.supabase\.co$ ]]; then
+              expected_ref="${BASH_REMATCH[1]}"
+            else
+              cname_safe="${cname//[$'\n\r']/}"
+              host_safe="${host//[$'\n\r']/}"
+              echo "::error::Cannot resolve canonical ref from URL host $host_safe (CNAME=$cname_safe)"
+              exit 1
+            fi
+          fi
+          if [[ "$ref" != "$expected_ref" ]]; then
+            echo "::error::JWT ref=\"$ref_safe\" does not match URL canonical ref=\"$expected_ref\""
+            exit 1
+          fi
+          echo "::notice::NEXT_PUBLIC_SUPABASE_ANON_KEY passes JWT-claims validation (ref=$ref_safe)"
 
       - name: Build and push Docker image
         id: docker_build

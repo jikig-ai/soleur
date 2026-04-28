@@ -1,16 +1,26 @@
 import { createBrowserClient } from "@supabase/ssr";
 import { assertProdSupabaseUrl } from "./validate-url";
+import { assertProdSupabaseAnonKey } from "./validate-anon-key";
 
 const DEV_PLACEHOLDER_URL = "https://placeholder.supabase.co";
 const DEV_PLACEHOLDER_KEY = "placeholder-anon-key";
 let warnedMissing = false;
 
-// Validate once at module load. `NEXT_PUBLIC_SUPABASE_URL` is statically
-// inlined by Next.js DefinePlugin, so the value cannot change at runtime —
-// re-validating per `createClient()` is wasted work and would emit one Sentry
-// event per call site if a bad bundle ships. Throwing here surfaces in the
-// Next.js error overlay before any UI tries to mount.
+// Validate once at module load. `NEXT_PUBLIC_SUPABASE_URL` and
+// `NEXT_PUBLIC_SUPABASE_ANON_KEY` are statically inlined by Next.js
+// DefinePlugin, so the values cannot change at runtime — re-validating per
+// `createClient()` is wasted work and would emit one Sentry event per call
+// site if a bad bundle ships. Throwing here surfaces in the Next.js error
+// overlay before any UI tries to mount.
+//
+// Call order is load-bearing: `assertProdSupabaseUrl` runs first because
+// `assertProdSupabaseAnonKey`'s JWT-ref cross-check anchors on the URL's
+// canonical first label.
 assertProdSupabaseUrl(process.env.NEXT_PUBLIC_SUPABASE_URL);
+assertProdSupabaseAnonKey(
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY,
+  process.env.NEXT_PUBLIC_SUPABASE_URL,
+);
 
 export function createClient() {
   if (!process.env.NEXT_PUBLIC_SUPABASE_URL) {

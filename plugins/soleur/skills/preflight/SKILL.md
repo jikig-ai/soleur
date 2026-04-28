@@ -244,9 +244,9 @@ Otherwise **PASS**.
 
 ### Check 5: Production Bundle Supabase Host
 
-**Path-gated:** only runs when `git diff --name-only origin/main...HEAD` contains any of `apps/web-platform/lib/supabase/client.ts`, `apps/web-platform/lib/supabase/validate-url.ts`, `apps/web-platform/Dockerfile`, `.github/workflows/reusable-release.yml`, or `apps/web-platform/scripts/verify-required-secrets.sh`. Otherwise return **SKIP** with note: "No build-arg surface changes detected."
+**Path-gated:** only runs when `git diff --name-only origin/main...HEAD` contains any of `apps/web-platform/lib/supabase/client.ts`, `apps/web-platform/lib/supabase/validate-url.ts`, `apps/web-platform/lib/supabase/validate-anon-key.ts`, `apps/web-platform/Dockerfile`, `.github/workflows/reusable-release.yml`, or `apps/web-platform/scripts/verify-required-secrets.sh`. Otherwise return **SKIP** with note: "No build-arg surface changes detected."
 
-**Note:** Complements Check 4. Check 4 enforces Doppler dev/prd isolation; Check 5 covers the GitHub-repo-secrets surface that feeds the prod Docker build (`secrets.NEXT_PUBLIC_SUPABASE_URL` in `reusable-release.yml`). The two sources can drift — see `knowledge-base/project/learnings/bug-fixes/2026-04-28-oauth-supabase-url-test-fixture-leaked-into-prod-build.md`.
+**Note:** Complements Check 4. Check 4 enforces Doppler dev/prd isolation; Check 5 covers the GitHub-repo-secrets surface that feeds the prod Docker build (`secrets.NEXT_PUBLIC_SUPABASE_URL` and `secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY` in `reusable-release.yml`). The two sources can drift — see `knowledge-base/project/learnings/bug-fixes/2026-04-28-oauth-supabase-url-test-fixture-leaked-into-prod-build.md` (URL class) and `knowledge-base/project/learnings/bug-fixes/2026-04-28-anon-key-test-fixture-leaked-into-prod-build.md` (anon-key class).
 
 **Step 5.1: Discover the deployed login chunk filename.**
 
@@ -280,11 +280,34 @@ grep -oE 'https?://api\.soleur\.ai' /tmp/preflight-chunk.js | sort -u
 
 The union of step 5.2 outputs must contain at least one host matching `^https://([a-z0-9]{20}\.supabase\.co|api\.soleur\.ai)$` and zero placeholder hosts (`test.supabase.co`, `placeholder.supabase.co`, `example.supabase.co`, `localhost`, `0.0.0.0`).
 
+**Step 5.4: Probe the chunk for inlined Supabase anon-key JWT and assert claims.**
+
+Reuses `/tmp/preflight-chunk.js` from Step 5.2 — single network round-trip. Pre-condition: Step 5.2's `curl` succeeded and `/tmp/preflight-chunk.js` is readable. If the chunk-fetch failed in Step 5.2, the entire Check 5 already returned SKIP — Step 5.4 does not run.
+
+```bash
+grep -oE 'eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+' /tmp/preflight-chunk.js | head -1
+```
+
+If the grep produces no output AND Step 5.2 found at least one Supabase host reference, return **FAIL** with note: "Supabase host found in chunk but no JWT — bundle is structurally inconsistent (host without key) and indicates a build regression." If the grep produces no output AND Step 5.2 also found zero Supabase host references, return **SKIP** with note: "Supabase init chunked elsewhere — investigate manually." (Distinguishing FAIL-on-inconsistency from SKIP-on-chunking-change prevents fail-open on a security-critical gate.)
+
+For the located JWT, decode the payload (segment 2) and assert:
+
+```bash
+JWT=$(grep -oE 'eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+' /tmp/preflight-chunk.js | head -1)
+PAYLOAD=$(printf '%s' "$JWT" | cut -d. -f2)
+PAD=$(( (4 - ${#PAYLOAD} % 4) % 4 ))
+if [[ $PAD -gt 0 ]]; then PADDED="$PAYLOAD$(printf '=%.0s' $(seq 1 $PAD))"; else PADDED="$PAYLOAD"; fi
+JSON=$(printf '%s' "$PADDED" | tr '_-' '/+' | base64 -d 2>/dev/null)
+printf '%s' "$JSON" | jq -r '"iss=\(.iss) role=\(.role) ref=\(.ref)"'
+```
+
+The decoded claims MUST satisfy: `iss == "supabase"`, `role == "anon"`, `ref` matches `^[a-z0-9]{20}$`, and `ref` is not in the placeholder set (`test*`, `placeholder*`, `example*`, `service*`, `local*`, `dev*`, `stub*`).
+
 **Result:**
 
-- **PASS** — all observed Supabase-host references are canonical.
-- **FAIL** — any placeholder host is present in the bundle (e.g., `https://test.supabase.co`). Indicates a build-arg leak; the operator must rotate `NEXT_PUBLIC_SUPABASE_URL` (GitHub repo secret) and trigger a fresh release per the runbook in the learning file.
-- **SKIP** — chunk not retrievable, or chunk contains zero Supabase host references (likely a chunking change moved the supabase init out of the login chunk — investigate manually before re-running).
+- **PASS** — all observed Supabase-host references are canonical AND the inlined anon-key JWT has canonical claims.
+- **FAIL** — any of: (a) any placeholder host is present in the bundle (e.g., `https://test.supabase.co`); (b) inlined anon-key JWT has placeholder ref or non-canonical claims (e.g., `role=service_role` — silent RLS bypass); (c) `iss != "supabase"` (cross-vendor JWT paste). Indicates a build-arg leak; the operator must rotate the corresponding GitHub repo secret (`NEXT_PUBLIC_SUPABASE_URL` or `NEXT_PUBLIC_SUPABASE_ANON_KEY`) and trigger a fresh release per the runbook in the learning files.
+- **SKIP** — chunk not retrievable, or chunk contains zero Supabase host references / no JWT (likely a chunking change moved the supabase init out of the login chunk — investigate manually before re-running).
 
 ### Check 6: Brand-Survival Self-Review
 
