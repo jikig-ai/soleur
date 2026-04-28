@@ -26,7 +26,7 @@ Run `git rev-parse --abbrev-ref HEAD` to get the current branch name.
 
 ## Phase 1: Run All Checks in Parallel
 
-Run these five checks (plus the Not-Bare-Repo assertion) as parallel Bash tool calls. Each returns PASS, FAIL, or SKIP.
+Run these six checks (plus the Not-Bare-Repo assertion) as parallel Bash tool calls. Each returns PASS, FAIL, or SKIP.
 
 ### Assertion: Not-Bare-Repo
 
@@ -242,11 +242,55 @@ Otherwise **PASS**.
 - **FAIL** -- refs match (single-DB blast radius), hostname is not a canonical Supabase endpoint, or custom domain uses A-record-only routing
 - **SKIP** -- Doppler unavailable, NEXT_PUBLIC_SUPABASE_URL unset in either config, or DNS resolution failed (`dig` rc != 0)
 
-### Check 5: Brand-Survival Self-Review
+### Check 5: Production Bundle Supabase Host
+
+**Path-gated:** only runs when `git diff --name-only origin/main...HEAD` contains any of `apps/web-platform/lib/supabase/client.ts`, `apps/web-platform/lib/supabase/validate-url.ts`, `apps/web-platform/Dockerfile`, `.github/workflows/reusable-release.yml`, or `apps/web-platform/scripts/verify-required-secrets.sh`. Otherwise return **SKIP** with note: "No build-arg surface changes detected."
+
+**Note:** Complements Check 4. Check 4 enforces Doppler dev/prd isolation; Check 5 covers the GitHub-repo-secrets surface that feeds the prod Docker build (`secrets.NEXT_PUBLIC_SUPABASE_URL` in `reusable-release.yml`). The two sources can drift — see `knowledge-base/project/learnings/bug-fixes/2026-04-28-oauth-supabase-url-test-fixture-leaked-into-prod-build.md`.
+
+**Step 5.1: Discover the deployed login chunk filename.**
+
+The chunk filename is content-hashed and changes per build, so the probe must discover it dynamically. Run as separate Bash calls (no command substitution per skill convention):
+
+```bash
+curl -fsSL -A "Mozilla/5.0" https://app.soleur.ai/login -o /tmp/preflight-login.html
+```
+
+```bash
+grep -oE '/_next/static/chunks/app/\(auth\)/login/page-[a-f0-9]+\.js' /tmp/preflight-login.html | head -1
+```
+
+If the curl fails or the grep produces no output, return **SKIP** with note: "Could not fetch /login HTML or could not locate login chunk reference."
+
+**Step 5.2: Probe the chunk for Supabase hosts.**
+
+```bash
+curl -fsSL "https://app.soleur.ai<chunk_path>" -o /tmp/preflight-chunk.js
+```
+
+```bash
+grep -oE 'https?://[a-z0-9.-]*supabase\.co' /tmp/preflight-chunk.js | sort -u
+```
+
+```bash
+grep -oE 'https?://api\.soleur\.ai' /tmp/preflight-chunk.js | sort -u
+```
+
+**Step 5.3: Assert canonical shape.**
+
+The union of step 5.2 outputs must contain at least one host matching `^https://([a-z0-9]{20}\.supabase\.co|api\.soleur\.ai)$` and zero placeholder hosts (`test.supabase.co`, `placeholder.supabase.co`, `example.supabase.co`, `localhost`, `0.0.0.0`).
+
+**Result:**
+
+- **PASS** — all observed Supabase-host references are canonical.
+- **FAIL** — any placeholder host is present in the bundle (e.g., `https://test.supabase.co`). Indicates a build-arg leak; the operator must rotate `NEXT_PUBLIC_SUPABASE_URL` (GitHub repo secret) and trigger a fresh release per the runbook in the learning file.
+- **SKIP** — chunk not retrievable, or chunk contains zero Supabase host references (likely a chunking change moved the supabase init out of the login chunk — investigate manually before re-running).
+
+### Check 6: Brand-Survival Self-Review
 
 Enforces `hr-weigh-every-decision-against-target-user-impact`: PRs that touch credentials, auth, data, payments, or user-owned resources must declare a `## User-Brand Impact` section (with a valid threshold) in the PR body. The section is the ship-time signal that the framing question was answered before the change reached production.
 
-**Step 5.1: Detect sensitive-path diff.**
+**Step 6.1: Detect sensitive-path diff.**
 
 The canonical sensitive-path regex (single source of truth, mirrored verbatim in `plugins/soleur/skills/deepen-plan/SKILL.md` Phase 4.6 Step 2):
 
@@ -261,7 +305,7 @@ Run as two separate Bash calls (assignment, then the piped `git`/`grep`). The re
 
 If `grep` exits non-zero (no match), return **SKIP** with note: "No sensitive paths touched."
 
-**Step 5.2: Fetch the PR body to a private temp file.**
+**Step 6.2: Fetch the PR body to a private temp file.**
 
 Use `mktemp` so the path is not predictable on multi-user hosts (defends against tmp-symlink attacks per general POSIX best practice). Two separate Bash calls (no command substitution):
 
@@ -275,23 +319,23 @@ gh pr view --json body --jq .body > "$PR_BODY_FILE"
 
 Trap exit so the temp file is removed: `trap 'rm -f "$PR_BODY_FILE"' EXIT`. If `gh pr view` fails (no PR exists for the current branch), return **SKIP** with note: "No PR available — section validation deferred to next preflight run after PR creation."
 
-**Step 5.3: Resolve the canonical compliance source (PR body OR linked plan file).**
+**Step 6.3: Resolve the canonical compliance source (PR body OR linked plan file).**
 
 The `## User-Brand Impact` section may live in the PR body itself (typical for short PRs) OR in a plan file referenced from the PR body (typical for plans authored via `/soleur:plan`). Both signals are valid per `plugins/soleur/skills/review/SKILL.md` `<conditional_agents>` block. Resolve a single check input by stripping noise from the PR body and concatenating any referenced plan file.
 
 ```bash
-# 5.3a: strip HTML comments and fenced code blocks from PR body before any regex match
+# 6.3a: strip HTML comments and fenced code blocks from PR body before any regex match
 SCRUBBED_BODY=$(awk 'BEGIN{f=0} /^[[:space:]]*```/{f=!f; next} !f{print}' "$PR_BODY_FILE" \
   | perl -0777 -pe 's/<!--.*?-->//gs')
 ```
 
 ```bash
-# 5.3b: extract any linked plan file path (knowledge-base/project/plans/*.md) from the scrubbed body
+# 6.3b: extract any linked plan file path (knowledge-base/project/plans/*.md) from the scrubbed body
 PLAN_PATH=$(printf '%s' "$SCRUBBED_BODY" | grep -Eo 'knowledge-base/project/plans/[^[:space:])"`'\'']+\.md' | head -n 1 || true)
 ```
 
 ```bash
-# 5.3c: build the combined check input
+# 6.3c: build the combined check input
 COMBINED=$(mktemp -t preflight-combined.XXXXXXXX.md)
 printf '%s\n' "$SCRUBBED_BODY" > "$COMBINED"
 if [[ -n "$PLAN_PATH" && -f "$PLAN_PATH" ]]; then
@@ -303,7 +347,7 @@ trap 'rm -f "$PR_BODY_FILE" "$COMBINED"' EXIT
 
 The `awk` pass strips fenced code blocks (so an HTML/markdown example inside ` ``` ` cannot fool a substring match). The `perl -0777` pass strips HTML comments (`<!-- ... -->` including multi-line). Anything inside fences/comments cannot appear in `$COMBINED`.
 
-**Step 5.4: Check for the section heading.**
+**Step 6.4: Check for the section heading.**
 
 ```bash
 grep -q '^## User-Brand Impact' "$COMBINED"
@@ -311,7 +355,7 @@ grep -q '^## User-Brand Impact' "$COMBINED"
 
 If absent, return **FAIL** with: "Sensitive-path diff detected but neither PR body nor linked plan file contains a `## User-Brand Impact` section. Add the section per `plugins/soleur/skills/plan/references/plan-issue-templates.md`."
 
-**Step 5.5: Validate threshold and scope-out — anchored, not substring.**
+**Step 6.5: Validate threshold and scope-out — anchored, not substring.**
 
 Extract the threshold line. Require canonical bullet form (`- **Brand-survival threshold:** …`) so a free-text sentence containing the words "single-user incident" cannot pass:
 
@@ -353,8 +397,8 @@ If `RESULT=PASS_INCIDENT` or `RESULT=PASS_AGGREGATE`: **PASS**.
 
 **Interactive mode behaviour:** On **FAIL**, present the failure reason and offer **AskUserQuestion** with options:
 
-1. "Fill in the section now" — prompt the operator for the three required lines (artifact / vector / threshold), append to the PR body via `gh pr edit --body-file -`, re-run Check 5.
-2. "Add scope-out note" — if the threshold should defensibly be `none`, prompt for the one-sentence reason, append `threshold: none, reason: <reason>` to the section, re-run Check 5.
+1. "Fill in the section now" — prompt the operator for the three required lines (artifact / vector / threshold), append to the PR body via `gh pr edit --body-file -`, re-run Check 6.
+2. "Add scope-out note" — if the threshold should defensibly be `none`, prompt for the one-sentence reason, append `threshold: none, reason: <reason>` to the section, re-run Check 6.
 3. "Abort — fix elsewhere" — stop the pipeline; operator handles in another tool.
 
 **Result:**
@@ -377,6 +421,7 @@ After all checks complete, aggregate results into a structured report:
 | Security Headers | PASS/FAIL/SKIP | <details> |
 | Lockfile Consistency | PASS/FAIL/SKIP | <details> |
 | Environment Isolation | PASS/FAIL/SKIP | <details> |
+| Production Bundle Supabase Host | PASS/FAIL/SKIP | <details> |
 | Brand-Survival Self-Review | PASS/FAIL/SKIP | <details> |
 
 **Overall: PASS / FAIL**
