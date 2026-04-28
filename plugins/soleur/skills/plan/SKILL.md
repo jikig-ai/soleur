@@ -350,6 +350,34 @@ No cross-domain implications detected — infrastructure/tooling change.
 
 Place after Acceptance Criteria, before Test Scenarios (or before the last major section). If the plan lacks an Acceptance Criteria heading, place before the last major section or at the end of the plan.
 
+### 2.6. User-Brand Impact Section (Always)
+
+Every plan MUST include a `## User-Brand Impact` section. This is the framing-time enforcement of AGENTS.md `hr-weigh-every-decision-against-target-user-impact` and the gate that catches the #2887-class blind spot — decisions weighed on technical and convenience axes only, with no question asked about what one user's breach would cost the brand.
+
+**Step 1 — Insert the section.** If the plan draft does not yet contain a `## User-Brand Impact` heading, insert one using the template from `plugins/soleur/skills/plan/references/plan-issue-templates.md`. The section MUST appear between the description and the Acceptance Criteria. The three required lines:
+
+- `**If this lands broken, the user experiences:**` — name a concrete, user-facing artifact.
+- `**If this leaks, the user's [data / workflow / money] is exposed via:**` — name a concrete exposure vector.
+- `**Brand-survival threshold:** none | single-user incident | aggregate pattern` — choose one.
+
+**Step 2 — Brainstorm carry-forward.** If the brainstorm document loaded in Phase 0.5 contains a `## User-Brand Impact` framing (which it should when brainstorm Phase 0.1 set `USER_BRAND_CRITICAL=true`), import the threshold and the artifact/vector declarations directly rather than re-authoring. Carry-forward is preferred — re-authoring at plan time risks drift from the brainstormed framing.
+
+**Step 3 — Threshold-driven sign-off requirement.** If the threshold resolves to `single-user incident`:
+
+1. Add `requires_cpo_signoff: true` to the plan's YAML frontmatter.
+2. Display: "CPO sign-off required before `/work` begins. Invoke CPO domain leader if not already covered by Phase 2.5 carry-forward, or confirm CPO has reviewed the brainstorm."
+3. Note in the plan that `user-impact-reviewer` will be invoked at review-time (handled by `plugins/soleur/skills/review/SKILL.md` conditional-agent block).
+
+If the threshold resolves to `aggregate pattern`, no per-PR sign-off is added but the section must still be present.
+
+If the threshold resolves to `none` AND the diff touches a sensitive path (preflight Check 5 globs), the section MUST contain a `threshold: none, reason: <one sentence>` scope-out line. Without it, preflight will FAIL at ship time.
+
+**Step 4 — Sharp-edge note.** When emitting the final plan output, add a Sharp Edges entry:
+
+> A plan whose `## User-Brand Impact` section is empty, contains only `TBD`/`TODO`/placeholder text, or omits the threshold will fail `deepen-plan` Phase 4.6. Fill it before requesting deepen-plan or `/work`.
+
+**Why:** Triggered by #2887 — the dev/prd Doppler-config collapse shipped for months because every existing gate weighed the decision on technical and convenience axes only. The framing-time enforcement here, combined with deepen-plan Phase 4.6 (halt on missing section), preflight Check 5 (ship-time gate), and the `user-impact-reviewer` conditional agent, closes the workflow-level loop.
+
 ### 3. SpecFlow Analysis
 
 **If spec-flow-analyzer was already invoked in Phase 2.5, skip this phase and proceed to Phase 4.**

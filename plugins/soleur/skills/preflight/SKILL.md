@@ -26,7 +26,7 @@ Run `git rev-parse --abbrev-ref HEAD` to get the current branch name.
 
 ## Phase 1: Run All Checks in Parallel
 
-Run these four checks (plus the Not-Bare-Repo assertion) as parallel Bash tool calls. Each returns PASS, FAIL, or SKIP.
+Run these five checks (plus the Not-Bare-Repo assertion) as parallel Bash tool calls. Each returns PASS, FAIL, or SKIP.
 
 ### Assertion: Not-Bare-Repo
 
@@ -242,6 +242,81 @@ Otherwise **PASS**.
 - **FAIL** -- refs match (single-DB blast radius), hostname is not a canonical Supabase endpoint, or custom domain uses A-record-only routing
 - **SKIP** -- Doppler unavailable, NEXT_PUBLIC_SUPABASE_URL unset in either config, or DNS resolution failed (`dig` rc != 0)
 
+### Check 5: Brand-Survival Self-Review
+
+Enforces `hr-weigh-every-decision-against-target-user-impact`: PRs that touch credentials, auth, data, payments, or user-owned resources must declare a `## User-Brand Impact` section (with a valid threshold) in the PR body. The section is the ship-time signal that the framing question was answered before the change reached production.
+
+**Step 5.1: Detect sensitive-path diff.**
+
+```bash
+git diff --name-only origin/main...HEAD
+```
+
+Check whether any changed file matches one of these globs (broader-glob strategy — false positives are cheap, false negatives are brand-ending):
+
+- `apps/web-platform/server/**`
+- `apps/web-platform/supabase/**`
+- `apps/web-platform/lib/stripe*`
+- `apps/web-platform/lib/auth*`
+- `apps/web-platform/lib/byok*`
+- `infra/**`
+- `**/doppler*.{yml,yaml,sh}`
+- `.github/workflows/*doppler*.yml`
+
+If no sensitive paths are touched, return **SKIP** with note: "No sensitive paths touched."
+
+**Step 5.2: Fetch the PR body.**
+
+Two separate Bash calls (no command substitution):
+
+```bash
+gh pr view --json body --jq .body > /tmp/preflight-pr-body.md
+```
+
+If the call fails (no PR exists for the current branch), return **SKIP** with note: "No PR available — section validation deferred to next preflight run after PR creation."
+
+**Step 5.3: Check for the section heading.**
+
+```bash
+grep -q '^## User-Brand Impact' /tmp/preflight-pr-body.md
+```
+
+If absent, return **FAIL** with: "Sensitive-path diff detected but PR body is missing `## User-Brand Impact` section. Add the section per `plugins/soleur/skills/plan/references/plan-issue-templates.md`."
+
+**Step 5.4: Validate threshold and scope-out.**
+
+Extract the threshold line:
+
+```bash
+grep -E '^.*Brand-survival threshold:' /tmp/preflight-pr-body.md
+```
+
+- If the line contains `single-user incident` or `aggregate pattern`: **PASS**.
+- If the line contains `none`: also grep for an inline scope-out note:
+
+  ```bash
+  grep -E 'threshold:[[:space:]]*none,[[:space:]]*reason:' /tmp/preflight-pr-body.md
+  ```
+
+  - Scope-out present: **PASS** (operator has explicitly justified why the touched sensitive path is not user-impacting).
+  - Scope-out absent: **FAIL** with: "Sensitive-path diff with `threshold: none` requires a `threshold: none, reason: <why>` scope-out note inside the User-Brand Impact section."
+
+- If the threshold line is missing entirely or its value is not one of the three allowed labels: **FAIL** with: "User-Brand Impact section present but `Brand-survival threshold:` line is missing or has an invalid value. Use one of: `none`, `single-user incident`, `aggregate pattern`."
+
+**Headless mode behaviour:** On **FAIL**, abort with the error details (no prompt). On **PASS** or **SKIP**, continue silently.
+
+**Interactive mode behaviour:** On **FAIL**, present the failure reason and offer **AskUserQuestion** with options:
+
+1. "Fill in the section now" — prompt the operator for the three required lines (artifact / vector / threshold), append to the PR body via `gh pr edit --body-file -`, re-run Check 5.
+2. "Add scope-out note" — if the threshold should defensibly be `none`, prompt for the one-sentence reason, append `threshold: none, reason: <reason>` to the section, re-run Check 5.
+3. "Abort — fix elsewhere" — stop the pipeline; operator handles in another tool.
+
+**Result:**
+
+- **PASS** — No sensitive paths touched, OR section present with `single-user incident`/`aggregate pattern` threshold, OR section present with `none` threshold AND a valid scope-out note.
+- **FAIL** — Sensitive-path diff with missing or empty User-Brand Impact section; OR `none` threshold without scope-out; OR missing/invalid threshold line.
+- **SKIP** — No sensitive paths touched, OR no PR exists yet (defer to post-PR run).
+
 ## Phase 2: Aggregate Go/No-Go Report
 
 After all checks complete, aggregate results into a structured report:
@@ -256,6 +331,7 @@ After all checks complete, aggregate results into a structured report:
 | Security Headers | PASS/FAIL/SKIP | <details> |
 | Lockfile Consistency | PASS/FAIL/SKIP | <details> |
 | Environment Isolation | PASS/FAIL/SKIP | <details> |
+| Brand-Survival Self-Review | PASS/FAIL/SKIP | <details> |
 
 **Overall: PASS / FAIL**
 ```
