@@ -452,13 +452,13 @@ grep -c '/login' apps/web-platform/infra/ci-deploy.sh
 
 The count MUST be ≥ 1.
 
-**Step 7.3: Assert error-sentinel body-content rejection.**
+**Step 7.3: Assert structured-marker body-content rejection.**
 
 ```bash
-grep -F 'An unexpected error occurred' apps/web-platform/infra/ci-deploy.sh
+grep -F 'data-error-boundary=' apps/web-platform/infra/ci-deploy.sh
 ```
 
-The grep MUST exit 0 (sentinel present) — without it, an SSR-rendered error.tsx would still pass HTTP-status probing.
+The grep MUST exit 0 — the canary must reject any rendered HTML containing the `data-error-boundary` attribute emitted by `components/error-boundary-view.tsx`. The structured marker survives copy edits; without it, a copy change would silently disable the rollback gate (PR #3014 lesson).
 
 **Result:**
 
