@@ -255,7 +255,7 @@ a future content file does, audit the parser before merging.
 (2026-04-28) filed duplicates #2982/#2983/#2984 against existing
 canonical audits #2146/#2969/#2970. Root cause: STEP 2 step (a) inline
 parser carried the FS-based form forward from PR #2974. Fixed in
-PR #<this-PR> (closes #2987); duplicates closed as duplicate-of-bug
+PR #2995 (closes #2987); duplicates closed as duplicate-of-bug
 post-merge per `wg-when-fixing-a-workflow-gates-detection`.
 
 ## Restore Procedure (generalized)

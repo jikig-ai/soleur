@@ -1,7 +1,7 @@
 # Session State
 
 ## Plan Phase
-- Plan file: /home/jean/git-repositories/jikig-ai/soleur/.worktrees/feat-one-shot-2987-campaign-calendar-parser/knowledge-base/project/plans/2026-04-28-fix-campaign-calendar-step2-title-parser-plan.md
+- Plan file: knowledge-base/project/plans/2026-04-28-fix-campaign-calendar-step2-title-parser-plan.md
 - Status: complete
 
 ### Errors

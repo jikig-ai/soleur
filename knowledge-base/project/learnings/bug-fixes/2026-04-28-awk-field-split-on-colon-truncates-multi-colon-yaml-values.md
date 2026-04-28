@@ -1,16 +1,25 @@
 ---
-module: CI Workflows
 date: 2026-04-28
-problem_type: logic_error
+category: bug-fixes
+module: ci-workflows
 component: github-actions
+problem_type: logic_error
+root_cause: parser_misuse
+resolution_type: code_fix
+severity: medium
+issue: 2987
+pr: 2995
 symptoms:
   - "campaign-calendar dedup search files duplicates against existing open audits"
   - "Issue titles truncated at first inner colon (e.g., 'Show HN: ...' → 'Show HN')"
   - "Issue titles carry a trailing quote artifact ('Browsers\"' instead of 'Browsers')"
-root_cause: parser_misuse
-resolution_type: code_fix
-severity: medium
 tags: [awk, mawk, github-actions, yaml, frontmatter, dedup, campaign-calendar]
+related:
+  - knowledge-base/project/learnings/2026-03-31-awk-split-defaults-to-fs-not-whitespace.md
+  - knowledge-base/project/learnings/2026-03-12-directory-driven-content-discovery-frontmatter-parsing.md
+  - knowledge-base/engineering/ops/runbooks/cloud-scheduled-tasks.md
+  - AGENTS.md#cq-workflow-pattern-duplication-bug-propagation
+  - AGENTS.md#wg-when-fixing-a-workflow-gates-detection
 ---
 
 # Troubleshooting: `awk -F': '` Truncates Multi-Colon YAML Values; `sub(/^X|X$/)` Only Fires Once
