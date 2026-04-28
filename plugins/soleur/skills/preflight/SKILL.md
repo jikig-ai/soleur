@@ -244,21 +244,13 @@ Otherwise **PASS**.
 
 ### Check 5: Production Bundle Supabase Host
 
-**Trigger:** runs when `git diff --name-only origin/main...HEAD` contains any of:
+**Path-gated:** only runs when `git diff --name-only origin/main...HEAD` contains any of `apps/web-platform/lib/supabase/client.ts`, `apps/web-platform/lib/supabase/validate-url.ts`, `apps/web-platform/Dockerfile`, `.github/workflows/reusable-release.yml`, or `apps/web-platform/scripts/verify-required-secrets.sh`. Otherwise return **SKIP** with note: "No build-arg surface changes detected."
 
-- `apps/web-platform/lib/supabase/client.ts`
-- `apps/web-platform/lib/supabase/allowed-hosts.ts`
-- `apps/web-platform/Dockerfile`
-- `.github/workflows/reusable-release.yml`
-- `apps/web-platform/scripts/verify-required-secrets.sh`
-
-Otherwise return **SKIP** with note: "No build-arg surface changes detected."
-
-**Why this exists:** Check 4 enforces that Doppler `dev` and `prd` resolve to distinct Supabase project refs. It does NOT cover the GitHub-repo-secrets surface that feeds the prod Docker build (`secrets.NEXT_PUBLIC_SUPABASE_URL` in `.github/workflows/reusable-release.yml`). The two sources can drift — see `knowledge-base/project/learnings/bug-fixes/2026-04-28-oauth-supabase-url-test-fixture-leaked-into-prod-build.md`. This check is the GitHub-secret blind-spot complement to Check 4: it verifies the deployed bundle actually serves a canonical Supabase host, regardless of which secret store fed the build.
+**Note:** Complements Check 4. Check 4 enforces Doppler dev/prd isolation; Check 5 covers the GitHub-repo-secrets surface that feeds the prod Docker build (`secrets.NEXT_PUBLIC_SUPABASE_URL` in `reusable-release.yml`). The two sources can drift — see `knowledge-base/project/learnings/bug-fixes/2026-04-28-oauth-supabase-url-test-fixture-leaked-into-prod-build.md`.
 
 **Step 5.1: Discover the deployed login chunk filename.**
 
-The chunk filename is content-hashed and changes per build, so the probe must discover it dynamically:
+The chunk filename is content-hashed and changes per build, so the probe must discover it dynamically. Run as separate Bash calls (no command substitution per skill convention):
 
 ```bash
 curl -fsSL -A "Mozilla/5.0" https://app.soleur.ai/login -o /tmp/preflight-login.html
@@ -286,11 +278,13 @@ grep -oE 'https?://api\.soleur\.ai' /tmp/preflight-chunk.js | sort -u
 
 **Step 5.3: Assert canonical shape.**
 
-The union of step 5.2 outputs must contain at least one host matching `^https://([a-z0-9]{20}\.supabase\.co|api\.soleur\.ai)$` and zero placeholder hosts (`test.supabase.co`, `placeholder.supabase.co`, `example.supabase.co`).
+The union of step 5.2 outputs must contain at least one host matching `^https://([a-z0-9]{20}\.supabase\.co|api\.soleur\.ai)$` and zero placeholder hosts (`test.supabase.co`, `placeholder.supabase.co`, `example.supabase.co`, `localhost`, `0.0.0.0`).
+
+**Result:**
 
 - **PASS** — all observed Supabase-host references are canonical.
-- **FAIL** — any placeholder host is present in the bundle (e.g., `https://test.supabase.co`). This indicates a build-arg leak; the operator must rotate `NEXT_PUBLIC_SUPABASE_URL` (GitHub repo secret) and trigger a fresh release per the runbook in the learning file.
-- **SKIP** — chunk not retrievable or contains no Supabase host references at all (unlikely; likely a chunking change that moved the supabase init out of the login chunk — investigate manually).
+- **FAIL** — any placeholder host is present in the bundle (e.g., `https://test.supabase.co`). Indicates a build-arg leak; the operator must rotate `NEXT_PUBLIC_SUPABASE_URL` (GitHub repo secret) and trigger a fresh release per the runbook in the learning file.
+- **SKIP** — chunk not retrievable, or chunk contains zero Supabase host references (likely a chunking change moved the supabase init out of the login chunk — investigate manually before re-running).
 
 
 

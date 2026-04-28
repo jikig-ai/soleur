@@ -283,6 +283,9 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ github.token }}
 
+      # Mirrored regex sites (edit together):
+      #   - apps/web-platform/lib/supabase/validate-url.ts (CANONICAL_HOSTNAME + PROD_ALLOWED_HOSTS)
+      #   - apps/web-platform/scripts/verify-required-secrets.sh (SUPABASE_URL_RE)
       - name: Validate NEXT_PUBLIC_SUPABASE_URL build-arg
         if: steps.version.outputs.next != '' && inputs.docker_image != ''
         env:

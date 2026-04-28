@@ -1,12 +1,18 @@
 import { createBrowserClient } from "@supabase/ssr";
-import { assertProdSupabaseUrl } from "./allowed-hosts";
+import { assertProdSupabaseUrl } from "./validate-url";
 
 const DEV_PLACEHOLDER_URL = "https://placeholder.supabase.co";
 const DEV_PLACEHOLDER_KEY = "placeholder-anon-key";
 let warnedMissing = false;
 
+// Validate once at module load. `NEXT_PUBLIC_SUPABASE_URL` is statically
+// inlined by Next.js DefinePlugin, so the value cannot change at runtime —
+// re-validating per `createClient()` is wasted work and would emit one Sentry
+// event per call site if a bad bundle ships. Throwing here surfaces in the
+// Next.js error overlay before any UI tries to mount.
+assertProdSupabaseUrl(process.env.NEXT_PUBLIC_SUPABASE_URL);
+
 export function createClient() {
-  assertProdSupabaseUrl(process.env.NEXT_PUBLIC_SUPABASE_URL);
   if (!process.env.NEXT_PUBLIC_SUPABASE_URL) {
     if (!warnedMissing) {
       warnedMissing = true;

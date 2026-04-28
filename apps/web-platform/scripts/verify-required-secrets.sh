@@ -37,8 +37,9 @@ done
 
 # Canonical-shape assertion for NEXT_PUBLIC_SUPABASE_URL: catches the
 # placeholder-leak class (e.g. operator pasting `https://test.supabase.co`
-# during a credentials rotation). Mirrors the regex in
-# .github/workflows/reusable-release.yml step "Validate NEXT_PUBLIC_SUPABASE_URL build-arg".
+# during a credentials rotation). Mirrored regex sites (edit together):
+#   - .github/workflows/reusable-release.yml step "Validate NEXT_PUBLIC_SUPABASE_URL build-arg"
+#   - apps/web-platform/lib/supabase/validate-url.ts (CANONICAL_HOSTNAME + PROD_ALLOWED_HOSTS)
 url_value="${NEXT_PUBLIC_SUPABASE_URL:-}"
 if [[ -n "$url_value" ]]; then
   if [[ ! "$url_value" =~ $SUPABASE_URL_RE ]]; then
