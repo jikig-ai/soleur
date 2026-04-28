@@ -185,20 +185,103 @@ MOCK
   chmod +x "$1/docker"
 }
 
-# Unified curl mock. Behavior selected at runtime via MOCK_CURL_MODE env var.
+# Unified curl mock. Behavior selected at runtime via env vars:
+#   MOCK_CURL_CANARY_FAIL=1     /health probe fails (existing rollback path)
+#   MOCK_CURL_LOGIN_5XX=1       /login returns 503 (canary rejects the swap)
+#   MOCK_CURL_DASH_5XX=1        /dashboard returns 503
+#   MOCK_CURL_DASH_ERROR_BODY=1 /dashboard returns 200 but body contains the
+#                               error.tsx sentinel string
+#   MOCK_CURL_LOGIN_EMPTY=1     /login returns 200 with empty body
 create_curl_mock() {
   cat > "$1/curl" << 'MOCK'
 #!/bin/bash
-for arg in "$@"; do
-  if [[ "$arg" == *"http_code"* ]]; then echo "200"; exit 0; fi
-  if [[ "$arg" == *"localhost:3001"* ]] && [[ "${MOCK_CURL_CANARY_FAIL:-}" == "1" ]]; then
-    exit 1
-  fi
+ARGS=("$@")
+URL=""
+OUTPUT_FILE=""
+WANT_HTTP_CODE=0
+for ((i=0; i<${#ARGS[@]}; i++)); do
+  case "${ARGS[$i]}" in
+    -o) OUTPUT_FILE="${ARGS[$((i+1))]}" ;;
+    -w)
+      if [[ "${ARGS[$((i+1))]}" == *"http_code"* ]]; then WANT_HTTP_CODE=1; fi
+      ;;
+    http*) URL="${ARGS[$i]}" ;;
+  esac
 done
-echo "OK"
+
+# Legacy /health failure path used by existing rollback tests.
+if [[ "${MOCK_CURL_CANARY_FAIL:-}" == "1" ]] && [[ "$URL" == *"localhost:3001/health"* ]]; then
+  exit 1
+fi
+
+write_body() {
+  if [[ -n "$OUTPUT_FILE" ]]; then printf '%s' "$1" > "$OUTPUT_FILE"; else printf '%s' "$1"; fi
+}
+
+# Per-route mock behavior. Order matters: /health must short-circuit first
+# because the canary loop's curl -sf for /health does NOT pass -w.
+case "$URL" in
+  *"/health"*)
+    write_body "OK"
+    if [[ "$WANT_HTTP_CODE" == "1" ]]; then echo "200"; fi
+    exit 0
+    ;;
+  *"/login"*)
+    if [[ "${MOCK_CURL_LOGIN_5XX:-}" == "1" ]]; then
+      write_body ""
+      if [[ "$WANT_HTTP_CODE" == "1" ]]; then echo "503"; fi
+      exit 0
+    fi
+    if [[ "${MOCK_CURL_LOGIN_EMPTY:-}" == "1" ]]; then
+      write_body ""
+      if [[ "$WANT_HTTP_CODE" == "1" ]]; then echo "200"; fi
+      exit 0
+    fi
+    write_body "<html><body>Sign in</body></html>"
+    if [[ "$WANT_HTTP_CODE" == "1" ]]; then echo "200"; fi
+    exit 0
+    ;;
+  *"/dashboard"*)
+    if [[ "${MOCK_CURL_DASH_5XX:-}" == "1" ]]; then
+      write_body ""
+      if [[ "$WANT_HTTP_CODE" == "1" ]]; then echo "503"; fi
+      exit 0
+    fi
+    if [[ "${MOCK_CURL_DASH_ERROR_BODY:-}" == "1" ]]; then
+      # Structured marker from `components/error-boundary-view.tsx`. Replaces
+      # the brittle copy-string sentinel — `data-error-boundary=` survives copy
+      # edits and digest-populated renders.
+      write_body '<html><body><div data-error-boundary="dashboard"><h2>Something went wrong</h2></div></body></html>'
+      if [[ "$WANT_HTTP_CODE" == "1" ]]; then echo "200"; fi
+      exit 0
+    fi
+    # Default: middleware-redirected unauthenticated request.
+    write_body ""
+    if [[ "$WANT_HTTP_CODE" == "1" ]]; then echo "307"; fi
+    exit 0
+    ;;
+esac
+
+# Fallback for unmatched URLs (legacy callers without an URL arg).
+if [[ "$WANT_HTTP_CODE" == "1" ]]; then echo "200"; exit 0; fi
+write_body "OK"
 exit 0
 MOCK
   chmod +x "$1/curl"
+}
+
+# Layer 3 mock — passes by default; honors MOCK_LAYER3_FAIL=1 to simulate a
+# malformed inlined JWT in the canary bundle.
+create_mock_layer3() {
+  cat > "$1/canary-bundle-claim-check.sh" << 'MOCK'
+#!/bin/bash
+if [[ "${MOCK_LAYER3_FAIL:-}" == "1" ]]; then
+  echo "canary-bundle-claim-check: simulated bad JWT" >&2
+  exit 1
+fi
+exit 0
+MOCK
+  chmod +x "$1/canary-bundle-claim-check.sh"
 }
 
 # Shared mock scaffold: creates all common mock binaries in $MOCK_DIR.
@@ -215,6 +298,7 @@ create_base_mocks() {
   create_mock_flock "$mock_dir"
   create_mock_df "$mock_dir"
   create_mock_doppler "$mock_dir"
+  create_mock_layer3 "$mock_dir"
 }
 
 # Parse .reason and .exit_code out of a ci-deploy.state JSON file.
@@ -254,6 +338,7 @@ run_deploy() {
 
     export DOPPLER_TOKEN="dp.st.prd.mock-token"
     export PATH="$MOCK_DIR:$TEST_PATH_BASE"
+    export CANARY_LAYER_3_SCRIPT="$MOCK_DIR/canary-bundle-claim-check.sh"
     bash "$DEPLOY_SCRIPT" 2>&1
   )
 }
@@ -321,6 +406,7 @@ run_deploy_traced() {
 
     export DOPPLER_TOKEN="dp.st.prd.mock-token"
     export PATH="$MOCK_DIR:$TEST_PATH_BASE"
+    export CANARY_LAYER_3_SCRIPT="$MOCK_DIR/canary-bundle-claim-check.sh"
     bash "$DEPLOY_SCRIPT" 2>&1
   )
 }
@@ -522,6 +608,59 @@ assert_canary_rollback() {
 
 assert_canary_rollback "canary failure: rollback preserves old container" \
   "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0"
+
+# Layered canary probe set (#3014): /health success alone is not enough — the
+# probe must also exercise /login (public route) and /dashboard (auth-required)
+# and reject any rendered body containing the error.tsx sentinel string. These
+# tests cover the failure modes the legacy /health-only probe missed.
+assert_canary_layered_rollback() {
+  local description="$1"
+  local fail_var="$2"  # e.g., MOCK_CURL_LOGIN_5XX
+  TOTAL=$((TOTAL + 1))
+
+  local output actual_exit
+  output=$(
+    export "$fail_var"=1
+    run_deploy_traced "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0" 2>&1
+  ) && actual_exit=0 || actual_exit=$?
+
+  local traces
+  traces=$(printf '%s\n' "$output" | grep "^DOCKER_TRACE:" | sed 's/DOCKER_TRACE://' | tr '\n' '|' | sed 's/|$//')
+
+  # Expected on rollback (CANARY_HEALTHY=false): no swap to prod.
+  # image|pull|stop|rm|run|stop|rm — same shape as the existing rollback test.
+  local expected="image|pull|stop|rm|run|stop|rm"
+
+  if [[ "$actual_exit" -eq 1 ]] && [[ "$traces" == "$expected" ]]; then
+    PASS=$((PASS + 1))
+    echo "  PASS: $description"
+  else
+    FAIL=$((FAIL + 1))
+    echo "  FAIL: $description"
+    echo "        expected traces: $expected (exit 1)"
+    echo "        actual traces:   $traces (exit $actual_exit)"
+  fi
+}
+
+assert_canary_layered_rollback \
+  "layered canary: /login 5xx → rollback (no swap)" \
+  "MOCK_CURL_LOGIN_5XX"
+
+assert_canary_layered_rollback \
+  "layered canary: /dashboard 5xx → rollback (no swap)" \
+  "MOCK_CURL_DASH_5XX"
+
+assert_canary_layered_rollback \
+  "layered canary: /dashboard renders error.tsx sentinel in body → rollback" \
+  "MOCK_CURL_DASH_ERROR_BODY"
+
+assert_canary_layered_rollback \
+  "layered canary: /login returns empty body → rollback" \
+  "MOCK_CURL_LOGIN_EMPTY"
+
+assert_canary_layered_rollback \
+  "layered canary: Layer 3 JWT-claims check fails → rollback" \
+  "MOCK_LAYER3_FAIL"
 
 # Docker pull failure: no canary started
 assert_pull_failure() {
@@ -998,6 +1137,7 @@ MOCK
     eval "$extra_env"
     export DOPPLER_TOKEN="dp.st.prd.mock-token"
     export PATH="$MOCK_DIR:$TEST_PATH_BASE"
+    export CANARY_LAYER_3_SCRIPT="$MOCK_DIR/canary-bundle-claim-check.sh"
     bash "$DEPLOY_SCRIPT" 2>&1
   ) && actual_exit=0 || actual_exit=$?
 
@@ -1118,11 +1258,34 @@ assert_state_contains "canary container run crash writes reason=unhandled" \
   "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0" \
   "export MOCK_DOCKER_RUN_FAIL_CANARY=1"
 
-# Canary health check failure -> reason=canary_failed
-assert_state_contains "canary health failure writes reason=canary_failed" \
-  "canary_failed" "1" \
+# Canary health probe failure -> reason=canary_health_failed (per-layer reason
+# taxonomy added in #3014 — replaces the legacy generic canary_failed reason).
+assert_state_contains "canary health failure writes reason=canary_health_failed" \
+  "canary_health_failed" "1" \
   "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0" \
   "export MOCK_CURL_CANARY_FAIL=1"
+
+# Per-layer canary failure reasons — each layer fails independently and writes
+# its own reason for incident attribution.
+assert_state_contains "canary /login 5xx writes reason=canary_login_failed" \
+  "canary_login_failed" "1" \
+  "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0" \
+  "export MOCK_CURL_LOGIN_5XX=1"
+
+assert_state_contains "canary /dashboard 5xx writes reason=canary_dashboard_5xx" \
+  "canary_dashboard_5xx" "1" \
+  "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0" \
+  "export MOCK_CURL_DASH_5XX=1"
+
+assert_state_contains "canary error-boundary marker in body writes reason=canary_error_boundary" \
+  "canary_error_boundary" "1" \
+  "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0" \
+  "export MOCK_CURL_DASH_ERROR_BODY=1"
+
+assert_state_contains "canary Layer 3 JWT-claims failure writes reason=canary_layer3_jwt_claims" \
+  "canary_layer3_jwt_claims" "1" \
+  "deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0" \
+  "export MOCK_LAYER3_FAIL=1"
 
 # -- Command parsing reason coverage (#2202) --
 # These validations run BEFORE flock and Doppler resolution, so run_deploy_traced
@@ -1274,6 +1437,7 @@ MOCK
 
     export DOPPLER_TOKEN="dp.st.prd.mock-token"
     export PATH="$MOCK_DIR:$TEST_PATH_BASE"
+    export CANARY_LAYER_3_SCRIPT="$MOCK_DIR/canary-bundle-claim-check.sh"
     bash "$DEPLOY_SCRIPT" 2>&1
   ) && actual_exit=0 || actual_exit=$?
 
