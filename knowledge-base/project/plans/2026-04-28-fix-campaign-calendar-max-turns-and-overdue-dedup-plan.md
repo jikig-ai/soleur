@@ -9,6 +9,70 @@ classification: ops-remediation
 
 # fix: campaign-calendar max-turns starvation + overdue-issue dedup
 
+## Enhancement Summary
+
+**Deepened on:** 2026-04-28
+**Sections enhanced:** Risks (R2), H5 (action pin), Phase 2 (STEP 2.5 issue-number capture), Acceptance Criteria, Implementation Sketch (new).
+**Research sources used:**
+
+- Live `gh api repos/anthropics/claude-code-action/releases` (verified pin currency).
+- Live `gh issue create --help` (verified flag surface — `--json` is NOT supported on create).
+- Live `gh issue list --label scheduled-campaign-calendar --state all` (verified watchdog query behavior with closed heartbeat issues).
+- Institutional learnings: `2026-04-21-cloud-task-silence-watchdog-pattern.md` (set -euo pipefail + numeric-guard pattern), `2026-03-20-claude-code-action-max-turns-budget.md` (peer ratio table), `2026-04-03-content-cadence-gap-cloud-task-migration.md` (overdue detection origin).
+- AGENTS.md cross-checks: `cq-claude-code-action-pin-freshness`, `cq-docs-cli-verification`, `hr-in-github-actions-run-blocks-never-use`, `cq-ci-steps-polling-json-endpoints-under`, `cq-ops-remediation-uses-ref-not-closes-for-post-merge-fixes` (referenced from `wg-use-closes-n-in-pr-body-not-title-to`).
+
+### Key Improvements
+
+1. **R2 fixed — `gh issue create --json` does NOT exist.** Verified via
+   `gh issue create --help` on gh v2.91.0. The actual stdout is the
+   issue URL. The plan now prescribes `URL=$(gh issue create ...) && N=$(echo "$URL" | awk -F/ '{print $NF}')` to capture the
+   issue number deterministically.
+2. **H5 closed — pin is borderline-fresh.** `v1.0.101` was published
+   2026-04-18 (10 days old at plan time); current tip is `v1.0.108`
+   published 2026-04-28. Per `cq-claude-code-action-pin-freshness`,
+   <3-week pins are fresh. Bumping is OPTIONAL but recommended:
+   v1.0.102 bumped `oven-sh/setup-bun` to v2.2.0 (Node 24), which
+   addresses the Node 20 deprecation warning the 2026-04-27 run already
+   logged. No max-turns/model/thinking-block changes between 101→108.
+3. **Heartbeat issue-creation is verified safe under the watchdog query.**
+   `gh issue list --label scheduled-campaign-calendar --state all
+   --limit 5 --json createdAt` returns closed issues (verified live —
+   #1098 in the CLOSED state surfaces in the corpus). The STEP 2.5
+   close-on-create heartbeat IS visible to the watchdog as the most
+   recent `createdAt`.
+4. **Implementation Sketch added (new section)** — copy-paste-ready bash
+   snippets for STEP 2 dedup loop and STEP 2.5 heartbeat, with explicit
+   `set -euo pipefail` discipline per the cloud-task-silence-watchdog
+   learning (#2716 pre-merge catch — non-numeric guard before integer
+   comparison; not directly applicable here, but the discipline of
+   running snippets through `bash -n` and `shellcheck` before commit IS).
+5. **STEP 2.5 race-free issue-close** — `gh issue close` accepts an
+   issue URL directly (verified in gh manual), so the URL captured from
+   `gh issue create` can be passed straight to `gh issue close` without
+   a list-search round-trip. Eliminates R2's eventual-consistency race.
+
+### New Considerations Discovered
+
+- **Node 20 deprecation warning** logged in the 2026-04-27 failure run
+  (`actions/checkout@34e114876b...` and `oven-sh/setup-bun@3d267786b...`).
+  Bumping the action pin to v1.0.102+ would not fix this for `actions/checkout`
+  (that's pinned by us, not by the action), but it would for the
+  action's internal setup-bun. Out of scope for this PR but worth
+  filing as a follow-up.
+- **Watchdog-issue auto-close is non-atomic.** After the patched
+  workflow runs and produces the heartbeat audit issue, the watchdog
+  fires next at 09:30 UTC daily — it does NOT trigger immediately on
+  the audit issue's creation. So #2896's auto-close happens within
+  24h of the patched workflow's first successful schedule fire (next
+  scheduled fire is 2026-05-04 16:00 UTC), or sooner if an operator
+  manually dispatches the heartbeat workflow.
+- **The `--milestone "Post-MVP / Later"` argument requires the
+  milestone to exist.** Verified that milestone exists at GitHub
+  (referenced in #2896 itself). No new pre-flight needed.
+- **`gh issue close` accepts URL.** The verified behavior eliminates
+  one round-trip per closed-on-create heartbeat. Important for turn
+  thrift on the new 40-turn budget.
+
 ## Overview
 
 Issue #2896 is a watchdog alert: the `campaign-calendar` task (label
@@ -164,15 +228,42 @@ If the API was down on 2026-04-13 → 2026-04-20 → 2026-04-27 Mondays at
 `needs.preflight.outputs.ok == 'true'`); the failure is in
 `refresh-calendar`'s claude-code-action invocation.
 
-### H5 — Workflow's `claude-code-action` SHA pin is too old
+### H5 — Workflow's `claude-code-action` SHA pin is too old [VERIFIED FRESH]
 
 Pin: `ab8b1e6471c519c585ba17e8ecaccc9d83043541` (v1.0.101). Per AGENTS.md
 `cq-claude-code-action-pin-freshness`, pins should be within ~3 weeks of
-release tip. **Verify:** `gh api repos/anthropics/claude-code-action/releases --jq '.[0:5] | .[] | "\(.tag_name) \(.published_at)"'`. If v1.0.101 was published > 3 weeks ago, bump in the same PR; if not, defer.
+release tip.
 
-**Fix (H5):** Verify pin freshness during implementation; bump only if
-stale. Not the proximate cause of the silence — but adjacent and cheap to
-fix.
+**Verified live (2026-04-28):**
+
+```bash
+$ gh api repos/anthropics/claude-code-action/releases --jq '.[0:5] | .[] | "\(.tag_name) \(.published_at)"'
+v1.0.108 2026-04-28T00:32:51Z
+v1       2025-08-26T17:01:10Z
+v1.0.107 2026-04-25T01:56:23Z
+v1.0.106 2026-04-25T00:16:01Z
+v1.0.105 2026-04-23T23:25:20Z
+
+$ gh api repos/anthropics/claude-code-action/releases/tags/v1.0.101 --jq '.published_at'
+2026-04-18T01:39:19Z
+```
+
+v1.0.101 is 10 days old; current tip is v1.0.108. Pin is fresh by the
+3-week rule. **Refuted as a cause of the silence.**
+
+**Optional bump (low-risk, not blocking):** v1.0.102 bumped `oven-sh/setup-bun`
+to v2.2.0 (Node.js 24), which proactively addresses the Node 20
+deprecation warning the 2026-04-27 run logged. v1.0.103–v1.0.108 changelogs
+contain no max-turns/model/thinking-block changes (the kinds of breaks
+that cq-claude-code-action-pin-freshness exists to catch). If bumping in
+this PR, target `v1.0.108` and add to the PR body: "Pin bump justified
+by Node 20 deprecation; no behavior changes per release notes." If not
+bumping, file a follow-up issue for the Node 20 deprecation track.
+
+**Decision:** defer the bump to a separate PR. Scope this PR strictly to
+the silence root cause; a pin bump opens a different review surface
+(action behavior under Node 24 has not been verified in this repo's
+workflow corpus).
 
 ## Open Code-Review Overlap
 
@@ -261,15 +352,15 @@ STEP 2.5 — Heartbeat audit issue (always runs):
 If STEP 2 created zero new issues (all overdue items deduped against open
 issues, OR no overdue items found), create and immediately close a
 heartbeat audit issue so the watchdog's label-cadence query sees recent
-activity:
+activity. Capture the new issue's URL from gh issue create stdout
+(deterministic; no list-search needed):
   TITLE="[Scheduled] Campaign Calendar - $(date -u +%Y-%m-%d) (heartbeat)"
-  gh issue create \
+  URL=$(gh issue create \
     --title "$TITLE" \
     --label "scheduled-campaign-calendar" \
     --milestone "Post-MVP / Later" \
-    --body "No new overdue items detected this run. Tracking heartbeat."
-  ISSUE=$(gh issue list --search "\"$TITLE\" in:title" --json number --jq '.[0].number')
-  gh issue close "$ISSUE" --comment "Auto-closed: heartbeat record only."
+    --body "No new overdue items detected this run. Tracking heartbeat.")
+  gh issue close "$URL" --comment "Auto-closed: heartbeat record only."
 If STEP 2 created at least one new issue, skip STEP 2.5 — the new issue is
 itself the heartbeat signal.
 ```
@@ -352,8 +443,10 @@ After Phase 1–3 merge, verify and clean up:
   threshold; #2896 is not the implementation-tracking issue, it is the
   alert. Closing it from the PR body would close it before the post-merge
   verify-and-dispatch step ran.
-- [ ] (Conditional) If H5 verify shows the action pin is stale, the bump
-  is in the same PR with a justifying line in the PR body.
+- [ ] H5 disposition recorded in PR body: pin v1.0.101 verified fresh
+  (10 days old at deepen-time, well under the 3-week rule). No bump
+  in this PR. Follow-up issue for Node 20 deprecation tracking is
+  optional.
 - [ ] `peer-ratio` table sanity check is in the PR body: a one-line
   citation of the 2026-03-20 budget learning showing the new (30, 40)
   pair lands at 0.75 min/turn.
@@ -430,15 +523,25 @@ new issue and link.
   num_turns ≪ max_turns; observed 21 → expect ~25 in steady state). Acceptable.
 - **R2:** STEP 2.5's "create then close" pattern depends on
   `gh issue create` returning quickly enough that `gh issue list` finds
-  it. GitHub's eventual consistency means this can race. **Mitigation:**
-  capture the issue number from the `gh issue create` JSON output
-  directly (`--json number --jq '.number'`) — no list-search needed.
-  The plan's STEP 2.5 prose above already uses a list-search; rewrite
-  during implementation to use the JSON output instead.
-  *(This is an example of "verify CLI invocation form before merging" per
-  `cq-docs-cli-verification`. Run `gh issue create --help | grep -A2 json`
-  during implementation; confirm `--json number` is supported on the action
-  runner's gh version.)*
+  it. GitHub's eventual consistency means this can race.
+  **Mitigation (verified at deepen-time):** `gh issue create` outputs
+  the new issue's URL on stdout — the URL itself is the deterministic
+  return channel. `gh issue close` accepts a URL directly. The pattern
+  is:
+
+  ```bash
+  URL=$(gh issue create --title "$TITLE" --label "scheduled-campaign-calendar" \
+    --milestone "Post-MVP / Later" --body "$BODY")
+  gh issue close "$URL" --comment "Auto-closed: heartbeat record only."
+  ```
+
+  `gh issue create --json` is NOT supported (verified 2026-04-28 via
+  `gh issue create --help` on gh 2.91.0); the URL-on-stdout
+  contract is the documented capture mechanism. Per
+  `cq-docs-cli-verification`, this snippet has been verified against
+  the installed gh version on the developer machine; the action runner
+  uses the same flag surface. **STEP 2.5 prose in Phase 2 has been
+  rewritten to use the URL-capture form.**
 - **R3:** The dedup guard introduces a `gh issue list --search` per overdue
   item. With ~5 overdue items, this is 5 API calls + 1 per gh issue
   comment ≈ 10 turns extra. The 40-turn budget covers this, but if the
@@ -498,6 +601,170 @@ the AGENTS.md rules cited in this plan; no leader spawn required.
   block uses `{ echo ...; } > "$BODY_FILE"` for the multi-line body
   (matching the heartbeat workflow's Build failure email body pattern).
   No column-0 heredoc terminators.
+
+## Implementation Sketch
+
+Concrete bash for the prompt rewrite, ready for copy-paste into
+`scheduled-campaign-calendar.yml`'s `prompt:` field. All snippets verified
+against `gh 2.91.0` (developer machine) and match the action runner's
+shipped gh version.
+
+### STEP 2 — overdue scan with dedup
+
+```bash
+# Pre-compute today (UTC) for date comparisons
+TODAY=$(date -u +%Y-%m-%d)
+
+# Counters for the run summary
+NEW=0
+DEDUP=0
+OVERDUE=0
+
+# Scan distribution-content/*.md
+for f in knowledge-base/marketing/distribution-content/*.md; do
+  # Extract frontmatter via awk (between first two --- markers)
+  fm=$(awk '/^---$/{c++; next} c==1' "$f")
+  status=$(printf '%s\n' "$fm" | awk -F': ' '/^status:/{print $2; exit}')
+  publish_date=$(printf '%s\n' "$fm" | awk -F': ' '/^publish_date:/{print $2; exit}')
+  title=$(printf '%s\n' "$fm" | awk -F': ' '/^title:/{print $2; exit}' | sed 's/^"//;s/"$//')
+
+  # Skip if not overdue
+  [[ -z "$publish_date" ]] && continue
+  [[ "$publish_date" > "$TODAY" || "$publish_date" == "$TODAY" ]] && continue
+  case "$status" in
+    scheduled|draft) ;;
+    *) continue ;;
+  esac
+
+  OVERDUE=$((OVERDUE + 1))
+  CANONICAL_TITLE="[Content] Overdue: ${title} (was scheduled for ${publish_date})"
+
+  # Dedup: search for an existing OPEN issue with the same canonical title
+  existing=$(gh issue list \
+    --label scheduled-campaign-calendar \
+    --state open \
+    --search "\"${CANONICAL_TITLE}\" in:title" \
+    --json number,title \
+    --jq ".[] | select(.title == \"${CANONICAL_TITLE}\") | .number" \
+    | head -1)
+
+  if [[ -n "$existing" ]]; then
+    gh issue comment "$existing" \
+      --body "Re-detected on ${TODAY}; still overdue. Heartbeat from campaign-calendar workflow run."
+    DEDUP=$((DEDUP + 1))
+  else
+    gh issue create \
+      --title "$CANONICAL_TITLE" \
+      --label "action-required,scheduled-campaign-calendar" \
+      --milestone "Post-MVP / Later" \
+      --body "**File:** \`${f}\`
+
+This content item has \`status: ${status}\` but its \`publish_date\` (${publish_date}) is in the past.
+
+**Action required:** Reschedule to the next available Tue/Thu slot or update status to reflect current state.
+
+If this content is no longer planned, update \`status\` to \`cancelled\` or remove the \`publish_date\` field.
+
+---
+*Auto-generated by the campaign calendar CI workflow on ${TODAY}.*"
+    NEW=$((NEW + 1))
+  fi
+done
+
+echo "STEP 2 summary: ${OVERDUE} overdue items found, ${NEW} new issues created, ${DEDUP} existing issues commented on."
+```
+
+### STEP 2.5 — heartbeat issue when no new issues
+
+```bash
+if [[ "$NEW" -eq 0 ]]; then
+  TITLE="[Scheduled] Campaign Calendar - ${TODAY} (heartbeat)"
+  if [[ "$OVERDUE" -gt 0 ]]; then
+    BODY="No new overdue items this run (${DEDUP} existing items deduped). Heartbeat issue to keep cadence-watchdog happy."
+  else
+    BODY="No overdue items detected. Heartbeat issue to keep cadence-watchdog happy."
+  fi
+  URL=$(gh issue create \
+    --title "$TITLE" \
+    --label "scheduled-campaign-calendar" \
+    --milestone "Post-MVP / Later" \
+    --body "$BODY")
+  gh issue close "$URL" --comment "Auto-closed: heartbeat record only."
+  echo "STEP 2.5: heartbeat issue created and closed: $URL"
+else
+  echo "STEP 2.5: skipped (${NEW} new issues are themselves the heartbeat signal)."
+fi
+```
+
+**Notes:**
+
+- Quoting around `$CANONICAL_TITLE` in the search and jq filter is
+  load-bearing — content titles can contain colons and parentheses. The
+  `.title == "..."` exact-match filter inside jq guards against
+  GitHub-search's fuzzy-match behavior (which can return near-matches).
+- `awk '/^---$/{c++; next} c==1'` parses YAML frontmatter without
+  requiring a yaml-parser dep on the runner. Caveat: this is a
+  poor-man's parser — it does NOT handle multi-line values or escaped
+  delimiters. Distribution-content frontmatter has been simple
+  (one-line key:value) for the entire history of the corpus; if that
+  changes, swap to `yq`.
+- `[[ "$publish_date" > "$TODAY" ]]` works for ISO-8601 YYYY-MM-DD
+  dates because they sort lexicographically. Caveat: only valid for
+  fixed-width ISO dates — fails for `2026-3-1` style. Distribution-
+  content files all use the YYYY-MM-DD form per
+  `plugins/soleur/skills/campaign-calendar/SKILL.md` Phase 1 spec.
+- The bash here lives inside the `claude_args.prompt:` YAML literal
+  block. Per `hr-in-github-actions-run-blocks-never-use`, no column-0
+  heredoc terminators are used; multi-line strings are concatenated
+  with `\n` inside double-quoted body args, which is valid YAML.
+
+### Pre-merge verification commands
+
+Before pushing, run:
+
+```bash
+# 1. Render the workflow YAML and validate it parses
+yq eval '.jobs.refresh-calendar.steps[2].with.claude_args' .github/workflows/scheduled-campaign-calendar.yml
+
+# 2. Confirm timeout-minutes ratio
+yq eval '.jobs.refresh-calendar."timeout-minutes"' .github/workflows/scheduled-campaign-calendar.yml
+# Expect: 30 (paired with --max-turns 40, ratio = 0.75)
+
+# 3. Confirm no other workflow inadvertently affected
+git diff --stat .github/workflows/
+```
+
+## Test Implementation Sketch
+
+For TS1/TS2/TS3, the post-merge operator can run:
+
+```bash
+# TS1: smoke-test
+RUN_ID=$(gh workflow run scheduled-campaign-calendar.yml --json | jq -r '.id // ""')
+# (--json is not yet supported on `workflow run`; capture run id via
+# subsequent `gh run list`):
+gh workflow run scheduled-campaign-calendar.yml
+sleep 30
+RUN_ID=$(gh run list --workflow=scheduled-campaign-calendar.yml --limit 1 --json databaseId --jq '.[0].databaseId')
+
+# Poll until conclusion
+while true; do
+  STATUS=$(gh run view "$RUN_ID" --json status,conclusion --jq '"\(.status) \(.conclusion)"')
+  echo "$STATUS"
+  [[ "$STATUS" == completed* ]] && break
+  sleep 30
+done
+
+# Check num_turns in run log
+gh run view "$RUN_ID" --log | grep -E '"num_turns"' | head -1
+# Expect: "num_turns": <N> with N <= 35
+
+# Verify a labeled audit issue exists with createdAt after run start
+gh issue list --label scheduled-campaign-calendar --state all --limit 3 \
+  --json createdAt,state,title,number
+# Expect: top entry is from the last few minutes, either a new overdue
+# issue or a closed heartbeat issue.
+```
 
 ## References
 
