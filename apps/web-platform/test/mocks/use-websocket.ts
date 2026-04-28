@@ -30,6 +30,8 @@ export function createWebSocketMock(
     resumeSession: vi.fn(),
     sendMessage: vi.fn(),
     sendReviewGateResponse: vi.fn(),
+    sendInteractivePromptResponse: vi.fn(),
+    resolveInteractivePrompt: vi.fn(),
     status: "connected",
     sessionConfirmed: true,
     disconnectReason: undefined,
@@ -40,6 +42,8 @@ export function createWebSocketMock(
     usageData: null,
     realConversationId: null,
     resumedFrom: null,
+    workflow: { state: "idle" } as const,
+    workflowEndedAt: null,
   } satisfies WebSocketState;
   return { ...base, ...overrides };
 }

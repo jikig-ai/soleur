@@ -42,6 +42,17 @@ pre-commit:
         - "apps/web-platform/*.{ts,tsx}"
         - "apps/web-platform/**/*.{ts,tsx}"
       run: cd apps/web-platform && npx tsc --noEmit
+    conversations-update-callsites:
+      priority: 5
+      # Run target is the whole repo (not `{staged_files}`) because the
+      # linter inspects ALL conversation-update sites in
+      # apps/web-platform/server/ — adding a new allowlist marker requires
+      # rescanning files that may not be staged.
+      glob:
+        - "apps/web-platform/server/*.ts"
+        - "apps/web-platform/server/**/*.ts"
+        - "scripts/lint-conversations-update-callsites.sh"
+      run: bash scripts/lint-conversations-update-callsites.sh
     bun-test:
       priority: 6
       glob: "*.{ts,tsx,js,jsx}"

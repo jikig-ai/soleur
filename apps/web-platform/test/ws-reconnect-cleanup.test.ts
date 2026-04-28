@@ -1,6 +1,7 @@
 import { describe, test, expect } from "vitest";
 import { applyStreamEvent, type ChatMessage } from "../lib/chat-state-machine";
 import type { WSMessage } from "../lib/types";
+import type { DomainLeaderId } from "../server/domain-leaders";
 
 type StreamEvent = Parameters<typeof applyStreamEvent>[2];
 
@@ -19,7 +20,7 @@ describe("WS reconnect cleanup (#2135)", () => {
   test("after cleanup, a stream_start begins a fresh bubble for the same leader", () => {
     // Pre-disconnect: leader 'cmo' has an in-flight stream.
     let messages: ChatMessage[] = [];
-    let activeStreams = new Map<string, number>();
+    let activeStreams = new Map<DomainLeaderId, number>();
     const s1 = applyStreamEvent(messages, activeStreams, {
       type: "stream_start",
       leaderId: "cmo",
@@ -38,7 +39,7 @@ describe("WS reconnect cleanup (#2135)", () => {
 
     // Simulate reconnect cleanup: the hook clears its activeStreamsRef and
     // timeoutTimersRef at the top of connect().
-    activeStreams = new Map();
+    activeStreams = new Map<DomainLeaderId, number>();
 
     // After cleanup, a new stream_start for 'cmo' must produce a NEW bubble
     // rather than mutate the pre-disconnect bubble at index 0.
@@ -66,7 +67,7 @@ describe("WS reconnect cleanup (#2135)", () => {
         state: "streaming",
       },
     ];
-    const activeStreams = new Map<string, number>();
+    const activeStreams = new Map<DomainLeaderId, number>();
 
     const result = applyStreamEvent(messages, activeStreams, {
       type: "tool_use",

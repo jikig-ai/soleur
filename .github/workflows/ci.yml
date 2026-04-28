@@ -26,6 +26,13 @@ jobs:
       - name: Lint bot synthetic completeness
         run: bash scripts/lint-bot-synthetic-completeness.sh
 
+  lint-conversations-update-callsites:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - name: Lint conversations update callsites (R8 wrapper enforcement)
+        run: bash scripts/lint-conversations-update-callsites.sh
+
   rule-metrics-shape:
     runs-on: ubuntu-latest
     steps:
@@ -169,3 +176,86 @@ jobs:
           name: playwright-report
           path: apps/web-platform/test-results/
           retention-days: 7
+
+  # Pre-merge variant of the deploy-docs critical-CSS gate. Catches FOUC-class
+  # regressions before merge, not after — see AGENTS.md cq-eleventy-critical-css-screenshot-gate.
+  critical-css-gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install root dependencies
+        run: npm ci
+
+      - name: Build docs
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: npx @11ty/eleventy
+
+      - name: Validate CSP (hashes + inline event-handler attributes)
+        run: bash plugins/soleur/skills/seo-aeo/scripts/validate-csp.sh _site
+
+      - name: Validate SEO
+        run: bash plugins/soleur/skills/seo-aeo/scripts/validate-seo.sh _site
+
+      - name: Static critical-CSS coverage check
+        run: node plugins/soleur/docs/scripts/check-critical-css-coverage.mjs
+
+      - name: Cache Playwright browsers
+        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        id: playwright-cache
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-critical-css-gate-${{ hashFiles('plugins/soleur/docs/scripts/screenshot-gate.mjs') }}
+
+      - name: Install Playwright + http-server (cache miss)
+        if: steps.playwright-cache.outputs.cache-hit != 'true'
+        run: |
+          npm install --no-save playwright@1 http-server@14
+          npx playwright install --with-deps chromium
+
+      - name: Install Playwright + http-server (cache hit)
+        if: steps.playwright-cache.outputs.cache-hit == 'true'
+        run: |
+          npm install --no-save playwright@1 http-server@14
+          npx playwright install-deps chromium
+
+      - name: Screenshot + stylesheet-swap gates
+        run: |
+          npx http-server _site -p 8888 -a 127.0.0.1 -c-1 -s &
+          SERVER_PID=$!
+          UP=0
+          for i in $(seq 1 30); do
+            if curl -sf -o /dev/null http://127.0.0.1:8888/; then UP=1; break; fi
+            sleep 0.5
+          done
+          if [ "$UP" -ne 1 ]; then
+            echo "gates: http-server failed to come up within 15s" >&2
+            kill $SERVER_PID 2>/dev/null || true
+            exit 2
+          fi
+          set +e
+          node plugins/soleur/docs/scripts/screenshot-gate.mjs
+          GATE_EXIT=$?
+          if [ "$GATE_EXIT" -eq 0 ]; then
+            node plugins/soleur/docs/scripts/check-stylesheet-swap.mjs
+            GATE_EXIT=$?
+          fi
+          set -e
+          kill $SERVER_PID 2>/dev/null || true
+          exit $GATE_EXIT
+
+      - name: Upload screenshot-gate failure artifacts
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: screenshot-gate-failures-pr
+          path: screenshot-gate-failures/
+          if-no-files-found: ignore
+          retention-days: 14

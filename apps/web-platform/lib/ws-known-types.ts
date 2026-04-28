@@ -47,6 +47,13 @@ export const KNOWN_WS_MESSAGE_TYPES = new Set<AllowedWSMessageType>([
   "fanout_truncated",
   "upgrade_pending",
   "error",
+  // Stage 3 (#2885) — Command Center soleur-go router event variants
+  "subagent_spawn",
+  "subagent_complete",
+  "workflow_started",
+  "workflow_ended",
+  "interactive_prompt",
+  "interactive_prompt_response",
   // Close-preamble payloads (sent before ws.close(4010/4011))
   "concurrency_cap_hit",
   "tier_changed",

@@ -49,10 +49,14 @@ for html_file in "${html_files[@]}"; do
     continue
   fi
 
-  # Use Python for all HTML parsing: extract CSP hashes and inline script hashes.
+  # Use Python for all HTML parsing: extract CSP hashes, inline script hashes, AND
+  # detect inline event-handler attributes (`onload=`, `onclick=`, etc.) that the
+  # CSP would block but no static gate previously caught — see PR #2966 / learning
+  # at knowledge-base/project/learnings/best-practices/ for the silent-failure class.
   # Passing the file path via sys.argv[1] avoids shell injection.
   RESULT=$(python3 -c "
 import hashlib, base64, re, sys
+from html.parser import HTMLParser
 
 with open(sys.argv[1], 'r') as f:
     content = f.read()
@@ -74,8 +78,14 @@ if not src_match:
     print('NO_SCRIPT_SRC')
     sys.exit(0)
 
+script_src = src_match.group(1)
+
 # Extract sha256 hashes from CSP
-csp_hashes = set(re.findall(r\"'(sha256-[A-Za-z0-9+/=]+)'\", src_match.group(1)))
+csp_hashes = set(re.findall(r\"'(sha256-[A-Za-z0-9+/=]+)'\", script_src))
+
+# Detect whether the CSP allows inline event handlers.
+allows_unsafe_inline = bool(re.search(r\"'unsafe-inline'\", script_src))
+allows_unsafe_hashes = bool(re.search(r\"'unsafe-hashes'\", script_src))
 
 # Extract inline scripts (excluding ld+json and src= scripts)
 scripts = re.findall(
@@ -99,6 +109,31 @@ prohibited = ['strict-dynamic', 'report-uri', 'report-to', 'frame-ancestors', 's
 found_prohibited = [d for d in prohibited if re.search(r'(^|;\s*)' + d + r'(\s|;|$)', csp_content)]
 if found_prohibited:
     print('PROHIBITED:' + ','.join(found_prohibited))
+
+# Inline event-handler scan. Use html.parser so we naturally skip <script>
+# content and HTML comments — both contained false-positives in earlier regex
+# attempts (e.g., 'window.onload =' inside a <script>, or 'onload=' inside a
+# <!-- comment -->).
+class EventHandlerFinder(HTMLParser):
+    def __init__(self):
+        super().__init__()
+        self.violations = []
+    def handle_starttag(self, tag, attrs):
+        for name, value in attrs:
+            if name and name.lower().startswith('on') and len(name) > 2 and name[2:].isalpha():
+                line, col = self.getpos()
+                self.violations.append((line, tag, name, (value or '')[:80]))
+    handle_startendtag = handle_starttag
+
+if not (allows_unsafe_inline or allows_unsafe_hashes):
+    finder = EventHandlerFinder()
+    try:
+        finder.feed(content)
+    except Exception as e:
+        print(f'INLINE_HANDLER_PARSE_ERROR:{e}')
+    for line, tag, attr, value in finder.violations:
+        # One violation per line. Bash splits on newlines.
+        print(f'INLINE_HANDLER:{line}:{tag}:{attr}={value}')
 " "$html_file" || true)
 
   # Skip pages without CSP
@@ -123,6 +158,20 @@ if found_prohibited:
   if [[ -n "$PROHIBITED_LINE" ]]; then
     directives="${PROHIBITED_LINE#PROHIBITED:}"
     fail "$page: CSP contains unsupported meta tag directive(s): $directives"
+  fi
+
+  # Check for inline event-handler attributes that CSP would silently block.
+  # See PR #2966 — `<link onload="...">` was blocked by `script-src` lacking
+  # `'unsafe-inline'`/`'unsafe-hashes'`, and the swap never fired in production.
+  while IFS= read -r handler_line; do
+    [[ -z "$handler_line" ]] && continue
+    detail="${handler_line#INLINE_HANDLER:}"
+    fail "$page: inline event-handler attribute '$detail' is silently blocked by script-src (no 'unsafe-inline'/'unsafe-hashes'). Move the handler into a hashed <script> block, or add 'unsafe-hashes' + a hash."
+  done < <(echo "$RESULT" | grep '^INLINE_HANDLER:' || true)
+
+  PARSE_ERR=$(echo "$RESULT" | grep '^INLINE_HANDLER_PARSE_ERROR:' || true)
+  if [[ -n "$PARSE_ERR" ]]; then
+    fail "$page: inline-handler parse error: ${PARSE_ERR#INLINE_HANDLER_PARSE_ERROR:}"
   fi
 
   # Convert to arrays

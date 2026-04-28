@@ -1,4 +1,4 @@
-// `interactive_prompt_response` handler (Stage 2.14).
+// `interactive_prompt_response` handler (Stage 3 — #2885).
 //
 // Pure decision function behind the ws-handler case. Responsibilities:
 //   (a) Validate payload shape + per-kind response literal (no Zod
@@ -30,7 +30,9 @@ import {
   type InteractivePromptKind,
   type PendingPromptRecord,
 } from "./pending-prompt-registry";
-import type { InteractivePromptResponse } from "./cc-interactive-prompt-types";
+import type { WSMessage } from "@/lib/types";
+import { mintPromptId, mintConversationId } from "@/lib/branded-ids";
+type InteractivePromptResponse = Extract<WSMessage, { type: "interactive_prompt_response" }>;
 
 export type HandleInteractivePromptResponseResult =
   | { ok: true }
@@ -174,7 +176,11 @@ export function handleInteractivePromptResponse(
     return { ok: false, error: "invalid_payload" };
   }
 
-  const key = makePendingPromptKey(userId, payload.conversationId, payload.promptId);
+  const key = makePendingPromptKey(
+    userId,
+    mintConversationId(payload.conversationId),
+    mintPromptId(payload.promptId),
+  );
 
   // Peek first (no consume) so cross-conversation / kind-mismatch do NOT
   // destroy the record — a correct retry must still work.

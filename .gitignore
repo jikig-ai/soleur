@@ -33,10 +33,13 @@ __pycache__/
 .claude/ralph-loop.*.local.md
 .claude/.rule-incidents.jsonl
 .claude/.rule-incidents-*.jsonl.gz
+# Stray Claude Code subagent worktree markers — must never be committed (#2905)
+/.claude/worktrees/
 .playwright-mcp/
 .env
 _site/
 _site_test/
+screenshot-gate-failures/
 
 # Local state (since-id, caches -- do not commit)
 .soleur/

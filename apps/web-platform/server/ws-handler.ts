@@ -19,6 +19,7 @@ import {
   resolveReviewGate,
   abortSession,
 } from "./agent-runner";
+import { updateConversationFor } from "./conversation-writer";
 import * as Sentry from "@sentry/nextjs";
 import { sanitizeErrorForClient } from "./error-sanitizer";
 import { createChildLogger } from "./logger";
@@ -50,9 +51,10 @@ import {
   dispatchSoleurGo,
   getCcStartSessionRateLimiter,
   handleInteractivePromptResponseCase,
+  resolveCcBashGate,
 } from "./cc-dispatcher";
 import { getFlag } from "@/lib/feature-flags/server";
-import type { InteractivePromptResponse } from "./cc-interactive-prompt-types";
+type InteractivePromptResponse = Extract<WSMessage, { type: "interactive_prompt_response" }>;
 
 const log = createChildLogger("ws");
 
@@ -187,22 +189,16 @@ export function abortActiveSession(userId: string, session: ClientSession): void
   session.routing = undefined;
 
   // Fire-and-forget — orphan cleanup catches failures on restart.
-  // Supabase query builders return PromiseLike (not Promise), so use
-  // .then(onFulfilled, onRejected) instead of .then().catch().
-  supabase
-    .from("conversations")
-    .update({ status: "completed", last_active: new Date().toISOString() })
-    .eq("id", oldConvId)
-    .then(
-      ({ error }) => {
-        if (error) {
-          log.error({ conversationId: oldConvId, err: error.message }, "Failed to mark conversation as completed");
-        }
-      },
-      (err) => {
-        log.error({ conversationId: oldConvId, err }, "Failed to update conversation");
-      },
+  // The wrapper enforces the R8 composite-key invariant; errors mirror to
+  // Sentry via reportSilentFallback so we don't need a local catch.
+  if (oldConvId) {
+    void updateConversationFor(
+      userId,
+      oldConvId,
+      { status: "completed", last_active: new Date().toISOString() },
+      { feature: "ws-handler", op: "supersede-on-reconnect", expectMatch: true },
     );
+  }
 
   session.conversationId = undefined;
 }
@@ -518,24 +514,26 @@ async function dispatchSoleurGoForConversation(
         ? { kind: "soleur_go_pending" }
         : { kind: "soleur_go_active", workflow },
     );
-    const { error } = await supabase
-      .from("conversations")
-      .update({
+    // data-integrity P2-A: defense-in-depth — conversationId is already
+    // server-derived, but the wrapper's `.eq("user_id", userId)` invariant
+    // ensures a future refactor that accepts conversationId from a
+    // less-trusted source cannot cross-write another user's row.
+    const { ok, error } = await updateConversationFor(
+      userId,
+      conversationId,
+      {
         active_workflow: serialized,
         last_active: new Date().toISOString(),
-      })
-      .eq("id", conversationId)
-      // data-integrity P2-A: defense-in-depth — conversationId is
-      // already server-derived, but scoping the UPDATE by user_id
-      // ensures a future refactor that accepts conversationId from a
-      // less-trusted source cannot cross-write another user's row.
-      .eq("user_id", userId);
-    if (error) {
-      log.error(
-        { conversationId, workflow, err: error.message },
-        "Failed to persist active_workflow",
-      );
-      throw new Error(`active_workflow update failed: ${error.message}`);
+      },
+      {
+        feature: "ws-handler",
+        op: "persist-active-workflow",
+        extra: { workflow },
+        expectMatch: true,
+      },
+    );
+    if (!ok) {
+      throw new Error(`active_workflow update failed: ${error?.message ?? "unknown"}`);
     }
     // Update the in-memory cache on the session so the next-turn
     // chat-case route lookup observes the new workflow without a DB
@@ -887,10 +885,12 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
       try {
         const convId = session.conversationId;
         abortSession(userId, convId, "superseded");
-        await supabase
-          .from("conversations")
-          .update({ status: "completed", last_active: new Date().toISOString() })
-          .eq("id", convId);
+        await updateConversationFor(
+          userId,
+          convId,
+          { status: "completed", last_active: new Date().toISOString() },
+          { feature: "ws-handler", op: "close-conversation", expectMatch: true },
+        );
         session.conversationId = undefined;
         session.routing = undefined;
         void releaseSlot(userId, convId);
@@ -1112,12 +1112,35 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
           throw new Error("Invalid review gate selection");
         }
 
-        await resolveReviewGate(
-          userId,
-          session.conversationId,
-          msg.gateId,
-          msg.selection,
-        );
+        // Stage 2.12: route by conversation routing kind. The
+        // cc-soleur-go path's Bash review-gate uses a synthetic
+        // AgentSession registered in `_ccBashGates` (cc-dispatcher.ts);
+        // legacy domain-leader sessions live in `agent-runner.ts`
+        // `activeSessions`. `resolveCcBashGate` returns false if the
+        // gate is not in the cc registry — fall through to the legacy
+        // resolver in that case so transitional conversations (cc
+        // started, then SDK iterator emitted a gate before routing
+        // moved) still resolve.
+        const ccRouted =
+          session.routing?.kind === "soleur_go_pending" ||
+          session.routing?.kind === "soleur_go_active";
+        let resolved = false;
+        if (ccRouted) {
+          resolved = resolveCcBashGate({
+            userId,
+            conversationId: session.conversationId,
+            gateId: msg.gateId,
+            selection: msg.selection,
+          });
+        }
+        if (!resolved) {
+          await resolveReviewGate(
+            userId,
+            session.conversationId,
+            msg.gateId,
+            msg.selection,
+          );
+        }
       } catch (err) {
         Sentry.captureException(err);
         log.error({ userId, err }, "review_gate_response error");
@@ -1158,6 +1181,10 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
     case "fanout_truncated":
     case "upgrade_pending":
     case "interactive_prompt":
+    case "subagent_spawn":
+    case "subagent_complete":
+    case "workflow_started":
+    case "workflow_ended":
     case "error": {
       sendToClient(userId, {
         type: "error",
