@@ -242,7 +242,57 @@ Otherwise **PASS**.
 - **FAIL** -- refs match (single-DB blast radius), hostname is not a canonical Supabase endpoint, or custom domain uses A-record-only routing
 - **SKIP** -- Doppler unavailable, NEXT_PUBLIC_SUPABASE_URL unset in either config, or DNS resolution failed (`dig` rc != 0)
 
-## Phase 2: Aggregate Go/No-Go Report
+### Check 5: Production Bundle Supabase Host
+
+**Trigger:** runs when `git diff --name-only origin/main...HEAD` contains any of:
+
+- `apps/web-platform/lib/supabase/client.ts`
+- `apps/web-platform/lib/supabase/allowed-hosts.ts`
+- `apps/web-platform/Dockerfile`
+- `.github/workflows/reusable-release.yml`
+- `apps/web-platform/scripts/verify-required-secrets.sh`
+
+Otherwise return **SKIP** with note: "No build-arg surface changes detected."
+
+**Why this exists:** Check 4 enforces that Doppler `dev` and `prd` resolve to distinct Supabase project refs. It does NOT cover the GitHub-repo-secrets surface that feeds the prod Docker build (`secrets.NEXT_PUBLIC_SUPABASE_URL` in `.github/workflows/reusable-release.yml`). The two sources can drift — see `knowledge-base/project/learnings/bug-fixes/2026-04-28-oauth-supabase-url-test-fixture-leaked-into-prod-build.md`. This check is the GitHub-secret blind-spot complement to Check 4: it verifies the deployed bundle actually serves a canonical Supabase host, regardless of which secret store fed the build.
+
+**Step 5.1: Discover the deployed login chunk filename.**
+
+The chunk filename is content-hashed and changes per build, so the probe must discover it dynamically:
+
+```bash
+curl -fsSL -A "Mozilla/5.0" https://app.soleur.ai/login -o /tmp/preflight-login.html
+```
+
+```bash
+grep -oE '/_next/static/chunks/app/\(auth\)/login/page-[a-f0-9]+\.js' /tmp/preflight-login.html | head -1
+```
+
+If the curl fails or the grep produces no output, return **SKIP** with note: "Could not fetch /login HTML or could not locate login chunk reference."
+
+**Step 5.2: Probe the chunk for Supabase hosts.**
+
+```bash
+curl -fsSL "https://app.soleur.ai<chunk_path>" -o /tmp/preflight-chunk.js
+```
+
+```bash
+grep -oE 'https?://[a-z0-9.-]*supabase\.co' /tmp/preflight-chunk.js | sort -u
+```
+
+```bash
+grep -oE 'https?://api\.soleur\.ai' /tmp/preflight-chunk.js | sort -u
+```
+
+**Step 5.3: Assert canonical shape.**
+
+The union of step 5.2 outputs must contain at least one host matching `^https://([a-z0-9]{20}\.supabase\.co|api\.soleur\.ai)$` and zero placeholder hosts (`test.supabase.co`, `placeholder.supabase.co`, `example.supabase.co`).
+
+- **PASS** — all observed Supabase-host references are canonical.
+- **FAIL** — any placeholder host is present in the bundle (e.g., `https://test.supabase.co`). This indicates a build-arg leak; the operator must rotate `NEXT_PUBLIC_SUPABASE_URL` (GitHub repo secret) and trigger a fresh release per the runbook in the learning file.
+- **SKIP** — chunk not retrievable or contains no Supabase host references at all (unlikely; likely a chunking change that moved the supabase init out of the login chunk — investigate manually).
+
+
 
 After all checks complete, aggregate results into a structured report:
 
@@ -256,6 +306,7 @@ After all checks complete, aggregate results into a structured report:
 | Security Headers | PASS/FAIL/SKIP | <details> |
 | Lockfile Consistency | PASS/FAIL/SKIP | <details> |
 | Environment Isolation | PASS/FAIL/SKIP | <details> |
+| Production Bundle Supabase Host | PASS/FAIL/SKIP | <details> |
 
 **Overall: PASS / FAIL**
 ```

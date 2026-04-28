@@ -1,14 +1,13 @@
 import { createBrowserClient } from "@supabase/ssr";
+import { assertProdSupabaseUrl } from "./allowed-hosts";
 
 const DEV_PLACEHOLDER_URL = "https://placeholder.supabase.co";
 const DEV_PLACEHOLDER_KEY = "placeholder-anon-key";
 let warnedMissing = false;
 
 export function createClient() {
+  assertProdSupabaseUrl(process.env.NEXT_PUBLIC_SUPABASE_URL);
   if (!process.env.NEXT_PUBLIC_SUPABASE_URL) {
-    if (process.env.NODE_ENV === "production") {
-      throw new Error("Missing NEXT_PUBLIC_SUPABASE_URL");
-    }
     if (!warnedMissing) {
       warnedMissing = true;
       console.warn(

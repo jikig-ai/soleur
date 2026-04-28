@@ -283,6 +283,23 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ github.token }}
 
+      - name: Validate NEXT_PUBLIC_SUPABASE_URL build-arg
+        if: steps.version.outputs.next != '' && inputs.docker_image != ''
+        env:
+          SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${SUPABASE_URL:-}" ]]; then
+            echo "::error::NEXT_PUBLIC_SUPABASE_URL secret is empty"
+            exit 1
+          fi
+          if [[ ! "$SUPABASE_URL" =~ ^https://([a-z0-9]{20}\.supabase\.co|api\.soleur\.ai)$ ]]; then
+            echo "::error::NEXT_PUBLIC_SUPABASE_URL has non-canonical value (likely a placeholder leak)"
+            echo "::error::Expected: https://<20-char-ref>.supabase.co or https://api.soleur.ai"
+            exit 1
+          fi
+          echo "::notice::NEXT_PUBLIC_SUPABASE_URL passes canonical-shape validation"
+
       - name: Build and push Docker image
         id: docker_build
         if: steps.version.outputs.next != '' && inputs.docker_image != ''
