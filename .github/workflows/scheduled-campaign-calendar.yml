@@ -6,8 +6,13 @@
 # Runs Monday 16:00 UTC (after content-publisher's 14:00 UTC window).
 # To test manually: gh workflow run scheduled-campaign-calendar.yml
 #
-# Security: This workflow does NOT use untrusted event inputs in run: commands.
-# All inputs come from schedule/workflow_dispatch triggers (no user-controlled strings).
+# Security: No untrusted event inputs in ${{ }} expressions or run: commands.
+# All triggers come from schedule/workflow_dispatch (no user-controlled strings).
+# Frontmatter content (title, publish_date) read by the agent from
+# knowledge-base/marketing/distribution-content/*.md is treated as trusted
+# (repo-internal, PR-gated). The STEP 2 prompt instructs the agent to bind
+# titles via shell variables ("$TITLE") and jq --arg, never literal
+# substitution into command strings — see STEP 2 step (a) below.
 
 name: "Scheduled: Campaign Calendar"
 
@@ -46,7 +51,7 @@ jobs:
     needs: preflight
     if: needs.preflight.outputs.ok == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 30
     steps:
       - name: Checkout repository
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
@@ -67,7 +72,7 @@ jobs:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           plugin_marketplaces: 'https://github.com/jikig-ai/soleur.git'
           plugins: 'soleur@soleur'
-          claude_args: '--model claude-sonnet-4-6 --max-turns 20 --allowedTools Bash,Read,Write,Edit,Glob,Grep'
+          claude_args: '--model claude-sonnet-4-6 --max-turns 40 --allowedTools Bash,Read,Write,Edit,Glob,Grep'
           prompt: |
             IMPORTANT: This is an automated CI workflow. The AGENTS.md rule
             Do NOT push directly to main.
@@ -76,15 +81,72 @@ jobs:
             STEP 1 — Refresh campaign calendar:
             Run /soleur:campaign-calendar on this repository.
 
-            STEP 2 — Flag overdue distribution content:
+            STEP 2 — Flag overdue distribution content (with dedup):
             Scan all files in knowledge-base/marketing/distribution-content/ for items where:
             - status is "scheduled" AND publish_date is in the past (before today)
             - status is "draft" AND publish_date is non-empty and in the past
-            For each overdue item, create a GitHub issue titled
-            "[Content] Overdue: <title> (was scheduled for <date>)"
-            with labels "action-required,scheduled-campaign-calendar"
-            and milestone "Post-MVP / Later" listing the file path and
-            suggesting rescheduling to the next available Tue/Thu slot.
+
+            SAFE-SUBSTITUTION RULE (load-bearing): never paste a frontmatter
+            value (title, publish_date) literally into a command string.
+            Always assign to a shell variable first and pass via "$VAR" /
+            jq --arg. This makes the dedup correct under titles containing
+            quotes or shell metacharacters. Treat the corpus as trusted
+            (repo-internal) but encode the safe pattern anyway.
+
+            For each overdue item, before creating an issue:
+            (a) Bind the title and publish_date to shell variables, e.g.
+                  TITLE_RAW=$(awk -F': ' '/^title:/{sub(/^"|"$/,"",$2); print $2; exit}' "$FILE")
+                  PUBLISH_DATE=$(awk -F': ' '/^publish_date:/{print $2; exit}' "$FILE")
+                  CANONICAL_TITLE="[Content] Overdue: ${TITLE_RAW} (was scheduled for ${PUBLISH_DATE})"
+            (b) Search for an existing OPEN issue with that exact title.
+                Pipe gh --json output to a standalone jq --arg (gh's
+                built-in --jq does NOT forward --arg to jq; use a separate
+                jq stage to bind the title safely):
+                  N=$(gh issue list \
+                    --repo "$GITHUB_REPOSITORY" \
+                    --label scheduled-campaign-calendar \
+                    --state open \
+                    --search "\"$CANONICAL_TITLE\" in:title" \
+                    --json number,title \
+                    | jq -r --arg t "$CANONICAL_TITLE" '.[] | select(.title == $t) | .number' \
+                    | head -1)
+            (c) If $N is non-empty, comment on it with a heartbeat note:
+                  gh issue comment "$N" --repo "$GITHUB_REPOSITORY" \
+                    --body "Re-detected on $(date -u +%Y-%m-%d); still overdue. Heartbeat from campaign-calendar workflow run."
+                Do NOT create a new issue. Increment DEDUP.
+            (d) If $N is empty, create a new issue (pass title via "$VAR",
+                not literal interpolation):
+                  gh issue create \
+                    --repo "$GITHUB_REPOSITORY" \
+                    --title "$CANONICAL_TITLE" \
+                    --label "action-required,scheduled-campaign-calendar" \
+                    --milestone "Post-MVP / Later" \
+                    --body "File: $FILE. Status=$STATUS, publish_date=$PUBLISH_DATE. Reschedule to next Tue/Thu slot, or set status to cancelled."
+                Increment NEW.
+
+            Track three counters across STEP 2: NEW (issues created), DEDUP
+            (existing issues commented on), OVERDUE (total overdue items
+            scanned). Print all three at the end of STEP 2 for visibility.
+
+            STEP 2.5 — Heartbeat audit issue (always runs when no new issues):
+            If STEP 2 created zero new issues (NEW == 0) — either all overdue
+            items deduped against existing open issues, or no overdue items
+            were found — create and immediately close a heartbeat audit issue
+            so the watchdog's label-cadence query
+            (.github/workflows/scheduled-cloud-task-heartbeat.yml) sees recent
+            activity. Capture the URL from gh issue create stdout
+            (deterministic; no list-search needed) and pass it to gh issue
+            close:
+              TITLE="[Scheduled] Campaign Calendar - $(date -u +%Y-%m-%d) (heartbeat)"
+              URL=$(gh issue create \
+                --repo "$GITHUB_REPOSITORY" \
+                --title "$TITLE" \
+                --label "scheduled-campaign-calendar" \
+                --milestone "Post-MVP / Later" \
+                --body "No new overdue items detected this run. Tracking heartbeat.")
+              gh issue close "$URL" --repo "$GITHUB_REPOSITORY" --comment "Auto-closed: heartbeat record only."
+            If STEP 2 created at least one new issue, skip STEP 2.5 — the new
+            issue is itself the heartbeat signal.
 
             STEP 3 — Update content-strategy review date:
             In knowledge-base/marketing/content-strategy.md, update the
