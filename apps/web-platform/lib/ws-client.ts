@@ -11,9 +11,20 @@ import {
   type TierChangedPreamble,
 } from "@/lib/types";
 import type { DomainLeaderId } from "@/server/domain-leaders";
-import { applyStreamEvent, applyTimeout, type ChatMessage, type StreamEventResult } from "@/lib/chat-state-machine";
+import {
+  applyStreamEvent,
+  applyTimeout,
+  type ChatMessage,
+  type StreamEventResult,
+  type WorkflowLifecycleState,
+  type SpawnIndex,
+} from "@/lib/chat-state-machine";
 import { isKnownWSMessageType } from "@/lib/ws-known-types";
+import { parseWSMessage } from "@/lib/ws-zod-schemas";
 import { reportSilentFallback } from "@/lib/client-observability";
+import { STUCK_TIMEOUT_MS } from "@/lib/ws-constants";
+
+export { STUCK_TIMEOUT_MS } from "@/lib/ws-constants";
 
 type ConnectionStatus = "connecting" | "connected" | "reconnecting" | "disconnected";
 
@@ -53,6 +64,16 @@ interface UseWebSocketReturn {
   resumeSession: (conversationId: string) => void;
   sendMessage: (content: string, attachments?: AttachmentRef[]) => void;
   sendReviewGateResponse: (gateId: string, selection: string) => void;
+  /** Stage 4 (#2886): client→server send for `interactive_prompt_response`.
+   *  Used by `<InteractivePromptCard>` to post the user's choice. */
+  sendInteractivePromptResponse: (msg: Extract<WSMessage, { type: "interactive_prompt_response" }>) => void;
+  /** Stage 4 (#2886): optimistically mark a prompt card as resolved
+   *  (locally; the runner's reaper handles staleness). */
+  resolveInteractivePrompt: (
+    promptId: string,
+    conversationId: string,
+    response: unknown,
+  ) => void;
   status: ConnectionStatus;
   sessionConfirmed: boolean;
   disconnectReason: string | undefined;
@@ -65,11 +86,17 @@ interface UseWebSocketReturn {
   realConversationId: string | null;
   /** Populated when the server resolved an existing thread via resumeByContextPath. */
   resumedFrom: ResumedFrom | null;
+  /** Stage 4 (#2886): ambient lifecycle-bar slice (idle/routing/active/ended). */
+  workflow: WorkflowLifecycleState;
+  /** Stage 4 review F3 (#2886): persisted `workflow_ended_at` from the
+   *  conversation row, hydrated on history fetch. The chat surface ORs this
+   *  into `workflowEnded` so input stays disabled across reloads even when
+   *  the in-memory lifecycle slice is `idle` post-mount. */
+  workflowEndedAt: string | null;
 }
 
 const MAX_BACKOFF = 30_000;
 const INITIAL_BACKOFF = 1_000;
-const STUCK_TIMEOUT_MS = 45_000;
 
 /** Close codes where reconnecting will never succeed. */
 export const NON_TRANSIENT_CLOSE_CODES: Record<number, { target?: string; reason: string }> = {
@@ -92,7 +119,11 @@ export const NON_TRANSIENT_CLOSE_CODES: Record<number, { target?: string; reason
  *  subsequent unrelated dispatches. */
 export interface ChatState {
   messages: ChatMessage[];
-  activeStreams: Map<string, number>;
+  activeStreams: Map<DomainLeaderId, number>;
+  /** Stage 4 (#2886): ambient lifecycle-bar slice. */
+  workflow: WorkflowLifecycleState;
+  /** Stage 4 (#2886): reverse-lookup index for `subagent_complete`. */
+  spawnIndex: SpawnIndex;
   pendingTimerAction?: StreamEventResult["timerAction"];
 }
 
@@ -106,13 +137,31 @@ export type ChatAction =
   | { type: "add_message"; message: ChatMessage }
   | { type: "filter_prepend"; messages: ChatMessage[] }
   | { type: "gate_error"; gateId: string; message: string }
-  | { type: "resolve_gate"; gateId: string; selection: string };
+  | { type: "resolve_gate"; gateId: string; selection: string }
+  | {
+      type: "resolve_interactive_prompt";
+      promptId: string;
+      conversationId: string;
+      response: unknown;
+    };
 
 export function chatReducer(state: ChatState, action: ChatAction): ChatState {
   switch (action.type) {
     case "stream_event": {
-      const result = applyStreamEvent(state.messages, state.activeStreams, action.msg);
-      return { messages: result.messages, activeStreams: result.activeStreams, pendingTimerAction: result.timerAction };
+      const result = applyStreamEvent(
+        state.messages,
+        state.activeStreams,
+        action.msg,
+        state.spawnIndex,
+        state.workflow,
+      );
+      return {
+        messages: result.messages,
+        activeStreams: result.activeStreams,
+        workflow: result.workflow,
+        spawnIndex: result.spawnIndex,
+        pendingTimerAction: result.timerAction,
+      };
     }
     case "timeout": {
       const result = applyTimeout(state.messages, state.activeStreams, action.leaderId);
@@ -128,7 +177,17 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
       };
     }
     case "clear_streams":
-      return { ...state, activeStreams: new Map(), pendingTimerAction: undefined };
+      // Review F1: clear_streams must also reset workflow and spawnIndex.
+      // Otherwise after `key_invalid` / `session_ended` / socket remount
+      // (`connect()`), the lifecycle bar still renders the old workflow's
+      // `state: "active"` and stale spawnIndex entries linger.
+      return {
+        ...state,
+        activeStreams: new Map(),
+        workflow: { state: "idle" },
+        spawnIndex: new Map(),
+        pendingTimerAction: undefined,
+      };
     case "ack_timer_action":
       return state.pendingTimerAction === undefined ? state : { ...state, pendingTimerAction: undefined };
     case "add_message":
@@ -156,6 +215,33 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
             : m,
         ),
       };
+    case "resolve_interactive_prompt":
+      return {
+        ...state,
+        messages: state.messages.map((m) =>
+          m.type === "interactive_prompt" &&
+          m.promptId === action.promptId &&
+          m.conversationId === action.conversationId
+            ? {
+                ...m,
+                resolved: true,
+                selectedResponse: action.response as ChatMessage extends infer T
+                  ? T extends { type: "interactive_prompt"; selectedResponse?: infer R }
+                    ? R
+                    : never
+                  : never,
+              }
+            : m,
+        ),
+      };
+    default: {
+      // Review F12: compile-time exhaustiveness rail on ChatAction.
+      // A new action variant added to the union without a case here fails
+      // `tsc --noEmit`.
+      const _exhaustive: never = action;
+      void _exhaustive;
+      return state;
+    }
   }
 }
 
@@ -170,7 +256,9 @@ export const OPEN_UPGRADE_MODAL_EVENT = "soleur:openUpgradeModal";
 export function useWebSocket(conversationId: string): UseWebSocketReturn {
   const [chatState, dispatch] = useReducer(chatReducer, null, (): ChatState => ({
     messages: [],
-    activeStreams: new Map<string, number>(),
+    activeStreams: new Map<DomainLeaderId, number>(),
+    workflow: { state: "idle" },
+    spawnIndex: new Map(),
   }));
 
   // Derive activeLeaderIds from reducer state. `applyStreamEvent` preserves the
@@ -179,7 +267,7 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
   // boundary events (stream_start, stream_end, review_gate) — matching the
   // cadence of the pre-refactor gated setActiveLeaderIds call.
   const activeLeaderIds = useMemo(
-    () => Array.from(chatState.activeStreams.keys()) as DomainLeaderId[],
+    () => Array.from(chatState.activeStreams.keys()),
     [chatState.activeStreams],
   );
 
@@ -191,6 +279,8 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
   const [realConversationId, setRealConversationId] = useState<string | null>(null);
   const [resumedFrom, setResumedFrom] = useState<ResumedFrom | null>(null);
   const [usageData, setUsageData] = useState<UsageData | null>(null);
+  // Stage 4 review F3: persisted `workflow_ended_at` from history fetch.
+  const [workflowEndedAt, setWorkflowEndedAt] = useState<string | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const backoffRef = useRef(INITIAL_BACKOFF);
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
@@ -336,11 +426,11 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
         }
       }
 
-      const msg = parsed as WSMessage;
-
       // FR4 (#2861): boundary guard. Drop any event whose type isn't in the
       // known allowlist, and breadcrumb it so server/client skew is visible.
-      // The reducer's exhaustiveness covers build-time; this covers runtime.
+      // Stage 3 (#2885) added a Zod schema as the strict gate; the
+      // `isKnownWSMessageType` allowlist stays as a cheap fast-path so a
+      // single bad-`type` frame doesn't pay for full schema validation.
       const rawType = (parsed as { type?: unknown } | null)?.type;
       if (!isKnownWSMessageType(rawType)) {
         reportSilentFallback(null, {
@@ -350,6 +440,30 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
         });
         return;
       }
+
+      const parseResult = parseWSMessage(parsed);
+      if (!parseResult.ok) {
+        // Strip per-issue `input` values from the Zod error before
+        // breadcrumbing — Zod 4 includes the offending payload value in
+        // each issue's `input` field, which would exfiltrate frame data
+        // through Sentry on a malformed-frame storm (CWE-201). Keep only
+        // the issue path + message + code.
+        const sanitizedIssues = parseResult.error.issues.map((issue) => ({
+          path: issue.path,
+          code: issue.code,
+          message: issue.message,
+        }));
+        reportSilentFallback(null, {
+          feature: "command-center",
+          op: "ws-zod-parse-failure",
+          extra: {
+            rawType: typeof rawType === "string" ? rawType : String(rawType),
+            issues: sanitizedIssues,
+          },
+        });
+        return;
+      }
+      const msg = parseResult.msg;
 
       switch (msg.type) {
         case "auth_ok": {
@@ -363,7 +477,12 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
         case "tool_progress":
         case "stream":
         case "stream_end":
-        case "review_gate": {
+        case "review_gate":
+        case "subagent_spawn":
+        case "subagent_complete":
+        case "workflow_started":
+        case "workflow_ended":
+        case "interactive_prompt": {
           // Store routing source from the first stream_start
           if (msg.type === "stream_start" && msg.source) {
             setRouteSource(msg.source);
@@ -371,6 +490,8 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
           // Dispatch to the pure reducer — no ref mutations inside the updater.
           // activeStreams and messages update atomically; pendingTimerAction carries
           // the timer intent out of the pure reducer for the useEffect above. See #2217.
+          // Stage 3 (#2885) — `subagent_*`, `workflow_*`, `interactive_prompt`
+          // are inert pass-throughs in the reducer; Stage 4 wires rendering.
           dispatch({ type: "stream_event", msg });
           break;
         }
@@ -460,9 +581,27 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
           break;
         }
 
-        // auth (client-only), chat — no UI message needed
-        default:
+        // Client→server message types (never received here) and inert
+        // server-side acks. Listed explicitly so a new server→client variant
+        // added to `WSMessage` falls through to the `: never` rail and
+        // fails `tsc --noEmit` per `cq-union-widening-grep-three-patterns`.
+        case "auth":
+        case "chat":
+        case "start_session":
+        case "resume_session":
+        case "close_conversation":
+        case "review_gate_response":
+        case "interactive_prompt_response":
+        case "fanout_truncated":
+        case "upgrade_pending":
           break;
+        default: {
+          // Review F12: compile-time exhaustiveness rail. A new server→client
+          // variant added to `WSMessage` without a case here fails build.
+          const _exhaustive: never = msg;
+          void _exhaustive;
+          break;
+        }
       }
     };
 
@@ -537,7 +676,11 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
   async function fetchConversationHistory(
     targetId: string,
     signal: AbortSignal,
-  ): Promise<{ messages: ChatMessage[]; costData: UsageData | null } | null> {
+  ): Promise<{
+    messages: ChatMessage[];
+    costData: UsageData | null;
+    workflowEndedAt: string | null;
+  } | null> {
     // Validate targetId is a safe path segment to satisfy CodeQL's
     // request-forgery check. Allows UUIDs and alphanumeric IDs only.
     // The server enforces ownership via user_id.
@@ -579,7 +722,10 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
         ? { totalCostUsd: json.totalCostUsd, inputTokens: json.inputTokens, outputTokens: json.outputTokens }
         : null;
 
-    return { messages: mapped, costData };
+    const workflowEndedAtFromServer: string | null =
+      typeof json.workflowEndedAt === "string" ? json.workflowEndedAt : null;
+
+    return { messages: mapped, costData, workflowEndedAt: workflowEndedAtFromServer };
   }
 
   /** Seed usageData from fetched cost data. Uses functional updater so a
@@ -588,6 +734,13 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
     if (costData) {
       setUsageData(prev => prev ?? costData);
     }
+  }
+
+  /** Stage 4 review F3: seed `workflowEndedAt` from history fetch.
+   *  Functional updater so a racing `workflow_ended` WS event that
+   *  preceded the fetch is not clobbered by stale (null) history. */
+  function seedWorkflowEndedAt(value: string | null) {
+    if (value) setWorkflowEndedAt((prev) => prev ?? value);
   }
 
   // Fetch conversation history on mount (once per conversationId)
@@ -605,6 +758,7 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
         // activeStreams.size === 0 guard and matches the resume path.
         dispatch({ type: "filter_prepend", messages: result.messages });
         seedCostData(result.costData);
+        seedWorkflowEndedAt(result.workflowEndedAt);
       } catch (err) {
         if (err instanceof DOMException && err.name === "AbortError") return;
         console.error("Failed to load history:", err);
@@ -636,6 +790,7 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
         // event arrives and completes before the fetch resolves.
         dispatch({ type: "filter_prepend", messages: result.messages });
         seedCostData(result.costData);
+        seedWorkflowEndedAt(result.workflowEndedAt);
       } catch (err) {
         if (err instanceof DOMException && err.name === "AbortError") return;
         console.error("Failed to load resume history:", err);
@@ -716,6 +871,25 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
     [send],
   );
 
+  const sendInteractivePromptResponse = useCallback(
+    (msg: Extract<WSMessage, { type: "interactive_prompt_response" }>) => {
+      send(msg);
+    },
+    [send],
+  );
+
+  const resolveInteractivePrompt = useCallback(
+    (promptId: string, conversationId: string, response: unknown) => {
+      dispatch({
+        type: "resolve_interactive_prompt",
+        promptId,
+        conversationId,
+        response,
+      });
+    },
+    [],
+  );
+
   const reconnect = useCallback(() => {
     setLastError(null);
     setDisconnectReason(undefined);
@@ -724,5 +898,25 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
     connect();
   }, [connect]);
 
-  return { messages: chatState.messages, startSession, resumeSession, sendMessage, sendReviewGateResponse, status, sessionConfirmed, disconnectReason, lastError, reconnect, routeSource, activeLeaderIds, usageData, realConversationId, resumedFrom };
+  return {
+    messages: chatState.messages,
+    startSession,
+    resumeSession,
+    sendMessage,
+    sendReviewGateResponse,
+    sendInteractivePromptResponse,
+    resolveInteractivePrompt,
+    status,
+    sessionConfirmed,
+    disconnectReason,
+    lastError,
+    reconnect,
+    routeSource,
+    activeLeaderIds,
+    usageData,
+    realConversationId,
+    resumedFrom,
+    workflow: chatState.workflow,
+    workflowEndedAt,
+  };
 }

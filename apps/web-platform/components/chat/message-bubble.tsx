@@ -86,6 +86,10 @@ export const MessageBubble = memo(function MessageBubble({
   getIconPath?: (id: DomainLeaderId) => string | null;
   attachments?: AttachmentRef[];
   variant?: "full" | "sidebar";
+  // Review F5 (#2886): the `parentId` prop, the `ml-6` indentClass, and the
+  // `data-parent-id` attribute were removed — they had no production caller.
+  // SubagentGroup renders its child rows directly with their own indentation
+  // and `data-child-spawn-id` test hooks.
 }) {
   const isUser = role === "user";
   const leader = leaderId ? DOMAIN_LEADERS.find((l) => l.id === leaderId) : null;
@@ -106,7 +110,9 @@ export const MessageBubble = memo(function MessageBubble({
         : "border border-neutral-800";
 
   return (
-    <div className={`flex min-w-0 ${isUser ? "justify-end" : "justify-start"}`}>
+    <div
+      className={`flex min-w-0 ${isUser ? "justify-end" : "justify-start"}`}
+    >
       <div className={`flex min-w-0 max-w-[90%] gap-3 md:max-w-[80%] ${isUser ? "flex-row-reverse" : ""}`}>
         {leader && (
           <LeaderAvatar leaderId={leaderId!} size="md" className="mt-1" customIconPath={customIconPath} />

@@ -16,8 +16,110 @@ import * as Sentry from "@sentry/nextjs";
 import { MessageBubble } from "@/components/chat/message-bubble";
 import { ReviewGateCard } from "@/components/chat/review-gate-card";
 import { StatusIndicator } from "@/components/chat/status-indicator";
+import { SubagentGroup } from "@/components/chat/subagent-group";
+import { InteractivePromptCard } from "@/components/chat/interactive-prompt-card";
+import { WorkflowLifecycleBar } from "@/components/chat/workflow-lifecycle-bar";
+import { ToolUseChip } from "@/components/chat/tool-use-chip";
+import type {
+  InteractivePromptResponsePayload,
+  InteractivePromptPayload,
+} from "@/lib/types";
+import type { ChatInteractivePromptMessage } from "@/lib/chat-state-machine";
 
 export type ChatSurfaceVariant = "full" | "sidebar";
+
+/**
+ * Stage 4 review F6: typed render helper for `<InteractivePromptCard>`.
+ * Replaces the prior `payload={msg.promptPayload as any}` /
+ * `selectedResponse={msg.selectedResponse as any}` casts at the call site
+ * with a per-kind switch that narrows the discriminated `{kind, payload}`
+ * couple at the boundary. Each branch passes congruent shapes — TS now
+ * tracks the union end-to-end.
+ */
+function renderInteractivePromptCard(
+  msg: ChatInteractivePromptMessage,
+  onRespond: (response: InteractivePromptResponsePayload) => void,
+): React.ReactNode {
+  switch (msg.promptKind) {
+    case "ask_user":
+      return (
+        <InteractivePromptCard
+          promptId={msg.promptId}
+          conversationId={msg.conversationId}
+          kind="ask_user"
+          payload={msg.promptPayload as Extract<InteractivePromptPayload, { kind: "ask_user" }>["payload"]}
+          resolved={msg.resolved}
+          selectedResponse={msg.selectedResponse}
+          onRespond={onRespond}
+        />
+      );
+    case "plan_preview":
+      return (
+        <InteractivePromptCard
+          promptId={msg.promptId}
+          conversationId={msg.conversationId}
+          kind="plan_preview"
+          payload={msg.promptPayload as Extract<InteractivePromptPayload, { kind: "plan_preview" }>["payload"]}
+          resolved={msg.resolved}
+          selectedResponse={msg.selectedResponse}
+          onRespond={onRespond}
+        />
+      );
+    case "diff":
+      return (
+        <InteractivePromptCard
+          promptId={msg.promptId}
+          conversationId={msg.conversationId}
+          kind="diff"
+          payload={msg.promptPayload as Extract<InteractivePromptPayload, { kind: "diff" }>["payload"]}
+          resolved={msg.resolved}
+          selectedResponse={msg.selectedResponse}
+          onRespond={onRespond}
+        />
+      );
+    case "bash_approval":
+      return (
+        <InteractivePromptCard
+          promptId={msg.promptId}
+          conversationId={msg.conversationId}
+          kind="bash_approval"
+          payload={msg.promptPayload as Extract<InteractivePromptPayload, { kind: "bash_approval" }>["payload"]}
+          resolved={msg.resolved}
+          selectedResponse={msg.selectedResponse}
+          onRespond={onRespond}
+        />
+      );
+    case "todo_write":
+      return (
+        <InteractivePromptCard
+          promptId={msg.promptId}
+          conversationId={msg.conversationId}
+          kind="todo_write"
+          payload={msg.promptPayload as Extract<InteractivePromptPayload, { kind: "todo_write" }>["payload"]}
+          resolved={msg.resolved}
+          selectedResponse={msg.selectedResponse}
+          onRespond={onRespond}
+        />
+      );
+    case "notebook_edit":
+      return (
+        <InteractivePromptCard
+          promptId={msg.promptId}
+          conversationId={msg.conversationId}
+          kind="notebook_edit"
+          payload={msg.promptPayload as Extract<InteractivePromptPayload, { kind: "notebook_edit" }>["payload"]}
+          resolved={msg.resolved}
+          selectedResponse={msg.selectedResponse}
+          onRespond={onRespond}
+        />
+      );
+    default: {
+      const _exhaustive: never = msg.promptKind;
+      void _exhaustive;
+      return null;
+    }
+  }
+}
 
 /**
  * Props only used by the sidebar variant. Grouping them behind
@@ -85,6 +187,8 @@ export function ChatSurface({
     resumeSession,
     sendMessage,
     sendReviewGateResponse,
+    sendInteractivePromptResponse,
+    resolveInteractivePrompt,
     status,
     sessionConfirmed,
     disconnectReason,
@@ -95,6 +199,8 @@ export function ChatSurface({
     usageData,
     realConversationId,
     resumedFrom,
+    workflow,
+    workflowEndedAt,
   } = useWebSocket(conversationId);
 
   const { names: customNames, getDisplayName, getIconPath, loading: teamNamesLoading } = useTeamNames();
@@ -115,6 +221,25 @@ export function ChatSurface({
       setShowNotificationPrompt(true);
     },
     [sendReviewGateResponse],
+  );
+
+  const handleInteractivePromptResponse = useCallback(
+    (
+      promptId: string,
+      conversationIdArg: string,
+      response: InteractivePromptResponsePayload,
+    ) => {
+      // Send the wire frame.
+      sendInteractivePromptResponse({
+        type: "interactive_prompt_response",
+        promptId,
+        conversationId: conversationIdArg,
+        ...response,
+      });
+      // Optimistically mark the local card as resolved.
+      resolveInteractivePrompt(promptId, conversationIdArg, response.response);
+    },
+    [sendInteractivePromptResponse, resolveInteractivePrompt],
   );
 
   useEffect(() => {
@@ -225,7 +350,18 @@ export function ChatSurface({
 
   const hasUserMessage = messages.some((m) => m.role === "user");
   const hasAssistantMessage = messages.some((m) => m.role === "assistant");
-  const isClassifying = hasUserMessage && !hasAssistantMessage && routeSource === null;
+  // Review F10: gate the legacy `isClassifying` chip on the lifecycle bar
+  // being idle — once the bar takes over routing/active/ended, the legacy
+  // chip must not double-render with the bar.
+  const isClassifying =
+    hasUserMessage &&
+    !hasAssistantMessage &&
+    routeSource === null &&
+    workflow.state === "idle";
+
+  // Review F3: workflow has ended either in-memory (this session) or in the
+  // persisted DB column (reload of an already-ended conversation).
+  const workflowEnded = workflow.state === "ended" || workflowEndedAt !== null;
 
   function handleSend(message: string, attachments?: AttachmentRef[]) {
     if (status !== "connected") return;
@@ -297,6 +433,14 @@ export function ChatSurface({
         </div>
       )}
 
+      {/* Review F15: WorkflowLifecycleBar is sticky context above the
+          scroll region — moving it OUTSIDE the `overflow-y-auto` container
+          keeps it pinned regardless of message-list scroll position. */}
+      <WorkflowLifecycleBar
+        lifecycle={workflow}
+        onStartNewConversation={() => router.push("/dashboard")}
+      />
+
       <div className={`min-w-0 flex-1 overflow-y-auto px-4 py-4 ${isFull ? "md:px-6" : ""}`}>
         {lastError && (
           <div className={`mb-4 ${widthWrapper}`}>
@@ -336,22 +480,13 @@ export function ChatSurface({
               const isFirst = msg.leaderId && !seenSoFar.has(msg.leaderId);
               if (msg.leaderId) seenSoFar.add(msg.leaderId);
 
-              return (
-                <div key={msg.id} className="min-w-0">
-                  {msg.type === "review_gate" ? (
-                    <ReviewGateCard
-                      gateId={msg.gateId}
-                      question={msg.question}
-                      options={msg.options}
-                      header={msg.header}
-                      descriptions={msg.descriptions}
-                      stepProgress={msg.stepProgress}
-                      resolved={msg.resolved}
-                      selectedOption={msg.selectedOption}
-                      gateError={msg.gateError}
-                      onSelect={handleReviewGateResponse}
-                    />
-                  ) : (
+              // Render dispatch with `: never` exhaustiveness rail per
+              // `cq-union-widening-grep-three-patterns`. A new ChatMessage
+              // variant without a case here fails `tsc --noEmit`.
+              let body: React.ReactNode;
+              switch (msg.type) {
+                case "text":
+                  body = (
                     <MessageBubble
                       role={msg.role}
                       content={msg.content}
@@ -366,7 +501,94 @@ export function ChatSurface({
                       attachments={msg.attachments}
                       variant={variant}
                     />
-                  )}
+                  );
+                  break;
+                case "review_gate":
+                  body = (
+                    <ReviewGateCard
+                      gateId={msg.gateId}
+                      question={msg.question}
+                      options={msg.options}
+                      header={msg.header}
+                      descriptions={msg.descriptions}
+                      stepProgress={msg.stepProgress}
+                      resolved={msg.resolved}
+                      selectedOption={msg.selectedOption}
+                      gateError={msg.gateError}
+                      onSelect={handleReviewGateResponse}
+                    />
+                  );
+                  break;
+                case "subagent_group":
+                  body = (
+                    <SubagentGroup
+                      parentSpawnId={msg.parentSpawnId}
+                      parentLeaderId={msg.parentLeaderId}
+                      parentTask={msg.parentTask}
+                      subagents={msg.children}
+                      getDisplayName={getDisplayName}
+                      getIconPath={getIconPath}
+                      variant={variant}
+                    />
+                  );
+                  break;
+                case "interactive_prompt": {
+                  body = renderInteractivePromptCard(msg, (response) =>
+                    handleInteractivePromptResponse(
+                      msg.promptId,
+                      msg.conversationId,
+                      response,
+                    ),
+                  );
+                  break;
+                }
+                case "workflow_ended":
+                  body = (
+                    <div
+                      data-message-type="workflow_ended"
+                      className="rounded-xl border border-neutral-800 bg-neutral-900/40 px-4 py-3"
+                    >
+                      <p className="text-sm text-neutral-200">
+                        Workflow{" "}
+                        <span className="font-semibold">{msg.workflow}</span>{" "}
+                        ended:{" "}
+                        <span
+                          className={
+                            msg.status === "completed"
+                              ? "text-emerald-400"
+                              : "text-red-400"
+                          }
+                        >
+                          {msg.status}
+                        </span>
+                      </p>
+                      {msg.summary ? (
+                        <p className="mt-1 text-xs text-neutral-400">{msg.summary}</p>
+                      ) : null}
+                    </div>
+                  );
+                  break;
+                case "tool_use_chip":
+                  // F13: `msg.leaderId` is already narrowed to "cc_router" | "system"
+                  // by the ChatToolUseChipMessage type — no cast needed.
+                  body = (
+                    <ToolUseChip
+                      toolName={msg.toolName}
+                      toolLabel={msg.toolLabel}
+                      leaderId={msg.leaderId}
+                    />
+                  );
+                  break;
+                default: {
+                  const _exhaustive: never = msg;
+                  void _exhaustive;
+                  body = null;
+                }
+              }
+
+              return (
+                <div key={msg.id} className="min-w-0">
+                  {body}
                 </div>
               );
             });
@@ -431,6 +653,7 @@ export function ChatSurface({
             onAtDismiss={() => setAtVisible(false)}
             atMentionVisible={atVisible}
             disabled={status !== "connected"}
+            workflowEnded={workflowEnded}
             placeholder={
               status === "connected"
                 ? (placeholder ??
