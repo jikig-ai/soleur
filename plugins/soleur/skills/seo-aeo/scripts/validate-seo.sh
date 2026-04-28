@@ -112,6 +112,37 @@ for f in "${html_files[@]}"; do
   else
     fail "$page missing Twitter card meta tag"
   fi
+
+  # No <base> tag (per #2945) — root-domain site uses absolute root-relative paths
+  if grep -q '<base ' "$f"; then
+    fail "$page contains <base> tag (must be removed for root-domain site)"
+  else
+    pass "$page has no <base> tag"
+  fi
+
+  # Exactly one <h1> per page (per #2943)
+  h1_count=$(grep -oE '<h1[ >]' "$f" | wc -l | tr -d ' ')
+  if [[ "$h1_count" -ne 1 ]]; then
+    fail "$page has $h1_count <h1> tags (expected exactly 1)"
+  else
+    pass "$page has exactly 1 <h1>"
+  fi
+
+  # Non-empty meta description (per #2942)
+  if grep -q 'name="description" content=""' "$f"; then
+    fail "$page has empty meta description"
+  else
+    pass "$page has non-empty meta description"
+  fi
+
+  # FAQPage parity when faq- class present (per #2948)
+  if grep -q 'class="faq-' "$f"; then
+    if grep -q '"@type": "FAQPage"' "$f"; then
+      pass "$page has FAQPage JSON-LD matching visible FAQ"
+    else
+      fail "$page renders faq- class but lacks FAQPage JSON-LD"
+    fi
+  fi
 done
 
 # ── Homepage-specific: SoftwareApplication ────────────────────────────────────
