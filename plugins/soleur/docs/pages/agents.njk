@@ -32,7 +32,7 @@ The result: {{ stats.agents }} open source AI agents that function as a unified 
     <div class="container">
       <nav class="category-nav" aria-label="Agent categories">
         {%- for domain in agents.domains %}
-        <a href="agents/#{{ domain.key }}" class="category-pill">{{ domain.name }}</a>
+        <a href="/agents/#{{ domain.key }}" class="category-pill">{{ domain.name }}</a>
         {%- endfor %}
       </nav>
 

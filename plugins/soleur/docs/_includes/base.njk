@@ -3,10 +3,10 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="description" content="{{ description }}">
+  <meta name="description" content="{{ description or site.description }}">
   <link rel="canonical" href="{{ site.url }}{{ page.url }}">
-  <meta property="og:title" content="{{ title }}{% if title != site.name %} - {{ site.name }}{% endif %}">
-  <meta property="og:description" content="{{ description }}">
+  <meta property="og:title" content="{{ title }}{% if title != site.name and ('Soleur' not in title) %} - {{ site.name }}{% endif %}">
+  <meta property="og:description" content="{{ description or site.description }}">
   <meta property="og:url" content="{{ site.url }}{{ page.url }}">
   <meta property="og:type" content="{{ ogType | default('website') }}">
   <meta property="og:site_name" content="{{ site.name }}">
@@ -16,8 +16,8 @@
   <meta property="og:image:height" content="630">
   <meta property="og:image:alt" content="{{ ogImageAlt | default(site.name + ' - ' + site.tagline) }}">
   <meta name="twitter:card" content="summary_large_image">
-  <meta name="twitter:title" content="{{ title }}{% if title != site.name %} - {{ site.name }}{% endif %}">
-  <meta name="twitter:description" content="{{ description }}">
+  <meta name="twitter:title" content="{{ title }}{% if title != site.name and ('Soleur' not in title) %} - {{ site.name }}{% endif %}">
+  <meta name="twitter:description" content="{{ description | default(site.description) }}">
   <meta name="twitter:image" content="{{ site.url }}/images/{{ ogImage | default('og-image.png') }}">
   <meta name="twitter:image:width" content="1200">
   <meta name="twitter:image:height" content="630">
@@ -42,9 +42,10 @@
       {
         "@type": "WebPage",
         "name": {{ title | jsonLdSafe | safe }},
-        "description": {{ description | jsonLdSafe | safe }},
+        "description": {{ (description or site.description) | jsonLdSafe | safe }},
         "url": {{ (site.url + page.url) | jsonLdSafe | safe }},
         "inLanguage": "en-US",
+        {% if page.date %}"dateModified": {{ (page.date | dateToRfc3339) | jsonLdSafe | safe }},{% endif %}
         "publisher": {
           "@type": "Organization",
           "name": {{ site.name | jsonLdSafe | safe }},
@@ -57,11 +58,7 @@
         "name": {{ site.name | jsonLdSafe | safe }},
         "url": {{ site.url | jsonLdSafe | safe }},
         "logo": {{ (site.url + "/images/logo-mark-512.png") | jsonLdSafe | safe }},
-        "founder": {
-          "@type": "Person",
-          "name": "Jean Deruelle",
-          "url": "https://github.com/deruelle"
-        },
+        "founder": { "@id": {{ (site.url + "/about/#jean-deruelle") | jsonLdSafe | safe }} },
         "foundingDate": "2026",
         "sameAs": [
           {{ site.github | jsonLdSafe | safe }},
@@ -120,9 +117,8 @@
     ]
   }
   </script>
-  <base href="/">
-  <link rel="icon" type="image/png" href="images/favicon.png">
-  <title>{% if seoTitle %}{{ seoTitle }}{% elif title == site.name %}{{ site.name }} - {{ site.tagline }}{% else %}{{ title }} - {{ site.name }}{% endif %}</title>
+  <link rel="icon" type="image/png" href="/images/favicon.png">
+  <title>{% if seoTitle %}{{ seoTitle }}{% elif title == site.name %}{{ site.name }} - {{ site.tagline }}{% elif 'Soleur' in title %}{{ title }}{% else %}{{ title }} - {{ site.name }}{% endif %}</title>
   <!-- Critical CSS: above-the-fold styles for /, /blog/*, and every .page-hero
        template inlined to unblock first paint. The full stylesheet loads
        asynchronously via the onload-swap pattern below. Selectors covered:
@@ -138,8 +134,8 @@
        per AGENTS.md cq-eleventy-critical-css-screenshot-gate. -->
   <style>
     @layer reset,tokens,base,layout,components,utilities;
-    @font-face{font-family:'Cormorant Garamond';src:url('fonts/cormorant-garamond-500.woff2') format('woff2');font-weight:500;font-style:normal;font-display:swap}
-    @font-face{font-family:'Inter';src:url('fonts/inter.woff2') format('woff2');font-weight:400 700;font-style:normal;font-display:swap}
+    @font-face{font-family:'Cormorant Garamond';src:url('/fonts/cormorant-garamond-500.woff2') format('woff2');font-weight:500;font-style:normal;font-display:swap}
+    @font-face{font-family:'Inter';src:url('/fonts/inter.woff2') format('woff2');font-weight:400 700;font-style:normal;font-display:swap}
     @layer reset{*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}img{max-width:100%;display:block}input,button{font:inherit}}
     @layer tokens{:root{--color-bg:#0A0A0A;--color-bg-secondary:#0E0E0E;--color-bg-tertiary:#141414;--color-bg-inverse:#FFFFFF;--color-text:#FFFFFF;--color-text-secondary:#848484;--color-text-tertiary:#737373;--color-text-inverse:#0A0A0A;--color-accent:#C9A962;--color-accent-hover:#D4B36A;--color-accent-dark:#B8923E;--color-border:#2A2A2A;--color-border-strong:#3A3A3A;--color-focus:#C9A962;--font-display:'Cormorant Garamond',Georgia,'Times New Roman',serif;--font-body:'Inter',system-ui,-apple-system,'Segoe UI',sans-serif;--font-mono:'JetBrains Mono',ui-monospace,'Cascadia Code','Fira Code',monospace;--text-xs:0.75rem;--text-sm:0.875rem;--text-base:1rem;--text-lg:1.25rem;--text-xl:1.5rem;--text-2xl:1.875rem;--text-3xl:2.25rem;--text-4xl:3rem;--text-5xl:4.5rem;--space-1:0.25rem;--space-2:0.5rem;--space-3:0.75rem;--space-4:1rem;--space-5:1.5rem;--space-6:2rem;--space-8:3rem;--space-10:5rem;--space-12:8rem;--header-h:3.5rem}}
     @layer base{html{scroll-behavior:smooth}body{font-family:var(--font-body);font-size:var(--text-base);line-height:1.6;color:var(--color-text);background:var(--color-bg);-webkit-font-smoothing:antialiased}h1,h2,h3,h4{line-height:1.2;font-weight:700}h1{font-size:var(--text-3xl)}h2{font-size:var(--text-2xl)}h3{font-size:var(--text-lg)}a{color:var(--color-accent);text-decoration:none}a:hover{color:var(--color-accent-hover);text-decoration:underline}:focus-visible{outline:2px solid var(--color-focus);outline-offset:2px}::selection{background:rgba(201,169,98,0.25)}}
@@ -212,8 +208,8 @@
       .honeypot-trap{position:absolute;left:-9999px;height:0;overflow:hidden}
     }
   </style>
-  <link id="soleur-css-preload" rel="preload" href="css/style.css" as="style">
-  <noscript><link rel="stylesheet" href="css/style.css"></noscript>
+  <link id="soleur-css-preload" rel="preload" href="/css/style.css" as="style">
+  <noscript><link rel="stylesheet" href="/css/style.css"></noscript>
   <!-- CSP-compliant async stylesheet swap. Replaces an inline onload= attribute (blocked
        by script-src without unsafe-inline / unsafe-hashes) with a hashed inline script.
        Editing the swap below requires updating the sha256 hash in the CSP meta tag above.
@@ -237,7 +233,7 @@
     <label for="nav-toggle" class="nav-toggle-label" aria-label="Toggle navigation">&#9776;</label>
     <ul class="nav-links">
       {%- for item in site.nav %}
-      <li><a href="{{ item.url }}"{% if page.url == ('/' + item.url) or (item.url == 'blog/' and page.url.startsWith('/blog')) %} aria-current="page"{% endif %}>{{ item.label }}</a></li>
+      <li><a href="{{ item.url }}"{% if page.url == item.url or (item.url == '/blog/' and page.url.startsWith('/blog')) %} aria-current="page"{% endif %}>{{ item.label }}</a></li>
       {%- endfor %}
       {%- if site.primaryCta %}
       <li class="nav-cta-slot"><a href="{{ site.primaryCta.url }}" aria-label="{{ site.primaryCta.ariaLabel }}" class="btn btn-primary btn--sm nav-cta">{{ site.primaryCta.label }}</a></li>
