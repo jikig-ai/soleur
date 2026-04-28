@@ -40,8 +40,12 @@ export default function (eleventyConfig) {
   });
 
   // RFC 3339 / ISO 8601 timestamp for schema.org dateModified
+  // Returns null on falsy input so callers can guard the JSON-LD line
+  // (new Date(undefined).toISOString() throws RangeError).
   eleventyConfig.addFilter("dateToRfc3339", (date) => {
-    return new Date(date).toISOString();
+    if (!date) return null;
+    const d = new Date(date);
+    return Number.isNaN(d.getTime()) ? null : d.toISOString();
   });
 
   // Human-readable date for blog templates

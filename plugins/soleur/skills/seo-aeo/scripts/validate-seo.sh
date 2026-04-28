@@ -114,14 +114,16 @@ for f in "${html_files[@]}"; do
   fi
 
   # No <base> tag (per #2945) — root-domain site uses absolute root-relative paths
-  if grep -q '<base ' "$f"; then
+  # Anchor on tag boundary to avoid false positives in prose / code blocks
+  if grep -qE '<base[[:space:]>]' "$f"; then
     fail "$page contains <base> tag (must be removed for root-domain site)"
   else
     pass "$page has no <base> tag"
   fi
 
   # Exactly one <h1> per page (per #2943)
-  h1_count=$(grep -oE '<h1[ >]' "$f" | wc -l | tr -d ' ')
+  # grep -c exits 1 on zero matches under pipefail; `|| true` keeps the script alive
+  h1_count=$(grep -cE '<h1[ >]' "$f" || true)
   if [[ "$h1_count" -ne 1 ]]; then
     fail "$page has $h1_count <h1> tags (expected exactly 1)"
   else
@@ -135,10 +137,14 @@ for f in "${html_files[@]}"; do
     pass "$page has non-empty meta description"
   fi
 
-  # FAQPage parity when faq- class present (per #2948)
-  if grep -q 'class="faq-' "$f"; then
+  # FAQPage existence when visible FAQ markup is rendered (per #2948).
+  # This check verifies the JSON-LD block is PRESENT alongside the visible
+  # FAQ, not that every Q/A pair has parity — see the FAQPage parity learning
+  # for the codepoint-exact check (run via /soleur:review's data-integrity
+  # agent, not this CI gate).
+  if grep -qE 'class="faq-(item|question|answer|list)\b' "$f"; then
     if grep -q '"@type": "FAQPage"' "$f"; then
-      pass "$page has FAQPage JSON-LD matching visible FAQ"
+      pass "$page has FAQPage JSON-LD alongside visible FAQ"
     else
       fail "$page renders faq- class but lacks FAQPage JSON-LD"
     fi
