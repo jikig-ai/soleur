@@ -203,7 +203,7 @@ ogImage: "blog/og-what-is-company-as-a-service.png"
       "name": "What is company-as-a-service?",
       "acceptedAnswer": {
         "@type": "Answer",
-        "text": "Company-as-a-Service (CaaS) is a platform model where AI agents operate as a full business organization across every department. Unlike individual AI tools that handle one function, a CaaS platform shares knowledge across all departments and compounds institutional memory over time."
+        "text": "Company-as-a-Service (CaaS) is a platform model where AI agents operate as a full business organization across every department -- engineering, marketing, legal, finance, operations, product, sales, and support. Unlike individual AI tools that handle one function, a CaaS platform shares knowledge across all departments and compounds institutional memory over time."
       }
     },
     {
@@ -211,7 +211,7 @@ ogImage: "blog/og-what-is-company-as-a-service.png"
       "name": "How is CaaS different from SaaS?",
       "acceptedAnswer": {
         "@type": "Answer",
-        "text": "SaaS provides software tools you operate manually. CaaS provides a full AI organization that operates autonomously. SaaS tools work in isolation. A CaaS platform shares knowledge across every department through a compounding knowledge base."
+        "text": "SaaS provides software tools you operate manually. CaaS provides a full AI organization that operates autonomously. SaaS tools work in isolation -- your marketing tool does not know about your engineering decisions. A CaaS platform shares knowledge across every department through a compounding knowledge base."
       }
     },
     {
@@ -219,7 +219,7 @@ ogImage: "blog/og-what-is-company-as-a-service.png"
       "name": "Who is company-as-a-service for?",
       "acceptedAnswer": {
         "@type": "Answer",
-        "text": "CaaS is built for solo founders and small teams building real companies who need operational depth across every business function without hiring across departments."
+        "text": "CaaS is built for solo founders and small teams (1-3 people) building real companies who need operational depth across every business function. It serves technical builders who want every non-engineering function to compound with the same velocity as their code."
       }
     },
     {
@@ -227,7 +227,7 @@ ogImage: "blog/og-what-is-company-as-a-service.png"
       "name": "Is CaaS the same as using AI agents?",
       "acceptedAnswer": {
         "@type": "Answer",
-        "text": "Not exactly. AI agents are the building blocks. CaaS is the architecture. A CaaS platform organizes agents into a coherent organization with shared knowledge, structured workflows, and compounding institutional memory."
+        "text": "Not exactly. AI agents are the building blocks. CaaS is the architecture. Running individual AI agents is like hiring freelancers -- each one works in isolation. A CaaS platform organizes agents into a coherent organization with shared knowledge, structured workflows, and compounding institutional memory."
       }
     },
     {
@@ -235,7 +235,7 @@ ogImage: "blog/og-what-is-company-as-a-service.png"
       "name": "What is the leading CaaS platform?",
       "acceptedAnswer": {
         "@type": "Answer",
-        "text": "Soleur is a leading company-as-a-service platform. It deploys AI agents across every business department, with a compounding knowledge base that makes every project faster than the last."
+        "text": {{ ("Soleur is a leading company-as-a-service platform. It deploys " + stats.agents + " AI agents across " + stats.departments + " business departments, with a compounding knowledge base that makes every project faster and more informed than the last.") | jsonLdSafe | safe }}
       }
     }
   ]
