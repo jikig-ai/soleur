@@ -65,13 +65,31 @@ route never imports `lib/supabase/client.ts`. The inlined-bundle bug
 cannot affect `/health` — `curl http://localhost:3001/health` returns
 200 even when every subsequent client navigation will throw.
 
-The fix (PR #3014) layers the canary: probe `/login` (public route, must
-200 with non-empty body), `/dashboard` (auth-required, must 200/302/307
-with no error-boundary sentinel), and reject any rendered HTML
-containing `An unexpected error occurred`. Layer 2 (chromium-in-canary)
-and Layer 3 (deployed-bundle JWT-claim assertion) are deferred to
-follow-up issues — see
-`knowledge-base/engineering/ops/runbooks/canary-probe-set.md`.
+The fix (PR #3014) layers the canary:
+
+- **Layer 1** — probe `/login` (public route, must 200 with non-empty
+  body), `/dashboard` (auth-required, must 200/302/307), and reject any
+  rendered HTML containing the structured marker `data-error-boundary=`
+  (emitted by `components/error-boundary-view.tsx`, stable across copy
+  edits).
+- **Layer 3** — `apps/web-platform/infra/canary-bundle-claim-check.sh`
+  fetches the deployed login chunk and asserts the inlined Supabase JWT
+  has canonical claims. This is the only Layer that catches the exact
+  #3007 regression class (client-only throws are invisible to SSR HTML
+  probes; Layer 3 reads what the bundle WILL try to validate).
+- **Layer 2** (chromium-in-canary) is deferred — see
+  `knowledge-base/engineering/ops/runbooks/canary-probe-set.md`.
+
+**Important Next.js 15 caveat:** an `error.tsx` file in a route segment
+is rendered as a SIBLING of that segment's `layout.tsx`, NOT a child of
+it. So a throw originating from `(dashboard)/layout.tsx` (or from
+modules that layout imports at module-load time, like
+`@/lib/supabase/client`) bubbles UP to the parent boundary
+(`app/error.tsx`). The new `app/(dashboard)/error.tsx` catches throws in
+dashboard CHILD pages but does NOT cover the validator-throw path that
+motivated this PR. The runbook documents this; future fixes that need
+to isolate the layout-import throw must lift `createClient` into a
+child component below the boundary.
 
 ### Sentry alerts did not fire
 

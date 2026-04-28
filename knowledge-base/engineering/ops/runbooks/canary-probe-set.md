@@ -35,21 +35,23 @@ spot.
 |---|---|---|---|
 | 1a | `curl http://localhost:3001/health` returns 200 | container is alive | enforced |
 | 1b | `curl http://localhost:3001/login` returns 200 with non-empty body | public route renders | enforced |
-| 1c | `curl http://localhost:3001/dashboard --max-redirs 0` returns 200/302/307, body does NOT contain "An unexpected error occurred" | middleware redirect or successful render; rejects SSR-rendered error.tsx | enforced |
+| 1c | `curl http://localhost:3001/dashboard --max-redirs 0` returns 200/302/307, body does NOT contain `data-error-boundary=` | middleware redirect or successful render; rejects SSR-rendered error.tsx | enforced |
 | 2 | Headless chromium hydrates `/dashboard` and observes no console errors | client-only throws (e.g. validator at module load) | **deferred — D1** |
-| 3 | Probe the deployed bundle for the inlined Supabase JWT and assert canonical claims | inlined build-arg corruption | **deferred — D5** |
+| 3 | `apps/web-platform/infra/canary-bundle-claim-check.sh` fetches the deployed login chunk and asserts the inlined Supabase JWT has canonical claims (`iss=supabase`, `role=anon`, ref shape) | inlined build-arg corruption (the #3007 regression class) — runs without a browser, catches what Layer 1 cannot see | enforced |
 
 Layer 1 is the cheapest broad-coverage gate. Layer 2 is the only thing
 that catches the exact PR #3007 regression class. Layer 3 is a
 build-arg integrity check — if Doppler / GitHub secret / build-arg
 plumbing drifts, Layer 3 detects it without needing a browser.
 
-## Body-content sentinel
+## Body-content sentinel — structured marker
 
-The `error.tsx` boundary copy is `An unexpected error occurred`. Any
-canary-rendered HTML that contains that string fails the probe and
-triggers rollback. This catches **server-component** throws (which DO
-render error.tsx during SSR). Client-only throws still need Layer 2.
+The shared `components/error-boundary-view.tsx` renders a stable
+`data-error-boundary` attribute on the boundary container (`"root"` for
+`app/error.tsx`, `"dashboard"` for `app/(dashboard)/error.tsx`). The
+canary greps for `data-error-boundary=` — copy edits cannot disable the
+gate. This catches **server-component** throws (which DO render error.tsx
+during SSR). Client-only throws are caught by Layer 3.
 
 ## Adding a new probe
 

@@ -1,9 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 
-// Hoist a mutable spy reference so the vi.mock factory can wire it before any
-// module is evaluated. Using vi.hoisted is mandatory: vitest hoists vi.mock
-// factories above all const/let declarations, so a top-level `const spy = vi.fn()`
-// would not be initialized when the factory runs.
+// vi.hoisted: vi.mock factories run before const initialization.
 const { reportSilentFallbackSpy } = vi.hoisted(() => ({
   reportSilentFallbackSpy: vi.fn(),
 }));
@@ -54,7 +51,9 @@ describe("lib/supabase/client module-load wrapper", () => {
       }),
     );
 
-    await expect(import("@/lib/supabase/client")).rejects.toThrow(/role/i);
+    await expect(import("@/lib/supabase/client")).rejects.toThrow(
+      /role="service_role"/,
+    );
 
     expect(reportSilentFallbackSpy).toHaveBeenCalledTimes(1);
     const [errArg, optionsArg] = reportSilentFallbackSpy.mock.calls[0]!;
@@ -71,7 +70,7 @@ describe("lib/supabase/client module-load wrapper", () => {
     vi.stubEnv("NEXT_PUBLIC_SUPABASE_ANON_KEY", VALID_ANON_KEY);
 
     await expect(import("@/lib/supabase/client")).rejects.toThrow(
-      /placeholder|test/i,
+      /NEXT_PUBLIC_SUPABASE_URL is a placeholder host/,
     );
 
     expect(reportSilentFallbackSpy).toHaveBeenCalledTimes(1);

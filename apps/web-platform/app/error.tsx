@@ -1,42 +1,9 @@
 "use client";
-import { useEffect } from "react";
-import { reportSilentFallback } from "@/lib/client-observability";
+import { ErrorBoundaryView } from "@/components/error-boundary-view";
 
-export default function Error({
-  error,
-  reset,
-}: {
+export default function Error(props: {
   error: Error & { digest?: string };
   reset: () => void;
 }) {
-  useEffect(() => {
-    // Do NOT pass error.message into `extra` — validator throws may include a
-    // JWT preview. The Error object itself is captured by Sentry; the client
-    // SDK's beforeSend strips x-nonce / cookie headers but does not redact
-    // message bodies, so anything we add here ships verbatim.
-    reportSilentFallback(error, {
-      feature: "dashboard-error-boundary",
-      op: "render",
-      extra: {
-        digest: error.digest ?? null,
-        route:
-          typeof window !== "undefined" ? window.location.pathname : null,
-      },
-    });
-  }, [error]);
-
-  return (
-    <div className="flex min-h-[50vh] flex-col items-center justify-center gap-4">
-      <h2 className="text-xl font-semibold text-white">Something went wrong</h2>
-      <p className="text-sm text-neutral-400">
-        {error.digest ? `Error ID: ${error.digest}` : "An unexpected error occurred."}
-      </p>
-      <button
-        onClick={reset}
-        className="rounded-lg border border-neutral-700 px-4 py-2 text-sm text-neutral-300 transition-colors hover:border-neutral-500 hover:text-white"
-      >
-        Try again
-      </button>
-    </div>
-  );
+  return <ErrorBoundaryView {...props} feature="root-error-boundary" />;
 }
