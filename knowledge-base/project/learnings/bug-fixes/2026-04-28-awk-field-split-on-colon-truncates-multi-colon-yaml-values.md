@@ -102,6 +102,27 @@ The `match() + substr()` form does NOT handle:
 
 The current corpus uses neither; if a future content file adopts block scalars, the parser must be revisited. The runbook §H8 entry documents the limitation.
 
+## Session Errors
+
+Per `wg-every-session-error-must-produce-either`. Both items are discoverable
+(hook output, missing-dir failure mode), so the discoverability exit applies —
+no new AGENTS.md rule needed.
+
+- **PreToolUse `security_reminder_hook` advisory on workflow YAML edit.**
+  First Edit of `.github/workflows/scheduled-campaign-calendar.yml` surfaced
+  a "GitHub Actions workflow injection" advisory. Verbatim retry succeeded.
+  **Recovery:** grep-verified the file state, retried the identical edit.
+  **Prevention:** already documented in
+  `bug-fixes/2026-04-15-signed-get-verify-step-tolerate-non-json-bodies.md`
+  Session Errors. No additional enforcement.
+- **Plan-phase agent did not create the `knowledge-base/project/specs/feat-<branch>/`
+  directory before pipeline returned.** Caused a silent path mismatch when
+  one-shot Step 2 attempted to write `session-state.md`.
+  **Recovery:** `mkdir -p` then `Write`.
+  **Prevention:** one-shot orchestrator already has fallback logic to write
+  session-state.md when missing; the path-resolution gap is bounded to
+  one extra `mkdir` call per feature.
+
 ## References
 
 - Issue: [#2987](https://github.com/jikig-ai/soleur/issues/2987)
