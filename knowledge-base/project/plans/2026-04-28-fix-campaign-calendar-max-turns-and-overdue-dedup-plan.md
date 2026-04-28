@@ -429,13 +429,13 @@ After Phase 1–3 merge, verify and clean up:
 
 ### Pre-merge (PR)
 
-- [ ] `.github/workflows/scheduled-campaign-calendar.yml` line 49 changed
+- [x] `.github/workflows/scheduled-campaign-calendar.yml` line 49 changed
   to `timeout-minutes: 30`.
-- [ ] Same file line 70 changed to `--max-turns 40`.
-- [ ] STEP 2 of the prompt body now requires the dedup guard described in
+- [x] Same file line 70 changed to `--max-turns 40`.
+- [x] STEP 2 of the prompt body now requires the dedup guard described in
   Phase 2; STEP 2.5 (heartbeat audit issue when no new issues filed) is
   appended.
-- [ ] `knowledge-base/engineering/ops/runbooks/cloud-scheduled-tasks.md`
+- [x] `knowledge-base/engineering/ops/runbooks/cloud-scheduled-tasks.md`
   has §H7 addendum.
 - [ ] PR body uses `Ref #2896` (NOT `Closes #2896`) per
   `cq-ops-remediation-uses-ref-not-closes-for-post-merge-fixes`.

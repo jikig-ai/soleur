@@ -162,6 +162,37 @@ and compare row formats against the prompt's expected pattern.
 
 **Restore (H5):** Fix the file format. Re-run the task.
 
+### H7 — GHA-scheduled-task max-turns starvation
+
+GHA-scheduled tasks (campaign-calendar, competitive-analysis, roadmap-review,
+growth-execution, seo-aeo-audit, daily-triage) invoke
+`anthropics/claude-code-action` with a `--max-turns` budget. If the budget is
+too tight for the task's plugin overhead (~10 turns) + task work (per-step
+turn estimate) + error buffer (~5 turns), the agent reaches max turns
+mid-STEP and the GHA workflow exits with a `failure` conclusion. The
+audit-issue step is typically the LAST step (PR persist), so a starved run
+produces zero artifacts → silent gap → watchdog flags after threshold.
+
+**Signature:**
+
+- GHA run conclusion: `failure`
+- Run log contains: `Reached maximum number of turns (N)`
+- Latest audit issue (label-based query) is older than threshold
+
+**Verify:** `grep -E '\-\-max-turns' .github/workflows/scheduled-*.yml`,
+read each row, compute against the 2026-03-20 ratio table.
+
+**Fix:** Raise `--max-turns` to peer median (40), and raise
+`timeout-minutes` proportionally (≥ 0.75 min/turn). See
+`knowledge-base/project/learnings/2026-03-20-claude-code-action-max-turns-budget.md`.
+
+**Reference incident:** PR #2974 — campaign-calendar at `--max-turns 20`
+failed on 2026-04-27 with 3 overdue items to file (#2968/#2969/#2970); the
+schedule-fire on 2026-04-20 ran at the wall (`num_turns: 21`) and produced
+no audit issues, triggering the watchdog (#2896) on 2026-04-25. Fix raised
+budget to `--max-turns 40` + `timeout-minutes: 30` (0.75 min/turn ratio)
+and added STEP 2 dedup + STEP 2.5 heartbeat issue.
+
 ## Restore Procedure (generalized)
 
 Based on the diagnosed H\* above:
