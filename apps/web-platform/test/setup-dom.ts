@@ -8,6 +8,14 @@ import { afterAll, afterEach, vi } from "vitest";
 const originalFetch: typeof fetch | undefined =
   typeof globalThis !== "undefined" ? globalThis.fetch : undefined;
 
+// Mirror of `originalFetch` for XMLHttpRequest. Today only `chat-input-attachments`
+// and `file-tree-upload` stub XHR via `vi.stubGlobal` (already undone by
+// `vi.unstubAllGlobals()`); the proactive capture-and-restore prevents a future
+// raw `globalThis.XMLHttpRequest = vi.fn(...)` assignment from leaking across files.
+// See `originalFetch` above and PR #2524 / #2470.
+const originalXHR: typeof XMLHttpRequest | undefined =
+  typeof globalThis !== "undefined" ? globalThis.XMLHttpRequest : undefined;
+
 function resetBrowserLikeGlobals() {
   if (typeof sessionStorage !== "undefined") {
     try {
@@ -41,6 +49,9 @@ afterAll(() => {
   vi.unstubAllGlobals();
   if (originalFetch && typeof globalThis !== "undefined") {
     globalThis.fetch = originalFetch;
+  }
+  if (originalXHR && typeof globalThis !== "undefined") {
+    globalThis.XMLHttpRequest = originalXHR;
   }
   vi.useRealTimers();
   resetBrowserLikeGlobals();

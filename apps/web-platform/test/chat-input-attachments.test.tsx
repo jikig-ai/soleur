@@ -1,3 +1,16 @@
+// DO NOT add `vi.useFakeTimers()` to this file. The XHR progress mocks use
+// manual triggers (see `fireProgress50` / `fireProgress100` / `completeUpload`
+// in the "send with attachments" describe block). Mixing fake timers with
+// `@testing-library/user-event` v14 hangs `await user.type/keyboard` calls —
+// see testing-library/user-event#833 and react-testing-library#1197/#1198.
+//
+// Trigger-function ordering invariant: each `let fireXxx: () => void` is
+// assigned inside `mockXhr.send.mockImplementation(...)`, which runs
+// synchronously when `uploadWithProgress` calls `xhr.send(file)`. By the
+// time `await userEvent.keyboard("{Enter}")` resolves, every trigger is
+// populated. The non-null `!` assertion at each call site encodes that
+// invariant; a future edit that moves the trigger before the keyboard
+// event will produce a clear `TypeError` rather than a silent hang.
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -161,9 +174,10 @@ describe("ChatInput — attachments", () => {
         }),
       });
 
-      // XHR upload completes immediately on send
+      // Manual trigger pattern — see top-of-file note.
+      let completeUpload: () => void;
       mockXhr.send.mockImplementation(() => {
-        setTimeout(() => mockXhr.onload?.(), 0);
+        completeUpload = () => mockXhr.onload?.();
       });
 
       const fileInput = document.querySelector("input[type='file']") as HTMLInputElement;
@@ -178,6 +192,9 @@ describe("ChatInput — attachments", () => {
       const textarea = screen.getByRole("textbox");
       await userEvent.type(textarea, "Check this out");
       await userEvent.keyboard("{Enter}");
+
+      // Manually complete the upload so handleSubmit resolves deterministically.
+      completeUpload!();
 
       await waitFor(() => {
         expect(onSend).toHaveBeenCalledWith(
@@ -205,15 +222,17 @@ describe("ChatInput — attachments", () => {
         }),
       });
 
-      // XHR send fires progress events, then completes
+      // Manual trigger pattern: explicitly fire each progress event between
+      // assertions so React commits the intermediate `att.progress = 50` state
+      // before progress jumps to 100. The previous real-clock 0/10/20-ms triple
+      // raced React's batching on slow CI workers (#2524, #2470).
+      let fireProgress50: () => void;
+      let fireProgress100: () => void;
+      let completeUpload: () => void;
       mockXhr.send.mockImplementation(() => {
-        setTimeout(() => {
-          mockXhr.upload.onprogress?.({ lengthComputable: true, loaded: 50, total: 100 });
-        }, 0);
-        setTimeout(() => {
-          mockXhr.upload.onprogress?.({ lengthComputable: true, loaded: 100, total: 100 });
-        }, 10);
-        setTimeout(() => mockXhr.onload?.(), 20);
+        fireProgress50 = () => mockXhr.upload.onprogress?.({ lengthComputable: true, loaded: 50, total: 100 });
+        fireProgress100 = () => mockXhr.upload.onprogress?.({ lengthComputable: true, loaded: 100, total: 100 });
+        completeUpload = () => mockXhr.onload?.();
       });
 
       const fileInput = document.querySelector("input[type='file']") as HTMLInputElement;
@@ -229,10 +248,24 @@ describe("ChatInput — attachments", () => {
       await userEvent.type(textarea, "hi");
       await userEvent.keyboard("{Enter}");
 
-      // Should show percentage text during upload
+      fireProgress50!();
       await waitFor(() => {
         expect(screen.getByText("50%")).toBeInTheDocument();
       });
+
+      // Negative-space assertion: pins the #2524 regression class. If React
+      // ever batched both progress events into a single commit (the original
+      // bug), the test would have still passed when "50%" briefly appeared
+      // and was immediately replaced by "Uploaded". Asserting "Uploaded" is
+      // NOT yet visible at this checkpoint forces the intermediate render.
+      expect(screen.queryByText("Uploaded")).not.toBeInTheDocument();
+
+      fireProgress100!();
+      await waitFor(() => {
+        expect(screen.getByText("Uploaded")).toBeInTheDocument();
+      });
+
+      completeUpload!();
     });
 
     it("shows 'Uploaded' text when progress reaches 100%", async () => {
@@ -246,12 +279,12 @@ describe("ChatInput — attachments", () => {
         }),
       });
 
-      // Delay XHR completion so React renders the progress=100 intermediate state
+      // Manual triggers: fire progress=100 explicitly so React commits the
+      // "Uploaded" intermediate state before handleSubmit resolves.
+      let fireProgress100: () => void;
       let completeUpload: () => void;
       mockXhr.send.mockImplementation(() => {
-        setTimeout(() => {
-          mockXhr.upload.onprogress?.({ lengthComputable: true, loaded: 100, total: 100 });
-        }, 0);
+        fireProgress100 = () => mockXhr.upload.onprogress?.({ lengthComputable: true, loaded: 100, total: 100 });
         completeUpload = () => mockXhr.onload?.();
       });
 
@@ -266,6 +299,8 @@ describe("ChatInput — attachments", () => {
       const textarea = screen.getByRole("textbox");
       await userEvent.type(textarea, "hi");
       await userEvent.keyboard("{Enter}");
+
+      fireProgress100!();
 
       // Wait for progress to reach 100% (renders "Uploaded" text)
       await waitFor(() => {
@@ -287,8 +322,9 @@ describe("ChatInput — attachments", () => {
         }),
       });
 
+      let fireNetworkError: () => void;
       mockXhr.send.mockImplementation(() => {
-        setTimeout(() => mockXhr.onerror?.(), 0);
+        fireNetworkError = () => mockXhr.onerror?.();
       });
 
       const fileInput = document.querySelector("input[type='file']") as HTMLInputElement;
@@ -302,6 +338,8 @@ describe("ChatInput — attachments", () => {
       const textarea = screen.getByRole("textbox");
       await userEvent.type(textarea, "hi");
       await userEvent.keyboard("{Enter}");
+
+      fireNetworkError!();
 
       await waitFor(() => {
         expect(screen.getByText(/upload to storage failed/i)).toBeInTheDocument();
@@ -319,11 +357,10 @@ describe("ChatInput — attachments", () => {
         }),
       });
 
-      // XHR send starts but never completes (simulates in-flight upload)
+      // XHR send starts but never completes (simulates in-flight upload).
+      let fireProgress25: () => void;
       mockXhr.send.mockImplementation(() => {
-        setTimeout(() => {
-          mockXhr.upload.onprogress?.({ lengthComputable: true, loaded: 25, total: 100 });
-        }, 0);
+        fireProgress25 = () => mockXhr.upload.onprogress?.({ lengthComputable: true, loaded: 25, total: 100 });
       });
 
       const fileInput = document.querySelector("input[type='file']") as HTMLInputElement;
@@ -338,6 +375,8 @@ describe("ChatInput — attachments", () => {
       const textarea = screen.getByRole("textbox");
       await userEvent.type(textarea, "hi");
       await userEvent.keyboard("{Enter}");
+
+      fireProgress25!();
 
       // Wait for progress to appear (upload in flight)
       await waitFor(() => {
@@ -364,8 +403,9 @@ describe("ChatInput — attachments", () => {
       });
 
       mockXhr.status = 403;
+      let completeUpload: () => void;
       mockXhr.send.mockImplementation(() => {
-        setTimeout(() => mockXhr.onload?.(), 0);
+        completeUpload = () => mockXhr.onload?.();
       });
 
       const fileInput = document.querySelector("input[type='file']") as HTMLInputElement;
@@ -379,6 +419,8 @@ describe("ChatInput — attachments", () => {
       const textarea = screen.getByRole("textbox");
       await userEvent.type(textarea, "hi");
       await userEvent.keyboard("{Enter}");
+
+      completeUpload!();
 
       await waitFor(() => {
         expect(screen.getByText(/upload to storage failed/i)).toBeInTheDocument();
@@ -397,8 +439,9 @@ describe("ChatInput — attachments", () => {
         }),
       });
 
+      let fireNetworkError: () => void;
       mockXhr.send.mockImplementation(() => {
-        setTimeout(() => mockXhr.onerror?.(), 0);
+        fireNetworkError = () => mockXhr.onerror?.();
       });
 
       const fileInput = document.querySelector("input[type='file']") as HTMLInputElement;
@@ -412,6 +455,8 @@ describe("ChatInput — attachments", () => {
       const textarea = screen.getByRole("textbox");
       await userEvent.type(textarea, "hi");
       await userEvent.keyboard("{Enter}");
+
+      fireNetworkError!();
 
       // Errored attachment should persist with error message
       await waitFor(() => {
