@@ -109,3 +109,31 @@ If the inlined anon-key JWT regresses to a placeholder/test-fixture value:
 - Diagnosis Sentry event id: `c5affdf737e34110be747ce3a6463407` (timestamp `2026-04-28T16:53:25Z`)
 - Hot-fix secret rotation: `2026-04-28T16:56:28Z`
 - PR #3007 (this PR): four-layer guardrail set landed.
+
+## Session Errors
+
+These were caught during the PR session (mostly by multi-agent review) and resolved inline before merge. Each is paired with a prevention proposal so the workflow tightens on the next iteration of this class.
+
+1. **Plan prescribed `dig +short CNAME` without a timeout.** Recovery: pinned `+time=3 +tries=2` (max ~6s) in `reusable-release.yml`. Prevention: add a Sharp Edge to `plan` skill (or `deepen-plan` Phase 4) — when prescribing `dig` in CI, always pin `+time` and `+tries` to bound runner wall-clock.
+
+2. **Validator placeholder-prefix `startsWith` had false-positive risk on legit project refs.** A real Supabase ref starting with `dev`/`test`/`stub` would be rejected. Recovery: documented the tradeoff inline; prefix list still in place because (a) canonical prd ref doesn't collide, (b) collision is loud and one-line-fixable. Prevention: add a Sharp Edge to `plan` — when a deny-list of identifier-prefixes is prescribed, audit the actual identifier shape (Supabase refs are random alphanumeric, so any short prefix has non-zero collision probability) and document the tradeoff in the proposing plan.
+
+3. **Preflight Check 5 Step 5.4 fail-open on chunk-fetch error.** SKIP semantics on a security gate is fail-open. Recovery: distinguished "host found but no JWT" (FAIL — bundle inconsistency) from "no host, no JWT" (SKIP — chunked elsewhere). Prevention: AGENTS.md already covers `cq-silent-fallback-must-mirror-to-sentry` for runtime; consider a complementary rule for security-gate semantics: "preflight checks on security-critical surfaces MUST fail-closed when input is partially observed; only fail-open when ALL signals are absent (truly indeterminate)." Domain-scoped to preflight skill; record there.
+
+4. **Three-site policy drift on custom-domain semantics.** Runtime validator skipped cross-check for `api.soleur.ai`; CI did `dig` deref; preflight had no cross-check. Three policies for one case. Recovery: documented the asymmetry in validator JSDoc + verify-script comment; CI is load-bearing. Prevention: reinforce `pattern-recognition-specialist` + `architecture-strategist` in review pipeline (they caught it). No new rule warranted.
+
+5. **`verify-required-secrets.sh` lacked URL/ref cross-check.** Doppler-side gate was strictly weaker than CI gate. Recovery: added cross-check for canonical hostnames (custom-domain still trusts JWT ref + CI dig). Prevention: when implementing a multi-layer defense, make a checklist of which assertions belong at each layer and run a coverage matrix in plan deepen pass. Add to `deepen-plan` Phase 4 sharp-edges.
+
+6. **Workflow `::error::` echo lacked log-injection sanitization.** A crafted JWT with `\n` in claims could spoof success annotations. Recovery: sanitize via `${var//[$'\n\r']/}` before echo. Prevention: add a Sharp Edge to `plan` and `review`/security-sentinel — when echoing untrusted JSON-decoded values into GitHub Actions annotations (`::error::`, `::notice::`), strip CR/LF first.
+
+7. **Dead `try/catch` on `Buffer.from(s, "base64url")`.** Node returns a partial buffer rather than throwing. Recovery: removed the dead branch; charset regex precheck is the real gate. Prevention: when adopting a Node-specific decoder in TS, verify the Node API's failure mode (some throw, some silently produce partial output) before wrapping in try/catch. Domain-scoped — record in the validate-anon-key.ts header comment, no AGENTS.md rule.
+
+8. **`validate-url.ts` edit-together comment not updated when adding the sibling validator.** Recovery: updated the comment block to list all 4 mirrored sites. Prevention: when adding a sibling module that consumes another module's exported behavior, audit the source module's "edit-together" comment in the same commit. Domain-scoped — could add a `cq-edit-together-bidirectional` Sharp Edge to `plan` skill (when proposing a sibling module, include both directions of the comment update in the file change list).
+
+9. **PreToolUse security_reminder_hook false-positives blocked Write of validator + Edit of workflow.** Hook flagged on doc-word "fail-fast" and on `${{ secrets.X }}` pattern despite proper `env:` block usage. Recovery: retried; succeeded on second attempt. Prevention: tighten `security_reminder_hook.py` regex precision OR exempt files in the `.github/workflows/` path that already use `env:`. Domain-scoped to the hook itself; track separately.
+
+10. **CR-test name mismatch with assertion** (named "rejects" but asserted `.not.toThrow()`). Recovery: renamed to "strips trailing CR before parsing" + added LF parallel test. Prevention: when writing tests for input-sanitization behavior, the test name MUST match the assertion direction (`rejects X` ↔ `toThrow`; `accepts X` / `strips Y` ↔ `not.toThrow`). Add to `test-design-reviewer`'s checklist; no new rule warranted (caught by review).
+
+11. **Bash CWD drift in worktree pipeline.** `bash -n apps/web-platform/scripts/...` failed because pwd had drifted into `apps/web-platform`. Recovery: chained `cd /worktree-abs && bash ...` in single Bash call. Prevention: already covered by AGENTS.md / constitution — the Bash tool does NOT persist CWD between calls (well-documented in `work` skill Phase 2.5). No new rule needed.
+
+12. **`git add -p` heredoc input did not work as expected.** Recovery: fell back to plain `git add <files>`. Prevention: `git add -p` requires interactive TTY; the Bash tool's non-interactive shell breaks it. Default to `git add <explicit files>` when staging from agent shells. Workflow-level — already implied by AGENTS.md non-interactive rule; no new rule needed.
