@@ -174,7 +174,7 @@ ratio. (15/40 = 0.375, below the floor; 30/40 = 0.75, on the median.)
 
 The 2026-04-13 run filed #2146 (overdue: brand-guide). The 2026-04-20 run
 saw the same overdue file but filed zero issues. The 2026-04-27 run filed
-#2968 — an exact-title duplicate of the still-open #2146.
+issue #2968 — an exact-title duplicate of the still-open #2146.
 
 The prompt does not instruct the agent how to handle "an open issue with
 this title already exists." Three failure modes observed:
@@ -210,8 +210,10 @@ options to address that:
   `scheduled-campaign-calendar`-labeled issues as a heartbeat signal.
 
 **Selected: 2a.** Self-contained — no edit to the watchdog, no risk of
-breaking the dedup contract for other tasks. The closed-on-create pattern
-is the same idiom community-monitor uses for "no new findings" runs.
+breaking the dedup contract for other tasks. The closed-on-create heartbeat
+is a novel pattern in this repo (verified via grep across
+`.github/workflows/scheduled-*.yml`); modeled on the watchdog's own
+exact-title dedup contract from `scheduled-cloud-task-heartbeat.yml`.
 
 ### H3 — Schedule did fire but the runner ran a stale revision of the workflow
 

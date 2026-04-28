@@ -187,11 +187,13 @@ read each row, compute against the 2026-03-20 ratio table.
 `knowledge-base/project/learnings/2026-03-20-claude-code-action-max-turns-budget.md`.
 
 **Reference incident:** PR #2974 — campaign-calendar at `--max-turns 20`
-failed on 2026-04-27 with 3 overdue items to file (#2968/#2969/#2970); the
-schedule-fire on 2026-04-20 ran at the wall (`num_turns: 21`) and produced
-no audit issues, triggering the watchdog (#2896) on 2026-04-25. Fix raised
-budget to `--max-turns 40` + `timeout-minutes: 30` (0.75 min/turn ratio)
-and added STEP 2 dedup + STEP 2.5 heartbeat issue.
+failed on 2026-04-27 with 3 overdue items to file (#2968/#2969/#2970);
+issue #2968 was an exact-title duplicate of the still-open #2146 (filed
+2026-04-13), which motivated the STEP 2 dedup logic. The schedule-fire on
+2026-04-20 ran at the wall (`num_turns: 21`) and produced no audit issues,
+triggering the watchdog (#2896) on 2026-04-25. Fix raised budget to
+`--max-turns 40` + `timeout-minutes: 30` (0.75 min/turn ratio) and added
+STEP 2 dedup + STEP 2.5 heartbeat issue.
 
 ## Restore Procedure (generalized)
 
