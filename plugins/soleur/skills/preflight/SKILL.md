@@ -248,60 +248,104 @@ Enforces `hr-weigh-every-decision-against-target-user-impact`: PRs that touch cr
 
 **Step 5.1: Detect sensitive-path diff.**
 
-```bash
-git diff --name-only origin/main...HEAD
-```
-
-Check whether any changed file matches one of these globs (broader-glob strategy — false positives are cheap, false negatives are brand-ending):
-
-- `apps/web-platform/server/**`
-- `apps/web-platform/supabase/**`
-- `apps/web-platform/lib/stripe*`
-- `apps/web-platform/lib/auth*`
-- `apps/web-platform/lib/byok*`
-- `infra/**`
-- `**/doppler*.{yml,yaml,sh}`
-- `.github/workflows/*doppler*.yml`
-
-If no sensitive paths are touched, return **SKIP** with note: "No sensitive paths touched."
-
-**Step 5.2: Fetch the PR body.**
-
-Two separate Bash calls (no command substitution):
+The canonical sensitive-path regex (single source of truth, mirrored verbatim in `plugins/soleur/skills/deepen-plan/SKILL.md` Phase 4.6 Step 2):
 
 ```bash
-gh pr view --json body --jq .body > /tmp/preflight-pr-body.md
+SENSITIVE_PATH_RE='^(apps/web-platform/(server|supabase|app/api|middleware\.ts$)|apps/web-platform/lib/(stripe|auth|byok|security-headers|csp|log-sanitize|safe-session|safe-return-to|supabase)|apps/web-platform/lib/(legal|auth)/|apps/[^/]+/infra/|.+/doppler[^/]*\.(yml|yaml|sh)$|\.github/workflows/.*(doppler|secret|token|deploy|release|version-bump|web-platform|infra-validation|cla|cf-token|linkedin-token).*\.ya?ml$)'
+
+set -uo pipefail
+git diff --name-only origin/main...HEAD | grep -E "$SENSITIVE_PATH_RE"
 ```
 
-If the call fails (no PR exists for the current branch), return **SKIP** with note: "No PR available — section validation deferred to next preflight run after PR creation."
+Run as two separate Bash calls (assignment, then the piped `git`/`grep`). The regex covers every Next.js attack surface (`middleware.ts`, every `app/api/**` route, security/CSP/auth/session/legal libraries, infra Terraform under `apps/*/infra/`, all Doppler-aware shell scripts, and every credential-handling workflow even when `doppler` is not in the filename).
 
-**Step 5.3: Check for the section heading.**
+If `grep` exits non-zero (no match), return **SKIP** with note: "No sensitive paths touched."
+
+**Step 5.2: Fetch the PR body to a private temp file.**
+
+Use `mktemp` so the path is not predictable on multi-user hosts (defends against tmp-symlink attacks per general POSIX best practice). Two separate Bash calls (no command substitution):
 
 ```bash
-grep -q '^## User-Brand Impact' /tmp/preflight-pr-body.md
+PR_BODY_FILE=$(umask 077 && mktemp -t preflight-pr-body.XXXXXXXX.md)
 ```
-
-If absent, return **FAIL** with: "Sensitive-path diff detected but PR body is missing `## User-Brand Impact` section. Add the section per `plugins/soleur/skills/plan/references/plan-issue-templates.md`."
-
-**Step 5.4: Validate threshold and scope-out.**
-
-Extract the threshold line:
 
 ```bash
-grep -E '^.*Brand-survival threshold:' /tmp/preflight-pr-body.md
+gh pr view --json body --jq .body > "$PR_BODY_FILE"
 ```
 
-- If the line contains `single-user incident` or `aggregate pattern`: **PASS**.
-- If the line contains `none`: also grep for an inline scope-out note:
+Trap exit so the temp file is removed: `trap 'rm -f "$PR_BODY_FILE"' EXIT`. If `gh pr view` fails (no PR exists for the current branch), return **SKIP** with note: "No PR available — section validation deferred to next preflight run after PR creation."
 
-  ```bash
-  grep -E 'threshold:[[:space:]]*none,[[:space:]]*reason:' /tmp/preflight-pr-body.md
-  ```
+**Step 5.3: Resolve the canonical compliance source (PR body OR linked plan file).**
 
-  - Scope-out present: **PASS** (operator has explicitly justified why the touched sensitive path is not user-impacting).
-  - Scope-out absent: **FAIL** with: "Sensitive-path diff with `threshold: none` requires a `threshold: none, reason: <why>` scope-out note inside the User-Brand Impact section."
+The `## User-Brand Impact` section may live in the PR body itself (typical for short PRs) OR in a plan file referenced from the PR body (typical for plans authored via `/soleur:plan`). Both signals are valid per `plugins/soleur/skills/review/SKILL.md` `<conditional_agents>` block. Resolve a single check input by stripping noise from the PR body and concatenating any referenced plan file.
 
-- If the threshold line is missing entirely or its value is not one of the three allowed labels: **FAIL** with: "User-Brand Impact section present but `Brand-survival threshold:` line is missing or has an invalid value. Use one of: `none`, `single-user incident`, `aggregate pattern`."
+```bash
+# 5.3a: strip HTML comments and fenced code blocks from PR body before any regex match
+SCRUBBED_BODY=$(awk 'BEGIN{f=0} /^[[:space:]]*```/{f=!f; next} !f{print}' "$PR_BODY_FILE" \
+  | perl -0777 -pe 's/<!--.*?-->//gs')
+```
+
+```bash
+# 5.3b: extract any linked plan file path (knowledge-base/project/plans/*.md) from the scrubbed body
+PLAN_PATH=$(printf '%s' "$SCRUBBED_BODY" | grep -Eo 'knowledge-base/project/plans/[^[:space:])"`'\'']+\.md' | head -n 1 || true)
+```
+
+```bash
+# 5.3c: build the combined check input
+COMBINED=$(mktemp -t preflight-combined.XXXXXXXX.md)
+printf '%s\n' "$SCRUBBED_BODY" > "$COMBINED"
+if [[ -n "$PLAN_PATH" && -f "$PLAN_PATH" ]]; then
+  awk 'BEGIN{f=0} /^[[:space:]]*```/{f=!f; next} !f{print}' "$PLAN_PATH" \
+    | perl -0777 -pe 's/<!--.*?-->//gs' >> "$COMBINED"
+fi
+trap 'rm -f "$PR_BODY_FILE" "$COMBINED"' EXIT
+```
+
+The `awk` pass strips fenced code blocks (so an HTML/markdown example inside ` ``` ` cannot fool a substring match). The `perl -0777` pass strips HTML comments (`<!-- ... -->` including multi-line). Anything inside fences/comments cannot appear in `$COMBINED`.
+
+**Step 5.4: Check for the section heading.**
+
+```bash
+grep -q '^## User-Brand Impact' "$COMBINED"
+```
+
+If absent, return **FAIL** with: "Sensitive-path diff detected but neither PR body nor linked plan file contains a `## User-Brand Impact` section. Add the section per `plugins/soleur/skills/plan/references/plan-issue-templates.md`."
+
+**Step 5.5: Validate threshold and scope-out — anchored, not substring.**
+
+Extract the threshold line. Require canonical bullet form (`- **Brand-survival threshold:** …`) so a free-text sentence containing the words "single-user incident" cannot pass:
+
+```bash
+THRESHOLD_LINE=$(grep -E '^[[:space:]]*[-*][[:space:]]+\*\*Brand-survival threshold:\*\*' "$COMBINED" | head -n 1)
+```
+
+If `$THRESHOLD_LINE` is empty, return **FAIL** with: "User-Brand Impact section present but the canonical bullet `- **Brand-survival threshold:** <label>` is missing. Use exactly the bullet form from `plan-issue-templates.md`."
+
+Match the label exactly — anchor the value to the end of the bullet (allow a trailing backtick/period/space):
+
+```bash
+if   [[ "$THRESHOLD_LINE" =~ \*\*Brand-survival[[:space:]]+threshold:\*\*[[:space:]]*\`?single-user[[:space:]]+incident\`?[[:space:]]*$ ]]; then
+  RESULT=PASS_INCIDENT
+elif [[ "$THRESHOLD_LINE" =~ \*\*Brand-survival[[:space:]]+threshold:\*\*[[:space:]]*\`?aggregate[[:space:]]+pattern\`?[[:space:]]*$ ]]; then
+  RESULT=PASS_AGGREGATE
+elif [[ "$THRESHOLD_LINE" =~ \*\*Brand-survival[[:space:]]+threshold:\*\*[[:space:]]*\`?none\`?[[:space:]]*$ ]]; then
+  RESULT=NEEDS_SCOPEOUT
+else
+  echo "FAIL: threshold value not recognized. Allowed: single-user incident | aggregate pattern | none."
+  exit 1
+fi
+```
+
+If `RESULT=NEEDS_SCOPEOUT`, look for the scope-out bullet — require a non-empty `reason:` (the `\S` after `reason:` is what enforces "explain yourself"):
+
+```bash
+grep -Eq 'threshold:[[:space:]]*none,[[:space:]]*reason:[[:space:]]*\S' "$COMBINED"
+```
+
+- Match (rc 0): **PASS** — operator has justified why the touched sensitive path is not user-impacting.
+- No match: **FAIL** with: "Sensitive-path diff with `threshold: none` requires a `threshold: none, reason: <one-sentence>` scope-out bullet (with a non-empty reason) inside the User-Brand Impact section."
+
+If `RESULT=PASS_INCIDENT` or `RESULT=PASS_AGGREGATE`: **PASS**.
 
 **Headless mode behaviour:** On **FAIL**, abort with the error details (no prompt). On **PASS** or **SKIP**, continue silently.
 

@@ -71,7 +71,13 @@ Per AGENTS.md `hr-weigh-every-decision-against-target-user-impact`, every brains
 
 **Step 2 — Parse the answer for trigger keywords.** Scan the free-text answer (case-insensitive substring match) for any of:
 
-`data loss` | `trust breach` | `credential exposure` | `credential leak` | `billing surprise` | `user data` | `credentials` | `payment` | `auth` | `session` | `pii` | `private` | `cross-tenant` | `RLS`
+User-data + auth lens:
+
+`data loss` | `trust breach` | `credential exposure` | `credential leak` | `billing surprise` | `user data` | `credentials` | `payment` | `auth` | `session` | `pii` | `private` | `cross-tenant` | `RLS` | `secret` | `secrets` | `token` | `api key` | `api keys` | `webhook`
+
+Infrastructure / data-store lens (covers the #2887 vocabulary the user-data lens alone misses — every term here has a corresponding sensitive-path glob in preflight Check 5):
+
+`migration` | `doppler` | `infra` | `infrastructure` | `terraform` | `firewall` | `dev/prd` | `dev to prd` | `supabase` | `service token` | `service-token` | `rotation` | `rotate` | `byok`
 
 If any keyword matches:
 

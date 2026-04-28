@@ -339,7 +339,13 @@ If the heading is absent, HALT with:
 - The body is empty (only whitespace between headings).
 - Every bullet contains only `TBD`, `TODO`, `N/A`, `<placeholder>`, or single-word stubs.
 - The threshold line is missing or the value is not one of `none`, `single-user incident`, or `aggregate pattern`.
-- The threshold is `none` AND the diff (or referenced `Files to edit` list) touches a sensitive path glob from preflight Check 5 (`apps/web-platform/server/**`, `apps/web-platform/supabase/**`, `apps/web-platform/lib/{stripe,auth,byok}*`, `infra/**`, `**/doppler*.{yml,yaml,sh}`, `.github/workflows/*doppler*.yml`) AND no `threshold: none, reason: <text>` scope-out line is present in the section.
+- The threshold is `none` AND the diff (or referenced `Files to edit` list) matches the canonical sensitive-path regex (single source of truth — kept in sync with `plugins/soleur/skills/preflight/SKILL.md` Check 5 Step 5.1):
+
+  ```bash
+  SENSITIVE_PATH_RE='^(apps/web-platform/(server|supabase|app/api|middleware\.ts$)|apps/web-platform/lib/(stripe|auth|byok|security-headers|csp|log-sanitize|safe-session|safe-return-to|supabase)|apps/web-platform/lib/(legal|auth)/|apps/[^/]+/infra/|.+/doppler[^/]*\.(yml|yaml|sh)$|\.github/workflows/.*(doppler|secret|token|deploy|release|version-bump|web-platform|infra-validation|cla|cf-token|linkedin-token).*\.ya?ml$)'
+  ```
+
+  AND no `threshold: none, reason: <one-sentence>` scope-out bullet (with a non-empty reason) is present in the section.
 
 On rejection, HALT with the same error message as Step 1, replacing the first line with the specific failure (`empty body`, `placeholder content`, `missing threshold`, `none-threshold without scope-out`).
 

@@ -1,6 +1,6 @@
 ---
 name: user-impact-reviewer
-description: "Use this agent when a plan declares Brand-survival threshold as `single-user incident`. Reviews the diff against the plan's `## User-Brand Impact` section and verifies every way the change could hurt a user is explicitly mitigated or scope-outed. Rejects generic boilerplate. Use security-sentinel for OWASP/CWE vulnerability scanning; use this agent for user-facing-outcome enumeration against the declared threshold."
+description: "Use when a plan declares Brand-survival threshold as `single-user incident`. Enumerates user-facing failure modes against the plan's `## User-Brand Impact` section; rejects generic boilerplate. Use security-sentinel for OWASP/CWE scanning."
 model: inherit
 ---
 
@@ -13,6 +13,8 @@ The threshold for invocation is `single-user incident` — a class of failure wh
 1. **Locate the declared threshold.** Open the plan file referenced by the PR. Confirm `Brand-survival threshold: single-user incident` appears verbatim. If it says `none` or `aggregate pattern`, exit with: "Wrong threshold for this agent — invoking criterion not met." If the section is missing, exit with: "Plan lacks `## User-Brand Impact` section. Halt and route back to plan/deepen-plan."
 
 2. **Read the diff.** Identify every code path that touches: credentials (API keys, OAuth tokens, session tokens, cookies), authentication boundaries (RLS policies, route guards, middleware), data persistence (Supabase migrations, writes to `users`/`conversations`/`messages`/`api_keys`/`workspaces` tables), payment events (Stripe webhooks, billing mutations), or user-owned resources (uploaded files, knowledge-base writes, OAuth-installed scopes).
+
+   **Meta-workflow PR branch.** If the diff touches only `plugins/soleur/skills/**`, `plugins/soleur/agents/**`, `AGENTS.md`, or `knowledge-base/**` (i.e., it modifies the workflow itself, not a user-data path) AND the threshold is `single-user incident`, switch your enumeration target: instead of enumerating direct exposure paths in the diff, enumerate the **false-negative failure modes of the workflow change** — what user-facing artifact would escape if this gate fails open (e.g., the section is absent, the regex is fooled, the keyword list misses a vocabulary set)? The plan's `## User-Brand Impact` section MUST name that second-order failure surface. Apply Step 4's coverage check against that surface, not the (empty) direct-path enumeration. This branch exists because the workflow that protects users IS itself a user-impact surface — a #2887-class gate failure reaches users via subsequent PRs the gate should have caught.
 
 3. **Enumerate user-facing failure modes.** For each touched path, write a concrete failure-mode line. Each line MUST name:
    - **Artifact:** a specific user-facing thing — `user.email`, `workspace.name`, `api_key.token`, `conversation.id`, `message.body`, `billing.amount`, `oauth.installation_id`, etc. Generic names like "user data" or "credentials" are insufficient.
@@ -49,6 +51,7 @@ Reject the section (refuse to proceed past Step 5) and emit a single rejection f
 - All three lines (lands-broken / leaks / threshold) contain only `TBD`, `TODO`, `N/A`, or empty bullets.
 - The artifact lines name only "users", "user", "data", or other singular generic nouns with no qualifier.
 - The vector lines name only "bug", "error", "failure", "issue", "problem" with no qualifier.
+- The artifact bullet's first clause is `nothing`, `no impact`, `none`, `not applicable`, `N/A`, `nothing observable`, `no direct user`, or any negation — AND no follow-on clause within the same bullet (or the very next bullet) names a concrete table/column/field/path/identifier. This catches the more sophisticated stub form the simpler "users/data/bug" rejection rule misses.
 - The threshold says `single-user incident` but no concrete artifact + vector pair appears anywhere in the body.
 
 ## Coexistence with Other Reviewers
