@@ -38,21 +38,32 @@ interface ChatInputProps {
   draftKey?: string;
   /** When true, Enter key defers to the @mention dropdown instead of sending. */
   atMentionVisible?: boolean;
+  /** Stage 4 (#2886): when true, force-disable the input and show the
+   *  workflow-ended placeholder. Set by `<ChatSurface>` from the
+   *  `conversation.workflow_ended_at` column / lifecycle bar's "ended" state.
+   *  Per `cq-jsdom-no-layout-gated-assertions`, the test hook is the
+   *  textarea's `placeholder` attribute, which is structural. */
+  workflowEnded?: boolean;
 }
 
 export function ChatInput({
   onSend,
   onAtTrigger,
   onAtDismiss,
-  disabled = false,
-  placeholder = "Ask your team anything... or @mention a leader",
+  disabled: rawDisabled = false,
+  placeholder: rawPlaceholder = "Ask your team anything... or @mention a leader",
   conversationId,
   insertRef,
   quoteRef,
   focusRef,
   draftKey,
   atMentionVisible = false,
+  workflowEnded = false,
 }: ChatInputProps) {
+  const disabled = rawDisabled || workflowEnded;
+  const placeholder = workflowEnded
+    ? "This conversation has ended"
+    : rawPlaceholder;
   const [value, setValue] = useState<string>(() => {
     // Rehydrate from sessionStorage on mount when a draftKey is given.
     if (!draftKey) return "";

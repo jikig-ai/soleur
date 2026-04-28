@@ -1,13 +1,13 @@
 import { query, type tool, createSdkMcpServer } from "@anthropic-ai/claude-agent-sdk";
 import { randomUUID } from "crypto";
-import { readFileSync, writeFileSync, mkdirSync } from "fs";
+import { readFileSync, mkdirSync } from "fs";
 import { readFile, writeFile, mkdir } from "fs/promises";
 import path from "path";
 
 import { createServiceClient } from "@/lib/supabase/service";
 import { ROUTABLE_DOMAIN_LEADERS, type DomainLeaderId } from "./domain-leaders";
 import { routeMessage } from "./domain-router";
-import { KeyInvalidError, type AttachmentRef } from "@/lib/types";
+import { KeyInvalidError, type AttachmentRef, type Conversation } from "@/lib/types";
 import { ALLOWED_ATTACHMENT_TYPES } from "@/lib/attachment-constants";
 import { decryptKey, decryptKeyLegacy, encryptKey } from "./byok";
 import { sendToClient } from "./ws-handler";
@@ -24,10 +24,8 @@ import {
   ERR_UPLOAD_FAILED,
 } from "./error-messages";
 import { isPathInWorkspace } from "./sandbox";
-import { buildAgentEnv } from "./agent-env";
 import { PROVIDER_CONFIG, EXCLUDED_FROM_SERVICES_UI } from "./providers";
 import type { Provider } from "@/lib/types";
-import { createSandboxHook } from "./sandbox-hook";
 import { abortableReviewGate, validateSelection, type AgentSession } from "./review-gate";
 import { createChildLogger } from "./logger";
 import { syncPull, syncPush } from "./session-sync";
@@ -42,7 +40,12 @@ import { buildGithubTools } from "./github-tools";
 import { buildPlausibleTools } from "./plausible-tools";
 import { createCanUseTool } from "./permission-callback";
 import { reportSilentFallback } from "./observability";
-import { buildAgentSandboxConfig } from "./agent-runner-sandbox-config";
+import { updateConversationFor } from "./conversation-writer";
+import { buildAgentQueryOptions } from "./agent-runner-query-options";
+import {
+  withWorkspacePermissionLock,
+  atomicWriteJson,
+} from "./workspace-permission-lock";
 
 const log = createChildLogger("agent");
 
@@ -73,20 +76,34 @@ const FILE_TOOLS_TO_REMOVE = new Set(["Read", "Glob", "Grep"]);
  * (permission chain step 4 before step 5). Idempotent — safe on every
  * cold-Query construction. Do NOT call from new modules.
  */
-export function patchWorkspacePermissions(workspacePath: string): void {
-  const settingsPath = path.join(workspacePath, ".claude", "settings.json");
-  try {
-    const raw = readFileSync(settingsPath, "utf8");
-    const settings = JSON.parse(raw);
-    const allow: string[] = settings?.permissions?.allow;
-    if (!Array.isArray(allow) || allow.length === 0) return;
-    const filtered = allow.filter((t: string) => !FILE_TOOLS_TO_REMOVE.has(t));
-    if (filtered.length === allow.length) return;
-    settings.permissions.allow = filtered;
-    writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + "\n");
-  } catch {
-    // Settings file missing or malformed — workspace.ts will recreate on next provision
-  }
+export async function patchWorkspacePermissions(
+  workspacePath: string,
+): Promise<void> {
+  // `withWorkspacePermissionLock` keys on the canonicalized workspace
+  // path (`path.resolve`). Two concurrent cold-Query constructions on
+  // the same workspace serialize their read-modify-write so we don't
+  // lose the second caller's filtered allowlist (#2918).
+  await withWorkspacePermissionLock(workspacePath, () => {
+    const settingsPath = path.join(workspacePath, ".claude", "settings.json");
+    try {
+      const raw = readFileSync(settingsPath, "utf8");
+      const settings = JSON.parse(raw);
+      // Preserve the existing Array.isArray guard — the settings file
+      // schema is permissive and `permissions.allow` may be missing.
+      if (!Array.isArray(settings?.permissions?.allow)) return;
+      const allow: string[] = settings.permissions.allow;
+      if (allow.length === 0) return;
+      const filtered = allow.filter((t: string) => !FILE_TOOLS_TO_REMOVE.has(t));
+      if (filtered.length === allow.length) return;
+      settings.permissions.allow = filtered;
+      // `atomicWriteJson` writes tmp → fdatasync → close → rename. A
+      // mid-write crash leaves either the prior content or the new
+      // content — never a zero-byte file.
+      atomicWriteJson(settingsPath, settings);
+    } catch {
+      // Settings file missing or malformed — workspace.ts will recreate on next provision
+    }
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -183,19 +200,40 @@ export async function getUserApiKey(userId: string): Promise<string> {
   const authTag = Buffer.from(data.auth_tag, "base64");
 
   if (data.key_version === 1) {
-    // Lazy migration: decrypt with raw key, re-encrypt with HKDF-derived key
+    // Lazy migration: decrypt with raw key, re-encrypt with HKDF-derived key.
+    // Routed through the predicate-locked `migrate_api_key_to_v2` RPC
+    // (migration 033) so two concurrent callers serialize via PG row
+    // locks — the second writer's UPDATE matches `WHERE key_version = 1`
+    // with zero rows. Re-encryption uses a fresh AES-GCM IV per call, so
+    // each caller's locally-encrypted ciphertext differs. The predicate-
+    // locked UPDATE ensures only the winning writer's ciphertext persists;
+    // both callers correctly return their own decrypted plaintext (the
+    // HKDF key derivation is deterministic on userId, so the persisted
+    // ciphertext from the winner decrypts to the same plaintext on later
+    // reads). See #2919.
     const plaintext = decryptKeyLegacy(encrypted, iv, authTag);
     const reEncrypted = encryptKey(plaintext, userId);
-    await supabase()
-      .from("api_keys")
-      .update({
-        encrypted_key: reEncrypted.encrypted.toString("base64"),
-        iv: reEncrypted.iv.toString("base64"),
-        auth_tag: reEncrypted.tag.toString("base64"),
-        key_version: 2,
-        updated_at: new Date().toISOString(),
-      })
-      .eq("id", data.id);
+    const { error: rpcErr } = await supabase().rpc("migrate_api_key_to_v2", {
+      p_id: data.id,
+      p_user_id: userId,
+      p_provider: "anthropic",
+      p_encrypted: reEncrypted.encrypted.toString("base64"),
+      p_iv: reEncrypted.iv.toString("base64"),
+      p_tag: reEncrypted.tag.toString("base64"),
+    });
+    if (rpcErr) {
+      // Per `cq-silent-fallback-must-mirror-to-sentry`: the lazy v1→v2
+      // migration is fire-and-forget from the caller's POV (we still
+      // return plaintext on RPC failure so the user's request succeeds),
+      // but a sustained RPC error means the v1 row never migrates and
+      // every subsequent caller pays the lazy-migration cost. Mirror so
+      // on-call sees the drift before it becomes a cost-tracking puzzle.
+      reportSilentFallback(rpcErr, {
+        feature: "byok-migration",
+        op: "migrate_api_key_to_v2",
+        extra: { userId, provider: "anthropic", keyId: data.id },
+      });
+    }
     return plaintext;
   }
 
@@ -220,7 +258,7 @@ export async function getUserServiceTokens(
 ): Promise<Record<string, string>> {
   const { data, error } = await supabase()
     .from("api_keys")
-    .select("provider, encrypted_key, iv, auth_tag, key_version")
+    .select("id, provider, encrypted_key, iv, auth_tag, key_version")
     .eq("user_id", userId)
     .eq("is_valid", true);
 
@@ -244,19 +282,30 @@ export async function getUserServiceTokens(
       let plaintext: string;
       if (row.key_version === 1) {
         plaintext = decryptKeyLegacy(encrypted, iv, authTag);
-        // Lazy migration to v2
+        // Lazy migration to v2 — same predicate-locked RPC as
+        // `getUserApiKey`. The (id, user_id, provider, key_version=1)
+        // predicate serializes concurrent callers via PG row locks. See
+        // `migrate_api_key_to_v2` in migration 033 + #2919. AES-GCM IV
+        // is fresh per call; the predicate UPDATE keeps only the winning
+        // writer's ciphertext.
         const reEncrypted = encryptKey(plaintext, userId);
-        await supabase()
-          .from("api_keys")
-          .update({
-            encrypted_key: reEncrypted.encrypted.toString("base64"),
-            iv: reEncrypted.iv.toString("base64"),
-            auth_tag: reEncrypted.tag.toString("base64"),
-            key_version: 2,
-            updated_at: new Date().toISOString(),
-          })
-          .eq("user_id", userId)
-          .eq("provider", row.provider);
+        const { error: rpcErr } = await supabase().rpc("migrate_api_key_to_v2", {
+          p_id: row.id,
+          p_user_id: userId,
+          p_provider: row.provider,
+          p_encrypted: reEncrypted.encrypted.toString("base64"),
+          p_iv: reEncrypted.iv.toString("base64"),
+          p_tag: reEncrypted.tag.toString("base64"),
+        });
+        if (rpcErr) {
+          // Mirror sustained migration failures — see sibling block in
+          // `getUserApiKey` for rationale.
+          reportSilentFallback(rpcErr, {
+            feature: "byok-migration",
+            op: "migrate_api_key_to_v2",
+            extra: { userId, provider: row.provider, keyId: row.id },
+          });
+        }
       } else {
         plaintext = decryptKey(encrypted, iv, authTag, userId);
       }
@@ -295,17 +344,26 @@ async function saveMessage(
 }
 
 async function updateConversationStatus(
+  userId: string,
   conversationId: string,
-  status: string,
+  status: Conversation["status"],
 ) {
-  const { error } = await supabase()
-    .from("conversations")
-    .update({ status, last_active: new Date().toISOString() })
-    .eq("id", conversationId);
+  const result = await updateConversationFor(
+    userId,
+    conversationId,
+    { status, last_active: new Date().toISOString() },
+    {
+      feature: "agent-runner",
+      op: "updateConversationStatus",
+      // Status transitions drive UI badges and gate evaluations downstream;
+      // a 0-rows write would silently desync UI state from DB.
+      expectMatch: true,
+    },
+  );
 
-  if (error) {
+  if (!result.ok) {
     throw new Error(
-      `Failed to update conversation status: ${error.message}`,
+      `Failed to update conversation status: ${result.error?.message ?? "unknown"}`,
     );
   }
 }
@@ -365,6 +423,7 @@ function buildReplayPrompt(
 // ---------------------------------------------------------------------------
 export async function cleanupOrphanedConversations(): Promise<void> {
   const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1_000).toISOString();
+  // allow-direct-conversation-update: bulk status sweep — no per-user composite key
   const { error } = await supabase()
     .from("conversations")
     .update({ status: "failed" })
@@ -385,6 +444,7 @@ const INACTIVITY_CHECK_INTERVAL_MS = 60 * 60 * 1_000; // Check every hour
 export function startInactivityTimer(): void {
   const timer = setInterval(async () => {
     const cutoff = new Date(Date.now() - INACTIVITY_TIMEOUT_MS).toISOString();
+    // allow-direct-conversation-update: bulk timeout sweep — no per-user composite key
     const { data, error } = await supabase()
       .from("conversations")
       .update({ status: "completed" })
@@ -507,8 +567,10 @@ export async function startAgentSession(
 
     // Migrate existing workspaces: remove pre-approved permissions that
     // bypass canUseTool (see #725). Safe to run on every session start —
-    // no-op for already-migrated workspaces.
-    patchWorkspacePermissions(workspacePath);
+    // no-op for already-migrated workspaces. Async per #2918 (the lock
+    // serializes concurrent same-workspace callers and the write goes
+    // through `atomicWriteJson`).
+    await patchWorkspacePermissions(workspacePath);
 
     // Sync: pull latest from remote before session (connected repos only)
     if (user.repo_status === "ready") {
@@ -811,62 +873,32 @@ issues/PRs, 4 KB comments); follow the html_url for the full text.`;
     const prompt = userMessage
       ?? `[Session started with ${leader.name}] How can I help you today?`;
 
+    // Build the SDK Options through `buildAgentQueryOptions` so the
+    // cc-soleur-go `realSdkQueryFactory` and this legacy path stay in
+    // sync on shared fields (sandbox, settingSources, hooks.PreToolUse,
+    // disallowedTools). Per-call divergent fields (maxTurns, mcpServers,
+    // allowedTools) flow through args. Drift-guarded by
+    // `agent-runner-query-options.test.ts`. See #2922.
+    const allowedToolsList =
+      platformToolNames.length > 0 || pluginMcpServerNames.length > 0
+        ? [
+            ...platformToolNames,
+            ...pluginMcpServerNames.map((s) => `mcp__plugin_soleur_${s}__*`),
+          ]
+        : undefined;
     const q = query({
       prompt,
-      options: {
-        cwd: workspacePath,
-        model: "claude-sonnet-4-6",
-        permissionMode: "default",
-        // Prevent SDK from loading .claude/settings.json -- permissions.allow
-        // entries bypass canUseTool entirely (permission chain step 4 before
-        // step 5). Default is [] since SDK v0.1.0; explicit for defense-in-depth.
-        settingSources: [],
-        includePartialMessages: true,
-        // persistSession defaults to true -- session files stored at
-        // ~/.claude/projects/ enable resume within the same container lifecycle.
-        // Cross-restart continuity handled by message replay fallback.
-        ...(resumeSessionId ? { resume: resumeSessionId } : {}),
+      options: buildAgentQueryOptions({
+        workspacePath,
+        pluginPath,
+        apiKey,
+        serviceTokens,
+        systemPrompt,
+        resumeSessionId,
         maxTurns: 50,
         maxBudgetUsd: 5.0,
-        systemPrompt,
-        env: buildAgentEnv(apiKey, serviceTokens),
-        disallowedTools: ["WebSearch", "WebFetch"],
         ...(mcpServersOption ? { mcpServers: mcpServersOption } : {}),
-        ...(platformToolNames.length > 0 || pluginMcpServerNames.length > 0
-          ? {
-              allowedTools: [
-                ...platformToolNames,
-                ...pluginMcpServerNames.map((s) => `mcp__plugin_soleur_${s}__*`),
-              ],
-            }
-          : {}),
-        // Sandbox literal extracted to `buildAgentSandboxConfig` so the
-        // cc-soleur-go path's `realSdkQueryFactory` consumes the same
-        // shape verbatim (drift-guarded by `agent-runner-helpers.test.ts`).
-        sandbox: buildAgentSandboxConfig(workspacePath),
-        plugins: [{ type: "local" as const, path: pluginPath }],
-        hooks: {
-          PreToolUse: [{
-            // LS and NotebookEdit added for #891 path validation.
-            // NotebookRead included defensively (SDK may route via Read).
-            matcher: "Read|Write|Edit|Glob|Grep|LS|NotebookRead|NotebookEdit|Bash",
-            hooks: [createSandboxHook(workspacePath)],
-          }],
-          // Defense-in-depth: log subagent spawns for audit visibility.
-          // If a future SDK version stops routing subagent tool calls
-          // through canUseTool, these logs provide evidence. See #910.
-          SubagentStart: [{
-            hooks: [async (input) => {
-              const subInput = input as Record<string, unknown>;
-              const sanitize = (v: unknown) => String(v ?? '').replace(/[\r\n]/g, ' ').slice(0, 200);
-              log.info(
-                { sec: true, agentId: sanitize(subInput.agent_id), agentType: sanitize(subInput.agent_type) },
-                "Subagent started",
-              );
-              return {};
-            }],
-          }],
-        },
+        ...(allowedToolsList ? { allowedTools: allowedToolsList } : {}),
         // Permission callback (SDK chain step 5). File-tool checks are
         // defense-in-depth — PreToolUse hooks (step 1) are the primary
         // enforcement. See #891. The callback body lives in
@@ -887,10 +919,14 @@ issues/PRs, 4 KB comments); follow the html_url for the full text.`;
             abortableReviewGate,
             sendToClient,
             notifyOfflineUser,
-            updateConversationStatus,
+            // Closure captures `userId` from the enclosing runAgentSession
+            // scope so the deps interface stays at (conversationId, status)
+            // — see plan §"Transitive Coverage via deps.updateConversationStatus".
+            updateConversationStatus: (convId, status) =>
+              updateConversationStatus(userId, convId, status as Conversation["status"]),
           },
         }),
-      },
+      }),
     });
 
     // Stream messages to client with leader attribution
@@ -917,12 +953,14 @@ issues/PRs, 4 KB comments); follow the html_url for the full text.`;
       if (!session.sessionId && "session_id" in message && message.session_id) {
         session.sessionId = message.session_id;
         // Persist to DB for cross-turn resume
-        const { error: updateErr } = await supabase()
-          .from("conversations")
-          .update({ session_id: message.session_id })
-          .eq("id", conversationId);
-        if (updateErr) {
-          log.error({ err: updateErr, conversationId }, "Failed to store session_id");
+        const { ok } = await updateConversationFor(
+          userId,
+          conversationId,
+          { session_id: message.session_id },
+          { feature: "agent-runner", op: "persist-session-id" },
+        );
+        if (!ok) {
+          log.error({ conversationId }, "Failed to store session_id");
         }
       }
 
@@ -1076,7 +1114,7 @@ issues/PRs, 4 KB comments); follow the html_url for the full text.`;
 
         // Mark as waiting_for_user instead of completed -- conversation
         // continues until explicit close or inactivity timeout.
-        await updateConversationStatus(conversationId, "waiting_for_user");
+        await updateConversationStatus(userId, conversationId, "waiting_for_user");
 
         // In multi-leader mode, dispatchToLeaders sends a single session_ended
         // after all leaders finish — individual leaders must not send it or the
@@ -1115,7 +1153,7 @@ issues/PRs, 4 KB comments); follow the html_url for the full text.`;
       if (!isSuperseded) {
         // Disconnect or abort -- mark conversation as failed so it does not
         // stay stuck in "waiting_for_user" or "active" status forever.
-        await updateConversationStatus(conversationId, "failed").catch(
+        await updateConversationStatus(userId, conversationId, "failed").catch(
           (statusErr) => {
             log.error(
               { err: statusErr, conversationId },
@@ -1165,7 +1203,7 @@ issues/PRs, 4 KB comments); follow the html_url for the full text.`;
         message,
         errorCode: err instanceof KeyInvalidError ? "key_invalid" : undefined,
       });
-      await updateConversationStatus(conversationId, "failed").catch(
+      await updateConversationStatus(userId, conversationId, "failed").catch(
         (statusErr) => {
           log.error(
             { err: statusErr, conversationId },
@@ -1397,7 +1435,7 @@ export async function sendUserMessage(
       message,
       errorCode: err instanceof KeyInvalidError ? "key_invalid" : undefined,
     });
-    updateConversationStatus(conversationId, "failed").catch((statusErr) => {
+    updateConversationStatus(userId, conversationId, "failed").catch((statusErr) => {
       log.error(
         { err: statusErr, conversationId },
         "Failed to mark conversation as failed",
@@ -1450,12 +1488,14 @@ export async function sendUserMessage(
     ).catch(async (err) => {
       log.warn({ err }, "SDK resume failed, falling back to message replay");
       // Clear stale session_id
-      const { error: clearErr } = await supabase()
-        .from("conversations")
-        .update({ session_id: null })
-        .eq("id", conversationId);
-      if (clearErr) {
-        log.error({ err: clearErr, conversationId }, "Failed to clear session_id");
+      const { ok: clearOk } = await updateConversationFor(
+        userId,
+        conversationId,
+        { session_id: null },
+        { feature: "agent-runner", op: "clear-stale-session-id" },
+      );
+      if (!clearOk) {
+        log.error({ conversationId }, "Failed to clear session_id");
       }
 
       // Load history and build replay prompt

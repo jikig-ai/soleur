@@ -391,4 +391,185 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
     const opts = mockQuery.mock.calls[0][0].options;
     expect(opts.resume).toBeUndefined();
   });
+
+  // -------------------------------------------------------------------------
+  // T-AC4 (#2920): cc dispatcher writes real conversation status updates.
+  // Replaces the prior no-op `ccDeps.updateConversationStatus`. Mirrors
+  // `agent-runner.ts:303` shape (status + last_active) and includes the
+  // R8 composite-key gate (`.eq("user_id", args.userId)`).
+  // -------------------------------------------------------------------------
+  describe("T-AC4: ccDeps.updateConversationStatus writes (#2920)", () => {
+    function captureUpdateChain() {
+      const updateCalls: Array<{
+        payload: Record<string, unknown>;
+        eqs: Array<[string, unknown]>;
+      }> = [];
+
+      mockSupabaseFrom.mockImplementation((table: string) => {
+        if (table === "users") {
+          return {
+            select: () => ({
+              eq: () => ({
+                single: () => ({
+                  data: { workspace_path: WORKSPACE_PATH },
+                  error: null,
+                }),
+                maybeSingle: () => ({
+                  data: { workspace_path: WORKSPACE_PATH },
+                  error: null,
+                }),
+              }),
+            }),
+          };
+        }
+        if (table === "conversations") {
+          return {
+            update: (payload: Record<string, unknown>) => {
+              const entry = { payload, eqs: [] as Array<[string, unknown]> };
+              updateCalls.push(entry);
+              const chain: Record<string, unknown> = {
+                error: null,
+                eq: (col: string, val: unknown) => {
+                  entry.eqs.push([col, val]);
+                  return chain;
+                },
+                select: () =>
+                  Promise.resolve({ data: [{ id: "conv-1" }], error: null }),
+                then: (resolve: (v: unknown) => void) =>
+                  resolve({ error: null }),
+              };
+              return chain;
+            },
+          };
+        }
+        return {
+          select: () => ({
+            eq: () => ({ single: () => ({ data: null, error: null }) }),
+          }),
+          insert: () => ({ error: null }),
+        };
+      });
+      return updateCalls;
+    }
+
+    async function getCcDepsFromFactory() {
+      // The factory passes ccDeps via createCanUseTool(ctx). Capture the
+      // ctx.deps so we can drive updateConversationStatus directly.
+      await realSdkQueryFactory(makeArgs());
+      const ctx = (
+        createCanUseTool as unknown as { mock: { calls: unknown[][] } }
+      ).mock.calls[0][0] as {
+        deps: {
+          updateConversationStatus: (
+            convId: string,
+            status: string,
+          ) => Promise<void>;
+        };
+      };
+      return ctx.deps;
+    }
+
+    it("T-AC4a: writes waiting_for_user with composite-key (.eq id + user_id)", async () => {
+      const updateCalls = captureUpdateChain();
+      const deps = await getCcDepsFromFactory();
+
+      await deps.updateConversationStatus("conv-1", "waiting_for_user");
+
+      expect(updateCalls).toHaveLength(1);
+      expect(updateCalls[0].payload.status).toBe("waiting_for_user");
+      // last_active is also written (parity with legacy agent-runner.ts:303)
+      expect(typeof updateCalls[0].payload.last_active).toBe("string");
+      // R8 composite-key invariant: BOTH id AND user_id must be present
+      const cols = updateCalls[0].eqs.map(([c]) => c).sort();
+      expect(cols).toEqual(["id", "user_id"]);
+      const userIdEq = updateCalls[0].eqs.find(([c]) => c === "user_id");
+      expect(userIdEq?.[1]).toBe("user-1");
+      const idEq = updateCalls[0].eqs.find(([c]) => c === "id");
+      expect(idEq?.[1]).toBe("conv-1");
+    });
+
+    it("T-AC4b: writes active on gate resolve (separate update)", async () => {
+      const updateCalls = captureUpdateChain();
+      const deps = await getCcDepsFromFactory();
+
+      await deps.updateConversationStatus("conv-1", "active");
+
+      expect(updateCalls).toHaveLength(1);
+      expect(updateCalls[0].payload.status).toBe("active");
+    });
+
+    it("T-AC4c: every status update carries the user_id .eq gate (R8)", async () => {
+      const updateCalls = captureUpdateChain();
+      const deps = await getCcDepsFromFactory();
+
+      await deps.updateConversationStatus("conv-1", "waiting_for_user");
+      await deps.updateConversationStatus("conv-1", "active");
+
+      expect(updateCalls).toHaveLength(2);
+      for (const call of updateCalls) {
+        const userIdEq = call.eqs.find(([c]) => c === "user_id");
+        expect(userIdEq?.[1]).toBe("user-1");
+      }
+    });
+
+    it("T-AC4d: error from supabase mirrors to reportSilentFallback", async () => {
+      mockSupabaseFrom.mockImplementation((table: string) => {
+        if (table === "users") {
+          return {
+            select: () => ({
+              eq: () => ({
+                single: () => ({
+                  data: { workspace_path: WORKSPACE_PATH },
+                  error: null,
+                }),
+                maybeSingle: () => ({
+                  data: { workspace_path: WORKSPACE_PATH },
+                  error: null,
+                }),
+              }),
+            }),
+          };
+        }
+        if (table === "conversations") {
+          return {
+            update: () => {
+              const chain: Record<string, unknown> = {
+                error: new Error("db unavailable"),
+                eq: () => chain,
+                select: () =>
+                  Promise.resolve({
+                    data: null,
+                    error: new Error("db unavailable"),
+                  }),
+                then: (resolve: (v: unknown) => void) =>
+                  resolve({ error: new Error("db unavailable") }),
+              };
+              return chain;
+            },
+          };
+        }
+        return {
+          select: () => ({
+            eq: () => ({ single: () => ({ data: null, error: null }) }),
+          }),
+          insert: () => ({ error: null }),
+        };
+      });
+      const deps = await getCcDepsFromFactory();
+      mockReportSilentFallback.mockClear();
+
+      await deps.updateConversationStatus("conv-1", "waiting_for_user");
+
+      const calls = mockReportSilentFallback.mock.calls.filter(
+        ([, opts]) => opts?.feature === "cc-dispatcher",
+      );
+      expect(calls.length).toBeGreaterThanOrEqual(1);
+      expect(calls[0][1].op).toBe("updateConversationStatus");
+      expect(calls[0][1].extra).toMatchObject({
+        userId: "user-1",
+        conversationId: "conv-1",
+        status: "waiting_for_user",
+      });
+    });
+  });
 });

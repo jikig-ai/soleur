@@ -270,6 +270,12 @@ cmd_post_content() {
     exit 1
   fi
 
+  # Normalize bare person IDs: LinkedIn API requires full URN (urn:li:person:<id>).
+  # LINKEDIN_PERSON_URN is often stored as just the ID portion without the prefix.
+  if [[ "$author" != urn:* ]]; then
+    author="urn:li:person:${author}"
+  fi
+
   # Organization posts require w_organization_social scope -- use LINKEDIN_ORG_ACCESS_TOKEN.
   if [[ "$author" == urn:li:organization:* ]]; then
     if [[ -z "${LINKEDIN_ORG_ACCESS_TOKEN:-}" ]]; then

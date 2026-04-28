@@ -39,6 +39,7 @@ __pycache__/
 .env
 _site/
 _site_test/
+screenshot-gate-failures/
 
 # Local state (since-id, caches -- do not commit)
 .soleur/

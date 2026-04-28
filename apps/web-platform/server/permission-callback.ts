@@ -44,6 +44,10 @@ import {
 import { isPathInWorkspace } from "./sandbox";
 import type { NotificationPayload } from "./notifications";
 import type { WSMessage } from "@/lib/types";
+import {
+  type BashApprovalCache,
+  deriveBashCommandPrefix,
+} from "./permission-callback-bash-batch";
 
 const log = createChildLogger("permission");
 
@@ -67,8 +71,16 @@ export function allow(toolInput: Record<string, unknown>): Extract<PermissionRes
 // Word-boundary anchors (`\b`) keep false positives down (e.g., a file
 // named `evalent.ts` or a command mentioning "sudoku" should not match).
 // Case-insensitive because shell commands are.
+//
+// Interpreter-flag arms (`node|python|python3|ruby|perl|deno|bun -e/-c`,
+// `deno eval`) catch the same payload-execution surface as `sh -c` but
+// via language interpreters that the soleur plugin sometimes legitimately
+// invokes (`node script.ts`, `python -m pytest`). Plain interpreter
+// invocations remain allowed; only the inline-eval flags `-e`/`-c` (and
+// `deno eval`) are blocked outright. A previously-granted `node` or
+// `python` batch grant cannot launder these.
 export const BLOCKED_BASH_PATTERNS =
-  /\b(?:curl|wget|ncat|nc|eval|sudo)\b|(?:sh|bash)\s+-c|base64\s+-d|\/dev\/tcp/i;
+  /\b(?:curl|wget|ncat|nc|eval|sudo)\b|(?:sh|bash|node|python|python3|ruby|perl|deno|bun)\s+-(?:e|c)\b|deno\s+eval\b|base64\s+-d|\/dev\/tcp/i;
 
 export function isBashCommandBlocked(command: string): boolean {
   if (typeof command !== "string" || command.length === 0) return false;
@@ -106,6 +118,16 @@ export interface CanUseToolDeps {
     conversationId: string,
     status: string,
   ) => Promise<void>;
+  /**
+   * Optional per-(userId, conversationId) Bash command-prefix
+   * batched-approval cache (#2921). When wired, the Bash review-gate
+   * checks the cache BEFORE issuing a gate (cache hit → auto-approve)
+   * and offers `Approve all <prefix>` as a third option that calls
+   * `cache.grant(prefix)` on selection. Legacy runner does NOT wire
+   * this — preserves the 2-option Bash gate for trusted-prompt domain
+   * leaders.
+   */
+  bashApprovalCache?: BashApprovalCache;
 }
 
 export interface CanUseToolContext {
@@ -280,6 +302,40 @@ export function createCanUseTool(ctx: CanUseToolContext): CanUseTool {
         };
       }
 
+      // #2921 batched-approval cache: pre-gate check (synchronous Map
+      // lookup; no AbortSignal needed for cache hit). Blocklist already
+      // ran above — curl/wget/nc/sh -c/eval/base64 -d/sudo cannot be
+      // batched because they were denied before reaching this branch.
+      if (deps.bashApprovalCache?.allow(command)) {
+        log.info(
+          {
+            sec: true,
+            tool: toolName,
+            decision: "auto-approved-batch",
+            repo: `${ctx.repoOwner}/${ctx.repoName}`,
+          },
+          "Bash command auto-approved via batch grant",
+        );
+        logPermissionDecision(
+          "canUseTool-bash",
+          toolName,
+          "allow",
+          "batch grant",
+        );
+        return allow(toolInput);
+      }
+
+      // Derive the prefix the user can grant in the gate. When the
+      // cache dep is wired, augment the gate options array with
+      // `Approve all <prefix>` so the user can collapse the modal cliff.
+      const cachePrefix = deps.bashApprovalCache
+        ? deriveBashCommandPrefix(command)
+        : "";
+      const gateOptions =
+        deps.bashApprovalCache && cachePrefix
+          ? ["Approve", `Approve all \`${cachePrefix}\``, "Reject"]
+          : ["Approve", "Reject"];
+
       const gateId = randomUUID();
       const preview = command.length > 200 ? `${command.slice(0, 200)}…` : command;
       const question = `Run Bash command?\n\n\`${preview}\``;
@@ -288,7 +344,7 @@ export function createCanUseTool(ctx: CanUseToolContext): CanUseTool {
         type: "review_gate",
         gateId,
         question,
-        options: ["Approve", "Reject"],
+        options: gateOptions,
       });
       if (!gateDelivered) {
         deps.notifyOfflineUser(ctx.userId, {
@@ -311,12 +367,21 @@ export function createCanUseTool(ctx: CanUseToolContext): CanUseTool {
         gateId,
         options.signal,
         undefined,
-        ["Approve", "Reject"],
+        gateOptions,
       );
 
       await deps.updateConversationStatus(ctx.conversationId, "active");
 
-      if (selection !== "Approve") {
+      // Selection can be "Approve", "Approve all `<prefix>`", or "Reject".
+      const approveAllOption =
+        deps.bashApprovalCache && cachePrefix
+          ? `Approve all \`${cachePrefix}\``
+          : null;
+      const isBatchedApprove =
+        approveAllOption !== null && selection === approveAllOption;
+      const isApprove = selection === "Approve" || isBatchedApprove;
+
+      if (!isApprove) {
         logPermissionDecision(
           "canUseTool-bash",
           toolName,
@@ -329,20 +394,37 @@ export function createCanUseTool(ctx: CanUseToolContext): CanUseTool {
         };
       }
 
-      log.info(
-        {
-          sec: true,
-          tool: toolName,
-          decision: "user-approved",
-          repo: `${ctx.repoOwner}/${ctx.repoName}`,
-        },
-        "Bash command approved via review-gate",
-      );
+      if (isBatchedApprove && deps.bashApprovalCache && cachePrefix) {
+        // Grant the prefix so subsequent matching commands hit the
+        // cache (auto-approve, zero gate). 60-min TTL + revoke on
+        // conversation cleanup.
+        deps.bashApprovalCache.grant(cachePrefix);
+        log.info(
+          {
+            sec: true,
+            tool: toolName,
+            decision: "user-approved-batch",
+            prefix: cachePrefix,
+            repo: `${ctx.repoOwner}/${ctx.repoName}`,
+          },
+          "Bash command approved via batch grant",
+        );
+      } else {
+        log.info(
+          {
+            sec: true,
+            tool: toolName,
+            decision: "user-approved",
+            repo: `${ctx.repoOwner}/${ctx.repoName}`,
+          },
+          "Bash command approved via review-gate",
+        );
+      }
       logPermissionDecision(
         "canUseTool-bash",
         toolName,
         "allow",
-        "user approved",
+        isBatchedApprove ? "user approved (batch)" : "user approved",
       );
       return allow(toolInput);
     }

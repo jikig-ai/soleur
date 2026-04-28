@@ -27,7 +27,7 @@
   <!-- CSP: Cloudflare Bot Fight Mode injects an inline script with per-request
        tokens. This script is intentionally blocked by script-src (its hash is
        unpredictable). The blocked script has no user-facing impact — see #1149. -->
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://plausible.io 'sha256-l56vLAULxECuIebP1+Hhz+75oNwhX8YnMpMJrN6HoPo=' 'sha256-SVJF5zPt5S9fNTROUuCTIHZpLN5Ht8ZoYfJXtx4ngtM='; connect-src 'self' https://buttondown.com https://plausible.io; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; base-uri 'self'; form-action 'self' https://buttondown.com; object-src 'none'; upgrade-insecure-requests;">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://plausible.io 'sha256-l56vLAULxECuIebP1+Hhz+75oNwhX8YnMpMJrN6HoPo=' 'sha256-SVJF5zPt5S9fNTROUuCTIHZpLN5Ht8ZoYfJXtx4ngtM=' 'sha256-9o2LMPU0pCC0i/83pWDPlO90JiCMiJbUjQWPhLF+W0Y='; connect-src 'self' https://buttondown.com https://plausible.io; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; base-uri 'self'; form-action 'self' https://buttondown.com; object-src 'none'; upgrade-insecure-requests;">
   <script type="application/ld+json">
   {# All string interpolations in this JSON-LD block MUST use | jsonLdSafe | safe — see #2609 #}
   {
@@ -123,13 +123,19 @@
   <base href="/">
   <link rel="icon" type="image/png" href="images/favicon.png">
   <title>{% if seoTitle %}{{ seoTitle }}{% elif title == site.name %}{{ site.name }} - {{ site.tagline }}{% else %}{{ title }} - {{ site.name }}{% endif %}</title>
-  <!-- Critical CSS: above-the-fold styles for / and /blog/* inlined to unblock first paint.
-       The full stylesheet loads asynchronously via the onload-swap pattern below.
-       Regenerate from css/style.css when these change: @layer tokens (--color-*, --font-*,
-       --space-*, --header-h, --text-*); rules .site-header, .header-mark, .header-name,
-       .nav-links*, .nav-toggle*, .nav-cta-slot, .nav-cta, .skip-link, .landing-hero*,
-       .section-label, .landing-stats, .landing-stat*, .btn, .btn-primary, .btn--sm,
-       .newsletter-form*, .hero-waitlist-form*, .hero (blog), .blog-post-meta. -->
+  <!-- Critical CSS: above-the-fold styles for /, /blog/*, and every .page-hero
+       template inlined to unblock first paint. The full stylesheet loads
+       asynchronously via the onload-swap pattern below. Selectors covered:
+       @layer tokens (--color-*, --font-*, --space-*, --header-h, --text-*);
+       rules .site-header, .header-mark, .header-name, .nav-links*, .nav-toggle*,
+       .nav-cta-slot, .nav-cta, .skip-link, .landing-hero*, .section-label,
+       .section-title, .section-desc, .landing-section, .landing-section-inner,
+       .landing-stats, .landing-stat*, .btn, .btn-primary, .btn--sm,
+       .newsletter-form*, .hero-waitlist-form*, .hero (blog), .blog-post-meta,
+       .page-hero*, .landing-cta*, .honeypot-trap. Any new selector rendered
+       above the fold on any docs page MUST be added here AND covered by the
+       deploy-docs screenshot gate (plugins/soleur/docs/scripts/screenshot-gate.mjs)
+       per AGENTS.md cq-eleventy-critical-css-screenshot-gate. -->
   <style>
     @layer reset,tokens,base,layout,components,utilities;
     @font-face{font-family:'Cormorant Garamond';src:url('fonts/cormorant-garamond-500.woff2') format('woff2');font-weight:500;font-style:normal;font-display:swap}
@@ -188,10 +194,31 @@
       .hero h1{font-size:var(--text-4xl);margin-bottom:var(--space-4);letter-spacing:-0.02em}
       .hero p,.hero .hero-subtitle,.hero .subtitle{font-size:var(--text-lg);color:var(--color-text-secondary);max-width:600px;margin-inline:auto}
       .blog-post-meta{display:flex;align-items:center;gap:var(--space-3);margin-top:var(--space-2);color:var(--color-text-secondary);font-size:var(--text-sm)}
+      /* .page-hero — used on /pricing/, /blog/, /agents/, /skills/, /about/, /getting-started/, /community/, /changelog/, /vision/, /legal/. Mirror of `.page-hero` rule in css/style.css */
+      .page-hero{background:var(--color-bg);color:var(--color-text);padding:var(--space-10) 0 var(--space-8);margin-top:var(--header-h);position:relative;text-align:center;border-bottom:1px solid var(--color-border)}
+      .page-hero .container{position:relative;z-index:1}
+      .page-hero h1{font-size:var(--text-4xl);margin-bottom:var(--space-4);letter-spacing:-0.02em}
+      .page-hero p{font-size:var(--text-lg);color:var(--color-text-secondary);max-width:600px;margin-inline:auto}
+      /* .landing-cta — used on /pricing/ #waitlist (above the fold). Mirror of `.landing-cta` rule in css/style.css */
+      .landing-cta{background:linear-gradient(180deg,var(--color-bg) 0%,var(--color-bg-tertiary) 100%);padding:var(--space-12) var(--space-5);text-align:center}
+      .landing-cta h2{font-family:var(--font-display);font-size:var(--text-4xl);font-weight:500;margin-bottom:var(--space-4)}
+      .landing-cta p{font-size:1.0625rem;color:var(--color-text-secondary);margin-bottom:var(--space-8)}
+      /* .landing-section + .section-title + .section-desc — first content section after every page-hero. Mirror of `.landing-section` / `.section-title` / `.section-desc` in css/style.css (`.section-label` already inlined above) */
+      .landing-section{padding:var(--space-10) var(--space-5)}
+      .landing-section-inner{max-width:1200px;margin-inline:auto}
+      .section-title{font-family:var(--font-display);font-size:2.625rem;font-weight:500;text-align:center;max-width:800px;margin-inline:auto;margin-bottom:var(--space-4);line-height:1.15}
+      .section-desc{font-size:1.0625rem;color:var(--color-text-secondary);text-align:center;max-width:640px;margin-inline:auto;line-height:1.7;margin-bottom:var(--space-8)}
+      /* .honeypot-trap — site-wide via _includes/newsletter-form.njk; visible during FOUC if not inlined. Mirror of `.honeypot-trap` rule in css/style.css */
+      .honeypot-trap{position:absolute;left:-9999px;height:0;overflow:hidden}
     }
   </style>
-  <link rel="preload" href="css/style.css" as="style" onload="this.onload=null;this.rel='stylesheet'">
+  <link id="soleur-css-preload" rel="preload" href="css/style.css" as="style">
   <noscript><link rel="stylesheet" href="css/style.css"></noscript>
+  <!-- CSP-compliant async stylesheet swap. Replaces an inline onload= attribute (blocked
+       by script-src without unsafe-inline / unsafe-hashes) with a hashed inline script.
+       Editing the swap below requires updating the sha256 hash in the CSP meta tag above.
+       Run validate-csp.sh to verify. -->
+  <script>(function(){var l=document.getElementById('soleur-css-preload');if(!l)return;function sw(){l.rel='stylesheet';}if(l.sheet){sw();}else{l.addEventListener('load',sw);}})();</script>
   <!-- Privacy-friendly analytics by Plausible -->
   <script async src="https://plausible.io/js/pa-unmpBTT7YXW_UsDCGRfHH.js"></script>
   <!-- CSP: editing this script requires updating the sha256 hash in the CSP meta tag above. Run validate-csp.sh to check. -->
@@ -202,7 +229,7 @@
 <body>
   <a href="#main-content" class="skip-link">Skip to main content</a>
   <header class="site-header">
-    <a href="index.html" class="logo">
+    <a href="/" class="logo">
       <div class="header-mark">S</div>
       <span class="header-name">{{ site.name }}</span>
     </a>

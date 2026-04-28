@@ -17,8 +17,16 @@ import path from "path";
 import type { Query } from "@anthropic-ai/claude-agent-sdk";
 import { query as sdkQuery } from "@anthropic-ai/claude-agent-sdk";
 
-import type { WSMessage } from "@/lib/types";
-import { KeyInvalidError } from "@/lib/types";
+import type { WSMessage, Conversation } from "@/lib/types";
+import { KeyInvalidError, STATUS_LABELS } from "@/lib/types";
+
+/**
+ * Runtime allowlist for `Conversation["status"]`. Mirrors the type union
+ * `"active" | "waiting_for_user" | "completed" | "failed"` and is derived
+ * from `STATUS_LABELS` so a future status added to the type and labels
+ * map flows through automatically.
+ */
+const CONVERSATION_STATUS_VALUES = new Set(Object.keys(STATUS_LABELS));
 import { createServiceClient } from "@/lib/supabase/service";
 import {
   createSoleurGoRunner,
@@ -46,14 +54,17 @@ import {
   type WorkflowName,
 } from "./conversation-routing";
 import { reportSilentFallback } from "./observability";
+import { updateConversationFor } from "./conversation-writer";
 import {
   getUserApiKey,
   getUserServiceTokens,
   patchWorkspacePermissions,
 } from "./agent-runner";
-import { buildAgentSandboxConfig } from "./agent-runner-sandbox-config";
-import { buildAgentEnv } from "./agent-env";
-import { createSandboxHook } from "./sandbox-hook";
+import { buildAgentQueryOptions } from "./agent-runner-query-options";
+import {
+  getBashApprovalCache,
+  _resetBashApprovalCacheForTests,
+} from "./permission-callback-bash-batch";
 import {
   createCanUseTool,
   type CanUseToolDeps,
@@ -295,6 +306,13 @@ export function cleanupCcBashGatesForConversation(
       _ccBashGates.delete(key);
     }
   }
+  // Drain the per-(userId, conversationId) Bash batched-approval cache
+  // (#2921). Without this, granted prefixes survive conversation
+  // close/reap and could auto-approve on the NEXT conversation if the
+  // ws layer reuses the same conversationId (it doesn't today, but
+  // defense-in-depth: the cache lifetime should never exceed the
+  // conversation lifetime).
+  getBashApprovalCache(userId, conversationId).revoke();
 }
 
 // ---------------------------------------------------------------------------
@@ -362,7 +380,9 @@ export const realSdkQueryFactory: QueryFactory = async (
   // Defense-in-depth: strip stale pre-approved file-tool entries from
   // the workspace's `.claude/settings.json` so they cannot bypass
   // `canUseTool` (permission chain step 4 before step 5). Idempotent.
-  patchWorkspacePermissions(workspacePath);
+  // Async per #2918 — the lock keyed on workspacePath prevents the
+  // legacy + cc paths from racing on the same workspace.
+  await patchWorkspacePermissions(workspacePath);
 
   const pluginPath = path.join(workspacePath, "plugins", "soleur");
 
@@ -391,71 +411,85 @@ export const realSdkQueryFactory: QueryFactory = async (
     },
     sendToClient: defaultSendToClient,
     notifyOfflineUser,
-    updateConversationStatus: async (_convId: string, _status: string) => {
-      // V1: cc-soleur-go path does not write conversation status. See
-      // scope-out C — gated by FLAG_CC_SOLEUR_GO=true acceptance.
+    // Per-(userId, conversationId) Bash command-prefix batched-approval
+    // cache (#2921). Wired only on the cc path; the legacy runner stays
+    // at the 2-option Bash gate. Revoked from
+    // `cleanupCcBashGatesForConversation` so a closed/reaped conversation
+    // doesn't leak grants.
+    bashApprovalCache: getBashApprovalCache(args.userId, args.conversationId),
+    // Real conversation-status write — replaces the prior no-op (#2920).
+    // Delegates to the typed wrapper which enforces the R8 composite-key
+    // invariant (`.eq("id", convId).eq("user_id", args.userId)`) and
+    // mirrors errors to Sentry via `reportSilentFallback` per
+    // `cq-silent-fallback-must-mirror-to-sentry`.
+    //
+    // The closure shape `(convId, status) => Promise<void>` is preserved
+    // so `permission-callback.ts`'s 6 deps-injected call sites get
+    // transitive R8 coverage with zero churn at the deps interface.
+    updateConversationStatus: async (convId: string, status: string) => {
+      // Runtime guard: protect against deps-injected callers passing a
+      // status literal not in Conversation["status"]. The wrapper would
+      // otherwise hand an invalid enum to Postgres which rejects the write
+      // — and the closure's `Promise<void>` shape would swallow the error.
+      if (!CONVERSATION_STATUS_VALUES.has(status)) {
+        reportSilentFallback(null, {
+          feature: "cc-dispatcher",
+          op: "updateConversationStatus",
+          message: `invalid conversation status: ${status}`,
+          extra: { userId: args.userId, conversationId: convId, status },
+        });
+        return;
+      }
+      await updateConversationFor(
+        args.userId,
+        convId,
+        {
+          status: status as Conversation["status"],
+          last_active: new Date().toISOString(),
+        },
+        {
+          feature: "cc-dispatcher",
+          op: "updateConversationStatus",
+          extra: { status },
+          // Status transitions drive permission-callback waiting_for_user
+          // events; a 0-rows write would emit a prompt for a deleted/
+          // archived row that the UI no longer shows.
+          expectMatch: true,
+        },
+      );
     },
   };
 
   try {
+    // Build SDK options through the shared `buildAgentQueryOptions`
+    // helper (#2922). Drift between this cc path and the legacy
+    // `agent-runner.ts startAgentSession` is guarded by
+    // `agent-runner-query-options.test.ts`.
+    //
+    // V1 — empty MCP allowlist. V2-13 (#2909) tracks
+    // tier-classification of `kb_share_*`, `conversations_*`,
+    // `github_*`, `plausible_*` for this path before widening.
     return sdkQuery({
       prompt: args.prompt,
-      options: {
-        cwd: workspacePath,
-        model: "claude-sonnet-4-6",
-        permissionMode: "default",
-        // settingSources: [] — defense-in-depth alongside
-        // `patchWorkspacePermissions`. Prevents the SDK from loading
-        // project `.claude/settings.json` whose `permissions.allow`
-        // would bypass `canUseTool`.
-        settingSources: [],
-        includePartialMessages: true,
-        ...(args.resumeSessionId ? { resume: args.resumeSessionId } : {}),
+      options: buildAgentQueryOptions({
+        workspacePath,
+        pluginPath,
+        apiKey,
+        serviceTokens,
         systemPrompt: args.systemPrompt,
-        env: buildAgentEnv(apiKey, serviceTokens),
-        // R7 — mirror legacy runner. WebSearch/WebFetch denied so the
-        // router cannot fetch arbitrary URLs.
-        disallowedTools: ["WebSearch", "WebFetch"],
-        // V1 — empty MCP allowlist. V2-13 (#2909) tracks
-        // tier-classification of `kb_share_*`, `conversations_*`,
-        // `github_*`, `plausible_*` for this path before widening.
+        resumeSessionId: args.resumeSessionId,
         mcpServers: {},
-        sandbox: buildAgentSandboxConfig(workspacePath),
-        plugins: [{ type: "local" as const, path: pluginPath }],
-        hooks: {
-          PreToolUse: [
-            {
-              matcher: "Read|Write|Edit|Glob|Grep|LS|NotebookRead|NotebookEdit|Bash",
-              hooks: [createSandboxHook(workspacePath)],
-            },
-          ],
-          SubagentStart: [
-            {
-              hooks: [
-                async (input) => {
-                  const subInput = input as Record<string, unknown>;
-                  // Strip control chars, DEL, Unicode line/paragraph
-                  // separators per learning
-                  // 2026-04-17-log-injection-unicode-line-separators.md
-                  // (covers \r\n already).
-                  const sanitize = (v: unknown) =>
-                    String(v ?? "")
-                      .replace(/[\x00-\x1f\x7f\u2028\u2029]/g, " ")
-                      .slice(0, 200);
-                  log.info(
-                    {
-                      sec: true,
-                      agentId: sanitize(subInput.agent_id),
-                      agentType: sanitize(subInput.agent_type),
-                      ccPath: true,
-                    },
-                    "Subagent started (cc-soleur-go)",
-                  );
-                  return {};
-                },
-              ],
-            },
-          ],
+        // SubagentStart sanitizer override: cc strips control chars +
+        // U+2028/U+2029 (per learning
+        // 2026-04-17-log-injection-unicode-line-separators.md) and
+        // tags `ccPath: true` for audit-log filtering.
+        subagentStartPayloadOverride: {
+          sanitizer: (v: unknown) =>
+            String(v ?? "")
+              .replace(/[\x00-\x1f\x7f\u2028\u2029]/g, " ")
+              .slice(0, 200),
+          extraLogFields: { ccPath: true },
+          logMessage: "Subagent started (cc-soleur-go)",
         },
         canUseTool: createCanUseTool({
           userId: args.userId,
@@ -473,7 +507,7 @@ export const realSdkQueryFactory: QueryFactory = async (
           controllerSignal: controller.signal,
           deps: ccDeps,
         }),
-      },
+      }),
     });
   } catch (err) {
     // Mirror the "sandbox required but unavailable" branch in
@@ -771,4 +805,10 @@ export function __resetDispatcherForTests(): void {
   _runnerSendToClient = null;
   _ccBashGates.clear();
   _mirrorLastReportedAt.clear();
+  // The bash batched-approval cache lives in a sibling module
+  // (`permission-callback-bash-batch.ts`) and is keyed by
+  // `${userId}:${conversationId}`. Without draining it here, a granted
+  // prefix in test A can survive into test B (cross-file leak via the
+  // module-level Map). Mirrors the centralization Fix 6 of PR #2954.
+  _resetBashApprovalCacheForTests();
 }
