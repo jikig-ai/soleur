@@ -178,11 +178,11 @@ permalink: index.html
           </details>
           <details class="faq-item">
             <summary class="faq-question">Is Soleur free?</summary>
-            <p class="faq-answer">Soleur offers two paths. The self-hosted version is free, open-source, and Apache-2.0 licensed &mdash; every agent, every skill, every department. The cloud platform (coming soon) adds managed infrastructure, a web dashboard, and priority support; <a href="/pricing/">see pricing</a> for plan details. Both paths run on Anthropic&rsquo;s Claude models, so your AI costs depend on your Claude usage.</p>
+            <p class="faq-answer">Soleur offers two paths. The self-hosted version is free, open-source, and Apache-2.0 licensed &mdash; every agent, every skill, every department. The cloud platform (coming soon) adds managed infrastructure, a web dashboard, and priority support; <a href="/pricing/">see pricing</a> for plan details. Both paths run on Anthropic's Claude models, so your AI costs depend on your Claude usage.</p>
           </details>
           <details class="faq-item">
             <summary class="faq-question">Who is Soleur for?</summary>
-            <p class="faq-answer">Solopreneurs and solo founders wearing 9 hats who want to hand off 8 of them. Especially founders at the hire-or-don&rsquo;t-hire decision point &mdash; Soleur gives you the capacity of a team before you have the budget for one. Your knowledge compounds across departments and sessions, so the more you use it, the more it knows about your business.</p>
+            <p class="faq-answer">Solopreneurs and solo founders wearing 9 hats who want to hand off 8 of them. Especially founders at the hire-or-don't-hire decision point &mdash; Soleur gives you the capacity of a team before you have the budget for one. Your knowledge compounds across departments and sessions, so the more you use it, the more it knows about your business.</p>
           </details>
           <details class="faq-item">
             <summary class="faq-question">How do I get started?</summary>
@@ -202,7 +202,7 @@ permalink: index.html
           "name": "What is Soleur?",
           "acceptedAnswer": {
             "@type": "Answer",
-            "text": "Soleur deploys AI agents across business departments — engineering, marketing, legal, finance, operations, product, sales, and support — giving a single founder the capacity of a full organization. Every agent shares a compounding knowledge base, so your marketing agent knows what your legal agent decided. Your expertise stays in the loop: agents provide starting points, you make the final call."
+            "text": {{ ("Soleur deploys " + stats.agents + " AI agents across " + stats.departments + " business departments — engineering, marketing, legal, finance, operations, product, sales, and support — giving a single founder the capacity of a full organization. Every agent shares a compounding knowledge base, so your marketing agent knows what your legal agent decided, and your finance agent references your actual revenue data. Your expertise stays in the loop: agents provide starting points, you make the final call.") | jsonLdSafe | safe }}
           }
         },
         {
@@ -218,7 +218,7 @@ permalink: index.html
           "name": "How does Soleur differ from Cursor or GitHub Copilot?",
           "acceptedAnswer": {
             "@type": "Answer",
-            "text": "Cursor and Copilot help you write code. Soleur helps you run a company. It includes agents for marketing strategy, legal compliance, financial planning, sales pipeline analysis, and more. The core difference: Soleur maintains a persistent knowledge base across every department. Your marketing agent knows your brand voice. Your legal agent knows your compliance posture. Cursor starts fresh every session."
+            "text": "Cursor and Copilot help you write code. Soleur helps you run a company. It includes agents for marketing strategy, legal compliance, financial planning, sales pipeline analysis, and more. The core difference: Soleur maintains a persistent knowledge base across every department. Your marketing agent knows your brand voice. Your legal agent knows your compliance posture. Cursor starts fresh every session. Soleur is built on Claude Code and the Model Context Protocol (MCP), the open standard for connecting AI to external tools."
           }
         },
         {
@@ -226,7 +226,7 @@ permalink: index.html
           "name": "What if the AI output is wrong?",
           "acceptedAnswer": {
             "@type": "Answer",
-            "text": "Soleur is human-in-the-loop by design. Every agent output is a starting point, not a final answer. You review, edit, and approve before anything ships. Your expertise drives the decisions — agents handle the execution."
+            "text": "Soleur is human-in-the-loop by design. Every agent output is a starting point, not a final answer. You review, edit, and approve before anything ships. Your expertise drives the decisions — agents handle the execution. Think of it as a draft from a competent team member, not an autonomous system."
           }
         },
         {
@@ -234,7 +234,7 @@ permalink: index.html
           "name": "Is Soleur free?",
           "acceptedAnswer": {
             "@type": "Answer",
-            "text": "Soleur offers two paths. The self-hosted version is free, open-source, and Apache-2.0 licensed — every agent, every skill, every department. The cloud platform (coming soon) adds managed infrastructure, a web dashboard, and priority support; see /pricing/ for plan details. Both paths run on Anthropic's Claude models, so your AI costs depend on your Claude usage."
+            "text": "Soleur offers two paths. The self-hosted version is free, open-source, and Apache-2.0 licensed — every agent, every skill, every department. The cloud platform (coming soon) adds managed infrastructure, a web dashboard, and priority support; see pricing for plan details. Both paths run on Anthropic's Claude models, so your AI costs depend on your Claude usage."
           }
         },
         {
@@ -250,7 +250,7 @@ permalink: index.html
           "name": "How do I get started?",
           "acceptedAnswer": {
             "@type": "Answer",
-            "text": "Join the waitlist for the cloud platform, or install the open-source version and start with /soleur:go. Describe what you need and Soleur routes to the right workflow — whether building a feature, validating a business idea, generating legal documents, or running a competitive analysis."
+            "text": "Join the waitlist for the cloud platform, or install the open-source version and run /soleur:go to start. Describe what you need — build a feature, validate a business idea, generate legal documents, run a competitive analysis — and Soleur routes to the right workflow."
           }
         }
       ]
