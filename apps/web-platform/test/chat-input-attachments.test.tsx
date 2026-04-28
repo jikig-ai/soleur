@@ -3,6 +3,14 @@
 // in the "send with attachments" describe block). Mixing fake timers with
 // `@testing-library/user-event` v14 hangs `await user.type/keyboard` calls —
 // see testing-library/user-event#833 and react-testing-library#1197/#1198.
+//
+// Trigger-function ordering invariant: each `let fireXxx: () => void` is
+// assigned inside `mockXhr.send.mockImplementation(...)`, which runs
+// synchronously when `uploadWithProgress` calls `xhr.send(file)`. By the
+// time `await userEvent.keyboard("{Enter}")` resolves, every trigger is
+// populated. The non-null `!` assertion at each call site encodes that
+// invariant; a future edit that moves the trigger before the keyboard
+// event will produce a clear `TypeError` rather than a silent hang.
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -245,6 +253,13 @@ describe("ChatInput — attachments", () => {
         expect(screen.getByText("50%")).toBeInTheDocument();
       });
 
+      // Negative-space assertion: pins the #2524 regression class. If React
+      // ever batched both progress events into a single commit (the original
+      // bug), the test would have still passed when "50%" briefly appeared
+      // and was immediately replaced by "Uploaded". Asserting "Uploaded" is
+      // NOT yet visible at this checkpoint forces the intermediate render.
+      expect(screen.queryByText("Uploaded")).not.toBeInTheDocument();
+
       fireProgress100!();
       await waitFor(() => {
         expect(screen.getByText("Uploaded")).toBeInTheDocument();
@@ -307,9 +322,9 @@ describe("ChatInput — attachments", () => {
         }),
       });
 
-      let fireError: () => void;
+      let fireNetworkError: () => void;
       mockXhr.send.mockImplementation(() => {
-        fireError = () => mockXhr.onerror?.();
+        fireNetworkError = () => mockXhr.onerror?.();
       });
 
       const fileInput = document.querySelector("input[type='file']") as HTMLInputElement;
@@ -324,7 +339,7 @@ describe("ChatInput — attachments", () => {
       await userEvent.type(textarea, "hi");
       await userEvent.keyboard("{Enter}");
 
-      fireError!();
+      fireNetworkError!();
 
       await waitFor(() => {
         expect(screen.getByText(/upload to storage failed/i)).toBeInTheDocument();
@@ -424,9 +439,9 @@ describe("ChatInput — attachments", () => {
         }),
       });
 
-      let fireError: () => void;
+      let fireNetworkError: () => void;
       mockXhr.send.mockImplementation(() => {
-        fireError = () => mockXhr.onerror?.();
+        fireNetworkError = () => mockXhr.onerror?.();
       });
 
       const fileInput = document.querySelector("input[type='file']") as HTMLInputElement;
@@ -441,7 +456,7 @@ describe("ChatInput — attachments", () => {
       await userEvent.type(textarea, "hi");
       await userEvent.keyboard("{Enter}");
 
-      fireError!();
+      fireNetworkError!();
 
       // Errored attachment should persist with error message
       await waitFor(() => {
