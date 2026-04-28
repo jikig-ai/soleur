@@ -978,3 +978,4 @@ This detects `[gone]` branches (where the remote was deleted after merge), remov
 - **Ask before running /compound.** The user may have already documented learnings.
 - **Do not block on missing artifacts.** Not every change needs a brainstorm or plan.
 - **Confirm the PR title and body** with the user before creating it (skip in headless mode).
+- **CI workflow edits:** When the PR touches `.github/workflows/*.yml` or `.github/actions/**`, load [ci-workflow-authoring.md](./references/ci-workflow-authoring.md) for known-buggy idioms, heredoc/YAML indentation traps, Doppler service-token naming, `claude-code-action` pin freshness, and `jq -e` guards for JSON polling. These were migrated out of AGENTS.md — review them before pushing CI changes.
