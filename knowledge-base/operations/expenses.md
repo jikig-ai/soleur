@@ -1,5 +1,5 @@
 ---
-last_updated: 2026-04-19
+last_updated: 2026-04-28
 ---
 
 # Expenses
@@ -24,6 +24,7 @@ last_updated: 2026-04-19
 | LinkedIn | LinkedIn | social | 0.00 | active | - | Company page + personal profile for content distribution. Free tier API access via LinkedIn Marketing Developer Platform |
 | Bluesky | Bluesky | social | 0.00 | active | - | @soleur.ai account for content distribution. AT Protocol API (free, no tier limits) |
 | Resend | Resend | email | 0.00 | free-tier | - | Transactional email API. Free tier: 100 emails/day, 3K emails/mo. Upgrade trigger: volume exceeds free tier ($20/mo for 50K emails) |
+| Proton Mail Workspace Standard (2 users) | Proton | email | 14.00 | active | - | Custom-domain email for `@soleur.ai` mailboxes. Workspace Standard plan, 2 users (`~$7/user/mo annual` estimate -- TBD: confirm exact monthly rate from Proton billing portal). DNS provisioned via Terraform PR #3009 (apex MX, SPF widening to `~all`, 3x DKIM CNAMEs, verification TXT). Receives + signs outbound from `@soleur.ai`. |
 | Anthropic API (ux-audit) | Anthropic | api | 15.00 | active | - | Event-driven + monthly cron via `.github/workflows/scheduled-ux-audit.yml`. ~$3-$12/run × ≤3 runs/month. Threshold warning at $15/run in workflow output. Budget: $15/mo estimate; COO target ≤$12/run. |
 | Claude Code Max 20x (seat 1) | Anthropic | dev-tools | 200.00 | active | 2026-05-01 | Max 20x tier ($200/mo/seat). Engineering tooling for Soleur development. Started 2026-02-01; seat 1 of 2 |
 | Claude Code Max 20x (seat 2) | Anthropic | dev-tools | 200.00 | active | 2026-05-01 | Max 20x tier ($200/mo/seat). Engineering tooling for Soleur development. Started 2026-02-01; seat 2 of 2 |
