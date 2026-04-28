@@ -100,13 +100,14 @@ resource "cloudflare_record" "supabase_acme_challenge" {
   ttl     = 60
 }
 
-# SPF hard-fail for root domain -- soleur.ai does not send email directly.
-# Prevents spoofing of @soleur.ai addresses. Sending domains (send.soleur.ai)
-# have their own SPF records with amazonses.com include.
+# SPF for root domain -- @soleur.ai mailboxes send via Proton Mail.
+# Sending subdomain send.soleur.ai (Resend/SES) has its own SPF record.
+# Softfail (~all) per Proton's recommended widening; tighten to -all once
+# deliverability is observed clean across all major receivers.
 resource "cloudflare_record" "spf_root" {
   zone_id = var.cf_zone_id
   name    = "soleur.ai"
-  content = "v=spf1 -all"
+  content = "v=spf1 include:_spf.protonmail.ch ~all"
   type    = "TXT"
   ttl     = 1
 }
@@ -121,13 +122,62 @@ resource "cloudflare_record" "google_site_verification" {
 }
 
 # ProtonMail domain ownership verification (apex TXT). Required to enable
-# Proton Mail on soleur.ai. Sending integration (MX/SPF/DKIM updates) is a
-# separate follow-up once verification clears.
+# Proton Mail on soleur.ai.
 resource "cloudflare_record" "protonmail_verification" {
   zone_id = var.cf_zone_id
   name    = "soleur.ai" # Use FQDN, not "@" -- CF API normalizes @ to FQDN, causing perpetual drift
   content = "protonmail-verification=669dab6390579ccb6db592dca20dbd199bacce2d"
   type    = "TXT"
+  ttl     = 1
+}
+
+# ProtonMail receiving (apex MX). Primary + secondary as published by Proton.
+# Apex SPF widened above to include _spf.protonmail.ch for sending.
+resource "cloudflare_record" "protonmail_mx_primary" {
+  zone_id  = var.cf_zone_id
+  name     = "soleur.ai" # Use FQDN, not "@" -- CF API normalizes @ to FQDN, causing perpetual drift
+  content  = "mail.protonmail.ch"
+  type     = "MX"
+  priority = 10
+  ttl      = 1
+}
+
+resource "cloudflare_record" "protonmail_mx_secondary" {
+  zone_id  = var.cf_zone_id
+  name     = "soleur.ai" # Use FQDN, not "@" -- CF API normalizes @ to FQDN, causing perpetual drift
+  content  = "mailsec.protonmail.ch"
+  type     = "MX"
+  priority = 20
+  ttl      = 1
+}
+
+# ProtonMail DKIM signing -- three CNAMEs per Proton's per-domain key rotation
+# scheme. Targets are issued once per domain in Proton's admin panel; do not
+# regenerate without coordinating with Proton support.
+resource "cloudflare_record" "protonmail_dkim_1" {
+  zone_id = var.cf_zone_id
+  name    = "protonmail._domainkey"
+  content = "protonmail.domainkey.d76oa5imuaqfja4roobbqhui6tif2utb6kzwbzuxr7u34wiq3yxza.domains.proton.ch"
+  type    = "CNAME"
+  proxied = false
+  ttl     = 1
+}
+
+resource "cloudflare_record" "protonmail_dkim_2" {
+  zone_id = var.cf_zone_id
+  name    = "protonmail2._domainkey"
+  content = "protonmail2.domainkey.d76oa5imuaqfja4roobbqhui6tif2utb6kzwbzuxr7u34wiq3yxza.domains.proton.ch"
+  type    = "CNAME"
+  proxied = false
+  ttl     = 1
+}
+
+resource "cloudflare_record" "protonmail_dkim_3" {
+  zone_id = var.cf_zone_id
+  name    = "protonmail3._domainkey"
+  content = "protonmail3.domainkey.d76oa5imuaqfja4roobbqhui6tif2utb6kzwbzuxr7u34wiq3yxza.domains.proton.ch"
+  type    = "CNAME"
+  proxied = false
   ttl     = 1
 }
 
