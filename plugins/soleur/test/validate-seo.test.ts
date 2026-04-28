@@ -5,27 +5,31 @@ import { resolve } from "path";
 const SCRIPT = resolve(import.meta.dir, "../skills/seo-aeo/scripts/validate-seo.sh");
 const TMP_DIR = resolve(import.meta.dir, "../test/.tmp-seo-test-site");
 
-// Minimal valid HTML that passes all checks
+// Minimal valid HTML that passes all checks (per PR #2973 — base.njk now requires
+// no <base>, exactly one <h1>, non-empty meta description; FAQPage parity only
+// fires when class="faq-(item|question|answer|list)" is rendered)
 const validHtml = `<!DOCTYPE html>
 <html>
 <head>
+<meta name="description" content="Test page description">
 <link rel="canonical" href="https://example.com/">
 <meta property="og:title" content="Test">
 <meta name="twitter:card" content="summary_large_image">
 <script type="application/ld+json">{"@type":"WebPage"}</script>
 </head>
-<body></body>
+<body><h1>Test page</h1></body>
 </html>`;
 
 const homepageHtml = `<!DOCTYPE html>
 <html>
 <head>
+<meta name="description" content="Homepage description">
 <link rel="canonical" href="https://example.com/">
 <meta property="og:title" content="Test">
 <meta name="twitter:card" content="summary_large_image">
 <script type="application/ld+json">{"@type":"WebPage","SoftwareApplication":"yes"}</script>
 </head>
-<body></body>
+<body><h1>Homepage</h1></body>
 </html>`;
 
 function setupSite(overrides?: { skipLlms?: boolean; skipCanonical?: boolean; skipSitemap?: boolean; skipRobots?: boolean; robotsContent?: string }) {
