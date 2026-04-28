@@ -1,9 +1,9 @@
 "use client";
 
 import { Suspense, useState, useEffect, useRef } from "react";
-import * as Sentry from "@sentry/nextjs";
 import { useSearchParams, useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
+import { reportSilentFallback } from "@/lib/client-observability";
 import { OAuthButtons } from "@/components/auth/oauth-buttons";
 import { EMAIL_OTP_LENGTH } from "@/lib/auth/constants";
 import { CALLBACK_ERRORS, DEFAULT_ERROR_MESSAGE, mapSupabaseError } from "@/lib/auth/error-messages";
@@ -51,11 +51,14 @@ function LoginForm() {
 
     if (error) {
       console.error("[auth] Supabase error:", error.message);
-      Sentry.captureException(error, {
-        tags: { feature: "auth", op: "signInWithOtp" },
+      // Forward only typed enum fields — error.message embeds the email on
+      // OTP failures and Sentry is a shared project (PII / cross-tenant risk).
+      reportSilentFallback(error, {
+        feature: "auth",
+        op: "signInWithOtp",
         extra: {
           errorCode: (error as { code?: string }).code,
-          errorMessage: error.message?.slice(0, 200),
+          errorName: error.name,
         },
       });
       setError(mapSupabaseError(error.message));
@@ -81,11 +84,12 @@ function LoginForm() {
 
     if (error) {
       console.error("[auth] Supabase error:", error.message);
-      Sentry.captureException(error, {
-        tags: { feature: "auth", op: "verifyOtp" },
+      reportSilentFallback(error, {
+        feature: "auth",
+        op: "verifyOtp",
         extra: {
           errorCode: (error as { code?: string }).code,
-          errorMessage: error.message?.slice(0, 200),
+          errorName: error.name,
         },
       });
       setError(mapSupabaseError(error.message));

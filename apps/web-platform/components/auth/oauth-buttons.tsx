@@ -1,8 +1,8 @@
 "use client";
 
 import { useState } from "react";
-import * as Sentry from "@sentry/nextjs";
 import { createClient } from "@/lib/supabase/client";
+import { reportSilentFallback } from "@/lib/client-observability";
 import { mapSupabaseError } from "@/lib/auth/error-messages";
 
 type Provider = "google" | "apple" | "github" | "azure";
@@ -79,11 +79,16 @@ export function OAuthButtons({ disabled = false }: { disabled?: boolean }) {
 
     if (error) {
       console.error("[auth] Supabase OAuth error:", error.message);
-      Sentry.captureException(error, {
-        tags: { feature: "auth", op: "signInWithOAuth", provider: provider.id },
+      // Forward only typed enum fields — error.message can embed the user's
+      // email or other PII and Sentry is a shared project (cross-tenant
+      // exposure vector). Provider tag distinguishes Google/Apple/GitHub/Azure.
+      reportSilentFallback(error, {
+        feature: "auth",
+        op: "signInWithOAuth",
         extra: {
+          provider: provider.id,
           errorCode: (error as { code?: string }).code,
-          errorMessage: error.message?.slice(0, 200),
+          errorName: error.name,
         },
       });
       setError(mapSupabaseError(error.message));

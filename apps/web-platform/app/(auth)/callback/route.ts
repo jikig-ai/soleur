@@ -63,11 +63,10 @@ export async function GET(request: NextRequest) {
     const { error } = await supabase.auth.exchangeCodeForSession(code);
 
     if (error) {
-      // Mirror to Sentry so auth regressions surface in the dashboard.
-      // Pino stdout is invisible to Sentry; per AGENTS.md
-      // cq-silent-fallback-must-mirror-to-sentry, error-returning branches
-      // must use reportSilentFallback. Truncate message in case it embeds
-      // the OAuth `code` query-param.
+      // Mirror to Sentry per cq-silent-fallback-must-mirror-to-sentry.
+      // Forward only typed enum fields — error.message can embed user-supplied
+      // input (email in OTP errors, OAuth `code` query param) and Sentry is a
+      // shared project, so PII forwarding is a cross-tenant exposure vector.
       reportSilentFallback(error, {
         feature: "auth",
         op: "exchangeCodeForSession",
@@ -75,7 +74,6 @@ export async function GET(request: NextRequest) {
           errorCode: (error as { code?: string }).code,
           errorName: error.name,
           errorStatus: error.status,
-          errorMessage: error.message?.slice(0, 200),
         },
       });
 
@@ -90,41 +88,52 @@ export async function GET(request: NextRequest) {
         data: { user },
       } = await supabase.auth.getUser();
 
-      if (user) {
-        const tcAcceptedVersion = await ensureWorkspaceProvisioned(user.id, user.email ?? "");
-
-        let redirectPath: string;
-        if (tcAcceptedVersion !== TC_VERSION) {
-          redirectPath = "/accept-terms";
-        } else {
-          const { data: keys } = await supabase
-            .from("api_keys")
-            .select("id")
-            .eq("user_id", user.id)
-            .eq("provider", "anthropic")
-            .eq("is_valid", true)
-            .limit(1);
-
-          if (!keys || keys.length === 0) {
-            redirectPath = "/setup-key";
-          } else {
-            // Check if a repository is connected
-            const serviceClient = createServiceClient();
-            const { data: repoUser } = await serviceClient
-              .from("users")
-              .select("repo_status")
-              .eq("id", user.id)
-              .single();
-
-            redirectPath =
-              !repoUser || repoUser.repo_status === "not_connected"
-                ? "/connect-repo"
-                : "/dashboard";
-          }
-        }
-
-        return redirectWithCookies(`${origin}${redirectPath}`, pendingCookies);
+      if (!user) {
+        // Exchange succeeded but getUser returned null — distinct failure
+        // class from "no code" (bottom-of-function fallback). Mirror with a
+        // dedicated op so telemetry doesn't conflate the two.
+        reportSilentFallback(null, {
+          feature: "auth",
+          op: "getUser_null_after_exchange",
+          message: "exchangeCodeForSession ok but getUser returned null",
+          extra: { origin },
+        });
+        return NextResponse.redirect(`${origin}/login?error=auth_failed`);
       }
+
+      const tcAcceptedVersion = await ensureWorkspaceProvisioned(user.id, user.email ?? "");
+
+      let redirectPath: string;
+      if (tcAcceptedVersion !== TC_VERSION) {
+        redirectPath = "/accept-terms";
+      } else {
+        const { data: keys } = await supabase
+          .from("api_keys")
+          .select("id")
+          .eq("user_id", user.id)
+          .eq("provider", "anthropic")
+          .eq("is_valid", true)
+          .limit(1);
+
+        if (!keys || keys.length === 0) {
+          redirectPath = "/setup-key";
+        } else {
+          // Check if a repository is connected
+          const serviceClient = createServiceClient();
+          const { data: repoUser } = await serviceClient
+            .from("users")
+            .select("repo_status")
+            .eq("id", user.id)
+            .single();
+
+          redirectPath =
+            !repoUser || repoUser.repo_status === "not_connected"
+              ? "/connect-repo"
+              : "/dashboard";
+        }
+      }
+
+      return redirectWithCookies(`${origin}${redirectPath}`, pendingCookies);
     }
   }
 
