@@ -36,13 +36,17 @@ spot.
 | 1a | `curl http://localhost:3001/health` returns 200 | container is alive | enforced |
 | 1b | `curl http://localhost:3001/login` returns 200 with non-empty body | public route renders | enforced |
 | 1c | `curl http://localhost:3001/dashboard --max-redirs 0` returns 200/302/307, body does NOT contain `data-error-boundary=` | middleware redirect or successful render; rejects SSR-rendered error.tsx | enforced |
-| 2 | Headless chromium hydrates `/dashboard` and observes no console errors | client-only throws (e.g. validator at module load) | **deferred — D1** |
+| 2 | Headless chromium hydrates `/login` AND `/dashboard`; rejects on any `pageerror`, console.error, or `Unhandled error` event during hydration | client-only throws at module load (validators, polyfill incompatibilities, encoding mismatches) | **required — was D1, promoted post-#3014** |
 | 3 | `apps/web-platform/infra/canary-bundle-claim-check.sh` fetches the deployed login chunk and asserts the inlined Supabase JWT has canonical claims (`iss=supabase`, `role=anon`, ref shape) | inlined build-arg corruption (the #3007 regression class) — runs without a browser, catches what Layer 1 cannot see | enforced |
 
-Layer 1 is the cheapest broad-coverage gate. Layer 2 is the only thing
-that catches the exact PR #3007 regression class. Layer 3 is a
-build-arg integrity check — if Doppler / GitHub secret / build-arg
-plumbing drifts, Layer 3 detects it without needing a browser.
+Layer 1 is the cheapest broad-coverage gate. Layer 2 is the ONLY layer
+that exercises the production browser environment — including webpack's
+`buffer@5.x` polyfill, which was the missing gate for the
+`Buffer.from(_, "base64url")` regression class. Layer 3 covers
+build-arg integrity (claim shape) but cannot detect runtime polyfill
+incompatibilities. The post-#3014 incident (validator throws
+`Unknown encoding: base64url` in the browser despite a canonical JWT)
+forced Layer 2 from deferred to required.
 
 ## Body-content sentinel — structured marker
 
