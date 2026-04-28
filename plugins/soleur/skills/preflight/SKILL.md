@@ -430,6 +430,50 @@ If `RESULT=PASS_INCIDENT` or `RESULT=PASS_AGGREGATE`: **PASS**.
 - **FAIL** — Sensitive-path diff with missing or empty User-Brand Impact section; OR `none` threshold without scope-out; OR missing/invalid threshold line.
 - **SKIP** — No sensitive paths touched, OR no PR exists yet (defer to post-PR run).
 
+### Check 8: Service Worker Cache Bump on Client-Bundle Regression Fix
+
+**Path-gated:** only runs when `git diff --name-only origin/main...HEAD` includes BOTH a regression-fix marker (a commit subject starting with `fix(`, `fix:`, or `hotfix`) AND any file under `apps/web-platform/lib/supabase/`, `apps/web-platform/sentry.client.config.ts`, `apps/web-platform/lib/auth/`, `apps/web-platform/lib/byok/`, or `apps/web-platform/components/error-boundary-view.tsx`. Otherwise return **SKIP** with note: "No client-bundle regression-fix surface detected."
+
+**Rationale:** Content-hashed Next.js chunks normally invalidate cache automatically — new content → new filename → SW cache miss → fresh fetch. But the SW at `apps/web-platform/public/sw.js` uses a cache-first strategy under a single `CACHE_NAME` for `/_next/static/**`, and old broken chunks remain cached under their old filenames until either (a) browser eviction, or (b) the activate handler purges them via a `CACHE_NAME` bump. After PR #3014 deployed v0.58.0 with a corrected validator, users still saw the dashboard error.tsx because their SW was serving cached PR #3007 chunks. Without bumping `CACHE_NAME`, a regression fix to the inlined client bundle relies on every user manually clearing site data — unacceptable for an auth-tree outage.
+
+**Step 8.1: Detect regression-fix commit subject.**
+
+```bash
+git log origin/main..HEAD --pretty=%s | grep -iE '^(fix\(|fix:|hotfix)' | head -1
+```
+
+If empty, return **SKIP** with note: "No fix(...) commit on branch."
+
+**Step 8.2: Detect client-bundle surface in diff.**
+
+```bash
+git diff --name-only origin/main...HEAD | grep -E '^apps/web-platform/(lib/(supabase|auth|byok)/|sentry\.client\.config\.ts|components/error-boundary-view\.tsx)' | head -1
+```
+
+If empty, return **SKIP** with note: "No client-bundle surface touched."
+
+**Step 8.3: Compare `CACHE_NAME` against `origin/main`.**
+
+Run as separate Bash calls (no command substitution per skill convention):
+
+```bash
+git show origin/main:apps/web-platform/public/sw.js 2>/dev/null | grep -oE 'CACHE_NAME[[:space:]]*=[[:space:]]*"[^"]+"' | head -1
+```
+
+```bash
+grep -oE 'CACHE_NAME[[:space:]]*=[[:space:]]*"[^"]+"' apps/web-platform/public/sw.js | head -1
+```
+
+If the two values are byte-equal, **FAIL** with: "Client-bundle regression fix detected on branch but `CACHE_NAME` in `apps/web-platform/public/sw.js` was not bumped. Old chunks remain cached for users with an active SW registration. Bump the suffix (e.g., `v2` → `v3`) so the activate handler purges stale caches on next page load."
+
+If the values differ (suffix bumped), **PASS**.
+
+**Result:**
+
+- **PASS** — `CACHE_NAME` bumped relative to `origin/main`, OR no client-bundle regression-fix surface detected.
+- **FAIL** — client-bundle regression fix on branch with unchanged `CACHE_NAME`. Bump the suffix to force-purge the stale-cache class.
+- **SKIP** — no `fix(...)` commit, OR no client-bundle surface in the diff.
+
 ### Check 7: Canary Probe Set Covers Authenticated Surface
 
 **Path-gated:** only runs when `git diff --name-only origin/main...HEAD` contains `apps/web-platform/infra/ci-deploy.sh`. Otherwise return **SKIP** with note: "ci-deploy.sh untouched."
@@ -483,6 +527,7 @@ After all checks complete, aggregate results into a structured report:
 | Production Bundle Supabase Host | PASS/FAIL/SKIP | <details> |
 | Brand-Survival Self-Review | PASS/FAIL/SKIP | <details> |
 | Canary Probe Set Covers Auth Surface | PASS/FAIL/SKIP | <details> |
+| SW Cache Bump on Client-Bundle Fix | PASS/FAIL/SKIP | <details> |
 
 **Overall: PASS / FAIL**
 ```
