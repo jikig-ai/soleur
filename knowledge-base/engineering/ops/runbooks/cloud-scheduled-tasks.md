@@ -195,6 +195,69 @@ triggering the watchdog (#2896) on 2026-04-25. Fix raised budget to
 `--max-turns 40` + `timeout-minutes: 30` (0.75 min/turn ratio) and added
 STEP 2 dedup + STEP 2.5 heartbeat issue.
 
+### H8 — Frontmatter parser truncates multi-colon values (`awk -F': '`)
+
+Workflow STEP 2 dedup logic compares a frontmatter-derived title against
+existing-issue titles via `gh issue list --search "\"$CANONICAL_TITLE\" in:title"`.
+If the parser truncates the title at an inner `: ` or leaves a trailing
+quote artifact, the search returns no match — dedup misfires and a fresh
+duplicate issue is filed each run. Two failure modes share the root cause:
+
+1. **`awk -F': '` field-split.** Sets the awk Field Separator to `: `;
+   `$2` returns only the chunk between the first and second `: `. A title
+   like `"Show HN: Soleur — agents that call APIs"` parses as `Show HN`.
+2. **`sub(/^"|"$/, "", s)` regex alternation.** POSIX `sub()` replaces
+   ONE match. Alternation `^"|"$` matches the leading `"` first; the
+   trailing `"` survives untouched. `Agents That Use APIs, Not Browsers"`
+   carries the trailing quote into the canonical title.
+
+**Signature:**
+
+- New audit issues filed with titles missing inner-colon content
+  (`[Content] Overdue: Show HN (was scheduled for …)`).
+- New audit issues with trailing `\"` artifact in the canonical title.
+- Existing canonical issues remain open in parallel — DEDUP counter
+  never increments for those slots.
+
+**Verify:**
+
+```bash
+for f in knowledge-base/marketing/distribution-content/*.md; do
+  title=$(awk -F': ' '/^title:/{sub(/^"|"$/,"",$2); print $2; exit}' "$f")
+  echo "$(basename "$f") | [$title]"
+done | grep -E '\["?(Show HN|[^"]*"$)'
+```
+
+Any line with `[Show HN]` (truncated) or `…"]` (trailing-quote) is broken.
+
+**Fix:** Replace the FS-based parser with `match() + substr()` and use
+TWO `sub()` calls per quote style:
+
+```bash
+TITLE_RAW=$(awk 'match($0, /^title: ?/) {
+  s = substr($0, RLENGTH + 1)
+  sub(/^"/, "", s); sub(/"$/, "", s)
+  sub(/^'\''/, "", s); sub(/'\''$/, "", s)
+  print s; exit
+}' "$FILE")
+```
+
+`match()` + `substr()` are POSIX awk and run on `mawk 1.3.4` (GHA
+`ubuntu-latest` default), `gawk`, and BSD `nawk`. Fix applies anywhere
+a workflow extracts a frontmatter scalar — copy this template instead
+of re-deriving an FS-based parser.
+
+**Limitations:** does NOT handle YAML block scalars (`title: >-`) or
+multi-line folded strings. The corpus does not currently use them; if
+a future content file does, audit the parser before merging.
+
+**Reference incident:** issue #2987 — campaign-calendar run 25043177327
+(2026-04-28) filed duplicates #2982/#2983/#2984 against existing
+canonical audits #2146/#2969/#2970. Root cause: STEP 2 step (a) inline
+parser carried the FS-based form forward from PR #2974. Fixed in
+PR #<this-PR> (closes #2987); duplicates closed as duplicate-of-bug
+post-merge per `wg-when-fixing-a-workflow-gates-detection`.
+
 ## Restore Procedure (generalized)
 
 Based on the diagnosed H\* above:
