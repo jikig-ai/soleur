@@ -19,6 +19,8 @@ describe("setup-dom.ts cleanup surfaces", () => {
     ["unstubAllGlobals", "vi.unstubAllGlobals()"],
     ["useRealTimers", "vi.useRealTimers()"],
     ["originalFetch capture", "originalFetch"],
+    ["originalXHR capture", "originalXHR"],
+    ["XMLHttpRequest restore line", "globalThis.XMLHttpRequest = originalXHR"],
   ])("retains %s", (_label, token) => {
     expect(source).toContain(token);
   });
