@@ -264,16 +264,63 @@ case "$COMPONENT" in
       -p 0.0.0.0:3001:3000 \
       "$IMAGE:$TAG"
 
-    # Health-check canary
+    # Health-check canary.
+    #
+    # Layered probe rationale (see knowledge-base/engineering/ops/runbooks/canary-probe-set.md):
+    #   - /health is middleware-bypassed and never imports the Supabase client,
+    #     so a broken inlined NEXT_PUBLIC_SUPABASE_* value passes /health.
+    #   - /login is a public route; SSR exercises the auth-page render path.
+    #   - /dashboard is auth-required; an unauthenticated request middleware-
+    #     redirects to /login (307). SSR returning 200 with the error.tsx
+    #     sentinel ('An unexpected error occurred') indicates a server-side
+    #     render throw and must roll back.
+    #   - The body-sentinel grep is the load-bearing client-symptom check —
+    #     HTTP status alone misses SSR-rendered error boundaries.
+    #
+    # Layer 2 (chromium-in-canary) and Layer 3 (inlined-JWT bundle assertion)
+    # are tracked as follow-ups; see the runbook.
+    readonly CANARY_DASH_BODY="/tmp/canary-dash-body.html"
+    readonly CANARY_LOGIN_BODY="/tmp/canary-login-body.html"
+    readonly CANARY_ERROR_SENTINEL="An unexpected error occurred"
+
+    rm -f "$CANARY_DASH_BODY" "$CANARY_LOGIN_BODY"
+
     echo "Waiting for canary health check..."
     CANARY_HEALTHY=false
     for i in $(seq 1 10); do
-      if curl -sf http://localhost:3001/health; then
-        CANARY_HEALTHY=true
-        echo " Canary OK"
-        break
+      if ! curl -sf --max-time 5 http://localhost:3001/health; then
+        sleep 3
+        continue
       fi
-      sleep 3
+      # /login: public route, SSR must produce a non-empty 200 body.
+      LOGIN_HTTP=$(curl -s --max-time 5 -o "$CANARY_LOGIN_BODY" \
+        -w '%{http_code}' http://localhost:3001/login || echo "000")
+      if [[ "$LOGIN_HTTP" != "200" ]] || [[ ! -s "$CANARY_LOGIN_BODY" ]]; then
+        sleep 3
+        continue
+      fi
+      # /dashboard: auth-required; unauthenticated should redirect (307/302)
+      # OR render successfully if the canary somehow has a valid session.
+      # 5xx, missing body, or the error.tsx sentinel string in the body is
+      # always a fail.
+      DASH_HTTP=$(curl -s --max-time 5 --max-redirs 0 \
+        -o "$CANARY_DASH_BODY" -w '%{http_code}' \
+        http://localhost:3001/dashboard || echo "000")
+      if [[ ! "$DASH_HTTP" =~ ^(200|302|307)$ ]]; then
+        sleep 3
+        continue
+      fi
+      # Body-content rejection: the error-boundary sentinel must NOT appear in
+      # any rendered page (server-component throws would render error.tsx
+      # during SSR; this catches them).
+      if grep -qF "$CANARY_ERROR_SENTINEL" "$CANARY_LOGIN_BODY" 2>/dev/null \
+        || grep -qF "$CANARY_ERROR_SENTINEL" "$CANARY_DASH_BODY" 2>/dev/null; then
+        sleep 3
+        continue
+      fi
+      CANARY_HEALTHY=true
+      echo " Canary OK (health/login/dashboard probes passed)"
+      break
     done
 
     # Verify bwrap sandbox works inside canary (#1557).

@@ -430,6 +430,42 @@ If `RESULT=PASS_INCIDENT` or `RESULT=PASS_AGGREGATE`: **PASS**.
 - **FAIL** — Sensitive-path diff with missing or empty User-Brand Impact section; OR `none` threshold without scope-out; OR missing/invalid threshold line.
 - **SKIP** — No sensitive paths touched, OR no PR exists yet (defer to post-PR run).
 
+### Check 7: Canary Probe Set Covers Authenticated Surface
+
+**Path-gated:** only runs when `git diff --name-only origin/main...HEAD` contains `apps/web-platform/infra/ci-deploy.sh`. Otherwise return **SKIP** with note: "ci-deploy.sh untouched."
+
+**Rationale:** The legacy canary probed only `/health`, which is middleware-bypassed and never imports `lib/supabase/client.ts`. A broken inlined `NEXT_PUBLIC_SUPABASE_*` value would pass canary and ship to prod (PR #3014 incident class). The canary contract — documented in `knowledge-base/engineering/ops/runbooks/canary-probe-set.md` — requires probes for every public route (`/login`) AND auth-gated entry (`/dashboard`) PLUS a body-content sentinel rejection.
+
+**Step 7.1: Assert /dashboard probe presence.**
+
+```bash
+grep -c '/dashboard' apps/web-platform/infra/ci-deploy.sh
+```
+
+The count MUST be ≥ 1.
+
+**Step 7.2: Assert /login probe presence.**
+
+```bash
+grep -c '/login' apps/web-platform/infra/ci-deploy.sh
+```
+
+The count MUST be ≥ 1.
+
+**Step 7.3: Assert error-sentinel body-content rejection.**
+
+```bash
+grep -F 'An unexpected error occurred' apps/web-platform/infra/ci-deploy.sh
+```
+
+The grep MUST exit 0 (sentinel present) — without it, an SSR-rendered error.tsx would still pass HTTP-status probing.
+
+**Result:**
+
+- **PASS** — all three greps satisfy their conditions.
+- **FAIL** — any of: `/dashboard` missing from canary, `/login` missing from canary, or the error-sentinel body check absent. Operator must restore the layered probe before re-running preflight.
+- **SKIP** — `apps/web-platform/infra/ci-deploy.sh` was not modified in this branch.
+
 ## Phase 2: Aggregate Go/No-Go Report
 
 After all checks complete, aggregate results into a structured report:
@@ -446,6 +482,7 @@ After all checks complete, aggregate results into a structured report:
 | Environment Isolation | PASS/FAIL/SKIP | <details> |
 | Production Bundle Supabase Host | PASS/FAIL/SKIP | <details> |
 | Brand-Survival Self-Review | PASS/FAIL/SKIP | <details> |
+| Canary Probe Set Covers Auth Surface | PASS/FAIL/SKIP | <details> |
 
 **Overall: PASS / FAIL**
 ```

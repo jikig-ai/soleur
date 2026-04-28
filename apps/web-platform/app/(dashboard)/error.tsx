@@ -2,7 +2,11 @@
 import { useEffect } from "react";
 import { reportSilentFallback } from "@/lib/client-observability";
 
-export default function Error({
+// Segment-scoped error boundary for the (dashboard) route group. A throw inside
+// any /dashboard, /knowledge-base, /chat, or /settings render is caught here
+// instead of bubbling to app/error.tsx, so the Sentry event carries
+// `segment: dashboard` and the layout chrome above the boundary stays mounted.
+export default function DashboardSegmentError({
   error,
   reset,
 }: {
@@ -10,14 +14,11 @@ export default function Error({
   reset: () => void;
 }) {
   useEffect(() => {
-    // Do NOT pass error.message into `extra` — validator throws may include a
-    // JWT preview. The Error object itself is captured by Sentry; the client
-    // SDK's beforeSend strips x-nonce / cookie headers but does not redact
-    // message bodies, so anything we add here ships verbatim.
     reportSilentFallback(error, {
       feature: "dashboard-error-boundary",
       op: "render",
       extra: {
+        segment: "dashboard",
         digest: error.digest ?? null,
         route:
           typeof window !== "undefined" ? window.location.pathname : null,

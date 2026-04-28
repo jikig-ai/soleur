@@ -1,4 +1,5 @@
 import { createBrowserClient } from "@supabase/ssr";
+import { reportSilentFallback } from "@/lib/client-observability";
 import { assertProdSupabaseUrl } from "./validate-url";
 import { assertProdSupabaseAnonKey } from "./validate-anon-key";
 
@@ -16,11 +17,27 @@ let warnedMissing = false;
 // Call order is load-bearing: `assertProdSupabaseUrl` runs first because
 // `assertProdSupabaseAnonKey`'s JWT-ref cross-check anchors on the URL's
 // canonical first label.
-assertProdSupabaseUrl(process.env.NEXT_PUBLIC_SUPABASE_URL);
-assertProdSupabaseAnonKey(
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY,
-  process.env.NEXT_PUBLIC_SUPABASE_URL,
-);
+//
+// The try/catch is observability-only: it captures a Sentry event with the
+// failed-claim context BEFORE re-throwing, so the throw surfaces at Sentry
+// even if the React error boundary's own captureException never gets a
+// chance to run (page unloads before the queue flushes). The fail-closed
+// posture is preserved — the validator throw still aborts module load and
+// every authenticated visitor sees the boundary, which is the correct
+// security behavior for a service-role-paste scenario.
+try {
+  assertProdSupabaseUrl(process.env.NEXT_PUBLIC_SUPABASE_URL);
+  assertProdSupabaseAnonKey(
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY,
+    process.env.NEXT_PUBLIC_SUPABASE_URL,
+  );
+} catch (err) {
+  reportSilentFallback(err, {
+    feature: "supabase-validator-throw",
+    op: "module-load",
+  });
+  throw err;
+}
 
 export function createClient() {
   if (!process.env.NEXT_PUBLIC_SUPABASE_URL) {
