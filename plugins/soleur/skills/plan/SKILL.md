@@ -249,6 +249,7 @@ Think like a product manager - what would make this issue clear and actionable? 
 - [ ] Prepare code examples or reproduction steps if applicable, name the mock filenames in the lists
 - [ ] When planning a directory rename, enumerate ALL files in the target directory as potential self-reference holders -- directory trees and conceptual prose derived from the directory name don't match path-pattern greps
 - [ ] When the plan prescribes scoping a helper function by a new column/predicate, `rg` the codebase for every other inline query on the same table that BYPASSES the helper (id-based lookups, pre-helper historical queries, WS-handler inline SELECTs) and list each as a `Files to Edit` entry -- sibling queries are the most common silent backdoor after a tenant-scope change. See learning `2026-04-22-scope-by-new-column-audit-every-query-not-just-the-helper.md`.
+- [ ] When the plan prescribes any path glob (e.g., `apps/foo/**`, `**/doppler*.{yml,yaml,sh}`, `.github/workflows/*foo*.yml`), verify each glob matches ≥1 real file via `git ls-files | grep -E '<translated-glob>'` AND for negative-coverage gates (security gates, denylist filters, sensitive-path detectors) enumerate sibling files at the same architectural depth — globs constructed from a plan miss files the plan never inventoried. See AGENTS.md `hr-when-a-plan-specifies-relative-paths-e-g` and learning `2026-04-28-plan-globs-must-be-verified-against-repo-structure.md`.
 
 ### 2.5. Domain Review Gate
 
@@ -349,6 +350,45 @@ No cross-domain implications detected — infrastructure/tooling change.
 ```
 
 Place after Acceptance Criteria, before Test Scenarios (or before the last major section). If the plan lacks an Acceptance Criteria heading, place before the last major section or at the end of the plan.
+
+### 2.6. User-Brand Impact Section (Always)
+
+Every plan MUST include a `## User-Brand Impact` section. This is the framing-time enforcement of AGENTS.md `hr-weigh-every-decision-against-target-user-impact` and the gate that catches the #2887-class blind spot — decisions weighed on technical and convenience axes only, with no question asked about what one user's breach would cost the brand.
+
+**Step 1 — Insert the section.** If the plan draft does not yet contain a `## User-Brand Impact` heading, insert one using the template from `plugins/soleur/skills/plan/references/plan-issue-templates.md`. The section MUST appear between the description and the Acceptance Criteria. The three required lines:
+
+- `**If this lands broken, the user experiences:**` — name a concrete, user-facing artifact.
+- `**If this leaks, the user's [data / workflow / money] is exposed via:**` — name a concrete exposure vector.
+- `**Brand-survival threshold:** none | single-user incident | aggregate pattern` — choose one.
+
+**Step 2 — Brainstorm carry-forward.** If the brainstorm document loaded in Phase 0.5 contains a `## User-Brand Impact` framing (which it should when brainstorm Phase 0.1 set `USER_BRAND_CRITICAL=true`), import the threshold and the artifact/vector declarations directly rather than re-authoring. Carry-forward is preferred — re-authoring at plan time risks drift from the brainstormed framing.
+
+**Step 3 — Threshold-driven sign-off requirement.** If the threshold resolves to `single-user incident`:
+
+1. Add `requires_cpo_signoff: true` to the plan's YAML frontmatter.
+2. Display: "CPO sign-off required at plan time before `/work` begins. Invoke CPO domain leader if not already covered by Phase 2.5 carry-forward, or confirm CPO has reviewed the brainstorm."
+3. Note in the plan that `user-impact-reviewer` will be invoked at review-time (handled by `plugins/soleur/skills/review/SKILL.md` conditional-agent block).
+
+**Sign-off lifecycle staging — who participates at which phase:**
+
+The set of mandatory leaders changes by lifecycle phase, and that is by design — different leaders weigh in at different decision points:
+
+- **Brainstorm phase (framing time):** CPO + CLO + CTO are spawned in parallel when `USER_BRAND_CRITICAL=true`. Rationale: the approach has not been chosen yet, so all three lenses (product blast-radius framing, legal/compliance, architectural blast-radius) need to land before the plan exists. See `plugins/soleur/skills/brainstorm/references/brainstorm-domain-config.md` `## User-Brand-Critical Tag Processing`.
+- **Plan phase (this gate):** CPO sign-off only. Rationale: the plan implements the approach already framed by all three brainstorm leaders; the plan-time sign-off is the single product-owner ack on the technical approach. CLO and CTO concerns from brainstorm should be reflected in the plan body (Risks section, Sharp Edges, Domain Review carry-forward) — they do not re-sign here.
+- **Review phase (PR time):** CPO is not re-invoked; instead the `user-impact-reviewer` agent enumerates failure modes against the diff. Rationale: review-time concerns are diff-shaped, not approach-shaped.
+- **Ship phase (preflight Check 6):** No human sign-off; mechanical gate that the section exists and the threshold is valid.
+
+This tiered model is intentional — re-asking CPO/CLO/CTO at every phase would dilute the framing into ceremony. The framing question is asked once (brainstorm), the answer is locked in (plan), the diff is checked against the answer (review), the gate verifies the answer was given (ship).
+
+If the threshold resolves to `aggregate pattern`, no per-PR sign-off is added but the section must still be present.
+
+If the threshold resolves to `none` AND the diff touches a sensitive path (canonical regex defined in `plugins/soleur/skills/preflight/SKILL.md` Check 6 Step 6.1), the section MUST contain a `threshold: none, reason: <one-sentence non-empty reason>` scope-out bullet. Without it, preflight will FAIL at ship time.
+
+**Step 4 — Sharp-edge note.** When emitting the final plan output, add a Sharp Edges entry:
+
+> A plan whose `## User-Brand Impact` section is empty, contains only `TBD`/`TODO`/placeholder text, or omits the threshold will fail `deepen-plan` Phase 4.6. Fill it before requesting deepen-plan or `/work`.
+
+**Why:** Triggered by #2887 — the dev/prd Doppler-config collapse shipped for months because every existing gate weighed the decision on technical and convenience axes only. The framing-time enforcement here, combined with deepen-plan Phase 4.6 (halt on missing section), preflight Check 6 (ship-time gate), and the `user-impact-reviewer` conditional agent, closes the workflow-level loop.
 
 ### 3. SpecFlow Analysis
 

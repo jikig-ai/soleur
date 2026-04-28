@@ -25,6 +25,14 @@ date: YYYY-MM-DD
 
 [Brief problem/feature description]
 
+## User-Brand Impact
+
+- **If this lands broken, the user experiences:** [concrete, named user-facing artifact]
+- **If this leaks, the user's [data / workflow / money] is exposed via:** [concrete exposure vector]
+- **Brand-survival threshold:** `none` | `single-user incident` | `aggregate pattern`
+
+*Scope-out override (only when `threshold: none` AND the diff touches a sensitive path flagged by preflight):* `threshold: none, reason: <one sentence naming why the touched path is not user-impacting>`
+
 ## Acceptance Criteria
 
 - [ ] Core requirement 1
@@ -115,6 +123,14 @@ List ALL code paths that touch the security surface being fixed:
 - What allowlists or bypass mechanisms exist for this boundary?
 - Which of those paths are checked by the fix, and which are not?
 - For each unchecked path: is it safe (with justification) or a gap (file tracking issue)?
+
+## User-Brand Impact
+
+- **If this lands broken, the user experiences:** [concrete, named user-facing artifact]
+- **If this leaks, the user's [data / workflow / money] is exposed via:** [concrete exposure vector]
+- **Brand-survival threshold:** `none` | `single-user incident` | `aggregate pattern`
+
+*Scope-out override (only when `threshold: none` AND the diff touches a sensitive path flagged by preflight):* `threshold: none, reason: <one sentence naming why the touched path is not user-impacting>`
 
 ## Acceptance Criteria
 
@@ -218,6 +234,16 @@ date: YYYY-MM-DD
 ## Alternative Approaches Considered
 
 [Other solutions evaluated and why rejected]
+
+## User-Brand Impact
+
+- **If this lands broken, the user experiences:** [concrete, named user-facing artifact]
+- **If this leaks, the user's [data / workflow / money] is exposed via:** [concrete exposure vector]
+- **Brand-survival threshold:** `none` | `single-user incident` | `aggregate pattern`
+
+*Scope-out override (only when `threshold: none` AND the diff touches a sensitive path flagged by preflight):* `threshold: none, reason: <one sentence naming why the touched path is not user-impacting>`
+
+If the threshold is `single-user incident` or `aggregate pattern`, list each user-facing artifact + exposure vector pair on its own bullet so `user-impact-reviewer` can cross-check them against the diff.
 
 ## Acceptance Criteria
 

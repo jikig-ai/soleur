@@ -26,7 +26,7 @@ Run `git rev-parse --abbrev-ref HEAD` to get the current branch name.
 
 ## Phase 1: Run All Checks in Parallel
 
-Run these four checks (plus the Not-Bare-Repo assertion) as parallel Bash tool calls. Each returns PASS, FAIL, or SKIP.
+Run these six checks (plus the Not-Bare-Repo assertion) as parallel Bash tool calls. Each returns PASS, FAIL, or SKIP.
 
 ### Assertion: Not-Bare-Repo
 
@@ -286,7 +286,128 @@ The union of step 5.2 outputs must contain at least one host matching `^https://
 - **FAIL** — any placeholder host is present in the bundle (e.g., `https://test.supabase.co`). Indicates a build-arg leak; the operator must rotate `NEXT_PUBLIC_SUPABASE_URL` (GitHub repo secret) and trigger a fresh release per the runbook in the learning file.
 - **SKIP** — chunk not retrievable, or chunk contains zero Supabase host references (likely a chunking change moved the supabase init out of the login chunk — investigate manually before re-running).
 
+### Check 6: Brand-Survival Self-Review
 
+Enforces `hr-weigh-every-decision-against-target-user-impact`: PRs that touch credentials, auth, data, payments, or user-owned resources must declare a `## User-Brand Impact` section (with a valid threshold) in the PR body. The section is the ship-time signal that the framing question was answered before the change reached production.
+
+**Step 6.1: Detect sensitive-path diff.**
+
+The canonical sensitive-path regex (single source of truth, mirrored verbatim in `plugins/soleur/skills/deepen-plan/SKILL.md` Phase 4.6 Step 2):
+
+```bash
+SENSITIVE_PATH_RE='^(apps/web-platform/(server|supabase|app/api|middleware\.ts$)|apps/web-platform/lib/(stripe|auth|byok|security-headers|csp|log-sanitize|safe-session|safe-return-to|supabase)|apps/web-platform/lib/(legal|auth)/|apps/[^/]+/infra/|.+/doppler[^/]*\.(yml|yaml|sh)$|\.github/workflows/.*(doppler|secret|token|deploy|release|version-bump|web-platform|infra-validation|cla|cf-token|linkedin-token).*\.ya?ml$)'
+
+set -uo pipefail
+git diff --name-only origin/main...HEAD | grep -E "$SENSITIVE_PATH_RE"
+```
+
+Run as two separate Bash calls (assignment, then the piped `git`/`grep`). The regex covers every Next.js attack surface (`middleware.ts`, every `app/api/**` route, security/CSP/auth/session/legal libraries, infra Terraform under `apps/*/infra/`, all Doppler-aware shell scripts, and every credential-handling workflow even when `doppler` is not in the filename).
+
+If `grep` exits non-zero (no match), return **SKIP** with note: "No sensitive paths touched."
+
+**Step 6.2: Fetch the PR body to a private temp file.**
+
+Use `mktemp` so the path is not predictable on multi-user hosts (defends against tmp-symlink attacks per general POSIX best practice). Two separate Bash calls (no command substitution):
+
+```bash
+PR_BODY_FILE=$(umask 077 && mktemp -t preflight-pr-body.XXXXXXXX.md)
+```
+
+```bash
+gh pr view --json body --jq .body > "$PR_BODY_FILE"
+```
+
+Trap exit so the temp file is removed: `trap 'rm -f "$PR_BODY_FILE"' EXIT`. If `gh pr view` fails (no PR exists for the current branch), return **SKIP** with note: "No PR available — section validation deferred to next preflight run after PR creation."
+
+**Step 6.3: Resolve the canonical compliance source (PR body OR linked plan file).**
+
+The `## User-Brand Impact` section may live in the PR body itself (typical for short PRs) OR in a plan file referenced from the PR body (typical for plans authored via `/soleur:plan`). Both signals are valid per `plugins/soleur/skills/review/SKILL.md` `<conditional_agents>` block. Resolve a single check input by stripping noise from the PR body and concatenating any referenced plan file.
+
+```bash
+# 6.3a: strip HTML comments and fenced code blocks from PR body before any regex match
+SCRUBBED_BODY=$(awk 'BEGIN{f=0} /^[[:space:]]*```/{f=!f; next} !f{print}' "$PR_BODY_FILE" \
+  | perl -0777 -pe 's/<!--.*?-->//gs')
+```
+
+```bash
+# 6.3b: extract any linked plan file path (knowledge-base/project/plans/*.md) from the scrubbed body
+PLAN_PATH=$(printf '%s' "$SCRUBBED_BODY" | grep -Eo 'knowledge-base/project/plans/[^[:space:])"`'\'']+\.md' | head -n 1 || true)
+```
+
+```bash
+# 6.3c: build the combined check input
+COMBINED=$(mktemp -t preflight-combined.XXXXXXXX.md)
+printf '%s\n' "$SCRUBBED_BODY" > "$COMBINED"
+if [[ -n "$PLAN_PATH" && -f "$PLAN_PATH" ]]; then
+  awk 'BEGIN{f=0} /^[[:space:]]*```/{f=!f; next} !f{print}' "$PLAN_PATH" \
+    | perl -0777 -pe 's/<!--.*?-->//gs' >> "$COMBINED"
+fi
+trap 'rm -f "$PR_BODY_FILE" "$COMBINED"' EXIT
+```
+
+The `awk` pass strips fenced code blocks (so an HTML/markdown example inside ` ``` ` cannot fool a substring match). The `perl -0777` pass strips HTML comments (`<!-- ... -->` including multi-line). Anything inside fences/comments cannot appear in `$COMBINED`.
+
+**Step 6.4: Check for the section heading.**
+
+```bash
+grep -q '^## User-Brand Impact' "$COMBINED"
+```
+
+If absent, return **FAIL** with: "Sensitive-path diff detected but neither PR body nor linked plan file contains a `## User-Brand Impact` section. Add the section per `plugins/soleur/skills/plan/references/plan-issue-templates.md`."
+
+**Step 6.5: Validate threshold and scope-out — anchored, not substring.**
+
+Extract the threshold line. Require canonical bullet form (`- **Brand-survival threshold:** …`) so a free-text sentence containing the words "single-user incident" cannot pass:
+
+```bash
+THRESHOLD_LINE=$(grep -E '^[[:space:]]*[-*][[:space:]]+\*\*Brand-survival threshold:\*\*' "$COMBINED" | head -n 1)
+```
+
+If `$THRESHOLD_LINE` is empty, return **FAIL** with: "User-Brand Impact section present but the canonical bullet `- **Brand-survival threshold:** <label>` is missing. Use exactly the bullet form from `plan-issue-templates.md`."
+
+Match the label as a discrete token. The value must follow the `**Brand-survival threshold:**` marker as an isolated word (optionally backticked) terminated by a value-boundary character (end-of-line, period, comma, semicolon, em-dash, or hyphen surrounded by spaces). This permits trailing commentary like `` `single-user incident` — explanation… `` while rejecting embedded substrings like "this is not a single-user incident":
+
+```bash
+# Boundary regex: end-of-line OR punctuation/dash that indicates "value ends here, commentary follows"
+BOUNDARY='($|[[:space:]]*[.,;]|[[:space:]]+[—–-][[:space:]])'
+if   [[ "$THRESHOLD_LINE" =~ \*\*Brand-survival[[:space:]]+threshold:\*\*[[:space:]]+\`?single-user[[:space:]]+incident\`?$BOUNDARY ]]; then
+  RESULT=PASS_INCIDENT
+elif [[ "$THRESHOLD_LINE" =~ \*\*Brand-survival[[:space:]]+threshold:\*\*[[:space:]]+\`?aggregate[[:space:]]+pattern\`?$BOUNDARY ]]; then
+  RESULT=PASS_AGGREGATE
+elif [[ "$THRESHOLD_LINE" =~ \*\*Brand-survival[[:space:]]+threshold:\*\*[[:space:]]+\`?none\`?$BOUNDARY ]]; then
+  RESULT=NEEDS_SCOPEOUT
+else
+  echo "FAIL: threshold value not recognized. The value must immediately follow \`**Brand-survival threshold:**\` and be one of: \`single-user incident\` | \`aggregate pattern\` | \`none\` (terminated by end-of-line, punctuation, or em-dash + space)."
+  exit 1
+fi
+```
+
+If `RESULT=NEEDS_SCOPEOUT`, look for the scope-out bullet — require a non-empty `reason:` (the `\S` after `reason:` is what enforces "explain yourself"):
+
+```bash
+grep -Eq 'threshold:[[:space:]]*none,[[:space:]]*reason:[[:space:]]*\S' "$COMBINED"
+```
+
+- Match (rc 0): **PASS** — operator has justified why the touched sensitive path is not user-impacting.
+- No match: **FAIL** with: "Sensitive-path diff with `threshold: none` requires a `threshold: none, reason: <one-sentence>` scope-out bullet (with a non-empty reason) inside the User-Brand Impact section."
+
+If `RESULT=PASS_INCIDENT` or `RESULT=PASS_AGGREGATE`: **PASS**.
+
+**Headless mode behaviour:** On **FAIL**, abort with the error details (no prompt). On **PASS** or **SKIP**, continue silently.
+
+**Interactive mode behaviour:** On **FAIL**, present the failure reason and offer **AskUserQuestion** with options:
+
+1. "Fill in the section now" — prompt the operator for the three required lines (artifact / vector / threshold), append to the PR body via `gh pr edit --body-file -`, re-run Check 6.
+2. "Add scope-out note" — if the threshold should defensibly be `none`, prompt for the one-sentence reason, append `threshold: none, reason: <reason>` to the section, re-run Check 6.
+3. "Abort — fix elsewhere" — stop the pipeline; operator handles in another tool.
+
+**Result:**
+
+- **PASS** — No sensitive paths touched, OR section present with `single-user incident`/`aggregate pattern` threshold, OR section present with `none` threshold AND a valid scope-out note.
+- **FAIL** — Sensitive-path diff with missing or empty User-Brand Impact section; OR `none` threshold without scope-out; OR missing/invalid threshold line.
+- **SKIP** — No sensitive paths touched, OR no PR exists yet (defer to post-PR run).
+
+## Phase 2: Aggregate Go/No-Go Report
 
 After all checks complete, aggregate results into a structured report:
 
@@ -301,6 +422,7 @@ After all checks complete, aggregate results into a structured report:
 | Lockfile Consistency | PASS/FAIL/SKIP | <details> |
 | Environment Isolation | PASS/FAIL/SKIP | <details> |
 | Production Bundle Supabase Host | PASS/FAIL/SKIP | <details> |
+| Brand-Survival Self-Review | PASS/FAIL/SKIP | <details> |
 
 **Overall: PASS / FAIL**
 ```

@@ -173,6 +173,20 @@ These agents are run ONLY when the PR matches specific criteria. Check the PR fi
 
 - `semgrep-sast`: Known vulnerability signatures (CWE patterns), hardcoded secrets, insecure function calls, taint analysis. Complements security-sentinel's LLM-based architectural review with deterministic rule-based scanning.
 
+**If the plan declares Brand-survival threshold as `single-user incident`:**
+
+15. Task user-impact-reviewer(PR content + plan path) - Enumerate every user-facing failure mode implied by the diff and verify the plan's `## User-Brand Impact` section mitigates or scope-outs each
+
+**When to run user-impact-reviewer:**
+
+- The plan file referenced from the PR body contains literal text `Brand-survival threshold: single-user incident`
+- The PR body itself contains a `## User-Brand Impact` section with that threshold label
+- Either signal alone is sufficient to fire the agent — both signals fire it once (no duplicate invocation)
+
+**What this agent checks:**
+
+- `user-impact-reviewer`: Enumerates concrete user-facing artifacts exposed by the change (`user.email`, `workspace.name`, `api_key.token`, `conversation.id`, `message.body`, `billing.amount`, `oauth.installation_id`, etc.) AND a concrete exposure vector per artifact (cross-tenant read, RLS bypass, credential leak in logs, data loss on rollback, double-charge on retry, silent drop on degraded fallback). Rejects generic boilerplate (e.g., "users experience a bug", "error state", `TBD`/`TODO` placeholders). Coexists with security-sentinel — security-sentinel handles OWASP/CWE scanning across all PRs; user-impact-reviewer handles user-facing-outcome enumeration when the plan declares the brand-survival threshold as `single-user incident`.
+
 </conditional_agents>
 
 ### 2. Rate Limit Fallback

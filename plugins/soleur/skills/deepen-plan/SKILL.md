@@ -316,6 +316,51 @@ source "$(git rev-parse --show-toplevel)/.claude/hooks/lib/incidents.sh" && \
   "When a plan addresses an SSH/network-connectivity s"
 ```
 
+### 4.6. User-Brand Impact Halt (Always)
+
+Per AGENTS.md `hr-weigh-every-decision-against-target-user-impact`, every plan MUST contain a `## User-Brand Impact` section before deepen-plan can proceed. This phase is a hard gate — no deepen agents fan out until the section exists and contains concrete content.
+
+**Step 1 — Locate the section.** Grep the target plan file:
+
+```bash
+grep -q '^## User-Brand Impact' <plan-file>
+```
+
+If the heading is absent, HALT with:
+
+> Error: Plan is missing `## User-Brand Impact` section.
+> See `plugins/soleur/skills/plan/references/plan-issue-templates.md` for the template.
+> Per AGENTS.md `hr-weigh-every-decision-against-target-user-impact`, every plan
+> must answer the user-impact framing question before deepen-plan can proceed.
+> Re-run `/soleur:plan` (or edit the plan directly) to add the section, then re-run deepen-plan.
+
+**Step 2 — Validate the body.** If the heading exists, extract the section body (everything between `^## User-Brand Impact` and the next `^## ` heading). Reject the section as non-compliant if ANY of:
+
+- The body is empty (only whitespace between headings).
+- Every bullet contains only `TBD`, `TODO`, `N/A`, `<placeholder>`, or single-word stubs.
+- The threshold line is missing or the value is not one of `none`, `single-user incident`, or `aggregate pattern`.
+- The threshold is `none` AND the diff (or referenced `Files to edit` list) matches the canonical sensitive-path regex (single source of truth — kept in sync with `plugins/soleur/skills/preflight/SKILL.md` Check 6 Step 6.1):
+
+  ```bash
+  SENSITIVE_PATH_RE='^(apps/web-platform/(server|supabase|app/api|middleware\.ts$)|apps/web-platform/lib/(stripe|auth|byok|security-headers|csp|log-sanitize|safe-session|safe-return-to|supabase)|apps/web-platform/lib/(legal|auth)/|apps/[^/]+/infra/|.+/doppler[^/]*\.(yml|yaml|sh)$|\.github/workflows/.*(doppler|secret|token|deploy|release|version-bump|web-platform|infra-validation|cla|cf-token|linkedin-token).*\.ya?ml$)'
+  ```
+
+  AND no `threshold: none, reason: <one-sentence>` scope-out bullet (with a non-empty reason) is present in the section.
+
+On rejection, HALT with the same error message as Step 1, replacing the first line with the specific failure (`empty body`, `placeholder content`, `missing threshold`, `none-threshold without scope-out`).
+
+**Step 3 — Emit telemetry.** When the halt fires (Step 1 OR Step 2), emit rule-application telemetry so the weekly aggregator records the deepen-plan enforcement layer fired:
+
+```bash
+source "$(git rev-parse --show-toplevel)/.claude/hooks/lib/incidents.sh" && \
+  emit_incident hr-weigh-every-decision-against-target-user-impact applied \
+  "Every plan/PR touching credentials, auth, data, paym"
+```
+
+**Step 4 — Pass-through.** If the section is present, non-empty, has a valid threshold, and (when `none`) has a scope-out line for sensitive-path diffs, deepen-plan proceeds normally. No telemetry is emitted on pass — the gate only records when it activates.
+
+**Why:** The framing layer (brainstorm Phase 0.1) and the template layer (plan Phase 2.6) can both be skipped or filled with placeholders. This phase is the load-bearing pre-implementation gate that catches both — a plan with an empty section cannot pass deepen-plan, which means it cannot proceed to `/work`. Combined with preflight Check 6 (ship-time gate) and the `user-impact-reviewer` conditional agent (review-time gate), this closes the workflow loop introduced for #2887.
+
 ### 5. Discover and Run ALL Review Agents
 
 <thinking>

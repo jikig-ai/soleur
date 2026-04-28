@@ -58,6 +58,52 @@ Options:
 
 If one-shot is selected, pass the original feature description (including any issue references) to `skill: soleur:one-shot` and stop brainstorm execution. Note: this skips brainstorm capture (Phase 3.5), worktree creation (Phase 3), and spec/issue creation (Phase 3.6) -- the one-shot pipeline handles setup through the plan skill.
 
+### Phase 0.1: User-Impact Framing
+
+Per AGENTS.md `hr-weigh-every-decision-against-target-user-impact`, every brainstorm MUST surface the framing question before any domain leader is spawned. The point is to force the user-impact lens onto every decision — even ones that look purely technical at first glance.
+
+**Step 1 — Ask the framing question.** Use the **AskUserQuestion** tool to present:
+
+- **Header:** "User impact"
+- **Question:** "If this decision ships as designed, what is the worst outcome the target user experiences? If it silently fails, what do they see? If it leaks, what data of theirs is exposed? (Answer even if the request seems purely technical — the framing is the point.)"
+- **Multi-select:** false. Use a single free-text answer (the operator may type into the `other` escape if no preset option fits).
+- **Options:** offer presets aligned with the trigger keywords below (e.g., "User data exposure", "Credential leak / auth bypass", "Billing surprise / payment error", "Data loss / corruption", "Trust breach / cross-tenant read", "No direct user impact", "Other"), but the free-text answer is what drives Step 2.
+
+**Step 2 — Parse the answer for trigger keywords.** Scan the free-text answer (case-insensitive substring match) for any of:
+
+User-data + auth lens:
+
+`data loss` | `trust breach` | `credential exposure` | `credential leak` | `billing surprise` | `user data` | `credentials` | `payment` | `auth` | `session` | `pii` | `private` | `cross-tenant` | `RLS` | `secret` | `secrets` | `token` | `api key` | `api keys` | `webhook`
+
+Infrastructure / data-store lens (covers the #2887 vocabulary the user-data lens alone misses — every term here has a corresponding sensitive-path glob in preflight Check 6):
+
+`migration` | `doppler` | `infra` | `infrastructure` | `terraform` | `firewall` | `dev/prd` | `dev to prd` | `supabase` | `service token` | `service-token` | `rotation` | `rotate` | `byok`
+
+If any keyword matches:
+
+1. Set `USER_BRAND_CRITICAL=true` for the rest of the brainstorm session.
+2. Capture a `## User-Brand Impact` block from the answer (artifact named, vector named, threshold inferred — defaulting to `single-user incident` when keywords match) so Phase 3.5 can persist it into the brainstorm document for plan-time carry-forward.
+3. Announce: "Tagged as **user-brand-critical**. CPO + CLO + CTO will be spawned in parallel at Phase 0.5 before other specialists. The plan derived from this brainstorm will inherit `Brand-survival threshold: single-user incident` unless overridden."
+
+If no keyword matches:
+
+1. Set `USER_BRAND_CRITICAL=false`.
+2. Proceed silently to Phase 0.25.
+
+**Step 3 — Emit telemetry on match.** When `USER_BRAND_CRITICAL=true`, emit rule-application telemetry so the weekly aggregator records that the brainstorm enforcement layer fired (see AGENTS.md `hr-weigh-every-decision-against-target-user-impact`):
+
+```bash
+source "$(git rev-parse --show-toplevel)/.claude/hooks/lib/incidents.sh" && \
+  emit_incident hr-weigh-every-decision-against-target-user-impact applied \
+  "Every plan/PR touching credentials, auth, data, paym"
+```
+
+Do NOT emit telemetry when `USER_BRAND_CRITICAL=false` — the gate only records when it activates. The aggregate ratio of "fired vs. asked" is itself a signal worth tracking.
+
+**Step 4 — Persist the framing into the brainstorm document.** When `USER_BRAND_CRITICAL=true`, the brainstorm capture in Phase 3.5 MUST include a `## User-Brand Impact` section reflecting the operator's answer (artifact, vector, threshold). The plan skill's Phase 2.6 carries this section forward into the plan, so re-authoring at plan time is unnecessary and risks drift.
+
+**Why:** Triggered by #2887 — the dev/prd Doppler-config collapse shipped because every prior gate weighed the decision on technical and convenience axes only, and no gate asked what one user's data breach would cost the brand. This is the earliest layer of enforcement for the workflow gate; it pairs with plan Phase 2.6 (template), deepen-plan Phase 4.6 (halt), preflight Check 6 (ship gate), and the `user-impact-reviewer` conditional agent to close the loop.
+
 ### Phase 0.25: Roadmap Freshness Check
 
 Domain leaders read `knowledge-base/product/roadmap.md` as ground truth. If the roadmap's status columns are stale, every domain assessment is unreliable. This step syncs the roadmap with GitHub milestone data before domain leaders are spawned.
