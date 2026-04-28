@@ -80,24 +80,40 @@ if [[ -n "$key_value" ]]; then
       iss=$(printf '%s' "$json" | jq -r '.iss // ""' 2>/dev/null || echo "")
       role=$(printf '%s' "$json" | jq -r '.role // ""' 2>/dev/null || echo "")
       ref=$(printf '%s' "$json" | jq -r '.ref // ""' 2>/dev/null || echo "")
+      # Strip CR/LF before echo to defend against log injection via crafted claims.
+      iss_safe="${iss//[$'\n\r']/}"
+      role_safe="${role//[$'\n\r']/}"
+      ref_safe="${ref//[$'\n\r']/}"
       if [[ "$iss" != "supabase" ]]; then
-        echo "::error::NEXT_PUBLIC_SUPABASE_ANON_KEY iss=\"$iss\", expected \"supabase\""
+        echo "::error::NEXT_PUBLIC_SUPABASE_ANON_KEY iss=\"$iss_safe\", expected \"supabase\""
         shape_violations=$((shape_violations + 1))
       fi
       if [[ "$role" != "anon" ]]; then
-        echo "::error::NEXT_PUBLIC_SUPABASE_ANON_KEY role=\"$role\", expected \"anon\" (service_role in browser bundle = silent RLS bypass)"
+        echo "::error::NEXT_PUBLIC_SUPABASE_ANON_KEY role=\"$role_safe\", expected \"anon\" (service_role in browser bundle = silent RLS bypass)"
         shape_violations=$((shape_violations + 1))
       fi
       if [[ ! "$ref" =~ ^[a-z0-9]{20}$ ]]; then
-        echo "::error::NEXT_PUBLIC_SUPABASE_ANON_KEY ref=\"$ref\" does not match canonical 20-char shape"
+        echo "::error::NEXT_PUBLIC_SUPABASE_ANON_KEY ref=\"$ref_safe\" does not match canonical 20-char shape"
         shape_violations=$((shape_violations + 1))
       else
         case "$ref" in
           test*|placeholder*|example*|service*|local*|dev*|stub*)
-            echo "::error::NEXT_PUBLIC_SUPABASE_ANON_KEY ref=\"$ref\" is a placeholder/test-fixture value"
+            echo "::error::NEXT_PUBLIC_SUPABASE_ANON_KEY ref=\"$ref_safe\" is a placeholder/test-fixture value"
             shape_violations=$((shape_violations + 1))
             ;;
         esac
+        # Cross-check ref against URL canonical first label (skipped for
+        # custom-domain `api.soleur.ai` — CI's `dig +short CNAME` step is
+        # load-bearing for that case; this Doppler-side gate trusts JWT ref).
+        url_for_check="${NEXT_PUBLIC_SUPABASE_URL:-}"
+        url_host=$(printf '%s' "$url_for_check" | sed -E 's#^https://##; s#/.*$##')
+        if [[ "$url_host" =~ ^[a-z0-9]{20}\.supabase\.co$ ]]; then
+          expected_ref="${url_host%%.*}"
+          if [[ "$ref" != "$expected_ref" ]]; then
+            echo "::error::NEXT_PUBLIC_SUPABASE_ANON_KEY ref=\"$ref_safe\" does not match URL canonical ref=\"$expected_ref\""
+            shape_violations=$((shape_violations + 1))
+          fi
+        fi
       fi
     fi
   fi

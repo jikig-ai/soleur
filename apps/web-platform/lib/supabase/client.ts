@@ -12,6 +12,10 @@ let warnedMissing = false;
 // `createClient()` is wasted work and would emit one Sentry event per call
 // site if a bad bundle ships. Throwing here surfaces in the Next.js error
 // overlay before any UI tries to mount.
+//
+// Call order is load-bearing: `assertProdSupabaseUrl` runs first because
+// `assertProdSupabaseAnonKey`'s JWT-ref cross-check anchors on the URL's
+// canonical first label.
 assertProdSupabaseUrl(process.env.NEXT_PUBLIC_SUPABASE_URL);
 assertProdSupabaseAnonKey(
   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY,

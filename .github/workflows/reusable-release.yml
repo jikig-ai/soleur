@@ -345,21 +345,27 @@ jobs:
           iss=$(printf '%s' "$json" | jq -r '.iss // ""')
           role=$(printf '%s' "$json" | jq -r '.role // ""')
           ref=$(printf '%s' "$json" | jq -r '.ref // ""')
+          # Strip CR/LF/control chars before echo to defend against log
+          # injection via crafted JWT claim values (e.g., a `\n::error::JWT iss="supabase"`
+          # injection that would forge a success-looking annotation).
+          iss_safe="${iss//[$'\n\r']/}"
+          role_safe="${role//[$'\n\r']/}"
+          ref_safe="${ref//[$'\n\r']/}"
           if [[ "$iss" != "supabase" ]]; then
-            echo "::error::JWT iss=\"$iss\", expected \"supabase\""
+            echo "::error::JWT iss=\"$iss_safe\", expected \"supabase\""
             exit 1
           fi
           if [[ "$role" != "anon" ]]; then
-            echo "::error::JWT role=\"$role\", expected \"anon\" (a non-anon role in the browser bundle is a critical security issue: role=service_role grants admin RLS bypass to every visitor)"
+            echo "::error::JWT role=\"$role_safe\", expected \"anon\" (a non-anon role in the browser bundle is a critical security issue: role=service_role grants admin RLS bypass to every visitor)"
             exit 1
           fi
           if [[ ! "$ref" =~ ^[a-z0-9]{20}$ ]]; then
-            echo "::error::JWT ref=\"$ref\" does not match canonical 20-char shape (^[a-z0-9]{20}$)"
+            echo "::error::JWT ref=\"$ref_safe\" does not match canonical 20-char shape (^[a-z0-9]{20}$)"
             exit 1
           fi
           case "$ref" in
             test*|placeholder*|example*|service*|local*|dev*|stub*)
-              echo "::error::JWT ref=\"$ref\" is a placeholder/test-fixture value"
+              echo "::error::JWT ref=\"$ref_safe\" is a placeholder/test-fixture value"
               exit 1
               ;;
           esac
@@ -367,19 +373,22 @@ jobs:
           if [[ "$host" =~ ^[a-z0-9]{20}\.supabase\.co$ ]]; then
             expected_ref="${host%%.*}"
           else
-            cname=$(dig +short CNAME "$host" | sed 's/\.$//' | head -1)
+            # Bound DNS wall-clock on resolver flake: 3s timeout, 2 tries (max ~6s).
+            cname=$(dig +short +time=3 +tries=2 CNAME "$host" | sed 's/\.$//' | head -1)
             if [[ "$cname" =~ ^([a-z0-9]{20})\.supabase\.co$ ]]; then
               expected_ref="${BASH_REMATCH[1]}"
             else
-              echo "::error::Cannot resolve canonical ref from URL host $host (CNAME=$cname)"
+              cname_safe="${cname//[$'\n\r']/}"
+              host_safe="${host//[$'\n\r']/}"
+              echo "::error::Cannot resolve canonical ref from URL host $host_safe (CNAME=$cname_safe)"
               exit 1
             fi
           fi
           if [[ "$ref" != "$expected_ref" ]]; then
-            echo "::error::JWT ref=\"$ref\" does not match URL canonical ref=\"$expected_ref\""
+            echo "::error::JWT ref=\"$ref_safe\" does not match URL canonical ref=\"$expected_ref\""
             exit 1
           fi
-          echo "::notice::NEXT_PUBLIC_SUPABASE_ANON_KEY passes JWT-claims validation (ref=$ref)"
+          echo "::notice::NEXT_PUBLIC_SUPABASE_ANON_KEY passes JWT-claims validation (ref=$ref_safe)"
 
       - name: Build and push Docker image
         id: docker_build

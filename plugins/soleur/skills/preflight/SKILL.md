@@ -282,13 +282,13 @@ The union of step 5.2 outputs must contain at least one host matching `^https://
 
 **Step 5.4: Probe the chunk for inlined Supabase anon-key JWT and assert claims.**
 
-Reuses `/tmp/preflight-chunk.js` from Step 5.2 — single network round-trip.
+Reuses `/tmp/preflight-chunk.js` from Step 5.2 — single network round-trip. Pre-condition: Step 5.2's `curl` succeeded and `/tmp/preflight-chunk.js` is readable. If the chunk-fetch failed in Step 5.2, the entire Check 5 already returned SKIP — Step 5.4 does not run.
 
 ```bash
 grep -oE 'eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+' /tmp/preflight-chunk.js | head -1
 ```
 
-If the grep produces no output, return **SKIP** with note: "No JWT located in login chunk; supabase init likely chunked elsewhere — investigate manually."
+If the grep produces no output AND Step 5.2 found at least one Supabase host reference, return **FAIL** with note: "Supabase host found in chunk but no JWT — bundle is structurally inconsistent (host without key) and indicates a build regression." If the grep produces no output AND Step 5.2 also found zero Supabase host references, return **SKIP** with note: "Supabase init chunked elsewhere — investigate manually." (Distinguishing FAIL-on-inconsistency from SKIP-on-chunking-change prevents fail-open on a security-critical gate.)
 
 For the located JWT, decode the payload (segment 2) and assert:
 

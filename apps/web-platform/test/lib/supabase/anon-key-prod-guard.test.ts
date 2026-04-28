@@ -72,6 +72,40 @@ describe("assertProdSupabaseAnonKey", () => {
       );
     });
 
+    it("throws on missing iss claim entirely", () => {
+      const { iss: _iss, ...rest } = canonicalAnonPayload;
+      const jwt = fakeJwt(rest);
+      expect(() => assertProdSupabaseAnonKey(jwt, CANONICAL_URL)).toThrow(
+        /iss/i,
+      );
+    });
+
+    it("throws on missing role claim entirely", () => {
+      const { role: _role, ...rest } = canonicalAnonPayload;
+      const jwt = fakeJwt(rest);
+      expect(() => assertProdSupabaseAnonKey(jwt, CANONICAL_URL)).toThrow(
+        /role/i,
+      );
+    });
+
+    it("throws on missing ref claim entirely", () => {
+      const { ref: _ref, ...rest } = canonicalAnonPayload;
+      const jwt = fakeJwt(rest);
+      expect(() => assertProdSupabaseAnonKey(jwt, CANONICAL_URL)).toThrow(
+        /ref|canonical/i,
+      );
+    });
+
+    it("throws on uppercase ref (case-sensitive canonical regex)", () => {
+      const jwt = fakeJwt({
+        ...canonicalAnonPayload,
+        ref: "ABCDEFGHIJ1234567890",
+      });
+      expect(() => assertProdSupabaseAnonKey(jwt, CANONICAL_URL)).toThrow(
+        /ref|canonical/i,
+      );
+    });
+
     it('throws on role = "service_role" (security-critical: silent RLS bypass)', () => {
       const jwt = fakeJwt({ ...canonicalAnonPayload, role: "service_role" });
       expect(() => assertProdSupabaseAnonKey(jwt, CANONICAL_URL)).toThrow(
@@ -132,9 +166,13 @@ describe("assertProdSupabaseAnonKey", () => {
       ).not.toThrow();
     });
 
-    it("rejects \\r-terminated JWT cleanly (not silently truncated)", () => {
+    it("strips trailing CR before parsing (CR-terminated canonical JWT passes)", () => {
       const jwt = `${fakeJwt(canonicalAnonPayload)}\r`;
-      // After CR strip, the JWT is canonical and should pass.
+      expect(() => assertProdSupabaseAnonKey(jwt, CANONICAL_URL)).not.toThrow();
+    });
+
+    it("strips trailing LF before parsing (LF-terminated canonical JWT passes)", () => {
+      const jwt = `${fakeJwt(canonicalAnonPayload)}\n`;
       expect(() => assertProdSupabaseAnonKey(jwt, CANONICAL_URL)).not.toThrow();
     });
 
