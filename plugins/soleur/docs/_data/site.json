@@ -14,18 +14,19 @@
     "username": "soleur"
   },
   "nav": [
-    { "label": "Pricing", "url": "pricing/" },
-    { "label": "Get Started", "url": "getting-started/" },
-    { "label": "Agents", "url": "agents/" },
-    { "label": "Skills", "url": "skills/" },
-    { "label": "Community", "url": "community/" },
-    { "label": "Blog", "url": "blog/" },
-    { "label": "Vision", "url": "vision/" },
-    { "label": "Changelog", "url": "changelog/" }
+    { "label": "Pricing", "url": "/pricing/" },
+    { "label": "Get Started", "url": "/getting-started/" },
+    { "label": "Agents", "url": "/agents/" },
+    { "label": "Skills", "url": "/skills/" },
+    { "label": "Community", "url": "/community/" },
+    { "label": "About", "url": "/about/" },
+    { "label": "Blog", "url": "/blog/" },
+    { "label": "Vision", "url": "/vision/" },
+    { "label": "Changelog", "url": "/changelog/" }
   ],
   "primaryCta": {
     "label": "Reserve access",
-    "url": "pricing/#waitlist",
+    "url": "/pricing/#waitlist",
     "ariaLabel": "Reserve access to the hosted Soleur platform"
   },
   "author": {
@@ -48,28 +49,28 @@
     {
       "heading": "Product",
       "links": [
-        { "label": "Get Started", "url": "getting-started/" },
-        { "label": "Hosted version (coming soon)", "url": "pricing/#waitlist", "title": "Reserve access — opening in waves to a founding cohort" },
-        { "label": "Pricing", "url": "pricing/" },
-        { "label": "Agents", "url": "agents/" },
-        { "label": "Skills", "url": "skills/" },
-        { "label": "Changelog", "url": "changelog/" }
+        { "label": "Get Started", "url": "/getting-started/" },
+        { "label": "Hosted version (coming soon)", "url": "/pricing/#waitlist", "title": "Reserve access — opening in waves to a founding cohort" },
+        { "label": "Pricing", "url": "/pricing/" },
+        { "label": "Agents", "url": "/agents/" },
+        { "label": "Skills", "url": "/skills/" },
+        { "label": "Changelog", "url": "/changelog/" }
       ]
     },
     {
       "heading": "Resources",
       "links": [
-        { "label": "Blog", "url": "blog/" },
-        { "label": "Community", "url": "community/" },
-        { "label": "Vision", "url": "vision/" },
-        { "label": "About", "url": "about/" },
+        { "label": "Blog", "url": "/blog/" },
+        { "label": "Community", "url": "/community/" },
+        { "label": "Vision", "url": "/vision/" },
+        { "label": "About", "url": "/about/" },
         { "label": "Status", "url": "https://soleur-ai.betteruptime.com/", "external": true }
       ]
     }
   ],
   "footerLegal": [
-    { "label": "Legal", "url": "legal/" },
-    { "label": "Privacy Policy", "url": "legal/privacy-policy/" },
-    { "label": "Terms of Service", "url": "legal/terms-and-conditions/" }
+    { "label": "Legal", "url": "/legal/" },
+    { "label": "Privacy Policy", "url": "/legal/privacy-policy/" },
+    { "label": "Terms of Service", "url": "/legal/terms-and-conditions/" }
   ]
 }
