@@ -94,9 +94,25 @@ jobs:
             (repo-internal) but encode the safe pattern anyway.
 
             For each overdue item, before creating an issue:
-            (a) Bind the title and publish_date to shell variables, e.g.
-                  TITLE_RAW=$(awk -F': ' '/^title:/{sub(/^"|"$/,"",$2); print $2; exit}' "$FILE")
-                  PUBLISH_DATE=$(awk -F': ' '/^publish_date:/{print $2; exit}' "$FILE")
+            (a) Bind the title and publish_date to shell variables. Use a
+                quote-aware, multi-colon-safe parser based on
+                `match() + substr()` (NOT `awk -F': '` — that splits on
+                every `: ` and truncates titles like "Show HN: …", and
+                `sub(/^X|X$/, …)` only fires once, leaving a trailing
+                quote. See runbook §H8 and learning
+                bug-fixes/2026-04-28-awk-field-split-on-colon-truncates-multi-colon-yaml-values.md):
+                  TITLE_RAW=$(awk 'match($0, /^title: ?/) {
+                    s = substr($0, RLENGTH + 1)
+                    sub(/^"/, "", s); sub(/"$/, "", s)
+                    sub(/^'\''/, "", s); sub(/'\''$/, "", s)
+                    print s; exit
+                  }' "$FILE")
+                  PUBLISH_DATE=$(awk 'match($0, /^publish_date: ?/) {
+                    s = substr($0, RLENGTH + 1)
+                    sub(/^"/, "", s); sub(/"$/, "", s)
+                    sub(/^'\''/, "", s); sub(/'\''$/, "", s)
+                    print s; exit
+                  }' "$FILE")
                   CANONICAL_TITLE="[Content] Overdue: ${TITLE_RAW} (was scheduled for ${PUBLISH_DATE})"
             (b) Search for an existing OPEN issue with that exact title.
                 Pipe gh --json output to a standalone jq --arg (gh's
