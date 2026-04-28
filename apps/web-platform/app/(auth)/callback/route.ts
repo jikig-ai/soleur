@@ -1,10 +1,12 @@
 import { createServerClient, type CookieOptions } from "@supabase/ssr";
 import { createServiceClient } from "@/lib/supabase/server";
 import { resolveOrigin } from "@/lib/auth/resolve-origin";
+import { classifyCallbackError } from "@/lib/auth/error-classifier";
 import { provisionWorkspace } from "@/server/workspace";
 import { TC_VERSION } from "@/lib/legal/tc-version";
 import { NextResponse, type NextRequest } from "next/server";
 import logger from "@/server/logger";
+import { reportSilentFallback } from "@/server/observability";
 
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
@@ -61,15 +63,25 @@ export async function GET(request: NextRequest) {
     const { error } = await supabase.auth.exchangeCodeForSession(code);
 
     if (error) {
-      logger.error(
-        { err: error, status: error.status, errorName: error.name },
-        "exchangeCodeForSession failed",
-      );
+      // Mirror to Sentry so auth regressions surface in the dashboard.
+      // Pino stdout is invisible to Sentry; per AGENTS.md
+      // cq-silent-fallback-must-mirror-to-sentry, error-returning branches
+      // must use reportSilentFallback. Truncate message in case it embeds
+      // the OAuth `code` query-param.
+      reportSilentFallback(error, {
+        feature: "auth",
+        op: "exchangeCodeForSession",
+        extra: {
+          errorCode: (error as { code?: string }).code,
+          errorName: error.name,
+          errorStatus: error.status,
+          errorMessage: error.message?.slice(0, 200),
+        },
+      });
 
-      // Return specific error so the login page can show a helpful message
-      const errorCode = error.message?.includes("code verifier")
-        ? "code_verifier_missing"
-        : "auth_failed";
+      // Discriminate on the typed error.code enum, not error.message
+      // substring (drift-prone across Supabase versions).
+      const errorCode = classifyCallbackError(error);
       return NextResponse.redirect(`${origin}/login?error=${errorCode}`);
     }
 
@@ -116,8 +128,17 @@ export async function GET(request: NextRequest) {
     }
   }
 
-  // Auth failed — redirect to login with error
-  logger.error({ codePresent: !!code, origin }, "Auth failed — no code or exchange error");
+  // Auth failed — redirect to login with error.
+  // No `code` query-param means the OAuth provider redirected without one
+  // (e.g. uri_allow_list rejected the redirect, or the provider errored).
+  // Mirror to Sentry per cq-silent-fallback-must-mirror-to-sentry so the
+  // class of failure is observable.
+  reportSilentFallback(null, {
+    feature: "auth",
+    op: "callback_no_code",
+    message: "Auth failed — no code or exchange error",
+    extra: { codePresent: !!code, origin },
+  });
   return NextResponse.redirect(`${origin}/login?error=auth_failed`);
 }
 

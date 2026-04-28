@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import * as Sentry from "@sentry/nextjs";
 import { createClient } from "@/lib/supabase/client";
 import { mapSupabaseError } from "@/lib/auth/error-messages";
 
@@ -78,6 +79,13 @@ export function OAuthButtons({ disabled = false }: { disabled?: boolean }) {
 
     if (error) {
       console.error("[auth] Supabase OAuth error:", error.message);
+      Sentry.captureException(error, {
+        tags: { feature: "auth", op: "signInWithOAuth", provider: provider.id },
+        extra: {
+          errorCode: (error as { code?: string }).code,
+          errorMessage: error.message?.slice(0, 200),
+        },
+      });
       setError(mapSupabaseError(error.message));
       setLoading(null);
     }

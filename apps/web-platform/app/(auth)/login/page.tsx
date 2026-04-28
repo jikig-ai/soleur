@@ -1,6 +1,7 @@
 "use client";
 
 import { Suspense, useState, useEffect, useRef } from "react";
+import * as Sentry from "@sentry/nextjs";
 import { useSearchParams, useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { OAuthButtons } from "@/components/auth/oauth-buttons";
@@ -50,6 +51,13 @@ function LoginForm() {
 
     if (error) {
       console.error("[auth] Supabase error:", error.message);
+      Sentry.captureException(error, {
+        tags: { feature: "auth", op: "signInWithOtp" },
+        extra: {
+          errorCode: (error as { code?: string }).code,
+          errorMessage: error.message?.slice(0, 200),
+        },
+      });
       setError(mapSupabaseError(error.message));
     } else {
       setOtpSent(true);
@@ -73,6 +81,13 @@ function LoginForm() {
 
     if (error) {
       console.error("[auth] Supabase error:", error.message);
+      Sentry.captureException(error, {
+        tags: { feature: "auth", op: "verifyOtp" },
+        extra: {
+          errorCode: (error as { code?: string }).code,
+          errorMessage: error.message?.slice(0, 200),
+        },
+      });
       setError(mapSupabaseError(error.message));
     } else {
       router.push("/dashboard");
