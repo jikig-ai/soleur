@@ -120,6 +120,17 @@ resource "cloudflare_record" "google_site_verification" {
   ttl     = 1
 }
 
+# ProtonMail domain ownership verification (apex TXT). Required to enable
+# Proton Mail on soleur.ai. Sending integration (MX/SPF/DKIM updates) is a
+# separate follow-up once verification clears.
+resource "cloudflare_record" "protonmail_verification" {
+  zone_id = var.cf_zone_id
+  name    = "soleur.ai" # Use FQDN, not "@" -- CF API normalizes @ to FQDN, causing perpetual drift
+  content = "protonmail-verification=669dab6390579ccb6db592dca20dbd199bacce2d"
+  type    = "TXT"
+  ttl     = 1
+}
+
 # GitHub Pages -- docs site (soleur.ai apex + www redirect)
 # These records were previously created via dashboard; imported to Terraform for IaC governance.
 resource "cloudflare_record" "github_pages" {
