@@ -1,4 +1,7 @@
-const CACHE_NAME = "soleur-app-shell-v1";
+// Bumping the suffix triggers the activate handler's cache cleanup, which
+// purges _next/static/** chunks cached against an old project ref. Keep
+// push-notification subscriptions intact (registration is unchanged).
+const CACHE_NAME = "soleur-app-shell-v2";
 
 // Static shell assets cached on install (non-hashed assets only).
 // _next/static/** are cached on fetch via cache-first strategy.

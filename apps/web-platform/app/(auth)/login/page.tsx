@@ -3,6 +3,7 @@
 import { Suspense, useState, useEffect, useRef } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
+import { reportSilentFallback } from "@/lib/client-observability";
 import { OAuthButtons } from "@/components/auth/oauth-buttons";
 import { EMAIL_OTP_LENGTH } from "@/lib/auth/constants";
 import { CALLBACK_ERRORS, DEFAULT_ERROR_MESSAGE, mapSupabaseError } from "@/lib/auth/error-messages";
@@ -50,6 +51,16 @@ function LoginForm() {
 
     if (error) {
       console.error("[auth] Supabase error:", error.message);
+      // Forward only typed enum fields — error.message embeds the email on
+      // OTP failures and Sentry is a shared project (PII / cross-tenant risk).
+      reportSilentFallback(error, {
+        feature: "auth",
+        op: "signInWithOtp",
+        extra: {
+          errorCode: (error as { code?: string }).code,
+          errorName: error.name,
+        },
+      });
       setError(mapSupabaseError(error.message));
     } else {
       setOtpSent(true);
@@ -73,6 +84,14 @@ function LoginForm() {
 
     if (error) {
       console.error("[auth] Supabase error:", error.message);
+      reportSilentFallback(error, {
+        feature: "auth",
+        op: "verifyOtp",
+        extra: {
+          errorCode: (error as { code?: string }).code,
+          errorName: error.name,
+        },
+      });
       setError(mapSupabaseError(error.message));
     } else {
       router.push("/dashboard");
