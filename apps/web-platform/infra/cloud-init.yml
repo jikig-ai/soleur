@@ -345,6 +345,20 @@ runcmd:
 
   # Pull and run container (secrets from Doppler -- no .env fallback)
   - docker pull ${image_name}
+
+  # Seed /mnt/data/plugins/soleur from the image's baked plugin tree (#3045).
+  # Ephemeral container so we don't depend on a long-running container.
+  # `docker cp src/.` copies *contents* (not the src dir itself) into dst.
+  # `find -mindepth 1 -delete` is POSIX-portable: cloud-init `- |` blocks run
+  # under /bin/sh (= dash on Ubuntu), which has no bash brace-expansion. The
+  # bash brace-glob form is reserved for ci-deploy.sh (bash shebang).
+  - |
+    set -e
+    docker create --name soleur-plugin-seed ${image_name}
+    find /mnt/data/plugins/soleur -mindepth 1 -delete 2>/dev/null || true
+    docker cp soleur-plugin-seed:/opt/soleur/plugin/. /mnt/data/plugins/soleur/
+    docker rm soleur-plugin-seed
+
   - |
     set -e
     # Source token from the restricted env file (avoids exposing it in /proc/<pid>/cmdline)

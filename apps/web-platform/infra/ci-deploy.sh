@@ -237,6 +237,28 @@ case "$COMPONENT" in
     { docker stop soleur-web-platform-canary 2>/dev/null || true; }
     { docker rm soleur-web-platform-canary 2>/dev/null || true; }
 
+    # Seed the read-only plugin bind-mount from the new image (#3045).
+    # Source of truth: /opt/soleur/plugin in the image (vendored at build time).
+    # Must run BEFORE the canary docker run so the canary itself sees populated
+    # content on first read — the Layer 3 probe script lives in the same mount.
+    # Uses an ephemeral container (`docker create` + `docker cp` + `docker rm`)
+    # so we never run a second instance of the new image during the canary phase.
+    # `docker cp src/. dst/` copies *contents* of src into dst (NOT src as a
+    # child of dst); the brace-glob removes prior-version content including
+    # dotfiles like `.claude-plugin/` (load-bearing — `*` alone leaves them).
+    echo "Seeding plugin mount from image..."
+    if ! docker create --name soleur-plugin-seed "$IMAGE:$TAG" >/dev/null; then
+      final_write_state 1 "plugin_seed_create_failed"
+      exit 1
+    fi
+    rm -rf /mnt/data/plugins/soleur/{*,.[!.]*,..?*} 2>/dev/null || true
+    if ! docker cp soleur-plugin-seed:/opt/soleur/plugin/. /mnt/data/plugins/soleur/; then
+      docker rm soleur-plugin-seed >/dev/null 2>&1 || true
+      final_write_state 1 "plugin_seed_copy_failed"
+      exit 1
+    fi
+    docker rm soleur-plugin-seed >/dev/null
+
     # Prepare environment (shared between canary and production)
     sudo chown 1001:1001 /mnt/data/workspaces
     ENV_FILE=$(resolve_env_file)

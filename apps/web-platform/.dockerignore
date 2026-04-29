@@ -24,3 +24,8 @@ next-env.d.ts
 Dockerfile
 .dockerignore
 docker-compose*.yml
+
+# Vendored plugin tree (#3045) — must ship with all .md content (SKILL.md,
+# agent prompts) so re-include after the *.md rule above strips them.
+!_plugin-vendored
+!_plugin-vendored/**

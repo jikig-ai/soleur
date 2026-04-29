@@ -35,6 +35,10 @@ on:
         description: "Skip path change detection (for workflow_dispatch)"
         type: boolean
         default: false
+      vendor_plugin:
+        description: "Vendor plugins/soleur into <docker_context>/_plugin-vendored before docker build (#3045)"
+        type: boolean
+        default: false
     outputs:
       version:
         description: "Computed version without prefix (e.g., 0.1.1)"
@@ -389,6 +393,19 @@ jobs:
             exit 1
           fi
           echo "::notice::NEXT_PUBLIC_SUPABASE_ANON_KEY passes JWT-claims validation (ref=$ref_safe)"
+
+      - name: Vendor plugin into build context
+        if: steps.version.outputs.next != '' && inputs.docker_image != '' && inputs.vendor_plugin
+        env:
+          DOCKER_CONTEXT: ${{ inputs.docker_context }}
+        run: |
+          set -euo pipefail
+          DEST="${DOCKER_CONTEXT}/_plugin-vendored"
+          rm -rf "$DEST"
+          cp -r plugins/soleur "$DEST"
+          # Drop test/docs trees that aren't needed at runtime — keeps image small.
+          rm -rf "$DEST/test" "$DEST/docs/_site"
+          echo "Vendored $(find "$DEST" -type f | wc -l) plugin files into $DEST"
 
       - name: Build and push Docker image
         id: docker_build
