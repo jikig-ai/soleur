@@ -7,22 +7,54 @@ let mockPathname = "/dashboard";
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ push: vi.fn(), refresh: vi.fn() }),
   usePathname: () => mockPathname,
+  // ConversationsRail (mounted via the drawer aside since the rail PR)
+  // calls useParams<{ conversationId }>(); a missing export would crash
+  // every render. The DashboardLayout test set predates the rail mount
+  // and doesn't care about active-row indication, so an empty-object
+  // mock is sufficient.
+  useParams: () => ({}),
 }));
+
+vi.mock("@/hooks/use-conversations", async (importOriginal) => {
+  const actual = await importOriginal<
+    typeof import("@/hooks/use-conversations")
+  >();
+  return {
+    ...actual,
+    useConversations: () => ({
+      conversations: [],
+      loading: false,
+      error: null,
+      refetch: vi.fn(),
+      archiveConversation: vi.fn(),
+      unarchiveConversation: vi.fn(),
+      updateStatus: vi.fn(),
+    }),
+  };
+});
 
 vi.mock("@/lib/supabase/client", () => ({
   createClient: () => ({
     auth: {
       getSession: () =>
         Promise.resolve({ data: { session: null }, error: null }),
-      signOut: vi.fn(),
+      getUser: () => Promise.resolve({ data: { user: null }, error: null }),
+      signOut: vi.fn(() => Promise.resolve({ error: null })),
     },
     from: () => ({
       select: () => ({
         eq: () => ({
           single: () => Promise.resolve({ data: null, error: null }),
+          maybeSingle: () => Promise.resolve({ data: null, error: null }),
         }),
       }),
     }),
+    channel: () => ({
+      on: vi.fn().mockReturnThis(),
+      subscribe: vi.fn().mockReturnThis(),
+    }),
+    removeChannel: vi.fn(),
+    removeAllChannels: vi.fn(() => Promise.resolve([])),
   }),
 }));
 

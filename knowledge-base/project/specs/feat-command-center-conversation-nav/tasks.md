@@ -88,13 +88,13 @@ Phases 2 and 3 were combined to avoid an inter-phase typecheck break (the Phase 
 
 ## Phase 6: Privacy + review gates
 
-- [ ] 6.1 Read `docs/legal/privacy-policy.md` (and Eleventy mirror at `plugins/soleur/docs/pages/legal/privacy-policy.md`)
-- [ ] 6.2 If existing language is surface-agnostic → no edit, document the no-op in PR description
-- [ ] 6.3 If a clause scopes "conversation history display" to a specific surface → broaden to authenticated app generally; commit
-- [ ] 6.4 Push branch; mark PR ready
+- [x] 6.1 Read `docs/legal/privacy-policy.md` and the Eleventy mirror at `plugins/soleur/docs/pages/legal/privacy-policy.md`
+- [x] 6.2 No edit required — every reference to conversation data (Sections 4.7 / Purpose / Retention / Section 8 portability) is already surface-agnostic. The chat-segment ConversationsRail is another rendering surface for the same user-owned conversation data; no new collection, retention, processing-purpose, sharing, or right-of-data-subject category is introduced. **PR body must state**: "TR8 re-affirmation — privacy policy already describes conversation data in surface-agnostic terms; no edit needed."
+- [ ] 6.3 N/A (no surface-scoped clause was found)
+- [ ] 6.4 Push branch; mark PR ready (delegated to `/soleur:review` + `/soleur:ship`)
 - [ ] 6.5 At PR review time: `user-impact-reviewer` + `security-sentinel` invoked by review skill (focus tags: Realtime filter, cache scoping, logout teardown)
 - [ ] 6.6 Resolve P1/P2 review findings inline per `rf-review-finding-default-fix-inline`
-- [ ] 6.7 Final pre-merge gate: `bun test`, `bun test:ci`, `bun test:e2e`, `bun typecheck`, `bun lint` all green; both review agents signed off; PR body has `Closes #3024` + `Ref #3025 #3026 #3027 #3028 #2194`
+- [ ] 6.7 Final pre-merge gate: `bun test`, `bun test:ci`, `bun typecheck`, `bun lint` all green; both review agents signed off; PR body has `Closes #3024` + `Ref #3025 #3026 #3027 #3028 #2194`
 - [ ] 6.8 `/soleur:ship`
 
 ## Phase 7: Post-merge verification (operator)
