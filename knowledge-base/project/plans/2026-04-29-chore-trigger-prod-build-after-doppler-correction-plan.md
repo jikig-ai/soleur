@@ -21,7 +21,7 @@ deepened_on: 2026-04-29
 
 1. **Inverted the framing** from "trigger build" → "verify recovery, trigger contingently" — Phase 1 now writes its findings to the runbook FIRST, so Phase 2's go/no-go is auditable. (deployment-verification-agent lens.)
 2. **Added a no-op exit gate** between Phase 1 and Phase 2 — if Sentry is clean and the claim-check passes, Phase 2 is explicitly skipped and the plan jumps to Phase 3 verification + Phase 4 close-out. Previously the contingency was implicit. (code-simplicity-reviewer lens — removed the implicit "always trigger" assumption.)
-3. **Documented why `workflow_dispatch` vs auto-trigger matters here** — the workflow's `paths: ['apps/web-platform/**']` push filter means PRs #3016/#3017/#3018 already auto-built; a manual dispatch with no code change would produce a no-op release-bump path. Operator must confirm a code/secret change preceded the dispatch, OR explicitly accept the no-op. (architecture-strategist lens.)
+3. **Documented why `workflow_dispatch` vs auto-trigger matters here** — the workflow's `paths: ['apps/web-platform/**']` push filter means PRs #3016 and #3017 already auto-built (PR #3018 was knowledge-base-only and did NOT auto-build); a manual dispatch with no code change would produce a no-op release-bump path. Operator must confirm a code/secret change preceded the dispatch, OR explicitly accept the no-op. (architecture-strategist lens.)
 4. **Added rollback procedure** — a fresh build that itself ships broken is not unprecedented (#3007 was the originating case). Rollback is via `gh workflow run` against the previous known-good commit's release-tag.
 5. **Hardened the claim-check invocation** — verified the script exists at `apps/web-platform/infra/canary-bundle-claim-check.sh` (3187 bytes, executable, wired into `ci-deploy.sh`), confirmed signature matches the runbook (`<base-url>` arg, returns 0 on pass, non-zero on any violation including SKIP outcomes — fail-closed by design).
 
@@ -63,10 +63,12 @@ gh run list --workflow=web-platform-release.yml --limit 5 \
 returned five consecutive `success`/`completed` runs on `main` between
 2026-04-28 20:12Z and 22:31Z, covering commits `7d556531` (PR #3007 — the
 original suspect), `f8b2a5c4` (#3009), `b2fed080` (#3014), `a1f229c5`
-(#3017), and `92e8b3d5` (#3018). PR #3014 already shipped. PRs #3016 / #3017
-/ #3018 each triggered fresh release builds via the `paths:
-['apps/web-platform/**']` push filter, so the latest deployed bundle on
-`app.soleur.ai` is now `92e8b3d5` (HEAD of main as of plan-time).
+(#3016), and `92e8b3d5` (#3017). PR #3014 already shipped. PRs #3016
+and #3017 each triggered fresh release builds via the `paths:
+['apps/web-platform/**']` push filter (PR #3018 merged later but only
+touched `knowledge-base/`, so it did NOT auto-trigger). The latest
+deployed bundle on `app.soleur.ai` is `92e8b3d5` (HEAD of `main`'s
+`apps/web-platform/**` history as of plan-time).
 
 A live `curl -I https://app.soleur.ai/dashboard` returns `HTTP 307` (auth
 redirect), not the error-boundary response, which is consistent with — but
@@ -107,8 +109,8 @@ Sentry digest, not by triggering a build.`
 
 | Issue claim | Reality | Plan response |
 |---|---|---|
-| "Trigger fresh prod build via `gh workflow run web-platform-release.yml`" | 4 prod builds have already shipped post-#3014 (PRs #3016–#3018 via push trigger). HEAD of prod = `92e8b3d5`. | Verify which build delivered the recovery before deciding whether to trigger an additional one. Default action: verify, don't re-trigger. |
-| Postmortem Phase 2 prescribes a build trigger as the fix | The trigger is contingent on Phase 1 finding (`Doppler prd correct vs wrong vs GH secret wrong vs Sentry DSN missing`). | Plan executes Phase 1 diagnosis first; only triggers if Phase 1 finds Doppler/secret was indeed corrected post-#3014 AND the auto-built bundle from #3016/#3017/#3018 still ships the broken value. |
+| "Trigger fresh prod build via `gh workflow run web-platform-release.yml`" | 2 prod builds (#3016 and #3017) auto-shipped post-#3014 via push trigger; #3018 is knowledge-base-only and did NOT path-trigger. HEAD of prod's apps/web-platform tree = `92e8b3d5`. | Verify which build delivered the recovery before deciding whether to trigger an additional one. Default action: verify, don't re-trigger. |
+| Postmortem Phase 2 prescribes a build trigger as the fix | The trigger is contingent on Phase 1 finding (`Doppler prd correct vs wrong vs GH secret wrong vs Sentry DSN missing`). | Plan executes Phase 1 diagnosis first; only triggers if Phase 1 finds Doppler/secret was indeed corrected post-#3014 AND the auto-built bundle from #3016/#3017 still ships the broken value. |
 | "Awaiting verification" | No verification artifacts (Sentry digest, Playwright screenshot, JWT claim re-check) recorded in the runbook's "Recovery Verification" section. | This plan's primary deliverable is filling in that section. |
 
 ## Hypotheses
@@ -186,7 +188,7 @@ Record in the runbook's Recovery Verification block:
 
 > Phase 2 not executed — `92e8b3d5` already-deployed bundle passes
 > claim-check, no boundary errors in Sentry post-deploy. Recovery
-> attributed to PRs #3016/#3017/#3018's auto-trigger via
+> attributed to PRs #3016/#3017's auto-trigger via
 > `paths: ['apps/web-platform/**']`.
 
 Why this gate matters (architecture-strategist lens): the original issue

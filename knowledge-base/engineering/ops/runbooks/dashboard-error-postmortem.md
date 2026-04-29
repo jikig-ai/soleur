@@ -5,7 +5,9 @@ incident_pr: 3014
 incident_window: "2026-04-28 ~22:22Z (Sentry first-seen `TypeError: Unknown encoding: base64url`) → 2026-04-28 22:37:08Z (v0.58.2 canary swap completed; recovery delivered by PR #3017's browser-safe JWT decode + Layer 2 promotion)"
 suspected_change: "PR #3007 — JWT-claims guardrails for NEXT_PUBLIC_SUPABASE_ANON_KEY (validator's runtime base64url decode fails in browser; fixed in PR #3017)"
 brand_threshold: single-user incident
-status: closed: 2026-04-29 (verified via #3015 follow-through; see Recovery Verification)
+status: closed
+closed_on: 2026-04-29
+closed_via: "#3015 follow-through (see Recovery Verification)"
 triggers:
   - dashboard error boundary
   - inlined supabase claim
@@ -185,7 +187,7 @@ cause before Phase 2.
 
 Filled in 2026-04-29 from the Sentry digest captured during #3015 verification.
 
-- **Hypothesis confirmed:** H1 (inlined anon-key validator throw at module load), with the precise failure mode being the validator's `base64url` decode call failing in the browser runtime — `TypeError: Unknown encoding: base64url`. PR #3017 ("browser-safe JWT decode + Layer 2 promotion") replaced the Node-only decode path with a browser-safe equivalent, and the same change relocated the Supabase init out of the login chunk into a shared async chunk so the throw site no longer hydrates as part of the auth landing.
+- **Hypothesis confirmed:** H1 (inlined anon-key validator throw at module load), with the precise failure mode being the validator's `base64url` decode call failing in the browser runtime — `TypeError: Unknown encoding: base64url`. PR #3017 ("browser-safe JWT decode + Layer 2 promotion") replaced the Node-only decode path (`Buffer.from(..., "base64url")` in `apps/web-platform/lib/supabase/validate-anon-key.ts`) with an `atob`-based browser-safe equivalent. The "Layer 2 promotion" in the commit subject refers to a canary-probe-set change (`canary-probe-set.md`), not a deliberate code-level chunk restructure. As a side effect of changing the validator's bytes, webpack's content-hashed chunk splitting reshuffled the JWT off `app/(auth)/login/page-*.js` into a shared async chunk (currently `8237-...js`). That chunk move was emergent, not an intentional refactor of the Supabase init.
 - **Evidence:** Sentry events `a3edfa6f` and `87ba1b0f` at 2026-04-28T22:22:24Z on project `soleur-web-platform`, both `TypeError: Unknown encoding: base64url`, occurring on the v0.58.1 build (post-#3016, pre-#3017). Zero matching events in the last 24h after v0.58.2 swap (Sentry digest run 2026-04-29 from /one-shot #3015).
 - **Failed assertion:** the validator's `base64url` decode call (the prerequisite to the canonical-claim assertions in `assertProdSupabaseAnonKey`); the assertion bodies themselves never executed because the runtime threw before reaching them.
 
@@ -245,14 +247,16 @@ renders correctly, not the boundary.
 Filled in 2026-04-29 by /one-shot pipeline against issue #3015. Phase 2
 trigger was **not executed** — Phase 1.4 no-op exit gate triggered:
 recovery was delivered organically by the auto-trigger on PR #3017's
-push to `apps/web-platform/**` (path-filtered), which shipped at
-`92e8b3d5` and ran the canary swap at 22:37:08Z. Sentry digest of
+push to `apps/web-platform/**` (path-filtered), which shipped at commit
+`92e8b3d5` and ran the canary swap at 22:37:08Z. PR #3018 (merged later
+the same window) was knowledge-base-only and did NOT auto-trigger a
+build — the recovery deploy is solely #3017's. Sentry digest of
 `feature:dashboard-error-boundary OR feature:supabase-validator-throw`
 over 24h returned zero events; the pre-fix `TypeError: Unknown
 encoding: base64url` events at 22:22Z (v0.58.1) were the originating
 regression PR #3017 fixed.
 
-- **New release tag:** `web-v0.58.2` (commit `92e8b3d5`, PR #3017 — `fix(supabase): browser-safe JWT decode + preflight Check 9 + Layer 2 promotion`).
+- **New release tag:** `web-v0.58.2` (commit `92e8b3d5`, PR #3017 — `fix(supabase): browser-safe JWT decode + preflight Check 9 + Layer 2 promotion`). The `tag: "v0.58.2"` value in the deploy-status JSON below is the same release; the deploy harness emits the bare version (no `web-` prefix) while GitHub Releases uses the `web-v0.58.2` form.
 - **Canary swap log line (from prod journald, 2026-04-28 22:37:08Z):**
   ```
   Canary OK
@@ -262,7 +266,7 @@ regression PR #3017 fixed.
   ```
   (`exit_code: 0, reason: ok` is the equivalent of `final_write_state 0 "ok"` in this deploy harness.)
 - **Playwright screenshot:** [`screenshots/3015/dashboard-redirect-login.png`](screenshots/3015/dashboard-redirect-login.png) — `/dashboard` redirects to `/login`, which renders cleanly. No `data-error-boundary=` marker in HTML, no "Something went wrong / unexpected error" body text, zero console errors/warnings. (Unauthenticated check, as permitted by the plan; signed-in render verification is the D2 follow-up.)
-- **Re-run of Phase 1 step 1.3 (inlined-JWT check passes):** ⚠ The shipped script `apps/web-platform/infra/canary-bundle-claim-check.sh` returned `no JWT found in login chunk` (exit 1) — but this is a **false negative** caused by PR #3017's "Layer 2 promotion" moving the Supabase init out of `app/(auth)/login/page-*.js` into a shared async chunk (`/_next/static/chunks/8237-323358398e5e7317.js`, where the JWT now lives). Manual decode of the JWT from the new chunk confirms canonical claims: `iss=supabase, role=anon, ref=ifsccnjhymdmidffkzhl` (20 lowercase alphanumeric chars, no placeholder prefix) — passes every assertion the script tests. Tracked as **#3033** with proposed mount + script-broadening fix; Layer 3 has additionally been silently skipped on every deploy since #3014 because `apps/web-platform/infra/` is not mounted into the canary container.
+- **Re-run of Phase 1 step 1.3 — script FAILED (false negative); manual decode SUBSTITUTED and PASSED:** The shipped script `apps/web-platform/infra/canary-bundle-claim-check.sh` returned `no JWT found in login chunk` and exited 1. This is a **false negative**, not a regression: PR #3017's `validate-anon-key.ts` byte change reshuffled webpack's content-hashed chunks so that the inlined JWT now lives in a shared async chunk (`/_next/static/chunks/8237-323358398e5e7317.js`) instead of `app/(auth)/login/page-*.js`. The script's hardcoded path filter no longer matches. As a manual substitute for the script's assertions, the JWT was extracted from the new chunk and decoded directly: payload `{"iss":"supabase","ref":"ifsccnjhymdmidffkzhl","role":"anon","iat":1773675703,"exp":2089251703}` — passes all four canonical assertions (3-segment shape, `iss=supabase`, `role=anon`, ref matches `^[a-z0-9]{20}$` and has no placeholder prefix from the denylist). The script-broadening fix (and a separately discovered missing volume mount that has caused Layer 3 to be silently skipped on every deploy since #3014) is tracked as **#3033**.
 
 ### Other deepen-pass observations recorded for the audit trail
 

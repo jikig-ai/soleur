@@ -40,11 +40,11 @@ Decision matrix (Plan §Phase 2):
 | 0 / pre-#3014 | fail | CDN purge first; re-run 1.3 |
 | present | fail | Proceed to Phase 2 |
 
-- [x] 2.1 N/A (Phase 1.4 exit, Phase 2 skipped — no Doppler change needed).
-- [x] 2.2 N/A (Phase 1.4 exit, Phase 2 skipped — no GH secret change needed).
-- [x] 2.3 N/A (Phase 1.4 exit, Phase 2 skipped — recovery delivered by
+- [~] 2.1 SKIPPED (Phase 1.4 exit, Phase 2 not executed — no Doppler change needed).
+- [~] 2.2 SKIPPED (Phase 1.4 exit, Phase 2 not executed — no GH secret change needed).
+- [~] 2.3 SKIPPED (Phase 1.4 exit, Phase 2 not executed — recovery delivered by
   organic auto-trigger from PR #3017).
-- [x] 2.4 N/A (no Phase 2, no rollback needed; Phase 3 confirms recovery).
+- [~] 2.4 SKIPPED (no Phase 2, no rollback needed; Phase 3 confirms recovery).
 
 ## Phase 3 — Render-time verification (always runs)
 
