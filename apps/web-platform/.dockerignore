@@ -24,3 +24,19 @@ next-env.d.ts
 Dockerfile
 .dockerignore
 docker-compose*.yml
+
+# Vendored plugin tree (#3045) — must ship with the file types listed below
+# (skill markdown, manifests, templates, scripts). Last-match-wins
+# semantics mean a blanket `!_plugin-vendored/**` would also re-include the
+# `.env*`, `*.pem`, `node_modules/`, and `.git/` excludes from earlier in
+# this file. Use a positive allowlist instead so a stray credential or
+# dependency tree under plugins/soleur cannot be baked into the image.
+!_plugin-vendored/
+!_plugin-vendored/**/*.md
+!_plugin-vendored/**/*.json
+!_plugin-vendored/**/*.njk
+!_plugin-vendored/**/*.yml
+!_plugin-vendored/**/*.yaml
+!_plugin-vendored/**/*.sh
+!_plugin-vendored/**/*.txt
+!_plugin-vendored/**/.claude-plugin/**

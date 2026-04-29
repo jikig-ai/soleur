@@ -12,6 +12,7 @@ import { WS_CLOSE_CODES } from "@/lib/types";
 import { abortAllSessions, cleanupOrphanedConversations, startInactivityTimer } from "./agent-runner";
 import { handleConversationMessages } from "./api-messages";
 import { createChildLogger } from "./logger";
+import { verifyPluginMountOnce } from "./plugin-mount-check";
 import {
   buildHealthResponse,
   buildInternalMetricsResponse,
@@ -38,6 +39,8 @@ const app = next({ dev });
 const handle = app.getRequestHandler();
 
 app.prepare().then(() => {
+  verifyPluginMountOnce();
+
   const server = createServer(async (req, res) => {
     const parsedUrl = parse(req.url!, true);
 
