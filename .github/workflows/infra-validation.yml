@@ -93,6 +93,9 @@ jobs:
       - name: Run ci-deploy.sh tests
         run: bash apps/web-platform/infra/ci-deploy.test.sh
 
+      - name: Run canary-bundle-claim-check.sh tests
+        run: bash apps/web-platform/infra/canary-bundle-claim-check.test.sh
+
   check-secrets:
     runs-on: ubuntu-24.04
     outputs:

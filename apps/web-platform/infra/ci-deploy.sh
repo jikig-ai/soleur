@@ -276,7 +276,12 @@ case "$COMPONENT" in
     # occurred" sentinel which only renders when `error.digest` is falsy.
     readonly CANARY_ERROR_BOUNDARY_MARKER='data-error-boundary='
     # CANARY_LAYER_3_SCRIPT is env-overridable so tests can inject a mock.
-    CANARY_LAYER_3_SCRIPT="${CANARY_LAYER_3_SCRIPT:-/app/shared/apps/web-platform/infra/canary-bundle-claim-check.sh}"
+    # Shipped to /usr/local/bin via terraform_data.deploy_pipeline_fix
+    # (existing servers) and cloud-init write_files (fresh servers); the host
+    # path mirrors ci-deploy.sh and cat-deploy-state.sh. The previous default
+    # under /app/shared/apps/... never resolved because the canary container
+    # only mounts /mnt/data/plugins/soleur, not /mnt/data/apps (#3033).
+    CANARY_LAYER_3_SCRIPT="${CANARY_LAYER_3_SCRIPT:-/usr/local/bin/canary-bundle-claim-check.sh}"
 
     rm -f "$CANARY_HEALTH_HTTP" "$CANARY_LOGIN_HTTP" "$CANARY_LOGIN_BODY" \
           "$CANARY_DASH_HTTP" "$CANARY_DASH_BODY"
@@ -328,10 +333,28 @@ case "$COMPONENT" in
       fi
       # Layer 3 — inlined-JWT bundle assertion. Catches client-only validator
       # throws that SSR HTML probing cannot detect (the #3007 regression class).
-      # The script is shipped via the read-only plugin mount; absence is a
-      # warning, not a hard fail (canary host may predate the script ship).
+      # Shipped to /usr/local/bin via terraform_data.deploy_pipeline_fix and
+      # cloud-init.write_files (#3033). Absence is a warning, not a hard fail
+      # (canary host may predate the script ship).
+      #
+      # The script's stderr carries refined failure-reason strings
+      # (canary_layer3_login_fetch_failed / canary_layer3_no_chunks /
+      # canary_layer3_no_jwt / canary_layer3_jwt_decode_failed /
+      # canary_layer3_jwt_claims). Pipe through `logger` so operators can
+      # triage via `journalctl -u webhook -t ci-deploy | grep canary_layer3_`.
+      # `set +o pipefail` is load-bearing — without it, the script-side fail
+      # would propagate through the pipe and `set -euo` would abort ci-deploy
+      # before the rc check runs. ${PIPESTATUS[0]} captures the script's rc;
+      # `| logger` always exits 0 in normal operation.
+      # CANARY_FAIL_REASON stays mapped to the umbrella "canary_layer3_jwt_claims"
+      # (cross-repo string-shape contract with cat-deploy-state.sh and
+      # reusable-release.yml — do NOT change without coordinated update).
       if [[ -x "$CANARY_LAYER_3_SCRIPT" ]]; then
-        if ! "$CANARY_LAYER_3_SCRIPT" http://localhost:3001 >/dev/null 2>&1; then
+        set +o pipefail
+        "$CANARY_LAYER_3_SCRIPT" http://localhost:3001 2>&1 | logger -t "$LOG_TAG" -p user.warning
+        layer3_rc=${PIPESTATUS[0]}
+        set -o pipefail
+        if [[ "$layer3_rc" -ne 0 ]]; then
           CANARY_FAIL_REASON="canary_layer3_jwt_claims"
           sleep 3
           continue

@@ -27,17 +27,18 @@ resource "hcloud_server" "web" {
   ssh_keys    = [hcloud_ssh_key.default.id]
 
   user_data = templatefile("${path.module}/cloud-init.yml", {
-    image_name                  = var.image_name
-    ci_deploy_script_b64        = base64encode(file("${path.module}/ci-deploy.sh"))
-    cat_deploy_state_script_b64 = base64encode(file("${path.module}/cat-deploy-state.sh"))
-    disk_monitor_script_b64     = base64encode(file("${path.module}/disk-monitor.sh"))
-    resource_monitor_script_b64 = base64encode(file("${path.module}/resource-monitor.sh"))
-    fail2ban_sshd_local_b64     = base64encode(file("${path.module}/fail2ban-sshd.local"))
-    hooks_json_b64              = base64encode(local.hooks_json)
-    tunnel_token                = cloudflare_zero_trust_tunnel_cloudflared.web.tunnel_token
-    webhook_deploy_secret       = var.webhook_deploy_secret
-    doppler_token               = var.doppler_token
-    resend_api_key              = var.resend_api_key
+    image_name                           = var.image_name
+    ci_deploy_script_b64                 = base64encode(file("${path.module}/ci-deploy.sh"))
+    cat_deploy_state_script_b64          = base64encode(file("${path.module}/cat-deploy-state.sh"))
+    canary_bundle_claim_check_script_b64 = base64encode(file("${path.module}/canary-bundle-claim-check.sh"))
+    disk_monitor_script_b64              = base64encode(file("${path.module}/disk-monitor.sh"))
+    resource_monitor_script_b64          = base64encode(file("${path.module}/resource-monitor.sh"))
+    fail2ban_sshd_local_b64              = base64encode(file("${path.module}/fail2ban-sshd.local"))
+    hooks_json_b64                       = base64encode(local.hooks_json)
+    tunnel_token                         = cloudflare_zero_trust_tunnel_cloudflared.web.tunnel_token
+    webhook_deploy_secret                = var.webhook_deploy_secret
+    doppler_token                        = var.doppler_token
+    resend_api_key                       = var.resend_api_key
   })
 
   # cloud-init and ssh_keys are create-time attributes. After import,
@@ -201,9 +202,10 @@ resource "terraform_data" "fail2ban_tuning" {
 # Source of truth for webhook.service: cloud-init.yml (search "path: /etc/systemd/system/webhook.service").
 # The standalone webhook.service file keeps triggers_replace and the file provisioner in sync.
 #
-# NOTE (#2205): ci-deploy.sh, cat-deploy-state.sh, and hooks.json are ALSO
-# provisioned via cloud-init write_files for fresh servers. See cloud-init.yml
-# (search "path: /usr/local/bin/ci-deploy.sh" and "/usr/local/bin/cat-deploy-state.sh").
+# NOTE (#2205): ci-deploy.sh, cat-deploy-state.sh, canary-bundle-claim-check.sh,
+# and hooks.json are ALSO provisioned via cloud-init write_files for fresh
+# servers. See cloud-init.yml (search "path: /usr/local/bin/ci-deploy.sh",
+# "/usr/local/bin/cat-deploy-state.sh", "/usr/local/bin/canary-bundle-claim-check.sh").
 # Both paths must stay in sync — a change here without updating cloud-init.yml
 # means new servers provisioned from scratch will miss the change.
 resource "terraform_data" "deploy_pipeline_fix" {
@@ -212,11 +214,13 @@ resource "terraform_data" "deploy_pipeline_fix" {
 
   # hcloud_server.web has ignore_changes=[user_data], so cloud-init never re-applies
   # to the existing server. This resource is the sole path for pushing ci-deploy.sh,
-  # webhook.service, cat-deploy-state.sh, and hooks.json updates to production (#2185).
+  # webhook.service, cat-deploy-state.sh, canary-bundle-claim-check.sh, and
+  # hooks.json updates to production (#2185, #3033).
   triggers_replace = sha256(join(",", [
     file("${path.module}/ci-deploy.sh"),
     file("${path.module}/webhook.service"),
     file("${path.module}/cat-deploy-state.sh"),
+    file("${path.module}/canary-bundle-claim-check.sh"),
     local.hooks_json,
   ]))
 
@@ -243,6 +247,11 @@ resource "terraform_data" "deploy_pipeline_fix" {
   }
 
   provisioner "file" {
+    source      = "${path.module}/canary-bundle-claim-check.sh"
+    destination = "/usr/local/bin/canary-bundle-claim-check.sh"
+  }
+
+  provisioner "file" {
     content     = local.hooks_json
     destination = "/etc/webhook/hooks.json"
   }
@@ -251,6 +260,7 @@ resource "terraform_data" "deploy_pipeline_fix" {
     inline = [
       "chmod +x /usr/local/bin/ci-deploy.sh",
       "chmod +x /usr/local/bin/cat-deploy-state.sh",
+      "chmod +x /usr/local/bin/canary-bundle-claim-check.sh",
       # hooks.json must be readable by the webhook (deploy group) but not world-readable --
       # it contains the HMAC secret. Provisioner "file" uploads as root:root by default.
       "chown root:deploy /etc/webhook/hooks.json",
