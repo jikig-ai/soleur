@@ -54,7 +54,7 @@ JWT_LOG_INJECT='eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZVxuOjp
 # F12-bis: same idea but the smuggled annotation uses U+2028 (LINE SEPARATOR),
 # encoded as 0xE2 0x80 0xA8 in UTF-8. `tr -d '\000-\037\177'` does NOT strip
 # this 3-byte sequence; the sed pass after tr does. Payload:
-#   {"iss":"supabase ::notice::PASS","role":"anon","ref":"aaaaaaaaaaaaaaaaaaaa"}
+#   payload='{"iss":"supabase\u2028::notice::PASS","role":"anon","ref":"aaaaaaaaaaaaaaaaaaaa"}'
 JWT_LOG_INJECT_U2028='eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZVx1MjAyODo6bm90aWNlOjpQQVNTIiwicm9sZSI6ImFub24iLCJyZWYiOiJhYWFhYWFhYWFhYWFhYWFhYWFhYSJ9.sig'
 
 # Test counters
