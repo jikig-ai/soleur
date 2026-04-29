@@ -6,6 +6,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { TeamNamesProvider } from "@/hooks/use-team-names";
 import { useSidebarCollapse } from "@/hooks/use-sidebar-collapse";
+import { ConversationsRail } from "@/components/chat/conversations-rail";
 
 const BANNER_DISMISS_KEY = "soleur:past_due_banner_dismissed";
 
@@ -152,8 +153,14 @@ export default function DashboardLayout({
       const tag = (e.target as HTMLElement)?.tagName;
       if (tag === "INPUT" || tag === "TEXTAREA") return;
       if ((e.target as HTMLElement)?.isContentEditable) return;
-      // Only fire on routes that are NOT KB or Settings
-      if (pathname.startsWith("/dashboard/kb") || pathname.startsWith("/dashboard/settings")) return;
+      // Only fire on routes that are NOT KB, Settings, or chat. On chat
+      // pages the ConversationsRail owns Cmd/Ctrl+B for its own collapse.
+      if (
+        pathname.startsWith("/dashboard/kb") ||
+        pathname.startsWith("/dashboard/settings") ||
+        pathname.startsWith("/dashboard/chat")
+      )
+        return;
       e.preventDefault();
       toggleCollapsed();
     }
@@ -185,6 +192,14 @@ export default function DashboardLayout({
 
   async function handleSignOut() {
     const supabase = createClient();
+    // Sign-out tears down ALL channels by design — do not introduce
+    // long-lived channels that must survive sign-out. supabase-js v2
+    // exposes removeAllChannels() as a single Promise<('ok'|'timed
+    // out'|'error')[]>, not an array of promises (the plan's pre-impl
+    // sketch said Promise.all(supabase.removeAllChannels()), which the
+    // TS overload rejects). Await the promise directly so phx_leave
+    // sends while the JWT is still valid before signOut().
+    await supabase.removeAllChannels();
     await supabase.auth.signOut();
     router.push("/login");
   }
@@ -281,6 +296,17 @@ export default function DashboardLayout({
             );
           })}
         </nav>
+
+        {/* Recent conversations — mobile drawer only. The chat segment
+            layout already renders the rail on md+; here we surface the same
+            row markup inside the drawer so phone users can switch threads
+            without leaving the drawer. */}
+        <div
+          data-testid="conversations-rail-drawer"
+          className="flex min-h-0 flex-1 flex-col border-t border-neutral-800 md:hidden"
+        >
+          <ConversationsRail />
+        </div>
 
         {/* Footer links */}
         <div className={`border-t border-neutral-800 safe-bottom ${collapsed ? "p-1" : "p-3"}`}>

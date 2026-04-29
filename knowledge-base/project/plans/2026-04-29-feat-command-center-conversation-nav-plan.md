@@ -77,7 +77,7 @@ USER_BRAND_CRITICAL feature; threshold = `single-user incident`. Reuses `useConv
 ## Files to edit
 
 - `apps/web-platform/hooks/use-conversations.ts` — add `limit?: number` to `UseConversationsOptions`; thread to `query.limit(opts?.limit ?? 50)`.
-- `apps/web-platform/app/(dashboard)/layout.tsx` — single edit: extend `handleSignOut` (line 186-189) to `await Promise.all(supabase.removeAllChannels())` BEFORE `auth.signOut()`. Add a one-line code comment per Kieran: "Sign-out tears down ALL channels by design — do not introduce long-lived channels that need to survive sign-out."
+- `apps/web-platform/app/(dashboard)/layout.tsx` — extend `handleSignOut` (line 186-189) to `await supabase.removeAllChannels()` BEFORE `auth.signOut()`. (Plan-time premise correction: `removeAllChannels()` is `Promise<('ok'|'timed out'|'error')[]>` — a single Promise of an array, NOT an array of Promises. `Promise.all(supabase.removeAllChannels())` is rejected by the supabase-js v2 type overload. Await the promise directly.) Add a one-line code comment per Kieran: "Sign-out tears down ALL channels by design — do not introduce long-lived channels that need to survive sign-out." Also widen the existing `Cmd/Ctrl+B` early-return at line 156 to skip `/dashboard/chat/*` so the rail's own `Cmd/Ctrl+B` handler owns toggle on chat pages.
 - `knowledge-base/project/specs/feat-command-center-conversation-nav/spec.md` — TR8 path correction; TR1 `repo_url` scope note.
 
 ## Files to create
@@ -141,10 +141,12 @@ Each row links to `/dashboard/chat/[conversationId]` rendering: title (truncated
    async function handleSignOut() {
      const supabase = createClient();
      // Sign-out tears down ALL channels by design — do not introduce long-lived
-     // channels that must survive sign-out. removeAllChannels() returns
-     // Promise<'ok'|'timed out'|'error'>[]; await before signOut() so phx_leave
+     // channels that must survive sign-out. supabase-js v2 returns a SINGLE
+     // Promise<('ok'|'timed out'|'error')[]> here (not an array of promises),
+     // so await the promise directly. Promise.all(supabase.removeAllChannels())
+     // is rejected by TS at compile time. Await before signOut() so phx_leave
      // sends while the JWT is still valid.
-     await Promise.all(supabase.removeAllChannels());
+     await supabase.removeAllChannels();
      await supabase.auth.signOut();
      router.push("/login");
    }
@@ -237,7 +239,7 @@ Both tests gate merge: 5a runs in CI; 5b runs locally pre-merge OR as a schedule
 
 - A plan whose `## User-Brand Impact` section is empty / `TBD` / missing the threshold will fail `deepen-plan` Phase 4.6. (This plan has it filled — carry-forward from brainstorm.)
 - `removeAllChannels()` is broad — sign-out tears down ALL channels by design. If a future component requires a long-lived channel that survives sign-out, it must be re-architected; do not work around the teardown. Code-comment in `handleSignOut` documents this contract.
-- Order of `removeAllChannels()` vs. `auth.signOut()` matters: removal first, sign-out second. Reverse risks `phx_leave` sending on a torn-down auth context. `removeAllChannels()` returns `Promise<'ok'|'timed out'|'error'>[]`; `await Promise.all(...)` is honest about the async fan-out.
+- Order of `removeAllChannels()` vs. `auth.signOut()` matters: removal first, sign-out second. Reverse risks `phx_leave` sending on a torn-down auth context. `removeAllChannels()` returns a SINGLE `Promise<('ok'|'timed out'|'error')[]>` — a promise of an array, not an array of promises. Await the promise directly; `Promise.all(supabase.removeAllChannels())` is rejected by the TS overload (caught at typecheck during work Phase 4).
 - Use `useParams<{ conversationId: string }>()` for active-row, not `usePathname` + string parsing.
 - Inline the 4-case status-badge mapping in `ConversationsRail`. Do NOT extract a shared component for v1; rule-of-three not hit (`/dashboard` and rail = two call sites). If a third call site appears later, file an extraction issue then.
 - The `(dashboard)/layout.tsx` edit is single-line scope: `handleSignOut`. Do not bundle other refactoring; #2194 stays untouched.
