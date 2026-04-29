@@ -89,7 +89,11 @@ If the inlined anon-key JWT regresses to a placeholder/test-fixture value:
    ```bash
    doppler secrets get NEXT_PUBLIC_SUPABASE_ANON_KEY -p soleur -c prd --plain \
      | tr -d '\r\n' \
-     | gh secret set NEXT_PUBLIC_SUPABASE_ANON_KEY --body -
+     | gh secret set NEXT_PUBLIC_SUPABASE_ANON_KEY
+   # `--body` omitted on purpose: gh reads from stdin when --body is not specified.
+   # `--body -` would set the secret to the literal '-'; inline `--body "$(...)"`
+   # would expose the JWT on the process command line (`ps`, /proc/<pid>/cmdline).
+   # Verified: gh secret set --help (gh 2.92.0, 2026-04-29).
    ```
 3. Trigger a fresh release workflow run. The new CI Validate step now runs before any Docker work — confirm it passes.
 4. Re-probe the deployed bundle:
