@@ -260,7 +260,7 @@ if (import.meta.main) {
   } else if (cmd === "reset") {
     await reset();
   } else {
-    console.error(`Usage: bun ${import.meta.path} <seed|reset>`);
+    console.error("Usage: bun bot-fixture.ts <seed|reset>");
     process.exit(2);
   }
 }
