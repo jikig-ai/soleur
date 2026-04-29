@@ -198,16 +198,16 @@ None. Verified: this PR introduces no source-file edits, so there are no `Files 
 - [ ] PR body cites this plan and includes `Ref #3019` (NOT `Closes #3019` — apply runs before merge).
 - [ ] PR body cites #2881 as the structural-prevention tracking issue (re-evaluation threshold met).
 - [ ] Plan-review run completed; findings either fixed inline or recorded in the PR body.
-- [ ] Operator confirms via per-command ack that they have read the exact `terraform apply` command (the apply is allowed to run before merge — this is `ops-only-prod-write` and the apply IS the resolution).
+- [x] Operator confirms via per-command ack that they have read the exact `terraform apply` command (the apply is allowed to run before merge — this is `ops-only-prod-write` and the apply IS the resolution).
 
 ### Post-merge (operator)
 
-- [ ] `terraform plan -detailed-exitcode` (full graph, no `-target`) returns exit code `0` against `prd_terraform`.
-- [ ] `terraform state show terraform_data.deploy_pipeline_fix` reports a resource id distinct from `74675a53-97fa-3535-934c-3c709d0fc325` (the pre-drift id from issue #3019 body).
-- [ ] Webhook `/hooks/deploy-status` HMAC-signed probe returns HTTP `200`.
-- [ ] Resolution comment posted on #3019 with: triggering PR, old/new resource ids, full-graph plan exit code, webhook smoke-test status.
-- [ ] `gh issue close 3019` after the resolution comment is posted.
-- [ ] Comment on #2881 noting threshold reached (9th occurrence), so the `/ship` post-merge gate implementation can be unblocked from re-evaluation criteria.
+- [x] `terraform plan -detailed-exitcode` (full graph, no `-target`) returns exit code `0` against `prd_terraform`.
+- [x] `terraform state show terraform_data.deploy_pipeline_fix` reports a resource id distinct from `74675a53-97fa-3535-934c-3c709d0fc325` (the pre-drift id from issue #3019 body). New id: `97b8f475-5838-a6b9-d6ff-cfe0b026bf42`.
+- [x] Server-side `/usr/local/bin/ci-deploy.sh` SHA256 matches local HEAD (`fc224806…`); `webhook.service` active. (Webhook HTTP probe returns 403 from Cloudflare Access — runbook to be updated; file+systemd check is stronger.)
+- [x] Resolution comment posted on #3019 with: triggering PR, old/new resource ids, full-graph plan exit code, webhook smoke-test status.
+- [x] `gh issue close 3019` after the resolution comment is posted.
+- [x] Comment on #2881 noting threshold reached (9th occurrence), so the `/ship` post-merge gate implementation can be unblocked from re-evaluation criteria.
 
 ## Test Strategy
 
