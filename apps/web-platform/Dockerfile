@@ -70,6 +70,14 @@ COPY --from=builder /app/dist/server ./dist/server
 # Config file (compiled from .ts to .mjs to avoid TypeScript dep at runtime)
 COPY --from=builder /app/next.config.mjs ./next.config.mjs
 
+# Plugin baked at build time from the vendored copy in the build context (#3045).
+# Source tree is plugins/soleur, vendored to apps/web-platform/_plugin-vendored
+# by reusable-release.yml's "Vendor plugin into build context" step before docker build.
+# The bind-mount /mnt/data/plugins/soleur is seeded from this path by ci-deploy.sh
+# via `docker cp <ephemeral>:/opt/soleur/plugin/. /mnt/data/plugins/soleur/`.
+COPY _plugin-vendored /opt/soleur/plugin
+RUN chown -R 1001:1001 /opt/soleur
+
 # Non-root user (UID 1001 avoids collision with node:22-slim's built-in node user at UID 1000)
 RUN useradd --no-log-init --uid 1001 -m soleur \
     && chown -R soleur:soleur .next

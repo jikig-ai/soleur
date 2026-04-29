@@ -356,6 +356,30 @@ runcmd:
 
   # Pull and run container (secrets from Doppler -- no .env fallback)
   - docker pull ${image_name}
+
+  # Seed /mnt/data/plugins/soleur from the image's baked plugin tree (#3045).
+  # Ephemeral container so we don't depend on a long-running container.
+  # `docker cp src/.` copies *contents* (not the src dir itself) into dst.
+  # `find -mindepth 1 -delete` is POSIX-portable: cloud-init `- |` blocks run
+  # under /bin/sh (= dash on Ubuntu), which has no bash brace-expansion. The
+  # same form is also used in ci-deploy.sh so both paths share one cleanup
+  # expression and the bash test exercises the production form.
+  # The .seed-complete sentinel is written LAST and checked by
+  # verifyPluginMountOnce so a partial copy (manifest present but skill files
+  # missing) is detected at startup instead of silently degrading.
+  - |
+    set -e
+    docker rm -f soleur-plugin-seed >/dev/null 2>&1 || true
+    cleanup() { docker rm -f soleur-plugin-seed >/dev/null 2>&1 || true; }
+    trap cleanup EXIT
+    docker create --name soleur-plugin-seed ${image_name}
+    find /mnt/data/plugins/soleur -mindepth 1 -delete 2>/dev/null || true
+    docker cp soleur-plugin-seed:/opt/soleur/plugin/. /mnt/data/plugins/soleur/
+    docker rm soleur-plugin-seed
+    trap - EXIT
+    printf '%s\n' "seeded $(date -u +%Y-%m-%dT%H:%M:%SZ) tag=cloud-init" \
+      > /mnt/data/plugins/soleur/.seed-complete
+
   - |
     set -e
     # Source token from the restricted env file (avoids exposing it in /proc/<pid>/cmdline)

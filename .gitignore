@@ -71,3 +71,8 @@ artifacts/
 # Stage 0 spike throwaway workspace + raw-run artifacts
 .spike-workspace/
 knowledge-base/project/plans/spike-raw-*.json
+
+# CI-vendored plugin tree (#3045) — populated by reusable-release.yml's
+# "Vendor plugin into build context" step before docker build. Local devs
+# building the image manually run the same `cp -r` command; never commit.
+apps/web-platform/_plugin-vendored/

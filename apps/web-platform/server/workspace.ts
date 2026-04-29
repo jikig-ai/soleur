@@ -15,6 +15,7 @@ import {
   GitOperationError,
 } from "./git-auth";
 import { generateInstallationToken, checkRepoAccess } from "./github-app";
+import { getPluginPath } from "./plugin-path";
 
 const GITHUB_URL_RE =
   /^https:\/\/github\.com\/([a-zA-Z0-9._-]+)\/([a-zA-Z0-9._-]+?)(?:\.git)?\/?$/;
@@ -33,10 +34,6 @@ const log = createChildLogger("workspace");
 
 function getWorkspacesRoot(): string {
   return process.env.WORKSPACES_ROOT || "/workspaces";
-}
-
-function getPluginPath(): string {
-  return process.env.SOLEUR_PLUGIN_PATH || "/app/shared/plugins/soleur";
 }
 
 const KNOWLEDGE_BASE_PROJECT_DIRS = [
