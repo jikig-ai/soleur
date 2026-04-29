@@ -357,37 +357,51 @@ actual close happens here, after evidence is recorded.
 
 ### Pre-merge (PR)
 
-- [ ] Plan file committed under `knowledge-base/project/plans/`.
-- [ ] `tasks.md` committed under
+- [x] Plan file committed under `knowledge-base/project/plans/`.
+- [x] `tasks.md` committed under
   `knowledge-base/project/specs/feat-one-shot-3015-trigger-prod-build/`.
-- [ ] PR body uses `Ref #3015` (NOT `Closes #3015`).
-- [ ] Phase 1 verification commands enumerated with exact flags (not
+- [x] PR body uses `Ref #3015` (NOT `Closes #3015`).
+- [x] Phase 1 verification commands enumerated with exact flags (not
   paraphrased from the runbook).
 
-### Post-merge (operator)
+### Post-merge (operator) — completed 2026-04-29 by /one-shot
 
-- [ ] Phase 1.2 Sentry digest captured (event count, first/last-seen).
-- [ ] Phase 1.3 `canary-bundle-claim-check.sh` result recorded (PASS/FAIL +
-  which assertion failed if applicable).
-- [ ] Phase 1.4 no-op exit gate decision recorded — either "exit
-  triggered, Phase 2 skipped" with the run-ID of the build attributed to
-  recovery, OR "Phase 2 required, reason: ..." with Phase 1.2/1.3
-  evidence.
-- [ ] If Phase 2 ran: workflow run ID, conclusion, release tag captured;
-  dispatch-noise rationale recorded (or N/A if a code-change auto-trigger
-  delivered the fix).
-- [ ] If Phase 2.4 rollback ran: previous-good tag, rollback dispatch run
-  ID, post-rollback canary swap log captured.
-- [ ] Phase 3.1 canary swap log line shows `final_write_state 0 "ok"`.
-- [ ] Phase 3.2 Playwright screenshot exists and does NOT contain
-  `data-error-boundary=`.
-- [ ] Phase 3.3 re-run of `canary-bundle-claim-check.sh` returns 0.
-- [ ] `dashboard-error-postmortem.md` Recovery Verification section filled;
-  frontmatter `status` flipped to `closed: 2026-04-29`.
-- [ ] `gh issue close 3015` ran with evidence comment.
-- [ ] Operator IP is in the Hetzner SSH allow-list (per AGENTS.md
-  `hr-ssh-diagnosis-verify-firewall` — Phase 3.1 ssh fails fast otherwise;
-  re-run `/soleur:admin-ip-refresh` if drift is detected).
+- [x] Phase 1.2 Sentry digest captured: 0 events for
+  `feature:dashboard-error-boundary OR feature:supabase-validator-throw`
+  in last 24h. Pre-fix events: `a3edfa6f` and `87ba1b0f` at 22:22:24Z
+  (TypeError: Unknown encoding: base64url, v0.58.1, fixed in #3017).
+- [x] Phase 1.3 `canary-bundle-claim-check.sh` result recorded: FAIL
+  (`no JWT found in login chunk`) — false negative from the script's
+  stale bundle-layout assumption. Tracked by #3033.
+- [x] Phase 1.4 no-op exit gate decision recorded: exit triggered,
+  Phase 2 skipped. Recovery attributed to PR #3017's auto-build
+  (run completed 2026-04-28 22:31:40Z, headSha `92e8b3d5`, swap at
+  22:37:08Z).
+- [x] If Phase 2 ran: N/A (Phase 1.4 exit, Phase 2 skipped).
+- [x] If Phase 2.4 rollback ran: N/A (no Phase 2).
+- [x] Phase 3.1 canary swap log: `Canary OK` + `Canary passed,
+  swapping to production` + `Deploy succeeded` + deploy-status
+  `{"exit_code":0,"reason":"ok","tag":"v0.58.2"}` at 2026-04-28
+  22:37:08Z (deploy harness equivalent of `final_write_state 0 "ok"`).
+- [x] Phase 3.2 Playwright screenshot exists
+  (`.playwright-mcp/3015-dashboard-redirect-login.png`) and does NOT
+  contain `data-error-boundary=`. /dashboard → /login redirect
+  (auth gate); login renders cleanly, zero console errors.
+- [x] Phase 3.3 re-run of `canary-bundle-claim-check.sh` — substituted
+  by manual JWT decode of the post-#3017 chunk
+  `/_next/static/chunks/8237-323358398e5e7317.js`:
+  `iss=supabase, role=anon, ref=ifsccnjhymdmidffkzhl (20 chars,
+  no placeholder prefix)`. Script-broadening fix tracked by #3033.
+- [x] `dashboard-error-postmortem.md` Recovery Verification section
+  filled; frontmatter `status` flipped to
+  `closed: 2026-04-29`.
+- [ ] `gh issue close 3015` ran with evidence comment — deferred to
+  post-merge (per Phase 4 of this plan; the close happens after the
+  PR for this work merges so the issue can reference the merged
+  artifacts).
+- [x] Operator IP is in the Hetzner SSH allow-list — verified via
+  successful `ssh root@135.181.45.178 'hostname'` returning
+  `soleur-web-platform`; egress IP `82.67.29.121`.
 
 ## Test Scenarios
 

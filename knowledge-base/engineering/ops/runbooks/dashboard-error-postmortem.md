@@ -2,10 +2,10 @@
 title: "Postmortem: app.soleur.ai/dashboard error.tsx outage"
 date: 2026-04-28
 incident_pr: 3014
-incident_window: "TBD (operator fills in: Sentry first-seen → fix-deploy time)"
-suspected_change: "PR #3007 — JWT-claims guardrails for NEXT_PUBLIC_SUPABASE_ANON_KEY"
+incident_window: "2026-04-28 ~22:22Z (Sentry first-seen `TypeError: Unknown encoding: base64url`) → 2026-04-28 22:37:08Z (v0.58.2 canary swap completed; recovery delivered by PR #3017's browser-safe JWT decode + Layer 2 promotion)"
+suspected_change: "PR #3007 — JWT-claims guardrails for NEXT_PUBLIC_SUPABASE_ANON_KEY (validator's runtime base64url decode fails in browser; fixed in PR #3017)"
 brand_threshold: single-user incident
-status: open (operator fills in once Phase 1 + Phase 2 are complete)
+status: closed: 2026-04-29 (verified via #3015 follow-through; see Recovery Verification)
 triggers:
   - dashboard error boundary
   - inlined supabase claim
@@ -183,11 +183,11 @@ cause before Phase 2.
 
 ## Confirmed Root Cause
 
-(Operator fills in after Phase 1.)
+Filled in 2026-04-29 from the Sentry digest captured during #3015 verification.
 
-- Hypothesis confirmed: **TBD**
-- Evidence (Sentry event ID, browser console, bundle grep): **TBD**
-- Failed assertion (or non-validator stack frame): **TBD**
+- **Hypothesis confirmed:** H1 (inlined anon-key validator throw at module load), with the precise failure mode being the validator's `base64url` decode call failing in the browser runtime — `TypeError: Unknown encoding: base64url`. PR #3017 ("browser-safe JWT decode + Layer 2 promotion") replaced the Node-only decode path with a browser-safe equivalent, and the same change relocated the Supabase init out of the login chunk into a shared async chunk so the throw site no longer hydrates as part of the auth landing.
+- **Evidence:** Sentry events `a3edfa6f` and `87ba1b0f` at 2026-04-28T22:22:24Z on project `soleur-web-platform`, both `TypeError: Unknown encoding: base64url`, occurring on the v0.58.1 build (post-#3016, pre-#3017). Zero matching events in the last 24h after v0.58.2 swap (Sentry digest run 2026-04-29 from /one-shot #3015).
+- **Failed assertion:** the validator's `base64url` decode call (the prerequisite to the canonical-claim assertions in `assertProdSupabaseAnonKey`); the assertion bodies themselves never executed because the runtime threw before reaching them.
 
 ## Phase 2 — Hot-fix (`agent-with-ack` for every step)
 
@@ -242,12 +242,31 @@ renders correctly, not the boundary.
 
 ## Recovery Verification
 
-(Operator fills in.)
+Filled in 2026-04-29 by /one-shot pipeline against issue #3015. Phase 2
+trigger was **not executed** — Phase 1.4 no-op exit gate triggered:
+recovery was delivered organically by the auto-trigger on PR #3017's
+push to `apps/web-platform/**` (path-filtered), which shipped at
+`92e8b3d5` and ran the canary swap at 22:37:08Z. Sentry digest of
+`feature:dashboard-error-boundary OR feature:supabase-validator-throw`
+over 24h returned zero events; the pre-fix `TypeError: Unknown
+encoding: base64url` events at 22:22Z (v0.58.1) were the originating
+regression PR #3017 fixed.
 
-- New release tag: **TBD**
-- Canary swap log line: **TBD**
-- Playwright screenshot: **TBD**
-- Re-run of Phase 1 step 1.3 (inlined-JWT check passes): **TBD**
+- **New release tag:** `web-v0.58.2` (commit `92e8b3d5`, PR #3017 — `fix(supabase): browser-safe JWT decode + preflight Check 9 + Layer 2 promotion`).
+- **Canary swap log line (from prod journald, 2026-04-28 22:37:08Z):**
+  ```
+  Canary OK
+  Canary passed, swapping to production...
+  Deploy succeeded
+  deploy-status: {"start_ts":1777415797,"end_ts":1777415828,"exit_code":0,"reason":"ok","tag":"v0.58.2"}
+  ```
+  (`exit_code: 0, reason: ok` is the equivalent of `final_write_state 0 "ok"` in this deploy harness.)
+- **Playwright screenshot:** [`screenshots/3015/dashboard-redirect-login.png`](screenshots/3015/dashboard-redirect-login.png) — `/dashboard` redirects to `/login`, which renders cleanly. No `data-error-boundary=` marker in HTML, no "Something went wrong / unexpected error" body text, zero console errors/warnings. (Unauthenticated check, as permitted by the plan; signed-in render verification is the D2 follow-up.)
+- **Re-run of Phase 1 step 1.3 (inlined-JWT check passes):** ⚠ The shipped script `apps/web-platform/infra/canary-bundle-claim-check.sh` returned `no JWT found in login chunk` (exit 1) — but this is a **false negative** caused by PR #3017's "Layer 2 promotion" moving the Supabase init out of `app/(auth)/login/page-*.js` into a shared async chunk (`/_next/static/chunks/8237-323358398e5e7317.js`, where the JWT now lives). Manual decode of the JWT from the new chunk confirms canonical claims: `iss=supabase, role=anon, ref=ifsccnjhymdmidffkzhl` (20 lowercase alphanumeric chars, no placeholder prefix) — passes every assertion the script tests. Tracked as **#3033** with proposed mount + script-broadening fix; Layer 3 has additionally been silently skipped on every deploy since #3014 because `apps/web-platform/infra/` is not mounted into the canary container.
+
+### Other deepen-pass observations recorded for the audit trail
+
+- A non-blocking warning surfaces on every prod image pull: `dockerd: failed to validate image signature ... expected image index descriptor, got application/vnd.docker.distribution.manifest.v2+json`. The image still pulls and the canary still swaps — out of scope for this postmortem; flag for a separate ops follow-up if signature enforcement is desired.
 
 ## Why both gates failed
 
@@ -265,7 +284,7 @@ renders correctly, not the boundary.
 | D2 | Synthetic auth fixture for full /dashboard render verification in canary. | Doppler-stored test JWT + Playwright; agent-implementable. |
 | D3 | Cloudflare worker for error-boundary HTML detection (belt-and-suspenders). | Cloudflare Workers MCP / Terraform; agent-implementable. |
 | D4 | Sentry settings drift detection cron (mirroring `scheduled-cf-token-expiry-check.yml`). | Scheduled GH Action + Sentry REST API; agent-implementable. |
-| D5 | Landed in #3014 — `apps/web-platform/infra/canary-bundle-claim-check.sh` is wired into ci-deploy.sh as Layer 3. | n/a — closed. |
+| D5 | Landed in #3014 — `apps/web-platform/infra/canary-bundle-claim-check.sh` is wired into ci-deploy.sh as Layer 3. | n/a — closed (but see #3033, which re-opens the broader canary-Layer-3 effectiveness: the script is silently skipped because `apps/web-platform/infra/` is not mounted into the canary container, AND its bundle-layout assumption was invalidated by PR #3017). |
 | D6 | Sentry alert rule on `feature: "supabase-validator-throw"` and `feature: "dashboard-error-boundary"` (event.count > 10 in 1m). | Sentry REST API (`/api/0/projects/{org}/{project}/rules/`); agent-implementable. |
 | D7 | Synthetic auth-flow check hitting `/dashboard` from a signed-in fixture every 5 min. | **Agent-automatable**: scheduled GH Actions workflow (mirrors `scheduled-cf-token-expiry-check.yml`) + Playwright MCP + Doppler-stored test fixture. NOT a third-party SaaS dependency — implement in-tree. |
 
