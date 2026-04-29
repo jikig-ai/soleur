@@ -3,6 +3,7 @@
 import { useState, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
+import { reportSilentFallback } from "@/lib/client-observability";
 import { OAuthButtons } from "@/components/auth/oauth-buttons";
 import { EMAIL_OTP_LENGTH } from "@/lib/auth/constants";
 import { mapSupabaseError } from "@/lib/auth/error-messages";
@@ -30,6 +31,14 @@ export default function SignupPage() {
 
     if (error) {
       console.error("[auth] Supabase error:", error.message);
+      reportSilentFallback(error, {
+        feature: "auth",
+        op: "signInWithOtp",
+        extra: {
+          errorCode: (error as { code?: string }).code,
+          errorName: error.name,
+        },
+      });
       setError(mapSupabaseError(error.message));
     } else {
       setOtpSent(true);
@@ -53,6 +62,14 @@ export default function SignupPage() {
 
     if (error) {
       console.error("[auth] Supabase error:", error.message);
+      reportSilentFallback(error, {
+        feature: "auth",
+        op: "verifyOtp",
+        extra: {
+          errorCode: (error as { code?: string }).code,
+          errorName: error.name,
+        },
+      });
       setError(mapSupabaseError(error.message));
     } else {
       router.push("/accept-terms");
