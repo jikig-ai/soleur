@@ -58,9 +58,9 @@ jobs:
           1. Go to https://www.linkedin.com/developers/tools/oauth/token-generator?clientId=78wtm2wu15iikn
           2. Select scopes: openid, profile, w_member_social, email
           3. Accept redirect URL confirmation -> Request access token -> Sign in -> Allow
-          4. Copy the new token and run:
+          4. Copy the new token and run (printf, not echo — `echo` appends `\n` which `gh secret set` would persist, breaking the JWT):
              ```bash
-             echo "<new-token>" | gh secret set LINKEDIN_ACCESS_TOKEN
+             printf '%s' '<new-token>' | gh secret set LINKEDIN_ACCESS_TOKEN
              ```
 
           **Person URN** (`LINKEDIN_PERSON_URN`) does not expire and does not need renewal.
