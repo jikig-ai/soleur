@@ -219,6 +219,7 @@ describe("cc-dispatcher singletons + orchestration", () => {
       reapIdle: () => 0,
       closeConversation: () => {},
       respondToToolUse: () => false,
+      notifyAwaitingUser: () => {},
       // biome-ignore lint/suspicious/noExplicitAny: minimal stub
     } as any;
     __setCcRunnerForTests(stubRunner);
@@ -264,6 +265,7 @@ describe("cc-dispatcher singletons + orchestration", () => {
       reapIdle: () => 0,
       closeConversation: () => {},
       respondToToolUse: () => false,
+      notifyAwaitingUser: () => {},
       // biome-ignore lint/suspicious/noExplicitAny: minimal stub
     } as any;
     __setCcRunnerForTests(stubRunner);
@@ -318,6 +320,7 @@ describe("cc-dispatcher singletons + orchestration", () => {
       reapIdle: () => 0,
       closeConversation: () => {},
       respondToToolUse: () => false,
+      notifyAwaitingUser: () => {},
       // biome-ignore lint/suspicious/noExplicitAny: minimal stub
     } as any);
 
@@ -362,6 +365,7 @@ describe("cc-dispatcher singletons + orchestration", () => {
       reapIdle: () => 0,
       closeConversation: () => {},
       respondToToolUse: () => false,
+      notifyAwaitingUser: () => {},
       // biome-ignore lint/suspicious/noExplicitAny: minimal stub
     } as any;
     __setCcRunnerForTests(stubRunner);

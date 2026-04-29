@@ -148,9 +148,48 @@ ships here; the dispatcher abstraction lifts above it later).
 - Raw rerun data (gitignored): `knowledge-base/project/plans/spike-raw-stream-input.json`.
 - Production runner arrives in Stage 2 of the plan.
 
-## 2026-04-29 follow-up
+## 2026-04-29 follow-up — Command Center QA fixes (PR #3020)
 
-- **Safe-Bash auto-approve allowlist** added in `permission-callback.ts` — read-only file/git inspection commands (e.g., `pwd`, `ls`, `git status`) bypass the user gate. Compound commands and shell-metacharacter inputs still flow through the existing review-gate. The SDK `bypassPermissions` mode was rejected as unsafe in the multi-tenant web app.
-- **Awaiting-user pause hook** in the runner — the wall-clock runaway timer pauses while a user gate is awaiting response. Wired via `cc-dispatcher.ts updateConversationStatus`. Wall-clock now counts agent compute time only, not human read time.
-- **Agent rename** — `cc_router.title` → "Soleur Concierge" (internal id unchanged).
-- **User-facing workflow-end copy** moved to a typed `WORKFLOW_END_USER_MESSAGES` map.
+Three QA findings from the V1 dogfood drove this amendment. See plan `knowledge-base/project/plans/2026-04-29-fix-command-center-qa-permissions-runaway-rename-plan.md`.
+
+### Decision 1 — Safe-Bash auto-approve allowlist (NOT `bypassPermissions`)
+
+**Context:** users were prompted to Approve/Deny trivial inspection commands (`pwd`, `ls`, `git status`) on every turn; the user-suggested fix was the SDK's `--dangerously-skip-permissions` flag (i.e. `permissionMode: "bypassPermissions"`).
+
+**Rejected:** `bypassPermissions` is an SDK-level kill-switch for the entire `canUseTool` chain. Per `@anthropic-ai/claude-agent-sdk/sdk.d.ts:1101-1111`, it bypasses (a) `BLOCKED_BASH_PATTERNS` deny (`curl|wget|nc|sudo|sh -c|/dev/tcp|base64 -d|eval`), (b) `FILE_TOOLS` sandbox-path check, (c) tier-blocked platform tools, (d) the plugin MCP allowlist. In a multi-tenant web app where the LLM consumes prompt-injection-vulnerable user input, any successful injection becomes immediate code execution within the user's sandbox — with BYOK key + service tokens reachable in env.
+
+Two SDK-side alternatives also considered and rejected:
+
+- `permissionMode: "acceptEdits"` — auto-approves file edits; doesn't help (`pwd` is Bash, not a file edit) and would auto-approve `Edit`/`Write`. Strict regression.
+- `permissionMode: "dontAsk"` — denies anything not pre-approved. Would re-engineer the entire permission model. Scope creep.
+
+**Accepted:** narrow `SAFE_BASH_PATTERNS` allowlist in `permission-callback.ts` (read-only file/git/cwd inspection: `pwd`, `ls`, `cat`, `head`, `tail`, `wc`, `file`, `stat`, `which`, `whoami`, `id`, `date`, `uname`, `hostname`, `echo`, `git status|log|diff|show|branch|rev-parse`, `git config --get`). Each pattern is a leading-token regex with strict argument shape. The check runs AFTER `BLOCKED_BASH_PATTERNS` (defense in depth) and BEFORE the review-gate. Compound commands, shell metacharacters (`;`, `&`, `|`, backtick, `<`, `>`, `$`, U+2028, U+2029, `\n`, `\r`, `\\`), and inputs over 4096 chars fall through to the gate.
+
+**Threat model surface that remains in force:** `BLOCKED_BASH_PATTERNS` deny, `FILE_TOOLS` sandbox-path check, plugin MCP allowlist, and the per-(user, conversation) review-gate. Notably excluded from the allowlist: `printenv` (env-dump risk for BYOK key + service tokens), `find` and `grep` (`-exec` could shell out).
+
+### Decision 2 — Awaiting-user pause hook for the runaway timer
+
+**Context:** the wall-clock runaway timer (`soleur-go-runner.ts`, default 30s) armed on first `tool_use` and only cleared on `SDKResultMessage`. While a Bash review-gate awaited the user's click, no result arrived → timer fired with `Workflow ended (runner_runaway)`. The product became unusable for any non-trivial Bash-touching prompt.
+
+**Decision:** add `notifyAwaitingUser(conversationId, awaiting: boolean)` to `SoleurGoRunner`. While `awaiting === true`, `armRunaway` is a no-op and the timer callback re-checks the flag (race-window guard). On `awaiting === false`, the runner re-arms with a fresh `state.firstToolUseAt = now()` if no `SDKResultMessage` has cleared it.
+
+**Wall-clock contract change (RUNNER PUBLIC API):** the wall-clock budget now measures **agent compute time only**, not human read time. A user who pauses indefinitely no longer triggers `runner_runaway`; the upstream safety net is `abortableReviewGate`'s 5-minute timeout (`review-gate.ts`), which rejects → `consumeStream` catches → `internal_error` fires once. Safety-net hierarchy: `abortableReviewGate` (5 min) > `runaway` (30 s agent compute).
+
+**Wired via:** `cc-dispatcher.ts updateConversationStatus` calls `notifyAwaitingUser(true)` on `"waiting_for_user"` and `(false)` on `"active"`. When the runner has no active query for the conversation (reaped or container-restarted), `notifyAwaitingUser` mirrors via `reportSilentFallback` and returns; the conversation status write proceeds and the abandoned canUseTool subprocess hits the 5-min safety net cleanly.
+
+**Known limitations** (filed as follow-ups): rapid `waiting_for_user` ↔ `active` flap can extend the budget across pauses; the idle reaper does not consult `awaitingUser` and may reap a conversation in the middle of a >10-min user pause.
+
+### Decision 3 — `WORKFLOW_END_USER_MESSAGES` typed map
+
+`cc-dispatcher.ts onWorkflowEnded` previously emitted `Workflow ended (${status}) — retry to continue.` — a status-enum leak with hostile copy. Replaced with `WORKFLOW_END_USER_MESSAGES: Record<WorkflowEndStatus, string>`. Adding a new variant to `WorkflowEnd["status"]` produces a TS error at the map declaration; runtime test in `cc-dispatcher.test.ts` snapshots all keys.
+
+### Decision 4 — Phantom approval cards (resolved-card UX)
+
+Two related fixes:
+
+- `interactive-prompt-card.tsx` resolved state across all 6 variants (`ask_user`, `plan_preview`, `diff`, `bash_approval`, `todo_write`, `notebook_edit`) renders a compact `<ResolvedCardRow>` matching `ReviewGateCard:40-49` instead of disabled buttons + footer.
+- `soleur-go-runner.ts classifyInteractiveTool` returns `null` for Bash when `isBashCommandSafe(command)` matches — auto-approved commands no longer emit phantom `bash_approval` `interactive_prompt` events that would land orphan cards in `pendingPrompts`.
+
+### Decision 5 — Agent rename
+
+`cc_router.title` → "Soleur Concierge", `name` → "Concierge". Internal id `cc_router` unchanged across all consumers (test files, state-machine narrowing, leader-colors map, tool-use chip).

@@ -108,7 +108,19 @@ export function isBashCommandBlocked(command: string): boolean {
 // `find` and `grep` are intentionally OMITTED — both accept `-exec` and
 // could shell out. `find` is also redundant with the SDK's `Glob` tool
 // which is auto-allowed via FILE_TOOLS.
-const SHELL_METACHAR_DENYLIST = /[;&|`<>\n\r\\]|\$\(|\$\{/;
+//
+// `printenv` is intentionally OMITTED — without an arg it dumps the
+// entire env (BYOK key, service tokens). Even with an arg, the env may
+// hold secrets the agent never needs to read; users who want a single
+// var should let the agent ask for it via the review-gate.
+//
+// `$` is in the metachar denylist so `echo "$VAR"` (which bash expands
+// inside double quotes) is rejected. U+2028 / U+2029 are included to
+// match the project's Unicode line-separator hardening pattern.
+const SHELL_METACHAR_DENYLIST = /[;&|`<>$\n\r\\\u2028\u2029]/;
+// Belt-and-suspenders: a 4096-char input cap before regex matching keeps
+// pathological-length inputs from amplifying any backtracking cost.
+const SAFE_BASH_MAX_INPUT_LENGTH = 4096;
 
 // Path/identifier arg shape: word chars, slash, dot, tilde, plus, colon,
 // equals, hyphen, at-sign. No shell-special chars, no spaces inside a
@@ -116,9 +128,9 @@ const SHELL_METACHAR_DENYLIST = /[;&|`<>\n\r\\]|\$\(|\$\{/;
 const PATH_TOKEN = String.raw`[\w./~+:=@-]+`;
 
 // Quoted-or-bareword token for `echo` — accepts `"hello world"`,
-// `'foo bar'`, or path-shape barewords. Excludes backtick/$ inside
-// quotes (metachar denylist already rejected those at the raw-string
-// level, but keep the regex strict).
+// `'foo bar'`, or path-shape barewords. The metachar denylist already
+// rejects `$`/backtick at the raw-string level, so quoted strings here
+// cannot contain expansion sigils.
 const ECHO_TOKEN = String.raw`(?:"[^"\\]*"|'[^'\\]*'|[\w./~+:=@-]+)`;
 
 export const SAFE_BASH_PATTERNS: readonly RegExp[] = [
@@ -138,8 +150,6 @@ export const SAFE_BASH_PATTERNS: readonly RegExp[] = [
   new RegExp(String.raw`^file\s+${PATH_TOKEN}\s*$`),
   new RegExp(String.raw`^stat\s+${PATH_TOKEN}\s*$`),
   new RegExp(String.raw`^which\s+${PATH_TOKEN}\s*$`),
-  // printenv: optional uppercase identifier
-  /^printenv(?:\s+[A-Z_][A-Z0-9_]*)?\s*$/,
   // uname with optional flags
   /^uname(?:\s+-[a-zA-Z]+)*\s*$/,
   // git read-only verbs
@@ -182,6 +192,7 @@ export const SAFE_BASH_PATTERNS: readonly RegExp[] = [
  */
 export function isBashCommandSafe(command: unknown): boolean {
   if (typeof command !== "string" || command.length === 0) return false;
+  if (command.length > SAFE_BASH_MAX_INPUT_LENGTH) return false;
   // Stage 1: raw-string metacharacter denylist. Run BEFORE trim so
   // leading/trailing newlines (for example) are caught.
   if (SHELL_METACHAR_DENYLIST.test(command)) return false;

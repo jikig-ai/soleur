@@ -296,21 +296,47 @@ describe("soleur-go-runner interactive-prompt bridge (Stage 2.10)", () => {
     }
   });
 
-  it("Bash tool_use → emit interactive_prompt with kind bash_approval", async () => {
+  it("Bash tool_use (non-allowlisted) → emit interactive_prompt with kind bash_approval", async () => {
     await runOneToolUse({
       id: "toolu_bash",
       name: "Bash",
-      input: { command: "ls -la", cwd: "/w" },
+      input: { command: "npm test", cwd: "/w" },
     });
 
     expect(emittedEvents).toHaveLength(1);
     const { event } = emittedEvents[0]!;
     expect(event.kind).toBe("bash_approval");
     if (event.kind === "bash_approval") {
-      expect(event.payload.command).toBe("ls -la");
+      expect(event.payload.command).toBe("npm test");
       expect(event.payload.cwd).toBe("/w");
       expect(event.payload.gated).toBe(true);
     }
+  });
+
+  it("Bash tool_use (safe-bash allowlist) → emits NO interactive_prompt (auto-approved upstream)", async () => {
+    // Auto-approved commands surface a tool_use chip via the standard
+    // streaming path; classifying them here would land an orphan
+    // bash_approval card in pendingPrompts that the user never sees.
+    await runOneToolUse({
+      id: "toolu_pwd",
+      name: "Bash",
+      input: { command: "pwd", cwd: "/w" },
+    });
+    expect(emittedEvents).toHaveLength(0);
+
+    await runOneToolUse({
+      id: "toolu_ls",
+      name: "Bash",
+      input: { command: "ls -la", cwd: "/w" },
+    });
+    expect(emittedEvents).toHaveLength(0);
+
+    await runOneToolUse({
+      id: "toolu_git_status",
+      name: "Bash",
+      input: { command: "git status", cwd: "/w" },
+    });
+    expect(emittedEvents).toHaveLength(0);
   });
 
   it("AskUserQuestion tool_use → emit interactive_prompt with kind ask_user", async () => {

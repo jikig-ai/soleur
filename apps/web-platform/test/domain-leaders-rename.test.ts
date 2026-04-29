@@ -12,8 +12,13 @@ import { DOMAIN_LEADERS } from "@/server/domain-leaders";
 describe("domain-leaders: cc_router rename to Soleur Concierge", () => {
   const router = DOMAIN_LEADERS.find((l) => l.id === "cc_router");
 
-  test("entry exists under the unchanged internal id", () => {
+  test("entry exists under the unchanged internal id 'cc_router'", () => {
+    // Pin the internal id explicitly so a future renamer doesn't
+    // accidentally change both id AND name in the same edit. The id is
+    // load-bearing for chat-state-machine narration and tool-use-chip
+    // discriminator; the rename is display-only.
     expect(router).toBeDefined();
+    expect(router?.id).toBe("cc_router");
   });
 
   test("title renders as 'Soleur Concierge'", () => {

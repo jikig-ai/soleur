@@ -51,6 +51,7 @@ import {
 } from "./conversation-routing";
 import { wrapUserInput } from "./prompt-injection-wrap";
 import { reportSilentFallback } from "./observability";
+import { isBashCommandSafe } from "./permission-callback";
 import {
   PendingPromptRegistry,
   PendingPromptCapExceededError,
@@ -181,6 +182,13 @@ function classifyInteractiveTool(
     }
     case "Bash": {
       const command = typeof toolInput.command === "string" ? toolInput.command : "";
+      // Bash commands matching the safe-bash allowlist are auto-approved
+      // by the permission-callback before any review-gate fires; emitting
+      // a `bash_approval` interactive prompt here would land an orphan
+      // card in `pendingPrompts` that the user never sees and never
+      // resolves. Skip classification for those — the SDK still streams
+      // the tool_use chip via the standard non-interactive path.
+      if (isBashCommandSafe(command)) return null;
       const cwd =
         typeof toolInput.cwd === "string" && toolInput.cwd.length > 0
           ? toolInput.cwd

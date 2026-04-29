@@ -31,21 +31,6 @@ import { formatAssistantText } from "@/lib/format-assistant-text";
  *   to "Post-MVP / Later". See PR #2925 review summary for the issue list.
  */
 
-/**
- * Review F14 (#2886): per-kind past-tense verb maps so the rendered
- * "selected" footers don't string-interpolate into ungrammatical results
- * like "Plan iterateed" (double-e from "iterate" + "ed") or "Bash ackd".
- * Discriminated maps are exhaustive at compile time.
- */
-const PLAN_PREVIEW_VERB: Record<"accept" | "iterate", string> = {
-  accept: "accepted",
-  iterate: "iterated",
-};
-const BASH_APPROVAL_VERB: Record<"approve" | "deny", string> = {
-  approve: "approved",
-  deny: "denied",
-};
-
 interface InteractivePromptCardPropsBase {
   promptId: string;
   conversationId: string;
@@ -134,7 +119,7 @@ function CardShell({
  * existing test seam in `cc-soleur-go-end-to-end-render.test.tsx` and
  * any DOM consumers continue to locate the card.
  */
-function ResolvedCardRow({
+const ResolvedCardRow = React.memo(function ResolvedCardRow({
   kind,
   promptId,
   verb,
@@ -171,7 +156,7 @@ function ResolvedCardRow({
       </div>
     </div>
   );
-}
+});
 
 // ---------------------------------------------------------------------------
 // ask_user
@@ -242,11 +227,6 @@ function AskUserCard({
           >
             Submit
           </button>
-          {disabled && selectedResponse !== undefined ? (
-            <p className="mt-2 text-xs text-neutral-500">
-              Selected: {Array.isArray(selectedResponse) ? selectedResponse.join(", ") : String(selectedResponse)}
-            </p>
-          ) : null}
         </div>
       </CardShell>
     );
@@ -270,9 +250,6 @@ function AskUserCard({
             </button>
           ))}
         </div>
-        {disabled && selectedResponse !== undefined ? (
-          <p className="mt-2 text-xs text-neutral-500">Selected: {String(selectedResponse)}</p>
-        ) : null}
       </div>
     </CardShell>
   );
@@ -324,14 +301,6 @@ function PlanPreviewCard({
             Iterate
           </button>
         </div>
-        {disabled && selectedResponse !== undefined ? (
-          <p className="mt-2 text-xs text-neutral-500">
-            {(() => {
-              const sel = selectedResponse as "accept" | "iterate";
-              return `Plan ${PLAN_PREVIEW_VERB[sel] ?? String(sel)}`;
-            })()}
-          </p>
-        ) : null}
       </div>
     </CardShell>
   );
@@ -377,9 +346,6 @@ function DiffCard({
         >
           Acknowledge
         </button>
-        {disabled && selectedResponse !== undefined ? (
-          <p className="mt-2 text-xs text-neutral-500">Acknowledged</p>
-        ) : null}
       </div>
     </CardShell>
   );
@@ -440,14 +406,6 @@ function BashApprovalCard({
             </button>
           </div>
         ) : null}
-        {disabled && selectedResponse !== undefined ? (
-          <p className="mt-2 text-xs text-neutral-500">
-            {(() => {
-              const sel = selectedResponse as "approve" | "deny";
-              return BASH_APPROVAL_VERB[sel] ?? String(sel);
-            })()}
-          </p>
-        ) : null}
       </div>
     </CardShell>
   );
@@ -500,9 +458,6 @@ function TodoWriteCard({
         >
           Acknowledge
         </button>
-        {disabled && selectedResponse !== undefined ? (
-          <p className="mt-2 text-xs text-neutral-500">Acknowledged</p>
-        ) : null}
       </div>
     </CardShell>
   );
@@ -553,9 +508,6 @@ function NotebookEditCard({
         >
           Acknowledge
         </button>
-        {disabled && selectedResponse !== undefined ? (
-          <p className="mt-2 text-xs text-neutral-500">Acknowledged</p>
-        ) : null}
       </div>
     </CardShell>
   );

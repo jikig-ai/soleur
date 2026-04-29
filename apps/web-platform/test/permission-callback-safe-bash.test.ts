@@ -148,7 +148,6 @@ const SAFE_COMMANDS: readonly string[] = [
   "git rev-parse HEAD",
   "git config --get user.email",
   "which bun",
-  "printenv NODE_ENV",
   "whoami",
   "id",
   "date",
@@ -217,6 +216,13 @@ const COMPOUND_COMMANDS: readonly string[] = [
   "ls 2>&1",
   "ls >& out",
   "cat foo || echo bad",
+  // Bash expands $VAR inside double quotes; safe-bash must reject.
+  'echo "$ANTHROPIC_API_KEY"',
+  'echo "$HOME"',
+  // printenv is intentionally NOT in the allowlist (env-dump risk).
+  "printenv",
+  "printenv NODE_ENV",
+  "printenv ANTHROPIC_API_KEY",
 ];
 
 describe("TS2 — compound-command misses (negative)", () => {
@@ -352,5 +358,28 @@ describe("isBashCommandSafe — edge cases", () => {
   test("escape-sneak: `pwd\\;ls` (literal backslash + semicolon) is rejected by metachar regex", () => {
     // The denylist applies to the raw command string. A semicolon is present.
     expect(isBashCommandSafe("pwd\\;ls")).toBe(false);
+  });
+
+  test("printenv is NOT in the safe allowlist (env-dump risk for BYOK key + service tokens)", () => {
+    expect(isBashCommandSafe("printenv")).toBe(false);
+    expect(isBashCommandSafe("printenv NODE_ENV")).toBe(false);
+    expect(isBashCommandSafe("printenv ANTHROPIC_API_KEY")).toBe(false);
+  });
+
+  test("`$VAR` expansion inside double quotes is rejected (denylist covers bare `$`)", () => {
+    expect(isBashCommandSafe('echo "$HOME"')).toBe(false);
+    expect(isBashCommandSafe('echo "$ANTHROPIC_API_KEY"')).toBe(false);
+    expect(isBashCommandSafe('cat "$FILE"')).toBe(false);
+  });
+
+  test("Unicode line separators (U+2028/U+2029) are rejected as command-separator equivalents", () => {
+    expect(isBashCommandSafe("pwd\u2028ls")).toBe(false);
+    expect(isBashCommandSafe("pwd\u2029ls")).toBe(false);
+  });
+
+  test("commands longer than 4096 chars are rejected (defense-in-depth length cap)", () => {
+    // Build a syntactically allowlisted command that exceeds the cap.
+    const filler = "a".repeat(4100);
+    expect(isBashCommandSafe(`cat /tmp/${filler}`)).toBe(false);
   });
 });
