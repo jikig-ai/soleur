@@ -27,6 +27,10 @@ readonly EXIT_NO_PRIOR=-2
 # extraction headroom). 5GB expressed in KB to match `df --output=avail`.
 readonly MIN_DISK_KB=$((5 * 1024 * 1024))  # 5GB for image pull + extraction
 
+# Plugin bind-mount target. Test harness overrides via env so the seed block
+# writes under a tmpdir instead of /mnt/data (which the GH runner cannot create).
+PLUGIN_MOUNT_DIR="${PLUGIN_MOUNT_DIR:-/mnt/data/plugins/soleur}"
+
 # -----------------------------------------------------------------------------
 # Deploy state observability (#2185)
 # -----------------------------------------------------------------------------
@@ -255,8 +259,16 @@ case "$COMPONENT" in
       final_write_state 1 "plugin_seed_create_failed"
       exit 1
     fi
-    find /mnt/data/plugins/soleur -mindepth 1 -delete 2>/dev/null || true
-    if ! docker cp soleur-plugin-seed:/opt/soleur/plugin/. /mnt/data/plugins/soleur/; then
+    # Pre-create the mount dir so the sentinel write below cannot fail with
+    # ENOENT in test harnesses that run with PLUGIN_MOUNT_DIR pointed at a
+    # tmpdir. In production cloud-init.yml already creates /mnt/data/plugins/
+    # soleur, so this is a no-op there.
+    mkdir -p "$PLUGIN_MOUNT_DIR"
+    find "$PLUGIN_MOUNT_DIR" -mindepth 1 -delete 2>/dev/null || true
+    # Redirect cp stdout so it stays out of the docker-trace assertion stream
+    # used by ci-deploy.test.sh (which greps DOCKER_TRACE:* from script stdout).
+    # Stderr is preserved for journalctl debugging on real failures.
+    if ! docker cp soleur-plugin-seed:/opt/soleur/plugin/. "$PLUGIN_MOUNT_DIR/" >/dev/null; then
       docker rm soleur-plugin-seed >/dev/null 2>&1 || true
       final_write_state 1 "plugin_seed_copy_failed"
       exit 1
@@ -266,7 +278,7 @@ case "$COMPONENT" in
     # absent. `verifyPluginMountOnce` checks for it to distinguish "manifest
     # extracted early but partial copy" from a healthy mount.
     printf '%s\n' "seeded $(date -u +%Y-%m-%dT%H:%M:%SZ) tag=$TAG" \
-      > /mnt/data/plugins/soleur/.seed-complete
+      > "$PLUGIN_MOUNT_DIR/.seed-complete"
 
     # Prepare environment (shared between canary and production)
     sudo chown 1001:1001 /mnt/data/workspaces
