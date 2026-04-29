@@ -58,7 +58,7 @@ describe("InteractivePromptCard ask_user", () => {
     }
   });
 
-  test("resolved=true disables buttons and shows selectedResponse", () => {
+  test("resolved=true renders compact row with selectedResponse and no buttons", () => {
     const onRespond = vi.fn();
     const { container } = render(
       <InteractivePromptCard
@@ -71,14 +71,15 @@ describe("InteractivePromptCard ask_user", () => {
         selectedResponse="x"
       />,
     );
-    fireEvent.click(screen.getByRole("button", { name: "x" }));
+    expect(screen.queryByRole("button", { name: "x" })).toBeNull();
     expect(onRespond).not.toHaveBeenCalled();
+    expect(container.textContent).toMatch(/Selected/);
     expect(container.textContent).toContain("x");
   });
 });
 
 describe("InteractivePromptCard ask_user multi-select rehydration (review F17 #2886)", () => {
-  test("resolved=true with multiSelect=true checkboxes are pre-checked from selectedResponse", () => {
+  test("resolved=true with multiSelect=true renders selected values in compact row", () => {
     const onRespond = vi.fn();
     const { container } = render(
       <InteractivePromptCard
@@ -91,12 +92,11 @@ describe("InteractivePromptCard ask_user multi-select rehydration (review F17 #2
         selectedResponse={["a", "c"]}
       />,
     );
-    const a = container.querySelector('input[type="checkbox"][aria-label="a"]');
-    const b = container.querySelector('input[type="checkbox"][aria-label="b"]');
-    const c = container.querySelector('input[type="checkbox"][aria-label="c"]');
-    expect((a as HTMLInputElement | null)?.checked).toBe(true);
-    expect((b as HTMLInputElement | null)?.checked).toBe(false);
-    expect((c as HTMLInputElement | null)?.checked).toBe(true);
+    expect(container.querySelector('input[type="checkbox"]')).toBeNull();
+    expect(container.textContent).toMatch(/Selected/);
+    expect(container.textContent).toContain("a");
+    expect(container.textContent).toContain("c");
+    expect(container.textContent).not.toMatch(/\bb\b/);
   });
 });
 
@@ -141,8 +141,8 @@ describe("InteractivePromptCard plan_preview", () => {
 
 describe("InteractivePromptCard plan_preview resolved-state grammar (review F14 #2886)", () => {
   test.each([
-    ["accept", /Plan accepted/],
-    ["iterate", /Plan iterated/],
+    ["accept", /Accepted/],
+    ["iterate", /Iterated/],
   ])("resolved=true with selectedResponse='%s' renders correctly", (sel, re) => {
     const { container } = render(
       <InteractivePromptCard
@@ -157,15 +157,15 @@ describe("InteractivePromptCard plan_preview resolved-state grammar (review F14 
     );
     expect(container.textContent).toMatch(re);
     // Regression: must NOT produce double-e or trailing-d artifacts.
-    expect(container.textContent).not.toMatch(/iterateed/);
-    expect(container.textContent).not.toMatch(/acceptd/);
+    expect(container.textContent).not.toMatch(/iterateed/i);
+    expect(container.textContent).not.toMatch(/acceptd/i);
   });
 });
 
 describe("InteractivePromptCard bash_approval resolved-state grammar (review F14 #2886)", () => {
   test.each([
-    ["approve", /approved/],
-    ["deny", /denied/],
+    ["approve", /Approved/],
+    ["deny", /Denied/],
   ])("resolved=true with selectedResponse='%s' renders correctly", (sel, re) => {
     const { container } = render(
       <InteractivePromptCard
@@ -180,8 +180,8 @@ describe("InteractivePromptCard bash_approval resolved-state grammar (review F14
     );
     expect(container.textContent).toMatch(re);
     // Regression: never "approved" + extra "d" / "denied" + extra "d".
-    expect(container.textContent).not.toMatch(/approveded/);
-    expect(container.textContent).not.toMatch(/deniedd/);
+    expect(container.textContent).not.toMatch(/approveded/i);
+    expect(container.textContent).not.toMatch(/deniedd/i);
   });
 });
 

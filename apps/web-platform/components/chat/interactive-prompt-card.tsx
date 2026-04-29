@@ -31,21 +31,6 @@ import { formatAssistantText } from "@/lib/format-assistant-text";
  *   to "Post-MVP / Later". See PR #2925 review summary for the issue list.
  */
 
-/**
- * Review F14 (#2886): per-kind past-tense verb maps so the rendered
- * "selected" footers don't string-interpolate into ungrammatical results
- * like "Plan iterateed" (double-e from "iterate" + "ed") or "Bash ackd".
- * Discriminated maps are exhaustive at compile time.
- */
-const PLAN_PREVIEW_VERB: Record<"accept" | "iterate", string> = {
-  accept: "accepted",
-  iterate: "iterated",
-};
-const BASH_APPROVAL_VERB: Record<"approve" | "deny", string> = {
-  approve: "approved",
-  deny: "denied",
-};
-
 interface InteractivePromptCardPropsBase {
   promptId: string;
   conversationId: string;
@@ -121,6 +106,58 @@ function CardShell({
   );
 }
 
+/**
+ * AC5 / TS6 (#3018) — compact resolved row, mirrors `ReviewGateCard:40-49`.
+ *
+ * After a prompt is resolved, all six variants collapse to a single line:
+ * one inline checkmark `<svg>` + `"<Verb>: <target>"` (or just `"<Verb>"`
+ * when `target` is empty). NO buttons / pre blocks / cwd lines / list
+ * markup remain — those are the disabled-but-visible artifacts the AC
+ * targets.
+ *
+ * The wrapper carries `data-prompt-kind` and `data-prompt-id` so the
+ * existing test seam in `cc-soleur-go-end-to-end-render.test.tsx` and
+ * any DOM consumers continue to locate the card.
+ */
+const ResolvedCardRow = React.memo(function ResolvedCardRow({
+  kind,
+  promptId,
+  verb,
+  target,
+}: {
+  kind: InteractivePromptPayload["kind"];
+  promptId: string;
+  verb: string;
+  target?: string;
+}) {
+  return (
+    <div data-prompt-kind={kind} data-prompt-id={promptId}>
+      <div className="flex items-center gap-2 rounded-lg border border-neutral-800 bg-neutral-900/50 px-4 py-2 text-sm text-neutral-400 transition-all duration-300">
+        <svg
+          className="h-4 w-4 text-green-500"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        >
+          <polyline points="20 6 9 17 4 12" />
+        </svg>
+        <span>
+          {verb}
+          {target ? (
+            <>
+              :{" "}
+              <strong className="text-neutral-200">{target}</strong>
+            </>
+          ) : null}
+        </span>
+      </div>
+    </div>
+  );
+});
+
 // ---------------------------------------------------------------------------
 // ask_user
 // ---------------------------------------------------------------------------
@@ -140,6 +177,22 @@ function AskUserCard({
   const [picked, setPicked] = useState<string[]>(() =>
     Array.isArray(selectedResponse) ? selectedResponse : [],
   );
+
+  // AC5 / TS6: collapse to compact row when resolved + a response was carried.
+  // Hook calls above must happen unconditionally — early return goes here.
+  if (disabled && selectedResponse !== undefined) {
+    const target = Array.isArray(selectedResponse)
+      ? selectedResponse.join(", ")
+      : String(selectedResponse);
+    return (
+      <ResolvedCardRow
+        kind="ask_user"
+        promptId={promptId}
+        verb="Selected"
+        target={target}
+      />
+    );
+  }
 
   if (payload.multiSelect) {
     const toggle = (opt: string) =>
@@ -174,11 +227,6 @@ function AskUserCard({
           >
             Submit
           </button>
-          {disabled && selectedResponse !== undefined ? (
-            <p className="mt-2 text-xs text-neutral-500">
-              Selected: {Array.isArray(selectedResponse) ? selectedResponse.join(", ") : String(selectedResponse)}
-            </p>
-          ) : null}
         </div>
       </CardShell>
     );
@@ -202,9 +250,6 @@ function AskUserCard({
             </button>
           ))}
         </div>
-        {disabled && selectedResponse !== undefined ? (
-          <p className="mt-2 text-xs text-neutral-500">Selected: {String(selectedResponse)}</p>
-        ) : null}
       </div>
     </CardShell>
   );
@@ -222,6 +267,13 @@ function PlanPreviewCard({
   onRespond,
   selectedResponse,
 }: VariantProps<"plan_preview", { markdown: string }>) {
+  // AC5 / TS6: compact resolved row.
+  if (disabled && selectedResponse !== undefined) {
+    const sel = selectedResponse as "accept" | "iterate";
+    const verb = sel === "accept" ? "Accepted" : "Iterated";
+    return <ResolvedCardRow kind="plan_preview" promptId={promptId} verb={verb} />;
+  }
+
   // V1 falls back to formatAssistantText (preserves code fences + line breaks).
   // Full markdown rendering is V2.
   const text = formatAssistantText(payload.markdown);
@@ -249,14 +301,6 @@ function PlanPreviewCard({
             Iterate
           </button>
         </div>
-        {disabled && selectedResponse !== undefined ? (
-          <p className="mt-2 text-xs text-neutral-500">
-            {(() => {
-              const sel = selectedResponse as "accept" | "iterate";
-              return `Plan ${PLAN_PREVIEW_VERB[sel] ?? String(sel)}`;
-            })()}
-          </p>
-        ) : null}
       </div>
     </CardShell>
   );
@@ -274,6 +318,18 @@ function DiffCard({
   onRespond,
   selectedResponse,
 }: VariantProps<"diff", { path: string; additions: number; deletions: number }>) {
+  // AC5 / TS6: compact resolved row.
+  if (disabled && selectedResponse !== undefined) {
+    return (
+      <ResolvedCardRow
+        kind="diff"
+        promptId={promptId}
+        verb="Acknowledged"
+        target={payload.path}
+      />
+    );
+  }
+
   return (
     <CardShell promptId={promptId} kind="diff">
       <div className={baseClass}>
@@ -290,9 +346,6 @@ function DiffCard({
         >
           Acknowledge
         </button>
-        {disabled && selectedResponse !== undefined ? (
-          <p className="mt-2 text-xs text-neutral-500">Acknowledged</p>
-        ) : null}
       </div>
     </CardShell>
   );
@@ -310,6 +363,20 @@ function BashApprovalCard({
   onRespond,
   selectedResponse,
 }: VariantProps<"bash_approval", { command: string; cwd: string; gated: boolean }>) {
+  // AC5 / TS6: compact resolved row.
+  if (disabled && selectedResponse !== undefined) {
+    const sel = selectedResponse as "approve" | "deny";
+    const verb = sel === "approve" ? "Approved" : "Denied";
+    return (
+      <ResolvedCardRow
+        kind="bash_approval"
+        promptId={promptId}
+        verb={verb}
+        target={payload.command}
+      />
+    );
+  }
+
   return (
     <CardShell promptId={promptId} kind="bash_approval">
       <div className={baseClass}>
@@ -339,14 +406,6 @@ function BashApprovalCard({
             </button>
           </div>
         ) : null}
-        {disabled && selectedResponse !== undefined ? (
-          <p className="mt-2 text-xs text-neutral-500">
-            {(() => {
-              const sel = selectedResponse as "approve" | "deny";
-              return BASH_APPROVAL_VERB[sel] ?? String(sel);
-            })()}
-          </p>
-        ) : null}
       </div>
     </CardShell>
   );
@@ -364,6 +423,19 @@ function TodoWriteCard({
   onRespond,
   selectedResponse,
 }: VariantProps<"todo_write", { items: TodoItem[] }>) {
+  // AC5 / TS6: compact resolved row.
+  if (disabled && selectedResponse !== undefined) {
+    const target = `${payload.items.length} todo${payload.items.length === 1 ? "" : "s"}`;
+    return (
+      <ResolvedCardRow
+        kind="todo_write"
+        promptId={promptId}
+        verb="Acknowledged"
+        target={target}
+      />
+    );
+  }
+
   return (
     <CardShell promptId={promptId} kind="todo_write">
       <div className={baseClass}>
@@ -386,9 +458,6 @@ function TodoWriteCard({
         >
           Acknowledge
         </button>
-        {disabled && selectedResponse !== undefined ? (
-          <p className="mt-2 text-xs text-neutral-500">Acknowledged</p>
-        ) : null}
       </div>
     </CardShell>
   );
@@ -406,6 +475,18 @@ function NotebookEditCard({
   onRespond,
   selectedResponse,
 }: VariantProps<"notebook_edit", { notebookPath: string; cellIds: string[] }>) {
+  // AC5 / TS6: compact resolved row.
+  if (disabled && selectedResponse !== undefined) {
+    return (
+      <ResolvedCardRow
+        kind="notebook_edit"
+        promptId={promptId}
+        verb="Acknowledged"
+        target={payload.notebookPath}
+      />
+    );
+  }
+
   return (
     <CardShell promptId={promptId} kind="notebook_edit">
       <div className={baseClass}>
@@ -427,9 +508,6 @@ function NotebookEditCard({
         >
           Acknowledge
         </button>
-        {disabled && selectedResponse !== undefined ? (
-          <p className="mt-2 text-xs text-neutral-500">Acknowledged</p>
-        ) : null}
       </div>
     </CardShell>
   );
