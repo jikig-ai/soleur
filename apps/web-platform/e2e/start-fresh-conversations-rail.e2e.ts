@@ -215,6 +215,40 @@ test.describe("ConversationsRail e2e (Phase 5a — mock-supabase)", () => {
   test("renders rail with active row + 'View all' link, then signs out cleanly", async ({
     page,
   }) => {
+    // CI-debug: capture browser console + supabase REST requests so a
+    // future failure surfaces what shape the hook actually receives.
+    page.on("console", (msg) => {
+      if (msg.type() === "error" || msg.text().includes("[rail-debug]")) {
+        console.log(`[browser-console] ${msg.type()}: ${msg.text()}`);
+      }
+    });
+    page.on("request", (req) => {
+      const url = req.url();
+      if (
+        url.includes("/rest/v1/users") ||
+        url.includes("/rest/v1/conversations") ||
+        url.includes("/rest/v1/messages") ||
+        url.includes("/auth/v1/user")
+      ) {
+        console.log(`[req] ${req.method()} ${url}`);
+      }
+    });
+    page.on("response", async (res) => {
+      const url = res.url();
+      if (
+        url.includes("/rest/v1/users") ||
+        url.includes("/rest/v1/conversations") ||
+        url.includes("/rest/v1/messages")
+      ) {
+        try {
+          const body = await res.text();
+          console.log(`[res] ${res.status()} ${url} body=${body.slice(0, 200)}`);
+        } catch {
+          /* ignore — body already consumed */
+        }
+      }
+    });
+
     await setupRailMocks(page);
 
     const response = await page.goto("/dashboard/chat/conv-active");
