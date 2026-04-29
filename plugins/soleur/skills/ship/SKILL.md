@@ -503,7 +503,7 @@ plugins/soleur/skills/postmerge/references/deploy-status-debugging.md
 
 Ask via AskUserQuestion: "Apply now (recommended), defer to operator post-merge, or skip?"
 
-- **Apply now:** Pause the ship pipeline until the operator confirms the apply ran. Do NOT execute the apply from this skill — the operator runs it in their own terminal so the Terraform `yes` prompt is in their TTY.
+- **Apply now:** Pause the ship pipeline until the operator confirms the apply ran. Do NOT execute the apply from this skill — the operator runs it in their own terminal so the Terraform `yes` prompt is in their TTY. (TTY hand-off is intentional: prod blast radius warrants a human-typed `yes` rather than `-auto-approve` plus an in-conversation confirmation menu, even though `hr-menu-option-ack-not-prod-write-auth` would technically permit the latter.)
 - **Defer:** Add a `gh pr comment` on the PR (deferred until Phase 6 has the PR number) tagged `[deploy_pipeline_fix-drift-gate]` with the apply command embedded so the next operator (post-merge) sees it.
 - **Skip:** Same as Defer plus a "skip rationale" sentence; the next drift cron tick will still file an issue as the safety net.
 
@@ -524,6 +524,8 @@ fi
 **If not triggered:** Skip silently.
 
 **Why:** The drift pattern is structural — 9 cycles in ~6 weeks before this gate landed (see [`2026-04-24-recurring-deploy-pipeline-fix-drift-as-feature.md`](../../../../knowledge-base/project/learnings/bug-fixes/2026-04-24-recurring-deploy-pipeline-fix-drift-as-feature.md)). The gate moves discovery from "next 12h cron tick" to "PR-creation time," shrinking the window where prod runs stale `ci-deploy.sh` against fresh container images. The post-apply verification contract (server-side `sha256sum` + `systemctl is-active`) is the file+systemd-layer signal that replaces the decayed HTTP probe (see [`2026-04-29-deploy-pipeline-fix-postapply-verification-cf-access.md`](../../../../knowledge-base/project/learnings/bug-fixes/2026-04-29-deploy-pipeline-fix-postapply-verification-cf-access.md)). Closes the structural-prevention threshold defined in #2881; canonicalizes the verification contract from #3034.
+
+**Defense in depth.** This gate covers the `/ship` code path only. PRs created without `/ship` (direct `gh pr create`, GitHub UI) bypass it. The 12h `scheduled-terraform-drift.yml` cron remains the terminal safety net for those paths and for "operator deferred / forgot to apply" scenarios.
 
 ### Retroactive Gate Application (conditional)
 
