@@ -34,6 +34,7 @@ import {
   type RealtimePostgresChangesPayload,
 } from "@supabase/supabase-js";
 import { randomBytes } from "crypto";
+import { ensureNodeWebSocketPolyfill } from "./helpers/node-websocket-polyfill";
 
 const INTEGRATION_ENABLED =
   process.env.SUPABASE_DEV_INTEGRATION === "1";
@@ -90,6 +91,11 @@ describe.skipIf(!INTEGRATION_ENABLED)(
     }>[] = [];
 
     beforeAll(async () => {
+      // Must run BEFORE any createClient(). On Node without native WebSocket,
+      // realtime-js's factory returns `unsupported` and JOIN times out at 10s
+      // (issue #3052). See test/helpers/node-websocket-polyfill.ts.
+      ensureNodeWebSocketPolyfill();
+
       const supabaseUrl = requireEnv("NEXT_PUBLIC_SUPABASE_URL");
       const anonKey = requireEnv("NEXT_PUBLIC_SUPABASE_ANON_KEY");
       const serviceRoleKey = requireEnv("SUPABASE_SERVICE_ROLE_KEY");
