@@ -23,39 +23,26 @@ TDD gate per AGENTS.md `cq-write-failing-tests-before`: each implementation task
 - [x] 1.8 Run `bun typecheck`; confirm green
 - [ ] 1.9 Commit: `git commit -m "feat(hooks): add limit option to useConversations + spec corrections"`
 
-## Phase 2: Chat-segment layout shell
+## Phase 2 + 3: Chat-segment layout + ConversationsRail (combined)
 
-- [ ] 2.1 Write failing test `apps/web-platform/test/conversations-rail.test.tsx` (layout shape suite — covers Phase 2 + Phase 3)
-  - [ ] 2.1.1 Given a stub `<Page data-testid="page" />` as `children`, `<ChatLayout>{children}</ChatLayout>` renders both `<ConversationsRail />` AND the page stub
-  - [ ] 2.1.2 Layout-segment-tree integration is NOT asserted here (RTL cannot render the Next.js segment tree; covered by Phase 5a Playwright)
-- [ ] 2.2 Run vitest; confirm 2.1 fails (RED — `ChatLayout` and `ConversationsRail` don't exist yet)
-- [ ] 2.3 Create `apps/web-platform/app/(dashboard)/dashboard/chat/layout.tsx` as a server component rendering `<ConversationsRail />` + `{children}`
-  - [ ] 2.3.1 Two-column flex layout on desktop; rail left, content right
-  - [ ] 2.3.2 Rail hidden on mobile via CSS `hidden md:block` (drawer integration in Phase 4)
-- [ ] 2.4 Run vitest; confirm 2.1 passes after Phase 3 lands the rail (deferred GREEN — note in commit)
-- [ ] 2.5 Commit: `git commit -m "feat(chat): nested chat-segment layout"` (test still red until Phase 3)
+Phases 2 and 3 were combined to avoid an inter-phase typecheck break (the Phase 2 layout imports `ConversationsRail`, which Phase 3 creates). Tests for both phases live in a single suite (`test/conversations-rail.test.tsx`); RED → GREEN cycle covers the layout shape and the rail behaviour together.
 
-## Phase 3: ConversationsRail client component
-
-- [ ] 3.1 Write failing tests in `test/conversations-rail.test.tsx` (extend existing suite)
-  - [ ] 3.1.1 Renders ≤15 rows when hook returns ≥15 conversations; renders all when <15
-  - [ ] 3.1.2 Active-row indication: row matching `useParams<{ conversationId: string }>().conversationId` has `aria-current="page"` and a distinct visual marker
-  - [ ] 3.1.3 "View all in Command Center" footer link routes to `/dashboard`
-  - [ ] 3.1.4 Empty state: "+ New conversation" CTA when hook returns 0 rows
-  - [ ] 3.1.5 Each row renders: title (truncated), inline status badge (4-case mapping: `waiting_for_user → "Needs your decision"`, `active → "In progress"`, `completed → "Done"`, `failed → "Needs attention"`), relative-time, unread count
-  - [ ] 3.1.6 Collapse via `useSidebarCollapse("soleur:sidebar.chat-rail.collapsed")` + `Cmd/Ctrl+B`; state persists across reloads
-- [ ] 3.2 Run vitest; confirm 3.1 fails (RED)
-- [ ] 3.3 Implement `apps/web-platform/components/chat/conversations-rail.tsx`
-  - [ ] 3.3.1 Client component (`"use client"`)
-  - [ ] 3.3.2 Calls `useConversations({ limit: 15 })`
-  - [ ] 3.3.3 Calls `useSidebarCollapse("soleur:sidebar.chat-rail.collapsed")`
-  - [ ] 3.3.4 Calls `useParams<{ conversationId: string }>()` for active-row detection
-  - [ ] 3.3.5 Inline 4-case status-badge mapping (do NOT extract a shared component — rule-of-three not hit)
-  - [ ] 3.3.6 Reuses existing `relative-time.ts` and `leader-colors.ts`
-  - [ ] 3.3.7 Footer link to `/dashboard` with text "View all in Command Center"
-- [ ] 3.4 Run vitest; confirm 3.1 passes (GREEN); confirm Phase 2 test 2.1 passes too
-- [ ] 3.5 `bun typecheck` green; `bun lint` green
-- [ ] 3.6 Commit: `git commit -m "feat(chat): ConversationsRail with active-row + collapse"`
+- [x] 2+3.1 Write failing tests in `apps/web-platform/test/conversations-rail.test.tsx`
+  - [x] 2+3.1.1 ChatLayout renders `<ConversationsRail />` + `{children}` (layout shape)
+  - [x] 2+3.1.2 Renders ≤15 rows when hook returns more; renders all when fewer
+  - [x] 2+3.1.3 `useConversations` is called with `{ limit: 15 }`
+  - [x] 2+3.1.4 Active-row indication via `useParams<{ conversationId: string }>()` → `aria-current="page"`
+  - [x] 2+3.1.5 "View all in Command Center" footer link → `/dashboard`
+  - [x] 2+3.1.6 Empty state: "+ New conversation" CTA
+  - [x] 2+3.1.7 Inline 4-case status-badge mapping (rail-specific labels distinct from `STATUS_LABELS`)
+  - [x] 2+3.1.8 Collapse toggle persists to `soleur:sidebar.chat-rail.collapsed`
+  - [x] 2+3.1.9 `Cmd/Ctrl+B` keyboard shortcut toggles collapse
+- [x] 2+3.2 Run vitest; confirm RED (failed at module-resolution time — `chat/layout.tsx` and `conversations-rail.tsx` don't exist)
+- [x] 2+3.3 Create `apps/web-platform/app/(dashboard)/dashboard/chat/layout.tsx` as a sync server component rendering `<ConversationsRail />` (`hidden md:block` aside) + `{children}` (`main`)
+- [x] 2+3.4 Create `apps/web-platform/components/chat/conversations-rail.tsx` as a client component using `useConversations({ limit: 15 })`, `useSidebarCollapse("soleur:sidebar.chat-rail.collapsed")`, `useParams`, inline status badge, `relative-time`, and `LEADER_COLORS`
+- [x] 2+3.5 Run vitest; all 10 tests pass GREEN
+- [x] 2+3.6 `bun typecheck` green
+- [ ] 2+3.7 Commit: `git commit -m "feat(chat): nested chat-segment layout + ConversationsRail"`
 
 ## Phase 4: Sign-out teardown + mobile drawer
 
