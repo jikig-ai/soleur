@@ -33,11 +33,15 @@ The WebSocket establishes — what fails is the Phoenix `phx_join` ⇄ `phx_repl
 
 ## Root cause
 
-[`supabase/supabase-js#1559`](https://github.com/supabase/supabase-js/issues/1559) — Node-only race condition (closed 2025-12-15 by upstream maintainer).
+Originally tracked as [`supabase/supabase-js#1559`](https://github.com/supabase/supabase-js/issues/1559) — a Node-only race in the `realtime-js` ws-fallback constructor (closed 2025-12-15 upstream).
 
-When `globalThis.WebSocket` is `undefined`, supabase-js falls back to the `ws` module. The fallback path attaches the response handlers AFTER the server has already pushed `phx_reply`, so the reply is dropped on the floor and the channel sits idle until the 10s `joinTimeout`.
+In the installed `@supabase/realtime-js@2.99.2`, the fallback path was removed in favor of an explicit failure: `lib/websocket-factory.ts` returns `{ type: 'unsupported', error: 'Node.js X detected without native WebSocket support' }` on Node <22 with no `globalThis.WebSocket`. The client's `connect()` then throws, the realtime client transitions to `disconnected`, and the channel's `subscribe()` sits in the reconnect loop until `joinTimeout` fires at 10s — producing the same `TIMED_OUT → CLOSED` sequence the upstream issue described, via a different code path.
 
-Browsers don't hit this: native `WebSocket` is on `globalThis` so the racy fallback is never taken.
+Setting `globalThis.WebSocket = ws` BEFORE `createClient()` pushes the factory into its `type: 'native'` branch (the same branch the browser path uses), so subscribe completes deterministically.
+
+Browsers don't hit this: native `WebSocket` is on `globalThis` so the unsupported branch is never reached.
+
+The upstream issue documents `transport: ws` as an alternative workaround (passed via `createClient` options). The polyfill was chosen here because it does not require changing the `createClient` signature in test code, mirrors the browser path more closely, and is a single shared helper rather than per-call configuration.
 
 ### Environment match (verified 2026-04-29)
 

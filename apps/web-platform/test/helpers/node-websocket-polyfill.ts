@@ -1,17 +1,20 @@
-// Workaround for supabase/supabase-js#1559 — Node.js race condition where the
-// ws-fallback constructor inside @supabase/realtime-js loses the `phx_reply`
-// frame before the response handlers are attached, surfacing as a 10s
-// `TIMED_OUT` followed by `CLOSED`. Polyfilling globalThis.WebSocket BEFORE
-// createClient() eliminates the racy fallback path entirely — the client uses
-// the polyfilled global the same way it uses the native browser WebSocket.
+// Workaround for the Node-without-native-WebSocket path in
+// @supabase/realtime-js (originally tracked as supabase/supabase-js#1559).
 //
-// No-op when WebSocket is already defined (browsers, jsdom). Idempotent so
-// multiple test files / beforeAll hooks can call it without conflict.
+// On Node <22 with no `globalThis.WebSocket`, realtime-js's WebSocket factory
+// returns `{ type: 'unsupported' }` and the connect path errors out — surfacing
+// to callers as a 10s `phx_join` timeout followed by `CLOSED`. Setting
+// `globalThis.WebSocket` BEFORE createClient() forces the factory into its
+// `type: 'native'` branch (same path the browser native WebSocket takes), so
+// the client subscribes deterministically.
+//
+// No-op when WebSocket is already defined (browsers, jsdom, Node 22+ behind
+// `--experimental-websocket`). Idempotent so multiple test files / beforeAll
+// hooks can call it without conflict.
 import WS from "ws";
 
 export function ensureNodeWebSocketPolyfill(): void {
   if (typeof globalThis.WebSocket === "undefined") {
-    (globalThis as unknown as { WebSocket: typeof globalThis.WebSocket })
-      .WebSocket = WS as unknown as typeof globalThis.WebSocket;
+    (globalThis as { WebSocket?: unknown }).WebSocket = WS;
   }
 }

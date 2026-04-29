@@ -43,10 +43,17 @@ const channel = client.channel(`probe-${Date.now()}`);
 const t0 = Date.now();
 
 let resolved = false;
+let hardTimer;
 const finish = (code) => {
   if (resolved) return;
   resolved = true;
-  client.removeAllChannels().then(() => process.exit(code));
+  clearTimeout(hardTimer);
+  // removeAllChannels() can reject if the socket is already torn down.
+  // Cleanup is best-effort; the verdict (code) is already determined.
+  client.removeAllChannels().then(
+    () => process.exit(code),
+    () => process.exit(code),
+  );
 };
 
 channel.subscribe((status, err) => {
@@ -61,7 +68,9 @@ channel.subscribe((status, err) => {
     finish(1);
 });
 
-setTimeout(() => {
+hardTimer = setTimeout(() => {
+  if (resolved) return;
+  resolved = true;
   console.error("[probe] hard timeout after 30s");
   process.exit(3);
 }, 30_000);

@@ -91,10 +91,9 @@ describe.skipIf(!INTEGRATION_ENABLED)(
     }>[] = [];
 
     beforeAll(async () => {
-      // Workaround for supabase/supabase-js#1559 — must run BEFORE any
-      // createClient() call. Without it, the realtime-js fallback path drops
-      // the phx_reply on Node and every channel reaches TIMED_OUT (issue
-      // #3052). See test/helpers/node-websocket-polyfill.ts.
+      // Must run BEFORE any createClient(). On Node without native WebSocket,
+      // realtime-js's factory returns `unsupported` and JOIN times out at 10s
+      // (issue #3052). See test/helpers/node-websocket-polyfill.ts.
       ensureNodeWebSocketPolyfill();
 
       const supabaseUrl = requireEnv("NEXT_PUBLIC_SUPABASE_URL");
