@@ -131,11 +131,8 @@ explicitly avoids exposing the secret on the process command line, which is a
 *strengthening* of the operator runbook against the inline-substitution
 alternative.
 
-**Brand-survival threshold:** none — internal-facing operator runbook, no
-end-user surface, the broken command surfaces a clear runtime error rather than
-silently shipping bad data. The named gate `cq-docs-cli-verification` (#2566)
-already exists to prevent fabricated CLI tokens; this is its retroactive
-remediation case, not a new exposure.
+- **Brand-survival threshold:** `none` — internal-facing operator runbook, no end-user surface, the broken command surfaces a clear runtime error rather than silently shipping bad data. The named gate `cq-docs-cli-verification` (#2566) already exists to prevent fabricated CLI tokens; this is its retroactive remediation case, not a new exposure.
+- threshold: none, reason: docs-only fix to operator-facing runbook commands; no end-user surface, no credentials read or written, broken commands surface as clear runtime errors rather than silently shipping bad data.
 
 ## Acceptance Criteria
 
