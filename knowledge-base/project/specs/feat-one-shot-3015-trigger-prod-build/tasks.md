@@ -14,7 +14,23 @@ Plan: `knowledge-base/project/plans/2026-04-29-chore-trigger-prod-build-after-do
 - [ ] 1.3 Run `bash apps/web-platform/infra/canary-bundle-claim-check.sh
   https://app.soleur.ai`; record pass/fail and which assertion failed.
 
+## Phase 1.4 — No-op exit gate (deepen-pass)
+
+- [ ] 1.4 If Phase 1.2 (Sentry clean OR last-seen ≤ 22:31Z 2026-04-28) AND
+  Phase 1.3 (claim-check returns 0) BOTH pass, skip Phase 2; record the
+  recovery-attribution build run-ID in the runbook's Recovery Verification
+  block; jump to Phase 3.
+
 ## Phase 2 — Trigger build (contingent on Phase 1.2 OR 1.3 finding fault)
+
+Decision matrix (Plan §Phase 2):
+
+| Sentry events | Claim-check | Action |
+|---|---|---|
+| 0 / pre-#3014 | pass | Phase 1.4 exit |
+| present, recent | pass | STOP — re-open H3/H6 hypothesis |
+| 0 / pre-#3014 | fail | CDN purge first; re-run 1.3 |
+| present | fail | Proceed to Phase 2 |
 
 - [ ] 2.1 If Doppler is wrong: `doppler secrets set
   NEXT_PUBLIC_SUPABASE_ANON_KEY=<canonical> -p soleur -c prd` (per-command
@@ -23,7 +39,14 @@ Plan: `knowledge-base/project/plans/2026-04-29-chore-trigger-prod-build-after-do
   NEXT_PUBLIC_SUPABASE_ANON_KEY -R jikig-ai/soleur < /dev/stdin`.
 - [ ] 2.3 `gh workflow run web-platform-release.yml --ref main`; capture
   `RUN_ID` via `gh run list --workflow=... --limit 1 --json databaseId
-  --jq '.[0].databaseId'`; `gh run watch "$RUN_ID" --exit-status`.
+  --jq '.[0].databaseId'`; `gh run watch "$RUN_ID" --exit-status`. If
+  no underlying code/secret change accompanies the dispatch, record the
+  no-change rationale in the runbook (release-history noise warning).
+- [ ] 2.4 (Rollback — only if Phase 3 fails) Identify previous-good tag
+  via `gh api repos/jikig-ai/soleur/releases --jq '.[] | select(.tag_name
+  | startswith("web-v")) | .tag_name' | sed -n '2p'`; resolve SHA;
+  `gh workflow run web-platform-release.yml --ref <prev-sha>`
+  (per-command ack required).
 
 ## Phase 3 — Render-time verification (always runs)
 
