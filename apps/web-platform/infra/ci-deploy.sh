@@ -244,20 +244,29 @@ case "$COMPONENT" in
     # Uses an ephemeral container (`docker create` + `docker cp` + `docker rm`)
     # so we never run a second instance of the new image during the canary phase.
     # `docker cp src/. dst/` copies *contents* of src into dst (NOT src as a
-    # child of dst); the brace-glob removes prior-version content including
-    # dotfiles like `.claude-plugin/` (load-bearing — `*` alone leaves them).
+    # child of dst); `find -mindepth 1 -delete` is a single POSIX-portable
+    # cleanup form shared with cloud-init.yml — handles dotfiles like
+    # `.claude-plugin/` correctly.
     echo "Seeding plugin mount from image..."
+    # Pre-flight: a prior SIGKILLed deploy may have left this container behind.
+    # `docker create --name` would otherwise fail with "container already exists".
+    docker rm -f soleur-plugin-seed >/dev/null 2>&1 || true
     if ! docker create --name soleur-plugin-seed "$IMAGE:$TAG" >/dev/null; then
       final_write_state 1 "plugin_seed_create_failed"
       exit 1
     fi
-    rm -rf /mnt/data/plugins/soleur/{*,.[!.]*,..?*} 2>/dev/null || true
+    find /mnt/data/plugins/soleur -mindepth 1 -delete 2>/dev/null || true
     if ! docker cp soleur-plugin-seed:/opt/soleur/plugin/. /mnt/data/plugins/soleur/; then
       docker rm soleur-plugin-seed >/dev/null 2>&1 || true
       final_write_state 1 "plugin_seed_copy_failed"
       exit 1
     fi
     docker rm soleur-plugin-seed >/dev/null
+    # Sentinel marker — written LAST so a SIGKILL mid-cp leaves the marker
+    # absent. `verifyPluginMountOnce` checks for it to distinguish "manifest
+    # extracted early but partial copy" from a healthy mount.
+    printf '%s\n' "seeded $(date -u +%Y-%m-%dT%H:%M:%SZ) tag=$TAG" \
+      > /mnt/data/plugins/soleur/.seed-complete
 
     # Prepare environment (shared between canary and production)
     sudo chown 1001:1001 /mnt/data/workspaces
