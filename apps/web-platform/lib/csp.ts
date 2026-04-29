@@ -7,6 +7,19 @@ function parseSupabaseHost(url: string): string {
   }
 }
 
+// Derives `http`/`https` from the URL itself so e2e mock servers using
+// `http://localhost:<port>` are not silently CSP-blocked. In production,
+// `NEXT_PUBLIC_SUPABASE_URL` is always `https://` (see verify-required-secrets.sh
+// canonical-shape assertion), so this is a no-op there.
+function parseSupabaseScheme(url: string): "http" | "https" {
+  if (!url) return "https";
+  try {
+    return new URL(url).protocol === "http:" ? "http" : "https";
+  } catch {
+    return "https";
+  }
+}
+
 export function buildCspHeader(options: {
   nonce: string;
   isDev: boolean;
@@ -16,6 +29,8 @@ export function buildCspHeader(options: {
 }): string {
   const { nonce, isDev, supabaseUrl, appHost, sentryReportUri } = options;
   const supabaseHost = parseSupabaseHost(supabaseUrl);
+  const supabaseScheme = parseSupabaseScheme(supabaseUrl);
+  const supabaseWsScheme = supabaseScheme === "http" ? "ws" : "wss";
 
   // In production, require an explicit Supabase URL to avoid a permissive
   // wildcard in connect-src. Fall back to *.supabase.co only in development.
@@ -26,7 +41,7 @@ export function buildCspHeader(options: {
   }
 
   const supabaseConnect = supabaseHost
-    ? `https://${supabaseHost} wss://${supabaseHost}`
+    ? `${supabaseScheme}://${supabaseHost} ${supabaseWsScheme}://${supabaseHost}`
     : "https://*.supabase.co wss://*.supabase.co";
 
   // CSP 'self' does not resolve to wss:// in all browsers (MDN compat note).
