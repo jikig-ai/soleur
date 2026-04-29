@@ -6,6 +6,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { TeamNamesProvider } from "@/hooks/use-team-names";
 import { useSidebarCollapse } from "@/hooks/use-sidebar-collapse";
+import { ConversationsRail } from "@/components/chat/conversations-rail";
 
 const BANNER_DISMISS_KEY = "soleur:past_due_banner_dismissed";
 
@@ -152,8 +153,14 @@ export default function DashboardLayout({
       const tag = (e.target as HTMLElement)?.tagName;
       if (tag === "INPUT" || tag === "TEXTAREA") return;
       if ((e.target as HTMLElement)?.isContentEditable) return;
-      // Only fire on routes that are NOT KB or Settings
-      if (pathname.startsWith("/dashboard/kb") || pathname.startsWith("/dashboard/settings")) return;
+      // Only fire on routes that are NOT KB, Settings, or chat. On chat
+      // pages the ConversationsRail owns Cmd/Ctrl+B for its own collapse.
+      if (
+        pathname.startsWith("/dashboard/kb") ||
+        pathname.startsWith("/dashboard/settings") ||
+        pathname.startsWith("/dashboard/chat")
+      )
+        return;
       e.preventDefault();
       toggleCollapsed();
     }
@@ -185,8 +192,19 @@ export default function DashboardLayout({
 
   async function handleSignOut() {
     const supabase = createClient();
-    await supabase.auth.signOut();
-    router.push("/login");
+    // Sign-out tears down ALL channels by design. removeAllChannels() is
+    // best-effort cleanup — if the Phoenix WS rejects phx_leave (network
+    // blip, already-closed transport), the inner await throws. We MUST
+    // still complete signOut + redirect: leaving the user authenticated
+    // with the click "doing nothing" is exactly the shared-device leak
+    // the plan's User-Brand Impact paragraph names. try/finally ensures
+    // session teardown is the contract, not a happy-path-only effect.
+    try {
+      await supabase.removeAllChannels();
+    } finally {
+      await supabase.auth.signOut();
+      router.push("/login");
+    }
   }
 
   return (
@@ -281,6 +299,25 @@ export default function DashboardLayout({
             );
           })}
         </nav>
+
+        {/* Recent conversations — mobile drawer only. Mounted only when
+            the drawer is open AND on chat routes, so:
+              (1) the rail does NOT mount on /dashboard, /dashboard/kb,
+                  /dashboard/settings (avoiding wasted Realtime channels +
+                  query bursts on every dashboard route); and
+              (2) at md+ the drawer button never fires (drawerOpen stays
+                  false), so the chat-segment <aside hidden md:block /> is
+                  the sole rail mount on desktop — no double-mount, no
+                  duplicate "command-center" channel subscription.
+            See review feedback on PR #3021 (perf P1 + user-impact F1/F3). */}
+        {drawerOpen && pathname.startsWith("/dashboard/chat") && (
+          <div
+            data-testid="conversations-rail-drawer"
+            className="flex min-h-0 flex-1 flex-col border-t border-neutral-800 md:hidden"
+          >
+            <ConversationsRail />
+          </div>
+        )}
 
         {/* Footer links */}
         <div className={`border-t border-neutral-800 safe-bottom ${collapsed ? "p-1" : "p-3"}`}>

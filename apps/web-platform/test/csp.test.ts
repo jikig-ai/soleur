@@ -64,6 +64,23 @@ describe("buildCspHeader", () => {
     expect(connectSrc).toContain("wss://abc.supabase.co");
   });
 
+  test("connect-src uses http+ws when Supabase URL is http (e2e mock servers)", () => {
+    // Regression guard: e2e tests use `http://localhost:<port>` for the
+    // mock-supabase server. The CSP's connect-src must include the actual
+    // scheme so authenticated e2e tests' fetch calls aren't silently
+    // CSP-blocked. See playwright.config.ts MOCK_SUPABASE_URL.
+    const csp = buildCspHeader({
+      nonce: TEST_NONCE,
+      isDev: true,
+      supabaseUrl: "http://localhost:54399",
+      appHost: "localhost:3100",
+    });
+    const connectSrc = parseCspDirective(csp, "connect-src");
+    expect(connectSrc).toContain("http://localhost:54399");
+    expect(connectSrc).toContain("ws://localhost:54399");
+    expect(connectSrc).not.toContain("https://localhost:54399");
+  });
+
   test("connect-src falls back to wildcard in dev when URL is empty", () => {
     const csp = buildCspHeader({
       nonce: TEST_NONCE,

@@ -18,6 +18,7 @@ interface UseConversationsOptions {
   statusFilter?: ConversationStatus | null;
   domainFilter?: DomainLeaderId | "general" | null;
   archiveFilter?: ArchiveFilter;
+  limit?: number;
 }
 
 interface UseConversationsResult {
@@ -80,7 +81,7 @@ function derivePreview(messages: Message[], conversationId: string): { text: str
 export function useConversations(
   options: UseConversationsOptions = {},
 ): UseConversationsResult {
-  const { statusFilter = null, domainFilter = null, archiveFilter = "active" } = options;
+  const { statusFilter = null, domainFilter = null, archiveFilter = "active", limit = 50 } = options;
   const [conversations, setConversations] = useState<ConversationWithPreview[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -163,7 +164,7 @@ export function useConversations(
         query = query.eq("domain_leader", domainFilter);
       }
 
-      const { data: convData, error: convError } = await query.limit(50);
+      const { data: convData, error: convError } = await query.limit(limit);
       if (convError) {
         setError(convError.message);
         setLoading(false);
@@ -211,7 +212,7 @@ export function useConversations(
       setError(err instanceof Error ? err.message : "Failed to load conversations");
       setLoading(false);
     }
-  }, [statusFilter, domainFilter, archiveFilter]);
+  }, [statusFilter, domainFilter, archiveFilter, limit]);
 
   // Initial fetch
   useEffect(() => {
@@ -239,7 +240,11 @@ export function useConversations(
         },
         (payload) => {
           const updated = payload.new as Conversation;
-          // Client-side user_id check: Free tier ignores server-side filter
+          // Defensive: DELETE events bypass RLS by Postgres design. REPLICA
+          // IDENTITY FULL (migration 015) populates payload.old.user_id so a
+          // future DELETE handler can reuse this drop pattern. Do not remove.
+          // See plan 2026-04-29-feat-command-center-conversation-nav-plan.md
+          // Phase 1.7 for full archaeology.
           if (updated.user_id !== userId) return;
           // Client-side repo_url check: Realtime can't express the second
           // equality, so drop payloads whose repo_url doesn't match the
