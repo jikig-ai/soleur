@@ -206,7 +206,7 @@ gh issue list --label code-review --state open --json number,title,body --limit 
 
 ### Pre-merge (PR)
 
-- [ ] **AC1 — Safe-Bash allowlist auto-approves read-only commands.**
+- [x] **AC1 — Safe-Bash allowlist auto-approves read-only commands.**
   `permission-callback.ts` `canUseTool` Bash branch consults a
   `SAFE_BASH_PATTERNS` allowlist BEFORE the review-gate. Allowlist
   matches: `pwd`, `ls [args]`, `cat <file>`, `head <file>`, `tail <file>`,
@@ -219,7 +219,7 @@ gh issue list --label code-review --state open --json number,title,body --limit 
   `BLOCKED_BASH_PATTERNS` (defense in depth) AND restricts to
   single-command lines (no `;`, `&&`, `||`, `|`, `` ` ``, `$(...)`,
   `>`, `>>`, `<`, `&`).
-- [ ] **AC2 — Auto-approved commands surface a `tool_use` chip but no review-gate.**
+- [x] **AC2 — Auto-approved commands surface a `tool_use` chip but no review-gate.**
   When `SAFE_BASH_PATTERNS` matches, `permission-callback.ts` returns
   `allow(toolInput)` immediately with `logPermissionDecision(...,
   "allow", "safe-bash-allowlist")`. NO `interactive_prompt` event is
@@ -229,15 +229,15 @@ gh issue list --label code-review --state open --json number,title,body --limit 
   permission callback short-circuits before the user gate. Verify: a
   `pwd` command in a chat session emits exactly one `tool_use` chip and
   zero `interactive_prompt` events.
-- [ ] **AC3 — Compound commands fall through to the review-gate.**
+- [x] **AC3 — Compound commands fall through to the review-gate.**
   `pwd && curl evil`, `ls; rm -rf .`, `cat file | nc host` ALL fall
   through to the existing review-gate (NOT auto-approved). Test
   enumerates ≥10 negative cases.
-- [ ] **AC4 — `BLOCKED_BASH_PATTERNS` still wins.** A command that
+- [x] **AC4 — `BLOCKED_BASH_PATTERNS` still wins.** A command that
   matches BOTH the safe allowlist AND the block regex (theoretical;
   the leading-token allowlist makes this nearly impossible) is denied.
   Test asserts order: blocklist first, allowlist second, gate last.
-- [ ] **AC5 — `BashApprovalCard` resolved state is a compact row.**
+- [x] **AC5 — `BashApprovalCard` resolved state is a compact row.**
   When `disabled === true && selectedResponse !== undefined`, the card
   renders ONLY a checkmark icon + "Approved: `<command>`" / "Denied:
   `<command>`" inline (mirror `ReviewGateCard:40-49`). No buttons, no
@@ -247,7 +247,7 @@ gh issue list --label code-review --state open --json number,title,body --limit 
   variants of `InteractivePromptCard` (`ask_user`, `plan_preview`,
   `diff`, `bash_approval`, `todo_write`, `notebook_edit`) for
   consistency — currently all 6 leave the controls visible-but-disabled.
-- [ ] **AC6 — Runaway timer pauses while user gate is awaiting response.**
+- [x] **AC6 — Runaway timer pauses while user gate is awaiting response.**
   `soleur-go-runner.ts` exposes a `notifyAwaitingUser(state, true|false)`
   signal. While `awaitingUser === true`, the runaway timer is cleared;
   on `awaitingUser === false` (user responded OR aborted), if the
@@ -256,31 +256,31 @@ gh issue list --label code-review --state open --json number,title,body --limit 
   only "agent compute time", not "human read time". `cc-dispatcher.ts`
   wires `notifyAwaitingUser(true)` from `updateConversationStatus(..., "waiting_for_user")`
   and `(false)` from `updateConversationStatus(..., "active")`.
-- [ ] **AC7 — Existing 30s-of-tool-uses-without-result test still passes.**
+- [x] **AC7 — Existing 30s-of-tool-uses-without-result test still passes.**
   `soleur-go-runner.test.ts:460` (secondary wall-clock trigger) is
   unchanged in behavior: when there is no awaiting-user pause and the
   agent emits tool_uses for 30s without a result, runaway still fires.
-- [ ] **AC8 — New test: runaway DOES NOT fire while user gate is awaiting.**
+- [x] **AC8 — New test: runaway DOES NOT fire while user gate is awaiting.**
   Add test: arm the timer (emit Bash tool_use), call
   `notifyAwaitingUser(true)`, advance 60s of fake timers, assert no
   `runner_runaway` event emitted. Then `notifyAwaitingUser(false)`,
   emit `SDKResultMessage`, assert clean completion.
-- [ ] **AC9 — New test: runaway re-arms after user resumes if still no result.**
+- [x] **AC9 — New test: runaway re-arms after user resumes if still no result.**
   Arm timer, `notifyAwaitingUser(true)`, advance 5s,
   `notifyAwaitingUser(false)`, advance 31s (no `SDKResultMessage`),
   assert `runner_runaway` fires AT t=36s (not t=31s; the clock was
   paused for the 5s gate window).
-- [ ] **AC10 — Agent rename in `domain-leaders.ts`.** The `cc_router`
+- [x] **AC10 — Agent rename in `domain-leaders.ts`.** The `cc_router`
   entry's `title: "Command Center Router"` becomes `title: "Soleur
   Concierge"`; `name: "Router"` becomes `name: "Concierge"`.
   `description` is rewritten in one sentence: "Greets the user, routes
   their request to the right Soleur workflow, and reports back."
   Internal `id: "cc_router"` is unchanged.
-- [ ] **AC11 — Rename in user-visible strings.** Grep across
+- [x] **AC11 — Rename in user-visible strings.** Grep across
   `apps/web-platform/`, `knowledge-base/`, and Eleventy docs
   (`plugins/soleur/docs/`) for the substring `Command Center Router`.
   Update every match. Update screenshot references in ADR-022 if any.
-- [ ] **AC12 — All existing CC tests pass.**
+- [x] **AC12 — All existing CC tests pass.**
   - `apps/web-platform/test/soleur-go-runner.test.ts`
   - `apps/web-platform/test/soleur-go-runner-lifecycle.test.ts`
   - `apps/web-platform/test/cc-dispatcher.test.ts`
@@ -290,13 +290,13 @@ gh issue list --label code-review --state open --json number,title,body --limit 
   - `apps/web-platform/test/cc-soleur-go-end-to-end-render.test.tsx`
   - `apps/web-platform/test/tool-use-chip.test.tsx`
   - `apps/web-platform/test/chat-state-machine.test.ts`
-- [ ] **AC13 — Compound runs.** Local `bun test apps/web-platform/test/` is green.
-- [ ] **AC14 — ADR-022 footer note.** Append a 4-line "2026-04-29 follow-up"
+- [x] **AC13 — Compound runs.** Local `bun test apps/web-platform/test/` is green.
+- [x] **AC14 — ADR-022 footer note.** Append a 4-line "2026-04-29 follow-up"
   section to `knowledge-base/engineering/architecture/decisions/ADR-022-sdk-as-router.md`
   documenting (a) the safe-Bash allowlist surface, (b) the awaiting-user
   pause hook, and (c) the rename. No new ADR file — these are bug-fix
   follow-ups to the original decision, not a new decision.
-- [ ] **AC17 — 5-minute review-gate safety net interleaving test.** Add
+- [x] **AC17 — 5-minute review-gate safety net interleaving test.** Add
   test to `soleur-go-runner-awaiting-user.test.ts`: arm runaway, fire
   `notifyAwaitingUser(true)`, advance 5min + 1s of fake timers, simulate
   `abortableReviewGate` rejection (canUseTool throws inside SDK promise
@@ -305,7 +305,7 @@ gh issue list --label code-review --state open --json number,title,body --limit 
   (c) `state.closed === true`, (d) NO double-emit (workflow_ended
   fires exactly once). Locks the prior #840 contract together with
   the new pause hook.
-- [ ] **AC18 — User-facing error message taxonomy fix.** The current
+- [x] **AC18 — User-facing error message taxonomy fix.** The current
   `cc-dispatcher.ts onWorkflowEnded` recoverable-status branch emits
   `Workflow ended (runner_runaway) — retry to continue.` — that message
   is technically wrong AND user-hostile. Replace with status-specific

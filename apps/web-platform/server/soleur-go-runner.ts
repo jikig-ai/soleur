@@ -340,6 +340,21 @@ export interface SoleurGoRunner {
     toolUseId: string;
     content: string;
   }): boolean;
+  /**
+   * Pause/resume the runaway wall-clock for a conversation. The
+   * cc-dispatcher calls `notifyAwaitingUser(true)` when conversation
+   * status transitions to `"waiting_for_user"` (Bash review-gate, plan
+   * preview, ask_user) and `notifyAwaitingUser(false)` on transition back
+   * to `"active"`. While paused, the runaway timer is cleared; on
+   * resume, `firstToolUseAt` is reset to `now()` and the timer is
+   * re-armed if `state.firstToolUseAt` was set AND the conversation
+   * is still open.
+   *
+   * If no active query exists for `conversationId`, this MUST mirror to
+   * Sentry via `reportSilentFallback` (no silent no-op) per
+   * `cq-silent-fallback-must-mirror-to-sentry`.
+   */
+  notifyAwaitingUser(conversationId: string, awaiting: boolean): void;
 }
 
 /**
@@ -493,6 +508,15 @@ interface ActiveQuery {
   costCaps: CostCaps;
   events: DispatchEvents;
   closed: boolean;
+  /**
+   * #2920 — paused-runaway flag. When `true`, the runner is awaiting a
+   * user response (e.g., Bash review-gate, ExitPlanMode). The runaway
+   * timer is paused (`clearRunaway`) on transition to `true` and re-armed
+   * with a fresh `firstToolUseAt = now()` on transition to `false`.
+   * The wall-clock contract becomes "agent compute time only, not human
+   * read time".
+   */
+  awaitingUser: boolean;
 }
 
 // --- Runner -----------------------------------------------------------
@@ -577,10 +601,20 @@ export function createSoleurGoRunner(deps: SoleurGoRunnerDeps): SoleurGoRunner {
 
   function armRunaway(state: ActiveQuery): void {
     clearRunaway(state);
+    // Defense-in-depth: when paused for user input, do NOT arm a timer.
+    // The legitimate caller (`handleAssistantMessage`'s first-tool-use
+    // branch and `notifyAwaitingUser(false)`) already gates on this, but
+    // a future caller mis-using `armRunaway` should not silently restart
+    // the wall-clock against human read time.
+    if (state.awaitingUser) return;
     const firedAtStart = state.firstToolUseAt ?? now();
     state.runaway = setTimeout(() => {
-      // Only fire if no SDKResultMessage cleared the arm.
+      // Only fire if no SDKResultMessage cleared the arm AND the runner
+      // is not paused (race window: timer fires the same tick the user
+      // clicks; `notifyAwaitingUser(true)` ran but the timer was already
+      // queued).
       if (state.closed) return;
+      if (state.awaitingUser) return;
       const elapsedMs = now() - firedAtStart;
       emitWorkflowEnded(state, { status: "runner_runaway", elapsedMs });
     }, wallClockTriggerMs);
@@ -869,6 +903,7 @@ export function createSoleurGoRunner(deps: SoleurGoRunnerDeps): SoleurGoRunner {
         costCaps: defaultCostCaps,
         events,
         closed: false,
+        awaitingUser: false,
       };
       activeQueries.set(conversationId, state);
 
@@ -955,6 +990,40 @@ export function createSoleurGoRunner(deps: SoleurGoRunnerDeps): SoleurGoRunner {
     }
   }
 
+  function notifyAwaitingUser(conversationId: string, awaiting: boolean): void {
+    const state = activeQueries.get(conversationId);
+    if (!state) {
+      // Per `cq-silent-fallback-must-mirror-to-sentry` + plan Sharp Edges:
+      // a notify for an unknown conversation is a server bug (the
+      // dispatcher fired the signal after the runner already reaped or
+      // closed). Mirror to Sentry; do NOT silently drop.
+      reportSilentFallback(
+        new Error("notifyAwaitingUser: no active query"),
+        {
+          feature: "soleur-go-runner",
+          op: "notifyAwaitingUser",
+          extra: { conversationId, awaiting },
+        },
+      );
+      return;
+    }
+    if (state.closed) return;
+    if (awaiting) {
+      state.awaitingUser = true;
+      // Pause the wall-clock — agent compute time only, not human read time.
+      clearRunaway(state);
+      return;
+    }
+    // Resume.
+    state.awaitingUser = false;
+    // Re-arm only when the conversation is mid-turn: a tool_use opened
+    // the wall-clock window AND no SDKResultMessage cleared it yet.
+    if (state.firstToolUseAt !== null) {
+      state.firstToolUseAt = now();
+      armRunaway(state);
+    }
+  }
+
   return {
     dispatch,
     hasActiveQuery,
@@ -962,5 +1031,6 @@ export function createSoleurGoRunner(deps: SoleurGoRunnerDeps): SoleurGoRunner {
     reapIdle,
     closeConversation,
     respondToToolUse,
+    notifyAwaitingUser,
   };
 }

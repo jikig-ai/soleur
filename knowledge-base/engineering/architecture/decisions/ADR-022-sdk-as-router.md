@@ -147,3 +147,10 @@ ships here; the dispatcher abstraction lifts above it later).
   (deleted pre-merge per plan task 0.7).
 - Raw rerun data (gitignored): `knowledge-base/project/plans/spike-raw-stream-input.json`.
 - Production runner arrives in Stage 2 of the plan.
+
+## 2026-04-29 follow-up
+
+- **Safe-Bash auto-approve allowlist** added in `permission-callback.ts` — read-only file/git inspection commands (e.g., `pwd`, `ls`, `git status`) bypass the user gate. Compound commands and shell-metacharacter inputs still flow through the existing review-gate. The SDK `bypassPermissions` mode was rejected as unsafe in the multi-tenant web app.
+- **Awaiting-user pause hook** in the runner — the wall-clock runaway timer pauses while a user gate is awaiting response. Wired via `cc-dispatcher.ts updateConversationStatus`. Wall-clock now counts agent compute time only, not human read time.
+- **Agent rename** — `cc_router.title` → "Soleur Concierge" (internal id unchanged).
+- **User-facing workflow-end copy** moved to a typed `WORKFLOW_END_USER_MESSAGES` map.

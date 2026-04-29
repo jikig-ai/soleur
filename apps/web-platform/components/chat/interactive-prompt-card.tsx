@@ -121,6 +121,58 @@ function CardShell({
   );
 }
 
+/**
+ * AC5 / TS6 (#3018) — compact resolved row, mirrors `ReviewGateCard:40-49`.
+ *
+ * After a prompt is resolved, all six variants collapse to a single line:
+ * one inline checkmark `<svg>` + `"<Verb>: <target>"` (or just `"<Verb>"`
+ * when `target` is empty). NO buttons / pre blocks / cwd lines / list
+ * markup remain — those are the disabled-but-visible artifacts the AC
+ * targets.
+ *
+ * The wrapper carries `data-prompt-kind` and `data-prompt-id` so the
+ * existing test seam in `cc-soleur-go-end-to-end-render.test.tsx` and
+ * any DOM consumers continue to locate the card.
+ */
+function ResolvedCardRow({
+  kind,
+  promptId,
+  verb,
+  target,
+}: {
+  kind: InteractivePromptPayload["kind"];
+  promptId: string;
+  verb: string;
+  target?: string;
+}) {
+  return (
+    <div data-prompt-kind={kind} data-prompt-id={promptId}>
+      <div className="flex items-center gap-2 rounded-lg border border-neutral-800 bg-neutral-900/50 px-4 py-2 text-sm text-neutral-400 transition-all duration-300">
+        <svg
+          className="h-4 w-4 text-green-500"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        >
+          <polyline points="20 6 9 17 4 12" />
+        </svg>
+        <span>
+          {verb}
+          {target ? (
+            <>
+              :{" "}
+              <strong className="text-neutral-200">{target}</strong>
+            </>
+          ) : null}
+        </span>
+      </div>
+    </div>
+  );
+}
+
 // ---------------------------------------------------------------------------
 // ask_user
 // ---------------------------------------------------------------------------
@@ -140,6 +192,22 @@ function AskUserCard({
   const [picked, setPicked] = useState<string[]>(() =>
     Array.isArray(selectedResponse) ? selectedResponse : [],
   );
+
+  // AC5 / TS6: collapse to compact row when resolved + a response was carried.
+  // Hook calls above must happen unconditionally — early return goes here.
+  if (disabled && selectedResponse !== undefined) {
+    const target = Array.isArray(selectedResponse)
+      ? selectedResponse.join(", ")
+      : String(selectedResponse);
+    return (
+      <ResolvedCardRow
+        kind="ask_user"
+        promptId={promptId}
+        verb="Selected"
+        target={target}
+      />
+    );
+  }
 
   if (payload.multiSelect) {
     const toggle = (opt: string) =>
@@ -222,6 +290,13 @@ function PlanPreviewCard({
   onRespond,
   selectedResponse,
 }: VariantProps<"plan_preview", { markdown: string }>) {
+  // AC5 / TS6: compact resolved row.
+  if (disabled && selectedResponse !== undefined) {
+    const sel = selectedResponse as "accept" | "iterate";
+    const verb = sel === "accept" ? "Accepted" : "Iterated";
+    return <ResolvedCardRow kind="plan_preview" promptId={promptId} verb={verb} />;
+  }
+
   // V1 falls back to formatAssistantText (preserves code fences + line breaks).
   // Full markdown rendering is V2.
   const text = formatAssistantText(payload.markdown);
@@ -274,6 +349,18 @@ function DiffCard({
   onRespond,
   selectedResponse,
 }: VariantProps<"diff", { path: string; additions: number; deletions: number }>) {
+  // AC5 / TS6: compact resolved row.
+  if (disabled && selectedResponse !== undefined) {
+    return (
+      <ResolvedCardRow
+        kind="diff"
+        promptId={promptId}
+        verb="Acknowledged"
+        target={payload.path}
+      />
+    );
+  }
+
   return (
     <CardShell promptId={promptId} kind="diff">
       <div className={baseClass}>
@@ -310,6 +397,20 @@ function BashApprovalCard({
   onRespond,
   selectedResponse,
 }: VariantProps<"bash_approval", { command: string; cwd: string; gated: boolean }>) {
+  // AC5 / TS6: compact resolved row.
+  if (disabled && selectedResponse !== undefined) {
+    const sel = selectedResponse as "approve" | "deny";
+    const verb = sel === "approve" ? "Approved" : "Denied";
+    return (
+      <ResolvedCardRow
+        kind="bash_approval"
+        promptId={promptId}
+        verb={verb}
+        target={payload.command}
+      />
+    );
+  }
+
   return (
     <CardShell promptId={promptId} kind="bash_approval">
       <div className={baseClass}>
@@ -364,6 +465,19 @@ function TodoWriteCard({
   onRespond,
   selectedResponse,
 }: VariantProps<"todo_write", { items: TodoItem[] }>) {
+  // AC5 / TS6: compact resolved row.
+  if (disabled && selectedResponse !== undefined) {
+    const target = `${payload.items.length} todo${payload.items.length === 1 ? "" : "s"}`;
+    return (
+      <ResolvedCardRow
+        kind="todo_write"
+        promptId={promptId}
+        verb="Acknowledged"
+        target={target}
+      />
+    );
+  }
+
   return (
     <CardShell promptId={promptId} kind="todo_write">
       <div className={baseClass}>
@@ -406,6 +520,18 @@ function NotebookEditCard({
   onRespond,
   selectedResponse,
 }: VariantProps<"notebook_edit", { notebookPath: string; cellIds: string[] }>) {
+  // AC5 / TS6: compact resolved row.
+  if (disabled && selectedResponse !== undefined) {
+    return (
+      <ResolvedCardRow
+        kind="notebook_edit"
+        promptId={promptId}
+        verb="Acknowledged"
+        target={payload.notebookPath}
+      />
+    );
+  }
+
   return (
     <CardShell promptId={promptId} kind="notebook_edit">
       <div className={baseClass}>
