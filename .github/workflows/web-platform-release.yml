@@ -34,6 +34,7 @@ jobs:
       tag_prefix: "web-v"
       docker_image: "ghcr.io/jikig-ai/soleur-web-platform"
       docker_context: "apps/web-platform"
+      vendor_plugin: true
       bump_type: ${{ inputs.bump_type || '' }}
       force_run: ${{ github.event_name == 'workflow_dispatch' }}
     secrets: inherit

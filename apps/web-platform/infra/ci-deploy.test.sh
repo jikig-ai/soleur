@@ -328,6 +328,9 @@ run_deploy() {
     export SSH_ORIGINAL_COMMAND="$cmd"
     MOCK_DIR=$(mktemp -d)
     trap 'rm -rf "$MOCK_DIR"' EXIT
+    # Redirect the plugin-seed bind-mount under MOCK_DIR so the seed block can
+    # mkdir/find/cp/sentinel-write without needing /mnt/data on the runner.
+    export PLUGIN_MOUNT_DIR="$MOCK_DIR/plugin-mount"
 
     export CI_DEPLOY_LOCK="$MOCK_DIR/ci-deploy.lock"
     # CI_DEPLOY_STATE defaults to a per-run temp path unless the caller already set one.
@@ -396,6 +399,9 @@ run_deploy_traced() {
     export SSH_ORIGINAL_COMMAND="$cmd"
     MOCK_DIR=$(mktemp -d)
     trap 'rm -rf "$MOCK_DIR"' EXIT
+    # Redirect the plugin-seed bind-mount under MOCK_DIR so the seed block can
+    # mkdir/find/cp/sentinel-write without needing /mnt/data on the runner.
+    export PLUGIN_MOUNT_DIR="$MOCK_DIR/plugin-mount"
 
     export CI_DEPLOY_LOCK="$MOCK_DIR/ci-deploy.lock"
     if [[ -z "${CI_DEPLOY_STATE:-}" ]]; then
@@ -785,6 +791,9 @@ run_deploy_doppler() {
     export SSH_ORIGINAL_COMMAND="$cmd"
     MOCK_DIR=$(mktemp -d)
     trap 'rm -rf "$MOCK_DIR"' EXIT
+    # Redirect the plugin-seed bind-mount under MOCK_DIR so the seed block can
+    # mkdir/find/cp/sentinel-write without needing /mnt/data on the runner.
+    export PLUGIN_MOUNT_DIR="$MOCK_DIR/plugin-mount"
 
     export CI_DEPLOY_LOCK="$MOCK_DIR/ci-deploy.lock"
     create_base_mocks "$MOCK_DIR"
@@ -1117,6 +1126,9 @@ assert_env_file_cleanup() {
     export SSH_ORIGINAL_COMMAND="deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0"
     MOCK_DIR=$(mktemp -d)
     trap 'rm -rf "$MOCK_DIR"' EXIT
+    # Redirect the plugin-seed bind-mount under MOCK_DIR so the seed block can
+    # mkdir/find/cp/sentinel-write without needing /mnt/data on the runner.
+    export PLUGIN_MOUNT_DIR="$MOCK_DIR/plugin-mount"
     export CI_DEPLOY_LOCK="$MOCK_DIR/ci-deploy.lock"
     export ENV_FILE_TRACKER="$tracker_dir/env_file_path"
     create_base_mocks "$MOCK_DIR"
@@ -1419,6 +1431,9 @@ assert_initial_running_has_tag() {
     export SSH_ORIGINAL_COMMAND="deploy web-platform ghcr.io/jikig-ai/soleur-web-platform v1.0.0"
     MOCK_DIR=$(mktemp -d)
     trap 'rm -rf "$MOCK_DIR"' EXIT
+    # Redirect the plugin-seed bind-mount under MOCK_DIR so the seed block can
+    # mkdir/find/cp/sentinel-write without needing /mnt/data on the runner.
+    export PLUGIN_MOUNT_DIR="$MOCK_DIR/plugin-mount"
     export CI_DEPLOY_LOCK="$MOCK_DIR/ci-deploy.lock"
     export CI_DEPLOY_STATE="$state_file"
     export RUNNING_SNAPSHOT="$snapshot"

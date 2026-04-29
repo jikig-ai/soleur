@@ -35,6 +35,10 @@ on:
         description: "Skip path change detection (for workflow_dispatch)"
         type: boolean
         default: false
+      vendor_plugin:
+        description: "Vendor plugins/soleur into <docker_context>/_plugin-vendored before docker build (#3045)"
+        type: boolean
+        default: false
     outputs:
       version:
         description: "Computed version without prefix (e.g., 0.1.1)"
@@ -389,6 +393,40 @@ jobs:
             exit 1
           fi
           echo "::notice::NEXT_PUBLIC_SUPABASE_ANON_KEY passes JWT-claims validation (ref=$ref_safe)"
+
+      - name: Vendor plugin into build context
+        if: steps.version.outputs.next != '' && inputs.docker_image != '' && inputs.vendor_plugin
+        env:
+          DOCKER_CONTEXT: ${{ inputs.docker_context }}
+        run: |
+          set -euo pipefail
+          # Defense-in-depth: bound DOCKER_CONTEXT to the apps/* prefix so a
+          # future caller passing untrusted input cannot rm -rf an arbitrary
+          # path under "$DOCKER_CONTEXT/_plugin-vendored".
+          if [[ ! "$DOCKER_CONTEXT" =~ ^apps/[a-z0-9-]+$ ]]; then
+            echo "::error::vendor_plugin: DOCKER_CONTEXT='$DOCKER_CONTEXT' must match ^apps/[a-z0-9-]+$"
+            exit 1
+          fi
+          DEST="${DOCKER_CONTEXT}/_plugin-vendored"
+          rm -rf "$DEST"
+          # `cp -a --no-dereference` preserves symlinks AS symlinks rather than
+          # following them. Without it, an absolute or escaping symlink under
+          # plugins/soleur (e.g. -> /etc/passwd) would land its target's
+          # CONTENT in the build context and be baked into the image.
+          cp -a --no-dereference plugins/soleur "$DEST"
+          # Reject any symlink whose resolved target escapes the vendor tree.
+          # readlink -f resolves transitively; the resolved absolute path is
+          # compared against the absolute DEST. Symlinks that stay inside
+          # _plugin-vendored (e.g. test fixtures) pass.
+          DEST_ABS="$(readlink -f "$DEST")"
+          while IFS= read -r link; do
+            target="$(readlink -f "$link" || true)"
+            if [[ -z "$target" ]] || [[ "$target" != "$DEST_ABS"* ]]; then
+              echo "::error::vendor_plugin: symlink escapes vendor tree: $link -> $target"
+              exit 1
+            fi
+          done < <(find "$DEST" -type l)
+          echo "Vendored $(find "$DEST" -type f | wc -l) plugin files into $DEST"
 
       - name: Build and push Docker image
         id: docker_build

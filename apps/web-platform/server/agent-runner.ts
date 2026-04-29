@@ -52,9 +52,6 @@ const log = createChildLogger("agent");
 let _supabase: ReturnType<typeof createServiceClient>;
 function supabase() { return _supabase ??= createServiceClient(); }
 
-const PLUGIN_PATH =
-  process.env.SOLEUR_PLUGIN_PATH || "/app/shared/plugins/soleur";
-
 import { buildToolLabel } from "./tool-labels";
 
 // ---------------------------------------------------------------------------
