@@ -15,6 +15,8 @@ priority: p1-high
 
 # Plan: Fix recurring `terraform_data.deploy_pipeline_fix` drift (#2873, #2874)
 
+> **2026-04-29 NOTE:** This plan's webhook smoke-test acceptance criterion ("Expected: HTTP 200" against `https://deploy.soleur.ai/hooks/deploy-status`) is **legacy** and incorrect post-CF-Access. Use the file+systemd contract documented in `plugins/soleur/skills/postmerge/references/deploy-status-debugging.md` "When NOT to use this probe" subsection. Tracking: #3034.
+
 ## Enhancement Summary
 
 **Deepened on:** 2026-04-24
