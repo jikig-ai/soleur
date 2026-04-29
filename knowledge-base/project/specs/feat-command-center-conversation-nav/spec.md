@@ -65,6 +65,8 @@ When the user's conversation list changes (new conversation, status update, arch
 
 Do NOT introduce a new Realtime subscription path. Either add a `limit` option to `apps/web-platform/hooks/use-conversations.ts` or extract a shared subscription primitive both call sites use. The single-source contract must be preserved: Realtime channel filter `user_id=eq.${userId}` + the existing client-side defensive `user_id !== uid` drop check.
 
+**Repo-scope inheritance.** `useConversations` filters server-side by both `user_id` AND `repo_url` (the user's currently-connected repo). The rail inherits this scoping for free: disconnected users (`repo_url IS NULL`) see an empty list by design — that's the empty-state contract for FR4, not a bug. Any future variant MUST preserve the `repo_url` filter, including its disconnect-empty behaviour.
+
 ### TR2: Subscription owned by the chat-segment layout
 
 The Realtime channel MUST live in the chat-segment layout (or a client component it mounts), not in `[conversationId]/page.tsx`. App Router does not remount segment layouts on intra-segment navigation, so this guarantees a single subscription per session-in-chat instead of one per conversation switch.
@@ -99,7 +101,7 @@ The rail's client component must be lazy-loaded so `/dashboard` and `/dashboard/
 
 ### TR8: Privacy-policy re-affirmation
 
-During `/work`, re-read `apps/web-platform/app/privacy/page.tsx`. If existing language scopes "conversation history display" to a specific surface, broaden to the authenticated app generally. Likely a no-op; verify rather than skip.
+During `/work`, re-read `docs/legal/privacy-policy.md` (the canonical Eleventy-rendered policy; mirrored at `plugins/soleur/docs/pages/legal/privacy-policy.md`). The Next.js path `apps/web-platform/app/privacy/page.tsx` does NOT exist — the privacy policy is rendered by Eleventy on the docs site, not by the Next.js app. If existing language scopes "conversation history display" to a specific surface, broaden to the authenticated app generally. Likely a no-op; verify rather than skip.
 
 ## Required Review Gates Before Merge
 

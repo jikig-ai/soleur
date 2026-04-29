@@ -10,17 +10,17 @@ TDD gate per AGENTS.md `cq-write-failing-tests-before`: each implementation task
 
 ## Phase 1: Hook contract widening + spec corrections
 
-- [ ] 1.1 Write failing test `apps/web-platform/test/use-conversations-limit.test.ts`
-  - [ ] 1.1.1 `useConversations({ limit: 15 })` against a mock returning 30 rows → result has length 15
-  - [ ] 1.1.2 `useConversations()` with no `limit` → default 50 behavior unchanged
-  - [ ] 1.1.3 Assert the underlying Supabase query receives `.limit(15)` (spy on `query.limit`)
-- [ ] 1.2 Run vitest; confirm 1.1 fails (RED)
-- [ ] 1.3 Implement: extend `UseConversationsOptions` in `apps/web-platform/hooks/use-conversations.ts` with `limit?: number`; replace `query.limit(50)` (line 166) with `query.limit(opts?.limit ?? 50)`
-- [ ] 1.4 Run vitest; confirm 1.1 passes (GREEN)
-- [ ] 1.5 Update `knowledge-base/project/specs/feat-command-center-conversation-nav/spec.md` TR8 path to `docs/legal/privacy-policy.md`
-- [ ] 1.6 Add `repo_url` inheritance note to spec TR1 / TR2
-- [ ] 1.7 Tier-divergence verification (per deepen-plan Risk #2): `git blame apps/web-platform/hooks/use-conversations.ts -L 243,246` to find the PR that introduced "Free tier ignores server-side filter". Read the linked issue/PR. Two outcomes: (a) the bug was real and is now fixed in current Supabase → delete the comment, keep the defensive client check (still load-bearing for DELETE per Risk #1); (b) the bug is still present → keep the comment AND open a Supabase-side issue. Document outcome in the PR body.
-- [ ] 1.8 Run `bun typecheck`; confirm green
+- [x] 1.1 Write failing test `apps/web-platform/test/use-conversations-limit.test.tsx` (filename is `.tsx` not `.ts` because `renderHook` needs the happy-dom test project)
+  - [x] 1.1.1 `useConversations({ limit: 15 })` against a mock returning 30 rows → result has length 15
+  - [x] 1.1.2 `useConversations()` with no `limit` → default 50 behavior unchanged
+  - [x] 1.1.3 Assert the underlying Supabase query receives `.limit(15)` (spy on `query.limit`)
+- [x] 1.2 Run vitest; confirm 1.1 fails (RED) — 2 of 3 tests failed (limit:15 + limit:5); default-50 passed
+- [x] 1.3 Implement: extend `UseConversationsOptions` with `limit?: number`; thread to `query.limit(limit)` (default 50 via destructure); add `limit` to `fetchConversations` useCallback deps
+- [x] 1.4 Run vitest; confirm 1.1 passes (GREEN) — all 3 tests pass
+- [x] 1.5 Update `knowledge-base/project/specs/feat-command-center-conversation-nav/spec.md` TR8 path to `docs/legal/privacy-policy.md`
+- [x] 1.6 Add `repo_url` inheritance note to spec TR1 / TR2
+- [x] 1.7 Tier-divergence verification — `git blame` traced the comment to PR #1759 (2026-04-07, "Free tier defence" per PR body). The justification was precautionary, not empirical. Updated the comment in-place: keep the check (load-bearing for DELETE per Risk #1) but correct the rationale. No upstream Supabase issue needed.
+- [x] 1.8 Run `bun typecheck`; confirm green
 - [ ] 1.9 Commit: `git commit -m "feat(hooks): add limit option to useConversations + spec corrections"`
 
 ## Phase 2: Chat-segment layout shell
