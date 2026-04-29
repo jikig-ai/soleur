@@ -268,7 +268,7 @@ If the `curl` fails (rc != 0) or `/tmp/preflight-candidates.txt` is empty, retur
 
 **Step 5.2: Probe each candidate chunk for Supabase shapes.**
 
-The Supabase host string and the inlined anon-key JWT may live in DIFFERENT chunks (verified 2026-04-29 against current prod: `8237-*.js` carries the JWT but contains zero `supabase.co` host strings). Track `host_union` (chunks containing supabase host) and `jwt_chunk` (the first chunk with a JWT) independently. Bail early once both signals are present.
+The Supabase host string and the inlined anon-key JWT may live in DIFFERENT chunks (verified 2026-04-29 against current prod: `8237-*.js` carries the JWT but contains zero `supabase.co` host strings). Track `host_union` (every chunk's supabase-host hits) and `jwt_chunk` (the first chunk with a JWT) independently. Always traverse the full candidate list — bail-early would skip chunks that may carry a placeholder-host leak (matrix row 6).
 
 This block is operator-executed under the skill's `set -euo pipefail` convention. Failed `curl` per chunk and `grep` rc=1 on no-match must NOT abort the loop — the gate-level SKIP/FAIL decision is made from the accumulated state at end-of-loop, not from per-iteration rc.
 
@@ -277,8 +277,11 @@ mkdir -p /tmp/preflight-chunks
 host_union=""
 jwt_chunk=""
 while IFS= read -r chunk_path; do
+  # Defense-in-depth: validate chunk_path is a clean Next.js static-chunks subpath
+  # before interpolating into the curl URL (no `..`, no `@`, no `?`, no whitespace).
+  [[ "$chunk_path" =~ ^/_next/static/chunks/[A-Za-z0-9_/().-]+\.js$ ]] || continue
   base=$(basename "$chunk_path")
-  curl -fsSL --max-time 10 "https://app.soleur.ai${chunk_path}" -o "/tmp/preflight-chunks/${base}" || continue
+  curl -fsSL --max-time 10 --max-filesize 5242880 "https://app.soleur.ai${chunk_path}" -o "/tmp/preflight-chunks/${base}" || continue
   hosts=$(grep -oE 'https?://([a-z0-9.-]*supabase\.co|api\.soleur\.ai)' "/tmp/preflight-chunks/${base}" | sort -u || true)
   if [[ -n "$hosts" ]]; then
     host_union="${host_union}${hosts}"$'\n'
@@ -289,14 +292,13 @@ while IFS= read -r chunk_path; do
       jwt_chunk="/tmp/preflight-chunks/${base}"
     fi
   fi
-  if [[ -n "$jwt_chunk" && -n "$host_union" ]]; then break; fi
 done < /tmp/preflight-candidates.txt
 
 printf '%s' "$host_union" | sort -u
 printf 'jwt_chunk=%s\n' "${jwt_chunk:-<none>}"
 ```
 
-The redirected-stdin form (`< /tmp/preflight-candidates.txt`) is required — piping (`cat ... | while read`) would scope `host_union` / `jwt_chunk` to a subshell and lose them at loop exit (precedent: PR #2573 flock subshell variable-scope incident).
+The redirected-stdin form (`< /tmp/preflight-candidates.txt`) is required — piping (`cat ... | while read`) scopes loop variables to a subshell and loses `host_union` / `jwt_chunk` at loop exit. The `--max-filesize 5242880` (5 MB) cap defends against a misbehaving CDN response filling tmpfs across 20 fetches. The strict path regex rejects `..`, `@`, `?`, and whitespace before any string interpolation into the curl URL — a defense-in-depth gate even though the source HTML is served by our own CDN. Full traversal (no early-break) ensures placeholder-host leaks in late-candidate chunks are still detected (matrix row 6).
 
 **Step 5.3: Assert canonical shape.**
 
@@ -312,16 +314,20 @@ PAYLOAD=$(printf '%s' "$JWT" | cut -d. -f2)
 PAD=$(( (4 - ${#PAYLOAD} % 4) % 4 ))
 if [[ $PAD -gt 0 ]]; then PADDED="$PAYLOAD$(printf '=%.0s' $(seq 1 $PAD))"; else PADDED="$PAYLOAD"; fi
 JSON=$(printf '%s' "$PADDED" | tr '_-' '/+' | base64 -d 2>/dev/null)
-iss=$(printf '%s' "$JSON" | jq -er '.iss // ""') || { echo "FAIL: JWT payload not parseable as JSON (security-gate fail-closed)"; exit 1; }
-role=$(printf '%s' "$JSON" | jq -er '.role // ""')
-ref=$(printf '%s' "$JSON" | jq -er '.ref // ""')
-iss_safe=${iss//[$'\n\r']/}
-role_safe=${role//[$'\n\r']/}
-ref_safe=${ref//[$'\n\r']/}
+iss=$(printf '%s' "$JSON" | jq -er '.iss // ""')  || { echo "FAIL: JWT payload not parseable as JSON (.iss missing or invalid)"; exit 1; }
+role=$(printf '%s' "$JSON" | jq -er '.role // ""') || { echo "FAIL: JWT payload missing .role (security-gate fail-closed)"; exit 1; }
+ref=$(printf '%s' "$JSON" | jq -er '.ref // ""')   || { echo "FAIL: JWT payload missing .ref (security-gate fail-closed)"; exit 1; }
+# Log-injection guard: strip C0 controls (NUL..US), DEL, and Unicode line separators
+# (U+2028, U+2029) before any echo. Defends against ANSI escape sequences, terminal
+# control chars, and GitHub Actions `::cmd::` smuggling via newlines or U+2028.
+sanitize() { printf '%s' "$1" | LC_ALL=C tr -d '\000-\037\177' | LC_ALL=C sed $'s/\xe2\x80\xa8//g; s/\xe2\x80\xa9//g'; }
+iss_safe=$(sanitize "$iss")
+role_safe=$(sanitize "$role")
+ref_safe=$(sanitize "$ref")
 printf 'iss=%s role=%s ref=%s\n' "$iss_safe" "$role_safe" "$ref_safe"
 ```
 
-`jq -er` (raise on null/error) plus the explicit FAIL-on-non-zero-rc enforces fail-closed semantics if the JWT regex matches a `eyJ...` literal that is not a valid base64-encoded JSON (e.g., a documentation example, a sibling cookie). The `${var//[$'\n\r']/}` strip is a log-injection guard — `jq -r` does not escape control characters, so a crafted JWT with `\n` in claim string values could otherwise smuggle synthetic `::notice::PASS` lines into GitHub Actions annotations (precedent: `2026-04-28-anon-key-test-fixture-leaked-into-prod-build` Session Error #6).
+`jq -er` (raise on null/error) plus the explicit FAIL-on-non-zero-rc enforces fail-closed semantics on every claim (`iss`, `role`, `ref`) if the JWT regex matches a `eyJ...` literal that is not a valid base64-encoded JSON or is missing a required claim. The `sanitize()` helper strips C0 controls (`\x00`–`\x1f`), DEL (`\x7f`), and Unicode line separators (U+2028, U+2029) before any echo — `jq -r` does not escape control characters, so a crafted JWT could otherwise smuggle ANSI escapes (e.g., `\x1b[2J` to clear the operator's terminal), `::notice::PASS` GitHub Actions annotations via `\n`, or U+2028/2029 line breaks invisible to `${var//$'\n'/}` (precedent: `2026-04-28-anon-key-test-fixture-leaked-into-prod-build` Session Error #6).
 
 The decoded claims MUST satisfy: `iss == "supabase"`, `role == "anon"`, `ref` matches `^[a-z0-9]{20}$`, and `ref` is not in the placeholder set (`test*`, `placeholder*`, `example*`, `service*`, `local*`, `dev*`, `stub*`).
 
@@ -340,7 +346,7 @@ Per `knowledge-base/project/learnings/2026-04-27-preflight-security-gates-skip-v
 | Zero Supabase host references AND zero JWTs after full 20-traversal | no | **SKIP** | Truly indeterminate — Supabase init not reachable from `/login`. Investigate manually (probe `/dashboard` or other authed routes). |
 | JWT regex matches but base64 decode / `jq` parse fails | invalid | **FAIL** | Discovered structure looks like a JWT but cannot be parsed — fail-closed. |
 
-The "host found but no JWT" row is FAIL, not SKIP, because partial-observation in a security-critical surface = fail-closed (the load-bearing invariant from the 2026-04-27 learning). A future "simplify the result block" commit that collapses this back to SKIP would silently re-introduce the fail-open class that #2887/#2903 already paid for. SKIP-on-chunking-change (the issue #3010 failure mode) is gone: a chunking change that moves the JWT to a different chunk now PASSes via Step 5.2's traversal.
+SKIP-on-chunking-change (the issue #3010 failure mode) is gone: a chunking change that moves the JWT to a different chunk now PASSes via Step 5.2's traversal. A future "simplify the result block" commit that collapses row 5 ("host without JWT after traversal") back to SKIP would silently re-introduce the fail-open class that #2887/#2903 already paid for — see the 2026-04-27 learning.
 
 ### Check 6: Brand-Survival Self-Review
 
