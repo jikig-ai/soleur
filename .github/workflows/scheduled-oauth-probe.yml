@@ -1,0 +1,238 @@
+# Synthetic OAuth probe: detects sign-in regressions before users hit them.
+# Probes prod public auth surface every 15 minutes and pages ops on failure.
+# Pattern: scheduled-cf-token-expiry-check.yml (issue file/comment dedup) +
+# scheduled-terraform-drift.yml (notify-ops-email integration).
+#
+# Security: all untrusted values (probe outputs) flow through env: vars before
+# being interpolated into run: shells. No github.event.* inputs are consumed.
+#
+# See: knowledge-base/engineering/ops/runbooks/oauth-probe-failure.md
+# Closes #2997.
+
+name: "Scheduled: OAuth Probe"
+
+on:
+  schedule:
+    - cron: '*/15 * * * *'
+  workflow_dispatch: {}
+
+concurrency:
+  group: scheduled-oauth-probe
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - id: probe
+        env:
+          APP_HOST: app.soleur.ai
+          API_HOST: api.soleur.ai
+          # Supabase /auth/v1/settings requires the anon key. The
+          # NEXT_PUBLIC_* anon key is shipped in the client bundle so
+          # exposing it to the workflow is no broader leak than its
+          # baseline scope. Still mask via secret to keep logs clean.
+          SUPABASE_ANON_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
+        run: |
+          set -uo pipefail
+          # Note: NOT set -e — we collect failure mode and emit it as output.
+
+          fail_mode=""
+          fail_detail=""
+
+          record_failure() {
+            if [[ -z "$fail_mode" ]]; then
+              fail_mode="$1"
+              fail_detail="$2"
+            fi
+          }
+
+          # check_redirect <provider> <expected_host> — probes a Supabase
+          # OAuth /authorize endpoint and asserts the 302 lands on the
+          # expected provider host. Sets fail_mode/fail_detail on miss.
+          # NOTE: uses GET (not HEAD/-sI) — Supabase Auth's /authorize
+          # rejects HEAD with 405 (Allow: GET).
+          check_redirect() {
+            local provider="$1" expected="$2"
+            local url line http redirect redirect_host
+            url="https://${API_HOST}/auth/v1/authorize?provider=${provider}&redirect_to=https%3A%2F%2F${APP_HOST}%2Fcallback"
+            # Default curl does NOT follow redirects (no -L), so the 302
+            # Location lands in %{redirect_url} without an extra hop.
+            line=$(curl -s --max-time 10 --max-redirs 0 -o /dev/null \
+              -w '%{http_code} %{redirect_url}' "$url" 2>/dev/null) || line="network_error"
+            if [[ "$line" == "network_error" ]]; then
+              record_failure "network_error" \
+                "GET ${url} -> curl error (DNS, TLS, or connect failure)"
+              return
+            fi
+            http=${line%% *}
+            redirect=${line#* }
+            redirect_host=$(printf '%s' "$redirect" | awk -F/ '{print $3}')
+            if [[ "$http" != "302" || "$redirect_host" != "$expected" ]]; then
+              record_failure "${provider}_authorize" \
+                "GET ${url} -> HTTP ${http}, redirect_host=${redirect_host}"
+            fi
+          }
+
+          # 1. /login is reachable
+          code=$(curl -s --max-time 10 -o /dev/null -w '%{http_code}' \
+            "https://${APP_HOST}/login" 2>/dev/null) || code="network_error"
+          if [[ "$code" == "network_error" ]]; then
+            record_failure "network_error" \
+              "GET https://${APP_HOST}/login -> curl error"
+          elif [[ "$code" != "200" ]]; then
+            record_failure "login_unreachable" \
+              "GET https://${APP_HOST}/login -> HTTP ${code}"
+          fi
+
+          # 2. Google OAuth redirect lands on accounts.google.com
+          [[ -z "$fail_mode" ]] && check_redirect "google" "accounts.google.com"
+
+          # 3. GitHub OAuth redirect lands on github.com
+          [[ -z "$fail_mode" ]] && check_redirect "github" "github.com"
+
+          # 4. /auth/v1/settings exposes google + github as enabled.
+          # Requires the Supabase anon `apikey` header — without it the
+          # endpoint returns 401 with `external: { google: null }`.
+          # The anon key is public (NEXT_PUBLIC_*) so passing it via
+          # an env var is safe; we still mark it `***` in logs.
+          if [[ -z "$fail_mode" ]]; then
+            if [[ -z "${SUPABASE_ANON_KEY:-}" ]]; then
+              record_failure "settings_misconfigured" \
+                "SUPABASE_ANON_KEY secret is not set on the workflow"
+            else
+              tmp=$(mktemp)
+              trap 'rm -f "$tmp"' EXIT
+              http=$(curl -s --max-time 10 -o "$tmp" -w '%{http_code}' \
+                -H "apikey: ${SUPABASE_ANON_KEY}" \
+                "https://${API_HOST}/auth/v1/settings" 2>/dev/null) || http="network_error"
+              if [[ "$http" == "network_error" ]]; then
+                record_failure "network_error" \
+                  "GET https://${API_HOST}/auth/v1/settings -> curl error"
+              elif [[ "$http" != "200" ]]; then
+                record_failure "settings_http" \
+                  "GET https://${API_HOST}/auth/v1/settings -> HTTP ${http}"
+              elif ! jq -e . "$tmp" >/dev/null 2>&1; then
+                record_failure "settings_invalid_json" \
+                  "GET https://${API_HOST}/auth/v1/settings -> non-JSON body (HTTP ${http})"
+              else
+                for prov in google github; do
+                  enabled=$(jq -r --arg p "$prov" '.external[$p] // false' "$tmp")
+                  if [[ "$enabled" != "true" ]]; then
+                    record_failure "settings_provider_disabled" \
+                      "external.${prov}=${enabled}"
+                    break
+                  fi
+                done
+              fi
+            fi
+          fi
+
+          # Sanitize for $GITHUB_OUTPUT — strip CR/LF + Unicode line/paragraph
+          # separators (U+2028/U+2029) that could break the key=value contract
+          # or forge ::warning:: annotations. Use tr for byte-class portability;
+          # bash's "${var//[$'…']/}" pattern doesn't reliably cover U+2028/9.
+          fail_detail_safe=$(printf '%s' "$fail_detail" | tr -d '\r\n\f\v\x7f' | sed 's/\xe2\x80\xa8//g; s/\xe2\x80\xa9//g')
+          {
+            echo "failure_mode=${fail_mode}"
+            echo "failure_detail=${fail_detail_safe}"
+          } >> "$GITHUB_OUTPUT"
+
+          if [[ -n "$fail_mode" ]]; then
+            echo "::warning::OAuth probe failed: ${fail_mode} — ${fail_detail_safe}"
+          else
+            echo "OAuth probe passed."
+          fi
+
+      - name: File or comment on tracking issue (failure)
+        if: steps.probe.outputs.failure_mode != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          FAIL_MODE: ${{ steps.probe.outputs.failure_mode }}
+          FAIL_DETAIL: ${{ steps.probe.outputs.failure_detail }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          RUNBOOK_URL: ${{ github.server_url }}/${{ github.repository }}/blob/main/knowledge-base/engineering/ops/runbooks/oauth-probe-failure.md
+        run: |
+          set -euo pipefail
+
+          ISSUE_TITLE="[ci/auth-broken] Synthetic OAuth probe failed"
+          ISSUE_SEARCH='in:title "[ci/auth-broken] Synthetic OAuth probe failed"'
+
+          # Pre-create the label defensively (idempotent).
+          gh label create "ci/auth-broken" --repo "$GH_REPO" \
+            --description "Synthetic CI probe detected an auth-flow regression" \
+            --color "B60205" 2>/dev/null || true
+
+          NOW=$(date -u '+%Y-%m-%d %H:%M UTC')
+
+          # Build body via printf to avoid heredoc-leading-whitespace traps
+          # (4+ leading spaces would render the body as a code block).
+          BODY_FILE=$(mktemp)
+          trap 'rm -f "$BODY_FILE"' EXIT
+          {
+            printf '## Synthetic OAuth probe failed\n\n'
+            printf -- '- **Failure mode:** `%s`\n' "$FAIL_MODE"
+            printf -- '- **Detail:** %s\n' "$FAIL_DETAIL"
+            printf -- '- **Detected at:** %s\n' "$NOW"
+            printf -- '- **Run log:** %s\n\n' "$RUN_URL"
+            printf '### What to do\n\nSee [oauth-probe-failure.md runbook](%s).\n\n' "$RUNBOOK_URL"
+            printf '**Tracks:** #2997\n'
+          } > "$BODY_FILE"
+
+          EXISTING=$(gh issue list --repo "$GH_REPO" --state open \
+            --search "$ISSUE_SEARCH" \
+            --json number --jq '.[0].number // empty')
+
+          if [[ -n "$EXISTING" ]]; then
+            echo "Existing tracking issue #$EXISTING — adding comment."
+            gh issue comment "$EXISTING" --repo "$GH_REPO" \
+              --body "Probe failed again at ${NOW} — \`${FAIL_MODE}\`: ${FAIL_DETAIL}. Run: ${RUN_URL}"
+          else
+            gh issue create --repo "$GH_REPO" \
+              --title "$ISSUE_TITLE" \
+              --label "ci/auth-broken" \
+              --label "priority/p1-high" \
+              --body-file "$BODY_FILE"
+          fi
+
+      - name: Email notification (failure)
+        if: steps.probe.outputs.failure_mode != ''
+        uses: ./.github/actions/notify-ops-email
+        with:
+          subject: "[Soleur Ops] OAuth probe failure: ${{ steps.probe.outputs.failure_mode }}"
+          body: |
+            <p><strong>Failure mode:</strong> ${{ steps.probe.outputs.failure_mode }}</p>
+            <p><strong>Detail:</strong> ${{ steps.probe.outputs.failure_detail }}</p>
+            <p><a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}">Run log</a></p>
+            <p>Runbook: <a href="https://github.com/${{ github.repository }}/blob/main/knowledge-base/engineering/ops/runbooks/oauth-probe-failure.md">oauth-probe-failure.md</a></p>
+          resend-api-key: ${{ secrets.RESEND_API_KEY }}
+
+      - name: Auto-close stale issue (probe green)
+        if: steps.probe.outputs.failure_mode == ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+
+          ISSUE_SEARCH='in:title "[ci/auth-broken] Synthetic OAuth probe failed"'
+          NOW=$(date -u '+%Y-%m-%d %H:%M UTC')
+
+          STALE=$(gh issue list --repo "$GH_REPO" --state open \
+            --search "$ISSUE_SEARCH" \
+            --json number --jq '.[0].number // empty')
+
+          if [[ -n "$STALE" ]]; then
+            echo "Closing stale tracking issue #$STALE."
+            gh issue close "$STALE" --repo "$GH_REPO" \
+              --comment "Probe green at ${NOW}. All four checks passed (login HTTP 200, google+github authorize 302, settings JSON valid). Run: ${RUN_URL}"
+          else
+            echo "No stale tracking issue to close."
+          fi

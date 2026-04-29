@@ -219,6 +219,7 @@ describe("cc-dispatcher singletons + orchestration", () => {
       reapIdle: () => 0,
       closeConversation: () => {},
       respondToToolUse: () => false,
+      notifyAwaitingUser: () => {},
       // biome-ignore lint/suspicious/noExplicitAny: minimal stub
     } as any;
     __setCcRunnerForTests(stubRunner);
@@ -264,6 +265,7 @@ describe("cc-dispatcher singletons + orchestration", () => {
       reapIdle: () => 0,
       closeConversation: () => {},
       respondToToolUse: () => false,
+      notifyAwaitingUser: () => {},
       // biome-ignore lint/suspicious/noExplicitAny: minimal stub
     } as any;
     __setCcRunnerForTests(stubRunner);
@@ -318,6 +320,7 @@ describe("cc-dispatcher singletons + orchestration", () => {
       reapIdle: () => 0,
       closeConversation: () => {},
       respondToToolUse: () => false,
+      notifyAwaitingUser: () => {},
       // biome-ignore lint/suspicious/noExplicitAny: minimal stub
     } as any);
 
@@ -362,6 +365,7 @@ describe("cc-dispatcher singletons + orchestration", () => {
       reapIdle: () => 0,
       closeConversation: () => {},
       respondToToolUse: () => false,
+      notifyAwaitingUser: () => {},
       // biome-ignore lint/suspicious/noExplicitAny: minimal stub
     } as any;
     __setCcRunnerForTests(stubRunner);
@@ -383,5 +387,53 @@ describe("cc-dispatcher singletons + orchestration", () => {
     const errMsg = errorCalls[0][1] as { errorCode?: string; message?: string };
     expect(errMsg.errorCode).toBeUndefined();
     expect(errMsg.message).toContain("Command Center router is unavailable");
+  });
+
+  // ---------------------------------------------------------------------------
+  // WORKFLOW_END_USER_MESSAGES — typed exhaustive map replaces the prior
+  // `Workflow ended (${status}) — retry to continue.` template that
+  // leaked the internal status enum to users. Compile-time enforcement is
+  // via `Record<WorkflowEndStatus, string>`; this test pins a runtime
+  // snapshot + verifies every variant has an entry.
+  // ---------------------------------------------------------------------------
+  it("WORKFLOW_END_USER_MESSAGES has an entry for every WorkflowEndStatus variant", async () => {
+    const { WORKFLOW_END_USER_MESSAGES } = await import(
+      "@/server/cc-dispatcher"
+    );
+    // Variants from the runner's WorkflowEnd union.
+    const expectedKeys: ReadonlyArray<string> = [
+      "completed",
+      "cost_ceiling",
+      "runner_runaway",
+      "user_aborted",
+      "idle_timeout",
+      "plugin_load_failure",
+      "internal_error",
+    ];
+    const actualKeys = Object.keys(WORKFLOW_END_USER_MESSAGES).sort();
+    expect(actualKeys).toEqual([...expectedKeys].sort());
+
+    // `completed` is intentionally empty — that path is handled via the
+    // terminal `session_ended` WS event and never produces a user-facing
+    // error message.
+    expect(WORKFLOW_END_USER_MESSAGES.completed).toBe("");
+
+    // Recoverable branches must surface user-friendly copy without
+    // leaking the internal enum.
+    expect(WORKFLOW_END_USER_MESSAGES.runner_runaway).toContain(
+      "agent went idle",
+    );
+    expect(WORKFLOW_END_USER_MESSAGES.cost_ceiling).toContain(
+      "per-workflow cost cap",
+    );
+    expect(WORKFLOW_END_USER_MESSAGES.internal_error).toContain(
+      "Something went wrong",
+    );
+
+    // Defense-in-depth: NO entry should leak the status token verbatim
+    // in a `Workflow ended (...)` template.
+    for (const [key, msg] of Object.entries(WORKFLOW_END_USER_MESSAGES)) {
+      expect(msg, `key=${key}`).not.toContain("Workflow ended (");
+    }
   });
 });
