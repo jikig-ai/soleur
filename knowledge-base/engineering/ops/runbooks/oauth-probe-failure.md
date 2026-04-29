@@ -42,8 +42,23 @@ operational runbooks) before mutating application state.
 
 ## Failure modes
 
-The probe emits one of six `failure_mode` values. Each maps to a
+The probe emits one of seven `failure_mode` values. Each maps to a
 distinct triage path.
+
+### `network_error`
+
+Curl itself failed before getting an HTTP response (DNS lookup failed,
+TLS handshake error, TCP connect timeout). Most often:
+
+- **Cloudflare incident** affecting the soleur.ai zone — check
+  <https://www.cloudflarestatus.com> first.
+- **GitHub-hosted runner egress disruption** — check
+  <https://www.githubstatus.com>.
+- **DNS drift** — `dig +time=5 +tries=2 +short A app.soleur.ai`.
+
+If only one of `app.soleur.ai` / `api.soleur.ai` is unreachable, the
+issue is typically scoped to that hostname's CDN config; both unreachable
+points to a network-layer issue rather than application state.
 
 ### `login_unreachable`
 
@@ -114,6 +129,19 @@ are stale, rotate the OAuth client secret.
 
 ## Diagnostic recipes
 
+All recipes assume `SENTRY_API_HOST` is set to the org's Sentry region
+hostname (`sentry.io` for US, `de.sentry.io` for EU). Default is EU for
+the Soleur org as of 2026-04-29; export the variable explicitly if you
+want to target a specific region:
+
+```bash
+export SENTRY_API_HOST="${SENTRY_API_HOST:-de.sentry.io}"
+```
+
+The configurator script (`apps/web-platform/scripts/configure-sentry-alerts.sh`)
+auto-detects the region — it prints `[info] Using Sentry API host: <host>`
+on startup. Mirror that value into recipes below if your org migrates regions.
+
 ### Sentry — recent auth events
 
 Sentry search syntax does **not** support `AND`/`OR`
@@ -123,7 +151,7 @@ are space-separated and AND'd implicitly:
 ```bash
 curl -s --max-time 10 \
   -H "Authorization: Bearer $SENTRY_AUTH_TOKEN" \
-  "https://de.sentry.io/api/0/projects/$SENTRY_ORG/$SENTRY_PROJECT/issues/?statsPeriod=24h&query=feature:auth"
+  "https://${SENTRY_API_HOST}/api/0/projects/$SENTRY_ORG/$SENTRY_PROJECT/issues/?statsPeriod=24h&query=feature:auth"
 ```
 
 For per-op slicing, run separate queries per `op:<verb>`.
@@ -133,7 +161,7 @@ For per-op slicing, run separate queries per `op:<verb>`.
 ```bash
 curl -s --max-time 10 \
   -H "Authorization: Bearer $SENTRY_AUTH_TOKEN" \
-  "https://de.sentry.io/api/0/projects/$SENTRY_ORG/$SENTRY_PROJECT/rules/" \
+  "https://${SENTRY_API_HOST}/api/0/projects/$SENTRY_ORG/$SENTRY_PROJECT/rules/" \
   | jq '.[] | {name, lastTriggered, status}'
 ```
 
@@ -141,12 +169,63 @@ Confirms the three rules (`auth-exchange-code-burst`,
 `auth-callback-no-code-burst`, `auth-per-user-loop`) exist and shows
 when each last fired.
 
+### Reconcile alert rules (rule drift / missing rule)
+
+If a rule is missing from the GET output above, or someone edited a
+rule via the Sentry UI and it has drifted from the configurator's
+canonical config, re-run the idempotent configurator:
+
+```bash
+SENTRY_AUTH_TOKEN=$(doppler secrets get SENTRY_AUTH_TOKEN -p soleur -c prd --plain) \
+SENTRY_ORG=$(doppler secrets get SENTRY_ORG -p soleur -c prd --plain) \
+SENTRY_PROJECT=$(doppler secrets get SENTRY_PROJECT -p soleur -c prd --plain) \
+bash apps/web-platform/scripts/configure-sentry-alerts.sh
+```
+
+The script is idempotent: re-running produces zero net changes when
+state is already correct. It fails closed if a rule name has been
+duplicated in the UI (resolve the duplicate manually before re-running).
+
+#### Accepted Sentry alert intervals
+
+The Sentry `EventFrequencyCondition.interval` field accepts only:
+`1m | 5m | 15m | 1h | 1d | 1w | 30d`. **`10m` is rejected** with HTTP
+400. If the 60-day ratchet table below is updated to a new interval,
+verify it is in this set first.
+
 ### Re-run the probe on demand
+
+`gh run watch` requires interactive selection (no TTY in agent
+shells); the agent-friendly form is to dispatch and poll the latest
+run:
 
 ```bash
 gh workflow run scheduled-oauth-probe.yml
-gh run watch
+sleep 5
+RUN_ID=$(gh run list --workflow=scheduled-oauth-probe.yml --limit 1 --json databaseId --jq '.[0].databaseId')
+gh run view "$RUN_ID" --json status,conclusion --jq '"\(.status) \(.conclusion)"'
 ```
+
+Repeat the `gh run view` until `status` is `completed`.
+
+### External provider status (machine-readable)
+
+When triaging `*_authorize` failures, distinguish "us vs them"
+programmatically before mutating Soleur state:
+
+```bash
+# Google Cloud (covers Google OAuth)
+curl -s --max-time 10 https://status.cloud.google.com/incidents.json \
+  | jq '[.[] | select(.end == null)] | length' # number of open incidents
+
+# GitHub
+curl -s --max-time 10 https://www.githubstatus.com/api/v2/status.json \
+  | jq -r '.status.indicator,.status.description'
+```
+
+If either reports an active incident touching identity / OAuth / login,
+the probe failure is upstream — comment on the tracking issue with
+the upstream incident link and wait, do not redeploy.
 
 ## Cross-references
 

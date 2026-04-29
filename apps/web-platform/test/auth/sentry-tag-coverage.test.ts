@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { readFileSync, readdirSync, statSync } from "fs";
-import { resolve, join } from "path";
+import { resolve, join, relative } from "path";
 
 /**
  * Drift-guard: every site that calls a Supabase auth verb must mirror to
@@ -37,7 +37,10 @@ function walkSource(dir: string): string[] {
     const stat = statSync(full);
     if (stat.isDirectory()) {
       results.push(...walkSource(full));
-    } else if (/\.(ts|tsx)$/.test(entry) && !/\.test\.tsx?$/.test(entry)) {
+    } else if (
+      /\.(ts|tsx)$/.test(entry) &&
+      !/\.(test|spec|stories)\.tsx?$/.test(entry)
+    ) {
       results.push(full);
     }
   }
@@ -59,14 +62,20 @@ describe("auth Sentry tag coverage", () => {
     }
   });
 
+  // Anchored regex avoids false-positives in comments and string literals
+  // (e.g., errorMap["signInWithOtp"]). Matches `.signInWithOtp(` and
+  // `.signInWithOtp ( ` (whitespace tolerated) but not `// .signInWithOtp(`.
+  const verbCallRegex = (verb: string) =>
+    new RegExp(`\\.${verb}\\s*\\(`);
+
   it("every file calling an auth verb mirrors to Sentry with feature:auth", () => {
     const offenders: string[] = [];
     for (const file of allFiles) {
       const src = readFileSync(file, "utf8");
-      const verbsInFile = AUTH_VERBS.filter((v) => src.includes(`.${v}(`));
+      const verbsInFile = AUTH_VERBS.filter((v) => verbCallRegex(v).test(src));
       if (verbsInFile.length === 0) continue;
       if (!/feature:\s*["']auth["']/.test(src)) {
-        const rel = file.split("/apps/web-platform/")[1] ?? file;
+        const rel = relative(APP_ROOT, file);
         offenders.push(
           `${rel} calls ${verbsInFile.join(",")} without feature:"auth" Sentry mirror`,
         );
@@ -80,10 +89,10 @@ describe("auth Sentry tag coverage", () => {
     for (const file of allFiles) {
       const src = readFileSync(file, "utf8");
       for (const verb of AUTH_VERBS) {
-        if (!src.includes(`.${verb}(`)) continue;
+        if (!verbCallRegex(verb).test(src)) continue;
         const opRegex = new RegExp(`op:\\s*["']${verb}["']`);
         if (!opRegex.test(src)) {
-          const rel = file.split("/apps/web-platform/")[1] ?? file;
+          const rel = relative(APP_ROOT, file);
           offenders.push(
             `${rel}: calls .${verb}() but missing op:"${verb}" in Sentry mirror`,
           );

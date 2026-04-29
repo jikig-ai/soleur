@@ -59,20 +59,41 @@ if [[ -n "$team_id" ]]; then
     '[{id:"sentry.mail.actions.NotifyEmailAction", targetType:"Team", targetIdentifier:($id|tonumber), fallthroughType:"ActiveMembers"}]')
   echo "[info] Email action: Team #${team_id}"
 else
-  email_action='[{"id":"sentry.mail.actions.NotifyEmailAction","targetType":"IssueOwners","fallthroughType":"ActiveMembers"}]'
-  echo "[warn] No 'ops' or 'engineering' Sentry team found — falling back to IssueOwners+ActiveMembers"
+  # IssueOwners + ActiveMembers means: try the issue's auto-assigned owners
+  # first, fall through to all active project members. This pages SOMEONE
+  # in any well-formed project, but for a hardened ops paging path the
+  # caller should create a Sentry team named ops or engineering and re-run.
+  email_action=$(jq -n \
+    '[{id:"sentry.mail.actions.NotifyEmailAction", targetType:"IssueOwners", fallthroughType:"ActiveMembers"}]')
+  echo "[warn] No 'ops' or 'engineering' Sentry team found — falling back to IssueOwners+ActiveMembers."
+  echo "[warn]   For tightly scoped ops paging, create a Sentry team and re-run this script."
 fi
 
 # --- upsert_rule <name> <conditions_json> <filters_json> <freq_minutes> ---
 upsert_rule() {
   local name="$1" conditions="$2" filters="$3" freq="$4"
 
-  local existing
-  existing=$(curl -s --max-time 10 \
+  # Match-by-name idempotency: a Sentry user can manually duplicate a rule
+  # name in the UI (the API does NOT enforce uniqueness). If we silently
+  # picked .[0].id we would update one copy and leave the other(s) drifted
+  # — paging on stale config with no signal. Fail-closed when count > 1.
+  local rules_json match_count match_ids existing
+  rules_json=$(curl -s --max-time 10 \
     -H "Authorization: Bearer ${SENTRY_AUTH_TOKEN}" \
-    "https://${api_host}/api/0/projects/${SENTRY_ORG}/${SENTRY_PROJECT}/rules/" \
-    | jq --arg name "$name" '[.[] | select(.name == $name)] | .[0].id // empty' \
-    | tr -d '"')
+    "https://${api_host}/api/0/projects/${SENTRY_ORG}/${SENTRY_PROJECT}/rules/")
+  if ! jq -e . <<<"$rules_json" >/dev/null 2>&1; then
+    echo "ERROR: GET /rules/ returned non-JSON for '${name}' lookup" >&2
+    echo "$rules_json" >&2
+    exit 1
+  fi
+  match_ids=$(jq -r --arg name "$name" '.[] | select(.name == $name) | .id' <<<"$rules_json")
+  match_count=$(printf '%s' "$match_ids" | grep -c . || true)
+  if (( match_count > 1 )); then
+    echo "ERROR: ${match_count} rules named '${name}' found — refusing to mutate (resolve duplicates in Sentry UI)." >&2
+    echo "  IDs: $(printf '%s' "$match_ids" | tr '\n' ' ')" >&2
+    exit 1
+  fi
+  existing=$(printf '%s' "$match_ids" | head -n1)
 
   local payload
   payload=$(jq -n \

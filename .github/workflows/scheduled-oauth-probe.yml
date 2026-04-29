@@ -47,49 +47,60 @@ jobs:
             fi
           }
 
+          # check_redirect <provider> <expected_host> — probes a Supabase
+          # OAuth /authorize endpoint and asserts the 302 lands on the
+          # expected provider host. Sets fail_mode/fail_detail on miss.
+          # NOTE: uses GET (not HEAD/-sI) — Supabase Auth's /authorize
+          # rejects HEAD with 405 (Allow: GET).
+          check_redirect() {
+            local provider="$1" expected="$2"
+            local url line http redirect redirect_host
+            url="https://${API_HOST}/auth/v1/authorize?provider=${provider}&redirect_to=https%3A%2F%2F${APP_HOST}%2Fcallback"
+            # Default curl does NOT follow redirects (no -L), so the 302
+            # Location lands in %{redirect_url} without an extra hop.
+            line=$(curl -s --max-time 10 --max-redirs 0 -o /dev/null \
+              -w '%{http_code} %{redirect_url}' "$url" 2>/dev/null) || line="network_error"
+            if [[ "$line" == "network_error" ]]; then
+              record_failure "network_error" \
+                "GET ${url} -> curl error (DNS, TLS, or connect failure)"
+              return
+            fi
+            http=${line%% *}
+            redirect=${line#* }
+            redirect_host=$(printf '%s' "$redirect" | awk -F/ '{print $3}')
+            if [[ "$http" != "302" || "$redirect_host" != "$expected" ]]; then
+              record_failure "${provider}_authorize" \
+                "GET ${url} -> HTTP ${http}, redirect_host=${redirect_host}"
+            fi
+          }
+
           # 1. /login is reachable
           code=$(curl -s --max-time 10 -o /dev/null -w '%{http_code}' \
-            "https://${APP_HOST}/login" || echo "curl_error")
-          if [[ "$code" != "200" ]]; then
+            "https://${APP_HOST}/login" 2>/dev/null) || code="network_error"
+          if [[ "$code" == "network_error" ]]; then
+            record_failure "network_error" \
+              "GET https://${APP_HOST}/login -> curl error"
+          elif [[ "$code" != "200" ]]; then
             record_failure "login_unreachable" \
               "GET https://${APP_HOST}/login -> HTTP ${code}"
           fi
 
           # 2. Google OAuth redirect lands on accounts.google.com
-          if [[ -z "$fail_mode" ]]; then
-            url="https://${API_HOST}/auth/v1/authorize?provider=google&redirect_to=https%3A%2F%2F${APP_HOST}%2Fcallback"
-            line=$(curl -sI --max-time 10 -o /dev/null \
-              -w '%{http_code} %{redirect_url}' "$url" || echo "curl_error")
-            http=${line%% *}
-            redirect=${line#* }
-            redirect_host=$(printf '%s' "$redirect" | awk -F/ '{print $3}')
-            if [[ "$http" != "302" || "$redirect_host" != "accounts.google.com" ]]; then
-              record_failure "google_authorize" \
-                "GET ${url} -> HTTP ${http}, redirect_host=${redirect_host}"
-            fi
-          fi
+          [[ -z "$fail_mode" ]] && check_redirect "google" "accounts.google.com"
 
           # 3. GitHub OAuth redirect lands on github.com
-          if [[ -z "$fail_mode" ]]; then
-            url="https://${API_HOST}/auth/v1/authorize?provider=github&redirect_to=https%3A%2F%2F${APP_HOST}%2Fcallback"
-            line=$(curl -sI --max-time 10 -o /dev/null \
-              -w '%{http_code} %{redirect_url}' "$url" || echo "curl_error")
-            http=${line%% *}
-            redirect=${line#* }
-            redirect_host=$(printf '%s' "$redirect" | awk -F/ '{print $3}')
-            if [[ "$http" != "302" || "$redirect_host" != "github.com" ]]; then
-              record_failure "github_authorize" \
-                "GET ${url} -> HTTP ${http}, redirect_host=${redirect_host}"
-            fi
-          fi
+          [[ -z "$fail_mode" ]] && check_redirect "github" "github.com"
 
           # 4. /auth/v1/settings exposes google + github as enabled
           if [[ -z "$fail_mode" ]]; then
             tmp=$(mktemp)
             trap 'rm -f "$tmp"' EXIT
             http=$(curl -s --max-time 10 -o "$tmp" -w '%{http_code}' \
-              "https://${API_HOST}/auth/v1/settings" || echo "curl_error")
-            if [[ "$http" != "200" ]]; then
+              "https://${API_HOST}/auth/v1/settings" 2>/dev/null) || http="network_error"
+            if [[ "$http" == "network_error" ]]; then
+              record_failure "network_error" \
+                "GET https://${API_HOST}/auth/v1/settings -> curl error"
+            elif [[ "$http" != "200" ]]; then
               record_failure "settings_http" \
                 "GET https://${API_HOST}/auth/v1/settings -> HTTP ${http}"
             elif ! jq -e . "$tmp" >/dev/null 2>&1; then
@@ -107,9 +118,11 @@ jobs:
             fi
           fi
 
-          # Sanitize for $GITHUB_OUTPUT — strip CR/LF that would break the
-          # key=value contract or smuggle annotations.
-          fail_detail_safe="${fail_detail//[$'\n\r']/}"
+          # Sanitize for $GITHUB_OUTPUT — strip CR/LF + Unicode line/paragraph
+          # separators (U+2028/U+2029) that could break the key=value contract
+          # or forge ::warning:: annotations. Use tr for byte-class portability;
+          # bash's "${var//[$'…']/}" pattern doesn't reliably cover U+2028/9.
+          fail_detail_safe=$(printf '%s' "$fail_detail" | tr -d '\r\n\f\v\x7f' | sed 's/\xe2\x80\xa8//g; s/\xe2\x80\xa9//g')
           {
             echo "failure_mode=${fail_mode}"
             echo "failure_detail=${fail_detail_safe}"
@@ -129,6 +142,7 @@ jobs:
           FAIL_MODE: ${{ steps.probe.outputs.failure_mode }}
           FAIL_DETAIL: ${{ steps.probe.outputs.failure_detail }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          RUNBOOK_URL: ${{ github.server_url }}/${{ github.repository }}/blob/main/knowledge-base/engineering/ops/runbooks/oauth-probe-failure.md
         run: |
           set -euo pipefail
 
@@ -142,21 +156,19 @@ jobs:
 
           NOW=$(date -u '+%Y-%m-%d %H:%M UTC')
 
-          BODY=$(cat <<ISSUE_BODY
-          ## Synthetic OAuth probe failed
-
-          - **Failure mode:** \`${FAIL_MODE}\`
-          - **Detail:** ${FAIL_DETAIL}
-          - **Detected at:** ${NOW}
-          - **Run log:** ${RUN_URL}
-
-          ### What to do
-
-          See [oauth-probe-failure.md runbook](https://github.com/${GH_REPO}/blob/main/knowledge-base/engineering/ops/runbooks/oauth-probe-failure.md).
-
-          **Tracks:** #2997
-          ISSUE_BODY
-          )
+          # Build body via printf to avoid heredoc-leading-whitespace traps
+          # (4+ leading spaces would render the body as a code block).
+          BODY_FILE=$(mktemp)
+          trap 'rm -f "$BODY_FILE"' EXIT
+          {
+            printf '## Synthetic OAuth probe failed\n\n'
+            printf -- '- **Failure mode:** `%s`\n' "$FAIL_MODE"
+            printf -- '- **Detail:** %s\n' "$FAIL_DETAIL"
+            printf -- '- **Detected at:** %s\n' "$NOW"
+            printf -- '- **Run log:** %s\n\n' "$RUN_URL"
+            printf '### What to do\n\nSee [oauth-probe-failure.md runbook](%s).\n\n' "$RUNBOOK_URL"
+            printf '**Tracks:** #2997\n'
+          } > "$BODY_FILE"
 
           EXISTING=$(gh issue list --repo "$GH_REPO" --state open \
             --search "$ISSUE_SEARCH" \
@@ -171,7 +183,7 @@ jobs:
               --title "$ISSUE_TITLE" \
               --label "ci/auth-broken" \
               --label "priority/p1-high" \
-              --body "$BODY"
+              --body-file "$BODY_FILE"
           fi
 
       - name: Email notification (failure)
