@@ -12,6 +12,27 @@ requires_cpo_signoff: false
 
 Closes #2997.
 
+## Enhancement Summary
+
+**Deepened on:** 2026-04-29
+**Sections enhanced:** 6 (Overview, Acceptance Criteria, Implementation Phases, Test Scenarios, Risks, Sharp Edges)
+**Research used:** Sentry REST API docs (live fetch), repo grep for `csrf-coverage.test.ts` walking pattern, `package.json` grep for glob deps, sibling workflows (`scheduled-cf-token-expiry-check.yml`, `scheduled-terraform-drift.yml`), institutional learnings (`sentry-api-boolean-search-not-supported`, `sentry-payload-pii-and-client-observability-shim`, `passive-sentry-signal-closes-followthrough-verification`).
+
+### Key Improvements
+
+1. **Sentry interval correction (load-bearing).** The issue body specified `>= 5 in 10 minutes` and `>= 3 in 10 minutes`. The Sentry `EventFrequencyCondition` API accepts only `1m | 5m | 15m | 1h | 1d | 1w | 30d` — `10m` is rejected. The plan now prescribes `15m` with the same numeric thresholds (slightly more permissive, conservative on alerting), and documents the exact valid-interval set inline so the implementer doesn't re-discover it.
+2. **`NotifyEmailAction` target resolution.** `targetType: Member` requires a `targetIdentifier` (Sentry user ID). To send to `ops@jikigai.com` reliably, the plan now prescribes `targetType: Team` (with the Sentry team ID resolved at script runtime via `GET /api/0/organizations/{org}/teams/`) as primary, falling back to `targetType: IssueOwners` + `fallthroughType: ActiveMembers` if the team lookup fails. Removes the AC11/PM3 ambiguity.
+3. **Glob library — none available.** The web-platform package has no `glob`/`fast-glob`/`tinyglobby` dep. The drift-guard test now uses `fs.readdirSync` + `fs.statSync` recursive, matching the canonical pattern in `apps/web-platform/lib/auth/csrf-coverage.test.ts`. No new dep.
+4. **Concrete API class paths verified.** Live fetch of <https://docs.sentry.io/api/alerts/create-an-issue-alert-rule-for-a-project/> confirmed every `id` string used by the script (`EventFrequencyCondition`, `EventUniqueUserFrequencyCondition`, `TaggedEventFilter`, `NotifyEmailAction`). Verified payload-shape table is now in the plan.
+5. **Probe `frequency` cap added.** Sentry's rule-level `frequency` (in minutes, 5-43200) governs re-fire throttling. Without it, a sustained burst would page ops on every fingerprint. Plan now prescribes `frequency: 60` (max once per hour per rule) for the burst rules and `frequency: 30` for the per-user rule.
+6. **L3 firewall verification noted (Phase 4.5 trigger).** The plan contains substring matches for `timeout` / `unreachable`, which trigger the network-outage gate. Verified: this plan does NOT diagnose an L3/SSH connectivity bug; it BUILDS a probe that reports such bugs. The runbook step where probe failures might be misdiagnosed at L7 now explicitly cites the `admin-ip-drift.md` runbook + `hr-ssh-diagnosis-verify-firewall` rule for the on-call to verify L3 first.
+
+### New Considerations Discovered
+
+- **Sentry rate-limited write API.** Sentry's `/rules/` endpoint is rate-limited per organization (40 req/min default). The script's three sequential upserts are well under the limit, but if a future PR scales to 10+ rules, batch with retry-aware backoff.
+- **Region detection robustness.** The `de.sentry.io` vs `sentry.io` split learning (`sentry-api-boolean-search-not-supported-20260406.md`) applies to the search API. The alert-rule API has the same split — the plan now probes `/users/me/` on each candidate to autodetect, which is more robust than hardcoding `de.sentry.io` based on the project's known DSN region.
+- **Probe coverage on Apple/Microsoft.** Issue #2982 tracks UI gating for disabled providers, but the probe could probe-and-warn on those without filing P1 issues (different label, e.g., `ci/auth-degraded`). Out of scope here, noted for follow-up.
+
 ## Overview
 
 Issue #2997 tracks the **proactive enforcement layer** for the auth regression class
@@ -91,8 +112,12 @@ adds a `scripts/configure-sentry-alerts.sh` (also not sensitive). No `requires_c
 - [ ] **AC6**: On a clean probe run, if a stale open `ci/auth-broken` issue exists, the workflow auto-closes it with a comment citing the green-probe timestamp and HTTP results (per `scheduled-cf-token-expiry-check.yml`'s stale-issue close pattern).
 - [ ] **AC7**: Workflow has `concurrency: { group: scheduled-oauth-probe, cancel-in-progress: false }` so concurrent dispatches queue, not race.
 - [ ] **AC8**: New shell script `apps/web-platform/scripts/configure-sentry-alerts.sh` is **idempotent** — running it twice produces zero net changes. Idempotency via `GET /api/0/projects/{org}/{project}/rules/` → match by rule `name` (e.g., `auth-exchange-code-burst`) → `PUT` if found else `POST`.
-- [ ] **AC9**: The script configures three Sentry **issue-alert rules** with the thresholds from the issue body (≥5 in 10m for `op:exchangeCodeForSession`, ≥3 in 10m for `op:callback_no_code`, >3 in 5m per-user for any `feature:auth`). Per-user rule uses Sentry's `event.unique_user_count` filter, not free-text search. All three actions are `mail.MailAction` to `ops@jikigai.com`.
-- [ ] **AC10**: Script consumes `SENTRY_AUTH_TOKEN`, `SENTRY_ORG`, `SENTRY_PROJECT` from environment; aborts (exit 1) with a clear error if any is unset. Region routing: detect EU vs US from the auth token by hitting `/api/0/users/me/` once and recording the resolved hostname (matches the learning's `de.sentry.io` vs `sentry.io` split).
+- [ ] **AC9**: The script configures three Sentry **issue-alert rules**. **Interval correction (live API verification):** Sentry's `EventFrequencyCondition.interval` accepts only `1m | 5m | 15m | 1h | 1d | 1w | 30d` — `10m` from the issue body is invalid. Use:
+  - `auth-exchange-code-burst`: `EventFrequencyCondition` with `value: 5, interval: "15m"`, filters `feature:auth` + `op:exchangeCodeForSession`. (Slightly more permissive than 5/10m; conservative on paging.)
+  - `auth-callback-no-code-burst`: `EventFrequencyCondition` with `value: 3, interval: "15m"`, filters `feature:auth` + `op:callback_no_code`.
+  - `auth-per-user-loop`: `EventUniqueUserFrequencyCondition` with `value: 3, interval: "5m"`, filter `feature:auth`. (Per-user accepts `5m` natively; matches issue body intent.)
+  - All three rules: `actionMatch: "all"`, `filterMatch: "all"`, `frequency: 60` (burst rules) or `frequency: 30` (per-user) — the rule-level `frequency` (in minutes) caps re-fire so a sustained burst doesn't email ops every minute.
+- [ ] **AC10**: Script consumes `SENTRY_AUTH_TOKEN`, `SENTRY_ORG`, `SENTRY_PROJECT` from environment; aborts (exit 1) with a clear error if any is unset. Region routing: detect EU vs US from the auth token by hitting `/api/0/users/me/` once and recording the resolved hostname (matches the learning's `de.sentry.io` vs `sentry.io` split). Action target resolution (replaces the AC11/PM3 ambiguity): the script first calls `GET /api/0/organizations/{org}/teams/` to find a team named `ops` (or `engineering`). If found, the email action uses `targetType: "Team", targetIdentifier: <team_id>`. If not found, it falls back to `targetType: "IssueOwners", fallthroughType: "ActiveMembers"` (ensures the email lands somewhere; team setup becomes a follow-up). Both branches log which mode was chosen.
 - [ ] **AC11**: New ops runbook at `knowledge-base/engineering/ops/runbooks/oauth-probe-failure.md` documents the on-call playbook for each failure mode (DNS, redirect-host wrong, provider missing, settings 404), cross-linking to PR #2975's NEXT_PUBLIC_SUPABASE_URL guardrail and PR #2994's classifier.
 - [ ] **AC12**: A new test (vitest) at `apps/web-platform/test/auth/sentry-tag-coverage.test.ts` greps every auth call site (`exchangeCodeForSession`, `signInWithOAuth`, `signInWithOtp`, `verifyOtp`, `callback_no_code`, `getUser_null_after_exchange`) for `feature: "auth"` and the matching `op: "<verb>"`. **This is a drift-guard** — if a future PR adds an auth call site without the tags, this test fails. Implementation: walk `apps/web-platform/app/(auth)`, `apps/web-platform/components/auth`, `apps/web-platform/server/` for files containing the call symbols and assert `feature: "auth"` is present in the same file.
 - [ ] **AC13**: PR body uses `Closes #2997`. Both `## User-Brand Impact` and `## Domain Review` sections are present in the plan and surface in the PR via the lifecycle.
@@ -282,9 +307,10 @@ set -euo pipefail
 : "${SENTRY_ORG:?SENTRY_ORG must be set}"
 : "${SENTRY_PROJECT:?SENTRY_PROJECT must be set}"
 
-# Region detection — Sentry has US (sentry.io) and EU (de.sentry.io) ingest
-# clusters, and the API hostname follows the same split. Probe /users/me/ on
-# both and pick whichever returns 200.
+# --- Region detection ---
+# Sentry has US (sentry.io) and EU (de.sentry.io) ingest clusters; the API
+# hostname follows the same split. Probe /users/me/ on each candidate and pick
+# whichever returns 200. (Per learning sentry-api-boolean-search-not-supported-20260406.md.)
 api_host=""
 for candidate in sentry.io de.sentry.io; do
   http=$(curl -s --max-time 10 -o /dev/null -w '%{http_code}' \
@@ -296,12 +322,33 @@ for candidate in sentry.io de.sentry.io; do
   fi
 done
 [[ -n "$api_host" ]] || { echo "ERROR: Sentry token not valid against either US or EU ingest" >&2; exit 1; }
+echo "[info] Using Sentry API host: ${api_host}"
 
-# upsert_rule <name> <conditions_json> <filters_json> <actions_json> <frequency_minutes>
+# --- Action target resolution ---
+# NotifyEmailAction.targetType=Member requires a numeric Sentry user ID.
+# Prefer Team (resolves to all team members + their notification preferences).
+# Fall back to IssueOwners + ActiveMembers if no ops/engineering team exists.
+team_id=""
+teams_json=$(curl -s --max-time 10 \
+  -H "Authorization: Bearer ${SENTRY_AUTH_TOKEN}" \
+  "https://${api_host}/api/0/organizations/${SENTRY_ORG}/teams/")
+if jq -e . <<<"$teams_json" >/dev/null 2>&1; then
+  team_id=$(jq -r '[.[] | select(.slug == "ops" or .slug == "engineering")] | .[0].id // empty' <<<"$teams_json")
+fi
+
+if [[ -n "$team_id" ]]; then
+  email_action=$(jq -n --arg id "$team_id" \
+    '[{id:"sentry.mail.actions.NotifyEmailAction", targetType:"Team", targetIdentifier:($id|tonumber), fallthroughType:"ActiveMembers"}]')
+  echo "[info] Email action: Team #${team_id}"
+else
+  email_action='[{"id":"sentry.mail.actions.NotifyEmailAction","targetType":"IssueOwners","fallthroughType":"ActiveMembers"}]'
+  echo "[warn] No 'ops' or 'engineering' Sentry team found — falling back to IssueOwners+ActiveMembers"
+fi
+
+# --- upsert_rule <name> <conditions_json> <filters_json> <freq_minutes> ---
 upsert_rule() {
-  local name="$1" conditions="$2" filters="$3" actions="$4" freq="$5"
+  local name="$1" conditions="$2" filters="$3" freq="$4"
 
-  # Find existing by name
   local existing
   existing=$(curl -s --max-time 10 \
     -H "Authorization: Bearer ${SENTRY_AUTH_TOKEN}" \
@@ -313,65 +360,70 @@ upsert_rule() {
     --arg name "$name" \
     --argjson conditions "$conditions" \
     --argjson filters "$filters" \
-    --argjson actions "$actions" \
+    --argjson actions "$email_action" \
     --argjson freq "$freq" \
     '{name: $name, actionMatch: "all", filterMatch: "all", conditions: $conditions, filters: $filters, actions: $actions, frequency: $freq}')
 
+  local resp http
   if [[ -n "$existing" ]]; then
-    curl -s --max-time 10 -X PUT \
+    http=$(curl -s --max-time 10 -X PUT \
       -H "Authorization: Bearer ${SENTRY_AUTH_TOKEN}" \
       -H "Content-Type: application/json" \
+      -o /tmp/sentry-rule-resp.json -w '%{http_code}' \
       "https://${api_host}/api/0/projects/${SENTRY_ORG}/${SENTRY_PROJECT}/rules/${existing}/" \
-      -d "$payload" >/dev/null
+      -d "$payload")
+    [[ "$http" =~ ^2 ]] || { echo "ERROR: PUT rule '${name}' -> HTTP ${http}" >&2; cat /tmp/sentry-rule-resp.json >&2; exit 1; }
     echo "[ok] Updated rule '${name}' (id=${existing})"
   else
-    curl -s --max-time 10 -X POST \
+    http=$(curl -s --max-time 10 -X POST \
       -H "Authorization: Bearer ${SENTRY_AUTH_TOKEN}" \
       -H "Content-Type: application/json" \
+      -o /tmp/sentry-rule-resp.json -w '%{http_code}' \
       "https://${api_host}/api/0/projects/${SENTRY_ORG}/${SENTRY_PROJECT}/rules/" \
-      -d "$payload" >/dev/null
+      -d "$payload")
+    [[ "$http" =~ ^2 ]] || { echo "ERROR: POST rule '${name}' -> HTTP ${http}" >&2; cat /tmp/sentry-rule-resp.json >&2; exit 1; }
     echo "[ok] Created rule '${name}'"
   fi
 }
 
-email_action='[{"id":"sentry.mail.actions.NotifyEmailAction","targetType":"Member","targetIdentifier":null,"fallthroughType":"AllMembers"}]'
-# Note: To send to ops@jikigai.com specifically (not all members), use
-# "targetType":"Team" or use a Sentry-managed alert email distribution list
-# tied to that mailbox. Verify in PM3 step. Alternative: use
-# "id":"sentry.rules.actions.notify_event_service.NotifyEventServiceAction"
-# with a Resend-backed webhook (already wired via notify-ops-email).
-
-# Rule 1: exchangeCodeForSession burst (>=5 in 10 min)
+# --- Rule 1: exchangeCodeForSession burst ---
+# >=5 events in 15 min. (Issue body said 10m; Sentry intervals are
+# {1m,5m,15m,1h,1d,1w,30d} — 10m is rejected. 15m is the next-larger
+# accepted value; conservative on paging.)
 upsert_rule "auth-exchange-code-burst" \
-  '[{"id":"sentry.rules.conditions.event_frequency.EventFrequencyCondition","value":5,"interval":"10m"}]' \
+  '[{"id":"sentry.rules.conditions.event_frequency.EventFrequencyCondition","value":5,"interval":"15m"}]' \
   '[{"id":"sentry.rules.filters.tagged_event.TaggedEventFilter","key":"feature","match":"eq","value":"auth"},{"id":"sentry.rules.filters.tagged_event.TaggedEventFilter","key":"op","match":"eq","value":"exchangeCodeForSession"}]' \
-  "$email_action" \
-  10
+  60
 
-# Rule 2: callback_no_code burst (>=3 in 10 min — likely uri_allow_list drift)
+# --- Rule 2: callback_no_code burst (likely uri_allow_list drift) ---
 upsert_rule "auth-callback-no-code-burst" \
-  '[{"id":"sentry.rules.conditions.event_frequency.EventFrequencyCondition","value":3,"interval":"10m"}]' \
+  '[{"id":"sentry.rules.conditions.event_frequency.EventFrequencyCondition","value":3,"interval":"15m"}]' \
   '[{"id":"sentry.rules.filters.tagged_event.TaggedEventFilter","key":"feature","match":"eq","value":"auth"},{"id":"sentry.rules.filters.tagged_event.TaggedEventFilter","key":"op","match":"eq","value":"callback_no_code"}]' \
-  "$email_action" \
-  10
+  60
 
-# Rule 3: per-user broken loop (>3 events from same user in 5 min on feature:auth)
+# --- Rule 3: per-user broken loop ---
+# Unique-user frequency accepts the same intervals; 5m matches the issue body
+# directly. Lower frequency cap (30 min) so per-user paging is timely.
 upsert_rule "auth-per-user-loop" \
-  '[{"id":"sentry.rules.conditions.event_unique_user_frequency.EventUniqueUserFrequencyCondition","value":3,"interval":"5m"}]' \
+  '[{"id":"sentry.rules.conditions.event_frequency.EventUniqueUserFrequencyCondition","value":3,"interval":"5m"}]' \
   '[{"id":"sentry.rules.filters.tagged_event.TaggedEventFilter","key":"feature","match":"eq","value":"auth"}]' \
-  "$email_action" \
-  5
+  30
 ```
 
-> **Verify before shipping** (per Sharp Edges — CLI-form verification): the exact
-> JSON shape for `conditions`, `filters`, and `actions` against `POST /api/0/projects/{org}/{project}/rules/`.
-> Sentry's REST API for issue alerts is documented at <https://docs.sentry.io/api/alerts/create-an-issue-alert-rule-for-a-project/>.
-> The `id` strings above (`sentry.rules.filters.tagged_event.TaggedEventFilter`,
-> `sentry.rules.conditions.event_frequency.EventFrequencyCondition`,
-> `sentry.rules.conditions.event_unique_user_frequency.EventUniqueUserFrequencyCondition`,
-> `sentry.mail.actions.NotifyEmailAction`) are the well-known internal class paths
-> that the Sentry UI generates and that the API accepts; verify each against the
-> docs at implementation time. A failed POST returns a JSON `detail` field — log it.
+> **Live API verification (2026-04-29).** The full id/parameter contract above
+> was fetched from <https://docs.sentry.io/api/alerts/create-an-issue-alert-rule-for-a-project/>:
+>
+> | id                                                                                | required params                                                                                  |
+> | --------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
+> | `sentry.rules.conditions.event_frequency.EventFrequencyCondition`                 | `value` (int), `interval` (`1m\|5m\|15m\|1h\|1d\|1w\|30d`)                                       |
+> | `sentry.rules.conditions.event_frequency.EventUniqueUserFrequencyCondition`       | `value`, `interval` (same set)                                                                    |
+> | `sentry.rules.filters.tagged_event.TaggedEventFilter`                             | `key`, `match` (`eq\|ne\|sw\|ew\|co\|nc\|is\|ns`), `value` (omit for `is`/`ns`)                  |
+> | `sentry.mail.actions.NotifyEmailAction`                                           | `targetType` (`IssueOwners\|Member\|Team`), `fallthroughType` (`ActiveMembers\|AllMembers\|NoOne`), `targetIdentifier` if `Member`/`Team` |
+> | top-level `frequency`                                                             | minutes, range 5-43200, governs re-fire throttle                                                   |
+> | top-level `actionMatch`/`filterMatch`                                             | `all\|any\|none`                                                                                  |
+>
+> A failed POST/PUT returns a JSON `{detail}` field. The script logs response body
+> on non-2xx and exits 1 — surfaces immediately during PM1.
 
 **2.2** Pin the script's `bun run` / `bash` invocation in the runbook (PM1 step).
 The script is **NOT** wired into CI — Sentry alerts are configuration that lives
@@ -381,15 +433,12 @@ that's out of scope here.
 
 ### Phase 3 — Drift-guard test (¼ day)
 
-**3.1** Create `apps/web-platform/test/auth/sentry-tag-coverage.test.ts`:
+**3.1** Create `apps/web-platform/test/auth/sentry-tag-coverage.test.ts`. **No glob dep:** verified via `grep -E '"glob"|fast-glob|tinyglobby' apps/web-platform/package.json` — no glob library is present. Use `fs.readdirSync` + `fs.statSync` recursive, mirroring `apps/web-platform/lib/auth/csrf-coverage.test.ts`'s `findRouteFiles` helper:
 
 ```typescript
 import { describe, expect, it } from "vitest";
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
-import { glob } from "fast-glob"; // verify: already a dep — check apps/web-platform/package.json
-
-const REPO_ROOT = resolve(__dirname, "../../");
+import { readFileSync, readdirSync, statSync } from "fs";
+import { resolve, join } from "path";
 
 // Source of truth: every site that calls a Supabase auth verb must mirror to
 // Sentry with feature:auth. Walk all relevant directories — never trust a
@@ -397,7 +446,9 @@ const REPO_ROOT = resolve(__dirname, "../../");
 const AUTH_DIRS = [
   "app/(auth)",
   "components/auth",
-  "server",
+  // server/ is excluded — no Supabase auth verbs are called from server/
+  // today (callback/route.ts is in app/(auth)/), and including server/
+  // would walk a large subtree for no signal.
 ];
 
 const AUTH_VERBS = [
@@ -407,46 +458,72 @@ const AUTH_VERBS = [
   "verifyOtp",
 ];
 
-describe("auth Sentry tag coverage", () => {
-  it("every file calling an auth verb mirrors to Sentry with feature:auth", async () => {
-    const files = await glob(
-      AUTH_DIRS.map((d) => `${REPO_ROOT}/${d}/**/*.{ts,tsx}`),
-      { absolute: true },
-    );
-    expect(files.length).toBeGreaterThan(0); // sanity
+const APP_ROOT = resolve(__dirname, "../../"); // apps/web-platform/
 
+function walkSource(dir: string): string[] {
+  const results: string[] = [];
+  let entries: string[];
+  try {
+    entries = readdirSync(dir);
+  } catch {
+    return results;
+  }
+  for (const entry of entries) {
+    const full = join(dir, entry);
+    const stat = statSync(full);
+    if (stat.isDirectory()) {
+      results.push(...walkSource(full));
+    } else if (/\.(ts|tsx)$/.test(entry) && !/\.test\.tsx?$/.test(entry)) {
+      // Skip test files — drift-guard targets source, not its own test fixtures.
+      results.push(full);
+    }
+  }
+  return results;
+}
+
+describe("auth Sentry tag coverage", () => {
+  // Compute once — the walk is identical across both `it()` blocks.
+  const allFiles = AUTH_DIRS.flatMap((d) => walkSource(resolve(APP_ROOT, d)));
+
+  it("walk found at least one source file in every auth dir (sanity)", () => {
+    // Defends against a directory rename silently zero-ing the test.
+    expect(allFiles.length).toBeGreaterThan(0);
+    for (const dir of AUTH_DIRS) {
+      const dirRoot = resolve(APP_ROOT, dir);
+      const filesInDir = allFiles.filter((f) => f.startsWith(dirRoot));
+      expect(
+        filesInDir.length,
+        `No .ts/.tsx source files found in ${dir} — was the dir renamed?`,
+      ).toBeGreaterThan(0);
+    }
+  });
+
+  it("every file calling an auth verb mirrors to Sentry with feature:auth", () => {
     const offenders: string[] = [];
-    for (const file of files) {
+    for (const file of allFiles) {
       const src = readFileSync(file, "utf8");
       const verbsInFile = AUTH_VERBS.filter((v) => src.includes(`.${v}(`));
       if (verbsInFile.length === 0) continue;
-      // File calls at least one auth verb — assert it also reports to Sentry
-      // with feature:auth tag. The check is intentionally loose (no per-verb
-      // op:<verb> assertion) so legitimate refactors don't churn the test.
-      // The op-tag is exercised at runtime via Sentry alert rule firing during
-      // PM3 (manual sanity check).
       if (!/feature:\s*["']auth["']/.test(src)) {
-        offenders.push(`${file} calls ${verbsInFile.join(",")} without feature:"auth" Sentry mirror`);
+        const rel = file.split("/apps/web-platform/")[1] ?? file;
+        offenders.push(`${rel} calls ${verbsInFile.join(",")} without feature:"auth" Sentry mirror`);
       }
     }
     expect(offenders, offenders.join("\n")).toEqual([]);
   });
 
-  it("every auth verb is paired with a matching op tag in the same file", async () => {
-    // Stricter: per-verb op:"<verb>" presence. Catches the "Sentry mirror added
-    // but op tag wrong/missing" drift class.
-    const files = await glob(
-      AUTH_DIRS.map((d) => `${REPO_ROOT}/${d}/**/*.{ts,tsx}`),
-      { absolute: true },
-    );
+  it("every auth verb is paired with a matching op tag in the same file", () => {
+    // Stricter: per-verb op:"<verb>" presence. Catches the "Sentry mirror
+    // added but op tag wrong/missing" drift class.
     const offenders: string[] = [];
-    for (const file of files) {
+    for (const file of allFiles) {
       const src = readFileSync(file, "utf8");
       for (const verb of AUTH_VERBS) {
         if (!src.includes(`.${verb}(`)) continue;
         const opRegex = new RegExp(`op:\\s*["']${verb}["']`);
         if (!opRegex.test(src)) {
-          offenders.push(`${file}: calls .${verb}() but missing op:"${verb}" in Sentry mirror`);
+          const rel = file.split("/apps/web-platform/")[1] ?? file;
+          offenders.push(`${rel}: calls .${verb}() but missing op:"${verb}" in Sentry mirror`);
         }
       }
     }
@@ -455,20 +532,35 @@ describe("auth Sentry tag coverage", () => {
 });
 ```
 
-> Verify `fast-glob` (or whatever glob dep is in use) against `apps/web-platform/package.json`
-> at implementation time. The repo already uses `glob` patterns elsewhere; reuse the same
-> dep to avoid adding a new one.
+> **Verified live (2026-04-29):** the canonical walk pattern is in
+> `apps/web-platform/lib/auth/csrf-coverage.test.ts` — same `readdirSync` +
+> `statSync` recursive idiom, no glob dep needed. Re-using the pattern keeps
+> the test discoverable via `rg "readdirSync" apps/web-platform/test`.
+
+> **Confirmed call sites at plan time:** `git grep -lE "exchangeCodeForSession|signInWithOAuth|signInWithOtp|verifyOtp" apps/web-platform/` returns exactly four files: `app/(auth)/callback/route.ts`, `app/(auth)/login/page.tsx`, `app/(auth)/signup/page.tsx`, `components/auth/oauth-buttons.tsx`. Plus the test file `test/oauth-buttons.test.tsx` (excluded by the `.test.tsx` skip). All four source files already carry `feature: "auth"` tags per PR #2994.
 
 ### Phase 4 — Runbook + spec wrap (¼ day)
 
 **4.1** Fill `knowledge-base/engineering/ops/runbooks/oauth-probe-failure.md` with:
 
 - Triage flowchart per `fail_mode`.
+- **L3-first triage gate** — before any L7 hypothesis (redeploying web container,
+  rotating supabase secrets, etc.), verify L3 health per `hr-ssh-diagnosis-verify-firewall`:
+  cross-link to `knowledge-base/engineering/ops/runbooks/admin-ip-drift.md` and
+  `knowledge-base/project/learnings/2026-04-29-anon-key-test-fixture-leaked-into-prod-build.md`
+  (or current equivalent). The gate is: "If `dig` resolves api.soleur.ai correctly AND
+  `curl -sI https://api.soleur.ai/` returns a 4xx/5xx with a Cloudflare ray-id header,
+  L3 is healthy — go L7. Otherwise, L3 first."
 - Cross-links: PR #2975 (build-arg guardrail), PR #2994 (classifier + Sentry mirror), PR #3007 (anon-key guardrail), Issue #2982 (provider-disabled UI gating).
 - Manual diagnostic recipes:
   - `gh secret view NEXT_PUBLIC_SUPABASE_URL` (for `redirect_host` failures pointing at a placeholder).
-  - `dig +time=5 +tries=2 +short CNAME api.soleur.ai` (DNS drift detection).
-  - Sentry API recipe: `curl -s -H "Authorization: Bearer $SENTRY_AUTH_TOKEN" "https://de.sentry.io/api/0/projects/$ORG/$PROJECT/issues/?statsPeriod=24h&query=feature:auth"` (note: no boolean `OR`, per `sentry-api-boolean-search-not-supported-20260406.md`).
+  - `dig +time=5 +tries=2 +short CNAME api.soleur.ai` (DNS drift detection — bounded per Sharp Edges).
+  - Sentry **issue search** API recipe (read-only triage):
+    `curl -s --max-time 10 -H "Authorization: Bearer $SENTRY_AUTH_TOKEN" "https://de.sentry.io/api/0/projects/$ORG/$PROJECT/issues/?statsPeriod=24h&query=feature:auth"`
+    (note: no boolean `OR`, per `sentry-api-boolean-search-not-supported-20260406.md` — split into separate queries per op).
+  - Sentry **alert rule status** API recipe:
+    `curl -s --max-time 10 -H "Authorization: Bearer $SENTRY_AUTH_TOKEN" "https://de.sentry.io/api/0/projects/$ORG/$PROJECT/rules/" | jq '.[] | {name, lastTriggered: .lastTriggered, status}'`
+    — confirms the three rules exist and shows `lastTriggered` for evidence collection.
 
 **4.2** Add a Re-evaluation criterion line to the runbook (per #2997 Section 3): "When auth flows have been stable for 60 days post-merge AND sign-in MAU > 100 users, ratchet thresholds down: `auth-exchange-code-burst` 5→3, `auth-callback-no-code-burst` 3→2, per-user 3→2." Link this back to a calendar reminder via `/soleur:schedule` (out of scope for this PR, called out in Non-Goals).
 
@@ -499,6 +591,7 @@ describe("auth Sentry tag coverage", () => {
 
 - Run `apps/web-platform/scripts/configure-sentry-alerts.sh` twice in a row.
 - Expect: first run logs `Created rule '...'` × 3; second run logs `Updated rule '...' (id=N)` × 3 with no semantic state change. Verify by listing rules before and after via `GET /api/0/projects/{org}/{project}/rules/` — the count and rule IDs are identical between runs.
+- Expect: each rule's `conditions[0].interval` is exactly `15m` (burst rules) or `5m` (per-user) — assert via `jq '.[] | select(.name == "auth-exchange-code-burst") | .conditions[0].interval'` returns `"15m"`. (Drift-guards against accidentally re-introducing the rejected `10m` value.)
 
 ### TS6 — Sentry rule fires (manual sanity, PM3)
 
@@ -519,6 +612,26 @@ describe("auth Sentry tag coverage", () => {
 - Locally rename `op: "signInWithOAuth"` to `op: "oauth"` in `oauth-buttons.tsx`.
 - Run the same test.
 - Expect: test fails on the second `it()` with `calls .signInWithOAuth() but missing op:"signInWithOAuth"`.
+
+## Network-Outage Deep-Dive
+
+Per AGENTS.md `hr-ssh-diagnosis-verify-firewall` and deepen-plan Phase 4.5, the trigger
+patterns `timeout` and `unreachable` matched on this plan. Layer-by-layer verification:
+
+| Layer                          | Status                  | Notes                                                                                                                                                                                                                                                  |
+| ------------------------------ | ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| L3 firewall allow-list         | not applicable          | The probe runs from GitHub-hosted runners hitting **public** prod hostnames (`app.soleur.ai`, `api.soleur.ai`). No L3 allow-list is in play — Cloudflare's public ingress accepts all source IPs. (The `admin-ip-drift.md` runbook covers SSH:22 to the Hetzner box, an unrelated path.) |
+| L3 DNS / routing               | covered by probe        | The fourth probe step (`/auth/v1/settings`) implicitly verifies DNS+routing for `api.soleur.ai`. The runbook adds `dig +time=5 +tries=2 +short CNAME api.soleur.ai` as a diagnostic.                                                                  |
+| L7 TLS / proxy                 | covered by probe        | `curl -sI` on HTTPS performs full TLS handshake; a cert/CDN regression returns non-2xx. Connection-reset symptoms during a probe failure are recorded in `failure_detail`.                                                                              |
+| L7 application                 | covered by probe        | The four checks (login HTML, two `/authorize` redirects, `/settings` JSON shape) are exactly the L7 application contract.                                                                                                                              |
+
+**Conclusion:** This plan does NOT diagnose an L3 firewall outage; it builds a probe
+that surfaces L3/L4/L7 regressions at the public boundary. The trigger pattern fired
+on the strings `timeout` (curl `--max-time 10`) and `unreachable` (the `login_unreachable`
+failure-mode label), neither of which represents L3 hypothesis-formation. The on-call
+runbook entry for "probe is firing, what next?" cross-links `admin-ip-drift.md` so an
+on-call doesn't pivot to L7 fixes (e.g., redeploying the web container) before
+verifying L3 (Cloudflare egress, DNS, Supabase `api.soleur.ai` CNAME) is healthy.
 
 ## Risks
 

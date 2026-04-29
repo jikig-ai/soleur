@@ -26,22 +26,24 @@ date: 2026-04-29
 - 2.1 Create `apps/web-platform/scripts/configure-sentry-alerts.sh`.
   - 2.1.1 Validate `SENTRY_AUTH_TOKEN`, `SENTRY_ORG`, `SENTRY_PROJECT` (`: "${VAR:?...}"`).
   - 2.1.2 Detect Sentry region via `/users/me/` probe against both `sentry.io` and `de.sentry.io`.
-  - 2.1.3 Implement `upsert_rule()` helper: `GET /rules/` → match by name → `PUT` if found else `POST`.
-  - 2.1.4 Configure rule `auth-exchange-code-burst` (5 events / 10 min, filters `feature:auth` + `op:exchangeCodeForSession`, action: email).
-  - 2.1.5 Configure rule `auth-callback-no-code-burst` (3 events / 10 min, filters `feature:auth` + `op:callback_no_code`, action: email).
-  - 2.1.6 Configure rule `auth-per-user-loop` (3 unique-user events / 5 min, filter `feature:auth`, action: email).
-  - 2.1.7 Bound every curl with `--max-time 10`; `set -euo pipefail`; on non-2xx response, log the JSON body and exit 1.
-- 2.2 Verify the JSON shape (`conditions` / `filters` / `actions`) against Sentry docs at <https://docs.sentry.io/api/alerts/create-an-issue-alert-rule-for-a-project/> before claiming the script complete.
+  - 2.1.3 Resolve email action target: `GET /api/0/organizations/{org}/teams/`, prefer slug `ops` then `engineering`; fall back to `targetType: "IssueOwners", fallthroughType: "ActiveMembers"` if no team. Log which mode was chosen.
+  - 2.1.4 Implement `upsert_rule()` helper: `GET /rules/` → match by name → `PUT` if found else `POST`. On non-2xx, log response body and exit 1.
+  - 2.1.5 Configure rule `auth-exchange-code-burst`: `EventFrequencyCondition value=5 interval="15m"` (NOT `10m` — Sentry rejects; valid set is `1m|5m|15m|1h|1d|1w|30d`), filters `feature:auth` + `op:exchangeCodeForSession`, `frequency: 60` (re-fire cap, minutes).
+  - 2.1.6 Configure rule `auth-callback-no-code-burst`: `EventFrequencyCondition value=3 interval="15m"`, filters `feature:auth` + `op:callback_no_code`, `frequency: 60`.
+  - 2.1.7 Configure rule `auth-per-user-loop`: `EventUniqueUserFrequencyCondition value=3 interval="5m"`, filter `feature:auth`, `frequency: 30`.
+  - 2.1.8 Bound every curl with `--max-time 10`; `set -euo pipefail`.
+- 2.2 Verify the JSON shape (`conditions` / `filters` / `actions`) against Sentry docs at <https://docs.sentry.io/api/alerts/create-an-issue-alert-rule-for-a-project/> — the plan's "Live API verification (2026-04-29)" table is the source of truth.
 
 ## Phase 3 — Drift-guard test
 
 - 3.1 Create `apps/web-platform/test/auth/sentry-tag-coverage.test.ts`.
-  - 3.1.1 Verify the glob library already used by `apps/web-platform/package.json` and reuse (no new dep).
-  - 3.1.2 Walk `app/(auth)`, `components/auth`, `server/` for `.ts`/`.tsx` files.
-  - 3.1.3 First `it()`: assert files calling any auth verb contain `feature: "auth"`.
-  - 3.1.4 Second `it()`: assert each verb has matching `op: "<verb>"` in same file.
-  - 3.1.5 Sanity-check: assert glob result `length > 0` so a directory rename can't silently no-op the test.
+  - 3.1.1 Use `fs.readdirSync` + `fs.statSync` recursive — verified no glob dep available in `apps/web-platform/package.json`. Pattern from `apps/web-platform/lib/auth/csrf-coverage.test.ts`.
+  - 3.1.2 Walk `app/(auth)` and `components/auth` for `.ts`/`.tsx` files; skip `*.test.tsx?` files.
+  - 3.1.3 First `it()`: per-dir sanity — each `AUTH_DIRS` entry yields ≥1 source file (catches a directory rename).
+  - 3.1.4 Second `it()`: assert files calling any auth verb contain `feature: "auth"`.
+  - 3.1.5 Third `it()`: assert each verb has matching `op: "<verb>"` in same file.
 - 3.2 Run `bun test apps/web-platform/test/auth/sentry-tag-coverage.test.ts` locally; expect all green on current `main`.
+- 3.3 Locally remove `feature: "auth"` from `oauth-buttons.tsx` and confirm test fails — proves the guard is active.
 
 ## Phase 4 — Runbook + spec wrap
 
