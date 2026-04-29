@@ -143,6 +143,17 @@ write_files:
     owner: root:root
     permissions: '0755'
 
+  # Canary Layer 3 — inlined-JWT bundle claim check invoked by ci-deploy.sh.
+  # Content injected from canary-bundle-claim-check.sh via Terraform
+  # base64encode(file()). Keep in sync with terraform_data.deploy_pipeline_fix
+  # in server.tf (#3033). Without this entry, fresh servers provisioned from
+  # cloud-init would miss the script and Layer 3 would silently skip.
+  - path: /usr/local/bin/canary-bundle-claim-check.sh
+    encoding: b64
+    content: ${canary_bundle_claim_check_script_b64}
+    owner: root:root
+    permissions: '0755'
+
   # Webhook configuration for adnanh/webhook.
   # Validates HMAC-SHA256 signature, sets SSH_ORIGINAL_COMMAND from payload,
   # and invokes ci-deploy.sh asynchronously (#968).
