@@ -42,7 +42,7 @@ operational runbooks) before mutating application state.
 
 ## Failure modes
 
-The probe emits one of seven `failure_mode` values. Each maps to a
+The probe emits one of eight `failure_mode` values. Each maps to a
 distinct triage path.
 
 ### `network_error`
@@ -118,6 +118,18 @@ Cross-link: <https://status.supabase.com>.
 Settings endpoint returned 200 but non-JSON (typically a Cloudflare
 edge HTML page or a rate-limit response). Treat as transient unless
 it persists across two probe runs.
+
+### `settings_misconfigured`
+
+The workflow's `SUPABASE_ANON_KEY` env (sourced from
+`secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY`) is empty. `/auth/v1/settings`
+requires the anon `apikey` header — without it, the endpoint returns
+401. This failure mode means the secret is unset on the workflow,
+NOT that auth is broken. Set the secret with:
+
+```bash
+gh secret set NEXT_PUBLIC_SUPABASE_ANON_KEY --body-file - <<< "$(doppler secrets get NEXT_PUBLIC_SUPABASE_ANON_KEY -p soleur -c prd --plain)"
+```
 
 ### `settings_provider_disabled`
 

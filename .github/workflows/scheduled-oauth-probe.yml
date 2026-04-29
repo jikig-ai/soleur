@@ -33,6 +33,11 @@ jobs:
         env:
           APP_HOST: app.soleur.ai
           API_HOST: api.soleur.ai
+          # Supabase /auth/v1/settings requires the anon key. The
+          # NEXT_PUBLIC_* anon key is shipped in the client bundle so
+          # exposing it to the workflow is no broader leak than its
+          # baseline scope. Still mask via secret to keep logs clean.
+          SUPABASE_ANON_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
         run: |
           set -uo pipefail
           # Note: NOT set -e — we collect failure mode and emit it as output.
@@ -91,30 +96,40 @@ jobs:
           # 3. GitHub OAuth redirect lands on github.com
           [[ -z "$fail_mode" ]] && check_redirect "github" "github.com"
 
-          # 4. /auth/v1/settings exposes google + github as enabled
+          # 4. /auth/v1/settings exposes google + github as enabled.
+          # Requires the Supabase anon `apikey` header — without it the
+          # endpoint returns 401 with `external: { google: null }`.
+          # The anon key is public (NEXT_PUBLIC_*) so passing it via
+          # an env var is safe; we still mark it `***` in logs.
           if [[ -z "$fail_mode" ]]; then
-            tmp=$(mktemp)
-            trap 'rm -f "$tmp"' EXIT
-            http=$(curl -s --max-time 10 -o "$tmp" -w '%{http_code}' \
-              "https://${API_HOST}/auth/v1/settings" 2>/dev/null) || http="network_error"
-            if [[ "$http" == "network_error" ]]; then
-              record_failure "network_error" \
-                "GET https://${API_HOST}/auth/v1/settings -> curl error"
-            elif [[ "$http" != "200" ]]; then
-              record_failure "settings_http" \
-                "GET https://${API_HOST}/auth/v1/settings -> HTTP ${http}"
-            elif ! jq -e . "$tmp" >/dev/null 2>&1; then
-              record_failure "settings_invalid_json" \
-                "GET https://${API_HOST}/auth/v1/settings -> non-JSON body (HTTP ${http})"
+            if [[ -z "${SUPABASE_ANON_KEY:-}" ]]; then
+              record_failure "settings_misconfigured" \
+                "SUPABASE_ANON_KEY secret is not set on the workflow"
             else
-              for prov in google github; do
-                enabled=$(jq -r --arg p "$prov" '.external[$p] // false' "$tmp")
-                if [[ "$enabled" != "true" ]]; then
-                  record_failure "settings_provider_disabled" \
-                    "external.${prov}=${enabled}"
-                  break
-                fi
-              done
+              tmp=$(mktemp)
+              trap 'rm -f "$tmp"' EXIT
+              http=$(curl -s --max-time 10 -o "$tmp" -w '%{http_code}' \
+                -H "apikey: ${SUPABASE_ANON_KEY}" \
+                "https://${API_HOST}/auth/v1/settings" 2>/dev/null) || http="network_error"
+              if [[ "$http" == "network_error" ]]; then
+                record_failure "network_error" \
+                  "GET https://${API_HOST}/auth/v1/settings -> curl error"
+              elif [[ "$http" != "200" ]]; then
+                record_failure "settings_http" \
+                  "GET https://${API_HOST}/auth/v1/settings -> HTTP ${http}"
+              elif ! jq -e . "$tmp" >/dev/null 2>&1; then
+                record_failure "settings_invalid_json" \
+                  "GET https://${API_HOST}/auth/v1/settings -> non-JSON body (HTTP ${http})"
+              else
+                for prov in google github; do
+                  enabled=$(jq -r --arg p "$prov" '.external[$p] // false' "$tmp")
+                  if [[ "$enabled" != "true" ]]; then
+                    record_failure "settings_provider_disabled" \
+                      "external.${prov}=${enabled}"
+                    break
+                  fi
+                done
+              fi
             fi
           fi
 
