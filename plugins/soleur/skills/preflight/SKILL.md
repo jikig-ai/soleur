@@ -259,7 +259,7 @@ curl -fsSL --max-time 10 -A "Mozilla/5.0" https://app.soleur.ai/login -o /tmp/pr
 ```
 
 ```bash
-grep -oE '/_next/static/chunks/[^"]+\.js' /tmp/preflight-login.html | sort -u | head -20 > /tmp/preflight-candidates.txt
+grep -oE '/_next/static/chunks/[^"]+\.js' /tmp/preflight-login.html | awk '!seen[$0]++' | head -20 > /tmp/preflight-candidates.txt
 ```
 
 The cap of 20 is generous (current prod loads 13 chunks); if ever hit on a future release, prefer raising the cap over reverting to the hardcoded login-chunk path. The grep matches both `<script src=...>` and `<link rel=preload href=...>` references — both are valid candidates.

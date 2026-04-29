@@ -374,9 +374,13 @@ fi
 rm -f "$stderr_file"
 
 # ============================================================================
-# F13 — generous cap: 21 chunks, JWT at position 21 → exit 1 by design
+# F13 — cap-at-20 boundary: 21 candidates with JWT only at position 21.
+# Asserts the cap is not wider than 20 — if a future change widens to 30,
+# the JWT would be reached and the test would flip to exit 0, failing this
+# fixture. This proves "cap is no wider than expected", not "cap is exactly 20"
+# (a narrower cap of 19 would also pass since chunks 1-19 are also empty).
 # ============================================================================
-echo "F13: generous cap (21 chunks, JWT at position 21 → fail by design)"
+echo "F13: cap boundary (21 candidates, JWT beyond cap of 20 → fail by design)"
 new_fixture
 mkdir -p "$FIXTURE_ROOT/login"
 chunks=()

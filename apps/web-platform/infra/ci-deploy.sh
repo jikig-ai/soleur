@@ -344,11 +344,18 @@ case "$COMPONENT" in
       # triage via `journalctl -u webhook -t ci-deploy | grep canary_layer3_`.
       # `set +o pipefail` is load-bearing — without it, the script-side fail
       # would propagate through the pipe and `set -euo` would abort ci-deploy
-      # before the rc check runs. ${PIPESTATUS[0]} captures the script's rc;
-      # `| logger` always exits 0 in normal operation.
+      # before the rc check runs. ${PIPESTATUS[0]} is the script's rc
+      # regardless of logger's outcome.
       # CANARY_FAIL_REASON stays mapped to the umbrella "canary_layer3_jwt_claims"
-      # (cross-repo string-shape contract with cat-deploy-state.sh and
-      # reusable-release.yml — do NOT change without coordinated update).
+      # for log-stability: the deploy-status workflow at
+      # .github/workflows/web-platform-release.yml line 274 surfaces this string
+      # via `::error::` and the umbrella keeps that line stable across deploys.
+      # The `*)` catch-all in that workflow accepts any non-zero reason, so
+      # the umbrella is for human-log stability, not a parser contract.
+      # Granular reasons (canary_layer3_no_chunks / _no_jwt / _decode_failed /
+      # _login_fetch_failed) are surfaced via journalctl through `logger -t`
+      # for SSH-time triage. See #3033 follow-ups for promoting granular
+      # reasons into the state file's reason field directly.
       if [[ -x "$CANARY_LAYER_3_SCRIPT" ]]; then
         set +o pipefail
         "$CANARY_LAYER_3_SCRIPT" http://localhost:3001 2>&1 | logger -t "$LOG_TAG" -p user.warning
