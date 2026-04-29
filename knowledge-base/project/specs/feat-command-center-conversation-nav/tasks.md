@@ -19,8 +19,9 @@ TDD gate per AGENTS.md `cq-write-failing-tests-before`: each implementation task
 - [ ] 1.4 Run vitest; confirm 1.1 passes (GREEN)
 - [ ] 1.5 Update `knowledge-base/project/specs/feat-command-center-conversation-nav/spec.md` TR8 path to `docs/legal/privacy-policy.md`
 - [ ] 1.6 Add `repo_url` inheritance note to spec TR1 / TR2
-- [ ] 1.7 Run `bun typecheck`; confirm green
-- [ ] 1.8 Commit: `git commit -m "feat(hooks): add limit option to useConversations + spec corrections"`
+- [ ] 1.7 Tier-divergence verification (per deepen-plan Risk #2): `git blame apps/web-platform/hooks/use-conversations.ts -L 243,246` to find the PR that introduced "Free tier ignores server-side filter". Read the linked issue/PR. Two outcomes: (a) the bug was real and is now fixed in current Supabase → delete the comment, keep the defensive client check (still load-bearing for DELETE per Risk #1); (b) the bug is still present → keep the comment AND open a Supabase-side issue. Document outcome in the PR body.
+- [ ] 1.8 Run `bun typecheck`; confirm green
+- [ ] 1.9 Commit: `git commit -m "feat(hooks): add limit option to useConversations + spec corrections"`
 
 ## Phase 2: Chat-segment layout shell
 
@@ -82,8 +83,7 @@ TDD gate per AGENTS.md `cq-write-failing-tests-before`: each implementation task
   - [ ] 5a.1.1 Navigate to `/dashboard/chat/<seeded-id>` (use existing `MOCK_SESSION` + seed conversations via mock fixture)
   - [ ] 5a.1.2 Assert rail is visible, contains seeded titles, active row has `aria-current="page"`
   - [ ] 5a.1.3 Click "View all in Command Center" → verify navigation to `/dashboard`
-  - [ ] 5a.1.4 Register `page.on('websocket')` to track open/close events
-  - [ ] 5a.1.5 Trigger sign-out via the existing button → assert zero open `/realtime/v1/websocket` connections at redirect
+  - [ ] 5a.1.4 Logout-teardown invariant — use the exact pattern from the plan's Phase 5a (`page.on('websocket')` open-set, `expect.poll(() => [...openSet].filter(ws => !ws.isClosed()).length).toBe(0)` with 5s timeout). Do NOT assert synchronously after `waitForURL('/login')` — Playwright CDP `close` events are not ordered against navigation, and a synchronous snapshot will race the close.
 - [ ] 5a.2 Run `bun test:e2e`; confirm 5a passes
 
 ### 5b. Cross-tenant Realtime integration test (against Doppler `dev` Supabase)
@@ -95,7 +95,8 @@ TDD gate per AGENTS.md `cq-write-failing-tests-before`: each implementation task
   - [ ] 5b.1.4 As User B (separate client), INSERT a conversation row
   - [ ] 5b.1.5 Wait 2 seconds; assert User A's subscription handler received ZERO payloads referencing User B's row
   - [ ] 5b.1.6 As User B, UPDATE a conversation row; repeat the assertion
-  - [ ] 5b.1.7 Tear down: delete seeded fixtures, close both clients
+  - [ ] 5b.1.7 As User B, DELETE a conversation row; assert User A's handler received ZERO payloads. **DELETE is the load-bearing case** per Supabase docs: Postgres cannot verify access to a deleted row, so `postgres_changes` DELETE events bypass RLS. The defensive client-side `user_id !== uid` drop check at `use-conversations.ts:243-246` is what catches this; this test verifies it.
+  - [ ] 5b.1.8 Tear down: delete seeded fixtures, close both clients
 - [ ] 5b.2 Document run command in `apps/web-platform/test/README.md` (create if absent): `SUPABASE_DEV_INTEGRATION=1 bun test:ci conversations-rail-cross-tenant`
 - [ ] 5b.3 Run locally pre-merge; confirm green. If you don't have `SUPABASE_DEV_INTEGRATION=1` available, the test must skip — but operator MUST run it before marking PR ready.
 

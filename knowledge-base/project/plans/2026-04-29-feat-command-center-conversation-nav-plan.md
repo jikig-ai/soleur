@@ -15,6 +15,24 @@ brand_survival_threshold: single-user incident
 
 ✨ Add a secondary navigation rail inside `/dashboard/chat/*` that lets users switch between recent conversations without round-tripping to `/dashboard`. Lives in a new nested layout `apps/web-platform/app/(dashboard)/dashboard/chat/layout.tsx` so the Realtime subscription persists across `[conversationId]` route changes (no remount, no resubscribe).
 
+## Enhancement Summary
+
+**Deepened on:** 2026-04-29
+**Sections enhanced:** 3 (Risks, Phase 5a, Tasks Phase 1 + 5b)
+**Research agents used:** Supabase realtime tier behavior, Next.js 15 nested-layout lifecycle, Playwright WebSocket assertion patterns
+
+### Key Improvements
+
+1. **Risks corrected.** The brainstorm/earlier plan claim "RLS doesn't gate Realtime broadcasts — only the snapshot" is wrong per Supabase docs ([Postgres Changes — Scaling](https://supabase.com/docs/guides/realtime/postgres-changes#scaling)): RLS gates every change event. Real load-bearing risk is narrower: **DELETE events bypass RLS** (Postgres can't verify access to a deleted row). Phase 5b integration test now exercises DELETE explicitly.
+2. **Tier-divergence task added.** The hook comment "Free tier ignores server-side filter" contradicts current docs. Phase 1 sub-task verifies via `git blame` and either retires the comment or files a Supabase issue. Empirical integration test on the actual project tier remains source of truth.
+3. **Playwright assertion pattern hardened.** Synchronous post-`waitForURL` snapshot would race CDP-side `close` events. Replaced with `expect.poll(() => [...openSet].filter(ws => !ws.isClosed()).length).toBe(0)` over a 5-second budget per the canonical pattern. Code sketch is now in the plan verbatim.
+4. **Next.js premise confirmed.** Layout-above-dynamic-segment lifecycle is the canonical "subscribe once across a route segment" idiom; remount-bug exception (dynamic segment AT or ABOVE the layout) does not apply because `[conversationId]` is below `chat/layout.tsx`. Sharp Edge added to prevent future regressions.
+
+### New Considerations Discovered
+
+- **DELETE is the load-bearing leak vector**, not the previously-feared INSERT/UPDATE broadcast. Cross-tenant test must include all three events.
+- **Issue #3028's framing for the AGENTS.md `cq-` rule needs revision.** The rule's original justification ("RLS doesn't gate broadcasts") is wrong; the correct justifications are (a) DELETE events bypass RLS, (b) per-event RLS check is a scaling concern, (c) explicit `filter:` documents intent. Update issued as a comment on #3028.
+
 ## Overview
 
 USER_BRAND_CRITICAL feature; threshold = `single-user incident`. Reuses `useConversations` (with a new `limit?: number` option) and `useSidebarCollapse`. No fork of the per-user Realtime contract.
@@ -142,7 +160,24 @@ Two tests, separated by infrastructure constraint per Kieran #1:
 **5a. `e2e/conversations-rail.e2e.ts` — Playwright against single-tenant mock:**
 
 1. Mount `/dashboard/chat/<seeded-id>`. Assert rail renders with seeded titles, active-row indication on the seeded row, "View all" link routes to `/dashboard`.
-2. After `handleSignOut`: register `page.on('websocket')` open/close events; assert zero open `/realtime/v1/websocket` connections at redirect time. Captures the load-bearing logout-teardown invariant the unit test would have given a false-positive on.
+2. Logout-teardown invariant — use this exact pattern (per deepen-plan research; raw `expect.poll` with `!ws.isClosed()`, NOT a synchronous post-redirect snapshot, because Playwright's CDP `close` event is not ordered against `waitForURL`):
+
+   ```ts
+   const realtimeSockets = new Set<WebSocket>();
+   page.on('websocket', ws => {
+     if (ws.url().includes('/realtime/v1/websocket')) realtimeSockets.add(ws);
+   });
+   await page.goto('/dashboard/chat/<seeded-id>');
+   await expect.poll(() => realtimeSockets.size).toBeGreaterThan(0); // arm
+   await page.getByRole('button', { name: /sign out/i }).click();
+   await page.waitForURL('**/login');
+   await expect.poll(
+     () => [...realtimeSockets].filter(ws => !ws.isClosed()).length,
+     { timeout: 5_000, message: 'open Realtime WS at /login' },
+   ).toBe(0);
+   ```
+
+   `WebSocket` exposes only `isClosed()` — no `state` accessor. Track open sockets via `page.on('websocket')`, filter by URL prefix, and poll `!ws.isClosed()` against a 5-second budget. Asserting at `waitForURL` resolution synchronously would race the CDP-side close event and produce false failures masked by sleeps.
 
 **5b. `test/conversations-rail-cross-tenant.integration.test.ts` — vitest against Doppler `dev` Supabase:**
 
@@ -193,8 +228,10 @@ Both tests gate merge: 5a runs in CI; 5b runs locally pre-merge OR as a schedule
 
 ## Risks (load-bearing only)
 
-1. **Realtime broadcasts ≠ RLS.** RLS does not gate Realtime payloads, only the initial REST snapshot. A typo in the channel `filter:` would silently leak. Mitigation: reuse `useConversations` (existing pattern is correct) + Phase 5b cross-tenant integration test.
-2. **Free-tier filter behavior.** The hook comment ("Free tier ignores server-side filter") suggests `filter:` may not be enforced on free-tier projects, leaving the defensive client-side `user_id !== uid` drop check as the gate. Verify prod plan tier; if free-tier, the defensive client check stays load-bearing; if paid-tier, the server filter is primary and the client check is belt-and-suspenders.
+> **Corrected during deepen-plan research.** The brainstorm and earlier plan revision claimed "RLS does NOT enforce isolation on Realtime broadcast payloads — only the initial REST snapshot." Per official Supabase docs ([Postgres Changes — Scaling](https://supabase.com/docs/guides/realtime/postgres-changes#scaling), [postgres-changes.mdx source](https://github.com/supabase/supabase/blob/master/apps/docs/content/guides/realtime/postgres-changes.mdx)), this is **wrong**: *"every change event must be checked to see if the subscribed user has access."* RLS is applied per-event before broadcast. Per the same docs, `filter:` is enforced server-side on all tiers (no documented Free-tier carve-out). The existing hook's "Free tier ignores server-side filter" comment may be empirical evidence that contradicts the docs OR may be obsolete — verify in Phase 1.
+
+1. **DELETE events bypass RLS.** Postgres cannot verify access to a deleted row, so `postgres_changes` DELETE events skip RLS. With `REPLICA IDENTITY FULL` (set in migration 015) the `old` record contains the full row including `user_id`, so a defensive client-side `user_id !== uid` drop check on DELETE payloads remains load-bearing. The existing hook ALREADY has this check at `use-conversations.ts:243-246` ("Free tier ignores server-side filter"); the comment justification is wrong but the check itself is correct for DELETE-event defense. Re-comment, do not remove. The cross-tenant integration test (Phase 5b) MUST exercise DELETE explicitly, not just INSERT/UPDATE.
+2. **Tier-divergence between docs and observed behavior.** The hook comment "Free tier ignores server-side filter" was written by a teammate based on observed behavior. Supabase docs disagree. Two possibilities: (a) Free-tier server filter was buggy at write time and is now fixed; (b) docs lag reality. Phase 1 sub-task: read git blame on the comment, look up the PR that introduced it, and either delete the comment (if the bug is fixed in current Supabase) or keep it AND open a Supabase issue. Either way the integration test (Phase 5b) on the actual project tier is the source of truth, not docs OR memory.
 
 ## Sharp Edges
 
@@ -205,6 +242,8 @@ Both tests gate merge: 5a runs in CI; 5b runs locally pre-merge OR as a schedule
 - Inline the 4-case status-badge mapping in `ConversationsRail`. Do NOT extract a shared component for v1; rule-of-three not hit (`/dashboard` and rail = two call sites). If a third call site appears later, file an extraction issue then.
 - The `(dashboard)/layout.tsx` edit is single-line scope: `handleSignOut`. Do not bundle other refactoring; #2194 stays untouched.
 - The Phase 5b integration test requires `SUPABASE_DEV_INTEGRATION=1` + Doppler dev credentials. If absent, the test must `skipIf` (not fail) so local dev without secrets stays clean.
+- **Do NOT introduce a dynamic segment AT or ABOVE `app/(dashboard)/dashboard/chat/layout.tsx` in future refactors.** Next.js issues [#49553](https://github.com/vercel/next.js/issues/49553), [#60395](https://github.com/vercel/next.js/issues/60395), [#44793](https://github.com/vercel/next.js/issues/44793): client components inside layouts whose route has a dynamic segment AT or ABOVE the layout will remount on intra-segment navigation. This feature's structure (`[conversationId]` BELOW `chat/layout.tsx`) avoids the bug. If a future refactor adds e.g. `app/[lang]/(dashboard)/dashboard/chat/layout.tsx`, the Realtime subscription will resubscribe on every conversation switch — silent perf regression that the no-remount premise of this plan depends on.
+- DELETE events on `postgres_changes` bypass RLS by Postgres design — `replica identity full` (set in migration 015) is what allows the defensive client-side `user_id !== uid` drop check in `use-conversations.ts:243-246` to see `payload.old.user_id`. If migration 015 were ever rolled back, that defense collapses. Phase 5b's DELETE assertion is the regression gate.
 
 ## Domain Review
 
