@@ -44,7 +44,7 @@ PR #2975 (this PR) ships a multi-layer defense. The actual prod outage is fixed 
 The actual bug is fixed by an operator-run sequence after merge:
 
 1. Verify Supabase project `uri_allow_list` includes `https://app.soleur.ai/callback`. (Without this, OAuth fails post-consent with `redirect_to is not allowed` even after the URL is correct.) Note: a `SUPABASE_ACCESS_TOKEN` from Doppler `prd` returned 401 against `GET /v1/projects/<ref>/config/auth` during plan execution — confirm the allowlist via the Supabase Dashboard, or refresh the access token to one with `read:auth_config` scope.
-2. Rotate the GitHub repo secret: `printf '%s' 'https://api.soleur.ai' | gh secret set NEXT_PUBLIC_SUPABASE_URL --body -`.
+2. Rotate the GitHub repo secret: `gh secret set NEXT_PUBLIC_SUPABASE_URL --body 'https://api.soleur.ai'`.
 3. Trigger a release workflow run: `gh workflow run reusable-release.yml ...`. The new Validate step now runs before any Docker work — confirm it passes.
 4. Re-probe the deployed bundle: `grep -oE 'https?://[a-z0-9.-]*supabase\.co'` against the freshly-built login chunk should return `https://api.soleur.ai` (or canonical ref) and zero placeholder strings.
 5. Playwright OAuth probe (Google + GitHub) reaches the providers' consent screens with no DNS error.
