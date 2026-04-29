@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import type { Page, WebSocket as PWWebSocket } from "@playwright/test";
+import type { Page } from "@playwright/test";
 
 // E2E Phase 5a for plan 2026-04-29-feat-command-center-conversation-nav.
 //
@@ -7,16 +7,17 @@ import type { Page, WebSocket as PWWebSocket } from "@playwright/test";
 //   1. Rail renders with seeded titles inside /dashboard/chat/<id>.
 //   2. Active row carries aria-current="page" for the open conversation.
 //   3. "View all in Command Center" footer link routes to /dashboard.
-//   4. Logout teardown closes any open Realtime WebSockets before /login.
+//   4. Sign-out completes (redirects to /login) without throwing.
 //
-// Mock-supabase rejects /realtime/* with HTTP 200 JSON instead of doing
-// the WS upgrade, so no Realtime WebSocket actually connects in this
-// environment; the zero-open-WS assertion is therefore vacuously true
-// here and the load-bearing cross-tenant Realtime isolation guarantee
-// lives in the Phase 5b integration test against Doppler dev Supabase.
-// We still keep the WS-tracking scaffold so the structural assertion
-// runs, and so a future mock that DOES support WS gets immediate
-// regression coverage. See plan §Test Strategy.
+// The zero-open-WS-after-signout assertion was REMOVED here. Mock-supabase
+// rejects /realtime/* with HTTP 200 instead of upgrading the WebSocket, so
+// no Realtime WS ever opens in this environment — `expect.poll(open === 0)`
+// passes vacuously regardless of whether the rail's sign-out path runs.
+// Carrying a structurally-dead assertion is worse than no assertion (false
+// confidence). The load-bearing cross-tenant Realtime isolation + DELETE
+// teardown guarantee lives entirely in Phase 5b
+// (test/conversations-rail-cross-tenant.integration.test.ts), which
+// targets a real Supabase project where WS upgrades succeed.
 
 const SEEDED_CONVERSATIONS = [
   {
@@ -211,13 +212,6 @@ test.describe("ConversationsRail e2e (Phase 5a — mock-supabase)", () => {
   test("renders rail with active row + 'View all' link, then signs out cleanly", async ({
     page,
   }) => {
-    const realtimeSockets = new Set<PWWebSocket>();
-    page.on("websocket", (ws) => {
-      if (ws.url().includes("/realtime/v1/websocket")) {
-        realtimeSockets.add(ws);
-      }
-    });
-
     await setupRailMocks(page);
 
     const response = await page.goto("/dashboard/chat/conv-active");
@@ -261,23 +255,13 @@ test.describe("ConversationsRail e2e (Phase 5a — mock-supabase)", () => {
       .click();
     await page.waitForURL("**/dashboard", { timeout: 10_000 });
 
-    // Sign-out teardown invariant. In the mock env no Realtime WS is ever
-    // upgraded (mock returns HTTP 200 instead of switching protocols), so
-    // the open-set is empty; we still poll-based assert because (a) it
-    // structurally verifies the rail's sign-out path runs and (b) any
-    // future real-WS-mock will get regression coverage for free.
+    // Sign-out smoke check: the click must complete and the app must
+    // redirect to /login. The try/finally in handleSignOut ensures
+    // signOut() runs even if removeAllChannels rejects — the user-visible
+    // contract is "click sign out → land on /login," and this assertion
+    // gates that contract. WS-teardown semantics are exercised by the
+    // Phase 5b integration test against a real Supabase WS endpoint.
     await page.getByRole("button", { name: /sign out/i }).click();
     await page.waitForURL("**/login", { timeout: 10_000 });
-
-    await expect
-      .poll(
-        () =>
-          [...realtimeSockets].filter((ws) => !ws.isClosed()).length,
-        {
-          timeout: 5_000,
-          message: "expected zero open Realtime WS after redirect to /login",
-        },
-      )
-      .toBe(0);
   });
 });

@@ -192,16 +192,19 @@ export default function DashboardLayout({
 
   async function handleSignOut() {
     const supabase = createClient();
-    // Sign-out tears down ALL channels by design — do not introduce
-    // long-lived channels that must survive sign-out. supabase-js v2
-    // exposes removeAllChannels() as a single Promise<('ok'|'timed
-    // out'|'error')[]>, not an array of promises (the plan's pre-impl
-    // sketch said Promise.all(supabase.removeAllChannels()), which the
-    // TS overload rejects). Await the promise directly so phx_leave
-    // sends while the JWT is still valid before signOut().
-    await supabase.removeAllChannels();
-    await supabase.auth.signOut();
-    router.push("/login");
+    // Sign-out tears down ALL channels by design. removeAllChannels() is
+    // best-effort cleanup — if the Phoenix WS rejects phx_leave (network
+    // blip, already-closed transport), the inner await throws. We MUST
+    // still complete signOut + redirect: leaving the user authenticated
+    // with the click "doing nothing" is exactly the shared-device leak
+    // the plan's User-Brand Impact paragraph names. try/finally ensures
+    // session teardown is the contract, not a happy-path-only effect.
+    try {
+      await supabase.removeAllChannels();
+    } finally {
+      await supabase.auth.signOut();
+      router.push("/login");
+    }
   }
 
   return (
@@ -297,16 +300,24 @@ export default function DashboardLayout({
           })}
         </nav>
 
-        {/* Recent conversations — mobile drawer only. The chat segment
-            layout already renders the rail on md+; here we surface the same
-            row markup inside the drawer so phone users can switch threads
-            without leaving the drawer. */}
-        <div
-          data-testid="conversations-rail-drawer"
-          className="flex min-h-0 flex-1 flex-col border-t border-neutral-800 md:hidden"
-        >
-          <ConversationsRail />
-        </div>
+        {/* Recent conversations — mobile drawer only. Mounted only when
+            the drawer is open AND on chat routes, so:
+              (1) the rail does NOT mount on /dashboard, /dashboard/kb,
+                  /dashboard/settings (avoiding wasted Realtime channels +
+                  query bursts on every dashboard route); and
+              (2) at md+ the drawer button never fires (drawerOpen stays
+                  false), so the chat-segment <aside hidden md:block /> is
+                  the sole rail mount on desktop — no double-mount, no
+                  duplicate "command-center" channel subscription.
+            See review feedback on PR #3021 (perf P1 + user-impact F1/F3). */}
+        {drawerOpen && pathname.startsWith("/dashboard/chat") && (
+          <div
+            data-testid="conversations-rail-drawer"
+            className="flex min-h-0 flex-1 flex-col border-t border-neutral-800 md:hidden"
+          >
+            <ConversationsRail />
+          </div>
+        )}
 
         {/* Footer links */}
         <div className={`border-t border-neutral-800 safe-bottom ${collapsed ? "p-1" : "p-3"}`}>

@@ -240,18 +240,11 @@ export function useConversations(
         },
         (payload) => {
           const updated = payload.new as Conversation;
-          // Defensive client-side user_id check. Per Supabase docs, the
-          // server-side `filter: user_id=eq.${userId}` IS applied to
-          // postgres_changes broadcasts on all tiers (including Free).
-          // The original "Free tier ignores server-side filter" justification
-          // (introduced in PR #1759, 2026-04-07) was precautionary, not
-          // empirical — see plan
-          // 2026-04-29-feat-command-center-conversation-nav-plan.md Phase 1.7.
-          // The check remains load-bearing for DELETE events: Postgres cannot
-          // verify access to a deleted row, so DELETE payloads bypass RLS.
-          // REPLICA IDENTITY FULL (migration 015) populates payload.old with
-          // the full row, so a DELETE handler added later can use the same
-          // user_id !== uid drop pattern. Do not remove this check.
+          // Defensive: DELETE events bypass RLS by Postgres design. REPLICA
+          // IDENTITY FULL (migration 015) populates payload.old.user_id so a
+          // future DELETE handler can reuse this drop pattern. Do not remove.
+          // See plan 2026-04-29-feat-command-center-conversation-nav-plan.md
+          // Phase 1.7 for full archaeology.
           if (updated.user_id !== userId) return;
           // Client-side repo_url check: Realtime can't express the second
           // equality, so drop payloads whose repo_url doesn't match the

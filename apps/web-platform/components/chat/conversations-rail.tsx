@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect } from "react";
+import { memo, useEffect } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useConversations } from "@/hooks/use-conversations";
@@ -11,7 +11,18 @@ import type { ConversationStatus } from "@/lib/types";
 import type { ConversationWithPreview } from "@/hooks/use-conversations";
 
 const COLLAPSE_KEY = "soleur:sidebar.chat-rail.collapsed";
+const RAIL_LIMIT = 15;
+// Hoisted to module scope so re-renders pass the SAME options object
+// reference to useConversations — a literal `{ limit: RAIL_LIMIT }` per
+// render would be safe today (the hook destructures primitives) but is
+// fragile to any future hook change that depends on options identity.
+const RAIL_OPTIONS = { limit: RAIL_LIMIT } as const;
 
+// Founder-language labels intentionally diverge from `STATUS_LABELS` in
+// `lib/types.ts` ("Executing"/"Completed" → "In progress"/"Done"). Do
+// NOT consolidate: the rail surfaces a switcher UI for the user, while
+// `STATUS_LABELS` is the ops-language used by the Command Center status
+// dropdown. Same enum, two distinct user-facing surfaces.
 const RAIL_STATUS_LABEL: Record<ConversationStatus, string> = {
   waiting_for_user: "Needs your decision",
   active: "In progress",
@@ -38,7 +49,7 @@ function StatusBadge({ status }: { status: ConversationStatus }) {
   );
 }
 
-export function ConversationRailRow({
+function ConversationRailRowImpl({
   conversation,
   active,
 }: {
@@ -68,8 +79,13 @@ export function ConversationRailRow({
   );
 }
 
+// Memo on (conversation, active): only the row whose `active` flips
+// re-renders when useParams emits a new conversationId — the other
+// 14 rows skip reconciliation.
+export const ConversationRailRow = memo(ConversationRailRowImpl);
+
 export function ConversationsRail() {
-  const { conversations, loading } = useConversations({ limit: 15 });
+  const { conversations, loading } = useConversations(RAIL_OPTIONS);
   const params = useParams<{ conversationId: string }>();
   const activeId = params?.conversationId;
   const [collapsed, toggle] = useSidebarCollapse(COLLAPSE_KEY);
@@ -125,7 +141,7 @@ export function ConversationsRail() {
             + New conversation
           </Link>
         ) : (
-          conversations.slice(0, 15).map((conv) => (
+          conversations.map((conv) => (
             <ConversationRailRow
               key={conv.id}
               conversation={conv}

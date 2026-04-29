@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, cleanup } from "@testing-library/react";
+import { render, screen, cleanup, fireEvent } from "@testing-library/react";
 import { createUseTeamNamesMock } from "./mocks/use-team-names";
 
 // Phase 4 RED: the dashboard mobile drawer must render the chat
@@ -80,7 +80,7 @@ afterEach(() => {
 });
 
 describe("DashboardLayout — mobile drawer surfaces ConversationsRail", () => {
-  it("renders the conversations rail inside the drawer aside", async () => {
+  it("does NOT mount the rail in the drawer when closed (avoids duplicate Realtime channel)", async () => {
     const { default: DashboardLayout } = await import(
       "@/app/(dashboard)/layout"
     );
@@ -91,8 +91,30 @@ describe("DashboardLayout — mobile drawer surfaces ConversationsRail", () => {
       </DashboardLayout>,
     );
 
-    // The rail is mobile-only (md:hidden). It still mounts in the drawer
-    // tree so users can switch conversations from the drawer on phones.
+    // Default drawerOpen=false. The rail must NOT mount yet — mounting
+    // unconditionally would open a duplicate "command-center" Realtime
+    // channel alongside the chat-segment layout's rail. See review
+    // feedback on PR #3021 (perf P1).
+    expect(
+      screen.queryByTestId("conversations-rail-drawer"),
+    ).not.toBeInTheDocument();
+  });
+
+  it("mounts the rail inside the drawer when the user opens it on a chat route", async () => {
+    const { default: DashboardLayout } = await import(
+      "@/app/(dashboard)/layout"
+    );
+
+    render(
+      <DashboardLayout>
+        <div data-testid="page">page</div>
+      </DashboardLayout>,
+    );
+
+    // Simulate the mobile menu button click — this is the only path that
+    // sets drawerOpen=true (md+ users never see the button).
+    fireEvent.click(screen.getByLabelText(/open navigation/i));
+
     const rail = screen.getByTestId("conversations-rail-drawer");
     expect(rail).toBeInTheDocument();
 

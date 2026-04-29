@@ -105,37 +105,16 @@ describe("ChatLayout (server component shell)", () => {
 });
 
 describe("ConversationsRail", () => {
-  it("renders no more than 15 rows when the hook returns more", async () => {
-    const rows = Array.from({ length: 20 }, (_, i) =>
-      makeConversation({ id: `conv-${i}`, title: `Conversation ${i}` }),
-    );
-    setRailHook(rows);
+  // The "≤15 rows" cap is enforced by `useConversations({ limit: 15 })`
+  // at the data layer — see `use-conversations-limit.test.tsx` for the
+  // hook→Supabase contract assertion. The rail trusts the hook contract
+  // and renders whatever it returns; layering a defensive `.slice(0, 15)`
+  // on top would be Speculative Generality (code-quality F2 in PR #3021
+  // review). This file therefore covers rail behaviour only — render
+  // shape, active-row, footer link, empty state, badge labels, collapse —
+  // with the hook mocked to return the desired row count per test.
 
-    const { ConversationsRail } = await import(
-      "@/components/chat/conversations-rail"
-    );
-    render(<ConversationsRail />);
-
-    const rendered = screen.getAllByRole("link", {
-      name: /Conversation \d+/,
-    });
-    expect(rendered.length).toBeLessThanOrEqual(15);
-  });
-
-  it("calls useConversations with limit: 15", async () => {
-    setRailHook([]);
-
-    const { ConversationsRail } = await import(
-      "@/components/chat/conversations-rail"
-    );
-    render(<ConversationsRail />);
-
-    expect(useConversationsMock).toHaveBeenCalledWith(
-      expect.objectContaining({ limit: 15 }),
-    );
-  });
-
-  it("renders all rows when the hook returns fewer than 15", async () => {
+  it("renders all rows the hook returns (rail trusts the limit contract)", async () => {
     const rows = Array.from({ length: 5 }, (_, i) =>
       makeConversation({ id: `conv-${i}`, title: `Row ${i}` }),
     );

@@ -69,7 +69,7 @@ USER_BRAND_CRITICAL feature; threshold = `single-user incident`. Reuses `useConv
 - In-rail search.
 - Cursor pagination + virtualization (deferred — #3026).
 - Conversation pinning (deferred — #3027).
-- Touching `apps/web-platform/app/(dashboard)/layout.tsx` beyond the single `handleSignOut` edit. #2194 stays untouched.
+- Touching `apps/web-platform/app/(dashboard)/layout.tsx` beyond what the rail directly requires. The originally-scoped `handleSignOut` edit expanded during work + review to also include (a) a route-+-drawer-gated `<ConversationsRail />` mount inside the existing drawer aside, and (b) widening the existing `Cmd/Ctrl+B` early-return at line ~156 to skip `/dashboard/chat/*` so the rail's keyboard handler owns toggle on chat pages. Both are mechanically required for the feature to work on mobile and to avoid a global keyboard collision; neither overlaps with #2194's DashboardLayout decomposition. #2194 stays untouched.
 - Adding a new global keyboard shortcut beyond `Cmd/Ctrl+B`.
 - Drafting the new AGENTS.md `cq-` rule for Realtime per-user filter (#3028).
 - Extracting a shared `statusBadge` component. Two call sites is duplication, not DRY violation; rule-of-three not hit. Inline the 4-case mapping in the rail.

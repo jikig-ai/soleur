@@ -161,16 +161,21 @@ describe.skipIf(!INTEGRATION_ENABLED)(
 
       if (!service) return;
 
+      // Two-pass cleanup to avoid an FK ordering hazard: if
+      // conversations.user_id ever gains ON DELETE RESTRICT, deleting
+      // user A first while B's row still references A would fail
+      // mid-loop and leave B's auth.users row orphaned. Pass 1 deletes
+      // every synthetic conversation; pass 2 deletes every synthetic
+      // user. Each pass tolerates not-found.
       for (const user of [userA, userB]) {
         if (!user.id) continue;
         assertSynthetic(user.email);
-        // Cleanup conversations user B created (may already be deleted
-        // by the DELETE assertion path; ignore not-found).
-        await service
-          .from("conversations")
-          .delete()
-          .eq("user_id", user.id);
+        await service.from("conversations").delete().eq("user_id", user.id);
+      }
 
+      for (const user of [userA, userB]) {
+        if (!user.id) continue;
+        assertSynthetic(user.email);
         const { data: check } = await service.auth.admin.getUserById(user.id);
         if (check?.user?.email && check.user.email !== user.email) {
           throw new Error(
@@ -248,30 +253,54 @@ describe.skipIf(!INTEGRATION_ENABLED)(
     test("user A receives ZERO payloads from user B's DELETE (RLS-bypass case)", async () => {
       receivedPayloads.length = 0;
 
-      const { data: targetRow, error: lookupErr } = await service
+      // Seed a fresh row to delete so the assertion is independent of
+      // INSERT/UPDATE test ordering (each test self-seeds).
+      const { data: seeded, error: seedErr } = await service
         .from("conversations")
+        .insert({
+          user_id: userB.id,
+          repo_url: SHARED_REPO_URL,
+          status: "active",
+        })
         .select("id")
-        .eq("user_id", userB.id)
-        .limit(1)
         .single();
-      expect(lookupErr, "lookup userB row for DELETE").toBeNull();
+      expect(seedErr, "seed userB row for DELETE").toBeNull();
+      // The seed INSERT also broadcasts; flush settle window before the
+      // DELETE so we measure DELETE leaks specifically.
+      await new Promise((r) => setTimeout(r, REALTIME_SETTLE_MS));
+      receivedPayloads.length = 0;
 
       const { error } = await service
         .from("conversations")
         .delete()
-        .eq("id", targetRow!.id);
+        .eq("id", seeded!.id);
       expect(error, "userB DELETE (via service) failed").toBeNull();
 
       await new Promise((r) => setTimeout(r, REALTIME_SETTLE_MS));
+
+      // REPLICA IDENTITY canary. If migration 015 ever regresses to
+      // DEFAULT, payload.old collapses to {id} only — `payload.old.user_id`
+      // becomes undefined and the leak filter below would silently match
+      // ZERO payloads, vacuously passing this load-bearing test. Fail
+      // loudly here when the DELETE-payload shape doesn't carry user_id.
+      const deletePayloads = receivedPayloads.filter(
+        (p) => p.eventType === "DELETE",
+      );
+      for (const p of deletePayloads) {
+        const old = p.old as Record<string, unknown> | null;
+        expect(
+          old && "user_id" in old,
+          "REPLICA IDENTITY regression: DELETE payload.old missing user_id — " +
+            "migration 015 is the source of truth and this assertion is the " +
+            "regression gate. Restore REPLICA IDENTITY FULL on conversations.",
+        ).toBe(true);
+      }
 
       // DELETE bypasses RLS (Postgres cannot check access on the deleted
       // row), so this is the load-bearing case for the test. The expected
       // result is still ZERO payloads thanks to the per-user filter:
       // server-side `filter: user_id=eq.${userA.id}` excludes user B's
-      // DELETEs even though RLS itself is silent on them. REPLICA
-      // IDENTITY FULL (migration 015) populates payload.old with the
-      // full deleted row including user_id, so a future drop-check on
-      // DELETEs can rely on it if filter behaviour ever regresses.
+      // DELETEs even though RLS itself is silent on them.
       const leaks = receivedPayloads.filter(
         (p) =>
           (p.new as Record<string, unknown> | null)?.user_id === userB.id ||
