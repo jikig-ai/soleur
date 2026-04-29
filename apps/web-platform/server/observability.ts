@@ -91,14 +91,26 @@ export function reportSilentFallback(
   // stdout, Better Stack) also get the same tag vocabulary.
   logger.error({ err, feature, op, ...extra }, message ?? `${feature} silent fallback`);
 
-  if (err instanceof Error) {
-    Sentry.captureException(err, { tags, extra });
-  } else {
-    Sentry.captureMessage(message ?? `${feature} silent fallback`, {
-      level: "error",
-      tags,
-      extra: { err, ...extra },
-    });
+  // Sentry's namespace shape varies across the dev-server bundle (where
+  // captureMessage may be tree-shaken when DSN is unset) and the prod build.
+  // Guard so an uninitialized Sentry never throws a TypeError into a caller
+  // that fires on server boot (see #3045 plugin-mount-check) — the pino mirror
+  // above is the durable signal regardless.
+  try {
+    if (err instanceof Error) {
+      if (typeof Sentry.captureException === "function") {
+        Sentry.captureException(err, { tags, extra });
+      }
+    } else if (typeof Sentry.captureMessage === "function") {
+      Sentry.captureMessage(message ?? `${feature} silent fallback`, {
+        level: "error",
+        tags,
+        extra: { err, ...extra },
+      });
+    }
+  } catch {
+    // Sentry call failures must never propagate — they would convert a
+    // diagnostic mirror into a service-killing exception.
   }
 }
 
@@ -118,13 +130,20 @@ export function warnSilentFallback(
 
   logger.warn({ err, feature, op, ...extra }, message ?? `${feature} silent fallback`);
 
-  if (err instanceof Error) {
-    Sentry.captureException(err, { level: "warning", tags, extra });
-  } else {
-    Sentry.captureMessage(message ?? `${feature} silent fallback`, {
-      level: "warning",
-      tags,
-      extra: { err, ...extra },
-    });
+  try {
+    if (err instanceof Error) {
+      if (typeof Sentry.captureException === "function") {
+        Sentry.captureException(err, { level: "warning", tags, extra });
+      }
+    } else if (typeof Sentry.captureMessage === "function") {
+      Sentry.captureMessage(message ?? `${feature} silent fallback`, {
+        level: "warning",
+        tags,
+        extra: { err, ...extra },
+      });
+    }
+  } catch {
+    // See reportSilentFallback — Sentry namespace may be partially shimmed
+    // in non-prod bundles; pino is the durable signal.
   }
 }
