@@ -425,6 +425,108 @@ Domain leaders are consulted at brainstorm time but not at ship time. The actual
 
 **Why:** New tools and subscriptions adopted during implementation often go unrecorded in the expense ledger because they feel incidental to the engineering work. The COO gate ensures every new cost is tracked at ship time, not discovered months later during a financial review.
 
+### Deploy Pipeline Fix Drift Gate
+
+**Trigger:** PR touches any of the 4 `terraform_data.deploy_pipeline_fix` trigger files:
+
+- `apps/web-platform/infra/ci-deploy.sh`
+- `apps/web-platform/infra/webhook.service`
+- `apps/web-platform/infra/cat-deploy-state.sh`
+- `apps/web-platform/infra/hooks.json.tmpl`
+
+**Detection:**
+
+The four trigger files are enumerated as a single bash array. The regex below MUST be derived from this array — keep the gate's reject criteria, documentation block, and test fixtures in sync (per `cq-when-a-plan-prescribes-a-validator-guard-or` — guard-surface coupling). If `apps/web-platform/infra/server.tf`'s `triggers_replace` `sha256(join(",",...))` block is changed (file added, removed, renamed), update the array, the regex, and `plugins/soleur/test/ship-deploy-pipeline-fix-gate.test.ts` in the same PR.
+
+```bash
+DEPLOY_PIPELINE_FIX_TRIGGERS=(
+  "apps/web-platform/infra/ci-deploy.sh"
+  "apps/web-platform/infra/webhook.service"
+  "apps/web-platform/infra/cat-deploy-state.sh"
+  "apps/web-platform/infra/hooks.json.tmpl"
+)
+DPF_REGEX='^apps/web-platform/infra/(ci-deploy\.sh|webhook\.service|cat-deploy-state\.sh|hooks\.json\.tmpl)$'
+
+git diff --name-only origin/main...HEAD | grep -E "$DPF_REGEX"
+```
+
+If the grep matches at least one path, the gate fires. Trigger condition is "≥1 match" — the gate fires once for the PR, not once per matched file.
+
+**If triggered:**
+
+The PR's diff will produce drift on `terraform_data.deploy_pipeline_fix` — by design, because `hcloud_server.web` has `lifecycle.ignore_changes = [user_data]` (per `#967`) so cloud-init can't re-apply. The drift workflow (`scheduled-terraform-drift.yml`, cron `0 6,18 * * *`) will detect this on its next tick and auto-file an issue. The cleaner path is to schedule the apply to happen *with* the merge.
+
+Display this exact block to the operator:
+
+```text
+This PR edits `terraform_data.deploy_pipeline_fix` trigger files. Drift will be
+detected on the next 12h cron tick. To prevent the drift-issue cycle, run the
+apply as part of the merge ritual:
+
+  cd apps/web-platform/infra
+  doppler run -p soleur -c prd_terraform -- \
+    terraform apply -target=terraform_data.deploy_pipeline_fix -input=true
+
+You will be prompted for "yes" by Terraform — that prompt is the load-bearing
+authorization per `hr-menu-option-ack-not-prod-write-auth`. Do NOT pass
+`-auto-approve`.
+
+After the apply completes, verify (server IP comes from Terraform output —
+the output name is `server_ip`, not `server_ipv4`):
+
+  SERVER_IP=$(cd apps/web-platform/infra && terraform output -raw server_ip)
+  LOCAL_HASHES=$(sha256sum \
+    apps/web-platform/infra/ci-deploy.sh \
+    apps/web-platform/infra/webhook.service \
+    apps/web-platform/infra/cat-deploy-state.sh)
+  echo "$LOCAL_HASHES"
+  ssh -o ConnectTimeout=5 root@"$SERVER_IP" \
+    "sha256sum /usr/local/bin/ci-deploy.sh \
+              /etc/systemd/system/webhook.service \
+              /usr/local/bin/cat-deploy-state.sh && \
+     systemctl is-active webhook"
+
+Each server-side hash must match the corresponding local hash AND
+`systemctl is-active webhook` must return `active`. (`hooks.json` is
+generated server-side from `local.hooks_json` so its hash will not match
+the `.tmpl` source — verify it via `stat /etc/webhook/hooks.json`; the
+mtime should be within seconds of the apply.)
+
+Do NOT use the HTTP probe at `https://deploy.soleur.ai/hooks/*` for
+post-apply verification — it returns 403 from CF Access for anonymous
+probes (proxy-layer signal that decayed silently). See #3034 and
+plugins/soleur/skills/postmerge/references/deploy-status-debugging.md
+"When NOT to use this probe."
+```
+
+**Interactive mode:**
+
+Ask via AskUserQuestion: "Apply now (recommended), defer to operator post-merge, or skip?"
+
+- **Apply now:** Pause the ship pipeline until the operator confirms the apply ran. Do NOT execute the apply from this skill — the operator runs it in their own terminal so the Terraform `yes` prompt is in their TTY. (TTY hand-off is intentional: prod blast radius warrants a human-typed `yes` rather than `-auto-approve` plus an in-conversation confirmation menu, even though `hr-menu-option-ack-not-prod-write-auth` would technically permit the latter.)
+- **Defer:** Add a `gh pr comment` on the PR (deferred until Phase 6 has the PR number) tagged `[deploy_pipeline_fix-drift-gate]` with the apply command embedded so the next operator (post-merge) sees it.
+- **Skip:** Same as Defer plus a "skip rationale" sentence; the next drift cron tick will still file an issue as the safety net.
+
+**Headless mode:**
+
+Auto-defer. Try `gh pr comment` first. If `gh pr comment` exits non-zero (the most common cause is the workflow's `GITHUB_TOKEN` lacks `pull-requests: write`; soleur shipping workflows typically grant `contents: read` + `issues: write` only), fall back to writing the tracking message into both stderr and `$GITHUB_STEP_SUMMARY` so it appears in the workflow's Summary tab. Do NOT abort the ship pipeline — the 12h drift cron remains the eventual safety net.
+
+```bash
+TRACKING_MSG="[deploy_pipeline_fix-drift-gate] PR touches a trigger file. Run: doppler run -p soleur -c prd_terraform -- terraform apply -target=terraform_data.deploy_pipeline_fix -input=true"
+if ! gh pr comment "$PR_NUMBER" --body "$TRACKING_MSG" 2>/dev/null; then
+  echo "$TRACKING_MSG" >&2
+  if [[ -n "${GITHUB_STEP_SUMMARY:-}" ]]; then
+    printf '### deploy_pipeline_fix drift gate\n\n%s\n' "$TRACKING_MSG" >> "$GITHUB_STEP_SUMMARY"
+  fi
+fi
+```
+
+**If not triggered:** Skip silently.
+
+**Why:** The drift pattern is structural — 9 cycles in ~6 weeks before this gate landed (see [`2026-04-24-recurring-deploy-pipeline-fix-drift-as-feature.md`](../../../../knowledge-base/project/learnings/bug-fixes/2026-04-24-recurring-deploy-pipeline-fix-drift-as-feature.md)). The gate moves discovery from "next 12h cron tick" to "PR-creation time," shrinking the window where prod runs stale `ci-deploy.sh` against fresh container images. The post-apply verification contract (server-side `sha256sum` + `systemctl is-active`) is the file+systemd-layer signal that replaces the decayed HTTP probe (see [`2026-04-29-deploy-pipeline-fix-postapply-verification-cf-access.md`](../../../../knowledge-base/project/learnings/bug-fixes/2026-04-29-deploy-pipeline-fix-postapply-verification-cf-access.md)). Closes the structural-prevention threshold defined in #2881; canonicalizes the verification contract from #3034.
+
+**Defense in depth.** This gate covers the `/ship` code path only. PRs created without `/ship` (direct `gh pr create`, GitHub UI) bypass it. The 12h `scheduled-terraform-drift.yml` cron remains the terminal safety net for those paths and for "operator deferred / forgot to apply" scenarios.
+
 ### Retroactive Gate Application (conditional)
 
 **Trigger:** The PR fixes a gate's detection logic (trigger conditions, assessment questions, or routing rules) AND the fix was motivated by a specific case that the gate missed.

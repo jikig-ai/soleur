@@ -2,6 +2,8 @@
 
 > Batch deliverable. Three related-but-distinct fixes shipped as one PR to keep main green and compress the deploy/verify cycle. Grouped by file proximity (all in `apps/web-platform/`) and because all three shape the "is the web-platform suite trustworthy" signal. Each bug gets its own commit within the branch so they remain independently revertable.
 
+> **2026-04-29 NOTE:** This plan's webhook smoke-test acceptance criterion ("Expected: HTTP 200" against `https://deploy.soleur.ai/hooks/deploy-status`) is **legacy** and incorrect post-CF-Access. Use the file+systemd contract documented in `plugins/soleur/skills/postmerge/references/deploy-status-debugging.md` "When NOT to use this probe" subsection. Tracking: #3034.
+
 ## Enhancement Summary
 
 **Deepened on:** 2026-04-14
