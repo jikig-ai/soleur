@@ -84,6 +84,8 @@ Tracked in #2881 — not implemented in this PR. Implementation requires:
 2. Doppler + SSH credentials in the shipping environment (currently operator-local only; `remote` claude-code-action workflows can't run terraform with prod creds).
 3. A retry/resume path for when the operator can't schedule the apply immediately.
 
+**Resolved:** 2026-04-29 — `/ship` Phase 5.5 "Deploy Pipeline Fix Drift Gate" landed alongside the file+systemd verification contract from #3034. See plan `knowledge-base/project/plans/2026-04-29-fix-deploy-pipeline-fix-ship-gate-and-postapply-contract-plan.md`.
+
 ## Deep-dive references
 
 - Resource definition: `apps/web-platform/infra/server.tf:209-269`

@@ -248,66 +248,105 @@ Otherwise **PASS**.
 
 **Note:** Complements Check 4. Check 4 enforces Doppler dev/prd isolation; Check 5 covers the GitHub-repo-secrets surface that feeds the prod Docker build (`secrets.NEXT_PUBLIC_SUPABASE_URL` and `secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY` in `reusable-release.yml`). The two sources can drift — see `knowledge-base/project/learnings/bug-fixes/2026-04-28-oauth-supabase-url-test-fixture-leaked-into-prod-build.md` (URL class) and `knowledge-base/project/learnings/bug-fixes/2026-04-28-anon-key-test-fixture-leaked-into-prod-build.md` (anon-key class).
 
-**Step 5.1: Discover the deployed login chunk filename.**
+**Step 5.1: Discover the candidate chunk set.**
 
-The chunk filename is content-hashed and changes per build, so the probe must discover it dynamically. Run as separate Bash calls (no command substitution per skill convention):
+Webpack chunking is not stable across releases — the inlined Supabase init may live in the login page chunk, in a numeric shared chunk (`/_next/static/chunks/8237-*.js`), or in a layout chunk. Hardcoding a single path produces SKIP-on-chunking-change, which silently disables the gate (issue #3010). Discover the candidate set dynamically by enumerating every chunk URL the login HTML references — that is the authoritative "what /login loads" surface.
+
+Run as separate Bash calls (no command substitution per skill convention):
 
 ```bash
-curl -fsSL -A "Mozilla/5.0" https://app.soleur.ai/login -o /tmp/preflight-login.html
+curl -fsSL --max-time 10 -A "Mozilla/5.0" https://app.soleur.ai/login -o /tmp/preflight-login.html
 ```
 
 ```bash
-grep -oE '/_next/static/chunks/app/\(auth\)/login/page-[a-f0-9]+\.js' /tmp/preflight-login.html | head -1
+grep -oE '/_next/static/chunks/[^"]+\.js' /tmp/preflight-login.html | awk '!seen[$0]++' | head -20 > /tmp/preflight-candidates.txt
 ```
 
-If the curl fails or the grep produces no output, return **SKIP** with note: "Could not fetch /login HTML or could not locate login chunk reference."
+The cap of 20 is generous (current prod loads 13 chunks); if ever hit on a future release, prefer raising the cap over reverting to the hardcoded login-chunk path. The grep matches both `<script src=...>` and `<link rel=preload href=...>` references — both are valid candidates.
 
-**Step 5.2: Probe the chunk for Supabase hosts.**
+If the `curl` fails (rc != 0) or `/tmp/preflight-candidates.txt` is empty, return **SKIP** with note: "Could not fetch /login HTML or could not locate any /_next/static/chunks references."
+
+**Step 5.2: Probe each candidate chunk for Supabase shapes.**
+
+The Supabase host string and the inlined anon-key JWT may live in DIFFERENT chunks (verified 2026-04-29 against current prod: `8237-*.js` carries the JWT but contains zero `supabase.co` host strings). Track `host_union` (every chunk's supabase-host hits) and `jwt_chunk` (the first chunk with a JWT) independently. Always traverse the full candidate list — bail-early would skip chunks that may carry a placeholder-host leak (matrix row 6).
+
+This block is operator-executed under the skill's `set -euo pipefail` convention. Failed `curl` per chunk and `grep` rc=1 on no-match must NOT abort the loop — the gate-level SKIP/FAIL decision is made from the accumulated state at end-of-loop, not from per-iteration rc.
 
 ```bash
-curl -fsSL "https://app.soleur.ai<chunk_path>" -o /tmp/preflight-chunk.js
+mkdir -p /tmp/preflight-chunks
+host_union=""
+jwt_chunk=""
+while IFS= read -r chunk_path; do
+  # Defense-in-depth: validate chunk_path is a clean Next.js static-chunks subpath
+  # before interpolating into the curl URL (no `..`, no `@`, no `?`, no whitespace).
+  [[ "$chunk_path" =~ ^/_next/static/chunks/[A-Za-z0-9_/().-]+\.js$ ]] || continue
+  base=$(basename "$chunk_path")
+  curl -fsSL --max-time 10 --max-filesize 5242880 "https://app.soleur.ai${chunk_path}" -o "/tmp/preflight-chunks/${base}" || continue
+  hosts=$(grep -oE 'https?://([a-z0-9.-]*supabase\.co|api\.soleur\.ai)' "/tmp/preflight-chunks/${base}" | sort -u || true)
+  if [[ -n "$hosts" ]]; then
+    host_union="${host_union}${hosts}"$'\n'
+  fi
+  if [[ -z "$jwt_chunk" ]]; then
+    jwt=$(grep -oE 'eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+' "/tmp/preflight-chunks/${base}" | head -1 || true)
+    if [[ -n "$jwt" ]]; then
+      jwt_chunk="/tmp/preflight-chunks/${base}"
+    fi
+  fi
+done < /tmp/preflight-candidates.txt
+
+printf '%s' "$host_union" | sort -u
+printf 'jwt_chunk=%s\n' "${jwt_chunk:-<none>}"
 ```
 
-```bash
-grep -oE 'https?://[a-z0-9.-]*supabase\.co' /tmp/preflight-chunk.js | sort -u
-```
-
-```bash
-grep -oE 'https?://api\.soleur\.ai' /tmp/preflight-chunk.js | sort -u
-```
+The redirected-stdin form (`< /tmp/preflight-candidates.txt`) is required — piping (`cat ... | while read`) scopes loop variables to a subshell and loses `host_union` / `jwt_chunk` at loop exit. The `--max-filesize 5242880` (5 MB) cap defends against a misbehaving CDN response filling tmpfs across 20 fetches. The strict path regex rejects `..`, `@`, `?`, and whitespace before any string interpolation into the curl URL — a defense-in-depth gate even though the source HTML is served by our own CDN. Full traversal (no early-break) ensures placeholder-host leaks in late-candidate chunks are still detected (matrix row 6).
 
 **Step 5.3: Assert canonical shape.**
 
-The union of step 5.2 outputs must contain at least one host matching `^https://([a-z0-9]{20}\.supabase\.co|api\.soleur\.ai)$` and zero placeholder hosts (`test.supabase.co`, `placeholder.supabase.co`, `example.supabase.co`, `localhost`, `0.0.0.0`).
+The `host_union` from Step 5.2 must contain at least one host matching `^https://([a-z0-9]{20}\.supabase\.co|api\.soleur\.ai)$` and zero placeholder hosts (`test.supabase.co`, `placeholder.supabase.co`, `example.supabase.co`, `localhost`, `0.0.0.0`).
 
-**Step 5.4: Probe the chunk for inlined Supabase anon-key JWT and assert claims.**
+**Step 5.4: Decode and assert JWT claims from `jwt_chunk`.**
 
-Reuses `/tmp/preflight-chunk.js` from Step 5.2 — single network round-trip. Pre-condition: Step 5.2's `curl` succeeded and `/tmp/preflight-chunk.js` is readable. If the chunk-fetch failed in Step 5.2, the entire Check 5 already returned SKIP — Step 5.4 does not run.
-
-```bash
-grep -oE 'eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+' /tmp/preflight-chunk.js | head -1
-```
-
-If the grep produces no output AND Step 5.2 found at least one Supabase host reference, return **FAIL** with note: "Supabase host found in chunk but no JWT — bundle is structurally inconsistent (host without key) and indicates a build regression." If the grep produces no output AND Step 5.2 also found zero Supabase host references, return **SKIP** with note: "Supabase init chunked elsewhere — investigate manually." (Distinguishing FAIL-on-inconsistency from SKIP-on-chunking-change prevents fail-open on a security-critical gate.)
-
-For the located JWT, decode the payload (segment 2) and assert:
+Pre-condition: `jwt_chunk` is non-empty after Step 5.2's traversal. If `jwt_chunk` is empty AND `host_union` is non-empty (canonical Supabase host found but no JWT in any of the 20 candidate chunks), return **FAIL** with note: "Supabase host found but no JWT in any of 20 candidate chunks — bundle is structurally inconsistent (host without key) and indicates a build regression." If `jwt_chunk` is empty AND `host_union` is empty (the full traversal yielded nothing), return **SKIP** with note: "Supabase init not present in any of the 20 candidate chunks loaded by /login — possible deeper Webpack restructure or app-shell split. Investigate manually (probe /dashboard or other authed routes)."
 
 ```bash
-JWT=$(grep -oE 'eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+' /tmp/preflight-chunk.js | head -1)
+JWT=$(grep -oE 'eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+' "$jwt_chunk" | head -1)
 PAYLOAD=$(printf '%s' "$JWT" | cut -d. -f2)
 PAD=$(( (4 - ${#PAYLOAD} % 4) % 4 ))
 if [[ $PAD -gt 0 ]]; then PADDED="$PAYLOAD$(printf '=%.0s' $(seq 1 $PAD))"; else PADDED="$PAYLOAD"; fi
 JSON=$(printf '%s' "$PADDED" | tr '_-' '/+' | base64 -d 2>/dev/null)
-printf '%s' "$JSON" | jq -r '"iss=\(.iss) role=\(.role) ref=\(.ref)"'
+iss=$(printf '%s' "$JSON" | jq -er '.iss // ""')  || { echo "FAIL: JWT payload not parseable as JSON (.iss missing or invalid)"; exit 1; }
+role=$(printf '%s' "$JSON" | jq -er '.role // ""') || { echo "FAIL: JWT payload missing .role (security-gate fail-closed)"; exit 1; }
+ref=$(printf '%s' "$JSON" | jq -er '.ref // ""')   || { echo "FAIL: JWT payload missing .ref (security-gate fail-closed)"; exit 1; }
+# Log-injection guard: strip C0 controls (NUL..US), DEL, and Unicode line separators
+# (U+2028, U+2029) before any echo. Defends against ANSI escape sequences, terminal
+# control chars, and GitHub Actions `::cmd::` smuggling via newlines or U+2028.
+sanitize() { printf '%s' "$1" | LC_ALL=C tr -d '\000-\037\177' | LC_ALL=C sed $'s/\xe2\x80\xa8//g; s/\xe2\x80\xa9//g'; }
+iss_safe=$(sanitize "$iss")
+role_safe=$(sanitize "$role")
+ref_safe=$(sanitize "$ref")
+printf 'iss=%s role=%s ref=%s\n' "$iss_safe" "$role_safe" "$ref_safe"
 ```
+
+`jq -er` (raise on null/error) plus the explicit FAIL-on-non-zero-rc enforces fail-closed semantics on every claim (`iss`, `role`, `ref`) if the JWT regex matches a `eyJ...` literal that is not a valid base64-encoded JSON or is missing a required claim. The `sanitize()` helper strips C0 controls (`\x00`–`\x1f`), DEL (`\x7f`), and Unicode line separators (U+2028, U+2029) before any echo — `jq -r` does not escape control characters, so a crafted JWT could otherwise smuggle ANSI escapes (e.g., `\x1b[2J` to clear the operator's terminal), `::notice::PASS` GitHub Actions annotations via `\n`, or U+2028/2029 line breaks invisible to `${var//$'\n'/}` (precedent: `2026-04-28-anon-key-test-fixture-leaked-into-prod-build` Session Error #6).
 
 The decoded claims MUST satisfy: `iss == "supabase"`, `role == "anon"`, `ref` matches `^[a-z0-9]{20}$`, and `ref` is not in the placeholder set (`test*`, `placeholder*`, `example*`, `service*`, `local*`, `dev*`, `stub*`).
 
-**Result:**
+**Result (eight-row decision matrix):**
 
-- **PASS** — all observed Supabase-host references are canonical AND the inlined anon-key JWT has canonical claims.
-- **FAIL** — any of: (a) any placeholder host is present in the bundle (e.g., `https://test.supabase.co`); (b) inlined anon-key JWT has placeholder ref or non-canonical claims (e.g., `role=service_role` — silent RLS bypass); (c) `iss != "supabase"` (cross-vendor JWT paste). Indicates a build-arg leak; the operator must rotate the corresponding GitHub repo secret (`NEXT_PUBLIC_SUPABASE_URL` or `NEXT_PUBLIC_SUPABASE_ANON_KEY`) and trigger a fresh release per the runbook in the learning files.
-- **SKIP** — chunk not retrievable, or chunk contains zero Supabase host references / no JWT (likely a chunking change moved the supabase init out of the login chunk — investigate manually before re-running).
+Per `knowledge-base/project/learnings/2026-04-27-preflight-security-gates-skip-vs-fail-defaults.md` — Check 5 is an invariant gate, so SKIP only when truly indeterminate; FAIL when partial-observation contradicts the invariant.
+
+| Host union | JWT discovered | Result | Rationale |
+| --- | --- | --- | --- |
+| Login HTML fetch failed (Step 5.1) | n/a | **SKIP** | Truly indeterminate — operator cannot run Check 5 against an unreachable origin. |
+| Login HTML fetched but zero `<script src>` matches | n/a | **SKIP** | Truly indeterminate — bundle structure unrecognizable. |
+| ≥1 canonical Supabase host AND JWT discovered AND JWT claims canonical | yes (canonical) | **PASS** | Invariant proven across (possibly different) chunks. |
+| ≥1 canonical Supabase host AND JWT discovered AND JWT claims non-canonical (placeholder ref, role≠anon, iss≠supabase) | yes (broken) | **FAIL** | Invariant DISPROVEN — leak detected; rotate the corresponding GitHub repo secret. |
+| ≥1 canonical Supabase host AND no JWT after full 20-traversal | no | **FAIL** | Bundle is structurally inconsistent (host without key); invariant cannot hold. |
+| ≥1 placeholder host (`test.supabase.co`, `placeholder.supabase.co`, etc.) anywhere in any examined chunk | any | **FAIL** | Placeholder URL leaked into the bundle (the original PR #2975 class). |
+| Zero Supabase host references AND zero JWTs after full 20-traversal | no | **SKIP** | Truly indeterminate — Supabase init not reachable from `/login`. Investigate manually (probe `/dashboard` or other authed routes). |
+| JWT regex matches but base64 decode / `jq` parse fails | invalid | **FAIL** | Discovered structure looks like a JWT but cannot be parsed — fail-closed. |
+
+SKIP-on-chunking-change (the issue #3010 failure mode) is gone: a chunking change that moves the JWT to a different chunk now PASSes via Step 5.2's traversal. A future "simplify the result block" commit that collapses row 5 ("host without JWT after traversal") back to SKIP would silently re-introduce the fail-open class that #2887/#2903 already paid for — see the 2026-04-27 learning.
 
 ### Check 6: Brand-Survival Self-Review
 

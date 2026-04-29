@@ -87,6 +87,124 @@ export function isBashCommandBlocked(command: string): boolean {
   return BLOCKED_BASH_PATTERNS.test(command);
 }
 
+// Safe-Bash allowlist (plan: 2026-04-29-fix-command-center-qa-permissions).
+//
+// Auto-approves read-only file/git/cwd inspection commands BEFORE the
+// review-gate. Every entry is a LEADING-TOKEN regex against the trimmed
+// command — substring matches do NOT count, so `pwd && curl evil` cannot
+// match the `pwd` entry.
+//
+// The regex contract is two-stage:
+//   1. SHELL_METACHAR_DENYLIST rejects ANY raw command containing one of
+//      `;`, `&`, `&&`, `|`, `||`, backtick, `$(`, `${`, `>`, `>>`, `<`,
+//      `<<`, newline, carriage return. Single-regex check on the raw
+//      string (not after splitting) so escape-sneak attempts (`pwd\;ls`)
+//      cannot launder through. Backslash itself is rejected to seal the
+//      escape-sneak surface.
+//   2. SAFE_BASH_PATTERNS matches the trimmed command. Each per-tool
+//      pattern uses a narrow path/identifier arg shape — no shell
+//      metacharacters allowed in args either.
+//
+// `find` and `grep` are intentionally OMITTED — both accept `-exec` and
+// could shell out. `find` is also redundant with the SDK's `Glob` tool
+// which is auto-allowed via FILE_TOOLS.
+//
+// `printenv` is intentionally OMITTED — without an arg it dumps the
+// entire env (BYOK key, service tokens). Even with an arg, the env may
+// hold secrets the agent never needs to read; users who want a single
+// var should let the agent ask for it via the review-gate.
+//
+// `$` is in the metachar denylist so `echo "$VAR"` (which bash expands
+// inside double quotes) is rejected. U+2028 / U+2029 are included to
+// match the project's Unicode line-separator hardening pattern.
+const SHELL_METACHAR_DENYLIST = /[;&|`<>$\n\r\\\u2028\u2029]/;
+// Belt-and-suspenders: a 4096-char input cap before regex matching keeps
+// pathological-length inputs from amplifying any backtracking cost.
+const SAFE_BASH_MAX_INPUT_LENGTH = 4096;
+
+// Path/identifier arg shape: word chars, slash, dot, tilde, plus, colon,
+// equals, hyphen, at-sign. No shell-special chars, no spaces inside a
+// single token.
+const PATH_TOKEN = String.raw`[\w./~+:=@-]+`;
+
+// Quoted-or-bareword token for `echo` — accepts `"hello world"`,
+// `'foo bar'`, or path-shape barewords. The metachar denylist already
+// rejects `$`/backtick at the raw-string level, so quoted strings here
+// cannot contain expansion sigils.
+const ECHO_TOKEN = String.raw`(?:"[^"\\]*"|'[^'\\]*'|[\w./~+:=@-]+)`;
+
+export const SAFE_BASH_PATTERNS: readonly RegExp[] = [
+  // No-arg / fixed-form commands
+  /^pwd\s*$/,
+  /^whoami\s*$/,
+  /^id\s*$/,
+  /^date\s*$/,
+  /^hostname\s*$/,
+  // ls — optional flags + optional path args
+  new RegExp(String.raw`^ls(?:\s+-[a-zA-Z]+)*(?:\s+${PATH_TOKEN})*\s*$`),
+  // Single-arg path-taking commands
+  new RegExp(String.raw`^cat\s+${PATH_TOKEN}\s*$`),
+  new RegExp(String.raw`^head(?:\s+-n\s+\d+)?\s+${PATH_TOKEN}\s*$`),
+  new RegExp(String.raw`^tail(?:\s+-n\s+\d+)?\s+${PATH_TOKEN}\s*$`),
+  new RegExp(String.raw`^wc(?:\s+-[a-zA-Z]+)?\s+${PATH_TOKEN}\s*$`),
+  new RegExp(String.raw`^file\s+${PATH_TOKEN}\s*$`),
+  new RegExp(String.raw`^stat\s+${PATH_TOKEN}\s*$`),
+  new RegExp(String.raw`^which\s+${PATH_TOKEN}\s*$`),
+  // uname with optional flags
+  /^uname(?:\s+-[a-zA-Z]+)*\s*$/,
+  // git read-only verbs
+  /^git\s+status\s*$/,
+  new RegExp(
+    String.raw`^git\s+log(?:\s+(?:-[a-zA-Z]+|--[a-zA-Z][\w-]*(?:=[\w./~+:=@-]+)?|-n\s+\d+|\d+|${PATH_TOKEN}))*\s*$`,
+  ),
+  new RegExp(
+    String.raw`^git\s+diff(?:\s+(?:-[a-zA-Z]+|--[a-zA-Z][\w-]*(?:=[\w./~+:=@-]+)?|${PATH_TOKEN}))*\s*$`,
+  ),
+  new RegExp(
+    String.raw`^git\s+show(?:\s+(?:-[a-zA-Z]+|--[a-zA-Z][\w-]*(?:=[\w./~+:=@-]+)?|${PATH_TOKEN}))*\s*$`,
+  ),
+  new RegExp(
+    String.raw`^git\s+branch(?:\s+(?:-[a-zA-Z]+|--[a-zA-Z][\w-]*|${PATH_TOKEN}))*\s*$`,
+  ),
+  new RegExp(
+    String.raw`^git\s+rev-parse(?:\s+(?:-[a-zA-Z]+|--[a-zA-Z][\w-]*|${PATH_TOKEN}))*\s*$`,
+  ),
+  // git config --get only (no --set, no --unset, no --add)
+  new RegExp(String.raw`^git\s+config\s+--get(?:\s+[\w.-]+)?\s*$`),
+  // echo — quoted strings or barewords
+  new RegExp(String.raw`^echo(?:\s+${ECHO_TOKEN})*\s*$`),
+];
+
+/**
+ * Returns true iff `command` is a single, read-only file/git/cwd
+ * inspection command safe to auto-approve without a user gate.
+ *
+ * Rejects:
+ *   - non-string / empty input (defensive),
+ *   - any command containing shell metacharacters (compound, redirect,
+ *     subshell, expansion, escape),
+ *   - any command whose leading token is not in SAFE_BASH_PATTERNS,
+ *   - any command whose argument shape doesn't match the tight per-tool
+ *     pattern.
+ *
+ * The check runs AFTER `isBashCommandBlocked` in the canUseTool flow so
+ * the blocklist is authoritative when both could match.
+ */
+export function isBashCommandSafe(command: unknown): boolean {
+  if (typeof command !== "string" || command.length === 0) return false;
+  if (command.length > SAFE_BASH_MAX_INPUT_LENGTH) return false;
+  // Stage 1: raw-string metacharacter denylist. Run BEFORE trim so
+  // leading/trailing newlines (for example) are caught.
+  if (SHELL_METACHAR_DENYLIST.test(command)) return false;
+  const trimmed = command.trim();
+  if (trimmed.length === 0) return false;
+  // Stage 2: leading-token allowlist match against trimmed string.
+  for (const pattern of SAFE_BASH_PATTERNS) {
+    if (pattern.test(trimmed)) return true;
+  }
+  return false;
+}
+
 // Safe UX-flow tools surfaced by the soleur plugin that carry no path
 // args and no command execution. Kept separate from `SAFE_TOOLS` in
 // `tool-path-checker.ts` so the existing `canusertool-decisions`
@@ -300,6 +418,32 @@ export function createCanUseTool(ctx: CanUseToolContext): CanUseTool {
           message:
             "This Bash command matches a blocked pattern (curl/wget/nc/sh -c/eval/base64 -d/sudo or similar) and is not permitted.",
         };
+      }
+
+      // Safe-Bash allowlist (plan: 2026-04-29). Auto-approve read-only
+      // file/git/cwd inspection commands BEFORE the cache and the
+      // review-gate. Faster than a cache hit (regex vs. Map lookup is
+      // wash, but no cache wear) and removes nuisance prompts for
+      // `pwd`/`ls`/`cat`/`git status` etc. that were forcing modal
+      // interrupts in Command Center. The blocklist already ran above,
+      // so curl/wget/nc/sudo/etc. cannot reach this branch.
+      if (isBashCommandSafe(command)) {
+        log.info(
+          {
+            sec: true,
+            tool: toolName,
+            decision: "auto-approved-safe-bash",
+            repo: `${ctx.repoOwner}/${ctx.repoName}`,
+          },
+          "Bash command auto-approved via safe-bash allowlist",
+        );
+        logPermissionDecision(
+          "canUseTool-bash",
+          toolName,
+          "allow",
+          "safe-bash-allowlist",
+        );
+        return allow(toolInput);
       }
 
       // #2921 batched-approval cache: pre-gate check (synchronous Map

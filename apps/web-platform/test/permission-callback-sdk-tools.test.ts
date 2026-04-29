@@ -222,7 +222,7 @@ describe("Bash permission branch (Stage 2.11)", () => {
     expect(abortable).not.toHaveBeenCalled();
   });
 
-  test("Bash with safe command → review-gate fires, user Approve → allow", async () => {
+  test("Bash with non-allowlisted command → review-gate fires, user Approve → allow", async () => {
     const abortable = vi.fn().mockResolvedValue("Approve");
     const sendToClient = vi.fn().mockReturnValue(true);
     const ctx = buildContext();
@@ -232,7 +232,7 @@ describe("Bash permission branch (Stage 2.11)", () => {
     const canUseTool = createCanUseTool(ctx);
     const result = await canUseTool(
       "Bash",
-      { command: "ls -la" },
+      { command: "npm test" },
       sdkOptions(),
     );
 
@@ -245,7 +245,7 @@ describe("Bash permission branch (Stage 2.11)", () => {
       question: string;
     };
     expect(gatePayload.type).toBe("review_gate");
-    expect(gatePayload.question).toContain("ls -la");
+    expect(gatePayload.question).toContain("npm test");
   });
 
   test("Bash with safe command → review-gate, user Reject → deny", async () => {
@@ -263,14 +263,26 @@ describe("Bash permission branch (Stage 2.11)", () => {
     assertDeny(result);
   });
 
-  test("Bash never auto-approves — even without BLOCKED_BASH_PATTERNS match, the gate must fire", async () => {
+  test("Bash auto-approves safe-bash allowlist commands without firing the review-gate", async () => {
     const abortable = vi.fn().mockResolvedValue("Approve");
+    const sendToClient = vi.fn().mockReturnValue(true);
     const ctx = buildContext();
     ctx.deps.abortableReviewGate = abortable;
+    ctx.deps.sendToClient = sendToClient;
     const canUseTool = createCanUseTool(ctx);
 
-    await canUseTool("Bash", { command: "echo hi" }, sdkOptions());
-    expect(abortable).toHaveBeenCalledOnce();
+    const result = await canUseTool(
+      "Bash",
+      { command: "echo hi" },
+      sdkOptions(),
+    );
+    assertAllow(result);
+    expect(abortable).not.toHaveBeenCalled();
+    // No review_gate should be sent for an allowlisted command.
+    const reviewGateCalls = sendToClient.mock.calls.filter(
+      (call) => (call[1] as { type?: string })?.type === "review_gate",
+    );
+    expect(reviewGateCalls).toHaveLength(0);
   });
 
   test("Bash with no command argument → deny (defensive)", async () => {

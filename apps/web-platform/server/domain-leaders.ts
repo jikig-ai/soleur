@@ -99,11 +99,11 @@ export const DOMAIN_LEADERS = [
     // processes. See plan 2026-04-23-feat-cc-route-via-soleur-go-plan.md
     // Stage 2 §"leaderId attribution" and ADR-022.
     id: "cc_router",
-    name: "Router",
+    name: "Concierge",
     domain: "System",
-    title: "Command Center Router",
+    title: "Soleur Concierge",
     description:
-      "Pre-dispatch router narration and tool-use chips for the /soleur:go workflow dispatcher.",
+      "Greets the user, routes their request to the right Soleur workflow, and reports back.",
     agentPath: "",
     defaultIcon: "",
     internal: true,

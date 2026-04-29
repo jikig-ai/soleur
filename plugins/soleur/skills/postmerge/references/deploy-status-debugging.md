@@ -23,6 +23,23 @@ When the release workflow's deploy step fails or times out, query `/hooks/deploy
      https://deploy.soleur.ai/hooks/deploy-status
    ```
 
+## When NOT to use this probe
+
+This runbook covers debugging the deploy-status webhook code path itself. Do NOT use this probe for **post-apply verification** of `terraform apply -target=terraform_data.deploy_pipeline_fix`. The HTTP probe is a proxy-layer signal: it observes "webhook is up + HMAC validates" but the post-apply question is provisioner-layer: "did the file provisioners write to disk and did remote-exec restart the service?" When CF Access landed in front of `/hooks/*`, the proxy-layer signal degraded silently — anonymous probes return 403 from Access — while provisioner-layer reality was unaffected. Eight prior remediations succeeded with a green AC marker that was actually red.
+
+For post-apply verification, use the file+systemd contract:
+
+```bash
+SERVER_IP=$(cd apps/web-platform/infra && terraform output -raw server_ip)
+LOCAL_HASH=$(sha256sum apps/web-platform/infra/ci-deploy.sh | awk '{print $1}')
+ssh -o ConnectTimeout=5 root@"$SERVER_IP" \
+  "sha256sum /usr/local/bin/ci-deploy.sh && systemctl is-active webhook"
+```
+
+The remote hash must equal `$LOCAL_HASH` and `systemctl is-active webhook` must return `active`. Extend the same pattern to `webhook.service`, `cat-deploy-state.sh`, and `hooks.json` if you want to verify all four provisioners landed (the `ci-deploy.sh` hash typically suffices because the provisioners run in sequence and any earlier failure aborts the resource creation).
+
+The `/ship` Phase 5.5 "Deploy Pipeline Fix Drift Gate" surfaces this contract automatically when a PR edits any of the four trigger files. See [`2026-04-29-deploy-pipeline-fix-postapply-verification-cf-access.md`](../../../../knowledge-base/project/learnings/bug-fixes/2026-04-29-deploy-pipeline-fix-postapply-verification-cf-access.md) for the root cause and contract design.
+
 ## Reason Taxonomy
 
 | reason | exit_code | Meaning | Remediation |
