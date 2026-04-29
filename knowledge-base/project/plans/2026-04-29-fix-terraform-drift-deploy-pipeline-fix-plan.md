@@ -1,9 +1,13 @@
 ---
 type: ops-remediation
 classification: ops-only-prod-write
+priority: p1-high
+component: apps/web-platform/infra
+files_to_edit: none
 issue: "#3019"
 related_issues: ["#2881", "#2874", "#2618", "#2234", "#1899", "#1505", "#1412", "#994", "#988"]
 related_prs: ["#3014", "#2880", "#2842"]
+related_learnings: ["knowledge-base/project/learnings/bug-fixes/2026-04-24-recurring-deploy-pipeline-fix-drift-as-feature.md"]
 requires_cpo_signoff: false
 ---
 
@@ -32,7 +36,7 @@ requires_cpo_signoff: false
 
 The scheduled drift detection workflow (`.github/workflows/scheduled-terraform-drift.yml`, cron `0 6,18 * * *`) detected on 2026-04-29 08:22 UTC that `terraform_data.deploy_pipeline_fix` is flagged for replacement (`Plan: 1 to add, 0 to change, 1 to destroy`). All other 50+ resources are clean.
 
-**This is the 9th occurrence of the same drift pattern in ~6 weeks** (#988 → #994 → #1412 → #1505 → #1899 → #2234 → #2618 → #2874 → #3019). The pattern is structural and intentional — see learning `knowledge-base/project/learnings/bug-fixes/2026-04-24-recurring-deploy-pipeline-fix-drift-as-feature.md` and meta-issue #2881 (the `/ship` post-merge gate that would prevent the recurrence is gated on a 10th occurrence trigger; this incident IS the 10th cycle counting #2873 + #2874 as one apply).
+**This is the 9th occurrence of the same drift pattern in ~6 weeks** (#988 → #994 → #1412 → #1505 → #1899 → #2234 → #2618 → #2873/#2874 → #3019, counting #2873 + #2874 as one cycle since they were resolved by a single targeted apply). The pattern is structural and intentional — see learning `knowledge-base/project/learnings/bug-fixes/2026-04-24-recurring-deploy-pipeline-fix-drift-as-feature.md` and meta-issue #2881 (the `/ship` post-merge gate that would prevent the recurrence; #2881's re-evaluation criterion #1 — "two more `infra-drift` issues land with the same `deploy_pipeline_fix` pattern" — is met by this 9th cycle).
 
 **Triggering change identified:** PR #3014 (commit `b2fed080`, merged after the 2026-04-24 apply that resolved #2874) modified `apps/web-platform/infra/ci-deploy.sh` to add `/dashboard`, `/login`, and error-sentinel canary probes. This file is one of the four trigger inputs to `terraform_data.deploy_pipeline_fix.triggers_replace` (per `apps/web-platform/infra/server.tf:216-221`), so any edit to it forces resource replacement on the next apply, which pushes the new `ci-deploy.sh` to the existing prod server.
 
@@ -160,12 +164,17 @@ cd apps/web-platform/infra && \
      -no-color -input=false
    ```
    - **Expected:** `No changes. Your infrastructure matches the configuration.` and exit code `0`.
-2. Webhook health probe (smoke-test the new `ci-deploy.sh` reached the server and webhook restarted cleanly):
+2. Webhook health probe (smoke-test the new `ci-deploy.sh` reached the server and webhook restarted cleanly).
+
+   **The `deploy.soleur.ai/hooks/*` endpoint sits behind a Cloudflare Zero Trust Access policy** (`cloudflare_zero_trust_access_application.deploy` in `server.tf`). Anonymous probes (HMAC headers alone) return HTTP `403` from Cloudflare Access — this is by design, not a regression. The HMAC body-validation that the `WEBHOOK_DEPLOY_SECRET` was meant to verify lives behind the Access gate.
+
+   **Use the SHA256 + systemd contract instead** (this is a stronger probe — it proves all 4 file provisioners landed AND the remote-exec restarted webhook, which is what the HTTP probe was trying to verify indirectly):
    ```bash
-   curl -s -o /dev/null -w '%{http_code}\n' https://deploy.soleur.ai/hooks/deploy-status \
-     -H "X-Signature-256: sha256=$(printf '' | openssl dgst -sha256 -hmac "$WEBHOOK_DEPLOY_SECRET" -hex | awk '{print $2}')"
+   LOCAL_HASH=$(sha256sum apps/web-platform/infra/ci-deploy.sh | awk '{print $1}')
+   ssh -o ConnectTimeout=5 root@<server-ip> "sha256sum /usr/local/bin/ci-deploy.sh && systemctl is-active webhook"
    ```
-   - **Expected:** HTTP `200`. (Mirrors the smoke-test from #2874's resolution comment.)
+   - **Expected:** server-side hash matches `$LOCAL_HASH`; `systemctl is-active webhook` returns `active`.
+   - **If you need to probe past Access:** add `CF-Access-Client-Id` + `CF-Access-Client-Secret` headers from `cloudflare_zero_trust_access_service_token.deploy`. Issue #3034 tracks updating the postmerge runbook with this detail.
 3. Confirm new resource id (record in PR body / closing comment):
    ```bash
    doppler run -p soleur -c prd_terraform -- \
@@ -185,7 +194,7 @@ cd apps/web-platform/infra && \
 ## Files to Create
 
 - `knowledge-base/project/plans/2026-04-29-fix-terraform-drift-deploy-pipeline-fix-plan.md` (this file).
-- `knowledge-base/project/specs/feat-one-shot-3019-terraform-drift-deploy-pipeline-fix/tasks.md` (post plan-review).
+- `knowledge-base/project/specs/feat-one-shot-3019-terraform-drift-deploy-pipeline-fix/session-state.md` (one-shot session state, no separate `tasks.md` — sequential ops-remediation, all phases tracked here).
 
 ## Open Code-Review Overlap
 
@@ -195,19 +204,37 @@ None. Verified: this PR introduces no source-file edits, so there are no `Files 
 
 ### Pre-merge (PR)
 
-- [ ] PR body cites this plan and includes `Ref #3019` (NOT `Closes #3019` — apply runs before merge).
+- [ ] PR body cites this plan and includes `Ref #3019` (NOT `Closes #3019` — issue is closed manually after the apply, before merge).
 - [ ] PR body cites #2881 as the structural-prevention tracking issue (re-evaluation threshold met).
 - [ ] Plan-review run completed; findings either fixed inline or recorded in the PR body.
-- [x] Operator confirms via per-command ack that they have read the exact `terraform apply` command (the apply is allowed to run before merge — this is `ops-only-prod-write` and the apply IS the resolution).
+- [ ] Operator confirms via per-command ack that they have read the exact `terraform apply` command (the apply is allowed to run before merge — this is `ops-only-prod-write` and the apply IS the resolution).
 
-### Post-merge (operator)
+### Post-apply (executed before merge per ops-only-prod-write classification)
 
-- [x] `terraform plan -detailed-exitcode` (full graph, no `-target`) returns exit code `0` against `prd_terraform`.
-- [x] `terraform state show terraform_data.deploy_pipeline_fix` reports a resource id distinct from `74675a53-97fa-3535-934c-3c709d0fc325` (the pre-drift id from issue #3019 body). New id: `97b8f475-5838-a6b9-d6ff-cfe0b026bf42`.
-- [x] Server-side `/usr/local/bin/ci-deploy.sh` SHA256 matches local HEAD (`fc224806…`); `webhook.service` active. (Webhook HTTP probe returns 403 from Cloudflare Access — runbook to be updated; file+systemd check is stronger.)
-- [x] Resolution comment posted on #3019 with: triggering PR, old/new resource ids, full-graph plan exit code, webhook smoke-test status.
-- [x] `gh issue close 3019` after the resolution comment is posted.
-- [x] Comment on #2881 noting threshold reached (9th occurrence), so the `/ship` post-merge gate implementation can be unblocked from re-evaluation criteria.
+- [ ] `terraform plan -detailed-exitcode` (full graph, no `-target`) returns exit code `0` against `prd_terraform`.
+- [ ] `terraform state show terraform_data.deploy_pipeline_fix` reports a resource id distinct from `74675a53-97fa-3535-934c-3c709d0fc325` (the pre-drift id from issue #3019 body).
+- [ ] Server-side `/usr/local/bin/ci-deploy.sh` SHA256 matches local HEAD; `systemctl is-active webhook` returns `active` (replaces the legacy HTTP-200 probe — `/hooks/*` sits behind Cloudflare Access).
+- [ ] Resolution comment posted on #3019 with: triggering PR, old/new resource ids, full-graph plan exit code, post-apply verification result.
+- [ ] `gh issue close 3019` after the resolution comment is posted.
+- [ ] Comment on #2881 noting threshold reached (9th occurrence), so the `/ship` post-merge gate implementation can be unblocked from re-evaluation criteria.
+
+## Resolution Log
+
+**Executed: 2026-04-29 09:50 UTC.**
+
+| Acceptance Criterion | Outcome |
+|---|---|
+| Per-command ack on `terraform apply -target=...` | ✅ Operator approved 2026-04-29 ~09:50 UTC |
+| Apply summary | ✅ `Apply complete! Resources: 1 added, 0 changed, 1 destroyed.` |
+| New resource id | ✅ `97b8f475-5838-a6b9-d6ff-cfe0b026bf42` (was `74675a53-97fa-3535-934c-3c709d0fc325`) |
+| Full-graph `terraform plan -detailed-exitcode` | ✅ Exit code `0`; `No changes. Your infrastructure matches the configuration.` |
+| Server `ci-deploy.sh` SHA256 vs HEAD | ✅ Match: `fc224806d0a66c3a1075e027ebe36d4c1941521eff8a787522d7e825e004a6fc` |
+| `systemctl is-active webhook` | ✅ `active` since 2026-04-29 09:50:33 UTC (consistent with provisioner remote-exec window) |
+| Pre-apply `bash apps/web-platform/infra/ci-deploy.test.sh` (no-rollback safeguard) | ✅ 66/66 cases green |
+| Resolution comment on #3019 | ✅ Posted: <https://github.com/jikig-ai/soleur/issues/3019#issuecomment-4342612059> |
+| `gh issue close 3019` | ✅ Closed 2026-04-29T09:52:29Z (verified via `gh issue view 3019 --json state,closedAt`) |
+| Comment on #2881 (threshold met) | ✅ Posted: <https://github.com/jikig-ai/soleur/issues/2881#issuecomment-4342613534> |
+| Webhook HTTP probe (legacy AC) | ⚠️ Returned 403 from Cloudflare Access. Substituted with SHA256 + `systemctl is-active` per Phase 4.2 (stronger contract). Runbook update tracked in #3034. |
 
 ## Test Strategy
 
@@ -235,7 +262,7 @@ The existing `apps/web-platform/infra/ci-deploy.test.sh` (66 cases per PR #3014'
 
 - A plan whose `## User-Brand Impact` section is empty, contains only `TBD`/`TODO`/placeholder text, or omits the threshold will fail `deepen-plan` Phase 4.6. This plan's threshold is `none` with an explicit non-empty reason; preflight Check 6 will pass.
 - This is `type: ops-remediation` / `classification: ops-only-prod-write`. Per AGENTS.md: PR body uses `Ref #3019`, NOT `Closes #3019`, because the resolution runs post-merge (`gh issue close 3019` is a separate operator step). `Closes` would auto-close at merge before the apply ran, producing a false-resolved state.
-- This plan is the 10th cycle counting #2873 + #2874 as one apply. #2881's re-evaluation criterion #1 (two more drifts after #2873/#2874) is met. The PR body should explicitly mention this so #2881 unblocks for implementation.
+- This plan is the 9th cycle (counting #2873 + #2874 as one apply). #2881's re-evaluation criterion #1 (two more drifts after #2873/#2874) is met. The PR body should explicitly mention this so #2881 unblocks for implementation.
 - `terraform plan` and `terraform apply` MUST run with `-detailed-exitcode` (or for apply, simply observe the summary line). `terraform_wrapper: false` is required for exit-code 2 to surface (the workflow learned this the hard way — see `.github/workflows/scheduled-terraform-drift.yml` lines 36-39).
 
 ## Domain Review
