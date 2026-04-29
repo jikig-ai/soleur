@@ -128,7 +128,12 @@ requires the anon `apikey` header — without it, the endpoint returns
 NOT that auth is broken. Set the secret with:
 
 ```bash
-gh secret set NEXT_PUBLIC_SUPABASE_ANON_KEY --body-file - <<< "$(doppler secrets get NEXT_PUBLIC_SUPABASE_ANON_KEY -p soleur -c prd --plain)"
+doppler secrets get NEXT_PUBLIC_SUPABASE_ANON_KEY -p soleur -c prd --plain \
+  | tr -d '\r\n' \
+  | gh secret set NEXT_PUBLIC_SUPABASE_ANON_KEY
+# `--body-file` does not exist on `gh secret set`; `--body -` would set the
+# literal '-'. Omit `--body` entirely so gh reads the JWT from stdin without
+# exposing it on the process command line. Verified: gh secret set --help (gh 2.92.0).
 ```
 
 ### `settings_provider_disabled`
