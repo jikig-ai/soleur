@@ -79,6 +79,7 @@ PR #3007 ships the symmetric guardrail set, mirroring PR #2975's four-layer defe
 If the inlined anon-key JWT regresses to a placeholder/test-fixture value:
 
 1. Decode the Doppler `prd` value to confirm the canonical key is still present:
+   <!-- verified: 2026-04-29 source: doppler secrets get --help (doppler v3.75.1); coreutils cut/printf/seq/tr/base64 (POSIX); jq --help (jq-1.7) -->
    ```bash
    doppler secrets get NEXT_PUBLIC_SUPABASE_ANON_KEY -p soleur -c prd --plain \
      | cut -d. -f2 | { read p; pad=$(( (4 - ${#p} % 4) % 4 )); \
@@ -95,6 +96,7 @@ If the inlined anon-key JWT regresses to a placeholder/test-fixture value:
    ```
 3. Trigger a fresh release workflow run. The new CI Validate step now runs before any Docker work — confirm it passes.
 4. Re-probe the deployed bundle:
+   <!-- verified: 2026-04-29 source: curl --help (curl 8.5.0); coreutils grep/head/xargs/cut/printf/tr/base64 (POSIX); jq --help (jq-1.7) -->
    ```bash
    curl -fsSL https://app.soleur.ai/login \
      | grep -oE '/_next/static/chunks/app/\(auth\)/login/page-[a-f0-9]+\.js' | head -1 \

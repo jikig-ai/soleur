@@ -203,7 +203,7 @@ a NEW build via `web-platform-release.yml`.
 |---|---|
 | Doppler `prd` correct, bundle has wrong inlined value | Trigger re-build of latest main |
 | Doppler `prd` is wrong | `doppler secrets set NEXT_PUBLIC_SUPABASE_ANON_KEY=<canonical> -p soleur -c prd`, then re-build |
-| GitHub repo secret is wrong | `gh secret set NEXT_PUBLIC_SUPABASE_ANON_KEY -R jikig-ai/soleur < /dev/stdin`, then re-build |
+| GitHub repo secret is wrong | `doppler secrets get NEXT_PUBLIC_SUPABASE_ANON_KEY -p soleur -c prd --plain \| tr -d '\r\n' \| gh secret set NEXT_PUBLIC_SUPABASE_ANON_KEY -R jikig-ai/soleur`, then re-build |
 | Sentry DSN missing in bundle | Update `reusable-release.yml` build-args, then re-build |
 
 ### 2.2 Trigger a new release build
