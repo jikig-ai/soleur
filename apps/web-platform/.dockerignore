@@ -25,13 +25,22 @@ Dockerfile
 .dockerignore
 docker-compose*.yml
 
-# Vendored plugin tree (#3045) — must ship with the file types listed below
-# (skill markdown, manifests, templates, scripts). Last-match-wins
-# semantics mean a blanket `!_plugin-vendored/**` would also re-include the
-# `.env*`, `*.pem`, `node_modules/`, and `.git/` excludes from earlier in
-# this file. Use a positive allowlist instead so a stray credential or
-# dependency tree under plugins/soleur cannot be baked into the image.
+# Vendored plugin tree (#3045) — allowlist specific file types only.
+#
+# `!_plugin-vendored/` (bare directory bang) is a *recursive* re-include in
+# Docker .dockerignore semantics: it pulls in ALL children regardless of
+# extension, so the per-extension lines below it become no-ops. The Bun-
+# specific `import.meta.path` in plugins/soleur/skills/ux-audit/scripts/
+# bot-fixture.ts then trips Next.js's strict TS pass during `npm run build`
+# — the 1edf7a62 release failed for exactly this reason.
+#
+# Correct allowlist pattern: exclude everything inside the dir first, then
+# bang specific patterns we ship. Children of an excluded dir are reachable
+# only when the dir itself is also banged back in (`!_plugin-vendored/`).
+_plugin-vendored/**
 !_plugin-vendored/
+!_plugin-vendored/**/.claude-plugin/
+!_plugin-vendored/**/.claude-plugin/**
 !_plugin-vendored/**/*.md
 !_plugin-vendored/**/*.json
 !_plugin-vendored/**/*.njk
@@ -39,4 +48,3 @@ docker-compose*.yml
 !_plugin-vendored/**/*.yaml
 !_plugin-vendored/**/*.sh
 !_plugin-vendored/**/*.txt
-!_plugin-vendored/**/.claude-plugin/**
