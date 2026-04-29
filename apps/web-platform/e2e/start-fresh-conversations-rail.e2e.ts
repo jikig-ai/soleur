@@ -134,6 +134,13 @@ async function setupRailMocks(page: Page) {
   });
 
   // The hook reads users.repo_url to scope the conversation list.
+  // All three select variants below are called via .single() / .maybeSingle()
+  // which sets `Accept: application/vnd.pgrst.object+json` — pgrst returns
+  // a single object, not an array. supabase-js does NOT auto-unwrap arrays,
+  // so the mock body MUST be an object literal. Returning an array makes
+  // `userRow?.repo_url` resolve to `undefined` and the hook short-circuits
+  // to the empty state, which presents as a phantom "rail not rendering"
+  // failure in the e2e (caught in CI on PR #3021).
   await page.route("**/rest/v1/users*", async (route) => {
     const url = new URL(route.request().url());
     const select = url.searchParams.get("select") ?? "";
@@ -141,9 +148,7 @@ async function setupRailMocks(page: Page) {
       await route.fulfill({
         status: 200,
         contentType: "application/json",
-        body: JSON.stringify([
-          { repo_url: "https://github.com/acme/repo" },
-        ]),
+        body: JSON.stringify({ repo_url: "https://github.com/acme/repo" }),
       });
       return;
     }
@@ -151,7 +156,7 @@ async function setupRailMocks(page: Page) {
       await route.fulfill({
         status: 200,
         contentType: "application/json",
-        body: JSON.stringify([{ subscription_status: null }]),
+        body: JSON.stringify({ subscription_status: null }),
       });
       return;
     }
@@ -159,19 +164,17 @@ async function setupRailMocks(page: Page) {
       await route.fulfill({
         status: 200,
         contentType: "application/json",
-        body: JSON.stringify([
-          {
-            onboarding_completed_at: "2024-01-01T00:00:00Z",
-            pwa_banner_dismissed_at: "2024-01-01T00:00:00Z",
-          },
-        ]),
+        body: JSON.stringify({
+          onboarding_completed_at: "2024-01-01T00:00:00Z",
+          pwa_banner_dismissed_at: "2024-01-01T00:00:00Z",
+        }),
       });
       return;
     }
     await route.fulfill({
       status: 200,
       contentType: "application/json",
-      body: JSON.stringify([{}]),
+      body: JSON.stringify({}),
     });
   });
 
