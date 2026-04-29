@@ -34,6 +34,7 @@ import {
   type RealtimePostgresChangesPayload,
 } from "@supabase/supabase-js";
 import { randomBytes } from "crypto";
+import { ensureNodeWebSocketPolyfill } from "./helpers/node-websocket-polyfill";
 
 const INTEGRATION_ENABLED =
   process.env.SUPABASE_DEV_INTEGRATION === "1";
@@ -90,6 +91,12 @@ describe.skipIf(!INTEGRATION_ENABLED)(
     }>[] = [];
 
     beforeAll(async () => {
+      // Workaround for supabase/supabase-js#1559 — must run BEFORE any
+      // createClient() call. Without it, the realtime-js fallback path drops
+      // the phx_reply on Node and every channel reaches TIMED_OUT (issue
+      // #3052). See test/helpers/node-websocket-polyfill.ts.
+      ensureNodeWebSocketPolyfill();
+
       const supabaseUrl = requireEnv("NEXT_PUBLIC_SUPABASE_URL");
       const anonKey = requireEnv("NEXT_PUBLIC_SUPABASE_ANON_KEY");
       const serviceRoleKey = requireEnv("SUPABASE_SERVICE_ROLE_KEY");
