@@ -33,7 +33,7 @@ brainstorm  -->  plan  -->  work  -->  review  -->  compound  -->  ship
 | `work` | Execute plans with incremental commits |
 | `review` | Run comprehensive code review with specialized agents |
 | `compound` | Capture learnings for future work |
-| `ship` | Enforce feature lifecycle checklist before creating PRs |
+| `ship` | Prepare the feature for production deployment |
 | `one-shot` | Full autonomous workflow from plan to PR |
 
 ## Components
