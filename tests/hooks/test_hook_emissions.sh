@@ -81,12 +81,34 @@ _build_fake_main_repo() {
   echo "$path"
 }
 
-# --- guardrails: block-stash-in-worktrees (uses real CWD → must be a worktree path)
-# We fabricate a worktree-like path under $WORK and call the hook with .cwd set.
+# --- guardrails: block-stash-in-worktrees (unconditional — CWD is irrelevant)
+# The guard blocks git stash regardless of working directory. The .cwd field
+# below is a no-op for this check; it is kept only for payload completeness.
+# Cases enumerate every alternation branch in the regex
+# `(^|&&|\|\||;)\s*git\s+stash` plus the cleanup sub-command and a negative
+# case that proves the guard does not over-fire on substrings.
 mkdir -p "$WORK/.worktrees/fake/inner"
 echo '{"tool_name":"Bash","tool_input":{"command":"git stash"},"cwd":"'"$WORK/.worktrees/fake/inner"'"}' \
   | bash "$WORK/.claude/hooks/guardrails.sh" >/dev/null 2>&1 || true
-_check "guardrails: git stash in worktree" "hr-never-git-stash-in-worktrees"
+_check "guardrails: git stash (bare)" "hr-never-git-stash-in-worktrees"
+
+echo '{"tool_name":"Bash","tool_input":{"command":"git stash pop"}}' \
+  | bash "$WORK/.claude/hooks/guardrails.sh" >/dev/null 2>&1 || true
+_check "guardrails: git stash pop" "hr-never-git-stash-in-worktrees"
+
+echo '{"tool_name":"Bash","tool_input":{"command":"git stash && bun test plugins/soleur/test/components.test.ts 2>&1 | head -n 20 ; git stash pop"}}' \
+  | bash "$WORK/.claude/hooks/guardrails.sh" >/dev/null 2>&1 || true
+_check "guardrails: git stash (&& chain — PR #2683 pattern)" "hr-never-git-stash-in-worktrees"
+
+echo '{"tool_name":"Bash","tool_input":{"command":"git diff --quiet || git stash"}}' \
+  | bash "$WORK/.claude/hooks/guardrails.sh" >/dev/null 2>&1 || true
+_check "guardrails: git stash (|| chain)" "hr-never-git-stash-in-worktrees"
+
+# Negative: substrings that are not `git\s+stash` must not over-fire. Mirrors
+# the _check_silent companions on block-commit-on-main and block-delete-branch.
+echo '{"tool_name":"Bash","tool_input":{"command":"echo gitstash; rg stash"}}' \
+  | bash "$WORK/.claude/hooks/guardrails.sh" >/dev/null 2>&1 || true
+_check_silent "guardrails: stash substrings (no over-fire)" "hr-never-git-stash-in-worktrees"
 
 # --- guardrails: bypass preflight (--no-verify should emit without blocking)
 echo '{"tool_name":"Bash","tool_input":{"command":"git commit --no-verify -m foo"}}' \
