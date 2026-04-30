@@ -20,10 +20,10 @@ The recommended way to use Soleur is through the unified entry point:
 
 This classifies your intent and routes to the right workflow skill. For existing codebases, run `/soleur:sync` first to populate your knowledge-base.
 
-The 5-step workflow (invoked automatically via `/soleur:go` or directly via Skill tool):
+The 6-step workflow (invoked automatically via `/soleur:go` or directly via Skill tool):
 
 ```text
-brainstorm  -->  plan  -->  work  -->  review  -->  compound
+brainstorm  -->  plan  -->  work  -->  review  -->  compound  -->  ship
 ```
 
 | Skill | Purpose |
@@ -33,6 +33,7 @@ brainstorm  -->  plan  -->  work  -->  review  -->  compound
 | `work` | Execute plans with incremental commits |
 | `review` | Run comprehensive code review with specialized agents |
 | `compound` | Capture learnings for future work |
+| `ship` | Prepare the feature for production deployment |
 | `one-shot` | Full autonomous workflow from plan to PR |
 
 ## Components
