@@ -81,12 +81,23 @@ _build_fake_main_repo() {
   echo "$path"
 }
 
-# --- guardrails: block-stash-in-worktrees (uses real CWD → must be a worktree path)
-# We fabricate a worktree-like path under $WORK and call the hook with .cwd set.
+# --- guardrails: block-stash-in-worktrees (unconditional — CWD is irrelevant)
+# The guard blocks git stash regardless of working directory. The .cwd field
+# below is a no-op for this check; it is kept only for payload completeness.
+# Three cases: bare command, pop sub-command, and the chained pattern that
+# bypassed the hook in PR #2683 (git stash && bun test ... ; git stash pop).
 mkdir -p "$WORK/.worktrees/fake/inner"
 echo '{"tool_name":"Bash","tool_input":{"command":"git stash"},"cwd":"'"$WORK/.worktrees/fake/inner"'"}' \
   | bash "$WORK/.claude/hooks/guardrails.sh" >/dev/null 2>&1 || true
-_check "guardrails: git stash in worktree" "hr-never-git-stash-in-worktrees"
+_check "guardrails: git stash (bare)" "hr-never-git-stash-in-worktrees"
+
+echo '{"tool_name":"Bash","tool_input":{"command":"git stash pop"}}' \
+  | bash "$WORK/.claude/hooks/guardrails.sh" >/dev/null 2>&1 || true
+_check "guardrails: git stash pop" "hr-never-git-stash-in-worktrees"
+
+echo '{"tool_name":"Bash","tool_input":{"command":"git stash && bun test plugins/soleur/test/components.test.ts 2>&1 | head -n 20 ; git stash pop"}}' \
+  | bash "$WORK/.claude/hooks/guardrails.sh" >/dev/null 2>&1 || true
+_check "guardrails: git stash (chained — PR #2683 pattern)" "hr-never-git-stash-in-worktrees"
 
 # --- guardrails: bypass preflight (--no-verify should emit without blocking)
 echo '{"tool_name":"Bash","tool_input":{"command":"git commit --no-verify -m foo"}}' \
