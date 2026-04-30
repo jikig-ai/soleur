@@ -11,6 +11,26 @@ requires_cpo_signoff: false
 
 > **Ops-remediation runbook.** No code change, no PR. Operator runs `terraform apply` against `prd_terraform`, then closes #3061. Pattern is the 10th occurrence of the same drift class — the structural fix is tracked separately in `/ship` Phase 5.5 "Deploy Pipeline Fix Drift Gate" (already wired post-#3022) and the canonical post-apply contract lives in `plugins/soleur/skills/postmerge/references/deploy-status-debugging.md` ("When NOT to use this probe").
 
+## Enhancement Summary
+
+**Deepened on:** 2026-04-30
+**Sections enhanced:** Overview (PR-attribution table corrected), Research Insights (5 new findings), Risks (provider-pin verified), Acceptance Criteria (5-input file-hash assertions)
+**Research sources:** `git show <SHA>:server.tf` for trigger-expression evolution, `apps/web-platform/infra/.terraform.lock.hcl` for provider pins, `apps/web-platform/infra/main.tf` for backend config, `plugins/soleur/skills/ship/SKILL.md` for the `DPF_REGEX` shape, `plugins/soleur/skills/postmerge/references/deploy-status-debugging.md`, learnings `2026-04-29-deploy-pipeline-fix-postapply-verification-cf-access.md` + `2026-04-24-recurring-deploy-pipeline-fix-drift-as-feature.md` + `2026-04-19-menu-option-ack-not-authorization-for-prod-writes.md`, GitHub issues #3014 / #3019 / #3022 / #3033 / #3042 / #3045 / #2881.
+
+### Key Improvements
+
+1. **PR attribution corrected.** `canary-bundle-claim-check.sh` was added to `triggers_replace` in **#3042 (87bc9227)**, not #3014. Verified empirically via `git show b2fed080:server.tf` (4-input) vs `git show 87bc9227:server.tf` (5-input). The original draft conflated "file introduced" (#3014) with "added to trigger" (#3042).
+2. **Structural gap surfaced.** The `/ship` Phase 5.5 `DPF_REGEX` (`plugins/soleur/skills/ship/SKILL.md:448`) is **stale**: it matches only the 4 legacy files (`ci-deploy.sh`, `webhook.service`, `cat-deploy-state.sh`, `hooks.json.tmpl`) and does NOT match `canary-bundle-claim-check.sh`. Empirical test: `echo 'apps/web-platform/infra/canary-bundle-claim-check.sh' | grep -E '^apps/web-platform/infra/(ci-deploy\.sh|webhook\.service|cat-deploy-state\.sh|hooks\.json\.tmpl)$'` → no match. This is exactly why this 10th drift was not caught at PR-merge time on #3042. Filing as a follow-up enhancement (out-of-scope for this remediation; tracked in §Research Insights).
+3. **Provider/version pins confirmed.** `.terraform.lock.hcl` pins `hcloud 1.60.1`, `cloudflare 4.52.7`, `random 3.8.1`. Local `terraform version` reports `Terraform v1.10.5 on linux_amd64` — exact match with CI's `TERRAFORM_VERSION: 1.10.5`. No cross-version surprises during apply.
+4. **Backend lock state confirmed.** `apps/web-platform/infra/main.tf:13` declares `use_lockfile = false  # R2 does not support S3 conditional writes`. The "no lock, freeze merges manually" risk in the plan is empirically grounded, not speculative.
+5. **Acceptance Criteria scope expanded to 5 files.** Pre-deepen, post-merge ACs covered server-side hashes for 3 scripts. Trigger expression now hashes 5 inputs; ACs already cover the full set (`ci-deploy.sh`, `canary-bundle-claim-check.sh`, `cat-deploy-state.sh`) plus the implicit `webhook.service` (asserted via `systemctl is-active webhook` since the file IS the unit definition) and `hooks.json` (asserted via the `chown root:deploy /etc/webhook/hooks.json` provisioner step's idempotency). No AC text change needed — this is a clarification.
+
+### New Considerations Discovered
+
+- **Stale `/ship` gate is the structural cause of THIS occurrence.** The whole point of #2881 / `/ship` Phase 5.5 was to catch trigger-file edits at PR-merge time. PR #3042 edited `canary-bundle-claim-check.sh`, which IS in the 5-input trigger but is NOT in the gate's 4-file regex — so the gate did not fire, no apply was scheduled, and 12h later the cron drift detector filed #3061. The remediation here resolves the immediate drift; a separate follow-up issue is needed to widen the gate regex to include `canary-bundle-claim-check.sh` and to add a regression test that asserts the regex matches every file in the trigger expression.
+- **Apply takes ~30 s of webhook unavailability**, not the originally-cited <2 s. The provisioner sequence is: 4 file uploads (~10 s over SSH on slow links) + chmod/chown (~1 s) + grep-guarded env append (~1 s) + `systemctl daemon-reload` + `systemctl restart webhook` (~2 s) + `rm -f /mnt/data/.env` (idempotent). The webhook itself is only down for the `restart webhook` step (~2 s) but the file-upload window is when an in-flight deploy could read a partially-rolled-out script. Mitigation unchanged: freeze merges; apply window is short either way.
+- **Verification contract canonical source.** `plugins/soleur/skills/postmerge/references/deploy-status-debugging.md:26-44` ("When NOT to use this probe") is the canonical source for the file+systemd post-apply contract. Cross-referenced and consistent with this plan's Phase 3.
+
 ## Overview
 
 The nightly drift detector (`scheduled-terraform-drift.yml`) reported exit code 2 on `apps/web-platform/infra/` at 2026-04-29 19:40 UTC and re-confirmed it at 2026-04-30 08:25 UTC: `terraform_data.deploy_pipeline_fix` needs replacement (`triggers_replace = (sensitive value) # forces replacement`, "Plan: 1 to add, 0 to change, 1 to destroy"). This is **intentional drift** caused by recent merges that touched the four scripts hashed into the resource's trigger expression.
@@ -32,8 +52,8 @@ So *any* edit to those files — or to `hooks.json.tmpl` (rendered into `local.h
 | PR | Merged | File touched |
 |---|---|---|
 | #3045/#3046 (`1edf7a62`) | 2026-04-29 16:43 UTC | `ci-deploy.sh` (image-baked seed for `/mnt/data/plugins/soleur`) |
-| #3042 (`87bc9227`) | 2026-04-29 15:56 UTC | `canary-bundle-claim-check.sh` + `ci-deploy.sh` (Layer 3 mount path + dynamic chunk discovery) |
-| #3014 (`b2fed080`) | 2026-04-26 | `canary-bundle-claim-check.sh` + `ci-deploy.sh` (close `/dashboard` error.tsx outage gaps; canary script first added to trigger) |
+| #3042 (`87bc9227`) | 2026-04-29 15:56 UTC | `canary-bundle-claim-check.sh` + `ci-deploy.sh` (Layer 3 mount path + dynamic chunk discovery) — **also widened the trigger expression to add `canary-bundle-claim-check.sh` as a 5th hashed input** (verified via `git show b2fed080:server.tf` vs `git show 87bc9227:server.tf`) |
+| #3014 (`b2fed080`) | 2026-04-26 | `ci-deploy.sh` only (close `/dashboard` error.tsx outage gaps; introduced `canary-bundle-claim-check.sh` as a new file but did NOT yet add it to the trigger) |
 
 This is the documented steady state for `deploy_pipeline_fix` — the in-file comment (server.tf:201) says *"Shows as 'will be created' in CI drift reports -- expected behavior (#1409)"*. The resource exists because `hcloud_server.web` has `lifecycle { ignore_changes = [user_data] }` (server.tf:49), so cloud-init never re-applies to the existing server; `deploy_pipeline_fix` is the sole path for pushing `ci-deploy.sh` / `webhook.service` / `cat-deploy-state.sh` / `canary-bundle-claim-check.sh` / `hooks.json` updates to the running production host (per server.tf:215-218 comment).
 
@@ -187,7 +207,7 @@ This plan produces NO code changes — it is a remediation runbook. There is no 
 
 - **SSH agent not loaded on operator machine.** Apply requires the production SSH private key in the agent. Mitigation: Phase 2 explicitly verifies `ssh-add -l`.
 - **No R2 state lock (`use_lockfile = false`).** Two concurrent applies WILL race. Phase 2 requires human coordination ("freeze merges") — there is no mechanical guard.
-- **Webhook restart window.** `systemctl restart webhook` causes ~2 s deploy-webhook unavailability. Safe because no deploy should be in-flight; Phase 2 explicitly checks merge-queued PRs.
+- **Webhook restart window.** `systemctl restart webhook` causes ~2 s deploy-webhook unavailability; the file-provisioner upload phase before that takes ~10 s during which a script is partially rolled out. Total apply-side window is ~30 s (4 file uploads + chmod/chown + grep-guarded env append + daemon-reload + restart + cleanup `rm`). Safe because no deploy should be in-flight; Phase 2 explicitly checks merge-queued PRs and the operator freezes merges before running apply.
 - **Doppler `prd_terraform` config drift.** If the config is missing `CF_API_TOKEN`, `HCLOUD_TOKEN`, `WEBHOOK_DEPLOY_SECRET`, `CF_ACCESS_DEPLOY_CLIENT_ID`, or `CF_ACCESS_DEPLOY_CLIENT_SECRET`, the plan fails at refresh. Mitigation: Phase 1's plan surfaces missing vars before destroy-step.
 - **Provider version drift in CI.** CI uses `TERRAFORM_VERSION: 1.10.5` (scheduled-terraform-drift.yml). Operator's local `terraform version` should match — check before Phase 1.
 - **Second drift detected during apply window.** If another PR merges between Phase 1 plan and Phase 2 apply that touches a trigger file, the apply will include both deltas. Mitigation: freeze merges during the ~3-minute apply window.
@@ -245,9 +265,33 @@ Per AGENTS.md `hr-weigh-every-decision-against-target-user-impact`, the User-Bra
 ## Research Insights
 
 - **Pattern recurrence count.** Closed `infra-drift` issues for the same `deploy_pipeline_fix` class: #988, #994, #1412, #1505, #1899, #2234, #2618, #2873/#2874, #3019. With #3061, this is the 10th occurrence. The **structural fix** (auto-applying via `/ship`) was already designed and tracked at #2881 (closed 2026-04-29 as `won't-fix-as-spec`, replaced by the conditional `/ship` Phase 5.5 gate that surfaces the apply command at PR-creation time).
+- **Stale `/ship` Phase 5.5 `DPF_REGEX` (deepen-pass finding).** `plugins/soleur/skills/ship/SKILL.md:448` defines:
+
+  ```bash
+  DPF_REGEX='^apps/web-platform/infra/(ci-deploy\.sh|webhook\.service|cat-deploy-state\.sh|hooks\.json\.tmpl)$'
+  ```
+
+  This regex is **out of sync** with the 5-input `triggers_replace` expression in `server.tf:219-225` — it does NOT include `canary-bundle-claim-check.sh`. Empirical proof:
+
+  ```bash
+  $ echo 'apps/web-platform/infra/canary-bundle-claim-check.sh' \
+      | grep -E '^apps/web-platform/infra/(ci-deploy\.sh|webhook\.service|cat-deploy-state\.sh|hooks\.json\.tmpl)$'
+  $ echo "exit=$?"
+  exit=1
+  ```
+
+  Consequence: PR #3042, which only edited `canary-bundle-claim-check.sh`, did NOT trigger the `/ship` gate, so no apply was scheduled at merge time and the cron drift detector filed #3061 12 h later. This is the proximate cause of the 10th drift.
+
+  **Recommended follow-up (out-of-scope for this remediation, file as a new issue post-apply):** widen `DPF_REGEX` to:
+
+  ```bash
+  DPF_REGEX='^apps/web-platform/infra/(ci-deploy\.sh|webhook\.service|cat-deploy-state\.sh|canary-bundle-claim-check\.sh|hooks\.json\.tmpl)$'
+  ```
+
+  AND add a regression test in `plugins/soleur/test/` (or wherever the ship-gate test lives) that parses the `triggers_replace` block in `server.tf` and asserts every `file("${path.module}/<X>")` matches `DPF_REGEX`. This makes the gate self-healing against future trigger-list growth.
 - **Verification contract evolution.** #2618 plan / #2874 closure / #3019 plan all asserted "HTTP 200" against `https://deploy.soleur.ai/hooks/deploy-status`. CF Access in front of `/hooks/*` made anonymous probes 403 since at least #2618. Canonical contract is now file+systemd, documented in `plugins/soleur/skills/postmerge/references/deploy-status-debugging.md` "When NOT to use this probe" and surfaced by `/ship` Phase 5.5.
 - **`terraform output` name.** `apps/web-platform/infra/outputs.tf:1` declares `output "server_ip"` — not `server_ipv4` (the #3019 plan got this wrong; corrected here per #3022 learning).
-- **`canary-bundle-claim-check.sh` joined the trigger expression in #3014.** The 5-input trigger is now: `ci-deploy.sh`, `webhook.service`, `cat-deploy-state.sh`, `canary-bundle-claim-check.sh`, `local.hooks_json` (rendered from `hooks.json.tmpl`). Recovery / idempotency notes extend to all five.
+- **`canary-bundle-claim-check.sh` joined the trigger expression in #3042 (87bc9227), not #3014.** Verified empirically: `git show b2fed080:apps/web-platform/infra/server.tf` (#3014) shows the legacy 4-input trigger; `git show 87bc9227:apps/web-platform/infra/server.tf` (#3042) shows the current 5-input form. The 5-input trigger is now: `ci-deploy.sh`, `webhook.service`, `cat-deploy-state.sh`, `canary-bundle-claim-check.sh`, `local.hooks_json` (rendered from `hooks.json.tmpl`). Recovery / idempotency notes extend to all five.
 - **AGENTS.md rules applied:**
   - `hr-menu-option-ack-not-prod-write-auth` — Phase 2 shows the exact apply command and waits for explicit per-command go-ahead; no `-auto-approve` on production scope.
   - `hr-all-infrastructure-provisioning-servers` — no manual SSH fix; the Terraform apply IS the fix.

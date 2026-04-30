@@ -58,7 +58,7 @@ date: 2026-04-30
 - [ ] 5.2 Trigger the drift workflow: `gh workflow run scheduled-terraform-drift.yml`
 - [ ] 5.3 Watch and verify success: `RUN_ID=$(gh run list --workflow scheduled-terraform-drift.yml --limit 1 --json databaseId --jq '.[0].databaseId')` then `gh run watch "$RUN_ID"` then `gh run view "$RUN_ID" --json conclusion --jq .conclusion` → expect `success`
 
-## Capture (compound) — recurrence pattern
+## Capture (compound) — recurrence pattern + structural follow-up
 
-- [ ] 6.1 If this is the 10th occurrence (verified — 10 closed issues with `infra-drift` label + this one), confirm `/ship` Phase 5.5 "Deploy Pipeline Fix Drift Gate" actually fires for the 5-input trigger (including `canary-bundle-claim-check.sh`, added by #3014). Open a follow-up issue if the gate's file-list is stale.
-- [ ] 6.2 No new learning needed — both `2026-04-24-recurring-deploy-pipeline-fix-drift-as-feature.md` and `2026-04-29-deploy-pipeline-fix-postapply-verification-cf-access.md` cover this class.
+- [ ] 6.1 Confirmed during deepen-plan: the `/ship` Phase 5.5 `DPF_REGEX` at `plugins/soleur/skills/ship/SKILL.md:448` is **stale** — it lists 4 files but `triggers_replace` now hashes 5 (the 5th being `canary-bundle-claim-check.sh`, added in #3042 / 87bc9227). PR #3042 thus did NOT trigger the gate at merge time, which is the proximate cause of #3061. **File a follow-up enhancement issue** (post-apply, separate from the remediation) titled "Widen /ship Phase 5.5 DPF_REGEX to match all triggers_replace inputs (and add a regression test parsing server.tf)". Milestone: Post-MVP / Later. Reference: this plan's Research Insights section.
+- [ ] 6.2 No new learning file needed for the drift class itself — both `knowledge-base/project/learnings/bug-fixes/2026-04-24-recurring-deploy-pipeline-fix-drift-as-feature.md` and `2026-04-29-deploy-pipeline-fix-postapply-verification-cf-access.md` cover it. The deepen-plan finding (gate-stale regex) is recorded in the plan's Research Insights and tracked via the follow-up issue from 6.1.
