@@ -9,25 +9,42 @@ issue: "#2688"
 
 # Learning: guardrails:block-stash-in-worktrees — test coverage gap for chained and pop variants
 
+## Scope
+
+This learning documents a **test-coverage gap** discovered while investigating issue #2688 (the bypass that produced PR #2683). It does **not** identify the root cause of the PR #2683 bypass — that mechanism remains unverified. See "Open Question" below.
+
 ## Problem
 
-The `guardrails:block-stash-in-worktrees` hook failed to fire during the one-shot agent run that produced PR #2683. The existing test (`tests/hooks/test_hook_emissions.sh`) covered only bare `git stash` — it had no cases for `git stash pop` or the chained pattern that actually appeared in PR #2683: `git stash && bun test ... 2>&1 | head -n 20 ; git stash pop`. The misleading comment "must be a worktree path" also implied that CWD was the discriminating factor, when in fact the hook is unconditional — CWD is irrelevant to whether stash is blocked.
+The `guardrails:block-stash-in-worktrees` hook failed to fire during the one-shot agent run that produced PR #2683. The existing test (`tests/hooks/test_hook_emissions.sh`) covered only bare `git stash` — it had no cases for `git stash pop`, the `&&`-chained pattern that actually appeared in PR #2683, the `||` alternation branch, or any negative case proving the guard does not over-fire. The misleading comment "must be a worktree path" also implied that CWD was the discriminating factor, when in fact the hook is unconditional — CWD is irrelevant to whether stash is blocked.
 
-## Root Cause
+## What This Fix Addresses
 
-The hook regex `(^|&&|\|\||;)\s*git\s+stash` is correct and matches all variants, including the chained PR #2683 pattern. The hook itself was not the bug. The gap was in the test file:
+The hook regex `(^|&&|\|\||;)\s*git\s+stash` is correct and matches all variants, including the chained PR #2683 pattern (verified: `bash tests/hooks/test_hook_emissions.sh` passes with the new cases). The hook itself was not the bug. The fix is purely test-side:
 
-1. Only one stash variant was tested (`git stash` bare), leaving `git stash pop` and chained patterns uncovered.
-2. The likely actual failure mode for PR #2683 was version skew: the one-shot worktree branch may have predated the stash guard's addition to `guardrails.sh`, or the subagent context bypassed hook registration — not a regex defect.
+1. Only one stash variant was tested (`git stash` bare), leaving `git stash pop`, `&&`-chained, and `||`-chained patterns uncovered.
+2. No `_check_silent` companion existed — a regex that degenerated to "always emit on `git`" would have passed every positive case.
 3. Because the test didn't exercise `pop` or chained forms, any future regression in those patterns would have been invisible until it re-appeared in production.
 
-## Solution
+## Open Question (Unverified)
 
-Three test cases replace the single existing case in `tests/hooks/test_hook_emissions.sh`:
+Why did the hook not fire during PR #2683? Hypotheses, in priority order:
+
+1. **Version skew** — the one-shot worktree branch may have predated the stash guard's addition to `guardrails.sh`. Provable in seconds: `git log --oneline -- .claude/hooks/guardrails.sh` against PR #2683's branch SHA.
+2. **Hook registration drift** — `.claude/settings.json` in the worktree may not have wired `guardrails.sh` into `PreToolUse.Bash`.
+3. **Subagent context bypass** — the `/soleur:one-shot` Task delegation may invoke Bash via a path that skips PreToolUse hooks.
+4. **`set -euo pipefail` short-circuit** — a hook preamble error (jq parse, var bind) could exit 0 before the stash check.
+
+Issue #2688 remains open as the tracker for proving (or refuting) these hypotheses. This PR uses `Ref #2688`, not `Closes`.
+
+## Solution (Test-Side Only)
+
+Five cases replace the single existing case in `tests/hooks/test_hook_emissions.sh`:
 
 1. **Bare command** (`git stash`) — existing case, updated comment to remove the misleading CWD requirement.
-2. **Pop sub-command** (`git stash pop`) — new case covering the cleanup half of the stash pattern.
-3. **Chained PR #2683 pattern** (`git stash && bun test ... ; git stash pop`) — new case that exactly reproduces the compound command from the incident.
+2. **Pop sub-command** (`git stash pop`) — covers the cleanup half of the stash pattern.
+3. **`&&` chain (PR #2683 pattern)** — exactly reproduces the compound command from the incident.
+4. **`||` chain** — covers the otherwise-untested alternation branch.
+5. **Negative `_check_silent`** — proves the guard does not over-fire on substrings like `gitstash` or `rg stash`.
 
 ## Key Insight
 
