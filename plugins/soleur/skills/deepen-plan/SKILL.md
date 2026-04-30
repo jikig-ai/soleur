@@ -300,6 +300,8 @@ Search for recent (2024-2026) articles, blog posts, and documentation on topics 
 
 If the plan's Overview, Problem Statement, or Hypotheses contain any of the trigger patterns `SSH`, `connection reset`, `kex`, `firewall`, `unreachable`, `timeout`, `502`, `503`, `504`, `handshake`, `EHOSTUNREACH`, `ECONNRESET` (case-insensitive), read `plugins/soleur/skills/plan/references/plan-network-outage-checklist.md` and spawn a dedicated "Network-Outage Deep-Dive" research agent in parallel with the other deepen agents.
 
+**Resource-shape trigger (implicit SSH dependency).** Also fire this gate when the plan drives `terraform apply` (with or without `-target=`) on any resource whose definition contains `provisioner "file"`, `provisioner "remote-exec"`, or a `connection { type = "ssh" ... }` block. The provisioner block makes SSH a hard apply-time dependency that the prose-only keyword scan won't detect — the plan body need not mention SSH at all and apply still fails on `connection reset by peer` if the operator's egress IP has drifted out of the firewall allowlist. **Why:** #3061 — plan body had zero SSH keywords; apply on `terraform_data.deploy_pipeline_fix` (file+remote-exec provisioners) still hit a handshake reset because Phase 4.5 didn't fire.
+
 The deep-dive agent's task:
 
 1. Read the checklist in full.
