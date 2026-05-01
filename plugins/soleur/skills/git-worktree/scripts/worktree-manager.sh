@@ -157,7 +157,15 @@ verify_worktree_created() {
     exit 1
   fi
 
-  # Check 2: Verify worktree is registered in git's worktree list (#1932)
+  # Check 2: Verify branch ref was actually created
+  if ! git show-ref --verify --quiet "refs/heads/$branch_name"; then
+    echo -e "${RED}Error: Branch $branch_name was not created despite successful worktree add${NC}"
+    echo -e "${YELLOW}Hint: Try 'git worktree add $worktree_path -b $branch_name $from_branch' directly${NC}"
+    git worktree remove "$worktree_path" --force 2>/dev/null || rm -rf "$worktree_path" 2>/dev/null || true
+    exit 1
+  fi
+
+  # Check 3: Verify worktree is registered in git's worktree list (#1932)
   if ! git worktree list --porcelain | grep -qxF "worktree $worktree_path"; then
     echo -e "${YELLOW}Warning: Worktree not in git worktree list — attempting repair...${NC}"
     git worktree repair "$worktree_path" 2>/dev/null || true
