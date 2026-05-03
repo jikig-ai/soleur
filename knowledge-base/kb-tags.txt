@@ -12,6 +12,7 @@ account-deletion
 account-migration
 adapter
 admin-ip
+admin-ip-drift
 admin-ip-refresh
 aeo
 aeo-score
@@ -51,6 +52,8 @@ anon-key
 anti-sycophancy
 api
 api key in git history
+api-contract
+api-errors
 api-first
 api-hardening
 api-key
@@ -70,10 +73,12 @@ article-28
 article-30
 artifacts
 askuserquestion
+async-await
 async-events
 async-io
 at-least-once
 atdd
+atomic-write
 attachments
 attribution
 audit
@@ -85,19 +90,24 @@ auto-fill
 auto-merge
 auto-revert
 automation
+autonomous-loop
 awk
 backdrop-filter
 backfill-migration
 backlog
 backtick
 badge
+bail-early
 banner-sizing
 bare-repo
 bare-repository
 base-href
+base64
 bash
+bash-approval
 bash-parsing
 bash-pipefail
+bash-strict-mode
 bash-tests
 batch-design
 bats
@@ -109,6 +119,7 @@ better-stack
 binary
 binary-serving
 binary-verification
+bind-mount
 blocked: --delete-branch with active worktrees will orphan them
 blog-authoring
 blog-post
@@ -130,6 +141,7 @@ brand-guide
 brand-guide-stale
 brand-identity
 brand-voice
+branded-types
 branding
 breadcrumb
 bridge
@@ -139,8 +151,10 @@ browser-compatibility
 browser-testing
 bubblewrap
 build-errors
+build-time-inlining
 bun
 bun-test
+bundle-content-gate
 bundling
 bunfig
 business-validation
@@ -166,12 +180,14 @@ category-design
 cert-provisioning
 changelog
 chat
+chat-ui
 check-constraint
 check-deps
 check-runs
 checksum
 child-process
 child_process
+chunk-splitting
 ci
 ci-cd
 ci-checks
@@ -198,11 +214,13 @@ cleanup-merged
 cli
 cli-integration
 client-bundle
+client-server-split
 clone-newuser
 close-codes
 cloud-init
 cloud-migration
 cloudflare
+cloudflare-access
 cmo
 cmo-delegation
 cname
@@ -224,13 +242,14 @@ commands/brainstorm
 commit-protocol
 community
 community-agent
-community-management
+community-ma-budget
 community-monitor
 community-overlap
 compaction-boundary
 comparedocumentposition
 competitive-analysis
 competitive-intelligence
+completeness
 compliance
 component-counts
 component-reuse
@@ -255,6 +274,7 @@ constitution-md
 constitution.md
 content-audit
 content-disposition
+content-hash
 content-integrity
 content-move
 content-pillar
@@ -270,6 +290,7 @@ context-budget
 context-management
 context-window
 contract
+contract-design
 contradictory-instructions
 convention-drift
 convention-mismatch
@@ -278,14 +299,20 @@ cookie-free
 cookies
 copywriter
 cost-estimate
+cost-slo
 count-mismatch
 counts
 coverage
 coverage-gap
 cpo
 credential-helper
+credentials
+critical-css
 cross-document-consistency
+cross-file-leak
+cross-language
 cross-runner
+cross-runtime
 crypto
 cryptography
 csp
@@ -302,14 +329,19 @@ cwe-59
 data-consistency
 data-integrity
 data-module
+data-validation
 ddl
 dead-code
 decodeuricomponent
+dedup
+dedupe
 deduplication
+deepen-plan
 defense-in-depth
 defense_in_depth
 defensive-coding
 definition-of-done
+dependabot
 dependencies
 dependency check for gui app without package manager
 dependency-cascade
@@ -359,6 +391,7 @@ docker-build-args
 docker-prune
 docs
 docs-build
+docs-fix
 docs-site
 docs-trust
 documentation
@@ -383,6 +416,7 @@ drift-resistance
 dry-run
 dual-location-sync
 dual-runner
+dual-source-of-truth
 duplication
 dynamic-import
 dynamic-rendering
@@ -422,6 +456,8 @@ extraction-pattern
 fact-checker
 fact-checking
 factory-pattern
+fail-closed
+fail-open
 fail2ban
 fake-timers
 false-assertions
@@ -432,7 +468,8 @@ faqpage
 fd-exhaustion
 fd-lifetime
 feature-video
-fetch-refspec
+feature-wiring
+fetch-recat
 field-separator
 file-extensions
 file-processing
@@ -449,6 +486,7 @@ firewall-ruleset
 fix-symptom-class
 fixture-design
 fk-cascade
+flake
 flex
 flexbox
 flock
@@ -458,6 +496,7 @@ footer
 formatting
 formdata
 formdata-error
+fouc
 fpe
 fragile keyword routing
 french-law
@@ -475,6 +514,7 @@ geo
 getuserbyid
 gh-api
 gh-cli
+gh-secret-set
 git
 git-branching
 git-clean
@@ -485,6 +525,7 @@ git-pull
 git-rebase
 git-reset-hard
 git-rev-parse
+git-stash
 git-tags
 git-workflow
 git-worktree
@@ -499,6 +540,7 @@ github-pages
 github-rulesets
 github-token
 gitignore
+glob
 global-install
 goals-api
 gone branch
@@ -533,6 +575,7 @@ health-scanner
 health-snapshot
 helper-extraction
 helpers
+heredoc
 hetzner
 high
 history-fetch
@@ -540,6 +583,8 @@ hkdf
 hook_enforcement
 hooks
 hot-path
+hr-rules
+hr-ssh-diagnosis-verify-firewall
 hsts
 html
 http-caching
@@ -552,7 +597,7 @@ idle-detection
 idor
 if-ladder
 if-none-match
-imagrns
+image-generation
 implementation-patterns
 in-filter
 inadequate-documentation
@@ -561,9 +606,11 @@ indexes
 infinite-loop
 information-architecture
 information-disclosure
+infra-drift
 infra-security
 infrastructure
 initialization
+inline-event-handler
 inline-validation
 inode-identity
 input-validation
@@ -576,6 +623,7 @@ intent-classification
 interactive-mode
 interface-contract
 ip-spoofing
+isolation
 issue-filing
 issue-tracking
 issue-verification
@@ -586,6 +634,7 @@ json-ld
 jsonl
 jsonld
 jsx
+jwt
 kb
 kb-chat
 kb-reader
@@ -597,9 +646,11 @@ knowledge-base
 knowledge-base-archiving
 landing-page
 landscape-audit
+layer-3
 layer-ordering
 layout
 layout-children
+layouts
 lazy-quantifier
 lcp
 leader
@@ -620,6 +671,7 @@ lighthouse
 linkedin
 lint-pitfalls
 lint-rule-ids
+linter
 loading-state
 local-testing
 log-injection
@@ -628,6 +680,7 @@ login
 macos
 magic-link
 maintenance
+manual-trigger
 markdown
 markdown-links
 markdown-tables
@@ -694,6 +747,7 @@ nav
 navigation
 navigation-design
 negative-space
+negative-space-assertion
 nested-directory-skill-missing
 new-skill-workflow
 next-headers
@@ -704,6 +758,7 @@ nextjs
 nextjs-app-router
 no business validation gate
 no cross-agent coordination
+node
 node-http
 node-js
 node-modules
@@ -734,6 +789,7 @@ openhands
 operations
 operator-precedence
 ops-directory
+ops-remediation
 optimistic-state
 opus-4-7
 ordering
@@ -753,7 +809,9 @@ parallel-execution
 parallel-io
 parallel-tests
 parameter-expansion
+parity-tests
 parser-underread
+partial-copy
 partial-unique-index
 passive-routing
 passthrough-copy
@@ -787,11 +845,14 @@ pipefail
 pipeline
 pipeline-gotchas
 pkce
+plan
 plan-ac
 plan-acceptance-criteria
 plan-accuracy
+plan-acs
 plan-gap
 plan-gates
+plan-quality
 plan-review
 plan-skill
 plan_review
@@ -824,6 +885,7 @@ portability
 porting
 position-fixed
 posix
+post-apply-verification
 post-deploy
 post-merge
 postcss
@@ -845,6 +907,7 @@ preload
 premise-validation
 pretooluse-hooks
 prevention
+prevention-infrastructure
 pricing-page
 private-documents
 private_key
@@ -878,6 +941,7 @@ proton-mail
 provenance-tracking
 provider-alias
 provisioner
+proxy-anti-pattern
 prune
 psql
 pure-function-extraction
@@ -892,18 +956,23 @@ queuemicrotask
 quoting
 r2-backend
 race-condition
+race-conditions
 ralph-loop
 rate-limit
 rate-limiting
 react
+react-batching
 react-context
 react-hooks
 react-markdown
 react-select
 readme
 ready-state
+realtime
 reconnection
+recurrence
 recurring $() permission prompts across multiple skills
+recurring-pattern
 red-green-refactor
 red-verification
 redaction
@@ -997,6 +1066,7 @@ scheduled-tasks
 scheduled-workflow
 schema
 schema-code-mismatch
+schema-evolution
 schema-mismatch
 schema-versioning
 scope-boundaries
@@ -1012,8 +1082,11 @@ script-breakout
 scripts
 sdk
 sdk-drift
+sdk-shape
 search
+search-path-pinning
 seccomp
+secret-scanning
 secrets
 secrets-leak
 secrets-management
@@ -1033,7 +1106,10 @@ self-references
 semantic-grouping
 sensitive aggregated findings in public repos
 sentinel
+sentinel-values
 sentry
+sentry-api
+sentry-tagging
 seo
 seo-aeo
 seo-score
@@ -1074,10 +1150,12 @@ shell-scripting
 shell-testing
 shellcheck
 ship
+ship-gate
 shipping
 showdownload
 sidebar-persistence
 sigfpe
+sign-out
 signal-drift
 sigterm
 silent-failure
@@ -1108,6 +1186,7 @@ smoke-tests
 smtp
 social-distribute
 soleur plugin skills
+soleur-go
 soleur-plugin
 spacing
 spawn
@@ -1161,13 +1240,16 @@ subagent-delegation
 subagents
 subprocess
 supabase
+supabase-auth
 supabase-numeric
+supabase-rpc
 supply-chain
 supply-chain-security
 symlink
 sync-command
 synthetic-check-runs
 synthetic-checks
+synthetic-probe
 system-prompt
 systemd
 table-driven-config
@@ -1182,6 +1264,7 @@ tasks
 tasks sent to wrong agent
 tdd
 tdd-edge-cases
+tdd-test-fixtures
 team-names
 teardown
 telemetry
@@ -1194,6 +1277,7 @@ test-coverage-gaps
 test-design
 test-fidelity
 test-fix-loop
+test-fixtures
 test-infrastructure
 test-isolation
 test-mock
@@ -1224,17 +1308,20 @@ token-budget
 token-cache-isolation
 tokenization
 tokenize-restore
+tokentructure
 tool-integration
 tool-path-validation
+tool-tier
 tooling
 transaction-safety
 trap-cleanup
+traversal
 triage
 trigger-logic
+triggers_replace
 truncation
 try-catch-scoping
 tsx
-typcat
 type-filter
 type-safety
 typecheck
@@ -1257,6 +1344,7 @@ url-validation
 useeffect
 user friction for experimental features
 user-confirmation
+user-event
 user-namespace
 user-namespaces
 userouter
@@ -1268,6 +1356,7 @@ ux-design
 ux-design-lead
 ux-gate
 ux-review
+validate-csp
 validation
 vapid
 variable-fonts
@@ -1276,6 +1365,7 @@ vendor-lock-in
 verdict-cache
 verification
 verification-decay
+verification-grep
 version already taken
 version-bump
 version-range
@@ -1299,11 +1389,13 @@ web-push
 webhook
 webhook-api
 webhooks
+webpack
 websocket
 websocket not connected
 websocket-disconnect
 websocket-handler
 welcome-hook
+wire-protocol
 woff2
 word-budget
 work
@@ -1317,6 +1409,7 @@ workflow-edits
 workflow-enforcement
 workflow-gate
 workflow-gates
+workflow-injection
 workflow-issues
 workflow-patterns
 workflow-productization
@@ -1342,6 +1435,7 @@ wrong-skill-count
 x-api
 xargs
 xhr-upload
+xmlhttprequest
 xss
 yagni
 yaml
