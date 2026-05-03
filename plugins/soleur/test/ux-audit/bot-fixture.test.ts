@@ -189,4 +189,51 @@ describeIfCreds("bot-fixture (DB-only v1)", () => {
     expect(row.subscription_status).toBe("none");
     expect(row.tc_accepted_version).toBeNull();
   });
+
+  // Contract test for migration 035: locks in PostgREST's ability to infer
+  // ON CONFLICT against (user_id, session_id). A future migration that
+  // narrows the index back to a partial form (e.g., WHERE archived_at IS
+  // NULL) will fail here with 42P10 before the scheduled cron does.
+  // POST with a bogus user_id so PostgREST fails at the FK (23503), not at
+  // the inference step. 23503 means inference passed; 42P10 means it didn't.
+  test("PostgREST infers ON CONFLICT against (user_id, session_id) without 42P10", async () => {
+    const res = await fetch(
+      `${SUPABASE_URL}/rest/v1/conversations?on_conflict=user_id,session_id`,
+      {
+        method: "POST",
+        headers: {
+          apikey: SERVICE_KEY!,
+          Authorization: `Bearer ${SERVICE_KEY}`,
+          "Content-Type": "application/json",
+          Prefer: "resolution=merge-duplicates",
+        },
+        body: JSON.stringify({
+          user_id: "00000000-0000-0000-0000-000000000000",
+          session_id: "contract-test-probe",
+          domain_leader: "cmo",
+          status: "completed",
+        }),
+      },
+    );
+    if (res.ok) {
+      // Shouldn't happen (FK is bogus), but if Postgres ever accepts the row
+      // we delete it — the contract assertion is "no 42P10", not "no insert".
+      const rows = (await res.json()) as Array<{ id: string }>;
+      if (rows[0]?.id) {
+        await fetch(
+          `${SUPABASE_URL}/rest/v1/conversations?id=eq.${rows[0].id}`,
+          {
+            method: "DELETE",
+            headers: {
+              apikey: SERVICE_KEY!,
+              Authorization: `Bearer ${SERVICE_KEY}`,
+            },
+          },
+        );
+      }
+      return;
+    }
+    const body = (await res.json()) as { code?: string };
+    expect(body.code).not.toBe("42P10");
+  });
 });

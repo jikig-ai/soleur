@@ -1,3 +1,6 @@
+-- Superseded by migration 035 (PostgREST cannot infer ON CONFLICT against
+-- a partial unique index — see knowledge-base/project/plans/2026-05-03-fix-ux-audit-seed-conflict-plan.md).
+--
 -- Unique (user_id, session_id) for PostgREST upsert on conflict.
 -- Partial: session_id is nullable; existing NULL rows must not collide.
 -- Consumer: plugins/soleur/skills/ux-audit/scripts/bot-fixture.ts uses
