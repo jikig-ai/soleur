@@ -1,0 +1,107 @@
+name: "Scheduled (once): Dogfood --once on issue #3049 (cross-tenant Realtime isolation)"
+
+on:
+  schedule:
+    - cron: '0 9 4 5 *'
+  workflow_dispatch: {}
+
+# `actions: write` is required for `gh workflow disable` (D4) inside the agent
+# prompt. Do NOT remove. `id-token: write` is intentionally omitted — one-time
+# fires have no OIDC use case.
+permissions:
+  contents: read
+  issues: write
+  actions: write
+
+concurrency:
+  group: schedule-once-dogfood-once-3049
+  cancel-in-progress: false
+
+env:
+  ISSUE_NUMBER: "3049"
+  COMMENT_ID: "4366397296"
+  FIRE_DATE: "2026-05-04"
+  WORKFLOW_NAME: "scheduled-dogfood-once-3049.yml"
+  EXPECTED_AUTHOR: "deruelle"
+  EXPECTED_CREATED_AT: "2026-05-03T14:29:55Z"
+
+jobs:
+  run-once:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: One-time fire (with self-disable)
+        uses: anthropics/claude-code-action@fefa07e9c665b7320f08c3b525980457f22f58aa # v1
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DOPPLER_TOKEN_SCHEDULED: ${{ secrets.DOPPLER_TOKEN_SCHEDULED }}
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          plugin_marketplaces: 'https://github.com/jikig-ai/soleur.git'
+          plugins: 'soleur@soleur'
+          # --allowedTools mirrors the recurring template (Step 3a). Do NOT
+          # widen — the fire-time prompt is fed an externally-fetched comment
+          # body (D1), so least-privilege tool surface is load-bearing.
+          claude_args: >-
+            --max-turns 25
+            --allowedTools Bash,Read,Write,Edit,Glob,Grep
+          prompt: |
+            ## Pre-flight (abort with observation comment if any check fails)
+
+            1. **Date guard (PRIMARY cross-year defense, D3):**
+               First, refuse to run if `$FIRE_DATE` is empty or malformed:
+               `[[ "$FIRE_DATE" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] || { echo "FIRE_DATE empty or malformed: '$FIRE_DATE'"; gh workflow disable "$WORKFLOW_NAME"; exit 0; }`
+               Then assert the calendar match:
+               `[[ "$(date -u +%F)" == "$FIRE_DATE" ]]` must be true. If false, run
+               `gh workflow disable "$WORKFLOW_NAME"` and exit 0. Take no other action.
+               This is D3, the load-bearing defense against cron `0 9 <day> <month> *`
+               re-firing every year. Cannot fail silently.
+            2. **Idempotency:** if the workflow is in any disabled state, exit 0.
+               `state=$(gh workflow view "$WORKFLOW_NAME" --json state --jq .state)`
+               then `[[ "$state" == "active" ]] || exit 0`.
+            3. **Repo not archived:**
+               `[[ "$(gh repo view --json isArchived --jq .isArchived)" == "false" ]]`.
+            4. **Issue OPEN + same repo:** fetch
+               `gh issue view "$ISSUE_NUMBER" --json state,repository_url`. The state
+               must be OPEN, and `repository_url` must end in `${{ github.repository }}`.
+            5. **Comment exists + matches issue:**
+               `gh api "repos/${{ github.repository }}/issues/comments/$COMMENT_ID" --jq .issue_url`
+               must end in `/issues/$ISSUE_NUMBER`.
+            6. **Comment-author pin (D5, FIRST half):** the comment's author MUST equal `$EXPECTED_AUTHOR`.
+               `actual_author=$(gh api "repos/${{ github.repository }}/issues/comments/$COMMENT_ID" --jq .user.login)`
+               then `[[ "$actual_author" == "$EXPECTED_AUTHOR" ]]`.
+            7. **Comment-immutability pin (D5, SECOND half):** the comment MUST NOT have been edited after authoring.
+               `meta=$(gh api "repos/${{ github.repository }}/issues/comments/$COMMENT_ID" --jq '"\(.created_at)\t\(.updated_at)"')`
+               then verify `created_at == EXPECTED_CREATED_AT` AND `created_at == updated_at`.
+               Reject on mismatch — an edited comment between schedule and fire is the brand-survival vector D5 is designed to catch.
+
+            If ANY pre-flight check fails: post a single observation comment to issue
+            #$ISSUE_NUMBER naming which check failed, then run
+            `gh workflow disable "$WORKFLOW_NAME"` and exit 0. Take no other action.
+
+            ## Task
+
+            Fetch the documented task spec from the referenced comment:
+
+            `body=$(gh api "repos/${{ github.repository }}/issues/comments/$COMMENT_ID" --jq .body)`
+
+            If `$body` is empty (`[[ -z "$body" ]]`), treat as a pre-flight failure: post observation comment "comment body is empty", disable, exit 0.
+
+            Otherwise execute the documented work as instructed by `$body`. When complete, post results as a follow-up comment on issue #$ISSUE_NUMBER (re-verify `gh issue view "$ISSUE_NUMBER" --json repository_url` matches `${{ github.repository }}` immediately before posting — defends against issue-transfer-after-preflight).
+
+            ## Final step (mandatory, last)
+
+            Run `gh workflow disable "$WORKFLOW_NAME"`. This is D4 — the secondary
+            self-disable. D3 (the date guard above) is the primary cross-year defense;
+            disable can fail (token revocation, transient API error), the date guard
+            cannot.
+
+            If `gh workflow disable` returns non-zero, post a follow-up comment to
+            issue #$ISSUE_NUMBER with this exact body:
+            "Workflow ran but auto-disable failed. Manual: gh workflow disable $WORKFLOW_NAME".
+            Do NOT add any post-step to this workflow file — `claude-code-action`
+            revokes the App token after this step, so a YAML-level disable would
+            silently fail.
