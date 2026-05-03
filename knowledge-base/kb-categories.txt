@@ -19,8 +19,8 @@ discovery
 docs-site
 documentation
 engineering
-implementation-patteg
 implementation-patterns
+infrastag
 infrastructure
 integration-issues
 learnings
