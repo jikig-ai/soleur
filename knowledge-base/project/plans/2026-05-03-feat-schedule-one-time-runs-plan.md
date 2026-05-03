@@ -34,18 +34,19 @@ The plan is intentionally small: one file edit, one test file, one dogfood run. 
 
 **Brand-survival threshold:** `single-user incident`. CPO sign-off required at plan time before `/work` begins (covered by brainstorm Phase 0.5 carry-forward). `user-impact-reviewer` will be invoked at review-time per `plugins/soleur/skills/review/SKILL.md`.
 
-## Four Load-Bearing Defenses
+## Five Load-Bearing Defenses
 
-The plan-review consensus stripped the audit-checklist framing in favor of naming the defenses that actually carry the brand-survival weight:
+The plan-review consensus stripped the audit-checklist framing in favor of naming the defenses that actually carry the brand-survival weight. D5 was added during multi-agent review (PR #3067) after `user-impact-reviewer` flagged comment-mutability between schedule and fire as an unaddressed single-user-incident vector.
 
 | # | Defense | What it prevents | Where it lives |
 |---|---------|------------------|----------------|
 | **D1** | Issue+comment ID context reference (no inline prompts) | Token/secret leak via committed YAML | Workflow `env:` block; agent fetches at runtime |
-| **D2** | Fire-time stale-context preamble | Wrong action against drifted state | First steps of agent prompt |
-| **D3** | In-prompt date guard `[[ $(date -u +%F) == "$FIRE_DATE" ]]` | Cross-year re-fire (cron `0 9 17 5 *` repeats every May 17) | First step of agent prompt — **PRIMARY defense** |
-| **D4** | `gh workflow disable` inside agent prompt | Re-fire on next cron tick | Last step of agent prompt — secondary defense |
+| **D2** | Fire-time stale-context preamble (issue OPEN, repo not archived, comment matches issue) | Wrong action against drifted state | First steps of agent prompt |
+| **D3** | In-prompt date guard `[[ $(date -u +%F) == "$FIRE_DATE" ]]` | Cross-year re-fire (cron `0 9 17 5 *` repeats every May 17) | First step of agent prompt — **PRIMARY cross-year defense** |
+| **D4** | `gh workflow disable` inside agent prompt | Same-year re-fire on next cron tick | Last step of agent prompt — secondary defense |
+| **D5** | Comment-author + immutability pin (`EXPECTED_AUTHOR`, `EXPECTED_CREATED_AT` captured at create time, verified in pre-flight) | Attacker edits the comment between schedule and fire to swap the task | Step 0c capture + agent prompt pre-flight checks #6 and #7 |
 
-D3 is primary, D4 is secondary. The plan-review caught that the original framing inverted these — disable can fail, the date guard cannot.
+D3 is primary against cross-year repeats; D4 is secondary (same-year re-fire). D5 closes the comment-mutability gap that D1-D4 alone do not — D1 says the prompt is fetched at runtime, but runtime fetch is mutable.
 
 ## Research Reconciliation — Spec vs. Codebase
 
@@ -304,15 +305,16 @@ None. `gh issue list --label code-review --state open` query against `plugins/so
 
 - [ ] **TS-dogfood:** Create `--once` schedule against an open issue with `--at <today+1>`. Verify fire next day, result comment posted, auto-disable. Comment results on the merged PR. **This is the real regression test** — content-assertions catch deletion, dogfood catches semantic drift.
 
-## Test Scenarios (4 load-bearing)
+## Test Scenarios (5 load-bearing)
 
 | # | Scenario | Type | Defense it guards |
 |---|----------|------|-------------------|
 | TS1 | `gh workflow disable` is LAST instruction inside agent prompt | Content-assertion | D4 (token revocation regression) |
 | TS2 | Date guard `[[ date == FIRE_DATE ]]` is FIRST agent-prompt step | Content-assertion | D3 (cross-year re-fire) |
-| TS3 | Stale-context preamble (OPEN, same-repo, comment-matches) | Content-assertion | D2 (drifted-state action) |
+| TS3 | Stale-context preamble (OPEN, same-repo, comment-matches, idempotency) | Content-assertion | D2 (drifted-state action) |
 | TS4 | Disambiguation section present with examples | Content-assertion | namespace-conflation regression |
-| TS-dogfood | End-to-end fire + result + disable | Post-merge real run | All four defenses (semantic) |
+| TS5 | D5 author-pin + immutability + input regex validators + `--allowedTools` allowlist + FIRE_DATE non-empty guard | Content-assertion | D5 (comment mutability), input-injection, tool-surface widening |
+| TS-dogfood | End-to-end fire + result + disable | Post-merge real run | All five defenses (semantic) |
 
 ## Risks and Mitigations
 

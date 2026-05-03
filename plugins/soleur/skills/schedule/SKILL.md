@@ -47,7 +47,7 @@ Inspect `$ARGUMENTS`:
 
 - If both `--cron` and `--once` are present → error: `Cannot specify both --once and --cron`. Stop.
 - If neither `--cron` nor `--once` is present → error: `Specify either --once <YYYY-MM-DD> or --cron <expression>`. Stop. (No silent default — the operator must declare intent.)
-- If `--once` is present → **one-time mode**. Validate per Step 0c below, then skip to Step 2 → Step 3 (one-time).
+- If `--once` is present → **one-time mode**. Validate per Step 0c below, then skip to Step 2 → Step 3b.
 - If `--cron` is present → **recurring mode**. Continue with Step 0b below.
 
 **Step 0b: Check arguments (recurring mode)**
@@ -56,27 +56,59 @@ If `$ARGUMENTS` contains `--name`, `--skill`, `--cron`, and `--model` flags, ext
 
 **Step 0c: Check arguments (one-time mode)**
 
-For `--once`, all five flags are MANDATORY. There is no AskUserQuestion fallback (Step 1 is recurring-only). Operator-supplied values are required so the workflow file is self-documenting at `delete`/cleanup time:
+For `--once`, all five flags are MANDATORY. There is no AskUserQuestion fallback (Step 1 is recurring-only). Operator-supplied values are required so the workflow file is self-documenting at `delete`/cleanup time. Each value MUST match its regex EXACTLY before substitution into the YAML — these regexes are the load-bearing defense against shell/YAML injection at fire time.
+
+If ANY regex below fails, emit `ERROR: --<flag> value '<value>' does not match required pattern <regex>` to stderr and stop.
 
 - `--once` (mode flag, no value)
-- `--at <YYYY-MM-DD>` — fire date in strict ISO format. Default time = 09:00 UTC. Natural-language dates (`"2 weeks from now"`, `tomorrow`) are intentionally rejected. Validate with:
+- `--at <YYYY-MM-DD>` — strict ISO date pattern `^\d{4}-\d{2}-\d{2}$`. Default time = 09:00 UTC. Natural-language dates (`"2 weeks from now"`, `tomorrow`) and ISO datetimes (`2026-05-17T03:00`) are intentionally rejected. Validate with:
 
   ```bash
   python3 -c "
-  import sys
+  import re, sys
   from datetime import datetime, timezone, timedelta
+  if not re.fullmatch(r'\d{4}-\d{2}-\d{2}', sys.argv[1]):
+      sys.exit(f\"ERROR: --at value '{sys.argv[1]}' does not match required pattern ^\\\d{{4}}-\\\d{{2}}-\\\d{{2}}\$\")
   d = datetime.fromisoformat(sys.argv[1]).replace(tzinfo=timezone.utc)
   now = datetime.now(timezone.utc)
   if d.date() < now.date():
-      sys.exit('--at date is in the past')
+      sys.exit('ERROR: --at date is in the past')
   if (d - now) > timedelta(days=50):
-      sys.exit('--at date is more than 50 days out (GHA auto-disables workflows after 60d inactivity; 10d margin)')
+      sys.exit('ERROR: --at date is more than 50 days out (GHA auto-disables workflows after 60d inactivity; 10d margin)')
   " '<AT_VALUE>'
   ```
 
-- `--issue <N>` — GitHub issue number whose comment carries the task spec.
-- `--comment <id>` — GitHub comment ID containing the documented work to execute. Look it up via `gh api repos/<OWNER>/<REPO>/issues/<N>/comments --jq '.[] | "\(.id) \(.user.login): \(.body | .[0:80])"'` if the operator needs to find it.
-- `--name <kebab-case>` — schedule name (lowercase, digits, hyphens). Reject if `.github/workflows/scheduled-<name>.yml` already exists. There is no `--force` flag in v1.
+- `--issue <N>` — GitHub issue number, pattern `^[1-9][0-9]{0,8}$` (positive integer, no leading zeros, ≤9 digits).
+- `--comment <id>` — GitHub comment ID, pattern `^[1-9][0-9]{0,18}$` (positive int64, no leading zeros). Look it up via `gh api repos/<OWNER>/<REPO>/issues/<N>/comments --jq '.[] | "\(.id) \(.user.login) \(.created_at): \(.body | .[0:80])"'` if the operator needs to find it.
+- `--name <kebab-case>` — schedule name, pattern `^[a-z][a-z0-9-]{0,49}$` (lowercase, leading letter, ≤50 chars). Reject if `.github/workflows/scheduled-<name>.yml` already exists with the exact error:
+
+  ```text
+  ERROR: .github/workflows/scheduled-<name>.yml already exists. Pick a different --name (no --force flag in v1).
+  ```
+
+**Comment integrity capture (D5 — comment-author-pin defense):**
+
+The fire-time agent fetches the task spec from the referenced comment body. If the comment is editable between authoring and fire, an attacker with comment-edit access can rewrite the task — single-user incident vector. Pin the comment at create time:
+
+```bash
+COMMENT_META=$(gh api "repos/${REPO_OWNER_AND_NAME}/issues/comments/${COMMENT_ID}" \
+  --jq '"\(.user.login)\t\(.created_at)\t\(.updated_at)"' 2>/dev/null) || {
+  echo "ERROR: --comment <id> not found or not accessible" >&2; exit 1; }
+
+EXPECTED_AUTHOR=$(echo "$COMMENT_META" | cut -f1)
+COMMENT_CREATED_AT=$(echo "$COMMENT_META" | cut -f2)
+COMMENT_UPDATED_AT=$(echo "$COMMENT_META" | cut -f3)
+
+if [[ "$COMMENT_CREATED_AT" != "$COMMENT_UPDATED_AT" ]]; then
+  echo "ERROR: comment $COMMENT_ID has been edited (created_at != updated_at)." >&2
+  echo "Re-post the task spec as a fresh comment and pass the new --comment <id>." >&2
+  exit 1
+fi
+```
+
+Both `$EXPECTED_AUTHOR` and `$COMMENT_CREATED_AT` are embedded into the workflow's `env:` block (Step 3b) and re-checked by the fire-time pre-flight (D5) — see Step 3b below.
+
+**Default-branch warning:**
 
 If the current branch is not the default branch (`gh repo view --json defaultBranchRef --jq .defaultBranchRef.name`), print a **WARNING** (not an error):
 
@@ -207,7 +239,17 @@ print(f'0 9 {d.day} {d.month} *')
 
 Result is a 5-field cron with explicit single-day + single-month + `*` year (e.g., `0 9 17 5 *`). The `*` year means the cron will repeat every year — the load-bearing **D3 date guard** inside the agent prompt aborts non-target-year fires; **D4 self-disable** as the final agent step revokes the workflow on first successful fire so the cron never matches again. Both defenses must be present.
 
-Create `.github/workflows/scheduled-<NAME>.yml` with this content, replacing all `<PLACEHOLDER>` values:
+**Defenses summary (D1-D5):**
+
+- **D1 — runtime context fetch.** Task spec is fetched from the referenced comment at fire time, never inlined into the committed YAML. Prevents secret leak via committed prompt.
+- **D2 — stale-context preamble.** Pre-flight verifies issue OPEN, repo not archived, comment matches issue. Prevents wrong action against drifted state.
+- **D3 — in-prompt date guard (PRIMARY).** `[[ $(date -u +%F) == $FIRE_DATE ]]` aborts cross-year re-fires. Cannot fail silently.
+- **D4 — in-prompt self-disable (SECONDARY).** `gh workflow disable` as the LAST instruction inside the agent prompt. Same-year re-fire defense (cron `0 9 17 5 *` matches every May 17 forever otherwise). MUST live inside the prompt — `claude-code-action` revokes its App token AFTER the step, so a post-step YAML-level disable would 403.
+- **D5 — comment-author + immutability pin.** `EXPECTED_AUTHOR` and `EXPECTED_CREATED_AT` env vars are captured at create time (Step 0c) and re-checked in pre-flight. Prevents "attacker edits the comment between create and fire to swap the task" — the brand-survival single-user-incident vector that D1-D4 alone do not cover.
+
+Create `.github/workflows/scheduled-<NAME>.yml` with this content, replacing all `<PLACEHOLDER>` values. The HTML markers `<!-- once-template-begin -->` / `<!-- once-template-end -->` below frame the canonical template; the test suite extracts between them, so do NOT add new fences inside the markers and do NOT remove them.
+
+<!-- once-template-begin -->
 
 ```yaml
 name: "Scheduled (once): <DISPLAY_NAME>"
@@ -217,6 +259,9 @@ on:
     - cron: '<ONE_TIME_CRON>'
   workflow_dispatch: {}
 
+# `actions: write` is required for `gh workflow disable` (D4) inside the agent
+# prompt. Do NOT remove. `id-token: write` is intentionally omitted — one-time
+# fires have no OIDC use case.
 permissions:
   contents: read
   issues: write
@@ -231,9 +276,11 @@ env:
   COMMENT_ID: "<id>"
   FIRE_DATE: "<YYYY-MM-DD>"
   WORKFLOW_NAME: "scheduled-<NAME>.yml"
+  EXPECTED_AUTHOR: "<COMMENT_AUTHOR_LOGIN>"
+  EXPECTED_CREATED_AT: "<COMMENT_CREATED_AT>"
 
 jobs:
-  fire:
+  run-once:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -248,15 +295,23 @@ jobs:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           plugin_marketplaces: 'https://github.com/<REPO_OWNER>/<REPO_NAME>.git'
           plugins: 'soleur@soleur'
-          claude_args: "--max-turns 25"
+          # --allowedTools mirrors the recurring template (Step 3a). Do NOT
+          # widen — the fire-time prompt is fed an externally-fetched comment
+          # body (D1), so least-privilege tool surface is load-bearing.
+          claude_args: >-
+            --max-turns 25
+            --allowedTools Bash,Read,Write,Edit,Glob,Grep
           prompt: |
             ## Pre-flight (abort with observation comment if any check fails)
 
-            1. **Date guard (PRIMARY cross-year defense):**
+            1. **Date guard (PRIMARY cross-year defense, D3):**
+               First, refuse to run if `$FIRE_DATE` is empty or malformed:
+               `[[ "$FIRE_DATE" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] || { echo "FIRE_DATE empty or malformed: '$FIRE_DATE'"; gh workflow disable "$WORKFLOW_NAME"; exit 0; }`
+               Then assert the calendar match:
                `[[ "$(date -u +%F)" == "$FIRE_DATE" ]]` must be true. If false, run
                `gh workflow disable "$WORKFLOW_NAME"` and exit 0. Take no other action.
                This is D3, the load-bearing defense against cron `0 9 <day> <month> *`
-               re-firing every year.
+               re-firing every year. Cannot fail silently.
             2. **Idempotency:** if the workflow is in any disabled state, exit 0.
                `state=$(gh workflow view "$WORKFLOW_NAME" --json state --jq .state)`
                then `[[ "$state" == "active" ]] || exit 0`.
@@ -266,8 +321,15 @@ jobs:
                `gh issue view "$ISSUE_NUMBER" --json state,repository_url`. The state
                must be OPEN, and `repository_url` must end in `${{ github.repository }}`.
             5. **Comment exists + matches issue:**
-               `gh api repos/${{ github.repository }}/issues/comments/$COMMENT_ID --jq .issue_url`
+               `gh api "repos/${{ github.repository }}/issues/comments/$COMMENT_ID" --jq .issue_url`
                must end in `/issues/$ISSUE_NUMBER`.
+            6. **Comment-author pin (D5, FIRST half):** the comment's author MUST equal `$EXPECTED_AUTHOR`.
+               `actual_author=$(gh api "repos/${{ github.repository }}/issues/comments/$COMMENT_ID" --jq .user.login)`
+               then `[[ "$actual_author" == "$EXPECTED_AUTHOR" ]]`.
+            7. **Comment-immutability pin (D5, SECOND half):** the comment MUST NOT have been edited after authoring.
+               `meta=$(gh api "repos/${{ github.repository }}/issues/comments/$COMMENT_ID" --jq '"\(.created_at)\t\(.updated_at)"')`
+               then verify `created_at == EXPECTED_CREATED_AT` AND `created_at == updated_at`.
+               Reject on mismatch — an edited comment between schedule and fire is the brand-survival vector D5 is designed to catch.
 
             If ANY pre-flight check fails: post a single observation comment to issue
             #$ISSUE_NUMBER naming which check failed, then run
@@ -277,10 +339,11 @@ jobs:
 
             Fetch the documented task spec from the referenced comment:
 
-            `gh api repos/${{ github.repository }}/issues/comments/$COMMENT_ID --jq .body`
+            `body=$(gh api "repos/${{ github.repository }}/issues/comments/$COMMENT_ID" --jq .body)`
 
-            Execute the documented work. When complete, post results as a follow-up
-            comment on issue #$ISSUE_NUMBER.
+            If `$body` is empty (`[[ -z "$body" ]]`), treat as a pre-flight failure: post observation comment "comment body is empty", disable, exit 0.
+
+            Otherwise execute the documented work as instructed by `$body`. When complete, post results as a follow-up comment on issue #$ISSUE_NUMBER (re-verify `gh issue view "$ISSUE_NUMBER" --json repository_url` matches `${{ github.repository }}` immediately before posting — defends against issue-transfer-after-preflight).
 
             ## Final step (mandatory, last)
 
@@ -297,15 +360,20 @@ jobs:
             silently fail.
 ```
 
+<!-- once-template-end -->
+
 YAML write verification (one-time mode — same primitive as recurring, additional asserts on the one-time-specific env block):
 
 ```bash
 python3 -c "
-import sys, yaml
+import re, sys, yaml
 d = yaml.safe_load(open(sys.argv[1]))
 assert d['on']['schedule'][0]['cron'] == '<ONE_TIME_CRON>', 'cron mismatch'
 assert d['env']['ISSUE_NUMBER'] == '<N>', 'ISSUE_NUMBER mismatch'
-assert d['env']['FIRE_DATE'] == '<YYYY-MM-DD>', 'FIRE_DATE mismatch'
+assert re.fullmatch(r'\d{4}-\d{2}-\d{2}', d['env']['FIRE_DATE']), 'FIRE_DATE empty or malformed'
+assert d['env']['FIRE_DATE'] == '<YYYY-MM-DD>', 'FIRE_DATE substitution mismatch'
+assert d['env'].get('EXPECTED_AUTHOR'), 'EXPECTED_AUTHOR missing (D5 author-pin defense)'
+assert d['env'].get('EXPECTED_CREATED_AT'), 'EXPECTED_CREATED_AT missing (D5 immutability pin)'
 assert d['permissions']['actions'] == 'write', 'actions:write missing (gh workflow disable will fail)'
 " .github/workflows/scheduled-<NAME>.yml
 ```
@@ -367,7 +435,7 @@ If the run fails, diagnose the issue, fix the workflow file, and re-run. Do not 
 
 Display all existing scheduled workflows, distinguishing recurring from one-time by cron shape.
 
-If `$ARGUMENTS` contains `--json`, output a JSON array with `name`, `cron`, `mode`, and `skill` fields. Otherwise display a formatted list with a mode tag.
+If `$ARGUMENTS` contains `--json`, output a JSON array with `name`, `cron`, `mode` (string: `"recurring"` or `"one-time"`), and `skill` fields. Otherwise display a formatted list with a mode tag.
 
 ```bash
 ls .github/workflows/scheduled-*.yml 2>/dev/null
@@ -375,9 +443,9 @@ ls .github/workflows/scheduled-*.yml 2>/dev/null
 
 If no files found, display: "No scheduled workflows found."
 
-For each file, extract the cron expression and classify by shape:
+For each file, extract the cron expression and classify by shape. The shape definition below is canonical — if Step 3b ever changes the generated cron pattern, update this classifier in the same edit:
 
-- 5-field cron with explicit single-day-of-month + single-month + `*` year (e.g., `0 9 17 5 *`) → `[one-time]`.
+- 5-field cron with explicit single integer for minute, hour, day-of-month, AND month, with `*` for year (e.g., `0 9 17 5 *`) → `[one-time]`.
 - Anything else → `[recurring]`.
 
 Mode detection (per file):
