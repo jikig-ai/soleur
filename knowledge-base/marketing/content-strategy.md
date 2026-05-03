@@ -226,6 +226,7 @@ All content maps to one of four pillars. Each pillar targets a specific audience
 | One Chat, 8 Departments: How We Built Domain Routing with Claude Haiku | Technical deep-dive | 2,000-2,500 | P1 | Month 1. Gap 13. Multi-leader streaming, assessment question classification, Map-based multiplexing. |
 | Why We Wrote 20 Architecture Decision Records for an AI Platform | Thought leadership | 1,500-2,000 | P2 | Month 2. Gap 13. ADR template with Cost Impacts, C4 diagrams, architecture-as-code skill. |
 | 53 Issues in 3 Days: When Agentic Code Review Defaults Compound Silently | Post-mortem / case study | 1,500-2,000 | P1 | Month 2 (scheduled after PR #2375 bakes 3-5 days). Issue #2399. Hook: "Our code-review agents filed 53 GitHub issues in 3 days. The bug wasn't the agents — it was one default in our skill definitions." Lesson: audit the defaults, not the agents. Target channels: blog primary, X/Twitter thread, HN submission Tue-Thu. |
+| When Plan-Time Review Misses What Run-Time Review Catches: A One-Time-Schedule Story | Post-mortem / case study | 1,500-2,000 | P2 | Month 2 (after PR #3067 bakes 5-7 days, dogfood completes). Issue #3108. Hook: "A 3-reviewer plan-time pass approved a one-time scheduling feature with 4 defenses. The 11-agent run-time review found a 5th defense was load-bearing — comment-mutability between authoring and fire." Lesson: `Brand-survival = single-user incident` requires `user-impact-reviewer` in the panel; "no inline prompts" and "runtime content integrity" are independent invariants. Companion: `soleur:schedule --once` ships the D1-D5 defense stack. Target channels: blog primary, X/Twitter thread, Discord, LinkedIn. |
 
 ### Pillar 3: Competitive Positioning
 
@@ -309,6 +310,7 @@ This calendar complements the perpetual cadence above. It defines what to write 
 | May 12-18 | Publish Soleur vs Polsia. Write "Why We Wrote 20 ADRs" (Gap 13, P2). | 6-8 | Comparison live + ADR thought leadership |
 | May 19-25 | Write "One-Person Billion-Dollar Company" (high social distribution potential). Distribution + analytics review. | 6-8 | Draft + status check |
 | Apr 20-22 (post-PR #2375 bake) | Draft "53 Issues in 3 Days" post-mortem (Issue #2399, Pillar 2). Cite 3-5 days of Phase 5.5 gate evidence. | 3-4 | Blog draft + X thread + HN submission plan |
+| May 12-15 (post-PR #3067 bake + dogfood) | Draft "When Plan-Time Review Misses What Run-Time Review Catches" post-mortem (Issue #3108, Pillar 2). Cite the D1→D5 defense expansion and the user-impact-reviewer-only catch. Companion announcement: `soleur:schedule --once` is GA. | 3-4 | Blog draft + announcement post + X thread + LinkedIn |
 
 ### Month 3 (May 21 - June 20, 2026): Long-Tail + Off-Site
 
@@ -424,4 +426,4 @@ All article URLs distributed via social-distribute use platform-specific UTM par
 
 ---
 
-_Updated: 2026-03-22 (business validation delivery pivot annotation). Sources: content-plan.md (2026-03-17), content-audit.md (2026-03-17), aeo-audit.md (2026-03-17), seo-audit.md (2026-03-17), competitive-intelligence.md (2026-03-22), brand-guide.md (2026-03-22), business-validation.md (2026-03-22)._
+_Updated: 2026-05-03 (added Issue #3108: schedule --once + multi-agent-review D5 narrative). Previously: 2026-03-22 (business validation delivery pivot annotation). Sources: content-plan.md (2026-03-17), content-audit.md (2026-03-17), aeo-audit.md (2026-03-17), seo-audit.md (2026-03-17), competitive-intelligence.md (2026-03-22), brand-guide.md (2026-03-22), business-validation.md (2026-03-22)._
