@@ -135,11 +135,15 @@ async function upsertConversation(
   // resolution=merge-duplicates compiles to `ON CONFLICT ... DO UPDATE
   // SET col = EXCLUDED.col` for every column in the body. Leaving
   // `created_at` out preserves the original insert timestamp on re-seed.
-  // The partial unique index excludes NULL session_id rows (see migration 028);
-  // an empty or missing sessionId would bypass the conflict target and race.
+  // The non-partial unique index `uniq_conversations_user_id_session_id_total`
+  // (migration 035) is the arbiter — PostgREST cannot infer a partial unique
+  // index because it does not emit the index's WHERE predicate. With NULLS
+  // DISTINCT (Postgres default) multiple (user_id, NULL) rows coexist, so an
+  // empty sessionId would defeat merge-duplicates and silently insert a new
+  // row on every re-seed.
   if (!sessionId) {
     throw new Error(
-      `upsertConversation requires a non-empty sessionId (partial unique index excludes NULLs)`,
+      `upsertConversation requires a non-empty sessionId (NULLs would bypass merge-duplicates and insert duplicate rows)`,
     );
   }
   const res = await sbFetch(

@@ -189,4 +189,82 @@ describeIfCreds("bot-fixture (DB-only v1)", () => {
     expect(row.subscription_status).toBe("none");
     expect(row.tc_accepted_version).toBeNull();
   });
+
+  // Contract test for migration 035: locks in PostgREST's ability to infer
+  // ON CONFLICT against (user_id, session_id). A future migration that
+  // narrows the index back to a partial form (e.g., WHERE archived_at IS
+  // NULL) will fail here with 42P10 before the scheduled cron does.
+  //
+  // Runs only under Doppler prd_scheduled (issue #2361). Plugin CI test-all
+  // is always skipped because Supabase creds are not injected — failures
+  // surface in the scheduled-ux-audit cron, not on PR merge.
+  //
+  // POST with a random bogus user_id so PostgREST fails at the FK (23503),
+  // not at the inference step. 23503 means inference passed; 42P10 means
+  // it didn't. Asserting positive 23503 (rather than negative `not 42P10`)
+  // also distinguishes "inference works" from "auth/network died with no
+  // body.code at all" — both would silently pass the negative form.
+  test("PostgREST infers ON CONFLICT against (user_id, session_id) returns FK rejection (23503)", async () => {
+    expect(SUPABASE_URL).toBeTruthy();
+    expect(SERVICE_KEY).toBeTruthy();
+
+    const probeUserId = crypto.randomUUID();
+    const probeSessionId = `contract-test-probe-${crypto.randomUUID()}`;
+    let insertedRowId: string | undefined;
+    try {
+      const res = await fetch(
+        `${SUPABASE_URL}/rest/v1/conversations?on_conflict=user_id,session_id`,
+        {
+          method: "POST",
+          headers: {
+            apikey: SERVICE_KEY!,
+            Authorization: `Bearer ${SERVICE_KEY}`,
+            "Content-Type": "application/json",
+            Prefer: "return=representation,resolution=merge-duplicates",
+          },
+          body: JSON.stringify({
+            user_id: probeUserId,
+            session_id: probeSessionId,
+            domain_leader: "cmo",
+            status: "completed",
+          }),
+        },
+      );
+      if (res.ok) {
+        // Shouldn't happen — probeUserId is a fresh random UUID with no row
+        // in auth.users, so the FK must reject. If it ever resolves, capture
+        // the row id so the finally block can clean it up before re-throwing
+        // a loud failure (silent success on this path would mask a real
+        // regression in either the FK constraint or the random UUID).
+        const rows = (await res.json()) as Array<{ id?: string }>;
+        insertedRowId = rows[0]?.id;
+        throw new Error(
+          `expected FK rejection (23503), got ${res.status} OK with row ${insertedRowId ?? "<no id>"}`,
+        );
+      }
+      const body = (await res.json()) as { code?: string };
+      expect(body.code).toBe("23503");
+    } finally {
+      // Defense in depth: if anything inserted under the probe session id,
+      // delete it. Runs even if the random UUID happened to resolve a real
+      // user or if assertions threw mid-test.
+      const del = await fetch(
+        `${SUPABASE_URL}/rest/v1/conversations?session_id=eq.${probeSessionId}`,
+        {
+          method: "DELETE",
+          headers: {
+            apikey: SERVICE_KEY!,
+            Authorization: `Bearer ${SERVICE_KEY}`,
+          },
+        },
+      );
+      if (!del.ok && del.status !== 404) {
+        // Surface cleanup failures so leaked probe rows don't accumulate
+        // silently across runs.
+        console.warn(
+          `[contract-test cleanup] DELETE conversations?session_id=eq.${probeSessionId} returned ${del.status}`,
+        );
+      }
+    }
+  });
 });

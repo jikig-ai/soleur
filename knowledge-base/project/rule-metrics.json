@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "generated_at": "2026-04-26T01:18:53Z",
+  "generated_at": "2026-05-03T01:25:34Z",
   "rules": [
     {
       "id": "cm-challenge-reasoning-instead-of",
@@ -42,7 +42,7 @@
       "rule_text_prefix": "When proposing to clear context or resume from a f"
     },
     {
-      "id": "cq-abort-signal-timeout-vs-fake-timers",
+      "id": "cq-agents-md-tier-gate",
       "section": "Code Quality",
       "hit_count": 0,
       "bypass_count": 0,
@@ -52,7 +52,7 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": "For test-friendly timeout-bounded async helpers, u"
+      "rule_text_prefix": "When editing AGENTS.md, apply the placement gate ["
     },
     {
       "id": "cq-agents-md-why-single-line",
@@ -81,7 +81,7 @@
       "rule_text_prefix": "Before pushing `package.json` changes, verify deps"
     },
     {
-      "id": "cq-ci-steps-polling-json-endpoints-under",
+      "id": "cq-eleventy-critical-css-screenshot-gate",
       "section": "Code Quality",
       "hit_count": 0,
       "bypass_count": 0,
@@ -91,228 +91,7 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": "CI steps polling JSON endpoints under `bash -e` mu"
-    },
-    {
-      "id": "cq-claude-code-action-pin-freshness",
-      "section": "Code Quality",
-      "hit_count": 0,
-      "bypass_count": 0,
-      "applied_count": 0,
-      "warn_count": 0,
-      "fire_count": 0,
-      "prevented_errors": 0,
-      "last_hit": null,
-      "first_seen": null,
-      "rule_text_prefix": "When a PR changes `--model <name>` in `.github/wor"
-    },
-    {
-      "id": "cq-cloudflare-block-ai-bots-not-skippable",
-      "section": "Code Quality",
-      "hit_count": 0,
-      "bypass_count": 0,
-      "applied_count": 0,
-      "warn_count": 0,
-      "fire_count": 0,
-      "prevented_errors": 0,
-      "last_hit": null,
-      "first_seen": null,
-      "rule_text_prefix": "Cloudflare's zone-level \"Block AI bots\" feature (`"
-    },
-    {
-      "id": "cq-cloudflare-dynamic-path-cache-rule-required",
-      "section": "Code Quality",
-      "hit_count": 0,
-      "bypass_count": 0,
-      "applied_count": 0,
-      "warn_count": 0,
-      "fire_count": 0,
-      "prevented_errors": 0,
-      "last_hit": null,
-      "first_seen": null,
-      "rule_text_prefix": "For Cache-Control on dynamic paths (opaque tokens,"
-    },
-    {
-      "id": "cq-cloudflare-provider-alias-for-narrow-scope",
-      "section": "Code Quality",
-      "hit_count": 0,
-      "bypass_count": 0,
-      "applied_count": 0,
-      "warn_count": 0,
-      "fire_count": 0,
-      "prevented_errors": 0,
-      "last_hit": null,
-      "first_seen": null,
-      "rule_text_prefix": "When a single Cloudflare terraform resource needs "
-    },
-    {
-      "id": "cq-cloudflare-ruleset-requires-applied-verification",
-      "section": "Code Quality",
-      "hit_count": 0,
-      "bypass_count": 0,
-      "applied_count": 0,
-      "warn_count": 0,
-      "fire_count": 0,
-      "prevented_errors": 0,
-      "last_hit": null,
-      "first_seen": null,
-      "rule_text_prefix": "PRs modifying `cloudflare_ruleset` must include ei"
-    },
-    {
-      "id": "cq-cloudflare-ruleset-skip-action-requires-logging-block",
-      "section": "Code Quality",
-      "hit_count": 0,
-      "bypass_count": 0,
-      "applied_count": 0,
-      "warn_count": 0,
-      "fire_count": 0,
-      "prevented_errors": 0,
-      "last_hit": null,
-      "first_seen": null,
-      "rule_text_prefix": "Every `cloudflare_ruleset` rule with `action = \"sk"
-    },
-    {
-      "id": "cq-code-comments-symbol-anchors-not-line-numbers",
-      "section": "Code Quality",
-      "hit_count": 0,
-      "bypass_count": 0,
-      "applied_count": 0,
-      "warn_count": 0,
-      "fire_count": 0,
-      "prevented_errors": 0,
-      "last_hit": null,
-      "first_seen": null,
-      "rule_text_prefix": "Code comments referencing other code MUST use grep"
-    },
-    {
-      "id": "cq-deploy-webhook-observability-debug",
-      "section": "Code Quality",
-      "hit_count": 0,
-      "bypass_count": 0,
-      "applied_count": 0,
-      "warn_count": 0,
-      "fire_count": 0,
-      "prevented_errors": 0,
-      "last_hit": null,
-      "first_seen": null,
-      "rule_text_prefix": "For deploy webhook debugging, fetch `WEBHOOK_DEPLO"
-    },
-    {
-      "id": "cq-destructive-prod-tests-allowlist",
-      "section": "Code Quality",
-      "hit_count": 0,
-      "bypass_count": 0,
-      "applied_count": 0,
-      "warn_count": 0,
-      "fire_count": 0,
-      "prevented_errors": 0,
-      "last_hit": null,
-      "first_seen": null,
-      "rule_text_prefix": "Tests that DELETE from shared production must gate"
-    },
-    {
-      "id": "cq-docs-cli-verification",
-      "section": "Code Quality",
-      "hit_count": 0,
-      "bypass_count": 0,
-      "applied_count": 0,
-      "warn_count": 0,
-      "fire_count": 0,
-      "prevented_errors": 0,
-      "last_hit": null,
-      "first_seen": null,
-      "rule_text_prefix": "When prescribing a CLI invocation that lands in us"
-    },
-    {
-      "id": "cq-doppler-service-tokens-are-per-config",
-      "section": "Code Quality",
-      "hit_count": 0,
-      "bypass_count": 0,
-      "applied_count": 0,
-      "warn_count": 0,
-      "fire_count": 0,
-      "prevented_errors": 0,
-      "last_hit": null,
-      "first_seen": null,
-      "rule_text_prefix": "Doppler service tokens are per-config — use config"
-    },
-    {
-      "id": "cq-for-local-verification-of-apps-doppler",
-      "section": "Code Quality",
-      "hit_count": 0,
-      "bypass_count": 0,
-      "applied_count": 0,
-      "warn_count": 0,
-      "fire_count": 0,
-      "prevented_errors": 0,
-      "last_hit": null,
-      "first_seen": null,
-      "rule_text_prefix": "For local verification of env-var-reading apps, us"
-    },
-    {
-      "id": "cq-for-production-debugging-use",
-      "section": "Code Quality",
-      "hit_count": 0,
-      "bypass_count": 0,
-      "applied_count": 0,
-      "warn_count": 0,
-      "fire_count": 0,
-      "prevented_errors": 0,
-      "last_hit": null,
-      "first_seen": null,
-      "rule_text_prefix": "For production debugging use Sentry API (`SENTRY_A"
-    },
-    {
-      "id": "cq-git-askpass-over-shell-helper",
-      "section": "Code Quality",
-      "hit_count": 0,
-      "bypass_count": 0,
-      "applied_count": 0,
-      "warn_count": 0,
-      "fire_count": 0,
-      "prevented_errors": 0,
-      "last_hit": null,
-      "first_seen": null,
-      "rule_text_prefix": "Never use `git -c credential.helper=!<path>` in se"
-    },
-    {
-      "id": "cq-in-worktrees-run-vitest-via-node-node",
-      "section": "Code Quality",
-      "hit_count": 0,
-      "bypass_count": 0,
-      "applied_count": 0,
-      "warn_count": 0,
-      "fire_count": 0,
-      "prevented_errors": 0,
-      "last_hit": null,
-      "first_seen": null,
-      "rule_text_prefix": "In worktrees, run vitest via `node node_modules/vi"
-    },
-    {
-      "id": "cq-jsdom-no-layout-gated-assertions",
-      "section": "Code Quality",
-      "hit_count": 0,
-      "bypass_count": 0,
-      "applied_count": 0,
-      "warn_count": 0,
-      "fire_count": 0,
-      "prevented_errors": 0,
-      "last_hit": null,
-      "first_seen": null,
-      "rule_text_prefix": "Never gate a jsdom test assertion on layout-engine"
-    },
-    {
-      "id": "cq-mutation-assertions-pin-exact-post-state",
-      "section": "Code Quality",
-      "hit_count": 0,
-      "bypass_count": 0,
-      "applied_count": 0,
-      "warn_count": 0,
-      "fire_count": 0,
-      "prevented_errors": 0,
-      "last_hit": null,
-      "first_seen": null,
-      "rule_text_prefix": "Assertions verifying a mutation (seed, update, del"
+      "rule_text_prefix": "Selectors rendered above the fold on the Eleventy "
     },
     {
       "id": "cq-nextjs-route-files-http-only-exports",
@@ -328,7 +107,7 @@
       "rule_text_prefix": "App Router route files (`apps/*/app/**/route.{ts,t"
     },
     {
-      "id": "cq-pencil-mcp-silent-drop-diagnosis-checklist",
+      "id": "cq-pg-security-definer-search-path-pin-pg-temp",
       "section": "Code Quality",
       "hit_count": 0,
       "bypass_count": 0,
@@ -338,85 +117,7 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": "When a Pencil MCP op appears to \"silently drop\" or"
-    },
-    {
-      "id": "cq-playwright-mcp-uses-isolated-mode-mcp",
-      "section": "Code Quality",
-      "hit_count": 0,
-      "bypass_count": 0,
-      "applied_count": 0,
-      "warn_count": 0,
-      "fire_count": 0,
-      "prevented_errors": 0,
-      "last_hit": null,
-      "first_seen": null,
-      "rule_text_prefix": "Playwright MCP uses `--isolated` mode (`.mcp.json`"
-    },
-    {
-      "id": "cq-preflight-fetch-sweep-test-mocks",
-      "section": "Code Quality",
-      "hit_count": 0,
-      "bypass_count": 0,
-      "applied_count": 0,
-      "warn_count": 0,
-      "fire_count": 0,
-      "prevented_errors": 0,
-      "last_hit": null,
-      "first_seen": null,
-      "rule_text_prefix": "When a component gains a pre-flight fetch (HEAD, O"
-    },
-    {
-      "id": "cq-progressive-rendering-for-large-assets",
-      "section": "Code Quality",
-      "hit_count": 0,
-      "bypass_count": 0,
-      "applied_count": 0,
-      "warn_count": 0,
-      "fire_count": 0,
-      "prevented_errors": 0,
-      "last_hit": null,
-      "first_seen": null,
-      "rule_text_prefix": "When a feature loads large assets (PDFs, videos, i"
-    },
-    {
-      "id": "cq-prose-issue-ref-line-start",
-      "section": "Code Quality",
-      "hit_count": 0,
-      "bypass_count": 0,
-      "applied_count": 0,
-      "warn_count": 0,
-      "fire_count": 0,
-      "prevented_errors": 0,
-      "last_hit": null,
-      "first_seen": null,
-      "rule_text_prefix": "In prose with GitHub references (`#NNNN`), never l"
-    },
-    {
-      "id": "cq-provider-binary-grep-before-dashboard-reflex",
-      "section": "Code Quality",
-      "hit_count": 0,
-      "bypass_count": 0,
-      "applied_count": 0,
-      "warn_count": 0,
-      "fire_count": 0,
-      "prevented_errors": 0,
-      "last_hit": null,
-      "first_seen": null,
-      "rule_text_prefix": "Before proposing any dashboard step for a CF/vendo"
-    },
-    {
-      "id": "cq-raf-batching-sweep-test-helpers",
-      "section": "Code Quality",
-      "hit_count": 0,
-      "bypass_count": 0,
-      "applied_count": 0,
-      "warn_count": 0,
-      "fire_count": 0,
-      "prevented_errors": 0,
-      "last_hit": null,
-      "first_seen": null,
-      "rule_text_prefix": "When introducing `requestAnimationFrame`/`queueMic"
+      "rule_text_prefix": "Postgres `SECURITY DEFINER` functions MUST pin `SE"
     },
     {
       "id": "cq-ref-removal-sweep-cleanup-closures",
@@ -458,32 +159,6 @@
       "rule_text_prefix": "When a code path catches an error (or detects a de"
     },
     {
-      "id": "cq-terraform-failed-apply-orphaned-state",
-      "section": "Code Quality",
-      "hit_count": 0,
-      "bypass_count": 0,
-      "applied_count": 0,
-      "warn_count": 0,
-      "fire_count": 0,
-      "prevented_errors": 0,
-      "last_hit": null,
-      "first_seen": null,
-      "rule_text_prefix": "After a failed `terraform apply`, run `terraform s"
-    },
-    {
-      "id": "cq-test-mocked-module-constant-import",
-      "section": "Code Quality",
-      "hit_count": 0,
-      "bypass_count": 0,
-      "applied_count": 0,
-      "warn_count": 0,
-      "fire_count": 0,
-      "prevented_errors": 0,
-      "last_hit": null,
-      "first_seen": null,
-      "rule_text_prefix": "Before extracting a constant for drift-resistance,"
-    },
-    {
       "id": "cq-union-widening-grep-three-patterns",
       "section": "Code Quality",
       "hit_count": 0,
@@ -495,45 +170,6 @@
       "last_hit": null,
       "first_seen": null,
       "rule_text_prefix": "When widening a discriminated union, grep **three*"
-    },
-    {
-      "id": "cq-vitest-setup-file-hook-scope",
-      "section": "Code Quality",
-      "hit_count": 0,
-      "bypass_count": 0,
-      "applied_count": 0,
-      "warn_count": 0,
-      "fire_count": 0,
-      "prevented_errors": 0,
-      "last_hit": null,
-      "first_seen": null,
-      "rule_text_prefix": "Vitest setup-file hooks run per-test, not per-file"
-    },
-    {
-      "id": "cq-when-lefthook-hangs-in-a-worktree-60s",
-      "section": "Code Quality",
-      "hit_count": 0,
-      "bypass_count": 0,
-      "applied_count": 0,
-      "warn_count": 0,
-      "fire_count": 0,
-      "prevented_errors": 0,
-      "last_hit": null,
-      "first_seen": null,
-      "rule_text_prefix": "When lefthook hangs in a worktree (>60s), kill (`p"
-    },
-    {
-      "id": "cq-workflow-pattern-duplication-bug-propagation",
-      "section": "Code Quality",
-      "hit_count": 0,
-      "bypass_count": 0,
-      "applied_count": 0,
-      "warn_count": 0,
-      "fire_count": 0,
-      "prevented_errors": 0,
-      "last_hit": null,
-      "first_seen": null,
-      "rule_text_prefix": "When extending a GitHub Actions workflow by duplic"
     },
     {
       "id": "cq-write-failing-tests-before",
@@ -601,6 +237,19 @@
       "rule_text_prefix": "Before shipping, `/ship` Phase 5.5 runs conditiona"
     },
     {
+      "id": "hr-dev-prd-distinct-supabase-projects",
+      "section": "Hard Rules",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "applied_count": 0,
+      "warn_count": 0,
+      "fire_count": 0,
+      "prevented_errors": 0,
+      "last_hit": null,
+      "first_seen": null,
+      "rule_text_prefix": "Doppler `dev` and `prd` configs MUST resolve to di"
+    },
+    {
       "id": "hr-every-new-terraform-root-must-include-an",
       "section": "Hard Rules",
       "hit_count": 0,
@@ -627,19 +276,6 @@
       "rule_text_prefix": "Exhaust all automated options before suggesting ma"
     },
     {
-      "id": "hr-github-actions-workflow-notifications",
-      "section": "Hard Rules",
-      "hit_count": 0,
-      "bypass_count": 0,
-      "applied_count": 0,
-      "warn_count": 0,
-      "fire_count": 0,
-      "prevented_errors": 0,
-      "last_hit": null,
-      "first_seen": null,
-      "rule_text_prefix": "GitHub Actions workflow notifications must use ema"
-    },
-    {
       "id": "hr-github-api-endpoints-with-enum",
       "section": "Hard Rules",
       "hit_count": 0,
@@ -651,19 +287,6 @@
       "last_hit": null,
       "first_seen": null,
       "rule_text_prefix": "GitHub API endpoints with enum parameters require "
-    },
-    {
-      "id": "hr-in-github-actions-run-blocks-never-use",
-      "section": "Hard Rules",
-      "hit_count": 0,
-      "bypass_count": 0,
-      "applied_count": 0,
-      "warn_count": 0,
-      "fire_count": 0,
-      "prevented_errors": 0,
-      "last_hit": null,
-      "first_seen": null,
-      "rule_text_prefix": "In GitHub Actions `run:` blocks, never use heredoc"
     },
     {
       "id": "hr-mcp-tools-playwright-etc-resolve-paths",
@@ -692,7 +315,7 @@
       "rule_text_prefix": "For destructive writes against shared prod (terraf"
     },
     {
-      "id": "hr-never-fake-git-author",
+      "id": "hr-never-git-add-a-in-user-repo-agents",
       "section": "Hard Rules",
       "hit_count": 0,
       "bypass_count": 0,
@@ -702,7 +325,7 @@
       "prevented_errors": 0,
       "last_hit": null,
       "first_seen": null,
-      "rule_text_prefix": "Never pass `-c user.email=<fake>` / `-c user.name="
+      "rule_text_prefix": "In connected-repo agent code paths (`apps/web-plat"
     },
     {
       "id": "hr-never-git-stash-in-worktrees",
@@ -809,6 +432,19 @@
       "rule_text_prefix": "The host terminal is Warp. Do not attempt automate"
     },
     {
+      "id": "hr-weigh-every-decision-against-target-user-impact",
+      "section": "Hard Rules",
+      "hit_count": 0,
+      "bypass_count": 0,
+      "applied_count": 0,
+      "warn_count": 0,
+      "fire_count": 0,
+      "prevented_errors": 0,
+      "last_hit": null,
+      "first_seen": null,
+      "rule_text_prefix": "Every plan/PR touching credentials, auth, data, pa"
+    },
+    {
       "id": "hr-when-a-command-exits-non-zero-or-prints",
       "section": "Hard Rules",
       "hit_count": 0,
@@ -859,19 +495,6 @@
       "last_hit": null,
       "first_seen": null,
       "rule_text_prefix": "When in a worktree, never read from bare repo path"
-    },
-    {
-      "id": "hr-when-playwright-mcp-hits-an-auth-wall",
-      "section": "Hard Rules",
-      "hit_count": 0,
-      "bypass_count": 0,
-      "applied_count": 0,
-      "warn_count": 0,
-      "fire_count": 0,
-      "prevented_errors": 0,
-      "last_hit": null,
-      "first_seen": null,
-      "rule_text_prefix": "When Playwright MCP hits an auth wall, keep the ta"
     },
     {
       "id": "hr-when-triaging-a-batch-of-issues-never",
@@ -1095,19 +718,6 @@
       "rule_text_prefix": "Every session error MUST produce a rule, skill edi"
     },
     {
-      "id": "wg-for-user-facing-pages-with-a-product-ux",
-      "section": "Workflow Gates",
-      "hit_count": 0,
-      "bypass_count": 0,
-      "applied_count": 0,
-      "warn_count": 0,
-      "fire_count": 0,
-      "prevented_errors": 0,
-      "last_hit": null,
-      "first_seen": null,
-      "rule_text_prefix": "For user-facing pages with a Product/UX Gate, spec"
-    },
-    {
       "id": "wg-never-bump-version-files-in-feature",
       "section": "Workflow Gates",
       "hit_count": 0,
@@ -1132,45 +742,6 @@
       "last_hit": null,
       "first_seen": null,
       "rule_text_prefix": "Use `Closes #N` in PR **body** (not title) to auto"
-    },
-    {
-      "id": "wg-when-a-feature-creates-external",
-      "section": "Workflow Gates",
-      "hit_count": 0,
-      "bypass_count": 0,
-      "applied_count": 0,
-      "warn_count": 0,
-      "fire_count": 0,
-      "prevented_errors": 0,
-      "last_hit": null,
-      "first_seen": null,
-      "rule_text_prefix": "When a feature creates external resources (Cloud t"
-    },
-    {
-      "id": "wg-when-a-feature-stores-user-generated",
-      "section": "Workflow Gates",
-      "hit_count": 0,
-      "bypass_count": 0,
-      "applied_count": 0,
-      "warn_count": 0,
-      "fire_count": 0,
-      "prevented_errors": 0,
-      "last_hit": null,
-      "first_seen": null,
-      "rule_text_prefix": "When a feature stores user-generated content, veri"
-    },
-    {
-      "id": "wg-when-a-pr-includes-database-migrations",
-      "section": "Workflow Gates",
-      "hit_count": 0,
-      "bypass_count": 0,
-      "applied_count": 0,
-      "warn_count": 0,
-      "fire_count": 0,
-      "prevented_errors": 0,
-      "last_hit": null,
-      "first_seen": null,
-      "rule_text_prefix": "When a PR includes database migrations (`supabase/"
     },
     {
       "id": "wg-when-a-test-runner-crashes-segfault-oom",
@@ -1291,8 +862,8 @@
     }
   ],
   "summary": {
-    "total_rules_tagged": 99,
-    "rules_unused_over_8w": 99,
+    "total_rules_tagged": 66,
+    "rules_unused_over_8w": 66,
     "rules_bypassed_over_baseline": 0,
     "orphan_rule_ids": []
   }
