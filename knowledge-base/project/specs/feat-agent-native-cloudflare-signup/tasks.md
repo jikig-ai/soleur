@@ -131,9 +131,11 @@ Derived from `knowledge-base/project/plans/2026-05-03-feat-agent-native-cloudfla
 
 ## Deferred follow-on issues (created at plan-finalize per `wg-when-deferring-a-capability-create-a`)
 
-- [ ] D1 WebAuthn step-up for cap-raise / future high-risk actions (re-evaluation: auditor request OR cap-raise UX gap)
-- [ ] D2 Hash-chain tamper-evidence for `vendor_actions_audit` (re-evaluation: ≥1k audit rows OR auditor request)
-- [ ] D3 Async export job + CSV format for `/audit-log/export` (re-evaluation: first user hits 10MB/10k-row cap)
-- [ ] D4 Tiered cold-tier audit retention (R2 object-lock + cold-migration job) (re-evaluation: table approaches 1M rows OR 18 months)
-- [ ] D5 Hourly reconciliation cron for orphan-class failures (re-evaluation: first orphan incident reveals failure class inline detection can't cover)
-- [ ] D6 Automated 11-month Stripe Connect refresh-token re-prompt cron (re-evaluation: first user OAuth + 11 months ≈ Q2 2027)
+All 6 tracked under "Post-MVP / Later" milestone, parent #3106.
+
+- [x] D1 #3109 — WebAuthn step-up for cap-raise / future high-risk actions
+- [x] D2 #3110 — Hash-chain tamper-evidence for `vendor_actions_audit`
+- [x] D3 #3111 — Async export job + CSV format for `/audit-log/export`
+- [x] D4 #3112 — Tiered cold-tier audit retention (R2 object-lock + cold-migration job)
+- [x] D5 #3113 — Hourly reconciliation cron for orphan-class failures
+- [x] D6 #3114 — Automated 11-month Stripe Connect refresh-token re-prompt cron
