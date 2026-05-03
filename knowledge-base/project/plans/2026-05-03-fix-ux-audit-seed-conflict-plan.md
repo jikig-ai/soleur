@@ -8,6 +8,24 @@ requires_cpo_signoff: false
 
 # fix(ux-audit): bot-fixture seed fails with 42P10 on partial unique index
 
+## Enhancement Summary
+
+**Deepened on:** 2026-05-03
+**Sections enhanced:** Problem (root-cause confirmation), Acceptance Criteria (DDL precision), Research Insights (Postgres + PostgREST authoritative quotes), Sharp Edges (live-probe rule clarified)
+**Sources cited:** Live prd Supabase repro (this session), PostgreSQL 17 `INSERT ON CONFLICT` docs (via Context7), PostgREST `on_conflict` + `resolution=merge-duplicates` docs (via Context7)
+
+### Key Improvements (post-deepen)
+
+1. Postgres docs explicitly confirm the bug: `index_predicate` (the `WHERE is_active`-style clause after the column list) is the documented mechanism for partial-index inference, and PostgREST does NOT generate it. The Postgres example in `/websites/postgresql_17/sql-insert.html` makes this unambiguous: `INSERT ... ON CONFLICT (did) WHERE is_active DO NOTHING;` — the `WHERE` is mandatory for partial-index inference.
+2. PostgREST docs (`/postgrest/postgrest`) speak only of "columns with a UNIQUE constraint" — partial unique indexes are nowhere mentioned as supported. The prior plan's reading was a false-confidence inference from doc silence.
+3. The migration number `035` is confirmed free (last applied: `034_conversations_messages_realtime_publication.sql`).
+4. The non-partial unique index swap is safe: existing prod has 14 NULL `session_id` rows including two users with 6 each — Postgres NULLS DISTINCT default preserves them.
+
+### Gates
+
+- Phase 4.5 (network-outage deep-dive): N/A. Plan addresses a Postgres SQLSTATE error, not an SSH/network/timeout symptom. No infrastructure provisioner triggers.
+- Phase 4.6 (User-Brand Impact halt): PASS. Section present, threshold `none` with valid scope-out reason for sensitive-path diff. No telemetry emitted on pass.
+
 ## Problem
 
 The Scheduled UX Audit workflow (`.github/workflows/scheduled-ux-audit.yml`) has been failing on every run since 2026-05-01 (run id 25210899975 and subsequent). The failing step is `Seed bot fixture (DB-only v1)`, which invokes `plugins/soleur/skills/ux-audit/scripts/bot-fixture.ts seed`. The script POSTs to:
@@ -287,6 +305,32 @@ This is an infrastructure/tooling fix to an internal CI loop. No domain leaders 
 
 `knowledge-base/project/plans/2026-04-18-fix-bot-fixture-hardening-plan.md` line 20 claims `on_conflict=<cols>` resolves against any unique index "**including a partial unique index**". The plan's evidence chain was "Supabase docs confirm; no live probe required." The actual PostgREST behavior is documented in PostgREST's own source comments and PostgreSQL's `INSERT ... ON CONFLICT` docs: index inference for partial indexes requires the INSERT to provide the index's WHERE predicate, which the PostgREST query planner does not synthesize. The corollary lesson — captured in the Phase 4 learning file — is that any plan asserting external-vendor query-inference behavior must include a live probe at plan time. This is a stricter form of the existing `cq-...-plan-ac-external-state-must-be-api-verified` pattern, applied to query-shape claims rather than just config-state claims.
 
+### Authoritative documentation (verified live via Context7, 2026-05-03)
+
+**Postgres 17 `INSERT ... ON CONFLICT` docs** (`/websites/postgresql_17`, source: <https://www.postgresql.org/docs/17/sql-insert.html>):
+
+> `index_predicate` — Partial unique indexes can be inferred by specifying an index predicate. Any index that satisfies the predicate, including non-partial indexes, can be used as an arbiter. This requires SELECT privileges on any columns used within the predicate expression.
+
+The corresponding example makes the syntactic requirement explicit:
+
+```sql
+-- This statement could infer a partial unique index on "did"
+-- with a predicate of "WHERE is_active", but it could also
+-- just use a regular unique constraint on "did"
+INSERT INTO distributors (did, dname) VALUES (10, 'Conrad International')
+    ON CONFLICT (did) WHERE is_active DO NOTHING;
+```
+
+The `WHERE is_active` clause AFTER the conflict target column list is mandatory for the partial-index path. There is no syntactic shortcut. The corollary: any client (PostgREST, supabase-js, postgrest-py, postgrest-go) that wants to upsert via a partial unique index must emit that predicate. None of them do.
+
+**PostgREST docs** (`/postgrest/postgrest`, source: <https://github.com/postgrest/postgrest/blob/main/docs/references/api/tables_views.md>):
+
+> By specifying the `on_conflict` query parameter, you can make upsert work on a column(s) that has a UNIQUE constraint.
+
+PostgREST docs only mention "UNIQUE constraint" — partial indexes are nowhere in scope. Combined with the Postgres docs above, this confirms PostgREST does not synthesize the `WHERE` predicate, and the inference therefore cannot pick a partial index. The 42P10 we observed live is the exact symptom that PostgreSQL emits when no arbiter index satisfies the inference rules.
+
+**PostgREST error mapping** (same source): Postgres 23503 (FK violation) → HTTP 409, 23505 (unique violation) → HTTP 409. Note that 42P10 ("no unique or exclusion constraint matching the ON CONFLICT specification") is also surfaced as a 409 by PostgREST, which is why the failing CI step shows `409` in the response status. This is the inverse of what one might expect — a 409 here is an inference failure, not a constraint violation.
+
 ### Related learnings
 
 - `knowledge-base/project/learnings/integration-issues/2026-04-18-supabase-migration-concurrently-forbidden.md` — confirms the `CONCURRENTLY` forbidden-in-transaction pattern that 035 also obeys.
@@ -306,6 +350,8 @@ This is an infrastructure/tooling fix to an internal CI loop. No domain leaders 
 - **`CONCURRENTLY` is not used.** Supabase's migration runner wraps each migration in a transaction, and `CREATE INDEX CONCURRENTLY` is forbidden inside a transaction (SQLSTATE 25001 — see learning `2026-04-18-supabase-migration-concurrently-forbidden.md`). The `conversations` table is small enough (~1k rows on prod, per 028.sql line 11) that a blocking build is acceptable. Migrations 025, 027, 028 follow the same pattern.
 - **Doppler `prd` and `prd_scheduled` deliberately point at the same Supabase project.** `hr-dev-prd-distinct-supabase-projects` requires `dev != prd`; it does NOT require `prd != prd_scheduled`. `prd_scheduled` is a scoped-down Doppler config for CI (fewer secrets, narrower service tokens), not a separate environment. Confirmed live this session.
 - **Live-probe rule for query-shape claims.** When a future plan asserts that PostgREST (or any other ORM/query layer) resolves a particular query construct against a particular DDL shape, the plan MUST include a live-probe step that exercises the exact request shape against the target database stack. Documentation alone is insufficient — PostgREST's behavior here is documented but the prior plan's reading of those docs was wrong.
+- **PostgREST does not expose a `ON CONSTRAINT <name>` form.** Postgres supports `INSERT ... ON CONFLICT ON CONSTRAINT <name> DO ...` as an alternative arbiter that bypasses index inference. PostgREST's HTTP API does not expose a parameter for this — `on_conflict=<col-list>` is the only path, and it always goes through index inference. So "name the constraint instead" is not an available escape hatch. Migration 035's non-partial unique index is the only viable fix at the API layer this codebase uses.
+- **Do not number this migration `035` from a different feature branch concurrently.** The repo has historical 029-collisions (`029_conversations_repo_url.sql` and `029_plan_tier_and_concurrency_slots.sql`). If another feature branch is preparing migration 035 in parallel, rebase one of them to 036 in the `/work` phase — the Supabase migration runner uses filename-prefix ordering and a duplicate prefix is not necessarily fatal but adds review noise. Verify via `git fetch origin && git log --all --oneline --since='14 days ago' -- apps/web-platform/supabase/migrations/`.
 
 ## References
 
