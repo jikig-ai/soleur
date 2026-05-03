@@ -17,14 +17,23 @@
 -- CONCURRENTLY is forbidden inside the Supabase migration transaction
 -- (SQLSTATE 25001). Matches 025, 027, 028 precedent.
 --
+-- Realtime/replication: index-only change. Postgres logical replication and
+-- the supabase_realtime publication are table-level; REPLICA IDENTITY is a
+-- table-level setting. Index DDL is transparent to subscribers — no resync,
+-- no missed events.
+--
 -- Consumer: plugins/soleur/skills/ux-audit/scripts/bot-fixture.ts
 -- upsertConversation() POSTs to
 -- /rest/v1/conversations?on_conflict=user_id,session_id with
--- Prefer: resolution=merge-duplicates.
+-- Prefer: resolution=merge-duplicates. (Today the only consumer; grep
+-- before adding more.)
 --
 -- Rollback: drop index if exists public.uniq_conversations_user_id_session_id_total;
---           recreate the partial index from 028 (and accept that the bot
---           fixture seed will start failing again with 42P10).
+--           recreate the partial index from 028. Before rolling back, audit
+--           any new consumer using on_conflict=user_id,session_id (grep
+--           apps/** plugins/**) — non-bot upserts added after this migration
+--           would silently lose merge-duplicates semantics under the partial
+--           form (PostgREST cannot infer partial indexes → 42P10).
 
 drop index if exists public.uniq_conversations_user_id_session_id;
 

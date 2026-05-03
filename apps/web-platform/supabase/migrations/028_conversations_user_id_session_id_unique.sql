@@ -1,5 +1,9 @@
 -- Superseded by migration 035 (PostgREST cannot infer ON CONFLICT against
 -- a partial unique index — see knowledge-base/project/plans/2026-05-03-fix-ux-audit-seed-conflict-plan.md).
+-- The "fixture-only crutch" framing below is also retired: 035's non-partial
+-- index is a real uniqueness invariant on (user_id, session_id) that any
+-- non-null upsert must respect (NULLS DISTINCT preserves the existing NULL
+-- rows; see 035 header).
 --
 -- Unique (user_id, session_id) for PostgREST upsert on conflict.
 -- Partial: session_id is nullable; existing NULL rows must not collide.

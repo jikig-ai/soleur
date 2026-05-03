@@ -73,7 +73,11 @@ Locked in by `bot-fixture.test.ts` "PostgREST infers ON CONFLICT against (user_i
 
 ## Lessons
 
-1. **Live-probe rule for query-shape claims.** When a plan asserts that PostgREST (or any other ORM/query layer) resolves a particular query construct against a particular DDL shape, the plan MUST include a live-probe step that exercises the exact request shape against the target database stack. The prior plan (`2026-04-18-fix-bot-fixture-hardening-plan.md` line 20) asserted "no live probe required; Supabase docs confirm" partial-index support. Both halves were wrong: the docs do not confirm it, and the live probe (when finally run by the first cron firing on 2026-05-01) returned 42P10. Documentation silence is not documentation support.
+1. **Live-probe rule for query-shape claims.** When a plan asserts that PostgREST (or any other ORM/query layer) resolves a particular query construct against a particular DDL shape, the plan MUST include a live-probe step that exercises the exact request shape against the target database stack. The prior plan (`knowledge-base/project/plans/2026-04-18-fix-bot-fixture-hardening-plan.md`) made the exact opposite call — verbatim:
+
+   > "PostgREST upsert conflict-target explicitly verified. `on_conflict=<cols>` resolves against any unique constraint or unique index that exactly matches those columns — **including a partial unique index**. ... No live probe required; Supabase docs confirm."
+
+   Both halves were wrong: the docs do not confirm it (PostgREST docs only describe "columns with a UNIQUE constraint" — partial indexes are nowhere in scope), and the live probe (when finally run by the first cron firing on 2026-05-01) returned 42P10. Documentation silence is not documentation support. The "no live probe required" sentence is the exact phrase to grep for in future plans — its presence is a smell.
 2. **Follow-through SLA-exceeded items that verify load-bearing post-merge invariants are not deferrable.** Issues #2584 ("verify migration 028 partial unique index applied to prod") and #2585 ("run scheduled-ux-audit.yml dry-run to exercise upsert + concurrency") were filed 2026-04-18, both flagged `needs-attention`, and both still open at the time of failure. The cron's first natural firing was the verification step those issues called for — and it failed. Issue tracker SLAs need to distinguish "nice-to-do follow-through" from "this is the verification that would have caught a regression already in main."
 
 ## References
