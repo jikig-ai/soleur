@@ -37,7 +37,6 @@ jobs:
         uses: anthropics/claude-code-action@fefa07e9c665b7320f08c3b525980457f22f58aa # v1
         env:
           GH_TOKEN: ${{ github.token }}
-          DOPPLER_TOKEN_SCHEDULED: ${{ secrets.DOPPLER_TOKEN_SCHEDULED }}
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           plugin_marketplaces: 'https://github.com/jikig-ai/soleur.git'
