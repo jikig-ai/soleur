@@ -284,21 +284,21 @@ None. `gh issue list --label code-review --state open` query against `plugins/so
 
 ### Pre-merge (PR)
 
-- [ ] `--once`, `--at`, `--issue`, `--comment`, `--name` flags implemented in SKILL.md (all mandatory for `--once`)
-- [ ] Mode mutex enforced (`--cron` + `--once` together → error; neither → error)
-- [ ] `--at` validation: ISO YYYY-MM-DD only; reject past; reject >50 days; reject collision
-- [ ] One-time YAML template includes `actions: write` permission, `FIRE_DATE` env var, date guard as FIRST prompt step, `gh workflow disable` as LAST prompt step
-- [ ] Stale-context preamble in agent prompt: OPEN issue + same repo + comment matches issue + repo not archived
-- [ ] `list` distinguishes `[recurring]` vs `[one-time]` by cron shape
-- [ ] Disambiguation section "When to use this skill vs harness `schedule`" present in SKILL.md
-- [ ] Known-limitations section names default-branch + cron-variance + 50-day-cap
-- [ ] `plugins/soleur/test/schedule-skill-once.test.sh` passes (4 scenarios)
-- [ ] `bun test plugins/soleur/test/components.test.ts` passes (skill description budget unchanged)
-- [ ] No regression in recurring path (existing 22 scheduled workflows unaffected)
-- [ ] CPO sign-off recorded
-- [ ] `user-impact-reviewer` invoked at review time and findings addressed
-- [ ] 4 follow-up issues filed (connected-repo, prune, list state, template extraction)
-- [ ] PR body contains `Closes #3094` and `Ref #3093` and `Ref #3096`
+- [x] `--once`, `--at`, `--issue`, `--comment`, `--name` flags implemented in SKILL.md (all mandatory for `--once`)
+- [x] Mode mutex enforced (`--cron` + `--once` together → error; neither → error)
+- [x] `--at` validation: ISO YYYY-MM-DD only; reject past; reject >50 days; reject collision
+- [x] One-time YAML template includes `actions: write` permission, `FIRE_DATE` env var, date guard as FIRST prompt step, `gh workflow disable` as LAST prompt step
+- [x] Stale-context preamble in agent prompt: OPEN issue + same repo + comment matches issue + repo not archived
+- [x] `list` distinguishes `[recurring]` vs `[one-time]` by cron shape
+- [x] Disambiguation section "When to use this skill vs harness `schedule`" present in SKILL.md
+- [x] Known-limitations section names default-branch + cron-variance + 50-day-cap
+- [x] `plugins/soleur/test/schedule-skill-once.test.sh` passes (4 scenarios — 14 assertions)
+- [x] `bun test plugins/soleur/test/components.test.ts` passes (skill description budget unchanged — 1013 pass)
+- [x] No regression in recurring path (existing scheduled workflows unaffected — Step 3a unchanged structurally)
+- [ ] CPO sign-off recorded (deferred to /ship)
+- [ ] `user-impact-reviewer` invoked at review time and findings addressed (deferred to /review)
+- [x] 4 follow-up issues filed (#3101 connected-repo, #3102 prune, #3103 list state, #3104 template extraction)
+- [ ] PR body contains `Closes #3094` and `Ref #3093` and `Ref #3096` (deferred to /ship)
 
 ### Post-merge (operator)
 
