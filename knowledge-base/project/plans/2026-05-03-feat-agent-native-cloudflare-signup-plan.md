@@ -17,15 +17,17 @@ date: 2026-05-03
 
 # Plan: Agent-Native Cloudflare Signup via Stripe Projects (Consumer Side)
 
-## Sprint Re-Evaluation — OPEN FOR USER DECISION
+## Sprint Re-Evaluation — RESOLVED 2026-05-03 → (a) Bundle all-at-once
 
-The deepen-plan pass (8 parallel agents) invalidated two v1 substrate choices and elevated three deferrals into v1 blockers. The revised surface area is ~1.5–2x the post-review plan. **Operator must confirm one of:**
+The deepen-plan pass (8 parallel agents) invalidated two v1 substrate choices and elevated three deferrals into v1 blockers. The revised surface area is ~1.5–2x the post-review plan.
 
-- **(a) Bundle all-at-once, accept timeline 3w → 4–5w**, slip the 14-day first-mover window. Land the right plan; ship the launch post retroactively.
-- **(b) Phased: ship US-only Stripe Projects MVP behind feature flag** with reduced surface (Stripe Secret Store + Shared Payment Tokens MUST land in v1; the polish cuts — async-progress UX, Redis status cache, mandate-ceiling re-consent surface — defer to a fast-follow PR), hit the 14-day launch post window. Risk: launch post claims a capability that's still being completed.
-- **(c) Hold the launch post**, write the plan correctly, ship in 4–5 weeks.
+**Decision:** **(a) Bundle all-at-once, accept timeline 3w → 4–5w.** Slip the 14-day first-mover window. Land the right plan; ship the launch post retroactively.
 
-Until this is resolved, the phase day-numbers below assume (a). Pick (b) or (c) and the implementation phases retitle accordingly.
+**Rationale:** the deepen pass *just* upgraded three items from "deferral" to "v1 blocker," signaling surface area is still expanding under inspection. A 14-day phased ship under a feature flag — where Stripe Secret Store + Shared Payment Tokens still must land, plus polish cuts that touch consent UX and rate-limit cache — is the configuration that historically produces the silent-fallback / cross-tenant class of incident this plan exists to prevent. A launch post that "claims a capability still being completed" is a brand commitment with no rollback. (a) trades the first-mover window for plan correctness; the post ships retroactively.
+
+Phase day-numbers below stand as written.
+
+**Rejected:** (b) phased — flag-gated MVP with polish cuts deferred to fast-follow. Risk: launch post claims a capability still being completed; surface is still expanding under inspection. (c) hold launch post — same engineering shape as (a) but loses the post entirely; (a) keeps the post on a retroactive sequence.
 
 ## Overview
 
