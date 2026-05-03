@@ -3,6 +3,7 @@ date: 2026-05-03
 category: integration-issues
 tags: [postgrest, postgres, supabase, on-conflict, partial-index, ux-audit, migrations]
 related: [PR #2584, #2585, scheduled-ux-audit run 25210899975]
+synced_to: [plan]
 ---
 
 # PostgREST cannot infer ON CONFLICT against a partial unique index
@@ -79,6 +80,11 @@ Locked in by `bot-fixture.test.ts` "PostgREST infers ON CONFLICT against (user_i
 
    Both halves were wrong: the docs do not confirm it (PostgREST docs only describe "columns with a UNIQUE constraint" — partial indexes are nowhere in scope), and the live probe (when finally run by the first cron firing on 2026-05-01) returned 42P10. Documentation silence is not documentation support. The "no live probe required" sentence is the exact phrase to grep for in future plans — its presence is a smell.
 2. **Follow-through SLA-exceeded items that verify load-bearing post-merge invariants are not deferrable.** Issues #2584 ("verify migration 028 partial unique index applied to prod") and #2585 ("run scheduled-ux-audit.yml dry-run to exercise upsert + concurrency") were filed 2026-04-18, both flagged `needs-attention`, and both still open at the time of failure. The cron's first natural firing was the verification step those issues called for — and it failed. Issue tracker SLAs need to distinguish "nice-to-do follow-through" from "this is the verification that would have caught a regression already in main."
+
+## Session Errors
+
+- **Bash CWD persistence confusion.** Several Bash calls in the work phase chained `cd apps/web-platform && cmd`. The first call's `cd` persisted across calls (Bash tool keeps CWD), then a follow-up `cd apps/web-platform && npx tsc` failed with "No such file or directory" because CWD was already there. Subsequent `npx tsc --noEmit` returned empty output that initially looked like a hang. **Recovery:** ran `pwd` to ground truth, then re-ran `npx tsc --noEmit; echo "EXIT=$?"` to confirm exit 0. **Prevention:** prefer fully self-contained `cd <abs-path> && cmd` chains in a single Bash call (or `cd /home/jean/.../<expected> && cmd`) rather than relying on persistence assumptions; always anchor at the start of each Bash call when CWD matters. Adjacent to the existing `bun test cwd anchor from worktree` learning (PR #2683 — same root failure mode).
+- **First Edit on `bot-fixture.ts` rejected.** "File has not been read yet." The file was read very early in the session (initial discovery), but by the time the Edit fired (after a long planning subagent ran), the read had aged out of the read-tracking window. **Recovery:** re-read with `Read`, then `Edit` succeeded. **Prevention:** AGENTS.md `hr-always-read-a-file-before-editing-it` already covers this and explicitly mentions context compaction — already-enforced. No new rule.
 
 ## References
 
