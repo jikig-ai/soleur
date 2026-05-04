@@ -137,6 +137,48 @@ but the root cause (slot held by an archived conversation) was invisible
 to anyone without the slot-ledger schema in their head. A free-tier
 prospect would treat this as broken-product-on-day-one.
 
+## Session Errors
+
+1. **Worktree creation reported success but produced no worktree.**
+   `worktree-manager.sh --yes create feat-one-shot-cc-conversation-limit-not-released-on-archive`
+   printed `✓ Worktree created successfully!` followed by the target path, but
+   neither `git worktree list` nor the filesystem showed any artifact. The
+   long branch name was the likely trigger (filesystem path-length, branch-name
+   sanitization, or a swallowed error in the post-create install step).
+   **Recovery:** retried with a shorter slug `feat-cc-conversation-limit-archive`;
+   succeeded immediately.
+   **Prevention:** `worktree-manager.sh` should verify creation via
+   `git worktree list --porcelain | grep -qx "branch refs/heads/$BRANCH"` before
+   exiting 0. A silent success is worse than a loud failure here — the
+   agent acted on the success message and the next `cd` failed with a
+   confusing `No such file or directory`.
+
+2. **`psql` not installed locally; AC13 dev rehearsal not executable in
+   the agent shell.** The agent shell has no sudo per
+   `hr-the-bash-tool-runs-in-a-non-interactive`, and `SUPABASE_DB_URL` is
+   absent from Doppler dev (present only in `prd`). The standard runbook
+   command (`bash apps/web-platform/scripts/run-migrations.sh`) errored
+   with `psql not found on PATH`.
+   **Recovery:** deferred to AC14 (post-merge operator + CI). The
+   `migrate` job in `web-platform-release.yml` applies migrations to prd
+   automatically, so the user-reported scenario will be fixed at deploy
+   time without operator action.
+   **Prevention:** discoverable — error was loud and immediate. No
+   AGENTS.md rule warranted. Skill-level enhancement worth considering:
+   `/soleur:plan` could detect migration-bearing plans and surface a
+   pre-flight that `psql` is reachable, or that the supabase MCP is
+   authenticated.
+
+3. **Bash tool does not persist CWD across calls.** Initial `cd
+   apps/web-platform && supabase db push` worked, but a follow-up call
+   to `vitest` ran from the worktree root because shell state doesn't
+   carry over between Bash invocations.
+   **Recovery:** chained `cd <dir> && <cmd>` in a single Bash call.
+   **Prevention:** already covered by the existing learning
+   `2026-04-19-admin-ip-drift-misdiagnosed-as-fail2ban.md` and the
+   skill-level guidance in `work/SKILL.md` Phase 2. Discoverability
+   exit applies.
+
 ## Generalizable principle
 
 When a value's lifecycle (acquire / use / release) is enforced by a
