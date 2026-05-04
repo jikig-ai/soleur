@@ -27,6 +27,58 @@ title = "Soleur secret-scan floor"
 useDefault = true
 
 # ---------------------------------------------------------------------------
+# Top-level allowlist — historical-triage paths (issue #3194)
+# ---------------------------------------------------------------------------
+# Surfaced by the post-merge full-tree scan in PR #3129 (the gate's first
+# `push:main` run): 18 historical findings across test runners and
+# documentation. Each was triaged in #3194 and confirmed synthesized or
+# false-positive (placeholder JWTs with `.sig` signatures, RFC-example nonces,
+# Tailwind class lists, BEGIN-header documentation comments, local Docker
+# fixture URLs). No real credentials, no rotation needed.
+#
+# This block silences ALL rules — including default-pack — for the listed
+# paths. That diverges intentionally from the per-rule fixture allowlists
+# below (`__goldens__/`, `__synthesized__/`, etc.), which deliberately let
+# default-pack rules fire so a stray AWS key in a fixture is still caught.
+# Rationale for the wider scope here:
+#
+#   - `apps/web-platform/(infra|test)/.*\.test\.(sh|ts)$` — integration test
+#     runners that craft synthesized JWTs and tokens to exercise scrubbers,
+#     claim checks, and HTTP fixtures. Real prod tokens have no purpose
+#     here; if one slipped in, the lefthook `lint-fixture-content` gate and
+#     GitHub push protection both still scan independently.
+#   - `knowledge-base/(plans|project/plans|project/specs)/.*\.md$` — plan
+#     and spec documentation. Plans frequently quote synthesized fixtures
+#     verbatim when documenting test-setup or remediation steps; specs
+#     reference Tailwind class lists and other non-secret token-shaped
+#     content. Real prod tokens have no purpose here; CODEOWNERS review
+#     covers content review.
+#   - `plugins/soleur/skills/.*/references/.*\.md$` — skill reference docs
+#     that include example connection strings (`postgres://user:pass@host`).
+#     Same low-motive argument; same compensating controls.
+#
+# Compensating controls (defense in depth):
+#   1. `lefthook lint-fixture-content` — independently scans the same paths
+#      for semi-sensitive shapes (real emails, prod-shape UUIDs, project refs).
+#   2. GitHub push protection — server-side scan for well-known token shapes
+#      (Doppler, AWS, Stripe, GitHub PAT, etc.) regardless of allowlist.
+#   3. CODEOWNERS — protects `.gitleaks.toml`, `secret-scan.yml`, and
+#      `lint-fixture-content.mjs` so this allowlist cannot be widened
+#      without 2nd-reviewer approval.
+#
+# To add a NEW path: triage individually first (synthesized vs real), prefer
+# moving to `apps/web-platform/test/__synthesized__/` (already allowlisted
+# per-rule) over widening this block. Per-line `# gitleaks:allow # issue:#NNN`
+# waivers remain the preferred mechanism for one-off cases in source paths.
+[allowlist]
+description = "Triage paths from issue #3194 — synthesized fixtures and doc examples in tests/plans/specs/refs"
+paths = [
+  '''apps/web-platform/(?:infra|test)/.*\.test\.(?:sh|ts)$''',
+  '''knowledge-base/(?:plans|project/(?:plans|specs))/.*\.md$''',
+  '''plugins/soleur/skills/.*/references/.*\.md$''',
+]
+
+# ---------------------------------------------------------------------------
 # 1. Soleur BYOK provider key
 # ---------------------------------------------------------------------------
 [[rules]]
