@@ -1,5 +1,6 @@
 import { test, expect } from "@playwright/test";
 import { EMAIL_OTP_LENGTH } from "../lib/auth/constants";
+import { SIGNUP_REASON_NO_ACCOUNT } from "../lib/auth/error-messages";
 
 // ---------- OTP Login Flow Tests ----------
 // These test the email OTP sign-in flow end-to-end.
@@ -119,6 +120,103 @@ test.describe("OTP callback error handling", () => {
     });
     expect(response.status()).toBe(307);
     expect(response.headers()["location"]).toContain("/login");
+  });
+});
+
+test.describe("Login no-account redirect", () => {
+  test("submitting unknown email on /login redirects to /signup with prefill + banner", async ({
+    page,
+  }) => {
+    // Mock Supabase OTP endpoint to return otp_disabled.
+    // Verified shape against `node_modules/@supabase/auth-js/src/lib/fetch.ts:65-69` —
+    // client reads `data.code` first, falls back to `data.error_code`. Status is 400
+    // per `errors.ts:47` AuthApiError constructor convention.
+    await page.route("**/auth/v1/otp*", (route) =>
+      route.fulfill({
+        status: 400,
+        contentType: "application/json",
+        body: JSON.stringify({
+          code: "otp_disabled",
+          error_code: "otp_disabled",
+          msg: "Signups not allowed for otp",
+          message: "Signups not allowed for otp",
+        }),
+      }),
+    );
+
+    await page.goto("/login");
+    const html = await page.content();
+    test.skip(
+      html.includes('statusCode":500'),
+      "Dev server CSS compilation error",
+    );
+
+    const email = "no-account@example.com";
+    await page
+      .getByRole("textbox", { name: /you@example.com/i })
+      .fill(email);
+    await page.getByRole("button", { name: /send sign-in code/i }).click();
+
+    // Expect navigation to /signup with email + reason params
+    await page.waitForURL(
+      new RegExp(`/signup\\?.*reason=${SIGNUP_REASON_NO_ACCOUNT}`),
+      { timeout: 5_000 },
+    );
+    expect(page.url()).toContain(`email=${encodeURIComponent(email)}`);
+
+    // Email is prefilled
+    const emailInput = page.getByRole("textbox", {
+      name: /you@example.com/i,
+    });
+    await expect(emailInput).toHaveValue(email);
+
+    // Banner is visible
+    await expect(page.getByRole("status")).toContainText(
+      /no Soleur account found/i,
+    );
+    await expect(page.getByRole("status")).toContainText(email);
+
+    // Banner dismisses on edit (derived from `email !== initialEmail`)
+    await emailInput.fill(`${email}-edit`);
+    await expect(page.getByRole("status")).toHaveCount(0);
+  });
+
+  test("/signup with unknown reason value does NOT show the banner", async ({
+    page,
+  }) => {
+    await page.goto(
+      `/signup?email=${encodeURIComponent("foo@example.com")}&reason=other_value`,
+    );
+    const html = await page.content();
+    test.skip(
+      html.includes('statusCode":500'),
+      "Dev server CSS compilation error",
+    );
+    await expect(page.getByRole("status")).toHaveCount(0);
+  });
+
+  test("/signup with reason=no_account but no email param does NOT show the banner", async ({
+    page,
+  }) => {
+    await page.goto(`/signup?reason=${SIGNUP_REASON_NO_ACCOUNT}`);
+    const html = await page.content();
+    test.skip(
+      html.includes('statusCode":500'),
+      "Dev server CSS compilation error",
+    );
+    await expect(page.getByRole("status")).toHaveCount(0);
+  });
+
+  test("/signup with no query params shows no banner (baseline)", async ({
+    page,
+  }) => {
+    await page.goto("/signup");
+    const html = await page.content();
+    test.skip(
+      html.includes('statusCode":500'),
+      "Dev server CSS compilation error",
+    );
+    await expect(page.getByRole("status")).toHaveCount(0);
   });
 });
 
