@@ -43,17 +43,36 @@ if [[ -z "$ONCE_BLOCK" ]]; then
   # the missing-block diagnosis explicit rather than masking it with a bail.
 fi
 
-# --- TS1: Token-revocation regression guard ---
-# The `gh workflow disable` MUST be inside the agent prompt (last instruction),
-# NOT a post-step. claude-code-action revokes the App token after its step, so
-# a post-step disable would silently fail and the workflow re-fires every year.
-echo "TS1: gh workflow disable is inside agent prompt (token-revocation regression guard)"
+# --- TS1: Token-revocation regression guard (rewritten for neutralization primitive, #3153) ---
+# The neutralization (D4 cleanup) MUST be inside the agent prompt — claude-code-action
+# revokes the App token after its step, so any post-step would silently fail.
+# The previous mechanism `gh workflow disable` was replaced by a YAML-edit-and-push
+# primitive because the App's installation token caps actions:* at READ; the
+# replacement leans on contents:write (App reliably honors) plus pull-requests:write
+# for the branch-protected fallback.
+echo "TS1: neutralization primitive is inside agent prompt (token-revocation regression guard)"
 
-assert_contains "$ONCE_BLOCK" "gh workflow disable" \
-  "one-time template references gh workflow disable"
+assert_contains "$ONCE_BLOCK" "Neutralization primitive" \
+  "one-time template references the Neutralization primitive section"
 
 assert_contains "$ONCE_BLOCK" "Final step" \
-  "one-time template labels disable as the Final step inside the prompt"
+  "one-time template labels neutralization as the Final step inside the prompt"
+
+assert_contains "$ONCE_BLOCK" "git push origin HEAD:" \
+  "neutralization primitive uses direct git push as the canonical leg"
+
+assert_contains "$ONCE_BLOCK" "gh pr create --base" \
+  "neutralization primitive includes a PR-create fallback leg"
+
+assert_contains "$ONCE_BLOCK" "git diff --cached --quiet" \
+  "neutralization primitive guards against silent no-op commits (per 2026-03-02 learning)"
+
+# Anti-regression: the operative `gh workflow disable "$WORKFLOW_NAME"` line
+# must NOT appear as an executable command in the prompt. Comments referencing
+# the previous mechanism are acceptable; line-anchored shell calls are not.
+DISABLE_LINE_HITS=$(printf '%s\n' "$ONCE_BLOCK" | grep -cE '^[[:space:]]*gh workflow disable "\$WORKFLOW_NAME"' || true)
+assert_eq "0" "${DISABLE_LINE_HITS:-0}" \
+  "no executable 'gh workflow disable \"\$WORKFLOW_NAME\"' line (App token does not honor actions:write — #3153)"
 
 # Verify no post-step appears after the claude-code-action step. Step entries
 # at this level are indented exactly 6 spaces ("      - "). Sub-keys (env:,
@@ -65,7 +84,7 @@ POST_STEP_COUNT=$(printf '%s\n' "$ONCE_BLOCK" | awk '
   END { print count+0 }
 ')
 assert_eq "0" "$POST_STEP_COUNT" \
-  "no step appears after claude-code-action (a post-step would defeat self-disable)"
+  "no step appears after claude-code-action (a post-step would defeat self-neutralization)"
 
 echo ""
 
@@ -75,15 +94,17 @@ echo "TS2: date guard [[ \"\$(date -u +%F)\" == \"\$FIRE_DATE\" ]] is FIRST agen
 assert_contains "$ONCE_BLOCK" '[[ "$(date -u +%F)" == "$FIRE_DATE" ]]' \
   "literal date guard line present in one-time template"
 
-# Date guard line must appear BEFORE the disable line inside the block.
+# Date guard line must appear BEFORE the Final step (neutralization invocation)
+# inside the block. Anchoring on "## Final step" — the heading marking D4 — is
+# more robust than grepping for a specific shell command.
 DATE_GUARD_LINE=$( { printf '%s\n' "$ONCE_BLOCK" | grep -nF '[[ "$(date -u +%F)" == "$FIRE_DATE" ]]' || true; } | head -1 | cut -d: -f1)
-DISABLE_LINE=$( { printf '%s\n' "$ONCE_BLOCK" | grep -nF 'gh workflow disable' || true; } | tail -1 | cut -d: -f1)
+FINAL_STEP_LINE=$( { printf '%s\n' "$ONCE_BLOCK" | grep -nE '^[[:space:]]*## Final step' || true; } | tail -1 | cut -d: -f1)
 
-if [[ -n "$DATE_GUARD_LINE" && -n "$DISABLE_LINE" && "$DATE_GUARD_LINE" -lt "$DISABLE_LINE" ]]; then
-  echo "  PASS: date guard appears before final disable (FIRST vs LAST ordering)"
+if [[ -n "$DATE_GUARD_LINE" && -n "$FINAL_STEP_LINE" && "$DATE_GUARD_LINE" -lt "$FINAL_STEP_LINE" ]]; then
+  echo "  PASS: date guard appears before Final step (FIRST vs LAST ordering)"
   PASS=$((PASS + 1))
 else
-  echo "  FAIL: date guard line ($DATE_GUARD_LINE) must precede disable line ($DISABLE_LINE)"
+  echo "  FAIL: date guard line ($DATE_GUARD_LINE) must precede Final step heading ($FINAL_STEP_LINE)"
   FAIL=$((FAIL + 1))
 fi
 echo ""
@@ -103,8 +124,12 @@ assert_contains "$ONCE_BLOCK" 'must be OPEN' \
 assert_contains "$ONCE_BLOCK" 'isArchived' \
   "preamble checks repo is not archived"
 
-assert_contains "$ONCE_BLOCK" 'state=$(gh workflow view' \
-  "preamble runs idempotency check (state=$(gh workflow view ...))"
+# Idempotency check rewired in #3153 — was a `gh workflow view ... --state`
+# probe, now checks the workflow file's `on:` block for `schedule:` (since the
+# neutralization primitive STRIPS the schedule trigger; the workflow stays
+# `active` but has no cron after a successful neutralization).
+assert_contains "$ONCE_BLOCK" 'already neutralized' \
+  "preamble runs idempotency check (on: block no longer contains schedule:)"
 
 assert_contains "$ONCE_BLOCK" 'gh api "repos/${{ github.repository }}/issues/comments/$COMMENT_ID" --jq .issue_url' \
   "preamble fetches comment.issue_url with quoted COMMENT_ID"
@@ -204,6 +229,55 @@ else
   echo "  FAIL: need >=2 examples for harness schedule, found $HARNESS_EXAMPLES"
   FAIL=$((FAIL + 1))
 fi
+
+echo ""
+
+# --- TS6: Fallback-comment conditional structure (#3153) ---
+# The neutralization primitive's fallback comment must fire ONLY when BOTH the
+# direct push leg AND the PR-create leg fail. A future "simplification" that
+# always posts the fallback comment is a regression — every successful --once
+# fire would post user-visible cleanup-failed noise.
+echo "TS6: fallback comment is conditional on both push AND PR-create failing"
+
+# The new fallback-comment text MUST replace the previous "auto-disable failed"
+# wording — leaving the old wording in place would suggest the previous
+# mechanism is still operative.
+assert_contains "$ONCE_BLOCK" "auto-cleanup failed" \
+  "fallback comment uses new 'auto-cleanup failed' wording (was 'auto-disable failed')"
+
+# Anti-regression: previous wording must be gone.
+OLD_WORDING_HITS=$(printf '%s\n' "$ONCE_BLOCK" | grep -cF 'auto-disable failed' || true)
+assert_eq "0" "${OLD_WORDING_HITS:-0}" \
+  "previous 'auto-disable failed' wording removed from one-time template"
+
+# Conditional gating: the prompt must explicitly say BOTH legs must fail before
+# posting the comment. Match a sentence near the fallback wording that gates on
+# "both" or "5a ... AND ... 5b" or similar.
+if printf '%s\n' "$ONCE_BLOCK" | grep -iE '(both[^.]*fail|5a[^.]*5b|direct push[^.]*AND[^.]*PR)' >/dev/null; then
+  echo "  PASS: fallback comment is gated on both push and PR-create failing"
+  PASS=$((PASS + 1))
+else
+  echo "  FAIL: prompt does not explicitly gate fallback comment on BOTH legs failing"
+  FAIL=$((FAIL + 1))
+fi
+
+echo ""
+
+# --- TS7: Permissions block reflects new neutralization mechanism (#3153) ---
+echo "TS7: permissions block has contents:write + pull-requests:write, no actions:write"
+
+assert_contains "$ONCE_BLOCK" 'contents: write' \
+  "contents: write present (D4 neutralization commit)"
+
+assert_contains "$ONCE_BLOCK" 'pull-requests: write' \
+  "pull-requests: write present (D4 PR-fallback)"
+
+# Anti-regression: actions: write must NOT be in the permissions block. The
+# Anthropic GitHub App's installation manifest caps actions:* at READ; declaring
+# it gave maintainers false confidence that gh workflow disable would work.
+ACTIONS_WRITE_HITS=$(printf '%s\n' "$ONCE_BLOCK" | grep -cE '^[[:space:]]+actions:[[:space:]]+write' || true)
+assert_eq "0" "${ACTIONS_WRITE_HITS:-0}" \
+  "actions: write is NOT in --once permissions block (App token does not honor it — #3153)"
 
 echo ""
 
