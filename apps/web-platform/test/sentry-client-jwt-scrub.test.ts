@@ -3,7 +3,7 @@ import { scrubJwtFromEvent } from "@/sentry.client.config";
 
 function fakeJwt(): string {
   // 3 dot-separated base64url segments, eyJ-prefixed (matches validator output).
-  return "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJvbGUiOiJhbm9uIn0.fake-signature";
+  return "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJvbGUiOiJhbm9uIn0.fake-signature"; // gitleaks:allow # issue:#3194 synthesized JWT (fake-signature literal) for scrubber test
 }
 
 describe("sentry.client.config beforeSend JWT scrub", () => {
