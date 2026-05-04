@@ -18,7 +18,14 @@ FAIL=0
 fail() { echo "  FAIL: $1"; FAIL=$((FAIL+1)); }
 pass() { echo "  pass: $1"; PASS=$((PASS+1)); }
 
+# Track all temp roots so an unexpected `set -e` exit still cleans them up.
+ROOTS=()
+trap 'for r in "${ROOTS[@]}"; do rm -rf "$r"; done' EXIT
+
 # Each test gets its own SKILL_LOGGER_REPO_ROOT so they don't interfere.
+# Caller must `ROOTS+=("$ROOT")` after `ROOT=$(make_root); ROOTS+=("$ROOT")` so the trap can
+# clean up — the array push must happen in the parent shell, not the
+# command-substitution subshell.
 make_root() {
   local dir
   dir="$(mktemp -d)"
@@ -34,7 +41,7 @@ logfile_for() {
 # Test 1: skill-name extraction from canonical Skill tool input shape.
 # ------------------------------------------------------------------------
 echo "Test 1: skill-name extraction"
-ROOT=$(make_root)
+ROOT=$(make_root); ROOTS+=("$ROOT")
 echo '{"tool_name":"Skill","tool_input":{"skill":"soleur:plan","args":"x"},"session_id":"sess-1"}' \
   | SKILL_LOGGER_REPO_ROOT="$ROOT" bash "$HOOK"
 LOG=$(logfile_for "$ROOT")
@@ -59,7 +66,7 @@ rm -rf "$ROOT"
 # Test 2: kill-switch (SOLEUR_DISABLE_SKILL_LOGGER=1) writes nothing.
 # ------------------------------------------------------------------------
 echo "Test 2: kill-switch honored"
-ROOT=$(make_root)
+ROOT=$(make_root); ROOTS+=("$ROOT")
 echo '{"tool_name":"Skill","tool_input":{"skill":"soleur:should-not-log"}}' \
   | SOLEUR_DISABLE_SKILL_LOGGER=1 SKILL_LOGGER_REPO_ROOT="$ROOT" bash "$HOOK"
 LOG=$(logfile_for "$ROOT")
@@ -74,7 +81,7 @@ rm -rf "$ROOT"
 # Test 3: invalid JSON input fails soft, no log written, exit 0.
 # ------------------------------------------------------------------------
 echo "Test 3: invalid JSON input"
-ROOT=$(make_root)
+ROOT=$(make_root); ROOTS+=("$ROOT")
 set +e
 echo "not-valid-json-at-all" | SKILL_LOGGER_REPO_ROOT="$ROOT" bash "$HOOK"
 RC=$?
@@ -94,7 +101,7 @@ rm -rf "$ROOT"
 # matcher) writes nothing, exit 0.
 # ------------------------------------------------------------------------
 echo "Test 4: missing tool_input.skill"
-ROOT=$(make_root)
+ROOT=$(make_root); ROOTS+=("$ROOT")
 set +e
 echo '{"tool_name":"Bash","tool_input":{"command":"ls"}}' | SKILL_LOGGER_REPO_ROOT="$ROOT" bash "$HOOK"
 RC=$?
@@ -113,7 +120,7 @@ rm -rf "$ROOT"
 # Test 5: 50 concurrent fires produce 50 valid lines (flock interlocks).
 # ------------------------------------------------------------------------
 echo "Test 5: 50 concurrent fires under flock"
-ROOT=$(make_root)
+ROOT=$(make_root); ROOTS+=("$ROOT")
 for i in $(seq 1 50); do
   (
     echo "{\"tool_name\":\"Skill\",\"tool_input\":{\"skill\":\"soleur:concurrent-$i\"}}" \
@@ -141,7 +148,7 @@ rm -rf "$ROOT"
 # Test 6: empty stdin → exit 0, no log
 # ------------------------------------------------------------------------
 echo "Test 6: empty stdin"
-ROOT=$(make_root)
+ROOT=$(make_root); ROOTS+=("$ROOT")
 set +e
 : | SKILL_LOGGER_REPO_ROOT="$ROOT" bash "$HOOK"
 RC=$?

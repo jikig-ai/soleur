@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "generated_at": "2026-05-04T09:55:46Z",
+  "generated_at": "2026-05-04T10:23:17Z",
   "skills": [
     {
       "name": "admin-ip-refresh",
@@ -284,10 +284,10 @@
     },
     {
       "name": "plan",
-      "last_invoked": null,
-      "invocation_count": 0,
-      "days_since_last": null,
-      "status": "never_invoked"
+      "last_invoked": "2026-05-04T10:15:15Z",
+      "invocation_count": 54,
+      "days_since_last": 0,
+      "status": "fresh"
     },
     {
       "name": "plan-review",
@@ -476,6 +476,8 @@
     "total_skills": 67,
     "idle_180d": 0,
     "idle_365d": 0,
-    "never_invoked": 67
+    "never_invoked": 66,
+    "orphan_skills": [],
+    "bad_jsonl_lines": 0
   }
 }

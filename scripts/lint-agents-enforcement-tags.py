@@ -54,16 +54,10 @@ def repo_root_for(path: Path) -> Path:
     return Path.cwd()
 
 
-def hook_resolves(token: str, root: Path, lefthook_text: str) -> bool:
-    """Return True if `token` names a real hook script or lefthook command.
-
-    `token` is the first whitespace-split element of a `[hook-enforced]`
-    tag's content. Examples:
-        guardrails.sh                  → .claude/hooks/guardrails.sh
-        lint-rule-ids.py               → scripts/lint-rule-ids.py
-        lefthook                       → second-token check (caller passes the
-                                         remainder)
-    """
+def hook_resolves(token: str, root: Path) -> bool:
+    """Return True if `token` names a real hook script."""
+    if "/" in token or ".." in token:
+        return False
     for d in HOOK_SEARCH_DIRS:
         if (root / d / token).exists():
             return True
@@ -111,11 +105,13 @@ def lint(agents_md: Path, root: Path) -> list[str]:
                         f"— no matching command in lefthook.yml"
                     )
             else:
-                if not hook_resolves(first, root, lefthook_text):
+                if not hook_resolves(first, root):
                     searched = ", ".join(HOOK_SEARCH_DIRS)
                     errors.append(
-                        f"{agents_md}:{line_num}: [hook-enforced: {first}] "
-                        f"— hook script not found in any of: {searched}"
+                        f"{agents_md}:{line_num}: ERROR: [hook-enforced: {first}] "
+                        f"— hook script not found in any of: {searched}. "
+                        f"Fix: add the script, update the tag, or retire the rule "
+                        f"(see cq-rule-ids-are-immutable)."
                     )
 
         for match in SKILL_TAG_RE.finditer(line):
@@ -123,8 +119,9 @@ def lint(agents_md: Path, root: Path) -> list[str]:
             skill_md = root / "plugins" / "soleur" / "skills" / skill / "SKILL.md"
             if not skill_md.exists():
                 errors.append(
-                    f"{agents_md}:{line_num}: [skill-enforced: {skill} ...] "
-                    f"— SKILL.md not found at {skill_md.relative_to(root)}"
+                    f"{agents_md}:{line_num}: ERROR: [skill-enforced: {skill} ...] "
+                    f"— SKILL.md not found at {skill_md.relative_to(root)}. "
+                    f"Fix: create the skill, update the tag, or retire the rule."
                 )
 
     return errors
@@ -147,7 +144,7 @@ def main(argv: list[str]) -> int:
     for f in args.files:
         path = Path(f)
         if not path.is_file():
-            print(f"error: {f} not found", file=sys.stderr)
+            print(f"ERROR: {f} not found", file=sys.stderr)
             return 2
         root = repo_root_for(path)
         text = path.read_text(encoding="utf-8")

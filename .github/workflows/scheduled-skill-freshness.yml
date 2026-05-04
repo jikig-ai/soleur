@@ -11,7 +11,8 @@
 # report (all 67 skills as never_invoked). This matches the rule-metrics
 # aggregator's known persistence gap; see plan deferral.
 #
-# Cron `0 0 1 * *` — 1st of month 00:00 UTC, distinct hour from 0 9 1 cluster.
+# Cron `0 2 1 * *` — 1st of month 02:00 UTC; dodges the 00:00 GitHub-schedule
+# stampede and the 0 9 1 audit cluster.
 #
 # To test manually (post-merge): gh workflow run scheduled-skill-freshness.yml
 
@@ -19,11 +20,11 @@ name: "Scheduled: Skill Freshness"
 
 on:
   schedule:
-    - cron: '0 0 1 * *'
+    - cron: '0 2 1 * *'
   workflow_dispatch:
 
 concurrency:
-  group: scheduled-skill-freshness
+  group: schedule-skill-freshness
   cancel-in-progress: false
 
 permissions:
@@ -79,38 +80,55 @@ jobs:
           jq -e '.schema == 1' "$REPORT" >/dev/null \
             || { echo "ERROR: skill-freshness.json missing or wrong schema version" >&2; exit 1; }
 
-          # Iterate stale skills (idle or archival_candidate). Stop at CAP_PER_RUN.
+          # Iterate stale skills (worst offenders first), stop at CAP_PER_RUN.
+          # Process substitution keeps the loop in the parent shell so the
+          # `filed` counter survives past the loop.
           filed=0
-          jq -r '.skills[] | select(.status == "idle" or .status == "archival_candidate") | "\(.name)\t\(.status)\t\(.days_since_last)"' "$REPORT" \
-            | while IFS=$'\t' read -r SKILL_NAME SKILL_STATUS DAYS; do
-                [[ "$filed" -ge "$CAP_PER_RUN" ]] && { echo "Cap reached (CAP_PER_RUN=$CAP_PER_RUN)"; break; }
+          while IFS=$'\t' read -r SKILL_NAME SKILL_STATUS DAYS; do
+            [[ "$filed" -ge "$CAP_PER_RUN" ]] && { echo "Cap reached (CAP_PER_RUN=$CAP_PER_RUN)"; break; }
 
-                # Idempotency: skip if any open or recently-closed issue exists.
-                EXISTING=$(gh issue list --label scheduled-skill-freshness \
-                                         --search "$SKILL_NAME in:title" \
-                                         --state all --limit 5 --json number \
-                                         --jq 'length')
-                if [[ "$EXISTING" -gt 0 ]]; then
-                  echo "Skipping $SKILL_NAME — existing issue(s) found"
-                  continue
-                fi
+            # Defense-in-depth: refuse skill names outside the canonical
+            # kebab-case (+ optional `:plugin` prefix) shape before passing
+            # to `gh issue list/create`.
+            if ! [[ "$SKILL_NAME" =~ ^[a-z][a-z0-9-]*(:[a-z0-9-]+)?$ ]]; then
+              echo "WARN: refusing malformed skill name: $SKILL_NAME"
+              continue
+            fi
 
-                # Write title and body to env (injection-safe per scheduled-ux-audit.yml pattern).
-                TITLE="[Scheduled] Skill freshness: $SKILL_NAME idle $DAYS days ($SKILL_STATUS)"
-                # shellcheck disable=SC2016  # backticks are markdown, not command substitution
-                BODY=$(printf 'Skill `%s` has not been invoked in %s days (status: `%s`).\n\nFiled by `scheduled-skill-freshness.yml`. Source: `knowledge-base/engineering/operations/skill-freshness.json`.\n\nReview action:\n- Is this skill still useful? If yes, close this issue.\n- Is this skill superseded? Mark for archival via `/soleur:archive-kb`.\n- Is the discovery surface broken (skill exists but operators forget it)? Update `/soleur:help` taxonomy.\n\nDo not autoclose this issue (do-not-autoclose label).' \
-                              "$SKILL_NAME" "$DAYS" "$SKILL_STATUS")
+            # Idempotency: phrase-search the full title prefix so skills
+            # whose names share a prefix (e.g., `plan` vs `plan-review`)
+            # don't suppress each other's issue creation.
+            EXISTING=$(gh issue list --label scheduled-skill-freshness \
+                                     --search "\"Skill freshness: $SKILL_NAME idle\" in:title" \
+                                     --state all --limit 5 --json number \
+                                     --jq 'length')
+            if [[ "$EXISTING" -gt 0 ]]; then
+              echo "Skipping $SKILL_NAME — existing issue(s) found"
+              continue
+            fi
 
-                gh issue create \
-                  --title "$TITLE" \
-                  --body  "$BODY" \
-                  --label "scheduled-skill-freshness,do-not-autoclose" \
-                  --milestone "Post-MVP / Later" || {
-                    echo "WARN: failed to file issue for $SKILL_NAME (continuing)";
-                    continue;
-                  }
-                filed=$((filed + 1))
-              done
+            # Write title and body to env (injection-safe per scheduled-ux-audit.yml pattern).
+            TITLE="[Scheduled] Skill freshness: $SKILL_NAME idle $DAYS days ($SKILL_STATUS)"
+            # shellcheck disable=SC2016  # backticks are markdown, not command substitution
+            BODY=$(printf 'Skill `%s` has not been invoked in %s days (status: `%s`).\n\nFiled by `scheduled-skill-freshness.yml`. Source: `knowledge-base/engineering/operations/skill-freshness.json`.\n\nReview action:\n- Is this skill still useful? If yes, close this issue.\n- Is this skill superseded? Mark for archival via `/soleur:archive-kb`.\n- Is the discovery surface broken (skill exists but operators forget it)? Update `/soleur:help` taxonomy.\n\nDo not autoclose this issue (do-not-autoclose label).' \
+                          "$SKILL_NAME" "$DAYS" "$SKILL_STATUS")
+
+            gh issue create \
+              --title "$TITLE" \
+              --body  "$BODY" \
+              --label "scheduled-skill-freshness,do-not-autoclose" \
+              --milestone "Post-MVP / Later" || {
+                echo "WARN: failed to file issue for $SKILL_NAME (continuing)";
+                continue;
+              }
+            filed=$((filed + 1))
+          done < <(jq -r '
+            .skills
+            | map(select(.status == "idle" or .status == "archival_candidate"))
+            | sort_by(.days_since_last) | reverse
+            | .[]
+            | "\(.name)\t\(.status)\t\(.days_since_last)"
+          ' "$REPORT")
 
           echo "Filed $filed stale-skill issues this run."
 

@@ -16,6 +16,10 @@ FAIL=0
 fail() { echo "  FAIL: $1"; FAIL=$((FAIL+1)); }
 pass() { echo "  pass: $1"; PASS=$((PASS+1)); }
 
+# Track all temp ROOTS so an unexpected `set -e` exit still cleans them up.
+ROOTS=()
+trap 'for r in "${ROOTS[@]}"; do rm -rf "$r"; done' EXIT
+
 # Build a fake repo root with N skills and an optional invocations log.
 make_fake_repo() {
   local dir
@@ -41,7 +45,7 @@ ts_days_ago() {
 # Test 1: empty invocations log → all skills "never_invoked"
 # ------------------------------------------------------------------------
 echo "Test 1: empty invocations log"
-ROOT=$(make_fake_repo)
+ROOT=$(make_fake_repo); ROOTS+=("$ROOT")
 OUT=$(SKILL_FRESHNESS_REPO_ROOT="$ROOT" bash "$AGGREGATOR" --dry-run)
 TOTAL=$(echo "$OUT" | jq -r '.summary.total_skills')
 NEVER=$(echo "$OUT" | jq -r '.summary.never_invoked')
@@ -65,7 +69,7 @@ rm -rf "$ROOT"
 # Test 2: malformed JSONL line → skipped, valid lines counted
 # ------------------------------------------------------------------------
 echo "Test 2: malformed line tolerance"
-ROOT=$(make_fake_repo)
+ROOT=$(make_fake_repo); ROOTS+=("$ROOT")
 {
   echo "not json at all"
   printf '{"schema":1,"ts":"%s","skill":"alpha"}\n' "$(ts_days_ago 1)"
@@ -90,7 +94,7 @@ rm -rf "$ROOT"
 # Test 3: threshold boundaries — 179d / 180d / 364d / 365d
 # ------------------------------------------------------------------------
 echo "Test 3: threshold boundaries"
-ROOT=$(make_fake_repo)
+ROOT=$(make_fake_repo); ROOTS+=("$ROOT")
 mkdir -p "$ROOT/plugins/soleur/skills/delta"
 mkdir -p "$ROOT/plugins/soleur/skills/epsilon"
 printf -- '---\nname: delta\n---\n'   > "$ROOT/plugins/soleur/skills/delta/SKILL.md"
@@ -121,7 +125,7 @@ rm -rf "$ROOT"
 # Test 4: aggregator counts multiple invocations of the same skill
 # ------------------------------------------------------------------------
 echo "Test 4: invocation_count aggregates"
-ROOT=$(make_fake_repo)
+ROOT=$(make_fake_repo); ROOTS+=("$ROOT")
 # Capture exact timestamps at write time so the assertion matches the
 # value in the JSONL (avoids 1s race between write and post-aggregator
 # `ts_days_ago 2` recomputation).
@@ -152,16 +156,43 @@ rm -rf "$ROOT"
 # Test 5: write to skill-freshness.json on first run; no rewrite on
 # second identical run (materially-changed gate)
 # ------------------------------------------------------------------------
+# ------------------------------------------------------------------------
+# Test 6: namespaced skill names ("soleur:alpha") match bare inventory ("alpha")
+# ------------------------------------------------------------------------
+echo "Test 6: namespaced/bare skill-name normalization"
+ROOT=$(make_fake_repo); ROOTS+=("$ROOT")
+{
+  printf '{"schema":1,"ts":"%s","skill":"soleur:alpha"}\n' "$(ts_days_ago 1)"
+  printf '{"schema":1,"ts":"%s","skill":"beta"}\n'        "$(ts_days_ago 1)"
+  printf '{"schema":1,"ts":"%s","skill":"foo:gamma"}\n'   "$(ts_days_ago 200)"
+  printf '{"schema":1,"ts":"%s","skill":"unknown:zzz"}\n' "$(ts_days_ago 1)"
+} > "$ROOT/.claude/.skill-invocations.jsonl"
+OUT=$(SKILL_FRESHNESS_REPO_ROOT="$ROOT" bash "$AGGREGATOR" --dry-run 2>/dev/null)
+A=$(echo "$OUT" | jq -r '.skills[] | select(.name == "alpha") | .status')
+B=$(echo "$OUT" | jq -r '.skills[] | select(.name == "beta")  | .status')
+G=$(echo "$OUT" | jq -r '.skills[] | select(.name == "gamma") | .status')
+ORPHANS=$(echo "$OUT" | jq -r '.summary.orphan_skills | join(",")')
+if [[ "$A" != "fresh" ]]; then
+  fail "soleur:alpha should match bare 'alpha' as fresh, got $A"
+elif [[ "$B" != "fresh" ]]; then
+  fail "bare 'beta' should remain fresh, got $B"
+elif [[ "$G" != "idle" ]]; then
+  fail "foo:gamma should match bare 'gamma' as idle, got $G"
+elif [[ "$ORPHANS" != "zzz" ]]; then
+  fail "expected orphan_skills=[zzz], got [$ORPHANS]"
+else
+  pass "namespaced names normalized; unknown suffix surfaces as orphan"
+fi
+
+# ------------------------------------------------------------------------
 echo "Test 5: materially-changed write"
-ROOT=$(make_fake_repo)
+ROOT=$(make_fake_repo); ROOTS+=("$ROOT")
 mkdir -p "$ROOT/knowledge-base/engineering/operations"
 SKILL_FRESHNESS_REPO_ROOT="$ROOT" bash "$AGGREGATOR" >/dev/null
 OUT_PATH="$ROOT/knowledge-base/engineering/operations/skill-freshness.json"
 if [[ ! -f "$OUT_PATH" ]]; then
   fail "first run did not write output file"
 else
-  FIRST_MTIME=$(stat -c %Y "$OUT_PATH" 2>/dev/null || stat -f %m "$OUT_PATH")
-  sleep 1
   OUT2=$(SKILL_FRESHNESS_REPO_ROOT="$ROOT" bash "$AGGREGATOR" 2>&1)
   if echo "$OUT2" | grep -q "No material change"; then
     pass "second identical run skipped write"

@@ -80,25 +80,25 @@ total_skills=$(echo "$inventory_json" | jq -r 'length')
 [[ "$total_skills" -gt 0 ]] || { echo "ERROR: no skills found under $SKILLS_DIR" >&2; exit 2; }
 
 # --- Parse invocation log ------------------------------------------------
-# Tolerant of missing file and malformed lines (per learning
-# 2026-04-24-rule-metrics-emit-incident-coverage-session-gotchas.md).
+# Single-pass parse with `fromjson?` for malformed-line tolerance and
+# schema-version pinning at the consumer boundary. `fromjson?` swallows
+# parse errors (returns empty), `select(.schema == 1 ...)` drops anything
+# that isn't a v1 record. One jq fork regardless of file size.
+bad_lines=0
+parsed_count=0
 if [[ -f "$INVOCATIONS" ]]; then
-  # Tolerate malformed lines: parse line-by-line. A pipe-based
-  # `jq -c < file` aborts the entire stream on the first parse error
-  # (subsequent valid lines are dropped). The `|| true` after a pipeline
-  # only catches the exit code — it doesn't recover already-aborted stdout.
-  # Per-line filtering with each `jq` call independent gives true
-  # tolerance: malformed lines are silently skipped, valid lines flow through.
-  parsed_lines=""
-  while IFS= read -r line; do
-    valid=$(echo "$line" | jq -c 'select(.skill != null)' 2>/dev/null || true)
-    if [[ -n "$valid" ]]; then
-      parsed_lines+="$valid"$'\n'
-    fi
-  done < "$INVOCATIONS"
+  total_lines=$(wc -l < "$INVOCATIONS" 2>/dev/null || echo 0)
+  parsed_records=$(jq -c -R 'fromjson? | select(.schema == 1 and .skill != null and (.ts | type) == "string")' < "$INVOCATIONS" 2>/dev/null || true)
+  parsed_count=$(printf '%s' "$parsed_records" | grep -c '^' || true)
+  bad_lines=$((total_lines - parsed_count))
+  [[ "$bad_lines" -lt 0 ]] && bad_lines=0
 
-  if [[ -n "$parsed_lines" ]]; then
-    invocations_json=$(printf '%s' "$parsed_lines" \
+  if [[ "$bad_lines" -gt 0 ]]; then
+    echo "::warning::Dropped $bad_lines malformed line(s) from $INVOCATIONS" >&2
+  fi
+
+  if [[ -n "$parsed_records" ]]; then
+    invocations_json=$(printf '%s' "$parsed_records" \
                        | jq -s -c 'group_by(.skill)
                                    | map({
                                        skill: .[0].skill,
@@ -127,9 +127,14 @@ report=$(
     --argjson now_epoch "$now_epoch" \
     --argjson idle_secs "$threshold_idle" \
     --argjson archival_secs "$threshold_archival" \
+    --argjson bad_lines "$bad_lines" \
     --arg generated_at "$now_iso" '
-      # Group invocations by skill name for fast lookup.
-      ($invocations | map({key: .skill, value: .}) | from_entries) as $by_skill
+      # Normalize namespaced skill names ("soleur:plan") to bare names
+      # ("plan") so they join against the directory-name inventory.
+      def bare: split(":") | last;
+      ($invocations | map({key: (.skill | bare), value: .}) | from_entries) as $by_skill
+      |
+      (($invocations | map(.skill | bare)) - $inventory) as $orphan_skills
       |
       ($inventory | map(
         . as $name
@@ -158,7 +163,7 @@ report=$(
                 )
               }
           end
-      )) as $skills
+      ) | sort_by(.name)) as $skills
       |
       {
         schema: 1,
@@ -168,11 +173,20 @@ report=$(
           total_skills: ($skills | length),
           idle_180d: ($skills | map(select(.status == "idle")) | length),
           idle_365d: ($skills | map(select(.status == "archival_candidate")) | length),
-          never_invoked: ($skills | map(select(.status == "never_invoked")) | length)
+          never_invoked: ($skills | map(select(.status == "never_invoked")) | length),
+          orphan_skills: $orphan_skills,
+          bad_jsonl_lines: $bad_lines
         }
       }
   '
 )
+
+# Surface orphan skills as a CI warning (renamed/deleted skills with stale logs).
+orphan_count=$(echo "$report" | jq -r '.summary.orphan_skills | length')
+if [[ "$orphan_count" -gt 0 ]]; then
+  orphan_names=$(echo "$report" | jq -r '.summary.orphan_skills | join(", ")')
+  echo "::warning::Found $orphan_count orphan skill(s) in invocation log (likely renamed/deleted): $orphan_names" >&2
+fi
 
 # Schema-version sanity (matches rule-metrics-aggregate.sh shape-gate).
 echo "$report" | jq -e '.schema == 1' >/dev/null 2>&1 \
@@ -195,9 +209,11 @@ if [[ -f "$OUT" ]]; then
 fi
 
 if [[ "$write" == "1" ]]; then
+  trap 'rm -f "$OUT.tmp"' EXIT
   echo "$report" > "$OUT.tmp"
-  jq empty "$OUT.tmp" >/dev/null 2>&1 || { echo "ERROR: tmp file malformed" >&2; rm -f "$OUT.tmp"; exit 5; }
-  mv "$OUT.tmp" "$OUT"
+  jq empty "$OUT.tmp" >/dev/null 2>&1 || { echo "ERROR: tmp file malformed (try --dry-run to inspect output)" >&2; exit 5; }
+  mv "$OUT.tmp" "$OUT" || { echo "ERROR: mv $OUT.tmp -> $OUT failed (check filesystem permissions)" >&2; exit 6; }
+  trap - EXIT
   echo "Wrote $OUT (total_skills=$(jq -r '.summary.total_skills' < "$OUT"), idle_180d=$(jq -r '.summary.idle_180d' < "$OUT"), idle_365d=$(jq -r '.summary.idle_365d' < "$OUT"), never_invoked=$(jq -r '.summary.never_invoked' < "$OUT"))"
 else
   echo "No material change to $OUT"
