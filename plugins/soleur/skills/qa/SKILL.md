@@ -80,6 +80,7 @@ For each test scenario in the plan, execute the steps it describes. Scenarios co
    - Capture a screenshot after each significant action using `browser_take_screenshot`
    - When in a worktree, always pass absolute paths for screenshot filenames
    - If Playwright MCP is unavailable, warn "Playwright MCP unavailable — skipping browser steps" and continue to API verification
+   - If `browser_navigate` errors with `Target page, context or browser has been closed`, do NOT retry the same call. Recycle the context: call `browser_close` first (it returns "No open tabs" if already closed — safe), then retry `browser_navigate`. Stale page state can outlive a previous session.
 2. Wait 3 seconds for eventual consistency (if the scenario has both Browser and API steps)
 3. Execute **API verify** steps (if present)
    - Run the exact command from the scenario via the Bash tool

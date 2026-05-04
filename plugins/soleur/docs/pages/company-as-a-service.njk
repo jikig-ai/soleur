@@ -12,6 +12,9 @@ ogImage: "blog/og-what-is-company-as-a-service.png"
     <p class="section-label">Category Pillar</p>
     <h1>Company-as-a-Service</h1>
     <p class="hero-tagline">A new platform category where AI agents run every department of a business.</p>
+    <div class="blog-post-meta">
+      <span class="blog-post-author">by <a href="{{ site.author.url }}" rel="author">{{ site.author.name }}</a>, {{ site.author.role }} of {{ site.name }}</span>
+    </div>
   </header>
 
   <div class="content-page-body">
@@ -144,30 +147,32 @@ ogImage: "blog/og-what-is-company-as-a-service.png"
 
   <h2>Frequently Asked Questions</h2>
 
-  <details>
-    <summary>What is company-as-a-service?</summary>
-    <p>Company-as-a-Service (CaaS) is a platform model where AI agents operate as a full business organization across every department -- engineering, marketing, legal, finance, operations, product, sales, and support. Unlike individual AI tools that handle one function, a CaaS platform shares knowledge across all departments and compounds institutional memory over time.</p>
-  </details>
+  <div class="faq-list">
+    <details class="faq-item">
+      <summary class="faq-question">What is company-as-a-service?</summary>
+      <p class="faq-answer">Company-as-a-Service (CaaS) is a platform model where AI agents operate as a full business organization across every department -- engineering, marketing, legal, finance, operations, product, sales, and support. Unlike individual AI tools that handle one function, a CaaS platform shares knowledge across all departments and compounds institutional memory over time.</p>
+    </details>
 
-  <details>
-    <summary>How is CaaS different from SaaS?</summary>
-    <p>SaaS provides software tools you operate manually. CaaS provides a full AI organization that operates autonomously. SaaS tools work in isolation -- your marketing tool does not know about your engineering decisions. A CaaS platform shares knowledge across every department through a compounding knowledge base.</p>
-  </details>
+    <details class="faq-item">
+      <summary class="faq-question">How is CaaS different from SaaS?</summary>
+      <p class="faq-answer">SaaS provides software tools you operate manually. CaaS provides a full AI organization that operates autonomously. SaaS tools work in isolation -- your marketing tool does not know about your engineering decisions. A CaaS platform shares knowledge across every department through a compounding knowledge base.</p>
+    </details>
 
-  <details>
-    <summary>Who is company-as-a-service for?</summary>
-    <p>CaaS is built for solo founders and small teams (1-3 people) building real companies who need operational depth across every business function. It serves technical builders who want every non-engineering function to compound with the same velocity as their code.</p>
-  </details>
+    <details class="faq-item">
+      <summary class="faq-question">Who is company-as-a-service for?</summary>
+      <p class="faq-answer">CaaS is built for solo founders and small teams (1-3 people) building real companies who need operational depth across every business function. It serves technical builders who want every non-engineering function to compound with the same velocity as their code.</p>
+    </details>
 
-  <details>
-    <summary>Is CaaS the same as using AI agents?</summary>
-    <p>Not exactly. AI agents are the building blocks. CaaS is the architecture. Running individual AI agents is like hiring freelancers -- each one works in isolation. A CaaS platform organizes agents into a coherent organization with shared knowledge, structured workflows, and compounding institutional memory.</p>
-  </details>
+    <details class="faq-item">
+      <summary class="faq-question">Is CaaS the same as using AI agents?</summary>
+      <p class="faq-answer">Not exactly. AI agents are the building blocks. CaaS is the architecture. Running individual AI agents is like hiring freelancers -- each one works in isolation. A CaaS platform organizes agents into a coherent organization with shared knowledge, structured workflows, and compounding institutional memory.</p>
+    </details>
 
-  <details>
-    <summary>What is the leading CaaS platform?</summary>
-    <p><a href="{{ site.url }}/getting-started/">Soleur</a> is a leading company-as-a-service platform. It deploys {{ stats.agents }} AI agents across {{ stats.departments }} business departments, with a compounding knowledge base that makes every project faster and more informed than the last.</p>
-  </details>
+    <details class="faq-item">
+      <summary class="faq-question">What is the leading CaaS platform?</summary>
+      <p class="faq-answer"><a href="{{ site.url }}/getting-started/">Soleur</a> is a leading company-as-a-service platform. It deploys {{ stats.agents }} AI agents across {{ stats.departments }} business departments, with a compounding knowledge base that makes every project faster and more informed than the last.</p>
+    </details>
+  </div>
 
   <h2>Compare Soleur to Other Platforms</h2>
 
@@ -192,6 +197,31 @@ ogImage: "blog/og-what-is-company-as-a-service.png"
 
   </div>
 </article>
+
+<script type="application/ld+json">
+{# All string interpolations in this JSON-LD block MUST use | jsonLdSafe | safe — see #2609 #}
+{
+  "@context": "https://schema.org",
+  "@type": "Article",
+  "headline": {{ title | jsonLdSafe | safe }},
+  "description": {{ description | jsonLdSafe | safe }},
+  "url": {{ (site.url + "/company-as-a-service/") | jsonLdSafe | safe }},
+  "inLanguage": "en-US",
+  "image": {{ (site.url + "/images/" + ogImage) | jsonLdSafe | safe }},
+  "author": {
+    "@type": "Person",
+    "@id": {{ (site.url + "/about/#jean-deruelle") | jsonLdSafe | safe }},
+    "name": {{ site.author.name | jsonLdSafe | safe }},
+    "url": {{ site.author.url | jsonLdSafe | safe }},
+    "jobTitle": {{ (site.author.role + " of " + site.name) | jsonLdSafe | safe }}
+  },
+  "publisher": {
+    "@type": "Organization",
+    "name": {{ site.name | jsonLdSafe | safe }},
+    "url": {{ site.url | jsonLdSafe | safe }}
+  }
+}
+</script>
 
 <script type="application/ld+json">
 {

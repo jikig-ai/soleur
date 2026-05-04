@@ -1,23 +1,42 @@
 "use client";
 
-import { useState, useRef } from "react";
-import { useRouter } from "next/navigation";
+import { Suspense, useState, useRef } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { reportSilentFallback } from "@/lib/client-observability";
 import { OAuthButtons } from "@/components/auth/oauth-buttons";
 import { EMAIL_OTP_LENGTH } from "@/lib/auth/constants";
-import { mapSupabaseError } from "@/lib/auth/error-messages";
+import {
+  mapSupabaseError,
+  SIGNUP_REASON_NO_ACCOUNT,
+} from "@/lib/auth/error-messages";
 import Link from "next/link";
 
 export default function SignupPage() {
+  return (
+    <Suspense>
+      <SignupForm />
+    </Suspense>
+  );
+}
+
+function SignupForm() {
   const router = useRouter();
-  const [email, setEmail] = useState("");
+  const searchParams = useSearchParams();
+  const initialEmail = searchParams.get("email") ?? "";
+  const reason = searchParams.get("reason");
+  const [email, setEmail] = useState(initialEmail);
   const [otpSent, setOtpSent] = useState(false);
   const [otp, setOtp] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [tcAccepted, setTcAccepted] = useState(false);
   const otpRef = useRef<HTMLInputElement>(null);
+
+  const showNoAccountBanner =
+    reason === SIGNUP_REASON_NO_ACCOUNT &&
+    initialEmail.length > 0 &&
+    email === initialEmail;
 
   async function handleSendOtp(e: React.FormEvent) {
     e.preventDefault();
@@ -137,6 +156,15 @@ export default function SignupPage() {
             Get started with Soleur — your AI organization
           </p>
         </div>
+
+        {showNoAccountBanner && (
+          <div
+            role="status"
+            className="rounded-lg border border-blue-900/50 bg-blue-950/30 px-4 py-3 text-sm text-blue-200"
+          >
+            No Soleur account found for <strong>{email}</strong>. Create one below.
+          </div>
+        )}
 
         <form onSubmit={handleSendOtp} className="space-y-4">
           <input

@@ -1,0 +1,21 @@
+# CODEOWNERS — security-critical files require second-reviewer approval.
+#
+# This file is load-bearing for the secret-scanning floor (#3121).
+# Without it, a single PR could disable the gates AND add a leaked secret
+# in the same diff. Branch protection on `main` requiring CODEOWNERS
+# review is a separate operator follow-up (requires repo-admin scope).
+#
+# Owner: @jeanderuelle (replace with team alias when one exists).
+
+# Default fallback — keeps all otherwise-unowned files reviewable.
+*                                                       @jeanderuelle
+
+# Secret-scanning floor (gitleaks rule pack + workflow).
+/.gitleaks.toml                                         @jeanderuelle
+/.github/workflows/secret-scan.yml                      @jeanderuelle
+/.github/workflows/pr-quality-guards.yml                @jeanderuelle
+/lefthook.yml                                           @jeanderuelle
+/apps/web-platform/scripts/lint-fixture-content.mjs     @jeanderuelle
+
+# Always-loaded workflow rules.
+/AGENTS.md                                              @jeanderuelle

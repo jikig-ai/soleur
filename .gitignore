@@ -78,3 +78,10 @@ knowledge-base/project/plans/spike-raw-*.json
 # "Vendor plugin into build context" step before docker build. Local devs
 # building the image manually run the same `cp -r` command; never commit.
 apps/web-platform/_plugin-vendored/
+
+# Mutation testing report directories (#3121 / #3130). Allowlisted in
+# .gitleaks.toml as a defense-in-depth in case a report ever lands by
+# accident — but the primary control is this gitignore.
+reports/mutation/
+.stryker-tmp/
+mutants/

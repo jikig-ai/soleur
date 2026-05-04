@@ -1,0 +1,209 @@
+# Soleur secret-scanning floor (gitleaks v8.24.2 — per-rule [[rules.allowlists]] syntax).
+#
+# IMPORTANT — schema version compatibility:
+#   - gitleaks v8.25+ supports top-level `[[allowlists]]` with `targetRules = [...]`.
+#   - gitleaks v8.24.x supports ONLY per-rule `[[rules.allowlists]]` blocks.
+#   - This file is locked to v8.24.2 syntax. The CI workflow pins gitleaks v8.24.2
+#     with a hardcoded SHA256. To upgrade, see knowledge-base/engineering/operations/secret-scanning.md.
+#
+# Default-pack rules (AWS, GitHub PAT, Stripe, OpenAI, Slack, Discord webhook, SSH key, etc.)
+# are inherited via [extend] useDefault = true. Default rules do NOT inherit our
+# per-rule allowlists — that is intentional: AWS keys never belong in fixtures even
+# under a synthesized path, so we want default rules to fire if such a token shape
+# appears anywhere in the tree.
+#
+# Allowlist scope (each custom rule below repeats this block):
+#   - __goldens__/.*                                   golden snapshots from PR2
+#   - (__snapshots__|__goldens__)/.*\.snap$            anchored snapshot files
+#   - apps/web-platform/test/__synthesized__/.*        fixtures with semi-sensitive shapes
+#   - reports/mutation/.*                              Stryker output (gitignored, but defensive)
+#
+# Waivers: line-level `# gitleaks:allow # issue:#NNN <reason>` (or `// gitleaks:allow ...`).
+# The `lint-fixture-content.mjs` linter rejects waivers with empty `issue:#NNN <reason>` trailer.
+
+title = "Soleur secret-scan floor"
+
+[extend]
+useDefault = true
+
+# ---------------------------------------------------------------------------
+# 1. Soleur BYOK provider key
+# ---------------------------------------------------------------------------
+[[rules]]
+id = "soleur-byok-key"
+description = "Soleur BYOK provider key"
+regex = '''sk-soleur-[A-Za-z0-9]{32,}'''
+keywords = ["sk-soleur-"]
+tags = ["key", "soleur", "byok"]
+  [[rules.allowlists]]
+  description = "Synthesized fixture paths"
+  paths = ['''__goldens__/.*''', '''(__snapshots__|__goldens__)/.*\.snap$''', '''apps/web-platform/test/__synthesized__/.*''', '''reports/mutation/.*''']
+
+# ---------------------------------------------------------------------------
+# 2. Doppler tokens (personal, service, service-account, CLI)
+#    NB: id must match the default-pack `doppler-api-token` rule id so this
+#    rule REPLACES the default — same-id replacement is the only way to attach
+#    a path allowlist to what would otherwise be a default-pack rule (gitleaks
+#    v8.24.2 has no top-level `[[allowlists]] targetRules`). The widened regex
+#    below covers all Doppler token shapes (pt/st/sa/ct), not just personal.
+# ---------------------------------------------------------------------------
+[[rules]]
+id = "doppler-api-token"
+description = "Doppler personal/service/service-account/CLI token"
+regex = '''dp\.(?:pt|st|sa|ct)\.[A-Za-z0-9_\-]{40,}'''
+keywords = ["dp.pt.", "dp.st.", "dp.sa.", "dp.ct."]
+tags = ["token", "doppler"]
+  [[rules.allowlists]]
+  paths = ['''__goldens__/.*''', '''(__snapshots__|__goldens__)/.*\.snap$''', '''apps/web-platform/test/__synthesized__/.*''', '''reports/mutation/.*''']
+
+# ---------------------------------------------------------------------------
+# 3. Supabase service-role JWT (HS256 — header eyJhbGciOiJIUzI1NiI...)
+# ---------------------------------------------------------------------------
+[[rules]]
+id = "supabase-service-role-jwt"
+description = "Supabase service-role JWT (HS256)"
+regex = '''eyJhbGciOiJIUzI1NiI[A-Za-z0-9_\-]{10,}\.eyJ[A-Za-z0-9_\-]{60,}\.[A-Za-z0-9_\-]{20,}'''
+keywords = ["eyJhbGciOiJIUzI1NiI"]
+entropy = 4.5
+tags = ["jwt", "supabase", "service-role"]
+  [[rules.allowlists]]
+  paths = ['''__goldens__/.*''', '''(__snapshots__|__goldens__)/.*\.snap$''', '''apps/web-platform/test/__synthesized__/.*''', '''reports/mutation/.*''']
+
+# ---------------------------------------------------------------------------
+# 4. Supabase anon JWT (also HS256 — distinguished by `role: anon` claim,
+#    but at scan time we treat any HS256 JWT carrying a Supabase issuer
+#    pattern as in-scope. Same regex shape; entropy floor catches noise.)
+# ---------------------------------------------------------------------------
+[[rules]]
+id = "supabase-anon-jwt"
+description = "Supabase anon-key JWT (HS256)"
+# Same shape as service-role; the difference is in the decoded claim payload.
+# Both should be redacted from public history; the rotation runbook differs.
+regex = '''eyJhbGciOiJIUzI1NiI[A-Za-z0-9_\-]{10,}\.eyJpc3Mi[A-Za-z0-9_\-]{60,}\.[A-Za-z0-9_\-]{20,}'''
+keywords = ["eyJhbGciOiJIUzI1NiI", "eyJpc3Mi"]
+entropy = 4.5
+tags = ["jwt", "supabase", "anon"]
+  [[rules.allowlists]]
+  paths = ['''__goldens__/.*''', '''(__snapshots__|__goldens__)/.*\.snap$''', '''apps/web-platform/test/__synthesized__/.*''', '''reports/mutation/.*''']
+
+# ---------------------------------------------------------------------------
+# 5. Supabase access token (sbp_)
+# ---------------------------------------------------------------------------
+[[rules]]
+id = "supabase-access-token"
+description = "Supabase personal access token (sbp_)"
+regex = '''sbp_[a-f0-9]{40,}'''
+keywords = ["sbp_"]
+tags = ["token", "supabase", "pat"]
+  [[rules.allowlists]]
+  paths = ['''__goldens__/.*''', '''(__snapshots__|__goldens__)/.*\.snap$''', '''apps/web-platform/test/__synthesized__/.*''', '''reports/mutation/.*''']
+
+# ---------------------------------------------------------------------------
+# 6. Stripe webhook secret (whsec_)
+#    Default pack covers Stripe live/test API keys (sk_live_, sk_test_, pk_live_).
+#    Webhook secrets are NOT in the default pack as of v8.24.2.
+# ---------------------------------------------------------------------------
+[[rules]]
+id = "stripe-webhook-secret"
+description = "Stripe webhook signing secret"
+regex = '''whsec_[A-Za-z0-9]{32,}'''
+keywords = ["whsec_"]
+tags = ["secret", "stripe", "webhook"]
+  [[rules.allowlists]]
+  paths = ['''__goldens__/.*''', '''(__snapshots__|__goldens__)/.*\.snap$''', '''apps/web-platform/test/__synthesized__/.*''', '''reports/mutation/.*''']
+
+# ---------------------------------------------------------------------------
+# 7. Anthropic API key (sk-ant-)
+# ---------------------------------------------------------------------------
+[[rules]]
+id = "anthropic-api-key"
+description = "Anthropic API key"
+regex = '''sk-ant-[A-Za-z0-9_\-]{40,}'''
+keywords = ["sk-ant-"]
+tags = ["key", "anthropic"]
+  [[rules.allowlists]]
+  paths = ['''__goldens__/.*''', '''(__snapshots__|__goldens__)/.*\.snap$''', '''apps/web-platform/test/__synthesized__/.*''', '''reports/mutation/.*''']
+
+# ---------------------------------------------------------------------------
+# 8. Resend API key (re_)
+# ---------------------------------------------------------------------------
+[[rules]]
+id = "resend-api-key"
+description = "Resend API key"
+regex = '''re_[A-Za-z0-9]{8,}_[A-Za-z0-9]{20,}'''
+keywords = ["re_"]
+tags = ["key", "resend", "email"]
+  [[rules.allowlists]]
+  paths = ['''__goldens__/.*''', '''(__snapshots__|__goldens__)/.*\.snap$''', '''apps/web-platform/test/__synthesized__/.*''', '''reports/mutation/.*''']
+
+# ---------------------------------------------------------------------------
+# 9. Cloudflare scoped token (40-char alphanumeric).
+#    NB: Cloudflare's "global API key" (32-char hex) is in the default pack.
+#    Scoped tokens are NOT covered by the default pack.
+# ---------------------------------------------------------------------------
+[[rules]]
+id = "cf-scoped-token"
+description = "Cloudflare scoped API token"
+regex = '''(?i)cloudflare[_\- ]?(api|token|secret)[_\- ]?(key|token)?[\"'\s:=]+([A-Za-z0-9_\-]{40})'''
+secretGroup = 3
+keywords = ["cloudflare"]
+tags = ["token", "cloudflare"]
+  [[rules.allowlists]]
+  paths = ['''__goldens__/.*''', '''(__snapshots__|__goldens__)/.*\.snap$''', '''apps/web-platform/test/__synthesized__/.*''', '''reports/mutation/.*''']
+
+# ---------------------------------------------------------------------------
+# 10. Sentry auth token (sntrys_, sntryu_)
+# ---------------------------------------------------------------------------
+[[rules]]
+id = "sentry-auth-token"
+description = "Sentry auth token (org or user scope)"
+regex = '''sntr(?:ys|yu)_[A-Za-z0-9_\-]{40,}'''
+keywords = ["sntrys_", "sntryu_"]
+tags = ["token", "sentry"]
+  [[rules.allowlists]]
+  paths = ['''__goldens__/.*''', '''(__snapshots__|__goldens__)/.*\.snap$''', '''apps/web-platform/test/__synthesized__/.*''', '''reports/mutation/.*''']
+
+# ---------------------------------------------------------------------------
+# 11. Discord webhook URL
+#     Default pack covers Discord BOT tokens (numeric.alpha.alpha).
+#     Webhook URLs (which carry an embedded secret token) are NOT covered.
+# ---------------------------------------------------------------------------
+[[rules]]
+id = "discord-webhook-url"
+description = "Discord webhook URL (carries embedded secret)"
+regex = '''https://(?:canary\.|ptb\.)?discord(?:app)?\.com/api/webhooks/[0-9]{17,20}/[A-Za-z0-9_\-]{60,}'''
+keywords = ["discord.com/api/webhooks", "discordapp.com/api/webhooks"]
+tags = ["webhook", "discord"]
+  [[rules.allowlists]]
+  paths = ['''__goldens__/.*''', '''(__snapshots__|__goldens__)/.*\.snap$''', '''apps/web-platform/test/__synthesized__/.*''', '''reports/mutation/.*''']
+
+# ---------------------------------------------------------------------------
+# 12. Database URL with embedded password
+#     Catches `postgres://user:password@host/db` and `postgresql://...`.
+# ---------------------------------------------------------------------------
+[[rules]]
+id = "database-url-with-password"
+description = "Database connection URL with embedded password"
+regex = '''postgres(?:ql)?://[^:/\s]+:[^@/\s]+@[A-Za-z0-9.\-]+'''
+keywords = ["postgres://", "postgresql://"]
+tags = ["url", "database", "credential"]
+  [[rules.allowlists]]
+  paths = ['''__goldens__/.*''', '''(__snapshots__|__goldens__)/.*\.snap$''', '''apps/web-platform/test/__synthesized__/.*''', '''reports/mutation/.*''']
+  # Allow placeholder URLs that ship in docs (postgres://USER:PASSWORD@HOST/DB).
+  regexes = ['''postgres(?:ql)?://(?:USER|user|postgres|<[^>]+>):(?:PASSWORD|password|secret|<[^>]+>)@''']
+
+# ---------------------------------------------------------------------------
+# 13. VAPID private key (web-push)
+#     P-256 raw private keys are 32 bytes -> 43 base64url chars.
+# ---------------------------------------------------------------------------
+[[rules]]
+id = "vapid-private-key"
+description = "VAPID web-push private key (P-256, base64url)"
+# VAPID env vars are conventionally named — anchor on the var-name context
+# rather than the raw 43-char key shape (which would false-positive heavily).
+regex = '''(?i)vapid[_\- ]?(private[_\- ]?key|secret)[\"'\s:=]+([A-Za-z0-9_\-]{42,44})'''
+secretGroup = 2
+keywords = ["vapid"]
+tags = ["key", "vapid", "web-push"]
+  [[rules.allowlists]]
+  paths = ['''__goldens__/.*''', '''(__snapshots__|__goldens__)/.*\.snap$''', '''apps/web-platform/test/__synthesized__/.*''', '''reports/mutation/.*''']

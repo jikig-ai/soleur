@@ -6,7 +6,13 @@ import { createClient } from "@/lib/supabase/client";
 import { reportSilentFallback } from "@/lib/client-observability";
 import { OAuthButtons } from "@/components/auth/oauth-buttons";
 import { EMAIL_OTP_LENGTH } from "@/lib/auth/constants";
-import { CALLBACK_ERRORS, DEFAULT_ERROR_MESSAGE, mapSupabaseError } from "@/lib/auth/error-messages";
+import {
+  CALLBACK_ERRORS,
+  DEFAULT_ERROR_MESSAGE,
+  isNoAccountError,
+  mapSupabaseError,
+  SIGNUP_REASON_NO_ACCOUNT,
+} from "@/lib/auth/error-messages";
 import Link from "next/link";
 
 export default function LoginPage() {
@@ -61,6 +67,14 @@ function LoginForm() {
           errorName: error.name,
         },
       });
+      if (isNoAccountError(error as { code?: string; message: string })) {
+        const params = new URLSearchParams({
+          email,
+          reason: SIGNUP_REASON_NO_ACCOUNT,
+        });
+        router.replace(`/signup?${params.toString()}`);
+        return;
+      }
       setError(mapSupabaseError(error.message));
     } else {
       setOtpSent(true);
