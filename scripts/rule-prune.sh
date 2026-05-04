@@ -64,14 +64,30 @@ jq -e --argjson v "$SCHEMA_VERSION" '.schema == $v' "$METRICS" >/dev/null 2>&1 \
 cutoff_epoch=$(( $(date -u +%s) - WEEKS * 7 * 86400 ))
 
 # Emit candidate tuples: id\tsection\tfirst_seen\trule_text_prefix.
-# try/catch on fromdateiso8601 mirrors the aggregator: malformed timestamps
-# get treated as "seen long ago" (epoch 0 < any finite cutoff).
+# Selection invariants:
+#   - fire_count == 0 (no deny/bypass/applied/warn events)
+#   - first_seen is set AND parseable AND older than cutoff
+#
+# `first_seen == null` means the aggregator hasn't recorded a first observation
+# yet (rule added since last aggregator run, or rule pre-dates v1 schema).
+# Treating null as "long ago" was the original intent (defensive fallback)
+# but the failure mode is severe: on first quarterly run after a rule-metrics
+# initialization, every never-fired rule with null first_seen is wrongly
+# flagged as stale. Surfaced post-merge by PR #3123's workflow_dispatch
+# validation, which proposed retiring 41 healthy rules including
+# `cq-rule-ids-are-immutable`. Rules without a first_seen timestamp are
+# unobservable, not stale — skip them and let the aggregator's next run
+# populate the timestamp.
+#
+# try/catch on fromdateiso8601 still treats malformed timestamps as
+# epoch 0 < cutoff (i.e., stale) — this is correct because a malformed
+# timestamp is corrupted state, not "not yet observed."
 candidates=$(jq -r \
   --argjson cutoff "$cutoff_epoch" \
   '.rules
    | map(select(.fire_count == 0
-        and (.first_seen == null
-             or (try (.first_seen | fromdateiso8601) catch 0) < $cutoff)))
+        and .first_seen != null
+        and (try (.first_seen | fromdateiso8601) catch 0) < $cutoff))
    | .[]
    | [.id, .section, (.first_seen // "unknown"), .rule_text_prefix]
    | @tsv' \
