@@ -30,7 +30,7 @@ fi
 # (20-char placeholder ref, passes all canonical claim checks). Pre-baked so each
 # fixture does not have to re-encode the JWT. Placeholder (not a real Supabase
 # ref) avoids GitHub secret-scanner pattern hits on the dev project ref.
-CANONICAL_JWT='eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImFhYWFhYWFhYWFhYWFhYWFhYWFhIiwicm9sZSI6ImFub24iLCJpYXQiOjAsImV4cCI6OTk5OTk5OTk5OX0.signaturedoesnotmattertoclaimcheck'
+CANONICAL_JWT='eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImFhYWFhYWFhYWFhYWFhYWFhYWFhIiwicm9sZSI6ImFub24iLCJpYXQiOjAsImV4cCI6OTk5OTk5OTk5OX0.signaturedoesnotmattertoclaimcheck' # gitleaks:allow # issue:#3194 synthesized JWT (placeholder ref aaaa..., signaturedoesnotmatter)
 
 # JWTs used by F4-F7 (non-canonical claims) — each crafted to fail exactly one
 # claim assertion. Generated via:
@@ -39,23 +39,23 @@ CANONICAL_JWT='eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJl
 #     printf '%s.%s.sig' "$(printf '%s' "$header" | base64 | tr '+/' '-_' | tr -d '=')" \
 #                       "$(printf '%s' "$payload" | base64 | tr '+/' '-_' | tr -d '=')"
 #   done
-JWT_PLACEHOLDER_REF='eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJvbGUiOiJhbm9uIiwicmVmIjoidGVzdDEyMzQ1Njc4OTAxMjM0NTYifQ.sig'
-JWT_SERVICE_ROLE='eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJvbGUiOiJzZXJ2aWNlX3JvbGUiLCJyZWYiOiJhYWFhYWFhYWFhYWFhYWFhYWFhYSJ9.sig'
-JWT_BAD_ISS='eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJldmlsIiwicm9sZSI6ImFub24iLCJyZWYiOiJhYWFhYWFhYWFhYWFhYWFhYWFhYSJ9.sig'
-JWT_SHORT_REF='eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJvbGUiOiJhbm9uIiwicmVmIjoiYWJjMTIzIn0.sig'
+JWT_PLACEHOLDER_REF='eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJvbGUiOiJhbm9uIiwicmVmIjoidGVzdDEyMzQ1Njc4OTAxMjM0NTYifQ.sig' # gitleaks:allow # issue:#3194 synthesized JWT (.sig signature, placeholder ref)
+JWT_SERVICE_ROLE='eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJvbGUiOiJzZXJ2aWNlX3JvbGUiLCJyZWYiOiJhYWFhYWFhYWFhYWFhYWFhYWFhYSJ9.sig' # gitleaks:allow # issue:#3194 synthesized JWT (.sig signature, placeholder ref)
+JWT_BAD_ISS='eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJldmlsIiwicm9sZSI6ImFub24iLCJyZWYiOiJhYWFhYWFhYWFhYWFhYWFhYWFhYSJ9.sig' # gitleaks:allow # issue:#3194 synthesized JWT (.sig signature, evil iss for negative test)
+JWT_SHORT_REF='eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJvbGUiOiJhbm9uIiwicmVmIjoiYWJjMTIzIn0.sig' # gitleaks:allow # issue:#3194 synthesized JWT (.sig signature, short-ref negative test)
 
 # F12: smuggled GitHub Actions annotation in the iss claim. The decoded payload
 # contains a literal newline + "::notice::PASS"; if the script does not strip
 # C0 controls before echoing claim values to stderr, this becomes a synthetic
 # annotation (and could mask the real failure). Built from:
 #   payload='{"iss":"supabase\n::notice::PASS","role":"anon","ref":"aaaaaaaaaaaaaaaaaaaa"}'
-JWT_LOG_INJECT='eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZVxuOjpub3RpY2U6OlBBU1MiLCJyb2xlIjoiYW5vbiIsInJlZiI6ImFhYWFhYWFhYWFhYWFhYWFhYWFhIn0.sig'
+JWT_LOG_INJECT='eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZVxuOjpub3RpY2U6OlBBU1MiLCJyb2xlIjoiYW5vbiIsInJlZiI6ImFhYWFhYWFhYWFhYWFhYWFhYWFhIn0.sig' # gitleaks:allow # issue:#3194 synthesized JWT (.sig signature, log-injection negative test)
 
 # F12-bis: same idea but the smuggled annotation uses U+2028 (LINE SEPARATOR),
 # encoded as 0xE2 0x80 0xA8 in UTF-8. `tr -d '\000-\037\177'` does NOT strip
 # this 3-byte sequence; the sed pass after tr does. Payload:
 #   payload='{"iss":"supabase\u2028::notice::PASS","role":"anon","ref":"aaaaaaaaaaaaaaaaaaaa"}'
-JWT_LOG_INJECT_U2028='eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZVx1MjAyODo6bm90aWNlOjpQQVNTIiwicm9sZSI6ImFub24iLCJyZWYiOiJhYWFhYWFhYWFhYWFhYWFhYWFhYSJ9.sig'
+JWT_LOG_INJECT_U2028='eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZVx1MjAyODo6bm90aWNlOjpQQVNTIiwicm9sZSI6ImFub24iLCJyZWYiOiJhYWFhYWFhYWFhYWFhYWFhYWFhYSJ9.sig' # gitleaks:allow # issue:#3194 synthesized JWT (.sig signature, U+2028 log-injection negative test)
 
 # Test counters
 TESTS_RUN=0

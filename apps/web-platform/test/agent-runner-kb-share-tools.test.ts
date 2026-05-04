@@ -223,7 +223,7 @@ describe("agent-runner kb_share_* tool wiring", () => {
 
     const result = await canUseTool(
       "mcp__soleur_platform__kb_share_revoke",
-      { token: "tok-1234567890" },
+      { token: "tok-1234567890" }, // gitleaks:allow # issue:#3194 synthesized fixture token for canUseTool test
       { signal: new AbortController().signal },
     );
     expect(result.behavior).toBe("allow");

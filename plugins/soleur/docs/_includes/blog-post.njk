@@ -23,7 +23,7 @@ layout: base.njk
     "@id": {{ (site.url + page.url) | jsonLdSafe | safe }}
   },
   "inLanguage": "en-US",
-  "image": {{ (site.url + "/images/og-image.png") | jsonLdSafe | safe }},
+  "image": {{ (site.url + "/images/" + (ogImage if ogImage else "og-image.png")) | jsonLdSafe | safe }},
   "author": {
     "@type": "Person",
     "@id": {{ (site.url + "/about/#jean-deruelle") | jsonLdSafe | safe }},

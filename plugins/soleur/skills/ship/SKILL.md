@@ -967,6 +967,38 @@ Each meaningful event (first iteration, every state change, heartbeat every 3rd 
 
    **Migration filename anchor.** If the item description mentions any migration filename OR a bare migration number (e.g. "migration 031") AND no sibling verify file exists yet (so we're still creating the issue), prepend a `**Migration file:** \`NNN_full_stem.sql\`` line to the body below the `<ITEM_DESCRIPTION>` paragraph. The `verify-migrations` auto-close job matches on both the full filename AND the stem (`NNN_full_stem`) — having either in the body ensures auto-close works once a verify file is later added. Bare `NNN` alone is not enough to match.
 
+   **Callback URL audit anchor.** If the item description matches BOTH a callback/redirect signal `/(callback URL|redirect_uri)/i` AND a GitHub-OAuth signal `/(GitHub App|OAuth App|Iv23|client_id)/i` (case-insensitive), this is a callback-URL-class follow-through. The two-signal AND prevents false-positives on unrelated docs/copy issues that happen to mention "GitHub App" once in passing. Closure requires more than a "looks fixed in dashboard" comment — issue #1784 was closed without a verified second remediation, and the same symptom recurred in #3183. Append the **Callback URL closure gate** block (below) to the issue body, and instruct any closer that the closing comment MUST contain ALL THREE of:
+   1. The verbatim `redirect_uri` value(s) verified — paste each registered callback URL byte-for-byte.
+   2. A workflow run ID showing `scheduled-oauth-probe.yml` ran green AFTER the dashboard change (link via `https://github.com/<repo>/actions/runs/<id>`).
+   3. The byte count of the GitHub App's Callback URL textarea contents (e.g., `wc -c <<<"$contents"`) — forensic anchor for future drift comparisons.
+
+   A close attempt without all three fields is workflow non-compliance per `wg-when-fixing-a-workflow-gates-detection` (the gap that allowed #1784 to recur). When closing the issue manually, verify the closing comment contains:
+   - Each registered callback URL listed verbatim (substring grep against the comment body).
+   - A run-URL of the form `actions/runs/[0-9]+` whose conclusion is `success` (verify via `gh run view <id> --json conclusion --jq .conclusion`).
+   - A byte-count line matching `bytes:\s*[0-9]+`.
+
+   If any field is missing, comment on the issue requesting it and leave the issue open. Do NOT close.
+
+   **Callback URL closure gate template** (append to issue body when the audit anchor matches):
+
+   ```text
+   ## Callback URL closure gate
+
+   This is a callback-URL-class follow-through. To prevent recurrence of #1784/#3183
+   (closed without verified second remediation), this issue is **NOT closeable** until
+   a comment is posted containing ALL THREE fields:
+
+   - [ ] Verbatim redirect_uri values verified (paste each callback URL byte-for-byte)
+   - [ ] Workflow run ID showing `scheduled-oauth-probe.yml` ran green AFTER the dashboard change
+   - [ ] Byte count of the GitHub App Callback URL textarea (`wc -c` output)
+
+   Auditor checklist (operator):
+   1. Open the GitHub App settings page (e.g., `https://github.com/organizations/<org>/settings/apps/<app>`)
+   2. Capture the textarea contents verbatim into the issue
+   3. Run `gh workflow run scheduled-oauth-probe.yml` and wait for it to be green
+   4. Paste run-URL + byte count + verbatim URLs into the closing comment
+   ```
+
    For each item, write the issue body to a temp file (do NOT use heredocs in this step — write with `{ echo "..."; } > /tmp/follow-through-body.md`), then create the issue:
 
    ```bash

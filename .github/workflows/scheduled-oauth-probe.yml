@@ -50,6 +50,19 @@ jobs:
           # exposing it to the workflow is no broader leak than its
           # baseline scope. Still mask via secret to keep logs clean.
           SUPABASE_ANON_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
+          # GitHub App user-OAuth client_id (Iv23...). Used to probe each
+          # registered callback URL against GitHub's /login/oauth/authorize.
+          # Prefix is OAUTH_PROBE_ because GitHub rejects repo secrets
+          # starting with GITHUB_ (HTTP 422 from the secrets API).
+          # Stored as a workflow secret to avoid hardcoding even though the
+          # client_id is public — keeps PR/log surfaces clean.
+          OAUTH_PROBE_GITHUB_CLIENT_ID: ${{ secrets.OAUTH_PROBE_GITHUB_CLIENT_ID }}
+          # 20-char Supabase project ref ([a-z0-9]{20}) for the canonical
+          # supabase.co fallback URL. Set via gh secret set from
+          # Doppler prd.NEXT_PUBLIC_SUPABASE_URL after CNAME deref. Probe
+          # cross-checks this against a live `dig CNAME api.soleur.ai`
+          # at runtime to catch silent project re-provisioning.
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
         run: |
           set -uo pipefail
           # Note: NOT set -e — we collect failure mode and emit it as output.
@@ -62,6 +75,18 @@ jobs:
               fail_mode="$1"
               fail_detail="$2"
             fi
+          }
+
+          # strip_log_injection — defense against log-annotation forgery via
+          # values echoed into ::error::/::warning:: or $GITHUB_OUTPUT. Strips
+          # CR/LF (\r\n), form-feed/vertical-tab/DEL (\f\v\x7f), NEL (\x85),
+          # and the Unicode line/paragraph/zwsp/bom separators U+2028, U+2029,
+          # U+200B, U+FEFF. Bash ${var//[$'…']/} does NOT reliably cover
+          # multi-byte UTF-8 sequences (verified on bash 5.2); use tr+sed.
+          # See: knowledge-base/project/learnings/security-issues/2026-04-17-log-injection-unicode-line-separators.md
+          strip_log_injection() {
+            printf '%s' "$1" | tr -d '\r\n\f\v\x7f\x85' \
+              | sed -E 's/\xe2\x80\xa8//g; s/\xe2\x80\xa9//g; s/\xe2\x80\x8b//g; s/\xef\xbb\xbf//g'
           }
 
           # check_redirect <provider> <expected_host> — probes a Supabase
@@ -107,6 +132,121 @@ jobs:
 
           # 3. GitHub OAuth redirect lands on github.com
           [[ -z "$fail_mode" ]] && check_redirect "github" "github.com"
+
+          # 3b. Probe each registered GitHub App callback URL against
+          # GitHub's /login/oauth/authorize and assert it is still
+          # associated with our App (Iv23...). Healthy state: HTTP 200 +
+          # body does NOT contain "redirect_uri is not associated".
+          # Both healthy and failing states return HTTP 200 — the body
+          # grep is load-bearing.
+          # See: docs.github.com/.../troubleshooting-authorization-request-errors
+          # See: knowledge-base/project/learnings/integration-issues/2026-05-04-github-app-callback-url-three-entries.md
+          # See: knowledge-base/engineering/ops/runbooks/github-app-callback-audit.md
+          probe_github_redirect_uri() {
+            local label="$1" redirect_uri="$2"
+            local url http body_file
+            local redirect_uri_safe
+            redirect_uri_safe=$(strip_log_injection "$redirect_uri")
+
+            # URL-encode via jq (no awk/printf escape traps). State omitted —
+            # probe never completes the callback round-trip.
+            local enc
+            enc=$(jq -nr --arg u "$redirect_uri" '$u|@uri')
+            url="https://github.com/login/oauth/authorize?client_id=${OAUTH_PROBE_GITHUB_CLIENT_ID}&redirect_uri=${enc}"
+
+            # Tmpfile pattern (matches the /auth/v1/settings probe below).
+            # -L follows the GitHub /login redirect for unauthenticated
+            # callers; the error page renders BEFORE the login form when
+            # redirect_uri is bad, so -L safely captures both code paths.
+            # User-Agent identifies the probe so GitHub can rate-limit
+            # politely if it ever needs to.
+            body_file=$(mktemp)
+            # shellcheck disable=SC2064
+            trap "rm -f '$body_file'" RETURN
+            http=$(curl --max-time 10 -L -s -o "$body_file" \
+              -H "User-Agent: soleur-oauth-probe/1.0" \
+              -w '%{http_code}' \
+              "$url" 2>/dev/null) || {
+              record_failure "github_oauth_${label}_network" \
+                "GET .../authorize for redirect_uri=${redirect_uri_safe} -> curl error (DNS, TLS, or connect; see runbook)"
+              return
+            }
+
+            if [[ "$http" != "200" ]]; then
+              record_failure "github_oauth_${label}_http" \
+                "GET .../authorize for ${redirect_uri_safe} -> HTTP ${http} (see runbook)"
+              return
+            fi
+            if grep -q "redirect_uri is not associated" "$body_file"; then
+              record_failure "github_oauth_${label}_unregistered" \
+                "GitHub rejected redirect_uri=${redirect_uri_safe} — operator must add this URL verbatim to the GitHub App callback list (see runbook)"
+              return
+            fi
+            if grep -q "Application suspended" "$body_file"; then
+              record_failure "github_app_suspended" \
+                "GitHub App for the probe's client_id is suspended — every GitHub auth flow breaks until reinstated (see runbook)"
+              return
+            fi
+            # Positive proof: a healthy authorize page contains GitHub-
+            # specific anchors. Generic <form/Authorize substrings are too
+            # permissive (GitHub rate-limit / abuse pages also contain
+            # <form). Match the authenticity_token input or the explicit
+            # GitHub copy. Both-missing = GitHub HTML reworded; treat as
+            # drift rather than silent-pass.
+            if ! grep -qE 'name="authenticity_token"|Sign in to GitHub|Authorize [A-Z]' "$body_file"; then
+              record_failure "github_oauth_${label}_html_drift" \
+                "Authorize response for ${redirect_uri_safe} lacked GitHub-specific anchors (authenticity_token / Sign in to GitHub / Authorize <App>) — GitHub may have reworded the page; refresh sentinels in oauth-probe-contract.test.ts (see runbook)"
+              return
+            fi
+          }
+
+          # Skip the new probes gracefully when secrets are unset (e.g.,
+          # on a repo fork or before the first `gh secret set`). Each
+          # missing secret records a distinct failure mode so the operator
+          # knows which `gh secret set` to run.
+          if [[ -z "$fail_mode" ]]; then
+            if [[ -z "${OAUTH_PROBE_GITHUB_CLIENT_ID:-}" ]]; then
+              record_failure "github_client_id_probe_unset" \
+                "OAUTH_PROBE_GITHUB_CLIENT_ID secret is not set — cannot probe GitHub App callback URL registration (see runbook)"
+            elif [[ -z "${SUPABASE_PROJECT_REF:-}" ]]; then
+              record_failure "supabase_project_ref_unset" \
+                "SUPABASE_PROJECT_REF secret is not set — cannot probe canonical supabase.co callback URL (see runbook)"
+            else
+              # 3c. SUPABASE_PROJECT_REF integrity — derive at runtime via
+              # CNAME deref of api.soleur.ai and assert byte-equality with
+              # the stored secret. Catches silent Supabase project re-
+              # provisioning (region migration, restore-from-backup) where
+              # the static secret would otherwise probe a phantom URL.
+              # `dig` pinned per cq-when-a-plan-prescribes-dig... rule.
+              cname_ref=$(dig +time=3 +tries=2 +short CNAME "${API_HOST}" 2>/dev/null \
+                | sed -E 's/\.supabase\.co\.?$//' \
+                | head -1)
+              if [[ -z "$cname_ref" ]]; then
+                # CNAME deref failed (network, DNS, custom domain unwound).
+                # Fall back to the secret — better than no probe.
+                cname_ref="${SUPABASE_PROJECT_REF}"
+              fi
+              if [[ "$cname_ref" != "${SUPABASE_PROJECT_REF}" ]]; then
+                cname_ref_safe=$(strip_log_injection "$cname_ref")
+                record_failure "supabase_project_ref_drift" \
+                  "dig CNAME ${API_HOST} resolved ref=${cname_ref_safe} but workflow secret SUPABASE_PROJECT_REF=${SUPABASE_PROJECT_REF} — re-run gh secret set or investigate Supabase re-provision (see runbook)"
+              fi
+
+              # 3d. github-resolve callback (Flow B — App-direct OAuth)
+              [[ -z "$fail_mode" ]] && probe_github_redirect_uri "github_resolve" \
+                "https://${APP_HOST}/api/auth/github-resolve/callback"
+
+              # 3e. Supabase custom-domain callback (Flow A primary)
+              [[ -z "$fail_mode" ]] && probe_github_redirect_uri "supabase_custom" \
+                "https://${API_HOST}/auth/v1/callback"
+
+              # 3f. Supabase canonical callback (Flow A fallback during
+              # custom-domain CNAME re-provisioning — see Supabase docs
+              # on custom-domain dual-registration)
+              [[ -z "$fail_mode" ]] && probe_github_redirect_uri "supabase_canonical" \
+                "https://${SUPABASE_PROJECT_REF}.supabase.co/auth/v1/callback"
+            fi
+          fi
 
           # 4. /auth/v1/settings exposes google + github as enabled.
           # Requires the Supabase anon `apikey` header — without it the
@@ -175,14 +315,19 @@ jobs:
           # separators (U+2028/U+2029) that could break the key=value contract
           # or forge ::warning:: annotations. Use tr for byte-class portability;
           # bash's "${var//[$'…']/}" pattern doesn't reliably cover U+2028/9.
-          fail_detail_safe=$(printf '%s' "$fail_detail" | tr -d '\r\n\f\v\x7f' | sed 's/\xe2\x80\xa8//g; s/\xe2\x80\xa9//g')
+          # Sanitise both fail_mode (defensive — current values are
+          # hardcoded literals but a future contributor might interpolate)
+          # and fail_detail before writing to $GITHUB_OUTPUT. Uses the
+          # shared strip_log_injection helper.
+          fail_mode_safe=$(strip_log_injection "$fail_mode")
+          fail_detail_safe=$(strip_log_injection "$fail_detail")
           {
-            echo "failure_mode=${fail_mode}"
+            echo "failure_mode=${fail_mode_safe}"
             echo "failure_detail=${fail_detail_safe}"
           } >> "$GITHUB_OUTPUT"
 
-          if [[ -n "$fail_mode" ]]; then
-            echo "::warning::OAuth probe failed: ${fail_mode} — ${fail_detail_safe}"
+          if [[ -n "$fail_mode_safe" ]]; then
+            echo "::warning::OAuth probe failed: ${fail_mode_safe} — ${fail_detail_safe}"
           else
             echo "OAuth probe passed."
           fi
@@ -219,6 +364,22 @@ jobs:
             printf -- '- **Detail:** %s\n' "$FAIL_DETAIL"
             printf -- '- **Detected at:** %s\n' "$NOW"
             printf -- '- **Run log:** %s\n\n' "$RUN_URL"
+            # When the failure is a callback-URL drift (or App suspension),
+            # inline the required-list so the operator can compute the diff
+            # without fetching the runbook. The list is the canonical
+            # source-of-truth from github-app-callback-audit.md.
+            case "$FAIL_MODE" in
+              github_oauth_*_unregistered|github_app_suspended)
+                printf '### Required GitHub App callback URLs\n\n'
+                printf 'The App `soleur-ai` (client_id `Iv23li9p88M5ZxYv1b7V`) MUST have ALL THREE of these registered:\n\n'
+                printf '```text\n'
+                printf 'https://app.soleur.ai/api/auth/github-resolve/callback\n'
+                printf 'https://api.soleur.ai/auth/v1/callback\n'
+                printf 'https://ifsccnjhymdmidffkzhl.supabase.co/auth/v1/callback\n'
+                printf '```\n\n'
+                printf 'Audit at: https://github.com/organizations/jikig-ai/settings/apps/soleur-ai\n\n'
+                ;;
+            esac
             printf '### What to do\n\nSee [oauth-probe-failure.md runbook](%s).\n\n' "$RUNBOOK_URL"
             printf '**Tracks:** #2997\n'
           } > "$BODY_FILE"
@@ -270,7 +431,7 @@ jobs:
           if [[ -n "$STALE" ]]; then
             echo "Closing stale tracking issue #$STALE."
             gh issue close "$STALE" --repo "$GH_REPO" \
-              --comment "Probe green at ${NOW}. All four checks passed (login HTTP 200, google+github authorize 302, settings JSON valid). Run: ${RUN_URL}"
+              --comment "Probe green at ${NOW}. All checks passed (login HTTP 200, google+github authorize 302, settings JSON valid, all 3 GitHub App callback URLs registered, callback-error pass-through). Run: ${RUN_URL}"
           else
             echo "No stale tracking issue to close."
           fi

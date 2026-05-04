@@ -20,6 +20,28 @@ pre-commit:
       glob: "*.md"
       run: npx --yes markdownlint-cli {staged_files}
       stage_fixed: true
+    # Secret-scanning floor (#3121). gitleaks scans the staged index directly,
+    # so no `glob:` filter is set — the binary handles file selection.
+    # `--exit-code 1` makes lefthook treat any finding as a hard failure.
+    # Documented as fast-feedback companion to the load-bearing CI gate at
+    # .github/workflows/secret-scan.yml. Bypass with `git commit --no-verify`
+    # is intentionally possible — CI re-scans on every PR.
+    gitleaks-staged:
+      priority: 4
+      run: gitleaks git --pre-commit --staged --redact --no-banner --exit-code 1
+    # Companion linter for shapes gitleaks doesn't catch (real emails, prod-shape
+    # UUIDs, Supabase project refs). Path-array glob (NOT `**/*` — gobwas
+    # semantics silently no-op without explicit subdirs; see learning
+    # 2026-03-21-lefthook-gobwas-glob-double-star.md).
+    lint-fixture-content:
+      priority: 4
+      glob:
+        - "apps/web-platform/test/fixtures/**"
+        - "apps/web-platform/test/__synthesized__/**"
+        - "apps/web-platform/test/__goldens__/**"
+        - "**/__goldens__/**"
+        - "**/*.snap"
+      run: node apps/web-platform/scripts/lint-fixture-content.mjs {staged_files}
     rule-id-lint:
       priority: 4
       # Run target is pinned to AGENTS.md (not `{staged_files}`) because the
