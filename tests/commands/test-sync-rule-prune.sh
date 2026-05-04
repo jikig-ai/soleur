@@ -451,6 +451,40 @@ tp11_dry_run_honored() {
   rm -rf "$root"
 }
 
+# tp12: rule with first_seen=null is NOT a retirement candidate.
+# Regression guard for the post-merge bug surfaced by #3123's workflow_dispatch:
+# the prior jq filter treated `first_seen == null` as "long ago," wrongly
+# proposing retirement of healthy never-fired rules whose timestamps the
+# aggregator hadn't populated yet (66 rules in rule-metrics.json on
+# 2026-05-04, 41 of which were proposed by PR #3154 before being closed).
+# Null first_seen means "not yet observed," not "stale" — it must skip.
+tp12_null_first_seen_skipped() {
+  local root; root=$(mktemp -d)
+  mkdir -p "$root/knowledge-base/project" "$root/scripts"
+  jq -n '{
+    schema:1, generated_at:"2026-05-04T00:00:00Z",
+    rules:[
+      {id:"wg-no-timestamp", section:"Workflow Gates", hit_count:0, bypass_count:0, applied_count:0, warn_count:0, fire_count:0, prevented_errors:0, last_hit:null, first_seen:null, rule_text_prefix:"never observed yet"}
+    ],
+    summary:{total_rules_tagged:1, rules_unused_over_8w:0, rules_bypassed_over_baseline:0, orphan_rule_ids:[]}
+  }' > "$root/knowledge-base/project/rule-metrics.json"
+  : > "$root/scripts/retired-rule-ids.txt"
+  local rc; rc=$(_run_pr "$root")
+  # Expectation: identical to tp1 (no candidates) — the null-first_seen rule
+  # must be filtered out at the candidates-jq stage, before any
+  # propose-retirement-mode logic runs. So we exit via the shared
+  # "No prune candidates" path.
+  if [[ "$rc" == "0" ]] \
+     && grep -qE 'No (prune|retirement) candidates' "$root/out.txt" \
+     && ! grep -qE '::rule-prune-pr-(title|body)::' "$root/out.txt" \
+     && ! grep -qE '^wg-no-timestamp \|' "$root/scripts/retired-rule-ids.txt"; then
+    _report "tp12: first_seen=null → not a candidate" ok
+  else
+    _report "tp12: first_seen=null → not a candidate" fail "rc=$rc; out=$(cat "$root/out.txt"); file=$(cat "$root/scripts/retired-rule-ids.txt")"
+  fi
+  rm -rf "$root"
+}
+
 if [[ ! -f "$SCRIPT" ]]; then
   echo "ERROR: $SCRIPT does not exist — RED phase expected this." >&2
   exit 1
@@ -474,6 +508,7 @@ tp8_schema_mismatch
 tp9_rerun_idempotent
 tp10_duplicate_candidate
 tp11_dry_run_honored
+tp12_null_first_seen_skipped
 
 echo "=== $pass passed, $fail failed ==="
 [[ "$fail" -eq 0 ]]
