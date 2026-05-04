@@ -223,6 +223,26 @@ function SignupForm() {
           <div className="flex-1 border-t border-neutral-700" />
         </div>
 
+        {/*
+          Hint is rendered only while the gating checkbox is unchecked.
+          - Sighted users: text is read in normal page flow on initial render
+            (checkbox is unchecked at mount, so the hint is present).
+          - Screen-reader users: the hint sits in the document at first paint
+            and is read in flow; the checkbox itself announces its toggled
+            state, which is the load-bearing signal for the disabled OAuth
+            buttons. Conditional render avoids the visual "ghost" gap that
+            a persistent empty live-region with min-h reservation creates
+            once the user accepts the terms.
+        */}
+        {!tcAccepted && (
+          <p
+            data-testid="tc-hint"
+            className="text-center text-xs text-neutral-500"
+          >
+            Accept the terms above to continue.
+          </p>
+        )}
+
         <OAuthButtons disabled={!tcAccepted} />
 
         <p className="text-center text-sm text-neutral-500">

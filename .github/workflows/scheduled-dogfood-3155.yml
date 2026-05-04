@@ -1,0 +1,194 @@
+name: "Scheduled (once): dogfood-3155"
+
+on:
+  schedule:
+    - cron: '0 9 5 5 *'
+  workflow_dispatch: {}
+
+# `contents: write` is required for the D4 neutralization commit (the agent
+# strips the `schedule:` trigger from this file at end-of-run). `pull-requests:
+# write` is required for the PR-fallback leg when direct push is blocked by
+# branch protection. `id-token: write` is required by
+# `anthropics/claude-code-action@v1` for its OIDC auth handshake — without it
+# the action exits before the prompt body runs (no agent execution, no D4).
+#
+# `actions: write` was REMOVED in #3153 — the official Anthropic GitHub App's
+# installation manifest caps `actions:*` at READ. Workflow-level `actions:
+# write` cannot widen the App's effective scope, so declaring it gave false
+# confidence that `gh workflow disable` would work inside the agent.
+#
+# COPY-PASTE WARNING: if you copy this block to a recurring-cron workflow,
+# REVERT `contents:` to `read` and DROP `pull-requests:` — recurring crons do
+# not self-neutralize, so the wider permissions are unnecessary attack surface.
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+  id-token: write
+
+concurrency:
+  group: schedule-once-dogfood-3155
+  cancel-in-progress: false
+
+# DEFAULT_BRANCH and REPO_FULL_NAME are hardcoded (not derived from
+# github.event.* or github.repository expressions) to satisfy the
+# security_reminder_hook PreToolUse check, which flags ${{ github.event.* }}
+# patterns globally. This dogfood workflow only ever runs in jikig-ai/soleur
+# against main, so hardcoding is safe for this single-fire schedule.
+env:
+  ISSUE_NUMBER: "3185"
+  COMMENT_ID: "4371785826"
+  FIRE_DATE: "2026-05-05"
+  WORKFLOW_NAME: "scheduled-dogfood-3155.yml"
+  EXPECTED_AUTHOR: "deruelle"
+  EXPECTED_CREATED_AT: "2026-05-04T14:17:54Z"
+  DEFAULT_BRANCH: "main"
+  REPO_FULL_NAME: "jikig-ai/soleur"
+
+jobs:
+  run-once:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: One-time fire (with self-neutralization)
+        uses: anthropics/claude-code-action@fefa07e9c665b7320f08c3b525980457f22f58aa # v1
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          plugin_marketplaces: 'https://github.com/jikig-ai/soleur.git'
+          plugins: 'soleur@soleur'
+          # --allowedTools mirrors the recurring template (Step 3a). Do NOT
+          # widen — the fire-time prompt is fed an externally-fetched comment
+          # body (D1), so least-privilege tool surface is load-bearing.
+          claude_args: >-
+            --max-turns 25
+            --allowedTools Bash,Read,Write,Edit,Glob,Grep
+          prompt: |
+            ## Neutralization primitive (referenced by D3 abort, preflight-failure abort, and the Final step)
+
+            To **neutralize** the workflow (prevent any future cron fires), do
+            the following IN ORDER. The previous mechanism `gh workflow disable
+            "$WORKFLOW_NAME"` was removed in #3153 — `claude-code-action`'s App
+            installation token does not honor `actions: write`, so the disable
+            returns 403 regardless of the workflow's declared permissions.
+
+            1. **Idempotency precheck.** Read `.github/workflows/$WORKFLOW_NAME`.
+               If the `on:` block has already had `schedule:` removed (or only
+               contains `workflow_dispatch:`), the workflow is already
+               neutralized — skip to step 6 (success, no-op).
+            2. **Edit YAML.** Use the Read+Edit tools (NOT shell `sed`/`awk` —
+               shell-based YAML mutation has a long history of corrupting
+               workflow files in CI) to remove the `schedule:` key and its
+               child list under `on:`. Leave any other triggers
+               (`workflow_dispatch:`, etc.) intact. If `schedule:` is the ONLY
+               trigger, replace the entire `on:` block with `on:\n  workflow_dispatch:`
+               so the file remains a valid GHA workflow that can be manually
+               invoked for forensic purposes.
+            3. **Stage and guard against no-op commit.**
+               `git add .github/workflows/$WORKFLOW_NAME` then
+               `git diff --cached --quiet`. If the diff is empty (exit 0), the
+               file was already neutralized between step 1 and step 2 — skip
+               to step 6.
+            4. **Configure git identity, then commit.**
+               `claude-code-action@v1` does not pre-configure `git config
+               user.name`/`user.email` inside the bash subprocess; without
+               this step `git commit` aborts with "Author identity unknown."
+               Run:
+               ```bash
+               git config user.name "github-actions[bot]"
+               git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+               git commit -m "chore(schedule): neutralize one-time workflow $WORKFLOW_NAME (post-fire cleanup, #$ISSUE_NUMBER)"
+               ```
+            5. **Push — direct first, PR fallback.**
+               - **5a.** Try direct push:
+                 `git push origin "HEAD:$DEFAULT_BRANCH"`.
+                 If exit 0, neutralization succeeded — go to step 6.
+               - **5b.** If direct push fails (branch protection / required
+                 status checks): first check whether a stale neutralization
+                 PR already exists for this workflow:
+                 `EXISTING=$(gh pr list --search "head:chore/neutralize-$WORKFLOW_NAME" --state open --json url --jq '.[0].url // empty')`.
+                 If `$EXISTING` is non-empty, treat as a successful handoff
+                 — go to step 6 without opening a duplicate. Otherwise create
+                 an ephemeral branch
+                 `chore/neutralize-$WORKFLOW_NAME-$(date -u +%Y%m%d%H%M%S)`,
+                 push it, then open a PR via
+                 `gh pr create --base "$DEFAULT_BRANCH" --head "$BRANCH" --title "chore(schedule): neutralize $WORKFLOW_NAME" --body "Auto-cleanup after one-time fire of #$ISSUE_NUMBER. Removes the schedule: trigger from the generated --once workflow file. See plugins/soleur/skills/schedule/SKILL.md (D4 defense)."`.
+                 Then attempt auto-merge:
+                 `gh pr merge --squash --auto "$PR_URL" 2>/tmp/merge.err`.
+                 If `merge.err` contains `auto-merge is not allowed`, the user
+                 repo has `allow_auto_merge: false` — the PR is open and
+                 waiting on a human reviewer; that is still a successful
+                 neutralization handoff (D3 catches any re-fire before the PR
+                 lands).
+            6. **Success.** No fallback comment posted; the task-result
+               comment from the main work suffices.
+            7. **Both legs failed.** If step 5a errored AND step 5b
+               PR-creation errored (NOT auto-merge — auto-merge unavailability
+               is acceptable), post the fallback comment to issue
+               #$ISSUE_NUMBER with this exact body:
+               "Workflow ran but auto-cleanup failed (direct push: <err>; PR
+               create: <err>). Operator action required: edit
+               `.github/workflows/$WORKFLOW_NAME` to remove the `schedule:`
+               trigger (the same edit this run attempted), OR install the
+               Anthropic Claude GitHub App as a bypass-actor on your default
+               branch ruleset, OR install a custom GitHub App with `actions:
+               write` and re-run with `gh workflow disable`."
+
+            ## Pre-flight (abort with observation comment if any check fails)
+
+            1. **Date guard (PRIMARY cross-year defense, D3):**
+               First, refuse to run if `$FIRE_DATE` is empty or malformed:
+               `[[ "$FIRE_DATE" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] || { echo "FIRE_DATE empty or malformed: '$FIRE_DATE'"; <invoke neutralization primitive>; exit 0; }`
+               Then assert the calendar match:
+               `[[ "$(date -u +%F)" == "$FIRE_DATE" ]]` must be true. If false,
+               invoke the Neutralization primitive above and exit 0. Take no
+               other action.
+               This is D3, the load-bearing defense against cron `0 9 <day> <month> *`
+               re-firing every year. Cannot fail silently.
+            2. **Idempotency:** if the workflow's `on:` block no longer
+               contains `schedule:` (already neutralized), exit 0 immediately.
+               No commit needed; the cron will not fire again from this file.
+            3. **Repo not archived:**
+               `[[ "$(gh repo view --json isArchived --jq .isArchived)" == "false" ]]`.
+            4. **Issue OPEN + same repo:** fetch
+               `gh issue view "$ISSUE_NUMBER" --json state,repository_url`. The state
+               must be OPEN, and `repository_url` must end in `$REPO_FULL_NAME`.
+            5. **Comment exists + matches issue:**
+               `gh api "repos/$REPO_FULL_NAME/issues/comments/$COMMENT_ID" --jq .issue_url`
+               must end in `/issues/$ISSUE_NUMBER`.
+            6. **Comment-author pin (D5, FIRST half):** the comment's author MUST equal `$EXPECTED_AUTHOR`.
+               `actual_author=$(gh api "repos/$REPO_FULL_NAME/issues/comments/$COMMENT_ID" --jq .user.login)`
+               then `[[ "$actual_author" == "$EXPECTED_AUTHOR" ]]`.
+            7. **Comment-immutability pin (D5, SECOND half):** the comment MUST NOT have been edited after authoring.
+               `meta=$(gh api "repos/$REPO_FULL_NAME/issues/comments/$COMMENT_ID" --jq '"\(.created_at)\t\(.updated_at)"')`
+               then verify `created_at == EXPECTED_CREATED_AT` AND `created_at == updated_at`.
+               Reject on mismatch — an edited comment between schedule and fire is the brand-survival vector D5 is designed to catch.
+
+            If ANY pre-flight check fails: post a single observation comment to issue
+            #$ISSUE_NUMBER naming which check failed, then invoke the
+            Neutralization primitive above and exit 0. Take no other action.
+
+            ## Task
+
+            Fetch the documented task spec from the referenced comment:
+
+            `body=$(gh api "repos/$REPO_FULL_NAME/issues/comments/$COMMENT_ID" --jq .body)`
+
+            If `$body` is empty (`[[ -z "$body" ]]`), treat as a pre-flight failure: post observation comment "comment body is empty", invoke the Neutralization primitive, exit 0.
+
+            Otherwise execute the documented work as instructed by `$body`. When complete, post results as a follow-up comment on issue #$ISSUE_NUMBER (re-verify `gh issue view "$ISSUE_NUMBER" --json repository_url` matches `$REPO_FULL_NAME` immediately before posting — defends against issue-transfer-after-preflight).
+
+            ## Final step (mandatory, last)
+
+            Invoke the Neutralization primitive above. This is D4 — the
+            secondary self-cleanup. D3 (the date guard above) is the primary
+            cross-year defense; D3 is structural (cron AND date both must
+            match) and cannot fail silently.
+
+            Do NOT add any post-step to this workflow file —
+            `claude-code-action` revokes the App token after this step, so a
+            YAML-level cleanup would silently fail.

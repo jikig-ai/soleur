@@ -48,28 +48,63 @@ export const REQUIRED_GITHUB_APP_CALLBACK_URLS = [
   "https://ifsccnjhymdmidffkzhl.supabase.co/auth/v1/callback",
 ] as const;
 
+// User-shape end-to-end authorize path. The 3-URL probe greps each callback
+// URL in isolation against GitHub's authorize endpoint, but a user click on
+// "Continue with GitHub" issues `GET /auth/v1/authorize?provider=github&...`
+// against Supabase, which 302s to GitHub with `redirect_to` AND `redirect_uri`
+// in the same query string. A future drift could pass the in-isolation probes
+// while failing this combined shape — the user-reported failure mode #3183
+// went unobserved inside the probe's supposedly-protected 15-min window.
+//
+// Lock the workflow's grep target to this constant so the e2e leg cannot
+// silently drop the user-shape coverage.
+//
+// See: knowledge-base/project/plans/2026-05-04-fix-signup-oauth-helper-and-github-callback-recurrence-plan.md
+export const SUPABASE_SHAPE_AUTHORIZE_PATH =
+  "/auth/v1/authorize?provider=github&redirect_to=";
+
 const repoRoot = path.resolve(__dirname, "../../..");
 const workflowPath = path.join(
   repoRoot,
   ".github/workflows/scheduled-oauth-probe.yml",
 );
 
-// Extract just the probe_github_redirect_uri function body so contract
-// assertions don't pass on stale matches in comments or unrelated steps.
-// The function opens with `<10-space-indent>probe_github_redirect_uri() {`
-// and closes with `<10-space-indent>}` (intermediate `}` from `|| {` blocks
-// are deeper-indented at 12 spaces, so we anchor on exactly 10).
-function extractProbeFnBody(yaml: string): string {
-  const match = yaml.match(
-    /probe_github_redirect_uri\(\)\s*\{[\s\S]*?\n {10}\}/,
-  );
-  if (!match) {
+// Extract a bash function body from the workflow's `run: |` script, robust
+// to indentation reflows. Finds the `<name>()` opening line via a same-line
+// regex that captures its leading indentation, then locates the matching
+// close brace at the same indentation. Intermediate `}` from `|| { … }`
+// blocks are deeper-indented than the function declaration, so the same-
+// indentation anchor is reliable.
+//
+// Replaces the prior `\n {10}\}` literal-indent pattern used for both
+// extractors (PR #3199 — the literal-indent pattern was a YAML-reformat
+// landmine; with two probe functions it doubled the surface area).
+function extractFunctionBody(yaml: string, name: string): string {
+  const declRe = new RegExp(`(?:^|\\n)([ \\t]+)${name}\\(\\)\\s*\\{`);
+  const decl = yaml.match(declRe);
+  if (!decl || decl.index === undefined) {
     throw new Error(
-      "probe_github_redirect_uri function not found in workflow — has it been renamed or removed?",
+      `${name} function not found in workflow — has it been renamed or removed?`,
     );
   }
-  return match[0];
+  const indent = decl[1];
+  const start = decl.index + (decl[0].startsWith("\n") ? 1 : 0);
+  const tail = yaml.slice(start);
+  const closeRe = new RegExp(`\\n${indent}\\}(?:\\n|$)`);
+  const close = tail.match(closeRe);
+  if (!close || close.index === undefined) {
+    throw new Error(
+      `${name} function close brace not found at indent="${indent.replace(/\t/g, "\\t")}" — workflow may be malformed`,
+    );
+  }
+  return tail.slice(0, close.index + close[0].length);
 }
+
+const extractProbeFnBody = (yaml: string) =>
+  extractFunctionBody(yaml, "probe_github_redirect_uri");
+
+const extractSupabaseShapeFnBody = (yaml: string) =>
+  extractFunctionBody(yaml, "probe_github_supabase_shape_e2e");
 
 describe("scheduled-oauth-probe.yml — GitHub redirect_uri probe contract", () => {
   test("workflow file exists at the expected path", () => {
@@ -168,6 +203,74 @@ describe("scheduled-oauth-probe.yml — GitHub redirect_uri probe contract", () 
     expect(yaml).toContain("supabase_project_ref_unset");
     // Old combined mode should be gone.
     expect(yaml).not.toContain("github_redirect_probe_misconfigured");
+  });
+
+  test("workflow exercises the Supabase user-shape authorize URL end-to-end", () => {
+    // The 3-URL in-isolation probe missed the user-reported failure (#3183)
+    // because real users click "Continue with GitHub" through Supabase's
+    // /auth/v1/authorize?provider=github&redirect_to=... endpoint, which
+    // 302s to GitHub with redirect_to AND redirect_uri in the same query
+    // string. A future drift could pass the in-isolation probes while
+    // failing this combined shape. Lock the grep target — assert against
+    // the function body, not raw YAML, so a stray comment match cannot
+    // make this assertion pass vacuously.
+    const yaml = readFileSync(workflowPath, "utf-8");
+    const fnBody = extractSupabaseShapeFnBody(yaml);
+    expect(fnBody).toContain(SUPABASE_SHAPE_AUTHORIZE_PATH);
+  });
+
+  test("supabase-shape probe function exists and uses log-injection-strip", () => {
+    // The new e2e probe must use the same strip_log_injection pattern
+    // as probe_github_redirect_uri — log-annotation forgery is a
+    // workflow-wide invariant, not a per-probe choice.
+    const yaml = readFileSync(workflowPath, "utf-8");
+    const fnBody = extractSupabaseShapeFnBody(yaml);
+    expect(fnBody).toContain("strip_log_injection");
+  });
+
+  test("supabase-shape probe greps for the redirect_uri error sentinel", () => {
+    // Same load-bearing sentinel as the in-isolation probe. If GitHub
+    // rewords the error string this fails simultaneously across both
+    // probe functions, signaling a global drift that the contract test
+    // catches at one place (GITHUB_REDIRECT_URI_ERROR_SENTINEL).
+    const yaml = readFileSync(workflowPath, "utf-8");
+    const fnBody = extractSupabaseShapeFnBody(yaml);
+    expect(fnBody).toContain(GITHUB_REDIRECT_URI_ERROR_SENTINEL);
+  });
+
+  test("supabase-shape probe pins curl --max-time", () => {
+    const yaml = readFileSync(workflowPath, "utf-8");
+    const fnBody = extractSupabaseShapeFnBody(yaml);
+    expect(fnBody).toMatch(/--max-time\s+\d+/);
+  });
+
+  test("supabase-shape probe is invoked exactly once at the call site", () => {
+    // Defensive: detect both accidental drop (zero invocations -> probe
+    // is dead code) and accidental duplication (multiple call sites ->
+    // unclear which step's failure surfaces first).
+    const yaml = readFileSync(workflowPath, "utf-8");
+    // Match the call site, not the function-definition line.
+    const callSiteRegex = /\bprobe_github_supabase_shape_e2e\b\s+["'$]/g;
+    const matches = yaml.match(callSiteRegex) ?? [];
+    expect(matches.length).toBe(1);
+  });
+
+  test("supabase-shape e2e failure mode is recorded and case-switch-routed", () => {
+    // Plan acceptance criterion: the failure-mode branch must include the
+    // new failure mode so the operator gets the same in-issue remediation
+    // guidance (the "Required GitHub App callback URLs" block).
+    //
+    // (a) Literal must appear inside the probe function (not just a comment
+    //     somewhere) — proves it is an actual record_failure value.
+    // (b) The issue-body case switch must include a glob that captures it —
+    //     proves the operator-facing remediation block fires for this mode.
+    const yaml = readFileSync(workflowPath, "utf-8");
+    const fnBody = extractSupabaseShapeFnBody(yaml);
+    expect(fnBody).toContain("github_oauth_supabase_shape_e2e_unregistered");
+    // The existing glob "github_oauth_*_unregistered" matches the new mode.
+    // Lock its presence so a future case-switch refactor that drops the glob
+    // doesn't silently strip the remediation block.
+    expect(yaml).toMatch(/github_oauth_\*_unregistered/);
   });
 });
 
