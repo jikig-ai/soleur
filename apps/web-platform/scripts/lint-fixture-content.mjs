@@ -15,7 +15,7 @@
 //
 // Exits 1 with `file:line:reason` on first match. Exits 0 if no matches.
 
-import { readFileSync, statSync } from "node:fs";
+import { readFileSync } from "node:fs";
 
 const REAL_EMAIL = /\b([A-Z0-9._%+-]+)@([A-Z0-9.-]+\.[A-Z]{2,})\b/gi;
 const ALLOWED_EMAIL_HOSTS = /^(example\.com|example\.org|.+\.test|fixtures\.local|test\.local)$/i;
@@ -80,16 +80,17 @@ function lintLine(line) {
 }
 
 function lintFile(path) {
-  let stat;
+  // Single-syscall read avoids the TOCTOU race window between stat() and
+  // readFileSync() (CodeQL js/file-system-race). ENOENT/EISDIR/EACCES are
+  // treated as "skip silently" to match the prior behavior of skipping
+  // deleted-in-same-stage files and accidentally-passed directories.
+  let buf;
   try {
-    stat = statSync(path);
+    buf = readFileSync(path);
   } catch (err) {
-    if (err && err.code === "ENOENT") return []; // file deleted in same staged change
+    if (err && (err.code === "ENOENT" || err.code === "EISDIR" || err.code === "EACCES")) return [];
     throw err;
   }
-  if (!stat.isFile()) return [];
-
-  const buf = readFileSync(path);
   if (looksBinary(buf)) return [];
 
   const content = buf.toString("utf8");
