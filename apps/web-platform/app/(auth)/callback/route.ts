@@ -2,20 +2,61 @@ import { createServerClient, type CookieOptions } from "@supabase/ssr";
 import { createServiceClient } from "@/lib/supabase/server";
 import { resolveOrigin } from "@/lib/auth/resolve-origin";
 import { classifyCallbackError } from "@/lib/auth/error-classifier";
+import { classifyProviderError } from "@/lib/auth/provider-error-classifier";
 import { provisionWorkspace } from "@/server/workspace";
 import { TC_VERSION } from "@/lib/legal/tc-version";
 import { NextResponse, type NextRequest } from "next/server";
 import logger from "@/server/logger";
 import { reportSilentFallback } from "@/server/observability";
 
+const VERIFIER_COOKIE_PATTERN = /^sb-.*-auth-token-code-verifier$/;
+
+/** Extract `host` from an arbitrary referer header — never the path or query. */
+function safeRefererHost(referer: string | null): string | null {
+  if (!referer) return null;
+  try {
+    return new URL(referer).host || null;
+  } catch {
+    return null;
+  }
+}
+
 export async function GET(request: NextRequest) {
-  const { searchParams } = new URL(request.url);
+  const { searchParams, pathname } = new URL(request.url);
   const code = searchParams.get("code");
   const origin = resolveOrigin(
     request.headers.get("x-forwarded-host"),
     request.headers.get("x-forwarded-proto"),
     request.headers.get("host"),
   );
+  const refererHost = safeRefererHost(request.headers.get("referer"));
+  // Sorted, key-only — never values (would forward error_description PII).
+  const searchParamKeys = Array.from(new Set(Array.from(searchParams.keys()))).sort();
+
+  // 1. Provider-side OAuth error (`?error=access_denied&error_description=...`).
+  //    Supabase forwards the upstream provider's `error` query param verbatim
+  //    on `redirect_to` per the documented user-deny path. Branch BEFORE the
+  //    `if (code)` block so user-cancel is never conflated with system failure.
+  const providerErrorBucket = classifyProviderError(searchParams);
+  if (providerErrorBucket) {
+    const providerErrorCode = searchParams.get("error");
+    reportSilentFallback(null, {
+      feature: "auth",
+      op: "callback_provider_error",
+      message: `OAuth provider returned error=${providerErrorCode}`,
+      // Typed enum + hostname only. Never the raw `error_description`
+      // (free text, may include account-specific details), never the full
+      // request URL (carries the same free text), never the full referer.
+      extra: {
+        providerErrorCode,
+        bucket: providerErrorBucket,
+        urlPath: pathname,
+        refererHost,
+        origin,
+      },
+    });
+    return NextResponse.redirect(`${origin}/login?error=${providerErrorBucket}`);
+  }
 
   if (code) {
     // Guard: in dev mode without Supabase env vars, redirect to login with error.
@@ -80,7 +121,26 @@ export async function GET(request: NextRequest) {
       // Discriminate on the typed error.code enum, not error.message
       // substring (drift-prone across Supabase versions).
       const errorCode = classifyCallbackError(error);
-      return NextResponse.redirect(`${origin}/login?error=${errorCode}`);
+      const response = NextResponse.redirect(`${origin}/login?error=${errorCode}`);
+
+      // Folds in #3001: on verifier-class failure, clear stale
+      // sb-*-auth-token-code-verifier cookies so the next sign-in attempt
+      // mints a fresh PKCE verifier instead of reusing the one Supabase
+      // already rejected.
+      if (errorCode === "code_verifier_missing") {
+        for (const cookie of request.cookies.getAll()) {
+          if (VERIFIER_COOKIE_PATTERN.test(cookie.name)) {
+            response.cookies.set(cookie.name, "", {
+              path: "/",
+              maxAge: 0,
+              sameSite: "lax",
+              secure: process.env.NODE_ENV === "production",
+            });
+          }
+        }
+      }
+
+      return response;
     }
 
     if (!error) {
@@ -138,15 +198,23 @@ export async function GET(request: NextRequest) {
   }
 
   // Auth failed — redirect to login with error.
-  // No `code` query-param means the OAuth provider redirected without one
-  // (e.g. uri_allow_list rejected the redirect, or the provider errored).
+  // No `code` query-param AND no recognized provider `error=` means either
+  // the user opened /callback directly (bookmark, stale link) or an
+  // unmodeled fallback (e.g. uri_allow_list rejection that strips both).
   // Mirror to Sentry per cq-silent-fallback-must-mirror-to-sentry so the
-  // class of failure is observable.
+  // class of failure is observable; the new extras (urlPath, refererHost,
+  // searchParamKeys) make root-cause-class queryable without redeploying.
   reportSilentFallback(null, {
     feature: "auth",
     op: "callback_no_code",
     message: "Auth failed — no code or exchange error",
-    extra: { codePresent: !!code, origin },
+    extra: {
+      codePresent: !!code,
+      origin,
+      urlPath: pathname,
+      refererHost,
+      searchParamKeys,
+    },
   });
   return NextResponse.redirect(`${origin}/login?error=auth_failed`);
 }

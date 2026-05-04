@@ -6,7 +6,7 @@
  * all have the same recovery action ("re-initiate the OAuth round-trip"),
  * so they share the user-facing copy in `lib/auth/error-messages.ts`.
  *
- * Source of truth: @supabase/auth-js error-codes.d.ts (installed v2.49.0).
+ * Source of truth: @supabase/auth-js error-codes.d.ts (installed v2.99.2).
  * Re-grep that file when bumping the dependency for new *_verifier / *_state
  * codes.
  */
@@ -19,13 +19,16 @@ const VERIFIER_CLASS_CODES = new Set<string>([
   "bad_oauth_callback",
 ]);
 
-export type CallbackErrorCode = "code_verifier_missing" | "auth_failed";
+export type CallbackErrorCode =
+  | "code_verifier_missing"
+  | "provider_disabled"
+  | "auth_failed";
 
 export function classifyCallbackError(err: unknown): CallbackErrorCode {
   if (typeof err !== "object" || err === null) return "auth_failed";
   const code = (err as { code?: unknown }).code;
-  if (typeof code === "string" && VERIFIER_CLASS_CODES.has(code)) {
-    return "code_verifier_missing";
-  }
+  if (typeof code !== "string") return "auth_failed";
+  if (VERIFIER_CLASS_CODES.has(code)) return "code_verifier_missing";
+  if (code === "provider_disabled") return "provider_disabled";
   return "auth_failed";
 }
