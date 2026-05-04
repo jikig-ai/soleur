@@ -30,6 +30,24 @@ describe("MarkdownRenderer — chat markdown overflow (issue #2229)", () => {
     expect(tableWrap).not.toBeNull();
   });
 
+  it("retains tight inline-class defaults (chat-bubble path) so a future base bump is caught", () => {
+    const md = "para1\n\npara2\n\n| A | B |\n|---|---|\n| 1 | 2 |\n";
+    const { container } = render(<MarkdownRenderer content={md} />);
+
+    const tableWrap = container.querySelector("div.overflow-x-auto");
+    expect(tableWrap).not.toBeNull();
+    expect(tableWrap!.className).toContain("mb-3");
+
+    const paragraphs = container.querySelectorAll("p");
+    expect(paragraphs.length).toBeGreaterThanOrEqual(2);
+    paragraphs.forEach((p) => expect(p.className).toContain("mb-2"));
+
+    const td = container.querySelector("td");
+    expect(td).not.toBeNull();
+    expect(td!.className).toContain("py-1.5");
+    expect(td!.className).toContain("px-3");
+  });
+
   it("co-mounted instances do NOT share `wrapCode` / `nofollow` — review #2380", () => {
     const md = "```ts\nconst x = 1;\n```\n\n[link](https://example.com)";
     const { container } = render(
