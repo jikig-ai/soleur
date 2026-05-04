@@ -215,13 +215,13 @@ Likely outcome of first run: case (a) — `incidents.sh` shipped 2026-04-15 (#22
 
 ### Pre-merge (PR)
 
-- [ ] `scripts/rule-prune.sh --propose-retirement` flag implemented per Phase 1.
-- [ ] All Phase 2 test cases pass via `bash tests/commands/test-sync-rule-prune.sh`.
-- [ ] `.github/workflows/scheduled-rule-prune.yml` validates via `gh workflow view scheduled-rule-prune.yml --yaml > /dev/null` (syntax check) — verified before opening PR.
-- [ ] `scripts/lint-rule-ids.py` continues to pass (no edits to the linter; the propose-retirement automation respects existing `HR_RETIREMENT_ALLOWLIST` discipline by not appending hr-* at all).
-- [ ] Spec `feat-harness-eval-stale-rules/spec.md` updated to reflect FR1/TR3 reconciliation (composite action, single-line PR body, branch shape).
-- [ ] PR body has `Closes #3120` and `Refs #3128`.
-- [ ] No edits to `AGENTS.md`, `retired-rule-ids.txt`, or `lint-rule-ids.py` in this PR — pure new-feature surface.
+- [x] `scripts/rule-prune.sh --propose-retirement` flag implemented per Phase 1.
+- [x] All Phase 2 test cases pass via `bash tests/commands/test-sync-rule-prune.sh` (17/17 green).
+- [x] `.github/workflows/scheduled-rule-prune.yml` YAML parses (verified via `python3 -c yaml.safe_load`); `gh workflow view` only works after push, deferred to Phase 4 post-merge step.
+- [x] `scripts/lint-rule-ids.py` continues to pass (no edits to the linter; the propose-retirement automation respects existing `HR_RETIREMENT_ALLOWLIST` discipline by not appending hr-* at all).
+- [x] Spec `feat-harness-eval-stale-rules/spec.md` updated to reflect FR1/TR3 reconciliation (composite action, single-line PR body, branch shape).
+- [ ] PR body has `Closes #3120` and `Refs #3128` (handled by /soleur:ship).
+- [x] No edits to `AGENTS.md`, `retired-rule-ids.txt`, or `lint-rule-ids.py` in this PR — pure new-feature surface.
 
 ### Post-merge (operator)
 

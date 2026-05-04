@@ -36,14 +36,19 @@ D1 (regression eval suite that replays new rules against historical `Closes #N` 
 When invoked with `--propose-retirement`:
 
 - Compute candidates the same way as the existing flow: `fire_count=0` AND `first_seen >= cutoff` (cutoff from `--weeks`).
-- Skip any id matching `^hr-` AND any id already present in `scripts/retired-rule-ids.txt` (uncommented lines).
-- For all surviving candidates, write a single PR that:
-  - Branches from `main` to `chore/rule-prune-retire-<YYYY-Qn>` (e.g., `chore/rule-prune-retire-2026-Q3`).
-  - Appends one line per candidate to `retired-rule-ids.txt` in the canonical `<id> | YYYY-MM-DD | PR #<N> | scheduled by rule-prune` format. The PR # backfills after PR creation via a second commit, OR the line uses `-` and the breadcrumb references the PR via title — implementation choice during plan.
-  - Body lists every candidate (id, section, first_seen, fire_count, rule-text-prefix). Hook-/skill-enforced rules and `hr-*` candidates are listed in a separate "Manual review required" section with the trigger-source pointer.
-- Set `semver:patch` label.
-- Title: `chore(rule-prune): propose retirement of N rules (Q<n> YYYY)`.
-- Idempotency: if the branch already exists OR an open PR with that title exists, exit 0 with a "[skip] already proposed" log line.
+- Two-pass design (per plan + spec-flow review):
+  1. **First pass (validate, no writes):** for each candidate, skip if `^hr-` (hr-* retirement requires `lint-rule-ids.py` edit, not automated), skip if already present in `scripts/retired-rule-ids.txt`, skip if duplicate-id within candidates set, validate against `_RULE_ID_RE`, sanitize CR/LF in `rule_text_prefix`. Push survivors to a `pending_lines` array; track `appended` and `hook_enforced` counters.
+  2. **Second pass (atomic write):** if `pending_lines` non-empty AND `--dry-run` not set, append all lines to `scripts/retired-rule-ids.txt` in a single redirect (`printf >> file`).
+- Each appended line uses canonical format: `<id> | YYYY-MM-DD | - | scheduled by rule-prune (first_seen=<ts>, fire_count=0, hook_enforced=<0|1>)`. The `-` placeholder for PR # is intentional — the actual PR number is in the breadcrumb's "scheduled by" trail and the PR title; backfilling would require a second commit on the proposal branch which adds churn for no review value.
+- **Stdout sentinels** (consumed by the calling workflow into `$GITHUB_OUTPUT`):
+  ```
+  ::rule-prune-pr-title::feat(rule-prune): propose retirement of N rules (M hook/skill-enforced)
+  ::rule-prune-pr-body::Quarterly rule-prune retirement proposal: N rules with fire_count=0 over >=W weeks. Per-rule rationale in the diff. M flagged hook-/skill-enforced — review them carefully. Spec: knowledge-base/project/specs/feat-harness-eval-stale-rules/spec.md.
+  ```
+  Both lines are `tr -d '\n\r'`-stripped before emission. Sentinels are emitted whenever `appended ≥ 1` (including under `--dry-run`, so an operator can preview what a real run would propose).
+- The PR itself is opened by `.github/workflows/scheduled-rule-prune.yml` calling the existing `.github/actions/bot-pr-with-synthetic-checks` composite action with the sentinels as title/body inputs. The composite action handles git config, branch creation (suffix `YYYY-MM-DD`, e.g., `ci/rule-prune-retire-2026-07-01`), commit, push, PR creation, synthetic check runs, and auto-merge queueing.
+- Idempotency at the script level: re-running on the same fixture skips already-appended ids via `_load_retired_ids` parse of the on-disk file (covered by test T9). Branch-exists collisions on back-to-back `workflow_dispatch` re-runs are handled by the composite action's existing logic; operators run at most one `workflow_dispatch` per merge.
+- `--propose-retirement --dry-run` honored: no file write, sentinels still emitted (preview mode).
 
 ### FR2: Quarterly scheduled workflow
 
@@ -77,9 +82,10 @@ When invoked with `--propose-retirement`:
 
 ### TR3: PR creation under GitHub Actions
 
-- Use `GH_TOKEN: ${{ github.token }}` for the gh CLI, mirroring `rule-metrics-aggregate.yml`.
-- Set `git config user.email` and `user.name` to a deterministic bot identity (e.g., `github-actions[bot]@users.noreply.github.com`). Reference: existing `rule-metrics-aggregate.yml` has the canonical pattern.
-- The first commit on the proposal branch is the file edit; a second commit (optional) backfills the PR # into the breadcrumb if the implementation chooses backfill over `-`.
+- Delegated entirely to `.github/actions/bot-pr-with-synthetic-checks` composite action — same pattern as `rule-metrics-aggregate.yml`. Workflow does NOT git-config or call `gh pr create` itself; it provides `pr-title-prefix`, `pr-body`, `add-paths`, `branch-prefix`, `commit-message`, `change-summary`, and `gh-token` to the action.
+- The composite action requires `pr-body` to be **single-line** — multi-line content fails action validation. The script's sentinel emission is `tr -d '\n\r'`-stripped to honor this contract.
+- Branch name suffix is `YYYY-MM-DD` (the composite action appends `$(date -u +%Y-%m-%d)` to `branch-prefix`). For the quarterly cron, this resolves to e.g. `ci/rule-prune-retire-2026-07-01`. The `YYYY-Qn` shape originally suggested in the brainstorm/spec is not used; the date is more granular and `bot-pr-with-synthetic-checks` does not parameterize the suffix shape.
+- The first (and only) commit on the proposal branch is the `retired-rule-ids.txt` append; PR # is `-` placeholder in the breadcrumb (no second commit). The actual PR number is recoverable via `gh pr list --search "scheduled by rule-prune"` or via the breadcrumb's "scheduled by" trail.
 
 ### TR4: Empty-candidate handling
 
