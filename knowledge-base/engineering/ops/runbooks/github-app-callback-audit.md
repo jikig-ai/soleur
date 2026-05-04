@@ -50,7 +50,24 @@ prod and are flagged by the probe as "noise but not failure" if absent.
 
 ## Audit procedure
 
-### 1. Read the current state
+### 1. Read the current state (Playwright MCP first; xdg-open as fallback)
+
+The read step is fully agent-driveable — only the Update click needs an
+operator (CSRF). Try Playwright MCP first per `hr-never-label-any-step-as-manual-without`:
+
+```text
+1. mcp__playwright__browser_navigate
+   url: https://github.com/organizations/jikig-ai/settings/apps/soleur-ai
+2. mcp__playwright__browser_snapshot — confirm "Identifying and authorizing
+   users" heading is visible
+3. mcp__playwright__browser_evaluate — capture the textarea contents:
+   () => document.querySelector('textarea[name="integration[callback_urls]"]').value
+4. Compute byte count: contents.length (UTF-8) or wc -c via shell
+5. Post both verbatim contents AND byte count to the tracking issue
+```
+
+If Playwright MCP is unavailable (CLI session, sandboxed environment),
+fall back to operator-manual via:
 
 ```bash
 xdg-open 'https://github.com/organizations/jikig-ai/settings/apps/soleur-ai'
@@ -62,6 +79,21 @@ along with the byte count: `wc -c <<<"$contents"`.
 
 The byte count is the forensic anchor — future drift comparisons use it
 to detect whitespace/case-only changes that visual review would miss.
+
+### Required workflow secrets (Probe + audit dependencies)
+
+The `scheduled-oauth-probe.yml` workflow requires two secrets to exercise
+the GitHub App callback list. The `OAUTH_PROBE_` prefix on the first
+secret is intentional: GitHub rejects repo secrets starting with `GITHUB_`
+(HTTP 422 from the secrets API).
+
+| Workflow secret | Sourced from | Set via |
+|---|---|---|
+| `OAUTH_PROBE_GITHUB_CLIENT_ID` | Doppler `prd.GITHUB_CLIENT_ID` | `doppler secrets get GITHUB_CLIENT_ID -p soleur -c prd --plain \| gh secret set OAUTH_PROBE_GITHUB_CLIENT_ID` |
+| `SUPABASE_PROJECT_REF` | CNAME of `api.soleur.ai` (canonical 20-char ref) | `dig +short +time=3 +tries=2 CNAME api.soleur.ai \| sed -E 's/\.supabase\.co\.?$//' \| head -1 \| gh secret set SUPABASE_PROJECT_REF` |
+
+Use direct pipe (no `printf '%s' "$(...)"` wrapper) so the value never
+appears in `/proc/<pid>/cmdline` or shell history.
 
 ### 2. Diff against the required list
 

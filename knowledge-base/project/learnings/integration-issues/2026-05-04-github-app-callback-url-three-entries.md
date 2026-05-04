@@ -4,7 +4,7 @@ date: 2026-05-04
 category: integration-issues
 related_issues: [1784, 3183]
 related_prs: [3181]
-tags: [github-oauth, supabase, redirect_uri, oauth-probe, custom-domain]
+tags: [github-oauth, supabase, redirect_uri, oauth-probe, custom-domain, single-client-id-many-flows, not-rest-mutable, body-grep-load-bearing, closure-gate]
 ---
 
 # GitHub App callback URL drift — single client_id serves three callbacks

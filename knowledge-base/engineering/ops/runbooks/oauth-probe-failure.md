@@ -240,21 +240,56 @@ curl -s -H "Authorization: Bearer $GH_APP_JWT" \
 If `suspended_at` is non-null, App is confirmed suspended. Do NOT attempt
 remediation in-app; resolution requires GitHub-side action.
 
-### `github_redirect_probe_misconfigured`
+### `github_client_id_probe_unset`
 
-The workflow's `OAUTH_PROBE_GITHUB_CLIENT_ID` or `SUPABASE_PROJECT_REF`
-secret is unset. The new probes cannot run. Set both secrets:
+The workflow's `OAUTH_PROBE_GITHUB_CLIENT_ID` secret is unset. The new
+probes cannot run. The secret name uses the `OAUTH_PROBE_` prefix because
+GitHub rejects repo secrets starting with `GITHUB_` (HTTP 422). Set it:
 
 ```bash
-printf '%s' "$(doppler secrets get GITHUB_CLIENT_ID -p soleur -c prd --plain)" \
+# Direct pipe — no command substitution, no printf wrapper. Avoids
+# embedding the value in /proc/<pid>/cmdline or shell history. Doppler's
+# --plain output already lacks a trailing newline.
+doppler secrets get GITHUB_CLIENT_ID -p soleur -c prd --plain \
   | gh secret set OAUTH_PROBE_GITHUB_CLIENT_ID
-
-# Derive the canonical 20-char ref from the prod Supabase URL via CNAME deref
-SUPA_URL=$(doppler secrets get NEXT_PUBLIC_SUPABASE_URL -p soleur -c prd --plain)
-SUPA_HOST=$(printf '%s' "$SUPA_URL" | sed -E 's#^https?://##; s#/.*##')
-REF=$(dig +short +time=3 +tries=2 CNAME "$SUPA_HOST" | sed -E 's/\.supabase\.co\.?$//' | head -1)
-printf '%s' "$REF" | gh secret set SUPABASE_PROJECT_REF
 ```
+
+### `supabase_project_ref_unset`
+
+The workflow's `SUPABASE_PROJECT_REF` secret is unset. Derive from the
+canonical CNAME of the prod Supabase URL and set it:
+
+```bash
+SUPA_HOST=$(doppler secrets get NEXT_PUBLIC_SUPABASE_URL -p soleur -c prd --plain \
+  | sed -E 's#^https?://##; s#/.*##')
+dig +short +time=3 +tries=2 CNAME "$SUPA_HOST" \
+  | sed -E 's/\.supabase\.co\.?$//' \
+  | head -1 \
+  | gh secret set SUPABASE_PROJECT_REF
+```
+
+### `supabase_project_ref_drift`
+
+`dig CNAME api.soleur.ai` resolved a project ref that does NOT match the
+stored `SUPABASE_PROJECT_REF` workflow secret. Either Supabase re-
+provisioned the project (region migration, restore-from-backup) or an
+operator updated the custom-domain CNAME without re-running `gh secret
+set`. **Until resolved, the canonical fallback probe is testing a phantom
+URL — Flow A appears healthy even when broken.**
+
+Diagnose:
+
+```bash
+# What the workflow saw at probe time (from the failure_detail)
+gh issue view <ISSUE_NUM> --json body --jq .body | grep 'cname_ref='
+
+# Current CNAME state (re-derive from the runner's POV — should match
+# Doppler prd's NEXT_PUBLIC_SUPABASE_URL host)
+dig +time=3 +tries=2 +short CNAME api.soleur.ai
+```
+
+Remediation: re-run the `supabase_project_ref_unset` recipe above to set
+`SUPABASE_PROJECT_REF` to the new canonical ref.
 
 ### `callback_error_passthrough`
 

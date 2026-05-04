@@ -126,14 +126,23 @@ fi
 #   "The redirect_uri is not associated with this application"
 # because GitHub looks up the App's callback list by client_id.
 # See: knowledge-base/project/learnings/integration-issues/2026-05-04-github-app-callback-url-three-entries.md
+#
+# Failure mode: WARN, not error. Rationale: GitHub may add new App-tier
+# prefixes (e.g., `Iv24...` or longer suffixes) in the future. Failing
+# closed on a regex tied to an externally-controlled format would block
+# all prod releases — strictly worse user impact than the operator-paste
+# class this catches. If the warning fires for a known-good value, set
+# SOLEUR_SKIP_GITHUB_CLIENT_ID_SHAPE=1 to suppress AND open an issue to
+# update the regex. The check still fires AGAINST clearly-wrong values
+# (Ov23..., placeholders, wrong length) — those should be investigated
+# even though they only WARN.
 GITHUB_CLIENT_ID_RE='^Iv23[A-Za-z0-9]{16}$'
 gh_client_id="${GITHUB_CLIENT_ID:-}"
-if [[ -n "$gh_client_id" ]]; then
+if [[ -n "$gh_client_id" && -z "${SOLEUR_SKIP_GITHUB_CLIENT_ID_SHAPE:-}" ]]; then
   if [[ ! "$gh_client_id" =~ $GITHUB_CLIENT_ID_RE ]]; then
     # Echo only the first 4 chars to avoid leaking unknown values into logs.
     prefix="${gh_client_id:0:4}"
-    echo "::error::GITHUB_CLIENT_ID has non-canonical shape (prefix=\"${prefix}…\"); expected GitHub App user-OAuth format Iv23<16 chars>"
-    shape_violations=$((shape_violations + 1))
+    echo "::warning::GITHUB_CLIENT_ID has non-canonical shape (prefix=\"${prefix}…\"); expected GitHub App user-OAuth format Iv23<16 chars>. If GitHub has changed the App client_id format, set SOLEUR_SKIP_GITHUB_CLIENT_ID_SHAPE=1 and open an issue to update the regex."
   fi
 fi
 

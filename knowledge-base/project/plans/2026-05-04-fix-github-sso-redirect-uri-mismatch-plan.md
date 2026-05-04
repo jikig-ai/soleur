@@ -59,12 +59,38 @@ GitHub-rendered error page (`The redirect_uri is not associated with this
 application`) with no path back into the product. Connect-repo onboarding is
 unreachable for that user. For founders auditing the product, this looks like a
 broken core flow at the worst possible moment (the first 60 seconds).
+**Important:** This PR ships observability and gates — the user-reported #3183
+symptom is fixed only after the post-merge operator audits the GitHub App
+callback list (Phase 2). Merging without Phase 2 = #3183 still broken for new
+sign-ups if the underlying drift was not already self-healed (current
+hypothesis: H_A self-healed; verify post-merge regardless).
 
 **If this leaks, the user's data is exposed via:** N/A for the current symptom
 — GitHub blocks the flow before any token is issued. Adjacent risk: if the
 operator-pasted callback URL is set to a typo or attacker-controlled host, the
 auth code would be delivered to the wrong destination. The fix MUST verify the
 exact byte-for-byte string and reject typos.
+
+**New failure modes the diff itself introduces (mitigated below):**
+
+1. **`verify-required-secrets.sh` fail-closed on GitHub format change.** If
+   GitHub adds a new App tier with a non-`Iv23` prefix or extends the suffix
+   length, the shape regex would block all prod releases — **strictly worse
+   than the operator-paste class it catches**. Mitigated by demoting the shape
+   check to `::warning::` (not `::error::`) and adding a documented
+   `SOLEUR_SKIP_GITHUB_CLIENT_ID_SHAPE=1` override.
+2. **`github_oauth_*_html_drift` false-positive page storm.** GitHub silently
+   A/B-tests the authorize page (~1×/year). One reword would page ops every
+   15 min until silenced — and a silenced probe re-exposes the original #3183
+   class. Mitigated by tightening the positive-proof grep to GitHub-specific
+   anchors (`name="authenticity_token"`, `Sign in to GitHub`, `Authorize <App>`)
+   instead of generic `<form|Authorize`, AND by the existing tracking-issue
+   dedup (one open issue at a time, not 96/day).
+3. **Over-broad `/ship` Phase 7 callback-URL audit anchor regex blocks
+   unrelated closures.** A docs follow-through that casually mentions
+   "GitHub App" would otherwise hit the closure gate and stay open
+   indefinitely. Mitigated by requiring co-occurrence of TWO sentinels
+   (callback/redirect_uri AND GitHub-OAuth signal) before the gate fires.
 
 **Brand-survival threshold:** `single-user incident`. Auth is the brand-truth
 surface; one repro on a public Loom = "Soleur's auth is broken" → CPO sign-off
