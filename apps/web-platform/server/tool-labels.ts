@@ -67,12 +67,18 @@ function stripWorkspacePath(text: string, workspacePath?: string): string {
   }
 
   // Any remaining suspected-leak shape is a gap in the pattern table.
-  if (SUSPECTED_LEAK_SHAPE.test(out)) {
+  // Capture the matched shape (not the surrounding prose) so the Sentry
+  // event names the offending form directly. Mirrors the client idiom in
+  // `lib/format-assistant-text.ts` (`match[0].slice(0, 200)`).
+  // `extra.shape` (renamed from `extra.text`) is grep-distinguishable from
+  // pre-fix events during the deploy window.
+  const leak = out.match(SUSPECTED_LEAK_SHAPE);
+  if (leak) {
     reportSilentFallback(null, {
       feature: "command-center",
       op: "tool-label-scrub",
       message: "Unmatched workspace/sandbox path shape after scrub",
-      extra: { text: out.slice(0, 200) },
+      extra: { shape: leak[0].slice(0, 200) },
     });
   }
   return out;

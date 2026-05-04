@@ -19,9 +19,16 @@ export const SANDBOX_PATH_PATTERNS: RegExp[] = [
   // workspaceId broadened to `[A-Za-z0-9_-]{3,}` (from `[0-9a-fA-F]{6,}`) so a
   // provisioning change to a non-hex alphabet or a shorter ID doesn't silently
   // re-enable leaks. Security review (#2861).
-  /\/tmp\/claude-\d+\/-workspaces-[A-Za-z0-9_-]{3,}\//g,
-  // Host form without explicit workspacePath context: /workspaces/<workspaceId>/
-  /\/workspaces\/[A-Za-z0-9_-]{3,}\//g,
+  //
+  // Terminator alternation `(?:\/|(?=[:,\s)])|$)` accepts a trailing `/`
+  // (consumed, the dominant case), OR a zero-width lookahead at `:`, `,`,
+  // whitespace, or `)` (terminator preserved so surrounding prose isn't
+  // eaten), OR end-of-string. Closes the gap that fired Sentry event
+  // 1e549c800f33479c9c6330cf6e91bce7 (paths terminating at the workspace-id
+  // bypassed scrub but tripped SUSPECTED_LEAK_SHAPE).
+  /\/tmp\/claude-\d+\/-workspaces-[A-Za-z0-9_-]{3,}(?:\/|(?=[:,\s)])|$)/g,
+  // Host form without explicit workspacePath context: /workspaces/<workspaceId>
+  /\/workspaces\/[A-Za-z0-9_-]{3,}(?:\/|(?=[:,\s)])|$)/g,
 ];
 
 /** Detects any path-shape that LOOKS like a sandbox or host workspace path

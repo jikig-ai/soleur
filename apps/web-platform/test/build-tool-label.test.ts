@@ -293,6 +293,44 @@ describe("sandbox path stripping (FR2 #2861)", () => {
     );
     expect(reportSilentFallbackMock).not.toHaveBeenCalled();
   });
+
+  // Terminator-form regression tests (Sentry 1e549c800f33479c9c6330cf6e91bce7):
+  // a workspace path that ends at a boundary character other than `/`
+  // (end-of-string, `:`, whitespace, `,`, `)`) must be scrubbed cleanly by
+  // the canonical patterns and MUST NOT trip the SUSPECTED_LEAK_SHAPE
+  // detector. Prior to this fix the canonical patterns required a trailing
+  // `/` after the workspace-id slot, so these forms slipped past scrub but
+  // still matched the wider leak detector, firing `op: "tool-label-scrub"`
+  // events with no actual leak risk.
+  //
+  // The cmd intentionally references a workspace ID DIFFERENT from
+  // `workspacePath` so the substring `replaceAll(workspacePath, "")` early
+  // path at tool-labels.ts:50 is skipped — only the canonical patterns can
+  // strip the leaked id. This is the production shape the Sentry event
+  // captured (assistant prose mentioning a path that isn't the agent's own
+  // cwd, e.g. an error trace from a sibling session).
+  const leakedWorkspaceId = "/workspaces/xyz789uvw012";
+  const leakedSandboxPrefix =
+    "/tmp/claude-2000/-workspaces-xyz789uvw012-7e8f9a2b1c3d4e5f6a7b8c9d0e1f2a3b";
+
+  test.each([
+    ["host: end-of-string", `cwd: ${leakedWorkspaceId}`],
+    ["host: colon terminator", `error at ${leakedWorkspaceId}:42`],
+    ["host: whitespace terminator", `pwd -> ${leakedWorkspaceId} then`],
+    ["host: comma terminator", `path: ${leakedWorkspaceId}, next`],
+    ["host: paren terminator", `dir(${leakedWorkspaceId})`],
+    ["sandbox: end-of-string", `cwd: ${leakedSandboxPrefix}`],
+  ])(
+    "workspace/sandbox path terminator (%s) does NOT fire tool-label-scrub fallback",
+    (_label, command) => {
+      buildToolLabel("Bash", { command }, workspacePath);
+      const scrubCalls = reportSilentFallbackMock.mock.calls.filter(
+        ([, opts]) =>
+          opts && (opts as { op?: string }).op === "tool-label-scrub",
+      );
+      expect(scrubCalls).toEqual([]);
+    },
+  );
 });
 
 // ---------------------------------------------------------------------------
