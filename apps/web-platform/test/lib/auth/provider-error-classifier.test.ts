@@ -88,4 +88,23 @@ describe("classifyProviderError", () => {
       classifyProviderError(new URLSearchParams("error=Access_Denied")),
     ).toBe("oauth_failed");
   });
+
+  it.each([
+    "toString",
+    "constructor",
+    "hasOwnProperty",
+    "__proto__",
+    "valueOf",
+  ])(
+    "prototype-chain key %s does not masquerade as a table entry — falls to oauth_failed",
+    (protoKey) => {
+      // Without `Object.hasOwn`, `PROVIDER_ERROR_TABLE["toString"]` would
+      // return `Object.prototype.toString` (truthy) and the route would
+      // emit `/login?error=function toString() { [native code] }`. The
+      // hardened classifier MUST default-branch to oauth_failed.
+      expect(
+        classifyProviderError(new URLSearchParams(`error=${protoKey}`)),
+      ).toBe("oauth_failed");
+    },
+  );
 });
