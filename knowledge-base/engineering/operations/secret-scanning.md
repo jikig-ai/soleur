@@ -105,6 +105,11 @@ Mitigations in place:
 adds a CI rename-guard job that fails on rename targets landing in
 allowlisted paths unless overridden via label or commit trailer.
 
+Re-check on every gitleaks bump — the upstream behavior may change. The
+PR1 smoke matrix's `rename-laundering` job is the canary; a green run on
+a future bump where it should fail means the gitleaks behavior shifted
+and our smoke expectations need updating in the same PR.
+
 ### `# gitleaks:allow` waivers
 
 Both gitleaks and the companion `lint-fixture-content.mjs` linter honor
@@ -123,6 +128,19 @@ allowed?" and get an answer in <30 seconds.
 When opening a PR that adds a waiver, link the issue in the PR body. When
 closing the issue, audit any waivers that reference it and remove them if
 the underlying constraint is gone.
+
+**Why the trailer is enforced in CI, not just by `lint-fixture-content`:**
+Native gitleaks `# gitleaks:allow` is honored on **any line in any file**
+with no trailer enforcement. `lint-fixture-content.mjs` is glob-scoped to
+fixture/golden/snapshot directories — a developer could waive a real
+`whsec_` or `sk-ant-` token in a server-path file with bare
+`# gitleaks:allow` and gitleaks would honor it.
+
+The `waiver-discipline` CI job closes this gap: it greps every PR-added
+line containing `gitleaks:allow` (across the whole tree) and rejects any
+without an `issue:#[0-9]+\s+\S{3,}` trailer. Failure blocks merge;
+CODEOWNERS guards the job definition itself so the gate cannot be removed
+without a 2nd-reviewer.
 
 ## When an alert fires
 
@@ -287,6 +305,79 @@ that disables `--redact` would leak via the artifact. The forensics path is:
 5. After rotation, re-run the workflow on the PR to confirm the finding
    does not re-fire (it should still fire — the secret is in git history;
    the point is to confirm the scan is detecting the same line).
+
+## Author-Side Pitfalls
+
+Pitfalls discovered while authoring the rule pack and CI workflow during
+PR1 of #3121. Read before adding a new custom rule or smoke-test fixture.
+
+### Always use non-capturing groups in custom rule regexes
+
+Gitleaks auto-picks the **first capturing group** as `secretGroup` when
+the rule does not set `secretGroup` explicitly. A token-shape alternation
+like `(pt|st|sa|ct)` becomes the secret body, and the rule extracts only
+that fragment instead of the full token — detection silently degrades.
+
+```
+# Wrong — first group captured by gitleaks as secretGroup
+regex = '''dp\.(pt|st|sa|ct)\.[A-Za-z0-9_\-]{40,}'''
+
+# Right — non-capturing group; gitleaks captures the whole match
+regex = '''dp\.(?:pt|st|sa|ct)\.[A-Za-z0-9_\-]{40,}'''
+```
+
+**Rule:** every custom regex in `.gitleaks.toml` must use `(?:...)` for
+grouping unless an explicit `secretGroup = N` is set with intent. The
+smoke-fixture for the rule should include the full token shape so that a
+silent capture-group regression is caught at CI time, not in production.
+
+### Doppler-shape literals in workflow files trip GitHub push protection
+
+GitHub server-side push protection scans every committed line for the
+contiguous Doppler shape (and Slack, Stripe, AWS PATs, GitHub PATs, etc.)
+regardless of file path or surrounding context. A YAML env literal like:
+
+```yaml
+env:
+  FAKE_DOPPLER: "dp.pt.SMOKETEST..."
+```
+
+is rejected at push time with `GH013: Push cannot contain secrets`, even
+though the value is a fixture and the file is `.github/workflows/*.yml`.
+
+**Workaround:** split the shape across two env vars and concatenate at
+runtime in the step:
+
+```yaml
+env:
+  FAKE_DOPPLER_PREFIX: "dp.pt."
+  FAKE_DOPPLER_BODY: "SMOKETEST..."
+run: |
+  echo "${FAKE_DOPPLER_PREFIX}${FAKE_DOPPLER_BODY}" > /tmp/fixture
+```
+
+Same trick applies to any vendor whose token shape GitHub push-protection
+recognizes when a fake fixture token is genuinely needed for a smoke test.
+Generating the fixture from random bytes inside a `run:` step is also
+acceptable; the split-env pattern is preferred when you need fixture
+stability across runs.
+
+### Override default-pack rules by id, don't add parallel rules
+
+Per-rule allowlists do **not** apply across rules. A custom rule named
+`doppler-api-token-custom` with a `paths` allowlist will not silence the
+default pack's `doppler-api-token` rule on the same file. To extend the
+default pack with allowlists, declare a custom rule with the **same id**
+as the default-pack rule — gitleaks treats the local definition as an
+override, not an addition.
+
+### Smoke-test fakes should map to allowlistable rules
+
+`jwt` (default rule, v8.24.2) cannot be allowlisted per-path. If a smoke
+matrix needs a fake JWT-shaped fixture, either upgrade gitleaks to a
+version that supports per-path allowlist for `jwt`, or pick a different
+fake-token shape whose rule you can allowlist. We chose Doppler shapes
+for the smoke matrix because our custom rules carry the path allowlist.
 
 ## Rule-pack maintenance
 
