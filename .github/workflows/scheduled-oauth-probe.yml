@@ -50,6 +50,15 @@ jobs:
           # exposing it to the workflow is no broader leak than its
           # baseline scope. Still mask via secret to keep logs clean.
           SUPABASE_ANON_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
+          # GitHub App user-OAuth client_id (Iv23...). Used to probe each
+          # registered callback URL against GitHub's /login/oauth/authorize.
+          # Stored as a workflow secret to avoid hardcoding even though the
+          # client_id is public — keeps PR/log surfaces clean.
+          OAUTH_PROBE_GITHUB_CLIENT_ID: ${{ secrets.OAUTH_PROBE_GITHUB_CLIENT_ID }}
+          # 20-char Supabase project ref ([a-z0-9]{20}) for the canonical
+          # supabase.co fallback URL. Set via gh secret set from
+          # Doppler prd.NEXT_PUBLIC_SUPABASE_URL after CNAME deref.
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
         run: |
           set -uo pipefail
           # Note: NOT set -e — we collect failure mode and emit it as output.
@@ -107,6 +116,97 @@ jobs:
 
           # 3. GitHub OAuth redirect lands on github.com
           [[ -z "$fail_mode" ]] && check_redirect "github" "github.com"
+
+          # 3b. Probe each registered GitHub App callback URL against
+          # GitHub's /login/oauth/authorize and assert it is still
+          # associated with our App (Iv23...). Healthy state: HTTP 200 +
+          # body does NOT contain "redirect_uri is not associated".
+          # Both healthy and failing states return HTTP 200 — the body
+          # grep is load-bearing.
+          # See: docs.github.com/.../troubleshooting-authorization-request-errors
+          # See: knowledge-base/project/learnings/integration-issues/2026-05-04-github-app-callback-url-three-entries.md
+          probe_github_redirect_uri() {
+            local label="$1" redirect_uri="$2"
+            local url body http
+            # Strip CR/LF + Unicode line/paragraph separators from any value
+            # echoed to ::error::/::warning:: to prevent annotation forgery
+            # via attacker-controlled redirect strings.
+            local redirect_uri_safe
+            redirect_uri_safe=$(printf '%s' "$redirect_uri" | tr -d '\r\n\f\v\x7f' | sed 's/\xe2\x80\xa8//g; s/\xe2\x80\xa9//g')
+
+            # URL-encode the redirect_uri via jq (no awk/printf escape traps).
+            local enc
+            enc=$(jq -nr --arg u "$redirect_uri" '$u|@uri')
+            url="https://github.com/login/oauth/authorize?client_id=${OAUTH_PROBE_GITHUB_CLIENT_ID}&redirect_uri=${enc}&state=probe-${RANDOM}"
+
+            # -L follows the GitHub /login redirect for unauthenticated
+            # callers; the error page renders BEFORE the login form when
+            # redirect_uri is bad, so -L safely captures both code paths.
+            # User-Agent identifies the probe so GitHub can rate-limit
+            # politely if it ever needs to.
+            body=$(curl --max-time 10 -L -s \
+              -H "User-Agent: soleur-oauth-probe/1.0" \
+              -w '\n__HTTP__%{http_code}' \
+              "$url" 2>/dev/null) || {
+              record_failure "github_oauth_${label}_network" \
+                "GET https://github.com/login/oauth/authorize?client_id=*&redirect_uri=${redirect_uri_safe} -> curl error (DNS, TLS, or connect)"
+              return
+            }
+            http=$(printf '%s' "$body" | grep -o '__HTTP__[0-9]*' | tail -1 | sed 's/__HTTP__//')
+            body=$(printf '%s' "$body" | sed 's/__HTTP__[0-9]*$//')
+
+            if [[ "$http" != "200" ]]; then
+              record_failure "github_oauth_${label}_http" \
+                "GET .../authorize for ${redirect_uri_safe} -> HTTP ${http}"
+              return
+            fi
+            if grep -q "redirect_uri is not associated" <<<"$body"; then
+              record_failure "github_oauth_${label}_unregistered" \
+                "GitHub rejected redirect_uri=${redirect_uri_safe} for the configured GitHub App — add this URL to the App's callback list"
+              return
+            fi
+            if grep -q "Application suspended" <<<"$body"; then
+              record_failure "github_app_suspended" \
+                "GitHub App for client_id matching probe is suspended — every GitHub auth flow breaks until reinstated"
+              return
+            fi
+            # Positive proof: a healthy authorize page contains either the
+            # login form (unauthenticated probe) or the consent page
+            # ("Authorize"). Both-missing = GitHub HTML reworded; treat as
+            # drift rather than silent-pass.
+            if ! grep -qE '<form|Authorize' <<<"$body"; then
+              record_failure "github_oauth_${label}_html_drift" \
+                "Authorize response for ${redirect_uri_safe} did not contain <form or Authorize — GitHub may have reworded the page; refresh probe sentinels"
+              return
+            fi
+          }
+
+          # Skip the new probes gracefully when the secret is unset (e.g.,
+          # on a repo fork or before the first `gh secret set`). The probe
+          # records a single configuration failure rather than three.
+          if [[ -z "$fail_mode" ]]; then
+            if [[ -z "${OAUTH_PROBE_GITHUB_CLIENT_ID:-}" ]]; then
+              record_failure "github_redirect_probe_misconfigured" \
+                "OAUTH_PROBE_GITHUB_CLIENT_ID secret is not set on the workflow — cannot probe GitHub App callback URL registration"
+            elif [[ -z "${SUPABASE_PROJECT_REF:-}" ]]; then
+              record_failure "github_redirect_probe_misconfigured" \
+                "SUPABASE_PROJECT_REF secret is not set on the workflow — cannot probe canonical supabase.co callback URL"
+            else
+              # 3c. github-resolve callback (Flow B — App-direct OAuth)
+              probe_github_redirect_uri "github_resolve" \
+                "https://${APP_HOST}/api/auth/github-resolve/callback"
+
+              # 3d. Supabase custom-domain callback (Flow A primary)
+              [[ -z "$fail_mode" ]] && probe_github_redirect_uri "supabase_custom" \
+                "https://${API_HOST}/auth/v1/callback"
+
+              # 3e. Supabase canonical callback (Flow A fallback during
+              # custom-domain CNAME re-provisioning — see Supabase docs
+              # on custom-domain dual-registration)
+              [[ -z "$fail_mode" ]] && probe_github_redirect_uri "supabase_canonical" \
+                "https://${SUPABASE_PROJECT_REF}.supabase.co/auth/v1/callback"
+            fi
+          fi
 
           # 4. /auth/v1/settings exposes google + github as enabled.
           # Requires the Supabase anon `apikey` header — without it the
@@ -270,7 +370,7 @@ jobs:
           if [[ -n "$STALE" ]]; then
             echo "Closing stale tracking issue #$STALE."
             gh issue close "$STALE" --repo "$GH_REPO" \
-              --comment "Probe green at ${NOW}. All four checks passed (login HTTP 200, google+github authorize 302, settings JSON valid). Run: ${RUN_URL}"
+              --comment "Probe green at ${NOW}. All checks passed (login HTTP 200, google+github authorize 302, settings JSON valid, all 3 GitHub App callback URLs registered, callback-error pass-through). Run: ${RUN_URL}"
           else
             echo "No stale tracking issue to close."
           fi

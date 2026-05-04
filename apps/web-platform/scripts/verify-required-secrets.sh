@@ -119,6 +119,24 @@ if [[ -n "$key_value" ]]; then
   fi
 fi
 
+# Shape assertion for GITHUB_CLIENT_ID: GitHub App user-OAuth client_ids
+# match `^Iv23[A-Za-z0-9]{16}$`. Catches the operator-paste class where an
+# OAuth App client_id (`Ov23...`) or a placeholder is written into Doppler
+# prd. A wrong client_id surfaces to users as
+#   "The redirect_uri is not associated with this application"
+# because GitHub looks up the App's callback list by client_id.
+# See: knowledge-base/project/learnings/integration-issues/2026-05-04-github-app-callback-url-three-entries.md
+GITHUB_CLIENT_ID_RE='^Iv23[A-Za-z0-9]{16}$'
+gh_client_id="${GITHUB_CLIENT_ID:-}"
+if [[ -n "$gh_client_id" ]]; then
+  if [[ ! "$gh_client_id" =~ $GITHUB_CLIENT_ID_RE ]]; then
+    # Echo only the first 4 chars to avoid leaking unknown values into logs.
+    prefix="${gh_client_id:0:4}"
+    echo "::error::GITHUB_CLIENT_ID has non-canonical shape (prefix=\"${prefix}…\"); expected GitHub App user-OAuth format Iv23<16 chars>"
+    shape_violations=$((shape_violations + 1))
+  fi
+fi
+
 if [[ "$missing" -gt 0 ]]; then
   echo "::error::$missing required NEXT_PUBLIC_* secret(s) missing from Doppler prd"
   exit 1
