@@ -36,13 +36,20 @@
  * bubbles (components/chat/message-bubble.tsx) — chat keeps the compact
  * defaults baked into MarkdownRenderer's inline Tailwind classes.
  *
- * Cascade note (Tailwind v4): these rules are intentionally UNLAYERED
- * (declared outside any @layer block). Tailwind v4 emits utilities into
- * @layer utilities, which beats @layer components by cascade-layer order.
+ * Cascade (Tailwind v4.x): these rules are intentionally UNLAYERED — declared
+ * outside any @layer block. v4 emits utilities into @layer utilities, which
+ * beats @layer components by cascade-layer order regardless of specificity.
  * Unlayered rules sit in the implicit topmost layer and beat all named
- * layers — that, plus the 0,2,0 descendant specificity vs the utility's
- * 0,1,0, gives defense-in-depth. If you move these into @layer components
- * the fix becomes a no-op.
+ * layers; combined with 0,2,0 descendant specificity vs the utility's 0,1,0,
+ * that's defense-in-depth. Moving these into @layer components silently
+ * no-ops the fix. Re-verify on Tailwind v5+.
+ *
+ * Selector note: `.prose-kb div:has(> table)` is descendant (NOT direct
+ * child). MarkdownRenderer wraps content in <div class="min-w-0 …"> before
+ * emitting the table-wrapper <div class="overflow-x-auto"><table>; a `>`
+ * combinator after .prose-kb skips the renderer root and matches nothing.
+ * If you change the renderer's structure, re-verify with:
+ *   container.querySelectorAll(".prose-kb div:has(> table)").length === 1
  */
 .prose-kb h1 { margin-top: 2rem; margin-bottom: 1rem; }
 .prose-kb h2 { margin-top: 1.75rem; margin-bottom: 0.75rem; }
@@ -51,8 +58,7 @@
 .prose-kb ul,
 .prose-kb ol { margin-bottom: 1rem; margin-left: 1.25rem; }
 .prose-kb li + li { margin-top: 0.5rem; }
-.prose-kb > div:has(> table),
-.prose-kb table { margin-top: 1.5rem; margin-bottom: 1.5rem; }
+.prose-kb div:has(> table) { margin-top: 1.5rem; margin-bottom: 1.5rem; }
 .prose-kb th,
 .prose-kb td { padding-left: 1rem; padding-right: 1rem; padding-top: 0.625rem; padding-bottom: 0.625rem; }
 .prose-kb pre { margin-top: 1.25rem; margin-bottom: 1.25rem; }

@@ -4,9 +4,11 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { MarkdownRenderer } from "@/components/ui/markdown-renderer";
 
+const KB_SELECTORS = ["h1", "h2", "h3", "p", "ul", "ol", "li", "th", "td", "pre", "blockquote"] as const;
+
 describe("prose-kb spacing wrapper — long-form-document density variant", () => {
   it("descendant selectors target real DOM under .prose-kb wrapper (table fixture)", () => {
-    const md = "before\n\n# Heading\n\npara\n\n| A | B |\n|---|---|\n| 1 | 2 |\n";
+    const md = "# Heading\n\npara\n\n| A | B |\n|---|---|\n| 1 | 2 |\n";
     const { container } = render(
       <article className="prose-kb">
         <MarkdownRenderer content={md} />
@@ -15,12 +17,31 @@ describe("prose-kb spacing wrapper — long-form-document density variant", () =
 
     const wrapper = container.querySelector(".prose-kb");
     expect(wrapper, "prose-kb wrapper present").not.toBeNull();
-
-    expect(wrapper!.querySelector("table"), ".prose-kb table selector targets DOM").not.toBeNull();
+    expect(wrapper!.querySelector(".prose-kb h1")).not.toBeNull();
+    expect(wrapper!.querySelector(".prose-kb table")).not.toBeNull();
     expect(wrapper!.querySelectorAll(".prose-kb td").length).toBe(2);
     expect(wrapper!.querySelectorAll(".prose-kb th").length).toBe(2);
-    expect(wrapper!.querySelector(".prose-kb h1")).not.toBeNull();
-    expect(wrapper!.querySelectorAll(".prose-kb p").length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("table-wrapper margin selector resolves: .prose-kb div:has(> table) matches exactly the renderer's overflow-x-auto wrapper", () => {
+    // Regression guard for the original `.prose-kb > div:has(> table)` selector,
+    // which uses the direct-child combinator after `.prose-kb`. MarkdownRenderer
+    // emits an outer `<div class="min-w-0 ...">` BEFORE the table-wrapper
+    // `<div class="overflow-x-auto">`, so the `>` form matches zero elements
+    // and the wrapper's `mb-3` keeps winning. The fix is the descendant form.
+    const md = "| A | B |\n|---|---|\n| 1 | 2 |\n";
+    const { container } = render(
+      <article className="prose-kb">
+        <MarkdownRenderer content={md} />
+      </article>,
+    );
+
+    const directChildOnly = container.querySelectorAll(".prose-kb > div:has(> table)");
+    const descendant = container.querySelectorAll(".prose-kb div:has(> table)");
+
+    expect(directChildOnly.length, "direct-child :has() form does NOT match because the renderer interposes its root wrapper").toBe(0);
+    expect(descendant.length, "descendant :has() form matches the table-scroll wrapper").toBe(1);
+    expect(descendant[0].className).toContain("overflow-x-auto");
   });
 
   it("renders three sequential h2 elements as descendants of .prose-kb", () => {
@@ -61,22 +82,27 @@ describe("prose-kb spacing wrapper — long-form-document density variant", () =
     expect(tableWrap!.className).toContain("mb-3");
   });
 
-  it("globals.css declares unlayered .prose-kb rules (NOT inside @layer components)", () => {
+  it("globals.css declares each .prose-kb selector unlayered (NOT inside @layer components)", () => {
     const cssPath = resolve(__dirname, "..", "app", "globals.css");
     const css = readFileSync(cssPath, "utf8");
 
-    expect(css, ".prose-kb rules present in globals.css").toMatch(/\.prose-kb\s+(?:>\s*)?\w/);
+    for (const selector of KB_SELECTORS) {
+      const pattern = new RegExp(`\\.prose-kb\\s+(?:[\\w.,#:[\\]"'=\\s]+,\\s*)?${selector}\\b`);
+      expect(css, `expected globals.css to declare .prose-kb ${selector} rule`).toMatch(pattern);
+    }
+    expect(css, "expected .prose-kb table-scroll-wrapper rule via :has(> table)").toMatch(
+      /\.prose-kb\s+div:has\(>\s*table\)/,
+    );
 
     const componentsBlockMatch = css.match(/@layer\s+components\s*\{([\s\S]*?)\n\}/);
-    if (componentsBlockMatch) {
-      expect(
-        componentsBlockMatch[1],
-        ".prose-kb must NOT live inside @layer components — Tailwind v4 emits utilities in a later layer that would win regardless of specificity",
-      ).not.toMatch(/\.prose-kb/);
-    }
-
-    const proseKbCount = (css.match(/\.prose-kb/g) ?? []).length;
-    expect(proseKbCount, "expected ≥7 .prose-kb selectors covering h*/p/ul-ol/li/table/th-td/pre/blockquote").toBeGreaterThanOrEqual(7);
+    expect(
+      componentsBlockMatch,
+      "expected an @layer components block in globals.css as anchor for the negative cascade-placement assertion",
+    ).not.toBeNull();
+    expect(
+      componentsBlockMatch![1],
+      ".prose-kb must NOT live inside @layer components — Tailwind v4 emits utilities in a later layer that would win regardless of specificity",
+    ).not.toMatch(/\.prose-kb/);
   });
 
   it("guard: chat/message-bubble.tsx does NOT contain the literal string 'prose-kb'", () => {
