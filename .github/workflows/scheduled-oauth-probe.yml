@@ -145,6 +145,32 @@ jobs:
             fi
           fi
 
+          # 5. /callback?error=access_denied 302s to /login?error=oauth_cancelled.
+          # Closes the regression class from the 2026-04-29 demo failure
+          # where a user who cancelled OAuth landed on /login?error=auth_failed
+          # with the wrong "try email instead" copy. The route now classifies
+          # provider errors before the `if (code)` block; this probe asserts
+          # the redirect path. Uses APP_HOST from the env: block (no untrusted
+          # input — same pattern as check_redirect above).
+          if [[ -z "$fail_mode" ]]; then
+            cb_url="https://${APP_HOST}/callback?error=access_denied"
+            cb_line=$(curl -s --max-time 10 --max-redirs 0 -o /dev/null \
+              -w '%{http_code} %{redirect_url}' "$cb_url" 2>/dev/null) || cb_line="network_error"
+            if [[ "$cb_line" == "network_error" ]]; then
+              record_failure "network_error" \
+                "GET ${cb_url} -> curl error"
+            else
+              cb_http=${cb_line%% *}
+              cb_redirect=${cb_line#* }
+              # Accept both 302 and 307 (NextResponse.redirect emits 307 by default).
+              if [[ "$cb_http" != "302" && "$cb_http" != "307" ]] || \
+                 [[ "$cb_redirect" != *"/login?error=oauth_cancelled"* ]]; then
+                record_failure "callback_error_passthrough" \
+                  "GET ${cb_url} -> HTTP ${cb_http}, redirect=${cb_redirect}"
+              fi
+            fi
+          fi
+
           # Sanitize for $GITHUB_OUTPUT — strip CR/LF + Unicode line/paragraph
           # separators (U+2028/U+2029) that could break the key=value contract
           # or forge ::warning:: annotations. Use tr for byte-class portability;
