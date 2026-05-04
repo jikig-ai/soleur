@@ -48,6 +48,13 @@
 # Tests set SKILL_FRESHNESS_REPO_ROOT to redirect reads/writes off the
 # operator's real .claude/.skill-invocations.jsonl and the canonical
 # knowledge-base output path.
+#
+# Cross-stream contract: hook emits namespaced names ("soleur:plan"),
+# inventory walks bare directory names ("plan"). The join normalizes
+# via `bare = split(":") | last`. Any test that touches the join MUST
+# include at least one fixture per producer's production format —
+# bare-only fixtures hide format-mismatch bugs (see learning
+# 2026-05-04-telemetry-join-format-mismatch-caught-by-orphan-counter.md).
 
 set -euo pipefail
 
