@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { classifyCallbackError } from "@/lib/auth/error-classifier";
 
 describe("classifyCallbackError", () => {
-  // Source of truth: @supabase/auth-js error-codes.d.ts (installed v2.49.0).
+  // Source of truth: @supabase/auth-js error-codes.d.ts (installed v2.99.2).
   // The five verifier-class codes all surface to the user as
   // `code_verifier_missing` ("Session expired. Please try signing in again.")
   // because the recovery action is identical: re-initiate the OAuth round-trip.
@@ -14,6 +14,16 @@ describe("classifyCallbackError", () => {
     "bad_oauth_callback",
   ])("maps Supabase error code %s to code_verifier_missing", (code) => {
     expect(classifyCallbackError({ code })).toBe("code_verifier_missing");
+  });
+
+  it("maps provider_disabled to provider_disabled (was dead code prior to wiring)", () => {
+    // CALLBACK_ERRORS["provider_disabled"] has existed in error-messages.ts
+    // since the dictionary was created, but the classifier never mapped
+    // anything to it — every provider_disabled failure showed the wrong
+    // "try email instead" copy. This case asserts the wire-up is live.
+    expect(classifyCallbackError({ code: "provider_disabled" })).toBe(
+      "provider_disabled",
+    );
   });
 
   it.each([

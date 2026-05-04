@@ -6,6 +6,10 @@ export const CALLBACK_ERRORS: Record<string, string> = {
   code_verifier_missing: "Session expired. Please try signing in again.",
   provider_disabled:
     "This sign-in provider is not enabled. Please use a different method.",
+  oauth_cancelled:
+    "Sign-in cancelled. Click your sign-in option to try again.",
+  oauth_failed:
+    "The sign-in service had a temporary problem. Please try again.",
 };
 
 const SUPABASE_ERROR_PATTERNS: [RegExp, string][] = [

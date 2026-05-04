@@ -144,6 +144,53 @@ provider OAuth credential expired (Supabase auto-disables broken
 providers). Re-enable in the Supabase Auth dashboard; if credentials
 are stale, rotate the OAuth client secret.
 
+### `callback_error_passthrough`
+
+`GET https://app.soleur.ai/callback?error=access_denied` did not
+redirect to `/login?error=oauth_cancelled`. The probe asserts that
+provider-side OAuth errors (specifically the user-cancel signal
+`access_denied`) are classified by the callback route and routed to
+the dedicated `oauth_cancelled` error copy — NOT conflated with
+generic `auth_failed`.
+
+Two common root causes:
+
+1. **Regression in `app/(auth)/callback/route.ts`** — someone removed
+   or moved the `classifyProviderError` branch that runs before the
+   `if (code)` block. Check the most recent diff:
+
+   ```bash
+   git log --oneline -- apps/web-platform/app/\(auth\)/callback/route.ts | head -5
+   git show <suspect-sha> -- apps/web-platform/app/\(auth\)/callback/route.ts
+   ```
+
+   The branch is load-bearing: without it, every user who cancels at
+   the OAuth consent screen sees the misleading "try email instead"
+   copy from `auth_failed`. Roll back the offending change or restore
+   the branch.
+
+2. **Edge / proxy stripped the `error=` query param** — Cloudflare
+   Workers, redirect rules, or a CDN cache key normalizer can drop
+   query params it doesn't recognize. Verify the inbound URL reaches
+   the route with `error=access_denied` intact:
+
+   ```bash
+   curl -sI --max-time 10 \
+     "https://app.soleur.ai/callback?error=access_denied" \
+     -H 'Cache-Control: no-cache'
+   # Expect: HTTP/2 307, location: .../login?error=oauth_cancelled
+   ```
+
+   If the response is `307 .../login?error=auth_failed`, the param
+   was stripped at the edge — check Cloudflare Page Rules / Transform
+   Rules / Workers in the soleur.ai zone for routes matching
+   `/callback*`.
+
+Cross-link: PR that introduced the classifier — check `git log` for
+the `provider-error-classifier.ts` add commit. The Sentry op for this
+class is `feature:auth, op:callback_provider_error` (queryable
+without re-deployment).
+
 ## Diagnostic recipes
 
 All recipes assume `SENTRY_API_HOST` is set to the org's Sentry region

@@ -66,13 +66,15 @@ function stripWorkspacePath(text: string, workspacePath?: string): string {
     out = out.replace(/^\//, "");
   }
 
-  // Any remaining suspected-leak shape is a gap in the pattern table.
-  if (SUSPECTED_LEAK_SHAPE.test(out)) {
+  // Report the matched shape (not surrounding prose) so Sentry names the
+  // offending form. Mirrors lib/format-assistant-text.ts:88.
+  const leak = out.match(SUSPECTED_LEAK_SHAPE);
+  if (leak) {
     reportSilentFallback(null, {
       feature: "command-center",
       op: "tool-label-scrub",
       message: "Unmatched workspace/sandbox path shape after scrub",
-      extra: { text: out.slice(0, 200) },
+      extra: { shape: leak[0].slice(0, 200) },
     });
   }
   return out;

@@ -30,6 +30,18 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
+      # Required so the `Email notification (failure)` step below can resolve
+      # `./.github/actions/notify-ops-email`. Without this, the runner workspace
+      # is empty and the local-path action lookup fails with
+      # `Can't find 'action.yml' under .github/actions/notify-ops-email`.
+      # Sparse: the only repo path consumed at runtime is `.github/actions/`;
+      # cone-mode disabled so the nested path matches as a literal subdirectory.
+      - name: Checkout (for local composite action)
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          sparse-checkout: |
+            .github/actions
+          sparse-checkout-cone-mode: false
       - name: Ensure labels exist
         env:
           GH_TOKEN: ${{ github.token }}
