@@ -138,7 +138,11 @@ describe("scheduled-oauth-probe.yml — GitHub redirect_uri probe contract", () 
     const yaml = readFileSync(workflowPath, "utf-8");
     const fnBody = extractProbeFnBody(yaml);
     expect(fnBody).toMatch(/--max-time\s+\d+/);
-    expect(fnBody).toMatch(/github\.com\/login\/oauth\/authorize/);
+    // Anchored on the https:// scheme to satisfy `js/regex/missing-regexp-anchor`
+    // (CodeQL would otherwise treat the unanchored substring as URL-validator-shaped
+    // and warn about attacker-host-prefix bypass — false-positive in this contract
+    // test, but the anchored form is also more precise).
+    expect(fnBody).toMatch(/https:\/\/github\.com\/login\/oauth\/authorize/);
   });
 
   test("probe asserts SUPABASE_PROJECT_REF agrees with live CNAME deref", () => {
