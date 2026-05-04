@@ -59,6 +59,15 @@
             "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/pencil-open-guard.sh"
           }
         ]
+      },
+      {
+        "matcher": "Skill",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/skill-invocation-logger.sh"
+          }
+        ]
       }
     ],
     "PostToolUse": [

@@ -1,0 +1,126 @@
+# Quarterly legal compliance audit using the soleur:legal-audit skill.
+# Scans existing legal documents for compliance gaps, outdated clauses,
+# missing disclosures, and cross-document consistency. Files findings as
+# GitHub issues.
+#
+# Cron `0 11 1 1,4,7,10 *` (Jan/Apr/Jul/Oct 1 at 11:00 UTC) — 11:00 UTC slot
+# avoids collision with the existing `0 9 1 * *` workflows that fire on the
+# 1st of every month (scheduled-ux-audit, scheduled-competitive-analysis).
+#
+# Issue-filing semantics live in the prompt, not the skill: legal-audit
+# SKILL.md displays findings inline; this workflow drives `gh issue create`
+# with explicit MILESTONE / CAP_OPEN_ISSUES / CAP_PER_RUN / injection-safety
+# rules, mirroring scheduled-ux-audit.yml's pattern.
+#
+# Track C1 of #3122 — see knowledge-base/project/plans/2026-05-04-feat-scheduled-audits-skill-freshness-plan.md
+#
+# Security: no untrusted event inputs interpolated in run: blocks.
+#
+# To test manually (post-merge): gh workflow run scheduled-legal-audit.yml
+
+name: "Scheduled: Legal Audit"
+
+on:
+  schedule:
+    - cron: '0 11 1 1,4,7,10 *'
+  workflow_dispatch:
+
+concurrency:
+  group: schedule-legal-audit
+  cancel-in-progress: false
+
+permissions:
+  issues: write
+  contents: read
+  pull-requests: write
+  id-token: write
+
+jobs:
+  preflight:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      ok: ${{ steps.check.outputs.ok }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - id: check
+        uses: ./.github/actions/anthropic-preflight
+        with:
+          anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+
+  legal-audit:
+    needs: preflight
+    if: needs.preflight.outputs.ok == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Ensure label exists
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh label create scheduled-legal-audit \
+            --description "Quarterly legal compliance audit finding" \
+            --color "0E8A16" 2>/dev/null || true
+
+      - name: Run scheduled skill
+        uses: anthropics/claude-code-action@ab8b1e6471c519c585ba17e8ecaccc9d83043541 # v1.0.101
+        env:
+          GH_TOKEN: ${{ github.token }}
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          plugin_marketplaces: 'https://github.com/jikig-ai/soleur.git'
+          plugins: 'soleur@soleur'
+          claude_args: '--model claude-opus-4-7 --max-turns 60 --allowedTools Bash,Read,Write,Edit,Glob,Grep,Task'
+          prompt: |
+            IMPORTANT: This is an automated CI workflow. Do NOT push directly
+            to main. Do NOT create commits.
+
+            MILESTONE RULE: Every gh issue create command MUST include
+            --milestone "Post-MVP / Later".
+
+            Run /soleur:legal-audit on this repository against US, EU/GDPR,
+            and UK jurisdictions (the three jurisdictions the project
+            currently targets). The skill discovers legal documents under
+            common locations (docs/legal/, legal/, pages/legal/, root
+            terms*/privacy*/cookie*/etc.) and audits each for compliance
+            gaps, outdated clauses, missing disclosures, and cross-document
+            consistency.
+
+            If no legal documents are found, exit cleanly without filing
+            issues — the skill itself reports the empty-discovery state.
+
+            Cap enforcement is mandatory:
+              CAP_OPEN_ISSUES = 20   (refuse to file when reached; check via
+                                      `gh issue list --label scheduled-legal-audit
+                                       --state open --limit 30 | wc -l`)
+              CAP_PER_RUN     = 5    (severity-ranked top-N filed per run)
+
+            For each filed issue:
+              - Title prefix: "[Scheduled] Legal Audit — <document>: <gap>"
+              - Labels: scheduled-legal-audit
+              - Milestone: "Post-MVP / Later"
+              - Body: document name, jurisdiction, gap, severity, recommended
+                clause language
+
+            Idempotency: before filing, check
+              gh issue list --label scheduled-legal-audit \
+                            --search "<gap-summary> in:title" --state all --limit 5
+            and skip if any existing issue (open or closed within 90 days)
+            matches. Quarterly cadence + 90-day window prevents reopen-loops.
+
+            Injection safety: write each finding's title and body to env vars
+            or files BEFORE `gh issue create` — never interpolate agent output
+            into bash `run:` commands directly.
+
+      - name: Email notification (failure)
+        if: failure()
+        uses: ./.github/actions/notify-ops-email
+        with:
+          subject: '[FAIL] Scheduled: Legal Audit workflow failed'
+          body: '<p><strong>Legal Audit</strong> failed.</p><p><a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}">View run</a></p>'
+          resend-api-key: ${{ secrets.RESEND_API_KEY }}
