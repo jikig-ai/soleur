@@ -67,7 +67,7 @@ Per AGENTS.md `hr-weigh-every-decision-against-target-user-impact`, every brains
 - **Header:** "User impact"
 - **Question:** "If this decision ships as designed, what is the worst outcome the target user experiences? If it silently fails, what do they see? If it leaks, what data of theirs is exposed? (Answer even if the request seems purely technical — the framing is the point.)"
 - **Multi-select:** false. Use a single free-text answer (the operator may type into the `other` escape if no preset option fits).
-- **Options:** offer presets aligned with the trigger keywords below (e.g., "User data exposure", "Credential leak / auth bypass", "Billing surprise / payment error", "Data loss / corruption", "Trust breach / cross-tenant read", "No direct user impact", "Other"), but the free-text answer is what drives Step 2.
+- **Options:** the AskUserQuestion tool caps `options` at 4 (`maxItems: 4`), and "Other" is auto-appended by the runtime — do NOT include "Other" in your options list, it wastes a slot. Pick the 3 presets most likely to fit the feature being brainstormed from this menu and let auto-"Other" carry the long tail: "User data exposure", "Credential leak / auth bypass", "Billing surprise / payment error", "Data loss / corruption", "Trust breach / cross-tenant read", "No direct user impact". The free-text answer is what drives Step 2 — presets are scaffolding, not exhaustive.
 
 **Step 2 — Parse the answer for trigger keywords.** Scan the free-text answer (case-insensitive substring match) for any of:
 
