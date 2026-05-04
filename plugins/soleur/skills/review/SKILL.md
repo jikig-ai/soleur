@@ -350,7 +350,11 @@ one of these four scope-out criteria:
   4. **pre-existing-unrelated** — finding existed on `main` before this PR and
      is not exacerbated by the PR's changes. (Does NOT block merge.) **Only
      reachable through the `pre-existing` branch of the provenance triage in
-     Step 1 below — never applies to `pr-introduced` findings.**
+     Step 1 below — never applies to `pr-introduced` findings. Mirroring an
+     existing brittle pattern "for symmetry" is exacerbation, not preservation:
+     if `git diff origin/main...HEAD -- <file> | grep '^+' | grep <pattern>`
+     returns ≥1 line, the criterion fails — fix inline. See
+     `knowledge-base/project/learnings/2026-05-04-in-isolation-probe-missed-user-shape-and-scope-out-exacerbation.md`.**
 
 When filing:
 
