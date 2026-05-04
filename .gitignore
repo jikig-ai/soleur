@@ -33,6 +33,8 @@ __pycache__/
 .claude/ralph-loop.*.local.md
 .claude/.rule-incidents.jsonl
 .claude/.rule-incidents-*.jsonl.gz
+.claude/.skill-invocations.jsonl
+.claude/.skill-invocations-*.jsonl.gz
 # Stray Claude Code subagent worktree markers — must never be committed (#2905)
 /.claude/worktrees/
 .playwright-mcp/

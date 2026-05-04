@@ -1,0 +1,481 @@
+{
+  "schema": 1,
+  "generated_at": "2026-05-04T09:55:46Z",
+  "skills": [
+    {
+      "name": "admin-ip-refresh",
+      "last_invoked": null,
+      "invocation_count": 0,
+      "days_since_last": null,
+      "status": "never_invoked"
+    },
+    {
+      "name": "agent-browser",
+      "last_invoked": null,
+      "invocation_count": 0,
+      "days_since_last": null,
+      "status": "never_invoked"
+    },
+    {
+      "name": "agent-native-architecture",
+      "last_invoked": null,
+      "invocation_count": 0,
+      "days_since_last": null,
+      "status": "never_invoked"
+    },
+    {
+      "name": "agent-native-audit",
+      "last_invoked": null,
+      "invocation_count": 0,
+      "days_since_last": null,
+      "status": "never_invoked"
+    },
+    {
+      "name": "andrew-kane-gem-writer",
+      "last_invoked": null,
+      "invocation_count": 0,
+      "days_since_last": null,
+      "status": "never_invoked"
+    },
+    {
+      "name": "architecture",
+      "last_invoked": null,
+      "invocation_count": 0,
+      "days_since_last": null,
+      "status": "never_invoked"
+    },
+    {
+      "name": "archive-kb",
+      "last_invoked": null,
+      "invocation_count": 0,
+      "days_since_last": null,
+      "status": "never_invoked"
+    },
+    {
+      "name": "atdd-developer",
+      "last_invoked": null,
+      "invocation_count": 0,
+      "days_since_last": null,
+      "status": "never_invoked"
+    },
+    {
+      "name": "brainstorm",
+      "last_invoked": null,
+      "invocation_count": 0,
+      "days_since_last": null,
+      "status": "never_invoked"
+    },
+    {
+      "name": "brainstorm-techniques",
+      "last_invoked": null,
+      "invocation_count": 0,
+      "days_since_last": null,
+      "status": "never_invoked"
+    },
+    {
+      "name": "campaign-calendar",
+      "last_invoked": null,
+      "invocation_count": 0,
+      "days_since_last": null,
+      "status": "never_invoked"
+    },
+    {
+      "name": "changelog",
+      "last_invoked": null,
+      "invocation_count": 0,
+      "days_since_last": null,
+      "status": "never_invoked"
+    },
+    {
+      "name": "community",
+      "last_invoked": null,
+      "invocation_count": 0,
+      "days_since_last": null,
+      "status": "never_invoked"
+    },
+    {
+      "name": "competitive-analysis",
+      "last_invoked": null,
+      "invocation_count": 0,
+      "days_since_last": null,
+      "status": "never_invoked"
+    },
+    {
+      "name": "compound",
+      "last_invoked": null,
+      "invocation_count": 0,
+      "days_since_last": null,
+      "status": "never_invoked"
+    },
+    {
+      "name": "compound-capture",
+      "last_invoked": null,
+      "invocation_count": 0,
+      "days_since_last": null,
+      "status": "never_invoked"
+    },
+    {
+      "name": "content-writer",
+      "last_invoked": null,
+      "invocation_count": 0,
+      "days_since_last": null,
+      "status": "never_invoked"
+    },
+    {
+      "name": "deepen-plan",
+      "last_invoked": null,
+      "invocation_count": 0,
+      "days_since_last": null,
+      "status": "never_invoked"
+    },
+    {
+      "name": "deploy",
+      "last_invoked": null,
+      "invocation_count": 0,
+      "days_since_last": null,
+      "status": "never_invoked"
+    },
+    {
+      "name": "deploy-docs",
+      "last_invoked": null,
+      "invocation_count": 0,
+      "days_since_last": null,
+      "status": "never_invoked"
+    },
+    {
+      "name": "dhh-rails-style",
+      "last_invoked": null,
+      "invocation_count": 0,
+      "days_since_last": null,
+      "status": "never_invoked"
+    },
+    {
+      "name": "discord-content",
+      "last_invoked": null,
+      "invocation_count": 0,
+      "days_since_last": null,
+      "status": "never_invoked"
+    },
+    {
+      "name": "docs-site",
+      "last_invoked": null,
+      "invocation_count": 0,
+      "days_since_last": null,
+      "status": "never_invoked"
+    },
+    {
+      "name": "drain-labeled-backlog",
+      "last_invoked": null,
+      "invocation_count": 0,
+      "days_since_last": null,
+      "status": "never_invoked"
+    },
+    {
+      "name": "dspy-ruby",
+      "last_invoked": null,
+      "invocation_count": 0,
+      "days_since_last": null,
+      "status": "never_invoked"
+    },
+    {
+      "name": "every-style-editor",
+      "last_invoked": null,
+      "invocation_count": 0,
+      "days_since_last": null,
+      "status": "never_invoked"
+    },
+    {
+      "name": "feature-video",
+      "last_invoked": null,
+      "invocation_count": 0,
+      "days_since_last": null,
+      "status": "never_invoked"
+    },
+    {
+      "name": "file-todos",
+      "last_invoked": null,
+      "invocation_count": 0,
+      "days_since_last": null,
+      "status": "never_invoked"
+    },
+    {
+      "name": "fix-issue",
+      "last_invoked": null,
+      "invocation_count": 0,
+      "days_since_last": null,
+      "status": "never_invoked"
+    },
+    {
+      "name": "frontend-design",
+      "last_invoked": null,
+      "invocation_count": 0,
+      "days_since_last": null,
+      "status": "never_invoked"
+    },
+    {
+      "name": "gemini-imagegen",
+      "last_invoked": null,
+      "invocation_count": 0,
+      "days_since_last": null,
+      "status": "never_invoked"
+    },
+    {
+      "name": "git-worktree",
+      "last_invoked": null,
+      "invocation_count": 0,
+      "days_since_last": null,
+      "status": "never_invoked"
+    },
+    {
+      "name": "growth",
+      "last_invoked": null,
+      "invocation_count": 0,
+      "days_since_last": null,
+      "status": "never_invoked"
+    },
+    {
+      "name": "heal-skill",
+      "last_invoked": null,
+      "invocation_count": 0,
+      "days_since_last": null,
+      "status": "never_invoked"
+    },
+    {
+      "name": "kb-search",
+      "last_invoked": null,
+      "invocation_count": 0,
+      "days_since_last": null,
+      "status": "never_invoked"
+    },
+    {
+      "name": "legal-audit",
+      "last_invoked": null,
+      "invocation_count": 0,
+      "days_since_last": null,
+      "status": "never_invoked"
+    },
+    {
+      "name": "legal-generate",
+      "last_invoked": null,
+      "invocation_count": 0,
+      "days_since_last": null,
+      "status": "never_invoked"
+    },
+    {
+      "name": "merge-pr",
+      "last_invoked": null,
+      "invocation_count": 0,
+      "days_since_last": null,
+      "status": "never_invoked"
+    },
+    {
+      "name": "one-shot",
+      "last_invoked": null,
+      "invocation_count": 0,
+      "days_since_last": null,
+      "status": "never_invoked"
+    },
+    {
+      "name": "pencil-setup",
+      "last_invoked": null,
+      "invocation_count": 0,
+      "days_since_last": null,
+      "status": "never_invoked"
+    },
+    {
+      "name": "plan",
+      "last_invoked": null,
+      "invocation_count": 0,
+      "days_since_last": null,
+      "status": "never_invoked"
+    },
+    {
+      "name": "plan-review",
+      "last_invoked": null,
+      "invocation_count": 0,
+      "days_since_last": null,
+      "status": "never_invoked"
+    },
+    {
+      "name": "postmerge",
+      "last_invoked": null,
+      "invocation_count": 0,
+      "days_since_last": null,
+      "status": "never_invoked"
+    },
+    {
+      "name": "preflight",
+      "last_invoked": null,
+      "invocation_count": 0,
+      "days_since_last": null,
+      "status": "never_invoked"
+    },
+    {
+      "name": "product-roadmap",
+      "last_invoked": null,
+      "invocation_count": 0,
+      "days_since_last": null,
+      "status": "never_invoked"
+    },
+    {
+      "name": "qa",
+      "last_invoked": null,
+      "invocation_count": 0,
+      "days_since_last": null,
+      "status": "never_invoked"
+    },
+    {
+      "name": "rclone",
+      "last_invoked": null,
+      "invocation_count": 0,
+      "days_since_last": null,
+      "status": "never_invoked"
+    },
+    {
+      "name": "release-announce",
+      "last_invoked": null,
+      "invocation_count": 0,
+      "days_since_last": null,
+      "status": "never_invoked"
+    },
+    {
+      "name": "release-docs",
+      "last_invoked": null,
+      "invocation_count": 0,
+      "days_since_last": null,
+      "status": "never_invoked"
+    },
+    {
+      "name": "reproduce-bug",
+      "last_invoked": null,
+      "invocation_count": 0,
+      "days_since_last": null,
+      "status": "never_invoked"
+    },
+    {
+      "name": "resolve-parallel",
+      "last_invoked": null,
+      "invocation_count": 0,
+      "days_since_last": null,
+      "status": "never_invoked"
+    },
+    {
+      "name": "resolve-pr-parallel",
+      "last_invoked": null,
+      "invocation_count": 0,
+      "days_since_last": null,
+      "status": "never_invoked"
+    },
+    {
+      "name": "resolve-todo-parallel",
+      "last_invoked": null,
+      "invocation_count": 0,
+      "days_since_last": null,
+      "status": "never_invoked"
+    },
+    {
+      "name": "review",
+      "last_invoked": null,
+      "invocation_count": 0,
+      "days_since_last": null,
+      "status": "never_invoked"
+    },
+    {
+      "name": "schedule",
+      "last_invoked": null,
+      "invocation_count": 0,
+      "days_since_last": null,
+      "status": "never_invoked"
+    },
+    {
+      "name": "seo-aeo",
+      "last_invoked": null,
+      "invocation_count": 0,
+      "days_since_last": null,
+      "status": "never_invoked"
+    },
+    {
+      "name": "ship",
+      "last_invoked": null,
+      "invocation_count": 0,
+      "days_since_last": null,
+      "status": "never_invoked"
+    },
+    {
+      "name": "skill-creator",
+      "last_invoked": null,
+      "invocation_count": 0,
+      "days_since_last": null,
+      "status": "never_invoked"
+    },
+    {
+      "name": "social-distribute",
+      "last_invoked": null,
+      "invocation_count": 0,
+      "days_since_last": null,
+      "status": "never_invoked"
+    },
+    {
+      "name": "spec-templates",
+      "last_invoked": null,
+      "invocation_count": 0,
+      "days_since_last": null,
+      "status": "never_invoked"
+    },
+    {
+      "name": "test-browser",
+      "last_invoked": null,
+      "invocation_count": 0,
+      "days_since_last": null,
+      "status": "never_invoked"
+    },
+    {
+      "name": "test-fix-loop",
+      "last_invoked": null,
+      "invocation_count": 0,
+      "days_since_last": null,
+      "status": "never_invoked"
+    },
+    {
+      "name": "triage",
+      "last_invoked": null,
+      "invocation_count": 0,
+      "days_since_last": null,
+      "status": "never_invoked"
+    },
+    {
+      "name": "user-story-writer",
+      "last_invoked": null,
+      "invocation_count": 0,
+      "days_since_last": null,
+      "status": "never_invoked"
+    },
+    {
+      "name": "ux-audit",
+      "last_invoked": null,
+      "invocation_count": 0,
+      "days_since_last": null,
+      "status": "never_invoked"
+    },
+    {
+      "name": "work",
+      "last_invoked": null,
+      "invocation_count": 0,
+      "days_since_last": null,
+      "status": "never_invoked"
+    },
+    {
+      "name": "xcode-test",
+      "last_invoked": null,
+      "invocation_count": 0,
+      "days_since_last": null,
+      "status": "never_invoked"
+    }
+  ],
+  "summary": {
+    "total_skills": 67,
+    "idle_180d": 0,
+    "idle_365d": 0,
+    "never_invoked": 67
+  }
+}
