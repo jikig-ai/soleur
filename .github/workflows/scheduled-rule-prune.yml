@@ -7,6 +7,7 @@
 # scrutinize each appended line before merging.
 #
 # Sister workflow: rule-metrics-aggregate.yml (weekly aggregator).
+# Composite action contract: .github/actions/bot-pr-with-synthetic-checks/action.yml
 # See knowledge-base/project/plans/2026-05-04-feat-rule-prune-retirement-proposal-plan.md
 # Issue: #3120 (closes); #3128 (D1 deferral).
 #
@@ -44,7 +45,10 @@ jobs:
       - name: Run rule-prune in propose-retirement mode
         id: prune
         run: |
-          set -eo pipefail
+          # -u for parity with scripts/rule-prune.sh; catches unset $GITHUB_OUTPUT
+          # under `act`-style local invocation.
+          set -euo pipefail
+          # 26 weeks ≈ 2× UNUSED_WEEKS_DEFAULT (8) — quarterly retirement window.
           # Capture stdout so we can extract sentinels AND surface the log.
           out=$(bash scripts/rule-prune.sh --weeks=26 --propose-retirement)
           printf '%s\n' "$out"
