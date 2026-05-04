@@ -13,6 +13,7 @@
 // MCP servers for cc-soleur-go path — referenced in factory body).
 
 import path from "path";
+import { readFile } from "fs/promises";
 
 import type { Query } from "@anthropic-ai/claude-agent-sdk";
 import { query as sdkQuery } from "@anthropic-ai/claude-agent-sdk";
@@ -60,6 +61,7 @@ import {
   getUserServiceTokens,
   patchWorkspacePermissions,
 } from "./agent-runner";
+import { isPathInWorkspace } from "./sandbox";
 import { buildAgentQueryOptions } from "./agent-runner-query-options";
 import {
   getBashApprovalCache,
@@ -396,6 +398,85 @@ async function fetchUserWorkspacePath(userId: string): Promise<string> {
 }
 
 /**
+ * Resolve a KB document's context for the Concierge system prompt.
+ * Mirrors the legacy `agent-runner.ts:595-631` injection — caller-provided
+ * content wins; PDFs get a Read directive (no body read); text files are
+ * read server-side under the workspace-validation guard.
+ *
+ * Returns an empty object on path-traversal rejection or on a missing
+ * workspace path. Read errors degrade gracefully to a kind-only result so
+ * the runner injects an instruction-shaped Read directive without the body.
+ */
+const CONCIERGE_INLINE_CAP_BYTES = 50_000;
+
+export async function resolveConciergeDocumentContext(args: {
+  userId: string;
+  contextPath: string | null | undefined;
+  providedContent?: string | null;
+}): Promise<{
+  artifactPath?: string;
+  documentKind?: "pdf" | "text";
+  documentContent?: string;
+}> {
+  const { userId, contextPath, providedContent } = args;
+  if (!contextPath || contextPath.length === 0) return {};
+
+  const isPdf = contextPath.toLowerCase().endsWith(".pdf");
+  // Caller-provided content wins (legacy parity). Skip the read entirely.
+  if (providedContent && providedContent.length > 0) {
+    if (isPdf) {
+      // PDFs aren't usefully inlined as text; let the agent Read it.
+      return { artifactPath: contextPath, documentKind: "pdf" };
+    }
+    return {
+      artifactPath: contextPath,
+      documentKind: "text",
+      documentContent: providedContent.slice(0, CONCIERGE_INLINE_CAP_BYTES),
+    };
+  }
+
+  if (isPdf) {
+    return { artifactPath: contextPath, documentKind: "pdf" };
+  }
+
+  let workspacePath: string;
+  try {
+    workspacePath = await fetchUserWorkspacePath(userId);
+  } catch {
+    // No workspace → still surface the path so the router knows the scope.
+    return { artifactPath: contextPath };
+  }
+
+  const fullPath = path.join(workspacePath, contextPath);
+  if (!isPathInWorkspace(fullPath, workspacePath)) {
+    // Path-traversal attempt — drop the path entirely (do not leak it
+    // back into the prompt) and fall through to the bare router prompt.
+    return {};
+  }
+
+  try {
+    const content = await readFile(fullPath, "utf-8");
+    if (content.length <= CONCIERGE_INLINE_CAP_BYTES) {
+      return {
+        artifactPath: contextPath,
+        documentKind: "text",
+        documentContent: content,
+      };
+    }
+    // Too large to inline — let the agent Read it directly.
+    return { artifactPath: contextPath, documentKind: "text" };
+  } catch (err) {
+    reportSilentFallback(err, {
+      feature: "kb-concierge-context",
+      op: "readFile",
+      // Path only — never log the document body.
+      extra: { userId, path: contextPath },
+    });
+    return { artifactPath: contextPath, documentKind: "text" };
+  }
+}
+
+/**
  * Build a real SDK `Query` for one cold cc-soleur-go conversation. Async
  * because workspace path + BYOK key + service tokens are DB-resident.
  * Errors flow up to `soleur-go-runner.ts dispatch`'s `await
@@ -647,6 +728,17 @@ export interface DispatchSoleurGoArgs {
   sessionId?: string | null;
   sendToClient: (userId: string, message: WSMessage) => boolean;
   persistActiveWorkflow: (workflow: WorkflowName | null) => Promise<void>;
+  /**
+   * KB Concierge document context. The ws-handler resolves these from the
+   * open KB document (start_session `pendingContext` for first turn,
+   * `conversations.context_path` lookup for subsequent turns) and passes
+   * them through. The runner threads them into `buildSoleurGoSystemPrompt`
+   * which mirrors the legacy `agent-runner.ts` injection (PDFs get a
+   * Read directive; text inlines content up to 50KB).
+   */
+  artifactPath?: string;
+  documentKind?: "pdf" | "text";
+  documentContent?: string;
 }
 
 /**
@@ -667,6 +759,9 @@ export async function dispatchSoleurGo(
     sessionId,
     sendToClient,
     persistActiveWorkflow,
+    artifactPath,
+    documentKind,
+    documentContent,
   } = args;
 
   const runner = getSoleurGoRunner(sendToClient);
@@ -685,6 +780,20 @@ export async function dispatchSoleurGo(
         type: "tool_use",
         leaderId: CC_ROUTER_LEADER_ID,
         label: block.name,
+      });
+    },
+    onTextTurnEnd: () => {
+      // Per-turn boundary → terminal stream event for the cc_router bubble.
+      // Without this, the client reducer keeps the bubble in
+      // `state: "streaming"` (raw `whitespace-pre-wrap`), so markdown
+      // (`**bold**`, `- ` bullets) renders as raw source. The
+      // chat-state-machine `case "stream_end"` (chat-state-machine.ts:484-516)
+      // already special-cases `cc_router` and transitions the bubble to
+      // `state: "done"`, which engages MarkdownRenderer
+      // (message-bubble.tsx:263).
+      sendToClient(userId, {
+        type: "stream_end",
+        leaderId: CC_ROUTER_LEADER_ID,
       });
     },
     onWorkflowDetected: (_workflow) => {
@@ -732,6 +841,9 @@ export async function dispatchSoleurGo(
       events,
       persistActiveWorkflow,
       sessionId: sessionId ?? undefined,
+      artifactPath,
+      documentKind,
+      documentContent,
     });
   } catch (err) {
     const errorClass =

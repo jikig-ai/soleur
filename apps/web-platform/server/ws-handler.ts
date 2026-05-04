@@ -52,6 +52,7 @@ import {
   getCcStartSessionRateLimiter,
   handleInteractivePromptResponseCase,
   resolveCcBashGate,
+  resolveConciergeDocumentContext,
 } from "./cc-dispatcher";
 import { getFlag } from "@/lib/feature-flags/server";
 type InteractivePromptResponse = Extract<WSMessage, { type: "interactive_prompt_response" }>;
@@ -131,6 +132,13 @@ export interface ClientSession {
    *  DB fetch (performance P1-A). Undefined means "not yet
    *  materialized OR cache cold" — read DB on cache miss. */
   routing?: ConversationRouting;
+  /** Cached `conversations.context_path` for the active conversation.
+   *  Populated at materialization (from `pending.contextPath`) + on
+   *  cache-miss DB lookup so chat-case follow-up turns can re-inject the
+   *  open KB document into the Concierge system prompt without a
+   *  per-turn DB fetch. `null` means "no scoped artifact"; `undefined`
+   *  means "cache cold". */
+  contextPath?: string | null;
 }
 
 /** Active connections keyed by Supabase user ID. Registered in session-registry
@@ -187,6 +195,8 @@ export function abortActiveSession(userId: string, session: ClientSession): void
   // Invalidate the per-session routing cache so the next conversation
   // on this socket re-reads active_workflow from DB.
   session.routing = undefined;
+  // Same invalidation contract for the KB context cache.
+  session.contextPath = undefined;
 
   // Fire-and-forget — orphan cleanup catches failures on restart.
   // The wrapper enforces the R8 composite-key invariant; errors mirror to
@@ -499,6 +509,7 @@ async function dispatchSoleurGoForConversation(
   conversationId: string,
   userMessage: string,
   routing: ConversationRouting,
+  context?: ConversationContext,
 ): Promise<void> {
   const persistActiveWorkflow = async (workflow: WorkflowName | null) => {
     // data-integrity P1-A: never regress a soleur-go conversation back
@@ -547,6 +558,26 @@ async function dispatchSoleurGoForConversation(
     }
   };
 
+  // KB Concierge document context (regression fix). When the chat is
+  // scoped to a KB document (PDF or text), inject the document into the
+  // system prompt so the Concierge can answer questions about it instead
+  // of replying that no document was attached. Mirrors the legacy
+  // `agent-runner.ts:595-631` injection — see
+  // `resolveConciergeDocumentContext` in cc-dispatcher for kind/path/
+  // workspace-validation logic.
+  let documentArgs: {
+    artifactPath?: string;
+    documentKind?: "pdf" | "text";
+    documentContent?: string;
+  } = {};
+  if (context?.path) {
+    documentArgs = await resolveConciergeDocumentContext({
+      userId,
+      contextPath: context.path,
+      providedContent: context.content ?? null,
+    });
+  }
+
   await dispatchSoleurGo({
     userId,
     conversationId,
@@ -554,6 +585,7 @@ async function dispatchSoleurGoForConversation(
     currentRouting: routing,
     sendToClient,
     persistActiveWorkflow,
+    ...documentArgs,
   });
 }
 
@@ -969,6 +1001,10 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
           // Seed the routing cache so chat-case on subsequent turns
           // can skip the DB lookup (performance P1-A).
           session.routing = pendingRouting;
+          // Seed the KB context path so chat-case follow-up turns can
+          // rebuild a synthetic ConversationContext for the soleur-go
+          // path (otherwise turn 2+ loses document context).
+          session.contextPath = pendingContextPath ?? null;
 
           log.info(
             {
@@ -988,6 +1024,7 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
               session.conversationId,
               msg.content,
               pendingRouting,
+              pendingContext,
             );
             break;
           }
@@ -1031,12 +1068,12 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
         // (the runner singleton is process-local).
         const convId = session.conversationId!;
         let routing: ConversationRouting;
-        if (session.routing) {
+        if (session.routing && session.contextPath !== undefined) {
           routing = session.routing;
         } else {
           const { data: row, error: routeErr } = await supabase
             .from("conversations")
-            .select("active_workflow, session_id")
+            .select("active_workflow, session_id, context_path")
             .eq("id", convId)
             .single();
           if (routeErr) {
@@ -1049,18 +1086,37 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
               "chat routing lookup failed (falling through to legacy)",
             );
           }
-          routing = row
+          const typedRow = row as {
+            active_workflow?: string | null;
+            session_id?: string | null;
+            context_path?: string | null;
+          } | null;
+          routing = typedRow
             ? parseConversationRouting({
-                active_workflow:
-                  (row as { active_workflow?: string | null }).active_workflow ?? null,
+                active_workflow: typedRow.active_workflow ?? null,
               })
             : { kind: "legacy" };
-          // Seed cache for subsequent turns.
+          // Seed both caches for subsequent turns.
           session.routing = routing;
+          session.contextPath = typedRow?.context_path ?? null;
         }
 
         if (routing.kind !== "legacy") {
-          await dispatchSoleurGoForConversation(userId, convId, msg.content, routing);
+          // KB Concierge: rebuild a synthetic ConversationContext from the
+          // conversation's persisted context_path so follow-up turns keep
+          // injecting the open document. Without this, only the first
+          // turn would see the document context (chat-case path serves
+          // turn 2+).
+          const chatContext: ConversationContext | undefined = session.contextPath
+            ? { path: session.contextPath, type: "kb-viewer" }
+            : undefined;
+          await dispatchSoleurGoForConversation(
+            userId,
+            convId,
+            msg.content,
+            routing,
+            chatContext,
+          );
           break;
         }
 

@@ -57,12 +57,17 @@ export const LeaderAvatar = memo(function LeaderAvatar({
     : null;
   const sizeConfig = SIZE_CLASSES[size];
   const isSystem = !leaderId || leaderId === "system" || !leader;
+  // cc_router (Concierge) has `defaultIcon: ""` and no ICON_MAP entry, so
+  // the fall-through icon branch would render an empty yellow square.
+  // Render the Soleur logo (no yellow bg) so the Concierge bubble matches
+  // the brand presentation of the system avatar.
+  const isConcierge = leaderId === "cc_router";
 
-  if (isSystem) {
+  if (isSystem || isConcierge) {
     return (
       <span
         className={`flex ${sizeConfig.container} shrink-0 items-center justify-center overflow-hidden rounded-md ${className ?? ""}`}
-        aria-label="Soleur avatar"
+        aria-label={isConcierge ? "Soleur Concierge avatar" : "Soleur avatar"}
       >
         <img
           src="/icons/soleur-logo-mark.png"
