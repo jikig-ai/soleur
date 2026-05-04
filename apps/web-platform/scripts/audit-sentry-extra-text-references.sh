@@ -91,7 +91,16 @@ if (( ADD_OR_CLAUSE && ! APPLY )); then
 fi
 
 # --- Required env --------------------------------------------------------
-: "${SENTRY_AUTH_TOKEN:?SENTRY_AUTH_TOKEN must be set}"
+# Token resolution: prefer SENTRY_API_TOKEN (typically a `sntryu_` user-auth
+# token with org:read scope) over SENTRY_AUTH_TOKEN (often a narrower
+# `sntrys_` org-auth token scoped to releases). The audit script needs
+# org:read for searches/dashboards/discover; releases-only tokens fail.
+# An operator can still override by exporting SENTRY_AUTH_TOKEN explicitly.
+if [[ -z "${SENTRY_AUTH_TOKEN:-}" && -n "${SENTRY_API_TOKEN:-}" ]]; then
+  SENTRY_AUTH_TOKEN="$SENTRY_API_TOKEN"
+  echo "[info] Using SENTRY_API_TOKEN (SENTRY_AUTH_TOKEN unset)"
+fi
+: "${SENTRY_AUTH_TOKEN:?SENTRY_AUTH_TOKEN must be set (or set SENTRY_API_TOKEN)}"
 : "${SENTRY_ORG:?SENTRY_ORG must be set}"
 : "${SENTRY_PROJECT:?SENTRY_PROJECT must be set}"
 
@@ -135,7 +144,9 @@ for candidate in sentry.io de.sentry.io; do
 done
 if [[ -z "$api_host" ]]; then
   echo "ERROR: Sentry token cannot read /organizations/${SENTRY_ORG}/ on either US or EU." >&2
-  echo "  Verify SENTRY_AUTH_TOKEN has org:read scope and SENTRY_ORG is correct." >&2
+  echo "  Verify the token has org:read scope and SENTRY_ORG is correct." >&2
+  echo "  If your prd SENTRY_AUTH_TOKEN is a sntrys_-prefixed releases-only token," >&2
+  echo "  re-run with: SENTRY_AUTH_TOKEN=\"\$SENTRY_API_TOKEN\" $0 $*" >&2
   exit 1
 fi
 
@@ -169,6 +180,7 @@ auth_get() {
   local body http
   local resp_file
   resp_file=$(mktemp)
+  trap 'rm -f "$resp_file"' RETURN
   http=$(curl -s --max-time 10 \
     -H "Authorization: Bearer ${SENTRY_AUTH_TOKEN}" \
     -o "$resp_file" -w '%{http_code}' "$url")
@@ -179,7 +191,6 @@ auth_get() {
       -o "$resp_file" -w '%{http_code}' "$url")
   fi
   if [[ "$http" == "404" && "$allow_404_empty" == "1" ]]; then
-    rm -f "$resp_file"
     echo "[note] ${url} -> 404; treating as empty (endpoint unavailable on this org's plan)" >&2
     printf '[]'
     return 0
@@ -187,11 +198,9 @@ auth_get() {
   if [[ ! "$http" =~ ^2 ]]; then
     echo "ERROR: GET ${url} -> HTTP ${http}" >&2
     cat "$resp_file" >&2
-    rm -f "$resp_file"
     exit 1
   fi
   body=$(cat "$resp_file")
-  rm -f "$resp_file"
   if ! jq -e . <<<"$body" >/dev/null 2>&1; then
     echo "ERROR: GET ${url} returned non-JSON" >&2
     echo "$body" >&2
@@ -206,6 +215,7 @@ auth_put() {
   local url="$1" payload="$2" http
   local resp_file
   resp_file=$(mktemp)
+  trap 'rm -f "$resp_file"' RETURN
   http=$(curl -s --max-time 10 -X PUT \
     -H "Authorization: Bearer ${SENTRY_AUTH_TOKEN}" \
     -H "Content-Type: application/json" \
@@ -214,11 +224,9 @@ auth_put() {
   if [[ ! "$http" =~ ^2 ]]; then
     echo "ERROR: PUT ${url} -> HTTP ${http}" >&2
     cat "$resp_file" >&2
-    rm -f "$resp_file"
     exit 1
   fi
   cat "$resp_file"
-  rm -f "$resp_file"
 }
 
 # --- Substitution primitive ----------------------------------------------
@@ -235,10 +243,31 @@ sub_replace() {
 # Add-or-clause variant for query strings. Wraps `extra.text:VAL` clauses
 # as `(extra.text:VAL OR extra.shape:VAL)`. Operates only on the literal
 # `extra.text:` token to avoid mangling unrelated occurrences.
+#
+# Value class is restricted to **bareword tokens** (Sentry's unquoted-value
+# syntax: `[A-Za-z0-9_./*-]+`). Quoted values (`"foo bar"`), parenthesized
+# values, and values containing colons / backslashes / quotes are skipped
+# rather than wrapped — wrapping a quoted value via a regex that stops at
+# the first space corrupts the saved query (review finding M1).
+#
+# Idempotency: if the input already contains `extra.text:VAL OR
+# extra.shape:VAL` the substitution is a no-op (the regex still matches
+# the inner `extra.text:VAL`, but the encompassing clause is already
+# wrapped, so wrapping again would nest). Skip strings that already
+# contain `OR extra.shape:` adjacent to the matched clause by using a
+# negative-lookahead-equivalent: drop matches whose surrounding context
+# already shows the OR partner.
+SUB_ADD_OR_CLAUSE_JQ='
+  if test("\\(extra\\.text:[A-Za-z0-9_./*-]+\\s+OR\\s+extra\\.shape:") then
+    .  # already wrapped; no-op (idempotency)
+  else
+    gsub("extra\\.text:(?<v>[A-Za-z0-9_./*-]+)";
+         "(extra.text:\(.v) OR extra.shape:\(.v))")
+  end
+'
 sub_add_or_clause() {
   local input="$1"
-  jq -nr --arg s "$input" \
-    '$s | gsub("extra\\.text:(?<v>[^ )]+)"; "(extra.text:\(.v) OR extra.shape:\(.v))")'
+  jq -nr --arg s "$input" "\$s | $SUB_ADD_OR_CLAUSE_JQ"
 }
 
 # --- Inventory: alert rules ---------------------------------------------
@@ -536,28 +565,36 @@ rewrite_dashboards() {
       continue
     fi
 
+    # Per-query scope guard: only mutate queries whose `conditions` field
+    # also references the SCOPE_OP (`tool-label-scrub`). A dashboard with
+    # widget A (in scope) and widget B (unrelated `extra.text:foo` for a
+    # different op) would otherwise have widget B silently mutated.
     local mutated
     if (( ADD_OR_CLAUSE )); then
       # `conditions` gets OR-wrapping; `fields[]`/`aggregates[]` always
       # replace (no syntactic OR for array entries).
-      mutated=$(jq --arg old "$LITERAL_OLD" --arg new "$LITERAL_NEW" '
+      mutated=$(jq --arg old "$LITERAL_OLD" --arg new "$LITERAL_NEW" --arg op "$SCOPE_OP" "
         .widgets = ((.widgets // []) | map(
           .queries = ((.queries // []) | map(
-            (.conditions // "") as $c
-            | .conditions = ($c | gsub("extra\\.text:(?<v>[^ )]+)"; "(extra.text:\(.v) OR extra.shape:\(.v))"))
-            | .fields = ((.fields // []) | map(if . == $old then $new else . end))
-            | .aggregates = ((.aggregates // []) | map(if . == $old then $new else . end))
+            if ((.conditions // \"\") | contains(\$op)) then
+              (.conditions // \"\") as \$c
+              | .conditions = (\$c | $SUB_ADD_OR_CLAUSE_JQ)
+              | .fields = ((.fields // []) | map(if . == \$old then \$new else . end))
+              | .aggregates = ((.aggregates // []) | map(if . == \$old then \$new else . end))
+            else . end
           ))
         ))
-      ' <<<"$d_body")
+      " <<<"$d_body")
       echo "[note] dashboard ${id}: fields[]/aggregates[] always replace (no syntactic OR for array entries)"
     else
-      mutated=$(jq --arg old "$LITERAL_OLD" --arg new "$LITERAL_NEW" '
+      mutated=$(jq --arg old "$LITERAL_OLD" --arg new "$LITERAL_NEW" --arg op "$SCOPE_OP" '
         .widgets = ((.widgets // []) | map(
           .queries = ((.queries // []) | map(
-            .conditions = ((.conditions // "") | gsub($old | gsub("[.]"; "\\."); $new))
-            | .fields = ((.fields // []) | map(if . == $old then $new else . end))
-            | .aggregates = ((.aggregates // []) | map(if . == $old then $new else . end))
+            if ((.conditions // "") | contains($op)) then
+                .conditions = ((.conditions // "") | gsub($old | gsub("[.]"; "\\."); $new))
+              | .fields = ((.fields // []) | map(if . == $old then $new else . end))
+              | .aggregates = ((.aggregates // []) | map(if . == $old then $new else . end))
+            else . end
           ))
         ))
       ' <<<"$d_body")
@@ -579,11 +616,24 @@ if (( APPLY && total_matches > 0 )); then
   rewrite_discover_saved
   rewrite_dashboards
 
-  # Re-verify silently.
+  # Re-verify. `inventory_all` is run via command substitution, which
+  # spawns a subshell — any `total_matches` mutation inside is lost on
+  # return. Parse the printed `Summary: N matches ...` line (or the
+  # explicit zero-match message) instead of relying on the variable.
   total_matches=0
   remaining=$(inventory_all 2>&1 || true)
-  if (( total_matches > 0 )); then
-    echo "FAILED: ${total_matches} references still present after rewrite:" >&2
+  if printf '%s\n' "$remaining" | grep -q '^No matches found\.'; then
+    remaining_count=0
+  else
+    remaining_count=$(
+      printf '%s\n' "$remaining" \
+        | sed -n 's/^Summary: \([0-9]\{1,\}\) matches.*/\1/p' \
+        | tail -1
+    )
+    remaining_count=${remaining_count:-1}  # default fail-closed if parse fails
+  fi
+  if (( remaining_count > 0 )); then
+    echo "FAILED: ${remaining_count} references still present after rewrite:" >&2
     printf '%s\n' "$remaining" >&2
     exit 1
   fi
