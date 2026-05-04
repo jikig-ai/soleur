@@ -1,0 +1,93 @@
+# Quarterly retirement-proposal PR for stale AGENTS.md rules.
+# Runs `scripts/rule-prune.sh --weeks=26 --propose-retirement`, parses
+# the script's stdout sentinels (::rule-prune-pr-title::, ::rule-prune-pr-body::),
+# and opens ONE consolidated PR appending zero-firing rules to
+# scripts/retired-rule-ids.txt via the bot-pr-with-synthetic-checks
+# composite action. The PR diff is the per-rule rationale; reviewers
+# scrutinize each appended line before merging.
+#
+# Sister workflow: rule-metrics-aggregate.yml (weekly aggregator).
+# Composite action contract: .github/actions/bot-pr-with-synthetic-checks/action.yml
+# See knowledge-base/project/plans/2026-05-04-feat-rule-prune-retirement-proposal-plan.md
+# Issue: #3120 (closes); #3128 (D1 deferral).
+#
+# Security: No untrusted event inputs used in run: commands. The pr_title
+# and pr_body step outputs originate from `scripts/rule-prune.sh`'s own
+# stdout sentinels — fully repo-controlled, never derived from issue
+# titles, PR bodies, or commit messages. GITHUB_TOKEN is the only secret
+# (RESEND_API_KEY for failure email only).
+
+name: "Scheduled: Rule Prune Retirement Proposal"
+
+on:
+  schedule:
+    - cron: '0 9 1 1,4,7,10 *'   # 09:00 UTC, 1st of Jan/Apr/Jul/Oct
+  workflow_dispatch:
+
+concurrency:
+  group: scheduled-rule-prune
+  cancel-in-progress: false
+
+permissions:
+  checks: write
+  contents: write
+  pull-requests: write
+
+jobs:
+  propose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Run rule-prune in propose-retirement mode
+        id: prune
+        run: |
+          # -u for parity with scripts/rule-prune.sh; catches unset $GITHUB_OUTPUT
+          # under `act`-style local invocation.
+          set -euo pipefail
+          # 26 weeks ≈ 2× UNUSED_WEEKS_DEFAULT (8) — quarterly retirement window.
+          # Capture stdout so we can extract sentinels AND surface the log.
+          out=$(bash scripts/rule-prune.sh --weeks=26 --propose-retirement)
+          printf '%s\n' "$out"
+          # Extract sentinels. If absent, no candidates were proposed.
+          PR_TITLE=$(printf '%s\n' "$out" | sed -n 's/^::rule-prune-pr-title:://p' | head -n 1 | tr -d '\n\r')
+          PR_BODY=$(printf  '%s\n' "$out" | sed -n 's/^::rule-prune-pr-body:://p'  | head -n 1 | tr -d '\n\r')
+          if [[ -z "$PR_TITLE" || -z "$PR_BODY" ]]; then
+            echo "no_candidates=true" >> "$GITHUB_OUTPUT"
+            # Defensive: a half-applied state (file modified but no
+            # sentinels) means the script's two-pass invariant broke.
+            # Fail loud rather than open the no-candidates branch silently.
+            if ! git diff --quiet -- scripts/retired-rule-ids.txt; then
+              echo "::error::retired-rule-ids.txt was modified but no sentinels emitted — partial-failure recovery"
+              exit 1
+            fi
+            exit 0
+          fi
+          echo "no_candidates=false" >> "$GITHUB_OUTPUT"
+          {
+            printf 'pr_title<<EOF\n%s\nEOF\n' "$PR_TITLE"
+            printf 'pr_body<<EOF\n%s\nEOF\n'  "$PR_BODY"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Open retirement-proposal PR
+        if: steps.prune.outputs.no_candidates == 'false'
+        uses: ./.github/actions/bot-pr-with-synthetic-checks
+        with:
+          add-paths: scripts/retired-rule-ids.txt
+          branch-prefix: ci/rule-prune-retire-
+          commit-message: "chore(rule-prune): propose retirement of stale rules"
+          pr-title-prefix: ${{ steps.prune.outputs.pr_title }}
+          pr-body: ${{ steps.prune.outputs.pr_body }}
+          change-summary: "Stale-rule retirement proposal — appends to retired-rule-ids.txt only"
+          gh-token: ${{ github.token }}
+
+      - name: Email notification (failure)
+        if: failure()
+        uses: ./.github/actions/notify-ops-email
+        with:
+          subject: '[FAIL] Scheduled: Rule Prune Retirement Proposal failed'
+          body: '<p><strong>Scheduled: Rule Prune Retirement Proposal</strong> failed.</p><p><a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}">View run</a></p>'
+          resend-api-key: ${{ secrets.RESEND_API_KEY }}
