@@ -100,6 +100,25 @@ describe("resolveConciergeDocumentContext", () => {
     expect(out).toEqual({});
   });
 
+  it("rejects paths outside the knowledge-base/ subtree (returns {})", async () => {
+    // Defense-in-depth: the resolver scopes every read to knowledge-base/.
+    // A UI bug (or malicious client) requesting attachments/, .git/, etc.
+    // gets dropped entirely — no path leakage into the LLM prompt.
+    for (const path of [
+      "attachments/other-conv/secret.txt",
+      ".git/config",
+      ".claude/settings.json",
+      "knowledge_base/typo.md", // underscore, not dash
+      "etc/passwd",
+    ]) {
+      const out = await resolveConciergeDocumentContext({
+        userId: "u1",
+        contextPath: path,
+      });
+      expect(out).toEqual({});
+    }
+  });
+
   it("falls through to instruction-only when the file does not exist", async () => {
     const out = await resolveConciergeDocumentContext({
       userId: "u1",

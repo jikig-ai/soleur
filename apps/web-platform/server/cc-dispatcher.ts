@@ -13,7 +13,6 @@
 // MCP servers for cc-soleur-go path — referenced in factory body).
 
 import path from "path";
-import { readFile } from "fs/promises";
 
 import type { Query } from "@anthropic-ai/claude-agent-sdk";
 import { query as sdkQuery } from "@anthropic-ai/claude-agent-sdk";
@@ -61,7 +60,14 @@ import {
   getUserServiceTokens,
   patchWorkspacePermissions,
 } from "./agent-runner";
-import { isPathInWorkspace } from "./sandbox";
+import {
+  fetchUserWorkspacePath,
+  resolveConciergeDocumentContext,
+  _resetWorkspacePathCacheForTests,
+} from "./kb-document-resolver";
+
+// Re-export so existing call sites keep working.
+export { resolveConciergeDocumentContext } from "./kb-document-resolver";
 import { buildAgentQueryOptions } from "./agent-runner-query-options";
 import {
   getBashApprovalCache,
@@ -82,7 +88,12 @@ const log = createChildLogger("cc-dispatcher");
 // audit-log attribution. Used by `createCanUseTool` (R-AC14), the WS
 // `stream`/`tool_use` events emitted from `dispatchSoleurGo`, and the
 // `reportSilentFallback` extra in the sandbox-startup mirror branch.
-export const CC_ROUTER_LEADER_ID = "cc_router" as const;
+//
+// Source of truth lives in `@/lib/cc-router-id` so client-safe modules
+// (leader-avatar.tsx, etc.) can import the same literal without dragging
+// pino + supabase service client into the browser bundle.
+export { CC_ROUTER_LEADER_ID } from "@/lib/cc-router-id";
+import { CC_ROUTER_LEADER_ID } from "@/lib/cc-router-id";
 
 // ---------------------------------------------------------------------------
 // Sentry mirror debounce — per (userId, errorClass) 5-minute TTL.
@@ -385,96 +396,12 @@ function supabase() {
   return _supabase;
 }
 
-async function fetchUserWorkspacePath(userId: string): Promise<string> {
-  const { data, error } = await supabase()
-    .from("users")
-    .select("workspace_path")
-    .eq("id", userId)
-    .single();
-  if (error || !data?.workspace_path) {
-    throw new Error("Workspace not provisioned");
-  }
-  return data.workspace_path as string;
-}
-
-/**
- * Resolve a KB document's context for the Concierge system prompt.
- * Mirrors the legacy `agent-runner.ts:595-631` injection — caller-provided
- * content wins; PDFs get a Read directive (no body read); text files are
- * read server-side under the workspace-validation guard.
- *
- * Returns an empty object on path-traversal rejection or on a missing
- * workspace path. Read errors degrade gracefully to a kind-only result so
- * the runner injects an instruction-shaped Read directive without the body.
- */
-const CONCIERGE_INLINE_CAP_BYTES = 50_000;
-
-export async function resolveConciergeDocumentContext(args: {
-  userId: string;
-  contextPath: string | null | undefined;
-  providedContent?: string | null;
-}): Promise<{
-  artifactPath?: string;
-  documentKind?: "pdf" | "text";
-  documentContent?: string;
-}> {
-  const { userId, contextPath, providedContent } = args;
-  if (!contextPath || contextPath.length === 0) return {};
-
-  const isPdf = contextPath.toLowerCase().endsWith(".pdf");
-  // Caller-provided content wins (legacy parity). Skip the read entirely.
-  if (providedContent && providedContent.length > 0) {
-    if (isPdf) {
-      // PDFs aren't usefully inlined as text; let the agent Read it.
-      return { artifactPath: contextPath, documentKind: "pdf" };
-    }
-    return {
-      artifactPath: contextPath,
-      documentKind: "text",
-      documentContent: providedContent.slice(0, CONCIERGE_INLINE_CAP_BYTES),
-    };
-  }
-
-  if (isPdf) {
-    return { artifactPath: contextPath, documentKind: "pdf" };
-  }
-
-  let workspacePath: string;
-  try {
-    workspacePath = await fetchUserWorkspacePath(userId);
-  } catch {
-    // No workspace → still surface the path so the router knows the scope.
-    return { artifactPath: contextPath };
-  }
-
-  const fullPath = path.join(workspacePath, contextPath);
-  if (!isPathInWorkspace(fullPath, workspacePath)) {
-    // Path-traversal attempt — drop the path entirely (do not leak it
-    // back into the prompt) and fall through to the bare router prompt.
-    return {};
-  }
-
-  try {
-    const content = await readFile(fullPath, "utf-8");
-    if (content.length <= CONCIERGE_INLINE_CAP_BYTES) {
-      return {
-        artifactPath: contextPath,
-        documentKind: "text",
-        documentContent: content,
-      };
-    }
-    // Too large to inline — let the agent Read it directly.
-    return { artifactPath: contextPath, documentKind: "text" };
-  } catch (err) {
-    reportSilentFallback(err, {
-      feature: "kb-concierge-context",
-      op: "readFile",
-      // Path only — never log the document body.
-      extra: { userId, path: contextPath },
-    });
-    return { artifactPath: contextPath, documentKind: "text" };
-  }
-}
+// `fetchUserWorkspacePath`, `resolveConciergeDocumentContext`, and the
+// per-process workspace memo were extracted to `./kb-document-resolver`
+// so this orchestration module no longer owns filesystem responsibilities
+// alongside SDK Query construction, MCP wiring, BYOK token resolution,
+// bash-approval, and rate-limiting. Both modules share the workspace
+// memo via the resolver's exported helper.
 
 /**
  * Build a real SDK `Query` for one cold cc-soleur-go conversation. Async
@@ -680,6 +607,20 @@ let _runnerSendToClient:
  * Subsequent invocations with a DIFFERENT sendToClient is an error:
  * the runner captures its WS-emit closure at first construction.
  */
+/**
+ * `true` when the cc-soleur-go runner already owns a live `Query` for the
+ * given conversation (warm path). Callers use this to skip work that the
+ * cold-Query construction already did — most importantly,
+ * `resolveConciergeDocumentContext` reads the user's open document into
+ * the system prompt at cold dispatch only; subsequent turns reuse the
+ * baked prompt, so the per-turn `readFile` + workspace lookup is
+ * pure-overhead. Returns `false` when no runner exists yet.
+ */
+export function hasActiveCcQuery(conversationId: string): boolean {
+  if (!_runner) return false;
+  return _runner.hasActiveQuery(conversationId);
+}
+
 export function getSoleurGoRunner(
   sendToClient: (userId: string, message: WSMessage) => boolean,
 ): SoleurGoRunner {
@@ -975,4 +916,8 @@ export function __resetDispatcherForTests(): void {
   // prefix in test A can survive into test B (cross-file leak via the
   // module-level Map). Mirrors the centralization Fix 6 of PR #2954.
   _resetBashApprovalCacheForTests();
+  // Drain the workspace-path memo so a `users.workspace_path` swap in
+  // tests is observable. Lives in `kb-document-resolver.ts` for the same
+  // reason as the bash cache: shared across files, drained centrally.
+  _resetWorkspacePathCacheForTests();
 }

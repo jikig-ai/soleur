@@ -12,6 +12,7 @@ import {
 import type { LucideIcon } from "lucide-react";
 import { DOMAIN_LEADERS } from "@/server/domain-leaders";
 import type { DomainLeaderId } from "@/server/domain-leaders";
+import { CC_ROUTER_LEADER_ID } from "@/lib/cc-router-id";
 import { LEADER_BG_COLORS } from "@/components/chat/leader-colors";
 
 const ICON_MAP: Record<string, LucideIcon> = {
@@ -61,7 +62,7 @@ export const LeaderAvatar = memo(function LeaderAvatar({
   // the fall-through icon branch would render an empty yellow square.
   // Render the Soleur logo (no yellow bg) so the Concierge bubble matches
   // the brand presentation of the system avatar.
-  const isConcierge = leaderId === "cc_router";
+  const isConcierge = leaderId === CC_ROUTER_LEADER_ID;
 
   if (isSystem || isConcierge) {
     return (

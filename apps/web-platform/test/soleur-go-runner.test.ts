@@ -205,23 +205,31 @@ function makeEvents(): DispatchEvents & {
   _workflowDetected: string[];
   _ended: WorkflowEnd[];
   _results: Array<{ totalCostUsd: number }>;
+  _turnEnds: number;
 } {
   const text: string[] = [];
   const tools: Array<{ name: string; input: Record<string, unknown> }> = [];
   const workflowDetected: string[] = [];
   const ended: WorkflowEnd[] = [];
   const results: Array<{ totalCostUsd: number }> = [];
+  const counter = { turnEnds: 0 };
   return {
     onText: (t) => text.push(t),
     onToolUse: (b) => tools.push(b),
     onWorkflowDetected: (w) => workflowDetected.push(w),
     onWorkflowEnded: (e) => ended.push(e),
     onResult: (r) => results.push(r),
+    onTextTurnEnd: () => {
+      counter.turnEnds += 1;
+    },
     _text: text,
     _tools: tools,
     _workflowDetected: workflowDetected,
     _ended: ended,
     _results: results,
+    get _turnEnds() {
+      return counter.turnEnds;
+    },
   };
 }
 
@@ -535,6 +543,48 @@ describe("soleur-go-runner dispatch (Stage 2.2)", () => {
     await flushMicrotasks();
 
     expect(events._results.at(-1)).toEqual({ totalCostUsd: 0.25 });
+  });
+
+  it("KB Concierge: fires onTextTurnEnd once per SDKResultMessage (real-runner contract)", async () => {
+    // Closes the two-mocks-meet-in-the-middle gap flagged by the test
+    // reviewer: cc-dispatcher.test.ts proves the dispatcher RELAYS
+    // onTextTurnEnd → stream_end, but only against a stub runner.
+    // This test pins the runner side: when the SDK emits a result block
+    // (turn boundary), the runner fires onTextTurnEnd exactly once,
+    // immediately after onResult. Without this, a future runner refactor
+    // could drop the callback and no test in the suite would catch it.
+    const mock = createMockQuery();
+    const runner = createSoleurGoRunner({
+      queryFactory: () => mock.query,
+      now: () => 0,
+    });
+    const events = makeEvents();
+
+    await runner.dispatch({
+      conversationId: "c-turn",
+      userId: "u1",
+      userMessage: "hi",
+      currentRouting: { kind: "soleur_go_pending" },
+      events,
+      persistActiveWorkflow: vi.fn().mockResolvedValue(undefined),
+    });
+
+    expect(events._turnEnds).toBe(0);
+    mock.emit(makeResult(0.1));
+    await flushMicrotasks();
+    expect(events._turnEnds).toBe(1);
+
+    // Second turn boundary fires again, idempotently.
+    mock.emit(makeResult(0.1));
+    await flushMicrotasks();
+    expect(events._turnEnds).toBe(2);
+
+    // Ordering: onResult is recorded before onTextTurnEnd is incremented
+    // (the runner fires onResult first, then onTextTurnEnd).
+    expect(events._results).toHaveLength(2);
+
+    mock.finish();
+    await flushMicrotasks();
   });
 
   it("streams text blocks to events.onText", async () => {
