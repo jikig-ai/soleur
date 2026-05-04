@@ -66,12 +66,8 @@ function stripWorkspacePath(text: string, workspacePath?: string): string {
     out = out.replace(/^\//, "");
   }
 
-  // Any remaining suspected-leak shape is a gap in the pattern table.
-  // Capture the matched shape (not the surrounding prose) so the Sentry
-  // event names the offending form directly. Mirrors the client idiom in
-  // `lib/format-assistant-text.ts` (`match[0].slice(0, 200)`).
-  // `extra.shape` (renamed from `extra.text`) is grep-distinguishable from
-  // pre-fix events during the deploy window.
+  // Report the matched shape (not surrounding prose) so Sentry names the
+  // offending form. Mirrors lib/format-assistant-text.ts:88.
   const leak = out.match(SUSPECTED_LEAK_SHAPE);
   if (leak) {
     reportSilentFallback(null, {
