@@ -217,13 +217,18 @@ describe("Trigger array and server.tf are in sync (path-glob verification)", () 
       'resource "terraform_data" "deploy_pipeline_fix"',
     );
     expect(resourceStart).toBeGreaterThanOrEqual(0);
-    // The next `resource ` heading bounds the block. The very last resource in
-    // the file has no following marker — slice to EOF in that case.
-    const nextResource = serverTf.indexOf("\nresource ", resourceStart + 1);
-    const resourceBlock = serverTf.slice(
-      resourceStart,
-      nextResource === -1 ? undefined : nextResource,
-    );
+    // Bound by the next top-level HCL block — `resource`, `data`, `module`,
+    // `output`, `locals`, `variable`, `provider`, `terraform`. Bare `\nresource `
+    // would absorb downstream non-resource blocks if `deploy_pipeline_fix`
+    // ever became the last `resource` in the file (P2 review finding).
+    const TOP_LEVEL_BLOCK_RE =
+      /\n(resource|data|module|output|locals|variable|provider|terraform)\b/;
+    const tail = serverTf.slice(resourceStart + 1);
+    const tailMatch = tail.match(TOP_LEVEL_BLOCK_RE);
+    const resourceBlock =
+      tailMatch && tailMatch.index !== undefined
+        ? serverTf.slice(resourceStart, resourceStart + 1 + tailMatch.index)
+        : serverTf.slice(resourceStart);
 
     const blockMatch = resourceBlock.match(
       /triggers_replace\s*=\s*sha256\(join\(\s*",\s*"\s*,\s*\[([\s\S]*?)\]\s*\)\s*\)/,
@@ -236,13 +241,28 @@ describe("Trigger array and server.tf are in sync (path-glob verification)", () 
       inner.matchAll(/file\(\s*"\$\{path\.module\}\/([^"]+)"\s*\)/g),
     ).map((m) => m[1]);
 
-    // local.<name> references → resolved via top-of-file `locals { <name> = templatefile("${path.module}/<file>", ...) }`.
+    // local.<name> references → resolved against the file-level `locals { ... }`
+    // block. Scoping the lookup (rather than searching the whole file) keeps the
+    // resolver from accidentally matching same-named identifiers in unrelated
+    // contexts (P2 review finding).
+    // `^locals` (file start) or `\nlocals` (subsequent line). Closing brace on
+    // its own line at column 0 (`\n}`) bounds the body — the templatefile()'s
+    // nested `})` is column-2 indented and won't match.
+    const localsBlockMatch = serverTf.match(/(?:^|\n)locals\s*\{([\s\S]*?)\n\}/);
+    if (!localsBlockMatch) {
+      throw new Error(
+        "server.tf has no top-level `locals { ... }` block but " +
+          "triggers_replace references `local.*` — refactor required.",
+      );
+    }
+    const localsBody = localsBlockMatch[1];
+
     const localNames = Array.from(inner.matchAll(/\blocal\.([A-Za-z0-9_]+)\b/g)).map(
       (m) => m[1],
     );
     const templatefileBasenames = localNames.map((name) => {
       const escaped = name.replace(/[.+*?^$(){}|[\]\\]/g, "\\$&");
-      const localMatch = serverTf.match(
+      const localMatch = localsBody.match(
         new RegExp(
           `\\b${escaped}\\s*=\\s*templatefile\\(\\s*"\\$\\{path\\.module\\}/([^"]+)"`,
         ),
@@ -250,13 +270,18 @@ describe("Trigger array and server.tf are in sync (path-glob verification)", () 
       if (!localMatch) {
         throw new Error(
           `triggers_replace references local.${name} but no matching ` +
-            `\`${name} = templatefile("\${path.module}/...")\` was found in server.tf. ` +
-            `Either add the local definition, or replace the local with a direct file()/templatefile() reference.`,
+            `\`${name} = templatefile("\${path.module}/...")\` was found in the ` +
+            `top-level locals { ... } block. Either add the local definition, or ` +
+            `replace the local with a direct file()/templatefile() reference.`,
         );
       }
       return localMatch[1];
     });
 
+    // Order-insensitive comparison: regex alternation is commutative, so the
+    // physical order in server.tf vs. TRIGGER_FILES is irrelevant for gate
+    // semantics. The token-for-token bash-array test above (line ~125) is
+    // where editorial ordering between SKILL.md and TRIGGER_FILES is enforced.
     const triggerBasenames = [...fileBasenames, ...templatefileBasenames].sort();
     const fixtureBasenames = TRIGGER_FILES.map((p) => p.split("/").pop()!).sort();
 
