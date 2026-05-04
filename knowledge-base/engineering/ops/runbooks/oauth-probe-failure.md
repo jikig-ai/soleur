@@ -5,8 +5,8 @@ owners: engineering/ops
 applies_to:
   - .github/workflows/scheduled-oauth-probe.yml
   - apps/web-platform/scripts/configure-sentry-alerts.sh
-related_issues: [2997, 2979, 2982, 3001]
-related_prs: [2975, 2994, 3007]
+related_issues: [2997, 2979, 2982, 3001, 1784, 3183]
+related_prs: [2975, 2994, 3007, 3181]
 ---
 
 # OAuth probe failure runbook
@@ -143,6 +143,153 @@ operator toggled the provider off in the Supabase dashboard, or a
 provider OAuth credential expired (Supabase auto-disables broken
 providers). Re-enable in the Supabase Auth dashboard; if credentials
 are stale, rotate the OAuth client secret.
+
+### `github_oauth_<label>_unregistered`
+
+GitHub returned the literal HTML "redirect_uri is not associated with this
+application" for the probed callback URL. `<label>` is one of:
+
+- `github_resolve` — `https://app.soleur.ai/api/auth/github-resolve/callback`
+  (Flow B, App-direct OAuth used by `/api/auth/github-resolve/route.ts`).
+- `supabase_custom` — `https://api.soleur.ai/auth/v1/callback`
+  (Flow A primary; Supabase advertises this when the custom-domain CNAME
+  is healthy).
+- `supabase_canonical` — `https://<ref>.supabase.co/auth/v1/callback`
+  (Flow A canonical fallback during custom-domain re-provisioning — see
+  Supabase docs on dual-registration).
+
+**This is the user-reported #3183 failure mode.** When this fires, new
+sign-ups (or "Connect GitHub" clicks for email-only users) bounce to a
+GitHub-rendered error page with no path back into the product.
+
+Diagnose:
+
+```bash
+# Confirm the specific URL the operator must add
+gh issue view <ISSUE_NUM> --json body --jq .body | grep -E 'GitHub rejected redirect_uri='
+
+# Capture the GitHub App's current callback list verbatim (manual — App
+# settings are not REST-mutable; Playwright MCP can navigate but operator
+# must click Update)
+xdg-open 'https://github.com/organizations/jikig-ai/settings/apps/soleur-ai'
+```
+
+Remediation:
+
+1. Open the GitHub App settings → "Identifying and authorizing users" →
+   Callback URL. Verify ALL THREE entries are present, one per line:
+   - `https://app.soleur.ai/api/auth/github-resolve/callback`
+   - `https://api.soleur.ai/auth/v1/callback`
+   - `https://ifsccnjhymdmidffkzhl.supabase.co/auth/v1/callback`
+2. Confirm "Request user authorization (OAuth) during installation" is
+   checked.
+3. Click Update (CSRF-protected — agent shells cannot auto-submit).
+4. Re-run the probe: `gh workflow run scheduled-oauth-probe.yml`.
+5. Close the tracking issue with the closure-gate comment per
+   `/ship` Phase 7 Step 3.5 callback-URL audit anchor: include the verbatim
+   callback URLs, the workflow run ID, and the textarea byte count.
+
+**Do NOT** rotate `GITHUB_CLIENT_SECRET` — secret rotation does not
+affect callback URL registration. Cargo-cult re-rotation extends MTTR.
+
+### `github_oauth_<label>_html_drift`
+
+Probe response was HTTP 200 and lacked the redirect_uri error string,
+but ALSO lacked both `<form` and `Authorize` (positive proof of either
+the login form or the consent page). GitHub probably reworded the
+authorize page HTML.
+
+Diagnose by capturing the live response and inspecting the structure:
+
+```bash
+CLIENT_ID=$(doppler secrets get GITHUB_CLIENT_ID -p soleur -c prd --plain)
+curl --max-time 10 -L -s -H "User-Agent: soleur-debug/1.0" \
+  "https://github.com/login/oauth/authorize?client_id=${CLIENT_ID}&redirect_uri=https%3A%2F%2Fapp.soleur.ai%2Fapi%2Fauth%2Fgithub-resolve%2Fcallback&state=debug" \
+  | tee /tmp/gh-authorize.html | tail -50
+```
+
+Update `apps/web-platform/test/oauth-probe-contract.test.ts` sentinel
+constants AND `.github/workflows/scheduled-oauth-probe.yml` grep targets
+to match the new HTML in the same PR. Both must change atomically; the
+test gate prevents partial updates.
+
+### `github_oauth_<label>_http`
+
+Probe returned a non-200 HTTP code (e.g., 5xx GitHub upstream error).
+Usually transient — wait one probe cycle (15 min). If it persists,
+check <https://www.githubstatus.com>.
+
+### `github_oauth_<label>_network`
+
+Curl failed before getting an HTTP response. Same triage as
+`network_error` above (Cloudflare → GitHub-runner egress → DNS).
+
+### `github_app_suspended`
+
+GitHub reported "Application suspended" on the authorize page. Every
+GitHub auth flow breaks simultaneously — single client_id, single point
+of failure. Contact GitHub Support immediately; verify via:
+
+```bash
+GH_APP_JWT="$(... your JWT mint ...)"
+curl -s -H "Authorization: Bearer $GH_APP_JWT" \
+     -H "Accept: application/vnd.github+json" \
+     https://api.github.com/app | jq '{suspended_at, name, html_url}'
+```
+
+If `suspended_at` is non-null, App is confirmed suspended. Do NOT attempt
+remediation in-app; resolution requires GitHub-side action.
+
+### `github_client_id_probe_unset`
+
+The workflow's `OAUTH_PROBE_GITHUB_CLIENT_ID` secret is unset. The new
+probes cannot run. The secret name uses the `OAUTH_PROBE_` prefix because
+GitHub rejects repo secrets starting with `GITHUB_` (HTTP 422). Set it:
+
+```bash
+# Direct pipe — no command substitution, no printf wrapper. Avoids
+# embedding the value in /proc/<pid>/cmdline or shell history. Doppler's
+# --plain output already lacks a trailing newline.
+doppler secrets get GITHUB_CLIENT_ID -p soleur -c prd --plain \
+  | gh secret set OAUTH_PROBE_GITHUB_CLIENT_ID
+```
+
+### `supabase_project_ref_unset`
+
+The workflow's `SUPABASE_PROJECT_REF` secret is unset. Derive from the
+canonical CNAME of the prod Supabase URL and set it:
+
+```bash
+SUPA_HOST=$(doppler secrets get NEXT_PUBLIC_SUPABASE_URL -p soleur -c prd --plain \
+  | sed -E 's#^https?://##; s#/.*##')
+dig +short +time=3 +tries=2 CNAME "$SUPA_HOST" \
+  | sed -E 's/\.supabase\.co\.?$//' \
+  | head -1 \
+  | gh secret set SUPABASE_PROJECT_REF
+```
+
+### `supabase_project_ref_drift`
+
+`dig CNAME api.soleur.ai` resolved a project ref that does NOT match the
+stored `SUPABASE_PROJECT_REF` workflow secret. Either Supabase re-
+provisioned the project (region migration, restore-from-backup) or an
+operator updated the custom-domain CNAME without re-running `gh secret
+set`. **Until resolved, the canonical fallback probe is testing a phantom
+URL — Flow A appears healthy even when broken.**
+
+Diagnose:
+
+```bash
+# What the workflow saw at probe time (from the failure_detail)
+gh issue view <ISSUE_NUM> --json body --jq .body | grep 'cname_ref='
+
+# Current CNAME state (re-derive from the runner's POV — should match
+# Doppler prd's NEXT_PUBLIC_SUPABASE_URL host)
+dig +time=3 +tries=2 +short CNAME api.soleur.ai
+```
+
+Remediation: re-run the `supabase_project_ref_unset` recipe above to set
+`SUPABASE_PROJECT_REF` to the new canonical ref.
 
 ### `callback_error_passthrough`
 

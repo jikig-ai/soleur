@@ -1,0 +1,149 @@
+# Closure-gate enforcement for callback-URL-class follow-through issues.
+# Triggered when an issue is closed with the ci/auth-broken label OR a
+# follow-through: title prefix referencing GitHub OAuth callback URLs.
+#
+# Per /ship Phase 7 Step 3.5 callback-URL audit anchor and
+# wg-when-fixing-a-workflow-gates-detection: the closing comment MUST
+# contain ALL THREE of:
+#   1. Verbatim redirect_uri values verified (substring match against
+#      the canonical 3 URLs from github-app-callback-audit.md)
+#   2. A workflow run-URL (actions/runs/<id>) whose conclusion=success
+#   3. A byte-count line matching `bytes:\s*[0-9]+`
+#
+# Missing any field → reopen + comment requesting it.
+#
+# Security: untrusted inputs (issue title used in if: filter, issue body
+# read inside run:) flow through env: vars only. The if: filter does
+# substring matching via GitHub Actions expression functions (no shell
+# interpolation), so untrusted title content cannot escape.
+#
+# This is the machine-enforced layer behind /ship's wording-level gate.
+# Closes #3190. Tracks: #1784/#3183 (the recurrence pattern this prevents).
+
+name: "Follow-through closure guard (callback URL)"
+
+on:
+  issues:
+    types: [closed]
+
+permissions:
+  contents: read
+  issues: write
+  actions: read
+
+jobs:
+  guard:
+    # Scope: only fire on issues that match the callback-URL-class
+    # signature. Cheap pre-filter to avoid spinning a runner for every
+    # issue close in the repo. Substring matching here is via GitHub
+    # Actions expression functions (no shell interpolation).
+    if: >-
+      contains(github.event.issue.labels.*.name, 'ci/auth-broken') ||
+      (
+        startsWith(github.event.issue.title, 'follow-through:') &&
+        (
+          contains(github.event.issue.title, 'callback URL') ||
+          contains(github.event.issue.title, 'redirect_uri') ||
+          contains(github.event.issue.title, 'GitHub App') ||
+          contains(github.event.issue.title, 'OAuth App')
+        )
+      )
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Check closing comment for required fields
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          ISSUE_NUM: ${{ github.event.issue.number }}
+        run: |
+          set -uo pipefail
+
+          # The required URLs from github-app-callback-audit.md. Mirrored
+          # from apps/web-platform/test/oauth-probe-contract.test.ts —
+          # any change there must reflect here.
+          required_urls=(
+            "https://app.soleur.ai/api/auth/github-resolve/callback"
+            "https://api.soleur.ai/auth/v1/callback"
+            "https://ifsccnjhymdmidffkzhl.supabase.co/auth/v1/callback"
+          )
+
+          # Fetch the most recent comment body (the closing comment).
+          # Fall back to the issue body if no comments exist.
+          comment_body=$(gh api "repos/${GH_REPO}/issues/${ISSUE_NUM}/comments" \
+            --jq '.[-1].body // ""' 2>/dev/null || echo "")
+          if [[ -z "$comment_body" ]]; then
+            comment_body=$(gh issue view "$ISSUE_NUM" --repo "$GH_REPO" \
+              --json body --jq .body 2>/dev/null || echo "")
+          fi
+
+          # Field 1: verbatim URLs. Require ALL THREE as substrings.
+          missing_urls=()
+          for url in "${required_urls[@]}"; do
+            if ! grep -Fq "$url" <<<"$comment_body"; then
+              missing_urls+=("$url")
+            fi
+          done
+
+          # Field 2: workflow run-URL. Match the actions/runs/<id> shape
+          # AND verify conclusion=success via gh run view.
+          run_id=$(grep -oE 'actions/runs/[0-9]+' <<<"$comment_body" \
+            | head -1 | sed 's|actions/runs/||')
+          run_ok="no"
+          if [[ -n "$run_id" ]]; then
+            conclusion=$(gh run view "$run_id" --repo "$GH_REPO" \
+              --json conclusion --jq .conclusion 2>/dev/null || echo "")
+            if [[ "$conclusion" == "success" ]]; then
+              run_ok="yes"
+            fi
+          fi
+
+          # Field 3: byte-count line `bytes: <N>`.
+          if grep -qE 'bytes:[[:space:]]*[0-9]+' <<<"$comment_body"; then
+            bytes_ok="yes"
+          else
+            bytes_ok="no"
+          fi
+
+          # If all three present, exit silently — close stands.
+          if [[ ${#missing_urls[@]} -eq 0 && "$run_ok" == "yes" && "$bytes_ok" == "yes" ]]; then
+            echo "Closure-gate fields all present — close stands."
+            exit 0
+          fi
+
+          # Build the reopen-comment body listing what's missing.
+          reopen_body_file=$(mktemp)
+          # shellcheck disable=SC2064
+          trap "rm -f '$reopen_body_file'" EXIT
+          {
+            printf '## Closure gate: re-opening per /ship Phase 7 Step 3.5 callback-URL audit anchor\n\n'
+            printf 'This issue was closed without the verbatim verification required for callback-URL-class follow-through issues. Per `wg-when-fixing-a-workflow-gates-detection`, the gap that allowed #1784 to close-without-verification (and recur as #3183) is now machine-enforced.\n\n'
+            printf '### Missing fields\n\n'
+            if [[ ${#missing_urls[@]} -gt 0 ]]; then
+              printf '- [ ] **Verbatim callback URLs.** The closing comment must include each of these as a literal substring (paste byte-for-byte from the GitHub App callback list):\n'
+              for url in "${missing_urls[@]}"; do
+                printf '    - `%s`\n' "$url"
+              done
+            else
+              printf '- [x] Verbatim callback URLs\n'
+            fi
+            if [[ "$run_ok" != "yes" ]]; then
+              printf -- '- [ ] **Workflow run-URL** showing `scheduled-oauth-probe.yml` ran green AFTER the dashboard change. Format: `https://github.com/%s/actions/runs/<id>`. Verified via `gh run view <id> --json conclusion`.\n' "$GH_REPO"
+            else
+              printf -- '- [x] Workflow run-URL (green)\n'
+            fi
+            if [[ "$bytes_ok" != "yes" ]]; then
+              printf -- '- [ ] **Byte count** of the GitHub App Callback URL textarea. Format: `bytes: <N>` (output of `wc -c` on the textarea contents).\n'
+            else
+              printf -- '- [x] Byte count\n'
+            fi
+            printf '\n### To close this issue\n\n'
+            printf 'Add a comment containing ALL THREE fields above, then close again. See [github-app-callback-audit.md](https://github.com/%s/blob/main/knowledge-base/engineering/ops/runbooks/github-app-callback-audit.md) for the audit procedure.\n' "$GH_REPO"
+          } > "$reopen_body_file"
+
+          gh issue reopen "$ISSUE_NUM" --repo "$GH_REPO" \
+            --comment "$(cat "$reopen_body_file")"
+
+          # Exit 0 — the reopen + comment IS the failure signal; we don't
+          # want this workflow itself to be red on every incomplete close.
+          echo "::warning::Re-opened #${ISSUE_NUM} — closing comment missing required fields."

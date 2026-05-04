@@ -119,6 +119,33 @@ if [[ -n "$key_value" ]]; then
   fi
 fi
 
+# Shape assertion for GITHUB_CLIENT_ID: GitHub App user-OAuth client_ids
+# match `^Iv23[A-Za-z0-9]{16}$`. Catches the operator-paste class where an
+# OAuth App client_id (`Ov23...`) or a placeholder is written into Doppler
+# prd. A wrong client_id surfaces to users as
+#   "The redirect_uri is not associated with this application"
+# because GitHub looks up the App's callback list by client_id.
+# See: knowledge-base/project/learnings/integration-issues/2026-05-04-github-app-callback-url-three-entries.md
+#
+# Failure mode: WARN, not error. Rationale: GitHub may add new App-tier
+# prefixes (e.g., `Iv24...` or longer suffixes) in the future. Failing
+# closed on a regex tied to an externally-controlled format would block
+# all prod releases — strictly worse user impact than the operator-paste
+# class this catches. If the warning fires for a known-good value, set
+# SOLEUR_SKIP_GITHUB_CLIENT_ID_SHAPE=1 to suppress AND open an issue to
+# update the regex. The check still fires AGAINST clearly-wrong values
+# (Ov23..., placeholders, wrong length) — those should be investigated
+# even though they only WARN.
+GITHUB_CLIENT_ID_RE='^Iv23[A-Za-z0-9]{16}$'
+gh_client_id="${GITHUB_CLIENT_ID:-}"
+if [[ -n "$gh_client_id" && -z "${SOLEUR_SKIP_GITHUB_CLIENT_ID_SHAPE:-}" ]]; then
+  if [[ ! "$gh_client_id" =~ $GITHUB_CLIENT_ID_RE ]]; then
+    # Echo only the first 4 chars to avoid leaking unknown values into logs.
+    prefix="${gh_client_id:0:4}"
+    echo "::warning::GITHUB_CLIENT_ID has non-canonical shape (prefix=\"${prefix}…\"); expected GitHub App user-OAuth format Iv23<16 chars>. If GitHub has changed the App client_id format, set SOLEUR_SKIP_GITHUB_CLIENT_ID_SHAPE=1 and open an issue to update the regex."
+  fi
+fi
+
 if [[ "$missing" -gt 0 ]]; then
   echo "::error::$missing required NEXT_PUBLIC_* secret(s) missing from Doppler prd"
   exit 1
