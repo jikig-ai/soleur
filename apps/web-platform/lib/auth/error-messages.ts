@@ -12,7 +12,15 @@ export const CALLBACK_ERRORS: Record<string, string> = {
     "The sign-in service had a temporary problem. Please try again.",
 };
 
+export const NO_ACCOUNT_PATTERN = /signups? not allowed for otp/i;
+
+export const SIGNUP_REASON_NO_ACCOUNT = "no_account";
+
 const SUPABASE_ERROR_PATTERNS: [RegExp, string][] = [
+  [
+    NO_ACCOUNT_PATTERN,
+    "No Soleur account found for this email. Sign up instead.",
+  ],
   [
     /email rate limit exceeded/i,
     "Too many sign-in attempts. Please wait a few minutes and try again.",
@@ -32,4 +40,12 @@ export function mapSupabaseError(message: string): string {
     if (pattern.test(message)) return friendly;
   }
   return DEFAULT_ERROR_MESSAGE;
+}
+
+export function isNoAccountError(error: {
+  code?: string;
+  message: string;
+}): boolean {
+  if (error.code === "otp_disabled") return true;
+  return NO_ACCOUNT_PATTERN.test(error.message);
 }
