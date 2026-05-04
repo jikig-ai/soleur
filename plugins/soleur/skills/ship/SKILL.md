@@ -427,25 +427,27 @@ Domain leaders are consulted at brainstorm time but not at ship time. The actual
 
 ### Deploy Pipeline Fix Drift Gate
 
-**Trigger:** PR touches any of the 4 `terraform_data.deploy_pipeline_fix` trigger files:
+**Trigger:** PR touches any of the 5 `terraform_data.deploy_pipeline_fix` trigger files:
 
 - `apps/web-platform/infra/ci-deploy.sh`
 - `apps/web-platform/infra/webhook.service`
 - `apps/web-platform/infra/cat-deploy-state.sh`
+- `apps/web-platform/infra/canary-bundle-claim-check.sh`
 - `apps/web-platform/infra/hooks.json.tmpl`
 
 **Detection:**
 
-The four trigger files are enumerated as a single bash array. The regex below MUST be derived from this array — keep the gate's reject criteria, documentation block, and test fixtures in sync (per `cq-when-a-plan-prescribes-a-validator-guard-or` — guard-surface coupling). If `apps/web-platform/infra/server.tf`'s `triggers_replace` `sha256(join(",",...))` block is changed (file added, removed, renamed), update the array, the regex, and `plugins/soleur/test/ship-deploy-pipeline-fix-gate.test.ts` in the same PR.
+The five trigger files are enumerated as a single bash array. The regex below MUST be derived from this array — keep the gate's reject criteria, documentation block, and test fixtures in sync (per `cq-when-a-plan-prescribes-a-validator-guard-or` — guard-surface coupling). If `apps/web-platform/infra/server.tf`'s `triggers_replace` `sha256(join(",",...))` block is changed (file added, removed, renamed), update the array, the regex, and `plugins/soleur/test/ship-deploy-pipeline-fix-gate.test.ts` in the same PR.
 
 ```bash
 DEPLOY_PIPELINE_FIX_TRIGGERS=(
   "apps/web-platform/infra/ci-deploy.sh"
   "apps/web-platform/infra/webhook.service"
   "apps/web-platform/infra/cat-deploy-state.sh"
+  "apps/web-platform/infra/canary-bundle-claim-check.sh"
   "apps/web-platform/infra/hooks.json.tmpl"
 )
-DPF_REGEX='^apps/web-platform/infra/(ci-deploy\.sh|webhook\.service|cat-deploy-state\.sh|hooks\.json\.tmpl)$'
+DPF_REGEX='^apps/web-platform/infra/(ci-deploy\.sh|webhook\.service|cat-deploy-state\.sh|canary-bundle-claim-check\.sh|hooks\.json\.tmpl)$'
 
 git diff --name-only origin/main...HEAD | grep -E "$DPF_REGEX"
 ```
@@ -478,12 +480,14 @@ the output name is `server_ip`, not `server_ipv4`):
   LOCAL_HASHES=$(sha256sum \
     apps/web-platform/infra/ci-deploy.sh \
     apps/web-platform/infra/webhook.service \
-    apps/web-platform/infra/cat-deploy-state.sh)
+    apps/web-platform/infra/cat-deploy-state.sh \
+    apps/web-platform/infra/canary-bundle-claim-check.sh)
   echo "$LOCAL_HASHES"
   ssh -o ConnectTimeout=5 root@"$SERVER_IP" \
     "sha256sum /usr/local/bin/ci-deploy.sh \
               /etc/systemd/system/webhook.service \
-              /usr/local/bin/cat-deploy-state.sh && \
+              /usr/local/bin/cat-deploy-state.sh \
+              /usr/local/bin/canary-bundle-claim-check.sh && \
      systemctl is-active webhook"
 
 Each server-side hash must match the corresponding local hash AND
