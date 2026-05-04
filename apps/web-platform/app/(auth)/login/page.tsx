@@ -6,13 +6,14 @@ import { createClient } from "@/lib/supabase/client";
 import { reportSilentFallback } from "@/lib/client-observability";
 import { OAuthButtons } from "@/components/auth/oauth-buttons";
 import { EMAIL_OTP_LENGTH } from "@/lib/auth/constants";
-import { CALLBACK_ERRORS, DEFAULT_ERROR_MESSAGE, mapSupabaseError } from "@/lib/auth/error-messages";
+import {
+  CALLBACK_ERRORS,
+  DEFAULT_ERROR_MESSAGE,
+  isNoAccountError,
+  mapSupabaseError,
+  SIGNUP_REASON_NO_ACCOUNT,
+} from "@/lib/auth/error-messages";
 import Link from "next/link";
-
-function isNoAccountError(error: { code?: string; message: string }): boolean {
-  if (error.code === "otp_disabled") return true;
-  return /signups? not allowed for otp/i.test(error.message);
-}
 
 export default function LoginPage() {
   return (
@@ -67,8 +68,11 @@ function LoginForm() {
         },
       });
       if (isNoAccountError(error as { code?: string; message: string })) {
-        const params = new URLSearchParams({ email, reason: "no_account" });
-        router.push(`/signup?${params.toString()}`);
+        const params = new URLSearchParams({
+          email,
+          reason: SIGNUP_REASON_NO_ACCOUNT,
+        });
+        router.replace(`/signup?${params.toString()}`);
         return;
       }
       setError(mapSupabaseError(error.message));

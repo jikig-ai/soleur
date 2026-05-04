@@ -6,7 +6,10 @@ import { createClient } from "@/lib/supabase/client";
 import { reportSilentFallback } from "@/lib/client-observability";
 import { OAuthButtons } from "@/components/auth/oauth-buttons";
 import { EMAIL_OTP_LENGTH } from "@/lib/auth/constants";
-import { mapSupabaseError } from "@/lib/auth/error-messages";
+import {
+  mapSupabaseError,
+  SIGNUP_REASON_NO_ACCOUNT,
+} from "@/lib/auth/error-messages";
 import Link from "next/link";
 
 export default function SignupPage() {
@@ -31,7 +34,7 @@ function SignupForm() {
   const otpRef = useRef<HTMLInputElement>(null);
 
   const showNoAccountBanner =
-    reason === "no_account" &&
+    reason === SIGNUP_REASON_NO_ACCOUNT &&
     initialEmail.length > 0 &&
     email === initialEmail;
 

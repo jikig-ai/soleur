@@ -1,5 +1,6 @@
 import { test, expect } from "@playwright/test";
 import { EMAIL_OTP_LENGTH } from "../lib/auth/constants";
+import { SIGNUP_REASON_NO_ACCOUNT } from "../lib/auth/error-messages";
 
 // ---------- OTP Login Flow Tests ----------
 // These test the email OTP sign-in flow end-to-end.
@@ -157,9 +158,10 @@ test.describe("Login no-account redirect", () => {
     await page.getByRole("button", { name: /send sign-in code/i }).click();
 
     // Expect navigation to /signup with email + reason params
-    await page.waitForURL(/\/signup\?.*reason=no_account/, {
-      timeout: 5_000,
-    });
+    await page.waitForURL(
+      new RegExp(`/signup\\?.*reason=${SIGNUP_REASON_NO_ACCOUNT}`),
+      { timeout: 5_000 },
+    );
     expect(page.url()).toContain(`email=${encodeURIComponent(email)}`);
 
     // Email is prefilled
@@ -176,6 +178,44 @@ test.describe("Login no-account redirect", () => {
 
     // Banner dismisses on edit (derived from `email !== initialEmail`)
     await emailInput.fill(`${email}-edit`);
+    await expect(page.getByRole("status")).toHaveCount(0);
+  });
+
+  test("/signup with unknown reason value does NOT show the banner", async ({
+    page,
+  }) => {
+    await page.goto(
+      `/signup?email=${encodeURIComponent("foo@example.com")}&reason=other_value`,
+    );
+    const html = await page.content();
+    test.skip(
+      html.includes('statusCode":500'),
+      "Dev server CSS compilation error",
+    );
+    await expect(page.getByRole("status")).toHaveCount(0);
+  });
+
+  test("/signup with reason=no_account but no email param does NOT show the banner", async ({
+    page,
+  }) => {
+    await page.goto(`/signup?reason=${SIGNUP_REASON_NO_ACCOUNT}`);
+    const html = await page.content();
+    test.skip(
+      html.includes('statusCode":500'),
+      "Dev server CSS compilation error",
+    );
+    await expect(page.getByRole("status")).toHaveCount(0);
+  });
+
+  test("/signup with no query params shows no banner (baseline)", async ({
+    page,
+  }) => {
+    await page.goto("/signup");
+    const html = await page.content();
+    test.skip(
+      html.includes('statusCode":500'),
+      "Dev server CSS compilation error",
+    );
     await expect(page.getByRole("status")).toHaveCount(0);
   });
 });
