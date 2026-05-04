@@ -76,6 +76,35 @@ real auth-test fixture that interacts with a live Supabase test project; if
 it ever needs a synthesized token, the file should move under
 `apps/web-platform/test/__synthesized__/`.
 
+### Rename-laundering — empirical behavior (gitleaks v8.24.2)
+
+The CI smoke matrix's `rename-laundering` case proved **empirically** that
+gitleaks v8.24.2 **allows** a rename from a non-allowlisted path into an
+allowlisted path. The path-based allowlist is evaluated against the
+**destination** path of the staged change; the diff content (which carries
+the same secret) is not re-evaluated against the source path.
+
+This means a `git mv apps/web-platform/server/with-secret.ts
+apps/web-platform/test/__synthesized__/now-allowed.ts` followed by
+`git add` slips a real secret past the gate.
+
+Mitigations in place:
+
+1. **GitHub push protection** independently scans every committed line for
+   well-known token shapes (Doppler, AWS, Stripe, etc.) and blocks the push
+   regardless of allowlist scope. We confirmed this empirically when
+   GitHub blocked our own smoke-test fixture commit until we split the
+   token into prefix + body composed at runtime.
+2. **CODEOWNERS** requires 2nd-reviewer for any change touching
+   `.gitleaks.toml`, the workflow, the linter, or `AGENTS.md` — humans
+   review the diff before merge.
+3. **Reviewer awareness** — this runbook documents the gap so reviewers
+   know to look for `git mv` into `__goldens__/` / `__synthesized__/`.
+
+**Follow-up tracked:** [#3160](https://github.com/jikig-ai/soleur/issues/3160)
+adds a CI rename-guard job that fails on rename targets landing in
+allowlisted paths unless overridden via label or commit trailer.
+
 ### `# gitleaks:allow` waivers
 
 Both gitleaks and the companion `lint-fixture-content.mjs` linter honor
