@@ -260,12 +260,14 @@ on:
   workflow_dispatch: {}
 
 # `actions: write` is required for `gh workflow disable` (D4) inside the agent
-# prompt. Do NOT remove. `id-token: write` is intentionally omitted — one-time
-# fires have no OIDC use case.
+# prompt. Do NOT remove. `id-token: write` is required by
+# `anthropics/claude-code-action@v1` for its OIDC auth handshake — without it
+# the action exits before the prompt body runs (no agent execution, no D4).
 permissions:
   contents: read
   issues: write
   actions: write
+  id-token: write
 
 concurrency:
   group: schedule-once-<NAME>
