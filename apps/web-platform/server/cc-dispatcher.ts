@@ -60,6 +60,14 @@ import {
   getUserServiceTokens,
   patchWorkspacePermissions,
 } from "./agent-runner";
+import {
+  fetchUserWorkspacePath,
+  resolveConciergeDocumentContext,
+  _resetWorkspacePathCacheForTests,
+} from "./kb-document-resolver";
+
+// Re-export so existing call sites keep working.
+export { resolveConciergeDocumentContext } from "./kb-document-resolver";
 import { buildAgentQueryOptions } from "./agent-runner-query-options";
 import {
   getBashApprovalCache,
@@ -80,7 +88,12 @@ const log = createChildLogger("cc-dispatcher");
 // audit-log attribution. Used by `createCanUseTool` (R-AC14), the WS
 // `stream`/`tool_use` events emitted from `dispatchSoleurGo`, and the
 // `reportSilentFallback` extra in the sandbox-startup mirror branch.
-export const CC_ROUTER_LEADER_ID = "cc_router" as const;
+//
+// Source of truth lives in `@/lib/cc-router-id` so client-safe modules
+// (leader-avatar.tsx, etc.) can import the same literal without dragging
+// pino + supabase service client into the browser bundle.
+export { CC_ROUTER_LEADER_ID } from "@/lib/cc-router-id";
+import { CC_ROUTER_LEADER_ID } from "@/lib/cc-router-id";
 
 // ---------------------------------------------------------------------------
 // Sentry mirror debounce — per (userId, errorClass) 5-minute TTL.
@@ -383,17 +396,12 @@ function supabase() {
   return _supabase;
 }
 
-async function fetchUserWorkspacePath(userId: string): Promise<string> {
-  const { data, error } = await supabase()
-    .from("users")
-    .select("workspace_path")
-    .eq("id", userId)
-    .single();
-  if (error || !data?.workspace_path) {
-    throw new Error("Workspace not provisioned");
-  }
-  return data.workspace_path as string;
-}
+// `fetchUserWorkspacePath`, `resolveConciergeDocumentContext`, and the
+// per-process workspace memo were extracted to `./kb-document-resolver`
+// so this orchestration module no longer owns filesystem responsibilities
+// alongside SDK Query construction, MCP wiring, BYOK token resolution,
+// bash-approval, and rate-limiting. Both modules share the workspace
+// memo via the resolver's exported helper.
 
 /**
  * Build a real SDK `Query` for one cold cc-soleur-go conversation. Async
@@ -599,6 +607,20 @@ let _runnerSendToClient:
  * Subsequent invocations with a DIFFERENT sendToClient is an error:
  * the runner captures its WS-emit closure at first construction.
  */
+/**
+ * `true` when the cc-soleur-go runner already owns a live `Query` for the
+ * given conversation (warm path). Callers use this to skip work that the
+ * cold-Query construction already did — most importantly,
+ * `resolveConciergeDocumentContext` reads the user's open document into
+ * the system prompt at cold dispatch only; subsequent turns reuse the
+ * baked prompt, so the per-turn `readFile` + workspace lookup is
+ * pure-overhead. Returns `false` when no runner exists yet.
+ */
+export function hasActiveCcQuery(conversationId: string): boolean {
+  if (!_runner) return false;
+  return _runner.hasActiveQuery(conversationId);
+}
+
 export function getSoleurGoRunner(
   sendToClient: (userId: string, message: WSMessage) => boolean,
 ): SoleurGoRunner {
@@ -647,6 +669,17 @@ export interface DispatchSoleurGoArgs {
   sessionId?: string | null;
   sendToClient: (userId: string, message: WSMessage) => boolean;
   persistActiveWorkflow: (workflow: WorkflowName | null) => Promise<void>;
+  /**
+   * KB Concierge document context. The ws-handler resolves these from the
+   * open KB document (start_session `pendingContext` for first turn,
+   * `conversations.context_path` lookup for subsequent turns) and passes
+   * them through. The runner threads them into `buildSoleurGoSystemPrompt`
+   * which mirrors the legacy `agent-runner.ts` injection (PDFs get a
+   * Read directive; text inlines content up to 50KB).
+   */
+  artifactPath?: string;
+  documentKind?: "pdf" | "text";
+  documentContent?: string;
 }
 
 /**
@@ -667,6 +700,9 @@ export async function dispatchSoleurGo(
     sessionId,
     sendToClient,
     persistActiveWorkflow,
+    artifactPath,
+    documentKind,
+    documentContent,
   } = args;
 
   const runner = getSoleurGoRunner(sendToClient);
@@ -685,6 +721,20 @@ export async function dispatchSoleurGo(
         type: "tool_use",
         leaderId: CC_ROUTER_LEADER_ID,
         label: block.name,
+      });
+    },
+    onTextTurnEnd: () => {
+      // Per-turn boundary → terminal stream event for the cc_router bubble.
+      // Without this, the client reducer keeps the bubble in
+      // `state: "streaming"` (raw `whitespace-pre-wrap`), so markdown
+      // (`**bold**`, `- ` bullets) renders as raw source. The
+      // chat-state-machine `case "stream_end"` (chat-state-machine.ts:484-516)
+      // already special-cases `cc_router` and transitions the bubble to
+      // `state: "done"`, which engages MarkdownRenderer
+      // (message-bubble.tsx:263).
+      sendToClient(userId, {
+        type: "stream_end",
+        leaderId: CC_ROUTER_LEADER_ID,
       });
     },
     onWorkflowDetected: (_workflow) => {
@@ -732,6 +782,9 @@ export async function dispatchSoleurGo(
       events,
       persistActiveWorkflow,
       sessionId: sessionId ?? undefined,
+      artifactPath,
+      documentKind,
+      documentContent,
     });
   } catch (err) {
     const errorClass =
@@ -863,4 +916,8 @@ export function __resetDispatcherForTests(): void {
   // prefix in test A can survive into test B (cross-file leak via the
   // module-level Map). Mirrors the centralization Fix 6 of PR #2954.
   _resetBashApprovalCacheForTests();
+  // Drain the workspace-path memo so a `users.workspace_path` swap in
+  // tests is observable. Lives in `kb-document-resolver.ts` for the same
+  // reason as the bash cache: shared across files, drained centrally.
+  _resetWorkspacePathCacheForTests();
 }
