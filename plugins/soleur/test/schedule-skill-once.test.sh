@@ -60,7 +60,7 @@ assert_contains "$ONCE_BLOCK" "Final step" \
 # with:, prompt:) and prompt-body lines are indented deeper, so they do not
 # match this pattern.
 POST_STEP_COUNT=$(printf '%s\n' "$ONCE_BLOCK" | awk '
-  /anthropics\/claude-code-action/ { found=1; next }
+  /^        uses: anthropics\/claude-code-action/ { found=1; next }
   found && /^      - / { count++ }
   END { print count+0 }
 ')
@@ -135,6 +135,13 @@ assert_contains "$ONCE_BLOCK" 'EXPECTED_CREATED_AT' \
 # Tool-surface allowlist (regression vs recurring template)
 assert_contains "$ONCE_BLOCK" '--allowedTools Bash,Read,Write,Edit,Glob,Grep' \
   "claude_args includes least-privilege --allowedTools allowlist"
+
+# id-token: write is required by anthropics/claude-code-action@v1 OIDC
+# handshake — without it the action exits before the agent prompt runs (issue
+# #3134). Guard against the comment from the recurring-template precedent
+# accidentally being copy-pasted back in.
+assert_contains "$ONCE_BLOCK" 'id-token: write' \
+  "id-token: write present in --once permissions block (claude-code-action OIDC requirement, #3134)"
 
 # Input regex validators (load-bearing against shell/YAML injection)
 assert_contains "$SKILL_CONTENT" '^[1-9][0-9]{0,8}$' \

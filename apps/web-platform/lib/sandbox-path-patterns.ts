@@ -14,14 +14,27 @@
  * pino/Sentry on the client.
  */
 
+// Terminator alternation: consume trailing `/`, else zero-width lookahead at
+// common prose boundaries, else end-of-string. The lookahead set covers
+// punctuation that frequently terminates a path in assistant prose
+// (`/workspaces/<id>.`, `/workspaces/<id>;`, `[/workspaces/<id>]`,
+// `"/workspaces/<id>"`, etc.). Zero-width preserves surrounding prose so
+// `error at /workspaces/<id>:42` strips to `error at :42`. Closes Sentry
+// 1e549c800f33479c9c6330cf6e91bce7. Add new prose terminators here when
+// `op: "tool-label-scrub"` events surface them.
+const PATH_TERMINATOR = String.raw`(?:\/|(?=[:;,.!?\s)\]}>"'|\\])|$)`;
+
 export const SANDBOX_PATH_PATTERNS: RegExp[] = [
   // Sandbox-remapped form: /tmp/claude-<uid>/-workspaces-<workspaceId>/...
   // workspaceId broadened to `[A-Za-z0-9_-]{3,}` (from `[0-9a-fA-F]{6,}`) so a
   // provisioning change to a non-hex alphabet or a shorter ID doesn't silently
   // re-enable leaks. Security review (#2861).
-  /\/tmp\/claude-\d+\/-workspaces-[A-Za-z0-9_-]{3,}\//g,
-  // Host form without explicit workspacePath context: /workspaces/<workspaceId>/
-  /\/workspaces\/[A-Za-z0-9_-]{3,}\//g,
+  new RegExp(
+    String.raw`\/tmp\/claude-\d+\/-workspaces-[A-Za-z0-9_-]{3,}` + PATH_TERMINATOR,
+    "g",
+  ),
+  // Host form without explicit workspacePath context: /workspaces/<workspaceId>
+  new RegExp(String.raw`\/workspaces\/[A-Za-z0-9_-]{3,}` + PATH_TERMINATOR, "g"),
 ];
 
 /** Detects any path-shape that LOOKS like a sandbox or host workspace path
