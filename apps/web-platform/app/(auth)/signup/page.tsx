@@ -223,6 +223,21 @@ function SignupForm() {
           <div className="flex-1 border-t border-neutral-700" />
         </div>
 
+        {/*
+          Live-region pre-exists invariant: render the role=status element
+          unconditionally and swap its text content when tcAccepted flips.
+          Conditionally rendering the live region itself does not reliably
+          announce on first state change — see plan ARIA22 / MDN refs.
+        */}
+        <p
+          data-testid="tc-hint"
+          aria-live="polite"
+          aria-atomic="true"
+          className="min-h-[1rem] text-center text-xs text-neutral-500"
+        >
+          {!tcAccepted ? "Accept the terms above to continue." : ""}
+        </p>
+
         <OAuthButtons disabled={!tcAccepted} />
 
         <p className="text-center text-sm text-neutral-500">

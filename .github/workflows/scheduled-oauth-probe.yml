@@ -200,6 +200,83 @@ jobs:
             fi
           }
 
+          # End-to-end probe of the Supabase Flow A shape — the URL real
+          # users hit when they click "Continue with GitHub" on /signup.
+          # The 3-URL in-isolation probe above checks each callback URL
+          # alone, but Supabase 302s to GitHub with redirect_to AND
+          # redirect_uri together; a drift that only manifests in that
+          # combined shape (issue #3183) goes unobserved by the in-isolation
+          # probe. This probe captures the Supabase 302, re-issues the
+          # exact GitHub URL with -L, and asserts no rejection sentinel.
+          # NOTE: NO cookies between legs — Supabase sets a transient `sb-`
+          # cookie that can change GitHub's response surface if persisted.
+          # All inputs are env-vars (APP_HOST, API_HOST) or sanitized via
+          # strip_log_injection before any echo/record_failure interpolation.
+          probe_github_supabase_shape_e2e() {
+            # Parameter is named `redirect_to` (Supabase's query-param name);
+            # the safe (strip-log-injection) variable carries the workflow's
+            # `_safe` suffix convention shared with probe_github_redirect_uri.
+            local redirect_to="$1"
+            local supabase_url enc line http redirect_url body_file
+            local redirect_uri_safe redirect_url_safe
+            redirect_uri_safe=$(strip_log_injection "$redirect_to")
+
+            enc=$(jq -nr --arg u "$redirect_to" '$u|@uri')
+            supabase_url="https://${API_HOST}/auth/v1/authorize?provider=github&redirect_to=${enc}"
+
+            # Leg 1 — capture Supabase 302 location.
+            line=$(curl -s --max-time 10 --max-redirs 0 -o /dev/null \
+              -H "User-Agent: soleur-oauth-probe/1.0" \
+              -w '%{http_code} %{redirect_url}' "$supabase_url" 2>/dev/null) \
+              || line="network_error"
+            if [[ "$line" == "network_error" ]]; then
+              record_failure "github_oauth_supabase_shape_e2e_supabase_network" \
+                "Supabase /auth/v1/authorize for redirect_to=${redirect_uri_safe} -> curl error (DNS, TLS, or connect; see runbook)"
+              return
+            fi
+            http=${line%% *}
+            redirect_url=${line#* }
+            redirect_url_safe=$(strip_log_injection "$redirect_url")
+            if [[ "$http" != "302" ]]; then
+              record_failure "github_oauth_supabase_shape_e2e_supabase_http" \
+                "Supabase /auth/v1/authorize for redirect_to=${redirect_uri_safe} -> HTTP ${http} (see runbook)"
+              return
+            fi
+
+            # Leg 2 — fresh curl, follow into GitHub authorize page.
+            body_file=$(mktemp)
+            # shellcheck disable=SC2064
+            trap "rm -f '$body_file'" RETURN
+            http=$(curl --max-time 10 -L -s -o "$body_file" \
+              -H "User-Agent: soleur-oauth-probe/1.0" \
+              -w '%{http_code}' \
+              "$redirect_url" 2>/dev/null) || {
+              record_failure "github_oauth_supabase_shape_e2e_github_network" \
+                "Follow Supabase 302 for redirect_to=${redirect_uri_safe} -> curl error against ${redirect_url_safe} (see runbook)"
+              return
+            }
+            if [[ "$http" != "200" ]]; then
+              record_failure "github_oauth_supabase_shape_e2e_github_http" \
+                "Follow Supabase 302 for redirect_to=${redirect_uri_safe} -> HTTP ${http} from ${redirect_url_safe} (see runbook)"
+              return
+            fi
+            if grep -q "redirect_uri is not associated" "$body_file"; then
+              record_failure "github_oauth_supabase_shape_e2e_unregistered" \
+                "GitHub rejected user-shape redirect_uri (Supabase Flow A) for redirect_to=${redirect_uri_safe}; rejected at ${redirect_url_safe} — operator must audit GitHub App callback list (see runbook)"
+              return
+            fi
+            if grep -q "Application suspended" "$body_file"; then
+              record_failure "github_app_suspended" \
+                "GitHub App for the probe's client_id is suspended (detected via Supabase shape) — every GitHub auth flow breaks until reinstated (see runbook)"
+              return
+            fi
+            if ! grep -qE 'name="authenticity_token"|Sign in to GitHub|Authorize [A-Z]' "$body_file"; then
+              record_failure "github_oauth_supabase_shape_e2e_html_drift" \
+                "Supabase-shape authorize response for redirect_to=${redirect_uri_safe} (followed to ${redirect_url_safe}) lacked GitHub-specific anchors — refresh sentinels in oauth-probe-contract.test.ts (see runbook)"
+              return
+            fi
+          }
+
           # Skip the new probes gracefully when secrets are unset (e.g.,
           # on a repo fork or before the first `gh secret set`). Each
           # missing secret records a distinct failure mode so the operator
@@ -245,6 +322,14 @@ jobs:
               # on custom-domain dual-registration)
               [[ -z "$fail_mode" ]] && probe_github_redirect_uri "supabase_canonical" \
                 "https://${SUPABASE_PROJECT_REF}.supabase.co/auth/v1/callback"
+
+              # 3g. User-shape end-to-end probe — exercises the actual
+              # Supabase 302 → GitHub authorize URL combination that real
+              # users hit. The 3-URL in-isolation probe (3d/3e/3f) cannot
+              # detect a drift that only manifests when redirect_to AND
+              # redirect_uri are sent together (Supabase Flow A shape).
+              # Closes the H_C gate-detection gap from issue #3183.
+              [[ -z "$fail_mode" ]] && probe_github_supabase_shape_e2e "https://${APP_HOST}/callback"
             fi
           fi
 
@@ -431,7 +516,7 @@ jobs:
           if [[ -n "$STALE" ]]; then
             echo "Closing stale tracking issue #$STALE."
             gh issue close "$STALE" --repo "$GH_REPO" \
-              --comment "Probe green at ${NOW}. All checks passed (login HTTP 200, google+github authorize 302, settings JSON valid, all 3 GitHub App callback URLs registered, callback-error pass-through). Run: ${RUN_URL}"
+              --comment "Probe green at ${NOW}. All checks passed (login HTTP 200, google+github authorize 302, settings JSON valid, all 3 GitHub App callback URLs registered, Supabase user-shape e2e green, callback-error pass-through). Run: ${RUN_URL}"
           else
             echo "No stale tracking issue to close."
           fi
