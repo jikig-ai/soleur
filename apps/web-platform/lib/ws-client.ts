@@ -107,7 +107,14 @@ export const NON_TRANSIENT_CLOSE_CODES: Record<number, { target?: string; reason
   [WS_CLOSE_CODES.INTERNAL_ERROR]: { reason: "Server error" },
   [WS_CLOSE_CODES.RATE_LIMITED]: { reason: "Too many requests. Please try again later." },
   [WS_CLOSE_CODES.IDLE_TIMEOUT]: { reason: "Session expired due to inactivity" },
-  [WS_CLOSE_CODES.CONCURRENCY_CAP]: { reason: "Concurrent-conversation limit reached" },
+  // Recovery hint: archive (not just complete) frees a slot — the
+  // AFTER UPDATE OF archived_at trigger in migration 036 fires
+  // release_conversation_slot only on archive, NOT on status='completed'.
+  // (Plan Risk #5: resume_session does not call acquireSlot, so releasing
+  // on completed alone would let resumes bypass the cap.)
+  [WS_CLOSE_CODES.CONCURRENCY_CAP]: {
+    reason: "Concurrent-conversation limit reached. Archive a completed conversation to free a slot.",
+  },
 };
 
 /** Combined chat state: messages and activeStreams update atomically via useReducer

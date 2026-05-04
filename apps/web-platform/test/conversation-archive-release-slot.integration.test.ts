@@ -18,7 +18,7 @@
  * assert the slot row is gone.
  */
 
-import { afterAll, beforeAll, describe, expect, test } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, test } from "vitest";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { randomBytes, randomUUID } from "crypto";
 
@@ -74,10 +74,25 @@ describe.skipIf(!INTEGRATION_ENABLED)(
         password: user.password,
         email_confirm: true,
       });
-      if (data.user?.id) user.id = data.user.id;
+      // Assign id BEFORE asserting so afterAll cleanup runs even if a flaky
+      // post-create assertion below trips. Same pattern as byok.integration.
+      user.id = data.user?.id ?? "";
       expect(error, `createUser(${user.email}) failed`).toBeNull();
       expect(user.id).toBeTruthy();
     }, 30_000);
+
+    afterEach(async () => {
+      if (!service || !user.id) return;
+      // Per-test cleanup so slot/conversation rows from one test do not
+      // skew the next test's slotCount() or trigger ordering coupling.
+      // Conversations: cascade through user_concurrency_slots is NOT
+      // present (slot FK is on users, not conversations) — clean both.
+      await service
+        .from("user_concurrency_slots")
+        .delete()
+        .eq("user_id", user.id);
+      await service.from("conversations").delete().eq("user_id", user.id);
+    });
 
     afterAll(async () => {
       if (!service || !user.id) return;
@@ -182,9 +197,13 @@ describe.skipIf(!INTEGRATION_ENABLED)(
       expect(acquireNew.active_count).toBe(1);
     }, 30_000);
 
-    test("unarchiving does NOT release a slot (NEW.archived_at IS NOT NULL guard)", async () => {
-      // Negative: a NULL → non-NULL → NULL transition must release the slot
-      // exactly once (on the first archive), not again on unarchive.
+    test("regression guard: trigger MUST NOT broaden to release on unarchive", async () => {
+      // Negative-space regression test. This test PASSES on the pre-fix
+      // branch too (no trigger means no release on unarchive either — the
+      // slot just leaks). It guards against a future broadening of the
+      // trigger's WHEN clause that would drop the `NEW.archived_at IS NOT
+      // NULL` filter and start releasing on unarchive (NULL → non-NULL →
+      // NULL). That broadening would silently break re-acquire-on-resume.
       const repoUrl = `https://github.com/synthetic/${randomBytes(4).toString("hex")}`;
       const convId = await insertConversation(repoUrl);
 
@@ -213,10 +232,12 @@ describe.skipIf(!INTEGRATION_ENABLED)(
       expect(await slotCount()).toBe(1);
     }, 30_000);
 
-    test("status='completed' alone does NOT release a slot (archive-only trigger)", async () => {
-      // Negative: the trigger uses AFTER UPDATE OF archived_at — a status-only
-      // UPDATE must not fire it. (See plan Risk #5: releasing on completed-only
-      // would let resume_session bypass the cap.)
+    test("regression guard: trigger MUST NOT broaden to release on status='completed'", async () => {
+      // Negative-space regression test. PASSES pre-fix too. Guards against
+      // a future widening of the AFTER UPDATE OF column list that would
+      // include `status` — see plan Risk #5: releasing on completed alone
+      // would let `resume_session` bypass the cap, because resume_session
+      // (ws-handler.ts:812) does not call acquireSlot.
       const repoUrl = `https://github.com/synthetic/${randomBytes(4).toString("hex")}`;
       const convId = await insertConversation(repoUrl);
 

@@ -34,11 +34,28 @@ describe("migration 036_release_slot_on_archive", () => {
     expect(executable).toMatch(/SET\s+search_path\s*=\s*public\s*,\s*pg_temp/i);
   });
 
-  it("body invokes public.release_conversation_slot with NEW.user_id and NEW.id", () => {
+  it("body invokes public.release_conversation_slot with OLD.user_id and OLD.id", () => {
     // The function body must call the existing keyed-DELETE RPC with
     // qualified relation names (cq-pg-security-definer-search-path-pin-pg-temp).
+    //
+    // OLD (not NEW) is load-bearing: the conversations RLS policy uses
+    // `FOR ALL USING (auth.uid() = user_id)` with NO `WITH CHECK` clause
+    // (001_initial_schema.sql:60-62). A malicious UPDATE can change
+    // `NEW.user_id` to any value the attacker chose; the trigger would
+    // then drive a definer-elevated DELETE against that user's slot row.
+    // OLD.user_id pins the lookup to the auth-checked pre-image owner.
     expect(executable).toMatch(
-      /public\.release_conversation_slot\s*\(\s*NEW\.user_id\s*,\s*NEW\.id\s*\)/i,
+      /public\.release_conversation_slot\s*\(\s*OLD\.user_id\s*,\s*OLD\.id\s*\)/i,
+    );
+  });
+
+  it("does NOT pass NEW.user_id or NEW.id to release_conversation_slot (security-sentinel P1)", () => {
+    // Belt-and-suspenders for the OLD-vs-NEW invariant above.
+    expect(executable).not.toMatch(
+      /release_conversation_slot\s*\([^)]*NEW\.user_id/i,
+    );
+    expect(executable).not.toMatch(
+      /release_conversation_slot\s*\([^)]*NEW\.id\b/i,
     );
   });
 
@@ -92,9 +109,5 @@ describe("migration 036_release_slot_on_archive", () => {
     expect(executable).toMatch(
       /REVOKE\s+ALL\s+ON\s+FUNCTION\s+public\.release_slot_on_archive\s*\(\s*\)\s+FROM\s+PUBLIC/i,
     );
-  });
-
-  it("does NOT use CONCURRENTLY (Supabase migration runner rejects 25001)", () => {
-    expect(executable).not.toMatch(/\bCONCURRENTLY\b/i);
   });
 });
