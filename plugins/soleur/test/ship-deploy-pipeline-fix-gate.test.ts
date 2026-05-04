@@ -23,14 +23,17 @@ const SERVER_TF = resolve(REPO_ROOT, "apps/web-platform/infra/server.tf");
 const GATE_HEADING = "### Deploy Pipeline Fix Drift Gate";
 const NEXT_HEADING = "### Retroactive Gate Application";
 
-// The 4 trigger files MUST match apps/web-platform/infra/server.tf
+// The 5 trigger files MUST match apps/web-platform/infra/server.tf
 // `terraform_data.deploy_pipeline_fix.triggers_replace.sha256(join(",",...))`.
 // If a future infra refactor changes the basenames, this fixture, the gate's
-// bash array, and the gate's regex must update together.
+// bash array, and the gate's regex must update together. The
+// "server.tf is in sync with TRIGGER_FILES" describe block below auto-detects
+// drift between server.tf and this fixture (#3068).
 const TRIGGER_FILES = [
   "apps/web-platform/infra/ci-deploy.sh",
   "apps/web-platform/infra/webhook.service",
   "apps/web-platform/infra/cat-deploy-state.sh",
+  "apps/web-platform/infra/canary-bundle-claim-check.sh",
   "apps/web-platform/infra/hooks.json.tmpl",
 ];
 
@@ -188,9 +191,9 @@ describe("Trigger array and server.tf are in sync (path-glob verification)", () 
     "server.tf references basename via file()/templatefile(): %s",
     (path) => {
       const basename = path.split("/").pop()!;
-      // Three direct triggers are referenced via file("${path.module}/<basename>")
-      // inside the triggers_replace block. The fourth (hooks.json.tmpl) is rendered
-      // by templatefile("${path.module}/hooks.json.tmpl", ...) in a locals block
+      // Direct triggers are referenced via file("${path.module}/<basename>")
+      // inside the triggers_replace block. hooks.json.tmpl is rendered by
+      // templatefile("${path.module}/hooks.json.tmpl", ...) in a locals block
       // and folded into triggers_replace via local.hooks_json. Either form proves
       // terraform tracks the file's contents.
       const escaped = basename.replace(/[.+*?^$(){}|[\]\\]/g, "\\$&");
@@ -200,6 +203,90 @@ describe("Trigger array and server.tf are in sync (path-glob verification)", () 
       expect(referenced).toBe(true);
     },
   );
+
+  // Self-healing direction (#3068): if server.tf grows a new file in
+  // triggers_replace, this test fails until TRIGGER_FILES (and therefore the
+  // gate's array + regex via the "matches token-for-token" tests above) is
+  // updated. Closes the gap that caused PR #3042 to slip past the gate and
+  // file drift issue #3061.
+  test("every basename hashed by triggers_replace appears in TRIGGER_FILES", () => {
+    // Locate the deploy_pipeline_fix resource block (server.tf has several
+    // `triggers_replace = sha256(join(",", [ ... ]))` blocks; we want only the
+    // one under `terraform_data "deploy_pipeline_fix"`).
+    const resourceStart = serverTf.indexOf(
+      'resource "terraform_data" "deploy_pipeline_fix"',
+    );
+    expect(resourceStart).toBeGreaterThanOrEqual(0);
+    // Bound by the next top-level HCL block — `resource`, `data`, `module`,
+    // `output`, `locals`, `variable`, `provider`, `terraform`. Bare `\nresource `
+    // would absorb downstream non-resource blocks if `deploy_pipeline_fix`
+    // ever became the last `resource` in the file (P2 review finding).
+    const TOP_LEVEL_BLOCK_RE =
+      /\n(resource|data|module|output|locals|variable|provider|terraform)\b/;
+    const tail = serverTf.slice(resourceStart + 1);
+    const tailMatch = tail.match(TOP_LEVEL_BLOCK_RE);
+    const resourceBlock =
+      tailMatch && tailMatch.index !== undefined
+        ? serverTf.slice(resourceStart, resourceStart + 1 + tailMatch.index)
+        : serverTf.slice(resourceStart);
+
+    const blockMatch = resourceBlock.match(
+      /triggers_replace\s*=\s*sha256\(join\(\s*",\s*"\s*,\s*\[([\s\S]*?)\]\s*\)\s*\)/,
+    );
+    expect(blockMatch).not.toBeNull();
+    const inner = blockMatch![1];
+
+    // Direct file() references.
+    const fileBasenames = Array.from(
+      inner.matchAll(/file\(\s*"\$\{path\.module\}\/([^"]+)"\s*\)/g),
+    ).map((m) => m[1]);
+
+    // local.<name> references → resolved against the file-level `locals { ... }`
+    // block. Scoping the lookup (rather than searching the whole file) keeps the
+    // resolver from accidentally matching same-named identifiers in unrelated
+    // contexts (P2 review finding).
+    // `^locals` (file start) or `\nlocals` (subsequent line). Closing brace on
+    // its own line at column 0 (`\n}`) bounds the body — the templatefile()'s
+    // nested `})` is column-2 indented and won't match.
+    const localsBlockMatch = serverTf.match(/(?:^|\n)locals\s*\{([\s\S]*?)\n\}/);
+    if (!localsBlockMatch) {
+      throw new Error(
+        "server.tf has no top-level `locals { ... }` block but " +
+          "triggers_replace references `local.*` — refactor required.",
+      );
+    }
+    const localsBody = localsBlockMatch[1];
+
+    const localNames = Array.from(inner.matchAll(/\blocal\.([A-Za-z0-9_]+)\b/g)).map(
+      (m) => m[1],
+    );
+    const templatefileBasenames = localNames.map((name) => {
+      const escaped = name.replace(/[.+*?^$(){}|[\]\\]/g, "\\$&");
+      const localMatch = localsBody.match(
+        new RegExp(
+          `\\b${escaped}\\s*=\\s*templatefile\\(\\s*"\\$\\{path\\.module\\}/([^"]+)"`,
+        ),
+      );
+      if (!localMatch) {
+        throw new Error(
+          `triggers_replace references local.${name} but no matching ` +
+            `\`${name} = templatefile("\${path.module}/...")\` was found in the ` +
+            `top-level locals { ... } block. Either add the local definition, or ` +
+            `replace the local with a direct file()/templatefile() reference.`,
+        );
+      }
+      return localMatch[1];
+    });
+
+    // Order-insensitive comparison: regex alternation is commutative, so the
+    // physical order in server.tf vs. TRIGGER_FILES is irrelevant for gate
+    // semantics. The token-for-token bash-array test above (line ~125) is
+    // where editorial ordering between SKILL.md and TRIGGER_FILES is enforced.
+    const triggerBasenames = [...fileBasenames, ...templatefileBasenames].sort();
+    const fixtureBasenames = TRIGGER_FILES.map((p) => p.split("/").pop()!).sort();
+
+    expect(triggerBasenames).toEqual(fixtureBasenames);
+  });
 });
 
 describe("postmerge runbook updates (#3034)", () => {
