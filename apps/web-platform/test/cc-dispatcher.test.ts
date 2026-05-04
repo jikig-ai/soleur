@@ -350,6 +350,96 @@ describe("cc-dispatcher singletons + orchestration", () => {
     expect(dispatchMirrors).toHaveLength(2);
   });
 
+  // ---------------------------------------------------------------------------
+  // KB Concierge bug fixes:
+  //  - artifactPath / documentKind / documentContent are forwarded to
+  //    `runner.dispatch` so the system prompt injects document context
+  //    (regression: PR #2901 cutover dropped this on the soleur-go path).
+  //  - dispatchSoleurGo wires `events.onTextTurnEnd` to emit a `stream_end`
+  //    WS event for `cc_router` so the bubble transitions out of
+  //    "streaming" and the MarkdownRenderer engages.
+  // ---------------------------------------------------------------------------
+  it("KB Concierge: forwards artifactPath + documentKind + documentContent to runner.dispatch", async () => {
+    const { __setCcRunnerForTests } = await import("@/server/cc-dispatcher");
+    const dispatchSpy = vi.fn(async (_args: unknown) => ({ queryReused: false }));
+    const stubRunner = {
+      dispatch: dispatchSpy,
+      hasActiveQuery: () => false,
+      activeQueriesSize: () => 0,
+      reapIdle: () => 0,
+      closeConversation: () => {},
+      respondToToolUse: () => false,
+      notifyAwaitingUser: () => {},
+      // biome-ignore lint/suspicious/noExplicitAny: minimal stub
+    } as any;
+    __setCcRunnerForTests(stubRunner);
+
+    const sendToClient = vi.fn().mockReturnValue(true);
+    const persistActiveWorkflow = vi.fn().mockResolvedValue(undefined);
+
+    await dispatchSoleurGo({
+      userId: "u-kb",
+      conversationId: "conv-kb",
+      userMessage: "summarize this document",
+      currentRouting: { kind: "soleur_go_pending" },
+      sendToClient,
+      persistActiveWorkflow,
+      artifactPath: "knowledge-base/foo.pdf",
+      documentKind: "pdf",
+    });
+
+    expect(dispatchSpy).toHaveBeenCalledTimes(1);
+    const arg = dispatchSpy.mock.calls[0][0] as {
+      artifactPath?: string;
+      documentKind?: string;
+      documentContent?: string;
+    };
+    expect(arg.artifactPath).toBe("knowledge-base/foo.pdf");
+    expect(arg.documentKind).toBe("pdf");
+  });
+
+  it("KB Concierge: emits stream_end{leaderId:cc_router} when runner fires events.onTextTurnEnd", async () => {
+    const { __setCcRunnerForTests } = await import("@/server/cc-dispatcher");
+    const stubRunner = {
+      dispatch: vi.fn(async (args: { events: { onTextTurnEnd?: () => void } }) => {
+        // Simulate the runner emitting a turn-boundary signal.
+        args.events.onTextTurnEnd?.();
+        return { queryReused: false };
+      }),
+      hasActiveQuery: () => false,
+      activeQueriesSize: () => 0,
+      reapIdle: () => 0,
+      closeConversation: () => {},
+      respondToToolUse: () => false,
+      notifyAwaitingUser: () => {},
+      // biome-ignore lint/suspicious/noExplicitAny: minimal stub
+    } as any;
+    __setCcRunnerForTests(stubRunner);
+
+    const sendToClient = vi.fn().mockReturnValue(true);
+    const persistActiveWorkflow = vi.fn().mockResolvedValue(undefined);
+
+    await dispatchSoleurGo({
+      userId: "u-streamend",
+      conversationId: "conv-streamend",
+      userMessage: "hi",
+      currentRouting: { kind: "soleur_go_pending" },
+      sendToClient,
+      persistActiveWorkflow,
+    });
+
+    const streamEndCalls = sendToClient.mock.calls.filter(
+      ([, msg]) =>
+        msg && typeof msg === "object" && (msg as { type?: string }).type === "stream_end",
+    );
+    expect(streamEndCalls.length).toBe(1);
+    const frame = streamEndCalls[0][1] as {
+      type: string;
+      leaderId?: string;
+    };
+    expect(frame.leaderId).toBe("cc_router");
+  });
+
   it("T19b: dispatchSoleurGo surfaces generic message (no errorCode) for unrelated errors", async () => {
     const sendToClient = vi.fn().mockReturnValue(true);
     const persistActiveWorkflow = vi.fn().mockResolvedValue(undefined);

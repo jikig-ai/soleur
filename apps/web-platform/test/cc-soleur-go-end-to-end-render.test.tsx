@@ -186,6 +186,42 @@ describe("cc-soleur-go end-to-end reducer + render", () => {
     expect(state.messages.length).toBe(0);
   });
 
+  test("KB Concierge: stream → stream_end transitions cc_router bubble to 'done' so MarkdownRenderer engages", () => {
+    // Drives the wire sequence the cc-dispatcher emits for a Concierge
+    // turn that contains markdown. Without `stream_end`, the bubble would
+    // stay in `state: "streaming"` (whitespace-pre-wrap raw text).
+    const state = replay([
+      {
+        type: "stream_start",
+        leaderId: "cc_router" as DomainLeaderId,
+        source: "auto",
+      } as StreamEventArg,
+      {
+        type: "stream",
+        content: "**bold** text and a list:\n- one\n- two",
+        partial: true,
+        leaderId: "cc_router" as DomainLeaderId,
+      } as StreamEventArg,
+      {
+        type: "stream_end",
+        leaderId: "cc_router" as DomainLeaderId,
+      } as StreamEventArg,
+    ]);
+    const bubble = state.messages.find(
+      (m) => m.type === "text" && m.leaderId === "cc_router",
+    );
+    expect(bubble).toBeDefined();
+    if (bubble && bubble.type === "text") {
+      // Bubble must be in "done" so message-bubble.tsx:263 engages
+      // MarkdownRenderer instead of the raw <p whitespace-pre-wrap> branch
+      // at message-bubble.tsx:219-225.
+      expect(bubble.state).toBe("done");
+      expect(bubble.content).toContain("**bold**");
+    }
+    // activeStreams must no longer track cc_router after stream_end.
+    expect(state.activeStreams.has("cc_router" as DomainLeaderId)).toBe(false);
+  });
+
   test("ToolUseChip renders the Stage 4 chip variant from a real reducer message", () => {
     const state = replay([
       {
