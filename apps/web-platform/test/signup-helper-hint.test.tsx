@@ -1,15 +1,17 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ push: vi.fn(), refresh: vi.fn() }),
   useSearchParams: () => new URLSearchParams(),
 }));
 
+const signInWithOtpMock = vi.fn();
+
 vi.mock("@/lib/supabase/client", () => ({
   createClient: () => ({
     auth: {
-      signInWithOtp: vi.fn(),
+      signInWithOtp: signInWithOtpMock,
       signInWithOAuth: vi.fn(),
       verifyOtp: vi.fn(),
     },
@@ -21,6 +23,11 @@ import SignupPage from "@/app/(auth)/signup/page";
 const HINT_COPY = "Accept the terms above to continue.";
 const OAUTH_PROVIDERS = ["Google", "Apple", "GitHub", "Microsoft"] as const;
 
+// The signup page also renders a separate role=status banner when the user
+// arrives via /login redirect with `?reason=no-account`. The default test
+// setup uses an empty URLSearchParams so that banner does NOT render — but
+// the unique selector below uses data-testid for stability against a future
+// refactor that adds another live region above the divider.
 describe("SignupPage helper hint (T&C-gated OAuth)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -45,8 +52,12 @@ describe("SignupPage helper hint (T&C-gated OAuth)", () => {
     fireEvent.click(screen.getByRole("checkbox"));
 
     // Live-region pre-exists invariant: element stays in DOM, text empties.
-    expect(screen.getByTestId("tc-hint")).toBeInTheDocument();
-    expect(screen.getByTestId("tc-hint")).toHaveTextContent("");
+    const afterTick = screen.getByTestId("tc-hint");
+    expect(afterTick).toBeInTheDocument();
+    expect(afterTick).toHaveTextContent("");
+    // aria-live MUST persist across the text swap so the announcement
+    // pipeline keeps observing this region for future content changes.
+    expect(afterTick).toHaveAttribute("aria-live", "polite");
   });
 
   it("keeps every OAuth provider button disabled before the checkbox is ticked", () => {
@@ -56,7 +67,9 @@ describe("SignupPage helper hint (T&C-gated OAuth)", () => {
       const button = screen.getByRole("button", {
         name: new RegExp(`Continue with ${label}`, "i"),
       });
-      expect(button).toBeDisabled();
+      // Include the provider label in the failure message so a regression
+      // pinpoints which provider broke without re-running.
+      expect(button, `OAuth provider ${label} should be disabled pre-tick`).toBeDisabled();
     }
   });
 
@@ -69,7 +82,27 @@ describe("SignupPage helper hint (T&C-gated OAuth)", () => {
       const button = screen.getByRole("button", {
         name: new RegExp(`Continue with ${label}`, "i"),
       });
-      expect(button).not.toBeDisabled();
+      expect(button, `OAuth provider ${label} should be enabled post-tick`).not.toBeDisabled();
     }
+  });
+
+  it("does NOT render the hint in the OTP-sent step (form has unmounted)", async () => {
+    // Regression guard: the live region lives in the pre-OTP form branch
+    // only. If a future refactor lifts the live region above the otpSent
+    // conditional, the announce-on-mount bug returns. Drive the page into
+    // the OTP step and assert the hint is gone.
+    signInWithOtpMock.mockResolvedValueOnce({ error: null });
+    render(<SignupPage />);
+
+    fireEvent.change(screen.getByPlaceholderText(/you@example.com/i), {
+      target: { value: "test@example.com" },
+    });
+    fireEvent.click(screen.getByRole("checkbox"));
+    fireEvent.click(screen.getByRole("button", { name: /send verification code/i }));
+
+    await waitFor(() => {
+      expect(screen.queryByText(/enter verification code/i)).toBeInTheDocument();
+    });
+    expect(screen.queryByTestId("tc-hint")).not.toBeInTheDocument();
   });
 });

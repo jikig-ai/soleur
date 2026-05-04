@@ -69,38 +69,42 @@ const workflowPath = path.join(
   ".github/workflows/scheduled-oauth-probe.yml",
 );
 
-// Extract just the probe_github_redirect_uri function body so contract
-// assertions don't pass on stale matches in comments or unrelated steps.
-// The function opens with `<10-space-indent>probe_github_redirect_uri() {`
-// and closes with `<10-space-indent>}` (intermediate `}` from `|| {` blocks
-// are deeper-indented at 12 spaces, so we anchor on exactly 10).
-function extractProbeFnBody(yaml: string): string {
-  const match = yaml.match(
-    /probe_github_redirect_uri\(\)\s*\{[\s\S]*?\n {10}\}/,
-  );
-  if (!match) {
+// Extract a bash function body from the workflow's `run: |` script, robust
+// to indentation reflows. Finds the `<name>()` opening line via a same-line
+// regex that captures its leading indentation, then locates the matching
+// close brace at the same indentation. Intermediate `}` from `|| { … }`
+// blocks are deeper-indented than the function declaration, so the same-
+// indentation anchor is reliable.
+//
+// Replaces the prior `\n {10}\}` literal-indent pattern used for both
+// extractors (PR #3199 — the literal-indent pattern was a YAML-reformat
+// landmine; with two probe functions it doubled the surface area).
+function extractFunctionBody(yaml: string, name: string): string {
+  const declRe = new RegExp(`(?:^|\\n)([ \\t]+)${name}\\(\\)\\s*\\{`);
+  const decl = yaml.match(declRe);
+  if (!decl || decl.index === undefined) {
     throw new Error(
-      "probe_github_redirect_uri function not found in workflow — has it been renamed or removed?",
+      `${name} function not found in workflow — has it been renamed or removed?`,
     );
   }
-  return match[0];
+  const indent = decl[1];
+  const start = decl.index + (decl[0].startsWith("\n") ? 1 : 0);
+  const tail = yaml.slice(start);
+  const closeRe = new RegExp(`\\n${indent}\\}(?:\\n|$)`);
+  const close = tail.match(closeRe);
+  if (!close || close.index === undefined) {
+    throw new Error(
+      `${name} function close brace not found at indent="${indent.replace(/\t/g, "\\t")}" — workflow may be malformed`,
+    );
+  }
+  return tail.slice(0, close.index + close[0].length);
 }
 
-// Same anchoring strategy for the user-shape end-to-end probe added in
-// PR #3199 (signup OAuth helper hint + recurrence audit). This probe
-// follows Supabase's 302 into GitHub's authorize page using the user's
-// captured URL shape (redirect_to + redirect_uri together).
-function extractSupabaseShapeFnBody(yaml: string): string {
-  const match = yaml.match(
-    /probe_github_supabase_shape_e2e\(\)\s*\{[\s\S]*?\n {10}\}/,
-  );
-  if (!match) {
-    throw new Error(
-      "probe_github_supabase_shape_e2e function not found in workflow — has it been renamed or removed?",
-    );
-  }
-  return match[0];
-}
+const extractProbeFnBody = (yaml: string) =>
+  extractFunctionBody(yaml, "probe_github_redirect_uri");
+
+const extractSupabaseShapeFnBody = (yaml: string) =>
+  extractFunctionBody(yaml, "probe_github_supabase_shape_e2e");
 
 describe("scheduled-oauth-probe.yml — GitHub redirect_uri probe contract", () => {
   test("workflow file exists at the expected path", () => {
@@ -207,9 +211,12 @@ describe("scheduled-oauth-probe.yml — GitHub redirect_uri probe contract", () 
     // /auth/v1/authorize?provider=github&redirect_to=... endpoint, which
     // 302s to GitHub with redirect_to AND redirect_uri in the same query
     // string. A future drift could pass the in-isolation probes while
-    // failing this combined shape. Lock the grep target.
+    // failing this combined shape. Lock the grep target — assert against
+    // the function body, not raw YAML, so a stray comment match cannot
+    // make this assertion pass vacuously.
     const yaml = readFileSync(workflowPath, "utf-8");
-    expect(yaml).toContain(SUPABASE_SHAPE_AUTHORIZE_PATH);
+    const fnBody = extractSupabaseShapeFnBody(yaml);
+    expect(fnBody).toContain(SUPABASE_SHAPE_AUTHORIZE_PATH);
   });
 
   test("supabase-shape probe function exists and uses log-injection-strip", () => {
@@ -248,12 +255,22 @@ describe("scheduled-oauth-probe.yml — GitHub redirect_uri probe contract", () 
     expect(matches.length).toBe(1);
   });
 
-  test("supabase-shape e2e failure mode is wired into the case switch", () => {
+  test("supabase-shape e2e failure mode is recorded and case-switch-routed", () => {
     // Plan acceptance criterion: the failure-mode branch must include the
     // new failure mode so the operator gets the same in-issue remediation
     // guidance (the "Required GitHub App callback URLs" block).
+    //
+    // (a) Literal must appear inside the probe function (not just a comment
+    //     somewhere) — proves it is an actual record_failure value.
+    // (b) The issue-body case switch must include a glob that captures it —
+    //     proves the operator-facing remediation block fires for this mode.
     const yaml = readFileSync(workflowPath, "utf-8");
-    expect(yaml).toContain("github_oauth_supabase_shape_e2e_unregistered");
+    const fnBody = extractSupabaseShapeFnBody(yaml);
+    expect(fnBody).toContain("github_oauth_supabase_shape_e2e_unregistered");
+    // The existing glob "github_oauth_*_unregistered" matches the new mode.
+    // Lock its presence so a future case-switch refactor that drops the glob
+    // doesn't silently strip the remediation block.
+    expect(yaml).toMatch(/github_oauth_\*_unregistered/);
   });
 });
 

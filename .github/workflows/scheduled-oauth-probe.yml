@@ -213,9 +213,12 @@ jobs:
           # All inputs are env-vars (APP_HOST, API_HOST) or sanitized via
           # strip_log_injection before any echo/record_failure interpolation.
           probe_github_supabase_shape_e2e() {
+            # Parameter is named `redirect_to` (Supabase's query-param name);
+            # the safe (strip-log-injection) variable carries the workflow's
+            # `_safe` suffix convention shared with probe_github_redirect_uri.
             local redirect_to="$1"
             local supabase_url enc line http redirect_url body_file
-            local redirect_uri_safe
+            local redirect_uri_safe redirect_url_safe
             redirect_uri_safe=$(strip_log_injection "$redirect_to")
 
             enc=$(jq -nr --arg u "$redirect_to" '$u|@uri')
@@ -223,17 +226,19 @@ jobs:
 
             # Leg 1 — capture Supabase 302 location.
             line=$(curl -s --max-time 10 --max-redirs 0 -o /dev/null \
+              -H "User-Agent: soleur-oauth-probe/1.0" \
               -w '%{http_code} %{redirect_url}' "$supabase_url" 2>/dev/null) \
               || line="network_error"
             if [[ "$line" == "network_error" ]]; then
-              record_failure "github_oauth_supabase_shape_e2e_network" \
-                "GET ${supabase_url} -> curl error (DNS, TLS, or connect; see runbook)"
+              record_failure "github_oauth_supabase_shape_e2e_supabase_network" \
+                "Supabase /auth/v1/authorize for redirect_to=${redirect_uri_safe} -> curl error (DNS, TLS, or connect; see runbook)"
               return
             fi
             http=${line%% *}
             redirect_url=${line#* }
+            redirect_url_safe=$(strip_log_injection "$redirect_url")
             if [[ "$http" != "302" ]]; then
-              record_failure "github_oauth_supabase_shape_e2e_network" \
+              record_failure "github_oauth_supabase_shape_e2e_supabase_http" \
                 "Supabase /auth/v1/authorize for redirect_to=${redirect_uri_safe} -> HTTP ${http} (see runbook)"
               return
             fi
@@ -246,18 +251,18 @@ jobs:
               -H "User-Agent: soleur-oauth-probe/1.0" \
               -w '%{http_code}' \
               "$redirect_url" 2>/dev/null) || {
-              record_failure "github_oauth_supabase_shape_e2e_network" \
-                "Follow Supabase 302 for redirect_to=${redirect_uri_safe} -> curl error (see runbook)"
+              record_failure "github_oauth_supabase_shape_e2e_github_network" \
+                "Follow Supabase 302 for redirect_to=${redirect_uri_safe} -> curl error against ${redirect_url_safe} (see runbook)"
               return
             }
             if [[ "$http" != "200" ]]; then
-              record_failure "github_oauth_supabase_shape_e2e_network" \
-                "Follow Supabase 302 for redirect_to=${redirect_uri_safe} -> HTTP ${http} (see runbook)"
+              record_failure "github_oauth_supabase_shape_e2e_github_http" \
+                "Follow Supabase 302 for redirect_to=${redirect_uri_safe} -> HTTP ${http} from ${redirect_url_safe} (see runbook)"
               return
             fi
             if grep -q "redirect_uri is not associated" "$body_file"; then
               record_failure "github_oauth_supabase_shape_e2e_unregistered" \
-                "GitHub rejected user-shape redirect_uri (Supabase Flow A) for redirect_to=${redirect_uri_safe} — operator must audit GitHub App callback list (see runbook)"
+                "GitHub rejected user-shape redirect_uri (Supabase Flow A) for redirect_to=${redirect_uri_safe}; rejected at ${redirect_url_safe} — operator must audit GitHub App callback list (see runbook)"
               return
             fi
             if grep -q "Application suspended" "$body_file"; then
@@ -267,7 +272,7 @@ jobs:
             fi
             if ! grep -qE 'name="authenticity_token"|Sign in to GitHub|Authorize [A-Z]' "$body_file"; then
               record_failure "github_oauth_supabase_shape_e2e_html_drift" \
-                "Supabase-shape authorize response for redirect_to=${redirect_uri_safe} lacked GitHub-specific anchors — refresh sentinels in oauth-probe-contract.test.ts (see runbook)"
+                "Supabase-shape authorize response for redirect_to=${redirect_uri_safe} (followed to ${redirect_url_safe}) lacked GitHub-specific anchors — refresh sentinels in oauth-probe-contract.test.ts (see runbook)"
               return
             fi
           }
