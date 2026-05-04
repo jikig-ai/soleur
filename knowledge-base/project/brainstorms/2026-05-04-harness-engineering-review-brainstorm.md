@@ -117,9 +117,16 @@ Rather than a single sweeping refactor, treat each theme as an independent track
 
 ## Open Questions
 
-- Which themes (A-F) does the operator want to convert into tracked GitHub issues right now?
-- Is there appetite for D1 (regression eval suite) as the first track? It's the most novel and most directly answers "are we doing harness engineering well?"
-- Should mutation testing (A1) pilot on `apps/web-platform/server/` or wait for a less time-pressured moment?
+- Which themes (A-F) does the operator want to convert into tracked GitHub issues right now? **Resolved 2026-05-04:** D+C2, A, C1+C3.
+- Is there appetite for D1 (regression eval suite) as the first track? It's the most novel and most directly answers "are we doing harness engineering well?" **Resolved:** yes — see #3120.
+- Should mutation testing (A1) pilot on `apps/web-platform/server/` or wait for a less time-pressured moment? **Deferred to issue #3121.**
+
+## Tracked Follow-ups
+
+- #3120 — Harness eval suite + stale-rule reporter (Theme D+C2)
+- #3121 — Behavior harness uplift: mutation testing, golden tests, ATDD, fitness functions (Theme A)
+- #3122 — Scheduled audits + skill freshness telemetry (Theme C1+C3)
+- Themes B, E, F: not converted to issues this session — captured here for future reference.
 
 ## Domain Assessments
 
