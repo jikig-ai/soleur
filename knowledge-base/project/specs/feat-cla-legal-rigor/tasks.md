@@ -7,23 +7,23 @@
 
 ## Phase 1: R2 evidence-bucket Terraform foundation
 
-- [ ] 1.1 Create directory `apps/cla-evidence/infra/`
-- [ ] 1.2 Write `main.tf` (R2 backend `key = "cla-evidence/terraform.tfstate"`, `use_lockfile = false`, Cloudflare provider `~> 4.0`)
-- [ ] 1.3 Write `bucket.tf` (`cloudflare_r2_bucket name = "soleur-cla-evidence"`, `location_hint = "weur"`, `lifecycle.prevent_destroy = true`)
-- [ ] 1.4 Write `object_lock.tf` (Governance mode, 3650-day default retention)
-- [ ] 1.5 Write `iam.tf` (object-write token + state-write token, distinct; no IP allowlist)
-- [ ] 1.6 Write `outputs.tf` (sensitive credentials, no plaintext)
-- [ ] 1.7 Write `variables.tf` (cf_api_token, cf_account_id)
-- [ ] 1.8 Write `README.md` (ownership, retention, single-writer apply assumption per learning #8)
-- [ ] 1.9 Write `main.test.sh` (terraform validate, fmt-check, lint for Governance + 3650 + prevent_destroy)
+- [x] 1.1 Create directory `apps/cla-evidence/infra/`
+- [x] 1.2 Write `main.tf` (R2 backend `key = "cla-evidence/terraform.tfstate"`, `use_lockfile = false`, Cloudflare provider `~> 4.0`)
+- [x] 1.3 Write `bucket.tf` (`cloudflare_r2_bucket name = "soleur-cla-evidence"`, `location_hint = "weur"`, `lifecycle.prevent_destroy = true`)
+- [x] 1.4 Write `object_lock.tf` (Governance mode, 3650-day default retention)
+- [x] 1.5 Write `iam.tf` (object-write token + state-write token, distinct; no IP allowlist)
+- [x] 1.6 Write `outputs.tf` (sensitive credentials, no plaintext)
+- [x] 1.7 Write `variables.tf` (cf_api_token, cf_account_id)
+- [x] 1.8 Write `README.md` (ownership, retention, single-writer apply assumption per learning #8)
+- [x] 1.9 Write `main.test.sh` (terraform validate, fmt-check, lint for Governance + 3650 + prevent_destroy)
 - [ ] 1.10 **Operator action (per-command ack required):** `cd apps/cla-evidence/infra && terraform init && terraform apply`
 - [ ] 1.11 Verify post-apply: `aws s3api get-object-lock-configuration` returns Governance + 3650
 - [ ] 1.12 **Operator action:** `doppler configs create prd_cla --project soleur`
 - [ ] 1.13 Set Doppler `prd_cla` config secrets (R2 access-key + secret) from Terraform outputs
 - [ ] 1.14 Generate Doppler service token scoped to `prd_cla` (per learning #9 — config-pinned)
 - [ ] 1.15 **Operator action:** `gh secret set DOPPLER_TOKEN_CLA --body "$token"`
-- [ ] 1.16 Add expense ledger entry to `knowledge-base/operations/expenses.md`
-- [ ] 1.17 Add cross-link section to `knowledge-base/engineering/ops/runbooks/cloudflare-service-token-rotation.md`
+- [x] 1.16 Add expense ledger entry to `knowledge-base/operations/expenses.md`
+- [x] 1.17 Add cross-link section to `knowledge-base/engineering/ops/runbooks/cloudflare-service-token-rotation.md`
 - [ ] 1.18 Extend `infra-validation.yml` to run `terraform plan` against `apps/cla-evidence/infra/` (zero-drift gate)
 
 ## Phase 2: Sidecar workflow + receipt comment (TDD, RED first)
