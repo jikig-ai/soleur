@@ -29,6 +29,12 @@ describe("CtaBanner close affordance", () => {
   });
 
   it("does not render when sessionStorage already marks the banner dismissed", () => {
+    // Control: with cleared storage the banner MUST render — proves the
+    // dismissed-key assertion below is gated on storage, not on always-null.
+    const control = render(<CtaBanner />);
+    expect(screen.getByRole("link", { name: /create your account/i })).toBeTruthy();
+    control.unmount();
+
     sessionStorage.setItem(STORAGE_KEY, "1");
     render(<CtaBanner />);
     expect(screen.queryByRole("link", { name: /create your account/i })).toBeNull();
@@ -45,27 +51,24 @@ describe("CtaBanner close affordance", () => {
     expect(sessionStorage.getItem(STORAGE_KEY)).toBe("1");
   });
 
-  it("renders and dismisses without throwing when sessionStorage access throws", () => {
-    const getSpy = vi
-      .spyOn(Storage.prototype, "getItem")
-      .mockImplementation(() => {
-        throw new Error("storage unavailable");
-      });
-    const setSpy = vi
-      .spyOn(Storage.prototype, "setItem")
-      .mockImplementation(() => {
-        throw new Error("storage unavailable");
-      });
+  it("renders without throwing when sessionStorage.getItem throws", () => {
+    vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => {
+      throw new Error("storage unavailable");
+    });
 
     expect(() => render(<CtaBanner />)).not.toThrow();
     expect(screen.getByRole("link", { name: /create your account/i })).toBeTruthy();
+  });
 
+  it("dismisses without throwing when sessionStorage.setItem throws", () => {
+    vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+      throw new Error("storage unavailable");
+    });
+
+    render(<CtaBanner />);
     expect(() =>
       fireEvent.click(screen.getByTestId("cta-banner-dismiss")),
     ).not.toThrow();
     expect(screen.queryByRole("link", { name: /create your account/i })).toBeNull();
-
-    getSpy.mockRestore();
-    setSpy.mockRestore();
   });
 });

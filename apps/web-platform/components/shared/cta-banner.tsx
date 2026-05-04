@@ -2,37 +2,19 @@
 
 import Link from "next/link";
 import { useState } from "react";
+import { safeSession } from "@/lib/safe-session";
 
-// Storage convention: soleur:<surface>:<key>
-// Sessionwide on purpose: a fresh tab/visit re-prompts; one close survives reloads
-// in the same tab. Do not change to localStorage without product/marketing review.
 const STORAGE_KEY = "soleur:shared:cta-dismissed";
 
-function getInitialDismissed(): boolean {
-  if (typeof window === "undefined") return false;
-  try {
-    return window.sessionStorage.getItem(STORAGE_KEY) === "1";
-  } catch {
-    return false;
-  }
-}
-
-function persistDismissed(): void {
-  if (typeof window === "undefined") return;
-  try {
-    window.sessionStorage.setItem(STORAGE_KEY, "1");
-  } catch {
-    // sessionStorage unavailable (Safari private mode, sandboxed iframe) -- in-memory only.
-  }
-}
-
 export function CtaBanner() {
-  const [dismissed, setDismissed] = useState<boolean>(getInitialDismissed);
+  const [dismissed, setDismissed] = useState<boolean>(
+    () => safeSession(STORAGE_KEY) === "1",
+  );
 
   if (dismissed) return null;
 
   function handleDismiss() {
-    persistDismissed();
+    safeSession(STORAGE_KEY, "1");
     setDismissed(true);
   }
 
