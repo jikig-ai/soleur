@@ -50,7 +50,7 @@ tags = ["key", "soleur", "byok"]
 [[rules]]
 id = "doppler-api-token"
 description = "Doppler personal/service/service-account/CLI token"
-regex = '''dp\.(?:pt|st|sa|ct)\.[A-Za-z0-9]{40,}'''
+regex = '''dp\.(?:pt|st|sa|ct)\.[A-Za-z0-9_\-]{40,}'''
 keywords = ["dp.pt.", "dp.st.", "dp.sa.", "dp.ct."]
 tags = ["token", "doppler"]
   [[rules.allowlists]]

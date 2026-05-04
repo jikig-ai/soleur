@@ -31,54 +31,77 @@ const UUID_RE = /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\
 const SUPABASE_REF_RE = /\b([a-z0-9]{20})\.supabase\.co\b/g;
 
 const WAIVER_RE = /(?:#|\/\/)\s*gitleaks:allow\b(.*)$/;
-const WAIVER_TRAILER_RE = /issue:#\d+\s+\S+/;
+const WAIVER_TRAILER_RE = /issue:#\d+\s+\S{3,}/;
+
+// Heuristic: NUL byte in the first 8 KiB → treat as binary and skip.
+function looksBinary(buf) {
+  const slice = buf.subarray(0, Math.min(buf.length, 8192));
+  for (let i = 0; i < slice.length; i++) {
+    if (slice[i] === 0) return true;
+  }
+  return false;
+}
 
 function lintLine(line) {
   // Honor + validate waivers FIRST so a malformed waiver fails noisily.
   const waiver = WAIVER_RE.exec(line);
   if (waiver) {
     if (!WAIVER_TRAILER_RE.test(waiver[1] ?? "")) {
-      return "waiver missing 'issue:#NNN <reason>' trailer";
+      return ["waiver missing 'issue:#NNN <reason>' trailer (reason must be ≥3 chars)"];
     }
     return null;
   }
 
+  const reasons = [];
+
   for (const match of line.matchAll(REAL_EMAIL)) {
     const host = match[2];
     if (!ALLOWED_EMAIL_HOSTS.test(host)) {
-      return `real-looking email '${match[0]}' (use @example.com / @test.local / @fixtures.local)`;
+      reasons.push(
+        `real-looking email '${match[0]}' (use @example.com / @test.local / @fixtures.local)`,
+      );
     }
   }
 
   for (const match of line.matchAll(UUID_RE)) {
     const uuid = match[0].toLowerCase();
     if (!ALLOWED_UUIDS.has(uuid)) {
-      return `prod-shape UUID '${uuid}' (use a value from ALLOWED_UUIDS or add via PR)`;
+      reasons.push(
+        `prod-shape UUID '${uuid}' (use a value from ALLOWED_UUIDS or add via PR)`,
+      );
     }
   }
 
   for (const match of line.matchAll(SUPABASE_REF_RE)) {
-    return `Supabase prod-shape project ref '${match[0]}'`;
+    reasons.push(`Supabase prod-shape project ref '${match[0]}'`);
   }
 
-  return null;
+  return reasons.length > 0 ? reasons : null;
 }
 
 function lintFile(path) {
   let stat;
   try {
     stat = statSync(path);
-  } catch {
-    return []; // file deleted in the same staged change — skip
+  } catch (err) {
+    if (err && err.code === "ENOENT") return []; // file deleted in same staged change
+    throw err;
   }
   if (!stat.isFile()) return [];
 
-  const content = readFileSync(path, "utf8");
+  const buf = readFileSync(path);
+  if (looksBinary(buf)) return [];
+
+  const content = buf.toString("utf8");
   const findings = [];
   const lines = content.split(/\r?\n/);
   for (let i = 0; i < lines.length; i++) {
-    const reason = lintLine(lines[i]);
-    if (reason) findings.push({ path, line: i + 1, reason });
+    const reasons = lintLine(lines[i]);
+    if (reasons) {
+      for (const reason of reasons) {
+        findings.push({ path, line: i + 1, reason });
+      }
+    }
   }
   return findings;
 }
