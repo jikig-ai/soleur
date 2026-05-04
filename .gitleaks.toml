@@ -89,7 +89,7 @@ keywords = ["sk-soleur-"]
 tags = ["key", "soleur", "byok"]
   [[rules.allowlists]]
   description = "Synthesized fixture paths"
-  paths = ['''__goldens__/.*''', '''(__snapshots__|__goldens__)/.*\.snap$''', '''apps/web-platform/test/__synthesized__/.*''', '''reports/mutation/.*''']
+  paths = ['''__goldens__/.*''', '''(__snapshots__|__goldens__)/.*\.snap$''', '''apps/web-platform/test/__synthesized__/.*''', '''reports/mutation/.*''', '''apps/web-platform/test/.*\.test\.(ts|tsx)$''', '''apps/web-platform/infra/.*\.test\.sh$''', '''knowledge-base/.*/(plans|specs)/.*\.md$''', '''knowledge-base/plans/.*\.md$''', '''plugins/soleur/skills/.*/references/.*\.md$''']
 
 # ---------------------------------------------------------------------------
 # 2. Doppler tokens (personal, service, service-account, CLI)
@@ -106,7 +106,7 @@ regex = '''dp\.(?:pt|st|sa|ct)\.[A-Za-z0-9_\-]{40,}'''
 keywords = ["dp.pt.", "dp.st.", "dp.sa.", "dp.ct."]
 tags = ["token", "doppler"]
   [[rules.allowlists]]
-  paths = ['''__goldens__/.*''', '''(__snapshots__|__goldens__)/.*\.snap$''', '''apps/web-platform/test/__synthesized__/.*''', '''reports/mutation/.*''']
+  paths = ['''__goldens__/.*''', '''(__snapshots__|__goldens__)/.*\.snap$''', '''apps/web-platform/test/__synthesized__/.*''', '''reports/mutation/.*''', '''apps/web-platform/test/.*\.test\.(ts|tsx)$''', '''apps/web-platform/infra/.*\.test\.sh$''', '''knowledge-base/.*/(plans|specs)/.*\.md$''', '''knowledge-base/plans/.*\.md$''', '''plugins/soleur/skills/.*/references/.*\.md$''']
 
 # ---------------------------------------------------------------------------
 # 3. Supabase service-role JWT (HS256 — header eyJhbGciOiJIUzI1NiI...)
@@ -119,7 +119,7 @@ keywords = ["eyJhbGciOiJIUzI1NiI"]
 entropy = 4.5
 tags = ["jwt", "supabase", "service-role"]
   [[rules.allowlists]]
-  paths = ['''__goldens__/.*''', '''(__snapshots__|__goldens__)/.*\.snap$''', '''apps/web-platform/test/__synthesized__/.*''', '''reports/mutation/.*''']
+  paths = ['''__goldens__/.*''', '''(__snapshots__|__goldens__)/.*\.snap$''', '''apps/web-platform/test/__synthesized__/.*''', '''reports/mutation/.*''', '''apps/web-platform/test/.*\.test\.(ts|tsx)$''', '''apps/web-platform/infra/.*\.test\.sh$''', '''knowledge-base/.*/(plans|specs)/.*\.md$''', '''knowledge-base/plans/.*\.md$''', '''plugins/soleur/skills/.*/references/.*\.md$''']
 
 # ---------------------------------------------------------------------------
 # 4. Supabase anon JWT (also HS256 — distinguished by `role: anon` claim,
@@ -136,7 +136,7 @@ keywords = ["eyJhbGciOiJIUzI1NiI", "eyJpc3Mi"]
 entropy = 4.5
 tags = ["jwt", "supabase", "anon"]
   [[rules.allowlists]]
-  paths = ['''__goldens__/.*''', '''(__snapshots__|__goldens__)/.*\.snap$''', '''apps/web-platform/test/__synthesized__/.*''', '''reports/mutation/.*''']
+  paths = ['''__goldens__/.*''', '''(__snapshots__|__goldens__)/.*\.snap$''', '''apps/web-platform/test/__synthesized__/.*''', '''reports/mutation/.*''', '''apps/web-platform/test/.*\.test\.(ts|tsx)$''', '''apps/web-platform/infra/.*\.test\.sh$''', '''knowledge-base/.*/(plans|specs)/.*\.md$''', '''knowledge-base/plans/.*\.md$''', '''plugins/soleur/skills/.*/references/.*\.md$''']
 
 # ---------------------------------------------------------------------------
 # 5. Supabase access token (sbp_)
@@ -148,7 +148,7 @@ regex = '''sbp_[a-f0-9]{40,}'''
 keywords = ["sbp_"]
 tags = ["token", "supabase", "pat"]
   [[rules.allowlists]]
-  paths = ['''__goldens__/.*''', '''(__snapshots__|__goldens__)/.*\.snap$''', '''apps/web-platform/test/__synthesized__/.*''', '''reports/mutation/.*''']
+  paths = ['''__goldens__/.*''', '''(__snapshots__|__goldens__)/.*\.snap$''', '''apps/web-platform/test/__synthesized__/.*''', '''reports/mutation/.*''', '''apps/web-platform/test/.*\.test\.(ts|tsx)$''', '''apps/web-platform/infra/.*\.test\.sh$''', '''knowledge-base/.*/(plans|specs)/.*\.md$''', '''knowledge-base/plans/.*\.md$''', '''plugins/soleur/skills/.*/references/.*\.md$''']
 
 # ---------------------------------------------------------------------------
 # 6. Stripe webhook secret (whsec_)
@@ -162,7 +162,7 @@ regex = '''whsec_[A-Za-z0-9]{32,}'''
 keywords = ["whsec_"]
 tags = ["secret", "stripe", "webhook"]
   [[rules.allowlists]]
-  paths = ['''__goldens__/.*''', '''(__snapshots__|__goldens__)/.*\.snap$''', '''apps/web-platform/test/__synthesized__/.*''', '''reports/mutation/.*''']
+  paths = ['''__goldens__/.*''', '''(__snapshots__|__goldens__)/.*\.snap$''', '''apps/web-platform/test/__synthesized__/.*''', '''reports/mutation/.*''', '''apps/web-platform/test/.*\.test\.(ts|tsx)$''', '''apps/web-platform/infra/.*\.test\.sh$''', '''knowledge-base/.*/(plans|specs)/.*\.md$''', '''knowledge-base/plans/.*\.md$''', '''plugins/soleur/skills/.*/references/.*\.md$''']
 
 # ---------------------------------------------------------------------------
 # 7. Anthropic API key (sk-ant-)
@@ -174,7 +174,7 @@ regex = '''sk-ant-[A-Za-z0-9_\-]{40,}'''
 keywords = ["sk-ant-"]
 tags = ["key", "anthropic"]
   [[rules.allowlists]]
-  paths = ['''__goldens__/.*''', '''(__snapshots__|__goldens__)/.*\.snap$''', '''apps/web-platform/test/__synthesized__/.*''', '''reports/mutation/.*''']
+  paths = ['''__goldens__/.*''', '''(__snapshots__|__goldens__)/.*\.snap$''', '''apps/web-platform/test/__synthesized__/.*''', '''reports/mutation/.*''', '''apps/web-platform/test/.*\.test\.(ts|tsx)$''', '''apps/web-platform/infra/.*\.test\.sh$''', '''knowledge-base/.*/(plans|specs)/.*\.md$''', '''knowledge-base/plans/.*\.md$''', '''plugins/soleur/skills/.*/references/.*\.md$''']
 
 # ---------------------------------------------------------------------------
 # 8. Resend API key (re_)
@@ -186,7 +186,7 @@ regex = '''re_[A-Za-z0-9]{8,}_[A-Za-z0-9]{20,}'''
 keywords = ["re_"]
 tags = ["key", "resend", "email"]
   [[rules.allowlists]]
-  paths = ['''__goldens__/.*''', '''(__snapshots__|__goldens__)/.*\.snap$''', '''apps/web-platform/test/__synthesized__/.*''', '''reports/mutation/.*''']
+  paths = ['''__goldens__/.*''', '''(__snapshots__|__goldens__)/.*\.snap$''', '''apps/web-platform/test/__synthesized__/.*''', '''reports/mutation/.*''', '''apps/web-platform/test/.*\.test\.(ts|tsx)$''', '''apps/web-platform/infra/.*\.test\.sh$''', '''knowledge-base/.*/(plans|specs)/.*\.md$''', '''knowledge-base/plans/.*\.md$''', '''plugins/soleur/skills/.*/references/.*\.md$''']
 
 # ---------------------------------------------------------------------------
 # 9. Cloudflare scoped token (40-char alphanumeric).
@@ -201,7 +201,7 @@ secretGroup = 3
 keywords = ["cloudflare"]
 tags = ["token", "cloudflare"]
   [[rules.allowlists]]
-  paths = ['''__goldens__/.*''', '''(__snapshots__|__goldens__)/.*\.snap$''', '''apps/web-platform/test/__synthesized__/.*''', '''reports/mutation/.*''']
+  paths = ['''__goldens__/.*''', '''(__snapshots__|__goldens__)/.*\.snap$''', '''apps/web-platform/test/__synthesized__/.*''', '''reports/mutation/.*''', '''apps/web-platform/test/.*\.test\.(ts|tsx)$''', '''apps/web-platform/infra/.*\.test\.sh$''', '''knowledge-base/.*/(plans|specs)/.*\.md$''', '''knowledge-base/plans/.*\.md$''', '''plugins/soleur/skills/.*/references/.*\.md$''']
 
 # ---------------------------------------------------------------------------
 # 10. Sentry auth token (sntrys_, sntryu_)
@@ -213,7 +213,7 @@ regex = '''sntr(?:ys|yu)_[A-Za-z0-9_\-]{40,}'''
 keywords = ["sntrys_", "sntryu_"]
 tags = ["token", "sentry"]
   [[rules.allowlists]]
-  paths = ['''__goldens__/.*''', '''(__snapshots__|__goldens__)/.*\.snap$''', '''apps/web-platform/test/__synthesized__/.*''', '''reports/mutation/.*''']
+  paths = ['''__goldens__/.*''', '''(__snapshots__|__goldens__)/.*\.snap$''', '''apps/web-platform/test/__synthesized__/.*''', '''reports/mutation/.*''', '''apps/web-platform/test/.*\.test\.(ts|tsx)$''', '''apps/web-platform/infra/.*\.test\.sh$''', '''knowledge-base/.*/(plans|specs)/.*\.md$''', '''knowledge-base/plans/.*\.md$''', '''plugins/soleur/skills/.*/references/.*\.md$''']
 
 # ---------------------------------------------------------------------------
 # 11. Discord webhook URL
@@ -227,7 +227,7 @@ regex = '''https://(?:canary\.|ptb\.)?discord(?:app)?\.com/api/webhooks/[0-9]{17
 keywords = ["discord.com/api/webhooks", "discordapp.com/api/webhooks"]
 tags = ["webhook", "discord"]
   [[rules.allowlists]]
-  paths = ['''__goldens__/.*''', '''(__snapshots__|__goldens__)/.*\.snap$''', '''apps/web-platform/test/__synthesized__/.*''', '''reports/mutation/.*''']
+  paths = ['''__goldens__/.*''', '''(__snapshots__|__goldens__)/.*\.snap$''', '''apps/web-platform/test/__synthesized__/.*''', '''reports/mutation/.*''', '''apps/web-platform/test/.*\.test\.(ts|tsx)$''', '''apps/web-platform/infra/.*\.test\.sh$''', '''knowledge-base/.*/(plans|specs)/.*\.md$''', '''knowledge-base/plans/.*\.md$''', '''plugins/soleur/skills/.*/references/.*\.md$''']
 
 # ---------------------------------------------------------------------------
 # 12. Database URL with embedded password
@@ -240,7 +240,7 @@ regex = '''postgres(?:ql)?://[^:/\s]+:[^@/\s]+@[A-Za-z0-9.\-]+'''
 keywords = ["postgres://", "postgresql://"]
 tags = ["url", "database", "credential"]
   [[rules.allowlists]]
-  paths = ['''__goldens__/.*''', '''(__snapshots__|__goldens__)/.*\.snap$''', '''apps/web-platform/test/__synthesized__/.*''', '''reports/mutation/.*''']
+  paths = ['''__goldens__/.*''', '''(__snapshots__|__goldens__)/.*\.snap$''', '''apps/web-platform/test/__synthesized__/.*''', '''reports/mutation/.*''', '''apps/web-platform/test/.*\.test\.(ts|tsx)$''', '''apps/web-platform/infra/.*\.test\.sh$''', '''knowledge-base/.*/(plans|specs)/.*\.md$''', '''knowledge-base/plans/.*\.md$''', '''plugins/soleur/skills/.*/references/.*\.md$''']
   # Allow placeholder URLs that ship in docs (postgres://USER:PASSWORD@HOST/DB).
   regexes = ['''postgres(?:ql)?://(?:USER|user|postgres|<[^>]+>):(?:PASSWORD|password|secret|<[^>]+>)@''']
 
@@ -258,4 +258,44 @@ secretGroup = 2
 keywords = ["vapid"]
 tags = ["key", "vapid", "web-push"]
   [[rules.allowlists]]
-  paths = ['''__goldens__/.*''', '''(__snapshots__|__goldens__)/.*\.snap$''', '''apps/web-platform/test/__synthesized__/.*''', '''reports/mutation/.*''']
+  paths = ['''__goldens__/.*''', '''(__snapshots__|__goldens__)/.*\.snap$''', '''apps/web-platform/test/__synthesized__/.*''', '''reports/mutation/.*''', '''apps/web-platform/test/.*\.test\.(ts|tsx)$''', '''apps/web-platform/infra/.*\.test\.sh$''', '''knowledge-base/.*/(plans|specs)/.*\.md$''', '''knowledge-base/plans/.*\.md$''', '''plugins/soleur/skills/.*/references/.*\.md$''']
+
+# ---------------------------------------------------------------------------
+# 14. Default-pack rule overrides (same-id replacement adds path allowlists).
+#     v8.24.2 has no top-level `[[allowlists]]` with `targetRules`; the only
+#     way to attach a path allowlist to a default-pack rule is to redefine it
+#     under the same `id`. The regex/keywords mirror the upstream default
+#     pack — keep in sync on gitleaks bumps. See the doppler-api-token
+#     override above for the proven pattern.
+# ---------------------------------------------------------------------------
+
+[[rules]]
+id = "jwt"
+description = "Uncovered a JSON Web Token (default pack, allowlist-extended)"
+regex = '''ey[A-Za-z0-9_-]{17,}\.ey[A-Za-z0-9_-]{17,}\.[A-Za-z0-9_-]{10,}'''
+keywords = ["ey"]
+tags = ["jwt"]
+  [[rules.allowlists]]
+  description = "Synthesized fixtures, test files, plan/spec/skill-reference docs"
+  paths = ['''__goldens__/.*''', '''(__snapshots__|__goldens__)/.*\.snap$''', '''apps/web-platform/test/__synthesized__/.*''', '''reports/mutation/.*''', '''apps/web-platform/test/.*\.test\.(ts|tsx)$''', '''apps/web-platform/infra/.*\.test\.sh$''', '''knowledge-base/.*/(plans|specs)/.*\.md$''', '''knowledge-base/plans/.*\.md$''', '''plugins/soleur/skills/.*/references/.*\.md$''']
+
+[[rules]]
+id = "generic-api-key"
+description = "Generic API key (default pack, allowlist-extended)"
+regex = '''(?i)(?:api[_-]?key|access[_-]?key|secret|token|auth|password|passwd|pwd|cred)[\s'"]*[:=][\s'"]*([A-Za-z0-9_\-]{16,})'''
+secretGroup = 1
+keywords = ["api", "key", "secret", "token", "auth"]
+tags = ["key", "API", "generic"]
+  [[rules.allowlists]]
+  description = "Synthesized fixtures, test files, plan/spec/skill-reference docs"
+  paths = ['''__goldens__/.*''', '''(__snapshots__|__goldens__)/.*\.snap$''', '''apps/web-platform/test/__synthesized__/.*''', '''reports/mutation/.*''', '''apps/web-platform/test/.*\.test\.(ts|tsx)$''', '''apps/web-platform/infra/.*\.test\.sh$''', '''knowledge-base/.*/(plans|specs)/.*\.md$''', '''knowledge-base/plans/.*\.md$''', '''plugins/soleur/skills/.*/references/.*\.md$''']
+
+[[rules]]
+id = "private-key"
+description = "Private key (default pack, allowlist-extended)"
+regex = '''-----BEGIN[ A-Z]*PRIVATE KEY( BLOCK)?-----[\s\S]*?-----END[ A-Z]*PRIVATE KEY( BLOCK)?-----'''
+keywords = ["BEGIN"]
+tags = ["key", "private"]
+  [[rules.allowlists]]
+  description = "Synthesized fixtures, test files, plan/spec/skill-reference docs"
+  paths = ['''__goldens__/.*''', '''(__snapshots__|__goldens__)/.*\.snap$''', '''apps/web-platform/test/__synthesized__/.*''', '''reports/mutation/.*''', '''apps/web-platform/test/.*\.test\.(ts|tsx)$''', '''apps/web-platform/infra/.*\.test\.sh$''', '''knowledge-base/.*/(plans|specs)/.*\.md$''', '''knowledge-base/plans/.*\.md$''', '''plugins/soleur/skills/.*/references/.*\.md$''']
