@@ -33,13 +33,20 @@ describe("SignupPage helper hint (T&C-gated OAuth)", () => {
     vi.clearAllMocks();
   });
 
-  it("renders the role=status hint at first render with the gating copy", () => {
+  it("renders the live-region hint at first render with the gating copy", () => {
     render(<SignupPage />);
 
     const hint = screen.getByTestId("tc-hint");
     expect(hint).toBeInTheDocument();
-    expect(hint).toHaveAttribute("role", "status");
+    // No `role="status"` here on purpose: the /signup page already renders a
+    // separate role=status banner ("No Soleur account found...") when the user
+    // arrives via /login redirect. Two role=status regions would collide with
+    // single-role locators in e2e (otp-login.e2e.ts uses page.getByRole("status")
+    // expecting exactly one match). aria-live + aria-atomic preserves the
+    // announce-as-whole semantics without the role-collision.
+    expect(hint).not.toHaveAttribute("role", "status");
     expect(hint).toHaveAttribute("aria-live", "polite");
+    expect(hint).toHaveAttribute("aria-atomic", "true");
     expect(hint).toHaveTextContent(HINT_COPY);
   });
 

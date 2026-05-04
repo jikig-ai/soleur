@@ -231,8 +231,8 @@ function SignupForm() {
         */}
         <p
           data-testid="tc-hint"
-          role="status"
           aria-live="polite"
+          aria-atomic="true"
           className="min-h-[1rem] text-center text-xs text-neutral-500"
         >
           {!tcAccepted ? "Accept the terms above to continue." : ""}
