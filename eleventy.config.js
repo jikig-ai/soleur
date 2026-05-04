@@ -35,8 +35,11 @@ export default function (eleventyConfig) {
   );
 
   // Short date for sitemap lastmod (YYYY-MM-DD)
+  // Guards falsy input for parity with dateToRfc3339 (new Date(undefined) throws RangeError).
   eleventyConfig.addFilter("dateToShort", (date) => {
-    return new Date(date).toISOString().split("T")[0];
+    if (!date) return null;
+    const d = new Date(date);
+    return Number.isNaN(d.getTime()) ? null : d.toISOString().split("T")[0];
   });
 
   // RFC 3339 / ISO 8601 timestamp for schema.org dateModified
