@@ -131,7 +131,7 @@ Assess whether the feature description has implications for specific business do
 
 #### Processing Instructions
 
-Emit rule-application telemetry (records that the CPO/CMO inclusion gate for new skills/agents was reached — see AGENTS.md `hr-new-skills-agents-or-user-facing`):
+Emit rule-application telemetry **only when the brainstorm scope matches the rule's trigger** — i.e., the feature description proposes a new skill, agent, or user-facing capability. For internal infra/CI brainstorms (where the rule does not apply), skip the emit. The telemetry records *rule fires*, not *gate reached* — emitting on every brainstorm pollutes the rule-fire count and breaks the unused-rule reporter.
 
 ```bash
 source "$(git rev-parse --show-toplevel)/.claude/hooks/lib/incidents.sh" && \
