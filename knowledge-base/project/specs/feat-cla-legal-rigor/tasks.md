@@ -30,28 +30,28 @@
 
 ### Phase 2a: RED-first tests (write before implementation per `cq-write-failing-tests-before`)
 
-- [ ] 2.1 Create directory `apps/web-platform/scripts/cla-evidence/__tests__/`
-- [ ] 2.2 Write `__tests__/hash.test.ts` (computeDocHash determinism)
-- [ ] 2.3 Write `__tests__/schema.test.ts` (rejects missing fields; **TS23 schema_version mismatch → exit 3**)
-- [ ] 2.4 Write `__tests__/allowlist.test.ts` (allowlist match + **DB-id 41898282 filter**)
-- [ ] 2.5 Write `__tests__/comment-fetch.test.ts` (5xx/429 retry; 404 degraded; **4xx≠404 fast-fail**)
-- [ ] 2.6 Write `apps/cla-evidence/scripts/upload-evidence.test.sh` (412 idempotent; **4xx≠412 fast-fail**)
-- [ ] 2.7 Run all tests — confirm RED (no implementation yet)
-- [ ] 2.8 Commit RED phase with message `test(cla-evidence): add RED-first tests for sidecar helpers`
+- [x] 2.1 Create directory `apps/web-platform/scripts/cla-evidence/__tests__/`
+- [x] 2.2 Write `__tests__/hash.test.ts` (computeDocHash determinism)
+- [x] 2.3 Write `__tests__/schema.test.ts` (rejects missing fields; **TS23 schema_version mismatch → exit 3**)
+- [x] 2.4 Write `__tests__/allowlist.test.ts` (allowlist match + **DB-id 41898282 filter**)
+- [x] 2.5 Write `__tests__/comment-fetch.test.ts` (5xx/429 retry; 404 degraded; **4xx≠404 fast-fail**)
+- [x] 2.6 Write `apps/cla-evidence/scripts/upload-evidence.test.sh` (412 idempotent; **4xx≠412 fast-fail**)
+- [x] 2.7 Run all tests — confirm RED (no implementation yet)
+- [x] 2.8 Commit RED phase with message `test(cla-evidence): add RED-first tests for sidecar helpers`
 
 ### Phase 2b: Implementation (GREEN)
 
-- [ ] 2.9 Implement `apps/web-platform/scripts/cla-evidence/hash.ts`
-- [ ] 2.10 Implement `apps/web-platform/scripts/cla-evidence/schema.ts` (Zod + exit 3 on schema_version mismatch)
-- [ ] 2.11 Implement `apps/web-platform/scripts/cla-evidence/allowlist.ts` (parse `cla.yml`; exclude DB-id 41898282)
-- [ ] 2.12 Implement `apps/web-platform/scripts/cla-evidence/comment-fetch.ts` (retry classes: 5xx/429 retry; 404 degraded; 4xx≠404 fast-fail)
-- [ ] 2.13 Implement `apps/cla-evidence/scripts/upload-evidence.sh` (R2 conditional-PUT; 412 → exit 0; 5xx/429 retry; **4xx≠412 fast-fail with `::error::`**)
-- [ ] 2.14 Run tests — confirm GREEN
-- [ ] 2.15 Commit GREEN phase
+- [x] 2.9 Implement `apps/web-platform/scripts/cla-evidence/hash.ts`
+- [x] 2.10 Implement `apps/web-platform/scripts/cla-evidence/schema.ts` (Zod + exit 3 on schema_version mismatch)
+- [x] 2.11 Implement `apps/web-platform/scripts/cla-evidence/allowlist.ts` (parse `cla.yml`; exclude DB-id 41898282)
+- [x] 2.12 Implement `apps/web-platform/scripts/cla-evidence/comment-fetch.ts` (retry classes: 5xx/429 retry; 404 degraded; 4xx≠404 fast-fail)
+- [x] 2.13 Implement `apps/cla-evidence/scripts/upload-evidence.sh` (R2 conditional-PUT; 412 → exit 0; 5xx/429 retry; **4xx≠412 fast-fail with `::error::`**)
+- [x] 2.14 Run tests — confirm GREEN
+- [x] 2.15 Commit GREEN phase
 
 ### Phase 2c: Sidecar workflow
 
-- [ ] 2.16 Write `.github/workflows/cla-evidence.yml`:
+- [x] 2.16 Write `.github/workflows/cla-evidence.yml`:
   - [ ] 2.16.1 Triggers: `pull_request_target` + `issue_comment.{created,edited,deleted}`
   - [ ] 2.16.2 Permissions: `contents: read`, `pull-requests: write`, `statuses: write` (NOT `contents: write`)
   - [ ] 2.16.3 Concurrency group: `cla-evidence-${{ pr-or-issue-number }}`
@@ -70,35 +70,35 @@
   - [ ] 2.16.16 Bounded `--max-time 30` on the `license/cla` status poll (dual-check folding)
 
 - [ ] 2.17 Add comment cross-link in `.github/workflows/cla.yml` pointing to `cla-evidence.yml`
-- [ ] 2.18 Extend `scripts/create-cla-required-ruleset.sh` to include `cla-evidence` Check Run (integration_id 15368) — full PUT replacement per learning #11
-- [ ] 2.19 Update `scripts/required-checks.txt` with `cla-evidence`
+- [x] 2.18 Extend `scripts/create-cla-required-ruleset.sh` to include `cla-evidence` Check Run (integration_id 15368) — full PUT replacement per learning #11
+- [x] 2.19 Update `scripts/required-checks.txt` with `cla-evidence`
 - [ ] 2.20 **Operator action (per-command ack required):** `bash scripts/create-cla-required-ruleset.sh`
 - [ ] 2.21 Validate workflow YAML: `gh workflow view cla-evidence.yml`
 
 ## Phase 3: Backfill of existing 2 signers
 
-- [ ] 3.1 Write `apps/web-platform/scripts/cla-evidence/__tests__/backfill.test.ts` (RED-first; idempotency + schema_version assertion + TS23)
-- [ ] 3.2 Implement `apps/web-platform/scripts/cla-backfill-evidence.ts`:
+- [x] 3.1 Write `apps/web-platform/scripts/cla-evidence/__tests__/backfill.test.ts` (RED-first; idempotency + schema_version assertion + TS23)
+- [x] 3.2 Implement `apps/web-platform/scripts/cla-backfill-evidence.ts`:
   - [ ] 3.2.1 Read `signatures/cla.json` from `cla-signatures` branch
   - [ ] 3.2.2 Assert `schema_version === "1.0"` on every input record (consumer #1)
   - [ ] 3.2.3 For each row: fetch comment body, find git-SHA via `git log --until=<created_at>`, build record with `capture_method: "backfilled"`
   - [ ] 3.2.4 Handle pre-file-existence edge: tag `capture_method: "backfilled-pre-existed"` if doc didn't exist at sign-time
   - [ ] 3.2.5 Correct Elvalio's `pr_of_record.number` to 3196 (action recorded #3186 incorrectly)
   - [ ] 3.2.6 Invoke `bash apps/cla-evidence/scripts/upload-evidence.sh` (same path as sidecar — single source of truth)
-- [ ] 3.3 Add `--dry-run` flag (prints payloads without R2 calls — pre-merge fixture verification)
-- [ ] 3.4 Run tests — confirm GREEN
+- [x] 3.3 Add `--dry-run` flag (prints payloads without R2 calls — pre-merge fixture verification)
+- [x] 3.4 Run tests — confirm GREEN
 - [ ] 3.5 Commit Phase 3
 
 ## Phase 4: Allowlist-bypass logging (per-quarter canonical)
 
-- [ ] 4.1 Write `__tests__/allowlist-bypass.test.ts` (RED-first; sanitized key, DB-id filter, TS14-16, TS16b)
-- [ ] 4.2 Implement allowlist-bypass detection in sidecar (Phase 2c) flow:
+- [x] 4.1 Write `__tests__/allowlist-bypass.test.ts` (RED-first; sanitized key, DB-id filter, TS14-16, TS16b)
+- [x] 4.2 Implement allowlist-bypass detection in sidecar (Phase 2c) flow:
   - [ ] 4.2.1 Sanitize key: `principal.replace(/\[bot\]/g, "-bot")` → e.g., `dependabot-bot`
   - [ ] 4.2.2 Deterministic key: `allowlist/<principal_safe>/<yyyy-qq>.json`
   - [ ] 4.2.3 Canonical record schema: `{schema_version, principal, principal_safe, db_id, quarter, first_seen_at, first_pr, allowlist_source}`
   - [ ] 4.2.4 Conditional PUT with `If-None-Match: *`; 412 → exit 0
   - [ ] 4.2.5 **Skip recording entirely if DB-id === 41898282** (`github-actions[bot]`)
-- [ ] 4.3 Run tests — confirm GREEN
+- [x] 4.3 Run tests — confirm GREEN
 - [ ] 4.4 Commit Phase 4
 
 ## Phase 5: RFC 3161 monthly timestamping
@@ -141,7 +141,7 @@
 
 ## Phase 7: Inspection runbook + retrieval script
 
-- [ ] 7.1 Implement `apps/cla-evidence/scripts/inspect-evidence.sh`:
+- [x] 7.1 Implement `apps/cla-evidence/scripts/inspect-evidence.sh`:
   - [ ] 7.1.1 Subcommand `by-pr <number>` → `rclone copy r2:soleur-cla-evidence/signatures/by-pr/<number>/`
   - [ ] 7.1.2 Subcommand `by-contributor <login>` → grep + fetch
   - [ ] 7.1.3 **Schema-version assertion (consumer #3):** `jq -e --arg v "1.0" '.schema_version == $v'` on every fetched record; exit 3 on mismatch
@@ -157,8 +157,8 @@
   - [ ] 7.3.7 **GDPR Art. 17 admin-override + tombstone protocol** (resolves spec-flow gap #10)
   - [ ] 7.3.8 Audit-log read procedure
   - [ ] 7.3.9 Paid-TSA fallback procedure (DigiCert/GlobalSign)
-- [ ] 7.4 Cross-link from `cloudflare-service-token-rotation.md`
-- [ ] 7.5 Verify runbook contains no real PII (synthesized fixtures only per `cq-test-fixtures-synthesized-only`)
+- [x] 7.4 Cross-link from `cloudflare-service-token-rotation.md`
+- [x] 7.5 Verify runbook contains no real PII (synthesized fixtures only per `cq-test-fixtures-synthesized-only`)
 - [ ] 7.6 Commit Phase 7
 
 ## Phase 8: Bootstrap & smoke (post-merge)
