@@ -345,16 +345,30 @@ jobs:
                to step 6. (See learning `2026-03-02-github-actions-auto-push-vs-pr-for-bot-content.md`
                — `git commit` does not fail on empty diff; explicit guard is
                required.)
-            4. **Commit.**
-               `git commit -m "chore(schedule): neutralize one-time workflow $WORKFLOW_NAME (post-fire cleanup, #$ISSUE_NUMBER)"`.
-               Use the `claude[bot]` identity that `claude-code-action` already
-               configures (no separate `git config user.*` step needed).
+            4. **Configure git identity, then commit.**
+               `claude-code-action@v1` does not pre-configure `git config
+               user.name`/`user.email` inside the bash subprocess; without
+               this step `git commit` aborts with "Author identity unknown."
+               (This is the canonical pattern across Soleur's other scheduled
+               workflows that push from inside `claude-code-action`.)
+               Run:
+               ```bash
+               git config user.name "github-actions[bot]"
+               git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+               git commit -m "chore(schedule): neutralize one-time workflow $WORKFLOW_NAME (post-fire cleanup, #$ISSUE_NUMBER)"
+               ```
             5. **Push — direct first, PR fallback.**
                - **5a.** Try direct push:
                  `git push origin HEAD:${{ github.event.repository.default_branch }}`.
                  If exit 0, neutralization succeeded — go to step 6.
                - **5b.** If direct push fails (branch protection / required
-                 status checks): create an ephemeral branch
+                 status checks): **first check whether a stale neutralization
+                 PR already exists** for this workflow:
+                 `EXISTING=$(gh pr list --search "head:chore/neutralize-$WORKFLOW_NAME" --state open --json url --jq '.[0].url // empty')`.
+                 If `$EXISTING` is non-empty, treat as a successful handoff
+                 (the prior fire already filed a cleanup PR awaiting review)
+                 — go to step 6 without opening a duplicate. Otherwise create
+                 an ephemeral branch
                  `chore/neutralize-$WORKFLOW_NAME-$(date -u +%Y%m%d%H%M%S)`,
                  push it, then open a PR via
                  `gh pr create --base "${{ github.event.repository.default_branch }}" --head "$BRANCH" --title "chore(schedule): neutralize $WORKFLOW_NAME" --body "Auto-cleanup after one-time fire of #$ISSUE_NUMBER. Removes the schedule: trigger from the generated --once workflow file. See plugins/soleur/skills/schedule/SKILL.md (D4 defense)."`.
@@ -372,12 +386,12 @@ jobs:
                is acceptable), post the fallback comment to issue
                #$ISSUE_NUMBER with this exact body:
                "Workflow ran but auto-cleanup failed (direct push: <err>; PR
-               create: <err>). Manual: edit
+               create: <err>). Operator action required: edit
                `.github/workflows/$WORKFLOW_NAME` to remove the `schedule:`
-               trigger, OR install the Anthropic Claude GitHub App as a
-               bypass-actor on your default branch ruleset, OR install a
-               custom GitHub App with `actions: write` and re-run with `gh
-               workflow disable`."
+               trigger (the same edit this run attempted), OR install the
+               Anthropic Claude GitHub App as a bypass-actor on your default
+               branch ruleset, OR install a custom GitHub App with `actions:
+               write` and re-run with `gh workflow disable`."
 
             ## Pre-flight (abort with observation comment if any check fails)
 
@@ -572,3 +586,9 @@ Remove a scheduled workflow.
 - **`--once` requires merge-before-fire.** GHA cron triggers fire only from workflows on the default branch. A `--once` workflow on a feature branch must be merged before its `--at` date or it will not fire.
 - **`--at` caps at 50 days.** GHA auto-disables workflows after 60 days of inactivity. The 50-day cap leaves a 10-day margin so a freshly merged `--once` workflow is still active when its cron tick arrives.
 - **Cron variance ~15 min.** GitHub Actions cron schedules trigger on a best-effort basis. `--at 2026-05-17` may fire any time between 09:00 and 09:15 UTC.
+- **`--once` D4 cleanup costs one extra GHA run on branch-protected repos.** When direct push to the default branch is blocked, D4's PR-fallback opens a cleanup PR. Required status checks fire on the ephemeral branch — that's one extra billable run per `--once` fire. To skip it, add `chore/neutralize-*` to your branch ruleset's bypass-actor list or disable required checks for that branch pattern.
+- **`--once` D3 + D4-failure → annual re-fire.** If D4's neutralization fails (both direct push and PR-create fail) and the operator does not act on the fallback comment, the cron `0 9 D M *` re-fires next year on the same calendar date. D3 (date guard) catches it and immediately invokes neutralization again — no harmful action against drifted state — but the workflow stays `active` until either the operator intervenes or GHA's 60-day inactivity timer fires after a full quiet year.
+
+## Sharp Edges
+
+- **`--once` widens agent-prompt blast radius via `contents: write` + `pull-requests: write`.** The fire-time agent's `--allowedTools` allowlist plus the comment-fetched `$body` (D1) means a successful prompt-injection in the comment body now has push + PR-create capability, not just `gh workflow disable`. D5 (comment-author + immutability pin) gates this — but D5 only verifies *who* authored the comment, not *what* they wrote. **Pin `--comment` to a high-trust author** (yourself or an org admin), and avoid scheduling `--once` against issues where the pinned commenter could later be compromised.

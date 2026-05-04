@@ -51,6 +51,10 @@ When designing a `claude-code-action` workflow that needs to mutate the repo or 
 
 If a future capability needs `actions: write` (e.g., re-running other workflows, deleting workflow runs), document that the user must install a **custom GitHub App** with `actions: write` and pass it via `claude-code-action`'s `github_app_*` inputs. Don't ship a default that requires it.
 
+## Tracking
+
+- **Upstream documentation request:** soleur issue [#3163](https://github.com/jikig-ai/soleur/issues/3163) tracks filing a doc-request against `anthropics/claude-code-action` to document the install-time vs. workflow-level permission interaction. Re-evaluate this learning if upstream adds explicit docs OR an `actions-write` passthrough mechanism.
+
 ## Related
 
 - [2026-03-02 — claude-code-action token revocation breaks persist step](../2026-03-02-claude-code-action-token-revocation-breaks-persist-step.md) — different bug, related root surface (claude-code-action's token strategy diverges from workflow GITHUB_TOKEN expectations).

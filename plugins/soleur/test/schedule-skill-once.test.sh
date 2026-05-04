@@ -67,6 +67,23 @@ assert_contains "$ONCE_BLOCK" "gh pr create --base" \
 assert_contains "$ONCE_BLOCK" "git diff --cached --quiet" \
   "neutralization primitive guards against silent no-op commits (per 2026-03-02 learning)"
 
+# claude-code-action@v1 does NOT pre-configure git user.name/user.email inside
+# its bash subprocess. Without an explicit git config step, `git commit` aborts
+# with "Author identity unknown" and the entire D4 path silently fails — which
+# is exactly the regression #3153 set out to fix. All sibling Soleur workflows
+# that push inside claude-code-action use this canonical pattern.
+assert_contains "$ONCE_BLOCK" 'git config user.name "github-actions[bot]"' \
+  "neutralization primitive sets git user.name (otherwise commit aborts at fire time)"
+
+assert_contains "$ONCE_BLOCK" 'git config user.email "41898282+github-actions[bot]@users.noreply.github.com"' \
+  "neutralization primitive sets git user.email"
+
+# Anti-regression: PR-fallback must check for an existing open neutralization
+# PR before opening a new one. Otherwise N fires on a branch-protected repo
+# without auto-merge produce N stale PRs.
+assert_contains "$ONCE_BLOCK" 'gh pr list --search "head:chore/neutralize-$WORKFLOW_NAME"' \
+  "PR-fallback checks for stale open neutralization PR before opening a duplicate"
+
 # Anti-regression: the operative `gh workflow disable "$WORKFLOW_NAME"` line
 # must NOT appear as an executable command in the prompt. Comments referencing
 # the previous mechanism are acceptable; line-anchored shell calls are not.
