@@ -1,0 +1,141 @@
+# Monthly skill-freshness aggregator (Track C3 of #3122).
+#
+# Runs scripts/skill-freshness-aggregate.sh against the gitignored
+# .claude/.skill-invocations.jsonl, opens a PR with the updated
+# knowledge-base/engineering/operations/skill-freshness.json via
+# bot-pr-with-synthetic-checks, and files at most CAP_PER_RUN issues for
+# skills idle >=180 days (status=idle) or >=365 days (status=archival_candidate).
+#
+# Persistence note: the invocations JSONL is gitignored and runner-local —
+# in CI the aggregator sees an empty file and produces an inventory-only
+# report (all 67 skills as never_invoked). This matches the rule-metrics
+# aggregator's known persistence gap; see plan deferral.
+#
+# Cron `0 2 1 * *` — 1st of month 02:00 UTC; dodges the 00:00 GitHub-schedule
+# stampede and the 0 9 1 audit cluster.
+#
+# To test manually (post-merge): gh workflow run scheduled-skill-freshness.yml
+
+name: "Scheduled: Skill Freshness"
+
+on:
+  schedule:
+    - cron: '0 2 1 * *'
+  workflow_dispatch:
+
+concurrency:
+  group: schedule-skill-freshness
+  cancel-in-progress: false
+
+permissions:
+  checks: write
+  contents: write
+  issues: write
+  pull-requests: write
+
+jobs:
+  aggregate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    env:
+      CAP_PER_RUN: '3'
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Ensure labels exist
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh label create scheduled-skill-freshness \
+            --description "Monthly skill freshness report finding" \
+            --color "0E8A16" 2>/dev/null || true
+          gh label create do-not-autoclose \
+            --description "Issue must not be autoclosed by triage automation" \
+            --color "C2E0C6" 2>/dev/null || true
+
+      - name: Run aggregator
+        run: bash scripts/skill-freshness-aggregate.sh
+
+      - name: Create PR with skill-freshness snapshot
+        uses: ./.github/actions/bot-pr-with-synthetic-checks
+        with:
+          add-paths: knowledge-base/engineering/operations/skill-freshness.json
+          branch-prefix: ci/skill-freshness-
+          commit-message: "chore(skill-freshness): monthly aggregate"
+          pr-title-prefix: "chore(skill-freshness): monthly aggregate"
+          pr-body: "Automated monthly skill-freshness snapshot from .claude/.skill-invocations.jsonl. See scripts/skill-freshness-aggregate.sh and #3122."
+          change-summary: "Skill-freshness aggregation only, no code changes"
+          gh-token: ${{ github.token }}
+
+      - name: File stale-skill issues
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          REPORT="knowledge-base/engineering/operations/skill-freshness.json"
+          [[ -f "$REPORT" ]] || { echo "No report — aggregator skipped write or failed earlier."; exit 0; }
+          jq -e '.schema == 1' "$REPORT" >/dev/null \
+            || { echo "ERROR: skill-freshness.json missing or wrong schema version" >&2; exit 1; }
+
+          # Iterate stale skills (worst offenders first), stop at CAP_PER_RUN.
+          # Process substitution keeps the loop in the parent shell so the
+          # `filed` counter survives past the loop.
+          filed=0
+          while IFS=$'\t' read -r SKILL_NAME SKILL_STATUS DAYS; do
+            [[ "$filed" -ge "$CAP_PER_RUN" ]] && { echo "Cap reached (CAP_PER_RUN=$CAP_PER_RUN)"; break; }
+
+            # Defense-in-depth: refuse skill names outside the canonical
+            # kebab-case (+ optional `:plugin` prefix) shape before passing
+            # to `gh issue list/create`.
+            if ! [[ "$SKILL_NAME" =~ ^[a-z][a-z0-9-]*(:[a-z0-9-]+)?$ ]]; then
+              echo "WARN: refusing malformed skill name: $SKILL_NAME"
+              continue
+            fi
+
+            # Idempotency: phrase-search the full title prefix so skills
+            # whose names share a prefix (e.g., `plan` vs `plan-review`)
+            # don't suppress each other's issue creation.
+            EXISTING=$(gh issue list --label scheduled-skill-freshness \
+                                     --search "\"Skill freshness: $SKILL_NAME idle\" in:title" \
+                                     --state all --limit 5 --json number \
+                                     --jq 'length')
+            if [[ "$EXISTING" -gt 0 ]]; then
+              echo "Skipping $SKILL_NAME — existing issue(s) found"
+              continue
+            fi
+
+            # Write title and body to env (injection-safe per scheduled-ux-audit.yml pattern).
+            TITLE="[Scheduled] Skill freshness: $SKILL_NAME idle $DAYS days ($SKILL_STATUS)"
+            # shellcheck disable=SC2016  # backticks are markdown, not command substitution
+            BODY=$(printf 'Skill `%s` has not been invoked in %s days (status: `%s`).\n\nFiled by `scheduled-skill-freshness.yml`. Source: `knowledge-base/engineering/operations/skill-freshness.json`.\n\nReview action:\n- Is this skill still useful? If yes, close this issue.\n- Is this skill superseded? Mark for archival via `/soleur:archive-kb`.\n- Is the discovery surface broken (skill exists but operators forget it)? Update `/soleur:help` taxonomy.\n\nDo not autoclose this issue (do-not-autoclose label).' \
+                          "$SKILL_NAME" "$DAYS" "$SKILL_STATUS")
+
+            gh issue create \
+              --title "$TITLE" \
+              --body  "$BODY" \
+              --label "scheduled-skill-freshness,do-not-autoclose" \
+              --milestone "Post-MVP / Later" || {
+                echo "WARN: failed to file issue for $SKILL_NAME (continuing)";
+                continue;
+              }
+            filed=$((filed + 1))
+          done < <(jq -r '
+            .skills
+            | map(select(.status == "idle" or .status == "archival_candidate"))
+            | sort_by(.days_since_last) | reverse
+            | .[]
+            | "\(.name)\t\(.status)\t\(.days_since_last)"
+          ' "$REPORT")
+
+          echo "Filed $filed stale-skill issues this run."
+
+      - name: Email notification (failure)
+        if: failure()
+        uses: ./.github/actions/notify-ops-email
+        with:
+          subject: '[FAIL] Scheduled: Skill Freshness workflow failed'
+          body: '<p><strong>Skill Freshness</strong> failed.</p><p><a href="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}">View run</a></p>'
+          resend-api-key: ${{ secrets.RESEND_API_KEY }}
