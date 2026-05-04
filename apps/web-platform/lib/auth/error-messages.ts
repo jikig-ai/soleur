@@ -14,6 +14,10 @@ export const CALLBACK_ERRORS: Record<string, string> = {
 
 const SUPABASE_ERROR_PATTERNS: [RegExp, string][] = [
   [
+    /signups? not allowed for otp/i,
+    "No Soleur account found for this email. Sign up instead.",
+  ],
+  [
     /email rate limit exceeded/i,
     "Too many sign-in attempts. Please wait a few minutes and try again.",
   ],

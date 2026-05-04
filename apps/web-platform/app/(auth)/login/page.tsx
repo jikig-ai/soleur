@@ -9,6 +9,11 @@ import { EMAIL_OTP_LENGTH } from "@/lib/auth/constants";
 import { CALLBACK_ERRORS, DEFAULT_ERROR_MESSAGE, mapSupabaseError } from "@/lib/auth/error-messages";
 import Link from "next/link";
 
+function isNoAccountError(error: { code?: string; message: string }): boolean {
+  if (error.code === "otp_disabled") return true;
+  return /signups? not allowed for otp/i.test(error.message);
+}
+
 export default function LoginPage() {
   return (
     <Suspense>
@@ -61,6 +66,11 @@ function LoginForm() {
           errorName: error.name,
         },
       });
+      if (isNoAccountError(error as { code?: string; message: string })) {
+        const params = new URLSearchParams({ email, reason: "no_account" });
+        router.push(`/signup?${params.toString()}`);
+        return;
+      }
       setError(mapSupabaseError(error.message));
     } else {
       setOtpSent(true);
