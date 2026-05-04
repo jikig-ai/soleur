@@ -36,6 +36,12 @@ pre-commit:
         - "AGENTS.md"
         - "plugins/soleur/skills/compound/SKILL.md"
       run: bash scripts/lint-agents-compound-sync.sh
+    agents-enforcement-tag-lint:
+      priority: 5
+      glob:
+        - "AGENTS.md"
+        - "scripts/lint-agents-enforcement-tags.py"
+      run: python3 scripts/lint-agents-enforcement-tags.py AGENTS.md
     web-platform-typecheck:
       priority: 5
       glob:
