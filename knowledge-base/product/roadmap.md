@@ -1,6 +1,6 @@
 ---
-last_updated: 2026-04-23
-last_reviewed: 2026-04-23
+last_updated: 2026-05-04
+last_reviewed: 2026-05-04
 review_cadence: weekly
 owner: CPO
 depends_on:
@@ -74,10 +74,10 @@ This roadmap was reviewed by CTO, CLO, CFO, and CMO before finalization.
 | Financial posture | Product COGS ~$81/mo, break-even 2 users at $49/mo. All-in burn ~$491/mo (includes ~$410/mo R&D: Claude Code Max seats + GitHub Copilot), break-even ~11 users. Gross margin at 50 users: ~97% vs COGS, ~80% all-in. BYOK eliminates per-user LLM cost (load-bearing architectural commitment). See [finance/cost-model.md](../finance/cost-model.md). |
 | Phase 1 (Close the Loop) | Complete. Milestone closed. 0 open, 15 closed. |
 | Phase 2 (Secure for Beta) | Complete. Milestone closed. 0 open, 20 closed. |
-| Phase 3 (Make it Sticky) | In progress. 11 open, 23 closed (milestone). Core KB, inbox, token storage, onboarding, CI/CD, service automation, analytics, sharing, usage indicator, pricing page, start fresh onboarding, post-connect sync, chat attachments, review gate notifications, guided instructions fallback, subscription management, KB file upload, invoice history, migration 021 follow-through all done. Agent work visualization (#2004) moved to Phase 4. KB chat sidebar (#2345) promoted from Post-MVP to Phase 3 P3 on 2026-04-15 (shipped in PR #2347). Remaining: service automation announcement (#1944), QA gate (#2108), KB rename files (#2152), KB PDF preview (#2153), KB delete button layout (#2154), team settings improvements (#2155), custom @mention handles (#2170), KB chat sidebar (#2345), `soleur:ux-audit` recurring UX-review loop (#2341), collapsible sidebars (#2342, blocked by #2341), exclude agent issues from auto-fix/triage (#2344). |
-| Phase 4 (Validate + Scale) | Not started. Blocked by Phase 3 completion + marketing/multi-user gates. Growth audit 2026-04-13 added 7 issues (6 marketing gate P0s + 1 outreach campaign). Growth audit 2026-04-19 added 7 marketing gate issues (M26-M32: #2657, #2658, #2659, #2663, #2664, #2665, #2666). Growth audit 2026-04-21 added 5 marketing gate issues (M33-M37: #2707 FAQ on pricing, #2708 title conflict, #2709 bare titles, #2711 author card, #2712 billion-dollar pillar). Growth audit 2026-04-22 added 3 marketing gate issues (M38-M40: #2806 /agents/ title+H1, #2804 vision superlative, #2805 vanity stat) plus 3 Post-MVP items (L21-L23: #2807 byline, #2808 meta description, #2809 render-blocking css). Agent work visualization (#2004) moved here from Phase 3. |
-| Phase 5 (Desktop Native App) | Defined. 5 open, 0 closed. Trigger-gated on user demand. |
-| Post-MVP / Later | 92 open, 343 closed. |
+| Phase 3 (Make it Sticky) | Near-complete. 1 open, 168 closed (milestone). All features shipped. Only remaining: QA gate (#2108). Previously "Not started" items (#1944, #2341, #2342, #2344, #2550, #2662) confirmed closed. Agent work visualization (#2004) moved to Phase 4. KB chat sidebar (#2345) shipped PR #2347. |
+| Phase 4 (Validate + Scale) | In progress. 28 open, 68 closed (milestone). Marketing Gate substantially complete (21 of 40 items closed). Multi-User Readiness Gate complete (MU1-MU3 all closed). Remaining open: M3 (#1051 marketing strategy), M4 (#1445 recruitment templates), and Phase 4 core validation issues. |
+| Phase 5 (Desktop Native App) | Defined. 6 open, 0 closed. Trigger-gated on user demand. Note: #2625 (A/B test Solo cap) is in this milestone but not yet in roadmap table. |
+| Post-MVP / Later | 326 open, 600 closed. |
 | Beta users | 0 |
 | Pricing gates passed | 0 of 5 |
 
@@ -202,13 +202,13 @@ This roadmap was reviewed by CTO, CLO, CFO, and CMO before finalization.
 | 3.19 | Chat attachments (images + PDFs via Supabase Storage, presigned URL upload, AI processing via filesystem write) | P2 | [#1961](https://github.com/jikig-ai/soleur/issues/1961) | Done |
 | 3.20 | KB file upload (images, PDFs, CSV, TXT, DOCX via GitHub Contents API, per-directory upload button, binary file preview) | P3 | [#1974](https://github.com/jikig-ai/soleur/issues/1974) | Done |
 | 3.21 | Agent work visualization in UX (show agent activity, progress, and outputs) | P2 | [#2004](https://github.com/jikig-ai/soleur/issues/2004) | Moved to Phase 4 |
-| 3.22 | Service automation feature announcement (marketing content for launch) | P3 | [#1944](https://github.com/jikig-ai/soleur/issues/1944) | Not started |
-| 3.23 | `soleur:ux-audit` — recurring UX-review agent loop (calibration gate for P4 self-service UX) | P2 | [#2341](https://github.com/jikig-ai/soleur/issues/2341) | Not started |
-| 3.24 | Collapsible sidebars (main nav, KB, Team Settings) — first proof-of-loop artifact for 3.23 | P2 | [#2342](https://github.com/jikig-ai/soleur/issues/2342) | Not started, blocked by 3.23 |
-| 3.25 | Exclude agent-authored issues from auto-fix and auto-triage (governance for 3.23) | P2 | [#2344](https://github.com/jikig-ai/soleur/issues/2344) | Not started |
+| 3.22 | Service automation feature announcement (marketing content for launch) | P3 | [#1944](https://github.com/jikig-ai/soleur/issues/1944) | Done |
+| 3.23 | `soleur:ux-audit` — recurring UX-review agent loop (calibration gate for P4 self-service UX) | P2 | [#2341](https://github.com/jikig-ai/soleur/issues/2341) | Done |
+| 3.24 | Collapsible sidebars (main nav, KB, Team Settings) — first proof-of-loop artifact for 3.23 | P2 | [#2342](https://github.com/jikig-ai/soleur/issues/2342) | Done |
+| 3.25 | Exclude agent-authored issues from auto-fix and auto-triage (governance for 3.23) | P2 | [#2344](https://github.com/jikig-ai/soleur/issues/2344) | Done |
 | 3.26 | KB chat sidebar (in-doc chat panel + selection-as-context, replaces "Chat about this" new-window) | P3 | [#2345](https://github.com/jikig-ai/soleur/issues/2345) | Shipped in PR #2347 (2026-04-15), flag-gated off in prd until one-week soak |
-| 3.27 | Fix invalid `ollama launch claude` command on /getting-started/ (trust-breaking on install page) | P0 | [#2550](https://github.com/jikig-ai/soleur/issues/2550) | Not started |
-| 3.28 | Cloudflare 403 blocks GPTBot/ClaudeBot/PerplexityBot on soleur.ai (WAF allowlist via terraform — blocks all AEO investment downstream) | P0 | [#2662](https://github.com/jikig-ai/soleur/issues/2662) | Not started |
+| 3.27 | Fix invalid `ollama launch claude` command on /getting-started/ (trust-breaking on install page) | P0 | [#2550](https://github.com/jikig-ai/soleur/issues/2550) | Done |
+| 3.28 | Cloudflare 403 blocks GPTBot/ClaudeBot/PerplexityBot on soleur.ai (WAF allowlist via terraform — blocks all AEO investment downstream) | P0 | [#2662](https://github.com/jikig-ai/soleur/issues/2662) | Done |
 
 **Why 3.1-3.2 matter:** The knowledge base is the compounding moat. If founders cannot see plans, brainstorms, brand guides, and competitive analyses their agents produced, the value is invisible. The KB viewer closes the review loop.
 
@@ -237,18 +237,18 @@ Before recruiting founders, all public surfaces must reflect the cloud platform 
 | M2 | Update homepage hero subtitle + meta description (remove "plugin" from meta descriptions) | 30 min | Done — [#1129](https://github.com/jikig-ai/soleur/issues/1129) |
 | M3 | Update marketing strategy for cloud pivot | 2 hours | Not started — [#1051](https://github.com/jikig-ai/soleur/issues/1051) |
 | M4 | Draft recruitment messaging templates per channel | 2 hours | Not started — [#1445](https://github.com/jikig-ai/soleur/issues/1445) |
-| M5 | Update Getting Started page (cloud platform primary, CLI plugin secondary) | 2 hours | Not started — [#1446](https://github.com/jikig-ai/soleur/issues/1446) |
+| M5 | Update Getting Started page (cloud platform primary, CLI plugin secondary) | 2 hours | Done — [#1446](https://github.com/jikig-ai/soleur/issues/1446) |
 | M6 | Standardize agent/skill counts across all surfaces | 2 hours | Done — [#1447](https://github.com/jikig-ai/soleur/issues/1447) |
 | M7 | Exclude feed.xml from sitemap.xml | 15 min | Done — [#1122](https://github.com/jikig-ai/soleur/issues/1122) |
 | M8 | Add case studies to Atom feed entries | 30 min | Done — [#1123](https://github.com/jikig-ai/soleur/issues/1123) |
 | M9 | Fix author URL to point to About page (blocked by About page creation) | 30 min | Done — [#1124](https://github.com/jikig-ai/soleur/issues/1124) |
 | M10 | Add external source citations to homepage (AEO/GEO citability — zero citations currently) | 1 hour | Done — [#1130](https://github.com/jikig-ai/soleur/issues/1130) |
 | M11 | Surface "open source" differentiator on homepage and key pages (absent from headings/meta) | 1 hour | Done — [#1134](https://github.com/jikig-ai/soleur/issues/1134) |
-| M12 | Homepage title tag contains zero target keywords (change to include "Company-as-a-Service") | 30 min | Not started — [#2064](https://github.com/jikig-ai/soleur/issues/2064) |
-| M13 | Homepage H1 targets no search query (add keyword-bearing heading) | 30 min | Not started — [#2066](https://github.com/jikig-ai/soleur/issues/2066) |
-| M14 | No canonical product definition for AI extraction (add extractable answer paragraph) | 1 hour | Not started — [#2067](https://github.com/jikig-ai/soleur/issues/2067) |
-| M15 | No author bylines on blog posts (add name, role, About link via template) | 30 min | Not started — [#2068](https://github.com/jikig-ai/soleur/issues/2068) |
-| M16 | About page lacks founder credentials and bio (add background, timeline, metrics) | 1 hour | Not started — [#2069](https://github.com/jikig-ai/soleur/issues/2069) |
+| M12 | Homepage title tag contains zero target keywords (change to include "Company-as-a-Service") | 30 min | Done — [#2064](https://github.com/jikig-ai/soleur/issues/2064) |
+| M13 | Homepage H1 targets no search query (add keyword-bearing heading) | 30 min | Done — [#2066](https://github.com/jikig-ai/soleur/issues/2066) |
+| M14 | No canonical product definition for AI extraction (add extractable answer paragraph) | 1 hour | Done — [#2067](https://github.com/jikig-ai/soleur/issues/2067) |
+| M15 | No author bylines on blog posts (add name, role, About link via template) | 30 min | Done — [#2068](https://github.com/jikig-ai/soleur/issues/2068) |
+| M16 | About page lacks founder credentials and bio (add background, timeline, metrics) | 1 hour | Done — [#2069](https://github.com/jikig-ai/soleur/issues/2069) |
 | M17 | Core pages have 0.7 citations/page vs blog 3.1 (add 2+ external citations per core page) | 2 hours | Not started — [#2070](https://github.com/jikig-ai/soleur/issues/2070) |
 | M18 | Homepage H1/tagline out of sync with brand guide 2026-03-26 (swap CaaS framing for "Stop hiring. Start delegating.") | 30 min | Not started — [#2551](https://github.com/jikig-ai/soleur/issues/2551) |
 | M19 | Homepage SEO title targets zero-volume "company-as-a-service platform" keyword (apply audit R1/R2) | 30 min | Not started — [#2552](https://github.com/jikig-ai/soleur/issues/2552) |
@@ -258,21 +258,21 @@ Before recruiting founders, all public surfaces must reflect the cloud platform 
 | M23 | Ship Claude Code plugin pillar article (3,500-4,500 words — highest-intent acquisition channel matching install path) | 8 hours | Not started — [#2559](https://github.com/jikig-ai/soleur/issues/2559) |
 | M24 | Ship AI CTO / AI CMO / Solo Founder AI Stack commercial cluster (P1.3, P1.4, P1.6 — closes pricing-page funnel) | 12 hours | Not started — [#2560](https://github.com/jikig-ai/soleur/issues/2560) |
 | M25 | Agentic engineering pillar + /glossary/ (P1.2 + P3.4 — closes core-vs-blog AEO gap, addresses AEO P1-1/P2-1) | 6 hours | Not started — [#2561](https://github.com/jikig-ai/soleur/issues/2561) |
-| M26 | Reconcile agent/skill/department count drift across site + brand guide (E-E-A-T trust; homepage 65/66, pricing 65, brand guide 63/62, stat blocks 60+) | 1 hour | Not started — [#2659](https://github.com/jikig-ai/soleur/issues/2659) |
-| M27 | Add "Company-as-a-Service" to homepage H1/H2 anchor (positioning keyword missing from primary headings) | 30 min | Not started — [#2657](https://github.com/jikig-ai/soleur/issues/2657) |
-| M28 | Promote CaaS pillar from /blog/ to top-level /company-as-a-service/ (positioning URL real estate) | 2 hours | Not started — [#2658](https://github.com/jikig-ai/soleur/issues/2658) |
-| M29 | Rewrite /vision/ H2s with search-intent language (low-volume heading copy) | 1 hour | Not started — [#2663](https://github.com/jikig-ai/soleur/issues/2663) |
-| M30 | Rewrite homepage FAQ "Is Soleur free?" — remove Spark-tier reference (stale pricing framing) | 30 min | Not started — [#2664](https://github.com/jikig-ai/soleur/issues/2664) |
-| M31 | Cite $95K/mo replacement-cost table on /pricing/ (add linked source footnote for trust/citability) | 30 min | Not started — [#2665](https://github.com/jikig-ai/soleur/issues/2665) |
-| M32 | Add Organization JSON-LD to homepage (AI-extractable entity markup) | 30 min | Not started — [#2666](https://github.com/jikig-ai/soleur/issues/2666) |
-| M33 | Add FAQ + FAQPage JSON-LD to /pricing/ (AEO #1 gap on #2 search-intent page) | 1 hour | Not started — [#2707](https://github.com/jikig-ai/soleur/issues/2707) |
-| M34 | Resolve homepage `<title>` conflict (Eleventy vs Next.js split signals) | 1 hour | Not started — [#2708](https://github.com/jikig-ai/soleur/issues/2708) |
-| M35 | Fix bare single-word `<title>` on /pricing/, /community/, /blog/ (add brand anchor for SERP CTR) | 30 min | Not started — [#2709](https://github.com/jikig-ai/soleur/issues/2709) |
-| M36 | Add inline author card to blog posts (E-E-A-T — photo, bio, credentials, Person JSON-LD) | 2 hours | Not started — [#2711](https://github.com/jikig-ai/soleur/issues/2711) |
-| M37 | Ship Billion-Dollar Solo Founder Stack pillar (P1.7 — category-owner slot, matches brand positioning) | 8 hours | Not started — [#2712](https://github.com/jikig-ai/soleur/issues/2712) |
-| M38 | Rewrite /agents/ title + H1 with keyword-dense modifiers (acquisition page carries weak SERP/H1 signals) | 30 min | Not started — [#2806](https://github.com/jikig-ai/soleur/issues/2806) |
-| M39 | Remove "world's first" superlative from /vision/ (unprovable claim erodes AEO/E-E-A-T trust) | 15 min | Not started — [#2804](https://github.com/jikig-ai/soleur/issues/2804) |
-| M40 | Remove "6 GitHub Stars" vanity stat from homepage hero (low number undermines credibility) | 15 min | Not started — [#2805](https://github.com/jikig-ai/soleur/issues/2805) |
+| M26 | Reconcile agent/skill/department count drift across site + brand guide (E-E-A-T trust; homepage 65/66, pricing 65, brand guide 63/62, stat blocks 60+) | 1 hour | Done — [#2659](https://github.com/jikig-ai/soleur/issues/2659) |
+| M27 | Add "Company-as-a-Service" to homepage H1/H2 anchor (positioning keyword missing from primary headings) | 30 min | Done — [#2657](https://github.com/jikig-ai/soleur/issues/2657) |
+| M28 | Promote CaaS pillar from /blog/ to top-level /company-as-a-service/ (positioning URL real estate) | 2 hours | Done — [#2658](https://github.com/jikig-ai/soleur/issues/2658) |
+| M29 | Rewrite /vision/ H2s with search-intent language (low-volume heading copy) | 1 hour | Done — [#2663](https://github.com/jikig-ai/soleur/issues/2663) |
+| M30 | Rewrite homepage FAQ "Is Soleur free?" — remove Spark-tier reference (stale pricing framing) | 30 min | Done — [#2664](https://github.com/jikig-ai/soleur/issues/2664) |
+| M31 | Cite $95K/mo replacement-cost table on /pricing/ (add linked source footnote for trust/citability) | 30 min | Done — [#2665](https://github.com/jikig-ai/soleur/issues/2665) |
+| M32 | Add Organization JSON-LD to homepage (AI-extractable entity markup) | 30 min | Done — [#2666](https://github.com/jikig-ai/soleur/issues/2666) |
+| M33 | Add FAQ + FAQPage JSON-LD to /pricing/ (AEO #1 gap on #2 search-intent page) | 1 hour | Done — [#2707](https://github.com/jikig-ai/soleur/issues/2707) |
+| M34 | Resolve homepage `<title>` conflict (Eleventy vs Next.js split signals) | 1 hour | Done — [#2708](https://github.com/jikig-ai/soleur/issues/2708) |
+| M35 | Fix bare single-word `<title>` on /pricing/, /community/, /blog/ (add brand anchor for SERP CTR) | 30 min | Done — [#2709](https://github.com/jikig-ai/soleur/issues/2709) |
+| M36 | Add inline author card to blog posts (E-E-A-T — photo, bio, credentials, Person JSON-LD) | 2 hours | Done — [#2711](https://github.com/jikig-ai/soleur/issues/2711) |
+| M37 | Ship Billion-Dollar Solo Founder Stack pillar (P1.7 — category-owner slot, matches brand positioning) | 8 hours | Done — [#2712](https://github.com/jikig-ai/soleur/issues/2712) |
+| M38 | Rewrite /agents/ title + H1 with keyword-dense modifiers (acquisition page carries weak SERP/H1 signals) | 30 min | Done — [#2806](https://github.com/jikig-ai/soleur/issues/2806) |
+| M39 | Remove "world's first" superlative from /vision/ (unprovable claim erodes AEO/E-E-A-T trust) | 15 min | Done — [#2804](https://github.com/jikig-ai/soleur/issues/2804) |
+| M40 | Remove "6 GitHub Stars" vanity stat from homepage hero (low number undermines credibility) | 15 min | Done — [#2805](https://github.com/jikig-ai/soleur/issues/2805) |
 
 **Gate:** No recruitment outreach until M1-M4, M12-M17, and M18-M40 complete.
 
@@ -284,9 +284,9 @@ Before recruiting founders, the platform must handle multiple users signing up a
 
 | # | Item | Status |
 |---|------|--------|
-| MU1 | Signup provisions a workspace (git clone + plugin install per user) | [#1448](https://github.com/jikig-ai/soleur/issues/1448) Runbook: `knowledge-base/engineering/ops/runbooks/mu1-signup-workspace-verification.md` |
-| MU2 | BYOK encryption works per-tenant (each user's API key isolated) | [#1449](https://github.com/jikig-ai/soleur/issues/1449) Existing — verify |
-| MU3 | Workspace isolation at process level (container isolation is P4 hardening, but basic isolation must work) | [#1450](https://github.com/jikig-ai/soleur/issues/1450) Existing bubblewrap sandbox — verify with cross-workspace integration test |
+| MU1 | Signup provisions a workspace (git clone + plugin install per user) | [#1448](https://github.com/jikig-ai/soleur/issues/1448) Done |
+| MU2 | BYOK encryption works per-tenant (each user's API key isolated) | [#1449](https://github.com/jikig-ai/soleur/issues/1449) Done |
+| MU3 | Workspace isolation at process level (container isolation is P4 hardening, but basic isolation must work) | [#1450](https://github.com/jikig-ai/soleur/issues/1450) Done |
 
 **Gate:** All three must pass before any recruitment outreach.
 
@@ -347,6 +347,7 @@ Before recruiting founders, the platform must handle multiple users signing up a
 | 5.3 | Reuse ops-provisioner guided setup pattern (3-phase: Setup, Configure, Verify) | P1 | [#1427](https://github.com/jikig-ai/soleur/issues/1427) | Playwright integrated | Not started |
 | 5.4 | Auto-update mechanism | P2 | [#1428](https://github.com/jikig-ai/soleur/issues/1428) | Desktop app shipped | Not started |
 | 5.5 | Code signing (macOS + Windows) | P1 | [#1429](https://github.com/jikig-ai/soleur/issues/1429) | Before distribution | Not started |
+| 5.6 | A/B test Solo tier cap (2 vs 3 vs metered concurrent agents) | P2 | [#2625](https://github.com/jikig-ai/soleur/issues/2625) | Desktop app shipped | Not started |
 
 **Why this phase exists:** Browser automation is impossible on PWA, iOS, and Android due to platform sandboxing. Only a native desktop app can run Playwright locally on the user's machine. This is the desktop app's reason to exist — not wrapping the web app, but providing a capability no other surface can.
 
@@ -436,8 +437,8 @@ Weekly CPO review (every Monday). Pre-product-market-fit: the landscape changes 
 - **After each beta cohort:** Update validation findings. Adjust Phase 3 scope.
 - **Quarterly:** Full roadmap revision. Cross-reference with competitive intelligence and marketing strategy.
 
-Next review: 2026-04-17.
+Next review: 2026-05-11.
 
 ---
 
-_Generated: 2026-03-23. Domain review: CTO, CLO, CFO, CMO (2026-03-23). Milestone audit: 2026-04-03. CPO weekly review: 2026-04-06. Status sync from GitHub milestones: 2026-04-10. CPO weekly review + status sync: 2026-04-13. Growth audit intake: 2026-04-18 (12 issues: 1 to Phase 3, 8 to Marketing Gate, 3 to Post-MVP). Growth audit intake: 2026-04-19 (17 issues: 1 P0 to Phase 3 infra, 1 P0 + 6 P1 to Marketing Gate M26-M32, 9 P2 to Post-MVP L11-L19). Growth audit intake: 2026-04-21 (6 issues: 5 to Marketing Gate M33-M37, 1 to Post-MVP L20). Growth audit intake: 2026-04-22 (6 issues: 3 to Marketing Gate M38-M40 for P1 inline fixes, 3 to Post-MVP L21-L23 for P2/P3 hygiene; 3 pillar issues #2559/#2561/#2712 already in Phase 4; 4 Post-MVP items #2556/#2558/#2669/#2670 already in L7-L14). Sources: business-validation.md (2026-03-12), competitive-intelligence.md (2026-03-12), pricing-strategy.md (2026-03-12), brand-guide.md (2026-02-21). Workshop conducted via /soleur:product-roadmap skill. Finance cost model reconciled 2026-04-23 (#2835) — CFO burn figure corrected from stale EUR 35-44 (~10× underestimate) to R&D/COGS split (~$81/mo product COGS, ~$491/mo all-in)._
+_Generated: 2026-03-23. Domain review: CTO, CLO, CFO, CMO (2026-03-23). Milestone audit: 2026-04-03. CPO weekly review: 2026-04-06. Status sync from GitHub milestones: 2026-04-10. CPO weekly review + status sync: 2026-04-13. Growth audit intake: 2026-04-18 (12 issues: 1 to Phase 3, 8 to Marketing Gate, 3 to Post-MVP). Growth audit intake: 2026-04-19 (17 issues: 1 P0 to Phase 3 infra, 1 P0 + 6 P1 to Marketing Gate M26-M32, 9 P2 to Post-MVP L11-L19). Growth audit intake: 2026-04-21 (6 issues: 5 to Marketing Gate M33-M37, 1 to Post-MVP L20). Growth audit intake: 2026-04-22 (6 issues: 3 to Marketing Gate M38-M40 for P1 inline fixes, 3 to Post-MVP L21-L23 for P2/P3 hygiene; 3 pillar issues #2559/#2561/#2712 already in Phase 4; 4 Post-MVP items #2556/#2558/#2669/#2670 already in L7-L14). Sources: business-validation.md (2026-03-12), competitive-intelligence.md (2026-03-12), pricing-strategy.md (2026-03-12), brand-guide.md (2026-02-21). Workshop conducted via /soleur:product-roadmap skill. Finance cost model reconciled 2026-04-23 (#2835) — CFO burn figure corrected from stale EUR 35-44 (~10× underestimate) to R&D/COGS split (~$81/mo product COGS, ~$491/mo all-in). CPO weekly review 2026-05-04: bidirectional gate audit — 30 stale statuses corrected (Phase 3 features 3.22-3.28, Marketing Gate M5/M12-M16/M26-M40, Multi-User Readiness MU1-MU3); milestone counts synced; #2625 added to Phase 5 table; 35 no-milestone issues flagged (see #3161)._

@@ -293,6 +293,75 @@ describe("sandbox path stripping (FR2 #2861)", () => {
     );
     expect(reportSilentFallbackMock).not.toHaveBeenCalled();
   });
+
+  // Terminator-form regression tests (Sentry 1e549c800f33479c9c6330cf6e91bce7).
+  // The leaked id intentionally differs from `workspacePath` so the substring
+  // `replaceAll(workspacePath, "")` early path at tool-labels.ts:50 is bypassed
+  // — only the canonical regex can strip the leaked id. Mirrors production:
+  // assistant prose mentioning a path that isn't the agent's own cwd.
+  const leakedWorkspaceId = "/workspaces/xyz789uvw012";
+  const leakedSandboxPrefix =
+    "/tmp/claude-2000/-workspaces-xyz789uvw012-7e8f9a2b1c3d4e5f6a7b8c9d0e1f2a3b";
+
+  // Invariant guard: if a future refactor sets the leaked id equal to
+  // workspacePath, the substring early path would mask the regex regression.
+  test("leaked-id fixtures do not collide with workspacePath", () => {
+    expect(workspacePath.includes("xyz789uvw012")).toBe(false);
+    expect(leakedSandboxPrefix.includes(workspacePath)).toBe(false);
+  });
+
+  test.each([
+    ["host: end-of-string", `cwd: ${leakedWorkspaceId}`, "cwd: "],
+    ["host: colon terminator", `error at ${leakedWorkspaceId}:42`, "error at :42"],
+    ["host: semicolon terminator", `cd ${leakedWorkspaceId}; ls`, "cd ; ls"],
+    ["host: period terminator", `inspect ${leakedWorkspaceId}.`, "inspect ."],
+    ["host: bracket terminator", `[${leakedWorkspaceId}]`, "[]"],
+    ["host: dquote terminator", `"${leakedWorkspaceId}"`, `""`],
+    ["host: whitespace terminator", `pwd -> ${leakedWorkspaceId} then`, "pwd ->  then"],
+    ["host: comma terminator", `path: ${leakedWorkspaceId}, next`, "path: , next"],
+    ["host: paren terminator", `dir(${leakedWorkspaceId})`, "dir()"],
+    ["sandbox: end-of-string", `cwd: ${leakedSandboxPrefix}`, "cwd: "],
+    ["sandbox: colon terminator", `error at ${leakedSandboxPrefix}:42`, "error at :42"],
+    ["sandbox: whitespace terminator", `pwd -> ${leakedSandboxPrefix} then`, "pwd ->  then"],
+    ["sandbox: comma terminator", `path: ${leakedSandboxPrefix}, next`, "path: , next"],
+    ["sandbox: paren terminator", `dir(${leakedSandboxPrefix})`, "dir()"],
+  ])(
+    "workspace/sandbox path terminator (%s) scrubs cleanly and does NOT fire fallback",
+    (_label, command, expectedScrubbed) => {
+      buildToolLabel("Bash", { command }, workspacePath);
+
+      // Behavior: the canonical pattern must actually remove the leaked path
+      // from the working text (not just match zero-width with no removal).
+      // Apply the same patterns the call site uses.
+      let scrubbed = command;
+      for (const pattern of SANDBOX_PATH_PATTERNS) {
+        scrubbed = scrubbed.replace(pattern, "");
+      }
+      expect(scrubbed).toBe(expectedScrubbed);
+      expect(scrubbed).not.toContain(leakedWorkspaceId);
+      expect(scrubbed).not.toContain(leakedSandboxPrefix);
+
+      // Side-effect: no scrub-fallback Sentry event fired.
+      const scrubCalls = reportSilentFallbackMock.mock.calls.filter(
+        ([, opts]) =>
+          opts && (opts as { op?: string }).op === "tool-label-scrub",
+      );
+      expect(scrubCalls).toEqual([]);
+    },
+  );
+
+  test("Read branch: bare leaked workspace id falls back to default label", () => {
+    // file_path = `/workspaces/<other-id>` (no subpath). Canonical pattern
+    // now matches via the `$` terminator and strips the entire string;
+    // extractRelativePath returns "" which falls back to FALLBACK_LABELS.Read.
+    const label = buildToolLabel(
+      "Read",
+      { file_path: leakedWorkspaceId },
+      workspacePath,
+    );
+    expect(label).toBe("Reading file...");
+    expect(label).not.toContain(leakedWorkspaceId);
+  });
 });
 
 // ---------------------------------------------------------------------------

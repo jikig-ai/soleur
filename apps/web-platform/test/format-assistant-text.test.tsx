@@ -175,4 +175,32 @@ describe("formatAssistantText (FR3 #2861)", () => {
     expect(once.split("```")[0]).not.toContain(WORKSPACE_PREFIX);
     expect(once.split("```")[2]).not.toContain(SANDBOX_PREFIX);
   });
+
+  // Terminator-form regression tests (Sentry 1e549c800f33479c9c6330cf6e91bce7).
+  // The shared `SANDBOX_PATH_PATTERNS` module is the only contract between
+  // server and client; this block locks the cross-bundle invariant so a
+  // future split in scrub paths is caught by either suite. Mirrors the
+  // server-side block in build-tool-label.test.ts.
+  test.each([
+    ["host: end-of-string", `Path is ${WORKSPACE_PREFIX}`],
+    ["host: colon terminator", `Error at ${WORKSPACE_PREFIX}:42`],
+    ["host: semicolon terminator", `Use ${WORKSPACE_PREFIX}; then proceed`],
+    ["host: period terminator", `Inspect ${WORKSPACE_PREFIX}.`],
+    ["host: bracket terminator", `See [${WORKSPACE_PREFIX}] for details`],
+    ["host: dquote terminator", `Path is "${WORKSPACE_PREFIX}" today`],
+    ["host: whitespace terminator", `pwd ${WORKSPACE_PREFIX} then ls`],
+    ["host: comma terminator", `Open ${WORKSPACE_PREFIX}, next file`],
+    ["host: paren terminator", `Run dir(${WORKSPACE_PREFIX}) now`],
+    ["sandbox: end-of-string", `Path is ${SANDBOX_PREFIX}`],
+    ["sandbox: colon terminator", `Error at ${SANDBOX_PREFIX}:42`],
+  ])(
+    "client scrub: terminator-form path (%s) is removed and does NOT trip fallthrough",
+    (_label, raw) => {
+      const fallthrough = vi.fn();
+      const out = formatAssistantText(raw, { reportFallthrough: fallthrough });
+      expect(out).not.toContain(WORKSPACE_PREFIX);
+      expect(out).not.toContain(SANDBOX_PREFIX);
+      expect(fallthrough).not.toHaveBeenCalled();
+    },
+  );
 });

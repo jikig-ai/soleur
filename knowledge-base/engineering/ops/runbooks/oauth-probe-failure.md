@@ -144,6 +144,53 @@ provider OAuth credential expired (Supabase auto-disables broken
 providers). Re-enable in the Supabase Auth dashboard; if credentials
 are stale, rotate the OAuth client secret.
 
+### `callback_error_passthrough`
+
+`GET https://app.soleur.ai/callback?error=access_denied` did not
+redirect to `/login?error=oauth_cancelled`. The probe asserts that
+provider-side OAuth errors (specifically the user-cancel signal
+`access_denied`) are classified by the callback route and routed to
+the dedicated `oauth_cancelled` error copy — NOT conflated with
+generic `auth_failed`.
+
+Two common root causes:
+
+1. **Regression in `app/(auth)/callback/route.ts`** — someone removed
+   or moved the `classifyProviderError` branch that runs before the
+   `if (code)` block. Check the most recent diff:
+
+   ```bash
+   git log --oneline -- apps/web-platform/app/\(auth\)/callback/route.ts | head -5
+   git show <suspect-sha> -- apps/web-platform/app/\(auth\)/callback/route.ts
+   ```
+
+   The branch is load-bearing: without it, every user who cancels at
+   the OAuth consent screen sees the misleading "try email instead"
+   copy from `auth_failed`. Roll back the offending change or restore
+   the branch.
+
+2. **Edge / proxy stripped the `error=` query param** — Cloudflare
+   Workers, redirect rules, or a CDN cache key normalizer can drop
+   query params it doesn't recognize. Verify the inbound URL reaches
+   the route with `error=access_denied` intact:
+
+   ```bash
+   curl -sI --max-time 10 \
+     "https://app.soleur.ai/callback?error=access_denied" \
+     -H 'Cache-Control: no-cache'
+   # Expect: HTTP/2 307, location: .../login?error=oauth_cancelled
+   ```
+
+   If the response is `307 .../login?error=auth_failed`, the param
+   was stripped at the edge — check Cloudflare Page Rules / Transform
+   Rules / Workers in the soleur.ai zone for routes matching
+   `/callback*`.
+
+Cross-link: PR that introduced the classifier — check `git log` for
+the `provider-error-classifier.ts` add commit. The Sentry op for this
+class is `feature:auth, op:callback_provider_error` (queryable
+without re-deployment).
+
 ## Diagnostic recipes
 
 All recipes assume `SENTRY_API_HOST` is set to the org's Sentry region
@@ -209,6 +256,46 @@ The Sentry `EventFrequencyCondition.interval` field accepts only:
 `1m | 5m | 15m | 1h | 1d | 1w | 30d`. **`10m` is rejected** with HTTP
 400. If the 60-day ratchet table below is updated to a new interval,
 verify it is in this set first.
+
+### Sentry config drift cleanup (`extra.*` field renames)
+
+When a server-side change renames a Sentry `extra.*` extra-context key
+(e.g., PR #3127 renamed `extra.text` → `extra.shape` for
+`op:tool-label-scrub`), saved Sentry artifacts that filter or group on
+the old key silently stop matching post-deploy. Run the audit script
+in dry-run mode against prod Sentry to enumerate stale references
+across all four artifact classes (issue alert rules, issue saved
+searches, Discover saved queries, dashboard widgets):
+
+```bash
+doppler run -p soleur -c prd -- bash apps/web-platform/scripts/audit-sentry-extra-text-references.sh
+```
+
+Required token scope: `org:read`, `project:read`, `project:write`,
+`event:read`. The Doppler `prd` `SENTRY_AUTH_TOKEN` may be a narrow
+`sntrys_` org-auth token scoped only to releases — if the script exits
+with `cannot read /organizations/.../`, override using the
+broader-scoped `SENTRY_API_TOKEN`:
+
+```bash
+doppler run -p soleur -c prd -- bash -c \
+  'SENTRY_AUTH_TOKEN="$SENTRY_API_TOKEN" \
+   bash apps/web-platform/scripts/audit-sentry-extra-text-references.sh'
+```
+
+If zero matches: close the tracking issue with the dry-run output.
+If non-zero matches: re-run with `--apply` (replace) or
+`--apply --add-or-clause` (additive deploy-window posture, query
+strings only — `fields[]` always replaces). The script self-verifies
+on `--apply` and exits non-zero if any references remain.
+
+**Sharp edge — tag vs. extra namespace.** The Sentry UI's issue-stream
+search bar searches **tags** (`Sentry.setTag()`), not extra-context
+(`Sentry.setExtra()`). Searching the issue stream for `extra.text`
+returns zero results regardless of how many extra-context fields
+exist. Saved searches and Discover/dashboard query strings DO
+reference `extra.*` in free-text Sentry search syntax — the audit
+script is the only complete inventory path. Do not skip the script.
 
 ### Re-run the probe on demand
 

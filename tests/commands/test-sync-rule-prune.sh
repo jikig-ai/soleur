@@ -193,6 +193,298 @@ t_body_has_verify_block() {
   rm -rf "$root"
 }
 
+# --- propose-retirement (--propose-retirement) test fixtures ---------------
+#
+# These tests exercise the quarterly retirement-proposal path (#3120 C2).
+# The default _setup() above uses hr-* ids which are filtered by the new
+# flag (per plan: hr-* retirement requires lint-rule-ids.py edit, not
+# automated). _setup_pr() builds a fixture with non-hr ids the new flag
+# CAN propose for retirement, plus a scripts/retired-rule-ids.txt seed
+# file at the path the script expects ($RULE_METRICS_ROOT/scripts/...).
+_setup_pr() {
+  local tmp; tmp=$(mktemp -d)
+  mkdir -p "$tmp/knowledge-base/project" "$tmp/scripts"
+  local cutoff
+  cutoff=$(date -u -d "-200 days" +%Y-%m-%dT%H:%M:%SZ)
+  jq -n --arg seen "$cutoff" '{
+    schema:1,
+    generated_at:"2026-05-04T00:00:00Z",
+    rules:[
+      {id:"wg-pr-stale-foo",   section:"Workflow Gates", hit_count:0, bypass_count:0, applied_count:0, warn_count:0, fire_count:0, prevented_errors:0, last_hit:null, first_seen:$seen, rule_text_prefix:"WG foo prefix"},
+      {id:"cq-pr-stale-bar",   section:"Code Quality",   hit_count:0, bypass_count:0, applied_count:0, warn_count:0, fire_count:0, prevented_errors:0, last_hit:null, first_seen:$seen, rule_text_prefix:"CQ bar [hook-enforced: guardrails.sh] prefix"},
+      {id:"hr-pr-stale-baz",   section:"Hard Rules",     hit_count:0, bypass_count:0, applied_count:0, warn_count:0, fire_count:0, prevented_errors:0, last_hit:null, first_seen:$seen, rule_text_prefix:"HR baz prefix"},
+      {id:"wg-pr-already-ret", section:"Workflow Gates", hit_count:0, bypass_count:0, applied_count:0, warn_count:0, fire_count:0, prevented_errors:0, last_hit:null, first_seen:$seen, rule_text_prefix:"already-retired prefix"},
+      {id:"rf-pr-active",      section:"Review & Feedback", hit_count:9, bypass_count:0, applied_count:0, warn_count:0, fire_count:9, prevented_errors:9, last_hit:"2026-05-01T00:00:00Z", first_seen:$seen, rule_text_prefix:"active rule"}
+    ],
+    summary:{total_rules_tagged:5, rules_unused_over_8w:4, rules_bypassed_over_baseline:0, orphan_rule_ids:[]}
+  }' > "$tmp/knowledge-base/project/rule-metrics.json"
+  cat > "$tmp/scripts/retired-rule-ids.txt" <<'RETIRED'
+# Retired AGENTS.md rule IDs.
+#
+# Format: <rule-id> | <YYYY-MM-DD> | <PR #NNNN or -> | <breadcrumb>
+
+wg-pr-already-ret | 2026-04-01 | PR #2001 | seeded for test
+RETIRED
+  echo "$tmp"
+}
+
+# Run rule-prune in propose-retirement mode and capture stdout/stderr.
+# Defense-in-depth: stub `gh` on PATH even though --propose-retirement
+# should not invoke it. Prevents real GitHub issues if the flag falls
+# through to the per-rule-issue codepath (e.g., during RED-phase reruns
+# or future regressions). _build_fake_gh sets up $root/bin/gh.
+_run_pr() {
+  local root="$1"; shift
+  _build_fake_gh "$root"
+  PATH="$root/bin:$PATH" FAKE_GH_STATE="$root" RULE_METRICS_ROOT="$root" \
+    bash "$SCRIPT" --weeks=26 --propose-retirement "$@" \
+    > "$root/out.txt" 2> "$root/err.txt"
+  echo $?
+}
+
+# tp1: no candidates → exit 0, no file mutation, no sentinels emitted.
+tp1_no_candidates() {
+  local root; root=$(mktemp -d)
+  mkdir -p "$root/knowledge-base/project" "$root/scripts"
+  jq -n '{
+    schema:1, generated_at:"2026-05-04T00:00:00Z",
+    rules:[{id:"rf-active", section:"Review & Feedback", hit_count:5, bypass_count:0, applied_count:0, warn_count:0, fire_count:5, prevented_errors:5, last_hit:"2026-05-01T00:00:00Z", first_seen:"2026-04-01T00:00:00Z", rule_text_prefix:"x"}],
+    summary:{total_rules_tagged:1, rules_unused_over_8w:0, rules_bypassed_over_baseline:0, orphan_rule_ids:[]}
+  }' > "$root/knowledge-base/project/rule-metrics.json"
+  : > "$root/scripts/retired-rule-ids.txt"
+  local rc; rc=$(_run_pr "$root")
+  # Empty-candidates exits via shared "No prune candidates" path; the
+  # propose-retirement-specific "No retirement candidates" fires only
+  # when candidates exist but are all filtered (hr-*/already-retired/
+  # duplicate). Either is the correct empty-result path; both must
+  # exit 0 with no sentinels and no file mutation.
+  if [[ "$rc" == "0" ]] \
+     && grep -qE 'No (prune|retirement) candidates' "$root/out.txt" \
+     && ! grep -qE '::rule-prune-pr-(title|body)::' "$root/out.txt" \
+     && ! grep -qE 'wg-|cq-' "$root/scripts/retired-rule-ids.txt"; then
+    _report "tp1: no candidates → exit 0, no sentinels, no append" ok
+  else
+    _report "tp1: no candidates → exit 0, no sentinels, no append" fail "rc=$rc; out=$(cat "$root/out.txt"); file=$(cat "$root/scripts/retired-rule-ids.txt")"
+  fi
+  rm -rf "$root"
+}
+
+# tp2: one non-hr candidate → exactly one append in canonical format,
+# both sentinels emitted on stdout.
+tp2_one_non_hr() {
+  local root; root=$(mktemp -d)
+  mkdir -p "$root/knowledge-base/project" "$root/scripts"
+  local cutoff; cutoff=$(date -u -d "-200 days" +%Y-%m-%dT%H:%M:%SZ)
+  jq -n --arg seen "$cutoff" '{
+    schema:1, generated_at:"2026-05-04T00:00:00Z",
+    rules:[{id:"wg-stale-only", section:"Workflow Gates", hit_count:0, bypass_count:0, applied_count:0, warn_count:0, fire_count:0, prevented_errors:0, last_hit:null, first_seen:$seen, rule_text_prefix:"some prefix"}],
+    summary:{total_rules_tagged:1, rules_unused_over_8w:1, rules_bypassed_over_baseline:0, orphan_rule_ids:[]}
+  }' > "$root/knowledge-base/project/rule-metrics.json"
+  : > "$root/scripts/retired-rule-ids.txt"
+  local rc; rc=$(_run_pr "$root")
+  local appends; appends=$(grep -cE '^wg-stale-only \|' "$root/scripts/retired-rule-ids.txt" || echo 0)
+  if [[ "$rc" == "0" ]] \
+     && [[ "$appends" == "1" ]] \
+     && grep -qE '^::rule-prune-pr-title::' "$root/out.txt" \
+     && grep -qE '^::rule-prune-pr-body::'  "$root/out.txt"; then
+    _report "tp2: one non-hr → 1 append + sentinels" ok
+  else
+    _report "tp2: one non-hr → 1 append + sentinels" fail "rc=$rc; appends=$appends; out=$(cat "$root/out.txt"); file=$(cat "$root/scripts/retired-rule-ids.txt")"
+  fi
+  rm -rf "$root"
+}
+
+# tp3: hr-* candidate is filtered (NOT appended) regardless of staleness.
+tp3_hr_skipped() {
+  local root; root=$(_setup_pr)
+  local rc; rc=$(_run_pr "$root")
+  if [[ "$rc" == "0" ]] \
+     && ! grep -qE '^hr-pr-stale-baz \|' "$root/scripts/retired-rule-ids.txt" \
+     && grep -qiE '\[skip\].*hr-' "$root/out.txt"; then
+    _report "tp3: hr-* candidate skipped" ok
+  else
+    _report "tp3: hr-* candidate skipped" fail "rc=$rc; out=$(cat "$root/out.txt"); file=$(cat "$root/scripts/retired-rule-ids.txt")"
+  fi
+  rm -rf "$root"
+}
+
+# tp4: id already in retired-rule-ids.txt → no second append, skip log.
+tp4_already_retired() {
+  local root; root=$(_setup_pr)
+  local rc; rc=$(_run_pr "$root")
+  local n; n=$(grep -cE '^wg-pr-already-ret \|' "$root/scripts/retired-rule-ids.txt" || echo 0)
+  if [[ "$rc" == "0" ]] \
+     && [[ "$n" == "1" ]] \
+     && grep -qE '\[skip\] already retired' "$root/out.txt"; then
+    _report "tp4: already-retired id not re-appended" ok
+  else
+    _report "tp4: already-retired id not re-appended" fail "rc=$rc; n=$n; out=$(cat "$root/out.txt")"
+  fi
+  rm -rf "$root"
+}
+
+# tp5a: mixed fixture → exactly 2 non-hr appends (wg-pr-stale-foo + cq-pr-stale-bar).
+tp5a_mixed_counts() {
+  local root; root=$(_setup_pr)
+  local rc; rc=$(_run_pr "$root")
+  local foo bar
+  foo=$(grep -cE '^wg-pr-stale-foo \|' "$root/scripts/retired-rule-ids.txt" || echo 0)
+  bar=$(grep -cE '^cq-pr-stale-bar \|' "$root/scripts/retired-rule-ids.txt" || echo 0)
+  if [[ "$rc" == "0" ]] && [[ "$foo" == "1" ]] && [[ "$bar" == "1" ]]; then
+    _report "tp5a: mixed → both non-hr ids appended exactly once" ok
+  else
+    _report "tp5a: mixed → both non-hr ids appended exactly once" fail "rc=$rc; foo=$foo; bar=$bar; file=$(cat "$root/scripts/retired-rule-ids.txt")"
+  fi
+  rm -rf "$root"
+}
+
+# tp5b: title sentinel format includes hook-enforced count.
+tp5b_title_format() {
+  local root; root=$(_setup_pr)
+  _run_pr "$root" >/dev/null
+  local title
+  title=$(grep -E '^::rule-prune-pr-title::' "$root/out.txt" | head -n 1 | sed 's/^::rule-prune-pr-title:://')
+  # Expected: "feat(rule-prune): propose retirement of 2 rules (1 hook/skill-enforced)"
+  if echo "$title" | grep -qE 'propose retirement of 2 rules' \
+     && echo "$title" | grep -qE '\(1 hook/skill-enforced\)'; then
+    _report "tp5b: title sentinel format" ok
+  else
+    _report "tp5b: title sentinel format" fail "title='$title'"
+  fi
+  rm -rf "$root"
+}
+
+# tp8: schema mismatch → exit 3, --propose-retirement does not bypass.
+tp8_schema_mismatch() {
+  local root; root=$(mktemp -d)
+  mkdir -p "$root/knowledge-base/project" "$root/scripts"
+  jq -n '{schema:99, generated_at:"x", rules:[], summary:{total_rules_tagged:0, rules_unused_over_8w:0, rules_bypassed_over_baseline:0, orphan_rule_ids:[]}}' \
+    > "$root/knowledge-base/project/rule-metrics.json"
+  _build_fake_gh "$root"
+  # Capture non-zero exit without tripping set -e in the parent test script.
+  local rc=0
+  PATH="$root/bin:$PATH" FAKE_GH_STATE="$root" RULE_METRICS_ROOT="$root" \
+    bash "$SCRIPT" --weeks=26 --propose-retirement \
+    > "$root/out.txt" 2> "$root/err.txt" || rc=$?
+  if [[ "$rc" == "3" ]] && grep -qE 'unexpected schema' "$root/err.txt"; then
+    _report "tp8: schema mismatch → exit 3" ok
+  else
+    _report "tp8: schema mismatch → exit 3" fail "rc=$rc; err=$(cat "$root/err.txt")"
+  fi
+  rm -rf "$root"
+}
+
+# tp9: re-run idempotency. After tp2-style append, second run sees the id
+# in the seed file and skips it.
+tp9_rerun_idempotent() {
+  local root; root=$(mktemp -d)
+  mkdir -p "$root/knowledge-base/project" "$root/scripts"
+  local cutoff; cutoff=$(date -u -d "-200 days" +%Y-%m-%dT%H:%M:%SZ)
+  jq -n --arg seen "$cutoff" '{
+    schema:1, generated_at:"2026-05-04T00:00:00Z",
+    rules:[{id:"wg-stale-rerun", section:"Workflow Gates", hit_count:0, bypass_count:0, applied_count:0, warn_count:0, fire_count:0, prevented_errors:0, last_hit:null, first_seen:$seen, rule_text_prefix:"x"}],
+    summary:{total_rules_tagged:1, rules_unused_over_8w:1, rules_bypassed_over_baseline:0, orphan_rule_ids:[]}
+  }' > "$root/knowledge-base/project/rule-metrics.json"
+  : > "$root/scripts/retired-rule-ids.txt"
+  _run_pr "$root" >/dev/null
+  local lines_after_first; lines_after_first=$(wc -l < "$root/scripts/retired-rule-ids.txt")
+  _run_pr "$root" >/dev/null
+  local lines_after_second; lines_after_second=$(wc -l < "$root/scripts/retired-rule-ids.txt")
+  if [[ "$lines_after_first" == "$lines_after_second" ]] \
+     && grep -qE '\[skip\] already retired' "$root/out.txt"; then
+    _report "tp9: re-run does not re-append" ok
+  else
+    _report "tp9: re-run does not re-append" fail "first=$lines_after_first second=$lines_after_second"
+  fi
+  rm -rf "$root"
+}
+
+# tp10: duplicate-id within rule-metrics candidate set → only first appended.
+tp10_duplicate_candidate() {
+  local root; root=$(mktemp -d)
+  mkdir -p "$root/knowledge-base/project" "$root/scripts"
+  local cutoff; cutoff=$(date -u -d "-200 days" +%Y-%m-%dT%H:%M:%SZ)
+  jq -n --arg seen "$cutoff" '{
+    schema:1, generated_at:"2026-05-04T00:00:00Z",
+    rules:[
+      {id:"wg-dup", section:"Workflow Gates", hit_count:0, bypass_count:0, applied_count:0, warn_count:0, fire_count:0, prevented_errors:0, last_hit:null, first_seen:$seen, rule_text_prefix:"x"},
+      {id:"wg-dup", section:"Workflow Gates", hit_count:0, bypass_count:0, applied_count:0, warn_count:0, fire_count:0, prevented_errors:0, last_hit:null, first_seen:$seen, rule_text_prefix:"x"}
+    ],
+    summary:{total_rules_tagged:2, rules_unused_over_8w:2, rules_bypassed_over_baseline:0, orphan_rule_ids:[]}
+  }' > "$root/knowledge-base/project/rule-metrics.json"
+  : > "$root/scripts/retired-rule-ids.txt"
+  _run_pr "$root" >/dev/null
+  local n; n=$(grep -cE '^wg-dup \|' "$root/scripts/retired-rule-ids.txt" || echo 0)
+  if [[ "$n" == "1" ]] && grep -qE '\[skip\] duplicate candidate id' "$root/out.txt"; then
+    _report "tp10: duplicate candidate id → single append" ok
+  else
+    _report "tp10: duplicate candidate id → single append" fail "n=$n; out=$(cat "$root/out.txt")"
+  fi
+  rm -rf "$root"
+}
+
+# tp11: --propose-retirement --dry-run → no file write, sentinels still emitted.
+tp11_dry_run_honored() {
+  local root; root=$(mktemp -d)
+  mkdir -p "$root/knowledge-base/project" "$root/scripts"
+  local cutoff; cutoff=$(date -u -d "-200 days" +%Y-%m-%dT%H:%M:%SZ)
+  jq -n --arg seen "$cutoff" '{
+    schema:1, generated_at:"2026-05-04T00:00:00Z",
+    rules:[{id:"wg-dry", section:"Workflow Gates", hit_count:0, bypass_count:0, applied_count:0, warn_count:0, fire_count:0, prevented_errors:0, last_hit:null, first_seen:$seen, rule_text_prefix:"x"}],
+    summary:{total_rules_tagged:1, rules_unused_over_8w:1, rules_bypassed_over_baseline:0, orphan_rule_ids:[]}
+  }' > "$root/knowledge-base/project/rule-metrics.json"
+  : > "$root/scripts/retired-rule-ids.txt"
+  _build_fake_gh "$root"
+  local rc=0
+  PATH="$root/bin:$PATH" FAKE_GH_STATE="$root" RULE_METRICS_ROOT="$root" \
+    bash "$SCRIPT" --weeks=26 --propose-retirement --dry-run \
+    > "$root/out.txt" 2> "$root/err.txt" || rc=$?
+  local n=0
+  n=$(grep -cE '^wg-dry \|' "$root/scripts/retired-rule-ids.txt" 2>/dev/null) || n=0
+  if [[ "$rc" == "0" ]] && [[ "$n" == "0" ]] \
+     && grep -qE '^::rule-prune-pr-title::' "$root/out.txt" \
+     && grep -qE '^::rule-prune-pr-body::'  "$root/out.txt"; then
+    _report "tp11: --dry-run → no append, sentinels emitted" ok
+  else
+    _report "tp11: --dry-run → no append, sentinels emitted" fail "rc=$rc; n=$n; out=$(cat "$root/out.txt")"
+  fi
+  rm -rf "$root"
+}
+
+# tp12: rule with first_seen=null is NOT a retirement candidate.
+# Regression guard for the post-merge bug surfaced by #3123's workflow_dispatch:
+# the prior jq filter treated `first_seen == null` as "long ago," wrongly
+# proposing retirement of healthy never-fired rules whose timestamps the
+# aggregator hadn't populated yet (66 rules in rule-metrics.json on
+# 2026-05-04, 41 of which were proposed by PR #3154 before being closed).
+# Null first_seen means "not yet observed," not "stale" — it must skip.
+tp12_null_first_seen_skipped() {
+  local root; root=$(mktemp -d)
+  mkdir -p "$root/knowledge-base/project" "$root/scripts"
+  jq -n '{
+    schema:1, generated_at:"2026-05-04T00:00:00Z",
+    rules:[
+      {id:"wg-no-timestamp", section:"Workflow Gates", hit_count:0, bypass_count:0, applied_count:0, warn_count:0, fire_count:0, prevented_errors:0, last_hit:null, first_seen:null, rule_text_prefix:"never observed yet"}
+    ],
+    summary:{total_rules_tagged:1, rules_unused_over_8w:0, rules_bypassed_over_baseline:0, orphan_rule_ids:[]}
+  }' > "$root/knowledge-base/project/rule-metrics.json"
+  : > "$root/scripts/retired-rule-ids.txt"
+  local rc; rc=$(_run_pr "$root")
+  # Expectation: identical to tp1 (no candidates) — the null-first_seen rule
+  # must be filtered out at the candidates-jq stage, before any
+  # propose-retirement-mode logic runs. So we exit via the shared
+  # "No prune candidates" path.
+  if [[ "$rc" == "0" ]] \
+     && grep -qE 'No (prune|retirement) candidates' "$root/out.txt" \
+     && ! grep -qE '::rule-prune-pr-(title|body)::' "$root/out.txt" \
+     && ! grep -qE '^wg-no-timestamp \|' "$root/scripts/retired-rule-ids.txt"; then
+    _report "tp12: first_seen=null → not a candidate" ok
+  else
+    _report "tp12: first_seen=null → not a candidate" fail "rc=$rc; out=$(cat "$root/out.txt"); file=$(cat "$root/scripts/retired-rule-ids.txt")"
+  fi
+  rm -rf "$root"
+}
+
 if [[ ! -f "$SCRIPT" ]]; then
   echo "ERROR: $SCRIPT does not exist — RED phase expected this." >&2
   exit 1
@@ -204,6 +496,19 @@ t_dry_run
 t_weeks_zero
 t_invalid_rule_id_skipped
 t_body_has_verify_block
+
+# --propose-retirement (#3120 C2) tests
+tp1_no_candidates
+tp2_one_non_hr
+tp3_hr_skipped
+tp4_already_retired
+tp5a_mixed_counts
+tp5b_title_format
+tp8_schema_mismatch
+tp9_rerun_idempotent
+tp10_duplicate_candidate
+tp11_dry_run_honored
+tp12_null_first_seen_skipped
 
 echo "=== $pass passed, $fail failed ==="
 [[ "$fail" -eq 0 ]]

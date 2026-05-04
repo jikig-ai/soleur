@@ -1,18 +1,37 @@
 #!/usr/bin/env bash
-# Surfaces AGENTS.md rules with zero hits over N weeks as GitHub issues
-# milestoned to "Post-MVP / Later". Does NOT edit AGENTS.md — a human
-# reviews the issue and decides whether to prune.
+# Surfaces AGENTS.md rules with zero hits over N weeks. Two output modes:
+#
+#   Default: files one GitHub issue per candidate, milestoned to
+#   "Post-MVP / Later". Idempotent via `gh issue list --search` title
+#   match. Used by /soleur:sync rule-prune.
+#
+#   --propose-retirement: appends candidates to scripts/retired-rule-ids.txt
+#   in canonical format and emits stdout sentinels for the calling
+#   workflow to consume into PR title/body via $GITHUB_OUTPUT. Used by the
+#   quarterly .github/workflows/scheduled-rule-prune.yml (#3120 C2). The
+#   workflow then opens a single consolidated PR via the
+#   bot-pr-with-synthetic-checks composite action.
+#
+# Neither mode edits AGENTS.md — humans retire rule text in a separate PR.
+# Both modes filter `^hr-` ids out (per cq-rule-ids-are-immutable + the
+# hr-rule-retirement-guard). hr-* retirement requires a human edit to
+# scripts/lint-rule-ids.py's HR_RETIREMENT_ALLOWLIST and is not automated.
 #
 # Reads knowledge-base/project/rule-metrics.json (written by
 # scripts/rule-metrics-aggregate.sh). Default threshold is
-# $UNUSED_WEEKS_DEFAULT (8) weeks; override with --weeks=<n>. Idempotent
-# via `gh issue list --search` title match.
+# $UNUSED_WEEKS_DEFAULT (8) weeks; override with --weeks=<n>.
 #
 # Flags:
-#   --weeks=<n>   Threshold in weeks (default 8)
-#   --dry-run     Print what would be filed; do not call gh
+#   --weeks=<n>             Threshold in weeks (default 8)
+#   --dry-run               Print what would be filed/appended; do not
+#                           mutate state. Honored in both modes.
+#   --propose-retirement    Switch to retirement-proposal mode: append
+#                           candidates to scripts/retired-rule-ids.txt
+#                           and emit ::rule-prune-pr-{title,body}::
+#                           sentinels on stdout. Skips ^hr-* and ids
+#                           already listed in retired-rule-ids.txt.
 #
-# Honors $RULE_METRICS_ROOT for tests.
+# Honors $RULE_METRICS_ROOT for tests (rule-metrics.json AND retired-rule-ids.txt).
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -21,10 +40,12 @@ source "$SCRIPT_DIR/lib/rule-metrics-constants.sh"
 
 WEEKS=$UNUSED_WEEKS_DEFAULT
 DRY_RUN=0
+PROPOSE_RETIREMENT=0
 for arg in "$@"; do
   case "$arg" in
-    --weeks=*)  WEEKS="${arg#--weeks=}" ;;
-    --dry-run)  DRY_RUN=1 ;;
+    --weeks=*)             WEEKS="${arg#--weeks=}" ;;
+    --dry-run)             DRY_RUN=1 ;;
+    --propose-retirement)  PROPOSE_RETIREMENT=1 ;;
   esac
 done
 
@@ -43,14 +64,30 @@ jq -e --argjson v "$SCHEMA_VERSION" '.schema == $v' "$METRICS" >/dev/null 2>&1 \
 cutoff_epoch=$(( $(date -u +%s) - WEEKS * 7 * 86400 ))
 
 # Emit candidate tuples: id\tsection\tfirst_seen\trule_text_prefix.
-# try/catch on fromdateiso8601 mirrors the aggregator: malformed timestamps
-# get treated as "seen long ago" (epoch 0 < any finite cutoff).
+# Selection invariants:
+#   - fire_count == 0 (no deny/bypass/applied/warn events)
+#   - first_seen is set AND parseable AND older than cutoff
+#
+# `first_seen == null` means the aggregator hasn't recorded a first observation
+# yet (rule added since last aggregator run, or rule pre-dates v1 schema).
+# Treating null as "long ago" was the original intent (defensive fallback)
+# but the failure mode is severe: on first quarterly run after a rule-metrics
+# initialization, every never-fired rule with null first_seen is wrongly
+# flagged as stale. Surfaced post-merge by PR #3123's workflow_dispatch
+# validation, which proposed retiring 41 healthy rules including
+# `cq-rule-ids-are-immutable`. Rules without a first_seen timestamp are
+# unobservable, not stale — skip them and let the aggregator's next run
+# populate the timestamp.
+#
+# try/catch on fromdateiso8601 still treats malformed timestamps as
+# epoch 0 < cutoff (i.e., stale) — this is correct because a malformed
+# timestamp is corrupted state, not "not yet observed."
 candidates=$(jq -r \
   --argjson cutoff "$cutoff_epoch" \
   '.rules
    | map(select(.fire_count == 0
-        and (.first_seen == null
-             or (try (.first_seen | fromdateiso8601) catch 0) < $cutoff)))
+        and .first_seen != null
+        and (try (.first_seen | fromdateiso8601) catch 0) < $cutoff))
    | .[]
    | [.id, .section, (.first_seen // "unknown"), .rule_text_prefix]
    | @tsv' \
@@ -71,6 +108,101 @@ candidate_count=$(printf '%s\n' "$candidates" | wc -l | tr -d ' ')
 # differ in syntax. Drift guard: a comment in lint-rule-ids.py points back
 # here, and vice versa.
 _RULE_ID_RE='^(hr|wg|cq|rf|pdr|cm)-[a-z0-9-]{3,60}$'
+
+# --- propose-retirement mode (#3120 C2) ----------------------------------
+# Parses scripts/retired-rule-ids.txt to skip already-retired ids.
+# Strips leading + trailing whitespace AND internal whitespace in the id
+# field; tolerates malformed rows by extracting only the id segment.
+_load_retired_ids() {
+  local file="$ROOT/scripts/retired-rule-ids.txt"
+  [[ -f "$file" ]] || return 0
+  awk '/^[^#]/ {
+    sub(/^[ \t]+/,""); sub(/[ \t]+$/,"")
+    if ($0 == "") next
+    split($0, a, "[ \t]*\\|[ \t]*")
+    gsub(/[ \t]+/, "", a[1])
+    if (a[1] != "") print a[1]
+  }' "$file"
+}
+
+if [[ "$PROPOSE_RETIREMENT" == "1" ]]; then
+  retired_file="$ROOT/scripts/retired-rule-ids.txt"
+  declare -A retired_set
+  while IFS= read -r r; do
+    [[ -n "$r" ]] && retired_set["$r"]=1
+  done < <(_load_retired_ids)
+
+  declare -A appended_set
+  declare -a pending_lines
+  appended=0
+  hook_enforced=0
+  today=$(date -u +%Y-%m-%d)
+
+  # First pass: validate, filter, decide. No file mutation.
+  while IFS=$'\t' read -r id section first_seen prefix; do
+    # Sanitize prefix: collapse CR/LF to space so the id breadcrumb stays
+    # on a single line in retired-rule-ids.txt (a stray \n in rule_text_prefix
+    # would break the file's line-oriented contract).
+    sanitized_prefix="${prefix//[$'\n\r']/ }"
+    if [[ "$sanitized_prefix" != "$prefix" ]]; then
+      echo "::warning::rule_text_prefix for $id contained CR/LF; sanitized to single line" >&2
+    fi
+    if ! [[ "$id" =~ $_RULE_ID_RE ]]; then
+      echo "::warning::Skipping invalid rule_id: $id" >&2
+      continue
+    fi
+    if [[ "$id" == hr-* ]]; then
+      echo "[skip] hr-* retirement requires lint-rule-ids.py edit, not automated: $id"
+      continue
+    fi
+    if [[ -n "${retired_set[$id]:-}" ]]; then
+      echo "[skip] already retired: $id"
+      continue
+    fi
+    if [[ -n "${appended_set[$id]:-}" ]]; then
+      echo "[skip] duplicate candidate id (rule-metrics drift): $id"
+      continue
+    fi
+    is_he=0
+    if [[ "$sanitized_prefix" == *"[hook-enforced"* || "$sanitized_prefix" == *"[skill-enforced"* ]]; then
+      is_he=1
+    fi
+    # Canonical retired-rule-ids.txt format:
+    # <id> | YYYY-MM-DD | PR #<N> or - | <breadcrumb>
+    pending_lines+=( "$id | $today | - | scheduled by rule-prune (first_seen=$first_seen, fire_count=0, hook_enforced=$is_he)" )
+    appended_set["$id"]=1
+    appended=$((appended + 1))
+    hook_enforced=$((hook_enforced + is_he))
+  done < <(printf '%s\n' "$candidates")
+
+  if (( appended == 0 )); then
+    echo "No retirement candidates for >=${WEEKS}w."
+    exit 0
+  fi
+
+  # Second pass: atomic single-redirect append.
+  if [[ "$DRY_RUN" != "1" ]]; then
+    # Ensure parent dir exists (test fixtures sometimes seed an empty file
+    # via `: > file`; production path always has a tracked file).
+    mkdir -p "$(dirname "$retired_file")"
+    printf '%s\n' "${pending_lines[@]}" >> "$retired_file"
+  fi
+
+  # Emit sentinels for the workflow to consume. Both lines are tr -d'd
+  # defensively even though sanitized_prefix already stripped CR/LF.
+  pr_title="feat(rule-prune): propose retirement of $appended rules ($hook_enforced hook/skill-enforced)"
+  pr_body="Quarterly rule-prune retirement proposal: $appended rules with fire_count=0 over >=${WEEKS} weeks. Per-rule rationale in the diff. $hook_enforced flagged hook-/skill-enforced — review them carefully. Spec: knowledge-base/project/specs/feat-harness-eval-stale-rules/spec.md."
+  printf '::rule-prune-pr-title::%s\n' "$(printf '%s' "$pr_title" | tr -d '\n\r')"
+  printf '::rule-prune-pr-body::%s\n'  "$(printf '%s' "$pr_body"  | tr -d '\n\r')"
+
+  if [[ "$DRY_RUN" == "1" ]]; then
+    echo "Done (dry-run). Pending: $appended. Hook/skill-enforced: $hook_enforced. No file written."
+  else
+    echo "Done. Appended: $appended. Hook/skill-enforced: $hook_enforced."
+  fi
+  exit 0
+fi
+# --- end propose-retirement mode -----------------------------------------
 
 if [[ "$DRY_RUN" == "1" ]]; then
   echo "Would file $candidate_count issue(s):"

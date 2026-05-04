@@ -40,3 +40,7 @@ When analyzing, consider:
 - The evolution of coding patterns and practices over time
 
 Your insights should help developers understand not just what the code does, but why it evolved to its current state, informing better decisions for future changes.
+
+## Sharp Edges
+
+- **Branch-vs-main comparisons MUST use three-dot diff (`origin/main...HEAD`), never two-dot (`origin/main..HEAD`).** Two-dot shows commits *main* gained since the fork point — a branch behind main will appear to have "reverted" everything main merged in the meantime, producing confidently-stated false-positive P0 findings ("branch contradicts merged PR #N", "branch deletes file X"). When asserting that a branch reverts, deletes, or contradicts work on main, ALWAYS verify via `git diff origin/main...HEAD --name-only` and `git log origin/main..HEAD --oneline` (the latter intentionally two-dot, but used for *commits this branch added*, not as a file-list source). Recurrence record: 2026-04-22 (PR #2795 review) and 2026-05-04 (PR #3123 review) both saw this fail-loud-blocker pattern from the same root cause; the prior prose-only prevention did not stick. See `knowledge-base/project/learnings/2026-04-22-markdown-table-parser-papercuts-and-review-diff-direction.md` §4.
