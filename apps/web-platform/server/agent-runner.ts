@@ -37,6 +37,7 @@ import { buildGithubTools } from "./github-tools";
 import { buildPlausibleTools } from "./plausible-tools";
 import { createCanUseTool } from "./permission-callback";
 import { reportSilentFallback } from "./observability";
+import { applyPrefillGuard } from "./agent-prefill-guard";
 import { updateConversationFor } from "./conversation-writer";
 import { buildAgentQueryOptions } from "./agent-runner-query-options";
 import {
@@ -880,6 +881,20 @@ issues/PRs, 4 KB comments); follow the html_url for the full text.`;
             ...pluginMcpServerNames.map((s) => `mcp__plugin_soleur_${s}__*`),
           ]
         : undefined;
+
+    // Thread-shape guard for #3250 — drop `resume:` when the persisted
+    // SDK session ends on `assistant`. Domain leaders default to
+    // `claude-sonnet-4-6`, which 400s on assistant-terminated threads.
+    // Helper-shared with the cc-soleur-go path (`cc-dispatcher.ts`).
+    const { safeResumeSessionId } = await applyPrefillGuard({
+      resumeSessionId,
+      workspacePath,
+      userId,
+      conversationId,
+      feature: "agent-runner",
+      leaderId: effectiveLeaderId,
+    });
+
     const q = query({
       prompt,
       options: buildAgentQueryOptions({
@@ -888,7 +903,7 @@ issues/PRs, 4 KB comments); follow the html_url for the full text.`;
         apiKey,
         serviceTokens,
         systemPrompt,
-        resumeSessionId,
+        resumeSessionId: safeResumeSessionId,
         maxTurns: 50,
         maxBudgetUsd: 5.0,
         ...(mcpServersOption ? { mcpServers: mcpServersOption } : {}),

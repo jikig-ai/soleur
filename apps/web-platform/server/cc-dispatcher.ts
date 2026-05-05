@@ -18,6 +18,8 @@ import path from "path";
 import type { Query } from "@anthropic-ai/claude-agent-sdk";
 import { query as sdkQuery } from "@anthropic-ai/claude-agent-sdk";
 
+import { applyPrefillGuard } from "./agent-prefill-guard";
+
 import type { WSMessage, Conversation, AttachmentRef } from "@/lib/types";
 import { KeyInvalidError, STATUS_LABELS } from "@/lib/types";
 import { persistAndDownloadAttachments } from "./attachment-pipeline";
@@ -425,12 +427,22 @@ export const realSdkQueryFactory: QueryFactory = async (
     getUserServiceTokens(args.userId),
   ]);
 
-  // Defense-in-depth: strip stale pre-approved file-tool entries from
-  // the workspace's `.claude/settings.json` so they cannot bypass
-  // `canUseTool` (permission chain step 4 before step 5). Idempotent.
-  // Async per #2918 — the lock keyed on workspacePath prevents the
-  // legacy + cc paths from racing on the same workspace.
-  await patchWorkspacePermissions(workspacePath);
+  // Workspace-permissions patch and the #3250 prefill-guard probe both
+  // depend on `workspacePath` but not on each other — parallelize so the
+  // probe doesn't add latency to cold-start dispatch. See plan
+  // §"Sharp Edges" and `agent-prefill-guard.ts` for the guard contract.
+  const [, prefillGuardResult] = await Promise.all([
+    patchWorkspacePermissions(workspacePath),
+    applyPrefillGuard({
+      resumeSessionId: args.resumeSessionId,
+      workspacePath,
+      userId: args.userId,
+      conversationId: args.conversationId,
+      feature: "cc-concierge",
+      leaderId: CC_ROUTER_LEADER_ID,
+    }),
+  ]);
+  const safeResumeSessionId = prefillGuardResult.safeResumeSessionId;
 
   const pluginPath = path.join(workspacePath, "plugins", "soleur");
 
@@ -540,7 +552,7 @@ export const realSdkQueryFactory: QueryFactory = async (
         apiKey,
         serviceTokens,
         systemPrompt: args.systemPrompt,
-        resumeSessionId: args.resumeSessionId,
+        resumeSessionId: safeResumeSessionId,
         mcpServers: {},
         // SubagentStart sanitizer override: cc strips control chars +
         // U+2028/U+2029 (per learning
