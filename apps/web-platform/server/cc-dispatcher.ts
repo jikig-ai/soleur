@@ -69,6 +69,7 @@ import {
 // Re-export so existing call sites keep working.
 export { resolveConciergeDocumentContext } from "./kb-document-resolver";
 import { buildAgentQueryOptions } from "./agent-runner-query-options";
+import { buildToolLabel } from "./tool-labels";
 import {
   getBashApprovalCache,
   _resetBashApprovalCacheForTests,
@@ -707,6 +708,29 @@ export async function dispatchSoleurGo(
 
   const runner = getSoleurGoRunner(sendToClient);
 
+  // Resolve workspace path ONCE per dispatch so the onToolUse closure can
+  // call `buildToolLabel(name, input, workspacePath)` and produce verbose,
+  // path-aware labels (e.g., `Reading Au Chat Potan.pdf...`) instead of the
+  // bare SDK tool name (`Read`). Mirrors the legacy `agent-runner.ts`
+  // emitter (~line 1041) which also threads `workspacePath` into label
+  // construction. The per-process memo in `fetchUserWorkspacePath` keeps
+  // the cost at one Supabase round-trip per (process, user) lifetime; warm
+  // cache hits are O(1). On failure (workspace not provisioned, transient
+  // Supabase error), fall back to `undefined` — `buildToolLabel` still
+  // produces the verbose label, just without the workspace-prefix scrub.
+  // Mirror the failure to Sentry per `cq-silent-fallback-must-mirror-to-sentry`.
+  let workspacePath: string | undefined;
+  try {
+    workspacePath = await fetchUserWorkspacePath(userId);
+  } catch (err) {
+    reportSilentFallback(err, {
+      feature: "command-center",
+      op: "cc-dispatcher-workspace-resolve",
+      extra: { userId, conversationId },
+    });
+    workspacePath = undefined;
+  }
+
   const events: DispatchEvents = {
     onText: (text) => {
       sendToClient(userId, {
@@ -720,7 +744,7 @@ export async function dispatchSoleurGo(
       sendToClient(userId, {
         type: "tool_use",
         leaderId: CC_ROUTER_LEADER_ID,
-        label: block.name,
+        label: buildToolLabel(block.name, block.input, workspacePath),
       });
     },
     onTextTurnEnd: () => {

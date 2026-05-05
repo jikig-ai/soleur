@@ -1,13 +1,24 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-const { mockReportSilentFallback } = vi.hoisted(() => ({
+const { mockReportSilentFallback, mockFetchUserWorkspacePath } = vi.hoisted(() => ({
   mockReportSilentFallback: vi.fn(),
+  mockFetchUserWorkspacePath: vi.fn(),
 }));
 
 vi.mock("@/server/observability", () => ({
   reportSilentFallback: mockReportSilentFallback,
   warnSilentFallback: vi.fn(),
 }));
+
+vi.mock("@/server/kb-document-resolver", async () => {
+  const actual = await vi.importActual<
+    typeof import("@/server/kb-document-resolver")
+  >("@/server/kb-document-resolver");
+  return {
+    ...actual,
+    fetchUserWorkspacePath: mockFetchUserWorkspacePath,
+  };
+});
 
 import {
   getPendingPromptRegistry,
@@ -33,6 +44,10 @@ describe("cc-dispatcher singletons + orchestration", () => {
   beforeEach(() => {
     __resetDispatcherForTests();
     mockReportSilentFallback.mockClear();
+    mockFetchUserWorkspacePath.mockReset();
+    // Default: a stable stub workspace path so existing tests that don't
+    // care about the workspace-resolve path still get a deterministic value.
+    mockFetchUserWorkspacePath.mockResolvedValue("/tmp/claude-XXXX/workspace");
   });
 
   it("getPendingPromptRegistry returns a stable singleton", () => {
@@ -581,5 +596,154 @@ describe("cc-dispatcher singletons + orchestration", () => {
     for (const [key, msg] of Object.entries(WORKFLOW_END_USER_MESSAGES)) {
       expect(msg, `key=${key}`).not.toContain("Workflow ended (");
     }
+  });
+
+  // ---------------------------------------------------------------------------
+  // dispatchSoleurGo onToolUse label routing
+  //
+  // Bug: cc-dispatcher emitted `label: block.name` (raw SDK tool name like
+  // `Read`) on the `tool_use` WS event, while the legacy agent-runner path
+  // routes the same event through `buildToolLabel(name, input, workspacePath)`
+  // which produces verbose, scrubbed labels (`Reading <relative>.pdf...`).
+  // After fix, both server-side `tool_use` emitters share identical
+  // label-building semantics and the chip beneath "Soleur Concierge / Working"
+  // shows the verbose label end-to-end.
+  // ---------------------------------------------------------------------------
+  it("KB Concierge: routes onToolUse label through buildToolLabel (verbose, scrubbed)", async () => {
+    const { __setCcRunnerForTests } = await import("@/server/cc-dispatcher");
+
+    const stubWorkspace = "/tmp/claude-XXXX/workspace";
+    mockFetchUserWorkspacePath.mockResolvedValue(stubWorkspace);
+
+    const stubRunner = {
+      dispatch: vi.fn(
+        async (args: {
+          events: {
+            onToolUse: (block: {
+              name: string;
+              input: Record<string, unknown>;
+              toolUseId: string;
+            }) => void;
+          };
+        }) => {
+          args.events.onToolUse({
+            name: "Read",
+            input: { file_path: `${stubWorkspace}/Au Chat Potan.pdf` },
+            toolUseId: "tool_use_1",
+          });
+          return { queryReused: false };
+        },
+      ),
+      hasActiveQuery: () => false,
+      activeQueriesSize: () => 0,
+      reapIdle: () => 0,
+      closeConversation: () => {},
+      respondToToolUse: () => false,
+      notifyAwaitingUser: () => {},
+      // biome-ignore lint/suspicious/noExplicitAny: minimal stub
+    } as any;
+    __setCcRunnerForTests(stubRunner);
+
+    const sendToClient = vi.fn().mockReturnValue(true);
+    const persistActiveWorkflow = vi.fn().mockResolvedValue(undefined);
+
+    await dispatchSoleurGo({
+      userId: "u-tool-label",
+      conversationId: "conv-tool-label",
+      userMessage: "summarize this PDF",
+      currentRouting: { kind: "soleur_go_pending" },
+      sendToClient,
+      persistActiveWorkflow,
+      artifactPath: "Au Chat Potan.pdf",
+      documentKind: "pdf",
+    });
+
+    const toolUseCalls = sendToClient.mock.calls.filter(
+      ([, msg]) =>
+        msg && typeof msg === "object" && (msg as { type?: string }).type === "tool_use",
+    );
+    expect(toolUseCalls.length).toBe(1);
+    const frame = toolUseCalls[0][1] as {
+      type: string;
+      label: string;
+      leaderId?: string;
+    };
+    // Must NOT be the bare SDK tool name.
+    expect(frame.label).not.toBe("Read");
+    // Must be the buildToolLabel output, with workspace prefix scrubbed.
+    expect(frame.label).toBe("Reading Au Chat Potan.pdf...");
+    // Must not contain the workspace prefix anywhere — proves the scrub fired.
+    expect(frame.label).not.toContain(stubWorkspace);
+    // Leader id pinned to cc_router for the Concierge surface.
+    expect(frame.leaderId).toBe("cc_router");
+  });
+
+  it("KB Concierge: emits verbose label and mirrors to Sentry when fetchUserWorkspacePath throws", async () => {
+    const { __setCcRunnerForTests } = await import("@/server/cc-dispatcher");
+
+    mockFetchUserWorkspacePath.mockRejectedValue(
+      new Error("Workspace not provisioned"),
+    );
+
+    const stubRunner = {
+      dispatch: vi.fn(
+        async (args: {
+          events: {
+            onToolUse: (block: {
+              name: string;
+              input: Record<string, unknown>;
+              toolUseId: string;
+            }) => void;
+          };
+        }) => {
+          args.events.onToolUse({
+            name: "Read",
+            input: { file_path: "/home/agent/repo/foo.pdf" },
+            toolUseId: "tool_use_1",
+          });
+          return { queryReused: false };
+        },
+      ),
+      hasActiveQuery: () => false,
+      activeQueriesSize: () => 0,
+      reapIdle: () => 0,
+      closeConversation: () => {},
+      respondToToolUse: () => false,
+      notifyAwaitingUser: () => {},
+      // biome-ignore lint/suspicious/noExplicitAny: minimal stub
+    } as any;
+    __setCcRunnerForTests(stubRunner);
+
+    const sendToClient = vi.fn().mockReturnValue(true);
+    const persistActiveWorkflow = vi.fn().mockResolvedValue(undefined);
+
+    await dispatchSoleurGo({
+      userId: "u-fallback",
+      conversationId: "conv-fallback",
+      userMessage: "summarize",
+      currentRouting: { kind: "soleur_go_pending" },
+      sendToClient,
+      persistActiveWorkflow,
+    });
+
+    // Sentry mirror fired exactly once for the workspace-resolve fallback.
+    const workspaceResolveMirrors = mockReportSilentFallback.mock.calls.filter(
+      ([, ctx]) =>
+        ctx?.feature === "command-center" &&
+        ctx?.op === "cc-dispatcher-workspace-resolve",
+    );
+    expect(workspaceResolveMirrors).toHaveLength(1);
+
+    // The tool_use frame still carries a verbose label (NOT the bare "Read").
+    // Workspace was unavailable, so the absolute path stays in the label —
+    // verbose-but-unscrubbed is acceptable per the deepened plan §Risks.
+    const toolUseCalls = sendToClient.mock.calls.filter(
+      ([, msg]) =>
+        msg && typeof msg === "object" && (msg as { type?: string }).type === "tool_use",
+    );
+    expect(toolUseCalls.length).toBe(1);
+    const frame = toolUseCalls[0][1] as { label: string };
+    expect(frame.label).not.toBe("Read");
+    expect(frame.label).toBe("Reading /home/agent/repo/foo.pdf...");
   });
 });
