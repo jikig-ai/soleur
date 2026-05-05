@@ -96,6 +96,14 @@ export const MessageBubble = memo(function MessageBubble({
   const colorClass = leaderId ? (LEADER_COLORS[leaderId] ?? "border-l-neutral-500") : "";
   const displayName = leaderId && getDisplayName ? getDisplayName(leaderId) : leader?.name;
   const customIconPath = leaderId && getIconPath ? getIconPath(leaderId) : null;
+  // Bug 2 (#3225): when displayName is contained in leader.title (cc_router
+  // "Concierge"/"Soleur Concierge", system "System"/"System Process"),
+  // promote the title into the always-rendered first span and suppress the
+  // secondary showFullTitle span. Otherwise the header rendered both
+  // side-by-side on first bubbles and bare displayName on follow-ups.
+  const titleContainsName =
+    !!leader && !!displayName && leader.title.includes(displayName);
+  const headerPrimary = leader && titleContainsName ? leader.title : displayName;
 
   const isActive = messageState === "thinking" || messageState === "tool_use" || messageState === "streaming";
   const isError = messageState === "error";
@@ -143,36 +151,16 @@ export const MessageBubble = memo(function MessageBubble({
           )}
 
           {leader && (
-            <div className="mb-1 flex items-center gap-2">
-              {/*
-                Bug 2 (#3225): when `displayName` is contained in `leader.title`
-                (e.g., cc_router "Concierge" / "Soleur Concierge", or the latent
-                `system` "System" / "System Process" pair), promote the title
-                into the always-rendered first span and suppress the secondary
-                `showFullTitle` span. Without this rule, the header rendered
-                both side-by-side ("Concierge   Soleur Concierge") on first
-                bubbles, AND rendered bare "Concierge" on follow-up bubbles
-                (`showFullTitle=false`) — neither matched the brand title.
-                Generic substring rule so future leaders with the same shape
-                are handled without a special-case.
-              */}
-              {(() => {
-                const titleContainsName =
-                  !!displayName && leader.title.includes(displayName);
-                const primary = titleContainsName ? leader.title : displayName;
-                return (
-                  <>
-                    <span className="text-xs font-semibold text-neutral-300">
-                      {primary}
-                    </span>
-                    {showFullTitle && !titleContainsName && (
-                      <span className="text-xs text-neutral-500">
-                        {leader.title}
-                      </span>
-                    )}
-                  </>
-                );
-              })()}
+            <div
+              className="mb-1 flex items-center gap-2"
+              data-testid="message-bubble-header"
+            >
+              <span className="text-xs font-semibold text-neutral-300">
+                {headerPrimary}
+              </span>
+              {showFullTitle && !titleContainsName && (
+                <span className="text-xs text-neutral-500">{leader.title}</span>
+              )}
             </div>
           )}
 

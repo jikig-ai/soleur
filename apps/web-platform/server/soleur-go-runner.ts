@@ -82,15 +82,16 @@ export const PRE_DISPATCH_NARRATION_DIRECTIVE =
   "This narration is load-bearing for perceived latency — without it, users see 5-6s of silence before the sub-skill's first text arrives.";
 
 export const DEFAULT_IDLE_REAP_MS = 10 * 60 * 1000;
-// 90s, raised from 30s 2026-05-05 (#3225). PDF Read+summarize turns
-// (kb-concierge attached document path) consistently bumped against the
-// old 30s ceiling and surfaced "agent went idle without finishing" to
-// users. The window now also resets on every assistant block (text or
-// tool_use) — see `handleAssistantMessage` — while turn-origin
-// `firstToolUseAt` is preserved so `elapsedMs` reports total turn time.
-// The runaway WorkflowEnd payload carries `lastBlockKind` and
-// `lastBlockToolName` for future calibration.
+// Idle window: no assistant block (text or tool_use) within this many ms.
+// Resets on every block — "agent is alive" signal. PDF Read+summarize
+// observed at ~75s p99, hence 90s.
 export const DEFAULT_WALL_CLOCK_TRIGGER_MS = 90 * 1000;
+// Absolute hard ceiling on turn duration, NOT reset by per-block activity.
+// Backstop against a chatty-but-stalled agent that emits one block every
+// <90s indefinitely (idle reaper and per-block wall-clock both reset on
+// activity; cost cap fires only at SDKResultMessage boundaries). Anchored
+// on `turnOriginAt` set once when the first block of a turn arrives.
+export const DEFAULT_MAX_TURN_DURATION_MS = 10 * 60 * 1000;
 
 // Recalibrated 2026-04-24 from stream-input rerun (see plan RERUN
 // §"Cost caps vs measured reality"). CFO gate at Stage 6.5.1.
@@ -249,15 +250,17 @@ export type WorkflowEnd =
   | {
       status: "runner_runaway";
       elapsedMs: number;
-      // `lastBlockKind` + `lastBlockToolName` carry the most recent
-      // assistant block at the moment the runaway timer fired. Useful
-      // for calibrating wallClockTriggerMs against tool mix (e.g., is
-      // it always Read on PDF? Bash? Skill on a sub-skill turn?).
-      // `null` when the runaway fires before any assistant block —
-      // legitimate fallback for the AC7 regression test which arms via
-      // a stub path.
+      // Most recent assistant block at fire time. Server-log-only
+      // observability for calibrating timer thresholds against tool mix
+      // — NOT forwarded over the WS wire (cc-dispatcher routes runaway
+      // to a static `{ type: "error" }` event). Follow-up to extend the
+      // wire schema is tracked separately. `null` when the timer fires
+      // before any assistant block (e.g., AC7 stub path).
       lastBlockKind: "text" | "tool_use" | null;
       lastBlockToolName: string | null;
+      // Discriminates the per-block idle window vs the absolute turn
+      // ceiling so operators can tell which guard fired.
+      reason: "idle_window" | "max_turn_duration";
     }
   | { status: "user_aborted" }
   | { status: "idle_timeout" }
@@ -351,6 +354,7 @@ export interface SoleurGoRunnerDeps {
   now?: () => number;
   idleReapMs?: number;
   wallClockTriggerMs?: number;
+  maxTurnDurationMs?: number;
   defaultCostCaps?: CostCaps;
   pluginPath?: string;
   cwd?: string;
@@ -618,13 +622,22 @@ interface ActiveQuery {
   totalCostUsd: number;
   sessionId: string | null;
   currentWorkflow: WorkflowName | null;
+  // Set once when the first assistant block of a turn arrives. Used as
+  // the anchor for both `elapsedMs` reporting and the absolute turn
+  // ceiling. NOT reset by per-block activity (only by SDKResultMessage
+  // and re-dispatch). Resume from `awaitingUser=true` re-stamps it so
+  // human-read time does not count.
   firstToolUseAt: number | null;
+  // Per-block idle-window timer. Cleared and re-armed on every
+  // assistant block.
   runaway: NodeJS.Timeout | null;
-  // Most recent assistant block observed for this turn — captured at
-  // every text/tool_use block so the runaway WorkflowEnd payload can
-  // report which tool/block was last alive when the timer fired.
-  // Reset to (null, null) on every SDKResultMessage alongside
-  // `firstToolUseAt`. See `handleAssistantMessage`.
+  // Absolute turn-ceiling timer. Armed once with the first block of a
+  // turn, NOT reset by subsequent blocks. Cleared on result and on
+  // `awaitingUser=true` (re-armed on resume against a fresh anchor).
+  turnHardCap: NodeJS.Timeout | null;
+  // Most recent assistant block — used by the runaway WorkflowEnd
+  // payload + log to identify which tool/block was last alive when the
+  // timer fired. Cleared alongside `firstToolUseAt`.
   lastBlockKind: "text" | "tool_use" | null;
   lastBlockToolName: string | null;
   costCaps: CostCaps;
@@ -648,6 +661,7 @@ export function createSoleurGoRunner(deps: SoleurGoRunnerDeps): SoleurGoRunner {
   const now = deps.now ?? (() => Date.now());
   const idleReapMs = deps.idleReapMs ?? DEFAULT_IDLE_REAP_MS;
   const wallClockTriggerMs = deps.wallClockTriggerMs ?? DEFAULT_WALL_CLOCK_TRIGGER_MS;
+  const maxTurnDurationMs = deps.maxTurnDurationMs ?? DEFAULT_MAX_TURN_DURATION_MS;
   const defaultCostCaps = deps.defaultCostCaps ?? DEFAULT_COST_CAPS;
   const pluginPath = deps.pluginPath ?? "";
   const cwd = deps.cwd ?? "";
@@ -721,6 +735,64 @@ export function createSoleurGoRunner(deps: SoleurGoRunnerDeps): SoleurGoRunner {
     }
   }
 
+  function clearTurnHardCap(state: ActiveQuery): void {
+    if (state.turnHardCap) {
+      clearTimeout(state.turnHardCap);
+      state.turnHardCap = null;
+    }
+  }
+
+  function armTurnHardCap(state: ActiveQuery): void {
+    clearTurnHardCap(state);
+    if (state.awaitingUser) return;
+    const turnOriginAt = state.firstToolUseAt ?? now();
+    state.turnHardCap = setTimeout(() => {
+      if (state.closed) return;
+      if (state.awaitingUser) return;
+      const elapsedMs = now() - turnOriginAt;
+      log.warn(
+        {
+          conversationId: state.conversationId,
+          elapsedMs,
+          maxTurnDurationMs,
+          lastBlockKind: state.lastBlockKind,
+          lastBlockToolName: state.lastBlockToolName,
+          reason: "max_turn_duration",
+        },
+        "runner_runaway fired (max turn duration)",
+      );
+      emitWorkflowEnded(state, {
+        status: "runner_runaway",
+        elapsedMs,
+        lastBlockKind: state.lastBlockKind,
+        lastBlockToolName: state.lastBlockToolName,
+        reason: "max_turn_duration",
+      });
+    }, maxTurnDurationMs);
+  }
+
+  // Single source of truth for "an assistant block landed". Stamps the
+  // turn origin if missing, records the last-block diagnostics, and
+  // resets the per-block idle window. The absolute turn ceiling is armed
+  // once on the first block of a turn and is NOT touched on subsequent
+  // blocks — that timer's whole job is to bound a chatty agent.
+  function recordAssistantBlock(
+    state: ActiveQuery,
+    kind: "text" | "tool_use",
+    toolName: string | null,
+  ): void {
+    const isFirstBlockOfTurn = state.firstToolUseAt === null;
+    if (isFirstBlockOfTurn) {
+      state.firstToolUseAt = now();
+    }
+    state.lastBlockKind = kind;
+    state.lastBlockToolName = toolName;
+    armRunaway(state);
+    if (isFirstBlockOfTurn) {
+      armTurnHardCap(state);
+    }
+  }
+
   function armRunaway(state: ActiveQuery): void {
     clearRunaway(state);
     // Defense-in-depth: when paused for user input, do NOT arm a timer.
@@ -738,13 +810,9 @@ export function createSoleurGoRunner(deps: SoleurGoRunnerDeps): SoleurGoRunner {
       if (state.closed) return;
       if (state.awaitingUser) return;
       const elapsedMs = now() - firedAtStart;
-      // Structured log so future tightening of `wallClockTriggerMs` is
-      // informed by which tools consistently bump the ceiling. The
-      // user-facing message ("agent went idle without finishing") is
-      // expected here — no Sentry mirror per
-      // `cq-silent-fallback-must-mirror-to-sentry` carve-out for known
-      // degraded states. See plan
-      // 2026-05-05-fix-concierge-idle-runaway-and-duplicate-label-plan.md.
+      // Server-log only. The user-facing message ("agent went idle…")
+      // is expected on this path — `cq-silent-fallback-must-mirror-to-
+      // sentry` carve-out for known degraded states applies.
       log.warn(
         {
           conversationId: state.conversationId,
@@ -752,14 +820,16 @@ export function createSoleurGoRunner(deps: SoleurGoRunnerDeps): SoleurGoRunner {
           wallClockTriggerMs,
           lastBlockKind: state.lastBlockKind,
           lastBlockToolName: state.lastBlockToolName,
+          reason: "idle_window",
         },
-        "runner_runaway fired",
+        "runner_runaway fired (idle window)",
       );
       emitWorkflowEnded(state, {
         status: "runner_runaway",
         elapsedMs,
         lastBlockKind: state.lastBlockKind,
         lastBlockToolName: state.lastBlockToolName,
+        reason: "idle_window",
       });
     }, wallClockTriggerMs);
   }
@@ -781,6 +851,7 @@ export function createSoleurGoRunner(deps: SoleurGoRunnerDeps): SoleurGoRunner {
 
   function closeQuery(state: ActiveQuery): void {
     clearRunaway(state);
+    clearTurnHardCap(state);
     try {
       state.query.close();
     } catch (err) {
@@ -826,19 +897,7 @@ export function createSoleurGoRunner(deps: SoleurGoRunnerDeps): SoleurGoRunner {
       const b = block as { type?: string };
       if (b.type === "text") {
         const text = (block as { text?: string }).text ?? "";
-        // Any assistant block (text or tool_use) is "agent is alive"
-        // signal. Reset the wall-clock window so a long-running PDF
-        // Read+summarize turn that emits intermediate text/tool_use
-        // does not trip the idle ceiling. Turn-origin `firstToolUseAt`
-        // is set ONCE per turn and preserved across blocks so
-        // `elapsedMs` on `runner_runaway` reports total turn time.
-        // See plan 2026-05-05-fix-concierge-idle-runaway-and-duplicate-label-plan.md.
-        if (state.firstToolUseAt === null) {
-          state.firstToolUseAt = now();
-        }
-        state.lastBlockKind = "text";
-        state.lastBlockToolName = null;
-        armRunaway(state);
+        recordAssistantBlock(state, "text", null);
         if (text) {
           try {
             state.events.onText(text);
@@ -860,17 +919,7 @@ export function createSoleurGoRunner(deps: SoleurGoRunnerDeps): SoleurGoRunner {
         const toolInput = tb.input ?? {};
         const toolUseId = tb.id ?? "";
 
-        // Reset the wall-clock window on every assistant block (text or
-        // tool_use). Turn-origin `firstToolUseAt` is preserved so the
-        // runaway `elapsedMs` reports total turn time, not
-        // time-since-last-block. See plan
-        // 2026-05-05-fix-concierge-idle-runaway-and-duplicate-label-plan.md.
-        if (state.firstToolUseAt === null) {
-          state.firstToolUseAt = now();
-        }
-        state.lastBlockKind = "tool_use";
-        state.lastBlockToolName = toolName;
-        armRunaway(state);
+        recordAssistantBlock(state, "tool_use", toolName);
 
         try {
           state.events.onToolUse({ name: toolName, input: toolInput, toolUseId });
@@ -921,10 +970,11 @@ export function createSoleurGoRunner(deps: SoleurGoRunnerDeps): SoleurGoRunner {
     const delta = msg.total_cost_usd ?? 0;
     state.totalCostUsd += delta;
     state.sessionId = msg.session_id ?? state.sessionId;
-    // A completed result clears the runaway arm; the next assistant
-    // block in a subsequent turn will re-arm (reset firstToolUseAt and
-    // lastBlock* accordingly).
+    // Result terminates the turn. Clear both the per-block idle window
+    // and the absolute turn ceiling; the next turn's first block will
+    // re-stamp `firstToolUseAt` and re-arm both timers.
     clearRunaway(state);
+    clearTurnHardCap(state);
     state.firstToolUseAt = null;
     state.lastBlockKind = null;
     state.lastBlockToolName = null;
@@ -1078,6 +1128,7 @@ export function createSoleurGoRunner(deps: SoleurGoRunnerDeps): SoleurGoRunner {
         currentWorkflow: initialWorkflow,
         firstToolUseAt: null,
         runaway: null,
+        turnHardCap: null,
         lastBlockKind: null,
         lastBlockToolName: null,
         costCaps: defaultCostCaps,
@@ -1092,9 +1143,18 @@ export function createSoleurGoRunner(deps: SoleurGoRunnerDeps): SoleurGoRunner {
       void consumeStream(state, persistActiveWorkflow);
     } else {
       // Re-arm events for the new dispatch so the caller's listeners
-      // target the current user's WS session.
+      // target the current user's WS session. Reset per-turn diagnostic
+      // state — the prior turn's `lastBlockKind`/`lastBlockToolName`
+      // and `firstToolUseAt` would otherwise leak into the next
+      // runaway-fire payload if the prior turn never produced a result
+      // (e.g., dropped/delayed result + immediate user follow-up).
       state.events = events;
       state.lastActivityAt = now();
+      clearRunaway(state);
+      clearTurnHardCap(state);
+      state.firstToolUseAt = null;
+      state.lastBlockKind = null;
+      state.lastBlockToolName = null;
     }
 
     pushUserMessage(state, userMessage);
@@ -1190,17 +1250,24 @@ export function createSoleurGoRunner(deps: SoleurGoRunnerDeps): SoleurGoRunner {
     if (state.closed) return;
     if (awaiting) {
       state.awaitingUser = true;
-      // Pause the wall-clock — agent compute time only, not human read time.
+      // Pause both wall-clocks — agent compute time only, not human
+      // read time. Both timers will be re-armed on resume against a
+      // fresh anchor.
       clearRunaway(state);
+      clearTurnHardCap(state);
       return;
     }
     // Resume.
     state.awaitingUser = false;
-    // Re-arm only when the conversation is mid-turn: a tool_use opened
-    // the wall-clock window AND no SDKResultMessage cleared it yet.
+    // Re-arm only when mid-turn (some assistant block has landed and no
+    // result has cleared `firstToolUseAt` yet). Re-stamping
+    // `firstToolUseAt` makes `elapsedMs` report active (non-paused)
+    // turn time — the absolute turn ceiling is also anchored here, so
+    // a long human-read pause does not consume the hard cap budget.
     if (state.firstToolUseAt !== null) {
       state.firstToolUseAt = now();
       armRunaway(state);
+      armTurnHardCap(state);
     }
   }
 

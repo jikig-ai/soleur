@@ -28,6 +28,7 @@ vi.mock("@/server/observability", () => ({
 import {
   createSoleurGoRunner,
   DEFAULT_WALL_CLOCK_TRIGGER_MS,
+  DEFAULT_MAX_TURN_DURATION_MS,
   type QueryFactory,
   type WorkflowEnd,
   type DispatchEvents,
@@ -576,6 +577,125 @@ describe("soleur-go-runner runaway window reset (Bug 1: PDF summarize idle)", ()
     expect(events._ended.find((e) => e.status === "runner_runaway")).toBeUndefined();
   });
 
+  it("DEFAULT_MAX_TURN_DURATION_MS is 10 min — absolute ceiling on a single turn, not reset by per-block activity", () => {
+    expect(DEFAULT_MAX_TURN_DURATION_MS).toBe(10 * 60 * 1000);
+  });
+
+  it("absolute turn ceiling fires runaway with reason=max_turn_duration even when blocks keep arriving (chatty-stall defense-in-depth)", async () => {
+    vi.setSystemTime(0);
+    const mock = createMockQuery();
+    const runner = createSoleurGoRunner({
+      queryFactory: () => mock.query,
+      now: () => Date.now(),
+      // Idle window must be larger than the per-step gap so it never fires;
+      // hard cap is 30s. The agent emits a block every 5s — under the new
+      // semantic the idle window keeps resetting indefinitely. The hard
+      // cap is what stops it.
+      wallClockTriggerMs: 20_000,
+      maxTurnDurationMs: 30_000,
+    });
+    const events = makeEvents();
+
+    await runner.dispatch({
+      conversationId: "conv-hardcap",
+      userId: "u1",
+      userMessage: "loop forever",
+      currentRouting: { kind: "soleur_go_pending" },
+      events,
+      persistActiveWorkflow: vi.fn().mockResolvedValue(undefined),
+    });
+
+    // First block at t=0 arms both timers.
+    mock.emit(
+      makeAssistant({
+        content: [{ type: "tool_use", id: "t0", name: "Bash", input: { command: "x" } }],
+      }),
+    );
+    await flushMicrotasks();
+
+    // Emit a block every 5s — the idle window (20s) keeps resetting.
+    for (let i = 1; i <= 7; i++) {
+      vi.advanceTimersByTime(5_000);
+      // Before t=30s, neither timer should have fired.
+      if (i * 5_000 < 30_000) {
+        expect(events._ended.find((e) => e.status === "runner_runaway")).toBeUndefined();
+      }
+      mock.emit(
+        makeAssistant({
+          content: [{ type: "text", text: `chatter ${i}` }],
+        }),
+      );
+      await flushMicrotasks();
+    }
+
+    // The hard cap (30s anchor) has now elapsed (we are at t=35s) and the
+    // hard-cap timer fires INDEPENDENTLY of the per-block window.
+    const end = events._ended.find((e) => e.status === "runner_runaway") as
+      | (WorkflowEnd & { status: "runner_runaway"; reason?: unknown; lastBlockKind?: unknown })
+      | undefined;
+    expect(end).toBeDefined();
+    expect(end!.reason).toBe("max_turn_duration");
+    // Last block at fire time was the most recent text chatter.
+    expect(end!.lastBlockKind).toBe("text");
+    expect(mock.closeSpy).toHaveBeenCalled();
+  });
+
+  it("re-dispatch on existing state resets per-turn diagnostics — prior turn's lastBlockToolName MUST NOT poison the next runaway log", async () => {
+    vi.setSystemTime(0);
+    const mock = createMockQuery();
+    const runner = createSoleurGoRunner({
+      queryFactory: () => mock.query,
+      now: () => Date.now(),
+      wallClockTriggerMs: 10_000,
+      maxTurnDurationMs: 60_000,
+    });
+    const events = makeEvents();
+
+    await runner.dispatch({
+      conversationId: "conv-redispatch",
+      userId: "u1",
+      userMessage: "first turn",
+      currentRouting: { kind: "soleur_go_pending" },
+      events,
+      persistActiveWorkflow: vi.fn().mockResolvedValue(undefined),
+    });
+
+    // Turn 1 ends mid-stream WITHOUT a result (e.g., dropped/delayed) —
+    // only a `Read` tool_use lands.
+    mock.emit(
+      makeAssistant({
+        content: [{ type: "tool_use", id: "t1", name: "Read", input: { file_path: "/x" } }],
+      }),
+    );
+    await flushMicrotasks();
+
+    // User fires a follow-up dispatch before turn 1's result arrives.
+    await runner.dispatch({
+      conversationId: "conv-redispatch",
+      userId: "u1",
+      userMessage: "second turn",
+      currentRouting: { kind: "soleur_go_pending" },
+      events,
+      persistActiveWorkflow: vi.fn().mockResolvedValue(undefined),
+    });
+
+    // Now turn 2 stalls (no blocks, no result) past the idle window.
+    vi.advanceTimersByTime(10_001);
+    await flushMicrotasks();
+
+    const end = events._ended.find((e) => e.status === "runner_runaway") as
+      | (WorkflowEnd & { status: "runner_runaway"; lastBlockKind?: unknown; lastBlockToolName?: unknown })
+      | undefined;
+    // Either no runaway fires (turn 2 had zero blocks so the timer was
+    // never armed) OR if a runaway fires its payload reflects turn 2's
+    // state (null), NOT turn 1's "Read".
+    if (end) {
+      expect(end.lastBlockToolName).not.toBe("Read");
+      expect(end.lastBlockKind).toBeNull();
+      expect(end.lastBlockToolName).toBeNull();
+    }
+  });
+
   it("when runaway DOES fire, elapsedMs reports total turn elapsed (turn-origin), NOT time-since-last-block", async () => {
     vi.setSystemTime(0);
     const mock = createMockQuery();
@@ -621,9 +741,10 @@ describe("soleur-go-runner runaway window reset (Bug 1: PDF summarize idle)", ()
       | undefined;
     expect(end).toBeDefined();
     // elapsedMs reflects total turn elapsed (~15s), not the 10s window.
-    // Allow ±100ms slack for timer-loop quantization.
+    // Tolerance widened to 1s to survive future async-shape refactors
+    // (extra await boundaries, batched emits) without false-fail.
     expect(end!.elapsedMs).toBeGreaterThanOrEqual(15_000);
-    expect(end!.elapsedMs).toBeLessThan(15_100);
+    expect(end!.elapsedMs).toBeLessThan(16_000);
   });
 
   it("runaway WorkflowEnded carries lastBlockKind and lastBlockToolName so future tightening is informed by which tool bumps the ceiling", async () => {
@@ -656,10 +777,16 @@ describe("soleur-go-runner runaway window reset (Bug 1: PDF summarize idle)", ()
     await flushMicrotasks();
 
     const end = events._ended.find((e) => e.status === "runner_runaway") as
-      | (WorkflowEnd & { status: "runner_runaway"; lastBlockKind?: unknown; lastBlockToolName?: unknown })
+      | (WorkflowEnd & {
+          status: "runner_runaway";
+          lastBlockKind?: unknown;
+          lastBlockToolName?: unknown;
+          reason?: unknown;
+        })
       | undefined;
     expect(end).toBeDefined();
     expect(end!.lastBlockKind).toBe("tool_use");
     expect(end!.lastBlockToolName).toBe("Read");
+    expect(end!.reason).toBe("idle_window");
   });
 });

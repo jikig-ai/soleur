@@ -500,6 +500,11 @@ describe("soleur-go-runner dispatch (Stage 2.2)", () => {
     await flushMicrotasks();
 
     vi.advanceTimersByTime(10_000);
+    // Negative-space gate: a regression to the OLD "30s from first
+    // tool_use" semantic would fire here (t=10s, well within the old
+    // window's reach once t1 lands at t=0). Pin that runaway has NOT
+    // fired before the second tool_use lands.
+    expect(events._ended.find((e) => e.status === "runner_runaway")).toBeUndefined();
     mock.emit(
       makeAssistant({
         content: [
@@ -510,6 +515,10 @@ describe("soleur-go-runner dispatch (Stage 2.2)", () => {
     await flushMicrotasks();
 
     vi.advanceTimersByTime(15_000);
+    // At t=25s — under the OLD semantic, runaway would fire 5s ago.
+    // Under the NEW semantic, t2 reset the window at t=10s and we are
+    // at t2+15s, still inside the 30s window.
+    expect(events._ended.find((e) => e.status === "runner_runaway")).toBeUndefined();
     mock.emit(
       makeAssistant({
         content: [
@@ -524,8 +533,22 @@ describe("soleur-go-runner dispatch (Stage 2.2)", () => {
     vi.advanceTimersByTime(30_001);
     await flushMicrotasks();
 
-    const runaway = events._ended.find((e) => e.status === "runner_runaway");
+    const runaway = events._ended.find(
+      (e) => e.status === "runner_runaway",
+    ) as
+      | (WorkflowEnd & {
+          status: "runner_runaway";
+          lastBlockKind?: unknown;
+          lastBlockToolName?: unknown;
+          reason?: unknown;
+        })
+      | undefined;
     expect(runaway).toBeDefined();
+    // Payload assertions (parity with the awaiting-user tests): the
+    // last block was Bash at t=25s, idle window expired.
+    expect(runaway!.lastBlockKind).toBe("tool_use");
+    expect(runaway!.lastBlockToolName).toBe("Bash");
+    expect(runaway!.reason).toBe("idle_window");
     expect(mock.closeSpy).toHaveBeenCalled();
   });
 
