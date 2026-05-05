@@ -47,7 +47,7 @@
    a. **Hand off to ux-design-lead** with the new tokens, the existing palette (for paired comparison), and a target surface set:
 
       ```
-      Task ux-design-lead("Render representative mockups applying <new tokens> to: primary button (default/hover/disabled), card surface with text hierarchy, form input (default/focus/error), navigation bar, modal/dialog, and one error state. If both light and dark palettes exist, render both side-by-side. Output: .pen file or screenshots in knowledge-base/marketing/brand-mockups/<topic>-<YYYY-MM-DD>/. If Pencil MCP is unavailable, fall back to a Playwright-rendered HTML mockup screenshotted at 1440×900.")
+      Task ux-design-lead("Render representative mockups applying <new tokens> to: primary button (default/hover/disabled), card surface with text hierarchy, form input (default/focus/error), navigation bar, modal/dialog, and one error state. If both light and dark palettes exist, render both side-by-side. Output is a .pen file in knowledge-base/marketing/brand-mockups/<topic>-<YYYY-MM-DD>/ produced via Pencil MCP — Pencil is the founder's standard design surface and is the required primary path. If Pencil MCP tools are not loaded, run skill: soleur:pencil-setup first to register them. Only if pencil-setup itself fails (no Pencil Desktop, no IDE extension) may the agent fall back to a Playwright-rendered HTML mockup screenshotted at 1440×900 — and that fallback must be flagged loudly to the founder so they can choose to re-run with Pencil on their next session.")
       ```
 
    b. **Surface mockups to the founder** via AskUserQuestion with options: `Approve`, `Request changes`, `Reject`. Include the mockup file paths in the question body so the founder can open them.
