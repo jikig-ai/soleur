@@ -186,6 +186,62 @@ describe("cc-dispatcher singletons + orchestration", () => {
   // fresh key. Generic errors fall back to the existing "router unavailable"
   // wording without an errorCode.
   // ---------------------------------------------------------------------------
+  it("dispatchSoleurGo forwards runner_runaway diagnostics over WS error event (#3225)", async () => {
+    const sendToClient = vi.fn().mockReturnValue(true);
+    const persistActiveWorkflow = vi.fn().mockResolvedValue(undefined);
+
+    const { __setCcRunnerForTests } = await import("@/server/cc-dispatcher");
+    const stubRunner = {
+      dispatch: vi.fn(async (args: { events: { onWorkflowEnded: (end: unknown) => void } }) => {
+        // Drive a runner_runaway WorkflowEnd through the dispatcher's
+        // onWorkflowEnded handler so we can verify wire forwarding.
+        args.events.onWorkflowEnded({
+          status: "runner_runaway",
+          elapsedMs: 92_500,
+          lastBlockKind: "tool_use",
+          lastBlockToolName: "Read",
+          reason: "idle_window",
+        });
+      }),
+      hasActiveQuery: () => false,
+      activeQueriesSize: () => 0,
+      reapIdle: () => 0,
+      closeConversation: () => {},
+      respondToToolUse: () => false,
+      notifyAwaitingUser: () => {},
+      // biome-ignore lint/suspicious/noExplicitAny: minimal stub
+    } as any;
+    __setCcRunnerForTests(stubRunner);
+
+    await dispatchSoleurGo({
+      userId: "u1",
+      conversationId: "conv-runaway",
+      userMessage: "summarize",
+      currentRouting: { kind: "soleur_go_pending" },
+      sendToClient,
+      persistActiveWorkflow,
+    });
+
+    const errorCalls = sendToClient.mock.calls.filter(
+      ([, msg]) =>
+        msg && typeof msg === "object" && (msg as { type?: string }).type === "error",
+    );
+    expect(errorCalls.length).toBeGreaterThan(0);
+    const errMsg = errorCalls[0][1] as {
+      type: string;
+      message: string;
+      runnerRunawayReason?: string;
+      runnerRunawayLastBlockKind?: string | null;
+      runnerRunawayLastBlockToolName?: string | null;
+    };
+    // Static user-facing copy preserved.
+    expect(errMsg.message).toContain("agent went idle");
+    // New diagnostic forwarding — agent-user observability parity.
+    expect(errMsg.runnerRunawayReason).toBe("idle_window");
+    expect(errMsg.runnerRunawayLastBlockKind).toBe("tool_use");
+    expect(errMsg.runnerRunawayLastBlockToolName).toBe("Read");
+  });
+
   it("T19: dispatchSoleurGo surfaces errorCode=key_invalid when runner throws KeyInvalidError", async () => {
     const sendToClient = vi.fn().mockReturnValue(true);
     const persistActiveWorkflow = vi.fn().mockResolvedValue(undefined);

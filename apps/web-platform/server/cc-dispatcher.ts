@@ -756,6 +756,19 @@ export async function dispatchSoleurGo(
           type: "session_ended",
           reason: end.status,
         });
+      } else if (end.status === "runner_runaway") {
+        // Forward runaway diagnostics so an API client / agent can
+        // distinguish idle-window from max-turn stalls and observe
+        // which tool was last alive. Pino logs already capture this
+        // server-side; the wire forwarding gives parity to consumers
+        // without server log access. See #3225.
+        sendToClient(userId, {
+          type: "error",
+          message: WORKFLOW_END_USER_MESSAGES[end.status],
+          runnerRunawayReason: end.reason,
+          runnerRunawayLastBlockKind: end.lastBlockKind,
+          runnerRunawayLastBlockToolName: end.lastBlockToolName,
+        });
       } else {
         sendToClient(userId, {
           type: "error",
