@@ -349,14 +349,20 @@ no headroom. CPO sign-off required (per
 
 **Files NOT edited (intentional):**
 
-- `apps/web-platform/supabase/migrations/` — **no new migration**. The
-  fix is application-layer because the slot-release contract is already
-  in place (migration 036's `release_slot_on_archive` trigger).
-  Database-layer enforcement of "release slot when status transitions
-  out of `active`" was rejected at PR #2954 deepen because
-  `resume_session` does not call `acquireSlot` and a slot-release-on-completed
-  trigger would let a resumed conversation run outside the ledger
-  (Risk #5 of the prior plan).
+- `apps/web-platform/supabase/migrations/` — **no new migration beyond
+  037**. Database-layer enforcement of "release slot when status
+  transitions `active → waiting_for_user` (or any non-active state)" was
+  rejected because `updateConversationFor` writes are issued from
+  several call sites (`cc-dispatcher.ts`, `ws-handler.ts` ~line 212/1177,
+  `agent-runner.ts` status flip), and a trigger releasing on the
+  `active → waiting_for_user` transition would race with an
+  agent that legitimately holds the slot for its next turn (the
+  conversation is still alive — slot must persist across the
+  user-facing pause). The slot-release contract therefore lives where
+  it can reason about the full conversation lifecycle: the application
+  layer (archive trigger from migration 036 covers the
+  `archived_at` transition; this PR's catches + reaper cover the
+  `active`-wedge class).
 - `apps/web-platform/hooks/use-conversations.ts` — no change. The hook's
   archive path is already covered by the migration-036 trigger.
 - The `release_conversation_slot` RPC itself — no signature change. The
@@ -668,6 +674,23 @@ no headroom. CPO sign-off required (per
    DELETE-keyed `releaseSlot` is idempotent). Cost is at most 2x
    trivial DB load. Safe.
 
+## Layer Co-Dependencies
+
+- **AC2 (reaper) and AC4 (cap_hit self-heal) are co-required, not
+  independent layers.** The system relies on AC4 to mask the AC2 race
+  window during the worst-case 60-180 s reap interval (60 s tick + 120 s
+  threshold). If AC2 ships without AC4, a user hitting `cap_hit` during
+  that window sees the dead-end "Archive a completed conversation"
+  message; AC4 short-circuits the deny by reconciling the ledger
+  in-line.
+- **120 s threshold-coupling.** The 120 s liveness threshold appears
+  in three places: migration 029 line ~131 (lazy sweep in
+  `acquire_conversation_slot`), migration 029 line ~224 (pg_cron
+  sweep), and migration 037 line ~39 (RPC default). The TS const
+  `STUCK_ACTIVE_THRESHOLD_SECONDS` in `agent-runner.ts` and the SQL
+  default in migration 037 carry coupling comments referencing the
+  other two so future changes desync visibly.
+
 ## Sharp Edges
 
 - **Status transition is the LAST step in the success path.** The
@@ -807,10 +830,13 @@ min for automatic recovery") would be valuable but is out-of-scope.
   throw-eligible steps after the message save; the catch must finalize
   state for all of them.
 - Do NOT propose a DB-level "release slot when status leaves `active`"
-  trigger. It was rejected at the prior PR's deepen pass (Risk #5 of
-  2026-05-04-fix-cc-conversation-limit-archive-plan.md): `resume_session`
-  does not call `acquireSlot`, so a release-on-completed trigger lets a
-  resumed conversation run outside the slot ledger.
+  trigger. The real reason: `updateConversationFor` writes happen in
+  many places (cc-dispatcher, ws-handler.ts ~line 212/1177,
+  agent-runner.ts status flip), and a trigger releasing on the
+  `active → waiting_for_user` transition would race with a
+  still-streaming agent that legitimately holds the slot for its next
+  turn (the conversation is alive across that pause — slot must
+  persist).
 - Do NOT propose merging the new reaper with `startInactivityTimer`.
   Cadences differ (5 min vs 1 hour), thresholds differ (5 min vs 2
   hours), and status-sets-being-reaped differ (`active` vs

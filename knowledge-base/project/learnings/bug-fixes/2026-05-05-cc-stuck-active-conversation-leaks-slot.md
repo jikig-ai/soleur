@@ -46,6 +46,8 @@ Three independent fixes, in order of decreasing user-blast radius:
 - **`last_active` is not a liveness signal.** It updates only on status writes and message inserts. A streaming agent turn does not refresh it. Use `user_concurrency_slots.last_heartbeat_at` (refreshed every 30 s by the WS handler) when the question is "is this conversation alive?".
 - **Status transitions are the LAST step in the success path.** When a code path's terminal state write is preceded by N awaits or N sendToClient calls, every intermediate step is a wedge candidate. Wrap such bodies in try/catch with explicit terminal-state finalization, not just at the iteration boundary.
 - **Self-healing branches must be observable.** Every recovery emits one Sentry event with a stable `feature` tag so the recovery rate is monitorable. A non-zero rate post-deploy means a NEW slot-leak class crept in — file an issue, don't let recovery silently absorb it.
+- **AC2 (reaper) and AC4 (cap_hit self-heal) are co-required.** They are not independent layers — the system relies on AC4 to mask the AC2 race window during the worst-case 60-180 s reap interval (60 s tick + 120 s threshold). Shipping AC2 without AC4 would leave a user dead-ended at "Archive a completed conversation" during that window.
+- **The 120 s liveness threshold is coupled across three sites** — migration 029 lazy sweep (line ~131), migration 029 pg_cron sweep (line ~224), and migration 037 RPC default (line ~39). The TS const `STUCK_ACTIVE_THRESHOLD_SECONDS` in `agent-runner.ts` and the SQL default in migration 037 carry coupling comments referencing the other sites so future changes desync visibly.
 
 ## Discoverability
 

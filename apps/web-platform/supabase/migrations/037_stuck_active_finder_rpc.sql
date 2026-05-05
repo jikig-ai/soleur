@@ -35,6 +35,11 @@
 -- deploy is also safe (the reaper handles "RPC not found" via its
 -- error branch). Recommended order: migration first, then deploy.
 
+-- THRESHOLD-COUPLING: 120 s default matches migration 029 line ~131
+-- (acquire_conversation_slot lazy sweep) and line ~224 (pg_cron sweep),
+-- and the TS const STUCK_ACTIVE_THRESHOLD_SECONDS in agent-runner.ts.
+-- Changing the default without updating those sites desyncs the sweep
+-- mechanisms.
 create or replace function public.find_stuck_active_conversations(
   p_threshold_seconds integer default 120
 ) returns table (id uuid, user_id uuid)
