@@ -44,10 +44,35 @@
 
    If the grep returns any line, OR if the brand-architect's status mentions palette/typography/imagery changes, the gate is REQUIRED. Hex values and oklch tokens are not founder-approvable in markdown — they must be seen rendered on representative app surfaces.
 
+   **0. Pre-flight: enforce headless Pencil MCP (HARD GATE):**
+
+   Agent-driven mockup runs MUST use the headless Pencil CLI adapter. IDE mode (VS Code / Cursor extension) and Desktop mode buffer `.pen` edits in editor memory and do not flush to disk without manual Ctrl+S — `mcp__pencil__export_nodes` reads from disk and returns `you are probably referencing the wrong .pen file` while the doc is unsaved, so the workshop's PNG export, git diff, and review trail all break. Headless CLI auto-calls `save()` after every mutating op (see `plugins/soleur/skills/pencil-setup/SKILL.md` §"No programmatic save (Desktop/IDE only)").
+
+   ```bash
+   pencil_mode=""
+   pencil_listing=$(claude mcp list 2>&1 | grep pencil || true)
+   case "$pencil_listing" in
+     *pencil-mcp-adapter*|*@pencil.dev/cli*|*pencil-cli*) pencil_mode=headless_cli ;;
+     *visual_studio_code*|*cursor*)                       pencil_mode=ide ;;
+     *--app\ pencil*|*mcp-server*)                        pencil_mode=desktop ;;
+     "")                                                  pencil_mode=unregistered ;;
+     *)                                                   pencil_mode=unknown ;;
+   esac
+
+   if [[ "$pencil_mode" != "headless_cli" ]]; then
+     echo "BLOCKED: Pencil MCP mode is '$pencil_mode'; brand-workshop step 4.5 requires headless_cli."
+     echo "Run: bash ./plugins/soleur/skills/pencil-setup/scripts/check_deps.sh --auto"
+     echo "Then restart Claude Code and resume from this step."
+     exit 1
+   fi
+   ```
+
+   If the gate exits non-zero, run pencil-setup with `--auto`, then provide the founder a copy-pasteable resume prompt (per `cm-when-proposing-to-clear-context-or` in AGENTS.md) for a fresh session that picks up at step 4.5. Do NOT proceed to step 4.5.a in IDE/Desktop mode — the rendered mockup will exist only in editor memory and the PNG export will fail.
+
    a. **Hand off to ux-design-lead** with the new tokens, the existing palette (for paired comparison), and a target surface set:
 
       ```
-      Task ux-design-lead("Render representative mockups applying <new tokens> to: primary button (default/hover/disabled), card surface with text hierarchy, form input (default/focus/error), navigation bar, modal/dialog, and one error state. If both light and dark palettes exist, render both side-by-side. Output is a .pen file in knowledge-base/marketing/brand-mockups/<topic>-<YYYY-MM-DD>/ produced via Pencil MCP — Pencil is the founder's standard design surface and is the required primary path. If Pencil MCP tools are not loaded, run skill: soleur:pencil-setup first to register them. Only if pencil-setup itself fails (no Pencil Desktop, no IDE extension) may the agent fall back to a Playwright-rendered HTML mockup screenshotted at 1440×900 — and that fallback must be flagged loudly to the founder so they can choose to re-run with Pencil on their next session.")
+      Task ux-design-lead("Render representative mockups applying <new tokens> to: primary button (default/hover/disabled), card surface with text hierarchy, form input (default/focus/error), navigation bar, modal/dialog, and one error state. If both light and dark palettes exist, render both side-by-side. Output is a .pen file in knowledge-base/marketing/brand-mockups/<topic>-<YYYY-MM-DD>/ produced via Pencil MCP in headless mode — IDE/Desktop modes are blocked by step 4.5.0. Pencil is the founder's standard design surface and is the required primary path. The agent must NOT fall back to Playwright/HTML mockups; if the headless adapter fails mid-run, halt and surface the error to the founder.")
       ```
 
    b. **Surface mockups to the founder** via AskUserQuestion with options: `Approve`, `Request changes`, `Reject`. Include the mockup file paths in the question body so the founder can open them.
