@@ -568,10 +568,14 @@ export function emitConciergeDocumentResolutionBreadcrumb(args: {
   routingKind: string;
 }): void {
   const { conversationId, contextPath, hasActiveCcQuery, documentArgs, routingKind } = args;
-  const hasContextPath = typeof contextPath === "string" && contextPath.length > 0;
-  const basenameStr = hasContextPath ? pathBasename(contextPath as string) : null;
-  const extension = hasContextPath
-    ? (contextPath as string).toLowerCase().split(".").pop() ?? null
+  const path = typeof contextPath === "string" && contextPath.length > 0 ? contextPath : null;
+  const basenameStr = path === null ? null : pathBasename(path);
+  // Use lastIndexOf so a dotless basename (e.g., "Makefile") yields null —
+  // not the whole filename — and `pathExtension` stays a clean enum-shaped
+  // dimension in Sentry filters.
+  const dot = basenameStr === null ? -1 : basenameStr.lastIndexOf(".");
+  const extension = dot > 0 && basenameStr !== null
+    ? basenameStr.slice(dot + 1).toLowerCase()
     : null;
   const documentKindResolved = documentArgs.documentKind ?? null;
   const documentContentBytes = documentArgs.documentContent?.length ?? 0;
@@ -581,7 +585,7 @@ export function emitConciergeDocumentResolutionBreadcrumb(args: {
     message: "concierge document context resolved",
     level: "info",
     data: {
-      hasContextPath,
+      hasContextPath: path !== null,
       pathBasename: basenameStr,
       pathExtension: extension,
       hasActiveCcQuery,
@@ -595,10 +599,10 @@ export function emitConciergeDocumentResolutionBreadcrumb(args: {
   // Suspicious-skip: cold Query (resolver was invoked) AND a path was sent
   // AND the resolver returned no documentKind. Warm turns deliberately skip
   // resolution and must NOT trigger this — that's the documented happy path.
-  if (hasContextPath && !hasActiveCcQuery && documentKindResolved === null) {
+  if (path !== null && !hasActiveCcQuery && documentKindResolved === null) {
     Sentry.captureMessage("cc-pdf-resolver-skip: path provided but resolver returned no documentKind", {
       level: "warning",
-      tags: { feature: "cc-pdf-resolver-skip" },
+      tags: { feature: "cc-pdf-resolver", op: "skip" },
       extra: {
         conversationId,
         pathBasename: basenameStr,
@@ -691,11 +695,7 @@ async function dispatchSoleurGoForConversation(
     });
   }
 
-  // #3287 Phase 1 — diagnostic breadcrumb. PII-safe payload (basename
-  // + extension only, no full path, no content). Pairs with a
-  // level=warning captureMessage on the suspicious-skip branch so the
-  // cold-Query construction state is searchable in Sentry without log
-  // diving. See `emitConciergeDocumentResolutionBreadcrumb` above.
+  // #3287 Phase 1 diagnostic — see helper JSDoc.
   emitConciergeDocumentResolutionBreadcrumb({
     conversationId,
     contextPath: context?.path ?? null,

@@ -14,9 +14,6 @@
  *
  * RED before GREEN per AGENTS.md `cq-write-failing-tests-before`.
  */
-process.env.NEXT_PUBLIC_SUPABASE_URL = "https://test.supabase.co";
-process.env.SUPABASE_SERVICE_ROLE_KEY = "test-service-role-key";
-
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 const addBreadcrumbSpy = vi.fn();
@@ -177,9 +174,34 @@ describe("emitConciergeDocumentResolutionBreadcrumb (#3287 Phase 1)", () => {
     expect(message).toMatch(/cc-pdf-resolver-skip/i);
     expect(options).toMatchObject({
       level: "warning",
-      tags: expect.objectContaining({
-        feature: "cc-pdf-resolver-skip",
-      }),
+      tags: { feature: "cc-pdf-resolver", op: "skip" },
+      extra: {
+        conversationId: "conv-suspicious",
+        pathBasename: "book.pdf",
+        pathExtension: "pdf",
+        routingKind: "soleur_go_pending",
+      },
+    });
+  });
+
+  it("Scenario 7: dotless basename — pathExtension is null (not the filename itself)", () => {
+    // `Makefile.split(".").pop()` would otherwise return "makefile" and
+    // pollute Sentry's pathExtension dimension. Pin the lastIndexOf-guarded
+    // implementation so a regression to the simpler split.pop() reopens the
+    // bug.
+    emitConciergeDocumentResolutionBreadcrumb({
+      conversationId: "conv-dotless",
+      contextPath: "knowledge-base/Makefile",
+      hasActiveCcQuery: false,
+      documentArgs: {},
+      routingKind: "soleur_go_pending",
+    });
+
+    const [crumb] = addBreadcrumbSpy.mock.calls[0]!;
+    expect(crumb.data).toMatchObject({
+      hasContextPath: true,
+      pathBasename: "Makefile",
+      pathExtension: null,
     });
   });
 
