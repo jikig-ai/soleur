@@ -117,8 +117,11 @@ export function isBashCommandBlocked(command: string): boolean {
 //
 // `$` is in the metachar denylist so `echo "$VAR"` (which bash expands
 // inside double quotes) is rejected. U+2028 / U+2029 are included to
-// match the project's Unicode line-separator hardening pattern.
-const SHELL_METACHAR_DENYLIST = /[;&|`<>$\n\r\\\u2028\u2029]/;
+// match the project's Unicode line-separator hardening pattern. The
+// full C0 range (`\x00-\x1f`) plus DEL (`\x7f`) is rejected to seal
+// log-injection / null-byte truncation surfaces \u2014 `\n` (`\x0a`) and
+// `\r` (`\x0d`) fall inside that range and are therefore double-covered.
+const SHELL_METACHAR_DENYLIST = /[;&|`<>$\\\x00-\x1f\x7f\u2028\u2029]/;
 // Path-traversal denylist (#3252). Matches `..` only as a parent-dir segment
 // \u2014 preceded by start-of-string, slash, or whitespace AND followed by
 // end-of-string, slash, or whitespace. Filenames containing `..` (such as
@@ -195,6 +198,17 @@ export const SAFE_BASH_PATTERNS: readonly RegExp[] = [
   new RegExp(String.raw`^echo(?:\s+${ECHO_TOKEN})*\s*$`),
 ];
 
+// Single source of truth for the safe-bash verb list. Used by the
+// per-pattern regexes above (informationally — each regex hardcodes its
+// own leading verb) AND by SAFE_BASH_NEAR_MISS_PREFIX below (derived).
+// When adding a new safe verb, append it here AND add a per-tool regex
+// to SAFE_BASH_PATTERNS — the near-miss prefix updates automatically.
+const SAFE_BASH_VERBS = [
+  "pwd", "whoami", "id", "date", "hostname",
+  "cd", "ls", "cat", "head", "tail", "wc",
+  "file", "stat", "which", "uname", "git", "echo",
+] as const;
+
 // Near-miss prefix detection (#3252). Matches commands whose leading
 // token starts with a known safe-bash allowlist verb but extends past
 // it (lsof vs ls, cdrecord vs cd, pwdx vs pwd, catatonic vs cat).
@@ -206,8 +220,20 @@ export const SAFE_BASH_PATTERNS: readonly RegExp[] = [
 // etc. — these ARE near-misses to `ls`, and the drift signal is correct.
 // Operators monitoring `safe-bash-near-miss` should expect such tokens
 // in normal exploration noise (see plan §Risks R5).
-const SAFE_BASH_NEAR_MISS_PREFIX =
-  /^(?:ls|pwd|cd|whoami|cat|head|tail|wc|file|stat|which|uname|git|echo)\w/;
+const SAFE_BASH_NEAR_MISS_PREFIX = new RegExp(
+  String.raw`^(?:${SAFE_BASH_VERBS.join("|")})\w`,
+);
+
+// Per-(canUseTool ctx) dedupe + budget for near-miss telemetry. Keyed
+// via WeakMap so the state is GC'd when the conversation ends. Caps
+// emitted events per-ctx at NEAR_MISS_PER_CTX_BUDGET to bound Sentry
+// flood under prompt-injected loops emitting unique near-miss tokens
+// (plan §R3). leadingToken is sliced to NEAR_MISS_LEADING_TOKEN_MAX
+// chars to bound PII surface in glued-no-space commands.
+const NEAR_MISS_PER_CTX_BUDGET = 32;
+const NEAR_MISS_LEADING_TOKEN_MAX = 32;
+type NearMissState = { seen: Set<string>; emitted: number };
+const NEAR_MISS_STATE = new WeakMap<CanUseToolContext, NearMissState>();
 
 /**
  * Returns true iff `command` is a single, read-only file/git/cwd
@@ -246,19 +272,6 @@ export function isBashCommandSafe(command: unknown): boolean {
     if (pattern.test(trimmed)) return true;
   }
   return false;
-}
-
-/**
- * Returns true iff `command`'s leading token looks like a near-miss
- * extension of a known safe-bash allowlist verb (lsof for ls, cdrecord
- * for cd, pwdx for pwd, etc.). Used to emit drift telemetry on
- * rejection paths — the user-facing decision is unchanged.
- *
- * Should ONLY be called when `isBashCommandSafe(command) === false`.
- */
-export function isBashCommandNearMiss(command: string): boolean {
-  if (typeof command !== "string" || command.length === 0) return false;
-  return SAFE_BASH_NEAR_MISS_PREFIX.test(command.trim());
 }
 
 // Safe UX-flow tools surfaced by the soleur plugin that carry no path
@@ -506,16 +519,32 @@ export function createCanUseTool(ctx: CanUseToolContext): CanUseTool {
       // ordering: AFTER the safe-bash allowlist missed, BEFORE the
       // batched-approval cache lookup. Placement is load-bearing —
       // earlier would emit on blocklist-denied commands (sudo/curl);
-      // later would lose signal for cache-hit cases. Emits only the
-      // first whitespace-separated token (PII guard — full command
-      // may contain user-prompt content).
-      if (isBashCommandNearMiss(command)) {
-        const leadingToken = command.trim().split(/\s+/)[0];
-        warnSilentFallback(null, {
-          feature: "cc-permissions",
-          op: "safe-bash-near-miss",
-          extra: { leadingToken },
-        });
+      // moving past the cache check would silence drift signal once a
+      // batched grant short-circuits subsequent identical invocations.
+      // PII + flood guards: leadingToken is sliced to ≤32 chars and
+      // deduped per-ctx with a 32-event-per-ctx budget cap.
+      const trimmedCmd = command.trim();
+      if (SAFE_BASH_NEAR_MISS_PREFIX.test(trimmedCmd)) {
+        const leadingToken = trimmedCmd
+          .split(/\s+/)[0]
+          .slice(0, NEAR_MISS_LEADING_TOKEN_MAX);
+        let nearMissState = NEAR_MISS_STATE.get(ctx);
+        if (!nearMissState) {
+          nearMissState = { seen: new Set(), emitted: 0 };
+          NEAR_MISS_STATE.set(ctx, nearMissState);
+        }
+        if (
+          nearMissState.emitted < NEAR_MISS_PER_CTX_BUDGET &&
+          !nearMissState.seen.has(leadingToken)
+        ) {
+          nearMissState.seen.add(leadingToken);
+          nearMissState.emitted += 1;
+          warnSilentFallback(null, {
+            feature: "cc-permissions",
+            op: "safe-bash-near-miss",
+            extra: { leadingToken },
+          });
+        }
       }
 
       // #2921 batched-approval cache: pre-gate check (synchronous Map

@@ -640,4 +640,139 @@ describe("near-miss telemetry surface (TS7)", () => {
       });
     });
   }
+
+  // Verbs added to the prefix surface in the post-review hardening pass:
+  // id, date, hostname were absent from the original alternation. Pin
+  // them so a future PR refactoring SAFE_BASH_VERBS can't silently drop
+  // their drift signal.
+  for (const cmd of ["idmap", "dateutil", "hostnamectl"]) {
+    test(`${JSON.stringify(cmd)} (post-review verb) triggers near-miss telemetry`, async () => {
+      const { ctx } = buildContext();
+      const canUseTool = createCanUseTool(ctx);
+      await canUseTool("Bash", { command: cmd }, sdkOptions());
+      expect(mockWarnSilentFallback).toHaveBeenCalledTimes(1);
+      const call = mockWarnSilentFallback.mock.calls[0];
+      expect(call[1]).toMatchObject({
+        feature: "cc-permissions",
+        op: "safe-bash-near-miss",
+        extra: { leadingToken: cmd },
+      });
+    });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// TS8 — leadingToken length cap + per-ctx dedupe + per-ctx budget
+// (post-review hardening per #3277 review findings)
+// ---------------------------------------------------------------------------
+
+describe("near-miss telemetry hardening (TS8)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockIsFileTool.mockReturnValue(false);
+    mockIsSafeTool.mockReturnValue(false);
+    mockIsPathInWorkspace.mockReturnValue(true);
+    mockExtractToolPath.mockReturnValue(null);
+    mockGetToolTier.mockReturnValue("auto-approve");
+  });
+
+  test("leadingToken truncates to ≤32 chars (PII guard for glued tokens)", async () => {
+    const { ctx } = buildContext();
+    const canUseTool = createCanUseTool(ctx);
+    // 45-char glued token starting with `cat` — matches near-miss prefix
+    // but the rest of the word is unbounded user-prompt-derived content.
+    const glued = "catatonic_password_dump_with_long_secret_data";
+    await canUseTool("Bash", { command: glued }, sdkOptions());
+    expect(mockWarnSilentFallback).toHaveBeenCalledTimes(1);
+    const call = mockWarnSilentFallback.mock.calls[0];
+    const extra = (call[1] as { extra: { leadingToken: string } }).extra;
+    expect(extra.leadingToken.length).toBeLessThanOrEqual(32);
+    expect(glued).toContain(extra.leadingToken);
+    // Sentinel: the secret-shaped tail must not be in the token.
+    expect(extra.leadingToken).not.toContain("secret_data");
+  });
+
+  test("dedupes same near-miss token within one ctx (single emission)", async () => {
+    const { ctx } = buildContext();
+    const canUseTool = createCanUseTool(ctx);
+    await canUseTool("Bash", { command: "lsof" }, sdkOptions());
+    await canUseTool("Bash", { command: "lsof" }, sdkOptions());
+    await canUseTool("Bash", { command: "lsof" }, sdkOptions());
+    expect(mockWarnSilentFallback).toHaveBeenCalledTimes(1);
+  });
+
+  test("distinct near-miss tokens within one ctx each emit once", async () => {
+    const { ctx } = buildContext();
+    const canUseTool = createCanUseTool(ctx);
+    await canUseTool("Bash", { command: "lsof" }, sdkOptions());
+    await canUseTool("Bash", { command: "cdrecord" }, sdkOptions());
+    await canUseTool("Bash", { command: "pwdx" }, sdkOptions());
+    expect(mockWarnSilentFallback).toHaveBeenCalledTimes(3);
+  });
+
+  test("per-ctx budget caps emissions to 32 distinct tokens", async () => {
+    const { ctx } = buildContext();
+    const canUseTool = createCanUseTool(ctx);
+    // Emit 40 distinct near-miss tokens; budget is 32.
+    for (let i = 0; i < 40; i++) {
+      await canUseTool("Bash", { command: `lsof_v${i}` }, sdkOptions());
+    }
+    expect(mockWarnSilentFallback).toHaveBeenCalledTimes(32);
+  });
+
+  test("fresh ctx resets dedupe (different conversation isolated)", async () => {
+    const ctx1 = buildContext().ctx;
+    const canUseTool1 = createCanUseTool(ctx1);
+    await canUseTool1("Bash", { command: "lsof" }, sdkOptions());
+
+    const ctx2 = buildContext().ctx;
+    const canUseTool2 = createCanUseTool(ctx2);
+    await canUseTool2("Bash", { command: "lsof" }, sdkOptions());
+
+    expect(mockWarnSilentFallback).toHaveBeenCalledTimes(2);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// TS9 — Hardened SHELL_METACHAR_DENYLIST: NUL + C0 range + DEL
+// (post-review hardening per #3277 review findings)
+// ---------------------------------------------------------------------------
+
+describe("metachar denylist hardening (TS9)", () => {
+  for (const ctrl of [
+    "\x00", // NUL
+    "\x01", // SOH
+    "\x07", // BEL
+    "\x08", // BS
+    "\x0b", // VT
+    "\x0c", // FF
+    "\x1b", // ESC
+    "\x7f", // DEL
+  ]) {
+    test(`commands containing 0x${ctrl.charCodeAt(0).toString(16).padStart(2, "0")} are not safe`, () => {
+      expect(isBashCommandSafe(`pwd${ctrl}`)).toBe(false);
+      expect(isBashCommandSafe(`pwd${ctrl}ls`)).toBe(false);
+      expect(isBashCommandSafe(`${ctrl}pwd`)).toBe(false);
+    });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// TS10 — Path-traversal denylist with whitespace-class separators
+// (post-review hardening — pin tab-as-separator coverage)
+// ---------------------------------------------------------------------------
+
+describe("path-traversal whitespace coverage (TS10)", () => {
+  test("tab-separated `..` rejects (HT covered by metachar denylist via C0)", () => {
+    // The C0 hardening rejects HT (\t) at the metachar stage now, so
+    // tab-separated path traversal short-circuits there. Either way,
+    // `cd\t..` is rejected — pin both directions for the regression.
+    expect(isBashCommandSafe("cd\t..")).toBe(false);
+    expect(isBashCommandSafe("ls\t..")).toBe(false);
+  });
+
+  test("multi-space-separated `..` rejects via path-traversal denylist", () => {
+    expect(isBashCommandSafe("ls  ..")).toBe(false);
+    expect(isBashCommandSafe("cat  ../foo")).toBe(false);
+  });
 });
