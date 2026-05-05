@@ -82,6 +82,20 @@ function extractFunctionBody(yaml: string, name: string): string {
   return tail.slice(0, close.index + close[0].length);
 }
 
+// Collect every index where `needle` occurs in `haystack`. Used to walk all
+// occurrences of a literal URL substring without regex (CodeQL flags
+// URL-shaped regexes for missing anchors).
+function collectIndices(haystack: string, needle: string): number[] {
+  const out: number[] = [];
+  let from = 0;
+  for (;;) {
+    const i = haystack.indexOf(needle, from);
+    if (i < 0) return out;
+    out.push(i);
+    from = i + needle.length;
+  }
+}
+
 // =============================================================================
 // Trigger-surface contract — schedule + workflow_dispatch only
 // =============================================================================
@@ -257,9 +271,20 @@ describe("scheduled-github-app-drift-guard.yml — gh api /app via curl", () => 
     // `Bearer <value>`. App-JWT endpoints (/app, /app/installations) require
     // Bearer. Using `gh api` with a JWT silently 401s.
     const yaml = readFileSync(workflowPath, "utf-8");
-    // Positive: must hit api.github.com/app via curl
-    expect(yaml).toContain("https://api.github.com/app");
-    expect(yaml).toMatch(/curl[\s\S]+?api\.github\.com\/app/);
+    // Positive: must hit api.github.com/app via curl. Walk every occurrence
+    // of the URL string and require at least one to have `curl` in the
+    // preceding 400-char window. Avoids URL-shaped regex (CodeQL
+    // js/regex/missing-regexp-anchor — `[\s\S]+?api\.github\.com` could
+    // match attacker URLs like `evil.com/api.github.com/app` in URL-validation
+    // contexts) AND avoids false positives from header-comment mentions of
+    // the URL.
+    const url = "https://api.github.com/app";
+    expect(yaml).toContain(url);
+    const occurrences = collectIndices(yaml, url);
+    const matched = occurrences.some((idx) =>
+      /\bcurl\b/.test(yaml.slice(Math.max(0, idx - 400), idx)),
+    );
+    expect(matched).toBe(true);
     // Negative: must not call `gh api /app`
     expect(yaml).not.toMatch(/gh\s+api\s+\/app(\s|$)/m);
   });
@@ -267,8 +292,15 @@ describe("scheduled-github-app-drift-guard.yml — gh api /app via curl", () => 
   test("curl pins --max-time to bound network calls", () => {
     const yaml = readFileSync(workflowPath, "utf-8");
     // Per Sharp Edge: any `dig`/`curl` in CI must pin a timeout to prevent
-    // hung jobs.
-    expect(yaml).toMatch(/curl[\s\S]+?--max-time\s+\d+[\s\S]+?api\.github\.com\/app/);
+    // hung jobs. Walk every URL occurrence and require at least one to have
+    // both `curl` and `--max-time <n>` in the preceding 400-char window.
+    const url = "https://api.github.com/app";
+    const occurrences = collectIndices(yaml, url);
+    const matched = occurrences.some((idx) => {
+      const window = yaml.slice(Math.max(0, idx - 400), idx);
+      return /\bcurl\b/.test(window) && /--max-time\s+\d+/.test(window);
+    });
+    expect(matched).toBe(true);
   });
 
   test("Authorization: Bearer is present (not Authorization: token)", () => {
