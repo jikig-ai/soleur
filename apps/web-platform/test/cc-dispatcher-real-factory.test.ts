@@ -41,6 +41,12 @@ const {
 
 vi.mock("@anthropic-ai/claude-agent-sdk", () => ({
   query: mockQuery,
+  // Drift-guard for #3250: `realSdkQueryFactory` calls `getSessionMessages`
+  // when `args.resumeSessionId` is set. Returning `[]` keeps the guard's
+  // empty-history branch from blocking these tests and matches the
+  // behavior asserted by the prefill-guard test file's empty-history
+  // scenario.
+  getSessionMessages: vi.fn().mockResolvedValue([]),
   tool: vi.fn(),
   createSdkMcpServer: vi.fn(),
 }));

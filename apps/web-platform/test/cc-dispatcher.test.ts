@@ -598,7 +598,7 @@ describe("cc-dispatcher singletons + orchestration", () => {
     expect(errorCalls.length).toBeGreaterThan(0);
     const errMsg = errorCalls[0][1] as { errorCode?: string; message?: string };
     expect(errMsg.errorCode).toBeUndefined();
-    expect(errMsg.message).toContain("Command Center router is unavailable");
+    expect(errMsg.message).toContain("Dashboard router is unavailable");
   });
 
   // ---------------------------------------------------------------------------

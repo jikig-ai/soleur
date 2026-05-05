@@ -75,7 +75,7 @@ export function ReadyState({
         </p>
 
         <div className="flex flex-col items-center gap-3 sm:flex-row sm:justify-center">
-          <GoldButton onClick={onContinue}>Open Command Center</GoldButton>
+          <GoldButton onClick={onContinue}>Open Dashboard</GoldButton>
           <button
             type="button"
             onClick={onViewKb}
@@ -184,7 +184,7 @@ export function ReadyState({
             href="/dashboard"
             className="text-amber-400 underline underline-offset-2 hover:text-amber-300"
           >
-            View in Command Center
+            View in Dashboard
           </Link>
         </p>
       ) : (
@@ -195,7 +195,7 @@ export function ReadyState({
 
       {/* CTAs */}
       <div className="flex items-center justify-center gap-3">
-        <GoldButton onClick={onContinue}>Open Command Center</GoldButton>
+        <GoldButton onClick={onContinue}>Open Dashboard</GoldButton>
         <button
           type="button"
           onClick={onViewKb}
