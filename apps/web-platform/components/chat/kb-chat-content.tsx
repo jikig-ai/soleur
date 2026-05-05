@@ -127,6 +127,14 @@ export function KbChatContent({ contextPath, onClose, visible }: KbChatContentPr
 
   const handleMessageCountChange = useCallback(
     (count: number) => {
+      // Belt-and-suspenders for race H3: handleThreadResumed seeds
+      // historicalCountRef = N when session_resumed arrives. If ChatSurface
+      // fires a transient onMessageCountChange(0) before its history fetch
+      // resolves (or while `realConversationId` is non-null but `messages` is
+      // still empty), do not overwrite KbChatContext.messageCount back to 0
+      // — the trigger label would flip to "Ask about this document" and
+      // stick if the fetch fails.
+      if (count === 0 && historicalCountRef.current > 0) return;
       setMessageCount(count);
       if (count > historicalCountRef.current) {
         setResumedBanner(null);

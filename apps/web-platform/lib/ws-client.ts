@@ -93,6 +93,14 @@ interface UseWebSocketReturn {
    *  into `workflowEnded` so input stays disabled across reloads even when
    *  the in-memory lifecycle slice is `idle` post-mount. */
   workflowEndedAt: string | null;
+  /** True while a `/api/conversations/:id/messages` fetch is in flight.
+   *  Surfaces from the resume-history and mount-time history-fetch effects.
+   *  ChatSurface uses this to gate the "Send a message to get started"
+   *  empty-state placeholder so it does NOT flash during the round-trip,
+   *  and to defer the `onMessageCountChange?.(0)` mount-time write that
+   *  would otherwise clobber `useKbLayoutState`'s prefetched messageCount
+   *  (race H3 in the resume hydration plan). */
+  historyLoading: boolean;
 }
 
 const MAX_BACKOFF = 30_000;
@@ -288,6 +296,13 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
   const [usageData, setUsageData] = useState<UsageData | null>(null);
   // Stage 4 review F3: persisted `workflow_ended_at` from history fetch.
   const [workflowEndedAt, setWorkflowEndedAt] = useState<string | null>(null);
+  // True while either history-fetch effect (mount-time or resume-by-ID) has
+  // an in-flight fetch. ChatSurface gates its empty-state placeholder on
+  // `!historyLoading` so the placeholder cannot render during the round-trip,
+  // and skips the mount-time `onMessageCountChange?.(0)` write while loading
+  // so the trigger button does not flip to "Ask about this document" between
+  // the prefetch (`useKbLayoutState`) and the history fetch resolving.
+  const [historyLoading, setHistoryLoading] = useState(false);
   const wsRef = useRef<WebSocket | null>(null);
   const backoffRef = useRef(INITIAL_BACKOFF);
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
@@ -697,6 +712,11 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
     const { data: { session } } = await supabase.auth.getSession();
     if (!session?.access_token) return null;
 
+    // NOTE: this endpoint is wired in the Node custom server
+    // (`server/api-messages.ts` via `server/index.ts:75-81` regex), NOT in
+    // `app/api/conversations/`. Do not add a duplicate `route.ts` — Next.js
+    // routing precedence between the App Router and the custom server is
+    // undefined and the duplicate would shadow this path silently.
     const res = await fetch(
       `/api/conversations/${targetId}/messages`,
       {
@@ -705,7 +725,11 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
       },
     );
     if (!res.ok) {
-      console.warn(`History fetch failed for ${targetId}: ${res.status}`);
+      reportSilentFallback(null, {
+        feature: "kb-chat",
+        op: "history-fetch-failed",
+        extra: { conversationId: targetId, status: res.status },
+      });
       return null;
     }
 
@@ -755,10 +779,15 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
     if (conversationId === "new") return;
     const controller = new AbortController();
 
+    setHistoryLoading(true);
     (async () => {
       try {
         const result = await fetchConversationHistory(conversationId, controller.signal);
-        if (!result || !mountedRef.current) return;
+        // `controller.signal.aborted` is per-effect-instance and deterministic
+        // across React strict-mode double-mount, where a stale `mountedRef`
+        // could observe its second-mount `true` value and dispatch into a
+        // remounted reducer.
+        if (!result || controller.signal.aborted) return;
 
         // filter_prepend deduplicates by id against whatever stream events
         // landed while the fetch was in flight — strictly safer than an
@@ -768,7 +797,13 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
         seedWorkflowEndedAt(result.workflowEndedAt);
       } catch (err) {
         if (err instanceof DOMException && err.name === "AbortError") return;
-        console.error("Failed to load history:", err);
+        reportSilentFallback(err, {
+          feature: "kb-chat",
+          op: "history-fetch-error",
+          extra: { conversationId },
+        });
+      } finally {
+        if (!controller.signal.aborted) setHistoryLoading(false);
       }
     })();
 
@@ -786,10 +821,11 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
 
     const controller = new AbortController();
 
+    setHistoryLoading(true);
     (async () => {
       try {
         const result = await fetchConversationHistory(realConversationId, controller.signal);
-        if (!result || !mountedRef.current) return;
+        if (!result || controller.signal.aborted) return;
 
         // Deduplicate: filter out any messages already present from stream events
         // that arrived while the fetch was in-flight. More robust than the
@@ -800,7 +836,13 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
         seedWorkflowEndedAt(result.workflowEndedAt);
       } catch (err) {
         if (err instanceof DOMException && err.name === "AbortError") return;
-        console.error("Failed to load resume history:", err);
+        reportSilentFallback(err, {
+          feature: "kb-chat",
+          op: "history-fetch-error",
+          extra: { conversationId: realConversationId },
+        });
+      } finally {
+        if (!controller.signal.aborted) setHistoryLoading(false);
       }
     })();
 
@@ -925,5 +967,6 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
     resumedFrom,
     workflow: chatState.workflow,
     workflowEndedAt,
+    historyLoading,
   };
 }

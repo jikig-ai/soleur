@@ -1,5 +1,7 @@
 import type { IncomingMessage, ServerResponse } from "http";
+import * as Sentry from "@sentry/nextjs";
 import { createServiceClient } from "@/lib/supabase/service";
+import { reportSilentFallback } from "@/server/observability";
 
 const supabase = createServiceClient();
 
@@ -17,6 +19,11 @@ export async function handleConversationMessages(
   // Extract bearer token
   const authHeader = req.headers.authorization;
   if (!authHeader?.startsWith("Bearer ")) {
+    reportSilentFallback(null, {
+      feature: "kb-chat",
+      op: "history-fetch-401-missing-auth",
+      extra: { conversationId },
+    });
     res.writeHead(401, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ error: "Missing authorization token" }));
     return;
@@ -29,6 +36,11 @@ export async function handleConversationMessages(
   } = await supabase.auth.getUser(token);
 
   if (authErr || !user) {
+    reportSilentFallback(authErr ?? null, {
+      feature: "kb-chat",
+      op: "history-fetch-401-invalid-token",
+      extra: { conversationId },
+    });
     res.writeHead(401, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ error: "Invalid token" }));
     return;
@@ -47,6 +59,11 @@ export async function handleConversationMessages(
     .single();
 
   if (convErr || !conv) {
+    reportSilentFallback(convErr ?? null, {
+      feature: "kb-chat",
+      op: "history-fetch-404-not-owned-or-missing",
+      extra: { conversationId, userId: user.id },
+    });
     res.writeHead(404, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ error: "Conversation not found" }));
     return;
@@ -60,10 +77,26 @@ export async function handleConversationMessages(
     .order("created_at", { ascending: true });
 
   if (msgErr) {
+    reportSilentFallback(msgErr, {
+      feature: "kb-chat",
+      op: "history-fetch-500-messages-load",
+      extra: { conversationId },
+    });
     res.writeHead(500, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ error: "Failed to load messages" }));
     return;
   }
+
+  // Success breadcrumb makes H1 (row mismatch / 0-row hit) observable in
+  // prod without requiring a manual repro: a `count: 0` breadcrumb paired
+  // with a user report localizes the bug to the Postgres row state rather
+  // than the client-side hydration path.
+  Sentry.addBreadcrumb({
+    category: "kb-chat",
+    message: "history-fetch-success",
+    level: "info",
+    data: { conversationId, count: messages?.length ?? 0 },
+  });
 
   res.writeHead(200, { "Content-Type": "application/json" });
   res.end(JSON.stringify({

@@ -201,6 +201,7 @@ export function ChatSurface({
     resumedFrom,
     workflow,
     workflowEndedAt,
+    historyLoading,
   } = useWebSocket(conversationId);
 
   const { names: customNames, getDisplayName, getIconPath, loading: teamNamesLoading } = useTeamNames();
@@ -279,8 +280,15 @@ export function ChatSurface({
   }, [realConversationId, onRealConversationId]);
 
   useEffect(() => {
+    // Race H3: while history is still loading, OR `realConversationId` is set
+    // but `messages.length === 0`, do NOT clobber the prefetched messageCount
+    // with `0`. `useKbLayoutState` seeds messageCount via /api/chat/thread-info
+    // before the sidebar mounts; firing `onMessageCountChange?.(0)` here would
+    // flip the trigger label to "Ask about this document" until the history
+    // fetch resolves — and stick there permanently if the fetch fails.
+    if (messages.length === 0 && (historyLoading || realConversationId)) return;
     onMessageCountChange?.(messages.length);
-  }, [messages.length, onMessageCountChange]);
+  }, [messages.length, onMessageCountChange, historyLoading, realConversationId]);
 
   useEffect(() => {
     if (status === "reconnecting") {
@@ -465,7 +473,7 @@ export function ChatSurface({
           </div>
         )}
 
-        {messages.length === 0 && !isClassifying && !lastError && (
+        {messages.length === 0 && !isClassifying && !lastError && !historyLoading && (
           <div className="flex h-full items-center justify-center">
             <p className="text-sm text-neutral-400">
               Send a message to get started
