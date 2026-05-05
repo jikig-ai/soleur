@@ -43,6 +43,64 @@ The existing `server/agent-runner.ts` (durable Claude Agent SDK on Hetzner) stay
 
 **Mitigations (load-bearing for plan):** see Increments 1–3 below; cross-referenced into individual ACs.
 
+## Deepen-Pass Round 2 Findings (2026-05-05)
+
+Round 2 deepen agents (security-sentinel, data-integrity-guardian, type-design-analyzer, architecture-strategist, framework-docs-researcher on Inngest, repo-research-analyst for static RLS, Kieran/DHH reviewers) returned a small set of cross-cutting findings already folded into the increments above. This block lists them so a future reader picks up the work-phase guidance without re-tracing the deepen run:
+
+### Security (P1 — load-bearing)
+- **P1-A (SHOWSTOPPER): BYOK lease cannot remove `ANTHROPIC_API_KEY` from subprocess env.** The Anthropic Claude Agent SDK CLI subprocess READS the key from env (`agent-env.ts:46-49`). Plan's earlier "NEVER via process.env" framing was wrong. Mitigation = `prctl(PR_SET_DUMPABLE, 0)` + bubblewrap `--proc /proc --tmpfs /sys` + Sentry `event.contexts.runtime.env = undefined`. RED-first AC reads `/proc/<child-pid>/environ` from a SIBLING process (not from inside child). See §1.2.
+- **P1-B: `aud='authenticated'` JWT enables session-impersonation.** Custom audience `aud='soleur-runtime'` makes runtime JWTs structurally distinct from user-login JWTs. Plus `jti` + `denied_jti` revocation table + `iss` issuer pin + 60/hour mint rate limit. See §1.4.
+- **P2-A: Inngest signature verification is required at startup, not optional.** `serve()` MUST be configured with `signingKey: process.env.INNGEST_SIGNING_KEY`; missing key = startup throw. Replay-window 5 min. CSRF defense is the wrong primitive — signature-verification IS the primitive. See §3.1.
+- **P2-B: Cost cap is soft, not hard.** Concurrency overshoot bound ~$N × $unit per founder; ~$0.35 worst case for $20 cap with 5 parallel tool-uses on Sonnet 4.6. Documented in ADR §3.1; tighten to row-level `SELECT … FOR UPDATE` if beta scale demands.
+- **P3-B: WORM enforced via trigger, not naming.** `audit_byok_use_no_update`/`_no_delete` triggers raise on UPDATE/DELETE; service-role can drop the trigger but the drop is itself a forensic signal. See §1.3.
+
+### Data Integrity (P1 — load-bearing)
+- **P1-1, P1-2: Atomic check-and-record is a single SQL statement with WITH CTE on `users`** (predicate-locked single-row UPDATE), NOT plpgsql with `ON CONFLICT … DO UPDATE` (no conflict target after `tenant_cost_window` was dropped). See §3.5.
+- **P1-3: `audit_byok_use` needs a founder-readable SELECT policy** for the usage dashboard; WORM via trigger, not via zero policies. See §1.3.
+- **P2-1: Schema includes `unit_cost_cents` column** — §3.5 SUM references it; was missing in earlier draft.
+- **P2-2: Covering index `(founder_id, ts desc) INCLUDE (token_count, unit_cost_cents)`** for index-only scan on the per-Anthropic-call gate. See §1.3.
+- **P2-5: $20/hr cap default**, not $10/hr — Sonnet 4.6 brainstorm-style multi-turn realistically draws ~$8/hr; 200% headroom recommended. See §3.5.
+
+### Type Design (high-leverage)
+- **F1: `WorkflowEnd` discriminated union** with 8 reasons (was 3): `idle_window | max_turn_duration | max_turns | cost_kill | byok_invalid | tenant_revoked | user_cancelled | subprocess_crash`. `: never` rails at every consumer. See §1.7.
+- **F2: 9 (not 11) tenant migration sites in `agent-runner.ts`.** Two sites (`:421`, `:441`) are bulk sweeps with no userId — `getFreshTenantClient(userId)` is structurally inapplicable; stay service-role with allowlist + comment. See §1.1.
+- **F3: `ByokLease.getApiKey()` is a function, NOT a property accessor.** A property would silently leak when a lease ref escaped ALS scope; a function call can detect ALS-context mismatch and throw `ByokLeaseError { cause: "escape" }`. See §1.2.
+- **F4: Split `RuntimeAuthError` (auth-domain) from `AuditWriteError` (integrity-domain).** Earlier merged class would degrade the user's session on a failed audit-row insert — wrong. See §1.6.
+- **F5: `SupportedVersion = 1` literal type at consumer boundary** (work-phase): `EventSchemas` is compile-time-only in v3, so `MIN_SUPPORTED`/`MAX_SUPPORTED` are runtime constants, but the literal type on the worker boundary makes a future schema-version drift fail at the type level instead of at runtime — bandwidth permitting in PR-C. See §3.1.
+- **F6: `TrustTier` discriminated union not string union** (work-phase): the 3 tier objects each carry tier-specific config (e.g., `draft_one_click` carries `verifyTimeoutMs`, `approve_every_time` carries `reauthRequired: boolean`); a string union flattens these and forces optional fields everywhere. Refactor at PR-D when the trust-tier object shape is touched.
+- **F7: `ActionClass` sub-discriminant on `TrustTier`** (work-phase): the action class (`external_brand_critical`, `internal_infra`, `read_research_draft`) is independent of the trust tier and should sit on the action object, not the policy lookup. Shape: `{ action: ActionClass, tier: TrustTier }`. PR-D scope.
+- **F8: Generic `EventEnvelope<TName, TData>` parameterizing the Inngest payload union** (work-phase): without it, every consumer re-narrows `event.data` from `unknown`. Implement when the second event type lands (currently only `finance.payment_failed`); MVP single-event scope is fine without the generic.
+
+### Architecture (cross-cutting)
+- **F1: PR-B's allowlist must include `:421` + `:441`** — both bulk sweeps stay service-role and would otherwise fail PR-B's own grep gate. Captured in §1.5 allowlist.
+- **F2: Extract `runtime-pipeline.ts`** (work-phase): `agent-runner.ts:startAgentSession` body becomes 3 stages (mint JWT → open BYOK lease → run SDK with auth probes); each stage is a pure function on a `RuntimeContext` value object. PR-C scope; out of MVP critical path. Tracking issue at `/work` time.
+- **F3: ADR scope clarification** — ADR `<NNN>-inngest-as-durable-trigger-layer.md` covers (a) Inngest substrate selection, (b) per-invocation user-scoped JWT invariant, (c) per-invocation BYOK lease invariant, (d) single-host setInterval (D13 trigger), (e) cost-cap soft-overshoot bound (P2-B). One ADR, not five. See §3.1.
+- **F5: CODEOWNERS pin** is the only structural defense against an attacker-modeled PR (or a careless agent loop) adding a service-role import AND its allowlist line in one commit. Without it, the gate is self-defeating. See §1.5 + Files-to-Edit (Increment 1) + consolidated Files-to-Create.
+- **F6: Extend grep gate to `app/`** (PR-D scope): the lint step today scopes to `apps/web-platform/{server,lib}`. Add `apps/web-platform/app/api/**/route.ts` (App Router routes can also drift to service-role). Captured as PR-D AC, low-risk extension.
+- **F7: Procedural override path** — when a founder customizes a domain-leader prompt or trust-tier policy, the override lives in their workspace KB (`knowledge-base/**`), NOT in Postgres. The `ACTION_CLASS_DEFAULTS` map (§3.4) is the runtime default; override resolution = read KB → fallback to map. Documented in ADR; not implemented in MVP.
+- **F8: Supabase per-founder-project inflection trigger** — single shared project + RLS holds until any of: (a) >100 paying founders, (b) RLS-bypass incident, (c) HIPAA/SOC2 onboarding, (d) per-founder PITR/replication SLO. Documented in §2.3 + ADR.
+
+### Inngest (framework-docs-researcher)
+- **D1: Concurrency uses CEL expressions, not JS template strings.** See §3.1 example.
+- **D2: `event.v` is a first-class envelope field**, not inside `data`. See §3.1.
+- **D3: Idempotency namespace `stripe-${id}`** to avoid cross-source ID collisions. See §3.2.
+- **D4: `cancelOn` does NOT interrupt in-flight `step.run()`** — only checkpoints. Cooperative `AbortSignal` plumbed into the SDK call is required. See §3.1.
+- **D6: No wildcard event triggers in v3.** Each function names exactly one event; founder identity is in `event.data.founderId`. See §3.1 + §3.2.
+- **D7: Pro tier is $75/mo**, not $25; retries are billable runs. Set `retries: 0` or `1` on functions whose failure should deadletter. See §3.1.
+
+### RLS Static Analysis (repo-research-analyst — psql unavailable)
+- All 5 target tables (`users`, `api_keys`, `conversations`, `messages`, `team_names`) already support `auth.uid() = <owner>` SELECT under user-scoped JWT (per migrations 001 + 016 + 017 + 018). PR-B requires no SELECT-policy migration.
+- `messages` has zero UPDATE/DELETE policies — Increment 1 must NOT issue UPDATE/DELETE against `messages` from `tenantClient`. Lint regex `tenantClient.from\("messages"\).(update|delete)\(` rejected at CI.
+- `conversations` lacks `WITH CHECK` (`001:60-62`, confirmed by `036:72`). USING governs both read and write — a future maintainer adding `WITH CHECK (true)` "to be explicit" silently defeats the invariant. Plan adds an inline comment + a regression test.
+
+### Reviewer Cuts (Kieran P-tier + DHH)
+- **K3 / P1.4: Verify-external-state contract is block-and-alert**, not silent proceed-on-error. Captured in §3.4.
+- **K4 superseded by data-integrity P1-1/P1-2** (atomic single-statement WITH CTE supersedes earlier `ON CONFLICT … DO UPDATE` framing).
+- **DHH #1: Custom ESLint rule rejected** for the lint gate; replaced with 1-line CI grep + checked-in allowlist + CODEOWNERS pin. See §1.5.
+- **DHH #3: Trust-tier collapsed from 5 to 3 tiers for MVP.** D2 tracks the 5-tier refactor for when a 2nd background trigger lands.
+- **DHH #4: No new `tenant_cost_window` table.** Cumulative spend derived from `audit_byok_use` SUM; `users` ALTER is the only new column shape. See §3.5.
+- **DHH #5: Today aggregator fetch in `page.tsx` directly**, no aggregator module/API route until a 2nd source type lands.
+
 ## Research Reconciliation — Spec vs. Codebase
 
 | Spec claim | Codebase reality | Plan response |
@@ -113,19 +171,27 @@ New module: `apps/web-platform/lib/supabase/tenant.ts`.
 - `createTenantClient(jwt: string): SupabaseClient` — wraps `createClient(url, anonKey, { global: { headers: { Authorization: \`Bearer ${jwt}\` } } })`. NO `setSession` (avoids cookie-storage assumptions); explicit per-call header.
 - **`getFreshTenantClient(userId: UserId): Promise<SupabaseClient>` — auto-remint boundary** (per Kieran P1.1). Caches `{ jwt, mintedAt, client }` per-userId in process-local map; if `now - mintedAt > ttlSec/2`, transparently re-mints and returns a fresh client. Caller path is `getFreshTenantClient` (NOT `createTenantClient`) for any code inside long-running agent loops. This is the only public boundary call sites use; `createTenantClient` is private to this module. Long-running tool calls already started under a stale JWT continue to completion (RLS denies new queries; existing in-flight resultsets are unaffected per PostgREST contract); the next query gets a fresh client. Auto-remint MUST succeed transparently — sanitized-error path is for terminal auth failure (user soft-deleted, JWT secret rotated, RPC error) only.
 
-Call sites to migrate inside `agent-runner.ts` (audit list, all line numbers from repo research):
-- `:182` `getUserApiKey` (BYOK fetch — see 1.2)
+Call sites to migrate inside `agent-runner.ts` — **9 to tenantClient, 2 to allowlist** (deepen-pass round 2 corrects the earlier framing per type-design F2 + architecture F1):
+
+**Migrate to `getFreshTenantClient(userId)` (9 sites, all in user-scoped contexts):**
+- `:182` `getUserApiKey` (BYOK fetch)
 - `:213` RPC `migrate_api_key_to_v2`
 - `:256, :289` `getUserServiceTokens`
 - `:329` `saveMessage` INSERT
 - `:376` `loadConversationHistory` SELECT
-- `:424` `cleanupOrphanedConversations` UPDATE
-- `:445` `startInactivityTimer` UPDATE (folds #3219 — slot leak)
 - `:528` `users` SELECT
-- `:839` `kbShareTools` constructor (`serviceClient: supabase()` → tenantClient)
 - `:1071` RPC `increment_conversation_cost`
-- `:1315, :1326, :1363, :1373, :1390` `sendUserMessage` ownership check, message insert, attachment metadata, user lookup, storage download
+- `:1315, :1326, :1363, :1373, :1390` `sendUserMessage` (ownership check, message insert, attachment metadata, user lookup, storage download)
 - `:1456` `team_names` SELECT
+
+**Stay service-role (cross-tenant bulk sweeps; no userId in scope — `getFreshTenantClient(userId)` is structurally inapplicable):**
+- `:421 cleanupOrphanedConversations` UPDATE — bulk sweep across all founders.
+- `:441 startInactivityTimer` UPDATE — bulk sweep, runs on a `setInterval` independent of any session. (#3219's slot-leak fix is achieved here by adjusting the sweep predicate, NOT by tenantClient migration.)
+- `:839` `kbShareTools` constructor — already covered by §1.5 allowlist (kb-share impersonation).
+
+Add explicit `// SERVICE-ROLE: cross-tenant bulk sweep — no userId; safe because predicate is keyed on staleness/`runtime_paused_at`, not on data ownership` comments at `:421` and `:441`. Both paths must be added to `.service-role-allowlist` in PR-B (otherwise PR-B's own CI grep gate fails — architecture F1).
+
+**Defer-or-rewrite trigger:** when a second runtime host is provisioned (per §3.1 ADR single-host invariant), the bulk-sweep pattern must move to per-tenant Inngest cron (already-available substrate from PR-C). Tracked as deferral D13 below.
 
 For each migrated call site, add an **auth probe** before the query (per `2026-04-12-silent-rls-failures-in-team-names.md`): explicit `getUser()` call OR check the JWT's `auth.uid()` claim matches the expected `userId`, distinguishing RLS-empty from auth-failure.
 
@@ -134,9 +200,21 @@ For each migrated call site, add an **auth probe** before the query (per `2026-0
 New module: `apps/web-platform/server/byok-lease.ts`.
 
 - `runWithByokLease<T>(userId: UserId, fn: (lease: ByokLease) => Promise<T>): Promise<T>` — opens an `AsyncLocalStorage` scope, decrypts BYOK on demand via existing `decryptKey` (`server/byok.ts`), zeroizes the buffer in `finally` (`buf.fill(0)` then `buf = null`).
+- **`ByokLease` API shape — function, NOT property accessor (per type-design F3).** Earlier wording "lease.apiKey" was a property accessor — a captured-and-leaked lease reference would silently return the key outside ALS scope. Replaced with:
+  ```ts
+  interface ByokLease {
+    getApiKey(): string;  // throws ByokLeaseError { cause: "escape" } if called outside ALS scope
+  }
+  ```
+  Implementation calls `getCurrentByokLease()` internally on each call and verifies ALS context is the same one that created the lease. Even better when the SDK supports it: pass `query({ apiKey: () => lease.getApiKey() })` so the lease is the only resolver and capture-then-leak is structurally meaningless. Plan AC: leaked `lease` reference outside scope MUST throw `ByokLeaseError { cause: 'escape' }` — this is the test that catches the silent-leak class.
 - **Buffer-vs-string contract verification (per Kieran P1.2).** Plan-time precondition: `server/byok.ts:decryptKey` MUST return `Buffer`. If it returns `string` today, refactor to `Buffer` BEFORE landing the lease module — V8 string-internment makes `string`-shaped zeroize advisory-only. AC-enforced. Residual exposure acknowledged: the moment the lease hands the key to the Anthropic SDK `query({ apiKey: string })`, V8 interns it again — the lease bounds the in-Soleur-heap window, NOT the SDK-side window. This is mitigation, not elimination; documented in §3.1 ADR.
 - `getCurrentByokLease(): ByokLease | null` — reads from ALS; throws if called outside a scope.
-- Lease is delivered to the Claude Agent SDK subprocess via `query()`'s `apiKey` parameter (string), NEVER via `process.env`. Existing `agent-env.ts` allowlist (per `2026-03-20-process-env-spread-leaks-secrets-to-subprocess-cwe-526`) is unchanged; `ANTHROPIC_API_KEY` is NOT added to the allowlist. Verified at `agent-runner.ts:891 buildAgentQueryOptions`.
+- **BYOK subprocess-env contradiction (deepen-pass security P1-A — SHOWSTOPPER for naive read of "NEVER via process.env").** Repo grep at `apps/web-platform/server/agent-env.ts:46-49` and `agent-runner-query-options.ts:123` shows that `buildAgentEnv()` TODAY writes `env: { ANTHROPIC_API_KEY: apiKey, ... }` into the spawned subprocess's environment block — the Anthropic Claude Agent SDK's `query()` spawns a CLI subprocess that READS `ANTHROPIC_API_KEY` from env. The plan's earlier wording ("NEVER via process.env") was incorrect: the lease moves the **Soleur-side** heap exposure into ALS scope, but the SDK-side subprocess env exposure remains because that's how the SDK's CLI subprocess receives the key. CWE-526 mitigation requires accepting the constraint and adding kernel-level hardening:
+  - **Add `prctl(PR_SET_DUMPABLE, 0)`** on the SDK subprocess via a small `child_process.spawn`-after-`prctl`-shim (or use `execSync` of a wrapper that calls `prctl` then `execve`). This denies non-root reads of `/proc/<pid>/environ`. Per [Linux prctl(2) PR_SET_DUMPABLE](https://man7.org/linux/man-pages/man2/prctl.2.html): when set to 0, the process becomes non-dumpable and `/proc/<pid>/environ` becomes owned by root.
+  - **Bubblewrap `--proc /proc --tmpfs /sys`** — closes #1285 (still open per learnings). Defense-in-depth: even if `prctl` is bypassed (e.g., container shares `/proc` host-mount), the sandbox `/proc` is private to the child.
+  - **Confirm Sentry's `process` integration excludes env block.** `sentry.server.config.ts` already strips `req.headers.authorization` + cookies (Increment 0); add `event.contexts?.runtime?.env = undefined` in `beforeSend` to defense-in-depth against the case where the SDK subprocess fails and Sentry's `Process` integration captures env.
+- **Updated AC for §1.4 (per security P1-A).** RED-first test must spawn the subprocess inside `runWithByokLease`, then read `/proc/<child-pid>/environ` from a SIBLING process (not from inside the child — `delete process.env.ANTHROPIC_API_KEY` from inside the child trivially passes a `process.env` test while the kernel still has the env block). Assert one of: (a) `ANTHROPIC_API_KEY` absent from the kernel env block (if SDK accepts non-env passing — unlikely), OR (b) `/proc/<child-pid>/environ` is `EACCES` due to `PR_SET_DUMPABLE=0`. The original "subprocess `process.env`" test is INSUFFICIENT and is removed.
+- Existing `agent-env.ts` allowlist remains the defense for OTHER secrets (`SUPABASE_SERVICE_ROLE_KEY`, `BYOK_ENCRYPTION_KEY`, `STRIPE_SECRET_KEY`) that the SDK CLI doesn't need. `ANTHROPIC_API_KEY` is the singular env-channel exception, hardened by `PR_SET_DUMPABLE` + bubblewrap.
 - **Async-contract widening (per `2026-04-27-widen-async-contract-instead-of-deferred-construction-proxy`).** Audit every existing factory signature touched (`buildAgentQueryOptions`, `createTenantClient` callers). If any takes a sync `(args) => T` and now needs an async fetch, widen to `(args) => Promise<T> | T` rather than wrapping in a deferred-construction proxy. Specifically: confirm `query()` accepts `apiKey: string | (() => Promise<string>)` — if not, widen at the boundary in `agent-runner.ts`.
 - Before each Anthropic call (or once per session at the SDK boundary), insert an `audit_byok_use` row via SECURITY DEFINER RPC `public.write_byok_audit(...)` — service-role-allowlisted.
 
@@ -152,42 +230,87 @@ Migration `037_audit_byok_use.sql` — single-table migration. The generalized `
 create table if not exists public.audit_byok_use (
   id uuid primary key default gen_random_uuid(),
   invocation_id uuid not null,
-  founder_id uuid not null references public.users(id),
+  founder_id uuid not null references public.users(id) on delete restrict,  -- preserve audit history; GDPR via separate runbook (D10)
   agent_role text not null,
   ts timestamptz not null default now(),
-  token_count int,
+  token_count int not null,
+  unit_cost_cents int not null,  -- (per data-integrity P2-1: §3.5 SUM references this column; was missing)
   created_at timestamptz not null default now()
 );
 
--- RLS-on, ZERO policies — service-role-only writes (mirrors processed_stripe_events).
+-- RLS-on. Founder-readable SELECT policy (per data-integrity P1-3: usage dashboard needs read path
+-- without service-role; WORM via trigger below, not via zero-policies).
 alter table public.audit_byok_use enable row level security;
 
+create policy audit_byok_use_owner_select on public.audit_byok_use
+  for select using (auth.uid() = founder_id);
+-- No INSERT/UPDATE/DELETE policies — writes via SECURITY DEFINER RPC only.
+
+-- WORM enforcement (per security P3-B: "WORM" naming alone doesn't restrict service-role; trigger does).
+-- Service-role can drop the trigger, but the drop is itself a forensic signal logged elsewhere.
+create or replace function public.audit_byok_use_no_mutate() returns trigger
+language plpgsql security definer set search_path = public, pg_temp as $$
+begin
+  raise exception 'audit_byok_use is append-only (WORM)';
+end;
+$$;
+
+create trigger audit_byok_use_no_update
+  before update on public.audit_byok_use
+  for each statement execute function public.audit_byok_use_no_mutate();
+create trigger audit_byok_use_no_delete
+  before delete on public.audit_byok_use
+  for each statement execute function public.audit_byok_use_no_mutate();
+
+-- Covering index for §3.5 hot-path sliding-window SUM (per data-integrity P2-2).
+-- INCLUDE makes index-only scans possible: no heap fetch on the per-Anthropic-call gate.
 create index audit_byok_use_founder_ts_idx
-  on public.audit_byok_use (founder_id, ts desc);  -- NOT CONCURRENTLY (per 2026-04-18-supabase-migration-concurrently-forbidden)
+  on public.audit_byok_use (founder_id, ts desc)
+  include (token_count, unit_cost_cents);  -- NOT CONCURRENTLY (per 2026-04-18-supabase-migration-concurrently-forbidden)
 
 create or replace function public.write_byok_audit(
   p_invocation_id uuid,
   p_founder_id uuid,
   p_agent_role text,
-  p_token_count int
+  p_token_count int,
+  p_unit_cost_cents int  -- (per data-integrity P2-1)
 ) returns void
 language sql
 security definer
 set search_path = public, pg_temp
 as $$
-  insert into public.audit_byok_use(invocation_id, founder_id, agent_role, token_count)
-  values (p_invocation_id, p_founder_id, p_agent_role, p_token_count);
+  insert into public.audit_byok_use(invocation_id, founder_id, agent_role, token_count, unit_cost_cents)
+  values (p_invocation_id, p_founder_id, p_agent_role, p_token_count, p_unit_cost_cents);
 $$;
 
-revoke all on function public.write_byok_audit(uuid, uuid, text, int) from public;
-grant execute on function public.write_byok_audit(uuid, uuid, text, int) to service_role;
+revoke all on function public.write_byok_audit(uuid, uuid, text, int, int) from public;
+grant execute on function public.write_byok_audit(uuid, uuid, text, int, int) to service_role;
 ```
+
+**Note:** Increment 3 (PR-D) generalizes to `record_byok_use_and_check_cap` (§3.5) which inserts the audit row AND atomically trips the kill-switch in one statement. PR-B's `write_byok_audit` is the simpler shape used until PR-D lands; the column shape is forward-compatible.
 
 Migration tests (under `apps/web-platform/test/supabase-migrations/`): assert `select` from `audit_byok_use` as `authenticated` returns zero rows (RLS deny); assert `service_role` insert succeeds; assert `write_byok_audit` callable only by `service_role`. Per `2026-04-18-rls-for-all-using-applies-to-writes.md` — copy the test shape from #1449.
 
 ### 1.4 — `mint_founder_jwt` RPC
 
-Migration adds `public.mint_founder_jwt(uid uuid, ttl_sec int default 600) returns text` SECURITY DEFINER. Body uses `auth.sign()` (Supabase exposes via `pg-jwt`); claims include `role='authenticated'`, `sub=uid`, `aud='authenticated'`, `exp=now()+ttl_sec`. `set search_path = public, pg_temp`. Granted to `service_role` ONLY. The Node side calls it via the allowlisted `getServiceClient` (memoized per #2962).
+Migration adds `public.mint_founder_jwt(uid uuid, ttl_sec int default 600) returns text` SECURITY DEFINER. Body uses `auth.sign()` (Supabase exposes via `pg-jwt`); `set search_path = public, pg_temp`. Granted to `service_role` ONLY. Node side calls via allowlisted `getServiceClient` (memoized per #2962).
+
+**Required claims (per security P1-B — earlier `aud='authenticated'` framing was a session-impersonation risk):**
+
+- `sub = uid` (founder UUID)
+- `role = 'authenticated'` (PostgREST recognizes for RLS)
+- `aud = 'soleur-runtime'` — **custom audience**, NOT `'authenticated'`. Runtime-minted JWTs are structurally distinct from user-login JWTs on the wire. PostgREST/Supabase clients on the runtime path accept this audience explicitly; the standard frontend continues to accept `'authenticated'`. A leaked runtime JWT cannot be replayed against the dashboard.
+- `iss` set explicitly to the canonical Supabase issuer URL (e.g., `https://<project-ref>.supabase.co/auth/v1`) — required for issuer-rotation observability.
+- `jti = gen_random_uuid()` — token ID, enables revocation. Paired with new table `public.denied_jti (jti uuid primary key, founder_id uuid, denied_at timestamptz default now())` (RLS-on, zero policies, service-role-only insert). Runtime auth-probe checks `not exists(select 1 from public.denied_jti where jti = $1)` before accepting cached JWTs in `getFreshTenantClient` (§1.1).
+- `exp = extract(epoch from (now() + (ttl_sec || ' seconds')::interval))::int`
+- `iat = extract(epoch from now())::int`
+
+**Per-userId rate limit on the RPC.** New table `public.mint_rate_window (founder_id uuid, window_start timestamptz, mints_count int)`. RPC body increments + checks `mints_count <= 60` per rolling hour (anomalous mint patterns are a compromise indicator). Exceeded = raise `EXCEPTION 'mint_rate_exceeded'` (sanitized to `RuntimeAuthError { cause: 'rotation' }` at boundary).
+
+**Migration test additions (extend §1 ACs):**
+- JWT decoded payload has `aud == 'soleur-runtime'` (NOT `'authenticated'`).
+- JWT has non-null `jti`; `denied_jti` insert blocks subsequent use under that `jti` (auth-probe rejects).
+- `mint_rate_window` enforces 60/hour ceiling; 61st call raises sanitized error.
 
 ### 1.5 — CI grep gate `no-service-role-in-runtime` (replaces custom ESLint rule)
 
@@ -208,7 +331,23 @@ apps/web-platform/server/health.ts
 apps/web-platform/server/byok-lease.ts
 apps/web-platform/server/session-sync.ts
 apps/web-platform/server/kb-share-tools.ts
+apps/web-platform/server/agent-runner.ts          # for bulk sweeps at :421, :441 only — JWT-mint helper above
+apps/web-platform/server/ws-handler.ts            # transitional; PR-C migrates 10 sites to tenantClient
+apps/web-platform/app/api/webhooks/stripe/route.ts # signature-verified webhook; legitimate service-role
 ```
+
+**CODEOWNERS pin (per architecture F5 — without this, the gate is self-defeating):** `.github/CODEOWNERS` requires `@jeand` (or security-owner team) approval for any change to:
+
+```
+apps/web-platform/.service-role-allowlist
+apps/web-platform/lib/supabase/service.ts
+apps/web-platform/lib/supabase/tenant.ts
+apps/web-platform/server/byok-lease.ts
+apps/web-platform/supabase/migrations/**
+.github/workflows/lint.yml
+```
+
+Without CODEOWNERS, an attacker-modeled PR (or a careless agent loop) can add both a service-role import AND the corresponding allowlist line in one commit — gate passes, isolation broken. CODEOWNERS is the only structural defense that survives this.
 
 **`kbShareTools` allowlist decision (per Kieran P3.5).** KB share-link writes legitimately impersonate the share — that's the share-link contract, not a tenant-data leak. Allowlist with explicit `// SERVICE-ROLE: kb-share-link impersonation; audit-row required` comment AND wire `write_byok_audit`-shaped audit row (separate `audit_share_use` table — defer to Increment 3 with `audit_log`). For Increment 1, simply allowlist + comment; deferral issue tracks the audit row.
 
@@ -219,8 +358,11 @@ apps/web-platform/server/kb-share-tools.ts
 Per `2026-03-20-websocket-error-sanitization-cwe-209.md`: every new error path (JWT mint failure, RLS deny, BYOK lease fetch failure, audit-row write failure) must go through `sanitizeErrorForClient()` before any WS forward and through `reportSilentFallback()` (per `cq-silent-fallback-must-mirror-to-sentry`) for server-side mirror. Two typed error classes (collapsed per DHH §1.6 — branch on `cause` field for the auth/audit pair):
 
 - `RlsDenyError` — distinct because client-UX-routing differs (founder vs other-founder data probe).
-- `ByokLeaseError` — distinct because client message ("BYOK key invalid; rotate") differs from generic auth.
-- `RuntimeAuthError { cause: "jwt_mint" | "audit_write" | "rotation" }` — shared shape for paths whose client message is identical ("Authentication unavailable; retry shortly"). Keeps the consumer-side mapper exhaustive (per `2026-05-04-flag-boundary-creates-new-error-class-mapper-must-handle`) without proliferating one class per cause.
+- `ByokLeaseError { cause: "fetch_failed" | "decrypt_failed" | "escape" }` — `escape` is raised when the lease object is accessed outside its ALS scope (per type-design F3 — getter cannot detect escape; the resolver call must throw).
+- `RuntimeAuthError { cause: "jwt_mint" | "rotation" | "denied_jti" }` — auth-domain only. Client message "Authentication unavailable; retry shortly". (Per type-design F4 — earlier `audit_write` cause was mis-keyed: failed audit-row insert is integrity, not auth, and must NOT degrade the user's session.)
+- `AuditWriteError { table: "audit_byok_use" | "audit_log" | "denied_jti" | "mint_rate_window" }` — integrity-domain only. `reportSilentFallback`-mirrored; surfaces as Sentry alert with no user-facing degradation. Failed audit-row insert is operations problem, not session problem.
+
+Mapper extended in `lib/auth/error-messages.ts` exhaustively per `cq-union-widening-grep-three-patterns`.
 
 Mapper extended in `lib/auth/error-messages.ts`.
 
@@ -232,7 +374,19 @@ Per `2026-03-20-claude-code-action-max-turns-budget.md` AND `2026-05-05-defense-
 - TWO discriminated guards:
   - `idle_window` — resets on every assistant block; default 90s (matches recent #3225).
   - `max_turn_duration` — anchored on `firstToolUseAt`, NOT reset by activity; default 10 min.
-- `WorkflowEnd { reason: "idle_window" | "max_turn_duration" | "max_turns" }` discriminator at the runner exit.
+- **`WorkflowEnd` discriminated union (per type-design F1 — earlier 3-reason enum was provably incomplete):**
+  ```ts
+  type WorkflowEnd =
+    | { reason: "idle_window" }
+    | { reason: "max_turn_duration" }
+    | { reason: "max_turns" }
+    | { reason: "cost_kill"; capCents: number; cumulativeCents: number }   // §3.5
+    | { reason: "byok_invalid" }                                            // §1.2 lease failure
+    | { reason: "tenant_revoked" }                                          // §1.6 RuntimeAuthError
+    | { reason: "user_cancelled"; by: "founder" | "operator" }              // existing abortSession
+    | { reason: "subprocess_crash"; exitCode: number; signal?: string };    // SDK exit
+  ```
+  `_exhaustive: never` rails at every consumer per `cq-union-widening-grep-three-patterns`.
 
 Plumbed in `agent-runner.ts` alongside `cc-cost-caps.ts`'s existing `maxBudgetUsd: 5.0` per-conversation cap.
 
@@ -249,12 +403,14 @@ Plumbed in `agent-runner.ts` alongside `cc-cost-caps.ts`'s existing `maxBudgetUs
 
 ### Files to Edit (Increment 1)
 
-- `apps/web-platform/server/agent-runner.ts` — replace `supabase()` callers (11 sites enumerated in §2.2 grep table; remaining ~30 in Increment 2) with `getFreshTenantClient(userId)`. Wire `runWithByokLease` around `startAgentSession` body. Add JWT mint at session start. Folds #3219 (`:445` slot leak).
+- `apps/web-platform/server/agent-runner.ts` — replace `supabase()` callers at the **9 user-scoped sites** enumerated in §1.1 with `getFreshTenantClient(userId)`. The **2 bulk-sweep sites** (`:421 cleanupOrphanedConversations`, `:441 startInactivityTimer`) stay service-role with explicit `// SERVICE-ROLE: bulk sweep` comments + allowlist entry (per type-design F2 + architecture F1). Remaining ~30 server-/ sibling sites migrate in Increment 2. Wire `runWithByokLease` around `startAgentSession` body. Add JWT mint at session start. Folds #3219 (`:445` slot leak — addressed via the bulk-sweep predicate adjustment, NOT tenantClient migration).
 - `apps/web-platform/lib/supabase/service.ts` — JSDoc warning + memoize `getServiceClient` per #2962. Folds #2962.
 - `apps/web-platform/server/byok.ts` — confirm/refactor `decryptKey` returns `Buffer` (per Kieran P1.2). Add `zeroize(buf: Buffer)` helper used by `byok-lease.ts`.
 - `apps/web-platform/server/health.ts:15` — already on allowlist (`.service-role-allowlist`); add inline comment `// SERVICE-ROLE: health probe`.
 - `apps/web-platform/server/session-sync.ts:133` — allowlist comment + `// SERVICE-ROLE (transitional): Increment 2 #3244 migrates to tenantClient`.
 - `apps/web-platform/server/kb-share-tools.ts` — allowlist comment `// SERVICE-ROLE: kb-share-link impersonation; audit-row Increment 3`.
+- `apps/web-platform/server/ws-handler.ts` — allowlist comment `// SERVICE-ROLE (transitional): Increment 2 #3244 migrates 10 sites to tenantClient`. (The 10 sites are themselves migrated in PR-C; PR-B only adds the disclosure comment + allowlist line so PR-B's own grep gate passes.)
+- `.github/CODEOWNERS` (NEW; create if absent — per architecture F5) — pin approval on `.service-role-allowlist`, `lib/supabase/{service,tenant}.ts`, `server/byok-lease.ts`, `supabase/migrations/**`, `.github/workflows/lint.yml` to security owner.
 - `apps/web-platform/lib/auth/error-messages.ts` — add `RlsDenyError`, `ByokLeaseError`, `RuntimeAuthError` (with `cause` field) and mapper entries.
 - `.github/workflows/lint.yml` (or existing CI workflow) — add CI grep step backed by `apps/web-platform/.service-role-allowlist`.
 - `apps/web-platform/server/agent-runner.ts` (separate edit set for §1.7) — wire `idle_window` + `max_turn_duration` guards alongside existing cost cap.
@@ -307,7 +463,26 @@ Plumbed in `agent-runner.ts` alongside `cc-cost-caps.ts`'s existing `maxBudgetUs
 
 ### 2.1 — Verify #1044 SDK-resume under user-scoped JWT
 
-- **RLS-audit gate (per Kieran P2.1).** Plan-time audit deferred to `/soleur:deepen-plan` Phase 4.x (deepen-plan's per-section research is the right place for live-DB introspection). Deepen-plan MUST run `psql $DEV_URL -c "select tablename, policyname, cmd, qual from pg_policies where tablename in ('messages','conversations','api_keys','users','team_names') order by 1,2"` and paste the result table into the plan's §2.1. **If any policy is insufficient for `auth.uid() = user_id` SELECT, the corresponding RLS migration moves to Increment 1 (NOT Increment 2)** — Increment 1's tenantClient switch fails open without it. Plan landing with §2.1 RLS table empty is acceptable; landing into `/work` without it is a workflow violation.
+**RLS state (resolved through migration 036, deepen-pass 2026-05-05):**
+
+`psql` was unavailable in the deepen-plan harness (no Doppler `SUPABASE_DB_URL`; no `psql` binary). Resolved via static analysis of every migration touching the five target tables — equivalent fidelity since no `drop policy` / `alter policy` exists in 001-036 for any of them.
+
+| Table | RLS enabled | SELECT policy (resolved) | INSERT | UPDATE | DELETE | `auth.uid()=owner` SELECT supported? | Action in PR-B |
+|---|---|---|---|---|---|---|---|
+| `users` | 001:15 | `Users can read own profile` PERMISSIVE FOR SELECT USING `auth.uid() = id` (001:17-19) | none (rows via `handle_new_user` SECURITY DEFINER trigger 001:101-116) | `Users can update own profile` USING `auth.uid() = id` + column-level REVOKE/GRANT (006:7-11) + 3 RESTRICTIVE FOR UPDATE policies pinning `github_username` (016:11-18), `kb_sync_history` (017:11-18), `health_snapshot` (017:13-17) | none | **Yes** (`auth.uid() = id`) | None |
+| `api_keys` | 001:37 | `Users can manage own API keys` PERMISSIVE FOR ALL USING `auth.uid() = user_id` (001:39-41) | same FOR ALL | same FOR ALL | same FOR ALL | **Yes** | None |
+| `conversations` | 001:58 | `Users can manage own conversations` PERMISSIVE FOR ALL USING `auth.uid() = user_id` (001:60-62) — **no `WITH CHECK` per migration 036:72 inline comment** | same FOR ALL | same FOR ALL | same FOR ALL | **Yes** | None |
+| `messages` | 001:77 | `Users can read own messages` FOR SELECT USING `EXISTS (SELECT 1 FROM public.conversations c WHERE c.id = conversation_id AND c.user_id = auth.uid())` (001:79-86) — owner via FK join (no direct `user_id` column) | `Users can insert own messages` FOR INSERT WITH CHECK same EXISTS (001:88-95) | **none** | **none** | **Yes (indirect)** for SELECT/INSERT | None for SELECT/INSERT. **If Increment 1 needs UPDATE/DELETE on `messages` under JWT, migration must be added.** |
+| `team_names` | 018:18 | `Users can manage own team names` FOR ALL USING `auth.uid() = user_id` (018:20-22) | same FOR ALL | same FOR ALL | same FOR ALL | **Yes** | None |
+
+**PR-B impact: No SELECT-policy migration needed.** All five tables already support `auth.uid() = <owner>` SELECT for the founder's own rows under user-scoped JWT. The "service-role-bypass → user-scoped JWT" flip in Increment 1 will Just Work for reads on all five tables.
+
+**Two watch-outs the plan must acknowledge:**
+
+1. **`messages` is read+insert only under JWT.** Zero UPDATE/DELETE policies (deliberate — `001_initial_schema.sql:79-95`). Increment 1 must NOT issue UPDATE/DELETE against `messages` from `tenantClient`. If a future change needs message edit/redact under JWT, separate migration. Lint-extension idea: regex `tenantClient.from\("messages"\).(update|delete)\(` rejected at CI.
+2. **`conversations` lacks `WITH CHECK`** (`001_initial_schema.sql:60-62`, confirmed by `036:72` inline comment). Per `2026-04-18-rls-for-all-using-applies-to-writes`: USING governs BOTH read AND write — this is the single-expression-doing-both-jobs pattern from the learning. A future maintainer adding `WITH CHECK (true)` "to be explicit" silently defeats the invariant. **Plan adds an inline comment + a test** asserting the policy lacks `WITH CHECK` and a regression test that `WITH CHECK` is never added.
+
+**Confirmation residual:** static analysis matches `psql pg_policies` output for the resolved policy set. If the operator runs `psql $PRD_URL -c "select tablename, policyname, cmd, qual, with_check from pg_policies where tablename in ('messages','conversations','api_keys','users','team_names') order by 1,2"` post-merge, the result MUST equal the table above. If not, an out-of-band policy was applied that the migration history doesn't carry — flag, investigate, do NOT proceed past PR-B.
 - Confirm `agent-runner.ts:953-961` (`session_id` persist) and `:1421` (resume) work under `tenantClient` — covered by Increment 1's replay-correctness test.
 - Per `2026-04-12-startAgentSession-catch-block-swallows-resume-errors`: ensure the `startAgentSession` catch RE-THROWS resume errors so the caller's "clear stale session_id, replay history" fallback actually fires. Today's catch may swallow.
 
@@ -435,18 +610,35 @@ Process gate, not implementation — moved to the Increment 2 PR-body checklist 
 - Add dependency: `inngest@^3` to `apps/web-platform/package.json`. Regenerate both `bun.lock` and `package-lock.json` (per `cq-before-pushing-package-json-changes`).
 - New API route: `apps/web-platform/app/api/inngest/route.ts` — Next.js App Router. Per `cq-nextjs-route-files-http-only-exports`, this file exports ONLY the `serve()` HTTP handlers; the Inngest function definitions live in `server/inngest/functions/` (sibling modules).
 - `server/inngest/client.ts` — `inngest = new Inngest({ id: "soleur-runtime", env, ... })`.
-- `server/inngest/functions/cfo-on-payment-failed.ts` — function bound to event `{founderId}.finance.payment_failed` (event-id keying for idempotency).
-- One in-flight per `(founderId, domain, eventKey)` enforced via Inngest concurrency key. Prevents ralph-loop pathology (per `2026-03-13-ralph-loop-idle-detection-and-repetition`).
+- `server/inngest/functions/cfo-on-payment-failed.ts` — function triggered by event `finance.payment_failed` (NOT `{founderId}.finance.payment_failed`; per Inngest deepen #6, wildcard event names DO NOT work in v3 trigger declarations — each function names exactly one event; founder identification carried in `event.data.founderId`).
+- **Concurrency key uses CEL expression, NOT JS template string** (per Inngest deepen #1):
+  ```ts
+  concurrency: [
+    { scope: "fn", key: 'event.data.founderId + ":finance.payment_failed"', limit: 1 },  // single in-flight per founder per event
+    { scope: "account", key: '"agent-runtime"', limit: 50 },                              // global safety valve
+  ]
+  ```
+  Prevents ralph-loop pathology (per `2026-03-13-ralph-loop-idle-detection-and-repetition`).
 - Cron lives in Inngest scheduler, NOT GH Actions (per `2026-03-23-skip-ci-blocks-auto-merge-on-scheduled-prs`).
-- Inngest event payload envelope: `{ schema_version: 1, founderId, domain, event, payload }`. `schema_version` asserted at the worker per `2026-04-18-schema-version-must-be-asserted-at-consumer-boundary`. **Version-band tolerance (per Kieran P2.3)** — exported constants `MIN_SUPPORTED = 1`, `MAX_SUPPORTED = 1`. Worker logic: `if (v > MAX_SUPPORTED) throw SchemaVersionError(forward-incompat)`; `if (v < MIN_SUPPORTED) deadletter()`; else `upcast(v) -> MAX_SUPPORTED`. Prevents 30-second deploy-window outages where a stale producer (cron) emits v1 against a worker upgraded to v2 (or vice versa). NOT cosmetic — consumer-side gate is load-bearing.
-- Discriminated-union for `payload` per variant: `PaymentFailedPayload | LeadInboxPayload | KbDriftPayload | …`. `_exhaustive: never` switch rails at every consumer per `cq-union-widening-grep-three-patterns`.
+- **Schema-version on `event.v` first-class field, NOT inside `data`** (per Inngest deepen #2). Inngest natively exposes `v: string` at envelope level — visible in dashboards/replays/DLQ. Plan envelope:
+  ```ts
+  { id: \`stripe-${stripe_event.id}\`, name: "finance.payment_failed", v: "1", data: { founderId, domain: "finance", event: "finance.payment_failed", payload: {...} } }
+  ```
+  Worker reads `event.v`. Band-tolerance hand-rolled (`EventSchemas` is compile-time only in v3): `MIN_SUPPORTED = 1, MAX_SUPPORTED = 1`. Logic: `if (v > MAX_SUPPORTED) throw SchemaVersionError; if (v < MIN_SUPPORTED) await step.run("deadletter", ...); else upcast(v) -> MAX_SUPPORTED`. NOT cosmetic — consumer-side gate is load-bearing per `2026-04-18-schema-version-must-be-asserted-at-consumer-boundary`.
+- **`cancelOn` does NOT interrupt in-flight `step.run()`** (per Inngest deepen #4). Only checkpoints (sleep, waitForEvent boundary). A 90-second LLM call inside a step runs to completion even if cancel arrived 1s after start. §1.7 `max_turn_duration` MUST be enforced via cooperative `AbortSignal` plumbed into the Anthropic SDK call inside the step — NOT via Inngest cancellation alone. `cancelOn` is the outer envelope; `AbortSignal` is the inner cooperative.
+- **Idempotency: namespace defensively** (per Inngest deepen #3 + D20). 24h global window across all event names — use `id: \`stripe-${stripe_event.id}\`` not bare ID. Also retain DB-level uniqueness on `processed_stripe_events` (existing pattern from migration 030) for ironclad once-only past 24h.
+- **Pricing reality (per Inngest deepen #7).** Free tier = 50K executions/mo. Pro tier is **$75/mo**, NOT $25 — supersedes earlier brainstorm "alpha ~$30/mo additional" claim. Retries are billable runs (a 4-retry default that fails consistently = 5x quota burn). Set `retries: 0` or `retries: 1` on functions whose failure should deadletter rather than retry (e.g., schema-version-too-high). Free tier covers alpha; flip to Pro at 40K monthly executions (80% threshold).
+- **`step.sleepUntil` and `step.waitForEvent` are FREE** (don't count toward executions). Watchdog patterns are cheap.
+- Discriminated-union for `payload` per `(domain, event)` pair: `PaymentFailedPayload | LeadInboxPayload | KbDriftPayload | …`. `_exhaustive: never` switch rails at every consumer per `cq-union-widening-grep-three-patterns`.
+- **Inngest webhook signature-verification is REQUIRED at startup, NOT optional** (per security P2-A). `serve()` from `inngest/next` MUST be configured with `signingKey: process.env.INNGEST_SIGNING_KEY`; missing key = throw at startup, NOT log-and-continue. Without signature verification, an attacker who discovers the public webhook URL can forge `finance.payment_failed` events for any founder. Pre-merge AC: synthesized inbound POST with INVALID signature returns 401 BEFORE any function dispatches; `reportSilentFallback` mirrored. CSRF defense from `2026-03-20-csrf-three-layer-defense-nextjs-api-routes` is the WRONG primitive here — signed webhooks are not CSRF targets; signature-verification IS the load-bearing primitive. (Plan AC line previously saying "CSRF defense on Inngest receiver" is corrected to "signature-verification".)
+- Replay-window enforcement: reject events with `timestamp` older than 5 min (Inngest signatures include a timestamp).
 - Each Inngest function runs under `runWithByokLease` + `createTenantClient(jwt)` — Increment 1 contract carries through.
 - ADR captured via `/soleur:architecture create "Adopt Inngest as durable trigger layer for server-side agents"` — output to `knowledge-base/engineering/adrs/<n>-inngest-as-durable-trigger-layer.md`. Includes rejected alternatives (LangGraph, Bedrock AgentCore, Cloudflare DO + LISTEN/NOTIFY) and load-bearing invariants. Closes #2955.
 
 ### 3.2 — Stripe `payment_failed` → CFO end-to-end (FR5)
 
 - Edit `apps/web-platform/app/api/webhooks/stripe/route.ts`: extend the existing `processed_stripe_events` dedup + atomic `.in()` UPDATE pattern (per `2026-04-22-stripe-webhook-idempotency-dedup-insert-first-pattern`) to handle `invoice.payment_failed` and `charge.failed`.
-- On dedup-success, emit Inngest event `{founderId}.finance.payment_failed` with the Stripe event_id as Inngest's idempotency key.
+- On dedup-success, emit Inngest event with **canonical event name `finance.payment_failed`** (NOT `{founderId}.finance.payment_failed` — Inngest v3 has no wildcard trigger declarations; founder identity carried in `event.data.founderId`, not in the event name) and **namespaced idempotency key `id: \`stripe-${stripe_event.id}\`** (per Inngest deepen #3 + #6 + D20 — bare event_id collides if a non-Stripe source ever emits with the same string; 24h global window). DB-level `processed_stripe_events` uniqueness is retained as the past-24h backstop.
 - `cfo-on-payment-failed.ts` Inngest function:
   - Mint founder JWT via Increment 1 contract.
   - Open BYOK lease.
@@ -488,16 +680,49 @@ Process gate, not implementation — moved to the Increment 2 PR-body checklist 
 
 ### 3.5 — Per-tenant cost attribution + kill-switch (TR6)
 
-**No new `tenant_cost_window` table** (per DHH #4). Cumulative spend is derived from `audit_byok_use` (Increment 1) — the existing index `audit_byok_use_founder_ts_idx (founder_id, ts desc)` already covers the sliding-window query. Two new columns on `public.users` (small ALTER, no new table):
+**No new `tenant_cost_window` table** (per DHH #4). Cumulative spend is derived from `audit_byok_use` (Increment 1). Two new columns on `public.users` (small ALTER, no new table):
 
 ```sql
 -- Migration 040_runtime_cost_state.sql
 alter table public.users
   add column if not exists runtime_paused_at timestamptz,
-  add column if not exists runtime_cost_cap_cents int default 1000;  -- $10/hr default
+  add column if not exists runtime_cost_cap_cents int default 2000;  -- $20/hr default (per data-integrity P2-5: $10/hr too tight for legitimate brainstorm-style multi-turn under Sonnet 4.6 — ~$8/hr realistic; 200% headroom recommended)
 ```
 
-- **Atomic check-and-record (per Kieran K4).** New SECURITY DEFINER RPC `public.record_byok_use_and_check_cap(p_invocation_id uuid, p_founder_id uuid, p_agent_role text, p_token_count int, p_unit_cost_cents int) returns table(cumulative_cents int, kill_tripped bool)`. Single call inserts the audit row AND aggregates `SUM(token_count * unit_cost_cents) FROM public.audit_byok_use WHERE founder_id=$1 AND ts > now() - '1 hour'` AND atomically sets `users.runtime_paused_at = now()` (`ON CONFLICT … DO UPDATE … WHERE runtime_paused_at IS NULL`) when sum exceeds `users.runtime_cost_cap_cents`. RETURNING is the source of truth for the kill-decision — no separate SELECT-then-UPDATE TOCTOU window. `set search_path = public, pg_temp`. Granted to `service_role` only.
+- **Atomic check-and-record — single SQL statement, NOT plpgsql** (per data-integrity P1-1 + P1-2; supersedes earlier Kieran K4 framing). Plan's earlier `ON CONFLICT (founder_id, window_start) DO UPDATE` wording is wrong — there's no conflict target after `tenant_cost_window` was dropped. The atomic primitive is a **predicate-locked single-row UPDATE on `users`** wrapped in a single SQL statement so the INSERT-then-SUM ordering happens in one transaction:
+
+```sql
+create or replace function public.record_byok_use_and_check_cap(
+  p_invocation_id uuid, p_founder_id uuid, p_agent_role text,
+  p_token_count int, p_unit_cost_cents int
+) returns table(cumulative_cents int, kill_tripped bool)
+language sql security definer set search_path = public, pg_temp as $$
+  with ins as (
+    insert into public.audit_byok_use (invocation_id, founder_id, agent_role, token_count, unit_cost_cents)
+    values (p_invocation_id, p_founder_id, p_agent_role, p_token_count, p_unit_cost_cents)
+    returning token_count * unit_cost_cents as this_cents
+  ),
+  agg as (
+    select coalesce(sum(token_count * unit_cost_cents), 0)::int as cum
+    from public.audit_byok_use
+    where founder_id = p_founder_id and ts > now() - interval '1 hour'
+  ),
+  upd as (
+    update public.users
+       set runtime_paused_at = now()
+     where id = p_founder_id
+       and runtime_paused_at is null
+       and (select cum from agg) > runtime_cost_cap_cents
+    returning runtime_paused_at
+  )
+  select (select cum from agg)::int as cumulative_cents,
+         exists(select 1 from upd) as kill_tripped;
+$$;
+```
+
+CTE semantics: `ins` commits before `agg` runs in same statement; SUM includes the just-inserted row; `upd`'s predicate-lock-on-`users.id` serializes any concurrent kill-trip attempts; second writer's predicate fails (`runtime_paused_at IS NOT NULL` after first writer wins) and `upd` returns 0 rows → `kill_tripped = false`.
+
+**Cost-overshoot SLO (per security P2-B).** Cap is a soft ceiling, NOT a hard ceiling. With N concurrent in-flight tool calls per founder, all N can pass the SUM gate simultaneously before any commits the kill UPDATE. Documented overshoot bound: ~$N × $unit_cost_per_call worst case. For Sonnet 4.6 + 5 parallel tool-uses per turn: ~$0.35 overshoot above the $20 cap. Acceptable for alpha; document in ADR §3.1; tighten to row-level `SELECT … FOR UPDATE` on `users` if beta scale demands.
 - Soft alert at 50% — emitted as a structured pino log entry mirrored to Sentry via `reportSilentFallback({feature:"cost-kill", op:"soft-alert"})`. No new vendor.
 - Hard kill: when `kill_tripped == true`, the runtime BYOK lease release path (`runWithByokLease` `finally`) checks `users.runtime_paused_at` and refuses to mint new leases. Active concurrency slots release via existing `2026-05-04-cc-archive-must-release-concurrency-slot` machinery (Inngest steps cancel via `step.sleepUntil` watchdog; WS sessions emit `runtime_paused` event and close).
 - Founder lift-pause = `approve_every_time` tier action (verify-external-state per §3.4: re-auth check before clearing `runtime_paused_at`).
@@ -686,6 +911,7 @@ These resolve at deepen-plan or `/work` time; they do not block plan write.
 - `apps/web-platform/lib/supabase/tenant.ts` (`mintFounderJwt`, `createTenantClient`, `getFreshTenantClient`)
 - `apps/web-platform/server/byok-lease.ts`
 - `apps/web-platform/.service-role-allowlist` (no ESLint rule)
+- `.github/CODEOWNERS` (per architecture F5 — pins security owner on the allowlist + factory + migrations + lint workflow)
 - `apps/web-platform/supabase/migrations/037_audit_byok_use.sql`
 - `apps/web-platform/supabase/migrations/038_episodic_memory.sql`
 - `apps/web-platform/supabase/migrations/039_audit_log.sql` (no hash-chain — deferred D1)
@@ -770,3 +996,5 @@ Per `wg-when-deferring-a-capability-create-a` — each item below requires a tra
 | D9 | 5 founder validation interviews (mid-MVP) | CPO brainstorm recommendation | Out-of-band research, not on critical path. | Between PR-B and PR-C merge. |
 | D10 | 9 legal artifacts (E&O, DPA, sub-processor page, breach runbook, AUP, ToS command-authority clause, scope-grant UX, audit-log retention pipeline) | FR7 | Tracked under CLO domain separately; this plan ships only the gating switch. | Before paid-tier launch. |
 | D11 | Sub-brand collateral / marketing relaunch | spec Non-Goals | User directive 2026-05-05: single brand "Soleur"; CMO refresh tracked separately. | After alpha cohort feedback. |
+| D12 | Synchronous trust-tier verify-state pre-action gate (block-and-alert) | §3.4 (deepen-pass round 2) | MVP keeps verify synchronous on the action path because failure modes are bounded (one founder, one draft). Async/queued verify becomes load-bearing once a 2nd background trigger lands or per-founder verify rate exceeds Stripe API ceiling (~100/sec). | When D4 (GH-source) or D5 (KB-drift-source) lands, OR when verify-state QPS approaches 60% of the third-party API rate ceiling. |
+| D13 | Bulk-sweep migration to per-tenant Inngest cron (replaces `:421 cleanupOrphanedConversations` + `:441 startInactivityTimer` setInterval pattern) | §1.1 (deepen-pass round 2) | Single-host invariant from §3.1 ADR holds while runtime is one Hetzner node. setInterval is fine on one host; on a second host, both nodes would run the sweep doubly. | When a 2nd runtime host is provisioned (capacity OR HA OR region split). |

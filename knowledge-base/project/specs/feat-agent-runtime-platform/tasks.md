@@ -67,19 +67,23 @@ requires_cpo_signoff: true
 - [ ] 1.4.3 Write `apps/web-platform/server/byok-lease.ts` (`runWithByokLease`, `getCurrentByokLease`).
 - [ ] 1.4.4 Add `zeroize(buf: Buffer)` helper to `byok.ts`.
 
-### 1.5 agent-runner migration (11 call-sites)
-- [ ] 1.5.1 Migrate `agent-runner.ts:182, 213, 256, 289, 329, 376, 424, 445, 528, 1071, 1315, 1326, 1363, 1373, 1390, 1456, 839 (kbShareTools constructor)` to `getFreshTenantClient(userId)`. (Note: kbShareTools constructor allowlisted per §1.5 plan; do NOT migrate that one.)
-- [ ] 1.5.2 Wrap `startAgentSession` body in `runWithByokLease`.
-- [ ] 1.5.3 Wire JWT mint at session start.
-- [ ] 1.5.4 §1.7 timeout pair: `idle_window` (90s, resets) + `max_turn_duration` (10min, anchored on `firstToolUseAt`, NOT reset). Add `WorkflowEnd { reason: "idle_window" | "max_turn_duration" | "max_turns" }` discriminator.
-- [ ] 1.5.5 Auth probe before every migrated query (per `2026-04-12-silent-rls-failures-in-team-names`).
-- [ ] 1.5.6 Verify `rg "createServiceClient|getServiceClient" apps/web-platform/server/agent-runner.ts` returns zero matches.
+### 1.5 agent-runner migration (9 user-scoped sites + 2 stay service-role)
+- [ ] 1.5.1 Migrate **9 user-scoped sites** to `getFreshTenantClient(userId)`: `agent-runner.ts:182, 213, 256, 289, 329, 376, 528, 1071, 1315, 1326, 1363, 1373, 1390, 1456` (the 1315/1326/1363/1373/1390 cluster is the `sendUserMessage` path counted as one site per plan §1.1). **Do NOT migrate** `:421 cleanupOrphanedConversations`, `:441 startInactivityTimer` (bulk sweeps with no userId — `getFreshTenantClient(userId)` structurally inapplicable per type-design F2), or `:839 kbShareTools` (allowlisted per §1.5 plan).
+- [ ] 1.5.2 Add `// SERVICE-ROLE: bulk sweep — keyed on staleness/runtime_paused_at, not data ownership` comments at `:421` and `:441`. Both paths added to `.service-role-allowlist`.
+- [ ] 1.5.3 Wrap `startAgentSession` body in `runWithByokLease`.
+- [ ] 1.5.4 Wire JWT mint at session start.
+- [ ] 1.5.5 §1.7 timeout pair: `idle_window` (90s, resets per assistant block) + `max_turn_duration` (10min, anchored on `firstToolUseAt`, NOT reset). Add `WorkflowEnd` 8-variant discriminated union: `{ reason: "idle_window" | "max_turn_duration" | "max_turns" | "cost_kill" | "byok_invalid" | "tenant_revoked" | "user_cancelled" | "subprocess_crash" }` with appropriate per-variant payloads (per type-design F1). `_exhaustive: never` rails at every consumer.
+- [ ] 1.5.6 [RED] Add a test asserting a captured `lease` reference outside the ALS scope throws `ByokLeaseError { cause: 'escape' }` from `lease.getApiKey()` (per type-design F3 — the function-not-property contract is the load-bearing test).
+- [ ] 1.5.7 [RED] Subprocess env-leak test: spawn child inside `runWithByokLease`, then read `/proc/<child-pid>/environ` from a SIBLING process (NOT from inside the child). Assert either `ANTHROPIC_API_KEY` absent OR `EACCES` due to `PR_SET_DUMPABLE=0` (per security P1-A — original "subprocess `process.env`" test is INSUFFICIENT and removed).
+- [ ] 1.5.8 Auth probe before every migrated query (per `2026-04-12-silent-rls-failures-in-team-names`).
+- [ ] 1.5.9 Verify `rg "createServiceClient|getServiceClient" apps/web-platform/server/agent-runner.ts` returns zero matches OUTSIDE the 2 allowlisted bulk-sweep sites.
 
 ### 1.6 CI grep gate (replaces ESLint rule)
 - [ ] 1.6.1 [RED] `apps/web-platform/test/ci/service-role-allowlist.test.sh` — synthetic violator file rejected; allowlisted file accepted.
-- [ ] 1.6.2 Write `apps/web-platform/.service-role-allowlist`.
+- [ ] 1.6.2 Write `apps/web-platform/.service-role-allowlist` — include `server/agent-runner.ts` (for `:421`, `:441` bulk sweeps), `server/ws-handler.ts` (transitional, PR-C migrates), `app/api/webhooks/stripe/route.ts` (signature-verified webhook).
 - [ ] 1.6.3 Edit `.github/workflows/lint.yml` — add grep step.
-- [ ] 1.6.4 Add allowlist comments: `server/health.ts:15`, `server/byok-lease.ts`, `server/session-sync.ts:133` (transitional), `server/kb-share-tools.ts`.
+- [ ] 1.6.4 Add allowlist comments: `server/health.ts:15`, `server/byok-lease.ts`, `server/session-sync.ts:133` (transitional), `server/kb-share-tools.ts`, `server/ws-handler.ts` (transitional).
+- [ ] 1.6.5 Write `.github/CODEOWNERS` (per architecture F5) — pin security owner approval on `.service-role-allowlist`, `lib/supabase/{service,tenant}.ts`, `server/byok-lease.ts`, `supabase/migrations/**`, `.github/workflows/lint.yml`. Without this pin, an attacker-modeled PR can add a service-role import AND its allowlist line in one commit; gate passes, isolation broken.
 
 ### 1.7 Error sanitization + typed classes
 - [ ] 1.7.1 Edit `apps/web-platform/lib/auth/error-messages.ts` — add `RlsDenyError`, `ByokLeaseError`, `RuntimeAuthError { cause }`. Mapper extended.
@@ -123,8 +127,10 @@ requires_cpo_signoff: true
 ### 2.5 Stripe webhook + CFO function
 - [ ] 2.5.1 [RED] `apps/web-platform/test/server/inngest/cfo-on-payment-failed.test.ts` — webhook replay = single Inngest event emission; CFO function runs once; draft saved with `tier: external_brand_critical, status: draft`.
 - [ ] 2.5.2 [RED] Stripe replay-idempotency test (synthesized event_id; per `2026-04-22-stripe-webhook-idempotency-dedup-insert-first-pattern`).
-- [ ] 2.5.3 Edit `app/api/webhooks/stripe/route.ts` — handle `invoice.payment_failed` + `charge.failed`; emit Inngest event `{founderId}.finance.payment_failed`.
-- [ ] 2.5.4 Write `server/inngest/functions/cfo-on-payment-failed.ts` — under `runWithByokLease` + `getFreshTenantClient`; concurrency-key per `(founderId, domain, eventKey)`; pre-action Stripe state verification.
+- [ ] 2.5.3 Edit `app/api/webhooks/stripe/route.ts` — handle `invoice.payment_failed` + `charge.failed`; emit Inngest event with **canonical name `finance.payment_failed`** (NOT `{founderId}.finance.payment_failed` — Inngest v3 has no wildcard triggers; founder identity in `event.data.founderId`) and **namespaced idempotency key `id: \`stripe-${stripe_event.id}\`** (per Inngest deepen #3 + #6 + D20).
+- [ ] 2.5.4 Write `server/inngest/functions/cfo-on-payment-failed.ts` — under `runWithByokLease` + `getFreshTenantClient`; concurrency via CEL expression `event.data.founderId + ":finance.payment_failed"` limit 1; pre-action Stripe state verification (block-and-alert per §3.4); cooperative `AbortSignal` plumbed into Anthropic SDK call (because `cancelOn` does NOT interrupt in-flight `step.run()` per Inngest deepen #4).
+- [ ] 2.5.5 Configure `serve()` from `inngest/next` with `signingKey: process.env.INNGEST_SIGNING_KEY` — startup throw if missing (per security P2-A). Replay-window 5 min.
+- [ ] 2.5.6 [RED] Inngest signature-verification test: synthesized inbound POST with INVALID signature returns 401 BEFORE any function dispatches; `reportSilentFallback` mirrored to Sentry.
 
 ### 2.6 Verify + ship
 - [ ] 2.6.1 `bun run typecheck && bun run test && bun run build` green.
@@ -149,7 +155,7 @@ requires_cpo_signoff: true
 ### 3.3 Cost kill-switch (atomic)
 - [ ] 3.3.1 [RED] `apps/web-platform/test/server/cost-kill-switch.test.ts` — concurrent-write race test (per Kieran P1.5): two parallel +$3 against $5 cap = exactly one `kill_tripped == true`.
 - [ ] 3.3.2 [RED] soft-alert + hard-kill scenarios: soft = `reportSilentFallback` mirrored; hard = `users.runtime_paused_at` set, slots released, UI shows pause.
-- [ ] 3.3.3 Write `apps/web-platform/supabase/migrations/040_runtime_cost_state.sql` — `users` ALTER + `record_byok_use_and_check_cap` SECURITY DEFINER RPC with atomic INSERT … ON CONFLICT … DO UPDATE … RETURNING.
+- [ ] 3.3.3 Write `apps/web-platform/supabase/migrations/040_runtime_cost_state.sql` — `users` ALTER (`runtime_paused_at`, `runtime_cost_cap_cents int default 2000` — $20/hr per data-integrity P2-5) + `record_byok_use_and_check_cap` SECURITY DEFINER RPC as a **single SQL statement with WITH CTE** (`ins` → `agg` → `upd`) over `audit_byok_use` SUM + predicate-locked single-row UPDATE on `users` (per data-integrity P1-1/P1-2). NOT plpgsql; NOT `ON CONFLICT … DO UPDATE` (no conflict target after `tenant_cost_window` was dropped). `set search_path = public, pg_temp`; qualify every relation as `public.<table>`.
 - [ ] 3.3.4 Write `server/cost-kill-switch.ts` — wraps RPC; lift-pause flow (tier 3 `approve_every_time`).
 - [ ] 3.3.5 Wire into `runWithByokLease` finally + Inngest function pre-flight.
 
@@ -167,7 +173,7 @@ requires_cpo_signoff: true
 - [ ] 3.6.2 ADR sections: chosen substrate, rejected alternatives (LangGraph, Bedrock AgentCore, Cloudflare DO + LISTEN/NOTIFY), load-bearing invariants (per-invocation user-scoped JWT, per-invocation BYOK lease, single in-flight per `(founderId, domain, eventKey)`), defense-relaxation ceiling pair (idle_window + max_turn_duration), schema_version band-tolerance contract, BYOK V8-internment residual-exposure note.
 
 ### 3.7 File deferral issues
-- [ ] 3.7.1 File issues for D1–D11 from plan §Deferred Capabilities, milestoned per re-evaluate column.
+- [ ] 3.7.1 File issues for D1–D13 from plan §Deferred Capabilities, milestoned per re-evaluate column. (D12 = synchronous trust-tier verify-state pre-action gate; D13 = bulk-sweep migration to per-tenant Inngest cron when 2nd runtime host provisioned.)
 
 ### 3.8 Verify + ship
 - [ ] 3.8.1 `bun run typecheck && bun run test && bun run build` green; `next build` green (route-file validator runs only at build time).
