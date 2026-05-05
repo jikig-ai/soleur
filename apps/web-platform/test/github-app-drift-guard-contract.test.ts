@@ -1,11 +1,7 @@
 import { describe, test, expect } from "vitest";
 import { readFileSync, existsSync, writeFileSync, unlinkSync } from "node:fs";
 import { spawnSync } from "node:child_process";
-import {
-  generateKeyPairSync,
-  createPublicKey,
-  verify as cryptoVerify,
-} from "node:crypto";
+import { generateKeyPairSync, verify as cryptoVerify } from "node:crypto";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -349,11 +345,12 @@ describe("scheduled-github-app-drift-guard.yml — JWT mint correctness", () => 
       // Exp - iat should be 600s (9-min forward + 60s back-buffer = 540 + 60).
       expect(payload.exp - payload.iat).toBe(600);
 
-      // Signature verify
+      // Signature verify. Pass the KeyObject directly — createPublicKey()
+      // expects a *private* KeyObject (to extract its public half) or raw
+      // PEM/DER input; passing an existing public KeyObject is a type error.
       const signingInput = Buffer.from(`${parts[0]}.${parts[1]}`);
       const signature = Buffer.from(parts[2], "base64url");
-      const pub = createPublicKey(publicKey);
-      const valid = cryptoVerify("RSA-SHA256", signingInput, pub, signature);
+      const valid = cryptoVerify("RSA-SHA256", signingInput, publicKey, signature);
       expect(valid, "minted JWT signature did not verify under the ephemeral public key").toBe(true);
     } finally {
       try {
