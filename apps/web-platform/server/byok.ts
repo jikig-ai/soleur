@@ -59,11 +59,11 @@ export function encryptKey(
   return { encrypted, iv, tag };
 }
 
-// Residual exposure (Kieran P1.2, plan §1.4.2): the string return type means
-// the plaintext key is interned in V8's string table for the lifetime of the
-// process. PR-B refactors this to return Buffer + a `zeroize(buf)` call from
-// the BYOK lease's `finally` so the secret can be wiped from memory. PR-A
-// ships this signature as-is to keep §0 small and isolated.
+// Residual exposure: `string` return interns the plaintext key in V8's
+// string table for the lifetime of the process. PR-B refactors this to
+// return Buffer + a `zeroize(buf)` call from the BYOK lease's `finally`
+// so the secret can be wiped from memory.
+// See plan: knowledge-base/project/plans/2026-05-05-feat-soleur-server-side-agentic-runtime-plan.md §1.4.2 — refactor scheduled with the BYOK lease (issue #3244).
 export function decryptKey(
   encrypted: Buffer,
   iv: Buffer,

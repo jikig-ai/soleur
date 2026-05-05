@@ -1,27 +1,16 @@
 import pino from "pino";
 
+import { REDACT_PATHS } from "./sensitive-keys";
+
 const isDev = process.env.NODE_ENV !== "production";
 
-// Pino's fast-redact does not support recursive wildcards, so each sensitive
-// key is enumerated at top level (`apiKey`) and one level deep (`*.apiKey`).
-// Deeper structures should avoid logging credential-bearing objects; the BYOK
-// lease (PR-B) is the canonical handling path for those values.
-export const REDACT_PATHS = [
-  "req.headers['x-nonce']",
-  "req.headers.cookie",
-  "apiKey",
-  "*.apiKey",
-  "Authorization",
-  "*.Authorization",
-  "authorization",
-  "*.authorization",
-  "encryptedKey",
-  "*.encryptedKey",
-  "iv",
-  "*.iv",
-  "auth_tag",
-  "*.auth_tag",
-];
+// `REDACT_PATHS` is derived from a single sensitive-key list shared with
+// the Sentry scrubber (`./sensitive-keys`). Pino's `fast-redact` has no
+// recursive wildcard, so each canonical key is enumerated at top level
+// + one-level-deep wildcard. Deeper structures should avoid logging
+// credential-bearing objects; the BYOK lease (PR-B §1.4) is the
+// canonical handling path.
+export { REDACT_PATHS };
 
 const logger = pino({
   level: process.env.LOG_LEVEL || (isDev ? "debug" : "info"),
@@ -37,7 +26,7 @@ const logger = pino({
         },
       }
     : {}),
-  redact: REDACT_PATHS,
+  redact: REDACT_PATHS as readonly string[] as string[],
 });
 
 export default logger;

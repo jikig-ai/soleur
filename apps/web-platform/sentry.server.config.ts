@@ -1,6 +1,6 @@
 import * as Sentry from "@sentry/nextjs";
 
-import { scrubSentryEvent, scrubSentryBreadcrumb } from "@/lib/sentry-scrub";
+import { scrubSentryEvent, scrubSentryBreadcrumb } from "@/server/sentry-scrub";
 
 Sentry.init({
   dsn: process.env.SENTRY_DSN,

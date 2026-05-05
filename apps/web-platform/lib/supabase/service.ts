@@ -25,17 +25,17 @@ export function serverUrl(): string {
 /**
  * Per-call factory. Each invocation constructs a fresh service-role client.
  *
- * Prefer `getServiceClient` for the lazy-singleton accessor — it memoizes
- * a single instance and is the canonical entry point for new call sites
- * (#2962). `createServiceClient` is retained for existing callers that
- * wrap their own per-module memoization (agent-runner.ts, cc-dispatcher.ts,
- * ws-handler.ts, conversation-writer.ts); migrating those is part of the
- * tenant-isolation rollout (PR-B / PR-C).
- *
  * Service-role usage is privileged — it bypasses RLS. Consult the
  * `.service-role-allowlist` gate (added in PR-B) before introducing new
  * call sites; most surfaces should use a per-tenant JWT-scoped client
  * instead.
+ *
+ * @deprecated for new code. Prefer {@link getServiceClient} — the lazy
+ *   memoized accessor is the canonical entry point for new call sites
+ *   (see #2962). `createServiceClient` is retained for existing callers
+ *   that wrap their own per-module memoization (agent-runner.ts,
+ *   cc-dispatcher.ts, ws-handler.ts, conversation-writer.ts); migrating
+ *   those is part of the tenant-isolation rollout (PR-B / PR-C).
  */
 export function createServiceClient() {
   return createClient(
