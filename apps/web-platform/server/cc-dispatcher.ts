@@ -12,13 +12,15 @@
 // V2 follow-ups tracked in #2853 backlog (V2-13: tier-classify in-process
 // MCP servers for cc-soleur-go path — referenced in factory body).
 
+import { randomUUID } from "crypto";
 import path from "path";
 
 import type { Query } from "@anthropic-ai/claude-agent-sdk";
 import { query as sdkQuery } from "@anthropic-ai/claude-agent-sdk";
 
-import type { WSMessage, Conversation } from "@/lib/types";
+import type { WSMessage, Conversation, AttachmentRef } from "@/lib/types";
 import { KeyInvalidError, STATUS_LABELS } from "@/lib/types";
+import { persistAndDownloadAttachments } from "./attachment-pipeline";
 
 /**
  * Runtime allowlist for `Conversation["status"]`. Mirrors the type union
@@ -69,6 +71,7 @@ import {
 // Re-export so existing call sites keep working.
 export { resolveConciergeDocumentContext } from "./kb-document-resolver";
 import { buildAgentQueryOptions } from "./agent-runner-query-options";
+import { buildToolUseWSMessage } from "./tool-labels";
 import {
   getBashApprovalCache,
   _resetBashApprovalCacheForTests,
@@ -680,6 +683,17 @@ export interface DispatchSoleurGoArgs {
   artifactPath?: string;
   documentKind?: "pdf" | "text";
   documentContent?: string;
+  /**
+   * Attachment refs uploaded via the chat-input paperclip flow. When
+   * non-empty, `dispatchSoleurGo` (a) inserts a `messages` row to
+   * satisfy the `message_attachments.message_id` FK, (b) calls the
+   * shared attachment-pipeline helper to persist metadata + download
+   * files into `<workspace>/attachments/<convId>/`, and (c) augments
+   * `userMessage` with the resulting `attachmentContext` text so the
+   * agent can `Read` the on-disk paths. Mirrors the legacy
+   * `agent-runner.ts:sendUserMessage` flow exactly. See #3254.
+   */
+  attachments?: AttachmentRef[];
 }
 
 /**
@@ -695,7 +709,7 @@ export async function dispatchSoleurGo(
   const {
     userId,
     conversationId,
-    userMessage,
+    userMessage: rawUserMessage,
     currentRouting,
     sessionId,
     sendToClient,
@@ -703,9 +717,100 @@ export async function dispatchSoleurGo(
     artifactPath,
     documentKind,
     documentContent,
+    attachments,
   } = args;
 
+  // Verify conversation ownership AND bump `last_active` in a single
+  // round-trip. `updateConversationFor` with `expectMatch: true` runs the
+  // UPDATE scoped to (id, user_id) and returns `ok: false` when zero rows
+  // matched — that's our 404 signal. Sentry mirroring on failure happens
+  // inside the wrapper, so we only translate to the throw here. Routes
+  // through the canonical wrapper per the R8 lint rule.
+  const ownership = await updateConversationFor(
+    userId,
+    conversationId,
+    { last_active: new Date().toISOString() },
+    {
+      feature: "cc-dispatcher",
+      op: "verify-conversation-ownership",
+      expectMatch: true,
+    },
+  );
+  if (!ownership.ok) {
+    throw new Error("Conversation not found");
+  }
+
+  // #3254 — persist a `messages` row for every cc turn so
+  // `message_attachments.message_id` can be FK'd. The legacy single-leader
+  // path has always done this in `agent-runner.ts:sendUserMessage`; the
+  // cc path silently dropped attachments because no parent message existed.
+  // The SDK's session-id resume mechanism still owns transcript replay
+  // for the agent — these rows are for attachment metadata durability and
+  // for `api-messages.ts` history hydration on tab reload.
+  const messageId = randomUUID();
+  const { error: insertErr } = await supabase().from("messages").insert({
+    id: messageId,
+    conversation_id: conversationId,
+    role: "user",
+    content: rawUserMessage,
+    tool_calls: null,
+    leader_id: null,
+  });
+  if (insertErr) {
+    reportSilentFallback(insertErr, {
+      feature: "cc-dispatcher",
+      op: "persist-user-message",
+      extra: { userId, conversationId },
+    });
+    throw new Error(`Failed to save user message: ${insertErr.message}`);
+  }
+
+  // Persist attachment metadata + download files into the workspace.
+  // Mirrors `agent-runner.ts:sendUserMessage` exactly via the shared
+  // helper. On any per-file download failure, the helper omits that file
+  // from the `attachmentContext` text — partial success is preferred over
+  // a hard turn failure. Validation/INSERT errors propagate to the outer
+  // dispatch catch, which mirrors via `mirrorWithDebounce` (no inner
+  // try/catch — that would double-mirror and bypass the dispatch
+  // debounce, flooding Sentry on a misconfigured Storage URL).
+  let userMessage = rawUserMessage;
+  if (attachments && attachments.length > 0) {
+    const { attachmentContext } = await persistAndDownloadAttachments({
+      supabase: supabase(),
+      userId,
+      conversationId,
+      messageId,
+      attachments,
+    });
+    if (attachmentContext) {
+      userMessage = `${rawUserMessage}\n\n${attachmentContext}`;
+    }
+  }
+
   const runner = getSoleurGoRunner(sendToClient);
+
+  // Resolve workspace path in parallel with `runner.dispatch` so cold-start
+  // LTFT (latency-to-first-token) does not pay an extra serial Supabase RTT.
+  // The closure-shared `workspacePath` is filled by the `.then` below; in
+  // production, `realSdkQueryFactory` (line 419) awaits the SAME memo before
+  // the SDK Query can emit any block, so by the time `onToolUse` fires the
+  // value is set. On warm dispatches the memo returns synchronously inside
+  // `fetchUserWorkspacePath` and the `.then` resolves on the next microtask.
+  // On failure, fall back to `undefined` — `buildToolLabel` still produces
+  // the verbose label (just without the workspace-prefix scrub) and the
+  // error is mirrored to Sentry per `cq-silent-fallback-must-mirror-to-sentry`.
+  let workspacePath: string | undefined;
+  void fetchUserWorkspacePath(userId)
+    .then((wp) => {
+      workspacePath = wp;
+    })
+    .catch((err) => {
+      reportSilentFallback(err, {
+        feature: "cc-dispatcher",
+        op: "workspace-resolve",
+        extra: { userId, conversationId },
+      });
+    });
 
   const events: DispatchEvents = {
     onText: (text) => {
@@ -717,11 +822,19 @@ export async function dispatchSoleurGo(
       });
     },
     onToolUse: (block) => {
-      sendToClient(userId, {
-        type: "tool_use",
-        leaderId: CC_ROUTER_LEADER_ID,
-        label: block.name,
-      });
+      // `buildToolUseWSMessage` pins the #2138 invariant: the raw SDK tool
+      // name is NOT placed on the wire (information-disclosure mitigation,
+      // see PR #2115). Shared with `agent-runner.ts` so a future schema
+      // change to `tool_use` flows through one edit, not two parallel ones.
+      sendToClient(
+        userId,
+        buildToolUseWSMessage({
+          name: block.name,
+          input: block.input,
+          workspacePath,
+          leaderId: CC_ROUTER_LEADER_ID,
+        }),
+      );
     },
     onTextTurnEnd: () => {
       // Per-turn boundary → terminal stream event for the cc_router bubble.
@@ -755,6 +868,19 @@ export async function dispatchSoleurGo(
         sendToClient(userId, {
           type: "session_ended",
           reason: end.status,
+        });
+      } else if (end.status === "runner_runaway") {
+        // Forward runaway diagnostics so an API client / agent can
+        // distinguish idle-window from max-turn stalls and observe
+        // which tool was last alive. Pino logs already capture this
+        // server-side; the wire forwarding gives parity to consumers
+        // without server log access. See #3225.
+        sendToClient(userId, {
+          type: "error",
+          message: WORKFLOW_END_USER_MESSAGES[end.status],
+          runnerRunawayReason: end.reason,
+          runnerRunawayLastBlockKind: end.lastBlockKind,
+          runnerRunawayLastBlockToolName: end.lastBlockToolName,
         });
       } else {
         sendToClient(userId, {

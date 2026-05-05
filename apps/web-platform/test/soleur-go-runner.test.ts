@@ -465,7 +465,12 @@ describe("soleur-go-runner dispatch (Stage 2.2)", () => {
     expect(mock.closeSpy).toHaveBeenCalled();
   });
 
-  it("secondary wall-clock trigger: >=30s of tool-use events without a SDKResultMessage fires runner_runaway and closes the Query", async () => {
+  it("secondary wall-clock trigger: tool_use stream that goes silent for >= wallClockTriggerMs fires runner_runaway and closes the Query", async () => {
+    // Updated 2026-05-05 (#3225): the wall-clock window resets on every
+    // assistant block (text or tool_use). The semantic is "no agent
+    // activity for wallClockTriggerMs", not "no result for
+    // wallClockTriggerMs from first tool_use". Turn-origin
+    // `firstToolUseAt` is preserved so `elapsedMs` reports total turn time.
     const mock = createMockQuery();
     const runner = createSoleurGoRunner({
       queryFactory: () => mock.query,
@@ -483,7 +488,8 @@ describe("soleur-go-runner dispatch (Stage 2.2)", () => {
       persistActiveWorkflow: vi.fn().mockResolvedValue(undefined),
     });
 
-    // Stream tool_use events at t=0, t=10s, t=20s, t=31s — no terminal result.
+    // Stream tool_use events at t=0, t=10s, t=25s. Each one resets the
+    // wall-clock window (the agent is "alive"). No terminal result.
     mock.emit(
       makeAssistant({
         content: [
@@ -494,6 +500,11 @@ describe("soleur-go-runner dispatch (Stage 2.2)", () => {
     await flushMicrotasks();
 
     vi.advanceTimersByTime(10_000);
+    // Negative-space gate: a regression to the OLD "30s from first
+    // tool_use" semantic would fire here (t=10s, well within the old
+    // window's reach once t1 lands at t=0). Pin that runaway has NOT
+    // fired before the second tool_use lands.
+    expect(events._ended.find((e) => e.status === "runner_runaway")).toBeUndefined();
     mock.emit(
       makeAssistant({
         content: [
@@ -504,6 +515,10 @@ describe("soleur-go-runner dispatch (Stage 2.2)", () => {
     await flushMicrotasks();
 
     vi.advanceTimersByTime(15_000);
+    // At t=25s — under the OLD semantic, runaway would fire 5s ago.
+    // Under the NEW semantic, t2 reset the window at t=10s and we are
+    // at t2+15s, still inside the 30s window.
+    expect(events._ended.find((e) => e.status === "runner_runaway")).toBeUndefined();
     mock.emit(
       makeAssistant({
         content: [
@@ -513,12 +528,27 @@ describe("soleur-go-runner dispatch (Stage 2.2)", () => {
     );
     await flushMicrotasks();
 
-    // Advance past the 30s trigger relative to the first tool_use.
-    vi.advanceTimersByTime(10_000);
+    // Now go silent for the full wallClockTriggerMs window from the LAST
+    // assistant block (t=25s + 30s = t=55s).
+    vi.advanceTimersByTime(30_001);
     await flushMicrotasks();
 
-    const runaway = events._ended.find((e) => e.status === "runner_runaway");
+    const runaway = events._ended.find(
+      (e) => e.status === "runner_runaway",
+    ) as
+      | (WorkflowEnd & {
+          status: "runner_runaway";
+          lastBlockKind?: unknown;
+          lastBlockToolName?: unknown;
+          reason?: unknown;
+        })
+      | undefined;
     expect(runaway).toBeDefined();
+    // Payload assertions (parity with the awaiting-user tests): the
+    // last block was Bash at t=25s, idle window expired.
+    expect(runaway!.lastBlockKind).toBe("tool_use");
+    expect(runaway!.lastBlockToolName).toBe("Bash");
+    expect(runaway!.reason).toBe("idle_window");
     expect(mock.closeSpy).toHaveBeenCalled();
   });
 

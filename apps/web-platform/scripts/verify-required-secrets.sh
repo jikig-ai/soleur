@@ -146,6 +146,38 @@ if [[ -n "$gh_client_id" && -z "${SOLEUR_SKIP_GITHUB_CLIENT_ID_SHAPE:-}" ]]; the
   fi
 fi
 
+# Shape assertions for GH_APP_DRIFTGUARD_* (drift-guard credentials).
+# WARN-not-error per the GITHUB_CLIENT_ID rationale above: the GitHub App
+# database-ID range expands over time and base64 strictness shouldn't
+# block prod releases. The actual binding test is the workflow's own
+# `openssl rsa -check` on the decoded PEM and `[[ =~ ^[1-9][0-9]+$ ]]`
+# on APP_ID — these are run-time, not pre-flight, controls.
+#
+# See: knowledge-base/project/specs/feat-3187-gh-app-drift-guard/spec.md
+#
+# GH_APP_DRIFTGUARD_APP_ID: numeric App database ID, 5–10 digits.
+gh_app_id="${GH_APP_DRIFTGUARD_APP_ID:-}"
+if [[ -n "$gh_app_id" && -z "${SOLEUR_SKIP_GH_APP_DRIFTGUARD_APP_ID_SHAPE:-}" ]]; then
+  # Loose range (2-12 digits) accommodates today's ~7-digit App IDs
+  # plus headroom for GitHub's eventual ID-space growth. Single-digit
+  # IDs and obvious paste artifacts (client_id `Iv23...`) still fail.
+  if [[ ! "$gh_app_id" =~ ^[1-9][0-9]{1,11}$ ]]; then
+    prefix="${gh_app_id:0:4}"
+    echo "::warning::GH_APP_DRIFTGUARD_APP_ID has non-canonical shape (prefix=\"${prefix}…\"); expected positive integer 2–12 digits (GitHub App database ID). Set SOLEUR_SKIP_GH_APP_DRIFTGUARD_APP_ID_SHAPE=1 to suppress."
+  fi
+fi
+
+# GH_APP_DRIFTGUARD_PRIVATE_KEY_B64: base64-decodable; decoded value must
+# start with `-----BEGIN`. Does NOT validate the RSA key itself (the
+# workflow does that at run-time via `openssl rsa -check`).
+gh_app_pem_b64="${GH_APP_DRIFTGUARD_PRIVATE_KEY_B64:-}"
+if [[ -n "$gh_app_pem_b64" && -z "${SOLEUR_SKIP_GH_APP_DRIFTGUARD_PEM_SHAPE:-}" ]]; then
+  decoded_head=$(printf '%s' "$gh_app_pem_b64" | base64 -d 2>/dev/null | head -c 11)
+  if [[ "$decoded_head" != "-----BEGIN" ]]; then
+    echo "::warning::GH_APP_DRIFTGUARD_PRIVATE_KEY_B64 did not base64-decode to a PEM block (expected leading \"-----BEGIN\"). Set SOLEUR_SKIP_GH_APP_DRIFTGUARD_PEM_SHAPE=1 to suppress."
+  fi
+fi
+
 if [[ "$missing" -gt 0 ]]; then
   echo "::error::$missing required NEXT_PUBLIC_* secret(s) missing from Doppler prd"
   exit 1

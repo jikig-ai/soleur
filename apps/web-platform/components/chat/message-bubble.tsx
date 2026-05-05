@@ -96,6 +96,14 @@ export const MessageBubble = memo(function MessageBubble({
   const colorClass = leaderId ? (LEADER_COLORS[leaderId] ?? "border-l-neutral-500") : "";
   const displayName = leaderId && getDisplayName ? getDisplayName(leaderId) : leader?.name;
   const customIconPath = leaderId && getIconPath ? getIconPath(leaderId) : null;
+  // Bug 2 (#3225): when displayName is contained in leader.title (cc_router
+  // "Concierge"/"Soleur Concierge", system "System"/"System Process"),
+  // promote the title into the always-rendered first span and suppress the
+  // secondary showFullTitle span. Otherwise the header rendered both
+  // side-by-side on first bubbles and bare displayName on follow-ups.
+  const titleContainsName =
+    !!leader && !!displayName && leader.title.includes(displayName);
+  const headerPrimary = leader && titleContainsName ? leader.title : displayName;
 
   const isActive = messageState === "thinking" || messageState === "tool_use" || messageState === "streaming";
   const isError = messageState === "error";
@@ -143,11 +151,14 @@ export const MessageBubble = memo(function MessageBubble({
           )}
 
           {leader && (
-            <div className="mb-1 flex items-center gap-2">
+            <div
+              className="mb-1 flex items-center gap-2"
+              data-testid="message-bubble-header"
+            >
               <span className="text-xs font-semibold text-neutral-300">
-                {displayName}
+                {headerPrimary}
               </span>
-              {showFullTitle && (
+              {showFullTitle && !titleContainsName && (
                 <span className="text-xs text-neutral-500">{leader.title}</span>
               )}
             </div>

@@ -395,6 +395,18 @@ flips to fix-inline — do not file the issue. If the first line is `CONCUR`,
 proceed with filing. Any other first-line content is treated as `DISSENT`
 (fail-safe toward fix-inline).
 
+**Write-time self-check:** Before invoking `gh issue create --label
+deferred-scope-out`, scroll up in the conversation and confirm the most
+recent `code-simplicity-reviewer` Task reply begins with `CONCUR` for THIS
+finding. If no such Task exists in this conversation, or the reply begins
+with anything other than `CONCUR`, STOP — invoke the agent first. Filing
+first and co-signing second is a protocol violation even when the agent
+eventually returns CONCUR; the gate exists for the DISSENT case, and
+filing-first leaves a publicly-visible issue that has to be closed if the
+agent dissents. See learning
+`knowledge-base/project/learnings/best-practices/2026-05-05-extracted-bash-functions-need-self-contained-state.md`
+Pattern 3.
+
 **Rationale:** One agent's "scope-out is fine here" can be wrong in the same
 way a single test can miss a bug. Requiring a second, simplicity-biased agent
 to co-sign blocks the most common regression pattern: an agent-author pair
@@ -611,6 +623,8 @@ When reviewing a Nunjucks/Eleventy page that pairs a visible HTML answer with a 
 When flagging a skill description word-budget overrun, the tokenizer MUST match the CI gate. `plugins/soleur/test/components.test.ts` uses `desc.split(/\s+/).filter(Boolean).length` against the YAML value only (1800-word skill budget); the `grep -h 'description:' | wc -w` pattern in AGENTS.md belongs to the agent 2500-word budget and includes YAML framing, inflating counts by ~5 words per skill. Run `bun test plugins/soleur/test/components.test.ts` before reporting — if it passes, the budget is satisfied. See `knowledge-base/project/learnings/2026-04-19-skill-description-word-budget-tokenizer.md`.
 
 When a review agent reports branch-scope regressions (claims the PR reverts merged commits, touches files outside the PR's linked issue/directory, or shows a file list materially larger than expected), verify with `git diff origin/main...HEAD --name-only` (three-dot) before accepting. Two-dot variants like `git diff main..HEAD` show commits on `main` since the fork point (NOT commits on HEAD) and produce wildly different file lists when the branch is behind main — a common agent failure mode that surfaces as a false-positive P0. See `knowledge-base/project/learnings/2026-04-22-markdown-table-parser-papercuts-and-review-diff-direction.md`.
+
+When a review agent recommends ADDING a field, header, or schema element to a security-relevant surface (wire schema, redaction filter, log scrubber, error envelope), grep the diff scope for `// See #N` provenance comments referencing prior REMOVALS of the same artifact BEFORE applying the fix. A `Pn` rating reflects local severity; it does not auto-override deliberate cross-cutting decisions encoded in code comments. If a prior PR removed the field as a security/privacy mitigation, flip disposition to `contested-design` scope-out with the prior issue # named in the filing — code-simplicity-reviewer reliably co-signs when the threat-model context is surfaced. See `knowledge-base/project/learnings/2026-05-05-agent-native-recommendation-vs-prior-security-removal.md`.
 
 ### Important: P1 Findings Block Merge
 
