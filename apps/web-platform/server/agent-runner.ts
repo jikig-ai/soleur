@@ -52,7 +52,7 @@ const log = createChildLogger("agent");
 let _supabase: ReturnType<typeof createServiceClient>;
 function supabase() { return _supabase ??= createServiceClient(); }
 
-import { buildToolLabel } from "./tool-labels";
+import { buildToolLabel, buildToolUseWSMessage } from "./tool-labels";
 
 // ---------------------------------------------------------------------------
 // Workspace permissions migration (#725)
@@ -1043,13 +1043,18 @@ issues/PRs, 4 KB comments); follow the html_url for the full text.`;
               // human-readable label crosses the wire — the raw SDK tool name
               // (Read/Bash/Grep/...) is an internal implementation detail and
               // must not leak to devtools or any WS inspector. See #2138.
+              // The `buildToolUseWSMessage` helper pins this invariant for
+              // both this emitter and the cc-dispatcher emitter (#3235).
               const toolBlock = block as { name?: string; input?: Record<string, unknown> };
-              const toolName = toolBlock.name ?? "unknown";
-              sendToClient(userId, {
-                type: "tool_use",
-                leaderId: streamLeaderId,
-                label: buildToolLabel(toolName, toolBlock.input, workspacePath),
-              });
+              sendToClient(
+                userId,
+                buildToolUseWSMessage({
+                  name: toolBlock.name ?? "unknown",
+                  input: toolBlock.input,
+                  workspacePath,
+                  leaderId: streamLeaderId,
+                }),
+              );
             }
           }
         }

@@ -240,7 +240,20 @@ export type WSMessage =
   | { type: "workflow_ended"; workflow: WorkflowName; status: WorkflowEndStatus; summary?: string }
   | ({ type: "interactive_prompt"; promptId: string; conversationId: string } & InteractivePromptPayload)
   | ({ type: "interactive_prompt_response"; promptId: string; conversationId: string } & InteractivePromptResponsePayload)
-  | { type: "error"; message: string; errorCode?: WSErrorCode; gateId?: string };
+  | {
+      type: "error";
+      message: string;
+      errorCode?: WSErrorCode;
+      gateId?: string;
+      // #3225: when this `error` event is mapped from a `runner_runaway`
+      // WorkflowEnd, forward the diagnostic fields so an API client /
+      // agent observing the conversation can distinguish idle-window
+      // from max-turn-duration stalls and see which tool was last alive.
+      // Optional and ignorable by existing consumers.
+      runnerRunawayReason?: "idle_window" | "max_turn_duration";
+      runnerRunawayLastBlockKind?: "text" | "tool_use" | null;
+      runnerRunawayLastBlockToolName?: string | null;
+    };
 
 /**
  * Wire-protocol naming convention (Stage 3, #2885):

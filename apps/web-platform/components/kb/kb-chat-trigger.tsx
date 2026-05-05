@@ -51,6 +51,12 @@ export function KbChatTrigger({ fallbackHref }: KbChatTriggerProps) {
     );
   }
 
+  // `ctx.messageCount` is the canonical thread-state signal. When the panel
+  // is closed, it is seeded by `useKbLayoutState`'s thread-info prefetch
+  // (/api/chat/thread-info) BEFORE the sidebar mounts. While the panel is
+  // open, ChatSurface keeps it current via `onMessageCountChange`. The
+  // trigger does not own this state and must not derive it from any other
+  // signal — see the H3 race fix in `chat-surface.tsx` and `kb-chat-content.tsx`.
   const hasThread = ctx.messageCount > 0;
   const label = hasThread ? "Continue thread" : "Ask about this document";
 
@@ -66,6 +72,7 @@ export function KbChatTrigger({ fallbackHref }: KbChatTriggerProps) {
       {hasThread && (
         <span
           aria-hidden="true"
+          data-testid="kb-trigger-thread-indicator"
           className="ml-1 inline-block h-1.5 w-1.5 rounded-full bg-amber-400"
         />
       )}

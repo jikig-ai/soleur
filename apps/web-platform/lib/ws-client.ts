@@ -93,6 +93,14 @@ interface UseWebSocketReturn {
    *  into `workflowEnded` so input stays disabled across reloads even when
    *  the in-memory lifecycle slice is `idle` post-mount. */
   workflowEndedAt: string | null;
+  /** True while a `/api/conversations/:id/messages` fetch is in flight.
+   *  Surfaces from the resume-history and mount-time history-fetch effects.
+   *  ChatSurface uses this to gate the "Send a message to get started"
+   *  empty-state placeholder so it does NOT flash during the round-trip,
+   *  and to defer the `onMessageCountChange?.(0)` mount-time write that
+   *  would otherwise clobber `useKbLayoutState`'s prefetched messageCount
+   *  (race H3 in the resume hydration plan). */
+  historyLoading: boolean;
 }
 
 const MAX_BACKOFF = 30_000;
@@ -288,6 +296,13 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
   const [usageData, setUsageData] = useState<UsageData | null>(null);
   // Stage 4 review F3: persisted `workflow_ended_at` from history fetch.
   const [workflowEndedAt, setWorkflowEndedAt] = useState<string | null>(null);
+  // True while either history-fetch effect (mount-time or resume-by-ID) has
+  // an in-flight fetch. ChatSurface gates its empty-state placeholder on
+  // `!historyLoading` so the placeholder cannot render during the round-trip,
+  // and skips the mount-time `onMessageCountChange?.(0)` write while loading
+  // so the trigger button does not flip to "Ask about this document" between
+  // the prefetch (`useKbLayoutState`) and the history fetch resolving.
+  const [historyLoading, setHistoryLoading] = useState(false);
   const wsRef = useRef<WebSocket | null>(null);
   const backoffRef = useRef(INITIAL_BACKOFF);
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
@@ -697,6 +712,11 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
     const { data: { session } } = await supabase.auth.getSession();
     if (!session?.access_token) return null;
 
+    // NOTE: this endpoint is wired in the Node custom server
+    // (`server/api-messages.ts` via `server/index.ts:75-81` regex), NOT in
+    // `app/api/conversations/`. Do not add a duplicate `route.ts` — Next.js
+    // routing precedence between the App Router and the custom server is
+    // undefined and the duplicate would shadow this path silently.
     const res = await fetch(
       `/api/conversations/${targetId}/messages`,
       {
@@ -705,7 +725,11 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
       },
     );
     if (!res.ok) {
-      console.warn(`History fetch failed for ${targetId}: ${res.status}`);
+      reportSilentFallback(null, {
+        feature: "kb-chat",
+        op: "history-fetch-failed",
+        extra: { conversationId: targetId, status: res.status },
+      });
       return null;
     }
 
@@ -750,28 +774,43 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
     if (value) setWorkflowEndedAt((prev) => prev ?? value);
   }
 
-  // Fetch conversation history on mount (once per conversationId)
+  // Single hydration helper used by both the mount-time effect (non-"new" IDs)
+  // and the resume effect ("new" → resolved UUID via session_resumed). Keeps
+  // the dispatch + seed + Sentry-mirror lifecycle in one place so a future
+  // change (extra seed, retry policy, etc.) cannot drift between the two
+  // call sites — exactly the failure mode that produced this bug class.
+  async function runHistoryFetch(targetId: string, controller: AbortController) {
+    setHistoryLoading(true);
+    try {
+      const result = await fetchConversationHistory(targetId, controller.signal);
+      // `controller.signal.aborted` is per-effect-instance and deterministic
+      // across React strict-mode double-mount, where a stale `mountedRef`
+      // could observe its second-mount `true` value and dispatch into a
+      // remounted reducer.
+      if (!result || controller.signal.aborted) return;
+      // filter_prepend deduplicates by id against whatever stream events
+      // landed while the fetch was in flight — strictly safer than an
+      // activeStreams.size === 0 guard.
+      dispatch({ type: "filter_prepend", messages: result.messages });
+      seedCostData(result.costData);
+      seedWorkflowEndedAt(result.workflowEndedAt);
+    } catch (err) {
+      if (err instanceof DOMException && err.name === "AbortError") return;
+      reportSilentFallback(err, {
+        feature: "kb-chat",
+        op: "history-fetch-error",
+        extra: { conversationId: targetId },
+      });
+    } finally {
+      if (!controller.signal.aborted) setHistoryLoading(false);
+    }
+  }
+
+  // Fetch conversation history on mount (once per conversationId).
   useEffect(() => {
     if (conversationId === "new") return;
     const controller = new AbortController();
-
-    (async () => {
-      try {
-        const result = await fetchConversationHistory(conversationId, controller.signal);
-        if (!result || !mountedRef.current) return;
-
-        // filter_prepend deduplicates by id against whatever stream events
-        // landed while the fetch was in flight — strictly safer than an
-        // activeStreams.size === 0 guard and matches the resume path.
-        dispatch({ type: "filter_prepend", messages: result.messages });
-        seedCostData(result.costData);
-        seedWorkflowEndedAt(result.workflowEndedAt);
-      } catch (err) {
-        if (err instanceof DOMException && err.name === "AbortError") return;
-        console.error("Failed to load history:", err);
-      }
-    })();
-
+    void runHistoryFetch(conversationId, controller);
     return () => controller.abort();
   }, [conversationId]);
 
@@ -785,25 +824,7 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
     if (conversationId !== "new") return; // only the sidebar resume path
 
     const controller = new AbortController();
-
-    (async () => {
-      try {
-        const result = await fetchConversationHistory(realConversationId, controller.signal);
-        if (!result || !mountedRef.current) return;
-
-        // Deduplicate: filter out any messages already present from stream events
-        // that arrived while the fetch was in-flight. More robust than the
-        // activeStreams.size === 0 guard: handles the window where a stream
-        // event arrives and completes before the fetch resolves.
-        dispatch({ type: "filter_prepend", messages: result.messages });
-        seedCostData(result.costData);
-        seedWorkflowEndedAt(result.workflowEndedAt);
-      } catch (err) {
-        if (err instanceof DOMException && err.name === "AbortError") return;
-        console.error("Failed to load resume history:", err);
-      }
-    })();
-
+    void runHistoryFetch(realConversationId, controller);
     return () => controller.abort();
   }, [realConversationId, conversationId]);
 
@@ -925,5 +946,6 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
     resumedFrom,
     workflow: chatState.workflow,
     workflowEndedAt,
+    historyLoading,
   };
 }
