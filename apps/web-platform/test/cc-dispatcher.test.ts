@@ -4,15 +4,23 @@ const {
   mockReportSilentFallback,
   mockFetchUserWorkspacePath,
   mockMessagesInsert,
-  mockConversationOwnership,
+  mockUpdateConversationFor,
 } = vi.hoisted(() => ({
   mockReportSilentFallback: vi.fn(),
   mockFetchUserWorkspacePath: vi.fn(),
   mockMessagesInsert: vi.fn().mockResolvedValue({ error: null }),
-  mockConversationOwnership: vi
-    .fn()
-    .mockResolvedValue({ data: { id: "stub-conv-id" }, error: null }),
+  mockUpdateConversationFor: vi.fn().mockResolvedValue({ ok: true }),
 }));
+
+vi.mock("@/server/conversation-writer", async () => {
+  const actual = await vi.importActual<
+    typeof import("@/server/conversation-writer")
+  >("@/server/conversation-writer");
+  return {
+    ...actual,
+    updateConversationFor: mockUpdateConversationFor,
+  };
+});
 
 vi.mock("@/server/observability", () => ({
   reportSilentFallback: mockReportSilentFallback,
@@ -47,17 +55,8 @@ vi.mock("@/lib/supabase/service", () => ({
       if (table === "messages") {
         return { insert: mockMessagesInsert };
       }
-      if (table === "conversations") {
-        // dispatchSoleurGo's combined ownership-check + last_active bump:
-        // `from("conversations").update({...}).eq(...).eq(...).select("id").single()`
-        const chain = {
-          update: () => chain,
-          select: () => chain,
-          eq: () => chain,
-          single: mockConversationOwnership,
-        };
-        return chain;
-      }
+      // `conversations` writes go through `updateConversationFor` which is
+      // mocked above; service-client should never see a direct .from("conversations").
       throw new Error(`unexpected table in cc-dispatcher.test.ts: ${table}`);
     },
     storage: {
@@ -95,11 +94,8 @@ describe("cc-dispatcher singletons + orchestration", () => {
     // Default: every messages-insert succeeds; tests that need a failure
     // can override per-call.
     mockMessagesInsert.mockResolvedValue({ error: null });
-    mockConversationOwnership.mockClear();
-    mockConversationOwnership.mockResolvedValue({
-      data: { id: "stub-conv-id" },
-      error: null,
-    });
+    mockUpdateConversationFor.mockClear();
+    mockUpdateConversationFor.mockResolvedValue({ ok: true });
     // Default: a stable stub workspace path so existing tests that don't
     // care about the workspace-resolve path still get a deterministic value.
     mockFetchUserWorkspacePath.mockResolvedValue("/tmp/claude-XXXX/workspace");
