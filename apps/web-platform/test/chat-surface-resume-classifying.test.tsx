@@ -76,6 +76,29 @@ describe("ChatSurface — routing chip resume gate (#3251 follow-up)", () => {
     expect(screen.queryByTestId("routing-chip")).not.toBeInTheDocument();
   });
 
+  it("T5d — does NOT render routing chip when BOTH historyLoading is true AND resumedFrom is set", async () => {
+    // Truth-table corner: with both new clauses suppressing simultaneously,
+    // the chip must remain hidden. T5a/T5b cover one clause each — T5d locks
+    // in the AND semantics so a regression to `||` (suppress on either)
+    // would not pass merely because each leg is independently exercised.
+    wsReturn = createWebSocketMock({
+      realConversationId: "test-id",
+      messages: [{ id: "u1", role: "user", content: "hello", type: "text" }],
+      routeSource: null,
+      workflow: { state: "idle" },
+      activeLeaderIds: [],
+      historyLoading: true,
+      resumedFrom: {
+        conversationId: "prior-conv",
+        timestamp: "2026-05-05T18:26:00.000Z",
+        messageCount: 2,
+      },
+    });
+    await renderFull();
+
+    expect(screen.queryByTestId("routing-chip")).not.toBeInTheDocument();
+  });
+
   it("T5c — RENDERS routing chip on a fresh (non-resume) thread that is mid-classification", async () => {
     // Drift guard: the new gate must NOT suppress the chip on a brand-new
     // conversation that legitimately has only the user's first message and is

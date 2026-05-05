@@ -870,8 +870,18 @@ describe("cc-dispatcher singletons + orchestration", () => {
     insertMock: ReturnType<typeof vi.fn>,
   ): Array<Record<string, unknown>> {
     return insertMock.mock.calls
-      .map((c) => c[0] as Record<string, unknown>)
-      .filter((row) => row && row["role"] === "assistant");
+      .map((c) => c[0] as { role?: string } & Record<string, unknown>)
+      .filter((row) => row && row.role === "assistant");
+  }
+
+  function mirrorCallsForOp(
+    mirrorMock: ReturnType<typeof vi.fn>,
+    op: string,
+  ): Array<unknown[]> {
+    return mirrorMock.mock.calls.filter(([, ctx]) => {
+      const c = ctx as { feature?: string; op?: string } | undefined;
+      return c?.feature === "cc-dispatcher" && c?.op === op;
+    });
   }
 
   it("T1: persists assistant message via supabase().from('messages').insert when onTextTurnEnd fires", async () => {
@@ -897,15 +907,14 @@ describe("cc-dispatcher singletons + orchestration", () => {
       persistActiveWorkflow: vi.fn().mockResolvedValue(undefined),
     });
 
-    // Allow `void saveAssistantMessage()` (fire-and-forget inside a sync
-    // callback) to settle before assertions. Two microtasks: one for the
-    // helper's `await supabase().from(...)`, one for the awaited resolved
-    // promise chain.
-    await Promise.resolve();
-    await Promise.resolve();
+    // `void saveAssistantMessage()` is fire-and-forget; wait for the insert
+    // to land rather than counting microtasks (which silently invalidates
+    // the test if the helper's await chain grows).
+    await vi.waitFor(() =>
+      expect(assistantInsertCalls(mockMessagesInsert)).toHaveLength(1),
+    );
 
     const assistantRows = assistantInsertCalls(mockMessagesInsert);
-    expect(assistantRows).toHaveLength(1);
     expect(assistantRows[0]).toEqual(
       expect.objectContaining({
         conversation_id: "conv-persist-1",
@@ -917,6 +926,10 @@ describe("cc-dispatcher singletons + orchestration", () => {
   });
 
   it("T2: does NOT insert assistant row when no text was emitted (tool-only turn)", async () => {
+    // RED-cycle note: this test passed vacuously before T1's GREEN — the
+    // pre-fix dispatcher never inserted assistant rows at all. Its load-bearing
+    // role is forward: catches a future regression where the
+    // `if (!fullText) return` empty-text guard is dropped.
     const { __setCcRunnerForTests } = await import("@/server/cc-dispatcher");
 
     __setCcRunnerForTests(
@@ -938,19 +951,25 @@ describe("cc-dispatcher singletons + orchestration", () => {
       persistActiveWorkflow: vi.fn().mockResolvedValue(undefined),
     });
 
-    await Promise.resolve();
-    await Promise.resolve();
-
+    // No assistant row should ever be inserted — flush microtasks and assert
+    // the count stays at 0.
+    await new Promise((resolve) => setTimeout(resolve, 0));
     expect(assistantInsertCalls(mockMessagesInsert)).toHaveLength(0);
   });
 
   it("T3: mirrors save-assistant-message-failed to Sentry on insert error and does NOT throw", async () => {
     const { __setCcRunnerForTests } = await import("@/server/cc-dispatcher");
 
-    // Sequence: user-message insert succeeds; assistant-message insert fails.
-    mockMessagesInsert
-      .mockResolvedValueOnce({ error: null })
-      .mockResolvedValueOnce({ error: { message: "db down" } });
+    // Role-aware mock — does not depend on insert ordering between user and
+    // assistant rows. If the dispatcher is ever refactored to write the user
+    // row in a different position, this test still drives the assistant
+    // failure-path deterministically.
+    mockMessagesInsert.mockImplementation(
+      async (row: { role?: string }) =>
+        row?.role === "assistant"
+          ? { error: { message: "db down" } }
+          : { error: null },
+    );
 
     __setCcRunnerForTests(
       makeAssistantPersistenceStubRunner({
@@ -973,17 +992,19 @@ describe("cc-dispatcher singletons + orchestration", () => {
       }),
     ).resolves.not.toThrow();
 
-    await Promise.resolve();
-    await Promise.resolve();
-
-    const mirrorCalls = mockReportSilentFallback.mock.calls.filter(
-      ([, ctx]) =>
-        ctx &&
-        typeof ctx === "object" &&
-        (ctx as { feature?: string; op?: string }).feature === "cc-dispatcher" &&
-        (ctx as { feature?: string; op?: string }).op ===
-          "save-assistant-message-failed",
+    await vi.waitFor(() =>
+      expect(
+        mirrorCallsForOp(mockReportSilentFallback, "save-assistant-message-failed"),
+      ).toHaveLength(1),
     );
-    expect(mirrorCalls.length).toBe(1);
+
+    // The mirrored error MUST be the underlying Supabase error, not undefined
+    // — defends against a future refactor that drops the err arg.
+    const mirrorCall = mirrorCallsForOp(
+      mockReportSilentFallback,
+      "save-assistant-message-failed",
+    )[0]!;
+    expect(mirrorCall[0]).toBeTruthy();
+    expect(mirrorCall[0]).toMatchObject({ message: "db down" });
   });
 });

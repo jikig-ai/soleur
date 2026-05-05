@@ -834,6 +834,9 @@ export async function dispatchSoleurGo(
   let accumulatedAssistantText = "";
 
   async function saveAssistantMessage(): Promise<void> {
+    // Snapshot-then-reset must precede `await` so a turn N+1 `onText` cannot
+    // mutate `fullText` while this insert is in flight (single async loop
+    // serializes onText/onTextTurnEnd, but the await yields the microtask).
     const fullText = accumulatedAssistantText;
     accumulatedAssistantText = "";
     if (!fullText) return;
@@ -847,11 +850,20 @@ export async function dispatchSoleurGo(
       leader_id: CC_ROUTER_LEADER_ID,
     });
     if (error) {
-      reportSilentFallback(error, {
-        feature: "cc-dispatcher",
-        op: "save-assistant-message-failed",
-        extra: { userId, conversationId, length: fullText.length },
-      });
+      // Route through `mirrorWithDebounce` (per-(userId, errorClass) 5-min TTL)
+      // — a misconfigured Supabase RLS for one user could otherwise emit one
+      // Sentry event per assistant turn (10 turns/conv × 100 active convs =
+      // 1000 events/hr).
+      mirrorWithDebounce(
+        error,
+        {
+          feature: "cc-dispatcher",
+          op: "save-assistant-message-failed",
+          extra: { userId, conversationId, length: fullText.length },
+        },
+        userId,
+        "save-assistant-message-failed",
+      );
     }
   }
 
@@ -881,10 +893,7 @@ export async function dispatchSoleurGo(
       );
     },
     onTextTurnEnd: () => {
-      // Persist assistant text at the per-turn boundary BEFORE emitting the
-      // terminal stream_end event. Fire-and-forget: the user has already seen
-      // the streamed text, so a Supabase write failure cannot retroactively
-      // un-render it; the helper mirrors via `reportSilentFallback`.
+      // Fire-and-forget — user already saw the streamed text; helper mirrors on failure.
       void saveAssistantMessage();
       // Per-turn boundary → terminal stream event for the cc_router bubble.
       // Without this, the client reducer keeps the bubble in
