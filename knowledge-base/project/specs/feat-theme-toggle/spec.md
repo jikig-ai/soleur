@@ -56,7 +56,7 @@ brand_survival_threshold: single-user incident
 
 ## UI Specification (founder-approved, design pass 2026-05-05)
 
-Initial mockups produced via Pencil MCP (`apps/web-platform/design/exports/theme-toggle-{forge,radiance}.png`). Founder reviewed both palettes and approved placement. Iteration request captured below; the iteration .pen was destroyed by a Pencil MCP silent-drop incident (#3274) before re-export, so the iteration is captured here in writing rather than as a fresh mockup. The original PNGs remain valid for placement and segment treatment; only labels/visibility differ.
+Initial mockups produced via Pencil MCP (`knowledge-base/product/design/theme-toggle/screenshots/{01-theme-toggle-forge,02-theme-toggle-radiance}.png`). Founder reviewed both palettes and approved placement. Iteration request captured below; the iteration .pen was destroyed by a Pencil MCP silent-drop incident (#3274) before re-export. The original PNGs remain valid for placement and segment treatment; the iteration (icons-only, hover tooltips, Dark/Light/System labels) will be re-mocked in a fresh .pen at the canonical path.
 
 **Placement.** Sidebar footer of the dashboard, directly above the email + Sign-out row. Anchored under a `THEME` ALL-CAPS label (Inter 10/600 letter-spacing 2, tertiary text). Total wrap height ≈70px; does not push the email row off-screen at the existing sidebar height.
 

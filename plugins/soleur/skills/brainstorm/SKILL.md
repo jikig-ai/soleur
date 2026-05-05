@@ -428,7 +428,7 @@ Use **AskUserQuestion tool** to present next steps:
 **Options:**
 
 1. **Proceed to planning** - Use `skill: soleur:plan` (will auto-detect this brainstorm)
-2. **Create visual designs** - Run ux-design-lead agent for .pen file design (requires Pencil extension). The agent auto-opens the screenshots folder for founder review after completion.
+2. **Create visual designs** - Run ux-design-lead agent for .pen file design (requires Pencil extension). The agent auto-opens the screenshots folder for founder review after completion. **Do NOT supply output paths in the spawn prompt** — the agent owns the path convention (`knowledge-base/product/design/{domain}/`). Passing app-tree paths (e.g., `apps/web-platform/design/`) breaks `/soleur:ux-audit` discoverability and is silently gitignored by app-level rules. The agent's output-path guard will override invoker-supplied paths and announce the override.
 3. **Refine design further** - Continue exploring
 4. **Done for now** - Return later
 
