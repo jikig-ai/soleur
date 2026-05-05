@@ -38,10 +38,27 @@ new environment.
 
 ### 1. Locate the App database ID
 
-The "App ID" displayed in the GitHub UI under
+Two equivalent paths — pick whichever your environment supports.
+
+**Via GitHub UI (operator):** the "App ID" displayed under
 `https://github.com/organizations/jikig-ai/settings/apps/<slug>` is the
 canonical numeric App database ID. It is NOT the client_id (`Iv23...`).
 Both are needed; they are distinct values.
+
+**Via `gh` CLI (operator OR agent):**
+
+```bash
+# When authenticated as a user with org-admin scope:
+gh api /orgs/jikig-ai/installations \
+  --jq '.installations[] | {id: .app_id, slug: .app_slug, app_db_id: .app_id}'
+
+# Or, when already authenticated AS the App (chicken-and-egg avoided
+# only when the App is partially bootstrapped — most useful for
+# verifying the App ID matches what /app returns):
+gh api /app
+```
+
+The `app_id` field of either response is the numeric App database ID.
 
 ### 2. Encode the PEM for transport
 
@@ -120,7 +137,9 @@ causes (most → least likely):
    Rotation procedure below.
 2. **The App was deleted/suspended.** GitHub returns 401. The
    user-facing OAuth flow is broken — every signup/sign-in 500s.
-   **Action:** restore the App in the GitHub UI, then re-run the guard.
+   **Action:** `[human-only: org owner via GitHub UI; App-suspend
+   has no public REST endpoint, App-delete is unrecoverable]`
+   restore the App in the GitHub UI, then re-run the guard.
 3. **A new App was created and the OAuth probe's `OAUTH_PROBE_GITHUB_CLIENT_ID`
    was updated WITHOUT updating drift-guard's sentinels.** The guard's
    `id` assertion fails with `app_id_mismatch` (db ID still points to
@@ -165,8 +184,22 @@ The post-step grep matched `BEGIN [A-Z ]*PRIVATE KEY` or
 leak until proven otherwise** — the false-positive rate of these
 anchored patterns is near-zero in practice.
 
-1. **Do NOT paste the matched lines anywhere.** Open the run log
-   directly in the GitHub Actions UI; copy nothing into the issue.
+1. **Inspect the run log without re-leaking.** Both paths are
+   equivalent — both go through GitHub's authenticated log API:
+
+   ```bash
+   # CLI path (agent or operator):
+   gh run view <run-id> --log | \
+     grep -E 'BEGIN [A-Z ]*PRIVATE KEY|LS0tLS1CRUdJTi[A-Za-z0-9+/]|eyJ[A-Za-z0-9_-]{20,}' | \
+     head -n 5
+   ```
+
+   Or open the GitHub Actions UI for the same run.
+
+   **Do NOT paste matched lines into the issue, ticket, PR body, or
+   any other persistent surface** — the goal is to identify the leak
+   vector, not to re-leak. Snippets in chat (e.g., for triage) are
+   acceptable only if scrubbed of the actual key bytes.
 2. **Identify what leaked.** Common modes:
    - PEM block: the masking step (`::add-mask::` per-line) failed,
      OR a `set -x`/`-e` was added to the drift-check step.
@@ -190,28 +223,94 @@ gap. Don't.
 
 ## Rotation (key compromise OR routine rotation)
 
+This section covers **private-key rotation only** — same App, new PEM.
+For App-identity rotation (replacing the App entirely with a new
+client_id / database ID), see **App-identity rotation** below.
+
 Run this end-to-end without skipping steps. The order matters: revoke
 on GitHub last so the new key is verified working before the old one
 is decommissioned.
 
-1. **Generate new key.** GitHub UI → App settings → Private keys →
-   "Generate a private key". Save the downloaded `.pem` file with
-   mode 0600.
+For shell-history hygiene during sync: run the Doppler/`gh secret set`
+commands in a subshell that disables history (`bash --noprofile
+--norc -c '… ; …'` or `set +o history` in your interactive shell).
+Clipboard managers and session recorders (Warp's persistent session
+log, asciinema, `script`) can capture stdout of intermediate pipes —
+prefer process substitution (`gh secret set ... < <(doppler ...)`)
+over `|` to avoid stdout buffers visible to ptrace on shared hosts.
+
+1. **Generate new key.** `[human-only: GitHub web UI; no API endpoint
+   exists for App-private-key generation]` GitHub UI → App settings →
+   Private keys → "Generate a private key". Save the downloaded `.pem`
+   file with mode 0600.
 2. **Encode for transport.** `base64 -w 0 < new-key.pem > new-key.pem.b64`.
 3. **Local round-trip check.** `base64 -d < new-key.pem.b64 | openssl rsa -check -noout`
    must print `RSA key ok`.
-4. **Update Doppler.** `cat new-key.pem.b64 | doppler secrets set GH_APP_DRIFTGUARD_PRIVATE_KEY_B64 --plain -p soleur -c prd`.
-5. **Sync to GitHub Actions.** `doppler secrets get GH_APP_DRIFTGUARD_PRIVATE_KEY_B64 -p soleur -c prd --plain | gh secret set GH_APP_DRIFTGUARD_PRIVATE_KEY_B64`.
-6. **Trigger the guard.** `gh workflow run scheduled-github-app-drift-guard.yml`.
-7. **Verify GREEN.** `gh run list --workflow=scheduled-github-app-drift-guard.yml --limit 1 --json conclusion` must show `success`.
-8. **Only now: revoke the old key on GitHub.** App settings → Private
-   keys → Delete. The window between step 1 and step 8 is the only
-   time both keys are valid; keep it under 15 minutes.
-9. **Securely delete local copies.** `rm -f new-key.pem new-key.pem.b64`.
-   On a developer workstation `rm` is sufficient — modern filesystems
-   (ext4, APFS, btrfs) and SSDs make `shred` ineffective. The
-   ephemeral cloud-VM runner that decoded the key already
-   self-destroyed.
+4. **Byte-count assertion** (defense against transport corruption):
+   `[[ $(wc -c < new-key.pem.b64) -ge 2000 && $(wc -c < new-key.pem.b64) -le 4096 ]] && echo OK`.
+   A 2048-bit RSA PEM in PKCS#8 is ~3000 chars when base64-encoded.
+5. **Update Doppler.** `cat new-key.pem.b64 | doppler secrets set GH_APP_DRIFTGUARD_PRIVATE_KEY_B64 --plain -p soleur -c prd`.
+6. **Sync to GitHub Actions.** `gh secret set GH_APP_DRIFTGUARD_PRIVATE_KEY_B64 < <(doppler secrets get GH_APP_DRIFTGUARD_PRIVATE_KEY_B64 -p soleur -c prd --plain)`.
+   (Process substitution avoids the intermediate pipe stdout buffer.)
+7. **Trigger the guard.** `gh workflow run scheduled-github-app-drift-guard.yml`.
+8. **Verify GREEN.** `gh run list --workflow=scheduled-github-app-drift-guard.yml --limit 1 --json conclusion` must show `success`.
+9. **Only now: revoke the old key on GitHub.** `[human-only: GitHub
+   web UI; no DELETE /apps/{id}/keys/{key_id} REST endpoint]` App
+   settings → Private keys → Delete. The window between step 1 and
+   step 9 is the only time both keys are valid; keep it under 15 minutes.
+10. **Securely delete local copies.** `rm -f new-key.pem new-key.pem.b64`.
+    See "Cleanup model note" below for why `shred` adds nothing.
+
+### App-identity rotation (replacing the App entirely)
+
+If you are switching to a new GitHub App (different client_id and
+database ID — not just rotating the existing App's key), the
+**ordering REVERSES**. Sentinels MUST be updated AFTER the new App is
+live and serving OAuth, not before.
+
+The trap: drift-guard authenticates AS the App using its PEM. If you
+update the Doppler sentinels to point at App-Y's identity ahead of
+the GitHub-side OAuth switch, drift-guard mints JWTs for App-Y,
+GitHub returns App-Y's metadata, and the byte-equality assertions
+go GREEN — while users still hit App-X's consent screen and break
+their sign-in. Up to 60 minutes of false-green coverage during which
+real user sign-ins are broken.
+
+The correct order:
+
+1. Set up the new App on GitHub side. `[human-only: GitHub web UI]`
+2. Update the OAuth-probe-side configuration (`OAUTH_PROBE_GITHUB_CLIENT_ID`)
+   to point at the NEW App's client_id, deploy, and confirm the
+   OAuth probe is GREEN against the new App. This proves users are
+   actually landing on the new App.
+3. ONLY NOW update `GH_APP_DRIFTGUARD_APP_ID` and
+   `GH_APP_DRIFTGUARD_PRIVATE_KEY_B64` in Doppler `prd` and sync to
+   GitHub Actions secrets via the steps above.
+4. Trigger drift-guard and verify GREEN.
+5. Revoke the old App on GitHub side. `[human-only: GitHub web UI]`
+
+If you do these steps out of order, expect a `client_id_mismatch` or
+`app_id_mismatch` failure routed to `ci/auth-broken` until the
+sentinels are fully synchronized — the guard's design intentionally
+fails LOUD on identity mismatch even if the cause is operator
+sequencing, not adversarial drift.
+
+### 401 triage (drift vs guard mis-bootstrap)
+
+A 401 from `/app` defaults to `ci/auth-broken` (drift) but can also
+mean the guard's own PEM is stale relative to GitHub-side rotation.
+Disambiguation:
+
+```bash
+# If you suspect guard mis-bootstrap rather than App-side drift:
+# 1. Confirm Doppler's PEM still decodes:
+doppler secrets get GH_APP_DRIFTGUARD_PRIVATE_KEY_B64 -p soleur -c prd --plain | base64 -d | openssl rsa -check -noout
+# 2. Confirm GitHub Actions has the latest:
+gh secret list | grep GH_APP_DRIFTGUARD_PRIVATE_KEY_B64
+# (the "Updated" timestamp should match your last Doppler→GH sync)
+# 3. If both are current, the App was genuinely swapped/deleted/suspended.
+# 4. If GH-secret-side is older than Doppler, re-run the sync (Bootstrap step 4).
+```
 
 ## Cleanup model note (honest)
 
@@ -220,8 +319,11 @@ Rationale: GitHub Actions runners are ephemeral cloud VMs on
 copy-on-write filesystems. `shred` overwrites on the COW *layer*, not
 the underlying block — the original blocks remain readable until they
 are reused. On the runner host, the storage is teardown'd at job
-completion. The honest model is "the runner disk is gone in seconds";
-`shred` adds no security and creates false confidence.
+completion. Same reasoning applies on a developer workstation: modern
+filesystems (ext4, APFS, btrfs) and SSDs make `shred` ineffective.
+The honest model is "the runner disk is gone in seconds; the laptop's
+journal will reuse the blocks within hours"; `shred` adds no security
+and creates false confidence.
 
 ## Why this guard exists
 
@@ -238,6 +340,19 @@ probe) because App-database-level changes are rare; an hourly cadence
 bounds the worst-case detection window at 60 minutes — well under the
 GDPR 72-hour notification clock — without burning CI budget on data
 that doesn't change.
+
+### SLO
+
+- **Detection latency target:** ≤60 minutes from the moment a drift
+  occurs (App swap, key rotation out-of-band, identity mismatch) to
+  the moment a `ci/auth-broken` issue is filed.
+- **Alert latency target:** ≤5 minutes from issue file to ops email
+  delivery (handled by the `notify-ops-email` composite action).
+- **Out of scope:** GitHub Actions cron reliability itself. If GH
+  Actions is degraded for >1 hour, this guard cannot fire — that
+  is a "guard-itself-dark" failure mode tracked separately. See
+  the follow-up issue linked from the plan's `## User-Brand Impact`
+  section for cross-workflow heartbeat coverage.
 
 ## Cross-references
 

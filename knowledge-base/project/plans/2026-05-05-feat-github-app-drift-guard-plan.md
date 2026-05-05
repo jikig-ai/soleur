@@ -37,6 +37,28 @@ single-user incident. CPO sign-off carried from brainstorm Phase 0.5;
   metadata, and any data accessible via the App's installed scopes.
   Reportable Article 33 breach under GDPR Policy §11 (72-hour CNIL clock
   starts at awareness, not confirmation).
+- **If sentinels rotate ahead of GitHub-side OAuth (App-identity rotation):**
+  Drift-guard mints JWTs against the new App identity (App-Y), GitHub
+  returns App-Y's metadata, byte-equality assertions go GREEN — while
+  users still hit App-X's consent screen and break their sign-in. Up to
+  60 minutes of false-green coverage during which real user sign-ins
+  fail. **Mitigation:** runbook §"App-identity rotation (replacing the
+  App entirely)" locks the order: GitHub-side OAuth deploy and oauth-probe
+  green check FIRST, then sentinel update. Identity rotation is rare;
+  key rotation (more common) does not have this trap because the App's
+  client_id and database ID are unchanged.
+- **If GitHub Actions cron is degraded ("guard-itself-dark"):** the guard
+  fails to fire, drift goes undetected, and auto-close-on-green leaves
+  the last tracking issue closed — removing the only signal that
+  something was being watched. **Disposition:** out of scope for this
+  PR. Cross-workflow heartbeat coverage (drift-guard, oauth-probe,
+  cf-token-expiry-check, terraform-drift, canary-bundle-claim-check)
+  needs its own architectural-pivot design cycle; tracked in
+  [#3236](https://github.com/jikig-ai/soleur/issues/3236) (architectural-pivot
+  scope-out, code-simplicity-reviewer co-signed). Drift-guard's 60-min
+  worst-case detection window is preserved as long as Actions is
+  operating; heartbeat is a strict superset, not a regression
+  introduced by this PR.
 - **Brand-survival threshold:** `single-user incident`.
 
 CPO sign-off carried from brainstorm Phase 0.5 (BUILD, P3→P2, Phase 4

@@ -15,6 +15,8 @@
 /.github/workflows/secret-scan.yml                      @jeanderuelle
 /.github/workflows/pr-quality-guards.yml                @jeanderuelle
 /.github/workflows/scheduled-github-app-drift-guard.yml @jeanderuelle
+/apps/web-platform/test/github-app-drift-guard-contract.test.ts @jeanderuelle
+/knowledge-base/engineering/ops/runbooks/github-app-drift.md @jeanderuelle
 /lefthook.yml                                           @jeanderuelle
 /apps/web-platform/scripts/lint-fixture-content.mjs     @jeanderuelle
 

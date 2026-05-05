@@ -158,9 +158,12 @@ fi
 # GH_APP_DRIFTGUARD_APP_ID: numeric App database ID, 5–10 digits.
 gh_app_id="${GH_APP_DRIFTGUARD_APP_ID:-}"
 if [[ -n "$gh_app_id" && -z "${SOLEUR_SKIP_GH_APP_DRIFTGUARD_APP_ID_SHAPE:-}" ]]; then
-  if [[ ! "$gh_app_id" =~ ^[1-9][0-9]{4,9}$ ]]; then
+  # Loose range (2-12 digits) accommodates today's ~7-digit App IDs
+  # plus headroom for GitHub's eventual ID-space growth. Single-digit
+  # IDs and obvious paste artifacts (client_id `Iv23...`) still fail.
+  if [[ ! "$gh_app_id" =~ ^[1-9][0-9]{1,11}$ ]]; then
     prefix="${gh_app_id:0:4}"
-    echo "::warning::GH_APP_DRIFTGUARD_APP_ID has non-canonical shape (prefix=\"${prefix}…\"); expected positive integer 5–10 digits (GitHub App database ID). Set SOLEUR_SKIP_GH_APP_DRIFTGUARD_APP_ID_SHAPE=1 to suppress."
+    echo "::warning::GH_APP_DRIFTGUARD_APP_ID has non-canonical shape (prefix=\"${prefix}…\"); expected positive integer 2–12 digits (GitHub App database ID). Set SOLEUR_SKIP_GH_APP_DRIFTGUARD_APP_ID_SHAPE=1 to suppress."
   fi
 fi
 
