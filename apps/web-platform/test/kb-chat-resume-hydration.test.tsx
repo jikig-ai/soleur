@@ -344,6 +344,10 @@ describe("useWebSocket — continuing-from regression #3267 (H1/H2/H5)", () => {
       expect.objectContaining({
         category: "kb-chat",
         message: "ws-message-after-teardown",
+        level: "warning",
+        data: expect.objectContaining({
+          rawPrefix: expect.stringContaining("session_resumed"),
+        }),
       }),
     );
   });
@@ -406,8 +410,8 @@ describe("useWebSocket — continuing-from regression #3267 (H1/H2/H5)", () => {
       expect(mockAddBreadcrumb).toHaveBeenCalledWith(
         expect.objectContaining({
           category: "kb-chat",
-          message: "abort-after-success",
-          level: "info",
+          message: "history-fetch-abort-after-success",
+          level: "warning",
           data: expect.objectContaining({
             conversationId: "conv-h2-only",
             messageCount: 2,

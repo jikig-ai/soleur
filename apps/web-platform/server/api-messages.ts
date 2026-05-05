@@ -92,19 +92,13 @@ export async function handleConversationMessages(
     return;
   }
 
-  // Diagnostic breadcrumb gated on the pathological case only: a 200 with
-  // zero messages for a row that ownership-checked successfully is the H1
-  // signal (row mismatch or genuinely empty thread). Logging on every
-  // success would burn the 100-entry breadcrumb buffer with noise that
-  // displaces useful UI/navigation context when an unrelated error fires
-  // later in the same request scope.
-  // TODO(#3267): if Sentry shows this firing alongside client-side
-  // `op: "history-fetch-no-session"` events for the same conversationId,
-  // add an `X-Resumed-Count` response header so the WS-handler's
-  // `messageCount` can be cross-checked against this empty-200 path
-  // (H4 disambiguation). Level bumped from `info` to `warning` so the
-  // breadcrumb survives Sentry's per-event downsampling and remains
-  // visible in triage when a downstream UI exception captures.
+  // 200 with zero messages on an ownership-checked row — diagnostic for
+  // the empty-banner class. `warning` (raised from `info` in #3267) so it
+  // survives Sentry's per-event downsampling. Some baseline noise from
+  // fresh-but-not-yet-written conversations is accepted.
+  // TODO(#3267): if this co-fires with client `history-fetch-no-session`
+  // for the same conversationId, add an `X-Resumed-Count` header so the
+  // WS-handler's `messageCount` can be cross-checked (H4 disambiguation).
   const messageCount = messages?.length ?? 0;
   if (messageCount === 0) {
     Sentry.addBreadcrumb({

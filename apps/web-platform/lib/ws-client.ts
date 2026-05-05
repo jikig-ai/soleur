@@ -429,25 +429,15 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
 
     ws.onmessage = (event) => {
       if (!mountedRef.current) {
-        // Diagnostic-only: a buffered frame delivered to onmessage AFTER
-        // unmount/teardown is structurally possible because we null
-        // `wsRef.current.onclose` at teardown but intentionally leave
-        // `onmessage` attached so the close handshake's final code/reason
-        // is observable. The mountedRef guard short-circuits dispatch into
-        // a stale hook; the breadcrumb lets production confirm whether real
-        // users hit this race (#3267).
-        let staleType = "unparseable";
-        try {
-          const stale = JSON.parse(event.data) as { type?: unknown };
-          if (typeof stale?.type === "string") staleType = stale.type;
-        } catch {
-          // already defaulted
-        }
+        // Stale frame after teardown — onmessage stays attached for the
+        // close handshake. See learnings/ui-bugs/2026-05-05-kb-chat-continuing-banner-h1-h5-residual-races.md (#3267).
+        // rawPrefix carries the frame's conversationId (when present) for
+        // correlation; truncated to bound ingestion cost on a malformed-frame storm.
         Sentry.addBreadcrumb({
           category: "kb-chat",
           message: "ws-message-after-teardown",
           level: "warning",
-          data: { type: staleType },
+          data: { rawPrefix: String(event.data).slice(0, 64) },
         });
         return;
       }
@@ -746,11 +736,8 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
     const supabase = createClient();
     const { data: { session } } = await supabase.auth.getSession();
     if (!session?.access_token) {
-      // Mirror the silent no-session degrade to Sentry. Distinct `op` so
-      // production triage can disambiguate this from `history-fetch-failed`
-      // (4xx/5xx) and `history-fetch-error` (network throw). Surfaces the
-      // long-idle-reopen path where the SSR Supabase session has expired
-      // but the WS connection still authed (#3267).
+      // Distinct op disambiguates from `history-fetch-failed` (4xx/5xx) and
+      // `history-fetch-error` (network throw). See #3267 learning.
       reportSilentFallback(null, {
         feature: "kb-chat",
         op: "history-fetch-no-session",
@@ -851,18 +838,16 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
     try {
       const result = await fetchConversationHistory(targetId, controller.signal);
       if (!result) return;
-      // `controller.signal.aborted` is per-effect-instance and deterministic
-      // across React strict-mode double-mount, where a stale `mountedRef`
-      // could observe its second-mount `true` value and dispatch into a
-      // remounted reducer. The breadcrumb is gated on result !== null so
-      // the routine "abort before fetch resolved at all" case (which throws
-      // AbortError into the catch below) does not generate noise — only the
-      // pathological "we had data and dropped it" branch records (#3267).
+      // Pathological "had data and dropped it" branch — gated on result !== null
+      // so the routine "abort before fetch resolved" path (which throws
+      // AbortError into the catch) does not generate noise. Same `warning`
+      // level as the empty-200 breadcrumb so Sentry's per-event downsampling
+      // preserves it in triage. See #3267 learning.
       if (controller.signal.aborted) {
         Sentry.addBreadcrumb({
           category: "kb-chat",
-          message: "abort-after-success",
-          level: "info",
+          message: "history-fetch-abort-after-success",
+          level: "warning",
           data: { conversationId: targetId, messageCount: result.messages.length },
         });
         return;
