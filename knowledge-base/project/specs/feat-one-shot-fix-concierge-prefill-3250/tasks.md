@@ -25,7 +25,7 @@ Derived from `2026-05-05-fix-cc-concierge-prefill-on-resume-plan.md`. Hierarchic
 - 2.1.3 Mock `fetchUserWorkspacePath` / `getUserApiKey` / `getUserServiceTokens` and `patchWorkspacePermissions` (reuse the pattern from `cc-dispatcher-real-factory.test.ts`).
 - 2.1.4 Implement test scenario 1: `drops resume when persisted session ends with assistant message`.
 - 2.1.5 Implement test scenario 2: `preserves resume when persisted session ends with user message`.
-- 2.1.6 Implement test scenario 3: `preserves resume when persisted session is empty`.
+- 2.1.6 Implement test scenario 3 (deepen-pass refined): `emits prefill-guard-empty-history warn and preserves resume when getSessionMessages returns []`. The non-empty `resumeSessionId` + empty history case is observability-gated, not silent.
 - 2.1.7 Implement test scenario 4: `preserves resume when getSessionMessages throws` (probe-failed warn under distinct op `prefill-guard-probe-failed`).
 - 2.1.8 Implement test scenario 5: `no-op when resumeSessionId is undefined` — `getSessionMessages` not called.
 - 2.1.9 Implement test scenario 6: `uses workspacePath as the dir argument to getSessionMessages` (drift-guard).
@@ -37,7 +37,10 @@ Derived from `2026-05-05-fix-cc-concierge-prefill-on-resume-plan.md`. Hierarchic
 - 3.1 Open `apps/web-platform/server/cc-dispatcher.ts`.
 - 3.2 Extend the `@anthropic-ai/claude-agent-sdk` import to also bring `getSessionMessages`.
 - 3.3 Extend the `./observability` import to also bring `warnSilentFallback`.
-- 3.4 Inside `realSdkQueryFactory`, after `await patchWorkspacePermissions(workspacePath)` and before the `try { return sdkQuery({ ... }) }` block, add the guard block as specified in plan Phase 2 (declare `safeResumeSessionId`, probe `getSessionMessages`, drop `resume:` + warn on assistant-trail, warn under `prefill-guard-probe-failed` on probe error).
+- 3.4 Inside `realSdkQueryFactory`, after `await patchWorkspacePermissions(workspacePath)` and before the `try { return sdkQuery({ ... }) }` block, add the guard block as specified in plan Phase 2: declare `safeResumeSessionId`, probe `getSessionMessages(args.resumeSessionId, { dir: workspacePath })`, then branch:
+   - `history.length === 0` → emit warn with `op: "prefill-guard-empty-history"`, pass-through.
+   - `last.type === "assistant"` (positive match, not negated) → emit warn with `op: "prefill-guard"`, set `safeResumeSessionId = undefined`.
+   - probe throws → emit warn with `op: "prefill-guard-probe-failed"`, pass-through.
 - 3.5 Replace `resumeSessionId: args.resumeSessionId` in the `buildAgentQueryOptions` call with `resumeSessionId: safeResumeSessionId`.
 - 3.6 Re-run the prefill-guard test file: all six scenarios must pass.
 - 3.7 Commit GREEN: `fix(cc-concierge): drop resume on assistant-terminated thread (#3250)`.
