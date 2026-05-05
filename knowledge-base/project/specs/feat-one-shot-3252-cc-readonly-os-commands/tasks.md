@@ -16,7 +16,10 @@ Derived from `2026-05-05-fix-cc-readonly-os-commands-plan.md`. Three phases (RED
 - 1.3 Add `describe("cd near-miss rejection (AC2)")` block — `cdrecord`, `cdx`, `cd../etc`, `cd /etc/../tmp`.
 - 1.4 Add `describe("path-traversal rejection (AC3)")` block — `ls ..`, `ls -la ../`, `cat ../foo`, `cat foo/..`, `cd ../`, `cd ..` (rejected). PLUS `cat foo/..baz` and `ls .` (allowed). The `..baz` and `.` rows are the boundary pins.
 - 1.5 Add `describe("near-miss telemetry (AC5)")` block — mock `../server/observability`. Assert `warnSilentFallback` called once with `{ feature: "cc-permissions", op: "safe-bash-near-miss", extra: { leadingToken: <first-word> } }` for `lsof`, `cdrecord`, `pwdx`. Assert NOT called for `pwd`, NOT called for `curl x` (blocklist hit), AND assert `extra` does NOT contain the rest of the command (PII guard via `cat foo/..baz`-shaped fixture or `lsof -i :443`-shaped fixture asserting `:443` is absent).
-- 1.6 Run: `bun test apps/web-platform/test/permission-callback-safe-bash.test.ts`. Confirm new tests in 1.2/1.4/1.5 fail (cd not allowed; ../ allowed; warnSilentFallback never called).
+- 1.5b (deepen-pass) Add TS5 — hidden-dotfile boundary block (10 fixtures). Verifies `.git`, `.gitignore`, `cat foo/.bashrc`, `cat my..backup.txt`, `cat ...gitignore` all auto-allow despite the path-traversal denylist. See plan §"Test Scenarios" TS5.
+- 1.5c (deepen-pass) Add TS6 — `cd` regex + path-traversal interdependence block. Pins BOTH directions: (a) `cd ..`, `cd ../`, `cd /etc/../tmp` reject; (b) `cd`, `cd /tmp`, `cd ~`, `cd /` allow. See plan §"Test Scenarios" TS6.
+- 1.5d (deepen-pass) Add TS7 — near-miss telemetry surface includes `lsblk`/`lsattr`/`lscpu`/`lsmod`/`lspci`/`lsusb`. Pins per-Risk R5. See plan §"Test Scenarios" TS7.
+- 1.6 Run: `bun test apps/web-platform/test/permission-callback-safe-bash.test.ts`. Confirm new tests in 1.2/1.4/1.5/1.5b/1.5c/1.5d fail (cd not allowed; ../ allowed; warnSilentFallback never called; lsblk-class not detected — though TS5 hidden-dotfile cases SHOULD already pass since dotfiles are not path-traversal). Expect: AC1, AC3, AC5, TS6, TS7 RED; TS5 likely already GREEN (sanity check).
 - 1.7 Commit: `test(cc-permissions): RED — cd auto-approve, ../-traversal rejection, near-miss telemetry`.
 
 ## Phase 2 — GREEN (implementation)
@@ -37,7 +40,7 @@ Derived from `2026-05-05-fix-cc-readonly-os-commands-plan.md`. Three phases (RED
 
 - 2.3.1 In `permission-callback.ts` imports, add `import { warnSilentFallback } from "./observability";`.
 - 2.3.2 Add `const SAFE_BASH_NEAR_MISS_PREFIX = /^(ls|pwd|cd|whoami|cat|head|tail|wc|file|stat|which|uname|git|echo)(\w)/;` near `SAFE_BASH_PATTERNS` (with the comment from plan §"Near-miss telemetry").
-- 2.3.3 In the Bash branch of `createCanUseTool` (around line 448, after `isBashCommandSafe(command)` returns false and before the cache-pre-gate `deps.bashApprovalCache?.allow(command)` check), add the near-miss detection block:
+- 2.3.3 In the Bash branch of `createCanUseTool` (around line 448 — between the `isBashCommandSafe(command)` early-return and the cache-pre-gate `deps.bashApprovalCache?.allow(command)` check, i.e., step 3.5 in the §"Security Ordering Invariant" — DO NOT move earlier or later, see plan §Sharp Edges "Near-miss telemetry placement is load-bearing"), add the near-miss detection block:
   ```ts
   if (SAFE_BASH_NEAR_MISS_PREFIX.test(command)) {
     const firstWord = command.trim().split(/\s+/)[0];

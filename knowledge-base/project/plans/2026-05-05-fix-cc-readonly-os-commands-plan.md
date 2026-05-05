@@ -16,6 +16,27 @@ requires_cpo_signoff: true
 
 Issue #3252 reports that read-only OS commands (`ls`, `pwd`, `cwd`) prompt the user for approval in Command Center. The investigation pointers in the issue body assume the gating point is `agent-runner.ts:261-346` and that the fix is "build a new exact-match allowlist." Both pointers are stale — the gate moved out of `agent-runner.ts` and an allowlist already ships from a prior plan (2026-04-29). This fix is the **delta**: add the one missing required command (`cd`), close one path-traversal gap (`..` is currently accepted as a path arg), and wire `warnSilentFallback` on near-miss rejections so over-reach drift is observable.
 
+## Enhancement Summary
+
+**Deepened on:** 2026-05-05
+**Sections enhanced:** Hypotheses, Acceptance Criteria, Risks, Sharp Edges, Test Scenarios.
+**Research sources used:** Direct code reads against `permission-callback.ts:90-206` (existing `SAFE_BASH_PATTERNS` + `isBashCommandSafe`) and `observability.ts:82-150` (`reportSilentFallback` / `warnSilentFallback` contracts); 38-fixture regex verification harness (Node v21.7.3, output preserved in §"Regex Verification Harness"); 12-fixture boundary harness for hidden-dotfile / `..baz` / leading-whitespace edges; security-ordering trace through `permission-callback.ts:386-574`; prior-learning review of `2026-03-20-canuse-tool-sandbox-defense-in-depth.md` and `2026-04-24-guard-surface-audit-before-coding.md`. Subagent fan-out skipped (Task tool unavailable in this nested subagent context); the deepen pass ran inline against authoritative source files instead of via parallel research agents — appropriate for a tight bug-fix scoped to one TS module + one test file.
+
+### Key Improvements
+
+1. **Regex verification harness pinned in plan body.** Output of all 38 ACx + regression + edge-case fixtures preserved in a new §"Regex Verification Harness" section. Future regressions or PRs widening the allowlist must re-run the harness (it lives at `/tmp/deepen-regex-verify.mjs` shape — copy to test dir at work time if useful).
+2. **Path-traversal denylist load-bearing rationale strengthened.** New §"Why path-traversal denylist is load-bearing" subsection in H2 explains that `extractToolPath` does NOT apply to Bash (Bash uses `command`, not `path`/`file_path`), so the workspace path-check does NOT catch `cat ../../etc/passwd`. The path-traversal denylist on the raw command string is the canUseTool-boundary check; the bubblewrap sandbox is the OS-syscall boundary check; both are needed.
+3. **Hidden-dotfile boundary verified.** Confirmed `cat .gitignore`, `cat foo/.bashrc`, `ls .config/app`, `cat ...gitignore`, `cat my..backup.txt`, `cat foo/..baz` all auto-allow (10 dotfile boundary fixtures pass). The `..` denylist regex `(?:^|[\s/])\.\.(?:$|[\s/])` correctly distinguishes parent-dir traversal from filename `..` substrings.
+4. **Near-miss telemetry surface scoped.** Verified that `lsblk`, `lsattr`, `lscpu`, `lsmod` (and similar `ls*`) all trigger near-miss telemetry — by design, since they ARE near-misses to `ls`. Documented in §Risks R3 with a Sentry-side rate-limit mitigation note.
+5. **Security ordering invariant traced through code.** §"Security Ordering Invariant" subsection added to Phase 2 documenting the canonical 5-step Bash-branch ordering (empty-deny → blocklist → allowlist → cache → review-gate). The new near-miss telemetry hook MUST land between allowlist-fail and cache-pre-gate; placing it earlier (before blocklist) would emit telemetry for `sudo`/`curl` which is wrong (those should hit blocklist deny, not near-miss noise). Placing it later (after review-gate) would lose drift signal.
+
+### New Considerations Discovered
+
+- **`cd../etc` was a candidate failure mode I almost missed.** Without the path-traversal denylist, `cd../etc` matches the proposed `cd` regex (since `[\w./~+:=@-]+` accepts `../etc`). The path-traversal denylist catches it because `../etc` has `..` followed by `/`. The two checks are **interdependent**: removing either the `cd`-with-arg regex OR the path-traversal denylist creates a hole. Documented in §Sharp Edges as an ordering-invariant note.
+- **Single-character commands (`id`, `ls`, `cd`) cannot use prefix-only matching.** All three already use `\s*$` end-anchors plus optional-arg shapes. Verified at the regex-harness level. Future PRs adding new short-prefix commands (e.g., `df`, `du`, `ps`) MUST follow the same end-anchored, arg-shape-pinned pattern.
+- **`feature: "cc-permissions"` is a fresh Sentry tag namespace.** No prior `cc-permissions` tag exists in the codebase (`grep -rn 'feature: "cc-' apps/web-platform/server/` returns `cc-dispatcher`, `cc-concierge`, but no `cc-permissions`). Following the established `cc-*` convention; no AGENTS.md edit needed (per `cq-agents-md-tier-gate` — domain-scoped tag, lives in code).
+- **Telemetry as side-channel DoS.** A model that fires off many `lsof` near-misses could flood Sentry. Mitigation lives at Sentry's per-feature rate limit, not in this plan. Documented in §Risks R3 as a known-limitation.
+
 ## User-Brand Impact
 
 **If this lands broken, the user experiences:** Command Center prompts a modal "Approve Bash command?" gate every time the agent runs `cd <dir>` to inspect a sub-tree. The agent's first read-only step interrupts every conversation. Worse, if the patch widens the allowlist incorrectly (prefix-only match, missing metachar denylist, or accepts `..` traversal arg shapes), the gate becomes a confused-deputy foothold for prompt-injected payloads to `cd ../../etc` or `cd /; ls /root` without a user prompt.
@@ -68,6 +89,19 @@ ALLOW  "ls -la ../"     // ← BUG: path traversal currently slips through
 ### H2 — `..` path traversal is a latent gap in the existing allowlist
 
 The `PATH_TOKEN` regex `[\w./~+:=@-]+` was designed to accept paths but does not exclude `..`. Auto-allowing `cat ../../../etc/passwd` is a real escape — even though the canUseTool's file-tool branch (`isFileTool` + `isPathInWorkspace`) catches the path-bearing SDK tools, **Bash with a path argument bypasses that workspace check** because the gate only inspects the command string, not the resolved path the shell executes. The host-level `bubblewrap` sandbox (sibling defense in `agent-runner-sandbox-config.ts`) restricts filesystem visibility, but the workspace-relative invariant is at the canUseTool boundary, not at the OS-syscall boundary. Closing `..` here is defense-in-depth against the exact pivot the issue's HARD CONSTRAINT names.
+
+#### Why path-traversal denylist is load-bearing (deepen-pass elaboration)
+
+`extractToolPath` (in `tool-path-checker.ts`) reads `toolInput.file_path`, `toolInput.path`, `toolInput.notebook_path` — verified at plan time. Bash uses `toolInput.command`, which is **not** in that list. So the canUseTool's `isFileTool` → `isPathInWorkspace` defense (`permission-callback.ts:274-300`) DOES NOT FIRE for Bash invocations. The only canUseTool-boundary check on Bash arguments is `isBashCommandSafe`, which today accepts `..` via `PATH_TOKEN`.
+
+Two layers in our defense-in-depth stack catch this today:
+
+1. **Bubblewrap sandbox** (`agent-runner-sandbox-config.ts`) restricts the agent subprocess's filesystem visibility at the OS namespace level. `cat /etc/passwd` would still fail because `/etc` is not bind-mounted into the sandbox.
+2. **Auto-approve scope** — `cat ../etc/passwd` does NOT match `BLOCKED_BASH_PATTERNS` (no `curl|wget|sudo|sh -c`) so it flows to the safe-bash check, which TODAY accepts it (verified via the harness in §"Regex Verification Harness"), then to the review-gate which prompts the user.
+
+The current behavior is: the user gets a review-gate prompt and (if they accept) the bubblewrap sandbox blocks the read. **The bug is that the user is forced into the prompt-and-decide loop** — exactly the friction the issue is trying to eliminate. We can't fix the friction by widening the auto-approve list without ALSO closing path-traversal, because the union ("auto-approve `cat <path>`" + "no `..` filter") would let the agent silently `cat ../../etc/passwd` (with the bubblewrap sandbox as the only remaining defense). One layer of defense for cross-tenant-data-class secrets is below the bar set by `2026-03-20-canuse-tool-sandbox-defense-in-depth.md` ("three-tier defense-in-depth, where each layer independently blocks the most critical attack classes").
+
+So: adding `cd` to the allowlist + auto-approving `cat`/`ls` with path args + NOT adding the path-traversal denylist would **regress** defense-in-depth. The denylist is required, not optional.
 
 ### H3 — Near-miss rejection telemetry is missing
 
@@ -281,6 +315,72 @@ Commit checkpoint: `refactor(cc-permissions): consolidate test setup` (only if a
 
 **Brainstorm-recommended specialists:** none (the bundle brainstorm did not name any specialist for #3252).
 
+## Security Ordering Invariant
+
+The Bash branch in `permission-callback.ts:386-574` follows a 5-step ordering invariant. Any change to this file MUST preserve it; the new near-miss telemetry hook lands at step 3.5:
+
+```text
+1. Empty-command deny     (line 388)
+2. BLOCKED_BASH_PATTERNS  (line 400) — sudo/curl/wget/sh -c/eval/base64 -d/dev/tcp
+3. SAFE_BASH_PATTERNS     (line 430) — auto-approve allowlist
+3.5 (NEW) Near-miss tel.  ← warnSilentFallback when SAFE_BASH_NEAR_MISS_PREFIX matches and step 3 missed
+4. bashApprovalCache      (line 453) — #2921 batched grants
+5. Review-gate (lines ~478-572) — user-facing modal
+```
+
+**Why step 3.5 is the only correct insertion point:**
+
+- **Earlier (between 1 and 2 OR between 2 and 3):** would emit telemetry for `sudo whoami` (which `SAFE_BASH_NEAR_MISS_PREFIX` does NOT match anyway: `sudo` is not in the prefix regex's alternatives), but more importantly would emit telemetry for `pwd && curl` BEFORE the blocklist denies — causing duplicate telemetry signal where blocklist log already fires.
+- **Same point as 3.5 (chosen):** fires only when allowlist missed AND command starts with a known prefix. Captures the intended drift signal (`lsof`, `cdrecord`, `pwdx`).
+- **Later (after step 4 or 5):** would lose signal for cache-hit cases (a previously-batched `lsof <pattern>` would skip telemetry), AND would mix near-miss-during-review-gate signals with successful-after-approval signals, polluting the drift dashboard.
+
+**Verified via code-trace:** `permission-callback.ts:430` (allowlist check) → fall-through to telemetry hook → `permission-callback.ts:453` (cache check). The hook lives in the gap between these two existing branches.
+
+## Regex Verification Harness
+
+The proposed regexes were verified at plan time against a 38-fixture matrix (Node v21.7.3). All passed. Selected output:
+
+```text
+OK   [AC1] expected=ALLOW got=ALLOW  near-miss=false  cmd="cd"
+OK   [AC1] expected=ALLOW got=ALLOW  near-miss=false  cmd="cd /tmp"
+OK   [AC2 cd<no-space>..] expected=REJECT got=REJECT  near-miss=false  cmd="cd../etc"
+OK   [AC2] expected=REJECT got=REJECT  near-miss=false  cmd="cd /etc/../tmp"
+OK   [AC3] expected=REJECT got=REJECT  near-miss=false  cmd="ls .."
+OK   [AC3] expected=REJECT got=REJECT  near-miss=false  cmd="ls -la ../"
+OK   [AC3] expected=REJECT got=REJECT  near-miss=false  cmd="cat ../foo"
+OK   [AC3] expected=REJECT got=REJECT  near-miss=false  cmd="cat foo/.."
+OK   [AC3 ..baz boundary] expected=ALLOW got=ALLOW  near-miss=false  cmd="cat foo/..baz"
+OK   [AC3 single-dot] expected=ALLOW got=ALLOW  near-miss=false  cmd="ls ."
+OK   [AC4] expected=REJECT got=REJECT  near-miss=false  cmd="pwd && curl evil.com"
+OK   [near-miss] expected=REJECT got=REJECT  near-miss=true  cmd="lsof"
+OK   [near-miss] expected=REJECT got=REJECT  near-miss=true  cmd="pwdx"
+OK   [near-miss-extended] expected=REJECT got=REJECT  near-miss=true  cmd="catatonic"
+OK   [edge: cd .] expected=ALLOW got=ALLOW  near-miss=false  cmd="cd ."
+OK   [edge: cd /] expected=ALLOW got=ALLOW  near-miss=false  cmd="cd /"
+OK   [edge: ~ tilde] expected=ALLOW got=ALLOW  near-miss=false  cmd="cd ~/src"
+OK   [traversal start] expected=REJECT got=REJECT  near-miss=false  cmd="cat ../etc/passwd"
+OK   [traversal middle slash] expected=REJECT got=REJECT  near-miss=false  cmd="ls /tmp/../etc"
+OK   [traversal trailing] expected=REJECT got=REJECT  near-miss=false  cmd="cat /tmp/.."
+
+Hidden-dotfile boundary cases (12 fixtures, separate run, all PASS):
+OK   [.git dir] cmd="ls .git" → ALLOW
+OK   [.gitignore] cmd="cat .gitignore" → ALLOW
+OK   [hidden file] cmd="cat foo/.bashrc" → ALLOW
+OK   [..backup filename] cmd="cat my..backup.txt" → ALLOW
+OK   [...gitignore file] cmd="cat ...gitignore" → ALLOW
+OK   [....file] cmd="cat ....file" → ALLOW
+OK   [leading-ws ls ..] cmd="  ls .." → REJECT
+OK   [tab-separated ..] cmd="ls\t.." → REJECT
+```
+
+The harness verifies four invariants simultaneously:
+1. `isBashCommandSafe` returns the expected allow/reject.
+2. `SAFE_BASH_NEAR_MISS_PREFIX` returns the expected near-miss flag.
+3. The two are consistent for all near-miss cases (telemetry fires iff a near-miss prefix is detected AND the safe-check missed).
+4. The `..baz` filename boundary holds (filenames starting with `..` are not flagged as path traversal).
+
+Future PRs widening `SAFE_BASH_PATTERNS` should re-run this harness with their new fixtures appended. Do NOT delete fixtures from the matrix without a §Risks justification.
+
 ## Test Scenarios
 
 ### TS1 — `cd` auto-approve (AC1)
@@ -405,12 +505,90 @@ describe("near-miss telemetry (AC5)", () => {
 });
 ```
 
+### TS5 — Hidden-dotfile boundary (deepen-pass addition)
+
+These fixtures verify that legitimate dotfile/`.git`/`.config` reads still auto-allow despite the path-traversal denylist:
+
+```ts
+describe("hidden-dotfile boundary (TS5)", () => {
+  for (const cmd of [
+    "ls .git",
+    "cat .gitignore",
+    "cat foo/.bashrc",
+    "ls .config/app",
+    "cat .foo",
+    "cat my..backup.txt",   // ..backup is a filename
+    "cat ...gitignore",     // ...gitignore is a filename
+    "cat ....file",          // ....file is a filename
+    "ls .",                   // current dir
+    "cat foo.",               // trailing dot in filename
+  ]) {
+    test(`isBashCommandSafe(${JSON.stringify(cmd)}) === true`, () => {
+      expect(isBashCommandSafe(cmd)).toBe(true);
+    });
+  }
+});
+```
+
+### TS6 — `cd` regex + path-traversal interdependence (deepen-pass addition)
+
+A regression guard for the §Sharp Edges note "cd regex + path-traversal denylist are interdependent." Asserts that **both** checks are required: removing either re-opens a hole.
+
+```ts
+describe("cd regex + path-traversal denylist interdependence (TS6)", () => {
+  // The cd regex itself ACCEPTS `cd ../etc` (path-traversal arg shape matches PATH_TOKEN).
+  // The path-traversal denylist is what rejects it. This test pins both checks
+  // by asserting:
+  //   (a) cd-with-../-arg variants reject (path-traversal denylist working)
+  //   (b) cd-with-non-traversal-arg variants allow (cd regex working)
+  // If a future PR breaks either the regex or the denylist, this block fires.
+
+  // (a) Path-traversal MUST reject for cd
+  for (const cmd of ["cd ..", "cd ../", "cd ../foo", "cd /etc/../tmp"]) {
+    test(`cd path-traversal: ${JSON.stringify(cmd)} rejects`, () => {
+      expect(isBashCommandSafe(cmd)).toBe(false);
+    });
+  }
+  // (b) cd regex MUST allow non-traversal args
+  for (const cmd of ["cd", "cd /tmp", "cd ~", "cd ~/src", "cd /", "cd ."]) {
+    test(`cd non-traversal: ${JSON.stringify(cmd)} allows`, () => {
+      expect(isBashCommandSafe(cmd)).toBe(true);
+    });
+  }
+});
+```
+
+### TS7 — Near-miss prefix surface includes `lsblk`-class (deepen-pass addition)
+
+Per §Risks R5, the near-miss telemetry surface intentionally includes `lsblk`, `lsattr`, `lscpu`, `lsmod`, etc. This test pins that surface so a future PR that narrows the prefix regex doesn't silently lose drift signal.
+
+```ts
+describe("near-miss telemetry surface (TS7)", () => {
+  for (const cmd of ["lsblk", "lsattr", "lscpu", "lsmod", "lspci", "lsusb"]) {
+    test(`${JSON.stringify(cmd)} triggers near-miss telemetry`, async () => {
+      const { ctx } = buildContext();
+      const canUseTool = createCanUseTool(ctx);
+      await canUseTool("Bash", { command: cmd }, sdkOptions());
+      expect(warnSilentFallback).toHaveBeenCalledTimes(1);
+      const call = vi.mocked(warnSilentFallback).mock.calls[0];
+      expect(call[1]).toMatchObject({
+        feature: "cc-permissions",
+        op: "safe-bash-near-miss",
+        extra: { leadingToken: cmd },
+      });
+    });
+  }
+});
+```
+
 ## Risks
 
 - **R1 — `ls ..` regression for legitimate users.** If a user / agent was relying on `ls ..` auto-approving today, AC3 will start prompting. Mitigation: this is a **strict tightening** for security; the user can `cd ..` first, then `ls`, or accept the one-time review-gate prompt. The `warnSilentFallback` telemetry will surface frequency-of-occurrence data so we can decide whether to relax. Expected hit count: low (the path-traversal pattern was rarely exercised — `Glob` and `Grep` SDK tools cover the legitimate "look outside cwd" use cases).
 - **R2 — Regex backtracking on pathological input.** `PATH_TRAVERSAL_DENYLIST = /(?:^|[\s/])\.\.(?:$|[\s/])/` is a tight non-backtracking shape (no `*` or `+` quantifiers on capture groups). The 4096-char input cap (`SAFE_BASH_MAX_INPUT_LENGTH`) already guards against amplification. No additional risk introduced.
-- **R3 — `warnSilentFallback` call rate.** If the model exploration includes many near-miss probes, Sentry could see traffic spikes. Sentry has per-feature rate limits; if this becomes noisy, switch to log-only via `log.info({ sec: true, … })` and remove the Sentry call. Tracking via the `feature: "cc-permissions"` tag.
+- **R3 — `warnSilentFallback` call rate / telemetry side-channel DoS.** If the model exploration (or a prompt-injection attempt) includes many near-miss probes, Sentry could see traffic spikes. **Mitigation:** Sentry's per-feature rate limit at the `feature: "cc-permissions"` tag (configured at the Sentry org level, not in this plan). If traffic exceeds the rate limit budget, switch to log-only via `log.info({ sec: true, … })` and remove the Sentry call — the pino mirror still writes to stdout and is captured by Better Stack. **Acknowledged-untracked:** an attacker-driven near-miss flood is technically a low-grade DoS surface against Sentry. Tracking issue: not filed; revisit if Sentry per-feature volume on `cc-permissions` exceeds 1k events/hour for any 24h window. Mitigation deferred per `wg-when-deferring-a-capability-create-a` — fold-in only if observed, file as scope-out otherwise.
 - **R4 — Future allowlist additions must follow the same pattern.** New entries in `SAFE_BASH_PATTERNS` must be reviewed against the `..` denylist (already enforced at the `isBashCommandSafe` boundary). Prescribe a §Sharp Edges note that future entries cannot bypass the metachar + path-traversal stages.
+- **R5 — Near-miss telemetry surface includes `lsblk`/`lsattr`/`lscpu`/`lsmod`/`lspci`/`lsusb`/etc.** Verified at plan time: `SAFE_BASH_NEAR_MISS_PREFIX = /^(ls|pwd|cd|whoami|cat|head|tail|wc|file|stat|which|uname|git|echo)(\w)/` matches any token starting with one of these prefixes followed by a word character. So `lsblk`, `lsattr`, `lscpu`, `lspci`, `lsusb`, `lsof` all trigger near-miss telemetry. **By design** — these ARE near-misses to `ls` and the drift signal is correct. Operators monitoring the `safe-bash-near-miss` op should expect `leadingToken` values like `lsblk` / `lspci` in normal traffic and treat them as exploration noise, not threats. The signal-to-noise issue on the dashboard is real but acceptable; the alternative (an exact-match list of "real near-misses") would require maintenance every time the kernel adds a util.
+- **R6 — `cd` is an interactive-shell builtin, not a process.** When the SDK Bash tool runs `cd /tmp`, it executes in a subprocess shell that exits immediately — `cd` does not persist working directory across Bash invocations. This is a UX subtlety the user/agent must understand: auto-approving `cd /tmp; ls` is impossible (rejected by metachar denylist), and `cd /tmp` followed by a separate `ls` Bash invocation runs `ls` in the original cwd (the workspace root), not `/tmp`. **Mitigation:** none needed in this plan — this is upstream SDK behavior. The agent should use `ls /tmp` directly. Document for the issue's author so they understand `cd` auto-approval is partially cosmetic (it confirms intent, but doesn't change subsequent command's cwd).
 
 ## Sharp Edges
 
@@ -421,6 +599,8 @@ describe("near-miss telemetry (AC5)", () => {
 - **`AGENTS.md` rule footprint:** this plan does NOT add a new AGENTS.md rule. The constraint "future allowlist entries must not bypass the metachar/traversal stages" is enforced by the test-suite (TS3's `..baz` pin + COMPOUND_COMMANDS regression coverage) and an in-code comment, not an AGENTS.md rule. Per `wg-every-session-error-must-produce-either` "Discoverability exit": the failure mode would surface as a failing test on the offending PR, not as a hidden production drift. Test pin + code comment is sufficient.
 - **Issue-body claim of `agent-runner.ts:261-346` as the gating point is stale.** Anyone re-reading the issue post-merge should know the authoritative path is `permission-callback.ts:createCanUseTool` → Bash branch (~lines 386-574). The plan's §"Research Reconciliation" row 1 documents this; the PR description should also note it inline.
 - **`cwd` is not a real Unix command.** The issue body lists "`ls`, `pwd`, `cwd`" as required allowlist entries. `pwd` covers the user-visible intent. The plan does NOT add a literal `cwd` regex. PR description should call this out for the issue author.
+- **`cd` regex + path-traversal denylist are interdependent (deepen finding).** The `cd` regex `^cd(?:\s+[\w./~+:=@-]+)?\s*$` accepts `cd ../etc` (since `../etc` matches `PATH_TOKEN`). The path-traversal denylist `(?:^|[\s/])\.\.(?:$|[\s/])` is what rejects it. **Removing either check creates a hole:** removing the `cd` regex breaks AC1; removing the path-traversal denylist re-opens `cd ../`, `cat ../foo`, `ls ..`. A future PR that "simplifies" the regex by dropping path-traversal because "the cd regex already restricts args" is wrong — verified at plan time by removing the denylist from the harness and observing `cd ../` immediately auto-allow. The two checks are bound together; document this in an in-code comment adjacent to `PATH_TRAVERSAL_DENYLIST` ("DO NOT remove this denylist without auditing every `PATH_TOKEN`-using regex above for `..` acceptance").
+- **Near-miss telemetry placement is load-bearing.** Per §"Security Ordering Invariant", the hook must land at step 3.5 (between `SAFE_BASH_PATTERNS` check and `bashApprovalCache` check). Any future PR that moves it earlier (before blocklist) emits noise on `sudo`/`curl` (which doesn't match the prefix anyway, but still — wrong placement) or duplicates blocklist signal; later (after cache) loses signal for cache-pre-approved misses. Document in code comments at the hook site.
 
 ## Open Code-Review Overlap
 
