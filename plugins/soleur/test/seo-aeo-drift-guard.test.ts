@@ -365,11 +365,16 @@ describe("#2808 homepage meta description is SERP-safe + keyword-dense", () => {
 describe("#2708 — Next.js layout title is dashboard-scoped", () => {
   test("apps/web-platform/app/layout.tsx uses dashboard template + default, not marketing brand", () => {
     const src = readFileSync(LAYOUT_TSX, "utf8");
-    // Must NOT contain the old brand string that leaked onto marketing routes.
+    // Must NOT contain the old marketing brand string that leaked onto
+    // marketing routes (the original #2708 regression).
     expect(src).not.toContain("One Command Center, 8 Departments");
     // Must use the dashboard-scoped template.
     expect(src).toContain("%s — Soleur Dashboard");
-    // Must use the dashboard default title.
-    expect(src).toContain("Soleur Dashboard — Your Command Center");
+    // Must use the dashboard default title. PR #3240 (PR-A pre-flight)
+    // dropped the "— Your Command Center" suffix when the brand rename
+    // collapsed the surface to "Soleur Dashboard"; the dashboard-scoped
+    // shape is preserved and the regression class (#2708 marketing-brand
+    // leak) remains guarded by the negative assertion above.
+    expect(src).toContain('default: "Soleur Dashboard"');
   });
 });

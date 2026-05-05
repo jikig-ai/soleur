@@ -10,10 +10,10 @@ export const metadata: Metadata = {
   // line lives in plugins/soleur/docs/index.njk seoTitle. See #2708.
   title: {
     template: "%s — Soleur Dashboard",
-    default: "Soleur Dashboard — Your Command Center",
+    default: "Soleur Dashboard",
   },
   description:
-    "Your Soleur command center — manage subscriptions, review agent output, and configure your AI organization.",
+    "Your Soleur dashboard — manage subscriptions, review agent output, and configure your AI organization.",
   icons: {
     apple: "/icons/apple-touch-icon.png",
   },
