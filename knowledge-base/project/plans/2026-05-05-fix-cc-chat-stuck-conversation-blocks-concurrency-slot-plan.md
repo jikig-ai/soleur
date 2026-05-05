@@ -178,7 +178,7 @@ no headroom. CPO sign-off required (per
 
 ### Pre-merge (PR)
 
-- [ ] **AC1 — Stuck-active prevention.** The `result`-branch in
+- [x] **AC1 — Stuck-active prevention.** The `result`-branch in
       `agent-runner.ts` (currently lines 1076-1144) is wrapped in a
       `try { … } catch (e) { /* finalize state */ throw e; }` block such
       that any throw between `saveMessage` (line 1079) and
@@ -190,7 +190,7 @@ no headroom. CPO sign-off required (per
       line 1079; the catch consults it. The catch does NOT swallow the
       error after finalization — it re-throws so the outer `catch` at
       line 1165 still runs (it currently sends `error` to client).
-- [ ] **AC2 — Periodic stuck-active reaper, signal = slot-heartbeat absence.**
+- [x] **AC2 — Periodic stuck-active reaper, signal = slot-heartbeat absence.**
       A new periodic timer (`startStuckActiveReaper`) runs every 60s and
       finalizes any conversation in `status='active'` whose corresponding
       `user_concurrency_slots` row either does not exist or has
@@ -221,13 +221,13 @@ no headroom. CPO sign-off required (per
       - 60s cadence converges with the pg_cron `user_concurrency_slots_sweep`
         cadence (migration 029 line 219-225) so the two sweep
         mechanisms agree on a single 120s liveness threshold.
-- [ ] **AC3 — Server startup wires the new timer.**
+- [x] **AC3 — Server startup wires the new timer.**
       `apps/web-platform/server/index.ts` calls `startStuckActiveReaper()`
       (alongside the existing `startInactivityTimer()` at line 89-92)
       AFTER the one-shot `cleanupOrphanedConversations` startup call.
       `.unref()` is applied so it does not block process exit (matches
       the existing pattern in `startInactivityTimer`).
-- [ ] **AC4 — Self-healing cap_hit retry (defense-in-depth).** When
+- [x] **AC4 — Self-healing cap_hit retry (defense-in-depth).** When
       `acquireSlot` in `ws-handler.ts:886` returns `cap_hit`, BEFORE
       emitting `concurrency_cap_hit` telemetry and closing the WS, run
       a *ledger-divergence* check:
@@ -248,14 +248,14 @@ no headroom. CPO sign-off required (per
          WS-close path (no behavior change in the genuine cap_hit case).
       The retry MUST NOT log to Sentry on the recovered case (success
       path noise) — only on the divergence detection itself.
-- [ ] **AC5 — Periodic-reaper test.** Vitest in
+- [x] **AC5 — Periodic-reaper test.** Vitest in
       `apps/web-platform/test/agent-runner-stuck-active-reaper.test.ts`:
       seed 3 stuck `active` conversations (one ≥ 5 min old, two recent);
       run the reaper once; assert only the old one transitioned to
       `failed`, `releaseSlot` was called for it, and the recent two
       are unchanged. Mock `setInterval` so the test does not depend on
       real wall-clock.
-- [ ] **AC6 — Stuck-active prevention test.** Vitest in
+- [x] **AC6 — Stuck-active prevention test.** Vitest in
       `apps/web-platform/test/agent-runner-result-branch-finalization.test.ts`:
       mock the SDK iterator to emit `result` then throw before line 1134.
       Assert: `updateConversationStatus(..., "waiting_for_user")` was
@@ -263,7 +263,7 @@ no headroom. CPO sign-off required (per
       `saveMessage`), AND `releaseSlot` was called exactly once. The
       test must use the existing test-double pattern from
       `apps/web-platform/test/agent-runner-*.test.ts`.
-- [ ] **AC7 — Self-healing cap_hit test.** Vitest in
+- [x] **AC7 — Self-healing cap_hit test.** Vitest in
       `apps/web-platform/test/ws-handler-cap-hit-self-heal.test.ts`:
       seed user with cap=1 and a slot referencing a `conversation_id`
       that does NOT exist in `conversations` (orphan slot). Simulate
@@ -271,13 +271,13 @@ no headroom. CPO sign-off required (per
       released, retry succeeds, `session_started` emitted. Negative case:
       slot references a real `active` conversation → no recovery, cap_hit
       proceeds.
-- [ ] **AC8 — All tests pass locally.** Test runner verified via
+- [x] **AC8 — All tests pass locally.** Test runner verified via
       `apps/web-platform/package.json scripts.test = "vitest"` (deepen
       pass). Run from `apps/web-platform/`:
       `bun run test agent-runner-stuck-active-reaper agent-runner-result-branch-finalization ws-handler-cap-hit-self-heal`
       OR equivalent vitest CLI form.
-- [ ] **AC9 — `tsc --noEmit` clean.**
-- [ ] **AC10 — No new AGENTS.md rules.** Discoverability exit applies.
+- [x] **AC9 — `tsc --noEmit` clean.**
+- [x] **AC10 — No new AGENTS.md rules.** Discoverability exit applies.
       The bug surfaced as a hard 4010 close + visible "Executing" badge
       stuck for 10 min. A learning file at
       `knowledge-base/project/learnings/bug-fixes/<topic>.md`
@@ -289,7 +289,7 @@ no headroom. CPO sign-off required (per
       tracking issue filed in Phase 6. Reference `#3219` (inactivity-sweep
       slot leak) with `Ref #3219` — that issue is overlapping but
       independent (waiting_for_user-class, 2-hour cadence).
-- [ ] **AC12 — User-brand impact section above is filled** (not `TBD` /
+- [x] **AC12 — User-brand impact section above is filled** (not `TBD` /
       `TODO` / placeholder), per `deepen-plan` Phase 4.6.
 
 ### Post-merge (operator)
