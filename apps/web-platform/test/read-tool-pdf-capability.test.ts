@@ -3,6 +3,8 @@ import { describe, it, expect } from "vitest";
 import {
   READ_TOOL_PDF_CAPABILITY_DIRECTIVE,
   buildSoleurGoSystemPrompt,
+  buildPdfGatedDirective,
+  PDF_GATED_DIRECTIVE_LEAD,
 } from "@/server/soleur-go-runner";
 
 // RED test for plan 2026-05-05-fix-cc-pdf-read-capability-prompt-plan.md (#3253).
@@ -116,21 +118,31 @@ describe("READ_TOOL_PDF_CAPABILITY_DIRECTIVE (load-bearing baseline directive �
   // 18:50:43–18:51:21Z, conversationId 73a6ede4 — every binary appeared
   // in the captured cascade). The gated directive must explicitly name
   // the measured binaries to override the tool-class prior.
-  it("Phase 2C: gated PDF directive names the 5 measured binaries plus install verbs", () => {
+  it("Phase 2C: gated PDF directive names every measured binary plus install verbs", () => {
     const prompt = buildSoleurGoSystemPrompt({
       artifactPath: "knowledge-base/test-fixtures/book.pdf",
       documentKind: "pdf",
     });
 
-    // 5 named binaries observed in the production cascade.
-    expect(prompt).toContain("pdftotext");
-    expect(prompt).toContain("pdfplumber");
-    expect(prompt).toContain("pdf-parse");
-    expect(prompt).toContain("PyPDF2");
-    expect(prompt).toContain("PyMuPDF");
+    // 6 named binaries observed in the production cascade (PyMuPDF and its
+    // common import alias `fitz` are listed separately because the model
+    // emits one or the other depending on import style).
+    const expectedBinaries = [
+      "pdftotext",
+      "pdfplumber",
+      "pdf-parse",
+      "PyPDF2",
+      "PyMuPDF",
+      "fitz",
+    ];
+    for (const binary of expectedBinaries) {
+      expect(prompt).toContain(binary);
+    }
     // Install-cascade verbs.
     expect(prompt).toContain("apt-get");
     expect(prompt).toContain("pip3 install");
+    // Generalized catch-all for unobserved variants (brew, dnf, npm install, …).
+    expect(prompt).toContain("shell-installation commands");
   });
 
   // Scenario 8 — anti-priming guard re-affirmation on the BASELINE constant.
@@ -143,16 +155,44 @@ describe("READ_TOOL_PDF_CAPABILITY_DIRECTIVE (load-bearing baseline directive �
   // declaring capabilities (per the 2026-05-05 baseline-prompt
   // best-practices learning). Belt-and-suspenders to Scenario 2.
   it("Phase 2C: BASELINE constant does not contain the gated exclusion-list binaries (no leak)", () => {
-    expect(READ_TOOL_PDF_CAPABILITY_DIRECTIVE).not.toContain("pdftotext");
-    expect(READ_TOOL_PDF_CAPABILITY_DIRECTIVE).not.toContain("pdfplumber");
-    expect(READ_TOOL_PDF_CAPABILITY_DIRECTIVE).not.toContain("pdf-parse");
-    expect(READ_TOOL_PDF_CAPABILITY_DIRECTIVE).not.toContain("PyPDF2");
-    expect(READ_TOOL_PDF_CAPABILITY_DIRECTIVE).not.toContain("PyMuPDF");
-    expect(READ_TOOL_PDF_CAPABILITY_DIRECTIVE).not.toContain("apt-get");
-    expect(READ_TOOL_PDF_CAPABILITY_DIRECTIVE).not.toContain("pip3 install");
+    const forbiddenInBaseline = [
+      "pdftotext",
+      "pdfplumber",
+      "pdf-parse",
+      "PyPDF2",
+      "PyMuPDF",
+      "fitz",
+      "apt-get",
+      "pip3 install",
+      "shell-installation commands",
+    ];
+    for (const token of forbiddenInBaseline) {
+      expect(READ_TOOL_PDF_CAPABILITY_DIRECTIVE).not.toContain(token);
+    }
     // Re-affirm Scenario 2: no negation tokens leak into the baseline.
     expect(READ_TOOL_PDF_CAPABILITY_DIRECTIVE).not.toMatch(
       /\b(do not|never|not installed)\b/i,
     );
+  });
+
+  // Scenario 9 — `buildPdfGatedDirective` factory parity. The factory is the
+  // single source of truth for the gated PDF directive; both
+  // `buildSoleurGoSystemPrompt` (Concierge) and `agent-runner.ts` (leader) MUST
+  // emit byte-equal output for the same path. This locks the lock-step
+  // parity invariant at the test layer instead of relying on a manual
+  // `grep -c` post-hoc check (architecture/security/code-quality review feedback).
+  it("Phase 2C: factory output is the source of truth — Concierge prompt embeds it byte-equal", () => {
+    const NO_ASK =
+      "Do not ask which document the user is referring to — it is the document described above.";
+    const path = "knowledge-base/test-fixtures/book.pdf";
+    const factoryOutput = buildPdfGatedDirective(path, NO_ASK);
+
+    const conciergePrompt = buildSoleurGoSystemPrompt({
+      artifactPath: path,
+      documentKind: "pdf",
+    });
+    expect(conciergePrompt).toContain(factoryOutput);
+    // Lead substring matches the exported `PDF_GATED_DIRECTIVE_LEAD`.
+    expect(factoryOutput.startsWith(PDF_GATED_DIRECTIVE_LEAD)).toBe(true);
   });
 });
