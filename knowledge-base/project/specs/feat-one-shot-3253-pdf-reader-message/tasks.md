@@ -8,14 +8,15 @@ Derived from `knowledge-base/project/plans/2026-05-05-fix-cc-pdf-read-capability
    - 1.1. Read `apps/web-platform/test/soleur-go-runner-narration.test.ts` — pattern for directive-embedding asserts.
    - 1.2. Read `apps/web-platform/test/agent-runner-system-prompt.test.ts` — find or design a build-only test seam for the leader prompt.
 
-2. **Author `apps/web-platform/test/read-tool-pdf-capability.test.ts`** with the four scenarios:
+2. **Author `apps/web-platform/test/read-tool-pdf-capability.test.ts`** with five scenarios (deepen-pass updated — purely positive directive, anti-priming guard, symmetry test):
    - 2.1. Scenario 1 — `READ_TOOL_PDF_CAPABILITY_DIRECTIVE` is exported, non-empty (>80 chars).
-   - 2.2. Scenario 2 — directive contains anchors `Read tool`, `PDF`, `PDF Reader` (in negative-list clause), and `/not installed/i`. Directive does NOT match `/pdf reader (is not|doesn't seem) (installed|available)/i` (anti-self-contradiction).
+   - 2.2. Scenario 2 — directive contains positive anchors `Read tool`, `PDF`, and `supports PDF files`. Anti-priming guard: directive does NOT match `/\b(do not|never|not installed)\b/i`. (No negative-list anchors — purely positive per 2026 prompt-engineering best practice.)
    - 2.3. Scenario 3 — `buildSoleurGoSystemPrompt()` baseline (no args) embeds the directive verbatim. Also assert it's present with `documentKind: "text"` artifact (proves it lives in baseline, not artifact branch).
+   - 2.4. Scenario 5 (new) — `buildSoleurGoSystemPrompt({ artifactPath: "research.pdf", documentKind: "pdf" })` contains BOTH the new baseline directive AND the existing assertive "currently viewing the PDF document" directive. Pins symmetry against a future edit that "merges" them and accidentally drops the baseline.
 
-3. **Author Scenario 4** in (or alongside) `apps/web-platform/test/agent-runner-system-prompt.test.ts`:
-   - 3.1. New `it()` asserting the leader system prompt (no `context`) contains the directive.
-   - 3.2. If a build-only seam does not yet exist in `agent-runner.ts`, mark this test SKIPPED until the GREEN-phase extraction lands.
+3. **Author Scenario 4** in `apps/web-platform/test/agent-runner-system-prompt.test.ts` — reuse the existing harness:
+   - 3.1. New `test()` adjacent to lines 146-238 — runs `runAgentSession` with no `context`, captures `mockQuery.mock.calls[0][0].systemPrompt`, asserts it contains the directive.
+   - 3.2. **No `buildLeaderSystemPrompt` extraction needed** (deepen-pass finding — R4 retired). The existing test pattern captures `systemPrompt` end-to-end.
 
 4. **Run the suite — confirm RED.**
    - 4.1. `bun test apps/web-platform/test/read-tool-pdf-capability.test.ts` — must fail on missing export.
@@ -25,7 +26,7 @@ Derived from `knowledge-base/project/plans/2026-05-05-fix-cc-pdf-read-capability
 
 5. **Add `READ_TOOL_PDF_CAPABILITY_DIRECTIVE` constant** in `apps/web-platform/server/soleur-go-runner.ts`:
    - 5.1. Place the export near `PRE_DISPATCH_NARRATION_DIRECTIVE` (around line 79).
-   - 5.2. Verbatim wording from plan §"Proposed Directive Wording" — three sentences, positive then negative.
+   - 5.2. Verbatim wording from plan §"Proposed Directive Wording" — **purely positive, two sentences** (declarative-then-imperative). No negation tokens.
    - 5.3. Re-run Scenarios 1, 2 — should pass.
 
 6. **Embed in `buildSoleurGoSystemPrompt` baseline:**
@@ -36,7 +37,7 @@ Derived from `knowledge-base/project/plans/2026-05-05-fix-cc-pdf-read-capability
 7. **Embed in the leader system prompt** in `apps/web-platform/server/agent-runner.ts`:
    - 7.1. Add `import { READ_TOOL_PDF_CAPABILITY_DIRECTIVE } from "@/server/soleur-go-runner"`.
    - 7.2. Append the directive to the leader baseline (after the AskUserQuestion sentence, line 591) and before the artifact-context branches.
-   - 7.3. If a build-only test seam is needed, extract `buildLeaderSystemPrompt` as a pure function (mechanical move; see plan R4). Update Scenario 4 to use it.
+   - 7.3. **No extraction needed** (R4 retired per deepen pass). Use the existing test harness in `agent-runner-system-prompt.test.ts` directly.
    - 7.4. Re-run Scenario 4 — should pass.
 
 8. **Confirm full test suite passes.**
