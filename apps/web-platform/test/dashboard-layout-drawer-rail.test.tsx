@@ -118,10 +118,10 @@ describe("DashboardLayout — mobile drawer surfaces ConversationsRail", () => {
     const rail = screen.getByTestId("conversations-rail-drawer");
     expect(rail).toBeInTheDocument();
 
-    // Footer "View all in Command Center" link must be visible inside the
+    // Footer "View all in Dashboard" link must be visible inside the
     // drawer-mounted rail so users on mobile can jump back to /dashboard.
     const viewAll = screen.getByRole("link", {
-      name: /view all in command center/i,
+      name: /view all in dashboard/i,
     });
     expect(viewAll).toHaveAttribute("href", "/dashboard");
   });

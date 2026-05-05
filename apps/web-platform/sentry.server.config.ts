@@ -1,5 +1,7 @@
 import * as Sentry from "@sentry/nextjs";
 
+import { scrubSentryEvent, scrubSentryBreadcrumb } from "@/lib/sentry-scrub";
+
 Sentry.init({
   dsn: process.env.SENTRY_DSN,
   environment: process.env.NODE_ENV,
@@ -8,11 +10,9 @@ Sentry.init({
   // Enable tracesSampleRate when investigating specific performance issues.
   tracesSampleRate: 0,
   beforeSend(event) {
-    // Strip sensitive headers
-    if (event.request?.headers) {
-      delete event.request.headers["x-nonce"];
-      delete event.request.headers.cookie;
-    }
-    return event;
+    return scrubSentryEvent(event);
+  },
+  beforeBreadcrumb(breadcrumb) {
+    return scrubSentryBreadcrumb(breadcrumb);
   },
 });

@@ -830,7 +830,7 @@ export async function dispatchSoleurGo(
     } else {
       sendToClient(userId, {
         type: "error",
-        message: "Command Center router is unavailable — try again shortly.",
+        message: "Dashboard router is unavailable — try again shortly.",
       });
     }
     // Belt-and-suspenders: drain ccBashGates here too. The runner's

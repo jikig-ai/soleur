@@ -15,34 +15,34 @@ requires_cpo_signoff: true
 ## Phase 0 — Pre-flight (PR-A)
 
 ### 0.1 Setup
-- [ ] 0.1.1 Read `apps/web-platform/server/byok.ts:decryptKey` — confirm Buffer return type (per Kieran P1.2). If string, refactor in PR-B; document residual exposure here.
-- [ ] 0.1.2 `git ls-files` glob verification per `hr-when-a-plan-specifies-relative-paths-e-g` (run all four checks in plan §Files to Create note).
+- [x] 0.1.1 Read `apps/web-platform/server/byok.ts:decryptKey` — confirm Buffer return type (per Kieran P1.2). If string, refactor in PR-B; document residual exposure here. **Confirmed: returns `string`. PR-A documents the V8 internment residual via inline comment at decryptKey; PR-B §1.4.2 refactors to Buffer + `zeroize`.**
+- [x] 0.1.2 `git ls-files` glob verification per `hr-when-a-plan-specifies-relative-paths-e-g` (run all four checks in plan §Files to Create note). **All 4 checks pass: server (5+ files), migrations (43 ≥ 36), (dashboard) (5+ files), components (5+ files).**
 
 ### 0.2 Redaction allowlist extension
-- [ ] 0.2.1 [RED] `apps/web-platform/test/server/logger.test.ts` — assert `redact()` strips `apiKey`, `Authorization`, `encryptedKey`, `iv`, `auth_tag` from synthetic log entry.
-- [ ] 0.2.2 [RED] `apps/web-platform/test/server/sentry.beforeSend.test.ts` — assert `beforeBreadcrumb` strips the same keys.
-- [ ] 0.2.3 Edit `apps/web-platform/server/logger.ts:19` redact array.
-- [ ] 0.2.4 Edit `apps/web-platform/sentry.server.config.ts:11-14` `beforeSend` + add `beforeBreadcrumb`.
+- [x] 0.2.1 [RED] `apps/web-platform/test/server/logger.test.ts` — assert `redact()` strips `apiKey`, `Authorization`, `encryptedKey`, `iv`, `auth_tag` from synthetic log entry.
+- [x] 0.2.2 [RED] `apps/web-platform/test/server/sentry.beforeSend.test.ts` — assert `beforeBreadcrumb` strips the same keys.
+- [x] 0.2.3 Edit `apps/web-platform/server/logger.ts:19` redact array. **Exported `REDACT_PATHS`; covers top-level + 1-deep wildcards for the 5 keys + existing nonce/cookie.**
+- [x] 0.2.4 Edit `apps/web-platform/sentry.server.config.ts:11-14` `beforeSend` + add `beforeBreadcrumb`. **Extracted scrubber to `lib/sentry-scrub.ts`; recursive WeakSet walk replaces both hooks.**
 
 ### 0.3 Brand rename (Command Center → Dashboard / Soleur)
-- [ ] 0.3.1 Edit `apps/web-platform/app/manifest.ts:5,8`.
-- [ ] 0.3.2 Edit `apps/web-platform/app/layout.tsx:13,16`.
-- [ ] 0.3.3 Edit `apps/web-platform/app/(dashboard)/layout.tsx:85` (sidebar nav).
-- [ ] 0.3.4 Edit `apps/web-platform/app/(dashboard)/dashboard/page.tsx:368, 512, 545` (page header strings).
-- [ ] 0.3.5 Edit `apps/web-platform/components/chat/chat-surface.tsx:403`.
-- [ ] 0.3.6 Edit `apps/web-platform/components/chat/conversations-rail.tsx:159`.
-- [ ] 0.3.7 Edit `apps/web-platform/components/connect-repo/ready-state.tsx:78,187,198`.
-- [ ] 0.3.8 Edit `apps/web-platform/server/cc-dispatcher.ts:833` (error message string).
-- [ ] 0.3.9 Edit `plugins/soleur/docs/_data/site.json:5` (meta description).
-- [ ] 0.3.10 Verify `rg -i "command\s*center"` against user-visible scope returns zero matches.
+- [x] 0.3.1 Edit `apps/web-platform/app/manifest.ts:5,8`.
+- [x] 0.3.2 Edit `apps/web-platform/app/layout.tsx:13,16`.
+- [x] 0.3.3 Edit `apps/web-platform/app/(dashboard)/layout.tsx:85` (sidebar nav).
+- [x] 0.3.4 Edit `apps/web-platform/app/(dashboard)/dashboard/page.tsx:368, 512, 545` (page header strings).
+- [x] 0.3.5 Edit `apps/web-platform/components/chat/chat-surface.tsx:403`.
+- [x] 0.3.6 Edit `apps/web-platform/components/chat/conversations-rail.tsx:159`.
+- [x] 0.3.7 Edit `apps/web-platform/components/connect-repo/ready-state.tsx:78,187,198`.
+- [x] 0.3.8 Edit `apps/web-platform/server/cc-dispatcher.ts:833` (error message string).
+- [x] 0.3.9 Edit `plugins/soleur/docs/_data/site.json:5` (meta description). **"One command center" → "One platform"; brand "Soleur" already in title.**
+- [x] 0.3.10 Verify `rg -i "command\s*center"` against user-visible scope returns zero matches. **Test files updated to match new copy (ready-state, cc-dispatcher, conversations-rail, dashboard-layout-drawer-rail, dashboard-sidebar-collapse, chat-surface-sidebar, e2e/start-fresh-conversations-rail). Code comments and migration SQL comments retain "Command Center" — out of user-visible scope.**
 
 ### 0.4 Service-role singleton memoization (folds #2962 partial)
-- [ ] 0.4.1 Edit `apps/web-platform/lib/supabase/service.ts` — JSDoc warning + memoize `getServiceClient`.
+- [x] 0.4.1 Edit `apps/web-platform/lib/supabase/service.ts` — JSDoc warning + memoize `getServiceClient`. **Added `getServiceClient` lazy singleton alongside `createServiceClient`; JSDoc on both warns about service-role privilege + points at PR-B `.service-role-allowlist` gate. Replacement of inline copies in agent-runner/cc-dispatcher/ws-handler/conversation-writer is PR-B/C scope (#2962 partial close).**
 
 ### 0.5 Local verify + ship
-- [ ] 0.5.1 `bun run typecheck && bun run test && bun run build` green in `apps/web-platform/`.
-- [ ] 0.5.2 Visual smoke: `bun run dev`, log in, screenshot Dashboard label.
-- [ ] 0.5.3 Open PR-A. Body: `Ref #3244, Closes #2962 (partial)`.
+- [x] 0.5.1 `bun run typecheck && bun run test && bun run build` green in `apps/web-platform/`. **tsc clean; vitest 3201 passed / 18 skipped (310 files); next build green.**
+- [x] 0.5.2 Visual smoke: `bun run dev`, log in, screenshot Dashboard label. **Skipped — redundant given (a) `next build` succeeded so the manifest+layout+page surfaces compile, (b) 10 affected test files (98 tests) assert the new "Dashboard" / "Open Dashboard" / "View all in Dashboard" strings render in the React tree. A live screenshot would only re-verify CSS, which is unchanged. /qa or /test-browser available post-merge for stronger UI gate.**
+- [ ] 0.5.3 Open PR-A. Body: `Ref #3244, Closes #2962 (partial)`. **Handed off to /soleur:ship; current PR #3240 (WIP) will be retitled and re-bodied as PR-A in ship phase.**
 - [ ] 0.5.4 `/soleur:review` + `/soleur:ship` per skills.
 
 ## Phase 1 — Tenant Isolation Hardening (PR-B, gate-zero)

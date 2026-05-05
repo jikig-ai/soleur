@@ -365,7 +365,7 @@ export default function DashboardPage() {
     return (
       <div className="mx-auto flex min-h-[calc(100dvh-4rem)] max-w-3xl flex-col items-center justify-center px-4 py-10">
         <p className="mb-3 text-xs font-medium tracking-widest text-amber-500">
-          COMMAND CENTER
+          DASHBOARD
         </p>
         <h1 className="mb-3 text-center text-3xl font-semibold text-white md:text-4xl">
           Tell your organization what you&apos;re building.
@@ -509,7 +509,7 @@ export default function DashboardPage() {
         )}
 
         <p className="mb-3 text-xs font-medium tracking-widest text-amber-500">
-          COMMAND CENTER
+          DASHBOARD
         </p>
         <h1 className="mb-3 text-center text-3xl font-semibold text-white md:text-4xl">
           {allTasksComplete
@@ -542,7 +542,7 @@ export default function DashboardPage() {
       {/* Header */}
       <div className="mb-6 flex items-center justify-between">
         <h1 className="text-xl font-semibold text-white md:text-2xl">
-          Command Center
+          Dashboard
         </h1>
       </div>
 

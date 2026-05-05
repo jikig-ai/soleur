@@ -229,8 +229,8 @@ describe("ReadyState — health snapshot", () => {
       screen.getByText(/deep analysis in progress/i),
     ).toBeInTheDocument();
 
-    // Should have a link/reference to Command Center
-    const ccLink = screen.getByRole("link", { name: /command center/i });
+    // Should have a link/reference to Dashboard
+    const ccLink = screen.getByRole("link", { name: /dashboard/i });
     expect(ccLink).toBeInTheDocument();
     expect(ccLink).toHaveAttribute("href", expect.stringContaining("/dashboard"));
   });
@@ -278,7 +278,7 @@ describe("ReadyState — health snapshot", () => {
       screen.getByText("Your AI Team Is Ready."),
     ).toBeInTheDocument();
     expect(screen.getByText("user/test-repo")).toBeInTheDocument();
-    expect(screen.getByText("Open Command Center")).toBeInTheDocument();
+    expect(screen.getByText("Open Dashboard")).toBeInTheDocument();
     expect(screen.getByText("Review Knowledge Base")).toBeInTheDocument();
 
     // Health-specific sections should NOT be present
@@ -290,10 +290,10 @@ describe("ReadyState — health snapshot", () => {
   });
 
   // -------------------------------------------------------------------------
-  // 7. Renders "Open Command Center" and "Review Knowledge Base" CTAs
+  // 7. Renders "Open Dashboard" and "Review Knowledge Base" CTAs
   // -------------------------------------------------------------------------
 
-  it('renders "Open Command Center" CTA when healthSnapshot is provided', async () => {
+  it('renders "Open Dashboard" CTA when healthSnapshot is provided', async () => {
     const ReadyState = await importReadyState();
     render(
       <ReadyState
@@ -305,7 +305,7 @@ describe("ReadyState — health snapshot", () => {
     );
 
     const ccButton = screen.getByRole("button", {
-      name: /open command center/i,
+      name: /open dashboard/i,
     });
     expect(ccButton).toBeInTheDocument();
   });
@@ -328,7 +328,7 @@ describe("ReadyState — health snapshot", () => {
     expect(kbButton).toBeInTheDocument();
   });
 
-  it('renders "Open Command Center" and "Review Knowledge Base" CTAs together', async () => {
+  it('renders "Open Dashboard" and "Review Knowledge Base" CTAs together', async () => {
     const ReadyState = await importReadyState();
     render(
       <ReadyState
@@ -340,7 +340,7 @@ describe("ReadyState — health snapshot", () => {
     );
 
     expect(
-      screen.getByRole("button", { name: /open command center/i }),
+      screen.getByRole("button", { name: /open dashboard/i }),
     ).toBeInTheDocument();
     expect(
       screen.getByRole("button", { name: /review knowledge base/i }),

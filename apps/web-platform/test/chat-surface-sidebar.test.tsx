@@ -48,9 +48,9 @@ describe("ChatSurface variant=\"sidebar\"", () => {
     return render(<ChatSurface variant="sidebar" conversationId="abc" />);
   }
 
-  it("does NOT render the full-mode Command Center header", async () => {
+  it("does NOT render the full-mode Dashboard header", async () => {
     await renderSidebar();
-    expect(screen.queryByText("Command Center")).toBeNull();
+    expect(screen.queryByText("Dashboard")).toBeNull();
   });
 
   it("does NOT render the mobile back-to-dashboard arrow", async () => {

@@ -93,14 +93,14 @@ describe("Dashboard sidebar collapse", () => {
     render(<DashboardLayout><div>content</div></DashboardLayout>);
     const toggle = screen.getByLabelText("Collapse sidebar");
     await userEvent.click(toggle);
-    expect(screen.getByTitle("Command Center")).toBeInTheDocument();
+    expect(screen.getByTitle("Dashboard")).toBeInTheDocument();
     expect(screen.getByTitle("Knowledge Base")).toBeInTheDocument();
     expect(screen.getByTitle("Settings")).toBeInTheDocument();
   });
 
   it("does not show title attributes when expanded", () => {
     render(<DashboardLayout><div>content</div></DashboardLayout>);
-    expect(screen.queryByTitle("Command Center")).not.toBeInTheDocument();
+    expect(screen.queryByTitle("Dashboard")).not.toBeInTheDocument();
   });
 
   it("persists collapse state to localStorage", async () => {
