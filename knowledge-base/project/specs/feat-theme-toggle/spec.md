@@ -66,9 +66,11 @@ Initial mockups produced via Pencil MCP (`knowledge-base/product/design/theme-to
 
 | Order | Label (tooltip + aria-label) | Icon (Lucide) |
 |---|---|---|
-| 1 | **Dark** | `flame` |
+| 1 | **Dark** | `moon` |
 | 2 | **Light** | `sun` |
 | 3 | **System** | `monitor` |
+
+**Note on icon swap.** The approved Pencil mockups (`screenshots/03-…` and `04-…`) show `flame` for the Dark segment as a brand-metaphor nod ("Solar Forge"). At the implementation handoff the founder requested `moon` instead — clearer affordance for "dark mode" in the agent industry, and avoids confusion with workflow-status flame icons used elsewhere in the app. Implementation MUST use `moon`; the mockups remain valid for placement, sizing, segment treatment, and tooltip styling.
 
 **States.** Inactive segment: transparent over toggle background, muted icon color (Forge `#6A6A6A` / Radiance `#6F6353`). Active segment: next surface tint fill (Forge `#1C1C1C` / Radiance `#EDE4CC`), 1px gold stroke (Forge `#C9A962` / Radiance `#9B8857`), gold icon.
 
