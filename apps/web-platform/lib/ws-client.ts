@@ -22,6 +22,7 @@ import {
 import { isKnownWSMessageType } from "@/lib/ws-known-types";
 import { parseWSMessage } from "@/lib/ws-zod-schemas";
 import { reportSilentFallback } from "@/lib/client-observability";
+import * as Sentry from "@sentry/nextjs";
 import { STUCK_TIMEOUT_MS } from "@/lib/ws-constants";
 
 export { STUCK_TIMEOUT_MS } from "@/lib/ws-constants";
@@ -427,7 +428,29 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
     };
 
     ws.onmessage = (event) => {
-      if (!mountedRef.current) return;
+      if (!mountedRef.current) {
+        // Diagnostic-only: a buffered frame delivered to onmessage AFTER
+        // unmount/teardown is structurally possible because we null
+        // `wsRef.current.onclose` at teardown but intentionally leave
+        // `onmessage` attached so the close handshake's final code/reason
+        // is observable. The mountedRef guard short-circuits dispatch into
+        // a stale hook; the breadcrumb lets production confirm whether real
+        // users hit this race (#3267).
+        let staleType = "unparseable";
+        try {
+          const stale = JSON.parse(event.data) as { type?: unknown };
+          if (typeof stale?.type === "string") staleType = stale.type;
+        } catch {
+          // already defaulted
+        }
+        Sentry.addBreadcrumb({
+          category: "kb-chat",
+          message: "ws-message-after-teardown",
+          level: "warning",
+          data: { type: staleType },
+        });
+        return;
+      }
 
       let parsed: unknown;
       try {
@@ -722,7 +745,19 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
 
     const supabase = createClient();
     const { data: { session } } = await supabase.auth.getSession();
-    if (!session?.access_token) return null;
+    if (!session?.access_token) {
+      // Mirror the silent no-session degrade to Sentry. Distinct `op` so
+      // production triage can disambiguate this from `history-fetch-failed`
+      // (4xx/5xx) and `history-fetch-error` (network throw). Surfaces the
+      // long-idle-reopen path where the SSR Supabase session has expired
+      // but the WS connection still authed (#3267).
+      reportSilentFallback(null, {
+        feature: "kb-chat",
+        op: "history-fetch-no-session",
+        extra: { conversationId: targetId },
+      });
+      return null;
+    }
 
     // NOTE: this endpoint is wired in the Node custom server
     // (`server/api-messages.ts` via `server/index.ts:75-81` regex), NOT in
@@ -815,11 +850,23 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
     setHistoryLoading(true);
     try {
       const result = await fetchConversationHistory(targetId, controller.signal);
+      if (!result) return;
       // `controller.signal.aborted` is per-effect-instance and deterministic
       // across React strict-mode double-mount, where a stale `mountedRef`
       // could observe its second-mount `true` value and dispatch into a
-      // remounted reducer.
-      if (!result || controller.signal.aborted) return;
+      // remounted reducer. The breadcrumb is gated on result !== null so
+      // the routine "abort before fetch resolved at all" case (which throws
+      // AbortError into the catch below) does not generate noise — only the
+      // pathological "we had data and dropped it" branch records (#3267).
+      if (controller.signal.aborted) {
+        Sentry.addBreadcrumb({
+          category: "kb-chat",
+          message: "abort-after-success",
+          level: "info",
+          data: { conversationId: targetId, messageCount: result.messages.length },
+        });
+        return;
+      }
       // filter_prepend deduplicates by id against whatever stream events
       // landed while the fetch was in flight — strictly safer than an
       // activeStreams.size === 0 guard.
