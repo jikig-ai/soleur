@@ -40,6 +40,7 @@ import { reportSilentFallback } from "./observability";
 import { applyPrefillGuard } from "./agent-prefill-guard";
 import { updateConversationFor } from "./conversation-writer";
 import { buildAgentQueryOptions } from "./agent-runner-query-options";
+import { READ_TOOL_PDF_CAPABILITY_DIRECTIVE } from "./soleur-go-runner";
 import {
   withWorkspacePermissionLock,
   atomicWriteJson,
@@ -588,7 +589,9 @@ Use the tools available to you to read and write to the knowledge-base directory
 
 Never mention file system paths, workspace paths, or internal directory structures in your responses — refer to files by their knowledge-base-relative path (e.g. "overview/vision.md" not "/workspaces/.../knowledge-base/overview/vision.md").
 
-When you need user input for important decisions, use the AskUserQuestion tool.`;
+When you need user input for important decisions, use the AskUserQuestion tool.
+
+${READ_TOOL_PDF_CAPABILITY_DIRECTIVE}`;
 
     // Inject artifact context when conversation started from a specific page.
     // Three tiers: (1) client-provided content, (2) server-read content,
