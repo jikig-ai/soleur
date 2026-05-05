@@ -16,10 +16,9 @@ import { randomUUID } from "crypto";
 import path from "path";
 
 import type { Query } from "@anthropic-ai/claude-agent-sdk";
-import {
-  query as sdkQuery,
-  getSessionMessages,
-} from "@anthropic-ai/claude-agent-sdk";
+import { query as sdkQuery } from "@anthropic-ai/claude-agent-sdk";
+
+import { applyPrefillGuard } from "./agent-prefill-guard";
 
 import type { WSMessage, Conversation, AttachmentRef } from "@/lib/types";
 import { KeyInvalidError, STATUS_LABELS } from "@/lib/types";
@@ -58,7 +57,7 @@ import {
   type ConversationRouting,
   type WorkflowName,
 } from "./conversation-routing";
-import { reportSilentFallback, warnSilentFallback } from "./observability";
+import { reportSilentFallback } from "./observability";
 import { updateConversationFor } from "./conversation-writer";
 import {
   getUserApiKey,
@@ -428,86 +427,22 @@ export const realSdkQueryFactory: QueryFactory = async (
     getUserServiceTokens(args.userId),
   ]);
 
-  // Defense-in-depth: strip stale pre-approved file-tool entries from
-  // the workspace's `.claude/settings.json` so they cannot bypass
-  // `canUseTool` (permission chain step 4 before step 5). Idempotent.
-  // Async per #2918 — the lock keyed on workspacePath prevents the
-  // legacy + cc paths from racing on the same workspace.
-  await patchWorkspacePermissions(workspacePath);
-
-  // Thread-shape guard for #3250 — drop `resume:` when the persisted
-  // session ends with an assistant message. Concierge's default model
-  // (`claude-sonnet-4-6`) rejects assistant-terminated threads with HTTP
-  // 400 "model does not support assistant message prefill". The persisted
-  // session at `~/.claude/projects/<encoded-cwd>/<sessionId>.jsonl` ends
-  // on `assistant` after any of: idle-reaper teardown, wall-clock
-  // runaway, cost-ceiling abort, container restart mid-stream.
-  //
-  // Positive-match polarity (`last.type === "assistant"`, not
-  // `last.type !== "user"`) so future SDK SessionMessage variants
-  // (e.g. `system`, `tool_result`) default to pass-through rather than a
-  // forced drop. Probe failure is non-fatal — pass `resume:` through
-  // unchanged and surface the SDK/FS outage to Sentry under a distinct
-  // op (`prefill-guard-probe-failed`) so a filter on
-  // `op:prefill-guard` reports actual guard fires.
-  let safeResumeSessionId: string | undefined = args.resumeSessionId;
-  if (args.resumeSessionId) {
-    try {
-      const history = await getSessionMessages(args.resumeSessionId, {
-        dir: workspacePath,
-      });
-      if (history.length === 0) {
-        // Empty history for a known resumeSessionId is suspicious — the
-        // session id was emitted by the SDK on a prior turn, so an empty
-        // list means either the session file was rotated/deleted, or the
-        // `dir` argument is wrong. Pass `resume:` through (Anthropic
-        // accepts an empty conversation + new user message) and emit a
-        // distinct warn op for `dir`-arg drift detection in prod.
-        warnSilentFallback(null, {
-          feature: "cc-concierge",
-          op: "prefill-guard-empty-history",
-          message:
-            "Persisted session has zero messages — possible dir-arg drift or missing session file",
-          extra: {
-            userId: args.userId,
-            conversationId: args.conversationId,
-            resumeSessionId: args.resumeSessionId,
-            workspacePath,
-          },
-        });
-      } else {
-        const last = history[history.length - 1];
-        if (last && last.type === "assistant") {
-          warnSilentFallback(null, {
-            feature: "cc-concierge",
-            op: "prefill-guard",
-            message:
-              "Persisted session ends with assistant — dropping resume to prevent 400",
-            extra: {
-              userId: args.userId,
-              conversationId: args.conversationId,
-              resumeSessionId: args.resumeSessionId,
-              lastType: last.type,
-              historyLength: history.length,
-            },
-          });
-          safeResumeSessionId = undefined;
-        }
-      }
-    } catch (err) {
-      warnSilentFallback(err, {
-        feature: "cc-concierge",
-        op: "prefill-guard-probe-failed",
-        extra: {
-          userId: args.userId,
-          conversationId: args.conversationId,
-          resumeSessionId: args.resumeSessionId,
-        },
-      });
-      // Fall through — pass `resume:` unchanged so an SDK regression in
-      // `getSessionMessages` cannot block the conversation.
-    }
-  }
+  // Workspace-permissions patch and the #3250 prefill-guard probe both
+  // depend on `workspacePath` but not on each other — parallelize so the
+  // probe doesn't add latency to cold-start dispatch. See plan
+  // §"Sharp Edges" and `agent-prefill-guard.ts` for the guard contract.
+  const [, prefillGuardResult] = await Promise.all([
+    patchWorkspacePermissions(workspacePath),
+    applyPrefillGuard({
+      resumeSessionId: args.resumeSessionId,
+      workspacePath,
+      userId: args.userId,
+      conversationId: args.conversationId,
+      feature: "cc-concierge",
+      leaderId: CC_ROUTER_LEADER_ID,
+    }),
+  ]);
+  const safeResumeSessionId = prefillGuardResult.safeResumeSessionId;
 
   const pluginPath = path.join(workspacePath, "plugins", "soleur");
 

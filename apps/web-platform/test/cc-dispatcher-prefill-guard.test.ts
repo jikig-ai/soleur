@@ -1,30 +1,10 @@
-// RED/GREEN tests for the cc-soleur-go prefill-guard at the SDK call
-// boundary in `realSdkQueryFactory`. Issue #3250 — Concierge default
-// `claude-sonnet-4-6` rejects assistant-terminated threads with HTTP 400
-// "model does not support assistant message prefill" when the persisted
-// session at `~/.claude/projects/<encoded-cwd>/<sessionId>.jsonl` ends
-// on `type: "assistant"` (idle-reaper, wall-clock runaway, cost-ceiling
-// abort, container restart mid-turn).
-//
-// Guard contract (positive-match polarity per plan §Sharp Edges):
-//   1. Probe the persisted session via `getSessionMessages(resumeSessionId,
-//      { dir: workspacePath })` BEFORE calling sdkQuery.
-//   2. If trailing `SessionMessage.type === "assistant"`: drop `resume:`,
-//      emit one `warnSilentFallback({ feature: "cc-concierge",
-//      op: "prefill-guard" })`.
-//   3. If history is `[]`: pass `resume:` through, emit one
-//      `warnSilentFallback({ ..., op: "prefill-guard-empty-history" })` —
-//      observability hook for `dir`-arg drift detection.
-//   4. If probe throws: pass `resume:` through, emit one
-//      `warnSilentFallback({ ..., op: "prefill-guard-probe-failed" })`.
-//   5. No `resumeSessionId`: no probe.
-//   6. Probe MUST be called with `(resumeSessionId, { dir: workspacePath })`
-//      — wrong dir returns `[]` silently and produces a false negative.
-//
-// Mocks reuse the harness pattern from `cc-dispatcher-real-factory.test.ts`
-// — same vi.hoisted shape, same supabase fixture, same fake Query stub.
-// Adds two captured spies the sibling file does NOT capture:
-// `mockGetSessionMessages` and `mockWarnSilentFallback`.
+// Integration coverage for the cc-soleur-go path's invocation of the
+// shared prefill-guard helper. The helper's semantic contract
+// (positive-match polarity, three observability ops, error
+// sanitization) is pinned in `agent-prefill-guard.test.ts`. This file
+// only verifies the integration: `realSdkQueryFactory` calls the
+// helper with the correct args and threads the result into
+// `buildAgentQueryOptions({ resumeSessionId })`.
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
@@ -33,24 +13,22 @@ process.env.NEXT_PUBLIC_APP_URL ??= "https://app.soleur.ai";
 
 const {
   mockQuery,
-  mockGetSessionMessages,
+  mockApplyPrefillGuard,
   mockGetUserApiKey,
   mockGetUserServiceTokens,
   mockPatchWorkspacePermissions,
   mockReportSilentFallback,
-  mockWarnSilentFallback,
   mockSendToClient,
   mockBuildAgentEnv,
   mockBuildAgentSandboxConfig,
   mockSupabaseFrom,
 } = vi.hoisted(() => ({
   mockQuery: vi.fn(),
-  mockGetSessionMessages: vi.fn(),
+  mockApplyPrefillGuard: vi.fn(),
   mockGetUserApiKey: vi.fn(),
   mockGetUserServiceTokens: vi.fn(),
   mockPatchWorkspacePermissions: vi.fn(),
   mockReportSilentFallback: vi.fn(),
-  mockWarnSilentFallback: vi.fn(),
   mockSendToClient: vi.fn(),
   mockBuildAgentEnv: vi.fn(),
   mockBuildAgentSandboxConfig: vi.fn(),
@@ -59,9 +37,16 @@ const {
 
 vi.mock("@anthropic-ai/claude-agent-sdk", () => ({
   query: mockQuery,
-  getSessionMessages: mockGetSessionMessages,
+  // The factory imports `applyPrefillGuard` directly — this stub is
+  // present only because some indirect transient imports may resolve
+  // through the SDK module.
+  getSessionMessages: vi.fn().mockResolvedValue([]),
   tool: vi.fn(),
   createSdkMcpServer: vi.fn(),
+}));
+
+vi.mock("@/server/agent-prefill-guard", () => ({
+  applyPrefillGuard: mockApplyPrefillGuard,
 }));
 
 vi.mock("@/server/agent-runner", () => ({
@@ -88,7 +73,7 @@ vi.mock("@/server/permission-callback", () => ({
 
 vi.mock("@/server/observability", () => ({
   reportSilentFallback: mockReportSilentFallback,
-  warnSilentFallback: mockWarnSilentFallback,
+  warnSilentFallback: vi.fn(),
 }));
 
 vi.mock("@supabase/supabase-js", () => ({
@@ -179,16 +164,7 @@ function makeArgs(
   };
 }
 
-function warnCallsForGuard() {
-  // Filter to only `cc-concierge` warns so an unrelated module-init
-  // warn (rare but possible during the lazy supabase client init) cannot
-  // false-positive these assertions.
-  return mockWarnSilentFallback.mock.calls.filter(
-    ([, opts]) => opts?.feature === "cc-concierge",
-  );
-}
-
-describe("realSdkQueryFactory — prefill-guard (#3250)", () => {
+describe("realSdkQueryFactory — prefill-guard integration (#3250)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockGetUserApiKey.mockResolvedValue("sk-test");
@@ -208,151 +184,55 @@ describe("realSdkQueryFactory — prefill-guard (#3250)", () => {
     });
     mockQuery.mockReturnValue(makeFakeQuery());
     setupSupabaseMockReturning(WORKSPACE_PATH);
+    // Default: helper passes resume through unchanged.
+    mockApplyPrefillGuard.mockImplementation(async ({ resumeSessionId }) => ({
+      safeResumeSessionId: resumeSessionId,
+    }));
   });
 
-  // Scenario 1 — guard fires on assistant-terminated history.
-  it("drops resume when persisted session ends with assistant message", async () => {
-    mockGetSessionMessages.mockResolvedValueOnce([
-      {
-        type: "user",
-        uuid: "u1",
-        session_id: "s",
-        message: {},
-        parent_tool_use_id: null,
-      },
-      {
-        type: "assistant",
-        uuid: "a1",
-        session_id: "s",
-        message: {},
-        parent_tool_use_id: null,
-      },
-    ]);
+  it("invokes applyPrefillGuard with the cc-concierge feature tag and CC_ROUTER_LEADER_ID", async () => {
+    await realSdkQueryFactory(makeArgs({ resumeSessionId: "s" }));
+
+    expect(mockApplyPrefillGuard).toHaveBeenCalledOnce();
+    const call = mockApplyPrefillGuard.mock.calls[0][0];
+    expect(call).toMatchObject({
+      resumeSessionId: "s",
+      workspacePath: WORKSPACE_PATH,
+      userId: "user-1",
+      conversationId: "conv-1",
+      feature: "cc-concierge",
+      leaderId: "cc_router",
+    });
+  });
+
+  it("threads the helper's safeResumeSessionId into options.resume (drop case)", async () => {
+    mockApplyPrefillGuard.mockResolvedValueOnce({
+      safeResumeSessionId: undefined,
+    });
 
     await realSdkQueryFactory(makeArgs({ resumeSessionId: "s" }));
 
-    // Drift-guard portion of scenario 6 — probe must use workspace cwd.
-    expect(mockGetSessionMessages).toHaveBeenCalledWith("s", {
-      dir: WORKSPACE_PATH,
-    });
-
-    // Resume was dropped before reaching the SDK.
-    expect(mockQuery).toHaveBeenCalledOnce();
     const opts = mockQuery.mock.calls[0][0].options;
     expect(opts.resume).toBeUndefined();
+  });
 
-    // One Sentry warn under the canonical feature/op.
-    const calls = warnCallsForGuard();
-    expect(calls).toHaveLength(1);
-    const [errArg, optsArg] = calls[0];
-    expect(errArg).toBeNull();
-    expect(optsArg.feature).toBe("cc-concierge");
-    expect(optsArg.op).toBe("prefill-guard");
-    expect(optsArg.extra).toMatchObject({
-      resumeSessionId: "s",
-      lastType: "assistant",
-      historyLength: 2,
+  it("threads the helper's safeResumeSessionId into options.resume (preserve case)", async () => {
+    mockApplyPrefillGuard.mockResolvedValueOnce({
+      safeResumeSessionId: "s",
     });
-  });
-
-  // Scenario 2 — user-terminated history passes through unchanged.
-  it("preserves resume when persisted session ends with user message", async () => {
-    mockGetSessionMessages.mockResolvedValueOnce([
-      {
-        type: "user",
-        uuid: "u1",
-        session_id: "s",
-        message: {},
-        parent_tool_use_id: null,
-      },
-      {
-        type: "assistant",
-        uuid: "a1",
-        session_id: "s",
-        message: {},
-        parent_tool_use_id: null,
-      },
-      {
-        type: "user",
-        uuid: "u2",
-        session_id: "s",
-        message: {},
-        parent_tool_use_id: null,
-      },
-    ]);
 
     await realSdkQueryFactory(makeArgs({ resumeSessionId: "s" }));
 
-    expect(mockQuery).toHaveBeenCalledOnce();
     const opts = mockQuery.mock.calls[0][0].options;
     expect(opts.resume).toBe("s");
-
-    expect(warnCallsForGuard()).toHaveLength(0);
   });
 
-  // Scenario 3 — empty history emits distinct op AND preserves resume.
-  it("emits prefill-guard-empty-history and preserves resume when history is empty", async () => {
-    mockGetSessionMessages.mockResolvedValueOnce([]);
-
-    await realSdkQueryFactory(makeArgs({ resumeSessionId: "s" }));
-
-    expect(mockQuery).toHaveBeenCalledOnce();
-    const opts = mockQuery.mock.calls[0][0].options;
-    expect(opts.resume).toBe("s");
-
-    const calls = warnCallsForGuard();
-    expect(calls).toHaveLength(1);
-    expect(calls[0][1].op).toBe("prefill-guard-empty-history");
-  });
-
-  // Scenario 4 — probe failure does NOT block the SDK call.
-  it("preserves resume and logs probe-failed when getSessionMessages throws", async () => {
-    const probeErr = new Error("synthetic probe failure");
-    mockGetSessionMessages.mockRejectedValueOnce(probeErr);
-
-    await realSdkQueryFactory(makeArgs({ resumeSessionId: "s" }));
-
-    expect(mockQuery).toHaveBeenCalledOnce();
-    const opts = mockQuery.mock.calls[0][0].options;
-    expect(opts.resume).toBe("s");
-
-    const calls = warnCallsForGuard();
-    expect(calls).toHaveLength(1);
-    expect(calls[0][0]).toBe(probeErr);
-    expect(calls[0][1].op).toBe("prefill-guard-probe-failed");
-  });
-
-  // Scenario 5 — no resumeSessionId means no probe.
-  it("does not probe when resumeSessionId is undefined", async () => {
+  it("invokes the helper even when resumeSessionId is undefined (helper short-circuits)", async () => {
     await realSdkQueryFactory(makeArgs());
 
-    expect(mockGetSessionMessages).not.toHaveBeenCalled();
-    expect(warnCallsForGuard()).toHaveLength(0);
-    expect(mockQuery).toHaveBeenCalledOnce();
+    expect(mockApplyPrefillGuard).toHaveBeenCalledOnce();
+    expect(mockApplyPrefillGuard.mock.calls[0][0].resumeSessionId).toBeUndefined();
     const opts = mockQuery.mock.calls[0][0].options;
     expect(opts.resume).toBeUndefined();
-  });
-
-  // Scenario 6 — drift-guard: probe MUST receive workspace cwd as `dir`.
-  // Without `dir`, the SDK's default lookup returns [] silently and the
-  // guard sees a "user-terminated" thread (false negative — the bug 400
-  // would still fire in prod).
-  it("invokes getSessionMessages with { dir: workspacePath } (drift-guard)", async () => {
-    mockGetSessionMessages.mockResolvedValueOnce([
-      {
-        type: "user",
-        uuid: "u1",
-        session_id: "s",
-        message: {},
-        parent_tool_use_id: null,
-      },
-    ]);
-
-    await realSdkQueryFactory(makeArgs({ resumeSessionId: "s" }));
-
-    expect(mockGetSessionMessages).toHaveBeenCalledOnce();
-    const [sid, probeOpts] = mockGetSessionMessages.mock.calls[0];
-    expect(sid).toBe("s");
-    expect(probeOpts).toEqual({ dir: WORKSPACE_PATH });
   });
 });
