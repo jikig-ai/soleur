@@ -5,9 +5,31 @@ created: 2026-05-05
 branch: feat-one-shot-kb-doc-chat-resume-bug
 classification: ui-bug
 requires_cpo_signoff: false
+deepened_on: 2026-05-05
 ---
 
 # Fix KB document chat resume hydration + button label + Command Center empty body
+
+## Enhancement Summary
+
+**Deepened on:** 2026-05-05
+**Sections enhanced:** 6 (Hypotheses, Files to Edit, Implementation Phases, Test Strategy, Sharp Edges, new Research Insights)
+**Research surfaces consulted:** local code grep on `apps/web-platform/lib/`, `apps/web-platform/server/`, `apps/web-platform/components/chat/`, `apps/web-platform/components/kb/`, `apps/web-platform/test/`; existing test file `ws-client-resume-history.test.tsx` as fixture template; existing `client-observability.ts` API surface; AGENTS.md hard rule `cq-silent-fallback-must-mirror-to-sentry`.
+
+### Key Improvements (vs. plan-skill output)
+
+1. **`reportSilentFallback` import path verified.** `ws-client.ts` already imports `reportSilentFallback` from `@/lib/client-observability` (line 24); the existing `console.warn` calls just need to be replaced — no new import. `server/api-messages.ts` will use the server variant from `@/server/observability` (already imported by `lookup-conversation-for-path.ts`, sibling pattern).
+2. **`mountedRef` is redundant for the resume-history fetch.** Both fetch effects already use `AbortController`; the cleanup `controller.abort()` rejects the in-flight fetch with `AbortError`. The `if (!result || !mountedRef.current) return` guard at lines 761 and 792 is belt-and-suspenders. Replacing it with `if (!result || controller.signal.aborted) return` removes the React-strict-mode-double-mount race entirely.
+3. **The `filter_prepend` reducer correctly preserves ordering.** Line 205: `messages: [...unique, ...state.messages]` — history (oldest first) is prepended to whatever stream events arrived during the in-flight fetch. No reducer change needed; the bug is upstream.
+4. **`thread-info` and `api-messages` use DIFFERENT row-lookup filters.** `thread-info` → `lookupConversationForPath` filters by `(user_id, repo_url, context_path)`; `api-messages` filters by `(id, user_id)` only. The `repo_url` mismatch can be silent. Adding the Sentry breadcrumb to `api-messages` (Phase 2 T3.5) makes this observable.
+5. **Empty-state placeholder timing depends on FOUR signals**, not just `messages.length`. The corrected guard is `messages.length === 0 && !isClassifying && !lastError && !historyLoading`. The fourth signal must thread through the hook return value.
+6. **Test framework is vitest with `bun test`** (per `package.json` `test: vitest`). Fixtures from `ws-client-resume-history.test.tsx` (MockWebSocket, fetchSpy, supabase mock) are reusable verbatim — no new mocking infrastructure needed.
+
+### New Considerations Discovered
+
+- The `useKbLayoutState` thread-info prefetch races the `KbChatContent` mount-time `onMessageCountChange?.(0)` because both write to the same `messageCount` slot in `KbChatContext`. Both edit sites (consumer in `kb-chat-content.tsx`, producer in `chat-surface.tsx`) need the fix — H3 race remediation requires belt-and-suspenders.
+- The Sentry mirror is mandatory (AGENTS.md `cq-silent-fallback-must-mirror-to-sentry`) AND solves the diagnosis problem: the user's screenshots can't be cross-referenced with prod because nothing surfaces in Sentry today. After the fix, Phase 0 (manual repro) becomes optional — the breadcrumb tells us H1 vs H2 vs H4 from prod data alone.
+- React 19 (per `package.json`) — Strict mode double-effect semantics are the same as React 18. AbortController-based cancellation is the canonical fix.
 
 ## Overview
 
@@ -98,10 +120,10 @@ NOT applicable — the failing call is a same-origin HTTP fetch from the browser
 
 ## Files to Edit
 
-- **`apps/web-platform/lib/ws-client.ts`** — (a) replace `console.warn` in both history-fetch effects with `reportSilentFallback({ feature: "kb-chat", op: "history-fetch-failed", extra: { status, conversationId } })`; (b) add a `historyLoading` flag to the hook return value (set to true on fetch start, false on settle/abort) so `ChatSurface` can suppress the empty-state placeholder during hydration; (c) add a code comment at line ~701 noting the endpoint lives in the Node custom server (`server/api-messages.ts`), not the App Router, so future contributors don't add a duplicate `app/api/conversations/[id]/messages/route.ts`. Trace which line each change applies to via `grep -n` before editing.
+- **`apps/web-platform/lib/ws-client.ts`** — (a) replace both `console.warn(\`History fetch failed for ${targetId}: ${res.status}\`)` (inside `fetchConversationHistory`, line 708) AND the two `console.error("Failed to load history:", err)` / `console.error("Failed to load resume history:", err)` calls (lines 771, 803) with `reportSilentFallback(err, { feature: "kb-chat", op: "history-fetch-failed", extra: { conversationId, ...(typeof status === "number" ? { status } : {}) } })`. The import is **already present** at line 24: `import { reportSilentFallback } from "@/lib/client-observability";` — no new import needed. (b) Introduce a `historyLoading: boolean` state (lifted to module scope of the hook); set to `true` at the start of each fetch-effect, set to `false` in a `try/finally` so abort-rejection still settles. Expose from the hook return (`return { ..., historyLoading }`). (c) Replace the `if (!result || !mountedRef.current) return;` guard at lines 761 and 792 with `if (!result || controller.signal.aborted) return;` — eliminates the React-strict-mode-double-mount race (H2). (d) Add a code comment at line 701 (just above the `fetch(\`/api/conversations/${targetId}/messages\`, ...)` call) noting: `// NOTE: this endpoint is wired in the Node custom server (server/api-messages.ts via server/index.ts:75-81 regex), NOT in app/api/conversations/. Do not add a duplicate route.ts — Next.js routing precedence is undefined.`
 - **`apps/web-platform/components/chat/chat-surface.tsx`** — (a) extend the empty-state guard at line 468 to include `!historyLoading`; (b) when `realConversationId` is non-null AND `messages.length === 0`, do NOT call `onMessageCountChange?.(0)` — defer until the first non-zero result lands or until `historyLoading` flips false. Keep the existing call for the genuine "no prior messages" case after history fetch completes.
 - **`apps/web-platform/components/chat/kb-chat-content.tsx`** — `handleMessageCountChange` should ignore `count === 0` writes when `historicalCountRef.current > 0` (we already know there are N historical messages). This belt-and-suspenders the H3 race even if `chat-surface.tsx` is changed.
-- **`apps/web-platform/server/api-messages.ts`** — add a `reportSilentFallback` call on every error branch (404 / 401 / 500) so a row-mismatch or auth desync surfaces in Sentry instead of being a silent JSON 4xx. Add a Sentry breadcrumb on the success path with `{ conversationId, count: messages.length }` so the H1 hypothesis is observable post-deploy.
+- **`apps/web-platform/server/api-messages.ts`** — add a `reportSilentFallback` call on every error branch (401 missing-auth at line 19, 401 invalid-token at line 31, 404 conversation-not-found at line 49, 500 messages-load-failed at line 62). Import: `import { reportSilentFallback } from "@/server/observability";` (sibling pattern — `lookup-conversation-for-path.ts` line 6 already does this). Add a Sentry breadcrumb on the success path before `res.end(...)` at line 69: `Sentry.addBreadcrumb({ category: "kb-chat", message: "history-fetch-success", data: { conversationId, count: messages?.length ?? 0 } })` (requires `import * as Sentry from "@sentry/nextjs"` — also a sibling pattern from `server/index.ts` line 5). The breadcrumb makes H1 (row mismatch / 0-row hit) observable in prod without needing a manual repro.
 - **`apps/web-platform/components/kb/kb-chat-trigger.tsx`** — verify the label and dot logic at line 54-55 is correct. No code change expected — bug is in the upstream `messageCount` propagation, not in the trigger's branching. Add a comment pointing to `useKbLayoutState`'s thread-info prefetch as the source of truth for `messageCount` when the panel is closed.
 
 ## Files to Create
@@ -127,11 +149,167 @@ NOT applicable — the failing call is a same-origin HTTP fetch from the browser
 
 ### Phase 2 — GREEN (minimal fix)
 
-- T3.1 — `ws-client.ts`: replace both `console.warn` calls in the two history-fetch effects with `reportSilentFallback`. Confirm import path of `reportSilentFallback` (likely `@/server/observability` — but `ws-client.ts` runs in the browser, so the client-safe variant is needed; verify by reading the existing usage from a sibling client module via `rg "reportSilentFallback" apps/web-platform/lib/ apps/web-platform/components/`). If no client-safe wrapper exists, add `Sentry.captureException` directly with a `tags: { feature: "kb-chat", op: "history-fetch-failed" }` shape.
-- T3.2 — `ws-client.ts`: introduce `historyLoading: boolean` state, set true at fetch-start, false at fetch-settle (success OR error OR abort). Return it from the hook.
-- T3.3 — `chat-surface.tsx`: extend the empty-state placeholder guard at line 468: `messages.length === 0 && !isClassifying && !lastError && !historyLoading`. Skip the `onMessageCountChange?.(0)` call when `realConversationId` is non-null AND `messages.length === 0` (still hydrating).
-- T3.4 — `kb-chat-content.tsx`: extend `handleMessageCountChange` — ignore `0` writes when `historicalCountRef.current > 0`. Adjust the existing comparison `count > historicalCountRef.current` to also early-return on `count === 0 && historicalCountRef.current > 0`.
-- T3.5 — `api-messages.ts`: wrap each non-200 branch with `reportSilentFallback`. Add a success breadcrumb. Confirm `reportSilentFallback` imports cleanly into the custom server bundle (esbuild should handle it).
+- T3.1 — `ws-client.ts`: replace both `console.warn` / `console.error` calls in the two history-fetch effects with `reportSilentFallback`. Verified import already present at line 24: `import { reportSilentFallback } from "@/lib/client-observability";` — no new import needed. Concrete diff shape:
+
+  ```ts
+  // BEFORE (line 708)
+  if (!res.ok) {
+    console.warn(`History fetch failed for ${targetId}: ${res.status}`);
+    return null;
+  }
+
+  // AFTER
+  if (!res.ok) {
+    reportSilentFallback(null, {
+      feature: "kb-chat",
+      op: "history-fetch-failed",
+      extra: { conversationId: targetId, status: res.status },
+    });
+    return null;
+  }
+
+  // BEFORE (lines 770-771, 802-803)
+  if (err instanceof DOMException && err.name === "AbortError") return;
+  console.error("Failed to load history:", err);
+
+  // AFTER
+  if (err instanceof DOMException && err.name === "AbortError") return;
+  reportSilentFallback(err, {
+    feature: "kb-chat",
+    op: "history-fetch-error",
+    extra: { conversationId: targetId },
+  });
+  ```
+- T3.2 — `ws-client.ts`: introduce `historyLoading: boolean` state. Set `true` immediately before the fetch call in BOTH history-fetch effects (lines 754-776 and 782-808). Set `false` in a `try/finally` block so abort-rejection still settles. Add `historyLoading` to the hook return object (line 908-928). Concrete diff shape:
+
+  ```ts
+  // Add at line ~290 with other useState
+  const [historyLoading, setHistoryLoading] = useState(false);
+
+  // Effect 1 (line 754-776) — wrap inside the IIFE:
+  setHistoryLoading(true);
+  try {
+    const result = await fetchConversationHistory(conversationId, controller.signal);
+    if (!result || controller.signal.aborted) return;
+    dispatch({ type: "filter_prepend", messages: result.messages });
+    seedCostData(result.costData);
+    seedWorkflowEndedAt(result.workflowEndedAt);
+  } catch (err) {
+    if (err instanceof DOMException && err.name === "AbortError") return;
+    reportSilentFallback(err, { feature: "kb-chat", op: "history-fetch-error", extra: { conversationId } });
+  } finally {
+    if (!controller.signal.aborted) setHistoryLoading(false);
+  }
+  // Same shape for Effect 2 (resume path).
+
+  // Return value (line ~927):
+  return { ..., historyLoading };
+  ```
+
+  Replace `mountedRef.current` checks at lines 761, 792 with `controller.signal.aborted` (already in scope, deterministic, not subject to React strict-mode double-mount).
+- T3.3 — `chat-surface.tsx`: destructure `historyLoading` from `useWebSocket(conversationId)` (line 184-204 of chat-surface.tsx — add after `workflowEndedAt`). Extend the empty-state placeholder guard at line 468:
+
+  ```tsx
+  // BEFORE
+  {messages.length === 0 && !isClassifying && !lastError && (
+
+  // AFTER
+  {messages.length === 0 && !isClassifying && !lastError && !historyLoading && (
+  ```
+
+  Skip the `onMessageCountChange?.(0)` overwrite while still hydrating. Replace effect at line 281-283:
+
+  ```tsx
+  // BEFORE
+  useEffect(() => {
+    onMessageCountChange?.(messages.length);
+  }, [messages.length, onMessageCountChange]);
+
+  // AFTER
+  useEffect(() => {
+    // While history is still loading or has not yet returned for a known
+    // realConversationId, do not overwrite the prefetched messageCount with 0.
+    // useKbLayoutState seeds messageCount via /api/chat/thread-info before the
+    // sidebar mounts; clobbering with 0 here flips the trigger label back to
+    // "Ask about this document" until history fetch resolves (race H3).
+    if (messages.length === 0 && (historyLoading || realConversationId)) return;
+    onMessageCountChange?.(messages.length);
+  }, [messages.length, onMessageCountChange, historyLoading, realConversationId]);
+  ```
+- T3.4 — `kb-chat-content.tsx`: extend `handleMessageCountChange` (line 128-136) — ignore `0` writes when `historicalCountRef.current > 0`:
+
+  ```tsx
+  // BEFORE
+  const handleMessageCountChange = useCallback(
+    (count: number) => {
+      setMessageCount(count);
+      if (count > historicalCountRef.current) {
+        setResumedBanner(null);
+      }
+    },
+    [setMessageCount],
+  );
+
+  // AFTER
+  const handleMessageCountChange = useCallback(
+    (count: number) => {
+      // Belt-and-suspenders for race H3: if we already know there are N
+      // historical messages (set by handleThreadResumed), do NOT clobber
+      // KbChatContext.messageCount back to 0 — even if ChatSurface fires
+      // a transient onMessageCountChange(0) during its mount-time effect.
+      if (count === 0 && historicalCountRef.current > 0) return;
+      setMessageCount(count);
+      if (count > historicalCountRef.current) {
+        setResumedBanner(null);
+      }
+    },
+    [setMessageCount],
+  );
+  ```
+- T3.5 — `api-messages.ts`: wrap each non-200 branch with `reportSilentFallback`. Add a success breadcrumb. Verified imports already work in the custom-server bundle (sibling `lookup-conversation-for-path.ts` already imports `@/server/observability`; `server/index.ts` imports `@sentry/nextjs`). Concrete diff shape:
+
+  ```ts
+  import * as Sentry from "@sentry/nextjs";
+  import { reportSilentFallback } from "@/server/observability";
+
+  // 401 missing-auth (line 19-22)
+  reportSilentFallback(null, {
+    feature: "kb-chat",
+    op: "history-fetch-401-missing-auth",
+    extra: { conversationId },
+  });
+
+  // 401 invalid-token (line 31-34)
+  reportSilentFallback(authErr, {
+    feature: "kb-chat",
+    op: "history-fetch-401-invalid-token",
+    extra: { conversationId },
+  });
+
+  // 404 conversation-not-found (line 49-52)
+  reportSilentFallback(convErr, {
+    feature: "kb-chat",
+    op: "history-fetch-404-not-owned-or-missing",
+    extra: { conversationId, userId: user.id },
+  });
+
+  // 500 messages-load-failed (line 62-66)
+  reportSilentFallback(msgErr, {
+    feature: "kb-chat",
+    op: "history-fetch-500-messages-load",
+    extra: { conversationId },
+  });
+
+  // Success path — before res.end at line 69
+  Sentry.addBreadcrumb({
+    category: "kb-chat",
+    message: "history-fetch-success",
+    data: { conversationId, count: messages?.length ?? 0 },
+    level: "info",
+  });
+  ```
+
+  Note: `reportSilentFallback`'s first arg is the `Error | null`; the `feature` / `op` / `extra` shape is per `@/server/observability` line 25 `SilentFallbackOptions`.
 
 ### Phase 3 — verify + REFACTOR
 
@@ -147,6 +325,99 @@ Existing test runner is **vitest** (per `package.json` `test` script: `vitest`).
 **Mocks:** `WebSocket` mock from `ws-client-resume-history.test.tsx` (lines 17-46) is reusable verbatim. `fetch` mock pattern from same file (lines 67-72). Supabase mock from same file (lines 5-14).
 
 No new test framework; no new dev dep. Test discovery is by glob `**/*.test.{ts,tsx}` so new files in `apps/web-platform/test/` are auto-picked-up.
+
+## Research Insights
+
+### React 19 Strict-Mode Effect Semantics
+
+In `next dev` mode, every effect runs `mount → cleanup → mount` to surface cleanup-correctness bugs (verified: `package.json` line lists `"react": "^19.1.0"`). Pattern: closure-captured refs read across the cleanup boundary are unreliable. Canonical fix is `AbortController` + `signal.aborted` because the controller is per-effect-instance — there is exactly one signal per scheduled effect, and the cleanup aborts that signal before the second mount creates a fresh one.
+
+```ts
+// Anti-pattern (race-prone in strict mode):
+const mountedRef = useRef(true);
+useEffect(() => {
+  mountedRef.current = true;
+  fetch(url).then(r => {
+    if (!mountedRef.current) return; // race: ref could be true again after re-mount
+    setState(r);
+  });
+  return () => { mountedRef.current = false; };
+}, [...]);
+
+// Pattern (deterministic):
+useEffect(() => {
+  const c = new AbortController();
+  fetch(url, { signal: c.signal }).then(r => {
+    if (c.signal.aborted) return; // deterministic: signal is per-effect-instance
+    setState(r);
+  });
+  return () => c.abort();
+}, [...]);
+```
+
+`ws-client.ts` already uses `AbortController` for the fetch lifecycle — the `mountedRef` check on top of it is redundant defensive code that introduces the very race it tries to prevent.
+
+### `reportSilentFallback` Surface
+
+`@/lib/client-observability` (browser-safe variant) — used by `lib/supabase/client.ts`, `lib/format-assistant-text.ts`, `components/error-boundary-view.tsx`, `lib/sandbox-path-patterns.ts`, `lib/ws-known-types.ts`, `lib/ws-client.ts` (already imported, just unused for the history-fetch path).
+
+`@/server/observability` (server-side variant, mirrors to pino + Sentry) — used by `server/lookup-conversation-for-path.ts` (sibling), `server/ws-handler.ts`, `server/agent-runner.ts`, etc.
+
+Both share the `(err, { feature, op, extra })` signature. The browser variant uses `Sentry.captureException` from `@sentry/nextjs`'s client SDK; the server variant adds a pino structured log line via `@/server/logger`. Both are guaranteed to surface in Sentry per AGENTS.md `cq-silent-fallback-must-mirror-to-sentry`.
+
+### `useReducer` `filter_prepend` Action — Verified Correct
+
+`apps/web-platform/lib/ws-client.ts:202-206`:
+
+```ts
+case "filter_prepend": {
+  const existingIds = new Set(state.messages.map(m => m.id));
+  const unique = action.messages.filter(m => !existingIds.has(m.id));
+  return { ...state, messages: [...unique, ...state.messages] };
+}
+```
+
+Properties verified by `apps/web-platform/test/ws-client-resume-history.test.tsx`:
+
+- Chronological order preserved (oldest first) — line 138-162 test case.
+- Deduplication against in-flight stream events — line 164-200 test case.
+- Cost data + `workflowEndedAt` seeded with functional updaters so racing WS events don't clobber.
+
+No reducer change needed.
+
+### Vitest + `@testing-library/react` Pattern
+
+Test fixtures from `apps/web-platform/test/ws-client-resume-history.test.tsx`:
+
+- `MockWebSocket` (line 27-46) — captures the WS instance for `serverSend` simulation.
+- `fetchSpy` via `vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify(...)))` (line 67-72).
+- Supabase mock: `vi.mock("@/lib/supabase/client", ...)` (line 10-14).
+- Helper `connectAndAuth(result)` (line 90-103) — drives WS to `connected` + `auth_ok`.
+
+The new test files (`kb-chat-resume-hydration.test.tsx`, `kb-chat-trigger.test.tsx`, `api-messages-handler.test.ts`) reuse these fixtures verbatim. No new mocking infrastructure.
+
+### Empty-State Placeholder Coordination
+
+The user-visible empty state ("Send a message to get started") at `chat-surface.tsx:468-474` currently gates on three signals:
+
+```tsx
+{messages.length === 0 && !isClassifying && !lastError && (
+  <div>...Send a message...</div>
+)}
+```
+
+The fourth signal (`!historyLoading`) closes the FOUC window where the placeholder briefly renders during the round-trip. This matches the established Soleur pattern — see `cq-eleventy-critical-css-screenshot-gate` for a sibling FOUC-aware gate. No screenshot test required here (different surface, different failure mode), but a vitest `waitFor` assertion that the placeholder NEVER appears between mount and history-resolution is sufficient.
+
+### Diagnostic Observability (Phase 0 Replacement)
+
+After the Sentry mirrors land, manual reproduction (Phase 0 T1.1-T1.3) becomes optional. Filter: `feature:kb-chat AND (op:history-fetch-failed OR op:history-fetch-error OR op:history-fetch-404-not-owned-or-missing OR op:history-fetch-500-messages-load)` over a 24h window post-deploy. Non-zero count localizes the root cause:
+
+- `op:history-fetch-failed` with status=404 → H4 (custom-server route bypass).
+- `op:history-fetch-failed` with status=500 → H1 (DB error in lookup or messages query).
+- `op:history-fetch-success` breadcrumb with `count=0` AND user reports messages missing → H1 confirmed (row mismatch — different conversation row resolved than the one referenced by id).
+- `op:history-fetch-error` with `AbortError` filtered out → H2 (network or React-strict-mode race; the `controller.signal.aborted` switch removes this entirely).
+
+If Sentry shows zero hits but the user still reports the bug, H3 (messageCount overwrite) is the residual cause and is fully addressed by T3.3 + T3.4.
 
 ## Sharp Edges
 
