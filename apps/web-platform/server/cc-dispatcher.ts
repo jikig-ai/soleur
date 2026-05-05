@@ -708,24 +708,20 @@ export async function dispatchSoleurGo(
 
   const runner = getSoleurGoRunner(sendToClient);
 
-  // Resolve workspace path ONCE per dispatch so the onToolUse closure can
-  // call `buildToolLabel(name, input, workspacePath)` and produce verbose,
-  // path-aware labels (e.g., `Reading Au Chat Potan.pdf...`) instead of the
-  // bare SDK tool name (`Read`). Mirrors the legacy `agent-runner.ts`
-  // emitter (~line 1041) which also threads `workspacePath` into label
-  // construction. The per-process memo in `fetchUserWorkspacePath` keeps
-  // the cost at one Supabase round-trip per (process, user) lifetime; warm
-  // cache hits are O(1). On failure (workspace not provisioned, transient
-  // Supabase error), fall back to `undefined` — `buildToolLabel` still
-  // produces the verbose label, just without the workspace-prefix scrub.
-  // Mirror the failure to Sentry per `cq-silent-fallback-must-mirror-to-sentry`.
+  // Resolve workspace path once per dispatch so onToolUse can call
+  // `buildToolLabel(name, input, workspacePath)`. Mirrors agent-runner.ts.
+  // The per-process memo in `fetchUserWorkspacePath` keeps cost at one
+  // Supabase RTT per (process, user) lifetime. On failure, fall back to
+  // `undefined` — `buildToolLabel` still produces the verbose label
+  // (just without the workspace-prefix scrub) and the failure is mirrored
+  // to Sentry per `cq-silent-fallback-must-mirror-to-sentry`.
   let workspacePath: string | undefined;
   try {
     workspacePath = await fetchUserWorkspacePath(userId);
   } catch (err) {
     reportSilentFallback(err, {
-      feature: "command-center",
-      op: "cc-dispatcher-workspace-resolve",
+      feature: "cc-dispatcher",
+      op: "workspace-resolve",
       extra: { userId, conversationId },
     });
     workspacePath = undefined;
@@ -741,6 +737,10 @@ export async function dispatchSoleurGo(
       });
     },
     onToolUse: (block) => {
+      // The raw SDK tool name (block.name) is intentionally NOT placed on
+      // the wire — see #2138 (PR #2115 review): exposing the internal
+      // tool taxonomy via browser devtools is an information-disclosure
+      // concern. agent-runner.ts:1041-1052 enforces the same rule.
       sendToClient(userId, {
         type: "tool_use",
         leaderId: CC_ROUTER_LEADER_ID,
