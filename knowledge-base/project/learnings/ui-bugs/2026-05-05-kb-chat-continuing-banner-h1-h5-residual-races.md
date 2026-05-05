@@ -67,3 +67,15 @@ Three surgical edits in `ws-client.ts` + a level bump in `api-messages.ts`:
 - Eager-factory mock class: `2026-04-17-vitest-mockReturnValue-eager-factory-async-event-race.md`
 - RED-test-must-simulate-preconditions: `2026-04-22-red-test-must-simulate-suts-preconditions.md`
 - AGENTS.md `cq-silent-fallback-must-mirror-to-sentry` — the rule H1 fix instantiates.
+
+## Session Errors
+
+- **Vitest matcher reported "Number of calls: 0" for a spy that WAS called.** `expect(fetchSpy).toHaveBeenCalledWith(url, expect.objectContaining({signal: expect.any(AbortSignal)}))` failed with "Number of calls: 0" while `console.log(fetchSpy.mock.calls)` showed one call. **Recovery:** swapped the assertion to `fetchSpy.mock.calls.some(([url]) => url === expected)`. **Prevention:** when a vitest matcher fails with a confusingly absolute "Number of calls: 0", use the spy's `.mock.calls` array directly to disambiguate matcher mismatch from spy-not-called. Discoverable via clear failure mode; not rule-worthy.
+
+- **Plan prescribed adding code that already existed.** The plan (post-deepen) said add `if (!mountedRef.current) return;` at `ws-client.ts:430`, but that guard was added by precursor PR #3237. **Recovery:** read the actual source file, narrowed the new work to the breadcrumb (the new behavior). **Prevention:** already covered by `hr-when-a-plan-specifies-relative-paths-e-g` — verify plan offsets via grep BEFORE implementing. The Pre-Implementation Verification block in the plan would have caught this if I had checked H5's existing-state separately from line-number-only verification.
+
+- **Bash tool CWD non-persistence between calls.** First `cd apps/web-platform && ./node_modules/.bin/vitest` failed because the prior call had set CWD elsewhere. **Recovery:** chained `cd <worktree-abs-path>/apps/web-platform && <cmd>` in single calls. **Prevention:** already in AGENTS.md as a code-quality bullet; this session reinforces it.
+
+- **`next lint` interactive prompt hang.** Project has no eslint config; `next lint` opened an interactive setup wizard that blocks CI. **Recovery:** treated lint as not-a-gate (typecheck via `tsc --noEmit` is the actual code-quality gate). **Prevention:** pre-existing project condition (Next 15 deprecated `next lint`); not introduced by this PR. Actionable as a separate cleanup if lint is to be re-enabled.
+
+- **Scope-out criterion mislabeled, code-simplicity-reviewer DISSENTed.** Filed Sentry MCP retrieval gap as `architectural-pivot` when `pre-existing-unrelated` was the correct criterion (the gap predates this PR; fix is additive tooling, not a pattern pivot). **Recovery:** dropped the filing (DISSENT flips disposition to fix-inline; for a tooling-gap that can't be fixed inline, dropping is the safe default; agent-native finding stands as a recommendation in the review summary). **Prevention:** when filing review scope-outs, distinguish the four criteria carefully — `architectural-pivot` is "we have a pattern and choose not to change it," `pre-existing-unrelated` is "this gap predates the PR." The triage downstream of each label is different; mislabeling routes work to the wrong queue.
