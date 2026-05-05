@@ -60,6 +60,7 @@ tmp/
 !plugins/soleur/docs/screenshots/*.png
 !apps/web-platform/public/icons/*.png
 !knowledge-base/product/design/**/screenshots/*.png
+!knowledge-base/product/design/**/*.png
 !knowledge-base/engineering/ops/runbooks/screenshots/**/*.png
 !knowledge-base/settings/team-icons/*.png
 !knowledge-base/settings/team-icons/*.svg

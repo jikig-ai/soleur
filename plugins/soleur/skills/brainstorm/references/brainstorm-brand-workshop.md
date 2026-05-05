@@ -72,7 +72,7 @@
    a. **Hand off to ux-design-lead** with the new tokens, the existing palette (for paired comparison), and a target surface set:
 
       ```
-      Task ux-design-lead("Render representative mockups applying <new tokens> to: primary button (default/hover/disabled), card surface with text hierarchy, form input (default/focus/error), navigation bar, modal/dialog, and one error state. If both light and dark palettes exist, render both side-by-side. Output is a .pen file in knowledge-base/marketing/brand-mockups/<topic>-<YYYY-MM-DD>/ produced via Pencil MCP in headless mode — IDE/Desktop modes are blocked by step 4.5.0. Pencil is the founder's standard design surface and is the required primary path. The agent must NOT fall back to Playwright/HTML mockups; if the headless adapter fails mid-run, halt and surface the error to the founder.")
+      Task ux-design-lead("Render representative mockups applying <new tokens> to: primary button (default/hover/disabled), card surface with text hierarchy, form input (default/focus/error), navigation bar, modal/dialog, and one error state. If both light and dark palettes exist, render both side-by-side. Output is a .pen file in knowledge-base/product/design/brand/<topic>-<YYYY-MM-DD>/ produced via Pencil MCP in headless mode — IDE/Desktop modes are blocked by step 4.5.0. Pencil is the founder's standard design surface and is the required primary path. The agent must NOT fall back to Playwright/HTML mockups; if the headless adapter fails mid-run, halt and surface the error to the founder.")
       ```
 
    b. **Surface mockups to the founder** via AskUserQuestion with options: `Approve`, `Request changes`, `Reject`. Include the mockup file paths in the question body so the founder can open them.
@@ -102,7 +102,7 @@
 
    Document: none (brand workshop)
    Brand guide: knowledge-base/marketing/brand-guide.md
-   Mockups: knowledge-base/marketing/brand-mockups/<topic>-<YYYY-MM-DD>/ (if Visual Direction changed)
+   Mockups: knowledge-base/product/design/brand/<topic>-<YYYY-MM-DD>/ (if Visual Direction changed)
    Founder approval: <date> on mockup set <path> (if Visual Direction changed)
    Issue: #N (using existing) | #N (created)
    Branch: feat-<name> (if worktree created)
