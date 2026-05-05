@@ -824,8 +824,52 @@ export async function dispatchSoleurGo(
       });
     });
 
+  // Per-turn assistant text accumulator. Reset to "" inside
+  // `saveAssistantMessage` after each turn boundary, so a turn that ends in
+  // `result` with zero text correctly skips the insert without consuming the
+  // previous turn's data. Mirrors the pattern at `agent-runner.ts:1079` so
+  // `api-messages.ts` returns BOTH user and assistant rows on resume —
+  // without this the cc path's history is user-only and the resumed thread
+  // re-renders the routing chip as if the question were unanswered.
+  let accumulatedAssistantText = "";
+
+  async function saveAssistantMessage(): Promise<void> {
+    // Snapshot-then-reset must precede `await` so a turn N+1 `onText` cannot
+    // mutate `fullText` while this insert is in flight (single async loop
+    // serializes onText/onTextTurnEnd, but the await yields the microtask).
+    const fullText = accumulatedAssistantText;
+    accumulatedAssistantText = "";
+    if (!fullText) return;
+
+    const { error } = await supabase().from("messages").insert({
+      id: randomUUID(),
+      conversation_id: conversationId,
+      role: "assistant",
+      content: fullText,
+      tool_calls: null,
+      leader_id: CC_ROUTER_LEADER_ID,
+    });
+    if (error) {
+      // Route through `mirrorWithDebounce` (per-(userId, errorClass) 5-min TTL)
+      // — a misconfigured Supabase RLS for one user could otherwise emit one
+      // Sentry event per assistant turn (10 turns/conv × 100 active convs =
+      // 1000 events/hr).
+      mirrorWithDebounce(
+        error,
+        {
+          feature: "cc-dispatcher",
+          op: "save-assistant-message-failed",
+          extra: { userId, conversationId, length: fullText.length },
+        },
+        userId,
+        "save-assistant-message-failed",
+      );
+    }
+  }
+
   const events: DispatchEvents = {
     onText: (text) => {
+      accumulatedAssistantText += text;
       sendToClient(userId, {
         type: "stream",
         content: text,
@@ -849,6 +893,8 @@ export async function dispatchSoleurGo(
       );
     },
     onTextTurnEnd: () => {
+      // Fire-and-forget — user already saw the streamed text; helper mirrors on failure.
+      void saveAssistantMessage();
       // Per-turn boundary → terminal stream event for the cc_router bubble.
       // Without this, the client reducer keeps the bubble in
       // `state: "streaming"` (raw `whitespace-pre-wrap`), so markdown
