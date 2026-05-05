@@ -54,15 +54,39 @@ brand_survival_threshold: single-user incident
 - **CSP regression vector.** No-FOUC inline script in `<head>` could break CSP nonce policy app-wide if implemented without nonce passthrough. CSP test required in plan.
 - **Sign-off:** CPO + CLO + CTO + `user-impact-reviewer` at plan ready.
 
+## UI Specification (founder-approved, design pass 2026-05-05)
+
+Initial mockups produced via Pencil MCP (`apps/web-platform/design/exports/theme-toggle-{forge,radiance}.png`). Founder reviewed both palettes and approved placement. Iteration request captured below; the iteration .pen was destroyed by a Pencil MCP silent-drop incident (#3274) before re-export, so the iteration is captured here in writing rather than as a fresh mockup. The original PNGs remain valid for placement and segment treatment; only labels/visibility differ.
+
+**Placement.** Sidebar footer of the dashboard, directly above the email + Sign-out row. Anchored under a `THEME` ALL-CAPS label (Inter 10/600 letter-spacing 2, tertiary text). Total wrap height ≈70px; does not push the email row off-screen at the existing sidebar height.
+
+**Control.** 3-way segmented control, equal-width thirds, 32px tall, sharp corners (0px radius — brand "architectural precision"). 1px outer gold-grey border. Sized to fill the 192px sidebar interior.
+
+**Segments.** Three segments, icons-only by default — **NO visible text labels.**
+
+| Order | Label (tooltip + aria-label) | Icon (Lucide) |
+|---|---|---|
+| 1 | **Dark** | `flame` |
+| 2 | **Light** | `sun` |
+| 3 | **System** | `monitor` |
+
+**States.** Inactive segment: transparent over toggle background, muted icon color (Forge `#6A6A6A` / Radiance `#6F6353`). Active segment: next surface tint fill (Forge `#1C1C1C` / Radiance `#EDE4CC`), 1px gold stroke (Forge `#C9A962` / Radiance `#9B8857`), gold icon.
+
+**Hover.** Show the label as a tooltip chip above the segment. Style matches the active-segment treatment: 1px gold stroke, surface tint background, primary text color. Use the platform-native `<button title>` only as a fallback for non-pointer devices; the visible chip is the primary affordance.
+
+**Accessibility.** Each segment is a `<button>` with `aria-pressed` reflecting active state and `aria-label` set to the full label ("Dark theme", "Light theme", "Follow system theme"). The chosen theme name announces via `aria-live` polite when changed.
+
 ## Acceptance Criteria
 
-Inherited from issue #3232:
+Inherited from issue #3232 + the UI spec above:
 
 - [ ] CSS theme tokens introduced; hardcoded `bg-neutral-950` / `text-neutral-100` replaced with semantic tokens (scope decided at plan time).
-- [ ] `ThemeProvider` (or equivalent) added; respects `prefers-color-scheme` for "system".
-- [ ] Persistence layer chosen (defaults to localStorage; DB only with security-sentinel review).
-- [ ] No-FOUC inline script added (CSP-nonce-compatible).
-- [ ] `viewport.themeColor` updated dynamically.
-- [ ] Toggle UI placed on the main page.
+- [ ] `ThemeProvider` (or equivalent) added; respects `prefers-color-scheme` for "System" and reacts to live OS-level changes.
+- [ ] Persistence: localStorage by default. DB only with `security-sentinel` + `data-integrity-guardian` review.
+- [ ] No-FOUC inline script added (CSP-nonce-compatible) — verified on `/`, `/auth/*`, payment surfaces.
+- [ ] `viewport.themeColor` updated dynamically per resolved theme.
+- [ ] 3-way segmented control rendered in sidebar footer with the three segments in order Dark / Light / System (no visible labels, hover tooltips show labels).
+- [ ] Lucide icons (`flame`, `sun`, `monitor`) at 12px inside 32px-tall segments.
+- [ ] aria-pressed + aria-label on each segment; aria-live announce on change.
 - [ ] CSP regression test passes.
 - [ ] `user-impact-reviewer` signs off.
