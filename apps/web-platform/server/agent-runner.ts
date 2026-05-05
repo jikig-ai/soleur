@@ -582,10 +582,19 @@ export async function startAgentSession(
       });
     }
 
-    // Build system prompt for the domain leader
-    let systemPrompt = `You are the ${leader.title} (${leader.name}) for this user's business. ${leader.description}
+    // Build system prompt for the domain leader.
+    //
+    // Phase 2B (#3292/#3293): leader-side parity for the artifact-frame-leads
+    // positional fix. The leader identity opener stays the absolute-first
+    // sentence (a leader frame that opens with "I am viewing this PDF"
+    // before establishing "you are the CPO" is incoherent). The artifact
+    // directive — when present — lands BETWEEN the identity opener and
+    // the rest of the baseline (the tools/paths/AskUserQuestion section
+    // and the READ_TOOL_PDF_CAPABILITY_DIRECTIVE constant). On the no-
+    // context path the assembly is identical to the pre-Phase-2 baseline.
+    const leaderIdentityOpener = `You are the ${leader.title} (${leader.name}) for this user's business. ${leader.description}`;
 
-Use the tools available to you to read and write to the knowledge-base directory. Files are relative to the current working directory.
+    const leaderBaselineRest = `Use the tools available to you to read and write to the knowledge-base directory. Files are relative to the current working directory.
 
 Never mention file system paths, workspace paths, or internal directory structures in your responses — refer to files by their knowledge-base-relative path (e.g. "overview/vision.md" not "/workspaces/.../knowledge-base/overview/vision.md").
 
@@ -601,8 +610,10 @@ ${READ_TOOL_PDF_CAPABILITY_DIRECTIVE}`;
     const CONTEXT_NO_ASK = "Do not ask which document the user is referring to — it is the document described above.";
     const MAX_INLINE_BYTES = 50_000; // ~12-15K tokens — keeps cost bounded
 
+    let artifactDirective = "";
+
     if (context?.content) {
-      systemPrompt += `\n\nThe user is currently viewing: ${context.path}\n\nArtifact content:\n${context.content}\n\nAnswer in the context of this artifact. ${CONTEXT_NO_ASK}`;
+      artifactDirective = `The user is currently viewing: ${context.path}\n\nArtifact content:\n${context.content}\n\nAnswer in the context of this artifact. ${CONTEXT_NO_ASK}`;
     } else if (context?.path) {
       const fullPath = path.join(workspacePath, context.path);
       const isPdf = context.path.toLowerCase().endsWith(".pdf");
@@ -612,24 +623,35 @@ ${READ_TOOL_PDF_CAPABILITY_DIRECTIVE}`;
         // Path traversal attempt — inject nothing, log warning
         log.warn({ path: context.path, userId }, "Context path failed workspace validation");
       } else if (isPdf) {
-        // PDFs can't be read as text — instruct agent assertively
-        systemPrompt += `\n\nThe user is currently viewing the PDF document: ${context.path}\n\nThis is a PDF file. Use the Read tool to read "${context.path}" — it supports PDF files. Answer all questions in the context of this document. ${CONTEXT_NO_ASK}`;
+        // PDFs can't be read as text — instruct agent assertively.
+        // Phase 2C (#3292/#3293): named-tool exclusion list parity with
+        // soleur-go-runner.ts. Lock-step text required (modulo
+        // ${context.path} vs ${safeArtifactPath} interpolation tokens).
+        // List is bounded; do NOT extend ad-hoc — file a GitHub issue.
+        artifactDirective = `The user is currently viewing the PDF document: ${context.path}\n\nThis is a PDF file. Use the Read tool to read "${context.path}" — it supports PDF files end-to-end without external binaries. Do NOT call \`pdftotext\`, \`pdfplumber\`, \`pdf-parse\`, \`PyPDF2\`, \`PyMuPDF\`, \`fitz\`, \`apt-get\`, \`pip3 install\`, or shell-installation commands — they are unnecessary and will fail. Answer all questions in the context of this document. ${CONTEXT_NO_ASK}`;
       } else {
         // Attempt to read the file server-side and inject content
         try {
           const content = await readFile(fullPath, "utf-8");
           if (content.length <= MAX_INLINE_BYTES) {
-            systemPrompt += `\n\nThe user is currently viewing: ${context.path}\n\nDocument content:\n${content}\n\nAnswer in the context of this document. ${CONTEXT_NO_ASK}`;
+            artifactDirective = `The user is currently viewing: ${context.path}\n\nDocument content:\n${content}\n\nAnswer in the context of this document. ${CONTEXT_NO_ASK}`;
           } else {
             // File too large to inline — instruct agent to Read it
-            systemPrompt += `\n\nThe user is currently viewing: ${context.path} (${Math.round(content.length / 1024)}KB)\n\nThis file is too large to include inline. Use the Read tool to read "${context.path}" and answer questions in its context. ${CONTEXT_NO_ASK}`;
+            artifactDirective = `The user is currently viewing: ${context.path} (${Math.round(content.length / 1024)}KB)\n\nThis file is too large to include inline. Use the Read tool to read "${context.path}" and answer questions in its context. ${CONTEXT_NO_ASK}`;
           }
         } catch {
           // Read failed — fall back to assertive Read instruction
-          systemPrompt += `\n\nThe user is currently viewing: ${context.path}\n\nRead this file first using the Read tool, then answer questions in the context of this document. Focus on the document content — do not search the knowledge-base directory for other files unless the user specifically asks. ${CONTEXT_NO_ASK}`;
+          artifactDirective = `The user is currently viewing: ${context.path}\n\nRead this file first using the Read tool, then answer questions in the context of this document. Focus on the document content — do not search the knowledge-base directory for other files unless the user specifically asks. ${CONTEXT_NO_ASK}`;
         }
       }
     }
+
+    // Assemble: identity opener → artifact frame (when present) → baseline-rest.
+    let systemPrompt = leaderIdentityOpener;
+    if (artifactDirective.length > 0) {
+      systemPrompt += `\n\n${artifactDirective}`;
+    }
+    systemPrompt += `\n\n${leaderBaselineRest}`;
 
     // CPO-scoped: enhance minimal vision.md with structured sections
     if (effectiveLeaderId === "cpo") {

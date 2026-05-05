@@ -82,4 +82,77 @@ describe("READ_TOOL_PDF_CAPABILITY_DIRECTIVE (load-bearing baseline directive �
     expect(prompt).toContain(READ_TOOL_PDF_CAPABILITY_DIRECTIVE); // baseline
     expect(prompt).toContain("currently viewing the PDF document"); // gated
   });
+
+  // Scenario 6 — Phase 2B positional pin (Concierge side, #3292/#3293).
+  // Phase 1 breadcrumbs (PR #3288) confirmed the directive WAS reaching
+  // the model but landed AFTER the router scaffolding. The fix moves the
+  // artifact frame to the FRONT of the system prompt when an artifact is
+  // present. This test pins that ordering with absolute indexOf
+  // comparisons — a future refactor that interleaves frames will fail.
+  it("Phase 2B: gated PDF directive lands BEFORE baseline router scaffolding when documentKind: pdf", () => {
+    const prompt = buildSoleurGoSystemPrompt({
+      artifactPath: "knowledge-base/test-fixtures/book.pdf",
+      documentKind: "pdf",
+    });
+
+    const gatedIdx = prompt.indexOf("currently viewing the PDF document");
+    const dispatchIdx = prompt.indexOf("Dispatch via the /soleur:go skill");
+    const baselineIdx = prompt.indexOf(READ_TOOL_PDF_CAPABILITY_DIRECTIVE);
+
+    expect(gatedIdx).toBeGreaterThanOrEqual(0);
+    expect(dispatchIdx).toBeGreaterThan(0);
+    expect(baselineIdx).toBeGreaterThan(0);
+    // Artifact frame leads the dispatch instruction.
+    expect(gatedIdx).toBeLessThan(dispatchIdx);
+    // Belt-and-suspenders: artifact frame leads even the baseline PDF-
+    // capability constant (the entire baseline router scaffolding).
+    expect(gatedIdx).toBeLessThan(baselineIdx);
+  });
+
+  // Scenario 7 — Phase 2C exclusion-list pin (Concierge side, #3292/#3293).
+  // The model's training prior on `pdftotext` / `pdfplumber` / `pdf-parse`
+  // / `PyPDF2` / `PyMuPDF` / `apt-get install poppler-utils` overrode the
+  // purely positive directive in production (Sentry events 2026-05-05
+  // 18:50:43–18:51:21Z, conversationId 73a6ede4 — every binary appeared
+  // in the captured cascade). The gated directive must explicitly name
+  // the measured binaries to override the tool-class prior.
+  it("Phase 2C: gated PDF directive names the 5 measured binaries plus install verbs", () => {
+    const prompt = buildSoleurGoSystemPrompt({
+      artifactPath: "knowledge-base/test-fixtures/book.pdf",
+      documentKind: "pdf",
+    });
+
+    // 5 named binaries observed in the production cascade.
+    expect(prompt).toContain("pdftotext");
+    expect(prompt).toContain("pdfplumber");
+    expect(prompt).toContain("pdf-parse");
+    expect(prompt).toContain("PyPDF2");
+    expect(prompt).toContain("PyMuPDF");
+    // Install-cascade verbs.
+    expect(prompt).toContain("apt-get");
+    expect(prompt).toContain("pip3 install");
+  });
+
+  // Scenario 8 — anti-priming guard re-affirmation on the BASELINE constant.
+  // Phase 2C's exclusion list is intentionally scoped to the GATED inline
+  // branch (soleur-go-runner.ts ~L519). It must NOT leak into the
+  // READ_TOOL_PDF_CAPABILITY_DIRECTIVE constant — the constant is the
+  // capability declaration that fires on every chat, including those
+  // without a "currently viewing" PDF. A 5-item negation list in the
+  // baseline becomes a budget tax that describes tools instead of
+  // declaring capabilities (per the 2026-05-05 baseline-prompt
+  // best-practices learning). Belt-and-suspenders to Scenario 2.
+  it("Phase 2C: BASELINE constant does not contain the gated exclusion-list binaries (no leak)", () => {
+    expect(READ_TOOL_PDF_CAPABILITY_DIRECTIVE).not.toContain("pdftotext");
+    expect(READ_TOOL_PDF_CAPABILITY_DIRECTIVE).not.toContain("pdfplumber");
+    expect(READ_TOOL_PDF_CAPABILITY_DIRECTIVE).not.toContain("pdf-parse");
+    expect(READ_TOOL_PDF_CAPABILITY_DIRECTIVE).not.toContain("PyPDF2");
+    expect(READ_TOOL_PDF_CAPABILITY_DIRECTIVE).not.toContain("PyMuPDF");
+    expect(READ_TOOL_PDF_CAPABILITY_DIRECTIVE).not.toContain("apt-get");
+    expect(READ_TOOL_PDF_CAPABILITY_DIRECTIVE).not.toContain("pip3 install");
+    // Re-affirm Scenario 2: no negation tokens leak into the baseline.
+    expect(READ_TOOL_PDF_CAPABILITY_DIRECTIVE).not.toMatch(
+      /\b(do not|never|not installed)\b/i,
+    );
+  });
 });

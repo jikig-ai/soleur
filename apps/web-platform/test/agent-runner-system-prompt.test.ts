@@ -255,4 +255,68 @@ describe("agent-runner system prompt context injection", () => {
     const options = mockQuery.mock.calls[0][0].options;
     expect(options.systemPrompt).toContain(READ_TOOL_PDF_CAPABILITY_DIRECTIVE);
   });
+
+  // Closes #3292/#3293: Phase 2B leader-side parity. When the Concierge
+  // dispatches a PDF-attached conversation to a leader, the artifact
+  // frame must lead the leader baseline (between the identity opener
+  // and the rest of the baseline) — same positional fix as the
+  // Concierge router. The leader identity opener stays first to avoid
+  // incoherence ("I am viewing this PDF" before "you are the CPO" is
+  // not a coherent leader frame).
+  test("leader system prompt with PDF context: artifact frame lands BEFORE baseline directive, AFTER identity opener", async () => {
+    setupSupabaseMock(BASE_USER_DATA);
+    setupQueryMockImmediate();
+
+    const context: ConversationContext = {
+      path: "knowledge-base/test-fixtures/book.pdf",
+      type: "kb-viewer",
+    };
+
+    await startAgentSession("user-1", "conv-1", "cpo", undefined, undefined, context);
+
+    const options = mockQuery.mock.calls[0][0].options;
+    const prompt: string = options.systemPrompt;
+
+    const identityIdx = prompt.indexOf("You are the");
+    const gatedIdx = prompt.indexOf("currently viewing the PDF document");
+    const baselineIdx = prompt.indexOf(READ_TOOL_PDF_CAPABILITY_DIRECTIVE);
+
+    expect(identityIdx).toBeGreaterThanOrEqual(0);
+    expect(gatedIdx).toBeGreaterThan(0);
+    expect(baselineIdx).toBeGreaterThan(0);
+    // Identity opener is always first (leader-frame coherence).
+    expect(identityIdx).toBeLessThan(gatedIdx);
+    // Artifact frame leads the baseline PDF-capability directive.
+    expect(gatedIdx).toBeLessThan(baselineIdx);
+  });
+
+  // Closes #3292/#3293: Phase 2C leader-side exclusion-list parity.
+  // The leader-side gated PDF directive (agent-runner.ts:616) must
+  // contain the same 5 measured binaries plus install verbs as the
+  // Concierge-side gated directive (soleur-go-runner.ts:519). Lock-step
+  // parity prevents the cascade from re-emerging when a PDF
+  // conversation is dispatched to a domain leader instead of the
+  // Concierge.
+  test("leader system prompt with PDF context: gated directive names the 5 measured binaries plus install verbs", async () => {
+    setupSupabaseMock(BASE_USER_DATA);
+    setupQueryMockImmediate();
+
+    const context: ConversationContext = {
+      path: "knowledge-base/test-fixtures/book.pdf",
+      type: "kb-viewer",
+    };
+
+    await startAgentSession("user-1", "conv-1", "cpo", undefined, undefined, context);
+
+    const options = mockQuery.mock.calls[0][0].options;
+    const prompt: string = options.systemPrompt;
+
+    expect(prompt).toContain("pdftotext");
+    expect(prompt).toContain("pdfplumber");
+    expect(prompt).toContain("pdf-parse");
+    expect(prompt).toContain("PyPDF2");
+    expect(prompt).toContain("PyMuPDF");
+    expect(prompt).toContain("apt-get");
+    expect(prompt).toContain("pip3 install");
+  });
 });
