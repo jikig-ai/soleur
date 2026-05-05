@@ -2,6 +2,7 @@ import { Server as HTTPServer } from "http";
 import { WebSocketServer, WebSocket } from "ws";
 import { parse } from "url";
 import { randomUUID } from "crypto";
+import { basename as pathBasename } from "path";
 
 import { KeyInvalidError, WS_CLOSE_CODES, type PlanTier, type WSMessage, type Conversation } from "@/lib/types";
 import type { ConversationContext } from "@/lib/types";
@@ -536,6 +537,78 @@ async function createConversation(
  * UPDATE so the sticky-workflow detection in the runner writes through
  * to the DB.
  */
+/**
+ * Diagnostic breadcrumb for the cc-soleur-go cold-Query construction site.
+ *
+ * Fires for every cold-Query construction in `dispatchSoleurGoForConversation`
+ * so two production reproductions of the #3287 poppler-utils install cascade
+ * can disambiguate hypothesis A (PDF directive missed cold-Query construction)
+ * from hypothesis B (directive present, model overrode it). The data payload
+ * is PII-safe: no full path, no document content, no userId.
+ *
+ * Pairs with a `level: "warning"` `Sentry.captureMessage` ONLY when the
+ * resolver was invoked (cold Query) AND a `context.path` was provided AND the
+ * resolver dropped it (`documentKindResolved === null`). That branch is the
+ * suspicious-skip case — a path arrived but never reached the directive — and
+ * needs its own searchable Sentry event since breadcrumbs are scope-attached
+ * (only surface when an event is sent in the same scope).
+ *
+ * Exported for unit testing; production call site is just below in
+ * `dispatchSoleurGoForConversation`.
+ */
+export function emitConciergeDocumentResolutionBreadcrumb(args: {
+  conversationId: string;
+  contextPath: string | null | undefined;
+  hasActiveCcQuery: boolean;
+  documentArgs: {
+    artifactPath?: string;
+    documentKind?: "pdf" | "text";
+    documentContent?: string;
+  };
+  routingKind: string;
+}): void {
+  const { conversationId, contextPath, hasActiveCcQuery, documentArgs, routingKind } = args;
+  const hasContextPath = typeof contextPath === "string" && contextPath.length > 0;
+  const basenameStr = hasContextPath ? pathBasename(contextPath as string) : null;
+  const extension = hasContextPath
+    ? (contextPath as string).toLowerCase().split(".").pop() ?? null
+    : null;
+  const documentKindResolved = documentArgs.documentKind ?? null;
+  const documentContentBytes = documentArgs.documentContent?.length ?? 0;
+
+  Sentry.addBreadcrumb({
+    category: "cc-pdf-resolver",
+    message: "concierge document context resolved",
+    level: "info",
+    data: {
+      hasContextPath,
+      pathBasename: basenameStr,
+      pathExtension: extension,
+      hasActiveCcQuery,
+      documentKindResolved,
+      documentContentBytes,
+      conversationId,
+      routingKind,
+    },
+  });
+
+  // Suspicious-skip: cold Query (resolver was invoked) AND a path was sent
+  // AND the resolver returned no documentKind. Warm turns deliberately skip
+  // resolution and must NOT trigger this — that's the documented happy path.
+  if (hasContextPath && !hasActiveCcQuery && documentKindResolved === null) {
+    Sentry.captureMessage("cc-pdf-resolver-skip: path provided but resolver returned no documentKind", {
+      level: "warning",
+      tags: { feature: "cc-pdf-resolver-skip" },
+      extra: {
+        conversationId,
+        pathBasename: basenameStr,
+        pathExtension: extension,
+        routingKind,
+      },
+    });
+  }
+}
+
 async function dispatchSoleurGoForConversation(
   userId: string,
   conversationId: string,
@@ -609,13 +682,27 @@ async function dispatchSoleurGoForConversation(
     documentKind?: "pdf" | "text";
     documentContent?: string;
   } = {};
-  if (context?.path && !hasActiveCcQuery(conversationId)) {
+  const warmCcQuery = hasActiveCcQuery(conversationId);
+  if (context?.path && !warmCcQuery) {
     documentArgs = await resolveConciergeDocumentContext({
       userId,
       contextPath: context.path,
       providedContent: context.content ?? null,
     });
   }
+
+  // #3287 Phase 1 — diagnostic breadcrumb. PII-safe payload (basename
+  // + extension only, no full path, no content). Pairs with a
+  // level=warning captureMessage on the suspicious-skip branch so the
+  // cold-Query construction state is searchable in Sentry without log
+  // diving. See `emitConciergeDocumentResolutionBreadcrumb` above.
+  emitConciergeDocumentResolutionBreadcrumb({
+    conversationId,
+    contextPath: context?.path ?? null,
+    hasActiveCcQuery: warmCcQuery,
+    documentArgs,
+    routingKind: routing.kind,
+  });
 
   await dispatchSoleurGo({
     userId,
