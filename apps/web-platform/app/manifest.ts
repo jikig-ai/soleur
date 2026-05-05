@@ -2,10 +2,10 @@ import type { MetadataRoute } from "next";
 
 export default function manifest(): MetadataRoute.Manifest {
   return {
-    name: "Soleur Dashboard — Your Command Center",
+    name: "Soleur Dashboard",
     short_name: "Soleur",
     description:
-      "Your Soleur command center — manage subscriptions, review agent output, and configure your AI organization.",
+      "Your Soleur dashboard — manage subscriptions, review agent output, and configure your AI organization.",
     start_url: "/",
     display: "standalone",
     background_color: "#0a0a0a",

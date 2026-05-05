@@ -409,7 +409,7 @@ export function ChatSurface({
             )}
 
             <span className="hidden text-sm font-semibold text-white md:inline">
-              Command Center
+              Dashboard
             </span>
           </div>
           <StatusIndicator status={status} disconnectReason={disconnectReason} />
