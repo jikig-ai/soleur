@@ -1,8 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-const { mockReportSilentFallback, mockFetchUserWorkspacePath } = vi.hoisted(() => ({
+const { mockReportSilentFallback, mockFetchUserWorkspacePath, mockMessagesInsert } = vi.hoisted(() => ({
   mockReportSilentFallback: vi.fn(),
   mockFetchUserWorkspacePath: vi.fn(),
+  mockMessagesInsert: vi.fn().mockResolvedValue({ error: null }),
 }));
 
 vi.mock("@/server/observability", () => ({
@@ -25,6 +26,28 @@ vi.mock("@/server/kb-document-resolver", async () => {
     fetchUserWorkspacePath: mockFetchUserWorkspacePath,
   };
 });
+
+// #3254 — `dispatchSoleurGo` now persists a `messages` row per turn
+// (so `message_attachments.message_id` FK can be satisfied for cc-path
+// attachments). Stub the service-role client so existing tests that
+// don't care about the new insert keep passing without spinning a real
+// Supabase up.
+vi.mock("@/lib/supabase/service", () => ({
+  serverUrl: () => "https://test.supabase.co",
+  createServiceClient: () => ({
+    from: (table: string) => {
+      if (table === "messages") {
+        return { insert: mockMessagesInsert };
+      }
+      // Other tables not exercised by these tests — fail loudly so a
+      // future test that hits them adds an explicit stub.
+      throw new Error(`unexpected table in cc-dispatcher.test.ts: ${table}`);
+    },
+    storage: {
+      from: () => ({ download: vi.fn() }),
+    },
+  }),
+}));
 
 import {
   getPendingPromptRegistry,
@@ -51,6 +74,10 @@ describe("cc-dispatcher singletons + orchestration", () => {
     __resetDispatcherForTests();
     mockReportSilentFallback.mockClear();
     mockFetchUserWorkspacePath.mockReset();
+    mockMessagesInsert.mockClear();
+    // Default: every messages-insert succeeds; tests that need a failure
+    // can override per-call.
+    mockMessagesInsert.mockResolvedValue({ error: null });
     // Default: a stable stub workspace path so existing tests that don't
     // care about the workspace-resolve path still get a deterministic value.
     mockFetchUserWorkspacePath.mockResolvedValue("/tmp/claude-XXXX/workspace");
