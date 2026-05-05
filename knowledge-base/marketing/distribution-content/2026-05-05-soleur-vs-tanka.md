@@ -3,7 +3,7 @@ title: "Soleur vs. Tanka: Memory AI vs. Execution Intelligence"
 type: pillar
 publish_date: 2026-05-05
 channels: discord, x, bluesky, linkedin-company
-status: scheduled
+status: published
 ---
 
 ## Discord

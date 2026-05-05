@@ -140,9 +140,10 @@ source "$(git rev-parse --show-toplevel)/.claude/hooks/lib/incidents.sh" && \
 ```
 
 1. Read the feature description and assess relevance against each domain in the table above using the Assessment Question column.
-2. For each relevant domain, spawn a Task using the Task Prompt from the table, substituting `{desc}` with the feature description. If multiple domains are relevant, spawn them in parallel. Weave each leader's assessment into the brainstorm dialogue alongside repo research findings.
-3. If the user explicitly requests a brand workshop or validation workshop (e.g., "start brand workshop", "run validation workshop"), follow the named workshop section below instead of spawning an assessment.
-4. If no domains are relevant, continue to Phase 1.
+2. **External-product-comparison default:** If Phase 1.0 ran (the feature description references an external platform/product) OR the feature description contains a URL to a competitor's product, treat **CPO and CMO as default-relevant** regardless of the relevance assessment in step 1. External-product comparisons import framing baked in by the comparison source (architecture, target user, positioning); CPO + CMO are the leaders whose first job is to challenge those assumptions before architecture-first leaders (CTO) commit context to designing the wrong product correctly. See `knowledge-base/project/learnings/2026-05-05-brainstorm-spawn-cpo-cmo-early-on-external-product-trigger.md`.
+3. For each relevant domain, spawn a Task using the Task Prompt from the table, substituting `{desc}` with the feature description. If multiple domains are relevant, spawn them in parallel. Weave each leader's assessment into the brainstorm dialogue alongside repo research findings.
+4. If the user explicitly requests a brand workshop or validation workshop (e.g., "start brand workshop", "run validation workshop"), follow the named workshop section below instead of spawning an assessment.
+5. If no domains are relevant, continue to Phase 1.
 
 #### Brand Workshop (if explicitly requested)
 
