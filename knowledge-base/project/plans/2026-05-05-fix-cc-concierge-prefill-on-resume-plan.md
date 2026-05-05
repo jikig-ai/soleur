@@ -406,15 +406,15 @@ The legacy `startAgentSession` also passes `resumeSessionId` through to `buildAg
 
 ### Pre-merge (PR)
 
-- [ ] Regression test `cc-dispatcher-prefill-guard.test.ts` exists, contains all 6 scenarios listed in Phase 1, and passes.
-- [ ] `realSdkQueryFactory` no longer passes `resume:` to `sdkQuery` when the persisted session's trailing `SessionMessage.type === "assistant"`.
-- [ ] When the guard fires, `warnSilentFallback` is called once with `{ feature: "cc-concierge", op: "prefill-guard" }` and `extra` containing `{ userId, conversationId, resumeSessionId, lastType, historyLength }` — verified by the test spy.
-- [ ] Probe failures (`getSessionMessages` rejects or returns malformed shape) do NOT block the SDK call; they emit one `warnSilentFallback` with `op: "prefill-guard-probe-failed"` and pass `resume:` through unchanged.
-- [ ] Empty `getSessionMessages` response for a non-empty `resumeSessionId` emits one `warnSilentFallback` with `op: "prefill-guard-empty-history"` and passes `resume:` through unchanged (observability hook for `dir`-arg drift detection).
-- [ ] User-terminated threads pass through unchanged (test scenarios 2 and 5).
-- [ ] The guard's assistant-detection uses positive match (`last.type === "assistant"`) — not negative match (`last.type !== "user"`) — so future SDK SessionMessage variants default to pass-through (test scenario 1 verifies the canonical case; codify the polarity in code review).
-- [ ] `agent-runner-query-options.test.ts` and `cc-dispatcher-real-factory.test.ts` remain green (no drift in builder/factory shapes).
-- [ ] Phase 3 Sentry audit performed; legacy guard either folded in (if hits found) or deferred via a new GitHub issue linked from the PR.
+- [x] Regression test `cc-dispatcher-prefill-guard.test.ts` exists, contains all 6 scenarios listed in Phase 1, and passes.
+- [x] `realSdkQueryFactory` no longer passes `resume:` to `sdkQuery` when the persisted session's trailing `SessionMessage.type === "assistant"`.
+- [x] When the guard fires, `warnSilentFallback` is called once with `{ feature: "cc-concierge", op: "prefill-guard" }` and `extra` containing `{ userId, conversationId, resumeSessionId, lastType, historyLength }` — verified by the test spy.
+- [x] Probe failures (`getSessionMessages` rejects or returns malformed shape) do NOT block the SDK call; they emit one `warnSilentFallback` with `op: "prefill-guard-probe-failed"` and pass `resume:` through unchanged.
+- [x] Empty `getSessionMessages` response for a non-empty `resumeSessionId` emits one `warnSilentFallback` with `op: "prefill-guard-empty-history"` and passes `resume:` through unchanged (observability hook for `dir`-arg drift detection).
+- [x] User-terminated threads pass through unchanged (test scenarios 2 and 5).
+- [x] The guard's assistant-detection uses positive match (`last.type === "assistant"`) — not negative match (`last.type !== "user"`) — so future SDK SessionMessage variants default to pass-through (test scenario 1 verifies the canonical case; codify the polarity in code review).
+- [x] `agent-runner-query-options.test.ts` and `cc-dispatcher-real-factory.test.ts` remain green (no drift in builder/factory shapes).
+- [x] Phase 3 Sentry audit performed; legacy guard either folded in (if hits found) or deferred via a new GitHub issue linked from the PR. (Sentry 90d: 0 hits across `prefill`, `assistant message prefill`, `does not support assistant`, `claude-sonnet-4-6`, `invalid_request_error` against 680 baseline events. Deferred via #3266.)
 - [ ] CPO sign-off captured at plan time per `requires_cpo_signoff: true` (this plan's Domain Review section).
 - [ ] Review pipeline includes `user-impact-reviewer` per `hr-weigh-every-decision-against-target-user-impact` and the bundle spec TR2.
 - [ ] PR body uses `Closes #3250` (single-issue PR; standard close).
