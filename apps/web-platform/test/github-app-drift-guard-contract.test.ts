@@ -207,6 +207,24 @@ describe("scheduled-github-app-drift-guard.yml — leak tripwire", () => {
     // grepping the GitHub-rendered log post-hoc is impossible mid-run.
     expect(yaml).toContain("step-output.log");
   });
+
+  test("leak tripwire filters runner-directive lines (^::) before scanning", () => {
+    const yaml = readFileSync(workflowPath, "utf-8");
+    // The drift step's `tee -a step-output.log` captures
+    // `::add-mask::<line>` registrations BEFORE the runner consumes them.
+    // Without a `^::` pre-filter, the tripwire matches its own mask
+    // registrations (PEM lines + minted JWT) and always fires on a
+    // green run — the "guard-itself-dark" failure mode the workflow was
+    // supposed to detect. The pre-filter must be a literal `grep -v '^::'`
+    // piped INTO the tripwire grep (not after; that would let the leak
+    // grep run against unfiltered input).
+    //
+    // A real leak via plain `echo` still fires because the leaked value
+    // appears on a non-`::`-prefixed line.
+    expect(yaml).toMatch(
+      /grep\s+-v\s+'\^::'\s+"\$LOG"\s*\|\s*grep\s+-E\s+"BEGIN \[A-Z \]\*PRIVATE KEY/,
+    );
+  });
 });
 
 // =============================================================================

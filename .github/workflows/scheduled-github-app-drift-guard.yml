@@ -312,6 +312,19 @@ jobs:
             exit 0
           fi
 
+          # Strip runner-directive lines before scanning. The drift step
+          # registers `::add-mask::<line>` for each PEM line and for the
+          # minted JWT, plus the workflow may emit `::warning::`/`::error::`
+          # directives. `tee -a` captures these to step-output.log BEFORE
+          # the runner consumes them, so the file contains
+          # `::add-mask::-----BEGIN RSA PRIVATE KEY-----` and
+          # `::add-mask::eyJ...JWT...`. These are mask REGISTRATIONS, not
+          # leaks — the runner replaces matched values in the displayed
+          # log. Filtering `^::` lines before grepping is correct: a real
+          # leak via plain `echo` would still match (it would appear on a
+          # non-`::`-prefixed line). The filter only hides values that we
+          # already explicitly registered for masking.
+          #
           # Three alternations:
           #   PEM block header (covers RSA, PKCS#8, EC, OPENSSH; rejects PUBLIC KEY)
           #   base64-of-PEM ("LS0tLS1CRUdJTi…" — what PRIVATE_KEY_B64 itself looks like)
@@ -320,7 +333,7 @@ jobs:
           # someone echoes $PRIVATE_KEY_B64 directly without decoding (the
           # decoded PEM would be masked, but the un-decoded base64 form
           # bypasses the line-by-line ::add-mask:: registration).
-          if grep -E "BEGIN [A-Z ]*PRIVATE KEY|LS0tLS1CRUdJTi[A-Za-z0-9+/]|eyJ[A-Za-z0-9_-]{20,}" "$LOG" >/dev/null; then
+          if grep -v '^::' "$LOG" | grep -E "BEGIN [A-Z ]*PRIVATE KEY|LS0tLS1CRUdJTi[A-Za-z0-9+/]|eyJ[A-Za-z0-9_-]{20,}" >/dev/null; then
             echo "::error::Leak tripwire fired."
 
             BODY_FILE=$(mktemp)

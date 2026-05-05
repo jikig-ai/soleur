@@ -206,9 +206,18 @@ anchored patterns is near-zero in practice.
    - JWT segment: the `JWT=$(mint_jwt)` capture or the curl auth header
      bypassed the mask. Less common; usually means a future PR added
      `echo "$JWT"` somewhere.
-3. **Rotate the GitHub App private key immediately.** Follow the
+3. **Rule out the self-leak class first.** The drift step's
+   `tee -a step-output.log` captures the workflow's own
+   `::add-mask::<line>` registrations BEFORE the runner consumes them.
+   The tripwire pre-filters lines starting with `::` (runner directives)
+   for exactly this reason — those are mask REGISTRATIONS, not leaks.
+   If the tripwire fires and the `LOG` matches are all
+   `::add-mask::…`-prefixed lines, the pre-filter has been removed or
+   broken. Re-add the `grep -v '^::' "$LOG"` pre-filter and re-run; do
+   NOT rotate the key for a self-leak.
+4. **Rotate the GitHub App private key immediately.** Follow the
    Rotation procedure below. Do not wait for IR triage.
-4. **Patch the leak vector.** Find the offending line in the workflow
+5. **Patch the leak vector.** Find the offending line in the workflow
    diff and add `::add-mask::` coverage or remove the echo. CODEOWNERS
    gates re-merge.
 5. **Postmortem.** Document the leak class in
