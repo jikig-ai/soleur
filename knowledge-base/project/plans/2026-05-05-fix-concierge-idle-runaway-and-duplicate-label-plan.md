@@ -60,16 +60,16 @@ data, payments).*
 
 ### Pre-merge (PR)
 
-- [ ] **Bug 1 — runaway timer.** Asking "can you summarize this document?" against any PDF up to
+- [x] **Bug 1 — runaway timer.** Asking "can you summarize this document?" against any PDF up to
       ~5 MB / ~50 pages in the kb-concierge panel produces a complete summary without surfacing
       `Error: The agent went idle without finishing.` Verified manually against the
       `Au Chat Potan - Presentation Projet-10.pdf` fixture from the screenshot (or the closest
       equivalent reproducible PDF in `knowledge-base/`).
-- [ ] **Bug 1 — runaway timer.** `DEFAULT_WALL_CLOCK_TRIGGER_MS` is raised from 30s to 90s in
+- [x] **Bug 1 — runaway timer.** `DEFAULT_WALL_CLOCK_TRIGGER_MS` is raised from 30s to 90s in
       `apps/web-platform/server/soleur-go-runner.ts`. The pre-existing comment
       ("measures 'no SDKResultMessage for wallClockTriggerMs'") is updated to reflect the new
       value AND the new "any-assistant-block resets the clock" semantics.
-- [ ] **Bug 1 — runaway timer.** The runaway timer resets on EVERY assistant `tool_use` block
+- [x] **Bug 1 — runaway timer.** The runaway timer resets on EVERY assistant `tool_use` block
       and EVERY assistant `text` block during the active turn, not just the first `tool_use`.
       The clock is cleared by `SDKResultMessage` (turn boundary) as today. The semantic moves
       from "30s after first tool_use" to "90s of true silence (no assistant content at all)".
@@ -77,7 +77,7 @@ data, payments).*
       remains the turn-origin timestamp so `armRunaway`'s `firedAtStart = state.firstToolUseAt`
       capture continues to report the user-facing `elapsedMs` as total turn elapsed time
       (not "time since last block").
-- [ ] **Bug 1 — tests.** `apps/web-platform/test/soleur-go-runner-awaiting-user.test.ts` adds:
+- [x] **Bug 1 — tests.** `apps/web-platform/test/soleur-go-runner-awaiting-user.test.ts` adds:
       (a) a test asserting the timer DOES fire when `wallClockTriggerMs` elapses with no further
       assistant blocks AFTER the new default (90s); (b) a test asserting the timer does NOT
       fire when a second `tool_use` arrives 25s after the first (within the new 90s budget,
@@ -87,11 +87,11 @@ data, payments).*
       first-tool_use (turn-origin), not time-since-last-block; (e) the default-constant
       assertion (currently NO test asserts `DEFAULT_WALL_CLOCK_TRIGGER_MS === 30_000` — see
       audit; if a test author adds one in the work phase, it must read 90_000).
-- [ ] **Bug 2 — header label.** The Concierge bubble header on first message shows ONLY
+- [x] **Bug 2 — header label.** The Concierge bubble header on first message shows ONLY
       `Soleur Concierge` (not `Concierge   Soleur Concierge`). Visually verified against the
       same kb-concierge panel post-fix; subsequent messages in the same thread continue to render
       no header (existing `isFirst` behavior preserved).
-- [ ] **Bug 2 — header label.** `apps/web-platform/components/chat/message-bubble.tsx` renders
+- [x] **Bug 2 — header label.** `apps/web-platform/components/chat/message-bubble.tsx` renders
       `leader.title` ONLY (not `displayName` AND `leader.title`) when `displayName` is contained
       in `leader.title` (substring-match, case-sensitive). This is the recommended fix shape —
       generic, catches both `cc_router` ("Concierge" / "Soleur Concierge") and the latent
@@ -101,7 +101,7 @@ data, payments).*
       Concretely: `showFullTitle && !leader.title.includes(displayName) && (
         <span className="text-xs text-neutral-500">{leader.title}</span>
       )` paired with `displayName ? (<span>{leader.title.includes(displayName) ? leader.title : displayName}</span>) : null` — the implementer picks the cleaner JSX shape; the acceptance test pins behavior, not structure.
-- [ ] **Bug 2 — tests.** New file `apps/web-platform/test/message-bubble-header.test.tsx`
+- [x] **Bug 2 — tests.** New file `apps/web-platform/test/message-bubble-header.test.tsx`
       (modeled on `message-bubble-retry.test.tsx` — same `vi.mock("@/lib/client-observability")`
       shim) adds:
       (a) for `leaderId="cc_router"` with `showFullTitle=true`, the header contains
@@ -110,7 +110,7 @@ data, payments).*
       (b) for `leaderId="system"` with `showFullTitle=true`, the header contains
       `"System Process"` exactly once and does NOT show `"System   System Process"` —
       regression guard for the latent prefix-collision pattern.
-- [ ] **Regression guard.** A non-prefix leader (e.g., `cmo` with `name: "CMO"` /
+- [x] **Regression guard.** A non-prefix leader (e.g., `cmo` with `name: "CMO"` /
       `title: "Chief Marketing Officer"`) with `showFullTitle=true` continues to render BOTH
       `displayName` ("CMO") AND `leader.title` ("Chief Marketing Officer") — the
       substring-suppression must NOT fire when displayName is not contained in title.
@@ -118,7 +118,26 @@ data, payments).*
       `getDisplayName` (e.g., `"CMO Riley"`); the test should cover BOTH the bare-name path
       (no `getDisplayName` provided) AND a getDisplayName-supplied team-name path to lock
       the substring rule's behavior on both shapes.
-- [ ] **Type-check + full suite green.** `bun run --cwd apps/web-platform typecheck` clean and
+- [x] **Bug 2 — follow-up bubble (turn 2 case).** A Concierge bubble with `leaderId="cc_router"`
+      and `showFullTitle=false` (the rendering used for non-first messages — see
+      `chat-surface.tsx` `showFullTitle={!!isFirst}`) MUST render the header as
+      `"Soleur Concierge"` (the substring-suppression rule promotes `leader.title` into the
+      always-rendered first span even when `showFullTitle=false`), NOT bare `"Concierge"`. Real
+      user observation 2026-05-05: nudging the failed concierge bubble produced a second
+      assistant bubble whose header was bare `"Concierge"`. The fix shape from line ~103
+      (`{leader.title.includes(displayName) ? leader.title : displayName}` in the
+      always-rendered first span) already covers this — the test below pins the behavior so a
+      future refactor cannot regress it.
+- [x] **Bug 2 — follow-up bubble test.** Add to `message-bubble-header.test.tsx` a case where
+      `leaderId="cc_router"` and `showFullTitle=false` and the header text equals
+      `"Soleur Concierge"` (NOT bare `"Concierge"`).
+- [x] **Bug 1 — observability.** When `runner_runaway` fires after the new 90s budget, the
+      structured log entry MUST include `elapsedMs`, `lastBlockKind` (`"tool_use" | "text" |
+      null`), and `lastBlockToolName` (when applicable) so a future tightening of the budget can
+      be informed by which tool consistently bumps against the ceiling. Reuse `logger.warn` —
+      this does NOT require Sentry mirroring (the runaway path is an expected failure mode the
+      user is shown via cc-dispatcher 145).
+- [x] **Type-check + full suite green.** `bun run --cwd apps/web-platform typecheck` clean and
       the web-platform vitest suite passes (≥ pre-PR baseline).
 
 ### Post-merge (operator)

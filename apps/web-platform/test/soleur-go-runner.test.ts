@@ -465,7 +465,12 @@ describe("soleur-go-runner dispatch (Stage 2.2)", () => {
     expect(mock.closeSpy).toHaveBeenCalled();
   });
 
-  it("secondary wall-clock trigger: >=30s of tool-use events without a SDKResultMessage fires runner_runaway and closes the Query", async () => {
+  it("secondary wall-clock trigger: tool_use stream that goes silent for >= wallClockTriggerMs fires runner_runaway and closes the Query", async () => {
+    // Updated 2026-05-05 (#3225): the wall-clock window resets on every
+    // assistant block (text or tool_use). The semantic is "no agent
+    // activity for wallClockTriggerMs", not "no result for
+    // wallClockTriggerMs from first tool_use". Turn-origin
+    // `firstToolUseAt` is preserved so `elapsedMs` reports total turn time.
     const mock = createMockQuery();
     const runner = createSoleurGoRunner({
       queryFactory: () => mock.query,
@@ -483,7 +488,8 @@ describe("soleur-go-runner dispatch (Stage 2.2)", () => {
       persistActiveWorkflow: vi.fn().mockResolvedValue(undefined),
     });
 
-    // Stream tool_use events at t=0, t=10s, t=20s, t=31s — no terminal result.
+    // Stream tool_use events at t=0, t=10s, t=25s. Each one resets the
+    // wall-clock window (the agent is "alive"). No terminal result.
     mock.emit(
       makeAssistant({
         content: [
@@ -513,8 +519,9 @@ describe("soleur-go-runner dispatch (Stage 2.2)", () => {
     );
     await flushMicrotasks();
 
-    // Advance past the 30s trigger relative to the first tool_use.
-    vi.advanceTimersByTime(10_000);
+    // Now go silent for the full wallClockTriggerMs window from the LAST
+    // assistant block (t=25s + 30s = t=55s).
+    vi.advanceTimersByTime(30_001);
     await flushMicrotasks();
 
     const runaway = events._ended.find((e) => e.status === "runner_runaway");

@@ -27,6 +27,7 @@ vi.mock("@/server/observability", () => ({
 
 import {
   createSoleurGoRunner,
+  DEFAULT_WALL_CLOCK_TRIGGER_MS,
   type QueryFactory,
   type WorkflowEnd,
   type DispatchEvents,
@@ -457,5 +458,208 @@ describe("soleur-go-runner notifyAwaitingUser pause/resume", () => {
 
     expect(events._ended.find((e) => e.status === "runner_runaway")).toBeDefined();
     expect(mock.closeSpy).toHaveBeenCalled();
+  });
+});
+
+// RED tests for plan
+// 2026-05-05-fix-concierge-idle-runaway-and-duplicate-label-plan.md
+//
+// Bug 1 — Concierge "agent went idle without finishing" on PDF summarize:
+// `DEFAULT_WALL_CLOCK_TRIGGER_MS = 30s` is too tight for PDF Read+summarize
+// turns. The fix raises the default to 90s AND, more importantly, resets the
+// timeout window on EVERY assistant block (text or tool_use). Turn-origin
+// `firstToolUseAt` is preserved so `elapsedMs` reports total turn time
+// (not "time since last block"). The runaway WorkflowEnded payload carries
+// `lastBlockKind` and `lastBlockToolName` so future timer-tightening is
+// informed by which tool consistently bumps against the ceiling.
+
+describe("soleur-go-runner runaway window reset (Bug 1: PDF summarize idle)", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    mockReportSilentFallback.mockClear();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("DEFAULT_WALL_CLOCK_TRIGGER_MS is 90s — bumped from 30s to accommodate PDF Read+summarize turns", () => {
+    expect(DEFAULT_WALL_CLOCK_TRIGGER_MS).toBe(90 * 1000);
+  });
+
+  it("a second tool_use at t=8s resets the runaway window — runaway does NOT fire at t=15s (would have under no-reset semantic)", async () => {
+    vi.setSystemTime(0);
+    const mock = createMockQuery();
+    const runner = createSoleurGoRunner({
+      queryFactory: () => mock.query,
+      now: () => Date.now(),
+      wallClockTriggerMs: 10_000,
+    });
+    const events = makeEvents();
+
+    await runner.dispatch({
+      conversationId: "conv-reset-tool",
+      userId: "u1",
+      userMessage: "summarize",
+      currentRouting: { kind: "soleur_go_pending" },
+      events,
+      persistActiveWorkflow: vi.fn().mockResolvedValue(undefined),
+    });
+
+    // First tool_use at t=0 — arms the timer (and stamps turn-origin).
+    mock.emit(
+      makeAssistant({
+        content: [{ type: "tool_use", id: "t1", name: "Read", input: { file_path: "/x.pdf" } }],
+      }),
+    );
+    await flushMicrotasks();
+
+    // 8s elapses, then a second tool_use arrives — the window MUST reset.
+    vi.advanceTimersByTime(8_000);
+    await flushMicrotasks();
+    mock.emit(
+      makeAssistant({
+        content: [{ type: "tool_use", id: "t2", name: "Read", input: { file_path: "/y.pdf" } }],
+      }),
+    );
+    await flushMicrotasks();
+
+    // 7s more (total t=15s). Under the OLD no-reset semantic, runaway would
+    // fire at t=10s. Under the NEW per-block-reset semantic, the second
+    // arm at t=8s gives a fresh 10s window, so runaway must NOT fire.
+    vi.advanceTimersByTime(7_000);
+    await flushMicrotasks();
+    expect(events._ended.find((e) => e.status === "runner_runaway")).toBeUndefined();
+  });
+
+  it("a text assistant block at t=8s also resets the runaway window — text counts as 'agent is alive'", async () => {
+    vi.setSystemTime(0);
+    const mock = createMockQuery();
+    const runner = createSoleurGoRunner({
+      queryFactory: () => mock.query,
+      now: () => Date.now(),
+      wallClockTriggerMs: 10_000,
+    });
+    const events = makeEvents();
+
+    await runner.dispatch({
+      conversationId: "conv-reset-text",
+      userId: "u1",
+      userMessage: "summarize",
+      currentRouting: { kind: "soleur_go_pending" },
+      events,
+      persistActiveWorkflow: vi.fn().mockResolvedValue(undefined),
+    });
+
+    // First tool_use at t=0.
+    mock.emit(
+      makeAssistant({
+        content: [{ type: "tool_use", id: "t1", name: "Read", input: { file_path: "/x.pdf" } }],
+      }),
+    );
+    await flushMicrotasks();
+
+    // 8s elapses, agent emits a text block (analyzing, narrating progress).
+    vi.advanceTimersByTime(8_000);
+    await flushMicrotasks();
+    mock.emit(
+      makeAssistant({
+        content: [{ type: "text", text: "Reading the document and preparing a summary..." }],
+      }),
+    );
+    await flushMicrotasks();
+
+    // 7s more (total t=15s). Under the NEW semantic the text block reset the
+    // window; runaway must NOT fire.
+    vi.advanceTimersByTime(7_000);
+    await flushMicrotasks();
+    expect(events._ended.find((e) => e.status === "runner_runaway")).toBeUndefined();
+  });
+
+  it("when runaway DOES fire, elapsedMs reports total turn elapsed (turn-origin), NOT time-since-last-block", async () => {
+    vi.setSystemTime(0);
+    const mock = createMockQuery();
+    const runner = createSoleurGoRunner({
+      queryFactory: () => mock.query,
+      now: () => Date.now(),
+      wallClockTriggerMs: 10_000,
+    });
+    const events = makeEvents();
+
+    await runner.dispatch({
+      conversationId: "conv-elapsed",
+      userId: "u1",
+      userMessage: "summarize",
+      currentRouting: { kind: "soleur_go_pending" },
+      events,
+      persistActiveWorkflow: vi.fn().mockResolvedValue(undefined),
+    });
+
+    // First tool_use at t=0 (turn origin).
+    mock.emit(
+      makeAssistant({
+        content: [{ type: "tool_use", id: "t1", name: "Read", input: { file_path: "/x.pdf" } }],
+      }),
+    );
+    await flushMicrotasks();
+
+    // Second tool_use at t=5s (resets the 10s window).
+    vi.advanceTimersByTime(5_000);
+    await flushMicrotasks();
+    mock.emit(
+      makeAssistant({
+        content: [{ type: "tool_use", id: "t2", name: "Read", input: { file_path: "/y.pdf" } }],
+      }),
+    );
+    await flushMicrotasks();
+
+    // No more blocks — runaway fires at t = 5s + 10s = 15s.
+    vi.advanceTimersByTime(10_001);
+    await flushMicrotasks();
+    const end = events._ended.find((e) => e.status === "runner_runaway") as
+      | (WorkflowEnd & { status: "runner_runaway" })
+      | undefined;
+    expect(end).toBeDefined();
+    // elapsedMs reflects total turn elapsed (~15s), not the 10s window.
+    // Allow ±100ms slack for timer-loop quantization.
+    expect(end!.elapsedMs).toBeGreaterThanOrEqual(15_000);
+    expect(end!.elapsedMs).toBeLessThan(15_100);
+  });
+
+  it("runaway WorkflowEnded carries lastBlockKind and lastBlockToolName so future tightening is informed by which tool bumps the ceiling", async () => {
+    vi.setSystemTime(0);
+    const mock = createMockQuery();
+    const runner = createSoleurGoRunner({
+      queryFactory: () => mock.query,
+      now: () => Date.now(),
+      wallClockTriggerMs: 10_000,
+    });
+    const events = makeEvents();
+
+    await runner.dispatch({
+      conversationId: "conv-observ",
+      userId: "u1",
+      userMessage: "summarize",
+      currentRouting: { kind: "soleur_go_pending" },
+      events,
+      persistActiveWorkflow: vi.fn().mockResolvedValue(undefined),
+    });
+
+    // Single Read tool_use, then nothing for >10s — runaway fires.
+    mock.emit(
+      makeAssistant({
+        content: [{ type: "tool_use", id: "t1", name: "Read", input: { file_path: "/au-chat-potan.pdf" } }],
+      }),
+    );
+    await flushMicrotasks();
+    vi.advanceTimersByTime(10_001);
+    await flushMicrotasks();
+
+    const end = events._ended.find((e) => e.status === "runner_runaway") as
+      | (WorkflowEnd & { status: "runner_runaway"; lastBlockKind?: unknown; lastBlockToolName?: unknown })
+      | undefined;
+    expect(end).toBeDefined();
+    expect(end!.lastBlockKind).toBe("tool_use");
+    expect(end!.lastBlockToolName).toBe("Read");
   });
 });

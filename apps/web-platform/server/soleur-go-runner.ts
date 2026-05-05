@@ -51,6 +51,9 @@ import {
 } from "./conversation-routing";
 import { wrapUserInput } from "./prompt-injection-wrap";
 import { reportSilentFallback } from "./observability";
+import { createChildLogger } from "./logger";
+
+const log = createChildLogger("soleur-go-runner");
 import { isBashCommandSafe } from "./permission-callback";
 import {
   PendingPromptRegistry,
@@ -79,7 +82,15 @@ export const PRE_DISPATCH_NARRATION_DIRECTIVE =
   "This narration is load-bearing for perceived latency — without it, users see 5-6s of silence before the sub-skill's first text arrives.";
 
 export const DEFAULT_IDLE_REAP_MS = 10 * 60 * 1000;
-export const DEFAULT_WALL_CLOCK_TRIGGER_MS = 30 * 1000;
+// 90s, raised from 30s 2026-05-05 (#3225). PDF Read+summarize turns
+// (kb-concierge attached document path) consistently bumped against the
+// old 30s ceiling and surfaced "agent went idle without finishing" to
+// users. The window now also resets on every assistant block (text or
+// tool_use) — see `handleAssistantMessage` — while turn-origin
+// `firstToolUseAt` is preserved so `elapsedMs` reports total turn time.
+// The runaway WorkflowEnd payload carries `lastBlockKind` and
+// `lastBlockToolName` for future calibration.
+export const DEFAULT_WALL_CLOCK_TRIGGER_MS = 90 * 1000;
 
 // Recalibrated 2026-04-24 from stream-input rerun (see plan RERUN
 // §"Cost caps vs measured reality"). CFO gate at Stage 6.5.1.
@@ -235,7 +246,19 @@ export type CostCaps = {
 export type WorkflowEnd =
   | { status: "completed"; summary?: string }
   | { status: "cost_ceiling"; totalCostUsd: number; cap: number; workflow: WorkflowName | null }
-  | { status: "runner_runaway"; elapsedMs: number }
+  | {
+      status: "runner_runaway";
+      elapsedMs: number;
+      // `lastBlockKind` + `lastBlockToolName` carry the most recent
+      // assistant block at the moment the runaway timer fired. Useful
+      // for calibrating wallClockTriggerMs against tool mix (e.g., is
+      // it always Read on PDF? Bash? Skill on a sub-skill turn?).
+      // `null` when the runaway fires before any assistant block —
+      // legitimate fallback for the AC7 regression test which arms via
+      // a stub path.
+      lastBlockKind: "text" | "tool_use" | null;
+      lastBlockToolName: string | null;
+    }
   | { status: "user_aborted" }
   | { status: "idle_timeout" }
   | { status: "plugin_load_failure"; error: string }
@@ -597,6 +620,13 @@ interface ActiveQuery {
   currentWorkflow: WorkflowName | null;
   firstToolUseAt: number | null;
   runaway: NodeJS.Timeout | null;
+  // Most recent assistant block observed for this turn — captured at
+  // every text/tool_use block so the runaway WorkflowEnd payload can
+  // report which tool/block was last alive when the timer fired.
+  // Reset to (null, null) on every SDKResultMessage alongside
+  // `firstToolUseAt`. See `handleAssistantMessage`.
+  lastBlockKind: "text" | "tool_use" | null;
+  lastBlockToolName: string | null;
   costCaps: CostCaps;
   events: DispatchEvents;
   closed: boolean;
@@ -708,7 +738,29 @@ export function createSoleurGoRunner(deps: SoleurGoRunnerDeps): SoleurGoRunner {
       if (state.closed) return;
       if (state.awaitingUser) return;
       const elapsedMs = now() - firedAtStart;
-      emitWorkflowEnded(state, { status: "runner_runaway", elapsedMs });
+      // Structured log so future tightening of `wallClockTriggerMs` is
+      // informed by which tools consistently bump the ceiling. The
+      // user-facing message ("agent went idle without finishing") is
+      // expected here — no Sentry mirror per
+      // `cq-silent-fallback-must-mirror-to-sentry` carve-out for known
+      // degraded states. See plan
+      // 2026-05-05-fix-concierge-idle-runaway-and-duplicate-label-plan.md.
+      log.warn(
+        {
+          conversationId: state.conversationId,
+          elapsedMs,
+          wallClockTriggerMs,
+          lastBlockKind: state.lastBlockKind,
+          lastBlockToolName: state.lastBlockToolName,
+        },
+        "runner_runaway fired",
+      );
+      emitWorkflowEnded(state, {
+        status: "runner_runaway",
+        elapsedMs,
+        lastBlockKind: state.lastBlockKind,
+        lastBlockToolName: state.lastBlockToolName,
+      });
     }, wallClockTriggerMs);
   }
 
@@ -774,6 +826,19 @@ export function createSoleurGoRunner(deps: SoleurGoRunnerDeps): SoleurGoRunner {
       const b = block as { type?: string };
       if (b.type === "text") {
         const text = (block as { text?: string }).text ?? "";
+        // Any assistant block (text or tool_use) is "agent is alive"
+        // signal. Reset the wall-clock window so a long-running PDF
+        // Read+summarize turn that emits intermediate text/tool_use
+        // does not trip the idle ceiling. Turn-origin `firstToolUseAt`
+        // is set ONCE per turn and preserved across blocks so
+        // `elapsedMs` on `runner_runaway` reports total turn time.
+        // See plan 2026-05-05-fix-concierge-idle-runaway-and-duplicate-label-plan.md.
+        if (state.firstToolUseAt === null) {
+          state.firstToolUseAt = now();
+        }
+        state.lastBlockKind = "text";
+        state.lastBlockToolName = null;
+        armRunaway(state);
         if (text) {
           try {
             state.events.onText(text);
@@ -795,15 +860,17 @@ export function createSoleurGoRunner(deps: SoleurGoRunnerDeps): SoleurGoRunner {
         const toolInput = tb.input ?? {};
         const toolUseId = tb.id ?? "";
 
-        // Arm the wall-clock runaway timer on the FIRST tool_use after any
-        // SDKResultMessage (or stream start). Do NOT re-arm on subsequent
-        // tool_use events — the timer measures "no SDKResultMessage for
-        // wallClockTriggerMs", not "no tool_use for wallClockTriggerMs".
-        // See plan Stage 2 §"Cost circuit breaker / secondary trigger".
+        // Reset the wall-clock window on every assistant block (text or
+        // tool_use). Turn-origin `firstToolUseAt` is preserved so the
+        // runaway `elapsedMs` reports total turn time, not
+        // time-since-last-block. See plan
+        // 2026-05-05-fix-concierge-idle-runaway-and-duplicate-label-plan.md.
         if (state.firstToolUseAt === null) {
           state.firstToolUseAt = now();
-          armRunaway(state);
         }
+        state.lastBlockKind = "tool_use";
+        state.lastBlockToolName = toolName;
+        armRunaway(state);
 
         try {
           state.events.onToolUse({ name: toolName, input: toolInput, toolUseId });
@@ -854,10 +921,13 @@ export function createSoleurGoRunner(deps: SoleurGoRunnerDeps): SoleurGoRunner {
     const delta = msg.total_cost_usd ?? 0;
     state.totalCostUsd += delta;
     state.sessionId = msg.session_id ?? state.sessionId;
-    // A completed result clears the runaway arm; the next tool_use in a
-    // subsequent turn will re-arm (reset firstToolUseAt accordingly).
+    // A completed result clears the runaway arm; the next assistant
+    // block in a subsequent turn will re-arm (reset firstToolUseAt and
+    // lastBlock* accordingly).
     clearRunaway(state);
     state.firstToolUseAt = null;
+    state.lastBlockKind = null;
+    state.lastBlockToolName = null;
     try {
       state.events.onResult({ totalCostUsd: delta });
     } catch (err) {
@@ -1008,6 +1078,8 @@ export function createSoleurGoRunner(deps: SoleurGoRunnerDeps): SoleurGoRunner {
         currentWorkflow: initialWorkflow,
         firstToolUseAt: null,
         runaway: null,
+        lastBlockKind: null,
+        lastBlockToolName: null,
         costCaps: defaultCostCaps,
         events,
         closed: false,

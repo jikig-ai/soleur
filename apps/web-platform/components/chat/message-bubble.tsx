@@ -144,12 +144,35 @@ export const MessageBubble = memo(function MessageBubble({
 
           {leader && (
             <div className="mb-1 flex items-center gap-2">
-              <span className="text-xs font-semibold text-neutral-300">
-                {displayName}
-              </span>
-              {showFullTitle && (
-                <span className="text-xs text-neutral-500">{leader.title}</span>
-              )}
+              {/*
+                Bug 2 (#3225): when `displayName` is contained in `leader.title`
+                (e.g., cc_router "Concierge" / "Soleur Concierge", or the latent
+                `system` "System" / "System Process" pair), promote the title
+                into the always-rendered first span and suppress the secondary
+                `showFullTitle` span. Without this rule, the header rendered
+                both side-by-side ("Concierge   Soleur Concierge") on first
+                bubbles, AND rendered bare "Concierge" on follow-up bubbles
+                (`showFullTitle=false`) — neither matched the brand title.
+                Generic substring rule so future leaders with the same shape
+                are handled without a special-case.
+              */}
+              {(() => {
+                const titleContainsName =
+                  !!displayName && leader.title.includes(displayName);
+                const primary = titleContainsName ? leader.title : displayName;
+                return (
+                  <>
+                    <span className="text-xs font-semibold text-neutral-300">
+                      {primary}
+                    </span>
+                    {showFullTitle && !titleContainsName && (
+                      <span className="text-xs text-neutral-500">
+                        {leader.title}
+                      </span>
+                    )}
+                  </>
+                );
+              })()}
             </div>
           )}
 
