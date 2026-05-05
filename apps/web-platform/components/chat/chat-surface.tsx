@@ -365,11 +365,20 @@ export function ChatSurface({
   // Review F10: gate the legacy `isClassifying` chip on the lifecycle bar
   // being idle — once the bar takes over routing/active/ended, the legacy
   // chip must not double-render with the bar.
+  // Defense-in-depth: never render the routing chip while the history fetch
+  // is in flight (`historyLoading`) or after a confirmed resume of a prior
+  // thread (`resumedFrom`). Either signal proves the user-only message
+  // snapshot does not represent an unanswered question — the assistant row is
+  // still in transit, or it was never persisted (legacy cc-path conversations
+  // pre-#3286). Without this gate, "Continue thread" would re-render the chip
+  // on every resumed thread that already has an answer.
   const isClassifying =
     hasUserMessage &&
     !hasAssistantMessage &&
     routeSource === null &&
-    workflow.state === "idle";
+    workflow.state === "idle" &&
+    !historyLoading &&
+    resumedFrom === null;
 
   // Review F3: workflow has ended either in-memory (this session) or in the
   // persisted DB column (reload of an already-ended conversation).

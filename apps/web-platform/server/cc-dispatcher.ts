@@ -824,8 +824,40 @@ export async function dispatchSoleurGo(
       });
     });
 
+  // Per-turn assistant text accumulator. Reset to "" inside
+  // `saveAssistantMessage` after each turn boundary, so a turn that ends in
+  // `result` with zero text correctly skips the insert without consuming the
+  // previous turn's data. Mirrors the pattern at `agent-runner.ts:1079` so
+  // `api-messages.ts` returns BOTH user and assistant rows on resume —
+  // without this the cc path's history is user-only and the resumed thread
+  // re-renders the routing chip as if the question were unanswered.
+  let accumulatedAssistantText = "";
+
+  async function saveAssistantMessage(): Promise<void> {
+    const fullText = accumulatedAssistantText;
+    accumulatedAssistantText = "";
+    if (!fullText) return;
+
+    const { error } = await supabase().from("messages").insert({
+      id: randomUUID(),
+      conversation_id: conversationId,
+      role: "assistant",
+      content: fullText,
+      tool_calls: null,
+      leader_id: CC_ROUTER_LEADER_ID,
+    });
+    if (error) {
+      reportSilentFallback(error, {
+        feature: "cc-dispatcher",
+        op: "save-assistant-message-failed",
+        extra: { userId, conversationId, length: fullText.length },
+      });
+    }
+  }
+
   const events: DispatchEvents = {
     onText: (text) => {
+      accumulatedAssistantText += text;
       sendToClient(userId, {
         type: "stream",
         content: text,
@@ -849,6 +881,11 @@ export async function dispatchSoleurGo(
       );
     },
     onTextTurnEnd: () => {
+      // Persist assistant text at the per-turn boundary BEFORE emitting the
+      // terminal stream_end event. Fire-and-forget: the user has already seen
+      // the streamed text, so a Supabase write failure cannot retroactively
+      // un-render it; the helper mirrors via `reportSilentFallback`.
+      void saveAssistantMessage();
       // Per-turn boundary → terminal stream event for the cc_router bubble.
       // Without this, the client reducer keeps the bubble in
       // `state: "streaming"` (raw `whitespace-pre-wrap`), so markdown
