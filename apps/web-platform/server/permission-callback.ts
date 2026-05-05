@@ -48,6 +48,7 @@ import {
   type BashApprovalCache,
   deriveBashCommandPrefix,
 } from "./permission-callback-bash-batch";
+import { warnSilentFallback } from "./observability";
 
 const log = createChildLogger("permission");
 
@@ -118,6 +119,19 @@ export function isBashCommandBlocked(command: string): boolean {
 // inside double quotes) is rejected. U+2028 / U+2029 are included to
 // match the project's Unicode line-separator hardening pattern.
 const SHELL_METACHAR_DENYLIST = /[;&|`<>$\n\r\\\u2028\u2029]/;
+// Path-traversal denylist (#3252). Matches `..` only as a parent-dir segment
+// \u2014 preceded by start-of-string, slash, or whitespace AND followed by
+// end-of-string, slash, or whitespace. Filenames containing `..` (such as
+// `..baz`, `my..backup.txt`, `...gitignore`, `....file`) are NOT matched.
+//
+// **DO NOT REMOVE** this denylist without auditing every PATH_TOKEN-using
+// regex above for `..` acceptance. The `cd` regex (and other PATH_TOKEN
+// args like `cat <path>`) accepts `../foo` as a path arg by token shape;
+// this denylist is the only thing that rejects parent-dir traversal at
+// the canUseTool boundary. extractToolPath/isPathInWorkspace does NOT
+// apply to Bash (Bash uses `command`, not `file_path`/`path`), so the
+// workspace-relative invariant is enforced here.
+const PATH_TRAVERSAL_DENYLIST = /(?:^|[\s/])\.\.(?:$|[\s/])/;
 // Belt-and-suspenders: a 4096-char input cap before regex matching keeps
 // pathological-length inputs from amplifying any backtracking cost.
 const SAFE_BASH_MAX_INPUT_LENGTH = 4096;
@@ -140,6 +154,12 @@ export const SAFE_BASH_PATTERNS: readonly RegExp[] = [
   /^id\s*$/,
   /^date\s*$/,
   /^hostname\s*$/,
+  // cd — optional single path arg. No flags (cd -, cd --, cd -P all
+  // rejected via the negative lookahead). The `..` arg shape is
+  // structurally accepted by PATH_TOKEN here but PATH_TRAVERSAL_DENYLIST
+  // in isBashCommandSafe rejects it before this pattern runs; see TS6
+  // for the regression pin.
+  new RegExp(String.raw`^cd(?:\s+(?!-)${PATH_TOKEN})?\s*$`),
   // ls — optional flags + optional path args
   new RegExp(String.raw`^ls(?:\s+-[a-zA-Z]+)*(?:\s+${PATH_TOKEN})*\s*$`),
   // Single-arg path-taking commands
@@ -175,6 +195,20 @@ export const SAFE_BASH_PATTERNS: readonly RegExp[] = [
   new RegExp(String.raw`^echo(?:\s+${ECHO_TOKEN})*\s*$`),
 ];
 
+// Near-miss prefix detection (#3252). Matches commands whose leading
+// token starts with a known safe-bash allowlist verb but extends past
+// it (lsof vs ls, cdrecord vs cd, pwdx vs pwd, catatonic vs cat).
+// Used only for telemetry — the rejection path is the same either way
+// (review-gate). When this fires, on-call sees drift before someone
+// widens the allowlist into a confused-deputy escape.
+//
+// Surface intentionally includes lsblk/lsattr/lscpu/lsmod/lspci/lsusb/
+// etc. — these ARE near-misses to `ls`, and the drift signal is correct.
+// Operators monitoring `safe-bash-near-miss` should expect such tokens
+// in normal exploration noise (see plan §Risks R5).
+const SAFE_BASH_NEAR_MISS_PREFIX =
+  /^(?:ls|pwd|cd|whoami|cat|head|tail|wc|file|stat|which|uname|git|echo)\w/;
+
 /**
  * Returns true iff `command` is a single, read-only file/git/cwd
  * inspection command safe to auto-approve without a user gate.
@@ -196,6 +230,15 @@ export function isBashCommandSafe(command: unknown): boolean {
   // Stage 1: raw-string metacharacter denylist. Run BEFORE trim so
   // leading/trailing newlines (for example) are caught.
   if (SHELL_METACHAR_DENYLIST.test(command)) return false;
+  // Stage 1b: parent-dir traversal denylist (#3252). Run BEFORE the
+  // per-pattern allowlist so PATH_TOKEN-shape regexes (cd <path>,
+  // cat <path>, ls <path>) cannot accept `../` arg shapes. Filenames
+  // starting with `..` (e.g. `..baz`) are not matched — see the regex
+  // definition. Bash uses `command`, not `file_path`/`path`, so the
+  // canUseTool's isFileTool→isPathInWorkspace defense does NOT fire
+  // for Bash invocations. This denylist is the canUseTool-boundary
+  // check; the bubblewrap sandbox is the OS-syscall-boundary check.
+  if (PATH_TRAVERSAL_DENYLIST.test(command)) return false;
   const trimmed = command.trim();
   if (trimmed.length === 0) return false;
   // Stage 2: leading-token allowlist match against trimmed string.
@@ -203,6 +246,19 @@ export function isBashCommandSafe(command: unknown): boolean {
     if (pattern.test(trimmed)) return true;
   }
   return false;
+}
+
+/**
+ * Returns true iff `command`'s leading token looks like a near-miss
+ * extension of a known safe-bash allowlist verb (lsof for ls, cdrecord
+ * for cd, pwdx for pwd, etc.). Used to emit drift telemetry on
+ * rejection paths — the user-facing decision is unchanged.
+ *
+ * Should ONLY be called when `isBashCommandSafe(command) === false`.
+ */
+export function isBashCommandNearMiss(command: string): boolean {
+  if (typeof command !== "string" || command.length === 0) return false;
+  return SAFE_BASH_NEAR_MISS_PREFIX.test(command.trim());
 }
 
 // Safe UX-flow tools surfaced by the soleur plugin that carry no path
@@ -444,6 +500,22 @@ export function createCanUseTool(ctx: CanUseToolContext): CanUseTool {
           "safe-bash-allowlist",
         );
         return allow(toolInput);
+      }
+
+      // Near-miss telemetry hook (#3252). Step 3.5 of the Bash-branch
+      // ordering: AFTER the safe-bash allowlist missed, BEFORE the
+      // batched-approval cache lookup. Placement is load-bearing —
+      // earlier would emit on blocklist-denied commands (sudo/curl);
+      // later would lose signal for cache-hit cases. Emits only the
+      // first whitespace-separated token (PII guard — full command
+      // may contain user-prompt content).
+      if (isBashCommandNearMiss(command)) {
+        const leadingToken = command.trim().split(/\s+/)[0];
+        warnSilentFallback(null, {
+          feature: "cc-permissions",
+          op: "safe-bash-near-miss",
+          extra: { leadingToken },
+        });
       }
 
       // #2921 batched-approval cache: pre-gate check (synchronous Map
