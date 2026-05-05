@@ -262,17 +262,17 @@ test("buildSoleurGoSystemPrompt with documentKind: pdf contains BOTH baseline di
 
 ### Pre-merge (PR)
 
-- [ ] Investigation is documented in this plan's Hypotheses section with H1 confirmed and H2/H3 ruled out by codebase grep evidence (already complete in this plan).
-- [ ] `READ_TOOL_PDF_CAPABILITY_DIRECTIVE` is exported from `apps/web-platform/server/soleur-go-runner.ts` and is non-empty.
-- [ ] The directive contains the anchor tokens "Read tool", "PDF", and the substring "supports PDF files" (shared verbatim with the existing assertive directives at `soleur-go-runner.ts:506` and `agent-runner.ts:613`).
-- [ ] The directive does NOT contain negation tokens (`/\b(do not|never|not installed)\b/i`) — pinned by Scenario 2's anti-priming guard.
-- [ ] **Anchor-grep audit:** `rg "supports PDF files" apps/web-platform/server/{soleur-go-runner,agent-runner}.ts` returns at least three hits (the new constant + the two existing directive call sites). No accidental deletion of either existing directive.
-- [ ] `buildSoleurGoSystemPrompt()` (no args) embeds the directive verbatim — pinned by `read-tool-pdf-capability.test.ts`.
-- [ ] `buildSoleurGoSystemPrompt({ artifactPath, documentKind: "text" })` also embeds the directive (the directive lives in `baseline`, not in the artifact-conditional branch) — pinned.
-- [ ] The leader system prompt built by `agent-runner.ts` (no `context`) embeds the directive verbatim — pinned by an addition to `agent-runner-system-prompt.test.ts`.
-- [ ] `agent-runner.ts` imports the constant from `@/server/soleur-go-runner` (single source of truth — no duplicate string literal).
-- [ ] `bun test apps/web-platform/test/read-tool-pdf-capability.test.ts apps/web-platform/test/agent-runner-system-prompt.test.ts apps/web-platform/test/soleur-go-runner-narration.test.ts apps/web-platform/test/soleur-go-runner.test.ts apps/web-platform/test/cc-soleur-go-end-to-end-render.test.tsx` all pass locally. Sibling builders that consume `buildSoleurGoSystemPrompt` are included as a drift-guard.
-- [ ] `bun run typecheck` and lint pass.
+- [x] Investigation is documented in this plan's Hypotheses section with H1 confirmed and H2/H3 ruled out by codebase grep evidence (already complete in this plan).
+- [x] `READ_TOOL_PDF_CAPABILITY_DIRECTIVE` is exported from `apps/web-platform/server/soleur-go-runner.ts` and is non-empty.
+- [x] The directive contains the anchor tokens "Read tool", "PDF", and the substring "supports PDF files" (shared verbatim with the existing assertive directives at `soleur-go-runner.ts:506` and `agent-runner.ts:613`).
+- [x] The directive does NOT contain negation tokens (`/\b(do not|never|not installed)\b/i`) — pinned by Scenario 2's anti-priming guard.
+- [x] **Anchor-grep audit:** `rg "supports PDF files" apps/web-platform/server/{soleur-go-runner,agent-runner}.ts` returns at least three hits (the new constant + the two existing directive call sites). No accidental deletion of either existing directive.
+- [x] `buildSoleurGoSystemPrompt()` (no args) embeds the directive verbatim — pinned by `read-tool-pdf-capability.test.ts`.
+- [x] `buildSoleurGoSystemPrompt({ artifactPath, documentKind: "text" })` also embeds the directive (the directive lives in `baseline`, not in the artifact-conditional branch) — pinned.
+- [x] The leader system prompt built by `agent-runner.ts` (no `context`) embeds the directive verbatim — pinned by an addition to `agent-runner-system-prompt.test.ts`.
+- [x] `agent-runner.ts` imports the constant from `@/server/soleur-go-runner` (single source of truth — no duplicate string literal).
+- [x] `bun test apps/web-platform/test/read-tool-pdf-capability.test.ts apps/web-platform/test/agent-runner-system-prompt.test.ts apps/web-platform/test/soleur-go-runner-narration.test.ts apps/web-platform/test/soleur-go-runner.test.ts apps/web-platform/test/cc-soleur-go-end-to-end-render.test.tsx` all pass locally. Sibling builders that consume `buildSoleurGoSystemPrompt` are included as a drift-guard.
+- [x] `bun run typecheck` and lint pass.
 - [ ] `cq-silent-fallback-must-mirror-to-sentry` is N/A and noted in the PR body (no error-catching code path changed).
 - [ ] PR body uses `Closes #3253`.
 - [ ] CPO sign-off recorded (per `requires_cpo_signoff: true` and bundle brainstorm threshold).
