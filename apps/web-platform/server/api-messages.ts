@@ -69,10 +69,15 @@ export async function handleConversationMessages(
     return;
   }
 
-  // Load messages
+  // Load messages — joined with `message_attachments` so the chat surface
+  // can rehydrate attachment chips on reload (#3254). The relation is
+  // FK'd via `message_attachments.message_id`; an empty array is the
+  // expected shape for messages without attachments.
   const { data: messages, error: msgErr } = await supabase
     .from("messages")
-    .select("id, role, content, leader_id, created_at")
+    .select(
+      "id, role, content, leader_id, created_at, message_attachments(id, storage_path, filename, content_type, size_bytes)",
+    )
     .eq("conversation_id", conversationId)
     .order("created_at", { ascending: true });
 

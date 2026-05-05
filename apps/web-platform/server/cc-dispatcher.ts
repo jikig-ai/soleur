@@ -12,13 +12,15 @@
 // V2 follow-ups tracked in #2853 backlog (V2-13: tier-classify in-process
 // MCP servers for cc-soleur-go path — referenced in factory body).
 
+import { randomUUID } from "crypto";
 import path from "path";
 
 import type { Query } from "@anthropic-ai/claude-agent-sdk";
 import { query as sdkQuery } from "@anthropic-ai/claude-agent-sdk";
 
-import type { WSMessage, Conversation } from "@/lib/types";
+import type { WSMessage, Conversation, AttachmentRef } from "@/lib/types";
 import { KeyInvalidError, STATUS_LABELS } from "@/lib/types";
+import { persistAndDownloadAttachments } from "./attachment-pipeline";
 
 /**
  * Runtime allowlist for `Conversation["status"]`. Mirrors the type union
@@ -681,6 +683,17 @@ export interface DispatchSoleurGoArgs {
   artifactPath?: string;
   documentKind?: "pdf" | "text";
   documentContent?: string;
+  /**
+   * Attachment refs uploaded via the chat-input paperclip flow. When
+   * non-empty, `dispatchSoleurGo` (a) inserts a `messages` row to
+   * satisfy the `message_attachments.message_id` FK, (b) calls the
+   * shared attachment-pipeline helper to persist metadata + download
+   * files into `<workspace>/attachments/<convId>/`, and (c) augments
+   * `userMessage` with the resulting `attachmentContext` text so the
+   * agent can `Read` the on-disk paths. Mirrors the legacy
+   * `agent-runner.ts:sendUserMessage` flow exactly. See #3254.
+   */
+  attachments?: AttachmentRef[];
 }
 
 /**
@@ -696,7 +709,7 @@ export async function dispatchSoleurGo(
   const {
     userId,
     conversationId,
-    userMessage,
+    userMessage: rawUserMessage,
     currentRouting,
     sessionId,
     sendToClient,
@@ -704,7 +717,78 @@ export async function dispatchSoleurGo(
     artifactPath,
     documentKind,
     documentContent,
+    attachments,
   } = args;
+
+  // Verify conversation ownership AND bump `last_active` in a single
+  // round-trip. The UPDATE/RETURNING form does both: rows that fail the
+  // user_id predicate return zero rows (treated as 404), rows that match
+  // record activity at the start of the turn so the conversation
+  // surfaces correctly in any "recent conversations" UI even if the
+  // runner errors before its own status callbacks fire. Mirrors the
+  // `user_id` defense-in-depth from `agent-runner.ts:sendUserMessage`.
+  const { data: ownership, error: ownershipErr } = await supabase()
+    .from("conversations")
+    .update({ last_active: new Date().toISOString() })
+    .eq("id", conversationId)
+    .eq("user_id", userId)
+    .select("id")
+    .single();
+  if (ownershipErr || !ownership) {
+    reportSilentFallback(ownershipErr, {
+      feature: "cc-dispatcher",
+      op: "verify-conversation-ownership",
+      extra: { userId, conversationId },
+    });
+    throw new Error("Conversation not found");
+  }
+
+  // #3254 — persist a `messages` row for every cc turn so
+  // `message_attachments.message_id` can be FK'd. The legacy single-leader
+  // path has always done this in `agent-runner.ts:sendUserMessage`; the
+  // cc path silently dropped attachments because no parent message existed.
+  // The SDK's session-id resume mechanism still owns transcript replay
+  // for the agent — these rows are for attachment metadata durability and
+  // for `api-messages.ts` history hydration on tab reload.
+  const messageId = randomUUID();
+  const { error: insertErr } = await supabase().from("messages").insert({
+    id: messageId,
+    conversation_id: conversationId,
+    role: "user",
+    content: rawUserMessage,
+    tool_calls: null,
+    leader_id: null,
+  });
+  if (insertErr) {
+    reportSilentFallback(insertErr, {
+      feature: "cc-dispatcher",
+      op: "persist-user-message",
+      extra: { userId, conversationId },
+    });
+    throw new Error(`Failed to save user message: ${insertErr.message}`);
+  }
+
+  // Persist attachment metadata + download files into the workspace.
+  // Mirrors `agent-runner.ts:sendUserMessage` exactly via the shared
+  // helper. On any per-file download failure, the helper omits that file
+  // from the `attachmentContext` text — partial success is preferred over
+  // a hard turn failure. Validation/INSERT errors propagate to the outer
+  // dispatch catch, which mirrors via `mirrorWithDebounce` (no inner
+  // try/catch — that would double-mirror and bypass the dispatch
+  // debounce, flooding Sentry on a misconfigured Storage URL).
+  let userMessage = rawUserMessage;
+  if (attachments && attachments.length > 0) {
+    const { attachmentContext } = await persistAndDownloadAttachments({
+      supabase: supabase(),
+      userId,
+      conversationId,
+      messageId,
+      attachments,
+    });
+    if (attachmentContext) {
+      userMessage = `${rawUserMessage}\n\n${attachmentContext}`;
+    }
+  }
 
   const runner = getSoleurGoRunner(sendToClient);
 
