@@ -604,7 +604,7 @@ export function ChatSurface({
           })()}
 
           {isClassifying && (
-            <div className="flex justify-start" data-testid="cc-routing-chip">
+            <div className="flex justify-start" data-testid="routing-chip">
               <div className="flex items-center gap-2 rounded-xl border border-neutral-800 bg-neutral-900 px-4 py-3">
                 <LeaderAvatar leaderId={CC_ROUTER_LEADER_ID} size="sm" />
                 <span className="h-2 w-2 animate-pulse rounded-full bg-amber-500" />

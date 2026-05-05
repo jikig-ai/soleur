@@ -48,7 +48,7 @@ describe("ChatSurface — Soleur Concierge visibility in routing panel (#3251)",
     });
     await renderFull();
 
-    const chip = await screen.findByTestId("cc-routing-chip");
+    const chip = await screen.findByTestId("routing-chip");
     expect(chip).toBeInTheDocument();
     expect(within(chip).getByLabelText("Soleur Concierge avatar")).toBeInTheDocument();
     expect(
@@ -70,7 +70,7 @@ describe("ChatSurface — Soleur Concierge visibility in routing panel (#3251)",
     });
     await renderFull();
 
-    const strip = await screen.findByTestId("cc-routed-leaders-strip");
+    const strip = await screen.findByTestId("routed-leaders-strip");
     expect(within(strip).getByLabelText("Soleur Concierge avatar")).toBeInTheDocument();
     expect(within(strip).getByText("Soleur Concierge")).toBeInTheDocument();
     expect(within(strip).getByText(/Marketing Lead/i)).toBeInTheDocument();
@@ -88,7 +88,7 @@ describe("ChatSurface — Soleur Concierge visibility in routing panel (#3251)",
     });
     await renderFull();
 
-    const strip = await screen.findByTestId("cc-routed-leaders-strip");
+    const strip = await screen.findByTestId("routed-leaders-strip");
     expect(within(strip).getByLabelText("Soleur Concierge avatar")).toBeInTheDocument();
     expect(within(strip).getByText("Soleur Concierge")).toBeInTheDocument();
   });
@@ -103,10 +103,10 @@ describe("ChatSurface — Soleur Concierge visibility in routing panel (#3251)",
     });
     await renderFull();
 
-    expect(screen.queryByTestId("cc-routed-leaders-strip")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("routed-leaders-strip")).not.toBeInTheDocument();
   });
 
-  it("T5 — strip never emits the bare 'Concierge' alongside 'Soleur Concierge' (#3225 regression)", async () => {
+  it("T5 — strip emits 'Soleur Concierge' exactly once and never the bare 'Concierge' (#3225 regression)", async () => {
     wsReturn = createWebSocketMock({
       realConversationId: "test-id",
       messages: [
@@ -119,8 +119,26 @@ describe("ChatSurface — Soleur Concierge visibility in routing panel (#3251)",
     });
     await renderFull();
 
-    const strip = await screen.findByTestId("cc-routed-leaders-strip");
-    const concierges = strip.textContent?.match(/Concierge/g) ?? [];
-    expect(concierges).toHaveLength(1);
+    const strip = await screen.findByTestId("routed-leaders-strip");
+    expect(within(strip).getAllByText("Soleur Concierge")).toHaveLength(1);
+    expect(within(strip).queryAllByText(/^Concierge$/)).toHaveLength(0);
+  });
+
+  it("T6 — strip is hidden when only cc_router responded (load-bearing some() predicate)", async () => {
+    // The chat-surface gate uses respondingLeaders.some(id => id !== CC_ROUTER_LEADER_ID).
+    // Without this test, the predicate could regress to .length > 0 and the suite would
+    // still pass — yet a Concierge-only response would render an empty leader strip.
+    wsReturn = createWebSocketMock({
+      realConversationId: "test-id",
+      messages: [
+        { id: "u1", role: "user", content: "hello", type: "text" },
+        { id: "a1", role: "assistant", content: "handled", leaderId: "cc_router", type: "text" },
+      ],
+      routeSource: "auto",
+      activeLeaderIds: [],
+    });
+    await renderFull();
+
+    expect(screen.queryByTestId("routed-leaders-strip")).not.toBeInTheDocument();
   });
 });
