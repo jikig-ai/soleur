@@ -81,20 +81,12 @@ export const PRE_DISPATCH_NARRATION_DIRECTIVE =
   'Example: "Routing to brainstorm — this looks like feature exploration." ' +
   "This narration is load-bearing for perceived latency — without it, users see 5-6s of silence before the sub-skill's first text arrives.";
 
-// Counters a model self-misreport class where the agent claims a separate
-// "PDF Reader" tool is missing when asked to read a PDF referenced in
-// chat (no "currently-viewing" artifact). The Claude Agent SDK's built-in
-// Read tool natively supports PDFs — this directive makes that fact
-// load-bearing in the BASELINE system prompt (both this Concierge router
-// and the leader baseline in agent-runner.ts). Wording mirrors the
-// existing assertive directives at soleur-go-runner.ts:506 and
-// agent-runner.ts:613, both of which have shipped successfully on the
-// gated document-viewing path. Purely positive (declarative-then-
-// imperative) per 2026 prompt-engineering corpus — see plan
-// 2026-05-05-fix-cc-pdf-read-capability-prompt-plan.md (#3253).
-//
-// Imported by agent-runner.ts so the directive has a single source of
-// truth across both system-prompt builders.
+// Counters a model self-misreport class where, with no "currently-viewing"
+// PDF artifact threaded through, the agent fabricates a missing "PDF Reader"
+// tool and refuses. The SDK Read tool natively handles PDFs; this directive
+// makes that load-bearing in the BASELINE prompt of both system-prompt
+// builders. Purely positive per 2026 prompt-engineering research (negation
+// underperforms at scale).
 export const READ_TOOL_PDF_CAPABILITY_DIRECTIVE =
   "Your built-in Read tool natively supports PDF files. " +
   "To read a PDF the user has shared, attached, or referenced, " +
