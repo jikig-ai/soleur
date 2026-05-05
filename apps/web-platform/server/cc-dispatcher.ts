@@ -721,25 +721,22 @@ export async function dispatchSoleurGo(
   } = args;
 
   // Verify conversation ownership AND bump `last_active` in a single
-  // round-trip. The UPDATE/RETURNING form does both: rows that fail the
-  // user_id predicate return zero rows (treated as 404), rows that match
-  // record activity at the start of the turn so the conversation
-  // surfaces correctly in any "recent conversations" UI even if the
-  // runner errors before its own status callbacks fire. Mirrors the
-  // `user_id` defense-in-depth from `agent-runner.ts:sendUserMessage`.
-  const { data: ownership, error: ownershipErr } = await supabase()
-    .from("conversations")
-    .update({ last_active: new Date().toISOString() })
-    .eq("id", conversationId)
-    .eq("user_id", userId)
-    .select("id")
-    .single();
-  if (ownershipErr || !ownership) {
-    reportSilentFallback(ownershipErr, {
+  // round-trip. `updateConversationFor` with `expectMatch: true` runs the
+  // UPDATE scoped to (id, user_id) and returns `ok: false` when zero rows
+  // matched — that's our 404 signal. Sentry mirroring on failure happens
+  // inside the wrapper, so we only translate to the throw here. Routes
+  // through the canonical wrapper per the R8 lint rule.
+  const ownership = await updateConversationFor(
+    userId,
+    conversationId,
+    { last_active: new Date().toISOString() },
+    {
       feature: "cc-dispatcher",
       op: "verify-conversation-ownership",
-      extra: { userId, conversationId },
-    });
+      expectMatch: true,
+    },
+  );
+  if (!ownership.ok) {
     throw new Error("Conversation not found");
   }
 
