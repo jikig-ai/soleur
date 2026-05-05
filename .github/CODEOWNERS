@@ -14,6 +14,7 @@
 /.gitleaks.toml                                         @jeanderuelle
 /.github/workflows/secret-scan.yml                      @jeanderuelle
 /.github/workflows/pr-quality-guards.yml                @jeanderuelle
+/.github/workflows/scheduled-github-app-drift-guard.yml @jeanderuelle
 /lefthook.yml                                           @jeanderuelle
 /apps/web-platform/scripts/lint-fixture-content.mjs     @jeanderuelle
 
