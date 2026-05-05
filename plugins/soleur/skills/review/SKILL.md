@@ -612,6 +612,8 @@ When flagging a skill description word-budget overrun, the tokenizer MUST match 
 
 When a review agent reports branch-scope regressions (claims the PR reverts merged commits, touches files outside the PR's linked issue/directory, or shows a file list materially larger than expected), verify with `git diff origin/main...HEAD --name-only` (three-dot) before accepting. Two-dot variants like `git diff main..HEAD` show commits on `main` since the fork point (NOT commits on HEAD) and produce wildly different file lists when the branch is behind main — a common agent failure mode that surfaces as a false-positive P0. See `knowledge-base/project/learnings/2026-04-22-markdown-table-parser-papercuts-and-review-diff-direction.md`.
 
+When a review agent recommends ADDING a field, header, or schema element to a security-relevant surface (wire schema, redaction filter, log scrubber, error envelope), grep the diff scope for `// See #N` provenance comments referencing prior REMOVALS of the same artifact BEFORE applying the fix. A `Pn` rating reflects local severity; it does not auto-override deliberate cross-cutting decisions encoded in code comments. If a prior PR removed the field as a security/privacy mitigation, flip disposition to `contested-design` scope-out with the prior issue # named in the filing — code-simplicity-reviewer reliably co-signs when the threat-model context is surfaced. See `knowledge-base/project/learnings/2026-05-05-agent-native-recommendation-vs-prior-security-removal.md`.
+
 ### Important: P1 Findings Block Merge
 
 Any **P1 (CRITICAL)** findings must be addressed before merging the PR. Present these prominently and ensure they're resolved before accepting the PR.

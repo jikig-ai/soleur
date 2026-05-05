@@ -215,13 +215,29 @@ describe("sandbox path stripping (FR2 #2861)", () => {
     expect(label).toContain("knowledge-base/vision.md");
   });
 
-  test("no workspacePath: input is unchanged", () => {
+  test("no workspacePath + absolute path: falls back to safe label (no leak, #3235 review)", () => {
+    // When workspacePath is undefined we cannot guarantee a literal-prefix
+    // scrub — the canonical sandbox patterns alone may not cover every
+    // host-shaped path. Defensive: fall back to FALLBACK_LABELS rather
+    // than echo the absolute path to clients.
     const label = buildToolLabel(
       "Read",
       { file_path: "/some/absolute/path.md" },
       undefined,
     );
-    expect(label).toBe("Reading /some/absolute/path.md...");
+    expect(label).toBe("Reading file...");
+    expect(label).not.toContain("/some/absolute/path.md");
+  });
+
+  test("no workspacePath + relative path: emits the relative path verbatim", () => {
+    // Relative paths are unaffected by the no-workspace guard — they
+    // cannot leak a workspace prefix because they don't have one.
+    const label = buildToolLabel(
+      "Read",
+      { file_path: "notes.md" },
+      undefined,
+    );
+    expect(label).toBe("Reading notes.md...");
   });
 
   test("idempotency: Read label on already-scrubbed path is stable", () => {
