@@ -140,7 +140,7 @@ source "$(git rev-parse --show-toplevel)/.claude/hooks/lib/incidents.sh" && \
 ```
 
 1. Read the feature description and assess relevance against each domain in the table above using the Assessment Question column.
-2. For each relevant domain, spawn a Task using the Task Prompt from the table, substituting `{desc}` with the feature description. If multiple domains are relevant, spawn them in parallel. Weave each leader's assessment into the brainstorm dialogue alongside repo research findings.
+2. For each relevant domain, spawn a Task using the Task Prompt from the table, substituting `{desc}` with the feature description. If multiple domains are relevant, spawn them in parallel. Weave each leader's assessment into the brainstorm dialogue alongside repo research findings. **When the feature is anchored on a specific prospect or customer signal, gather verifiable facts about them (headcount, named roles, employment relationship vs. retainer/advisor) BEFORE spawning leaders and thread these facts into every Task Prompt alongside `{desc}` — quotes alone admit multiple readings that leaders may resolve confidently in the wrong direction.**
 3. If the user explicitly requests a brand workshop or validation workshop (e.g., "start brand workshop", "run validation workshop"), follow the named workshop section below instead of spawning an assessment.
 4. If no domains are relevant, continue to Phase 1.
 
