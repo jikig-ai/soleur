@@ -158,10 +158,10 @@ This threshold is inherited from the bundle brainstorm. The Concierge surface is
 
 ### Phase 0 — Pre-implementation verification
 
-- [ ] Run `rg -n "respondingLeaders" apps/web-platform/` to confirm the symbol's full set of call sites. Expected: `chat-surface.tsx` derivation + the line referenced in #2223 (verify presence/absence).
-- [ ] Run `rg -n 'isClassifying' apps/web-platform/` to confirm the chip is the only consumer; expected to match `chat-surface.tsx` only.
-- [ ] Run `rg -n 'CC_ROUTER_LEADER_ID|cc_router' apps/web-platform/components/ apps/web-platform/lib/` to confirm `LeaderAvatar` is the canonical Concierge-rendering surface.
-- [ ] Confirm `apps/web-platform/test/` has no Playwright visual-regression harness via `rg -ln 'toHaveScreenshot|toMatchVisual|expect.*screenshot' apps/web-platform/test/`. Expected: zero hits. If hits exist, this plan's "DOM-state assertion" framing must be revisited.
+- [x] Run `rg -n "respondingLeaders" apps/web-platform/` to confirm the symbol's full set of call sites. Expected: `chat-surface.tsx` derivation + the line referenced in #2223 (verify presence/absence).
+- [x] Run `rg -n 'isClassifying' apps/web-platform/` to confirm the chip is the only consumer; expected to match `chat-surface.tsx` only.
+- [x] Run `rg -n 'CC_ROUTER_LEADER_ID|cc_router' apps/web-platform/components/ apps/web-platform/lib/` to confirm `LeaderAvatar` is the canonical Concierge-rendering surface.
+- [x] Confirm `apps/web-platform/test/` has no Playwright visual-regression harness via `rg -ln 'toHaveScreenshot|toMatchVisual|expect.*screenshot' apps/web-platform/test/`. Expected: zero hits. If hits exist, this plan's "DOM-state assertion" framing must be revisited.
 
 ### Phase 1 — RED tests (failing before implementation)
 
@@ -453,12 +453,12 @@ export function RoutedLeadersStrip({
 
 ### Phase 3 — REFACTOR
 
-- [ ] Verify `LeaderAvatar` size prop accepts `"sm"` (it does — `apps/web-platform/components/leader-avatar.tsx:29-33`).
-- [ ] Verify the `cc_router` Concierge rendering renders the Soleur logo (per `leader-avatar.tsx:67-82`) — no yellow square fallback.
-- [ ] Run `apps/web-platform/test/cc-routing-panel-concierge-visibility.test.tsx` — all 4 tests pass.
-- [ ] Run `apps/web-platform/test/chat-surface-sidebar.test.tsx` — confirm no regression. The sidebar variant uses the same code path.
-- [ ] Run `bun test apps/web-platform/test/leader-avatar.test.tsx apps/web-platform/test/message-bubble-header.test.tsx apps/web-platform/test/tool-use-chip.test.tsx` — all Concierge-aware tests still pass.
-- [ ] Run `bun run --cwd apps/web-platform typecheck` — no TS errors.
+- [x] Verify `LeaderAvatar` size prop accepts `"sm"` (it does — `apps/web-platform/components/leader-avatar.tsx:29-33`).
+- [x] Verify the `cc_router` Concierge rendering renders the Soleur logo (per `leader-avatar.tsx:67-82`) — no yellow square fallback.
+- [x] Run `apps/web-platform/test/cc-routing-panel-concierge-visibility.test.tsx` — all 4 tests pass.
+- [x] Run `apps/web-platform/test/chat-surface-sidebar.test.tsx` — confirm no regression. The sidebar variant uses the same code path.
+- [x] Run `bun test apps/web-platform/test/leader-avatar.test.tsx apps/web-platform/test/message-bubble-header.test.tsx apps/web-platform/test/tool-use-chip.test.tsx` — all Concierge-aware tests still pass.
+- [x] Run `bun run --cwd apps/web-platform typecheck` — no TS errors.
 - [ ] Manual QA: load a Command Center session, send a message that triggers auto-routing to a domain leader, confirm the strip shows "Soleur Concierge · Auto-routed to <leader>" with the Soleur logo avatar.
 
 ### Phase 4 — Domain Review carry-forward and CPO sign-off
@@ -481,13 +481,13 @@ The `## User-Brand Impact` threshold is `single-user incident`. Per AGENTS.md `h
 
 ### Pre-merge (PR)
 
-- [ ] `apps/web-platform/test/cc-routing-panel-concierge-visibility.test.tsx` exists with 5 tests covering: no-leaders-yet shows Concierge identity (T1), leaders-resolved shows Concierge + domain leaders (T2), leaders-resolved-without-Concierge-bubble still shows Concierge (T3), strip-not-rendered-pre-routing (T4), bare-Concierge drift guard (T5).
-- [ ] All 5 tests pass on the feature branch.
-- [ ] `apps/web-platform/components/chat/routed-leaders-strip.tsx` exists with a `data-testid="cc-routed-leaders-strip"` hook and an explicit Concierge slot via `<LeaderAvatar leaderId="cc_router" />`.
-- [ ] `apps/web-platform/components/chat/chat-surface.tsx` `isClassifying` chip has `data-testid="cc-routing-chip"` and a Concierge avatar prefix.
-- [ ] `bun run --cwd apps/web-platform typecheck` passes.
-- [ ] `bun test apps/web-platform/test/leader-avatar.test.tsx apps/web-platform/test/message-bubble-header.test.tsx apps/web-platform/test/tool-use-chip.test.tsx apps/web-platform/test/chat-surface-sidebar.test.tsx` — no regression.
-- [ ] No new dependencies introduced (no Playwright pixel-diff harness).
+- [x] `apps/web-platform/test/cc-routing-panel-concierge-visibility.test.tsx` exists with 5 tests covering: no-leaders-yet shows Concierge identity (T1), leaders-resolved shows Concierge + domain leaders (T2), leaders-resolved-without-Concierge-bubble still shows Concierge (T3), strip-not-rendered-pre-routing (T4), bare-Concierge drift guard (T5).
+- [x] All 5 tests pass on the feature branch.
+- [x] `apps/web-platform/components/chat/routed-leaders-strip.tsx` exists with a `data-testid="cc-routed-leaders-strip"` hook and an explicit Concierge slot via `<LeaderAvatar leaderId="cc_router" />`.
+- [x] `apps/web-platform/components/chat/chat-surface.tsx` `isClassifying` chip has `data-testid="cc-routing-chip"` and a Concierge avatar prefix.
+- [x] `bun run --cwd apps/web-platform typecheck` passes.
+- [x] `bun test apps/web-platform/test/leader-avatar.test.tsx apps/web-platform/test/message-bubble-header.test.tsx apps/web-platform/test/tool-use-chip.test.tsx apps/web-platform/test/chat-surface-sidebar.test.tsx` — no regression.
+- [x] No new dependencies introduced (no Playwright pixel-diff harness).
 - [ ] PR body uses `Closes #3251` (not in the title — per AGENTS.md `wg-use-closes-n-in-pr-body-not-title-to`).
 - [ ] `user-impact-reviewer` agent reviewed the diff and signed off (handled by review skill conditional-agent block).
 - [ ] Manual QA: screenshot of the routing strip in the leaders-resolved state attached to the PR description, showing "Soleur Concierge · Auto-routed to <leader>" with the Soleur logo avatar.
