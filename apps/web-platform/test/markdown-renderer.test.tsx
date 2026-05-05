@@ -81,6 +81,8 @@ describe("MarkdownRenderer — table column widths (shared-doc readability)", ()
     expect(headers.length).toBeGreaterThan(0);
     headers.forEach((th) => {
       expect(th.className).toContain("whitespace-nowrap");
+      // Regression guard: th must not silently re-acquire w-full (would defeat the auto-layout fix).
+      expect(th.className).not.toMatch(/(^|\s)w-full(\s|$)/);
     });
   });
 
@@ -92,6 +94,8 @@ describe("MarkdownRenderer — table column widths (shared-doc readability)", ()
       expect(td.className).toContain("min-w-[8ch]");
       expect(td.className).toContain("max-w-[40ch]");
       expect(td.className).toContain("align-top");
+      // Regression guard: td must not silently re-acquire w-full (would override the band).
+      expect(td.className).not.toMatch(/(^|\s)w-full(\s|$)/);
     });
   });
 });

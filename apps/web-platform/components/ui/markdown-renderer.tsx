@@ -49,6 +49,9 @@ function buildComponents({ linkRel, preWrap }: BuildOptions): Components {
         {children}
       </th>
     ),
+    // 8ch keeps single-token / empty cells visible; 40ch caps prose cells to a
+    // readable line so a single long-paragraph cell doesn't blow out the table.
+    // Header may exceed 40ch (whitespace-nowrap on th wins) by design.
     td: ({ children }) => (
       <td className="min-w-[8ch] max-w-[40ch] border border-neutral-700 px-3 py-1.5 align-top text-neutral-300">{children}</td>
     ),
