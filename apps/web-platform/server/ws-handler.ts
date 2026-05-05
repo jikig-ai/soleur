@@ -21,6 +21,7 @@ import {
   abortSession,
 } from "./agent-runner";
 import { updateConversationFor } from "./conversation-writer";
+import { reportSilentFallback } from "./observability";
 import * as Sentry from "@sentry/nextjs";
 import { sanitizeErrorForClient } from "./error-sanitizer";
 import { createChildLogger } from "./logger";
@@ -214,6 +215,141 @@ export function abortActiveSession(userId: string, session: ClientSession): void
   }
 
   session.conversationId = undefined;
+}
+
+/**
+ * Self-healing ledger-divergence recovery for `start_session` cap_hit
+ * (#stuck-active fix, AC4).
+ *
+ * When `acquireSlot` returns `cap_hit` and the user's *visible* active
+ * conversations (status in active/waiting_for_user, archived_at IS NULL)
+ * are FEWER than the slot count, the slot ledger has at least one
+ * orphan row — its `conversation_id` does not appear in the visible set.
+ * Reasons: a transient bug or process kill stranded a conversation row
+ * (covered by AC1 + AC2), or an archive trigger fired but a slot
+ * insertion raced after.
+ *
+ * This helper detects divergence and force-releases each orphan slot,
+ * then mirrors a single Sentry event so a non-zero rate is visible to
+ * on-call. The caller is expected to retry `acquireSlot` ONCE on
+ * `didRecover: true`. Recursion on a second cap_hit is forbidden — fall
+ * through to the existing close path so genuine cap denials behave
+ * unchanged.
+ *
+ * Best-effort: errors during the SELECT or releaseSlot calls do not
+ * throw — they short-circuit to `didRecover: false` so the caller's
+ * fallback (close with `concurrency_cap_hit` preamble) still runs.
+ *
+ * Exported for tests; call site is the `start_session` cap_hit branch
+ * below.
+ */
+export async function tryLedgerDivergenceRecovery(
+  userId: string,
+): Promise<{ didRecover: boolean }> {
+  try {
+    // Visible active conversations — what the user perceives as "in
+    // flight". Mirrors the ledger denominator the cap was checked
+    // against.
+    const visibleResp = await supabase
+      .from("conversations")
+      .select("id")
+      .eq("user_id", userId)
+      .is("archived_at", null)
+      .in("status", ["active", "waiting_for_user"]);
+    if (visibleResp.error) {
+      reportSilentFallback(visibleResp.error, {
+        feature: "concurrency-ledger-divergence",
+        op: "start_session-recovery-select-visible",
+        extra: { userId },
+      });
+      return { didRecover: false };
+    }
+    const visibleIds = new Set<string>(
+      ((visibleResp.data ?? []) as Array<{ id: string }>).map((r) => r.id),
+    );
+
+    const slotsResp = await supabase
+      .from("user_concurrency_slots")
+      .select("conversation_id")
+      .eq("user_id", userId);
+    if (slotsResp.error) {
+      reportSilentFallback(slotsResp.error, {
+        feature: "concurrency-ledger-divergence",
+        op: "start_session-recovery-select-slots",
+        extra: { userId },
+      });
+      return { didRecover: false };
+    }
+    const slotConversationIds = ((slotsResp.data ?? []) as Array<{ conversation_id: string }>)
+      .map((r) => r.conversation_id);
+
+    const orphans = slotConversationIds.filter((cid) => !visibleIds.has(cid));
+    if (orphans.length === 0) {
+      // No divergence — slot count is correct given visible-conversation
+      // count. Genuine cap_hit; caller proceeds to close path.
+      return { didRecover: false };
+    }
+
+    // Release every orphan slot in parallel — keyed DELETE is idempotent
+    // and concurrent calls are safe. Any individual error is mirrored
+    // by `releaseSlot` itself.
+    await Promise.all(
+      orphans.map((cid) => releaseSlot(userId, cid)),
+    );
+
+    // Conversation-row finalize for orphans. The visible-set query above
+    // filters `archived_at IS NULL AND status IN ('active','waiting_for_user')`,
+    // so an orphan's conversation row is one of: (a) archived (any status),
+    // (b) already terminal (`failed`/`completed`) and non-archived, or
+    // (c) hard-deleted. (b) and (c) are no-ops. (a) is also benign — the
+    // archive-trigger (migration 036) already released the slot and the
+    // user perceives the row as gone. We still issue a `failed` finalize
+    // best-effort with `expectMatch: false` so a row stuck at `active`
+    // (e.g. archived mid-stream before the result-branch wrap landed)
+    // converges to a terminal state in the same recovery pass instead of
+    // waiting up to 60s for the reaper. No-op for missing rows.
+    await Promise.all(
+      orphans.map((cid) =>
+        updateConversationFor(
+          userId,
+          cid,
+          { status: "failed", last_active: new Date().toISOString() },
+          {
+            feature: "concurrency-ledger-divergence",
+            op: "start_session-recovery-finalize-orphan",
+            expectMatch: false,
+          },
+        ).catch(() => undefined),
+      ),
+    );
+
+    // Single Sentry mirror for the divergence detection itself. AC4
+    // explicitly excludes the recovered-OK path from telemetry to keep
+    // signal-to-noise on the divergence rate. Use a new Error so the
+    // mirror surfaces as a captureException (taggable + groupable in
+    // Sentry) rather than a captureMessage.
+    reportSilentFallback(new Error("ledger-divergence"), {
+      feature: "concurrency-ledger-divergence",
+      op: "start_session-recovery",
+      extra: {
+        userId,
+        visibleCount: visibleIds.size,
+        slotCount: slotConversationIds.length,
+        orphanCount: orphans.length,
+      },
+    });
+
+    return { didRecover: true };
+  } catch (err) {
+    // Defensive: any unexpected throw must NOT prevent the caller's
+    // close path from running. Mirror once so the failure surfaces.
+    reportSilentFallback(err, {
+      feature: "concurrency-ledger-divergence",
+      op: "start_session-recovery-throw",
+      extra: { userId },
+    });
+    return { didRecover: false };
+  }
 }
 
 /**
@@ -912,6 +1048,21 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
             }
           } catch (liveErr) {
             Sentry.captureException(liveErr);
+          }
+        }
+
+        // Self-healing ledger-divergence recovery (#stuck-active fix, AC4).
+        // Run BEFORE the existing cap_hit close path. If the slot ledger
+        // has orphan rows (slot present, conversation invisible/missing),
+        // release the orphans and retry acquire once. If the retry still
+        // returns cap_hit, fall through to the genuine cap-deny close
+        // path unchanged — DO NOT recurse.
+        // non-recursive by construction; do not refactor into a loop
+        if (acquire.status === "cap_hit") {
+          const recovered = await tryLedgerDivergenceRecovery(userId);
+          if (recovered.didRecover) {
+            const cap = effectiveCap(session.planTier, session.concurrencyOverride);
+            acquire = await acquireSlot(userId, pendingId, cap);
           }
         }
 

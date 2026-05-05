@@ -39,6 +39,7 @@ import { createCanUseTool } from "./permission-callback";
 import { reportSilentFallback } from "./observability";
 import { applyPrefillGuard } from "./agent-prefill-guard";
 import { updateConversationFor } from "./conversation-writer";
+import { releaseSlot } from "./concurrency";
 import { buildAgentQueryOptions } from "./agent-runner-query-options";
 import {
   READ_TOOL_PDF_CAPABILITY_DIRECTIVE,
@@ -466,6 +467,123 @@ export function startInactivityTimer(): void {
     }
   }, INACTIVITY_CHECK_INTERVAL_MS);
   timer.unref();
+}
+
+// ---------------------------------------------------------------------------
+// Stuck-active conversation reaper (#stuck-active fix, AC2)
+// ---------------------------------------------------------------------------
+/**
+ * Periodic reaper for conversations stuck at status='active'.
+ *
+ * Companion to the `try/catch` in the result branch (AC1) — that wrap
+ * handles the in-process throw class. This reaper handles the broader
+ * defense-in-depth class: process-killed-mid-stream, OOM, deploy
+ * mid-turn, future regressions.
+ *
+ * Signal: slot-heartbeat staleness. The RPC
+ * `find_stuck_active_conversations` (migration 037) returns conversations
+ * where the corresponding `user_concurrency_slots` row is missing OR has
+ * `last_heartbeat_at < now() - threshold`. NOT `conversations.last_active`
+ * — `last_active` is updated only by status writes, so a long tool-heavy
+ * turn streaming partials without status writes would have stale
+ * `last_active` and be falsely reaped. Slot heartbeats are refreshed every
+ * 30 s by `ws-handler.ts` for the active conversation; their staleness is
+ * the authoritative liveness signal.
+ *
+ * Threshold (120 s) and cadence (60 s) match the existing pg_cron sweep
+ * (migration 029 line 219-225) so the two sweep mechanisms agree on a
+ * single liveness threshold.
+ *
+ * Per-row order: status flip → releaseSlot → abortSession.
+ *   - Status flip first means the abort-branch in `startAgentSession`'s
+ *     outer catch (`controller.signal.aborted` ⇒ `failed` write) sees an
+ *     already-`failed` row, so the catch's status write is a no-op
+ *     (`expectMatch: false`).
+ *   - `releaseSlot` is the keyed DELETE; idempotent — safe even if the
+ *     archive trigger or the AC1 catch already released the slot.
+ *   - `abortSession` triggers the SDK iterator's
+ *     `controller.signal.aborted` branch, exiting the `for await` loop
+ *     so the activeSessions Map entry is removed by the existing finally
+ *     block.
+ *
+ * Returns the timer so callers can clear it (used by tests; production
+ * server keeps the reference live for the lifetime of the process).
+ */
+// THRESHOLD-COUPLING: 120 s appears in three places — keep them in sync.
+//   (1) migration 029 line ~131 (acquire_conversation_slot lazy sweep)
+//   (2) migration 029 line ~224 (pg_cron user_concurrency_slots_sweep)
+//   (3) migration 037 line ~39 (find_stuck_active_conversations default)
+// Changing this constant without updating those sites desyncs the sweep
+// mechanisms — one will reap rows the others consider live.
+const STUCK_ACTIVE_THRESHOLD_SECONDS = 120;
+const STUCK_ACTIVE_CHECK_INTERVAL_MS = 60 * 1_000;
+
+export function startStuckActiveReaper(): NodeJS.Timeout {
+  const timer = setInterval(async () => {
+    let candidates: Array<{ id: string; user_id: string }> = [];
+    try {
+      const { data, error } = await supabase().rpc(
+        "find_stuck_active_conversations",
+        { p_threshold_seconds: STUCK_ACTIVE_THRESHOLD_SECONDS },
+      );
+      if (error) {
+        log.error({ err: error }, "Stuck-active reaper RPC error");
+        reportSilentFallback(error, {
+          feature: "concurrency-stuck-active-reaper",
+          op: "find",
+        });
+        return;
+      }
+      candidates = (data ?? []) as Array<{ id: string; user_id: string }>;
+    } catch (rpcErr) {
+      // Defensive: RPC client itself threw (network blip, JSON shape).
+      reportSilentFallback(rpcErr, {
+        feature: "concurrency-stuck-active-reaper",
+        op: "find",
+      });
+      return;
+    }
+
+    if (candidates.length === 0) return;
+
+    // Parallelize per-row teardown — each candidate's pipeline is
+    // independent (per-(user,conv) keyed writes / DELETE / abort). Use
+    // `allSettled` so one row's failure does not block siblings. The
+    // ORDER constraint (status flip → releaseSlot → abortSession) is
+    // per-row, not cross-row.
+    await Promise.allSettled(
+      candidates.map(async (conv) => {
+        // Idempotent — if another replica already flipped the row, the
+        // expectMatch:false update is a no-op.
+        const result = await updateConversationFor(
+          conv.user_id,
+          conv.id,
+          { status: "failed", last_active: new Date().toISOString() },
+          {
+            feature: "concurrency-stuck-active-reaper",
+            op: "finalize",
+            expectMatch: false,
+          },
+        );
+        if (!result.ok) {
+          log.warn(
+            { userId: conv.user_id, conversationId: conv.id, err: result.error },
+            "stuck-active reap: status flip failed (will retry next tick)",
+          );
+          return;
+        }
+        // Order: status flip → releaseSlot → abortSession (see header above).
+        await releaseSlot(conv.user_id, conv.id);
+        abortSession(conv.user_id, conv.id);
+      }),
+    );
+    log.info(
+      { count: candidates.length },
+      "stuck-active reaper finalized rows",
+    );
+  }, STUCK_ACTIVE_CHECK_INTERVAL_MS);
+  timer.unref();
+  return timer;
 }
 
 // ---------------------------------------------------------------------------
@@ -1098,73 +1216,157 @@ issues/PRs, 4 KB comments); follow the html_url for the full text.`;
           }
         }
       } else if (message.type === "result") {
-        // Save the full assistant response with leader attribution
-        if (fullText) {
-          await saveMessage(conversationId, "assistant", fullText, undefined, streamLeaderId);
-        }
+        // Stuck-active prevention (#stuck-active fix, AC1). The result-branch
+        // body has SIX throw-eligible steps after `saveMessage`:
+        //   1. cost RPC `.then` (fire-and-forget; can't bubble to caller)
+        //   2. `sendToClient` usage_update emit (throws on dead WS)
+        //   3. `syncPush` await
+        //   4. `sendToClient` stream_end emit
+        //   5. `updateConversationStatus` (`expectMatch: true` 0-row throws)
+        //   6. `sendToClient` session_ended emit
+        // Without this wrap, any throw between (1) and the LAST step leaves
+        // the row at status='active' AND leaks the concurrency slot (the
+        // outer catch at the bottom of this try only writes "failed" when
+        // `controller.signal.aborted` is true, which it isn't here).
+        //
+        // Contract:
+        //   - `assistantPersisted` is set the moment `saveMessage` resolves;
+        //     a thrown step lands the row at `waiting_for_user` (the
+        //     assistant text was successfully persisted) or `failed` (if
+        //     `saveMessage` itself threw).
+        //   - `releaseSlot` is called best-effort; the implementation already
+        //     swallows errors per `concurrency.ts` semantics.
+        //   - The original error is RE-THROWN so the outer catch at the
+        //     bottom of the SDK-iterator try block still fires its existing
+        //     side effects (sanitize → send `error` to client → status
+        //     "failed" fallback). Idempotent because the catch we add here
+        //     attempts `waiting_for_user` first; the outer catch will write
+        //     `failed` only via its own
+        //     `updateConversationStatus(..., "failed").catch(...)` chain.
+        let assistantPersisted = false;
+        try {
+          // Save the full assistant response with leader attribution
+          if (fullText) {
+            await saveMessage(conversationId, "assistant", fullText, undefined, streamLeaderId);
+            assistantPersisted = true;
+          }
 
-        // Capture cost data from SDK result (per-turn delta)
-        const costDelta = message.total_cost_usd ?? 0;
-        const inputDelta = message.usage?.input_tokens ?? 0;
-        const outputDelta = message.usage?.output_tokens ?? 0;
+          // Capture cost data from SDK result (per-turn delta)
+          const costDelta = message.total_cost_usd ?? 0;
+          const inputDelta = message.usage?.input_tokens ?? 0;
+          const outputDelta = message.usage?.output_tokens ?? 0;
 
-        // Fire-and-forget: cost tracking is non-blocking telemetry.
-        // A failure here drops per-turn cost data silently — mirror to Sentry
-        // per `cq-silent-fallback-must-mirror-to-sentry` so on-call sees
-        // cost-tracking drift instead of discovering it at monthly reconciliation.
-        supabase().rpc(
-          "increment_conversation_cost",
-          {
-            conv_id: conversationId,
-            cost_delta: costDelta,
-            input_delta: inputDelta,
-            output_delta: outputDelta,
-          },
-        ).then(({ error: costError }) => {
-          if (costError) {
-            log.error({ err: costError, conversationId }, "Failed to save cost data");
-            reportSilentFallback(costError, {
-              feature: "agent-cost-tracking",
-              op: "increment",
-              extra: { conversationId, costDelta, inputDelta, outputDelta },
+          // Fire-and-forget: cost tracking is non-blocking telemetry.
+          // A failure here drops per-turn cost data silently — mirror to Sentry
+          // per `cq-silent-fallback-must-mirror-to-sentry` so on-call sees
+          // cost-tracking drift instead of discovering it at monthly reconciliation.
+          supabase().rpc(
+            "increment_conversation_cost",
+            {
+              conv_id: conversationId,
+              cost_delta: costDelta,
+              input_delta: inputDelta,
+              output_delta: outputDelta,
+            },
+          ).then(({ error: costError }) => {
+            if (costError) {
+              log.error({ err: costError, conversationId }, "Failed to save cost data");
+              reportSilentFallback(costError, {
+                feature: "agent-cost-tracking",
+                op: "increment",
+                extra: { conversationId, costDelta, inputDelta, outputDelta },
+              });
+            }
+          });
+
+          sendToClient(userId, {
+            type: "usage_update",
+            conversationId,
+            totalCostUsd: costDelta,
+            inputTokens: inputDelta,
+            outputTokens: outputDelta,
+          });
+
+          // Sync: push changes to remote after session (connected repos only)
+          if (user.repo_status === "ready") {
+            await syncPush(userId, workspacePath);
+          }
+
+          // Notify client that this leader finished streaming. The finally block
+          // below emits the same event as a fallback for exception paths; guard
+          // with `streamStartSent && !streamEndSent` so the two sites are
+          // idempotent (grep-stable across all three emission sites — see #2843).
+          if (streamStartSent && !streamEndSent) {
+            sendToClient(userId, { type: "stream_end", leaderId: streamLeaderId });
+            streamEndSent = true;
+          }
+
+          // Mark as waiting_for_user instead of completed -- conversation
+          // continues until explicit close or inactivity timeout.
+          await updateConversationStatus(userId, conversationId, "waiting_for_user");
+
+          // In multi-leader mode, dispatchToLeaders sends a single session_ended
+          // after all leaders finish — individual leaders must not send it or the
+          // client clears all active streams prematurely (see #2428).
+          if (!skipSessionEnded) {
+            sendToClient(userId, {
+              type: "session_ended",
+              reason: "turn_complete",
             });
           }
-        });
-
-        sendToClient(userId, {
-          type: "usage_update",
-          conversationId,
-          totalCostUsd: costDelta,
-          inputTokens: inputDelta,
-          outputTokens: outputDelta,
-        });
-
-        // Sync: push changes to remote after session (connected repos only)
-        if (user.repo_status === "ready") {
-          await syncPush(userId, workspacePath);
-        }
-
-        // Notify client that this leader finished streaming. The finally block
-        // below emits the same event as a fallback for exception paths; guard
-        // with `streamStartSent && !streamEndSent` so the two sites are
-        // idempotent (grep-stable across all three emission sites — see #2843).
-        if (streamStartSent && !streamEndSent) {
-          sendToClient(userId, { type: "stream_end", leaderId: streamLeaderId });
-          streamEndSent = true;
-        }
-
-        // Mark as waiting_for_user instead of completed -- conversation
-        // continues until explicit close or inactivity timeout.
-        await updateConversationStatus(userId, conversationId, "waiting_for_user");
-
-        // In multi-leader mode, dispatchToLeaders sends a single session_ended
-        // after all leaders finish — individual leaders must not send it or the
-        // client clears all active streams prematurely (see #2428).
-        if (!skipSessionEnded) {
-          sendToClient(userId, {
-            type: "session_ended",
-            reason: "turn_complete",
-          });
+        } catch (resultBranchErr) {
+          // Best-effort terminal-state finalization. The conversation row
+          // would otherwise stay at status='active' and the slot would leak.
+          // See `cq-silent-fallback-must-mirror-to-sentry` — the err is
+          // re-thrown, so the outer catch (this file, lines ~1165-1232) is
+          // the durable Sentry mirror; we don't double-mirror here.
+          log.error(
+            { err: resultBranchErr, userId, conversationId, assistantPersisted },
+            "result-branch finalization fallback firing (stuck-active prevention)",
+          );
+          if (assistantPersisted) {
+            // Assistant text was saved — natural terminal state is
+            // `waiting_for_user`. If that write itself fails (the most
+            // common wedge class — see (5) above), cascade to `failed`
+            // so the row never stays at `active`.
+            try {
+              await updateConversationStatus(userId, conversationId, "waiting_for_user");
+            } catch (waitingErr) {
+              log.warn(
+                { err: waitingErr, userId, conversationId },
+                "result-branch fallback: waiting_for_user flip failed; cascading to failed",
+              );
+              await updateConversationStatus(userId, conversationId, "failed").catch(
+                (failedErr) => {
+                  log.error(
+                    { err: failedErr, userId, conversationId },
+                    "result-branch fallback: failed-status flip also failed",
+                  );
+                },
+              );
+            }
+          } else {
+            // `saveMessage` itself threw or never ran — there is no
+            // user-visible assistant content so `failed` is the honest
+            // terminal state.
+            await updateConversationStatus(userId, conversationId, "failed").catch(
+              (failedErr) => {
+                log.error(
+                  { err: failedErr, userId, conversationId },
+                  "result-branch fallback: failed-status flip failed (no assistant text)",
+                );
+              },
+            );
+          }
+          // Idempotent keyed DELETE — safe even if archive-trigger or a
+          // concurrent teardown already released the slot.
+          await releaseSlot(userId, conversationId);
+          // Re-throw so the outer catch's existing side effects (client
+          // `error` emit, sanitization, abort-vs-disconnect branching) still
+          // fire. The outer catch's `failed`-status write is a no-op when
+          // we already wrote `waiting_for_user` (last-writer-wins on
+          // `last_active` is fine; the row is no longer `active` either way).
+          throw resultBranchErr;
         }
       } else if (
         // Partial messages (streaming text deltas — cumulative snapshots)
@@ -1202,6 +1404,9 @@ issues/PRs, 4 KB comments); follow the html_url for the full text.`;
             );
           },
         );
+        // Outer catch: result-branch wrap might not have run; release slot so the user isn't stuck for up to 60s waiting for the reaper.
+        // releaseSlot already swallows errors internally (concurrency.ts) — no extra .catch needed.
+        await releaseSlot(userId, conversationId);
       }
     } else if (
       resumeSessionId &&
@@ -1252,6 +1457,9 @@ issues/PRs, 4 KB comments); follow the html_url for the full text.`;
           );
         },
       );
+      // Outer catch: result-branch wrap might not have run; release slot so the user isn't stuck for up to 60s waiting for the reaper.
+      // releaseSlot already swallows errors internally (concurrency.ts) — no extra .catch needed.
+      await releaseSlot(userId, conversationId);
     }
   } finally {
     // Fallback stream_end emission. Covers: SDK iterator throws mid-stream,
