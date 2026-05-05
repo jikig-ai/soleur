@@ -283,4 +283,81 @@ describe("persistAndDownloadAttachments", () => {
     expect(inserted[0]!.filename).not.toContain("/");
     expect(inserted[0]!.filename).not.toContain("\\");
   });
+
+  it("strips control chars and Unicode line separators from filename (log/prompt-injection guard)", async () => {
+    const supabase = makeSupabaseMock({
+      workspacePath: "/workspace/u1",
+      download: () => ({
+        data: { arrayBuffer: async () => buf },
+        error: null,
+      }),
+    });
+
+    // U+2028 and U+2029 would otherwise let an attacker forge a second
+    // "- file.png ..." line in the LLM-facing attachmentContext block.
+    // Newlines + null + DEL behave the same way.
+    const evil = makeAttachment({
+      filename: "ok\u2028name\nwith\rweird\x00chars\x7f.png",
+      storagePath: `${userId}/${conversationId}/file.png`,
+    });
+
+    await persistAndDownloadAttachments({
+      supabase: supabase.client as never,
+      userId,
+      conversationId,
+      messageId,
+      attachments: [evil],
+    });
+
+    const inserted = supabase.insertCalls[0] as Array<{ filename: string }>;
+    const filename = inserted[0]!.filename;
+    expect(filename).not.toMatch(/[\u2028\u2029\n\r\x00\x7f]/);
+  });
+
+  it("returns attachmentContext: undefined and skips DB writes when attachments array is empty", async () => {
+    const supabase = makeSupabaseMock({
+      workspacePath: "/workspace/u1",
+      download: () => ({
+        data: { arrayBuffer: async () => buf },
+        error: null,
+      }),
+    });
+
+    const { attachmentContext } = await persistAndDownloadAttachments({
+      supabase: supabase.client as never,
+      userId,
+      conversationId,
+      messageId,
+      attachments: [],
+    });
+
+    expect(attachmentContext).toBeUndefined();
+    expect(supabase.insertCalls).toHaveLength(0);
+    expect(writeFileMock).not.toHaveBeenCalled();
+  });
+
+  it("throws ERR_UPLOAD_FAILED when message_attachments insert fails", async () => {
+    const supabase = makeSupabaseMock({
+      workspacePath: "/workspace/u1",
+      insertError: new Error("postgrest 500"),
+      download: () => ({
+        data: { arrayBuffer: async () => buf },
+        error: null,
+      }),
+    });
+
+    await expect(
+      persistAndDownloadAttachments({
+        supabase: supabase.client as never,
+        userId,
+        conversationId,
+        messageId,
+        attachments: [makeAttachment()],
+      }),
+    ).rejects.toThrow(/Upload failed/);
+
+    // Workspace download must NOT have run after a failed insert (no
+    // orphan files on disk for an FK that doesn't exist).
+    expect(writeFileMock).not.toHaveBeenCalled();
+  });
 });

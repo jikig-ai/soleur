@@ -540,6 +540,18 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
             });
           }
 
+          // #3254 — image-placeholder-strip surfaced a structured error.
+          // Promote into `lastError` so a programmatic / agent-driven
+          // client can branch on `code` instead of regexing the assistant
+          // message text. The message itself ALSO falls through to the
+          // chat-bubble path below for the human reader.
+          if (msg.errorCode === "image_paste_lost") {
+            setLastError({
+              code: "image_paste_lost",
+              message: msg.message,
+            });
+          }
+
           // Route gateId-targeted errors to the review gate message
           if (msg.gateId) {
             dispatch({ type: "gate_error", gateId: msg.gateId, message: msg.message });
@@ -734,7 +746,20 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
     }
 
     const json = await res.json();
-    const mapped = json.messages.map((m: { id: string; role: string; content: string; leader_id: string | null }) => ({
+    type RawAttachment = {
+      id: string;
+      storage_path: string;
+      filename: string;
+      content_type: string;
+      size_bytes: number;
+    };
+    const mapped = json.messages.map((m: {
+      id: string;
+      role: string;
+      content: string;
+      leader_id: string | null;
+      message_attachments?: RawAttachment[] | null;
+    }) => ({
       id: m.id,
       role: m.role as "user" | "assistant",
       content: m.content,
@@ -746,6 +771,13 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
       // undefined state via its default branch (MarkdownRenderer), which is
       // functionally identical to case "done" for messages without toolsUsed.
       // See #2218 (checkmark on historical bubbles) and #2139 (original fix).
+      attachments: (m.message_attachments ?? []).map((a) => ({
+        id: a.id,
+        storagePath: a.storage_path,
+        filename: a.filename,
+        contentType: a.content_type,
+        sizeBytes: a.size_bytes,
+      })),
     }));
 
     const costData: UsageData | null =

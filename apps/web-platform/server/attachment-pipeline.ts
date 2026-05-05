@@ -78,7 +78,8 @@ export async function persistAndDownloadAttachments(
     return { attachmentContext: undefined };
   }
 
-  // Validate and sanitize each attachment (defense-in-depth — client is untrusted).
+  // The client is untrusted: validate storagePath + content-type and
+  // sanitize filename in one pass before any DB write or filesystem touch.
   const pathPrefix = `${userId}/${conversationId}/`;
 
   for (const att of attachments) {
@@ -88,10 +89,20 @@ export async function persistAndDownloadAttachments(
     if (!ALLOWED_ATTACHMENT_TYPES.has(att.contentType)) {
       throw new Error(ERR_UNSUPPORTED_FILE_TYPE);
     }
-    att.filename = att.filename.replace(/[/\\]/g, "_");
+    // Sanitize filename:
+    //   - strip path separators (defense against shell/SQL injection
+    //     downstream paths)
+    //   - strip C0 controls + DEL + Unicode line separators (U+2028/U+2029)
+    //     so a crafted filename cannot smuggle a forged "another attached
+    //     file" line into the `attachmentContext` text block we feed to
+    //     the LLM
+    //   - cap length at 255 to bound LLM-prompt growth
+    att.filename = att.filename
+      // eslint-disable-next-line no-control-regex
+      .replace(/[/\\\x00-\x1f\x7f\u2028\u2029]/g, "_")
+      .slice(0, 255);
   }
 
-  // Insert attachment metadata rows.
   const attachmentRows = attachments.map((att) => ({
     message_id: messageId,
     storage_path: att.storagePath,
@@ -109,7 +120,6 @@ export async function persistAndDownloadAttachments(
     throw new Error(ERR_UPLOAD_FAILED);
   }
 
-  // Download files to workspace for agent access.
   const { data: user } = await supabase
     .from("users")
     .select("workspace_path")

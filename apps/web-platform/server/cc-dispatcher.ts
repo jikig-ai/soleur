@@ -720,6 +720,29 @@ export async function dispatchSoleurGo(
     attachments,
   } = args;
 
+  // Verify conversation ownership BEFORE persisting the user message.
+  // Mirrors `agent-runner.ts:sendUserMessage` — the cc path's caller chain
+  // already filters on `user_id` upstream (see `ws-handler.ts` start_session
+  // / resume_session probes), but a defense-in-depth probe at the
+  // persistence boundary protects against future callers that bypass the
+  // upstream invariant. Without this, a `dispatchSoleurGo` reuse with an
+  // externally-supplied `conversationId` would write into another tenant's
+  // row.
+  const { data: ownership, error: ownershipErr } = await supabase()
+    .from("conversations")
+    .select("id")
+    .eq("id", conversationId)
+    .eq("user_id", userId)
+    .single();
+  if (ownershipErr || !ownership) {
+    reportSilentFallback(ownershipErr, {
+      feature: "cc-dispatcher",
+      op: "verify-conversation-ownership",
+      extra: { userId, conversationId },
+    });
+    throw new Error("Conversation not found");
+  }
+
   // #3254 — persist a `messages` row for every cc turn so
   // `message_attachments.message_id` can be FK'd. The legacy single-leader
   // path has always done this in `agent-runner.ts:sendUserMessage`; the
@@ -742,36 +765,28 @@ export async function dispatchSoleurGo(
       op: "persist-user-message",
       extra: { userId, conversationId },
     });
-    // Re-throw — without the parent row, attachments cannot land and the
-    // turn would be a silent partial success.
     throw new Error(`Failed to save user message: ${insertErr.message}`);
   }
 
   // Persist attachment metadata + download files into the workspace.
   // Mirrors `agent-runner.ts:sendUserMessage` exactly via the shared
-  // helper. On any download failure, the helper omits that file from
-  // the `attachmentContext` text — partial success is preferred over
-  // a hard turn failure.
+  // helper. On any per-file download failure, the helper omits that file
+  // from the `attachmentContext` text — partial success is preferred over
+  // a hard turn failure. Validation/INSERT errors propagate to the outer
+  // dispatch catch, which mirrors via `mirrorWithDebounce` (no inner
+  // try/catch — that would double-mirror and bypass the dispatch
+  // debounce, flooding Sentry on a misconfigured Storage URL).
   let userMessage = rawUserMessage;
   if (attachments && attachments.length > 0) {
-    try {
-      const { attachmentContext } = await persistAndDownloadAttachments({
-        supabase: supabase(),
-        userId,
-        conversationId,
-        messageId,
-        attachments,
-      });
-      if (attachmentContext) {
-        userMessage = `${rawUserMessage}\n\n${attachmentContext}`;
-      }
-    } catch (err) {
-      reportSilentFallback(err, {
-        feature: "cc-dispatcher",
-        op: "attachment-pipeline",
-        extra: { userId, conversationId, messageId },
-      });
-      throw err;
+    const { attachmentContext } = await persistAndDownloadAttachments({
+      supabase: supabase(),
+      userId,
+      conversationId,
+      messageId,
+      attachments,
+    });
+    if (attachmentContext) {
+      userMessage = `${rawUserMessage}\n\n${attachmentContext}`;
     }
   }
 

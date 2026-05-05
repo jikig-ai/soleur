@@ -1,9 +1,17 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-const { mockReportSilentFallback, mockFetchUserWorkspacePath, mockMessagesInsert } = vi.hoisted(() => ({
+const {
+  mockReportSilentFallback,
+  mockFetchUserWorkspacePath,
+  mockMessagesInsert,
+  mockConversationOwnership,
+} = vi.hoisted(() => ({
   mockReportSilentFallback: vi.fn(),
   mockFetchUserWorkspacePath: vi.fn(),
   mockMessagesInsert: vi.fn().mockResolvedValue({ error: null }),
+  mockConversationOwnership: vi
+    .fn()
+    .mockResolvedValue({ data: { id: "stub-conv-id" }, error: null }),
 }));
 
 vi.mock("@/server/observability", () => ({
@@ -39,8 +47,16 @@ vi.mock("@/lib/supabase/service", () => ({
       if (table === "messages") {
         return { insert: mockMessagesInsert };
       }
-      // Other tables not exercised by these tests — fail loudly so a
-      // future test that hits them adds an explicit stub.
+      if (table === "conversations") {
+        // dispatchSoleurGo's ownership probe:
+        // `from("conversations").select("id").eq("id", id).eq("user_id", uid).single()`
+        const chain = {
+          select: () => chain,
+          eq: () => chain,
+          single: mockConversationOwnership,
+        };
+        return chain;
+      }
       throw new Error(`unexpected table in cc-dispatcher.test.ts: ${table}`);
     },
     storage: {
@@ -78,6 +94,11 @@ describe("cc-dispatcher singletons + orchestration", () => {
     // Default: every messages-insert succeeds; tests that need a failure
     // can override per-call.
     mockMessagesInsert.mockResolvedValue({ error: null });
+    mockConversationOwnership.mockClear();
+    mockConversationOwnership.mockResolvedValue({
+      data: { id: "stub-conv-id" },
+      error: null,
+    });
     // Default: a stable stub workspace path so existing tests that don't
     // care about the workspace-resolve path still get a deterministic value.
     mockFetchUserWorkspacePath.mockResolvedValue("/tmp/claude-XXXX/workspace");
