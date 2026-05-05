@@ -48,9 +48,10 @@ vi.mock("@/lib/supabase/service", () => ({
         return { insert: mockMessagesInsert };
       }
       if (table === "conversations") {
-        // dispatchSoleurGo's ownership probe:
-        // `from("conversations").select("id").eq("id", id).eq("user_id", uid).single()`
+        // dispatchSoleurGo's combined ownership-check + last_active bump:
+        // `from("conversations").update({...}).eq(...).eq(...).select("id").single()`
         const chain = {
+          update: () => chain,
           select: () => chain,
           eq: () => chain,
           single: mockConversationOwnership,

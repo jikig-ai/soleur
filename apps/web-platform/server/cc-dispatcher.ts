@@ -720,19 +720,19 @@ export async function dispatchSoleurGo(
     attachments,
   } = args;
 
-  // Verify conversation ownership BEFORE persisting the user message.
-  // Mirrors `agent-runner.ts:sendUserMessage` — the cc path's caller chain
-  // already filters on `user_id` upstream (see `ws-handler.ts` start_session
-  // / resume_session probes), but a defense-in-depth probe at the
-  // persistence boundary protects against future callers that bypass the
-  // upstream invariant. Without this, a `dispatchSoleurGo` reuse with an
-  // externally-supplied `conversationId` would write into another tenant's
-  // row.
+  // Verify conversation ownership AND bump `last_active` in a single
+  // round-trip. The UPDATE/RETURNING form does both: rows that fail the
+  // user_id predicate return zero rows (treated as 404), rows that match
+  // record activity at the start of the turn so the conversation
+  // surfaces correctly in any "recent conversations" UI even if the
+  // runner errors before its own status callbacks fire. Mirrors the
+  // `user_id` defense-in-depth from `agent-runner.ts:sendUserMessage`.
   const { data: ownership, error: ownershipErr } = await supabase()
     .from("conversations")
-    .select("id")
+    .update({ last_active: new Date().toISOString() })
     .eq("id", conversationId)
     .eq("user_id", userId)
+    .select("id")
     .single();
   if (ownershipErr || !ownership) {
     reportSilentFallback(ownershipErr, {
