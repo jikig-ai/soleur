@@ -168,6 +168,14 @@ verify_worktree_created() {
     fi
     echo -e "${GREEN}Repair successful — worktree now registered${NC}"
   fi
+
+  # Check 3: Verify the branch was actually created
+  if ! git show-ref --verify --quiet "refs/heads/$branch_name"; then
+    echo -e "${RED}Error: Branch $branch_name was not created despite successful worktree add${NC}"
+    echo -e "${YELLOW}Hint: Try 'git worktree add $worktree_path -b $branch_name $from_branch' directly${NC}"
+    git worktree remove "$worktree_path" --force 2>/dev/null || rm -rf "$worktree_path" 2>/dev/null || true
+    exit 1
+  fi
 }
 
 # Ensure the worktree uses the operator's global git identity, not the bare repo's
