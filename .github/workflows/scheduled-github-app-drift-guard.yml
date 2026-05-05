@@ -85,6 +85,9 @@ jobs:
           PRIVATE_KEY_B64: ${{ secrets.GH_APP_DRIFTGUARD_PRIVATE_KEY_B64 }}
           EXPECTED_CLIENT_ID: ${{ secrets.OAUTH_PROBE_GITHUB_CLIENT_ID }}
         run: |
+          # NOT set -e — we collect failure modes and emit them as outputs.
+          # set -e would abort on the first non-zero, defeating the whole
+          # 3-output failure-routing model. Mirror of oauth-probe:67.
           set -uo pipefail
           exec > >(tee -a "$RUNNER_TEMP/step-output.log") 2>&1
 
@@ -96,6 +99,16 @@ jobs:
             local mode="$1"
             local detail="$2"
             local label="$3"
+            # Allowlist routing labels. A typo (e.g., "ci/auth-borken")
+            # would silently route to the case-default at the issue-create
+            # step; warn here so the typo surfaces at write-time.
+            case "$label" in
+              ci/auth-broken|ci/guard-broken) ;;
+              *)
+                echo "::warning::record_failure called with unknown label '$label' — routing as ci/guard-broken"
+                label="ci/guard-broken"
+                ;;
+            esac
             if [[ -z "$failure_mode" ]]; then
               failure_mode="$mode"
               failure_detail="$detail"
@@ -108,17 +121,31 @@ jobs:
           }
 
           mint_jwt() {
+            # Local pipefail so a partial-output silent-success in the
+            # openssl|b64url pipeline does NOT produce a malformed JWT
+            # while the outer step's `JWT=$(mint_jwt) || …` capture
+            # treats it as success. Pipe stderr to a step-scoped log so
+            # record_failure can include the actual openssl error.
+            set -o pipefail
+            # JWT lifetime: GitHub's hard cap on App-JWT exp is 10 minutes.
+            # 540s forward + 60s back-buffer for clock skew = 600s window
+            # (still under the 10min cap). Constants are local so the
+            # contract test can extract and re-run mint_jwt in isolation
+            # without depending on script-level state.
+            # https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/generating-a-json-web-token-jwt-for-a-github-app
+            local backdate_s=60
+            local lifetime_s=540
             local now header payload unsigned signature
             now=$(date +%s)
             header=$(printf '%s' '{"alg":"RS256","typ":"JWT"}' | b64url)
             payload=$(jq -nc \
               --argjson iss "$APP_ID" \
-              --argjson iat "$((now - 60))" \
-              --argjson exp "$((now + 540))" \
+              --argjson iat "$((now - backdate_s))" \
+              --argjson exp "$((now + lifetime_s))" \
               '{iss: $iss, iat: $iat, exp: $exp}' | b64url)
             unsigned="${header}.${payload}"
             signature=$(printf '%s' "$unsigned" | \
-              openssl dgst -sha256 -sign "$KEY_FILE" -binary | b64url)
+              openssl dgst -sha256 -sign "$KEY_FILE" -binary 2>"${RUNNER_TEMP:-/tmp}/mint-stderr.log" | b64url)
             printf '%s.%s\n' "$unsigned" "$signature"
           }
 
@@ -168,16 +195,27 @@ jobs:
           if [[ -z "$failure_mode" ]]; then
             export KEY_FILE
             JWT=$(mint_jwt) || {
+              mint_err=$(head -c 200 "$RUNNER_TEMP/mint-stderr.log" 2>/dev/null || true)
               record_failure "jwt_mint_failed" \
-                "openssl/jq pipeline returned non-zero" \
+                "openssl/jq pipeline returned non-zero: ${mint_err:-no stderr captured}" \
                 "ci/guard-broken"
             }
             if [[ -n "${JWT:-}" ]]; then
               echo "::add-mask::$JWT"
+            else
+              # Defensive: if mint failed silently but record_failure didn't
+              # fire (e.g., subshell-success-with-empty-output), surface it.
+              [[ -z "$failure_mode" ]] && record_failure "jwt_mint_empty" \
+                "mint_jwt produced empty output despite zero exit status" \
+                "ci/guard-broken"
             fi
           fi
 
-          if [[ -z "$failure_mode" ]]; then
+          # Re-check failure_mode after the mint block — defensive against
+          # the JWT scope leak between if-blocks. A future intermediate
+          # block that touches failure_mode would otherwise leave $JWT
+          # stale at the curl call site.
+          if [[ -z "$failure_mode" && -n "${JWT:-}" ]]; then
             RESPONSE_FILE=$(mktemp -p "$RUNNER_TEMP" app-response.XXXXXX)
             HTTP_CODE=$(curl -s --max-time 15 -w '%{http_code}' \
               -o "$RESPONSE_FILE" \
@@ -191,8 +229,16 @@ jobs:
                 "curl https://api.github.com/app -> network error" \
                 "ci/guard-broken"
             elif [[ "$HTTP_CODE" == "401" ]]; then
+              # 401 has two equally-plausible causes that route differently:
+              # (a) App swapped/deleted/suspended (true drift -> ci/auth-broken)
+              # (b) our PEM is stale relative to GitHub-side rotation
+              #     (guard malfunction -> ci/guard-broken). Operator triage
+              #     decides via the runbook's 401-disambiguation procedure.
+              # We default to ci/auth-broken because (a) is more likely AND
+              # has higher user impact; (b) is recoverable by re-syncing
+              # Doppler→GH secrets.
               record_failure "github_app_401" \
-                "GET /app -> 401 Bad credentials. App ID ${APP_ID} may have been deleted, suspended, or its private key rotated" \
+                "GET /app -> 401 Bad credentials. Either App ID ${APP_ID} was deleted/suspended/swapped (drift) OR our PEM is stale vs GitHub-side rotation (guard mis-bootstrap). See runbook 401-disambiguation." \
                 "ci/auth-broken"
             elif [[ "$HTTP_CODE" != "200" ]]; then
               record_failure "github_api_http" \
@@ -222,9 +268,23 @@ jobs:
             fi
           fi
 
-          fail_mode_safe=$(printf '%s' "$failure_mode" | tr -d '\r\n\f\v\x7f')
-          fail_detail_safe=$(printf '%s' "$failure_detail" | tr -d '\r\n\f\v\x7f')
-          fail_label_safe=$(printf '%s' "$failure_label" | tr -d '\r\n\f\v\x7f')
+          # Sanitize for $GITHUB_OUTPUT: strip CR/LF/form-feed/vertical-tab/
+          # DEL plus NEL (U+0085) and Unicode line/paragraph separators
+          # (U+2028/U+2029). The latter two render as line breaks in markdown
+          # issue bodies and could be used to forge ::warning:: annotations
+          # or break the key=value contract for $GITHUB_OUTPUT. Bash's
+          # ${var//[$'…']/} doesn't reliably cover multi-byte UTF-8; pipe
+          # through sed for the explicit byte sequences. Mirror of
+          # oauth-probe's strip_log_injection (yaml :84-90).
+          strip_log_injection() {
+            # First pass: ASCII control chars via tr (single-byte safe).
+            # Second pass: explicit UTF-8 byte sequences for U+0085 (C2 85),
+            # U+2028 (E2 80 A8), U+2029 (E2 80 A9) via sed.
+            tr -d '\r\n\f\v\x7f' | sed -e 's/\xc2\x85//g' -e 's/\xe2\x80\xa8//g' -e 's/\xe2\x80\xa9//g'
+          }
+          fail_mode_safe=$(printf '%s' "$failure_mode" | strip_log_injection)
+          fail_detail_safe=$(printf '%s' "$failure_detail" | strip_log_injection)
+          fail_label_safe=$(printf '%s' "$failure_label" | strip_log_injection)
           {
             echo "failure_mode=${fail_mode_safe}"
             echo "failure_detail=${fail_detail_safe}"
@@ -252,7 +312,15 @@ jobs:
             exit 0
           fi
 
-          if grep -E "BEGIN [A-Z ]*PRIVATE KEY|eyJ[A-Za-z0-9_-]{20,}" "$LOG" >/dev/null; then
+          # Three alternations:
+          #   PEM block header (covers RSA, PKCS#8, EC, OPENSSH; rejects PUBLIC KEY)
+          #   base64-of-PEM ("LS0tLS1CRUdJTi…" — what PRIVATE_KEY_B64 itself looks like)
+          #   JWT segment prefix (eyJ + 20+ base64url chars)
+          # The base64-of-PEM alternation catches a future-PR mistake where
+          # someone echoes $PRIVATE_KEY_B64 directly without decoding (the
+          # decoded PEM would be masked, but the un-decoded base64 form
+          # bypasses the line-by-line ::add-mask:: registration).
+          if grep -E "BEGIN [A-Z ]*PRIVATE KEY|LS0tLS1CRUdJTi[A-Za-z0-9+/]|eyJ[A-Za-z0-9_-]{20,}" "$LOG" >/dev/null; then
             echo "::error::Leak tripwire fired."
 
             BODY_FILE=$(mktemp)
@@ -302,6 +370,11 @@ jobs:
               ISSUE_TITLE="[ci/guard-broken] GitHub App drift-guard malfunctioned"
               ;;
             *)
+              # Belt-and-suspenders: record_failure already allowlists the
+              # label. If we reach this branch, the routing pipeline drifted —
+              # surface a warning AND default to ci/guard-broken so an
+              # operator sees the issue rather than a silent dead-letter.
+              echo "::warning::Issue-create step received unknown FAILURE_LABEL='${FAILURE_LABEL}', defaulting to ci/guard-broken"
               ISSUE_TITLE="[ci/guard-broken] GitHub App drift-guard malfunctioned"
               FAILURE_LABEL="ci/guard-broken"
               ;;
@@ -324,7 +397,7 @@ jobs:
 
           EXISTING=$(gh issue list --repo "$GH_REPO" --state open \
             --label "$FAILURE_LABEL" \
-            --search 'in:title "drift-guard"' \
+            --search 'in:title "GitHub App drift-guard"' \
             --json number --jq '.[0].number // empty' 2>/dev/null) || EXISTING=""
 
           if [[ -n "$EXISTING" ]]; then
@@ -367,7 +440,7 @@ jobs:
           for label in ci/auth-broken ci/guard-broken; do
             STALE=$(gh issue list --repo "$GH_REPO" --state open \
               --label "$label" \
-              --search 'in:title "drift-guard"' \
+              --search 'in:title "GitHub App drift-guard"' \
               --json number --jq '.[0].number // empty' 2>/dev/null) || STALE=""
 
             if [[ -n "$STALE" ]]; then
@@ -377,7 +450,12 @@ jobs:
             fi
           done
 
-      - name: Cleanup PEM (best-effort)
+      - name: Cleanup PEM and response file (best-effort)
         if: always()
         run: |
-          rm -f "$RUNNER_TEMP"/app.pem.* 2>/dev/null || true
+          # Cleanup all step-scoped temp files (PEM, response body, mint stderr).
+          # rm -f, not shred — runners are ephemeral cloud VMs on COW
+          # filesystems; shred adds no security here. See runbook.
+          rm -f "$RUNNER_TEMP"/app.pem.* \
+                "$RUNNER_TEMP"/app-response.* \
+                "$RUNNER_TEMP/mint-stderr.log" 2>/dev/null || true

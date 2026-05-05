@@ -25,6 +25,13 @@ import path from "node:path";
 // See: knowledge-base/project/learnings/best-practices/2026-04-18-drift-guard-self-silent-failures.md
 export const LEAK_TRIPWIRE_PEM_REGEX = "BEGIN [A-Z ]*PRIVATE KEY";
 export const LEAK_TRIPWIRE_JWT_REGEX = "eyJ[A-Za-z0-9_-]{20,}";
+// Base64-of-PEM tripwire: catches the future-PR mistake where someone
+// echoes `$PRIVATE_KEY_B64` directly without decoding. The decoded form
+// is masked line-by-line via `::add-mask::` (one mask per PEM line);
+// the un-decoded base64 form is a single line that bypasses that
+// registration. `LS0tLS1CRUdJTi` is the base64 of `-----BEGIN ` and
+// is the deterministic prefix for any standard PEM-encoded key.
+export const LEAK_TRIPWIRE_PEM_B64_REGEX = "LS0tLS1CRUdJTi[A-Za-z0-9+/]";
 
 // Concurrency group — must be unique across all workflows in this repo.
 export const CONCURRENCY_GROUP = "scheduled-github-app-drift-guard";
@@ -160,13 +167,16 @@ describe("scheduled-github-app-drift-guard.yml — concurrency", () => {
 // =============================================================================
 
 describe("scheduled-github-app-drift-guard.yml — leak tripwire", () => {
-  test("leak tripwire greps for both anchored regex patterns", () => {
+  test("leak tripwire greps for all three anchored regex patterns", () => {
     const yaml = readFileSync(workflowPath, "utf-8");
-    // Both patterns must appear verbatim in the workflow body. A future
-    // edit that loosens or narrows either pattern silently weakens the
-    // guard; CODEOWNERS requires a second-reviewer to catch this at PR.
+    // All three patterns must appear verbatim in the workflow body. A
+    // future edit that loosens or narrows any pattern silently weakens
+    // the guard; CODEOWNERS requires a second-reviewer to catch this
+    // at PR. The base64-of-PEM alternation covers the un-decoded
+    // PRIVATE_KEY_B64 echo class (added per security review P3-5).
     expect(yaml).toContain(LEAK_TRIPWIRE_PEM_REGEX);
     expect(yaml).toContain(LEAK_TRIPWIRE_JWT_REGEX);
+    expect(yaml).toContain(LEAK_TRIPWIRE_PEM_B64_REGEX);
   });
 
   test("leak tripwire is a separate step with if: always()", () => {
@@ -218,10 +228,14 @@ describe("scheduled-github-app-drift-guard.yml — failure routing", () => {
 
   test("dedup search scopes to drift-guard (no collision with oauth-probe)", () => {
     const yaml = readFileSync(workflowPath, "utf-8");
-    // The search must include the literal token `drift-guard` so dedup is
-    // scoped to this workflow only; oauth-probe issues use the same labels
-    // (`ci/auth-broken`) but their titles do not contain `drift-guard`.
-    expect(yaml).toMatch(/in:title\s+["']*drift-guard/);
+    // The search must include the more-specific phrase `GitHub App
+    // drift-guard` so dedup is scoped to THIS workflow's titles only.
+    // oauth-probe uses `ci/auth-broken` too but its titles say "Synthetic
+    // OAuth probe" not "GitHub App drift-guard". Tightening to the full
+    // phrase (vs bare "drift-guard") closes a future-PR risk where some
+    // unrelated issue mentions "drift-guard" in its title and this
+    // workflow's auto-close eats it.
+    expect(yaml).toMatch(/in:title\s+["']*GitHub App drift-guard/);
   });
 
   test("idempotent label create for both new labels", () => {
@@ -342,8 +356,13 @@ describe("scheduled-github-app-drift-guard.yml — JWT mint correctness", () => 
       const now = Math.floor(Date.now() / 1000);
       expect(payload.iat).toBeLessThanOrEqual(now);
       expect(payload.exp).toBeGreaterThan(now);
-      // Exp - iat should be 600s (9-min forward + 60s back-buffer = 540 + 60).
-      expect(payload.exp - payload.iat).toBe(600);
+      // exp - iat should be in [540, 600] seconds. GitHub's hard cap on
+      // App-JWT exp is 10 min (600s); the workflow uses 540s forward
+      // plus a 60s back-buffer for clock skew. The range allows a
+      // future tightening (e.g., to 500s + 30s) without test churn.
+      const window = payload.exp - payload.iat;
+      expect(window).toBeGreaterThanOrEqual(540);
+      expect(window).toBeLessThanOrEqual(600);
 
       // Signature verify. Pass the KeyObject directly — createPublicKey()
       // expects a *private* KeyObject (to extract its public half) or raw
@@ -422,18 +441,43 @@ describe("leak-tripwire regex semantics — negative control", () => {
   test("a real PEM block DOES match the PEM tripwire (positive control)", () => {
     const re = new RegExp(LEAK_TRIPWIRE_PEM_REGEX);
     expect("-----BEGIN RSA PRIVATE KEY-----").toMatch(re);
-    expect("-----BEGIN PRIVATE KEY-----").toMatch(re);
+    expect("-----BEGIN PRIVATE KEY-----").toMatch(re); // PKCS#8
     expect("-----BEGIN OPENSSH PRIVATE KEY-----").toMatch(re);
+    expect("-----BEGIN EC PRIVATE KEY-----").toMatch(re);
+    expect("-----BEGIN DSA PRIVATE KEY-----").toMatch(re);
+    expect("-----BEGIN ENCRYPTED PRIVATE KEY-----").toMatch(re);
     // Public key MUST NOT match — the tripwire is for private key blocks only.
     expect("-----BEGIN PUBLIC KEY-----").not.toMatch(re);
+  });
+
+  test("base64-of-PEM (un-decoded PRIVATE_KEY_B64) matches the b64 tripwire", () => {
+    // `LS0tLS1CRUdJTi…` is the deterministic base64 prefix of any
+    // standard PEM (`-----BEGIN `). This catches the case where someone
+    // echoes `$PRIVATE_KEY_B64` directly — the decoded PEM is masked
+    // line-by-line, but the un-decoded base64 form is one continuous
+    // string that bypasses ::add-mask:: registration.
+    const re = new RegExp(LEAK_TRIPWIRE_PEM_B64_REGEX);
+    // Real `base64 -w 0` of "-----BEGIN RSA PRIVATE KEY-----\nMIIE..."
+    // starts with "LS0tLS1CRUdJTiBSU0EgUFJJVkFURSBLRVktLS0tL...".
+    expect("LS0tLS1CRUdJTiBSU0EgUFJJVkFURSBLRVktLS0tL").toMatch(re);
+    expect("LS0tLS1CRUdJTiBQUklWQVRFIEtFWS0tLS0t").toMatch(re); // PKCS#8
+    // The constant `LS0tLS1CRUdJTi` alone (no trailing alphanum) does NOT
+    // match — must be followed by ≥1 base64 char to count as a real prefix.
+    expect("LS0tLS1CRUdJTi").not.toMatch(re);
+    // Random base64-shaped prose without the BEGIN prefix does NOT match.
+    expect("ZHJpZnQtZ3VhcmQ=").not.toMatch(re);
   });
 
   test("a real JWT-shaped string DOES match the JWT tripwire (positive control)", () => {
     const re = new RegExp(LEAK_TRIPWIRE_JWT_REGEX);
     // 30+ char base64url after eyJ — well-formed JWT header prefix
     expect("eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9").toMatch(re);
-    // Short (< 20 chars after eyJ) does NOT match — avoids false-positives
-    // on `eyJ`-prefixed prose / log fragments.
+    // Boundary: exactly 20 chars after eyJ MATCHES (the {20,} threshold).
+    expect("eyJ" + "a".repeat(20)).toMatch(re);
+    // Boundary: exactly 19 chars after eyJ does NOT match — avoids false-
+    // positives on short `eyJ`-prefixed prose / log fragments.
+    expect("eyJ" + "a".repeat(19)).not.toMatch(re);
+    // Short bare `eyJ` does NOT match.
     expect("eyJabc").not.toMatch(re);
   });
 });
