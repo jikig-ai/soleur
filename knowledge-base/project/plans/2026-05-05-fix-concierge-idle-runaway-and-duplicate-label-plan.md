@@ -3,9 +3,24 @@ title: Fix Concierge idle-runaway on PDF summarize + duplicate "Concierge" heade
 type: fix
 date: 2026-05-05
 requires_cpo_signoff: false
+deepened: 2026-05-05
 ---
 
 # Fix Concierge idle-runaway on PDF summarize + duplicate "Concierge" header label
+
+## Enhancement Summary
+
+**Deepened on:** 2026-05-05
+**Sections enhanced:** Acceptance Criteria, Files to Edit, Context (Bug 1 + Bug 2 fix shapes), Risks, Test plan
+**Research surface used:** repo-research (existing runaway tests, `MessageBubble` test patterns, all `DOMAIN_LEADERS` name/title pairs), call-site audit for `DEFAULT_WALL_CLOCK_TRIGGER_MS` / `wallClockTriggerMs`, learning carry-forward (`2026-05-04-cc-soleur-go-cutover-dropped-document-context-and-stream-end.md`).
+
+### Key Improvements (deepening pass)
+
+1. **Bug 1 fix shape clarified — preserve `firstToolUseAt` as turn-origin metadata.** The naive "reset on every block" reading would corrupt the user-facing `elapsedMs` field on `runner_runaway`. Correct shape: leave `state.firstToolUseAt` set on first tool_use only (turn origin), but call `clearRunaway(state)` + `armRunaway(state)` on every subsequent assistant block so the timeout window resets without changing the elapsed-measurement origin.
+2. **Bug 2 fix shape generalized — substring rule, not cc_router-only.** Auditing all `DOMAIN_LEADERS`, the `name` is a strict prefix of `title` for both `cc_router` ("Concierge" / "Soleur Concierge") AND `system` ("System" / "System Process"). A generic rule (`title.includes(displayName)` → render `title` only) catches both and is safer than a hardcoded `cc_router` branch. The cc_router-specific branch is named as an acceptable fallback only if test churn is meaningful.
+3. **Test target file corrected.** Bug 1 tests must land in `apps/web-platform/test/soleur-go-runner-awaiting-user.test.ts` (the actual home of the runaway-timer test surface) NOT the generic `soleur-go-runner.test.ts`. Bug 2 tests should land in a new sibling file `apps/web-platform/test/message-bubble-header.test.tsx` modeled on `message-bubble-retry.test.tsx` (existing render harness — same `vi.mock("@/lib/client-observability")` setup needed).
+4. **Existing runaway tests confirmed compatible.** AC7-regression, AC8, AC9, AC17, and the silent-fallback test all pass `wallClockTriggerMs: 30_000` explicitly per-test and emit a single tool_use, then advance past 30s with no further blocks. They remain green under both the raised default AND the new "any-block resets" semantic without change.
+5. **Call-site audit complete.** `grep -rn "DEFAULT_WALL_CLOCK_TRIGGER_MS\|wallClockTriggerMs" apps/web-platform/` returns exactly 11 hits: 5 test references in `soleur-go-runner-awaiting-user.test.ts` (all explicit `30_000` overrides — unaffected by default change), 5 in `soleur-go-runner.ts` (the constant + dep + threading), and zero in `ws-handler.ts` / health-check paths. Safe to raise.
 
 Two regressions in the kb-concierge thread UI, both surfaced by a single user-reported screenshot
 (`/home/jean/Pictures/Screenshots/Screenshot From 2026-05-05 10-23-37.png`).
@@ -58,29 +73,51 @@ data, payments).*
       and EVERY assistant `text` block during the active turn, not just the first `tool_use`.
       The clock is cleared by `SDKResultMessage` (turn boundary) as today. The semantic moves
       from "30s after first tool_use" to "90s of true silence (no assistant content at all)".
-- [ ] **Bug 1 — tests.** `apps/web-platform/test/soleur-go-runner.test.ts` adds:
+      Implementation invariant: `state.firstToolUseAt` is NOT reset on subsequent blocks — it
+      remains the turn-origin timestamp so `armRunaway`'s `firedAtStart = state.firstToolUseAt`
+      capture continues to report the user-facing `elapsedMs` as total turn elapsed time
+      (not "time since last block").
+- [ ] **Bug 1 — tests.** `apps/web-platform/test/soleur-go-runner-awaiting-user.test.ts` adds:
       (a) a test asserting the timer DOES fire when `wallClockTriggerMs` elapses with no further
-      assistant blocks; (b) a test asserting the timer does NOT fire when a second `tool_use`
-      arrives before the budget expires; (c) a test asserting the timer does NOT fire when a
-      mid-turn `text` block arrives before the budget expires; (d) the existing 30s-default
-      assertion is updated to 90s.
+      assistant blocks AFTER the new default (90s); (b) a test asserting the timer does NOT
+      fire when a second `tool_use` arrives 25s after the first (within the new 90s budget,
+      and the second-block reset extends the window for another full 90s); (c) a test
+      asserting the timer does NOT fire when a mid-turn `text` block arrives before the
+      budget expires; (d) a test asserting `runner_runaway.elapsedMs` reports time-since-
+      first-tool_use (turn-origin), not time-since-last-block; (e) the default-constant
+      assertion (currently NO test asserts `DEFAULT_WALL_CLOCK_TRIGGER_MS === 30_000` — see
+      audit; if a test author adds one in the work phase, it must read 90_000).
 - [ ] **Bug 2 — header label.** The Concierge bubble header on first message shows ONLY
       `Soleur Concierge` (not `Concierge   Soleur Concierge`). Visually verified against the
       same kb-concierge panel post-fix; subsequent messages in the same thread continue to render
       no header (existing `isFirst` behavior preserved).
 - [ ] **Bug 2 — header label.** `apps/web-platform/components/chat/message-bubble.tsx` renders
-      `displayName` only — never both `displayName` and `leader.title` — when `displayName` is a
-      substring of (or equal to) `leader.title` for that leader. Equivalent specific-case branch:
-      special-case `leaderId === CC_ROUTER_LEADER_ID` to render `leader.title` only and skip
-      `displayName`. Either approach is acceptable provided no other leader's header regresses.
-- [ ] **Bug 2 — tests.** `apps/web-platform/test/` adds (or extends an existing message-bubble
-      test) one render-time assertion: for `leaderId="cc_router"` with `showFullTitle=true`,
-      the header contains `"Soleur Concierge"` exactly once and does NOT contain the bare token
+      `leader.title` ONLY (not `displayName` AND `leader.title`) when `displayName` is contained
+      in `leader.title` (substring-match, case-sensitive). This is the recommended fix shape —
+      generic, catches both `cc_router` ("Concierge" / "Soleur Concierge") and the latent
+      `system` leader bug ("System" / "System Process"), and is safer for future leaders.
+      Acceptable fallback: special-case `leaderId === CC_ROUTER_LEADER_ID` only — but only if
+      the substring rule generates unexpected test churn for other leaders.
+      Concretely: `showFullTitle && !leader.title.includes(displayName) && (
+        <span className="text-xs text-neutral-500">{leader.title}</span>
+      )` paired with `displayName ? (<span>{leader.title.includes(displayName) ? leader.title : displayName}</span>) : null` — the implementer picks the cleaner JSX shape; the acceptance test pins behavior, not structure.
+- [ ] **Bug 2 — tests.** New file `apps/web-platform/test/message-bubble-header.test.tsx`
+      (modeled on `message-bubble-retry.test.tsx` — same `vi.mock("@/lib/client-observability")`
+      shim) adds:
+      (a) for `leaderId="cc_router"` with `showFullTitle=true`, the header contains
+      `"Soleur Concierge"` exactly once and does NOT contain the bare token
       `"Concierge "` (trailing-space) or `"Concierge   Soleur Concierge"`.
-- [ ] **Regression guard.** A non-cc leader (e.g., `cmo`) with `showFullTitle=true` continues
-      to render BOTH `displayName` (e.g., `"CMO Riley"`) AND `leader.title`
-      (e.g., `"Chief Marketing Officer"`) — the duplicate-suppression must NOT fire for
-      leaders where name is not a prefix of title.
+      (b) for `leaderId="system"` with `showFullTitle=true`, the header contains
+      `"System Process"` exactly once and does NOT show `"System   System Process"` —
+      regression guard for the latent prefix-collision pattern.
+- [ ] **Regression guard.** A non-prefix leader (e.g., `cmo` with `name: "CMO"` /
+      `title: "Chief Marketing Officer"`) with `showFullTitle=true` continues to render BOTH
+      `displayName` ("CMO") AND `leader.title` ("Chief Marketing Officer") — the
+      substring-suppression must NOT fire when displayName is not contained in title.
+      Note: in production the team-naming UX often passes a richer `displayName` via
+      `getDisplayName` (e.g., `"CMO Riley"`); the test should cover BOTH the bare-name path
+      (no `getDisplayName` provided) AND a getDisplayName-supplied team-name path to lock
+      the substring rule's behavior on both shapes.
 - [ ] **Type-check + full suite green.** `bun run --cwd apps/web-platform typecheck` clean and
       the web-platform vitest suite passes (≥ pre-PR baseline).
 
@@ -107,13 +144,24 @@ data, payments).*
   `onWorkflowEnded({ status: "runner_runaway", elapsedMs: ≥90_000 })` exactly as today.
 - **Given** the runner has emitted one `tool_use` and 25s later receives `SDKResultMessage`,
   **then** the runaway timer is cleared (existing semantics, unchanged).
+- **Given** the runner has emitted a tool_use at t=0 and another tool_use at t=60s, **when**
+  the timer fires at t≥150s with no further blocks, **then**
+  `runner_runaway.elapsedMs` is approximately 150_000 (turn-origin = first tool_use), NOT
+  90_000 (time-since-last-block). This pins `firstToolUseAt` as turn-origin metadata.
 - **Given** a Concierge bubble with `leaderId="cc_router"` and `showFullTitle=true`, **when**
   the bubble renders, **then** the header text content equals `"Soleur Concierge"` (single
   rendering — no leading bare `"Concierge"` token).
-- **Given** a CMO bubble with `leaderId="cmo"` and `showFullTitle=true`, **when** the bubble
-  renders, **then** the header contains BOTH the team-name token (`"CMO Riley"`) AND
-  `leader.title` (`"Chief Marketing Officer"`) — regression guard against an over-broad
-  duplicate-suppression rule.
+- **Given** a System bubble with `leaderId="system"` and `showFullTitle=true`, **when** the
+  bubble renders, **then** the header contains `"System Process"` exactly once and does NOT
+  contain `"System   System Process"` — regression guard for the latent prefix-collision.
+- **Given** a CMO bubble with `leaderId="cmo"` and `showFullTitle=true` and NO
+  `getDisplayName` prop, **when** the bubble renders, **then** the header contains BOTH
+  `"CMO"` (from `leader.name`) AND `"Chief Marketing Officer"` (from `leader.title`) — the
+  substring-suppression rule must NOT fire when displayName is not contained in title.
+- **Given** a CMO bubble with a custom `getDisplayName` returning `"CMO Riley"` and
+  `showFullTitle=true`, **when** the bubble renders, **then** the header contains BOTH
+  `"CMO Riley"` AND `"Chief Marketing Officer"` — the team-name path is unaffected by the
+  substring rule.
 
 ## Context
 
@@ -233,31 +281,48 @@ have no signal in the diff. CTO sign-off lives in the runaway-timer Risk note be
 ## Files to Edit
 
 1. `apps/web-platform/server/soleur-go-runner.ts`
-   - Raise `DEFAULT_WALL_CLOCK_TRIGGER_MS` from `30 * 1000` to `90 * 1000`.
-   - In `handleAssistantMessage`, after the existing first-`tool_use` arm-runaway branch, add a
-     re-arm path that fires for every `text` / `tool_use` block when `firstToolUseAt !== null`
-     and `!state.awaitingUser`.
+   - Raise `DEFAULT_WALL_CLOCK_TRIGGER_MS` from `30 * 1000` to `90 * 1000` (line 82).
+   - In `handleAssistantMessage` (line ~766), refactor the runaway-arm logic. Today
+     (lines 803-806) the timer arms ONCE on first `tool_use`. Replace with: on every
+     assistant block (`text` and `tool_use`), if `firstToolUseAt === null` set
+     `firstToolUseAt = now()` (turn-origin), then unconditionally call
+     `clearRunaway(state)` + `armRunaway(state)` to reset the timeout window.
+     **Critical:** do NOT reset `firstToolUseAt` on subsequent blocks — `armRunaway`
+     captures `firedAtStart = state.firstToolUseAt` (line 702), and the user-facing
+     `elapsedMs` field on `runner_runaway` must report total turn elapsed time, not
+     "time since last block".
    - Update the comment block at lines ~798-803 ("Arm the wall-clock runaway timer on the FIRST
-     tool_use…") to reflect the new "any-assistant-content resets the clock" semantic.
+     tool_use…") to reflect the new "any assistant block resets the timeout window; turn-origin
+     `firstToolUseAt` is preserved" semantic.
 2. `apps/web-platform/components/chat/message-bubble.tsx`
-   - Special-case `leaderId === CC_ROUTER_LEADER_ID`: when true, render `leader.title` only and
-     skip the bare `displayName` span. Other leaders unchanged.
-   - Import `CC_ROUTER_LEADER_ID` from `@/lib/cc-router-id` (matches existing `LeaderAvatar`
-     import shape).
-3. `apps/web-platform/test/soleur-go-runner.test.ts`
-   - Update the existing 30s-default assertion to 90s.
-   - Add four new tests per `## Test Scenarios` (no-fire on second tool_use within budget,
-     no-fire on text block within budget, fire on 90s of true silence, default-90s assertion).
-4. `apps/web-platform/test/message-bubble.test.tsx` (or extend existing if present; otherwise
-   create alongside leader-avatar.test.tsx)
-   - Add the cc_router header-render assertion.
-   - Add the cmo regression-guard render assertion.
+   - In the header render block (lines ~145-153), gate the `leader.title` span on
+     `showFullTitle && !leader.title.includes(displayName)` — when displayName is a substring
+     of title, skip the bare `displayName` span and render `leader.title` instead. This is
+     a generic substring rule; no per-leader special-case needed.
+   - Acceptable fallback if the substring rule generates unexpected churn: special-case
+     `leaderId === CC_ROUTER_LEADER_ID` only. Either path must satisfy ALL acceptance
+     criteria including the system-leader regression guard.
+   - If the substring rule is chosen, no additional import is needed. If the cc_router
+     fallback is chosen, import `CC_ROUTER_LEADER_ID` from `@/lib/cc-router-id` (matches
+     existing `LeaderAvatar` import shape).
+3. `apps/web-platform/test/soleur-go-runner-awaiting-user.test.ts`
+   - Add four new tests per `## Test Scenarios` (no-fire on second tool_use within new 90s
+     budget, no-fire on text block within budget, fire on 90s of true silence, elapsedMs
+     reports turn-origin not last-block).
+   - Existing AC7-regression / AC8 / AC9 / AC17 / silent-fallback tests are confirmed
+     compatible (each passes `wallClockTriggerMs: 30_000` explicitly + emits one tool_use
+     + advances past 30s — green under both old and new semantics).
 
 ## Files to Create
 
-None — all edits are in existing files. (The message-bubble test file may be created if no
-existing test covers `MessageBubble` rendering — `grep -l "MessageBubble" apps/web-platform/test/`
-to confirm during work-phase.)
+1. `apps/web-platform/test/message-bubble-header.test.tsx`
+   - New test file modeled on `apps/web-platform/test/message-bubble-retry.test.tsx`
+     (same `vi.mock("@/lib/client-observability")` shim required to keep Sentry initialization
+     out of the bundle under test). See that file for the render harness.
+   - Tests per `## Test Scenarios`: cc_router shows "Soleur Concierge" once; system leader
+     shows "System Process" once; cmo (or another non-prefix leader) shows BOTH "CMO" and
+     "Chief Marketing Officer"; team-name path (`getDisplayName="CMO Riley"`) renders both
+     "CMO Riley" and "Chief Marketing Officer".
 
 ## Risks
 
@@ -273,12 +338,23 @@ to confirm during work-phase.)
   `"Soleur Concierge"` to a different value, the test asserting
   `header.contains("Soleur Concierge")` would fail and force the renamer to update the test
   in the same commit. Acceptable — that is the desired pin.
-- **Other leaders' `displayName === leader.title` future collisions.** Today no other leader's
-  `name` equals (or is a strict prefix of) its `title`. Verified at plan time:
-  `grep -A1 "name:" apps/web-platform/server/domain-leaders.ts | grep -B1 "title:"` (manual
-  walk through `DOMAIN_LEADERS` at `apps/web-platform/server/domain-leaders.ts`). The
-  `cc_router` special-case avoids over-fitting a generic prefix-match rule that would silently
-  affect future leaders.
+- **Other leaders' `displayName === leader.title` future collisions.** Verified at deepen
+  time via `grep -n "name:\|title:" apps/web-platform/server/domain-leaders.ts`: TWO leaders
+  today have `name` as a strict prefix of `title` — `cc_router` ("Concierge" /
+  "Soleur Concierge") and `system` ("System" / "System Process"). The `system` leader is
+  documented as not-user-visible-as-a-conversational-bubble (see line 95-100 of
+  `domain-leaders.ts`), but the bug surface exists if it ever does render with
+  `showFullTitle`. The recommended substring rule fixes BOTH; the cc_router-only fallback
+  fixes only one and leaves the latent system-leader case untouched. Other leaders
+  (`cmo`/CMO, `cto`/CTO, `cfo`/CFO, etc.) all have orthogonal name/title pairs where neither
+  is a substring of the other, so the substring rule is no-op for them.
+- **Substring-rule false positives for future leaders.** If a future leader is added with
+  `name: "Acme"` / `title: "Acme Engineering"`, the substring rule would silently render only
+  the title. This is the same UX as `cc_router` today (after the fix) and is design-intent —
+  showing both creates the duplication this PR is fixing. If a future case wants explicit
+  side-by-side rendering despite substring, the path forward is to override `displayName`
+  via `getDisplayName` (e.g., `"Acme Bot"`) so the substring rule no longer matches. This
+  escape hatch is documented in the Bug 2 fix-shape commentary.
 
 ## Sharp Edges
 
