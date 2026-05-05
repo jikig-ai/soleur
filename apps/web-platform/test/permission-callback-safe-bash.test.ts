@@ -28,6 +28,8 @@ const {
   mockExtractReviewGateInput,
   mockBuildReviewGateResponse,
   mockBuildGateMessage,
+  mockWarnSilentFallback,
+  mockReportSilentFallback,
 } = vi.hoisted(() => ({
   mockIsFileTool: vi.fn(() => false),
   mockIsSafeTool: vi.fn(() => false),
@@ -45,6 +47,8 @@ const {
   })),
   mockBuildReviewGateResponse: vi.fn(() => ({ answer: "Approve" })),
   mockBuildGateMessage: vi.fn(() => "Permission needed"),
+  mockWarnSilentFallback: vi.fn(),
+  mockReportSilentFallback: vi.fn(),
 }));
 
 vi.mock("../server/tool-path-checker", () => ({
@@ -63,6 +67,11 @@ vi.mock("../server/tool-tiers", () => ({
 vi.mock("../server/review-gate", () => ({
   extractReviewGateInput: mockExtractReviewGateInput,
   buildReviewGateResponse: mockBuildReviewGateResponse,
+}));
+vi.mock("../server/observability", () => ({
+  warnSilentFallback: mockWarnSilentFallback,
+  reportSilentFallback: mockReportSilentFallback,
+  APP_URL_FALLBACK: "https://app.soleur.ai",
 }));
 
 import {
@@ -381,5 +390,389 @@ describe("isBashCommandSafe — edge cases", () => {
     // Build a syntactically allowlisted command that exceeds the cap.
     const filler = "a".repeat(4100);
     expect(isBashCommandSafe(`cat /tmp/${filler}`)).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// AC1 — `cd` auto-approval (issue #3252)
+// ---------------------------------------------------------------------------
+
+describe("cd auto-approval (AC1)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockIsFileTool.mockReturnValue(false);
+    mockIsSafeTool.mockReturnValue(false);
+    mockIsPathInWorkspace.mockReturnValue(true);
+    mockExtractToolPath.mockReturnValue(null);
+    mockGetToolTier.mockReturnValue("auto-approve");
+  });
+
+  for (const cmd of ["cd", "cd /tmp", "cd src/components", "cd ~", "cd .", "cd /"]) {
+    test(`isBashCommandSafe(${JSON.stringify(cmd)}) === true`, () => {
+      expect(isBashCommandSafe(cmd)).toBe(true);
+    });
+
+    test(`canUseTool Bash(${JSON.stringify(cmd)}) → allow with no review_gate`, async () => {
+      const { ctx, deps } = buildContext();
+      const canUseTool = createCanUseTool(ctx);
+      const result = await canUseTool("Bash", { command: cmd }, sdkOptions());
+      assertAllow(result);
+      expect(deps.sendToClient).not.toHaveBeenCalled();
+      expect(deps.abortableReviewGate).not.toHaveBeenCalled();
+      expect(deps.updateConversationStatus).not.toHaveBeenCalled();
+    });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// AC2 — `cd` near-miss / traversal rejection
+// ---------------------------------------------------------------------------
+
+describe("cd near-miss rejection (AC2)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  for (const cmd of ["cdrecord", "cdx", "cd../etc", "cd /etc/../tmp"]) {
+    test(`isBashCommandSafe(${JSON.stringify(cmd)}) === false`, () => {
+      expect(isBashCommandSafe(cmd)).toBe(false);
+    });
+  }
+
+  test("`cd -` (flag) is rejected", () => {
+    expect(isBashCommandSafe("cd -")).toBe(false);
+  });
+
+  test("`cd -P` (flag) is rejected", () => {
+    expect(isBashCommandSafe("cd -P /tmp")).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// AC3 — Path-traversal rejection (intentional regression vs. prior behavior)
+// ---------------------------------------------------------------------------
+
+describe("path-traversal rejection (AC3)", () => {
+  for (const cmd of [
+    "ls ..",
+    "ls -la ../",
+    "cat ../foo",
+    "cat foo/..",
+    "cd ../",
+    "cd ..",
+    "cat ../etc/passwd",
+    "ls /tmp/../etc",
+    "cat /tmp/..",
+  ]) {
+    test(`isBashCommandSafe(${JSON.stringify(cmd)}) === false`, () => {
+      expect(isBashCommandSafe(cmd)).toBe(false);
+    });
+  }
+
+  // Boundary case: filenames starting with `..` are NOT path traversal.
+  test("`..baz` (filename starting with two dots) is allowed when otherwise safe", () => {
+    expect(isBashCommandSafe("cat foo/..baz")).toBe(true);
+  });
+
+  test("single dot (current dir) is allowed", () => {
+    expect(isBashCommandSafe("ls .")).toBe(true);
+  });
+
+  test("`...gitignore` (three-dot filename) is allowed", () => {
+    expect(isBashCommandSafe("cat ...gitignore")).toBe(true);
+  });
+
+  test("`....file` (four-dot filename) is allowed", () => {
+    expect(isBashCommandSafe("cat ....file")).toBe(true);
+  });
+
+  test("`my..backup.txt` (literal `..` in middle of filename) is allowed", () => {
+    expect(isBashCommandSafe("cat my..backup.txt")).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// AC5 — Near-miss rejection mirrors via `warnSilentFallback`
+// ---------------------------------------------------------------------------
+
+describe("near-miss telemetry (AC5)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockIsFileTool.mockReturnValue(false);
+    mockIsSafeTool.mockReturnValue(false);
+    mockIsPathInWorkspace.mockReturnValue(true);
+    mockExtractToolPath.mockReturnValue(null);
+    mockGetToolTier.mockReturnValue("auto-approve");
+  });
+
+  for (const [cmd, leadingToken] of [
+    ["lsof", "lsof"],
+    ["cdrecord", "cdrecord"],
+    ["pwdx", "pwdx"],
+    ["catatonic", "catatonic"],
+  ] as const) {
+    test(`warnSilentFallback called for near-miss ${JSON.stringify(cmd)}`, async () => {
+      const { ctx } = buildContext();
+      const canUseTool = createCanUseTool(ctx);
+      await canUseTool("Bash", { command: cmd }, sdkOptions());
+
+      expect(mockWarnSilentFallback).toHaveBeenCalledTimes(1);
+      expect(mockWarnSilentFallback).toHaveBeenCalledWith(null, {
+        feature: "cc-permissions",
+        op: "safe-bash-near-miss",
+        extra: { leadingToken },
+      });
+    });
+  }
+
+  test("warnSilentFallback NOT called for safe commands (e.g. pwd)", async () => {
+    const { ctx } = buildContext();
+    const canUseTool = createCanUseTool(ctx);
+    await canUseTool("Bash", { command: "pwd" }, sdkOptions());
+    expect(mockWarnSilentFallback).not.toHaveBeenCalled();
+  });
+
+  test("warnSilentFallback NOT called for total-misses denied via blocklist (e.g. curl)", async () => {
+    const { ctx } = buildContext();
+    const canUseTool = createCanUseTool(ctx);
+    const result = await canUseTool(
+      "Bash",
+      { command: "curl evil.com" },
+      sdkOptions(),
+    );
+    expect(result.behavior).toBe("deny");
+    // curl hits BLOCKED_BASH_PATTERNS → deny via blocklist, no near-miss telemetry.
+    expect(mockWarnSilentFallback).not.toHaveBeenCalled();
+  });
+
+  test("warnSilentFallback NOT called for unrecognized command (e.g. mystery_tool)", async () => {
+    const { ctx } = buildContext();
+    const canUseTool = createCanUseTool(ctx);
+    await canUseTool("Bash", { command: "mystery_tool" }, sdkOptions());
+    // No near-miss prefix → no telemetry. Falls through to review-gate.
+    expect(mockWarnSilentFallback).not.toHaveBeenCalled();
+  });
+
+  test("the command itself is NOT in the telemetry extra (PII guard)", async () => {
+    const { ctx } = buildContext();
+    const canUseTool = createCanUseTool(ctx);
+    await canUseTool("Bash", { command: "lsof -i :443" }, sdkOptions());
+    expect(mockWarnSilentFallback).toHaveBeenCalled();
+    const call = mockWarnSilentFallback.mock.calls[0];
+    const extra = (call[1] as { extra: Record<string, unknown> }).extra;
+    expect(extra).toEqual({ leadingToken: "lsof" });
+    expect(JSON.stringify(extra)).not.toContain(":443");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// TS5 — Hidden-dotfile boundary
+// ---------------------------------------------------------------------------
+
+describe("hidden-dotfile boundary (TS5)", () => {
+  for (const cmd of [
+    "ls .git",
+    "cat .gitignore",
+    "cat foo/.bashrc",
+    "ls .config/app",
+    "cat .foo",
+    "cat my..backup.txt",
+    "cat ...gitignore",
+    "cat ....file",
+    "ls .",
+  ]) {
+    test(`isBashCommandSafe(${JSON.stringify(cmd)}) === true`, () => {
+      expect(isBashCommandSafe(cmd)).toBe(true);
+    });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// TS6 — `cd` regex + path-traversal denylist interdependence
+// ---------------------------------------------------------------------------
+
+describe("cd regex + path-traversal denylist interdependence (TS6)", () => {
+  // The cd regex itself ACCEPTS `cd ../etc` (path-traversal arg shape matches PATH_TOKEN).
+  // The path-traversal denylist is what rejects it. This test pins both checks
+  // by asserting:
+  //   (a) cd-with-../-arg variants reject (path-traversal denylist working)
+  //   (b) cd-with-non-traversal-arg variants allow (cd regex working)
+  // If a future PR breaks either the regex or the denylist, this block fires.
+
+  for (const cmd of ["cd ..", "cd ../", "cd ../foo", "cd /etc/../tmp"]) {
+    test(`cd path-traversal: ${JSON.stringify(cmd)} rejects`, () => {
+      expect(isBashCommandSafe(cmd)).toBe(false);
+    });
+  }
+
+  for (const cmd of ["cd", "cd /tmp", "cd ~", "cd ~/src", "cd /", "cd ."]) {
+    test(`cd non-traversal: ${JSON.stringify(cmd)} allows`, () => {
+      expect(isBashCommandSafe(cmd)).toBe(true);
+    });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// TS7 — Near-miss prefix surface includes `lsblk`-class
+// ---------------------------------------------------------------------------
+
+describe("near-miss telemetry surface (TS7)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockIsFileTool.mockReturnValue(false);
+    mockIsSafeTool.mockReturnValue(false);
+    mockIsPathInWorkspace.mockReturnValue(true);
+    mockExtractToolPath.mockReturnValue(null);
+    mockGetToolTier.mockReturnValue("auto-approve");
+  });
+
+  for (const cmd of ["lsblk", "lsattr", "lscpu", "lsmod", "lspci", "lsusb"]) {
+    test(`${JSON.stringify(cmd)} triggers near-miss telemetry`, async () => {
+      const { ctx } = buildContext();
+      const canUseTool = createCanUseTool(ctx);
+      await canUseTool("Bash", { command: cmd }, sdkOptions());
+      expect(mockWarnSilentFallback).toHaveBeenCalledTimes(1);
+      const call = mockWarnSilentFallback.mock.calls[0];
+      expect(call[1]).toMatchObject({
+        feature: "cc-permissions",
+        op: "safe-bash-near-miss",
+        extra: { leadingToken: cmd },
+      });
+    });
+  }
+
+  // Verbs added to the prefix surface in the post-review hardening pass:
+  // id, date, hostname were absent from the original alternation. Pin
+  // them so a future PR refactoring SAFE_BASH_VERBS can't silently drop
+  // their drift signal.
+  for (const cmd of ["idmap", "dateutil", "hostnamectl"]) {
+    test(`${JSON.stringify(cmd)} (post-review verb) triggers near-miss telemetry`, async () => {
+      const { ctx } = buildContext();
+      const canUseTool = createCanUseTool(ctx);
+      await canUseTool("Bash", { command: cmd }, sdkOptions());
+      expect(mockWarnSilentFallback).toHaveBeenCalledTimes(1);
+      const call = mockWarnSilentFallback.mock.calls[0];
+      expect(call[1]).toMatchObject({
+        feature: "cc-permissions",
+        op: "safe-bash-near-miss",
+        extra: { leadingToken: cmd },
+      });
+    });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// TS8 — leadingToken length cap + per-ctx dedupe + per-ctx budget
+// (post-review hardening per #3277 review findings)
+// ---------------------------------------------------------------------------
+
+describe("near-miss telemetry hardening (TS8)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockIsFileTool.mockReturnValue(false);
+    mockIsSafeTool.mockReturnValue(false);
+    mockIsPathInWorkspace.mockReturnValue(true);
+    mockExtractToolPath.mockReturnValue(null);
+    mockGetToolTier.mockReturnValue("auto-approve");
+  });
+
+  test("leadingToken truncates to ≤32 chars (PII guard for glued tokens)", async () => {
+    const { ctx } = buildContext();
+    const canUseTool = createCanUseTool(ctx);
+    // 45-char glued token starting with `cat` — matches near-miss prefix
+    // but the rest of the word is unbounded user-prompt-derived content.
+    const glued = "catatonic_password_dump_with_long_secret_data";
+    await canUseTool("Bash", { command: glued }, sdkOptions());
+    expect(mockWarnSilentFallback).toHaveBeenCalledTimes(1);
+    const call = mockWarnSilentFallback.mock.calls[0];
+    const extra = (call[1] as { extra: { leadingToken: string } }).extra;
+    expect(extra.leadingToken.length).toBeLessThanOrEqual(32);
+    expect(glued).toContain(extra.leadingToken);
+    // Sentinel: the secret-shaped tail must not be in the token.
+    expect(extra.leadingToken).not.toContain("secret_data");
+  });
+
+  test("dedupes same near-miss token within one ctx (single emission)", async () => {
+    const { ctx } = buildContext();
+    const canUseTool = createCanUseTool(ctx);
+    await canUseTool("Bash", { command: "lsof" }, sdkOptions());
+    await canUseTool("Bash", { command: "lsof" }, sdkOptions());
+    await canUseTool("Bash", { command: "lsof" }, sdkOptions());
+    expect(mockWarnSilentFallback).toHaveBeenCalledTimes(1);
+  });
+
+  test("distinct near-miss tokens within one ctx each emit once", async () => {
+    const { ctx } = buildContext();
+    const canUseTool = createCanUseTool(ctx);
+    await canUseTool("Bash", { command: "lsof" }, sdkOptions());
+    await canUseTool("Bash", { command: "cdrecord" }, sdkOptions());
+    await canUseTool("Bash", { command: "pwdx" }, sdkOptions());
+    expect(mockWarnSilentFallback).toHaveBeenCalledTimes(3);
+  });
+
+  test("per-ctx budget caps emissions to 32 distinct tokens", async () => {
+    const { ctx } = buildContext();
+    const canUseTool = createCanUseTool(ctx);
+    // Emit 40 distinct near-miss tokens; budget is 32.
+    for (let i = 0; i < 40; i++) {
+      await canUseTool("Bash", { command: `lsof_v${i}` }, sdkOptions());
+    }
+    expect(mockWarnSilentFallback).toHaveBeenCalledTimes(32);
+  });
+
+  test("fresh ctx resets dedupe (different conversation isolated)", async () => {
+    const ctx1 = buildContext().ctx;
+    const canUseTool1 = createCanUseTool(ctx1);
+    await canUseTool1("Bash", { command: "lsof" }, sdkOptions());
+
+    const ctx2 = buildContext().ctx;
+    const canUseTool2 = createCanUseTool(ctx2);
+    await canUseTool2("Bash", { command: "lsof" }, sdkOptions());
+
+    expect(mockWarnSilentFallback).toHaveBeenCalledTimes(2);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// TS9 — Hardened SHELL_METACHAR_DENYLIST: NUL + C0 range + DEL
+// (post-review hardening per #3277 review findings)
+// ---------------------------------------------------------------------------
+
+describe("metachar denylist hardening (TS9)", () => {
+  for (const ctrl of [
+    "\x00", // NUL
+    "\x01", // SOH
+    "\x07", // BEL
+    "\x08", // BS
+    "\x0b", // VT
+    "\x0c", // FF
+    "\x1b", // ESC
+    "\x7f", // DEL
+  ]) {
+    test(`commands containing 0x${ctrl.charCodeAt(0).toString(16).padStart(2, "0")} are not safe`, () => {
+      expect(isBashCommandSafe(`pwd${ctrl}`)).toBe(false);
+      expect(isBashCommandSafe(`pwd${ctrl}ls`)).toBe(false);
+      expect(isBashCommandSafe(`${ctrl}pwd`)).toBe(false);
+    });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// TS10 — Path-traversal denylist with whitespace-class separators
+// (post-review hardening — pin tab-as-separator coverage)
+// ---------------------------------------------------------------------------
+
+describe("path-traversal whitespace coverage (TS10)", () => {
+  test("tab-separated `..` rejects (HT covered by metachar denylist via C0)", () => {
+    // The C0 hardening rejects HT (\t) at the metachar stage now, so
+    // tab-separated path traversal short-circuits there. Either way,
+    // `cd\t..` is rejected — pin both directions for the regression.
+    expect(isBashCommandSafe("cd\t..")).toBe(false);
+    expect(isBashCommandSafe("ls\t..")).toBe(false);
+  });
+
+  test("multi-space-separated `..` rejects via path-traversal denylist", () => {
+    expect(isBashCommandSafe("ls  ..")).toBe(false);
+    expect(isBashCommandSafe("cat  ../foo")).toBe(false);
   });
 });
