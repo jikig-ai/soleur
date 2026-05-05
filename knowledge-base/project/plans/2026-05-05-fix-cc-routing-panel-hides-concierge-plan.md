@@ -14,6 +14,38 @@ branch: feat-one-shot-3251-routing-experts-concierge
 
 # Fix CC routing panel hiding Soleur Concierge once leaders are picked (#3251)
 
+## Enhancement Summary
+
+**Deepened on:** 2026-05-05
+
+**Sections enhanced:** Research Reconciliation (added 2 rows), Open Code-Review Overlap (verification result), Implementation Phases 1 & 2 (test scaffolding + name-vs-title resolution), Risks (added R6: Concierge bare name), Cross-References (added Concierge name learning). New "## Research Insights" subsection added under Implementation Phase 2.
+
+**Research sources used:**
+- Local repo: `apps/web-platform/test/mocks/use-websocket.ts` (`createWebSocketMock` factory; routeSource/activeLeaderIds/messages overrides — perfect for the 4-test suite).
+- Local repo: `apps/web-platform/test/mocks/use-team-names.ts` (`createUseTeamNamesMock`; `getDisplayName` defaults to `id.toUpperCase()` in tests).
+- Local repo: `apps/web-platform/server/domain-leaders.ts:101-115` — `cc_router` has `name: "Concierge"` AND `title: "Soleur Concierge"`. Two different fields with different presentation roles.
+- Local repo: `apps/web-platform/hooks/use-team-names.tsx:37,123-131` — `getDisplayName(id)` returns `name` (Concierge), not `title` (Soleur Concierge). Direct use of `getDisplayName("cc_router")` would emit bare "Concierge" — the exact regression #3225 fixed in `message-bubble.tsx`.
+- Local repo: `apps/web-platform/test/chat-surface-sidebar.test.tsx` (38-line scaffold demonstrating the canonical mock pattern: `vi.mock("@/lib/ws-client", () => ({ useWebSocket: () => wsReturn }))` + `wsReturn = createWebSocketMock({...})` reset in `beforeEach`).
+- Local learning: `knowledge-base/project/learnings/2026-05-05-defense-relaxation-must-name-new-ceiling.md` — duplicated "Concierge / Soleur Concierge" header pattern; `name` vs `title` confusion is the same surface this plan must avoid re-introducing.
+- `gh issue view 2223` — verified #2223's referenced location (`page.tsx:202-211`) no longer contains `respondingLeaders`. Symbol moved into `chat-surface.tsx`. Issue needs a comment + rebase before this PR ships.
+
+### Key Improvements
+
+1. **Concierge bare-name regression caught at deepen.** `getDisplayName("cc_router") === "Concierge"`, not `"Soleur Concierge"`. The plan now mandates `RoutedLeadersStrip` hardcodes `"Soleur Concierge"` (or reads `DOMAIN_LEADERS.find(l => l.id === "cc_router").title`) — never `getDisplayName`. Same hazard class as #3225's bare-Concierge bubble.
+2. **Test scaffold reuse identified.** `createWebSocketMock` is a satisfies-typed factory with all relevant overrides (`routeSource`, `activeLeaderIds`, `messages`, `workflow`). The 4-test suite reuses it instead of building bespoke mocks.
+3. **#2223 overlap verified obsolete at the referenced location.** `respondingLeaders` no longer lives in `page.tsx:202-211`. The acknowledgment in `## Open Code-Review Overlap` is upgraded to "stale reference; comment on #2223 in same PR with the new location and let the issue author decide whether to keep, rescope, or close."
+4. **Test 2 setup pinned.** Test mocks need both a Concierge bubble (`leaderId: "cc_router"`) AND a domain-leader bubble (`leaderId: "cmo"`) in `messages` to assert the strip renders both identities side-by-side. Earlier test sketch under-specified.
+5. **Strip-rendering gate clarified.** New gate `routeSource && respondingLeaders.some((id) => id !== CC_ROUTER_LEADER_ID)`: cleaner intent ("at least one domain leader resolved") + safer regression behavior (Concierge-only state stays in the chip flow).
+
+### New Considerations Discovered
+
+- **`name` vs `title` discipline must be encoded in the new component.** Add a comment in `routed-leaders-strip.tsx` referencing #3225: "Concierge slot uses the literal 'Soleur Concierge' (matches `DOMAIN_LEADERS.title`); never `getDisplayName('cc_router')` which returns the bare name."
+- **`leader.title` is the canonical source.** Reading `DOMAIN_LEADERS.find((l) => l.id === CC_ROUTER_LEADER_ID)?.title ?? "Soleur Concierge"` gives a single source of truth and survives a future rename. Plan adopts this over a string literal.
+- **Test scaffold details for `useSearchParams` and `useRouter`.** `chat-surface.tsx:178-181` reads `searchParams.get("leader")` and `searchParams.get("msg")`. The 4-test suite must mock `next/navigation` as in `chat-surface-sidebar.test.tsx:30-34` with an empty `URLSearchParams()` — otherwise the auto-start logic at lines ~310 may fire and pollute assertions.
+- **`useTeamNames` mock returns `id.toUpperCase()` for `getDisplayName`** in test mode. Test 2's expectation `getByText(/Marketing/i)` would match `"CMO"` (uppercase id). Adjust the assertion to `getByText(/CMO/i)` OR override the mock to return `"Marketing"` for `cmo`. Plan locks in the second option (override mock) so the test assertion reads naturally.
+- **`workflow.state === "idle"` is the canonical no-leader state**, but a session in `workflow.state === "active"` (post-routing) does NOT re-trigger the `isClassifying` chip even if `messages` changes — the chip is gated on `routeSource === null && workflow.state === "idle"`. Test 1 must explicitly set `workflow: { state: "idle" }` to satisfy the gate (already in plan; called out for clarity).
+- **The `isClassifying` chip's data-testid is new** — searching the codebase for existing `cc-routing-chip` returns zero hits, confirming no naming collision.
+
 ## TL;DR
 
 In the Command Center chat surface, the visible "routing panel" is **two distinct UI surfaces** that the issue body conflates into one:
@@ -65,13 +97,16 @@ This threshold is inherited from the bundle brainstorm. The Concierge surface is
 
 ## Open Code-Review Overlap
 
-**1 open scope-out touches files in this plan:**
+**1 open scope-out touches files in this plan (verified at deepen-plan):**
 
-- **#2223** — `perf(chat): useMemo ChatPage derivations (respondingLeaders, hasUser/Assistant, seenSoFar)`. P3, performance optimization. Touches `apps/web-platform/app/(dashboard)/dashboard/chat/[conversationId]/page.tsx:202-211` (the **route page**, not `chat-surface.tsx`). Even though the symbol name `respondingLeaders` collides, **the symbol lives in two places**: this plan modifies `chat-surface.tsx`'s `respondingLeaders` derivation (line 353-358); #2223 references the route-page derivation (which delegates to ChatSurface and may not even exist in current code — verification at work-time required).
+- **#2223** — `perf(chat): useMemo ChatPage derivations (respondingLeaders, hasUser/Assistant, seenSoFar)`. P3, performance optimization. Issue body references `apps/web-platform/app/(dashboard)/dashboard/chat/[conversationId]/page.tsx:202-211`. **Verified at deepen-plan via `grep -n "respondingLeaders" apps/web-platform/app/\(dashboard\)/dashboard/chat/\[conversationId\]/page.tsx`: ZERO hits.** The symbol moved into `chat-surface.tsx:353-358` (likely during a prior consolidation PR). The location cited in #2223 no longer exists.
 
-  **Disposition: Acknowledge.** The perf fix is orthogonal to the visibility fix. Folding it in would balloon the scope (memoization audit across three IIFEs in two different files) and conflate "fix trust regression" with "shave parent re-render cost." The scope-out remains open. Rationale recorded for the next planner.
+  **Disposition: Acknowledge + comment on the issue.** The perf fix is still valid in concept (the IIFE in `chat-surface.tsx` re-runs on every parent re-render), but the file path and line numbers in the issue body are stale. This PR will:
 
-  **Verification at work-time:** `rg -n "respondingLeaders" apps/web-platform/app/(dashboard)/dashboard/chat/[conversationId]/page.tsx` — if zero hits, the issue's referenced location was already restructured (likely consolidated into `chat-surface.tsx`) and #2223 needs a comment + close. If non-zero, leave the issue alone.
+  1. Add an inline comment on #2223 with the corrected location (`chat-surface.tsx:353-358`) and a note that the perf concern is orthogonal to this visibility fix.
+  2. Leave the issue open for the original author / next planner to decide: rescope to `chat-surface.tsx` and refresh, fold into a future ChatSurface refactor, or close as superseded by structural changes.
+
+  **No fold-in here.** Scope discipline: this PR is a 2-file presentational fix; bundling a memoization audit (which would also touch `seenSoFar` in `chat-surface.tsx:329-367`) doubles the surface area and the review cost.
 
 ## Hypotheses
 
@@ -132,92 +167,165 @@ This threshold is inherited from the bundle brainstorm. The Concierge surface is
 
 Test file: `apps/web-platform/test/cc-routing-panel-concierge-visibility.test.tsx` (NEW).
 
-The test mocks `useWebSocket` from `@/lib/ws-client` and renders `<ChatSurface conversationId="test" variant="full" />` in three states:
+**Test scaffold (canonical pattern, mirroring `chat-surface-sidebar.test.tsx`).**
 
-**Test 1 — no-leaders-yet state shows Concierge identity**
+```tsx
+import { describe, it, expect, vi, beforeEach } from "vitest";
+import { render, screen, within } from "@testing-library/react";
+import { createUseTeamNamesMock } from "./mocks/use-team-names";
+import { createWebSocketMock } from "./mocks/use-websocket";
 
-```ts
-// State: hasUserMessage=true, hasAssistantMessage=false, routeSource=null, workflow.state="idle"
-mockUseWebSocket({
-  messages: [{ id: "u1", role: "user", content: "hello", ... }],
-  routeSource: null,
-  workflow: { state: "idle" },
-  activeLeaderIds: [],
-  ...
+let wsReturn = createWebSocketMock();
+
+vi.mock("@/lib/ws-client", () => ({
+  useWebSocket: () => wsReturn,
+}));
+
+// Override `getDisplayName` so the strip's leader-list renders human names,
+// not the default `id.toUpperCase()` shim. Avoids matching against "CMO"
+// when the assertion reads more naturally as `Marketing Lead`.
+vi.mock("@/hooks/use-team-names", () => ({
+  useTeamNames: () => createUseTeamNamesMock({
+    getDisplayName: (id) =>
+      id === "cmo" ? "Marketing Lead" : id.toUpperCase(),
+  }),
+  TeamNamesProvider: ({ children }: { children: React.ReactNode }) => children,
+}));
+
+const mockSearchParams = new URLSearchParams();
+vi.mock("next/navigation", () => ({
+  useSearchParams: () => mockSearchParams,
+  useRouter: () => ({ replace: vi.fn(), push: vi.fn() }),
+  usePathname: () => "/dashboard/chat/test-id",
+}));
+
+describe("ChatSurface — Soleur Concierge visibility in routing panel (#3251)", () => {
+  beforeEach(() => {
+    wsReturn = createWebSocketMock();
+  });
+
+  async function renderFull() {
+    const { ChatSurface } = await import("@/components/chat/chat-surface");
+    return render(<ChatSurface conversationId="test-id" variant="full" />);
+  }
+
+  // ... tests below
 });
-render(<ChatSurface conversationId="test" variant="full" />);
+```
 
-const chip = await screen.findByText(/Routing to the right experts/i);
-const chipContainer = chip.closest("[data-testid='cc-routing-chip']");
-expect(chipContainer).toBeInTheDocument();
-expect(chipContainer.querySelector("[aria-label='Soleur Concierge avatar']")).toBeInTheDocument();
+**Test 1 — no-leaders-yet state shows Concierge identity in the chip**
+
+```tsx
+it("T1 — isClassifying chip has Concierge avatar + 'Soleur Concierge is routing...' text", async () => {
+  wsReturn = createWebSocketMock({
+    messages: [
+      { id: "u1", role: "user", content: "hello", type: "text" },
+    ],
+    routeSource: null,
+    workflow: { state: "idle" },
+    activeLeaderIds: [],
+  });
+  await renderFull();
+
+  const chip = await screen.findByTestId("cc-routing-chip");
+  expect(chip).toBeInTheDocument();
+  expect(within(chip).getByLabelText("Soleur Concierge avatar")).toBeInTheDocument();
+  expect(within(chip).getByText(/Soleur Concierge is routing to the right experts/i))
+    .toBeInTheDocument();
+});
 ```
 
 **Test 2 — leaders-resolved state shows Concierge alongside routed leaders**
 
-```ts
-// State: hasUserMessage=true, hasAssistantMessage=true, routeSource="auto",
-// respondingLeaders=["cmo"] (Concierge has handed off but user expects to still see Concierge)
-mockUseWebSocket({
-  messages: [
-    { id: "u1", role: "user", content: "hello", ... },
-    { id: "a1", role: "assistant", content: "routing to CMO", leaderId: "cc_router", ... },
-    { id: "a2", role: "assistant", content: "marketing answer", leaderId: "cmo", ... },
-  ],
-  routeSource: "auto",
-  workflow: { state: "idle" },
-  activeLeaderIds: ["cmo"],
-  ...
-});
-render(<ChatSurface conversationId="test" variant="full" />);
+```tsx
+it("T2 — strip renders Concierge slot + routed-leader name when both bubbles present", async () => {
+  wsReturn = createWebSocketMock({
+    messages: [
+      { id: "u1", role: "user", content: "hello", type: "text" },
+      { id: "a1", role: "assistant", content: "routing", leaderId: "cc_router", type: "text" },
+      { id: "a2", role: "assistant", content: "answer", leaderId: "cmo", type: "text" },
+    ],
+    routeSource: "auto",
+    workflow: { state: "idle" },
+    activeLeaderIds: ["cmo"],
+  });
+  await renderFull();
 
-const strip = await screen.findByTestId("cc-routed-leaders-strip");
-expect(strip).toBeInTheDocument();
-// Concierge identity is present, regardless of whether cc_router is in respondingLeaders
-expect(within(strip).getByLabelText("Soleur Concierge avatar")).toBeInTheDocument();
-expect(within(strip).getByText(/Soleur Concierge/)).toBeInTheDocument();
-// Routed leaders are also present
-expect(within(strip).getByText(/Marketing/i)).toBeInTheDocument();
+  const strip = await screen.findByTestId("cc-routed-leaders-strip");
+  expect(within(strip).getByLabelText("Soleur Concierge avatar")).toBeInTheDocument();
+  // Hardcoded "Soleur Concierge" — NOT getDisplayName('cc_router') which returns "Concierge"
+  expect(within(strip).getByText("Soleur Concierge")).toBeInTheDocument();
+  // Routed leaders are also present
+  expect(within(strip).getByText(/Marketing Lead/i)).toBeInTheDocument();
+});
 ```
 
-**Test 3 — leaders-resolved state with no Concierge bubble in messages STILL shows Concierge**
+**Test 3 — leaders-resolved with NO `cc_router` in messages still shows Concierge**
 
-```ts
-// State: respondingLeaders does NOT contain cc_router (Concierge bubble was elided
-// or pruned), but routeSource is set — Concierge MUST still appear.
-mockUseWebSocket({
-  messages: [
-    { id: "u1", role: "user", content: "hello", ... },
-    { id: "a1", role: "assistant", content: "answer", leaderId: "cmo", ... },
-  ],
-  routeSource: "auto",
-  ...
+```tsx
+it("T3 — strip shows Concierge even when respondingLeaders excludes cc_router", async () => {
+  wsReturn = createWebSocketMock({
+    messages: [
+      { id: "u1", role: "user", content: "hello", type: "text" },
+      { id: "a1", role: "assistant", content: "answer", leaderId: "cmo", type: "text" },
+    ],
+    routeSource: "auto",
+    activeLeaderIds: ["cmo"],
+  });
+  await renderFull();
+
+  const strip = await screen.findByTestId("cc-routed-leaders-strip");
+  expect(within(strip).getByLabelText("Soleur Concierge avatar")).toBeInTheDocument();
+  expect(within(strip).getByText("Soleur Concierge")).toBeInTheDocument();
 });
-render(<ChatSurface conversationId="test" variant="full" />);
-
-const strip = await screen.findByTestId("cc-routed-leaders-strip");
-expect(within(strip).getByLabelText("Soleur Concierge avatar")).toBeInTheDocument();
 ```
 
-**Test 4 — strip is NOT rendered when routeSource is null**
+**Test 4 — strip NOT rendered when `routeSource` is null**
 
-```ts
-// State: pre-routing, strip should not render
-mockUseWebSocket({
-  messages: [...],
-  routeSource: null,
-  ...
+```tsx
+it("T4 — strip is absent when routeSource is null (pre-routing regression guard)", async () => {
+  wsReturn = createWebSocketMock({
+    messages: [
+      { id: "u1", role: "user", content: "hello", type: "text" },
+    ],
+    routeSource: null,
+  });
+  await renderFull();
+
+  expect(screen.queryByTestId("cc-routed-leaders-strip")).not.toBeInTheDocument();
 });
-render(<ChatSurface conversationId="test" variant="full" />);
-
-expect(screen.queryByTestId("cc-routed-leaders-strip")).not.toBeInTheDocument();
 ```
 
-Expected: all four tests **fail** before implementation:
+**Test 5 — bare "Concierge" string never appears alongside "Soleur Concierge" (drift guard)**
 
-- T1: chip has no Concierge avatar.
-- T2 + T3: strip has no `data-testid` (line 420 has no testid attribute) and no Concierge avatar.
-- T4: passes already (strip is gated on `routeSource && respondingLeaders.length > 0`).
+```tsx
+it("T5 — strip never emits the bare 'Concierge' alongside 'Soleur Concierge' (#3225 regression)", async () => {
+  wsReturn = createWebSocketMock({
+    messages: [
+      { id: "u1", role: "user", content: "hello", type: "text" },
+      { id: "a1", role: "assistant", content: "routing", leaderId: "cc_router", type: "text" },
+      { id: "a2", role: "assistant", content: "answer", leaderId: "cmo", type: "text" },
+    ],
+    routeSource: "auto",
+    activeLeaderIds: ["cmo"],
+  });
+  await renderFull();
+
+  const strip = await screen.findByTestId("cc-routed-leaders-strip");
+  // Match the pattern from `2026-05-05-defense-relaxation-must-name-new-ceiling.md`:
+  // count occurrences of "Concierge" in the textContent — should be exactly 1
+  // (from "Soleur Concierge"), never 2 (which would mean a duplicated bare "Concierge").
+  const concierges = strip.textContent?.match(/Concierge/g) ?? [];
+  expect(concierges).toHaveLength(1);
+});
+```
+
+Expected before implementation:
+
+- T1: FAIL — chip has no `data-testid="cc-routing-chip"` and no Concierge avatar.
+- T2 + T3: FAIL — strip has no `data-testid="cc-routed-leaders-strip"`, no Concierge avatar, no "Soleur Concierge" literal.
+- T4: PASS already (strip is gated on `routeSource && respondingLeaders.length > 0`).
+- T5: PASS-vacuous (no strip with the testid yet — `findByTestId` would throw before the regex check). Becomes load-bearing after Phase 2.
 
 ### Phase 2 — GREEN implementation
 
@@ -230,11 +338,25 @@ Extract the strip into a dedicated component so the test surface is narrow. Comp
 
 import { LeaderAvatar } from "@/components/leader-avatar";
 import { CC_ROUTER_LEADER_ID } from "@/lib/cc-router-id";
+import { DOMAIN_LEADERS } from "@/server/domain-leaders";
 import type { DomainLeaderId } from "@/server/domain-leaders";
+
+/**
+ * Concierge presentation literal.
+ *
+ * Resolves to "Soleur Concierge" via `DOMAIN_LEADERS[cc_router].title`,
+ * NOT the bare `name: "Concierge"`. `getDisplayName('cc_router')` returns
+ * the bare name — using it here re-introduces the duplicated header
+ * regression #3225 fixed in `message-bubble.tsx`. See
+ * `knowledge-base/project/learnings/2026-05-05-defense-relaxation-must-name-new-ceiling.md`.
+ */
+const CONCIERGE_TITLE =
+  DOMAIN_LEADERS.find((l) => l.id === CC_ROUTER_LEADER_ID)?.title ??
+  "Soleur Concierge";
 
 interface RoutedLeadersStripProps {
   routeSource: "auto" | "mention";
-  routedLeaders: DomainLeaderId[]; // domain leaders only — cc_router is excluded
+  routedLeaders: DomainLeaderId[]; // any leader ids — cc_router is filtered defensively below
   getDisplayName: (id: DomainLeaderId) => string;
   /** Sidebar variant tightens left/right padding. */
   isFull: boolean;
@@ -246,8 +368,8 @@ export function RoutedLeadersStrip({
   getDisplayName,
   isFull,
 }: RoutedLeadersStripProps) {
-  // Filter cc_router out of routedLeaders defensively — the Concierge slot
-  // is rendered explicitly so we never want a duplicated Concierge chip.
+  // Filter cc_router out defensively — the Concierge slot is rendered
+  // explicitly so we never want a duplicated chip from the comma-joined list.
   const domainOnly = routedLeaders.filter((id) => id !== CC_ROUTER_LEADER_ID);
 
   return (
@@ -257,11 +379,11 @@ export function RoutedLeadersStrip({
     >
       <span
         className="inline-flex items-center gap-1.5 rounded-full bg-neutral-800/50 px-3 py-1 text-xs text-neutral-400"
-        aria-label={`Routing: Soleur Concierge ${routeSource === "auto" ? "auto-routed to" : "directed to"} ${domainOnly.map(getDisplayName).join(", ")}`}
+        aria-label={`Routing: ${CONCIERGE_TITLE} ${routeSource === "auto" ? "auto-routed to" : "directed to"} ${domainOnly.map(getDisplayName).join(", ")}`}
       >
         {/* Concierge slot — always present once routeSource is set */}
         <LeaderAvatar leaderId={CC_ROUTER_LEADER_ID} size="sm" />
-        <span>Soleur Concierge</span>
+        <span>{CONCIERGE_TITLE}</span>
         <span className="text-neutral-600">·</span>
         {routeSource === "auto" ? (
           <>Auto-routed to {domainOnly.map(getDisplayName).join(", ")}</>
@@ -299,7 +421,35 @@ export function RoutedLeadersStrip({
 
 1. **Test isolation.** `RoutedLeadersStrip` can be unit-tested without rendering the full `ChatSurface` (which mounts a WS client, message list, input, etc.). Reduces test setup from ~80 LoC of mocks to ~10 LoC of props.
 2. **Re-use surface.** If a future surface (KB-doc sidebar, embedded chat preview) needs the same strip, it imports the component instead of duplicating the JSX.
-3. **Code-simplicity-reviewer compliance.** YAGNI is preserved — we extract because the test needs the seam, not because we anticipate a re-use. The new file is ≤60 LoC.
+3. **Code-simplicity-reviewer compliance.** YAGNI is preserved — we extract because the test needs the seam, not because we anticipate a re-use. The new file is ≤70 LoC.
+
+### Research Insights (deepen-plan)
+
+**Best practices applied:**
+
+- Reuse the existing test scaffold (`createWebSocketMock` + `createUseTeamNamesMock`) rather than building bespoke mocks. Both factories use `satisfies` against `ReturnType<typeof useWebSocket>` / `ReturnType<typeof useTeamNames>`, so a future hook-shape change fails compile here, not at test runtime — exactly the drift-resistance pattern documented in the factory comments.
+- Use `module-scope const` for the Concierge title (`CONCIERGE_TITLE`) so it resolves once at import time (cheap) and the source-of-truth is the `DOMAIN_LEADERS` array, not a string literal scattered across components. This survives a future rename of the `title` field without a grep-and-replace.
+- Pin the `next/navigation` mock with an empty `URLSearchParams()` so the auto-start-on-mount logic (gated on `searchParams.get("leader")` + `searchParams.get("msg")`) does NOT fire during tests and pollute `wsReturn.startSession` call counts.
+
+**Anti-patterns avoided:**
+
+- DON'T call `getDisplayName(CC_ROUTER_LEADER_ID)` in the strip — returns bare "Concierge". Direct read of `DOMAIN_LEADERS.find(...).title` is the only safe path.
+- DON'T pass `respondingLeaders` directly into the strip's `routedLeaders` prop without filtering — Concierge appears twice (explicit slot + comma-list).
+- DON'T add a Concierge-special-case to `getDisplayName` itself — the hook's current contract returns `name`, and changing it would ripple through every leader-list rendering surface (header, message-bubble, footer cost line). Special-case the strip, not the hook.
+
+**Edge cases:**
+
+- Concierge-only response (Concierge replied without routing to a domain leader): the new strip-render gate `routeSource && respondingLeaders.some((id) => id !== CC_ROUTER_LEADER_ID)` evaluates false → strip is hidden, chip continues to show. Correct behavior — the user sees the Concierge bubble + chip, no orphan strip.
+- `routeSource === "mention"` with a `@cc_router` mention (if such a flow ever exists): `respondingLeaders` would contain only `cc_router`, the gate evaluates false, no strip renders. Same behavior as Concierge-only response — the chip + bubble cover the UX.
+- `routeSource` flips between values mid-conversation: the strip re-renders with the new `routedLeaders`. Concierge slot is stable (always present once `routeSource` is set + at least one domain leader resolved).
+
+**References:**
+
+- `apps/web-platform/test/mocks/use-websocket.ts` — `createWebSocketMock` factory.
+- `apps/web-platform/test/mocks/use-team-names.ts` — `createUseTeamNamesMock` factory.
+- `apps/web-platform/test/chat-surface-sidebar.test.tsx` — canonical scaffold pattern.
+- `apps/web-platform/server/domain-leaders.ts:101-115` — `cc_router` definition (`name`, `title`, `internal: true`).
+- `knowledge-base/project/learnings/2026-05-05-defense-relaxation-must-name-new-ceiling.md` — the bare-Concierge drift hazard this plan inherits the regression guard from.
 
 ### Phase 3 — REFACTOR
 
@@ -331,8 +481,8 @@ The `## User-Brand Impact` threshold is `single-user incident`. Per AGENTS.md `h
 
 ### Pre-merge (PR)
 
-- [ ] `apps/web-platform/test/cc-routing-panel-concierge-visibility.test.tsx` exists with 4 tests covering: no-leaders-yet shows Concierge identity, leaders-resolved shows Concierge + domain leaders, leaders-resolved-without-Concierge-bubble still shows Concierge, strip-not-rendered-pre-routing.
-- [ ] All 4 tests pass on the feature branch.
+- [ ] `apps/web-platform/test/cc-routing-panel-concierge-visibility.test.tsx` exists with 5 tests covering: no-leaders-yet shows Concierge identity (T1), leaders-resolved shows Concierge + domain leaders (T2), leaders-resolved-without-Concierge-bubble still shows Concierge (T3), strip-not-rendered-pre-routing (T4), bare-Concierge drift guard (T5).
+- [ ] All 5 tests pass on the feature branch.
 - [ ] `apps/web-platform/components/chat/routed-leaders-strip.tsx` exists with a `data-testid="cc-routed-leaders-strip"` hook and an explicit Concierge slot via `<LeaderAvatar leaderId="cc_router" />`.
 - [ ] `apps/web-platform/components/chat/chat-surface.tsx` `isClassifying` chip has `data-testid="cc-routing-chip"` and a Concierge avatar prefix.
 - [ ] `bun run --cwd apps/web-platform typecheck` passes.
@@ -398,6 +548,17 @@ The `## User-Brand Impact` threshold is `single-user incident`. Per AGENTS.md `h
 **Mitigation:**
 
 - #2223 is open (P3, not yet started). This plan ships first. If #2223 lands during this plan's review window, rebase and adopt the memoized symbol — the conflict is mechanical (same line moved into a `useMemo`).
+- Deepen-plan verified #2223's referenced location is stale (`page.tsx:202-211` no longer contains `respondingLeaders`). PR will leave a comment on #2223 with the corrected location; merge conflict probability is low.
+
+### R6 — Concierge bare-name regression re-introduced via `getDisplayName('cc_router')`
+
+**Mechanism:** `getDisplayName(id)` in `apps/web-platform/hooks/use-team-names.tsx:123-131` reads from `leaderNameMap` which maps `id → name` (NOT `id → title`). For `cc_router`: `name = "Concierge"`, `title = "Soleur Concierge"`. A naive implementation that calls `getDisplayName("cc_router")` for the Concierge slot emits the bare "Concierge" — the exact text PR #3225's `message-bubble.tsx` fix removed. If the strip then ALSO emits "Soleur Concierge" via the routed-leader fallback, the user sees `"Concierge · Soleur Concierge"` — the same duplicated-header pattern.
+
+**Mitigation:**
+
+- The `RoutedLeadersStrip` component reads `CONCIERGE_TITLE` from `DOMAIN_LEADERS.find((l) => l.id === CC_ROUTER_LEADER_ID)?.title` at module scope (resolves to "Soleur Concierge" at compile time). It NEVER calls `getDisplayName(CC_ROUTER_LEADER_ID)`.
+- The `domainOnly` filter strips `cc_router` from `routedLeaders` before the comma-joined list, preventing the fallback `getDisplayName(cc_router)` from firing.
+- Test 5 (T5) is the explicit regression guard — counts occurrences of `/Concierge/` in the strip's `textContent`, asserts exactly 1 match (from "Soleur Concierge"). If a future refactor accidentally re-introduces a bare "Concierge", T5 fails.
 
 ## Sharp Edges
 

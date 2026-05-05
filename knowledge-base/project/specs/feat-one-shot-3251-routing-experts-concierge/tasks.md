@@ -23,7 +23,9 @@ branch: feat-one-shot-3251-routing-experts-concierge
 - [ ] 1.3 Add Test 2 (leaders-resolved with Concierge bubble in messages). Assert strip has `data-testid="cc-routed-leaders-strip"`, contains a Concierge avatar, and contains the routed-leader name. Expected: FAIL.
 - [ ] 1.4 Add Test 3 (leaders-resolved WITHOUT Concierge bubble in messages). Assert Concierge avatar is still present in the strip. Expected: FAIL.
 - [ ] 1.5 Add Test 4 (pre-routing). Assert strip is NOT rendered when `routeSource=null`. Expected: PASS already (regression guard).
-- [ ] 1.6 Run `bun test apps/web-platform/test/cc-routing-panel-concierge-visibility.test.tsx` and confirm 3 FAIL + 1 PASS.
+- [ ] 1.6 Add Test 5 (bare-Concierge drift guard, #3225 pattern). Count `/Concierge/` matches in `strip.textContent`; assert `toHaveLength(1)`. Expected: PASS-vacuous before Phase 2 (strip not rendered yet); load-bearing after Phase 2.
+- [ ] 1.7 Use `createWebSocketMock` from `test/mocks/use-websocket.ts` and `createUseTeamNamesMock` from `test/mocks/use-team-names.ts` (override `getDisplayName` for `cmo` → `"Marketing Lead"`). Mock `next/navigation` with empty `URLSearchParams()` to suppress auto-start.
+- [ ] 1.8 Run `bun test apps/web-platform/test/cc-routing-panel-concierge-visibility.test.tsx` and confirm 3 FAIL + 2 PASS (T4 + T5 pass-vacuous).
 
 ## Phase 2 — GREEN implementation
 
@@ -34,6 +36,7 @@ branch: feat-one-shot-3251-routing-experts-concierge
 - [ ] 2.1.3 Filter `cc_router` from `routedLeaders` defensively (avoid duplicate Concierge chip).
 - [ ] 2.1.4 Use `<LeaderAvatar leaderId={CC_ROUTER_LEADER_ID} size="sm" />` for the Concierge slot.
 - [ ] 2.1.5 Wire `aria-label` to describe the routing relationship.
+- [ ] 2.1.6 Define `CONCIERGE_TITLE` at module scope as `DOMAIN_LEADERS.find((l) => l.id === CC_ROUTER_LEADER_ID)?.title ?? "Soleur Concierge"`. Add a comment referencing #3225 / `2026-05-05-defense-relaxation-must-name-new-ceiling.md` warning against `getDisplayName(CC_ROUTER_LEADER_ID)` (returns bare "Concierge").
 
 ### 2.2 Update chat-surface.tsx
 
@@ -43,7 +46,7 @@ branch: feat-one-shot-3251-routing-experts-concierge
 
 ### 2.3 Verify GREEN
 
-- [ ] 2.3.1 Re-run `bun test apps/web-platform/test/cc-routing-panel-concierge-visibility.test.tsx` — all 4 PASS.
+- [ ] 2.3.1 Re-run `bun test apps/web-platform/test/cc-routing-panel-concierge-visibility.test.tsx` — all 5 PASS.
 - [ ] 2.3.2 Run `bun run --cwd apps/web-platform typecheck` — no TS errors.
 - [ ] 2.3.3 Run regression suite: `bun test apps/web-platform/test/leader-avatar.test.tsx apps/web-platform/test/message-bubble-header.test.tsx apps/web-platform/test/tool-use-chip.test.tsx apps/web-platform/test/chat-surface-sidebar.test.tsx` — no failures.
 
