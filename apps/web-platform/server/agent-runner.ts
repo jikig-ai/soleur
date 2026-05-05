@@ -1367,6 +1367,9 @@ issues/PRs, 4 KB comments); follow the html_url for the full text.`;
             );
           },
         );
+        // Outer catch: result-branch wrap might not have run; release slot so the user isn't stuck for up to 60s waiting for the reaper.
+        // releaseSlot already swallows errors internally (concurrency.ts) — no extra .catch needed.
+        await releaseSlot(userId, conversationId);
       }
     } else if (
       resumeSessionId &&
@@ -1417,6 +1420,9 @@ issues/PRs, 4 KB comments); follow the html_url for the full text.`;
           );
         },
       );
+      // Outer catch: result-branch wrap might not have run; release slot so the user isn't stuck for up to 60s waiting for the reaper.
+      // releaseSlot already swallows errors internally (concurrency.ts) — no extra .catch needed.
+      await releaseSlot(userId, conversationId);
     }
   } finally {
     // Fallback stream_end emission. Covers: SDK iterator throws mid-stream,

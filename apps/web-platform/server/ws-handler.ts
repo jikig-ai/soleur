@@ -297,6 +297,32 @@ export async function tryLedgerDivergenceRecovery(
       orphans.map((cid) => releaseSlot(userId, cid)),
     );
 
+    // Conversation-row finalize for orphans. The visible-set query above
+    // filters `archived_at IS NULL AND status IN ('active','waiting_for_user')`,
+    // so an orphan's conversation row is one of: (a) archived (any status),
+    // (b) already terminal (`failed`/`completed`) and non-archived, or
+    // (c) hard-deleted. (b) and (c) are no-ops. (a) is also benign — the
+    // archive-trigger (migration 036) already released the slot and the
+    // user perceives the row as gone. We still issue a `failed` finalize
+    // best-effort with `expectMatch: false` so a row stuck at `active`
+    // (e.g. archived mid-stream before the result-branch wrap landed)
+    // converges to a terminal state in the same recovery pass instead of
+    // waiting up to 60s for the reaper. No-op for missing rows.
+    await Promise.all(
+      orphans.map((cid) =>
+        updateConversationFor(
+          userId,
+          cid,
+          { status: "failed", last_active: new Date().toISOString() },
+          {
+            feature: "concurrency-ledger-divergence",
+            op: "start_session-recovery-finalize-orphan",
+            expectMatch: false,
+          },
+        ).catch(() => undefined),
+      ),
+    );
+
     // Single Sentry mirror for the divergence detection itself. AC4
     // explicitly excludes the recovered-OK path from telemetry to keep
     // signal-to-noise on the divergence rate. Use a new Error so the
@@ -1031,6 +1057,7 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
         // release the orphans and retry acquire once. If the retry still
         // returns cap_hit, fall through to the genuine cap-deny close
         // path unchanged — DO NOT recurse.
+        // non-recursive by construction; do not refactor into a loop
         if (acquire.status === "cap_hit") {
           const recovered = await tryLedgerDivergenceRecovery(userId);
           if (recovered.didRecover) {
