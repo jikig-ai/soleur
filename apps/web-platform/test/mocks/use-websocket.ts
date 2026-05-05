@@ -44,6 +44,7 @@ export function createWebSocketMock(
     resumedFrom: null,
     workflow: { state: "idle" } as const,
     workflowEndedAt: null,
+    historyLoading: false,
   } satisfies WebSocketState;
   return { ...base, ...overrides };
 }
