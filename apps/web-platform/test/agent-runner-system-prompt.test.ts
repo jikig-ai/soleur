@@ -100,6 +100,7 @@ vi.mock("../server/observability", () => ({
 
 import { startAgentSession } from "../server/agent-runner";
 import type { ConversationContext } from "../lib/types";
+import { READ_TOOL_PDF_CAPABILITY_DIRECTIVE } from "../server/soleur-go-runner";
 import {
   DEFAULT_API_KEY_ROW,
   createSupabaseMockImpl,
@@ -237,5 +238,21 @@ describe("agent-runner system prompt context injection", () => {
     const sharingBlock =
       options.systemPrompt.split("Knowledge-base sharing")[1] ?? "";
     expect(sharingBlock.toLowerCase()).toMatch(/sensitive|credentials/);
+  });
+
+  // Closes #3253: leader baseline must teach the model that the Read
+  // tool natively handles PDFs — without this, when a user mentions a
+  // PDF in chat with no "currently-viewing" artifact (no `context`),
+  // the model fabricates a plausible refusal ("PDF Reader doesn't seem
+  // installed"). The directive is imported from soleur-go-runner.ts so
+  // both system-prompt builders share a single source of truth.
+  test("leader system prompt embeds the PDF-capability directive in the baseline (no context)", async () => {
+    setupSupabaseMock(BASE_USER_DATA);
+    setupQueryMockImmediate();
+
+    await startAgentSession("user-1", "conv-1", "cpo");
+
+    const options = mockQuery.mock.calls[0][0].options;
+    expect(options.systemPrompt).toContain(READ_TOOL_PDF_CAPABILITY_DIRECTIVE);
   });
 });

@@ -22,6 +22,7 @@ import {
 import { isKnownWSMessageType } from "@/lib/ws-known-types";
 import { parseWSMessage } from "@/lib/ws-zod-schemas";
 import { reportSilentFallback } from "@/lib/client-observability";
+import * as Sentry from "@sentry/nextjs";
 import { STUCK_TIMEOUT_MS } from "@/lib/ws-constants";
 
 export { STUCK_TIMEOUT_MS } from "@/lib/ws-constants";
@@ -427,7 +428,19 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
     };
 
     ws.onmessage = (event) => {
-      if (!mountedRef.current) return;
+      if (!mountedRef.current) {
+        // Stale frame after teardown — onmessage stays attached for the
+        // close handshake. See learnings/ui-bugs/2026-05-05-kb-chat-continuing-banner-h1-h5-residual-races.md (#3267).
+        // rawPrefix carries the frame's conversationId (when present) for
+        // correlation; truncated to bound ingestion cost on a malformed-frame storm.
+        Sentry.addBreadcrumb({
+          category: "kb-chat",
+          message: "ws-message-after-teardown",
+          level: "warning",
+          data: { rawPrefix: String(event.data).slice(0, 64) },
+        });
+        return;
+      }
 
       let parsed: unknown;
       try {
@@ -722,7 +735,16 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
 
     const supabase = createClient();
     const { data: { session } } = await supabase.auth.getSession();
-    if (!session?.access_token) return null;
+    if (!session?.access_token) {
+      // Distinct op disambiguates from `history-fetch-failed` (4xx/5xx) and
+      // `history-fetch-error` (network throw). See #3267 learning.
+      reportSilentFallback(null, {
+        feature: "kb-chat",
+        op: "history-fetch-no-session",
+        extra: { conversationId: targetId },
+      });
+      return null;
+    }
 
     // NOTE: this endpoint is wired in the Node custom server
     // (`server/api-messages.ts` via `server/index.ts:75-81` regex), NOT in
@@ -815,11 +837,21 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
     setHistoryLoading(true);
     try {
       const result = await fetchConversationHistory(targetId, controller.signal);
-      // `controller.signal.aborted` is per-effect-instance and deterministic
-      // across React strict-mode double-mount, where a stale `mountedRef`
-      // could observe its second-mount `true` value and dispatch into a
-      // remounted reducer.
-      if (!result || controller.signal.aborted) return;
+      if (!result) return;
+      // Pathological "had data and dropped it" branch — gated on result !== null
+      // so the routine "abort before fetch resolved" path (which throws
+      // AbortError into the catch) does not generate noise. Same `warning`
+      // level as the empty-200 breadcrumb so Sentry's per-event downsampling
+      // preserves it in triage. See #3267 learning.
+      if (controller.signal.aborted) {
+        Sentry.addBreadcrumb({
+          category: "kb-chat",
+          message: "history-fetch-abort-after-success",
+          level: "warning",
+          data: { conversationId: targetId, messageCount: result.messages.length },
+        });
+        return;
+      }
       // filter_prepend deduplicates by id against whatever stream events
       // landed while the fetch was in flight — strictly safer than an
       // activeStreams.size === 0 guard.
