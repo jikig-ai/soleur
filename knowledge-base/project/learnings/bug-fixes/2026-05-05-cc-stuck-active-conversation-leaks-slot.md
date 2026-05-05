@@ -57,4 +57,4 @@ This bug surfaced as a 4010 WS close + a visible "Executing" badge stuck for 10+
 - Migration 029 — pg_cron sweep + acquire_conversation_slot
 - Migration 036 — release-slot-on-archive trigger
 - Migration 037 — `find_stuck_active_conversations` RPC (this PR)
-- Issue #3219 — inactivity-sweep slot leak (parallel `waiting_for_user` class; out of scope)
+- PR #3217 — archive-trigger slot release (commit `d4858aba`, migration 036; same incident class on `archived_at` transition)

@@ -12,7 +12,7 @@ related_plans:
   - 2026-05-04-fix-cc-conversation-limit-archive-plan.md
 related_migrations: [029_plan_tier_and_concurrency_slots.sql, 036_release_slot_on_archive.sql]
 related_issues:
-  - "#3219 (inactivity-sweep slot leak — overlapping concern)"
+  - "#3217 (archive-trigger slot release, same incident class on archived_at transition)"
 deepened_on: 2026-05-05
 ---
 
@@ -157,7 +157,7 @@ point — and from any other entry point — after a single transient failure
 during a previous turn. The Command Center sidebar shows ONE active
 conversation that the user perceives as "running forever" (badge:
 "Executing" for 10+ min); archiving it works around the problem (the
-prior PR #3219-precursor trigger releases the slot on archive), but the
+prior PR #3217 archive trigger releases the slot on archive), but the
 user has no way to know archive is the recovery action — the error
 message says "Archive a completed conversation" and the conversation is
 NOT in a "completed" state from the user's POV.
@@ -286,9 +286,10 @@ no headroom. CPO sign-off required (per
       anything that throws between the message save and the status update
       leaves the row at `active`).
 - [ ] **AC11 — PR body cites tracking issue.** Use `Closes #<N>` for the
-      tracking issue filed in Phase 6. Reference `#3219` (inactivity-sweep
-      slot leak) with `Ref #3219` — that issue is overlapping but
-      independent (waiting_for_user-class, 2-hour cadence).
+      tracking issue filed in Phase 6. Reference `#3217` (archive-trigger
+      slot release) with `Ref #3217` — that PR is the same incident class
+      on the `archived_at` transition; this PR covers the
+      `status='active'` non-archived case.
 - [x] **AC12 — User-brand impact section above is filled** (not `TBD` /
       `TODO` / placeholder), per `deepen-plan` Phase 4.6.
 
@@ -578,11 +579,12 @@ no headroom. CPO sign-off required (per
    blocks concurrency slot in KB chat". Title body cites the user report
    from `jean.deruelle@jikigai.com`, both screenshots attached. PR body:
    `Closes #<this-issue>`.
-2. **Reference, do NOT close, #3219** (inactivity-sweep slot leak). It
-   addresses the parallel `waiting_for_user → completed` bulk-flip leak
-   in `agent-runner.ts:447`. The fix shape there is different (add
-   explicit `releaseSlot` calls inside the existing inactivity
-   timer's loop). PR body: `Ref #3219`. Do not fold in — keeps PR
+2. **Reference, do NOT close, #3217** (archive-trigger slot release).
+   That PR established the slot-release-on-archive trigger (migration
+   036) — same incident class triggered by the `archived_at` transition
+   path. This PR covers the complementary `status='active'`
+   non-archived case where a streaming turn wedges before the terminal
+   status write. PR body: `Ref #3217`. Do not fold in — keeps PR
    scope tight.
 3. **Roadmap impact:** none — this is a stability fix.
 4. Run `skill: soleur:compound` per `wg-before-every-commit-run-compound-skill`.
@@ -742,7 +744,7 @@ no headroom. CPO sign-off required (per
 | Migration 036's archive trigger fixes this | False — the trigger releases slot only on `archived_at` transition; user's stuck conversation has `archived_at IS NULL` | App-layer fix needed |
 | `release_conversation_slot` is idempotent | True (migration 029, line 200-203) — plain keyed DELETE | Recovery + reaper + catch can all call it without coordination |
 | `acquireSlot`'s lazy sweep would reclaim the orphan | False — lazy sweep checks `last_heartbeat_at < now() - 120s`; the heartbeat is fresh because the WS session is alive (ws-handler.ts:1590-1598) | Self-healing branch in AC4 explicitly handles this |
-| #3219 (inactivity-sweep slot leak) is the same bug | Partially — #3219 covers `waiting_for_user → completed` bulk-flip in `agent-runner.ts:447`. This plan covers stuck `active`. Both leak slots; both need fixes; different code paths. | Reference-only; do not fold in |
+| #3217 (archive-trigger slot release) is the same bug | Partially — #3217 (commit `d4858aba`, migration 036) releases the slot on `archived_at` transition. This plan covers the orthogonal case: `status='active'` non-archived rows that wedge before the status write. Both fall under the same slot-leak incident class; different code paths. | Reference-only; do not fold in |
 
 ## Domain Review
 
@@ -756,9 +758,9 @@ status-machine invariant violation: the success path's last step is the
 status transition, with at least 5 throw-eligible steps before it. The
 fix is a try/catch wrapping the result branch + a periodic reaper for
 defense-in-depth + a self-healing recovery on cap_hit. All three are
-application-layer; no migration. Aligns with prior PRs #3219
-(inactivity-sweep) and the migration-036 archive trigger — all three
-are slot-lifecycle invariants spread across multiple code paths;
+application-layer; no migration. Aligns with prior PR #3217
+(archive-trigger slot release / migration 036) — both are
+slot-lifecycle invariants spread across multiple code paths;
 consolidating into a single DB constraint is rejected because
 `resume_session` does not call `acquireSlot` (Risk #5 of
 2026-05-04-fix-cc-conversation-limit-archive-plan.md).
@@ -785,13 +787,10 @@ min for automatic recovery") would be valuable but is out-of-scope.
 
 3 open scope-outs touch files in this PR's blast radius:
 
-- **#3219** fix: inactivity-sweep slot leak (agent-runner.ts:447) —
-  *Acknowledge.* Same code file, parallel concern. This PR addresses
-  `active`-class stuck rows; #3219 addresses the
-  `waiting_for_user → completed` bulk-flip on the inactivity timer.
-  Both are slot-leak paths. Folding in would require a different fix
-  shape (explicit `releaseSlot` calls inside the inactivity timer's
-  loop) — keep them separate to keep this PR scoped. PR body: `Ref #3219`.
+- **#3217** fix: archive-trigger slot release (migration 036) —
+  *Acknowledge.* Same incident class (slot leak) but the orthogonal
+  trigger: `archived_at` transition vs. `status='active'` non-archived
+  wedge. This PR addresses the latter. PR body: `Ref #3217`.
 - **#2955** arch: process-local state assumption needs ADR + startup
   guard — *Acknowledge.* This PR's reaper inherits the same
   process-local assumption (`abortSession` operates on in-process
@@ -820,6 +819,9 @@ min for automatic recovery") would be valuable but is out-of-scope.
   applies: the bug surfaces as a 4010 close + a 10-min "Executing"
   badge — clear product-visible failure that future authors can
   diagnose without a hidden-constraint rule.
+- Do NOT propose folding in #3217 — different code path
+  (DB trigger vs. application-layer reaper) and different incident
+  trigger (`archived_at` transition vs. `status='active'` wedge).
 - The risk #1 (reaper races with a legitimate long-running turn) is
   the single most important verification to fold in at deepen-plan.
   Trace `last_active` updates through the SDK iteration loop and
