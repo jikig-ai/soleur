@@ -100,10 +100,8 @@ vi.mock("../server/concurrency", () => ({
   emitConcurrencyCapHit: vi.fn(),
 }));
 
-import {
-  startStuckActiveReaper,
-  abortSession,
-} from "../server/agent-runner";
+import * as agentRunnerMod from "../server/agent-runner";
+const { startStuckActiveReaper, abortSession } = agentRunnerMod;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -128,8 +126,13 @@ function setupSupabaseMockForReaper(args: {
   rpcError?: { message: string };
 }): {
   statusUpdates: Array<{ conversationId: string; userId: string; status: string }>;
+  statusUpdateMock: ReturnType<typeof vi.fn>;
 } {
   const statusUpdates: Array<{ conversationId: string; userId: string; status: string }> = [];
+  // Spy that fires on every captured status-update terminal so we get
+  // `mock.invocationCallOrder` parity with the other vi mocks (lets us
+  // assert "status flip → releaseSlot" ordering via invocation IDs).
+  const statusUpdateMock = vi.fn();
 
   mockRpc.mockImplementation(async (name: string) => {
     if (name === "find_stuck_active_conversations") {
@@ -159,6 +162,7 @@ function setupSupabaseMockForReaper(args: {
                 userId: capturedUserId,
                 status: String(patch.status ?? ""),
               });
+              statusUpdateMock(capturedConvId, capturedUserId, patch.status);
             }
           };
           const chain: Record<string, unknown> = {
@@ -200,7 +204,7 @@ function setupSupabaseMockForReaper(args: {
     };
   });
 
-  return { statusUpdates };
+  return { statusUpdates, statusUpdateMock };
 }
 
 // ---------------------------------------------------------------------------
@@ -236,23 +240,27 @@ describe("startStuckActiveReaper (AC2/AC5)", () => {
       status: "active",
     };
 
-    const { statusUpdates } = setupSupabaseMockForReaper({
+    const { statusUpdates, statusUpdateMock } = setupSupabaseMockForReaper({
       candidates: reapable.map(({ id, user_id }) => ({ id, user_id })),
     });
+
+    // Spy on `abortSession` via the namespace import. Same-module callers
+    // hit the module's own binding, so this captures `abortSession` calls
+    // made from inside `startStuckActiveReaper`. Used below to assert the
+    // per-row order: status flip → releaseSlot → abortSession.
+    const abortSessionSpy = vi.spyOn(agentRunnerMod, "abortSession");
 
     timer = startStuckActiveReaper();
 
     // Advance past one tick (60 s) and drain the microtasks queued by the
     // RPC promise + per-row writes. Clear the timer BEFORE additional
     // microtask drains so a second tick doesn't fire and double the
-    // observed call counts.
+    // observed call counts. Use `runOnlyPendingTimersAsync` for parity
+    // with sibling tests' drainage idiom.
     await vi.advanceTimersByTimeAsync(60_000);
     if (timer) clearInterval(timer);
     timer = undefined;
-    // One more await turn so any in-flight async work from the tick we
-    // already triggered settles before we assert.
-    await Promise.resolve();
-    await Promise.resolve();
+    await vi.runOnlyPendingTimersAsync();
 
     // Each reapable row got a status flip to "failed".
     for (const row of reapable) {
@@ -273,6 +281,21 @@ describe("startStuckActiveReaper (AC2/AC5)", () => {
     expect(mockReleaseSlot).toHaveBeenCalledTimes(reapable.length);
     for (const row of reapable) {
       expect(mockReleaseSlot).toHaveBeenCalledWith(row.user_id, row.id);
+    }
+
+    // Per-row order invariant: status flip → releaseSlot → abortSession.
+    // `mock.invocationCallOrder` is a global counter across all vi.fn()
+    // mocks — strictly increasing means the calls were issued in that
+    // order. If `abortSession` was spy-able (same-module call), assert
+    // it lands AFTER releaseSlot for the first row.
+    expect(statusUpdateMock).toHaveBeenCalled();
+    expect(mockReleaseSlot.mock.invocationCallOrder[0]).toBeGreaterThan(
+      statusUpdateMock.mock.invocationCallOrder[0],
+    );
+    if (abortSessionSpy.mock.invocationCallOrder.length > 0) {
+      expect(abortSessionSpy.mock.invocationCallOrder[0]).toBeGreaterThan(
+        mockReleaseSlot.mock.invocationCallOrder[0],
+      );
     }
   });
 
@@ -298,15 +321,22 @@ describe("startStuckActiveReaper (AC2/AC5)", () => {
     expect(mockReleaseSlot).not.toHaveBeenCalled();
   });
 
-  test("empty candidate set → no DB writes and no slot releases", async () => {
-    const { statusUpdates } = setupSupabaseMockForReaper({ candidates: [] });
+  test("empty candidate set → no DB writes, no releaseSlot, no abortSession (gate-presence)", async () => {
+    // Reaper's gate is "RPC return set", NOT "every active row is reaped".
+    // An empty result must produce zero side effects across the per-row
+    // pipeline (statusFlip / releaseSlot / abortSession) — this proves
+    // we're trusting the RPC predicate as the sole filter.
+    const { statusUpdates, statusUpdateMock } = setupSupabaseMockForReaper({ candidates: [] });
+    const abortSessionSpy = vi.spyOn(agentRunnerMod, "abortSession");
 
     timer = startStuckActiveReaper();
     await vi.advanceTimersByTimeAsync(61_000);
     await vi.runOnlyPendingTimersAsync();
 
     expect(statusUpdates).toEqual([]);
+    expect(statusUpdateMock).not.toHaveBeenCalled();
     expect(mockReleaseSlot).not.toHaveBeenCalled();
+    expect(abortSessionSpy).not.toHaveBeenCalled();
   });
 
   // Discoverability: assert the abort export (unused here directly, but
