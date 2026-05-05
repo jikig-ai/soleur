@@ -1,6 +1,19 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, cleanup, fireEvent } from "@testing-library/react";
 import { createUseTeamNamesMock } from "./mocks/use-team-names";
+import { ThemeProvider } from "@/components/theme/theme-provider";
+
+// happy-dom does not provide window.matchMedia by default, but ThemeProvider
+// (mounted via the dashboard sidebar's ThemeToggle) reads it on mount.
+const stubMatchMedia = () => ({
+  matches: false,
+  addEventListener: () => {},
+  removeEventListener: () => {},
+});
+
+function Wrap({ children }: { children: React.ReactNode }) {
+  return <ThemeProvider>{children}</ThemeProvider>;
+}
 
 // Phase 4 RED: the dashboard mobile drawer must render the chat
 // conversations rail so users on small viewports can switch threads
@@ -71,6 +84,7 @@ const fetchMock = vi.fn(() =>
 
 beforeEach(() => {
   vi.stubGlobal("fetch", fetchMock);
+  vi.stubGlobal("matchMedia", stubMatchMedia);
   fetchMock.mockClear();
 });
 
@@ -86,9 +100,11 @@ describe("DashboardLayout — mobile drawer surfaces ConversationsRail", () => {
     );
 
     render(
-      <DashboardLayout>
-        <div data-testid="page">page</div>
-      </DashboardLayout>,
+      <Wrap>
+        <DashboardLayout>
+          <div data-testid="page">page</div>
+        </DashboardLayout>
+      </Wrap>,
     );
 
     // Default drawerOpen=false. The rail must NOT mount yet — mounting
@@ -106,9 +122,11 @@ describe("DashboardLayout — mobile drawer surfaces ConversationsRail", () => {
     );
 
     render(
-      <DashboardLayout>
-        <div data-testid="page">page</div>
-      </DashboardLayout>,
+      <Wrap>
+        <DashboardLayout>
+          <div data-testid="page">page</div>
+        </DashboardLayout>
+      </Wrap>,
     );
 
     // Simulate the mobile menu button click — this is the only path that

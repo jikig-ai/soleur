@@ -1,6 +1,9 @@
 import type { Metadata, Viewport } from "next";
 import { headers } from "next/headers";
 import { SwRegister } from "./sw-register";
+import { NoFoucScript } from "@/components/theme/no-fouc-script";
+import { ThemeProvider } from "@/components/theme/theme-provider";
+import { DynamicThemeColor } from "@/components/theme/dynamic-theme-color";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -19,6 +22,9 @@ export const metadata: Metadata = {
   },
 };
 
+// Static fallback covers the pre-hydration window. Once <ThemeProvider> +
+// <DynamicThemeColor> mount, the meta tag is updated to match the resolved
+// theme. Forge dark is the default to avoid a light flash for dark-mode users.
 export const viewport: Viewport = {
   themeColor: "#0a0a0a",
 };
@@ -31,13 +37,21 @@ export default async function RootLayout({
   // Force dynamic rendering so Next.js extracts the CSP nonce from
   // the Content-Security-Policy header and applies it to all framework
   // scripts, inline scripts, and styles automatically.
-  await headers();
+  const headerList = await headers();
+  const nonce = headerList.get("x-nonce") ?? undefined;
 
   return (
     <html lang="en">
-      <body className="bg-neutral-950 text-neutral-100 antialiased">
-        <SwRegister />
-        {children}
+      <head>
+        {/* Sync theme bootstrap — runs before paint to prevent FOUC. */}
+        <NoFoucScript nonce={nonce} />
+      </head>
+      <body className="bg-soleur-bg-base text-soleur-text-primary antialiased">
+        <ThemeProvider>
+          <DynamicThemeColor />
+          <SwRegister />
+          {children}
+        </ThemeProvider>
       </body>
     </html>
   );

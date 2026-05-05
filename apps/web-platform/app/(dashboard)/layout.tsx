@@ -7,6 +7,7 @@ import { createClient } from "@/lib/supabase/client";
 import { TeamNamesProvider } from "@/hooks/use-team-names";
 import { useSidebarCollapse } from "@/hooks/use-sidebar-collapse";
 import { ConversationsRail } from "@/components/chat/conversations-rail";
+import { ThemeToggle } from "@/components/theme/theme-toggle";
 
 const BANNER_DISMISS_KEY = "soleur:past_due_banner_dismissed";
 
@@ -211,16 +212,16 @@ export default function DashboardLayout({
     <TeamNamesProvider>
     <div className="flex h-dvh flex-col md:flex-row">
       {/* Mobile top bar — only visible below md breakpoint */}
-      <div className="flex h-14 shrink-0 items-center border-b border-neutral-800 bg-neutral-900 px-4 safe-top md:hidden">
+      <div className="flex h-14 shrink-0 items-center border-b border-soleur-border-default bg-soleur-bg-surface-1 px-4 safe-top md:hidden">
         <button
           onClick={() => setDrawerOpen(true)}
           aria-label="Open navigation"
           aria-expanded={drawerOpen}
-          className="flex h-10 w-10 items-center justify-center rounded-lg text-neutral-400 hover:bg-neutral-800 hover:text-white"
+          className="flex h-10 w-10 items-center justify-center rounded-lg text-soleur-text-muted hover:bg-soleur-bg-surface-2 hover:text-soleur-text-primary"
         >
           <MenuIcon className="h-5 w-5" />
         </button>
-        <span className="ml-3 text-lg font-semibold tracking-tight text-white">
+        <span className="ml-3 text-lg font-semibold tracking-tight text-soleur-text-primary">
           Soleur
         </span>
       </div>
@@ -237,7 +238,7 @@ export default function DashboardLayout({
       {/* Sidebar / mobile drawer — always rendered for CSS transitions */}
       <aside
         className={`
-          fixed inset-y-0 left-0 z-50 flex w-64 flex-col border-r border-neutral-800 bg-neutral-900
+          fixed inset-y-0 left-0 z-50 flex w-64 flex-col border-r border-soleur-border-default bg-soleur-bg-surface-1
           transition-transform duration-200 ease-out
           ${drawerOpen ? "translate-x-0" : "-translate-x-full"}
           md:relative md:z-auto md:translate-x-0
@@ -247,13 +248,13 @@ export default function DashboardLayout({
       >
         {/* Brand + close/collapse buttons */}
         <div className={`flex items-center justify-between safe-top ${collapsed ? "px-2 py-5" : "px-5 py-5"}`}>
-          <span className={`text-lg font-semibold tracking-tight text-white overflow-hidden whitespace-nowrap ${collapsed ? "md:hidden" : ""}`}>
+          <span className={`text-lg font-semibold tracking-tight text-soleur-text-primary overflow-hidden whitespace-nowrap ${collapsed ? "md:hidden" : ""}`}>
             Soleur
           </span>
           <button
             onClick={() => setDrawerOpen(false)}
             aria-label="Close navigation"
-            className="flex h-10 w-10 items-center justify-center rounded-lg text-neutral-400 hover:bg-neutral-800 hover:text-white md:hidden"
+            className="flex h-10 w-10 items-center justify-center rounded-lg text-soleur-text-muted hover:bg-soleur-bg-surface-2 hover:text-soleur-text-primary md:hidden"
           >
             <XIcon className="h-5 w-5" />
           </button>
@@ -262,7 +263,7 @@ export default function DashboardLayout({
             onClick={toggleCollapsed}
             aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
             title={collapsed ? "Expand sidebar (⌘B)" : "Collapse sidebar (⌘B)"}
-            className="hidden md:flex h-6 w-6 items-center justify-center rounded text-neutral-400 hover:bg-neutral-800 hover:text-white"
+            className="hidden md:flex h-6 w-6 items-center justify-center rounded text-soleur-text-muted hover:bg-soleur-bg-surface-2 hover:text-soleur-text-primary"
           >
             {collapsed ? (
               <ChevronRightIcon className="h-4 w-4" />
@@ -287,8 +288,8 @@ export default function DashboardLayout({
                 title={collapsed ? item.label : undefined}
                 className={`flex min-h-[44px] items-center gap-3 rounded-lg px-3 py-2 text-sm transition-colors ${
                   active
-                    ? "bg-neutral-800 text-white"
-                    : "text-neutral-400 hover:bg-neutral-800/50 hover:text-neutral-200"
+                    ? "bg-soleur-bg-surface-2 text-soleur-text-primary"
+                    : "text-soleur-text-muted hover:bg-soleur-bg-surface-2/60 hover:text-soleur-text-secondary"
                 } ${collapsed ? "md:justify-center md:gap-0 md:px-0" : ""}`}
               >
                 <item.icon className="h-4 w-4 shrink-0" />
@@ -313,17 +314,29 @@ export default function DashboardLayout({
         {drawerOpen && pathname.startsWith("/dashboard/chat") && (
           <div
             data-testid="conversations-rail-drawer"
-            className="flex min-h-0 flex-1 flex-col border-t border-neutral-800 md:hidden"
+            className="flex min-h-0 flex-1 flex-col border-t border-soleur-border-default md:hidden"
           >
             <ConversationsRail />
           </div>
         )}
 
+        {/* Theme toggle — hidden when sidebar is collapsed (no horizontal
+            room for the 3-segment control). Anchored under a "THEME"
+            ALL-CAPS label per brand-guide.md section-label convention. */}
+        {!collapsed && (
+          <div className="border-t border-soleur-border-default px-3 pt-3">
+            <p className="px-1 pb-2 text-[10px] font-semibold uppercase tracking-[0.2em] text-soleur-accent-gold-fg">
+              Theme
+            </p>
+            <ThemeToggle />
+          </div>
+        )}
+
         {/* Footer links */}
-        <div className={`border-t border-neutral-800 safe-bottom ${collapsed ? "p-1" : "p-3"}`}>
+        <div className={`border-t border-soleur-border-default safe-bottom ${collapsed ? "p-1" : "p-3"}`}>
           {userEmail && !collapsed && (
             <p
-              className="truncate px-3 py-1 text-xs text-neutral-500"
+              className="truncate px-3 py-1 text-xs text-soleur-text-muted"
               title={userEmail}
             >
               {userEmail}
@@ -334,7 +347,7 @@ export default function DashboardLayout({
             target="_blank"
             rel="noopener noreferrer"
             title={collapsed ? "Status" : undefined}
-            className={`flex min-h-[44px] w-full items-center gap-3 rounded-lg px-3 py-2 text-sm text-neutral-400 transition-colors hover:bg-neutral-800/50 hover:text-neutral-200 ${collapsed ? "md:justify-center md:gap-0 md:px-0" : ""}`}
+            className={`flex min-h-[44px] w-full items-center gap-3 rounded-lg px-3 py-2 text-sm text-soleur-text-muted transition-colors hover:bg-soleur-bg-surface-2/60 hover:text-soleur-text-secondary ${collapsed ? "md:justify-center md:gap-0 md:px-0" : ""}`}
           >
             <StatusIcon className="h-4 w-4 shrink-0" />
             <span className={`overflow-hidden whitespace-nowrap ${collapsed ? "md:hidden" : ""}`}>Status</span>
@@ -342,7 +355,7 @@ export default function DashboardLayout({
           <button
             onClick={handleSignOut}
             title={collapsed ? "Sign out" : undefined}
-            className={`flex min-h-[44px] w-full items-center gap-3 rounded-lg px-3 py-2 text-sm text-neutral-400 transition-colors hover:bg-neutral-800/50 hover:text-neutral-200 ${collapsed ? "md:justify-center md:gap-0 md:px-0" : ""}`}
+            className={`flex min-h-[44px] w-full items-center gap-3 rounded-lg px-3 py-2 text-sm text-soleur-text-muted transition-colors hover:bg-soleur-bg-surface-2/60 hover:text-soleur-text-secondary ${collapsed ? "md:justify-center md:gap-0 md:px-0" : ""}`}
           >
             <LogOutIcon className="h-4 w-4 shrink-0" />
             <span className={`overflow-hidden whitespace-nowrap ${collapsed ? "md:hidden" : ""}`}>Sign out</span>
@@ -352,7 +365,7 @@ export default function DashboardLayout({
 
       {/* Main content — inert when drawer is open for focus trapping */}
       <main
-        className="flex-1 overflow-y-auto bg-neutral-950"
+        className="flex-1 overflow-y-auto bg-soleur-bg-base"
         inert={drawerOpen || undefined}
       >
         {/* Payment banners */}
