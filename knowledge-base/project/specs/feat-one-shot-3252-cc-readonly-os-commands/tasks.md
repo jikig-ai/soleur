@@ -77,12 +77,12 @@ Derived from `2026-05-05-fix-cc-readonly-os-commands-plan.md`. Three phases (RED
 
 ## Acceptance verification (pre-merge)
 
-- [ ] AC1: `cd`, `cd /tmp`, `cd src/components` all auto-approve with no review_gate.
-- [ ] AC2: `cdrecord`, `cdx`, `cd../etc` all reject from `isBashCommandSafe`.
-- [ ] AC3: `ls ..`, `cat ../foo`, `cd ..` reject; `cat foo/..baz`, `ls .` allow.
-- [ ] AC4: All COMPOUND_COMMANDS fixtures from existing test still reject.
-- [ ] AC5: `lsof`, `cdrecord`, `pwdx` invocations call `warnSilentFallback` with correct `leadingToken` and no command-content leakage to `extra`.
-- [ ] AC6: Test file extended with three new `describe` blocks, all green.
+- [x] AC1: `cd`, `cd /tmp`, `cd src/components` all auto-approve with no review_gate.
+- [x] AC2: `cdrecord`, `cdx`, `cd../etc` all reject from `isBashCommandSafe`.
+- [x] AC3: `ls ..`, `cat ../foo`, `cd ..` reject; `cat foo/..baz`, `ls .` allow.
+- [x] AC4: All COMPOUND_COMMANDS fixtures from existing test still reject.
+- [x] AC5: `lsof`, `cdrecord`, `pwdx` invocations call `warnSilentFallback` with correct `leadingToken` and no command-content leakage to `extra`.
+- [x] AC6: Test file extended with three new `describe` blocks, all green.
 
 ## Acceptance verification (post-merge)
 
