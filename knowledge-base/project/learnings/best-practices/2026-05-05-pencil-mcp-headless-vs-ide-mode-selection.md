@@ -51,6 +51,8 @@ Generalizable lesson: when a tool offers multiple registration modes and one has
 
 4. **Treated a `rmdir: directory not empty` failure as cleanup success.** Compound shell chain `rm && rmdir && git reset --soft && git restore --staged && git status` short-circuited at `rmdir` (leftover `export/` dir from a Pencil MCP operation), but the next commands didn't run, leaving the scaffold commit on the branch. Caught only when `git log` showed it still present. Prevention: per `hr-when-a-command-exits-non-zero-or-prints`, investigate non-zero exits before proceeding. For cleanup chains, prefer `set -e` semantics or read each step's exit code explicitly.
 
+5. **`check_deps.sh` `attempt_headless_install` used wrong npm package name.** Line 438 ran `npm install @anthropic-ai/pencil-cli` (404) while `detect_headless_cli` expected `@pencil.dev/cli` in the symlink target. The install silently fell through to IDE-mode (Tier 3) on every `pencil-setup --auto` invocation that lacked a pre-installed headless CLI. Recovery: package name corrected to `@pencil.dev/cli` (verified via `npm view @pencil.dev/cli`) — install now succeeds. Prevention: the detect function and install function must reference the same package identifier; consider extracting `PENCIL_CLI_PACKAGE="@pencil.dev/cli"` as a shared constant at the top of `check_deps.sh` so future renames don't drift.
+
 ## Prevention summary
 
 - **Workflow gate (already applied):** brand-workshop step 4.5.0 refuses non-headless Pencil MCP modes for agent runs.
