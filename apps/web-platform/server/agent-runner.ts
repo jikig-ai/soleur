@@ -536,30 +536,37 @@ export function startStuckActiveReaper(): NodeJS.Timeout {
 
     if (candidates.length === 0) return;
 
-    for (const conv of candidates) {
-      // Idempotent — if another replica already flipped the row, the
-      // expectMatch:false update is a no-op.
-      const result = await updateConversationFor(
-        conv.user_id,
-        conv.id,
-        { status: "failed", last_active: new Date().toISOString() },
-        {
-          feature: "concurrency-stuck-active-reaper",
-          op: "finalize",
-          expectMatch: false,
-        },
-      );
-      if (!result.ok) {
-        log.warn(
-          { userId: conv.user_id, conversationId: conv.id, err: result.error },
-          "stuck-active reap: status flip failed (will retry next tick)",
+    // Parallelize per-row teardown — each candidate's pipeline is
+    // independent (per-(user,conv) keyed writes / DELETE / abort). Use
+    // `allSettled` so one row's failure does not block siblings. The
+    // ORDER constraint (status flip → releaseSlot → abortSession) is
+    // per-row, not cross-row.
+    await Promise.allSettled(
+      candidates.map(async (conv) => {
+        // Idempotent — if another replica already flipped the row, the
+        // expectMatch:false update is a no-op.
+        const result = await updateConversationFor(
+          conv.user_id,
+          conv.id,
+          { status: "failed", last_active: new Date().toISOString() },
+          {
+            feature: "concurrency-stuck-active-reaper",
+            op: "finalize",
+            expectMatch: false,
+          },
         );
-        continue;
-      }
-      // Order: status flip → releaseSlot → abortSession (see header above).
-      await releaseSlot(conv.user_id, conv.id);
-      abortSession(conv.user_id, conv.id);
-    }
+        if (!result.ok) {
+          log.warn(
+            { userId: conv.user_id, conversationId: conv.id, err: result.error },
+            "stuck-active reap: status flip failed (will retry next tick)",
+          );
+          return;
+        }
+        // Order: status flip → releaseSlot → abortSession (see header above).
+        await releaseSlot(conv.user_id, conv.id);
+        abortSession(conv.user_id, conv.id);
+      }),
+    );
     log.info(
       { count: candidates.length },
       "stuck-active reaper finalized rows",

@@ -102,8 +102,10 @@ app.prepare().then(() => {
   // staleness threshold). Defense-in-depth against the AC1 try/catch wrap:
   // catches process-killed-mid-stream + future regressions that strand
   // conversations at status='active'. See agent-runner.ts for the full
-  // contract.
-  startStuckActiveReaper();
+  // contract. Capture the timer so SIGTERM can stop it explicitly —
+  // .unref() already prevents shutdown blocking, but explicit cleanup
+  // avoids in-flight releaseSlot calls during shutdown.
+  const stuckActiveReaperTimer = startStuckActiveReaper();
 
   server.listen(port, () => {
     log.info({ port, env: dev ? "development" : "production" }, "Server ready");
@@ -136,6 +138,10 @@ app.prepare().then(() => {
       process.exit(1);
     }, SHUTDOWN_TIMEOUT_MS);
     forceExit.unref();
+
+    // Stop the stuck-active reaper before aborting sessions — otherwise an
+    // in-flight reaper tick could issue releaseSlot writes during shutdown.
+    clearInterval(stuckActiveReaperTimer);
 
     // Abort all active agent sessions first — stops API credit consumption
     // and triggers the catch block which updates conversation status to "failed".

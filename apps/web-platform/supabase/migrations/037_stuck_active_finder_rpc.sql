@@ -57,3 +57,9 @@ $$;
 
 revoke all on function public.find_stuck_active_conversations(integer) from public;
 grant execute on function public.find_stuck_active_conversations(integer) to service_role;
+
+-- Partial index targeting the reaper's predicate. Eliminates full-table scan on
+-- idx_conversations_status as the conversations table grows.
+create index if not exists idx_conversations_active_unarchived
+  on public.conversations (id, user_id)
+  where status = 'active' and archived_at is null;
