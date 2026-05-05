@@ -1,12 +1,68 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-const { mockReportSilentFallback } = vi.hoisted(() => ({
+const {
+  mockReportSilentFallback,
+  mockFetchUserWorkspacePath,
+  mockMessagesInsert,
+  mockUpdateConversationFor,
+} = vi.hoisted(() => ({
   mockReportSilentFallback: vi.fn(),
+  mockFetchUserWorkspacePath: vi.fn(),
+  mockMessagesInsert: vi.fn().mockResolvedValue({ error: null }),
+  mockUpdateConversationFor: vi.fn().mockResolvedValue({ ok: true }),
 }));
+
+vi.mock("@/server/conversation-writer", async () => {
+  const actual = await vi.importActual<
+    typeof import("@/server/conversation-writer")
+  >("@/server/conversation-writer");
+  return {
+    ...actual,
+    updateConversationFor: mockUpdateConversationFor,
+  };
+});
 
 vi.mock("@/server/observability", () => ({
   reportSilentFallback: mockReportSilentFallback,
   warnSilentFallback: vi.fn(),
+}));
+
+// Module-scoped: every test in this file gets a mocked
+// `fetchUserWorkspacePath`. Existing dispatchSoleurGo tests pre-#3235 do not
+// assert on workspace-resolve or tool labels, so the swap is behavior-neutral
+// for them. Future tests in this file MUST be aware that a real Supabase
+// SELECT is bypassed here — re-add `vi.importActual` if you need the real
+// memo / Supabase round-trip semantics.
+vi.mock("@/server/kb-document-resolver", async () => {
+  const actual = await vi.importActual<
+    typeof import("@/server/kb-document-resolver")
+  >("@/server/kb-document-resolver");
+  return {
+    ...actual,
+    fetchUserWorkspacePath: mockFetchUserWorkspacePath,
+  };
+});
+
+// #3254 — `dispatchSoleurGo` now persists a `messages` row per turn
+// (so `message_attachments.message_id` FK can be satisfied for cc-path
+// attachments). Stub the service-role client so existing tests that
+// don't care about the new insert keep passing without spinning a real
+// Supabase up.
+vi.mock("@/lib/supabase/service", () => ({
+  serverUrl: () => "https://test.supabase.co",
+  createServiceClient: () => ({
+    from: (table: string) => {
+      if (table === "messages") {
+        return { insert: mockMessagesInsert };
+      }
+      // `conversations` writes go through `updateConversationFor` which is
+      // mocked above; service-client should never see a direct .from("conversations").
+      throw new Error(`unexpected table in cc-dispatcher.test.ts: ${table}`);
+    },
+    storage: {
+      from: () => ({ download: vi.fn() }),
+    },
+  }),
 }));
 
 import {
@@ -33,6 +89,16 @@ describe("cc-dispatcher singletons + orchestration", () => {
   beforeEach(() => {
     __resetDispatcherForTests();
     mockReportSilentFallback.mockClear();
+    mockFetchUserWorkspacePath.mockReset();
+    mockMessagesInsert.mockClear();
+    // Default: every messages-insert succeeds; tests that need a failure
+    // can override per-call.
+    mockMessagesInsert.mockResolvedValue({ error: null });
+    mockUpdateConversationFor.mockClear();
+    mockUpdateConversationFor.mockResolvedValue({ ok: true });
+    // Default: a stable stub workspace path so existing tests that don't
+    // care about the workspace-resolve path still get a deterministic value.
+    mockFetchUserWorkspacePath.mockResolvedValue("/tmp/claude-XXXX/workspace");
   });
 
   it("getPendingPromptRegistry returns a stable singleton", () => {
@@ -581,5 +647,186 @@ describe("cc-dispatcher singletons + orchestration", () => {
     for (const [key, msg] of Object.entries(WORKFLOW_END_USER_MESSAGES)) {
       expect(msg, `key=${key}`).not.toContain("Workflow ended (");
     }
+  });
+
+  // ---------------------------------------------------------------------------
+  // dispatchSoleurGo onToolUse label routing (#3235)
+  //
+  // Bug: cc-dispatcher emitted `label: block.name` (raw SDK tool name like
+  // `Read`) on the `tool_use` WS event, while the legacy agent-runner path
+  // routes the same event through `buildToolLabel(name, input, workspacePath)`
+  // which produces verbose, scrubbed labels (`Reading <relative>.pdf...`).
+  // After fix, both server-side `tool_use` emitters share identical
+  // label-building semantics and the chip beneath "Soleur Concierge / Working"
+  // shows the verbose label end-to-end.
+  // ---------------------------------------------------------------------------
+  type ToolUseBlock = {
+    name: string;
+    input: Record<string, unknown>;
+    toolUseId: string;
+  };
+
+  function makeStubCcRunner(args: {
+    onDispatch: (events: { onToolUse: (block: ToolUseBlock) => void }) => void;
+  }) {
+    return {
+      dispatch: vi.fn(
+        async (a: { events: { onToolUse: (b: ToolUseBlock) => void } }) => {
+          // Yield one microtask so the dispatcher's parallel
+          // workspace-resolve `.then` settles before the stub fires
+          // onToolUse. In production, the SDK Query construction (which
+          // awaits the same memo) provides this ordering implicitly; the
+          // stub bypasses the runner internals so we simulate it explicitly.
+          await Promise.resolve();
+          args.onDispatch(a.events);
+          return { queryReused: false };
+        },
+      ),
+      hasActiveQuery: () => false,
+      activeQueriesSize: () => 0,
+      reapIdle: () => 0,
+      closeConversation: () => {},
+      respondToToolUse: () => false,
+      notifyAwaitingUser: () => {},
+      // biome-ignore lint/suspicious/noExplicitAny: minimal stub
+    } as any;
+  }
+
+  function captureToolUseFrames(sendToClient: ReturnType<typeof vi.fn>) {
+    return sendToClient.mock.calls
+      .filter(
+        ([, msg]) =>
+          msg &&
+          typeof msg === "object" &&
+          (msg as { type?: string }).type === "tool_use",
+      )
+      .map(([, msg]) => msg as { type: string; label: string; leaderId?: string });
+  }
+
+  it("KB Concierge: routes onToolUse label through buildToolLabel and scrubs workspace prefix", async () => {
+    const { __setCcRunnerForTests } = await import("@/server/cc-dispatcher");
+
+    const stubWorkspace = "/tmp/claude-XXXX/workspace";
+    mockFetchUserWorkspacePath.mockResolvedValue(stubWorkspace);
+
+    __setCcRunnerForTests(
+      makeStubCcRunner({
+        onDispatch: (events) =>
+          events.onToolUse({
+            name: "Read",
+            input: { file_path: `${stubWorkspace}/Au Chat Potan.pdf` },
+            toolUseId: "tool_use_1",
+          }),
+      }),
+    );
+
+    const sendToClient = vi.fn().mockReturnValue(true);
+    await dispatchSoleurGo({
+      userId: "u-tool-label",
+      conversationId: "conv-tool-label",
+      userMessage: "summarize this PDF",
+      currentRouting: { kind: "soleur_go_pending" },
+      sendToClient,
+      persistActiveWorkflow: vi.fn().mockResolvedValue(undefined),
+      artifactPath: "Au Chat Potan.pdf",
+      documentKind: "pdf",
+    });
+
+    const frames = captureToolUseFrames(sendToClient);
+    expect(frames).toHaveLength(1);
+    const frame = frames[0]!;
+
+    // Must NOT be the bare SDK tool name (the bug).
+    expect(frame.label).not.toBe("Read");
+    // Must read like a Read-with-relative-path label. Use a regex so a
+    // future buildToolLabel suffix tweak (`...` → `…`, etc.) does not
+    // break this dispatcher-contract test — exact-format coverage lives
+    // in `tool-labels.test.ts`.
+    expect(frame.label).toMatch(/^Reading .*Au Chat Potan\.pdf/);
+    // Must not contain the workspace prefix anywhere — proves the scrub fired.
+    expect(frame.label).not.toContain(stubWorkspace);
+    // Leader id pinned to cc_router for the Concierge surface.
+    expect(frame.leaderId).toBe("cc_router");
+  });
+
+  it("KB Concierge: mirrors workspace-resolve failure to Sentry under feature: cc-dispatcher", async () => {
+    const { __setCcRunnerForTests } = await import("@/server/cc-dispatcher");
+
+    mockFetchUserWorkspacePath.mockRejectedValue(
+      new Error("Workspace not provisioned"),
+    );
+
+    __setCcRunnerForTests(
+      makeStubCcRunner({
+        onDispatch: (events) =>
+          events.onToolUse({
+            name: "Read",
+            input: { file_path: "/home/agent/repo/foo.pdf" },
+            toolUseId: "tool_use_1",
+          }),
+      }),
+    );
+
+    await dispatchSoleurGo({
+      userId: "u-fallback-mirror",
+      conversationId: "conv-fallback-mirror",
+      userMessage: "summarize",
+      currentRouting: { kind: "soleur_go_pending" },
+      sendToClient: vi.fn().mockReturnValue(true),
+      persistActiveWorkflow: vi.fn().mockResolvedValue(undefined),
+    });
+
+    const workspaceResolveMirrors = mockReportSilentFallback.mock.calls.filter(
+      ([, ctx]) =>
+        ctx?.feature === "cc-dispatcher" && ctx?.op === "workspace-resolve",
+    );
+    expect(workspaceResolveMirrors).toHaveLength(1);
+    // The userId/conversationId must travel as `extra` so Sentry can group
+    // by user + conversation when the resolve flakes.
+    expect(workspaceResolveMirrors[0]![1]?.extra).toMatchObject({
+      userId: "u-fallback-mirror",
+      conversationId: "conv-fallback-mirror",
+    });
+  });
+
+  it("KB Concierge: falls back to a safe label (no absolute path) when workspace path is unavailable", async () => {
+    const { __setCcRunnerForTests } = await import("@/server/cc-dispatcher");
+
+    mockFetchUserWorkspacePath.mockRejectedValue(
+      new Error("Workspace not provisioned"),
+    );
+
+    const absolutePath = "/home/agent/repo/foo.pdf";
+    __setCcRunnerForTests(
+      makeStubCcRunner({
+        onDispatch: (events) =>
+          events.onToolUse({
+            name: "Read",
+            input: { file_path: absolutePath },
+            toolUseId: "tool_use_1",
+          }),
+      }),
+    );
+
+    const sendToClient = vi.fn().mockReturnValue(true);
+    await dispatchSoleurGo({
+      userId: "u-fallback-label",
+      conversationId: "conv-fallback-label",
+      userMessage: "summarize",
+      currentRouting: { kind: "soleur_go_pending" },
+      sendToClient,
+      persistActiveWorkflow: vi.fn().mockResolvedValue(undefined),
+    });
+
+    const frames = captureToolUseFrames(sendToClient);
+    expect(frames).toHaveLength(1);
+    const frame = frames[0]!;
+    // Workspace was unavailable AND the path is absolute, so
+    // `extractRelativePath` returns undefined and `buildToolLabel` falls
+    // back to FALLBACK_LABELS.Read. Defense-in-depth against echoing
+    // host-shaped paths to clients during a Supabase incident.
+    expect(frame.label).not.toBe("Read");
+    expect(frame.label).toBe("Reading file...");
+    expect(frame.label).not.toContain(absolutePath);
   });
 });

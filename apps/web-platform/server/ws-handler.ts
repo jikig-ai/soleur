@@ -55,6 +55,7 @@ import {
   resolveCcBashGate,
   resolveConciergeDocumentContext,
 } from "./cc-dispatcher";
+import { stripAndReportImagePlaceholders } from "./image-paste-strip";
 import { getFlag } from "@/lib/feature-flags/server";
 type InteractivePromptResponse = Extract<WSMessage, { type: "interactive_prompt_response" }>;
 
@@ -541,6 +542,7 @@ async function dispatchSoleurGoForConversation(
   userMessage: string,
   routing: ConversationRouting,
   context?: ConversationContext,
+  attachments?: import("@/lib/types").AttachmentRef[],
 ): Promise<void> {
   const persistActiveWorkflow = async (workflow: WorkflowName | null) => {
     // data-integrity P1-A: never regress a soleur-go conversation back
@@ -622,6 +624,7 @@ async function dispatchSoleurGoForConversation(
     currentRouting: routing,
     sendToClient,
     persistActiveWorkflow,
+    attachments,
     ...documentArgs,
   });
 }
@@ -1000,12 +1003,23 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
         return;
       }
 
+      // Strip `[Image #N]` SDK-CLI placeholders from inbound text. The
+      // placeholders mean image bytes were already dropped upstream;
+      // letting them through would persist the broken artifact to
+      // `messages.content` and re-inject it into every LLM replay.
+      // Surfaces a non-blocking `image_paste_lost` error to the client.
+      const userContent = stripAndReportImagePlaceholders(msg.content, {
+        userId,
+        conversationId: session.conversationId ?? null,
+        send: (m) => sendToClient(userId, m),
+      });
+
       // User activity resets idle timer
       resetIdleTimer(userId, session);
 
       // Materialize pending conversation on first real message
       if (!session.conversationId && session.pending) {
-        const stripped = msg.content.replace(/@\w+\s*/g, "").trim();
+        const stripped = userContent.replace(/@\w+\s*/g, "").trim();
         if (!stripped) {
           sendToClient(userId, {
             type: "error",
@@ -1063,9 +1077,10 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
             await dispatchSoleurGoForConversation(
               userId,
               session.conversationId,
-              msg.content,
+              userContent,
               pendingRouting,
               pendingContext,
+              msg.attachments,
             );
             break;
           }
@@ -1087,7 +1102,13 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
           }
 
           // sendUserMessage handles saveMessage internally — do not double-save
-          await sendUserMessage(userId, session.conversationId, msg.content, pendingContext);
+          await sendUserMessage(
+            userId,
+            session.conversationId,
+            userContent,
+            pendingContext,
+            msg.attachments,
+          );
         } catch (err) {
           Sentry.captureException(err);
           log.error({ userId, err }, "chat error (deferred creation)");
@@ -1154,9 +1175,10 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
           await dispatchSoleurGoForConversation(
             userId,
             convId,
-            msg.content,
+            userContent,
             routing,
             chatContext,
+            msg.attachments,
           );
           break;
         }
@@ -1164,7 +1186,7 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
         await sendUserMessage(
           userId,
           session.conversationId!,
-          msg.content,
+          userContent,
           undefined, // conversationContext
           msg.attachments,
         );

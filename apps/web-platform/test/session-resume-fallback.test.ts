@@ -109,6 +109,8 @@ vi.mock("../server/service-tools", () => ({
 vi.mock("../server/observability", () => ({
   reportSilentFallback: vi.fn(),
   reportSilentFallbackWarning: vi.fn(),
+  // #3250: `applyPrefillGuard` emits warn-level via `warnSilentFallback`.
+  warnSilentFallback: vi.fn(),
 }));
 
 import { startAgentSession } from "../server/agent-runner";

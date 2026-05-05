@@ -127,6 +127,15 @@ export function KbChatContent({ contextPath, onClose, visible }: KbChatContentPr
 
   const handleMessageCountChange = useCallback(
     (count: number) => {
+      // Invariant owned by this consumer: once handleThreadResumed has set
+      // historicalCountRef to N>0 (server confirmed a resumed thread of N
+      // messages), messageCount must never regress below that floor for the
+      // life of this mount. The KB sidebar has no "clear thread" code path
+      // today — messages only grow via filter_prepend or stream events — so
+      // a `count === 0` write after a confirmed resume is necessarily
+      // transient (race with hydration). If a future feature adds an
+      // explicit clear, replace this guard with a `resumed`-flag check.
+      if (count === 0 && historicalCountRef.current > 0) return;
       setMessageCount(count);
       if (count > historicalCountRef.current) {
         setResumedBanner(null);

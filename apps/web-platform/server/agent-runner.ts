@@ -1,14 +1,14 @@
 import { query, type tool, createSdkMcpServer } from "@anthropic-ai/claude-agent-sdk";
 import { randomUUID } from "crypto";
 import { readFileSync, mkdirSync } from "fs";
-import { readFile, writeFile, mkdir } from "fs/promises";
+import { readFile } from "fs/promises";
 import path from "path";
 
 import { createServiceClient } from "@/lib/supabase/service";
 import { ROUTABLE_DOMAIN_LEADERS, type DomainLeaderId } from "./domain-leaders";
 import { routeMessage } from "./domain-router";
 import { KeyInvalidError, type AttachmentRef, type Conversation } from "@/lib/types";
-import { ALLOWED_ATTACHMENT_TYPES } from "@/lib/attachment-constants";
+import { persistAndDownloadAttachments } from "./attachment-pipeline";
 import { decryptKey, decryptKeyLegacy, encryptKey } from "./byok";
 import { sendToClient } from "./ws-handler";
 import { notifyOfflineUser, type NotificationPayload } from "./notifications";
@@ -19,9 +19,6 @@ import {
   ERR_CONVERSATION_NOT_FOUND,
   ERR_NO_ACTIVE_SESSION,
   ERR_REVIEW_GATE_NOT_FOUND,
-  ERR_ATTACHMENT_NOT_FOUND,
-  ERR_UNSUPPORTED_FILE_TYPE,
-  ERR_UPLOAD_FAILED,
 } from "./error-messages";
 import { isPathInWorkspace } from "./sandbox";
 import { PROVIDER_CONFIG, EXCLUDED_FROM_SERVICES_UI } from "./providers";
@@ -40,6 +37,7 @@ import { buildGithubTools } from "./github-tools";
 import { buildPlausibleTools } from "./plausible-tools";
 import { createCanUseTool } from "./permission-callback";
 import { reportSilentFallback } from "./observability";
+import { applyPrefillGuard } from "./agent-prefill-guard";
 import { updateConversationFor } from "./conversation-writer";
 import { buildAgentQueryOptions } from "./agent-runner-query-options";
 import {
@@ -52,7 +50,7 @@ const log = createChildLogger("agent");
 let _supabase: ReturnType<typeof createServiceClient>;
 function supabase() { return _supabase ??= createServiceClient(); }
 
-import { buildToolLabel } from "./tool-labels";
+import { buildToolLabel, buildToolUseWSMessage } from "./tool-labels";
 
 // ---------------------------------------------------------------------------
 // Workspace permissions migration (#725)
@@ -883,6 +881,20 @@ issues/PRs, 4 KB comments); follow the html_url for the full text.`;
             ...pluginMcpServerNames.map((s) => `mcp__plugin_soleur_${s}__*`),
           ]
         : undefined;
+
+    // Thread-shape guard for #3250 — drop `resume:` when the persisted
+    // SDK session ends on `assistant`. Domain leaders default to
+    // `claude-sonnet-4-6`, which 400s on assistant-terminated threads.
+    // Helper-shared with the cc-soleur-go path (`cc-dispatcher.ts`).
+    const { safeResumeSessionId } = await applyPrefillGuard({
+      resumeSessionId,
+      workspacePath,
+      userId,
+      conversationId,
+      feature: "agent-runner",
+      leaderId: effectiveLeaderId,
+    });
+
     const q = query({
       prompt,
       options: buildAgentQueryOptions({
@@ -891,7 +903,7 @@ issues/PRs, 4 KB comments); follow the html_url for the full text.`;
         apiKey,
         serviceTokens,
         systemPrompt,
-        resumeSessionId,
+        resumeSessionId: safeResumeSessionId,
         maxTurns: 50,
         maxBudgetUsd: 5.0,
         ...(mcpServersOption ? { mcpServers: mcpServersOption } : {}),
@@ -1043,13 +1055,18 @@ issues/PRs, 4 KB comments); follow the html_url for the full text.`;
               // human-readable label crosses the wire — the raw SDK tool name
               // (Read/Bash/Grep/...) is an internal implementation detail and
               // must not leak to devtools or any WS inspector. See #2138.
+              // The `buildToolUseWSMessage` helper pins this invariant for
+              // both this emitter and the cc-dispatcher emitter (#3235).
               const toolBlock = block as { name?: string; input?: Record<string, unknown> };
-              const toolName = toolBlock.name ?? "unknown";
-              sendToClient(userId, {
-                type: "tool_use",
-                leaderId: streamLeaderId,
-                label: buildToolLabel(toolName, toolBlock.input, workspacePath),
-              });
+              sendToClient(
+                userId,
+                buildToolUseWSMessage({
+                  name: toolBlock.name ?? "unknown",
+                  input: toolBlock.input,
+                  workspacePath,
+                  leaderId: streamLeaderId,
+                }),
+              );
             }
           }
         }
@@ -1333,86 +1350,18 @@ export async function sendUserMessage(
   });
   if (msgErr) throw new Error(`Failed to save message: ${msgErr.message}`);
 
-  // Persist attachment metadata and download files to workspace
+  // Persist attachment metadata and download files to workspace.
+  // Extracted in #3254 — see `attachment-pipeline.ts` for the lifted body.
   let attachmentContext: string | undefined;
   if (attachments && attachments.length > 0) {
-    // Validate and sanitize each attachment (defense-in-depth — client is untrusted)
-    const pathPrefix = `${userId}/${conversationId}/`;
-
-    for (const att of attachments) {
-      // P1 fix: reject storagePath that doesn't belong to this user/conversation or contains traversal
-      if (!att.storagePath.startsWith(pathPrefix) || att.storagePath.includes("..")) {
-        throw new Error(ERR_ATTACHMENT_NOT_FOUND);
-      }
-      if (!ALLOWED_ATTACHMENT_TYPES.has(att.contentType)) {
-        throw new Error(ERR_UNSUPPORTED_FILE_TYPE);
-      }
-      // Sanitize filename: strip path separators
-      att.filename = att.filename.replace(/[/\\]/g, "_");
-    }
-
-    // Insert attachment metadata rows
-    const attachmentRows = attachments.map((att) => ({
-      message_id: messageId,
-      storage_path: att.storagePath,
-      filename: att.filename,
-      content_type: att.contentType,
-      size_bytes: att.sizeBytes,
-    }));
-
-    const { error: attErr } = await supabase()
-      .from("message_attachments")
-      .insert(attachmentRows);
-
-    if (attErr) {
-      log.error({ err: attErr, messageId }, "Failed to save attachment metadata");
-      throw new Error(ERR_UPLOAD_FAILED);
-    }
-
-    // Download files to workspace for agent access
-    const { data: user } = await supabase()
-      .from("users")
-      .select("workspace_path")
-      .eq("id", userId)
-      .single();
-
-    if (user?.workspace_path) {
-      const attachDir = path.join(user.workspace_path, "attachments", conversationId);
-      await mkdir(attachDir, { recursive: true });
-
-      const extMap: Record<string, string> = {
-        "image/png": "png", "image/jpeg": "jpeg", "image/gif": "gif",
-        "image/webp": "webp", "application/pdf": "pdf",
-      };
-
-      const results = await Promise.allSettled(
-        attachments.map(async (att) => {
-          const { data: fileData, error: dlErr } = await supabase()
-            .storage
-            .from("chat-attachments")
-            .download(att.storagePath);
-
-          if (dlErr || !fileData) {
-            log.error({ err: dlErr, storagePath: att.storagePath }, "Failed to download attachment");
-            return null;
-          }
-
-          const ext = extMap[att.contentType] || "bin";
-          const localPath = path.join(attachDir, `${randomUUID()}.${ext}`);
-          await writeFile(localPath, Buffer.from(await fileData.arrayBuffer()));
-          return `- ${att.filename} (${att.contentType}, ${att.sizeBytes} bytes): ${localPath}`;
-        }),
-      );
-
-      const filePaths = results
-        .filter((r): r is PromiseFulfilledResult<string | null> => r.status === "fulfilled")
-        .map((r) => r.value)
-        .filter((v): v is string => v !== null);
-
-      if (filePaths.length > 0) {
-        attachmentContext = `The user attached the following files:\n${filePaths.join("\n")}`;
-      }
-    }
+    const result = await persistAndDownloadAttachments({
+      supabase: supabase(),
+      userId,
+      conversationId,
+      messageId,
+      attachments,
+    });
+    attachmentContext = result.attachmentContext;
   }
 
   // Check for an in-memory session with a captured session_id

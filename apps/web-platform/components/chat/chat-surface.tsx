@@ -201,6 +201,7 @@ export function ChatSurface({
     resumedFrom,
     workflow,
     workflowEndedAt,
+    historyLoading,
   } = useWebSocket(conversationId);
 
   const { names: customNames, getDisplayName, getIconPath, loading: teamNamesLoading } = useTeamNames();
@@ -279,8 +280,16 @@ export function ChatSurface({
   }, [realConversationId, onRealConversationId]);
 
   useEffect(() => {
+    // Skip the zero-write while a hydration is genuinely pending — either the
+    // history fetch is still in flight, or the server has resolved a prior
+    // thread (`resumedFrom`) but its history hasn't arrived yet. Both cases
+    // would otherwise clobber the prefetched messageCount that `useKbLayoutState`
+    // seeded for the trigger label. A fresh `session_started` (no resume) does
+    // NOT need the guard — `messages.length === 0` for a brand-new conversation
+    // is the correct count, not stale.
+    if (messages.length === 0 && (historyLoading || resumedFrom)) return;
     onMessageCountChange?.(messages.length);
-  }, [messages.length, onMessageCountChange]);
+  }, [messages.length, onMessageCountChange, historyLoading, resumedFrom]);
 
   useEffect(() => {
     if (status === "reconnecting") {
@@ -465,7 +474,7 @@ export function ChatSurface({
           </div>
         )}
 
-        {messages.length === 0 && !isClassifying && !lastError && (
+        {messages.length === 0 && !isClassifying && !lastError && !historyLoading && (
           <div className="flex h-full items-center justify-center">
             <p className="text-sm text-neutral-400">
               Send a message to get started

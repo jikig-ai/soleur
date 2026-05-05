@@ -8,6 +8,7 @@ import type { AttachmentRef } from "@/lib/types";
 import { validateFiles } from "@/lib/validate-files";
 import { uploadWithProgress } from "@/lib/upload-with-progress";
 import { safeSession } from "@/lib/safe-session";
+import { detectImagePlaceholders } from "@/lib/image-placeholder-detect";
 
 interface PendingAttachment {
   id: string;
@@ -454,6 +455,24 @@ export function ChatInput({
       if (files.length > 0) {
         e.preventDefault();
         validateAndAddFiles(files);
+        return;
+      }
+
+      // #3254 — guard against `[Image #N]` SDK-CLI placeholders flattened
+      // to `text/plain`. The image bytes never reached the clipboard;
+      // accepting the text would persist a known-broken artifact and
+      // trigger a hallucinated agent response. Server-side strip is the
+      // backstop; this is a friendlier UX layer.
+      const text = e.clipboardData.getData("text/plain") ?? "";
+      if (text.length > 0) {
+        const { count } = detectImagePlaceholders(text);
+        if (count > 0) {
+          e.preventDefault();
+          const noun = count === 1 ? "image placeholder" : "image placeholders";
+          setAttachError(
+            `Pasted text contained ${count} ${noun} — paste the image file directly.`,
+          );
+        }
       }
     },
     [validateAndAddFiles],
