@@ -466,6 +466,110 @@ export function startInactivityTimer(): void {
 }
 
 // ---------------------------------------------------------------------------
+// Stuck-active conversation reaper (#stuck-active fix, AC2)
+// ---------------------------------------------------------------------------
+/**
+ * Periodic reaper for conversations stuck at status='active'.
+ *
+ * Companion to the `try/catch` in the result branch (AC1) — that wrap
+ * handles the in-process throw class. This reaper handles the broader
+ * defense-in-depth class: process-killed-mid-stream, OOM, deploy
+ * mid-turn, future regressions.
+ *
+ * Signal: slot-heartbeat staleness. The RPC
+ * `find_stuck_active_conversations` (migration 037) returns conversations
+ * where the corresponding `user_concurrency_slots` row is missing OR has
+ * `last_heartbeat_at < now() - threshold`. NOT `conversations.last_active`
+ * — `last_active` is updated only by status writes, so a long tool-heavy
+ * turn streaming partials without status writes would have stale
+ * `last_active` and be falsely reaped. Slot heartbeats are refreshed every
+ * 30 s by `ws-handler.ts` for the active conversation; their staleness is
+ * the authoritative liveness signal.
+ *
+ * Threshold (120 s) and cadence (60 s) match the existing pg_cron sweep
+ * (migration 029 line 219-225) so the two sweep mechanisms agree on a
+ * single liveness threshold.
+ *
+ * Per-row order: status flip → releaseSlot → abortSession.
+ *   - Status flip first means the abort-branch in `startAgentSession`'s
+ *     outer catch (`controller.signal.aborted` ⇒ `failed` write) sees an
+ *     already-`failed` row, so the catch's status write is a no-op
+ *     (`expectMatch: false`).
+ *   - `releaseSlot` is the keyed DELETE; idempotent — safe even if the
+ *     archive trigger or the AC1 catch already released the slot.
+ *   - `abortSession` triggers the SDK iterator's
+ *     `controller.signal.aborted` branch, exiting the `for await` loop
+ *     so the activeSessions Map entry is removed by the existing finally
+ *     block.
+ *
+ * Returns the timer so callers can clear it (used by tests; production
+ * server keeps the reference live for the lifetime of the process).
+ */
+const STUCK_ACTIVE_THRESHOLD_SECONDS = 120;
+const STUCK_ACTIVE_CHECK_INTERVAL_MS = 60 * 1_000;
+
+export function startStuckActiveReaper(): NodeJS.Timeout {
+  const timer = setInterval(async () => {
+    let candidates: Array<{ id: string; user_id: string }> = [];
+    try {
+      const { data, error } = await supabase().rpc(
+        "find_stuck_active_conversations",
+        { p_threshold_seconds: STUCK_ACTIVE_THRESHOLD_SECONDS },
+      );
+      if (error) {
+        log.error({ err: error }, "Stuck-active reaper RPC error");
+        reportSilentFallback(error, {
+          feature: "concurrency-stuck-active-reaper",
+          op: "find",
+        });
+        return;
+      }
+      candidates = (data ?? []) as Array<{ id: string; user_id: string }>;
+    } catch (rpcErr) {
+      // Defensive: RPC client itself threw (network blip, JSON shape).
+      reportSilentFallback(rpcErr, {
+        feature: "concurrency-stuck-active-reaper",
+        op: "find",
+      });
+      return;
+    }
+
+    if (candidates.length === 0) return;
+
+    for (const conv of candidates) {
+      // Idempotent — if another replica already flipped the row, the
+      // expectMatch:false update is a no-op.
+      const result = await updateConversationFor(
+        conv.user_id,
+        conv.id,
+        { status: "failed", last_active: new Date().toISOString() },
+        {
+          feature: "concurrency-stuck-active-reaper",
+          op: "finalize",
+          expectMatch: false,
+        },
+      );
+      if (!result.ok) {
+        log.warn(
+          { userId: conv.user_id, conversationId: conv.id, err: result.error },
+          "stuck-active reap: status flip failed (will retry next tick)",
+        );
+        continue;
+      }
+      // Order: status flip → releaseSlot → abortSession (see header above).
+      await releaseSlot(conv.user_id, conv.id);
+      abortSession(conv.user_id, conv.id);
+    }
+    log.info(
+      { count: candidates.length },
+      "stuck-active reaper finalized rows",
+    );
+  }, STUCK_ACTIVE_CHECK_INTERVAL_MS);
+  timer.unref();
+  return timer;
+}
+
+// ---------------------------------------------------------------------------
 // Start agent session
 // ---------------------------------------------------------------------------
 export async function startAgentSession(

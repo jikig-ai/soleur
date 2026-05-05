@@ -9,7 +9,12 @@ import { parse } from "url";
 import { WebSocket } from "ws";
 import { setupWebSocket } from "./ws-handler";
 import { WS_CLOSE_CODES } from "@/lib/types";
-import { abortAllSessions, cleanupOrphanedConversations, startInactivityTimer } from "./agent-runner";
+import {
+  abortAllSessions,
+  cleanupOrphanedConversations,
+  startInactivityTimer,
+  startStuckActiveReaper,
+} from "./agent-runner";
 import { handleConversationMessages } from "./api-messages";
 import { createChildLogger } from "./logger";
 import { verifyPluginMountOnce } from "./plugin-mount-check";
@@ -92,6 +97,13 @@ app.prepare().then(() => {
 
   // Start periodic inactivity check (24h timeout, hourly checks)
   startInactivityTimer();
+
+  // Start periodic stuck-active reaper (60s cadence, 120s slot-heartbeat
+  // staleness threshold). Defense-in-depth against the AC1 try/catch wrap:
+  // catches process-killed-mid-stream + future regressions that strand
+  // conversations at status='active'. See agent-runner.ts for the full
+  // contract.
+  startStuckActiveReaper();
 
   server.listen(port, () => {
     log.info({ port, env: dev ? "development" : "production" }, "Server ready");
