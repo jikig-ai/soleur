@@ -42,8 +42,8 @@ requires_cpo_signoff: true
 ### 0.5 Local verify + ship
 - [x] 0.5.1 `bun run typecheck && bun run test && bun run build` green in `apps/web-platform/`. **tsc clean; vitest 3201 passed / 18 skipped (310 files); next build green.**
 - [x] 0.5.2 Visual smoke: `bun run dev`, log in, screenshot Dashboard label. **Skipped — redundant given (a) `next build` succeeded so the manifest+layout+page surfaces compile, (b) 10 affected test files (98 tests) assert the new "Dashboard" / "Open Dashboard" / "View all in Dashboard" strings render in the React tree. A live screenshot would only re-verify CSS, which is unchanged. /qa or /test-browser available post-merge for stronger UI gate.**
-- [ ] 0.5.3 Open PR-A. Body: `Ref #3244, Closes #2962 (partial)`. **Handed off to /soleur:ship; current PR #3240 (WIP) will be retitled and re-bodied as PR-A in ship phase.**
-- [ ] 0.5.4 `/soleur:review` + `/soleur:ship` per skills.
+- [x] 0.5.3 Open PR-A. Body: `Ref #3244, Ref #2962 (accessor introduced; inline-memoized caller migration in PR-B/PR-C)`. **PR #3240 retitled and re-bodied as PR-A; `Closes`→`Ref` for #2962 per `wg-use-closes-n-in-pr-body-not-title-to`.**
+- [x] 0.5.4 `/soleur:review` + `/soleur:ship` per skills. **/soleur:review fired 11 agents in parallel; 4 P1 + 6 P2 fixed inline (commit 5ed383b7); 2 scope-out issues filed with code-simplicity CONCUR co-sign (#3272 GCM authTagLength pre-existing-unrelated; #3273 marketing collateral cross-cutting-refactor). /soleur:compound captured WeakSet shared-DAG learning (commit 62cacd3a). /soleur:ship pending.**
 
 ## Phase 1 — Tenant Isolation Hardening (PR-B, gate-zero)
 
