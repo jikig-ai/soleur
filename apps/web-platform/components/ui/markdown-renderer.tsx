@@ -41,16 +41,19 @@ function buildComponents({ linkRel, preWrap }: BuildOptions): Components {
     ),
     table: ({ children }) => (
       <div className="mb-3 overflow-x-auto">
-        <table className="w-full border-collapse text-sm">{children}</table>
+        <table className="w-auto border-collapse text-sm">{children}</table>
       </div>
     ),
     th: ({ children }) => (
-      <th className="border border-neutral-700 bg-neutral-800/50 px-3 py-1.5 text-left font-semibold text-neutral-200">
+      <th className="whitespace-nowrap border border-neutral-700 bg-neutral-800/50 px-3 py-1.5 text-left font-semibold text-neutral-200">
         {children}
       </th>
     ),
+    // 8ch keeps single-token / empty cells visible; 40ch caps prose cells to a
+    // readable line so a single long-paragraph cell doesn't blow out the table.
+    // Header may exceed 40ch (whitespace-nowrap on th wins) by design.
     td: ({ children }) => (
-      <td className="border border-neutral-700 px-3 py-1.5 text-neutral-300">{children}</td>
+      <td className="min-w-[8ch] max-w-[40ch] border border-neutral-700 px-3 py-1.5 align-top text-neutral-300">{children}</td>
     ),
     pre: ({ children }) => (
       <pre
