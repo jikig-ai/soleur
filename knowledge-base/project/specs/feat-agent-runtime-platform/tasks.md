@@ -48,8 +48,8 @@ requires_cpo_signoff: true
 ## Phase 1 — Tenant Isolation Hardening (PR-B, gate-zero)
 
 ### 1.1 Setup + RLS audit (deepen-plan deliverable)
-- [ ] 1.1.1 Run `psql $DEV_URL -c "select tablename, policyname, cmd, qual from pg_policies where tablename in ('messages','conversations','api_keys','users','team_names')"`. Paste result into plan §2.1. **If any policy is insufficient for `auth.uid() = user_id` SELECT, the migration moves into PR-B (NOT PR-C).**
-- [ ] 1.1.2 If RLS-policy migration needed: `apps/web-platform/supabase/migrations/041_rls_tenant_policies.sql` (number conditional on prior migrations landing first).
+- [x] 1.1.1 Run `psql $DEV_URL -c "select tablename, policyname, cmd, qual from pg_policies where tablename in ('messages','conversations','api_keys','users','team_names')"`. Paste result into plan §2.1. **If any policy is insufficient for `auth.uid() = user_id` SELECT, the migration moves into PR-B (NOT PR-C).** **Executed via `supabase db query --db-url "$DATABASE_URL"` (Doppler dev); psql binary unavailable on host. Output pasted into plan §2.1 "Live audit output". All 5 tables sufficient for SELECT under user-scoped JWT. §1.1.2 NOT triggered.**
+- [x] 1.1.2 If RLS-policy migration needed: `apps/web-platform/supabase/migrations/041_rls_tenant_policies.sql` (number conditional on prior migrations landing first). **Not needed — §1.1.1 audit confirmed all 5 tables already grant `auth.uid() = <owner>` SELECT (with `users.id` and `messages` via `conversations` FK join). No migration 041 in PR-B.**
 
 ### 1.2 Migration 037 + RPCs
 - [ ] 1.2.1 [RED] `apps/web-platform/test/supabase-migrations/037_audit_byok_use.test.ts` — RLS deny for `authenticated`; service-role insert succeeds; `mint_founder_jwt` and `write_byok_audit` callable only by `service_role` (`42501` for authenticated); `mint_founder_jwt` JWT decoded payload has `sub == uid`, `role == "authenticated"`, `exp` within ttl±5s.

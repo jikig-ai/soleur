@@ -463,9 +463,9 @@ Plumbed in `agent-runner.ts` alongside `cc-cost-caps.ts`'s existing `maxBudgetUs
 
 ### 2.1 — Verify #1044 SDK-resume under user-scoped JWT
 
-**RLS state (resolved through migration 036, deepen-pass 2026-05-05):**
+**RLS state (resolved through migration 036, deepen-pass 2026-05-05; live-audited at PR-B start 2026-05-05 via `supabase db query --db-url "$DATABASE_URL"` against dev — task §1.1.1):**
 
-`psql` was unavailable in the deepen-plan harness (no Doppler `SUPABASE_DB_URL`; no `psql` binary). Resolved via static analysis of every migration touching the five target tables — equivalent fidelity since no `drop policy` / `alter policy` exists in 001-036 for any of them.
+`psql` was unavailable in the deepen-plan harness (no `psql` binary on host); the deepen pass relied on static analysis of every migration touching the five target tables. Task §1.1.1 ran the audit live against dev via `supabase db query` (Doppler `DATABASE_URL` + Supabase CLI 2.84.2) and confirmed the static-analysis table below matches the live `pg_policies` view. **Result: no SELECT-policy gaps; task §1.1.2 (migration 041) NOT triggered.**
 
 | Table | RLS enabled | SELECT policy (resolved) | INSERT | UPDATE | DELETE | `auth.uid()=owner` SELECT supported? | Action in PR-B |
 |---|---|---|---|---|---|---|---|
@@ -482,7 +482,16 @@ Plumbed in `agent-runner.ts` alongside `cc-cost-caps.ts`'s existing `maxBudgetUs
 1. **`messages` is read+insert only under JWT.** Zero UPDATE/DELETE policies (deliberate — `001_initial_schema.sql:79-95`). Increment 1 must NOT issue UPDATE/DELETE against `messages` from `tenantClient`. If a future change needs message edit/redact under JWT, separate migration. Lint-extension idea: regex `tenantClient.from\("messages"\).(update|delete)\(` rejected at CI.
 2. **`conversations` lacks `WITH CHECK`** (`001_initial_schema.sql:60-62`, confirmed by `036:72` inline comment). Per `2026-04-18-rls-for-all-using-applies-to-writes`: USING governs BOTH read AND write — this is the single-expression-doing-both-jobs pattern from the learning. A future maintainer adding `WITH CHECK (true)` "to be explicit" silently defeats the invariant. **Plan adds an inline comment + a test** asserting the policy lacks `WITH CHECK` and a regression test that `WITH CHECK` is never added.
 
-**Confirmation residual:** static analysis matches `psql pg_policies` output for the resolved policy set. If the operator runs `psql $PRD_URL -c "select tablename, policyname, cmd, qual, with_check from pg_policies where tablename in ('messages','conversations','api_keys','users','team_names') order by 1,2"` post-merge, the result MUST equal the table above. If not, an out-of-band policy was applied that the migration history doesn't carry — flag, investigate, do NOT proceed past PR-B.
+**Live audit output (PR-B start, dev):** task §1.1.1 ran `select tablename, policyname, cmd, qual, with_check from pg_policies where tablename in ('messages','conversations','api_keys','users','team_names')` against the dev DB. Output matches the static-analysis table above; the only RLS rows visible to the dev role are the 11 policies enumerated in 001 + 006 + 016 + 017 + 018 + 036 (no out-of-band policies). Specifically:
+
+- `api_keys` `Users can manage own API keys` (ALL) — qual `auth.uid() = user_id`, with_check NULL.
+- `conversations` `Users can manage own conversations` (ALL) — qual `auth.uid() = user_id`, **with_check NULL** (confirms watch-out #2 below).
+- `messages` `Users can read own messages` (SELECT) — qual `EXISTS (SELECT 1 FROM conversations c WHERE c.id = messages.conversation_id AND c.user_id = auth.uid())`, with_check NULL.
+- `messages` `Users can insert own messages` (INSERT) — qual NULL, with_check `EXISTS (SELECT 1 FROM conversations c WHERE c.id = messages.conversation_id AND c.user_id = auth.uid())`. **No UPDATE / DELETE rows** (confirms watch-out #1 below).
+- `team_names` `Users can manage own team names` (ALL) — qual `auth.uid() = user_id`, with_check NULL.
+- `users` SELECT/UPDATE policies plus 2 RESTRICTIVE column-pinning UPDATEs (`github_username`, `kb_sync_history`) and 1 RESTRICTIVE `Prevent client health_snapshot update` (UPDATE qual `NOT (health_snapshot IS DISTINCT FROM (SELECT users_1.health_snapshot FROM users users_1 WHERE users_1.id = auth.uid()))`). **Join key on `users` is `id`, NOT `user_id`** — the auth-probe pattern in §1.5.8 must use `auth.uid() === userId` against `users.id`.
+
+If the operator re-runs the same query against `$PRD_URL` post-merge, the result MUST equal this set. Any out-of-band policy → flag, investigate, do NOT proceed past PR-B.
 - Confirm `agent-runner.ts:953-961` (`session_id` persist) and `:1421` (resume) work under `tenantClient` — covered by Increment 1's replay-correctness test.
 - Per `2026-04-12-startAgentSession-catch-block-swallows-resume-errors`: ensure the `startAgentSession` catch RE-THROWS resume errors so the caller's "clear stale session_id, replay history" fallback actually fires. Today's catch may swallow.
 
