@@ -69,7 +69,7 @@ import {
 // Re-export so existing call sites keep working.
 export { resolveConciergeDocumentContext } from "./kb-document-resolver";
 import { buildAgentQueryOptions } from "./agent-runner-query-options";
-import { buildToolLabel } from "./tool-labels";
+import { buildToolUseWSMessage } from "./tool-labels";
 import {
   getBashApprovalCache,
   _resetBashApprovalCacheForTests,
@@ -708,24 +708,28 @@ export async function dispatchSoleurGo(
 
   const runner = getSoleurGoRunner(sendToClient);
 
-  // Resolve workspace path once per dispatch so onToolUse can call
-  // `buildToolLabel(name, input, workspacePath)`. Mirrors agent-runner.ts.
-  // The per-process memo in `fetchUserWorkspacePath` keeps cost at one
-  // Supabase RTT per (process, user) lifetime. On failure, fall back to
-  // `undefined` — `buildToolLabel` still produces the verbose label
-  // (just without the workspace-prefix scrub) and the failure is mirrored
-  // to Sentry per `cq-silent-fallback-must-mirror-to-sentry`.
+  // Resolve workspace path in parallel with `runner.dispatch` so cold-start
+  // LTFT (latency-to-first-token) does not pay an extra serial Supabase RTT.
+  // The closure-shared `workspacePath` is filled by the `.then` below; in
+  // production, `realSdkQueryFactory` (line 419) awaits the SAME memo before
+  // the SDK Query can emit any block, so by the time `onToolUse` fires the
+  // value is set. On warm dispatches the memo returns synchronously inside
+  // `fetchUserWorkspacePath` and the `.then` resolves on the next microtask.
+  // On failure, fall back to `undefined` — `buildToolLabel` still produces
+  // the verbose label (just without the workspace-prefix scrub) and the
+  // error is mirrored to Sentry per `cq-silent-fallback-must-mirror-to-sentry`.
   let workspacePath: string | undefined;
-  try {
-    workspacePath = await fetchUserWorkspacePath(userId);
-  } catch (err) {
-    reportSilentFallback(err, {
-      feature: "cc-dispatcher",
-      op: "workspace-resolve",
-      extra: { userId, conversationId },
+  void fetchUserWorkspacePath(userId)
+    .then((wp) => {
+      workspacePath = wp;
+    })
+    .catch((err) => {
+      reportSilentFallback(err, {
+        feature: "cc-dispatcher",
+        op: "workspace-resolve",
+        extra: { userId, conversationId },
+      });
     });
-    workspacePath = undefined;
-  }
 
   const events: DispatchEvents = {
     onText: (text) => {
@@ -737,15 +741,19 @@ export async function dispatchSoleurGo(
       });
     },
     onToolUse: (block) => {
-      // The raw SDK tool name (block.name) is intentionally NOT placed on
-      // the wire — see #2138 (PR #2115 review): exposing the internal
-      // tool taxonomy via browser devtools is an information-disclosure
-      // concern. agent-runner.ts:1041-1052 enforces the same rule.
-      sendToClient(userId, {
-        type: "tool_use",
-        leaderId: CC_ROUTER_LEADER_ID,
-        label: buildToolLabel(block.name, block.input, workspacePath),
-      });
+      // `buildToolUseWSMessage` pins the #2138 invariant: the raw SDK tool
+      // name is NOT placed on the wire (information-disclosure mitigation,
+      // see PR #2115). Shared with `agent-runner.ts` so a future schema
+      // change to `tool_use` flows through one edit, not two parallel ones.
+      sendToClient(
+        userId,
+        buildToolUseWSMessage({
+          name: block.name,
+          input: block.input,
+          workspacePath,
+          leaderId: CC_ROUTER_LEADER_ID,
+        }),
+      );
     },
     onTextTurnEnd: () => {
       // Per-turn boundary → terminal stream event for the cc_router bubble.

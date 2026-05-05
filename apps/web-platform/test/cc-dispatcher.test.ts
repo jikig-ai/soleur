@@ -627,6 +627,12 @@ describe("cc-dispatcher singletons + orchestration", () => {
     return {
       dispatch: vi.fn(
         async (a: { events: { onToolUse: (b: ToolUseBlock) => void } }) => {
+          // Yield one microtask so the dispatcher's parallel
+          // workspace-resolve `.then` settles before the stub fires
+          // onToolUse. In production, the SDK Query construction (which
+          // awaits the same memo) provides this ordering implicitly; the
+          // stub bypasses the runner internals so we simulate it explicitly.
+          await Promise.resolve();
           args.onDispatch(a.events);
           return { queryReused: false };
         },
@@ -738,19 +744,20 @@ describe("cc-dispatcher singletons + orchestration", () => {
     });
   });
 
-  it("KB Concierge: still emits a verbose label when workspace path is unavailable", async () => {
+  it("KB Concierge: falls back to a safe label (no absolute path) when workspace path is unavailable", async () => {
     const { __setCcRunnerForTests } = await import("@/server/cc-dispatcher");
 
     mockFetchUserWorkspacePath.mockRejectedValue(
       new Error("Workspace not provisioned"),
     );
 
+    const absolutePath = "/home/agent/repo/foo.pdf";
     __setCcRunnerForTests(
       makeStubCcRunner({
         onDispatch: (events) =>
           events.onToolUse({
             name: "Read",
-            input: { file_path: "/home/agent/repo/foo.pdf" },
+            input: { file_path: absolutePath },
             toolUseId: "tool_use_1",
           }),
       }),
@@ -769,9 +776,12 @@ describe("cc-dispatcher singletons + orchestration", () => {
     const frames = captureToolUseFrames(sendToClient);
     expect(frames).toHaveLength(1);
     const frame = frames[0]!;
-    // Workspace was unavailable, so the absolute path stays in the label —
-    // verbose-but-unscrubbed is acceptable per the deepened plan §Risks.
+    // Workspace was unavailable AND the path is absolute, so
+    // `extractRelativePath` returns undefined and `buildToolLabel` falls
+    // back to FALLBACK_LABELS.Read. Defense-in-depth against echoing
+    // host-shaped paths to clients during a Supabase incident.
     expect(frame.label).not.toBe("Read");
-    expect(frame.label).toMatch(/^Reading .*foo\.pdf/);
+    expect(frame.label).toBe("Reading file...");
+    expect(frame.label).not.toContain(absolutePath);
   });
 });
