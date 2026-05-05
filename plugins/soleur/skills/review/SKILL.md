@@ -395,6 +395,18 @@ flips to fix-inline — do not file the issue. If the first line is `CONCUR`,
 proceed with filing. Any other first-line content is treated as `DISSENT`
 (fail-safe toward fix-inline).
 
+**Write-time self-check:** Before invoking `gh issue create --label
+deferred-scope-out`, scroll up in the conversation and confirm the most
+recent `code-simplicity-reviewer` Task reply begins with `CONCUR` for THIS
+finding. If no such Task exists in this conversation, or the reply begins
+with anything other than `CONCUR`, STOP — invoke the agent first. Filing
+first and co-signing second is a protocol violation even when the agent
+eventually returns CONCUR; the gate exists for the DISSENT case, and
+filing-first leaves a publicly-visible issue that has to be closed if the
+agent dissents. See learning
+`knowledge-base/project/learnings/best-practices/2026-05-05-extracted-bash-functions-need-self-contained-state.md`
+Pattern 3.
+
 **Rationale:** One agent's "scope-out is fine here" can be wrong in the same
 way a single test can miss a bug. Requiring a second, simplicity-biased agent
 to co-sign blocks the most common regression pattern: an agent-author pair
