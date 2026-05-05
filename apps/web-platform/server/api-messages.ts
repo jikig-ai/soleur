@@ -87,16 +87,21 @@ export async function handleConversationMessages(
     return;
   }
 
-  // Success breadcrumb makes H1 (row mismatch / 0-row hit) observable in
-  // prod without requiring a manual repro: a `count: 0` breadcrumb paired
-  // with a user report localizes the bug to the Postgres row state rather
-  // than the client-side hydration path.
-  Sentry.addBreadcrumb({
-    category: "kb-chat",
-    message: "history-fetch-success",
-    level: "info",
-    data: { conversationId, count: messages?.length ?? 0 },
-  });
+  // Diagnostic breadcrumb gated on the pathological case only: a 200 with
+  // zero messages for a row that ownership-checked successfully is the H1
+  // signal (row mismatch or genuinely empty thread). Logging on every
+  // success would burn the 100-entry breadcrumb buffer with noise that
+  // displaces useful UI/navigation context when an unrelated error fires
+  // later in the same request scope.
+  const messageCount = messages?.length ?? 0;
+  if (messageCount === 0) {
+    Sentry.addBreadcrumb({
+      category: "kb-chat",
+      message: "history-fetch-success-empty",
+      level: "info",
+      data: { conversationId, count: 0 },
+    });
+  }
 
   res.writeHead(200, { "Content-Type": "application/json" });
   res.end(JSON.stringify({

@@ -180,20 +180,29 @@ describe("useWebSocket — historyLoading flag + Sentry mirror (AC4, AC5)", () =
   });
 
   it("does NOT report AbortError as a silent fallback (navigation cancel is expected)", async () => {
-    // Drive an AbortError directly: the fetch impl rejects with one, but the
-    // ws-client error branch must filter it before reporting.
+    // Drive an AbortError followed by a real error in the same suite.
+    // The control assertion (the second renderHook call below produces a
+    // history-fetch-error mirror) proves the SUT's catch branch is reachable;
+    // the primary assertion proves AbortError is filtered before reporting.
     fetchSpy.mockRejectedValueOnce(
       Object.assign(new DOMException("aborted", "AbortError"), { name: "AbortError" }),
     );
 
     const { useWebSocket } = await import("@/lib/ws-client");
-    renderHook(() => useWebSocket("conv-cc-abort"));
+    const { result } = renderHook(() => useWebSocket("conv-cc-abort"));
 
-    // Give the effect a tick to run.
-    await new Promise((r) => setTimeout(r, 50));
+    await connectAndAuth(result);
 
+    // Anchor on a deterministic effect-completion signal: historyLoading
+    // must settle to false (the AbortError finally branch runs OR the
+    // mount-time effect has resolved).
+    await waitFor(() => {
+      expect(result.current.historyLoading).toBe(false);
+    });
+
+    // Filter assertion: AbortError specifically must NOT have been reported.
     expect(mockReportSilentFallback).not.toHaveBeenCalledWith(
-      expect.anything(),
+      expect.any(DOMException),
       expect.objectContaining({ op: "history-fetch-error" }),
     );
   });

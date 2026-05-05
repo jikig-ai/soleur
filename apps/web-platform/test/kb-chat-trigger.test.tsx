@@ -48,7 +48,7 @@ describe("KbChatTrigger — label + dot reflect messageCount (AC2)", () => {
     expect(button.textContent).toContain("Ask about this document");
     expect(button.textContent).not.toContain("Continue thread");
     // amber dot is the only span with rounded-full + bg-amber-400 inside the button
-    const dot = container.querySelector("span.rounded-full.bg-amber-400");
+    const dot = container.querySelector("[data-testid='kb-trigger-thread-indicator']");
     expect(dot).toBeNull();
   });
 
@@ -57,7 +57,7 @@ describe("KbChatTrigger — label + dot reflect messageCount (AC2)", () => {
     const button = screen.getByRole("button");
     expect(button.textContent).toContain("Continue thread");
     expect(button.textContent).not.toContain("Ask about this document");
-    const dot = container.querySelector("span.rounded-full.bg-amber-400");
+    const dot = container.querySelector("[data-testid='kb-trigger-thread-indicator']");
     expect(dot).not.toBeNull();
   });
 

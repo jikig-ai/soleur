@@ -280,15 +280,16 @@ export function ChatSurface({
   }, [realConversationId, onRealConversationId]);
 
   useEffect(() => {
-    // Race H3: while history is still loading, OR `realConversationId` is set
-    // but `messages.length === 0`, do NOT clobber the prefetched messageCount
-    // with `0`. `useKbLayoutState` seeds messageCount via /api/chat/thread-info
-    // before the sidebar mounts; firing `onMessageCountChange?.(0)` here would
-    // flip the trigger label to "Ask about this document" until the history
-    // fetch resolves — and stick there permanently if the fetch fails.
-    if (messages.length === 0 && (historyLoading || realConversationId)) return;
+    // Skip the zero-write while a hydration is genuinely pending — either the
+    // history fetch is still in flight, or the server has resolved a prior
+    // thread (`resumedFrom`) but its history hasn't arrived yet. Both cases
+    // would otherwise clobber the prefetched messageCount that `useKbLayoutState`
+    // seeded for the trigger label. A fresh `session_started` (no resume) does
+    // NOT need the guard — `messages.length === 0` for a brand-new conversation
+    // is the correct count, not stale.
+    if (messages.length === 0 && (historyLoading || resumedFrom)) return;
     onMessageCountChange?.(messages.length);
-  }, [messages.length, onMessageCountChange, historyLoading, realConversationId]);
+  }, [messages.length, onMessageCountChange, historyLoading, resumedFrom]);
 
   useEffect(() => {
     if (status === "reconnecting") {

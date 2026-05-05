@@ -1,26 +1,31 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { IncomingMessage, ServerResponse } from "http";
+import { mockQueryChain } from "./helpers/mock-supabase";
 
-const mockGetUser = vi.fn();
-const mockFromConversations = vi.fn();
-const mockFromMessages = vi.fn();
+const { mockGetUser, mockFrom } = vi.hoisted(() => ({
+  mockGetUser: vi.fn(),
+  mockFrom: vi.fn(),
+}));
 
 vi.mock("@/lib/supabase/service", () => ({
   createServiceClient: () => ({
     auth: { getUser: mockGetUser },
-    from: (table: string) =>
-      table === "conversations" ? mockFromConversations() : mockFromMessages(),
+    from: mockFrom,
   }),
 }));
 
-const mockReportSilentFallback = vi.fn();
+const { mockReportSilentFallback } = vi.hoisted(() => ({
+  mockReportSilentFallback: vi.fn(),
+}));
 vi.mock("@/server/observability", () => ({
-  reportSilentFallback: (...args: unknown[]) => mockReportSilentFallback(...args),
+  reportSilentFallback: mockReportSilentFallback,
 }));
 
-const mockAddBreadcrumb = vi.fn();
+const { mockAddBreadcrumb } = vi.hoisted(() => ({
+  mockAddBreadcrumb: vi.fn(),
+}));
 vi.mock("@sentry/nextjs", () => ({
-  addBreadcrumb: (...args: unknown[]) => mockAddBreadcrumb(...args),
+  addBreadcrumb: mockAddBreadcrumb,
 }));
 
 function makeReq(authHeader?: string): IncomingMessage {
@@ -47,6 +52,14 @@ function makeRes(): ServerResponse & { _status: number; _body: string } {
     },
   } as unknown as ServerResponse & { _status: number; _body: string };
 }
+
+const conversationRow = {
+  id: "conv-1",
+  total_cost_usd: 0,
+  input_tokens: 0,
+  output_tokens: 0,
+  workflow_ended_at: null,
+};
 
 describe("handleConversationMessages — observability + auth + ownership", () => {
   beforeEach(() => {
@@ -91,15 +104,7 @@ describe("handleConversationMessages — observability + auth + ownership", () =
 
   it("returns 404 + reports silent fallback when conversation is not owned by user", async () => {
     mockGetUser.mockResolvedValue({ data: { user: { id: "user-1" } }, error: null });
-    mockFromConversations.mockReturnValue({
-      select: () => ({
-        eq: () => ({
-          eq: () => ({
-            single: async () => ({ data: null, error: null }),
-          }),
-        }),
-      }),
-    });
+    mockFrom.mockReturnValue(mockQueryChain(null));
 
     const { handleConversationMessages } = await import("@/server/api-messages");
     const req = makeReq("Bearer ok");
@@ -108,9 +113,6 @@ describe("handleConversationMessages — observability + auth + ownership", () =
     await handleConversationMessages(req, res, "conv-other-owner");
 
     expect(res._status).toBe(404);
-    // When `.single()` returns no row with a null error (RLS-filtered or
-    // genuinely missing), the handler still mirrors with a null `err` arg —
-    // `expect.anything()` does not match null per vitest's matcher contract.
     expect(mockReportSilentFallback).toHaveBeenCalledWith(
       null,
       expect.objectContaining({
@@ -121,39 +123,17 @@ describe("handleConversationMessages — observability + auth + ownership", () =
     );
   });
 
-  it("returns 200 + adds Sentry breadcrumb on success path with non-empty messages", async () => {
+  it("returns 200 with non-empty messages — no Sentry breadcrumb (gated to empty-only)", async () => {
     mockGetUser.mockResolvedValue({ data: { user: { id: "user-1" } }, error: null });
-    mockFromConversations.mockReturnValue({
-      select: () => ({
-        eq: () => ({
-          eq: () => ({
-            single: async () => ({
-              data: {
-                id: "conv-1",
-                total_cost_usd: 0,
-                input_tokens: 0,
-                output_tokens: 0,
-                workflow_ended_at: null,
-              },
-              error: null,
-            }),
-          }),
-        }),
-      }),
-    });
-    mockFromMessages.mockReturnValue({
-      select: () => ({
-        eq: () => ({
-          order: async () => ({
-            data: [
-              { id: "m-1", role: "user", content: "hi", leader_id: null, created_at: "t1" },
-              { id: "m-2", role: "assistant", content: "hello", leader_id: "cto", created_at: "t2" },
-            ],
-            error: null,
-          }),
-        }),
-      }),
-    });
+    // First call: conversations row lookup. Second call: messages list.
+    mockFrom
+      .mockReturnValueOnce(mockQueryChain(conversationRow))
+      .mockReturnValueOnce(
+        mockQueryChain([
+          { id: "m-1", role: "user", content: "hi", leader_id: null, created_at: "t1" },
+          { id: "m-2", role: "assistant", content: "hello", leader_id: "cto", created_at: "t2" },
+        ]),
+      );
 
     const { handleConversationMessages } = await import("@/server/api-messages");
     const req = makeReq("Bearer ok");
@@ -162,43 +142,19 @@ describe("handleConversationMessages — observability + auth + ownership", () =
     await handleConversationMessages(req, res, "conv-1");
 
     expect(res._status).toBe(200);
-    expect(mockAddBreadcrumb).toHaveBeenCalledWith(
-      expect.objectContaining({
-        category: "kb-chat",
-        message: "history-fetch-success",
-        data: expect.objectContaining({ conversationId: "conv-1", count: 2 }),
-      }),
-    );
+    const body = JSON.parse(res._body);
+    expect(body.messages).toHaveLength(2);
+    // Breadcrumb is gated on count===0 to avoid burning the 100-entry buffer
+    // on every successful fetch. Non-empty success path should NOT breadcrumb.
+    expect(mockAddBreadcrumb).not.toHaveBeenCalled();
     expect(mockReportSilentFallback).not.toHaveBeenCalled();
   });
 
-  it("returns 200 with empty messages array when row exists but has no messages (NOT 404)", async () => {
+  it("returns 200 with empty messages — adds H1-diagnostic Sentry breadcrumb", async () => {
     mockGetUser.mockResolvedValue({ data: { user: { id: "user-1" } }, error: null });
-    mockFromConversations.mockReturnValue({
-      select: () => ({
-        eq: () => ({
-          eq: () => ({
-            single: async () => ({
-              data: {
-                id: "conv-empty",
-                total_cost_usd: 0,
-                input_tokens: 0,
-                output_tokens: 0,
-                workflow_ended_at: null,
-              },
-              error: null,
-            }),
-          }),
-        }),
-      }),
-    });
-    mockFromMessages.mockReturnValue({
-      select: () => ({
-        eq: () => ({
-          order: async () => ({ data: [], error: null }),
-        }),
-      }),
-    });
+    mockFrom
+      .mockReturnValueOnce(mockQueryChain({ ...conversationRow, id: "conv-empty" }))
+      .mockReturnValueOnce(mockQueryChain([]));
 
     const { handleConversationMessages } = await import("@/server/api-messages");
     const req = makeReq("Bearer ok");
@@ -211,6 +167,8 @@ describe("handleConversationMessages — observability + auth + ownership", () =
     expect(body.messages).toEqual([]);
     expect(mockAddBreadcrumb).toHaveBeenCalledWith(
       expect.objectContaining({
+        category: "kb-chat",
+        message: "history-fetch-success-empty",
         data: expect.objectContaining({ conversationId: "conv-empty", count: 0 }),
       }),
     );

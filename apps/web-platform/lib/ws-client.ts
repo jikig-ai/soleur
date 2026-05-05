@@ -774,39 +774,43 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
     if (value) setWorkflowEndedAt((prev) => prev ?? value);
   }
 
-  // Fetch conversation history on mount (once per conversationId)
+  // Single hydration helper used by both the mount-time effect (non-"new" IDs)
+  // and the resume effect ("new" → resolved UUID via session_resumed). Keeps
+  // the dispatch + seed + Sentry-mirror lifecycle in one place so a future
+  // change (extra seed, retry policy, etc.) cannot drift between the two
+  // call sites — exactly the failure mode that produced this bug class.
+  async function runHistoryFetch(targetId: string, controller: AbortController) {
+    setHistoryLoading(true);
+    try {
+      const result = await fetchConversationHistory(targetId, controller.signal);
+      // `controller.signal.aborted` is per-effect-instance and deterministic
+      // across React strict-mode double-mount, where a stale `mountedRef`
+      // could observe its second-mount `true` value and dispatch into a
+      // remounted reducer.
+      if (!result || controller.signal.aborted) return;
+      // filter_prepend deduplicates by id against whatever stream events
+      // landed while the fetch was in flight — strictly safer than an
+      // activeStreams.size === 0 guard.
+      dispatch({ type: "filter_prepend", messages: result.messages });
+      seedCostData(result.costData);
+      seedWorkflowEndedAt(result.workflowEndedAt);
+    } catch (err) {
+      if (err instanceof DOMException && err.name === "AbortError") return;
+      reportSilentFallback(err, {
+        feature: "kb-chat",
+        op: "history-fetch-error",
+        extra: { conversationId: targetId },
+      });
+    } finally {
+      if (!controller.signal.aborted) setHistoryLoading(false);
+    }
+  }
+
+  // Fetch conversation history on mount (once per conversationId).
   useEffect(() => {
     if (conversationId === "new") return;
     const controller = new AbortController();
-
-    setHistoryLoading(true);
-    (async () => {
-      try {
-        const result = await fetchConversationHistory(conversationId, controller.signal);
-        // `controller.signal.aborted` is per-effect-instance and deterministic
-        // across React strict-mode double-mount, where a stale `mountedRef`
-        // could observe its second-mount `true` value and dispatch into a
-        // remounted reducer.
-        if (!result || controller.signal.aborted) return;
-
-        // filter_prepend deduplicates by id against whatever stream events
-        // landed while the fetch was in flight — strictly safer than an
-        // activeStreams.size === 0 guard and matches the resume path.
-        dispatch({ type: "filter_prepend", messages: result.messages });
-        seedCostData(result.costData);
-        seedWorkflowEndedAt(result.workflowEndedAt);
-      } catch (err) {
-        if (err instanceof DOMException && err.name === "AbortError") return;
-        reportSilentFallback(err, {
-          feature: "kb-chat",
-          op: "history-fetch-error",
-          extra: { conversationId },
-        });
-      } finally {
-        if (!controller.signal.aborted) setHistoryLoading(false);
-      }
-    })();
-
+    void runHistoryFetch(conversationId, controller);
     return () => controller.abort();
   }, [conversationId]);
 
@@ -820,32 +824,7 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
     if (conversationId !== "new") return; // only the sidebar resume path
 
     const controller = new AbortController();
-
-    setHistoryLoading(true);
-    (async () => {
-      try {
-        const result = await fetchConversationHistory(realConversationId, controller.signal);
-        if (!result || controller.signal.aborted) return;
-
-        // Deduplicate: filter out any messages already present from stream events
-        // that arrived while the fetch was in-flight. More robust than the
-        // activeStreams.size === 0 guard: handles the window where a stream
-        // event arrives and completes before the fetch resolves.
-        dispatch({ type: "filter_prepend", messages: result.messages });
-        seedCostData(result.costData);
-        seedWorkflowEndedAt(result.workflowEndedAt);
-      } catch (err) {
-        if (err instanceof DOMException && err.name === "AbortError") return;
-        reportSilentFallback(err, {
-          feature: "kb-chat",
-          op: "history-fetch-error",
-          extra: { conversationId: realConversationId },
-        });
-      } finally {
-        if (!controller.signal.aborted) setHistoryLoading(false);
-      }
-    })();
-
+    void runHistoryFetch(realConversationId, controller);
     return () => controller.abort();
   }, [realConversationId, conversationId]);
 
