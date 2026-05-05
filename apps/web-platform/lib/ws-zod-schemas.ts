@@ -304,6 +304,7 @@ const errorSchema = z.strictObject({
       "unsupported_file_type",
       "too_many_files",
       "interactive_prompt_rejected",
+      "image_paste_lost",
     ])
     .optional(),
   gateId: z.string().optional(),

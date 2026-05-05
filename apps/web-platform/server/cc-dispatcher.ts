@@ -17,7 +17,7 @@ import path from "path";
 import type { Query } from "@anthropic-ai/claude-agent-sdk";
 import { query as sdkQuery } from "@anthropic-ai/claude-agent-sdk";
 
-import type { WSMessage, Conversation } from "@/lib/types";
+import type { WSMessage, Conversation, AttachmentRef } from "@/lib/types";
 import { KeyInvalidError, STATUS_LABELS } from "@/lib/types";
 
 /**
@@ -681,6 +681,17 @@ export interface DispatchSoleurGoArgs {
   artifactPath?: string;
   documentKind?: "pdf" | "text";
   documentContent?: string;
+  /**
+   * Attachment refs uploaded via the chat-input paperclip flow. When
+   * non-empty, `dispatchSoleurGo` (a) inserts a `messages` row to
+   * satisfy the `message_attachments.message_id` FK, (b) calls the
+   * shared attachment-pipeline helper to persist metadata + download
+   * files into `<workspace>/attachments/<convId>/`, and (c) augments
+   * `userMessage` with the resulting `attachmentContext` text so the
+   * agent can `Read` the on-disk paths. Mirrors the legacy
+   * `agent-runner.ts:sendUserMessage` flow exactly. See #3254.
+   */
+  attachments?: AttachmentRef[];
 }
 
 /**

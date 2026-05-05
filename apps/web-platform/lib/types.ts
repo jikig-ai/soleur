@@ -110,7 +110,12 @@ export type WSErrorCode =
   | "file_too_large"
   | "unsupported_file_type"
   | "too_many_files"
-  | "interactive_prompt_rejected";
+  | "interactive_prompt_rejected"
+  // Server stripped `[Image #N]` placeholders from inbound content. The
+  // SDK CLI's text-editor markers leaked into `text/plain` paste data;
+  // image bytes were never attached. Client renders a non-blocking
+  // banner asking the user to re-attach the image directly.
+  | "image_paste_lost";
 
 // Shared WebSocket close codes — single source of truth for server, client, and tests.
 // See: https://developer.mozilla.org/en-US/docs/Web/API/CloseEvent/code (4000-4999 = application-reserved)
