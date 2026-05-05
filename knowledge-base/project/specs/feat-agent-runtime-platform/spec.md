@@ -1,4 +1,6 @@
-# Feature: Command Center Server-Side Agentic Runtime
+# Feature: Soleur Server-Side Agentic Runtime
+
+> **Branding (decided 2026-05-05):** Single brand "Soleur" across CLI plugin + Web Platform; no "Command Center" sub-brand. Earlier brainstorm CMO recommendation superseded by user directive — one product, one brand, two surfaces. References to "Command Center" in this spec or the brainstorm reflect prior framing only.
 
 **Brainstorm:** `knowledge-base/project/brainstorms/2026-05-05-command-center-runtime-brainstorm.md`
 **Issue:** [#3244](https://github.com/jikig-ai/soleur/issues/3244)
@@ -34,7 +36,7 @@ The roadmap, brand guide, and Phase 1.10/1.11 already imply this work. Augment C
 - **Not** an episodic-vs-procedural compound classifier (Cosmos borrow B). Soleur mechanically ahead via existing placement gate; vocabulary borrow only.
 - **Not** an Expert Registry with quality signals (Cosmos borrow D). Re-evaluate post-5-org adoption.
 - **Not** paid tier launch in this scope. Closed free preview only.
-- **Not** a sub-brand rollout to public surfaces. CMO collateral (brand guide, landing page, demo video) tracked separately.
+- **Not** a marketing relaunch to public surfaces. CMO collateral (positioning refresh under the existing Soleur brand, landing page, demo video) tracked separately.
 
 ## Functional Requirements
 

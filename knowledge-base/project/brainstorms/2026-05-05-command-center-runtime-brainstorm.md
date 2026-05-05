@@ -18,7 +18,7 @@ The roadmap-implied runtime, made shippable. Three sequenced increments inside `
 2. **Multi-turn continuity (#1044) fix.** Domain leaders today are stateless one-shots; the runtime amplifies whatever signal they emit, so amnesia compounds. Continuity must land before background reactions ship.
 3. **Daily Priorities home + one Inngest-driven background trigger.** Dashboard answers "what needs you today" across all 8 domains. End-to-end demo: Stripe failed-payment webhook → CFO drafts response + CRO logs the deal-risk → founder reviews in Command Center.
 
-Launches as **Soleur Command Center** (sub-brand). CLI plugin remains "Soleur." Closed free preview until E&O insurance + DPA + audit log + scope-grant UX are in place. Paid tier targets $99/mo flat BYOK.
+Single brand: **Soleur**. Two surfaces (CLI plugin, Web Platform) under one product, one brand — no sub-brand. Closed free preview until E&O insurance + DPA + audit log + scope-grant UX are in place. Paid tier targets $99/mo flat BYOK.
 
 ## Why This Approach
 
@@ -37,7 +37,7 @@ Launches as **Soleur Command Center** (sub-brand). CLI plugin remains "Soleur." 
 | Framing | Alignment + hardening (NOT pivot vs Cosmos) | CPO+CMO challenge accepted; positioning vs Polsia/Lindy/Notion AI |
 | Target user | Solo founder running an agentic company across 8 domains | Validation FLAG persists; not yet validated for "react-while-sleeping" form factor |
 | MVP scope | Three sequenced increments: RLS hardening → #1044 fix → Daily Priorities + 1 trigger | All three required for a defensible demo |
-| Sub-brand | Soleur Command Center (Web Platform); Soleur (CLI plugin) | CMO; avoids Cosmos-lite confusion |
+| Branding | Single brand "Soleur" across CLI plugin + Web Platform; no sub-brand | User directive 2026-05-05; one product, one brand, two surfaces — overrides earlier "Soleur Command Center" CMO recommendation |
 | Headline | "Run a company. Not a codebase." | CMO; demo = inbound email → cross-domain cascade |
 | Pricing | $99/mo flat, BYOK | CMO; below "needs spouse approval," above "must be a toy" |
 | Channels | X build-in-public, IndieHackers, YC W26, Lovable/Bolt Discords | CMO; skip LinkedIn/podcasts |
@@ -73,7 +73,7 @@ Launches as **Soleur Command Center** (sub-brand). CLI plugin remains "Soleur." 
 
 ### Marketing (CMO)
 
-**Summary:** Position as "the agentic operating system for one-person companies" — NOT vs Cosmos. Sub-brand "Soleur Command Center." Headline "Run a company. Not a codebase." Demo: inbound email → cross-domain cascade. $99 flat BYOK. Channels: X, IndieHackers, YC W26, Lovable/Bolt Discords. Defensible wedge: opinionated org simulation, not agent count.
+**Summary:** Position as "the agentic operating system for one-person companies" — NOT vs Cosmos. Single brand "Soleur" (no sub-brand per user directive 2026-05-05; supersedes initial CMO sub-brand recommendation). Headline "Run a company. Not a codebase." Demo: inbound email → cross-domain cascade. $99 flat BYOK. Channels: X, IndieHackers, YC W26, Lovable/Bolt Discords. Defensible wedge: opinionated org simulation, not agent count.
 
 ### Legal (CLO)
 
@@ -95,7 +95,7 @@ Launches as **Soleur Command Center** (sub-brand). CLI plugin remains "Soleur." 
 | Trust-tier policy engine | Legal + Engineering | Per-action-class autonomy needs declarative policy, not hardcoded `if` ladders |
 | Multi-tenant secret custody at scale | Operations | Doppler covers Soleur infra only; per-tenant envelope encryption + KMS for BYOK |
 | Per-tenant cost attribution + abuse controls | Operations | Runaway loop on one founder shouldn't bankrupt Soleur; kill-switch on cost spike |
-| Sub-brand collateral (Command Center) | Marketing | Brand guide, positioning doc, ICP doc, landing page, demo video, content calendar |
+| Brand collateral (Soleur Web Platform launch — no sub-brand) | Marketing | Positioning refresh, ICP doc, landing page, demo video, content calendar |
 | DPA template, sub-processor page, breach runbook, AUP, audit-log schema | Legal | 9 must-have legal artifacts before paid launch |
 | E&O / Cyber insurance broker relationship | Operations + Legal | $1-3M coverage before first paying user |
 | Multi-turn continuity (#1044) fix | Engineering | Stateful per-(founder, domain, conversation) message history |
