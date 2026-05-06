@@ -138,13 +138,13 @@ and this row provides the rationale; no per-PR sign-off required.
 
 ### Pre-merge (PR)
 
-- [ ] `apps/web-platform/infra/seo-rulesets.tf` rule for `api.soleur.ai` GET responses (current lines ~257-275) carries an inline comment block stating: (a) the rule is currently a no-op because api.soleur.ai is DNS-only CNAME → Supabase, (b) the rule is intentionally retained so it fires automatically if/when the hostname is proxied through soleur.ai's edge, (c) re-evaluation criteria with link to the follow-up tracker.
-- [ ] The comment block names the load-bearing fact: Cloudflare Transform Rules on the `soleur.ai` zone only fire on traffic that transits soleur.ai's CF edge — DNS-only records bypass the edge, so the rule is silently a no-op until the record is proxied.
-- [ ] The comment cites the post-apply verification (`curl -X GET https://api.soleur.ai/` returns no `x-robots-tag` header on 2026-05-06) and the contrast with `deploy.soleur.ai` (proxied; rule DOES fire).
-- [ ] A new GitHub issue is created (label: `infrastructure`, `seo`; milestone: `Post-MVP / Later`) tracking the re-evaluation, with re-evaluation criteria: (1) Supabase Custom Domains adds header-injection feature, OR (2) `api.soleur.ai` is migrated to soleur.ai's edge (orange-cloud + Origin Certificate). The comment in `seo-rulesets.tf` references this issue number.
-- [ ] PR body uses `Closes #3375` (the issue is closed when the comment + tracker land — there is no post-merge operator action; this is NOT an ops-remediation class).
-- [ ] `terraform plan` (against the prd_terraform Doppler config) shows either zero diff or comment-only drift on `cloudflare_ruleset.seo_response_headers`. No rule add/remove/reorder. No expression mutation. No `enabled` toggle.
-- [ ] All existing tests pass (no new tests required — comment-only change to `.tf`).
+- [x] `apps/web-platform/infra/seo-rulesets.tf` rule for `api.soleur.ai` GET responses (current lines ~257-275) carries an inline comment block stating: (a) the rule is currently a no-op because api.soleur.ai is DNS-only CNAME → Supabase, (b) the rule is intentionally retained so it fires automatically if/when the hostname is proxied through soleur.ai's edge, (c) re-evaluation criteria with link to the follow-up tracker.
+- [x] The comment block names the load-bearing fact: Cloudflare Transform Rules on the `soleur.ai` zone only fire on traffic that transits soleur.ai's CF edge — DNS-only records bypass the edge, so the rule is silently a no-op until the record is proxied.
+- [x] The comment cites the post-apply verification (`curl -X GET https://api.soleur.ai/` returns no `x-robots-tag` header on 2026-05-06) and the contrast with `deploy.soleur.ai` (proxied; rule DOES fire).
+- [x] A new GitHub issue is created (#3379; labels `domain/engineering`, `chore`, `priority/p3-low` — closest existing labels since `infrastructure`/`seo` do not exist in this repo; milestone: `Post-MVP / Later`) tracking the re-evaluation, with re-evaluation criteria: (1) Supabase Custom Domains adds header-injection feature, OR (2) `api.soleur.ai` is migrated to soleur.ai's edge (orange-cloud + Origin Certificate). The comment in `seo-rulesets.tf` references this issue number.
+- [ ] PR body uses `Closes #3375` (the issue is closed when the comment + tracker land — there is no post-merge operator action; this is NOT an ops-remediation class). [Set in Phase 4 ship step.]
+- [ ] `terraform plan` (against the prd_terraform Doppler config) shows either zero diff or comment-only drift on `cloudflare_ruleset.seo_response_headers`. No rule add/remove/reorder. No expression mutation. No `enabled` toggle. [Operator step post-merge.]
+- [x] All existing tests pass (no new tests required — comment-only change to `.tf`).
 
 ### Post-merge (operator)
 

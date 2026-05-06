@@ -246,6 +246,9 @@ resource "cloudflare_ruleset" "seo_page_redirects" {
 # Access policy intercepts before the response_headers_transform phase, this
 # rule is silently a no-op — the post-merge curl verification is the
 # load-bearing check (see plan Phase 4 step 6).
+#
+# NOTE: the api.soleur.ai rule below is currently a no-op (DNS-only CNAME
+# bypasses CF edge). See per-rule comment for diagnosis and tracker #3379.
 resource "cloudflare_ruleset" "seo_response_headers" {
   provider    = cloudflare.rulesets
   zone_id     = var.cf_zone_id
@@ -254,9 +257,41 @@ resource "cloudflare_ruleset" "seo_response_headers" {
   kind        = "zone"
   phase       = "http_response_headers_transform"
 
+  # ── Currently a no-op (verified 2026-05-06) ────────────────────────────────
+  #
+  # `api.soleur.ai` is a DNS-only CNAME → `ifsccnjhymdmidffkzhl.supabase.co`
+  # (Supabase Custom Domain). Cloudflare Transform Rules declared on the
+  # `soleur.ai` zone only fire on traffic that transits soleur.ai's CF edge
+  # (proxied / orange-cloud records). DNS-only CNAMEs bypass the edge entirely,
+  # so this Transform Rule never sees the request.
+  #
+  # Per Cloudflare: "Rules features require that your domain (or subdomain)
+  # has its DNS records proxied through Cloudflare"
+  # (https://developers.cloudflare.com/rules/).
+  #
+  # Evidence (2026-05-06):
+  #   $ curl -sI -X GET https://api.soleur.ai/
+  #   HTTP/2 404 — no x-robots-tag header in response.
+  # Compare deploy.soleur.ai (also on this ruleset, but proxied) — its rule
+  # fires correctly: x-robots-tag: noindex, nofollow confirmed live.
+  #
+  # Why retained: if `api.soleur.ai` is ever proxied through soleur.ai's edge
+  # (orange-cloud record + Supabase Origin Certificate at the edge), this rule
+  # fires automatically without further code changes. Removing it would make
+  # that future flip more error-prone (silent re-exposure window).
+  #
+  # Re-evaluation criteria (tracker: #3379):
+  #   1. Supabase Custom Domains adds a response-header-injection feature
+  #      (eliminates the need for an edge rule entirely), OR
+  #   2. operator chooses to proxy api.soleur.ai through soleur.ai's edge.
+  #
+  # Practical risk: low. `api.soleur.ai` returns 401/404/403 on every
+  # authenticated path under Googlebot's anonymous identity — there is no
+  # body content for Google to index. X-Robots-Tag was defense-in-depth
+  # against URL-existence-recording (the "Crawled - not indexed" GSC bucket).
   rules {
     action      = "rewrite"
-    description = "X-Robots-Tag: noindex, nofollow on api.soleur.ai GET responses"
+    description = "X-Robots-Tag: noindex, nofollow on api.soleur.ai GET responses (no-op until proxied — see #3379)"
     enabled     = true
     # Scoped to GET only — Soleur app users hit api.soleur.ai for Supabase
     # REST/Auth via POST/PATCH/DELETE/OPTIONS. Only GET responses can be
