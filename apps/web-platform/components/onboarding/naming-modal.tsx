@@ -28,15 +28,15 @@ export function NamingOnboardingModal({
   }
 
   return (
-    <div className="flex min-h-[100dvh] items-center justify-center bg-neutral-950 px-4">
+    <div className="flex min-h-[100dvh] items-center justify-center bg-soleur-bg-base px-4">
       <div className="w-full max-w-lg">
-        <div className="mb-2 text-center text-xs font-medium uppercase tracking-wider text-amber-500">
+        <div className="mb-2 text-center text-xs font-medium uppercase tracking-wider text-soleur-accent-gold-fg">
           Meet Your Team
         </div>
-        <h1 className="mb-2 text-center text-2xl font-semibold text-white">
+        <h1 className="mb-2 text-center text-2xl font-semibold text-soleur-text-primary">
           Want to Name Your Leaders?
         </h1>
-        <p className="mb-8 text-center text-sm text-neutral-400">
+        <p className="mb-8 text-center text-sm text-soleur-text-secondary">
           Give each domain leader a name that feels right to you. You can always
           change these later in Settings.
         </p>
@@ -45,7 +45,7 @@ export function NamingOnboardingModal({
           {ROUTABLE_DOMAIN_LEADERS.map((leader) => (
             <div key={leader.id} className="flex items-center gap-4">
               <LeaderAvatar leaderId={leader.id} size="lg" />
-              <span className="min-w-0 flex-1 text-sm text-neutral-300">
+              <span className="min-w-0 flex-1 text-sm text-soleur-text-secondary">
                 {leader.title}
               </span>
               <input
@@ -54,7 +54,7 @@ export function NamingOnboardingModal({
                 onChange={(e) => handleChange(leader.id, e.target.value)}
                 placeholder="Enter a name..."
                 maxLength={30}
-                className="w-40 rounded-lg border border-neutral-700 bg-neutral-800/50 px-3 py-2 text-sm text-white placeholder-neutral-500 outline-none transition-colors focus:border-amber-600"
+                className="w-40 rounded-lg border border-soleur-border-default bg-soleur-bg-surface-2/50 px-3 py-2 text-sm text-soleur-text-primary placeholder-soleur-text-muted outline-none transition-colors focus:border-soleur-border-emphasized"
               />
             </div>
           ))}
@@ -63,13 +63,13 @@ export function NamingOnboardingModal({
         <div className="mt-8 flex items-center justify-center gap-6">
           <button
             onClick={onSkip}
-            className="text-sm text-neutral-400 transition-colors hover:text-neutral-200"
+            className="text-sm text-soleur-text-secondary transition-colors hover:text-soleur-text-primary"
           >
             Skip for now
           </button>
           <button
             onClick={handleSave}
-            className="rounded-lg bg-amber-500 px-6 py-2.5 text-sm font-semibold text-neutral-900 transition-colors hover:bg-amber-400"
+            className="rounded-lg bg-soleur-accent-gold-fill px-6 py-2.5 text-sm font-semibold text-soleur-text-on-accent transition-colors hover:bg-soleur-accent-gold-text"
           >
             Save Names
           </button>
