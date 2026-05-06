@@ -754,11 +754,7 @@ export function emitConciergeDocumentResolutionBreadcrumb(args: {
   conversationId: string;
   contextPath: string | null | undefined;
   hasActiveCcQuery: boolean;
-  documentArgs: {
-    artifactPath?: string;
-    documentKind?: "pdf" | "text";
-    documentContent?: string;
-  };
+  documentArgs: Awaited<ReturnType<typeof resolveConciergeDocumentContext>>;
   routingKind: string;
 }): void {
   const { conversationId, contextPath, hasActiveCcQuery, documentArgs, routingKind } = args;
@@ -773,6 +769,13 @@ export function emitConciergeDocumentResolutionBreadcrumb(args: {
     : null;
   const documentKindResolved = documentArgs.documentKind ?? null;
   const documentContentBytes = documentArgs.documentContent?.length ?? 0;
+  // 2026-05-06 follow-up — operators triaging "Concierge gave the apt-get
+  // cascade" reach for THIS breadcrumb first (it sits at the resolution
+  // boundary). Naming the typed extractor failure class here prevents the
+  // ambiguity between "no path was sent" and "path was sent, parse failed
+  // with class X" and lets a Sentry filter pivot directly to the user's
+  // actual failure shape without crawling extractor breadcrumbs.
+  const documentExtractError = documentArgs.documentExtractError ?? null;
 
   Sentry.addBreadcrumb({
     category: "cc-pdf-resolver",
@@ -785,6 +788,7 @@ export function emitConciergeDocumentResolutionBreadcrumb(args: {
       hasActiveCcQuery,
       documentKindResolved,
       documentContentBytes,
+      documentExtractError,
       conversationId,
       routingKind,
     },
@@ -875,11 +879,12 @@ async function dispatchSoleurGoForConversation(
   // and reused across turns (streaming-input mode). Resolving on warm
   // turns wastes a Supabase RTT + 2 realpathSync + a 50KB readFile per
   // turn for bytes that never reach the LLM.
-  let documentArgs: {
-    artifactPath?: string;
-    documentKind?: "pdf" | "text";
-    documentContent?: string;
-  } = {};
+  // Bind the resolver's return shape directly so new fields
+  // (`documentExtractError` etc.) flow through the spread at line 851
+  // without a parallel literal type that drifts silently.
+  let documentArgs: Awaited<
+    ReturnType<typeof resolveConciergeDocumentContext>
+  > = {};
   const warmCcQuery = hasActiveCcQuery(conversationId);
   if (context?.path && !warmCcQuery) {
     documentArgs = await resolveConciergeDocumentContext({
