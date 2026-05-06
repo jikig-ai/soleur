@@ -30,6 +30,7 @@ import { tryCreateVision, buildVisionEnhancementPrompt } from "./vision-helpers"
 import { createRateLimiter } from "./trigger-workflow";
 import { githubApiGet } from "./github-api";
 import { MAX_BINARY_SIZE } from "./kb-limits";
+import { MAX_AGENT_READABLE_PDF_SIZE } from "@/lib/attachment-constants";
 import { buildKbShareTools } from "./kb-share-tools";
 import { buildConversationsTools } from "./conversations-tools";
 import { getCurrentRepoUrl } from "./current-repo-url";
@@ -796,6 +797,7 @@ ${READ_TOOL_PDF_CAPABILITY_DIRECTIVE}`;
     // agent cannot discover kb_share_* from natural-language requests like
     // "share the Q1 report."
     const kbShareSizeMb = Math.round(MAX_BINARY_SIZE / 1024 / 1024);
+    const kbReadablePdfMb = Math.round(MAX_AGENT_READABLE_PDF_SIZE / 1024 / 1024);
     systemPrompt += `
 
 ## Knowledge-base sharing
@@ -816,6 +818,11 @@ Share links expose the file contents to anyone who has the URL. Before creating
 a link for a file that looks sensitive (credentials, personal data, unreleased
 strategy, or paths under finances/, legal/, customers/), confirm with
 AskUserQuestion first. Files over ${kbShareSizeMb} MB cannot be shared.
+
+PDF Reads have an additional ceiling: PDFs over ${kbReadablePdfMb} MB cannot
+be Read by the model in a single request. This is the Anthropic API request-
+size ceiling (32 MB after base64 encoding) — not a Soleur policy. For larger
+PDFs, ask the user to attach a smaller excerpt or convert the document.
 
 Use kb_share_preview({ token }) to verify a link renders correctly before
 sending it to someone. It returns the same metadata a recipient's browser

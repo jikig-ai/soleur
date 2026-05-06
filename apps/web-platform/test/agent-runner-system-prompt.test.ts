@@ -248,6 +248,21 @@ describe("agent-runner system prompt context injection", () => {
     expect(sharingBlock.toLowerCase()).toMatch(/sensitive|credentials/);
   });
 
+  // Closes #3332: agent must know PDFs over the API request-size ceiling
+  // cannot be Read in a single request. The 24 MB number is derived from
+  // Anthropic's 32 MB encoded-payload limit minus base64 inflation
+  // (~33%) and some headroom for the system prompt + prior turns.
+  test("system prompt advises a 24 MB PDF Read ceiling", async () => {
+    setupSupabaseMock(BASE_USER_DATA);
+    setupQueryMockImmediate();
+
+    await startAgentSession("user-1", "conv-1", "cpo");
+
+    const options = mockQuery.mock.calls[0][0].options;
+    expect(options.systemPrompt).toContain("24 MB");
+    expect(options.systemPrompt).toMatch(/PDF[^.]{0,80}Read/i);
+  });
+
   // Closes #3253: leader baseline must teach the model that the Read
   // tool natively handles PDFs — without this, when a user mentions a
   // PDF in chat with no "currently-viewing" artifact (no `context`),
