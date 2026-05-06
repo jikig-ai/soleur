@@ -69,3 +69,5 @@ For each, provide:
 ### Patterns Observed
 
 Note positive patterns worth keeping and anti-patterns to address across the suite.
+
+When the test asserts on the **side effect** of a setState wrapper (e.g., `localStorage`, network call, log emission, persisted db row) AND a **public DOM contract** is available (`aria-label`, `aria-pressed`, `data-*`, `role`, visible text), prefer the DOM contract. The wrapper's guard logic (same-value short-circuits, throttling, debouncing, error-swallowing fallbacks) can desynchronize the side effect from the state transition under StrictMode double-invocation or framework upgrades, producing assertion failures even when the user-facing behavior is correct. The DOM contract is what the user (and screen readers, and agents) actually perceives. See `knowledge-base/project/learnings/2026-05-06-test-public-dom-contract-not-setstate-side-effects.md`.
