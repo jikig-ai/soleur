@@ -324,7 +324,7 @@ export default function DashboardLayout({
             room for the 3-segment control). Anchored under a "THEME"
             ALL-CAPS label per brand-guide.md section-label convention. */}
         {!collapsed && (
-          <div className="border-t border-soleur-border-default px-3 pt-3">
+          <div className="border-t border-soleur-border-default p-3">
             <p className="px-1 pb-2 text-[10px] font-semibold uppercase tracking-[0.2em] text-soleur-accent-gold-fg">
               Theme
             </p>
