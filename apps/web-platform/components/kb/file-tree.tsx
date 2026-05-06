@@ -193,7 +193,7 @@ function TreeItem({
       <div className="group relative">
         <button
           onClick={() => onToggle(dirKey)}
-          className={`flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm text-neutral-300 hover:bg-neutral-800/50 ${
+          className={`flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm text-soleur-text-secondary hover:bg-soleur-bg-surface-2/50 ${
             isBusy ? "bg-amber-500/10" : ""
           }`}
           style={{ paddingLeft }}
@@ -219,7 +219,7 @@ function TreeItem({
           <FolderIcon />
           <span className="truncate font-medium">{node.name}</span>
           {node.modifiedAt && !isBusy && (
-            <span className="ml-auto shrink-0 text-xs text-neutral-600 group-hover:opacity-0 transition-opacity">
+            <span className="ml-auto shrink-0 text-xs text-soleur-text-muted group-hover:opacity-0 transition-opacity">
               {formatRelativeTime(node.modifiedAt)}
             </span>
           )}
@@ -230,7 +230,7 @@ function TreeItem({
               e.stopPropagation();
               fileInputRef.current?.click();
             }}
-            className="absolute right-1 top-1/2 -translate-y-1/2 rounded p-1 text-neutral-500 opacity-0 transition-opacity hover:bg-neutral-700 hover:text-neutral-300 group-hover:opacity-100"
+            className="absolute right-1 top-1/2 -translate-y-1/2 rounded p-1 text-soleur-text-muted opacity-0 transition-opacity hover:bg-soleur-bg-surface-2 hover:text-soleur-text-secondary group-hover:opacity-100"
             title="Upload file"
             aria-label={`Upload file to ${node.name}`}
           >
@@ -267,7 +267,7 @@ function TreeItem({
             </button>
             <button
               onClick={() => setUploadState({ status: "idle" })}
-              className="rounded px-2 py-0.5 text-neutral-400 hover:text-neutral-300"
+              className="rounded px-2 py-0.5 text-soleur-text-secondary hover:text-soleur-text-primary"
             >
               Cancel
             </button>
@@ -398,7 +398,7 @@ function FileNode({
       <div className="group relative">
         {isEditing ? (
           <div
-            className="flex items-center gap-2 rounded-md px-2 py-1.5 text-sm text-neutral-300"
+            className="flex items-center gap-2 rounded-md px-2 py-1.5 text-sm text-soleur-text-secondary"
             style={{ paddingLeft }}
           >
             <FileTypeIcon extension={node.extension} />
@@ -408,34 +408,34 @@ function FileNode({
               defaultValue={baseName}
               onKeyDown={handleRenameKeyDown}
               onBlur={(e) => handleRenameConfirm(e.target.value)}
-              className="min-w-0 flex-1 rounded border border-neutral-600 bg-neutral-800 px-1.5 py-0.5 text-sm text-neutral-200 outline-none focus:border-amber-500"
+              className="min-w-0 flex-1 rounded border border-soleur-border-default bg-soleur-bg-surface-2 px-1.5 py-0.5 text-sm text-soleur-text-primary outline-none focus:border-soleur-border-emphasized"
             />
-            <span className="shrink-0 text-sm text-neutral-500">{ext}</span>
+            <span className="shrink-0 text-sm text-soleur-text-muted">{ext}</span>
           </div>
         ) : (
           <Link
             href={filePath}
             className={`flex items-center gap-2 rounded-md px-2 py-1.5 text-sm transition-colors ${
               isActive
-                ? "bg-neutral-800 text-amber-400"
-                : "text-neutral-400 hover:bg-neutral-800/50 hover:text-neutral-200"
+                ? "bg-soleur-bg-surface-2 text-soleur-accent-gold-fg"
+                : "text-soleur-text-secondary hover:bg-soleur-bg-surface-2/50 hover:text-soleur-text-primary"
             } ${isDeleting || isRenaming ? "opacity-50" : ""}`}
             style={{ paddingLeft }}
           >
             <FileTypeIcon extension={node.extension} />
             <span className="truncate">{node.name}</span>
             {node.modifiedAt && !isDeleting && !isRenaming && (
-              <span className={`ml-auto shrink-0 text-xs text-neutral-600${isAttachment ? " group-hover:opacity-0 transition-opacity" : ""}`}>
+              <span className={`ml-auto shrink-0 text-xs text-soleur-text-muted${isAttachment ? " group-hover:opacity-0 transition-opacity" : ""}`}>
                 {formatRelativeTime(node.modifiedAt)}
               </span>
             )}
             {isDeleting && (
-              <span className="ml-auto shrink-0 text-xs text-neutral-500">
+              <span className="ml-auto shrink-0 text-xs text-soleur-text-muted">
                 Deleting...
               </span>
             )}
             {isRenaming && (
-              <span className="ml-auto shrink-0 text-xs text-neutral-500">
+              <span className="ml-auto shrink-0 text-xs text-soleur-text-muted">
                 Renaming...
               </span>
             )}
@@ -450,7 +450,7 @@ function FileNode({
                 renameSubmittedRef.current = false;
                 setRenameState({ status: "editing" });
               }}
-              className="rounded p-1 text-neutral-500 hover:bg-neutral-700 hover:text-neutral-300"
+              className="rounded p-1 text-soleur-text-muted hover:bg-soleur-bg-surface-2 hover:text-soleur-text-secondary"
               title="Rename file"
               aria-label={`Rename ${node.name}`}
             >
@@ -462,7 +462,7 @@ function FileNode({
                 e.stopPropagation();
                 setDeleteState({ status: "confirming" });
               }}
-              className="rounded p-1 text-neutral-500 hover:bg-neutral-700 hover:text-red-400"
+              className="rounded p-1 text-soleur-text-muted hover:bg-soleur-bg-surface-2 hover:text-red-400"
               title="Delete file"
               aria-label={`Delete ${node.name}`}
             >
@@ -483,7 +483,7 @@ function FileNode({
             </button>
             <button
               onClick={() => setDeleteState({ status: "idle" })}
-              className="rounded px-2 py-0.5 text-neutral-400 hover:text-neutral-300"
+              className="rounded px-2 py-0.5 text-soleur-text-secondary hover:text-soleur-text-primary"
             >
               Cancel
             </button>
@@ -577,7 +577,7 @@ function FileTypeIcon({ extension }: { extension?: string }) {
 
   // Default file icon (including .md)
   return (
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className="shrink-0 text-neutral-500">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className="shrink-0 text-soleur-text-muted">
       <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z" strokeLinecap="round" strokeLinejoin="round" />
       <path d="M14 2v6h6" strokeLinecap="round" strokeLinejoin="round" />
     </svg>

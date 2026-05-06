@@ -12,7 +12,7 @@ const PdfPreview = dynamic(
     ssr: false,
     loading: () => (
       <div className="flex items-center justify-center p-8">
-        <div className="h-5 w-5 animate-spin rounded-full border-2 border-neutral-600 border-t-amber-400" />
+        <div className="h-5 w-5 animate-spin rounded-full border-2 border-soleur-border-default border-t-amber-400" />
       </div>
     ),
   },
@@ -64,7 +64,7 @@ function ImagePreview({ src, filename }: { src: string; filename: string }) {
     <div className="flex flex-col items-center gap-4 p-6">
       <button
         onClick={() => setLightbox(true)}
-        className="cursor-zoom-in overflow-hidden rounded-lg border border-neutral-800 bg-neutral-900/50"
+        className="cursor-zoom-in overflow-hidden rounded-lg border border-soleur-border-default bg-soleur-bg-surface-1/50"
       >
         {/* eslint-disable-next-line @next/next/no-img-element */}
         <img
@@ -74,7 +74,7 @@ function ImagePreview({ src, filename }: { src: string; filename: string }) {
           loading="lazy"
         />
       </button>
-      <p className="text-xs text-neutral-500">Click to enlarge</p>
+      <p className="text-xs text-soleur-text-muted">Click to enlarge</p>
 
       {lightbox && (
         <div
@@ -85,7 +85,7 @@ function ImagePreview({ src, filename }: { src: string; filename: string }) {
         >
           <button
             onClick={() => setLightbox(false)}
-            className="absolute right-4 top-4 rounded-full p-2 text-neutral-400 hover:text-white"
+            className="absolute right-4 top-4 rounded-full p-2 text-soleur-text-secondary hover:text-soleur-text-primary"
             aria-label="Close lightbox"
           >
             <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">

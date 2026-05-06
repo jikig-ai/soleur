@@ -72,7 +72,7 @@ export function TextPreview({
   if (loading) {
     return (
       <div className="flex items-center justify-center p-8">
-        <div className="h-5 w-5 animate-spin rounded-full border-2 border-neutral-600 border-t-amber-400" />
+        <div className="h-5 w-5 animate-spin rounded-full border-2 border-soleur-border-default border-t-amber-400" />
       </div>
     );
   }
@@ -85,17 +85,17 @@ export function TextPreview({
     <div className="flex flex-col gap-3 p-4">
       {showDownload && (
         <div className="flex items-center justify-between">
-          <span className="text-sm text-neutral-400">{filename}</span>
+          <span className="text-sm text-soleur-text-secondary">{filename}</span>
           <a
             href={src}
             download={filename}
-            className="rounded-md border border-neutral-700 px-3 py-1 text-xs text-neutral-300 hover:bg-neutral-800"
+            className="rounded-md border border-soleur-border-default px-3 py-1 text-xs text-soleur-text-secondary hover:bg-soleur-bg-surface-2"
           >
             Download
           </a>
         </div>
       )}
-      <pre className="max-h-[70vh] overflow-auto rounded-lg border border-neutral-800 bg-neutral-900/50 p-4 text-sm text-neutral-300">
+      <pre className="max-h-[70vh] overflow-auto rounded-lg border border-soleur-border-default bg-soleur-bg-surface-1/50 p-4 text-sm text-soleur-text-secondary">
         {text}
       </pre>
     </div>
