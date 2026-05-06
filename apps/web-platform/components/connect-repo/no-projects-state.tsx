@@ -27,9 +27,9 @@ export function NoProjectsState({ onUpdateAccess, onBack, onRefresh }: NoProject
       </div>
 
       <Card className="flex flex-col items-center py-12 text-center">
-        <FolderIcon className="mb-4 h-12 w-12 text-neutral-600" />
-        <h3 className="text-lg font-medium text-neutral-200">No projects found</h3>
-        <p className="mt-2 max-w-sm text-sm text-neutral-500">
+        <FolderIcon className="mb-4 h-12 w-12 text-soleur-text-muted" />
+        <h3 className="text-lg font-medium text-soleur-text-primary">No projects found</h3>
+        <p className="mt-2 max-w-sm text-sm text-soleur-text-muted">
           We could not find any repositories you have granted access to. You may
           need to update the GitHub App permissions to include the repositories
           you want to connect.

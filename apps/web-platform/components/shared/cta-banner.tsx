@@ -19,24 +19,24 @@ export function CtaBanner() {
   }
 
   return (
-    <div className="fixed bottom-0 left-0 right-0 z-40 border-t border-neutral-800 bg-neutral-900/95 px-4 py-3 backdrop-blur-sm">
+    <div className="fixed bottom-0 left-0 right-0 z-40 border-t border-soleur-border-default bg-soleur-bg-surface-1/95 px-4 py-3 backdrop-blur-sm">
       <div className="mx-auto flex max-w-3xl items-center justify-between gap-4">
-        <p className="text-sm text-neutral-300">
+        <p className="text-sm text-soleur-text-secondary">
           This document was created with{" "}
-          <span className="font-medium text-amber-400">Soleur</span> — AI
+          <span className="font-medium text-soleur-accent-gold-fg">Soleur</span> — AI
           agents for every department of your startup.
         </p>
         <div className="flex shrink-0 items-center gap-2">
           <Link
             href="/signup"
-            className="rounded-lg bg-amber-500 px-4 py-2 text-sm font-medium text-black transition-colors hover:bg-amber-400"
+            className="rounded-lg bg-soleur-accent-gold-fill px-4 py-2 text-sm font-medium text-soleur-text-on-accent transition-colors hover:bg-amber-400"
           >
             Create your account
           </Link>
           <button
             type="button"
             onClick={handleDismiss}
-            className="rounded p-1 text-neutral-500 transition-colors hover:text-neutral-300"
+            className="rounded p-1 text-soleur-text-muted transition-colors hover:text-soleur-text-secondary"
             aria-label="Dismiss signup banner"
             data-testid="cta-banner-dismiss"
           >

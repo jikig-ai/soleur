@@ -46,7 +46,7 @@ export function FoundationCards({
             <a
               key={card.id}
               href={`/dashboard/kb/${card.kbPath}`}
-              className="inline-flex items-center gap-1.5 rounded-lg border border-neutral-800/50 bg-neutral-900/30 px-3 py-1.5 text-sm text-neutral-400 transition-colors hover:border-neutral-700 hover:text-neutral-300"
+              className="inline-flex items-center gap-1.5 rounded-lg border border-soleur-border-default/50 bg-soleur-bg-surface-1/30 px-3 py-1.5 text-sm text-soleur-text-secondary transition-colors hover:border-soleur-border-default hover:text-soleur-text-secondary"
             >
               <svg className="h-3.5 w-3.5 text-green-500" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                 <path d="M20 6 9 17l-5-5" />
@@ -65,17 +65,17 @@ export function FoundationCards({
               key={card.id}
               type="button"
               onClick={() => onIncompleteClick(card.promptText)}
-              className="flex flex-col gap-2 rounded-xl border border-neutral-800 bg-neutral-900/50 p-4 text-left transition-colors hover:border-neutral-600"
+              className="flex flex-col gap-2 rounded-xl border border-soleur-border-default bg-soleur-bg-surface-1/50 p-4 text-left transition-colors hover:border-soleur-border-default"
             >
               <LeaderAvatar
                 leaderId={card.leaderId}
                 size="sm"
                 customIconPath={getIconPath(card.leaderId)}
               />
-              <span className="text-sm font-medium text-white">
+              <span className="text-sm font-medium text-soleur-text-primary">
                 {card.title}
               </span>
-              <span className="text-xs text-neutral-500">
+              <span className="text-xs text-soleur-text-muted">
                 {card.promptText}
               </span>
             </button>

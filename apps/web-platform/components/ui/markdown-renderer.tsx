@@ -19,13 +19,13 @@ interface BuildOptions {
 function buildComponents({ linkRel, preWrap }: BuildOptions): Components {
   return {
     h1: ({ children }) => (
-      <h1 className="mb-3 mt-4 text-lg font-semibold text-white">{children}</h1>
+      <h1 className="mb-3 mt-4 text-lg font-semibold text-soleur-text-primary">{children}</h1>
     ),
     h2: ({ children }) => (
-      <h2 className="mb-2 mt-3 text-base font-semibold text-white">{children}</h2>
+      <h2 className="mb-2 mt-3 text-base font-semibold text-soleur-text-primary">{children}</h2>
     ),
     h3: ({ children }) => (
-      <h3 className="mb-2 mt-3 text-sm font-semibold text-neutral-200">{children}</h3>
+      <h3 className="mb-2 mt-3 text-sm font-semibold text-soleur-text-primary">{children}</h3>
     ),
     p: ({ children }) => (
       <p className="mb-2 leading-relaxed">{children}</p>
@@ -37,7 +37,7 @@ function buildComponents({ linkRel, preWrap }: BuildOptions): Components {
       <ol className="mb-2 ml-4 list-decimal space-y-1">{children}</ol>
     ),
     li: ({ children }) => (
-      <li className="text-neutral-200">{children}</li>
+      <li className="text-soleur-text-secondary">{children}</li>
     ),
     table: ({ children }) => (
       <div className="mb-3 overflow-x-auto">
@@ -45,7 +45,7 @@ function buildComponents({ linkRel, preWrap }: BuildOptions): Components {
       </div>
     ),
     th: ({ children }) => (
-      <th className="whitespace-nowrap border border-neutral-700 bg-neutral-800/50 px-3 py-1.5 text-left font-semibold text-neutral-200">
+      <th className="whitespace-nowrap border border-soleur-border-default bg-soleur-bg-surface-2/50 px-3 py-1.5 text-left font-semibold text-soleur-text-primary">
         {children}
       </th>
     ),
@@ -53,14 +53,14 @@ function buildComponents({ linkRel, preWrap }: BuildOptions): Components {
     // readable line so a single long-paragraph cell doesn't blow out the table.
     // Header may exceed 40ch (whitespace-nowrap on th wins) by design.
     td: ({ children }) => (
-      <td className="min-w-[8ch] max-w-[40ch] border border-neutral-700 px-3 py-1.5 align-top text-neutral-300">{children}</td>
+      <td className="min-w-[8ch] max-w-[40ch] border border-soleur-border-default px-3 py-1.5 align-top text-soleur-text-secondary">{children}</td>
     ),
     pre: ({ children }) => (
       <pre
         className={
           preWrap
-            ? "mb-3 min-w-0 whitespace-pre-wrap break-words rounded-lg bg-neutral-950 p-3 text-xs text-neutral-300 [overflow-wrap:anywhere]"
-            : "mb-3 overflow-x-auto rounded-lg bg-neutral-950 p-3 text-xs text-neutral-300"
+            ? "mb-3 min-w-0 whitespace-pre-wrap break-words rounded-lg bg-soleur-bg-base p-3 text-xs text-soleur-text-secondary [overflow-wrap:anywhere]"
+            : "mb-3 overflow-x-auto rounded-lg bg-soleur-bg-base p-3 text-xs text-soleur-text-secondary"
         }
       >
         {children}
@@ -71,18 +71,18 @@ function buildComponents({ linkRel, preWrap }: BuildOptions): Components {
       return isBlock ? (
         <code className={className}>{children}</code>
       ) : (
-        <code className="rounded bg-neutral-800 px-1.5 py-0.5 text-xs text-amber-300">{children}</code>
+        <code className="rounded bg-soleur-bg-surface-2 px-1.5 py-0.5 text-xs text-soleur-accent-gold-fg">{children}</code>
       );
     },
     strong: ({ children }) => (
-      <strong className="font-semibold text-white">{children}</strong>
+      <strong className="font-semibold text-soleur-text-primary">{children}</strong>
     ),
     a: ({ href, children }) => (
       <a href={href} target="_blank" rel={linkRel}
-        className="text-amber-400 underline hover:text-amber-300">{children}</a>
+        className="text-soleur-accent-gold-fg underline hover:text-soleur-accent-gold-text">{children}</a>
     ),
     blockquote: ({ children }) => (
-      <blockquote className="mb-2 border-l-2 border-neutral-600 pl-3 italic text-neutral-400">
+      <blockquote className="mb-2 border-l-2 border-soleur-border-default pl-3 italic text-soleur-text-muted">
         {children}
       </blockquote>
     ),

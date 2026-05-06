@@ -77,7 +77,7 @@ function ImageAttachment({ attachment }: { attachment: AttachmentRef }) {
 
   if (!url) {
     return (
-      <div className="h-32 w-32 animate-pulse rounded-lg bg-neutral-800" />
+      <div className="h-32 w-32 animate-pulse rounded-lg bg-soleur-bg-surface-2" />
     );
   }
 
@@ -86,7 +86,7 @@ function ImageAttachment({ attachment }: { attachment: AttachmentRef }) {
       <button
         type="button"
         onClick={() => setExpanded(true)}
-        className="overflow-hidden rounded-lg border border-neutral-700 transition-opacity hover:opacity-80"
+        className="overflow-hidden rounded-lg border border-soleur-border-default transition-opacity hover:opacity-80"
       >
         <img
           src={url}
@@ -124,7 +124,7 @@ function FileAttachment({ attachment }: { attachment: AttachmentRef }) {
       href={url ?? "#"}
       target="_blank"
       rel="noopener noreferrer"
-      className={`flex items-center gap-2 rounded-lg border border-neutral-700 bg-neutral-800/50 px-3 py-2 text-sm transition-colors hover:border-neutral-500 ${!url ? "pointer-events-none opacity-60" : ""}`}
+      className={`flex items-center gap-2 rounded-lg border border-soleur-border-default bg-soleur-bg-surface-2/50 px-3 py-2 text-sm transition-colors hover:border-soleur-border-emphasized ${!url ? "pointer-events-none opacity-60" : ""}`}
     >
       <svg
         width="20"
@@ -143,8 +143,8 @@ function FileAttachment({ attachment }: { attachment: AttachmentRef }) {
         <line x1="16" y1="17" x2="8" y2="17" />
       </svg>
       <div className="flex flex-col">
-        <span className="max-w-[200px] truncate text-neutral-200">{attachment.filename}</span>
-        <span className="text-xs text-neutral-500">{sizeKb} KB</span>
+        <span className="max-w-[200px] truncate text-soleur-text-primary">{attachment.filename}</span>
+        <span className="text-xs text-soleur-text-muted">{sizeKb} KB</span>
       </div>
     </a>
   );

@@ -43,7 +43,7 @@ export function SelectProjectState({ repos, loading, onSelect, onBack, onRefresh
         <button
           type="button"
           onClick={onBack}
-          className="flex h-8 w-8 items-center justify-center rounded-lg border border-neutral-700 text-neutral-400 transition-colors hover:bg-neutral-800 hover:text-neutral-200"
+          className="flex h-8 w-8 items-center justify-center rounded-lg border border-soleur-border-default text-soleur-text-secondary transition-colors hover:bg-soleur-bg-surface-2 hover:text-soleur-text-primary"
         >
           <ArrowLeftIcon className="h-4 w-4" />
         </button>
@@ -52,7 +52,7 @@ export function SelectProjectState({ repos, loading, onSelect, onBack, onRefresh
           <button
             type="button"
             onClick={onRefresh}
-            className="flex h-8 w-8 items-center justify-center rounded-lg border border-neutral-700 text-neutral-400 transition-colors hover:bg-neutral-800 hover:text-neutral-200"
+            className="flex h-8 w-8 items-center justify-center rounded-lg border border-soleur-border-default text-soleur-text-secondary transition-colors hover:bg-soleur-bg-surface-2 hover:text-soleur-text-primary"
             aria-label="Refresh"
           >
             <RefreshIcon className="h-4 w-4" />
@@ -64,7 +64,7 @@ export function SelectProjectState({ repos, loading, onSelect, onBack, onRefresh
         <h1 className={`${serif.className} text-3xl font-semibold`}>
           Select a Project
         </h1>
-        <p className="text-sm text-neutral-400">
+        <p className="text-sm text-soleur-text-secondary">
           Choose which project your AI team should work on. You can change this
           later from Settings.
         </p>
@@ -72,7 +72,7 @@ export function SelectProjectState({ repos, loading, onSelect, onBack, onRefresh
 
       {/* Search */}
       <div className="relative">
-        <SearchIcon className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-neutral-500" />
+        <SearchIcon className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-soleur-text-muted" />
         <input
           type="text"
           value={search}
@@ -81,14 +81,14 @@ export function SelectProjectState({ repos, loading, onSelect, onBack, onRefresh
             setPage(1);
           }}
           placeholder="Search projects..."
-          className="w-full rounded-lg border border-neutral-700 bg-neutral-900 py-2.5 pl-10 pr-4 text-sm placeholder:text-neutral-500 focus:border-neutral-500 focus:outline-none"
+          className="w-full rounded-lg border border-soleur-border-default bg-soleur-bg-surface-1 py-2.5 pl-10 pr-4 text-sm placeholder:text-soleur-text-muted focus:border-soleur-text-muted focus:outline-none"
         />
       </div>
 
       {/* Repo list */}
       {loading ? (
         <div className="flex items-center justify-center py-12">
-          <SpinnerIcon className="h-6 w-6 text-amber-500/70" />
+          <SpinnerIcon className="h-6 w-6 text-soleur-accent-gold-fg/70" />
         </div>
       ) : (
         <div className="space-y-1">
@@ -99,19 +99,19 @@ export function SelectProjectState({ repos, loading, onSelect, onBack, onRefresh
               onClick={() => setSelected(repo.fullName)}
               className={`flex w-full items-center justify-between rounded-lg border px-4 py-3 text-left transition-colors ${
                 selected === repo.fullName
-                  ? "border-amber-500/40 bg-amber-500/5"
-                  : "border-neutral-800 bg-neutral-900/30 hover:bg-neutral-900/60"
+                  ? "border-soleur-border-emphasized/40 bg-soleur-accent-gold-fg/5"
+                  : "border-soleur-border-default bg-soleur-bg-surface-1/30 hover:bg-soleur-bg-surface-1/60"
               }`}
             >
               <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-2">
-                  <span className="text-sm font-medium text-neutral-100">
+                  <span className="text-sm font-medium text-soleur-text-primary">
                     {repo.name}
                   </span>
                   <span
                     className={`rounded px-1.5 py-0.5 text-[10px] font-medium uppercase ${
                       repo.private
-                        ? "bg-neutral-800 text-neutral-400"
+                        ? "bg-soleur-bg-surface-2 text-soleur-text-secondary"
                         : "bg-emerald-950 text-emerald-400"
                     }`}
                   >
@@ -119,12 +119,12 @@ export function SelectProjectState({ repos, loading, onSelect, onBack, onRefresh
                   </span>
                 </div>
                 {repo.description && (
-                  <p className="mt-0.5 truncate text-xs text-neutral-500">
+                  <p className="mt-0.5 truncate text-xs text-soleur-text-muted">
                     {repo.description}
                   </p>
                 )}
               </div>
-              <span className="shrink-0 text-xs text-neutral-400">
+              <span className="shrink-0 text-xs text-soleur-text-secondary">
                 Updated {relativeTime(repo.updatedAt)}
               </span>
             </button>
@@ -134,12 +134,12 @@ export function SelectProjectState({ repos, loading, onSelect, onBack, onRefresh
 
       {/* Pagination */}
       {!loading && totalPages > 1 && (
-        <div className="flex items-center justify-between text-xs text-neutral-500">
+        <div className="flex items-center justify-between text-xs text-soleur-text-muted">
           <button
             type="button"
             onClick={() => setPage((p) => Math.max(1, p - 1))}
             disabled={page === 1}
-            className="rounded px-2 py-1 hover:bg-neutral-800 disabled:opacity-30"
+            className="rounded px-2 py-1 hover:bg-soleur-bg-surface-2 disabled:opacity-30"
           >
             Previous
           </button>
@@ -150,7 +150,7 @@ export function SelectProjectState({ repos, loading, onSelect, onBack, onRefresh
             type="button"
             onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
             disabled={page === totalPages}
-            className="rounded px-2 py-1 hover:bg-neutral-800 disabled:opacity-30"
+            className="rounded px-2 py-1 hover:bg-soleur-bg-surface-2 disabled:opacity-30"
           >
             Next
           </button>
@@ -165,11 +165,11 @@ export function SelectProjectState({ repos, loading, onSelect, onBack, onRefresh
       </div>
 
       {/* Expandable: access info */}
-      <div className="border-t border-neutral-800 pt-4">
+      <div className="border-t border-soleur-border-default pt-4">
         <button
           type="button"
           onClick={() => setShowAccess((v) => !v)}
-          className="flex items-center gap-2 text-sm text-neutral-400 transition-colors hover:text-neutral-200"
+          className="flex items-center gap-2 text-sm text-soleur-text-secondary transition-colors hover:text-soleur-text-primary"
         >
           <ChevronDownIcon
             className={`h-4 w-4 transition-transform ${showAccess ? "rotate-180" : ""}`}
@@ -177,7 +177,7 @@ export function SelectProjectState({ repos, loading, onSelect, onBack, onRefresh
           What can the GitHub App access?
         </button>
         {showAccess && (
-          <div className="mt-3 rounded-lg border border-neutral-800 bg-neutral-900/50 p-4 text-xs text-neutral-500">
+          <div className="mt-3 rounded-lg border border-soleur-border-default bg-soleur-bg-surface-1/50 p-4 text-xs text-soleur-text-muted">
             <p>
               The Soleur GitHub App can read and write code in repositories you
               explicitly grant access to. It cannot access other repositories,

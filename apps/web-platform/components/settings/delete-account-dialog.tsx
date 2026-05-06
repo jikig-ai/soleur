@@ -62,13 +62,13 @@ export function DeleteAccountDialog({ userEmail }: DeleteAccountDialogProps) {
       <h3 className="mb-2 text-lg font-semibold text-red-400">
         Permanently delete your account
       </h3>
-      <p className="mb-4 text-sm text-neutral-400">
+      <p className="mb-4 text-sm text-soleur-text-secondary">
         This action cannot be undone. All your data, API keys, conversations,
         and workspace files will be permanently deleted.
       </p>
 
-      <label className="mb-2 block text-sm text-neutral-300">
-        Type <span className="font-mono text-white">{userEmail}</span> to
+      <label className="mb-2 block text-sm text-soleur-text-secondary">
+        Type <span className="font-mono text-soleur-text-primary">{userEmail}</span> to
         confirm:
       </label>
       <input
@@ -76,7 +76,7 @@ export function DeleteAccountDialog({ userEmail }: DeleteAccountDialogProps) {
         value={confirmEmail}
         onChange={(e) => setConfirmEmail(e.target.value)}
         placeholder={userEmail}
-        className="mb-4 w-full rounded-lg border border-neutral-700 bg-neutral-900 px-3 py-2 text-sm text-white placeholder:text-neutral-400 focus:border-red-700 focus:outline-none focus:ring-1 focus:ring-red-700"
+        className="mb-4 w-full rounded-lg border border-soleur-border-default bg-soleur-bg-surface-1 px-3 py-2 text-sm text-soleur-text-primary placeholder:text-soleur-text-muted focus:border-red-700 focus:outline-none focus:ring-1 focus:ring-red-700"
         autoComplete="off"
         spellCheck={false}
       />
@@ -90,7 +90,7 @@ export function DeleteAccountDialog({ userEmail }: DeleteAccountDialogProps) {
           type="button"
           onClick={handleDelete}
           disabled={!emailMatches || isDeleting}
-          className="rounded-lg bg-red-700 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-red-600 disabled:cursor-not-allowed disabled:opacity-50"
+          className="rounded-lg bg-red-700 px-4 py-2 text-sm font-medium text-soleur-text-on-accent transition-colors hover:bg-red-600 disabled:cursor-not-allowed disabled:opacity-50"
         >
           {isDeleting ? "Deleting..." : "Confirm Deletion"}
         </button>
@@ -101,7 +101,7 @@ export function DeleteAccountDialog({ userEmail }: DeleteAccountDialogProps) {
             setConfirmEmail("");
             setError(null);
           }}
-          className="rounded-lg border border-neutral-700 px-4 py-2 text-sm text-neutral-400 transition-colors hover:bg-neutral-800 hover:text-white"
+          className="rounded-lg border border-soleur-border-default px-4 py-2 text-sm text-soleur-text-secondary transition-colors hover:bg-soleur-bg-surface-2 hover:text-soleur-text-primary"
         >
           Cancel
         </button>

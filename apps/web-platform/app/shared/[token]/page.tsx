@@ -22,7 +22,7 @@ const PdfPreview = dynamic(
     ssr: false,
     loading: () => (
       <div className="flex items-center justify-center p-8">
-        <div className="h-5 w-5 animate-spin rounded-full border-2 border-neutral-600 border-t-amber-400" />
+        <div className="h-5 w-5 animate-spin rounded-full border-2 border-soleur-text-muted border-t-amber-400" />
       </div>
     ),
   },
@@ -82,14 +82,14 @@ export default function SharedDocumentPage({
       <head>
         <meta name="robots" content="noindex" />
       </head>
-      <div className="min-h-screen bg-neutral-950 text-neutral-200">
+      <div className="min-h-screen bg-soleur-bg-base text-soleur-text-primary">
         {/* Soleur branded header */}
-        <header className="border-b border-neutral-800 px-4 py-3">
+        <header className="border-b border-soleur-border-default px-4 py-3">
           <div className="mx-auto flex max-w-3xl items-center justify-between">
-            <Link href="https://soleur.ai" className="text-lg font-semibold text-white">
+            <Link href="https://soleur.ai" className="text-lg font-semibold text-soleur-text-primary">
               Soleur
             </Link>
-            <span className="text-xs text-neutral-500">Shared document</span>
+            <span className="text-xs text-soleur-text-muted">Shared document</span>
           </div>
         </header>
 
@@ -160,7 +160,7 @@ function renderSharedContent(data: SharedData) {
             src={data.src}
             alt="Shared image"
             title={data.filename ?? undefined}
-            className="max-h-[80vh] max-w-full rounded-lg border border-neutral-800"
+            className="max-h-[80vh] max-w-full rounded-lg border border-soleur-border-default"
           />
         </div>
       );
@@ -169,13 +169,13 @@ function renderSharedContent(data: SharedData) {
     case "download":
       return (
         <div className="flex flex-col items-center justify-center py-20 text-center">
-          <h1 className="mb-2 text-lg font-semibold text-white">{data.filename}</h1>
-          <p className="mb-6 text-sm text-neutral-400">Download to view this file.</p>
+          <h1 className="mb-2 text-lg font-semibold text-soleur-text-primary">{data.filename}</h1>
+          <p className="mb-6 text-sm text-soleur-text-secondary">Download to view this file.</p>
           <a
             data-testid="shared-download"
             href={data.src}
             download={data.filename}
-            className="inline-flex items-center gap-2 rounded-lg border border-amber-500/50 px-4 py-2 text-sm font-medium text-amber-400 transition-colors hover:border-amber-400 hover:text-amber-300"
+            className="inline-flex items-center gap-2 rounded-lg border border-soleur-border-emphasized px-4 py-2 text-sm font-medium text-soleur-accent-gold-fg transition-colors hover:border-amber-400 hover:text-soleur-accent-gold-text"
           >
             Download {data.filename}
           </a>
@@ -194,11 +194,11 @@ function renderSharedContent(data: SharedData) {
 function ErrorMessage({ title, message }: { title: string; message: string }) {
   return (
     <div className="flex flex-col items-center justify-center py-20 text-center">
-      <h1 className="mb-2 text-lg font-semibold text-white">{title}</h1>
-      <p className="mb-6 text-sm text-neutral-400">{message}</p>
+      <h1 className="mb-2 text-lg font-semibold text-soleur-text-primary">{title}</h1>
+      <p className="mb-6 text-sm text-soleur-text-secondary">{message}</p>
       <Link
         href="https://soleur.ai"
-        className="text-sm text-amber-400 underline hover:text-amber-300"
+        className="text-sm text-soleur-accent-gold-fg underline hover:text-soleur-accent-gold-text"
       >
         Learn about Soleur
       </Link>

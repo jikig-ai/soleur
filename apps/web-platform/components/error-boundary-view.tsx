@@ -37,15 +37,15 @@ export function ErrorBoundaryView({
       data-error-boundary={segment ?? "root"}
       className="flex min-h-[50vh] flex-col items-center justify-center gap-4"
     >
-      <h2 className="text-xl font-semibold text-white">Something went wrong</h2>
-      <p className="text-sm text-neutral-400">
+      <h2 className="text-xl font-semibold text-soleur-text-primary">Something went wrong</h2>
+      <p className="text-sm text-soleur-text-secondary">
         {error.digest
           ? `Error ID: ${error.digest}`
           : "An unexpected error occurred."}
       </p>
       <button
         onClick={reset}
-        className="rounded-lg border border-neutral-700 px-4 py-2 text-sm text-neutral-300 transition-colors hover:border-neutral-500 hover:text-white"
+        className="rounded-lg border border-soleur-border-default px-4 py-2 text-sm text-soleur-text-secondary transition-colors hover:border-soleur-border-default hover:text-soleur-text-primary"
       >
         Try again
       </button>

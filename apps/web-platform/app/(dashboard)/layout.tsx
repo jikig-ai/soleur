@@ -58,21 +58,21 @@ export function PaymentWarningBanner({
   return (
     <div className="border-b border-orange-800/50 bg-orange-950/30 px-4 py-3">
       <div className="mx-auto flex max-w-4xl items-center justify-between gap-3">
-        <p className="text-sm text-neutral-200">
+        <p className="text-sm text-soleur-text-primary">
           <span className="font-medium text-orange-400">Your last payment failed.</span>{" "}
           Update your payment method to avoid service interruption.
         </p>
         <div className="flex shrink-0 items-center gap-2">
           <a
             href="/dashboard/settings"
-            className="rounded-lg bg-orange-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-orange-500"
+            className="rounded-lg bg-orange-600 px-3 py-1.5 text-xs font-medium text-soleur-text-on-accent hover:bg-orange-500"
           >
             Update Payment
           </a>
           <button
             onClick={dismissBanner}
             aria-label="Dismiss payment warning"
-            className="rounded p-1 text-neutral-400 hover:text-neutral-200"
+            className="rounded p-1 text-soleur-text-secondary hover:text-soleur-text-primary"
           >
             <XIcon className="h-4 w-4" />
           </button>
@@ -372,13 +372,13 @@ export default function DashboardLayout({
         {subscriptionStatus === "unpaid" && (
           <div className="border-b border-red-800/50 bg-red-950/30 px-4 py-3">
             <div className="mx-auto flex max-w-4xl items-center justify-between gap-3">
-              <p className="text-sm text-neutral-200">
+              <p className="text-sm text-soleur-text-primary">
                 <span className="font-medium text-red-400">Your subscription is unpaid.</span>{" "}
                 Your account is in read-only mode.
               </p>
               <a
                 href="/dashboard/settings"
-                className="shrink-0 rounded-lg bg-red-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-red-500"
+                className="shrink-0 rounded-lg bg-red-600 px-3 py-1.5 text-xs font-medium text-soleur-text-on-accent hover:bg-red-500"
               >
                 Resolve Payment
               </a>

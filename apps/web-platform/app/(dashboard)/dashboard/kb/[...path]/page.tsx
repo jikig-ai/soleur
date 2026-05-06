@@ -75,7 +75,7 @@ export default function KbContentPage({
     return (
       <div className="p-6 md:p-8">
         <div className="mx-auto max-w-3xl space-y-4">
-          <div className="h-4 w-48 animate-pulse rounded bg-neutral-800" />
+          <div className="h-4 w-48 animate-pulse rounded bg-soleur-bg-surface-2" />
           <KbContentSkeleton
             widths={["85%", "70%", "90%", "65%", "80%", "75%"]}
           />
@@ -88,12 +88,12 @@ export default function KbContentPage({
     return (
       <div className="flex h-full items-center justify-center p-6">
         <div className="text-center">
-          <p className="mb-2 text-sm text-neutral-400">
+          <p className="mb-2 text-sm text-soleur-text-secondary">
             File not found. This file may have been renamed or removed.
           </p>
           <Link
             href="/dashboard/kb"
-            className="text-sm text-amber-400 underline hover:text-amber-300"
+            className="text-sm text-soleur-accent-gold-fg underline hover:text-soleur-accent-gold-text"
           >
             Back to file tree
           </Link>
@@ -106,7 +106,7 @@ export default function KbContentPage({
     return (
       <div className="flex h-full items-center justify-center p-6">
         <div className="text-center">
-          <p className="text-sm text-neutral-400">
+          <p className="text-sm text-soleur-text-secondary">
             Unable to load this file. Please try again later.
           </p>
         </div>
