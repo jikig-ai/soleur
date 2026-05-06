@@ -201,15 +201,15 @@ This means the inline script grows from ~10 lines to ~25 lines and includes a tr
 
 **File:** `apps/web-platform/components/theme/no-fouc-script.tsx`
 
-- [ ] 3.1 Replace the `SCRIPT` constant with the augmented version (see Research Insights → Issue 3). It must:
+- [x] 3.1 Replace the `SCRIPT` constant with the augmented version (see Research Insights → Issue 3). It must:
   - Resolve `effective` palette (light/dark) by reading `prefers-color-scheme` for "system".
   - Set `documentElement.style.colorScheme`.
   - Set `documentElement.style.backgroundColor` to the literal hex of `--soleur-bg-base` for the resolved palette.
   - Inject a transient `<style id="__soleur-no-transition">* { transition: none !important; animation-duration: 0s !important; }</style>` into `<head>` and remove it via double-rAF, mirroring the runtime helper. This prevents first-paint transitions on hydration when React mounts and consumers compute their own initial colors.
 
-- [ ] 3.2 Add an inline comment naming `--soleur-bg-base` value drift as a Sharp Edge — the hex literals in this script duplicate `globals.css` and must move together.
+- [x] 3.2 Add an inline comment naming `--soleur-bg-base` value drift as a Sharp Edge — the hex literals in this script duplicate `globals.css` and must move together.
 
-- [ ] 3.3 Confirm the inline-style hint clears once React's hydration runs OR at the moment the `<style id="__soleur-no-transition">` is removed. Ideally the inline `style.backgroundColor` is removed as part of the post-rAF cleanup, OR set on a `<html data-theme-bootstrapping>` attribute that's removed in a `useEffect` after first paint. **Prefer: remove `style.backgroundColor` and `style.colorScheme` after the first rAF as well, so future CSS-only theming (e.g., a future `:root[data-theme="dim"]`) is not pinned by an inline override.**
+- [x] 3.3 Confirm the inline-style hint clears once React's hydration runs OR at the moment the `<style id="__soleur-no-transition">` is removed. Ideally the inline `style.backgroundColor` is removed as part of the post-rAF cleanup, OR set on a `<html data-theme-bootstrapping>` attribute that's removed in a `useEffect` after first paint. **Prefer: remove `style.backgroundColor` and `style.colorScheme` after the first rAF as well, so future CSS-only theming (e.g., a future `:root[data-theme="dim"]`) is not pinned by an inline override.**
 
   Implementation choice: keep `style.colorScheme` (browser defaults benefit from this — scrollbars, autofill) but clear `style.backgroundColor` after first rAF; the body/`html` will then resolve via the now-correct CSS cascade.
 
@@ -217,7 +217,7 @@ This means the inline script grows from ~10 lines to ~25 lines and includes a tr
 
 **File (new):** `apps/web-platform/test/components/theme-no-fouc-script.test.tsx`
 
-- [ ] 4.1 Unit-test the augmented `<NoFoucScript>` script string for:
+- [x] 4.1 Unit-test the augmented `<NoFoucScript>` script string for:
   - Contains `style.colorScheme` write.
   - Contains `style.backgroundColor` write.
   - Contains both light hex (`#fbf7ee`) and dark hex (`#0a0a0a`) literals (drift-guard).
@@ -227,7 +227,7 @@ This means the inline script grows from ~10 lines to ~25 lines and includes a tr
 
   These are string-match assertions on the SCRIPT constant; no JSDOM execution required because the script is rendered via `dangerouslySetInnerHTML` as a static string.
 
-- [ ] 4.2 Add a "hex literal parity" assertion that reads `apps/web-platform/app/globals.css` and confirms the `--soleur-bg-base` declarations for `:root[data-theme="light"]` and `:root[data-theme="dark"]` match the script's literal strings. This is the drift-guard for the Sharp Edge in Phase 3.2.
+- [x] 4.2 Add a "hex literal parity" assertion that reads `apps/web-platform/app/globals.css` and confirms the `--soleur-bg-base` declarations for `:root[data-theme="light"]` and `:root[data-theme="dark"]` match the script's literal strings. This is the drift-guard for the Sharp Edge in Phase 3.2.
 
   ```ts
   import { describe, expect, it } from "vitest";
@@ -256,7 +256,7 @@ This means the inline script grows from ~10 lines to ~25 lines and includes a tr
 
 **File (extend):** `apps/web-platform/test/theme-provider.test.tsx`
 
-- [ ] 4.3 Add a unit test that calling `setTheme("light")` from `useTheme()` injects a `<style>` element with `transition: none` into `document.head`, and that the style is removed after two animation frames. Use JSDOM's `document.head.querySelectorAll("style")` to inspect, and a `requestAnimationFrame` polyfill (existing test file may already have one — verify in Phase 1 of /work).
+- [x] 4.3 Add a unit test that calling `setTheme("light")` from `useTheme()` injects a `<style>` element with `transition: none` into `document.head`, and that the style is removed after two animation frames. Use JSDOM's `document.head.querySelectorAll("style")` to inspect, and a `requestAnimationFrame` polyfill (existing test file may already have one — verify in Phase 1 of /work).
 
 ### Phase 5 — Visual QA
 
