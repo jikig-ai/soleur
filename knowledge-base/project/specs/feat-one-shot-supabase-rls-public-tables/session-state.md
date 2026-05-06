@@ -1,7 +1,7 @@
 # Session State
 
 ## Plan Phase
-- Plan file: /home/jean/git-repositories/jikig-ai/soleur/.worktrees/feat-one-shot-supabase-rls-public-tables/knowledge-base/project/plans/2026-05-06-fix-rls-disabled-on-schema-migrations-plan.md
+- Plan file: knowledge-base/project/plans/2026-05-06-fix-rls-disabled-on-schema-migrations-plan.md
 - Status: complete
 
 ### Errors
