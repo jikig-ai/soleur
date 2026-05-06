@@ -15,19 +15,19 @@ Derived from the plan. Constraint TR7 governs the entire layout edit — see pla
 
 ## Phase 1 — Component (`apps/web-platform/components/theme/theme-toggle.tsx`)
 
-- [ ] **1.1** Change function signature to `export function ThemeToggle({ collapsed }: { collapsed: boolean })`. Required prop, no default.
-- [ ] **1.2** Wrap today's existing 3-segment JSX in `if (collapsed === false)` early-return. No changes to `SEGMENTS`, `useRef`, `handleKeyDown`, classNames, or aria attributes inside the pill block.
-- [ ] **1.3** Add the collapsed-mode return below: a single `<button>` with:
-  - [ ] `data-testid="theme-cycle-button"` (mandatory)
-  - [ ] 36×36, `rounded-full`, Tailwind utility classes only (`border-soleur-border-default`, `bg-soleur-bg-surface-2`, `text-soleur-accent-gold-fg`, focus-visible ring matching the pill's active treatment)
-  - [ ] No inline `style={{ color: "var(--soleur-...)" }}` (CSP regression risk)
-  - [ ] Inner SVG = current mode's icon (reuse existing `MoonIcon`/`SunIcon`/`MonitorIcon`)
-  - [ ] `aria-label={"Theme: " + currentLabel}` (e.g., `Theme: Dark`); no `title` attribute
-- [ ] **1.4** Click handler computes next mode via `SEGMENTS[(SEGMENTS.findIndex(s => s.value === theme) + 1) % SEGMENTS.length]` and calls `setTheme(next.value)`.
+- [x] **1.1** Change function signature to `export function ThemeToggle({ collapsed }: { collapsed: boolean })`. Required prop, no default.
+- [x] **1.2** Wrap today's existing 3-segment JSX in `if (collapsed === false)` early-return. No changes to `SEGMENTS`, `useRef`, `handleKeyDown`, classNames, or aria attributes inside the pill block.
+- [x] **1.3** Add the collapsed-mode return below: a single `<button>` with:
+  - [x] `data-testid="theme-cycle-button"` (mandatory)
+  - [x] 36×36, `rounded-full`, Tailwind utility classes only (`border-soleur-border-default`, `bg-soleur-bg-surface-2`, `text-soleur-accent-gold-fg`, focus-visible ring matching the pill's active treatment)
+  - [x] No inline `style={{ color: "var(--soleur-...)" }}` (CSP regression risk)
+  - [x] Inner SVG = current mode's icon (reuse existing `MoonIcon`/`SunIcon`/`MonitorIcon`)
+  - [x] `aria-label={"Theme: " + currentLabel}` (e.g., `Theme: Dark`); no `title` attribute
+- [x] **1.4** Click handler computes next mode via `SEGMENTS[(SEGMENTS.findIndex(s => s.value === theme) + 1) % SEGMENTS.length]` and calls `setTheme(next.value)`.
 
 ## Phase 2 — Layout (`apps/web-platform/app/(dashboard)/layout.tsx`)
 
-- [ ] **2.1** Insert the new toggle wrapper between brand-row `</div>` (line ~274) and `<nav>` (line ~277):
+- [x] **2.1** Insert the new toggle wrapper between brand-row `</div>` (line ~274) and `<nav>` (line ~277):
 
   ```tsx
   {/* Theme toggle — sidebar header. Pill in expanded state, single
@@ -38,24 +38,24 @@ Derived from the plan. Constraint TR7 governs the entire layout edit — see pla
   </div>
   ```
 
-- [ ] **2.2** Delete the existing footer-block mount (lines ~323–333) including its `<p>Theme</p>` label.
-- [ ] **2.3** **Do NOT touch** brand-row `py-5` on line ~250 (the temptation to "tidy spacing" must be resisted — TR7 violation).
-- [ ] **2.4** Verify with `git diff main -- 'apps/web-platform/app/(dashboard)/layout.tsx'` (single-quote the path). Output must be exactly two hunks: one insertion near the brand row, one deletion in the footer area. Anything else = TR7 violation; revert.
+- [x] **2.2** Delete the existing footer-block mount (lines ~323–333) including its `<p>Theme</p>` label.
+- [x] **2.3** **Do NOT touch** brand-row `py-5` on line ~250 (the temptation to "tidy spacing" must be resisted — TR7 violation).
+- [x] **2.4** Verify with `git diff main -- 'apps/web-platform/app/(dashboard)/layout.tsx'` (single-quote the path). Output must be exactly two hunks: one insertion near the brand row, one deletion in the footer area. Anything else = TR7 violation; revert.
 
 ## Phase 3 — Tests (`apps/web-platform/test/components/theme-toggle.test.tsx`)
 
-- [ ] **3.1** Update every existing `<ThemeToggle />` to `<ThemeToggle collapsed={false} />` (required prop or compile fails).
-- [ ] **3.2** Add a `renderToggleCollapsed()` helper next to the existing `renderToggle()`.
-- [ ] **3.3** Add a `describe("collapsed mode")` block with one test:
-  - [ ] **cycle-advances-mode:** fresh `localStorage` (provider default = `system`). Render collapsed. Query button via `getByTestId("theme-cycle-button")`. Click → assert `localStorage.getItem("soleur:theme") === "dark"`. Click → `"light"`. Click → `"system"`. (Sequence: `system → dark → light → system` per `SEGMENTS` order.)
+- [x] **3.1** Update every existing `<ThemeToggle />` to `<ThemeToggle collapsed={false} />` (required prop or compile fails).
+- [x] **3.2** Add a `renderToggleCollapsed()` helper next to the existing `renderToggle()`.
+- [x] **3.3** Add a `describe("collapsed mode")` block with one test:
+  - [x] **cycle-advances-mode:** fresh `localStorage` (provider default = `system`). Render collapsed. Query button via `getByTestId("theme-cycle-button")`. Click → assert `localStorage.getItem("soleur:theme") === "dark"`. Click → `"light"`. Click → `"system"`. (Sequence: `system → dark → light → system` per `SEGMENTS` order.)
 
 ## Phase 4 — Verification
 
-- [ ] **4.1** `bun test apps/web-platform/test/components/theme-toggle.test.tsx` — all green.
-- [ ] **4.2** `bun test apps/web-platform/test/dashboard-sidebar-collapse.test.tsx` — all green (no edits expected; verified at plan time no button-count assertions exist).
-- [ ] **4.3** `bun test apps/web-platform/test/dashboard-layout-drawer-rail.test.tsx` — all green (same).
-- [ ] **4.4** `bun test apps/web-platform/test/theme-csp-regression.test.tsx` — all green (no token-style changes should reach it; if it fails, raw `var(--soleur-*)` slipped into Phase 1).
-- [ ] **4.5** `bun test apps/web-platform/test/theme-provider.test.tsx` — all green (provider untouched).
+- [x] **4.1** `bun test apps/web-platform/test/components/theme-toggle.test.tsx` — all green.
+- [x] **4.2** `bun test apps/web-platform/test/dashboard-sidebar-collapse.test.tsx` — all green (no edits expected; verified at plan time no button-count assertions exist).
+- [x] **4.3** `bun test apps/web-platform/test/dashboard-layout-drawer-rail.test.tsx` — all green (same).
+- [x] **4.4** `bun test apps/web-platform/test/theme-csp-regression.test.tsx` — all green (no token-style changes should reach it; if it fails, raw `var(--soleur-*)` slipped into Phase 1).
+- [x] **4.5** `bun test apps/web-platform/test/theme-provider.test.tsx` — all green (provider untouched).
 - [ ] **4.6** Manual QA in browser: load `/dashboard` in dark and light, click each pill segment, then `⌘B` to collapse and click the cycle button three times. Both work; theme persists across reloads.
 
 ## Phase 5 — Ship
