@@ -134,6 +134,14 @@ describe.skipIf(!INTEGRATION_ENABLED)(
           key_version: 2,
         });
         expect(keyError, `seed api_keys for ${user.email}`).toBeNull();
+
+        // Seed a team_names row so A↔B cross-tenant reads have a target.
+        const { error: nameError } = await service.from("team_names").insert({
+          user_id: user.id,
+          leader_id: "cpo",
+          custom_name: `Synthetic-${user.id.slice(0, 8)}`,
+        });
+        expect(nameError, `seed team_names for ${user.email}`).toBeNull();
       }
 
       // 3. Mint runtime JWTs for A and B via tenant.ts (the SUT).
@@ -239,6 +247,59 @@ describe.skipIf(!INTEGRATION_ENABLED)(
       expect(convsViaB).toEqual([]);
       expect(msgsViaB).toEqual([]);
       expect(keysViaB).toEqual([]);
+    });
+
+    // Per user-impact-reviewer FINDING 5 (#3244): the `users` SELECT site at
+    // session start is a high-value cross-tenant probe surface. A leak of
+    // `github_installation_id` enumerates which founders connected which
+    // GitHub orgs. Per RLS-policy `Users can read own profile` (auth.uid() = id),
+    // a cross-founder probe must return zero rows.
+    test("users: A's JWT cannot read B's users row (RLS deny via auth.uid()=id)", async () => {
+      const { data, error } = await aClient
+        .from("users")
+        .select("workspace_path, repo_status, github_installation_id")
+        .eq("id", userB.id);
+      expect(error).toBeNull();
+      expect(data).toEqual([]);
+    });
+
+    // Per user-impact-reviewer FINDING 4 (#3244): team_names is a known
+    // prior-incident surface (`2026-04-12-silent-rls-failures-in-team-names`).
+    // PR-B's sendUserMessage routing path reads team_names under tenant client.
+    test("team_names: A's JWT cannot read B's custom names (RLS deny)", async () => {
+      const { data, error } = await aClient
+        .from("team_names")
+        .select("custom_name")
+        .eq("user_id", userB.id);
+      expect(error).toBeNull();
+      expect(data).toEqual([]);
+    });
+
+    // Per user-impact-reviewer FINDING 3 (#3244): the conversations RLS
+    // policy on PR-B's RLS-audit (plan §94) lacks `WITH CHECK` — `USING`
+    // governs both read AND write. A future maintainer adding `WITH CHECK
+    // (true)` "to be explicit" would silently defeat write-side isolation.
+    // This test documents the invariant by asserting cross-founder UPDATE
+    // affects zero rows under tenant JWT.
+    test("conversations: A's JWT cannot UPDATE B's conversation (RLS deny via USING)", async () => {
+      const { data, error } = await aClient
+        .from("conversations")
+        .update({ status: "failed" })
+        .eq("id", bConversationId)
+        .select("id");
+      // RLS-filtered UPDATE returns [] (zero rows affected). PostgREST
+      // returns 200, no error — same shape as RLS-filtered SELECT.
+      expect(error).toBeNull();
+      expect(data).toEqual([]);
+
+      // Verify B's conversation status is unchanged.
+      const { data: stillThere } = await service
+        .from("conversations")
+        .select("id, status")
+        .eq("id", bConversationId)
+        .maybeSingle();
+      expect(stillThere?.id).toBe(bConversationId);
+      expect(stillThere?.status).not.toBe("failed");
     });
 
     test("audit-row write under tenant client is rejected (write_byok_audit is service-role only)", async () => {

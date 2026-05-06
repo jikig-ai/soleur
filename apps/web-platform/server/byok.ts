@@ -48,7 +48,10 @@ export function encryptKey(
 } {
   const key = deriveUserKey(getEncryptionKey(), userId);
   const iv = randomBytes(IV_LENGTH);
-  const cipher = createCipheriv(ALGORITHM, key, iv);
+  // CWE-310: pin authTagLength=16 (128-bit tag). Without it, an
+  // attacker who can substitute the auth tag could downgrade to a
+  // shorter tag (4..15 bytes) and cut forgery cost. Per #3244 review.
+  const cipher = createCipheriv(ALGORITHM, key, iv, { authTagLength: 16 });
 
   const encrypted = Buffer.concat([
     cipher.update(plaintext, "utf8"),
@@ -79,7 +82,8 @@ export function decryptKey(
   userId: string,
 ): Buffer {
   const key = deriveUserKey(getEncryptionKey(), userId);
-  const decipher = createDecipheriv(ALGORITHM, key, iv);
+  // CWE-310: pin authTagLength=16 to enforce 128-bit tag at verify time.
+  const decipher = createDecipheriv(ALGORITHM, key, iv, { authTagLength: 16 });
   decipher.setAuthTag(tag);
 
   return Buffer.concat([decipher.update(encrypted), decipher.final()]);
@@ -96,7 +100,8 @@ export function decryptKeyLegacy(
   tag: Buffer,
 ): Buffer {
   const key = getEncryptionKey();
-  const decipher = createDecipheriv(ALGORITHM, key, iv);
+  // CWE-310: pin authTagLength=16 to enforce 128-bit tag at verify time.
+  const decipher = createDecipheriv(ALGORITHM, key, iv, { authTagLength: 16 });
   decipher.setAuthTag(tag);
 
   return Buffer.concat([decipher.update(encrypted), decipher.final()]);

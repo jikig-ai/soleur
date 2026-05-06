@@ -11,7 +11,7 @@ import { routeMessage } from "./domain-router";
 import { KeyInvalidError, type AttachmentRef, type Conversation } from "@/lib/types";
 import { persistAndDownloadAttachments } from "./attachment-pipeline";
 import { decryptKey, decryptKeyLegacy, encryptKey } from "./byok";
-import { runWithByokLease, ByokLeaseError } from "./byok-lease";
+import { runWithByokLease, ByokLeaseError, mapByokLeaseCauseToErrorCode } from "./byok-lease";
 import { sendToClient } from "./ws-handler";
 import { notifyOfflineUser, type NotificationPayload } from "./notifications";
 import * as Sentry from "@sentry/nextjs";
@@ -52,6 +52,21 @@ const log = createChildLogger("agent");
 
 let _supabase: ReturnType<typeof createServiceClient>;
 function supabase() { return _supabase ??= createServiceClient(); }
+
+/**
+ * Single source of truth for `errorCode` on WS error events thrown out
+ * of `startAgentSession` / `sendUserMessage` (#3244 §1.7.2).
+ *
+ * Replaces the duplicated `err instanceof KeyInvalidError ? "key_invalid"
+ * : undefined` ladder. Re-uses `mapByokLeaseCauseToErrorCode` so a
+ * future widening of `ByokLeaseError.cause` is a TS build break here
+ * via the helper's `: never` rail.
+ */
+function resolveSessionErrorCode(err: unknown): "key_invalid" | undefined {
+  if (err instanceof KeyInvalidError) return "key_invalid";
+  if (err instanceof ByokLeaseError) return mapByokLeaseCauseToErrorCode(err.cause);
+  return undefined;
+}
 
 import { buildToolLabel, buildToolUseWSMessage } from "./tool-labels";
 
@@ -223,12 +238,16 @@ export async function getUserApiKey(userId: string): Promise<string> {
     const plaintextBuf = decryptKeyLegacy(encrypted, iv, authTag);
     const plaintext = plaintextBuf.toString("utf8");
     const reEncrypted = encryptKey(plaintext, userId);
-    // PR-B §1.5.1: tenant-scoped RPC. The `migrate_api_key_to_v2` RPC
-    // is a SECURITY DEFINER function; under tenant JWT it runs with the
-    // founder's identity and the predicate-locked UPDATE still serializes
-    // concurrent callers via PG row locks (the lock predicate is keyed
-    // on `(id, user_id, provider, key_version=1)`).
-    const { error: rpcErr } = await tenant.rpc("migrate_api_key_to_v2", {
+    // SERVICE-ROLE: `migrate_api_key_to_v2` is REVOKEd from authenticated
+    // (migration 033:54). Granting authenticated would require auth.uid()
+    // guards in the RPC body to prevent cross-tenant probes; that's a
+    // separate migration. The predicate-locked UPDATE keyed on
+    // `(id, user_id, provider, key_version=1)` is the load-bearing
+    // access control — service-role here is safe because the tenant-
+    // scoped SELECT above (`tenant.from("api_keys")`) already enforced
+    // ownership before we obtained the row id we're now migrating.
+    // agent-runner.ts is allowlisted (.service-role-allowlist).
+    const { error: rpcErr } = await supabase().rpc("migrate_api_key_to_v2", {
       p_id: data.id,
       p_user_id: userId,
       p_provider: "anthropic",
@@ -311,9 +330,12 @@ export async function getUserServiceTokens(
         // is fresh per call; the predicate UPDATE keeps only the winning
         // writer's ciphertext.
         const reEncrypted = encryptKey(plaintext, userId);
-        // PR-B §1.5.1: tenant-scoped RPC (see sibling block in
-        // `getUserApiKey`). Same predicate-locked semantics under JWT.
-        const { error: rpcErr } = await tenant.rpc("migrate_api_key_to_v2", {
+        // SERVICE-ROLE: see sibling block in `getUserApiKey` for rationale.
+        // `migrate_api_key_to_v2` is REVOKEd from authenticated; predicate-
+        // locked UPDATE on `(id, user_id, provider, key_version=1)` is the
+        // load-bearing access control after the tenant SELECT verifies
+        // ownership of `row.id`.
+        const { error: rpcErr } = await supabase().rpc("migrate_api_key_to_v2", {
           p_id: row.id,
           p_user_id: userId,
           p_provider: row.provider,
@@ -1154,44 +1176,37 @@ issues/PRs, 4 KB comments); follow the html_url for the full text.`;
         const inputDelta = message.usage?.input_tokens ?? 0;
         const outputDelta = message.usage?.output_tokens ?? 0;
 
-        // PR-B §1.5.1 (#3244): tenant-scoped cost RPC. The RPC is keyed
-        // on `conv_id`; under tenant JWT, it runs with founder identity
-        // and the conversations table's RLS policy enforces ownership.
+        // SERVICE-ROLE: `increment_conversation_cost` is REVOKEd from
+        // authenticated (migration 017:43). Granting authenticated would
+        // require an `auth.uid() = user_id` guard in the RPC body to
+        // prevent cross-founder cost-counter inflation; that's a separate
+        // migration tracked as a follow-up. Service-role is safe here
+        // because the conversation's ownership was verified earlier in
+        // the session (tenant.from("conversations") in sendUserMessage,
+        // or the JWT-validated session start). agent-runner.ts is
+        // allowlisted (.service-role-allowlist).
         // Fire-and-forget: cost tracking is non-blocking telemetry.
         // A failure here drops per-turn cost data silently — mirror to Sentry
         // per `cq-silent-fallback-must-mirror-to-sentry` so on-call sees
         // cost-tracking drift instead of discovering it at monthly reconciliation.
-        void (async () => {
-          try {
-            const costTenant = await getFreshTenantClient(userId);
-            const { error: costError } = await costTenant.rpc(
-              "increment_conversation_cost",
-              {
-                conv_id: conversationId,
-                cost_delta: costDelta,
-                input_delta: inputDelta,
-                output_delta: outputDelta,
-              },
-            );
-            if (costError) {
-              log.error({ err: costError, conversationId }, "Failed to save cost data");
-              reportSilentFallback(costError, {
-                feature: "agent-cost-tracking",
-                op: "increment",
-                extra: { conversationId, costDelta, inputDelta, outputDelta },
-              });
-            }
-          } catch (err) {
-            // JWT-mint failure or unexpected throw — mirror to Sentry.
-            // Fire-and-forget pattern means we cannot let this reject the
-            // outer chain (no awaiter); explicit catch is the only surface.
-            reportSilentFallback(err, {
+        supabase().rpc(
+          "increment_conversation_cost",
+          {
+            conv_id: conversationId,
+            cost_delta: costDelta,
+            input_delta: inputDelta,
+            output_delta: outputDelta,
+          },
+        ).then(({ error: costError }) => {
+          if (costError) {
+            log.error({ err: costError, conversationId }, "Failed to save cost data");
+            reportSilentFallback(costError, {
               feature: "agent-cost-tracking",
-              op: "increment-tenant-mint",
-              extra: { userId, conversationId },
+              op: "increment",
+              extra: { conversationId, costDelta, inputDelta, outputDelta },
             });
           }
-        })();
+        });
 
         sendToClient(userId, {
           type: "usage_update",
@@ -1302,18 +1317,10 @@ issues/PRs, 4 KB comments); follow the html_url for the full text.`;
       }
       log.error({ err, userId, conversationId }, "Session error");
       const message = sanitizeErrorForClient(err);
-      // PR-B §1.7.2 (#3244): map ByokLeaseError {fetch_failed, decrypt_failed}
-      // to the same `key_invalid` UX as the legacy KeyInvalidError —
-      // identical client-side prompt-for-key flow. `escape` is a server-
-      // side bug surface (captured-leak), not a key-invalid signal.
-      const isKeyInvalidShape =
-        err instanceof KeyInvalidError ||
-        (err instanceof ByokLeaseError &&
-          (err.cause === "fetch_failed" || err.cause === "decrypt_failed"));
       sendToClient(userId, {
         type: "error",
         message,
-        errorCode: isKeyInvalidShape ? "key_invalid" : undefined,
+        errorCode: resolveSessionErrorCode(err),
       });
       await updateConversationStatus(userId, conversationId, "failed").catch(
         (statusErr) => {
@@ -1486,7 +1493,7 @@ export async function sendUserMessage(
     sendToClient(userId, {
       type: "error",
       message,
-      errorCode: err instanceof KeyInvalidError ? "key_invalid" : undefined,
+      errorCode: resolveSessionErrorCode(err),
     });
     updateConversationStatus(userId, conversationId, "failed").catch((statusErr) => {
       log.error(
@@ -1502,29 +1509,39 @@ export async function sendUserMessage(
     : content;
 
   // If no domain_leader is set (tag-and-route mode), use the router
-  // to determine which leaders should respond
+  // to determine which leaders should respond.
+  // PR-B §1.5.3 (#3244): the routing-side BYOK fetch goes through
+  // runWithByokLease so the plaintext key is zeroized on exit and
+  // captured-leak attempts throw ByokLeaseError{cause:"escape"}.
+  // routeMessage hits Anthropic with the plaintext apiKey; the lease
+  // bounds the in-process heap window for that call too.
   if (!conv.domain_leader) {
     try {
-      const apiKey = await getUserApiKey(userId);
+      await runWithByokLease(userId, async (lease) => {
+        const apiKey = await lease.getApiKey();
 
-      // PR-B §1.5.1 (#3244): tenant-scoped read. RLS on `team_names`
-      // enforces `auth.uid() = user_id`. `sendTenant` from earlier in
-      // this function is reusable here (TTL/2 auto-remint amortizes
-      // across the same `sendUserMessage` invocation).
-      const { data: nameRows, error: namesError } = await sendTenant
-        .from("team_names")
-        .select("leader_id, custom_name")
-        .eq("user_id", userId);
-      if (namesError) log.warn({ err: namesError }, "Failed to fetch custom team names");
-      const customNames: Record<string, string> = {};
-      for (const row of nameRows ?? []) {
-        customNames[row.leader_id] = row.custom_name;
-      }
+        // tenant-scoped read of team_names. RLS enforces auth.uid() = user_id.
+        // sendTenant from earlier in this function is reusable here
+        // (TTL/2 auto-remint amortizes across the same sendUserMessage
+        // invocation).
+        const { data: nameRows, error: namesError } = await sendTenant
+          .from("team_names")
+          .select("leader_id, custom_name")
+          .eq("user_id", userId);
+        if (namesError) log.warn({ err: namesError }, "Failed to fetch custom team names");
+        const customNames: Record<string, string> = {};
+        for (const row of nameRows ?? []) {
+          customNames[row.leader_id] = row.custom_name;
+        }
 
-      const route = await routeMessage(content, apiKey, conversationContext, customNames);
-      log.info({ leaders: route.leaders, source: route.source }, "Routed message to leaders");
-      dispatchToLeaders(userId, conversationId, route.leaders, augmentedContent, conversationContext, undefined, route.source)
-        .catch(handleSessionError);
+        const route = await routeMessage(content, apiKey, conversationContext, customNames);
+        log.info({ leaders: route.leaders, source: route.source }, "Routed message to leaders");
+        // Fire-and-forget the dispatch — it has its own runWithByokLease
+        // wrap inside startAgentSession (per §1.5.3), so the routing-side
+        // lease can close before the per-leader lease bodies run.
+        dispatchToLeaders(userId, conversationId, route.leaders, augmentedContent, conversationContext, undefined, route.source)
+          .catch(handleSessionError);
+      });
     } catch (err) {
       handleSessionError(err);
     }

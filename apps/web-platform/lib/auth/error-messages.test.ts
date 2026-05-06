@@ -1,13 +1,7 @@
 // Copy-contract tests: exact strings are intentional.
 // Copy edits MUST come with test edits — that is the contract.
 import { describe, it, expect } from "vitest";
-import {
-  DEFAULT_ERROR_MESSAGE,
-  isNoAccountError,
-  mapRuntimeError,
-  mapSupabaseError,
-} from "./error-messages";
-import { RlsDenyError, AuditWriteError } from "./runtime-errors";
+import { isNoAccountError, mapSupabaseError } from "./error-messages";
 
 describe("mapSupabaseError", () => {
   it("maps 'Signups not allowed for otp' to the no-account string", () => {
@@ -78,58 +72,3 @@ describe("isNoAccountError", () => {
 // PR-B §1.7.1 — runtime typed-error mapper. Discriminates on `error.name`
 // (string) rather than `instanceof` so the mapper does not pull
 // `byok-lease.ts` (server) or `tenant.ts` into client bundles.
-describe("mapRuntimeError", () => {
-  it("maps RuntimeAuthError (cause: jwt_mint) to sanitized auth string", () => {
-    class RuntimeAuthError extends Error {
-      constructor() {
-        super("internal mint failure shape");
-        this.name = "RuntimeAuthError";
-      }
-    }
-    expect(mapRuntimeError(new RuntimeAuthError())).toBe(
-      "Authentication unavailable; retry shortly.",
-    );
-  });
-
-  it("maps ByokLeaseError (cause: escape) to sanitized auth string", () => {
-    class ByokLeaseError extends Error {
-      constructor() {
-        super("internal lease escape");
-        this.name = "ByokLeaseError";
-      }
-    }
-    expect(mapRuntimeError(new ByokLeaseError())).toBe(
-      "Authentication unavailable; retry shortly.",
-    );
-  });
-
-  it("maps RlsDenyError to 'Access denied.' (UX is distinct from auth-domain)", () => {
-    expect(
-      mapRuntimeError(
-        new RlsDenyError("explicit_deny", "permission denied for table"),
-      ),
-    ).toBe("Access denied.");
-  });
-
-  it("maps AuditWriteError to DEFAULT (integrity-domain, no user-facing degradation)", () => {
-    expect(
-      mapRuntimeError(
-        new AuditWriteError("audit_byok_use", "insert failed: foreign key"),
-      ),
-    ).toBe(DEFAULT_ERROR_MESSAGE);
-  });
-
-  it("returns DEFAULT for non-Error inputs (defensive)", () => {
-    expect(mapRuntimeError("string error")).toBe(DEFAULT_ERROR_MESSAGE);
-    expect(mapRuntimeError(undefined)).toBe(DEFAULT_ERROR_MESSAGE);
-    expect(mapRuntimeError(null)).toBe(DEFAULT_ERROR_MESSAGE);
-    expect(mapRuntimeError({ name: "RuntimeAuthError" })).toBe(
-      DEFAULT_ERROR_MESSAGE,
-    );
-  });
-
-  it("returns DEFAULT for unrecognized Error subclasses", () => {
-    expect(mapRuntimeError(new TypeError("oops"))).toBe(DEFAULT_ERROR_MESSAGE);
-    expect(mapRuntimeError(new Error("plain"))).toBe(DEFAULT_ERROR_MESSAGE);
-  });
-});

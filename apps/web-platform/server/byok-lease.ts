@@ -60,6 +60,34 @@ export class ByokLeaseError extends Error {
   }
 }
 
+/**
+ * Map a `ByokLeaseError.cause` to the WS `errorCode` the client uses to
+ * trigger the BYOK-key-prompt UX. Returns `"key_invalid"` for the two
+ * causes that legitimately mean "the founder's key on file is unusable"
+ * (`fetch_failed` / `decrypt_failed`); returns `undefined` for `"escape"`
+ * because that is a server-side capture-leak bug, not a key-invalid signal.
+ *
+ * Per `cq-union-widening-grep-three-patterns`: the exhaustive `switch` +
+ * `: never` rail makes a future `cause` widening (e.g., `"expired"` for
+ * #3363) a TS build break here rather than a silent fall-through to
+ * `undefined` at every call site.
+ */
+export function mapByokLeaseCauseToErrorCode(
+  cause: ByokLeaseError["cause"],
+): "key_invalid" | undefined {
+  switch (cause) {
+    case "fetch_failed":
+    case "decrypt_failed":
+      return "key_invalid";
+    case "escape":
+      return undefined;
+    default: {
+      const _exhaustive: never = cause;
+      return _exhaustive;
+    }
+  }
+}
+
 export interface ByokLease {
   /**
    * Return the plaintext API key as a string. Lazy-decrypts on first

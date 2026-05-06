@@ -207,14 +207,18 @@ interface CacheEntry {
 }
 
 /**
- * Process-local per-userId cache of `{ jwt, mintedAt, ttlSec, client }`.
+ * Process-local per-userId cache of `Promise<CacheEntry>`.
+ *
+ * Storing the in-flight Promise (not the resolved value) is the load-
+ * bearing dedup: concurrent cold callers (e.g., `Promise.all([lease.getApiKey(),
+ * getUserServiceTokens(userId)])` at session start) await the same
+ * pending mint instead of each consuming a slot from the 60/hr ceiling.
  * Entries are remminted when `now - mintedAt > ttlSec/2` (Kieran P1.1
- * boundary) so a fresh client is always returned to the caller before the
- * old JWT actually expires. In-flight queries holding the previous client
- * reference continue to completion (PostgREST's resultset is unaffected by
+ * boundary). In-flight queries holding the previous client reference
+ * continue to completion (PostgREST's resultset is unaffected by
  * subsequent header changes).
  */
-const cache = new Map<UserId, CacheEntry>();
+const cache = new Map<UserId, Promise<CacheEntry>>();
 
 /**
  * Get a tenant-scoped Supabase client for the given founder, transparently
@@ -233,23 +237,41 @@ export async function getFreshTenantClient(
   userId: UserId,
 ): Promise<SupabaseClient> {
   const now = Date.now();
-  const entry = cache.get(userId);
+  const inflight = cache.get(userId);
 
-  if (entry && now - entry.mintedAt < (entry.ttlSec * 1000) / 2) {
-    return entry.client;
+  if (inflight) {
+    // Settled or in-flight — peek the resolved freshness if settled,
+    // otherwise let the second concurrent caller share the same mint.
+    // We can't synchronously inspect a Promise's state; the simplest
+    // dedup is to await and then re-validate freshness. Cost on a hot
+    // path is one extra microtask vs the alternative double-mint.
+    const entry = await inflight;
+    if (now - entry.mintedAt < (entry.ttlSec * 1000) / 2) {
+      return entry.client;
+    }
+    // Stale — fall through to remint.
   }
 
-  const minted = await mintFounderJwt(userId, { ttlSec: DEFAULT_TTL_SEC });
-  const client = createTenantClient(minted.jwt);
+  const minting: Promise<CacheEntry> = (async () => {
+    const minted = await mintFounderJwt(userId, { ttlSec: DEFAULT_TTL_SEC });
+    return {
+      jwt: minted.jwt,
+      mintedAt: minted.mintedAt,
+      ttlSec: minted.ttlSec,
+      client: createTenantClient(minted.jwt),
+    };
+  })();
+  cache.set(userId, minting);
 
-  cache.set(userId, {
-    jwt: minted.jwt,
-    mintedAt: minted.mintedAt,
-    ttlSec: minted.ttlSec,
-    client,
-  });
-
-  return client;
+  try {
+    const entry = await minting;
+    return entry.client;
+  } catch (err) {
+    // Don't keep a rejected Promise in the cache — every subsequent
+    // caller would re-throw the same error without retrying the mint.
+    if (cache.get(userId) === minting) cache.delete(userId);
+    throw err;
+  }
 }
 
 /**
