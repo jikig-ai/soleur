@@ -322,6 +322,34 @@ Flag any unverified CLI invocation as **P1 (docs-trust)** — NOT P3 polish. A
 fabricated CLI command on a high-intent landing page breaks first-touch
 trust (#1810/#2550).
 
+### 4.6. Build-step Gate Claim Verification
+
+When a review agent claims that a build-step CI gate (e.g., post-Eleventy
+`grep -rEn ... _site/`, post-Webpack chunk regex, post-`tsc` output scan)
+will fail on rendered output, **rebuild the artifact directory BEFORE
+running the gate locally**. Never run the gate against an existing
+`_site/`, `dist/`, `build/`, or `.next/` from a prior session — those
+predate the source change under review and return false-pass (zero
+matches) even when the rendered output post-rebuild contains the flagged
+strings.
+
+The verification command order is non-negotiable:
+
+```bash
+<rebuild command> && <literal CI gate command>
+```
+
+Examples:
+- Eleventy: `npx @11ty/eleventy --quiet && grep -rEn '<regex>' _site/`
+- Next.js: `bun run build && grep -rEn '<regex>' .next/`
+
+If the rebuild step is unfamiliar, read the corresponding `.github/workflows/`
+job to find the exact build command the gate runs against — match it, do
+not invent one. A stale-artifact false-pass is the most common dismissal
+class for build-output gates (PR #3296 → #3347 hotfix). Treat any agent
+finding of the form "rendered/built artifact X contains Y" as a
+fresh-build-required claim by default.
+
 ### 5. Findings Synthesis and GitHub Issue Creation
 
 <critical_requirement>
@@ -625,6 +653,10 @@ When flagging a skill description word-budget overrun, the tokenizer MUST match 
 When a review agent reports branch-scope regressions (claims the PR reverts merged commits, touches files outside the PR's linked issue/directory, or shows a file list materially larger than expected), verify with `git diff origin/main...HEAD --name-only` (three-dot) before accepting. Two-dot variants like `git diff main..HEAD` show commits on `main` since the fork point (NOT commits on HEAD) and produce wildly different file lists when the branch is behind main — a common agent failure mode that surfaces as a false-positive P0. See `knowledge-base/project/learnings/2026-04-22-markdown-table-parser-papercuts-and-review-diff-direction.md`.
 
 When a review agent recommends ADDING a field, header, or schema element to a security-relevant surface (wire schema, redaction filter, log scrubber, error envelope), grep the diff scope for `// See #N` provenance comments referencing prior REMOVALS of the same artifact BEFORE applying the fix. A `Pn` rating reflects local severity; it does not auto-override deliberate cross-cutting decisions encoded in code comments. If a prior PR removed the field as a security/privacy mitigation, flip disposition to `contested-design` scope-out with the prior issue # named in the filing — code-simplicity-reviewer reliably co-signs when the threat-model context is surfaced. See `knowledge-base/project/learnings/2026-05-05-agent-native-recommendation-vs-prior-security-removal.md`.
+
+ADRs documenting an *already-chosen-and-shipping* architecture fail `architectural-pivot` — the criterion requires the *fix itself* to change a cross-codebase pattern, and an ADR for the path you're already shipping is documentation work, not pattern-changing work. Inline-absorb ADRs of this shape (~1 markdown file under `knowledge-base/engineering/architecture/decisions/`) rather than scoping them out. Symmetric rule: when `code-simplicity-reviewer` DISSENTs by naming a *different* criterion that fits, re-file under that criterion (fresh concur cycle) rather than absorbing inline — the dissent is on the label, not on the underlying deferral. See `knowledge-base/project/learnings/2026-05-06-scope-out-criterion-misclassification-adr-not-architectural-pivot.md`.
+
+When a reviewer prescribes ADDING a defensive wrapper (try/catch around an SDK call, a typeof guard, a validation step, a retry envelope) citing a single in-tree precedent, grep the same file/module for ≥3 sibling unwrapped invocations of the same primitive BEFORE applying. If precedent is consistent and the new code mirrors it, the wrapper recommendation is precedent-contradicting — reject with a one-line disposition citing the unwrapped sites. The cited precedent may be helper-internal (boot-path safety) and not generalize to call-site code. Cost of verification: one grep. Cost of applying a precedent-contradicting wrapper: a commit that future reviewers will roll back when they apply the same heuristic. See `knowledge-base/project/learnings/2026-05-05-phase-1-instrumentation-when-prior-fix-visibly-missed.md` (#3287 review's false-positive P1 on a `Sentry.addBreadcrumb` call that mirrored 5 in-file precedents).
 
 ### Important: P1 Findings Block Merge
 

@@ -499,7 +499,7 @@ export function ChatInput({
             <div
               key={att.id}
               data-testid="attachment-preview"
-              className="relative flex items-center gap-2 rounded-lg border border-neutral-700 bg-neutral-800 px-2 py-1.5"
+              className="relative flex items-center gap-2 rounded-lg border border-soleur-border-default bg-soleur-bg-surface-2 px-2 py-1.5"
             >
               {att.preview ? (
                 <img
@@ -508,19 +508,19 @@ export function ChatInput({
                   className="h-8 w-8 rounded object-cover"
                 />
               ) : (
-                <div className="flex h-8 w-8 items-center justify-center rounded bg-neutral-700 text-xs text-neutral-400">
+                <div className="flex h-8 w-8 items-center justify-center rounded bg-soleur-bg-surface-2 text-xs text-soleur-text-secondary">
                   PDF
                 </div>
               )}
               <div className="flex flex-col">
-                <span className="max-w-[120px] truncate text-xs text-neutral-300">
+                <span className="max-w-[120px] truncate text-xs text-soleur-text-secondary">
                   {att.file.name}
                 </span>
                 {att.error ? (
                   <span className="text-xs text-red-400">{att.error}</span>
                 ) : att.progress > 0 && att.progress < 100 ? (
                   <div className="mt-0.5 flex items-center gap-1.5">
-                    <div className="h-1 w-16 overflow-hidden rounded-full bg-neutral-700">
+                    <div className="h-1 w-16 overflow-hidden rounded-full bg-soleur-bg-surface-2">
                       <div
                         className="h-full bg-amber-500"
                         style={{
@@ -529,7 +529,7 @@ export function ChatInput({
                         }}
                       />
                     </div>
-                    <span className="text-[10px] tabular-nums text-neutral-400">
+                    <span className="text-[10px] tabular-nums text-soleur-text-secondary">
                       {att.progress}%
                     </span>
                   </div>
@@ -540,7 +540,7 @@ export function ChatInput({
               <button
                 type="button"
                 onClick={() => removeAttachment(att.id)}
-                className="ml-1 rounded p-0.5 text-neutral-500 hover:text-neutral-300"
+                className="ml-1 rounded p-0.5 text-soleur-text-muted hover:text-soleur-text-secondary"
                 aria-label={`Remove ${att.file.name}`}
               >
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -566,7 +566,7 @@ export function ChatInput({
           type="button"
           onClick={() => fileInputRef.current?.click()}
           disabled={disabled || isUploading}
-          className="flex h-[44px] w-[44px] shrink-0 items-center justify-center rounded-xl border border-neutral-700 text-neutral-400 transition-colors hover:border-neutral-500 hover:text-white disabled:opacity-50"
+          className="flex h-[44px] w-[44px] shrink-0 items-center justify-center rounded-xl border border-soleur-border-default text-soleur-text-secondary transition-colors hover:border-soleur-border-emphasized hover:text-soleur-text-primary disabled:opacity-50"
           aria-label="Attach file"
         >
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -598,7 +598,7 @@ export function ChatInput({
             rows={1}
             data-quote-flashing={flashQuote ? "true" : undefined}
             className={
-              "w-full resize-none rounded-xl border border-neutral-700 bg-neutral-900 px-4 py-2.5 pr-12 text-sm text-white placeholder:text-neutral-500 focus:border-neutral-500 focus:outline-none disabled:opacity-50 min-h-[72px] max-h-[140px] overflow-y-auto transition-shadow" +
+              "w-full resize-none rounded-xl border border-soleur-border-default bg-soleur-bg-surface-1 px-4 py-2.5 pr-12 text-sm text-soleur-text-primary placeholder:text-soleur-text-muted focus:border-soleur-border-emphasized focus:outline-none disabled:opacity-50 min-h-[72px] max-h-[140px] overflow-y-auto transition-shadow" +
               (flashQuote ? " ring-2 ring-amber-400" : "")
             }
           />
@@ -607,7 +607,7 @@ export function ChatInput({
             type="button"
             onClick={handleAtButtonClick}
             disabled={disabled}
-            className="absolute bottom-2.5 right-2 rounded-md p-1 text-neutral-500 transition-colors hover:text-neutral-300 disabled:opacity-50 md:hidden"
+            className="absolute bottom-2.5 right-2 rounded-md p-1 text-soleur-text-muted transition-colors hover:text-soleur-text-secondary disabled:opacity-50 md:hidden"
             aria-label="Mention a leader"
           >
             <span className="text-sm font-medium">@</span>
@@ -617,7 +617,7 @@ export function ChatInput({
           type="button"
           onClick={handleSubmit}
           disabled={disabled || isUploading || (!value.trim() && attachments.length === 0)}
-          className="flex h-[44px] w-[44px] shrink-0 items-center justify-center rounded-xl bg-amber-600 text-white transition-colors hover:bg-amber-500 disabled:opacity-50 disabled:hover:bg-amber-600"
+          className="flex h-[44px] w-[44px] shrink-0 items-center justify-center rounded-xl bg-amber-600 text-soleur-text-on-accent transition-colors hover:bg-amber-500 disabled:opacity-50 disabled:hover:bg-amber-600"
           aria-label="Send message"
         >
           {isUploading ? (

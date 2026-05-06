@@ -35,15 +35,15 @@ export function RoutedLeadersStrip({
   return (
     <div
       data-testid="routed-leaders-strip"
-      className={`border-b border-neutral-800/50 px-4 py-2 ${isFull ? "md:px-6" : ""}`}
+      className={`border-b border-soleur-border-default/50 px-4 py-2 ${isFull ? "md:px-6" : ""}`}
     >
       <span
-        className="inline-flex items-center gap-1.5 rounded-full bg-neutral-800/50 px-3 py-1 text-xs text-neutral-400"
+        className="inline-flex items-center gap-1.5 rounded-full bg-soleur-bg-surface-2/50 px-3 py-1 text-xs text-soleur-text-secondary"
         aria-label={`${CONCIERGE_TITLE} ${verb} ${visibleJoin}`}
       >
         <LeaderAvatar leaderId={CC_ROUTER_LEADER_ID} size="sm" />
         <span>{CONCIERGE_TITLE}</span>
-        <span className="text-neutral-600">·</span>
+        <span className="text-soleur-text-muted">·</span>
         {verb} {visibleJoin}
       </span>
     </div>

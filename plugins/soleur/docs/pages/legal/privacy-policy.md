@@ -31,7 +31,7 @@ We are committed to protecting your privacy. This Policy explains what data is a
 
 The Soleur source code is available at the GitHub repository [jikig-ai/soleur](https://github.com/jikig-ai/soleur).
 
-For privacy inquiries, you may contact us at <legal@jikigai.com> (include "Privacy" in the subject line), by opening an issue on the GitHub repository, or through the website at [soleur.ai](https://soleur.ai).
+For privacy inquiries, you may contact us at <legal@jikigai.com> (include "Privacy" in the subject line), by opening an issue on the GitHub repository, or through the website at [soleur.ai](https://www.soleur.ai).
 
 ## 3. What the Plugin Does
 
@@ -62,7 +62,7 @@ All of this data remains on your machine. We have no access to it.
 
 ### 4.3 Data Collected by the Docs Site
 
-The Soleur documentation site at [soleur.ai](https://soleur.ai) is hosted on **GitHub Pages**. We use **Plausible Analytics** ([plausible.io](https://plausible.io)) for privacy-respecting website analytics. Plausible does not use cookies, local storage, or fingerprinting. It collects the following anonymous, aggregated data:
+The Soleur documentation site at [soleur.ai](https://www.soleur.ai) is hosted on **GitHub Pages**. We use **Plausible Analytics** ([plausible.io](https://plausible.io)) for privacy-respecting website analytics. Plausible does not use cookies, local storage, or fingerprinting. It collects the following anonymous, aggregated data:
 
 - Page URLs visited
 - Referrer URLs (how visitors find the site)
@@ -309,7 +309,7 @@ If you have questions about this Privacy Policy or our data practices, you can r
 
 - **Email:** <legal@jikigai.com>
 - **GitHub:** Open an issue at [github.com/jikig-ai/soleur](https://github.com/jikig-ai/soleur)
-- **Website:** [soleur.ai](https://soleur.ai)
+- **Website:** [soleur.ai](https://www.soleur.ai)
 - **GDPR / Data Protection Inquiries:** <legal@jikigai.com> (include "GDPR" in the subject line)
 
 To exercise your data subject rights under GDPR, send a written request to <legal@jikigai.com>. We will acknowledge your request within 5 business days and respond substantively within one month of receipt, as required by GDPR Article 12(3). This period may be extended by two further months where necessary, taking into account the complexity or volume of requests, in which case we will inform you of the extension and reasons within the initial one-month period.

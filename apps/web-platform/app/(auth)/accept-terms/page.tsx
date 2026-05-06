@@ -37,19 +37,19 @@ export default function AcceptTermsPage() {
       <div className="w-full max-w-sm space-y-6">
         <div className="space-y-2 text-center">
           <h1 className="text-2xl font-semibold">Accept Terms & Conditions</h1>
-          <p className="text-sm text-neutral-400">
+          <p className="text-sm text-soleur-text-secondary">
             To continue using Soleur, please review and accept our terms.
           </p>
         </div>
 
         <form onSubmit={handleSubmit} className="space-y-4">
-          <label className="flex items-start gap-3 text-sm text-neutral-400">
+          <label className="flex items-start gap-3 text-sm text-soleur-text-secondary">
             <input
               type="checkbox"
               required
               checked={accepted}
               onChange={(e) => setAccepted(e.target.checked)}
-              className="mt-0.5 h-4 w-4 rounded border-neutral-700 bg-neutral-900"
+              className="mt-0.5 h-4 w-4 rounded border-soleur-border-default bg-soleur-bg-surface-1"
             />
             <span>
               I agree to the{" "}
@@ -57,7 +57,7 @@ export default function AcceptTermsPage() {
                 href="https://soleur.ai/pages/legal/terms-and-conditions.html"
                 target="_blank"
                 rel="noopener noreferrer"
-                className="text-white underline hover:text-neutral-300"
+                className="text-soleur-text-primary underline hover:text-soleur-text-secondary"
               >
                 Terms &amp; Conditions
               </a>{" "}
@@ -66,7 +66,7 @@ export default function AcceptTermsPage() {
                 href="https://soleur.ai/pages/legal/privacy-policy.html"
                 target="_blank"
                 rel="noopener noreferrer"
-                className="text-white underline hover:text-neutral-300"
+                className="text-soleur-text-primary underline hover:text-soleur-text-secondary"
               >
                 Privacy Policy
               </a>
@@ -78,7 +78,7 @@ export default function AcceptTermsPage() {
           <button
             type="submit"
             disabled={loading || !accepted}
-            className="w-full rounded-lg bg-white px-4 py-3 text-sm font-medium text-black hover:bg-neutral-200 disabled:opacity-50"
+            className="w-full rounded-lg bg-soleur-accent-gold-fill px-4 py-3 text-sm font-medium text-soleur-text-on-accent hover:opacity-90 disabled:opacity-50"
           >
             {loading ? "Saving..." : "Accept and continue"}
           </button>

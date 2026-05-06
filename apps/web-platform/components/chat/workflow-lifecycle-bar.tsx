@@ -38,16 +38,16 @@ export function WorkflowLifecycleBar({
       return (
         <div
           data-lifecycle-state="active"
-          className="flex items-center gap-3 border-b border-neutral-800 bg-neutral-900/40 px-4 py-2"
+          className="flex items-center gap-3 border-b border-soleur-border-default bg-soleur-bg-surface-1/40 px-4 py-2"
         >
           <span className="rounded-full bg-amber-900/30 px-2 py-0.5 text-[10px] font-semibold text-amber-300">
             {lifecycle.workflow}
           </span>
           {lifecycle.phase ? (
-            <span className="text-xs text-neutral-400">{lifecycle.phase}</span>
+            <span className="text-xs text-soleur-text-secondary">{lifecycle.phase}</span>
           ) : null}
           {typeof lifecycle.cumulativeCostUsd === "number" ? (
-            <span className="text-xs text-neutral-500">
+            <span className="text-xs text-soleur-text-muted">
               ~${lifecycle.cumulativeCostUsd.toFixed(4)}
             </span>
           ) : null}
@@ -56,7 +56,7 @@ export function WorkflowLifecycleBar({
               <button
                 type="button"
                 onClick={onSwitchWorkflow}
-                className="rounded-md border border-neutral-700 px-2 py-1 text-xs text-neutral-300 hover:border-neutral-500"
+                className="rounded-md border border-soleur-border-default px-2 py-1 text-xs text-soleur-text-secondary hover:border-soleur-border-emphasized"
               >
                 Switch workflow
               </button>
@@ -68,10 +68,10 @@ export function WorkflowLifecycleBar({
       return (
         <div
           data-lifecycle-state="ended"
-          className="flex flex-col gap-2 border-b border-neutral-800 bg-neutral-900/40 px-4 py-3"
+          className="flex flex-col gap-2 border-b border-soleur-border-default bg-soleur-bg-surface-1/40 px-4 py-3"
         >
           <div className="flex items-center gap-2">
-            <span className="rounded-full bg-neutral-800 px-2 py-0.5 text-[10px] font-semibold text-neutral-200">
+            <span className="rounded-full bg-soleur-bg-surface-2 px-2 py-0.5 text-[10px] font-semibold text-soleur-text-primary">
               {lifecycle.workflow}
             </span>
             <span
@@ -84,14 +84,14 @@ export function WorkflowLifecycleBar({
               {lifecycle.status}
             </span>
             {lifecycle.summary ? (
-              <span className="truncate text-xs text-neutral-400">{lifecycle.summary}</span>
+              <span className="truncate text-xs text-soleur-text-secondary">{lifecycle.summary}</span>
             ) : null}
           </div>
           <div>
             <button
               type="button"
               onClick={onStartNewConversation}
-              className="rounded-md bg-amber-600 px-3 py-1 text-xs text-white hover:bg-amber-500"
+              className="rounded-md bg-amber-600 px-3 py-1 text-xs text-soleur-text-on-accent hover:bg-amber-500"
             >
               Start new conversation
             </button>

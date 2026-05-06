@@ -295,7 +295,7 @@ If domain leaders participated in Phase 0.5, include a `## Domain Assessments` s
 - Only relevant domains get `### [Domain Name]` subsections with summaries
 - Omit the entire section if no domain leaders participated
 
-If domain leaders reported capability gaps in their assessments, include a `## Capability Gaps` section after "Domain Assessments" listing each gap with what is missing, which domain it belongs to, and why it is needed. Omit this section if no gaps were reported.
+If domain leaders reported capability gaps in their assessments, include a `## Capability Gaps` section after "Domain Assessments" listing each gap with what is missing, which domain it belongs to, and why it is needed. Omit this section if no gaps were reported. **Each capability-gap claim MUST cite specific evidence** (the exact grep / `find` command run, file paths checked, or symbols searched). Bare assertions like "no existing X manages Y" without evidence are research misses, not gaps — the plan-skill's research phase will surface them in a Research Reconciliation table and the plan-time pivot is more expensive than getting the brainstorm grep right. **Why:** PR #3297 — brainstorm declared "no existing Cloudflare Terraform root manages soleur.ai" via a depth-4 `find`; the root existed at `apps/web-platform/infra/` and managed the entire zone, propagating three pivot-required claims into the spec. See `knowledge-base/project/learnings/2026-05-05-brainstorm-capability-gaps-need-repo-grep.md`.
 
 Ensure the brainstorms directory exists before writing.
 
@@ -429,7 +429,7 @@ Use **AskUserQuestion tool** to present next steps:
 **Options:**
 
 1. **Proceed to planning** - Use `skill: soleur:plan` (will auto-detect this brainstorm)
-2. **Create visual designs** - Run ux-design-lead agent for .pen file design (requires Pencil extension). The agent auto-opens the screenshots folder for founder review after completion.
+2. **Create visual designs** - Run ux-design-lead agent for .pen file design (requires Pencil extension). The agent auto-opens the screenshots folder for founder review after completion. **Do NOT supply output paths in the spawn prompt** — the agent owns the path convention (`knowledge-base/product/design/{domain}/`). Passing app-tree paths (e.g., `apps/web-platform/design/`) breaks `/soleur:ux-audit` discoverability and is silently gitignored by app-level rules. The agent's output-path guard will override invoker-supplied paths and announce the override.
 3. **Refine design further** - Continue exploring
 4. **Done for now** - Return later
 

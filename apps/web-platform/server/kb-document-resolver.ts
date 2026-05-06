@@ -15,9 +15,14 @@
 import { readFile } from "fs/promises";
 import path from "path";
 
+import * as Sentry from "@sentry/nextjs";
 import { createServiceClient } from "@/lib/supabase/service";
 import { reportSilentFallback } from "./observability";
 import { isPathInWorkspace } from "./sandbox";
+import {
+  extractPdfText,
+  type PdfExtractErrorClass,
+} from "./pdf-text-extract";
 
 /** Per-conversation cap on inlined document body. Mirrors the legacy
  *  `agent-runner.ts MAX_INLINE_BYTES` (~12-15K tokens). Source of truth
@@ -74,6 +79,14 @@ export async function resolveConciergeDocumentContext(args: {
   artifactPath?: string;
   documentKind?: "pdf" | "text";
   documentContent?: string;
+  /**
+   * Set when the in-process PDF extractor returned a typed failure
+   * (`oversized_buffer | lazy_import_failed | encrypted | corrupted |
+   * parse_error | empty_text`). Threaded into the runner so the system
+   * prompt picks `buildPdfUnreadableDirective` (content-grounded reply)
+   * instead of `buildPdfGatedDirective` (apt-get-cascade-prone Read path).
+   */
+  documentExtractError?: PdfExtractErrorClass;
 }> {
   const { userId, contextPath, providedContent } = args;
   if (!contextPath || contextPath.length === 0) return {};
@@ -104,10 +117,6 @@ export async function resolveConciergeDocumentContext(args: {
     };
   }
 
-  if (isPdf) {
-    return { artifactPath: contextPath, documentKind: "pdf" };
-  }
-
   let workspacePath: string;
   try {
     workspacePath = await fetchUserWorkspacePath(userId);
@@ -120,8 +129,14 @@ export async function resolveConciergeDocumentContext(args: {
       op: "fetchUserWorkspacePath",
       extra: { userId, pathBasename: path.basename(contextPath) },
     });
-    // Still surface the path so the router knows the scope.
-    return { artifactPath: contextPath };
+    // Surface the path AND the kind so the runner emits the correct
+    // assertive directive (gated PDF Read vs text Read). Without the kind,
+    // emitConciergeDocumentResolutionBreadcrumb fires its suspicious-skip
+    // warning on a path that's actually well-formed — just unfetchable.
+    return {
+      artifactPath: contextPath,
+      documentKind: isPdf ? "pdf" : "text",
+    };
   }
 
   const fullPath = path.join(workspacePath, contextPath);
@@ -129,6 +144,100 @@ export async function resolveConciergeDocumentContext(args: {
     // Path-traversal attempt — drop the path entirely (do not leak it
     // back into the prompt) and fall through to the bare router prompt.
     return {};
+  }
+
+  if (isPdf) {
+    // #3338 — server-side PDF text extraction. Read raw bytes (NOT utf-8)
+    // and hand to the in-process pdfjs-dist parser. On success, inline the
+    // body via documentContent so the agent never has to call Read (which
+    // is the proximate cause of the apt-get/find Bash modal cascade). On
+    // failure, fall through to the existing Read-directive branch and
+    // mirror to Sentry so operators see the failure class.
+    try {
+      const buffer = await readFile(fullPath);
+      const result = await extractPdfText(buffer, CONCIERGE_INLINE_CAP_BYTES);
+      // #3338 Phase 5.1 — observability breadcrumb. Captures the extractor's
+      // outcome on every cold-Query construction so operators can correlate
+      // PDF-summary-quality with extraction shape (page count, truncation,
+      // body size). PII redaction: log basename only — KB paths can carry
+      // user-identifying directory hierarchy. The 2026-05-06 follow-up adds
+      // `errorClass` so a future Sentry event names the failure class
+      // directly without breadcrumb hunting.
+      if ("error" in result) {
+        // Extraction failed (oversized, corrupted, encrypted, lazy-import
+        // failure, parse error, OR empty_text). Mirror to Sentry tagged with
+        // the failure class so operators see WHICH shape fired without
+        // parsing breadcrumbs. `empty_text` gets a distinct `op` so
+        // Hypothesis B (scanned PDFs) is filterable from Hypothesis A
+        // (oversized) in the Sentry UI.
+        Sentry.addBreadcrumb({
+          category: "cc-pdf-extractor",
+          message: "extractPdfText completed",
+          level: "info",
+          data: {
+            ok: false,
+            errorClass: result.error,
+            pageCount: result.pageCount ?? null,
+            truncated: null,
+            textBytes: 0,
+            pathBasename: path.basename(contextPath),
+          },
+        });
+        const op =
+          result.error === "empty_text"
+            ? "extractPdfText.empty_text"
+            : "extractPdfText";
+        reportSilentFallback(new Error(`extractPdfText ${result.error}`), {
+          feature: "kb-concierge-context",
+          op,
+          extra: {
+            userId,
+            pathBasename: path.basename(contextPath),
+            errorClass: result.error,
+            ...(result.pageCount !== undefined
+              ? { pageCount: result.pageCount }
+              : {}),
+          },
+        });
+        return {
+          artifactPath: contextPath,
+          documentKind: "pdf",
+          documentExtractError: result.error,
+        };
+      }
+      Sentry.addBreadcrumb({
+        category: "cc-pdf-extractor",
+        message: "extractPdfText completed",
+        level: "info",
+        data: {
+          ok: true,
+          errorClass: null,
+          pageCount: result.pageCount,
+          truncated: result.truncated,
+          textBytes: result.text.length,
+          pathBasename: path.basename(contextPath),
+        },
+      });
+      if (result.text.length > 0) {
+        return {
+          artifactPath: contextPath,
+          documentKind: "pdf",
+          documentContent: result.text,
+        };
+      }
+      // Unreachable under the current extractor contract: an empty text
+      // body is now classified as `{ error: "empty_text" }` upstream and
+      // handled in the failure branch above. Keep this terminal return as
+      // a tight type-narrowing guard so a future contract regression
+      // (extractor reverts to returning `{ text: "" }` on success) cannot
+      // produce a literal-undefined `documentContent`.
+      return { artifactPath: contextPath, documentKind: "pdf" };
+    } catch {
+      // readFile failed (missing file, permission denied) — let the agent
+      // try Read. No Sentry mirror: this is not a degraded extractor, just
+      // an absent file the UI may have stale-referenced.
+      return { artifactPath: contextPath, documentKind: "pdf" };
+    }
   }
 
   try {

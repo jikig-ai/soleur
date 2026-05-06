@@ -26,17 +26,17 @@ export function ProjectSetupCard({
 }: ProjectSetupCardProps) {
   return (
     <section>
-      <h2 className="mb-4 text-lg font-semibold text-white">Project</h2>
-      <div className="rounded-xl border border-neutral-800 bg-neutral-900/50 p-6">
+      <h2 className="mb-4 text-lg font-semibold text-soleur-text-primary">Project</h2>
+      <div className="rounded-xl border border-soleur-border-default bg-soleur-bg-surface-1/50 p-6">
         {repoStatus === "not_connected" && (
           <div>
-            <p className="mb-4 text-sm text-neutral-400">
+            <p className="mb-4 text-sm text-soleur-text-secondary">
               Connect a GitHub project so your AI team has full context on your
               codebase.
             </p>
             <a
               href="/connect-repo?return_to=/dashboard/settings"
-              className="inline-block rounded-lg bg-white px-4 py-2 text-sm font-medium text-neutral-900 transition-colors hover:bg-neutral-200"
+              className="inline-block rounded-lg bg-soleur-accent-gold-fill px-4 py-2 text-sm font-medium text-soleur-text-on-accent transition-colors hover:opacity-90"
             >
               Set Up Project
             </a>
@@ -47,7 +47,7 @@ export function ProjectSetupCard({
           <div className="space-y-4">
             <div className="space-y-1">
               <div className="flex items-center gap-2">
-                <p className="text-sm font-medium text-white">
+                <p className="text-sm font-medium text-soleur-text-primary">
                   {extractRepoName(repoUrl)}
                 </p>
                 <span className="rounded-full bg-green-900/50 px-2 py-0.5 text-xs font-medium text-green-400">
@@ -55,7 +55,7 @@ export function ProjectSetupCard({
                 </span>
               </div>
               {repoLastSyncedAt && (
-                <p className="text-sm text-neutral-400">
+                <p className="text-sm text-soleur-text-secondary">
                   Last synced:{" "}
                   {new Date(repoLastSyncedAt).toLocaleDateString()}
                 </p>
@@ -81,8 +81,8 @@ export function ProjectSetupCard({
 
         {repoStatus === "cloning" && (
           <div className="flex items-center gap-2">
-            <div className="h-4 w-4 animate-spin rounded-full border-2 border-neutral-600 border-t-white" />
-            <p className="text-sm text-neutral-400">Setting up your project...</p>
+            <div className="h-4 w-4 animate-spin rounded-full border-2 border-soleur-border-default border-t-soleur-text-primary" />
+            <p className="text-sm text-soleur-text-secondary">Setting up your project...</p>
           </div>
         )}
       </div>

@@ -31,7 +31,7 @@ export function KbMobileLayout({ children, state }: KbMobileLayoutProps) {
     <div className="flex h-full">
       <aside
         inert={kbCollapsed || undefined}
-        className={`w-full shrink-0 overflow-y-auto border-r border-neutral-800
+        className={`w-full shrink-0 overflow-y-auto border-r border-soleur-border-default
           ${isContentView ? "hidden" : "block"}`}
       >
         <KbSidebarShell onCollapse={toggleKbCollapsed} />

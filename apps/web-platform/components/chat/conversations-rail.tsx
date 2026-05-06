@@ -66,12 +66,12 @@ function ConversationRailRowImpl({
       aria-current={active ? "page" : undefined}
       className={`block border-l-2 ${borderColor} px-3 py-2 transition-colors ${
         active
-          ? "bg-neutral-800/60 text-white"
-          : "text-neutral-300 hover:bg-neutral-900"
+          ? "bg-soleur-bg-surface-2 text-soleur-text-primary"
+          : "text-soleur-text-secondary hover:bg-soleur-bg-surface-1"
       }`}
     >
       <div className="truncate text-sm font-medium">{conversation.title}</div>
-      <div className="mt-1 flex items-center justify-between gap-2 text-[11px] text-neutral-500">
+      <div className="mt-1 flex items-center justify-between gap-2 text-[11px] text-soleur-text-muted">
         <StatusBadge status={conversation.status} />
         <span>{relativeTime(conversation.last_active)}</span>
       </div>
@@ -108,7 +108,7 @@ export function ConversationsRail() {
           type="button"
           aria-label="Expand conversations rail"
           onClick={toggle}
-          className="rounded p-2 text-neutral-400 hover:bg-neutral-800 hover:text-neutral-100"
+          className="rounded p-2 text-soleur-text-secondary hover:bg-soleur-bg-surface-2 hover:text-soleur-text-primary"
         >
           ›
         </button>
@@ -118,15 +118,15 @@ export function ConversationsRail() {
 
   return (
     <div className="flex h-full flex-col">
-      <div className="flex items-center justify-between border-b border-neutral-800 px-3 py-2">
-        <span className="text-xs font-semibold uppercase tracking-wide text-neutral-500">
+      <div className="flex items-center justify-between border-b border-soleur-border-default px-3 py-2">
+        <span className="text-xs font-semibold uppercase tracking-wide text-soleur-text-muted">
           Recent conversations
         </span>
         <button
           type="button"
           aria-label="Collapse conversations rail"
           onClick={toggle}
-          className="rounded p-1 text-neutral-500 hover:bg-neutral-800 hover:text-neutral-100"
+          className="rounded p-1 text-soleur-text-muted hover:bg-soleur-bg-surface-2 hover:text-soleur-text-primary"
         >
           ‹
         </button>
@@ -136,7 +136,7 @@ export function ConversationsRail() {
         {!loading && conversations.length === 0 ? (
           <Link
             href="/dashboard/chat/new"
-            className="block px-3 py-3 text-sm text-blue-400 hover:bg-neutral-900"
+            className="block px-3 py-3 text-sm text-blue-400 hover:bg-soleur-bg-surface-1"
           >
             + New conversation
           </Link>
@@ -151,10 +151,10 @@ export function ConversationsRail() {
         )}
       </nav>
 
-      <div className="border-t border-neutral-800 px-3 py-2">
+      <div className="border-t border-soleur-border-default px-3 py-2">
         <Link
           href="/dashboard"
-          className="text-xs text-neutral-400 hover:text-neutral-100"
+          className="text-xs text-soleur-text-secondary hover:text-soleur-text-primary"
         >
           View all in Dashboard
         </Link>

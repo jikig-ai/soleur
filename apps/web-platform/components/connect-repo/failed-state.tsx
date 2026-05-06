@@ -101,7 +101,7 @@ export function FailedState({ onRetry, errorMessage, errorCode }: FailedStatePro
         <h1 className={`${serif.className} text-4xl font-semibold`}>
           {copy?.headline ?? "Project Setup Failed"}
         </h1>
-        <p className="text-base text-neutral-400">
+        <p className="text-base text-soleur-text-secondary">
           {copy?.body ??
             "Something went wrong while setting up your project. This is usually a temporary issue."}
         </p>
@@ -110,10 +110,10 @@ export function FailedState({ onRetry, errorMessage, errorCode }: FailedStatePro
       {errorMessage && (
         <Card className="text-left">
           <details>
-            <summary className="cursor-pointer text-sm font-medium text-neutral-200">
+            <summary className="cursor-pointer text-sm font-medium text-soleur-text-primary">
               Error details (for support)
             </summary>
-            <p className="mt-2 text-sm text-neutral-400 font-mono break-all">
+            <p className="mt-2 text-sm text-soleur-text-secondary font-mono break-all">
               {errorMessage}
             </p>
           </details>
@@ -121,7 +121,7 @@ export function FailedState({ onRetry, errorMessage, errorCode }: FailedStatePro
       )}
 
       <Card className="text-left">
-        <h3 className="mb-3 text-sm font-medium text-neutral-200">What you can do</h3>
+        <h3 className="mb-3 text-sm font-medium text-soleur-text-primary">What you can do</h3>
         <ol className="space-y-3">
           {(copy?.steps ?? [
             "Try again — most issues resolve on a second attempt.",
@@ -129,10 +129,10 @@ export function FailedState({ onRetry, errorMessage, errorCode }: FailedStatePro
             "If the problem persists, contact support with the time of the error.",
           ]).map((step, i) => (
             <li key={i} className="flex items-start gap-3">
-              <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full border border-neutral-700 text-xs font-medium text-neutral-300">
+              <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full border border-soleur-border-default text-xs font-medium text-soleur-text-secondary">
                 {i + 1}
               </span>
-              <span className="text-sm text-neutral-400">{step}</span>
+              <span className="text-sm text-soleur-text-secondary">{step}</span>
             </li>
           ))}
         </ol>

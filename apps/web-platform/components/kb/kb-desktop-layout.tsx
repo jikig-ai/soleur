@@ -16,13 +16,13 @@ const KbChatContent = dynamic(
 function ResizeHandle(props: { style?: React.CSSProperties }) {
   return (
     <Separator
-      className="group relative w-1 bg-transparent transition-colors duration-150 hover:bg-neutral-400/50 active:bg-amber-500/50 data-[resize-handle-active]:bg-amber-500/50"
+      className="group relative w-1 bg-transparent transition-colors duration-150 hover:bg-soleur-text-secondary/50 active:bg-amber-500/50 data-[resize-handle-active]:bg-amber-500/50"
       style={props.style}
     >
       <div className="absolute inset-y-0 left-1/2 flex -translate-x-1/2 flex-col items-center justify-center gap-0.5">
-        <span className="h-0.5 w-0.5 rounded-full bg-neutral-600 group-hover:bg-neutral-400" />
-        <span className="h-0.5 w-0.5 rounded-full bg-neutral-600 group-hover:bg-neutral-400" />
-        <span className="h-0.5 w-0.5 rounded-full bg-neutral-600 group-hover:bg-neutral-400" />
+        <span className="h-0.5 w-0.5 rounded-full bg-soleur-text-muted group-hover:bg-soleur-text-secondary" />
+        <span className="h-0.5 w-0.5 rounded-full bg-soleur-text-muted group-hover:bg-soleur-text-secondary" />
+        <span className="h-0.5 w-0.5 rounded-full bg-soleur-text-muted group-hover:bg-soleur-text-secondary" />
       </div>
     </Separator>
   );
@@ -60,7 +60,7 @@ export function KbDesktopLayout({ children, state }: KbDesktopLayoutProps) {
           setKbCollapsed(size.asPercentage < 1);
         }}
       >
-        <div className="min-w-0 h-full overflow-y-auto border-r border-neutral-800">
+        <div className="min-w-0 h-full overflow-y-auto border-r border-soleur-border-default">
           <KbSidebarShell onCollapse={toggleKbCollapsed} />
         </div>
       </Panel>
@@ -90,7 +90,7 @@ export function KbDesktopLayout({ children, state }: KbDesktopLayoutProps) {
             minSize="20%"
             maxSize="40%"
           >
-            <div className="min-w-0 h-full border-l border-neutral-800">
+            <div className="min-w-0 h-full border-l border-soleur-border-default">
               <KbChatContent
                 contextPath={contextPath}
                 onClose={closeSidebar}

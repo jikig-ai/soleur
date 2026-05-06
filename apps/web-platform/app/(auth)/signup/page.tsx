@@ -101,9 +101,9 @@ function SignupForm() {
         <div className="w-full max-w-sm space-y-6">
           <div className="space-y-2 text-center">
             <h1 className="text-2xl font-semibold">Enter verification code</h1>
-            <p className="text-sm text-neutral-400">
+            <p className="text-sm text-soleur-text-secondary">
               We sent a {EMAIL_OTP_LENGTH}-digit code to{" "}
-              <strong className="text-white">{email}</strong>
+              <strong className="text-soleur-text-primary">{email}</strong>
             </p>
           </div>
 
@@ -118,7 +118,7 @@ function SignupForm() {
               value={otp}
               onChange={(e) => setOtp(e.target.value.replace(/\D/g, ""))}
               placeholder="000000"
-              className="w-full rounded-lg border border-neutral-700 bg-neutral-900 px-4 py-3 text-center text-lg tracking-[0.3em] placeholder:text-neutral-500 focus:border-neutral-500 focus:outline-none"
+              className="w-full rounded-lg border border-soleur-border-default bg-soleur-bg-surface-1 px-4 py-3 text-center text-lg tracking-[0.3em] placeholder:text-soleur-text-muted focus:border-soleur-border-emphasized focus:outline-none"
             />
 
             {error && <p role="alert" className="text-sm text-red-400">{error}</p>}
@@ -126,7 +126,7 @@ function SignupForm() {
             <button
               type="submit"
               disabled={loading || otp.length !== EMAIL_OTP_LENGTH}
-              className="w-full rounded-lg bg-white px-4 py-3 text-sm font-medium text-black hover:bg-neutral-200 disabled:opacity-50"
+              className="w-full rounded-lg bg-soleur-accent-gold-fill px-4 py-3 text-sm font-medium text-soleur-text-on-accent hover:opacity-90 disabled:opacity-50"
             >
               {loading ? "Verifying..." : "Create account"}
             </button>
@@ -138,7 +138,7 @@ function SignupForm() {
               setOtp("");
               setError("");
             }}
-            className="block w-full text-center text-sm text-neutral-500 hover:text-neutral-300"
+            className="block w-full text-center text-sm text-soleur-text-muted hover:text-soleur-text-secondary"
           >
             Try a different email
           </button>
@@ -152,7 +152,7 @@ function SignupForm() {
       <div className="w-full max-w-sm space-y-6">
         <div className="space-y-2 text-center">
           <h1 className="text-2xl font-semibold">Create your account</h1>
-          <p className="text-sm text-neutral-400">
+          <p className="text-sm text-soleur-text-secondary">
             Get started with Soleur — your AI organization
           </p>
         </div>
@@ -173,18 +173,18 @@ function SignupForm() {
             value={email}
             onChange={(e) => setEmail(e.target.value)}
             placeholder="you@example.com"
-            className="w-full rounded-lg border border-neutral-700 bg-neutral-900 px-4 py-3 text-sm placeholder:text-neutral-500 focus:border-neutral-500 focus:outline-none"
+            className="w-full rounded-lg border border-soleur-border-default bg-soleur-bg-surface-1 px-4 py-3 text-sm placeholder:text-soleur-text-muted focus:border-soleur-border-emphasized focus:outline-none"
           />
 
           {error && <p role="alert" className="text-sm text-red-400">{error}</p>}
 
-          <label className="flex items-start gap-3 text-sm text-neutral-400">
+          <label className="flex items-start gap-3 text-sm text-soleur-text-secondary">
             <input
               type="checkbox"
               required
               checked={tcAccepted}
               onChange={(e) => setTcAccepted(e.target.checked)}
-              className="mt-0.5 h-4 w-4 rounded border-neutral-700 bg-neutral-900"
+              className="mt-0.5 h-4 w-4 rounded border-soleur-border-default bg-soleur-bg-surface-1"
             />
             <span>
               I agree to the{" "}
@@ -192,7 +192,7 @@ function SignupForm() {
                 href="https://soleur.ai/pages/legal/terms-and-conditions.html"
                 target="_blank"
                 rel="noopener noreferrer"
-                className="text-white underline hover:text-neutral-300"
+                className="text-soleur-text-primary underline hover:text-soleur-text-secondary"
               >
                 Terms &amp; Conditions
               </a>{" "}
@@ -201,7 +201,7 @@ function SignupForm() {
                 href="https://soleur.ai/pages/legal/privacy-policy.html"
                 target="_blank"
                 rel="noopener noreferrer"
-                className="text-white underline hover:text-neutral-300"
+                className="text-soleur-text-primary underline hover:text-soleur-text-secondary"
               >
                 Privacy Policy
               </a>
@@ -211,16 +211,16 @@ function SignupForm() {
           <button
             type="submit"
             disabled={loading || !tcAccepted}
-            className="w-full rounded-lg bg-white px-4 py-3 text-sm font-medium text-black hover:bg-neutral-200 disabled:opacity-50"
+            className="w-full rounded-lg bg-soleur-accent-gold-fill px-4 py-3 text-sm font-medium text-soleur-text-on-accent hover:opacity-90 disabled:opacity-50"
           >
             {loading ? "Sending..." : "Send verification code"}
           </button>
         </form>
 
         <div className="relative flex items-center gap-4">
-          <div className="flex-1 border-t border-neutral-700" />
-          <span className="text-xs text-neutral-500">or</span>
-          <div className="flex-1 border-t border-neutral-700" />
+          <div className="flex-1 border-t border-soleur-border-default" />
+          <span className="text-xs text-soleur-text-muted">or</span>
+          <div className="flex-1 border-t border-soleur-border-default" />
         </div>
 
         {/*
@@ -237,7 +237,7 @@ function SignupForm() {
         {!tcAccepted && (
           <p
             data-testid="tc-hint"
-            className="text-center text-xs text-neutral-500"
+            className="text-center text-xs text-soleur-text-muted"
           >
             Accept the terms above to continue.
           </p>
@@ -245,9 +245,9 @@ function SignupForm() {
 
         <OAuthButtons disabled={!tcAccepted} />
 
-        <p className="text-center text-sm text-neutral-500">
+        <p className="text-center text-sm text-soleur-text-muted">
           Already have an account?{" "}
-          <Link href="/login" className="text-white hover:underline">
+          <Link href="/login" className="text-soleur-text-primary hover:underline">
             Sign in
           </Link>
         </p>

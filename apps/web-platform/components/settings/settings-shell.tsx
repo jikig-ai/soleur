@@ -35,18 +35,18 @@ export function SettingsShell({ children }: { children: React.ReactNode }) {
       {/* Settings sidebar — hidden on mobile, shown on md+ */}
       <nav
         inert={settingsCollapsed || undefined}
-        className={`hidden shrink-0 border-r border-neutral-800 md:block
+        className={`hidden shrink-0 border-r border-soleur-border-default md:block
         md:transition-[width] md:duration-200 md:ease-out
         ${settingsCollapsed ? "md:w-0 md:overflow-hidden md:border-r-0" : "w-48 px-4 py-5"}`}>
         <div className="mb-4 flex items-center justify-between">
-          <h2 className="text-xs font-medium uppercase tracking-wider text-neutral-500">
+          <h2 className="text-xs font-medium uppercase tracking-wider text-soleur-text-muted">
             Settings
           </h2>
           <button
             onClick={toggleSettingsCollapsed}
             aria-label="Collapse settings nav"
             title="Collapse settings nav (⌘B)"
-            className="flex h-6 w-6 items-center justify-center rounded text-neutral-400 hover:bg-neutral-800 hover:text-white"
+            className="flex h-6 w-6 items-center justify-center rounded text-soleur-text-secondary hover:bg-soleur-bg-surface-2 hover:text-soleur-text-primary"
           >
             <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 19.5 8.25 12l7.5-7.5" />
@@ -66,8 +66,8 @@ export function SettingsShell({ children }: { children: React.ReactNode }) {
                   href={tab.href}
                   className={`block rounded-lg px-3 py-2 text-sm transition-colors ${
                     active
-                      ? "bg-neutral-800 text-white font-medium"
-                      : "text-neutral-400 hover:bg-neutral-800/50 hover:text-neutral-200"
+                      ? "bg-soleur-bg-surface-2 text-soleur-text-primary font-medium"
+                      : "text-soleur-text-secondary hover:bg-soleur-bg-surface-2/50 hover:text-soleur-text-primary"
                   }`}
                 >
                   {tab.label}
@@ -79,7 +79,7 @@ export function SettingsShell({ children }: { children: React.ReactNode }) {
       </nav>
 
       {/* Mobile tab bar */}
-      <div className="fixed bottom-0 left-0 right-0 z-40 flex border-t border-neutral-800 bg-neutral-900 safe-bottom md:hidden">
+      <div className="fixed bottom-0 left-0 right-0 z-40 flex border-t border-soleur-border-default bg-soleur-bg-surface-1 safe-bottom md:hidden">
         {SETTINGS_TABS.map((tab) => {
           const active =
             tab.href === "/dashboard/settings"
@@ -91,7 +91,7 @@ export function SettingsShell({ children }: { children: React.ReactNode }) {
               key={tab.href}
               href={tab.href}
               className={`flex-1 py-3 text-center text-xs font-medium transition-colors ${
-                active ? "text-white" : "text-neutral-500"
+                active ? "text-soleur-text-primary" : "text-soleur-text-muted"
               }`}
             >
               {tab.label}
@@ -107,7 +107,7 @@ export function SettingsShell({ children }: { children: React.ReactNode }) {
             onClick={toggleSettingsCollapsed}
             aria-label="Expand settings nav"
             title="Expand settings nav (⌘B)"
-            className="absolute left-2 top-5 z-10 hidden md:flex h-6 w-6 items-center justify-center rounded text-neutral-400 hover:bg-neutral-800 hover:text-white"
+            className="absolute left-2 top-5 z-10 hidden md:flex h-6 w-6 items-center justify-center rounded text-soleur-text-secondary hover:bg-soleur-bg-surface-2 hover:text-soleur-text-primary"
           >
             <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
               <path strokeLinecap="round" strokeLinejoin="round" d="m8.25 4.5 7.5 7.5-7.5 7.5" />

@@ -51,6 +51,21 @@ jobs:
       - name: Validate SEO
         run: bash plugins/soleur/skills/seo-aeo/scripts/validate-seo.sh _site
 
+      - name: Apex-host canonical gate
+        # Catches stray https://soleur.ai/... (apex) interpolations leaking
+        # into rendered HTML/XML. Canonical host is https://www.soleur.ai
+        # (apex 301s to www at the edge). Regex covers EVERY non-host-
+        # continuation suffix: `/`, `?`, `#`, `"`, `'`, `<`, ` `, EOL, etc.
+        # Negative class `[^a-zA-Z0-9.-]` rejects only `soleur.ai-org` /
+        # `soleur.aitech.com` style same-prefix-different-domain matches.
+        # See #3297. No untrusted input — pattern is literal.
+        run: |
+          if grep -rEn 'https://soleur\.ai($|[^a-zA-Z0-9.-])' _site/; then
+            echo "FAIL: rendered output contains apex-host references"
+            exit 1
+          fi
+          echo "PASS: no apex-host leaks in rendered output"
+
       - name: Validate CSP
         run: bash plugins/soleur/skills/seo-aeo/scripts/validate-csp.sh _site
 

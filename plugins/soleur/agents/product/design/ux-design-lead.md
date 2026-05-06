@@ -18,6 +18,8 @@ This agent requires the Pencil MCP server registered with Claude Code. If Pencil
 - If the prompt supplies `.pen` file paths without `mode: audit`, jump to `## Wireframe-to-Implementation Handoff`.
 - Otherwise, proceed through the normal Pencil design flow (Steps 1–3).
 
+**Output-path guard (HARD GATE).** If the invocation prompt supplies an output path for the `.pen` file or PNG exports that is NOT under `knowledge-base/product/design/`, the agent MUST override the supplied path and use the canonical convention from Step 3 instead (`knowledge-base/product/design/{domain}/{descriptive-name}.pen` and the sibling `screenshots/` directory). State the override in the deliverables report so the caller learns. Common bad invoker paths to override: anything under `apps/**/design/`, anything under `assets/`, anything under `public/`. Reason: design artifacts under app source trees are not reachable by `/soleur:ux-audit`, are usually gitignored by app-level rules, and silently disappear from the brand/design audit surface. Path overrides do not require asking the founder — they are a structural convention, not a design decision.
+
 ### Step 1: Design Brief
 
 Check if `knowledge-base/marketing/brand-guide.md` exists. If found, read the `## Visual Direction` section and extract color palette, typography, and style as primary design constraints.

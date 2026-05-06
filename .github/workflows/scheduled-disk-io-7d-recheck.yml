@@ -1,0 +1,189 @@
+name: "Scheduled (once): Disk IO Budget +7d recovery check (PR #3356)"
+
+# One-time fire: 2026-05-13 ~09:00 UTC. Snapshots prd Supabase Disk IO
+# Budget gauge + pg_stat_statements top-10, posts results to follow-through
+# issue #3387 and PR #3356, self-neutralizes.
+#
+# This is the structural-recovery checkpoint: burst credit on the Micro
+# tier accumulates over ~7 days, so a stable-but-not-recovering budget at
+# +7d means the surgical lever set (migrations 038 + 039) was insufficient
+# and a tier bump (#3360) is required.
+#
+# Pattern derived from `soleur:schedule --once`. See companion workflow
+# scheduled-disk-io-24h-recheck.yml for the +24h variant.
+
+on:
+  schedule:
+    - cron: '0 9 13 5 *'
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+
+concurrency:
+  group: scheduled-disk-io-7d-recheck
+  cancel-in-progress: false
+
+env:
+  ISSUE_NUMBER: "3387"
+  PR_NUMBER: "3356"
+  TRACKING_ISSUE: "3358"
+  CLOSE_FT_ISSUE: "3388"
+  FIRE_DATE: "2026-05-13"
+  WORKFLOW_NAME: "scheduled-disk-io-7d-recheck.yml"
+  SUPABASE_PROJECT_REF: "ifsccnjhymdmidffkzhl"
+  DEFAULT_BRANCH: "main"
+
+jobs:
+  recheck:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: D3 — date guard (cross-year defense)
+        run: |
+          set -euo pipefail
+          if [[ "$(date -u +%F)" != "$FIRE_DATE" ]]; then
+            echo "::notice::Date mismatch (today=$(date -u +%F), expected=$FIRE_DATE) — aborting"
+            exit 0
+          fi
+          echo "Date guard passed: $(date -u +%F) == $FIRE_DATE"
+
+      - name: Install Doppler CLI
+        run: |
+          set -euo pipefail
+          curl -Ls --tlsv1.2 --proto "=https" --retry 3 \
+            https://cli.doppler.com/install.sh | sudo sh
+
+      - name: Pull pg_stat_statements top-10 + Disk IO Budget snapshot
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN_SCHEDULED }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${DOPPLER_TOKEN:-}" ]]; then
+            echo "::warning::DOPPLER_TOKEN_SCHEDULED secret not set; cannot fetch SUPABASE_ACCESS_TOKEN"
+            exit 1
+          fi
+          SUPA_TOKEN=$(doppler secrets get SUPABASE_ACCESS_TOKEN -p soleur -c prd --plain)
+          printf '::add-mask::%s\n' "$SUPA_TOKEN"
+
+          QPATH="https://api.supabase.com/v1/projects/$SUPABASE_PROJECT_REF/database/query"
+
+          STMT_QUERY='SELECT round(total_exec_time::numeric, 1) AS total_ms, calls, round(mean_exec_time::numeric, 2) AS mean_ms, shared_blks_read, shared_blks_hit, left(query, 200) AS query FROM pg_stat_statements WHERE query NOT ILIKE '"'"'%pg_stat_statements%'"'"' ORDER BY total_exec_time DESC LIMIT 10'
+          STMT_JSON=$(curl -sS -X POST \
+            -H "Authorization: Bearer $SUPA_TOKEN" \
+            -H "Content-Type: application/json" \
+            "$QPATH" \
+            -d "$(jq -n --arg q "$STMT_QUERY" '{query: $q}')")
+
+          SENTINEL_QUERY="SELECT 'cron' AS kind, jobname AS k, schedule AS v FROM cron.job WHERE jobname='user_concurrency_slots_sweep' UNION ALL SELECT 'pub' AS kind, schemaname || '.' || tablename AS k, 'in publication' AS v FROM pg_publication_tables WHERE pubname='supabase_realtime' ORDER BY kind, k"
+          SENTINEL_JSON=$(curl -sS -X POST \
+            -H "Authorization: Bearer $SUPA_TOKEN" \
+            -H "Content-Type: application/json" \
+            "$QPATH" \
+            -d "$(jq -n --arg q "$SENTINEL_QUERY" '{query: $q}')")
+
+          HEALTH_JSON=$(curl -sS \
+            -H "Authorization: Bearer $SUPA_TOKEN" \
+            "https://api.supabase.com/v1/projects/$SUPABASE_PROJECT_REF/health" || echo '{}')
+
+          {
+            echo "## Disk IO Budget +7d recovery check (auto-posted by scheduled-disk-io-7d-recheck.yml)"
+            echo ""
+            echo "**Fired:** $(date -u +'%Y-%m-%d %H:%M:%S UTC')"
+            echo "**Baseline:** \`pg_stat_statements_reset()\` ran 2026-05-06 20:53:02 UTC (7 days ago)."
+            echo "**PR:** #$PR_NUMBER. **Issues:** #$ISSUE_NUMBER (this), #$TRACKING_ISSUE (root tracker), #$CLOSE_FT_ISSUE (close gate)."
+            echo ""
+            echo "### Sentinels (must still pass)"
+            echo ""
+            echo '```json'
+            echo "$SENTINEL_JSON" | jq .
+            echo '```'
+            echo ""
+            echo "### pg_stat_statements top-10 (7d after reset)"
+            echo ""
+            echo '```json'
+            echo "$STMT_JSON" | jq .
+            echo '```'
+            echo ""
+            echo "### Health endpoint snapshot"
+            echo ""
+            echo '```json'
+            echo "$HEALTH_JSON" | jq . 2>/dev/null || echo "$HEALTH_JSON"
+            echo '```'
+            echo ""
+            echo "## Operator decision"
+            echo ""
+            echo "If Disk IO Budget gauge is **recovering** (climbing back toward full): close #$TRACKING_ISSUE with a delta-summary comment, then close #$CLOSE_FT_ISSUE."
+            echo ""
+            echo "If gauge is **flat or still draining**: do NOT close #$TRACKING_ISSUE. Promote #3360 (tripwire compute bump) to next sprint."
+            echo ""
+            echo "_This workflow does not auto-close issues — recovery curve evaluation is human-judgment per AGENTS.md \`hr-weigh-every-decision-against-target-user-impact\` (single-user incident threshold)._"
+          } > /tmp/recheck-body.md
+
+      - name: Post results to issue + PR
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh issue comment "$ISSUE_NUMBER" --body-file /tmp/recheck-body.md
+          gh pr comment "$PR_NUMBER" --body-file /tmp/recheck-body.md
+
+      - name: D4 — self-neutralize (strip schedule trigger, push or PR-fallback)
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          WORKFLOW_PATH=".github/workflows/$WORKFLOW_NAME"
+
+          if ! grep -q '^[[:space:]]*schedule:' "$WORKFLOW_PATH"; then
+            echo "Already neutralized, no-op"
+            exit 0
+          fi
+
+          python3 - "$WORKFLOW_PATH" <<'PYEOF'
+          import re, sys
+          path = sys.argv[1]
+          with open(path) as f:
+              src = f.read()
+          new = re.sub(
+              r'^  schedule:\n(?:    - cron: .*\n)+',
+              '',
+              src,
+              count=1,
+              flags=re.MULTILINE,
+          )
+          with open(path, 'w') as f:
+              f.write(new)
+          PYEOF
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add "$WORKFLOW_PATH"
+          if git diff --cached --quiet; then
+            echo "No diff after edit — already neutralized"
+            exit 0
+          fi
+          git commit -m "chore(schedule): neutralize $WORKFLOW_NAME (post-fire cleanup, #$ISSUE_NUMBER)"
+
+          if git push origin "HEAD:$DEFAULT_BRANCH" 2>/tmp/push.err; then
+            echo "Direct push succeeded"
+            exit 0
+          fi
+
+          BRANCH="chore/neutralize-$WORKFLOW_NAME-$(date -u +%Y%m%d%H%M%S)"
+          git checkout -b "$BRANCH"
+          git push -u origin "$BRANCH"
+          PR_URL=$(gh pr create \
+            --base "$DEFAULT_BRANCH" \
+            --head "$BRANCH" \
+            --title "chore(schedule): neutralize $WORKFLOW_NAME" \
+            --body "Auto-cleanup after one-time fire of #$ISSUE_NUMBER. Removes the schedule: trigger from this --once workflow file." \
+            --json url --jq .url)
+          gh pr merge --squash --auto "$PR_URL" 2>/tmp/merge.err || true
+          echo "PR fallback opened: $PR_URL"
