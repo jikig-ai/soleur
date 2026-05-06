@@ -47,7 +47,7 @@ replaces matched values in the displayed log with `***`. They are NOT
 log content.
 
 But `tee -a step-output.log` runs BEFORE the runner consumes the
-directives. The runner sees `::add-mask::-----BEGIN RSA PRIVATE KEY-----`
+directives. The runner sees `::add-mask::-----BEGIN RSA PRIVATE KEY-----` <!-- gitleaks:allow # issue:#3268 documentation example, not a real key -->
 on stdout, registers the mask, and removes the line from displayed
 output. `tee` already wrote the raw bytes to the file. So
 `step-output.log` ends up containing:

@@ -297,5 +297,5 @@ regex = '''-----BEGIN[ A-Z]*PRIVATE KEY( BLOCK)?-----[\s\S]*?-----END[ A-Z]*PRIV
 keywords = ["BEGIN"]
 tags = ["key", "private"]
   [[rules.allowlists]]
-  description = "Synthesized fixtures, test files, plan/spec/skill-reference docs"
-  paths = ['''__goldens__/.*''', '''(__snapshots__|__goldens__)/.*\.snap$''', '''apps/web-platform/test/__synthesized__/.*''', '''reports/mutation/.*''', '''apps/web-platform/test/.*\.test\.(ts|tsx)$''', '''apps/web-platform/infra/.*\.test\.sh$''', '''knowledge-base/.*/(plans|specs)/.*\.md$''', '''knowledge-base/plans/.*\.md$''', '''plugins/soleur/skills/.*/references/.*\.md$''']
+  description = "Synthesized fixtures, test files, plan/spec/skill-reference docs, learning files (private-key only — see issue:#3268)"
+  paths = ['''__goldens__/.*''', '''(__snapshots__|__goldens__)/.*\.snap$''', '''apps/web-platform/test/__synthesized__/.*''', '''reports/mutation/.*''', '''apps/web-platform/test/.*\.test\.(ts|tsx)$''', '''apps/web-platform/infra/.*\.test\.sh$''', '''knowledge-base/.*/(plans|specs)/.*\.md$''', '''knowledge-base/project/learnings/.*\.md$''', '''knowledge-base/plans/.*\.md$''', '''plugins/soleur/skills/.*/references/.*\.md$''']
