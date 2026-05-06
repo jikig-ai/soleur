@@ -125,6 +125,8 @@ export function buildPdfGatedDirective(
     `it supports PDF files end-to-end without external binaries. ` +
     "Do NOT call `pdftotext`, `pdfplumber`, `pdf-parse`, `PyPDF2`, `PyMuPDF`, `fitz`, " +
     "`apt-get`, `pip3 install`, or shell-installation commands — they are unnecessary and will fail. " +
+    `When referring to the document in your reply to the user, use the name "${displayPath}" — ` +
+    "never the absolute filesystem path. " +
     `Answer all questions in the context of this document. ${noAskClause}`
   );
 }
@@ -716,18 +718,27 @@ export function buildSoleurGoSystemPrompt(
   if (args.artifactPath && args.artifactPath.length > 0) {
     const safeArtifactPath = sanitizePromptString(args.artifactPath);
     // Bug A1 (#3376): compute the workspace-absolute path for any
-    // directive that instructs the model to call Read. The sanitizer
-    // 256-caps which is fine for display strings; compute the absolute
-    // path from the UN-sanitized `args.artifactPath` so a long path
-    // doesn't get truncated mid-string. The post-realpath containment
-    // check in the sandbox is the load-bearing security guard, not this
-    // sanitizer (which only strips control chars + 256-caps for log
-    // hygiene). When `workspacePath` is absent (legacy callers), fall
-    // back to the relative path — the Bug A2 sandbox fix tolerates it
+    // directive that instructs the model to call Read. We MUST strip
+    // control chars / U+2028 / U+2029 from the artifact suffix before
+    // injecting (security-sentinel P2 on PR #3384 review): the display
+    // half is sanitized via `sanitizePromptString`, but a 256-cap
+    // would truncate a long absolute path mid-string. Use a
+    // size-uncapped strip that keeps separator-injection guards.
+    // The post-realpath containment check in the sandbox is the
+    // load-bearing security guard against path escape; this sanitizer
+    // closes the prompt-injection vector that emerged when we started
+    // injecting the un-sanitized join into the prompt. When
+    // `workspacePath` is absent (legacy callers), fall back to the
+    // sanitized relative path — the Bug A2 sandbox fix tolerates it
     // for in-workspace files.
+    // eslint-disable-next-line no-control-regex -- intentional: strip control chars + U+2028/U+2029
+    const stripPromptSeparators = (v: string): string =>
+      v.replace(/[\x00-\x1f\x7f\u2028\u2029]/g, "");
     const absoluteReadPath =
       args.workspacePath && args.workspacePath.length > 0
-        ? path.join(args.workspacePath, args.artifactPath)
+        ? stripPromptSeparators(
+            path.join(args.workspacePath, args.artifactPath),
+          )
         : safeArtifactPath;
     if (safeArtifactPath.length > 0) {
       // KB Concierge document-context parity with leader baseline.

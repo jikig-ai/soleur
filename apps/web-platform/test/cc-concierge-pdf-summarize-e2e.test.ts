@@ -18,7 +18,13 @@
 // not started (no SDK Query); we synthesize the system prompt directly.
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from "fs";
+import {
+  mkdtempSync,
+  realpathSync,
+  rmSync,
+  mkdirSync,
+  writeFileSync,
+} from "fs";
 import { tmpdir } from "os";
 import path from "path";
 
@@ -61,7 +67,10 @@ import { _resetWorkspacePathCacheForTests } from "@/server/kb-document-resolver"
 let tmpRoot: string;
 
 beforeEach(() => {
-  tmpRoot = mkdtempSync(path.join(tmpdir(), "concierge-pdf-e2e-"));
+  // Wrap in realpathSync so macOS `/var/folders/...` → `/private/var/folders/...`
+  // aliasing matches the absolute path the runner injects. Without this,
+  // `startsWith(tmpRoot)` assertions in Phase 4.3/4.3b fail on macOS.
+  tmpRoot = realpathSync(mkdtempSync(path.join(tmpdir(), "concierge-pdf-e2e-")));
   fetchUserWorkspacePathSpy.mockResolvedValue({
     data: { workspace_path: tmpRoot },
     error: null,

@@ -248,6 +248,8 @@ export async function resolveConciergeDocumentContext(args: {
       // this PDF" reply) instead. Mirror to Sentry per
       // `cq-silent-fallback-must-mirror-to-sentry` — `read_failed` IS
       // alarming when it fires (real upload-vs-context_path drift).
+      const errno = (err as NodeJS.ErrnoException)?.code ?? null;
+      const basename = path.basename(contextPath);
       Sentry.addBreadcrumb({
         category: "cc-pdf-extractor",
         message: "readFile failed before extractPdfText",
@@ -255,20 +257,30 @@ export async function resolveConciergeDocumentContext(args: {
         data: {
           ok: false,
           errorClass: "read_failed",
-          errno: (err as NodeJS.ErrnoException)?.code ?? null,
-          pathBasename: path.basename(contextPath),
+          errno,
+          pathBasename: basename,
         },
       });
-      reportSilentFallback(err, {
-        feature: "kb-concierge-context",
-        op: "extractPdfText.readFile",
-        extra: {
-          userId,
-          pathBasename: path.basename(contextPath),
-          errorClass: "read_failed",
-          errno: (err as NodeJS.ErrnoException)?.code ?? null,
-        },
-      });
+      // Per `cq-silent-fallback-must-mirror-to-sentry`'s "first-time
+      // 404" exemption (perf review #3384 P2-1): an ENOENT here is the
+      // expected "user deleted/renamed the file while sidebar was open"
+      // case — it produces a graceful `read_failed` reply, not a
+      // production incident. Keep the breadcrumb (free, in-process) so
+      // an event captured later in the same scope retains the context;
+      // skip the Sentry event so a deletion sweep doesn't quota-storm.
+      // EACCES / EIO / EBUSY etc. ARE alarming and still mirror.
+      if (errno !== "ENOENT") {
+        reportSilentFallback(err, {
+          feature: "kb-concierge-context",
+          op: "extractPdfText.readFile",
+          extra: {
+            userId,
+            pathBasename: basename,
+            errorClass: "read_failed",
+            errno,
+          },
+        });
+      }
       return {
         artifactPath: contextPath,
         documentKind: "pdf",

@@ -257,13 +257,19 @@ describe("resolveConciergeDocumentContext", () => {
     expect(out.documentContent).toBeUndefined();
   });
 
-  it("missing PDF file surfaces documentExtractError=read_failed (Bug B fix)", async () => {
+  it("missing PDF file (ENOENT) surfaces documentExtractError=read_failed without Sentry alarm (Bug B fix)", async () => {
     // Pre-fix (#3376 reproduction): readFile-ENOENT silently fell through to
     // bare `{ artifactPath, documentKind: "pdf" }` — no `documentExtractError` —
     // so the runner picked `buildPdfGatedDirective` and the agent's Read attempt
     // tripped Bug A's sandbox denial. Post-fix: surface `read_failed` so the
-    // runner picks `buildPdfUnreadableDirective` instead, AND mirror to Sentry
-    // per `cq-silent-fallback-must-mirror-to-sentry`.
+    // runner picks `buildPdfUnreadableDirective` instead.
+    //
+    // ENOENT is the expected "user deleted/renamed the file while sidebar was
+    // open" case — it produces a graceful `read_failed` reply, not a
+    // production incident. Per perf review #3384 P2-1 + the
+    // `cq-silent-fallback-must-mirror-to-sentry` "first-time 404" exemption,
+    // ENOENT skips the Sentry event (breadcrumb stays). The companion test
+    // below verifies non-ENOENT errors DO still mirror.
     const out = await resolveConciergeDocumentContext({
       userId: "u1",
       contextPath: "knowledge-base/missing.pdf",
@@ -271,17 +277,36 @@ describe("resolveConciergeDocumentContext", () => {
     expect(out.artifactPath).toBe("knowledge-base/missing.pdf");
     expect(out.documentKind).toBe("pdf");
     expect(out.documentExtractError).toBe("read_failed");
-    // Extractor never called when readFile fails.
     expect(extractPdfTextSpy).not.toHaveBeenCalled();
-    // Sentry mirror fired with the typed op tag.
+    const calls = reportSilentFallbackSpy.mock.calls.filter(
+      ([, opts]) =>
+        (opts as { op?: string })?.op === "extractPdfText.readFile",
+    );
+    expect(calls.length).toBe(0);
+  });
+
+  it("non-ENOENT readFile failure (EISDIR) DOES mirror to Sentry", async () => {
+    // Companion to the ENOENT-exemption test above: when the PDF "path" is
+    // actually a directory on disk (EISDIR — alarming), the resolver MUST
+    // mirror to Sentry so operators see truly degraded states. Validates the
+    // errno-conditional branch in the readFile catch.
+    mkdirSync(path.join(tmpRoot, "knowledge-base", "book.pdf"), {
+      recursive: true,
+    });
+
+    const out = await resolveConciergeDocumentContext({
+      userId: "u1",
+      contextPath: "knowledge-base/book.pdf",
+    });
+    expect(out.documentExtractError).toBe("read_failed");
     const calls = reportSilentFallbackSpy.mock.calls.filter(
       ([, opts]) =>
         (opts as { op?: string })?.op === "extractPdfText.readFile",
     );
     expect(calls.length).toBe(1);
-    expect((calls[0]?.[1] as { extra?: { errorClass?: string } })?.extra?.errorClass).toBe(
-      "read_failed",
-    );
+    expect(
+      (calls[0]?.[1] as { extra?: { errno?: string | null } })?.extra?.errno,
+    ).toBe("EISDIR");
   });
 
   it("inlines the extractor's body when truncated=true is reported", async () => {
