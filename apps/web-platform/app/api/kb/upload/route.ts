@@ -11,6 +11,7 @@ import path from "path";
 import logger from "@/server/logger";
 import * as Sentry from "@sentry/nextjs";
 import { KB_UPLOAD_EXTENSIONS } from "@/lib/kb-constants";
+import { MAX_AGENT_READABLE_PDF_SIZE } from "@/lib/attachment-constants";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -103,6 +104,20 @@ export async function POST(request: Request) {
   }
 
   // Validate file size
+  // Closes #3332: PDFs are bounded by the agent-readable cap (24 MB raw),
+  // sized to fit Anthropic's 32 MB encoded request payload after base64
+  // inflation. Defense-in-depth — under current MAX_FILE_SIZE = 20 MB the
+  // generic gate fires first; this branch future-proofs a raise.
+  const isPdf =
+    file.type === "application/pdf" || ext === "pdf";
+  if (isPdf && file.size > MAX_AGENT_READABLE_PDF_SIZE) {
+    return NextResponse.json(
+      {
+        error: `PDF exceeds the ${Math.round(MAX_AGENT_READABLE_PDF_SIZE / 1024 / 1024)} MB ceiling for the Anthropic API request payload (after base64 encoding)`,
+      },
+      { status: 413 },
+    );
+  }
   if (file.size > MAX_FILE_SIZE) {
     return NextResponse.json(
       { error: `File exceeds maximum size of ${MAX_FILE_SIZE / 1024 / 1024}MB` },

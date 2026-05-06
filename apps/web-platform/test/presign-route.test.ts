@@ -222,4 +222,45 @@ describe("POST /api/attachments/presign", () => {
     const res = await POST(req);
     expect(res.status).toBe(400);
   });
+
+  // Closes #3332: PDFs over the agent-readable cap (24 MB raw, sized to fit
+  // Anthropic's 32 MB encoded request payload after ~33% base64 inflation)
+  // must be rejected at the presign seam. Defense-in-depth alongside the
+  // client-side validateFiles guard.
+  describe("PDF size cap (#3332)", () => {
+    test("rejects 25 MB application/pdf with 400 file_too_large", async () => {
+      setupAuthenticatedUser();
+      setupConversationOwnership(true);
+
+      const res = await POST(
+        makeRequest({
+          contentType: "application/pdf",
+          filename: "big.pdf",
+          sizeBytes: 25 * 1024 * 1024,
+        }),
+      );
+      expect(res.status).toBe(400);
+
+      const body = await res.json();
+      expect(body.error).toBe("file_too_large");
+    });
+
+    test("accepts 19 MB application/pdf with 200 (under both caps)", async () => {
+      setupAuthenticatedUser();
+      setupConversationOwnership(true);
+      mockCreateSignedUploadUrl.mockResolvedValue({
+        data: { signedUrl: "https://storage.supabase.co/upload/signed/abc123" },
+        error: null,
+      });
+
+      const res = await POST(
+        makeRequest({
+          contentType: "application/pdf",
+          filename: "ok.pdf",
+          sizeBytes: 19 * 1024 * 1024,
+        }),
+      );
+      expect(res.status).toBe(200);
+    });
+  });
 });

@@ -559,4 +559,35 @@ describe("POST /api/kb/upload", () => {
     expect(res.status).toBe(201);
     expect(mockLinearize).not.toHaveBeenCalled();
   });
+
+  // Closes #3332: defense-in-depth PDF size cap. Today the route's
+  // existing MAX_FILE_SIZE = 20 MB rejects any 25 MB upload, so this is
+  // a contract-lock (not a true RED) — the implementation adds a
+  // PDF-specific 24 MB branch that future-proofs against MAX_FILE_SIZE
+  // being raised independently.
+  describe("PDF size cap (#3332)", () => {
+    test("returns 413 for 25 MB application/pdf", async () => {
+      setupFullMocks();
+
+      const bigPdf = new File([new Uint8Array(25 * 1024 * 1024)], "big.pdf", {
+        type: "application/pdf",
+      });
+      const formData = createFormData(bigPdf, "uploads");
+      const res = await POST(createRequest(formData, "https://app.soleur.ai"));
+      expect(res.status).toBe(413);
+    });
+
+    test("returns 201 for 19 MB application/pdf (under both caps)", async () => {
+      setupFullMocks();
+
+      const okPdf = new File(
+        [new Uint8Array(19 * 1024 * 1024)],
+        "ok.pdf",
+        { type: "application/pdf" },
+      );
+      const formData = createFormData(okPdf, "uploads");
+      const res = await POST(createRequest(formData, "https://app.soleur.ai"));
+      expect(res.status).toBe(201);
+    });
+  });
 });
