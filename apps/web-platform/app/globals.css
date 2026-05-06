@@ -1,6 +1,30 @@
 @import "tailwindcss";
 
 /*
+ * Tailwind v4 dark variant — pin to our data-theme contract. Default
+ * Tailwind v4 resolves `dark:*` via `prefers-color-scheme: dark`, which
+ * drifts from <html data-theme=...> when a user picks Light on a dark-OS
+ * machine (or Dark on a light-OS machine). Map the variant to:
+ *   1. data-theme="dark" — explicit user choice
+ *   2. data-theme="system" + prefers-color-scheme: dark — system follows OS
+ * No prefers-color-scheme block when data-theme="light" — explicit Light
+ * always wins over OS even if the OS reports dark.
+ */
+@custom-variant dark {
+  &:where([data-theme="dark"], [data-theme="dark"] *) {
+    @slot;
+  }
+  @media (prefers-color-scheme: dark) {
+    &:where([data-theme="system"], [data-theme="system"] *) {
+      @slot;
+    }
+    &:where(:root:not([data-theme]), :root:not([data-theme]) *) {
+      @slot;
+    }
+  }
+}
+
+/*
  * Solar Forge (dark) is the default — declared on :root so SSR output without
  * a data-theme attribute renders dark, matching the pre-toggle behavior.
  *

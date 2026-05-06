@@ -8,6 +8,7 @@ import {
   useCallback,
   useMemo,
 } from "react";
+import { reportSilentFallback } from "@/lib/client-observability";
 
 export type Theme = "dark" | "light" | "system";
 export type ResolvedTheme = "dark" | "light";
@@ -37,6 +38,11 @@ function getSystemPreference(): ResolvedTheme {
   return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
 }
 
+function resolveInitial(theme: Theme): ResolvedTheme {
+  if (theme === "system") return getSystemPreference();
+  return theme;
+}
+
 type ThemeContextValue = {
   theme: Theme;
   resolvedTheme: ResolvedTheme;
@@ -46,24 +52,27 @@ type ThemeContextValue = {
 const ThemeContext = createContext<ThemeContextValue | null>(null);
 
 export function ThemeProvider({ children }: { children: React.ReactNode }) {
-  // Initial state is "system" on every render (server + first client paint)
-  // to keep SSR markup identical and avoid hydration drift. The post-mount
-  // effect below replaces it with the persisted choice. The no-FOUC inline
-  // script in app/layout.tsx has already set <html data-theme=...> before
-  // React mounted, so the visual surface stays correct during this swap.
-  const [theme, setThemeState] = useState<Theme>("system");
-  const [resolvedTheme, setResolvedTheme] = useState<ResolvedTheme>("dark");
+  // Lazy initializers read localStorage / matchMedia on first client render
+  // so the post-hydration paint already matches the persisted choice — no
+  // extra effect-driven swap, no flicker. SSR (where window is undefined)
+  // falls back to "system" + dark; the hydration mismatch on <html
+  // data-theme> set by the no-FOUC inline script is silenced via
+  // suppressHydrationWarning in app/layout.tsx.
+  // INVARIANT: the inline <NoFoucScript> in app/layout.tsx <head> has already
+  // written document.documentElement.dataset.theme before React mounts. This
+  // provider's first paint and that script must agree on the value or the
+  // user sees a one-frame flash.
+  const [theme, setThemeState] = useState<Theme>(() =>
+    typeof window === "undefined" ? "system" : readStoredTheme(),
+  );
+  const [resolvedTheme, setResolvedTheme] = useState<ResolvedTheme>(() =>
+    typeof window === "undefined" ? "dark" : resolveInitial(readStoredTheme()),
+  );
 
-  // Hydrate from localStorage + sync data-theme on mount.
-  useEffect(() => {
-    const stored = readStoredTheme();
-    setThemeState(stored);
-    setResolvedTheme(stored === "system" ? getSystemPreference() : stored);
-  }, []);
-
-  // Apply data-theme on the html element + dynamic theme-color whenever theme
-  // changes. Done in a separate effect so it also runs after hydration when
-  // the stored value differs from the default "system".
+  // Apply data-theme on the html element whenever theme changes. Runs once
+  // post-mount to harmonise with the lazy initializer above (covers the
+  // narrow window where the inline script wrote a stale value before the
+  // user changed their preference in another tab).
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
   }, [theme]);
@@ -94,6 +103,18 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     function onStorage(event: StorageEvent) {
       if (event.key !== STORAGE_KEY) return;
+      // newValue=null means the key was removed — reset to default. A
+      // non-null value that doesn't match the Theme union means another
+      // tab (or extension, or attacker) wrote garbage; fall back to
+      // "system" but mirror to Sentry so we notice if it's not isolated.
+      if (event.newValue !== null && !isTheme(event.newValue)) {
+        reportSilentFallback(null, {
+          feature: "theme-provider",
+          op: "storage-event",
+          extra: { newValue: event.newValue },
+          message: "theme-provider received non-Theme storage event value",
+        });
+      }
       const next = isTheme(event.newValue) ? event.newValue : "system";
       setThemeState(next);
     }
@@ -105,9 +126,16 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
     setThemeState(next);
     try {
       localStorage.setItem(STORAGE_KEY, next);
-    } catch {
-      // Persistence failed (quota, private mode) — in-memory state still
-      // applies for the current session, which is acceptable degradation.
+    } catch (err) {
+      // Persistence failed (quota, private mode, disabled cookies) —
+      // in-memory state still applies for the current session, which is
+      // acceptable degradation. Mirror to Sentry so we can detect if the
+      // failure mode becomes systemic (browser update, quota explosion).
+      reportSilentFallback(err, {
+        feature: "theme-provider",
+        op: "setItem",
+        extra: { theme: next },
+      });
     }
   }, []);
 

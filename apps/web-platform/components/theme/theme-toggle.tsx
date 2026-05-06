@@ -1,5 +1,6 @@
 "use client";
 
+import { useRef } from "react";
 import { useTheme, type Theme } from "./theme-provider";
 
 type Segment = {
@@ -22,18 +23,47 @@ const SEGMENTS: readonly Segment[] = [
 
 export function ThemeToggle() {
   const { theme, setTheme } = useTheme();
+  const buttonsRef = useRef<Array<HTMLButtonElement | null>>([]);
+
+  function handleKeyDown(event: React.KeyboardEvent<HTMLDivElement>) {
+    const key = event.key;
+    if (key !== "ArrowLeft" && key !== "ArrowRight" && key !== "Home" && key !== "End") {
+      return;
+    }
+    event.preventDefault();
+    const currentIndex = SEGMENTS.findIndex((s) => s.value === theme);
+    const safeIndex = currentIndex === -1 ? 0 : currentIndex;
+    let nextIndex = safeIndex;
+    if (key === "ArrowLeft") {
+      nextIndex = (safeIndex - 1 + SEGMENTS.length) % SEGMENTS.length;
+    } else if (key === "ArrowRight") {
+      nextIndex = (safeIndex + 1) % SEGMENTS.length;
+    } else if (key === "Home") {
+      nextIndex = 0;
+    } else if (key === "End") {
+      nextIndex = SEGMENTS.length - 1;
+    }
+    const next = SEGMENTS[nextIndex];
+    if (!next) return;
+    setTheme(next.value);
+    buttonsRef.current[nextIndex]?.focus();
+  }
 
   return (
     <div
       role="group"
       aria-label="Theme"
+      onKeyDown={handleKeyDown}
       className="flex h-8 w-full items-stretch border border-soleur-border-default"
     >
-      {SEGMENTS.map((seg) => {
+      {SEGMENTS.map((seg, index) => {
         const active = theme === seg.value;
         return (
           <button
             key={seg.value}
+            ref={(el) => {
+              buttonsRef.current[index] = el;
+            }}
             type="button"
             onClick={() => setTheme(seg.value)}
             aria-pressed={active}

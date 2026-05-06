@@ -51,7 +51,7 @@ export default function SetupKeyPage() {
       <div className="w-full max-w-sm space-y-6">
         <div className="space-y-2 text-center">
           <h1 className="text-2xl font-semibold">Connect your API key</h1>
-          <p className="text-sm text-neutral-400">
+          <p className="text-sm text-soleur-text-secondary">
             Soleur uses your own Anthropic API key. It&apos;s encrypted at rest
             and never shared.
           </p>
@@ -69,11 +69,11 @@ export default function SetupKeyPage() {
               }
             }}
             placeholder="sk-ant-..."
-            className="w-full rounded-lg border border-neutral-700 bg-neutral-900 px-4 py-3 text-sm placeholder:text-neutral-500 focus:border-neutral-500 focus:outline-none"
+            className="w-full rounded-lg border border-soleur-border-default bg-soleur-bg-surface-1 px-4 py-3 text-sm placeholder:text-soleur-text-muted focus:border-soleur-border-emphasized focus:outline-none"
           />
 
           {status === "checking" && (
-            <p className="text-sm text-neutral-400">Checking...</p>
+            <p className="text-sm text-soleur-text-secondary">Checking...</p>
           )}
           {status === "valid" && (
             <p className="text-sm text-green-400">
@@ -87,19 +87,19 @@ export default function SetupKeyPage() {
           <button
             type="submit"
             disabled={status === "checking" || status === "valid"}
-            className="w-full rounded-lg bg-white px-4 py-3 text-sm font-medium text-black hover:bg-neutral-200 disabled:opacity-50"
+            className="w-full rounded-lg bg-soleur-accent-gold-fill px-4 py-3 text-sm font-medium text-soleur-text-on-accent hover:opacity-90 disabled:opacity-50"
           >
             {status === "checking" ? "Validating..." : "Save key"}
           </button>
         </form>
 
-        <p className="text-center text-xs text-neutral-500">
+        <p className="text-center text-xs text-soleur-text-muted">
           Need a key?{" "}
           <a
             href="https://console.anthropic.com/settings/keys"
             target="_blank"
             rel="noopener noreferrer"
-            className="text-neutral-300 hover:underline"
+            className="text-soleur-text-secondary hover:underline"
           >
             Get one from Anthropic
           </a>

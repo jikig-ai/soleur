@@ -1,5 +1,5 @@
 import { render, screen, fireEvent } from "@testing-library/react";
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { ThemeProvider } from "@/components/theme/theme-provider";
 import { ThemeToggle } from "@/components/theme/theme-toggle";
 
@@ -27,6 +27,10 @@ describe("ThemeToggle", () => {
     localStorage.clear();
     document.documentElement.removeAttribute("data-theme");
     vi.stubGlobal("matchMedia", makeMatchMedia(true));
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
   });
 
   it("renders three segments with the spec-defined accessible names", () => {
@@ -96,5 +100,37 @@ describe("ThemeToggle", () => {
     expect(dark.textContent ?? "").not.toMatch(/Dark/);
     expect(light.textContent ?? "").not.toMatch(/Light/);
     expect(system.textContent ?? "").not.toMatch(/System/);
+  });
+
+  it("ArrowRight from the active segment moves selection to the next segment", () => {
+    renderToggle();
+
+    const group = screen.getByRole("group", { name: "Theme" });
+    // Default starts at 'system' (index 2). ArrowRight wraps to 'dark' (0).
+    fireEvent.keyDown(group, { key: "ArrowRight" });
+    expect(localStorage.getItem(STORAGE_KEY)).toBe("dark");
+    expect(
+      screen.getByRole("button", { name: "Dark theme" }).getAttribute("aria-pressed"),
+    ).toBe("true");
+  });
+
+  it("ArrowLeft from the active segment moves selection to the previous segment", () => {
+    renderToggle();
+
+    // 'system' (index 2) → ArrowLeft → 'light' (index 1).
+    const group = screen.getByRole("group", { name: "Theme" });
+    fireEvent.keyDown(group, { key: "ArrowLeft" });
+    expect(localStorage.getItem(STORAGE_KEY)).toBe("light");
+  });
+
+  it("Home selects the first segment and End the last", () => {
+    renderToggle();
+    const group = screen.getByRole("group", { name: "Theme" });
+
+    fireEvent.keyDown(group, { key: "Home" });
+    expect(localStorage.getItem(STORAGE_KEY)).toBe("dark");
+
+    fireEvent.keyDown(group, { key: "End" });
+    expect(localStorage.getItem(STORAGE_KEY)).toBe("system");
   });
 });

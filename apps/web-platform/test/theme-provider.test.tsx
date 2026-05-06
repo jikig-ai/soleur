@@ -1,5 +1,5 @@
 import { render, screen, act } from "@testing-library/react";
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { ThemeProvider, useTheme } from "@/components/theme/theme-provider";
 
 const STORAGE_KEY = "soleur:theme";
@@ -60,6 +60,13 @@ describe("ThemeProvider", () => {
     document.documentElement.removeAttribute("data-theme");
   });
 
+  afterEach(() => {
+    // Hygiene: every test stubs matchMedia. Without afterEach, a test that
+    // throws mid-flight leaks the stub into the next test's render and
+    // produces confusing "why did the OS preference flip" failures.
+    vi.unstubAllGlobals();
+  });
+
   it("defaults to 'system' with no stored preference", () => {
     const { matchMedia } = makeMatchMedia(true);
     vi.stubGlobal("matchMedia", matchMedia);
@@ -72,7 +79,6 @@ describe("ThemeProvider", () => {
 
     expect(screen.getByTestId("theme").textContent).toBe("system");
     expect(screen.getByTestId("resolved").textContent).toBe("dark");
-    vi.unstubAllGlobals();
   });
 
   it("hydrates from localStorage on mount", () => {
@@ -89,10 +95,9 @@ describe("ThemeProvider", () => {
     expect(screen.getByTestId("theme").textContent).toBe("light");
     expect(screen.getByTestId("resolved").textContent).toBe("light");
     expect(document.documentElement.dataset.theme).toBe("light");
-    vi.unstubAllGlobals();
   });
 
-  it("setTheme persists to localStorage and applies data-theme on <html>", () => {
+  it("setTheme(dark) persists 'dark' to localStorage and writes data-theme='dark'", () => {
     const { matchMedia } = makeMatchMedia(true);
     vi.stubGlobal("matchMedia", matchMedia);
 
@@ -109,13 +114,25 @@ describe("ThemeProvider", () => {
     expect(screen.getByTestId("theme").textContent).toBe("dark");
     expect(localStorage.getItem(STORAGE_KEY)).toBe("dark");
     expect(document.documentElement.dataset.theme).toBe("dark");
+  });
+
+  it("setTheme(light) persists 'light' to localStorage and writes data-theme='light'", () => {
+    const { matchMedia } = makeMatchMedia(true);
+    vi.stubGlobal("matchMedia", matchMedia);
+
+    render(
+      <ThemeProvider>
+        <Probe />
+      </ThemeProvider>,
+    );
 
     act(() => {
       screen.getByText("set-light").click();
     });
+
+    expect(screen.getByTestId("theme").textContent).toBe("light");
     expect(localStorage.getItem(STORAGE_KEY)).toBe("light");
     expect(document.documentElement.dataset.theme).toBe("light");
-    vi.unstubAllGlobals();
   });
 
   it("system mode resolves to OS preference and updates live on matchMedia change", () => {
@@ -147,7 +164,6 @@ describe("ThemeProvider", () => {
     // globals.css is what swaps the CSS vars when prefers-color-scheme flips).
     expect(screen.getByTestId("theme").textContent).toBe("system");
     expect(document.documentElement.dataset.theme).toBe("system");
-    vi.unstubAllGlobals();
   });
 
   it("rejects invalid stored values and falls back to 'system'", () => {
@@ -163,6 +179,107 @@ describe("ThemeProvider", () => {
 
     expect(screen.getByTestId("theme").textContent).toBe("system");
     expect(screen.getByTestId("resolved").textContent).toBe("light");
-    vi.unstubAllGlobals();
+  });
+
+  it("cross-tab: storage event with a valid Theme value updates state without remount", () => {
+    const { matchMedia } = makeMatchMedia(true);
+    vi.stubGlobal("matchMedia", matchMedia);
+
+    render(
+      <ThemeProvider>
+        <Probe />
+      </ThemeProvider>,
+    );
+
+    expect(screen.getByTestId("theme").textContent).toBe("system");
+
+    // Another tab wrote 'light' — fire a synthetic storage event.
+    act(() => {
+      window.dispatchEvent(
+        new StorageEvent("storage", { key: STORAGE_KEY, newValue: "light" }),
+      );
+    });
+
+    expect(screen.getByTestId("theme").textContent).toBe("light");
+  });
+
+  it("cross-tab: storage event with garbage value falls back to 'system'", () => {
+    localStorage.setItem(STORAGE_KEY, "dark");
+    const { matchMedia } = makeMatchMedia(true);
+    vi.stubGlobal("matchMedia", matchMedia);
+
+    render(
+      <ThemeProvider>
+        <Probe />
+      </ThemeProvider>,
+    );
+
+    expect(screen.getByTestId("theme").textContent).toBe("dark");
+
+    // Hostile or malformed value from another tab.
+    act(() => {
+      window.dispatchEvent(
+        new StorageEvent("storage", { key: STORAGE_KEY, newValue: "neon" }),
+      );
+    });
+
+    expect(screen.getByTestId("theme").textContent).toBe("system");
+  });
+
+  it("cross-tab: storage event for unrelated keys is ignored", () => {
+    const { matchMedia } = makeMatchMedia(true);
+    vi.stubGlobal("matchMedia", matchMedia);
+
+    render(
+      <ThemeProvider>
+        <Probe />
+      </ThemeProvider>,
+    );
+
+    act(() => {
+      window.dispatchEvent(
+        new StorageEvent("storage", { key: "some-other-key", newValue: "light" }),
+      );
+    });
+
+    expect(screen.getByTestId("theme").textContent).toBe("system");
+  });
+
+  it("useTheme throws a descriptive error when used outside <ThemeProvider>", () => {
+    // Render Probe with no provider; React's error boundary surface here is
+    // the thrown message itself. Suppress the React-Testing-Library noise by
+    // muting console.error for this assertion.
+    const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    expect(() => render(<Probe />)).toThrow(/useTheme.*ThemeProvider/);
+    consoleSpy.mockRestore();
+  });
+
+  it("setTheme survives localStorage.setItem quota errors (state still updates)", () => {
+    const { matchMedia } = makeMatchMedia(true);
+    vi.stubGlobal("matchMedia", matchMedia);
+
+    // Force setItem to throw (simulates Safari private-mode quota or a
+    // browser extension blocking writes).
+    const setItemSpy = vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+      throw new DOMException("quota exceeded", "QuotaExceededError");
+    });
+
+    render(
+      <ThemeProvider>
+        <Probe />
+      </ThemeProvider>,
+    );
+
+    expect(() => {
+      act(() => {
+        screen.getByText("set-dark").click();
+      });
+    }).not.toThrow();
+
+    // In-memory state still flipped — degraded persistence is acceptable.
+    expect(screen.getByTestId("theme").textContent).toBe("dark");
+    expect(document.documentElement.dataset.theme).toBe("dark");
+
+    setItemSpy.mockRestore();
   });
 });
