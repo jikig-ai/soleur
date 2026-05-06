@@ -42,17 +42,17 @@ describe("KbChatTrigger — label + dot reflect messageCount (AC2)", () => {
     expect(link.tagName.toLowerCase()).toBe("a");
   });
 
-  it("renders 'Ask about this document' with NO amber dot when messageCount === 0", async () => {
+  it("renders 'Ask about this document' with NO thread-indicator dot when messageCount === 0", async () => {
     const { container } = await renderTrigger(makeCtx({ messageCount: 0 }));
     const button = screen.getByRole("button");
     expect(button.textContent).toContain("Ask about this document");
     expect(button.textContent).not.toContain("Continue thread");
-    // amber dot is the only span with rounded-full + bg-amber-400 inside the button
+    // Thread-indicator dot is identified by data-testid; absent here.
     const dot = container.querySelector("[data-testid='kb-trigger-thread-indicator']");
     expect(dot).toBeNull();
   });
 
-  it("renders 'Continue thread' WITH amber dot when messageCount > 0 (AC2 GREEN case)", async () => {
+  it("renders 'Continue thread' WITH thread-indicator dot when messageCount > 0 (AC2 GREEN case)", async () => {
     const { container } = await renderTrigger(makeCtx({ messageCount: 3 }));
     const button = screen.getByRole("button");
     expect(button.textContent).toContain("Continue thread");

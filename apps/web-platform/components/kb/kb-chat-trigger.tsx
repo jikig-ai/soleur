@@ -33,8 +33,14 @@ export function KbChatTrigger({ fallbackHref }: KbChatTriggerProps) {
     wasOpenRef.current = isOpen;
   }, [ctx?.open]);
 
+  // Gold-gradient primary CTA — first activation of the
+  // `--soleur-accent-gradient-{start,end}` theme tokens registered in
+  // globals.css `@theme`. Tokens resolve to #d4b36a/#b8923e cross-theme,
+  // visually identical to the dashboard "New conversation" CTA at
+  // dashboard/page.tsx:526 (which currently uses the literal-hex form).
+  // Consolidating those literal-hex sites is tracked as a separate cleanup.
   const baseClass =
-    "inline-flex items-center gap-1.5 rounded-lg bg-gradient-to-r from-[#D4B36A] to-[#B8923E] px-3 py-1.5 text-xs font-semibold text-soleur-text-on-accent transition-opacity hover:opacity-90";
+    "inline-flex items-center gap-1.5 rounded-lg bg-gradient-to-r from-soleur-accent-gradient-start to-soleur-accent-gradient-end px-3 py-1.5 text-xs font-semibold text-soleur-text-on-accent transition-opacity hover:opacity-90";
 
   const icon = (
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="shrink-0">
