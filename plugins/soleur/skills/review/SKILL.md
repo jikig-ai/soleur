@@ -322,6 +322,34 @@ Flag any unverified CLI invocation as **P1 (docs-trust)** — NOT P3 polish. A
 fabricated CLI command on a high-intent landing page breaks first-touch
 trust (#1810/#2550).
 
+### 4.6. Build-step Gate Claim Verification
+
+When a review agent claims that a build-step CI gate (e.g., post-Eleventy
+`grep -rEn ... _site/`, post-Webpack chunk regex, post-`tsc` output scan)
+will fail on rendered output, **rebuild the artifact directory BEFORE
+running the gate locally**. Never run the gate against an existing
+`_site/`, `dist/`, `build/`, or `.next/` from a prior session — those
+predate the source change under review and return false-pass (zero
+matches) even when the rendered output post-rebuild contains the flagged
+strings.
+
+The verification command order is non-negotiable:
+
+```bash
+<rebuild command> && <literal CI gate command>
+```
+
+Examples:
+- Eleventy: `npx @11ty/eleventy --quiet && grep -rEn '<regex>' _site/`
+- Next.js: `bun run build && grep -rEn '<regex>' .next/`
+
+If the rebuild step is unfamiliar, read the corresponding `.github/workflows/`
+job to find the exact build command the gate runs against — match it, do
+not invent one. A stale-artifact false-pass is the most common dismissal
+class for build-output gates (PR #3296 → #3347 hotfix). Treat any agent
+finding of the form "rendered/built artifact X contains Y" as a
+fresh-build-required claim by default.
+
 ### 5. Findings Synthesis and GitHub Issue Creation
 
 <critical_requirement>
