@@ -1,10 +1,11 @@
 ---
 type: bug-fix
-issue: TBD
+issue: 3346
 branch: feat-one-shot-concierge-pdf-summary-fix
 prior_issues: [3253, 3263, 3278, 3287, 3288, 3294, 3326]
-related_open_issues: [3332]
-follow_through_issues: [TBD-safe-bash-widen, TBD-bash-modal-hide]
+related_open_issues: [3332, 3243]
+follow_through_issues: [3344, 3345]
+review_scope_outs: [3342, 3343]
 requires_cpo_signoff: true
 ---
 
