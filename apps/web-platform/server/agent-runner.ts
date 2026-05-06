@@ -510,10 +510,12 @@ export function startInactivityTimer(): void {
  * Returns the timer so callers can clear it (used by tests; production
  * server keeps the reference live for the lifetime of the process).
  */
-// THRESHOLD-COUPLING: 120 s appears in three places — keep them in sync.
+// THRESHOLD-COUPLING: 120 s appears in four places — keep them in sync.
 //   (1) migration 029 line ~131 (acquire_conversation_slot lazy sweep)
 //   (2) migration 029 line ~224 (pg_cron user_concurrency_slots_sweep)
 //   (3) migration 037 line ~39 (find_stuck_active_conversations default)
+//   (4) ws-handler.ts STALE_HEARTBEAT_THRESHOLD_SECONDS in
+//       tryLedgerDivergenceRecovery (May-6 #3354)
 // Changing this constant without updating those sites desyncs the sweep
 // mechanisms — one will reap rows the others consider live.
 const STUCK_ACTIVE_THRESHOLD_SECONDS = 120;

@@ -37,14 +37,25 @@
 # the 301 is served whether GitHub Pages still emits the legacy HTML files or
 # not. Source-template deletion is tracked in follow-up issue #3328.
 #
-# Verbose `rules { ... }` blocks (one per redirect) are deliberate over
-# `dynamic { for_each = local.page_redirects ... }` for first-apply review:
-# `terraform plan` shows each rule as its own diff entry, which makes
-# operator review of the initial 22-rule rollout straightforward. A future
-# PR (after the deploy is verified live) can collapse to a `dynamic` block;
-# changing the iteration shape on a settled ruleset triggers in-place
-# updates across all entries (CF rule ordering matters), so the refactor
-# is cleaner as a separate Terraform change.
+# Cloudflare Free-tier zones cap dynamic-redirect rules at 10 per phase,
+# and `regex_replace()` in `target_url.expression` requires Business or WAF
+# Advanced (cannot be used to consolidate). Both constraints discovered
+# post-merge during PR #3296 apply.
+#
+# This ruleset declares 10 explicit rules (the Free-tier cap), prioritized:
+#   - 8 top-level `/pages/<slug>.html → /<slug>/` redirects (high-traffic pages)
+#   - 1 `terms-of-service → terms-and-conditions` slug rename (load-bearing —
+#     the only entry with a confirmed GSC 404 bucket entry pre-fix)
+#   - 1 `/blog/what-is-company-as-a-service/index.html → /company-as-a-service/` reslug
+#
+# Deferred to follow-up: 9 individual `/pages/legal/<slug>.html → /legal/<slug>/`
+# redirects (privacy, cookie, gdpr, AUP, data-protection, individual-cla,
+# corporate-cla, disclaimer, terms-and-conditions). These paths return 404
+# until a Bulk Redirects refactor lands (account-scoped `cloudflare_list` of
+# type "redirect" + `cloudflare_ruleset` with phase `http_request_redirect`).
+# Google will recrawl from the sitemap and drop them from the redirect-bucket
+# cluster — acceptable transitional state since the canonical `/legal/<slug>/`
+# paths ARE in the sitemap and indexed.
 resource "cloudflare_ruleset" "seo_page_redirects" {
   provider    = cloudflare.rulesets
   zone_id     = var.cf_zone_id
@@ -181,38 +192,6 @@ resource "cloudflare_ruleset" "seo_page_redirects" {
     }
   }
 
-  rules {
-    action      = "redirect"
-    description = "Redirect /pages/legal/privacy-policy.html → /legal/privacy-policy/"
-    enabled     = true
-    expression  = "(http.host eq \"www.soleur.ai\" and http.request.uri.path eq \"/pages/legal/privacy-policy.html\")"
-    action_parameters {
-      from_value {
-        status_code           = 301
-        preserve_query_string = false
-        target_url {
-          value = "https://www.soleur.ai/legal/privacy-policy/"
-        }
-      }
-    }
-  }
-
-  rules {
-    action      = "redirect"
-    description = "Redirect /pages/legal/terms-and-conditions.html → /legal/terms-and-conditions/"
-    enabled     = true
-    expression  = "(http.host eq \"www.soleur.ai\" and http.request.uri.path eq \"/pages/legal/terms-and-conditions.html\")"
-    action_parameters {
-      from_value {
-        status_code           = 301
-        preserve_query_string = false
-        target_url {
-          value = "https://www.soleur.ai/legal/terms-and-conditions/"
-        }
-      }
-    }
-  }
-
   # NEW: missing entry in legacy _data/pageRedirects.js — caused the 1× 404
   # in the GSC report (legal slug renamed but redirect not added).
   rules {
@@ -226,118 +205,6 @@ resource "cloudflare_ruleset" "seo_page_redirects" {
         preserve_query_string = false
         target_url {
           value = "https://www.soleur.ai/legal/terms-and-conditions/"
-        }
-      }
-    }
-  }
-
-  rules {
-    action      = "redirect"
-    description = "Redirect /pages/legal/cookie-policy.html → /legal/cookie-policy/"
-    enabled     = true
-    expression  = "(http.host eq \"www.soleur.ai\" and http.request.uri.path eq \"/pages/legal/cookie-policy.html\")"
-    action_parameters {
-      from_value {
-        status_code           = 301
-        preserve_query_string = false
-        target_url {
-          value = "https://www.soleur.ai/legal/cookie-policy/"
-        }
-      }
-    }
-  }
-
-  rules {
-    action      = "redirect"
-    description = "Redirect /pages/legal/gdpr-policy.html → /legal/gdpr-policy/"
-    enabled     = true
-    expression  = "(http.host eq \"www.soleur.ai\" and http.request.uri.path eq \"/pages/legal/gdpr-policy.html\")"
-    action_parameters {
-      from_value {
-        status_code           = 301
-        preserve_query_string = false
-        target_url {
-          value = "https://www.soleur.ai/legal/gdpr-policy/"
-        }
-      }
-    }
-  }
-
-  rules {
-    action      = "redirect"
-    description = "Redirect /pages/legal/acceptable-use-policy.html → /legal/acceptable-use-policy/"
-    enabled     = true
-    expression  = "(http.host eq \"www.soleur.ai\" and http.request.uri.path eq \"/pages/legal/acceptable-use-policy.html\")"
-    action_parameters {
-      from_value {
-        status_code           = 301
-        preserve_query_string = false
-        target_url {
-          value = "https://www.soleur.ai/legal/acceptable-use-policy/"
-        }
-      }
-    }
-  }
-
-  rules {
-    action      = "redirect"
-    description = "Redirect /pages/legal/data-protection-disclosure.html → /legal/data-protection-disclosure/"
-    enabled     = true
-    expression  = "(http.host eq \"www.soleur.ai\" and http.request.uri.path eq \"/pages/legal/data-protection-disclosure.html\")"
-    action_parameters {
-      from_value {
-        status_code           = 301
-        preserve_query_string = false
-        target_url {
-          value = "https://www.soleur.ai/legal/data-protection-disclosure/"
-        }
-      }
-    }
-  }
-
-  rules {
-    action      = "redirect"
-    description = "Redirect /pages/legal/individual-cla.html → /legal/individual-cla/"
-    enabled     = true
-    expression  = "(http.host eq \"www.soleur.ai\" and http.request.uri.path eq \"/pages/legal/individual-cla.html\")"
-    action_parameters {
-      from_value {
-        status_code           = 301
-        preserve_query_string = false
-        target_url {
-          value = "https://www.soleur.ai/legal/individual-cla/"
-        }
-      }
-    }
-  }
-
-  rules {
-    action      = "redirect"
-    description = "Redirect /pages/legal/corporate-cla.html → /legal/corporate-cla/"
-    enabled     = true
-    expression  = "(http.host eq \"www.soleur.ai\" and http.request.uri.path eq \"/pages/legal/corporate-cla.html\")"
-    action_parameters {
-      from_value {
-        status_code           = 301
-        preserve_query_string = false
-        target_url {
-          value = "https://www.soleur.ai/legal/corporate-cla/"
-        }
-      }
-    }
-  }
-
-  rules {
-    action      = "redirect"
-    description = "Redirect /pages/legal/disclaimer.html → /legal/disclaimer/"
-    enabled     = true
-    expression  = "(http.host eq \"www.soleur.ai\" and http.request.uri.path eq \"/pages/legal/disclaimer.html\")"
-    action_parameters {
-      from_value {
-        status_code           = 301
-        preserve_query_string = false
-        target_url {
-          value = "https://www.soleur.ai/legal/disclaimer/"
         }
       }
     }
@@ -379,6 +246,9 @@ resource "cloudflare_ruleset" "seo_page_redirects" {
 # Access policy intercepts before the response_headers_transform phase, this
 # rule is silently a no-op — the post-merge curl verification is the
 # load-bearing check (see plan Phase 4 step 6).
+#
+# NOTE: the api.soleur.ai rule below is currently a no-op (DNS-only CNAME
+# bypasses CF edge). See per-rule comment for diagnosis and tracker #3379.
 resource "cloudflare_ruleset" "seo_response_headers" {
   provider    = cloudflare.rulesets
   zone_id     = var.cf_zone_id
@@ -387,9 +257,41 @@ resource "cloudflare_ruleset" "seo_response_headers" {
   kind        = "zone"
   phase       = "http_response_headers_transform"
 
+  # ── Currently a no-op (verified 2026-05-06) ────────────────────────────────
+  #
+  # `api.soleur.ai` is a DNS-only CNAME → `ifsccnjhymdmidffkzhl.supabase.co`
+  # (Supabase Custom Domain). Cloudflare Transform Rules declared on the
+  # `soleur.ai` zone only fire on traffic that transits soleur.ai's CF edge
+  # (proxied / orange-cloud records). DNS-only CNAMEs bypass the edge entirely,
+  # so this Transform Rule never sees the request.
+  #
+  # Per Cloudflare: "Rules features require that your domain (or subdomain)
+  # has its DNS records proxied through Cloudflare"
+  # (https://developers.cloudflare.com/rules/).
+  #
+  # Evidence (2026-05-06):
+  #   $ curl -sI -X GET https://api.soleur.ai/
+  #   HTTP/2 404 — no x-robots-tag header in response.
+  # Compare deploy.soleur.ai (also on this ruleset, but proxied) — its rule
+  # fires correctly: x-robots-tag: noindex, nofollow confirmed live.
+  #
+  # Why retained: if `api.soleur.ai` is ever proxied through soleur.ai's edge
+  # (orange-cloud record + Supabase Origin Certificate at the edge), this rule
+  # fires automatically without further code changes. Removing it would make
+  # that future flip more error-prone (silent re-exposure window).
+  #
+  # Re-evaluation criteria (tracker: #3379):
+  #   1. Supabase Custom Domains adds a response-header-injection feature
+  #      (eliminates the need for an edge rule entirely), OR
+  #   2. operator chooses to proxy api.soleur.ai through soleur.ai's edge.
+  #
+  # Practical risk: low. `api.soleur.ai` returns 401/404/403 on every
+  # authenticated path under Googlebot's anonymous identity — there is no
+  # body content for Google to index. X-Robots-Tag was defense-in-depth
+  # against URL-existence-recording (the "Crawled - not indexed" GSC bucket).
   rules {
     action      = "rewrite"
-    description = "X-Robots-Tag: noindex, nofollow on api.soleur.ai GET responses"
+    description = "X-Robots-Tag: noindex, nofollow on api.soleur.ai GET responses (no-op until proxied — see #3379)"
     enabled     = true
     # Scoped to GET only — Soleur app users hit api.soleur.ai for Supabase
     # REST/Auth via POST/PATCH/DELETE/OPTIONS. Only GET responses can be
