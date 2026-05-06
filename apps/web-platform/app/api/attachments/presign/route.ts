@@ -8,6 +8,7 @@ import {
   ALLOWED_ATTACHMENT_TYPES,
   MAX_AGENT_READABLE_PDF_SIZE,
   MAX_ATTACHMENT_SIZE,
+  isPdfAttachment,
 } from "@/lib/attachment-constants";
 
 function getExtension(contentType: string): string {
@@ -56,15 +57,15 @@ export async function POST(request: Request) {
 
   // Validate file size
   // Closes #3332: PDFs are bounded by the agent-readable cap (24 MB raw)
-  // alongside the generic 20 MB attachment cap. Branch on Content-Type or
-  // filename extension — clients may send "application/octet-stream" for
-  // a misnamed PDF.
-  const isPdf =
-    contentType === "application/pdf" ||
-    filename.toLowerCase().endsWith(".pdf");
-  if (sizeBytes <= 0) {
+  // alongside the generic 20 MB attachment cap. Note that an unsupported
+  // Content-Type is already rejected above, but isPdfAttachment branches on
+  // filename extension too — this hardens the cap if ALLOWED_ATTACHMENT_TYPES
+  // is later widened to include octet-stream-with-extension.
+  // Number.isFinite catches NaN/Infinity from a coerced sizeBytes.
+  if (!Number.isFinite(sizeBytes) || sizeBytes <= 0) {
     return NextResponse.json({ error: "file_too_large" }, { status: 400 });
   }
+  const isPdf = isPdfAttachment({ contentType, filename });
   if (isPdf && sizeBytes > MAX_AGENT_READABLE_PDF_SIZE) {
     return NextResponse.json({ error: "file_too_large" }, { status: 400 });
   }

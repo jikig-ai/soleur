@@ -11,7 +11,10 @@ import path from "path";
 import logger from "@/server/logger";
 import * as Sentry from "@sentry/nextjs";
 import { KB_UPLOAD_EXTENSIONS } from "@/lib/kb-constants";
-import { MAX_AGENT_READABLE_PDF_SIZE } from "@/lib/attachment-constants";
+import {
+  MAX_AGENT_READABLE_PDF_SIZE,
+  isPdfAttachment,
+} from "@/lib/attachment-constants";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -31,6 +34,23 @@ export async function POST(request: Request) {
   // CSRF validation
   const { valid: originValid, origin } = validateOrigin(request);
   if (!originValid) return rejectCsrf("api/kb/upload", origin);
+
+  // Content-Length precheck: reject obviously oversized requests in O(1)
+  // before buffering the body via formData(). Defense-in-depth — the value
+  // is spoofable, but the formData parser still caps actual bytes consumed
+  // when the declared size is honest. Slack covers multipart envelope
+  // overhead. A PDF declared above the agent-readable cap is rejected first.
+  const declaredLength = Number(request.headers.get("content-length"));
+  const SLACK_BYTES = 1024 * 1024; // 1 MB for multipart framing/headers
+  if (
+    Number.isFinite(declaredLength) &&
+    declaredLength > MAX_AGENT_READABLE_PDF_SIZE + SLACK_BYTES
+  ) {
+    return NextResponse.json(
+      { error: "Request body too large" },
+      { status: 413 },
+    );
+  }
 
   // Authentication
   const supabase = await createClient();
@@ -108,9 +128,10 @@ export async function POST(request: Request) {
   // sized to fit Anthropic's 32 MB encoded request payload after base64
   // inflation. Defense-in-depth — under current MAX_FILE_SIZE = 20 MB the
   // generic gate fires first; this branch future-proofs a raise.
-  const isPdf =
-    file.type === "application/pdf" || ext === "pdf";
-  if (isPdf && file.size > MAX_AGENT_READABLE_PDF_SIZE) {
+  if (
+    isPdfAttachment({ contentType: file.type, filename: sanitizedName }) &&
+    file.size > MAX_AGENT_READABLE_PDF_SIZE
+  ) {
     return NextResponse.json(
       {
         error: `PDF exceeds the ${Math.round(MAX_AGENT_READABLE_PDF_SIZE / 1024 / 1024)} MB ceiling for the Anthropic API request payload (after base64 encoding)`,

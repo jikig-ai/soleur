@@ -30,7 +30,7 @@ import { tryCreateVision, buildVisionEnhancementPrompt } from "./vision-helpers"
 import { createRateLimiter } from "./trigger-workflow";
 import { githubApiGet } from "./github-api";
 import { MAX_BINARY_SIZE } from "./kb-limits";
-import { MAX_AGENT_READABLE_PDF_SIZE } from "../lib/attachment-constants";
+import { MAX_AGENT_READABLE_PDF_SIZE } from "@/lib/attachment-constants";
 import { buildKbShareTools } from "./kb-share-tools";
 import { buildConversationsTools } from "./conversations-tools";
 import { getCurrentRepoUrl } from "./current-repo-url";

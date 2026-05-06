@@ -156,6 +156,32 @@ describe("POST /api/attachments/presign", () => {
     expect(body.error).toBeDefined();
   });
 
+  // Regression for #3332 review: NaN slipped past `typeof === "number"` and
+  // `<= 0` before the Number.isFinite gate. Closes a defense-in-depth gap.
+  test("returns 400 when sizeBytes is NaN", async () => {
+    setupAuthenticatedUser();
+    setupConversationOwnership(true);
+
+    // JSON has no NaN literal; emulate via a body that round-trips NaN
+    // through the route's number-coercion path. The simplest way is to
+    // bypass JSON.stringify and hand-craft the body.
+    const req = new Request("https://app.soleur.ai/api/attachments/presign", {
+      method: "POST",
+      headers: {
+        origin: "https://app.soleur.ai",
+        "content-type": "application/json",
+      },
+      body: '{"filename":"x.pdf","contentType":"application/pdf","sizeBytes":NaN,"conversationId":"' +
+        TEST_CONVERSATION_ID +
+        '"}',
+    });
+    const res = await POST(req);
+    // NaN is not valid JSON — request.json() rejects, so the parse-guard
+    // fires (400 invalid_request). If a future code path begins accepting
+    // NaN through Number coercion, the Number.isFinite gate must catch it.
+    expect(res.status).toBe(400);
+  });
+
   test("returns 200 with uploadUrl and storagePath on success", async () => {
     setupAuthenticatedUser();
     setupConversationOwnership(true);

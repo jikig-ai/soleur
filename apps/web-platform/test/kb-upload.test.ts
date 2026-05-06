@@ -560,13 +560,13 @@ describe("POST /api/kb/upload", () => {
     expect(mockLinearize).not.toHaveBeenCalled();
   });
 
-  // Closes #3332: defense-in-depth PDF size cap. Today the route's
-  // existing MAX_FILE_SIZE = 20 MB rejects any 25 MB upload, so this is
-  // a contract-lock (not a true RED) — the implementation adds a
-  // PDF-specific 24 MB branch that future-proofs against MAX_FILE_SIZE
-  // being raised independently.
+  // Closes #3332: defense-in-depth PDF size cap. The PDF branch (24 MB)
+  // is ordered BEFORE the generic 20 MB MAX_FILE_SIZE gate, so a 25 MB
+  // PDF is rejected by the PDF branch with the PDF-specific message — the
+  // body assertion below is what makes the test RED-distinguishing rather
+  // than a plain contract-lock.
   describe("PDF size cap (#3332)", () => {
-    test("returns 413 for 25 MB application/pdf", async () => {
+    test("returns 413 with PDF-specific message for 25 MB application/pdf", async () => {
       setupFullMocks();
 
       const bigPdf = new File([new Uint8Array(25 * 1024 * 1024)], "big.pdf", {
@@ -575,6 +575,11 @@ describe("POST /api/kb/upload", () => {
       const formData = createFormData(bigPdf, "uploads");
       const res = await POST(createRequest(formData, "https://app.soleur.ai"));
       expect(res.status).toBe(413);
+
+      const body = await res.json();
+      expect(body.error).toMatch(/PDF/);
+      expect(body.error).toContain("24 MB");
+      expect(body.error).toMatch(/Anthropic/i);
     });
 
     test("returns 201 for 19 MB application/pdf (under both caps)", async () => {

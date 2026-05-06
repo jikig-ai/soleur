@@ -24,9 +24,27 @@ export const MAX_ATTACHMENTS_PER_MESSAGE = 5;
  * Anthropic's PDF beta caps the entire encoded request payload at 32 MB
  * (https://platform.claude.com/docs/en/docs/build-with-claude/pdf-support).
  * The SDK's Read tool returns PDF bytes as base64 (FileReadOutput.pdf.base64),
- * which inflates raw bytes by ~33%. So 32 MB encoded ÷ 1.33 ≈ 24 MB raw,
- * with small headroom for system prompt + prior turns.
+ * which inflates raw bytes by ~33%. So 32 MB encoded ÷ 1.33 ≈ 24 MB raw.
+ * System prompt + prior turns also count toward the 32 MB encoded ceiling, so
+ * a request near 24 MB raw can still trip the API limit; this cap is the
+ * upper bound, not a guaranteed-fit budget.
  *
  * Closes #3332.
  */
 export const MAX_AGENT_READABLE_PDF_SIZE = 24 * 1024 * 1024; // 24 MB
+
+/**
+ * Detect whether an attachment is (or may be) a PDF for the purpose of
+ * applying MAX_AGENT_READABLE_PDF_SIZE. Branch on Content-Type OR filename
+ * extension — clients sometimes send "application/octet-stream" with a .pdf
+ * filename. Either signal triggers the PDF cap. Used by the chat-attachment
+ * validator and KB upload route.
+ */
+export function isPdfAttachment(opts: {
+  contentType?: string | null;
+  filename?: string | null;
+}): boolean {
+  if (opts.contentType === "application/pdf") return true;
+  const name = opts.filename?.toLowerCase() ?? "";
+  return name.endsWith(".pdf");
+}
