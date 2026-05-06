@@ -51,4 +51,13 @@ describe("ToolUseChip", () => {
     expect(container.querySelector("script")).toBeNull();
     expect(container.textContent).toContain("<script>alert(1)</script>");
   });
+
+  test("does not render a pulsing dot indicator", () => {
+    const { container } = render(
+      <ToolUseChip toolName="Skill" toolLabel="Routing" leaderId="cc_router" />,
+    );
+    const chip = container.querySelector("[data-tool-chip-id]");
+    expect(chip).not.toBeNull();
+    expect(chip?.querySelector("span.animate-pulse")).toBeNull();
+  });
 });

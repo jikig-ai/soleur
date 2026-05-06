@@ -100,14 +100,14 @@ None expected. The removal is mechanical. If the `gap-2` removal looks visually 
 
 ### Pre-merge (PR)
 
-- [ ] `apps/web-platform/components/chat/message-bubble.tsx` `ToolStatusChip` no longer renders the amber pulsing dot.
-- [ ] `apps/web-platform/components/chat/message-bubble.tsx` `ToolStatusChip` wrapper has `data-testid="tool-status-chip"` (mirrors sibling `data-testid` precedent in same file).
-- [ ] `apps/web-platform/components/chat/tool-use-chip.tsx` `ToolUseChip` no longer renders the amber pulsing dot.
-- [ ] New test `message-bubble-tool-status-chip.test.tsx` asserts the dot is gone (scoped via `data-testid="tool-status-chip"`) AND the toolLabel + Working badge + animated bubble border (`message-bubble-active`) are still present.
-- [ ] Existing test `apps/web-platform/test/tool-use-chip.test.tsx` extended with a "no dot" assertion (scoped via the existing `[data-tool-chip-id]` attribute), all other assertions still green.
-- [ ] Existing test `apps/web-platform/test/message-bubble-retry.test.tsx` still green — the change does NOT touch `RetryingChip`. The retry chip has its own dot at line 48; that dot stays because the retry chip stands alone when `retrying=true` (no surrounding `Working` badge — the badge is replaced by the retry chip).
-- [ ] Existing tests that touch `MessageBubble` rendering (`message-bubble-memo.test.tsx`, `message-bubble-header.test.tsx`, `message-bubble-file-issue-link.test.tsx`, `light-theme-tokenization.test.tsx`, `cc-soleur-go-end-to-end-render.test.tsx`) remain green — verified at deepen-plan time that none of these tests assert on `bg-amber-500` or `animate-pulse.rounded-full` selectors (grep returned zero matches).
-- [ ] `bun test apps/web-platform/test/` returns no new failures vs. main-branch baseline.
+- [x] `apps/web-platform/components/chat/message-bubble.tsx` `ToolStatusChip` no longer renders the amber pulsing dot.
+- [x] `apps/web-platform/components/chat/message-bubble.tsx` `ToolStatusChip` wrapper has `data-testid="tool-status-chip"` (mirrors sibling `data-testid` precedent in same file).
+- [x] `apps/web-platform/components/chat/tool-use-chip.tsx` `ToolUseChip` no longer renders the amber pulsing dot.
+- [x] New test `message-bubble-tool-status-chip.test.tsx` asserts the dot is gone (scoped via `data-testid="tool-status-chip"`) AND the toolLabel + Working badge + animated bubble border (`message-bubble-active`) are still present.
+- [x] Existing test `apps/web-platform/test/tool-use-chip.test.tsx` extended with a "no dot" assertion (scoped via the existing `[data-tool-chip-id]` attribute), all other assertions still green.
+- [x] Existing test `apps/web-platform/test/message-bubble-retry.test.tsx` still green — the change does NOT touch `RetryingChip`. The retry chip has its own dot at line 48; that dot stays because the retry chip stands alone when `retrying=true` (no surrounding `Working` badge — the badge is replaced by the retry chip).
+- [x] Existing tests that touch `MessageBubble` rendering (`message-bubble-memo.test.tsx`, `message-bubble-header.test.tsx`, `message-bubble-file-issue-link.test.tsx`, `light-theme-tokenization.test.tsx`, `cc-soleur-go-end-to-end-render.test.tsx`) remain green — verified at deepen-plan time that none of these tests assert on `bg-amber-500` or `animate-pulse.rounded-full` selectors (grep returned zero matches).
+- [x] `bun test apps/web-platform/test/` returns no new failures vs. main-branch baseline.
 - [ ] QA screenshot of a `tool_use` bubble (e.g., a `/soleur:go` flow that triggers a `Read` tool call) — bubble shows animated border, top-right `Working` badge, and the toolLabel text WITHOUT the inner dot.
 - [ ] QA screenshot of a `cc_router` / `system` pre-bubble chip during routing — chip shows colored border + pill shape + toolLabel text WITHOUT the inner dot.
 - [ ] QA spot-check (regression-canary): trigger a retry scenario; confirm `RetryingChip` still renders with its own pulsing dot + "Retrying…" text. Also confirm the routing chip in `chat-surface.tsx` and the subagent in-flight indicator in `subagent-group.tsx` are untouched.
