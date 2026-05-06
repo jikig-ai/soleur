@@ -40,7 +40,8 @@ import {
 // + composing the summary, because `consumeStream` only resets the per-block
 // idle window on `assistant`/`result` messages — it ignores the SDK's
 // `user`-role tool_use_result messages that signal forward progress
-// (sdk.d.ts:2528 — `SDKUserMessage.tool_use_result?: unknown`).
+// (the SDK exposes `SDKUserMessage.tool_use_result?: unknown` as the
+// documented discriminator field).
 //
 // Fix: in `consumeStream`, when `msg.type === "user"` AND
 // `tool_use_result !== undefined` AND the runner is not closed/awaitingUser,
@@ -111,13 +112,14 @@ function makeResult(totalCostUsd: number, sessionId = "sess-1"): SDKResultMessag
 }
 
 // AC1.1 / AC1.4: a `user`-role SDK message carrying `tool_use_result` is
-// the SDK's own forward-progress signal (sdk.d.ts:2528). The new branch
-// detects it via the documented field and re-arms `armRunaway`.
+// the SDK's own forward-progress signal. The new branch detects it via the
+// documented `SDKUserMessage.tool_use_result?: unknown` field and re-arms
+// `armRunaway`.
 function makeUserToolResult(
   toolUseId: string,
-  opts: { isReplay?: boolean; sessionId?: string } = {},
+  sessionId = "sess-1",
 ): SDKUserMessage {
-  const base = {
+  return {
     type: "user",
     message: {
       role: "user",
@@ -133,16 +135,23 @@ function makeUserToolResult(
     parent_tool_use_id: null,
     isSynthetic: true,
     tool_use_result: { ok: true },
-    session_id: opts.sessionId ?? "sess-1",
-  };
-  if (opts.isReplay) {
-    return {
-      ...base,
-      isReplay: true,
-      uuid: "00000000-0000-0000-0000-0000000000aa" as never,
-    } as unknown as SDKUserMessage;
-  }
-  return base as SDKUserMessage;
+    session_id: sessionId,
+  } as SDKUserMessage;
+}
+
+// AC1.8: `SDKUserMessageReplay` shares the `tool_use_result?: unknown`
+// field with `SDKUserMessage`. The shared field-check covers both shapes
+// without an extra branch.
+function makeUserToolResultReplay(
+  toolUseId: string,
+  sessionId = "sess-1",
+): SDKUserMessage {
+  return {
+    ...makeUserToolResult(toolUseId, sessionId),
+    isReplay: true,
+    uuid: "00000000-0000-0000-0000-0000000000aa" as never,
+    // biome-ignore lint/suspicious/noExplicitAny: replay variant is a structural superset
+  } as any;
 }
 
 // AC1.6: a `user`-role SDK message WITHOUT `tool_use_result` MUST NOT
@@ -330,6 +339,12 @@ describe("consumeStream — tool_use_result resets runaway timer (Bug 1: PDF mid
     expect(
       events._ended.find((e) => e.status === "runner_runaway"),
     ).toBeUndefined();
+    // Positive liveness: no workflow_ended fired at all (not just
+    // runaway-free), no silent fallback mirrored to Sentry. Guards
+    // against a vacuous pass where the new branch silently short-circuits
+    // before re-arming.
+    expect(events._ended).toHaveLength(0);
+    expect(mockReportSilentFallback).not.toHaveBeenCalled();
   });
 
   // AC1.5: defense-pair invariant. A tool_use_result drumbeat every 5s
@@ -376,9 +391,12 @@ describe("consumeStream — tool_use_result resets runaway timer (Bug 1: PDF mid
     // Drum-beat tool_use_result every 5s — the per-block idle window
     // (20s) keeps resetting under the new semantic. The hard cap (30s
     // anchor) MUST still fire because the new branch does not touch
-    // `turnHardCap`.
-    for (let i = 1; i <= 7; i++) {
-      vi.advanceTimersByTime(5_000);
+    // `turnHardCap`. Loop bound is derived from the cap so a future
+    // change to `maxTurnDurationMs` doesn't silently truncate coverage.
+    const drumBeatMs = 5_000;
+    const drumBeatsToExceedCap = Math.ceil(30_000 / drumBeatMs) + 1;
+    for (let i = 1; i <= drumBeatsToExceedCap; i++) {
+      vi.advanceTimersByTime(drumBeatMs);
       mock.emit(makeUserToolResult(`tu${i}`));
       await flushMicrotasks();
     }
@@ -502,8 +520,8 @@ describe("consumeStream — tool_use_result resets runaway timer (Bug 1: PDF mid
     expect(end!.lastBlockToolName).toBe("Read");
   });
 
-  // AC1.8: replay-path resilience. `SDKUserMessageReplay` (sdk.d.ts:
-  // 2538-2552) shares the `tool_use_result?: unknown` field. The shared
+  // AC1.8: replay-path resilience. `SDKUserMessageReplay` shares the
+  // `tool_use_result?: unknown` field with `SDKUserMessage`. The shared
   // field-check covers both shapes — no extra branch.
   it("scenario E: SDKUserMessageReplay with tool_use_result also resets the runaway timer", async () => {
     vi.setSystemTime(0);
@@ -541,7 +559,7 @@ describe("consumeStream — tool_use_result resets runaway timer (Bug 1: PDF mid
     vi.advanceTimersByTime(8_000);
     await flushMicrotasks();
     // Replay-path tool_use_result.
-    mock.emit(makeUserToolResult("tu1", { isReplay: true }));
+    mock.emit(makeUserToolResultReplay("tu1"));
     await flushMicrotasks();
 
     // 7s more — under the correct semantic the replay-path message reset
