@@ -142,20 +142,63 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
     typeof window === "undefined" ? "dark" : resolveInitial(readStoredTheme()),
   );
 
-  // Apply data-theme on the html element whenever theme changes. The first
-  // run on mount writes the attribute (covers the narrow window where the
-  // inline script wrote a stale value vs. another tab) but intentionally
-  // skips disableTransitionsForOneFrame: the inline <NoFoucScript> already
-  // owns the boot-frame transition-disable cleanup, and the helper would
-  // no-op anyway via its bail guard while the boot-script's <style> is
-  // still alive. Skipping the call avoids an unnecessary createElement +
-  // reflow round on first mount.
+  // Apply data-theme on the html element whenever theme changes.
+  //
+  // First-mount behaviour: the inline <NoFoucScript> in app/layout.tsx
+  // already wrote document.documentElement.dataset.theme from
+  // localStorage before this provider hydrated. Treat THAT value as the
+  // canonical post-bootstrap theme and sync React state to it if React's
+  // SSR-vs-client lazy initializer landed on a divergent value (in
+  // practice, the SSR snapshot is "system" because window is undefined
+  // server-side; React 18 hydration does not always re-run the lazy
+  // initializer with the localStorage-derived value).
+  //
+  // Without this sync, ThemeToggle reads `theme` from context and
+  // highlights the wrong segment even though the page palette is
+  // correct (CSS resolves via dataset.theme, which IS correct). The
+  // user-visible symptom: the active-segment indicator is stuck on
+  // "system" until the user clicks any segment, at which point setTheme
+  // re-syncs state implicitly. The same-value guard in setTheme then
+  // makes a single click a no-op when the click target equals the
+  // (incorrect) cur state, producing the "click back-and-forth to
+  // switch" bug.
+  //
+  // We do NOT write dataset.theme on the first run — the inline script's
+  // value is already correct AND already canonical; overwriting it
+  // before the React-state-sync re-render would briefly resolve CSS
+  // through the @media (prefers-color-scheme) fallback (visible flicker
+  // for users whose OS preference doesn't match their stored choice).
+  // Subsequent runs (real theme changes) still write dataset.theme and
+  // run disableTransitionsForOneFrame.
   const prevThemeRef = useRef<Theme | null>(null);
   useEffect(() => {
-    if (prevThemeRef.current === theme) return;
-    if (prevThemeRef.current !== null) {
-      disableTransitionsForOneFrame();
+    if (prevThemeRef.current === null) {
+      const fromDom = document.documentElement.dataset.theme;
+      if (isTheme(fromDom)) {
+        // Inline boot script set a valid dataset.theme — that is the
+        // canonical post-bootstrap value. Sync React state to it if the
+        // lazy initializer landed elsewhere (SSR fallback). Do NOT
+        // overwrite dataset.theme here: it's already correct, and an
+        // overwrite before the state-sync re-render would briefly
+        // resolve CSS through the @media (prefers-color-scheme)
+        // fallback (visible flicker for users whose OS preference does
+        // not match their stored choice).
+        prevThemeRef.current = fromDom;
+        if (fromDom !== theme) {
+          setThemeState(fromDom);
+          setResolvedTheme(resolveInitial(fromDom));
+        }
+        return;
+      }
+      // No (or invalid) dataset.theme — inline script did not run, or
+      // we are mid-test in an environment that scrubs the attribute.
+      // Establish the baseline by writing React's current state.
+      document.documentElement.dataset.theme = theme;
+      prevThemeRef.current = theme;
+      return;
     }
+    if (prevThemeRef.current === theme) return;
+    disableTransitionsForOneFrame();
     document.documentElement.dataset.theme = theme;
     prevThemeRef.current = theme;
   }, [theme]);

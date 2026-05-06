@@ -260,6 +260,35 @@ describe("ThemeProvider", () => {
     consoleSpy.mockRestore();
   });
 
+  it("syncs React state from <html data-theme> on mount when state diverged from the inline-script's value", () => {
+    // Simulate the SSR-vs-client divergence the inline <NoFoucScript> sees:
+    // the boot script wrote data-theme="dark" to <html> from localStorage,
+    // but at hydration time React's lazy initializer didn't pick it up (the
+    // SSR snapshot ran with `typeof window === "undefined"` and produced
+    // "system"). Without a mount-sync, ThemeToggle reads theme="system"
+    // from context and highlights the wrong segment even though the page
+    // palette is correct (CSS reads dataset.theme, not the React context).
+    document.documentElement.dataset.theme = "dark";
+    // localStorage.clear() ran in beforeEach so readStoredTheme returns "system" —
+    // this is the state the lazy initializer would land on if it had no
+    // access to localStorage at hydration time.
+    const { matchMedia } = makeMatchMedia(true);
+    vi.stubGlobal("matchMedia", matchMedia);
+
+    render(
+      <ThemeProvider>
+        <Probe />
+      </ThemeProvider>,
+    );
+
+    // After mount, React state must reflect the inline-script's value.
+    expect(screen.getByTestId("theme").textContent).toBe("dark");
+    // The mount sync must NOT overwrite the inline script's data-theme attribute
+    // (which would cause a one-frame palette flicker as CSS re-resolves through
+    // the @media (prefers-color-scheme) fallback).
+    expect(document.documentElement.dataset.theme).toBe("dark");
+  });
+
   it("setTheme injects __soleur-no-transition style and removes it on next frames", () => {
     const { matchMedia } = makeMatchMedia(true);
     vi.stubGlobal("matchMedia", matchMedia);
