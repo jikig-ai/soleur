@@ -48,6 +48,12 @@ export const SENSITIVE_KEY_NAMES = [
   "client_secret",
   "private_key",
   "secret",
+  // JWT-mint signing secret (PR-B §1.4 — Resolution A: Node-side mint).
+  // Added because exact-name match on `secret` does not cover
+  // `SUPABASE_JWT_SECRET` / `jwt_secret` field-name shapes that crop up
+  // in env-block dumps and config-snapshot logs.
+  "jwt_secret",
+  "supabase_jwt_secret",
   // HTTP transport
   "cookie",
   "x-nonce",
