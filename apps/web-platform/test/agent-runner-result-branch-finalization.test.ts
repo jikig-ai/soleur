@@ -55,6 +55,18 @@ vi.mock("@anthropic-ai/claude-agent-sdk", () => ({
 vi.mock("@supabase/supabase-js", () => ({
   createClient: vi.fn(() => ({ from: mockFrom, rpc: mockRpc })),
 }));
+vi.mock("@/lib/supabase/tenant", () => ({
+  getFreshTenantClient: vi.fn(async () => ({ from: mockFrom, rpc: mockRpc })),
+  mintFounderJwt: vi.fn(),
+  RuntimeAuthError: class RuntimeAuthError extends Error {
+    cause: string;
+    constructor(cause: string, msg: string) {
+      super(msg);
+      this.name = "RuntimeAuthError";
+      this.cause = cause;
+    }
+  },
+}));
 vi.mock("@sentry/nextjs", () => ({ captureException: vi.fn(), addBreadcrumb: vi.fn() }));
 vi.mock("../server/ws-handler", () => ({ sendToClient: mockSendToClient }));
 vi.mock("../server/logger", () => ({
@@ -66,9 +78,10 @@ vi.mock("../server/logger", () => ({
   }),
 }));
 vi.mock("../server/byok", () => ({
-  decryptKey: vi.fn(() => "sk-test-key"),
-  decryptKeyLegacy: vi.fn(),
+  decryptKey: vi.fn(() => Buffer.from("sk-test-key")),
+  decryptKeyLegacy: vi.fn(() => Buffer.from("sk-test-key")),
   encryptKey: vi.fn(),
+  zeroize: vi.fn(),
 }));
 vi.mock("../server/error-sanitizer", () => ({
   sanitizeErrorForClient: vi.fn(() => "error"),

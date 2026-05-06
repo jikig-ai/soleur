@@ -22,3 +22,17 @@
 
 # Always-loaded workflow rules.
 /AGENTS.md                                              @jeanderuelle
+
+# PR-B §1.6 — Service-role allowlist gate. Without these pins, an
+# attacker-modeled PR (or a careless agent loop) could add a
+# service-role import AND its allowlist line in one commit; the gate
+# would pass and tenant isolation would silently break. CODEOWNERS is
+# the only structural defense that survives this — see plan
+# §1.5 (architecture F5).
+/apps/web-platform/.service-role-allowlist              @jeanderuelle
+/apps/web-platform/lib/supabase/service.ts              @jeanderuelle
+/apps/web-platform/lib/supabase/tenant.ts               @jeanderuelle
+/apps/web-platform/server/byok-lease.ts                 @jeanderuelle
+/apps/web-platform/scripts/service-role-allowlist-gate.sh @jeanderuelle
+/apps/web-platform/supabase/migrations/                 @jeanderuelle
+/.github/workflows/ci.yml                               @jeanderuelle
