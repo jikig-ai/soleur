@@ -294,10 +294,10 @@ runbook, NOT AGENTS.md material. **No AGENTS.md edit.**
 After CI green:
 
 - PR body contains `Closes #3268` (the actual single-finding tracker that this
-  plan fully resolves) and `Ref #3281` (the umbrella issue, whose enumeration
-  was stale; #3281 is closed in the same PR via `Closes #3281` since the actual
-  remediation surface is just the one finding documented in #3268, all other
-  enumerated findings being already resolved).
+  plan fully resolves) **and** `Closes #3281` (the umbrella issue — its
+  enumeration was stale, and the actual remediation surface after PRs #3196 +
+  #3197 is just the one finding documented in #3268, so closing the umbrella
+  in this same PR is correct).
 - Verify by running `gh run watch` on the post-merge `secret-scan` push:main
   workflow — must complete green before declaring the issue closed
   (`hr-when-a-command-exits-non-zero-or-prints` + `wg-after-a-pr-merges-to-main`).

@@ -1,7 +1,7 @@
 # Session State
 
 ## Plan Phase
-- Plan file: /home/jean/git-repositories/jikig-ai/soleur/.worktrees/feat-one-shot-3281-secret-scan-gitleaks-waivers/knowledge-base/project/plans/2026-05-06-fix-secret-scan-gitleaks-waiver-learning-file-plan.md
+- Plan file: knowledge-base/project/plans/2026-05-06-fix-secret-scan-gitleaks-waiver-learning-file-plan.md
 - Status: complete
 
 ### Errors
