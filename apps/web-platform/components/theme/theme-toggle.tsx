@@ -81,7 +81,11 @@ export function ThemeToggle({ collapsed }: { collapsed: boolean }) {
       role="group"
       aria-label="Theme"
       onKeyDown={handleKeyDown}
-      className="flex h-8 w-full items-stretch border border-soleur-border-default"
+      className={[
+        "flex h-8 w-full items-stretch p-[3px]",
+        "rounded-full border border-soleur-border-default",
+        "bg-soleur-bg-surface-2",
+      ].join(" ")}
     >
       {SEGMENTS.map((seg, index) => {
         const active = theme === seg.value;
@@ -97,10 +101,10 @@ export function ThemeToggle({ collapsed }: { collapsed: boolean }) {
             aria-label={seg.ariaLabel}
             title={seg.label}
             className={[
-              "flex flex-1 items-center justify-center transition-colors",
-              "border-r border-soleur-border-default last:border-r-0",
+              "flex flex-1 items-center justify-center rounded-full",
+              "transition-colors",
               active
-                ? "bg-soleur-bg-surface-2 text-soleur-accent-gold-fg ring-1 ring-inset ring-soleur-border-emphasized"
+                ? "bg-soleur-bg-surface-1 text-soleur-accent-gold-fg ring-1 ring-inset ring-soleur-border-emphasized"
                 : "text-soleur-text-muted hover:text-soleur-text-secondary",
             ].join(" ")}
           >
