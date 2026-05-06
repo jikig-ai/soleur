@@ -11,6 +11,10 @@
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
+import {
+  NO_TRANSITION_CSS_TEXT,
+  NO_TRANSITION_STYLE_ID,
+} from "@/components/theme/no-transition-contract";
 
 const SCRIPT_FILE = resolve(__dirname, "../../components/theme/no-fouc-script.tsx");
 const CSS_FILE = resolve(__dirname, "../../app/globals.css");
@@ -40,9 +44,25 @@ describe("NoFoucScript SCRIPT contents", () => {
     expect(src.toLowerCase()).toContain("#0a0a0a");
   });
 
-  it("injects a transient style element with the __soleur-no-transition id", () => {
+  it("imports the shared NO_TRANSITION_STYLE_ID + NO_TRANSITION_CSS_TEXT contract", () => {
     const src = readScriptSource();
-    expect(src).toContain("__soleur-no-transition");
+    // Both the runtime helper (theme-provider.tsx) and this boot script
+    // import these constants from no-transition-contract.ts. TypeScript's
+    // compile-time identity is the load-bearing drift-guard between the
+    // two files; this test just confirms the import edge survives any
+    // future refactor that might inline the literals back into either
+    // file. The constants themselves ARE used (referenced via
+    // ${"$"}{JSON.stringify(NO_TRANSITION_STYLE_ID)} interpolation in the
+    // SCRIPT template), so an unused-import lint would flag a regression.
+    expect(src).toMatch(
+      /from\s+["']@\/components\/theme\/no-transition-contract["']/,
+    );
+    expect(src).toContain("NO_TRANSITION_STYLE_ID");
+    expect(src).toContain("NO_TRANSITION_CSS_TEXT");
+    // Sanity: confirm the constants resolve to non-empty values at test
+    // time so the contract module isn't accidentally exporting empty strings.
+    expect(NO_TRANSITION_STYLE_ID.length).toBeGreaterThan(0);
+    expect(NO_TRANSITION_CSS_TEXT).toMatch(/transition:\s*none/);
   });
 
   it("calls localStorage.getItem('soleur:theme') exactly once", () => {
@@ -66,23 +86,40 @@ describe("NoFoucScript SCRIPT contents", () => {
 });
 
 describe("no-fouc-script hex literal drift-guard", () => {
-  it("script literals match globals.css --soleur-bg-base values", () => {
+  // Anchor to `:root[data-theme="..."]` (canonical block in globals.css)
+  // rather than `[data-theme="..."]`; the @custom-variant declaration at
+  // the top of globals.css also contains `[data-theme="dark"]` but no
+  // `--soleur-bg-base`, and a permissive regex would silently fall through
+  // to a later match on a CSS reorder. Anchoring removes that ambiguity.
+  function extractBgBase(css: string, palette: "light" | "dark"): string {
+    const re = new RegExp(
+      `:root\\[data-theme="${palette}"\\]\\s*\\{[^}]*?--soleur-bg-base:\\s*([^;]+);`,
+    );
+    const match = css.match(re);
+    return match?.[1]?.trim() ?? "";
+  }
+
+  it("script literal matches globals.css :root[data-theme=light] --soleur-bg-base", () => {
     const script = readScriptSource();
     const css = readFileSync(CSS_FILE, "utf8");
+    const lightHex = extractBgBase(css, "light");
 
-    // Extract --soleur-bg-base from :root[data-theme="light"] and "dark" blocks.
-    // The CSS declares the dark variables under both `:root` and
-    // `:root[data-theme="dark"]`; either qualifier is acceptable.
-    const lightMatch = css.match(
-      /\[data-theme="light"\][^}]*--soleur-bg-base:\s*([^;]+);/,
-    );
-    const darkMatch = css.match(
-      /\[data-theme="dark"\][^}]*--soleur-bg-base:\s*([^;]+);/,
-    );
+    expect(lightHex, "light --soleur-bg-base not found in globals.css").toBeTruthy();
+    expect(
+      script.toLowerCase(),
+      `script missing light hex literal '${lightHex}'`,
+    ).toContain(lightHex.toLowerCase());
+  });
 
-    expect(lightMatch?.[1]?.trim()).toBeTruthy();
-    expect(darkMatch?.[1]?.trim()).toBeTruthy();
-    expect(script.toLowerCase()).toContain(lightMatch![1].trim().toLowerCase());
-    expect(script.toLowerCase()).toContain(darkMatch![1].trim().toLowerCase());
+  it("script literal matches globals.css :root[data-theme=dark] --soleur-bg-base", () => {
+    const script = readScriptSource();
+    const css = readFileSync(CSS_FILE, "utf8");
+    const darkHex = extractBgBase(css, "dark");
+
+    expect(darkHex, "dark --soleur-bg-base not found in globals.css").toBeTruthy();
+    expect(
+      script.toLowerCase(),
+      `script missing dark hex literal '${darkHex}'`,
+    ).toContain(darkHex.toLowerCase());
   });
 });

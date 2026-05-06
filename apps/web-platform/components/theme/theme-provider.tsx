@@ -4,11 +4,16 @@ import {
   createContext,
   useContext,
   useEffect,
+  useRef,
   useState,
   useCallback,
   useMemo,
 } from "react";
 import { reportSilentFallback } from "@/lib/client-observability";
+import {
+  NO_TRANSITION_CSS_TEXT,
+  NO_TRANSITION_STYLE_ID,
+} from "@/components/theme/no-transition-contract";
 
 export type Theme = "dark" | "light" | "system";
 export type ResolvedTheme = "dark" | "light";
@@ -55,8 +60,6 @@ function readStoredTheme(): Theme {
  *
  * No-op on the server.
  */
-const NO_TRANSITION_STYLE_ID = "__soleur-no-transition";
-
 function disableTransitionsForOneFrame(): void {
   if (typeof document === "undefined") return;
   // Bail if a previous call (e.g., the inline boot script's transient
@@ -67,8 +70,7 @@ function disableTransitionsForOneFrame(): void {
 
   const style = document.createElement("style");
   style.id = NO_TRANSITION_STYLE_ID;
-  style.textContent =
-    "* { transition: none !important; animation-duration: 0s !important; }";
+  style.textContent = NO_TRANSITION_CSS_TEXT;
   document.head.appendChild(style);
 
   // Force a synchronous style recalc so the override is committed BEFORE
@@ -140,14 +142,35 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
     typeof window === "undefined" ? "dark" : resolveInitial(readStoredTheme()),
   );
 
-  // Apply data-theme on the html element whenever theme changes. Runs once
-  // post-mount to harmonise with the lazy initializer above (covers the
-  // narrow window where the inline script wrote a stale value before the
-  // user changed their preference in another tab).
+  // Apply data-theme on the html element whenever theme changes. The first
+  // run on mount writes the attribute (covers the narrow window where the
+  // inline script wrote a stale value vs. another tab) but intentionally
+  // skips disableTransitionsForOneFrame: the inline <NoFoucScript> already
+  // owns the boot-frame transition-disable cleanup, and the helper would
+  // no-op anyway via its bail guard while the boot-script's <style> is
+  // still alive. Skipping the call avoids an unnecessary createElement +
+  // reflow round on first mount.
+  const prevThemeRef = useRef<Theme | null>(null);
   useEffect(() => {
-    disableTransitionsForOneFrame();
+    if (prevThemeRef.current === theme) return;
+    if (prevThemeRef.current !== null) {
+      disableTransitionsForOneFrame();
+    }
     document.documentElement.dataset.theme = theme;
+    prevThemeRef.current = theme;
   }, [theme]);
+
+  // Re-assert html.style.colorScheme whenever the resolved palette flips.
+  // The inline boot script seeds colorScheme once at first paint; without
+  // re-assertion here, a user who boots Dark and toggles Light keeps
+  // `style.colorScheme = "dark"` permanently because nothing in the CSS
+  // cascade declares `color-scheme` for our data-theme blocks. Inline
+  // style beats stylesheet, so this assignment is the only path that
+  // updates UA-rendered widgets (scrollbars, form controls, default <body>
+  // background) after the boot frame.
+  useEffect(() => {
+    document.documentElement.style.colorScheme = resolvedTheme;
+  }, [resolvedTheme]);
 
   // Live OS-change listener: only matters when theme === "system". The CSS
   // @media (prefers-color-scheme) block in globals.css already handles the
@@ -191,6 +214,8 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
       }
       const next = isTheme(event.newValue) ? event.newValue : "system";
       disableTransitionsForOneFrame();
+      // No localStorage.setItem here by design — the originating tab
+      // already persisted; mirroring the write would cause an event loop.
       setThemeState(next);
     }
     window.addEventListener("storage", onStorage);
@@ -198,8 +223,14 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const setTheme = useCallback((next: Theme) => {
+    let changed = false;
+    setThemeState((cur) => {
+      if (cur === next) return cur;
+      changed = true;
+      return next;
+    });
+    if (!changed) return;
     disableTransitionsForOneFrame();
-    setThemeState(next);
     try {
       localStorage.setItem(STORAGE_KEY, next);
     } catch (err) {
