@@ -254,6 +254,47 @@ describe("ThemeProvider", () => {
     consoleSpy.mockRestore();
   });
 
+  it("setTheme injects __soleur-no-transition style and removes it on next frames", async () => {
+    const { matchMedia } = makeMatchMedia(true);
+    vi.stubGlobal("matchMedia", matchMedia);
+
+    // Polyfill rAF on JSDOM/happy-dom — the transition-disable helper relies
+    // on a double-rAF cleanup. setTimeout(0) is a faithful enough stand-in
+    // for our purposes (we want to assert the cleanup eventually runs, not
+    // verify exact frame timing).
+    const rafs: Array<() => void> = [];
+    vi.stubGlobal("requestAnimationFrame", (cb: FrameRequestCallback) => {
+      rafs.push(() => cb(0));
+      return rafs.length;
+    });
+
+    render(
+      <ThemeProvider>
+        <Probe />
+      </ThemeProvider>,
+    );
+
+    act(() => {
+      screen.getByText("set-light").click();
+    });
+
+    // The helper should have appended a style element with the agreed id.
+    const styleEl = document.head.querySelector("style#__soleur-no-transition");
+    expect(styleEl).not.toBeNull();
+    expect(styleEl!.textContent).toMatch(/transition\s*:\s*none/);
+
+    // Drain the queued rAF callbacks (double-rAF cleanup); the style should
+    // be removed after both fire.
+    act(() => {
+      while (rafs.length) {
+        const next = rafs.shift()!;
+        next();
+      }
+    });
+
+    expect(document.head.querySelector("style#__soleur-no-transition")).toBeNull();
+  });
+
   it("setTheme survives localStorage.setItem quota errors (state still updates)", () => {
     const { matchMedia } = makeMatchMedia(true);
     vi.stubGlobal("matchMedia", matchMedia);
