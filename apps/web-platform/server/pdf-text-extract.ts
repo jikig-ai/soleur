@@ -35,6 +35,7 @@
 // soleur-go-runner.ts) instead of the apt-get-prone gated Read directive.
 
 import { MAX_AGENT_READABLE_PDF_SIZE } from "@/lib/attachment-constants";
+import { reportSilentFallback } from "./observability";
 
 /**
  * Hard cap on page iteration count. PDFs declare /Pages /Count independently
@@ -59,7 +60,14 @@ export type PdfExtractErrorClass =
   | "encrypted"
   | "corrupted"
   | "parse_error"
-  | "empty_text";
+  | "empty_text"
+  // 2026-05-06 follow-up to #3353: `readFile` failed in
+  // `kb-document-resolver` BEFORE the buffer ever reached the extractor.
+  // Surfaced through the same typed-error path so the runner picks
+  // `buildPdfUnreadableDirective` instead of falling back to the gated
+  // Read directive (which lands the agent in the sandbox-deny path that
+  // produced the "outside my workspace boundary" reply in #3376).
+  | "read_failed";
 
 export interface PdfTextExtractResult {
   text: string;
@@ -90,10 +98,22 @@ export async function extractPdfText(
   }
 
   // Lazy import — paid once per process (shared with `readPdfMetadata`).
+  // Mirror to Sentry so a future runtime regression diagnoses itself
+  // (e.g., a base-image refresh that drops Node below the engines.node
+  // floor). `process.getBuiltinModule` was added in Node 22.3 / 20.16;
+  // pdfjs-dist@5 calls it during module init.
   let pdfjs: typeof import("pdfjs-dist/legacy/build/pdf.mjs");
   try {
     pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
-  } catch {
+  } catch (importErr) {
+    reportSilentFallback(importErr, {
+      feature: "kb-concierge-context",
+      op: "extractPdfText.import",
+      extra: {
+        nodeVersion: process.versions.node,
+        message: (importErr as Error)?.message ?? "",
+      },
+    });
     return { error: "lazy_import_failed" };
   }
 

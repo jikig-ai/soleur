@@ -57,6 +57,7 @@ import {
   resolveCcBashGate,
   resolveConciergeDocumentContext,
 } from "./cc-dispatcher";
+import { fetchUserWorkspacePath } from "./kb-document-resolver";
 import { stripAndReportImagePlaceholders } from "./image-paste-strip";
 import { getFlag } from "@/lib/feature-flags/server";
 type InteractivePromptResponse = Extract<WSMessage, { type: "interactive_prompt_response" }>;
@@ -894,6 +895,27 @@ async function dispatchSoleurGoForConversation(
     });
   }
 
+  // 2026-05-06 Bug A1 fix — resolve workspacePath up-front when an
+  // artifact directive is going to be built. The resolver above already
+  // populated the per-process `_workspacePathCache` for non-warm turns
+  // with a contextPath; this fetch is a synchronous map lookup in that
+  // case. For warm turns or no-context dispatches, the runner skips
+  // system-prompt construction entirely (the prompt is baked at cold
+  // construction), so a missing workspacePath here is a no-op. On
+  // failure (DB transient error, missing workspace_path row), fall
+  // through with undefined — the runner's directive builder gracefully
+  // falls back to the relative path, which the Bug A2 sandbox fix
+  // tolerates for in-workspace files.
+  let workspacePath: string | undefined;
+  if (context?.path && !warmCcQuery) {
+    try {
+      workspacePath = await fetchUserWorkspacePath(userId);
+    } catch {
+      // Resolver already mirrored to Sentry on the same failure mode;
+      // skip a duplicate mirror here.
+    }
+  }
+
   // #3287 Phase 1 diagnostic — see helper JSDoc.
   emitConciergeDocumentResolutionBreadcrumb({
     conversationId,
@@ -911,6 +933,7 @@ async function dispatchSoleurGoForConversation(
     sendToClient,
     persistActiveWorkflow,
     attachments,
+    workspacePath,
     ...documentArgs,
   });
 }

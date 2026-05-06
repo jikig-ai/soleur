@@ -257,19 +257,56 @@ describe("resolveConciergeDocumentContext", () => {
     expect(out.documentContent).toBeUndefined();
   });
 
-  it("missing PDF file falls through to documentKind=pdf without content", async () => {
-    // No file on disk — the resolver should NOT throw. It falls through to
-    // the Read directive (matching pre-#3338 behavior).
+  it("missing PDF file (ENOENT) surfaces documentExtractError=read_failed without Sentry alarm (Bug B fix)", async () => {
+    // Pre-fix (#3376 reproduction): readFile-ENOENT silently fell through to
+    // bare `{ artifactPath, documentKind: "pdf" }` — no `documentExtractError` —
+    // so the runner picked `buildPdfGatedDirective` and the agent's Read attempt
+    // tripped Bug A's sandbox denial. Post-fix: surface `read_failed` so the
+    // runner picks `buildPdfUnreadableDirective` instead.
+    //
+    // ENOENT is the expected "user deleted/renamed the file while sidebar was
+    // open" case — it produces a graceful `read_failed` reply, not a
+    // production incident. Per perf review #3384 P2-1 + the
+    // `cq-silent-fallback-must-mirror-to-sentry` "first-time 404" exemption,
+    // ENOENT skips the Sentry event (breadcrumb stays). The companion test
+    // below verifies non-ENOENT errors DO still mirror.
     const out = await resolveConciergeDocumentContext({
       userId: "u1",
       contextPath: "knowledge-base/missing.pdf",
     });
-    expect(out).toEqual({
-      artifactPath: "knowledge-base/missing.pdf",
-      documentKind: "pdf",
-    });
-    // Extractor never called when readFile fails.
+    expect(out.artifactPath).toBe("knowledge-base/missing.pdf");
+    expect(out.documentKind).toBe("pdf");
+    expect(out.documentExtractError).toBe("read_failed");
     expect(extractPdfTextSpy).not.toHaveBeenCalled();
+    const calls = reportSilentFallbackSpy.mock.calls.filter(
+      ([, opts]) =>
+        (opts as { op?: string })?.op === "extractPdfText.readFile",
+    );
+    expect(calls.length).toBe(0);
+  });
+
+  it("non-ENOENT readFile failure (EISDIR) DOES mirror to Sentry", async () => {
+    // Companion to the ENOENT-exemption test above: when the PDF "path" is
+    // actually a directory on disk (EISDIR — alarming), the resolver MUST
+    // mirror to Sentry so operators see truly degraded states. Validates the
+    // errno-conditional branch in the readFile catch.
+    mkdirSync(path.join(tmpRoot, "knowledge-base", "book.pdf"), {
+      recursive: true,
+    });
+
+    const out = await resolveConciergeDocumentContext({
+      userId: "u1",
+      contextPath: "knowledge-base/book.pdf",
+    });
+    expect(out.documentExtractError).toBe("read_failed");
+    const calls = reportSilentFallbackSpy.mock.calls.filter(
+      ([, opts]) =>
+        (opts as { op?: string })?.op === "extractPdfText.readFile",
+    );
+    expect(calls.length).toBe(1);
+    expect(
+      (calls[0]?.[1] as { extra?: { errno?: string | null } })?.extra?.errno,
+    ).toBe("EISDIR");
   });
 
   it("inlines the extractor's body when truncated=true is reported", async () => {
@@ -341,15 +378,20 @@ describe("resolveConciergeDocumentContext", () => {
     }
   });
 
-  it("falls through to instruction-only when the file does not exist", async () => {
+  it("missing text file drops to no-context (Bug A defense-in-depth)", async () => {
+    // Bug B Phase 2.4: text-file readFile-ENOENT used to fall through to a
+    // text Read directive — same Bug A vulnerability as the PDF gated path.
+    // Post-fix: drop to no-context (`{}`) and mirror to Sentry. The runner
+    // emits the bare router prompt; no relative-path Read is suggested.
     const out = await resolveConciergeDocumentContext({
       userId: "u1",
       contextPath: "knowledge-base/missing.md",
     });
-    // Defense-in-depth: no documentContent; agent will Read.
-    expect(out.artifactPath).toBe("knowledge-base/missing.md");
-    expect(out.documentKind).toBe("text");
-    expect(out.documentContent).toBeUndefined();
+    expect(out).toEqual({});
+    const calls = reportSilentFallbackSpy.mock.calls.filter(
+      ([, opts]) => (opts as { op?: string })?.op === "readFile",
+    );
+    expect(calls.length).toBe(1);
   });
 
   it("drops oversized text files to instruction-only (no content inlined)", async () => {

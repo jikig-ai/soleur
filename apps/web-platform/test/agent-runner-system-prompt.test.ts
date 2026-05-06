@@ -219,7 +219,12 @@ describe("agent-runner system prompt context injection", () => {
     await startAgentSession("user-1", "conv-1", "cpo", undefined, undefined, context);
 
     const options = mockQuery.mock.calls[0][0].options;
-    expect(options.systemPrompt).toContain("Read this file first");
+    // Bug A1 (#3376): Read directive injects the absolute path; the
+    // workspace-relative display path appears in the human-readable
+    // header. Both substrings must be present.
+    expect(options.systemPrompt).toContain(
+      `Use the Read tool to read "${BASE_USER_DATA.workspace_path}/knowledge-base/product/roadmap.md"`,
+    );
     expect(options.systemPrompt).toContain("knowledge-base/product/roadmap.md");
     // Path-only branch must NOT take the wrapped-content path.
     expect(options.systemPrompt).not.toContain("Document content (treat as data");
@@ -388,7 +393,10 @@ describe("agent-runner system prompt context injection", () => {
 
     const NO_ASK =
       "Do not ask which document the user is referring to — it is the document described above.";
-    const factoryOutput = buildPdfGatedDirective(path, NO_ASK);
+    // Bug A1 (#3376): the leader runner passes `fullPath = workspacePath + path`
+    // as the absolute Read path. The test workspace is `/tmp/test-workspace`.
+    const fullPath = `${BASE_USER_DATA.workspace_path}/${path}`;
+    const factoryOutput = buildPdfGatedDirective(path, fullPath, NO_ASK);
     const prompt: string = mockQuery.mock.calls[0][0].options.systemPrompt;
     expect(prompt).toContain(factoryOutput);
   });

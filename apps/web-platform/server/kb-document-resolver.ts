@@ -232,11 +232,60 @@ export async function resolveConciergeDocumentContext(args: {
       // (extractor reverts to returning `{ text: "" }` on success) cannot
       // produce a literal-undefined `documentContent`.
       return { artifactPath: contextPath, documentKind: "pdf" };
-    } catch {
-      // readFile failed (missing file, permission denied) — let the agent
-      // try Read. No Sentry mirror: this is not a degraded extractor, just
-      // an absent file the UI may have stale-referenced.
-      return { artifactPath: contextPath, documentKind: "pdf" };
+    } catch (err) {
+      // 2026-05-06 follow-up to #3353 — Bug B in plan
+      // 2026-05-06-fix-sidebar-pdf-summarize-out-of-boundary-plan.md.
+      // Pre-fix this catch returned a bare `{ artifactPath, documentKind:
+      // "pdf" }` (no `documentExtractError`), which routed the runner to
+      // `buildPdfGatedDirective`. The agent then called
+      // `Read({ file_path: contextPath })` with a workspace-relative
+      // path; the sandbox-hook resolved it against the Next.js process
+      // CWD, denied with "outside workspace boundary", and the model
+      // paraphrased that to the end user (#3376 reproduction).
+      //
+      // Surface the typed `read_failed` class so the runner picks
+      // `buildPdfUnreadableDirective` (content-grounded "I can't read
+      // this PDF" reply) instead. Mirror to Sentry per
+      // `cq-silent-fallback-must-mirror-to-sentry` — `read_failed` IS
+      // alarming when it fires (real upload-vs-context_path drift).
+      const errno = (err as NodeJS.ErrnoException)?.code ?? null;
+      const basename = path.basename(contextPath);
+      Sentry.addBreadcrumb({
+        category: "cc-pdf-extractor",
+        message: "readFile failed before extractPdfText",
+        level: "warning",
+        data: {
+          ok: false,
+          errorClass: "read_failed",
+          errno,
+          pathBasename: basename,
+        },
+      });
+      // Per `cq-silent-fallback-must-mirror-to-sentry`'s "first-time
+      // 404" exemption (perf review #3384 P2-1): an ENOENT here is the
+      // expected "user deleted/renamed the file while sidebar was open"
+      // case — it produces a graceful `read_failed` reply, not a
+      // production incident. Keep the breadcrumb (free, in-process) so
+      // an event captured later in the same scope retains the context;
+      // skip the Sentry event so a deletion sweep doesn't quota-storm.
+      // EACCES / EIO / EBUSY etc. ARE alarming and still mirror.
+      if (errno !== "ENOENT") {
+        reportSilentFallback(err, {
+          feature: "kb-concierge-context",
+          op: "extractPdfText.readFile",
+          extra: {
+            userId,
+            pathBasename: basename,
+            errorClass: "read_failed",
+            errno,
+          },
+        });
+      }
+      return {
+        artifactPath: contextPath,
+        documentKind: "pdf",
+        documentExtractError: "read_failed",
+      };
     }
   }
 
@@ -252,6 +301,16 @@ export async function resolveConciergeDocumentContext(args: {
     // Too large to inline — let the agent Read it directly.
     return { artifactPath: contextPath, documentKind: "text" };
   } catch (err) {
+    // 2026-05-06 follow-up to #3353 — text-file twin of Bug B.
+    // Pre-fix this catch returned `{ artifactPath, documentKind: "text" }`
+    // which routed the runner to a text Read directive injecting the
+    // workspace-relative path; the agent's Read attempt tripped the same
+    // sandbox-deny path Bug A1+A2 covered for PDFs. Drop to no-context
+    // (`{}`) instead — the runner emits the bare router prompt and the
+    // model produces a generic "I can't find that document" reply
+    // without leaking sandbox internals. Text files don't have an
+    // apt-get-cascade analog, so a parallel `text_read_failed` directive
+    // would be ROI-negative.
     reportSilentFallback(err, {
       feature: "kb-concierge-context",
       op: "readFile",
@@ -260,8 +319,12 @@ export async function resolveConciergeDocumentContext(args: {
       // scrubbing matches on field NAMES (password / email / ssn) — it
       // does NOT scrub a `path` value. Log only the basename so the
       // failure is traceable without leaking the directory hierarchy.
-      extra: { userId, pathBasename: path.basename(contextPath) },
+      extra: {
+        userId,
+        pathBasename: path.basename(contextPath),
+        errno: (err as NodeJS.ErrnoException)?.code ?? null,
+      },
     });
-    return { artifactPath: contextPath, documentKind: "text" };
+    return {};
   }
 }
