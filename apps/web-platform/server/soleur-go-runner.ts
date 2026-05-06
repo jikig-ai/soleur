@@ -1055,6 +1055,23 @@ export function createSoleurGoRunner(deps: SoleurGoRunnerDeps): SoleurGoRunner {
           handleAssistantMessage(state, content, persistActiveWorkflow);
         } else if (msg.type === "result") {
           handleResultMessage(state, msg as SDKResultMessage);
+        } else if (
+          msg.type === "user" &&
+          (msg as SDKUserMessage).tool_use_result !== undefined
+        ) {
+          // SDK-emitted forward-progress signal. While the SDK is mid-tool
+          // execution (e.g., native PDF Read + Anthropic API roundtrip on a
+          // multi-MB document), the only client-visible activity for tens
+          // of seconds is a synthetic `user`-role message carrying
+          // `tool_use_result` (sdk.d.ts: `SDKUserMessage.tool_use_result?:
+          // unknown`). Treat it as forward progress and re-arm
+          // `state.runaway`. Do NOT touch `state.turnHardCap` — the 10-min
+          // absolute ceiling stays anchored on `firstToolUseAt` (defense
+          // pair from PR #3225 + learning
+          // 2026-05-05-defense-relaxation-must-name-new-ceiling.md).
+          if (!state.closed && !state.awaitingUser) {
+            armRunaway(state);
+          }
         }
         // Other SDKMessage variants (partial assistant, hook, task notifications)
         // are ignored at V1. V2 will route stream_event → WS cumulative deltas.
