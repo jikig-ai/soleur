@@ -279,7 +279,7 @@ export default function DashboardLayout({
         </div>
 
         {/* Navigation */}
-        <nav className={`flex-1 space-y-1 ${collapsed ? "px-1" : "px-3"}`}>
+        <nav className={`flex-1 space-y-1 pt-3 ${collapsed ? "px-1" : "px-3"}`}>
           {navItems.map((item) => {
             const active =
               item.href === "/dashboard"
