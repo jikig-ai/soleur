@@ -15,9 +15,11 @@
 import { readFile } from "fs/promises";
 import path from "path";
 
+import * as Sentry from "@sentry/nextjs";
 import { createServiceClient } from "@/lib/supabase/service";
 import { reportSilentFallback } from "./observability";
 import { isPathInWorkspace } from "./sandbox";
+import { extractPdfText } from "./pdf-text-extract";
 
 /** Per-conversation cap on inlined document body. Mirrors the legacy
  *  `agent-runner.ts MAX_INLINE_BYTES` (~12-15K tokens). Source of truth
@@ -104,10 +106,6 @@ export async function resolveConciergeDocumentContext(args: {
     };
   }
 
-  if (isPdf) {
-    return { artifactPath: contextPath, documentKind: "pdf" };
-  }
-
   let workspacePath: string;
   try {
     workspacePath = await fetchUserWorkspacePath(userId);
@@ -129,6 +127,65 @@ export async function resolveConciergeDocumentContext(args: {
     // Path-traversal attempt — drop the path entirely (do not leak it
     // back into the prompt) and fall through to the bare router prompt.
     return {};
+  }
+
+  if (isPdf) {
+    // #3338 — server-side PDF text extraction. Read raw bytes (NOT utf-8)
+    // and hand to the in-process pdfjs-dist parser. On success, inline the
+    // body via documentContent so the agent never has to call Read (which
+    // is the proximate cause of the apt-get/find Bash modal cascade). On
+    // failure, fall through to the existing Read-directive branch and
+    // mirror to Sentry so operators see the failure class.
+    try {
+      const buffer = await readFile(fullPath);
+      const result = await extractPdfText(buffer, CONCIERGE_INLINE_CAP_BYTES);
+      // #3338 Phase 5.1 — observability breadcrumb. Captures the extractor's
+      // outcome on every cold-Query construction so operators can correlate
+      // PDF-summary-quality with extraction shape (page count, truncation,
+      // body size). PII redaction: log basename only — KB paths can carry
+      // user-identifying directory hierarchy.
+      Sentry.addBreadcrumb({
+        category: "cc-pdf-extractor",
+        message: "extractPdfText completed",
+        level: "info",
+        data: {
+          ok: result !== null,
+          pageCount: result?.pageCount ?? null,
+          truncated: result?.truncated ?? null,
+          textBytes: result?.text.length ?? 0,
+          pathBasename: path.basename(contextPath),
+        },
+      });
+      if (result && result.text.length > 0) {
+        return {
+          artifactPath: contextPath,
+          documentKind: "pdf",
+          documentContent: result.text,
+        };
+      }
+      if (!result) {
+        // Extraction failed (corrupted, encrypted, oversized buffer, parse
+        // error). Mirror to Sentry; caller falls through to Read directive.
+        reportSilentFallback(
+          new Error("extractPdfText returned null"),
+          {
+            feature: "kb-concierge-context",
+            op: "extractPdfText",
+            extra: {
+              userId,
+              pathBasename: path.basename(contextPath),
+            },
+          },
+        );
+      }
+      return { artifactPath: contextPath, documentKind: "pdf" };
+    } catch (err) {
+      // readFile failed (missing file, permission denied) — let the agent
+      // try Read. No Sentry mirror: this is not a degraded extractor, just
+      // an absent file the UI may have stale-referenced.
+      void err;
+      return { artifactPath: contextPath, documentKind: "pdf" };
+    }
   }
 
   try {

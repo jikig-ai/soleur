@@ -201,6 +201,37 @@ let _registry: PendingPromptRegistry | null = null;
 let _reaperInterval: ReturnType<typeof setInterval> | null = null;
 const REAPER_INTERVAL_MS = 5 * 60 * 1000;
 
+/**
+ * Read-only / router-safe tool surface for the cc-soleur-go path (#3338).
+ *
+ * The cc-router's job is to dispatch via the Skill tool to a routed sub-skill;
+ * it never needs Bash, Edit, or Write itself. By passing this list to the
+ * SDK's `allowedTools` filter, the model literally cannot emit a Bash call
+ * (e.g. `find . -name "*.pdf"` or `apt-get install -y poppler-utils`) at the
+ * cc path — so even when the model's training prior tries to override the
+ * gated PDF directive, no `review_gate` WS event reaches the user-facing
+ * Concierge surface. Bash gating remains in place via canUseTool as
+ * defense-in-depth in case the SDK widens its default-allow list.
+ *
+ * Routed sub-skills load their own toolset via the soleur plugin and the
+ * legacy domain-leader path (`agent-runner.ts startAgentSession`), so this
+ * narrowing is scoped to the router only — exploration / inspection within
+ * routed workflows is unaffected.
+ *
+ * Tool names are the SDK runtime names at @anthropic-ai/claude-agent-sdk
+ * v0.2.85 (sdk.d.ts:1230 documents `tools: ['Read', 'Grep', 'Glob', 'Bash']`
+ * for the allowedTools filter).
+ */
+const CC_PATH_ALLOWED_TOOLS: readonly string[] = [
+  "Read",
+  "Glob",
+  "Grep",
+  "LS",
+  "NotebookRead",
+  "TodoWrite",
+  "ExitPlanMode",
+];
+
 export function getPendingPromptRegistry(): PendingPromptRegistry {
   if (_registry) return _registry;
   _registry = new PendingPromptRegistry();
@@ -554,6 +585,11 @@ export const realSdkQueryFactory: QueryFactory = async (
         systemPrompt: args.systemPrompt,
         resumeSessionId: safeResumeSessionId,
         mcpServers: {},
+        // #3338 — narrow the cc-router toolset to read-only/router-safe tools
+        // so the model cannot emit Bash (`find`, `apt-get`) at the cc path.
+        // Defense-in-depth: even if the SDK widens its default-allow list in
+        // a future major version, this list pins the cc-router's surface.
+        allowedTools: [...CC_PATH_ALLOWED_TOOLS],
         // SubagentStart sanitizer override: cc strips control chars +
         // U+2028/U+2029 (per learning
         // 2026-04-17-log-injection-unicode-line-separators.md) and

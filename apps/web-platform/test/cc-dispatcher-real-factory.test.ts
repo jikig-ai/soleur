@@ -267,6 +267,30 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
   });
 
   // -------------------------------------------------------------------------
+  // T6b (#3338): allowedTools is narrowed to read-only/router-safe tools and
+  // EXCLUDES Bash, Edit, Write. The cc-router's job is dispatch via the Skill
+  // tool; it never needs to shell out. With Bash absent from allowedTools,
+  // the SDK rejects the tool-call BEFORE canUseTool is invoked — so even if
+  // a regression re-enables a `find . -name "*.pdf"` or
+  // `apt-get install poppler-utils` cascade in the model's training prior,
+  // no review_gate WS event reaches the user-facing Concierge surface.
+  // Pin the invariant at the test layer so a future deps-injection edit
+  // cannot silently re-widen the toolset.
+  // -------------------------------------------------------------------------
+  it("T6b: allowedTools narrows the cc-router to safe tools and EXCLUDES Bash/Edit/Write (#3338)", async () => {
+    await realSdkQueryFactory(makeArgs());
+    const opts = mockQuery.mock.calls[0][0].options;
+    expect(Array.isArray(opts.allowedTools)).toBe(true);
+    expect(opts.allowedTools).not.toContain("Bash");
+    expect(opts.allowedTools).not.toContain("Edit");
+    expect(opts.allowedTools).not.toContain("Write");
+    // Read-only / router-safe tools the cc-router DOES need.
+    expect(opts.allowedTools).toEqual(
+      expect.arrayContaining(["Read", "Glob", "Grep"]),
+    );
+  });
+
+  // -------------------------------------------------------------------------
   // T7: settingSources: [] (defense-in-depth)
   // -------------------------------------------------------------------------
   it("T7: settingSources is the empty array (no project settings.json pre-approvals)", async () => {
