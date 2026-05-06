@@ -133,14 +133,18 @@ describe("migration 037_audit_byok_use", () => {
       expect(fnBlock).toMatch(/INSERT\s+INTO\s+public\.audit_byok_use/i);
     });
 
-    it("revokes default PUBLIC execute and grants service_role only", () => {
+    it("revokes execute from PUBLIC, anon, and authenticated; grants service_role only", () => {
+      // Supabase's `ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT EXECUTE
+      // ON FUNCTIONS TO anon, authenticated, service_role` means new
+      // functions are auto-granted to all three roles. `REVOKE ALL FROM
+      // PUBLIC` does NOT undo the explicit-role grants — we must revoke
+      // anon and authenticated explicitly.
       expect(executable).toMatch(
-        /REVOKE\s+ALL\s+ON\s+FUNCTION\s+public\.write_byok_audit\([^)]*\)\s+FROM\s+PUBLIC/i,
+        /REVOKE\s+ALL\s+ON\s+FUNCTION\s+public\.write_byok_audit\([^)]*\)\s+FROM\s+PUBLIC\s*,\s*anon\s*,\s*authenticated/i,
       );
       expect(executable).toMatch(
         /GRANT\s+EXECUTE\s+ON\s+FUNCTION\s+public\.write_byok_audit\([^)]*\)\s+TO\s+service_role/i,
       );
-      // Belt-and-suspenders: must NOT grant to authenticated.
       expect(executable).not.toMatch(
         /GRANT\s+EXECUTE\s+ON\s+FUNCTION\s+public\.write_byok_audit\([^)]*\)\s+TO\s+authenticated/i,
       );
@@ -177,9 +181,9 @@ describe("migration 037_audit_byok_use", () => {
       expect(fnBlock).toMatch(/FROM\s+public\.denied_jti/i);
     });
 
-    it("revokes is_jti_denied PUBLIC and grants service_role only", () => {
+    it("revokes is_jti_denied from PUBLIC, anon, and authenticated; grants service_role only", () => {
       expect(executable).toMatch(
-        /REVOKE\s+ALL\s+ON\s+FUNCTION\s+public\.is_jti_denied\([^)]*\)\s+FROM\s+PUBLIC/i,
+        /REVOKE\s+ALL\s+ON\s+FUNCTION\s+public\.is_jti_denied\([^)]*\)\s+FROM\s+PUBLIC\s*,\s*anon\s*,\s*authenticated/i,
       );
       expect(executable).toMatch(
         /GRANT\s+EXECUTE\s+ON\s+FUNCTION\s+public\.is_jti_denied\([^)]*\)\s+TO\s+service_role/i,
@@ -257,9 +261,9 @@ describe("migration 037_audit_byok_use", () => {
       expect(fnBlock).toMatch(/interval\s+'1\s+hour'/i);
     });
 
-    it("revokes PUBLIC and grants service_role only", () => {
+    it("revokes from PUBLIC, anon, and authenticated; grants service_role only", () => {
       expect(executable).toMatch(
-        /REVOKE\s+ALL\s+ON\s+FUNCTION\s+public\.precheck_jwt_mint\([^)]*\)\s+FROM\s+PUBLIC/i,
+        /REVOKE\s+ALL\s+ON\s+FUNCTION\s+public\.precheck_jwt_mint\([^)]*\)\s+FROM\s+PUBLIC\s*,\s*anon\s*,\s*authenticated/i,
       );
       expect(executable).toMatch(
         /GRANT\s+EXECUTE\s+ON\s+FUNCTION\s+public\.precheck_jwt_mint\([^)]*\)\s+TO\s+service_role/i,

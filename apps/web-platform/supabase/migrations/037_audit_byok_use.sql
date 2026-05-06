@@ -57,7 +57,7 @@ BEGIN
 END;
 $$;
 
-REVOKE ALL ON FUNCTION public.audit_byok_use_no_mutate() FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.audit_byok_use_no_mutate() FROM PUBLIC, anon, authenticated, service_role;
 
 CREATE TRIGGER audit_byok_use_no_update
   BEFORE UPDATE ON public.audit_byok_use
@@ -95,7 +95,12 @@ AS $$
   );
 $$;
 
-REVOKE ALL ON FUNCTION public.write_byok_audit(uuid, uuid, text, int, int) FROM PUBLIC;
+-- Explicit revoke from anon + authenticated is load-bearing: Supabase
+-- sets `ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT EXECUTE ON
+-- FUNCTIONS TO anon, authenticated, service_role` so every new fn is
+-- auto-granted to all three roles. `REVOKE ALL FROM PUBLIC` does NOT
+-- undo the explicit-role grants — the named-role revoke is required.
+REVOKE ALL ON FUNCTION public.write_byok_audit(uuid, uuid, text, int, int) FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.write_byok_audit(uuid, uuid, text, int, int) TO service_role;
 
 COMMENT ON TABLE public.audit_byok_use IS
@@ -135,7 +140,7 @@ AS $$
   SELECT EXISTS (SELECT 1 FROM public.denied_jti WHERE jti = p_jti);
 $$;
 
-REVOKE ALL ON FUNCTION public.is_jti_denied(uuid) FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.is_jti_denied(uuid) FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.is_jti_denied(uuid) TO service_role;
 
 COMMENT ON TABLE public.denied_jti IS
@@ -213,7 +218,7 @@ BEGIN
 END;
 $$;
 
-REVOKE ALL ON FUNCTION public.precheck_jwt_mint(uuid, int) FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.precheck_jwt_mint(uuid, int) FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.precheck_jwt_mint(uuid, int) TO service_role;
 
 COMMENT ON TABLE public.mint_rate_window IS
