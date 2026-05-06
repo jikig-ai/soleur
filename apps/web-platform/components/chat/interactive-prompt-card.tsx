@@ -45,7 +45,7 @@ type InteractivePromptCardProps = InteractivePromptCardPropsBase &
 
 export function InteractivePromptCard(props: InteractivePromptCardProps) {
   const baseClass =
-    "rounded-xl border border-neutral-800 bg-neutral-900/60 px-4 py-3";
+    "rounded-xl border border-soleur-border-default bg-soleur-bg-surface-1/60 px-4 py-3";
   const disabled = props.resolved === true;
 
   switch (props.kind) {
@@ -132,7 +132,7 @@ const ResolvedCardRow = React.memo(function ResolvedCardRow({
 }) {
   return (
     <div data-prompt-kind={kind} data-prompt-id={promptId}>
-      <div className="flex items-center gap-2 rounded-lg border border-neutral-800 bg-neutral-900/50 px-4 py-2 text-sm text-neutral-400 transition-all duration-300">
+      <div className="flex items-center gap-2 rounded-lg border border-soleur-border-default bg-soleur-bg-surface-1/50 px-4 py-2 text-sm text-soleur-text-secondary transition-all duration-300">
         <svg
           className="h-4 w-4 text-green-500"
           viewBox="0 0 24 24"
@@ -149,7 +149,7 @@ const ResolvedCardRow = React.memo(function ResolvedCardRow({
           {target ? (
             <>
               :{" "}
-              <strong className="text-neutral-200">{target}</strong>
+              <strong className="text-soleur-text-primary">{target}</strong>
             </>
           ) : null}
         </span>
@@ -202,10 +202,10 @@ function AskUserCard({
     return (
       <CardShell promptId={promptId} kind="ask_user">
         <div className={baseClass}>
-          <p className="mb-2 text-sm text-neutral-200">{payload.question}</p>
+          <p className="mb-2 text-sm text-soleur-text-primary">{payload.question}</p>
           <div className="flex flex-col gap-1.5">
             {payload.options.map((opt) => (
-              <label key={opt} className="flex items-center gap-2 text-sm text-neutral-300">
+              <label key={opt} className="flex items-center gap-2 text-sm text-soleur-text-secondary">
                 <input
                   type="checkbox"
                   aria-label={opt}
@@ -223,7 +223,7 @@ function AskUserCard({
             onClick={() =>
               onRespond({ kind: "ask_user", response: picked })
             }
-            className="mt-3 rounded-md bg-amber-600 px-3 py-1 text-sm text-white disabled:opacity-50"
+            className="mt-3 rounded-md bg-amber-600 px-3 py-1 text-sm text-soleur-text-on-accent disabled:opacity-50"
           >
             Submit
           </button>
@@ -236,7 +236,7 @@ function AskUserCard({
   return (
     <CardShell promptId={promptId} kind="ask_user">
       <div className={baseClass}>
-        <p className="mb-2 text-sm text-neutral-200">{payload.question}</p>
+        <p className="mb-2 text-sm text-soleur-text-primary">{payload.question}</p>
         <div className="flex flex-wrap gap-2">
           {payload.options.map((opt) => (
             <button
@@ -244,7 +244,7 @@ function AskUserCard({
               type="button"
               disabled={disabled}
               onClick={() => onRespond({ kind: "ask_user", response: opt })}
-              className="rounded-full border border-neutral-700 px-3 py-1 text-xs text-neutral-200 hover:border-amber-500 disabled:cursor-not-allowed disabled:opacity-50"
+              className="rounded-full border border-soleur-border-default px-3 py-1 text-xs text-soleur-text-primary hover:border-amber-500 disabled:cursor-not-allowed disabled:opacity-50"
             >
               {opt}
             </button>
@@ -280,7 +280,7 @@ function PlanPreviewCard({
   return (
     <CardShell promptId={promptId} kind="plan_preview">
       <div className={baseClass}>
-        <pre className="mb-3 max-h-64 overflow-auto whitespace-pre-wrap text-sm text-neutral-200">
+        <pre className="mb-3 max-h-64 overflow-auto whitespace-pre-wrap text-sm text-soleur-text-primary">
           {text}
         </pre>
         <div className="flex gap-2">
@@ -288,7 +288,7 @@ function PlanPreviewCard({
             type="button"
             disabled={disabled}
             onClick={() => onRespond({ kind: "plan_preview", response: "accept" })}
-            className="rounded-md bg-amber-600 px-3 py-1 text-sm text-white disabled:opacity-50"
+            className="rounded-md bg-amber-600 px-3 py-1 text-sm text-soleur-text-on-accent disabled:opacity-50"
           >
             Accept
           </button>
@@ -296,7 +296,7 @@ function PlanPreviewCard({
             type="button"
             disabled={disabled}
             onClick={() => onRespond({ kind: "plan_preview", response: "iterate" })}
-            className="rounded-md border border-neutral-700 px-3 py-1 text-sm text-neutral-200 disabled:opacity-50"
+            className="rounded-md border border-soleur-border-default px-3 py-1 text-sm text-soleur-text-primary disabled:opacity-50"
           >
             Iterate
           </button>
@@ -333,8 +333,8 @@ function DiffCard({
   return (
     <CardShell promptId={promptId} kind="diff">
       <div className={baseClass}>
-        <p className="mb-2 text-sm text-neutral-200">
-          Edited file <code className="rounded bg-neutral-800 px-1 py-0.5 text-xs">{payload.path}</code>{" "}
+        <p className="mb-2 text-sm text-soleur-text-primary">
+          Edited file <code className="rounded bg-soleur-bg-surface-2 px-1 py-0.5 text-xs">{payload.path}</code>{" "}
           <span className="text-emerald-400">+{payload.additions}</span>{" "}
           <span className="text-red-400">-{payload.deletions}</span>
         </p>
@@ -342,7 +342,7 @@ function DiffCard({
           type="button"
           disabled={disabled}
           onClick={() => onRespond({ kind: "diff", response: "ack" })}
-          className="rounded-md border border-neutral-700 px-3 py-1 text-sm text-neutral-200 disabled:opacity-50"
+          className="rounded-md border border-soleur-border-default px-3 py-1 text-sm text-soleur-text-primary disabled:opacity-50"
         >
           Acknowledge
         </button>
@@ -380,19 +380,19 @@ function BashApprovalCard({
   return (
     <CardShell promptId={promptId} kind="bash_approval">
       <div className={baseClass}>
-        <pre className="mb-2 overflow-auto rounded bg-neutral-950 p-2 text-xs text-neutral-200">
+        <pre className="mb-2 overflow-auto rounded bg-soleur-bg-base p-2 text-xs text-soleur-text-primary">
           {/* Default React text-node escaping handles HTML-special chars in
               attacker-influenced `payload.command`. NO escape-hatch render APIs. */}
           {payload.command}
         </pre>
-        <p className="mb-3 text-xs text-neutral-500">cwd: {payload.cwd}</p>
+        <p className="mb-3 text-xs text-soleur-text-muted">cwd: {payload.cwd}</p>
         {payload.gated ? (
           <div className="flex gap-2">
             <button
               type="button"
               disabled={disabled}
               onClick={() => onRespond({ kind: "bash_approval", response: "approve" })}
-              className="rounded-md bg-amber-600 px-3 py-1 text-sm text-white disabled:opacity-50"
+              className="rounded-md bg-amber-600 px-3 py-1 text-sm text-soleur-text-on-accent disabled:opacity-50"
             >
               Approve
             </button>
@@ -439,11 +439,11 @@ function TodoWriteCard({
   return (
     <CardShell promptId={promptId} kind="todo_write">
       <div className={baseClass}>
-        <p className="mb-2 text-sm text-neutral-200">{payload.items.length} todos</p>
+        <p className="mb-2 text-sm text-soleur-text-primary">{payload.items.length} todos</p>
         <ul className="mb-3 space-y-1">
           {payload.items.map((it) => (
-            <li key={it.id} className="flex items-center gap-2 text-xs text-neutral-300">
-              <span className="rounded bg-neutral-800 px-1.5 py-0.5 text-[10px] text-neutral-400">
+            <li key={it.id} className="flex items-center gap-2 text-xs text-soleur-text-secondary">
+              <span className="rounded bg-soleur-bg-surface-2 px-1.5 py-0.5 text-[10px] text-soleur-text-secondary">
                 {it.status}
               </span>
               <span className="truncate">{it.content}</span>
@@ -454,7 +454,7 @@ function TodoWriteCard({
           type="button"
           disabled={disabled}
           onClick={() => onRespond({ kind: "todo_write", response: "ack" })}
-          className="rounded-md border border-neutral-700 px-3 py-1 text-sm text-neutral-200 disabled:opacity-50"
+          className="rounded-md border border-soleur-border-default px-3 py-1 text-sm text-soleur-text-primary disabled:opacity-50"
         >
           Acknowledge
         </button>
@@ -490,12 +490,12 @@ function NotebookEditCard({
   return (
     <CardShell promptId={promptId} kind="notebook_edit">
       <div className={baseClass}>
-        <p className="mb-2 text-sm text-neutral-200">
-          {payload.cellIds.length} cells in <code className="rounded bg-neutral-800 px-1 py-0.5 text-xs">{payload.notebookPath}</code>
+        <p className="mb-2 text-sm text-soleur-text-primary">
+          {payload.cellIds.length} cells in <code className="rounded bg-soleur-bg-surface-2 px-1 py-0.5 text-xs">{payload.notebookPath}</code>
         </p>
         <div className="mb-3 flex flex-wrap gap-1">
           {payload.cellIds.map((cid) => (
-            <span key={cid} className="rounded-full bg-neutral-800 px-2 py-0.5 text-[10px] text-neutral-300">
+            <span key={cid} className="rounded-full bg-soleur-bg-surface-2 px-2 py-0.5 text-[10px] text-soleur-text-secondary">
               {cid}
             </span>
           ))}
@@ -504,7 +504,7 @@ function NotebookEditCard({
           type="button"
           disabled={disabled}
           onClick={() => onRespond({ kind: "notebook_edit", response: "ack" })}
-          className="rounded-md border border-neutral-700 px-3 py-1 text-sm text-neutral-200 disabled:opacity-50"
+          className="rounded-md border border-soleur-border-default px-3 py-1 text-sm text-soleur-text-primary disabled:opacity-50"
         >
           Acknowledge
         </button>

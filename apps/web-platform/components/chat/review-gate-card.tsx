@@ -39,11 +39,11 @@ export function ReviewGateCard({
 
   if (resolved && selectedOption) {
     return (
-      <div className="flex items-center gap-2 rounded-lg border border-neutral-800 bg-neutral-900/50 px-4 py-2 text-sm text-neutral-400 transition-all duration-300">
+      <div className="flex items-center gap-2 rounded-lg border border-soleur-border-default bg-soleur-bg-surface-1/50 px-4 py-2 text-sm text-soleur-text-secondary transition-all duration-300">
         <svg className="h-4 w-4 text-green-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
           <polyline points="20 6 9 17 4 12" />
         </svg>
-        <span>Selected: <strong className="text-neutral-200">{selectedOption}</strong></span>
+        <span>Selected: <strong className="text-soleur-text-primary">{selectedOption}</strong></span>
       </div>
     );
   }
@@ -90,13 +90,13 @@ export function ReviewGateCard({
               pending === option
                 ? "border-amber-500 bg-amber-900/50 text-amber-100"
                 : pending !== null
-                  ? "border-neutral-700 text-neutral-500 opacity-50"
-                  : "border-neutral-700 text-neutral-300 hover:border-amber-600 hover:text-amber-200"
+                  ? "border-soleur-border-default text-soleur-text-muted opacity-50"
+                  : "border-soleur-border-default text-soleur-text-secondary hover:border-amber-600 hover:text-amber-200"
             }`}
           >
             <span>{option}</span>
             {descriptions?.[option] && (
-              <span className="mt-0.5 text-xs text-neutral-400">{descriptions[option]}</span>
+              <span className="mt-0.5 text-xs text-soleur-text-secondary">{descriptions[option]}</span>
             )}
           </button>
         ))}

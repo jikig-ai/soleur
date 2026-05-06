@@ -402,12 +402,12 @@ export function ChatSurface({
   return (
     <div className={rootClass}>
       {isFull && (
-        <header className="flex shrink-0 items-center justify-between border-b border-neutral-800 px-4 py-3 md:px-6">
+        <header className="flex shrink-0 items-center justify-between border-b border-soleur-border-default px-4 py-3 md:px-6">
           <div className="flex items-center gap-3">
             <a
               href="/dashboard"
               aria-label="Back to dashboard"
-              className="flex items-center text-neutral-400 hover:text-white md:hidden"
+              className="flex items-center text-soleur-text-secondary hover:text-soleur-text-primary md:hidden"
             >
               <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <polyline points="15 18 9 12 15 6" />
@@ -415,12 +415,12 @@ export function ChatSurface({
             </a>
 
             {activeLeaderIds.length > 0 && (
-              <span className="text-sm text-neutral-400 md:hidden">
+              <span className="text-sm text-soleur-text-secondary md:hidden">
                 {activeLeaderIds.map((id) => getDisplayName(id)).join(", ")} responding
               </span>
             )}
 
-            <span className="hidden text-sm font-semibold text-white md:inline">
+            <span className="hidden text-sm font-semibold text-soleur-text-primary md:inline">
               Dashboard
             </span>
           </div>
@@ -485,7 +485,7 @@ export function ChatSurface({
 
         {messages.length === 0 && !isClassifying && !lastError && !historyLoading && (
           <div className="flex h-full items-center justify-center">
-            <p className="text-sm text-neutral-400">
+            <p className="text-sm text-soleur-text-secondary">
               Send a message to get started
             </p>
           </div>
@@ -564,9 +564,9 @@ export function ChatSurface({
                   body = (
                     <div
                       data-message-type="workflow_ended"
-                      className="rounded-xl border border-neutral-800 bg-neutral-900/40 px-4 py-3"
+                      className="rounded-xl border border-soleur-border-default bg-soleur-bg-surface-1/40 px-4 py-3"
                     >
-                      <p className="text-sm text-neutral-200">
+                      <p className="text-sm text-soleur-text-primary">
                         Workflow{" "}
                         <span className="font-semibold">{msg.workflow}</span>{" "}
                         ended:{" "}
@@ -581,7 +581,7 @@ export function ChatSurface({
                         </span>
                       </p>
                       {msg.summary ? (
-                        <p className="mt-1 text-xs text-neutral-400">{msg.summary}</p>
+                        <p className="mt-1 text-xs text-soleur-text-secondary">{msg.summary}</p>
                       ) : null}
                     </div>
                   );
@@ -614,10 +614,10 @@ export function ChatSurface({
 
           {isClassifying && (
             <div className="flex justify-start" data-testid="routing-chip">
-              <div className="flex items-center gap-2 rounded-xl border border-neutral-800 bg-neutral-900 px-4 py-3">
+              <div className="flex items-center gap-2 rounded-xl border border-soleur-border-default bg-soleur-bg-surface-1 px-4 py-3">
                 <LeaderAvatar leaderId={CC_ROUTER_LEADER_ID} size="sm" />
                 <span className="h-2 w-2 animate-pulse rounded-full bg-amber-500" />
-                <span className="text-sm text-neutral-400">
+                <span className="text-sm text-soleur-text-secondary">
                   Soleur Concierge is routing to the right experts...
                 </span>
               </div>
@@ -630,23 +630,23 @@ export function ChatSurface({
       </div>
 
       {isFull && (activeLeaderIds.length > 0 || (usageData && usageData.totalCostUsd > 0)) && (
-        <div className="hidden border-t border-neutral-800/50 px-4 py-1.5 md:block md:px-6">
-          <p className="text-xs text-neutral-500">
+        <div className="hidden border-t border-soleur-border-default/50 px-4 py-1.5 md:block md:px-6">
+          <p className="text-xs text-soleur-text-muted">
             {activeLeaderIds.length > 0 && (
               <>{activeLeaderIds.length} leaders responding</>
             )}
             {usageData && usageData.totalCostUsd > 0 && (
-              <span className="text-neutral-400">
+              <span className="text-soleur-text-secondary">
                 {activeLeaderIds.length > 0 && " · "}
                 ~${usageData.totalCostUsd.toFixed(4)}
-                <span className="text-neutral-500 ml-1">estimated</span>
+                <span className="text-soleur-text-muted ml-1">estimated</span>
               </span>
             )}
           </p>
         </div>
       )}
 
-      <div className={`shrink-0 border-t border-neutral-800 bg-neutral-950 py-3 ${inputPadX} ${isFull ? "safe-bottom md:px-6" : ""}`}>
+      <div className={`shrink-0 border-t border-soleur-border-default bg-soleur-bg-base py-3 ${inputPadX} ${isFull ? "safe-bottom md:px-6" : ""}`}>
         <div className={`relative min-w-0 ${widthWrapper}`}>
           <AtMentionDropdown
             query={atQuery}
@@ -686,18 +686,18 @@ export function ChatSurface({
           />
         </div>
         {!isFull && usageData && usageData.totalCostUsd > 0 && (
-          <div className="mt-1 px-1 text-xs text-neutral-500">
+          <div className="mt-1 px-1 text-xs text-soleur-text-muted">
             ~${usageData.totalCostUsd.toFixed(4)} estimated
           </div>
         )}
         {isFull && (
-          <div className="mx-auto mt-1 flex max-w-3xl items-center justify-between text-xs text-neutral-400">
+          <div className="mx-auto mt-1 flex max-w-3xl items-center justify-between text-xs text-soleur-text-secondary">
             <span className="md:hidden">
               {activeLeaderIds.length > 0 && (
                 <>{activeLeaderIds.length} leaders responding</>
               )}
               {usageData && usageData.totalCostUsd > 0 && (
-                <span className="text-neutral-400">
+                <span className="text-soleur-text-secondary">
                   {activeLeaderIds.length > 0 && " · "}
                   ~${usageData.totalCostUsd.toFixed(4)} est.
                 </span>

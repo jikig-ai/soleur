@@ -43,7 +43,7 @@ export function NamingNudge({
         <p className="text-sm font-medium text-amber-200">
           You just worked with your {roleName}.
         </p>
-        <p className="text-xs text-neutral-400">
+        <p className="text-xs text-soleur-text-secondary">
           Want to give them a name? It will display as &quot;Name ({roleName})&quot; in conversations.
         </p>
         {error && (
@@ -59,19 +59,19 @@ export function NamingNudge({
         placeholder={`Name your ${roleName}...`}
         maxLength={30}
         disabled={saving}
-        className="w-32 rounded-lg border border-neutral-700 bg-neutral-800/50 px-3 py-1.5 text-sm text-white placeholder-neutral-500 outline-none focus:border-amber-600 disabled:opacity-50"
+        className="w-32 rounded-lg border border-soleur-border-default bg-soleur-bg-surface-2/50 px-3 py-1.5 text-sm text-soleur-text-primary placeholder:text-soleur-text-muted outline-none focus:border-amber-600 disabled:opacity-50"
       />
       <button
         onClick={handleSave}
         disabled={saving}
-        className="rounded-lg bg-amber-500 px-3 py-1.5 text-sm font-semibold text-neutral-900 transition-colors hover:bg-amber-400 disabled:cursor-not-allowed disabled:opacity-60"
+        className="rounded-lg bg-soleur-accent-gold-fill px-3 py-1.5 text-sm font-semibold text-soleur-text-on-accent transition-colors hover:bg-amber-400 disabled:cursor-not-allowed disabled:opacity-60"
       >
         {saving ? "Saving..." : "Save"}
       </button>
       <button
         onClick={() => onDismiss(leaderId)}
         disabled={saving}
-        className="text-sm text-neutral-400 transition-colors hover:text-neutral-200 disabled:opacity-50"
+        className="text-sm text-soleur-text-secondary transition-colors hover:text-soleur-text-primary disabled:opacity-50"
       >
         Dismiss
       </button>
