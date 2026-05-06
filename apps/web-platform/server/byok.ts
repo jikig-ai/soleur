@@ -59,33 +59,61 @@ export function encryptKey(
   return { encrypted, iv, tag };
 }
 
-// Residual exposure: `string` return interns the plaintext key in V8's
-// string table for the lifetime of the process. PR-B refactors this to
-// return Buffer + a `zeroize(buf)` call from the BYOK lease's `finally`
-// so the secret can be wiped from memory.
-// See plan: knowledge-base/project/plans/2026-05-05-feat-soleur-server-side-agentic-runtime-plan.md §1.4.2 — refactor scheduled with the BYOK lease (issue #3244).
+/**
+ * Decrypt a BYOK envelope and return the plaintext key as a `Buffer`.
+ *
+ * Buffer-shaped state is wipeable in place via `zeroize` — this is the
+ * load-bearing primitive for the PR-B BYOK lease (#3244 §1.4). The
+ * caller MUST eventually call `zeroize(returnedBuffer)` to wipe the
+ * plaintext from memory. The boundary where the buffer is converted to
+ * a string for the Anthropic SDK reintroduces V8 string-internment;
+ * that surface is documented as a residual in the §3.6 ADR and is NOT
+ * mitigated here.
+ *
+ * Plan: 2026-05-05-feat-soleur-server-side-agentic-runtime-plan.md §1.2 / §1.4.
+ */
 export function decryptKey(
   encrypted: Buffer,
   iv: Buffer,
   tag: Buffer,
   userId: string,
-): string {
+): Buffer {
   const key = deriveUserKey(getEncryptionKey(), userId);
   const decipher = createDecipheriv(ALGORITHM, key, iv);
   decipher.setAuthTag(tag);
 
-  return decipher.update(encrypted) + decipher.final("utf8");
+  return Buffer.concat([decipher.update(encrypted), decipher.final()]);
 }
 
+/**
+ * Legacy (v1, pre-HKDF) decryption path. Returns Buffer for symmetry
+ * with `decryptKey` and to keep zeroize-on-finally consistent across
+ * both decryption paths.
+ */
 export function decryptKeyLegacy(
   encrypted: Buffer,
   iv: Buffer,
   tag: Buffer,
-): string {
+): Buffer {
   const key = getEncryptionKey();
   const decipher = createDecipheriv(ALGORITHM, key, iv);
   decipher.setAuthTag(tag);
 
-  return decipher.update(encrypted) + decipher.final("utf8");
+  return Buffer.concat([decipher.update(encrypted), decipher.final()]);
+}
+
+/**
+ * Wipe a Buffer's contents in place. Used by the BYOK lease's `finally`
+ * block to bound the in-Soleur-heap exposure window of decrypted keys.
+ *
+ * `Buffer.fill(0)` mutates the underlying ArrayBuffer bytes — any other
+ * view (e.g., a `string` produced via `toString`) is a separate copy
+ * and is NOT affected. The lease holds the Buffer as the sole owning
+ * reference; downstream consumers receive copies through controlled
+ * APIs.
+ */
+export function zeroize(buf: Buffer): void {
+  if (buf.length === 0) return;
+  buf.fill(0);
 }
 

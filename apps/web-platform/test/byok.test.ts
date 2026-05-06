@@ -10,7 +10,9 @@ describe("BYOK encryption round-trip", () => {
     const plaintext = "sk-ant-api03-test-key-1234567890";
     const { encrypted, iv, tag } = encryptKey(plaintext, TEST_USER_A);
     const decrypted = decryptKey(encrypted, iv, tag, TEST_USER_A);
-    expect(decrypted).toBe(plaintext);
+    // PR-B §1.4.2: decryptKey returns Buffer; toString("utf8") is the
+    // explicit boundary call.
+    expect(decrypted.toString("utf8")).toBe(plaintext);
   });
 
   test("base64 round-trip matches app data flow", () => {
@@ -29,7 +31,7 @@ describe("BYOK encryption round-trip", () => {
       Buffer.from(storedTag, "base64"),
       TEST_USER_A,
     );
-    expect(decrypted).toBe(plaintext);
+    expect(decrypted.toString("utf8")).toBe(plaintext);
   });
 });
 
@@ -58,8 +60,8 @@ describe("HKDF per-user isolation", () => {
     const result1 = encryptKey(plaintext, TEST_USER_A);
     const result2 = encryptKey(plaintext, TEST_USER_A);
 
-    expect(decryptKey(result1.encrypted, result1.iv, result1.tag, TEST_USER_A)).toBe(plaintext);
-    expect(decryptKey(result2.encrypted, result2.iv, result2.tag, TEST_USER_A)).toBe(plaintext);
+    expect(decryptKey(result1.encrypted, result1.iv, result1.tag, TEST_USER_A).toString("utf8")).toBe(plaintext);
+    expect(decryptKey(result2.encrypted, result2.iv, result2.tag, TEST_USER_A).toString("utf8")).toBe(plaintext);
   });
 });
 
@@ -80,7 +82,7 @@ describe("legacy decryption (v1 migration path)", () => {
     const tag = cipher.getAuthTag();
 
     const decrypted = decryptKeyLegacy(encrypted, iv, tag);
-    expect(decrypted).toBe(plaintext);
+    expect(decrypted.toString("utf8")).toBe(plaintext);
   });
 
   test("v1 legacy key cannot be decrypted with HKDF-derived key", () => {

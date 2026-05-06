@@ -207,7 +207,11 @@ export async function getUserApiKey(userId: string): Promise<string> {
     // HKDF key derivation is deterministic on userId, so the persisted
     // ciphertext from the winner decrypts to the same plaintext on later
     // reads). See #2919.
-    const plaintext = decryptKeyLegacy(encrypted, iv, authTag);
+    // PR-B (#3244 §1.4.2): decryptKey* now return Buffer. Convert to
+    // string at the legacy public-API boundary; the BYOK lease path
+    // (added in §1.4.3) keeps the buffer form for zeroize-on-finally.
+    const plaintextBuf = decryptKeyLegacy(encrypted, iv, authTag);
+    const plaintext = plaintextBuf.toString("utf8");
     const reEncrypted = encryptKey(plaintext, userId);
     const { error: rpcErr } = await supabase().rpc("migrate_api_key_to_v2", {
       p_id: data.id,
@@ -233,7 +237,7 @@ export async function getUserApiKey(userId: string): Promise<string> {
     return plaintext;
   }
 
-  return decryptKey(encrypted, iv, authTag, userId);
+  return decryptKey(encrypted, iv, authTag, userId).toString("utf8");
 }
 
 // ---------------------------------------------------------------------------
@@ -277,7 +281,9 @@ export async function getUserServiceTokens(
 
       let plaintext: string;
       if (row.key_version === 1) {
-        plaintext = decryptKeyLegacy(encrypted, iv, authTag);
+        // PR-B (#3244 §1.4.2): decryptKey* return Buffer; convert at the
+        // public-API boundary for legacy callers.
+        plaintext = decryptKeyLegacy(encrypted, iv, authTag).toString("utf8");
         // Lazy migration to v2 — same predicate-locked RPC as
         // `getUserApiKey`. The (id, user_id, provider, key_version=1)
         // predicate serializes concurrent callers via PG row locks. See
@@ -303,7 +309,7 @@ export async function getUserServiceTokens(
           });
         }
       } else {
-        plaintext = decryptKey(encrypted, iv, authTag, userId);
+        plaintext = decryptKey(encrypted, iv, authTag, userId).toString("utf8");
       }
 
       tokens[config.envVar] = plaintext;
