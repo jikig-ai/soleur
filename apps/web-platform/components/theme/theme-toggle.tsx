@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useTheme, type Theme } from "./theme-provider";
 
 type Segment = {
@@ -21,19 +21,60 @@ const SEGMENTS: readonly Segment[] = [
   },
 ];
 
+// SSR-safe placeholder index for the collapsed cycle button. Pre-mount the
+// component renders this segment as "current" regardless of the React-state
+// theme value, so SSR HTML and the first client paint agree on the visible
+// glyph. After mount the gate flips to the real `theme`.
+const PRE_MOUNT_INDEX = SEGMENTS.findIndex((s) => s.value === "system");
+if (PRE_MOUNT_INDEX === -1) {
+  // SEGMENTS must include a "system" entry — the mounted-gate's pre-mount
+  // placeholder depends on it, and dropping it would silently render
+  // SEGMENTS[-1] (undefined) and crash on `current.value`. Fail loud at
+  // module load instead of at first render.
+  throw new Error('ThemeToggle: SEGMENTS must include a "system" entry');
+}
+
+// `data-active` is the canonical agent/test probe for active visual state.
+// `aria-pressed` is the screen-reader contract. Both flip together — drift
+// between the two is a regression.
+
 export function ThemeToggle({ collapsed }: { collapsed: boolean }) {
   const { theme, setTheme } = useTheme();
   const buttonsRef = useRef<Array<HTMLButtonElement | null>>([]);
 
+  // Mounted-gate: SSR and the first client paint render no segment as
+  // active (data-active="false" on every button, no active className).
+  // After hydration completes the useEffect flips `mounted` to true and
+  // React re-renders with the real active segment based on `theme`.
+  //
+  // React 18+ production hydration does NOT patch className mismatches —
+  // when SSR's lazy initializer returns "system" (window undefined) but
+  // the client computes the real theme from dataset.theme/localStorage,
+  // the SSR-painted active className on System persists in the DOM even
+  // though React state is correct. The gate eliminates the mismatch by
+  // having both sides render no-active until post-mount. Same pattern
+  // used by `pacocoursey/next-themes`.
+  //
+  // Tradeoff: ~1 paint frame where no segment is highlighted. The page
+  // palette is already correct during this frame (NoFoucScript writes
+  // dataset.theme synchronously in <head>); only the toggle's indicator
+  // catches up.
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => {
+    setMounted(true);
+  }, []);
+
   if (collapsed) {
-    const currentIndex = SEGMENTS.findIndex((s) => s.value === theme);
-    const safeIndex = currentIndex === -1 ? 0 : currentIndex;
-    const current = SEGMENTS[safeIndex];
-    const next = SEGMENTS[(safeIndex + 1) % SEGMENTS.length];
+    const realIndex = SEGMENTS.findIndex((s) => s.value === theme);
+    const safeRealIndex = realIndex === -1 ? 0 : realIndex;
+    const visibleIndex = mounted ? safeRealIndex : PRE_MOUNT_INDEX;
+    const current = SEGMENTS[visibleIndex];
+    const next = SEGMENTS[(visibleIndex + 1) % SEGMENTS.length];
     return (
       <button
         type="button"
         data-testid="theme-cycle-button"
+        data-active={String(mounted)}
         data-theme-current={current.value}
         data-theme-next={next.value}
         onClick={() => setTheme(next.value)}
@@ -88,7 +129,7 @@ export function ThemeToggle({ collapsed }: { collapsed: boolean }) {
       ].join(" ")}
     >
       {SEGMENTS.map((seg, index) => {
-        const active = theme === seg.value;
+        const active = mounted && theme === seg.value;
         return (
           <button
             key={seg.value}
@@ -97,6 +138,7 @@ export function ThemeToggle({ collapsed }: { collapsed: boolean }) {
             }}
             type="button"
             onClick={() => setTheme(seg.value)}
+            data-active={String(active)}
             aria-pressed={active}
             aria-label={seg.ariaLabel}
             title={seg.label}
