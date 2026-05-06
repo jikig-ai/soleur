@@ -64,13 +64,21 @@ if [[ -f "$SITE_DIR/sitemap.xml" ]]; then
   # (only if robots.txt actually has a Sitemap line — fixtures may omit it).
   # This catches the GSC `Page with redirect` cluster cause: sitemap on apex
   # while live infra 301s apex→www. See the GSC indexing-fixes brainstorm.
+  # `|| true` absorbs grep's exit-1 when sitemap has zero <loc> entries —
+  # pipefail would otherwise short-circuit before the empty-guard below.
   SITEMAP_HOSTS=$(grep -oP '(?<=<loc>)[^<]+' "$SITE_DIR/sitemap.xml" \
-    | sed -E 's|^(https?://[^/]+).*|\1|' | sort -u)
+    | sed -E 's|^(https?://[^/]+).*|\1|' | sort -u || true)
   HOST_COUNT=$(echo "$SITEMAP_HOSTS" | grep -c . || true)
-  if [[ "$HOST_COUNT" -gt 1 ]]; then
+  if [[ -z "$SITEMAP_HOSTS" ]]; then
+    fail "sitemap.xml has no <loc> entries"
+  elif [[ "$HOST_COUNT" -gt 1 ]]; then
     fail "sitemap.xml mixes multiple hosts: $(echo "$SITEMAP_HOSTS" | tr '\n' ' ')"
   else
     pass "sitemap.xml uses a single canonical host: $SITEMAP_HOSTS"
+    # Closing branch is below this if-fi block — the host comparison only
+    # runs when robots.txt exists AND has a `Sitemap:` line. Fixtures that
+    # omit the Sitemap line still pass the sitemap-internal consistency
+    # check above; production robots.txt always has the line.
     if [[ -f "$SITE_DIR/robots.txt" ]] && grep -qiE '^Sitemap:' "$SITE_DIR/robots.txt"; then
       ROBOTS_HOST=$(grep -iE '^Sitemap:' "$SITE_DIR/robots.txt" \
         | sed -E 's|^[Ss]itemap:[[:space:]]*(https?://[^/]+).*|\1|' | head -1)

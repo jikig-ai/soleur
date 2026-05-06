@@ -122,6 +122,19 @@ describe("validate-seo.sh", () => {
     expect(stdout).toContain("does not match robots.txt Sitemap line");
   });
 
+  test("fails when sitemap has zero <loc> entries", async () => {
+    setupSite();
+    writeFileSync(
+      `${TMP_DIR}/sitemap.xml`,
+      '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"></urlset>',
+    );
+    const proc = Bun.spawn(["bash", SCRIPT, TMP_DIR], { stdout: "pipe", stderr: "pipe" });
+    const exitCode = await proc.exited;
+    const stdout = await new Response(proc.stdout).text();
+    expect(exitCode).toBe(1);
+    expect(stdout).toContain("sitemap.xml has no <loc> entries");
+  });
+
   test("passes when sitemap host matches robots.txt Sitemap line", async () => {
     setupSite({
       robotsContent: "User-agent: *\nAllow: /\nSitemap: https://example.com/sitemap.xml\n",

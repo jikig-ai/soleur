@@ -51,19 +51,43 @@ Single PR, single Terraform file, all landing in the existing
 
 ## User-Brand Impact
 
-**If this lands broken, the user experiences:** brief sitemap-regen lag where
-prospect search results either go stale or return broken pages. Worst case:
-a misconfigured Transform Rule on `deploy.soleur.ai` interferes with the
-Cloudflare Zero Trust Access challenge, exposing internal admin tooling
-to public view.
+**If this lands broken, the user experiences:**
 
-**If this leaks, the user's [trust / brand] is exposed via:** the
-`deploy.soleur.ai` Transform Rule. A scope error (wrong `expression`,
-wrong `phase`, missing `enabled = true` on the existing Access app) could
-cause the `X-Robots-Tag` injection rule to short-circuit Access enforcement.
-The Access app holds (independent ruleset), but a Transform Rule that
-touches the Access challenge response in the wrong way could surface 403
-HTML body content publicly.
+- **Prospect (anonymous via Google):** brief sitemap-regen lag where search
+  results go stale or return broken pages. Worst case: a misconfigured
+  Transform Rule on `deploy.soleur.ai` interferes with the Cloudflare Zero
+  Trust Access challenge, exposing internal admin tooling to public view.
+- **Authenticated app user (`api.soleur.ai` Supabase REST/Auth path):** the
+  new Transform Rule injects `X-Robots-Tag` on responses from `api.soleur.ai`.
+  This is the path that carries Soleur app login, conversations, messages,
+  and BYOK token operations. Although `X-Robots-Tag` is not a CORS-relevant
+  header, scope creep on the Supabase REST surface is the highest-blast-radius
+  scenario in this PR — every request from every app user passes through.
+  Mitigation: rule scoped to `http.request.method eq "GET"` (no impact on
+  POST/PATCH/DELETE/OPTIONS preflights).
+- **Legal-document signer (slug-rename redirect):** legacy
+  `/pages/legal/terms-of-service.html` now 301s to
+  `/legal/terms-and-conditions/`. Verified pre-merge: the destination is the
+  canonical, semantically-equivalent Terms page (slug-rename, not policy
+  change). If a future slug-rename happens without updating
+  `seo-rulesets.tf`, a prospect could land on the wrong policy text — single-
+  user incident class.
+
+**If this leaks, the user's [trust / brand / data path] is exposed via:**
+
+- **`deploy.soleur.ai` Transform Rule scope error.** Wrong `expression`,
+  wrong `phase`, or interaction with `cloudflare_zero_trust_access_application.deploy`
+  could short-circuit Access enforcement. The Access app holds (independent
+  ruleset), but a Transform Rule that touches the Access challenge response
+  in the wrong way could surface 403 HTML body content publicly.
+- **Partial-apply state during `terraform apply`.** If apply lands
+  `seo_page_redirects` but fails on `seo_response_headers` (e.g., token-scope
+  expansion forgotten), 19 page redirects fire WITHOUT the X-Robots-Tag
+  protection on subdomain user-data paths — half-protection sits live until
+  the operator re-runs apply. Mitigation: `terraform plan -out=<file>` shows
+  the full diff before commit; operator must verify both rulesets present.
+- **Wrong-destination 301.** Mitigated pre-merge by verification of the
+  `terms-of-service.html` → `terms-and-conditions/` mapping.
 
 **Brand-survival threshold:** `single-user incident`. CPO sign-off required at
 plan-time (this gate). `user-impact-reviewer` invoked at PR-review-time.

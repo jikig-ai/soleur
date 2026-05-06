@@ -1,8 +1,10 @@
 # SEO and indexing-hygiene rulesets at the Cloudflare edge.
 #
-# Two rulesets, both bound to the existing cf_api_token_rulesets token (scope
-# expanded to include Single Redirect Rules:Edit + Transform Rules:Edit; see
-# variables.tf). Both run BEFORE origin fetch, so they apply regardless of
+# Provider alias `cloudflare.rulesets` is defined in main.tf (lines ~50-71),
+# bound to var.cf_api_token_rulesets. Existing siblings on the same alias:
+# cloudflare_ruleset.cache_shared_binaries (cache.tf), allowlist_ai_crawlers
+# (bot-allowlist.tf). Token scope expanded to include Single Redirect
+# Rules:Edit + Transform Rules:Edit (see variables.tf). Both run BEFORE origin fetch, so they apply regardless of
 # what GitHub Pages emits — the legacy meta-refresh templates at
 # plugins/soleur/docs/page-redirects.njk + _data/pageRedirects.js can be
 # deleted in a follow-up PR once these 301s are verified live.
@@ -33,8 +35,16 @@
 #
 # This phase (`http_request_dynamic_redirect`) runs before origin fetch, so
 # the 301 is served whether GitHub Pages still emits the legacy HTML files or
-# not. Deletion of the source templates is a follow-up PR (see Phase 5 of the
-# plan).
+# not. Source-template deletion is tracked in follow-up issue #3328.
+#
+# Verbose `rules { ... }` blocks (one per redirect) are deliberate over
+# `dynamic { for_each = local.page_redirects ... }` for first-apply review:
+# `terraform plan` shows each rule as its own diff entry, which makes
+# operator review of the initial 22-rule rollout straightforward. A future
+# PR (after the deploy is verified live) can collapse to a `dynamic` block;
+# changing the iteration shape on a settled ruleset triggers in-place
+# updates across all entries (CF rule ordering matters), so the refactor
+# is cleaner as a separate Terraform change.
 resource "cloudflare_ruleset" "seo_page_redirects" {
   provider    = cloudflare.rulesets
   zone_id     = var.cf_zone_id
@@ -379,9 +389,15 @@ resource "cloudflare_ruleset" "seo_response_headers" {
 
   rules {
     action      = "rewrite"
-    description = "X-Robots-Tag: noindex, nofollow on api.soleur.ai/*"
+    description = "X-Robots-Tag: noindex, nofollow on api.soleur.ai GET responses"
     enabled     = true
-    expression  = "(http.host eq \"api.soleur.ai\")"
+    # Scoped to GET only — Soleur app users hit api.soleur.ai for Supabase
+    # REST/Auth via POST/PATCH/DELETE/OPTIONS. Only GET responses can be
+    # indexed by search engines. Trims one header byte off every write
+    # request and removes any chance of header injection on CORS preflight
+    # responses (X-Robots-Tag is not CORS-relevant, but defense in depth
+    # narrows the surface — see #3297 user-impact-reviewer triage).
+    expression = "(http.host eq \"api.soleur.ai\" and http.request.method eq \"GET\")"
     action_parameters {
       headers {
         name      = "X-Robots-Tag"
