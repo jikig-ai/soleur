@@ -34,7 +34,7 @@ export function KbChatTrigger({ fallbackHref }: KbChatTriggerProps) {
   }, [ctx?.open]);
 
   const baseClass =
-    "inline-flex items-center gap-1.5 rounded-lg border border-amber-500/50 px-3 py-1.5 text-xs font-medium text-amber-400 transition-colors hover:border-amber-400 hover:text-amber-300";
+    "inline-flex items-center gap-1.5 rounded-lg bg-gradient-to-r from-[#D4B36A] to-[#B8923E] px-3 py-1.5 text-xs font-semibold text-soleur-text-on-accent transition-opacity hover:opacity-90";
 
   const icon = (
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="shrink-0">
@@ -73,7 +73,7 @@ export function KbChatTrigger({ fallbackHref }: KbChatTriggerProps) {
         <span
           aria-hidden="true"
           data-testid="kb-trigger-thread-indicator"
-          className="ml-1 inline-block h-1.5 w-1.5 rounded-full bg-amber-400"
+          className="ml-1 inline-block h-1.5 w-1.5 rounded-full bg-soleur-text-on-accent"
         />
       )}
     </button>
