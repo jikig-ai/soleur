@@ -185,7 +185,12 @@ describe("READ_TOOL_PDF_CAPABILITY_DIRECTIVE (load-bearing baseline directive â€
     const NO_ASK =
       "Do not ask which document the user is referring to â€” it is the document described above.";
     const path = "knowledge-base/test-fixtures/book.pdf";
-    const factoryOutput = buildPdfGatedDirective(path, NO_ASK);
+    // Bug A1 (#3376): when `workspacePath` is not provided to
+    // `buildSoleurGoSystemPrompt`, the directive falls back to the
+    // workspace-relative `safeArtifactPath` for the absolute-path slot
+    // (Bug A2 sandbox fix tolerates this for in-workspace files). For
+    // factory-parity, call the factory the same way.
+    const factoryOutput = buildPdfGatedDirective(path, path, NO_ASK);
 
     const conciergePrompt = buildSoleurGoSystemPrompt({
       artifactPath: path,

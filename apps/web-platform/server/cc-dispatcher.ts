@@ -754,6 +754,16 @@ export interface DispatchSoleurGoArgs {
    */
   documentExtractError?: PdfExtractErrorClass;
   /**
+   * 2026-05-06 follow-up — Bug A1 fix. Resolved workspace path threaded
+   * from the ws-handler through `runner.dispatch` →
+   * `buildSoleurGoSystemPrompt` so PDF gated + text-too-large directives
+   * can inject workspace-absolute Read paths. Required by the SDK Read
+   * tool's `file_path` "absolute path" contract; passing relative paths
+   * triggered the sandbox-deny path that produced the user-facing
+   * "outside my workspace boundary" reply (#3376).
+   */
+  workspacePath?: string;
+  /**
    * Attachment refs uploaded via the chat-input paperclip flow. When
    * non-empty, `dispatchSoleurGo` (a) inserts a `messages` row to
    * satisfy the `message_attachments.message_id` FK, (b) calls the
@@ -788,6 +798,7 @@ export async function dispatchSoleurGo(
     documentKind,
     documentContent,
     documentExtractError,
+    workspacePath: callerWorkspacePath,
     attachments,
   } = args;
 
@@ -1029,6 +1040,11 @@ export async function dispatchSoleurGo(
       documentKind,
       documentContent,
       documentExtractError,
+      // 2026-05-06 Bug A1 fix — thread workspacePath through so the
+      // runner builds the system prompt with workspace-absolute Read
+      // instructions. Falls back to the locally-resolved value (set by
+      // the `.then` above) when the caller didn't pre-resolve it.
+      workspacePath: callerWorkspacePath ?? workspacePath,
     });
   } catch (err) {
     const errorClass =

@@ -257,19 +257,31 @@ describe("resolveConciergeDocumentContext", () => {
     expect(out.documentContent).toBeUndefined();
   });
 
-  it("missing PDF file falls through to documentKind=pdf without content", async () => {
-    // No file on disk — the resolver should NOT throw. It falls through to
-    // the Read directive (matching pre-#3338 behavior).
+  it("missing PDF file surfaces documentExtractError=read_failed (Bug B fix)", async () => {
+    // Pre-fix (#3376 reproduction): readFile-ENOENT silently fell through to
+    // bare `{ artifactPath, documentKind: "pdf" }` — no `documentExtractError` —
+    // so the runner picked `buildPdfGatedDirective` and the agent's Read attempt
+    // tripped Bug A's sandbox denial. Post-fix: surface `read_failed` so the
+    // runner picks `buildPdfUnreadableDirective` instead, AND mirror to Sentry
+    // per `cq-silent-fallback-must-mirror-to-sentry`.
     const out = await resolveConciergeDocumentContext({
       userId: "u1",
       contextPath: "knowledge-base/missing.pdf",
     });
-    expect(out).toEqual({
-      artifactPath: "knowledge-base/missing.pdf",
-      documentKind: "pdf",
-    });
+    expect(out.artifactPath).toBe("knowledge-base/missing.pdf");
+    expect(out.documentKind).toBe("pdf");
+    expect(out.documentExtractError).toBe("read_failed");
     // Extractor never called when readFile fails.
     expect(extractPdfTextSpy).not.toHaveBeenCalled();
+    // Sentry mirror fired with the typed op tag.
+    const calls = reportSilentFallbackSpy.mock.calls.filter(
+      ([, opts]) =>
+        (opts as { op?: string })?.op === "extractPdfText.readFile",
+    );
+    expect(calls.length).toBe(1);
+    expect((calls[0]?.[1] as { extra?: { errorClass?: string } })?.extra?.errorClass).toBe(
+      "read_failed",
+    );
   });
 
   it("inlines the extractor's body when truncated=true is reported", async () => {
@@ -341,15 +353,20 @@ describe("resolveConciergeDocumentContext", () => {
     }
   });
 
-  it("falls through to instruction-only when the file does not exist", async () => {
+  it("missing text file drops to no-context (Bug A defense-in-depth)", async () => {
+    // Bug B Phase 2.4: text-file readFile-ENOENT used to fall through to a
+    // text Read directive — same Bug A vulnerability as the PDF gated path.
+    // Post-fix: drop to no-context (`{}`) and mirror to Sentry. The runner
+    // emits the bare router prompt; no relative-path Read is suggested.
     const out = await resolveConciergeDocumentContext({
       userId: "u1",
       contextPath: "knowledge-base/missing.md",
     });
-    // Defense-in-depth: no documentContent; agent will Read.
-    expect(out.artifactPath).toBe("knowledge-base/missing.md");
-    expect(out.documentKind).toBe("text");
-    expect(out.documentContent).toBeUndefined();
+    expect(out).toEqual({});
+    const calls = reportSilentFallbackSpy.mock.calls.filter(
+      ([, opts]) => (opts as { op?: string })?.op === "readFile",
+    );
+    expect(calls.length).toBe(1);
   });
 
   it("drops oversized text files to instruction-only (no content inlined)", async () => {

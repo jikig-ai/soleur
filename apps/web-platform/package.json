@@ -3,6 +3,9 @@
   "version": "0.0.1",
   "type": "module",
   "private": true,
+  "engines": {
+    "node": ">=22.3.0"
+  },
   "scripts": {
     "dev": "esbuild server/index.ts --bundle --platform=node --target=node22 --format=esm --packages=external --outfile=.next/dev-server.mjs && node .next/dev-server.mjs",
     "build": "next build",
