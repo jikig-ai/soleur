@@ -5,11 +5,13 @@ import { readFile } from "fs/promises";
 import path from "path";
 
 import { createServiceClient } from "@/lib/supabase/service";
+import { getFreshTenantClient } from "@/lib/supabase/tenant";
 import { ROUTABLE_DOMAIN_LEADERS, type DomainLeaderId } from "./domain-leaders";
 import { routeMessage } from "./domain-router";
 import { KeyInvalidError, type AttachmentRef, type Conversation } from "@/lib/types";
 import { persistAndDownloadAttachments } from "./attachment-pipeline";
 import { decryptKey, decryptKeyLegacy, encryptKey } from "./byok";
+import { runWithByokLease, ByokLeaseError, mapByokLeaseCauseToErrorCode } from "./byok-lease";
 import { sendToClient } from "./ws-handler";
 import { notifyOfflineUser, type NotificationPayload } from "./notifications";
 import * as Sentry from "@sentry/nextjs";
@@ -56,6 +58,21 @@ const log = createChildLogger("agent");
 
 let _supabase: ReturnType<typeof createServiceClient>;
 function supabase() { return _supabase ??= createServiceClient(); }
+
+/**
+ * Single source of truth for `errorCode` on WS error events thrown out
+ * of `startAgentSession` / `sendUserMessage` (#3244 §1.7.2).
+ *
+ * Replaces the duplicated `err instanceof KeyInvalidError ? "key_invalid"
+ * : undefined` ladder. Re-uses `mapByokLeaseCauseToErrorCode` so a
+ * future widening of `ByokLeaseError.cause` is a TS build break here
+ * via the helper's `: never` rail.
+ */
+function resolveSessionErrorCode(err: unknown): "key_invalid" | undefined {
+  if (err instanceof KeyInvalidError) return "key_invalid";
+  if (err instanceof ByokLeaseError) return mapByokLeaseCauseToErrorCode(err.cause);
+  return undefined;
+}
 
 import { buildToolLabel, buildToolUseWSMessage } from "./tool-labels";
 
@@ -184,7 +201,15 @@ export function abortAllSessions(): void {
  * fresh BYOK key (mirrors `agent-runner.ts` `KeyInvalidError` handling).
  */
 export async function getUserApiKey(userId: string): Promise<string> {
-  const { data, error } = await supabase()
+  // PR-B §1.5.1 (#3244): tenant-scoped client. RLS on `api_keys` filters
+  // to `auth.uid() = user_id` — a JWT mismatch surfaces as zero rows
+  // (silent), distinguished from a real "no key on file" by the prior
+  // `getFreshTenantClient` mint (which throws RuntimeAuthError if the
+  // JWT cannot be issued). Per `2026-04-12-silent-rls-failures-in-team-names`,
+  // the auth probe is implicit in `getFreshTenantClient` — the throw at
+  // mint time is the load-bearing distinction.
+  const tenant = await getFreshTenantClient(userId);
+  const { data, error } = await tenant
     .from("api_keys")
     .select("id, encrypted_key, iv, auth_tag, key_version")
     .eq("user_id", userId)
@@ -213,8 +238,21 @@ export async function getUserApiKey(userId: string): Promise<string> {
     // HKDF key derivation is deterministic on userId, so the persisted
     // ciphertext from the winner decrypts to the same plaintext on later
     // reads). See #2919.
-    const plaintext = decryptKeyLegacy(encrypted, iv, authTag);
+    // PR-B (#3244 §1.4.2): decryptKey* now return Buffer. Convert to
+    // string at the legacy public-API boundary; the BYOK lease path
+    // (added in §1.4.3) keeps the buffer form for zeroize-on-finally.
+    const plaintextBuf = decryptKeyLegacy(encrypted, iv, authTag);
+    const plaintext = plaintextBuf.toString("utf8");
     const reEncrypted = encryptKey(plaintext, userId);
+    // SERVICE-ROLE: `migrate_api_key_to_v2` is REVOKEd from authenticated
+    // (migration 033:54). Granting authenticated would require auth.uid()
+    // guards in the RPC body to prevent cross-tenant probes; that's a
+    // separate migration. The predicate-locked UPDATE keyed on
+    // `(id, user_id, provider, key_version=1)` is the load-bearing
+    // access control — service-role here is safe because the tenant-
+    // scoped SELECT above (`tenant.from("api_keys")`) already enforced
+    // ownership before we obtained the row id we're now migrating.
+    // agent-runner.ts is allowlisted (.service-role-allowlist).
     const { error: rpcErr } = await supabase().rpc("migrate_api_key_to_v2", {
       p_id: data.id,
       p_user_id: userId,
@@ -239,7 +277,7 @@ export async function getUserApiKey(userId: string): Promise<string> {
     return plaintext;
   }
 
-  return decryptKey(encrypted, iv, authTag, userId);
+  return decryptKey(encrypted, iv, authTag, userId).toString("utf8");
 }
 
 // ---------------------------------------------------------------------------
@@ -258,7 +296,12 @@ export async function getUserApiKey(userId: string): Promise<string> {
 export async function getUserServiceTokens(
   userId: string,
 ): Promise<Record<string, string>> {
-  const { data, error } = await supabase()
+  // PR-B §1.5.1 (#3244): tenant-scoped client. Same auth-probe shape as
+  // `getUserApiKey` — RuntimeAuthError surfaces JWT-mint failure; an
+  // empty rowset under a valid JWT is a legitimate "no service tokens"
+  // state (returns `{}`).
+  const tenant = await getFreshTenantClient(userId);
+  const { data, error } = await tenant
     .from("api_keys")
     .select("id, provider, encrypted_key, iv, auth_tag, key_version")
     .eq("user_id", userId)
@@ -283,7 +326,9 @@ export async function getUserServiceTokens(
 
       let plaintext: string;
       if (row.key_version === 1) {
-        plaintext = decryptKeyLegacy(encrypted, iv, authTag);
+        // PR-B (#3244 §1.4.2): decryptKey* return Buffer; convert at the
+        // public-API boundary for legacy callers.
+        plaintext = decryptKeyLegacy(encrypted, iv, authTag).toString("utf8");
         // Lazy migration to v2 — same predicate-locked RPC as
         // `getUserApiKey`. The (id, user_id, provider, key_version=1)
         // predicate serializes concurrent callers via PG row locks. See
@@ -291,6 +336,11 @@ export async function getUserServiceTokens(
         // is fresh per call; the predicate UPDATE keeps only the winning
         // writer's ciphertext.
         const reEncrypted = encryptKey(plaintext, userId);
+        // SERVICE-ROLE: see sibling block in `getUserApiKey` for rationale.
+        // `migrate_api_key_to_v2` is REVOKEd from authenticated; predicate-
+        // locked UPDATE on `(id, user_id, provider, key_version=1)` is the
+        // load-bearing access control after the tenant SELECT verifies
+        // ownership of `row.id`.
         const { error: rpcErr } = await supabase().rpc("migrate_api_key_to_v2", {
           p_id: row.id,
           p_user_id: userId,
@@ -309,7 +359,7 @@ export async function getUserServiceTokens(
           });
         }
       } else {
-        plaintext = decryptKey(encrypted, iv, authTag, userId);
+        plaintext = decryptKey(encrypted, iv, authTag, userId).toString("utf8");
       }
 
       tokens[config.envVar] = plaintext;
@@ -325,13 +375,21 @@ export async function getUserServiceTokens(
 // Message persistence
 // ---------------------------------------------------------------------------
 async function saveMessage(
+  userId: string,
   conversationId: string,
   role: "user" | "assistant",
   content: string,
   toolCalls?: unknown,
   leaderId?: string,
 ) {
-  const { error } = await supabase().from("messages").insert({
+  // PR-B §1.5.1 (#3244): tenant-scoped insert. RLS on `messages` requires
+  // `EXISTS (SELECT 1 FROM conversations WHERE id = conversation_id AND
+  // user_id = auth.uid())` — a cross-founder write fails the policy and
+  // surfaces as a Postgres error (not a silent no-op). The userId param
+  // is the founder identity for `getFreshTenantClient`; the actual write
+  // is keyed on `conversation_id` and the FK-join policy enforces ownership.
+  const tenant = await getFreshTenantClient(userId);
+  const { error } = await tenant.from("messages").insert({
     id: randomUUID(),
     conversation_id: conversationId,
     role,
@@ -376,9 +434,18 @@ async function updateConversationStatus(
 const MAX_REPLAY_MESSAGES = 20;
 
 async function loadConversationHistory(
+  userId: string,
   conversationId: string,
 ): Promise<Array<{ role: string; content: string }>> {
-  const { data, error } = await supabase()
+  // PR-B §1.5.1 (#3244): tenant-scoped read. RLS on `messages` enforces
+  // ownership via FK-join to `conversations.user_id`. A cross-founder
+  // read returns zero rows (silent filter) — the empty replay is safe
+  // (no plaintext leak) but also useless to the caller. The
+  // RLS-deny vs. no-history distinction is downstream's problem; here
+  // we mirror DB errors and return [] on any fetch error per the prior
+  // contract.
+  const tenant = await getFreshTenantClient(userId);
+  const { data, error } = await tenant
     .from("messages")
     .select("role, content, created_at, message_attachments(filename, content_type, size_bytes)")
     .eq("conversation_id", conversationId)
@@ -425,6 +492,10 @@ function buildReplayPrompt(
 // ---------------------------------------------------------------------------
 export async function cleanupOrphanedConversations(): Promise<void> {
   const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1_000).toISOString();
+  // SERVICE-ROLE: bulk sweep — keyed on staleness (last_active < cutoff),
+  // not data ownership. No userId in scope; getFreshTenantClient(userId)
+  // is structurally inapplicable (per type-design F2 + architecture F1).
+  // Allowlisted in apps/web-platform/.service-role-allowlist.
   // allow-direct-conversation-update: bulk status sweep — no per-user composite key
   const { error } = await supabase()
     .from("conversations")
@@ -446,6 +517,10 @@ const INACTIVITY_CHECK_INTERVAL_MS = 60 * 60 * 1_000; // Check every hour
 export function startInactivityTimer(): void {
   const timer = setInterval(async () => {
     const cutoff = new Date(Date.now() - INACTIVITY_TIMEOUT_MS).toISOString();
+    // SERVICE-ROLE: bulk sweep — keyed on staleness (last_active < cutoff),
+    // not data ownership. The selected `user_id` rows are then used to
+    // abort in-memory sessions; no per-tenant write is performed here.
+    // Allowlisted in apps/web-platform/.service-role-allowlist.
     // allow-direct-conversation-update: bulk timeout sweep — no per-user composite key
     const { data, error } = await supabase()
       .from("conversations")
@@ -632,9 +707,19 @@ export async function startAgentSession(
   const outerStreamLeaderId: DomainLeaderId = leaderId ?? "cpo";
 
   try {
+    // PR-B §1.5.3 (#3244): wrap session body in runWithByokLease.
+    // The lease zeroizes the plaintext-key buffer in `finally`, even if
+    // the inner body throws or the controller aborts. `lease.getApiKey()`
+    // is the BYOK plaintext-key fetch surface — captured-leak attempts
+    // outside this scope throw `ByokLeaseError{cause:"escape"}`.
+    //
+    // The implicit JWT mint at session start (per §1.5.4) is the first
+    // `getFreshTenantClient(userId)` call inside the lease body — surfaces
+    // RuntimeAuthError synchronously rather than mid-tool-call.
+    await runWithByokLease(userId, async (lease) => {
     // Get user's decrypted API key and service tokens
     const [apiKey, serviceTokens] = await Promise.all([
-      getUserApiKey(userId),
+      lease.getApiKey(),
       getUserServiceTokens(userId),
     ]);
 
@@ -643,13 +728,16 @@ export async function startAgentSession(
     const leader = ROUTABLE_DOMAIN_LEADERS.find((l) => l.id === effectiveLeaderId);
     if (!leader) throw new Error(`Unknown leader: ${effectiveLeaderId}`);
 
-    // Get user workspace path, repo status, and GitHub App connection.
+    // PR-B §1.5.1 (#3244): tenant-scoped read of the founder's own row.
+    // RLS policy `Users can read own profile` (auth.uid() = id) filters
+    // the row; under tenant JWT this returns the founder's row only.
     // `repo_url` is intentionally NOT selected here — the canonical read
     // is `getCurrentRepoUrl(userId)` below, which normalizes the value
     // via `normalizeRepoUrl` and mirrors DB errors to Sentry. Sibling
     // inline SELECTs were a class of scoping-backdoor bug (see plan
     // 2026-04-22-refactor-drain-web-platform-code-review-2775-2776-2777-plan.md).
-    const { data: user } = await supabase()
+    const sessionTenant = await getFreshTenantClient(userId);
+    const { data: user } = await sessionTenant
       .from("users")
       .select("workspace_path, repo_status, github_installation_id")
       .eq("id", userId)
@@ -1009,6 +1097,10 @@ issues/PRs, 4 KB comments); follow the html_url for the full text.`;
         extra: { userId },
       });
     }
+    // SERVICE-ROLE: kb-share-link impersonation; the share-link
+    // contract IS the impersonation. Allowlisted in
+    // `apps/web-platform/.service-role-allowlist`. Audit-row
+    // (`audit_share_use`) deferred to Increment 3 per plan §1.5.
     const kbShareTools = buildKbShareTools({
       serviceClient: supabase(),
       userId,
@@ -1276,9 +1368,11 @@ issues/PRs, 4 KB comments); follow the html_url for the full text.`;
         //     `updateConversationStatus(..., "failed").catch(...)` chain.
         let assistantPersisted = false;
         try {
-          // Save the full assistant response with leader attribution
+          // Save the full assistant response with leader attribution.
+          // PR-B (#3244 §1.5.1): saveMessage signature gained userId first
+          // arg for tenant-scoped insert via getFreshTenantClient(userId).
           if (fullText) {
-            await saveMessage(conversationId, "assistant", fullText, undefined, streamLeaderId);
+            await saveMessage(userId, conversationId, "assistant", fullText, undefined, streamLeaderId);
             assistantPersisted = true;
           }
 
@@ -1287,6 +1381,15 @@ issues/PRs, 4 KB comments); follow the html_url for the full text.`;
           const inputDelta = message.usage?.input_tokens ?? 0;
           const outputDelta = message.usage?.output_tokens ?? 0;
 
+          // SERVICE-ROLE: `increment_conversation_cost` is REVOKEd from
+          // authenticated (migration 017:43). Granting authenticated would
+          // require an `auth.uid() = user_id` guard in the RPC body to
+          // prevent cross-founder cost-counter inflation; that's a separate
+          // migration tracked as a follow-up. Service-role is safe here
+          // because the conversation's ownership was verified earlier in
+          // the session (tenant.from("conversations") in sendUserMessage,
+          // or the JWT-validated session start). agent-runner.ts is
+          // allowlisted (.service-role-allowlist).
           // Fire-and-forget: cost tracking is non-blocking telemetry.
           // A failure here drops per-turn cost data silently — mirror to Sentry
           // per `cq-silent-fallback-must-mirror-to-sentry` so on-call sees
@@ -1419,6 +1522,7 @@ issues/PRs, 4 KB comments); follow the html_url for the full text.`;
         }
       }
     }
+    });  // end runWithByokLease
   } catch (err) {
     if (controller.signal.aborted) {
       // If superseded, the caller (abortActiveSession) already set status to
@@ -1478,7 +1582,7 @@ issues/PRs, 4 KB comments); follow the html_url for the full text.`;
       sendToClient(userId, {
         type: "error",
         message,
-        errorCode: err instanceof KeyInvalidError ? "key_invalid" : undefined,
+        errorCode: resolveSessionErrorCode(err),
       });
       await updateConversationStatus(userId, conversationId, "failed").catch(
         (statusErr) => {
@@ -1593,9 +1697,14 @@ export async function sendUserMessage(
   conversationContext?: import("@/lib/types").ConversationContext,
   attachments?: AttachmentRef[],
 ): Promise<void> {
-  // Verify conversation ownership BEFORE saving the message to prevent
-  // cross-user writes (the message insert has no user_id check itself).
-  const { data: conv, error: convErr } = await supabase()
+  // PR-B §1.5.1 (#3244): tenant-scoped ownership probe. The
+  // `eq("user_id", userId)` filter is now redundant under RLS (which
+  // enforces auth.uid() = user_id), but kept for defense-in-depth and
+  // historical-grep stability. A cross-founder probe under tenant JWT
+  // returns zero rows (silent RLS filter); the JWT-mint failure
+  // upstream surfaces as RuntimeAuthError before this query.
+  const sendTenant = await getFreshTenantClient(userId);
+  const { data: conv, error: convErr } = await sendTenant
     .from("conversations")
     .select("domain_leader, session_id")
     .eq("id", conversationId)
@@ -1604,9 +1713,10 @@ export async function sendUserMessage(
 
   if (convErr || !conv) throw new Error(ERR_CONVERSATION_NOT_FOUND);
 
-  // Save user message to DB (after ownership verified)
+  // PR-B §1.5.1: tenant-scoped insert. RLS on `messages` enforces
+  // ownership via the FK-join policy on `conversations.user_id`.
   const messageId = randomUUID();
-  const { error: msgErr } = await supabase().from("messages").insert({
+  const { error: msgErr } = await sendTenant.from("messages").insert({
     id: messageId,
     conversation_id: conversationId,
     role: "user",
@@ -1618,6 +1728,9 @@ export async function sendUserMessage(
 
   // Persist attachment metadata and download files to workspace.
   // Extracted in #3254 — see `attachment-pipeline.ts` for the lifted body.
+  // SERVICE-ROLE: persistAndDownloadAttachments uses service-role for
+  // attachment-storage writes (signed URL plumbing). Migrated in PR-C
+  // alongside the rest of the attachment pipeline (spec §2.1.4).
   let attachmentContext: string | undefined;
   if (attachments && attachments.length > 0) {
     const result = await persistAndDownloadAttachments({
@@ -1645,7 +1758,7 @@ export async function sendUserMessage(
     sendToClient(userId, {
       type: "error",
       message,
-      errorCode: err instanceof KeyInvalidError ? "key_invalid" : undefined,
+      errorCode: resolveSessionErrorCode(err),
     });
     updateConversationStatus(userId, conversationId, "failed").catch((statusErr) => {
       log.error(
@@ -1661,26 +1774,39 @@ export async function sendUserMessage(
     : content;
 
   // If no domain_leader is set (tag-and-route mode), use the router
-  // to determine which leaders should respond
+  // to determine which leaders should respond.
+  // PR-B §1.5.3 (#3244): the routing-side BYOK fetch goes through
+  // runWithByokLease so the plaintext key is zeroized on exit and
+  // captured-leak attempts throw ByokLeaseError{cause:"escape"}.
+  // routeMessage hits Anthropic with the plaintext apiKey; the lease
+  // bounds the in-process heap window for that call too.
   if (!conv.domain_leader) {
     try {
-      const apiKey = await getUserApiKey(userId);
+      await runWithByokLease(userId, async (lease) => {
+        const apiKey = await lease.getApiKey();
 
-      // Fetch user's custom team names for @-mention resolution
-      const { data: nameRows, error: namesError } = await supabase()
-        .from("team_names")
-        .select("leader_id, custom_name")
-        .eq("user_id", userId);
-      if (namesError) log.warn({ err: namesError }, "Failed to fetch custom team names");
-      const customNames: Record<string, string> = {};
-      for (const row of nameRows ?? []) {
-        customNames[row.leader_id] = row.custom_name;
-      }
+        // tenant-scoped read of team_names. RLS enforces auth.uid() = user_id.
+        // sendTenant from earlier in this function is reusable here
+        // (TTL/2 auto-remint amortizes across the same sendUserMessage
+        // invocation).
+        const { data: nameRows, error: namesError } = await sendTenant
+          .from("team_names")
+          .select("leader_id, custom_name")
+          .eq("user_id", userId);
+        if (namesError) log.warn({ err: namesError }, "Failed to fetch custom team names");
+        const customNames: Record<string, string> = {};
+        for (const row of nameRows ?? []) {
+          customNames[row.leader_id] = row.custom_name;
+        }
 
-      const route = await routeMessage(content, apiKey, conversationContext, customNames);
-      log.info({ leaders: route.leaders, source: route.source }, "Routed message to leaders");
-      dispatchToLeaders(userId, conversationId, route.leaders, augmentedContent, conversationContext, undefined, route.source)
-        .catch(handleSessionError);
+        const route = await routeMessage(content, apiKey, conversationContext, customNames);
+        log.info({ leaders: route.leaders, source: route.source }, "Routed message to leaders");
+        // Fire-and-forget the dispatch — it has its own runWithByokLease
+        // wrap inside startAgentSession (per §1.5.3), so the routing-side
+        // lease can close before the per-leader lease bodies run.
+        dispatchToLeaders(userId, conversationId, route.leaders, augmentedContent, conversationContext, undefined, route.source)
+          .catch(handleSessionError);
+      });
     } catch (err) {
       handleSessionError(err);
     }
@@ -1711,7 +1837,7 @@ export async function sendUserMessage(
       }
 
       // Load history and build replay prompt
-      const history = await loadConversationHistory(conversationId);
+      const history = await loadConversationHistory(userId, conversationId);
       const replayPrompt = buildReplayPrompt(history, augmentedContent);
 
       startAgentSession(
@@ -1725,7 +1851,7 @@ export async function sendUserMessage(
     });
   } else {
     // No session to resume — first turn or history-only replay
-    const history = await loadConversationHistory(conversationId);
+    const history = await loadConversationHistory(userId, conversationId);
     const prompt = history.length > 0
       ? buildReplayPrompt(history, augmentedContent)
       : augmentedContent;
