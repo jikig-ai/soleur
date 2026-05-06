@@ -76,13 +76,14 @@ export interface AgentQueryOptionsArgs {
   /** Per-call allowedTools list (legacy: platform tool names + plugin MCP wildcards; cc: omitted at V1). */
   allowedTools?: string[];
   /**
-   * NOTE: `disallowedTools` is intentionally NOT exposed as an arg.
-   * Both legacy + cc paths share `["WebSearch", "WebFetch"]` and no
-   * consumer overrides it today. Pinned as a constant inside the helper
-   * (CANONICAL_DISALLOWED_TOOLS below). If a future caller needs a
-   * different list, re-introduce the arg with a real test — see review
-   * fix-inline #2954.
+   * Per-call disallowedTools extension (#3338). Merged with the canonical
+   * `[WebSearch, WebFetch]` list. The cc path passes `["Bash", "Edit", "Write"]`
+   * here so the model literally cannot emit those tools — `allowedTools` is
+   * auto-approve only per SDK semantics (sdk.d.ts:858-862), so the only way
+   * to actually restrict the model's tool surface is `disallowedTools` (or
+   * the `tools` option). Legacy path leaves this undefined.
    */
+  extraDisallowedTools?: readonly string[];
   /** Legacy: 50; cc: omitted (cost-cap is enforced at the runner level). */
   maxTurns?: number;
   /** Legacy: 5.0; cc: omitted. */
@@ -118,7 +119,10 @@ export function buildAgentQueryOptions(
     // `permissions.allow` would bypass `canUseTool` (chain step 4 before step 5).
     settingSources: [],
     includePartialMessages: true,
-    disallowedTools: [...CANONICAL_DISALLOWED_TOOLS],
+    disallowedTools: [
+      ...CANONICAL_DISALLOWED_TOOLS,
+      ...(args.extraDisallowedTools ?? []),
+    ],
     systemPrompt: args.systemPrompt,
     env: buildAgentEnv(args.apiKey, args.serviceTokens),
     // Sandbox literal lives in `buildAgentSandboxConfig` so legacy + cc
