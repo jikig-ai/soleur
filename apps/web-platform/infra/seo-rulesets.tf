@@ -37,15 +37,25 @@
 # the 301 is served whether GitHub Pages still emits the legacy HTML files or
 # not. Source-template deletion is tracked in follow-up issue #3328.
 #
-# Free-tier Cloudflare zones cap dynamic-redirect rules at 10 per phase. The
-# initial 19-rule rollout (one rule per source path) hit that limit on first
-# apply — see `knowledge-base/project/learnings/2026-05-06-cf-free-tier-rule-limits.md`.
-# This ruleset consolidates the 19 source paths into 4 rules using
-# `regex_replace()` in `target_url.expression`. Rule ORDER matters: the
-# dynamic-redirect phase short-circuits on first match, so the
-# `terms-of-service` rename rule must precede the generic `/pages/legal/*`
-# regex rule (otherwise the regex would route /pages/legal/terms-of-service.html
-# to /legal/terms-of-service/, a 404 — the slug was renamed to terms-and-conditions).
+# Cloudflare Free-tier zones cap dynamic-redirect rules at 10 per phase,
+# and `regex_replace()` in `target_url.expression` requires Business or WAF
+# Advanced (cannot be used to consolidate). Both constraints discovered
+# post-merge during PR #3296 apply.
+#
+# This ruleset declares 10 explicit rules (the Free-tier cap), prioritized:
+#   - 8 top-level `/pages/<slug>.html → /<slug>/` redirects (high-traffic pages)
+#   - 1 `terms-of-service → terms-and-conditions` slug rename (load-bearing —
+#     the only entry with a confirmed GSC 404 bucket entry pre-fix)
+#   - 1 `/blog/what-is-company-as-a-service/index.html → /company-as-a-service/` reslug
+#
+# Deferred to follow-up: 9 individual `/pages/legal/<slug>.html → /legal/<slug>/`
+# redirects (privacy, cookie, gdpr, AUP, data-protection, individual-cla,
+# corporate-cla, disclaimer, terms-and-conditions). These paths return 404
+# until a Bulk Redirects refactor lands (account-scoped `cloudflare_list` of
+# type "redirect" + `cloudflare_ruleset` with phase `http_request_redirect`).
+# Google will recrawl from the sitemap and drop them from the redirect-bucket
+# cluster — acceptable transitional state since the canonical `/legal/<slug>/`
+# paths ARE in the sitemap and indexed.
 resource "cloudflare_ruleset" "seo_page_redirects" {
   provider    = cloudflare.rulesets
   zone_id     = var.cf_zone_id
@@ -54,10 +64,136 @@ resource "cloudflare_ruleset" "seo_page_redirects" {
   kind        = "zone"
   phase       = "http_request_dynamic_redirect"
 
-  # Rule 1: terms-of-service slug rename — MUST come before Rule 3 below.
-  # The legacy slug terms-of-service was renamed to terms-and-conditions; if
-  # the generic /pages/legal/* regex (Rule 3) matched first, it would 301 to
-  # /legal/terms-of-service/ which is a 404.
+  rules {
+    action      = "redirect"
+    description = "Redirect /pages/agents.html → /agents/"
+    enabled     = true
+    expression  = "(http.host eq \"www.soleur.ai\" and http.request.uri.path eq \"/pages/agents.html\")"
+    action_parameters {
+      from_value {
+        status_code           = 301
+        preserve_query_string = false
+        target_url {
+          value = "https://www.soleur.ai/agents/"
+        }
+      }
+    }
+  }
+
+  rules {
+    action      = "redirect"
+    description = "Redirect /pages/skills.html → /skills/"
+    enabled     = true
+    expression  = "(http.host eq \"www.soleur.ai\" and http.request.uri.path eq \"/pages/skills.html\")"
+    action_parameters {
+      from_value {
+        status_code           = 301
+        preserve_query_string = false
+        target_url {
+          value = "https://www.soleur.ai/skills/"
+        }
+      }
+    }
+  }
+
+  rules {
+    action      = "redirect"
+    description = "Redirect /pages/vision.html → /vision/"
+    enabled     = true
+    expression  = "(http.host eq \"www.soleur.ai\" and http.request.uri.path eq \"/pages/vision.html\")"
+    action_parameters {
+      from_value {
+        status_code           = 301
+        preserve_query_string = false
+        target_url {
+          value = "https://www.soleur.ai/vision/"
+        }
+      }
+    }
+  }
+
+  rules {
+    action      = "redirect"
+    description = "Redirect /pages/community.html → /community/"
+    enabled     = true
+    expression  = "(http.host eq \"www.soleur.ai\" and http.request.uri.path eq \"/pages/community.html\")"
+    action_parameters {
+      from_value {
+        status_code           = 301
+        preserve_query_string = false
+        target_url {
+          value = "https://www.soleur.ai/community/"
+        }
+      }
+    }
+  }
+
+  rules {
+    action      = "redirect"
+    description = "Redirect /pages/getting-started.html → /getting-started/"
+    enabled     = true
+    expression  = "(http.host eq \"www.soleur.ai\" and http.request.uri.path eq \"/pages/getting-started.html\")"
+    action_parameters {
+      from_value {
+        status_code           = 301
+        preserve_query_string = false
+        target_url {
+          value = "https://www.soleur.ai/getting-started/"
+        }
+      }
+    }
+  }
+
+  rules {
+    action      = "redirect"
+    description = "Redirect /pages/legal.html → /legal/"
+    enabled     = true
+    expression  = "(http.host eq \"www.soleur.ai\" and http.request.uri.path eq \"/pages/legal.html\")"
+    action_parameters {
+      from_value {
+        status_code           = 301
+        preserve_query_string = false
+        target_url {
+          value = "https://www.soleur.ai/legal/"
+        }
+      }
+    }
+  }
+
+  rules {
+    action      = "redirect"
+    description = "Redirect /pages/pricing.html → /pricing/"
+    enabled     = true
+    expression  = "(http.host eq \"www.soleur.ai\" and http.request.uri.path eq \"/pages/pricing.html\")"
+    action_parameters {
+      from_value {
+        status_code           = 301
+        preserve_query_string = false
+        target_url {
+          value = "https://www.soleur.ai/pricing/"
+        }
+      }
+    }
+  }
+
+  rules {
+    action      = "redirect"
+    description = "Redirect /pages/changelog.html → /changelog/"
+    enabled     = true
+    expression  = "(http.host eq \"www.soleur.ai\" and http.request.uri.path eq \"/pages/changelog.html\")"
+    action_parameters {
+      from_value {
+        status_code           = 301
+        preserve_query_string = false
+        target_url {
+          value = "https://www.soleur.ai/changelog/"
+        }
+      }
+    }
+  }
+
+  # NEW: missing entry in legacy _data/pageRedirects.js — caused the 1× 404
+  # in the GSC report (legal slug renamed but redirect not added).
   rules {
     action      = "redirect"
     description = "Redirect /pages/legal/terms-of-service.html → /legal/terms-and-conditions/ (renamed slug)"
@@ -74,52 +210,6 @@ resource "cloudflare_ruleset" "seo_page_redirects" {
     }
   }
 
-  # Rule 2: top-level /pages/<slug>.html → /<slug>/.
-  # Match anchors are `^/pages/[^/]+\.html$` so single-segment paths only —
-  # /pages/legal/cookie-policy.html (depth 2) is intentionally NOT matched
-  # here; Rule 3 handles it. /pages/legal.html (depth 1) IS matched here and
-  # correctly routes to /legal/.
-  # Covers: agents, skills, vision, community, getting-started, legal,
-  #         pricing, changelog (8 source paths).
-  rules {
-    action      = "redirect"
-    description = "Redirect /pages/<slug>.html → /<slug>/ (regex-consolidated, 8 source paths)"
-    enabled     = true
-    expression  = "(http.host eq \"www.soleur.ai\" and http.request.uri.path matches \"^/pages/[^/]+\\.html$\")"
-    action_parameters {
-      from_value {
-        status_code           = 301
-        preserve_query_string = false
-        target_url {
-          expression = "concat(\"https://www.soleur.ai\", regex_replace(http.request.uri.path, \"^/pages/([^/]+)\\.html$\", \"/$${1}/\"))"
-        }
-      }
-    }
-  }
-
-  # Rule 3: /pages/legal/<slug>.html → /legal/<slug>/ (depth 2, regex).
-  # The terms-of-service rename is excluded by Rule 1 firing first.
-  # Covers: privacy-policy, terms-and-conditions, cookie-policy, gdpr-policy,
-  #         acceptable-use-policy, data-protection-disclosure, individual-cla,
-  #         corporate-cla, disclaimer (9 source paths).
-  rules {
-    action      = "redirect"
-    description = "Redirect /pages/legal/<slug>.html → /legal/<slug>/ (regex-consolidated, 9 source paths)"
-    enabled     = true
-    expression  = "(http.host eq \"www.soleur.ai\" and http.request.uri.path matches \"^/pages/legal/[^/]+\\.html$\")"
-    action_parameters {
-      from_value {
-        status_code           = 301
-        preserve_query_string = false
-        target_url {
-          expression = "concat(\"https://www.soleur.ai/legal\", regex_replace(http.request.uri.path, \"^/pages/legal/([^/]+)\\.html$\", \"/$${1}/\"))"
-        }
-      }
-    }
-  }
-
-  # Rule 4: blog content reslug.
-  # Specific path; not part of the /pages/* pattern.
   rules {
     action      = "redirect"
     description = "Redirect /blog/what-is-company-as-a-service/index.html → /company-as-a-service/"
