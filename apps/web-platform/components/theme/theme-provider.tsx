@@ -37,6 +37,41 @@ function readStoredTheme(): Theme {
 }
 
 /**
+ * Resolve the canonical post-bootstrap theme on the client.
+ *
+ * The inline `NoFoucScript` runs synchronously in `<head>` before React mounts
+ * and writes `documentElement.dataset.theme` from `localStorage["soleur:theme"]`.
+ * That attribute is the canonical, post-bootstrap theme — by the time React's
+ * lazy `useState` initializer runs on the client, the DOM is already correct.
+ *
+ * Reading from `dataset.theme` first (rather than re-reading `localStorage`)
+ * makes the initial React state match the painted palette without an
+ * effect-driven swap. The effect at line ~174 stays as a defense-in-depth
+ * fallback for environments where the inline script never ran (tests, dev
+ * preview that scrubbed the attribute, very old browsers).
+ *
+ * No-op on the server (`document` is undefined).
+ *
+ * **Why this matters:** prior to this helper, the lazy initializer called
+ * `readStoredTheme()` directly. The SSR snapshot returned `"system"` (window
+ * undefined). React 18 hydration reuses the server-rendered state and does
+ * NOT re-call lazy initializers — so the client's first paint rendered the
+ * `aria-pressed` indicator on the System segment even when the page palette
+ * (resolved via `dataset.theme`) was already Dark or Light. The first-mount
+ * useEffect re-synced state, but the wrong-segment paint persisted long
+ * enough for users to perceive it as "stuck on System after reload"
+ * (#3312 attempted to fix this; this is the structural fix).
+ */
+function resolveClientInitialTheme(): Theme {
+  if (typeof document === "undefined") return "system";
+  const fromDom = document.documentElement.dataset.theme;
+  if (isTheme(fromDom)) return fromDom;
+  // Fallback: dataset.theme not set (test fixture scrubbed it, or the
+  // inline script failed to run). Read localStorage directly.
+  return readStoredTheme();
+}
+
+/**
  * Suppress CSS transitions and keyframe animations for one paint frame.
  *
  * Theme switches re-resolve every `var(--soleur-*)` token that surfaces
@@ -125,21 +160,29 @@ type ThemeContextValue = {
 const ThemeContext = createContext<ThemeContextValue | null>(null);
 
 export function ThemeProvider({ children }: { children: React.ReactNode }) {
-  // Lazy initializers read localStorage / matchMedia on first client render
-  // so the post-hydration paint already matches the persisted choice — no
-  // extra effect-driven swap, no flicker. SSR (where window is undefined)
-  // falls back to "system" + dark; the hydration mismatch on <html
-  // data-theme> set by the no-FOUC inline script is silenced via
-  // suppressHydrationWarning in app/layout.tsx.
-  // INVARIANT: the inline <NoFoucScript> in app/layout.tsx <head> has already
-  // written document.documentElement.dataset.theme before React mounts. This
-  // provider's first paint and that script must agree on the value or the
-  // user sees a one-frame flash.
+  // Lazy initializers read documentElement.dataset.theme on first client
+  // render so the initial paint matches the inline <NoFoucScript>'s value
+  // (which it already wrote synchronously in <head> from localStorage). No
+  // effect-driven swap, no flicker, no "stuck on System" first paint.
+  //
+  // SSR (where document is undefined) falls back to "system" + dark; the
+  // hydration mismatch on <html data-theme> set by the inline script is
+  // silenced via suppressHydrationWarning in app/layout.tsx.
+  //
+  // INVARIANT: the inline <NoFoucScript> in app/layout.tsx <head> has
+  // already written document.documentElement.dataset.theme before React
+  // mounts. This provider's first paint and that script MUST agree on the
+  // value or the user sees a one-frame flash. The first-mount useEffect
+  // below stays as a defense-in-depth fallback for environments where the
+  // inline script never ran (test fixtures that scrubbed the attribute,
+  // very old browsers, CSP-blocked inline scripts).
   const [theme, setThemeState] = useState<Theme>(() =>
-    typeof window === "undefined" ? "system" : readStoredTheme(),
+    typeof window === "undefined" ? "system" : resolveClientInitialTheme(),
   );
   const [resolvedTheme, setResolvedTheme] = useState<ResolvedTheme>(() =>
-    typeof window === "undefined" ? "dark" : resolveInitial(readStoredTheme()),
+    typeof window === "undefined"
+      ? "dark"
+      : resolveInitial(resolveClientInitialTheme()),
   );
 
   // Apply data-theme on the html element whenever theme changes.
