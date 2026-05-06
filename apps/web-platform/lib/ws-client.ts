@@ -121,8 +121,16 @@ export const NON_TRANSIENT_CLOSE_CODES: Record<number, { target?: string; reason
   // release_conversation_slot only on archive, NOT on status='completed'.
   // (Plan Risk #5: resume_session does not call acquireSlot, so releasing
   // on completed alone would let resumes bypass the cap.)
+  // Copy (May-6 #3354) names the dashboard remediation surface, removes
+  // the misleading "*completed*" qualifier (active rows can be archived
+  // too), and sets expectation about the auto-reclaim window
+  // (60 s reaper tick + 120 s threshold ≈ 3 min). The widened
+  // `tryLedgerDivergenceRecovery` (server-side) eliminates this dead-end
+  // for stale-heartbeat slots; the copy still applies when the cap is
+  // genuinely held by a fresh-heartbeat conversation.
   [WS_CLOSE_CODES.CONCURRENCY_CAP]: {
-    reason: "Concurrent-conversation limit reached. Archive a completed conversation to free a slot.",
+    reason:
+      "You've reached your concurrent-conversation limit. Archive an active or completed conversation from the dashboard to free a slot. If a conversation appears stuck Executing, the server will automatically reclaim it within ~3 minutes.",
   },
 };
 
