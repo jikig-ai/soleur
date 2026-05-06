@@ -156,8 +156,6 @@ export async function resolveConciergeDocumentContext(args: {
     try {
       const buffer = await readFile(fullPath);
       const result = await extractPdfText(buffer, CONCIERGE_INLINE_CAP_BYTES);
-      const ok = !("error" in result);
-      const errorClass: PdfExtractErrorClass | null = ok ? null : result.error;
       // #3338 Phase 5.1 — observability breadcrumb. Captures the extractor's
       // outcome on every cold-Query construction so operators can correlate
       // PDF-summary-quality with extraction shape (page count, truncation,
@@ -165,33 +163,26 @@ export async function resolveConciergeDocumentContext(args: {
       // user-identifying directory hierarchy. The 2026-05-06 follow-up adds
       // `errorClass` so a future Sentry event names the failure class
       // directly without breadcrumb hunting.
-      Sentry.addBreadcrumb({
-        category: "cc-pdf-extractor",
-        message: "extractPdfText completed",
-        level: "info",
-        data: {
-          ok,
-          errorClass,
-          pageCount: ok ? result.pageCount : (result.pageCount ?? null),
-          truncated: ok ? result.truncated : null,
-          textBytes: ok ? result.text.length : 0,
-          pathBasename: path.basename(contextPath),
-        },
-      });
-      if (ok && result.text.length > 0) {
-        return {
-          artifactPath: contextPath,
-          documentKind: "pdf",
-          documentContent: result.text,
-        };
-      }
-      if (!ok) {
+      if ("error" in result) {
         // Extraction failed (oversized, corrupted, encrypted, lazy-import
         // failure, parse error, OR empty_text). Mirror to Sentry tagged with
         // the failure class so operators see WHICH shape fired without
         // parsing breadcrumbs. `empty_text` gets a distinct `op` so
         // Hypothesis B (scanned PDFs) is filterable from Hypothesis A
         // (oversized) in the Sentry UI.
+        Sentry.addBreadcrumb({
+          category: "cc-pdf-extractor",
+          message: "extractPdfText completed",
+          level: "info",
+          data: {
+            ok: false,
+            errorClass: result.error,
+            pageCount: result.pageCount ?? null,
+            truncated: null,
+            textBytes: 0,
+            pathBasename: path.basename(contextPath),
+          },
+        });
         const op =
           result.error === "empty_text"
             ? "extractPdfText.empty_text"
@@ -214,9 +205,32 @@ export async function resolveConciergeDocumentContext(args: {
           documentExtractError: result.error,
         };
       }
-      // ok === true but text was empty. The extractor now classifies that as
-      // `empty_text`, so this branch is unreachable — keep the safety return
-      // for type narrowing and future-proofing.
+      Sentry.addBreadcrumb({
+        category: "cc-pdf-extractor",
+        message: "extractPdfText completed",
+        level: "info",
+        data: {
+          ok: true,
+          errorClass: null,
+          pageCount: result.pageCount,
+          truncated: result.truncated,
+          textBytes: result.text.length,
+          pathBasename: path.basename(contextPath),
+        },
+      });
+      if (result.text.length > 0) {
+        return {
+          artifactPath: contextPath,
+          documentKind: "pdf",
+          documentContent: result.text,
+        };
+      }
+      // Unreachable under the current extractor contract: an empty text
+      // body is now classified as `{ error: "empty_text" }` upstream and
+      // handled in the failure branch above. Keep this terminal return as
+      // a tight type-narrowing guard so a future contract regression
+      // (extractor reverts to returning `{ text: "" }` on success) cannot
+      // produce a literal-undefined `documentContent`.
       return { artifactPath: contextPath, documentKind: "pdf" };
     } catch {
       // readFile failed (missing file, permission denied) — let the agent

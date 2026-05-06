@@ -167,9 +167,9 @@ describe("extractPdfText", () => {
 
   it("does NOT trip oversized_buffer for buffers in the [old-15MB, new-24MB] band (Hypothesis A regression)", { timeout: 15_000 }, async () => {
     // Synthesize a 16 MB buffer of zero bytes. pdfjs will fail to parse
-    // (InvalidPDFException → "corrupted"), but the critical assertion is that
-    // we did NOT short-circuit on the input cap. Pre-fix this returned null
-    // (oversized_buffer) silently, hitting the apt-get cascade.
+    // (InvalidPDFException → "corrupted"), but the critical assertion is
+    // that we did NOT short-circuit on the input cap. Pre-fix this returned
+    // null (oversized_buffer) silently, hitting the apt-get cascade.
     const sixteenMb = Buffer.alloc(16 * 1024 * 1024);
     // Stamp a PDF header so this isn't an obviously invalid header path.
     sixteenMb.write("%PDF-1.4\n");
@@ -177,7 +177,15 @@ describe("extractPdfText", () => {
     expect(result).not.toBeNull();
     expect(result && "error" in result).toBe(true);
     if (!result || !("error" in result)) return;
-    expect(result.error).not.toBe("oversized_buffer");
+    // Critical invariant: the cap-aligned extractor MUST classify this
+    // buffer as a parse-failure shape — NOT as oversized_buffer (which
+    // would re-introduce Hypothesis A) and NOT as a class outside the
+    // expected pdfjs failure modes (which would hint at silent contract
+    // drift in the library or our outer catch). Pin the actual observed
+    // class on the current pdfjs-dist version so future drift surfaces as
+    // an actionable failure message ("expected 'parse_error' to be
+    // 'corrupted'") rather than a vacuous pass.
+    expect(["corrupted", "parse_error"]).toContain(result.error);
   });
 
   it("handles an empty (zero-page) PDF without throwing — empty_text or terminal shape", async () => {

@@ -179,6 +179,64 @@ describe("resolveConciergeDocumentContext", () => {
     expect(opts.extra?.pageCount).toBe(12);
   });
 
+  it("encrypted PDFs surface documentExtractError=encrypted with a Sentry mirror", async () => {
+    // Pinned in plan §Hypothesis C. The extractor's outer catch maps
+    // pdfjs's PasswordException via `err.name === "PasswordException"`;
+    // synthesizing spec-correct AES-128 in pure JS is disproportionate, so
+    // the extractor-level test relies on this resolver-level mock to pin
+    // the contract (`{ error: "encrypted" }` → documentExtractError +
+    // Sentry op: extractPdfText).
+    mkdirSync(path.join(tmpRoot, "knowledge-base"), { recursive: true });
+    writeFileSync(
+      path.join(tmpRoot, "knowledge-base", "locked.pdf"),
+      Buffer.from("%PDF-1.4\nfake"),
+    );
+    extractPdfTextSpy.mockResolvedValueOnce({ error: "encrypted" });
+
+    const out = await resolveConciergeDocumentContext({
+      userId: "u1",
+      contextPath: "knowledge-base/locked.pdf",
+    });
+    expect(out.documentExtractError).toBe("encrypted");
+    expect(out.documentContent).toBeUndefined();
+    const sentryCalls = reportSilentFallbackSpy.mock.calls.filter(
+      ([, opts]) => (opts as { op?: string })?.op === "extractPdfText",
+    );
+    expect(sentryCalls.length).toBe(1);
+    const [[, opts]] = sentryCalls as Array<
+      [unknown, { extra?: { errorClass?: unknown } }]
+    >;
+    expect(opts.extra?.errorClass).toBe("encrypted");
+  });
+
+  it("lazy_import_failed (broken runner image) surfaces documentExtractError + Sentry mirror", async () => {
+    // Production runner images can fail to lazy-load `pdfjs-dist` (broken
+    // native dep, missing libstdc++). The extractor catches and returns
+    // `{ error: "lazy_import_failed" }`. Pinned via mock — the actual
+    // import failure is environment-specific and not reproducible in the
+    // test runner.
+    mkdirSync(path.join(tmpRoot, "knowledge-base"), { recursive: true });
+    writeFileSync(
+      path.join(tmpRoot, "knowledge-base", "any.pdf"),
+      Buffer.from("%PDF-1.4\nfake"),
+    );
+    extractPdfTextSpy.mockResolvedValueOnce({ error: "lazy_import_failed" });
+
+    const out = await resolveConciergeDocumentContext({
+      userId: "u1",
+      contextPath: "knowledge-base/any.pdf",
+    });
+    expect(out.documentExtractError).toBe("lazy_import_failed");
+    const sentryCalls = reportSilentFallbackSpy.mock.calls.filter(
+      ([, opts]) => (opts as { op?: string })?.op === "extractPdfText",
+    );
+    expect(sentryCalls.length).toBe(1);
+    const [[, opts]] = sentryCalls as Array<
+      [unknown, { extra?: { errorClass?: unknown } }]
+    >;
+    expect(opts.extra?.errorClass).toBe("lazy_import_failed");
+  });
+
   it("oversized_buffer surfaces documentExtractError so the runner can pick the user-facing message", async () => {
     // Hypothesis A regression: the failure class flows through the resolver
     // so the runner emits a content-grounded "this PDF is too large" reply

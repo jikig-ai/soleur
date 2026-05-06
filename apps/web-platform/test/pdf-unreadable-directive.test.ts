@@ -156,4 +156,36 @@ describe("buildPdfUnreadableDirective via buildSoleurGoSystemPrompt", () => {
     expect(prompt).toContain("<document>");
     expect(prompt).toContain("Chapter 1: Inlined.");
   });
+
+  it("precedence: documentExtractError wins over a partial documentContent (defense-in-depth)", () => {
+    // Pin the inline-branch precedence: even when both fields land at the
+    // prompt builder (a future refactor regression), the extractor's typed
+    // failure class must still route to the unreadable directive. The
+    // gated Read path is the apt-get-cascade anchor; we cannot reach it on
+    // a known failure class.
+    const prompt = buildSoleurGoSystemPrompt({
+      artifactPath: "knowledge-base/partial.pdf",
+      documentKind: "pdf",
+      documentContent: "stale partial body that should not be inlined",
+      documentExtractError: "oversized_buffer",
+    });
+    expect(prompt).not.toContain("<document>");
+    expect(prompt).not.toContain(PDF_GATED_DIRECTIVE_LEAD);
+    expect(prompt).toContain("too large");
+    expectNoCascade(prompt);
+  });
+
+  it("includes a chat-affordance hint so the agent can answer 'how do I paste it?' follow-ups", () => {
+    // agent-native review P2: without this, the recovery loop dead-ends.
+    // The directive must name how the user delivers the recovery payload
+    // (paste / paperclip re-upload) so the agent has grounding for the
+    // inevitable follow-up.
+    const prompt = buildSoleurGoSystemPrompt({
+      artifactPath: "knowledge-base/anything.pdf",
+      documentKind: "pdf",
+      documentExtractError: "encrypted",
+    });
+    expect(prompt.toLowerCase()).toContain("paste");
+    expect(prompt.toLowerCase()).toMatch(/paperclip|re-upload/);
+  });
 });

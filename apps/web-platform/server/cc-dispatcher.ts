@@ -69,6 +69,7 @@ import {
   resolveConciergeDocumentContext,
   _resetWorkspacePathCacheForTests,
 } from "./kb-document-resolver";
+import type { PdfExtractErrorClass } from "./pdf-text-extract";
 
 // Re-export so existing call sites keep working.
 export { resolveConciergeDocumentContext } from "./kb-document-resolver";
@@ -751,7 +752,7 @@ export interface DispatchSoleurGoArgs {
    * runner emits `buildPdfUnreadableDirective` (content-grounded reply)
    * instead of `buildPdfGatedDirective` (apt-get-cascade-prone Read path).
    */
-  documentExtractError?: string;
+  documentExtractError?: PdfExtractErrorClass;
   /**
    * Attachment refs uploaded via the chat-input paperclip flow. When
    * non-empty, `dispatchSoleurGo` (a) inserts a `messages` row to

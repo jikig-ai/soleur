@@ -520,6 +520,50 @@ describe("cc-dispatcher singletons + orchestration", () => {
     expect(arg.documentKind).toBe("pdf");
   });
 
+  it("KB Concierge: forwards documentExtractError to runner.dispatch (Hypothesis A regression — PR #3353)", async () => {
+    // Pin the end-to-end thread: when ws-handler resolves
+    // `{ documentExtractError: <class> }` and spreads it into
+    // `dispatchSoleurGo`, the dispatcher MUST forward the field to
+    // `runner.dispatch`. Without this pin a future refactor that
+    // explicitly enumerates fields (instead of `...documentArgs`) would
+    // silently drop the extractor failure class and re-introduce the
+    // apt-get cascade — the bug PR #3353 closes.
+    const { __setCcRunnerForTests } = await import("@/server/cc-dispatcher");
+    const dispatchSpy = vi.fn(async (_args: unknown) => ({ queryReused: false }));
+    const stubRunner = {
+      dispatch: dispatchSpy,
+      hasActiveQuery: () => false,
+      activeQueriesSize: () => 0,
+      reapIdle: () => 0,
+      closeConversation: () => {},
+      respondToToolUse: () => false,
+      notifyAwaitingUser: () => {},
+      // biome-ignore lint/suspicious/noExplicitAny: minimal stub
+    } as any;
+    __setCcRunnerForTests(stubRunner);
+
+    const sendToClient = vi.fn().mockReturnValue(true);
+    const persistActiveWorkflow = vi.fn().mockResolvedValue(undefined);
+
+    await dispatchSoleurGo({
+      userId: "u-extract-err",
+      conversationId: "conv-extract-err",
+      userMessage: "summarize this document",
+      currentRouting: { kind: "soleur_go_pending" },
+      sendToClient,
+      persistActiveWorkflow,
+      artifactPath: "knowledge-base/scanned.pdf",
+      documentKind: "pdf",
+      documentExtractError: "empty_text",
+    });
+
+    expect(dispatchSpy).toHaveBeenCalledTimes(1);
+    const arg = dispatchSpy.mock.calls[0][0] as {
+      documentExtractError?: string;
+    };
+    expect(arg.documentExtractError).toBe("empty_text");
+  });
+
   it("KB Concierge: emits stream_end{leaderId:cc_router} when runner fires events.onTextTurnEnd", async () => {
     const { __setCcRunnerForTests } = await import("@/server/cc-dispatcher");
     const stubRunner = {

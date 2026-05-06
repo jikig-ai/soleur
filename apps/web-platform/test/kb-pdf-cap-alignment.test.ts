@@ -34,11 +34,16 @@ describe("kb-pdf cap alignment drift guard", () => {
       /import\s*\{[^}]*MAX_AGENT_READABLE_PDF_SIZE[^}]*\}\s*from\s*"@\/lib\/attachment-constants"/,
     );
 
-    // Suspenders: no local literal that re-introduces the 15 MB or 24 MB
-    // value. Matching `15 * 1024 * 1024` and `24 * 1024 * 1024` catches
-    // both the prior misalignment and a future hand-rolled re-shadow.
-    expect(src).not.toMatch(/15\s*\*\s*1024\s*\*\s*1024/);
-    expect(src).not.toMatch(/24\s*\*\s*1024\s*\*\s*1024/);
+    // Suspenders: ANY hand-rolled `<n> * 1024 * 1024` literal anywhere in
+    // the executable source path is forbidden. A re-shadow as
+    // `25 * 1024 * 1024` or `0x1800000` would slip past a per-value
+    // assertion; this catches the entire shape. We strip line/block
+    // comments first so historical references in JSDoc do not trip the
+    // gate.
+    const sourceWithoutComments = src
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/(^|\s)\/\/[^\n]*/g, "$1");
+    expect(sourceWithoutComments).not.toMatch(/\d+\s*\*\s*1024\s*\*\s*1024/);
 
     // No revival of the prior `INPUT_BUFFER_CAP_BYTES` shadow constant.
     // Anchored on `const ` so a comment referencing the historical name
