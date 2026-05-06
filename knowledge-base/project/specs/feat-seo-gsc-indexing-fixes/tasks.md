@@ -6,28 +6,30 @@ Brand-survival threshold: `single-user incident`
 
 ## Phase 1: Hostname canonicalization
 
-- [ ] 1.1 Edit `plugins/soleur/docs/_data/site.json`: change `url` to `"https://www.soleur.ai"`.
-- [ ] 1.2 Edit `plugins/soleur/docs/robots.txt`: change `Sitemap:` line to `https://www.soleur.ai/sitemap.xml`.
-- [ ] 1.3 Run `npx @11ty/eleventy` and verify `rg 'https://soleur\.ai(/|[a-zA-Z]|$)' _site/` returns zero matches. If hits found, route the hardcoded apex through `{{ site.url }}`.
-- [ ] 1.4 Edit `plugins/soleur/docs/scripts/validate-seo.sh`: add canonical-host gate that asserts `_site/sitemap.xml` `<loc>` entries all use the host parsed from `site.url`. Fail build on mismatch.
-- [ ] 1.5 Edit `.github/workflows/deploy-docs.yml`: add post-build step running the apex-grep above. Fail workflow if matches.
+- [x] 1.1 Edit `plugins/soleur/docs/_data/site.json`: change `url` to `"https://www.soleur.ai"`. (Also updated `author.url` apex reference.)
+- [x] 1.2 Edit `plugins/soleur/docs/robots.txt`: change `Sitemap:` line to `https://www.soleur.ai/sitemap.xml`.
+- [x] 1.3 Run `npx @11ty/eleventy` and verify `rg 'https://soleur\.ai(/|[a-zA-Z]|$)' _site/` returns zero matches. Found one residual interpolation: `eleventy.config.js` Atom feed `base:` was hardcoded apex; updated to www. Post-fix grep returns zero.
+- [x] 1.4 Edit `plugins/soleur/skills/seo-aeo/scripts/validate-seo.sh` (corrected path from plan): add canonical-host gate that asserts `_site/sitemap.xml` `<loc>` entries all use a single host AND that host matches `robots.txt`'s `Sitemap:` line.
+- [x] 1.5 Edit `.github/workflows/deploy-docs.yml`: add post-build step running `rg 'https://soleur\.ai(/|[a-zA-Z]|$)' _site/`. Fails workflow on hits.
 
 ## Phase 2: Cloudflare rulesets (Terraform)
 
-- [ ] 2.1 Edit `apps/web-platform/infra/variables.tf`: update description on `cf_api_token_rulesets` to reflect new scope (Cache Rules:Edit + Zone WAF:Edit + Single Redirect Rules:Edit + Transform Rules:Edit).
-- [ ] 2.2 Create `apps/web-platform/infra/seo-rulesets.tf` with two `cloudflare_ruleset` resources:
-  - [ ] 2.2.1 `seo_page_redirects` — `kind = "zone"`, `phase = "http_request_dynamic_redirect"`, `provider = cloudflare.rulesets`. 19 `rules` blocks (one per row in the plan's mapping table) with `action = "redirect"` and `action_parameters.from_value` (`status_code = 301`, `target_url { value = "..." }`, `preserve_query_string = false`).
-  - [ ] 2.2.2 `seo_response_headers` — `kind = "zone"`, `phase = "http_response_headers_transform"`, same provider. 3 `rules` blocks with `action = "rewrite"` and v4-style nested `headers { name = "X-Robots-Tag", operation = "set", value = "..." }` blocks.
-- [ ] 2.3 Verify v4 nested-block syntax (NOT v5 attribute-map) by referencing `apps/web-platform/infra/cache.tf` (existing v4-validated template).
+- [x] 2.1 Edit `apps/web-platform/infra/variables.tf`: update description on `cf_api_token_rulesets` to reflect new scope (Cache Rules:Edit + Zone WAF:Edit + Single Redirect Rules:Edit + Transform Rules:Edit).
+- [x] 2.2 Create `apps/web-platform/infra/seo-rulesets.tf` with two `cloudflare_ruleset` resources:
+  - [x] 2.2.1 `seo_page_redirects` — 19 rules (`http_request_dynamic_redirect` phase).
+  - [x] 2.2.2 `seo_response_headers` — 3 rules (`http_response_headers_transform` phase, v4 nested-block `headers` syntax).
+- [x] 2.3 Verify v4 nested-block syntax — confirmed via `terraform validate` against pinned `cloudflare/cloudflare v4.52.7`.
 
 ## Phase 3: Pre-merge verification
 
-- [ ] 3.1 Run `terraform validate` with Doppler-injected env (nested `doppler run` per `variables.tf` header comment). Must pass.
-- [ ] 3.2 Capture pre-change curl baselines and attach to PR description:
-  - `curl -IA "Mozilla/5.0" https://deploy.soleur.ai/`
-  - `curl -IA "Googlebot" https://api.soleur.ai/`
-  - `curl -IA "Googlebot" https://www.soleur.ai/blog/feed.xml`
-  Confirm none currently include `X-Robots-Tag`.
+- [x] 3.1 Run `terraform validate` (with `-backend=false`). Passes against `cloudflare/cloudflare v4.52.7`.
+- [x] 3.2 Capture pre-change curl baselines (`/tmp/seo-fixes-baselines.txt`):
+  - deploy.soleur.ai: `HTTP/2 403`, no X-Robots-Tag (CF Access challenge confirmed).
+  - api.soleur.ai: `HTTP/2 404`, no X-Robots-Tag (Supabase REST root confirmed).
+  - feed.xml: `HTTP/2 200`, no X-Robots-Tag.
+  - /pages/agents.html: `HTTP/2 200` (meta-refresh page, currently).
+  - /pages/legal/terms-of-service.html: `HTTP/2 404` (missing redirect entry confirmed).
+  Will attach to PR description on push.
 - [ ] 3.3 Push branch; mark PR #3296 ready for review.
 - [ ] 3.4 Run review pipeline (DHH + Kieran + simplicity + `user-impact-reviewer` + CPO sign-off).
 - [ ] 3.5 Resolve all P0/P1 review findings inline.
@@ -51,8 +53,8 @@ Brand-survival threshold: `single-user incident`
 
 ## Phase 5: Follow-up issue creation
 
-- [ ] 5.1 Run `gh issue create --title "feat(seo): migrate blog redirects + delete page-redirects meta-refresh templates" --milestone "Post-MVP / Later" --body "<see plan Phase 5>"`.
-- [ ] 5.2 Update `knowledge-base/product/roadmap.md` if a more specific phase fits.
+- [x] 5.1 Created issue #3328 — `feat(seo): migrate blog redirects + delete page-redirects meta-refresh templates` (milestone Post-MVP / Later).
+- [ ] 5.2 Update `knowledge-base/product/roadmap.md` if a more specific phase fits. (Roadmap not currently milestoning SEO hygiene; leaving #3328 in Post-MVP / Later.)
 
 ## Phase 6: 7-day observation
 
