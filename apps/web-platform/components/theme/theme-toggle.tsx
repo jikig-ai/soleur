@@ -28,17 +28,18 @@ export function ThemeToggle({ collapsed }: { collapsed: boolean }) {
   if (collapsed) {
     const currentIndex = SEGMENTS.findIndex((s) => s.value === theme);
     const safeIndex = currentIndex === -1 ? 0 : currentIndex;
-    const current = SEGMENTS[safeIndex] ?? SEGMENTS[0]!;
-    const nextIndex = (safeIndex + 1) % SEGMENTS.length;
-    const next = SEGMENTS[nextIndex] ?? SEGMENTS[0]!;
+    const current = SEGMENTS[safeIndex];
+    const next = SEGMENTS[(safeIndex + 1) % SEGMENTS.length];
     return (
       <button
         type="button"
         data-testid="theme-cycle-button"
+        data-theme-current={current.value}
+        data-theme-next={next.value}
         onClick={() => setTheme(next.value)}
         aria-label={`Theme: ${current.label}`}
         className={[
-          "flex h-9 w-9 items-center justify-center rounded-full",
+          "flex h-9 w-9 shrink-0 items-center justify-center rounded-full",
           "border border-soleur-border-default bg-soleur-bg-surface-2",
           "text-soleur-accent-gold-fg transition-colors",
           "hover:ring-1 hover:ring-inset hover:ring-soleur-border-emphasized",

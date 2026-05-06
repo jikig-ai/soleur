@@ -273,9 +273,7 @@ export default function DashboardLayout({
           </button>
         </div>
 
-        {/* Theme toggle — sidebar header. Pill in expanded state, single
-            cycle button in collapsed state. Replaces the prior footer-block
-            mount. See spec TR7. */}
+        {/* Theme toggle — sidebar header (spec TR7). */}
         <div className={`border-b border-soleur-border-default ${collapsed ? "px-2 py-3" : "px-3 py-3"}`}>
           <ThemeToggle collapsed={collapsed} />
         </div>

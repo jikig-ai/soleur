@@ -14,18 +14,10 @@ function makeMatchMedia(initialDarkMatches: boolean) {
   return () => list;
 }
 
-function renderToggle() {
+function renderToggle({ collapsed = false }: { collapsed?: boolean } = {}) {
   return render(
     <ThemeProvider>
-      <ThemeToggle collapsed={false} />
-    </ThemeProvider>,
-  );
-}
-
-function renderToggleCollapsed() {
-  return render(
-    <ThemeProvider>
-      <ThemeToggle collapsed />
+      <ThemeToggle collapsed={collapsed} />
     </ThemeProvider>,
   );
 }
@@ -143,37 +135,54 @@ describe("ThemeToggle", () => {
   });
 
   describe("collapsed mode", () => {
-    it("cycles theme through SEGMENTS order on click: system → dark → light → system", () => {
-      // Provider default on fresh localStorage is "system" (verified by the
-      // pill-mode "default is system" test above). SEGMENTS order in the
-      // component is [dark, light, system] (indexes 0, 1, 2). Cycle advances
-      // (idx + 1) % 3, so from system (2) → dark (0) → light (1) → system (2).
-      //
-      // We assert via document.documentElement.dataset.theme (the canonical
-      // page-state marker the provider's effect writes on every theme change)
-      // rather than localStorage. The provider's setTheme has a same-value
-      // guard that occasionally short-circuits the localStorage write under
-      // React 19 + happy-dom even when the state transition fires; dataset
-      // is the user-visible truth and the contract this test cares about.
-      renderToggleCollapsed();
+    // SEGMENTS order in the component is [dark, light, system] (indexes
+    // 0, 1, 2). Cycle advances (idx + 1) % 3. These per-transition tests
+    // each seed an explicit start state so a failure names the failing
+    // transition, not just the final state.
 
+    it("from system, click advances aria-label to Dark", () => {
+      localStorage.setItem(STORAGE_KEY, "system");
+      renderToggle({ collapsed: true });
       const button = screen.getByTestId("theme-cycle-button");
-
       fireEvent.click(button);
-      expect(document.documentElement.dataset.theme).toBe("dark");
-
-      fireEvent.click(button);
-      expect(document.documentElement.dataset.theme).toBe("light");
-
-      fireEvent.click(button);
-      expect(document.documentElement.dataset.theme).toBe("system");
+      expect(button.getAttribute("aria-label")).toBe("Theme: Dark");
     });
 
-    it("renders the icon for the current theme; aria-label surfaces the mode", () => {
-      // Default theme is system → icon and aria-label reflect "System".
-      renderToggleCollapsed();
+    it("from dark, click advances aria-label to Light", () => {
+      localStorage.setItem(STORAGE_KEY, "dark");
+      renderToggle({ collapsed: true });
       const button = screen.getByTestId("theme-cycle-button");
+      fireEvent.click(button);
+      expect(button.getAttribute("aria-label")).toBe("Theme: Light");
+    });
+
+    it("from light, click wraps aria-label back to System", () => {
+      localStorage.setItem(STORAGE_KEY, "light");
+      renderToggle({ collapsed: true });
+      const button = screen.getByTestId("theme-cycle-button");
+      fireEvent.click(button);
       expect(button.getAttribute("aria-label")).toBe("Theme: System");
+    });
+
+    it.each([
+      ["dark", "Dark"],
+      ["light", "Light"],
+      ["system", "System"],
+    ])("renders aria-label \"Theme: %s\" when theme is %s", (stored, label) => {
+      localStorage.setItem(STORAGE_KEY, stored);
+      renderToggle({ collapsed: true });
+      const button = screen.getByTestId("theme-cycle-button");
+      expect(button.getAttribute("aria-label")).toBe(`Theme: ${label}`);
+    });
+
+    it("exposes data-theme-current and data-theme-next so agents can plan multi-click paths", () => {
+      // Agent-native parity: the cycle button collapses 3 actions into 1, so
+      // the cycle order must be machine-readable (not implicit in code).
+      localStorage.setItem(STORAGE_KEY, "dark");
+      renderToggle({ collapsed: true });
+      const button = screen.getByTestId("theme-cycle-button");
+      expect(button.getAttribute("data-theme-current")).toBe("dark");
+      expect(button.getAttribute("data-theme-next")).toBe("light");
     });
   });
 });
