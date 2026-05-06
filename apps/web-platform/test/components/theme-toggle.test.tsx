@@ -71,6 +71,24 @@ describe("ThemeToggle", () => {
     expect(system.getAttribute("aria-pressed")).toBe("true");
   });
 
+  it("data-active mirrors aria-pressed: exactly one segment is data-active='true' post-mount", () => {
+    // data-active is the test/agent probe for active visual state; aria-pressed
+    // is the screen-reader contract. Both must agree post-mount.
+    renderToggle();
+
+    const buttons = [
+      screen.getByRole("button", { name: "Dark theme" }),
+      screen.getByRole("button", { name: "Light theme" }),
+      screen.getByRole("button", { name: "Follow system theme" }),
+    ];
+    const active = buttons.filter(
+      (b) => b.getAttribute("data-active") === "true",
+    );
+    expect(active).toHaveLength(1);
+    expect(active[0]?.getAttribute("aria-pressed")).toBe("true");
+    expect(active[0]?.getAttribute("aria-label")).toBe("Follow system theme");
+  });
+
   it("clicking a segment changes the active theme and persists to localStorage", () => {
     renderToggle();
 
