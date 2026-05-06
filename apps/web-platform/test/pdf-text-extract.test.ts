@@ -153,18 +153,35 @@ describe("extractPdfText", () => {
     }
   });
 
-  it("returns null on a PDF with truncated body (graceful reject — covers password/encrypted class)", async () => {
-    // Behaviorally identical to T3 per plan §"Test Scenarios" T4: any
-    // unparseable PDF (corrupted body, password-protected without callback,
-    // unsupported filter) returns null and the caller falls through to the
-    // Read directive. Synthesizing a spec-correct encrypted PDF in pure JS
-    // requires implementing PDF encryption (RC4/AES-128/256 + key derivation)
-    // — disproportionate to the assertion. A truncated PDF body covers the
-    // same code path: pdfjs throws on missing root catalog → catch → null.
+  it("returns null on a PDF with mid-stream-truncated body (parser reject)", async () => {
+    // Mid-stream truncation makes xref offsets point past EOF; pdfjs throws
+    // a parser exception → outer catch → null. Behaviorally identical to T3
+    // (no PDF header). Note: this test does NOT exercise the
+    // password-protected / encrypted PDF path — synthesizing spec-correct
+    // RC4/AES-128 encryption in pure JS is disproportionate to the
+    // assertion. The encrypted-PDF graceful-reject path is reached via the
+    // same `try/catch` in extractPdfText (PasswordException is caught
+    // identically to InvalidPDFException), so behavioral coverage is
+    // equivalent. Real encrypted-PDF coverage would require a real fixture
+    // (rejected by `cq-test-fixtures-synthesized-only`) or a PDF encryption
+    // implementation — neither in scope for this PR.
     const buf = makeMinimalPdf(["Secret content"]);
-    // Truncate mid-stream so the xref offsets point past EOF.
     const truncated = buf.subarray(0, Math.floor(buf.length / 2));
     const result = await extractPdfText(truncated, 50_000);
     expect(result).toBeNull();
+  });
+
+  it("caps page iteration at MAX_PAGES and reports truncated=true (#3338 P1-B)", async () => {
+    // DoS guard: attacker-crafted PDF with 1M empty pages would never trip
+    // the capChars halt (0 chars per page) but would pin the event loop.
+    // The MAX_PAGES cap (500) bounds the loop independently. Synthesize a
+    // 600-page PDF (each page emits a 1-char Tj operator) and assert the
+    // extractor halts at MAX_PAGES with truncated=true.
+    const pages = Array.from({ length: 600 }, (_, i) => `p${i}`);
+    const buf = makeMinimalPdf(pages);
+    const result = await extractPdfText(buf, 50_000);
+    expect(result).not.toBeNull();
+    expect(result!.pageCount).toBe(600);
+    expect(result!.truncated).toBe(true);
   });
 });

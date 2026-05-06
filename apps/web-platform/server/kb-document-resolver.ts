@@ -118,8 +118,14 @@ export async function resolveConciergeDocumentContext(args: {
       op: "fetchUserWorkspacePath",
       extra: { userId, pathBasename: path.basename(contextPath) },
     });
-    // Still surface the path so the router knows the scope.
-    return { artifactPath: contextPath };
+    // Surface the path AND the kind so the runner emits the correct
+    // assertive directive (gated PDF Read vs text Read). Without the kind,
+    // emitConciergeDocumentResolutionBreadcrumb fires its suspicious-skip
+    // warning on a path that's actually well-formed — just unfetchable.
+    return {
+      artifactPath: contextPath,
+      documentKind: isPdf ? "pdf" : "text",
+    };
   }
 
   const fullPath = path.join(workspacePath, contextPath);
@@ -179,11 +185,10 @@ export async function resolveConciergeDocumentContext(args: {
         );
       }
       return { artifactPath: contextPath, documentKind: "pdf" };
-    } catch (err) {
+    } catch {
       // readFile failed (missing file, permission denied) — let the agent
       // try Read. No Sentry mirror: this is not a degraded extractor, just
       // an absent file the UI may have stale-referenced.
-      void err;
       return { artifactPath: contextPath, documentKind: "pdf" };
     }
   }

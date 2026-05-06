@@ -267,26 +267,37 @@ describe("realSdkQueryFactory — cc-soleur-go SDK binding", () => {
   });
 
   // -------------------------------------------------------------------------
-  // T6b (#3338): allowedTools is narrowed to read-only/router-safe tools and
-  // EXCLUDES Bash, Edit, Write. The cc-router's job is dispatch via the Skill
-  // tool; it never needs to shell out. With Bash absent from allowedTools,
-  // the SDK rejects the tool-call BEFORE canUseTool is invoked — so even if
-  // a regression re-enables a `find . -name "*.pdf"` or
-  // `apt-get install poppler-utils` cascade in the model's training prior,
-  // no review_gate WS event reaches the user-facing Concierge surface.
-  // Pin the invariant at the test layer so a future deps-injection edit
-  // cannot silently re-widen the toolset.
+  // T6b (#3338): cc path HARD-BLOCKS Bash/Edit/Write via disallowedTools so
+  // the model cannot emit them — no review_gate WS event reaches the
+  // user-facing Concierge surface. The auto-approve `allowedTools` list pins
+  // read-only tools (Read/Glob/Grep/LS/NotebookRead/TodoWrite/ExitPlanMode)
+  // so they bypass canUseTool. SDK semantics per sdk.d.ts:855-892:
+  //   - allowedTools = auto-approve (NOT restriction)
+  //   - disallowedTools = hard-block (removes from model's context)
+  // Pin BOTH invariants so a future regression that flips one cannot silently
+  // re-introduce the apt-get/find Bash modal cascade.
   // -------------------------------------------------------------------------
-  it("T6b: allowedTools narrows the cc-router to safe tools and EXCLUDES Bash/Edit/Write (#3338)", async () => {
+  it("T6b: disallowedTools HARD-BLOCKS Bash/Edit/Write on the cc path (#3338)", async () => {
     await realSdkQueryFactory(makeArgs());
     const opts = mockQuery.mock.calls[0][0].options;
+    expect(Array.isArray(opts.disallowedTools)).toBe(true);
+    expect(opts.disallowedTools).toEqual(
+      expect.arrayContaining(["Bash", "Edit", "Write", "WebSearch", "WebFetch"]),
+    );
+    // Auto-approve list narrows to read-only safe tools — order-tolerant
+    // closed-set match so widening the list requires an explicit test edit.
     expect(Array.isArray(opts.allowedTools)).toBe(true);
-    expect(opts.allowedTools).not.toContain("Bash");
-    expect(opts.allowedTools).not.toContain("Edit");
-    expect(opts.allowedTools).not.toContain("Write");
-    // Read-only / router-safe tools the cc-router DOES need.
-    expect(opts.allowedTools).toEqual(
-      expect.arrayContaining(["Read", "Glob", "Grep"]),
+    const sorted = [...opts.allowedTools].sort();
+    expect(sorted).toEqual(
+      [
+        "ExitPlanMode",
+        "Glob",
+        "Grep",
+        "LS",
+        "NotebookRead",
+        "Read",
+        "TodoWrite",
+      ],
     );
   });
 

@@ -202,25 +202,30 @@ let _reaperInterval: ReturnType<typeof setInterval> | null = null;
 const REAPER_INTERVAL_MS = 5 * 60 * 1000;
 
 /**
- * Read-only / router-safe tool surface for the cc-soleur-go path (#3338).
+ * Hard-block list for the cc-soleur-go path (#3338).
+ *
+ * Two SDK options govern tool surface, with DIFFERENT semantics
+ * (sdk.d.ts:855-892):
+ *   - `allowedTools`: AUTO-APPROVE list — pre-approves without canUseTool.
+ *   - `disallowedTools`: HARD-BLOCK list — removes from model context entirely.
+ *   - `tools`: closed allowlist of available built-ins (alternative to
+ *     disallowedTools).
  *
  * The cc-router's job is to dispatch via the Skill tool to a routed sub-skill;
- * it never needs Bash, Edit, or Write itself. By passing this list to the
- * SDK's `allowedTools` filter, the model literally cannot emit a Bash call
- * (e.g. `find . -name "*.pdf"` or `apt-get install -y poppler-utils`) at the
- * cc path — so even when the model's training prior tries to override the
- * gated PDF directive, no `review_gate` WS event reaches the user-facing
- * Concierge surface. Bash gating remains in place via canUseTool as
- * defense-in-depth in case the SDK widens its default-allow list.
+ * it never needs Bash, Edit, or Write itself. We add Bash/Edit/Write to
+ * `disallowedTools` so the model literally cannot emit them — without this,
+ * Bash falls through to `canUseTool` and pops the review_gate modal in the
+ * end-user Concierge surface (the bug this PR fixes).
+ *
+ * The auto-approve list (`CC_PATH_ALLOWED_TOOLS`) is kept as a separate
+ * concern: it eliminates a `canUseTool` round-trip for read-only tools
+ * (Read, Glob, Grep, LS, NotebookRead, TodoWrite, ExitPlanMode) the cc-router
+ * legitimately uses on its own. This is auto-approve, not restriction.
  *
  * Routed sub-skills load their own toolset via the soleur plugin and the
  * legacy domain-leader path (`agent-runner.ts startAgentSession`), so this
- * narrowing is scoped to the router only — exploration / inspection within
- * routed workflows is unaffected.
- *
- * Tool names are the SDK runtime names at @anthropic-ai/claude-agent-sdk
- * v0.2.85 (sdk.d.ts:1230 documents `tools: ['Read', 'Grep', 'Glob', 'Bash']`
- * for the allowedTools filter).
+ * narrowing is scoped to the cc-router only — exploration within routed
+ * workflows is unaffected.
  */
 const CC_PATH_ALLOWED_TOOLS: readonly string[] = [
   "Read",
@@ -231,6 +236,12 @@ const CC_PATH_ALLOWED_TOOLS: readonly string[] = [
   "TodoWrite",
   "ExitPlanMode",
 ];
+
+/**
+ * Tools removed from the cc-router's surface entirely. Adds to the
+ * canonical `[WebSearch, WebFetch]` shared with the legacy path.
+ */
+const CC_PATH_DISALLOWED_TOOLS: readonly string[] = ["Bash", "Edit", "Write"];
 
 export function getPendingPromptRegistry(): PendingPromptRegistry {
   if (_registry) return _registry;
@@ -585,11 +596,14 @@ export const realSdkQueryFactory: QueryFactory = async (
         systemPrompt: args.systemPrompt,
         resumeSessionId: safeResumeSessionId,
         mcpServers: {},
-        // #3338 — narrow the cc-router toolset to read-only/router-safe tools
-        // so the model cannot emit Bash (`find`, `apt-get`) at the cc path.
-        // Defense-in-depth: even if the SDK widens its default-allow list in
-        // a future major version, this list pins the cc-router's surface.
+        // #3338 — auto-approve the cc-router's read-only tool surface so they
+        // don't pay a canUseTool round-trip per call. This is auto-approve,
+        // not restriction — see CC_PATH_ALLOWED_TOOLS doc comment.
         allowedTools: [...CC_PATH_ALLOWED_TOOLS],
+        // #3338 — HARD-BLOCK Bash/Edit/Write at the SDK level so the model
+        // cannot emit them (no review_gate modal can appear). Merged with
+        // the canonical [WebSearch, WebFetch] disallowed list.
+        extraDisallowedTools: CC_PATH_DISALLOWED_TOOLS,
         // SubagentStart sanitizer override: cc strips control chars +
         // U+2028/U+2029 (per learning
         // 2026-04-17-log-injection-unicode-line-separators.md) and

@@ -31,6 +31,16 @@
 
 const INPUT_BUFFER_CAP_BYTES = 15 * 1024 * 1024;
 
+/**
+ * Hard cap on page iteration count. PDFs declare /Pages /Count independently
+ * of byte size — a 1 MB attacker-crafted PDF can claim 1,000,000 empty pages
+ * and pin the event loop calling getPage()+getTextContent() in a loop the
+ * cap-at-capChars break never escapes (each page produces 0 chars). Bound
+ * the loop independently. Real-world books rarely exceed a few hundred
+ * pages; KB documents are typically &lt;200.
+ */
+const MAX_PAGES = 500;
+
 export interface PdfTextExtractResult {
   text: string;
   truncated: boolean;
@@ -85,10 +95,15 @@ export async function extractPdfText(
     }).promise;
 
     const pageCount = doc.numPages;
+    // Independent cap: even if total text stays under capChars (e.g., empty
+    // pages), the page-iteration loop has a cost per page (getPage +
+    // getTextContent + cleanup). Bound it so attacker-declared numPages
+    // can't pin the cold-Query event loop.
+    const effectivePageLimit = Math.min(pageCount, MAX_PAGES);
     let text = "";
     let truncated = false;
 
-    for (let pageNum = 1; pageNum <= pageCount; pageNum++) {
+    for (let pageNum = 1; pageNum <= effectivePageLimit; pageNum++) {
       const page = await doc.getPage(pageNum);
       try {
         const content = await page.getTextContent();
@@ -114,6 +129,11 @@ export async function extractPdfText(
       }
     }
 
+    // Surface the page-cap as a truncation signal so observability can
+    // distinguish "huge book, body fit" from "page-cap kicked in".
+    if (pageCount > effectivePageLimit) {
+      truncated = true;
+    }
     return { text, truncated, pageCount };
   } catch {
     return null;

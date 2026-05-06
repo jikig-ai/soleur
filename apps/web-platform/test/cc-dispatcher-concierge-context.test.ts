@@ -148,10 +148,11 @@ describe("resolveConciergeDocumentContext", () => {
     expect(extractPdfTextSpy).not.toHaveBeenCalled();
   });
 
-  it("uses the extractor's truncated text when output exceeds the inline cap", async () => {
-    // The extractor enforces the cap and returns truncated:true; the
-    // resolver still inlines what it has — better than the Read-directive
-    // path (no body at all).
+  it("inlines the extractor's body when truncated=true is reported", async () => {
+    // The resolver passes the extractor's body through verbatim — even when
+    // truncated=true. Better than the Read-directive path (no body at all).
+    // Test pins the contract (resolver inlines what extractor returned),
+    // not the cap constant.
     mkdirSync(path.join(tmpRoot, "knowledge-base"), { recursive: true });
     writeFileSync(
       path.join(tmpRoot, "knowledge-base", "big.pdf"),
@@ -170,7 +171,7 @@ describe("resolveConciergeDocumentContext", () => {
     });
     expect(out.artifactPath).toBe("knowledge-base/big.pdf");
     expect(out.documentKind).toBe("pdf");
-    expect(out.documentContent?.length).toBe(50_000);
+    expect(out.documentContent?.length).toBe(cappedBody.length);
   });
 
   it("inlines text body for small files within the workspace", async () => {
