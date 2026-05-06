@@ -5,7 +5,7 @@ audience: operators, on-call, contributors
 related:
   - https://github.com/jikig-ai/soleur/issues/3121
   - knowledge-base/engineering/operations/golden-tests.md
-last_updated: 2026-05-04
+last_updated: 2026-05-06
 ---
 
 # Secret-scanning floor
@@ -70,6 +70,16 @@ intentional. Examples:
   - `apps/web-platform/test/__synthesized__/.*` — fixtures with semi-sensitive
     shapes that need to look real (e.g., a JWT shape for a parser test).
   - `reports/mutation/.*` — Stryker output (also gitignored; defensive belt-and-suspenders).
+- The `private-key` rule (and **only** that rule) additionally allowlists
+  `knowledge-base/project/learnings/.*\.md$`. Learning files routinely document
+  private-key-shape symptom reproductions (e.g.,
+  `2026-05-05-leak-tripwire-self-trips-on-mask-registrations.md` — the file that
+  motivated this carve-out via [#3268](https://github.com/jikig-ai/soleur/issues/3268)
+  / [#3281](https://github.com/jikig-ai/soleur/issues/3281)). Default-pack rules
+  (AWS, Stripe, etc.) and the other 13 custom rules (Doppler, Supabase JWT,
+  Anthropic, Resend, Cloudflare, Sentry, Discord webhook, database URL, VAPID,
+  JWT, generic-API-key, Soleur BYOK, Stripe webhook secret) remain LIVE on the
+  learnings tree — only literal `BEGIN/END PRIVATE KEY` blocks are silenced.
 
 `apps/web-platform/test/fixtures/qa-auth.ts` is **NOT** allowlisted. It is a
 real auth-test fixture that interacts with a live Supabase test project; if
