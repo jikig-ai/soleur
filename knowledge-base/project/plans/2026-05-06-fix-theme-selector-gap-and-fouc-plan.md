@@ -153,8 +153,8 @@ This means the inline script grows from ~10 lines to ~25 lines and includes a tr
 
 **File:** `apps/web-platform/app/(dashboard)/layout.tsx`
 
-- [ ] 1.1 Change line 327 from `className="border-t border-soleur-border-default px-3 pt-3"` to `className="border-t border-soleur-border-default p-3"` (or `px-3 py-3` for consistency with the footer's pattern).
-- [ ] 1.2 Verify the THEME label's `pb-2` still produces the intended 8px below the label before the toggle (no change needed).
+- [x] 1.1 Change line 327 from `className="border-t border-soleur-border-default px-3 pt-3"` to `className="border-t border-soleur-border-default p-3"` (or `px-3 py-3` for consistency with the footer's pattern).
+- [x] 1.2 Verify the THEME label's `pb-2` still produces the intended 8px below the label before the toggle (no change needed).
 - [ ] 1.3 Visual confirm: above-toggle gap (border-t → label) and below-toggle gap (toggle → border-t) are now 12px each.
 
 ### Phase 2 — Transition Disable on Theme Change
