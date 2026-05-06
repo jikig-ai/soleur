@@ -20,6 +20,9 @@ import { SubagentGroup } from "@/components/chat/subagent-group";
 import { InteractivePromptCard } from "@/components/chat/interactive-prompt-card";
 import { WorkflowLifecycleBar } from "@/components/chat/workflow-lifecycle-bar";
 import { ToolUseChip } from "@/components/chat/tool-use-chip";
+import { RoutedLeadersStrip } from "@/components/chat/routed-leaders-strip";
+import { LeaderAvatar } from "@/components/leader-avatar";
+import { CC_ROUTER_LEADER_ID } from "@/lib/cc-router-id";
 import type {
   InteractivePromptResponsePayload,
   InteractivePromptPayload,
@@ -362,11 +365,20 @@ export function ChatSurface({
   // Review F10: gate the legacy `isClassifying` chip on the lifecycle bar
   // being idle — once the bar takes over routing/active/ended, the legacy
   // chip must not double-render with the bar.
+  // Defense-in-depth: never render the routing chip while the history fetch
+  // is in flight (`historyLoading`) or after a confirmed resume of a prior
+  // thread (`resumedFrom`). Either signal proves the user-only message
+  // snapshot does not represent an unanswered question — the assistant row is
+  // still in transit, or it was never persisted (legacy cc-path conversations
+  // pre-#3286). Without this gate, "Continue thread" would re-render the chip
+  // on every resumed thread that already has an answer.
   const isClassifying =
     hasUserMessage &&
     !hasAssistantMessage &&
     routeSource === null &&
-    workflow.state === "idle";
+    workflow.state === "idle" &&
+    !historyLoading &&
+    resumedFrom === null;
 
   // Review F3: workflow has ended either in-memory (this session) or in the
   // persisted DB column (reload of an already-ended conversation).
@@ -409,23 +421,20 @@ export function ChatSurface({
             )}
 
             <span className="hidden text-sm font-semibold text-white md:inline">
-              Command Center
+              Dashboard
             </span>
           </div>
           <StatusIndicator status={status} disconnectReason={disconnectReason} />
         </header>
       )}
 
-      {routeSource && respondingLeaders.length > 0 && (
-        <div className={`border-b border-neutral-800/50 px-4 py-2 ${isFull ? "md:px-6" : ""}`}>
-          <span className="inline-flex items-center gap-1.5 rounded-full bg-neutral-800/50 px-3 py-1 text-xs text-neutral-400">
-            {routeSource === "auto" ? (
-              <>Auto-routed to {respondingLeaders.map((id) => getDisplayName(id)).join(", ")}</>
-            ) : (
-              <>Directed to @{respondingLeaders.map((id) => getDisplayName(id)).join(", @")}</>
-            )}
-          </span>
-        </div>
+      {routeSource && respondingLeaders.some((id) => id !== CC_ROUTER_LEADER_ID) && (
+        <RoutedLeadersStrip
+          routeSource={routeSource}
+          routedLeaders={respondingLeaders}
+          getDisplayName={getDisplayName}
+          isFull={isFull}
+        />
       )}
 
       {status === "reconnecting" && (
@@ -604,11 +613,12 @@ export function ChatSurface({
           })()}
 
           {isClassifying && (
-            <div className="flex justify-start">
+            <div className="flex justify-start" data-testid="routing-chip">
               <div className="flex items-center gap-2 rounded-xl border border-neutral-800 bg-neutral-900 px-4 py-3">
+                <LeaderAvatar leaderId={CC_ROUTER_LEADER_ID} size="sm" />
                 <span className="h-2 w-2 animate-pulse rounded-full bg-amber-500" />
                 <span className="text-sm text-neutral-400">
-                  Routing to the right experts...
+                  Soleur Concierge is routing to the right experts...
                 </span>
               </div>
             </div>

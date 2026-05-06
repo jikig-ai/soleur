@@ -83,7 +83,7 @@ export function PaymentWarningBanner({
 }
 
 const NAV_ITEMS = [
-  { href: "/dashboard", label: "Command Center", icon: GridIcon },
+  { href: "/dashboard", label: "Dashboard", icon: GridIcon },
   { href: "/dashboard/kb", label: "Knowledge Base", icon: BookIcon },
   { href: "/dashboard/settings", label: "Settings", icon: SettingsIcon },
 ];

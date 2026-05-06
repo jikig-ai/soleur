@@ -598,7 +598,7 @@ describe("cc-dispatcher singletons + orchestration", () => {
     expect(errorCalls.length).toBeGreaterThan(0);
     const errMsg = errorCalls[0][1] as { errorCode?: string; message?: string };
     expect(errMsg.errorCode).toBeUndefined();
-    expect(errMsg.message).toContain("Command Center router is unavailable");
+    expect(errMsg.message).toContain("Dashboard router is unavailable");
   });
 
   // ---------------------------------------------------------------------------
@@ -828,5 +828,183 @@ describe("cc-dispatcher singletons + orchestration", () => {
     expect(frame.label).not.toBe("Read");
     expect(frame.label).toBe("Reading file...");
     expect(frame.label).not.toContain(absolutePath);
+  });
+
+  // ---------------------------------------------------------------------------
+  // dispatchSoleurGo assistant-message persistence (Continue Thread regression)
+  //
+  // Mirrors `agent-runner.ts:saveMessage(... "assistant" ...)`. The cc path
+  // historically dropped the assistant write, so `api-messages.ts` returned
+  // user-only history on resume → `chat-surface.tsx isClassifying === true` →
+  // the routing chip rendered on every resumed thread (PR #3251 surfaced
+  // the symptom by renaming the chip).
+  // ---------------------------------------------------------------------------
+
+  type AssistantPersistenceEvents = {
+    onText: (text: string) => void;
+    onTextTurnEnd?: () => void;
+  };
+
+  function makeAssistantPersistenceStubRunner(args: {
+    onDispatch: (events: AssistantPersistenceEvents) => Promise<void> | void;
+  }) {
+    return {
+      dispatch: vi.fn(
+        async (a: { events: AssistantPersistenceEvents }) => {
+          await Promise.resolve();
+          await args.onDispatch(a.events);
+          return { queryReused: false };
+        },
+      ),
+      hasActiveQuery: () => false,
+      activeQueriesSize: () => 0,
+      reapIdle: () => 0,
+      closeConversation: () => {},
+      respondToToolUse: () => false,
+      notifyAwaitingUser: () => {},
+      // biome-ignore lint/suspicious/noExplicitAny: minimal stub
+    } as any;
+  }
+
+  function assistantInsertCalls(
+    insertMock: ReturnType<typeof vi.fn>,
+  ): Array<Record<string, unknown>> {
+    return insertMock.mock.calls
+      .map((c) => c[0] as { role?: string } & Record<string, unknown>)
+      .filter((row) => row && row.role === "assistant");
+  }
+
+  function mirrorCallsForOp(
+    mirrorMock: ReturnType<typeof vi.fn>,
+    op: string,
+  ): Array<unknown[]> {
+    return mirrorMock.mock.calls.filter(([, ctx]) => {
+      const c = ctx as { feature?: string; op?: string } | undefined;
+      return c?.feature === "cc-dispatcher" && c?.op === op;
+    });
+  }
+
+  it("T1: persists assistant message via supabase().from('messages').insert when onTextTurnEnd fires", async () => {
+    const { __setCcRunnerForTests } = await import("@/server/cc-dispatcher");
+
+    __setCcRunnerForTests(
+      makeAssistantPersistenceStubRunner({
+        onDispatch: (events) => {
+          events.onText("Hello ");
+          events.onText("world.");
+          events.onTextTurnEnd?.();
+        },
+      }),
+    );
+
+    const sendToClient = vi.fn().mockReturnValue(true);
+    await dispatchSoleurGo({
+      userId: "u-persist-1",
+      conversationId: "conv-persist-1",
+      userMessage: "summarize",
+      currentRouting: { kind: "soleur_go_pending" },
+      sendToClient,
+      persistActiveWorkflow: vi.fn().mockResolvedValue(undefined),
+    });
+
+    // `void saveAssistantMessage()` is fire-and-forget; wait for the insert
+    // to land rather than counting microtasks (which silently invalidates
+    // the test if the helper's await chain grows).
+    await vi.waitFor(() =>
+      expect(assistantInsertCalls(mockMessagesInsert)).toHaveLength(1),
+    );
+
+    const assistantRows = assistantInsertCalls(mockMessagesInsert);
+    expect(assistantRows[0]).toEqual(
+      expect.objectContaining({
+        conversation_id: "conv-persist-1",
+        role: "assistant",
+        content: "Hello world.",
+        leader_id: "cc_router",
+      }),
+    );
+  });
+
+  it("T2: does NOT insert assistant row when no text was emitted (tool-only turn)", async () => {
+    // RED-cycle note: this test passed vacuously before T1's GREEN — the
+    // pre-fix dispatcher never inserted assistant rows at all. Its load-bearing
+    // role is forward: catches a future regression where the
+    // `if (!fullText) return` empty-text guard is dropped.
+    const { __setCcRunnerForTests } = await import("@/server/cc-dispatcher");
+
+    __setCcRunnerForTests(
+      makeAssistantPersistenceStubRunner({
+        onDispatch: (events) => {
+          // No onText calls — simulate a tool-only turn that ends in `result`.
+          events.onTextTurnEnd?.();
+        },
+      }),
+    );
+
+    const sendToClient = vi.fn().mockReturnValue(true);
+    await dispatchSoleurGo({
+      userId: "u-empty-turn",
+      conversationId: "conv-empty-turn",
+      userMessage: "run a tool",
+      currentRouting: { kind: "soleur_go_pending" },
+      sendToClient,
+      persistActiveWorkflow: vi.fn().mockResolvedValue(undefined),
+    });
+
+    // No assistant row should ever be inserted — flush microtasks and assert
+    // the count stays at 0.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(assistantInsertCalls(mockMessagesInsert)).toHaveLength(0);
+  });
+
+  it("T3: mirrors save-assistant-message-failed to Sentry on insert error and does NOT throw", async () => {
+    const { __setCcRunnerForTests } = await import("@/server/cc-dispatcher");
+
+    // Role-aware mock — does not depend on insert ordering between user and
+    // assistant rows. If the dispatcher is ever refactored to write the user
+    // row in a different position, this test still drives the assistant
+    // failure-path deterministically.
+    mockMessagesInsert.mockImplementation(
+      async (row: { role?: string }) =>
+        row?.role === "assistant"
+          ? { error: { message: "db down" } }
+          : { error: null },
+    );
+
+    __setCcRunnerForTests(
+      makeAssistantPersistenceStubRunner({
+        onDispatch: (events) => {
+          events.onText("text");
+          events.onTextTurnEnd?.();
+        },
+      }),
+    );
+
+    const sendToClient = vi.fn().mockReturnValue(true);
+    await expect(
+      dispatchSoleurGo({
+        userId: "u-mirror-fail",
+        conversationId: "conv-mirror-fail",
+        userMessage: "hi",
+        currentRouting: { kind: "soleur_go_pending" },
+        sendToClient,
+        persistActiveWorkflow: vi.fn().mockResolvedValue(undefined),
+      }),
+    ).resolves.not.toThrow();
+
+    await vi.waitFor(() =>
+      expect(
+        mirrorCallsForOp(mockReportSilentFallback, "save-assistant-message-failed"),
+      ).toHaveLength(1),
+    );
+
+    // The mirrored error MUST be the underlying Supabase error, not undefined
+    // — defends against a future refactor that drops the err arg.
+    const mirrorCall = mirrorCallsForOp(
+      mockReportSilentFallback,
+      "save-assistant-message-failed",
+    )[0]!;
+    expect(mirrorCall[0]).toBeTruthy();
+    expect(mirrorCall[0]).toMatchObject({ message: "db down" });
   });
 });

@@ -156,7 +156,7 @@ export function ConversationsRail() {
           href="/dashboard"
           className="text-xs text-soleur-text-secondary hover:text-soleur-text-primary"
         >
-          View all in Command Center
+          View all in Dashboard
         </Link>
       </div>
     </div>
