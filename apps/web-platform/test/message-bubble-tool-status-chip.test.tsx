@@ -9,23 +9,12 @@ vi.mock("@/lib/client-observability", () => ({
 import { MessageBubble } from "../components/chat/message-bubble";
 
 // Removal of the redundant pulsing-dot indicator inside the in-bubble
-// `ToolStatusChip` (the bubble's animated border + top-right "Working" pill
-// already convey the working state). Scoped via `data-testid="tool-status-chip"`
-// per learning 2026-04-18 Pattern 4 — survives Tailwind class refactors.
+// `ToolStatusChip`. The bubble's animated border + top-right "Working" pill
+// already convey the working state. Structural assertion (chip has exactly
+// one child = the label span) is durable against Tailwind-class refactors
+// (`motion-safe:animate-pulse`, CSS modules, etc.).
 describe("MessageBubble tool_use ToolStatusChip (no redundant dot)", () => {
-  test("renders the chip wrapper with the data-testid hook", () => {
-    const { getByTestId } = render(
-      <MessageBubble
-        role="assistant"
-        content=""
-        messageState="tool_use"
-        toolLabel="Reading knowledge-base/overview/foo.pdf"
-      />,
-    );
-    expect(getByTestId("tool-status-chip")).toBeTruthy();
-  });
-
-  test("does NOT render an inner pulsing dot inside the chip", () => {
+  test("chip contains exactly one child (the label span) — no inner indicator", () => {
     const { getByTestId } = render(
       <MessageBubble
         role="assistant"
@@ -35,10 +24,11 @@ describe("MessageBubble tool_use ToolStatusChip (no redundant dot)", () => {
       />,
     );
     const chip = getByTestId("tool-status-chip");
-    expect(chip.querySelector("span.animate-pulse")).toBeNull();
+    expect(chip.children).toHaveLength(1);
+    expect(chip.children[0].textContent).toBe("Reading knowledge-base/overview/foo.pdf");
   });
 
-  test("renders the toolLabel verbatim", () => {
+  test("renders the toolLabel verbatim in the bubble", () => {
     const { container } = render(
       <MessageBubble
         role="assistant"
@@ -50,7 +40,7 @@ describe("MessageBubble tool_use ToolStatusChip (no redundant dot)", () => {
     expect(container.textContent).toContain("Reading knowledge-base/overview/foo.pdf");
   });
 
-  test("preserves the surviving working-state cues (Working pill + animated bubble border)", () => {
+  test("renders the surviving 'Working' pill text", () => {
     const { container } = render(
       <MessageBubble
         role="assistant"
@@ -60,6 +50,17 @@ describe("MessageBubble tool_use ToolStatusChip (no redundant dot)", () => {
       />,
     );
     expect(container.textContent).toContain("Working");
+  });
+
+  test("preserves the message-bubble-active animated-border class", () => {
+    const { container } = render(
+      <MessageBubble
+        role="assistant"
+        content=""
+        messageState="tool_use"
+        toolLabel="Doing the thing"
+      />,
+    );
     expect(container.querySelector(".message-bubble-active")).not.toBeNull();
   });
 });

@@ -52,12 +52,13 @@ describe("ToolUseChip", () => {
     expect(container.textContent).toContain("<script>alert(1)</script>");
   });
 
-  test("does not render a pulsing dot indicator", () => {
+  test("chip contains exactly one child (the label span) — no inner indicator", () => {
     const { container } = render(
       <ToolUseChip toolName="Skill" toolLabel="Routing" leaderId="cc_router" />,
     );
     const chip = container.querySelector("[data-tool-chip-id]");
     expect(chip).not.toBeNull();
-    expect(chip?.querySelector("span.animate-pulse")).toBeNull();
+    expect(chip?.children).toHaveLength(1);
+    expect(chip?.children[0].textContent).toBe("Routing");
   });
 });
