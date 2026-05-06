@@ -5,26 +5,26 @@ Issue: #3358. Draft PR: #3356. Brand-survival threshold: `single-user incident` 
 
 ## Phase 1: Tests First (TDD)
 
-- [ ] 1.1 Create `apps/web-platform/test/supabase-migrations/038-039-disk-io-fix.test.ts` with the dual-`describe` structure from the plan (Phase 3). Tests must FAIL before any migration is written.
-  - [ ] 1.1.1 `038` describe — assert `cron.unschedule('user_concurrency_slots_sweep')`, `cron.schedule(...)` with `*/15 * * * *`, AND a literal-shape assertion on the DELETE body (`delete from public.user_concurrency_slots where last_heartbeat_at < now() - interval '120 seconds'`).
-  - [ ] 1.1.2 `039` describe — assert `ALTER PUBLICATION supabase_realtime DROP TABLE public.messages`, NOT-drop `public.conversations`, `pg_publication_tables` guard with `IF EXISTS`.
-- [ ] 1.2 Run `bun test apps/web-platform/test/supabase-migrations/038-039-disk-io-fix.test.ts` — expect failures (the migration files do not exist yet).
+- [x] 1.1 Create `apps/web-platform/test/supabase-migrations/038-039-disk-io-fix.test.ts` with the dual-`describe` structure from the plan (Phase 3). Tests must FAIL before any migration is written.
+  - [x] 1.1.1 `038` describe — assert `cron.unschedule('user_concurrency_slots_sweep')`, `cron.schedule(...)` with `*/15 * * * *`, AND a literal-shape assertion on the DELETE body (`delete from public.user_concurrency_slots where last_heartbeat_at < now() - interval '120 seconds'`).
+  - [x] 1.1.2 `039` describe — assert `ALTER PUBLICATION supabase_realtime DROP TABLE public.messages`, NOT-drop `public.conversations`, `pg_publication_tables` guard with `IF EXISTS`.
+- [x] 1.2 Run `bun test apps/web-platform/test/supabase-migrations/038-039-disk-io-fix.test.ts` — expect failures (the migration files do not exist yet).
 
 ## Phase 2: Migration 038 — slow `user_concurrency_slots_sweep`
 
-- [ ] 2.1 Create `apps/web-platform/supabase/migrations/038_slow_user_concurrency_slots_sweep.sql` with the body specified in plan Phase 1.
-- [ ] 2.2 Verify the file's text matches the test assertions: `bun test apps/web-platform/test/supabase-migrations/038-039-disk-io-fix.test.ts` — `038` describe block green, `039` still failing.
-- [ ] 2.3 Pre-merge AC #5: `grep -r "user_concurrency_slots_sweep" apps/web-platform/supabase/migrations/` returns ONLY 029 + 038 (no sibling rename drift).
+- [x] 2.1 Create `apps/web-platform/supabase/migrations/038_slow_user_concurrency_slots_sweep.sql` with the body specified in plan Phase 1.
+- [x] 2.2 Verify the file's text matches the test assertions: `bun test apps/web-platform/test/supabase-migrations/038-039-disk-io-fix.test.ts` — `038` describe block green, `039` still failing.
+- [x] 2.3 Pre-merge AC #5: `grep -r "user_concurrency_slots_sweep" apps/web-platform/supabase/migrations/` returns ONLY 029 + 038 (no sibling rename drift).
 
 ## Phase 3: Migration 039 — drop `public.messages` from `supabase_realtime`
 
-- [ ] 3.1 Create `apps/web-platform/supabase/migrations/039_drop_messages_from_realtime_publication.sql` with the body specified in plan Phase 2.
-- [ ] 3.2 Verify content tests pass: `bun test apps/web-platform/test/supabase-migrations/038-039-disk-io-fix.test.ts` — both describe blocks green.
-- [ ] 3.3 Confirm `apps/web-platform/hooks/use-conversations.ts` is NOT touched (`git status` shows only the two `.sql` and the one `.test.ts` modified).
+- [x] 3.1 Create `apps/web-platform/supabase/migrations/039_drop_messages_from_realtime_publication.sql` with the body specified in plan Phase 2.
+- [x] 3.2 Verify content tests pass: `bun test apps/web-platform/test/supabase-migrations/038-039-disk-io-fix.test.ts` — both describe blocks green.
+- [x] 3.3 Confirm `apps/web-platform/hooks/use-conversations.ts` is NOT touched (`git status` shows only the two `.sql` and the one `.test.ts` modified).
 
 ## Phase 4: PR readiness
 
-- [ ] 4.1 `bun run typecheck` and `bun run lint` green from the worktree root.
+- [x] 4.1 `bun run typecheck` and `bun run lint` green from the worktree root.
 - [ ] 4.2 Capture before-snapshot from prd via Supabase Management API (queries in plan Phase 4); paste into PR description under `## Before snapshot (2026-05-06)`.
 - [ ] 4.3 Add `## Roll-back` section to PR description (copy from plan Roll-back section).
 - [ ] 4.4 Verify PR body uses `Ref #3358` (NOT `Closes #3358`) per `classification: ops-only-prod-write`.

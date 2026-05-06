@@ -239,11 +239,11 @@ After post-merge migrate, run `pg_stat_statements_reset()` once via Management A
 
 ### Pre-merge (PR)
 
-- [ ] `apps/web-platform/supabase/migrations/038_slow_user_concurrency_slots_sweep.sql` exists with a `*/15 * * * *` schedule and the `cron.unschedule` + `cron.schedule` pattern wrapped in a `DO $$ ... END $$` idempotent guard against `cron.job.jobname`.
-- [ ] `apps/web-platform/supabase/migrations/039_drop_messages_from_realtime_publication.sql` exists with `ALTER PUBLICATION supabase_realtime DROP TABLE public.messages;` wrapped in a `DO $$ ... END $$` idempotent guard against `pg_publication_tables`.
-- [ ] `apps/web-platform/test/supabase-migrations/038-039-disk-io-fix.test.ts` passes (`bun test apps/web-platform/test/supabase-migrations`).
-- [ ] `bun run typecheck` and `bun run lint` green.
-- [ ] **Cron job-name uniqueness:** `grep -r "user_concurrency_slots_sweep" apps/web-platform/supabase/migrations/` returns ONLY migrations 029 and 038 (guards against silent rename drift in sibling migrations that would double-schedule).
+- [x] `apps/web-platform/supabase/migrations/038_slow_user_concurrency_slots_sweep.sql` exists with a `*/15 * * * *` schedule and the `cron.unschedule` + `cron.schedule` pattern wrapped in a `DO $$ ... END $$` idempotent guard against `cron.job.jobname`.
+- [x] `apps/web-platform/supabase/migrations/039_drop_messages_from_realtime_publication.sql` exists with `ALTER PUBLICATION supabase_realtime DROP TABLE public.messages;` wrapped in a `DO $$ ... END $$` idempotent guard against `pg_publication_tables`.
+- [x] `apps/web-platform/test/supabase-migrations/038-039-disk-io-fix.test.ts` passes (`bun test apps/web-platform/test/supabase-migrations`).
+- [x] `bun run typecheck` green (`bun run lint` requires interactive ESLint setup; not a configured gate in this app).
+- [x] **Cron job-name uniqueness:** `grep -r "user_concurrency_slots_sweep" apps/web-platform/supabase/migrations/` returns ONLY migrations 029 and 038 (guards against silent rename drift in sibling migrations that would double-schedule).
 - [ ] PR description includes:
   - Before-snapshot of `pg_stat_statements` top 10 + `pg_stat_user_tables` write counts on prd, captured 2026-05-06 (already in the brainstorm — paste).
   - Roll-back plan (see Roll-back section below).
