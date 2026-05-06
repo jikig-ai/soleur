@@ -26,7 +26,7 @@ permalink: legal/acceptable-use-policy/
 
 ## 1. Introduction
 
-This Acceptable Use Policy ("AUP" or "Policy") governs your use of the Soleur platform ("Soleur," "the Platform"), including the Claude Code plugin ("the Plugin") and the hosted web application at app.soleur.ai ("the Web Platform"), providing agents for software development workflows, including code generation, review, planning, deployment, and browser automation. Soleur is developed and maintained by Jikigai ("we," "us," "our") and is available at [soleur.ai](https://soleur.ai), [app.soleur.ai](https://app.soleur.ai), and through the GitHub repository [jikig-ai/soleur](https://github.com/jikig-ai/soleur).
+This Acceptable Use Policy ("AUP" or "Policy") governs your use of the Soleur platform ("Soleur," "the Platform"), including the Claude Code plugin ("the Plugin") and the hosted web application at app.soleur.ai ("the Web Platform"), providing agents for software development workflows, including code generation, review, planning, deployment, and browser automation. Soleur is developed and maintained by Jikigai ("we," "us," "our") and is available at [soleur.ai](https://www.soleur.ai), [app.soleur.ai](https://app.soleur.ai), and through the GitHub repository [jikig-ai/soleur](https://github.com/jikig-ai/soleur).
 
 By installing, configuring, or using Soleur, you ("User," "you," "your") agree to comply with this Policy. If you do not agree, you must discontinue use of the Platform immediately.
 
@@ -202,7 +202,7 @@ Violation of this Policy may result in:
 If you become aware of any use of Soleur that violates this Policy, please report it through:
 
 - **GitHub:** Open an issue or security advisory at [github.com/jikig-ai/soleur](https://github.com/jikig-ai/soleur)
-- **Website:** [soleur.ai](https://soleur.ai)
+- **Website:** [soleur.ai](https://www.soleur.ai)
 
 ---
 
@@ -263,7 +263,7 @@ For questions about this Policy, please contact us through:
 
 - **Email:** <legal@jikigai.com>
 - **GitHub:** [github.com/jikig-ai/soleur](https://github.com/jikig-ai/soleur)
-- **Website:** [soleur.ai](https://soleur.ai)
+- **Website:** [soleur.ai](https://www.soleur.ai)
 
 ---
 

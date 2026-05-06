@@ -9,9 +9,12 @@ import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import path from "path";
 
-const { fetchUserWorkspacePathSpy } = vi.hoisted(() => ({
-  fetchUserWorkspacePathSpy: vi.fn(),
-}));
+const { fetchUserWorkspacePathSpy, extractPdfTextSpy, reportSilentFallbackSpy } =
+  vi.hoisted(() => ({
+    fetchUserWorkspacePathSpy: vi.fn(),
+    extractPdfTextSpy: vi.fn(),
+    reportSilentFallbackSpy: vi.fn(),
+  }));
 
 vi.mock("@/lib/supabase/service", () => ({
   createServiceClient: () => ({
@@ -26,11 +29,16 @@ vi.mock("@/lib/supabase/service", () => ({
 }));
 
 vi.mock("@/server/observability", () => ({
-  reportSilentFallback: vi.fn(),
+  reportSilentFallback: reportSilentFallbackSpy,
   warnSilentFallback: vi.fn(),
 }));
 
+vi.mock("@/server/pdf-text-extract", () => ({
+  extractPdfText: extractPdfTextSpy,
+}));
+
 import { resolveConciergeDocumentContext } from "@/server/cc-dispatcher";
+import { _resetWorkspacePathCacheForTests } from "@/server/kb-document-resolver";
 
 let tmpRoot: string;
 
@@ -40,6 +48,13 @@ beforeEach(() => {
     data: { workspace_path: tmpRoot },
     error: null,
   });
+  extractPdfTextSpy.mockReset();
+  reportSilentFallbackSpy.mockReset();
+  // Drain the per-process workspace-path memo so each test sees its own
+  // tmpRoot (the resolver caches `users.workspace_path` for the
+  // conversation lifetime — without a reset, test N's tmpRoot leaks into
+  // test N+1).
+  _resetWorkspacePathCacheForTests();
 });
 
 afterEach(() => {
@@ -64,16 +79,99 @@ describe("resolveConciergeDocumentContext", () => {
     expect(out).toEqual({});
   });
 
-  it("returns documentKind=pdf and skips file read for .pdf paths", async () => {
-    // No file written; the resolver must not attempt to read it.
+  it("returns documentKind=pdf with documentContent when extractor succeeds", async () => {
+    // #3338 — server-side PDF text extraction at cold-Query construction.
+    // When a PDF is present in the workspace AND the extractor returns a
+    // non-empty body within the inline cap, the resolver inlines it via
+    // documentContent. The agent never has to call Read.
+    mkdirSync(path.join(tmpRoot, "knowledge-base"), { recursive: true });
+    writeFileSync(
+      path.join(tmpRoot, "knowledge-base", "book.pdf"),
+      Buffer.from("%PDF-1.4\nfake-bytes"),
+    );
+    extractPdfTextSpy.mockResolvedValueOnce({
+      text: "Chapter 1\nIntroduction to Platform Engineering",
+      truncated: false,
+      pageCount: 12,
+    });
+
     const out = await resolveConciergeDocumentContext({
       userId: "u1",
-      contextPath: "knowledge-base/foo.pdf",
+      contextPath: "knowledge-base/book.pdf",
+    });
+    expect(out.artifactPath).toBe("knowledge-base/book.pdf");
+    expect(out.documentKind).toBe("pdf");
+    expect(out.documentContent).toContain("Chapter 1");
+    expect(extractPdfTextSpy).toHaveBeenCalledOnce();
+  });
+
+  it("falls through to documentKind=pdf without content when extractor returns null", async () => {
+    // Corrupted, encrypted, or oversized PDFs return null from the
+    // extractor; the resolver falls through to the existing Read-directive
+    // path AND mirrors a Sentry breadcrumb so operators see the failure
+    // class.
+    mkdirSync(path.join(tmpRoot, "knowledge-base"), { recursive: true });
+    writeFileSync(
+      path.join(tmpRoot, "knowledge-base", "scanned.pdf"),
+      Buffer.from("%PDF-1.4\ncorrupted"),
+    );
+    extractPdfTextSpy.mockResolvedValueOnce(null);
+
+    const out = await resolveConciergeDocumentContext({
+      userId: "u1",
+      contextPath: "knowledge-base/scanned.pdf",
     });
     expect(out).toEqual({
-      artifactPath: "knowledge-base/foo.pdf",
+      artifactPath: "knowledge-base/scanned.pdf",
       documentKind: "pdf",
     });
+    // Sentry mirror MUST fire so a degraded extractor path is observable
+    // (per cq-silent-fallback-must-mirror-to-sentry).
+    const sentryCalls = reportSilentFallbackSpy.mock.calls.filter(
+      ([, opts]) => (opts as { op?: string })?.op === "extractPdfText",
+    );
+    expect(sentryCalls.length).toBe(1);
+  });
+
+  it("missing PDF file falls through to documentKind=pdf without content", async () => {
+    // No file on disk — the resolver should NOT throw. It falls through to
+    // the Read directive (matching pre-#3338 behavior).
+    const out = await resolveConciergeDocumentContext({
+      userId: "u1",
+      contextPath: "knowledge-base/missing.pdf",
+    });
+    expect(out).toEqual({
+      artifactPath: "knowledge-base/missing.pdf",
+      documentKind: "pdf",
+    });
+    // Extractor never called when readFile fails.
+    expect(extractPdfTextSpy).not.toHaveBeenCalled();
+  });
+
+  it("inlines the extractor's body when truncated=true is reported", async () => {
+    // The resolver passes the extractor's body through verbatim — even when
+    // truncated=true. Better than the Read-directive path (no body at all).
+    // Test pins the contract (resolver inlines what extractor returned),
+    // not the cap constant.
+    mkdirSync(path.join(tmpRoot, "knowledge-base"), { recursive: true });
+    writeFileSync(
+      path.join(tmpRoot, "knowledge-base", "big.pdf"),
+      Buffer.from("%PDF-1.4\nfake"),
+    );
+    const cappedBody = "x".repeat(50_000);
+    extractPdfTextSpy.mockResolvedValueOnce({
+      text: cappedBody,
+      truncated: true,
+      pageCount: 400,
+    });
+
+    const out = await resolveConciergeDocumentContext({
+      userId: "u1",
+      contextPath: "knowledge-base/big.pdf",
+    });
+    expect(out.artifactPath).toBe("knowledge-base/big.pdf");
+    expect(out.documentKind).toBe("pdf");
+    expect(out.documentContent?.length).toBe(cappedBody.length);
   });
 
   it("inlines text body for small files within the workspace", async () => {

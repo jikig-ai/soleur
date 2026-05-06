@@ -343,7 +343,7 @@ For questions or concerns regarding these Terms, please contact us through:
 
 - **Email:** <legal@jikigai.com>
 - **GitHub Repository:** [github.com/jikig-ai/soleur](https://github.com/jikig-ai/soleur)
-- **Website:** [soleur.ai](https://soleur.ai)
+- **Website:** [soleur.ai](https://www.soleur.ai)
 - **Issues:** [github.com/jikig-ai/soleur/issues](https://github.com/jikig-ai/soleur/issues)
 - **GDPR / Data Protection Inquiries:** <legal@jikigai.com> (include "GDPR" in the subject line)
 
