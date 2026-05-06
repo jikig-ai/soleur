@@ -23,8 +23,7 @@ export function ThinkingDots() {
 
 export function ToolStatusChip({ label }: { label: string }) {
   return (
-    <div className="flex items-center gap-2 py-0.5">
-      <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-amber-500" />
+    <div className="flex items-center gap-2 py-0.5" data-testid="tool-status-chip">
       <span className="text-sm text-soleur-text-secondary">{label}</span>
     </div>
   );
