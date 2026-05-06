@@ -13,12 +13,12 @@ export type KbContentHeaderProps = {
 
 export function KbContentHeader({ joinedPath, chatUrl, download }: KbContentHeaderProps) {
   return (
-    <header className="flex shrink-0 items-center justify-between border-b border-neutral-800 px-4 py-3 md:px-6">
+    <header className="flex shrink-0 items-center justify-between border-b border-soleur-border-default px-4 py-3 md:px-6">
       <div className="flex items-center gap-2">
         <Link
           href="/dashboard/kb"
           aria-label="Back to file tree"
-          className="flex items-center text-neutral-400 hover:text-white md:hidden"
+          className="flex items-center text-soleur-text-secondary hover:text-soleur-text-primary md:hidden"
         >
           <svg
             width="20"
@@ -42,7 +42,7 @@ export function KbContentHeader({ joinedPath, chatUrl, download }: KbContentHead
             href={download.href}
             download={download.filename}
             aria-label={`Download ${download.filename}`}
-            className="inline-flex items-center gap-1.5 rounded-lg border border-neutral-700 px-3 py-1.5 text-xs font-medium text-neutral-300 transition-colors hover:border-neutral-500 hover:text-white"
+            className="inline-flex items-center gap-1.5 rounded-lg border border-soleur-border-default px-3 py-1.5 text-xs font-medium text-soleur-text-secondary transition-colors hover:border-soleur-border-emphasized hover:text-soleur-text-primary"
           >
             <svg
               width="14"

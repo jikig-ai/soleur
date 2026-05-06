@@ -45,14 +45,14 @@ export function CreateProjectState({ onBack, onSubmit }: CreateProjectStateProps
         <h1 className={`${serif.className} text-4xl font-semibold`}>
           Name Your Project
         </h1>
-        <p className="text-base text-neutral-400">
+        <p className="text-base text-soleur-text-secondary">
           Give your project a name. This will be used to create your workspace on GitHub.
         </p>
       </div>
 
       <form onSubmit={handleSubmit} className="space-y-6">
         <div className="space-y-2">
-          <label htmlFor="project-name" className="block text-sm font-medium text-neutral-200">
+          <label htmlFor="project-name" className="block text-sm font-medium text-soleur-text-primary">
             Project Name
           </label>
           <input
@@ -62,32 +62,32 @@ export function CreateProjectState({ onBack, onSubmit }: CreateProjectStateProps
             value={projectName}
             onChange={(e) => setProjectName(e.target.value)}
             placeholder="my-startup"
-            className="w-full rounded-lg border border-neutral-700 bg-neutral-900 px-4 py-3 text-sm placeholder:text-neutral-500 focus:border-neutral-500 focus:outline-none"
+            className="w-full rounded-lg border border-soleur-border-default bg-soleur-bg-surface-1 px-4 py-3 text-sm placeholder:text-soleur-text-muted focus:border-soleur-text-muted focus:outline-none"
           />
           {slug && (
-            <p className="text-xs text-neutral-500">
+            <p className="text-xs text-soleur-text-muted">
               This becomes your project address on GitHub (e.g. github.com/you/{slug}).
             </p>
           )}
           {!slug && (
-            <p className="text-xs text-neutral-500">
+            <p className="text-xs text-soleur-text-muted">
               This becomes your project address on GitHub (e.g. github.com/you/my-startup).
             </p>
           )}
         </div>
 
         <div className="space-y-2">
-          <label className="block text-sm font-medium text-neutral-200">
+          <label className="block text-sm font-medium text-soleur-text-primary">
             Visibility
           </label>
-          <div className="flex overflow-hidden rounded-lg border border-neutral-700">
+          <div className="flex overflow-hidden rounded-lg border border-soleur-border-default">
             <button
               type="button"
               onClick={() => setIsPrivate(true)}
               className={`flex flex-1 items-center justify-center gap-2 px-4 py-2.5 text-sm transition-colors ${
                 isPrivate
-                  ? "bg-neutral-800 text-neutral-100"
-                  : "bg-transparent text-neutral-400 hover:text-neutral-200"
+                  ? "bg-soleur-bg-surface-2 text-soleur-text-primary"
+                  : "bg-transparent text-soleur-text-secondary hover:text-soleur-text-primary"
               }`}
             >
               <LockIcon className="h-4 w-4" />
@@ -96,10 +96,10 @@ export function CreateProjectState({ onBack, onSubmit }: CreateProjectStateProps
             <button
               type="button"
               onClick={() => setIsPrivate(false)}
-              className={`flex flex-1 items-center justify-center gap-2 border-l border-neutral-700 px-4 py-2.5 text-sm transition-colors ${
+              className={`flex flex-1 items-center justify-center gap-2 border-l border-soleur-border-default px-4 py-2.5 text-sm transition-colors ${
                 !isPrivate
-                  ? "bg-neutral-800 text-neutral-100"
-                  : "bg-transparent text-neutral-400 hover:text-neutral-200"
+                  ? "bg-soleur-bg-surface-2 text-soleur-text-primary"
+                  : "bg-transparent text-soleur-text-secondary hover:text-soleur-text-primary"
               }`}
             >
               <GlobeIcon className="h-4 w-4" />

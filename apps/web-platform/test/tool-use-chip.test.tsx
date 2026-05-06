@@ -31,7 +31,7 @@ describe("ToolUseChip", () => {
       <ToolUseChip toolName="Bash" toolLabel="Bootstrap" leaderId="system" />,
     );
     const chip = container.querySelector("[data-tool-chip-id]");
-    expect(chip?.className ?? "").toMatch(/border-neutral/);
+    expect(chip?.className ?? "").toMatch(/border-l-neutral/);
   });
 
   test("multiple chips coexist when rendered together", () => {

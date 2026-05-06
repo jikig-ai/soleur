@@ -20,48 +20,48 @@ export function GitHubRedirectState({ onContinue, onBack }: GitHubRedirectStateP
         <h1 className={`${serif.className} text-4xl font-semibold`}>
           Connecting to GitHub
         </h1>
-        <p className="text-base text-neutral-400">
+        <p className="text-base text-soleur-text-secondary">
           GitHub is a trusted platform used by millions of developers and
           businesses to manage their projects securely.
         </p>
       </div>
 
       <Card>
-        <h3 className="mb-4 text-sm font-medium text-neutral-200">What happens next</h3>
+        <h3 className="mb-4 text-sm font-medium text-soleur-text-primary">What happens next</h3>
         <ol className="space-y-4">
           <li className="flex items-start gap-3">
-            <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full border border-neutral-700 text-xs font-medium text-neutral-300">
+            <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full border border-soleur-border-default text-xs font-medium text-soleur-text-secondary">
               1
             </span>
-            <span className="text-sm text-neutral-300">Sign in to GitHub</span>
+            <span className="text-sm text-soleur-text-secondary">Sign in to GitHub</span>
           </li>
           <li className="flex items-start gap-3">
-            <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full border border-neutral-700 text-xs font-medium text-neutral-300">
+            <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full border border-soleur-border-default text-xs font-medium text-soleur-text-secondary">
               2
             </span>
             <div>
-              <span className="text-sm text-neutral-300">Grant project access</span>
-              <p className="mt-0.5 text-xs text-neutral-500">
+              <span className="text-sm text-soleur-text-secondary">Grant project access</span>
+              <p className="mt-0.5 text-xs text-soleur-text-muted">
                 We only request permission to read and manage your project files — nothing else.
               </p>
             </div>
           </li>
           <li className="flex items-start gap-3">
-            <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full border border-neutral-700 text-xs font-medium text-neutral-300">
+            <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full border border-soleur-border-default text-xs font-medium text-soleur-text-secondary">
               3
             </span>
-            <span className="text-sm text-neutral-300">Return here automatically</span>
+            <span className="text-sm text-soleur-text-secondary">Return here automatically</span>
           </li>
         </ol>
       </Card>
 
       <Card className="flex items-start gap-3">
-        <ShieldIcon className="mt-0.5 h-5 w-5 shrink-0 text-amber-500/70" />
+        <ShieldIcon className="mt-0.5 h-5 w-5 shrink-0 text-soleur-accent-gold-fg/70" />
         <div>
-          <h3 className="text-sm font-medium text-neutral-200">
+          <h3 className="text-sm font-medium text-soleur-text-primary">
             Why your own GitHub account?
           </h3>
-          <p className="mt-1 text-xs text-neutral-500">
+          <p className="mt-1 text-xs text-soleur-text-muted">
             Your project stays in your GitHub account, under your control. Your
             AI team accesses it through a secure GitHub App installation — you
             can revoke access at any time from your GitHub settings.

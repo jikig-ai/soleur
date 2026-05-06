@@ -14,9 +14,9 @@ import { reportSilentFallback } from "@/lib/client-observability";
 export function ThinkingDots() {
   return (
     <div className="flex items-center gap-1.5 py-1" data-testid="thinking-dots">
-      <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-neutral-400" style={{ animationDelay: "0ms" }} />
-      <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-neutral-400" style={{ animationDelay: "150ms" }} />
-      <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-neutral-400" style={{ animationDelay: "300ms" }} />
+      <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-soleur-text-secondary" style={{ animationDelay: "0ms" }} />
+      <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-soleur-text-secondary" style={{ animationDelay: "150ms" }} />
+      <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-soleur-text-secondary" style={{ animationDelay: "300ms" }} />
     </div>
   );
 }
@@ -25,7 +25,7 @@ export function ToolStatusChip({ label }: { label: string }) {
   return (
     <div className="flex items-center gap-2 py-0.5">
       <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-amber-500" />
-      <span className="text-sm text-neutral-400">{label}</span>
+      <span className="text-sm text-soleur-text-secondary">{label}</span>
     </div>
   );
 }
@@ -49,7 +49,7 @@ export function RetryingChip({ label }: { label: string | undefined }) {
         <span className="text-sm font-medium text-amber-400">Retrying…</span>
       </div>
       {label ? (
-        <span className="text-xs text-neutral-500">{label}</span>
+        <span className="text-xs text-soleur-text-muted">{label}</span>
       ) : null}
     </div>
   );
@@ -114,8 +114,8 @@ export const MessageBubble = memo(function MessageBubble({
     : isActive
       ? "message-bubble-active border-2 border-amber-600/70"
       : isDone
-        ? "border border-neutral-800/60"
-        : "border border-neutral-800";
+        ? "border border-soleur-border-default/60"
+        : "border border-soleur-border-default";
 
   return (
     <div
@@ -129,19 +129,19 @@ export const MessageBubble = memo(function MessageBubble({
         <div
           className={`relative min-w-0 rounded-xl px-4 py-3 text-sm leading-relaxed ${
             isUser
-              ? "bg-neutral-800 text-neutral-100"
-              : `bg-neutral-900 text-neutral-200 ${borderStyle} ${leader && !isActive && !isError ? `border-l-2 ${colorClass}` : ""}`
+              ? "bg-soleur-bg-surface-2 text-soleur-text-primary"
+              : `bg-soleur-bg-surface-1 text-soleur-text-primary ${borderStyle} ${leader && !isActive && !isError ? `border-l-2 ${colorClass}` : ""}`
           }`}
         >
           {(messageState === "tool_use" || messageState === "streaming") && (
-            <span className="absolute -top-2.5 right-3 rounded-full border border-amber-700/50 bg-neutral-900 px-2 py-0.5 text-[10px] font-medium text-amber-500">
+            <span className="absolute -top-2.5 right-3 rounded-full border border-amber-700/50 bg-soleur-bg-surface-1 px-2 py-0.5 text-[10px] font-medium text-amber-500">
               {messageState === "tool_use" ? "Working" : "Streaming"}
             </span>
           )}
 
           {isDone && role === "assistant" && (
             <span
-              className="absolute -top-2.5 right-3 flex h-5 w-5 items-center justify-center rounded-full bg-neutral-900 text-amber-600"
+              className="absolute -top-2.5 right-3 flex h-5 w-5 items-center justify-center rounded-full bg-soleur-bg-surface-1 text-amber-600"
               aria-label="Response complete"
             >
               <svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true">
@@ -155,11 +155,11 @@ export const MessageBubble = memo(function MessageBubble({
               className="mb-1 flex items-center gap-2"
               data-testid="message-bubble-header"
             >
-              <span className="text-xs font-semibold text-neutral-300">
+              <span className="text-xs font-semibold text-soleur-text-secondary">
                 {headerPrimary}
               </span>
               {showFullTitle && !titleContainsName && (
-                <span className="text-xs text-neutral-500">{leader.title}</span>
+                <span className="text-xs text-soleur-text-muted">{leader.title}</span>
               )}
             </div>
           )}
@@ -251,7 +251,7 @@ function renderBubbleContent({
             href="https://github.com/jikigai/soleur/issues/new?labels=type%2Fbug&template=bug_report.md"
             target="_blank"
             rel="noopener noreferrer"
-            className="text-xs text-neutral-500 underline hover:text-neutral-300"
+            className="text-xs text-soleur-text-muted underline hover:text-soleur-text-secondary"
             data-testid="file-issue-link"
           >
             File an issue
@@ -261,10 +261,10 @@ function renderBubbleContent({
     case "done":
       if (content === "" && toolsUsed && toolsUsed.length > 0) {
         return (
-          <div className="flex items-center gap-1.5 text-xs text-neutral-500">
+          <div className="flex items-center gap-1.5 text-xs text-soleur-text-muted">
             <span>Used:</span>
             {toolsUsed.map((t, i) => (
-              <span key={i} className="rounded bg-neutral-800 px-1.5 py-0.5">
+              <span key={i} className="rounded bg-soleur-bg-surface-2 px-1.5 py-0.5">
                 {t}
               </span>
             ))}

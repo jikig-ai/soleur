@@ -35,18 +35,18 @@ export function ToolUseChip({ toolName, toolLabel, leaderId }: ToolUseChipProps)
   const colorClass =
     leaderId === "cc_router"
       ? `border border-yellow-700/60 ${LEADER_COLORS.cc_router}`
-      : `border border-neutral-700 ${LEADER_COLORS.system}`;
+      : `border border-soleur-border-default ${LEADER_COLORS.system}`;
 
   return (
     <div
       data-tool-chip-id={`${leaderId}-${toolName}-${toolLabel}`}
-      className={`inline-flex items-center gap-2 rounded-full bg-neutral-900/60 px-3 py-1 ${colorClass}`}
+      className={`inline-flex items-center gap-2 rounded-full bg-soleur-bg-surface-1/60 px-3 py-1 ${colorClass}`}
     >
       <span
         className="h-1.5 w-1.5 animate-pulse rounded-full bg-amber-500"
         aria-hidden="true"
       />
-      <span className="text-xs text-neutral-300">{toolLabel}</span>
+      <span className="text-xs text-soleur-text-secondary">{toolLabel}</span>
     </div>
   );
 }
