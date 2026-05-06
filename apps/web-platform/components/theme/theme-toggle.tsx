@@ -26,6 +26,17 @@ const SEGMENTS: readonly Segment[] = [
 // theme value, so SSR HTML and the first client paint agree on the visible
 // glyph. After mount the gate flips to the real `theme`.
 const PRE_MOUNT_INDEX = SEGMENTS.findIndex((s) => s.value === "system");
+if (PRE_MOUNT_INDEX === -1) {
+  // SEGMENTS must include a "system" entry — the mounted-gate's pre-mount
+  // placeholder depends on it, and dropping it would silently render
+  // SEGMENTS[-1] (undefined) and crash on `current.value`. Fail loud at
+  // module load instead of at first render.
+  throw new Error('ThemeToggle: SEGMENTS must include a "system" entry');
+}
+
+// `data-active` is the canonical agent/test probe for active visual state.
+// `aria-pressed` is the screen-reader contract. Both flip together — drift
+// between the two is a regression.
 
 export function ThemeToggle({ collapsed }: { collapsed: boolean }) {
   const { theme, setTheme } = useTheme();
@@ -63,7 +74,7 @@ export function ThemeToggle({ collapsed }: { collapsed: boolean }) {
       <button
         type="button"
         data-testid="theme-cycle-button"
-        data-active={mounted ? "true" : "false"}
+        data-active={String(mounted)}
         data-theme-current={current.value}
         data-theme-next={next.value}
         onClick={() => setTheme(next.value)}
@@ -127,7 +138,7 @@ export function ThemeToggle({ collapsed }: { collapsed: boolean }) {
             }}
             type="button"
             onClick={() => setTheme(seg.value)}
-            data-active={active ? "true" : "false"}
+            data-active={String(active)}
             aria-pressed={active}
             aria-label={seg.ariaLabel}
             title={seg.label}
