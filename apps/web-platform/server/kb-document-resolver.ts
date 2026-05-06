@@ -19,7 +19,10 @@ import * as Sentry from "@sentry/nextjs";
 import { createServiceClient } from "@/lib/supabase/service";
 import { reportSilentFallback } from "./observability";
 import { isPathInWorkspace } from "./sandbox";
-import { extractPdfText } from "./pdf-text-extract";
+import {
+  extractPdfText,
+  type PdfExtractErrorClass,
+} from "./pdf-text-extract";
 
 /** Per-conversation cap on inlined document body. Mirrors the legacy
  *  `agent-runner.ts MAX_INLINE_BYTES` (~12-15K tokens). Source of truth
@@ -76,6 +79,14 @@ export async function resolveConciergeDocumentContext(args: {
   artifactPath?: string;
   documentKind?: "pdf" | "text";
   documentContent?: string;
+  /**
+   * Set when the in-process PDF extractor returned a typed failure
+   * (`oversized_buffer | lazy_import_failed | encrypted | corrupted |
+   * parse_error | empty_text`). Threaded into the runner so the system
+   * prompt picks `buildPdfUnreadableDirective` (content-grounded reply)
+   * instead of `buildPdfGatedDirective` (apt-get-cascade-prone Read path).
+   */
+  documentExtractError?: PdfExtractErrorClass;
 }> {
   const { userId, contextPath, providedContent } = args;
   if (!contextPath || contextPath.length === 0) return {};
@@ -145,45 +156,67 @@ export async function resolveConciergeDocumentContext(args: {
     try {
       const buffer = await readFile(fullPath);
       const result = await extractPdfText(buffer, CONCIERGE_INLINE_CAP_BYTES);
+      const ok = !("error" in result);
+      const errorClass: PdfExtractErrorClass | null = ok ? null : result.error;
       // #3338 Phase 5.1 — observability breadcrumb. Captures the extractor's
       // outcome on every cold-Query construction so operators can correlate
       // PDF-summary-quality with extraction shape (page count, truncation,
       // body size). PII redaction: log basename only — KB paths can carry
-      // user-identifying directory hierarchy.
+      // user-identifying directory hierarchy. The 2026-05-06 follow-up adds
+      // `errorClass` so a future Sentry event names the failure class
+      // directly without breadcrumb hunting.
       Sentry.addBreadcrumb({
         category: "cc-pdf-extractor",
         message: "extractPdfText completed",
         level: "info",
         data: {
-          ok: result !== null,
-          pageCount: result?.pageCount ?? null,
-          truncated: result?.truncated ?? null,
-          textBytes: result?.text.length ?? 0,
+          ok,
+          errorClass,
+          pageCount: ok ? result.pageCount : (result.pageCount ?? null),
+          truncated: ok ? result.truncated : null,
+          textBytes: ok ? result.text.length : 0,
           pathBasename: path.basename(contextPath),
         },
       });
-      if (result && result.text.length > 0) {
+      if (ok && result.text.length > 0) {
         return {
           artifactPath: contextPath,
           documentKind: "pdf",
           documentContent: result.text,
         };
       }
-      if (!result) {
-        // Extraction failed (corrupted, encrypted, oversized buffer, parse
-        // error). Mirror to Sentry; caller falls through to Read directive.
-        reportSilentFallback(
-          new Error("extractPdfText returned null"),
-          {
-            feature: "kb-concierge-context",
-            op: "extractPdfText",
-            extra: {
-              userId,
-              pathBasename: path.basename(contextPath),
-            },
+      if (!ok) {
+        // Extraction failed (oversized, corrupted, encrypted, lazy-import
+        // failure, parse error, OR empty_text). Mirror to Sentry tagged with
+        // the failure class so operators see WHICH shape fired without
+        // parsing breadcrumbs. `empty_text` gets a distinct `op` so
+        // Hypothesis B (scanned PDFs) is filterable from Hypothesis A
+        // (oversized) in the Sentry UI.
+        const op =
+          result.error === "empty_text"
+            ? "extractPdfText.empty_text"
+            : "extractPdfText";
+        reportSilentFallback(new Error(`extractPdfText ${result.error}`), {
+          feature: "kb-concierge-context",
+          op,
+          extra: {
+            userId,
+            pathBasename: path.basename(contextPath),
+            errorClass: result.error,
+            ...(result.pageCount !== undefined
+              ? { pageCount: result.pageCount }
+              : {}),
           },
-        );
+        });
+        return {
+          artifactPath: contextPath,
+          documentKind: "pdf",
+          documentExtractError: result.error,
+        };
       }
+      // ok === true but text was empty. The extractor now classifies that as
+      // `empty_text`, so this branch is unreachable — keep the safety return
+      // for type narrowing and future-proofing.
       return { artifactPath: contextPath, documentKind: "pdf" };
     } catch {
       // readFile failed (missing file, permission denied) — let the agent

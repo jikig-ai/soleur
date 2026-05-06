@@ -1,13 +1,21 @@
-// Unit tests for `extractPdfText` (#3338 plan §Phase 1).
+// Unit tests for `extractPdfText` (#3338 plan §Phase 1, follow-up plan
+// 2026-05-06-fix-extract-pdf-text-null-in-production-plan.md §Phase 1).
 //
 // PDF fixtures are synthesized inline (per `cq-test-fixtures-synthesized-only`):
 // `makeMinimalPdf(pages)` builds a minimal but spec-conforming PDF byte buffer
 // with one Type1 Helvetica font reference and one text-showing operator per
 // page. xref offsets are computed at append time.
+//
+// As of the 2026-05-06 follow-up, `extractPdfText` returns a discriminated
+// union: a successful `PdfTextExtractResult` OR `{ error: PdfExtractErrorClass }`
+// where the class names the failure shape. The previous null-returns are
+// gone — tests that asserted `toBeNull()` now assert `result.error === <class>`
+// so the next Sentry event diagnoses itself.
 
 import { describe, it, expect } from "vitest";
 
 import { extractPdfText } from "@/server/pdf-text-extract";
+import { MAX_AGENT_READABLE_PDF_SIZE } from "@/lib/attachment-constants";
 
 /**
  * Build a minimal PDF byte buffer with one text-showing operator per page.
@@ -20,8 +28,6 @@ function makeMinimalPdf(pageTexts: string[]): Buffer {
   const offsets: number[] = [];
 
   function append(s: string): number {
-    // Use binary encoding so high-byte chars in the PDF binary marker
-    // pass through verbatim.
     const b = Buffer.from(s, "binary");
     chunks.push(b);
     const before = totalBytes;
@@ -29,11 +35,9 @@ function makeMinimalPdf(pageTexts: string[]): Buffer {
     return before;
   }
 
-  // PDF header + binary marker.
   append("%PDF-1.4\n%\xE2\xE3\xCF\xD3\n");
 
   const numPages = pageTexts.length;
-  // Object IDs: 1 Catalog, 2 Pages, 3 Font, 4..3+N Pages, 4+N..3+2N Contents.
   const fontId = 3;
   const pageStartId = 4;
   const contentStartId = 4 + numPages;
@@ -95,24 +99,32 @@ function makeMinimalPdf(pageTexts: string[]): Buffer {
   return Buffer.concat(chunks);
 }
 
+function isOk(
+  result: Awaited<ReturnType<typeof extractPdfText>>,
+): result is { text: string; truncated: boolean; pageCount: number } {
+  return result !== null && !("error" in result);
+}
+
 describe("extractPdfText", () => {
   it("extracts text from a single-page PDF", async () => {
     const buf = makeMinimalPdf(["Hello World"]);
     const result = await extractPdfText(buf, 50_000);
-    expect(result).not.toBeNull();
-    expect(result!.pageCount).toBe(1);
-    expect(result!.truncated).toBe(false);
-    expect(result!.text).toContain("Hello World");
+    expect(isOk(result)).toBe(true);
+    if (!isOk(result)) return;
+    expect(result.pageCount).toBe(1);
+    expect(result.truncated).toBe(false);
+    expect(result.text).toContain("Hello World");
   });
 
   it("extracts text from a multi-page PDF and reports pageCount", async () => {
     const buf = makeMinimalPdf(["Page One Body", "Page Two Body"]);
     const result = await extractPdfText(buf, 50_000);
-    expect(result).not.toBeNull();
-    expect(result!.pageCount).toBe(2);
-    expect(result!.text).toContain("Page One Body");
-    expect(result!.text).toContain("Page Two Body");
-    expect(result!.truncated).toBe(false);
+    expect(isOk(result)).toBe(true);
+    if (!isOk(result)) return;
+    expect(result.pageCount).toBe(2);
+    expect(result.text).toContain("Page One Body");
+    expect(result.text).toContain("Page Two Body");
+    expect(result.truncated).toBe(false);
   });
 
   it("truncates output and reports truncated=true when capChars is small", async () => {
@@ -121,67 +133,96 @@ describe("extractPdfText", () => {
       "DDDDDDDDDD EEEEEEEEEE FFFFFFFFFF",
     ]);
     const result = await extractPdfText(buf, 20);
-    expect(result).not.toBeNull();
-    expect(result!.truncated).toBe(true);
-    expect(result!.text.length).toBeLessThanOrEqual(20);
+    expect(isOk(result)).toBe(true);
+    if (!isOk(result)) return;
+    expect(result.truncated).toBe(true);
+    expect(result.text.length).toBeLessThanOrEqual(20);
   });
 
-  it("returns null on a corrupted buffer (no PDF header)", async () => {
+  it("returns { error: 'corrupted' | 'parse_error' } on a buffer with no PDF header", async () => {
+    // pdfjs throws InvalidPDFException for a missing/invalid header → "corrupted".
+    // Some pdfjs builds bubble the parse failure as a generic Error → "parse_error".
+    // Either is acceptable; both are non-null so the caller's null-check no
+    // longer fires the apt-get cascade.
     const garbage = Buffer.from("this is definitely not a PDF file");
     const result = await extractPdfText(garbage, 50_000);
-    expect(result).toBeNull();
+    expect(result).not.toBeNull();
+    expect(result && "error" in result).toBe(true);
+    if (!result || !("error" in result)) return;
+    expect(["corrupted", "parse_error"]).toContain(result.error);
   });
 
-  it("returns null when buffer exceeds 15 MB input cap", async () => {
-    // Input cap mirrors PREVIEW_MAX_BYTES at kb-preview-metadata.ts:25.
-    // Refuse without invoking the parser to avoid a 200-300 MB RSS spike.
-    const oversized = Buffer.alloc(15 * 1024 * 1024 + 1);
+  it("returns { error: 'oversized_buffer' } when buffer exceeds the upload cap", async () => {
+    // Hypothesis A: pre-fix the local INPUT_BUFFER_CAP_BYTES = 15 MB silently
+    // gated PDFs in the [15 MB, 24 MB] band uploaded after #3337 raised the
+    // upload cap to 24 MB. The fix aligns the extractor to the same constant.
+    // The size guard fires only when buffer.length > MAX_AGENT_READABLE_PDF_SIZE.
+    const oversized = Buffer.alloc(MAX_AGENT_READABLE_PDF_SIZE + 1);
     const result = await extractPdfText(oversized, 50_000);
-    expect(result).toBeNull();
+    expect(result).not.toBeNull();
+    expect(result && "error" in result).toBe(true);
+    if (!result || !("error" in result)) return;
+    expect(result.error).toBe("oversized_buffer");
   });
 
-  it("handles an empty (zero-page) PDF without throwing", async () => {
-    // Synthesized 0-page PDF — `pdfjs-dist` typically rejects an empty Pages
-    // tree as malformed; either { text: "", pageCount: 0 } or null is an
-    // acceptable terminal state. Asserts no throw and a sane shape.
+  it("does NOT trip oversized_buffer for buffers in the [old-15MB, new-24MB] band (Hypothesis A regression)", { timeout: 15_000 }, async () => {
+    // Synthesize a 16 MB buffer of zero bytes. pdfjs will fail to parse
+    // (InvalidPDFException → "corrupted"), but the critical assertion is that
+    // we did NOT short-circuit on the input cap. Pre-fix this returned null
+    // (oversized_buffer) silently, hitting the apt-get cascade.
+    const sixteenMb = Buffer.alloc(16 * 1024 * 1024);
+    // Stamp a PDF header so this isn't an obviously invalid header path.
+    sixteenMb.write("%PDF-1.4\n");
+    const result = await extractPdfText(sixteenMb, 50_000);
+    expect(result).not.toBeNull();
+    expect(result && "error" in result).toBe(true);
+    if (!result || !("error" in result)) return;
+    expect(result.error).not.toBe("oversized_buffer");
+  });
+
+  it("handles an empty (zero-page) PDF without throwing — empty_text or terminal shape", async () => {
+    // Synthesized 0-page PDF — pdfjs typically rejects an empty Pages tree as
+    // malformed. Acceptable terminal states: { text: "", pageCount: 0,
+    // truncated: false } OR { error: "empty_text" } OR { error: "corrupted" |
+    // "parse_error" }. All non-null shapes are fine.
     const buf = makeMinimalPdf([]);
     const result = await extractPdfText(buf, 50_000);
-    if (result !== null) {
+    expect(result).not.toBeNull();
+    if (!result) return;
+    if (isOk(result)) {
       expect(result.pageCount).toBeGreaterThanOrEqual(0);
       expect(typeof result.text).toBe("string");
-      expect(result.truncated).toBe(false);
+    } else {
+      expect(["empty_text", "corrupted", "parse_error"]).toContain(result.error);
     }
   });
 
-  it("returns null on a PDF with mid-stream-truncated body (parser reject)", async () => {
+  it("returns { error: 'corrupted' | 'parse_error' } on a mid-stream-truncated body", async () => {
     // Mid-stream truncation makes xref offsets point past EOF; pdfjs throws
-    // a parser exception → outer catch → null. Behaviorally identical to T3
-    // (no PDF header). Note: this test does NOT exercise the
+    // a parser exception → "corrupted" (InvalidPDFException) or
+    // "parse_error" (generic). Note: this test does NOT exercise the
     // password-protected / encrypted PDF path — synthesizing spec-correct
     // RC4/AES-128 encryption in pure JS is disproportionate to the
     // assertion. The encrypted-PDF graceful-reject path is reached via the
-    // same `try/catch` in extractPdfText (PasswordException is caught
-    // identically to InvalidPDFException), so behavioral coverage is
-    // equivalent. Real encrypted-PDF coverage would require a real fixture
-    // (rejected by `cq-test-fixtures-synthesized-only`) or a PDF encryption
-    // implementation — neither in scope for this PR.
+    // same `try/catch` in extractPdfText (PasswordException is mapped to
+    // "encrypted" via its `.name` property; coverage for the branch is in
+    // the cc-dispatcher-concierge-context.test.ts mock-driven scenarios).
     const buf = makeMinimalPdf(["Secret content"]);
     const truncated = buf.subarray(0, Math.floor(buf.length / 2));
     const result = await extractPdfText(truncated, 50_000);
-    expect(result).toBeNull();
+    expect(result).not.toBeNull();
+    expect(result && "error" in result).toBe(true);
+    if (!result || !("error" in result)) return;
+    expect(["corrupted", "parse_error"]).toContain(result.error);
   });
 
   it("caps page iteration at MAX_PAGES and reports truncated=true (#3338 P1-B)", async () => {
-    // DoS guard: attacker-crafted PDF with 1M empty pages would never trip
-    // the capChars halt (0 chars per page) but would pin the event loop.
-    // The MAX_PAGES cap (500) bounds the loop independently. Synthesize a
-    // 600-page PDF (each page emits a 1-char Tj operator) and assert the
-    // extractor halts at MAX_PAGES with truncated=true.
     const pages = Array.from({ length: 600 }, (_, i) => `p${i}`);
     const buf = makeMinimalPdf(pages);
     const result = await extractPdfText(buf, 50_000);
-    expect(result).not.toBeNull();
-    expect(result!.pageCount).toBe(600);
-    expect(result!.truncated).toBe(true);
+    expect(isOk(result)).toBe(true);
+    if (!isOk(result)) return;
+    expect(result.pageCount).toBe(600);
+    expect(result.truncated).toBe(true);
   });
 });
