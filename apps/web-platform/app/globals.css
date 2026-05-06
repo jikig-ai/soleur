@@ -1,11 +1,152 @@
 @import "tailwindcss";
 
+/*
+ * Tailwind v4 dark variant — pin to our data-theme contract. Default
+ * Tailwind v4 resolves `dark:*` via `prefers-color-scheme: dark`, which
+ * drifts from <html data-theme=...> when a user picks Light on a dark-OS
+ * machine (or Dark on a light-OS machine). Map the variant to:
+ *   1. data-theme="dark" — explicit user choice
+ *   2. data-theme="system" + prefers-color-scheme: dark — system follows OS
+ * No prefers-color-scheme block when data-theme="light" — explicit Light
+ * always wins over OS even if the OS reports dark.
+ */
+@custom-variant dark {
+  &:where([data-theme="dark"], [data-theme="dark"] *) {
+    @slot;
+  }
+  @media (prefers-color-scheme: dark) {
+    &:where([data-theme="system"], [data-theme="system"] *) {
+      @slot;
+    }
+    &:where(:root:not([data-theme]), :root:not([data-theme]) *) {
+      @slot;
+    }
+  }
+}
+
+/*
+ * Solar Forge (dark) is the default — declared on :root so SSR output without
+ * a data-theme attribute renders dark, matching the pre-toggle behavior.
+ *
+ * The no-FOUC inline script in app/layout.tsx may set <html data-theme="dark">,
+ * <html data-theme="light">, or leave it unset (= follow prefers-color-scheme
+ * via the @media block below). The "system" theme writes data-theme="system"
+ * AND lets prefers-color-scheme drive the final palette.
+ *
+ * Token names mirror knowledge-base/marketing/brand-guide.md exactly.
+ * Components MUST consume tokens via var(--soleur-*); never raw hex.
+ */
+:root,
+:root[data-theme="dark"] {
+  /* Surfaces */
+  --soleur-bg-base: #0a0a0a;
+  --soleur-bg-surface-1: #141414;
+  --soleur-bg-surface-2: #1c1c1c;
+  --soleur-bg-accent-surface: #1c1c1c;
+  /* Borders */
+  --soleur-border-default: #2a2a2a;
+  --soleur-border-emphasized: #c9a962;
+  /* Text */
+  --soleur-text-primary: #ffffff;
+  --soleur-text-secondary: #848484;
+  --soleur-text-muted: #6a6a6a;
+  --soleur-text-on-accent: #1a1612;
+  /* Accents */
+  --soleur-accent-gold-fill: #c9a962;
+  --soleur-accent-gold-fg: #c9a962;
+  --soleur-accent-gold-text: #d4b36a;
+  --soleur-accent-gradient-start: #d4b36a;
+  --soleur-accent-gradient-end: #b8923e;
+  /* Browser chrome (mobile address bar, PWA shell) */
+  --soleur-theme-color: #0a0a0a;
+}
+
+:root[data-theme="light"] {
+  /* Surfaces */
+  --soleur-bg-base: #fbf7ee;
+  --soleur-bg-surface-1: #f4eedf;
+  --soleur-bg-surface-2: #ede4cc;
+  --soleur-bg-accent-surface: #f8efd4;
+  /* Borders */
+  --soleur-border-default: #d8c9a6;
+  --soleur-border-emphasized: #9b8857;
+  /* Text */
+  --soleur-text-primary: #1a1612;
+  --soleur-text-secondary: #5c5043;
+  --soleur-text-muted: #6f6353;
+  --soleur-text-on-accent: #1a1612;
+  /* Accents */
+  --soleur-accent-gold-fill: #c9a962;
+  --soleur-accent-gold-fg: #9c7a2e;
+  --soleur-accent-gold-text: #7a5e1f;
+  --soleur-accent-gradient-start: #d4b36a;
+  --soleur-accent-gradient-end: #b8923e;
+  /* Browser chrome */
+  --soleur-theme-color: #fbf7ee;
+}
+
+/*
+ * System mode: when data-theme="system" (or unset entirely on the legacy
+ * pre-script render), follow the OS via prefers-color-scheme. The
+ * declarations duplicate the explicit blocks above so OS toggles take
+ * effect live without a re-render.
+ */
+@media (prefers-color-scheme: light) {
+  :root[data-theme="system"],
+  :root:not([data-theme]) {
+    --soleur-bg-base: #fbf7ee;
+    --soleur-bg-surface-1: #f4eedf;
+    --soleur-bg-surface-2: #ede4cc;
+    --soleur-bg-accent-surface: #f8efd4;
+    --soleur-border-default: #d8c9a6;
+    --soleur-border-emphasized: #9b8857;
+    --soleur-text-primary: #1a1612;
+    --soleur-text-secondary: #5c5043;
+    --soleur-text-muted: #6f6353;
+    --soleur-text-on-accent: #1a1612;
+    --soleur-accent-gold-fill: #c9a962;
+    --soleur-accent-gold-fg: #9c7a2e;
+    --soleur-accent-gold-text: #7a5e1f;
+    --soleur-accent-gradient-start: #d4b36a;
+    --soleur-accent-gradient-end: #b8923e;
+    --soleur-theme-color: #fbf7ee;
+  }
+}
+
+/*
+ * Tailwind v4: register tokens as theme variables so utilities like
+ * bg-soleur-bg-base, text-soleur-text-primary, border-soleur-border-default
+ * resolve at compile time. Aliases keep the existing focus-ring rule
+ * working (it references --color-neutral-950 / --color-amber-500).
+ */
+@theme {
+  --color-soleur-bg-base: var(--soleur-bg-base);
+  --color-soleur-bg-surface-1: var(--soleur-bg-surface-1);
+  --color-soleur-bg-surface-2: var(--soleur-bg-surface-2);
+  --color-soleur-bg-accent-surface: var(--soleur-bg-accent-surface);
+  --color-soleur-border-default: var(--soleur-border-default);
+  --color-soleur-border-emphasized: var(--soleur-border-emphasized);
+  --color-soleur-text-primary: var(--soleur-text-primary);
+  --color-soleur-text-secondary: var(--soleur-text-secondary);
+  --color-soleur-text-muted: var(--soleur-text-muted);
+  --color-soleur-text-on-accent: var(--soleur-text-on-accent);
+  --color-soleur-accent-gold-fill: var(--soleur-accent-gold-fill);
+  --color-soleur-accent-gold-fg: var(--soleur-accent-gold-fg);
+  --color-soleur-accent-gold-text: var(--soleur-accent-gold-text);
+  --color-soleur-accent-gradient-start: var(--soleur-accent-gradient-start);
+  --color-soleur-accent-gradient-end: var(--soleur-accent-gradient-end);
+}
+
 @layer base {
+  body {
+    background-color: var(--soleur-bg-base);
+    color: var(--soleur-text-primary);
+  }
   :where(a, button, input, select, textarea, [tabindex]:not([tabindex="-1"])):focus-visible {
     outline: none;
     box-shadow:
-      0 0 0 2px var(--color-neutral-950),
-      0 0 0 4px var(--color-amber-500);
+      0 0 0 2px var(--soleur-bg-base),
+      0 0 0 4px var(--soleur-accent-gold-fill);
   }
 }
 

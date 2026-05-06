@@ -158,12 +158,12 @@ export function UpgradeAtCapacityModal() {
         if (e.target === e.currentTarget) close();
       }}
     >
-      <div className="w-full max-w-md rounded-2xl border border-neutral-800 bg-neutral-950 p-6 text-neutral-100 shadow-2xl">
+      <div className="w-full max-w-md rounded-2xl border border-soleur-border-default bg-soleur-bg-surface-1 p-6 text-soleur-text-primary shadow-2xl">
         <button
           type="button"
           onClick={close}
           aria-label="Close"
-          className="float-right text-neutral-500 hover:text-neutral-300"
+          className="float-right text-soleur-text-muted hover:text-soleur-text-secondary"
         >
           ×
         </button>
@@ -171,33 +171,33 @@ export function UpgradeAtCapacityModal() {
         {state === "loading" && (
           <div data-state="loading">
             <h2 id="upgrade-at-capacity-title" className="text-lg font-semibold">{LOADING_COPY.title}</h2>
-            <p className="mt-2 text-sm text-neutral-400">{LOADING_COPY.body}</p>
+            <p className="mt-2 text-sm text-soleur-text-secondary">{LOADING_COPY.body}</p>
           </div>
         )}
 
         {state === "default" && copy && (
           <div data-state="default">
             <h2 id="upgrade-at-capacity-title" className="text-lg font-semibold">{copy.title}</h2>
-            <p className="mt-2 text-sm text-neutral-300">{copy.subhead}</p>
+            <p className="mt-2 text-sm text-soleur-text-secondary">{copy.subhead}</p>
             <div className="mt-6 flex items-center justify-between">
               {copy.targetTier ? (
                 <button
                   type="button"
                   onClick={() => startCheckout(copy.targetTier)}
-                  className="rounded-lg bg-amber-500 px-4 py-2 text-sm font-medium text-black hover:bg-amber-400"
+                  className="rounded-lg bg-soleur-accent-gold-fill px-4 py-2 text-sm font-medium text-soleur-text-on-accent hover:opacity-90"
                 >
                   {copy.primaryCtaLabel}
                 </button>
               ) : (
                 <Link
                   href="mailto:jean@soleur.ai"
-                  className="rounded-lg bg-amber-500 px-4 py-2 text-sm font-medium text-black hover:bg-amber-400"
+                  className="rounded-lg bg-soleur-accent-gold-fill px-4 py-2 text-sm font-medium text-soleur-text-on-accent hover:opacity-90"
                 >
                   {copy.primaryCtaLabel}
                 </Link>
               )}
               {copy.secondaryLink ? (
-                <Link href={copy.secondaryLink.href} className="text-sm text-neutral-400 hover:text-neutral-200">
+                <Link href={copy.secondaryLink.href} className="text-sm text-soleur-text-secondary hover:text-soleur-text-primary">
                   {copy.secondaryLink.label}
                 </Link>
               ) : null}
@@ -208,16 +208,16 @@ export function UpgradeAtCapacityModal() {
         {state === "error" && (
           <div data-state="error">
             <h2 id="upgrade-at-capacity-title" className="text-lg font-semibold">{ERROR_COPY.title}</h2>
-            <p className="mt-2 text-sm text-neutral-300">{ERROR_COPY.body}</p>
+            <p className="mt-2 text-sm text-soleur-text-secondary">{ERROR_COPY.body}</p>
             <div className="mt-6 flex items-center justify-between">
               <button
                 type="button"
                 onClick={() => startCheckout(errorRetryTarget)}
-                className="rounded-lg bg-amber-500 px-4 py-2 text-sm font-medium text-black hover:bg-amber-400"
+                className="rounded-lg bg-soleur-accent-gold-fill px-4 py-2 text-sm font-medium text-soleur-text-on-accent hover:opacity-90"
               >
                 {ERROR_COPY.primaryCtaLabel}
               </button>
-              <Link href={ERROR_COPY.secondaryLink.href} className="text-sm text-neutral-400 hover:text-neutral-200">
+              <Link href={ERROR_COPY.secondaryLink.href} className="text-sm text-soleur-text-secondary hover:text-soleur-text-primary">
                 {ERROR_COPY.secondaryLink.label}
               </Link>
             </div>
@@ -241,18 +241,18 @@ function AdminOverrideBody({ cap, onClose }: { cap: number; onClose: () => void 
   return (
     <div data-state="admin-override">
       <h2 id="upgrade-at-capacity-title" className="text-lg font-semibold">{copy.title}</h2>
-      <p className="mt-2 text-sm text-neutral-300">{copy.subhead}</p>
+      <p className="mt-2 text-sm text-soleur-text-secondary">{copy.subhead}</p>
       <div className="mt-6 flex items-center justify-between">
         <Link
           href={copy.primaryCtaHref}
-          className="rounded-lg bg-amber-500 px-4 py-2 text-sm font-medium text-black hover:bg-amber-400"
+          className="rounded-lg bg-soleur-accent-gold-fill px-4 py-2 text-sm font-medium text-soleur-text-on-accent hover:opacity-90"
         >
           {copy.primaryCtaLabel}
         </Link>
         <button
           type="button"
           onClick={onClose}
-          className="text-sm text-neutral-400 hover:text-neutral-200"
+          className="text-sm text-soleur-text-secondary hover:text-soleur-text-primary"
         >
           {copy.secondaryLink.label}
         </button>
@@ -267,20 +267,20 @@ function EnterpriseCapBody({ cap, onClose }: { cap: number; onClose: () => void 
       <h2 id="upgrade-at-capacity-title" className="text-lg font-semibold">
         All {cap} of your conversations are working.
       </h2>
-      <p className="mt-2 text-sm text-neutral-300">
+      <p className="mt-2 text-sm text-soleur-text-secondary">
         50 in parallel is the platform ceiling today. Your Enterprise contract can carry more — let&apos;s size a custom quota against your usage.
       </p>
       <div className="mt-6 flex items-center justify-between">
         <Link
           href="mailto:jean@soleur.ai"
-          className="rounded-lg bg-amber-500 px-4 py-2 text-sm font-medium text-black hover:bg-amber-400"
+          className="rounded-lg bg-soleur-accent-gold-fill px-4 py-2 text-sm font-medium text-soleur-text-on-accent hover:opacity-90"
         >
           Contact your account team
         </Link>
         <button
           type="button"
           onClick={onClose}
-          className="text-sm text-neutral-400 hover:text-neutral-200"
+          className="text-sm text-soleur-text-secondary hover:text-soleur-text-primary"
         >
           Dismiss
         </button>

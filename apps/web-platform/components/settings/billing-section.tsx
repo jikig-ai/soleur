@@ -132,15 +132,15 @@ export function BillingSection({
 
   return (
     <section>
-      <h2 className="mb-4 text-lg font-semibold text-white">Billing</h2>
-      <div className="rounded-xl border border-neutral-800 bg-neutral-900/50 p-6">
+      <h2 className="mb-4 text-lg font-semibold text-soleur-text-primary">Billing</h2>
+      <div className="rounded-xl border border-soleur-border-default bg-soleur-bg-surface-1 p-6">
         {/* Suspended recovery prompt */}
         {isUnpaid && (
           <div className="mb-4 rounded-lg border border-red-800/50 bg-red-950/30 p-4">
             <p className="text-sm font-medium text-red-400">
               Your subscription is unpaid
             </p>
-            <p className="mt-1 text-sm text-neutral-300">
+            <p className="mt-1 text-sm text-soleur-text-secondary">
               Your account is in read-only mode. Update your payment method to
               restore full access.
             </p>
@@ -157,7 +157,7 @@ export function BillingSection({
         {/* Past due warning */}
         {isPastDue && (
           <div className="mb-4 rounded-lg border border-orange-800/50 bg-orange-950/30 p-4">
-            <p className="text-sm text-neutral-300">
+            <p className="text-sm text-soleur-text-secondary">
               Your last payment failed. Update your payment method to avoid
               service interruption.
             </p>
@@ -174,15 +174,15 @@ export function BillingSection({
         {/* No subscription */}
         {!isActive && !isCancelled && !isPastDue && !isUnpaid && (
           <div className="flex flex-col items-center gap-4 py-4">
-            <div className="h-12 w-12 rounded-full bg-neutral-800" />
-            <p className="text-sm text-neutral-300">No active subscription</p>
-            <p className="text-sm text-neutral-500">
+            <div className="h-12 w-12 rounded-full bg-soleur-bg-surface-2" />
+            <p className="text-sm text-soleur-text-secondary">No active subscription</p>
+            <p className="text-sm text-soleur-text-muted">
               Subscribe to access the full Soleur platform.
             </p>
             <button
               onClick={handleSubscribe}
               disabled={loading}
-              className="rounded-lg bg-amber-600 px-6 py-2 text-sm font-medium text-white transition-colors hover:bg-amber-500 disabled:opacity-50"
+              className="rounded-lg bg-soleur-accent-gold-fill px-6 py-2 text-sm font-medium text-soleur-text-on-accent transition-colors hover:opacity-90 disabled:opacity-50"
             >
               {loading ? "Redirecting..." : "Subscribe"}
             </button>
@@ -192,14 +192,14 @@ export function BillingSection({
         {/* Cancelled / expired */}
         {isCancelled && (
           <div className="flex flex-col items-center gap-4 py-4">
-            <p className="text-sm text-neutral-300">
+            <p className="text-sm text-soleur-text-secondary">
               Your subscription ended
               {formattedPeriodEnd ? ` on ${formattedPeriodEnd}` : ""}.
             </p>
             <button
               onClick={handleSubscribe}
               disabled={loading}
-              className="rounded-lg bg-amber-600 px-6 py-2 text-sm font-medium text-white transition-colors hover:bg-amber-500 disabled:opacity-50"
+              className="rounded-lg bg-soleur-accent-gold-fill px-6 py-2 text-sm font-medium text-soleur-text-on-accent transition-colors hover:opacity-90 disabled:opacity-50"
             >
               {loading ? "Redirecting..." : "Resubscribe"}
             </button>
@@ -212,13 +212,13 @@ export function BillingSection({
             {/* Cancelling banner */}
             {isCancelling && (
               <div className="rounded-lg border border-amber-800/50 bg-amber-950/30 p-4">
-                <p className="text-sm text-neutral-300">
+                <p className="text-sm text-soleur-text-secondary">
                   Your subscription will end on {formattedPeriodEnd}.
                   You&apos;ll retain full access until then.
                 </p>
                 <button
                   onClick={handlePortalRedirect}
-                  className="mt-1 text-sm font-medium text-amber-400 hover:text-amber-300"
+                  className="mt-1 text-sm font-medium text-soleur-accent-gold-fg hover:text-soleur-accent-gold-text"
                 >
                   Reactivate
                 </button>
@@ -228,8 +228,8 @@ export function BillingSection({
             {/* Plan info */}
             <div className="flex items-center gap-3">
               <div>
-                <p className="text-xs text-neutral-500">Plan</p>
-                <p className="text-sm font-medium text-white">
+                <p className="text-xs text-soleur-text-muted">Plan</p>
+                <p className="text-sm font-medium text-soleur-text-primary">
                   Solo — $49/mo
                 </p>
               </div>
@@ -238,11 +238,11 @@ export function BillingSection({
 
             {/* Period end */}
             {formattedPeriodEnd && (
-              <div className="border-t border-neutral-800 pt-4">
-                <p className="text-xs text-neutral-500">
+              <div className="border-t border-soleur-border-default pt-4">
+                <p className="text-xs text-soleur-text-muted">
                   {isCancelling ? "Access ends" : "Billing period ends"}
                 </p>
-                <p className="text-sm text-white">{formattedPeriodEnd}</p>
+                <p className="text-sm text-soleur-text-primary">{formattedPeriodEnd}</p>
               </div>
             )}
 
@@ -251,14 +251,14 @@ export function BillingSection({
               <button
                 onClick={handlePortalRedirect}
                 disabled={loading}
-                className="rounded-lg bg-amber-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-amber-500 disabled:opacity-50"
+                className="rounded-lg bg-soleur-accent-gold-fill px-4 py-2 text-sm font-medium text-soleur-text-on-accent transition-colors hover:opacity-90 disabled:opacity-50"
               >
                 Manage Subscription
               </button>
               {!isCancelling && !isUnpaid && (
                 <button
                   onClick={() => setShowRetentionModal(true)}
-                  className="rounded-lg border border-neutral-700 px-4 py-2 text-sm font-medium text-neutral-300 transition-colors hover:bg-neutral-800"
+                  className="rounded-lg border border-soleur-border-default px-4 py-2 text-sm font-medium text-soleur-text-secondary transition-colors hover:bg-soleur-bg-surface-2"
                 >
                   Cancel Subscription
                 </button>
@@ -276,24 +276,24 @@ export function BillingSection({
 
       {/* Invoice list */}
       {(isActive || isPastDue || isUnpaid) && (
-        <div className="mt-6 rounded-xl border border-neutral-800 bg-neutral-900/50 p-6">
-          <h3 className="mb-4 text-sm font-semibold text-white">Invoices</h3>
+        <div className="mt-6 rounded-xl border border-soleur-border-default bg-soleur-bg-surface-1 p-6">
+          <h3 className="mb-4 text-sm font-semibold text-soleur-text-primary">Invoices</h3>
           {invoicesLoading ? (
-            <p className="text-sm text-neutral-500">Loading invoices...</p>
+            <p className="text-sm text-soleur-text-muted">Loading invoices...</p>
           ) : invoices.length === 0 ? (
-            <p className="text-sm text-neutral-500">No invoices yet.</p>
+            <p className="text-sm text-soleur-text-muted">No invoices yet.</p>
           ) : (
             <div className="space-y-3">
               {invoices.map((inv) => (
                 <div
                   key={inv.id}
-                  className="flex items-center justify-between border-b border-neutral-800 pb-3 last:border-0 last:pb-0"
+                  className="flex items-center justify-between border-b border-soleur-border-default pb-3 last:border-0 last:pb-0"
                 >
                   <div className="flex items-center gap-4">
-                    <span className="text-sm text-neutral-300">
+                    <span className="text-sm text-soleur-text-secondary">
                       {formatDate(inv.date)}
                     </span>
-                    <span className="text-sm font-medium text-white">
+                    <span className="text-sm font-medium text-soleur-text-primary">
                       {formatCurrency(inv.amount, inv.currency)}
                     </span>
                     <span className="rounded-full bg-green-900/50 px-2 py-0.5 text-xs text-green-400 border border-green-800">
@@ -306,7 +306,7 @@ export function BillingSection({
                         href={inv.hostedUrl}
                         target="_blank"
                         rel="noopener noreferrer"
-                        className="text-sm text-amber-400 hover:text-amber-300"
+                        className="text-sm text-soleur-accent-gold-fg hover:text-soleur-accent-gold-text"
                       >
                         View
                       </a>
@@ -316,7 +316,7 @@ export function BillingSection({
                         href={inv.pdfUrl}
                         target="_blank"
                         rel="noopener noreferrer"
-                        className="text-sm text-amber-400 hover:text-amber-300"
+                        className="text-sm text-soleur-accent-gold-fg hover:text-soleur-accent-gold-text"
                       >
                         PDF
                       </a>

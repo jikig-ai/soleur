@@ -118,9 +118,9 @@ function LoginForm() {
         <div className="w-full max-w-sm space-y-6">
           <div className="space-y-2 text-center">
             <h1 className="text-2xl font-semibold">Enter verification code</h1>
-            <p className="text-sm text-neutral-400">
+            <p className="text-sm text-soleur-text-secondary">
               We sent a {EMAIL_OTP_LENGTH}-digit code to{" "}
-              <strong className="text-white">{email}</strong>
+              <strong className="text-soleur-text-primary">{email}</strong>
             </p>
           </div>
 
@@ -135,7 +135,7 @@ function LoginForm() {
               value={otp}
               onChange={(e) => setOtp(e.target.value.replace(/\D/g, ""))}
               placeholder="000000"
-              className="w-full rounded-lg border border-neutral-700 bg-neutral-900 px-4 py-3 text-center text-lg tracking-[0.3em] placeholder:text-neutral-500 focus:border-neutral-500 focus:outline-none"
+              className="w-full rounded-lg border border-soleur-border-default bg-soleur-bg-surface-1 px-4 py-3 text-center text-lg tracking-[0.3em] placeholder:text-soleur-text-muted focus:border-soleur-border-emphasized focus:outline-none"
             />
 
             {error && <p role="alert" className="text-sm text-red-400">{error}</p>}
@@ -143,7 +143,7 @@ function LoginForm() {
             <button
               type="submit"
               disabled={loading || otp.length !== EMAIL_OTP_LENGTH}
-              className="w-full rounded-lg bg-white px-4 py-3 text-sm font-medium text-black hover:bg-neutral-200 disabled:opacity-50"
+              className="w-full rounded-lg bg-soleur-accent-gold-fill px-4 py-3 text-sm font-medium text-soleur-text-on-accent hover:opacity-90 disabled:opacity-50"
             >
               {loading ? "Verifying..." : "Sign in"}
             </button>
@@ -155,7 +155,7 @@ function LoginForm() {
               setOtp("");
               setError("");
             }}
-            className="block w-full text-center text-sm text-neutral-500 hover:text-neutral-300"
+            className="block w-full text-center text-sm text-soleur-text-muted hover:text-soleur-text-secondary"
           >
             Try a different email
           </button>
@@ -169,7 +169,7 @@ function LoginForm() {
       <div className="w-full max-w-sm space-y-6">
         <div className="space-y-2 text-center">
           <h1 className="text-2xl font-semibold">Sign in to Soleur</h1>
-          <p className="text-sm text-neutral-400">
+          <p className="text-sm text-soleur-text-secondary">
             Enter your email to receive a sign-in code
           </p>
         </div>
@@ -181,7 +181,7 @@ function LoginForm() {
             value={email}
             onChange={(e) => setEmail(e.target.value)}
             placeholder="you@example.com"
-            className="w-full rounded-lg border border-neutral-700 bg-neutral-900 px-4 py-3 text-sm placeholder:text-neutral-500 focus:border-neutral-500 focus:outline-none"
+            className="w-full rounded-lg border border-soleur-border-default bg-soleur-bg-surface-1 px-4 py-3 text-sm placeholder:text-soleur-text-muted focus:border-soleur-border-emphasized focus:outline-none"
           />
 
           {error && <p role="alert" className="text-sm text-red-400">{error}</p>}
@@ -189,23 +189,23 @@ function LoginForm() {
           <button
             type="submit"
             disabled={loading}
-            className="w-full rounded-lg bg-white px-4 py-3 text-sm font-medium text-black hover:bg-neutral-200 disabled:opacity-50"
+            className="w-full rounded-lg bg-soleur-accent-gold-fill px-4 py-3 text-sm font-medium text-soleur-text-on-accent hover:opacity-90 disabled:opacity-50"
           >
             {loading ? "Sending..." : "Send sign-in code"}
           </button>
         </form>
 
         <div className="relative flex items-center gap-4">
-          <div className="flex-1 border-t border-neutral-700" />
-          <span className="text-xs text-neutral-500">or</span>
-          <div className="flex-1 border-t border-neutral-700" />
+          <div className="flex-1 border-t border-soleur-border-default" />
+          <span className="text-xs text-soleur-text-muted">or</span>
+          <div className="flex-1 border-t border-soleur-border-default" />
         </div>
 
         <OAuthButtons />
 
-        <p className="text-center text-sm text-neutral-500">
+        <p className="text-center text-sm text-soleur-text-muted">
           Don&apos;t have an account?{" "}
-          <Link href="/signup" className="text-white hover:underline">
+          <Link href="/signup" className="text-soleur-text-primary hover:underline">
             Sign up
           </Link>
         </p>

@@ -17,17 +17,17 @@ export function ApiUsageInfoTooltip({
   return (
     <details className="group relative inline-block">
       <summary
-        className="inline-flex cursor-pointer list-none items-center gap-1 whitespace-nowrap rounded text-xs text-zinc-500 hover:text-zinc-700 focus:outline-none focus:ring-1 focus:ring-zinc-400 dark:text-zinc-400 dark:hover:text-zinc-200 [&::-webkit-details-marker]:hidden"
+        className="inline-flex cursor-pointer list-none items-center gap-1 whitespace-nowrap rounded text-xs text-soleur-text-muted hover:text-soleur-text-secondary focus:outline-none focus:ring-1 focus:ring-soleur-border-emphasized [&::-webkit-details-marker]:hidden"
       >
         <span
           aria-hidden="true"
-          className="inline-flex h-4 w-4 items-center justify-center rounded-full border border-zinc-300 text-[10px] font-semibold leading-none dark:border-zinc-600"
+          className="inline-flex h-4 w-4 items-center justify-center rounded-full border border-soleur-border-default text-[10px] font-semibold leading-none"
         >
           ?
         </span>
         <span>{label}</span>
       </summary>
-      <div className="absolute left-0 top-full z-10 mt-1 w-64 rounded-md border border-zinc-200 bg-white p-3 text-xs text-zinc-700 shadow-lg dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-200">
+      <div className="absolute left-0 top-full z-10 mt-1 w-64 rounded-md border border-soleur-border-default bg-soleur-bg-surface-1 p-3 text-xs text-soleur-text-secondary shadow-lg">
         {children}
       </div>
     </details>

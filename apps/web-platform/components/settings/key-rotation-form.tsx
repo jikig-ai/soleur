@@ -56,7 +56,7 @@ export function KeyRotationForm({ hasExistingKey }: KeyRotationFormProps) {
   return (
     <form onSubmit={handleSubmit} className="space-y-4">
       <div>
-        <label htmlFor="api-key-input" className="mb-2 block text-sm text-neutral-300">
+        <label htmlFor="api-key-input" className="mb-2 block text-sm text-soleur-text-secondary">
           Anthropic API Key
         </label>
         <input
@@ -65,7 +65,7 @@ export function KeyRotationForm({ hasExistingKey }: KeyRotationFormProps) {
           value={apiKey}
           onChange={(e) => setApiKey(e.target.value)}
           placeholder="sk-ant-..."
-          className="w-full rounded-lg border border-neutral-700 bg-neutral-900 px-3 py-2 text-sm text-white placeholder:text-neutral-400 focus:border-amber-600 focus:outline-none focus:ring-1 focus:ring-amber-600"
+          className="w-full rounded-lg border border-soleur-border-default bg-soleur-bg-surface-1 px-3 py-2 text-sm text-soleur-text-primary placeholder:text-soleur-text-muted focus:border-soleur-border-emphasized focus:outline-none focus:ring-1 focus:ring-soleur-border-emphasized"
           autoComplete="off"
         />
       </div>
@@ -81,7 +81,7 @@ export function KeyRotationForm({ hasExistingKey }: KeyRotationFormProps) {
       <button
         type="submit"
         disabled={!apiKey.trim() || isSubmitting}
-        className="rounded-lg bg-amber-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-amber-500 disabled:cursor-not-allowed disabled:opacity-50"
+        className="rounded-lg bg-soleur-accent-gold-fill px-4 py-2 text-sm font-medium text-soleur-text-on-accent transition-colors hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
       >
         {isSubmitting
           ? "Validating..."

@@ -66,31 +66,46 @@ vi.mock("@/hooks/use-team-names", () => ({
 }));
 
 import DashboardLayout from "@/app/(dashboard)/layout";
+import { ThemeProvider } from "@/components/theme/theme-provider";
+
+// happy-dom does not provide window.matchMedia by default, but ThemeProvider
+// (mounted via the dashboard sidebar's ThemeToggle) reads it on mount.
+const stubMatchMedia = () => ({
+  matches: false,
+  addEventListener: () => {},
+  removeEventListener: () => {},
+});
+
+function Wrap({ children }: { children: React.ReactNode }) {
+  return <ThemeProvider>{children}</ThemeProvider>;
+}
 
 describe("Dashboard sidebar collapse", () => {
   beforeEach(() => {
     mockPathname = "/dashboard";
     localStorage.clear();
+    vi.stubGlobal("matchMedia", stubMatchMedia);
   });
 
   afterEach(() => {
     localStorage.clear();
+    vi.unstubAllGlobals();
   });
 
   it("renders a collapse toggle button", () => {
-    render(<DashboardLayout><div>content</div></DashboardLayout>);
+    render(<Wrap><DashboardLayout><div>content</div></DashboardLayout></Wrap>);
     expect(screen.getByLabelText("Collapse sidebar")).toBeInTheDocument();
   });
 
   it("toggles aria-label when collapse toggle is clicked", async () => {
-    render(<DashboardLayout><div>content</div></DashboardLayout>);
+    render(<Wrap><DashboardLayout><div>content</div></DashboardLayout></Wrap>);
     const toggle = screen.getByLabelText("Collapse sidebar");
     await userEvent.click(toggle);
     expect(screen.getByLabelText("Expand sidebar")).toBeInTheDocument();
   });
 
   it("adds title attributes to nav links when collapsed", async () => {
-    render(<DashboardLayout><div>content</div></DashboardLayout>);
+    render(<Wrap><DashboardLayout><div>content</div></DashboardLayout></Wrap>);
     const toggle = screen.getByLabelText("Collapse sidebar");
     await userEvent.click(toggle);
     expect(screen.getByTitle("Dashboard")).toBeInTheDocument();
@@ -99,33 +114,33 @@ describe("Dashboard sidebar collapse", () => {
   });
 
   it("does not show title attributes when expanded", () => {
-    render(<DashboardLayout><div>content</div></DashboardLayout>);
+    render(<Wrap><DashboardLayout><div>content</div></DashboardLayout></Wrap>);
     expect(screen.queryByTitle("Dashboard")).not.toBeInTheDocument();
   });
 
   it("persists collapse state to localStorage", async () => {
-    render(<DashboardLayout><div>content</div></DashboardLayout>);
+    render(<Wrap><DashboardLayout><div>content</div></DashboardLayout></Wrap>);
     const toggle = screen.getByLabelText("Collapse sidebar");
     await userEvent.click(toggle);
     expect(localStorage.getItem("soleur:sidebar.main.collapsed")).toBe("1");
   });
 
   it("toggles sidebar on Cmd+B when on /dashboard", () => {
-    render(<DashboardLayout><div>content</div></DashboardLayout>);
+    render(<Wrap><DashboardLayout><div>content</div></DashboardLayout></Wrap>);
     expect(screen.getByLabelText("Collapse sidebar")).toBeInTheDocument();
     fireEvent.keyDown(document, { key: "b", metaKey: true });
     expect(screen.getByLabelText("Expand sidebar")).toBeInTheDocument();
   });
 
   it("toggles sidebar on Ctrl+B when on /dashboard", () => {
-    render(<DashboardLayout><div>content</div></DashboardLayout>);
+    render(<Wrap><DashboardLayout><div>content</div></DashboardLayout></Wrap>);
     fireEvent.keyDown(document, { key: "b", ctrlKey: true });
     expect(screen.getByLabelText("Expand sidebar")).toBeInTheDocument();
   });
 
   it("does NOT toggle sidebar on Cmd+B when on /dashboard/kb route", () => {
     mockPathname = "/dashboard/kb/some-file";
-    render(<DashboardLayout><div>content</div></DashboardLayout>);
+    render(<Wrap><DashboardLayout><div>content</div></DashboardLayout></Wrap>);
     fireEvent.keyDown(document, { key: "b", metaKey: true });
     // Should still be expanded — main sidebar shortcut does not fire on KB routes
     expect(screen.getByLabelText("Collapse sidebar")).toBeInTheDocument();
@@ -133,16 +148,18 @@ describe("Dashboard sidebar collapse", () => {
 
   it("does NOT toggle sidebar on Cmd+B when on /dashboard/settings route", () => {
     mockPathname = "/dashboard/settings/team";
-    render(<DashboardLayout><div>content</div></DashboardLayout>);
+    render(<Wrap><DashboardLayout><div>content</div></DashboardLayout></Wrap>);
     fireEvent.keyDown(document, { key: "b", metaKey: true });
     expect(screen.getByLabelText("Collapse sidebar")).toBeInTheDocument();
   });
 
   it("ignores Cmd+B when focus is in an input element", () => {
     render(
-      <DashboardLayout>
-        <input data-testid="test-input" />
-      </DashboardLayout>,
+      <Wrap>
+        <DashboardLayout>
+          <input data-testid="test-input" />
+        </DashboardLayout>
+      </Wrap>,
     );
     const input = screen.getByTestId("test-input");
     fireEvent.keyDown(input, { key: "b", metaKey: true, bubbles: true });
@@ -151,9 +168,11 @@ describe("Dashboard sidebar collapse", () => {
 
   it("ignores Cmd+B when focus is in a textarea", () => {
     render(
-      <DashboardLayout>
-        <textarea data-testid="test-textarea" />
-      </DashboardLayout>,
+      <Wrap>
+        <DashboardLayout>
+          <textarea data-testid="test-textarea" />
+        </DashboardLayout>
+      </Wrap>,
     );
     const textarea = screen.getByTestId("test-textarea");
     fireEvent.keyDown(textarea, { key: "b", metaKey: true, bubbles: true });
