@@ -161,7 +161,7 @@ This means the inline script grows from ~10 lines to ~25 lines and includes a tr
 
 **File:** `apps/web-platform/components/theme/theme-provider.tsx`
 
-- [ ] 2.1 Add a `disableTransitionsForOneFrame()` helper inside the module:
+- [x] 2.1 Add a `disableTransitionsForOneFrame()` helper inside the module:
 
   ```ts
   function disableTransitionsForOneFrame() {
@@ -189,13 +189,13 @@ This means the inline script grows from ~10 lines to ~25 lines and includes a tr
   }
   ```
 
-- [ ] 2.2 Call `disableTransitionsForOneFrame()` at the top of:
+- [x] 2.2 Call `disableTransitionsForOneFrame()` at the top of:
   - The `useEffect` block that writes `document.documentElement.dataset.theme = theme` (currently lines 76-78).
   - The `setTheme` callback (currently lines 125-140) before `setThemeState(next)`.
   - The cross-tab `onStorage` handler (currently lines 103-122) before `setThemeState(next)`.
   - The `prefers-color-scheme` media-query handler when `theme === "system"` (currently lines 92-99) — when the OS flips, the same flicker applies.
 
-- [ ] 2.3 Verify there is no double-disable nesting (e.g., setTheme triggers the effect which would re-disable). The first call attaches a `<style>`; if a second call lands inside the same frame, it appends a second `<style>` element. Both are removed independently across two rAFs. This is benign but slightly wasteful — a guard `if (document.getElementById("__soleur-no-transition")) return;` with a unique id solves it.
+- [x] 2.3 Verify there is no double-disable nesting (e.g., setTheme triggers the effect which would re-disable). The first call attaches a `<style>`; if a second call lands inside the same frame, it appends a second `<style>` element. Both are removed independently across two rAFs. This is benign but slightly wasteful — a guard `if (document.getElementById("__soleur-no-transition")) return;` with a unique id solves it.
 
 ### Phase 3 — Light-Mode FOUC Fix
 

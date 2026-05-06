@@ -31,6 +31,77 @@ function readStoredTheme(): Theme {
   return "system";
 }
 
+/**
+ * Suppress CSS transitions and keyframe animations for one paint frame.
+ *
+ * Theme switches re-resolve every `var(--soleur-*)` token that surfaces
+ * consume; surfaces with `transition-colors` (theme-toggle squares, active
+ * nav indicator, conversations-rail rows, chat bubbles) animate the change
+ * over Tailwind's default 150ms while the body and non-transitioning
+ * surfaces snap instantly. The user perceives this as different parts of
+ * the page changing theme at different speeds.
+ *
+ * Mirrors `next-themes`' `disableTransitionOnChange` pattern: inject a
+ * transient `<style>` with `transition: none !important;` BEFORE the
+ * `data-theme` attribute flips, force a synchronous style recalc so the
+ * override is committed, then remove the style on the next paint via
+ * double-rAF. Browsers commit the theme change as a single paint with no
+ * transition cascade.
+ *
+ * Also forces `animation-duration: 0s !important;` because `globals.css`
+ * declares a `pulse-border` keyframe used by `.message-bubble-active` —
+ * without this rule, an in-progress pulse would mid-animate during a
+ * theme switch.
+ *
+ * No-op on the server.
+ */
+const NO_TRANSITION_STYLE_ID = "__soleur-no-transition";
+
+function disableTransitionsForOneFrame(): void {
+  if (typeof document === "undefined") return;
+  // Bail if a previous call (e.g., the inline boot script's transient
+  // style, or a fast user toggle within the same frame) already injected
+  // the override. The existing element is on its own rAF cleanup
+  // schedule — we do not extend it here.
+  if (document.getElementById(NO_TRANSITION_STYLE_ID)) return;
+
+  const style = document.createElement("style");
+  style.id = NO_TRANSITION_STYLE_ID;
+  style.textContent =
+    "* { transition: none !important; animation-duration: 0s !important; }";
+  document.head.appendChild(style);
+
+  // Force a synchronous style recalc so the override is committed BEFORE
+  // the data-theme attribute change. Reading getComputedStyle on a
+  // non-pseudo element is the standard reflow-forcing trick; opacity is
+  // cheap to read and defends against dead-code-elimination.
+  if (typeof window !== "undefined" && document.body) {
+    void window.getComputedStyle(document.body).opacity;
+  }
+
+  // Double-rAF cleanup: gives the browser one full frame to commit the
+  // theme change without animation, then removes the override on the
+  // following frame. Resolve via globalThis so test stubs (vi.stubGlobal)
+  // override the lookup; a bare `requestAnimationFrame` reference may bind
+  // to the host's native function past property writes on globalThis.
+  function schedule(cb: FrameRequestCallback): void {
+    const g = globalThis as unknown as {
+      requestAnimationFrame?: (cb: FrameRequestCallback) => number;
+    };
+    if (typeof g.requestAnimationFrame === "function") {
+      g.requestAnimationFrame(cb);
+      return;
+    }
+    setTimeout(() => cb(0), 0);
+  }
+  schedule(() => {
+    schedule(() => {
+      const existing = document.getElementById(NO_TRANSITION_STYLE_ID);
+      if (existing) existing.remove();
+    });
+  });
+}
+
 function getSystemPreference(): ResolvedTheme {
   if (typeof window === "undefined" || typeof window.matchMedia !== "function") {
     return "dark";
@@ -74,6 +145,7 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
   // narrow window where the inline script wrote a stale value before the
   // user changed their preference in another tab).
   useEffect(() => {
+    disableTransitionsForOneFrame();
     document.documentElement.dataset.theme = theme;
   }, [theme]);
 
@@ -92,6 +164,8 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
     const mq = window.matchMedia("(prefers-color-scheme: dark)");
     setResolvedTheme(mq.matches ? "dark" : "light");
     const handler = (e: { matches: boolean }) => {
+      // OS flipped under "system" — same instant-switch invariant.
+      disableTransitionsForOneFrame();
       setResolvedTheme(e.matches ? "dark" : "light");
     };
     mq.addEventListener("change", handler);
@@ -116,6 +190,7 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
         });
       }
       const next = isTheme(event.newValue) ? event.newValue : "system";
+      disableTransitionsForOneFrame();
       setThemeState(next);
     }
     window.addEventListener("storage", onStorage);
@@ -123,6 +198,7 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const setTheme = useCallback((next: Theme) => {
+    disableTransitionsForOneFrame();
     setThemeState(next);
     try {
       localStorage.setItem(STORAGE_KEY, next);

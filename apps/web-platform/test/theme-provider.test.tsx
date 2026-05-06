@@ -58,6 +58,12 @@ describe("ThemeProvider", () => {
   beforeEach(() => {
     localStorage.clear();
     document.documentElement.removeAttribute("data-theme");
+    // Scrub any stale transition-disable style left by an undrained rAF in
+    // the previous test on this happy-dom worker. Tests that do not stub
+    // rAF rely on happy-dom's native rAF, which may not fire before the
+    // test ends — cleanup callbacks (and their <style> elements) leak.
+    const stale = document.head.querySelector("style#__soleur-no-transition");
+    if (stale) stale.remove();
   });
 
   afterEach(() => {
@@ -254,17 +260,16 @@ describe("ThemeProvider", () => {
     consoleSpy.mockRestore();
   });
 
-  it("setTheme injects __soleur-no-transition style and removes it on next frames", async () => {
+  it("setTheme injects __soleur-no-transition style and removes it on next frames", () => {
     const { matchMedia } = makeMatchMedia(true);
     vi.stubGlobal("matchMedia", matchMedia);
 
-    // Polyfill rAF on JSDOM/happy-dom — the transition-disable helper relies
-    // on a double-rAF cleanup. setTimeout(0) is a faithful enough stand-in
-    // for our purposes (we want to assert the cleanup eventually runs, not
-    // verify exact frame timing).
-    const rafs: Array<() => void> = [];
+    // Defer the queued rAF callbacks so the test can observe the style
+    // BEFORE the cleanup runs, then explicitly drain. Two-deep recursion is
+    // expected (double-rAF cleanup); the loop drains both.
+    const rafs: Array<FrameRequestCallback> = [];
     vi.stubGlobal("requestAnimationFrame", (cb: FrameRequestCallback) => {
-      rafs.push(() => cb(0));
+      rafs.push(cb);
       return rafs.length;
     });
 
@@ -274,23 +279,30 @@ describe("ThemeProvider", () => {
       </ThemeProvider>,
     );
 
+    // Initial mount queued one rAF. Drain only the cleanup pair from the
+    // mount BEFORE the click so the click's helper invocation can re-inject
+    // (won't bail) and we observe a fresh style element.
+    while (rafs.length) {
+      const next = rafs.shift()!;
+      next(0);
+    }
+    expect(document.head.querySelector("style#__soleur-no-transition")).toBeNull();
+
     act(() => {
       screen.getByText("set-light").click();
     });
 
-    // The helper should have appended a style element with the agreed id.
+    // setTheme injected the style synchronously.
     const styleEl = document.head.querySelector("style#__soleur-no-transition");
     expect(styleEl).not.toBeNull();
     expect(styleEl!.textContent).toMatch(/transition\s*:\s*none/);
 
-    // Drain the queued rAF callbacks (double-rAF cleanup); the style should
-    // be removed after both fire.
-    act(() => {
-      while (rafs.length) {
-        const next = rafs.shift()!;
-        next();
-      }
-    });
+    // Drain queued rAFs; each invocation may schedule another (double-rAF
+    // cleanup). After the queue empties, the override style is removed.
+    while (rafs.length) {
+      const next = rafs.shift()!;
+      next(0);
+    }
 
     expect(document.head.querySelector("style#__soleur-no-transition")).toBeNull();
   });
