@@ -476,6 +476,27 @@ describe("idle timeout", () => {
     expect(entry.reason).toBe("Session expired due to inactivity");
     expect(entry.target).toBeUndefined();
   });
+
+  test("NON_TRANSIENT_CLOSE_CODES CONCURRENCY_CAP reason starts with 'You've reached' and names the dashboard archive remediation", async () => {
+    // Regression anchor for the May-6 copy fix:
+    // - removes the misleading "*completed* conversation" qualifier (active rows
+    //   can be archived too; see migration 036 trigger),
+    // - names the dashboard remediation surface explicitly,
+    // - sets expectation that the server will auto-reclaim a stuck row within
+    //   the reaper window (~3 min = 60 s tick + 120 s threshold).
+    const { NON_TRANSIENT_CLOSE_CODES } = await import("../lib/ws-client");
+    const entry = NON_TRANSIENT_CLOSE_CODES[WS_CLOSE_CODES.CONCURRENCY_CAP];
+    expect(entry).toBeDefined();
+    expect(entry.reason.startsWith("You've reached")).toBe(true);
+    expect(entry.reason.toLowerCase()).toContain("dashboard");
+    expect(entry.reason.toLowerCase()).toContain("3 minutes");
+    // The misleading verbatim phrase ("Archive a completed conversation
+    // to free a slot") implied the user MUST archive a completed row —
+    // false, since active rows release the slot too via migration 036.
+    // The new copy may still mention "active or completed conversation",
+    // which is fine; only the no-qualifier instruction is forbidden.
+    expect(entry.reason).not.toContain("Archive a completed conversation to free a slot");
+  });
 });
 
 describe("Stage 3 protocol — new variant round-trip via parseWSMessage (#2885)", () => {
