@@ -83,20 +83,20 @@ function ProviderCard({
           ? error
             ? "border-red-900/50"
             : "border-amber-600/50"
-          : "border-neutral-800"
+          : "border-soleur-border-default"
       }`}
     >
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
           <div
             className={`h-2 w-2 rounded-full ${
-              connected ? "bg-green-400" : "bg-neutral-600"
+              connected ? "bg-green-400" : "bg-soleur-bg-surface-2"
             }`}
           />
           <div>
-            <span className="text-sm font-medium text-white">{config.label}</span>
+            <span className="text-sm font-medium text-soleur-text-primary">{config.label}</span>
             {connected && validatedAt && (
-              <span className="ml-2 text-xs text-neutral-500">
+              <span className="ml-2 text-xs text-soleur-text-muted">
                 Connected {formatDate(validatedAt)}
               </span>
             )}
@@ -107,7 +107,7 @@ function ProviderCard({
             <>
               <button
                 onClick={() => setExpanded(!expanded)}
-                className="rounded-lg border border-neutral-700 px-3 py-1.5 text-xs font-medium text-neutral-300 transition-colors hover:border-neutral-600 hover:text-white"
+                className="rounded-lg border border-soleur-border-default px-3 py-1.5 text-xs font-medium text-soleur-text-secondary transition-colors hover:border-soleur-border-default hover:text-soleur-text-primary"
               >
                 Rotate
               </button>
@@ -122,7 +122,7 @@ function ProviderCard({
           ) : (
             <button
               onClick={() => setExpanded(!expanded)}
-              className="rounded-lg bg-amber-600 px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-amber-500"
+              className="rounded-lg bg-soleur-accent-gold-fill px-3 py-1.5 text-xs font-medium text-soleur-text-on-accent transition-colors hover:opacity-90"
             >
               {expanded ? "Cancel" : "Connect"}
             </button>
@@ -135,7 +135,7 @@ function ProviderCard({
           <div>
             <label
               htmlFor={`token-${provider}`}
-              className="mb-1 block text-xs font-medium text-neutral-400"
+              className="mb-1 block text-xs font-medium text-soleur-text-secondary"
             >
               API Token
             </label>
@@ -148,10 +148,10 @@ function ProviderCard({
                 if (e.key === "Enter") handleSubmit();
               }}
               placeholder={`Paste your ${config.label} API token`}
-              className={`w-full rounded-lg border bg-neutral-900 px-3 py-2 text-sm text-white placeholder:text-neutral-600 focus:ring-1 ${
+              className={`w-full rounded-lg border bg-soleur-bg-surface-1 px-3 py-2 text-sm text-soleur-text-primary placeholder:text-soleur-text-muted focus:ring-1 ${
                 error
                   ? "border-red-800 focus:border-red-600 focus:ring-red-600"
-                  : "border-neutral-700 focus:border-amber-600 focus:ring-amber-600"
+                  : "border-soleur-border-default focus:border-soleur-border-emphasized focus:ring-soleur-border-emphasized"
               }`}
             />
           </div>
@@ -161,13 +161,13 @@ function ProviderCard({
             </p>
           )}
           <div className="flex items-center justify-between">
-            <p className="text-xs text-neutral-500">
+            <p className="text-xs text-soleur-text-muted">
               Token will be encrypted at rest and validated before saving.
             </p>
             <button
               onClick={handleSubmit}
               disabled={loading || !token.trim()}
-              className="rounded-lg bg-amber-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-amber-500 disabled:opacity-50"
+              className="rounded-lg bg-soleur-accent-gold-fill px-4 py-2 text-sm font-medium text-soleur-text-on-accent transition-colors hover:opacity-90 disabled:opacity-50"
             >
               {loading ? "Validating..." : "Save"}
             </button>
@@ -230,8 +230,8 @@ export function ConnectedServicesContent({ initialServices }: Props) {
   return (
     <div className="space-y-10">
       <div>
-        <h1 className="text-2xl font-bold text-white">Connected Services</h1>
-        <p className="mt-1 text-sm text-neutral-400">
+        <h1 className="text-2xl font-bold text-soleur-text-primary">Connected Services</h1>
+        <p className="mt-1 text-sm text-soleur-text-secondary">
           Manage API tokens for third-party services. Tokens are encrypted with
           AES-256-GCM and automatically available to your agent sessions.
         </p>
@@ -244,9 +244,9 @@ export function ConnectedServicesContent({ initialServices }: Props) {
         return (
           <section
             key={category}
-            className="rounded-xl border border-neutral-800 bg-neutral-900/50 p-6"
+            className="rounded-xl border border-soleur-border-default bg-soleur-bg-surface-1/50 p-6"
           >
-            <h2 className="mb-4 text-lg font-semibold text-white">
+            <h2 className="mb-4 text-lg font-semibold text-soleur-text-primary">
               {CATEGORY_LABELS[category]}
             </h2>
             <div className="space-y-3">
