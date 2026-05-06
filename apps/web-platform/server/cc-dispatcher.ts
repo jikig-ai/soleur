@@ -69,6 +69,7 @@ import {
   resolveConciergeDocumentContext,
   _resetWorkspacePathCacheForTests,
 } from "./kb-document-resolver";
+import type { PdfExtractErrorClass } from "./pdf-text-extract";
 
 // Re-export so existing call sites keep working.
 export { resolveConciergeDocumentContext } from "./kb-document-resolver";
@@ -746,6 +747,13 @@ export interface DispatchSoleurGoArgs {
   documentKind?: "pdf" | "text";
   documentContent?: string;
   /**
+   * 2026-05-06 follow-up to #3338. Set by `resolveConciergeDocumentContext`
+   * when the in-process PDF extractor surfaced a typed failure class. The
+   * runner emits `buildPdfUnreadableDirective` (content-grounded reply)
+   * instead of `buildPdfGatedDirective` (apt-get-cascade-prone Read path).
+   */
+  documentExtractError?: PdfExtractErrorClass;
+  /**
    * Attachment refs uploaded via the chat-input paperclip flow. When
    * non-empty, `dispatchSoleurGo` (a) inserts a `messages` row to
    * satisfy the `message_attachments.message_id` FK, (b) calls the
@@ -779,6 +787,7 @@ export async function dispatchSoleurGo(
     artifactPath,
     documentKind,
     documentContent,
+    documentExtractError,
     attachments,
   } = args;
 
@@ -1019,6 +1028,7 @@ export async function dispatchSoleurGo(
       artifactPath,
       documentKind,
       documentContent,
+      documentExtractError,
     });
   } catch (err) {
     const errorClass =

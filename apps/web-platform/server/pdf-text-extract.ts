@@ -16,20 +16,25 @@
 // (`readPdfMetadata`) prove this works at cold-start. Encrypted PDFs reject
 // cleanly because no `onPassword` callback is registered.
 //
-// Cap shape:
-//   - Input buffer cap = 15 MB (mirrors `PREVIEW_MAX_BYTES`). Larger PDFs
-//     return null; the caller falls through to the Read directive (with the
-//     existing 32 MB Anthropic API ceiling — separate scope-out at #3332).
+// Cap shape (2026-05-06 follow-up to #3337/#3338):
+//   - Input buffer cap is the SHARED constant `MAX_AGENT_READABLE_PDF_SIZE`
+//     from `@/lib/attachment-constants` (24 MB). Aligning the extractor with
+//     the upload validator closes Hypothesis A from
+//     `2026-05-06-fix-extract-pdf-text-null-in-production-plan.md`: a PDF in
+//     the [15 MB, 24 MB] band would pass upload but trip an unaligned 15 MB
+//     extractor cap, returning null → the apt-get cascade.
 //   - Output text cap = `capChars` (caller-provided). Page iteration halts
 //     once the running length exceeds the cap; the last page is sliced at a
 //     code-unit boundary. Reports `truncated: true` when the cap fired.
 //
-// Errors are silent-fallbacks: corrupted, encrypted, or unparseable PDFs
-// return null. The CALLER is responsible for mirroring to Sentry via
-// `reportSilentFallback` (per `cq-silent-fallback-must-mirror-to-sentry`)
-// because feature/op tags are call-site specific.
+// Failure shape: the extractor returns a discriminated union — either a
+// successful `PdfTextExtractResult` OR `{ error: <PdfExtractErrorClass> }`.
+// The CALLER mirrors the failure to Sentry (per
+// `cq-silent-fallback-must-mirror-to-sentry`) and uses `errorClass` to drive
+// the user-facing fallback prompt (`buildPdfUnreadableDirective` —
+// soleur-go-runner.ts) instead of the apt-get-prone gated Read directive.
 
-const INPUT_BUFFER_CAP_BYTES = 15 * 1024 * 1024;
+import { MAX_AGENT_READABLE_PDF_SIZE } from "@/lib/attachment-constants";
 
 /**
  * Hard cap on page iteration count. PDFs declare /Pages /Count independently
@@ -41,23 +46,47 @@ const INPUT_BUFFER_CAP_BYTES = 15 * 1024 * 1024;
  */
 const MAX_PAGES = 500;
 
+/**
+ * Distinguishable failure shapes surfaced to the caller. The caller mirrors
+ * to Sentry with `extra.errorClass = <one of these>` so operators can read
+ * the failure class directly off the event without parsing breadcrumbs, and
+ * the runner picks an appropriate user-facing message in
+ * `buildPdfUnreadableDirective`.
+ */
+export type PdfExtractErrorClass =
+  | "oversized_buffer"
+  | "lazy_import_failed"
+  | "encrypted"
+  | "corrupted"
+  | "parse_error"
+  | "empty_text";
+
 export interface PdfTextExtractResult {
   text: string;
   truncated: boolean;
   pageCount: number;
 }
 
+export interface PdfTextExtractError {
+  error: PdfExtractErrorClass;
+  /** Optional hint — populated for `empty_text` so operators see how many
+   *  pages the parser saw before producing zero text (scanned PDF signal). */
+  pageCount?: number;
+}
+
 /**
  * Extract text from a PDF buffer using the in-process `pdfjs-dist` parser.
- * Returns `null` on parse failure (corrupted, encrypted, oversized input);
- * the caller decides whether to mirror to Sentry.
+ * On parse failure (corrupted, encrypted, oversized input, lazy-import
+ * failure), returns `{ error: <class> }` instead of null — the caller drives
+ * a content-grounded fallback prompt off the class so the model never falls
+ * back to the apt-get / find Bash cascade.
  */
 export async function extractPdfText(
   buffer: Buffer | Uint8Array,
   capChars: number,
-): Promise<PdfTextExtractResult | null> {
-  if (buffer.length > INPUT_BUFFER_CAP_BYTES) {
-    return null;
+): Promise<PdfTextExtractResult | PdfTextExtractError> {
+  if (buffer.length > MAX_AGENT_READABLE_PDF_SIZE) {
+    return { error: "oversized_buffer" };
   }
 
   // Lazy import — paid once per process (shared with `readPdfMetadata`).
@@ -65,7 +94,7 @@ export async function extractPdfText(
   try {
     pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
   } catch {
-    return null;
+    return { error: "lazy_import_failed" };
   }
 
   // pdfjs-dist@5.4.296 explicitly REJECTS Buffer ("Please provide binary data
@@ -89,9 +118,9 @@ export async function extractPdfText(
       data,
       isEvalSupported: false,
       // No `onPassword` callback — encrypted PDFs reject with PasswordException
-      // and we return null. The Read-directive fallback path also can't read
-      // encrypted PDFs (the SDK Read tool's Files API path fails on them too),
-      // so users get a content-grounded error message either way.
+      // and we surface the class. The runner translates "encrypted" into a
+      // content-grounded fallback prompt; the agent does NOT attempt to Read
+      // the file (which would also fail for the same reason).
     }).promise;
 
     const pageCount = doc.numPages;
@@ -134,9 +163,30 @@ export async function extractPdfText(
     if (pageCount > effectivePageLimit) {
       truncated = true;
     }
+
+    // Hypothesis B fold-in: a parsed-but-text-empty PDF (scanned image-only
+    // document) is its own failure class. Returning success with
+    // `text: ""` would let the resolver mirror nothing to Sentry and fall
+    // through to a directive the agent can't satisfy. Promote to a typed
+    // error so the caller picks the scanned-PDF user-facing message.
+    if (text.length === 0) {
+      return { error: "empty_text", pageCount };
+    }
+
     return { text, truncated, pageCount };
-  } catch {
-    return null;
+  } catch (err) {
+    // pdfjs's PasswordException / InvalidPDFException are NOT both re-exported
+    // from the legacy entry (`pdfjs-dist/legacy/build/pdf.mjs`). InvalidPDFException
+    // is in the export block; PasswordException is not. Both inherit from
+    // BaseException which sets `this.name = "PasswordException"` /
+    // `"InvalidPDFException"` in the constructor — so name-based dispatch is
+    // the most portable check. instanceof `pdfjs.InvalidPDFException` would
+    // also work for one of them; using `.name` for both keeps the branch
+    // symmetric and survives any future re-export reshuffle.
+    const name = (err as { name?: unknown } | null)?.name;
+    if (name === "PasswordException") return { error: "encrypted" };
+    if (name === "InvalidPDFException") return { error: "corrupted" };
+    return { error: "parse_error" };
   } finally {
     if (doc) {
       await doc.destroy().catch(() => {});
