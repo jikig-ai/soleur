@@ -105,7 +105,7 @@ export function OAuthButtons({ disabled = false }: { disabled?: boolean }) {
           type="button"
           onClick={() => handleOAuth(provider)}
           disabled={loading !== null || disabled}
-          className="flex w-full items-center justify-center gap-3 rounded-lg border border-neutral-700 bg-neutral-900 px-4 py-3 text-sm font-medium text-white hover:bg-neutral-800 disabled:opacity-50"
+          className="flex w-full items-center justify-center gap-3 rounded-lg border border-soleur-border-default bg-soleur-bg-surface-1 px-4 py-3 text-sm font-medium text-soleur-text-primary hover:bg-soleur-bg-surface-2 disabled:opacity-50"
         >
           {provider.icon}
           Continue with {provider.label}
