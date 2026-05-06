@@ -60,7 +60,8 @@ if [[ -f "$SITE_DIR/sitemap.xml" ]]; then
   fi
 
   # Canonical-host gate (#3297): every <loc> must use a single canonical host,
-  # and that host must match the one declared in robots.txt's `Sitemap:` line.
+  # and that host must match the one declared in robots.txt's `Sitemap:` line
+  # (only if robots.txt actually has a Sitemap line — fixtures may omit it).
   # This catches the GSC `Page with redirect` cluster cause: sitemap on apex
   # while live infra 301s apex→www. See the GSC indexing-fixes brainstorm.
   SITEMAP_HOSTS=$(grep -oP '(?<=<loc>)[^<]+' "$SITE_DIR/sitemap.xml" \
@@ -70,7 +71,7 @@ if [[ -f "$SITE_DIR/sitemap.xml" ]]; then
     fail "sitemap.xml mixes multiple hosts: $(echo "$SITEMAP_HOSTS" | tr '\n' ' ')"
   else
     pass "sitemap.xml uses a single canonical host: $SITEMAP_HOSTS"
-    if [[ -f "$SITE_DIR/robots.txt" ]]; then
+    if [[ -f "$SITE_DIR/robots.txt" ]] && grep -qiE '^Sitemap:' "$SITE_DIR/robots.txt"; then
       ROBOTS_HOST=$(grep -iE '^Sitemap:' "$SITE_DIR/robots.txt" \
         | sed -E 's|^[Ss]itemap:[[:space:]]*(https?://[^/]+).*|\1|' | head -1)
       if [[ "$SITEMAP_HOSTS" != "$ROBOTS_HOST" ]]; then
