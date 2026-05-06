@@ -4,9 +4,61 @@ type: docs
 classification: ops-only-prod-write
 requires_cpo_signoff: false
 brand_survival_threshold: aggregate pattern
+deepened: 2026-05-06
 ---
 
 # fix: Document X-Robots-Tag api.soleur.ai no-op (DNS-only CNAME bypasses CF edge)
+
+## Enhancement Summary
+
+**Deepened on:** 2026-05-06
+**Sections enhanced:** Overview, Research Reconciliation, Implementation
+Phases (1, 3), Test Strategy, Risks
+**Research sources:** Cloudflare Rules docs, Cloudflare DNS proxy-status docs,
+Supabase Custom Domains docs, Terraform Cloudflare provider lock file,
+sibling-comment style in `apps/web-platform/infra/seo-rulesets.tf` itself
+
+### Key Improvements
+
+1. **Cloudflare semantics confirmed via vendor docs.** "Rules features
+   require that your domain (or subdomain) has its DNS records proxied
+   through Cloudflare" — confirmed at
+   <https://developers.cloudflare.com/rules/> and
+   <https://developers.cloudflare.com/dns/proxy-status/limitations/>.
+   Citation pinned in the inline comment block (Phase 1 step 2).
+2. **Supabase Custom Domains has no header-injection feature** as of
+   2026-05-06 — confirmed by Supabase Custom Domains docs
+   (<https://supabase.com/docs/guides/platform/custom-domains>) and
+   2026 changelog. The tracking-issue re-evaluation criterion (1) is
+   correctly framed as "if Supabase ADDS this feature."
+3. **Terraform provider version pinned to `cloudflare/cloudflare ~> 4.0`**
+   (locked at `4.52.7`). v5 of the provider has different ruleset
+   schema — the plan must execute against v4 only. Added to Phase 3.
+4. **HCL comment style precedent established in-file.** Lines 1-30 of
+   `seo-rulesets.tf` already use `#` line-comments (not `/* */`
+   blocks). Phase 1 step 4 prescribes matching this convention to
+   minimize fmt drift.
+
+### New Considerations Discovered
+
+- The 2026-04-28 Cloudflare changelog introduced an account-level
+  "enforce DNS-only" setting
+  (<https://developers.cloudflare.com/changelog/post/2026-04-28-enforce-dns-only/>).
+  If this is ever enabled at account level, ALL of soleur.ai's
+  Transform Rules become no-ops — not just `api.soleur.ai`. Worth a
+  forward-looking note in the comment, but out of scope for this plan
+  (the rule on `api.soleur.ai` is already a no-op for a different
+  reason; this would be an aggregate-account-config change tracked
+  separately).
+- Supabase Storage objects DO accept a per-object `x-robots-tag`
+  header, but the REST root (`api.soleur.ai/rest/v1/...`,
+  `api.soleur.ai/auth/v1/...`) is not a Storage path — that
+  Storage feature does not address the indexing concern at issue
+  here.
+- The cloudflare `cloudflare_ruleset` resource normalizes some
+  whitespace and may surface or hide HCL-only comment changes
+  unpredictably. The post-apply verification in AC handles both
+  outcomes (zero-diff OR comment-only drift).
 
 ## Overview
 
@@ -130,6 +182,48 @@ not fire, instead of misdiagnosing it as a Terraform regression.
 
 ### Phase 1 — Extend the inline comment in `seo-rulesets.tf`
 
+#### Research Insights — Phase 1
+
+**Cloudflare semantics (vendor-confirmed):**
+
+- "Rules features require that your domain (or subdomain) has its
+  DNS records proxied through Cloudflare, meaning traffic passes
+  through the Cloudflare network before reaching your origin server."
+  — <https://developers.cloudflare.com/rules/> (verified 2026-05-06)
+- "When an A, AAAA, or CNAME record is DNS-only — shown as a gray
+  cloud icon in the dashboard — DNS queries for these will resolve
+  to the record's actual origin IP address. DNS-only is only
+  recommended for records that do not serve web traffic, such as
+  records used for email routing or third-party domain
+  verification." — <https://developers.cloudflare.com/dns/proxy-status/>
+  (verified 2026-05-06)
+- The comment block MUST cite at least the first URL to give a future
+  operator the load-bearing primary source — the curl evidence is
+  empirical, but the doc citation is what makes the no-op
+  diagnosis reproducible from documentation alone.
+
+**Supabase Custom Domains (vendor-confirmed):**
+
+- Supabase Custom Domains route the project's REST/Auth/Realtime root
+  through a custom hostname via a CNAME to
+  `<project-ref>.supabase.co`. The Supabase docs do not currently
+  expose a response-header-injection feature on the Custom Domain
+  surface. — <https://supabase.com/docs/guides/platform/custom-domains>
+  (verified 2026-05-06)
+- Supabase Storage DOES support per-object `x-robots-tag` (validated
+  on upload, returned on retrieval), but the API endpoints under
+  `api.soleur.ai/rest/v1/`, `/auth/v1/`, `/realtime/v1/` are not
+  Storage paths — this feature is irrelevant to the indexing concern
+  at hand.
+
+**HCL comment-style precedent (in-file, verified):**
+
+- `apps/web-platform/infra/seo-rulesets.tf` lines 1-30 already
+  use `#` line-comment style (no `/* */` blocks). Match this
+  convention to minimize `terraform fmt` drift on adjacent lines.
+
+#### Implementation steps
+
 1. Read the existing rule block in `apps/web-platform/infra/seo-rulesets.tf`
    (the `api.soleur.ai` rule currently at lines ~257-275 inside
    `cloudflare_ruleset.seo_response_headers`).
@@ -143,7 +237,10 @@ not fire, instead of misdiagnosing it as a Terraform regression.
      Cloudflare Transform Rules declared on the `soleur.ai` zone only
      fire on traffic that transits soleur.ai's CF edge (proxied /
      orange-cloud records). DNS-only CNAMEs bypass the edge entirely,
-     so this Transform Rule never sees the request."
+     so this Transform Rule never sees the request. Per Cloudflare:
+     'Rules features require that your domain (or subdomain) has its
+     DNS records proxied through Cloudflare'
+     (<https://developers.cloudflare.com/rules/>)."
 
    - **Evidence:** "`curl -sI -X GET https://api.soleur.ai/` returns
      HTTP 404 with no `x-robots-tag` header (2026-05-06). Compare
@@ -206,11 +303,30 @@ not fire, instead of misdiagnosing it as a Terraform regression.
 
 ### Phase 3 — Verify and commit
 
+#### Research Insights — Phase 3
+
+**Provider version (verified):**
+
+- `apps/web-platform/infra/.terraform.lock.hcl` pins
+  `cloudflare/cloudflare ~> 4.0` (locked at `4.52.7` as of
+  2026-05-06). The Cloudflare provider v5 introduced a different
+  `cloudflare_ruleset` schema; running `terraform plan` against v5
+  on this file would produce schema-drift errors unrelated to the
+  comment edit. **Do not upgrade the provider as part of this PR.**
+- Terraform binary version observed in the work environment:
+  v1.10.5 (`terraform version` 2026-05-06). HCL parser is stable
+  across 1.x — no version-specific concerns for `#` line-comments.
+
+#### Implementation steps
+
 1. Run `terraform fmt apps/web-platform/infra/` once more — comment
-   addition must not break formatting.
+   addition must not break formatting. `terraform fmt` does NOT
+   reflow `#` line-comments; it only normalizes alignment of
+   surrounding HCL tokens. Verify the diff is comment-only.
 
 2. Run `terraform validate` from `apps/web-platform/infra/` — confirm
-   the file still parses.
+   the file still parses against the pinned `cloudflare/cloudflare
+   ~> 4.0` provider.
 
 3. Commit: `docs(infra): document api.soleur.ai X-Robots-Tag no-op
    (DNS-only CNAME bypasses CF edge) (#3375)`.
@@ -267,6 +383,37 @@ tests, no test framework dependencies.
   produce false negatives. **Mitigation:** the comment links to the
   issue by number, not by title. Title can drift; number is stable.
 
+- **Cloudflare provider major-version upgrade.** Provider is pinned
+  to `cloudflare/cloudflare ~> 4.0` (locked at `4.52.7`). v5
+  introduced ruleset schema changes (notably for the
+  `http_response_headers_transform` phase). If a sibling PR upgrades
+  to v5 between this plan's write and apply, the schema-drift error
+  surfaces during `terraform plan` on this file BEFORE this PR's
+  comment edit can be applied. **Mitigation:** check
+  `.terraform.lock.hcl` at apply time; if the provider has been
+  upgraded, abort and rebase first.
+
+- **Account-level "enforce DNS-only" setting (2026-04-28
+  changelog).** Cloudflare introduced an account-level option to
+  force every record to DNS-only
+  (<https://developers.cloudflare.com/changelog/post/2026-04-28-enforce-dns-only/>).
+  If this is ever enabled on the soleur.ai account, ALL Transform
+  Rules become no-ops — including the `deploy.soleur.ai` rule and
+  the `www.soleur.ai/blog/feed.xml` rule on the same ruleset.
+  **Mitigation:** out of scope for this PR. The comment block names
+  the api.soleur.ai-specific cause (DNS-only on this one record);
+  the account-level concern is a separate failure mode that would
+  break siblings simultaneously and is observable via the same
+  curl-verification pattern. Tracking issue (Phase 2) can be
+  extended later if the account-level setting is ever toggled.
+
+- **`cloudflare_ruleset` comment-only diff is non-deterministic.**
+  Cloudflare's API does not consistently surface HCL comment-only
+  changes — provider may show zero diff (API normalized away the
+  delta) or may show a comment-line drift on the resource. Both are
+  acceptable per AC. Operator only runs `terraform apply` if drift
+  surfaces.
+
 ## Sharp Edges
 
 - Comment-only changes to Terraform-managed Cloudflare resources
@@ -308,10 +455,14 @@ tests, no test framework dependencies.
 
 ## References
 
+**Internal:**
+
 - Issue #3375 (this issue)
 - PR #3296 (the SEO/GSC fixes that introduced the no-op rule)
 - `apps/web-platform/infra/seo-rulesets.tf` lines ~230-275 (the
   ruleset and rule definition being commented)
+- `apps/web-platform/infra/.terraform.lock.hcl` line 4 (Cloudflare
+  provider pin: `cloudflare/cloudflare ~> 4.0` at `4.52.7`)
 - `knowledge-base/project/learnings/2026-05-05-gsc-indexing-triage-patterns.md`
 - `knowledge-base/project/learnings/2026-05-06-user-impact-section-by-role-not-surface.md`
   (this learning is exactly why role-by-role enumeration appears in
@@ -320,3 +471,22 @@ tests, no test framework dependencies.
   for Cloudflare changes)
 - AGENTS.md `hr-weigh-every-decision-against-target-user-impact`
   (User-Brand Impact section requirement)
+
+**External (verified 2026-05-06):**
+
+- <https://developers.cloudflare.com/rules/> — primary source for
+  "Rules features require that your domain (or subdomain) has its
+  DNS records proxied through Cloudflare." (cited in the inline
+  comment block)
+- <https://developers.cloudflare.com/dns/proxy-status/> — Cloudflare
+  DNS proxy-status documentation (orange-cloud vs grey-cloud
+  semantics)
+- <https://developers.cloudflare.com/dns/proxy-status/limitations/>
+  — proxying limitations (sibling reference for grey-cloud bypass
+  behavior)
+- <https://developers.cloudflare.com/changelog/post/2026-04-28-enforce-dns-only/>
+  — account-level "enforce DNS-only" changelog (Risks section
+  forward-looking note)
+- <https://supabase.com/docs/guides/platform/custom-domains> —
+  Supabase Custom Domains feature; basis for the tracking-issue
+  re-evaluation criterion (1)
