@@ -80,19 +80,33 @@ import { tryLedgerDivergenceRecovery } from "../server/ws-handler";
 // Helpers
 // ---------------------------------------------------------------------------
 
+/**
+ * Captures runtime values the mock observes so tests can assert on the
+ * production code's filter arguments (e.g. the stale-heartbeat cutoff
+ * timestamp). Without this, the mock would silently accept any cutoff
+ * value and a constant-value regression (e.g. `120` instead of
+ * `120_000`) would not fail the test.
+ */
+interface MockCapture {
+  /** Last `last_heartbeat_at` cutoff passed to `.lt(...)` on the
+   *  `user_concurrency_slots` chain. */
+  staleCutoff?: string;
+}
+
 function setupSupabaseMock(args: {
   visibleConversations: Array<{ id: string }>;
   slotRows: Array<{ conversation_id: string }>;
   /**
-   * Slots whose `last_heartbeat_at < now() - STALE_HEARTBEAT_THRESHOLD_MS`.
+   * Slots whose `last_heartbeat_at < now() - STALE_HEARTBEAT_THRESHOLD_SECONDS`.
    * A separate SELECT on `user_concurrency_slots` with an `.lt(...)` clause
    * must resolve to these rows. The first SELECT (orphan path, no `.lt()`)
    * resolves to `slotRows`. Defaults to `[]` so existing tests are
    * unchanged.
    */
   staleSlotRows?: Array<{ conversation_id: string }>;
-}) {
+}): MockCapture {
   const staleRows = args.staleSlotRows ?? [];
+  const capture: MockCapture = {};
   mockServiceFrom.mockImplementation((table: string) => {
     if (table === "conversations") {
       // .select("id").eq("user_id", uid).is("archived_at", null).in("status", [...])
@@ -109,16 +123,18 @@ function setupSupabaseMock(args: {
     }
     if (table === "user_concurrency_slots") {
       // Per-from() chain: `.lt()` flips the chain into stale-heartbeat
-      // mode so the second SELECT in `tryLedgerDivergenceRecovery`
-      // (filtered by `last_heartbeat_at < staleCutoff`) resolves to
-      // `staleRows`. The first SELECT (orphan path) does not call
-      // `.lt()` and resolves to `args.slotRows`.
+      // mode AND captures the cutoff value so tests can assert the
+      // production-side constant. Production calls `.from()` twice
+      // (once without `.lt()` for the orphan path, once with `.lt()`
+      // for the stale path) — each gets a fresh chain, so the
+      // `isStaleQuery` flag does not leak across queries.
       let isStaleQuery = false;
       const chain: Record<string, unknown> = {
         error: null,
         eq: vi.fn(() => chain),
-        lt: vi.fn(() => {
+        lt: vi.fn((_col: string, val: string) => {
           isStaleQuery = true;
+          capture.staleCutoff = val;
           return chain;
         }),
         then: (resolve: (v: unknown) => void) =>
@@ -138,6 +154,7 @@ function setupSupabaseMock(args: {
       })),
     };
   });
+  return capture;
 }
 
 // ---------------------------------------------------------------------------
@@ -264,7 +281,8 @@ describe("tryLedgerDivergenceRecovery — stale-heartbeat reap (May-6)", () => {
     // conversation IS visible (status='active', archived_at NULL), so the
     // orphan check returns []. The widened helper must additionally
     // detect that the slot's heartbeat is stale (>120s) and reap it.
-    setupSupabaseMock({
+    const before = Date.now();
+    const capture = setupSupabaseMock({
       visibleConversations: [{ id: "conv-stuck-active" }],
       slotRows: [{ conversation_id: "conv-stuck-active" }],
       staleSlotRows: [{ conversation_id: "conv-stuck-active" }],
@@ -275,6 +293,14 @@ describe("tryLedgerDivergenceRecovery — stale-heartbeat reap (May-6)", () => {
     expect(result.didRecover).toBe(true);
     expect(mockReleaseSlot).toHaveBeenCalledTimes(1);
     expect(mockReleaseSlot).toHaveBeenCalledWith("user-1", "conv-stuck-active");
+
+    // Anchor the production-side STALE_HEARTBEAT_THRESHOLD_SECONDS constant.
+    // A regression that ships `120` (treated as ms) or `1_200_000` (typo)
+    // would miss this; this assertion catches it.
+    expect(capture.staleCutoff).toBeDefined();
+    const cutoffMs = new Date(capture.staleCutoff!).getTime();
+    const expected = before - 120_000;
+    expect(Math.abs(cutoffMs - expected)).toBeLessThan(5_000);
 
     expect(mockReportSilentFallback).toHaveBeenCalled();
     const [, opts] = mockReportSilentFallback.mock.calls[0];
@@ -288,6 +314,7 @@ describe("tryLedgerDivergenceRecovery — stale-heartbeat reap (May-6)", () => {
       slotCount: 1,
       orphanCount: 0,
       staleHeartbeatCount: 1,
+      recoveryCause: "stale-heartbeat",
     });
   });
 
@@ -332,6 +359,7 @@ describe("tryLedgerDivergenceRecovery — stale-heartbeat reap (May-6)", () => {
       slotCount: 2,
       orphanCount: 1,
       staleHeartbeatCount: 1,
+      recoveryCause: "orphan-and-stale",
     });
   });
 

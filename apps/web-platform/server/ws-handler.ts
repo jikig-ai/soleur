@@ -287,12 +287,14 @@ export async function tryLedgerDivergenceRecovery(
 
     // Stale-heartbeat detector (May-6 #3354). The orphan check above only
     // catches slots whose conversation is NOT in the visible-active set;
-    // it misses the case where a `status='active'` conversation row IS
-    // visible but no live WS is heartbeating its slot — e.g. after a tab
-    // supersession (`SUPERSEDED` close) the old WS's `pingInterval` is
-    // cleared and `last_heartbeat_at` ages out, but the dashboard's
-    // stuck-Executing row stays visible. Without this detector the
-    // user dead-ends until the next reaper tick (up to 60+120=180 s).
+    // it misses the boundary case where a `status='active'` conversation row
+    // IS visible but its slot's `last_heartbeat_at` lapsed past 120 s
+    // between the RPC's lazy sweep and this helper's processing — e.g.
+    // a tab supersession that clears the old WS's `pingInterval` so no
+    // refresh fires while the helper runs. Catching it here (vs waiting
+    // up to 60 s for the agent-runner reaper) flips the conv row to
+    // `failed` synchronously so the dashboard "Active conversations" rail
+    // truths up, and surfaces the divergence to Sentry.
     //
     // THRESHOLD-COUPLING: 120 s here matches the four pre-existing sites:
     //   (1) migration 029 line ~131 (acquire_conversation_slot lazy sweep)
@@ -301,10 +303,14 @@ export async function tryLedgerDivergenceRecovery(
     //   (4) agent-runner.ts STUCK_ACTIVE_THRESHOLD_SECONDS
     // Changing this constant without updating the four sibling sites
     // desyncs the sweep mechanisms — one will reap rows the others
-    // consider live. Index path: matches `user_concurrency_slots_user_heartbeat_idx`
-    // (migration 029) on `(user_id, last_heartbeat_at)`.
-    const STALE_HEARTBEAT_THRESHOLD_MS = 120_000;
-    const staleCutoff = new Date(Date.now() - STALE_HEARTBEAT_THRESHOLD_MS).toISOString();
+    // consider live. Naming + unit mirror agent-runner.ts so a grep on
+    // `STUCK_ACTIVE_THRESHOLD_SECONDS` surfaces this site too. Index
+    // path: `user_concurrency_slots_user_heartbeat_idx` (migration 029)
+    // on `(user_id, last_heartbeat_at)`.
+    const STALE_HEARTBEAT_THRESHOLD_SECONDS = 120;
+    const staleCutoff = new Date(
+      Date.now() - STALE_HEARTBEAT_THRESHOLD_SECONDS * 1_000,
+    ).toISOString();
     const staleResp = await supabase
       .from("user_concurrency_slots")
       .select("conversation_id")
@@ -324,45 +330,43 @@ export async function tryLedgerDivergenceRecovery(
         .map((r) => r.conversation_id);
     }
 
-    // Dedup union: a slot can be both orphan AND stale-heartbeat (slot
-    // present, conversation hard-deleted, heartbeat lapsed). Issue one
-    // releaseSlot + one finalize per unique conversation_id so a single
-    // recovery pass produces one breadcrumb per row, not two.
+    // Dedup union: one releaseSlot + one finalize per unique conversation_id.
+    const orphanSet = new Set<string>(orphans);
     const reapableSet = new Set<string>([...orphans, ...staleConversationIds]);
     const reapable = Array.from(reapableSet);
 
     if (reapable.length === 0) {
-      // No divergence on either signal — slot count is correct AND every
-      // slot has a fresh heartbeat. Genuine cap_hit; caller proceeds to
-      // the close path.
+      // No divergence — genuine cap_hit; caller proceeds to close path.
       return { didRecover: false };
     }
 
-    // Release every reapable slot in parallel — keyed DELETE is
-    // idempotent and concurrent calls are safe. Any individual error is
-    // mirrored by `releaseSlot` itself.
+    // Release every reapable slot in parallel — keyed DELETE is idempotent.
     await Promise.all(
       reapable.map((cid) => releaseSlot(userId, cid)),
     );
 
-    // Conversation-row finalize. For an orphan, the visible-set query
-    // above filters `archived_at IS NULL AND status IN ('active',
-    // 'waiting_for_user')`, so its row is one of: (a) archived,
-    // (b) already terminal, or (c) hard-deleted — (b)/(c) are no-ops,
-    // (a) is benign. For a stale-heartbeat row whose conversation IS
-    // visible at `status='active'`, this is the load-bearing flip:
-    // converge the wedged row to `failed` so the dashboard "Active
-    // conversations" rail no longer shows it as Executing. No-op for
-    // missing rows.
+    // Conversation-row finalize. Status-only — do NOT bump `last_active`:
+    // this is a server-initiated cleanup, not user activity, and bumping
+    // would float wedged-and-failed rows above genuinely-recent ones in
+    // sort-by-last-active surfaces (`conversations-tools.ts` MCP list,
+    // `lookup-conversation-for-path.ts`). Per-row op tag distinguishes
+    // the finalize cause for Sentry breadcrumb consumers — orphan rows
+    // are typically already terminal/archived (no-op), stale-heartbeat
+    // rows are the load-bearing case where the user-visible row flips
+    // from Executing to failed. `expectMatch: false` because both classes
+    // include benign zero-row outcomes (archived row, already-terminal,
+    // hard-deleted).
     await Promise.all(
       reapable.map((cid) =>
         updateConversationFor(
           userId,
           cid,
-          { status: "failed", last_active: new Date().toISOString() },
+          { status: "failed" },
           {
             feature: "concurrency-ledger-divergence",
-            op: "start_session-recovery-finalize-orphan",
+            op: orphanSet.has(cid)
+              ? "start_session-recovery-finalize-orphan"
+              : "start_session-recovery-finalize-stale-heartbeat",
             expectMatch: false,
           },
         ).catch(() => undefined),
@@ -370,13 +374,15 @@ export async function tryLedgerDivergenceRecovery(
     );
 
     // Single Sentry mirror for the divergence detection itself. AC4
-    // explicitly excludes the recovered-OK path from telemetry to keep
-    // signal-to-noise on the divergence rate. Use a new Error so the
-    // mirror surfaces as a captureException (taggable + groupable in
-    // Sentry) rather than a captureMessage. The extras carry both
-    // detection-cause counts so the existing
-    // `concurrency-ledger-divergence` Sentry group continues to receive
-    // every recovery and the new branch is distinguishable in tags.
+    // excludes the recovered-OK path. `recoveryCause` lets dashboards
+    // segment orphan vs stale-heartbeat without spawning a new feature
+    // key; existing aggregations on `feature` + `op` are preserved.
+    const recoveryCause: "orphan" | "stale-heartbeat" | "orphan-and-stale" =
+      orphans.length > 0 && staleConversationIds.length > 0
+        ? "orphan-and-stale"
+        : orphans.length > 0
+          ? "orphan"
+          : "stale-heartbeat";
     reportSilentFallback(new Error("ledger-divergence"), {
       feature: "concurrency-ledger-divergence",
       op: "start_session-recovery",
@@ -387,6 +393,7 @@ export async function tryLedgerDivergenceRecovery(
         orphanCount: orphans.length,
         staleHeartbeatCount: staleConversationIds.length,
         reapableCount: reapable.length,
+        recoveryCause,
       },
     });
 

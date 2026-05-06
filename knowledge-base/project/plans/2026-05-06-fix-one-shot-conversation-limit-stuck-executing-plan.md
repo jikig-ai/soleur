@@ -95,6 +95,22 @@ again — a 4-step recovery for what should be a 1-click action. On a
 free tier this is the user's first impression of the product after PDF
 upload.
 
+**Accepted side effect of the recovery path (post-merge):** when the
+helper reaps a stale-heartbeat slot whose conversation was visible at
+`status='active'` (the dashboard's stuck-Executing row), it flips the
+conversation row to `status='failed'`. The dashboard rail
+(`components/chat/conversations-rail.tsx`) renders `failed` rows with a
+red "Needs attention" badge. The user fixes their KB sidebar chat but
+inherits a red-badge row on the dashboard with no in-app explanation
+of WHY (the "the server will automatically reclaim it within ~3 min"
+copy lives in the KB-sidebar's close modal, not on the dashboard tab).
+This is accepted in Phase 1 as truthful-state-truing — the
+conversation was wedged and IS failed; the badge correctly reflects
+that. A follow-up issue may soft-relabel auto-reaped rows
+("Auto-reclaimed — slot freed") with a non-red badge to close the
+explanation gap; that work is dashboard-rail UI, scoped out of this
+hotfix per `cross-cutting-refactor` (3+ unrelated UI files).
+
 **If this leaks, the user's workflow is exposed via:** N/A — this is a
 liveness/availability bug, not a data-exposure or auth bug. No
 credentials cross sessions; the slot ledger is owner-scoped.
