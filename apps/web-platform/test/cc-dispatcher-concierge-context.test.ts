@@ -105,17 +105,18 @@ describe("resolveConciergeDocumentContext", () => {
     expect(extractPdfTextSpy).toHaveBeenCalledOnce();
   });
 
-  it("falls through to documentKind=pdf without content when extractor returns null", async () => {
-    // Corrupted, encrypted, or oversized PDFs return null from the
-    // extractor; the resolver falls through to the existing Read-directive
-    // path AND mirrors a Sentry breadcrumb so operators see the failure
-    // class.
+  it("falls through to documentKind=pdf without content when extractor errors (with errorClass)", async () => {
+    // Corrupted, encrypted, or oversized PDFs surface a typed
+    // `{ error: <class> }` from the extractor; the resolver falls through
+    // to the runner with `documentExtractError` set and mirrors a Sentry
+    // event tagged with the same class so operators see WHICH failure
+    // shape fired without parsing breadcrumbs.
     mkdirSync(path.join(tmpRoot, "knowledge-base"), { recursive: true });
     writeFileSync(
       path.join(tmpRoot, "knowledge-base", "scanned.pdf"),
       Buffer.from("%PDF-1.4\ncorrupted"),
     );
-    extractPdfTextSpy.mockResolvedValueOnce(null);
+    extractPdfTextSpy.mockResolvedValueOnce({ error: "corrupted" });
 
     const out = await resolveConciergeDocumentContext({
       userId: "u1",
@@ -124,6 +125,7 @@ describe("resolveConciergeDocumentContext", () => {
     expect(out).toEqual({
       artifactPath: "knowledge-base/scanned.pdf",
       documentKind: "pdf",
+      documentExtractError: "corrupted",
     });
     // Sentry mirror MUST fire so a degraded extractor path is observable
     // (per cq-silent-fallback-must-mirror-to-sentry).
@@ -131,6 +133,128 @@ describe("resolveConciergeDocumentContext", () => {
       ([, opts]) => (opts as { op?: string })?.op === "extractPdfText",
     );
     expect(sentryCalls.length).toBe(1);
+    // The errorClass MUST be on extra so operators read it directly off the
+    // event without breadcrumb parsing.
+    const [[, opts]] = sentryCalls as Array<
+      [unknown, { extra?: { errorClass?: unknown } }]
+    >;
+    expect(opts.extra?.errorClass).toBe("corrupted");
+  });
+
+  it("mirrors empty_text distinctly via op: extractPdfText.empty_text", async () => {
+    // Hypothesis B fold-in: a parsed-but-empty PDF (scanned image-only) is
+    // its own failure class. Pre-fix, the resolver swallowed
+    // text.length === 0 silently — no Sentry mirror — and the agent ran
+    // into the apt-get cascade with no observability hook. Post-fix, the
+    // extractor returns { error: "empty_text" } and the resolver mirrors
+    // distinctly so Hypothesis B is distinguishable from Hypothesis A.
+    mkdirSync(path.join(tmpRoot, "knowledge-base"), { recursive: true });
+    writeFileSync(
+      path.join(tmpRoot, "knowledge-base", "image-only.pdf"),
+      Buffer.from("%PDF-1.4\nfake"),
+    );
+    extractPdfTextSpy.mockResolvedValueOnce({
+      error: "empty_text",
+      pageCount: 12,
+    });
+
+    const out = await resolveConciergeDocumentContext({
+      userId: "u1",
+      contextPath: "knowledge-base/image-only.pdf",
+    });
+    expect(out).toEqual({
+      artifactPath: "knowledge-base/image-only.pdf",
+      documentKind: "pdf",
+      documentExtractError: "empty_text",
+    });
+    const sentryCalls = reportSilentFallbackSpy.mock.calls.filter(
+      ([, opts]) =>
+        (opts as { op?: string })?.op === "extractPdfText.empty_text",
+    );
+    expect(sentryCalls.length).toBe(1);
+    const [[, opts]] = sentryCalls as Array<
+      [unknown, { extra?: { errorClass?: unknown; pageCount?: unknown } }]
+    >;
+    expect(opts.extra?.errorClass).toBe("empty_text");
+    expect(opts.extra?.pageCount).toBe(12);
+  });
+
+  it("encrypted PDFs surface documentExtractError=encrypted with a Sentry mirror", async () => {
+    // Pinned in plan §Hypothesis C. The extractor's outer catch maps
+    // pdfjs's PasswordException via `err.name === "PasswordException"`;
+    // synthesizing spec-correct AES-128 in pure JS is disproportionate, so
+    // the extractor-level test relies on this resolver-level mock to pin
+    // the contract (`{ error: "encrypted" }` → documentExtractError +
+    // Sentry op: extractPdfText).
+    mkdirSync(path.join(tmpRoot, "knowledge-base"), { recursive: true });
+    writeFileSync(
+      path.join(tmpRoot, "knowledge-base", "locked.pdf"),
+      Buffer.from("%PDF-1.4\nfake"),
+    );
+    extractPdfTextSpy.mockResolvedValueOnce({ error: "encrypted" });
+
+    const out = await resolveConciergeDocumentContext({
+      userId: "u1",
+      contextPath: "knowledge-base/locked.pdf",
+    });
+    expect(out.documentExtractError).toBe("encrypted");
+    expect(out.documentContent).toBeUndefined();
+    const sentryCalls = reportSilentFallbackSpy.mock.calls.filter(
+      ([, opts]) => (opts as { op?: string })?.op === "extractPdfText",
+    );
+    expect(sentryCalls.length).toBe(1);
+    const [[, opts]] = sentryCalls as Array<
+      [unknown, { extra?: { errorClass?: unknown } }]
+    >;
+    expect(opts.extra?.errorClass).toBe("encrypted");
+  });
+
+  it("lazy_import_failed (broken runner image) surfaces documentExtractError + Sentry mirror", async () => {
+    // Production runner images can fail to lazy-load `pdfjs-dist` (broken
+    // native dep, missing libstdc++). The extractor catches and returns
+    // `{ error: "lazy_import_failed" }`. Pinned via mock — the actual
+    // import failure is environment-specific and not reproducible in the
+    // test runner.
+    mkdirSync(path.join(tmpRoot, "knowledge-base"), { recursive: true });
+    writeFileSync(
+      path.join(tmpRoot, "knowledge-base", "any.pdf"),
+      Buffer.from("%PDF-1.4\nfake"),
+    );
+    extractPdfTextSpy.mockResolvedValueOnce({ error: "lazy_import_failed" });
+
+    const out = await resolveConciergeDocumentContext({
+      userId: "u1",
+      contextPath: "knowledge-base/any.pdf",
+    });
+    expect(out.documentExtractError).toBe("lazy_import_failed");
+    const sentryCalls = reportSilentFallbackSpy.mock.calls.filter(
+      ([, opts]) => (opts as { op?: string })?.op === "extractPdfText",
+    );
+    expect(sentryCalls.length).toBe(1);
+    const [[, opts]] = sentryCalls as Array<
+      [unknown, { extra?: { errorClass?: unknown } }]
+    >;
+    expect(opts.extra?.errorClass).toBe("lazy_import_failed");
+  });
+
+  it("oversized_buffer surfaces documentExtractError so the runner can pick the user-facing message", async () => {
+    // Hypothesis A regression: the failure class flows through the resolver
+    // so the runner emits a content-grounded "this PDF is too large" reply
+    // instead of the apt-get cascade. Pre-fix, oversized was indistinguishable
+    // from corrupted from the runner's perspective.
+    mkdirSync(path.join(tmpRoot, "knowledge-base"), { recursive: true });
+    writeFileSync(
+      path.join(tmpRoot, "knowledge-base", "huge.pdf"),
+      Buffer.from("%PDF-1.4\nfake"),
+    );
+    extractPdfTextSpy.mockResolvedValueOnce({ error: "oversized_buffer" });
+
+    const out = await resolveConciergeDocumentContext({
+      userId: "u1",
+      contextPath: "knowledge-base/huge.pdf",
+    });
+    expect(out.documentExtractError).toBe("oversized_buffer");
+    expect(out.documentContent).toBeUndefined();
   });
 
   it("missing PDF file falls through to documentKind=pdf without content", async () => {
