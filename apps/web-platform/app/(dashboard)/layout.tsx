@@ -273,6 +273,11 @@ export default function DashboardLayout({
           </button>
         </div>
 
+        {/* Theme toggle — sidebar header (spec TR7). */}
+        <div className={`border-b border-soleur-border-default ${collapsed ? "px-2 py-3" : "px-3 py-3"}`}>
+          <ThemeToggle collapsed={collapsed} />
+        </div>
+
         {/* Navigation */}
         <nav className={`flex-1 space-y-1 ${collapsed ? "px-1" : "px-3"}`}>
           {navItems.map((item) => {
@@ -317,18 +322,6 @@ export default function DashboardLayout({
             className="flex min-h-0 flex-1 flex-col border-t border-soleur-border-default md:hidden"
           >
             <ConversationsRail />
-          </div>
-        )}
-
-        {/* Theme toggle — hidden when sidebar is collapsed (no horizontal
-            room for the 3-segment control). Anchored under a "THEME"
-            ALL-CAPS label per brand-guide.md section-label convention. */}
-        {!collapsed && (
-          <div className="border-t border-soleur-border-default p-3">
-            <p className="px-1 pb-2 text-[10px] font-semibold uppercase tracking-[0.2em] text-soleur-accent-gold-fg">
-              Theme
-            </p>
-            <ThemeToggle />
           </div>
         )}
 

@@ -14,10 +14,10 @@ function makeMatchMedia(initialDarkMatches: boolean) {
   return () => list;
 }
 
-function renderToggle() {
+function renderToggle({ collapsed = false }: { collapsed?: boolean } = {}) {
   return render(
     <ThemeProvider>
-      <ThemeToggle />
+      <ThemeToggle collapsed={collapsed} />
     </ThemeProvider>,
   );
 }
@@ -132,5 +132,57 @@ describe("ThemeToggle", () => {
 
     fireEvent.keyDown(group, { key: "End" });
     expect(localStorage.getItem(STORAGE_KEY)).toBe("system");
+  });
+
+  describe("collapsed mode", () => {
+    // SEGMENTS order in the component is [dark, light, system] (indexes
+    // 0, 1, 2). Cycle advances (idx + 1) % 3. These per-transition tests
+    // each seed an explicit start state so a failure names the failing
+    // transition, not just the final state.
+
+    it("from system, click advances aria-label to Dark", () => {
+      localStorage.setItem(STORAGE_KEY, "system");
+      renderToggle({ collapsed: true });
+      const button = screen.getByTestId("theme-cycle-button");
+      fireEvent.click(button);
+      expect(button.getAttribute("aria-label")).toBe("Theme: Dark");
+    });
+
+    it("from dark, click advances aria-label to Light", () => {
+      localStorage.setItem(STORAGE_KEY, "dark");
+      renderToggle({ collapsed: true });
+      const button = screen.getByTestId("theme-cycle-button");
+      fireEvent.click(button);
+      expect(button.getAttribute("aria-label")).toBe("Theme: Light");
+    });
+
+    it("from light, click wraps aria-label back to System", () => {
+      localStorage.setItem(STORAGE_KEY, "light");
+      renderToggle({ collapsed: true });
+      const button = screen.getByTestId("theme-cycle-button");
+      fireEvent.click(button);
+      expect(button.getAttribute("aria-label")).toBe("Theme: System");
+    });
+
+    it.each([
+      ["dark", "Dark"],
+      ["light", "Light"],
+      ["system", "System"],
+    ])("renders aria-label \"Theme: %s\" when theme is %s", (stored, label) => {
+      localStorage.setItem(STORAGE_KEY, stored);
+      renderToggle({ collapsed: true });
+      const button = screen.getByTestId("theme-cycle-button");
+      expect(button.getAttribute("aria-label")).toBe(`Theme: ${label}`);
+    });
+
+    it("exposes data-theme-current and data-theme-next so agents can plan multi-click paths", () => {
+      // Agent-native parity: the cycle button collapses 3 actions into 1, so
+      // the cycle order must be machine-readable (not implicit in code).
+      localStorage.setItem(STORAGE_KEY, "dark");
+      renderToggle({ collapsed: true });
+      const button = screen.getByTestId("theme-cycle-button");
+      expect(button.getAttribute("data-theme-current")).toBe("dark");
+      expect(button.getAttribute("data-theme-next")).toBe("light");
+    });
   });
 });
