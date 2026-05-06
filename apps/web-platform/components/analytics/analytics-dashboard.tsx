@@ -16,7 +16,7 @@ function Sparkline({
   color?: string;
 }) {
   if (data.length === 0) {
-    return <span className="text-neutral-600">—</span>;
+    return <span className="text-soleur-text-muted">—</span>;
   }
 
   if (data.length === 1) {
@@ -113,9 +113,9 @@ export function AnalyticsDashboard({
   if (metrics.length === 0) {
     return (
       <div className="space-y-6">
-        <h1 className="text-2xl font-semibold text-white">Analytics</h1>
-        <div className="flex flex-col items-center justify-center min-h-[300px] rounded-xl border border-neutral-800 bg-neutral-900/50">
-          <p className="text-neutral-400">No users registered yet.</p>
+        <h1 className="text-2xl font-semibold text-soleur-text-primary">Analytics</h1>
+        <div className="flex flex-col items-center justify-center min-h-[300px] rounded-xl border border-soleur-border-default bg-soleur-bg-surface-1/50">
+          <p className="text-soleur-text-secondary">No users registered yet.</p>
         </div>
       </div>
     );
@@ -123,37 +123,37 @@ export function AnalyticsDashboard({
 
   return (
     <div className="space-y-6">
-      <h1 className="text-2xl font-semibold text-white">Analytics</h1>
-      <p className="text-sm text-neutral-500">
+      <h1 className="text-2xl font-semibold text-soleur-text-primary">Analytics</h1>
+      <p className="text-sm text-soleur-text-muted">
         P4 validation metrics — {metrics.length} user{metrics.length !== 1 ? "s" : ""}
       </p>
 
-      <div className="rounded-xl border border-neutral-800 bg-neutral-900/50 overflow-x-auto">
+      <div className="rounded-xl border border-soleur-border-default bg-soleur-bg-surface-1/50 overflow-x-auto">
         <table className="w-full text-sm">
           <thead>
-            <tr className="border-b border-neutral-800">
-              <th className="px-4 py-3 text-left text-xs font-medium text-neutral-500 uppercase tracking-wider">
+            <tr className="border-b border-soleur-border-default">
+              <th className="px-4 py-3 text-left text-xs font-medium text-soleur-text-muted uppercase tracking-wider">
                 User
               </th>
-              <th className="px-4 py-3 text-left text-xs font-medium text-neutral-500 uppercase tracking-wider">
+              <th className="px-4 py-3 text-left text-xs font-medium text-soleur-text-muted uppercase tracking-wider">
                 Domains
               </th>
-              <th className="px-4 py-3 text-left text-xs font-medium text-neutral-500 uppercase tracking-wider">
+              <th className="px-4 py-3 text-left text-xs font-medium text-soleur-text-muted uppercase tracking-wider">
                 Sessions
               </th>
-              <th className="px-4 py-3 text-left text-xs font-medium text-neutral-500 uppercase tracking-wider">
+              <th className="px-4 py-3 text-left text-xs font-medium text-soleur-text-muted uppercase tracking-wider">
                 Multi-Domain
               </th>
-              <th className="px-4 py-3 text-left text-xs font-medium text-neutral-500 uppercase tracking-wider">
+              <th className="px-4 py-3 text-left text-xs font-medium text-soleur-text-muted uppercase tracking-wider">
                 KB Growth
               </th>
-              <th className="px-4 py-3 text-left text-xs font-medium text-neutral-500 uppercase tracking-wider">
+              <th className="px-4 py-3 text-left text-xs font-medium text-soleur-text-muted uppercase tracking-wider">
                 TTFV
               </th>
-              <th className="px-4 py-3 text-left text-xs font-medium text-neutral-500 uppercase tracking-wider">
+              <th className="px-4 py-3 text-left text-xs font-medium text-soleur-text-muted uppercase tracking-wider">
                 Error Rate
               </th>
-              <th className="px-4 py-3 text-left text-xs font-medium text-neutral-500 uppercase tracking-wider">
+              <th className="px-4 py-3 text-left text-xs font-medium text-soleur-text-muted uppercase tracking-wider">
                 Status
               </th>
             </tr>
@@ -162,37 +162,37 @@ export function AnalyticsDashboard({
             {metrics.map((m) => (
               <tr
                 key={m.userId}
-                className="border-b border-neutral-800/50 hover:bg-neutral-800/30"
+                className="border-b border-soleur-border-default/50 hover:bg-soleur-bg-surface-2/30"
               >
-                <td className="px-4 py-3 text-neutral-300 font-mono text-xs">
+                <td className="px-4 py-3 text-soleur-text-secondary font-mono text-xs">
                   {m.email}
                 </td>
-                <td className="px-4 py-3 text-neutral-400">
+                <td className="px-4 py-3 text-soleur-text-secondary">
                   {m.totalSessions > 0 ? (
                     <span title={Object.entries(m.domainCounts).map(([k, v]) => `${k}: ${v}`).join(", ")}>
                       {Object.entries(m.domainCounts).map(([leader, count]) => (
                         <span key={leader} className="inline-block mr-1.5 text-xs">
-                          <span className="text-amber-500">{leader}</span>
-                          <span className="text-neutral-500 ml-0.5">{count}</span>
+                          <span className="text-soleur-accent-gold-fg">{leader}</span>
+                          <span className="text-soleur-text-muted ml-0.5">{count}</span>
                         </span>
                       ))}
                     </span>
                   ) : (
-                    <span className="text-neutral-600">—</span>
+                    <span className="text-soleur-text-muted">—</span>
                   )}
                 </td>
                 <td className="px-4 py-3">
                   <div className="flex items-center gap-2">
-                    <span className="text-neutral-300">{m.totalSessions}</span>
+                    <span className="text-soleur-text-secondary">{m.totalSessions}</span>
                     <Sparkline data={sessionSparklineData(m.sessionsByDay)} />
                   </div>
                 </td>
-                <td className="px-4 py-3 text-neutral-300">
-                  {m.domainCount > 0 ? m.domainCount : <span className="text-neutral-600">—</span>}
+                <td className="px-4 py-3 text-soleur-text-secondary">
+                  {m.domainCount > 0 ? m.domainCount : <span className="text-soleur-text-muted">—</span>}
                 </td>
                 <td className="px-4 py-3">
                   <div className="flex items-center gap-2">
-                    <span className="text-neutral-300 text-xs">
+                    <span className="text-soleur-text-secondary text-xs">
                       {kbGrowthLabel(m.kbHistory)}
                     </span>
                     <Sparkline
@@ -201,7 +201,7 @@ export function AnalyticsDashboard({
                     />
                   </div>
                 </td>
-                <td className="px-4 py-3 text-neutral-400">
+                <td className="px-4 py-3 text-soleur-text-secondary">
                   {formatDays(m.ttfvDays)}
                 </td>
                 <td className="px-4 py-3">
@@ -211,7 +211,7 @@ export function AnalyticsDashboard({
                         ? "text-red-400"
                         : m.errorRate > 0
                           ? "text-amber-400"
-                          : "text-neutral-400"
+                          : "text-soleur-text-secondary"
                     }
                   >
                     {formatPercent(m.errorRate)}
@@ -224,7 +224,7 @@ export function AnalyticsDashboard({
                         m.churning ? "bg-red-500" : "bg-green-500"
                       }`}
                     />
-                    <span className="text-xs text-neutral-500">
+                    <span className="text-xs text-soleur-text-muted">
                       {m.churning
                         ? m.daysSinceLastSession !== null
                           ? `${m.daysSinceLastSession}d ago`

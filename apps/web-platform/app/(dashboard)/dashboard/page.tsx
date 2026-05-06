@@ -337,9 +337,9 @@ export default function DashboardPage() {
     return (
       <div className="mx-auto flex min-h-[calc(100dvh-4rem)] max-w-3xl flex-col items-center justify-center px-4 py-10">
         <div className="mb-6 h-12 w-12 animate-pulse rounded-lg bg-amber-600/50" />
-        <div className="mb-3 h-4 w-48 animate-pulse rounded bg-neutral-800" />
-        <div className="mb-8 h-3 w-64 animate-pulse rounded bg-neutral-800" />
-        <div className="h-[44px] w-full max-w-xl animate-pulse rounded-xl bg-neutral-800/50" />
+        <div className="mb-3 h-4 w-48 animate-pulse rounded bg-soleur-bg-surface-2" />
+        <div className="mb-8 h-3 w-64 animate-pulse rounded bg-soleur-bg-surface-2" />
+        <div className="h-[44px] w-full max-w-xl animate-pulse rounded-xl bg-soleur-bg-surface-2/50" />
       </div>
     );
   }
@@ -352,7 +352,7 @@ export default function DashboardPage() {
     return (
       <div className="mx-auto flex min-h-[calc(100dvh-4rem)] max-w-3xl flex-col items-center justify-center px-4 py-10">
         <div className="mb-6 h-12 w-12 animate-pulse rounded-lg bg-amber-600/50" />
-        <p className="text-sm text-neutral-400">Setting up your workspace...</p>
+        <p className="text-sm text-soleur-text-secondary">Setting up your workspace...</p>
       </div>
     );
   }
@@ -364,19 +364,19 @@ export default function DashboardPage() {
   if (!kbError && !visionExists && conversations.length === 0 && !hasActiveFilter) {
     return (
       <div className="mx-auto flex min-h-[calc(100dvh-4rem)] max-w-3xl flex-col items-center justify-center px-4 py-10">
-        <p className="mb-3 text-xs font-medium tracking-widest text-amber-500">
+        <p className="mb-3 text-xs font-medium tracking-widest text-soleur-accent-gold-fg">
           DASHBOARD
         </p>
-        <h1 className="mb-3 text-center text-3xl font-semibold text-white md:text-4xl">
+        <h1 className="mb-3 text-center text-3xl font-semibold text-soleur-text-primary md:text-4xl">
           Tell your organization what you&apos;re building.
         </h1>
-        <p className="mb-10 max-w-md text-center text-sm text-neutral-400">
+        <p className="mb-10 max-w-md text-center text-sm text-soleur-text-secondary">
           Describe your startup idea and your AI organization will get to work.
         </p>
         {repoDisconnected && orphanedCount > 0 && (
           <p
             data-testid="disconnected-orphans-hint"
-            className="mb-6 max-w-md text-center text-xs text-neutral-500"
+            className="mb-6 max-w-md text-center text-xs text-soleur-text-muted"
           >
             {orphanedCount === 1
               ? "Your previous conversation is tied to your disconnected repository. Reconnect that repository to view it."
@@ -401,7 +401,7 @@ export default function DashboardPage() {
               {firstRunAttachments.map((att) => (
                 <div
                   key={att.id}
-                  className="flex items-center gap-1.5 rounded-lg border border-neutral-700 bg-neutral-800 px-2 py-1.5"
+                  className="flex items-center gap-1.5 rounded-lg border border-soleur-border-default bg-soleur-bg-surface-2 px-2 py-1.5"
                 >
                   {att.preview ? (
                     <img
@@ -414,11 +414,11 @@ export default function DashboardPage() {
                       <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 0 0-3.375-3.375h-1.5A1.125 1.125 0 0 1 13.5 7.125v-1.5a3.375 3.375 0 0 0-3.375-3.375H8.25m2.25 0H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 0 0-9-9Z" />
                     </svg>
                   )}
-                  <span className="max-w-[120px] truncate text-xs text-neutral-300">{att.file.name}</span>
+                  <span className="max-w-[120px] truncate text-xs text-soleur-text-secondary">{att.file.name}</span>
                   <button
                     type="button"
                     onClick={() => removeFirstRunAttachment(att.id)}
-                    className="ml-1 text-neutral-500 hover:text-white"
+                    className="ml-1 text-soleur-text-muted hover:text-soleur-text-primary"
                     aria-label={`Remove ${att.file.name}`}
                   >
                     <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
@@ -440,7 +440,7 @@ export default function DashboardPage() {
             <button
               type="button"
               onClick={() => fileInputRef.current?.click()}
-              className="flex h-[44px] w-[44px] shrink-0 items-center justify-center rounded-xl border border-neutral-700 text-neutral-400 transition-colors hover:border-neutral-500 hover:text-white"
+              className="flex h-[44px] w-[44px] shrink-0 items-center justify-center rounded-xl border border-soleur-border-default text-soleur-text-secondary transition-colors hover:border-soleur-border-default hover:text-soleur-text-primary"
               aria-label="Attach files"
             >
               <svg className="h-[18px] w-[18px]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
@@ -464,7 +464,7 @@ export default function DashboardPage() {
               type="text"
               placeholder="What are you building?"
               autoFocus
-              className="min-h-[44px] flex-1 rounded-xl border border-neutral-700 bg-neutral-900 px-4 py-3 text-sm text-white placeholder:text-neutral-500 focus:border-neutral-500 focus:outline-none"
+              className="min-h-[44px] flex-1 rounded-xl border border-soleur-border-default bg-soleur-bg-surface-1 px-4 py-3 text-sm text-soleur-text-primary placeholder:text-soleur-text-muted focus:border-soleur-border-default focus:outline-none"
               onPaste={(e) => {
                 const files = Array.from(e.clipboardData.files);
                 if (files.length > 0) {
@@ -475,7 +475,7 @@ export default function DashboardPage() {
             />
             <button
               type="submit"
-              className="flex h-[44px] w-[44px] shrink-0 items-center justify-center rounded-xl bg-amber-600 text-white transition-colors hover:bg-amber-500"
+              className="flex h-[44px] w-[44px] shrink-0 items-center justify-center rounded-xl bg-amber-600 text-soleur-text-on-accent transition-colors hover:bg-amber-500"
               aria-label="Send message"
             >
               <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -508,22 +508,22 @@ export default function DashboardPage() {
           />
         )}
 
-        <p className="mb-3 text-xs font-medium tracking-widest text-amber-500">
+        <p className="mb-3 text-xs font-medium tracking-widest text-soleur-accent-gold-fg">
           DASHBOARD
         </p>
-        <h1 className="mb-3 text-center text-3xl font-semibold text-white md:text-4xl">
+        <h1 className="mb-3 text-center text-3xl font-semibold text-soleur-text-primary md:text-4xl">
           {allTasksComplete
             ? "Your organization is ready."
             : "No conversations yet."}
         </h1>
-        <p className="mb-8 text-center text-sm text-neutral-400">
+        <p className="mb-8 text-center text-sm text-soleur-text-secondary">
           Start a conversation to put your agents to work.
         </p>
 
         <button
           type="button"
           onClick={() => router.push("/dashboard/chat/new")}
-          className="mb-10 rounded-lg bg-gradient-to-r from-[#D4B36A] to-[#B8923E] px-6 py-3 text-sm font-semibold text-white transition-opacity hover:opacity-90"
+          className="mb-10 rounded-lg bg-gradient-to-r from-[#D4B36A] to-[#B8923E] px-6 py-3 text-sm font-semibold text-soleur-text-on-accent transition-opacity hover:opacity-90"
         >
           New conversation
         </button>
@@ -541,7 +541,7 @@ export default function DashboardPage() {
     <div className="mx-auto max-w-4xl px-4 py-6 md:py-8">
       {/* Header */}
       <div className="mb-6 flex items-center justify-between">
-        <h1 className="text-xl font-semibold text-white md:text-2xl">
+        <h1 className="text-xl font-semibold text-soleur-text-primary md:text-2xl">
           Dashboard
         </h1>
       </div>
@@ -558,14 +558,14 @@ export default function DashboardPage() {
       {/* Filter bar */}
       <div className="mb-4 flex flex-wrap items-center gap-2">
         {/* Archive toggle */}
-        <div className="flex rounded-lg border border-neutral-700 overflow-hidden">
+        <div className="flex rounded-lg border border-soleur-border-default overflow-hidden">
           <button
             type="button"
             onClick={() => setArchiveFilter("active")}
             className={`min-h-[44px] px-3 py-2 text-sm font-medium transition-colors ${
               archiveFilter === "active"
-                ? "bg-neutral-700 text-white"
-                : "bg-neutral-900 text-neutral-400 hover:text-neutral-300"
+                ? "bg-soleur-bg-surface-2 text-soleur-text-primary"
+                : "bg-soleur-bg-surface-1 text-soleur-text-secondary hover:text-soleur-text-secondary"
             }`}
           >
             Active
@@ -575,8 +575,8 @@ export default function DashboardPage() {
             onClick={() => setArchiveFilter("archived")}
             className={`min-h-[44px] px-3 py-2 text-sm font-medium transition-colors ${
               archiveFilter === "archived"
-                ? "bg-neutral-700 text-white"
-                : "bg-neutral-900 text-neutral-400 hover:text-neutral-300"
+                ? "bg-soleur-bg-surface-2 text-soleur-text-primary"
+                : "bg-soleur-bg-surface-1 text-soleur-text-secondary hover:text-soleur-text-secondary"
             }`}
           >
             Archived
@@ -588,8 +588,8 @@ export default function DashboardPage() {
           onChange={handleStatusChange}
           className={`min-h-[44px] rounded-lg border px-3 py-2 text-sm transition-colors ${
             statusFilter
-              ? "border-amber-500/50 bg-neutral-900 text-amber-500"
-              : "border-neutral-700 bg-neutral-900 text-neutral-300"
+              ? "border-soleur-border-emphasized bg-soleur-bg-surface-1 text-soleur-accent-gold-fg"
+              : "border-soleur-border-default bg-soleur-bg-surface-1 text-soleur-text-secondary"
           }`}
         >
           {STATUS_OPTIONS.map((opt) => (
@@ -604,8 +604,8 @@ export default function DashboardPage() {
           onChange={handleDomainChange}
           className={`min-h-[44px] rounded-lg border px-3 py-2 text-sm transition-colors ${
             domainFilter
-              ? "border-amber-500/50 bg-neutral-900 text-amber-500"
-              : "border-neutral-700 bg-neutral-900 text-neutral-300"
+              ? "border-soleur-border-emphasized bg-soleur-bg-surface-1 text-soleur-accent-gold-fg"
+              : "border-soleur-border-default bg-soleur-bg-surface-1 text-soleur-text-secondary"
           }`}
         >
           {DOMAIN_OPTIONS.map((opt) => (
@@ -620,7 +620,7 @@ export default function DashboardPage() {
         <button
           type="button"
           onClick={() => router.push("/dashboard/chat/new")}
-          className="min-h-[44px] rounded-lg bg-gradient-to-r from-[#D4B36A] to-[#B8923E] px-4 py-2 text-sm font-semibold text-white transition-opacity hover:opacity-90"
+          className="min-h-[44px] rounded-lg bg-gradient-to-r from-[#D4B36A] to-[#B8923E] px-4 py-2 text-sm font-semibold text-soleur-text-on-accent transition-opacity hover:opacity-90"
         >
           + New conversation
         </button>
@@ -632,14 +632,14 @@ export default function DashboardPage() {
           {[1, 2, 3, 4].map((i) => (
             <div
               key={i}
-              className="animate-pulse rounded-lg border border-neutral-800 bg-neutral-900/50 p-4"
+              className="animate-pulse rounded-lg border border-soleur-border-default bg-soleur-bg-surface-1/50 p-4"
             >
               <div className="flex items-center gap-4">
-                <div className="h-5 w-28 rounded-full bg-neutral-800" />
-                <div className="h-4 w-48 rounded bg-neutral-800" />
+                <div className="h-5 w-28 rounded-full bg-soleur-bg-surface-2" />
+                <div className="h-4 w-48 rounded bg-soleur-bg-surface-2" />
                 <div className="flex-1" />
-                <div className="h-7 w-7 rounded-md bg-neutral-800" />
-                <div className="h-4 w-16 rounded bg-neutral-800" />
+                <div className="h-7 w-7 rounded-md bg-soleur-bg-surface-2" />
+                <div className="h-4 w-16 rounded bg-soleur-bg-surface-2" />
               </div>
             </div>
           ))}
@@ -658,13 +658,13 @@ export default function DashboardPage() {
       {/* Filtered empty state */}
       {!loading && !error && conversations.length === 0 && hasActiveFilter && (
         <div className="flex flex-col items-center justify-center py-20">
-          <p className="mb-4 text-sm text-neutral-400">
+          <p className="mb-4 text-sm text-soleur-text-secondary">
             No conversations match your filters.
           </p>
           <button
             type="button"
             onClick={clearFilters}
-            className="rounded-lg border border-neutral-700 px-4 py-2 text-sm text-neutral-300 transition-colors hover:bg-neutral-800"
+            className="rounded-lg border border-soleur-border-default px-4 py-2 text-sm text-soleur-text-secondary transition-colors hover:bg-soleur-bg-surface-2"
           >
             Clear filters
           </button>
@@ -692,7 +692,7 @@ export default function DashboardPage() {
 function LeaderStrip({ onLeaderClick, getIconPath }: { onLeaderClick: (leaderId: string) => void; getIconPath: (id: DomainLeaderId) => string | null }) {
   return (
     <>
-      <p className="mb-4 text-xs font-medium tracking-widest text-neutral-400">
+      <p className="mb-4 text-xs font-medium tracking-widest text-soleur-text-secondary">
         YOUR ORGANIZATION
       </p>
       <div className="flex flex-wrap justify-center gap-3">
@@ -701,10 +701,10 @@ function LeaderStrip({ onLeaderClick, getIconPath }: { onLeaderClick: (leaderId:
             key={leader.id}
             type="button"
             onClick={() => onLeaderClick(leader.id)}
-            className="group flex items-center gap-1.5 rounded-lg px-2 py-1 transition-colors hover:bg-neutral-800/50"
+            className="group flex items-center gap-1.5 rounded-lg px-2 py-1 transition-colors hover:bg-soleur-bg-surface-2/50"
           >
             <LeaderAvatar leaderId={leader.id} size="sm" customIconPath={getIconPath(leader.id as DomainLeaderId)} />
-            <span className="text-xs text-neutral-500 group-hover:text-neutral-300">
+            <span className="text-xs text-soleur-text-muted group-hover:text-soleur-text-secondary">
               {leader.name}
             </span>
           </button>
