@@ -248,7 +248,7 @@ function renderBubbleContent({
             </span>
           </div>
           <a
-            href="https://github.com/jikigai/soleur/issues/new?labels=type%2Fbug&template=bug_report.md"
+            href="https://github.com/jikig-ai/soleur/issues/new?labels=type%2Fbug&template=bug_report.md"
             target="_blank"
             rel="noopener noreferrer"
             className="text-xs text-soleur-text-muted underline hover:text-soleur-text-secondary"
