@@ -204,6 +204,13 @@ export type WSMessage =
   | { type: "resume_session"; conversationId: string }
   | { type: "close_conversation" }
   | { type: "review_gate_response"; gateId: string; selection: string }
+  // Client → server: user-initiated Stop. The server resolves `userId`
+  // from the authenticated socket session — `userId` is intentionally
+  // NOT part of the wire shape (TR4 cross-user invariant; see
+  // `feat-abort-conversation-web` plan §"User-Brand Impact"). The
+  // strictObject zod schema in `lib/ws-zod-schemas.ts` rejects extra
+  // fields so a forged `userId` cannot land here from a network peer.
+  | { type: "abort_turn"; conversationId: string }
   | {
       type: "stream";
       content: string;

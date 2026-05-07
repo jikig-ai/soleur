@@ -127,60 +127,28 @@ export async function patchWorkspacePermissions(
 
 // ---------------------------------------------------------------------------
 // Active session tracking
+//
+// The registry + abort helpers were extracted into
+// `agent-session-registry.ts` so the abort logic is unit-testable
+// without dragging in the SDK + Supabase + observability surface that
+// `agent-runner.ts` pulls in at module-init time
+// (feat-abort-conversation-web PR1, plan §1.9). The re-exports below
+// preserve the existing public surface — `ws-handler.ts`,
+// `account-delete.ts`, and `server/index.ts` continue to import these
+// names from `@/server/agent-runner`.
 // ---------------------------------------------------------------------------
-const activeSessions = new Map<string, AgentSession>();
+import {
+  abortSession,
+  abortAllUserSessions,
+  abortAllSessions,
+  registerSession,
+  unregisterSession,
+  getSession,
+  forEachSessionForConversation,
+} from "./agent-session-registry";
+import { classifyAbortReason } from "./abort-classifier";
 
-function sessionKey(userId: string, conversationId: string, leaderId?: string) {
-  return leaderId
-    ? `${userId}:${conversationId}:${leaderId}`
-    : `${userId}:${conversationId}`;
-}
-
-/** Abort a running agent session (called from ws-handler on disconnect or supersession).
- *  When leaderId is provided, only that leader's session is aborted.
- *  When omitted, ALL leader sessions for the conversation are aborted (prefix match). */
-export function abortSession(
-  userId: string,
-  conversationId: string,
-  reason?: "disconnected" | "superseded",
-  leaderId?: string,
-): void {
-  if (leaderId) {
-    const key = sessionKey(userId, conversationId, leaderId);
-    const session = activeSessions.get(key);
-    if (session) {
-      session.abort.abort(new Error(`Session aborted: ${reason ?? "disconnected"}`));
-    }
-    return;
-  }
-
-  // Broadcast: abort ALL sessions for this conversation (any leader)
-  const prefix = `${userId}:${conversationId}`;
-  for (const [key, session] of activeSessions) {
-    if (key === prefix || key.startsWith(`${prefix}:`)) {
-      session.abort.abort(new Error(`Session aborted: ${reason ?? "disconnected"}`));
-    }
-  }
-}
-
-/** Abort ALL sessions for a user (called during account deletion). */
-export function abortAllUserSessions(userId: string): void {
-  const prefix = `${userId}:`;
-  for (const [key, session] of activeSessions) {
-    if (key.startsWith(prefix)) {
-      session.abort.abort(new Error("Session aborted: account_deleted"));
-    }
-  }
-}
-
-/** Abort ALL active sessions (called during server shutdown).
- *  Triggers the catch block in startAgentSession which updates
- *  conversation status to "failed" in the database. */
-export function abortAllSessions(): void {
-  for (const [, session] of activeSessions) {
-    session.abort.abort(new Error("Session aborted: server_shutdown"));
-  }
-}
+export { abortSession, abortAllUserSessions, abortAllSessions };
 
 // ---------------------------------------------------------------------------
 // BYOK key retrieval
@@ -372,6 +340,37 @@ export async function getUserServiceTokens(
 }
 
 // ---------------------------------------------------------------------------
+// Abort-marker helpers (feat-abort-conversation-web PR1, plan §1.5).
+// ---------------------------------------------------------------------------
+
+/** Usage snapshot persisted alongside an `aborted` assistant message
+ *  row. Documented at `messages.usage` jsonb in migration 040. */
+export interface UsageSnapshot {
+  input_tokens: number;
+  output_tokens: number;
+  cost_usd?: number | null;
+  completed_actions: Array<{
+    tool_name: string;
+    input_summary: string;
+    result_summary: string;
+  }>;
+}
+
+/** One-line summary of an opaque SDK tool input for the abort-marker
+ *  chip-list. Bounded length so a verbose `Edit` payload doesn't bloat
+ *  the persisted `messages.usage` jsonb. */
+function summarizeToolPayload(input: unknown): string {
+  if (input === undefined || input === null) return "";
+  let s: string;
+  try {
+    s = typeof input === "string" ? input : JSON.stringify(input);
+  } catch {
+    s = String(input);
+  }
+  return s.slice(0, 200);
+}
+
+// ---------------------------------------------------------------------------
 // Message persistence
 // ---------------------------------------------------------------------------
 async function saveMessage(
@@ -381,6 +380,15 @@ async function saveMessage(
   content: string,
   toolCalls?: unknown,
   leaderId?: string,
+  /**
+   * Optional 7th argument added in feat-abort-conversation-web PR1
+   * (plan §1.4). When omitted, the row defaults to `status='complete'`
+   * and `usage=null` — matching every existing call site without
+   * change. The abort branch passes `{ status: 'aborted', usage }` so
+   * the abort-marker UI in PR2 can render the partial assistant text
+   * + token cost + completed-actions chip-list.
+   */
+  meta?: { status?: "complete" | "aborted"; usage?: UsageSnapshot },
 ) {
   // PR-B §1.5.1 (#3244): tenant-scoped insert. RLS on `messages` requires
   // `EXISTS (SELECT 1 FROM conversations WHERE id = conversation_id AND
@@ -396,6 +404,8 @@ async function saveMessage(
     content,
     tool_calls: toolCalls || null,
     leader_id: leaderId ?? null,
+    status: meta?.status ?? "complete",
+    usage: meta?.usage ?? null,
   });
 
   if (error) {
@@ -680,10 +690,8 @@ export async function startAgentSession(
    *  session_ended after all leaders finish (see #2428). */
   skipSessionEnded?: boolean,
 ): Promise<void> {
-  const key = sessionKey(userId, conversationId, leaderId);
-
   // Abort any existing session for this specific leader (or un-keyed session)
-  const existing = activeSessions.get(key);
+  const existing = getSession(userId, conversationId, leaderId);
   if (existing) existing.abort.abort();
 
   const controller = new AbortController();
@@ -692,7 +700,7 @@ export async function startAgentSession(
     reviewGateResolvers: new Map(),
     sessionId: null,
   };
-  activeSessions.set(key, session);
+  registerSession(userId, conversationId, session, leaderId);
 
   // Guards for stream_end idempotency across success, exception, and abort
   // paths. Before #2843, stream_end only fired inside the `result` branch —
@@ -705,6 +713,27 @@ export async function startAgentSession(
   let streamStartSent = false;
   let streamEndSent = false;
   const outerStreamLeaderId: DomainLeaderId = leaderId ?? "cpo";
+
+  // Abort-branch closure-scoped accumulators
+  // (feat-abort-conversation-web PR1, plan §1.5).
+  //
+  // Hoisted above the `runWithByokLease` callback so the outer
+  // `catch (err) { if (controller.signal.aborted) ... }` block can read
+  // them when the SDK iterator throws an AbortError. The `messagePersisted`
+  // guard is the single source of truth that prevents the abort branch
+  // and the `result` branch from each calling `saveMessage` for the same
+  // turn (plan §1.9 race-window invariant).
+  let fullText = "";
+  let messagePersisted = false;
+  let accumulatedUsage: { input_tokens: number; output_tokens: number; cost_usd?: number | null } = {
+    input_tokens: 0,
+    output_tokens: 0,
+  };
+  const completedActions: Array<{
+    tool_name: string;
+    input_summary: string;
+    result_summary: string;
+  }> = [];
 
   try {
     // PR-B §1.5.3 (#3244): wrap session body in runWithByokLease.
@@ -1194,6 +1223,12 @@ issues/PRs, 4 KB comments); follow the html_url for the full text.`;
         resumeSessionId: safeResumeSessionId,
         maxTurns: 50,
         maxBudgetUsd: 5.0,
+        // Wire user-initiated Stop into the SDK iterator + underlying
+        // HTTP fetch + hook callbacks. The for-await abort branch below
+        // reads `controller.signal.reason` to route persistence vs
+        // status-flip via `classifyAbortReason`. Plan §1.6 / SDK
+        // `Options.abortController` (sdk.d.ts:816).
+        abortController: controller,
         ...(mcpServersOption ? { mcpServers: mcpServersOption } : {}),
         ...(allowedToolsList ? { allowedTools: allowedToolsList } : {}),
         // Permission callback (SDK chain step 5). File-tool checks are
@@ -1226,8 +1261,11 @@ issues/PRs, 4 KB comments); follow the html_url for the full text.`;
       }),
     });
 
-    // Stream messages to client with leader attribution
-    let fullText = "";
+    // Stream messages to client with leader attribution.
+    // `fullText`, `messagePersisted`, `accumulatedUsage`,
+    // `completedActions` are hoisted above the `runWithByokLease`
+    // callback (see startAgentSession declarations) so the outer
+    // catch's abort branch can read them when the SDK iterator throws.
     let hasStreamedPartials = false;
     const streamLeaderId = effectiveLeaderId;
 
@@ -1355,6 +1393,21 @@ issues/PRs, 4 KB comments); follow the html_url for the full text.`;
                   leaderId: streamLeaderId,
                 }),
               );
+
+              // Snapshot tool_use for the abort-marker chip-list (plan
+              // §1.5). The assistant emitting a tool_use means the
+              // model decided to call it; the tokens were billed
+              // regardless of whether the result returns. We display
+              // the human-readable label (same source the WS event
+              // uses) so the marker matches what the user already saw
+              // in the streaming chip during the live turn — the raw
+              // SDK tool name is an internal implementation detail.
+              const inputSummary = summarizeToolPayload(toolBlock.input);
+              completedActions.push({
+                tool_name: buildToolLabel(toolBlock.name ?? "unknown", toolBlock.input, workspacePath),
+                input_summary: inputSummary,
+                result_summary: "",
+              });
             }
           }
         }
@@ -1391,8 +1444,14 @@ issues/PRs, 4 KB comments); follow the html_url for the full text.`;
           // Save the full assistant response with leader attribution.
           // PR-B (#3244 §1.5.1): saveMessage signature gained userId first
           // arg for tenant-scoped insert via getFreshTenantClient(userId).
-          if (fullText) {
+          if (fullText && !messagePersisted) {
             await saveMessage(userId, conversationId, "assistant", fullText, undefined, streamLeaderId);
+            messagePersisted = true;
+            assistantPersisted = true;
+          } else if (messagePersisted) {
+            // The abort branch already persisted the partial text with
+            // status='aborted'; do not double-write a `complete` row
+            // for the same turn (plan §1.9 race-window invariant).
             assistantPersisted = true;
           }
 
@@ -1400,6 +1459,15 @@ issues/PRs, 4 KB comments); follow the html_url for the full text.`;
           const costDelta = message.total_cost_usd ?? 0;
           const inputDelta = message.usage?.input_tokens ?? 0;
           const outputDelta = message.usage?.output_tokens ?? 0;
+          // Mirror into the abort-branch accumulator so a Stop
+          // received between `result` and the next iteration still
+          // surfaces token counts to the user (the abort branch reads
+          // these unconditionally).
+          accumulatedUsage = {
+            input_tokens: inputDelta,
+            output_tokens: outputDelta,
+            cost_usd: costDelta,
+          };
 
           // SERVICE-ROLE: `increment_conversation_cost` is REVOKEd from
           // authenticated (migration 017:43). Granting authenticated would
@@ -1545,22 +1613,100 @@ issues/PRs, 4 KB comments); follow the html_url for the full text.`;
     });  // end runWithByokLease
   } catch (err) {
     if (controller.signal.aborted) {
-      // If superseded, the caller (abortActiveSession) already set status to
-      // "completed" — skip the "failed" write to avoid overwriting it.
+      // feat-abort-conversation-web PR1 (plan §1.3): the abort branch
+      // splits three ways based on `controller.signal.reason`:
+      //   - user_requested_stop → persist partial fullText, conversation
+      //     stays `active` (continuable), client receives
+      //     `session_ended:user_aborted`.
+      //   - disconnected (tab-close, ws.on("close") in ws-handler.ts) →
+      //     persist partial fullText (G4 fix today's silent discard),
+      //     conversation flips to `failed` (today's behavior preserved
+      //     so a crashed client doesn't masquerade as clean).
+      //   - superseded (caller already set conversation to `completed`
+      //     via abortActiveSession) → skip status flip; do NOT persist
+      //     a partial — the supersession write owns the row's terminal
+      //     state.
+      const { isUserRequested } = classifyAbortReason(controller.signal.reason);
       const isSuperseded = err instanceof Error && err.message.includes("superseded");
+
       if (!isSuperseded) {
-        // Disconnect or abort -- mark conversation as failed so it does not
-        // stay stuck in "waiting_for_user" or "active" status forever.
-        await updateConversationStatus(userId, conversationId, "failed").catch(
+        // Persist partial assistant text. Applies to BOTH user-requested
+        // AND disconnected aborts so closing a tab no longer loses what
+        // the user paid for. The `messagePersisted` guard prevents a
+        // double-save when a `result` event arrived 50ms after abort.
+        if (!messagePersisted && fullText.length > 0) {
+          messagePersisted = true;
+          try {
+            await saveMessage(
+              userId,
+              conversationId,
+              "assistant",
+              fullText,
+              undefined,
+              outerStreamLeaderId,
+              {
+                status: "aborted",
+                usage: { ...accumulatedUsage, completed_actions: completedActions },
+              },
+            );
+          } catch (persistErr) {
+            // Persistence failure here is a silent fallback per
+            // `cq-silent-fallback-must-mirror-to-sentry`: the user
+            // already saw the partial in the live stream, but losing
+            // the row means it disappears on history reload. Mirror so
+            // on-call sees the drift before it becomes a missing-data
+            // bug report.
+            reportSilentFallback(persistErr, {
+              feature: "abort-turn",
+              op: "persist-partial-on-abort",
+              extra: {
+                userId,
+                conversationId,
+                isUserRequested,
+                hadPartialText: true,
+              },
+            });
+          }
+        }
+
+        const nextConversationStatus: Conversation["status"] = isUserRequested
+          ? "waiting_for_user"
+          : "failed";
+        await updateConversationStatus(userId, conversationId, nextConversationStatus).catch(
           (statusErr) => {
             log.error(
-              { err: statusErr, conversationId },
-              "Failed to mark aborted conversation as failed",
+              { err: statusErr, conversationId, isUserRequested },
+              "Failed to write aborted-conversation status",
             );
+            reportSilentFallback(statusErr, {
+              feature: "abort-turn",
+              op: "update-conversation-status",
+              extra: { userId, conversationId, isUserRequested, nextStatus: nextConversationStatus },
+            });
           },
         );
-        // Outer catch: result-branch wrap might not have run; release slot so the user isn't stuck for up to 60s waiting for the reaper.
-        // releaseSlot already swallows errors internally (concurrency.ts) — no extra .catch needed.
+
+        if (isUserRequested) {
+          // Send the explicit user-aborted ack so the client can
+          // transition out of `stopping` state and re-enable input.
+          try {
+            sendToClient(userId, {
+              type: "session_ended",
+              reason: "user_aborted",
+            });
+          } catch (sendErr) {
+            reportSilentFallback(sendErr, {
+              feature: "abort-turn",
+              op: "send-session-ended",
+              extra: { userId, conversationId },
+            });
+          }
+        }
+
+        // Outer catch: result-branch wrap might not have run; release
+        // slot so the user isn't stuck for up to 60s waiting for the
+        // reaper. releaseSlot already swallows errors internally
+        // (concurrency.ts) — no extra .catch needed.
         await releaseSlot(userId, conversationId);
       }
     } else if (
@@ -1640,7 +1786,7 @@ issues/PRs, 4 KB comments); follow the html_url for the full text.`;
         );
       }
     }
-    activeSessions.delete(key);
+    unregisterSession(userId, conversationId, leaderId);
   }
 }
 
@@ -1764,8 +1910,7 @@ export async function sendUserMessage(
   }
 
   // Check for an in-memory session with a captured session_id
-  const key = sessionKey(userId, conversationId);
-  const activeSession = activeSessions.get(key);
+  const activeSession = getSession(userId, conversationId);
   const resumeSessionId = activeSession?.sessionId ?? conv.session_id ?? undefined;
 
   const handleSessionError = (err: unknown) => {
@@ -1898,22 +2043,19 @@ export async function resolveReviewGate(
 ): Promise<void> {
   // Search all sessions for this conversation (any leader) to find the gate.
   // In multi-leader mode, each leader has its own session key.
-  const prefix = `${userId}:${conversationId}`;
   let hasSession = false;
   let foundSession: import("./review-gate").AgentSession | undefined;
   let foundEntry: { resolve: (s: string) => void; options: string[] } | undefined;
 
-  for (const [key, session] of activeSessions) {
-    if (key === prefix || key.startsWith(`${prefix}:`)) {
-      hasSession = true;
-      const entry = session.reviewGateResolvers.get(gateId);
-      if (entry) {
-        foundSession = session;
-        foundEntry = entry;
-        break;
-      }
+  forEachSessionForConversation(userId, conversationId, (_key, session) => {
+    hasSession = true;
+    const entry = session.reviewGateResolvers.get(gateId);
+    if (entry) {
+      foundSession = session;
+      foundEntry = entry;
+      return true; // stop iteration
     }
-  }
+  });
 
   if (!hasSession) {
     throw new Error(ERR_NO_ACTIVE_SESSION);
