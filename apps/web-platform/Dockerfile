@@ -66,6 +66,14 @@ ENV BUILD_SHA=$BUILD_SHA
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev
 
+# Build-time assertion that lazy-imported runtime deps resolve in the runner image's
+# node_modules. Catches future regressions where a Dockerfile edit (npm prune, prod
+# re-copy, devDependencies migration) strips pdfjs-dist or sharp from the runner stage,
+# which would otherwise be swallowed by try/catch in pdf-text-extract.ts /
+# kb-preview-metadata.ts and surface only as a WARN Sentry breadcrumb in production.
+# See #3422 / Ref #3410.
+RUN node -e "require.resolve('pdfjs-dist/legacy/build/pdf.mjs'); require.resolve('sharp')"
+
 # Next.js build output + public assets (icons, service worker)
 COPY --from=builder /app/public ./public
 COPY --from=builder /app/.next ./.next
