@@ -197,6 +197,22 @@ describe("POST /api/auth/dev-signin — happy path + cookie-writer regression (R
     });
   });
 
+  it("returns 403 when Origin header is from an unallowed origin (CSRF gate)", async () => {
+    const params = new URLSearchParams({ slot: "1" });
+    const request = new Request("http://localhost/api/auth/dev-signin", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded",
+        Origin: "https://evil.example.com",
+      },
+      body: params.toString(),
+    });
+    const { POST } = await importRoute();
+    const res = await POST(request);
+    expect(res.status).toBe(403);
+    expect(mockSignInWithPassword).not.toHaveBeenCalled();
+  });
+
   it("returns 500 when signInWithPassword returns an error; response body does not echo password", async () => {
     mockSignInWithPassword.mockImplementationOnce(async () => ({
       data: { user: null, session: null },

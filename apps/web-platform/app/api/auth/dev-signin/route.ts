@@ -17,6 +17,7 @@ import { createServerClient, type CookieOptions } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
 
 import { isDevSignInEnabled } from "@/lib/auth/dev-mode";
+import { rejectCsrf, validateOrigin } from "@/lib/auth/validate-origin";
 
 import {
   getEmailForSlot,
@@ -47,6 +48,15 @@ export async function POST(request: NextRequest | Request): Promise<Response> {
 
   // Layer B — feature flag (must explicitly be "1" in Doppler dev).
   if (!isDevSignInEnabled()) return notFound();
+
+  // CSRF — the route is gated to dev so the realistic threat is a
+  // malicious site loaded in the same browser session as a developer's
+  // dev server with FLAG_DEV_SIGNIN=1. validateOrigin resolves to the
+  // local dev allowlist (localhost:3000 + NEXT_PUBLIC_APP_URL); 403 on
+  // mismatch. Required by lib/auth/csrf-coverage.test.ts (negative-space
+  // gate over every state-mutating route).
+  const { valid, origin } = validateOrigin(request);
+  if (!valid) return rejectCsrf("/api/auth/dev-signin", origin);
 
   // Parse form-encoded body (the panel posts a vanilla <form>).
   let slot: DevSlot;
