@@ -36,6 +36,7 @@
 
 import { MAX_AGENT_READABLE_PDF_SIZE } from "@/lib/attachment-constants";
 import { reportSilentFallback } from "./observability";
+import { toPdfjsData } from "./pdfjs-input";
 
 /**
  * Hard cap on page iteration count. PDFs declare /Pages /Count independently
@@ -117,19 +118,9 @@ export async function extractPdfText(
     return { error: "lazy_import_failed" };
   }
 
-  // pdfjs-dist@5.4.296 explicitly REJECTS Buffer ("Please provide binary data
-  // as Uint8Array, rather than Buffer."), even though Buffer is a Uint8Array
-  // subclass — the check is `instanceof Buffer === false`. Wrap to a plain
-  // Uint8Array view (no copy) so the legacy parser entry accepts it.
-  const isNodeBuffer =
-    typeof Buffer !== "undefined" && Buffer.isBuffer(buffer);
-  const data = isNodeBuffer
-    ? new Uint8Array(
-        (buffer as Buffer).buffer,
-        (buffer as Buffer).byteOffset,
-        (buffer as Buffer).byteLength,
-      )
-    : (buffer as Uint8Array);
+  // pdfjs-dist@5+ rejects Buffer; convert via the shared no-copy helper so
+  // this and `kb-preview-metadata.ts` stay in lockstep.
+  const data = toPdfjsData(buffer);
 
   let doc: Awaited<ReturnType<typeof pdfjs.getDocument>["promise"]> | null =
     null;
