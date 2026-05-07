@@ -1,4 +1,4 @@
-// pdfjs-mocked tests for `pdf-text-extract.ts` (#3429 + #3438).
+// pdfjs-mocked tests for `pdf-text-extract.ts` (#3429).
 //
 // Lives in its own file so vitest's per-file module isolation prevents the
 // `vi.mock("pdfjs-dist/legacy/build/pdf.mjs", …)` factory from leaking into
@@ -6,13 +6,15 @@
 // hoisted to the top of THIS file only.
 //
 // Covers:
-//   1. extractPdfText > lazy_import_failed (#3438 fold-in) — when the
-//      dynamic `import("pdfjs-dist/...")` rejects, the typed error class
-//      surfaces correctly. Previously had no direct test (only an
-//      indirect path via runtime engine drift).
-//   2. extractPdfMetadata > timeout (#3429) — when `getDocument` exceeds
-//      METADATA_READ_TIMEOUT_MS, the function returns the timeout shape
-//      and calls `loadingTask.destroy()` once to release the worker.
+//   - extractPdfMetadata > timeout (#3429) — when `getDocument` exceeds
+//     METADATA_READ_TIMEOUT_MS, the function returns the timeout shape
+//     and calls `loadingTask.destroy()` once to release the worker.
+//
+// Note: `lazy_import_failed` direct coverage (#3438) lives in
+// `pdf-text-extract.test.ts` using the `vi.doMock` + `vi.resetModules`
+// pattern at test scope, which is the only shape that can induce a true
+// import REJECTION (vitest's per-file `vi.mock` cannot — the factory IS
+// the import).
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
@@ -26,7 +28,6 @@ vi.mock("pdfjs-dist/legacy/build/pdf.mjs", () => ({
 }));
 
 import {
-  extractPdfText,
   extractPdfMetadata,
   METADATA_READ_TIMEOUT_MS,
 } from "@/server/pdf-text-extract";
@@ -38,30 +39,6 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.useRealTimers();
-});
-
-// NOTE: this describe block was originally drafted as a `lazy_import_failed`
-// fold-in for #3438, but the mock-factory model of `vi.mock` cannot induce
-// a true import REJECTION (the factory IS the import — vitest invokes it
-// synchronously, errors propagate). The synchronous-throw-at-getDocument
-// shape exercised here lands in `extractPdfText`'s outer try/catch
-// (parse_error branch), NOT the lazy_import_failed branch above. A real
-// lazy_import_failed coverage would require a different mock harness
-// (e.g., `vi.doMock` with rejected factory in an isolated test file) and
-// remains an open follow-up — see `#3438`. Naming the test honestly here
-// to avoid the misleading-coverage signal flagged in PR #3430 review.
-describe("extractPdfText post-import getDocument throw (parse_error path)", () => {
-  it("returns { error: 'parse_error' } when getDocument throws synchronously at the call site", async () => {
-    getDocumentSpy.mockImplementation(() => {
-      throw new Error("synthetic-pdfjs-init-failure");
-    });
-    const buf = Buffer.from("%PDF-1.4\nfake");
-    const result = await extractPdfText(buf, 50_000);
-    expect(result).not.toBeNull();
-    expect(result && "error" in result).toBe(true);
-    if (!result || !("error" in result)) return;
-    expect(result.error).toBe("parse_error");
-  });
 });
 
 describe("extractPdfMetadata timeout (#3429)", () => {

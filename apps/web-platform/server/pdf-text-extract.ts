@@ -36,6 +36,7 @@
 
 import { MAX_AGENT_READABLE_PDF_SIZE } from "@/lib/attachment-constants";
 import { reportSilentFallback } from "./observability";
+import { toPdfjsData } from "./pdfjs-input";
 
 /**
  * Hard cap on page iteration count. PDFs declare /Pages /Count independently
@@ -152,6 +153,10 @@ export async function extractPdfText(
   // pdfjs-dist@5 calls it during module init.
   let pdfjs: typeof import("pdfjs-dist/legacy/build/pdf.mjs");
   try {
+    // If you add or rename a bare-specifier `await import()` here, mirror it
+    // in the build-time `require.resolve` assertion in apps/web-platform/Dockerfile
+    // (see #3422) — otherwise a missing dep silently routes through the catch
+    // below and surfaces only as a WARN Sentry breadcrumb.
     pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
   } catch (importErr) {
     reportSilentFallback(importErr, {
@@ -165,19 +170,9 @@ export async function extractPdfText(
     return { error: "lazy_import_failed" };
   }
 
-  // pdfjs-dist@5.4.296 explicitly REJECTS Buffer ("Please provide binary data
-  // as Uint8Array, rather than Buffer."), even though Buffer is a Uint8Array
-  // subclass — the check is `instanceof Buffer === false`. Wrap to a plain
-  // Uint8Array view (no copy) so the legacy parser entry accepts it.
-  const isNodeBuffer =
-    typeof Buffer !== "undefined" && Buffer.isBuffer(buffer);
-  const data = isNodeBuffer
-    ? new Uint8Array(
-        (buffer as Buffer).buffer,
-        (buffer as Buffer).byteOffset,
-        (buffer as Buffer).byteLength,
-      )
-    : (buffer as Uint8Array);
+  // pdfjs-dist@5+ rejects Buffer; convert via the shared no-copy helper so
+  // this and `kb-preview-metadata.ts` stay in lockstep.
+  const data = toPdfjsData(buffer);
 
   let doc: Awaited<ReturnType<typeof pdfjs.getDocument>["promise"]> | null =
     null;
@@ -299,18 +294,10 @@ export async function extractPdfMetadata(
     return { ok: false, reason: "parse_error" };
   }
 
-  // 3. Buffer → Uint8Array view (zero-copy) — pdfjs-dist@5.4.296 rejects
-  //    Node Buffer (`instanceof Buffer === false` check). Authoritative
-  //    pattern from `extractPdfText` above.
-  const isNodeBuffer =
-    typeof Buffer !== "undefined" && Buffer.isBuffer(buffer);
-  const data = isNodeBuffer
-    ? new Uint8Array(
-        (buffer as Buffer).buffer,
-        (buffer as Buffer).byteOffset,
-        (buffer as Buffer).byteLength,
-      )
-    : (buffer as Uint8Array);
+  // 3. Buffer → Uint8Array view (zero-copy) — shared helper from `pdfjs-input.ts`
+  //    keeps `extractPdfText` and `extractPdfMetadata` byte-equivalent on the
+  //    pdfjs-dist@5+ "Buffer is not Uint8Array" rejection.
+  const data = toPdfjsData(buffer);
 
   // 4. Race the loadingTask.promise against a timeout. On timeout we call
   //    `loadingTask.destroy()` (the synchronous handle owns the cancel API

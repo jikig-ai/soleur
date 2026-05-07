@@ -12,7 +12,7 @@
 // gone — tests that asserted `toBeNull()` now assert `result.error === <class>`
 // so the next Sentry event diagnoses itself.
 
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 
 import {
   extractPdfText,
@@ -22,6 +22,19 @@ import {
   METADATA_READ_TIMEOUT_MS,
 } from "@/server/pdf-text-extract";
 import { MAX_AGENT_READABLE_PDF_SIZE } from "@/lib/attachment-constants";
+import {
+  BELOW_PDFJS_ENGINES_FLOOR,
+  emitPdfjsEngineFloorDiagnostic,
+} from "./helpers/engines-floor";
+
+// Engine-floor guard for #3439 (follow-up to #3424). See
+// `test/helpers/engines-floor.ts` for the rationale (pdfjs-dist@5 calls
+// `process.getBuiltinModule`, added in Node 22.3 / 20.16). Dev path:
+// describe.skipIf + single stderr diagnostic. CI path: throw at module init
+// so a misconfigured runner can't ship vacuous green. The lazy_import_failed
+// test below sits OUTSIDE the skipIf because it mocks the real import — the
+// engine floor is irrelevant to it.
+emitPdfjsEngineFloorDiagnostic("pdf-text-extract.test");
 
 /**
  * Build a minimal PDF byte buffer with one text-showing operator per page.
@@ -111,7 +124,7 @@ function isOk(
   return result !== null && !("error" in result);
 }
 
-describe("extractPdfText", () => {
+describe.skipIf(BELOW_PDFJS_ENGINES_FLOOR)("extractPdfText", () => {
   it("extracts text from a single-page PDF", async () => {
     const buf = makeMinimalPdf(["Hello World"]);
     const result = await extractPdfText(buf, 50_000);
@@ -230,7 +243,11 @@ describe("extractPdfText", () => {
     expect(["corrupted", "parse_error"]).toContain(result.error);
   });
 
-  it("caps page iteration at MAX_PAGES and reports truncated=true (#3338 P1-B)", async () => {
+  // 30s ceiling: the extractor caps iteration at MAX_PAGES=500 (server/pdf-text-extract.ts);
+  // 500 pdfjs getPage+getTextContent calls run ~3-8s locally, so 30s gives ~4x headroom
+  // for cold-cache CI variance without tolerating real regressions (default vitest 5s
+  // would fail on slow runners).
+  it("caps page iteration at MAX_PAGES and reports truncated=true (#3338 P1-B)", { timeout: 30_000 }, async () => {
     const pages = Array.from({ length: 600 }, (_, i) => `p${i}`);
     const buf = makeMinimalPdf(pages);
     const result = await extractPdfText(buf, 50_000);
@@ -249,11 +266,10 @@ describe("extractPdfText", () => {
 // new HARD class `too_many_pages` to avoid the Read-fanout idle-reaper
 // timeout described in #3429.
 //
-// NOTE: pdfjs-mock-based tests (timeout, lazy_import_failed) live in the
-// sibling file `pdf-text-extract-mocked.test.ts` so vitest's per-file
-// isolation prevents the module mocks from leaking into the real-pdfjs
-// tests below.
-describe("extractPdfMetadata (#3429)", () => {
+// `skipIf(BELOW_PDFJS_ENGINES_FLOOR)` because the "valid 3-page PDF" test
+// calls real pdfjs which needs Node ≥22.3 / 20.16 per the engines field.
+// The mock-based timeout test lives in `pdf-text-extract-mocked.test.ts`.
+describe.skipIf(BELOW_PDFJS_ENGINES_FLOOR)("extractPdfMetadata (#3429)", () => {
   it("exports the threshold and ceiling constants with sensible values", () => {
     expect(LARGE_PDF_PAGE_THRESHOLD).toBe(150);
     expect(METADATA_READ_BYTE_CEILING_BYTES).toBe(40 * 1024 * 1024);
@@ -263,8 +279,8 @@ describe("extractPdfMetadata (#3429)", () => {
   it("returns { ok: false, reason: 'oversized' } when buffer exceeds METADATA_READ_BYTE_CEILING_BYTES — short-circuits before pdfjs runs", async () => {
     // Allocate a buffer one byte over the ceiling. The function MUST
     // short-circuit BEFORE invoking pdfjs (otherwise the test would pay
-    // 60MB+ pdfjs xref-build cost). Wall-clock <50ms is the cheapest
-    // proxy for "no parser invocation".
+    // pdfjs xref-build cost). Wall-clock <50ms is the cheapest proxy
+    // for "no parser invocation".
     const oversized = Buffer.alloc(METADATA_READ_BYTE_CEILING_BYTES + 1);
     const start = Date.now();
     const result = await extractPdfMetadata(oversized);
@@ -289,5 +305,62 @@ describe("extractPdfMetadata (#3429)", () => {
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.reason).toBe("parse_error");
+  });
+});
+
+// Direct unit test of the lazy_import_failed branch (#3438). Sits OUTSIDE
+// the engine-floor describe.skipIf because the `vi.doMock` short-circuits
+// the real `await import("pdfjs-dist/legacy/build/pdf.mjs")` — the runtime
+// never reaches `process.getBuiltinModule`, so the test runs identically on
+// Node 21.7.3 and Node 22.x. Asserts both the discriminated-union contract
+// (`result.error === "lazy_import_failed"`) and the Sentry mirror call from
+// `pdf-text-extract.ts:113-122` (so the silent-fallback observability can't
+// regress without flipping the test red).
+//
+// Worker-isolation: relies on vitest's default per-file isolation
+// (`vitest.config.ts` does NOT set `pool: "threads"` with `isolate: false`
+// for the unit project). The before-import `vi.resetModules()` and the
+// finally-block `vi.doUnmock` + `vi.resetModules()` together prevent
+// in-file mock leakage; if the project ever moves to `isolate: false`,
+// move this `describe` to its own file (`pdf-text-extract.lazy-import.test.ts`).
+describe("extractPdfText lazy_import_failed", () => {
+  it("returns lazy_import_failed when pdfjs module init throws", async () => {
+    const reportSilentFallback = vi.fn();
+    try {
+      vi.doMock("@/server/observability", async () => {
+        const actual = await vi.importActual<
+          typeof import("@/server/observability")
+        >("@/server/observability");
+        return { ...actual, reportSilentFallback };
+      });
+      vi.doMock("pdfjs-dist/legacy/build/pdf.mjs", () => {
+        throw new Error("simulated module-init failure");
+      });
+      vi.resetModules();
+      const { extractPdfText: extractPdfTextIsolated } = await import(
+        "@/server/pdf-text-extract"
+      );
+      const buf = Buffer.from("%PDF-1.4\n");
+      const result = await extractPdfTextIsolated(buf, 50_000);
+      expect(result).toMatchObject({ error: "lazy_import_failed" });
+      expect(reportSilentFallback).toHaveBeenCalledTimes(1);
+      const [errArg, ctxArg] = reportSilentFallback.mock.calls[0];
+      // Vitest wraps factory throws with its own Error; we don't assert on
+      // the inner message because vitest swallows it. The discriminated-union
+      // contract above + the observability feature/op shape below are the
+      // load-bearing invariants.
+      expect(errArg).toBeInstanceOf(Error);
+      expect(ctxArg).toMatchObject({
+        feature: "kb-concierge-context",
+        op: "extractPdfText.import",
+      });
+      expect(ctxArg.extra).toMatchObject({
+        nodeVersion: process.versions.node,
+      });
+    } finally {
+      vi.doUnmock("@/server/observability");
+      vi.doUnmock("pdfjs-dist/legacy/build/pdf.mjs");
+      vi.resetModules();
+    }
   });
 });
