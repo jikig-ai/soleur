@@ -7,11 +7,18 @@ process.env.NEXT_PUBLIC_SUPABASE_URL ??= "https://test.supabase.co";
 // Mock dependencies (same pattern as agent-runner-system-prompt.test.ts)
 // ---------------------------------------------------------------------------
 
-const { mockFrom, mockQuery, mockReadFileSync, mockReadFile } = vi.hoisted(() => ({
+const {
+  mockFrom,
+  mockQuery,
+  mockReadFileSync,
+  mockReadFile,
+  resolveLeaderDocumentContextSpy,
+} = vi.hoisted(() => ({
   mockFrom: vi.fn(),
   mockQuery: vi.fn(),
   mockReadFileSync: vi.fn(),
   mockReadFile: vi.fn(),
+  resolveLeaderDocumentContextSpy: vi.fn(),
 }));
 
 vi.mock("@anthropic-ai/claude-agent-sdk", () => ({
@@ -121,6 +128,14 @@ vi.mock("../server/observability", () => ({
   reportSilentFallbackWarning: vi.fn(),
 }));
 
+// 2026-05-07 (#3437): the leader artifact-frame branch routes PDF/text
+// contexts through `leader-document-resolver`. Mock it so these tests
+// drive the partition shapes deterministically without exercising real
+// FS reads through the resolver wrapper.
+vi.mock("../server/leader-document-resolver", () => ({
+  resolveLeaderDocumentContext: resolveLeaderDocumentContextSpy,
+}));
+
 import { startAgentSession } from "../server/agent-runner";
 import type { ConversationContext } from "../lib/types";
 import {
@@ -163,12 +178,16 @@ describe("document context injection (#2428)", () => {
     setupMocks();
 
     const fileContent = "# Vision du projet\n\nCréer un lieu hybride...";
-    mockReadFile.mockResolvedValue(fileContent);
+    resolveLeaderDocumentContextSpy.mockResolvedValueOnce({
+      artifactPath: "overview/pitch-projet.md",
+      documentKind: "text",
+      documentContent: fileContent,
+    });
 
     const context: ConversationContext = {
       path: "overview/pitch-projet.md",
       type: "kb-viewer",
-      // no content — server should read it
+      // no content — resolver reads it
     };
 
     await startAgentSession("user-1", "conv-1", "cpo", undefined, "test", context);
@@ -181,6 +200,13 @@ describe("document context injection (#2428)", () => {
 
   test("PDF file: assertive Read instruction with filename", async () => {
     setupMocks();
+    // Path-only PDF (no extracted body, no typed error) → runner falls
+    // through to the gated Read directive (legacy behavior on path-only
+    // PDF contexts).
+    resolveLeaderDocumentContextSpy.mockResolvedValueOnce({
+      artifactPath: "overview/Au Chat Pôtan - Pitch Projet.pdf",
+      documentKind: "pdf",
+    });
 
     const context: ConversationContext = {
       path: "overview/Au Chat Pôtan - Pitch Projet.pdf",
@@ -198,9 +224,12 @@ describe("document context injection (#2428)", () => {
 
   test("text file over 50KB: assertive Read instruction with size info", async () => {
     setupMocks();
-
-    const largeContent = "x".repeat(60_000);
-    mockReadFile.mockResolvedValue(largeContent);
+    // Resolver caps at MAX_INLINE_BYTES (50KB) and surfaces kind=text
+    // without content for over-cap files; runner emits the Read directive.
+    resolveLeaderDocumentContextSpy.mockResolvedValueOnce({
+      artifactPath: "overview/large-file.md",
+      documentKind: "text",
+    });
 
     const context: ConversationContext = {
       path: "overview/large-file.md",
@@ -210,7 +239,6 @@ describe("document context injection (#2428)", () => {
     await startAgentSession("user-1", "conv-1", "cpo", undefined, "test", context);
 
     const options = mockQuery.mock.calls[0][0].options;
-    // Should instruct to Read the file, not inject the content directly
     expect(options.systemPrompt).toContain("large-file.md");
     expect(options.systemPrompt).toContain("Do not ask which document");
     expect(options.systemPrompt).not.toContain("x".repeat(100));
@@ -218,7 +246,12 @@ describe("document context injection (#2428)", () => {
 
   test("all context injection branches include 'do not ask which document' language", async () => {
     setupMocks();
-    mockReadFile.mockRejectedValue(new Error("ENOENT"));
+    // Read failure surfaces as kind=text without content (Bug A1 #3376
+    // legacy leader behavior — Read directive on text read failure).
+    resolveLeaderDocumentContextSpy.mockResolvedValueOnce({
+      artifactPath: "overview/missing-file.md",
+      documentKind: "text",
+    });
 
     const context: ConversationContext = {
       path: "overview/missing-file.md",
@@ -228,13 +261,16 @@ describe("document context injection (#2428)", () => {
     await startAgentSession("user-1", "conv-1", "cpo", undefined, "test", context);
 
     const options = mockQuery.mock.calls[0][0].options;
-    // Even on read error, the prompt should include the anti-question language
     expect(options.systemPrompt).toContain("Do not ask which document");
   });
 
   test("system prompt never contains absolute workspace paths in context injection", async () => {
     setupMocks();
-    mockReadFile.mockResolvedValue("some content");
+    resolveLeaderDocumentContextSpy.mockResolvedValueOnce({
+      artifactPath: "overview/vision.md",
+      documentKind: "text",
+      documentContent: "some content",
+    });
 
     const context: ConversationContext = {
       path: "overview/vision.md",

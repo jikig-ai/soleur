@@ -8,10 +8,11 @@ process.env.NEXT_PUBLIC_APP_URL ??= "https://app.soleur.ai";
 // Mock all heavy dependencies (same pattern as agent-runner-tools.test.ts)
 // ---------------------------------------------------------------------------
 
-const { mockFrom, mockQuery, mockReadFileSync } = vi.hoisted(() => ({
+const { mockFrom, mockQuery, mockReadFileSync, resolveLeaderDocumentContextSpy } = vi.hoisted(() => ({
   mockFrom: vi.fn(),
   mockQuery: vi.fn(),
   mockReadFileSync: vi.fn(),
+  resolveLeaderDocumentContextSpy: vi.fn(),
 }));
 
 vi.mock("@anthropic-ai/claude-agent-sdk", () => ({
@@ -116,6 +117,15 @@ vi.mock("../server/observability", () => ({
   reportSilentFallbackWarning: vi.fn(),
 }));
 
+// 2026-05-07 (#3437): the leader artifact-frame branch now resolves
+// PDF/text contexts through `leader-document-resolver`. Mock it so these
+// system-prompt tests drive expected partition shapes without paying real
+// FS I/O. Per-test `mockResolvedValueOnce` calls supply the resolver
+// output that produces each expected directive.
+vi.mock("../server/leader-document-resolver", () => ({
+  resolveLeaderDocumentContext: resolveLeaderDocumentContextSpy,
+}));
+
 import { startAgentSession } from "../server/agent-runner";
 import type { ConversationContext } from "../lib/types";
 import {
@@ -164,6 +174,13 @@ describe("agent-runner system prompt context injection", () => {
         return JSON.stringify({ mcpServers: {} });
       }
       throw new Error(`ENOENT: no such file ${filePath}`);
+    });
+    // Default resolver output: the path-only legacy shape (kind text without
+    // content → produces a Read directive). Tests that need a specific
+    // partition shape override per-call via `mockResolvedValueOnce`.
+    resolveLeaderDocumentContextSpy.mockResolvedValue({
+      artifactPath: "knowledge-base/product/roadmap.md",
+      documentKind: "text",
     });
   });
 
@@ -312,6 +329,13 @@ describe("agent-runner system prompt context injection", () => {
   test("leader system prompt with PDF context: artifact frame lands BEFORE baseline directive, AFTER identity opener", async () => {
     setupSupabaseMock(BASE_USER_DATA);
     setupQueryMockImmediate();
+    // Resolver returns a soft-failure class so the runner picks the gated
+    // directive (legacy leader behavior on PDF contexts pre-#3437).
+    resolveLeaderDocumentContextSpy.mockResolvedValueOnce({
+      artifactPath: "knowledge-base/test-fixtures/book.pdf",
+      documentKind: "pdf",
+      documentExtractError: "read_failed",
+    });
 
     const context: ConversationContext = {
       path: "knowledge-base/test-fixtures/book.pdf",
@@ -351,6 +375,11 @@ describe("agent-runner system prompt context injection", () => {
   test("leader system prompt with PDF context: gated directive names every measured binary plus install verbs", async () => {
     setupSupabaseMock(BASE_USER_DATA);
     setupQueryMockImmediate();
+    resolveLeaderDocumentContextSpy.mockResolvedValueOnce({
+      artifactPath: "knowledge-base/test-fixtures/book.pdf",
+      documentKind: "pdf",
+      documentExtractError: "read_failed",
+    });
 
     const context: ConversationContext = {
       path: "knowledge-base/test-fixtures/book.pdf",
@@ -385,6 +414,11 @@ describe("agent-runner system prompt context injection", () => {
   test("leader system prompt with PDF context: directive equals buildPdfGatedDirective() factory output", async () => {
     setupSupabaseMock(BASE_USER_DATA);
     setupQueryMockImmediate();
+    resolveLeaderDocumentContextSpy.mockResolvedValueOnce({
+      artifactPath: "knowledge-base/test-fixtures/book.pdf",
+      documentKind: "pdf",
+      documentExtractError: "read_failed",
+    });
 
     const path = "knowledge-base/test-fixtures/book.pdf";
     const context: ConversationContext = { path, type: "kb-viewer" };

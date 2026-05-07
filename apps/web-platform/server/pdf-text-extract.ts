@@ -141,7 +141,14 @@ export interface PdfTextExtractError {
 export async function extractPdfText(
   buffer: Buffer | Uint8Array,
   capChars: number,
+  options?: { featureTag?: string },
 ): Promise<PdfTextExtractResult | PdfTextExtractError> {
+  // featureTag disambiguates Sentry mirrors between callers (Concierge vs
+  // leader). Default preserves the legacy behavior so existing call sites
+  // remain wire-compatible. The leader-document resolver passes
+  // `featureTag: "leader-context"` so operators can filter leader-side
+  // lazy-import failures from Concierge fires.
+  const featureTag = options?.featureTag ?? "kb-concierge-context";
   if (buffer.length > MAX_AGENT_READABLE_PDF_SIZE) {
     return { error: "oversized_buffer" };
   }
@@ -160,7 +167,7 @@ export async function extractPdfText(
     pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
   } catch (importErr) {
     reportSilentFallback(importErr, {
-      feature: "kb-concierge-context",
+      feature: featureTag,
       op: "extractPdfText.import",
       extra: {
         nodeVersion: process.versions.node,
