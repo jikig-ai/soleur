@@ -1,0 +1,26 @@
+{
+  "_comment": "S2 spike fixture manifest. PDF binaries are .gitignore'd (see scripts/spike/.gitignore). Operator drops fixtures in scripts/spike/fixtures/ before running pdf-outline-coverage.ts. Verify SHA-256 before use to detect bit-rot or wrong copy.",
+  "fixtures": [
+    {
+      "name": "outline-bearing-technical-book",
+      "filename": "outline-bearing.pdf",
+      "expected": "usable",
+      "minPages": 200,
+      "maxPages": 500,
+      "minOutlineEntries": 10,
+      "minPageCoverage": 0.8,
+      "sha256": "TODO: operator records SHA-256 after dropping the fixture",
+      "sourceUrl": "TODO: operator records source URL (e.g., a Manning/O'Reilly purchase or LeanPub free sample with TOC)",
+      "notes": "Technical book with publisher-grade table of contents. pdfjs-dist getOutline() should return a tree with depth>=1 entries that resolve via getDestination/getPageIndex."
+    },
+    {
+      "name": "no-outline-scanned-book",
+      "filename": "no-outline.pdf",
+      "expected": "fall-through",
+      "minPages": 50,
+      "sha256": "TODO: operator records SHA-256 after dropping the fixture",
+      "sourceUrl": "TODO: operator records source URL (e.g., a scanned PDF from archive.org)",
+      "notes": "Scanned PDF with no embedded outline. extractPdfOutline should return { ok: false, reason: \"no_outline\" } so the resolver falls through to PR #3430's too_many_pages bridge."
+    }
+  ]
+}

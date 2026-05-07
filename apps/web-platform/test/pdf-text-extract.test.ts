@@ -17,9 +17,13 @@ import { describe, it, expect, vi } from "vitest";
 import {
   extractPdfText,
   extractPdfMetadata,
+  extractPdfOutline,
   LARGE_PDF_PAGE_THRESHOLD,
   METADATA_READ_BYTE_CEILING_BYTES,
   METADATA_READ_TIMEOUT_MS,
+  MIN_OUTLINE_ENTRIES,
+  OUTLINE_PAGE_COVERAGE_MIN,
+  OUTLINE_READ_TIMEOUT_MS,
 } from "@/server/pdf-text-extract";
 import { MAX_AGENT_READABLE_PDF_SIZE } from "@/lib/attachment-constants";
 import {
@@ -306,6 +310,304 @@ describe.skipIf(BELOW_PDFJS_ENGINES_FLOOR)("extractPdfMetadata (#3429)", () => {
     if (result.ok) return;
     expect(result.reason).toBe("parse_error");
   });
+});
+
+// 2026-05-07 plan §Phase 2 (#3436): page-range slicing on extractPdfText.
+// Chapter-chunked resolver branch slices a chapter via
+// `extractPdfText(buffer, capChars, { startPage, endPage })`. Validation:
+// 1-based pages, endPage <= numPages, endPage >= startPage. Invalid range
+// returns { error: "parse_error" } (existing class; no new union member).
+describe.skipIf(BELOW_PDFJS_ENGINES_FLOOR)("extractPdfText page-range option (#3436)", () => {
+  it("slices a single chapter when given startPage/endPage", async () => {
+    const buf = makeMinimalPdf([
+      "Page One Body",
+      "Page Two Body",
+      "Page Three Body",
+      "Page Four Body",
+    ]);
+    const result = await extractPdfText(buf, 50_000, {
+      startPage: 2,
+      endPage: 3,
+    });
+    expect(isOk(result)).toBe(true);
+    if (!isOk(result)) return;
+    expect(result.text).toContain("Page Two Body");
+    expect(result.text).toContain("Page Three Body");
+    expect(result.text).not.toContain("Page One Body");
+    expect(result.text).not.toContain("Page Four Body");
+  });
+
+  it("returns { error: 'parse_error' } when startPage < 1", async () => {
+    const buf = makeMinimalPdf(["a", "b", "c"]);
+    const result = await extractPdfText(buf, 50_000, { startPage: 0, endPage: 2 });
+    expect(result && "error" in result).toBe(true);
+    if (!result || !("error" in result)) return;
+    expect(result.error).toBe("parse_error");
+  });
+
+  it("returns { error: 'parse_error' } when endPage > numPages", async () => {
+    const buf = makeMinimalPdf(["a", "b", "c"]);
+    const result = await extractPdfText(buf, 50_000, { startPage: 1, endPage: 99 });
+    expect(result && "error" in result).toBe(true);
+    if (!result || !("error" in result)) return;
+    expect(result.error).toBe("parse_error");
+  });
+
+  it("returns { error: 'parse_error' } when endPage < startPage", async () => {
+    const buf = makeMinimalPdf(["a", "b", "c"]);
+    const result = await extractPdfText(buf, 50_000, { startPage: 3, endPage: 2 });
+    expect(result && "error" in result).toBe(true);
+    if (!result || !("error" in result)) return;
+    expect(result.error).toBe("parse_error");
+  });
+
+  it("returns { error: 'oversized_buffer' } when slice would exceed cap (synthetic ceiling)", async () => {
+    // Drive `oversized_buffer` for a chapter slice using a tiny capChars on
+    // a real range. The plan reserves `oversized_buffer` for "chapter X is
+    // too large" — distinguishable from the per-PDF input cap because the
+    // resolver narrows the range BEFORE invoking the extractor.
+    const buf = makeMinimalPdf([
+      "AAAAAAAAAAAAAAAAAAAAAAAA",
+      "BBBBBBBBBBBBBBBBBBBBBBBB",
+    ]);
+    // capChars=1 forces the slice output to overflow on the very first
+    // page text. Currently extractPdfText would return truncated output;
+    // the new contract returns an explicit oversized_buffer when the
+    // SLICE output would exceed cap. (RED until impl wires this.)
+    const result = await extractPdfText(buf, 1, { startPage: 1, endPage: 2 });
+    expect(result && "error" in result).toBe(true);
+    if (!result || !("error" in result)) return;
+    expect(result.error).toBe("oversized_buffer");
+  });
+});
+
+// 2026-05-07 plan §Phase 2 (#3436): extractPdfOutline shape contract.
+// Tests run against a mocked pdfjs module so we can exercise the
+// outline-walking logic without synthesizing a fully-spec'd /Outlines tree
+// in raw PDF bytes (consistent with the lazy_import_failed pattern below).
+describe("extractPdfOutline (#3436)", () => {
+  function makeMockPdfjs(opts: {
+    numPages: number;
+    outline: Array<{
+      title: string;
+      // pdfjs's getOutline returns `dest` (string for named destinations,
+      // array for explicit). Use `destName` in fixture spec for ergonomics
+      // and rewrite to the wire shape below.
+      destName?: string | null;
+    }> | null;
+    pageIndexByName?: Record<string, number>;
+    timeoutMs?: number;
+  }) {
+    const doc = {
+      numPages: opts.numPages,
+      // Wire shape: `dest: <name>` (a string named destination), matching pdfjs.
+      getOutline: async () =>
+        opts.outline === null
+          ? null
+          : opts.outline.map((entry) => ({
+              title: entry.title,
+              dest: entry.destName ?? null,
+              items: [],
+            })),
+      getDestination: async (name: string) => {
+        const idx = opts.pageIndexByName?.[name];
+        if (idx === undefined) return null;
+        return [{ __pageRef: idx }, { name: "XYZ" }];
+      },
+      getPageIndex: async (ref: { __pageRef?: number } | unknown) => {
+        if (typeof ref === "object" && ref !== null && "__pageRef" in ref) {
+          return (ref as { __pageRef: number }).__pageRef;
+        }
+        return -1;
+      },
+      destroy: async () => {},
+    };
+    return {
+      getDocument: () => {
+        const promise =
+          opts.timeoutMs !== undefined
+            ? new Promise((resolve) => setTimeout(() => resolve(doc), opts.timeoutMs))
+            : Promise.resolve(doc);
+        return { promise, destroy: async () => {} };
+      },
+    };
+  }
+
+  async function importIsolated() {
+    vi.resetModules();
+    return await import("@/server/pdf-text-extract");
+  }
+
+  it("exports outline tunables with sensible values", async () => {
+    expect(MIN_OUTLINE_ENTRIES).toBe(3);
+    expect(OUTLINE_PAGE_COVERAGE_MIN).toBeCloseTo(0.8);
+    expect(OUTLINE_READ_TIMEOUT_MS).toBe(5000);
+  });
+
+  it("returns { ok: true, outline } for a usable outline meeting MIN_OUTLINE_ENTRIES + coverage", async () => {
+    try {
+      // 3 chapters at pages 1, 50, 90 of 100 pages — last chapter starts
+      // at page 90 = 0.9 coverage, ≥ OUTLINE_PAGE_COVERAGE_MIN (0.8).
+      const mockPdfjs = makeMockPdfjs({
+        numPages: 100,
+        outline: [
+          { title: "Chapter 1", destName: "ch1" },
+          { title: "Chapter 2", destName: "ch2" },
+          { title: "Chapter 3", destName: "ch3" },
+        ],
+        pageIndexByName: { ch1: 0, ch2: 49, ch3: 89 },
+      });
+      vi.doMock("pdfjs-dist/legacy/build/pdf.mjs", () => mockPdfjs);
+      const mod = await importIsolated();
+      const buf = Buffer.from("%PDF-1.4\n");
+      const result = await mod.extractPdfOutline(buf);
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.outline).toHaveLength(3);
+      // Page indices in ChapterIndex are 1-based per plan TR1.
+      expect(result.outline[0].title).toBe("Chapter 1");
+      expect(result.outline[0].startPage).toBe(1);
+      expect(result.outline[0].endPage).toBe(49);
+      expect(result.outline[1].startPage).toBe(50);
+      expect(result.outline[1].endPage).toBe(89);
+      expect(result.outline[2].startPage).toBe(90);
+      expect(result.outline[2].endPage).toBe(100);
+    } finally {
+      vi.doUnmock("pdfjs-dist/legacy/build/pdf.mjs");
+      vi.resetModules();
+    }
+  });
+
+  it("returns { ok: false, reason: 'no_outline' } when getOutline returns null", async () => {
+    try {
+      vi.doMock("pdfjs-dist/legacy/build/pdf.mjs", () =>
+        makeMockPdfjs({ numPages: 100, outline: null }),
+      );
+      const mod = await importIsolated();
+      const buf = Buffer.from("%PDF-1.4\n");
+      const result = await mod.extractPdfOutline(buf);
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.reason).toBe("no_outline");
+    } finally {
+      vi.doUnmock("pdfjs-dist/legacy/build/pdf.mjs");
+      vi.resetModules();
+    }
+  });
+
+  it("returns { ok: false, reason: 'outline_too_shallow' } when fewer than MIN_OUTLINE_ENTRIES", async () => {
+    try {
+      vi.doMock("pdfjs-dist/legacy/build/pdf.mjs", () =>
+        makeMockPdfjs({
+          numPages: 100,
+          outline: [
+            { title: "Cover", destName: "cover" },
+            { title: "Index", destName: "idx" },
+          ],
+          pageIndexByName: { cover: 0, idx: 50 },
+        }),
+      );
+      const mod = await importIsolated();
+      const buf = Buffer.from("%PDF-1.4\n");
+      const result = await mod.extractPdfOutline(buf);
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.reason).toBe("outline_too_shallow");
+    } finally {
+      vi.doUnmock("pdfjs-dist/legacy/build/pdf.mjs");
+      vi.resetModules();
+    }
+  });
+
+  it("returns { ok: false, reason: 'outline_too_shallow' } when page coverage < OUTLINE_PAGE_COVERAGE_MIN", async () => {
+    // 3 entries covering pages 1..30 of a 200-page PDF — coverage 0.15.
+    try {
+      vi.doMock("pdfjs-dist/legacy/build/pdf.mjs", () =>
+        makeMockPdfjs({
+          numPages: 200,
+          outline: [
+            { title: "Front 1", destName: "f1" },
+            { title: "Front 2", destName: "f2" },
+            { title: "Front 3", destName: "f3" },
+          ],
+          pageIndexByName: { f1: 0, f2: 10, f3: 20 },
+        }),
+      );
+      const mod = await importIsolated();
+      const buf = Buffer.from("%PDF-1.4\n");
+      const result = await mod.extractPdfOutline(buf);
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.reason).toBe("outline_too_shallow");
+    } finally {
+      vi.doUnmock("pdfjs-dist/legacy/build/pdf.mjs");
+      vi.resetModules();
+    }
+  });
+
+  it("returns { ok: false, reason: 'outline_too_shallow' } when ANY chapter dest cannot resolve (whole-outline fail)", async () => {
+    // Plan: "If any chapter dest cannot resolve → treat WHOLE outline as
+    // unusable (don't emit partial chapter list — better to fall through
+    // to bridge than mis-bound chapters)."
+    try {
+      vi.doMock("pdfjs-dist/legacy/build/pdf.mjs", () =>
+        makeMockPdfjs({
+          numPages: 100,
+          outline: [
+            { title: "Chapter 1", destName: "ch1" },
+            { title: "Chapter 2", destName: "missing" },
+            { title: "Chapter 3", destName: "ch3" },
+          ],
+          // Note: "missing" is intentionally absent from the resolution map.
+          pageIndexByName: { ch1: 0, ch3: 66 },
+        }),
+      );
+      const mod = await importIsolated();
+      const buf = Buffer.from("%PDF-1.4\n");
+      const result = await mod.extractPdfOutline(buf);
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.reason).toBe("outline_too_shallow");
+    } finally {
+      vi.doUnmock("pdfjs-dist/legacy/build/pdf.mjs");
+      vi.resetModules();
+    }
+  });
+
+  it("returns { ok: false, reason: 'timeout' } when getDocument exceeds OUTLINE_READ_TIMEOUT_MS", async () => {
+    try {
+      vi.doMock("pdfjs-dist/legacy/build/pdf.mjs", () =>
+        makeMockPdfjs({
+          numPages: 100,
+          outline: [],
+          // Timeout is 5000ms; mocked load takes 6000ms.
+          timeoutMs: 6000,
+        }),
+      );
+      const mod = await importIsolated();
+      const buf = Buffer.from("%PDF-1.4\n");
+      const result = await mod.extractPdfOutline(buf);
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.reason).toBe("timeout");
+    } finally {
+      vi.doUnmock("pdfjs-dist/legacy/build/pdf.mjs");
+      vi.resetModules();
+    }
+  }, 10_000);
+
+  it.skipIf(BELOW_PDFJS_ENGINES_FLOOR)(
+    "returns { ok: false, reason: 'parse_error' } on garbage input",
+    async () => {
+      // No mock — exercise the real parse failure path. Skipped below the
+      // pdfjs engine floor (Node 22.3 / 20.16) per `engines-floor.ts`.
+      const garbage = Buffer.from("definitely not a PDF");
+      const result = await extractPdfOutline(garbage);
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.reason).toBe("parse_error");
+    },
+  );
 });
 
 // Direct unit test of the lazy_import_failed branch (#3438). Sits OUTSIDE
