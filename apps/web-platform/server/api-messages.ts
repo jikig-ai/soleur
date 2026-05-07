@@ -76,7 +76,13 @@ export async function handleConversationMessages(
   const { data: messages, error: msgErr } = await supabase
     .from("messages")
     .select(
-      "id, role, content, leader_id, created_at, message_attachments(id, storage_path, filename, content_type, size_bytes)",
+      // `status` and `usage` (added in migration 040) carry the
+      // aborted-turn marker + token cost + completed-actions snapshot
+      // so PR2's history reload can render the marker for partial
+      // assistant text persisted on Stop or tab-close. Without these
+      // here, the live WS-subscriber would see the marker once and a
+      // page reload would silently drop it (G2 disclosure regression).
+      "id, role, content, leader_id, created_at, status, usage, message_attachments(id, storage_path, filename, content_type, size_bytes)",
     )
     .eq("conversation_id", conversationId)
     .order("created_at", { ascending: true });

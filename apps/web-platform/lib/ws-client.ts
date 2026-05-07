@@ -647,6 +647,7 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
         case "resume_session":
         case "close_conversation":
         case "review_gate_response":
+        case "abort_turn":
         case "interactive_prompt_response":
         case "fanout_truncated":
         case "upgrade_pending":

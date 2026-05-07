@@ -1540,6 +1540,28 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
     // ------------------------------------------------------------------
     // review_gate_response: resolve a pending review gate in the agent
     // ------------------------------------------------------------------
+    // ------------------------------------------------------------------
+    // abort_turn: user-initiated Stop. Broadcast-aborts every leader's
+    // session for the conversation so multi-leader dispatch can't leak
+    // a hidden BYOK-burning session past the click (TR3 / G3, plan
+    // §"Reconciliation" row 1). `userId` MUST come from the
+    // authenticated socket session — NEVER from the message payload.
+    // The `WSMessage` strictObject schema in `lib/ws-zod-schemas.ts`
+    // already rejects extra fields so a forged `userId` cannot land
+    // here from a network peer (TR4 cross-user invariant).
+    // ------------------------------------------------------------------
+    case "abort_turn": {
+      // Idempotent: if no session is active for (userId, conversationId),
+      // abortSession is a silent no-op (registry prefix-lookup with no
+      // matches). The client-side `stopping` state holds until the
+      // server's `session_ended:user_aborted` arrives (emitted by the
+      // for-await abort branch in `agent-runner.ts`); a no-op here
+      // means the turn already finished, which the client tolerates
+      // by ignoring the late `stopping`-state timeout.
+      abortSession(userId, msg.conversationId, "user_requested_stop");
+      break;
+    }
+
     case "review_gate_response": {
       if (!session.conversationId) {
         sendToClient(userId, {

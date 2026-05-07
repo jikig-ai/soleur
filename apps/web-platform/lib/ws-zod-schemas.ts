@@ -218,6 +218,14 @@ const reviewGateResponseSchema = z.strictObject({
   gateId: z.string(),
   selection: z.string(),
 });
+// `abort_turn` (feat-abort-conversation-web PR1, plan §1.2): user-initiated
+// Stop. `userId` is intentionally NOT a wire field — strictObject + the
+// minimum-length conversationId reject forged userIds and empty IDs at the
+// boundary. See plan §"User-Brand Impact" / TR4 cross-user invariant.
+const abortTurnSchema = z.strictObject({
+  type: z.literal("abort_turn"),
+  conversationId: conversationIdSchema,
+});
 const streamSchema = z.strictObject({
   type: z.literal("stream"),
   content: z.string(),
@@ -276,6 +284,9 @@ const sessionResumedSchema = z.strictObject({
 const sessionEndedSchema = z.strictObject({
   type: z.literal("session_ended"),
   reason: z.string(),
+  // Optional disambiguator for multi-tab clients (feat-abort-conversation-web
+  // PR1). Existing emitters that omit it remain wire-compatible.
+  conversationId: z.string().optional(),
 });
 const usageUpdateSchema = z.strictObject({
   type: z.literal("usage_update"),
@@ -430,6 +441,7 @@ const flatTypeSchema = z.discriminatedUnion("type", [
   resumeSessionSchema,
   closeConversationSchema,
   reviewGateResponseSchema,
+  abortTurnSchema,
   streamSchema,
   streamStartSchema,
   streamEndSchema,
