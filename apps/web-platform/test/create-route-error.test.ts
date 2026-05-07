@@ -115,17 +115,20 @@ describe("POST /api/repo/create — error handling", () => {
     expect(mockCaptureException).not.toHaveBeenCalled();
   });
 
-  test("returns 403 for GitHub 403 (permission denied)", async () => {
-    mockCreateRepo.mockRejectedValue(
-      new GitHubApiError("Resource not accessible by integration", 403),
-    );
+  test("returns 403 for GitHub 403 (permission denied) and mirrors to Sentry", async () => {
+    // 403 is unexpected post-#3399 (the original /user/repos 403 is gone). It
+    // now means an installation lost administration:write or the App is
+    // partially uninstalled — operator-side, not user-correctable. The
+    // route mirrors to Sentry via reportSilentFallback so ops triages.
+    const err = new GitHubApiError("Resource not accessible by integration", 403);
+    mockCreateRepo.mockRejectedValue(err);
 
     const res = await POST(makeRequest({ name: "my-repo", private: true }));
     expect(res.status).toBe(403);
 
     const body = await res.json();
     expect(body.error).toBe("Resource not accessible by integration");
-    expect(mockCaptureException).not.toHaveBeenCalled();
+    expect(mockCaptureException).toHaveBeenCalledWith(err, expect.any(Object));
   });
 
   test("user installation: returns 500 and calls Sentry when template generate returns 404 (template missing)", async () => {
