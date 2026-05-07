@@ -101,51 +101,53 @@ Two-PR sequence (Approach B). PR1 = server correctness + DB + legal. PR2 = clien
 
 ## Phase 5 — RED (PR2 client tests, failing first)
 
-- [ ] 5.1 — Create new feature branch `feat-abort-conversation-web-pr2` off updated main (after PR1 merge).
-- [ ] 5.2 — Create `apps/web-platform/components/chat/__tests__/abort-marker.test.tsx`. Failing test: rendering a message with `status='aborted'` shows partial text + `[stopped by user]` chip + token count + USD cost + completed-actions chip-list.
-- [ ] 5.3 — Failing test: Stop button replaces Send when `streamState === 'streaming' | 'stopping'`. Click invokes `useWebSocket.abort()`.
-- [ ] 5.4 — Failing test: `Esc` keystroke invokes abort when chat surface is focused AND (textarea is empty OR not focused).
-- [ ] 5.5 — Failing test: `Esc` does NOT invoke abort when textarea is focused AND has 10+ chars of content.
-- [ ] 5.6 — Failing test: double-click safety — second click while `stopping` is a no-op.
-- [ ] 5.7 — Failing test: `useEffect` cleanup removes the keydown listener on unmount.
-- [ ] 5.8 — Failing test: `useWebSocket.abort()` sends `{ type: "abort_turn", conversationId }` over the socket and transitions local `streamState` to `'stopping'`.
-- [ ] 5.9 — Run vitest → all RED.
+- [x] 5.1 — Create new feature branch `feat-abort-conversation-web-pr2` off updated main (after PR1 merge).
+- [x] 5.2 — Create `apps/web-platform/test/abort-marker.test.tsx` (repo convention `test/*.test.tsx`, vitest `include`). Failing test: rendering a message with `status='aborted'` shows partial text + `[stopped by user]` chip + token count + USD cost + completed-actions chip-list.
+- [x] 5.3 — Failing test: Stop button replaces Send when `streamState === 'streaming' | 'stopping'`. Click invokes `useWebSocket.abort()`.
+- [x] 5.4 — Failing test: `Esc` keystroke invokes abort when chat surface is focused AND (textarea is empty OR not focused).
+- [x] 5.5 — Failing test: `Esc` does NOT invoke abort when textarea is focused AND has 10+ chars of content.
+- [x] 5.6 — Failing test: double-click safety — second click while `stopping` is a no-op.
+- [x] 5.7 — Failing test: `useEffect` cleanup removes the keydown listener on unmount.
+- [x] 5.8 — Failing test: `useWebSocket.abort()` sends `{ type: "abort_turn", conversationId }` over the socket and transitions local `streamState` to `'stopping'`.
+- [x] 5.9 — Run vitest → all RED. (14 positive-case tests fail on initial run; 5 negative-space tests pass vacuously by design — they assert the marker / abort path is NOT triggered.)
 
 ## Phase 6 — GREEN: PR2 client implementation
 
 ### 6.1 — `useWebSocket.abort()`
 
-- [ ] 6.1.1 — `apps/web-platform/lib/ws-client.ts`: add `abort()` method to the hook's return surface. Sends `abort_turn`, transitions local state to `'stopping'`. Coordinate with #3280 (history-fetch reducer refactor).
-- [ ] 6.1.2 — Extend `streamState` type to include `'stopping'`. Update reducer / `_exhaustive: never` rails accordingly. Per AGENTS.md `cq-union-widening-grep-three-patterns`, run the 3-pattern grep on `streamState`.
+- [x] 6.1.1 — `apps/web-platform/lib/ws-client.ts`: add `abort()` method to the hook's return surface. Sends `abort_turn`, transitions local state to `'stopping'`. Coordinate with #3280 (history-fetch reducer refactor) — `abort` slots into the existing return surface as a callback; if #3280 lands first, the callback can move into the new reducer's action types in a follow-up.
+- [x] 6.1.2 — Add new `StreamState = 'idle' | 'streaming' | 'stopping'` type at the top of ws-client.ts. Three-pattern grep clean: zero `_exhaustive: never` consumers, two if-ladder hits both inside `chat-input.tsx` (`streamState === "stopping"`, `streamState === "streaming"`) which together cover the two non-idle states; `idle` is the implicit fall-through (Send button render).
 
 ### 6.2 — Stop button
 
-- [ ] 6.2.1 — `apps/web-platform/components/chat/chat-input.tsx`: when `streamState ∈ {'streaming', 'stopping'}`, render Stop button in place of Send. While `'stopping'`, disable the button + show "Stopping…" label.
-- [ ] 6.2.2 — Wire the click handler through to `useWebSocket.abort()` (via prop drilling from `page.tsx`).
+- [x] 6.2.1 — `apps/web-platform/components/chat/chat-input.tsx`: when `streamState ∈ {'streaming', 'stopping'}`, render Stop button in place of Send. While `'stopping'`, disable the button + show "Stopping…" label.
+- [x] 6.2.2 — Wire the click handler through to `useWebSocket.abort()` via `streamState` + `onStop` props passed from `<ChatSurface>` to `<ChatInput>`.
 
 ### 6.3 — Esc shortcut
 
-- [ ] 6.3.1 — `apps/web-platform/components/chat/chat-surface.tsx`: register a `keydown` listener (in `useEffect`) when `streamState ∈ {'streaming', 'stopping'}`.
-- [ ] 6.3.2 — Listener checks: `e.key === 'Escape'`, AND (focus is NOT a non-empty textarea), then `e.preventDefault()` + `abort()`.
-- [ ] 6.3.3 — `useEffect` cleanup returns `() => document.removeEventListener('keydown', handler)`.
+- [x] 6.3.1 — `apps/web-platform/components/chat/chat-surface.tsx`: register a `document` keydown listener (in `useEffect`) when `streamState ∈ {'streaming', 'stopping'}`.
+- [x] 6.3.2 — Listener checks: `e.key === 'Escape'`, AND focus is NOT a non-empty textarea, then `e.preventDefault()` + `abort()`.
+- [x] 6.3.3 — `useEffect` cleanup returns `() => document.removeEventListener('keydown', handler)` per AGENTS.md `cq-ref-removal-sweep-cleanup-closures`.
 
 ### 6.4 — Abort marker
 
-- [ ] 6.4.1 — `apps/web-platform/components/chat/message-bubble.tsx`: when `message.status === 'aborted'`, render the marker:
-  - The accumulated `content` text.
+- [x] 6.4.1 — `apps/web-platform/components/chat/message-bubble.tsx`: when `message.status === 'aborted'`, render the marker:
+  - The accumulated `content` text via MarkdownRenderer.
   - `[stopped by user]` chip.
-  - Token count: `usage.input_tokens + usage.output_tokens` and `usage.cost_usd` (or "included in your plan").
-  - Completed-actions chip-list (one chip per `usage.completed_actions[]` entry; reuse `tool-use-chip.tsx` if shape matches per 0.4).
-- [ ] 6.4.2 — If #3242 (raw tool name field) is merged before this PR, use the raw name. Otherwise use today's shape.
+  - Token count: `usage.input_tokens + usage.output_tokens` and `$<cost_usd>` (or "included in your plan" when `cost_usd` is null/undefined).
+  - Completed-actions chip-list (one inline chip per `usage.completed_actions[]` entry — `<ToolUseChip>` was NOT reused because its `leaderId` is narrowed to `cc_router | system`).
+- [x] 6.4.2 — Today's shape used (raw tool name on `completed_actions[].tool_name`). #3242 coordination noted; downstream cleanup if needed.
 
 ### 6.5 — Page wiring
 
-- [ ] 6.5.1 — `apps/web-platform/app/(dashboard)/dashboard/chat/[conversationId]/page.tsx`: pass `useWebSocket().abort` through to `ChatInput` and `ChatSurface` props.
+- [x] 6.5.1 — `apps/web-platform/components/chat/chat-surface.tsx` wires `streamState` + `abort` from `useWebSocket()` through to `<ChatInput>` (Stop button) and the document keydown effect (Esc). The `chat/[conversationId]/page.tsx` route delegates to `<ChatSurface>`, so no additional plumbing was needed there.
+- [x] 6.5.2 — `apps/web-platform/lib/ws-client.ts` `runHistoryFetch` mapper extended to surface `status` + `usage` from the API response (PR1's `api-messages.ts` already SELECTs these columns).
+- [x] 6.5.3 — `apps/web-platform/lib/chat-state-machine.ts` `ChatTextMessage` extended with optional `status` + `usage` fields so the persisted-row marker survives a page reload.
 
 ### 6.6 — Run tests
 
-- [ ] 6.6.1 — `vitest run components/chat/__tests__/abort-marker.test.tsx` → all GREEN.
-- [ ] 6.6.2 — `tsc --noEmit` from `apps/web-platform/` → clean.
+- [x] 6.6.1 — `vitest run test/abort-marker.test.tsx test/chat-stop-button.test.tsx test/useWebSocket-abort.test.tsx` → all GREEN (19 tests). Full suite: 3901 passed, 7 skipped, no regressions.
+- [x] 6.6.2 — `tsc --noEmit` from `apps/web-platform/` → clean.
 
 ## Phase 7 — PR2 verification + ship
 
