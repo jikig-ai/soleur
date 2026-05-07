@@ -40,7 +40,7 @@ The brainstorm and spec were written against an older snapshot of `agent-runner.
 | `activeSessions` keyed `userId:conversationId` | Keyed `userId:conversationId:leaderId` — multi-leader dispatch (`agent-runner.ts:131-141`). `dispatchToLeaders` (line 1655) spawns parallel per-leader sessions for one conversation turn. | **Stop = broadcast.** User-Stop calls `abortSession(userId, conversationId)` with **no `leaderId`** — the existing prefix-match in lines 159-165 broadcasts to every leader's session for the turn. Single-stream conversations get one abort; multi-leader dispatch gets every leader stopped. This is the only mental model that satisfies G3 (no hidden leader keeps burning BYOK after Stop). |
 | `abortSession(userId, conversationId)` takes no reason argument | Already takes `reason?: "disconnected" \| "superseded"` (lines 142-148). | **Add a third reason.** Widen the union to `"disconnected" \| "superseded" \| "user_requested_stop"`. The branch at `agent-runner.ts:401-411` reads `controller.signal.reason` (or the abort error message) to decide turn vs. conversation status. |
 | Spec: AbortSignal not wired into SDK `query()` | Confirmed against installed `node_modules/@anthropic-ai/claude-agent-sdk/sdk.d.ts:816`: `abortController?: AbortController` is part of the Options object. Hook callbacks and `CanUseTool` receive `signal: AbortSignal`. Verified in this worktree at plan time. | **Wire `abortController: controller`** into the `query({ options })` call in `agent-runner.ts` (around line 204). Source-level signal-propagation behavior to (a) underlying Anthropic HTTP fetch and (b) PreToolUse-launched Bash subprocesses is the SDK's internal concern; the type signature confirms the option is honored. If runtime testing surfaces a propagation gap, file an SDK feature request and add a per-turn wall-clock budget. |
-| Spec: persist `fullText` on abort, conversation stays `active` | `saveMessage` (line 377) does NOT have a `status` column today. `messages` table has `{id, conversation_id, role, content, tool_calls, created_at, leader_id}` — no `status`, no `usage`. | **Migration adds three columns.** See Phase 1 below. `tool_calls` jsonb is reused for completed-actions snapshot; `status` and `usage` are net-new. |
+| Spec: persist `fullText` on abort, conversation stays continuable | `saveMessage` (line 377) does NOT have a `status` column today. `messages` table has `{id, conversation_id, role, content, tool_calls, created_at, leader_id}` — no `status`, no `usage`. The Conversation status enum (`active` \| `waiting_for_user` \| `completed` \| `failed`) treats `waiting_for_user` (not `active`) as the "user can continue" terminus — the result branch already writes `waiting_for_user` on normal turn completion. | **Migration adds three columns; abort branch flips to `waiting_for_user` for user-Stop.** See Phase 1 below. `tool_calls` jsonb is reused for completed-actions snapshot; `status` and `usage` are net-new. |
 
 ## User-Brand Impact
 
@@ -103,7 +103,7 @@ Esc keystroke   ───┘    conversationId } ──→ ws-handler.handleMess
                                   │    │              status="aborted",
                                   │    │              usage={input,output,cost,
                                   │    │                     completed_actions:[…]})
-                                  │    └─ updateConversationStatus(active)  ← turn aborted, conv active
+                                  │    └─ updateConversationStatus(waiting_for_user)  ← turn aborted, conv continuable
                                   └─ else (disconnected | superseded):
                                        └─ existing path → conversation status=failed
                                                                                     
@@ -119,7 +119,7 @@ Browser (PR2):
 
 ### Key design choices (locked from brainstorm; reconfirmed at plan time)
 
-1. **Stop = turn-level abort, conversation stays active.** Locked at brainstorm Decision 1.
+1. **Stop = turn-level abort, conversation stays continuable.** Locked at brainstorm Decision 1. (Concretely: `Conversation.status` flips to `waiting_for_user` — same terminus the result branch writes on normal turn completion. The enum value `active` is only used while a turn is in flight; "stays continuable" means the user can chat again, not that the row literally says `active`.)
 2. **Best-effort cancel + honest disclosure.** Wire `abortController: controller` into SDK `query()`. Surface completed-before-stop side effects in the abort marker. Locked at Decision 2.
 3. **Trigger: Stop button + Esc.** Esc-while-typing guard added at plan time (see SpecFlow §1).
 4. **Persist partial text + inline cost + completed actions.** Locked at Decision 4.
@@ -131,7 +131,7 @@ Browser (PR2):
 The spec-flow-analyzer surfaced 5 critical questions that the plan resolves now (not deferred to /work):
 
 - **Multi-leader Stop semantics:** broadcast (no `leaderId` argument). Cross-references in #Phase 2 below.
-- **Tab-close persistence path:** server-resolved in the existing `ws.on("close")` handler at `ws-handler.ts:357-370`, NOT client `beforeunload`. The handler calls `abortSession(userId, conversationId, "disconnected")`; the `disconnected` branch in `agent-runner.ts` will be taught to also persist `fullText` (PR1 G4), but with conversation status remaining `failed` for disconnect (today's behavior preserved for the disconnect case; only `user_requested_stop` keeps the conversation `active`).
+- **Tab-close persistence path:** server-resolved in the existing `ws.on("close")` handler at `ws-handler.ts:357-370`, NOT client `beforeunload`. The handler calls `abortSession(userId, conversationId, "disconnected")`; the `disconnected` branch in `agent-runner.ts` will be taught to also persist `fullText` (PR1 G4), but with conversation status remaining `failed` for disconnect (today's behavior preserved for the disconnect case; only `user_requested_stop` flips to `waiting_for_user`).
 - **Esc-while-typing guard:** Esc only triggers abort when (a) the focus is on the chat surface (not the textarea), OR (b) the chat input is empty. Otherwise it falls through to the textarea's default (clear autocomplete, blur). Documented as FR10 refinement.
 - **Stopping-state timeout:** client transitions to `stopping` immediately on click and remains there until `session_ended` arrives. If the WebSocket dies before ack, the existing reconnect/error path surfaces normally — no separate `failed_to_stop` state, no safety-net timer. (Cut after plan review: a custom 5s timeout state was speculative for a 5-second cosmetic gap; the existing WS error surface handles real connection failures.)
 - **Edit-and-retry interaction with `aborted` rows:** verified at plan time — `ws-handler.ts` has no `edit_message` / `editMessage` handler today. There is no message-edit feature to corrupt. NG5 deferral stands; nothing to audit.
@@ -250,13 +250,13 @@ if (controller.signal.aborted) {
     );
   }
 
-  // Conversation status: only user-requested keeps conversation active.
+  // Conversation status: only user-requested flips to waiting_for_user.
   // Disconnect / superseded keeps today's "failed" semantics so a
   // crashed client doesn't masquerade as a clean continuation.
   await updateConversationStatus(
     userId,
     conversationId,
-    isUserRequested ? "active" : "failed",
+    isUserRequested ? "waiting_for_user" : "failed",
   );
 
   // Send session_ended with user_aborted reason if applicable.
@@ -373,7 +373,7 @@ Test file path: `apps/web-platform/server/__tests__/abort-turn.test.ts` (matchin
   - **Race-window:** a `result` event yielded 50ms after `controller.signal.aborted === true` does NOT cause a second `saveMessage` — the `messagePersisted` guard short-circuits both branches.
 - **Integration (Vitest + a real Supabase instance via existing test fixtures):**
   - `messages` row persisted with `status = 'aborted'`, `usage` populated, `tool_calls` carries cumulative-stream snapshot.
-  - Conversation row's `status` remains `'active'` for `user_requested_stop`; transitions to `'failed'` for `disconnected`.
+  - Conversation row's `status` flips to `'waiting_for_user'` for `user_requested_stop`; transitions to `'failed'` for `disconnected`.
 
 (Stress-loop test cut on plan-review feedback — a unit test asserting idempotency covers the same property without the CI flakiness.)
 
@@ -529,7 +529,7 @@ Chip-list uses raw tool name from the SDK event (coordinate with #3242 if it lan
 - [ ] `abortSession` reason union widened to include `"user_requested_stop"`.
 - [ ] `agent-runner.ts` SDK `query()` call passes `abortController: controller`.
 - [ ] Abort branch persists `fullText` as an assistant message with `status = 'aborted'` and a `usage` snapshot when `fullText.length > 0`. Applies to BOTH user-requested AND disconnected aborts.
-- [ ] Conversation status logic: `user_requested_stop` → `active`; `disconnected`/`superseded` → `failed`.
+- [ ] Conversation status logic: `user_requested_stop` → `waiting_for_user` (continuable; matches the natural turn-complete terminus); `disconnected`/`superseded` → `failed`.
 - [ ] Sentry mirroring (`reportSilentFallback`) on abort error paths per `cq-silent-fallback-must-mirror-to-sentry`.
 - [ ] Cross-user invariant unit test: forged `msg.userId` cannot abort another user's session (concrete shape in §1.9).
 - [ ] Multi-leader broadcast unit test: one `abort_turn` aborts every leader session for the conversation (concrete shape in §1.9).

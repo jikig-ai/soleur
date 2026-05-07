@@ -28,6 +28,7 @@
  */
 
 import type { AgentSession } from "./review-gate";
+import { SessionAbortError, type AbortKind } from "./abort-classifier";
 
 const activeSessions = new Map<string, AgentSession>();
 
@@ -109,15 +110,15 @@ export function forEachSessionForConversation(
 export function abortSession(
   userId: string,
   conversationId: string,
-  reason?: "disconnected" | "superseded" | "user_requested_stop",
+  reason?: AbortKind,
   leaderId?: string,
 ): void {
-  const errReason = reason ?? "disconnected";
+  const kind: AbortKind = reason ?? "disconnected";
 
   if (leaderId) {
     const session = activeSessions.get(sessionKey(userId, conversationId, leaderId));
     if (session) {
-      session.abort.abort(new Error(`Session aborted: ${errReason}`));
+      session.abort.abort(new SessionAbortError(kind));
     }
     return;
   }
@@ -126,7 +127,7 @@ export function abortSession(
   const prefix = `${userId}:${conversationId}`;
   for (const [key, session] of activeSessions) {
     if (key === prefix || key.startsWith(`${prefix}:`)) {
-      session.abort.abort(new Error(`Session aborted: ${errReason}`));
+      session.abort.abort(new SessionAbortError(kind));
     }
   }
 }
@@ -136,7 +137,7 @@ export function abortAllUserSessions(userId: string): void {
   const prefix = `${userId}:`;
   for (const [key, session] of activeSessions) {
     if (key.startsWith(prefix)) {
-      session.abort.abort(new Error("Session aborted: account_deleted"));
+      session.abort.abort(new SessionAbortError("account_deleted"));
     }
   }
 }
@@ -144,7 +145,7 @@ export function abortAllUserSessions(userId: string): void {
 /** Abort every session in the process. Called during server shutdown. */
 export function abortAllSessions(): void {
   for (const [, session] of activeSessions) {
-    session.abort.abort(new Error("Session aborted: server_shutdown"));
+    session.abort.abort(new SessionAbortError("server_shutdown"));
   }
 }
 

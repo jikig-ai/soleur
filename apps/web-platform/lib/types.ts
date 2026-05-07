@@ -241,7 +241,18 @@ export type WSMessage =
   | { type: "review_gate"; gateId: string; question: string; header?: string; options: string[]; descriptions?: Record<string, string | undefined>; stepProgress?: { current: number; total: number } }
   | { type: "session_started"; conversationId: string; capabilities?: { promptKinds: readonly string[] } }
   | { type: "session_resumed"; conversationId: string; resumedFromTimestamp: string; messageCount: number }
-  | { type: "session_ended"; reason: string }
+  | {
+      type: "session_ended";
+      reason: string;
+      /** Disambiguator for multi-tab clients: when a user has two open
+       *  tabs on different conversations, a `session_ended` frame
+       *  without `conversationId` would race the wrong tab's reducer
+       *  into a `stopping`/`idle` transition. Optional so the existing
+       *  emitters that don't yet pass it remain protocol-compatible.
+       *  feat-abort-conversation-web PR1 emits it for `user_aborted`
+       *  reasons. */
+      conversationId?: string;
+    }
   // #3269 — context-reset lifecycle notice. Emitted exactly once per
   // prefill-guard fire (assistant-terminated history → SDK 400 prevention
   // path drops `resume:` and the model loses prior-turn context). The
@@ -393,4 +404,24 @@ export interface Message {
   leader_id: DomainLeaderId | null;
   attachments?: MessageAttachment[];
   created_at: string;
+  /** Added in migration 040. `'aborted'` rows carry partial assistant
+   *  text and a `usage` snapshot from a user-initiated Stop or a
+   *  tab-close abort. PR2's chat reload renders the abort marker via
+   *  this discriminator. Optional in the type so existing
+   *  fixtures/snapshots don't churn; runtime persistence always sets
+   *  it (DB default is `'complete'`). */
+  status?: "complete" | "aborted";
+  /** Aborted-turn snapshot: token cost + completed-actions chip-list.
+   *  Set only when `status === 'aborted'`. Shape documented in
+   *  migration 040 and `UsageSnapshot` in agent-runner.ts. */
+  usage?: {
+    input_tokens: number;
+    output_tokens: number;
+    cost_usd?: number | null;
+    completed_actions: Array<{
+      tool_name: string;
+      input_summary: string;
+      result_summary: string;
+    }>;
+  } | null;
 }

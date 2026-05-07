@@ -284,6 +284,9 @@ const sessionResumedSchema = z.strictObject({
 const sessionEndedSchema = z.strictObject({
   type: z.literal("session_ended"),
   reason: z.string(),
+  // Optional disambiguator for multi-tab clients (feat-abort-conversation-web
+  // PR1). Existing emitters that omit it remain wire-compatible.
+  conversationId: z.string().optional(),
 });
 const usageUpdateSchema = z.strictObject({
   type: z.literal("usage_update"),

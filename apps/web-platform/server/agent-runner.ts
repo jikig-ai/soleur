@@ -146,7 +146,7 @@ import {
   getSession,
   forEachSessionForConversation,
 } from "./agent-session-registry";
-import { classifyAbortReason } from "./abort-classifier";
+import { classifyAbortReason, SessionAbortError } from "./abort-classifier";
 
 export { abortSession, abortAllUserSessions, abortAllSessions };
 
@@ -348,7 +348,7 @@ export async function getUserServiceTokens(
 export interface UsageSnapshot {
   input_tokens: number;
   output_tokens: number;
-  cost_usd?: number | null;
+  cost_usd: number;
   completed_actions: Array<{
     tool_name: string;
     input_summary: string;
@@ -356,18 +356,31 @@ export interface UsageSnapshot {
   }>;
 }
 
+const SUMMARIZE_PRE_TRUNCATE = 4_000;
+const SUMMARIZE_OUTPUT_CAP = 200;
+
 /** One-line summary of an opaque SDK tool input for the abort-marker
  *  chip-list. Bounded length so a verbose `Edit` payload doesn't bloat
- *  the persisted `messages.usage` jsonb. */
+ *  the persisted `messages.usage` jsonb. The pre-truncate guard
+ *  prevents JSON.stringify from materializing a multi-MB string in
+ *  memory before the slice — pathological MCP tool inputs (large file
+ *  contents, full-document attachments) otherwise spike heap on every
+ *  tool call regardless of the final output cap. */
 function summarizeToolPayload(input: unknown): string {
   if (input === undefined || input === null) return "";
+  if (typeof input === "string") {
+    return input.length > SUMMARIZE_OUTPUT_CAP
+      ? input.slice(0, SUMMARIZE_OUTPUT_CAP)
+      : input;
+  }
   let s: string;
   try {
-    s = typeof input === "string" ? input : JSON.stringify(input);
+    s = JSON.stringify(input) ?? "";
   } catch {
     s = String(input);
   }
-  return s.slice(0, 200);
+  if (s.length > SUMMARIZE_PRE_TRUNCATE) s = s.slice(0, SUMMARIZE_PRE_TRUNCATE);
+  return s.length > SUMMARIZE_OUTPUT_CAP ? s.slice(0, SUMMARIZE_OUTPUT_CAP) : s;
 }
 
 // ---------------------------------------------------------------------------
@@ -690,9 +703,12 @@ export async function startAgentSession(
    *  session_ended after all leaders finish (see #2428). */
   skipSessionEnded?: boolean,
 ): Promise<void> {
-  // Abort any existing session for this specific leader (or un-keyed session)
+  // Abort any existing session for this specific leader (or un-keyed
+  // session). Tagged `superseded` so the existing session's
+  // for-await catch branch classifies via the same code path as an
+  // explicit `abortSession(..., "superseded")` from ws-handler.ts.
   const existing = getSession(userId, conversationId, leaderId);
-  if (existing) existing.abort.abort();
+  if (existing) existing.abort.abort(new SessionAbortError("superseded"));
 
   const controller = new AbortController();
   const session: AgentSession = {
@@ -723,11 +739,21 @@ export async function startAgentSession(
   // guard is the single source of truth that prevents the abort branch
   // and the `result` branch from each calling `saveMessage` for the same
   // turn (plan §1.9 race-window invariant).
+  //
+  // INVARIANT — the BYOK lease boundary that wraps the SDK call still
+  // holds even though these locals live above it: the lease zeroizes
+  // the plaintext `apiKey` Buffer fetched via `lease.getApiKey()`
+  // INSIDE the callback. NEVER add a field to `accumulatedUsage` or
+  // `completedActions` that carries the API key, lease tokens, raw
+  // tool results containing credentials, or any other BYOK-derived
+  // material — the catch branch reads these AFTER the lease has
+  // returned, so anything that lands here outlives the zeroize.
   let fullText = "";
   let messagePersisted = false;
-  let accumulatedUsage: { input_tokens: number; output_tokens: number; cost_usd?: number | null } = {
+  let accumulatedUsage: { input_tokens: number; output_tokens: number; cost_usd: number } = {
     input_tokens: 0,
     output_tokens: 0,
+    cost_usd: 0,
   };
   const completedActions: Array<{
     tool_name: string;
@@ -1459,14 +1485,15 @@ issues/PRs, 4 KB comments); follow the html_url for the full text.`;
           const costDelta = message.total_cost_usd ?? 0;
           const inputDelta = message.usage?.input_tokens ?? 0;
           const outputDelta = message.usage?.output_tokens ?? 0;
-          // Mirror into the abort-branch accumulator so a Stop
-          // received between `result` and the next iteration still
-          // surfaces token counts to the user (the abort branch reads
-          // these unconditionally).
+          // Accumulate (NOT overwrite) into the abort-branch
+          // accumulator. The SDK can yield multiple `result` events
+          // in a single session (multi-turn agents), and the abort
+          // marker should reflect the cumulative cost the user paid
+          // for, not just the last turn's delta.
           accumulatedUsage = {
-            input_tokens: inputDelta,
-            output_tokens: outputDelta,
-            cost_usd: costDelta,
+            input_tokens: accumulatedUsage.input_tokens + inputDelta,
+            output_tokens: accumulatedUsage.output_tokens + outputDelta,
+            cost_usd: accumulatedUsage.cost_usd + costDelta,
           };
 
           // SERVICE-ROLE: `increment_conversation_cost` is REVOKEd from
@@ -1626,8 +1653,14 @@ issues/PRs, 4 KB comments); follow the html_url for the full text.`;
       //     via abortActiveSession) → skip status flip; do NOT persist
       //     a partial — the supersession write owns the row's terminal
       //     state.
-      const { isUserRequested } = classifyAbortReason(controller.signal.reason);
-      const isSuperseded = err instanceof Error && err.message.includes("superseded");
+      // Single decoding site for the abort reason — both branches
+      // route through the typed SessionAbortError discriminator
+      // (abort-classifier.ts). The previous inline
+      // `err.message.includes("superseded")` substring-match is gone:
+      // future kinds (e.g., a `superseded_by_admin`) would have
+      // silently flipped that check, and there is one obvious place
+      // for the abort branch to read the kind.
+      const { isUserRequested, isSuperseded } = classifyAbortReason(controller.signal.reason);
 
       if (!isSuperseded) {
         // Persist partial assistant text. Applies to BOTH user-requested
@@ -1690,9 +1723,17 @@ issues/PRs, 4 KB comments); follow the html_url for the full text.`;
           // Send the explicit user-aborted ack so the client can
           // transition out of `stopping` state and re-enable input.
           try {
+            // `conversationId` disambiguates which conversation the
+            // ack belongs to — required for the multi-tab user role
+            // (two open tabs on different conversations: without
+            // conversationId, the non-aborting tab's reducer
+            // mis-fires `stopping → idle`). Optional in the schema
+            // for backward compat with other emitters; mandatory
+            // here per plan §1.3.
             sendToClient(userId, {
               type: "session_ended",
               reason: "user_aborted",
+              conversationId,
             });
           } catch (sendErr) {
             reportSilentFallback(sendErr, {
