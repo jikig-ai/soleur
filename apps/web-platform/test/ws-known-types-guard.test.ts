@@ -43,6 +43,8 @@ describe("KNOWN_WS_MESSAGE_TYPES (FR4 #2861)", () => {
       "workflow_ended",
       "interactive_prompt",
       "interactive_prompt_response",
+      // #3269 — context-reset signal (prefill-guard fire / tool_use orphan)
+      "context_reset",
       "concurrency_cap_hit",
       "tier_changed",
     ].sort();
@@ -56,6 +58,8 @@ describe("KNOWN_WS_MESSAGE_TYPES (FR4 #2861)", () => {
     expect(isKnownWSMessageType("tool_progress")).toBe(true);
     expect(isKnownWSMessageType("stream")).toBe(true);
     expect(isKnownWSMessageType("auth_ok")).toBe(true);
+    // #3269 — context-reset signal
+    expect(isKnownWSMessageType("context_reset")).toBe(true);
   });
 
   test("isKnownWSMessageType returns false for unknown types", () => {

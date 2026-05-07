@@ -1154,7 +1154,11 @@ issues/PRs, 4 KB comments); follow the html_url for the full text.`;
     // SDK session ends on `assistant`. Domain leaders default to
     // `claude-sonnet-4-6`, which 400s on assistant-terminated threads.
     // Helper-shared with the cc-soleur-go path (`cc-dispatcher.ts`).
-    const { safeResumeSessionId } = await applyPrefillGuard({
+    const {
+      safeResumeSessionId,
+      contextResetNotice,
+      reason: contextResetReason,
+    } = await applyPrefillGuard({
       resumeSessionId,
       workspacePath,
       userId,
@@ -1163,6 +1167,22 @@ issues/PRs, 4 KB comments); follow the html_url for the full text.`;
       leaderId: effectiveLeaderId,
     });
 
+    // #3269 — context-reset signal. Single-turn notice append + per-fire
+    // WS event. `conversationId` is required at the call site (see
+    // `startAgentSession` signature) so no fallback needed. SDK retries
+    // are internal to the returned Query AsyncGenerator and re-enter
+    // `query()`, not the guard, so the helper is naturally per-fire.
+    if (contextResetReason) {
+      sendToClient(userId, {
+        type: "context_reset",
+        reason: contextResetReason,
+        conversationId,
+      });
+    }
+    const effectiveSystemPrompt = contextResetNotice
+      ? `${systemPrompt}\n\n${contextResetNotice}`
+      : systemPrompt;
+
     const q = query({
       prompt,
       options: buildAgentQueryOptions({
@@ -1170,7 +1190,7 @@ issues/PRs, 4 KB comments); follow the html_url for the full text.`;
         pluginPath,
         apiKey,
         serviceTokens,
-        systemPrompt,
+        systemPrompt: effectiveSystemPrompt,
         resumeSessionId: safeResumeSessionId,
         maxTurns: 50,
         maxBudgetUsd: 5.0,

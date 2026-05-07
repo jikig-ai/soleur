@@ -184,6 +184,8 @@ Run these agents **in parallel** to gather context before dialogue:
 
 **Verifying "this is a regression of #N" claims.** When the feature description (or your framing) attributes a post-deploy symptom to a recently-merged PR, do NOT accept the attribution until the symptom's trigger path is traced end-to-end: grep the literal rendered string → locate the render condition → identify the state/event that triggers it → cross-check that trigger path against the PR's file diff. If the PR did not modify any file on that path, the symptom is NOT a regression of that PR — it is a distinct latent bug or an adjacent uncovered code path. See `knowledge-base/project/learnings/2026-04-23-verify-trigger-path-before-attributing-regression.md`.
 
+**Treating `claude[bot]` / `bot-fix/attempted` comments as read-only context, not recommendations.** When the issue carries a `bot-fix/attempted` label or `claude[bot]` comment trail, the bot's chosen fix shape optimized for the `fix-issue` skill's single-file constraint — not for brand-survival or user-impact threshold. Read what the bot tried for context, then re-derive the fix shape from leader consensus (Phase 0.5). The bot's "needs multi-file" bail-out is a handoff signal, never an endorsement of the partial shape it attempted. See `knowledge-base/project/learnings/2026-05-07-bot-fix-single-file-constraint-not-a-signal-for-brainstorm-fix-shape.md`.
+
 If either agent fails or returns empty, proceed with whatever results are available. Weave findings naturally into your first question rather than presenting a formal summary.
 
 #### 1.2 Collaborative Dialogue

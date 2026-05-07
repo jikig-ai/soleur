@@ -486,7 +486,28 @@ export const realSdkQueryFactory: QueryFactory = async (
       leaderId: CC_ROUTER_LEADER_ID,
     }),
   ]);
-  const safeResumeSessionId = prefillGuardResult.safeResumeSessionId;
+  const {
+    safeResumeSessionId,
+    contextResetNotice,
+    reason: contextResetReason,
+  } = prefillGuardResult;
+
+  // #3269 — context-reset signal. The notice is appended to systemPrompt
+  // for THIS SDK call only (single-turn; not persisted across turns).
+  // The WS event is the user-side signal; emitted exactly once per guard
+  // fire. SDK retries are internal to the returned Query AsyncGenerator
+  // (sdk.d.ts:1678-1681) and re-enter `query()`, not the factory — so
+  // `applyPrefillGuard` is naturally per-fire and a single emit suffices.
+  if (contextResetReason) {
+    defaultSendToClient(args.userId, {
+      type: "context_reset",
+      reason: contextResetReason,
+      conversationId: args.conversationId,
+    });
+  }
+  const effectiveSystemPrompt = contextResetNotice
+    ? `${args.systemPrompt}\n\n${contextResetNotice}`
+    : args.systemPrompt;
 
   const pluginPath = path.join(workspacePath, "plugins", "soleur");
 
@@ -595,7 +616,7 @@ export const realSdkQueryFactory: QueryFactory = async (
         pluginPath,
         apiKey,
         serviceTokens,
-        systemPrompt: args.systemPrompt,
+        systemPrompt: effectiveSystemPrompt,
         resumeSessionId: safeResumeSessionId,
         mcpServers: {},
         // #3338 — auto-approve the cc-router's read-only tool surface so they
