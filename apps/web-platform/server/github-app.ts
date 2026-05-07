@@ -187,14 +187,24 @@ export function _resetSlugCacheForTesting(): void {
 
 const GITHUB_API = "https://api.github.com";
 const GITHUB_FETCH_TIMEOUT_MS = 15_000;
+// Template-generate clones a repo server-side; tail latency exceeds /repos
+// create. Bumped to 30s to avoid clipping legitimate generates that succeed
+// server-side but time out client-side (and would 422 on user retry).
+const GITHUB_GENERATE_TIMEOUT_MS = 30_000;
+
+// GitHub username/org slug rules: 1-39 chars, alphanumerics and hyphens, no
+// leading/trailing hyphens. Defense-in-depth — values from getInstallationAccount
+// are GitHub-controlled but we don't trust upstream regressions.
+const GITHUB_LOGIN_RE = /^[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,38})$/;
 
 async function githubFetch(
   url: string,
-  options: RequestInit = {},
+  options: RequestInit & { timeoutMs?: number } = {},
 ): Promise<Response> {
+  const { timeoutMs, ...rest } = options;
   const response = await fetch(url, {
-    ...options,
-    signal: AbortSignal.timeout(GITHUB_FETCH_TIMEOUT_MS),
+    ...rest,
+    signal: AbortSignal.timeout(timeoutMs ?? GITHUB_FETCH_TIMEOUT_MS),
     headers: {
       Accept: "application/vnd.github+json",
       "X-GitHub-Api-Version": "2022-11-28",
@@ -237,6 +247,12 @@ export async function getInstallationAccount(
   };
   if (!data.account?.login) {
     throw new InstallationError("Installation has no account", "NO_ACCOUNT");
+  }
+  if (!GITHUB_LOGIN_RE.test(data.account.login)) {
+    throw new InstallationError(
+      `Installation account login does not match GitHub login format: ${data.account.login.slice(0, 50)}`,
+      "NO_ACCOUNT",
+    );
   }
   return data.account;
 }
@@ -600,13 +616,162 @@ export async function listInstallationRepos(
   return repos;
 }
 
+// Public template under the Soleur org used to seed user-account repos.
+// User installations cannot call POST /user/repos with installation tokens
+// (returns 403 "Resource not accessible by integration" — UAT-only endpoint),
+// so we route through the template-generate endpoint, which DOES accept
+// installation tokens. Live-verified against the production App on 2026-05-07.
+//
+// Template MUST be public + is_template — cross-account /generate calls
+// from a user-installation token return 404 against private templates.
+//
+// Owner/name are env-overridable so staging/preview environments can pin a
+// per-environment template without a code deploy.
+export const KB_TEMPLATE_OWNER =
+  process.env.KB_TEMPLATE_OWNER ?? "jikig-ai";
+export const KB_TEMPLATE_NAME =
+  process.env.KB_TEMPLATE_NAME ?? "kb-template";
+
+async function parseGitHubError(
+  response: Response,
+  fallbackPrefix: string,
+): Promise<{ message: string; body: string }> {
+  const body = await response.text();
+  let message = `${fallbackPrefix}: ${response.status}`;
+  try {
+    const parsed = JSON.parse(body);
+    if (parsed.errors?.[0]?.message) {
+      message = parsed.errors[0].message;
+    } else if (parsed.message) {
+      message = `${fallbackPrefix}: ${response.status} - ${parsed.message}`;
+    }
+  } catch {
+    // Non-JSON response
+  }
+  return { message, body };
+}
+
+/**
+ * Shared body for the two repo-create helpers. POSTs to {url} with the
+ * installation token, parses errors via parseGitHubError, validates the
+ * response shape (defends against 202-async or stripped payloads), and
+ * returns the canonical {repoUrl, fullName} pair.
+ */
+async function postRepoCreate(
+  installationId: number,
+  url: string,
+  payload: Record<string, unknown>,
+  logCtx: { op: string; name: string; ownerLogin?: string },
+  options: { timeoutMs?: number } = {},
+): Promise<{ repoUrl: string; fullName: string }> {
+  const token = await generateInstallationToken(installationId);
+
+  const response = await githubFetch(url, {
+    method: "POST",
+    headers: {
+      Authorization: `token ${token}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(payload),
+    timeoutMs: options.timeoutMs,
+  });
+
+  if (!response.ok) {
+    const { message, body } = await parseGitHubError(
+      response,
+      "GitHub create repo failed",
+    );
+    log.error(
+      {
+        status: response.status,
+        body: body.slice(0, 500),
+        installationId,
+        ...logCtx,
+      },
+      "Failed to create repo",
+    );
+    throw new GitHubApiError(message, response.status);
+  }
+
+  const data = (await response.json()) as Partial<GitHubRepoResponse>;
+  if (typeof data.html_url !== "string" || typeof data.full_name !== "string") {
+    log.error(
+      {
+        installationId,
+        responseKeys: Object.keys(data),
+        ...logCtx,
+      },
+      "GitHub repo create returned malformed response (missing html_url/full_name)",
+    );
+    throw new GitHubApiError(
+      "GitHub returned a malformed repo creation response",
+      502,
+    );
+  }
+  log.info(
+    { installationId, fullName: data.full_name, ...logCtx },
+    "Created repo",
+  );
+  return { repoUrl: data.html_url, fullName: data.full_name };
+}
+
+async function createRepoForOrg(
+  installationId: number,
+  orgLogin: string,
+  name: string,
+  isPrivate: boolean,
+): Promise<{ repoUrl: string; fullName: string }> {
+  return postRepoCreate(
+    installationId,
+    `${GITHUB_API}/orgs/${orgLogin}/repos`,
+    {
+      name,
+      private: isPrivate,
+      auto_init: true,
+      description: "Knowledge base managed by Soleur",
+    },
+    { op: "createRepoForOrg", name },
+  );
+}
+
+/**
+ * Create a repository for a user installation by generating from the
+ * Soleur KB template. Used because POST /user/repos does not accept
+ * installation tokens (UAT-only endpoint, returns 403). The template-generate
+ * endpoint DOES accept installation tokens, provided the template is public
+ * and marked is_template (private templates return 404 to cross-account
+ * installation tokens — live-verified GitHub API limitation).
+ */
+async function createRepoFromTemplate(
+  installationId: number,
+  ownerLogin: string,
+  name: string,
+  isPrivate: boolean,
+): Promise<{ repoUrl: string; fullName: string }> {
+  return postRepoCreate(
+    installationId,
+    `${GITHUB_API}/repos/${KB_TEMPLATE_OWNER}/${KB_TEMPLATE_NAME}/generate`,
+    {
+      owner: ownerLogin,
+      name,
+      private: isPrivate,
+      include_all_branches: false,
+      description: "Knowledge base managed by Soleur",
+    },
+    { op: "createRepoFromTemplate", name, ownerLogin },
+    { timeoutMs: GITHUB_GENERATE_TIMEOUT_MS },
+  );
+}
+
 /**
  * Create a repository using the GitHub App installation token.
  *
  * Determines whether the installation is on a user account or an
  * organization, then calls the appropriate GitHub API endpoint:
  * - Organization: POST /orgs/{org}/repos (requires administration:write)
- * - User: POST /user/repos
+ * - User: POST /repos/{template_owner}/{template_repo}/generate
+ *   (POST /user/repos does not accept installation tokens — see
+ *    createRepoFromTemplate for details)
  */
 export async function createRepo(
   installationId: number,
@@ -614,51 +779,15 @@ export async function createRepo(
   isPrivate: boolean,
 ): Promise<{ repoUrl: string; fullName: string }> {
   const account = await getInstallationAccount(installationId);
-  const token = await generateInstallationToken(installationId);
 
-  const endpoint = account.type === "Organization"
-    ? `${GITHUB_API}/orgs/${account.login}/repos`
-    : `${GITHUB_API}/user/repos`;
-
-  const response = await githubFetch(endpoint, {
-    method: "POST",
-    headers: {
-      Authorization: `token ${token}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      name,
-      private: isPrivate,
-      auto_init: true,
-      description: "Knowledge base managed by Soleur",
-    }),
-  });
-
-  if (!response.ok) {
-    const body = await response.text();
-    let errorMessage = `GitHub create repo failed: ${response.status}`;
-    try {
-      const parsed = JSON.parse(body);
-      if (parsed.errors?.[0]?.message) {
-        errorMessage = parsed.errors[0].message;
-      } else if (parsed.message) {
-        errorMessage = `GitHub create repo failed: ${response.status} - ${parsed.message}`;
-      }
-    } catch {
-      // Non-JSON response
-    }
-    log.error(
-      { status: response.status, body: body.slice(0, 500), installationId, name },
-      "Failed to create repo",
-    );
-    throw new GitHubApiError(errorMessage, response.status);
+  if (account.type === "Organization") {
+    return createRepoForOrg(installationId, account.login, name, isPrivate);
   }
 
-  const data = (await response.json()) as GitHubRepoResponse;
-  return {
-    repoUrl: data.html_url,
-    fullName: data.full_name,
-  };
+  // User installation: template-generate is the only working option.
+  // POST /user/repos returns 403 "Resource not accessible by integration"
+  // when called with an installation token (live-verified).
+  return createRepoFromTemplate(installationId, account.login, name, isPrivate);
 }
 
 /**
@@ -691,20 +820,10 @@ export async function createPullRequest(
   );
 
   if (!response.ok) {
-    const errorBody = await response.text();
-    // Extract the most useful error message from GitHub's response
-    let errorMessage = `GitHub create PR failed: ${response.status}`;
-    try {
-      const parsed = JSON.parse(errorBody);
-      const firstError = parsed.errors?.[0]?.message;
-      if (firstError) {
-        errorMessage = firstError;
-      } else if (parsed.message) {
-        errorMessage = `GitHub create PR failed: ${response.status} - ${parsed.message}`;
-      }
-    } catch {
-      // Non-JSON response body -- use generic message
-    }
+    const { message: errorMessage, body: errorBody } = await parseGitHubError(
+      response,
+      "GitHub create PR failed",
+    );
     log.error(
       { status: response.status, body: errorBody.slice(0, 500), installationId, owner, repo },
       "Failed to create pull request",

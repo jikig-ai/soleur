@@ -74,6 +74,10 @@ Tighten the hook to only fire when the diff actually adds or modifies a `run:` b
 containing `${{ github.event.*.title }}`, `${{ github.event.*.body }}`, or similar
 untrusted-input interpolations. Filed as GitHub issue for hook improvement.
 
+## 2026-05-07 update
+
+300s outgrew the realistic deploy window (#3398). Recurrence pattern + script-side phase-addition prevention checklist live in `2026-05-07-deploy-poll-ceiling-must-track-realistic-deploy-window.md`. Original 300s reasoning above preserved as historical record.
+
 ## See Also
 
 - `knowledge-base/project/learnings/2026-03-21-async-webhook-deploy-cloudflare-timeout.md`
@@ -81,4 +85,6 @@ untrusted-input interpolations. Filed as GitHub issue for hook improvement.
   accommodates)
 - `knowledge-base/project/learnings/bug-fixes/2026-04-15-signed-get-verify-step-tolerate-non-json-bodies.md`
   (prior fix to the same verify-completion step — non-JSON body guard)
-- Issue #2519, PR #2523
+- `knowledge-base/project/learnings/best-practices/2026-05-07-deploy-poll-ceiling-must-track-realistic-deploy-window.md`
+  (recurrence pattern + script-side phase-addition prevention checklist)
+- Issue #2519, PR #2523, Issue #3398
