@@ -12,67 +12,23 @@
 // gone — tests that asserted `toBeNull()` now assert `result.error === <class>`
 // so the next Sentry event diagnoses itself.
 
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 
 import { extractPdfText } from "@/server/pdf-text-extract";
 import { MAX_AGENT_READABLE_PDF_SIZE } from "@/lib/attachment-constants";
+import {
+  BELOW_PDFJS_ENGINES_FLOOR,
+  emitPdfjsEngineFloorDiagnostic,
+} from "./helpers/engines-floor";
 
-// Engine-floor guard for #3424. pdfjs-dist@5.4.296 calls
-// `process.getBuiltinModule` during module init (legacy/build/pdf.mjs:5465);
-// that builtin landed in Node 22.3 / 20.16, and Node 21 reached end-of-life
-// before the back-port and never received it. Below the floor the lazy
-// import in extractPdfText throws and every assertion in this file resolves
-// to `lazy_import_failed`, masking the extractor's real contract.
-//
-// Dev path: describe.skipIf with a single stderr diagnostic so the operator
-// sees a yellow skip + actionable remediation instead of an 8-red cascade.
-// CI path: throw at module init so a misconfigured runner can't ship a
-// vacuous green. Today every runner in `.github/workflows/*.yml` pins Node
-// 22 (above the floor), so the throw branch is forward-defense — it
-// activates only if a future workflow regresses, not under the current CI
-// matrix.
-//
-// Floor expressed as `>=22.3.0 || (>=20.16.0 AND <21)` — keep in sync with
-// `apps/web-platform/package.json` `engines.node`. Use a regex match over
-// `process.versions.node` rather than `split(".").map(Number)` because the
-// latter returns NaN on prerelease/nightly tags like `22.3.0-nightly...`,
-// silently misclassifying a supported runtime as below the floor.
-function supportsGetBuiltinModule(): boolean {
-  const match = process.versions.node.match(/^(\d+)\.(\d+)\./);
-  if (!match) return true; // Unknown shape (bun/deno emulation, custom build) — fail open; the lazy import will surface real failures.
-  const maj = Number(match[1]);
-  const min = Number(match[2]);
-  if (!Number.isFinite(maj) || !Number.isFinite(min)) return true;
-  if (maj >= 23) return true;
-  if (maj === 22) return min >= 3;
-  if (maj === 21) return false;
-  if (maj === 20) return min >= 16;
-  return false;
-}
-const BELOW_PDFJS_ENGINES_FLOOR = !supportsGetBuiltinModule();
-const ENGINES_FLOOR_DIAGNOSTIC =
-  `[pdf-text-extract.test] Node ${process.versions.node} is below the ` +
-  `pdfjs-dist engines floor (>=22.3.0 or >=20.16.0). pdfjs-dist@5 calls ` +
-  `process.getBuiltinModule (legacy/build/pdf.mjs:5465) which lands at those ` +
-  `versions; below the floor the lazy import throws and every test in this ` +
-  `file would resolve to {error: "lazy_import_failed"}. Run your version ` +
-  `manager's .nvmrc reader (nvm use, fnm use, asdf install, volta pin) or ` +
-  `install Node 22.3+ to run this test. See ` +
-  `knowledge-base/project/learnings/2026-04-18-pdfjs-metadata-on-node-without-canvas.md.`;
-
-if (BELOW_PDFJS_ENGINES_FLOOR) {
-  if (process.env.CI) {
-    // Loud failure on CI — a misconfigured CI runner below the floor must NOT
-    // ship a vacuous green. Throw carries the full diagnostic in .message so
-    // vitest's reporter surfaces it once (no console.error sibling — that
-    // would double-print on CI where the throw also renders the message).
-    throw new Error(ENGINES_FLOOR_DIAGNOSTIC);
-  }
-  // Dev path: stderr write (not console.error) bypasses any vitest
-  // onConsoleLog interception that could otherwise swallow the diagnostic
-  // and leave the operator with a silent yellow skip.
-  process.stderr.write(ENGINES_FLOOR_DIAGNOSTIC + "\n");
-}
+// Engine-floor guard for #3439 (follow-up to #3424). See
+// `test/helpers/engines-floor.ts` for the rationale (pdfjs-dist@5 calls
+// `process.getBuiltinModule`, added in Node 22.3 / 20.16). Dev path:
+// describe.skipIf + single stderr diagnostic. CI path: throw at module init
+// so a misconfigured runner can't ship vacuous green. The lazy_import_failed
+// test below sits OUTSIDE the skipIf because it mocks the real import — the
+// engine floor is irrelevant to it.
+emitPdfjsEngineFloorDiagnostic("pdf-text-extract.test");
 
 /**
  * Build a minimal PDF byte buffer with one text-showing operator per page.
@@ -293,5 +249,62 @@ describe.skipIf(BELOW_PDFJS_ENGINES_FLOOR)("extractPdfText", () => {
     if (!isOk(result)) return;
     expect(result.pageCount).toBe(600);
     expect(result.truncated).toBe(true);
+  });
+});
+
+// Direct unit test of the lazy_import_failed branch (#3438). Sits OUTSIDE
+// the engine-floor describe.skipIf because the `vi.doMock` short-circuits
+// the real `await import("pdfjs-dist/legacy/build/pdf.mjs")` — the runtime
+// never reaches `process.getBuiltinModule`, so the test runs identically on
+// Node 21.7.3 and Node 22.x. Asserts both the discriminated-union contract
+// (`result.error === "lazy_import_failed"`) and the Sentry mirror call from
+// `pdf-text-extract.ts:113-122` (so the silent-fallback observability can't
+// regress without flipping the test red).
+//
+// Worker-isolation: relies on vitest's default per-file isolation
+// (`vitest.config.ts` does NOT set `pool: "threads"` with `isolate: false`
+// for the unit project). The before-import `vi.resetModules()` and the
+// finally-block `vi.doUnmock` + `vi.resetModules()` together prevent
+// in-file mock leakage; if the project ever moves to `isolate: false`,
+// move this `describe` to its own file (`pdf-text-extract.lazy-import.test.ts`).
+describe("extractPdfText lazy_import_failed", () => {
+  it("returns lazy_import_failed when pdfjs module init throws", async () => {
+    const reportSilentFallback = vi.fn();
+    try {
+      vi.doMock("@/server/observability", async () => {
+        const actual = await vi.importActual<
+          typeof import("@/server/observability")
+        >("@/server/observability");
+        return { ...actual, reportSilentFallback };
+      });
+      vi.doMock("pdfjs-dist/legacy/build/pdf.mjs", () => {
+        throw new Error("simulated module-init failure");
+      });
+      vi.resetModules();
+      const { extractPdfText: extractPdfTextIsolated } = await import(
+        "@/server/pdf-text-extract"
+      );
+      const buf = Buffer.from("%PDF-1.4\n");
+      const result = await extractPdfTextIsolated(buf, 50_000);
+      expect(result).toMatchObject({ error: "lazy_import_failed" });
+      expect(reportSilentFallback).toHaveBeenCalledTimes(1);
+      const [errArg, ctxArg] = reportSilentFallback.mock.calls[0];
+      // Vitest wraps factory throws with its own Error; we don't assert on
+      // the inner message because vitest swallows it. The discriminated-union
+      // contract above + the observability feature/op shape below are the
+      // load-bearing invariants.
+      expect(errArg).toBeInstanceOf(Error);
+      expect(ctxArg).toMatchObject({
+        feature: "kb-concierge-context",
+        op: "extractPdfText.import",
+      });
+      expect(ctxArg.extra).toMatchObject({
+        nodeVersion: process.versions.node,
+      });
+    } finally {
+      vi.doUnmock("@/server/observability");
+      vi.doUnmock("pdfjs-dist/legacy/build/pdf.mjs");
+      vi.resetModules();
+    }
   });
 });
