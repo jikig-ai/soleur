@@ -860,24 +860,30 @@ ${READ_TOOL_PDF_CAPABILITY_DIRECTIVE}`;
           userId,
           contextPath: context.path,
           providedContent: null,
+          workspacePath, // pre-resolved at agent-runner.ts:~745 — skip duplicate fetch
         });
 
         if (resolved.documentKind === "pdf") {
           if (resolved.documentExtractError) {
+            // Lock-step partition-dispatch order with `soleur-go-runner.ts`
+            // (lines ~985-1013): SOFT first, then `too_many_pages`, then
+            // HARD fall-through. Order is behaviorally equivalent (the
+            // partition is exhaustive and disjoint via `_AssertPartitionTotal`)
+            // but matching ordering keeps future bug-fixes single-edit.
             const safeErrorClass = sanitizePromptIdentifier(
               resolved.documentExtractError,
             );
-            if (safeErrorClass === "too_many_pages") {
+            if (isPdfSoftFailure(safeErrorClass)) {
+              artifactDirective = buildPdfGatedDirective(
+                safeContextPath,
+                safeFullPath,
+                CONTEXT_NO_ASK,
+              );
+            } else if (safeErrorClass === "too_many_pages") {
               const safeNumPages = resolved.documentExtractMeta?.numPages ?? 0;
               artifactDirective = buildPdfTooLongDirective(
                 safeContextPath,
                 safeNumPages,
-                CONTEXT_NO_ASK,
-              );
-            } else if (isPdfSoftFailure(safeErrorClass)) {
-              artifactDirective = buildPdfGatedDirective(
-                safeContextPath,
-                safeFullPath,
                 CONTEXT_NO_ASK,
               );
             } else {

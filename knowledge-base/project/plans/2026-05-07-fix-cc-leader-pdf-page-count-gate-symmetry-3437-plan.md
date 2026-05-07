@@ -84,6 +84,11 @@ The Concierge resolver (`apps/web-platform/server/kb-document-resolver.ts:67-329
 
 **Brand-survival threshold:** `single-user incident` — one founder asking the CPO to "summarize this Manning book" and watching it hang is the brand-breaking moment. Same threshold + treatment as #3429 per `hr-weigh-every-decision-against-target-user-impact`.
 
+**Carve-outs disclosed at review time (PR #3442):**
+
+- **>60MB byte-ceiling case:** the page-count gate is bounded by `METADATA_READ_BYTE_CEILING_BYTES = 40 MiB` (post perf-oracle review of #3430). PDFs exceeding that ceiling fail-close to existing `oversized_buffer` soft-route routing — i.e. the legacy `buildPdfGatedDirective` Read fanout. A 80MB image-heavy book still hangs the leader. The fix is page-count-bounded, NOT byte-bounded. Per-path tuning of the metadata ceiling deferred to a follow-up tracking issue per `2026-05-05-defense-relaxation-must-name-new-ceiling.md`.
+- **Leader text-fallback divergence from Concierge:** when a non-PDF text file fails to read (ENOENT after rename, EACCES, EISDIR), the leader resolver returns `{ kind: "text" }` (no content) and the runner emits a Read directive against the absolute path. Concierge's #3353 fix returns `{}` (silent-drop) on the same shape. This is the legacy leader behavior preserved per AC8; the resulting Read directive may surface a stale/permission-denied path in the model's context. Risk is lower than the original #3376 sandbox-deny-cascade (the leader has no router-prompt fallback to mis-paraphrase) but the divergence is real and named here so a future symmetry pass has a documented anchor.
+
 CPO sign-off required at plan time before `/work` begins (per `requires_cpo_signoff: true` carry-forward from #3429 brainstorm). `user-impact-reviewer` will be invoked at review-time.
 
 ## Hypotheses

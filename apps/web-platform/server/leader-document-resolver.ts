@@ -27,10 +27,11 @@ import {
   extractPdfText,
   extractPdfMetadata,
   LARGE_PDF_PAGE_THRESHOLD,
+  PDF_FEATURE_TAGS,
   type PdfExtractErrorClass,
 } from "./pdf-text-extract";
 
-const LEADER_FEATURE_TAG = "leader-context";
+const LEADER_FEATURE_TAG = PDF_FEATURE_TAGS.LEADER;
 
 export interface ResolvedLeaderDocumentContext {
   artifactPath?: string;
@@ -52,8 +53,17 @@ export async function resolveLeaderDocumentContext(args: {
   userId: string;
   contextPath: string | null | undefined;
   providedContent?: string | null;
+  /**
+   * Optional pre-resolved workspace path. The leader's `startAgentSession`
+   * already SELECTs `workspace_path` (alongside repo_status/installation_id)
+   * for the session — passing it through here avoids a second Supabase
+   * round-trip via `fetchUserWorkspacePath` on every leader turn. When
+   * omitted, the resolver falls back to the cached fetcher (Concierge
+   * shape).
+   */
+  workspacePath?: string;
 }): Promise<ResolvedLeaderDocumentContext> {
-  const { userId, contextPath, providedContent } = args;
+  const { userId, contextPath, providedContent, workspacePath: preResolvedPath } = args;
   if (!contextPath || contextPath.length === 0) return {};
 
   const isPdf = contextPath.toLowerCase().endsWith(".pdf");
@@ -71,18 +81,22 @@ export async function resolveLeaderDocumentContext(args: {
   }
 
   let workspacePath: string;
-  try {
-    workspacePath = await fetchUserWorkspacePath(userId);
-  } catch (err) {
-    reportSilentFallback(err, {
-      feature: LEADER_FEATURE_TAG,
-      op: "fetchUserWorkspacePath",
-      extra: { userId, pathBasename: path.basename(contextPath) },
-    });
-    return {
-      artifactPath: contextPath,
-      documentKind: isPdf ? "pdf" : "text",
-    };
+  if (preResolvedPath && preResolvedPath.length > 0) {
+    workspacePath = preResolvedPath;
+  } else {
+    try {
+      workspacePath = await fetchUserWorkspacePath(userId);
+    } catch (err) {
+      reportSilentFallback(err, {
+        feature: LEADER_FEATURE_TAG,
+        op: "fetchUserWorkspacePath",
+        extra: { userId, pathBasename: path.basename(contextPath) },
+      });
+      return {
+        artifactPath: contextPath,
+        documentKind: isPdf ? "pdf" : "text",
+      };
+    }
   }
 
   const fullPath = path.join(workspacePath, contextPath);

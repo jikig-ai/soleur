@@ -275,6 +275,47 @@ describe("agent-runner leader PDF partition (#3437)", () => {
     expect(prompt).toContain("Hello body content");
   });
 
+  test("too_many_pages directive does NOT name pdftotext/pdfplumber/PyPDF2/apt-get/pip3 (apt-get cascade defense — AC14)", async () => {
+    setupSupabaseMock();
+    setupQueryMock();
+    resolveLeaderDocumentContextSpy.mockResolvedValueOnce({
+      artifactPath: PDF_PATH,
+      documentKind: "pdf",
+      documentExtractError: "too_many_pages",
+      documentExtractMeta: { numPages: 403 },
+    });
+
+    await startAgentSession("user-1", "conv-1", "cpo", undefined, undefined, PDF_CONTEXT);
+
+    const prompt: string = mockQuery.mock.calls[0][0].options.systemPrompt;
+    // AC14: the leader-path too-long directive MUST NOT mention any of the
+    // measured cascade-binary names. Mirrors the Concierge AC the apt-get
+    // cascade learning enshrined.
+    const forbidden = [
+      "pdftotext",
+      "pdfplumber",
+      "pdf-parse",
+      "PyPDF2",
+      "PyMuPDF",
+      "fitz",
+      "apt-get",
+      "pip3 install",
+    ];
+    // The leader baseline emits `READ_TOOL_PDF_CAPABILITY_DIRECTIVE` and the
+    // gated directive's exclusion clause names these tokens deliberately —
+    // so we scope the check to the artifact frame between the identity
+    // opener and the baseline-rest.
+    const tooLongIdx = prompt.indexOf(PDF_TOO_LONG_DIRECTIVE_LEAD);
+    expect(tooLongIdx).toBeGreaterThan(0);
+    // Take a window around the too-long directive that excludes the
+    // baseline (which legitimately names these tokens for capability
+    // discovery on the Read tool).
+    const tooLongFrame = prompt.slice(tooLongIdx, tooLongIdx + 4000);
+    for (const token of forbidden) {
+      expect(tooLongFrame).not.toContain(token);
+    }
+  });
+
   test("no documentExtractError + kind=pdf with no body falls through to gated directive", async () => {
     // Resolver returned a path-only result (e.g. read fully failed without
     // surfacing a typed error class). The runner falls through to the

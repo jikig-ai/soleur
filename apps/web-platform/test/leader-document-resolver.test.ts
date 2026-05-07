@@ -176,8 +176,9 @@ describe("resolveLeaderDocumentContext (#3437)", () => {
     expect(result.documentExtractMeta).toBeUndefined();
   });
 
-  it("fails closed to oversized_buffer when metadata read fails (oversized/timeout/parse_error)", async () => {
-    for (const reason of ["oversized", "timeout", "parse_error"] as const) {
+  it.each(["oversized", "timeout", "parse_error"] as const)(
+    "fails closed to oversized_buffer when metadata read fails with reason=%s",
+    async (reason) => {
       seedFile(`books/fail-${reason}.pdf`);
       extractPdfTextSpy.mockResolvedValueOnce({ error: "oversized_buffer" });
       extractPdfMetadataSpy.mockResolvedValueOnce({ ok: false, reason });
@@ -187,8 +188,8 @@ describe("resolveLeaderDocumentContext (#3437)", () => {
       });
       expect(result.documentExtractError).toBe("oversized_buffer");
       expect(result.documentExtractMeta).toBeUndefined();
-    }
-  });
+    },
+  );
 
   it("does NOT call extractPdfMetadata for non-oversized_buffer extractor failures (e.g. encrypted)", async () => {
     seedFile("books/encrypted.pdf");
@@ -245,6 +246,19 @@ describe("resolveLeaderDocumentContext (#3437)", () => {
     });
     expect(result.documentKind).toBe("text");
     expect(result.documentContent).toBeUndefined();
+  });
+
+  it("skips fetchUserWorkspacePath when caller passes pre-resolved workspacePath", async () => {
+    seedFile("notes/short.md", "Body");
+    const result = await resolveLeaderDocumentContext({
+      userId: "u1",
+      contextPath: "notes/short.md",
+      workspacePath: tmpRoot,
+    });
+    expect(result.documentContent).toBe("Body");
+    // The mocked Supabase chain wasn't invoked — pre-resolved path bypassed
+    // the fetcher entirely.
+    expect(fetchUserWorkspacePathSpy).not.toHaveBeenCalled();
   });
 
   it("passes featureTag: 'leader-context' to extractPdfText", async () => {

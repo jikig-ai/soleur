@@ -106,6 +106,17 @@ export const LARGE_PDF_PAGE_THRESHOLD = 150;
 // profile) so we use the equivalent `40 << 20 = 41_943_040` shape.
 export const METADATA_READ_BYTE_CEILING_BYTES = 40 << 20;
 
+/**
+ * Sentry feature-tag dictionary for both PDF resolvers. The Concierge
+ * resolver passes the implicit default (or the explicit `CONCIERGE` tag);
+ * the leader resolver passes the `LEADER` tag. Hoisted to a single shared
+ * record so a future rename is one edit, not five.
+ */
+export const PDF_FEATURE_TAGS = {
+  CONCIERGE: "kb-concierge-context",
+  LEADER: "leader-context",
+} as const;
+
 // `Promise.race` timeout on the pdfjs metadata-only `getDocument` call
 // (#3429). 3s caps the wall-clock cost in the resolver's hot path. On
 // timeout we call `loadingTask.destroy()` (per pdfjs-dist@5.4.296
@@ -148,7 +159,7 @@ export async function extractPdfText(
   // remain wire-compatible. The leader-document resolver passes
   // `featureTag: "leader-context"` so operators can filter leader-side
   // lazy-import failures from Concierge fires.
-  const featureTag = options?.featureTag ?? "kb-concierge-context";
+  const featureTag = options?.featureTag ?? PDF_FEATURE_TAGS.CONCIERGE;
   if (buffer.length > MAX_AGENT_READABLE_PDF_SIZE) {
     return { error: "oversized_buffer" };
   }
