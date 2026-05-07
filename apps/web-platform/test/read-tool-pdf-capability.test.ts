@@ -6,6 +6,7 @@ import {
   buildPdfGatedDirective,
   PDF_GATED_DIRECTIVE_LEAD,
   PDF_UNREADABLE_DIRECTIVE_LEAD,
+  PDF_TOO_LONG_DIRECTIVE_LEAD,
   PDF_SOFT_FAILURE_LITERALS,
   PDF_HARD_FAILURE_LITERALS,
 } from "@/server/soleur-go-runner";
@@ -326,14 +327,34 @@ describe("PdfExtractErrorClass routing partition (soft → gated, hard → unrea
   }
 
   for (const cls of PDF_HARD_FAILURE_LITERALS) {
-    it(`${cls}: routes to PDF_UNREADABLE_DIRECTIVE_LEAD (SDK Read genuinely cannot help)`, () => {
-      const prompt = buildSoleurGoSystemPrompt({
-        artifactPath: "knowledge-base/probe.pdf",
-        documentKind: "pdf",
-        documentExtractError: cls,
+    if (cls === "too_many_pages") {
+      // 2026-05-07 follow-up to #3429: too_many_pages is a HARD class with
+      // its OWN directive lead — distinct from the generic unreadable lead.
+      // The directive names the page count and offers chapter-share or
+      // TOC-paste recovery. Asserts must adapt per-class within the loop so
+      // the partition rail and per-class routing both stay tested.
+      it(`${cls}: routes to PDF_TOO_LONG_DIRECTIVE_LEAD (page-count gate)`, () => {
+        const prompt = buildSoleurGoSystemPrompt({
+          artifactPath: "knowledge-base/probe.pdf",
+          documentKind: "pdf",
+          documentExtractError: cls,
+          documentExtractMeta: { numPages: 200 },
+        });
+        expect(prompt).toContain(PDF_TOO_LONG_DIRECTIVE_LEAD);
+        expect(prompt).not.toContain(PDF_GATED_DIRECTIVE_LEAD);
+        expect(prompt).not.toContain(PDF_UNREADABLE_DIRECTIVE_LEAD);
       });
-      expect(prompt).toContain(PDF_UNREADABLE_DIRECTIVE_LEAD);
-      expect(prompt).not.toContain(PDF_GATED_DIRECTIVE_LEAD);
-    });
+    } else {
+      it(`${cls}: routes to PDF_UNREADABLE_DIRECTIVE_LEAD (SDK Read genuinely cannot help)`, () => {
+        const prompt = buildSoleurGoSystemPrompt({
+          artifactPath: "knowledge-base/probe.pdf",
+          documentKind: "pdf",
+          documentExtractError: cls,
+        });
+        expect(prompt).toContain(PDF_UNREADABLE_DIRECTIVE_LEAD);
+        expect(prompt).not.toContain(PDF_GATED_DIRECTIVE_LEAD);
+        expect(prompt).not.toContain(PDF_TOO_LONG_DIRECTIVE_LEAD);
+      });
+    }
   }
 });

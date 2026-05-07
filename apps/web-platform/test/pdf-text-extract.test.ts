@@ -12,9 +12,15 @@
 // gone — tests that asserted `toBeNull()` now assert `result.error === <class>`
 // so the next Sentry event diagnoses itself.
 
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 
-import { extractPdfText } from "@/server/pdf-text-extract";
+import {
+  extractPdfText,
+  extractPdfMetadata,
+  LARGE_PDF_PAGE_THRESHOLD,
+  METADATA_READ_BYTE_CEILING_BYTES,
+  METADATA_READ_TIMEOUT_MS,
+} from "@/server/pdf-text-extract";
 import { MAX_AGENT_READABLE_PDF_SIZE } from "@/lib/attachment-constants";
 
 /**
@@ -232,5 +238,119 @@ describe("extractPdfText", () => {
     if (!isOk(result)) return;
     expect(result.pageCount).toBe(600);
     expect(result.truncated).toBe(true);
+  });
+});
+
+// 2026-05-07 follow-up to #3429: direct lazy_import_failed coverage.
+// Folds in #3438 — previously the lazy_import_failed branch in extractPdfText
+// had no direct unit test (only an indirect path via runtime engine drift).
+// Mocking the legacy pdfjs entry to throw at import time exercises the catch
+// in extractPdfText:107-118 and asserts the typed error class surfaces.
+describe("extractPdfText lazy_import_failed (#3438)", () => {
+  it("returns { error: 'lazy_import_failed' } when the dynamic import throws", async () => {
+    vi.resetModules();
+    vi.doMock("pdfjs-dist/legacy/build/pdf.mjs", () => {
+      throw new Error("synthetic-import-failure");
+    });
+    // Re-import after the mock is registered so the lazy `import("pdfjs-dist/...")`
+    // inside extractPdfText resolves to the rejecting factory. The function
+    // catches the import rejection and returns the typed shape — no try/catch
+    // needed at the call site.
+    const { extractPdfText: extractWithBrokenImport } = await import(
+      "@/server/pdf-text-extract"
+    );
+    const buf = Buffer.from("%PDF-1.4\nfake-bytes");
+    const result = await extractWithBrokenImport(buf, 50_000);
+    expect(result).not.toBeNull();
+    expect(result && "error" in result).toBe(true);
+    if (!result || !("error" in result)) return;
+    expect(result.error).toBe("lazy_import_failed");
+    vi.doUnmock("pdfjs-dist/legacy/build/pdf.mjs");
+    vi.resetModules();
+  });
+});
+
+// 2026-05-07 follow-up to #3429: extractPdfMetadata bridge fix.
+// Metadata-only pdfjs read on the soft-route path. When extractPdfText
+// raises `oversized_buffer` for a >24MB PDF, the resolver calls this
+// function to obtain numPages cheaply (xref-only, no per-page text
+// iteration). PDFs with `numPages > LARGE_PDF_PAGE_THRESHOLD` route to the
+// new HARD class `too_many_pages` to avoid the Read-fanout idle-reaper
+// timeout described in #3429.
+describe("extractPdfMetadata (#3429)", () => {
+  it("exports the threshold and ceiling constants with sensible values", () => {
+    expect(LARGE_PDF_PAGE_THRESHOLD).toBe(150);
+    expect(METADATA_READ_BYTE_CEILING_BYTES).toBe(60 * 1024 * 1024);
+    expect(METADATA_READ_TIMEOUT_MS).toBe(3000);
+  });
+
+  it("returns { ok: false, reason: 'oversized' } when buffer exceeds METADATA_READ_BYTE_CEILING_BYTES — short-circuits before pdfjs runs", async () => {
+    // Allocate a buffer one byte over the ceiling. The function MUST
+    // short-circuit BEFORE invoking pdfjs (otherwise the test would pay
+    // 60MB+ pdfjs xref-build cost). Wall-clock <50ms is the cheapest
+    // proxy for "no parser invocation".
+    const oversized = Buffer.alloc(METADATA_READ_BYTE_CEILING_BYTES + 1);
+    const start = Date.now();
+    const result = await extractPdfMetadata(oversized);
+    const elapsed = Date.now() - start;
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.reason).toBe("oversized");
+    expect(elapsed).toBeLessThan(50);
+  });
+
+  it("returns { ok: true, numPages } for a valid 3-page PDF", async () => {
+    const buf = makeMinimalPdf(["p1", "p2", "p3"]);
+    const result = await extractPdfMetadata(buf);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.numPages).toBe(3);
+  });
+
+  it("returns { ok: false, reason: 'parse_error' } on a buffer with no PDF header", async () => {
+    const garbage = Buffer.from("this is definitely not a PDF file");
+    const result = await extractPdfMetadata(garbage);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.reason).toBe("parse_error");
+  });
+
+  it("returns { ok: false, reason: 'timeout' } when getDocument exceeds METADATA_READ_TIMEOUT_MS, and calls loadingTask.destroy() once", async () => {
+    // Mock pdfjs to return a never-resolving loadingTask. The race against
+    // METADATA_READ_TIMEOUT_MS must win, the function must return the
+    // timeout shape, and loadingTask.destroy() must be invoked once to
+    // release the worker + xref allocation. Use fake timers so the test
+    // does NOT pay 3s wall-clock per run.
+    vi.resetModules();
+    const destroySpy = vi.fn(() => Promise.resolve());
+    vi.doMock("pdfjs-dist/legacy/build/pdf.mjs", () => ({
+      getDocument: vi.fn(() => ({
+        // Never resolves — `Promise.race` must pick the timeout.
+        promise: new Promise(() => {}),
+        destroy: destroySpy,
+      })),
+    }));
+    const { extractPdfMetadata: extractWithMockedPdfjs } = await import(
+      "@/server/pdf-text-extract"
+    );
+
+    vi.useFakeTimers();
+    try {
+      const buf = Buffer.from("%PDF-1.4\nfake-bytes-but-pdfjs-mocked");
+      const promise = extractWithMockedPdfjs(buf);
+      // Advance past the timeout so the `Promise.race` resolves with the
+      // timeout sentinel. `advanceTimersByTimeAsync` flushes microtasks
+      // between tick boundaries so the race winner observes correctly.
+      await vi.advanceTimersByTimeAsync(METADATA_READ_TIMEOUT_MS + 100);
+      const result = await promise;
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.reason).toBe("timeout");
+      expect(destroySpy).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+      vi.doUnmock("pdfjs-dist/legacy/build/pdf.mjs");
+      vi.resetModules();
+    }
   });
 });

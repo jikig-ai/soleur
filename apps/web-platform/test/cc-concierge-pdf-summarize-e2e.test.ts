@@ -61,6 +61,7 @@ import {
   buildSoleurGoSystemPrompt,
   PDF_GATED_DIRECTIVE_LEAD,
   PDF_UNREADABLE_DIRECTIVE_LEAD,
+  PDF_TOO_LONG_DIRECTIVE_LEAD,
 } from "@/server/soleur-go-runner";
 import { _resetWorkspacePathCacheForTests } from "@/server/kb-document-resolver";
 
@@ -217,5 +218,31 @@ describe("cc-concierge PDF summarize end-to-end (#3376)", () => {
       expect(match[1]).toMatch(/^\/[^"]+/);
       expect(match[1]?.startsWith(tmpRoot)).toBe(true);
     }
+  });
+
+  it("Phase 4.4 (#3429) — too_many_pages emits buildPdfTooLongDirective lead with the page count", async () => {
+    // End-to-end shape for the bridge fix: the resolver surfaced a
+    // synthesized many-pages PDF as `documentExtractError: "too_many_pages"`
+    // with `documentExtractMeta: { numPages: 250 }`. The system prompt
+    // emits the new directive lead, names the page count, and does NOT
+    // emit the gated Read directive (which would fanout-bomb the SDK Read
+    // tool's 20-page cap).
+    const systemPrompt = buildSoleurGoSystemPrompt({
+      artifactPath: "knowledge-base/big-book.pdf",
+      documentKind: "pdf",
+      documentExtractError: "too_many_pages",
+      documentExtractMeta: { numPages: 250 },
+      workspacePath: tmpRoot,
+    });
+
+    expect(systemPrompt).toContain(PDF_TOO_LONG_DIRECTIVE_LEAD);
+    expect(systemPrompt).toContain("I see 250 pages");
+    expect(systemPrompt).not.toContain(PDF_GATED_DIRECTIVE_LEAD);
+    expect(systemPrompt).not.toContain(PDF_UNREADABLE_DIRECTIVE_LEAD);
+    // No Read instructions on the too-long route — no fanout to time out.
+    const readInstructions = Array.from(
+      systemPrompt.matchAll(/Use the Read tool to read "([^"]+)"/g),
+    );
+    expect(readInstructions.length).toBe(0);
   });
 });
