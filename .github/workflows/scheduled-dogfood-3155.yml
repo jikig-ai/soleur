@@ -1,8 +1,6 @@
 name: "Scheduled (once): dogfood-3155"
 
 on:
-  schedule:
-    - cron: '0 9 5 5 *'
   workflow_dispatch: {}
 
 # `contents: write` is required for the D4 neutralization commit (the agent
