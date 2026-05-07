@@ -14,25 +14,39 @@ name: "Scheduled (once): Sandbox dogfood for #3403 abort-path verification"
 # plugins/soleur/skills/schedule/SKILL.md):
 #
 # 1. Includes an extra step BEFORE the claude-code-action step that closes
-#    the sandbox issue. This intentionally violates the "issue must be OPEN
-#    at fire time" precondition to force the agent through the D4 abort path.
+#    the sandbox issue (idempotently — skip if already CLOSED). This
+#    intentionally violates the "issue must be OPEN at fire time" precondition
+#    to force the agent through the D4 abort path.
 # 2. show_full_output: true is enabled (matches the fixed --once template).
 # 3. github_token: ${{ secrets.GITHUB_TOKEN }} is passed (matches the fixed
 #    --once template — candidate fix for #3403's denial source).
+# 4. Trigger is workflow_dispatch ONLY (no `schedule:` cron). This avoids the
+#    annual-recurrence trap that #3403's predecessor #3155 fell into. The
+#    operator manually fires this workflow on FIRE_DATE (2026-05-19) once the
+#    PR has merged — `gh workflow run scheduled-dogfood-3403.yml`. After
+#    capturing the SDK transcript, the workflow file is deleted (or the
+#    workflow stays inert at workflow_dispatch only — it cannot self-fire).
+# 5. Post-step REOPEN of issue #3420 (`if: always()`) so re-runs are
+#    idempotent — the SANDBOX precondition step finds an OPEN issue every
+#    time, regardless of how many prior fires.
+# 6. Post-step VERIFICATION reads the workflow YAML from main via the
+#    contents API and exits non-zero from the GHA shell if `schedule:` is
+#    still present. This is the genuine framework-level fix for "exit
+#    success without observable side-effect" — the in-prompt `exit 1` is
+#    swallowed by claude-code-action's tool-call boundary, so the GHA-shell
+#    post-step is what actually fails the workflow conclusion.
 #
 # Post-fire operator playbook (AC14 of the bundle PR):
-#   1. Read the SDK transcript from the GHA run page.
+#   1. Read the SDK transcript from the GHA run page (visible due to
+#      show_full_output: true).
 #   2. Identify the exact tool call producing permission_denials_count: 1.
 #   3. File #3403-followup with the architectural finding (Branch B of the
 #      split contract) OR confirm the candidate fixes (AC1+AC2+AC3+AC1b)
 #      cover #3403's acceptance criteria (Branch A — close #3403).
-#   4. Manually neutralize THIS workflow per PR #3402 recipe regardless of
-#      whether D4 self-neutralized — defense in depth, the sandbox is itself
-#      an annual-recurrence trap.
+#   4. Once captured, delete this workflow file (or leave it inert — it has
+#      no `schedule:` so it cannot self-fire).
 
 on:
-  schedule:
-    - cron: '0 9 19 5 *'
   workflow_dispatch: {}
 
 permissions:
@@ -66,12 +80,20 @@ jobs:
       # the claude-code-action step. The scheduler design says "the issue
       # must be OPEN at fire time"; this sandbox intentionally violates that
       # precondition to exercise the D4 abort path inside claude-code-action.
+      # Idempotent: skip if the issue is already CLOSED (e.g., re-run after
+      # the post-step reopen failed for some reason).
       - name: Sandbox precondition — close issue to force abort path
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          set -euo pipefail
+          STATE=$(gh issue view "$ISSUE_NUMBER" --json state --jq .state)
+          if [[ "$STATE" == "CLOSED" ]]; then
+            echo "::notice::Issue $ISSUE_NUMBER already CLOSED — sandbox precondition already satisfied."
+            exit 0
+          fi
           gh issue close "$ISSUE_NUMBER" \
-            --comment "Sandbox precondition for #3403 — closed to force abort path. Will be reopened post-fire by the AC14 follow-up."
+            --comment "Sandbox precondition for #3403 — closed to force abort path. Will be reopened by the post-step at end of this run."
 
       - name: One-time fire (with self-neutralization)
         uses: anthropics/claude-code-action@ab8b1e6471c519c585ba17e8ecaccc9d83043541 # v1.0.101
@@ -139,10 +161,14 @@ jobs:
 
             ## Pre-flight (abort with observation comment if any check fails)
 
-            1. **Date guard (PRIMARY cross-year defense, D3):**
-               `[[ "$FIRE_DATE" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] || { echo "FIRE_DATE empty or malformed: '$FIRE_DATE'"; <invoke neutralization primitive>; exit 0; }`
-               then `[[ "$(date -u +%F)" == "$FIRE_DATE" ]]` must be true. If
-               false, invoke the Neutralization primitive above and exit 0.
+            **SANDBOX MODIFICATION:** D3 (date guard) is INTENTIONALLY DISABLED
+            in this dogfood. The canonical --once template uses D3 to break
+            annual cron re-fire; this sandbox has `workflow_dispatch:` only
+            (no `schedule:` cron), so cross-year recurrence is impossible by
+            construction and the date guard would only block on-demand re-runs.
+            FIRE_DATE is retained in the env block as documentation only.
+
+            1. **Date guard:** SKIPPED — see SANDBOX MODIFICATION above.
             2. **Idempotency:** if the workflow's `on:` block no longer
                contains `schedule:`, exit 0 immediately.
             3. **Repo not archived:**
@@ -184,11 +210,13 @@ jobs:
             `claude-code-action` revokes the App token after this step, so a
             YAML-level cleanup would silently fail.
 
-            ## Post-fire verification (mandatory after Final step) — bundle-PR framework fix
+            ## Post-fire verification (in-prompt observation) — bundle-PR framework fix
 
-            After the Neutralization primitive completes, verify the side
-            effect actually landed by reading the workflow file back from
-            the default branch:
+            After the Neutralization primitive completes, also post an
+            observable signal into the issue thread (separate from the
+            workflow conclusion, which is enforced by the post-step BELOW
+            this claude-code-action step). Read the workflow file from the
+            default branch via the contents API:
 
             ```bash
             CONTENT=$(gh api "repos/${{ github.repository }}/contents/.github/workflows/$WORKFLOW_NAME" --jq .content | base64 -d)
@@ -197,10 +225,63 @@ jobs:
             ```
 
             Expected post-neutralization state: `STILL_HAS_SCHEDULE == 0`
-            AND `HAS_DISPATCH >= 1`. If verification FAILS, post a
-            follow-up comment to issue #$ISSUE_NUMBER:
-            "Workflow neutralization claimed success but post-fire
-            verification shows `schedule:` still present. Manual
-            intervention required."
-            Then exit 1 (NOT 0). The workflow conclusion must reflect the
-            verification outcome.
+            AND `HAS_DISPATCH >= 1`. If verification FAILS (which is
+            EXPECTED in this sandbox — the agent never reaches the
+            Neutralization primitive because pre-flight check 4 fails),
+            post a follow-up comment to issue #$ISSUE_NUMBER summarizing
+            the SDK-transcript evidence: which tool call produced
+            `permission_denials_count: 1`, what the agent attempted, and
+            what side effects (if any) actually landed.
+
+            Note: an `exit 1` here is SWALLOWED by claude-code-action's
+            tool-call boundary. The genuine workflow-conclusion enforcement
+            is the post-step BELOW this action which uses
+            `secrets.GITHUB_TOKEN` and runs in the GHA shell.
+
+      # Post-step VERIFICATION (runs in GHA shell, not inside claude-code-action,
+      # so its exit code DOES propagate to the workflow conclusion). Reads the
+      # workflow YAML from the default branch and exits non-zero if `schedule:`
+      # is still present. Tolerates contents API replication lag with a
+      # bounded retry loop.
+      - name: Post-fire verification (GHA-shell, propagates to conclusion)
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -uo pipefail
+          STILL_HAS_SCHEDULE=99
+          HAS_DISPATCH=0
+          for attempt in 1 2 3; do
+            CONTENT=$(gh api "repos/$REPO/contents/.github/workflows/$WORKFLOW_NAME" --jq .content 2>/dev/null | base64 -d || true)
+            STILL_HAS_SCHEDULE=$(printf '%s' "$CONTENT" | grep -cE '^[[:space:]]*schedule:' || true)
+            HAS_DISPATCH=$(printf '%s' "$CONTENT" | grep -cE '^[[:space:]]*workflow_dispatch:' || true)
+            if [[ "$STILL_HAS_SCHEDULE" == "0" && "$HAS_DISPATCH" -ge "1" ]]; then
+              echo "::notice::Post-fire verification passed (attempt $attempt)."
+              exit 0
+            fi
+            echo "Attempt $attempt: schedule=$STILL_HAS_SCHEDULE dispatch=$HAS_DISPATCH — retrying after replication lag."
+            sleep 10
+          done
+          # Note: this dogfood ships with workflow_dispatch ONLY (no schedule:)
+          # so the expected steady state is STILL_HAS_SCHEDULE=0 from the very
+          # first read. If we end up here, something is genuinely off.
+          echo "::error::Post-fire verification failed: schedule=$STILL_HAS_SCHEDULE dispatch=$HAS_DISPATCH"
+          exit 1
+
+      # Post-step REOPEN of the sandbox issue (always runs). Makes the
+      # workflow idempotent: if the operator wants to re-fire to capture a
+      # second transcript, the precondition step finds the issue OPEN.
+      - name: Sandbox post-step — reopen issue (idempotency)
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -uo pipefail
+          STATE=$(gh issue view "$ISSUE_NUMBER" --json state --jq .state)
+          if [[ "$STATE" == "OPEN" ]]; then
+            echo "::notice::Issue $ISSUE_NUMBER already OPEN."
+            exit 0
+          fi
+          gh issue reopen "$ISSUE_NUMBER" \
+            --comment "Sandbox post-step: reopened automatically after dogfood fire so the workflow is re-runnable. AC14 follow-up still required (read SDK transcript, confirm fixes OR file #3403-followup, then delete this workflow)."

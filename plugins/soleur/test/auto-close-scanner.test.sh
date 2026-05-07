@@ -40,7 +40,7 @@ count_lines() {
   if [[ -z "$1" ]]; then
     echo 0
   else
-    printf '%s\n' "$1" | grep -c .
+    printf '%s\n' "$1" | wc -l | tr -d ' '
   fi
 }
 
@@ -80,6 +80,22 @@ TMP_UPPER=$(mktemp); printf 'CLOSE #99 in shouty caps\n' > "$TMP_UPPER"
 OUT=$(run_scan "$TMP_UPPER")
 rm -f "$TMP_UPPER"
 assert_eq "1" "$(count_lines "$OUT")" "uppercase 'CLOSE #99' triggers a match"
+echo ""
+
+# --- TS6b: complete keyword matrix (all 9 GitHub auto-close keywords) ---
+# Closes the test-coverage gap surfaced by code-quality review F1: the regex
+# claims to cover close|closes|closed|fix|fixes|fixed|resolve|resolves|resolved
+# but only 4 of the 9 are exercised by the named fixtures (close via TS6,
+# fix via TS2 prose, resolved via TS4 code-block, GH-N via TS5). A future
+# regex narrowing (e.g., dropping `[sd]?` to ship a "simpler" pattern) would
+# pass the original 4-keyword set silently.
+echo "TS6b: every GitHub auto-close keyword (close|closes|closed|fix|fixes|fixed|resolve|resolves|resolved) triggers"
+for kw in close closes closed fix fixes fixed resolve resolves resolved; do
+  TMP_KW=$(mktemp); printf 'will %s #99 in prose\n' "$kw" > "$TMP_KW"
+  OUT=$(run_scan "$TMP_KW")
+  rm -f "$TMP_KW"
+  assert_eq "1" "$(count_lines "$OUT")" "keyword '$kw' produces exactly 1 match"
+done
 echo ""
 
 # --- TS7: line-number prefix in output ---

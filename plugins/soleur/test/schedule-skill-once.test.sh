@@ -91,17 +91,24 @@ DISABLE_LINE_HITS=$(printf '%s\n' "$ONCE_BLOCK" | grep -cE '^[[:space:]]*gh work
 assert_eq "0" "${DISABLE_LINE_HITS:-0}" \
   "no executable 'gh workflow disable \"\$WORKFLOW_NAME\"' line (App token does not honor actions:write — #3153)"
 
-# Verify no post-step appears after the claude-code-action step. Step entries
+# Verify the only post-step after the claude-code-action step is the read-only
+# "Post-fire verification" enforcement step (#3403 framework fix). Step entries
 # at this level are indented exactly 6 spaces ("      - "). Sub-keys (env:,
 # with:, prompt:) and prompt-body lines are indented deeper, so they do not
 # match this pattern.
-POST_STEP_COUNT=$(printf '%s\n' "$ONCE_BLOCK" | awk '
+#
+# Why permit a post-step at all? The verification step uses `secrets.GITHUB_TOKEN`
+# (workflow scope) and only READS via the contents API — claude-code-action's
+# token revocation does not affect it. Agent-driven WRITE post-steps remain
+# forbidden and any new step that does NOT match the "Post-fire verification"
+# name fails this assertion.
+POST_STEP_NAMES=$(printf '%s\n' "$ONCE_BLOCK" | awk '
   /^        uses: anthropics\/claude-code-action/ { found=1; next }
-  found && /^      - / { count++ }
-  END { print count+0 }
+  found && /^      - name: / { sub(/^      - name: /, ""); print }
 ')
-assert_eq "0" "$POST_STEP_COUNT" \
-  "no step appears after claude-code-action (a post-step would defeat self-neutralization)"
+EXPECTED_POST_STEPS="Post-fire verification (#3403)"
+assert_eq "$EXPECTED_POST_STEPS" "$POST_STEP_NAMES" \
+  "the only post-step after claude-code-action is the read-only Post-fire verification step (#3403); any agent-write post-step would silently fail"
 
 echo ""
 

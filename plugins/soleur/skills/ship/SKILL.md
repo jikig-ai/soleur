@@ -595,10 +595,10 @@ If `T_MATCHES` OR `B_MATCHES` is non-empty:
 
 1. Display every match with line context: `printf 'In title:\n%s\nIn body:\n%s\n' "${T_MATCHES:-(none)}" "${B_MATCHES:-(none)}"`.
 2. Compare each match against the intended `ISSUE_NUMBER` set from the detection step above. Any match where the issue number is in `ISSUE_NUMBER` AND the match line is the canonical `Closes #N` body line (one keyword, one number, on its own line, no surrounding prose) is intentional — keep it. Any other match is a candidate trap.
-3. **Headless mode:** If unintentional matches remain after the comparison, write a `<!-- auto-close-scanner: confirm -->` marker to the body before the PR-create call IF the operator has previously confirmed via `--confirm-auto-close` flag or `SHIP_AUTOCLOSE_CONFIRM=1` env. Otherwise abort with an error listing every match — do NOT silently create the PR.
+3. **Headless mode:** If unintentional matches remain after the comparison, abort with an error listing every match — do NOT silently create the PR. The operator must either edit the body to remove the trap OR (when the match IS intentional, e.g., `Closes #N` was filtered out by step 2's heuristic incorrectly) add a `<!-- auto-close-scanner: confirm -->` marker to the body and re-run.
 4. **Interactive mode:** Use AskUserQuestion to surface every unintentional match and offer (a) edit the body to remove the trap, (b) add the `<!-- auto-close-scanner: confirm -->` marker (intentional), or (c) abort and let the operator edit manually.
 
-The CI workflow `.github/workflows/pr-auto-close-scanner.yml` is the post-creation defense for PRs created outside this skill. This pre-creation scan is the agent-side defense; both share `plugins/soleur/skills/ship/scripts/auto-close-scan.sh` so the regex stays canonical.
+The CI workflow [`.github/workflows/pr-auto-close-scanner.yml`](../../../../.github/workflows/pr-auto-close-scanner.yml) is the observational post-creation surface for PRs created outside this skill (manual `gh pr create`, GitHub UI, third-party plugins). This pre-creation scan is the only blocking surface; both share [`./scripts/auto-close-scan.sh`](./scripts/auto-close-scan.sh) so the regex stays canonical.
 
 The PR body of THIS Soleur PR will typically contain `Closes #N` lines that ARE intentional — those are not traps and should be kept. The trap pattern is auto-close keyword + #N where the issue is NOT in the intentional `ISSUE_NUMBER` set, OR where the form is a checkbox / prose / code-fence rather than the canonical body line.
 

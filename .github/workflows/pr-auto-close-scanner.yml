@@ -15,10 +15,15 @@ name: "PR auto-close keyword scanner (#3407)"
 # Operators confirm intent by adding `<!-- auto-close-scanner: confirm -->` to
 # the PR body, which silences subsequent edits.
 #
-# Defense surface alongside `plugins/soleur/skills/ship/SKILL.md` Phase 6
-# pre-creation scan. The CI workflow covers all PR sources (Soleur skills,
-# manual `gh pr create`, GitHub UI, third-party plugins); the ship-skill scan
-# is the agent-side defense.
+# Two-surface coverage with one blocking layer. The CI workflow runs on
+# `pull_request: opened, edited` AFTER the PR exists — by then GitHub's parser
+# has already recorded the auto-close intent. CI is therefore observational:
+# it warns + comments, but cannot prevent the auto-close that fires when the
+# PR is merged. The blocking layer is `plugins/soleur/skills/ship/SKILL.md`
+# Phase 6 pre-creation scan, which surfaces matches BEFORE `gh pr create` /
+# `gh pr edit`. CI covers the surfaces ship doesn't (manual `gh pr create`,
+# GitHub UI, third-party plugins). Together they reduce blast radius without
+# being literal defense-in-depth (only one layer blocks).
 
 on:
   pull_request:
@@ -60,13 +65,22 @@ jobs:
           printf '%s\n' "$PR_TITLE" > "$TMP_T"
           printf '%s\n' "$PR_BODY"  > "$TMP_B"
 
-          T_MATCHES=$(bash plugins/soleur/skills/ship/scripts/auto-close-scan.sh "$TMP_T")
-          B_MATCHES=$(bash plugins/soleur/skills/ship/scripts/auto-close-scan.sh "$TMP_B")
+          T_MATCHES_RAW=$(bash plugins/soleur/skills/ship/scripts/auto-close-scan.sh "$TMP_T")
+          B_MATCHES_RAW=$(bash plugins/soleur/skills/ship/scripts/auto-close-scan.sh "$TMP_B")
 
-          if [[ -z "$T_MATCHES" && -z "$B_MATCHES" ]]; then
+          if [[ -z "$T_MATCHES_RAW" && -z "$B_MATCHES_RAW" ]]; then
             echo "No auto-close keyword + #N references detected in title or body."
             exit 0
           fi
+
+          # Strip backticks from match output before embedding inside the bot
+          # comment's triple-backtick fences. Without this, an attacker submitting
+          # a PR body containing literal ``` near an auto-close keyword could
+          # break out of the bot comment's code fence and inject arbitrary
+          # Markdown into a github-actions[bot]-authored comment (high apparent
+          # trust, downstream agents read bot comments). See PR #3411 P2-1.
+          T_MATCHES=$(printf '%s' "$T_MATCHES_RAW" | tr -d '`')
+          B_MATCHES=$(printf '%s' "$B_MATCHES_RAW" | tr -d '`')
 
           MSG="auto-close keyword + #N detected in PR title or body. Verify each match is intentional. If unintentional, edit the PR. To silence this scanner on subsequent body edits, add <!-- auto-close-scanner: confirm --> to the PR body."
           MSG_SAFE="${MSG//[$'\n\r']/}"
@@ -83,15 +97,26 @@ jobs:
 
           # Find a prior bot comment with the same header → edit in place.
           # Otherwise post a new comment. Either path keeps the surface to a
-          # single PR-thread comment regardless of edit cadence.
-          PRIOR_ID=$(gh api "repos/$REPO/issues/$PR_NUMBER/comments" \
+          # single PR-thread comment regardless of edit cadence. `--paginate
+          # ?per_page=100` covers PRs with >30 comments where the prior bot
+          # comment may not be on page 1; without paging we'd silently degrade
+          # to "post a new comment every edit" on long PRs.
+          PRIOR_ID=$(gh api --paginate "repos/$REPO/issues/$PR_NUMBER/comments?per_page=100" \
             --jq '[.[] | select(.user.login=="github-actions[bot]" and (.body | startswith("## Auto-close keyword scanner")))] | .[0].id // empty')
 
           if [[ -n "$PRIOR_ID" ]]; then
-            gh api -X PATCH "repos/$REPO/issues/comments/$PRIOR_ID" \
+            # If the prior comment was deleted between GET and PATCH, fall
+            # through to POST instead of failing the workflow.
+            if ! gh api -X PATCH "repos/$REPO/issues/comments/$PRIOR_ID" \
               -f "body=$COMMENT_BODY" \
-              >/dev/null
-            echo "Edited prior scanner comment (id=$PRIOR_ID)."
+              >/dev/null 2>&1; then
+              echo "Prior comment $PRIOR_ID PATCH failed (deleted?); posting fresh."
+              gh api -X POST "repos/$REPO/issues/$PR_NUMBER/comments" \
+                -f "body=$COMMENT_BODY" \
+                >/dev/null
+            else
+              echo "Edited prior scanner comment (id=$PRIOR_ID)."
+            fi
           else
             gh api -X POST "repos/$REPO/issues/$PR_NUMBER/comments" \
               -f "body=$COMMENT_BODY" \

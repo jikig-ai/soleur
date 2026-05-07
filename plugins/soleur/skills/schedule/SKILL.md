@@ -221,6 +221,19 @@ jobs:
       # using actions/upload-artifact to upload the file with retention scoped
       # to operator access. Do NOT copy show_full_output: true from the --once
       # template (Step 3b). See #3404.
+      #
+      # Recurring schedules also deliberately do NOT pass
+      # github_token: ${{ secrets.GITHUB_TOKEN }}. The --once template adds
+      # the override because its agent prompt issues writes (push to default
+      # branch, gh pr create) where the App-installation token's narrower
+      # scope produces silent denials (#3403). The recurring template's
+      # default prompt issues only `gh issue create` for findings — a
+      # capability the App token reliably has. If you hand-edit a recurring
+      # workflow to add writes that touch branch-protected resources, copy
+      # the github_token override from --once template AND re-evaluate the
+      # blast-radius widening: secrets.GITHUB_TOKEN inherits the workflow's
+      # full permissions: block, which a recurring schedule SHOULD keep at
+      # least-privilege (contents: read, issues: write, id-token: write).
       - name: Run scheduled skill
         uses: anthropics/claude-code-action@<ACTION_SHA> # v1
         with:
@@ -479,15 +492,20 @@ jobs:
             cross-year defense; D3 is structural (cron AND date both must
             match) and cannot fail silently.
 
-            Do NOT add any post-step to this workflow file —
-            `claude-code-action` revokes the App token after this step, so a
-            YAML-level cleanup would silently fail.
+            Do NOT add any agent-driven post-step (writes) — `claude-code-action`
+            revokes its App-installation token after this step, so any push or
+            PR-create from a YAML-level post-step using the action's token
+            would silently fail. The Post-fire verification post-step below
+            this action is exempt: it uses `secrets.GITHUB_TOKEN` (workflow
+            scope, not action scope) and only READS via the contents API.
 
-            ## Post-fire verification (mandatory after Final step) — #3403
+            ## Post-fire verification (in-prompt observation) — #3403
 
-            After the Neutralization primitive completes, verify the side
-            effect actually landed by reading the workflow file back from the
-            default branch via the contents API:
+            After the Neutralization primitive completes, also post an
+            observable signal into the issue thread (separate from the
+            workflow conclusion, which is enforced by the post-step below).
+            Read the workflow file back from the default branch via the
+            contents API:
 
             ```bash
             CONTENT=$(gh api "repos/${{ github.repository }}/contents/.github/workflows/$WORKFLOW_NAME" --jq .content | base64 -d)
@@ -496,24 +514,59 @@ jobs:
             ```
 
             Expected post-neutralization state: `STILL_HAS_SCHEDULE == 0` AND
-            `HAS_DISPATCH >= 1` (the file remains a valid GHA workflow that
-            can be manually invoked for forensic purposes). If verification
-            FAILS (schedule: still present OR dispatch: missing), post a
-            follow-up comment to issue #$ISSUE_NUMBER with this exact body:
+            `HAS_DISPATCH >= 1`. If verification FAILS (schedule: still
+            present OR dispatch: missing), post a follow-up comment to issue
+            #$ISSUE_NUMBER with this exact body:
 
             "Workflow neutralization claimed success but post-fire
             verification shows `schedule:` still present (or
             `workflow_dispatch:` removed) on the default branch. Manual
             intervention required: edit `.github/workflows/$WORKFLOW_NAME` to
-            remove the `schedule:` trigger. See PR #3402 for the manual
-            neutralization recipe and #3403 for the silent-failure root
-            cause."
+            remove the `schedule:` trigger. See the schedule SKILL.md
+            'Known Limitations' section for the manual neutralization recipe."
 
-            Then exit 1 (NOT 0) — the workflow conclusion must reflect the
-            verification outcome, not the neutralization-step exit code. The
-            intent: never exit `success` without observable side-effect proof.
-            This is the framework-level fix for #3403's "exit success without
-            side-effect" failure mode.
+            Note: an `exit 1` inside this prompt is SWALLOWED by
+            claude-code-action's tool-call boundary — agent tool exits
+            propagate to the SDK transcript, not to the workflow conclusion.
+            The load-bearing enforcement is the post-step below this action,
+            which runs in the GHA shell and propagates its exit code to the
+            workflow conclusion. This in-prompt verification provides the
+            observable signal (issue comment); the post-step provides the
+            non-success conclusion.
+```
+
+After the `claude-code-action` step, add this post-step (outside the action,
+runs in the GHA shell — exit codes propagate to the workflow conclusion):
+
+```yaml
+      # Post-step verification — runs in GHA shell so its exit code propagates
+      # to the workflow conclusion. Reads the workflow YAML from the default
+      # branch via the contents API; exits non-zero if `schedule:` is still
+      # present, ensuring the workflow conclusion never lies about
+      # neutralization success. Tolerates contents API replication lag with
+      # a bounded retry loop.
+      - name: Post-fire verification (#3403)
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -uo pipefail
+          STILL_HAS_SCHEDULE=99
+          HAS_DISPATCH=0
+          for attempt in 1 2 3; do
+            CONTENT=$(gh api "repos/$REPO/contents/.github/workflows/$WORKFLOW_NAME" --jq .content 2>/dev/null | base64 -d || true)
+            STILL_HAS_SCHEDULE=$(printf '%s' "$CONTENT" | grep -cE '^[[:space:]]*schedule:' || true)
+            HAS_DISPATCH=$(printf '%s' "$CONTENT" | grep -cE '^[[:space:]]*workflow_dispatch:' || true)
+            if [[ "$STILL_HAS_SCHEDULE" == "0" && "$HAS_DISPATCH" -ge "1" ]]; then
+              echo "::notice::Post-fire verification passed (attempt $attempt)."
+              exit 0
+            fi
+            echo "Attempt $attempt: schedule=$STILL_HAS_SCHEDULE dispatch=$HAS_DISPATCH — retrying after replication lag."
+            sleep 10
+          done
+          echo "::error::Post-fire verification failed: schedule=$STILL_HAS_SCHEDULE dispatch=$HAS_DISPATCH"
+          exit 1
 ```
 
 <!-- once-template-end -->
