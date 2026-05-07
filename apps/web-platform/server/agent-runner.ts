@@ -454,6 +454,45 @@ async function updateConversationStatus(
   }
 }
 
+/**
+ * Race-safe variant of {@link updateConversationStatus} for the
+ * abort/result-branch finalization sites: writes the new status only
+ * when the row's current `status` is `active`. A row that already
+ * reached a terminal state (`waiting_for_user`, `completed`, `failed`,
+ * `aborted`) is left untouched and the call returns silently.
+ *
+ * Use at sites that race against the result branch's terminal-state
+ * write — most importantly the disconnect-after-result window in
+ * `ws.on("close")` → `abortSession(uid, convId)` → outer-catch abort
+ * branch (#3463). The wrapper's `expectMatch: false` default plus the
+ * `onlyIfStatusIn` guard means a 0-rows outcome is the success case,
+ * not a degraded fallback — no Sentry mirror is emitted (per
+ * `cq-silent-fallback-must-mirror-to-sentry` "expected states"
+ * exemption).
+ *
+ * **Do NOT use** at sites whose 0-rows-affected outcome is a real
+ * failure (the result branch's primary `waiting_for_user` write at
+ * line ~1613, or its first-attempt fallback at line ~1640) — those
+ * sites need `expectMatch: true` and use the strict
+ * {@link updateConversationStatus} helper.
+ */
+async function updateConversationStatusIfActive(
+  userId: string,
+  conversationId: string,
+  status: Conversation["status"],
+): Promise<void> {
+  await updateConversationFor(
+    userId,
+    conversationId,
+    { status, last_active: new Date().toISOString() },
+    {
+      feature: "agent-runner",
+      op: "updateConversationStatusIfActive",
+      onlyIfStatusIn: ["active"],
+    },
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Conversation history for replay fallback
 // ---------------------------------------------------------------------------
@@ -1643,27 +1682,31 @@ issues/PRs, 4 KB comments); follow the html_url for the full text.`;
                 { err: waitingErr, userId, conversationId },
                 "result-branch fallback: waiting_for_user flip failed; cascading to failed",
               );
-              await updateConversationStatus(userId, conversationId, "failed").catch(
-                (failedErr) => {
-                  log.error(
-                    { err: failedErr, userId, conversationId },
-                    "result-branch fallback: failed-status flip also failed",
-                  );
-                },
-              );
+              await updateConversationStatusIfActive(
+                userId,
+                conversationId,
+                "failed",
+              ).catch((failedErr) => {
+                log.error(
+                  { err: failedErr, userId, conversationId },
+                  "result-branch fallback: failed-status flip also failed",
+                );
+              });
             }
           } else {
             // `saveMessage` itself threw or never ran — there is no
             // user-visible assistant content so `failed` is the honest
             // terminal state.
-            await updateConversationStatus(userId, conversationId, "failed").catch(
-              (failedErr) => {
-                log.error(
-                  { err: failedErr, userId, conversationId },
-                  "result-branch fallback: failed-status flip failed (no assistant text)",
-                );
-              },
-            );
+            await updateConversationStatusIfActive(
+              userId,
+              conversationId,
+              "failed",
+            ).catch((failedErr) => {
+              log.error(
+                { err: failedErr, userId, conversationId },
+                "result-branch fallback: failed-status flip failed (no assistant text)",
+              );
+            });
           }
           // Idempotent keyed DELETE — safe even if archive-trigger or a
           // concurrent teardown already released the slot.
@@ -1763,19 +1806,28 @@ issues/PRs, 4 KB comments); follow the html_url for the full text.`;
         const nextConversationStatus: Conversation["status"] = isUserRequested
           ? "waiting_for_user"
           : "failed";
-        await updateConversationStatus(userId, conversationId, nextConversationStatus).catch(
-          (statusErr) => {
-            log.error(
-              { err: statusErr, conversationId, isUserRequested },
-              "Failed to write aborted-conversation status",
-            );
-            reportSilentFallback(statusErr, {
-              feature: "abort-turn",
-              op: "update-conversation-status",
-              extra: { userId, conversationId, isUserRequested, nextStatus: nextConversationStatus },
-            });
-          },
-        );
+        // #3463: race-window guard — if the result branch already wrote
+        // a terminal state (the disconnect-after-result race), leave it
+        // alone instead of stomping it back to `failed`. The user-Stop
+        // late-click case (`waiting_for_user`) lands at the same end
+        // state regardless of whether this write or the result branch's
+        // wins, so a no-op is semantically equivalent. The
+        // `session_ended:user_aborted` ack below is unconditional.
+        await updateConversationStatusIfActive(
+          userId,
+          conversationId,
+          nextConversationStatus,
+        ).catch((statusErr) => {
+          log.error(
+            { err: statusErr, conversationId, isUserRequested },
+            "Failed to write aborted-conversation status",
+          );
+          reportSilentFallback(statusErr, {
+            feature: "abort-turn",
+            op: "update-conversation-status",
+            extra: { userId, conversationId, isUserRequested, nextStatus: nextConversationStatus },
+          });
+        });
 
         if (isUserRequested) {
           // Send the explicit user-aborted ack so the client can
@@ -1849,14 +1901,16 @@ issues/PRs, 4 KB comments); follow the html_url for the full text.`;
         message,
         errorCode: resolveSessionErrorCode(err),
       });
-      await updateConversationStatus(userId, conversationId, "failed").catch(
-        (statusErr) => {
-          log.error(
-            { err: statusErr, conversationId },
-            "Failed to mark conversation as failed",
-          );
-        },
-      );
+      await updateConversationStatusIfActive(
+        userId,
+        conversationId,
+        "failed",
+      ).catch((statusErr) => {
+        log.error(
+          { err: statusErr, conversationId },
+          "Failed to mark conversation as failed",
+        );
+      });
       // Outer catch: result-branch wrap might not have run; release slot so the user isn't stuck for up to 60s waiting for the reaper.
       // releaseSlot already swallows errors internally (concurrency.ts) — no extra .catch needed.
       await releaseSlot(userId, conversationId);

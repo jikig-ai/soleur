@@ -21,6 +21,7 @@ import {
   abortSession,
 } from "./agent-runner";
 import { updateConversationFor } from "./conversation-writer";
+import { WS_CAPABILITIES } from "@/lib/ws-capabilities";
 import { reportSilentFallback } from "./observability";
 import * as Sentry from "@sentry/nextjs";
 import { sanitizeErrorForClient } from "./error-sanitizer";
@@ -1191,7 +1192,11 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
           "start_session (deferred creation)",
         );
 
-        sendToClient(userId, { type: "session_started", conversationId: session.pending.id });
+        sendToClient(userId, {
+          type: "session_started",
+          conversationId: session.pending.id,
+          capabilities: WS_CAPABILITIES,
+        });
         resetIdleTimer(userId, session);
         log.debug("session_started sent to client");
       } catch (err) {
@@ -1251,6 +1256,7 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
         sendToClient(userId, {
           type: "session_started",
           conversationId: msg.conversationId,
+          capabilities: WS_CAPABILITIES,
         });
       } catch (err) {
         Sentry.captureException(err);
