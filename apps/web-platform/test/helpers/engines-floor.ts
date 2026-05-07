@@ -6,8 +6,13 @@
 // throws and every assertion in the suite resolves to `lazy_import_failed`,
 // masking the real contract.
 //
-// Floor expressed as `>=22.3.0 || (>=20.16.0 AND <21)` — keep in sync with
-// `apps/web-platform/package.json` `engines.node`.
+// Effective floor: `>=22.3.0 OR (>=20.16.0 AND <21)`. The `apps/web-platform/
+// package.json` `engines.node` field is `">=20.16.0 || >=22.3.0"`, which
+// npm-semver evaluates as "matches if either clause matches" — that admits
+// Node 21.x as a side-effect of the 20.16+ clause. The runtime floor enforced
+// here is narrower (rejects 21.x) because Node 21 reached EOL before
+// `process.getBuiltinModule` was back-ported. `apps/web-platform/.nvmrc`
+// pins `22.3.0` to keep contributor workstations on the upper line.
 //
 // Use a regex match over `process.versions.node` (NOT `split(".").map(Number)`
 // which returns NaN on prerelease tags like `22.3.0-nightly...`).
@@ -29,9 +34,14 @@ export function supportsPdfjsEngineFloor(): boolean {
   return false;
 }
 
+/**
+ * `true` when the current Node runtime is below the pdfjs-dist@5 engine
+ * floor (Node 22.3+ or 20.16+ on the 20-line). Pass to `describe.skipIf(...)`
+ * so suites short-circuit cleanly on Node <22.3 dev workstations.
+ */
 export const BELOW_PDFJS_ENGINES_FLOOR = !supportsPdfjsEngineFloor();
 
-export function pdfjsEngineFloorDiagnostic(testFileLabel: string): string {
+function pdfjsEngineFloorDiagnostic(testFileLabel: string): string {
   return (
     `[${testFileLabel}] Node ${process.versions.node} is below the ` +
     `pdfjs-dist engines floor (>=22.3.0 or >=20.16.0). pdfjs-dist@5 calls ` +

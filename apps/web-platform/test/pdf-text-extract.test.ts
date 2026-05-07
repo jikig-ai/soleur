@@ -21,12 +21,13 @@ import {
   emitPdfjsEngineFloorDiagnostic,
 } from "./helpers/engines-floor";
 
-// Engine-floor guard for #3424. See `test/helpers/engines-floor.ts` for the
-// rationale (pdfjs-dist@5 calls `process.getBuiltinModule`, added in Node
-// 22.3 / 20.16). Dev path: describe.skipIf + single stderr diagnostic. CI
-// path: throw at module init so a misconfigured runner can't ship vacuous
-// green. The lazy_import_failed test below sits OUTSIDE the skipIf because
-// it mocks the real import — the engine floor is irrelevant to it.
+// Engine-floor guard for #3439 (follow-up to #3424). See
+// `test/helpers/engines-floor.ts` for the rationale (pdfjs-dist@5 calls
+// `process.getBuiltinModule`, added in Node 22.3 / 20.16). Dev path:
+// describe.skipIf + single stderr diagnostic. CI path: throw at module init
+// so a misconfigured runner can't ship vacuous green. The lazy_import_failed
+// test below sits OUTSIDE the skipIf because it mocks the real import — the
+// engine floor is irrelevant to it.
 emitPdfjsEngineFloorDiagnostic("pdf-text-extract.test");
 
 /**
@@ -259,20 +260,27 @@ describe.skipIf(BELOW_PDFJS_ENGINES_FLOOR)("extractPdfText", () => {
 // (`result.error === "lazy_import_failed"`) and the Sentry mirror call from
 // `pdf-text-extract.ts:113-122` (so the silent-fallback observability can't
 // regress without flipping the test red).
+//
+// Worker-isolation: relies on vitest's default per-file isolation
+// (`vitest.config.ts` does NOT set `pool: "threads"` with `isolate: false`
+// for the unit project). The before-import `vi.resetModules()` and the
+// finally-block `vi.doUnmock` + `vi.resetModules()` together prevent
+// in-file mock leakage; if the project ever moves to `isolate: false`,
+// move this `describe` to its own file (`pdf-text-extract.lazy-import.test.ts`).
 describe("extractPdfText lazy_import_failed", () => {
   it("returns lazy_import_failed when pdfjs module init throws", async () => {
     const reportSilentFallback = vi.fn();
-    vi.doMock("@/server/observability", async () => {
-      const actual = await vi.importActual<
-        typeof import("@/server/observability")
-      >("@/server/observability");
-      return { ...actual, reportSilentFallback };
-    });
-    vi.doMock("pdfjs-dist/legacy/build/pdf.mjs", () => {
-      throw new Error("simulated module-init failure");
-    });
-    vi.resetModules();
     try {
+      vi.doMock("@/server/observability", async () => {
+        const actual = await vi.importActual<
+          typeof import("@/server/observability")
+        >("@/server/observability");
+        return { ...actual, reportSilentFallback };
+      });
+      vi.doMock("pdfjs-dist/legacy/build/pdf.mjs", () => {
+        throw new Error("simulated module-init failure");
+      });
+      vi.resetModules();
       const { extractPdfText: extractPdfTextIsolated } = await import(
         "@/server/pdf-text-extract"
       );
