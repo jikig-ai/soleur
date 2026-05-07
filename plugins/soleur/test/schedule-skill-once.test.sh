@@ -298,4 +298,44 @@ assert_eq "0" "${ACTIONS_WRITE_HITS:-0}" \
 
 echo ""
 
+# --- TS8: --once template flips show_full_output to true (#3404 fix) ---
+# WARNING — scoped to --once only. The action's docstring explicitly warns the
+# flag leaks ALL tool execution results which may contain secrets. The recurring
+# template (Step 3a) MUST stay at action default (false). This test guards
+# against silent removal of the --once flip.
+echo "TS8: --once template enables show_full_output: true for dogfood diagnostics (#3404)"
+
+assert_contains "$ONCE_BLOCK" "show_full_output: true" \
+  "one-time template defaults to show_full_output: true (#3404 — dogfood diagnostics)"
+
+echo ""
+
+# --- TS9: token-context alignment for D4 abort path (#3403 candidate fix) ---
+# claude-code-action accepts a github_token input that overrides the
+# App-installation token. Without this, bash-bridge `gh` calls run with one
+# token and inner action machinery runs with another — split context is the
+# prime suspect for #3403's permission_denials_count: 1.
+echo "TS9: --once template passes github_token to align bash-bridge and action-machinery contexts (#3403)"
+
+assert_contains "$ONCE_BLOCK" 'github_token: ${{ secrets.GITHUB_TOKEN }}' \
+  "one-time template passes github_token override to claude-code-action with: block (#3403 candidate fix)"
+
+echo ""
+
+# --- TS10: Post-fire side-effect verification block (#3403 framework fix) ---
+# The agent must verify the workflow YAML actually no longer contains
+# `schedule:` after the neutralization primitive runs, and post a follow-up
+# comment if verification fails. This is the framework-level fix for
+# "exit success without observable side-effect" — independent of whatever the
+# sandbox repro reveals as the root cause of the denial.
+echo "TS10: --once template verifies side-effects post-fire (#3403)"
+
+assert_contains "$ONCE_BLOCK" "Post-fire verification" \
+  "one-time template includes Post-fire verification section (#3403 framework fix)"
+
+assert_contains "$ONCE_BLOCK" 'verification' \
+  "one-time template's Post-fire section references verification semantics"
+
+echo ""
+
 print_results

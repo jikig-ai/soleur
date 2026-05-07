@@ -208,6 +208,19 @@ jobs:
             --description "Scheduled: <DISPLAY_NAME>" \
             --color "0E8A16" 2>/dev/null || true
 
+      # Recurring schedules deliberately do NOT set show_full_output: true.
+      # The action's docstring warns the flag leaks ALL tool execution results
+      # which may contain secrets/API keys publicly to GitHub Actions logs.
+      # Recurring workflows accumulate new tool calls and skill invocations
+      # over time; the bound-at-create-time safety reasoning that justifies
+      # show_full_output: true on the --once template (committed prompt, fixed
+      # tool surface, no secrets.* interpolation) does NOT extend here.
+      #
+      # If a recurring agent-loop needs diagnostic output, write a redacted
+      # JSON summary to a file inside the prompt body, then add a post-step
+      # using actions/upload-artifact to upload the file with retention scoped
+      # to operator access. Do NOT copy show_full_output: true from the --once
+      # template (Step 3b). See #3404.
       - name: Run scheduled skill
         uses: anthropics/claude-code-action@<ACTION_SHA> # v1
         with:
@@ -303,12 +316,34 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@<CHECKOUT_SHA> # v4
 
+      # show_full_output: true is enabled below for --once schedules ONLY.
+      # The action's docstring warns the flag leaks ALL tool execution results
+      # which may contain secrets/API keys publicly to GitHub Actions logs.
+      # The --once prompt is committed verbatim with no `secrets.*` interpolation
+      # and the tool surface is fixed at create time (--allowedTools below), so
+      # the diagnostic transcript poses no leak risk for canonical --once usage.
+      # If you hand-edit this workflow to interpolate `secrets.*` into the prompt
+      # body (e.g., per the #3390 follow-up extension), set show_full_output:
+      # false and replace it with an actions/upload-artifact step that uploads
+      # only a redacted summary to a retention-scoped artifact. Do NOT copy
+      # show_full_output: true into the recurring (Step 3a) template — recurring
+      # operators add new tool calls over time and the bound-at-create-time
+      # safety reasoning does not apply (#3404).
+      #
+      # github_token below is the candidate fix for #3403's silent abort-path
+      # denial: passing the workflow GITHUB_TOKEN as the action input aligns
+      # the bash-bridge token (env: GH_TOKEN) and the action-machinery token,
+      # which previously diverged via the App-installation token's narrower
+      # runtime scope. See the schedule SKILL.md "Known Limitations" section
+      # and #3403 for the abort-path verification dogfood.
       - name: One-time fire (with self-neutralization)
         uses: anthropics/claude-code-action@<ACTION_SHA> # v1
         env:
           GH_TOKEN: ${{ github.token }}
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          show_full_output: true
           plugin_marketplaces: 'https://github.com/<REPO_OWNER>/<REPO_NAME>.git'
           plugins: 'soleur@soleur'
           # --allowedTools mirrors the recurring template (Step 3a). Do NOT
@@ -447,6 +482,38 @@ jobs:
             Do NOT add any post-step to this workflow file —
             `claude-code-action` revokes the App token after this step, so a
             YAML-level cleanup would silently fail.
+
+            ## Post-fire verification (mandatory after Final step) — #3403
+
+            After the Neutralization primitive completes, verify the side
+            effect actually landed by reading the workflow file back from the
+            default branch via the contents API:
+
+            ```bash
+            CONTENT=$(gh api "repos/${{ github.repository }}/contents/.github/workflows/$WORKFLOW_NAME" --jq .content | base64 -d)
+            STILL_HAS_SCHEDULE=$(printf '%s' "$CONTENT" | grep -cE '^[[:space:]]*schedule:' || true)
+            HAS_DISPATCH=$(printf '%s' "$CONTENT" | grep -cE '^[[:space:]]*workflow_dispatch:' || true)
+            ```
+
+            Expected post-neutralization state: `STILL_HAS_SCHEDULE == 0` AND
+            `HAS_DISPATCH >= 1` (the file remains a valid GHA workflow that
+            can be manually invoked for forensic purposes). If verification
+            FAILS (schedule: still present OR dispatch: missing), post a
+            follow-up comment to issue #$ISSUE_NUMBER with this exact body:
+
+            "Workflow neutralization claimed success but post-fire
+            verification shows `schedule:` still present (or
+            `workflow_dispatch:` removed) on the default branch. Manual
+            intervention required: edit `.github/workflows/$WORKFLOW_NAME` to
+            remove the `schedule:` trigger. See PR #3402 for the manual
+            neutralization recipe and #3403 for the silent-failure root
+            cause."
+
+            Then exit 1 (NOT 0) — the workflow conclusion must reflect the
+            verification outcome, not the neutralization-step exit code. The
+            intent: never exit `success` without observable side-effect proof.
+            This is the framework-level fix for #3403's "exit success without
+            side-effect" failure mode.
 ```
 
 <!-- once-template-end -->
@@ -588,6 +655,7 @@ Remove a scheduled workflow.
 - **Cron variance ~15 min.** GitHub Actions cron schedules trigger on a best-effort basis. `--at 2026-05-17` may fire any time between 09:00 and 09:15 UTC.
 - **`--once` D4 cleanup costs one extra GHA run on branch-protected repos.** When direct push to the default branch is blocked, D4's PR-fallback opens a cleanup PR. Required status checks fire on the ephemeral branch — that's one extra billable run per `--once` fire. To skip it, add `chore/neutralize-*` to your branch ruleset's bypass-actor list or disable required checks for that branch pattern.
 - **`--once` D3 + D4-failure → annual re-fire.** If D4's neutralization fails (both direct push and PR-create fail) and the operator does not act on the fallback comment, the cron `0 9 D M *` re-fires next year on the same calendar date. D3 (date guard) catches it and immediately invokes neutralization again — no harmful action against drifted state — but the workflow stays `active` until either the operator intervenes or GHA's 60-day inactivity timer fires after a full quiet year.
+- **`--once` D4 abort-path silent failure (#3403).** A `--once` schedule whose tracked issue closes pre-fire routes through the abort path. The 2026-05-05 dogfood (#3185) showed that abort-path side-effects (observation comment, neutralization commit) silently fail inside `claude-code-action` — `permission_denials_count: 1`, run conclusion `success`, zero observable side-effects. Root cause TBD by the post-merge sandbox dogfood `.github/workflows/scheduled-dogfood-3403.yml`. Until then: `--once` schedules generated before the bundle PR closing #3403 + #3404 + #3407 may not self-neutralize on the abort path; treat them as not-self-cleaning and run the migration sweep `gh workflow list --all | grep 'Scheduled (once):'` to identify each, then manually neutralize per the PR #3402 recipe. The Post-fire verification block added to Step 3b's prompt ensures the agent never exits `success` without observable side-effect proof — independent of whatever the sandbox reveals as the root cause.
 
 ## Sharp Edges
 

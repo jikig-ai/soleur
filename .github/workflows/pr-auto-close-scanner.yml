@@ -1,0 +1,103 @@
+name: "PR auto-close keyword scanner (#3407)"
+
+# Scans PR title + body for GitHub auto-close keyword + #N references using the
+# regex from plugins/soleur/skills/ship/scripts/auto-close-scan.sh.
+#
+# SECURITY: this workflow uses the env-block pattern (PR_TITLE/PR_BODY mapped to
+# env vars, then accessed via "$PR_TITLE"/"$PR_BODY" in the run script) — never
+# interpolates ${{ github.event.pull_request.* }} directly into a `run:` line.
+# Untrusted PR title/body content is treated as data passed through env, not as
+# shell. See https://github.blog/security/vulnerability-research/how-to-catch-github-actions-workflow-injections-before-attackers-do/
+#
+# Fail-soft: warns via `::warning::` annotation and (idempotently) edits a single
+# bot comment listing all matches. The workflow exits 0 even when matches are
+# found — sometimes `Closes #N` IS intentional (e.g., the canonical body line).
+# Operators confirm intent by adding `<!-- auto-close-scanner: confirm -->` to
+# the PR body, which silences subsequent edits.
+#
+# Defense surface alongside `plugins/soleur/skills/ship/SKILL.md` Phase 6
+# pre-creation scan. The CI workflow covers all PR sources (Soleur skills,
+# manual `gh pr create`, GitHub UI, third-party plugins); the ship-skill scan
+# is the agent-side defense.
+
+on:
+  pull_request:
+    types: [opened, edited]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: pr-auto-close-scanner-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Scan PR title and body for auto-close keyword + #N
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -uo pipefail
+
+          # Honor explicit operator opt-out marker.
+          if printf '%s\n' "$PR_BODY" | grep -qF '<!-- auto-close-scanner: confirm -->'; then
+            echo "::notice::PR body contains <!-- auto-close-scanner: confirm --> — scanner skipped per author opt-in."
+            exit 0
+          fi
+
+          TMP_T=$(mktemp); TMP_B=$(mktemp)
+          printf '%s\n' "$PR_TITLE" > "$TMP_T"
+          printf '%s\n' "$PR_BODY"  > "$TMP_B"
+
+          T_MATCHES=$(bash plugins/soleur/skills/ship/scripts/auto-close-scan.sh "$TMP_T")
+          B_MATCHES=$(bash plugins/soleur/skills/ship/scripts/auto-close-scan.sh "$TMP_B")
+
+          if [[ -z "$T_MATCHES" && -z "$B_MATCHES" ]]; then
+            echo "No auto-close keyword + #N references detected in title or body."
+            exit 0
+          fi
+
+          MSG="auto-close keyword + #N detected in PR title or body. Verify each match is intentional. If unintentional, edit the PR. To silence this scanner on subsequent body edits, add <!-- auto-close-scanner: confirm --> to the PR body."
+          MSG_SAFE="${MSG//[$'\n\r']/}"
+          echo "::warning::${MSG_SAFE}"
+
+          # Build the comment body with a stable header line so we can match a
+          # prior bot comment for in-place edit (idempotency — see #3407 R3).
+          COMMENT_HEADER='## Auto-close keyword scanner (#3407)'
+          COMMENT_BODY=$(printf '%s\n\n%s\n\n### Title matches\n```\n%s\n```\n\n### Body matches\n```\n%s\n```\n\nIf any match is unintentional, edit the PR. To silence this scanner on subsequent body edits, add `<!-- auto-close-scanner: confirm -->` to the PR body.\n' \
+            "$COMMENT_HEADER" \
+            "$MSG" \
+            "${T_MATCHES:-(none)}" \
+            "${B_MATCHES:-(none)}")
+
+          # Find a prior bot comment with the same header → edit in place.
+          # Otherwise post a new comment. Either path keeps the surface to a
+          # single PR-thread comment regardless of edit cadence.
+          PRIOR_ID=$(gh api "repos/$REPO/issues/$PR_NUMBER/comments" \
+            --jq '[.[] | select(.user.login=="github-actions[bot]" and (.body | startswith("## Auto-close keyword scanner")))] | .[0].id // empty')
+
+          if [[ -n "$PRIOR_ID" ]]; then
+            gh api -X PATCH "repos/$REPO/issues/comments/$PRIOR_ID" \
+              -f "body=$COMMENT_BODY" \
+              >/dev/null
+            echo "Edited prior scanner comment (id=$PRIOR_ID)."
+          else
+            gh api -X POST "repos/$REPO/issues/$PR_NUMBER/comments" \
+              -f "body=$COMMENT_BODY" \
+              >/dev/null
+            echo "Posted new scanner comment."
+          fi
+
+          # Always exit 0 — fail-soft per #3407.
+          exit 0

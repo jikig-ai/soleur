@@ -2,6 +2,29 @@
 
 Plan: `knowledge-base/project/plans/2026-05-07-feat-drain-once-schedule-dogfood-backlog-plan.md`
 
+## Substituted values (resolved during work)
+
+| Placeholder | Value |
+|---|---|
+| `<SANDBOX_ISSUE_NUMBER>` | `3420` |
+| `<SANDBOX_COMMENT_ID>` | `4395522376` |
+| `<EXPECTED_AUTHOR>` | `deruelle` |
+| `<EXPECTED_CREATED_AT>` | `2026-05-07T08:37:43Z` |
+| FIRE_DATE | `2026-05-19` |
+| Pinned cron | `0 9 19 5 *` |
+| `actions/checkout@v4` SHA | `34e114876b0b11c390a56381ad16ebd13914f8d5` |
+| `anthropics/claude-code-action@v1.0.101` SHA | `ab8b1e6471c519c585ba17e8ecaccc9d83043541` |
+
+## Progress (filled during /work)
+
+- [x] Phase 0 (preflight): sandbox issue #3420 + pinned task-spec comment 4395522376
+- [x] Phase 1 (RED): scanner test, schedule test extensions — confirmed failing without GREEN
+- [x] Phase 2 (GREEN): scanner script, schedule SKILL.md edits (Step 3a + Step 3b + Known Limitations), pr-auto-close-scanner.yml, ship SKILL.md Phase 6 insertion, AGENTS.md rule rewrite (571 bytes), scheduled-dogfood-3403.yml
+- [x] Phase 3 (verify): scanner tests 14/14 ✓, schedule tests 42/42 ✓, YAML valid for both new workflows, AGENTS.md rule under 600 bytes, lefthook gates pass
+- [ ] Phase 4 (pre-merge gates): pending PR-edit + ship-skill self-scan
+- [ ] Phase 5 (post-merge operator)
+- [ ] Phase 6 (compound + ship)
+
 ## Phase 0 — Preflight setup
 
 - 0.1 Create sandbox tracking issue `[Sandbox] Verify D4 abort-path neutralization with show_full_output (Ref #3403)` via `gh issue create --label deferred-scope-out`. Capture `<SANDBOX_ISSUE_NUMBER>`.

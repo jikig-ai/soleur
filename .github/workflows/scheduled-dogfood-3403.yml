@@ -1,0 +1,206 @@
+name: "Scheduled (once): Sandbox dogfood for #3403 abort-path verification"
+
+# SANDBOX-ONLY workflow generated from the FIXED --once template (the bundle PR
+# closing #3403 + #3404 + #3407). Verifies whether the schedule SKILL.md
+# template's abort-path neutralization actually self-cleans inside
+# claude-code-action when the tracked issue is CLOSED at fire time.
+#
+# SECURITY: this workflow uses env-block pattern for all dynamic context. No
+# untrusted GitHub event payload (issue title, comment body, etc.) is passed
+# into a `run:` line as ${{ github.event.* }}. The agent prompt is committed
+# verbatim — no template interpolation of untrusted strings.
+#
+# Differences from the canonical --once template (Step 3b of
+# plugins/soleur/skills/schedule/SKILL.md):
+#
+# 1. Includes an extra step BEFORE the claude-code-action step that closes
+#    the sandbox issue. This intentionally violates the "issue must be OPEN
+#    at fire time" precondition to force the agent through the D4 abort path.
+# 2. show_full_output: true is enabled (matches the fixed --once template).
+# 3. github_token: ${{ secrets.GITHUB_TOKEN }} is passed (matches the fixed
+#    --once template — candidate fix for #3403's denial source).
+#
+# Post-fire operator playbook (AC14 of the bundle PR):
+#   1. Read the SDK transcript from the GHA run page.
+#   2. Identify the exact tool call producing permission_denials_count: 1.
+#   3. File #3403-followup with the architectural finding (Branch B of the
+#      split contract) OR confirm the candidate fixes (AC1+AC2+AC3+AC1b)
+#      cover #3403's acceptance criteria (Branch A — close #3403).
+#   4. Manually neutralize THIS workflow per PR #3402 recipe regardless of
+#      whether D4 self-neutralized — defense in depth, the sandbox is itself
+#      an annual-recurrence trap.
+
+on:
+  schedule:
+    - cron: '0 9 19 5 *'
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+  id-token: write
+
+concurrency:
+  group: schedule-once-dogfood-3403
+  cancel-in-progress: false
+
+env:
+  ISSUE_NUMBER: "3420"
+  COMMENT_ID: "4395522376"
+  FIRE_DATE: "2026-05-19"
+  WORKFLOW_NAME: "scheduled-dogfood-3403.yml"
+  EXPECTED_AUTHOR: "deruelle"
+  EXPECTED_CREATED_AT: "2026-05-07T08:37:43Z"
+
+jobs:
+  run-once:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      # SANDBOX-ONLY — DO NOT copy into a real --once workflow.
+      # Forces the abort path by closing the sandbox issue immediately before
+      # the claude-code-action step. The scheduler design says "the issue
+      # must be OPEN at fire time"; this sandbox intentionally violates that
+      # precondition to exercise the D4 abort path inside claude-code-action.
+      - name: Sandbox precondition — close issue to force abort path
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh issue close "$ISSUE_NUMBER" \
+            --comment "Sandbox precondition for #3403 — closed to force abort path. Will be reopened post-fire by the AC14 follow-up."
+
+      - name: One-time fire (with self-neutralization)
+        uses: anthropics/claude-code-action@ab8b1e6471c519c585ba17e8ecaccc9d83043541 # v1.0.101
+        env:
+          GH_TOKEN: ${{ github.token }}
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          show_full_output: true
+          plugin_marketplaces: 'https://github.com/jikig-ai/soleur.git'
+          plugins: 'soleur@soleur'
+          claude_args: >-
+            --max-turns 25
+            --allowedTools Bash,Read,Write,Edit,Glob,Grep
+          prompt: |
+            ## Neutralization primitive (referenced by D3 abort, preflight-failure abort, and the Final step)
+
+            To **neutralize** the workflow (prevent any future cron fires), do
+            the following IN ORDER. The previous mechanism `gh workflow disable
+            "$WORKFLOW_NAME"` was removed in #3153 — `claude-code-action`'s App
+            installation token does not honor `actions: write`, so the disable
+            returns 403 regardless of the workflow's declared permissions.
+
+            1. **Idempotency precheck.** Read `.github/workflows/$WORKFLOW_NAME`.
+               If the `on:` block has already had `schedule:` removed (or only
+               contains `workflow_dispatch:`), the workflow is already
+               neutralized — skip to step 6 (success, no-op).
+            2. **Edit YAML.** Use the Read+Edit tools (NOT shell `sed`/`awk`)
+               to remove the `schedule:` key and its child list under `on:`.
+               Leave any other triggers (`workflow_dispatch:`) intact. If
+               `schedule:` is the ONLY trigger, replace the entire `on:` block
+               with `on:\n  workflow_dispatch:` so the file remains a valid
+               GHA workflow that can be manually invoked for forensic
+               purposes.
+            3. **Stage and guard against no-op commit.**
+               `git add .github/workflows/$WORKFLOW_NAME` then
+               `git diff --cached --quiet`. If the diff is empty (exit 0), the
+               file was already neutralized — skip to step 6.
+            4. **Configure git identity, then commit.**
+               ```bash
+               git config user.name "github-actions[bot]"
+               git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+               git commit -m "chore(schedule): neutralize one-time workflow $WORKFLOW_NAME (post-fire cleanup, #$ISSUE_NUMBER)"
+               ```
+            5. **Push — direct first, PR fallback.**
+               - **5a.** Try direct push:
+                 `git push origin HEAD:${{ github.event.repository.default_branch }}`.
+                 If exit 0, neutralization succeeded — go to step 6.
+               - **5b.** If direct push fails:
+                 `EXISTING=$(gh pr list --search "head:chore/neutralize-$WORKFLOW_NAME" --state open --json url --jq '.[0].url // empty')`.
+                 If `$EXISTING` is non-empty, treat as a successful handoff and
+                 go to step 6. Otherwise create an ephemeral branch
+                 `chore/neutralize-$WORKFLOW_NAME-$(date -u +%Y%m%d%H%M%S)`,
+                 push it, then open a PR via
+                 `gh pr create --base "${{ github.event.repository.default_branch }}" --head "$BRANCH" --title "chore(schedule): neutralize $WORKFLOW_NAME" --body "Auto-cleanup after one-time fire of #$ISSUE_NUMBER (sandbox dogfood for #3403)."`.
+                 Then `gh pr merge --squash --auto "$PR_URL" 2>/tmp/merge.err`.
+            6. **Success.** No fallback comment posted.
+            7. **Both legs failed.** If step 5a errored AND step 5b
+               PR-creation errored, post the fallback comment to issue
+               #$ISSUE_NUMBER:
+               "Workflow ran but auto-cleanup failed (direct push: <err>; PR
+               create: <err>). Operator action required: edit
+               `.github/workflows/$WORKFLOW_NAME` to remove the `schedule:`
+               trigger."
+
+            ## Pre-flight (abort with observation comment if any check fails)
+
+            1. **Date guard (PRIMARY cross-year defense, D3):**
+               `[[ "$FIRE_DATE" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] || { echo "FIRE_DATE empty or malformed: '$FIRE_DATE'"; <invoke neutralization primitive>; exit 0; }`
+               then `[[ "$(date -u +%F)" == "$FIRE_DATE" ]]` must be true. If
+               false, invoke the Neutralization primitive above and exit 0.
+            2. **Idempotency:** if the workflow's `on:` block no longer
+               contains `schedule:`, exit 0 immediately.
+            3. **Repo not archived:**
+               `[[ "$(gh repo view --json isArchived --jq .isArchived)" == "false" ]]`.
+            4. **Issue OPEN + same repo:** fetch
+               `gh issue view "$ISSUE_NUMBER" --json state,repository_url`.
+               The state must be OPEN (this sandbox INTENTIONALLY closes it
+               in the precondition step above, so this check WILL fail —
+               that's the test).
+            5. **Comment exists + matches issue:**
+               `gh api "repos/${{ github.repository }}/issues/comments/$COMMENT_ID" --jq .issue_url`
+               must end in `/issues/$ISSUE_NUMBER`.
+            6. **Comment-author pin (D5):** the comment author MUST equal
+               `$EXPECTED_AUTHOR`.
+            7. **Comment-immutability pin (D5):** the comment MUST NOT have
+               been edited.
+
+            If ANY pre-flight check fails (and it will — check 4 fails
+            because the precondition step closed the issue): post a single
+            observation comment to issue #$ISSUE_NUMBER naming which check
+            failed, then invoke the Neutralization primitive above and exit
+            0. This is the path the bundle PR fixes; capture the full SDK
+            transcript so we can identify the exact failure point.
+
+            ## Task
+
+            (Sandbox: this branch is NOT taken because pre-flight check 4
+            fails. The agent should never reach this section in this run.
+            If it does, that itself is forensic data worth capturing.)
+
+            Fetch the documented task spec from the referenced comment and
+            execute it. When complete, post results as a follow-up comment.
+
+            ## Final step (mandatory, last)
+
+            Invoke the Neutralization primitive above. This is D4.
+
+            Do NOT add any post-step to this workflow file —
+            `claude-code-action` revokes the App token after this step, so a
+            YAML-level cleanup would silently fail.
+
+            ## Post-fire verification (mandatory after Final step) — bundle-PR framework fix
+
+            After the Neutralization primitive completes, verify the side
+            effect actually landed by reading the workflow file back from
+            the default branch:
+
+            ```bash
+            CONTENT=$(gh api "repos/${{ github.repository }}/contents/.github/workflows/$WORKFLOW_NAME" --jq .content | base64 -d)
+            STILL_HAS_SCHEDULE=$(printf '%s' "$CONTENT" | grep -cE '^[[:space:]]*schedule:' || true)
+            HAS_DISPATCH=$(printf '%s' "$CONTENT" | grep -cE '^[[:space:]]*workflow_dispatch:' || true)
+            ```
+
+            Expected post-neutralization state: `STILL_HAS_SCHEDULE == 0`
+            AND `HAS_DISPATCH >= 1`. If verification FAILS, post a
+            follow-up comment to issue #$ISSUE_NUMBER:
+            "Workflow neutralization claimed success but post-fire
+            verification shows `schedule:` still present. Manual
+            intervention required."
+            Then exit 1 (NOT 0). The workflow conclusion must reflect the
+            verification outcome.

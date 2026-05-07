@@ -577,6 +577,31 @@ If an issue number is found, store it as `ISSUE_NUMBER` for use in the PR body b
 
 **Important:** Use `Closes #N` syntax (not `Ref #N`, not `(#N)` in the title). GitHub only auto-closes issues when the PR body contains a keyword (`Closes`, `Fixes`, or `Resolves`) followed by the issue reference.
 
+### Auto-Close Keyword Pre-Creation Scan (#3407)
+
+Before invoking `gh pr edit` or `gh pr create` below, scan the proposed PR title and body for unintentional auto-close-keyword + #N references. GitHub's parser is markdown-blind: matches inside checkboxes, code blocks, blockquotes, and prose all auto-close (`#3185` was closed twice in three days by this trap — first via PR title `(Closes #N after fire)` in #3200, then via body checkbox `- [ ] Post-merge: close #N` in #3402).
+
+Write the proposed `PR_TITLE` and `PR_BODY` to temp files, then run the shared scanner:
+
+```bash
+TMP_TITLE=$(mktemp); TMP_BODY=$(mktemp)
+printf '%s\n' "$PR_TITLE" > "$TMP_TITLE"
+printf '%s\n' "$PR_BODY"  > "$TMP_BODY"
+T_MATCHES=$(bash plugins/soleur/skills/ship/scripts/auto-close-scan.sh "$TMP_TITLE")
+B_MATCHES=$(bash plugins/soleur/skills/ship/scripts/auto-close-scan.sh "$TMP_BODY")
+```
+
+If `T_MATCHES` OR `B_MATCHES` is non-empty:
+
+1. Display every match with line context: `printf 'In title:\n%s\nIn body:\n%s\n' "${T_MATCHES:-(none)}" "${B_MATCHES:-(none)}"`.
+2. Compare each match against the intended `ISSUE_NUMBER` set from the detection step above. Any match where the issue number is in `ISSUE_NUMBER` AND the match line is the canonical `Closes #N` body line (one keyword, one number, on its own line, no surrounding prose) is intentional — keep it. Any other match is a candidate trap.
+3. **Headless mode:** If unintentional matches remain after the comparison, write a `<!-- auto-close-scanner: confirm -->` marker to the body before the PR-create call IF the operator has previously confirmed via `--confirm-auto-close` flag or `SHIP_AUTOCLOSE_CONFIRM=1` env. Otherwise abort with an error listing every match — do NOT silently create the PR.
+4. **Interactive mode:** Use AskUserQuestion to surface every unintentional match and offer (a) edit the body to remove the trap, (b) add the `<!-- auto-close-scanner: confirm -->` marker (intentional), or (c) abort and let the operator edit manually.
+
+The CI workflow `.github/workflows/pr-auto-close-scanner.yml` is the post-creation defense for PRs created outside this skill. This pre-creation scan is the agent-side defense; both share `plugins/soleur/skills/ship/scripts/auto-close-scan.sh` so the regex stays canonical.
+
+The PR body of THIS Soleur PR will typically contain `Closes #N` lines that ARE intentional — those are not traps and should be kept. The trap pattern is auto-close keyword + #N where the issue is NOT in the intentional `ISSUE_NUMBER` set, OR where the form is a checkbox / prose / code-fence rather than the canonical body line.
+
 Push the branch to remote. Get the branch name first:
 
 ```bash
