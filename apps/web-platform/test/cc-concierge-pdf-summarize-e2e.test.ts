@@ -52,9 +52,12 @@ vi.mock("@/server/observability", () => ({
   warnSilentFallback: vi.fn(),
 }));
 
-vi.mock("@/server/pdf-text-extract", () => ({
-  extractPdfText: extractPdfTextSpy,
-}));
+vi.mock("@/server/pdf-text-extract", async () => {
+  const actual = await vi.importActual<typeof import("@/server/pdf-text-extract")>(
+    "@/server/pdf-text-extract",
+  );
+  return { ...actual, extractPdfText: extractPdfTextSpy };
+});
 
 import { resolveConciergeDocumentContext } from "@/server/cc-dispatcher";
 import {

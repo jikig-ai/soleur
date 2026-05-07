@@ -54,6 +54,15 @@ export const SENSITIVE_KEY_NAMES = [
   // in env-block dumps and config-snapshot logs.
   "jwt_secret",
   "supabase_jwt_secret",
+  // Dev-only sign-in passwords (R3 / feat-dev-signin-bypass). Exact-name
+  // match on `password` does NOT cover the per-slot env-var key names
+  // that may appear in error reports or config-snapshot dumps. These
+  // keys must never reach Sentry even though they are dev-only — a
+  // leak of the dev passwords is a vector to authenticate as the
+  // seeded test users in the dev Supabase project.
+  "DEV_USER_1_PASSWORD",
+  "DEV_USER_2_PASSWORD",
+  "DEV_USER_3_PASSWORD",
   // HTTP transport
   "cookie",
   "x-nonce",
