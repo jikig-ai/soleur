@@ -22,23 +22,38 @@ import { isPathInWorkspace } from "./sandbox";
 import {
   extractPdfText,
   extractPdfMetadata,
+  extractPdfOutline,
   LARGE_PDF_PAGE_THRESHOLD,
   type PdfExtractErrorClass,
+  type ChapterIndex,
 } from "./pdf-text-extract";
 
 /**
- * Structured metadata passed alongside `documentExtractError` for failure
- * classes that carry per-failure details. Currently only `too_many_pages`
- * uses `numPages`; the type is open for future extension.
+ * Structured metadata passed alongside `documentExtractError` (or, for the
+ * chapter-chunking soft-route, alongside a SUCCESS shape that carries
+ * structure rather than an error). Fields are independent — the runner
+ * branches on which fields are present:
+ *   - `numPages` → bridge `too_many_pages` (#3429/#3430).
+ *   - `chapters` + `fullExtractedText` → chapter-chunking soft-route (#3436).
  */
 export interface DocumentExtractMeta {
   numPages?: number;
+  chapters?: ChapterIndex[];
+  fullExtractedText?: string;
 }
 
 /** Per-conversation cap on inlined document body. Mirrors the legacy
  *  `agent-runner.ts MAX_INLINE_BYTES` (~12-15K tokens). Source of truth
  *  for the cc path. */
 export const CONCIERGE_INLINE_CAP_BYTES = 50_000;
+
+/** Loose cap on the full-text extract used by the chapter-chunking soft-
+ *  route (#3436). The runner SLICES per-chapter via the page-range option
+ *  on `extractPdfText`; `fullExtractedText` is held in resolver state for
+ *  the routing turn and per-chapter slicing is the byte-economic path.
+ *  5 MiB chars covers Manning/O'Reilly-class books (typically 1-3 MiB of
+ *  extracted text) without trying to fit a full library. */
+export const FULL_TEXT_CAP_BYTES = 5 * 1024 * 1024;
 
 let _supabase: ReturnType<typeof createServiceClient> | null = null;
 function supabase() {
@@ -249,6 +264,44 @@ export async function resolveConciergeDocumentContext(args: {
             },
           });
           if (meta.ok && meta.numPages > LARGE_PDF_PAGE_THRESHOLD) {
+            // 2026-05-07 (#3436) chapter-chunking soft-route. Probe for a
+            // usable outline; if present, run a loose-cap full-text extract
+            // and surface chapters + body for the runner to slice
+            // per-question. If the outline is missing, too shallow, or
+            // the full-text extract trips an unexpected failure, fall
+            // through to PR #3430's `too_many_pages` bridge — worst case
+            // the user gets the bridge experience, never worse.
+            const outlineResult = await extractPdfOutline(buffer);
+            Sentry.addBreadcrumb({
+              category: "cc-pdf-extractor",
+              message: "extractPdfOutline completed",
+              level: "info",
+              data: {
+                ok: outlineResult.ok,
+                op: "outlineRead",
+                entries: outlineResult.ok ? outlineResult.outline.length : 0,
+                reason: outlineResult.ok ? null : outlineResult.reason,
+                pathBasename: path.basename(contextPath),
+              },
+            });
+            if (outlineResult.ok) {
+              const fullTextResult = await extractPdfText(
+                buffer,
+                FULL_TEXT_CAP_BYTES,
+              );
+              if (!("error" in fullTextResult)) {
+                return {
+                  artifactPath: contextPath,
+                  documentKind: "pdf",
+                  documentExtractMeta: {
+                    numPages: meta.numPages,
+                    chapters: outlineResult.outline,
+                    fullExtractedText: fullTextResult.text,
+                  },
+                };
+              }
+              // Outline parsed but full-text extract failed — fall through.
+            }
             return {
               artifactPath: contextPath,
               documentKind: "pdf",

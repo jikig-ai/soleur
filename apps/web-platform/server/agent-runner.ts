@@ -999,7 +999,24 @@ ${READ_TOOL_PDF_CAPABILITY_DIRECTIVE}`;
         });
 
         if (resolved.documentKind === "pdf") {
-          if (resolved.documentExtractError) {
+          // 2026-05-07 (#3436) — chapter-chunked soft-route, symmetric
+          // with `soleur-go-runner.ts`. Phase 3.A foundations ship the
+          // router module + tests but DEFER per-turn dispatch routing
+          // + content-block attachment to #3472. Until #3472 ships,
+          // fall through to PR #3430's `too_many_pages` bridge whenever
+          // chapters are present so the leader gets a deterministic
+          // refusal naming the page count rather than a directive
+          // promising a content block the dispatch layer does not yet
+          // attach. See multi-agent review on PR #3440 (#3472 tracking).
+          const chapters = resolved.documentExtractMeta?.chapters;
+          if (chapters && chapters.length > 0) {
+            const safeNumPages = resolved.documentExtractMeta?.numPages ?? 0;
+            artifactDirective = buildPdfTooLongDirective(
+              safeContextPath,
+              safeNumPages,
+              CONTEXT_NO_ASK,
+            );
+          } else if (resolved.documentExtractError) {
             // Lock-step partition-dispatch order with `soleur-go-runner.ts`
             // (lines ~985-1013): SOFT first, then `too_many_pages`, then
             // HARD fall-through. Order is behaviorally equivalent (the

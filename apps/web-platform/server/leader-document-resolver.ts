@@ -21,11 +21,13 @@ import { isPathInWorkspace } from "./sandbox";
 import {
   fetchUserWorkspacePath,
   CONCIERGE_INLINE_CAP_BYTES,
+  FULL_TEXT_CAP_BYTES,
   type DocumentExtractMeta,
 } from "./kb-document-resolver";
 import {
   extractPdfText,
   extractPdfMetadata,
+  extractPdfOutline,
   LARGE_PDF_PAGE_THRESHOLD,
   PDF_FEATURE_TAGS,
   type PdfExtractErrorClass,
@@ -201,6 +203,39 @@ export async function resolveLeaderDocumentContext(args: {
           },
         });
         if (meta.ok && meta.numPages > LARGE_PDF_PAGE_THRESHOLD) {
+          // 2026-05-07 (#3436) chapter-chunking soft-route, leader symmetric.
+          const outlineResult = await extractPdfOutline(buffer);
+          Sentry.addBreadcrumb({
+            category: "cc-pdf-extractor",
+            message: "extractPdfOutline completed",
+            level: "info",
+            data: {
+              ok: outlineResult.ok,
+              op: "outlineRead",
+              entries: outlineResult.ok ? outlineResult.outline.length : 0,
+              reason: outlineResult.ok ? null : outlineResult.reason,
+              pathBasename: path.basename(contextPath),
+              feature: LEADER_FEATURE_TAG,
+            },
+          });
+          if (outlineResult.ok) {
+            const fullTextResult = await extractPdfText(
+              buffer,
+              FULL_TEXT_CAP_BYTES,
+              { featureTag: LEADER_FEATURE_TAG },
+            );
+            if (!("error" in fullTextResult)) {
+              return {
+                artifactPath: contextPath,
+                documentKind: "pdf",
+                documentExtractMeta: {
+                  numPages: meta.numPages,
+                  chapters: outlineResult.outline,
+                  fullExtractedText: fullTextResult.text,
+                },
+              };
+            }
+          }
           return {
             artifactPath: contextPath,
             documentKind: "pdf",

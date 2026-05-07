@@ -982,7 +982,30 @@ export function buildSoleurGoSystemPrompt(
         // `buildPdfGatedDirective`'s named-binary exclusion list bounds the
         // shell-prior in the prompt text, and `disallowedTools: [Bash, Edit,
         // Write]` in cc-dispatcher is the SDK-level hard brake.
-        if (args.documentExtractError) {
+        // 2026-05-07 (#3436) — chapter-chunked soft-route. Resolver
+        // partitions outline-bearing oversized PDFs as
+        // `documentExtractMeta.chapters` (no error). Phase 3.A foundations
+        // ship the router module + tests but DEFER the dispatch-time
+        // per-turn chapter routing + content-block attachment to #3472
+        // (Phase 3.B). Until #3472 ships, fall through to PR #3430's
+        // `too_many_pages` bridge whenever chapters are present so the
+        // user gets a deterministic refusal naming the page count, never
+        // a system-prompt directive that promises a content block the
+        // dispatch layer does not yet attach. (Per multi-agent review on
+        // PR #3440: an "we will attach the chapter for you" directive
+        // without the matching dispatch wiring would launder fabricated
+        // chapter answers under a confident `[Answering from chapter N]`
+        // prefix — crosses the brand-survival threshold per plan
+        // §User-Brand Impact.)
+        const chapters = args.documentExtractMeta?.chapters;
+        if (chapters && chapters.length > 0) {
+          const safeNumPages = args.documentExtractMeta?.numPages ?? 0;
+          artifactDirective = buildPdfTooLongDirective(
+            safeArtifactPath,
+            safeNumPages,
+            NO_ASK,
+          );
+        } else if (args.documentExtractError) {
           const safeErrorClass = sanitizePromptString(args.documentExtractError);
           if (isPdfSoftFailure(safeErrorClass)) {
             artifactDirective = buildPdfGatedDirective(
