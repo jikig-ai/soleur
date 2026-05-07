@@ -48,11 +48,14 @@ The dev server (`npm run dev`) escapes via `--packages=external`. The custom ser
 
 ## Solution
 
-Three coordinated edits:
+Two coordinated edits (NOT three — see "Why not Next.js serverExternalPackages" below):
 
-1. **`apps/web-platform/package.json:scripts.build:server`** — add `--external:pdfjs-dist`. Bundle dropped 2.9 MB → 1.9 MB.
-2. **`apps/web-platform/next.config.ts:serverExternalPackages`** — add `"pdfjs-dist"`. Load-bearing for `app/api/kb/share/route.ts` → `kb-share.ts:638` → `readPdfMetadata` (Next.js webpack bundles this Route Handler independently of esbuild).
-3. **`apps/web-platform/server/pdfjs-input.ts`** — extract `toPdfjsData(buffer)` for the Buffer→Uint8Array no-copy view (pdfjs@5 rejects Buffer despite `Buffer extends Uint8Array`). Folds in #3342.
+1. **`apps/web-platform/package.json:scripts.build:server`** — add `--external:pdfjs-dist`. Bundle dropped 2.9 MB → 1.9 MB. This is the proven fix for the production Sentry event (`/app/dist/server/index.cjs` is the esbuild output; the bundled-server regression test reproduces the failure with the EXACT prod flag set).
+2. **`apps/web-platform/server/pdfjs-input.ts`** — extract `toPdfjsData(buffer)` for the Buffer→Uint8Array no-copy view (pdfjs@5 rejects Buffer despite `Buffer extends Uint8Array`). Folds in #3342.
+
+### Why not Next.js `serverExternalPackages`
+
+The architecture-strategist review hypothesized that adding `pdfjs-dist` to `next.config.ts:serverExternalPackages` was load-bearing for the `app/api/kb/share/route.ts` → `kb-share.ts` → `readPdfMetadata` path (a Next.js Route Handler bundled by webpack independently of esbuild). The first commit included that change; CI's `web-platform-build` job rejected it: `next build` failed compiling `components/kb/pdf-preview.tsx` (a `"use client"` component dynamically imported with `ssr: false`) because the worker reference `new URL("pdfjs-dist/build/pdf.worker.min.mjs", import.meta.url).toString()` cannot resolve when pdfjs-dist is treated as an external package. The Sentry event's stack frame is `/app/dist/server/index.cjs : __init` — the esbuild custom-server output, not a Next.js Route Handler chunk. The Route Handler path may or may not exhibit the same init-reorder bug under webpack 5; it has not produced a Sentry event. Defer until evidence, then choose a different mechanism (`transpilePackages`, restructure the worker URL, etc.).
 
 Plus two new bundled-server regression tests (`apps/web-platform/test/{pdf-text-extract,kb-preview-metadata}.bundled-server.test.ts`) that reproduce the exact production failure path:
 
@@ -64,9 +67,9 @@ Plus two new bundled-server regression tests (`apps/web-platform/test/{pdf-text-
 
 ## Key Insight
 
-**When a Node-only library has a side-effectful module init (polyfills, native bindings, register-a-fake-worker, env detection), it MUST be externalized in BOTH esbuild and Next.js `serverExternalPackages`.** Bundlers reorder statements; module-init contracts only hold when the library file is evaluated as a discrete module by the host loader.
+**When a Node-only library has a side-effectful module init (polyfills, native bindings, register-a-fake-worker, env detection), externalize it from any bundler whose output Sentry has actually witnessed throwing.** The esbuild custom-server bundle (`dist/server/index.cjs`) was the proven failure path; the Next.js webpack server bundle was a hypothesis.
 
-The two-bundler topology (custom server via esbuild + Next.js webpack for App Router) means a single externalize is not enough — both bundlers see the dependency graph independently. Future Node-only parsers (mammoth, xlsx, epub-parse, etc.) added to this app should default to entries in BOTH lists.
+The two-bundler topology matters: when adding the SAME library to BOTH externalize lists, verify that no client-side consumer references the package via `new URL("<pkg>/sub/path", import.meta.url)` — `serverExternalPackages` interferes with webpack's asset-URL resolution at compile time, even for files behind `dynamic({ ssr: false })`. The architecture-strategist's "defense-in-depth always" instinct produced a pre-merge `web-platform-build` failure; "fix the proven path, defer the hypothetical" was correct.
 
 The bundled-server regression test pattern is reusable: read externals from production `package.json` at runtime, bundle in-process, exec via `spawnSync(process.execPath, ...)`, parse delimited JSON from stdout. This catches a class of bugs that vitest's source-only path structurally cannot reach. Helper lives at `apps/web-platform/test/helpers/bundled-server.ts`.
 
@@ -83,6 +86,8 @@ The bundled-server regression test pattern is reusable: read externals from prod
 5. **`gh milestone list` is not a valid `gh` subcommand** — used `gh api repos/{owner}/{repo}/milestones --jq '.[] | "\(.number): \(.title)"'` instead. **Prevention:** verify `gh <cmd> --help` before chaining; one-off, no rule needed.
 
 6. **Bash CWD doesn't persist between tool calls** — already covered by AGENTS.md sharp edges; recovered by chaining `cd <abs> && <cmd>` in a single Bash call.
+
+7. **CI `web-platform-build` job failed post-PR-ready** because adding `pdfjs-dist` to `next.config.ts:serverExternalPackages` broke `next build` compilation of the client-side `components/kb/pdf-preview.tsx` worker URL `new URL("pdfjs-dist/build/pdf.worker.min.mjs", import.meta.url).toString()`. Local `npm run typecheck` (which is `tsc --noEmit`) and `vitest run` did NOT exercise `next build`, so the break was invisible until CI. **Recovery:** revert the `serverExternalPackages` change; keep the esbuild externalize (which is the actual proven fix for the Sentry event). **Prevention:** when adding a package to `serverExternalPackages`, run `cd apps/web-platform && npm run build` locally before committing — `tsc --noEmit` does NOT exercise webpack's module resolution. This is a class-mate of `cq-nextjs-route-files-http-only-exports` — webpack-specific failures only surface at `next build` time. Considered AGENTS.md placement: domain-scoped (only applies to `apps/web-platform/next.config.ts`), so the rule lives in this learning + the inline comment in `next.config.ts`, not in AGENTS.md.
 
 ## Cross-References
 
