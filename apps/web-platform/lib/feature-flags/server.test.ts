@@ -50,20 +50,24 @@ describe("getFeatureFlags", () => {
   it("returns all flags as a record", () => {
     process.env.FLAG_KB_CHAT_SIDEBAR = "1";
     delete process.env.FLAG_CC_SOLEUR_GO;
+    delete process.env.FLAG_DEV_SIGNIN;
     const flags = getFeatureFlags();
     expect(flags).toEqual({
       "kb-chat-sidebar": true,
       "command-center-soleur-go": false,
+      "dev-signin": false,
     });
   });
 
   it("returns false for all flags when none are set", () => {
     delete process.env.FLAG_KB_CHAT_SIDEBAR;
     delete process.env.FLAG_CC_SOLEUR_GO;
+    delete process.env.FLAG_DEV_SIGNIN;
     const flags = getFeatureFlags();
     expect(flags).toEqual({
       "kb-chat-sidebar": false,
       "command-center-soleur-go": false,
+      "dev-signin": false,
     });
   });
 });
