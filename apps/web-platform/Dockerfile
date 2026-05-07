@@ -56,6 +56,12 @@ ENV PORT=3000
 ARG BUILD_VERSION=dev
 ENV BUILD_VERSION=$BUILD_VERSION
 
+# Git commit SHA injected at build time for /health endpoint verification.
+# Asserted post-deploy by web-platform-release.yml against ${{ github.sha }}
+# to catch bad-tag → bad-image associations (#3409).
+ARG BUILD_SHA=dev
+ENV BUILD_SHA=$BUILD_SHA
+
 # Production dependencies only
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev
