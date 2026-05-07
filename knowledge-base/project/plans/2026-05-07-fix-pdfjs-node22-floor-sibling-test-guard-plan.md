@@ -150,25 +150,25 @@ No L3/network-outage signal in this issue (no SSH/firewall/timeout patterns), so
 
 ### Pre-merge (PR)
 
-- [ ] `apps/web-platform/test/helpers/engines-floor.ts` exists, exports `BELOW_PDFJS_ENGINES_FLOOR`, `pdfjsEngineFloorDiagnostic(label)`, `emitPdfjsEngineFloorDiagnostic(label)`.
-- [ ] `apps/web-platform/test/pdf-text-extract.test.ts` imports from the helper instead of defining the guard inline. Behavior unchanged on Node 22.3+ (9/9 pass) and Node 21.x (file skipped, single stderr diagnostic, no double-print).
-- [ ] `apps/web-platform/test/pdf-text-extract.bundled-server.test.ts` wraps `describe(...)` in `describe.skipIf(BELOW_PDFJS_ENGINES_FLOOR)`. Calls `emitPdfjsEngineFloorDiagnostic("pdf-text-extract.bundled-server.test")` at module top.
-- [ ] `apps/web-platform/test/kb-preview-metadata.bundled-server.test.ts` same wrap with its own label.
-- [ ] On Node 21.7.3 dev path: `scripts/test-all.sh` reports `26/26` (was `25/26`); each of the three pdfjs suites prints exactly one stderr diagnostic line and skips cleanly. Verify via `node --version && bash scripts/test-all.sh 2>&1 | tail -10`.
-- [ ] On Node 22.22+ ground truth: all three suites pass (no skips). Verified locally via `nvm use 22 && cd apps/web-platform && npx vitest run test/pdf-text-extract.test.ts test/pdf-text-extract.bundled-server.test.ts test/kb-preview-metadata.bundled-server.test.ts`.
-- [ ] On Node 21.7.3 with `CI=1`: each of the three pdfjs suites throws at module init with a single Error message (no double-print). Verified via `CI=1 npx vitest run test/pdf-text-extract.test.ts test/pdf-text-extract.bundled-server.test.ts test/kb-preview-metadata.bundled-server.test.ts 2>&1 | grep -c "DOMMatrix"` returning 0 (the throw short-circuits before pdfjs init).
-- [ ] `apps/web-platform/.nvmrc` exists with content `22.3.0\n`.
-- [ ] `apps/web-platform/README.md` Requirements section names the new `apps/web-platform/.nvmrc` and remediation flow.
-- [ ] `apps/web-platform/test/README.md` documents the engine-floor skip behavior.
-- [ ] `tsc --noEmit` clean from `apps/web-platform/`.
-- [ ] Full unit suite on Node 22 via `cd apps/web-platform && npm run test:ci` (matches `scripts/test-all.sh:64`): no regressions vs. main (`2885 passed | 30 skipped` per PR #3431's verified baseline).
-- [ ] New `it("returns lazy_import_failed when pdfjs module init throws", ...)` test added to `apps/web-platform/test/pdf-text-extract.test.ts` outside the `describe.skipIf` block. Uses `vi.doMock` to simulate module-init failure; asserts `result.error === "lazy_import_failed"` AND `reportSilentFallback` was called with `feature: "pdf-text-extract"` (or matching `feature` slug at `pdf-text-extract.ts:107-115`) and the expected `extra` shape. Test passes on Node 21.7.3 and Node 22.x (the `vi.doMock` mocks the real import).
-- [ ] `Closes #3439` on its own line in PR body.
-- [ ] `Closes #3438` on its own line in PR body — folded in per user request (lazy_import_failed direct test).
+- [x] `apps/web-platform/test/helpers/engines-floor.ts` exists, exports `BELOW_PDFJS_ENGINES_FLOOR`, `pdfjsEngineFloorDiagnostic(label)`, `emitPdfjsEngineFloorDiagnostic(label)`.
+- [x] `apps/web-platform/test/pdf-text-extract.test.ts` imports from the helper instead of defining the guard inline. Behavior unchanged on Node 22.3+ (9/9 pass) and Node 21.x (file skipped, single stderr diagnostic, no double-print).
+- [x] `apps/web-platform/test/pdf-text-extract.bundled-server.test.ts` wraps `describe(...)` in `describe.skipIf(BELOW_PDFJS_ENGINES_FLOOR)`. Calls `emitPdfjsEngineFloorDiagnostic("pdf-text-extract.bundled-server.test")` at module top.
+- [x] `apps/web-platform/test/kb-preview-metadata.bundled-server.test.ts` same wrap with its own label.
+- [x] On Node 21.7.3 dev path: `scripts/test-all.sh` reports `26/26` (was `25/26`); each of the three pdfjs suites prints exactly one stderr diagnostic line and skips cleanly. Verify via `node --version && bash scripts/test-all.sh 2>&1 | tail -10`.
+- [x] On Node 22.22+ ground truth: all three suites pass (no skips). Verified locally via `nvm use 22 && cd apps/web-platform && npx vitest run test/pdf-text-extract.test.ts test/pdf-text-extract.bundled-server.test.ts test/kb-preview-metadata.bundled-server.test.ts`.
+- [x] On Node 21.7.3 with `CI=1`: each of the three pdfjs suites throws at module init with a single Error message (no double-print). Verified via `CI=1 npx vitest run test/pdf-text-extract.test.ts test/pdf-text-extract.bundled-server.test.ts test/kb-preview-metadata.bundled-server.test.ts 2>&1 | grep -c "DOMMatrix"` returning 0 (the throw short-circuits before pdfjs init).
+- [x] `apps/web-platform/.nvmrc` exists with content `22.3.0\n`.
+- [x] `apps/web-platform/README.md` Requirements section names the new `apps/web-platform/.nvmrc` and remediation flow.
+- [x] `apps/web-platform/test/README.md` documents the engine-floor skip behavior.
+- [x] `tsc --noEmit` clean from `apps/web-platform/`.
+- [x] Full unit suite on Node 22 via `cd apps/web-platform && npm run test:ci` (matches `scripts/test-all.sh:64`): no regressions vs. main (`2885 passed | 30 skipped` per PR #3431's verified baseline).
+- [x] New `it("returns lazy_import_failed when pdfjs module init throws", ...)` test added to `apps/web-platform/test/pdf-text-extract.test.ts` outside the `describe.skipIf` block. Uses `vi.doMock` to simulate module-init failure; asserts `result.error === "lazy_import_failed"` AND `reportSilentFallback` was called with `feature: "pdf-text-extract"` (or matching `feature` slug at `pdf-text-extract.ts:107-115`) and the expected `extra` shape. Test passes on Node 21.7.3 and Node 22.x (the `vi.doMock` mocks the real import).
+- [x] `Closes #3439` on its own line in PR body.
+- [x] `Closes #3438` on its own line in PR body — folded in per user request (lazy_import_failed direct test).
 
 ### Post-merge (operator)
 
-- [ ] None. Test-only and dev-tooling change; no infra apply, no migration, no ops handoff.
+- [x] None. Test-only and dev-tooling change; no infra apply, no migration, no ops handoff.
 
 ## Open Code-Review Overlap
 

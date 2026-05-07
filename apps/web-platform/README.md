@@ -4,7 +4,7 @@ The Soleur Command Center — a Next.js 15 web app that hosts the chat router (`
 
 ## Requirements
 
-- **Node.js ≥ 22.3** (`engines.node` in `package.json`). The PDF text extractor lazy-imports `pdfjs-dist@5`, which calls `process.getBuiltinModule()` during module init — that API was added in Node 22.3 / 20.16. The production Dockerfile uses `node:22-slim`, so the floor is pinned to 22.3 to keep contributor and runtime matrices aligned. Node 21.x will fail with `process.getBuiltinModule is not a function` on any code path that exercises the in-process PDF extractor.
+- **Node.js ≥ 22.3** (`engines.node` in `package.json`). The PDF text extractor lazy-imports `pdfjs-dist@5`, which calls `process.getBuiltinModule()` during module init — that API was added in Node 22.3 / 20.16. The production Dockerfile uses `node:22-slim`, so the floor is pinned to 22.3 to keep contributor and runtime matrices aligned. Node 21.x will fail with `process.getBuiltinModule is not a function` on any code path that exercises the in-process PDF extractor. Run `nvm use` (or `fnm use` / `asdf install`) from `apps/web-platform/` to land on the binding floor — this directory's `.nvmrc` pins `22.3.0`.
 
 ## Running locally
 

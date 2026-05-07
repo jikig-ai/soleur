@@ -11,6 +11,15 @@ import {
   bundleAndExec,
   VITEST_TIMEOUT_MS,
 } from "./helpers/bundled-server";
+import {
+  BELOW_PDFJS_ENGINES_FLOOR,
+  emitPdfjsEngineFloorDiagnostic,
+} from "./helpers/engines-floor";
+
+// Engine-floor guard (#3439). The bundled CJS imports pdfjs-dist for the
+// `readPdfMetadata` path; same `process.getBuiltinModule` floor as
+// extractPdfText. See `test/helpers/engines-floor.ts`.
+emitPdfjsEngineFloorDiagnostic("kb-preview-metadata.bundled-server.test");
 
 interface PdfPreviewShape {
   kind: "pdf";
@@ -19,7 +28,7 @@ interface PdfPreviewShape {
   height: number;
 }
 
-describe("kb-preview-metadata bundled-server (production CJS path)", () => {
+describe.skipIf(BELOW_PDFJS_ENGINES_FLOOR)("kb-preview-metadata bundled-server (production CJS path)", () => {
   it(
     "reads PDF metadata from a fixture when bundled with the production build:server flags",
     async () => {
