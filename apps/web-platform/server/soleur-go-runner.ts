@@ -249,33 +249,66 @@ function unreadableCopyForClass(
 // — the upfront refusal denied users a working summarize on real PDFs that
 // Read could read once steered. This partition recovers the soft-failure
 // route while keeping the cascade defense intact (named-binary list in the
-// gated directive + `disallowedTools: [Bash, Edit, Write]` in cc-dispatcher).
+// gated directive + `disallowedTools: [Bash, Edit, Write]` in cc-dispatcher;
+// see also `cc-dispatcher.ts realSdkQueryFactory` — load-bearing pair).
 //
-// Soft = pdfjs-dist-side limitations where SDK Read MAY still succeed:
+// Soft = pdfjs-dist-side limitations OR transient/normalizable I/O where
+// SDK Read MAY still succeed (different parser, no in-process buffer cap,
+// native PDF pipeline; Read also resolves some path-shape mismatches the
+// resolver's bare `readFile` does not):
 //   oversized_buffer | corrupted | parse_error | lazy_import_failed | read_failed
 // Hard = SDK Read genuinely cannot recover (no key, no text layer):
 //   encrypted | empty_text
-const PDF_SOFT_FAILURE_CLASSES: ReadonlySet<PdfExtractErrorClass> = new Set<
-  PdfExtractErrorClass
->([
+//
+// `read_failed` placement rationale (per `user-impact-reviewer` review on
+// PR #3405, CPO-relevant for the `single-user incident` brand-survival
+// threshold): the user's filmed reproduction (#3376) was a path-shape
+// mismatch where bare `readFile` raised but SDK Read would have resolved
+// the document. Moving `read_failed` to hard would re-introduce that
+// upfront-refusal regression. Worst case on a genuinely-missing ENOENT:
+// the gated Read attempt fails, model paraphrases the tool error — same
+// failure-mode UX as the unreadable copy, with one extra roundtrip. This
+// asymmetric cost (best-case recovery vs worst-case extra roundtrip) is
+// proportional to the threshold. Keep on soft.
+//
+// IMPORTANT: the literal arrays below are the source of truth for both
+// the compile-time exhaustiveness rail AND the test-time partition lock
+// (re-exported below; imported by `read-tool-pdf-capability.test.ts`). Do
+// NOT inline `new Set<...>([literals])` — the explicit
+// `ReadonlySet<PdfExtractErrorClass>` widening causes `infer T` on
+// `typeof <Set>` to yield the FULL union, collapsing the rail to a
+// vacuous `Union extends Union ? true : never`. Driving the rail off the
+// literal arrays preserves bidirectional union-coverage detection.
+export const PDF_SOFT_FAILURE_LITERALS = [
   "oversized_buffer",
   "corrupted",
   "parse_error",
   "lazy_import_failed",
   "read_failed",
-]);
+] as const satisfies readonly PdfExtractErrorClass[];
+export const PDF_HARD_FAILURE_LITERALS = [
+  "encrypted",
+  "empty_text",
+] as const satisfies readonly PdfExtractErrorClass[];
 
-const PDF_HARD_FAILURE_CLASSES: ReadonlySet<PdfExtractErrorClass> = new Set<
-  PdfExtractErrorClass
->(["encrypted", "empty_text"]);
+const PDF_SOFT_FAILURE_CLASSES: ReadonlySet<PdfExtractErrorClass> = new Set(
+  PDF_SOFT_FAILURE_LITERALS,
+);
 
-// Compile-time exhaustiveness rail on the partition. If `PdfExtractErrorClass`
-// widens (or a member migrates between sets), this assertion fails until the
-// new shape lands in exactly one of the two sets above. Test-time mirror lives
-// in `read-tool-pdf-capability.test.ts > PdfExtractErrorClass routing partition`.
+// Compile-time exhaustiveness rail on the partition. Driven off the literal
+// arrays (NOT `infer T` from the Set) so widening `PdfExtractErrorClass`
+// without adding the new member to one of the literal arrays fails the
+// build. The `as const satisfies readonly PdfExtractErrorClass[]` clause
+// above ALSO catches typos at literal-declaration time (e.g., `"encryptd"`
+// fails to satisfy the union). Bidirectional `extends` here catches the
+// dual gap: a member added to `PdfExtractErrorClass` and forgotten here.
+//
+// Test-time mirror lives in
+// `read-tool-pdf-capability.test.ts > PdfExtractErrorClass routing partition`,
+// which imports the same literal tuples (single source of truth).
 type _PartitionMembers =
-  | (typeof PDF_SOFT_FAILURE_CLASSES extends ReadonlySet<infer T> ? T : never)
-  | (typeof PDF_HARD_FAILURE_CLASSES extends ReadonlySet<infer T> ? T : never);
+  | (typeof PDF_SOFT_FAILURE_LITERALS)[number]
+  | (typeof PDF_HARD_FAILURE_LITERALS)[number];
 type _AssertPartitionTotal = PdfExtractErrorClass extends _PartitionMembers
   ? _PartitionMembers extends PdfExtractErrorClass
     ? true
@@ -286,15 +319,23 @@ void _partitionExhaustive;
 
 /**
  * Runtime predicate: does this error class allow the model to retry via the
- * SDK Read tool's PDF pipeline? Soft classes (in-process extractor side)
- * route to `buildPdfGatedDirective`; hard classes (no key, no text layer)
- * route to `buildPdfUnreadableDirective`.
+ * SDK Read tool's PDF pipeline? Soft classes (pdfjs-dist-side) route to
+ * `buildPdfGatedDirective`; hard classes (no key, no text layer, FS-side
+ * read failure) route to `buildPdfUnreadableDirective`.
  *
  * The predicate accepts `PdfExtractErrorClass | string` because the runner
  * sanitizes the wire-typed value via `sanitizePromptString` and may receive
  * an off-union string (forward-compat with serialized payloads). Off-union
  * values fall through to the unreadable path — safe-by-construction (we
- * don't optimistically gate Read on a class we don't recognize).
+ * don't optimistically gate Read on a class we don't recognize). A future
+ * union member that lands without a partition entry ALSO falls through to
+ * unreadable; the compile-time rail above is what catches this at build
+ * time, not the predicate.
+ *
+ * Note: only `PDF_SOFT_FAILURE_CLASSES` is read at runtime. The hard
+ * literal tuple feeds the type-level rail and the test-time partition
+ * mirror; it has no runtime Set because the predicate is one-sided
+ * (default-route is unreadable).
  */
 function isPdfSoftFailure(
   errorClass: PdfExtractErrorClass | string,

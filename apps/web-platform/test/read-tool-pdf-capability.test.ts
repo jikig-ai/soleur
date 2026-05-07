@@ -6,6 +6,8 @@ import {
   buildPdfGatedDirective,
   PDF_GATED_DIRECTIVE_LEAD,
   PDF_UNREADABLE_DIRECTIVE_LEAD,
+  PDF_SOFT_FAILURE_LITERALS,
+  PDF_HARD_FAILURE_LITERALS,
 } from "@/server/soleur-go-runner";
 
 // RED test for plan 2026-05-05-fix-cc-pdf-read-capability-prompt-plan.md (#3253).
@@ -298,26 +300,20 @@ describe("READ_TOOL_PDF_CAPABILITY_DIRECTIVE (load-bearing baseline directive �
 });
 
 // 2026-05-07 follow-up to #3384: PdfExtractErrorClass routing partition.
-// `PDF_SOFT_FAILURE_CLASSES` route to `buildPdfGatedDirective` (SDK Read
-// tool's Anthropic Files API path may still succeed); `PDF_HARD_FAILURE_CLASSES`
-// route to `buildPdfUnreadableDirective` (Read genuinely cannot help).
+// Soft literals route to `buildPdfGatedDirective` (SDK Read tool's
+// Anthropic Files API path may still succeed); hard literals route to
+// `buildPdfUnreadableDirective` (Read genuinely cannot help).
 //
 // This describe block is the test-time mirror of the compile-time
-// `_AssertPartitionTotal` rail in `soleur-go-runner.ts`: a future addition
-// to `PdfExtractErrorClass` that lands without an entry in either set
-// below leaves the new class untested at the routing layer. The for-loops
-// fail at unit-test time when the union widens.
+// `_AssertPartitionTotal` rail in `soleur-go-runner.ts`. The literal
+// tuples are imported from the runtime (NOT hand-duplicated) — adding a
+// new union member to `PdfExtractErrorClass` and forgetting to land it
+// in one of the runtime literal arrays now fails BOTH the compile-time
+// rail AND this test loop (because the loop iterates the runtime tuple
+// directly; a missing class never gets a routing assertion that would
+// otherwise pass vacuously).
 describe("PdfExtractErrorClass routing partition (soft → gated, hard → unreadable)", () => {
-  const SOFT_CLASSES = [
-    "oversized_buffer",
-    "corrupted",
-    "parse_error",
-    "lazy_import_failed",
-    "read_failed",
-  ] as const;
-  const HARD_CLASSES = ["encrypted", "empty_text"] as const;
-
-  for (const cls of SOFT_CLASSES) {
+  for (const cls of PDF_SOFT_FAILURE_LITERALS) {
     it(`${cls}: routes to PDF_GATED_DIRECTIVE_LEAD (SDK Read may still help via Anthropic Files API)`, () => {
       const prompt = buildSoleurGoSystemPrompt({
         artifactPath: "knowledge-base/probe.pdf",
@@ -329,7 +325,7 @@ describe("PdfExtractErrorClass routing partition (soft → gated, hard → unrea
     });
   }
 
-  for (const cls of HARD_CLASSES) {
+  for (const cls of PDF_HARD_FAILURE_LITERALS) {
     it(`${cls}: routes to PDF_UNREADABLE_DIRECTIVE_LEAD (SDK Read genuinely cannot help)`, () => {
       const prompt = buildSoleurGoSystemPrompt({
         artifactPath: "knowledge-base/probe.pdf",
