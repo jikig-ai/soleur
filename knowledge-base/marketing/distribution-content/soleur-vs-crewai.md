@@ -3,7 +3,7 @@ title: "Soleur vs. CrewAI: AI Agent Framework vs. AI Organization"
 type: pillar
 publish_date: 2026-05-07
 channels: discord, x, bluesky, linkedin-company
-status: scheduled
+status: published
 ---
 
 ## Discord
