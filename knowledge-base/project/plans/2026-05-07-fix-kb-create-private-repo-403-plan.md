@@ -87,28 +87,90 @@ real-API impossibility.
 
 ## User-Brand Impact
 
-**If this lands broken, the user experiences:** the "Create Project" CTA on
-`/connect-repo` returns a generic "GitHub create repo failed: 403" toast for
-every personal-account user. The user has no path forward — the only escape
-is to know they must create the repo manually on github.com first and use
-"Connect existing repo." Most users will bounce to a competitor, attributing
-the failure to "Soleur is broken" rather than "GitHub auth model nuance."
+**Note:** This section was rewritten 2026-05-07 to match the actually-shipped
+Approach B (template-generate). The original UAT-exfiltration analysis is
+preserved under "Approach A risk surface (not landed)" below for the
+A2-fallback path; only the Approach B section governs CPO sign-off.
 
-**If this leaks, the user's data / workflow is exposed via:** the fix
-introduces a user-to-server access token (UAT) which has the user's
-GitHub `repo` scope. If the UAT is logged, persisted unencrypted in
-`auth.users.user_metadata`, or echoed in error responses, an attacker
-who exfiltrates it gets full read+write to all repos the user can access
-(including private repos containing secrets). UAT exfiltration is a
-single-user incident, not aggregate — the token is per-user, short-lived
-(default 8h), and refreshable.
+### If this lands broken, the user experiences
 
-**Brand-survival threshold:** single-user incident.
+The "Create Project" CTA on `/connect-repo` returns a generic
+"GitHub create repo failed: …" toast for every personal-account user. The
+user has no in-product path forward (no "Try Connect existing repo" link in
+the error state); they must know to create the repo manually on github.com
+first and use "Connect existing repo." Most users bounce to a competitor,
+attributing the failure to "Soleur is broken" rather than the operator-side
+template-availability issue. Single-user incident, but high attribution
+weight (the failure is on the canonical onboarding CTA).
 
-Reason: the fix introduces credentials-handling (UAT mint, store, scrub),
-which sits on the credentials/auth axis under
-`hr-weigh-every-decision-against-target-user-impact`. CPO sign-off
-required at plan time; `user-impact-reviewer` invoked at review time.
+### Approach B artifacts and exposure vectors
+
+**Artifact 1 — Public "generated from jikig-ai/kb-template" attribution
+on every user-account repo.** Vector: the user's
+`github.com/<user>/<repo>` page and their public profile carry a sidebar
+link to `jikig-ai/kb-template`. Anyone viewing the user's GitHub profile
+(recruiters, employers, peers) can trace that the user onboarded via
+Soleur. Single-user reputational disclosure surface — the user did not
+opt into making this association public.
+
+**Artifact 2 — `jikig-ai/kb-template` repository contents.** Vector: the
+template MUST be public for cross-account `/generate` to work
+(live-verified GitHub API constraint). Any commit to the template's
+default branch (a) becomes publicly indexable on github.com search and
+code-search bots within minutes, AND (b) propagates as the seed of every
+subsequent user repo. If a Soleur operator commits a secret, PII, or
+stale config, every downstream user repo created post-leak inherits the
+content under the user's GitHub handle — making the user a publication
+channel for an operator-side mistake. Mitigation lives in
+`jikig-ai/kb-template`'s repo settings, not in this PR's code:
+README-only seed, branch protection, CODEOWNERS, gitleaks pre-commit
+(see Risks §1 and the supply-chain follow-up issue).
+
+**Artifact 3 — Template availability (`is_template:true`,
+`private:false`, repo not deleted/renamed).** Vector: if an operator
+deletes, renames, flips-to-private, or drops the `is_template` flag on
+`jikig-ai/kb-template`, every user-account Create Project returns 404
+(template missing) or 422 (template flag dropped). User sees the
+generic toast and has no signal whether to retry or wait. Operator
+visibility is a Sentry alert on `op:createRepoFromTemplate
+statusCode:404|422` — but the alert is post-hoc; user impact precedes
+detection. Health-probe (hourly assertion that
+`is_template === true && private === false`) is deferred to a tracked
+follow-up issue (out of this PR's scope per scope-out criterion
+`cross-cutting-refactor` — touches a separate ops surface).
+
+**Artifact 4 — Repository-creation API responses.** Vector: a malformed
+or stripped `/generate` response (e.g., GitHub returns 202 async or
+omits `html_url`) would silently produce
+`{ repoUrl: undefined, fullName: undefined }` and downstream
+persistence would store `"undefined"` strings. Fix-inline this PR:
+runtime guard rejecting non-string `html_url`/`full_name` with
+`GitHubApiError(502)`.
+
+### Brand-survival threshold
+
+Single-user incident.
+
+Reason: each enumerated artifact (attribution, public-template content,
+availability, malformed response) is per-user — failure or leak affects
+one user at a time, not aggregate. CPO sign-off required at plan time
+on the three Approach-B artifacts (attribution, public-template
+propagation, availability); `user-impact-reviewer` re-invoked at review
+time to verify mitigations landed.
+
+### Approach A risk surface (not landed — preserved for A2-fallback)
+
+If CPO rejects the template-sidebar visibility on Artifact 1 and
+forces a fallback to Approach A2 (re-OAuth on every create), the
+landed risk surface changes. A2 introduces a user-to-server (UAT)
+access token with the user's GitHub `repo` scope; if the UAT is
+logged, persisted unencrypted, or echoed in error responses, an
+attacker who exfiltrates it gets full read+write to all repos the
+user can access (including private repos with secrets). UAT
+exfiltration is also a single-user incident — token is per-user,
+short-lived (8h default), refreshable. A2 trade-off: replace public
+attribution with credential-surface; both sit on the
+`hr-weigh-every-decision-against-target-user-impact` axis.
 
 ## Approaches
 
