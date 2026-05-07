@@ -1,31 +1,53 @@
-// Phase 3 of `2026-05-06-fix-extract-pdf-text-null-in-production-plan.md`:
-// when the in-process extractor surfaces a typed failure class
-// (`oversized_buffer | encrypted | corrupted | parse_error | empty_text |
-// lazy_import_failed`), the system prompt MUST emit a content-grounded
-// `buildPdfUnreadableDirective` instead of the apt-get-cascade-prone
-// `buildPdfGatedDirective`. Pre-fix, every extractor null fell through to the
-// gated directive and re-introduced the exact bug #3338 was supposed to fix.
+// PDF extract-error routing partition (2026-05-07 follow-up to #3384).
+//
+// `PdfExtractErrorClass` is partitioned at `soleur-go-runner.ts:771`:
+//
+//   SOFT (route to `buildPdfGatedDirective` — SDK Read tool's Anthropic
+//   Files API path may still succeed where in-process pdfjs-dist failed):
+//     oversized_buffer | corrupted | parse_error | lazy_import_failed |
+//     read_failed
+//
+//   HARD (route to `buildPdfUnreadableDirective` — SDK Read genuinely
+//   cannot help: password-protected PDFs reject without the password,
+//   image-only/scanned PDFs have no text layer):
+//     encrypted | empty_text
+//
+// The cascade defense (named-binary list + cc-dispatcher's
+// `disallowedTools: [Bash, Edit, Write]`) is preserved on BOTH directives.
 //
 // Pinned invariants per assertion below:
-//   1. The unreadable directive is reachable when documentExtractError is set.
-//   2. It does NOT contain the named-binary cascade (`pdftotext`, `pdfplumber`,
-//      `pdf-parse`, `PyPDF2`, `PyMuPDF`, `fitz`, `apt-get`, `pip3 install`,
-//      `shell-installation commands`).
-//   3. It does NOT start with `PDF_GATED_DIRECTIVE_LEAD` ("The user is
-//      currently viewing the PDF document"). The gated lead is the proximate
-//      anchor for the model's "I should Read this PDF" prior — replacing it
-//      is the load-bearing fix.
-//   4. The reply phrasing depends on errorClass — `oversized_buffer` →
-//      "too large", `encrypted` → "password-protected", `empty_text` →
-//      "scanned" or "image-only".
+//   1. Soft classes route to `PDF_GATED_DIRECTIVE_LEAD`; the unreadable
+//      lead must NOT be present on the soft route.
+//   2. Hard classes route to `PDF_UNREADABLE_DIRECTIVE_LEAD`; the gated
+//      lead must NOT be present on the hard route.
+//   3. Neither route contains the named-binary cascade (`pdftotext`,
+//      `pdfplumber`, `pdf-parse`, `PyPDF2`, `PyMuPDF`, `fitz`, `apt-get`,
+//      `pip3 install`, `shell-installation commands`) — gated directive's
+//      named-binary exclusion list bounds it on the soft route too.
+//   4. Hard-class copy still depends on errorClass (`encrypted` →
+//      "password-protected", `empty_text` → "scanned" or "image-only").
 
 import { describe, it, expect } from "vitest";
 
 import {
   buildSoleurGoSystemPrompt,
   PDF_GATED_DIRECTIVE_LEAD,
+  PDF_UNREADABLE_DIRECTIVE_LEAD,
 } from "@/server/soleur-go-runner";
 
+// Binary tokens that, if PRESENT IN AN ENABLING CONTEXT, indicate the
+// apt-get cascade has leaked into the prompt. The `expectNoCascade` pin
+// is appropriate ONLY on the unreadable (hard-route) directive, whose body
+// must not name these binaries at all — the unreadable directive should
+// not even hint at shell tooling.
+//
+// On the gated (soft-route) directive, these tokens appear by design in
+// the defensive "Do NOT call <X>" exclusion list — they are the cascade
+// DEFENSE, not the cascade itself. The cascade-enabling check on the
+// gated route lives in the "does NOT install software" test below
+// (regex-based: `/\b(install|run)\s+apt-get\b/`, "install poppler",
+// "install software"), which distinguishes defensive prose from enabling
+// prose.
 const FORBIDDEN_BINARIES = [
   "pdftotext",
   "pdfplumber",
@@ -44,81 +66,98 @@ function expectNoCascade(prompt: string) {
   }
 }
 
-describe("buildPdfUnreadableDirective via buildSoleurGoSystemPrompt", () => {
-  it("oversized_buffer: emits a 'too large' message and does NOT contain the apt-get cascade", () => {
+describe("PDF extract-error routing partition (soft → gated, hard → unreadable)", () => {
+  it("oversized_buffer (soft): routes to gated lead", () => {
     const prompt = buildSoleurGoSystemPrompt({
       artifactPath: "knowledge-base/huge.pdf",
       documentKind: "pdf",
       documentExtractError: "oversized_buffer",
     });
-    expect(prompt).toContain("too large");
-    expectNoCascade(prompt);
-    // Pin: the gated lead substring (the apt-get-prone Read directive's
-    // opening anchor) must NOT appear when the unreadable branch fires.
-    expect(prompt).not.toContain(PDF_GATED_DIRECTIVE_LEAD);
+    // Soft-failure route: SDK Read tool's Anthropic Files API path may
+    // still succeed where pdfjs-dist's in-process buffer cap rejected.
+    expect(prompt).toContain(PDF_GATED_DIRECTIVE_LEAD);
+    expect(prompt).not.toContain(PDF_UNREADABLE_DIRECTIVE_LEAD);
+    // Cascade-enabling check is in the "does NOT install software" test
+    // below — `expectNoCascade` is unsafe on the gated route because
+    // the directive's defensive "Do NOT call <X>" exclusion list contains
+    // those binary names by design.
   });
 
-  it("encrypted: tells the user the PDF is password-protected", () => {
+  it("encrypted (hard): routes to unreadable lead and tells the user the PDF is password-protected", () => {
     const prompt = buildSoleurGoSystemPrompt({
       artifactPath: "knowledge-base/locked.pdf",
       documentKind: "pdf",
       documentExtractError: "encrypted",
     });
+    expect(prompt).toContain(PDF_UNREADABLE_DIRECTIVE_LEAD);
+    expect(prompt).not.toContain(PDF_GATED_DIRECTIVE_LEAD);
     expect(prompt.toLowerCase()).toContain("password-protected");
     expectNoCascade(prompt);
-    expect(prompt).not.toContain(PDF_GATED_DIRECTIVE_LEAD);
   });
 
-  it("empty_text: tells the user the PDF appears to be scanned / image-only", () => {
+  it("empty_text (hard): routes to unreadable lead and tells the user the PDF appears to be scanned / image-only", () => {
     const prompt = buildSoleurGoSystemPrompt({
       artifactPath: "knowledge-base/scanned.pdf",
       documentKind: "pdf",
       documentExtractError: "empty_text",
     });
+    expect(prompt).toContain(PDF_UNREADABLE_DIRECTIVE_LEAD);
+    expect(prompt).not.toContain(PDF_GATED_DIRECTIVE_LEAD);
     const lc = prompt.toLowerCase();
     // Either "scanned" or "image-only" is acceptable — both name the failure
     // shape concretely (not "I cannot read this PDF").
     expect(lc.includes("scanned") || lc.includes("image-only")).toBe(true);
     expectNoCascade(prompt);
-    expect(prompt).not.toContain(PDF_GATED_DIRECTIVE_LEAD);
   });
 
-  it("corrupted / parse_error: tells the user the PDF is corrupted or unreadable", () => {
+  it("corrupted / parse_error (soft): routes to gated lead so SDK Read can attempt the Files API path", () => {
     for (const cls of ["corrupted", "parse_error"] as const) {
       const prompt = buildSoleurGoSystemPrompt({
         artifactPath: "knowledge-base/broken.pdf",
         documentKind: "pdf",
         documentExtractError: cls,
       });
-      expect(prompt.toLowerCase()).toMatch(/corrupted|unreadable/);
-      expectNoCascade(prompt);
-      expect(prompt).not.toContain(PDF_GATED_DIRECTIVE_LEAD);
+      expect(prompt).toContain(PDF_GATED_DIRECTIVE_LEAD);
+      expect(prompt).not.toContain(PDF_UNREADABLE_DIRECTIVE_LEAD);
     }
   });
 
-  it("lazy_import_failed: still emits a graceful unreadable message (no cascade)", () => {
-    // Defense-in-depth: an in-process extractor outage (lazy `import()`
-    // rejection, e.g. broken native dep in the runner image) is invisible
-    // to the user — the surface is still "I can't read this PDF" rather than
-    // an internal error.
+  it("lazy_import_failed (soft): routes to gated lead (in-process outage, SDK Read pipeline is independent)", () => {
+    // An in-process extractor outage (lazy `import()` rejection — e.g.
+    // a Node-version regression breaking pdfjs-dist's native-dep import)
+    // is independent of the SDK Read tool's PDF pipeline. Route to gated
+    // so the model attempts Read with the absolute workspace path before
+    // refusing.
     const prompt = buildSoleurGoSystemPrompt({
       artifactPath: "knowledge-base/anything.pdf",
       documentKind: "pdf",
       documentExtractError: "lazy_import_failed",
     });
-    expectNoCascade(prompt);
-    expect(prompt).not.toContain(PDF_GATED_DIRECTIVE_LEAD);
-    // Suggest a recoverable next step (paste/share/smaller) — the runner
-    // doesn't know which class fired exactly, so the directive is generic.
-    expect(prompt.toLowerCase()).toMatch(/can'?t read|unable to read|cannot read/);
+    expect(prompt).toContain(PDF_GATED_DIRECTIVE_LEAD);
+    expect(prompt).not.toContain(PDF_UNREADABLE_DIRECTIVE_LEAD);
   });
 
-  it("does NOT install software: directive must not offer to install poppler-utils or similar", () => {
+  it("read_failed (soft): routes to gated lead (transient I/O — Read may succeed on retry via Files API)", () => {
+    // `read_failed` fires when `readFile` raised in the resolver (NFC/NFD
+    // filename mismatch, URL-encoded path that wasn't decoded, file moved
+    // mid-conversation). The path may resolve correctly under the SDK's
+    // sandbox-aware Read; soft route lets the model try.
+    const prompt = buildSoleurGoSystemPrompt({
+      artifactPath: "knowledge-base/transient.pdf",
+      documentKind: "pdf",
+      documentExtractError: "read_failed",
+    });
+    expect(prompt).toContain(PDF_GATED_DIRECTIVE_LEAD);
+    expect(prompt).not.toContain(PDF_UNREADABLE_DIRECTIVE_LEAD);
+  });
+
+  it("does NOT install software: cascade defense holds on the soft (gated) route", () => {
     // The pre-#3338 regression is the model emitting "please install
     // poppler-utils" / "run apt-get install" replies in TEXT. The SDK-level
     // disallowedTools blocks Bash modals, but the prompt-text gaslights the
-    // user about installing software the runner can't run anyway. Pin the
-    // absence of install verbs.
+    // user about installing software the runner can't run anyway. The
+    // gated directive's named-binary exclusion list is what bounds the
+    // cascade on the soft route — pin its absence.
     const prompt = buildSoleurGoSystemPrompt({
       artifactPath: "knowledge-base/x.pdf",
       documentKind: "pdf",
@@ -130,10 +169,10 @@ describe("buildPdfUnreadableDirective via buildSoleurGoSystemPrompt", () => {
     expect(lc).not.toMatch(/\b(install|run)\s+apt-get\b/);
   });
 
-  it("documentExtractError WITHOUT documentKind=pdf does NOT activate the unreadable branch", () => {
-    // Belt-and-suspenders: the unreadable branch is gated on documentKind.
-    // A stale `documentExtractError` on a text artifact must NOT alter the
-    // text branch's behavior.
+  it("documentExtractError WITHOUT documentKind=pdf does NOT activate either PDF branch", () => {
+    // Belt-and-suspenders: the partition is gated on documentKind. A stale
+    // `documentExtractError` on a text artifact must NOT alter the text
+    // branch's behavior.
     const prompt = buildSoleurGoSystemPrompt({
       artifactPath: "knowledge-base/notes.md",
       documentKind: "text",
@@ -141,7 +180,8 @@ describe("buildPdfUnreadableDirective via buildSoleurGoSystemPrompt", () => {
       documentExtractError: "oversized_buffer",
     });
     expect(prompt).toContain("Hello");
-    expect(prompt.toLowerCase()).not.toContain("too large");
+    expect(prompt).not.toContain(PDF_GATED_DIRECTIVE_LEAD);
+    expect(prompt).not.toContain(PDF_UNREADABLE_DIRECTIVE_LEAD);
   });
 
   it("documentExtractError unset on documentKind=pdf preserves the inline-or-gated branches (regression-only addition)", () => {
@@ -157,12 +197,12 @@ describe("buildPdfUnreadableDirective via buildSoleurGoSystemPrompt", () => {
     expect(prompt).toContain("Chapter 1: Inlined.");
   });
 
-  it("precedence: documentExtractError wins over a partial documentContent (defense-in-depth)", () => {
+  it("precedence (soft): documentExtractError wins over a partial documentContent and routes to gated lead", () => {
     // Pin the inline-branch precedence: even when both fields land at the
     // prompt builder (a future refactor regression), the extractor's typed
-    // failure class must still route to the unreadable directive. The
-    // gated Read path is the apt-get-cascade anchor; we cannot reach it on
-    // a known failure class.
+    // failure class must still route through the partition — soft classes
+    // skip the inline body and emit the gated directive (so the model can
+    // attempt SDK Read with the absolute path), not the inline <document>.
     const prompt = buildSoleurGoSystemPrompt({
       artifactPath: "knowledge-base/partial.pdf",
       documentKind: "pdf",
@@ -170,8 +210,28 @@ describe("buildPdfUnreadableDirective via buildSoleurGoSystemPrompt", () => {
       documentExtractError: "oversized_buffer",
     });
     expect(prompt).not.toContain("<document>");
+    expect(prompt).not.toContain("stale partial body");
+    expect(prompt).toContain(PDF_GATED_DIRECTIVE_LEAD);
+    expect(prompt).not.toContain(PDF_UNREADABLE_DIRECTIVE_LEAD);
+  });
+
+  it("precedence (hard): documentExtractError wins over a partial documentContent and routes to unreadable lead", () => {
+    // Hard-class twin of the precedence test: when an `encrypted` PDF's
+    // extractor surfaced its typed failure but a partial body somehow
+    // leaked into the prompt builder (defensive scenario), the unreadable
+    // directive still fires — the upfront refusal is correct because SDK
+    // Read cannot recover a password-protected PDF either.
+    const prompt = buildSoleurGoSystemPrompt({
+      artifactPath: "knowledge-base/locked-partial.pdf",
+      documentKind: "pdf",
+      documentContent: "stale partial body that should not be inlined",
+      documentExtractError: "encrypted",
+    });
+    expect(prompt).not.toContain("<document>");
+    expect(prompt).not.toContain("stale partial body");
+    expect(prompt).toContain(PDF_UNREADABLE_DIRECTIVE_LEAD);
     expect(prompt).not.toContain(PDF_GATED_DIRECTIVE_LEAD);
-    expect(prompt).toContain("too large");
+    expect(prompt.toLowerCase()).toContain("password-protected");
     expectNoCascade(prompt);
   });
 

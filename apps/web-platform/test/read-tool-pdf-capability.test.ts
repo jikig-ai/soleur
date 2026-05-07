@@ -5,6 +5,9 @@ import {
   buildSoleurGoSystemPrompt,
   buildPdfGatedDirective,
   PDF_GATED_DIRECTIVE_LEAD,
+  PDF_UNREADABLE_DIRECTIVE_LEAD,
+  PDF_SOFT_FAILURE_LITERALS,
+  PDF_HARD_FAILURE_LITERALS,
 } from "@/server/soleur-go-runner";
 
 // RED test for plan 2026-05-05-fix-cc-pdf-read-capability-prompt-plan.md (#3253).
@@ -294,4 +297,43 @@ describe("READ_TOOL_PDF_CAPABILITY_DIRECTIVE (load-bearing baseline directive �
     // appear concatenated.
     expect(prompt).toContain("HelloWorld");
   });
+});
+
+// 2026-05-07 follow-up to #3384: PdfExtractErrorClass routing partition.
+// Soft literals route to `buildPdfGatedDirective` (SDK Read tool's
+// Anthropic Files API path may still succeed); hard literals route to
+// `buildPdfUnreadableDirective` (Read genuinely cannot help).
+//
+// This describe block is the test-time mirror of the compile-time
+// `_AssertPartitionTotal` rail in `soleur-go-runner.ts`. The literal
+// tuples are imported from the runtime (NOT hand-duplicated) — adding a
+// new union member to `PdfExtractErrorClass` and forgetting to land it
+// in one of the runtime literal arrays now fails BOTH the compile-time
+// rail AND this test loop (because the loop iterates the runtime tuple
+// directly; a missing class never gets a routing assertion that would
+// otherwise pass vacuously).
+describe("PdfExtractErrorClass routing partition (soft → gated, hard → unreadable)", () => {
+  for (const cls of PDF_SOFT_FAILURE_LITERALS) {
+    it(`${cls}: routes to PDF_GATED_DIRECTIVE_LEAD (SDK Read may still help via Anthropic Files API)`, () => {
+      const prompt = buildSoleurGoSystemPrompt({
+        artifactPath: "knowledge-base/probe.pdf",
+        documentKind: "pdf",
+        documentExtractError: cls,
+      });
+      expect(prompt).toContain(PDF_GATED_DIRECTIVE_LEAD);
+      expect(prompt).not.toContain(PDF_UNREADABLE_DIRECTIVE_LEAD);
+    });
+  }
+
+  for (const cls of PDF_HARD_FAILURE_LITERALS) {
+    it(`${cls}: routes to PDF_UNREADABLE_DIRECTIVE_LEAD (SDK Read genuinely cannot help)`, () => {
+      const prompt = buildSoleurGoSystemPrompt({
+        artifactPath: "knowledge-base/probe.pdf",
+        documentKind: "pdf",
+        documentExtractError: cls,
+      });
+      expect(prompt).toContain(PDF_UNREADABLE_DIRECTIVE_LEAD);
+      expect(prompt).not.toContain(PDF_GATED_DIRECTIVE_LEAD);
+    });
+  }
 });

@@ -64,6 +64,16 @@ pre-commit:
         - "AGENTS.md"
         - "scripts/lint-agents-enforcement-tags.py"
       run: python3 scripts/lint-agents-enforcement-tags.py AGENTS.md
+    scheduled-show-full-output-lint:
+      priority: 5
+      # Forbid show_full_output: true in recurring scheduled workflows. Only
+      # `--once` workflows (name starts with "Scheduled (once):") may set it
+      # because their prompt + tool surface are bound at create time. See
+      # scripts/lint-scheduled-show-full-output.sh and #3404 + #3411 review.
+      glob:
+        - ".github/workflows/scheduled-*.yml"
+        - "scripts/lint-scheduled-show-full-output.sh"
+      run: bash scripts/lint-scheduled-show-full-output.sh {staged_files}
     web-platform-typecheck:
       priority: 5
       glob:

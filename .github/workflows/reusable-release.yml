@@ -449,6 +449,7 @@ jobs:
             SENTRY_ORG=${{ secrets.SENTRY_ORG }}
             SENTRY_PROJECT=${{ secrets.SENTRY_PROJECT }}
             BUILD_VERSION=${{ steps.version.outputs.next }}
+            BUILD_SHA=${{ github.sha }}
             NEXT_PUBLIC_AGENT_COUNT=${{ steps.plugin_stats.outputs.agent_count }}
 
       - name: Set docker_pushed output
