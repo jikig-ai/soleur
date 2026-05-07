@@ -34,7 +34,7 @@ fi
 
 Read `CLAUDE.md` if it exists - apply project conventions during brainstorming.
 
-**Branch safety check (defense-in-depth):** Run `git branch --show-current`. If the result is `main` or `master`, and `knowledge-base/` exists, create the worktree immediately (pulling Phase 3 forward) so that dialogue and file writes happen on a feature branch. Derive the feature name from the feature description (kebab-case). Run `./plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh feature <name>`, then `cd .worktrees/feat-<name>`. Set `WORKTREE_CREATED_EARLY=true` so Phase 3 skips worktree creation. If `knowledge-base/` does not exist, abort with: "Error: brainstorm cannot run on main/master without knowledge-base/. Checkout a feature branch first." This check fires in all modes as defense-in-depth alongside PreToolUse hooks -- it fires even if hooks are unavailable (e.g., in CI).
+**Branch safety check (defense-in-depth):** Run `git branch --show-current`. If the result is `main` or `master`, and `knowledge-base/` exists, create the worktree immediately (pulling Phase 3 forward) so that dialogue and file writes happen on a feature branch. Derive the feature name from the feature description (kebab-case). Run `./plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh feature <name>`, then `cd .worktrees/feat-<name>`, then **immediately** run `bash ../../plugins/soleur/skills/git-worktree/scripts/worktree-manager.sh draft-pr` from inside the worktree to push the branch and open a draft PR before any further work. Set `WORKTREE_CREATED_EARLY=true` so Phase 3 skips worktree creation AND skips the duplicate `draft-pr` step. If `knowledge-base/` does not exist, abort with: "Error: brainstorm cannot run on main/master without knowledge-base/. Checkout a feature branch first." This check fires in all modes as defense-in-depth alongside PreToolUse hooks -- it fires even if hooks are unavailable (e.g., in CI). **Why push immediately:** an unpushed feature branch can be wiped by a concurrent session's `cleanup-merged` sweep — the Phase 3 race-window warning applies the same way at Phase 0, just with a longer exposure (Phase 0.1, 0.25, 0.5, 1.0, 1.1, 1.2, and 2 all happen before Phase 3 today). See `knowledge-base/project/learnings/2026-04-21-concurrent-cleanup-merged-wipes-active-worktree.md`.
 
 **Plugin loader constraint:** Before proposing namespace changes (bare commands, command-to-skill migration), verify plugin loader constraints -- bare namespace commands are not supported, and commands/skills have different frontmatter and argument handling.
 
@@ -186,6 +186,8 @@ Run these agents **in parallel** to gather context before dialogue:
 
 **Verifying referenced PR/issue state.** When the feature description references an adjacent PR or issue (e.g., "PR #N adds X" / "this is the durable fix for #N"), verify the referenced state with `gh pr view <N> --json state,mergedAt` + a grep for the specific symbol the PR is supposed to have introduced (e.g., `git grep -l "<symbol>" main`) BEFORE accepting any sequencing claim from the issue body or weaving it into domain-leader prompts. Issue bodies are written at one point in time and aren't updated when adjacent PRs land or stall. A "PR #N is merged" claim that is false will produce internally-coherent leader recommendations premised on a wrong factual floor (e.g., a CPO "park this" recommendation premised on a bridge fix that hasn't actually shipped). See `knowledge-base/project/learnings/2026-05-07-brainstorm-verify-referenced-pr-state-and-leader-infra-claims.md`.
 
+**Treating `claude[bot]` / `bot-fix/attempted` comments as read-only context, not recommendations.** When the issue carries a `bot-fix/attempted` label or `claude[bot]` comment trail, the bot's chosen fix shape optimized for the `fix-issue` skill's single-file constraint — not for brand-survival or user-impact threshold. Read what the bot tried for context, then re-derive the fix shape from leader consensus (Phase 0.5). The bot's "needs multi-file" bail-out is a handoff signal, never an endorsement of the partial shape it attempted. See `knowledge-base/project/learnings/2026-05-07-bot-fix-single-file-constraint-not-a-signal-for-brainstorm-fix-shape.md`.
+
 If either agent fails or returns empty, proceed with whatever results are available. Weave findings naturally into your first question rather than presenting a formal summary.
 
 #### 1.2 Collaborative Dialogue
@@ -222,7 +224,7 @@ Use **AskUserQuestion tool** to ask which approach the user prefers.
 
 **IMPORTANT:** Create the worktree BEFORE writing any files so all artifacts go on the feature branch.
 
-**If `WORKTREE_CREATED_EARLY=true`** (worktree was created in Phase 0 branch safety check), skip steps 1-2 below and proceed to step 3 (set worktree path).
+**If `WORKTREE_CREATED_EARLY=true`** (worktree was created AND pushed via `draft-pr` in Phase 0 branch safety check), skip steps 1-2 AND step 4 below; proceed to step 3 (set worktree path) and continue from Phase 3.5.
 
 **Check for knowledge-base directory:**
 

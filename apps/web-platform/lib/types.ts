@@ -34,6 +34,16 @@ export const SUBAGENT_COMPLETE_STATUSES = ["success", "error", "timeout"] as con
 export type SubagentCompleteStatus = typeof SUBAGENT_COMPLETE_STATUSES[number];
 
 /**
+ * `context_reset.reason` allowed values (#3269). Tuple-as-source — the
+ * Zod schema, the helper return shape (`agent-prefill-guard.ts`), the
+ * `ChatContextResetMessage` reducer variant, and the `CONTEXT_RESET_COPY`
+ * render-side const all derive from this union to prevent silent drift
+ * when the family widens. ADR-025 documents the lifecycle-notice family.
+ */
+export const CONTEXT_RESET_REASONS = ["prefill-guard", "tool_use_orphan"] as const;
+export type ContextResetReason = typeof CONTEXT_RESET_REASONS[number];
+
+/**
  * `interactive_prompt.kind` allowed values. Tuple is shared with
  * `server/pending-prompt-registry.ts:InteractivePromptKind` via a compile-
  * time `_AssertKindsMatch` check below.
@@ -194,6 +204,13 @@ export type WSMessage =
   | { type: "resume_session"; conversationId: string }
   | { type: "close_conversation" }
   | { type: "review_gate_response"; gateId: string; selection: string }
+  // Client → server: user-initiated Stop. The server resolves `userId`
+  // from the authenticated socket session — `userId` is intentionally
+  // NOT part of the wire shape (TR4 cross-user invariant; see
+  // `feat-abort-conversation-web` plan §"User-Brand Impact"). The
+  // strictObject zod schema in `lib/ws-zod-schemas.ts` rejects extra
+  // fields so a forged `userId` cannot land here from a network peer.
+  | { type: "abort_turn"; conversationId: string }
   | {
       type: "stream";
       content: string;
@@ -224,7 +241,31 @@ export type WSMessage =
   | { type: "review_gate"; gateId: string; question: string; header?: string; options: string[]; descriptions?: Record<string, string | undefined>; stepProgress?: { current: number; total: number } }
   | { type: "session_started"; conversationId: string; capabilities?: { promptKinds: readonly string[] } }
   | { type: "session_resumed"; conversationId: string; resumedFromTimestamp: string; messageCount: number }
-  | { type: "session_ended"; reason: string }
+  | {
+      type: "session_ended";
+      reason: string;
+      /** Disambiguator for multi-tab clients: when a user has two open
+       *  tabs on different conversations, a `session_ended` frame
+       *  without `conversationId` would race the wrong tab's reducer
+       *  into a `stopping`/`idle` transition. Optional so the existing
+       *  emitters that don't yet pass it remain protocol-compatible.
+       *  feat-abort-conversation-web PR1 emits it for `user_aborted`
+       *  reasons. */
+      conversationId?: string;
+    }
+  // #3269 — context-reset lifecycle notice. Emitted exactly once per
+  // prefill-guard fire (assistant-terminated history → SDK 400 prevention
+  // path drops `resume:` and the model loses prior-turn context). The
+  // `reason` discriminator drives copywriter-approved render variants in
+  // chat-surface.tsx; `prefill-guard` is the generic branch and
+  // `tool_use_orphan` is the narrower branch where the trailing assistant
+  // message contained a `tool_use` content block. ADR-025 establishes the
+  // WS lifecycle-notice family invariants for forward-compat.
+  | {
+      type: "context_reset";
+      reason: ContextResetReason;
+      conversationId: string;
+    }
   | { type: "usage_update"; conversationId: string; totalCostUsd: number; inputTokens: number; outputTokens: number }
   | { type: "fanout_truncated"; dispatched: number; dropped: number }
   | { type: "upgrade_pending" }
@@ -363,4 +404,24 @@ export interface Message {
   leader_id: DomainLeaderId | null;
   attachments?: MessageAttachment[];
   created_at: string;
+  /** Added in migration 040. `'aborted'` rows carry partial assistant
+   *  text and a `usage` snapshot from a user-initiated Stop or a
+   *  tab-close abort. PR2's chat reload renders the abort marker via
+   *  this discriminator. Optional in the type so existing
+   *  fixtures/snapshots don't churn; runtime persistence always sets
+   *  it (DB default is `'complete'`). */
+  status?: "complete" | "aborted";
+  /** Aborted-turn snapshot: token cost + completed-actions chip-list.
+   *  Set only when `status === 'aborted'`. Shape documented in
+   *  migration 040 and `UsageSnapshot` in agent-runner.ts. */
+  usage?: {
+    input_tokens: number;
+    output_tokens: number;
+    cost_usd?: number | null;
+    completed_actions: Array<{
+      tool_name: string;
+      input_summary: string;
+      result_summary: string;
+    }>;
+  } | null;
 }

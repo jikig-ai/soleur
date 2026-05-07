@@ -90,6 +90,15 @@ export interface AgentQueryOptionsArgs {
   maxBudgetUsd?: number;
   /** Override the default SubagentStart hook payload (cc path uses Unicode-hardened sanitize + ccPath: true). */
   subagentStartPayloadOverride?: SubagentStartPayloadOverride;
+  /**
+   * Cancellation surface for the SDK iterator and any in-flight HTTP
+   * fetch / hook callbacks (`abortController?: AbortController` per
+   * `node_modules/@anthropic-ai/claude-agent-sdk/sdk.d.ts:816`). Wired
+   * by `startAgentSession` in `agent-runner.ts` so user-initiated Stop
+   * propagates beyond the for-await loop boundary
+   * (feat-abort-conversation-web PR1, plan §1.6).
+   */
+  abortController?: AbortController;
 }
 
 /**
@@ -170,6 +179,7 @@ export function buildAgentQueryOptions(
   if (args.allowedTools !== undefined) opts.allowedTools = args.allowedTools;
   if (args.maxTurns !== undefined) opts.maxTurns = args.maxTurns;
   if (args.maxBudgetUsd !== undefined) opts.maxBudgetUsd = args.maxBudgetUsd;
+  if (args.abortController !== undefined) opts.abortController = args.abortController;
 
   return opts;
 }

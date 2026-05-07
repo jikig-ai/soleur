@@ -31,8 +31,10 @@ import { describe, it, expect } from "vitest";
 
 import {
   buildSoleurGoSystemPrompt,
+  buildPdfTooLongDirective,
   PDF_GATED_DIRECTIVE_LEAD,
   PDF_UNREADABLE_DIRECTIVE_LEAD,
+  PDF_TOO_LONG_DIRECTIVE_LEAD,
 } from "@/server/soleur-go-runner";
 
 // Binary tokens that, if PRESENT IN AN ENABLING CONTEXT, indicate the
@@ -247,5 +249,99 @@ describe("PDF extract-error routing partition (soft → gated, hard → unreadab
     });
     expect(prompt.toLowerCase()).toContain("paste");
     expect(prompt.toLowerCase()).toMatch(/paperclip|re-upload/);
+  });
+});
+
+// 2026-05-07 follow-up to #3429 — buildPdfTooLongDirective bridge fix.
+// New HARD class `too_many_pages` produces a third directive lead distinct
+// from `PDF_UNREADABLE_DIRECTIVE_LEAD`: a specific, actionable refusal
+// naming the page count and offering a chapter-share or TOC-paste recovery.
+describe("buildPdfTooLongDirective (#3429)", () => {
+  const NO_ASK =
+    "Do not ask which document the user is referring to — it is the document described above.";
+
+  it("produces FR4 exact copy with the page count interpolated", () => {
+    const out = buildPdfTooLongDirective(
+      "knowledge-base/big-book.pdf",
+      403,
+      NO_ASK,
+    );
+    expect(out).toContain("knowledge-base/big-book.pdf");
+    expect(out).toContain("I see 403 pages");
+    expect(out).toContain("This PDF is too long for me to read in one go");
+    expect(out).toContain("Share a chapter");
+    expect(out).toContain("paste the table of contents");
+    expect(out).toContain(NO_ASK);
+  });
+
+  it("contains PDF_TOO_LONG_DIRECTIVE_LEAD as a load-bearing substring", () => {
+    const out = buildPdfTooLongDirective(
+      "knowledge-base/big-book.pdf",
+      200,
+      NO_ASK,
+    );
+    expect(out).toContain(PDF_TOO_LONG_DIRECTIVE_LEAD);
+  });
+
+  it("clamps a negative or NaN numPages to 0", () => {
+    expect(() =>
+      buildPdfTooLongDirective("knowledge-base/x.pdf", -5, NO_ASK),
+    ).not.toThrow();
+    const negOut = buildPdfTooLongDirective(
+      "knowledge-base/x.pdf",
+      -5,
+      NO_ASK,
+    );
+    expect(negOut).toContain("I see 0 pages");
+    const nanOut = buildPdfTooLongDirective(
+      "knowledge-base/x.pdf",
+      Number.NaN,
+      NO_ASK,
+    );
+    expect(nanOut).toContain("I see 0 pages");
+  });
+
+  it("does NOT trigger the apt-get / shell-installation cascade", () => {
+    const out = buildPdfTooLongDirective(
+      "knowledge-base/giant.pdf",
+      500,
+      NO_ASK,
+    );
+    expectNoCascade(out);
+  });
+});
+
+// Routing assertion for the new HARD class — too_many_pages routes to the
+// new `PDF_TOO_LONG_DIRECTIVE_LEAD`, NOT to the gated lead and NOT to the
+// generic unreadable lead. The compile-time partition rail in
+// `soleur-go-runner.ts` (driven off the literal arrays) ensures that adding
+// `too_many_pages` to `PDF_HARD_FAILURE_LITERALS` automatically extends the
+// per-class iteration in `read-tool-pdf-capability.test.ts`; this test
+// pins the routing target separately because the lead is distinct.
+describe("too_many_pages routing (#3429 HARD class)", () => {
+  it("documentExtractError 'too_many_pages' + numPages routes to the too-long lead", () => {
+    const prompt = buildSoleurGoSystemPrompt({
+      artifactPath: "knowledge-base/manning.pdf",
+      documentKind: "pdf",
+      documentExtractError: "too_many_pages",
+      documentExtractMeta: { numPages: 403 },
+    });
+    expect(prompt).toContain(PDF_TOO_LONG_DIRECTIVE_LEAD);
+    expect(prompt).toContain("I see 403 pages");
+    expect(prompt).not.toContain(PDF_GATED_DIRECTIVE_LEAD);
+    expect(prompt).not.toContain(PDF_UNREADABLE_DIRECTIVE_LEAD);
+    expectNoCascade(prompt);
+  });
+
+  it("missing documentExtractMeta on too_many_pages defaults numPages display to 0 (no crash)", () => {
+    const prompt = buildSoleurGoSystemPrompt({
+      artifactPath: "knowledge-base/manning.pdf",
+      documentKind: "pdf",
+      documentExtractError: "too_many_pages",
+      // No documentExtractMeta — defensive partial state.
+    });
+    expect(prompt).toContain(PDF_TOO_LONG_DIRECTIVE_LEAD);
+    expect(prompt).toContain("I see 0 pages");
+    expect(prompt).not.toContain(PDF_GATED_DIRECTIVE_LEAD);
   });
 });

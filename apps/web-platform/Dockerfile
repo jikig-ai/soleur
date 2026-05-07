@@ -24,6 +24,11 @@ ARG SENTRY_ORG
 ARG SENTRY_PROJECT
 
 RUN npm run build
+# R3 (feat-dev-signin-bypass): post-build tripwire that fails the prd
+# image if dev-only sign-in symbols leak into client chunks or the RSC
+# manifest. Scope is documented inside the script — server-bundle
+# inclusion of the route handler is by-design and not flagged here.
+RUN bash scripts/assert-dev-signin-eliminated.sh
 RUN npm run build:server
 # Compile next.config.ts to .mjs so the runner stage doesn't need TypeScript
 RUN ./node_modules/.bin/esbuild next.config.ts --bundle --format=esm --platform=node --external:@sentry/nextjs --outfile=next.config.mjs
@@ -65,6 +70,17 @@ ENV BUILD_SHA=$BUILD_SHA
 # Production dependencies only
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev
+
+# Build-time assertion that lazy-imported runtime deps resolve in the runner image's
+# node_modules. Catches future regressions where a Dockerfile edit (npm prune, prod
+# re-copy, devDependencies migration) strips pdfjs-dist or sharp from the runner stage,
+# which would otherwise be swallowed by try/catch in pdf-text-extract.ts /
+# kb-preview-metadata.ts and surface only as a WARN Sentry breadcrumb in production.
+# pdfjs-dist is a direct dep (apps/web-platform/package.json); sharp is transitive via
+# Next.js — if Next ever drops it, this assertion fires loudly instead of breaking
+# kb-share image previews silently.
+# See #3422 / Ref #3410.
+RUN node -e "require.resolve('pdfjs-dist/legacy/build/pdf.mjs'); require.resolve('sharp')"
 
 # Next.js build output + public assets (icons, service worker)
 COPY --from=builder /app/public ./public

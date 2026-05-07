@@ -7,6 +7,7 @@ import type {
   WorkflowName,
   SubagentCompleteStatus,
   WorkflowEndStatus,
+  ContextResetReason,
 } from "./types";
 import type { DomainLeaderId } from "@/server/domain-leaders";
 
@@ -48,6 +49,25 @@ interface ChatMessageBase {
 
 interface ChatTextMessage extends ChatMessageBase {
   type: "text";
+  /** #3448 PR2: persistence-tier discriminator surfaced by the history
+   *  fetch (`status` column added in migration 040). `"aborted"` rows
+   *  trigger the abort-marker render path in `message-bubble.tsx`.
+   *  Optional so live-stream bubbles (which have no DB row yet) and
+   *  legacy fixtures both type-check. */
+  status?: "complete" | "aborted";
+  /** #3448 PR2: aborted-turn snapshot. Present only for rows whose
+   *  `status === "aborted"`. Shape mirrors the `usage` jsonb column
+   *  documented in migration 040. */
+  usage?: {
+    input_tokens: number;
+    output_tokens: number;
+    cost_usd?: number | null;
+    completed_actions: Array<{
+      tool_name: string;
+      input_summary: string;
+      result_summary: string;
+    }>;
+  } | null;
 }
 
 interface ChatGateMessage extends ChatMessageBase {
@@ -116,13 +136,22 @@ export interface ChatToolUseChipMessage extends Omit<ChatMessageBase, "leaderId"
   leaderId: "cc_router" | "system";
 }
 
+/** #3269: inline context-reset notice. Single-shot lifecycle card; renders
+ *  via `chat-surface.tsx` using copy from `CONTEXT_RESET_COPY` keyed by
+ *  `reason`. No state mutation beyond appending the message itself. */
+export interface ChatContextResetMessage extends ChatMessageBase {
+  type: "context_reset";
+  reason: ContextResetReason;
+}
+
 export type ChatMessage =
   | ChatTextMessage
   | ChatGateMessage
   | ChatSubagentGroupMessage
   | ChatInteractivePromptMessage
   | ChatWorkflowEndedMessage
-  | ChatToolUseChipMessage;
+  | ChatToolUseChipMessage
+  | ChatContextResetMessage;
 
 /** Stage 4 (#2886): ambient lifecycle-bar slice. The bar is sticky context;
  *  `workflow_ended` sets state to "ended" AND pushes an in-list summary card.
@@ -217,6 +246,7 @@ type StreamEvent = Extract<
   | { type: "workflow_started" }
   | { type: "workflow_ended" }
   | { type: "interactive_prompt" }
+  | { type: "context_reset" }
 >;
 
 const IDLE_WORKFLOW: WorkflowLifecycleState = { state: "idle" };
@@ -736,6 +766,25 @@ export function applyStreamEvent(
       const card = buildInteractivePromptCard(event);
       return {
         messages: [...prev, card],
+        activeStreams,
+        workflow: priorWorkflow,
+        spawnIndex: priorSpawnIndex,
+      };
+    }
+
+    case "context_reset": {
+      // #3269: lifecycle notice — append a single-shot context-reset card
+      // to the message stream. Mirrors `workflow_ended` shape (no other
+      // state mutation; render reads copy from `CONTEXT_RESET_COPY`).
+      const notice: ChatContextResetMessage = {
+        id: `context-reset-${event.conversationId}-${crypto.randomUUID()}`,
+        role: "assistant",
+        content: "",
+        type: "context_reset",
+        reason: event.reason,
+      };
+      return {
+        messages: [...prev, notice],
         activeStreams,
         workflow: priorWorkflow,
         spawnIndex: priorSpawnIndex,

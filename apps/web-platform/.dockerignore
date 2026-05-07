@@ -4,6 +4,13 @@ node_modules
 # Terraform configs, not needed at runtime
 infra/
 scripts/
+# Allow the post-build dev-signin grep gate (R3 / feat-dev-signin-bypass).
+# The Dockerfile builder stage runs `bash scripts/assert-dev-signin-eliminated.sh`
+# immediately after `npm run build`; without this re-include the script is
+# excluded from the build context and the RUN step exits 127 (file not
+# found), failing the prd image build. The runner stage is a separate
+# `FROM` so this re-include does NOT bloat the runtime image.
+!scripts/assert-dev-signin-eliminated.sh
 
 .git
 .gitignore

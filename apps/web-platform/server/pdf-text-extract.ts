@@ -68,7 +68,66 @@ export type PdfExtractErrorClass =
   // `buildPdfUnreadableDirective` instead of falling back to the gated
   // Read directive (which lands the agent in the sandbox-deny path that
   // produced the "outside my workspace boundary" reply in #3376).
-  | "read_failed";
+  | "read_failed"
+  // 2026-05-07 follow-up to #3429: bridge fix for the large-PDF
+  // soft-route timeout. When `oversized_buffer` fires (>24MB) AND the
+  // resolver's metadata-only pdfjs read reports `numPages >
+  // LARGE_PDF_PAGE_THRESHOLD`, surface this HARD class so the runner
+  // routes to `buildPdfTooLongDirective` instead of `buildPdfGatedDirective`.
+  // Avoids the ~21-call SDK Read fanout that exceeds the 90s idle-reaper
+  // window on 400+ page PDFs.
+  | "too_many_pages";
+
+// Threshold derivation (#3429): floor(90s reaper / ~10s per Read call) *
+// 20 pages-per-call - safety margin = 160 pages → 150 for headroom.
+// Single exported constant — trivially adjustable downward if real-world
+// per-Read latency proves higher (post-merge calibration via Sentry
+// breadcrumbs). Reversible via one-line edit; no architectural commitment.
+export const LARGE_PDF_PAGE_THRESHOLD = 150;
+
+// Upper bound at which we'll attempt a metadata-only pdfjs read (#3429).
+// DISTINCT from MAX_AGENT_READABLE_PDF_SIZE (24MB extractor cap) —
+// metadata-only reads have a different RSS profile (xref + numPages, no
+// per-page text iteration). 40 MiB bounds RSS for a malformed PDF
+// (pdfjs can spike ~3-5x the buffer size during xref-build per the
+// 2026-04-18 learning) while leaving headroom over the 24MB extractor
+// cap so a Manning-shaped PDF (15-30MB) is in scope. Above this ceiling
+// we fail closed — the resolver falls through to the existing soft-route.
+//
+// Sized down from the originally-proposed 60 MiB per perf-oracle review
+// of PR #3430: a 60 MiB malformed PDF could allocate >300 MB RSS during
+// xref-build, partially defeating the bound; 40 MiB caps the worst-case
+// RSS spike at ~200 MB while preserving the Manning use case.
+//
+// Bit-shift form (`40 << 20`) by design — the `kb-pdf-cap-alignment`
+// drift guard forbids `<n> * 1024 * 1024` shadow constants in this file
+// to prevent re-introducing a competing extractor cap; the metadata
+// ceiling is a SEPARATE concern (different lifecycle, different RSS
+// profile) so we use the equivalent `40 << 20 = 41_943_040` shape.
+export const METADATA_READ_BYTE_CEILING_BYTES = 40 << 20;
+
+/**
+ * Sentry feature-tag dictionary for both PDF resolvers. The Concierge
+ * resolver passes the implicit default (or the explicit `CONCIERGE` tag);
+ * the leader resolver passes the `LEADER` tag. Hoisted to a single shared
+ * record so a future rename is one edit, not five.
+ */
+export const PDF_FEATURE_TAGS = {
+  CONCIERGE: "kb-concierge-context",
+  LEADER: "leader-context",
+} as const;
+
+// `Promise.race` timeout on the pdfjs metadata-only `getDocument` call
+// (#3429). 3s caps the wall-clock cost in the resolver's hot path. On
+// timeout we call `loadingTask.destroy()` (per pdfjs-dist@5.4.296
+// `types/src/display/api.d.ts:872`: "Abort all network requests and
+// destroy the worker") and return the timeout shape; the resolver
+// fail-closes to existing soft-route behavior.
+export const METADATA_READ_TIMEOUT_MS = 3000;
+
+export type PdfMetadataReadResult =
+  | { ok: true; numPages: number }
+  | { ok: false; reason: "oversized" | "timeout" | "parse_error" };
 
 export interface PdfTextExtractResult {
   text: string;
@@ -93,7 +152,14 @@ export interface PdfTextExtractError {
 export async function extractPdfText(
   buffer: Buffer | Uint8Array,
   capChars: number,
+  options?: { featureTag?: string },
 ): Promise<PdfTextExtractResult | PdfTextExtractError> {
+  // featureTag disambiguates Sentry mirrors between callers (Concierge vs
+  // leader). Default preserves the legacy behavior so existing call sites
+  // remain wire-compatible. The leader-document resolver passes
+  // `featureTag: "leader-context"` so operators can filter leader-side
+  // lazy-import failures from Concierge fires.
+  const featureTag = options?.featureTag ?? PDF_FEATURE_TAGS.CONCIERGE;
   if (buffer.length > MAX_AGENT_READABLE_PDF_SIZE) {
     return { error: "oversized_buffer" };
   }
@@ -105,10 +171,14 @@ export async function extractPdfText(
   // pdfjs-dist@5 calls it during module init.
   let pdfjs: typeof import("pdfjs-dist/legacy/build/pdf.mjs");
   try {
+    // If you add or rename a bare-specifier `await import()` here, mirror it
+    // in the build-time `require.resolve` assertion in apps/web-platform/Dockerfile
+    // (see #3422) — otherwise a missing dep silently routes through the catch
+    // below and surfaces only as a WARN Sentry breadcrumb.
     pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
   } catch (importErr) {
     reportSilentFallback(importErr, {
-      feature: "kb-concierge-context",
+      feature: featureTag,
       op: "extractPdfText.import",
       extra: {
         nodeVersion: process.versions.node,
@@ -202,5 +272,80 @@ export async function extractPdfText(
     if (doc) {
       await doc.destroy().catch(() => {});
     }
+  }
+}
+
+/**
+ * Metadata-only pdfjs read for the page-count gate (#3429).
+ *
+ * The resolver invokes this when `extractPdfText` raised `oversized_buffer`
+ * (>24MB) to obtain `numPages` cheaply WITHOUT paying the per-page text
+ * iteration cost. Wrapped in three independent safety bounds:
+ *
+ *   1. Byte ceiling: refuse buffers >60MB BEFORE invoking pdfjs (bounds RSS).
+ *   2. Timeout: `Promise.race` against `METADATA_READ_TIMEOUT_MS` (3s).
+ *   3. Cancel-on-timeout: `loadingTask.destroy()` aborts the in-flight
+ *      worker per pdfjs-dist@5.4.296 `types/src/display/api.d.ts:872`.
+ *
+ * The function never throws — every error path returns the typed
+ * `PdfMetadataReadResult` failure shape so the resolver can drive
+ * fail-closed routing without a try/catch at the call site.
+ */
+export async function extractPdfMetadata(
+  buffer: Buffer | Uint8Array,
+): Promise<PdfMetadataReadResult> {
+  // 1. Pre-pdfjs byte ceiling. Bounds RSS without invoking the parser.
+  if (buffer.length > METADATA_READ_BYTE_CEILING_BYTES) {
+    return { ok: false, reason: "oversized" };
+  }
+
+  // 2. Lazy import — paid once per process (shared with `extractPdfText`).
+  let pdfjs: typeof import("pdfjs-dist/legacy/build/pdf.mjs");
+  try {
+    pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
+  } catch {
+    // Lazy_import_failed is dominated by Node-engine drift and bounded
+    // by the repo's three-layer enforcement (engines + .nvmrc + CI). We
+    // surface as `parse_error` here because the gate's behavior is
+    // identical (fail-closed to existing soft-route routing) and there
+    // is no caller-actionable distinction.
+    return { ok: false, reason: "parse_error" };
+  }
+
+  // 3. Buffer → Uint8Array view (zero-copy) — shared helper from `pdfjs-input.ts`
+  //    keeps `extractPdfText` and `extractPdfMetadata` byte-equivalent on the
+  //    pdfjs-dist@5+ "Buffer is not Uint8Array" rejection.
+  const data = toPdfjsData(buffer);
+
+  // 4. Race the loadingTask.promise against a timeout. On timeout we call
+  //    `loadingTask.destroy()` (the synchronous handle owns the cancel API
+  //    — `doc` may not have resolved yet).
+  const loadingTask = pdfjs.getDocument({ data, isEvalSupported: false });
+
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<"__timeout__">((resolve) => {
+    timer = setTimeout(() => resolve("__timeout__"), METADATA_READ_TIMEOUT_MS);
+  });
+
+  try {
+    const winner = await Promise.race([loadingTask.promise, timeout]);
+    if (winner === "__timeout__") {
+      // Cancel the in-flight task — releases the worker + xref allocation.
+      // Fire-and-forget; the resolver has already decided to fail-closed.
+      void loadingTask.destroy().catch(() => {});
+      return { ok: false, reason: "timeout" };
+    }
+    // winner is the resolved doc. numPages is synchronous on the doc.
+    const doc = winner;
+    const numPages = doc.numPages;
+    void doc.destroy().catch(() => {});
+    return { ok: true, numPages };
+  } catch {
+    // getDocument rejection (corrupted, encrypted, malformed). The doc
+    // never resolved so loadingTask.destroy() is the cleanup path.
+    void loadingTask.destroy().catch(() => {});
+    return { ok: false, reason: "parse_error" };
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
   }
 }

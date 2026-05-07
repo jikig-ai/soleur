@@ -23,6 +23,7 @@ import {
   WORKFLOW_END_STATUSES,
   SUBAGENT_COMPLETE_STATUSES,
   INTERACTIVE_PROMPT_KINDS,
+  CONTEXT_RESET_REASONS,
 } from "@/lib/types";
 
 // ---------------------------------------------------------------------------
@@ -217,6 +218,14 @@ const reviewGateResponseSchema = z.strictObject({
   gateId: z.string(),
   selection: z.string(),
 });
+// `abort_turn` (feat-abort-conversation-web PR1, plan §1.2): user-initiated
+// Stop. `userId` is intentionally NOT a wire field — strictObject + the
+// minimum-length conversationId reject forged userIds and empty IDs at the
+// boundary. See plan §"User-Brand Impact" / TR4 cross-user invariant.
+const abortTurnSchema = z.strictObject({
+  type: z.literal("abort_turn"),
+  conversationId: conversationIdSchema,
+});
 const streamSchema = z.strictObject({
   type: z.literal("stream"),
   content: z.string(),
@@ -275,6 +284,9 @@ const sessionResumedSchema = z.strictObject({
 const sessionEndedSchema = z.strictObject({
   type: z.literal("session_ended"),
   reason: z.string(),
+  // Optional disambiguator for multi-tab clients (feat-abort-conversation-web
+  // PR1). Existing emitters that omit it remain wire-compatible.
+  conversationId: z.string().optional(),
 });
 const usageUpdateSchema = z.strictObject({
   type: z.literal("usage_update"),
@@ -287,6 +299,17 @@ const fanoutTruncatedSchema = z.strictObject({
   type: z.literal("fanout_truncated"),
   dispatched: z.number(),
   dropped: z.number(),
+});
+// #3269 — context-reset lifecycle notice (prefill-guard fire / tool_use orphan).
+// Mirrors the `fanoutTruncatedSchema` shape (z.strictObject with a literal
+// type discriminator) so the WS lifecycle-notice family stays homogeneous
+// per ADR-025. `reason` derives from `CONTEXT_RESET_REASONS` so the Zod
+// schema, helper return shape, reducer variant, and render-side copy map
+// all share a single source of truth.
+const contextResetSchema = z.strictObject({
+  type: z.literal("context_reset"),
+  reason: z.enum(CONTEXT_RESET_REASONS),
+  conversationId: z.string(),
 });
 const upgradePendingSchema = z.strictObject({ type: z.literal("upgrade_pending") });
 const errorSchema = z.strictObject({
@@ -418,6 +441,7 @@ const flatTypeSchema = z.discriminatedUnion("type", [
   resumeSessionSchema,
   closeConversationSchema,
   reviewGateResponseSchema,
+  abortTurnSchema,
   streamSchema,
   streamStartSchema,
   streamEndSchema,
@@ -429,6 +453,7 @@ const flatTypeSchema = z.discriminatedUnion("type", [
   sessionEndedSchema,
   usageUpdateSchema,
   fanoutTruncatedSchema,
+  contextResetSchema,
   upgradePendingSchema,
   errorSchema,
   subagentSpawnSchema,
