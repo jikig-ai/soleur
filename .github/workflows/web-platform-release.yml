@@ -234,13 +234,21 @@ jobs:
           CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
           CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
           VERSION: ${{ needs.release.outputs.version }}
-          # Named poll bounds (#2205, #2519). Total window = MAX_ATTEMPTS * INTERVAL_S.
-          # Raised from 24 (120s) to 60 (300s) after run 24583922171 hit a
-          # false-negative timeout during a healthy v0.43.0 deploy. Aligns with
-          # the downstream Verify-deploy-health step's 300s ceiling (HEALTH_POLL_*).
+          # Named poll bounds (#2205, issue #2519, #3398). Total window = MAX_ATTEMPTS * INTERVAL_S.
+          # 2026-05-07 (#3398): raised from 60 (300s) to 180 (900s) after runs
+          # 25461549363 (PR #3391, v0.66.10) and 25463360079 (PR-B/#3395, v0.67.0)
+          # both hit 60/60 attempts in `running` state while the prod-side deploy
+          # was healthy. Realistic deploy duration is now 6-11 min (canary +
+          # plugin seed + sandbox verify added since #2523). Aligns with the
+          # downstream Verify-deploy-health step's matching 900s ceiling
+          # (HEALTH_POLL_*) per cq-align-ci-poll-windows-with-adjacent-steps.
           # Kept INTERVAL_S=5 to preserve fail-fast on early non-zero exits
-          # (e.g., insufficient_disk_space, unhandled traps).
-          STATUS_POLL_MAX_ATTEMPTS: 60
+          # (e.g., insufficient_disk_space, lock_contention, unhandled traps).
+          # WARNING: do NOT `gh run rerun --failed` while the prod-side deploy
+          # may still be running -- a fresh /hooks/deploy POST will hit flock -n
+          # failure and write reason=lock_contention. Poll /hooks/deploy-status
+          # directly first; see plugins/soleur/skills/postmerge/references/deploy-status-debugging.md.
+          STATUS_POLL_MAX_ATTEMPTS: 180
           STATUS_POLL_INTERVAL_S: 5
         run: |
           # /hooks/deploy-status is GET (read-only, idempotent). adnanh/webhook's
@@ -283,7 +291,15 @@ jobs:
                 echo "Attempt $i/$STATUS_POLL_MAX_ATTEMPTS: last deploy was for $TAG (want v$VERSION)"
                 ;;
               -1)
-                echo "Attempt $i/$STATUS_POLL_MAX_ATTEMPTS: ci-deploy.sh still running (reason=$REASON)"
+                # Elapsed-since-running annotation (#3398): surface ceiling drift
+                # in the workflow log directly. start_ts is populated by ci-deploy.sh
+                # and is schema-stable per the comment block at its definition.
+                # `// 0` fallback yields a giant epoch delta (cosmetic noise) if a
+                # state file from an older ci-deploy.sh version omits the field.
+                STARTED=$(echo "$BODY" | jq -r '.start_ts // 0')
+                NOW=$(date +%s)
+                ELAPSED=$((NOW - STARTED))
+                echo "Attempt $i/$STATUS_POLL_MAX_ATTEMPTS: ci-deploy.sh still running (reason=$REASON, elapsed=${ELAPSED}s)"
                 ;;
               -2)
                 echo "Attempt $i/$STATUS_POLL_MAX_ATTEMPTS: no prior deploy recorded"
@@ -307,8 +323,11 @@ jobs:
       - name: Verify deploy health and version
         env:
           VERSION: ${{ needs.release.outputs.version }}
-          # Named poll bounds (#2205). Total window = MAX_ATTEMPTS * INTERVAL_S.
-          HEALTH_POLL_MAX_ATTEMPTS: 30
+          # Named poll bounds (#2205, #3398). Total window = MAX_ATTEMPTS * INTERVAL_S.
+          # 2026-05-07 (#3398): raised from 30 (300s) to 90 (900s) to maintain
+          # alignment with the upstream Verify-deploy-script-completion step's
+          # new 900s ceiling per cq-align-ci-poll-windows-with-adjacent-steps.
+          HEALTH_POLL_MAX_ATTEMPTS: 90
           HEALTH_POLL_INTERVAL_S: 10
         run: |
           for i in $(seq 1 "$HEALTH_POLL_MAX_ATTEMPTS"); do

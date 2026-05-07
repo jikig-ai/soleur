@@ -68,3 +68,9 @@ The `/ship` Phase 5.5 "Deploy Pipeline Fix Drift Gate" surfaces this contract au
 ## When NOT to SSH
 
 Per AGENTS.md: SSH is for infrastructure provisioning (Terraform) only, never for logs. Use `/hooks/deploy-status` + Sentry API + Better Stack as the three observability layers. SSH is read-only last-resort diagnosis for `canary_sandbox_failed` only (bwrap capability errors live in journalctl).
+
+## Rerun Safety
+
+**Do not `gh run rerun --failed` while ci-deploy.sh may still be running on prod.** A new `/hooks/deploy` POST will hit `flock -n` failure and write `reason=lock_contention` -- masking the original deploy's actual fate. The advisory flock in ci-deploy.sh is held by FD 200 for the full lifetime of the script (release is implicit on FD close at process exit; there is no manual `flock -u` path that could leak). A `lock_contention` reason on rerun therefore means the prior invocation is **still in its critical section**, not a release-path leak.
+
+If the workflow's verify-completion step times out, **first poll `/hooks/deploy-status` directly** (per the call pattern at the top of this file) and confirm `exit_code` is no longer `-1` before retrying. The verify-completion ceiling is **900s** as of PR #3398 (`STATUS_POLL_MAX_ATTEMPTS=180 × INTERVAL_S=5` in `.github/workflows/web-platform-release.yml`); the matching `Verify deploy health and version` ceiling is also 900s (`HEALTH_POLL_MAX_ATTEMPTS=90 × INTERVAL_S=10`). Wait at least that long before considering the workflow truly stuck. See [`2026-04-17-align-ci-poll-windows-with-adjacent-steps.md`](../../../../knowledge-base/project/learnings/best-practices/2026-04-17-align-ci-poll-windows-with-adjacent-steps.md) and the 2026-05-07 update for the alignment invariant.

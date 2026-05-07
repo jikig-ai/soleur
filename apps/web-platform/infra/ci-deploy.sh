@@ -40,6 +40,9 @@ PLUGIN_MOUNT_DIR="${PLUGIN_MOUNT_DIR:-/mnt/data/plugins/soleur}"
 # signal. We persist structured state to /var/lock/ci-deploy.state so that the
 # /hooks/deploy-status webhook endpoint (cat-deploy-state.sh) can surface it.
 STATE_FILE="${CI_DEPLOY_STATE:-/var/lock/ci-deploy.state}"
+# START_TS is consumed by .github/workflows/web-platform-release.yml's
+# Verify-deploy-script-completion step for elapsed-time annotation (#3398).
+# Schema-stable: do NOT rename or drop without updating that workflow.
 START_TS=$(date +%s)
 # These are populated as the script parses SSH_ORIGINAL_COMMAND; surfaced in state.
 COMPONENT=""
@@ -58,6 +61,8 @@ write_state() {
     logger -t "$LOG_TAG" "write_state: mktemp failed for STATE_FILE=$STATE_FILE"
     return 0
   }
+  # start_ts: schema-stable, consumed by web-platform-release.yml elapsed
+  # annotation (#3398). Do NOT rename without updating that workflow.
   printf '{"start_ts":%d,"end_ts":%d,"exit_code":%d,"component":"%s","image":"%s","tag":"%s","reason":"%s"}\n' \
     "$START_TS" "$(date +%s)" "$exit_code" "${COMPONENT:-}" "${IMAGE:-}" "${TAG:-}" "$reason" \
     > "$tmp" 2>/dev/null || {
@@ -206,6 +211,16 @@ logger -t "$LOG_TAG" "ACCEPTED: deploy $COMPONENT $IMAGE:$TAG"
 
 # Serialize concurrent deploys (webhook may invoke ci-deploy.sh simultaneously).
 # CI_DEPLOY_LOCK is overridable for testing; production uses /var/lock/ci-deploy.lock.
+#
+# FD-200 advisory flock: the lock is held by this bash process for the
+# lifetime of the script. Release is implicit -- the kernel closes FD 200
+# on process exit (any exit code, including SIGKILL). No manual `flock -u`
+# path exists; loser writes reason="lock_contention" and exits non-zero.
+# A "lock_contention" reason on a webhook retry therefore means the prior
+# invocation is still in its critical section, NOT a release-path leak.
+# See #3398 for the cascading-rerun pattern this serialization produces
+# when the upstream poll ceiling is shorter than the realistic deploy
+# window.
 LOCK_FILE="${CI_DEPLOY_LOCK:-/var/lock/ci-deploy.lock}"
 exec 200>"$LOCK_FILE"
 flock -n 200 || {
