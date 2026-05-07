@@ -220,17 +220,17 @@ Any if-ladder hit not covered by an exhaustive switch must be widened in the sam
 
 ### Pre-merge (PR)
 
-- [ ] AC1: Guard fires on assistant-terminated history → `contextResetNotice` populated, system-prompt receives notice, WS `context_reset` event emitted exactly once with `reason: "prefill-guard"`.
-- [ ] AC2: Guard fires on tool_use-trailing history → notice contains "do not execute without re-confirmation" directive; WS event emits with `reason: "tool_use_orphan"`.
-- [ ] AC3: Guard does NOT fire (user-final history) → no system-prompt mutation, no WS event.
-- [ ] AC4: Probe failure → no system-prompt mutation, no WS event, existing `prefill-guard-probe-failed` Sentry op fires.
-- [ ] AC5: Empty history → no system-prompt mutation, no WS event, existing `prefill-guard-empty-history` Sentry op fires.
-- [ ] AC6a: SDK retry inside one runner call does not re-emit `context_reset` (idempotent per fire).
-- [ ] AC6b: A subsequent dispatcher/runner call in the same session, where the guard does NOT fire, does NOT carry the notice forward (multi-turn non-accumulation; the notice is single-turn signal only — per spec AC6).
-- [ ] AC7: WS `context_reset` Zod-parses both `reason` variants; round-trips through `ws-known-types-guard.test.ts`.
-- [ ] AC8: Inline notice renders in `chat-surface.tsx` for both `reason` variants with the copywriter-approved strings (verbatim).
-- [ ] AC9: New + existing prefill-guard tests pass; no regression in `agent-prefill-guard.test.ts` existing scenarios.
-- [ ] AC10: `_SchemaCovers` proof in `ws-zod-schemas.ts` accepts the new variant; `tsc --noEmit` clean.
+- [x] AC1: Guard fires on assistant-terminated history → `contextResetNotice` populated, system-prompt receives notice, WS `context_reset` event emitted exactly once with `reason: "prefill-guard"`.
+- [x] AC2: Guard fires on tool_use-trailing history → notice contains "do not execute without re-confirmation" directive; WS event emits with `reason: "tool_use_orphan"`.
+- [x] AC3: Guard does NOT fire (user-final history) → no system-prompt mutation, no WS event.
+- [x] AC4: Probe failure → no system-prompt mutation, no WS event, existing `prefill-guard-probe-failed` Sentry op fires.
+- [x] AC5: Empty history → no system-prompt mutation, no WS event, existing `prefill-guard-empty-history` Sentry op fires.
+- [x] AC6a: SDK retry inside one runner call does not re-emit `context_reset` (idempotent per fire).
+- [x] AC6b: A subsequent dispatcher/runner call in the same session, where the guard does NOT fire, does NOT carry the notice forward (multi-turn non-accumulation; the notice is single-turn signal only — per spec AC6).
+- [x] AC7: WS `context_reset` Zod-parses both `reason` variants; round-trips through `ws-known-types-guard.test.ts`.
+- [x] AC8: Inline notice renders in `chat-surface.tsx` for both `reason` variants with the copywriter-approved strings (verbatim).
+- [x] AC9: New + existing prefill-guard tests pass; no regression in `agent-prefill-guard.test.ts` existing scenarios.
+- [x] AC10: `_SchemaCovers` proof in `ws-zod-schemas.ts` accepts the new variant; `tsc --noEmit` clean.
 - [ ] AC11: Manual QA screenshots captured for both `reason` variants (PR comment).
 - [ ] AC12: CPO sign-off recorded on PR; `user-impact-reviewer` review pass.
 

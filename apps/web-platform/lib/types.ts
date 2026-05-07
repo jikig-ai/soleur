@@ -225,6 +225,19 @@ export type WSMessage =
   | { type: "session_started"; conversationId: string; capabilities?: { promptKinds: readonly string[] } }
   | { type: "session_resumed"; conversationId: string; resumedFromTimestamp: string; messageCount: number }
   | { type: "session_ended"; reason: string }
+  // #3269 — context-reset lifecycle notice. Emitted exactly once per
+  // prefill-guard fire (assistant-terminated history → SDK 400 prevention
+  // path drops `resume:` and the model loses prior-turn context). The
+  // `reason` discriminator drives copywriter-approved render variants in
+  // chat-surface.tsx; `prefill-guard` is the generic branch and
+  // `tool_use_orphan` is the narrower branch where the trailing assistant
+  // message contained a `tool_use` content block. ADR-025 establishes the
+  // WS lifecycle-notice family invariants for forward-compat.
+  | {
+      type: "context_reset";
+      reason: "prefill-guard" | "tool_use_orphan";
+      conversationId: string;
+    }
   | { type: "usage_update"; conversationId: string; totalCostUsd: number; inputTokens: number; outputTokens: number }
   | { type: "fanout_truncated"; dispatched: number; dropped: number }
   | { type: "upgrade_pending" }

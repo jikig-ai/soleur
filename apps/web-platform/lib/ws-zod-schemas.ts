@@ -288,6 +288,18 @@ const fanoutTruncatedSchema = z.strictObject({
   dispatched: z.number(),
   dropped: z.number(),
 });
+// #3269 — context-reset lifecycle notice (prefill-guard fire / tool_use orphan).
+// Mirrors the `fanoutTruncatedSchema` shape (z.strictObject with a literal
+// type discriminator) so the WS lifecycle-notice family stays homogeneous
+// per ADR-025.
+const contextResetSchema = z.strictObject({
+  type: z.literal("context_reset"),
+  reason: z.union([
+    z.literal("prefill-guard"),
+    z.literal("tool_use_orphan"),
+  ]),
+  conversationId: z.string(),
+});
 const upgradePendingSchema = z.strictObject({ type: z.literal("upgrade_pending") });
 const errorSchema = z.strictObject({
   type: z.literal("error"),
@@ -429,6 +441,7 @@ const flatTypeSchema = z.discriminatedUnion("type", [
   sessionEndedSchema,
   usageUpdateSchema,
   fanoutTruncatedSchema,
+  contextResetSchema,
   upgradePendingSchema,
   errorSchema,
   subagentSpawnSchema,

@@ -613,3 +613,55 @@ describe("Stage 3 protocol — new variant round-trip via parseWSMessage (#2885)
     }
   });
 });
+
+describe("context_reset Zod round-trip (#3269)", () => {
+  test("parses { reason: 'prefill-guard' }", async () => {
+    const { parseWSMessage } = await import("../lib/ws-zod-schemas");
+    const wire = JSON.stringify({
+      type: "context_reset",
+      reason: "prefill-guard",
+      conversationId: "c-1",
+    });
+    const r = parseWSMessage(JSON.parse(wire));
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.msg.type).toBe("context_reset");
+      if (r.msg.type === "context_reset") {
+        expect(r.msg.reason).toBe("prefill-guard");
+        expect(r.msg.conversationId).toBe("c-1");
+      }
+    }
+  });
+
+  test("parses { reason: 'tool_use_orphan' }", async () => {
+    const { parseWSMessage } = await import("../lib/ws-zod-schemas");
+    const r = parseWSMessage({
+      type: "context_reset",
+      reason: "tool_use_orphan",
+      conversationId: "c-1",
+    });
+    expect(r.ok).toBe(true);
+    if (r.ok && r.msg.type === "context_reset") {
+      expect(r.msg.reason).toBe("tool_use_orphan");
+    }
+  });
+
+  test("rejects unknown reason values", async () => {
+    const { parseWSMessage } = await import("../lib/ws-zod-schemas");
+    const r = parseWSMessage({
+      type: "context_reset",
+      reason: "made_up_reason",
+      conversationId: "c-1",
+    });
+    expect(r.ok).toBe(false);
+  });
+
+  test("rejects missing conversationId", async () => {
+    const { parseWSMessage } = await import("../lib/ws-zod-schemas");
+    const r = parseWSMessage({
+      type: "context_reset",
+      reason: "prefill-guard",
+    });
+    expect(r.ok).toBe(false);
+  });
+});

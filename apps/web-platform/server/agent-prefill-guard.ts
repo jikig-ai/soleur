@@ -69,6 +69,16 @@ export interface ApplyPrefillGuardArgs {
   leaderId?: string;
 }
 
+/**
+ * Discriminator for the WS `context_reset` event. `prefill-guard` is the
+ * generic "assistant-terminated history" branch; `tool_use_orphan` is the
+ * narrower branch where the trailing assistant message contained a
+ * `tool_use` content block — model must NOT execute "yes do that" without
+ * re-confirmation by name. See plan
+ * `2026-05-07-feat-prefill-guard-context-reset-signal-plan.md` §1.3.
+ */
+export type ContextResetReason = "prefill-guard" | "tool_use_orphan";
+
 export interface ApplyPrefillGuardResult {
   /**
    * `args.resumeSessionId` unchanged when the persisted session is
@@ -77,6 +87,62 @@ export interface ApplyPrefillGuardResult {
    * `buildAgentQueryOptions({ resumeSessionId: ... })`.
    */
   safeResumeSessionId: string | undefined;
+  /**
+   * Single-turn notice the caller appends to `systemPrompt` ONLY for the
+   * SDK call this guard is gating. Populated only when the guard fires
+   * (assistant-terminated history). Caller MUST NOT persist across turns
+   * — multi-turn accumulation would compound noise into the model context.
+   * `undefined` on cold start, user-final, empty history, probe failure.
+   * See #3269.
+   */
+  contextResetNotice?: string;
+  /**
+   * Discriminator for the user-side WS `context_reset` event. Source of
+   * truth for `reason` on the wire — the caller MUST pass this through to
+   * `sendToClient(userId, { type: "context_reset", reason, conversationId })`
+   * verbatim. Populated only when the guard fires; `undefined` otherwise.
+   * Drives copywriter-approved render variants in `chat-surface.tsx`.
+   */
+  reason?: ContextResetReason;
+}
+
+/**
+ * Generic context-reset notice — used when the trailing assistant message
+ * is plain text (or non-array content). Trimmed to model directive only
+ * per copywriter constraint (no "Note:" / "due to" / jargon).
+ */
+const CONTEXT_RESET_NOTICE_GENERIC =
+  "Prior conversation context was reset. Treat the user's next message as standalone; ask for clarification if it references earlier turns.";
+
+/**
+ * Tool-aware variant — used when the trailing assistant message contained a
+ * `tool_use` content block. Model must NOT execute any action without
+ * explicit re-confirmation by name (CLO authorization-audit-trail floor).
+ */
+const CONTEXT_RESET_NOTICE_TOOL_USE_ORPHAN =
+  "Prior conversation context was reset. The previous turn proposed a tool action you no longer have context on. Do NOT execute any action without explicit re-confirmation by name — ask the user to restate which action they want to run.";
+
+/**
+ * Typed runtime guard: does the SDK `SessionMessage.message` (typed
+ * `unknown` per `sdk.d.ts:2563`) contain a `tool_use` content block? Per
+ * Anthropic SDK semantics, `content` is `string | ContentBlock[]` and
+ * `tool_use` only appears in the array form. Any unrecognized shape
+ * (null, undefined, non-object, missing `content`, content of wrong type)
+ * returns `false` and the caller degrades to the generic notice — never
+ * throws. Plan §1.2.
+ */
+function isToolUseTrailing(message: unknown): boolean {
+  if (typeof message !== "object" || message === null) return false;
+  if (!("content" in message)) return false;
+  const content = (message as { content: unknown }).content;
+  if (!Array.isArray(content)) return false;
+  return content.some(
+    (block) =>
+      typeof block === "object" &&
+      block !== null &&
+      "type" in block &&
+      (block as { type: unknown }).type === "tool_use",
+  );
 }
 
 /**
@@ -183,7 +249,14 @@ export async function applyPrefillGuard(
         historyLength: history.length,
       },
     });
-    return { safeResumeSessionId: undefined };
+    const toolUseOrphan = isToolUseTrailing(last.message);
+    return {
+      safeResumeSessionId: undefined,
+      contextResetNotice: toolUseOrphan
+        ? CONTEXT_RESET_NOTICE_TOOL_USE_ORPHAN
+        : CONTEXT_RESET_NOTICE_GENERIC,
+      reason: toolUseOrphan ? "tool_use_orphan" : "prefill-guard",
+    };
   }
 
   return { safeResumeSessionId: args.resumeSessionId };
