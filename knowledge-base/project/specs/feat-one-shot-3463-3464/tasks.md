@@ -26,22 +26,30 @@ Plan: `knowledge-base/project/plans/2026-05-07-feat-disconnect-race-and-incoming
 - [ ] 1.4 GREEN: implement Phase 1 wrapper change.
 - [ ] 1.5 REFACTOR: confirm `bun test apps/web-platform/test/conversation-writer-only-if-status.test.ts` passes.
 
-## Phase 2 — Wire the new option at the four agent-runner sites (#3463)
+## Phase 2 — Add helper + replace four call sites (#3463)
 
-- [ ] 2.1 RED: write failing tests in `apps/web-platform/test/agent-runner-disconnect-after-result-race.test.ts`:
-  - 2.1.1 AC1: result branch wrote `waiting_for_user`, then disconnect-abort fires; abort branch's UPDATE is a no-op.
-  - 2.1.2 AC2: disconnect-abort fires before any result emission; abort branch writes `failed` (today's behavior preserved).
-  - 2.1.3 AC3: row already at `aborted` (concurrent user-stop), late disconnect-abort is a no-op.
-  - 2.1.4 AC4: result-branch fallback `failed`-cascade at line 1646 is a no-op when row is at `aborted`.
-- [ ] 2.2 GREEN: pass `onlyIfStatusIn: ["active"]` at each of the four sites:
-  - 2.2.1 Line ~1646 (result-branch fallback `failed`-cascade after `waiting_for_user` flip failure).
-  - 2.2.2 Line ~1659 (result-branch fallback when `assistantPersisted = false`).
-  - 2.2.3 Line ~1766 (abort branch's non-superseded `failed` write — primary site).
-  - 2.2.4 Line ~1852 (non-abort thrown errors path).
-- [ ] 2.3 Confirm regression tests pass:
-  - 2.3.1 `apps/web-platform/test/agent-runner-result-branch-finalization.test.ts`
-  - 2.3.2 `apps/web-platform/test/abort-all-sessions.test.ts`
-  - 2.3.3 `apps/web-platform/test/ws-abort.test.ts`
+- [ ] 2.1 Add `updateConversationStatusIfActive(userId, conversationId, status)` helper in `apps/web-platform/server/agent-runner.ts` (sibling to existing `updateConversationStatus`). Implementation:
+  - 2.1.1 Calls `updateConversationFor` with `expectMatch: false, onlyIfStatusIn: ["active"]`.
+  - 2.1.2 Returns `Promise<void>` — never throws on 0-rows.
+  - 2.1.3 Inline JSDoc names which call sites use it and why (per `2026-05-06-defense-in-depth-recovery-mirroring-sql-predicate-document-load-bearing-value.md`).
+- [ ] 2.2 RED: write failing tests in `apps/web-platform/test/agent-runner-disconnect-after-result-race.test.ts`:
+  - 2.2.1 AC1: result branch wrote `waiting_for_user`, then disconnect-abort fires; abort branch's UPDATE is a no-op (row stays `waiting_for_user`).
+  - 2.2.2 AC2: disconnect-abort fires before any result emission; abort branch writes `failed` (today's behavior preserved).
+  - 2.2.3 AC3: row already at `aborted` (concurrent user-stop), late disconnect-abort is a no-op.
+  - 2.2.4 AC4: result-branch fallback `failed`-cascade at line 1646 is a no-op when row is at `aborted`.
+  - 2.2.5 No Sentry mirror fires on the no-op outcomes (AC1, AC3, AC4).
+- [ ] 2.3 GREEN: replace `updateConversationStatus` with `updateConversationStatusIfActive` at:
+  - 2.3.1 Line ~1646 (result-branch fallback `failed`-cascade after `waiting_for_user` flip failure).
+  - 2.3.2 Line ~1659 (result-branch fallback when `assistantPersisted = false`).
+  - 2.3.3 Line ~1766 (abort branch's non-superseded write — primary site, value depends on `isUserRequested` ternary).
+  - 2.3.4 Line ~1852 (non-abort thrown errors path).
+- [ ] 2.4 KEEP `updateConversationStatus` (with `expectMatch: true`) at:
+  - 2.4.1 Line ~1613 (result branch's primary `waiting_for_user` write).
+  - 2.4.2 Line ~1640 (result-branch fallback's first attempt).
+- [ ] 2.5 Confirm regression tests pass:
+  - 2.5.1 `apps/web-platform/test/agent-runner-result-branch-finalization.test.ts`
+  - 2.5.2 `apps/web-platform/test/abort-all-sessions.test.ts`
+  - 2.5.3 `apps/web-platform/test/ws-abort.test.ts`
 
 ## Phase 3 — Capability extension (#3464)
 

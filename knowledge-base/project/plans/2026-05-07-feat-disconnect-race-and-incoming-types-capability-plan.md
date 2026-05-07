@@ -5,9 +5,54 @@ date: 2026-05-07
 issues: [3463, 3464]
 related_prs: [3447, 3469]
 requires_cpo_signoff: false
+deepened_on: 2026-05-07
 ---
 
 # Bundle: fix disconnect-after-result race (#3463) + extend session_started capabilities with incomingTypes (#3464)
+
+## Enhancement Summary
+
+**Deepened on:** 2026-05-07
+
+**Sections enhanced:** Phase 0 verification grep run live; Proposed Solution §#3463 revised with helper-function discovery; Files to Edit refined; new "Deepen Insights" section appended.
+
+### Key Improvements
+
+1. **Discovered design flaw in original plan.** The original plan said
+   "extend `UpdateConversationOptions` with `onlyIfStatusIn?` and pass
+   it through `updateConversationStatus`" — but `updateConversationStatus`
+   uses `expectMatch: true` which **throws + Sentry-mirrors** on 0-rows.
+   The race-window case (row already at `waiting_for_user` when the
+   abort branch's UPDATE runs) would fire a Sentry event for what is
+   the *intended success path*. Plan revised to introduce a separate
+   helper `updateConversationStatusIfActive` that uses `expectMatch: false`
+   so the no-op is silent.
+2. **Verified all line numbers live** — 1613, 1640, 1646, 1659, 1766
+   (variable-named, hence missed by original literal grep), 1852, 2027
+   confirmed against the worktree HEAD `b6f04394`.
+3. **Enumerated all 9 test fixtures pinning `session_started`** — the
+   plan now lists them explicitly (Files to Edit §"Test fixtures") so
+   Phase 4 doesn't drift on which files need touch.
+4. **Confirmed Supabase JS supports `.in()` on UPDATE chains** via
+   Context7 — pattern is standard PostgREST and does not need
+   `maxAffected` (PostgREST 13 feature, separate concern).
+5. **Cross-referenced three adjacent learnings** — the typed-optional-field
+   wire-drop (2026-05-07), defense-in-depth recovery mirroring SQL
+   predicate (2026-05-06), and trace-callgraph-from-entrypoint
+   (2026-05-05) — all apply directly.
+6. **Identified one subtle behavior change** at line 1766: the abort
+   branch's `updateConversationStatus` write currently fires for both
+   user-Stop (writes `waiting_for_user`) and disconnect (writes
+   `failed`). With `onlyIfStatusIn: ["active"]`, the user-Stop late-click
+   case (user clicks Stop AFTER result branch already wrote
+   `waiting_for_user`) becomes a no-op. Same end state — semantically
+   equivalent. Documented in §"Deepen Insights".
+
+### New Considerations Discovered
+
+- The plan's `## Files to Edit` originally listed "Test fixtures pinning `session_started` shape — enumerate via Phase 0 grep". Phase 0 ran live: 9 files identified. Listed explicitly below.
+- The schema currently declares `capabilities.promptKinds` but no emit site populates it — the new `incomingTypes` change is the lever to fix BOTH wire-drops in one PR.
+- The four guarded sites are NOT semantically identical: line 1766 is the only one where the *value being written* depends on a runtime branch (`isUserRequested ? "waiting_for_user" : "failed"`). The other three always write a fixed value. The conditional guard is correct at all four.
 
 ## Overview
 
@@ -105,19 +150,55 @@ Rationale vs. the two alternatives:
   but unbounded for this PR. Tracked as a re-evaluation criterion in
   #3463 body ("conversation status state machine is consolidated").
 
-**Implementation:** extend `ConversationPatch` / `UpdateConversationOptions`
-in `apps/web-platform/server/conversation-writer.ts` with an
-`onlyIfStatusIn?: ReadonlyArray<Conversation["status"]>` filter. The
-wrapper appends `.in("status", onlyIfStatusIn)` to the base query when
-provided. The abort branch passes `onlyIfStatusIn: ["active"]` for the
-`failed`-write so any row already at a terminal state (`waiting_for_user`,
-`completed`, `aborted`) is left untouched.
+**Implementation (revised after deepen-plan discovery — see Enhancement Summary §1):**
 
-**Subtlety:** the abort branch with `expectMatch: false` already returns
-`{ ok: true }` on 0-rows-affected, so the no-op outcome is safe (no
-spurious Sentry mirror). For the disconnect path specifically we keep
-`expectMatch: false` — the row legitimately may have already been
-transitioned by the result branch, and that's the success case we want.
+1. Extend `UpdateConversationOptions` in
+   `apps/web-platform/server/conversation-writer.ts` with
+   `onlyIfStatusIn?: ReadonlyArray<Conversation["status"]>`. The wrapper
+   appends `.in("status", onlyIfStatusIn)` to the base query when provided.
+2. Introduce a new helper
+   `updateConversationStatusIfActive(userId, conversationId, status)`
+   in `agent-runner.ts` (sibling to the existing
+   `updateConversationStatus`). The new helper:
+   - Uses `expectMatch: false` (a no-op is the success case, not an
+     error to mirror).
+   - Passes `onlyIfStatusIn: ["active"]`.
+   - Returns `Promise<void>` — never throws on 0-rows-affected.
+3. The abort branch and the three result-branch fallback sites call
+   `updateConversationStatusIfActive` instead of
+   `updateConversationStatus` for the `failed`-cascade. Sites enumerated
+   in §Acceptance Criteria.
+
+**Why a new helper, not a flag on the existing one:** the existing
+`updateConversationStatus` has a load-bearing
+`expectMatch: true` + `if (!result.ok) throw` contract (per its inline
+comment: "a 0-rows write would silently desync UI state from DB"). That
+contract is correct for the result branch's primary `waiting_for_user`
+write at line 1613 — if THAT write returns 0-rows, something is genuinely
+broken (the user's row is gone, the UI badge will be stale, on-call
+needs to know). Folding `onlyIfStatusIn` into the existing helper would
+either (a) throw + Sentry-mirror on every clean disconnect-after-result
+(noise) or (b) require a `silentZero` flag that confuses the contract.
+A separate helper makes the silent-no-op contract explicit at the call
+site.
+
+**Subtlety #1 (silent no-op contract):** the new helper does NOT mirror
+to Sentry on 0-rows-affected. Per `cq-silent-fallback-must-mirror-to-sentry`
+exempt clauses: "Exempt: expected states (CSRF reject, rate-limit hit,
+first-time 404, intentional pass-through)" — the no-op IS the intended
+pass-through.
+
+**Subtlety #2 (line 1766 user-Stop late-click semantics):** at line 1766
+the abort branch writes either `waiting_for_user` (user-requested) OR
+`failed` (disconnect). With `onlyIfStatusIn: ["active"]`, both branches
+no-op when the row is no longer `active`:
+- Disconnect path (`failed`-write): no-op when result branch already
+  wrote `waiting_for_user` — the bug fix we want.
+- User-Stop late-click path (`waiting_for_user`-write): no-op when result
+  branch already wrote `waiting_for_user` — same end state, semantically
+  equivalent. Sending the `session_ended:user_aborted` ack still happens
+  (the ack is unconditional within the `if (isUserRequested)` block),
+  so the client still transitions out of `stopping` state.
 
 **Symmetric application — must apply at all three writers in
 `agent-runner.ts`:**
@@ -329,17 +410,30 @@ Neither is brand-survival-threatening.
       `UpdateConversationOptions`. When provided, the wrapper appends
       `.in("status", onlyIfStatusIn)` to the existing
       composite-key UPDATE.
-- [ ] `apps/web-platform/server/agent-runner.ts` line **~1766** (abort
-      branch's non-superseded `updateConversationStatus` call) passes
-      `onlyIfStatusIn: ["active"]` so the disconnect path cannot stomp
-      a row that already reached a terminal state.
-- [ ] Same guard applied at lines **~1646** (result-branch fallback
-      `failed`-cascade) and **~1659** (result-branch fallback when
-      `assistantPersisted = false`) and **~1852** (non-abort thrown
-      errors path).
+- [ ] `apps/web-platform/server/agent-runner.ts` adds a new helper
+      `updateConversationStatusIfActive(userId, conversationId, status)`
+      that uses `expectMatch: false` + `onlyIfStatusIn: ["active"]` and
+      returns `Promise<void>` (silent no-op on 0-rows-affected).
+- [ ] Line **~1766** (abort branch's non-superseded
+      `updateConversationStatus` call) is replaced with the new helper
+      so the disconnect path cannot stomp a row that already reached a
+      terminal state.
+- [ ] Same replacement applied at:
+  - Line **~1646** (result-branch fallback `failed`-cascade after a
+    failed `waiting_for_user` flip).
+  - Line **~1659** (result-branch fallback when `assistantPersisted = false`).
+  - Line **~1852** (non-abort thrown errors path).
 - [ ] No guard at line **~1613** (the result branch's primary
       `waiting_for_user` write — that's the writer we want to win the
       race; guarding it would re-introduce the bug from the other side).
+      This site continues to use `updateConversationStatus` (with
+      `expectMatch: true`) per its load-bearing
+      "0-rows = genuinely broken" contract.
+- [ ] Line **~1640** (result-branch fallback's first attempt — re-write
+      `waiting_for_user` when the primary write threw): keep
+      `updateConversationStatus` (with `expectMatch: true`). If THAT
+      write returns 0-rows, something is genuinely broken — the original
+      contract is correct here.
 - [ ] No guard at line **~2027** (`dispatchToLeaders`'s catch — verified
       by Read as the sole writer for that conversation in that branch;
       no race surface).
@@ -476,11 +570,31 @@ Test file: `apps/web-platform/test/ws-handler-session-started-capabilities.test.
 ## Files to Edit
 
 - `apps/web-platform/server/conversation-writer.ts` — add `onlyIfStatusIn?` option to `UpdateConversationOptions`; thread through the base query in `updateConversationFor`.
-- `apps/web-platform/server/agent-runner.ts` — pass `onlyIfStatusIn: ["active"]` at the four sites enumerated in AC1-AC4 / Functional Requirements (lines ~1646, ~1659, ~1766, ~1852).
-- `apps/web-platform/lib/ws-zod-schemas.ts` — add optional `incomingTypes: z.array(z.string()).readonly().optional()` to the `capabilities` sub-schema at lines 274-276.
-- `apps/web-platform/lib/types.ts` — extend the `session_started` variant's `capabilities` shape at line 242.
-- `apps/web-platform/server/ws-handler.ts` — populate the `capabilities` payload at both emit sites (lines 1194 and 1252).
-- Test fixtures pinning `session_started` shape — enumerate via Phase 0 grep (`rg -l 'session_started' apps/web-platform/test/`).
+- `apps/web-platform/server/agent-runner.ts` — add `updateConversationStatusIfActive` helper; replace `updateConversationStatus` calls at lines ~1646, ~1659, ~1766, ~1852 with the new helper. **Keep** `updateConversationStatus` at lines ~1613 (primary result-branch write) and ~1640 (fallback first-attempt). **No guard** at line ~2027.
+- `apps/web-platform/lib/ws-zod-schemas.ts:267-277` — add optional `incomingTypes: z.array(z.string()).readonly().optional()` to the `capabilities` sub-schema.
+- `apps/web-platform/lib/types.ts:242` — extend the `session_started` variant's `capabilities` shape.
+- `apps/web-platform/server/ws-handler.ts:1194` (`start_session` emit) and `:1252` (`resume_session` emit) — populate the full `capabilities` payload.
+
+### Test fixtures pinning `session_started` shape (verified live via Phase 0 grep)
+
+All 9 files surfaced by `rg -l 'session_started' apps/web-platform/test/`:
+
+- `apps/web-platform/test/useWebSocket-abort.test.tsx` (8 fixture sites: lines 111, 124, 156, 175, 208, 226, 243, 272)
+- `apps/web-platform/test/ws-zod-schemas.test.ts` (2 sites: lines 20, 293)
+- `apps/web-platform/test/ws-client-resume-history.test.tsx` (line 244)
+- `apps/web-platform/test/ws-resume-by-context-path.test.ts` (lines 174, 310)
+- `apps/web-platform/test/ws-deferred-creation.test.ts` (lines 139, 154)
+- `apps/web-platform/test/ws-known-types-guard.test.ts` (line 32)
+- `apps/web-platform/test/ws-start-session-cap-hit.test.ts` (line 138)
+- `apps/web-platform/test/ws-protocol.test.ts` (lines 36, 71, 74)
+- `apps/web-platform/test/chat-page.test.tsx` (filename match — verify exact line in Phase 4)
+
+**Audit guidance:** for each fixture, confirm the test does NOT
+explicitly assert `capabilities === undefined` — fixtures that pin the
+absent-capabilities shape MUST stay as-is to test the legacy-server-build
+code path (E2 edge case). Fixtures that ignore the field (most of them)
+need no change. Fixtures that match-on full shape via `toMatchObject` or
+`toEqual` need the new shape.
 
 ## Files to Create
 
@@ -684,3 +798,174 @@ agents and dev-tools inspect WS frames).
   - `tsc --noEmit` clean from `apps/web-platform/`.
   - PR body uses `Closes #3463` and `Closes #3464` on their own lines (per `wg-use-closes-n-in-pr-body-not-title-to`).
 - **Post-merge (operator):** none. No DB migration, no infra change, no Doppler secret rotation. Standard CI deploy via the merge-to-main pipeline is sufficient.
+
+## Deepen Insights
+
+This section captures the additional considerations surfaced during the
+deepen-plan pass that were not in the original plan but are
+load-bearing for implementation correctness.
+
+### Insight 1 — `expectMatch: true` is a load-bearing contract; don't fold a silent guard into it
+
+The original plan's "extend `UpdateConversationOptions` with
+`onlyIfStatusIn?` and pass it through `updateConversationStatus`" is
+load-bearing-incorrect. `updateConversationStatus` (the agent-runner.ts
+helper at line 432) uses `expectMatch: true`, which:
+
+1. Throws when 0-rows are affected.
+2. Mirrors a `"conversation update affected 0 rows (expectMatch)"`
+   Sentry event.
+
+For the disconnect-after-result race, the **success** path is a 0-rows
+outcome (the row already left `active`). Folding `onlyIfStatusIn` into
+`updateConversationStatus` would emit a Sentry event for every clean
+disconnect-after-result — directly violating
+`cq-silent-fallback-must-mirror-to-sentry`'s "expected states"
+exemption clause.
+
+**Resolution:** introduce a separate helper
+`updateConversationStatusIfActive` that uses `expectMatch: false` and
+makes the silent-no-op contract explicit at the call site. Sites that
+need the strict contract (lines 1613, 1640) keep using the original
+helper.
+
+This insight applies the same pattern as
+`2026-05-06-defense-in-depth-recovery-mirroring-sql-predicate-document-load-bearing-value.md`:
+when adding a defense layer at the same surface as an existing primitive,
+the load-bearing sub-value (here: silent-no-op vs. throw-and-mirror)
+must be documented at the call site.
+
+### Insight 2 — The four guarded sites are not semantically identical
+
+- **Line 1646** (`failed`-cascade after `waiting_for_user` flip
+  failure): always writes `failed`. Guard prevents stomp on a row that
+  reached terminus during the cascade window.
+- **Line 1659** (`failed`-write when `assistantPersisted = false`):
+  always writes `failed`. Guard prevents stomp.
+- **Line 1766** (abort branch ternary): writes
+  `isUserRequested ? "waiting_for_user" : "failed"`. Guard's effect
+  splits by branch:
+  - User-Stop (writes `waiting_for_user`): no-op when row is already
+    `waiting_for_user`. **Same end state — semantically equivalent.**
+    The `session_ended:user_aborted` ack still fires (unconditional
+    within the `if (isUserRequested)` block).
+  - Disconnect (writes `failed`): no-op when row is already
+    `waiting_for_user`. **The bug fix.**
+- **Line 1852** (non-abort thrown errors): always writes `failed`.
+  Guard prevents stomp on the rare case where a concurrent terminal
+  write landed before this catch fires.
+
+The conditional-update guard is correct at all four sites; the
+end-state semantics differ but the guard's intent is uniform: "if
+someone else already wrote a terminal state, leave it alone."
+
+### Insight 3 — `promptKinds` is currently declared but not emitted (typed-optional-field wire-drop, exact instance)
+
+Per the live grep run during deepen-plan: the schema at
+`ws-zod-schemas.ts:274-276` declares `capabilities: { promptKinds:
+readonly string[] }` as optional, the type at `lib/types.ts:242`
+mirrors it, but neither emit site at `ws-handler.ts:1194` or `:1252`
+populates it. The current build emits
+`{ type: "session_started", conversationId }` — no `capabilities` field
+at all.
+
+This is exactly the
+`2026-05-07-typed-optional-field-wire-drop-caught-by-user-impact-reviewer.md`
+pattern: a typed optional field that compiles + tests-green but never
+reaches the wire. Phase 3 of this plan fixes BOTH `promptKinds` AND
+`incomingTypes` in the same pass — a wire-completeness regression test
+(AC5-AC6) pins the wire shape so the next field-addition that forgets
+the emit hop fails the test.
+
+**Reconciliation:** the original plan's §"Surfaced gap" prose noted
+this; the deepen pass elevated the fix from "implied by Phase 2 step 4"
+to a first-class AC item.
+
+### Insight 4 — `WS_PROMPT_KINDS` constant has no canonical home today
+
+The live grep `rg -n 'promptKinds' apps/web-platform/` returned only
+two hits: the schema (line 275) and the type (line 242). There is no
+shared constant, no consumer that reads it, no test that asserts it.
+The "curated promptKinds set from #2885" exists only as a phrase in
+PR review comments and the schema's docstring.
+
+**Implementation requirement:** the new
+`apps/web-platform/lib/ws-capabilities.ts` module is the single source
+of truth for both `WS_PROMPT_KINDS` AND `WS_INCOMING_TYPES`. Phase 0
+grep already confirmed no canonical home exists, so creating one in
+Phase 3 step 1 is the right move.
+
+The `WS_PROMPT_KINDS` initial population must enumerate the actual
+emitted-by-server `interactive_prompt.kind` values. Per
+`apps/web-platform/lib/ws-zod-schemas.ts` (the WSMessage variant
+definitions for `interactive_prompt`) — verify in Phase 3 step 1 by
+greping `interactive_prompt.*kind:` in `cc-dispatcher.ts` and
+`soleur-go-runner.ts`. **Estimate:** 6 kinds based on the #2885
+PR-body assertion ("default 6-kind set"). Confirm count live in
+Phase 3.
+
+### Insight 5 — Test fixture audit must distinguish "ignores capabilities" from "asserts absent"
+
+Per the live `rg -l 'session_started' apps/web-platform/test/`, 9
+files contain `session_started` literals. Most tests construct fixtures
+that match on `type` + `conversationId` only; those need no change.
+The risk is fixtures that pin the FULL shape via `toMatchObject` /
+`toEqual`. Phase 4 audit guidance:
+
+```bash
+# Check each fixture file for full-shape match
+for f in [9 files]; do
+  rg -n 'session_started' "$f" | grep -E 'toMatchObject|toEqual|deep\.equal'
+done
+```
+
+**Per file, choose one of three actions:**
+
+- **No change** — fixture only constructs the message or matches on
+  partial shape (most cases).
+- **Add new fields** — fixture matches on full shape; needs
+  `capabilities: { promptKinds: WS_PROMPT_KINDS, incomingTypes: WS_INCOMING_TYPES }`.
+- **Pin legacy-server-build behavior** — fixture explicitly tests the
+  absent-capabilities code path (E2 edge case); leave as-is and add
+  comment explaining why.
+
+### Insight 6 — Trace-callgraph-from-entrypoint applies to the emit-site sweep
+
+Per
+`knowledge-base/project/learnings/best-practices/2026-05-05-trace-callgraph-from-entrypoint-when-placing-guards.md`,
+when placing a guard, trace the value-of-interest from the entry point
+to the guarded site, not just from the guard outward. For #3464,
+the analogous trace is from the `session_started` emit to every
+external observer (browser client, agent client, future MCP tool):
+
+- Browser client: `lib/ws-client.ts:744` — reads `msg.type` only,
+  ignores `capabilities` today. Will continue to ignore. No risk.
+- Agent client (hypothetical): the curated `WS_INCOMING_TYPES` arrives
+  unchanged. No external transform.
+- Future MCP tool: when an `mcp__soleur_platform__list_capabilities`
+  tool is added (a natural follow-up), it should read from the same
+  `WS_INCOMING_TYPES` constant module — single source of truth.
+
+Phase 0 grep `rg -n 'capabilities' apps/web-platform/` returns the
+schema + the type only; no consumers read it today. Adding the
+emit + a curated constant unlocks consumers without coupling them
+to internal WSMessage evolution.
+
+### Insight 7 — No defense-relaxation analysis needed
+
+Per `2026-05-05-defense-relaxation-must-name-new-ceiling.md`: a
+plan that **relaxes or removes** a load-bearing defense must enumerate
+every threat surface the original was bounding. This plan does the
+opposite — it **adds** a guard (`onlyIfStatusIn: ["active"]`) that
+narrows an existing UPDATE's effective scope. No threats are
+unbounded; no new ceiling needed. **Confirmed N/A.**
+
+### Insight 8 — No defense-in-depth-mirror analysis needed
+
+Per `2026-05-06-defense-in-depth-recovery-mirroring-sql-predicate-document-load-bearing-value.md`:
+when adding a defense at the same threshold as an existing primitive
+in a different layer, name the load-bearing sub-value. The
+`onlyIfStatusIn: ["active"]` guard does NOT mirror an existing SQL
+or scheduler primitive — there is no DB-side check today that says
+"don't write `failed` if status is already terminal." The guard is
+the FIRST defense at this surface, not a mirror. **Confirmed N/A.**
