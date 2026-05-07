@@ -117,11 +117,18 @@ describe("cc-concierge PDF summarize end-to-end (#3376)", () => {
     expect(systemPrompt).not.toContain(PDF_UNREADABLE_DIRECTIVE_LEAD);
   });
 
-  it("Phase 4.2 — readFile failure surfaces unreadable directive with read_failed copy and NO 'workspace boundary' string", async () => {
+  it("Phase 4.2 — readFile failure surfaces gated Read directive (soft route) and NO 'workspace boundary' string", async () => {
     // Filename drift: persisted contextPath uses spaces, on-disk file is
     // URL-encoded. The resolver's `readFile` raises ENOENT — exactly the
     // shape that produced the user-facing "outside workspace boundary"
     // reply pre-fix.
+    //
+    // 2026-05-07 follow-up to #3384: `read_failed` is a SOFT failure class
+    // (transient I/O — NFC/NFD filename mismatch, mid-conversation rename,
+    // URL-encoding hop). The SDK Read tool's sandbox-aware path resolution
+    // may succeed where the resolver's bare `readFile` raised. Routes to
+    // `buildPdfGatedDirective` so the model attempts Read with the absolute
+    // workspace path before refusing.
     mkdirSync(path.join(tmpRoot, "knowledge-base"), { recursive: true });
     writeFileSync(
       path.join(tmpRoot, "knowledge-base", "Au%20Chat%20Potan.pdf"),
@@ -143,19 +150,19 @@ describe("cc-concierge PDF summarize end-to-end (#3376)", () => {
       workspacePath: tmpRoot,
     });
 
-    // Unreadable directive fired.
-    expect(systemPrompt).toContain(PDF_UNREADABLE_DIRECTIVE_LEAD);
-    // The new read_failed copy is present (verbatim from
-    // `unreadableCopyForClass`).
-    expect(systemPrompt).toContain(
+    // Gated Read directive fired (soft route).
+    expect(systemPrompt).toContain(PDF_GATED_DIRECTIVE_LEAD);
+    // The unreadable directive's copy MUST NOT appear — the gated directive
+    // is generic (no per-class copy), and the model should attempt Read
+    // rather than refuse upfront.
+    expect(systemPrompt).not.toContain(PDF_UNREADABLE_DIRECTIVE_LEAD);
+    expect(systemPrompt).not.toContain(
       "I couldn't open this PDF on my end — the file path may have changed",
     );
-    // Gated Read directive MUST be absent — its presence would mean the
-    // runner picked the apt-get-cascade-prone Read path.
-    expect(systemPrompt).not.toContain(PDF_GATED_DIRECTIVE_LEAD);
     // Hard load-bearing assertion: the system prompt must NEVER contain
     // sandbox-internal substrings that the model could paraphrase to the
-    // user. This is the user-facing leak from #3376.
+    // user. This is the user-facing leak from #3376 — must hold on the
+    // gated route too.
     expect(systemPrompt.toLowerCase()).not.toContain("workspace boundary");
     expect(systemPrompt.toLowerCase()).not.toContain("outside the workspace");
   });
