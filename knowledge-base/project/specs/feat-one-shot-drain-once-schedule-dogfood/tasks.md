@@ -21,11 +21,12 @@ Plan: `knowledge-base/project/plans/2026-05-07-feat-drain-once-schedule-dogfood-
 
 - 2.1 Create `plugins/soleur/skills/ship/scripts/auto-close-scan.sh` (10-line `grep -niE` helper, fail-soft).
 - 2.2 Edit `plugins/soleur/skills/schedule/SKILL.md` Step 3b template:
-  - 2.2a Add `show_full_output: true` to the `with:` block of the `claude-code-action@v1` step.
+  - 2.2a Add `show_full_output: true` to the `with:` block of the `claude-code-action@v1` step (`--once`-scoped only — see deepen-pass Research Insights §2.1).
   - 2.2b Add a new section `## Post-fire verification (mandatory after Final step)` to the prompt body containing the contents-API verification recipe + follow-up-comment-on-failure logic.
-  - 2.2c Add a paragraph to the long permissions-comment block warning operators not to flip `show_full_output: false` unless they hand-inject `secrets.*` into the prompt body.
+  - 2.2c Add a paragraph to the long permissions-comment block scoping `show_full_output: true` to `--once` (warn operators NOT to copy this flag into recurring workflows; reference the action's leak-warning docstring).
   - 2.2d Update Known Limitations: extend `--once D3 + D4-failure` bullet with #3403 reference and AC2 banner about pre-PR `--once` schedules being not-self-cleaning.
-- 2.3 Edit `plugins/soleur/skills/schedule/SKILL.md` Step 3a template: add `show_full_output: true` to recurring template's `with:` block.
+  - 2.2e Add `github_token: ${{ secrets.GITHUB_TOKEN }}` to the `with:` block (token-context alignment per deepen-pass Research Insights §2.3 — candidate root-cause fix for #3403).
+- 2.3 Edit `plugins/soleur/skills/schedule/SKILL.md` Step 3a template: do NOT add `show_full_output: true` (deepen-pass revision). Optionally add a comment block above the recurring `with:` block naming the scope distinction and pointing operators to the `actions/upload-artifact` forensic-capture pattern.
 - 2.4 Create `.github/workflows/pr-auto-close-scanner.yml` triggering on `pull_request: opened, edited`. Calls `auto-close-scan.sh` against title and body. Emits `::warning::` and idempotent `gh pr comment`. Honors `<!-- auto-close-scanner: confirm -->` opt-out marker.
 - 2.5 Edit `plugins/soleur/skills/ship/SKILL.md` Phase 6: insert pre-creation scanner call before the existing `gh pr create` invocation. Surface matches via `AskUserQuestion` (interactive) or `WARNING:` log (`HEADLESS_MODE=true`).
 - 2.6 Edit `AGENTS.md` rule `wg-use-closes-n-in-pr-body-not-title-to`: generalize wording per AC7. Verify final byte length < 600 via `awk '/wg-use-closes-n-in-pr-body-not-title-to/ {print length($0)}' AGENTS.md`.
@@ -65,7 +66,8 @@ Plan: `knowledge-base/project/plans/2026-05-07-feat-drain-once-schedule-dogfood-
 
 | AC | Phase/Task |
 |---|---|
-| AC1 (template `show_full_output`) | 2.2a, 2.3 |
+| AC1 (`--once` template `show_full_output`; recurring stays default) | 2.2a, 2.3 |
+| AC1b (token override `github_token`) | 2.2e |
 | AC2 (not-self-cleaning banner) | 2.2d |
 | AC3 (side-effect verification) | 2.2b |
 | AC4 (sandbox workflow) | 0.1, 0.2, 2.7 |

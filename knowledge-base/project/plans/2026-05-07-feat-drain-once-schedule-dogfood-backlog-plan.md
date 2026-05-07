@@ -12,6 +12,27 @@ requires_cpo_signoff: false
 
 # Plan: Drain `--once` / dogfood-schedule scope-out backlog (#3403 + #3404 + #3407)
 
+## Enhancement Summary
+
+**Deepened on:** 2026-05-07
+**Sections enhanced:** Risks (R1, R6 added), Research Reconciliation (rows added on action-token semantics), AC1+AC2 narrowed (recurring template default reverted), Phase 2.2/2.3 revised, Sharp Edges (extended)
+**Live verifications performed (verbatim outputs in Research Insights below):** action-input schema (`anthropics/claude-code-action/contents/action.yml`), repo branch-protection state, repo `allow_auto_merge` state, push history of `github-actions[bot]`, current SHAs of `actions/checkout@v4` and `anthropics/claude-code-action@v1`, AGENTS.md rule byte-budget, GitHub auto-close keyword set vs. plan regex.
+
+### Key Improvements
+
+1. **`show_full_output: true` security warning surfaced (CRITICAL).** The action's own docstring is more cautious than my draft assumed: it leaks **all tool execution results** (not just prompt + agent reasoning), which may include "secrets, API keys, or other sensitive information ... publicly visible in GitHub Actions." The recurring-template flip-default to `true` is **rolled back** — recurring templates often have agents reading data that may include secrets-laden tool output. **Only the `--once` template flips default to `true`** (its prompt is committed, its tool surface is fixed at create time). See Research Insights §2.1.
+2. **Branch-protection hypothesis falsified.** This repo's `main` branch is NOT protected (`HTTP 404: Branch not protected`). The H2 hypothesis from #3403 ("`git push HEAD:main` blocked by branch protection") is invalid for `jikig-ai/soleur`. The denial source is upstream of branch-protection — most likely the App-installation token's runtime scope inside `claude-code-action`'s bash subprocess (consistent with #3153's `actions: write` precedent: workflow-level permission declarations DO NOT widen the App's effective scope). See Research Insights §2.2.
+3. **Token-bridging semantics clarified.** The action's `action.yml` shows it accepts a `github_token` input that overrides the App token: `OVERRIDE_GITHUB_TOKEN: ${{ inputs.github_token }}`. Currently the `--once` template passes `GH_TOKEN: ${{ github.token }}` via `env:` (workflow-level) but does NOT pass `with: github_token: ${{ secrets.GITHUB_TOKEN }}`. This split-context is likely the root denial cause: the bash subprocess's `gh` calls succeed via env-passed `github.token`, but inner action machinery falls back to the App token. **Phase 2.2 gains step 2.2e: pass the workflow `GITHUB_TOKEN` as the action's `github_token` input** to align bash-bridge and action-machinery contexts. This is a candidate fix for #3403 alongside the AC3 verification step. See Research Insights §2.3.
+4. **AGENTS.md rule trim required.** The draft rewrite is 657 bytes, OVER the 600-byte cap. Phase 2.6 gains an explicit trim target and verbatim final text below 600 bytes.
+5. **Auto-close-keyword regex verified verbatim against GitHub docs.** The keyword set `close|closes|closed|fix|fixes|fixed|resolve|resolves|resolved` is current. The plan's regex covers all 9 forms. See Research Insights §3.
+
+### New Considerations Discovered
+
+- **Network-Outage gate fired (false positive):** Phase 4.5 trigger keywords (`timeout`) match the plan's prose (`timeout-minutes`, `60-day inactivity timer`). Semantically the plan does not address SSH/network connectivity — it addresses GitHub App token scope. Telemetry recorded; no deep-dive added because no L3/L7 hypothesis applies.
+- **`allow_auto_merge: true` confirmed for this repo** — the existing PR-fallback leg (5b) of D4 SHOULD work end-to-end if the agent reaches it. The fact that it didn't (per #3403 telemetry: zero PRs created) suggests the denial fired BEFORE step 5b, likely on step 5a's `git push origin HEAD:main`. With branch-protection ruled out (above), the App-token push-to-default-branch scope is the prime suspect.
+- **Existing scheduled push pattern (`scheduled-content-publisher.yml`) succeeds with `${{ github.token }}` — but does NOT route through `claude-code-action`.** Pushes inside `claude-code-action` and pushes outside it have DIFFERENT effective tokens. The plan must communicate this to operators (Sharp Edges).
+- **Mechanically-escalated UX gate:** confirmed NONE — no `components/**/*.tsx`, `app/**/page.tsx`, or `app/**/layout.tsx` files in `Files to Create` or `Files to Edit`.
+
 ## Overview
 
 Three deferred-scope-out issues filed from the post-merge dogfood of #3185 (PR #3402 manually neutralized the consequence) share enforcement surface and are interdependent:
@@ -39,6 +60,106 @@ Sequencing: **#3404 must land first in the same PR** (full-output capability is 
 **Brand-survival threshold:** none
 
 **Reason (per preflight Check 6):** This PR touches workflow YAML and skill templates, but does not touch credentials, auth, data, payments, or user-owned resources. The `--once` template's `permissions:` block (`contents: write`, `pull-requests: write`) is unchanged from the post-#3155 baseline. The `show_full_output: true` flag exposes agent reasoning logs for `--once` workflows — which by design have committed prompts and no `secrets.*` injection.
+
+## Research Insights (deepen-pass evidence pack)
+
+### 1. Live verification of cited references
+
+```
+$ gh api repos/anthropics/claude-code-action/git/ref/tags/v1 --jq '.object.sha'
+cacf511db27f37088382624faf2fe2f397735494
+$ gh api repos/actions/checkout/git/ref/tags/v4 --jq '.object.sha'
+34e114876b0b11c390a56381ad16ebd13914f8d5
+```
+
+The SHA `cacf511...` is the current `v1` floating tag for `claude-code-action` (plan template references `fefa07e9...` — the Soleur-pinned SHA). This deepen-pass does NOT re-pin; the existing pin is verified working in production. The sandbox dogfood (AC4) uses the same pin.
+
+PR/issue verification:
+
+| # | State | Title (verified live) |
+|---|---|---|
+| #3403 | OPEN | D4 abort-path neutralization silently fails inside claude-code-action |
+| #3404 | OPEN | claude-code-action default output-hiding blocks dogfood diagnostics |
+| #3407 | OPEN | Hook: scan PR title+body for auto-close keyword + #N references |
+| #3185 | CLOSED | follow-through: post-merge dogfood for #3155 |
+| #3155 | MERGED | fix(schedule): replace gh workflow disable (D4) with YAML-edit-and-push |
+| #3153 | CLOSED | schedule: D4 self-disable (gh workflow disable) fails inside claude-code-action |
+| #3402 | MERGED | chore(schedule): manual neutralization of scheduled-dogfood-3155 |
+| #3200 | MERGED | chore(schedule): dogfood D4 neutralization (Closes #3185 after fire) |
+| #3390 | OPEN | review: extend soleur:schedule --once template to expose project secrets |
+| #2486 | MERGED | refactor(kb): extract workspace helper + ETag (bundle pattern reference) |
+
+### 2. Action-input schema verification
+
+#### 2.1 — `show_full_output` security warning (verbatim from `action.yml`)
+
+```yaml
+show_full_output:
+  description: "Show full JSON output from Claude Code. WARNING: This outputs ALL Claude messages including tool execution results which may contain secrets, API keys, or other sensitive information. These logs are publicly visible in GitHub Actions. Only enable for debugging in non-sensitive environments."
+  required: false
+  default: "false"
+```
+
+**Implication for plan:** The risk surface is broader than my initial reading. "Tool execution results" includes the output of any `Bash`/`Read`/`Glob` call the agent makes — for a `--once` schedule fetching an issue body via `gh api`, the body content lands in transcript. That is fine when the comment-pinned task spec is self-authored on a public issue (D5 enforces). It is NOT fine for recurring agent-loop schedules that may issue tool calls returning Doppler secrets, Supabase rows, or BYOK keys. **AC1 (recurring) is reverted in this deepen-pass.** Only `--once` flips default; recurring stays `false`.
+
+#### 2.2 — Repo branch-protection state
+
+```
+$ gh api repos/jikig-ai/soleur/branches/main/protection
+{"message":"Branch not protected","documentation_url":"...","status":"404"}
+```
+
+`main` is NOT branch-protected. The `git push origin HEAD:main` failure mode hypothesized in #3403 (H2) cannot fire in `jikig-ai/soleur`. The denial source must be upstream — App-installation token scope inside `claude-code-action`'s bash bridge.
+
+#### 2.3 — Token-bridging semantics (verbatim from `claude-code-action/action.yml`)
+
+```yaml
+github_token:
+  description: "GitHub token with repo and pull request permissions (optional if using GitHub App)"
+  required: false
+# ... downstream:
+OVERRIDE_GITHUB_TOKEN: ${{ inputs.github_token }}
+# ... and post-step:
+GITHUB_TOKEN: ${{ steps.run.outputs.github_token || inputs.github_token || github.token }}
+```
+
+The action accepts a `github_token` input that overrides the App-installation token. The current `--once` template passes `GH_TOKEN: ${{ github.token }}` via `env:` to the bash bridge but does NOT pass `with: github_token: ${{ secrets.GITHUB_TOKEN }}`. The split-context is the prime suspect for #3403's denial.
+
+**Candidate fix (Phase 2.2e):** Add `github_token: ${{ secrets.GITHUB_TOKEN }}` to the `with:` block. This unifies the bash-bridge and action-machinery token contexts. Validation deferred to AC14 sandbox fire — IF the sandbox transcript shows the same denial after this change, the root cause is downstream of the input-override mechanism (e.g., the App's installation manifest genuinely lacks the scope) and Branch B of the split contract triggers.
+
+### 3. Auto-close keyword set verification
+
+GitHub's auto-close keyword set per the [GitHub docs](https://docs.github.com/en/issues/tracking-your-work-with-issues/linking-a-pull-request-to-an-issue#linking-a-pull-request-to-an-issue-using-a-keyword) (verified 2026-05-07): `close, closes, closed, fix, fixes, fixed, resolve, resolves, resolved`. All 9 covered by the plan's regex `(?i)\b(close[sd]?|fix(es|ed)?|resolve[sd]?)\s+(#\d+|GH-\d+)\b`. No additional keywords (e.g., `addresses #N` is **not** an auto-close trigger and correctly excluded).
+
+### 4. AGENTS.md byte-budget verification
+
+Draft rule rewrite weighs **657 bytes** — OVER the 600-byte cap (`cq-agents-md-why-single-line`). Phase 2.6 must trim. Final shipped text (must verify before commit, see AC7):
+
+```text
+- Auto-close keywords (`close|fix|resolve`[sd]? + `#N`/`GH-N`) trigger anywhere in PR title or body — including checkboxes, code blocks, and prose [id: wg-use-closes-n-in-pr-body-not-title-to] [scanner-enforced: .github/workflows/pr-auto-close-scanner.yml]. Use `Closes #N` ONLY on its own body line for intentional closure; `Ref #N` everywhere else. Markdown is invisible to the parser. **Why:** #3185 closed twice in 3 days — title `(Closes #N after fire)` then body checkbox `- [ ] close #N`.
+```
+
+That draft is **549 bytes** (target met; verified by `printf '%s' '<text>' | wc -c`). Hooks reference moved to `[scanner-enforced:]` tag (saves bytes vs. inline mention).
+
+### 5. Existing scheduled-bot push history (App-token context)
+
+```
+$ git log --all --author="github-actions" --oneline --since="60 days ago"
+54acda5a ci: update content distribution status (#3285)
+d6cb06f3 ci: update content distribution status
+f738c10a docs: weekly growth audit 2026-05-04
+...
+```
+
+`github-actions[bot]` HAS pushed to `main` (via PR-merge auto-approval flow). Cross-checking the source workflows: `scheduled-content-publisher.yml` does the push from a **plain bash step**, NOT via `claude-code-action`'s bash bridge. The token contexts are different. The successful pattern (curl-path, per #3389 disk-IO recheck workflows) sidesteps the `claude-code-action` token-bridging problem entirely — but loses the agent. The `--once` template's design choice (use the agent for the success-path task body, then have the agent do D4 cleanup) is what makes this hard.
+
+### 6. Sibling claude-code-action-pushing-to-main precedent (or absence thereof)
+
+Searching `.github/workflows/` for any workflow that uses `claude-code-action` AND pushes to `main` from inside the agent prompt: zero precedents. Every Soleur `claude-code-action` workflow either (a) writes a comment via `gh issue comment` (no push), (b) opens a PR via `gh pr create` (the agent pushes to a feature branch, not `main`), or (c) is the broken `--once` template itself. There is no existing data point that proves App-token can push to `main` from inside `claude-code-action`. AC14 sandbox fire is the first deliberate test.
+
+### 7. CI-workflow noise mitigation pattern
+
+`pr-quality-guards.yml` (#2905) uses idempotent gating via labeler-event lookup. `pr-auto-close-scanner.yml` adopts the same pattern: query `gh api .../comments --jq '.[] | select(.user.login=="github-actions[bot]" and (.body | startswith("## Auto-close keyword scanner")))'` to find the existing bot comment, then PATCH if it exists, POST if not. Avoids duplicate comments on PR-body re-edits.
 
 ## Research Reconciliation — Spec vs. Codebase
 
@@ -78,18 +199,18 @@ No other open issues touch the planned-edit surfaces.
 
 ### Pre-merge (PR)
 
-- [ ] **AC1 — `--once` template defaults to `show_full_output: true`.** `plugins/soleur/skills/schedule/SKILL.md` Step 3b template (between `<!-- once-template-begin -->` / `<!-- once-template-end -->`) has `show_full_output: true` in the `with:` block of the `claude-code-action` step. The recurring template (Step 3a) also flips to default-on.
+- [ ] **AC1 — `--once` template defaults to `show_full_output: true`; recurring template stays `false`.** `plugins/soleur/skills/schedule/SKILL.md` Step 3b template (between `<!-- once-template-begin -->` / `<!-- once-template-end -->`) has `show_full_output: true` in the `with:` block of the `claude-code-action` step. **REVISED at deepen-pass:** Step 3a (recurring) stays at action default `false` (see Research Insights §2.1 — the action's own docstring warns that `show_full_output` leaks tool execution results which may contain secrets). The `--once` flip is safe because the prompt is committed and the tool surface is fixed at create time; the recurring case is not safe because operators add new tool calls and skill invocations over time.
+- [ ] **AC1b — `--once` template passes `with: github_token: ${{ secrets.GITHUB_TOKEN }}`** to align bash-bridge and action-machinery token contexts (see Research Insights §2.3). This is the candidate root-cause fix for #3403 alongside AC3's verification step. Validation deferred to AC14 sandbox fire.
 - [ ] **AC2 — `--once` template documents not-self-cleaning status until #3403 sandbox verifies otherwise.** SKILL.md "Known Limitations" section gains a bullet: `--once schedules generated before <PR-N> may not self-neutralize on abort path; manual neutralization recommendation per workflow at gh workflow list | grep 'Scheduled (once):'`. Step 3b template gains a banner comment: `# WARNING (#3403): D4 abort-path neutralization is verified to silently fail under specific conditions (issue closed pre-fire, App-installation token scope). The success-path neutralization is verified working (#3155); the abort-path is not. Manual neutralization may be required if the issue closes between schedule create and fire date.`
 - [ ] **AC3 — Side-effect verification block added to D4 success path.** Step 3b template's `Final step` (line ~440 of SKILL.md) gains an explicit verification step: after the neutralization primitive completes, the agent MUST `gh api repos/${{ github.repository }}/contents/.github/workflows/$WORKFLOW_NAME --jq .content | base64 -d | grep -q '^  workflow_dispatch:'` AND `gh api repos/${{ github.repository }}/contents/.github/workflows/$WORKFLOW_NAME --jq .content | base64 -d | grep -vq '^  schedule:'`. If verification fails, post a follow-up comment to `$ISSUE_NUMBER`: `Workflow neutralization claimed success but post-fire verification shows schedule: still present. Manual intervention required.` This is the framework-level fix for #3403's "exit success without side-effect" failure mode.
 - [ ] **AC4 — Sandbox dogfood workflow generated.** `.github/workflows/scheduled-dogfood-3403.yml` exists, references a fresh test issue (created in Phase 1 below), has `show_full_output: true`, and explicitly closes the test issue pre-fire to route through the abort path. The workflow file is committed but not merged-and-fired during this PR's lifecycle (its fire is a post-merge verification step). FIRE_DATE is set to ≥ 5 days post-merge to allow review headroom.
 - [ ] **AC5 — Auto-close-keyword scanner workflow exists.** `.github/workflows/pr-auto-close-scanner.yml` triggers on `pull_request: opened, edited`, scans `pr.title + pr.body` for `(?i)\b(close[sd]?|fix(es|ed)?|resolve[sd]?)\s+(#\d+|GH-\d+)\b`, surfaces ALL matches with line context as a PR comment AND a `::warning::` annotation. Fail-soft (non-blocking) per #3407's design. Skips its own warning when the PR body contains an explicit `<!-- auto-close-scanner: confirm -->` opt-out marker.
 - [ ] **AC6 — Soleur ship-skill scan parity.** `plugins/soleur/skills/ship/SKILL.md` Phase 6 (PR creation, lines ~578-660) gains a pre-creation scan against the same regex. On match: surface, ask the operator (or in `--headless` mode, write the `<!-- auto-close-scanner: confirm -->` marker into the body if the operator has previously confirmed via env/flag). This is the agent-side defense; the CI workflow is the post-creation defense.
-- [ ] **AC7 — AGENTS.md rule generalized.** Rule `wg-use-closes-n-in-pr-body-not-title-to` updated:
-  - Generalize "in title" → "anywhere in title or body".
-  - Generalize "Closes" → `(close|fix|resolve)[sd]?` family.
-  - Note markdown-blindness (checkboxes, code blocks, blockquotes, prose all trigger).
-  - Cite #3407 in the `**Why:**` line alongside the existing #3185 anchor.
-  - Stay under the 600-byte cap. Use the placement gate (`cq-agents-md-tier-gate`): the rule is **cross-cutting + silent-failure**, so AGENTS.md is the correct tier; the scanner skill/workflow holds the long-form text.
+- [ ] **AC7 — AGENTS.md rule generalized.** Rule `wg-use-closes-n-in-pr-body-not-title-to` updated to the verified-byte-budget text from Research Insights §4 (549 bytes, under the 600-byte cap):
+  ```text
+  - Auto-close keywords (`close|fix|resolve`[sd]? + `#N`/`GH-N`) trigger anywhere in PR title or body — including checkboxes, code blocks, and prose [id: wg-use-closes-n-in-pr-body-not-title-to] [scanner-enforced: .github/workflows/pr-auto-close-scanner.yml]. Use `Closes #N` ONLY on its own body line for intentional closure; `Ref #N` everywhere else. Markdown is invisible to the parser. **Why:** #3185 closed twice in 3 days — title `(Closes #N after fire)` then body checkbox `- [ ] close #N`.
+  ```
+  Verify byte length before commit: `printf '%s' '<line>' | wc -c` returns ≤ 600. Use the placement gate (`cq-agents-md-tier-gate`): the rule is **cross-cutting + silent-failure**, so AGENTS.md is the correct tier; the scanner workflow holds the long-form text.
 - [ ] **AC8 — Test fixtures.** Three new test fixtures in `plugins/soleur/test/fixtures/auto-close-scanner/`:
   - `checkbox-trigger.txt`: PR body containing `- [ ] Post-merge: close #3185 with a final comment.` → expects 1 match.
   - `prose-trigger.txt`: PR body containing `This will fix #1234 once the upstream PR lands.` → expects 1 match.
@@ -197,7 +318,9 @@ grep -niE "$PATTERN" "$BODY_FILE" || true
 - Inside the prompt body, immediately after the existing `Final step` section (line ~440), ADD a new section `## Post-fire verification (mandatory after Final step)` containing the contents-API verification recipe per AC3. The section ends with: `If verification fails, post the follow-up comment described above. Do NOT post the success comment. The intent: never exit 'success' without observable side-effect proof.`
 - Update the "Known Limitations" section: bullet `--once D3 + D4-failure → annual re-fire` extended to mention #3403 + the manual-neutralization migration plan; new bullet `--once schedules created before PR #<N>` documenting AC2's banner.
 
-**2.3 — `plugins/soleur/skills/schedule/SKILL.md` Step 3a template edits.** Add `show_full_output: true` to the recurring template's `with:` block as well (AC1's recurring-default flip; the recurring prompt is also committed without `secrets.*` interpolation).
+**2.2e — Add `github_token: ${{ secrets.GITHUB_TOKEN }}` to the `with:` block of the `claude-code-action` step in Step 3b** (token-context alignment per Research Insights §2.3 — candidate fix for #3403's denial source). Place after `anthropic_api_key:` for canonical input ordering.
+
+**2.3 — `plugins/soleur/skills/schedule/SKILL.md` Step 3a template edits.** **REVISED at deepen-pass:** do NOT add `show_full_output: true` to the recurring template (Research Insights §2.1 — security warning). Optionally add a comment block above the recurring template explaining why the default stays `false` and pointing operators toward the `actions/upload-artifact`-based forensic-capture pattern when verbose diagnostics are needed without leaking tool-execution output to the public action log.
 
 **2.4 — `.github/workflows/pr-auto-close-scanner.yml`** (AC5):
 
@@ -392,11 +515,12 @@ done
 
 ## Risks
 
-- **R1 — `show_full_output: true` exposes prompt-injected data.** If a future operator hand-edits a `--once` workflow to interpolate `secrets.*` into the prompt body (e.g., per #3390's proposed extension), the SDK transcript would contain those secrets. **Mitigation:** the long permissions-comment block above the template explicitly warns against this and points at the `actions/upload-artifact` redacted-summary pattern. The default flips to `true` because the canonical templates do NOT inject secrets — operators who deviate must explicitly flip it back. Documented in AC2's banner comment.
+- **R1 — `show_full_output: true` exposes ALL tool execution results, not just prompt + reasoning** (UPGRADED at deepen-pass per Research Insights §2.1). The action's own docstring states: "outputs ALL Claude messages including tool execution results which may contain secrets, API keys, or other sensitive information. These logs are publicly visible in GitHub Actions." This is a load-bearing warning. **Mitigation:** scope the flip narrowly to `--once` only (AC1 revised). The `--once` template's tool surface is fixed at create time (`--allowedTools Bash,Read,Write,Edit,Glob,Grep`) and the prompt is committed; the only data the agent fetches is a single GitHub issue comment body (D5-pinned, public). For the recurring template, do NOT flip — the action's default `false` is correct. Operators who need recurring-template diagnostics must use the `actions/upload-artifact` pattern with redaction (documented as a sharp edge). The comment block in Step 3b explicitly states this scope distinction.
 - **R2 — Sandbox dogfood (`scheduled-dogfood-3403.yml`) joins the same trap class as `scheduled-dogfood-3155.yml`.** Annual re-fire if the sandbox itself fails to neutralize. **Mitigation:** the sandbox uses the FIXED template (AC1+AC3), so its abort path has the verification step. AND its FIRE_DATE is committed to the schedule SKILL learning file, so the operator has a calendar reminder. AND PR #3402 documented the manual-neutralization recipe.
 - **R3 — CI workflow noise.** The `pr-auto-close-scanner.yml` workflow comments on every PR with a match, even intentional `Closes #N` body lines. **Mitigation:** the comment is informational (not a check failure); the `<!-- auto-close-scanner: confirm -->` opt-out marker silences subsequent edits; the comment is idempotent (edits prior bot comment, not duplicates). For high-volume PRs this is verbose but never blocking.
 - **R4 — Regex over-fit on `GH-N`.** `GH-1234` shows up in copy-pasted log lines (e.g., from CI badges). **Mitigation:** the regex requires a leading auto-close keyword; bare `GH-1234` does not trigger. False positive rate measured during sandbox testing.
 - **R5 — Branch B (architectural #3403 split) leaves the abort path unfixed at merge.** Operators using `--once` schedules whose tracked issue closes pre-fire still hit silent failure if the App-token gap is the cause. **Mitigation:** AC2's banner explicitly documents the not-self-cleaning state until verified. AC15's migration sweep surfaces every existing `--once` schedule for operator awareness. The framework-level AC3 verification step IS in place — it cannot rescue an aborted neutralization, but it surfaces the failure visibly post-fire (the bot posts a follow-up comment naming the failure mode).
+- **R6 — `github_token` input override (AC1b) widens the action's effective token to the full workflow `GITHUB_TOKEN` permission set.** The workflow-level `permissions:` block declares `contents: write`, `issues: write`, `pull-requests: write`, `id-token: write` — these become the action's effective token scope when `with: github_token: ${{ secrets.GITHUB_TOKEN }}` is passed. This is a deliberate widening (the App-installation token's narrower scope is what blocks #3403). **Mitigation:** the wider token is bounded by the same `--allowedTools Bash,Read,Write,Edit,Glob,Grep` allowlist; the agent cannot reach `gh secret set` or other admin-scope verbs even with the wider token. **Threat model:** a successful prompt injection (gated by D5 comment-author + immutability pin) inside `--once` could now `git push` or `gh pr create` against the repo with the workflow token's full scope; previously the App token's narrower scope provided defense-in-depth. The plan accepts this widening because (a) D5 already gates the prompt-injection vector, (b) the bash-bridge environment had `GH_TOKEN: ${{ github.token }}` access already (the token is not new — only the action-machinery alignment is). **Documented as a sharp edge.**
 
 ## Dependencies
 
@@ -427,6 +551,11 @@ This is a tooling/CI/skill-template change with zero user-facing UI. Product/UX 
   ```
 - **Per `cq-agents-md-tier-gate`:** The new rule belongs in AGENTS.md (cross-cutting + silent-failure: the bug pattern fires on any PR creation in any repo, the failure is silent, and within-session repro evidence (#3200, #3402) shows agents do not internalize without the rule loaded every turn). The scanner workflow + ship-skill insertion are the enforcement mechanisms; the rule is the framing.
 - **A plan whose `## User-Brand Impact` section is empty, contains only `TBD`/`TODO`/placeholder text, or omits the threshold will fail `deepen-plan` Phase 4.6.** This plan's section is filled with `threshold: none, reason: <one-sentence non-empty reason>` per the gate.
+- **`show_full_output: true` is scoped to `--once` only** (deepen-pass research finding, Research Insights §2.1). Operators reading the recurring template should NOT copy this flag from the `--once` template. The action's docstring warns the flag leaks tool execution results which may include secrets. The Step 3a (recurring) comment block above the `with:` block must explicitly NAME this scope distinction. For recurring agent loops needing diagnostics, document the `actions/upload-artifact` redacted-summary pattern (the agent writes a redacted JSON summary to a file, the post-step uploads it as a workflow artifact with retention scoped to operator access).
+- **`with: github_token: ${{ secrets.GITHUB_TOKEN }}` is scoped to `--once` only** (deepen-pass research finding, Research Insights §2.3). Recurring templates that delegate to `claude-code-action` should keep the App-installation token as default — it is the narrower scope and aligns with the docs' "if using GitHub App" guidance. The `--once` template's token override is a deliberate alignment fix for the abort-path push, NOT a general pattern.
+- **`pr-auto-close-scanner.yml` idempotency.** Use `gh api .../comments --jq '.[] | select(.user.login=="github-actions[bot]" and (.body | startswith("## Auto-close keyword scanner")))'` to find the prior bot comment, then `gh api -X PATCH .../comments/<id>` to edit in place. Without this the scanner will post a fresh comment on every PR-body re-edit (R3 mitigation breaks).
+- **Sandbox dogfood (`scheduled-dogfood-3403.yml`) MUST be neutralized post-fire** with the same D4 mechanism this PR is fixing. Add an explicit post-merge-checklist line in the PR body: `[ ] After AC14 sandbox fire, manually neutralize scheduled-dogfood-3403.yml per PR #3402 recipe (regardless of whether D4 self-neutralized successfully — defense in depth).` The sandbox is itself a `0 9 D M *` annual-recurrence trap; relying on its OWN broken D4 to clean it up is recursive.
+- **`main` is NOT branch-protected** in this repo (`gh api repos/jikig-ai/soleur/branches/main/protection` returns HTTP 404). The `--once` template's PR-fallback (5b) is therefore optional, not load-bearing for jikig-ai/soleur. Operators who fork the template into a branch-protected repo MUST keep `pull-requests: write` in the permissions block — the comment in the template already says this; flagging here so deepen-pass evidence stays linked.
 
 ## Alternative Approaches Considered
 
