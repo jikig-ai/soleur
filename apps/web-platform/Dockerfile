@@ -71,6 +71,9 @@ RUN npm ci --omit=dev
 # re-copy, devDependencies migration) strips pdfjs-dist or sharp from the runner stage,
 # which would otherwise be swallowed by try/catch in pdf-text-extract.ts /
 # kb-preview-metadata.ts and surface only as a WARN Sentry breadcrumb in production.
+# pdfjs-dist is a direct dep (apps/web-platform/package.json); sharp is transitive via
+# Next.js — if Next ever drops it, this assertion fires loudly instead of breaking
+# kb-share image previews silently.
 # See #3422 / Ref #3410.
 RUN node -e "require.resolve('pdfjs-dist/legacy/build/pdf.mjs'); require.resolve('sharp')"
 

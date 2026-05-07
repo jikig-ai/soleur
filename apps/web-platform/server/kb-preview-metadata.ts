@@ -81,6 +81,10 @@ export async function readPdfMetadata(
   }
 
   try {
+    // If you add or rename a bare-specifier `await import()` here, mirror it
+    // in the build-time `require.resolve` assertion in apps/web-platform/Dockerfile
+    // (see #3422) — otherwise a missing dep silently routes through the catch
+    // below and surfaces only as a WARN Sentry breadcrumb.
     const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
     // Legacy entry provides a fake worker for Node so GlobalWorkerOptions
     // does not need to be set. isEvalSupported: false avoids Function()
@@ -129,6 +133,10 @@ export async function readImageMetadata(
   }
 
   try {
+    // Mirrored in apps/web-platform/Dockerfile build-time `require.resolve`
+    // assertion (see #3422). `sharp` resolves transitively via Next.js today
+    // — if Next.js ever drops it, the Dockerfile assertion fires loudly
+    // instead of letting this catch silently null out kb-share previews.
     const sharp = (await import("sharp")).default;
     const meta = await sharp(buffer).metadata();
     if (!meta.width || !meta.height || !meta.format) return null;
