@@ -21,6 +21,7 @@ import {
   abortSession,
 } from "./agent-runner";
 import { updateConversationFor } from "./conversation-writer";
+import { WS_CAPABILITIES } from "@/lib/ws-capabilities";
 import { reportSilentFallback } from "./observability";
 import * as Sentry from "@sentry/nextjs";
 import { sanitizeErrorForClient } from "./error-sanitizer";
@@ -356,7 +357,11 @@ export async function tryLedgerDivergenceRecovery(
     // rows are the load-bearing case where the user-visible row flips
     // from Executing to failed. `expectMatch: false` because both classes
     // include benign zero-row outcomes (archived row, already-terminal,
-    // hard-deleted).
+    // hard-deleted). #3463: `onlyIfStatusIn: ["active"]` narrows the
+    // race surface where divergence detection ran ≤Xms before a
+    // legitimate result-branch flipped the row to `waiting_for_user` —
+    // without the guard the recovery path stomps a healthy terminal
+    // state to `failed`.
     await Promise.all(
       reapable.map((cid) =>
         updateConversationFor(
@@ -369,6 +374,7 @@ export async function tryLedgerDivergenceRecovery(
               ? "start_session-recovery-finalize-orphan"
               : "start_session-recovery-finalize-stale-heartbeat",
             expectMatch: false,
+            onlyIfStatusIn: ["active"],
           },
         ).catch(() => undefined),
       ),
@@ -1191,7 +1197,11 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
           "start_session (deferred creation)",
         );
 
-        sendToClient(userId, { type: "session_started", conversationId: session.pending.id });
+        sendToClient(userId, {
+          type: "session_started",
+          conversationId: session.pending.id,
+          capabilities: WS_CAPABILITIES,
+        });
         resetIdleTimer(userId, session);
         log.debug("session_started sent to client");
       } catch (err) {
@@ -1251,6 +1261,7 @@ export async function handleMessage(userId: string, raw: string): Promise<void> 
         sendToClient(userId, {
           type: "session_started",
           conversationId: msg.conversationId,
+          capabilities: WS_CAPABILITIES,
         });
       } catch (err) {
         Sentry.captureException(err);

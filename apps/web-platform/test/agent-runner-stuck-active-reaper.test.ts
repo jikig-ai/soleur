@@ -178,6 +178,14 @@ function setupSupabaseMockForReaper(args: {
               if (col === "user_id") capturedUserId = val;
               return chain;
             }),
+            // #3463: reaper now appends `.in("status", ["active"])` so a
+            // healthy result-branch flip in the candidate-fetch-to-update
+            // window doesn't get stomped. The mock returns the same
+            // chain so the wrapper's `await guardedQuery` resolves
+            // through `.then` above (silent success on the no-op path
+            // is the contract; this mock simulates the row-matched
+            // path so the test continues to exercise the reap flow).
+            in: vi.fn(() => chain),
             select: vi.fn(() => {
               recordWrite();
               return Promise.resolve({
