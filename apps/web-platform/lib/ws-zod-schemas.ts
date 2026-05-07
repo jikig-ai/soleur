@@ -271,8 +271,17 @@ const sessionStartedSchema = z.strictObject({
   // `interactive_prompt.kind` values this server build can emit. Absent =
   // legacy server, treat as the default 6-kind set. Lets external agents
   // skip a feature-detection round-trip.
+  //
+  // #3464 — `incomingTypes` advertises the curated client→server message
+  // types this server build accepts as stable agent primitives (today:
+  // `["abort_turn"]`). Required-for-protocol and feature-internal
+  // variants are intentionally not advertised. Source of truth:
+  // `apps/web-platform/lib/ws-capabilities.ts`.
   capabilities: z
-    .strictObject({ promptKinds: z.array(z.string()).readonly() })
+    .strictObject({
+      promptKinds: z.array(z.string()).readonly(),
+      incomingTypes: z.array(z.string()).readonly().optional(),
+    })
     .optional(),
 });
 const sessionResumedSchema = z.strictObject({

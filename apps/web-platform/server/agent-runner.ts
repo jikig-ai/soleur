@@ -454,6 +454,75 @@ async function updateConversationStatus(
   }
 }
 
+/**
+ * Status set the race-safe finalize helper guards on. Pinned to a
+ * `Conversation["status"]` literal subset via `satisfies` so a future
+ * widening of the conversation-status enum is a TS error here rather
+ * than silent semantic drift at every guarded site.
+ */
+const ACTIVE_STATUSES_FOR_FINALIZE = [
+  "active",
+] as const satisfies ReadonlyArray<Conversation["status"]>;
+
+/**
+ * Race-safe variant of {@link updateConversationStatus} for the
+ * abort/result-branch finalization sites: writes the new status only
+ * when the row's current `status` is `active`. A row that already
+ * reached a terminal state is left untouched and the call returns
+ * silently.
+ *
+ * Use at sites that race against the result branch's terminal-state
+ * write — most importantly the disconnect-after-result window in
+ * `ws.on("close")` → `abortSession(uid, convId)` → outer-catch abort
+ * branch (#3463). The wrapper's `expectMatch: false` plus the
+ * `onlyIfStatusIn` guard means a 0-rows outcome is the success case,
+ * not a degraded fallback — no Sentry mirror is emitted (per
+ * `cq-silent-fallback-must-mirror-to-sentry` "expected states"
+ * exemption).
+ *
+ * **`last_active` semantics:** when the status guard excludes the
+ * row, `last_active` is also left untouched in the same UPDATE. This
+ * is intentional — the writer that already wrote the terminal state
+ * (typically the result branch's primary `waiting_for_user` write)
+ * bumped `last_active` in its own UPDATE, so this helper's no-op
+ * preserves the canonical timestamp.
+ *
+ * **Throws** on a real Supabase error (network, permission, timeout)
+ * so the call site's `.catch(...)` handler fires and emits
+ * site-specific diagnostic logs. The conversation-writer's
+ * `reportSilentFallback` already mirrors the underlying error to
+ * Sentry; the throw lets the call site add abort-vs-cascade context
+ * the writer doesn't know.
+ *
+ * **Do NOT use** at sites whose 0-rows-affected outcome is a real
+ * failure (the result branch's primary `waiting_for_user` write, or
+ * its first-attempt fallback re-write) — those sites need
+ * `expectMatch: true` and use the strict
+ * {@link updateConversationStatus} helper.
+ */
+async function updateConversationStatusIfActive(
+  userId: string,
+  conversationId: string,
+  status: Conversation["status"],
+): Promise<void> {
+  const result = await updateConversationFor(
+    userId,
+    conversationId,
+    { status, last_active: new Date().toISOString() },
+    {
+      feature: "agent-runner",
+      op: "updateConversationStatusIfActive",
+      onlyIfStatusIn: ACTIVE_STATUSES_FOR_FINALIZE,
+    },
+  );
+
+  if (!result.ok) {
+    throw new Error(
+      `Failed to update conversation status (race-safe): ${result.error?.message ?? "unknown"}`,
+    );
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Conversation history for replay fallback
 // ---------------------------------------------------------------------------
@@ -657,8 +726,18 @@ export function startStuckActiveReaper(): NodeJS.Timeout {
     // per-row, not cross-row.
     await Promise.allSettled(
       candidates.map(async (conv) => {
-        // Idempotent — if another replica already flipped the row, the
-        // expectMatch:false update is a no-op.
+        // #3463: race-window guard. The candidate set was computed
+        // ≤60s ago; the candidate's session may have completed cleanly
+        // (result branch wrote `waiting_for_user`) in the interval
+        // between RPC return and this UPDATE. The `find_stuck_active`
+        // RPC selects on `status='active' AND heartbeat-stale`, but
+        // the row's status could legitimately have moved off `active`
+        // by now. Without the guard the reaper stomps that
+        // `waiting_for_user` to `failed` AND calls abortSession +
+        // releaseSlot — strictly more dangerous than the
+        // disconnect-after-result race because it tears down a healthy
+        // session. The `.in("status", ["active"])` predicate makes the
+        // race-loser a silent no-op.
         const result = await updateConversationFor(
           conv.user_id,
           conv.id,
@@ -667,6 +746,7 @@ export function startStuckActiveReaper(): NodeJS.Timeout {
             feature: "concurrency-stuck-active-reaper",
             op: "finalize",
             expectMatch: false,
+            onlyIfStatusIn: ACTIVE_STATUSES_FOR_FINALIZE,
           },
         );
         if (!result.ok) {
@@ -1643,27 +1723,31 @@ issues/PRs, 4 KB comments); follow the html_url for the full text.`;
                 { err: waitingErr, userId, conversationId },
                 "result-branch fallback: waiting_for_user flip failed; cascading to failed",
               );
-              await updateConversationStatus(userId, conversationId, "failed").catch(
-                (failedErr) => {
-                  log.error(
-                    { err: failedErr, userId, conversationId },
-                    "result-branch fallback: failed-status flip also failed",
-                  );
-                },
-              );
+              await updateConversationStatusIfActive(
+                userId,
+                conversationId,
+                "failed",
+              ).catch((failedErr) => {
+                log.error(
+                  { err: failedErr, userId, conversationId },
+                  "result-branch fallback: failed-status flip also failed",
+                );
+              });
             }
           } else {
             // `saveMessage` itself threw or never ran — there is no
             // user-visible assistant content so `failed` is the honest
             // terminal state.
-            await updateConversationStatus(userId, conversationId, "failed").catch(
-              (failedErr) => {
-                log.error(
-                  { err: failedErr, userId, conversationId },
-                  "result-branch fallback: failed-status flip failed (no assistant text)",
-                );
-              },
-            );
+            await updateConversationStatusIfActive(
+              userId,
+              conversationId,
+              "failed",
+            ).catch((failedErr) => {
+              log.error(
+                { err: failedErr, userId, conversationId },
+                "result-branch fallback: failed-status flip failed (no assistant text)",
+              );
+            });
           }
           // Idempotent keyed DELETE — safe even if archive-trigger or a
           // concurrent teardown already released the slot.
@@ -1763,19 +1847,28 @@ issues/PRs, 4 KB comments); follow the html_url for the full text.`;
         const nextConversationStatus: Conversation["status"] = isUserRequested
           ? "waiting_for_user"
           : "failed";
-        await updateConversationStatus(userId, conversationId, nextConversationStatus).catch(
-          (statusErr) => {
-            log.error(
-              { err: statusErr, conversationId, isUserRequested },
-              "Failed to write aborted-conversation status",
-            );
-            reportSilentFallback(statusErr, {
-              feature: "abort-turn",
-              op: "update-conversation-status",
-              extra: { userId, conversationId, isUserRequested, nextStatus: nextConversationStatus },
-            });
-          },
-        );
+        // #3463: race-window guard — if the result branch already wrote
+        // a terminal state (the disconnect-after-result race), leave it
+        // alone instead of stomping it back to `failed`. The user-Stop
+        // late-click case (`waiting_for_user`) lands at the same end
+        // state regardless of whether this write or the result branch's
+        // wins, so a no-op is semantically equivalent. The
+        // `session_ended:user_aborted` ack below is unconditional.
+        await updateConversationStatusIfActive(
+          userId,
+          conversationId,
+          nextConversationStatus,
+        ).catch((statusErr) => {
+          log.error(
+            { err: statusErr, conversationId, isUserRequested },
+            "Failed to write aborted-conversation status",
+          );
+          reportSilentFallback(statusErr, {
+            feature: "abort-turn",
+            op: "update-conversation-status",
+            extra: { userId, conversationId, isUserRequested, nextStatus: nextConversationStatus },
+          });
+        });
 
         if (isUserRequested) {
           // Send the explicit user-aborted ack so the client can
@@ -1849,14 +1942,16 @@ issues/PRs, 4 KB comments); follow the html_url for the full text.`;
         message,
         errorCode: resolveSessionErrorCode(err),
       });
-      await updateConversationStatus(userId, conversationId, "failed").catch(
-        (statusErr) => {
-          log.error(
-            { err: statusErr, conversationId },
-            "Failed to mark conversation as failed",
-          );
-        },
-      );
+      await updateConversationStatusIfActive(
+        userId,
+        conversationId,
+        "failed",
+      ).catch((statusErr) => {
+        log.error(
+          { err: statusErr, conversationId },
+          "Failed to mark conversation as failed",
+        );
+      });
       // Outer catch: result-branch wrap might not have run; release slot so the user isn't stuck for up to 60s waiting for the reaper.
       // releaseSlot already swallows errors internally (concurrency.ts) — no extra .catch needed.
       await releaseSlot(userId, conversationId);
@@ -2024,12 +2119,19 @@ export async function sendUserMessage(
       message,
       errorCode: resolveSessionErrorCode(err),
     });
-    updateConversationStatus(userId, conversationId, "failed").catch((statusErr) => {
-      log.error(
-        { err: statusErr, conversationId },
-        "Failed to mark conversation as failed",
-      );
-    });
+    // #3463: same race surface as startAgentSession's outer catch — a
+    // concurrent terminal-state writer (result branch in another leader
+    // session, the stuck-active reaper, ws-handler ledger-divergence)
+    // may have already moved the row off `active`. Use the race-safe
+    // helper so a late `failed` write here cannot stomp it.
+    updateConversationStatusIfActive(userId, conversationId, "failed").catch(
+      (statusErr) => {
+        log.error(
+          { err: statusErr, conversationId },
+          "Failed to mark conversation as failed",
+        );
+      },
+    );
   };
 
   // Augment content with attachment context for the agent

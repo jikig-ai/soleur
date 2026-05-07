@@ -34,12 +34,19 @@ import {
 type UpdateCall = {
   payload: Record<string, unknown>;
   eqs: Array<[string, unknown]>;
+  ins: Array<[string, unknown[]]>;
 };
 
 function captureUpdateChain(
   opts: {
     errorOnUpdate?: Error | null;
     selectData?: { id: string }[] | null;
+    /** When provided, the update chain resolves with 0 rows IF the
+     *  caller appended an `.in("status", values)` predicate that does
+     *  NOT include `simulatedStatus`. Lets a single test scenario
+     *  exercise both the "row matches the guard" and "row excluded by
+     *  the guard" outcomes without per-test mock branching. */
+    simulatedStatus?: string;
   } = {},
 ): UpdateCall[] {
   const errorOnUpdate = opts.errorOnUpdate ?? null;
@@ -51,7 +58,7 @@ function captureUpdateChain(
     }
     return {
       update: (payload: Record<string, unknown>) => {
-        const entry: UpdateCall = { payload, eqs: [] };
+        const entry: UpdateCall = { payload, eqs: [], ins: [] };
         updateCalls.push(entry);
         const chain: Record<string, unknown> = {
           error: errorOnUpdate,
@@ -59,13 +66,23 @@ function captureUpdateChain(
             entry.eqs.push([col, val]);
             return chain;
           },
+          in: (col: string, vals: unknown[]) => {
+            entry.ins.push([col, vals]);
+            return chain;
+          },
           select: () => ({
             // expectMatch path resolves the chain via .select("id").
-            then: (resolve: (v: unknown) => void) =>
-              resolve({
-                data: opts.selectData ?? [{ id: "conv-1" }],
+            then: (resolve: (v: unknown) => void) => {
+              const guard = entry.ins.find(([c]) => c === "status");
+              const guardExcluded =
+                guard !== undefined &&
+                opts.simulatedStatus !== undefined &&
+                !(guard[1] as string[]).includes(opts.simulatedStatus);
+              return resolve({
+                data: guardExcluded ? [] : (opts.selectData ?? [{ id: "conv-1" }]),
                 error: errorOnUpdate,
-              }),
+              });
+            },
           }),
           then: (resolve: (v: unknown) => void) =>
             resolve({ error: errorOnUpdate }),
@@ -278,5 +295,76 @@ describe("updateConversationFor", () => {
     );
 
     expect(mockReportSilentFallback).toHaveBeenCalledTimes(3);
+  });
+
+  // T10 — onlyIfStatusIn appends `.in("status", [...])` to the base query
+  // (#3463: narrows the abort-branch's UPDATE so it cannot stomp a row
+  // that already reached a terminal state).
+  it("appends .in(status, [...]) when onlyIfStatusIn is provided", async () => {
+    const updateCalls = captureUpdateChain();
+
+    const result = await updateConversationFor(
+      "user-1",
+      "conv-1",
+      { status: "failed" },
+      { onlyIfStatusIn: ["active"] },
+    );
+
+    expect(result.ok).toBe(true);
+    expect(updateCalls).toHaveLength(1);
+    expect(updateCalls[0].ins).toEqual([["status", ["active"]]]);
+
+    // Composite key is still pinned alongside the status guard.
+    const cols = updateCalls[0].eqs.map(([c]) => c).sort();
+    expect(cols).toEqual(["id", "user_id"]);
+  });
+
+  // T11 — onlyIfStatusIn omitted: no .in() chained, behavior identical to today
+  it("does not call .in() when onlyIfStatusIn is omitted", async () => {
+    const updateCalls = captureUpdateChain();
+
+    await updateConversationFor("user-1", "conv-1", { status: "failed" });
+
+    expect(updateCalls).toHaveLength(1);
+    expect(updateCalls[0].ins).toEqual([]);
+  });
+
+  // T12 — onlyIfStatusIn + expectMatch=false: 0-rows-affected (row excluded
+  // by the guard) is silent success, no Sentry mirror. This is the
+  // load-bearing race-window contract for the new agent-runner helper.
+  it("returns ok: true silently when onlyIfStatusIn excludes the row and expectMatch is false", async () => {
+    captureUpdateChain({ simulatedStatus: "waiting_for_user" });
+
+    const result = await updateConversationFor(
+      "user-1",
+      "conv-1",
+      { status: "failed" },
+      { onlyIfStatusIn: ["active"] },
+    );
+
+    expect(result.ok).toBe(true);
+    expect(mockReportSilentFallback).not.toHaveBeenCalled();
+  });
+
+  // T13 — onlyIfStatusIn + expectMatch=true: 0-rows-affected still surfaces
+  // as failure (expectMatch's contract is unchanged by the new guard).
+  it("returns ok: false when onlyIfStatusIn excludes the row and expectMatch is true", async () => {
+    captureUpdateChain({ simulatedStatus: "waiting_for_user" });
+
+    const result = await updateConversationFor(
+      "user-1",
+      "conv-1",
+      { status: "failed" },
+      {
+        onlyIfStatusIn: ["active"],
+        expectMatch: true,
+        feature: "test",
+        op: "guarded-write",
+      },
+    );
+
+    expect(result.ok).toBe(false);
+    expect(result.error?.message).toBe("conversation update affected 0 rows");
+    expect(mockReportSilentFallback).toHaveBeenCalledTimes(1);
   });
 });
