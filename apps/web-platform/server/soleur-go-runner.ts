@@ -240,6 +240,68 @@ function unreadableCopyForClass(
   }
 }
 
+// 2026-05-07 follow-up to #3384 — `PdfExtractErrorClass` routing partition.
+//
+// PR #3384 routed every typed extractor failure through
+// `buildPdfUnreadableDirective` to break the apt-get/pdftotext cascade. That
+// fix overcorrected on classes where the SDK Read tool's Anthropic Files API
+// path (a separate PDF pipeline from in-process pdfjs-dist) may still succeed
+// — the upfront refusal denied users a working summarize on real PDFs that
+// Read could read once steered. This partition recovers the soft-failure
+// route while keeping the cascade defense intact (named-binary list in the
+// gated directive + `disallowedTools: [Bash, Edit, Write]` in cc-dispatcher).
+//
+// Soft = pdfjs-dist-side limitations where SDK Read MAY still succeed:
+//   oversized_buffer | corrupted | parse_error | lazy_import_failed | read_failed
+// Hard = SDK Read genuinely cannot recover (no key, no text layer):
+//   encrypted | empty_text
+const PDF_SOFT_FAILURE_CLASSES: ReadonlySet<PdfExtractErrorClass> = new Set<
+  PdfExtractErrorClass
+>([
+  "oversized_buffer",
+  "corrupted",
+  "parse_error",
+  "lazy_import_failed",
+  "read_failed",
+]);
+
+const PDF_HARD_FAILURE_CLASSES: ReadonlySet<PdfExtractErrorClass> = new Set<
+  PdfExtractErrorClass
+>(["encrypted", "empty_text"]);
+
+// Compile-time exhaustiveness rail on the partition. If `PdfExtractErrorClass`
+// widens (or a member migrates between sets), this assertion fails until the
+// new shape lands in exactly one of the two sets above. Test-time mirror lives
+// in `read-tool-pdf-capability.test.ts > PdfExtractErrorClass routing partition`.
+type _PartitionMembers =
+  | (typeof PDF_SOFT_FAILURE_CLASSES extends ReadonlySet<infer T> ? T : never)
+  | (typeof PDF_HARD_FAILURE_CLASSES extends ReadonlySet<infer T> ? T : never);
+type _AssertPartitionTotal = PdfExtractErrorClass extends _PartitionMembers
+  ? _PartitionMembers extends PdfExtractErrorClass
+    ? true
+    : never
+  : never;
+const _partitionExhaustive: _AssertPartitionTotal = true;
+void _partitionExhaustive;
+
+/**
+ * Runtime predicate: does this error class allow the model to retry via the
+ * SDK Read tool's PDF pipeline? Soft classes (in-process extractor side)
+ * route to `buildPdfGatedDirective`; hard classes (no key, no text layer)
+ * route to `buildPdfUnreadableDirective`.
+ *
+ * The predicate accepts `PdfExtractErrorClass | string` because the runner
+ * sanitizes the wire-typed value via `sanitizePromptString` and may receive
+ * an off-union string (forward-compat with serialized payloads). Off-union
+ * values fall through to the unreadable path — safe-by-construction (we
+ * don't optimistically gate Read on a class we don't recognize).
+ */
+function isPdfSoftFailure(
+  errorClass: PdfExtractErrorClass | string,
+): boolean {
+  return PDF_SOFT_FAILURE_CLASSES.has(errorClass as PdfExtractErrorClass);
+}
+
 // Sanitizer shared with `buildSoleurGoSystemPrompt`. Strips control chars +
 // U+2028/U+2029 (separator-based prompt injection) and 256-caps short
 // identifiers (paths). See learning 2026-04-17-log-injection-unicode-line-separators.md.
@@ -758,23 +820,44 @@ export function buildSoleurGoSystemPrompt(
           // eslint-disable-next-line no-control-regex -- intentional strip
           .replace(/[\x00-\x1f\x7f\u2028\u2029]/g, "")
           .replaceAll("</document>", "<\\/document>");
-        // 2026-05-06 follow-up: `documentExtractError` wins over inlining.
-        // The resolver makes the two mutually exclusive (it only sets
-        // `documentExtractError` when extraction failed AND
-        // `documentContent` is unset), but if a future refactor lets a
-        // partial body slip past, the extractor's typed failure signal
-        // must still route to the unreadable directive — the gated Read
-        // path is the apt-get-cascade anchor and we cannot fall back to it
-        // on a known failure class. Defense-in-depth alongside the
-        // SDK-level `disallowedTools: [Bash, Edit, Write]` block in
-        // cc-dispatcher.
+        // 2026-05-07 follow-up to #3384: `documentExtractError` wins over
+        // inlining (defense-in-depth — the resolver makes them mutually
+        // exclusive, but a partial body must still route through the
+        // partition rather than land in the inline branch). Routing within
+        // the extract-error branch is partitioned by `isPdfSoftFailure`:
+        //
+        //   Soft (oversized_buffer / corrupted / parse_error /
+        //   lazy_import_failed / read_failed) → `buildPdfGatedDirective` so
+        //   the model attempts the SDK Read tool's Anthropic Files API path
+        //   with the absolute workspace path before refusing. Read's PDF
+        //   pipeline is structurally separate from in-process pdfjs-dist
+        //   (different parser, no in-process buffer cap) and frequently
+        //   succeeds where the extractor failed.
+        //
+        //   Hard (encrypted / empty_text) → `buildPdfUnreadableDirective`
+        //   because Read genuinely cannot recover — password-protected PDFs
+        //   reject without the password, image-only/scanned PDFs have no
+        //   text layer.
+        //
+        // The apt-get cascade defense is preserved on BOTH directives:
+        // `buildPdfGatedDirective`'s named-binary exclusion list bounds the
+        // shell-prior in the prompt text, and `disallowedTools: [Bash, Edit,
+        // Write]` in cc-dispatcher is the SDK-level hard brake.
         if (args.documentExtractError) {
           const safeErrorClass = sanitizePromptString(args.documentExtractError);
-          artifactDirective = buildPdfUnreadableDirective(
-            safeArtifactPath,
-            NO_ASK,
-            safeErrorClass,
-          );
+          if (isPdfSoftFailure(safeErrorClass)) {
+            artifactDirective = buildPdfGatedDirective(
+              safeArtifactPath,
+              absoluteReadPath,
+              NO_ASK,
+            );
+          } else {
+            artifactDirective = buildPdfUnreadableDirective(
+              safeArtifactPath,
+              NO_ASK,
+              safeErrorClass,
+            );
+          }
         } else if (
           pdfBody.length > 0 &&
           pdfBody.length <= MAX_DOCUMENT_INLINE_BYTES
