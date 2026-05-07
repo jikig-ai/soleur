@@ -1,3 +1,4 @@
+--once
 .claude/hooks/guardrails.sh
 .pen file not modified in git after batch-design
 2026-03-02-skill-handoff-blocks-pipeline-when-announcing.md
@@ -6,14 +7,19 @@
 404
 abort-controller
 abort-signal
+abortcontroller
 acceptance-criteria
 account-consolidation
 account-deletion
+account-enumeration
 account-migration
 adapter
+add-mask
+adjacent-prs
 admin-ip
 admin-ip-drift
 admin-ip-refresh
+adr
 aeo
 aeo-score
 aftereach
@@ -29,8 +35,10 @@ agent-native
 agent-native-parity
 agent-not-found
 agent-prompt-design
+agent-routing
 agent-runner
 agent-sdk
+agent-tool-selection
 agents
 agents-cant-find-commands
 agents-md
@@ -49,6 +57,7 @@ analytics
 analytics-track
 anomaly-detection
 anon-key
+anti-priming
 anti-sycophancy
 api
 api key in git history
@@ -64,10 +73,12 @@ api-validation
 app-removal
 app-router
 apparmor
+architectural-pivot
 architecture
 architecture-decisions
 archive-kb
 argument-list
+aria
 aria-current
 article-28
 article-30
@@ -103,6 +114,7 @@ bare-repo
 bare-repository
 base-href
 base64
+base64url
 bash
 bash-approval
 bash-parsing
@@ -123,6 +135,7 @@ bind-mount
 blocked: --delete-branch with active worktrees will orphan them
 blog-authoring
 blog-post
+body-grep-load-bearing
 body-size
 bot-configuration
 bot-fix-pipeline
@@ -131,6 +144,7 @@ bot-pr
 brainstorm
 brainstorm-hygiene
 brainstorm-routing
+brainstorm-slicing
 branch lost
 branch-protection
 branch-validation
@@ -141,9 +155,11 @@ brand-guide
 brand-guide-stale
 brand-identity
 brand-voice
+brand-workshop
 branded-types
 branding
 breadcrumb
+breadcrumbs
 bridge
 browser
 browser-automation
@@ -152,11 +168,13 @@ browser-testing
 bubblewrap
 build-errors
 build-time-inlining
+build-time-interpolation
 bun
 bun-test
 bundle-content-gate
 bundling
 bunfig
+bunx
 business-validation
 business-validator
 buttondown
@@ -164,6 +182,7 @@ bwrap
 byok
 bypass-actors
 bypass-mode
+byte-budget
 ca-certificates
 cache-control
 cache-invalidation
@@ -171,12 +190,18 @@ cache-rules
 caching
 cadence
 calibration
+call-graph-trace
 campaign-calendar
 canary
 canary-deploy
 canusetool
+cap-coupling
 cascade-architecture
 category-design
+cc-chat
+cc-pdf
+cc-permissions
+cc-soleur-go
 cert-provisioning
 changelog
 chat
@@ -191,6 +216,7 @@ chunk-splitting
 ci
 ci-cd
 ci-checks
+ci-config
 ci-deploy
 ci-flake
 ci-gap
@@ -217,6 +243,7 @@ client-bundle
 client-server-split
 clone-newuser
 close-codes
+closure-gate
 cloud-init
 cloud-migration
 cloudflare
@@ -227,8 +254,11 @@ cname
 cnil
 code-comments
 code-quality
+code-reuse
 code-review
 code-scanning
+code-simplicity-reviewer
+codebase-precedent
 codeql
 column-level-security
 command-center
@@ -239,10 +269,11 @@ command-skill-overlap
 command-substitution
 commands
 commands/brainstorm
+comment-mutability
 commit-protocol
 community
 community-agent
-community-ma-budget
+community-management
 community-monitor
 community-overlap
 compaction-boundary
@@ -286,12 +317,15 @@ content-security-policy
 content-strategy
 content-structure
 content-writer
+contested-design
 context-budget
 context-management
 context-window
 contract
 contract-design
+contract-test
 contradictory-instructions
+contrast
 convention-drift
 convention-mismatch
 convention-violation
@@ -334,17 +368,19 @@ ddl
 dead-code
 decodeuricomponent
 dedup
+dedup-search
 dedupe
 deduplication
 deepen-plan
 defense-in-depth
+defense-pair
 defense_in_depth
 defensive-coding
 definition-of-done
 dependabot
 dependencies
 dependency check for gui app without package manager
-dependency-cascade
+dependency-casce
 dependency-detection
 dependency-management
 dependency-resolution
@@ -396,8 +432,10 @@ docs-site
 docs-trust
 documentation
 documentation-gap
+dogfood
 dogfooding
 dom-globals
+dom-testing
 domain
 domain-assessment
 domain-enumeration
@@ -408,6 +446,7 @@ domain-verification
 doppler
 downshift
 dpa
+dpf
 drain-pr
 drift
 drift-guard
@@ -441,17 +480,20 @@ environment-variables
 eprivacy
 eresolve
 error-handling
+error-mapping
 esbuild
 escape-hatch
 esm-hooks
 etag
 event-emitter
+exacerbation-rule
 exhaustive-switch
 exit-trap
 export
 extensions.worktreeconfig
 external-agents
 external-services
+extractfunctionbody
 extraction-pattern
 fact-checker
 fact-checking
@@ -469,7 +511,7 @@ fd-exhaustion
 fd-lifetime
 feature-video
 feature-wiring
-fetch-recat
+fetch-refspec
 field-separator
 file-extensions
 file-processing
@@ -483,6 +525,7 @@ find-delete
 fire-and-forget
 firewall
 firewall-ruleset
+fix-inline
 fix-symptom-class
 fixture-design
 fk-cascade
@@ -496,7 +539,10 @@ footer
 formatting
 formdata
 formdata-error
+forward-progress
 fouc
+founder-approval
+founder-review
 fpe
 fragile keyword routing
 french-law
@@ -506,6 +552,7 @@ functional-discovery
 functional-updater
 gap-detection
 gate-detection
+gate-detection-gap
 gc
 gdpr
 gemini-api
@@ -519,7 +566,6 @@ git
 git-branching
 git-clean
 git-diff
-git-env-vars
 git-mv
 git-pull
 git-rebase
@@ -535,11 +581,15 @@ github-actions
 github-actions-yaml
 github-api
 github-app
+github-auto-close
 github-issues
+github-oauth
 github-pages
+github-push-protection
 github-rulesets
 github-token
 gitignore
+gitleaks
 glob
 global-install
 goals-api
@@ -558,16 +608,20 @@ growth
 growth-audit
 growth-strategist
 growth-targets
+guard-itself-dark
 guard-testing
 guardrails
 guards
 hallucination
 handoff
 happy-dom
+harness
 hash-based-csp
+hcl
 hcloud
 header-injection
 headless
+headless-cli
 headless-mode
 health-check
 health-endpoint
@@ -589,6 +643,9 @@ hsts
 html
 http-caching
 http-server
+hydration
+hypothesis-driven-fix
+ide-mode
 idempotence
 idempotency
 idempotent-scripts
@@ -597,6 +654,7 @@ idle-detection
 idor
 if-ladder
 if-none-match
+image-export
 image-generation
 implementation-patterns
 in-filter
@@ -622,7 +680,10 @@ integration-tests
 intent-classification
 interactive-mode
 interface-contract
+internal-consistency
 ip-spoofing
+irreversible
+isclassifying-gate
 isolation
 issue-filing
 issue-tracking
@@ -637,9 +698,12 @@ jsx
 jwt
 kb
 kb-chat
+kb-concierge
+kb-pdf
 kb-reader
 kb-security
 kb-share
+kborm
 key-derivation
 keyword-detection
 knowledge-base
@@ -655,6 +719,7 @@ lazy-quantifier
 lcp
 leader
 leader-avatar
+leak-detection
 leaked secret
 lefthook
 legal
@@ -665,8 +730,10 @@ legal-compliance-auditor
 legal-docs
 legal-document-generator
 legal-documents
+lib-helpers
 libuv-threadpool
 license-migration
+light-theme
 lighthouse
 linkedin
 lint-pitfalls
@@ -725,6 +792,7 @@ mocks
 model-ids
 module-level-state
 monitoring
+mounted-gate
 mu1
 multi-account
 multi-agent
@@ -739,9 +807,13 @@ multi-signal
 multi-tenant-scoping
 multi-turn
 multi_agent_review
+mutation-testing
 name-transformer
 named-exports
+namespace
+naming
 naming-conventions
+naming-discipline
 narrow-token
 nav
 navigation
@@ -753,11 +825,13 @@ new-skill-workflow
 next-headers
 next-js
 next-navigation
+next-themes
 next.js
 nextjs
 nextjs-app-router
 no business validation gate
 no cross-agent coordination
+no-fouc-script
 node
 node-http
 node-js
@@ -769,6 +843,7 @@ nonce
 normalizer
 nosniff
 not-null
+not-rest-mutable
 notification-migration
 npm
 npx
@@ -776,20 +851,25 @@ null-test
 numeric-precision
 nunjucks
 oauth
+oauth-probe
 oauth2
 objection-window
 observability
 og-image
+oidc
 on-click-fetch
+on-conflict
 onboarding
 onboarding describes dev plugin not platform
 one-shot
 open-redirect
 openhands
+openssl
 operations
 operator-precedence
 ops-directory
 ops-remediation
+ops-scripts
 optimistic-state
 opus-4-7
 ordering
@@ -800,6 +880,7 @@ output-sanitization
 over-engineering
 over-specified-prompts
 overengineering
+overflow
 overflow-wrap
 overview
 paginate
@@ -807,11 +888,13 @@ parallel
 parallel-agents
 parallel-execution
 parallel-io
+parallel-runner-paths
 parallel-tests
 parameter-expansion
 parity-tests
 parser-underread
 partial-copy
+partial-index
 partial-unique-index
 passive-routing
 passthrough-copy
@@ -823,6 +906,7 @@ path-traversal
 pathignorepatterns
 pattern
 pdf
+pdf-extractor
 peer-dependency
 pencil
 pencil cli name collision with evolus/pencil
@@ -833,6 +917,7 @@ performance
 permalink
 permission-prompt
 permissions
+persistence-asymmetry
 pgsodium
 phase-5.5
 phase-7
@@ -845,6 +930,7 @@ pipefail
 pipeline
 pipeline-gotchas
 pkce
+placement-gate
 plan
 plan-ac
 plan-acceptance-criteria
@@ -854,13 +940,17 @@ plan-gap
 plan-gates
 plan-quality
 plan-review
+plan-review-catch
 plan-skill
+plan-time-architecture-review
+plan-vs-code-drift
 plan_review
 planning
 platform-integration
 platform-risk
 plausible
 playwright
+pltag
 plugin
 plugin-architecture
 plugin-commands
@@ -891,11 +981,14 @@ post-merge
 postcss
 postgres
 postgres-partial-index
+postgres-trigger
 postgresql-grants
 postgrest
 pr
 pr not merged
+pr-3244
 pr-creation
+pr-process
 practices
 pre-commit
 pre-merge-hook
@@ -909,6 +1002,7 @@ pretooluse-hooks
 prevention
 prevention-infrastructure
 pricing-page
+prior-art
 private-documents
 private_key
 process-env
@@ -937,6 +1031,7 @@ prop-wiring
 prose-conventions
 protecthome
 protocol
+protocol-gate
 proton-mail
 provenance-tracking
 provider-alias
@@ -944,6 +1039,7 @@ provisioner
 proxy-anti-pattern
 prune
 psql
+public-repo
 pure-function-extraction
 purity
 push-notifications
@@ -961,6 +1057,8 @@ ralph-loop
 rate-limit
 rate-limiting
 react
+react-18
+react-19
 react-batching
 react-context
 react-hooks
@@ -979,6 +1077,7 @@ redaction
 redirect
 redirect-handling
 redirect-loop
+redirect_uri
 redirects
 redos
 reducer
@@ -988,11 +1087,14 @@ refactor-batching
 refactor-cascade
 refactoring
 reference-files
+referrer-policy
 regex
 regex-concurrency
 regex-parity
 registry-integration
+regression
 regression-analysis
+regression-class
 rehype-highlight
 release-announce
 release-announcements
@@ -1021,12 +1123,15 @@ retroactive-sweep
 review
 review-agents
 review-catch
+review-catches
 review-driven
+review-driven-hardening
 review-gap
 review-gate
 review-gates
 review-reminder
 review-resolver
+review-workflow
 revocation
 rfc-5869
 rich-results
@@ -1056,14 +1161,17 @@ same-browser
 sandbox
 sandbox-hook
 sanitization
+sanitization-parity
 scalability
 scanner
 schedule
+schedule-skill
 scheduled-audits
 scheduled-bug-fixer
 scheduled-ci
 scheduled-tasks
 scheduled-workflow
+scheduled-workflows
 schema
 schema-code-mismatch
 schema-evolution
@@ -1074,6 +1182,8 @@ scope-calibration
 scope-cuts
 scope-guard
 scope-out
+scope-out-criteria
+scope-out-protocol
 scope-outs
 scope_reduction
 screenshot
@@ -1082,10 +1192,16 @@ script-breakout
 scripts
 sdk
 sdk-drift
+sdk-lifecycle
+sdk-read-tool
+sdk-router
 sdk-shape
+sdk-tooling
 search
 search-path-pinning
 seccomp
+second-reviewer-concur
+secret-leak
 secret-scanning
 secrets
 secrets-leak
@@ -1097,11 +1213,14 @@ security-audit
 security-definer
 security-gates
 security-headers
+security-hooks
 security-issues
 security-review
 sed
 segfault
+self-healing-tests
 self-hosting
+self-leak
 self-references
 semantic-grouping
 sensitive aggregated findings in public repos
@@ -1109,6 +1228,8 @@ sentinel
 sentinel-values
 sentry
 sentry-api
+sentry-deferral-gate
+sentry-observability
 sentry-tagging
 seo
 seo-aeo
@@ -1141,6 +1262,7 @@ setup-files
 sha-pinning
 sha256
 share
+shared-factory
 shell
 shell-expansion
 shell-injection
@@ -1162,6 +1284,8 @@ silent-failure
 silent-fallback
 simplicity
 simplification
+single-client-id-many-flows
+single-user-incident
 site.url
 sitemap
 skill tool returns error instead of showing permission prompt for bash command in code fence
@@ -1182,8 +1306,10 @@ skills-page
 skills/brainstorm
 skills/one-shot
 skills/work
+slots
 smoke-tests
 smtp
+snapshot-tests
 social-distribute
 soleur plugin skills
 soleur-go
@@ -1196,6 +1322,7 @@ specflow
 specialist-gates
 spf
 split
+sql-layer-vs-application-layer
 sql-ts-parity
 squash-merge
 srp
@@ -1203,6 +1330,7 @@ ssg
 ssh
 ssh-hypothesis-gate
 ssl
+ssr
 stack-detection
 stacking-context
 stale mcp binary path after extension update
@@ -1211,6 +1339,7 @@ stale worktrees persist after cleanup-merged reports success
 stale-count
 stale-counts
 stale-data
+stale-enumeration
 stale-ref
 stale-references
 start-fresh
@@ -1222,16 +1351,19 @@ state-management
 static-content-extraction
 static-site
 stderr
+step-output
 stop-hook
 strategy-review
 stream-lifecycle
 streaming
+streaming-input
 strict-dynamic
 strict-mode
 stripe
 structural-enforcement
 structural-test
 structured-data
+stuck-active
 stuck-detection
 sub-command-merging
 sub-processor
@@ -1241,6 +1373,7 @@ subagents
 subprocess
 supabase
 supabase-auth
+supabase-messages
 supabase-numeric
 supabase-rpc
 supply-chain
@@ -1253,6 +1386,7 @@ synthetic-probe
 system-prompt
 systemd
 table-driven-config
+table-layout
 tablet-breakpoint
 tabular-nums
 tag-corruption
@@ -1262,26 +1396,30 @@ task-prompts
 task-tool
 tasks
 tasks sent to wrong agent
+taywright
 tdd
 tdd-edge-cases
 tdd-test-fixtures
 team-names
 teardown
+tee
 telemetry
 temp files in worktree
+template-bug
 tenant-isolation
+terrafest-fix-loop
 terraform
 terraform_data
 test-coverage
 test-coverage-gaps
 test-design
 test-fidelity
-test-fix-loop
 test-fixtures
 test-infrastructure
 test-isolation
 test-mock
 test-mock-drift
+test-mock-sweep
 test-mocks
 test-patterns
 test-runner
@@ -1293,13 +1431,20 @@ testing-library
 text-nodes
 tf-var
 tfstate
+theme
+theme-provider
+theme-system
+theme-tokens
 thenable
 thinking-api
 thinking-indicator
+third-party-actions
 three-tier detection removes ide hard dependency
+threshold-coupling
 tier-0
 tiered-gating
 timeout
+timer-design
 timer-leak
 timestamps
 toctou
@@ -1308,10 +1453,10 @@ token-budget
 token-cache-isolation
 tokenization
 tokenize-restore
-tokentructure
 tool-integration
 tool-path-validation
 tool-tier
+toolchain-pinning
 tooling
 transaction-safety
 trap-cleanup
@@ -1326,6 +1471,7 @@ type-filter
 type-safety
 typecheck
 typescript
+typescript-identity
 typescript-strict
 ua-match
 ui
@@ -1343,6 +1489,7 @@ url-concatenation
 url-validation
 useeffect
 user friction for experimental features
+user-brand-critical
 user-confirmation
 user-event
 user-namespace
@@ -1356,6 +1503,7 @@ ux-design
 ux-design-lead
 ux-gate
 ux-review
+ux-rtag
 validate-csp
 validation
 vapid
@@ -1394,8 +1542,10 @@ websocket
 websocket not connected
 websocket-disconnect
 websocket-handler
+websockets
 welcome-hook
 wire-protocol
+wire-schema
 woff2
 word-budget
 work
@@ -1410,6 +1560,7 @@ workflow-enforcement
 workflow-gate
 workflow-gates
 workflow-injection
+workflow-injection-defenscat
 workflow-issues
 workflow-patterns
 workflow-productization
@@ -1421,6 +1572,7 @@ workflow_run
 workshop pattern not yet reused
 workspace
 workspace-cleanup
+workspace-paths
 workspace-provisioning
 workspace-sync
 worktree
@@ -1432,6 +1584,7 @@ worktree-manager
 worktree-race
 worktrees
 wrong-skill-count
+ws-handler
 x-api
 xargs
 xhr-upload
