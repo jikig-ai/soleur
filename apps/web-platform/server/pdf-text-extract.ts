@@ -105,6 +105,10 @@ export async function extractPdfText(
   // pdfjs-dist@5 calls it during module init.
   let pdfjs: typeof import("pdfjs-dist/legacy/build/pdf.mjs");
   try {
+    // If you add or rename a bare-specifier `await import()` here, mirror it
+    // in the build-time `require.resolve` assertion in apps/web-platform/Dockerfile
+    // (see #3422) — otherwise a missing dep silently routes through the catch
+    // below and surfaces only as a WARN Sentry breadcrumb.
     pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
   } catch (importErr) {
     reportSilentFallback(importErr, {
