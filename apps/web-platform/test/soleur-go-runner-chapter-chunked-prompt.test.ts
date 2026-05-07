@@ -1,18 +1,18 @@
 // Concierge system-prompt coverage for the chapter-chunked branch (#3436
-// Phase 3 foundations). Verifies that when the resolver populates
-// `documentExtractMeta.chapters`, the assembled system prompt:
+// Phase 3.A foundations).
 //
-//   - declares the table of contents (chapter # + title + page range)
-//   - tells the model the answer-turn chapter content arrives as a
-//     `document` content block on the user message
-//   - asks the model to prefix replies with `[Answering from chapter
-//     <N>: "<title>"]`
-//   - includes the standard NO-ASK clause
+// Phase 3.A intentionally DEFERS the dispatch-time per-turn chapter
+// routing + content-block attachment to #3472 (Phase 3.B). Until #3472
+// ships, when the resolver populates `documentExtractMeta.chapters`, the
+// runner system prompt MUST fall through to the existing PR #3430
+// `too_many_pages` bridge directive — never declare a content-block
+// contract the dispatch layer has not yet implemented (would launder
+// fabricated chapter answers under the chapter-prefix surface, crossing
+// the brand-survival threshold per plan §User-Brand Impact).
 //
-// Per plan §Sharp Edges, the directive is byte-stable per session — no
-// per-turn chapter info leaks into the system prompt (that's the cache-
-// invalidation hazard the design avoids). Per-turn chapter routing +
-// content-block attachment is wired at the dispatch layer in a follow-up.
+// This file pins that fall-through invariant so a future revival of the
+// chapter-chunked directive must arrive together with the dispatch
+// wiring (or this test fails).
 
 import { describe, it, expect } from "vitest";
 
@@ -25,8 +25,8 @@ const sampleChapters: ChapterIndex[] = [
   { title: "Authentication", startPage: 48, endPage: 102, depth: 0 },
 ];
 
-describe("buildSoleurGoSystemPrompt — chapter-chunked branch", () => {
-  it("emits a TOC + content-block + prefix directive when chapters are present", () => {
+describe("buildSoleurGoSystemPrompt — chapter-chunked branch (Phase 3.A fall-through)", () => {
+  it("falls through to too_many_pages bridge when chapters are present (Phase 3.B not yet wired)", () => {
     const prompt = buildSoleurGoSystemPrompt({
       artifactPath: "knowledge-base/manning-large.pdf",
       documentKind: "pdf",
@@ -41,49 +41,38 @@ describe("buildSoleurGoSystemPrompt — chapter-chunked branch", () => {
     // Currently-viewing line names the artifact.
     expect(prompt).toContain("knowledge-base/manning-large.pdf");
 
-    // TOC is interpolated by index (1-based) + title + page range.
-    expect(prompt).toContain("1. Introduction (pages 1-12)");
-    expect(prompt).toContain("2. Architecture overview (pages 13-47)");
-    expect(prompt).toContain("3. Authentication (pages 48-102)");
+    // Page count from documentExtractMeta interpolated into the bridge
+    // directive (existing PR #3430 behavior).
+    expect(prompt).toContain("403");
 
-    // Cache-cumulative-prefix invariant: per-turn chapter content is
-    // declared to arrive on the user message, not in the system prompt.
-    // (Match across the directive's line wrap.)
-    expect(prompt).toMatch(/`document` content[\s\S]{0,3}block/);
-
-    // Loaded-chapter prefix instruction (AC #5 carrier).
-    expect(prompt).toContain(
-      'Prefix every reply with `[Answering from chapter <N>: "<title>"]`',
+    // CRITICAL: NO chapter-content-block contract leaks into the prompt
+    // until #3472 actually attaches the content block at dispatch time.
+    expect(prompt).not.toContain("`document` content block");
+    expect(prompt).not.toMatch(
+      /Prefix every reply with `\[Answering from chapter/,
     );
-
-    // Standard NO-ASK clause.
-    expect(prompt).toContain(
-      "Do not ask which document the user is referring to",
-    );
+    expect(prompt).not.toContain("Table of contents:");
   });
 
-  it("chapter-chunked branch wins over `too_many_pages` when both fields are present (defense-in-depth)", () => {
-    // Resolver makes them mutually exclusive but a partial body must
-    // still take the chapter-chunked branch — chapters-set is the
-    // success-with-structure discriminator.
+  it("treats chapters-present as too_many_pages even when documentExtractError is unset", () => {
+    // Resolver emits chapters with NO error (success-with-structure) —
+    // runner falls through to the bridge based on chapters presence
+    // alone, not on the error class.
     const prompt = buildSoleurGoSystemPrompt({
       artifactPath: "knowledge-base/book.pdf",
       documentKind: "pdf",
-      documentExtractError: "too_many_pages",
       documentExtractMeta: {
-        numPages: 403,
+        numPages: 250,
         chapters: sampleChapters,
-        fullExtractedText: "(extracted body)",
+        fullExtractedText: "(body)",
       },
       workspacePath: "/workspaces/u1",
     });
-
-    expect(prompt).toContain("Table of contents:");
-    // Should NOT carry the too_many_pages bridge copy in this branch.
-    expect(prompt).not.toContain("too long for me to read in one pass");
+    expect(prompt).toContain("250");
+    expect(prompt).not.toContain("Table of contents:");
   });
 
-  it("falls through to `too_many_pages` directive when chapters is empty / unset", () => {
+  it("falls through to too_many_pages directive when chapters is empty / unset (existing behavior)", () => {
     const prompt = buildSoleurGoSystemPrompt({
       artifactPath: "knowledge-base/book.pdf",
       documentKind: "pdf",
@@ -93,7 +82,6 @@ describe("buildSoleurGoSystemPrompt — chapter-chunked branch", () => {
     });
 
     expect(prompt).not.toContain("Table of contents:");
-    // Existing too_many_pages copy continues to surface.
     expect(prompt).toContain("403");
   });
 

@@ -1,16 +1,12 @@
 // Leader-path system-prompt coverage for the chapter-chunked branch
-// (#3436 Phase 3 foundations). Symmetric to
-// `soleur-go-runner-chapter-chunked-prompt.test.ts`. When the leader
-// resolver populates `documentExtractMeta.chapters`, the assembled
-// system prompt:
+// (#3436 Phase 3.A foundations). Symmetric to
+// `soleur-go-runner-chapter-chunked-prompt.test.ts`.
 //
-//   - declares the table of contents
-//   - tells the model the answer-turn chapter content arrives as a
-//     `document` content block on the user message
-//   - instructs the model to NOT invoke the SDK Read tool on this PDF
-//     (the chapter content is already provided)
-//   - asks the model to prefix replies with `[Answering from chapter
-//     <N>: "<title>"]`
+// Phase 3.A intentionally DEFERS the dispatch-time per-turn chapter
+// routing + content-block attachment to #3472 (Phase 3.B). Until #3472
+// ships, when the leader resolver populates
+// `documentExtractMeta.chapters`, the runner system prompt MUST fall
+// through to the existing PR #3430 `too_many_pages` bridge directive.
 
 import { vi, describe, test, expect, beforeEach } from "vitest";
 
@@ -165,8 +161,8 @@ beforeEach(() => {
   createQueryMock(mockQuery);
 });
 
-describe("agent-runner leader chapter-chunked branch (#3436)", () => {
-  test("emits TOC + content-block + Read-NO-ASK + chapter-prefix directive when resolver returns chapters", async () => {
+describe("agent-runner leader chapter-chunked branch (#3436 Phase 3.A fall-through)", () => {
+  test("falls through to PDF_TOO_LONG bridge when resolver returns chapters (Phase 3.B not yet wired)", async () => {
     resolveLeaderDocumentContextSpy.mockResolvedValueOnce({
       artifactPath: PDF_PATH,
       documentKind: "pdf",
@@ -188,31 +184,20 @@ describe("agent-runner leader chapter-chunked branch (#3436)", () => {
 
     const prompt: string = mockQuery.mock.calls[0][0].options.systemPrompt;
 
-    // TOC interpolated by 1-based index + title + page range.
-    expect(prompt).toContain("1. Introduction (pages 1-12)");
-    expect(prompt).toContain("2. Architecture overview (pages 13-47)");
-    expect(prompt).toContain("3. Authentication (pages 48-102)");
+    // Bridge directive carries the page count.
+    expect(prompt).toContain(PDF_TOO_LONG_DIRECTIVE_LEAD);
+    expect(prompt).toContain("403");
 
-    // Content-block declaration (cache-cumulative-prefix invariant).
-    expect(prompt).toMatch(/`document` content[\s\S]{0,3}block/);
-
-    // Leader-specific NO-ASK on the SDK Read tool — leader has Read in
-    // its toolset, must not call it for this chapter-chunked PDF.
-    expect(prompt).toMatch(/Do NOT invoke the Read tool/);
-
-    // Loaded-chapter prefix instruction.
-    expect(prompt).toContain(
-      'Prefix every reply with `[Answering from chapter <N>: "<title>"]`',
-    );
-
-    // Chapter-chunked branch wins over the error-class partition.
+    // CRITICAL: chapter-content-block contract must NOT leak into the
+    // prompt until #3472 actually attaches the content block.
+    expect(prompt).not.toContain("Table of contents:");
+    expect(prompt).not.toContain("Do NOT invoke the Read tool");
+    expect(prompt).not.toMatch(/Prefix every reply with `\[Answering/);
     expect(prompt).not.toContain(PDF_GATED_DIRECTIVE_LEAD);
     expect(prompt).not.toContain(PDF_UNREADABLE_DIRECTIVE_LEAD);
-    expect(prompt).not.toContain(PDF_TOO_LONG_DIRECTIVE_LEAD);
   });
 
-  test("falls through to error-class partition when chapters is empty / unset (existing behavior preserved)", async () => {
-    // Empty chapters → take the existing too_many_pages branch.
+  test("falls through to too_many_pages directive when chapters is unset (existing behavior)", async () => {
     resolveLeaderDocumentContextSpy.mockResolvedValueOnce({
       artifactPath: PDF_PATH,
       documentKind: "pdf",
