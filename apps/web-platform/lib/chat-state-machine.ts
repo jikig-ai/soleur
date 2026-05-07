@@ -49,6 +49,25 @@ interface ChatMessageBase {
 
 interface ChatTextMessage extends ChatMessageBase {
   type: "text";
+  /** #3448 PR2: persistence-tier discriminator surfaced by the history
+   *  fetch (`status` column added in migration 040). `"aborted"` rows
+   *  trigger the abort-marker render path in `message-bubble.tsx`.
+   *  Optional so live-stream bubbles (which have no DB row yet) and
+   *  legacy fixtures both type-check. */
+  status?: "complete" | "aborted";
+  /** #3448 PR2: aborted-turn snapshot. Present only for rows whose
+   *  `status === "aborted"`. Shape mirrors the `usage` jsonb column
+   *  documented in migration 040. */
+  usage?: {
+    input_tokens: number;
+    output_tokens: number;
+    cost_usd?: number | null;
+    completed_actions: Array<{
+      tool_name: string;
+      input_summary: string;
+      result_summary: string;
+    }>;
+  } | null;
 }
 
 interface ChatGateMessage extends ChatMessageBase {

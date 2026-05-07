@@ -205,6 +205,8 @@ export function ChatSurface({
     workflow,
     workflowEndedAt,
     historyLoading,
+    streamState,
+    abort,
   } = useWebSocket(conversationId);
 
   const { names: customNames, getDisplayName, getIconPath, loading: teamNamesLoading } = useTeamNames();
@@ -299,6 +301,39 @@ export function ChatSurface({
       setSessionStarted(false);
     }
   }, [status]);
+
+  // #3448 PR2 — Esc keyboard shortcut with focus guard.
+  //
+  // Mounts a `document`-level keydown listener only while a turn is in
+  // flight (`streaming`) or already aborting (`stopping`, so a quick second
+  // Esc is harmlessly ignored by `abort()`'s own no-op-while-stopping
+  // guard rather than racing the Stop button into a stale state).
+  //
+  // Esc-while-typing guard (plan §"Plan-time additions from SpecFlow"):
+  // when the user is mid-sentence in the chat textarea, Esc must NOT
+  // abort — the textarea's native Esc handling (clear autocomplete, blur)
+  // is the more frequent intent. We treat "focused on a textarea with
+  // content" as the suppressing condition; an empty textarea, an unfocused
+  // textarea, or focus on any other element falls through to abort.
+  //
+  // Per AGENTS.md `cq-ref-removal-sweep-cleanup-closures`, the effect's
+  // cleanup MUST return removeEventListener — orphaned listeners survive
+  // unmount and would re-fire abort on a freshly-mounted bubble's first
+  // Esc. The test `task 5.7` is the regression gate for this.
+  useEffect(() => {
+    if (streamState !== "streaming" && streamState !== "stopping") return;
+    const handler = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      const target = document.activeElement;
+      if (target instanceof HTMLTextAreaElement && target.value.length > 0) {
+        return;
+      }
+      e.preventDefault();
+      abort();
+    };
+    document.addEventListener("keydown", handler);
+    return () => document.removeEventListener("keydown", handler);
+  }, [streamState, abort]);
 
   useEffect(() => {
     if (sessionConfirmed && msgParam && !initialMsgSent) {
@@ -518,6 +553,8 @@ export function ChatSurface({
                       getIconPath={getIconPath}
                       attachments={msg.attachments}
                       variant={variant}
+                      status={msg.status}
+                      usage={msg.usage}
                     />
                   );
                   break;
@@ -706,6 +743,8 @@ export function ChatSurface({
             quoteRef={quoteRef}
             focusRef={focusRef}
             draftKey={draftKey}
+            streamState={streamState}
+            onStop={abort}
           />
         </div>
         {!isFull && usageData && usageData.totalCostUsd > 0 && (

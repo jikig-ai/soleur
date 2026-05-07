@@ -29,6 +29,23 @@ export { STUCK_TIMEOUT_MS } from "@/lib/ws-constants";
 
 type ConnectionStatus = "connecting" | "connected" | "reconnecting" | "disconnected";
 
+/**
+ * Per-turn stream lifecycle exposed on the hook return surface.
+ *
+ *   - `"idle"`     — no in-flight assistant turn for this conversation.
+ *   - `"streaming"` — at least one leader is mid-stream (entered on the first
+ *                    `stream_start` after auth).
+ *   - `"stopping"`  — user clicked Stop / pressed Esc; an `abort_turn` frame
+ *                    was sent. Stays here until `session_ended` arrives so the
+ *                    Stop button can disable + show "Stopping…" without a
+ *                    second client-side timer.
+ *
+ * Distinct from `activeLeaderIds`: a multi-leader dispatch may still have
+ * leaders responding while we are already in `"stopping"` — the UI binds the
+ * Stop button to `streamState`, not to the per-leader map.
+ */
+export type StreamState = "idle" | "streaming" | "stopping";
+
 export interface WebSocketError {
   code: string;
   message: string;
@@ -102,6 +119,16 @@ interface UseWebSocketReturn {
    *  would otherwise clobber `useKbLayoutState`'s prefetched messageCount
    *  (race H3 in the resume hydration plan). */
   historyLoading: boolean;
+  /** Per-turn stream lifecycle (#3448 PR2). See `StreamState` jsdoc. The
+   *  Stop button + Esc shortcut bind to this field, NOT to
+   *  `activeLeaderIds.length > 0` — a multi-leader dispatch may have
+   *  leaders responding while we are already `"stopping"`. */
+  streamState: StreamState;
+  /** User-initiated Stop. Sends `{ type: "abort_turn", conversationId }` and
+   *  optimistically transitions `streamState` to `"stopping"`. No-op when
+   *  `streamState !== "streaming"` (idempotent under double-click) or when
+   *  no conversationId is resolved yet (pre-`session_started`). */
+  abort: () => void;
 }
 
 const MAX_BACKOFF = 30_000;
@@ -312,6 +339,12 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
   // so the trigger button does not flip to "Ask about this document" between
   // the prefetch (`useKbLayoutState`) and the history fetch resolving.
   const [historyLoading, setHistoryLoading] = useState(false);
+  // Per-turn stream lifecycle (#3448 PR2). Driven inline in the WS message
+  // switch to keep the transitions next to the events that cause them.
+  const [streamState, setStreamState] = useState<StreamState>("idle");
+  // Mirror of `realConversationId` for the `abort()` callback so a stale
+  // closure cannot send the wrong conversationId on the wire.
+  const realConversationIdRef = useRef<string | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const backoffRef = useRef(INITIAL_BACKOFF);
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
@@ -356,6 +389,15 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
     timeoutTimersRef.current.set(leaderId, timer);
   }, [clearLeaderTimeout]);
 
+  // Mirror realConversationId into a ref so `abort()` reads the latest value
+  // without re-binding on every WS frame that updates state. The Stop UX
+  // tolerates a one-tick stale read (the user has to click), but the abort
+  // payload's conversationId MUST be current — a stale closure here would
+  // route the abort to a prior conversation under multi-tab navigation.
+  useEffect(() => {
+    realConversationIdRef.current = realConversationId;
+  }, [realConversationId]);
+
   // Apply timer side-effects declared by the reducer after each stream event,
   // then clear the pending intent so unrelated subsequent dispatches (add_message,
   // filter_prepend, gate_error, resolve_gate) cannot carry stale timer state
@@ -379,6 +421,7 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
     clearAllTimeouts();
     setSessionConfirmed(false);
     setRealConversationId(null);
+    setStreamState("idle");
     if (wsRef.current) {
       wsRef.current.onclose = null;
       wsRef.current.close();
@@ -409,6 +452,7 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
     clearAllTimeouts();
     setSessionConfirmed(false);
     setUsageData(null);
+    setStreamState("idle");
 
     // Clean up any existing connection
     if (wsRef.current) {
@@ -531,6 +575,15 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
           if (msg.type === "stream_start" && msg.source) {
             setRouteSource(msg.source);
           }
+          // #3448 PR2: enter `"streaming"` on the first stream_start of a
+          // turn. If the user already pressed Stop and we're in `"stopping"`,
+          // stay there — the server will follow up with `session_ended` and
+          // we collapse to `"idle"` then. A stream_start that arrives during
+          // `"stopping"` would otherwise re-enable the Send button while the
+          // abort is still in flight.
+          if (msg.type === "stream_start") {
+            setStreamState((prev) => (prev === "stopping" ? prev : "streaming"));
+          }
           // Dispatch to the pure reducer — no ref mutations inside the updater.
           // activeStreams and messages update atomically; pendingTimerAction carries
           // the timer intent out of the pure reducer for the useEffect above. See #2217.
@@ -543,6 +596,7 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
         case "error": {
           dispatch({ type: "clear_streams" });
           clearAllTimeouts();
+          setStreamState("idle");
 
           // Key invalidation: set structured error instead of redirect
           if (msg.errorCode === "key_invalid") {
@@ -595,6 +649,16 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
         case "session_ended": {
           dispatch({ type: "clear_streams" });
           clearAllTimeouts();
+          // #3448 PR2: a turn ended (any reason). Reset streamState so the
+          // Send button comes back. Multi-tab disambiguation: the server
+          // forwards `conversationId` for `user_aborted` reasons; honour it
+          // when present. Frames without `conversationId` (existing emitters
+          // for `turn_complete` / `idle_timeout`) are treated as scoped to
+          // this socket's current conversation, matching today's semantics.
+          const targetConv = realConversationIdRef.current;
+          if (!msg.conversationId || msg.conversationId === targetConv) {
+            setStreamState("idle");
+          }
           // Don't display "turn_complete" as a visible message — it's a lifecycle signal
           if (msg.reason !== "turn_complete") {
             dispatch({
@@ -785,12 +849,24 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
       content_type: string;
       size_bytes: number;
     };
+    type RawUsage = {
+      input_tokens: number;
+      output_tokens: number;
+      cost_usd?: number | null;
+      completed_actions?: Array<{
+        tool_name: string;
+        input_summary: string;
+        result_summary: string;
+      }>;
+    };
     const mapped = json.messages.map((m: {
       id: string;
       role: string;
       content: string;
       leader_id: string | null;
       message_attachments?: RawAttachment[] | null;
+      status?: "complete" | "aborted" | null;
+      usage?: RawUsage | null;
     }) => ({
       id: m.id,
       role: m.role as "user" | "assistant",
@@ -810,6 +886,17 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
         contentType: a.content_type,
         sizeBytes: a.size_bytes,
       })),
+      // #3448 PR2: surface persistence-tier abort status + usage snapshot
+      // so MessageBubble can render the abort marker on history reload.
+      status: m.status ?? undefined,
+      usage: m.usage
+        ? {
+            input_tokens: m.usage.input_tokens,
+            output_tokens: m.usage.output_tokens,
+            cost_usd: m.usage.cost_usd ?? null,
+            completed_actions: m.usage.completed_actions ?? [],
+          }
+        : null,
     }));
 
     const costData: UsageData | null =
@@ -992,6 +1079,33 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
     [],
   );
 
+  /**
+   * #3448 PR2 — user-initiated Stop. The contract:
+   *
+   *   - No-op when streamState !== "streaming" — handles both the idle
+   *     "no turn to stop" case and the double-click-while-stopping case.
+   *   - No-op when the WebSocket is not OPEN.
+   *   - No-op when no conversationId is resolved yet (pre-`session_started`).
+   *
+   * Sends `{ type: "abort_turn", conversationId }` and transitions
+   * streamState to "stopping" optimistically. The hook stays in "stopping"
+   * until `session_ended` arrives (single source of truth for the turn
+   * boundary). The server resolves `userId` from the authenticated socket
+   * — `userId` is intentionally NOT in the wire payload (TR4 cross-user
+   * invariant; see plan §"User-Brand Impact").
+   */
+  const abort = useCallback(() => {
+    const ws = wsRef.current;
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    if (streamState !== "streaming") return;
+    const targetConv =
+      realConversationIdRef.current ??
+      (conversationId !== "new" ? conversationId : null);
+    if (!targetConv) return;
+    ws.send(JSON.stringify({ type: "abort_turn", conversationId: targetConv }));
+    setStreamState("stopping");
+  }, [streamState, conversationId]);
+
   const reconnect = useCallback(() => {
     setLastError(null);
     setDisconnectReason(undefined);
@@ -1021,5 +1135,7 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
     workflow: chatState.workflow,
     workflowEndedAt,
     historyLoading,
+    streamState,
+    abort,
   };
 }
