@@ -134,24 +134,24 @@ Result: zero matches across 69 open code-review issues. No fold-in / acknowledge
 
 ### Pre-merge (PR)
 
-- [ ] `apps/web-platform/server/health.ts` — `HealthResponse` interface includes `build_sha: string`.
-- [ ] `apps/web-platform/server/health.ts` — `buildHealthResponse()` populates `build_sha` from `process.env.BUILD_SHA || "dev"`.
-- [ ] `apps/web-platform/Dockerfile` — declares `ARG BUILD_SHA=dev` + `ENV BUILD_SHA=$BUILD_SHA`, mirroring the `BUILD_VERSION` block (same location, same comment style).
-- [ ] `.github/workflows/reusable-release.yml` — docker-build step `build-args` block adds `BUILD_SHA=${{ github.sha }}` line. **Reusable workflow caveat:** every consumer of `reusable-release.yml` will inherit this build-arg expression at YAML parse time. Verified zero blast radius during deepen: the only other consumer is `version-bump-and-release.yml` (component=`plugin`), which does NOT pass `docker_image` — and the docker-build step is gated `if: steps.version.outputs.next != '' && inputs.docker_image != ''` (`reusable-release.yml:433`). The build never runs for the plugin path, so the new build-arg is never evaluated there. Confirmed via `git grep -l "uses: ./.github/workflows/reusable-release.yml" .github/workflows/`.
-- [ ] `.github/workflows/web-platform-release.yml` — new step `Pre-rerun lock probe` inserted as the FIRST step of the `deploy` job, before `Deploy via webhook`. Probe behaviour:
+- [x] `apps/web-platform/server/health.ts` — `HealthResponse` interface includes `build_sha: string`.
+- [x] `apps/web-platform/server/health.ts` — `buildHealthResponse()` populates `build_sha` from `process.env.BUILD_SHA || "dev"`.
+- [x] `apps/web-platform/Dockerfile` — declares `ARG BUILD_SHA=dev` + `ENV BUILD_SHA=$BUILD_SHA`, mirroring the `BUILD_VERSION` block (same location, same comment style).
+- [x] `.github/workflows/reusable-release.yml` — docker-build step `build-args` block adds `BUILD_SHA=${{ github.sha }}` line. **Reusable workflow caveat:** every consumer of `reusable-release.yml` will inherit this build-arg expression at YAML parse time. Verified zero blast radius during deepen: the only other consumer is `version-bump-and-release.yml` (component=`plugin`), which does NOT pass `docker_image` — and the docker-build step is gated `if: steps.version.outputs.next != '' && inputs.docker_image != ''` (`reusable-release.yml:433`). The build never runs for the plugin path, so the new build-arg is never evaluated there. Confirmed via `git grep -l "uses: ./.github/workflows/reusable-release.yml" .github/workflows/`.
+- [x] `.github/workflows/web-platform-release.yml` — new step `Pre-rerun lock probe` inserted as the FIRST step of the `deploy` job, before `Deploy via webhook`. Probe behaviour:
   - GET `/hooks/deploy-status` with HMAC-empty-body signature (same pattern as `Verify deploy script completion`).
   - Tolerant of non-JSON and HTTP-error responses — treats them as "no prior state, proceed" (degraded-permissive, log-only).
   - Refuses to proceed (`exit 1` with `::error::`) ONLY when the JSON body parses cleanly AND `.exit_code == -1` AND `.start_ts` indicates the prior run is younger than 900s (matches the verify-completion ceiling). A `.exit_code == -1` reading older than 900s implies a stuck/abandoned state file (the matching downstream step already gave up) and MUST NOT block the new deploy.
   - Logs the prior `.tag` and `elapsed=$(date +%s)-$start_ts)s` so the operator sees the in-flight deploy at a glance.
-- [ ] `.github/workflows/web-platform-release.yml` — `Verify deploy health and version` step adds a build-sha gate after the existing version-match check:
+- [x] `.github/workflows/web-platform-release.yml` — `Verify deploy health and version` step adds a build-sha gate after the existing version-match check:
   - Asserts `build_sha == ${{ github.sha }}`.
   - Treats a missing `.build_sha` field as an in-flight rolling deploy (loops, doesn't fail) — safe rollout for the case where the new image build lands first but a stale image is still answering the LB during the swap window.
   - Treats a present-but-mismatched `.build_sha` as an actionable error: logs `expected=$EXPECTED_SHA got=$DEPLOYED_SHA tag=$VERSION` with `::error::` and exits 1.
-- [ ] `apps/web-platform/test/server/health.test.ts` — new test asserts `build_sha` is `"dev"` when `BUILD_SHA` env var is unset.
-- [ ] `apps/web-platform/test/server/health.test.ts` — new test asserts `build_sha` echoes `process.env.BUILD_SHA` when set.
-- [ ] `plugins/soleur/skills/postmerge/references/deploy-status-debugging.md` — `Rerun Safety` section updated to note the new pre-rerun probe gate (the operator-side runbook stops conflating "still running" with "release-path leak" because the workflow now surfaces it pre-POST).
-- [ ] `bun run typecheck` passes (no new TS errors from the `HealthResponse` interface change).
-- [ ] `bun run test apps/web-platform/test/server/health.test.ts` — full suite green including the two new test cases.
+- [x] `apps/web-platform/test/server/health.test.ts` — new test asserts `build_sha` is `"dev"` when `BUILD_SHA` env var is unset.
+- [x] `apps/web-platform/test/server/health.test.ts` — new test asserts `build_sha` echoes `process.env.BUILD_SHA` when set.
+- [x] `plugins/soleur/skills/postmerge/references/deploy-status-debugging.md` — `Rerun Safety` section updated to note the new pre-rerun probe gate (the operator-side runbook stops conflating "still running" with "release-path leak" because the workflow now surfaces it pre-POST).
+- [x] `bun run typecheck` passes (no new TS errors from the `HealthResponse` interface change).
+- [x] `bun run test apps/web-platform/test/server/health.test.ts` — full suite green including the two new test cases.
 - [ ] PR body uses `Closes #3408 / Closes #3409` (both deferred chores resolve in the same PR).
 
 ### Post-merge (operator)

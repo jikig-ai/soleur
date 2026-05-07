@@ -68,6 +68,18 @@ describe("buildHealthResponse", () => {
     expect(response).toHaveProperty("memory");
   });
 
+  it("includes build_sha as 'dev' when BUILD_SHA is unset", async () => {
+    delete process.env.BUILD_SHA;
+    const response = await buildHealthResponse();
+    expect(response.build_sha).toBe("dev");
+  });
+
+  it("includes build_sha from BUILD_SHA env var when set", async () => {
+    process.env.BUILD_SHA = "abc1234deadbeef";
+    const response = await buildHealthResponse();
+    expect(response.build_sha).toBe("abc1234deadbeef");
+  });
+
   it("reports supabase status", async () => {
     const response = await buildHealthResponse();
     expect(["connected", "error"]).toContain(response.supabase);
