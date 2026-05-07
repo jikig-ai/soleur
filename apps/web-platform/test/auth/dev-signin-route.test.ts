@@ -39,8 +39,6 @@ const FAKE_ANON_KEY = "anon-key-stub";
 
 // ---------------------------------------------------------------------------
 
-const ORIGINAL_ENV = process.env;
-
 function makeFormRequest(body: Record<string, string>) {
   const params = new URLSearchParams(body);
   return new Request("http://localhost/api/auth/dev-signin", {
@@ -51,15 +49,14 @@ function makeFormRequest(body: Record<string, string>) {
 }
 
 beforeEach(() => {
-  process.env = { ...ORIGINAL_ENV };
-  process.env.NEXT_PUBLIC_SUPABASE_URL = FAKE_SUPABASE_URL;
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY = FAKE_ANON_KEY;
+  vi.stubEnv("NEXT_PUBLIC_SUPABASE_URL", FAKE_SUPABASE_URL);
+  vi.stubEnv("NEXT_PUBLIC_SUPABASE_ANON_KEY", FAKE_ANON_KEY);
   capturedSetAll = null;
   mockSignInWithPassword.mockReset();
 });
 
 afterEach(() => {
-  process.env = ORIGINAL_ENV;
+  vi.unstubAllEnvs();
 });
 
 async function importRoute() {
@@ -70,9 +67,9 @@ async function importRoute() {
 
 describe("POST /api/auth/dev-signin — gate behaviour", () => {
   it("returns 404 in production even with FLAG_DEV_SIGNIN=1 and a valid slot", async () => {
-    process.env.NODE_ENV = "production";
-    process.env.FLAG_DEV_SIGNIN = "1";
-    process.env.DEV_USER_1_PASSWORD = "pw";
+    vi.stubEnv("NODE_ENV", "production");
+    vi.stubEnv("FLAG_DEV_SIGNIN", "1");
+    vi.stubEnv("DEV_USER_1_PASSWORD", "pw");
     const { POST } = await importRoute();
     const res = await POST(makeFormRequest({ slot: "1" }));
     expect(res.status).toBe(404);
@@ -80,9 +77,9 @@ describe("POST /api/auth/dev-signin — gate behaviour", () => {
   });
 
   it("returns 404 under NODE_ENV=test even with FLAG_DEV_SIGNIN=1 (strict === \"development\")", async () => {
-    process.env.NODE_ENV = "test";
-    process.env.FLAG_DEV_SIGNIN = "1";
-    process.env.DEV_USER_1_PASSWORD = "pw";
+    vi.stubEnv("NODE_ENV", "test");
+    vi.stubEnv("FLAG_DEV_SIGNIN", "1");
+    vi.stubEnv("DEV_USER_1_PASSWORD", "pw");
     const { POST } = await importRoute();
     const res = await POST(makeFormRequest({ slot: "1" }));
     expect(res.status).toBe(404);
@@ -90,9 +87,9 @@ describe("POST /api/auth/dev-signin — gate behaviour", () => {
   });
 
   it("returns 404 in development when FLAG_DEV_SIGNIN is unset", async () => {
-    process.env.NODE_ENV = "development";
-    delete process.env.FLAG_DEV_SIGNIN;
-    process.env.DEV_USER_1_PASSWORD = "pw";
+    vi.stubEnv("NODE_ENV", "development");
+    vi.stubEnv("FLAG_DEV_SIGNIN", undefined);
+    vi.stubEnv("DEV_USER_1_PASSWORD", "pw");
     const { POST } = await importRoute();
     const res = await POST(makeFormRequest({ slot: "1" }));
     expect(res.status).toBe(404);
@@ -102,11 +99,11 @@ describe("POST /api/auth/dev-signin — gate behaviour", () => {
 
 describe("POST /api/auth/dev-signin — input validation", () => {
   beforeEach(() => {
-    process.env.NODE_ENV = "development";
-    process.env.FLAG_DEV_SIGNIN = "1";
-    process.env.DEV_USER_1_PASSWORD = "pw1";
-    process.env.DEV_USER_2_PASSWORD = "pw2";
-    process.env.DEV_USER_3_PASSWORD = "pw3";
+    vi.stubEnv("NODE_ENV", "development");
+    vi.stubEnv("FLAG_DEV_SIGNIN", "1");
+    vi.stubEnv("DEV_USER_1_PASSWORD", "pw1");
+    vi.stubEnv("DEV_USER_2_PASSWORD", "pw2");
+    vi.stubEnv("DEV_USER_3_PASSWORD", "pw3");
   });
 
   it.each([
@@ -122,7 +119,7 @@ describe("POST /api/auth/dev-signin — input validation", () => {
   });
 
   it("returns 500 when DEV_USER_<slot>_PASSWORD is unset; env-var key is scrubbed from response body", async () => {
-    delete process.env.DEV_USER_1_PASSWORD;
+    vi.stubEnv("DEV_USER_1_PASSWORD", undefined);
     const { POST } = await importRoute();
     const res = await POST(makeFormRequest({ slot: "1" }));
     expect(res.status).toBe(500);
@@ -138,9 +135,9 @@ describe("POST /api/auth/dev-signin — input validation", () => {
 
 describe("POST /api/auth/dev-signin — happy path + cookie-writer regression (R3)", () => {
   beforeEach(() => {
-    process.env.NODE_ENV = "development";
-    process.env.FLAG_DEV_SIGNIN = "1";
-    process.env.DEV_USER_1_PASSWORD = "pw1";
+    vi.stubEnv("NODE_ENV", "development");
+    vi.stubEnv("FLAG_DEV_SIGNIN", "1");
+    vi.stubEnv("DEV_USER_1_PASSWORD", "pw1");
 
     mockSignInWithPassword.mockImplementation(async (credentials: { email: string; password: string }) => {
       // Simulate Supabase writing its auth-token cookie via the setAll
@@ -173,7 +170,11 @@ describe("POST /api/auth/dev-signin — happy path + cookie-writer regression (R
     const res = await POST(makeFormRequest({ slot: "1" }));
 
     expect(res.status).toBe(303);
-    expect(res.headers.get("location")).toBe("/");
+    // NextResponse.redirect requires an absolute URL; the route constructs
+    // it via `new URL("/", request.url)` → the Location header is the
+    // resolved absolute form, with pathname "/".
+    const location = res.headers.get("location") ?? "";
+    expect(new URL(location).pathname).toBe("/");
 
     const setCookie = res.headers.get("set-cookie") ?? "";
     expect(setCookie).toMatch(/sb-[a-z0-9]+-auth-token=/);
@@ -186,7 +187,7 @@ describe("POST /api/auth/dev-signin — happy path + cookie-writer regression (R
   });
 
   it("dispatches the slot's email and password to signInWithPassword (slot 2)", async () => {
-    process.env.DEV_USER_2_PASSWORD = "pw2-secret";
+    vi.stubEnv("DEV_USER_2_PASSWORD", "pw2-secret");
     const { POST } = await importRoute();
     await POST(makeFormRequest({ slot: "2" }));
 

@@ -1,21 +1,15 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, afterEach, vi } from "vitest";
 
 import { isDevSignInEnabled } from "@/lib/auth/dev-mode";
 
-const ORIGINAL_ENV = process.env;
-
-beforeEach(() => {
-  process.env = { ...ORIGINAL_ENV };
-});
-
 afterEach(() => {
-  process.env = ORIGINAL_ENV;
+  vi.unstubAllEnvs();
 });
 
 describe("isDevSignInEnabled (R3 dev sign-in gate)", () => {
   it("returns false in production regardless of FLAG_DEV_SIGNIN", () => {
-    process.env.NODE_ENV = "production";
-    process.env.FLAG_DEV_SIGNIN = "1";
+    vi.stubEnv("NODE_ENV", "production");
+    vi.stubEnv("FLAG_DEV_SIGNIN", "1");
     expect(isDevSignInEnabled()).toBe(false);
   });
 
@@ -24,28 +18,28 @@ describe("isDevSignInEnabled (R3 dev sign-in gate)", () => {
     // in 2026-04-13-supabase-env-var-dev-mode-graceful-degradation: under
     // NODE_ENV=test (vitest default), a `!= "production"` check fires and the
     // panel/route would render in SDK-mocked suites.
-    process.env.NODE_ENV = "test";
-    process.env.FLAG_DEV_SIGNIN = "1";
+    vi.stubEnv("NODE_ENV", "test");
+    vi.stubEnv("FLAG_DEV_SIGNIN", "1");
     expect(isDevSignInEnabled()).toBe(false);
   });
 
   it("returns false in development when FLAG_DEV_SIGNIN is unset", () => {
-    process.env.NODE_ENV = "development";
-    delete process.env.FLAG_DEV_SIGNIN;
+    vi.stubEnv("NODE_ENV", "development");
+    vi.stubEnv("FLAG_DEV_SIGNIN", undefined);
     expect(isDevSignInEnabled()).toBe(false);
   });
 
   it("returns false in development when FLAG_DEV_SIGNIN is any non-\"1\" value", () => {
-    process.env.NODE_ENV = "development";
-    process.env.FLAG_DEV_SIGNIN = "true";
+    vi.stubEnv("NODE_ENV", "development");
+    vi.stubEnv("FLAG_DEV_SIGNIN", "true");
     expect(isDevSignInEnabled()).toBe(false);
-    process.env.FLAG_DEV_SIGNIN = "0";
+    vi.stubEnv("FLAG_DEV_SIGNIN", "0");
     expect(isDevSignInEnabled()).toBe(false);
   });
 
   it("returns true only under NODE_ENV=development AND FLAG_DEV_SIGNIN=1", () => {
-    process.env.NODE_ENV = "development";
-    process.env.FLAG_DEV_SIGNIN = "1";
+    vi.stubEnv("NODE_ENV", "development");
+    vi.stubEnv("FLAG_DEV_SIGNIN", "1");
     expect(isDevSignInEnabled()).toBe(true);
   });
 });
