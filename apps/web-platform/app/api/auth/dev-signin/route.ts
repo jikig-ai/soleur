@@ -18,6 +18,7 @@ import { NextResponse, type NextRequest } from "next/server";
 
 import { isDevSignInEnabled } from "@/lib/auth/dev-mode";
 import { rejectCsrf, validateOrigin } from "@/lib/auth/validate-origin";
+import { reportSilentFallback } from "@/server/observability";
 
 import {
   getEmailForSlot,
@@ -75,7 +76,20 @@ export async function POST(request: NextRequest | Request): Promise<Response> {
   }
 
   const password = getPasswordForSlot(slot);
-  if (!password) return configurationError();
+  if (!password) {
+    // Mirror the missing-password 5xx to Sentry per
+    // cq-silent-fallback-must-mirror-to-sentry. Forward only the slot —
+    // never the env-var key NAME (also forbidden by the post-build grep
+    // gate) and never the value (redacted via sensitive-keys.ts even if
+    // it ever lands in `extra`).
+    reportSilentFallback(null, {
+      feature: "auth",
+      op: "devSignIn_missing_password",
+      message: "DEV_USER password env var unset for requested slot",
+      extra: { slot },
+    });
+    return configurationError();
+  }
 
   const email = getEmailForSlot(slot);
 
@@ -86,21 +100,33 @@ export async function POST(request: NextRequest | Request): Promise<Response> {
 
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-  if (!supabaseUrl || !supabaseAnonKey) return configurationError();
+  if (!supabaseUrl || !supabaseAnonKey) {
+    reportSilentFallback(null, {
+      feature: "auth",
+      op: "devSignIn_missing_supabase_env",
+      message: "NEXT_PUBLIC_SUPABASE_{URL,ANON_KEY} unset under dev-signin",
+    });
+    return configurationError();
+  }
 
   const supabase = createServerClient(supabaseUrl, supabaseAnonKey, {
     cookieOptions: {
       sameSite: "lax",
-      secure: false, // dev-only — local http://localhost
+      // Layer A above guarantees NODE_ENV === "development" by the time
+      // we reach this line — TS even narrows the type away from "production"
+      // (TS2367 on `=== "production"` here). The hardcoded `false` is
+      // therefore equivalent to the callback route's
+      // `process.env.NODE_ENV === "production"` expression but TS-clean.
+      secure: false,
       path: "/",
     },
     cookies: {
       getAll() {
         // App Router `Request` does not expose a cookies bag; `NextRequest`
-        // does. Either way, supabase only needs `getAll` to populate its
-        // refresh-token check, and a fresh sign-in flow starts clean.
-        const reqCookies = (request as NextRequest).cookies;
-        return reqCookies?.getAll?.() ?? [];
+        // does. Use a runtime narrow rather than `as NextRequest` so the
+        // type system enforces the discrimination at the call site
+        // (review-finding code-quality #1).
+        return "cookies" in request ? request.cookies.getAll() : [];
       },
       setAll(cookiesToSet: { name: string; value: string; options: CookieOptions }[]) {
         cookiesToSet.forEach(({ name, value, options }) => {
@@ -116,7 +142,19 @@ export async function POST(request: NextRequest | Request): Promise<Response> {
     // Surface a generic failure — never echo `password` (would leak the
     // dev secret) or the env-var key name. Distinct status code from the
     // missing-config 500 so operators can disambiguate via metrics, but
-    // the response body is fixed.
+    // the response body is fixed. Mirror to Sentry per
+    // cq-silent-fallback-must-mirror-to-sentry — forward only typed enum
+    // fields so error.message (which can embed credentials) never lands.
+    reportSilentFallback(error, {
+      feature: "auth",
+      op: "devSignIn_signInWithPassword",
+      extra: {
+        slot,
+        errorCode: (error as { code?: string }).code,
+        errorName: error.name,
+        errorStatus: (error as { status?: number }).status,
+      },
+    });
     return new Response("dev sign-in failed", { status: 500 });
   }
 

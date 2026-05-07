@@ -34,5 +34,13 @@ export function getPasswordForSlot(slot: DevSlot): string | undefined {
       return process.env.DEV_USER_2_PASSWORD;
     case 3:
       return process.env.DEV_USER_3_PASSWORD;
+    default: {
+      // Exhaustiveness rail per cq-union-widening-grep-three-patterns —
+      // widening DevSlot (e.g., adding slot 4) without adding a branch
+      // here triggers a tsc error rather than a silent runtime undefined
+      // that the route handler maps to a misconfig 500.
+      const _exhaustive: never = slot;
+      return _exhaustive;
+    }
   }
 }
