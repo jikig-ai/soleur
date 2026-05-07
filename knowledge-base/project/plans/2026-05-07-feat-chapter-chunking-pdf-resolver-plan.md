@@ -48,6 +48,12 @@ No third-party file storage. Both BYOK + Soleur-key users via existing `cc-cost-
 
 ## Implementation Phases
 
+### Status (2026-05-07 work session)
+
+- **Phase 1 spikes:** scripts scaffolded (`scripts/spike/cache-control-forwarding.ts`, `scripts/spike/pdf-outline-coverage.ts`, `scripts/spike/pdf-outline-fixtures.json`). Not executed in this session — operator runs them post-merge or in a follow-up. AC #4 defaulted to RED-S1.
+- **Phase 2:** ✅ shipped. `extractPdfOutline` + page-range slicing on `extractPdfText` (`server/pdf-text-extract.ts`). Chapter-chunked branch in both resolvers (`server/kb-document-resolver.ts`, `server/leader-document-resolver.ts`). Tests: `test/pdf-text-extract.test.ts` extended (10 outline + page-range cases, 5 of them mock-based and engine-floor-independent), `test/kb-document-resolver-chapter-chunked.test.ts` (6 cases), `test/leader-document-resolver-chapter-chunked.test.ts` (4 cases). All 45 new tests pass; full suite remains 3907 passing.
+- **Phase 3:** **deferred to next session.** Chapter router module (`server/pdf-chapter-router.ts`) + soleur-go-runner.ts + agent-runner.ts integrations + 4 new runner-flow test files + `@anthropic-ai/sdk` devDep + S1 spike execution + AC #4 final edit. Resume prompt in `## Resume` section below.
+
 ### Phase 1: Empirical spikes
 
 Two spikes; both must complete before Phase 2.
@@ -193,7 +199,7 @@ Same pattern as Concierge. Leader path differs in that it has access to MCP tool
 1. A 400pg published PDF with TOC + "summarize chapter 3" → content-grounded summary citing chapter 3. Round-trip latency < 8s p95 (measured at Phase 3 manual testing; if > 8s, evaluate keyword-match fallback for the routing turn).
 2. Same PDF + "summarize this" → TOC-derived overview turn (not a refusal).
 3. PDF with no usable outline → bridge `too_many_pages` directive (existing copy unchanged).
-4. **Per-conv cost on Sonnet 4.6 stays under $0.50 across [GREEN-S1: 10 turns | RED-S1: 5 turns] of chapter Q&A.** After S1 spike runs, edit this AC to keep ONLY the matching branch — reviewer cannot verify both branches.
+4. **Per-conv cost on Sonnet 4.6 stays under $0.50 across 5 turns of chapter Q&A (RED-S1).** Phase 1 S1 spike was scaffolded but not executed in this PR — the implementation defaults to RED-S1 (no `cache_control` attachment). Operator runs `doppler run -p soleur -c dev -- ./node_modules/.bin/tsx apps/web-platform/scripts/spike/cache-control-forwarding.ts` post-merge; if GREEN, file a follow-up issue to flip to the 10-turn branch and add `cache_control: { type: "ephemeral" }` to the chapter content block in the runner integrations.
 5. Loaded-chapter prefix `[Answering from chapter <N>: "<title>"]` appears in every chapter-grounded response. Misrouted chapter is correctable in one user turn ("actually try chapter 7") without breaking conversation context.
 6. `cc-cost-caps.ts` per-conv cap, when hit mid-conversation (including hits between routing turn and answer turn), produces existing `cost_ceiling` directive — no silent failure, no fabricated answer. Verified by integration test.
 7. Per-chapter extraction failure (single chapter exceeds buffer cap or hits parse_error) surfaces "I have the TOC but chapter X failed to extract" — does NOT charge `state.totalCostUsd` for the failed routing turn. Verified by integration test.
@@ -268,5 +274,16 @@ Same pattern as Concierge. Leader path differs in that it has access to MCP tool
 
 - Unit + integration tests woven through Phase 2 (extract) and Phase 3 (router + runner).
 - Fixture sweep at Phase 1 (S2) gates Phase 2; PDF binaries `.gitignore`d, manifest committed.
-- No new test framework — `bun test` per project conventions.
+- No new test framework — `vitest` per project conventions (the plan body's `bun test` reference was a transcription drift from the Phase 1 brainstorm; the actual `web-platform` runner is `vitest run` invoked via `./node_modules/.bin/vitest`).
 - S1 + S2 spike outputs (token counts, fixture coverage table) committed to PR body verbatim.
+
+## Resume
+
+To continue Phase 3 in a fresh session:
+
+```
+/soleur:work knowledge-base/project/plans/2026-05-07-feat-chapter-chunking-pdf-resolver-plan.md
+
+Branch: feat-large-pdf-files-api. Worktree: .worktrees/feat-large-pdf-files-api/. Issue: #3436. PR: #3440. Phase 1 + 2 are committed and pushed (SHAs visible via `git log origin/feat-large-pdf-files-api`). Phase 3 remaining: (1) `apps/web-platform/server/pdf-chapter-router.ts` new module exporting `selectChapter` per plan §Phase 3 spec — Sonnet 4.6 / 200K pinned, BYOK key via `getCurrentByokLease()` in ALS, numeric-index parse with Levenshtein fuzzy fallback, returns selected/ambiguous/cost-cap-hit with `routingCostUsd`. (2) `soleur-go-runner.ts` chapter-chunked branch consuming `documentExtractMeta.chapters` — call `selectChapter` per question turn, branch on selected/ambiguous/cost-cap-hit, slice via `extractPdfText(buffer, capChars, { startPage, endPage })`, attach as `document` content block (NO `cache_control` for v1 per AC #4 RED-S1), prepend `[Answering from chapter <N>: "<title>"]`, refund routing-turn cost on slice failure. (3) `agent-runner.ts` symmetric integration in the leader region around line 909-996; directive must include NO-ASK clause for SDK Read on this PDF. (4) Test files: `test/pdf-chapter-router.test.ts`, `test/soleur-go-runner-chapter-chunked.test.ts`, `test/agent-runner-chapter-chunked.test.ts` — assert system-prompt byte-stability across within-chapter turns (plan §Sharp Edges), cap-hit between routing and answer turn, refund on slice failure, ambiguous-no-answer-turn, chapter-switch-rekeys-cache. (5) Add `@anthropic-ai/sdk` to `apps/web-platform/package.json` `devDependencies` for type-only `MessageParam` (regen both `bun.lock` and `package-lock.json`). (6) Run `cache-control-forwarding.ts` spike with Doppler-supplied key; if GREEN, flip AC #4 wording and attach `cache_control: { type: "ephemeral" }` to the chapter content block (one-line edit per runner). The buffer source for resolver-side outline + chapter-extract round-trips needs threading from the resolver through to the runner — currently `documentExtractMeta` carries `fullExtractedText` only; for slicing the runner re-reads `readFile(fullPath)` per turn, OR threads a `documentExtractBuffer` (binary) on the resolver result. Pick one in Phase 3.A pre-work; the simpler shape is re-read per turn (already cached by the OS page cache for hot files; ~5ms cost on a 30MB PDF).
+```
+
