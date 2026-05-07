@@ -256,7 +256,7 @@ describe("extractPdfText", () => {
 describe("extractPdfMetadata (#3429)", () => {
   it("exports the threshold and ceiling constants with sensible values", () => {
     expect(LARGE_PDF_PAGE_THRESHOLD).toBe(150);
-    expect(METADATA_READ_BYTE_CEILING_BYTES).toBe(60 * 1024 * 1024);
+    expect(METADATA_READ_BYTE_CEILING_BYTES).toBe(40 * 1024 * 1024);
     expect(METADATA_READ_TIMEOUT_MS).toBe(3000);
   });
 

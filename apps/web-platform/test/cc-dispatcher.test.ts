@@ -564,6 +564,53 @@ describe("cc-dispatcher singletons + orchestration", () => {
     expect(arg.documentExtractError).toBe("empty_text");
   });
 
+  it("KB Concierge: forwards documentExtractMeta to runner.dispatch (#3429 wire-drop regression — caught by user-impact-reviewer on PR #3430)", async () => {
+    // Pin the resolver→dispatcher→runner thread for the page-count gate's
+    // numPages payload. Pre-fix, dispatchSoleurGo destructured fields
+    // explicitly and forgot `documentExtractMeta`, so even though the
+    // resolver populated `{ numPages: 403 }`, the runner saw `undefined`
+    // and the user-facing copy fell back to "I see 0 pages". This test
+    // pins the field's survival across the dispatcher hop so a future
+    // field addition can't silently re-introduce the same defect class.
+    const { __setCcRunnerForTests } = await import("@/server/cc-dispatcher");
+    const dispatchSpy = vi.fn(async (_args: unknown) => ({ queryReused: false }));
+    const stubRunner = {
+      dispatch: dispatchSpy,
+      hasActiveQuery: () => false,
+      activeQueriesSize: () => 0,
+      reapIdle: () => 0,
+      closeConversation: () => {},
+      respondToToolUse: () => false,
+      notifyAwaitingUser: () => {},
+      // biome-ignore lint/suspicious/noExplicitAny: minimal stub
+    } as any;
+    __setCcRunnerForTests(stubRunner);
+
+    const sendToClient = vi.fn().mockReturnValue(true);
+    const persistActiveWorkflow = vi.fn().mockResolvedValue(undefined);
+
+    await dispatchSoleurGo({
+      userId: "u-meta",
+      conversationId: "conv-meta",
+      userMessage: "summarize this document",
+      currentRouting: { kind: "soleur_go_pending" },
+      sendToClient,
+      persistActiveWorkflow,
+      artifactPath: "knowledge-base/big-book.pdf",
+      documentKind: "pdf",
+      documentExtractError: "too_many_pages",
+      documentExtractMeta: { numPages: 403 },
+    });
+
+    expect(dispatchSpy).toHaveBeenCalledTimes(1);
+    const arg = dispatchSpy.mock.calls[0][0] as {
+      documentExtractError?: string;
+      documentExtractMeta?: { numPages?: number };
+    };
+    expect(arg.documentExtractError).toBe("too_many_pages");
+    expect(arg.documentExtractMeta).toEqual({ numPages: 403 });
+  });
+
   it("KB Concierge: emits stream_end{leaderId:cc_router} when runner fires events.onTextTurnEnd", async () => {
     const { __setCcRunnerForTests } = await import("@/server/cc-dispatcher");
     const stubRunner = {

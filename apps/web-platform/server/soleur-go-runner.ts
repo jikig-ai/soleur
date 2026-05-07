@@ -54,6 +54,7 @@ import { wrapUserInput } from "./prompt-injection-wrap";
 import { reportSilentFallback } from "./observability";
 import { createChildLogger } from "./logger";
 import type { PdfExtractErrorClass } from "./pdf-text-extract";
+import type { DocumentExtractMeta } from "./kb-document-resolver";
 
 const log = createChildLogger("soleur-go-runner");
 import { isBashCommandSafe } from "./permission-callback";
@@ -143,9 +144,13 @@ export const PDF_UNREADABLE_DIRECTIVE_LEAD =
 // unreadable leads — the page-count refusal names the count and offers
 // chapter-share / TOC-paste recovery, so the model has a concrete next
 // step instead of the silent timeout that fires when the SDK Read tool's
-// 20-page cap is exceeded by a 400+ page PDF.
+// 20-page cap is exceeded by a 400+ page PDF. Sentence-leading anchor
+// (NOT a mid-sentence fragment) so a future copy edit dropping the
+// em-dash or apostrophe doesn't silently break this load-bearing
+// substring — same shape as `PDF_GATED_DIRECTIVE_LEAD` and
+// `PDF_UNREADABLE_DIRECTIVE_LEAD`.
 export const PDF_TOO_LONG_DIRECTIVE_LEAD =
-  "that's too long for me to read in one go";
+  "This PDF is too long for me to read in one go";
 
 /**
  * Build a content-grounded "I cannot read this PDF" directive when the
@@ -183,20 +188,30 @@ const UNREADABLE_COPY_GENERIC = {
     "Could you paste the text excerpt you'd like me to work with?",
 } as const;
 
+// Prompt-byte budget guard for the interpolated numPages display in
+// `buildPdfTooLongDirective`. pdfjs-dist's `numPages` is a uint32; the
+// directive only carries it as a count in human-readable copy, so clamp
+// to a 5-digit ceiling to keep the prompt bounded against an
+// attacker-shaped malformed PDF.
+const MAX_DISPLAYED_PAGE_COUNT = 99_999;
+
 /**
  * Build the page-count gate directive (#3429 bridge fix). Routed when the
  * resolver detected `oversized_buffer` AND a metadata-only pdfjs read
  * reported `numPages > LARGE_PDF_PAGE_THRESHOLD`. Naming the page count
- * makes the refusal specific (CPO sign-off requirement: "I see N pages —
- * too long" preserves the concierge identity vs a generic "I can't").
+ * makes the refusal specific ("I see N pages — too long") instead of a
+ * generic "I can't" that loses the concierge identity.
  *
  * The returned string contains `PDF_TOO_LONG_DIRECTIVE_LEAD` as a
  * load-bearing substring (test-asserted) and offers two recovery paths:
- * share a chapter (page range) or paste the table of contents.
+ * (1) the user names a specific page range, in which case the agent uses
+ * `Read(file_path, { offset, limit })` with `limit ≤ 20` to stay under
+ * the SDK Read tool's per-request cap, OR (2) the user pastes the table
+ * of contents and the agent answers from that text directly.
  *
- * `numPages` is sanitized: clamped to [0, 99999] and floored. Defends
- * against attacker-shaped numPages from a malformed PDF and bounds the
- * prompt-byte budget.
+ * `numPages` is sanitized: clamped to [0, MAX_DISPLAYED_PAGE_COUNT] and
+ * floored. Defends against attacker-shaped numPages from a malformed
+ * PDF and bounds the prompt-byte budget.
  */
 export function buildPdfTooLongDirective(
   artifactPath: string,
@@ -205,14 +220,17 @@ export function buildPdfTooLongDirective(
 ): string {
   const safeN = Math.max(
     0,
-    Math.min(Math.floor(Number(numPages) || 0), 99999),
+    Math.min(Math.floor(Number(numPages) || 0), MAX_DISPLAYED_PAGE_COUNT),
   );
   return (
     `The user is currently viewing: ${artifactPath}\n\n` +
-    `I see ${safeN} pages — ${PDF_TOO_LONG_DIRECTIVE_LEAD}. ` +
+    `I see ${safeN} pages. ${PDF_TOO_LONG_DIRECTIVE_LEAD}. ` +
     "Share a chapter, or paste the table of contents and I'll point you at the right section. " +
-    "The user can paste the relevant text directly into this chat or re-upload via the paperclip. " +
-    "Do not propose installing dependencies, do not run shell commands, and do not attempt to discover or open the file via other tools. " +
+    "If the user names a specific page range (e.g. 'pages 80-100', 'chapter 3, pages 50-65'), " +
+    `you may use the Read tool on "${artifactPath}" with the matching offset/limit, ` +
+    "keeping limit ≤ 20 to stay within a single response window. " +
+    "The user can also paste the relevant text directly into this chat or re-upload via the paperclip. " +
+    "Do not propose installing dependencies and do not run shell commands. " +
     `${noAskClause}`
   );
 }
@@ -309,8 +327,14 @@ function unreadableCopyForClass(
 // native PDF pipeline; Read also resolves some path-shape mismatches the
 // resolver's bare `readFile` does not):
 //   oversized_buffer | corrupted | parse_error | lazy_import_failed | read_failed
-// Hard = SDK Read genuinely cannot recover (no key, no text layer):
-//   encrypted | empty_text
+// Hard = SDK Read genuinely cannot recover. Three sub-categories:
+//   - no key:                 encrypted
+//   - no text layer:          empty_text
+//   - operational-bound       too_many_pages (Read CAN read each chunk, but
+//     exceeded:               the ~21-call fanout for a 400-page PDF
+//                             exceeds the 90s idle-reaper window — added
+//                             in #3429, routed via `buildPdfTooLongDirective`
+//                             rather than the generic unreadable factory)
 //
 // `read_failed` placement rationale (per `user-impact-reviewer` review on
 // PR #3405, CPO-relevant for the `single-user incident` brand-survival
@@ -660,7 +684,7 @@ export interface DispatchArgs {
    * injects the page count into the directive copy so the user sees
    * "I see {N} pages — too long" instead of a generic refusal.
    */
-  documentExtractMeta?: { numPages?: number };
+  documentExtractMeta?: DocumentExtractMeta;
   /**
    * 2026-05-06 follow-up — Bug A1 fix. The agent's SDK Query is configured
    * with `cwd = workspacePath`, but Read instructions in the system
@@ -704,7 +728,7 @@ export interface QueryFactoryArgs {
   /** 2026-05-06 follow-up: typed extractor failure class. See `DispatchArgs.documentExtractError`. */
   documentExtractError?: PdfExtractErrorClass;
   /** 2026-05-07 follow-up: per-failure metadata. See `DispatchArgs.documentExtractMeta`. */
-  documentExtractMeta?: { numPages?: number };
+  documentExtractMeta?: DocumentExtractMeta;
   /** 2026-05-06 Bug A1: absolute-path Read directive support. See `DispatchArgs.workspacePath`. */
   workspacePath?: string;
 }
@@ -840,7 +864,7 @@ export interface BuildSoleurGoSystemPromptArgs {
    * Currently only `numPages` (used by the `too_many_pages` HARD class
    * to interpolate the count into `buildPdfTooLongDirective`).
    */
-  documentExtractMeta?: { numPages?: number };
+  documentExtractMeta?: DocumentExtractMeta;
 }
 
 // Hoisted: parity with agent-runner.ts MAX_INLINE_BYTES (~12-15K tokens).

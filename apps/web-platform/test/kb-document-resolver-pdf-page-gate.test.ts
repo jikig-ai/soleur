@@ -51,18 +51,20 @@ vi.mock("@/server/observability", () => ({
   warnSilentFallback: vi.fn(),
 }));
 
-vi.mock("@/server/pdf-text-extract", () => ({
-  extractPdfText: extractPdfTextSpy,
-  extractPdfMetadata: extractPdfMetadataSpy,
-  // The resolver uses `PdfExtractErrorClass` as a TYPE only (erased at
-  // runtime). The mock factory returns a noop placeholder so any runtime
-  // re-export check passes. The constants below are imported by the
-  // resolver via the same module — surface them so the resolver code path
-  // works under the mock without a partial-import undefined explosion.
-  LARGE_PDF_PAGE_THRESHOLD: 150,
-  METADATA_READ_BYTE_CEILING_BYTES: 60 * 1024 * 1024,
-  METADATA_READ_TIMEOUT_MS: 3000,
-}));
+vi.mock("@/server/pdf-text-extract", async () => {
+  // Import the real module so the threshold constants stay in lockstep
+  // with the source — hardcoded test-side values silently desync if the
+  // production threshold ever shifts. Spread `actual` then override the
+  // two functions whose behavior the test drives via spies.
+  const actual = await vi.importActual<typeof import("@/server/pdf-text-extract")>(
+    "@/server/pdf-text-extract",
+  );
+  return {
+    ...actual,
+    extractPdfText: extractPdfTextSpy,
+    extractPdfMetadata: extractPdfMetadataSpy,
+  };
+});
 
 import { resolveConciergeDocumentContext } from "@/server/cc-dispatcher";
 import { _resetWorkspacePathCacheForTests } from "@/server/kb-document-resolver";

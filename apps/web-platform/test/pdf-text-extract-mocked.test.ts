@@ -40,20 +40,18 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-describe("extractPdfText lazy_import_failed (#3438)", () => {
-  it("returns { error: 'lazy_import_failed' } when getDocument throws synchronously at the call site", async () => {
-    // Simulate an in-process pdfjs outage: the lazy `import()` resolved
-    // (the module IS cached by vitest's mock), but invoking `getDocument`
-    // throws — equivalent shape to a Node-engine drift breakage that
-    // shows up at first parse rather than at import resolution.
-    //
-    // The extractor's catch block (pdf-text-extract.ts:107-118 around
-    // `await import(...)`) maps any post-import failure to its parse
-    // path; this test specifically pins that lazy_import_failed surfaces
-    // when the import promise itself rejects. Use a rejected mock for
-    // the import — vitest's mock factory is the import, so we make
-    // `getDocument` throw with a synthetic error and confirm the
-    // extractor's outer try/catch covers it.
+// NOTE: this describe block was originally drafted as a `lazy_import_failed`
+// fold-in for #3438, but the mock-factory model of `vi.mock` cannot induce
+// a true import REJECTION (the factory IS the import — vitest invokes it
+// synchronously, errors propagate). The synchronous-throw-at-getDocument
+// shape exercised here lands in `extractPdfText`'s outer try/catch
+// (parse_error branch), NOT the lazy_import_failed branch above. A real
+// lazy_import_failed coverage would require a different mock harness
+// (e.g., `vi.doMock` with rejected factory in an isolated test file) and
+// remains an open follow-up — see `#3438`. Naming the test honestly here
+// to avoid the misleading-coverage signal flagged in PR #3430 review.
+describe("extractPdfText post-import getDocument throw (parse_error path)", () => {
+  it("returns { error: 'parse_error' } when getDocument throws synchronously at the call site", async () => {
     getDocumentSpy.mockImplementation(() => {
       throw new Error("synthetic-pdfjs-init-failure");
     });
@@ -62,13 +60,7 @@ describe("extractPdfText lazy_import_failed (#3438)", () => {
     expect(result).not.toBeNull();
     expect(result && "error" in result).toBe(true);
     if (!result || !("error" in result)) return;
-    // The extractor's outer try/catch lands the throw in the parse_error
-    // branch (the synchronous throw is shaped like a generic parse
-    // exception). This is functionally indistinguishable from
-    // lazy_import_failed for the gate downstream — both fail-close to
-    // the same routing. Pin the actual observed class so future drift
-    // surfaces as an actionable failure message.
-    expect(["parse_error", "lazy_import_failed"]).toContain(result.error);
+    expect(result.error).toBe("parse_error");
   });
 });
 

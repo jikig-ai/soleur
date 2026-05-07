@@ -268,7 +268,7 @@ describe("buildPdfTooLongDirective (#3429)", () => {
     );
     expect(out).toContain("knowledge-base/big-book.pdf");
     expect(out).toContain("I see 403 pages");
-    expect(out).toContain("that's too long for me to read in one go");
+    expect(out).toContain("This PDF is too long for me to read in one go");
     expect(out).toContain("Share a chapter");
     expect(out).toContain("paste the table of contents");
     expect(out).toContain(NO_ASK);

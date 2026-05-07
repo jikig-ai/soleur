@@ -45,16 +45,20 @@ vi.mock("@/server/observability", () => ({
   warnSilentFallback: vi.fn(),
 }));
 
-vi.mock("@/server/pdf-text-extract", () => ({
-  extractPdfText: extractPdfTextSpy,
-  extractPdfMetadata: extractPdfMetadataSpy,
-  // The resolver imports the threshold constant for the page-count gate.
-  // Stubbed at the same value as the source so the gate behaves
-  // identically under the mock.
-  LARGE_PDF_PAGE_THRESHOLD: 150,
-  METADATA_READ_BYTE_CEILING_BYTES: 60 * 1024 * 1024,
-  METADATA_READ_TIMEOUT_MS: 3000,
-}));
+vi.mock("@/server/pdf-text-extract", async () => {
+  // Spread the real module so threshold constants (LARGE_PDF_PAGE_THRESHOLD
+  // etc.) stay in lockstep with the source — hardcoded test-side values
+  // silently desync on a production threshold shift. Override only the
+  // two functions whose behavior the test drives via spies.
+  const actual = await vi.importActual<typeof import("@/server/pdf-text-extract")>(
+    "@/server/pdf-text-extract",
+  );
+  return {
+    ...actual,
+    extractPdfText: extractPdfTextSpy,
+    extractPdfMetadata: extractPdfMetadataSpy,
+  };
+});
 
 import { resolveConciergeDocumentContext } from "@/server/cc-dispatcher";
 import { _resetWorkspacePathCacheForTests } from "@/server/kb-document-resolver";

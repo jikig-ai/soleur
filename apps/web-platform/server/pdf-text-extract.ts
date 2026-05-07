@@ -87,17 +87,23 @@ export const LARGE_PDF_PAGE_THRESHOLD = 150;
 // Upper bound at which we'll attempt a metadata-only pdfjs read (#3429).
 // DISTINCT from MAX_AGENT_READABLE_PDF_SIZE (24MB extractor cap) —
 // metadata-only reads have a different RSS profile (xref + numPages, no
-// per-page text iteration). 60 MiB still bounds RSS for a malformed PDF
-// while leaving headroom over the 24MB extractor cap so a Manning-shaped
-// PDF (15-30MB) is in scope. Above this ceiling we fail closed — the
-// resolver falls through to the existing soft-route.
+// per-page text iteration). 40 MiB bounds RSS for a malformed PDF
+// (pdfjs can spike ~3-5x the buffer size during xref-build per the
+// 2026-04-18 learning) while leaving headroom over the 24MB extractor
+// cap so a Manning-shaped PDF (15-30MB) is in scope. Above this ceiling
+// we fail closed — the resolver falls through to the existing soft-route.
 //
-// Bit-shift form (`60 << 20`) by design — the `kb-pdf-cap-alignment`
+// Sized down from the originally-proposed 60 MiB per perf-oracle review
+// of PR #3430: a 60 MiB malformed PDF could allocate >300 MB RSS during
+// xref-build, partially defeating the bound; 40 MiB caps the worst-case
+// RSS spike at ~200 MB while preserving the Manning use case.
+//
+// Bit-shift form (`40 << 20`) by design — the `kb-pdf-cap-alignment`
 // drift guard forbids `<n> * 1024 * 1024` shadow constants in this file
 // to prevent re-introducing a competing extractor cap; the metadata
 // ceiling is a SEPARATE concern (different lifecycle, different RSS
-// profile) so we use the equivalent `60 << 20 = 62_914_560` shape.
-export const METADATA_READ_BYTE_CEILING_BYTES = 60 << 20;
+// profile) so we use the equivalent `40 << 20 = 41_943_040` shape.
+export const METADATA_READ_BYTE_CEILING_BYTES = 40 << 20;
 
 // `Promise.race` timeout on the pdfjs metadata-only `getDocument` call
 // (#3429). 3s caps the wall-clock cost in the resolver's hot path. On
