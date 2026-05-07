@@ -525,7 +525,8 @@ export function useWebSocket(conversationId: string): UseWebSocketReturn {
         case "subagent_complete":
         case "workflow_started":
         case "workflow_ended":
-        case "interactive_prompt": {
+        case "interactive_prompt":
+        case "context_reset": {
           // Store routing source from the first stream_start
           if (msg.type === "stream_start" && msg.source) {
             setRouteSource(msg.source);

@@ -27,6 +27,7 @@ import type {
   InteractivePromptPayload,
 } from "@/lib/types";
 import type { ChatInteractivePromptMessage } from "@/lib/chat-state-machine";
+import { CONTEXT_RESET_COPY } from "@/components/chat/chat-copy";
 
 export type ChatSurfaceVariant = "full" | "sidebar";
 
@@ -594,6 +595,21 @@ export function ChatSurface({
                       toolLabel={msg.toolLabel}
                       leaderId={msg.leaderId}
                     />
+                  );
+                  break;
+                case "context_reset":
+                  // #3269 — inline lifecycle notice mirroring `workflow_ended`
+                  // shape. Copy is read from `CONTEXT_RESET_COPY[msg.reason]`
+                  // (single source of truth shared with the RTL test).
+                  body = (
+                    <div
+                      data-message-type="context_reset"
+                      className="rounded-xl border border-soleur-border-default bg-soleur-bg-surface-1/40 px-4 py-3"
+                    >
+                      <p className="text-sm text-soleur-text-primary">
+                        {CONTEXT_RESET_COPY[msg.reason]}
+                      </p>
+                    </div>
                   );
                   break;
                 default: {
