@@ -100,6 +100,9 @@ After the subagent returns, check for a `## Session Summary` heading in the outp
 > **CONTINUATION GATE**: When work outputs `## Work Phase Complete`, that is your signal to continue. Do NOT end your turn. Do NOT treat "Implementation complete" or similar phrases as a stopping point. Immediately proceed to step 4 in the same response.
 
 4. Use the **Skill tool**: `skill: soleur:review`
+
+> **CONTINUATION GATE**: When review outputs `## Code Review Complete` (or any review-summary heading, "Findings Summary", "Next Steps", etc.), that is a **status marker**, not a turn boundary. Do NOT end your turn. Do NOT treat the review summary as a deliverable — your deliverable is the merged PR at step 8. After the summary, immediately proceed to step 5 in the same response. If you find yourself wanting to write a wrap-up sentence, hand off to the user, or wait for confirmation, stop — that is the failure mode this gate exists to block. The same anti-stop rule applies between every subsequent step (5 → 5.5 → 6 → 7 → 8): each skill's exit summary is a checkpoint, never a stopping point.
+
 5. **Resolve ALL review findings (P1, P2, and P3).** Technical debt compounds — fix everything now, not later. List open GitHub issues from this review session:
 
    ```bash
