@@ -405,80 +405,80 @@ Neither is brand-survival-threatening.
 
 #### #3463 — disconnect-after-result race
 
-- [ ] `apps/web-platform/server/conversation-writer.ts` exports a new
+- [x] `apps/web-platform/server/conversation-writer.ts` exports a new
       `onlyIfStatusIn?: ReadonlyArray<Conversation["status"]>` field on
       `UpdateConversationOptions`. When provided, the wrapper appends
       `.in("status", onlyIfStatusIn)` to the existing
       composite-key UPDATE.
-- [ ] `apps/web-platform/server/agent-runner.ts` adds a new helper
+- [x] `apps/web-platform/server/agent-runner.ts` adds a new helper
       `updateConversationStatusIfActive(userId, conversationId, status)`
       that uses `expectMatch: false` + `onlyIfStatusIn: ["active"]` and
       returns `Promise<void>` (silent no-op on 0-rows-affected).
-- [ ] Line **~1766** (abort branch's non-superseded
+- [x] Line **~1766** (abort branch's non-superseded
       `updateConversationStatus` call) is replaced with the new helper
       so the disconnect path cannot stomp a row that already reached a
       terminal state.
-- [ ] Same replacement applied at:
+- [x] Same replacement applied at:
   - Line **~1646** (result-branch fallback `failed`-cascade after a
     failed `waiting_for_user` flip).
   - Line **~1659** (result-branch fallback when `assistantPersisted = false`).
   - Line **~1852** (non-abort thrown errors path).
-- [ ] No guard at line **~1613** (the result branch's primary
+- [x] No guard at line **~1613** (the result branch's primary
       `waiting_for_user` write — that's the writer we want to win the
       race; guarding it would re-introduce the bug from the other side).
       This site continues to use `updateConversationStatus` (with
       `expectMatch: true`) per its load-bearing
       "0-rows = genuinely broken" contract.
-- [ ] Line **~1640** (result-branch fallback's first attempt — re-write
+- [x] Line **~1640** (result-branch fallback's first attempt — re-write
       `waiting_for_user` when the primary write threw): keep
       `updateConversationStatus` (with `expectMatch: true`). If THAT
       write returns 0-rows, something is genuinely broken — the original
       contract is correct here.
-- [ ] No guard at line **~2027** (`dispatchToLeaders`'s catch — verified
+- [x] No guard at line **~2027** (`dispatchToLeaders`'s catch — verified
       by Read as the sole writer for that conversation in that branch;
       no race surface).
 
 #### #3464 — incomingTypes capability extension
 
-- [ ] `apps/web-platform/lib/ws-zod-schemas.ts:274-276` — `capabilities`
+- [x] `apps/web-platform/lib/ws-zod-schemas.ts:274-276` — `capabilities`
       sub-schema gains optional `incomingTypes: z.array(z.string()).readonly().optional()`.
-- [ ] `apps/web-platform/lib/types.ts:242` — `session_started` variant's
+- [x] `apps/web-platform/lib/types.ts:242` — `session_started` variant's
       `capabilities` shape mirrors the schema: `{ promptKinds: readonly string[]; incomingTypes?: readonly string[] }`.
-- [ ] New module `apps/web-platform/lib/ws-capabilities.ts` (or extend
+- [x] New module `apps/web-platform/lib/ws-capabilities.ts` (or extend
       an existing constant module if grep finds a natural home — see
       Phase 0) exports two `readonly string[]` constants:
       - `WS_PROMPT_KINDS` — the curated server→client `interactive_prompt.kind`
         set from #2885 (already canonical somewhere; consolidate or import).
       - `WS_INCOMING_TYPES = ["abort_turn"] as const` — the curated
         client→server manifest. **Initially `abort_turn` only.**
-- [ ] `apps/web-platform/server/ws-handler.ts:1194` (`start_session` emit)
+- [x] `apps/web-platform/server/ws-handler.ts:1194` (`start_session` emit)
       passes `capabilities: { promptKinds: WS_PROMPT_KINDS, incomingTypes: WS_INCOMING_TYPES }`.
-- [ ] `apps/web-platform/server/ws-handler.ts:1252` (`resume_session` emit)
+- [x] `apps/web-platform/server/ws-handler.ts:1252` (`resume_session` emit)
       passes the same `capabilities` payload.
-- [ ] If `cc-dispatcher.ts` or any other module emits `session_started`
+- [x] If `cc-dispatcher.ts` or any other module emits `session_started`
       independently (verified via Phase 0 grep), the same payload is
       threaded.
 
 ### Non-Functional Requirements
 
-- [ ] No new Sentry mirror at the `onlyIfStatusIn` no-op site (silent
+- [x] No new Sentry mirror at the `onlyIfStatusIn` no-op site (silent
       success is the contract for the conditional write — the row
       legitimately may have already reached terminus).
-- [ ] All three layers of `apps/web-platform/test/` fixtures that pin
+- [x] All three layers of `apps/web-platform/test/` fixtures that pin
       `session_started` shape are updated (Phase 0 enumerates them
       via grep).
-- [ ] `tsc --noEmit` clean — discriminated-union widening on a single
+- [x] `tsc --noEmit` clean — discriminated-union widening on a single
       variant must not regress any consumer.
-- [ ] `bun test apps/web-platform/test/` green — including any
+- [x] `bun test apps/web-platform/test/` green — including any
       `WSMessage` exhaustiveness test files (`*.test-d.ts`).
 
 ### Quality Gates
 
-- [ ] Test coverage: each of the four agent-runner sites + the new
+- [x] Test coverage: each of the four agent-runner sites + the new
       `onlyIfStatusIn` wrapper field + the `incomingTypes` emit at
       both `session_started` sites has a dedicated test scenario.
-- [ ] No new dependencies.
-- [ ] No DB migration (status-column guard is a query predicate; no
+- [x] No new dependencies.
+- [x] No DB migration (status-column guard is a query predicate; no
       schema change).
 
 ## Test Scenarios
