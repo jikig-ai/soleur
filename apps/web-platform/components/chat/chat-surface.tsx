@@ -614,13 +614,15 @@ export function ChatSurface({
 
           {isClassifying && (
             <div className="flex justify-start" data-testid="routing-chip">
-              <div className="flex items-center gap-2 rounded-xl border border-soleur-border-default bg-soleur-bg-surface-1 px-4 py-3">
-                <LeaderAvatar leaderId={CC_ROUTER_LEADER_ID} size="sm" />
-                <span className="h-2 w-2 animate-pulse rounded-full bg-amber-500" />
-                <span className="text-sm text-soleur-text-secondary">
-                  Soleur Concierge is routing to the right experts...
-                </span>
-              </div>
+              <MessageBubble
+                role="assistant"
+                content=""
+                leaderId={CC_ROUTER_LEADER_ID}
+                messageState="tool_use"
+                toolLabel="Routing to the right experts…"
+                getDisplayName={getDisplayName}
+                getIconPath={getIconPath}
+              />
             </div>
           )}
 
