@@ -982,7 +982,44 @@ export function buildSoleurGoSystemPrompt(
         // `buildPdfGatedDirective`'s named-binary exclusion list bounds the
         // shell-prior in the prompt text, and `disallowedTools: [Bash, Edit,
         // Write]` in cc-dispatcher is the SDK-level hard brake.
-        if (args.documentExtractError) {
+        // 2026-05-07 (#3436) — chapter-chunked soft-route. Resolver
+        // already partitioned this PDF as outline-bearing + oversized,
+        // produced a usable `chapters` outline + `fullExtractedText`, and
+        // surfaced them on `documentExtractMeta` with NO `documentExtractError`.
+        // Chapter content for each user-question turn is attached as a
+        // `document` content block on the user message via the dispatch-
+        // time chapter-router (`pdf-chapter-router.ts`); the system
+        // prompt is byte-stable per session (per plan §Sharp Edges
+        // — `cache_control` cumulative-prefix invariant). Inline
+        // template (no factory) per plan §Phase 3 / Simplicity reviewer.
+        const chapters = args.documentExtractMeta?.chapters;
+        if (chapters && chapters.length > 0) {
+          const tocLines = chapters
+            .map((c, i) => {
+              const safeTitle = sanitizePromptString(c.title);
+              return `${i + 1}. ${safeTitle} (pages ${c.startPage}-${c.endPage})`;
+            })
+            .join("\n");
+          artifactDirective = [
+            `The user is currently viewing: ${safeArtifactPath}`,
+            "",
+            "This PDF is large but I have the table of contents. The most-",
+            "relevant chapter for each of the user's questions will be",
+            "routed and attached on that user turn as a `document` content",
+            "block. Treat that block as the authoritative source for your",
+            "answer.",
+            "",
+            "Table of contents:",
+            tocLines,
+            "",
+            'Prefix every reply with `[Answering from chapter <N>: "<title>"]`',
+            "naming the chapter that grounded the answer (use the same number",
+            "and title from the TOC above). If the user asks a question",
+            "no chapter clearly answers, say so plainly — do NOT fabricate.",
+            "",
+            NO_ASK,
+          ].join("\n");
+        } else if (args.documentExtractError) {
           const safeErrorClass = sanitizePromptString(args.documentExtractError);
           if (isPdfSoftFailure(safeErrorClass)) {
             artifactDirective = buildPdfGatedDirective(

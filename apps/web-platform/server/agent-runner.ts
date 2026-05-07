@@ -919,7 +919,51 @@ ${READ_TOOL_PDF_CAPABILITY_DIRECTIVE}`;
         });
 
         if (resolved.documentKind === "pdf") {
-          if (resolved.documentExtractError) {
+          // 2026-05-07 (#3436) — chapter-chunked soft-route, symmetric
+          // with `soleur-go-runner.ts`. Resolver partitioned this PDF as
+          // outline-bearing + oversized and produced `chapters` +
+          // `fullExtractedText` on `documentExtractMeta` with NO error.
+          // Per-question chapter routing + content-block attachment is
+          // wired at the dispatch layer (`pdf-chapter-router.ts`); the
+          // system prompt declares the TOC + a NO-ASK clause naming the
+          // SDK Read tool so the leader does NOT call Read on this PDF
+          // (the chapter content arrives on each user turn). Inline
+          // template (no factory) per plan §Phase 3.
+          const chapters = resolved.documentExtractMeta?.chapters;
+          if (chapters && chapters.length > 0) {
+            const tocLines = chapters
+              .map((c, i) => {
+                const safeTitle = sanitizePromptIdentifier(c.title);
+                return `${i + 1}. ${safeTitle} (pages ${c.startPage}-${c.endPage})`;
+              })
+              .join("\n");
+            artifactDirective = [
+              `The user is currently viewing: ${safeContextPath}`,
+              "",
+              "This PDF is large but I have the table of contents. The most-",
+              "relevant chapter for each of the user's questions will be",
+              "routed and attached on that user turn as a `document` content",
+              "block. Treat that block as the authoritative source for your",
+              "answer.",
+              "",
+              "Table of contents:",
+              tocLines,
+              "",
+              "Do NOT invoke the Read tool on this PDF — the chapter content",
+              "for the current question is provided in the user message",
+              "above. Calling Read here triggers the in-process pdfjs",
+              "extractor's oversize refusal (the same path that surfaced",
+              "this chapter-chunked route in the first place).",
+              "",
+              'Prefix every reply with `[Answering from chapter <N>: "<title>"]`',
+              "naming the chapter that grounded the answer (use the same",
+              "number and title from the TOC above). If the user asks a",
+              "question no chapter clearly answers, say so plainly — do NOT",
+              "fabricate.",
+              "",
+              CONTEXT_NO_ASK,
+            ].join("\n");
+          } else if (resolved.documentExtractError) {
             // Lock-step partition-dispatch order with `soleur-go-runner.ts`
             // (lines ~985-1013): SOFT first, then `too_many_pages`, then
             // HARD fall-through. Order is behaviorally equivalent (the
