@@ -363,4 +363,72 @@ describe("extractPdfText lazy_import_failed", () => {
       vi.resetModules();
     }
   });
+
+  // 2026-05-07 follow-up to #3437: when the leader-document resolver calls
+  // extractPdfText, lazy-import failures must mirror to Sentry with
+  // `feature: "leader-context"` so operators can filter leader-side fires
+  // from Concierge fires (which mirror with `feature: "kb-concierge-context"`).
+  // Pre-fix the feature tag was hardcoded; this test pins the per-call
+  // override surface (`featureTag` arg) so a future refactor can't silently
+  // collapse the two paths to one tag.
+  it("mirrors with caller-provided featureTag when one is passed", async () => {
+    const reportSilentFallback = vi.fn();
+    try {
+      vi.doMock("@/server/observability", async () => {
+        const actual = await vi.importActual<
+          typeof import("@/server/observability")
+        >("@/server/observability");
+        return { ...actual, reportSilentFallback };
+      });
+      vi.doMock("pdfjs-dist/legacy/build/pdf.mjs", () => {
+        throw new Error("simulated module-init failure");
+      });
+      vi.resetModules();
+      const { extractPdfText: extractPdfTextIsolated } = await import(
+        "@/server/pdf-text-extract"
+      );
+      const buf = Buffer.from("%PDF-1.4\n");
+      const result = await extractPdfTextIsolated(buf, 50_000, {
+        featureTag: "leader-context",
+      });
+      expect(result).toMatchObject({ error: "lazy_import_failed" });
+      expect(reportSilentFallback).toHaveBeenCalledTimes(1);
+      const [, ctxArg] = reportSilentFallback.mock.calls[0];
+      expect(ctxArg).toMatchObject({
+        feature: "leader-context",
+        op: "extractPdfText.import",
+      });
+    } finally {
+      vi.doUnmock("@/server/observability");
+      vi.doUnmock("pdfjs-dist/legacy/build/pdf.mjs");
+      vi.resetModules();
+    }
+  });
+
+  it("defaults featureTag to 'kb-concierge-context' when omitted", async () => {
+    const reportSilentFallback = vi.fn();
+    try {
+      vi.doMock("@/server/observability", async () => {
+        const actual = await vi.importActual<
+          typeof import("@/server/observability")
+        >("@/server/observability");
+        return { ...actual, reportSilentFallback };
+      });
+      vi.doMock("pdfjs-dist/legacy/build/pdf.mjs", () => {
+        throw new Error("simulated module-init failure");
+      });
+      vi.resetModules();
+      const { extractPdfText: extractPdfTextIsolated } = await import(
+        "@/server/pdf-text-extract"
+      );
+      const buf = Buffer.from("%PDF-1.4\n");
+      await extractPdfTextIsolated(buf, 50_000);
+      const [, ctxArg] = reportSilentFallback.mock.calls[0];
+      expect(ctxArg.feature).toBe("kb-concierge-context");
+    } finally {
+      vi.doUnmock("@/server/observability");
+      vi.doUnmock("pdfjs-dist/legacy/build/pdf.mjs");
+      vi.resetModules();
+    }
+  });
 });

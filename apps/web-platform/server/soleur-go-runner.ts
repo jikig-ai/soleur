@@ -420,7 +420,7 @@ void _partitionExhaustive;
  * mirror; it has no runtime Set because the predicate is one-sided
  * (default-route is unreadable).
  */
-function isPdfSoftFailure(
+export function isPdfSoftFailure(
   errorClass: PdfExtractErrorClass | string,
 ): boolean {
   return PDF_SOFT_FAILURE_CLASSES.has(errorClass as PdfExtractErrorClass);
