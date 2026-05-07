@@ -234,13 +234,12 @@ jobs:
           CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
           CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
           VERSION: ${{ needs.release.outputs.version }}
-          # Named poll bounds (#2205, #2519). Total window = MAX_ATTEMPTS * INTERVAL_S.
-          # Raised from 24 (120s) to 60 (300s) after run 24583922171 hit a
-          # false-negative timeout during a healthy v0.43.0 deploy. Aligns with
-          # the downstream Verify-deploy-health step's 300s ceiling (HEALTH_POLL_*).
-          # Kept INTERVAL_S=5 to preserve fail-fast on early non-zero exits
-          # (e.g., insufficient_disk_space, unhandled traps).
-          STATUS_POLL_MAX_ATTEMPTS: 60
+          # Named poll bounds (#2205, #2519, #3398). 900s ceiling (180 * 5s).
+          # Aligns with HEALTH_POLL_* below per cq-align-ci-poll-windows-with-adjacent-steps.
+          # Sizing rationale + rerun-during-flight unsafety:
+          # knowledge-base/project/learnings/best-practices/2026-05-07-deploy-poll-ceiling-must-track-realistic-deploy-window.md
+          # Runbook: plugins/soleur/skills/postmerge/references/deploy-status-debugging.md
+          STATUS_POLL_MAX_ATTEMPTS: 180
           STATUS_POLL_INTERVAL_S: 5
         run: |
           # /hooks/deploy-status is GET (read-only, idempotent). adnanh/webhook's
@@ -283,7 +282,10 @@ jobs:
                 echo "Attempt $i/$STATUS_POLL_MAX_ATTEMPTS: last deploy was for $TAG (want v$VERSION)"
                 ;;
               -1)
-                echo "Attempt $i/$STATUS_POLL_MAX_ATTEMPTS: ci-deploy.sh still running (reason=$REASON)"
+                # Elapsed-since-running annotation (#3398): surfaces ceiling drift in the log.
+                STARTED=$(echo "$BODY" | jq -r '.start_ts // 0')
+                ELAPSED=$(($(date +%s) - STARTED))
+                echo "Attempt $i/$STATUS_POLL_MAX_ATTEMPTS: ci-deploy.sh still running (reason=$REASON, elapsed=${ELAPSED}s)"
                 ;;
               -2)
                 echo "Attempt $i/$STATUS_POLL_MAX_ATTEMPTS: no prior deploy recorded"
@@ -307,8 +309,11 @@ jobs:
       - name: Verify deploy health and version
         env:
           VERSION: ${{ needs.release.outputs.version }}
-          # Named poll bounds (#2205). Total window = MAX_ATTEMPTS * INTERVAL_S.
-          HEALTH_POLL_MAX_ATTEMPTS: 30
+          # Named poll bounds (#2205, #3398). Total window = MAX_ATTEMPTS * INTERVAL_S.
+          # 2026-05-07 (#3398): raised from 30 (300s) to 90 (900s) to maintain
+          # alignment with the upstream Verify-deploy-script-completion step's
+          # new 900s ceiling per cq-align-ci-poll-windows-with-adjacent-steps.
+          HEALTH_POLL_MAX_ATTEMPTS: 90
           HEALTH_POLL_INTERVAL_S: 10
         run: |
           for i in $(seq 1 "$HEALTH_POLL_MAX_ATTEMPTS"); do
