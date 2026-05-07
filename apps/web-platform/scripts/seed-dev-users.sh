@@ -88,10 +88,21 @@ header_auth="Authorization: Bearer $SRK"
 header_api="apikey: $SRK"
 header_json="Content-Type: application/json"
 
-# Fetch the current user list once and look up by email locally — cheaper
-# and more reliable than the search query API for small lists.
-USER_LIST=$(curl -sf "$SB_URL/auth/v1/admin/users?per_page=100" \
-  -H "$header_auth" -H "$header_api")
+# TC_VERSION must match `lib/legal/tc-version.ts`. If that file's literal
+# changes, bump this string too — middleware redirects to /accept-terms
+# when the user's tc_accepted_version doesn't match the literal.
+TC_VERSION="1.0.0"
+
+# Look up an existing user by email via the admin endpoint's per-email
+# filter (avoids the >100-users pagination bug in the previous shape that
+# fetched a single ?per_page=100 page and missed dev-N if it landed on
+# page ≥2 — review-finding data-integrity #1).
+find_user_by_email() {
+  local email="$1"
+  curl -sf "$SB_URL/auth/v1/admin/users?email=$(jq -rn --arg v "$email" '$v|@uri')&per_page=1" \
+    -H "$header_auth" -H "$header_api" \
+    | jq -r --arg e "$email" '(.users // []) | map(select(.email == $e)) | .[0].id // ""'
+}
 
 for slot in 1 2 3; do
   pw_var="DEV_USER_${slot}_PASSWORD"
@@ -103,8 +114,7 @@ for slot in 1 2 3; do
   fi
   email="dev-${slot}@example.com"
 
-  user_id=$(printf '%s' "$USER_LIST" | jq -r --arg e "$email" \
-    '(.users // []) | map(select(.email == $e)) | .[0].id // ""')
+  user_id=$(find_user_by_email "$email")
 
   if [[ -z "$user_id" ]]; then
     echo "Creating $email..."
@@ -126,8 +136,41 @@ for slot in 1 2 3; do
       > /dev/null
     echo "  Updated."
   fi
+
+  # Provision public.users so the dev session lands on /dashboard, not
+  # /accept-terms or /setup-key. Mirrors the seed-qa-user.sh ladder
+  # (review-finding data-integrity #2). PATCH is idempotent — repeated
+  # runs reset the row to the canonical QA-ready state.
+  echo "  Provisioning public.users row..."
+  curl -sf "$SB_URL/rest/v1/users?id=eq.$user_id" \
+    -X PATCH -H "$header_auth" -H "$header_api" -H "$header_json" \
+    -H "Prefer: return=minimal" \
+    -d "$(jq -nc \
+      --arg tc "$TC_VERSION" \
+      --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+      --arg wp "/workspaces/$user_id" \
+      '{tc_accepted_version: $tc, tc_accepted_at: $ts, workspace_status: "ready", repo_status: "connected", workspace_path: $wp}')" \
+    > /dev/null
+
+  # Ensure a dummy anthropic api_keys row exists so the dashboard's
+  # has-key gate passes. Idempotent: only insert if no row matches.
+  existing_key=$(curl -sf "$SB_URL/rest/v1/api_keys?user_id=eq.$user_id&provider=eq.anthropic&select=id" \
+    -H "$header_auth" -H "$header_api" \
+    | jq -r '.[0].id // ""')
+  if [[ -z "$existing_key" ]]; then
+    curl -sf "$SB_URL/rest/v1/api_keys" \
+      -X POST -H "$header_auth" -H "$header_api" -H "$header_json" \
+      -H "Prefer: return=minimal" \
+      -d "$(jq -nc --arg uid "$user_id" \
+        '{user_id: $uid, provider: "anthropic", encrypted_key: "dev-dummy-not-real", is_valid: true}')" \
+      > /dev/null
+    echo "  Inserted dummy anthropic api_keys row."
+  else
+    echo "  api_keys row already present ($existing_key)."
+  fi
 done
 
 echo ""
-echo "::notice::All three dev users provisioned. Panel will appear on /login when"
-echo "::notice::FLAG_DEV_SIGNIN=1 is set in Doppler dev and the dev server is running."
+echo "::notice::All three dev users provisioned (tc=$TC_VERSION, workspace=ready,"
+echo "::notice::repo=connected, dummy anthropic key). Panel renders on /login when"
+echo "::notice::FLAG_DEV_SIGNIN=1 is set in Doppler dev and dev server is running."
