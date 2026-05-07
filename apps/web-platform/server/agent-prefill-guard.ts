@@ -33,7 +33,10 @@ import {
   type SessionMessage,
 } from "@anthropic-ai/claude-agent-sdk";
 
+import type { ContextResetReason } from "@/lib/types";
 import { warnSilentFallback } from "./observability";
+
+export type { ContextResetReason } from "@/lib/types";
 
 /**
  * Sentry feature tag for the call site. Cc-soleur-go uses
@@ -69,16 +72,6 @@ export interface ApplyPrefillGuardArgs {
   leaderId?: string;
 }
 
-/**
- * Discriminator for the WS `context_reset` event. `prefill-guard` is the
- * generic "assistant-terminated history" branch; `tool_use_orphan` is the
- * narrower branch where the trailing assistant message contained a
- * `tool_use` content block — model must NOT execute "yes do that" without
- * re-confirmation by name. See plan
- * `2026-05-07-feat-prefill-guard-context-reset-signal-plan.md` §1.3.
- */
-export type ContextResetReason = "prefill-guard" | "tool_use_orphan";
-
 export interface ApplyPrefillGuardResult {
   /**
    * `args.resumeSessionId` unchanged when the persisted session is
@@ -109,9 +102,11 @@ export interface ApplyPrefillGuardResult {
 /**
  * Generic context-reset notice — used when the trailing assistant message
  * is plain text (or non-array content). Trimmed to model directive only
- * per copywriter constraint (no "Note:" / "due to" / jargon).
+ * per copywriter constraint (no "Note:" / "due to" / jargon). Exported
+ * so tests can assert against the canonical literal without redeclaring
+ * it (single source of truth).
  */
-const CONTEXT_RESET_NOTICE_GENERIC =
+export const CONTEXT_RESET_NOTICE_GENERIC =
   "Prior conversation context was reset. Treat the user's next message as standalone; ask for clarification if it references earlier turns.";
 
 /**
@@ -119,7 +114,7 @@ const CONTEXT_RESET_NOTICE_GENERIC =
  * `tool_use` content block. Model must NOT execute any action without
  * explicit re-confirmation by name (CLO authorization-audit-trail floor).
  */
-const CONTEXT_RESET_NOTICE_TOOL_USE_ORPHAN =
+export const CONTEXT_RESET_NOTICE_TOOL_USE_ORPHAN =
   "Prior conversation context was reset. The previous turn proposed a tool action you no longer have context on. Do NOT execute any action without explicit re-confirmation by name — ask the user to restate which action they want to run.";
 
 /**

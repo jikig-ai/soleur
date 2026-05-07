@@ -7,6 +7,7 @@ import type {
   WorkflowName,
   SubagentCompleteStatus,
   WorkflowEndStatus,
+  ContextResetReason,
 } from "./types";
 import type { DomainLeaderId } from "@/server/domain-leaders";
 
@@ -121,7 +122,7 @@ export interface ChatToolUseChipMessage extends Omit<ChatMessageBase, "leaderId"
  *  `reason`. No state mutation beyond appending the message itself. */
 export interface ChatContextResetMessage extends ChatMessageBase {
   type: "context_reset";
-  reason: "prefill-guard" | "tool_use_orphan";
+  reason: ContextResetReason;
 }
 
 export type ChatMessage =

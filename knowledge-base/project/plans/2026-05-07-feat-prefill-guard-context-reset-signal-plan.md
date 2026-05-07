@@ -65,6 +65,8 @@ ADR-025 (committed in the brainstorm phase, before this plan was written) docume
 
 **Brand-survival threshold:** `single-user incident`. CPO sign-off required at plan time (this plan). `user-impact-reviewer` invoked at review-time. `requires_cpo_signoff: true` set in frontmatter.
 
+**Pre-existing operator-side surface (out-of-scope):** the `op:prefill-guard` Sentry payload (`workspacePath`, `userId`, `resumeSessionId`, `conversationId`) is operator-visible via Sentry RBAC and was introduced by #3263; this PR adds NO new fields to that payload. `sanitizeProbeError` (lines 162-176 of `agent-prefill-guard.ts`) already strips absolute paths from probe-failure stacks. Tracking any further hardening of the success-path `extra` fields is out of scope for this PR — file follow-up if needed.
+
 ## Files to Edit
 
 - `apps/web-platform/server/agent-prefill-guard.ts` — extend `ApplyPrefillGuardResult` with `contextResetNotice?: string`; add tool_use detection (`last.message.content[].type === "tool_use"`); return tool-aware notice variant.

@@ -22,7 +22,11 @@ vi.mock("@/server/observability", () => ({
   reportSilentFallback: vi.fn(),
 }));
 
-import { applyPrefillGuard } from "@/server/agent-prefill-guard";
+import {
+  applyPrefillGuard,
+  CONTEXT_RESET_NOTICE_GENERIC,
+  CONTEXT_RESET_NOTICE_TOOL_USE_ORPHAN,
+} from "@/server/agent-prefill-guard";
 
 const WORKSPACE_PATH = "/tmp/cc-test-workspace";
 const COMMON_ARGS = {
@@ -208,9 +212,7 @@ describe("applyPrefillGuard", () => {
       });
 
       expect(result.safeResumeSessionId).toBeUndefined();
-      expect(result.contextResetNotice).toBe(
-        "Prior conversation context was reset. Treat the user's next message as standalone; ask for clarification if it references earlier turns.",
-      );
+      expect(result.contextResetNotice).toBe(CONTEXT_RESET_NOTICE_GENERIC);
       expect(result.reason).toBe("prefill-guard");
     });
 
@@ -240,7 +242,7 @@ describe("applyPrefillGuard", () => {
       expect(result.safeResumeSessionId).toBeUndefined();
       expect(result.reason).toBe("tool_use_orphan");
       expect(result.contextResetNotice).toBe(
-        "Prior conversation context was reset. The previous turn proposed a tool action you no longer have context on. Do NOT execute any action without explicit re-confirmation by name — ask the user to restate which action they want to run.",
+        CONTEXT_RESET_NOTICE_TOOL_USE_ORPHAN,
       );
     });
 

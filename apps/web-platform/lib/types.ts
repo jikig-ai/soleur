@@ -34,6 +34,16 @@ export const SUBAGENT_COMPLETE_STATUSES = ["success", "error", "timeout"] as con
 export type SubagentCompleteStatus = typeof SUBAGENT_COMPLETE_STATUSES[number];
 
 /**
+ * `context_reset.reason` allowed values (#3269). Tuple-as-source — the
+ * Zod schema, the helper return shape (`agent-prefill-guard.ts`), the
+ * `ChatContextResetMessage` reducer variant, and the `CONTEXT_RESET_COPY`
+ * render-side const all derive from this union to prevent silent drift
+ * when the family widens. ADR-025 documents the lifecycle-notice family.
+ */
+export const CONTEXT_RESET_REASONS = ["prefill-guard", "tool_use_orphan"] as const;
+export type ContextResetReason = typeof CONTEXT_RESET_REASONS[number];
+
+/**
  * `interactive_prompt.kind` allowed values. Tuple is shared with
  * `server/pending-prompt-registry.ts:InteractivePromptKind` via a compile-
  * time `_AssertKindsMatch` check below.
@@ -235,7 +245,7 @@ export type WSMessage =
   // WS lifecycle-notice family invariants for forward-compat.
   | {
       type: "context_reset";
-      reason: "prefill-guard" | "tool_use_orphan";
+      reason: ContextResetReason;
       conversationId: string;
     }
   | { type: "usage_update"; conversationId: string; totalCostUsd: number; inputTokens: number; outputTokens: number }
