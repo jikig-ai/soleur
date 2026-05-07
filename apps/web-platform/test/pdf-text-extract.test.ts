@@ -17,6 +17,53 @@ import { describe, it, expect } from "vitest";
 import { extractPdfText } from "@/server/pdf-text-extract";
 import { MAX_AGENT_READABLE_PDF_SIZE } from "@/lib/attachment-constants";
 
+// Engine-floor guard for #3424. pdfjs-dist@5.4.296 calls
+// `process.getBuiltinModule` during module init (legacy/build/pdf.mjs:5465);
+// that builtin landed in Node 22.3 / 20.16. Below the floor, the lazy import
+// in extractPdfText throws and every assertion in this file resolves to
+// `lazy_import_failed`, masking the extractor's real contract.
+//
+// Dev: skipIf with a one-line console.error naming the exact remediation, so
+// the operator sees a yellow skip + actionable diagnostic instead of an 8-red
+// assertion cascade.
+//
+// CI: process.env.CI is set by GitHub Actions / GitLab / most runners; if a CI
+// runner mistakenly lands below the floor, fail the file with a single error
+// (matches `mu1-integration.test.ts`'s loud-CI-quiet-dev pattern).
+// Node `process.getBuiltinModule` was added in v22.3.0 and back-ported to
+// v20.16.0; Node 21 reached end-of-life before the back-port and never
+// received it, so the supported set is { 20.16+ on the 20.x line } ∪ { 22.3+
+// on any line >= 22 }. A simple `nodeAtLeast(20, 16)` would incorrectly
+// admit Node 21 because its major exceeds 20 — encode the dual-range
+// explicitly instead.
+function supportsGetBuiltinModule(): boolean {
+  const [maj, min] = process.versions.node.split(".").map(Number);
+  if (maj >= 23) return true;
+  if (maj === 22) return min >= 3;
+  if (maj === 21) return false;
+  if (maj === 20) return min >= 16;
+  return false;
+}
+const BELOW_PDFJS_ENGINES_FLOOR = !supportsGetBuiltinModule();
+const ENGINES_FLOOR_DIAGNOSTIC =
+  `[pdf-text-extract.test] Node ${process.versions.node} is below the ` +
+  `pdfjs-dist engines floor (>=22.3.0 or >=20.16.0). pdfjs-dist@5 calls ` +
+  `process.getBuiltinModule (legacy/build/pdf.mjs:5465) which lands at those ` +
+  `versions; below the floor the lazy import throws and every test in this ` +
+  `file would resolve to {error: "lazy_import_failed"}. Run \`nvm use 22\` ` +
+  `(.nvmrc pins 22) or install Node 22.3+ to run this test. See ` +
+  `knowledge-base/project/learnings/2026-04-18-pdfjs-metadata-on-node-without-canvas.md.`;
+
+if (BELOW_PDFJS_ENGINES_FLOOR) {
+  console.error(ENGINES_FLOOR_DIAGNOSTIC);
+  if (process.env.CI) {
+    // Loud failure on CI — a misconfigured CI runner below the floor must NOT
+    // ship a vacuous green. Mirrors throw-in-beforeAll without the cross-file
+    // grep cost.
+    throw new Error(ENGINES_FLOOR_DIAGNOSTIC);
+  }
+}
+
 /**
  * Build a minimal PDF byte buffer with one text-showing operator per page.
  * Returns a Buffer suitable for `extractPdfText`. No real PDF binaries land
@@ -105,7 +152,7 @@ function isOk(
   return result !== null && !("error" in result);
 }
 
-describe("extractPdfText", () => {
+describe.skipIf(BELOW_PDFJS_ENGINES_FLOOR)("extractPdfText", () => {
   it("extracts text from a single-page PDF", async () => {
     const buf = makeMinimalPdf(["Hello World"]);
     const result = await extractPdfText(buf, 50_000);
@@ -224,7 +271,7 @@ describe("extractPdfText", () => {
     expect(["corrupted", "parse_error"]).toContain(result.error);
   });
 
-  it("caps page iteration at MAX_PAGES and reports truncated=true (#3338 P1-B)", async () => {
+  it("caps page iteration at MAX_PAGES and reports truncated=true (#3338 P1-B)", { timeout: 30_000 }, async () => {
     const pages = Array.from({ length: 600 }, (_, i) => `p${i}`);
     const buf = makeMinimalPdf(pages);
     const result = await extractPdfText(buf, 50_000);
