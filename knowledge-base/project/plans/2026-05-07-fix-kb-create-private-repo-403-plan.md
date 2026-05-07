@@ -147,16 +147,9 @@ persistence would store `"undefined"` strings. Fix-inline this PR:
 runtime guard rejecting non-string `html_url`/`full_name` with
 `GitHubApiError(502)`.
 
-### Brand-survival threshold
+### Threshold
 
-Single-user incident.
-
-Reason: each enumerated artifact (attribution, public-template content,
-availability, malformed response) is per-user — failure or leak affects
-one user at a time, not aggregate. CPO sign-off required at plan time
-on the three Approach-B artifacts (attribution, public-template
-propagation, availability); `user-impact-reviewer` re-invoked at review
-time to verify mitigations landed.
+- **Brand-survival threshold:** `single-user incident` — each enumerated artifact (attribution, public-template content, availability, malformed response) is per-user; failure or leak affects one user at a time, not aggregate. CPO sign-off required at plan time on the three Approach-B artifacts (attribution, public-template propagation, availability); `user-impact-reviewer` re-invoked at review time to verify mitigations landed.
 
 ### Approach A risk surface (not landed — preserved for A2-fallback)
 
