@@ -96,7 +96,7 @@ describe("Esc keyboard shortcut (tasks 5.4 – 5.5)", () => {
     expect(mockAbort).toHaveBeenCalledTimes(1);
   });
 
-  it("does NOT invoke abort() when textarea has 10+ chars and is focused (Esc-while-typing guard)", async () => {
+  it("does NOT invoke abort() when focused textarea has any content (Esc-while-typing guard; impl checks `value.length > 0`)", async () => {
     wsReturn = makeWs({ streamState: "streaming" });
     await mount();
 
@@ -111,6 +111,46 @@ describe("Esc keyboard shortcut (tasks 5.4 – 5.5)", () => {
     });
 
     expect(mockAbort).not.toHaveBeenCalled();
+  });
+
+  it("does NOT invoke abort() when focus is inside an [role='dialog'] (review fix — security P2)", async () => {
+    wsReturn = makeWs({ streamState: "streaming" });
+    await mount();
+
+    // Mount a dialog with a button inside, focus the button, then dispatch Esc.
+    const dialog = document.createElement("div");
+    dialog.setAttribute("role", "dialog");
+    dialog.setAttribute("data-state", "open");
+    const inner = document.createElement("button");
+    dialog.appendChild(inner);
+    document.body.appendChild(dialog);
+    inner.focus();
+
+    act(() => {
+      document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    });
+
+    expect(mockAbort).not.toHaveBeenCalled();
+    document.body.removeChild(dialog);
+  });
+
+  it("does NOT invoke abort() when focus is on a [contenteditable] element with content (review fix — security P2)", async () => {
+    wsReturn = makeWs({ streamState: "streaming" });
+    await mount();
+
+    const editable = document.createElement("div");
+    editable.setAttribute("contenteditable", "true");
+    editable.textContent = "user typing in markdown widget";
+    editable.tabIndex = 0;
+    document.body.appendChild(editable);
+    editable.focus();
+
+    act(() => {
+      document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    });
+
+    expect(mockAbort).not.toHaveBeenCalled();
+    document.body.removeChild(editable);
   });
 
   it("does NOT invoke abort() when streamState='idle' (no in-flight turn)", async () => {

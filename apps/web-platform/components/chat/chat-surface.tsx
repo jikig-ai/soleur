@@ -325,8 +325,27 @@ export function ChatSurface({
     const handler = (e: KeyboardEvent) => {
       if (e.key !== "Escape") return;
       const target = document.activeElement;
-      if (target instanceof HTMLTextAreaElement && target.value.length > 0) {
-        return;
+      // Review fix (security): the original guard only suppressed Esc on
+      // a non-empty <textarea>. That left native UA Esc semantics (close
+      // autocomplete, clear, blur, dismiss dialog) shadowed for:
+      //   - <input type="text"> and friends (KB filename input, search box,
+      //     dialog text inputs),
+      //   - any [contenteditable] element (rich-text widgets),
+      //   - elements inside an open Radix/Headless `[role="dialog"]`
+      //     where Esc is the established close gesture.
+      // For all three, Esc-mid-stream now defers to the local handler:
+      // user closes the dialog / clears the input WITHOUT also burning
+      // their billable turn. Stop via the on-screen button still works.
+      if (target instanceof HTMLElement) {
+        if (target.closest('[role="dialog"]')) return;
+        if (target.isContentEditable) return;
+        const hasContent =
+          (target instanceof HTMLInputElement &&
+            target.type !== "checkbox" &&
+            target.type !== "radio" &&
+            target.value.length > 0) ||
+          (target instanceof HTMLTextAreaElement && target.value.length > 0);
+        if (hasContent) return;
       }
       e.preventDefault();
       abort();

@@ -75,8 +75,27 @@ export function ChatInput({
   streamState = "idle",
   onStop,
 }: ChatInputProps) {
-  const isStopping = streamState === "stopping";
-  const showStop = streamState === "streaming" || isStopping;
+  // #3448 PR2 (review fix): exhaustive narrowing on the StreamState union
+  // per AGENTS.md `cq-union-widening-grep-three-patterns`. A future widening
+  // (e.g., adding `"queued"`) fails build here instead of silently flowing
+  // into the Send branch.
+  const buttonMode: "send" | "stop" | "stopping" = (() => {
+    switch (streamState) {
+      case "idle":
+        return "send";
+      case "streaming":
+        return "stop";
+      case "stopping":
+        return "stopping";
+      default: {
+        const _exhaustive: never = streamState;
+        void _exhaustive;
+        return "send";
+      }
+    }
+  })();
+  const showStop = buttonMode !== "send";
+  const isStopping = buttonMode === "stopping";
   const disabled = rawDisabled || workflowEnded;
   const placeholder = workflowEnded
     ? "This conversation has ended"

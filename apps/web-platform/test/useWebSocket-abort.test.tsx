@@ -196,6 +196,74 @@ describe("useWebSocket — abort() (task 5.8)", () => {
     });
   });
 
+  it("transitions to streamState='streaming' on first `stream` event without prior `stream_start` (review fix — Finding 2)", async () => {
+    // Brand-survival regression gate: if the server emits content directly
+    // via `stream` (sub-agent path or tool-only turn) without a leading
+    // `stream_start`, the Stop button must still appear. The original
+    // implementation only handled `stream_start`.
+    const { useWebSocket } = await import("@/lib/ws-client");
+    const { result } = renderHook(() => useWebSocket("cid-1"));
+
+    await connectAndAuth(result);
+    serverSend({ type: "session_started", conversationId: "cid-1" });
+    serverSend({
+      type: "stream",
+      content: "partial ",
+      partial: true,
+      leaderId: "cto",
+    });
+
+    await waitFor(() => {
+      expect(result.current.streamState).toBe("streaming");
+    });
+  });
+
+  it("transitions to streamState='streaming' on first `tool_use` event without prior `stream_start` (review fix — Finding 2)", async () => {
+    const { useWebSocket } = await import("@/lib/ws-client");
+    const { result } = renderHook(() => useWebSocket("cid-1"));
+
+    await connectAndAuth(result);
+    serverSend({ type: "session_started", conversationId: "cid-1" });
+    serverSend({ type: "tool_use", leaderId: "cto", label: "Bash" });
+
+    await waitFor(() => {
+      expect(result.current.streamState).toBe("streaming");
+    });
+  });
+
+  it("session_ended with mismatched conversationId still resets streamState to 'idle' (review fix — Finding 3)", async () => {
+    // The original disambiguator gate would have left streamState stuck in
+    // 'stopping' forever if the server emitted a mismatched conversationId.
+    // Resolution: always reset on session_ended (mirrors clear_streams);
+    // breadcrumb the mismatch for observability.
+    const { useWebSocket } = await import("@/lib/ws-client");
+    const { result } = renderHook(() => useWebSocket("cid-1"));
+
+    await connectAndAuth(result);
+    serverSend({ type: "session_started", conversationId: "cid-1" });
+    serverSend({ type: "stream_start", leaderId: "cto" });
+
+    await waitFor(() => {
+      expect(result.current.streamState).toBe("streaming");
+    });
+
+    act(() => {
+      result.current.abort();
+    });
+
+    expect(result.current.streamState).toBe("stopping");
+
+    serverSend({
+      type: "session_ended",
+      reason: "user_aborted",
+      conversationId: "cid-OTHER",
+    });
+
+    await waitFor(() => {
+      expect(result.current.streamState).toBe("idle");
+    });
+  });
+
   it("abort() while streamState='idle' is a no-op (no abort_turn sent)", async () => {
     const { useWebSocket } = await import("@/lib/ws-client");
     const { result } = renderHook(() => useWebSocket("cid-1"));
