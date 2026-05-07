@@ -69,6 +69,7 @@ import {
   resolveConciergeDocumentContext,
   _resetWorkspacePathCacheForTests,
 } from "./kb-document-resolver";
+import type { DocumentExtractMeta } from "./kb-document-resolver";
 import type { PdfExtractErrorClass } from "./pdf-text-extract";
 
 // Re-export so existing call sites keep working.
@@ -485,7 +486,28 @@ export const realSdkQueryFactory: QueryFactory = async (
       leaderId: CC_ROUTER_LEADER_ID,
     }),
   ]);
-  const safeResumeSessionId = prefillGuardResult.safeResumeSessionId;
+  const {
+    safeResumeSessionId,
+    contextResetNotice,
+    reason: contextResetReason,
+  } = prefillGuardResult;
+
+  // #3269 — context-reset signal. The notice is appended to systemPrompt
+  // for THIS SDK call only (single-turn; not persisted across turns).
+  // The WS event is the user-side signal; emitted exactly once per guard
+  // fire. SDK retries are internal to the returned Query AsyncGenerator
+  // (sdk.d.ts:1678-1681) and re-enter `query()`, not the factory — so
+  // `applyPrefillGuard` is naturally per-fire and a single emit suffices.
+  if (contextResetReason) {
+    defaultSendToClient(args.userId, {
+      type: "context_reset",
+      reason: contextResetReason,
+      conversationId: args.conversationId,
+    });
+  }
+  const effectiveSystemPrompt = contextResetNotice
+    ? `${args.systemPrompt}\n\n${contextResetNotice}`
+    : args.systemPrompt;
 
   const pluginPath = path.join(workspacePath, "plugins", "soleur");
 
@@ -594,7 +616,7 @@ export const realSdkQueryFactory: QueryFactory = async (
         pluginPath,
         apiKey,
         serviceTokens,
-        systemPrompt: args.systemPrompt,
+        systemPrompt: effectiveSystemPrompt,
         resumeSessionId: safeResumeSessionId,
         mcpServers: {},
         // #3338 — auto-approve the cc-router's read-only tool surface so they
@@ -754,6 +776,15 @@ export interface DispatchSoleurGoArgs {
    */
   documentExtractError?: PdfExtractErrorClass;
   /**
+   * 2026-05-07 follow-up to #3429. Per-failure metadata. Currently only
+   * `numPages` (interpolated by `buildPdfTooLongDirective` for the
+   * page-count gate's "I see {N} pages" copy). Without plumbing through
+   * here, the runner reads `?? 0` and the user sees "I see 0 pages" on
+   * every triggering case. Caught by the user-impact-reviewer review of
+   * PR #3430.
+   */
+  documentExtractMeta?: DocumentExtractMeta;
+  /**
    * 2026-05-06 follow-up — Bug A1 fix. Resolved workspace path threaded
    * from the ws-handler through `runner.dispatch` →
    * `buildSoleurGoSystemPrompt` so PDF gated + text-too-large directives
@@ -798,6 +829,7 @@ export async function dispatchSoleurGo(
     documentKind,
     documentContent,
     documentExtractError,
+    documentExtractMeta,
     workspacePath: callerWorkspacePath,
     attachments,
   } = args;
@@ -1040,6 +1072,7 @@ export async function dispatchSoleurGo(
       documentKind,
       documentContent,
       documentExtractError,
+      documentExtractMeta,
       // 2026-05-06 Bug A1 fix — thread workspacePath through so the
       // runner builds the system prompt with workspace-absolute Read
       // instructions. Falls back to the locally-resolved value (set by

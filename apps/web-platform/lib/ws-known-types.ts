@@ -45,6 +45,8 @@ export const KNOWN_WS_MESSAGE_TYPES = new Set<AllowedWSMessageType>([
   // Usage + meta
   "usage_update",
   "fanout_truncated",
+  // #3269 — context-reset lifecycle notice
+  "context_reset",
   "upgrade_pending",
   "error",
   // Stage 3 (#2885) — Command Center soleur-go router event variants

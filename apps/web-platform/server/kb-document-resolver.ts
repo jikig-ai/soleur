@@ -21,8 +21,19 @@ import { reportSilentFallback } from "./observability";
 import { isPathInWorkspace } from "./sandbox";
 import {
   extractPdfText,
+  extractPdfMetadata,
+  LARGE_PDF_PAGE_THRESHOLD,
   type PdfExtractErrorClass,
 } from "./pdf-text-extract";
+
+/**
+ * Structured metadata passed alongside `documentExtractError` for failure
+ * classes that carry per-failure details. Currently only `too_many_pages`
+ * uses `numPages`; the type is open for future extension.
+ */
+export interface DocumentExtractMeta {
+  numPages?: number;
+}
 
 /** Per-conversation cap on inlined document body. Mirrors the legacy
  *  `agent-runner.ts MAX_INLINE_BYTES` (~12-15K tokens). Source of truth
@@ -82,11 +93,17 @@ export async function resolveConciergeDocumentContext(args: {
   /**
    * Set when the in-process PDF extractor returned a typed failure
    * (`oversized_buffer | lazy_import_failed | encrypted | corrupted |
-   * parse_error | empty_text`). Threaded into the runner so the system
-   * prompt picks `buildPdfUnreadableDirective` (content-grounded reply)
-   * instead of `buildPdfGatedDirective` (apt-get-cascade-prone Read path).
+   * parse_error | empty_text | read_failed | too_many_pages`). Threaded
+   * into the runner so the system prompt picks the correct directive
+   * factory (gated / unreadable / too-long).
    */
   documentExtractError?: PdfExtractErrorClass;
+  /**
+   * Per-failure structured metadata. Currently only set with
+   * `too_many_pages` (`numPages`), where the runner injects the count
+   * into the directive copy.
+   */
+  documentExtractMeta?: DocumentExtractMeta;
 }> {
   const { userId, contextPath, providedContent } = args;
   if (!contextPath || contextPath.length === 0) return {};
@@ -199,6 +216,50 @@ export async function resolveConciergeDocumentContext(args: {
               : {}),
           },
         });
+
+        // 2026-05-07 follow-up to #3429: page-count gate on the
+        // soft-route. When `oversized_buffer` fires (the >24MB extractor
+        // refusal — see MAX_AGENT_READABLE_PDF_SIZE), do a metadata-only
+        // pdfjs read to obtain numPages cheaply. PDFs with too many
+        // pages would fanout the SDK Read tool's 20-page-per-request cap
+        // (~21 sequential calls for a 400-page book), exceeding the 90s
+        // idle-reaper window and surfacing "Agent stopped responding"
+        // to the user. Surface a typed `too_many_pages` HARD class so
+        // the runner routes to `buildPdfTooLongDirective` (specific
+        // refusal naming the page count, offering chapter-share/TOC-paste
+        // recovery) instead of the gated Read directive.
+        //
+        // Fail-closed on every metadata-read error path: the gate
+        // augments the existing partition; if metadata can't be read
+        // (oversized beyond the 60MB ceiling, parse failure, timeout)
+        // we fall through to the existing soft-route. Worst case the
+        // user gets today's behavior — never worse.
+        if (result.error === "oversized_buffer") {
+          const meta = await extractPdfMetadata(buffer);
+          Sentry.addBreadcrumb({
+            category: "cc-pdf-extractor",
+            message: "extractPdfMetadata completed",
+            level: "info",
+            data: {
+              ok: meta.ok,
+              op: "metadataRead",
+              numPages: meta.ok ? meta.numPages : null,
+              reason: meta.ok ? null : meta.reason,
+              pathBasename: path.basename(contextPath),
+            },
+          });
+          if (meta.ok && meta.numPages > LARGE_PDF_PAGE_THRESHOLD) {
+            return {
+              artifactPath: contextPath,
+              documentKind: "pdf",
+              documentExtractError: "too_many_pages",
+              documentExtractMeta: { numPages: meta.numPages },
+            };
+          }
+          // Below threshold OR metadata-read failed → fall through to
+          // the existing soft-route (oversized_buffer → buildPdfGatedDirective).
+        }
+
         return {
           artifactPath: contextPath,
           documentKind: "pdf",

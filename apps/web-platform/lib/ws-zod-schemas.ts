@@ -23,6 +23,7 @@ import {
   WORKFLOW_END_STATUSES,
   SUBAGENT_COMPLETE_STATUSES,
   INTERACTIVE_PROMPT_KINDS,
+  CONTEXT_RESET_REASONS,
 } from "@/lib/types";
 
 // ---------------------------------------------------------------------------
@@ -288,6 +289,17 @@ const fanoutTruncatedSchema = z.strictObject({
   dispatched: z.number(),
   dropped: z.number(),
 });
+// #3269 — context-reset lifecycle notice (prefill-guard fire / tool_use orphan).
+// Mirrors the `fanoutTruncatedSchema` shape (z.strictObject with a literal
+// type discriminator) so the WS lifecycle-notice family stays homogeneous
+// per ADR-025. `reason` derives from `CONTEXT_RESET_REASONS` so the Zod
+// schema, helper return shape, reducer variant, and render-side copy map
+// all share a single source of truth.
+const contextResetSchema = z.strictObject({
+  type: z.literal("context_reset"),
+  reason: z.enum(CONTEXT_RESET_REASONS),
+  conversationId: z.string(),
+});
 const upgradePendingSchema = z.strictObject({ type: z.literal("upgrade_pending") });
 const errorSchema = z.strictObject({
   type: z.literal("error"),
@@ -429,6 +441,7 @@ const flatTypeSchema = z.discriminatedUnion("type", [
   sessionEndedSchema,
   usageUpdateSchema,
   fanoutTruncatedSchema,
+  contextResetSchema,
   upgradePendingSchema,
   errorSchema,
   subagentSpawnSchema,

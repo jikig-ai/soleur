@@ -34,6 +34,16 @@ export const SUBAGENT_COMPLETE_STATUSES = ["success", "error", "timeout"] as con
 export type SubagentCompleteStatus = typeof SUBAGENT_COMPLETE_STATUSES[number];
 
 /**
+ * `context_reset.reason` allowed values (#3269). Tuple-as-source — the
+ * Zod schema, the helper return shape (`agent-prefill-guard.ts`), the
+ * `ChatContextResetMessage` reducer variant, and the `CONTEXT_RESET_COPY`
+ * render-side const all derive from this union to prevent silent drift
+ * when the family widens. ADR-025 documents the lifecycle-notice family.
+ */
+export const CONTEXT_RESET_REASONS = ["prefill-guard", "tool_use_orphan"] as const;
+export type ContextResetReason = typeof CONTEXT_RESET_REASONS[number];
+
+/**
  * `interactive_prompt.kind` allowed values. Tuple is shared with
  * `server/pending-prompt-registry.ts:InteractivePromptKind` via a compile-
  * time `_AssertKindsMatch` check below.
@@ -225,6 +235,19 @@ export type WSMessage =
   | { type: "session_started"; conversationId: string; capabilities?: { promptKinds: readonly string[] } }
   | { type: "session_resumed"; conversationId: string; resumedFromTimestamp: string; messageCount: number }
   | { type: "session_ended"; reason: string }
+  // #3269 — context-reset lifecycle notice. Emitted exactly once per
+  // prefill-guard fire (assistant-terminated history → SDK 400 prevention
+  // path drops `resume:` and the model loses prior-turn context). The
+  // `reason` discriminator drives copywriter-approved render variants in
+  // chat-surface.tsx; `prefill-guard` is the generic branch and
+  // `tool_use_orphan` is the narrower branch where the trailing assistant
+  // message contained a `tool_use` content block. ADR-025 establishes the
+  // WS lifecycle-notice family invariants for forward-compat.
+  | {
+      type: "context_reset";
+      reason: ContextResetReason;
+      conversationId: string;
+    }
   | { type: "usage_update"; conversationId: string; totalCostUsd: number; inputTokens: number; outputTokens: number }
   | { type: "fanout_truncated"; dispatched: number; dropped: number }
   | { type: "upgrade_pending" }
